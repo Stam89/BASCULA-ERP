@@ -1,0 +1,17 @@
+node_modules/
+dist/
+build/
+.gradle/
+local.properties
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+*.apk
+*.aab
+*.keystore
+*.jks
+*.log
+logs/
+coverage/

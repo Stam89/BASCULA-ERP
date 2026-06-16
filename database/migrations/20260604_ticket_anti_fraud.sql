@@ -1,0 +1,5 @@
+ALTER TABLE weighing_tickets
+  ADD COLUMN IF NOT EXISTS is_locked BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE weighing_tickets
+  ADD COLUMN IF NOT EXISTS print_count INTEGER NOT NULL DEFAULT 0;

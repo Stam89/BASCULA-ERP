@@ -1,0 +1,156 @@
+import { Router } from "express";
+import { z } from "zod";
+import { inTransaction } from "../../db/transaction.js";
+import { pool } from "../../db/pool.js";
+import { asyncRoute } from "../../http/async-route.js";
+import { ApiError } from "../../http/error-handler.js";
+import { nextCode } from "../../utils/codes.js";
+import { createLotProcessReport } from "../../utils/process-reports.js";
+import { round2 } from "../../utils/rice-formulas.js";
+
+export const salesRouter = Router();
+
+const QQ_TO_LB = 100;
+
+salesRouter.post("/", asyncRoute(async (req, res) => {
+  const body = z.object({
+    customer_id: z.string().uuid().optional(),
+    cash_register_id: z.string().uuid().optional(),
+    payment_method: z.enum(["CASH", "TRANSFER", "CARD", "CHECK", "CREDIT"]).default("CASH"),
+    packaging_supply_id: z.string().uuid().optional(),
+    presentation: z.string().optional(),
+    sack_weight_lb: z.number().positive().default(100),
+    created_by: z.string().uuid().optional(),
+    items: z.array(z.object({
+      product_id: z.string().uuid(),
+      warehouse_id: z.string().uuid(),
+      lot_id: z.string().uuid().optional(),
+      quantity: z.number().positive(),
+      unit_price: z.number().nonnegative()
+    })).min(1)
+  }).parse(req.body);
+
+  const result = await inTransaction(async (client) => {
+    const total = round2(body.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0));
+    const sale = await client.query(
+      `INSERT INTO sales (sale_number, customer_id, cash_register_id, total_amount, payment_status, sale_status, created_by)
+       VALUES ($1, $2, $3, $4, $5, 'CONFIRMED', $6)
+       RETURNING *`,
+      [nextCode("VEN"), body.customer_id, body.cash_register_id, total, body.payment_method === "CREDIT" ? "CONFIRMED" : "PAID", body.created_by]
+    );
+
+    for (const item of body.items) {
+      const itemTotal = round2(item.quantity * item.unit_price);
+      await client.query(
+        `INSERT INTO sale_items (sale_id, product_id, lot_id, warehouse_id, quantity, unit_price, total)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [sale.rows[0].id, item.product_id, item.lot_id, item.warehouse_id, item.quantity, item.unit_price, itemTotal]
+      );
+      await client.query(
+        `INSERT INTO inventory_movements
+         (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by)
+         VALUES ($1, $2, $3, 'OUT', $4, 'sales', $5, 'OWNED', $6)`,
+        [item.product_id, item.warehouse_id, item.lot_id, -item.quantity, sale.rows[0].id, body.created_by]
+      );
+
+      if (item.lot_id) {
+        await createLotProcessReport(client, {
+          lotId: item.lot_id,
+          stage: "VENTA",
+          title: `Venta ${sale.rows[0].sale_number}`,
+          referenceType: "sales",
+          referenceId: sale.rows[0].id,
+          data: {
+            sale_number: sale.rows[0].sale_number,
+            product_id: item.product_id,
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            total: itemTotal,
+            payment_method: body.payment_method
+          },
+          createdBy: body.created_by
+        });
+      }
+    }
+
+    if (body.payment_method === "CREDIT") {
+      await client.query(
+        `INSERT INTO accounts_receivable (customer_id, sale_id, amount, balance)
+         VALUES ($1, $2, $3, $3)`,
+       [body.customer_id, sale.rows[0].id, total]
+      );
+    } else if (body.cash_register_id) {
+      await client.query(
+        `INSERT INTO cash_movements
+         (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)
+         VALUES ($1, 'INCOME', 'VENTA', 'sales', $2, $3, $4, $5)`,
+        [body.cash_register_id, sale.rows[0].id, total, `Venta ${sale.rows[0].sale_number}`, body.created_by]
+      );
+    }
+
+    const totalSoldPounds = body.items.reduce((sum, item) => sum + item.quantity * QQ_TO_LB, 0);
+    const sacksUsed = body.packaging_supply_id ? Math.ceil(totalSoldPounds / body.sack_weight_lb) : 0;
+    let packagingAlert: null | {
+      insumoId: string;
+      nombre: string;
+      stockActual: number;
+      nivelCritico: number;
+      isCritical: boolean;
+    } = null;
+
+    if (body.packaging_supply_id && sacksUsed > 0) {
+      const supply = await client.query(
+        "SELECT * FROM insumos WHERE id = $1 FOR UPDATE",
+        [body.packaging_supply_id]
+      );
+      if (!supply.rowCount) throw new ApiError(404, "Bodega de sacos no encontrada");
+
+      const stock = Number(supply.rows[0].stock_actual);
+      if (stock < sacksUsed) {
+        throw new ApiError(409, `Stock insuficiente de ${supply.rows[0].nombre}`);
+      }
+
+      const nextStock = stock - sacksUsed;
+      const updatedSupply = await client.query(
+        `UPDATE insumos
+         SET stock_actual = $2, updated_at = now()
+         WHERE id = $1
+         RETURNING *`,
+        [body.packaging_supply_id, nextStock]
+      );
+      await client.query(
+        `INSERT INTO insumo_movements
+         (insumo_id, movement, quantity, reference_type, reference_id, notes, created_by)
+         VALUES ($1, 'CONSUMPTION', $2, 'sales', $3, $4, $5)`,
+        [
+          body.packaging_supply_id,
+          -sacksUsed,
+          sale.rows[0].id,
+          `Consumo automatico de sacos por pedido ${sale.rows[0].sale_number}${body.presentation ? ` (${body.presentation})` : ""}`,
+          body.created_by
+        ]
+      );
+
+      packagingAlert = {
+        insumoId: updatedSupply.rows[0].id,
+        nombre: updatedSupply.rows[0].nombre,
+        stockActual: Number(updatedSupply.rows[0].stock_actual),
+        nivelCritico: Number(updatedSupply.rows[0].nivel_critico),
+        isCritical: Number(updatedSupply.rows[0].stock_actual) < Number(updatedSupply.rows[0].nivel_critico)
+      };
+    }
+
+    return {
+      ...sale.rows[0],
+      sacks_used: sacksUsed,
+      packaging_alert: packagingAlert
+    };
+  });
+
+  res.status(201).json(result);
+}));
+
+salesRouter.get("/", asyncRoute(async (_req, res) => {
+  const result = await pool.query("SELECT * FROM sales ORDER BY created_at DESC LIMIT 500");
+  res.json(result.rows);
+}));

@@ -1,0 +1,36 @@
+import { Router } from "express";
+import { advancesRouter } from "./modules/advances.js";
+import { authRouter } from "./modules/auth.js";
+import { cashRouter } from "./modules/cash.js";
+import { catalogsRouter } from "./modules/catalogs.js";
+import { dashboardRouter } from "./modules/dashboard.js";
+import { documentsRouter } from "./modules/documents.js";
+import { expensesRouter } from "./modules/expenses.js";
+import { farmersRouter } from "./modules/farmers.js";
+import { inventoryRouter } from "./modules/inventory.js";
+import { liquidationsRouter } from "./modules/liquidations.js";
+import { lotsRouter } from "./modules/lots.js";
+import { mobileTicketsRouter } from "./modules/mobile-tickets.js";
+import { processFlowRouter } from "./modules/process-flow.js";
+import { processingRouter } from "./modules/processing.js";
+import { salesRouter } from "./modules/sales.js";
+import { weighingRouter } from "./modules/weighing-tickets.js";
+
+export const routes = Router();
+
+routes.use("/auth", authRouter);
+routes.use("/dashboard", dashboardRouter);
+routes.use("/tickets", mobileTicketsRouter);
+routes.use("/process-flow", processFlowRouter);
+routes.use("/catalogs", catalogsRouter);
+routes.use("/farmers", farmersRouter);
+routes.use("/advances", advancesRouter);
+routes.use("/weighing-tickets", weighingRouter);
+routes.use("/lots", lotsRouter);
+routes.use("/inventory", inventoryRouter);
+routes.use("/processing-batches", processingRouter);
+routes.use("/liquidations", liquidationsRouter);
+routes.use("/cash", cashRouter);
+routes.use("/sales", salesRouter);
+routes.use("/expenses", expensesRouter);
+routes.use("/documents", documentsRouter);
