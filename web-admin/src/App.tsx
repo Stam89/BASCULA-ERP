@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import React, { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost, apiPut, checkHealth } from "./api";
 
 type Farmer = {
@@ -178,7 +178,32 @@ type MillingPiladoEntry = {
   quantityQq: number;
 };
 
-const tabs = ["Dashboard", "Bascula", "Secadoras", "Agricultores", "Inventario", "Produccion", "Pedidos", "Caja", "Liquidaciones"];
+const tabs = ["Dashboard", "Bascula", "Secadoras", "Produccion", "Agricultores", "Inventario", "Pedidos", "Caja", "Liquidaciones"];
+
+function NavIcon({ tab }: { tab: string }) {
+  switch (tab) {
+    case "Dashboard":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="1.5"/><rect x="9" y="1" width="6" height="6" rx="1.5"/><rect x="1" y="9" width="6" height="6" rx="1.5"/><rect x="9" y="9" width="6" height="6" rx="1.5"/></svg>;
+    case "Bascula":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><line x1="8" y1="2" x2="8" y2="14"/><line x1="5" y1="14" x2="11" y2="14"/><line x1="3" y1="4" x2="13" y2="4"/><path d="M3 4 L2 8 Q2 10 4.5 10 Q7 10 7 8 L6 4"/><path d="M13 4 L14 8 Q14 10 11.5 10 Q9 10 9 8 L10 4"/></svg>;
+    case "Secadoras":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1C8 1 3.5 5 3.5 9a4.5 4.5 0 009 0C12.5 5 8 1 8 1zm0 11.5a2.5 2.5 0 01-2.5-2.5c0-1.6 1.3-3.5 2.5-5 1.2 1.5 2.5 3.4 2.5 5a2.5 2.5 0 01-2.5 2.5z"/></svg>;
+    case "Agricultores":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="5.5" r="3"/><path d="M2 15c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5H2z"/></svg>;
+    case "Inventario":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 1L14 4.5v7L8 15 2 11.5v-7L8 1z"/><line x1="8" y1="1" x2="8" y2="8.5"/><line x1="2" y1="4.5" x2="8" y2="8.5"/><line x1="14" y1="4.5" x2="8" y2="8.5"/></svg>;
+    case "Produccion":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.2 3.2l1.4 1.4M11.4 11.4l1.4 1.4M3.2 12.8l1.4-1.4M11.4 4.6l1.4-1.4"/></svg>;
+    case "Pedidos":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="1" width="10" height="14" rx="1.5"/><line x1="5.5" y1="5.5" x2="10.5" y2="5.5"/><line x1="5.5" y1="8.5" x2="10.5" y2="8.5"/><line x1="5.5" y1="11.5" x2="8.5" y2="11.5"/></svg>;
+    case "Caja":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="5" width="14" height="10" rx="1.5"/><path d="M1 9h14"/><path d="M5 5V3.5a3 3 0 016 0V5"/><circle cx="8" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg>;
+    case "Liquidaciones":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 1h8a1 1 0 011 1v13l-4.5-2L4 15V2a1 1 0 011-1z"/><line x1="6" y1="6" x2="10" y2="6"/><line x1="6" y1="9" x2="10" y2="9"/></svg>;
+    default:
+      return null;
+  }
+}
 const LB_TO_KG = 0.45359237;
 const QQ_TO_LB = 100;
 const millingDraftStorageKey = "bascula-erp:milling-report-draft";
@@ -248,6 +273,20 @@ export function App() {
   const [millingPiladoQq, setMillingPiladoQq] = useState("");
   const [millingDraftSavedAt, setMillingDraftSavedAt] = useState<string | null>(() => loadMillingDraft().savedAt);
   const [millingYields, setMillingYields] = useState<MillingYieldResult | null>(null);
+
+  const [toasts, setToasts] = useState<Array<{ id: number; text: string; type?: "success" | "error" | "warn" }>>([]);
+
+  const addToast = useCallback((text: string, type?: "success" | "error" | "warn") => {
+    const id = Date.now();
+    setToasts((prev) => [...prev.slice(-4), { id, text, type }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4500);
+  }, []);
+
+  useEffect(() => {
+    if (!message || message === "Listo") return;
+    const isError = /error|falla|falt[ao]|no se pudo|inv[aá]lido|seleccione|ingrese/i.test(message);
+    addToast(message, isError ? "error" : "success");
+  }, [message]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const rawProduct = useMemo(
     () => products.find((product) => product.code === "CASCARA-011") ?? products.find((product) => product.code === "ARROZ-CASCARA") ?? products[0],
@@ -1062,6 +1101,7 @@ export function App() {
   }
 
   return (
+    <>
     <main className="shell">
       <aside className="sidebar">
         <div className="brand">
@@ -1074,6 +1114,7 @@ export function App() {
         <nav>
           {tabs.map((tab) => (
             <button className={activeTab === tab ? "active" : ""} key={tab} onClick={() => setActiveTab(tab)}>
+              <NavIcon tab={tab} />
               {tab}
             </button>
           ))}
@@ -1082,14 +1123,24 @@ export function App() {
 
       <section className="workspace">
         <header className="topbar">
-          <div>
+          <div className="topbarLeft">
             <h1>{activeTab}</h1>
-            <p>{loading ? "Cargando datos..." : message}</p>
+            <p>{loading ? "Actualizando datos…" : message}</p>
           </div>
-          <span className={apiOnline ? "pill online" : "pill offline"}>
-            API {apiOnline ? "conectada" : "sin conexion"}
-          </span>
+          <div className="topbarRight">
+            <button
+              className="btnSecondary"
+              onClick={() => refresh().catch((e) => setMessage(e.message))}
+              disabled={loading}
+            >
+              {loading ? "⟳" : "↻"} Actualizar
+            </button>
+            <span className={apiOnline ? "pill online" : "pill offline"}>
+              API {apiOnline ? "conectada" : "sin conexión"}
+            </span>
+          </div>
         </header>
+        <div className="content">
 
         {activeTab === "Dashboard" && (
           <>
@@ -1105,20 +1156,24 @@ export function App() {
             </section>
             <section className="setupPanel">
               <div>
-                <h2>Preparacion operativa</h2>
-                <p className="muted">
-                  Productos, bodegas, sacos vacios, agricultores y caja son la base para operar sin pantallas vacias.
-                </p>
+                <h2>Preparación operativa</h2>
+                <p className="muted">Productos, bodegas, insumos, agricultores y caja habilitan todas las funciones.</p>
+                <div className="setupProgress" style={{ marginTop: 8 }}>
+                  <div className="setupBar">
+                    <div className="setupBarFill" style={{ width: `${(setupScore / 5) * 100}%` }} />
+                  </div>
+                  <small style={{ whiteSpace: "nowrap", fontWeight: 700 }}>{setupScore} / 5</small>
+                </div>
               </div>
               <div className="setupChecks">
-                <StatusDot ok={products.length >= 7} label="Productos base" />
+                <StatusDot ok={products.length >= 7} label="Productos" />
                 <StatusDot ok={warehouses.length >= 2} label="Bodegas" />
-                <StatusDot ok={insumos.length > 0} label="Sacos vacios" />
+                <StatusDot ok={insumos.length > 0} label="Insumos" />
                 <StatusDot ok={farmers.length > 0} label="Agricultores" />
-                <StatusDot ok={dashboard.current_cash_register !== null} label="Caja abierta" />
+                <StatusDot ok={dashboard.current_cash_register !== null} label="Caja" />
               </div>
               <button className="primary" onClick={() => setupMasterData().catch((error) => setMessage(error.message))} disabled={busy}>
-                {busy ? "Preparando..." : "Crear datos base"}
+                {busy ? "Preparando…" : "Crear datos base"}
               </button>
             </section>
             {criticalSupplies.length > 0 && (
@@ -1159,7 +1214,11 @@ export function App() {
               <Input name="qualification" label="Calificacion" type="number" />
               <button className="primary">Cerrar ticket</button>
             </form>
-            <DataList title="Ultimos lotes" rows={lots.slice(0, 8).map((lot) => [lot.lot_code, lot.farmer_name ?? "", riceTypeLabel(lot.rice_type), `${lot.quintals ?? 0} QQ`])} />
+            <DataList
+              title="Últimos lotes"
+              headers={["Lote", "Agricultor", "Tipo", "QQ"]}
+              rows={lots.slice(0, 8).map((lot) => [lot.lot_code, lot.farmer_name ?? "—", riceTypeLabel(lot.rice_type), `${Number(lot.quintals ?? 0).toFixed(2)} QQ`])}
+            />
           </section>
         )}
 
@@ -1190,7 +1249,7 @@ export function App() {
               onSubmit={(event) => submitDryingReport(event).catch((error) => setMessage(error.message))}
             >
               <h2>Informe de secado por tunel</h2>
-              {editingDryingReport && <span className="pill online">Editando secado guardado</span>}
+              {editingDryingReport && <span className="editBadge">✎ Editando secado guardado</span>}
               <Select
                 name="rice_type"
                 label="Tipo de arroz"
@@ -1239,7 +1298,6 @@ export function App() {
               </div>
             </form>
 
-            <ProcessFlowPanel flow={processFlow} />
             <DryingReportsPanel reports={dryingReports} onEdit={editDryingReport} />
           </section>
         )}
@@ -1260,7 +1318,11 @@ export function App() {
               <Input name="concept" label="Concepto" />
               <button className="primary">Registrar</button>
             </form>
-            <DataList title="Agricultores" rows={farmers.map((f) => [f.full_name, f.identification ?? "", f.phone ?? ""])} />
+            <DataList
+              title="Agricultores registrados"
+              headers={["Nombre", "Cédula / RUC", "Teléfono"]}
+              rows={farmers.map((f) => [f.full_name, f.identification ?? "—", f.phone ?? "—"])}
+            />
           </section>
         )}
 
@@ -1278,12 +1340,32 @@ export function App() {
               <Input name="notes" label="Motivo" defaultValue="Cuadre manual de inventario" required={false} />
               <button className="primary">Registrar cuadre</button>
             </form>
-            <DataList title="Productos" rows={visibleInventoryProducts.map((p) => [p.code, p.name, p.product_type, p.unit])} />
-            <DataList title="Stock cascara" rows={rawStockRows.map((row) => [row.product_name, row.warehouse_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])} />
-            <DataList title="Stock producto" rows={finishedStockRows.map((row) => [row.product_name, row.warehouse_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])} />
-            <DataList title="Stock subproductos" rows={byproductStockRows.map((row) => [row.product_name, row.warehouse_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])} />
+            <DataList
+              title="Productos"
+              headers={["Código", "Nombre", "Tipo", "Unidad"]}
+              rows={visibleInventoryProducts.map((p) => [p.code, p.name, p.product_type, p.unit])}
+            />
+            <DataList
+              title="Stock cáscara"
+              headers={["Producto", "Bodega", "Cantidad"]}
+              rows={rawStockRows.map((row) => [row.product_name, row.warehouse_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
+            />
+            <DataList
+              title="Stock producto terminado"
+              headers={["Producto", "Bodega", "Cantidad"]}
+              rows={finishedStockRows.map((row) => [row.product_name, row.warehouse_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
+            />
+            <DataList
+              title="Stock subproductos"
+              headers={["Producto", "Bodega", "Cantidad"]}
+              rows={byproductStockRows.map((row) => [row.product_name, row.warehouse_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
+            />
             {otherStockRows.length > 0 && (
-              <DataList title="Otros stocks" rows={otherStockRows.map((row) => [row.product_name, row.warehouse_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])} />
+              <DataList
+                title="Otros stocks"
+                headers={["Producto", "Bodega", "Cantidad"]}
+                rows={otherStockRows.map((row) => [row.product_name, row.warehouse_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
+              />
             )}
           </section>
         )}
@@ -1467,10 +1549,11 @@ export function App() {
               <button className="primary">Guardar pedido y bajar sacos</button>
             </form>
             <DataList
-              title="Stock para pedidos"
+              title="Stock disponible"
+              headers={["Producto", "Bodega", "Propiedad", "Cantidad"]}
               rows={stock
                 .filter((row) => row.ownership === "OWNED")
-                .map((row) => [row.product_name, row.warehouse_name, row.ownership, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
+                .map((row) => [row.product_name, row.warehouse_name, "Propio", `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
             />
           </section>
         )}
@@ -1505,11 +1588,27 @@ export function App() {
               <Input name="other_discounts" label="Otros descuentos" type="number" defaultValue="0" />
               <button className="primary">Liquidar</button>
             </form>
-            <DataList title="Lotes disponibles" rows={lots.map((lot) => [lot.lot_code, lot.farmer_name ?? "", lot.status, `${lot.quintals ?? 0} QQ`])} />
+            <DataList
+              title="Lotes disponibles"
+              headers={["Lote", "Agricultor", "Estado", "QQ"]}
+              rows={lots.map((lot) => [lot.lot_code, lot.farmer_name ?? "—", lot.status, `${Number(lot.quintals ?? 0).toFixed(2)} QQ`])}
+            />
           </section>
         )}
+        </div>{/* .content */}
       </section>
     </main>
+
+    {toasts.length > 0 && (
+      <div className="toastBar">
+        {toasts.map((t) => (
+          <div key={t.id} className={`toast${t.type ? ` ${t.type}` : ""}`}>
+            {t.text}
+          </div>
+        ))}
+      </div>
+    )}
+    </>
   );
 }
 
@@ -1687,23 +1786,41 @@ function DryingReportsPanel({
             <small>Tipo: {report.rice_type === "CORRIENTE" ? "Corriente" : "0.11"}</small>
             <small>{report.lots.map((lot) => `${lot.farmer_name ?? "Sin agricultor"} (${Number(lot.quintals ?? 0).toFixed(2)} QQ)`).join(" + ")}</small>
           </div>
-          <button type="button" onClick={() => onEdit(report)}>Editar</button>
+          {report.status !== "COMPLETED" && (
+            <button type="button" onClick={() => onEdit(report)}>Editar</button>
+          )}
         </article>
       ))}
     </section>
   );
 }
 
-function DataList({ title, rows }: { title: string; rows: Array<Array<string | number>> }) {
+function DataList({
+  title,
+  rows,
+  headers
+}: {
+  title: string;
+  rows: Array<Array<string | number>>;
+  headers?: string[];
+}) {
+  const colCount = headers?.length ?? rows[0]?.length ?? 4;
+  const gridCols: React.CSSProperties = { gridTemplateColumns: `repeat(${colCount}, minmax(0, 1fr))` };
+
   return (
     <section className="tablePanel">
       <h2>{title}</h2>
+      {headers && (
+        <div className="tableHead" style={gridCols}>
+          {headers.map((h, i) => <span key={i}>{h}</span>)}
+        </div>
+      )}
       <div className="table">
-        {rows.length === 0 && <p className="muted">Sin datos</p>}
+        {rows.length === 0 && <p className="tableEmpty">Sin datos registrados</p>}
         {rows.map((row, index) => (
-          <div className="tableRow" key={`${title}-${index}`}>
-            {row.map((cell, cellIndex) => (
-              <span key={cellIndex}>{cell}</span>
+          <div className="tableRow" key={`${title}-${index}`} style={gridCols}>
+            {row.map((cell, ci) => (
+              <span key={ci}>{cell}</span>
             ))}
           </div>
         ))}
@@ -1715,16 +1832,22 @@ function DataList({ title, rows }: { title: string; rows: Array<Array<string | n
 function TicketPreview() {
   return (
     <div className="ticketPreview">
-      <h2>Impresion 58mm</h2>
-      <pre>{`RECIBO DE BASCULA
+      <h2>Vista previa de ticket 58 mm</h2>
+      <pre>{`  *** BASCULA ERP ***
+  Piladora de Arroz
+========================
+Lote   : LT-2026-0001
+Fecha  : 23/06/2026 22:30
+Agric. : PEDRO RAMIREZ
+Tipo   : 0.11
 ------------------------
-Lote: LT-2026-0001
-Bruto: 12000 kg
-Tara: 4000 kg
-Neto: 8000 kg
-QQ: 113.55
-------------------------
-Firma: ________________`}</pre>
+Bruto  :  12,000 kg
+Tara   :   4,000 kg
+NETO   :   8,000 kg
+QQ     :     113.55
+Clasif.:       80%
+========================
+Firma: ______________`}</pre>
     </div>
   );
 }
@@ -1813,20 +1936,22 @@ function ProcessFlowPanel({ flow }: { flow: ProcessFlow | null }) {
       <div className="traceTables">
         <DataList
           title="Informes del lote"
+          headers={["#", "Etapa", "Informe", "Fecha"]}
           rows={flow.reports.map((report) => [
             report.sequence,
             stageLabel(report.stage),
             report.report_title,
-            new Date(report.created_at).toLocaleString()
+            new Date(report.created_at).toLocaleString("es-EC", { dateStyle: "short", timeStyle: "short" })
           ])}
         />
         <DataList
-          title="Tuneles registrados"
+          title="Túneles registrados"
+          headers={["Túnel", "QQ", "Estado", "Consumo"]}
           rows={flow.tunnels.map((tunnel) => [
-            `Tunel ${tunnel.tunnel_number}`,
+            `Túnel ${tunnel.tunnel_number}`,
             `${Number(tunnel.total_quintals ?? 0).toFixed(2)} QQ`,
-            tunnel.status === "COMPLETED" ? "Finalizado" : "En proceso",
-            `${Number(tunnel.gas_used ?? 0).toFixed(2)} gas / ${Number(tunnel.diesel_used ?? 0).toFixed(2)} diesel`
+            tunnel.status === "COMPLETED" ? "✓ Finalizado" : "En proceso",
+            `Gas ${Number(tunnel.gas_used ?? 0).toFixed(1)} / Diesel ${Number(tunnel.diesel_used ?? 0).toFixed(1)}`
           ])}
         />
       </div>
