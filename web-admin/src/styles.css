@@ -150,6 +150,82 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
   text-transform: uppercase;
 }
 
+/* ── Quick Add menu ───────────────────────────────────────────── */
+.quickAdd {
+  padding: 10px 10px 0;
+  flex-shrink: 0;
+}
+
+.quickAddBtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: var(--c-brand);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background var(--t);
+}
+
+.quickAddBtn:hover { background: var(--c-brand-dark); }
+
+.quickAddBtn .chevron {
+  margin-left: auto;
+  transition: transform var(--t);
+}
+
+.quickAddBtn.open .chevron { transform: rotate(180deg); }
+
+.quickAddItems {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 4px;
+  padding: 4px 0 6px;
+  border-bottom: 1px solid var(--c-sidebar-border);
+  animation: slideDown 0.18s ease;
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.quickAddItem {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--c-sidebar-text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--t);
+}
+
+.quickAddItem:hover { background: var(--c-sidebar-hover); }
+
+.quickAddItem svg { margin-left: auto; opacity: 0.5; flex-shrink: 0; }
+.quickAddItem:hover svg { opacity: 1; }
+
+.quickAddItemIcon {
+  font-size: 14px;
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+/* ── Nav ──────────────────────────────────────────────────────── */
 nav {
   display: flex;
   flex-direction: column;

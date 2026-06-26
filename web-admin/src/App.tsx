@@ -275,6 +275,7 @@ export function App() {
   const [millingYields, setMillingYields] = useState<MillingYieldResult | null>(null);
 
   const [toasts, setToasts] = useState<Array<{ id: number; text: string; type?: "success" | "error" | "warn" }>>([]);
+  const [quickMenuOpen, setQuickMenuOpen] = useState(false);
 
   const addToast = useCallback((text: string, type?: "success" | "error" | "warn") => {
     const id = Date.now();
@@ -1111,6 +1112,48 @@ export function App() {
             <small>Piladora de arroz</small>
           </div>
         </div>
+        <div className="quickAdd">
+          <button
+            className={`quickAddBtn${quickMenuOpen ? " open" : ""}`}
+            onClick={() => setQuickMenuOpen((v) => !v)}
+          >
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor">
+              <rect x="7" y="1" width="2" height="14" rx="1"/>
+              <rect x="1" y="7" width="14" height="2" rx="1"/>
+            </svg>
+            Agregar
+            <svg className="chevron" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <polyline points="2,4 6,8 10,4"/>
+            </svg>
+          </button>
+
+          {quickMenuOpen && (
+            <div className="quickAddItems">
+              {[
+                { label: "Ticket de báscula",  tab: "Bascula",       icon: "⚖" },
+                { label: "Agricultor",          tab: "Agricultores",  icon: "👤" },
+                { label: "Anticipo",            tab: "Agricultores",  icon: "💵" },
+                { label: "Pedido de venta",     tab: "Pedidos",       icon: "📋" },
+                { label: "Secado por túnel",    tab: "Secadoras",     icon: "🌡" },
+                { label: "Abrir caja",          tab: "Caja",          icon: "🏧" },
+                { label: "Liquidación",         tab: "Liquidaciones", icon: "📄" },
+              ].map(({ label, tab, icon }) => (
+                <button
+                  key={label}
+                  className="quickAddItem"
+                  onClick={() => { setActiveTab(tab); setQuickMenuOpen(false); }}
+                >
+                  <span className="quickAddItemIcon">{icon}</span>
+                  {label}
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                    <polyline points="3,2 7,5 3,8"/>
+                  </svg>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
         <nav>
           {tabs.map((tab) => (
             <button className={activeTab === tab ? "active" : ""} key={tab} onClick={() => setActiveTab(tab)}>
