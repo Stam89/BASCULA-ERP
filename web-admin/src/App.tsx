@@ -6,6 +6,7 @@ type Farmer = {
   identification: string | null;
   full_name: string;
   phone: string | null;
+  pending_advance_balance: number;
 };
 
 type Product = {
@@ -24,6 +25,7 @@ type Warehouse = {
 
 type Lot = {
   id: string;
+  farmer_id: string;
   lot_code: string;
   farmer_name: string | null;
   rice_type?: string | null;
@@ -51,6 +53,23 @@ type StockRow = {
   ownership: string;
   quantity: string | number;
   unit: string;
+};
+
+type LiqRecord = {
+  id: string;
+  liquidation_number: string;
+  farmer_name: string;
+  lot_code: string | null;
+  rice_type: string | null;
+  quintals: number;
+  price_per_quintal: number;
+  gross_amount: number;
+  advances_discount: number;
+  other_discounts: number;
+  net_amount: number;
+  pending_balance: number;
+  batch_id: string | null;
+  created_at: string;
 };
 
 type Insumo = {
@@ -252,6 +271,7 @@ export function App() {
   const [lots, setLots] = useState<Lot[]>([]);
   const [availableDryingLots, setAvailableDryingLots] = useState<Lot[]>([]);
   const [dryingReports, setDryingReports] = useState<DryingTunnelReport[]>([]);
+  const [liquidacionesList, setLiquidacionesList] = useState<LiqRecord[]>([]);
   const [stock, setStock] = useState<StockRow[]>([]);
   const [insumos, setInsumos] = useState<Insumo[]>([]);
   const [productionResult, setProductionResult] = useState<ProductionResult | null>(null);
@@ -275,7 +295,18 @@ export function App() {
   const [millingYields, setMillingYields] = useState<MillingYieldResult | null>(null);
 
   const [toasts, setToasts] = useState<Array<{ id: number; text: string; type?: "success" | "error" | "warn" }>>([]);
-  const [quickMenuOpen, setQuickMenuOpen] = useState(false);
+
+  type LiqLine = { lot_id: string; quintals: string; price: string };
+  type LiqResultItem = {
+    lot_code: string; rice_type: string | null;
+    quintals: number; price_per_quintal: number;
+    gross_amount: number; advances_discount: number; other_discounts: number; net_amount: number;
+  };
+  const [liqFarmerId, setLiqFarmerId] = useState("");
+  const [liqLines, setLiqLines] = useState<LiqLine[]>([{ lot_id: "", quintals: "", price: "" }]);
+  const [discountsOpen, setDiscountsOpen] = useState(false);
+  const [liqDiscounts, setLiqDiscounts] = useState({ fomento: "", bascula: "", flete: "", cosechadora: "" });
+  const [liqResult, setLiqResult] = useState<LiqResultItem[] | null>(null);
 
   const addToast = useCallback((text: string, type?: "success" | "error" | "warn") => {
     const id = Date.now();
@@ -453,6 +484,135 @@ export function App() {
     () => (Array.isArray(selectedDryerEntries) ? selectedDryerEntries : []).reduce((sum, entry) => sum + entry.weightQq, 0),
     [selectedDryerEntries]
   );
+  const availableLots = useMemo(
+    () => lots.filter((l) => l.status !== "LIQUIDATED"),
+    [lots]
+  );
+
+  const farmerLots = useMemo(
+    () => liqFarmerId ? availableLots.filter((l) => l.farmer_id === liqFarmerId) : [],
+    [availableLots, liqFarmerId]
+  );
+
+  const liqGrossTotal = useMemo(() =>
+    liqLines.reduce((sum, line) => {
+      if (!line.lot_id || !line.price) return sum;
+      const lot = lots.find((l) => l.id === line.lot_id);
+      const qq = Number(line.quintals) || Number(lot?.quintals ?? 0);
+      return sum + qq * Number(line.price);
+    }, 0),
+    [liqLines, lots]
+  );
+
+  const liqQqTotal = useMemo(() =>
+    liqLines.reduce((sum, line) => {
+      if (!line.lot_id) return sum;
+      const lot = lots.find((l) => l.id === line.lot_id);
+      return sum + (Number(line.quintals) || Number(lot?.quintals ?? 0));
+    }, 0),
+    [liqLines, lots]
+  );
+
+  const farmersWithLots = useMemo(
+    () => farmers.filter((f) => availableLots.some((l) => l.farmer_id === f.id)),
+    [farmers, availableLots]
+  );
+
+  const farmersWithAdvances = useMemo(
+    () => farmers.filter((f) => Number(f.pending_advance_balance) > 0),
+    [farmers]
+  );
+
+  const farmersForAnticipo = useMemo(() =>
+    farmers
+      .map((f) => ({
+        id: f.id,
+        full_name: f.full_name,
+        pendingQq: availableLots
+          .filter((l) => l.farmer_id === f.id)
+          .reduce((s, l) => s + Number(l.quintals ?? 0), 0),
+      }))
+      .filter((f) => f.pendingQq > 0),
+    [farmers, availableLots]
+  );
+
+  type LiqBatch = {
+    key: string;
+    batch_id: string | null;
+    farmer_name: string;
+    created_at: string;
+    lots: Array<{ lot_code: string | null; rice_type: string | null; quintals: number; price_per_quintal: number }>;
+    gross_total: number;
+    advances_total: number;
+    other_disc_total: number;
+    net_total: number;
+    pending_total: number;
+  };
+  const liqBatches = useMemo((): LiqBatch[] => {
+    // Ordenar de más reciente a más antiguo para mostrar así
+    const sorted = [...liquidacionesList].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+
+    const batches: LiqBatch[] = [];
+
+    for (const r of sorted) {
+      const rTime = new Date(r.created_at).getTime();
+
+      // 1) Si tiene batch_id → buscar batch existente con mismo batch_id
+      if (r.batch_id) {
+        const existing = batches.find((b) => b.batch_id === r.batch_id);
+        if (existing) {
+          existing.lots.push({ lot_code: r.lot_code, rice_type: r.rice_type, quintals: Number(r.quintals), price_per_quintal: Number(r.price_per_quintal) });
+          existing.gross_total    += Number(r.gross_amount);
+          existing.advances_total += Number(r.advances_discount);
+          existing.other_disc_total += Number(r.other_discounts);
+          existing.net_total      += Number(r.net_amount);
+          existing.pending_total  += Number(r.pending_balance);
+          continue;
+        }
+      } else {
+        // 2) Sin batch_id → agrupar por agricultor + ventana de 15 segundos
+        const existing = batches.find(
+          (b) =>
+            b.batch_id === null &&
+            b.farmer_name === r.farmer_name &&
+            Math.abs(new Date(b.created_at).getTime() - rTime) <= 15000
+        );
+        if (existing) {
+          existing.lots.push({ lot_code: r.lot_code, rice_type: r.rice_type, quintals: Number(r.quintals), price_per_quintal: Number(r.price_per_quintal) });
+          existing.gross_total    += Number(r.gross_amount);
+          existing.advances_total += Number(r.advances_discount);
+          existing.other_disc_total += Number(r.other_discounts);
+          existing.net_total      += Number(r.net_amount);
+          existing.pending_total  += Number(r.pending_balance);
+          continue;
+        }
+      }
+
+      // 3) Crear nuevo batch
+      batches.push({
+        key: r.batch_id ?? r.id,
+        batch_id: r.batch_id,
+        farmer_name: r.farmer_name,
+        created_at: r.created_at,
+        lots: [{ lot_code: r.lot_code, rice_type: r.rice_type, quintals: Number(r.quintals), price_per_quintal: Number(r.price_per_quintal) }],
+        gross_total:      Number(r.gross_amount),
+        advances_total:   Number(r.advances_discount),
+        other_disc_total: Number(r.other_discounts),
+        net_total:        Number(r.net_amount),
+        pending_total:    Number(r.pending_balance),
+      });
+    }
+
+    return batches;
+  }, [liquidacionesList]);
+
+  const liqDiscountsTotal = useMemo(() =>
+    Object.values(liqDiscounts).reduce((sum, v) => sum + Number(v || 0), 0),
+    [liqDiscounts]
+  );
+
   const setupScore = useMemo(() => {
     const checks = [
       farmers.length > 0,
@@ -480,7 +640,8 @@ export function App() {
         stockRows,
         supplyRows,
         dryingLotRows,
-        dryingReportRows
+        dryingReportRows,
+        liqRows
       ] = await Promise.all([
         apiGet<Dashboard>("/dashboard"),
         apiGet<Farmer[]>("/farmers"),
@@ -490,7 +651,8 @@ export function App() {
         apiGet<StockRow[]>("/inventory/stock"),
         apiGet<Insumo[]>("/inventory/insumos"),
         apiGet<Lot[]>("/process-flow/drying/available-lots"),
-        apiGet<DryingTunnelReport[]>("/process-flow/drying/reports")
+        apiGet<DryingTunnelReport[]>("/process-flow/drying/reports"),
+        apiGet<LiqRecord[]>("/liquidations")
       ]);
 
       setDashboard(dash);
@@ -500,6 +662,7 @@ export function App() {
       setLots(lotRows);
       setAvailableDryingLots(dryingLotRows);
       setDryingReports(dryingReportRows);
+      setLiquidacionesList(liqRows);
       setStock(stockRows);
       setInsumos(supplyRows);
     } finally {
@@ -1080,25 +1243,119 @@ export function App() {
     await refresh();
   }
 
-  async function submitLiquidation(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const lotId = String(form.get("lot_id"));
-    const lot = lots.find((item) => item.id === lotId);
-    if (!lot) return;
-
-    await apiPost("/liquidations", {
-      farmer_id: form.get("farmer_id"),
-      lot_id: lotId,
-      quintals: Number(form.get("quintals")),
-      price_per_quintal: Number(form.get("price_per_quintal")),
-      other_discounts: Number(form.get("other_discounts") || 0)
-    });
-
-    safeResetForm(formElement);
-    setMessage("Liquidacion creada con descuento automatico de anticipos");
+  async function submitLiquidations() {
+    const validLines = liqLines.filter((l) => l.lot_id && l.price);
+    if (!liqFarmerId || validLines.length === 0) {
+      setMessage("Seleccione agricultor y al menos un lote con precio");
+      return;
+    }
+    type LiqApiResult = {
+      quintals: number; price_per_quintal: number;
+      gross_amount: number; advances_discount: number; other_discounts: number; net_amount: number;
+    };
+    const batchId = crypto.randomUUID();
+    const resultItems: Array<{
+      lot_code: string; rice_type: string | null;
+      quintals: number; price_per_quintal: number;
+      gross_amount: number; advances_discount: number; other_discounts: number; net_amount: number;
+    }> = [];
+    for (let i = 0; i < validLines.length; i++) {
+      const line = validLines[i];
+      const lot = lots.find((l) => l.id === line.lot_id);
+      if (!lot) continue;
+      const qq = Number(line.quintals) || Number(lot.quintals ?? 0);
+      const result = await apiPost<LiqApiResult>("/liquidations", {
+        farmer_id: liqFarmerId,
+        lot_id: line.lot_id,
+        quintals: qq,
+        price_per_quintal: Number(line.price),
+        other_discounts: i === 0 ? liqDiscountsTotal : 0,
+        batch_id: batchId
+      });
+      resultItems.push({
+        lot_code: lot.lot_code,
+        rice_type: lot.rice_type ?? null,
+        quintals: Number(result.quintals),
+        price_per_quintal: Number(result.price_per_quintal),
+        gross_amount: Number(result.gross_amount),
+        advances_discount: Number(result.advances_discount),
+        other_discounts: Number(result.other_discounts),
+        net_amount: Number(result.net_amount),
+      });
+    }
+    setLiqResult(resultItems);
+    setLiqLines([{ lot_id: "", quintals: "", price: "" }]);
+    setLiqDiscounts({ fomento: "", bascula: "", flete: "", cosechadora: "" });
+    setDiscountsOpen(false);
+    setMessage(`${resultItems.length} lote(s) liquidado(s)`);
     await refresh();
+  }
+
+  function printLiqBatch(b: LiqBatch) {
+    const qqTotal = b.lots.reduce((s, l) => s + l.quintals, 0);
+    const fecha = new Date(b.created_at).toLocaleDateString("es-EC", {
+      year: "numeric", month: "long", day: "numeric",
+    });
+    const lotsRows = b.lots.map((l) => `
+      <tr>
+        <td>${l.lot_code ?? "—"}</td>
+        <td>${l.rice_type ?? "—"}</td>
+        <td style="text-align:right">${l.quintals.toFixed(2)}</td>
+        <td style="text-align:right">$${l.price_per_quintal.toFixed(2)}</td>
+        <td style="text-align:right">$${(l.quintals * l.price_per_quintal).toFixed(2)}</td>
+      </tr>`).join("");
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+      <title>Comprobante de Liquidación</title>
+      <style>
+        *{box-sizing:border-box}
+        body{font-family:Arial,sans-serif;font-size:13px;color:#111;margin:24px 32px}
+        .hdr{text-align:center;border-bottom:2px solid #111;padding-bottom:10px;margin-bottom:14px}
+        .hdr h1{margin:0;font-size:19px;letter-spacing:1px}
+        .hdr h2{margin:2px 0;font-size:13px;font-weight:normal}
+        .hdr h3{margin:6px 0 0;font-size:15px;letter-spacing:2px;text-transform:uppercase}
+        .meta{display:flex;justify-content:space-between;margin-bottom:14px;font-size:13px}
+        table{width:100%;border-collapse:collapse;margin-bottom:10px}
+        th{background:#f0f0f0;padding:6px 8px;text-align:left;border:1px solid #bbb;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+        td{padding:6px 8px;border:1px solid #ccc;font-size:13px}
+        .totals{width:280px;margin-left:auto;border-collapse:collapse}
+        .totals td{padding:5px 8px;border:none;font-size:13px}
+        .totals .lbl{font-weight:600;text-align:right;padding-right:12px}
+        .totals .val{text-align:right}
+        .totals .disc{color:#b91c1c}
+        .total-row td{font-weight:700;font-size:15px;border-top:2px solid #111;padding-top:7px}
+        .sigs{display:flex;justify-content:space-around;margin-top:52px}
+        .sig{text-align:center}
+        .sig hr{width:180px;border:none;border-top:1px solid #111;margin:0 auto 4px}
+        .sig span{font-size:12px}
+        @media print{body{margin:10mm}}
+      </style></head><body>
+      <div class="hdr">
+        <h1>BASCULA ERP</h1>
+        <h2>Piladora de Arroz</h2>
+        <h3>Comprobante de Liquidación</h3>
+      </div>
+      <div class="meta">
+        <div><strong>Agricultor:</strong> ${b.farmer_name}</div>
+        <div><strong>Fecha:</strong> ${fecha}</div>
+      </div>
+      <table>
+        <thead><tr><th>Lote</th><th>Tipo</th><th style="text-align:right">QQ</th><th style="text-align:right">Precio/QQ</th><th style="text-align:right">Subtotal</th></tr></thead>
+        <tbody>${lotsRows}</tbody>
+      </table>
+      <table class="totals">
+        <tr><td class="lbl">Total QQ:</td><td class="val">${qqTotal.toFixed(2)} QQ</td></tr>
+        <tr><td class="lbl">Bruto:</td><td class="val">$${b.gross_total.toFixed(2)}</td></tr>
+        ${b.advances_total > 0 ? `<tr><td class="lbl disc">Desc. Anticipo:</td><td class="val disc">-$${b.advances_total.toFixed(2)}</td></tr>` : ""}
+        ${b.other_disc_total > 0 ? `<tr><td class="lbl disc">Otros descuentos:</td><td class="val disc">-$${b.other_disc_total.toFixed(2)}</td></tr>` : ""}
+        <tr class="total-row"><td class="lbl">NETO A PAGAR:</td><td class="val">$${b.net_total.toFixed(2)}</td></tr>
+      </table>
+      <div class="sigs">
+        <div class="sig"><hr/><span>Agricultor</span></div>
+        <div class="sig"><hr/><span>Responsable</span></div>
+      </div>
+    </body></html>`;
+    const win = window.open("", "_blank", "width=760,height=620");
+    if (win) { win.document.write(html); win.document.close(); win.print(); }
   }
 
   return (
@@ -1112,48 +1369,6 @@ export function App() {
             <small>Piladora de arroz</small>
           </div>
         </div>
-        <div className="quickAdd">
-          <button
-            className={`quickAddBtn${quickMenuOpen ? " open" : ""}`}
-            onClick={() => setQuickMenuOpen((v) => !v)}
-          >
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor">
-              <rect x="7" y="1" width="2" height="14" rx="1"/>
-              <rect x="1" y="7" width="14" height="2" rx="1"/>
-            </svg>
-            Agregar
-            <svg className="chevron" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <polyline points="2,4 6,8 10,4"/>
-            </svg>
-          </button>
-
-          {quickMenuOpen && (
-            <div className="quickAddItems">
-              {[
-                { label: "Ticket de báscula",  tab: "Bascula",       icon: "⚖" },
-                { label: "Agricultor",          tab: "Agricultores",  icon: "👤" },
-                { label: "Anticipo",            tab: "Agricultores",  icon: "💵" },
-                { label: "Pedido de venta",     tab: "Pedidos",       icon: "📋" },
-                { label: "Secado por túnel",    tab: "Secadoras",     icon: "🌡" },
-                { label: "Abrir caja",          tab: "Caja",          icon: "🏧" },
-                { label: "Liquidación",         tab: "Liquidaciones", icon: "📄" },
-              ].map(({ label, tab, icon }) => (
-                <button
-                  key={label}
-                  className="quickAddItem"
-                  onClick={() => { setActiveTab(tab); setQuickMenuOpen(false); }}
-                >
-                  <span className="quickAddItemIcon">{icon}</span>
-                  {label}
-                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-                    <polyline points="3,2 7,5 3,8"/>
-                  </svg>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
         <nav>
           {tabs.map((tab) => (
             <button className={activeTab === tab ? "active" : ""} key={tab} onClick={() => setActiveTab(tab)}>
@@ -1353,13 +1568,6 @@ export function App() {
               <Input name="identification" label="Cedula/RUC" />
               <Input name="phone" label="Telefono" />
               <button className="primary">Guardar</button>
-            </form>
-            <form className="formPanel" onSubmit={(event) => submitAdvance(event).catch((error) => setMessage(error.message))}>
-              <h2>Registrar anticipo</h2>
-              <Select name="farmer_id" label="Agricultor" rows={farmers.map((f) => [f.id, f.full_name])} />
-              <Input name="amount" label="Monto" type="number" />
-              <Input name="concept" label="Concepto" />
-              <button className="primary">Registrar</button>
             </form>
             <DataList
               title="Agricultores registrados"
@@ -1622,20 +1830,242 @@ export function App() {
 
         {activeTab === "Liquidaciones" && (
           <section className="panelGrid">
-            <form className="formPanel" onSubmit={(event) => submitLiquidation(event).catch((error) => setMessage(error.message))}>
-              <h2>Nueva liquidacion</h2>
-              <Select name="farmer_id" label="Agricultor" rows={farmers.map((f) => [f.id, f.full_name])} />
-              <Select name="lot_id" label="Lote" rows={lots.map((lot) => [lot.id, `${lot.lot_code} - ${lot.farmer_name ?? ""}`])} />
-              <Input name="quintals" label="Quintales liquidados" type="number" />
-              <Input name="price_per_quintal" label="Precio por QQ" type="number" />
-              <Input name="other_discounts" label="Otros descuentos" type="number" defaultValue="0" />
-              <button className="primary">Liquidar</button>
+            <div className="formPanel">
+              {liqResult ? (
+                <>
+                  <h2>Liquidación realizada</h2>
+                  <div className="liqResultTable">
+                    <div className="liqResultHead">
+                      <span>Lote</span><span>Tipo</span><span>QQ</span>
+                      <span>Precio</span><span>Desc.</span><span>Neto</span>
+                    </div>
+                    {liqResult.map((item, i) => (
+                      <div key={i} className="liqResultRow">
+                        <span>{item.lot_code}</span>
+                        <span>{item.rice_type ?? "—"}</span>
+                        <span>{Number(item.quintals).toFixed(2)}</span>
+                        <span>${Number(item.price_per_quintal).toFixed(2)}</span>
+                        <span className="liqDiscount">
+                          -${(Number(item.advances_discount) + Number(item.other_discounts)).toFixed(2)}
+                        </span>
+                        <span className="liqNet">${Number(item.net_amount).toFixed(2)}</span>
+                      </div>
+                    ))}
+                    <div className="liqResultTotal">
+                      <span>Total neto</span><span /><span />
+                      <span /><span />
+                      <span className="liqNet">
+                        ${liqResult.reduce((s, r) => s + Number(r.net_amount), 0).toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="liqResultActions">
+                    {farmerLots.length > 0 && (
+                      <button type="button" className="liqAddBtn"
+                        onClick={() => setLiqResult(null)}>
+                        ↩ Seguir liquidando
+                      </button>
+                    )}
+                    <button type="button" className="liqAddBtn"
+                      onClick={() => { setLiqResult(null); setLiqFarmerId(""); }}>
+                      + Nueva liquidación
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h2>Nueva liquidación</h2>
+
+                  <label>
+                    <span>Agricultor</span>
+                    <select value={liqFarmerId}
+                      onChange={(e) => { setLiqFarmerId(e.target.value); setLiqLines([{ lot_id: "", quintals: "", price: "" }]); }}
+                      required>
+                      <option value="">Seleccione</option>
+                      {farmersWithLots.map((f) => <option key={f.id} value={f.id}>{f.full_name}</option>)}
+                    </select>
+                  </label>
+
+                  <div className="liqLinesHeader">
+                    <span>Lote</span><span>QQ</span><span>Precio / QQ</span>
+                  </div>
+
+                  {liqLines.map((line, i) => {
+                    const lot = lots.find((l) => l.id === line.lot_id);
+                    const takenIds = new Set(liqLines.filter((_, j) => j !== i).map((l) => l.lot_id).filter(Boolean));
+                    return (
+                      <div key={i} className="liqLine">
+                        <select value={line.lot_id} onChange={(e) => {
+                          const sel = lots.find((l) => l.id === e.target.value);
+                          const updated = [...liqLines];
+                          updated[i] = { ...updated[i], lot_id: e.target.value, quintals: sel ? String(Number(sel.quintals ?? 0).toFixed(2)) : "" };
+                          setLiqLines(updated);
+                        }} required>
+                          <option value="">— seleccionar lote —</option>
+                          {farmerLots.filter((l) => !takenIds.has(l.id)).map((l) => (
+                            <option key={l.id} value={l.id}>
+                              {l.lot_code} · {l.rice_type ?? "—"} · {Number(l.quintals ?? 0).toFixed(2)} QQ
+                            </option>
+                          ))}
+                        </select>
+                        <input type="number" step="0.01" min="0"
+                          placeholder={lot ? String(Number(lot.quintals ?? 0).toFixed(2)) : "QQ"}
+                          value={line.quintals}
+                          onChange={(e) => { const u = [...liqLines]; u[i] = { ...u[i], quintals: e.target.value }; setLiqLines(u); }} />
+                        <input type="number" step="0.01" min="0" placeholder="0.00"
+                          value={line.price}
+                          onChange={(e) => { const u = [...liqLines]; u[i] = { ...u[i], price: e.target.value }; setLiqLines(u); }}
+                          required />
+                        {liqLines.length > 1 && (
+                          <button type="button" className="liqRemoveBtn"
+                            onClick={() => setLiqLines(liqLines.filter((_, j) => j !== i))}>×</button>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  <button type="button" className="liqAddBtn"
+                    onClick={() => setLiqLines([...liqLines, { lot_id: "", quintals: "", price: "" }])}>
+                    + Agregar lote
+                  </button>
+
+                  {/* ─ Descuentos ─ */}
+                  <button type="button"
+                    className={`liqDiscountToggle${discountsOpen ? " open" : ""}`}
+                    onClick={() => setDiscountsOpen((v) => !v)}>
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <line x1="3" y1="8" x2="13" y2="8"/>
+                      {!discountsOpen && <line x1="8" y1="3" x2="8" y2="13"/>}
+                    </svg>
+                    Descuentos
+                    {liqDiscountsTotal > 0 && <span className="liqDiscBadge">-${liqDiscountsTotal.toFixed(2)}</span>}
+                    <svg className="chevron" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <polyline points="2,4 6,8 10,4"/>
+                    </svg>
+                  </button>
+
+                  {discountsOpen && (
+                    <div className="liqDiscountsPanel">
+                      <div className="liqDiscNote">
+                        <strong>Anticipo</strong> — se descuenta automáticamente del balance del agricultor
+                      </div>
+                      {([
+                        { key: "fomento",     label: "Fomento" },
+                        { key: "bascula",     label: "Báscula" },
+                        { key: "flete",       label: "Flete" },
+                        { key: "cosechadora", label: "Cosechadora" },
+                      ] as const).map(({ key, label }) => (
+                        <label key={key} className="liqDiscRow">
+                          <span>{label}</span>
+                          <input type="number" step="0.01" min="0" placeholder="0.00"
+                            value={liqDiscounts[key]}
+                            onChange={(e) => setLiqDiscounts((p) => ({ ...p, [key]: e.target.value }))} />
+                        </label>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* ─ Resumen ─ */}
+                  <div className="liqSummary">
+                    <div className="liqSummaryRow">
+                      <span>Total QQ</span>
+                      <strong>{liqQqTotal.toFixed(2)} QQ</strong>
+                    </div>
+                    <div className="liqSummaryRow">
+                      <span>Total bruto</span>
+                      <strong>${liqGrossTotal.toFixed(2)}</strong>
+                    </div>
+                    {liqDiscountsTotal > 0 && (
+                      <div className="liqSummaryRow disc">
+                        <span>Descuentos manuales</span>
+                        <strong>-${liqDiscountsTotal.toFixed(2)}</strong>
+                      </div>
+                    )}
+                    <div className="liqSummaryRow total">
+                      <span>Estimado a pagar</span>
+                      <strong>${Math.max(0, liqGrossTotal - liqDiscountsTotal).toFixed(2)}</strong>
+                    </div>
+                    <small>* Anticipos pendientes se descuentan automáticamente</small>
+                  </div>
+
+                  <button className="primary"
+                    onClick={() => submitLiquidations().catch((e: Error) => setMessage(e.message))}>
+                    Liquidar {liqLines.filter((l) => l.lot_id && l.price).length || ""} lote(s)
+                  </button>
+                </>
+              )}
+            </div>
+
+            <form className="formPanel" onSubmit={(event) => submitAdvance(event).catch((error) => setMessage(error.message))}>
+              <h2>Registrar anticipo</h2>
+              <Select name="farmer_id" label="Agricultor" rows={farmersForAnticipo.map((f) => [f.id, `${f.full_name} — ${f.pendingQq.toFixed(2)} QQ`])} />
+              <Input name="amount" label="Monto" type="number" />
+              <Input name="concept" label="Concepto" />
+              <button className="primary">Registrar</button>
             </form>
+
             <DataList
               title="Lotes disponibles"
-              headers={["Lote", "Agricultor", "Estado", "QQ"]}
-              rows={lots.map((lot) => [lot.lot_code, lot.farmer_name ?? "—", lot.status, `${Number(lot.quintals ?? 0).toFixed(2)} QQ`])}
+              headers={["Lote", "Tipo cáscara", "Agricultor", "Estado", "QQ"]}
+              rows={availableLots.map((lot) => [
+                lot.lot_code,
+                lot.rice_type ?? "—",
+                lot.farmer_name ?? "—",
+                lot.status,
+                `${Number(lot.quintals ?? 0).toFixed(2)} QQ`
+              ])}
             />
+
+            <div className="tablePanel liqHistPanel">
+              <h2>Liquidaciones realizadas</h2>
+              {liqBatches.length === 0
+                ? <p className="tableEmpty">Sin liquidaciones registradas</p>
+                : <div className="liqHistTable">
+                    <div className="liqHistHead">
+                      <span>Agricultor</span>
+                      <span>Lotes</span>
+                      <span>Total QQ</span>
+                      <span>Bruto</span>
+                      <span>Anticipo</span>
+                      <span>Otros desc.</span>
+                      <span>Neto</span>
+                      <span>Estado</span>
+                      <span></span>
+                    </div>
+                    {liqBatches.map((b) => {
+                      const paid = b.pending_total === 0;
+                      const qqTotal = b.lots.reduce((s, l) => s + l.quintals, 0);
+                      const lotsLabel = b.lots.map((l) => `${l.lot_code ?? "?"} (${l.rice_type ?? "—"})`).join(", ");
+                      return (
+                        <div key={b.key} className="liqHistRow">
+                          <span>{b.farmer_name}</span>
+                          <span title={lotsLabel} className="liqHistLots">{lotsLabel}</span>
+                          <span>{qqTotal.toFixed(2)} QQ</span>
+                          <span>${b.gross_total.toFixed(2)}</span>
+                          <span className="liqDiscount">-${b.advances_total.toFixed(2)}</span>
+                          <span className="liqDiscount">-${b.other_disc_total.toFixed(2)}</span>
+                          <span className="liqNet">${b.net_total.toFixed(2)}</span>
+                          <span>
+                            <span className={paid ? "liqBadgePaid" : "liqBadgePending"}>
+                              {paid ? "Pagado" : `Pend. $${b.pending_total.toFixed(2)}`}
+                            </span>
+                          </span>
+                          <span>
+                            <button type="button" className="liqPrintBtn" onClick={() => printLiqBatch(b)} title="Imprimir comprobante">
+                              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                                <rect x="3" y="1" width="10" height="8" rx="1"/>
+                                <path d="M3 9H1v5h14V9h-2"/>
+                                <rect x="4" y="11" width="8" height="3" rx=".5"/>
+                                <line x1="5" y1="12.5" x2="11" y2="12.5"/>
+                              </svg>
+                            </button>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+              }
+            </div>
           </section>
         )}
         </div>{/* .content */}

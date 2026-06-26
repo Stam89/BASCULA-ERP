@@ -16,7 +16,14 @@ const farmerSchema = z.object({
 });
 
 farmersRouter.get("/", asyncRoute(async (_req, res) => {
-  const result = await pool.query("SELECT * FROM farmers ORDER BY full_name ASC");
+  const result = await pool.query(`
+    SELECT f.*,
+           COALESCE(SUM(fa.balance) FILTER (WHERE fa.status IN ('CONFIRMED', 'PARTIAL')), 0) AS pending_advance_balance
+    FROM farmers f
+    LEFT JOIN farmer_advances fa ON fa.farmer_id = f.id
+    GROUP BY f.id
+    ORDER BY f.full_name ASC
+  `);
   res.json(result.rows);
 }));
 

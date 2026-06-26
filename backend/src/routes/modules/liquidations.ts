@@ -14,6 +14,7 @@ const liquidationInput = z.object({
   quintals: z.number().positive(),
   price_per_quintal: z.number().nonnegative(),
   other_discounts: z.number().nonnegative().default(0),
+  batch_id: z.string().uuid().optional(),
   created_by: z.string().uuid().optional()
 });
 
@@ -51,8 +52,8 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
     const liquidation = await client.query(
       `INSERT INTO liquidations
        (liquidation_number, farmer_id, lot_id, quintals, price_per_quintal, gross_amount,
-        advances_discount, other_discounts, net_amount, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        advances_discount, other_discounts, net_amount, batch_id, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
       [
         nextCode("LIQ"),
@@ -64,6 +65,7 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
         preview.advances_discount,
         preview.other_discounts,
         preview.net_amount,
+        data.batch_id ?? null,
         data.created_by
       ]
     );
@@ -112,9 +114,13 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
 
 liquidationsRouter.get("/", asyncRoute(async (_req, res) => {
   const result = await pool.query(
-    `SELECT l.*, f.full_name AS farmer_name
+    `SELECT l.*, f.full_name AS farmer_name,
+            lo.lot_code, lo.rice_type,
+            COALESCE(ap.balance, 0) AS pending_balance
      FROM liquidations l
      JOIN farmers f ON f.id = l.farmer_id
+     LEFT JOIN lots lo ON lo.id = l.lot_id
+     LEFT JOIN accounts_payable ap ON ap.liquidation_id = l.id
      ORDER BY l.created_at DESC`
   );
   res.json(result.rows);

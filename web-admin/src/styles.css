@@ -150,79 +150,215 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
   text-transform: uppercase;
 }
 
-/* ── Quick Add menu ───────────────────────────────────────────── */
-.quickAdd {
-  padding: 10px 10px 0;
+
+/* ── Liquidación multi-lote ───────────────────────────────────── */
+.liqLinesHeader {
+  display: grid;
+  grid-template-columns: 1fr 80px 100px;
+  gap: 6px;
+  padding: 0 2px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.liqLine {
+  display: grid;
+  grid-template-columns: 1fr 80px 100px auto;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.liqLine select,
+.liqLine input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  background: var(--c-surface);
+  color: var(--c-text);
+  font-size: 13px;
+  font-family: inherit;
+  transition: border-color var(--t);
+}
+
+.liqLine select:focus,
+.liqLine input:focus { outline: none; border-color: var(--c-brand); }
+
+.liqRemoveBtn {
+  width: 28px; height: 28px;
+  border: none; border-radius: var(--r-sm);
+  background: transparent; color: var(--c-muted);
+  font-size: 18px; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background var(--t), color var(--t);
   flex-shrink: 0;
 }
+.liqRemoveBtn:hover { background: #fee2e2; color: #dc2626; }
 
-.quickAddBtn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 9px 12px;
-  border: none;
-  border-radius: var(--r-sm);
-  background: var(--c-brand);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background var(--t);
+.liqAddBtn {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; padding: 7px 10px;
+  border: 1.5px dashed var(--c-border); border-radius: var(--r-sm);
+  background: transparent; color: var(--c-brand);
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: border-color var(--t), background var(--t);
+  margin-top: 2px;
+}
+.liqAddBtn:hover { border-color: var(--c-brand); background: color-mix(in srgb, var(--c-brand) 6%, transparent); }
+
+/* Descuentos */
+.liqDiscountToggle {
+  display: flex; align-items: center; gap: 7px;
+  width: 100%; padding: 8px 10px; margin-top: 10px;
+  border: 1px solid var(--c-border); border-radius: var(--r-sm);
+  background: var(--c-surface); color: var(--c-text);
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: border-color var(--t);
+}
+.liqDiscountToggle:hover { border-color: var(--c-brand); }
+.liqDiscountToggle .chevron { margin-left: auto; transition: transform var(--t); }
+.liqDiscountToggle.open .chevron { transform: rotate(180deg); }
+
+.liqDiscBadge {
+  margin-left: 4px; padding: 2px 7px;
+  background: #fee2e2; color: #dc2626;
+  border-radius: 99px; font-size: 11px; font-weight: 700;
 }
 
-.quickAddBtn:hover { background: var(--c-brand-dark); }
+.liqDiscountsPanel {
+  border: 1px solid var(--c-border); border-radius: var(--r-sm);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
+  animation: fadeIn 0.15s ease;
+}
+@keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 
-.quickAddBtn .chevron {
-  margin-left: auto;
-  transition: transform var(--t);
+.liqDiscNote {
+  font-size: 12px; color: var(--c-muted);
+  padding: 6px 8px; background: var(--c-bg);
+  border-radius: var(--r-sm); border-left: 3px solid var(--c-brand);
+}
+.liqDiscNote strong { color: var(--c-text); }
+
+.liqDiscRow {
+  display: grid; grid-template-columns: 1fr 120px;
+  align-items: center; gap: 8px; font-size: 13px;
+}
+.liqDiscRow input {
+  padding: 6px 10px; border: 1px solid var(--c-border);
+  border-radius: var(--r-sm); background: var(--c-surface);
+  color: var(--c-text); font-size: 13px; font-family: inherit;
+  text-align: right;
+}
+.liqDiscRow input:focus { outline: none; border-color: var(--c-brand); }
+
+/* Resumen */
+.liqSummary {
+  border-top: 1px solid var(--c-border); margin-top: 12px;
+  padding-top: 10px; display: flex; flex-direction: column; gap: 4px;
+}
+.liqSummaryRow {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 13px; color: var(--c-text-soft);
+}
+.liqSummaryRow.disc { color: #dc2626; }
+.liqSummaryRow.total {
+  font-size: 15px; font-weight: 700;
+  color: var(--c-brand); padding-top: 6px;
+  border-top: 1px solid var(--c-border); margin-top: 4px;
+}
+.liqSummary small { font-size: 11px; color: var(--c-muted); margin-top: 4px; }
+
+/* Resultado */
+.liqResultTable {
+  border: 1px solid var(--c-border); border-radius: var(--r-sm);
+  overflow: hidden; margin-bottom: 14px;
+}
+.liqResultHead,
+.liqResultRow,
+.liqResultTotal {
+  display: grid;
+  grid-template-columns: 2fr 1fr 60px 70px 80px 80px;
+  gap: 0;
+}
+.liqResultHead {
+  background: var(--c-bg);
+  font-size: 11px; font-weight: 600; color: var(--c-muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.liqResultHead span,
+.liqResultRow span,
+.liqResultTotal span {
+  padding: 7px 10px; border-right: 1px solid var(--c-border);
+}
+.liqResultHead span:last-child,
+.liqResultRow span:last-child,
+.liqResultTotal span:last-child { border-right: none; }
+.liqResultRow { font-size: 13px; border-top: 1px solid var(--c-border); }
+.liqResultRow:hover { background: var(--c-bg); }
+.liqResultTotal {
+  font-size: 13px; font-weight: 700;
+  border-top: 2px solid var(--c-border);
+  background: var(--c-bg);
+}
+.liqDiscount { color: #dc2626; }
+.liqNet { color: var(--c-brand); font-weight: 700; }
+
+.liqResultActions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Historial de liquidaciones */
+.liqHistPanel { grid-column: 1 / -1; }
+
+.liqHistTable { overflow-x: auto; }
+
+.liqHistHead,
+.liqHistRow {
+  display: grid;
+  grid-template-columns: 150px 1fr 90px 90px 90px 90px 90px 110px 44px;
+  min-width: 850px;
+}
+.liqHistHead {
+  background: var(--c-bg);
+  font-size: 11px; font-weight: 600; color: var(--c-muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+  border-bottom: 2px solid var(--c-border);
+}
+.liqHistHead span,
+.liqHistRow span {
+  padding: 7px 10px;
+  border-right: 1px solid var(--c-border);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.liqHistHead span:last-child,
+.liqHistRow span:last-child { border-right: none; }
+.liqHistRow { font-size: 13px; border-top: 1px solid var(--c-border); }
+.liqHistRow:hover { background: var(--c-bg); }
+.liqHistNum { font-weight: 600; color: var(--c-brand); font-size: 12px; }
+.liqHistLots { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+
+.liqPrintBtn {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px;
+  border: 1px solid var(--c-border); border-radius: var(--r-sm);
+  background: transparent; color: var(--c-muted);
+  cursor: pointer; transition: background var(--t), color var(--t), border-color var(--t);
+}
+.liqPrintBtn:hover {
+  background: var(--c-brand); color: #fff; border-color: var(--c-brand);
 }
 
-.quickAddBtn.open .chevron { transform: rotate(180deg); }
-
-.quickAddItems {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  margin-top: 4px;
-  padding: 4px 0 6px;
-  border-bottom: 1px solid var(--c-sidebar-border);
-  animation: slideDown 0.18s ease;
+.liqBadgePaid {
+  display: inline-block; padding: 2px 8px;
+  border-radius: 99px; font-size: 11px; font-weight: 700;
+  background: #dcfce7; color: #15803d;
 }
-
-@keyframes slideDown {
-  from { opacity: 0; transform: translateY(-6px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-.quickAddItem {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  width: 100%;
-  padding: 8px 10px;
-  border: none;
-  border-radius: var(--r-sm);
-  background: transparent;
-  color: var(--c-sidebar-text);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  text-align: left;
-  transition: background var(--t);
-}
-
-.quickAddItem:hover { background: var(--c-sidebar-hover); }
-
-.quickAddItem svg { margin-left: auto; opacity: 0.5; flex-shrink: 0; }
-.quickAddItem:hover svg { opacity: 1; }
-
-.quickAddItemIcon {
-  font-size: 14px;
-  width: 20px;
-  text-align: center;
-  flex-shrink: 0;
+.liqBadgePending {
+  display: inline-block; padding: 2px 8px;
+  border-radius: 99px; font-size: 11px; font-weight: 700;
+  background: #fef9c3; color: #a16207;
 }
 
 /* ── Nav ──────────────────────────────────────────────────────── */
