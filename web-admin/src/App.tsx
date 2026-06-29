@@ -355,6 +355,7 @@ export function App() {
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
   const [cashSummary, setCashSummary] = useState<CashSummary | null>(null);
   const [cashPayables, setCashPayables] = useState<AccountPayable[]>([]);
+  const [anticipoFarmerId, setAnticipoFarmerId] = useState("");
 
   const addToast = useCallback((text: string, type?: "success" | "error" | "warn") => {
     const id = Date.now();
@@ -2139,11 +2140,26 @@ export function App() {
 
                 {/* ── Anticipo ── */}
                 {cajaSubTab === "anticipo" && (
-                  <form className="formPanel cajaForm" onSubmit={(event) => submitCajaAnticipo(event).catch((e) => addToast(e.message, "error"))}>
+                  <form className="formPanel cajaForm" onSubmit={(event) => submitCajaAnticipo(event).then(() => setAnticipoFarmerId("")).catch((e) => addToast(e.message, "error"))}>
                     <h2>Anticipo a agricultor</h2>
                     {farmersWithPendingLiq.length === 0
                       ? <p className="muted">No hay agricultores con saldo pendiente en liquidaciones.</p>
-                      : <Select name="farmer_id" label="Agricultor" rows={farmersWithPendingLiq.map((f) => [f.id, f.full_name])} />
+                      : (
+                        <label>
+                          <span>Agricultor</span>
+                          <select
+                            name="farmer_id"
+                            required
+                            value={anticipoFarmerId}
+                            onChange={(e) => setAnticipoFarmerId(e.target.value)}
+                          >
+                            <option value="">Seleccione</option>
+                            {farmersWithPendingLiq.map((f) => (
+                              <option key={f.id} value={f.id}>{f.full_name}</option>
+                            ))}
+                          </select>
+                        </label>
+                      )
                     }
                     <Input name="amount" label="Monto $" type="number" />
                     <Input name="concept" label="Concepto" />
@@ -2434,14 +2450,28 @@ export function App() {
                           </span>
                           <span className="liqActions">
                             {!paid && (
-                              <button
-                                type="button"
-                                className="liqApplyBtn"
-                                title="Descontar anticipos pendientes"
-                                onClick={() => aplicarAnticiposLiquidacion(b.liquidation_ids).catch((e) => addToast(e.message, "error"))}
-                              >
-                                Desc. anticipo
-                              </button>
+                              <>
+                                <button
+                                  type="button"
+                                  className="liqAbonoBtn"
+                                  title="Ir a Caja → Anticipo con este agricultor"
+                                  onClick={() => {
+                                    setAnticipoFarmerId(b.farmer_id);
+                                    setCajaSubTab("anticipo");
+                                    setActiveTab("Caja");
+                                  }}
+                                >
+                                  💰 Abonar
+                                </button>
+                                <button
+                                  type="button"
+                                  className="liqApplyBtn"
+                                  title="Descontar anticipos pendientes"
+                                  onClick={() => aplicarAnticiposLiquidacion(b.liquidation_ids).catch((e) => addToast(e.message, "error"))}
+                                >
+                                  Desc. anticipo
+                                </button>
+                              </>
                             )}
                             <button type="button" className="liqPrintBtn" onClick={() => printLiqBatch(b).catch((e) => addToast(e.message, "error"))} title="Imprimir comprobante">
                               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
