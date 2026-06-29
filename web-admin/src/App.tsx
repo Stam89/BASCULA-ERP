@@ -55,6 +55,13 @@ type StockRow = {
   unit: string;
 };
 
+type DiscountBreakdown = {
+  fomento: number;
+  bascula: number;
+  flete: number;
+  cosechadora: number;
+};
+
 type LiqRecord = {
   id: string;
   liquidation_number: string;
@@ -67,6 +74,7 @@ type LiqRecord = {
   gross_amount: number;
   advances_discount: number;
   other_discounts: number;
+  discount_breakdown: DiscountBreakdown | null;
   net_amount: number;
   pending_balance: number;
   batch_id: string | null;
@@ -606,6 +614,7 @@ export function App() {
     gross_total: number;
     advances_total: number;
     other_disc_total: number;
+    discount_breakdown: DiscountBreakdown;
     net_total: number;
     pending_total: number;
   };
@@ -653,6 +662,7 @@ export function App() {
         }
       }
 
+      const bd = r.discount_breakdown ?? { fomento: 0, bascula: 0, flete: 0, cosechadora: 0 };
       // 3) Crear nuevo batch
       batches.push({
         key: r.batch_id ?? r.id,
@@ -662,11 +672,12 @@ export function App() {
         farmer_id: r.farmer_id,
         created_at: r.created_at,
         lots: [{ lot_code: r.lot_code, rice_type: r.rice_type, quintals: Number(r.quintals), price_per_quintal: Number(r.price_per_quintal) }],
-        gross_total:      Number(r.gross_amount),
-        advances_total:   Number(r.advances_discount),
-        other_disc_total: Number(r.other_discounts),
-        net_total:        Number(r.net_amount),
-        pending_total:    Number(r.pending_balance),
+        gross_total:        Number(r.gross_amount),
+        advances_total:     Number(r.advances_discount),
+        other_disc_total:   Number(r.other_discounts),
+        discount_breakdown: { fomento: Number(bd.fomento), bascula: Number(bd.bascula), flete: Number(bd.flete), cosechadora: Number(bd.cosechadora) },
+        net_total:          Number(r.net_amount),
+        pending_total:      Number(r.pending_balance),
       });
     }
 
@@ -1463,6 +1474,12 @@ export function App() {
         quintals: qq,
         price_per_quintal: Number(line.price),
         other_discounts: i === 0 ? liqDiscountsTotal : 0,
+        discount_breakdown: i === 0 ? {
+          fomento:     Number(liqDiscounts.fomento     || 0),
+          bascula:     Number(liqDiscounts.bascula     || 0),
+          flete:       Number(liqDiscounts.flete       || 0),
+          cosechadora: Number(liqDiscounts.cosechadora || 0)
+        } : undefined,
         batch_id: batchId
       });
       resultItems.push({
@@ -1562,7 +1579,16 @@ export function App() {
         <tr><td class="lbl">Total QQ:</td><td class="val">${qqTotal.toFixed(2)} QQ</td></tr>
         <tr><td class="lbl">Bruto:</td><td class="val">$${b.gross_total.toFixed(2)}</td></tr>
         ${advanceRows.length > 0 ? `<tr class="disc-header"><td colspan="2">Anticipos descontados</td></tr>${advanceRows}` : ""}
-        ${b.other_disc_total > 0 ? `<tr><td class="lbl disc">Otros descuentos:</td><td class="val disc">-$${b.other_disc_total.toFixed(2)}</td></tr>` : ""}
+        ${b.other_disc_total > 0 ? `
+          <tr class="disc-header"><td colspan="2">Otros descuentos</td></tr>
+          ${b.discount_breakdown.fomento     > 0 ? `<tr><td class="lbl disc">Fomento:</td><td class="val disc">-$${b.discount_breakdown.fomento.toFixed(2)}</td></tr>` : ""}
+          ${b.discount_breakdown.bascula     > 0 ? `<tr><td class="lbl disc">Báscula:</td><td class="val disc">-$${b.discount_breakdown.bascula.toFixed(2)}</td></tr>` : ""}
+          ${b.discount_breakdown.flete       > 0 ? `<tr><td class="lbl disc">Flete:</td><td class="val disc">-$${b.discount_breakdown.flete.toFixed(2)}</td></tr>` : ""}
+          ${b.discount_breakdown.cosechadora > 0 ? `<tr><td class="lbl disc">Cosechadora:</td><td class="val disc">-$${b.discount_breakdown.cosechadora.toFixed(2)}</td></tr>` : ""}
+          ${(b.other_disc_total - b.discount_breakdown.fomento - b.discount_breakdown.bascula - b.discount_breakdown.flete - b.discount_breakdown.cosechadora) > 0.01
+            ? `<tr><td class="lbl disc">Otros:</td><td class="val disc">-$${(b.other_disc_total - b.discount_breakdown.fomento - b.discount_breakdown.bascula - b.discount_breakdown.flete - b.discount_breakdown.cosechadora).toFixed(2)}</td></tr>`
+            : ""}
+        ` : ""}
         <tr class="total-row"><td class="lbl">NETO A PAGAR:</td><td class="val">$${b.net_total.toFixed(2)}</td></tr>
       </table>
       <div class="sigs">

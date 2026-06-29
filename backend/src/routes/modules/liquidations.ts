@@ -8,12 +8,20 @@ import { round2 } from "../../utils/rice-formulas.js";
 
 export const liquidationsRouter = Router();
 
+const discountBreakdownSchema = z.object({
+  fomento:     z.number().nonnegative().default(0),
+  bascula:     z.number().nonnegative().default(0),
+  flete:       z.number().nonnegative().default(0),
+  cosechadora: z.number().nonnegative().default(0)
+}).optional();
+
 const liquidationInput = z.object({
   farmer_id: z.string().uuid(),
   lot_id: z.string().uuid(),
   quintals: z.number().positive(),
   price_per_quintal: z.number().nonnegative(),
   other_discounts: z.number().nonnegative().default(0),
+  discount_breakdown: discountBreakdownSchema,
   batch_id: z.string().uuid().optional(),
   created_by: z.string().uuid().optional()
 });
@@ -52,8 +60,8 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
     const liquidation = await client.query(
       `INSERT INTO liquidations
        (liquidation_number, farmer_id, lot_id, quintals, price_per_quintal, gross_amount,
-        advances_discount, other_discounts, net_amount, batch_id, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        advances_discount, other_discounts, discount_breakdown, net_amount, batch_id, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING *`,
       [
         nextCode("LIQ"),
@@ -64,6 +72,7 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
         preview.gross_amount,
         preview.advances_discount,
         preview.other_discounts,
+        data.discount_breakdown ? JSON.stringify(data.discount_breakdown) : null,
         preview.net_amount,
         data.batch_id ?? null,
         data.created_by
