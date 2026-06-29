@@ -239,7 +239,39 @@ type MillingPiladoEntry = {
   quantityQq: number;
 };
 
-const tabs = ["Dashboard", "Bascula", "Secadoras", "Produccion", "Agricultores", "Inventario", "Pedidos", "Caja", "Liquidaciones"];
+type Fomento = {
+  id: string;
+  farmer_name: string;
+  farmer_id: string | null;
+  cuadras: number;
+  inicio: string;
+  cosecha: string | null;
+  renta: number;
+  status: "ACTIVOS" | "NO ACTIVOS" | "APROBADOS";
+  notes: string | null;
+  created_at: string;
+  paradas: number;
+  monto_limite: number;
+  total_pedido: number;
+  gasto_adm: number;
+  falta_por_pedir: number;
+  estado_credito: "HABILITADO" | "DESABILITADO";
+};
+
+type FomentoEntrega = {
+  id: string;
+  fomento_id: string;
+  fecha: string;
+  valor: number;
+  concepto: string | null;
+  interes: number;
+  suman: number;
+  created_at: string;
+};
+
+type FomentoDetalle = Fomento & { entregas: FomentoEntrega[] };
+
+const tabs = ["Dashboard", "Bascula", "Secadoras", "Produccion", "Agricultores", "Inventario", "Pedidos", "Caja", "Liquidaciones", "Fomentos"];
 
 function NavIcon({ tab }: { tab: string }) {
   switch (tab) {
@@ -261,6 +293,8 @@ function NavIcon({ tab }: { tab: string }) {
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="5" width="14" height="10" rx="1.5"/><path d="M1 9h14"/><path d="M5 5V3.5a3 3 0 016 0V5"/><circle cx="8" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg>;
     case "Liquidaciones":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 1h8a1 1 0 011 1v13l-4.5-2L4 15V2a1 1 0 011-1z"/><line x1="6" y1="6" x2="10" y2="6"/><line x1="6" y1="9" x2="10" y2="9"/></svg>;
+    case "Fomentos":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 14V8"/><path d="M5 11l3-3 3 3"/><path d="M2 14h12"/><path d="M4 8C4 5 6 2 8 2s4 3 4 6"/></svg>;
     default:
       return null;
   }
@@ -356,6 +390,13 @@ export function App() {
   const [cashSummary, setCashSummary] = useState<CashSummary | null>(null);
   const [cashPayables, setCashPayables] = useState<AccountPayable[]>([]);
   const [anticipoFarmerId, setAnticipoFarmerId] = useState("");
+
+  // ── Fomentos ──────────────────────────────────────────────────────────────
+  const [fomentos, setFomentos] = useState<Fomento[]>([]);
+  const [fomentoDetalle, setFomentoDetalle] = useState<FomentoDetalle | null>(null);
+  const [fomentoForm, setFomentoForm] = useState({ farmer_name: "", cuadras: "", inicio: new Date().toISOString().slice(0,10), status: "ACTIVOS" as "ACTIVOS"|"NO ACTIVOS"|"APROBADOS", notes: "" });
+  const [fomentoEntregaForm, setFomentoEntregaForm] = useState({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
+  const [fomentoFilter, setFomentoFilter] = useState<"TODOS"|"ACTIVOS"|"NO ACTIVOS"|"APROBADOS">("TODOS");
 
   const addToast = useCallback((text: string, type?: "success" | "error" | "warn") => {
     const id = Date.now();
@@ -772,6 +813,99 @@ export function App() {
       refreshCaja().catch(() => undefined);
     }
   }, [activeTab, dashboard.current_cash_register?.id]);
+
+  async function refreshFomentos() {
+    const data = await apiGet<Fomento[]>("/fomentos");
+    setFomentos(data);
+  }
+
+  async function loadFomentoDetalle(id: string) {
+    const data = await apiGet<FomentoDetalle>(`/fomentos/${id}`);
+    setFomentoDetalle(data);
+  }
+
+  useEffect(() => {
+    if (activeTab === "Fomentos") refreshFomentos().catch(() => undefined);
+  }, [activeTab]);
+
+  async function submitFomento(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    await apiPost("/fomentos", {
+      farmer_name: fomentoForm.farmer_name,
+      cuadras: Number(fomentoForm.cuadras),
+      inicio: fomentoForm.inicio,
+      status: fomentoForm.status,
+      notes: fomentoForm.notes || undefined
+    });
+    setFomentoForm({ farmer_name: "", cuadras: "", inicio: new Date().toISOString().slice(0,10), status: "ACTIVOS", notes: "" });
+    addToast("Fomento creado", "success");
+    await refreshFomentos();
+  }
+
+  async function submitFomentoEntrega(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!fomentoDetalle) return;
+    await apiPost(`/fomentos/${fomentoDetalle.id}/entregas`, {
+      fecha: fomentoEntregaForm.fecha,
+      valor: Number(fomentoEntregaForm.valor),
+      concepto: fomentoEntregaForm.concepto || undefined
+    });
+    setFomentoEntregaForm({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
+    addToast("Entrega registrada", "success");
+    await loadFomentoDetalle(fomentoDetalle.id);
+    await refreshFomentos();
+  }
+
+  async function deleteFomentoEntrega(fomentoId: string, entregaId: string) {
+    const apiBase = (import.meta.env.VITE_API_URL ?? "http://localhost:4000");
+    await fetch(`${apiBase}/api/v1/fomentos/${fomentoId}/entregas/${entregaId}`, { method: "DELETE" });
+    await loadFomentoDetalle(fomentoId);
+    await refreshFomentos();
+  }
+
+  function downloadCajaExcel() {
+    if (!cashSummary) return;
+    const apiBase = (import.meta.env.VITE_API_URL ?? "http://localhost:4000");
+    const url = `${apiBase}/api/v1/cash/registers/${cashSummary.id}/export-excel`;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "cierre-caja.xlsx";
+    a.click();
+  }
+
+  function printCajaMovimientos() {
+    if (!cashSummary) return;
+    const opening = Number(cashSummary.opening_balance);
+    const rows = cashMovements.map((m, i) => {
+      const isIncome = m.movement === "INCOME";
+      return `<tr>
+        <td>${i+1}</td>
+        <td>${new Date(m.created_at).toLocaleString("es-EC")}</td>
+        <td>${m.category}</td>
+        <td>${m.description ?? ""}</td>
+        <td style="color:green">${isIncome ? "$"+Number(m.amount).toFixed(2) : ""}</td>
+        <td style="color:#c00">${!isIncome ? "$"+Number(m.amount).toFixed(2) : ""}</td>
+      </tr>`;
+    }).join("");
+    const balance = (opening + cashSummary.total_income - cashSummary.total_expense).toFixed(2);
+    const html = `<html><head><title>Cierre de Caja</title>
+    <style>body{font-family:Arial;font-size:12px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:4px 8px}th{background:#16a34a;color:#fff}.tot{font-weight:bold}</style>
+    </head><body>
+    <h2 style="text-align:center">${cashSummary.name} — Cierre de Caja</h2>
+    <p>Fecha apertura: ${new Date(cashSummary.opened_at).toLocaleString("es-EC")} | Saldo inicial: $${opening.toFixed(2)}</p>
+    <table><thead><tr><th>#</th><th>Fecha/Hora</th><th>Categoría</th><th>Descripción</th><th>Ingreso</th><th>Egreso</th></tr></thead>
+    <tbody>${rows}</tbody>
+    <tfoot>
+      <tr class="tot"><td colspan="4">TOTALES</td><td style="color:green">$${cashSummary.total_income.toFixed(2)}</td><td style="color:#c00">$${cashSummary.total_expense.toFixed(2)}</td></tr>
+      <tr class="tot"><td colspan="4">SALDO FINAL</td><td colspan="2">$${balance}</td></tr>
+    </tfoot></table>
+    </body></html>`;
+    const w = window.open("", "_blank");
+    if (!w) return;
+    w.document.write(html);
+    w.document.close();
+    w.print();
+  }
 
   async function submitFarmer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -2088,9 +2222,17 @@ export function App() {
                   </div>
                   <div className="cajaSummaryCard">
                     <span>{dashboard.current_cash_register.name}</span>
-                    <button type="button" className="dangerBtn" onClick={() => closeCaja().catch((e) => addToast(e.message, "error"))}>
-                      Cerrar caja
-                    </button>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
+                      <button type="button" style={{ background: "#1d4ed8", color: "#fff", border: "none", borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 12 }} onClick={downloadCajaExcel} title="Descargar Excel con movimientos del día">
+                        ⬇ Excel
+                      </button>
+                      <button type="button" style={{ background: "#7c3aed", color: "#fff", border: "none", borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 12 }} onClick={printCajaMovimientos} title="Imprimir / PDF de movimientos">
+                        🖨 PDF
+                      </button>
+                      <button type="button" className="dangerBtn" onClick={() => closeCaja().catch((e) => addToast(e.message, "error"))}>
+                        Cerrar caja
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -2490,6 +2632,227 @@ export function App() {
             </div>
           </section>
         )}
+        {activeTab === "Fomentos" && (
+          <section className="tabSection">
+            <h2>Fomentos de Insumos</h2>
+
+            {/* Filtro de estado */}
+            <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+              {(["TODOS","ACTIVOS","NO ACTIVOS","APROBADOS"] as const).map(f => (
+                <button key={f} type="button"
+                  style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid var(--c-brand)",
+                    background: fomentoFilter === f ? "var(--c-brand)" : "transparent",
+                    color: fomentoFilter === f ? "#fff" : "var(--c-brand)", cursor: "pointer", fontWeight: fomentoFilter === f ? 700 : 400 }}
+                  onClick={() => { setFomentoFilter(f); setFomentoDetalle(null); }}
+                >{f}</button>
+              ))}
+              <button type="button" style={{ marginLeft: "auto", padding: "4px 12px", borderRadius: 6, border: "1px solid #999", background: "transparent", cursor: "pointer" }}
+                onClick={() => refreshFomentos().catch(() => undefined)}>↺ Actualizar</button>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+
+              {/* COLUMNA IZQUIERDA: Lista + Formulario nuevo */}
+              <div>
+                <h3 style={{ marginBottom: 8 }}>Lista de Fomentos</h3>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 420, overflowY: "auto" }}>
+                  {fomentos
+                    .filter(f => fomentoFilter === "TODOS" || f.status === fomentoFilter)
+                    .map(f => {
+                      const habilitado = f.estado_credito === "HABILITADO";
+                      const statusColor = f.status === "ACTIVOS" ? "#16a34a" : f.status === "APROBADOS" ? "#1d4ed8" : "#6b7280";
+                      return (
+                        <div key={f.id} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 14px", cursor: "pointer",
+                          background: fomentoDetalle?.id === f.id ? "#f0fdf4" : "var(--c-surface)" }}
+                          onClick={() => loadFomentoDetalle(f.id).catch(() => undefined)}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                            <strong style={{ fontSize: 14 }}>{f.farmer_name}</strong>
+                            <span style={{ fontSize: 11, background: statusColor, color: "#fff", borderRadius: 4, padding: "2px 6px" }}>{f.status}</span>
+                          </div>
+                          <div style={{ fontSize: 12, color: "var(--c-muted)", display: "flex", gap: 12, flexWrap: "wrap" }}>
+                            <span>{f.cuadras} cuadras</span>
+                            <span>Límite: ${Number(f.monto_limite).toFixed(2)}</span>
+                            <span>Pedido: ${Number(f.total_pedido).toFixed(2)}</span>
+                            <span style={{ color: habilitado ? "#16a34a" : "#dc2626", fontWeight: 700 }}>{f.estado_credito}</span>
+                          </div>
+                          <div style={{ fontSize: 11, color: "var(--c-muted)", marginTop: 2 }}>
+                            Inicio: {f.inicio?.slice(0,10)} | Cosecha: {f.cosecha?.slice(0,10) ?? "—"} | Interés: ${Number(f.gasto_adm).toFixed(2)}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  {fomentos.filter(f => fomentoFilter === "TODOS" || f.status === fomentoFilter).length === 0 && (
+                    <p style={{ color: "var(--c-muted)", textAlign: "center", padding: 20 }}>No hay fomentos {fomentoFilter !== "TODOS" ? `con estado ${fomentoFilter}` : "registrados"}</p>
+                  )}
+                </div>
+
+                {/* Formulario nuevo fomento */}
+                <details style={{ marginTop: 16 }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 600, color: "var(--c-brand)", padding: "6px 0" }}>+ Nuevo Fomento</summary>
+                  <form onSubmit={submitFomento} style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>Agricultor / Cliente
+                      <input required value={fomentoForm.farmer_name} onChange={e => setFomentoForm(p => ({...p, farmer_name: e.target.value}))}
+                        style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Nombre completo" />
+                    </label>
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>Cuadras
+                      <input required type="number" step="0.01" min="0.01" value={fomentoForm.cuadras} onChange={e => setFomentoForm(p => ({...p, cuadras: e.target.value}))}
+                        style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Ej: 2.5" />
+                    </label>
+                    {fomentoForm.cuadras && (
+                      <div style={{ fontSize: 12, color: "var(--c-muted)", background: "#f0fdf4", borderRadius: 6, padding: "4px 8px" }}>
+                        Paradas: {(Number(fomentoForm.cuadras)*16).toFixed(0)} | Límite: ${(Number(fomentoForm.cuadras)*800).toFixed(2)}
+                      </div>
+                    )}
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>Fecha Inicio
+                      <input required type="date" value={fomentoForm.inicio} onChange={e => setFomentoForm(p => ({...p, inicio: e.target.value}))}
+                        style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} />
+                    </label>
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>Estado
+                      <select value={fomentoForm.status} onChange={e => setFomentoForm(p => ({...p, status: e.target.value as "ACTIVOS"|"NO ACTIVOS"|"APROBADOS"}))}
+                        style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }}>
+                        <option>ACTIVOS</option>
+                        <option>NO ACTIVOS</option>
+                        <option>APROBADOS</option>
+                      </select>
+                    </label>
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>Notas
+                      <input value={fomentoForm.notes} onChange={e => setFomentoForm(p => ({...p, notes: e.target.value}))}
+                        style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Opcional" />
+                    </label>
+                    <button type="submit" style={{ background: "var(--c-brand)", color: "#fff", border: "none", borderRadius: 6, padding: "8px 16px", cursor: "pointer", fontWeight: 700 }}>
+                      Guardar Fomento
+                    </button>
+                  </form>
+                </details>
+              </div>
+
+              {/* COLUMNA DERECHA: Detalle del fomento seleccionado */}
+              <div>
+                {fomentoDetalle ? (
+                  <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                      <h3 style={{ margin: 0 }}>{fomentoDetalle.farmer_name}</h3>
+                      <button type="button" onClick={() => setFomentoDetalle(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--c-muted)" }}>✕</button>
+                    </div>
+
+                    {/* Resumen */}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+                      {([
+                        ["Cuadras", fomentoDetalle.cuadras],
+                        ["Paradas", Number(fomentoDetalle.paradas).toFixed(0)],
+                        ["Monto Límite", `$${Number(fomentoDetalle.monto_limite).toFixed(2)}`],
+                        ["Total Pedido", `$${Number(fomentoDetalle.total_pedido).toFixed(2)}`],
+                        ["Disponible", `$${Number(fomentoDetalle.falta_por_pedir).toFixed(2)}`],
+                        ["Interés Acum.", `$${Number(fomentoDetalle.gasto_adm).toFixed(2)}`],
+                        ["Total + Interés", `$${(Number(fomentoDetalle.total_pedido) + Number(fomentoDetalle.gasto_adm)).toFixed(2)}`],
+                        ["Estado", fomentoDetalle.estado_credito],
+                      ] as [string, string|number][]).map(([k, v]) => (
+                        <div key={k} style={{ background: "#f9fafb", borderRadius: 6, padding: "6px 10px" }}>
+                          <div style={{ fontSize: 10, color: "var(--c-muted)", fontWeight: 600 }}>{k}</div>
+                          <div style={{ fontSize: 14, fontWeight: 700,
+                            color: k === "Estado" ? (v === "HABILITADO" ? "#16a34a" : "#dc2626") : "inherit" }}>{v}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Tabla de entregas */}
+                    <h4 style={{ marginBottom: 6 }}>Entregas / Créditos</h4>
+                    <div style={{ overflowX: "auto", marginBottom: 12 }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                        <thead>
+                          <tr style={{ background: "var(--c-brand)", color: "#fff" }}>
+                            <th style={{ padding: "4px 8px", textAlign: "left" }}>Fecha</th>
+                            <th style={{ padding: "4px 8px", textAlign: "right" }}>Valor</th>
+                            <th style={{ padding: "4px 8px", textAlign: "right" }}>Días</th>
+                            <th style={{ padding: "4px 8px", textAlign: "right" }}>Interés</th>
+                            <th style={{ padding: "4px 8px", textAlign: "right" }}>Total</th>
+                            <th style={{ padding: "4px 8px" }}></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {fomentoDetalle.entregas.map((e, i) => {
+                            const dias = Math.max(0, Math.floor((Date.now() - new Date(e.fecha).getTime()) / 86400000));
+                            return (
+                              <tr key={e.id} style={{ background: i % 2 === 0 ? "#fff" : "#f9fafb" }}>
+                                <td style={{ padding: "4px 8px" }}>{e.fecha?.slice(0,10)}</td>
+                                <td style={{ padding: "4px 8px", textAlign: "right" }}>${Number(e.valor).toFixed(2)}</td>
+                                <td style={{ padding: "4px 8px", textAlign: "right" }}>{dias}</td>
+                                <td style={{ padding: "4px 8px", textAlign: "right", color: "#b45309" }}>${Number(e.interes).toFixed(2)}</td>
+                                <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700 }}>${Number(e.suman).toFixed(2)}</td>
+                                <td style={{ padding: "4px 8px" }}>
+                                  <button type="button" title="Eliminar entrega"
+                                    onClick={() => deleteFomentoEntrega(fomentoDetalle.id, e.id).catch(() => undefined)}
+                                    style={{ background: "none", border: "none", cursor: "pointer", color: "#dc2626", fontSize: 14 }}>✕</button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {fomentoDetalle.entregas.length === 0 && (
+                            <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--c-muted)", padding: 12 }}>Sin entregas registradas</td></tr>
+                          )}
+                        </tbody>
+                        {fomentoDetalle.entregas.length > 0 && (
+                          <tfoot>
+                            <tr style={{ fontWeight: 700, borderTop: "2px solid #e5e7eb" }}>
+                              <td style={{ padding: "4px 8px" }}>TOTAL</td>
+                              <td style={{ padding: "4px 8px", textAlign: "right" }}>${Number(fomentoDetalle.total_pedido).toFixed(2)}</td>
+                              <td></td>
+                              <td style={{ padding: "4px 8px", textAlign: "right", color: "#b45309" }}>${Number(fomentoDetalle.gasto_adm).toFixed(2)}</td>
+                              <td style={{ padding: "4px 8px", textAlign: "right" }}>${(Number(fomentoDetalle.total_pedido)+Number(fomentoDetalle.gasto_adm)).toFixed(2)}</td>
+                              <td></td>
+                            </tr>
+                          </tfoot>
+                        )}
+                      </table>
+                    </div>
+
+                    {/* Formulario nueva entrega */}
+                    <details open style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 14px" }}>
+                      <summary style={{ cursor: "pointer", fontWeight: 600, color: "var(--c-brand)" }}>+ Registrar Entrega</summary>
+                      <form onSubmit={submitFomentoEntrega} style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
+                        <label style={{ fontSize: 12, fontWeight: 600 }}>Fecha
+                          <input required type="date" value={fomentoEntregaForm.fecha}
+                            onChange={e => setFomentoEntregaForm(p => ({...p, fecha: e.target.value}))}
+                            style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} />
+                        </label>
+                        <label style={{ fontSize: 12, fontWeight: 600 }}>Valor ($)
+                          <input required type="number" step="0.01" min="0.01" value={fomentoEntregaForm.valor}
+                            onChange={e => setFomentoEntregaForm(p => ({...p, valor: e.target.value}))}
+                            style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="0.00" />
+                        </label>
+                        {fomentoEntregaForm.valor && fomentoEntregaForm.fecha && (
+                          <div style={{ fontSize: 12, color: "var(--c-muted)", background: "#fffbeb", borderRadius: 6, padding: "4px 8px" }}>
+                            {(() => {
+                              const dias = Math.max(0, Math.floor((Date.now() - new Date(fomentoEntregaForm.fecha).getTime()) / 86400000));
+                              const interes = Number(fomentoEntregaForm.valor) * 0.07 / 30 * dias;
+                              return `Días: ${dias} | Interés al día de hoy: $${interes.toFixed(2)} | Total: $${(Number(fomentoEntregaForm.valor) + interes).toFixed(2)}`;
+                            })()}
+                          </div>
+                        )}
+                        <label style={{ fontSize: 12, fontWeight: 600 }}>Concepto
+                          <input value={fomentoEntregaForm.concepto}
+                            onChange={e => setFomentoEntregaForm(p => ({...p, concepto: e.target.value}))}
+                            style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Opcional" />
+                        </label>
+                        <button type="submit" style={{ background: "var(--c-brand)", color: "#fff", border: "none", borderRadius: 6, padding: "8px 16px", cursor: "pointer", fontWeight: 700 }}>
+                          Registrar Entrega
+                        </button>
+                      </form>
+                    </details>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 300, color: "var(--c-muted)", textAlign: "center" }}>
+                    <svg width="48" height="48" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.3, marginBottom: 12 }}>
+                      <path d="M8 14V8"/><path d="M5 11l3-3 3 3"/><path d="M2 14h12"/><path d="M4 8C4 5 6 2 8 2s4 3 4 6"/>
+                    </svg>
+                    <p>Selecciona un fomento de la lista<br/>para ver su detalle y registrar entregas</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
         </div>{/* .content */}
       </section>
     </main>

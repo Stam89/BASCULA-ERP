@@ -3,6 +3,7 @@ import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
+import ExcelJS from "exceljs";
 
 export const cashRouter = Router();
 
@@ -111,6 +112,90 @@ cashRouter.get("/payables", asyncRoute(async (_req, res) => {
      ORDER BY ap.created_at DESC`
   );
   res.json(result.rows);
+}));
+
+// ── Exportar movimientos del día en Excel ────────────────────────────────────
+cashRouter.get("/registers/:id/export-excel", asyncRoute(async (req, res) => {
+  const reg = await pool.query("SELECT * FROM cash_registers WHERE id = $1", [req.params.id]);
+  if (!reg.rows[0]) { res.status(404).json({ error: "No encontrada" }); return; }
+
+  const movs = await pool.query(
+    `SELECT cm.*,
+            CASE WHEN cm.movement = 'INCOME' THEN cm.amount ELSE 0 END AS ingreso,
+            CASE WHEN cm.movement = 'EXPENSE' THEN cm.amount ELSE 0 END AS egreso
+     FROM cash_movements cm
+     WHERE cm.cash_register_id = $1
+     ORDER BY cm.created_at ASC`,
+    [req.params.id]
+  );
+
+  const opening = Number(reg.rows[0].opening_balance);
+  const totalIncome  = movs.rows.reduce((a: number, r: { ingreso: string }) => a + Number(r.ingreso), 0);
+  const totalExpense = movs.rows.reduce((a: number, r: { egreso: string }) => a + Number(r.egreso), 0);
+  const balance = opening + totalIncome - totalExpense;
+
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "BASCULA-ERP";
+  const ws = wb.addWorksheet("Movimientos");
+
+  // Title
+  ws.mergeCells("A1:F1");
+  ws.getCell("A1").value = `CIERRE DE CAJA — ${reg.rows[0].name}`;
+  ws.getCell("A1").font = { bold: true, size: 14 };
+  ws.getCell("A1").alignment = { horizontal: "center" };
+
+  const openedDate = new Date(reg.rows[0].opened_at).toLocaleDateString("es-EC");
+  ws.mergeCells("A2:F2");
+  ws.getCell("A2").value = `Fecha: ${openedDate}   Saldo inicial: $${opening.toFixed(2)}`;
+  ws.getCell("A2").alignment = { horizontal: "center" };
+
+  ws.addRow([]);
+
+  // Headers
+  const headers = ["#", "Fecha/Hora", "Categoría", "Descripción", "Ingreso", "Egreso"];
+  const headerRow = ws.addRow(headers);
+  headerRow.font = { bold: true };
+  headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF16A34A" } };
+  headerRow.getCell(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  headerRow.eachCell(cell => {
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    cell.border = { bottom: { style: "thin" } };
+  });
+
+  movs.rows.forEach((m: { created_at: string; category: string; description: string; ingreso: string; egreso: string }, i: number) => {
+    const row = ws.addRow([
+      i + 1,
+      new Date(m.created_at).toLocaleString("es-EC"),
+      m.category,
+      m.description ?? "",
+      Number(m.ingreso) || null,
+      Number(m.egreso) || null
+    ]);
+    row.getCell(5).numFmt = '"$"#,##0.00';
+    row.getCell(6).numFmt = '"$"#,##0.00';
+    if (i % 2 === 1) {
+      row.eachCell(c => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF0FDF4" } }; });
+    }
+  });
+
+  ws.addRow([]);
+  const totRow = ws.addRow(["", "", "", "TOTALES", totalIncome, totalExpense]);
+  totRow.font = { bold: true };
+  totRow.getCell(5).numFmt = '"$"#,##0.00';
+  totRow.getCell(6).numFmt = '"$"#,##0.00';
+
+  const balRow = ws.addRow(["", "", "", "SALDO FINAL", balance, ""]);
+  balRow.font = { bold: true };
+  balRow.getCell(5).numFmt = '"$"#,##0.00';
+  balRow.getCell(5).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEF08A" } };
+
+  ws.columns = [
+    { width: 5 }, { width: 22 }, { width: 22 }, { width: 35 }, { width: 14 }, { width: 14 }
+  ];
+
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="cierre-caja-${openedDate}.xlsx"`);
+  await wb.xlsx.write(res);
 }));
 
 // ── Pagar cuenta por pagar ───────────────────────────────────────────────────
