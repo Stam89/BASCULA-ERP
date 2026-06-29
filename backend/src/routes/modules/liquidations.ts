@@ -126,6 +126,78 @@ liquidationsRouter.get("/", asyncRoute(async (_req, res) => {
   res.json(result.rows);
 }));
 
+// Aplicar anticipos pendientes del agricultor contra una liquidación ya realizada
+liquidationsRouter.post("/:id/apply-advances", asyncRoute(async (req, res) => {
+  const result = await inTransaction(async (client) => {
+    // Traer la liquidación y su cuenta por pagar
+    const liq = await client.query(
+      `SELECT l.*, ap.id AS ap_id, ap.balance AS ap_balance
+       FROM liquidations l
+       LEFT JOIN accounts_payable ap ON ap.liquidation_id = l.id
+       WHERE l.id = $1`,
+      [req.params.id]
+    );
+    if (!liq.rows[0]) throw new Error("Liquidación no encontrada");
+    const row = liq.rows[0];
+    const apBalance = Number(row.ap_balance ?? 0);
+    if (apBalance <= 0) throw new Error("Esta liquidación ya está pagada");
+
+    // Traer anticipos pendientes del agricultor
+    const advances = await client.query(
+      `SELECT * FROM farmer_advances
+       WHERE farmer_id = $1 AND status IN ('CONFIRMED', 'PARTIAL') AND balance > 0
+       ORDER BY issued_at ASC
+       FOR UPDATE`,
+      [row.farmer_id]
+    );
+    if (advances.rows.length === 0) throw new Error("No hay anticipos pendientes para este agricultor");
+
+    let remaining = apBalance;
+    let totalApplied = 0;
+
+    for (const adv of advances.rows) {
+      if (remaining <= 0) break;
+      const applyAmt = Math.min(remaining, Number(adv.balance));
+
+      // Reducir saldo del anticipo
+      const newAdvBal = round2(Number(adv.balance) - applyAmt);
+      const newAdvStatus = newAdvBal < 0.01 ? "PAID" : "PARTIAL";
+      await client.query(
+        "UPDATE farmer_advances SET balance = $2, status = $3 WHERE id = $1",
+        [adv.id, newAdvBal, newAdvStatus]
+      );
+
+      // Registrar aplicación
+      await client.query(
+        `INSERT INTO advance_applications (advance_id, liquidation_id, amount_applied)
+         VALUES ($1, $2, $3)`,
+        [adv.id, req.params.id, applyAmt]
+      );
+
+      // Actualizar advances_discount en la liquidación
+      await client.query(
+        "UPDATE liquidations SET advances_discount = advances_discount + $2, net_amount = GREATEST(0, net_amount - $2) WHERE id = $1",
+        [req.params.id, applyAmt]
+      );
+
+      totalApplied = round2(totalApplied + applyAmt);
+      remaining = round2(remaining - applyAmt);
+    }
+
+    // Actualizar cuenta por pagar
+    const newApBal = round2(apBalance - totalApplied);
+    const newApStatus = newApBal < 0.01 ? "PAID" : "PARTIAL";
+    await client.query(
+      "UPDATE accounts_payable SET balance = $2, status = $3 WHERE id = $1",
+      [row.ap_id, newApBal, newApStatus]
+    );
+
+    return { applied: totalApplied, remaining: newApBal };
+  });
+
+  res.json(result);
+}));
+
 // Anticipos aplicados a un lote de liquidaciones (para impresión detallada)
 liquidationsRouter.get("/applied-advances", asyncRoute(async (req, res) => {
   const { batch_id, liquidation_ids } = req.query;

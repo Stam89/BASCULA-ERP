@@ -58,6 +58,7 @@ type StockRow = {
 type LiqRecord = {
   id: string;
   liquidation_number: string;
+  farmer_id: string;
   farmer_name: string;
   lot_code: string | null;
   rice_type: string | null;
@@ -578,7 +579,9 @@ export function App() {
   type LiqBatch = {
     key: string;
     batch_id: string | null;
+    liquidation_ids: string[];
     farmer_name: string;
+    farmer_id: string;
     created_at: string;
     lots: Array<{ lot_code: string | null; rice_type: string | null; quintals: number; price_per_quintal: number }>;
     gross_total: number;
@@ -602,6 +605,7 @@ export function App() {
       if (r.batch_id) {
         const existing = batches.find((b) => b.batch_id === r.batch_id);
         if (existing) {
+          existing.liquidation_ids.push(r.id);
           existing.lots.push({ lot_code: r.lot_code, rice_type: r.rice_type, quintals: Number(r.quintals), price_per_quintal: Number(r.price_per_quintal) });
           existing.gross_total    += Number(r.gross_amount);
           existing.advances_total += Number(r.advances_discount);
@@ -619,6 +623,7 @@ export function App() {
             Math.abs(new Date(b.created_at).getTime() - rTime) <= 15000
         );
         if (existing) {
+          existing.liquidation_ids.push(r.id);
           existing.lots.push({ lot_code: r.lot_code, rice_type: r.rice_type, quintals: Number(r.quintals), price_per_quintal: Number(r.price_per_quintal) });
           existing.gross_total    += Number(r.gross_amount);
           existing.advances_total += Number(r.advances_discount);
@@ -633,7 +638,9 @@ export function App() {
       batches.push({
         key: r.batch_id ?? r.id,
         batch_id: r.batch_id,
+        liquidation_ids: [r.id],
         farmer_name: r.farmer_name,
+        farmer_id: r.farmer_id,
         created_at: r.created_at,
         lots: [{ lot_code: r.lot_code, rice_type: r.rice_type, quintals: Number(r.quintals), price_per_quintal: Number(r.price_per_quintal) }],
         gross_total:      Number(r.gross_amount),
@@ -852,6 +859,24 @@ export function App() {
     safeResetForm(formElement);
     addToast("Ingreso registrado", "success");
     await refreshCaja(registerId);
+  }
+
+  async function aplicarAnticiposLiquidacion(liquidationIds: string[]) {
+    let totalAplicado = 0;
+    for (const id of liquidationIds) {
+      try {
+        const r = await apiPost<{ applied: number; remaining: number }>(`/liquidations/${id}/apply-advances`, {});
+        totalAplicado += r.applied;
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (!msg.includes("ya está pagada") && !msg.includes("No hay anticipos")) throw e;
+      }
+    }
+    if (totalAplicado === 0) throw new Error("No hay anticipos pendientes para este agricultor");
+    addToast(`Anticipo aplicado: $${totalAplicado.toFixed(2)} descontados`, "success");
+    const [liqRows] = await Promise.all([apiGet<LiqRecord[]>("/liquidations")]);
+    setLiquidacionesList(liqRows);
+    await refresh();
   }
 
   async function pagarCuenta(payableId: string, amount: number) {
@@ -2368,7 +2393,17 @@ export function App() {
                               {paid ? "Pagado" : `Pend. $${b.pending_total.toFixed(2)}`}
                             </span>
                           </span>
-                          <span>
+                          <span className="liqActions">
+                            {!paid && (
+                              <button
+                                type="button"
+                                className="liqApplyBtn"
+                                title="Descontar anticipos pendientes"
+                                onClick={() => aplicarAnticiposLiquidacion(b.liquidation_ids).catch((e) => addToast(e.message, "error"))}
+                              >
+                                Desc. anticipo
+                              </button>
+                            )}
                             <button type="button" className="liqPrintBtn" onClick={() => printLiqBatch(b).catch((e) => addToast(e.message, "error"))} title="Imprimir comprobante">
                               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
                                 <rect x="3" y="1" width="10" height="8" rx="1"/>
