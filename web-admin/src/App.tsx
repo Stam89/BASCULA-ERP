@@ -2115,10 +2115,13 @@ export function App() {
                 {cajaSubTab === "anticipo" && (
                   <form className="formPanel cajaForm" onSubmit={(event) => submitCajaAnticipo(event).catch((e) => addToast(e.message, "error"))}>
                     <h2>Anticipo a agricultor</h2>
-                    <Select name="farmer_id" label="Agricultor" rows={farmers.map((f) => [f.id, f.full_name])} />
+                    {farmersWithPendingLiq.length === 0
+                      ? <p className="muted">No hay agricultores con saldo pendiente en liquidaciones.</p>
+                      : <Select name="farmer_id" label="Agricultor" rows={farmersWithPendingLiq.map((f) => [f.id, f.full_name])} />
+                    }
                     <Input name="amount" label="Monto $" type="number" />
                     <Input name="concept" label="Concepto" />
-                    <button className="primary">Registrar anticipo</button>
+                    <button className="primary" disabled={farmersWithPendingLiq.length === 0}>Registrar anticipo</button>
                   </form>
                 )}
 
@@ -2358,16 +2361,6 @@ export function App() {
               )}
             </div>
 
-            <form className="formPanel" onSubmit={(event) => submitAdvance(event).catch((error) => setMessage(error.message))}>
-              <h2>Registrar anticipo</h2>
-              {farmersWithPendingLiq.length === 0
-                ? <p className="muted">No hay agricultores con saldo pendiente.</p>
-                : <Select name="farmer_id" label="Agricultor" rows={farmersWithPendingLiq.map((f) => [f.id, f.full_name])} />
-              }
-              <Input name="amount" label="Monto $" type="number" />
-              <Input name="concept" label="Concepto" />
-              <button className="primary" disabled={farmersWithPendingLiq.length === 0}>Registrar</button>
-            </form>
 
             <DataList
               title="Lotes disponibles"
@@ -2388,7 +2381,6 @@ export function App() {
                 : <div className="liqHistTable">
                     <div className="liqHistHead">
                       <span>Agricultor</span>
-                      <span>Lotes</span>
                       <span>Total QQ</span>
                       <span>Bruto</span>
                       <span>Anticipo</span>
@@ -2404,7 +2396,6 @@ export function App() {
                       return (
                         <div key={b.key} className="liqHistRow">
                           <span>{b.farmer_name}</span>
-                          <span title={lotsLabel} className="liqHistLots">{lotsLabel}</span>
                           <span>{qqTotal.toFixed(2)} QQ</span>
                           <span>${b.gross_total.toFixed(2)}</span>
                           <span className="liqDiscount">-${b.advances_total.toFixed(2)}</span>

@@ -317,8 +317,8 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 .liqHistHead,
 .liqHistRow {
   display: grid;
-  grid-template-columns: 150px 1fr 90px 90px 90px 90px 90px 110px 44px;
-  min-width: 850px;
+  grid-template-columns: 180px 90px 90px 90px 90px 90px 110px auto;
+  min-width: 700px;
 }
 .liqHistHead {
   background: var(--c-bg);
@@ -1284,18 +1284,20 @@ input[type="datetime-local"] { height: 36px; }
 .cajaSubNav button {
   background: none;
   border: none;
-  border-bottom: 2px solid transparent;
-  padding: 8px 14px;
+  border-radius: var(--r-sm);
+  padding: 7px 14px;
   cursor: pointer;
-  color: var(--muted);
+  color: var(--c-text-muted);
   font-size: 13px;
   font-weight: 500;
-  border-radius: 0;
-  margin-bottom: -1px;
-  transition: color .15s, border-color .15s;
+  transition: background .15s, color .15s;
 }
-.cajaSubNav button:hover { color: var(--text); }
-.cajaSubNav button.active { color: var(--accent); border-bottom-color: var(--accent); }
+.cajaSubNav button:hover { background: var(--c-surface-3); color: var(--c-text); }
+.cajaSubNav button.active {
+  background: var(--c-brand);
+  color: #ffffff;
+  font-weight: 600;
+}
 
 .cajaMovimientosPanel {
   background: var(--surface);
