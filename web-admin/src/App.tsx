@@ -793,7 +793,8 @@ export function App() {
       farmer_id: form.get("farmer_id"),
       amount: Number(form.get("amount")),
       concept: form.get("concept"),
-      cash_register_id: registerId
+      cash_register_id: registerId,
+      apply_to_payables: true
     });
     safeResetForm(formElement);
     addToast("Anticipo registrado", "success");
@@ -1439,7 +1440,17 @@ export function App() {
     await refresh();
   }
 
-  function printLiqBatch(b: LiqBatch) {
+  async function printLiqBatch(b: LiqBatch) {
+    // Traer anticipos detallados aplicados a esta liquidación
+    type AppliedAdvance = { advance_number: string; concept: string; amount_applied: string | number; issued_at: string };
+    let appliedAdvances: AppliedAdvance[] = [];
+    try {
+      const qs = b.batch_id
+        ? `batch_id=${b.batch_id}`
+        : `liquidation_ids=${b.key}`;
+      appliedAdvances = await apiGet<AppliedAdvance[]>(`/liquidations/applied-advances?${qs}`);
+    } catch { /* sin detalle, igual imprime */ }
+
     const qqTotal = b.lots.reduce((s, l) => s + l.quintals, 0);
     const fecha = new Date(b.created_at).toLocaleDateString("es-EC", {
       year: "numeric", month: "long", day: "numeric",
@@ -1452,6 +1463,18 @@ export function App() {
         <td style="text-align:right">$${l.price_per_quintal.toFixed(2)}</td>
         <td style="text-align:right">$${(l.quintals * l.price_per_quintal).toFixed(2)}</td>
       </tr>`).join("");
+
+    // Filas de anticipos individuales
+    const advanceRows = appliedAdvances.length > 0
+      ? appliedAdvances.map((a) => `
+        <tr>
+          <td class="lbl disc">${a.advance_number} — ${a.concept}</td>
+          <td class="val disc">-$${Number(a.amount_applied).toFixed(2)}</td>
+        </tr>`).join("")
+      : b.advances_total > 0
+        ? `<tr><td class="lbl disc">Desc. Anticipos</td><td class="val disc">-$${b.advances_total.toFixed(2)}</td></tr>`
+        : "";
+
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
       <title>Comprobante de Liquidación</title>
       <style>
@@ -1465,11 +1488,12 @@ export function App() {
         table{width:100%;border-collapse:collapse;margin-bottom:10px}
         th{background:#f0f0f0;padding:6px 8px;text-align:left;border:1px solid #bbb;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
         td{padding:6px 8px;border:1px solid #ccc;font-size:13px}
-        .totals{width:280px;margin-left:auto;border-collapse:collapse}
+        .totals{width:320px;margin-left:auto;border-collapse:collapse}
         .totals td{padding:5px 8px;border:none;font-size:13px}
-        .totals .lbl{font-weight:600;text-align:right;padding-right:12px}
-        .totals .val{text-align:right}
-        .totals .disc{color:#b91c1c}
+        .lbl{font-weight:600;text-align:right;padding-right:12px}
+        .val{text-align:right}
+        .disc{color:#b91c1c}
+        .disc-header td{font-size:11px;font-weight:700;text-transform:uppercase;color:#888;padding-top:8px;padding-bottom:2px}
         .total-row td{font-weight:700;font-size:15px;border-top:2px solid #111;padding-top:7px}
         .sigs{display:flex;justify-content:space-around;margin-top:52px}
         .sig{text-align:center}
@@ -1493,7 +1517,7 @@ export function App() {
       <table class="totals">
         <tr><td class="lbl">Total QQ:</td><td class="val">${qqTotal.toFixed(2)} QQ</td></tr>
         <tr><td class="lbl">Bruto:</td><td class="val">$${b.gross_total.toFixed(2)}</td></tr>
-        ${b.advances_total > 0 ? `<tr><td class="lbl disc">Desc. Anticipo:</td><td class="val disc">-$${b.advances_total.toFixed(2)}</td></tr>` : ""}
+        ${advanceRows.length > 0 ? `<tr class="disc-header"><td colspan="2">Anticipos descontados</td></tr>${advanceRows}` : ""}
         ${b.other_disc_total > 0 ? `<tr><td class="lbl disc">Otros descuentos:</td><td class="val disc">-$${b.other_disc_total.toFixed(2)}</td></tr>` : ""}
         <tr class="total-row"><td class="lbl">NETO A PAGAR:</td><td class="val">$${b.net_total.toFixed(2)}</td></tr>
       </table>
@@ -2345,7 +2369,7 @@ export function App() {
                             </span>
                           </span>
                           <span>
-                            <button type="button" className="liqPrintBtn" onClick={() => printLiqBatch(b)} title="Imprimir comprobante">
+                            <button type="button" className="liqPrintBtn" onClick={() => printLiqBatch(b).catch((e) => addToast(e.message, "error"))} title="Imprimir comprobante">
                               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
                                 <rect x="3" y="1" width="10" height="8" rx="1"/>
                                 <path d="M3 9H1v5h14V9h-2"/>

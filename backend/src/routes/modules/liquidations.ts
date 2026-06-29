@@ -125,3 +125,31 @@ liquidationsRouter.get("/", asyncRoute(async (_req, res) => {
   );
   res.json(result.rows);
 }));
+
+// Anticipos aplicados a un lote de liquidaciones (para impresión detallada)
+liquidationsRouter.get("/applied-advances", asyncRoute(async (req, res) => {
+  const { batch_id, liquidation_ids } = req.query;
+
+  let ids: string[] = [];
+  if (batch_id) {
+    const liq = await pool.query(
+      "SELECT id FROM liquidations WHERE batch_id = $1",
+      [batch_id]
+    );
+    ids = liq.rows.map((r: { id: string }) => r.id);
+  } else if (liquidation_ids) {
+    ids = String(liquidation_ids).split(",").filter(Boolean);
+  }
+
+  if (ids.length === 0) { res.json([]); return; }
+
+  const result = await pool.query(
+    `SELECT aa.amount_applied, fa.concept, fa.advance_number, fa.issued_at
+     FROM advance_applications aa
+     JOIN farmer_advances fa ON fa.id = aa.advance_id
+     WHERE aa.liquidation_id = ANY($1::uuid[])
+     ORDER BY fa.issued_at ASC`,
+    [ids]
+  );
+  res.json(result.rows);
+}));
