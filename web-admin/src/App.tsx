@@ -159,6 +159,39 @@ type ProcessFlow = {
   tunnels: DryingTunnelReport[];
 };
 
+type CashMovement = {
+  id: string;
+  cash_register_id: string;
+  movement: "INCOME" | "EXPENSE";
+  category: string;
+  amount: string | number;
+  description: string | null;
+  reference_type: string | null;
+  created_at: string;
+};
+
+type CashSummary = {
+  id: string;
+  name: string;
+  status: string;
+  opening_balance: string | number;
+  total_income: number;
+  total_expense: number;
+  current_balance: number;
+  opened_at: string;
+};
+
+type AccountPayable = {
+  id: string;
+  farmer_id: string;
+  farmer_name: string;
+  liquidation_number: string | null;
+  amount: string | number;
+  balance: string | number;
+  status: string;
+  created_at: string;
+};
+
 type ProductionPackageKey = "whiteRice" | "broken34" | "fineBroken" | "bran";
 
 type ProductionPackageState = Record<ProductionPackageKey, {
@@ -307,6 +340,12 @@ export function App() {
   const [discountsOpen, setDiscountsOpen] = useState(false);
   const [liqDiscounts, setLiqDiscounts] = useState({ fomento: "", bascula: "", flete: "", cosechadora: "" });
   const [liqResult, setLiqResult] = useState<LiqResultItem[] | null>(null);
+
+  // ── Caja ──────────────────────────────────────────────────────────────────
+  const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "gasto" | "mano_obra" | "ingreso" | "cuentas">("resumen");
+  const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
+  const [cashSummary, setCashSummary] = useState<CashSummary | null>(null);
+  const [cashPayables, setCashPayables] = useState<AccountPayable[]>([]);
 
   const addToast = useCallback((text: string, type?: "success" | "error" | "warn") => {
     const id = Date.now();
@@ -677,6 +716,25 @@ export function App() {
     });
   }, []);
 
+  async function refreshCaja(registerId?: string) {
+    const id = registerId ?? dashboard.current_cash_register?.id;
+    if (!id) return;
+    const [summary, movements, payables] = await Promise.all([
+      apiGet<CashSummary>(`/cash/registers/${id}/summary`),
+      apiGet<CashMovement[]>(`/cash/registers/${id}/movements`),
+      apiGet<AccountPayable[]>("/cash/payables")
+    ]);
+    setCashSummary(summary);
+    setCashMovements(movements);
+    setCashPayables(payables);
+  }
+
+  useEffect(() => {
+    if (activeTab === "Caja" && dashboard.current_cash_register?.id) {
+      refreshCaja().catch(() => undefined);
+    }
+  }, [activeTab, dashboard.current_cash_register?.id]);
+
   async function submitFarmer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formElement = event.currentTarget;
@@ -712,8 +770,98 @@ export function App() {
       name: form.get("name"),
       opening_balance: Number(form.get("opening_balance"))
     });
-    setMessage("Caja abierta");
+    addToast("Caja abierta", "success");
     await refresh();
+  }
+
+  async function closeCaja() {
+    if (!cashSummary) return;
+    await apiPost(`/cash/registers/${cashSummary.id}/close`, {});
+    addToast("Caja cerrada", "success");
+    setCashSummary(null);
+    setCashMovements([]);
+    await refresh();
+  }
+
+  async function submitCajaAnticipo(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) throw new Error("No hay caja abierta");
+    await apiPost("/advances", {
+      farmer_id: form.get("farmer_id"),
+      amount: Number(form.get("amount")),
+      concept: form.get("concept"),
+      cash_register_id: registerId
+    });
+    safeResetForm(formElement);
+    addToast("Anticipo registrado", "success");
+    await refresh();
+    await refreshCaja(registerId);
+  }
+
+  async function submitCajaGasto(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) throw new Error("No hay caja abierta");
+    await apiPost("/expenses", {
+      cash_register_id: registerId,
+      amount: Number(form.get("amount")),
+      description: form.get("description"),
+      paid_to: form.get("paid_to") || undefined
+    });
+    safeResetForm(formElement);
+    addToast("Gasto registrado", "success");
+    await refreshCaja(registerId);
+  }
+
+  async function submitCajaManoObra(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) throw new Error("No hay caja abierta");
+    await apiPost("/expenses/labor-payments", {
+      cash_register_id: registerId,
+      worker_group: form.get("worker_group"),
+      sacks_moved: Number(form.get("sacks_moved")),
+      price_per_sack: Number(form.get("price_per_sack"))
+    });
+    safeResetForm(formElement);
+    addToast("Pago de mano de obra registrado", "success");
+    await refreshCaja(registerId);
+  }
+
+  async function submitCajaIngreso(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) throw new Error("No hay caja abierta");
+    await apiPost("/cash/movements", {
+      cash_register_id: registerId,
+      movement: "INCOME",
+      category: form.get("category"),
+      amount: Number(form.get("amount")),
+      description: form.get("description") || undefined
+    });
+    safeResetForm(formElement);
+    addToast("Ingreso registrado", "success");
+    await refreshCaja(registerId);
+  }
+
+  async function pagarCuenta(payableId: string, amount: number) {
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) throw new Error("No hay caja abierta");
+    await apiPost(`/cash/payables/${payableId}/pay`, {
+      cash_register_id: registerId,
+      amount
+    });
+    addToast("Pago registrado", "success");
+    await refreshCaja(registerId);
   }
 
   async function setupMasterData() {
@@ -794,7 +942,7 @@ export function App() {
     const farmerId = String(form.get("farmer_id"));
     const riceType = String(form.get("rice_type")) as "0.11" | "CORRIENTE";
     const productId = riceType === "CORRIENTE" ? rawProductCorriente?.id : rawProduct011?.id;
-    const warehouseId = String(form.get("warehouse_id"));
+    const warehouseId = rawWarehouse?.id ?? "";
     const ownership = String(form.get("ownership"));
 
     if (!productId) {
@@ -1466,7 +1614,6 @@ export function App() {
                   <option value="CORRIENTE">Corriente</option>
                 </select>
               </label>
-              <Select name="warehouse_id" label="Bodega" rows={warehouses.map((w) => [w.id, w.name])} defaultValue={rawWarehouse?.id} />
               <Input name="gross_weight" label="Peso bruto kg" type="number" />
               <Input name="tare_weight" label="Tara kg" type="number" />
               <Input name="qualification" label="Calificacion" type="number" />
@@ -1810,21 +1957,168 @@ export function App() {
         )}
 
         {activeTab === "Caja" && (
-          <section className="panelGrid">
-            <form className="formPanel" onSubmit={(event) => submitCash(event).catch((error) => setMessage(error.message))}>
-              <h2>Abrir caja</h2>
-              <Input name="name" label="Nombre" defaultValue="Caja Principal" />
-              <Input name="opening_balance" label="Saldo inicial" type="number" defaultValue="0" />
-              <button className="primary">Abrir caja</button>
-            </form>
-            <div className="formPanel">
-              <h2>Estado</h2>
-              <p className="muted">
-                {dashboard.current_cash_register
-                  ? `Caja abierta: ${dashboard.current_cash_register.name}`
-                  : "Aun no hay caja abierta"}
-              </p>
-            </div>
+          <section className="cajaLayout">
+            {/* ── Sin caja abierta ── */}
+            {!dashboard.current_cash_register && (
+              <section className="panelGrid">
+                <form className="formPanel" onSubmit={(event) => submitCash(event).catch((error) => addToast(error.message, "error"))}>
+                  <h2>Abrir caja</h2>
+                  <Input name="name" label="Nombre" defaultValue="Caja Principal" />
+                  <Input name="opening_balance" label="Saldo inicial $" type="number" defaultValue="0" />
+                  <button className="primary">Abrir caja</button>
+                </form>
+                <div className="formPanel">
+                  <h2>Estado</h2>
+                  <p className="muted">No hay caja abierta. Abre una para registrar movimientos.</p>
+                </div>
+              </section>
+            )}
+
+            {/* ── Con caja abierta ── */}
+            {dashboard.current_cash_register && (
+              <>
+                {/* Barra de resumen */}
+                <div className="cajaSummaryBar">
+                  <div className="cajaSummaryCard income">
+                    <span>Ingresos</span>
+                    <strong>{money(cashSummary?.total_income ?? 0)}</strong>
+                  </div>
+                  <div className="cajaSummaryCard expense">
+                    <span>Egresos</span>
+                    <strong>{money(cashSummary?.total_expense ?? 0)}</strong>
+                  </div>
+                  <div className="cajaSummaryCard balance">
+                    <span>Saldo actual</span>
+                    <strong>{money(cashSummary?.current_balance ?? Number(dashboard.current_cash_register.opening_balance))}</strong>
+                  </div>
+                  <div className="cajaSummaryCard">
+                    <span>{dashboard.current_cash_register.name}</span>
+                    <button type="button" className="dangerBtn" onClick={() => closeCaja().catch((e) => addToast(e.message, "error"))}>
+                      Cerrar caja
+                    </button>
+                  </div>
+                </div>
+
+                {/* Sub-tabs */}
+                <nav className="cajaSubNav">
+                  {(["resumen", "anticipo", "gasto", "mano_obra", "ingreso", "cuentas"] as const).map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      className={cajaSubTab === t ? "active" : ""}
+                      onClick={() => setCajaSubTab(t)}
+                    >
+                      {{
+                        resumen: "Movimientos",
+                        anticipo: "Anticipo",
+                        gasto: "Gasto",
+                        mano_obra: "Mano de obra",
+                        ingreso: "Ingreso",
+                        cuentas: `Cuentas por pagar${cashPayables.length > 0 ? ` (${cashPayables.length})` : ""}`
+                      }[t]}
+                    </button>
+                  ))}
+                </nav>
+
+                {/* ── Movimientos ── */}
+                {cajaSubTab === "resumen" && (
+                  <div className="cajaMovimientosPanel">
+                    {cashMovements.length === 0 && <p className="muted">Sin movimientos aun.</p>}
+                    <table className="cajaTable">
+                      <thead>
+                        <tr><th>Hora</th><th>Tipo</th><th>Categoría</th><th>Descripción</th><th>Monto</th></tr>
+                      </thead>
+                      <tbody>
+                        {cashMovements.map((m) => (
+                          <tr key={m.id} className={m.movement === "INCOME" ? "rowIncome" : "rowExpense"}>
+                            <td>{new Date(m.created_at).toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" })}</td>
+                            <td>{m.movement === "INCOME" ? "Ingreso" : "Egreso"}</td>
+                            <td>{categoryLabel(m.category)}</td>
+                            <td>{m.description ?? "—"}</td>
+                            <td className="amountCell">{m.movement === "EXPENSE" ? "-" : "+"}{money(Number(m.amount))}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* ── Anticipo ── */}
+                {cajaSubTab === "anticipo" && (
+                  <form className="formPanel cajaForm" onSubmit={(event) => submitCajaAnticipo(event).catch((e) => addToast(e.message, "error"))}>
+                    <h2>Anticipo a agricultor</h2>
+                    <Select name="farmer_id" label="Agricultor" rows={farmers.map((f) => [f.id, f.full_name])} />
+                    <Input name="amount" label="Monto $" type="number" />
+                    <Input name="concept" label="Concepto" />
+                    <button className="primary">Registrar anticipo</button>
+                  </form>
+                )}
+
+                {/* ── Gasto ── */}
+                {cajaSubTab === "gasto" && (
+                  <form className="formPanel cajaForm" onSubmit={(event) => submitCajaGasto(event).catch((e) => addToast(e.message, "error"))}>
+                    <h2>Gasto operativo</h2>
+                    <Input name="amount" label="Monto $" type="number" />
+                    <Input name="description" label="Descripción" />
+                    <Input name="paid_to" label="Pagado a" required={false} />
+                    <button className="primary">Registrar gasto</button>
+                  </form>
+                )}
+
+                {/* ── Mano de obra ── */}
+                {cajaSubTab === "mano_obra" && (
+                  <form className="formPanel cajaForm" onSubmit={(event) => submitCajaManoObra(event).catch((e) => addToast(e.message, "error"))}>
+                    <h2>Pago mano de obra</h2>
+                    <Input name="worker_group" label="Grupo / trabajador" />
+                    <Input name="sacks_moved" label="Sacos trabajados" type="number" />
+                    <Input name="price_per_sack" label="Precio por saco $" type="number" />
+                    <button className="primary">Registrar pago</button>
+                  </form>
+                )}
+
+                {/* ── Ingreso manual ── */}
+                {cajaSubTab === "ingreso" && (
+                  <form className="formPanel cajaForm" onSubmit={(event) => submitCajaIngreso(event).catch((e) => addToast(e.message, "error"))}>
+                    <h2>Ingreso manual</h2>
+                    <label>
+                      <span>Categoría</span>
+                      <select name="category" required>
+                        <option value="">Seleccione</option>
+                        <option value="VENTA_CONTADO">Venta contado</option>
+                        <option value="COBRO_MAQUILA">Cobro maquila</option>
+                        <option value="OTRO_INGRESO">Otro ingreso</option>
+                      </select>
+                    </label>
+                    <Input name="amount" label="Monto $" type="number" />
+                    <Input name="description" label="Descripción" required={false} />
+                    <button className="primary">Registrar ingreso</button>
+                  </form>
+                )}
+
+                {/* ── Cuentas por pagar ── */}
+                {cajaSubTab === "cuentas" && (
+                  <div className="cajaMovimientosPanel">
+                    {cashPayables.length === 0 && <p className="muted">No hay cuentas por pagar pendientes.</p>}
+                    {cashPayables.map((ap) => (
+                      <article key={ap.id} className="payableCard">
+                        <div className="payableInfo">
+                          <strong>{ap.farmer_name}</strong>
+                          <small>{ap.liquidation_number ? `Liq. ${ap.liquidation_number}` : "Sin liquidación"}</small>
+                        </div>
+                        <div className="payableAmounts">
+                          <span className="muted">Total: {money(Number(ap.amount))}</span>
+                          <strong>Pendiente: {money(Number(ap.balance))}</strong>
+                        </div>
+                        <PayablePayForm
+                          payable={ap}
+                          onPay={(amount) => pagarCuenta(ap.id, amount).catch((e) => addToast(e.message, "error"))}
+                        />
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
           </section>
         )}
 
@@ -2444,6 +2738,43 @@ function StageCard({ title, report }: { title: string; report?: ProcessReport })
 
 function money(value: string | number | null | undefined) {
   return `$${Number(value ?? 0).toFixed(2)}`;
+}
+
+function categoryLabel(cat: string) {
+  const map: Record<string, string> = {
+    ANTICIPO_AGRICULTOR: "Anticipo",
+    GASTO_OPERATIVO: "Gasto operativo",
+    PAGO_MANO_OBRA: "Mano de obra",
+    PAGO_AGRICULTOR: "Pago agricultor",
+    VENTA_CONTADO: "Venta contado",
+    COBRO_MAQUILA: "Cobro maquila",
+    OTRO_INGRESO: "Otro ingreso"
+  };
+  return map[cat] ?? cat;
+}
+
+function PayablePayForm({ payable, onPay }: { payable: AccountPayable; onPay: (amount: number) => void }) {
+  const [amount, setAmount] = React.useState(String(Number(payable.balance).toFixed(2)));
+  return (
+    <div className="payablePayRow">
+      <input
+        type="number"
+        min="0.01"
+        step="0.01"
+        max={Number(payable.balance)}
+        value={amount}
+        onChange={(e) => setAmount(e.target.value)}
+        className="payableInput"
+      />
+      <button
+        type="button"
+        className="primary"
+        onClick={() => { onPay(Number(amount)); }}
+      >
+        Pagar
+      </button>
+    </div>
+  );
 }
 
 function riceTypeLabel(value: string | null | undefined) {

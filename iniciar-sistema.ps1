@@ -10,7 +10,7 @@ $nodeCmd = Join-Path $nodeDir "node.exe"
 $databaseUrl = $env:DATABASE_URL
 
 if ([string]::IsNullOrWhiteSpace($databaseUrl)) {
-  $databaseUrl = "postgres://postgres:postgres@localhost:5432/bascula_erp"
+  $databaseUrl = "postgres://postgres:1989@localhost:5432/bascula_erp"
 }
 
 New-Item -ItemType Directory -Force -Path $logs | Out-Null

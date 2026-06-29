@@ -1232,6 +1232,140 @@ input[type="datetime-local"] { height: 36px; }
   .traceLayout { grid-template-columns: 1fr; }
 }
 
+/* ── Caja ─────────────────────────────────────────────────────────────────── */
+.cajaLayout {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.cajaSummaryBar {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.cajaSummaryCard {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cajaSummaryCard span { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.cajaSummaryCard strong { font-size: 20px; font-weight: 700; }
+.cajaSummaryCard.income strong { color: #22c55e; }
+.cajaSummaryCard.expense strong { color: #ef4444; }
+.cajaSummaryCard.balance strong { color: var(--accent); }
+
+.cajaSubNav {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+  flex-wrap: wrap;
+}
+.cajaSubNav button {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 14px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 0;
+  margin-bottom: -1px;
+  transition: color .15s, border-color .15s;
+}
+.cajaSubNav button:hover { color: var(--text); }
+.cajaSubNav button.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.cajaMovimientosPanel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  overflow-x: auto;
+}
+
+.cajaTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.cajaTable th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: 600;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.cajaTable td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.cajaTable tr:last-child td { border-bottom: none; }
+.cajaTable .rowIncome td:first-child { border-left: 3px solid #22c55e; }
+.cajaTable .rowExpense td:first-child { border-left: 3px solid #ef4444; }
+.amountCell { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.rowIncome .amountCell { color: #22c55e; }
+.rowExpense .amountCell { color: #ef4444; }
+
+.cajaForm { max-width: 480px; }
+
+.dangerBtn {
+  background: #ef4444;
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  padding: 6px 14px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  margin-top: 4px;
+  transition: background .15s;
+}
+.dangerBtn:hover { background: #dc2626; }
+
+/* Cuentas por pagar */
+.payableCard {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.payableInfo { display: flex; flex-direction: column; gap: 3px; }
+.payableAmounts { display: flex; flex-direction: column; gap: 3px; }
+.payablePayRow { display: flex; gap: 8px; align-items: center; }
+.payableInput {
+  width: 110px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+
+@media (max-width: 860px) {
+  .cajaSummaryBar { grid-template-columns: 1fr 1fr; }
+  .payableCard { grid-template-columns: 1fr; }
+}
+
+/* ── End Caja ─────────────────────────────────────────────────────────────── */
+
 @media (max-width: 860px) {
   .shell { grid-template-columns: 1fr; }
   .sidebar { position: static; height: auto; }
