@@ -255,6 +255,8 @@ type Fomento = {
   total_pedido: number;
   gasto_adm: number;
   falta_por_pedir: number;
+  deuda_total: number;
+  total_pagado: number;
   estado_credito: "HABILITADO" | "DESABILITADO";
 };
 
@@ -269,7 +271,17 @@ type FomentoEntrega = {
   created_at: string;
 };
 
-type FomentoDetalle = Fomento & { entregas: FomentoEntrega[] };
+type FomentoPago = {
+  id: string;
+  fomento_id: string;
+  cash_register_id: string | null;
+  fecha: string;
+  valor: number;
+  concepto: string | null;
+  created_at: string;
+};
+
+type FomentoDetalle = Fomento & { entregas: FomentoEntrega[]; pagos: FomentoPago[]; deuda_total: number; total_pagado: number; };
 
 const tabs = ["Dashboard", "Bascula", "Secadoras", "Produccion", "Agricultores", "Inventario", "Pedidos", "Caja", "Liquidaciones", "Fomentos"];
 
@@ -385,7 +397,7 @@ export function App() {
   const [liqResult, setLiqResult] = useState<LiqResultItem[] | null>(null);
 
   // ── Caja ──────────────────────────────────────────────────────────────────
-  const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "gasto" | "mano_obra" | "ingreso" | "cuentas">("resumen");
+  const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "gasto" | "mano_obra" | "ingreso" | "cuentas" | "fomentos">("resumen");
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
   const [cashSummary, setCashSummary] = useState<CashSummary | null>(null);
   const [cashPayables, setCashPayables] = useState<AccountPayable[]>([]);
@@ -397,6 +409,14 @@ export function App() {
   const [fomentoForm, setFomentoForm] = useState({ farmer_name: "", cuadras: "", inicio: new Date().toISOString().slice(0,10), status: "ACTIVOS" as "ACTIVOS"|"NO ACTIVOS"|"APROBADOS", notes: "" });
   const [fomentoEntregaForm, setFomentoEntregaForm] = useState({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
   const [fomentoFilter, setFomentoFilter] = useState<"TODOS"|"ACTIVOS"|"NO ACTIVOS"|"APROBADOS">("TODOS");
+  const [fomentoEditingRenta, setFomentoEditingRenta] = useState<string | null>(null);
+  const [fomentoRentaInput, setFomentoRentaInput] = useState("");
+  const [fomentoPagoForm, setFomentoPagoForm] = useState({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
+  // Sub-tab Fomentos en Caja
+  const [cajaFomentoId, setCajaFomentoId] = useState("");
+  const [cajaFomentoAccion, setCajaFomentoAccion] = useState<"entrega"|"pago">("entrega");
+  const [cajaFomentoMonto, setCajaFomentoMonto] = useState("");
+  const [cajaFomentoConcepto, setCajaFomentoConcepto] = useState("");
 
   const addToast = useCallback((text: string, type?: "success" | "error" | "warn") => {
     const id = Date.now();
@@ -848,12 +868,14 @@ export function App() {
     await apiPost(`/fomentos/${fomentoDetalle.id}/entregas`, {
       fecha: fomentoEntregaForm.fecha,
       valor: Number(fomentoEntregaForm.valor),
-      concepto: fomentoEntregaForm.concepto || undefined
+      concepto: fomentoEntregaForm.concepto || undefined,
+      cash_register_id: dashboard.current_cash_register?.id
     });
     setFomentoEntregaForm({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
-    addToast("Entrega registrada", "success");
+    addToast("Entrega registrada" + (dashboard.current_cash_register ? " y descontada de caja" : ""), "success");
     await loadFomentoDetalle(fomentoDetalle.id);
     await refreshFomentos();
+    if (dashboard.current_cash_register?.id) await refreshCaja(dashboard.current_cash_register.id);
   }
 
   async function deleteFomentoEntrega(fomentoId: string, entregaId: string) {
@@ -861,6 +883,64 @@ export function App() {
     await fetch(`${apiBase}/api/v1/fomentos/${fomentoId}/entregas/${entregaId}`, { method: "DELETE" });
     await loadFomentoDetalle(fomentoId);
     await refreshFomentos();
+  }
+
+  async function submitFomentoPago(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!fomentoDetalle) return;
+    await apiPost(`/fomentos/${fomentoDetalle.id}/pagos`, {
+      fecha: fomentoPagoForm.fecha,
+      valor: Number(fomentoPagoForm.valor),
+      concepto: fomentoPagoForm.concepto || undefined,
+      cash_register_id: dashboard.current_cash_register?.id
+    });
+    setFomentoPagoForm({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
+    addToast("Pago registrado", "success");
+    await loadFomentoDetalle(fomentoDetalle.id);
+    await refreshFomentos();
+    if (dashboard.current_cash_register?.id) await refreshCaja(dashboard.current_cash_register.id);
+  }
+
+  async function deleteFomentoPago(fomentoId: string, pagoId: string) {
+    const apiBase = (import.meta.env.VITE_API_URL ?? "http://localhost:4000");
+    await fetch(`${apiBase}/api/v1/fomentos/${fomentoId}/pagos/${pagoId}`, { method: "DELETE" });
+    await loadFomentoDetalle(fomentoId);
+    await refreshFomentos();
+  }
+
+  async function saveRenta(fomentoId: string) {
+    const renta = Number(fomentoRentaInput) / 100;
+    if (!renta || renta <= 0 || renta > 1) { addToast("Porcentaje inválido", "error"); return; }
+    const apiBase = (import.meta.env.VITE_API_URL ?? "http://localhost:4000");
+    await fetch(`${apiBase}/api/v1/fomentos/${fomentoId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ renta })
+    });
+    setFomentoEditingRenta(null);
+    addToast("Tasa actualizada", "success");
+    await refreshFomentos();
+    if (fomentoDetalle?.id === fomentoId) await loadFomentoDetalle(fomentoId);
+  }
+
+  async function submitCajaFomento(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!cajaFomentoId) { addToast("Selecciona un agricultor fomentado", "error"); return; }
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) { addToast("No hay caja abierta", "error"); return; }
+    const endpoint = cajaFomentoAccion === "entrega"
+      ? `/fomentos/${cajaFomentoId}/entregas`
+      : `/fomentos/${cajaFomentoId}/pagos`;
+    await apiPost(endpoint, {
+      fecha: new Date().toISOString().slice(0,10),
+      valor: Number(cajaFomentoMonto),
+      concepto: cajaFomentoConcepto || (cajaFomentoAccion === "entrega" ? "Entrega de insumos" : "Pago de fomento"),
+      cash_register_id: registerId
+    });
+    setCajaFomentoMonto("");
+    setCajaFomentoConcepto("");
+    addToast(cajaFomentoAccion === "entrega" ? "Entrega registrada en caja" : "Pago registrado en caja", "success");
+    await refreshFomentos();
+    await refreshCaja(registerId);
   }
 
   function downloadCajaExcel() {
@@ -2238,7 +2318,7 @@ export function App() {
 
                 {/* Sub-tabs */}
                 <nav className="cajaSubNav">
-                  {(["resumen", "anticipo", "gasto", "mano_obra", "ingreso", "cuentas"] as const).map((t) => (
+                  {(["resumen", "anticipo", "gasto", "mano_obra", "ingreso", "cuentas", "fomentos"] as const).map((t) => (
                     <button
                       key={t}
                       type="button"
@@ -2251,7 +2331,8 @@ export function App() {
                         gasto: "Gasto",
                         mano_obra: "Mano de obra",
                         ingreso: "Ingreso",
-                        cuentas: `Cuentas por pagar${cashPayables.length > 0 ? ` (${cashPayables.length})` : ""}`
+                        cuentas: `Cuentas por pagar${cashPayables.length > 0 ? ` (${cashPayables.length})` : ""}`,
+                        fomentos: `Fomentos${fomentos.filter(f=>f.status==="ACTIVOS").length > 0 ? ` (${fomentos.filter(f=>f.status==="ACTIVOS").length})` : ""}`
                       }[t]}
                     </button>
                   ))}
@@ -2370,6 +2451,131 @@ export function App() {
                         />
                       </article>
                     ))}
+                  </div>
+                )}
+
+                {cajaSubTab === "fomentos" && (
+                  <div className="cajaMovimientosPanel">
+                    {/* Form de acción */}
+                    <form onSubmit={submitCajaFomento} style={{ background: "var(--c-surface)", border: "1px solid #e5e7eb", borderRadius: 10, padding: 16, marginBottom: 16 }}>
+                      <h4 style={{ margin: "0 0 12px" }}>Operación de Fomento desde Caja</h4>
+
+                      {/* Tipo de acción */}
+                      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                        <button type="button"
+                          style={{ flex: 1, padding: "8px 0", borderRadius: 6, border: "2px solid",
+                            borderColor: cajaFomentoAccion === "entrega" ? "var(--c-brand)" : "#d1d5db",
+                            background: cajaFomentoAccion === "entrega" ? "var(--c-brand)" : "transparent",
+                            color: cajaFomentoAccion === "entrega" ? "#fff" : "inherit",
+                            cursor: "pointer", fontWeight: 700, fontSize: 13 }}
+                          onClick={() => setCajaFomentoAccion("entrega")}>
+                          ⬇ Entregar Fomento
+                        </button>
+                        <button type="button"
+                          style={{ flex: 1, padding: "8px 0", borderRadius: 6, border: "2px solid",
+                            borderColor: cajaFomentoAccion === "pago" ? "#16a34a" : "#d1d5db",
+                            background: cajaFomentoAccion === "pago" ? "#16a34a" : "transparent",
+                            color: cajaFomentoAccion === "pago" ? "#fff" : "inherit",
+                            cursor: "pointer", fontWeight: 700, fontSize: 13 }}
+                          onClick={() => setCajaFomentoAccion("pago")}>
+                          ⬆ Recibir Pago
+                        </button>
+                      </div>
+
+                      {/* Seleccionar agricultor fomentado */}
+                      <label style={{ fontSize: 12, fontWeight: 600, display: "block", marginBottom: 8 }}>
+                        Agricultor Fomentado
+                        <select required value={cajaFomentoId} onChange={e => setCajaFomentoId(e.target.value)}
+                          style={{ display: "block", width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 13 }}>
+                          <option value="">— Seleccionar —</option>
+                          {fomentos.filter(f => f.status === "ACTIVOS").map(f => (
+                            <option key={f.id} value={f.id}>
+                              {f.farmer_name} | Deuda: ${Number(f.deuda_total ?? 0).toFixed(2)} | Disp: ${Number(f.falta_por_pedir).toFixed(2)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      {/* Resumen del fomento seleccionado */}
+                      {cajaFomentoId && (() => {
+                        const f = fomentos.find(x => x.id === cajaFomentoId);
+                        if (!f) return null;
+                        return (
+                          <div style={{ background: "#f0fdf4", borderRadius: 6, padding: "8px 12px", marginBottom: 10, fontSize: 12, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+                            <div><span style={{ color: "var(--c-muted)" }}>Pedido</span><br/><strong>${Number(f.total_pedido).toFixed(2)}</strong></div>
+                            <div><span style={{ color: "var(--c-muted)" }}>Interés</span><br/><strong style={{ color: "#b45309" }}>${Number(f.gasto_adm).toFixed(2)}</strong></div>
+                            <div><span style={{ color: "var(--c-muted)" }}>Deuda total</span><br/><strong style={{ color: "#dc2626" }}>${Number(f.deuda_total ?? 0).toFixed(2)}</strong></div>
+                          </div>
+                        );
+                      })()}
+
+                      <label style={{ fontSize: 12, fontWeight: 600, display: "block", marginBottom: 8 }}>
+                        Monto ($)
+                        <input required type="number" step="0.01" min="0.01" value={cajaFomentoMonto}
+                          onChange={e => setCajaFomentoMonto(e.target.value)}
+                          style={{ display: "block", width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3 }}
+                          placeholder="0.00" />
+                      </label>
+
+                      <label style={{ fontSize: 12, fontWeight: 600, display: "block", marginBottom: 12 }}>
+                        Concepto
+                        <input value={cajaFomentoConcepto} onChange={e => setCajaFomentoConcepto(e.target.value)}
+                          style={{ display: "block", width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3 }}
+                          placeholder={cajaFomentoAccion === "entrega" ? "Entrega de insumos / semilla / etc." : "Abono / pago parcial / etc."} />
+                      </label>
+
+                      <button type="submit"
+                        style={{ width: "100%", padding: "9px 0", borderRadius: 6, border: "none", cursor: "pointer", fontWeight: 700, fontSize: 14,
+                          background: cajaFomentoAccion === "entrega" ? "var(--c-brand)" : "#16a34a", color: "#fff" }}>
+                        {cajaFomentoAccion === "entrega" ? "⬇ Registrar Entrega (sale de caja)" : "⬆ Registrar Pago (entra a caja)"}
+                      </button>
+                    </form>
+
+                    {/* Lista de todos los agricultores fomentados */}
+                    <h4 style={{ marginBottom: 8 }}>Agricultores Fomentados</h4>
+                    {fomentos.filter(f => f.status === "ACTIVOS").length === 0 && (
+                      <p style={{ color: "var(--c-muted)", textAlign: "center" }}>No hay fomentos activos</p>
+                    )}
+                    {fomentos.filter(f => f.status === "ACTIVOS").map(f => {
+                      const deuda = Number(f.deuda_total ?? 0);
+                      const pagado = Number(f.total_pagado ?? 0);
+                      return (
+                        <article key={f.id} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "12px 16px", marginBottom: 8, background: "var(--c-surface)" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                            <strong style={{ fontSize: 14 }}>{f.farmer_name}</strong>
+                            <span style={{ fontSize: 11, background: f.estado_credito === "HABILITADO" ? "#dcfce7" : "#fee2e2",
+                              color: f.estado_credito === "HABILITADO" ? "#16a34a" : "#dc2626",
+                              borderRadius: 4, padding: "2px 8px", fontWeight: 700 }}>
+                              {f.estado_credito}
+                            </span>
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6, fontSize: 12 }}>
+                            <div style={{ textAlign: "center" }}>
+                              <div style={{ color: "var(--c-muted)", fontSize: 10 }}>PEDIDO</div>
+                              <strong>${Number(f.total_pedido).toFixed(2)}</strong>
+                            </div>
+                            <div style={{ textAlign: "center" }}>
+                              <div style={{ color: "var(--c-muted)", fontSize: 10 }}>INTERÉS</div>
+                              <strong style={{ color: "#b45309" }}>${Number(f.gasto_adm).toFixed(2)}</strong>
+                            </div>
+                            <div style={{ textAlign: "center" }}>
+                              <div style={{ color: "var(--c-muted)", fontSize: 10 }}>PAGADO</div>
+                              <strong style={{ color: "#16a34a" }}>${pagado.toFixed(2)}</strong>
+                            </div>
+                            <div style={{ textAlign: "center" }}>
+                              <div style={{ color: "var(--c-muted)", fontSize: 10 }}>DEUDA</div>
+                              <strong style={{ color: deuda > 0 ? "#dc2626" : "#16a34a" }}>${deuda.toFixed(2)}</strong>
+                            </div>
+                          </div>
+                          <button type="button"
+                            onClick={() => { setCajaFomentoId(f.id); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+                            style={{ marginTop: 8, fontSize: 11, padding: "4px 10px", borderRadius: 5, border: "1px solid var(--c-brand)",
+                              background: "transparent", color: "var(--c-brand)", cursor: "pointer" }}>
+                            Seleccionar para operar
+                          </button>
+                        </article>
+                      );
+                    })}
                   </div>
                 )}
               </>
@@ -2735,6 +2941,37 @@ export function App() {
                       <button type="button" onClick={() => setFomentoDetalle(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--c-muted)" }}>✕</button>
                     </div>
 
+                    {/* Tasa de interés editable */}
+                    <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 12px", marginBottom: 12, display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600 }}>Tasa de interés:</span>
+                      {fomentoEditingRenta === fomentoDetalle.id ? (
+                        <>
+                          <input type="number" step="0.01" min="0.1" max="100" value={fomentoRentaInput}
+                            onChange={e => setFomentoRentaInput(e.target.value)}
+                            style={{ width: 70, padding: "3px 6px", borderRadius: 5, border: "1px solid #d1d5db", fontSize: 13 }}
+                            placeholder="7" />
+                          <span style={{ fontSize: 12 }}>%</span>
+                          <button type="button" onClick={() => saveRenta(fomentoDetalle.id).catch(e => addToast(e.message,"error"))}
+                            style={{ background: "var(--c-brand)", color: "#fff", border: "none", borderRadius: 5, padding: "3px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
+                            Guardar
+                          </button>
+                          <button type="button" onClick={() => setFomentoEditingRenta(null)}
+                            style={{ background: "none", border: "1px solid #d1d5db", borderRadius: 5, padding: "3px 8px", cursor: "pointer", fontSize: 12 }}>
+                            Cancelar
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <strong style={{ fontSize: 15, color: "#b45309" }}>{(Number(fomentoDetalle.renta) * 100).toFixed(2)}%</strong>
+                          <span style={{ fontSize: 10, color: "var(--c-muted)" }}>mensual</span>
+                          <button type="button" onClick={() => { setFomentoEditingRenta(fomentoDetalle.id); setFomentoRentaInput((Number(fomentoDetalle.renta)*100).toFixed(2)); }}
+                            style={{ background: "none", border: "1px solid #fcd34d", borderRadius: 5, padding: "3px 8px", cursor: "pointer", fontSize: 11, color: "#92400e" }}>
+                            ✏ Editar %
+                          </button>
+                        </>
+                      )}
+                    </div>
+
                     {/* Resumen */}
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
                       {([
@@ -2744,13 +2981,17 @@ export function App() {
                         ["Total Pedido", `$${Number(fomentoDetalle.total_pedido).toFixed(2)}`],
                         ["Disponible", `$${Number(fomentoDetalle.falta_por_pedir).toFixed(2)}`],
                         ["Interés Acum.", `$${Number(fomentoDetalle.gasto_adm).toFixed(2)}`],
-                        ["Total + Interés", `$${(Number(fomentoDetalle.total_pedido) + Number(fomentoDetalle.gasto_adm)).toFixed(2)}`],
+                        ["Total Pagado", `$${Number(fomentoDetalle.total_pagado ?? 0).toFixed(2)}`],
+                        ["Deuda Total", `$${Number(fomentoDetalle.deuda_total ?? 0).toFixed(2)}`],
                         ["Estado", fomentoDetalle.estado_credito],
                       ] as [string, string|number][]).map(([k, v]) => (
                         <div key={k} style={{ background: "#f9fafb", borderRadius: 6, padding: "6px 10px" }}>
                           <div style={{ fontSize: 10, color: "var(--c-muted)", fontWeight: 600 }}>{k}</div>
                           <div style={{ fontSize: 14, fontWeight: 700,
-                            color: k === "Estado" ? (v === "HABILITADO" ? "#16a34a" : "#dc2626") : "inherit" }}>{v}</div>
+                            color: k === "Estado" ? (v === "HABILITADO" ? "#16a34a" : "#dc2626")
+                                 : k === "Deuda Total" ? (Number(v.toString().replace("$","")) > 0 ? "#dc2626" : "#16a34a")
+                                 : k === "Total Pagado" ? "#16a34a"
+                                 : "inherit" }}>{v}</div>
                         </div>
                       ))}
                     </div>
@@ -2824,8 +3065,9 @@ export function App() {
                           <div style={{ fontSize: 12, color: "var(--c-muted)", background: "#fffbeb", borderRadius: 6, padding: "4px 8px" }}>
                             {(() => {
                               const dias = Math.max(0, Math.floor((Date.now() - new Date(fomentoEntregaForm.fecha).getTime()) / 86400000));
-                              const interes = Number(fomentoEntregaForm.valor) * 0.07 / 30 * dias;
-                              return `Días: ${dias} | Interés al día de hoy: $${interes.toFixed(2)} | Total: $${(Number(fomentoEntregaForm.valor) + interes).toFixed(2)}`;
+                              const renta = Number(fomentoDetalle.renta ?? 0.07);
+                              const interes = Number(fomentoEntregaForm.valor) * renta / 30 * dias;
+                              return `Días: ${dias} | Tasa: ${(renta*100).toFixed(2)}% | Interés: $${interes.toFixed(2)} | Total: $${(Number(fomentoEntregaForm.valor) + interes).toFixed(2)}`;
                             })()}
                           </div>
                         )}
@@ -2836,6 +3078,71 @@ export function App() {
                         </label>
                         <button type="submit" style={{ background: "var(--c-brand)", color: "#fff", border: "none", borderRadius: 6, padding: "8px 16px", cursor: "pointer", fontWeight: 700 }}>
                           Registrar Entrega
+                        </button>
+                      </form>
+                    </details>
+
+                    {/* Pagos recibidos */}
+                    <details style={{ border: "1px solid #bbf7d0", borderRadius: 8, padding: "10px 14px", marginTop: 10 }}>
+                      <summary style={{ cursor: "pointer", fontWeight: 600, color: "#16a34a" }}>💵 Pagos Recibidos ({fomentoDetalle.pagos?.length ?? 0})</summary>
+
+                      {/* Lista de pagos */}
+                      {(fomentoDetalle.pagos?.length ?? 0) > 0 && (
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 8, marginBottom: 10 }}>
+                          <thead>
+                            <tr style={{ background: "#dcfce7" }}>
+                              <th style={{ padding: "4px 8px", textAlign: "left" }}>Fecha</th>
+                              <th style={{ padding: "4px 8px", textAlign: "right" }}>Valor</th>
+                              <th style={{ padding: "4px 8px", textAlign: "left" }}>Concepto</th>
+                              <th style={{ padding: "4px 8px" }}></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {fomentoDetalle.pagos.map((p, i) => (
+                              <tr key={p.id} style={{ background: i % 2 === 0 ? "#fff" : "#f0fdf4" }}>
+                                <td style={{ padding: "4px 8px" }}>{p.fecha?.slice(0,10)}</td>
+                                <td style={{ padding: "4px 8px", textAlign: "right", color: "#16a34a", fontWeight: 700 }}>${Number(p.valor).toFixed(2)}</td>
+                                <td style={{ padding: "4px 8px" }}>{p.concepto ?? "—"}</td>
+                                <td style={{ padding: "4px 8px" }}>
+                                  <button type="button" title="Eliminar"
+                                    onClick={() => deleteFomentoPago(fomentoDetalle.id, p.id).catch(() => undefined)}
+                                    style={{ background: "none", border: "none", cursor: "pointer", color: "#dc2626", fontSize: 13 }}>✕</button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot>
+                            <tr style={{ fontWeight: 700, borderTop: "2px solid #bbf7d0" }}>
+                              <td style={{ padding: "4px 8px" }}>TOTAL</td>
+                              <td style={{ padding: "4px 8px", textAlign: "right", color: "#16a34a" }}>
+                                ${fomentoDetalle.pagos.reduce((s, p) => s + Number(p.valor), 0).toFixed(2)}
+                              </td>
+                              <td colSpan={2}></td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      )}
+
+                      {/* Formulario pago */}
+                      <form onSubmit={submitFomentoPago} style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+                        <label style={{ fontSize: 12, fontWeight: 600 }}>Fecha
+                          <input required type="date" value={fomentoPagoForm.fecha}
+                            onChange={e => setFomentoPagoForm(p => ({...p, fecha: e.target.value}))}
+                            style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} />
+                        </label>
+                        <label style={{ fontSize: 12, fontWeight: 600 }}>Monto recibido ($)
+                          <input required type="number" step="0.01" min="0.01" value={fomentoPagoForm.valor}
+                            onChange={e => setFomentoPagoForm(p => ({...p, valor: e.target.value}))}
+                            style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="0.00" />
+                        </label>
+                        <label style={{ fontSize: 12, fontWeight: 600 }}>Concepto
+                          <input value={fomentoPagoForm.concepto}
+                            onChange={e => setFomentoPagoForm(p => ({...p, concepto: e.target.value}))}
+                            style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Abono / pago total" />
+                        </label>
+                        <button type="submit" style={{ background: "#16a34a", color: "#fff", border: "none", borderRadius: 6, padding: "8px 16px", cursor: "pointer", fontWeight: 700 }}>
+                          💵 Registrar Pago
+                          {dashboard.current_cash_register && " (entra a caja)"}
                         </button>
                       </form>
                     </details>
