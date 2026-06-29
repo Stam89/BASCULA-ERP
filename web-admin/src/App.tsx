@@ -576,6 +576,25 @@ export function App() {
     [farmers, availableLots]
   );
 
+  // Agricultores con saldo pendiente en liquidaciones (para anticipo en tab Liquidaciones)
+  const farmersWithPendingLiq = useMemo(() => {
+    const pendingByFarmer = new Map<string, { name: string; pending: number }>();
+    for (const r of liquidacionesList) {
+      const bal = Number(r.pending_balance ?? 0);
+      if (bal > 0) {
+        const prev = pendingByFarmer.get(r.farmer_id);
+        pendingByFarmer.set(r.farmer_id, {
+          name: r.farmer_name,
+          pending: (prev?.pending ?? 0) + bal
+        });
+      }
+    }
+    return Array.from(pendingByFarmer.entries()).map(([id, v]) => ({
+      id,
+      full_name: `${v.name} — debe $${v.pending.toFixed(2)}`
+    }));
+  }, [liquidacionesList]);
+
   type LiqBatch = {
     key: string;
     batch_id: string | null;
@@ -2341,10 +2360,13 @@ export function App() {
 
             <form className="formPanel" onSubmit={(event) => submitAdvance(event).catch((error) => setMessage(error.message))}>
               <h2>Registrar anticipo</h2>
-              <Select name="farmer_id" label="Agricultor" rows={farmersForAnticipo.map((f) => [f.id, `${f.full_name} — ${f.pendingQq.toFixed(2)} QQ`])} />
-              <Input name="amount" label="Monto" type="number" />
+              {farmersWithPendingLiq.length === 0
+                ? <p className="muted">No hay agricultores con saldo pendiente.</p>
+                : <Select name="farmer_id" label="Agricultor" rows={farmersWithPendingLiq.map((f) => [f.id, f.full_name])} />
+              }
+              <Input name="amount" label="Monto $" type="number" />
               <Input name="concept" label="Concepto" />
-              <button className="primary">Registrar</button>
+              <button className="primary" disabled={farmersWithPendingLiq.length === 0}>Registrar</button>
             </form>
 
             <DataList
