@@ -256,6 +256,53 @@ type SackMovement = {
   created_at: string;
 };
 
+type Customer = {
+  id: string;
+  identification: string | null;
+  full_name: string;
+  phone: string | null;
+  address: string | null;
+  customer_type: "NATURAL" | "EMPRESA";
+  created_at: string;
+};
+
+type Sale = {
+  id: string;
+  sale_number: string;
+  customer_id: string | null;
+  customer_name: string | null;
+  customer_phone: string | null;
+  cash_register_id: string | null;
+  total_amount: number;
+  payment_status: "PAID" | "CONFIRMED" | "PARTIAL";
+  sale_status: string;
+  created_at: string;
+  items_count?: number;
+};
+
+type SaleItem = {
+  id: string;
+  sale_id: string;
+  product_id: string;
+  product_name: string;
+  warehouse_id: string;
+  quantity: number;
+  unit_price: number;
+  total: number;
+};
+
+type AccountsReceivable = {
+  id: string;
+  customer_id: string | null;
+  customer_name: string | null;
+  sale_id: string | null;
+  sale_number: string | null;
+  amount: number;
+  balance: number;
+  status: "PAID" | "CONFIRMED" | "PARTIAL";
+  created_at: string;
+};
+
 type Fomento = {
   id: string;
   farmer_name: string;
@@ -300,7 +347,7 @@ type FomentoPago = {
 
 type FomentoDetalle = Fomento & { entregas: FomentoEntrega[]; pagos: FomentoPago[]; deuda_total: number; total_pagado: number; };
 
-const tabs = ["Dashboard", "Bascula", "Secadoras", "Produccion", "Agricultores", "Inventario", "Pedidos", "Caja", "Liquidaciones", "Fomentos"];
+const tabs = ["Dashboard", "Bascula", "Secadoras", "Produccion", "Agricultores", "Inventario", "Ventas", "Caja", "Liquidaciones", "Fomentos"];
 
 function NavIcon({ tab }: { tab: string }) {
   switch (tab) {
@@ -324,6 +371,8 @@ function NavIcon({ tab }: { tab: string }) {
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 1h8a1 1 0 011 1v13l-4.5-2L4 15V2a1 1 0 011-1z"/><line x1="6" y1="6" x2="10" y2="6"/><line x1="6" y1="9" x2="10" y2="9"/></svg>;
     case "Fomentos":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 14V8"/><path d="M5 11l3-3 3 3"/><path d="M2 14h12"/><path d="M4 8C4 5 6 2 8 2s4 3 4 6"/></svg>;
+    case "Ventas":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 5h12M2 9h12"/><circle cx="8" cy="13" r="1"/><path d="M3 2h10v11H3z"/></svg>;
     default:
       return null;
   }
@@ -437,6 +486,12 @@ export function App() {
   const [sackInventory, setSackInventory] = useState<SackInventory[]>([]);
   const [sackMovements, setSackMovements] = useState<SackMovement[]>([]);
   const [sackMovForm, setSackMovForm] = useState({ sack_id: "", movement: "ENTRADA" as "ENTRADA"|"SALIDA", cantidad: "", concepto: "" });
+
+  // ── Clientes y Ventas ──────────────────────────────────────────────────────
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [sales, setSales] = useState<Sale[]>([]);
+  const [accountsReceivable, setAccountsReceivable] = useState<AccountsReceivable[]>([]);
+  const [newCustomerForm, setNewCustomerForm] = useState({ full_name: "", phone: "", address: "", customer_type: "NATURAL" as "NATURAL"|"EMPRESA" });
 
   // Sub-tab Fomentos en Caja
   const [cajaFomentoId, setCajaFomentoId] = useState("");
@@ -874,6 +929,40 @@ export function App() {
     setSackMovements(movs);
   }
 
+  async function refreshCustomersAndSales() {
+    const [custs, sls, ar] = await Promise.all([
+      apiGet<Customer[]>("/customers"),
+      apiGet<Sale[]>("/sales"),
+      apiGet<AccountsReceivable[]>("/receivable")
+    ]);
+    setCustomers(custs);
+    setSales(sls);
+    setAccountsReceivable(ar.filter(a => a.status !== "PAID"));
+  }
+
+  async function submitNewCustomer(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!newCustomerForm.full_name) { addToast("Ingresa nombre del cliente", "error"); return; }
+    await apiPost("/customers", {
+      full_name: newCustomerForm.full_name,
+      phone: newCustomerForm.phone || undefined,
+      address: newCustomerForm.address || undefined,
+      customer_type: newCustomerForm.customer_type
+    });
+    setNewCustomerForm({ full_name: "", phone: "", address: "", customer_type: "NATURAL" });
+    addToast("Cliente agregado", "success");
+    await refreshCustomersAndSales();
+  }
+
+  async function payAccountReceivable(id: string, amount: number) {
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) { addToast("No hay caja abierta", "error"); return; }
+    await apiPost(`/receivable/${id}/pay`, { amount, cash_register_id: registerId });
+    addToast("Pago registrado en caja", "success");
+    await refreshCustomersAndSales();
+    await refreshCaja(registerId);
+  }
+
   async function submitSackMovement(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!sackMovForm.sack_id) { addToast("Selecciona un tipo de saco", "error"); return; }
@@ -896,6 +985,8 @@ export function App() {
   useEffect(() => {
     if (activeTab === "Fomentos") refreshFomentos().catch(() => undefined);
     if (activeTab === "Produccion") refreshSacks().catch(() => undefined);
+    if (activeTab === "Inventario") refreshSacks().catch(() => undefined);
+    if (activeTab === "Ventas") refreshCustomersAndSales().catch(() => undefined);
   }, [activeTab]);
 
   async function submitFomento(e: FormEvent<HTMLFormElement>) {
@@ -2349,7 +2440,7 @@ export function App() {
           </section>
         )}
 
-        {activeTab === "Pedidos" && (
+        {activeTab === "Ventas" && (
           <section className="panelGrid">
             <form className="formPanel" onSubmit={(event) => submitOrderSale(event).catch((error) => setMessage(error.message))}>
               <h2>Nuevo pedido de producto</h2>

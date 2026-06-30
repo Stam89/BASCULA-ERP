@@ -17,6 +17,8 @@ import { salesRouter } from "./modules/sales.js";
 import { weighingRouter } from "./modules/weighing-tickets.js";
 import { fomentosRouter } from "./modules/fomentos.js";
 import { sacksRouter } from "./modules/sacks.js";
+import { customersRouter } from "./modules/customers.js";
+import { receivableRouter } from "./modules/receivable.js";
 
 export const routes = Router();
 
@@ -38,3 +40,5 @@ routes.use("/expenses", expensesRouter);
 routes.use("/documents", documentsRouter);
 routes.use("/fomentos", fomentosRouter);
 routes.use("/sacks", sacksRouter);
+routes.use("/customers", customersRouter);
+routes.use("/receivable", receivableRouter);

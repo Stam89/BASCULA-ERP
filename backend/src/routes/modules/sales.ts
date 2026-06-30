@@ -150,7 +150,41 @@ salesRouter.post("/", asyncRoute(async (req, res) => {
   res.status(201).json(result);
 }));
 
+// GET todas las ventas con detalles de cliente
 salesRouter.get("/", asyncRoute(async (_req, res) => {
-  const result = await pool.query("SELECT * FROM sales ORDER BY created_at DESC LIMIT 500");
+  const result = await pool.query(`
+    SELECT s.*,
+           c.full_name AS customer_name,
+           c.phone AS customer_phone,
+           COUNT(si.id) AS items_count,
+           COALESCE(SUM(si.total), 0) AS items_total
+    FROM sales s
+    LEFT JOIN customers c ON c.id = s.customer_id
+    LEFT JOIN sale_items si ON si.sale_id = s.id
+    GROUP BY s.id, c.full_name, c.phone
+    ORDER BY s.created_at DESC
+    LIMIT 500
+  `);
   res.json(result.rows);
+}));
+
+// GET detalle de una venta con items
+salesRouter.get("/:id", asyncRoute(async (req, res) => {
+  const sale = await pool.query(`
+    SELECT s.*, c.full_name AS customer_name, c.phone AS customer_phone
+    FROM sales s
+    LEFT JOIN customers c ON c.id = s.customer_id
+    WHERE s.id = $1
+  `, [req.params.id]);
+
+  if (!sale.rows[0]) { res.status(404).json({ error: "Venta no encontrada" }); return; }
+
+  const items = await pool.query(`
+    SELECT si.*, p.name AS product_name
+    FROM sale_items si
+    JOIN products p ON p.id = si.product_id
+    WHERE si.sale_id = $1
+  `, [req.params.id]);
+
+  res.json({ ...sale.rows[0], items: items.rows });
 }));
