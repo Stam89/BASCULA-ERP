@@ -1157,7 +1157,7 @@ export function App() {
     if (res.ok) setEquipment(await res.json());
   };
 
-  const submitEquipmentMaintenance = async () => {
+  const submitEquipmentMaintenance = async (photoFile?: File) => {
     if (!dashboard.current_cash_register?.id || !maintenanceForm.equipment_id || !maintenanceForm.description || !maintenanceForm.amount) {
       addToast("Completa los campos requeridos", "error");
       return;
@@ -1167,18 +1167,25 @@ export function App() {
 
     try {
       const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
+
+      // Crear FormData para multipart/form-data
+      const formData = new FormData();
+      formData.append("maintenance_type", maintenanceForm.maintenance_type);
+      formData.append("description", maintenanceForm.description);
+      if (maintenanceForm.provider) formData.append("provider", maintenanceForm.provider);
+      if (maintenanceForm.invoice_number) formData.append("invoice_number", maintenanceForm.invoice_number);
+      formData.append("amount", amount.toString());
+      formData.append("cash_register_id", registerId);
+
+      // Agregar archivo si fue seleccionado
+      if (photoFile) {
+        formData.append("receipt_photo", photoFile);
+      }
+
       const res = await fetch(`${API}/api/v1/equipment/${maintenanceForm.equipment_id}/maintenance`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          maintenance_type: maintenanceForm.maintenance_type,
-          description: maintenanceForm.description,
-          provider: maintenanceForm.provider || undefined,
-          invoice_number: maintenanceForm.invoice_number || undefined,
-          receipt_photo_url: maintenanceForm.receipt_photo_url || undefined,
-          amount,
-          cash_register_id: registerId
-        })
+        body: formData
+        // NO agregar Content-Type header - el navegador lo hace automáticamente con la boundary
       });
       if (!res.ok) throw new Error(await res.text());
 
@@ -2904,7 +2911,12 @@ export function App() {
 
                 {/* ── Mantenimiento de Equipos ── */}
                 {cajaSubTab === "mantenimiento" && (
-                  <form className="formPanel cajaForm" onSubmit={(event: any) => { event.preventDefault(); submitEquipmentMaintenance(); }}>
+                  <form className="formPanel cajaForm" onSubmit={(event: any) => {
+                    event.preventDefault();
+                    const fileInput = event.currentTarget.querySelector('input[type="file"]');
+                    const file = fileInput?.files?.[0];
+                    submitEquipmentMaintenance(file);
+                  }}>
                     <h2>Mantenimiento de Equipos</h2>
                     <label>
                       <span>Máquina</span>
@@ -2970,11 +2982,10 @@ export function App() {
                       />
                     </label>
                     <label>
-                      <span>URL de foto del comprobante (opcional)</span>
+                      <span>📸 Foto del comprobante (JPG, PNG, máx 5MB)</span>
                       <input
-                        type="url"
-                        value={maintenanceForm.receipt_photo_url}
-                        onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, receipt_photo_url: event.target.value })}
+                        type="file"
+                        accept="image/jpeg,image/png,image/jpg"
                         style={{ width: "100%", padding: 8 }}
                       />
                     </label>

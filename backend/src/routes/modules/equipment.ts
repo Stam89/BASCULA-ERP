@@ -1,9 +1,37 @@
 import { Router } from "express";
 import { z } from "zod";
+import multer from "multer";
+import path from "path";
+import { fileURLToPath } from "url";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { round2 } from "../../utils/rice-formulas.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const uploadsDir = path.join(__dirname, "../../../uploads/equipment");
+
+// Configurar multer
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, uploadsDir),
+  filename: (_req, file, cb) => {
+    const timestamp = Date.now();
+    const ext = path.extname(file.originalname);
+    cb(null, `maintenance-${timestamp}${ext}`);
+  }
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB max
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Solo se permiten imágenes"));
+    }
+  }
+});
 
 export const equipmentRouter = Router();
 
@@ -73,18 +101,23 @@ equipmentRouter.patch("/:id", asyncRoute(async (req, res) => {
   res.json(result.rows[0]);
 }));
 
-// POST registrar mantenimiento (crea maintenance + cash_movement en transacción)
-equipmentRouter.post("/:id/maintenance", asyncRoute(async (req, res) => {
+// POST registrar mantenimiento CON subida de foto (multipart/form-data)
+equipmentRouter.post("/:id/maintenance", upload.single("receipt_photo"), asyncRoute(async (req, res) => {
   const body = z.object({
     maintenance_type: z.enum(["REPUESTO", "MANO_OBRA", "PREVENTIVO", "CORRECTIVO"]),
     description: z.string().min(1),
     provider: z.string().optional(),
     invoice_number: z.string().optional(),
-    receipt_photo_url: z.string().url().optional(),
-    amount: z.number().positive(),
+    amount: z.string().transform(s => parseFloat(s)).refine(n => n > 0),
     cash_register_id: z.string().uuid().optional(),
     created_by: z.string().uuid().optional()
   }).parse(req.body);
+
+  // Construir URL de foto si se subió
+  let photoUrl = null;
+  if (req.file) {
+    photoUrl = `/uploads/equipment/${req.file.filename}`;
+  }
 
   const result = await inTransaction(async (client) => {
     // Verificar que equipo existe
@@ -106,7 +139,7 @@ equipmentRouter.post("/:id/maintenance", asyncRoute(async (req, res) => {
         body.description,
         body.provider || null,
         body.invoice_number || null,
-        body.receipt_photo_url || null,
+        photoUrl,
         round2(body.amount),
         body.created_by || null
       ]
