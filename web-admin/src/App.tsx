@@ -347,6 +347,29 @@ type FomentoPago = {
 
 type FomentoDetalle = Fomento & { entregas: FomentoEntrega[]; pagos: FomentoPago[]; deuda_total: number; total_pagado: number; };
 
+type Equipment = {
+  id: string;
+  name: string;
+  type: "PILADORA" | "SECADORA" | "OTRO";
+  branch_id: string | null;
+  status: "ACTIVA" | "MANTENIMIENTO" | "FUERA_SERVICIO";
+  created_at: string;
+};
+
+type EquipmentMaintenance = {
+  id: string;
+  equipment_id: string;
+  equipment_name: string;
+  maintenance_type: "REPUESTO" | "MANO_OBRA" | "PREVENTIVO" | "CORRECTIVO";
+  description: string;
+  provider: string | null;
+  invoice_number: string | null;
+  receipt_photo_url: string | null;
+  amount: number;
+  created_by: string | null;
+  created_at: string;
+};
+
 const tabs = ["Dashboard", "Bascula", "Secadoras", "Produccion", "Agricultores", "Inventario", "Ventas", "Caja", "Liquidaciones", "Fomentos"];
 
 function NavIcon({ tab }: { tab: string }) {
@@ -380,6 +403,7 @@ function NavIcon({ tab }: { tab: string }) {
 const LB_TO_KG = 0.45359237;
 const QQ_TO_LB = 100;
 const millingDraftStorageKey = "bascula-erp:milling-report-draft";
+const round2 = (n: number) => Math.round(n * 100) / 100;
 const dryerOptions = ["Secadora 1", "Secadora 2", "Secadora 3"];
 const piladoPresentations = ["10 LB", "25 LB", "50 LB", "98 LB", "100 LB"];
 
@@ -463,7 +487,7 @@ export function App() {
   const [liqResult, setLiqResult] = useState<LiqResultItem[] | null>(null);
 
   // ── Caja ──────────────────────────────────────────────────────────────────
-  const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "gasto" | "mano_obra" | "ingreso" | "cuentas" | "fomentos" | "sacos">("resumen");
+  const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "gasto" | "sacos" | "mantenimiento" | "mano_obra" | "ingreso" | "cuentas" | "fomentos">("resumen");
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
   const [cashSummary, setCashSummary] = useState<CashSummary | null>(null);
   const [cashPayables, setCashPayables] = useState<AccountPayable[]>([]);
@@ -501,6 +525,18 @@ export function App() {
 
   // ── Compra de Sacos en Caja ────────────────────────────────────────────
   const [sackBuyForm, setSackBuyForm] = useState({ sack_id: "", cantidad: "", precio: "" });
+
+  // ── Mantenimiento de Equipos ───────────────────────────────────────────
+  const [equipment, setEquipment] = useState<Equipment[]>([]);
+  const [maintenanceForm, setMaintenanceForm] = useState({
+    equipment_id: "",
+    maintenance_type: "CORRECTIVO" as "REPUESTO" | "MANO_OBRA" | "PREVENTIVO" | "CORRECTIVO",
+    description: "",
+    provider: "",
+    invoice_number: "",
+    receipt_photo_url: "",
+    amount: ""
+  });
 
   const addToast = useCallback((text: string, type?: "success" | "error" | "warn") => {
     const id = Date.now();
@@ -1110,6 +1146,53 @@ export function App() {
       await refreshSacks();
       await refreshCaja(registerId);
       addToast("Compra de sacos registrada ✓", "success");
+    } catch (e) {
+      addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error");
+    }
+  };
+
+  const refreshEquipment = async () => {
+    const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
+    const res = await fetch(`${API}/api/v1/equipment`);
+    if (res.ok) setEquipment(await res.json());
+  };
+
+  const submitEquipmentMaintenance = async () => {
+    if (!dashboard.current_cash_register?.id || !maintenanceForm.equipment_id || !maintenanceForm.description || !maintenanceForm.amount) {
+      addToast("Completa los campos requeridos", "error");
+      return;
+    }
+    const amount = parseFloat(maintenanceForm.amount);
+    const registerId = dashboard.current_cash_register.id;
+
+    try {
+      const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
+      const res = await fetch(`${API}/api/v1/equipment/${maintenanceForm.equipment_id}/maintenance`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          maintenance_type: maintenanceForm.maintenance_type,
+          description: maintenanceForm.description,
+          provider: maintenanceForm.provider || undefined,
+          invoice_number: maintenanceForm.invoice_number || undefined,
+          receipt_photo_url: maintenanceForm.receipt_photo_url || undefined,
+          amount,
+          cash_register_id: registerId
+        })
+      });
+      if (!res.ok) throw new Error(await res.text());
+
+      setMaintenanceForm({
+        equipment_id: "",
+        maintenance_type: "CORRECTIVO",
+        description: "",
+        provider: "",
+        invoice_number: "",
+        receipt_photo_url: "",
+        amount: ""
+      });
+      await refreshCaja(registerId);
+      addToast("Mantenimiento registrado ✓", "success");
     } catch (e) {
       addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error");
     }
@@ -2684,18 +2767,22 @@ export function App() {
 
                 {/* Sub-tabs */}
                 <nav className="cajaSubNav">
-                  {(["resumen", "anticipo", "gasto", "sacos", "mano_obra", "ingreso", "cuentas", "fomentos"] as const).map((t) => (
+                  {(["resumen", "anticipo", "gasto", "sacos", "mantenimiento", "mano_obra", "ingreso", "cuentas", "fomentos"] as const).map((t) => (
                     <button
                       key={t}
                       type="button"
                       className={cajaSubTab === t ? "active" : ""}
-                      onClick={() => setCajaSubTab(t)}
+                      onClick={() => {
+                        setCajaSubTab(t);
+                        if (t === "mantenimiento" && equipment.length === 0) refreshEquipment();
+                      }}
                     >
                       {{
                         resumen: "Movimientos",
                         anticipo: "Anticipo",
                         gasto: "Gasto",
                         sacos: "Compra de Sacos",
+                        mantenimiento: "Mantenimiento",
                         mano_obra: "Mano de obra",
                         ingreso: "Ingreso",
                         cuentas: `Cuentas por pagar${cashPayables.length > 0 ? ` (${cashPayables.length})` : ""}`,
@@ -2785,27 +2872,113 @@ export function App() {
                         ))}
                       </select>
                     </label>
-                    <Input
-                      type="number"
-                      placeholder="Cantidad"
-                      value={sackBuyForm.cantidad}
-                      onChange={(e) => setSackBuyForm({ ...sackBuyForm, cantidad: e.target.value })}
-                      required
-                    />
-                    <Input
-                      type="number"
-                      placeholder="Precio por unidad"
-                      step="0.01"
-                      value={sackBuyForm.precio}
-                      onChange={(e) => setSackBuyForm({ ...sackBuyForm, precio: e.target.value })}
-                      required
-                    />
+                    <label>
+                      <span>Cantidad</span>
+                      <input
+                        type="number"
+                        value={sackBuyForm.cantidad}
+                        onChange={(e: any) => setSackBuyForm({ ...sackBuyForm, cantidad: e.target.value })}
+                        required
+                        style={{ width: "100%", padding: 8 }}
+                      />
+                    </label>
+                    <label>
+                      <span>Precio por unidad</span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={sackBuyForm.precio}
+                        onChange={(e: any) => setSackBuyForm({ ...sackBuyForm, precio: e.target.value })}
+                        required
+                        style={{ width: "100%", padding: 8 }}
+                      />
+                    </label>
                     {sackBuyForm.cantidad && sackBuyForm.precio && (
                       <div style={{ background: "#f0f9ff", border: "1px solid #0ea5e9", borderRadius: 6, padding: 12, marginBottom: 12, fontSize: 14 }}>
                         <strong>Total:</strong> ${(parseInt(sackBuyForm.cantidad || "0") * parseFloat(sackBuyForm.precio || "0")).toFixed(2)}
                       </div>
                     )}
                     <button className="primary">Registrar compra de sacos</button>
+                  </form>
+                )}
+
+                {/* ── Mantenimiento de Equipos ── */}
+                {cajaSubTab === "mantenimiento" && (
+                  <form className="formPanel cajaForm" onSubmit={(event: any) => { event.preventDefault(); submitEquipmentMaintenance(); }}>
+                    <h2>Mantenimiento de Equipos</h2>
+                    <label>
+                      <span>Máquina</span>
+                      <select
+                        value={maintenanceForm.equipment_id}
+                        onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, equipment_id: event.target.value })}
+                        required
+                      >
+                        <option value="">Seleccione</option>
+                        {equipment.map((eq) => (
+                          <option key={eq.id} value={eq.id}>{eq.name} ({eq.type})</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span>Tipo de mantenimiento</span>
+                      <select
+                        value={maintenanceForm.maintenance_type}
+                        onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, maintenance_type: event.target.value as any })}
+                      >
+                        <option value="CORRECTIVO">Correctivo (reparación)</option>
+                        <option value="PREVENTIVO">Preventivo</option>
+                        <option value="REPUESTO">Repuesto</option>
+                        <option value="MANO_OBRA">Mano de obra</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>Descripción del trabajo/repuesto</span>
+                      <textarea
+                        style={{ width: "100%", minHeight: 60, padding: 8, fontFamily: "inherit" }}
+                        value={maintenanceForm.description}
+                        onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, description: event.target.value })}
+                        required
+                      />
+                    </label>
+                    <label>
+                      <span>Proveedor/Técnico</span>
+                      <input
+                        type="text"
+                        value={maintenanceForm.provider}
+                        onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, provider: event.target.value })}
+                        style={{ width: "100%", padding: 8 }}
+                      />
+                    </label>
+                    <label>
+                      <span>Número de factura</span>
+                      <input
+                        type="text"
+                        value={maintenanceForm.invoice_number}
+                        onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, invoice_number: event.target.value })}
+                        style={{ width: "100%", padding: 8 }}
+                      />
+                    </label>
+                    <label>
+                      <span>Monto $</span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={maintenanceForm.amount}
+                        onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, amount: event.target.value })}
+                        required
+                        style={{ width: "100%", padding: 8 }}
+                      />
+                    </label>
+                    <label>
+                      <span>URL de foto del comprobante (opcional)</span>
+                      <input
+                        type="url"
+                        value={maintenanceForm.receipt_photo_url}
+                        onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, receipt_photo_url: event.target.value })}
+                        style={{ width: "100%", padding: 8 }}
+                      />
+                    </label>
+                    <button className="primary">Registrar mantenimiento</button>
                   </form>
                 )}
 

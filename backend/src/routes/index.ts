@@ -19,6 +19,7 @@ import { fomentosRouter } from "./modules/fomentos.js";
 import { sacksRouter } from "./modules/sacks.js";
 import { customersRouter } from "./modules/customers.js";
 import { receivableRouter } from "./modules/receivable.js";
+import { equipmentRouter } from "./modules/equipment.js";
 
 export const routes = Router();
 
@@ -42,3 +43,4 @@ routes.use("/fomentos", fomentosRouter);
 routes.use("/sacks", sacksRouter);
 routes.use("/customers", customersRouter);
 routes.use("/receivable", receivableRouter);
+routes.use("/equipment", equipmentRouter);
