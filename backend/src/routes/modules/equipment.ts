@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import multer from "multer";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { pool } from "../../db/pool.js";
@@ -11,27 +11,10 @@ import { round2 } from "../../utils/rice-formulas.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsDir = path.join(__dirname, "../../../uploads/equipment");
 
-// Configurar multer
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadsDir),
-  filename: (_req, file, cb) => {
-    const timestamp = Date.now();
-    const ext = path.extname(file.originalname);
-    cb(null, `maintenance-${timestamp}${ext}`);
-  }
-});
-
-const upload = multer({
-  storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB max
-  fileFilter: (_req, file, cb) => {
-    if (file.mimetype.startsWith("image/")) {
-      cb(null, true);
-    } else {
-      cb(new Error("Solo se permiten imágenes"));
-    }
-  }
-});
+// Crear directorio si no existe
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
 
 export const equipmentRouter = Router();
 
@@ -101,22 +84,37 @@ equipmentRouter.patch("/:id", asyncRoute(async (req, res) => {
   res.json(result.rows[0]);
 }));
 
-// POST registrar mantenimiento CON subida de foto (multipart/form-data)
-equipmentRouter.post("/:id/maintenance", upload.single("receipt_photo"), asyncRoute(async (req, res) => {
+// POST registrar mantenimiento CON foto (base64 en JSON)
+equipmentRouter.post("/:id/maintenance", asyncRoute(async (req, res) => {
   const body = z.object({
     maintenance_type: z.enum(["REPUESTO", "MANO_OBRA", "PREVENTIVO", "CORRECTIVO"]),
     description: z.string().min(1),
     provider: z.string().optional(),
     invoice_number: z.string().optional(),
-    amount: z.string().transform(s => parseFloat(s)).refine(n => n > 0),
+    receipt_photo_base64: z.string().optional(), // Base64 encoded image
+    amount: z.number().positive(),
     cash_register_id: z.string().uuid().optional(),
     created_by: z.string().uuid().optional()
   }).parse(req.body);
 
-  // Construir URL de foto si se subió
+  // Guardar foto si se envió
   let photoUrl = null;
-  if (req.file) {
-    photoUrl = `/uploads/equipment/${req.file.filename}`;
+  if (body.receipt_photo_base64 && body.receipt_photo_base64.length > 0) {
+    try {
+      const timestamp = Date.now();
+      const filename = `maintenance-${timestamp}.png`;
+      const filepath = path.join(uploadsDir, filename);
+
+      // Decodificar base64 a buffer
+      const buffer = Buffer.from(body.receipt_photo_base64.split(",")[1] || body.receipt_photo_base64, "base64");
+
+      // Escribir archivo
+      fs.writeFileSync(filepath, buffer);
+      photoUrl = `/uploads/equipment/${filename}`;
+    } catch (e) {
+      console.error("Error saving photo:", e);
+      // Continuar sin foto si hay error
+    }
   }
 
   const result = await inTransaction(async (client) => {

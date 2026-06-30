@@ -1168,24 +1168,28 @@ export function App() {
     try {
       const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
 
-      // Crear FormData para multipart/form-data
-      const formData = new FormData();
-      formData.append("maintenance_type", maintenanceForm.maintenance_type);
-      formData.append("description", maintenanceForm.description);
-      if (maintenanceForm.provider) formData.append("provider", maintenanceForm.provider);
-      if (maintenanceForm.invoice_number) formData.append("invoice_number", maintenanceForm.invoice_number);
-      formData.append("amount", amount.toString());
-      formData.append("cash_register_id", registerId);
-
-      // Agregar archivo si fue seleccionado
+      // Convertir foto a base64 si existe
+      let photoBase64: string | undefined;
       if (photoFile) {
-        formData.append("receipt_photo", photoFile);
+        const reader = new FileReader();
+        photoBase64 = await new Promise((resolve) => {
+          reader.onload = () => resolve(reader.result as string);
+          reader.readAsDataURL(photoFile);
+        });
       }
 
       const res = await fetch(`${API}/api/v1/equipment/${maintenanceForm.equipment_id}/maintenance`, {
         method: "POST",
-        body: formData
-        // NO agregar Content-Type header - el navegador lo hace automáticamente con la boundary
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          maintenance_type: maintenanceForm.maintenance_type,
+          description: maintenanceForm.description,
+          provider: maintenanceForm.provider || undefined,
+          invoice_number: maintenanceForm.invoice_number || undefined,
+          receipt_photo_base64: photoBase64,
+          amount,
+          cash_register_id: registerId
+        })
       });
       if (!res.ok) throw new Error(await res.text());
 
