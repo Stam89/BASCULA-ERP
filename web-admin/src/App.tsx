@@ -2425,8 +2425,17 @@ export function App() {
 
         {activeTab === "Ventas" && (
           <section className="panelGrid">
+            {/* Formulario de venta */}
             <form className="formPanel" onSubmit={(event) => submitOrderSale(event).catch((error) => setMessage(error.message))}>
-              <h2>Nuevo pedido de producto</h2>
+              <h2>Nueva venta de producto</h2>
+
+              <Select
+                name="customer_id"
+                label="Cliente"
+                rows={customers.map((c) => [c.id, c.full_name])}
+                required={false}
+              />
+
               <Select
                 name="product_id"
                 label="Producto"
@@ -2434,32 +2443,24 @@ export function App() {
                 defaultValue={whiteRiceProduct?.id}
               />
               <Select name="warehouse_id" label="Bodega de producto" rows={warehouses.map((warehouse) => [warehouse.id, warehouse.name])} defaultValue={finishedWarehouse?.id} />
+
               <div className="productionSackGrid">
                 <label>
-                  <span>QQ pedidos</span>
-                  <input
-                    min="0"
-                    step="1"
-                    type="number"
-                    value={orderPackage.qq}
-                    onChange={(event) => setOrderPackage((current) => ({ ...current, qq: Number(event.target.value || 0) }))}
-                  />
+                  <span>QQ</span>
+                  <input min="0" step="1" type="number" value={orderPackage.qq}
+                    onChange={(event) => setOrderPackage((current) => ({ ...current, qq: Number(event.target.value || 0) }))} />
                 </label>
                 <label>
-                  <span>Libras sobrantes</span>
-                  <input
-                    min="0"
-                    max="99.99"
-                    step="0.01"
-                    type="number"
-                    value={orderPackage.pounds}
-                    onChange={(event) => setOrderPackage((current) => ({ ...current, pounds: Number(event.target.value || 0) }))}
-                  />
+                  <span>Libras</span>
+                  <input min="0" max="99.99" step="0.01" type="number" value={orderPackage.pounds}
+                    onChange={(event) => setOrderPackage((current) => ({ ...current, pounds: Number(event.target.value || 0) }))} />
                 </label>
               </div>
+
               <Input name="unit_price" label="Precio por QQ" type="number" defaultValue="0" />
+
               <label>
-                <span>Presentacion</span>
+                <span>Presentación</span>
                 <select name="presentation" defaultValue="Flor">
                   <option value="Flor">Flor</option>
                   <option value="Lira">Lira</option>
@@ -2467,17 +2468,14 @@ export function App() {
                   <option value="Generico">Generico</option>
                 </select>
               </label>
-              <label>
-                <span>Libras por saco</span>
-                <input
-                  min="1"
-                  step="1"
-                  type="number"
-                  value={orderPackage.sackWeightLb}
-                  onChange={(event) => setOrderPackage((current) => ({ ...current, sackWeightLb: Number(event.target.value || 100) }))}
-                />
-              </label>
-              <Select name="packaging_supply_id" label="Bodega de sacos" rows={insumos.map((item) => [item.id, `${item.nombre} (${item.stock_actual})`])} defaultValue={sacksSupply?.id} required={false} />
+
+              <Select
+                name="payment_method"
+                label="Forma de pago"
+                rows={[["CASH", "💵 Efectivo"], ["TRANSFER", "📱 Transferencia"], ["CARD", "💳 Tarjeta"], ["CHECK", "✓ Cheque"], ["CREDIT", "📋 Crédito"]]}
+                defaultValue="CASH"
+              />
+
               <Select
                 name="cash_register_id"
                 label="Caja"
@@ -2485,26 +2483,99 @@ export function App() {
                 defaultValue={dashboard.current_cash_register?.id}
                 required={false}
               />
-              <Select
-                name="payment_method"
-                label="Forma de pago"
-                rows={[["CASH", "Efectivo"], ["TRANSFER", "Transferencia"], ["CARD", "Tarjeta"], ["CHECK", "Cheque"], ["CREDIT", "Credito"]]}
-                defaultValue="CASH"
-              />
+
               <div className="totalBox">
-                <span>Empaque a descontar</span>
-                <strong>{orderSacksUsed.toFixed(0)} sacos</strong>
-                <small>{orderQuantityQq.toFixed(2)} QQ pedidos con sacos de {orderPackage.sackWeightLb || 0} lb</small>
+                <span>Total venta estimado</span>
+                <strong>Calculado al guardar</strong>
               </div>
-              <button className="primary">Guardar pedido y bajar sacos</button>
+
+              <button className="primary">💾 Guardar venta</button>
             </form>
-            <DataList
-              title="Stock disponible"
-              headers={["Producto", "Bodega", "Propiedad", "Cantidad"]}
-              rows={stock
-                .filter((row) => row.ownership === "OWNED")
-                .map((row) => [row.product_name, row.warehouse_name, "Propio", `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
-            />
+
+            {/* Historial de ventas */}
+            {sales.length > 0 && (
+              <div style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
+                <h3 style={{ marginTop: 0, marginBottom: 12 }}>📊 Ventas realizadas</h3>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ background: "var(--c-brand)", color: "#fff" }}>
+                        <th style={{ padding: "6px 10px", textAlign: "left" }}>Número</th>
+                        <th style={{ padding: "6px 10px", textAlign: "left" }}>Cliente</th>
+                        <th style={{ padding: "6px 10px", textAlign: "right" }}>Monto</th>
+                        <th style={{ padding: "6px 10px", textAlign: "left" }}>Pago</th>
+                        <th style={{ padding: "6px 10px", textAlign: "left" }}>Fecha</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sales.map((s, i) => (
+                        <tr key={s.id} style={{ background: i % 2 === 0 ? "#fff" : "#f9fafb" }}>
+                          <td style={{ padding: "5px 10px" }}><strong>{s.sale_number}</strong></td>
+                          <td style={{ padding: "5px 10px" }}>{s.customer_name ?? "Sin cliente"}</td>
+                          <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700 }}>${Number(s.total_amount).toFixed(2)}</td>
+                          <td style={{ padding: "5px 10px" }}>
+                            <span style={{
+                              padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700,
+                              background: s.payment_status === "PAID" ? "#dcfce7" : "#fef3c7",
+                              color: s.payment_status === "PAID" ? "#16a34a" : "#92400e"
+                            }}>
+                              {s.payment_status === "PAID" ? "✓ Pagado" : s.payment_status === "PARTIAL" ? "⏳ Parcial" : "📋 Pendiente"}
+                            </span>
+                          </td>
+                          <td style={{ padding: "5px 10px" }}>{new Date(s.created_at).toLocaleDateString("es-EC")}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Cuentas por cobrar pendientes */}
+            {accountsReceivable.length > 0 && (
+              <div style={{ gridColumn: "1 / -1", border: "1px solid #fee2e2", borderRadius: 10, padding: 16, background: "#fef2f2" }}>
+                <h3 style={{ marginTop: 0, marginBottom: 12, color: "#dc2626" }}>💰 Cuentas por Cobrar Pendientes</h3>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
+                  {accountsReceivable.map(ar => (
+                    <div key={ar.id} style={{ border: "1px solid #fecaca", borderRadius: 8, padding: 12, background: "#fff" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                        <div>
+                          <div style={{ fontSize: 11, color: "var(--c-muted)", fontWeight: 600 }}>Cliente</div>
+                          <div style={{ fontSize: 14, fontWeight: 700 }}>{ar.customer_name}</div>
+                        </div>
+                        <div style={{ textAlign: "right" }}>
+                          <div style={{ fontSize: 11, color: "var(--c-muted)", fontWeight: 600 }}>Venta</div>
+                          <div style={{ fontSize: 12, fontWeight: 700 }}>{ar.sale_number}</div>
+                        </div>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10, fontSize: 11, textAlign: "center" }}>
+                        <div>
+                          <div style={{ color: "var(--c-muted)" }}>Monto total</div>
+                          <div style={{ fontSize: 14, fontWeight: 700 }}>${Number(ar.amount).toFixed(2)}</div>
+                        </div>
+                        <div>
+                          <div style={{ color: "var(--c-muted)" }}>Saldo pendiente</div>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: "#dc2626" }}>${Number(ar.balance).toFixed(2)}</div>
+                        </div>
+                      </div>
+                      <form onSubmit={async (e) => {
+                        e.preventDefault();
+                        const amt = prompt(`Cobrar hasta $${Number(ar.balance).toFixed(2)}:`, Number(ar.balance).toFixed(2));
+                        if (amt) await payAccountReceivable(ar.id, Number(amt)).catch(e => setMessage(e.message));
+                      }} style={{ display: "flex", gap: 6 }}>
+                        <input type="hidden" />
+                        <button type="submit" style={{
+                          flex: 1, padding: "6px 10px", borderRadius: 6, border: "none", cursor: "pointer",
+                          background: "#16a34a", color: "#fff", fontWeight: 700, fontSize: 12
+                        }}>
+                          💵 Cobrar
+                        </button>
+                      </form>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </section>
         )}
 
