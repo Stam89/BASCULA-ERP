@@ -463,7 +463,7 @@ export function App() {
   const [liqResult, setLiqResult] = useState<LiqResultItem[] | null>(null);
 
   // ── Caja ──────────────────────────────────────────────────────────────────
-  const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "gasto" | "mano_obra" | "ingreso" | "cuentas" | "fomentos">("resumen");
+  const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "gasto" | "mano_obra" | "ingreso" | "cuentas" | "fomentos" | "sacos">("resumen");
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
   const [cashSummary, setCashSummary] = useState<CashSummary | null>(null);
   const [cashPayables, setCashPayables] = useState<AccountPayable[]>([]);
@@ -498,6 +498,9 @@ export function App() {
   const [cajaFomentoAccion, setCajaFomentoAccion] = useState<"entrega"|"pago">("entrega");
   const [cajaFomentoMonto, setCajaFomentoMonto] = useState("");
   const [cajaFomentoConcepto, setCajaFomentoConcepto] = useState("");
+
+  // ── Compra de Sacos en Caja ────────────────────────────────────────────
+  const [sackBuyForm, setSackBuyForm] = useState({ sack_id: "", cantidad: "", precio: "" });
 
   const addToast = useCallback((text: string, type?: "success" | "error" | "warn") => {
     const id = Date.now();
@@ -1062,6 +1065,55 @@ export function App() {
     await refreshFomentos();
     if (fomentoDetalle?.id === fomentoId) await loadFomentoDetalle(fomentoId);
   }
+
+  const submitSackBuy = async () => {
+    if (!dashboard.current_cash_register?.id || !sackBuyForm.sack_id || !sackBuyForm.cantidad || !sackBuyForm.precio) {
+      addToast("Completa todos los campos", "error");
+      return;
+    }
+    const cantidad = parseInt(sackBuyForm.cantidad);
+    const precio = parseFloat(sackBuyForm.precio);
+    const monto = round2(cantidad * precio);
+    const registerId = dashboard.current_cash_register.id;
+
+    try {
+      // Registrar gasto en caja
+      const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
+      const gastoRes = await fetch(`${API}/api/v1/cash/${registerId}/movements`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          movement: "EXPENSE",
+          category: "GASTO",
+          amount: monto,
+          description: `Compra de sacos: ${sackBuyForm.sack_id} (x${cantidad} @ $${precio})`,
+          reference_type: "sack_purchase",
+          reference_id: sackBuyForm.sack_id
+        })
+      });
+      if (!gastoRes.ok) throw new Error(await gastoRes.text());
+
+      // Actualizar inventario de sacos
+      const movRes = await fetch(`${API}/api/v1/sacks/movements`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sack_id: sackBuyForm.sack_id,
+          movement: "ENTRADA",
+          cantidad,
+          concepto: `Compra a $${precio}/unidad`
+        })
+      });
+      if (!movRes.ok) throw new Error(await movRes.text());
+
+      setSackBuyForm({ sack_id: "", cantidad: "", precio: "" });
+      await refreshSacks();
+      await refreshCaja(registerId);
+      addToast("Compra de sacos registrada ✓", "success");
+    } catch (e) {
+      addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error");
+    }
+  };
 
   async function submitCajaFomento(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -2632,7 +2684,7 @@ export function App() {
 
                 {/* Sub-tabs */}
                 <nav className="cajaSubNav">
-                  {(["resumen", "anticipo", "gasto", "mano_obra", "ingreso", "cuentas", "fomentos"] as const).map((t) => (
+                  {(["resumen", "anticipo", "gasto", "sacos", "mano_obra", "ingreso", "cuentas", "fomentos"] as const).map((t) => (
                     <button
                       key={t}
                       type="button"
@@ -2643,6 +2695,7 @@ export function App() {
                         resumen: "Movimientos",
                         anticipo: "Anticipo",
                         gasto: "Gasto",
+                        sacos: "Compra de Sacos",
                         mano_obra: "Mano de obra",
                         ingreso: "Ingreso",
                         cuentas: `Cuentas por pagar${cashPayables.length > 0 ? ` (${cashPayables.length})` : ""}`,
@@ -2712,6 +2765,47 @@ export function App() {
                     <Input name="description" label="Descripción" />
                     <Input name="paid_to" label="Pagado a" required={false} />
                     <button className="primary">Registrar gasto</button>
+                  </form>
+                )}
+
+                {/* ── Compra de Sacos ── */}
+                {cajaSubTab === "sacos" && (
+                  <form className="formPanel cajaForm" onSubmit={(e) => { e.preventDefault(); submitSackBuy(); }}>
+                    <h2>Compra de Sacos</h2>
+                    <label>
+                      <span>Tipo de saco</span>
+                      <select
+                        value={sackBuyForm.sack_id}
+                        onChange={(e) => setSackBuyForm({ ...sackBuyForm, sack_id: e.target.value })}
+                        required
+                      >
+                        <option value="">Seleccione</option>
+                        {sackInventory.map((s) => (
+                          <option key={s.id} value={s.id}>{s.tipo} (Stock: {s.stock})</option>
+                        ))}
+                      </select>
+                    </label>
+                    <Input
+                      type="number"
+                      placeholder="Cantidad"
+                      value={sackBuyForm.cantidad}
+                      onChange={(e) => setSackBuyForm({ ...sackBuyForm, cantidad: e.target.value })}
+                      required
+                    />
+                    <Input
+                      type="number"
+                      placeholder="Precio por unidad"
+                      step="0.01"
+                      value={sackBuyForm.precio}
+                      onChange={(e) => setSackBuyForm({ ...sackBuyForm, precio: e.target.value })}
+                      required
+                    />
+                    {sackBuyForm.cantidad && sackBuyForm.precio && (
+                      <div style={{ background: "#f0f9ff", border: "1px solid #0ea5e9", borderRadius: 6, padding: 12, marginBottom: 12, fontSize: 14 }}>
+                        <strong>Total:</strong> ${(parseInt(sackBuyForm.cantidad || "0") * parseFloat(sackBuyForm.precio || "0")).toFixed(2)}
+                      </div>
+                    )}
+                    <button className="primary">Registrar compra de sacos</button>
                   </form>
                 )}
 

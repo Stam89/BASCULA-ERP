@@ -100,6 +100,27 @@ cashRouter.post("/movements", asyncRoute(async (req, res) => {
   res.status(201).json(result.rows[0]);
 }));
 
+// ── Registrar movimiento en una caja específica ─────────────────────────────────
+cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
+  const body = z.object({
+    movement: z.enum(["INCOME", "EXPENSE"]),
+    category: z.string(),
+    amount: z.number().positive(),
+    description: z.string().optional(),
+    reference_type: z.string().optional(),
+    reference_id: z.string().optional(),
+    created_by: z.string().uuid().optional()
+  }).parse(req.body);
+
+  const result = await pool.query(
+    `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, reference_type, reference_id, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING *`,
+    [req.params.id, body.movement, body.category, body.amount, body.description, body.reference_type, body.reference_id, body.created_by]
+  );
+  res.status(201).json(result.rows[0]);
+}));
+
 // ── Cuentas por pagar pendientes ─────────────────────────────────────────────
 cashRouter.get("/payables", asyncRoute(async (_req, res) => {
   const result = await pool.query(
