@@ -239,6 +239,23 @@ type MillingPiladoEntry = {
   quantityQq: number;
 };
 
+type SackInventory = {
+  id: string;
+  tipo: string;
+  stock: number;
+  updated_at: string;
+};
+
+type SackMovement = {
+  id: string;
+  sack_id: string;
+  tipo: string;
+  movement: "ENTRADA" | "SALIDA";
+  cantidad: number;
+  concepto: string | null;
+  created_at: string;
+};
+
 type Fomento = {
   id: string;
   farmer_name: string;
@@ -412,6 +429,15 @@ export function App() {
   const [fomentoEditingRenta, setFomentoEditingRenta] = useState<string | null>(null);
   const [fomentoRentaInput, setFomentoRentaInput] = useState("");
   const [fomentoPagoForm, setFomentoPagoForm] = useState({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
+  // ── Pilador / Estibador en Producción ────────────────────────────────────
+  const [piladorName, setPiladorName] = useState("");
+  const [estibadorName, setEstibadorName] = useState("");
+
+  // ── Inventario de Sacos ───────────────────────────────────────────────────
+  const [sackInventory, setSackInventory] = useState<SackInventory[]>([]);
+  const [sackMovements, setSackMovements] = useState<SackMovement[]>([]);
+  const [sackMovForm, setSackMovForm] = useState({ sack_id: "", movement: "ENTRADA" as "ENTRADA"|"SALIDA", cantidad: "", concepto: "" });
+
   // Sub-tab Fomentos en Caja
   const [cajaFomentoId, setCajaFomentoId] = useState("");
   const [cajaFomentoAccion, setCajaFomentoAccion] = useState<"entrega"|"pago">("entrega");
@@ -839,6 +865,29 @@ export function App() {
     setFomentos(data);
   }
 
+  async function refreshSacks() {
+    const [inv, movs] = await Promise.all([
+      apiGet<SackInventory[]>("/sacks"),
+      apiGet<SackMovement[]>("/sacks/movements/recent")
+    ]);
+    setSackInventory(inv);
+    setSackMovements(movs);
+  }
+
+  async function submitSackMovement(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!sackMovForm.sack_id) { addToast("Selecciona un tipo de saco", "error"); return; }
+    await apiPost("/sacks/movements", {
+      sack_id: sackMovForm.sack_id,
+      movement: sackMovForm.movement,
+      cantidad: Number(sackMovForm.cantidad),
+      concepto: sackMovForm.concepto || undefined
+    });
+    setSackMovForm(p => ({ ...p, cantidad: "", concepto: "" }));
+    addToast(`${sackMovForm.movement === "ENTRADA" ? "Entrada" : "Salida"} de sacos registrada`, "success");
+    await refreshSacks();
+  }
+
   async function loadFomentoDetalle(id: string) {
     const data = await apiGet<FomentoDetalle>(`/fomentos/${id}`);
     setFomentoDetalle(data);
@@ -846,6 +895,7 @@ export function App() {
 
   useEffect(() => {
     if (activeTab === "Fomentos") refreshFomentos().catch(() => undefined);
+    if (activeTab === "Produccion") refreshSacks().catch(() => undefined);
   }, [activeTab]);
 
   async function submitFomento(e: FormEvent<HTMLFormElement>) {
@@ -1472,7 +1522,9 @@ export function App() {
         quantity: Number(millingReport.polvillo || 0),
         unit: "QQ"
       } : undefined,
-      sacks_used: 0
+      sacks_used: 0,
+      pilador_name: piladorName || undefined,
+      estibador_name: estibadorName || undefined
     });
 
     setMillingYields(result);
@@ -2105,7 +2157,23 @@ export function App() {
             </section>
 
             <section className="formPanel productionQuickCard">
-              <h2>Reporte de pilado (Estibador)</h2>
+              <h2>Reporte de pilado</h2>
+
+              {/* Pilador y Estibador */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12, padding: "10px 12px", background: "#f0fdf4", borderRadius: 8, border: "1px solid #bbf7d0" }}>
+                <label style={{ fontSize: 12 }}>
+                  <span style={{ fontWeight: 700, display: "block", marginBottom: 3 }}>👷 Pilador</span>
+                  <input value={piladorName} onChange={e => setPiladorName(e.target.value)}
+                    style={{ width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
+                    placeholder="Nombre del pilador" />
+                </label>
+                <label style={{ fontSize: 12 }}>
+                  <span style={{ fontWeight: 700, display: "block", marginBottom: 3 }}>🧱 Estibador</span>
+                  <input value={estibadorName} onChange={e => setEstibadorName(e.target.value)}
+                    style={{ width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
+                    placeholder="Nombre del estibador" />
+                </label>
+              </div>
               <div className="millingPiladoBuilder">
                 <label>
                   <span>Pilado (QQ)</span>
@@ -2177,6 +2245,107 @@ export function App() {
                 </section>
               )}
             </section>
+
+            {/* ── Inventario de Sacos ─────────────────────────────────── */}
+            <section className="formPanel productionQuickCard" style={{ gridColumn: "1 / -1" }}>
+              <h2>Inventario de Sacos</h2>
+
+              {/* Stock actual */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 8, marginBottom: 16 }}>
+                {sackInventory.map(s => (
+                  <div key={s.id} style={{
+                    background: Number(s.stock) <= 10 ? "#fef2f2" : "#f0fdf4",
+                    border: `1px solid ${Number(s.stock) <= 10 ? "#fecaca" : "#bbf7d0"}`,
+                    borderRadius: 8, padding: "10px 12px", textAlign: "center",
+                    cursor: "pointer",
+                    outline: sackMovForm.sack_id === s.id ? "2px solid var(--c-brand)" : "none"
+                  }}
+                    onClick={() => setSackMovForm(p => ({ ...p, sack_id: s.id }))}>
+                    <div style={{ fontSize: 11, color: "var(--c-muted)", fontWeight: 600, marginBottom: 2 }}>{s.tipo}</div>
+                    <div style={{ fontSize: 24, fontWeight: 800, color: Number(s.stock) <= 10 ? "#dc2626" : "#16a34a" }}>
+                      {Number(s.stock)}
+                    </div>
+                    <div style={{ fontSize: 10, color: "var(--c-muted)" }}>unidades</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Formulario de movimiento */}
+              <form onSubmit={submitSackMovement} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr auto", gap: 10, alignItems: "end", background: "#f9fafb", borderRadius: 8, padding: "12px 14px", marginBottom: 14 }}>
+                <label style={{ fontSize: 12, fontWeight: 600 }}>
+                  Tipo de saco
+                  <select required value={sackMovForm.sack_id} onChange={e => setSackMovForm(p => ({ ...p, sack_id: e.target.value }))}
+                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3 }}>
+                    <option value="">— Seleccionar —</option>
+                    {sackInventory.map(s => (
+                      <option key={s.id} value={s.id}>{s.tipo} (stock: {Number(s.stock)})</option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ fontSize: 12, fontWeight: 600 }}>
+                  Movimiento
+                  <select value={sackMovForm.movement} onChange={e => setSackMovForm(p => ({ ...p, movement: e.target.value as "ENTRADA"|"SALIDA" }))}
+                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3 }}>
+                    <option value="ENTRADA">⬇ ENTRADA (compra)</option>
+                    <option value="SALIDA">⬆ SALIDA (uso)</option>
+                  </select>
+                </label>
+                <label style={{ fontSize: 12, fontWeight: 600 }}>
+                  Cantidad
+                  <input required type="number" min="1" step="1" value={sackMovForm.cantidad}
+                    onChange={e => setSackMovForm(p => ({ ...p, cantidad: e.target.value }))}
+                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3 }}
+                    placeholder="0" />
+                </label>
+                <label style={{ fontSize: 12, fontWeight: 600 }}>
+                  Concepto
+                  <input value={sackMovForm.concepto}
+                    onChange={e => setSackMovForm(p => ({ ...p, concepto: e.target.value }))}
+                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3 }}
+                    placeholder="Compra / Uso producción..." />
+                </label>
+                <button type="submit"
+                  style={{ padding: "7px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontWeight: 700,
+                    background: sackMovForm.movement === "ENTRADA" ? "var(--c-brand)" : "#dc2626", color: "#fff" }}>
+                  Registrar
+                </button>
+              </form>
+
+              {/* Historial de movimientos */}
+              {sackMovements.length > 0 && (
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ background: "var(--c-brand)", color: "#fff" }}>
+                        <th style={{ padding: "5px 10px", textAlign: "left" }}>Fecha</th>
+                        <th style={{ padding: "5px 10px", textAlign: "left" }}>Tipo</th>
+                        <th style={{ padding: "5px 10px", textAlign: "center" }}>Mov.</th>
+                        <th style={{ padding: "5px 10px", textAlign: "right" }}>Cantidad</th>
+                        <th style={{ padding: "5px 10px", textAlign: "left" }}>Concepto</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sackMovements.map((m, i) => (
+                        <tr key={m.id} style={{ background: i % 2 === 0 ? "#fff" : "#f9fafb" }}>
+                          <td style={{ padding: "4px 10px" }}>{new Date(m.created_at).toLocaleDateString("es-EC")}</td>
+                          <td style={{ padding: "4px 10px" }}>{m.tipo}</td>
+                          <td style={{ padding: "4px 10px", textAlign: "center" }}>
+                            <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700,
+                              background: m.movement === "ENTRADA" ? "#dcfce7" : "#fee2e2",
+                              color: m.movement === "ENTRADA" ? "#16a34a" : "#dc2626" }}>
+                              {m.movement}
+                            </span>
+                          </td>
+                          <td style={{ padding: "4px 10px", textAlign: "right", fontWeight: 700 }}>{m.cantidad}</td>
+                          <td style={{ padding: "4px 10px" }}>{m.concepto ?? "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+
           </section>
         )}
 

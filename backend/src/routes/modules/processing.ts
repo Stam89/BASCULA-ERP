@@ -44,6 +44,8 @@ const finishProductionSchema = z.object({
   packaging_supply_id: z.string().uuid().optional(),
   sacks_used: z.number().nonnegative().optional(),
   service_rate_per_qq: z.number().nonnegative().optional(),
+  pilador_name: z.string().optional(),
+  estibador_name: z.string().optional(),
   created_by: z.string().uuid().optional()
 });
 
@@ -368,8 +370,12 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
     });
 
     const updatedBatch = await client.query(
-      "UPDATE processing_batches SET status = 'PAID', finished_at = now() WHERE id = $1 RETURNING *",
-      [processingBatchId]
+      `UPDATE processing_batches
+       SET status = 'PAID', finished_at = now(),
+           pilador_name = COALESCE($2, pilador_name),
+           estibador_name = COALESCE($3, estibador_name)
+       WHERE id = $1 RETURNING *`,
+      [processingBatchId, body.pilador_name ?? null, body.estibador_name ?? null]
     );
 
     if (batch.drying_report_id) {
@@ -602,6 +608,8 @@ processingRouter.post("/:id/finish", asyncRoute(async (req, res) => {
     sacks_product_id: z.string().uuid().optional(),
     sacks_warehouse_id: z.string().uuid().optional(),
     sacks_used: z.number().nonnegative().optional(),
+    pilador_name: z.string().optional(),
+    estibador_name: z.string().optional(),
     created_by: z.string().uuid().optional()
   }).parse(req.body);
 
@@ -639,8 +647,12 @@ processingRouter.post("/:id/finish", asyncRoute(async (req, res) => {
     }
 
     const batch = await client.query(
-      "UPDATE processing_batches SET status = 'PAID', finished_at = now() WHERE id = $1 RETURNING *",
-      [req.params.id]
+      `UPDATE processing_batches
+       SET status = 'PAID', finished_at = now(),
+           pilador_name = COALESCE($2, pilador_name),
+           estibador_name = COALESCE($3, estibador_name)
+       WHERE id = $1 RETURNING *`,
+      [req.params.id, body.pilador_name ?? null, body.estibador_name ?? null]
     );
     await client.query("UPDATE lots SET status = 'PROCESSED' WHERE id = $1", [body.lot_id]);
     return batch.rows[0];
