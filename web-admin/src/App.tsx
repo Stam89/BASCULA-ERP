@@ -487,7 +487,7 @@ export function App() {
   const [liqResult, setLiqResult] = useState<LiqResultItem[] | null>(null);
 
   // ── Caja ──────────────────────────────────────────────────────────────────
-  const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "gasto" | "sacos" | "mantenimiento" | "mano_obra" | "ingreso" | "cuentas" | "fomentos">("resumen");
+  const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "movimiento" | "sacos" | "mantenimiento" | "venta_detalle" | "cuentas" | "fomentos">("resumen");
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
   const [cashSummary, setCashSummary] = useState<CashSummary | null>(null);
   const [cashPayables, setCashPayables] = useState<AccountPayable[]>([]);
@@ -517,6 +517,34 @@ export function App() {
   const [accountsReceivable, setAccountsReceivable] = useState<AccountsReceivable[]>([]);
   const [newCustomerForm, setNewCustomerForm] = useState({ full_name: "", phone: "", address: "", customer_type: "NATURAL" as "NATURAL"|"EMPRESA" });
 
+  // ── Buscador de clientes en formulario de venta ──
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [filteredCustomers, setFilteredCustomers] = useState<Customer[]>([]);
+  const [selectedCustomerId, setSelectedCustomerId] = useState("");
+  const [showQuickNewCustomer, setShowQuickNewCustomer] = useState(false);
+  const [quickNewCustomerForm, setQuickNewCustomerForm] = useState({ full_name: "", phone: "" });
+
+  // ── Presentaciones dinámicas en venta ──
+  const [saleProductPresentations, setSaleProductPresentations] = useState<any[]>([]);
+  const [selectedPresentationId, setSelectedPresentationId] = useState("");
+
+  // ── Carrito de pedido (múltiples líneas) ──
+  type SaleLineItem = {
+    id: string; // temp ID para UI
+    product_id: string;
+    presentation_id: string;
+    presentation_name: string; // Para mostrar en tabla
+    quantity: number;
+    unit_price: number;
+  };
+  const [saleLineItems, setSaleLineItems] = useState<SaleLineItem[]>([]);
+  const [saleLineForm, setSaleLineForm] = useState({
+    product_id: "",
+    presentation_id: "",
+    quantity: "",
+    unit_price: ""
+  });
+
   // Sub-tab Fomentos en Caja
   const [cajaFomentoId, setCajaFomentoId] = useState("");
   const [cajaFomentoAccion, setCajaFomentoAccion] = useState<"entrega"|"pago">("entrega");
@@ -525,6 +553,14 @@ export function App() {
 
   // ── Compra de Sacos en Caja ────────────────────────────────────────────
   const [sackBuyForm, setSackBuyForm] = useState({ sack_id: "", cantidad: "", precio: "" });
+
+  // ── Venta Detalle (por libra) en Caja ──────────────────────────────────
+  const [ventaDetalleForm, setVentaDetalleForm] = useState({
+    product_id: "",
+    cantidad_libras: "",
+    precio_por_libra: "",
+    customer_id: ""
+  });
 
   // ── Mantenimiento de Equipos ───────────────────────────────────────────
   const [equipment, setEquipment] = useState<Equipment[]>([]);
@@ -536,6 +572,11 @@ export function App() {
     invoice_number: "",
     receipt_photo_url: "",
     amount: ""
+  });
+  const [newEquipmentForm, setNewEquipmentForm] = useState({
+    name: "",
+    type: "PILADORA" as "PILADORA" | "SECADORA" | "MOTOR" | "OTRO",
+    status: "ACTIVA" as "ACTIVA" | "MANTENIMIENTO" | "FUERA_SERVICIO"
   });
 
   const addToast = useCallback((text: string, type?: "success" | "error" | "warn") => {
@@ -1021,6 +1062,166 @@ export function App() {
     setFomentoDetalle(data);
   }
 
+  // ── Venta Detalle (por libra) ──
+  async function submitVentaDetalle() {
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) { addToast("No hay caja abierta", "error"); return; }
+    if (!ventaDetalleForm.product_id || !ventaDetalleForm.cantidad_libras || !ventaDetalleForm.precio_por_libra) {
+      addToast("Completa producto, cantidad en libras y precio", "error");
+      return;
+    }
+
+    const cantidadLibras = Number(ventaDetalleForm.cantidad_libras);
+    const precioLibra = Number(ventaDetalleForm.precio_por_libra);
+    const cantidadQQ = round2(cantidadLibras / 100); // Convertir libras a QQ
+    const totalVenta = round2(cantidadLibras * precioLibra); // Total por libra
+
+    try {
+      const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
+
+      // Crear movimiento de inventario
+      await fetch(`${API}/api/v1/inventory/adjustments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          product_id: ventaDetalleForm.product_id,
+          warehouse_id: finishedWarehouse?.id,
+          quantity: -cantidadQQ, // Negativo = salida
+          ownership: "OWNED",
+          notes: `Venta al detalle: ${cantidadLibras} lb @ $${precioLibra.toFixed(2)}/lb`
+        })
+      });
+
+      // Crear movimiento de caja
+      await apiPost("/cash/movements", {
+        cash_register_id: registerId,
+        movement: "INCOME",
+        category: "VENTA",
+        amount: totalVenta,
+        description: `Venta detalle ${cantidadLibras} lb @ $${precioLibra.toFixed(2)}/lb`
+      });
+
+      setVentaDetalleForm({ product_id: "", cantidad_libras: "", precio_por_libra: "", customer_id: "" });
+      addToast(`✓ Venta ${cantidadLibras} lb por $${totalVenta.toFixed(2)} registrada`, "success");
+      await refreshCaja(registerId);
+    } catch (e) {
+      addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error");
+    }
+  }
+
+  // ── Búsqueda de clientes (autocompletado) ──
+  async function handleCustomerSearch(q: string) {
+    setCustomerSearch(q);
+    if (q.length < 2) { setFilteredCustomers([]); return; }
+    try {
+      const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
+      const res = await fetch(`${API}/api/v1/customers/search?q=${encodeURIComponent(q)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setFilteredCustomers(data);
+      }
+    } catch (e) { console.error(e); }
+  }
+
+  // ── Crear cliente rápido (nombre + teléfono) ──
+  async function submitQuickNewCustomer() {
+    if (!quickNewCustomerForm.full_name) { addToast("Ingresa el nombre del cliente", "error"); return; }
+    try {
+      const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
+      const res = await fetch(`${API}/api/v1/customers/quick`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(quickNewCustomerForm)
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const newCust = await res.json();
+      setCustomers(prev => [...prev, newCust]);
+      setSelectedCustomerId(newCust.id);
+      setQuickNewCustomerForm({ full_name: "", phone: "" });
+      setShowQuickNewCustomer(false);
+      setCustomerSearch("");
+      setFilteredCustomers([]);
+      addToast(`Cliente ${newCust.full_name} creado ✓`, "success");
+    } catch (e) {
+      addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error");
+    }
+  }
+
+  // ── Cargar presentaciones de un producto ──
+  async function loadProductPresentations(productId: string) {
+    if (!productId) { setSaleProductPresentations([]); setSelectedPresentationId(""); return; }
+    try {
+      const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
+      const res = await fetch(`${API}/api/v1/products/${productId}/presentations`);
+      if (res.ok) {
+        const pres = await res.json();
+        setSaleProductPresentations(pres);
+        setSelectedPresentationId(pres[0]?.id || "");
+      }
+    } catch (e) { console.error(e); }
+  }
+
+  // ── Agregar línea de pedido al carrito ──
+  function addSaleLineItem() {
+    if (!saleLineForm.product_id || !saleLineForm.presentation_id || !saleLineForm.quantity || saleLineForm.unit_price === "") {
+      addToast("Completa producto, presentación, cantidad y precio", "error");
+      return;
+    }
+    const presentation = saleProductPresentations.find(p => p.id === saleLineForm.presentation_id);
+    const newItem: SaleLineItem = {
+      id: `temp-${Date.now()}`,
+      product_id: saleLineForm.product_id,
+      presentation_id: saleLineForm.presentation_id,
+      presentation_name: presentation ? `${presentation.name}` : "",
+      quantity: Number(saleLineForm.quantity),
+      unit_price: Number(saleLineForm.unit_price)
+    };
+    setSaleLineItems(prev => [...prev, newItem]);
+    setSaleLineForm({ product_id: "", presentation_id: "", quantity: "", unit_price: "" });
+    setSaleProductPresentations([]);
+    setSelectedPresentationId("");
+    addToast("Línea agregada", "success");
+  }
+
+  // ── Mapeo de marcas a productos de inventario ──
+  function getInventoryProductForBrand(brandName: string): string | null {
+    // Flor, Oso, Lira Verde, Lira Azul → Producto 0.11
+    if (['Flor', 'Oso', 'Lira Verde', 'Lira Azul'].includes(brandName)) {
+      return products.find(p => p.code === 'ARROZ-PILADO-011')?.id || null;
+    }
+    // Conejo → Producto Corriente
+    if (brandName === 'Conejo') {
+      return products.find(p => p.code === 'ARROZ-PILADO-CORRIENTE')?.id || null;
+    }
+    // Arrocillos y Polvillo → productos propios
+    const prod = products.find(p => p.name === brandName);
+    return prod?.id || null;
+  }
+
+  // ── Eliminar línea de pedido ──
+  function removeSaleLineItem(id: string) {
+    setSaleLineItems(prev => prev.filter(item => item.id !== id));
+  }
+
+  // ── Calcular total del pedido ──
+  function calculateSaleTotal(): number {
+    return saleLineItems.reduce((sum, item) => sum + (item.quantity * item.unit_price), 0);
+  }
+
+  // ── Cambiar producto en formulario de línea (actualizar presentaciones) ──
+  async function handleSaleLineProductChange(productId: string) {
+    setSaleLineForm(prev => ({ ...prev, product_id: productId, presentation_id: "" }));
+    try {
+      const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
+      const res = await fetch(`${API}/api/v1/products/${productId}/presentations`);
+      if (res.ok) {
+        const pres = await res.json();
+        setSaleProductPresentations(pres);
+        setSaleLineForm(prev => ({ ...prev, presentation_id: pres[0]?.id || "" }));
+      }
+    } catch (e) { console.error(e); }
+  }
+
   useEffect(() => {
     if (activeTab === "Fomentos") refreshFomentos().catch(() => undefined);
     if (activeTab === "Produccion") refreshSacks().catch(() => undefined);
@@ -1155,6 +1356,57 @@ export function App() {
     const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
     const res = await fetch(`${API}/api/v1/equipment`);
     if (res.ok) setEquipment(await res.json());
+  };
+
+  const submitNewEquipment = async () => {
+    if (!newEquipmentForm.name || !newEquipmentForm.type) {
+      addToast("Completa nombre y tipo", "error");
+      return;
+    }
+
+    try {
+      const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
+      const res = await fetch(`${API}/api/v1/equipment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newEquipmentForm.name,
+          type: newEquipmentForm.type,
+          status: newEquipmentForm.status
+        })
+      });
+      if (!res.ok) throw new Error(await res.text());
+
+      setNewEquipmentForm({ name: "", type: "PILADORA", status: "ACTIVA" });
+      await refreshEquipment();
+      addToast("Máquina creada ✓", "success");
+    } catch (e) {
+      addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error");
+    }
+  };
+
+  const deleteEquipment = async (equipmentId: string) => {
+    if (!confirm("¿Eliminar este equipo?")) return;
+    try {
+      const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
+      const res = await fetch(`${API}/api/v1/equipment/${equipmentId}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" }
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await refreshEquipment();
+      addToast("Equipo actualizado ✓", "success");
+    } catch (e) {
+      addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error");
+    }
+  };
+
+  const getDescriptionPlaceholder = () => {
+    const selectedEquip = equipment.find(e => e.id === maintenanceForm.equipment_id);
+    if (selectedEquip?.name === "Piladora 1") {
+      return "Ej: cambio de faja - pulidora 2, rodamiento - elevador 3, malla - zaranda, ajuste - plan sister";
+    }
+    return "Descripción del trabajo realizado";
   };
 
   const submitEquipmentMaintenance = async (photoFile?: File) => {
@@ -1341,55 +1593,22 @@ export function App() {
     await refreshCaja(registerId);
   }
 
-  async function submitCajaGasto(event: FormEvent<HTMLFormElement>) {
+  async function submitCajaMovimiento(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) throw new Error("No hay caja abierta");
-    await apiPost("/expenses", {
-      cash_register_id: registerId,
-      amount: Number(form.get("amount")),
-      description: form.get("description"),
-      paid_to: form.get("paid_to") || undefined
-    });
-    safeResetForm(formElement);
-    addToast("Gasto registrado", "success");
-    await refreshCaja(registerId);
-  }
-
-  async function submitCajaManoObra(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const registerId = dashboard.current_cash_register?.id;
-    if (!registerId) throw new Error("No hay caja abierta");
-    await apiPost("/expenses/labor-payments", {
-      cash_register_id: registerId,
-      worker_group: form.get("worker_group"),
-      sacks_moved: Number(form.get("sacks_moved")),
-      price_per_sack: Number(form.get("price_per_sack"))
-    });
-    safeResetForm(formElement);
-    addToast("Pago de mano de obra registrado", "success");
-    await refreshCaja(registerId);
-  }
-
-  async function submitCajaIngreso(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const registerId = dashboard.current_cash_register?.id;
-    if (!registerId) throw new Error("No hay caja abierta");
-    await apiPost("/cash/movements", {
-      cash_register_id: registerId,
-      movement: "INCOME",
-      category: form.get("category"),
+    const movement = form.get("movement") as "INCOME" | "EXPENSE";
+    const category = form.get("category") as string;
+    await apiPost(`/cash/${registerId}/movements`, {
+      movement,
+      category,
       amount: Number(form.get("amount")),
       description: form.get("description") || undefined
     });
     safeResetForm(formElement);
-    addToast("Ingreso registrado", "success");
+    addToast(`${movement === "INCOME" ? "Ingreso" : "Egreso"} registrado`, "success");
     await refreshCaja(registerId);
   }
 
@@ -1891,40 +2110,72 @@ export function App() {
     event.preventDefault();
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
-    const quantity = orderQuantityQq;
 
-    if (quantity <= 0) {
-      setMessage("Ingrese la cantidad del pedido en QQ y libras");
+    if (saleLineItems.length === 0) {
+      setMessage("Agrega al menos una línea de producto");
+      return;
+    }
+
+    if (!selectedCustomerId) {
+      setMessage("Selecciona un cliente");
+      return;
+    }
+
+    // Obtener warehouse_id del formulario o usar el por defecto
+    const warehouse_id = form.get("warehouse_id") as string || finishedWarehouse?.id;
+    if (!warehouse_id) {
+      setMessage("Falta seleccionar bodega");
+      return;
+    }
+
+    // Convertir líneas del carrito al formato esperado por API
+    // Mapear marcas a productos de inventario correctos
+    const items = saleLineItems.map(line => {
+      const brandProduct = products.find(p => p.id === line.product_id);
+      const inventoryProductId = getInventoryProductForBrand(brandProduct?.name || "");
+
+      return {
+        product_id: inventoryProductId || line.product_id, // Usar producto de inventario o fallback
+        warehouse_id: warehouse_id,
+        presentation_id: line.presentation_id,
+        quantity: line.quantity,
+        unit_price: line.unit_price
+      };
+    });
+
+    const cashRegisterId = form.get("cash_register_id") as string;
+    const paymentMethod = (form.get("payment_method") || "CASH") as string;
+
+    // Validar que haya caja abierta si no es crédito
+    if (paymentMethod !== "CREDIT" && !cashRegisterId) {
+      setMessage("Abre una caja para guardar la venta");
       return;
     }
 
     const sale = await apiPost<{
       sale_number: string;
       total_amount: string | number;
-      sacks_used?: number;
-      packaging_alert?: { nombre: string; stockActual: number; isCritical: boolean } | null;
     }>("/sales", {
-      cash_register_id: form.get("cash_register_id") || undefined,
-      payment_method: form.get("payment_method") || "CASH",
-      packaging_supply_id: form.get("packaging_supply_id") || undefined,
-      presentation: form.get("presentation") || undefined,
-      sack_weight_lb: orderPackage.sackWeightLb,
-      items: [
-        {
-          product_id: form.get("product_id"),
-          warehouse_id: form.get("warehouse_id"),
-          quantity,
-          unit_price: Number(form.get("unit_price") || 0)
-        }
-      ]
+      customer_id: selectedCustomerId,
+      cash_register_id: cashRegisterId || undefined, // Agregar automáticamente a caja
+      payment_method: paymentMethod,
+      items: items
     });
 
     safeResetForm(formElement);
-    setOrderPackage(defaultOrderPackage);
+    setSaleLineItems([]);
+    setSaleLineForm({ product_id: "", presentation_id: "", quantity: "", unit_price: "" });
+    setSelectedCustomerId("");
+    setCustomerSearch("");
+    setFilteredCustomers([]);
+    setSelectedPresentationId("");
+    setSaleProductPresentations([]);
+    const totalText = paymentMethod === "CREDIT" ? "a crédito" : "en efectivo";
     setMessage(
-      `Pedido ${sale.sale_number} guardado: ${money(sale.total_amount)} y ${Number(sale.sacks_used ?? 0).toFixed(0)} sacos descontados`
+      `✓ Pedido ${sale.sale_number} guardado ${totalText}: ${money(sale.total_amount)}`
     );
     await refresh();
+    if (cashRegisterId) await refreshCaja(cashRegisterId);
   }
 
   async function submitStockAdjustment(event: FormEvent<HTMLFormElement>) {
@@ -2572,48 +2823,227 @@ export function App() {
         {activeTab === "Ventas" && (
           <section className="panelGrid">
             {/* Formulario de venta */}
-            <form className="formPanel" onSubmit={(event) => submitOrderSale(event).catch((error) => setMessage(error.message))}>
-              <h2>Nueva venta de producto</h2>
+            {showQuickNewCustomer && (
+              <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+                <div style={{ background: "white", borderRadius: 10, padding: 20, maxWidth: 400, width: "90%" }}>
+                  <h3>Nuevo cliente rápido</h3>
+                  <label style={{ display: "block", marginBottom: 12 }}>
+                    <span style={{ display: "block", marginBottom: 4, fontWeight: 600, fontSize: 13 }}>Nombre *</span>
+                    <input
+                      type="text"
+                      placeholder="Ej: Juan García"
+                      value={quickNewCustomerForm.full_name}
+                      onChange={(e) => setQuickNewCustomerForm({ ...quickNewCustomerForm, full_name: e.target.value })}
+                      style={{ width: "100%", padding: 8, border: "1px solid #d1d5db", borderRadius: 4 }}
+                    />
+                  </label>
+                  <label style={{ display: "block", marginBottom: 16 }}>
+                    <span style={{ display: "block", marginBottom: 4, fontWeight: 600, fontSize: 13 }}>Teléfono</span>
+                    <input
+                      type="text"
+                      placeholder="0987654321"
+                      value={quickNewCustomerForm.phone}
+                      onChange={(e) => setQuickNewCustomerForm({ ...quickNewCustomerForm, phone: e.target.value })}
+                      style={{ width: "100%", padding: 8, border: "1px solid #d1d5db", borderRadius: 4 }}
+                    />
+                  </label>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button type="button" onClick={submitQuickNewCustomer} style={{ flex: 1, padding: "8px 12px", background: "#10b981", color: "white", border: "none", borderRadius: 4, fontWeight: 600, cursor: "pointer" }}>
+                      Crear
+                    </button>
+                    <button type="button" onClick={() => { setShowQuickNewCustomer(false); setQuickNewCustomerForm({ full_name: "", phone: "" }); }} style={{ flex: 1, padding: "8px 12px", background: "#e5e7eb", color: "#333", border: "none", borderRadius: 4, fontWeight: 600, cursor: "pointer" }}>
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
-              <Select
-                name="customer_id"
-                label="Cliente"
-                rows={customers.map((c) => [c.id, c.full_name])}
-                required={false}
-              />
+            {/* SECCIÓN 1: Cliente */}
+            <div className="formPanel" style={{ gridColumn: "1 / -1", background: "#f0f9ff", borderLeft: "4px solid #0ea5e9" }}>
+              <h2 style={{ marginTop: 0 }}>1️⃣ Cliente</h2>
+              <label>
+                <span>Busca cliente o crea uno nuevo</span>
+                <div style={{ position: "relative", display: "flex", gap: 6 }}>
+                  <input
+                    type="text"
+                    placeholder="Busca por nombre o teléfono..."
+                    value={customerSearch}
+                    onChange={(e) => handleCustomerSearch(e.target.value)}
+                    style={{ flex: 1, padding: 8, border: "1px solid #d1d5db", borderRadius: 4 }}
+                  />
+                  <button type="button" onClick={() => setShowQuickNewCustomer(true)} style={{ padding: "8px 12px", background: "#059669", color: "white", border: "none", borderRadius: 4, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
+                    + Nuevo
+                  </button>
+                </div>
+                {filteredCustomers.length > 0 && (
+                  <div style={{ border: "1px solid #d1d5db", borderRadius: 4, marginTop: 4, maxHeight: 150, overflowY: "auto" }}>
+                    {filteredCustomers.map((c) => (
+                      <button key={c.id} type="button" onClick={() => { setSelectedCustomerId(c.id); setCustomerSearch(c.full_name); setFilteredCustomers([]); }} style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", background: "white", border: "none", borderBottom: "1px solid #e5e7eb", cursor: "pointer", fontSize: 13 }}>
+                        {c.full_name} {c.phone ? `(${c.phone})` : ""}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </label>
+              {selectedCustomerId && (
+                <div style={{ padding: 10, background: "#dcfce7", borderRadius: 6, marginTop: 8, fontSize: 13, fontWeight: 600, color: "#16a34a" }}>
+                  ✓ {customers.find(c => c.id === selectedCustomerId)?.full_name} seleccionado
+                </div>
+              )}
+            </div>
 
-              <Select
-                name="product_id"
-                label="Producto"
-                rows={(saleProducts.length ? saleProducts : products).map((product) => [product.id, `${product.name} (${product.unit})`])}
-                defaultValue={whiteRiceProduct?.id}
-              />
-              <Select name="warehouse_id" label="Bodega de producto" rows={warehouses.map((warehouse) => [warehouse.id, warehouse.name])} defaultValue={finishedWarehouse?.id} />
+            {/* SECCIÓN 2: Agregar líneas de pedido */}
+            <div className="formPanel" style={{ gridColumn: "1 / -1", background: "#fef3c7", borderLeft: "4px solid #f59e0b" }}>
+              <h2 style={{ marginTop: 0 }}>2️⃣ Agregar productos al pedido</h2>
 
-              <div className="productionSackGrid">
+              {/* FILA 1: Marca y Presentación lado a lado */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
                 <label>
-                  <span>QQ</span>
-                  <input min="0" step="1" type="number" value={orderPackage.qq}
-                    onChange={(event) => setOrderPackage((current) => ({ ...current, qq: Number(event.target.value || 0) }))} />
+                  <span>Marca / Producto *</span>
+                  <select
+                    value={saleLineForm.product_id}
+                    onChange={(e) => handleSaleLineProductChange(e.target.value)}
+                    style={{ width: "100%", padding: 8, border: "1px solid #d1d5db", borderRadius: 4, fontSize: 13 }}
+                  >
+                    <option value="">Selecciona marca</option>
+                    <option value="" disabled>━━━ MARCAS ━━━</option>
+                    {['Flor', 'Oso', 'Lira Verde', 'Lira Azul', 'Conejo'].map(brandName => {
+                      const prod = products.find(p => p.name === brandName);
+                      return prod ? <option key={prod.id} value={prod.id}>{prod.name}</option> : null;
+                    })}
+                    <option value="" disabled>━━━ ARROCILLOS ━━━</option>
+                    {['Arrocillo 3/4', 'Arrocillo Fino', 'Polvillo / Afrecho'].map(brandName => {
+                      const prod = products.find(p => p.name === brandName);
+                      return prod ? <option key={prod.id} value={prod.id}>{prod.name}</option> : null;
+                    })}
+                  </select>
                 </label>
+
                 <label>
-                  <span>Libras</span>
-                  <input min="0" max="99.99" step="0.01" type="number" value={orderPackage.pounds}
-                    onChange={(event) => setOrderPackage((current) => ({ ...current, pounds: Number(event.target.value || 0) }))} />
+                  <span>Presentación *</span>
+                  <select
+                    value={saleLineForm.presentation_id}
+                    onChange={(e) => setSaleLineForm({...saleLineForm, presentation_id: e.target.value})}
+                    style={{ width: "100%", padding: 8, border: "1px solid #d1d5db", borderRadius: 4, fontSize: 13 }}
+                    disabled={saleProductPresentations.length === 0}
+                  >
+                    <option value="">Selecciona presentación</option>
+                    {saleProductPresentations.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
                 </label>
               </div>
 
-              <Input name="unit_price" label="Precio por QQ" type="number" defaultValue="0" />
+              {/* FILA 2: Cantidad y Precio */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+                <label>
+                  <span>Cantidad *</span>
+                  <input
+                    type="number"
+                    placeholder="0"
+                    value={saleLineForm.quantity}
+                    onChange={(e) => setSaleLineForm({...saleLineForm, quantity: e.target.value})}
+                    style={{ width: "100%", padding: 8, border: "1px solid #d1d5db", borderRadius: 4 }}
+                    min="0"
+                    step="0.01"
+                  />
+                </label>
 
-              <label>
-                <span>Presentación</span>
-                <select name="presentation" defaultValue="Flor">
-                  <option value="Flor">Flor</option>
-                  <option value="Lira">Lira</option>
-                  <option value="Oso">Oso</option>
-                  <option value="Generico">Generico</option>
-                </select>
-              </label>
+                <label>
+                  <span>Precio $ (manual) *</span>
+                  <input
+                    type="number"
+                    placeholder="0.00"
+                    value={saleLineForm.unit_price}
+                    onChange={(e) => setSaleLineForm({...saleLineForm, unit_price: e.target.value})}
+                    style={{ width: "100%", padding: 8, border: "1px solid #d1d5db", borderRadius: 4 }}
+                    min="0"
+                    step="0.01"
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  onClick={addSaleLineItem}
+                  style={{ padding: "8px 12px", background: "#f59e0b", color: "white", border: "none", borderRadius: 4, fontWeight: 700, cursor: "pointer", alignSelf: "flex-end", fontSize: 13 }}
+                >
+                  ➕ Agregar
+                </button>
+              </div>
+            </div>
+
+            {/* SECCIÓN 3: Líneas agregadas (carrito) */}
+            {saleLineItems.length > 0 && (
+              <div className="formPanel" style={{ gridColumn: "1 / -1", background: "#f3f4f6", borderLeft: "4px solid #6b7280" }}>
+                <h2 style={{ marginTop: 0 }}>3️⃣ Líneas del pedido ({saleLineItems.length})</h2>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ background: "#6b7280", color: "#fff" }}>
+                        <th style={{ padding: "8px 10px", textAlign: "left" }}>Marca</th>
+                        <th style={{ padding: "8px 10px", textAlign: "left" }}>Presentación</th>
+                        <th style={{ padding: "8px 10px", textAlign: "right" }}>Cantidad</th>
+                        <th style={{ padding: "8px 10px", textAlign: "right" }}>Precio $</th>
+                        <th style={{ padding: "8px 10px", textAlign: "right" }}>Subtotal $</th>
+                        <th style={{ padding: "8px 10px", textAlign: "center" }}>Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {saleLineItems.map((item, i) => {
+                        const product = products.find(p => p.id === item.product_id);
+                        const allPresentations = saleProductPresentations.length > 0 ? saleProductPresentations : [];
+                        const presentation = allPresentations.find(p => p.id === item.presentation_id) ||
+                          (async () => {
+                            try {
+                              const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
+                              const res = await fetch(`${API}/api/v1/products/${item.product_id}/presentations`);
+                              if (res.ok) {
+                                const preses = await res.json();
+                                return preses.find((p: any) => p.id === item.presentation_id);
+                              }
+                            } catch (e) { console.error(e); }
+                            return null;
+                          })();
+
+                        // Buscar presentación de forma síncrona desde lista guardada en item (mejor enfoque)
+                        // Para evitar async en render, guardamos la presentación en el item
+                        const subtotal = item.quantity * item.unit_price;
+                        return (
+                          <tr key={item.id} style={{ background: i % 2 === 0 ? "#fff" : "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>
+                            <td style={{ padding: "8px 10px" }}><strong>{product?.name}</strong></td>
+                            <td style={{ padding: "8px 10px" }}>{item.presentation_name || "—"}</td>
+                            <td style={{ padding: "8px 10px", textAlign: "right" }}>{item.quantity}</td>
+                            <td style={{ padding: "8px 10px", textAlign: "right" }}>${item.unit_price.toFixed(2)}</td>
+                            <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>${subtotal.toFixed(2)}</td>
+                            <td style={{ padding: "8px 10px", textAlign: "center" }}>
+                              <button
+                                type="button"
+                                onClick={() => removeSaleLineItem(item.id)}
+                                style={{ padding: "4px 8px", background: "#ef4444", color: "white", border: "none", borderRadius: 3, fontSize: 11, cursor: "pointer", fontWeight: 600 }}
+                              >
+                                Eliminar
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* SECCIÓN 4: Resumen y pago */}
+            <form className="formPanel" onSubmit={(event) => submitOrderSale(event).catch((error) => setMessage(error.message))} style={{ gridColumn: "1 / -1", background: "#f0fdf4", borderLeft: "4px solid #10b981" }}>
+              <h2 style={{ marginTop: 0 }}>4️⃣ Resumen y forma de pago</h2>
+
+              <div className="totalBox" style={{ background: "#dcfce7", padding: 16, borderRadius: 8, marginBottom: 16 }}>
+                <span style={{ fontSize: 14 }}>TOTAL A COBRAR</span>
+                <strong style={{ fontSize: 28, color: "#16a34a" }}>${calculateSaleTotal().toFixed(2)}</strong>
+                <small style={{ color: "#6b7280" }}>Suma de todos los subtotales</small>
+              </div>
 
               <Select
                 name="payment_method"
@@ -2630,12 +3060,11 @@ export function App() {
                 required={false}
               />
 
-              <div className="totalBox">
-                <span>Total venta estimado</span>
-                <strong>Calculado al guardar</strong>
-              </div>
+              <Select name="warehouse_id" label="Bodega de salida" rows={warehouses.map((warehouse) => [warehouse.id, warehouse.name])} defaultValue={finishedWarehouse?.id} />
 
-              <button className="primary">💾 Guardar venta</button>
+              <button className="primary" style={{ width: "100%", padding: 12, fontSize: 16 }}>
+                💾 GUARDAR PEDIDO
+              </button>
             </form>
 
             {/* Historial de ventas */}
@@ -2729,199 +3158,342 @@ export function App() {
           <section className="cajaLayout">
             {/* ── Sin caja abierta ── */}
             {!dashboard.current_cash_register && (
-              <section className="panelGrid">
-                <form className="formPanel" onSubmit={(event) => submitCash(event).catch((error) => addToast(error.message, "error"))}>
-                  <h2>Abrir caja</h2>
-                  <Input name="name" label="Nombre" defaultValue="Caja Principal" />
-                  <Input name="opening_balance" label="Saldo inicial $" type="number" defaultValue="0" />
-                  <button className="primary">Abrir caja</button>
-                </form>
-                <div className="formPanel">
-                  <h2>Estado</h2>
-                  <p className="muted">No hay caja abierta. Abre una para registrar movimientos.</p>
+              <section style={{ display: "grid", gridTemplateColumns: "1fr", gap: 20, maxWidth: 600, margin: "40px auto" }}>
+                <div style={{ textAlign: "center", padding: "40px 20px" }}>
+                  <div style={{ fontSize: 48, marginBottom: 16 }}>💼</div>
+                  <h2 style={{ margin: "0 0 8px", fontSize: 24, fontWeight: 700 }}>No hay caja abierta</h2>
+                  <p style={{ margin: "0 0 24px", color: "#6b7280", fontSize: 14 }}>Abre una caja para comenzar a registrar movimientos de dinero</p>
                 </div>
+                <form className="formPanel" onSubmit={(event) => submitCash(event).catch((error) => addToast(error.message, "error"))} style={{ padding: 24 }}>
+                  <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 700 }}>Abrir caja nueva</h3>
+                  <Input name="name" label="Nombre de la caja" defaultValue="Caja Principal" />
+                  <Input name="opening_balance" label="Saldo inicial $" type="number" defaultValue="0" />
+                  <button className="primary" style={{ width: "100%", padding: "10px 0", fontSize: 14, fontWeight: 700 }}>💰 Abrir caja</button>
+                </form>
               </section>
             )}
 
             {/* ── Con caja abierta ── */}
             {dashboard.current_cash_register && (
               <>
-                {/* Barra de resumen */}
-                <div className="cajaSummaryBar">
-                  <div className="cajaSummaryCard income">
-                    <span>Ingresos</span>
-                    <strong>{money(cashSummary?.total_income ?? 0)}</strong>
-                  </div>
-                  <div className="cajaSummaryCard expense">
-                    <span>Egresos</span>
-                    <strong>{money(cashSummary?.total_expense ?? 0)}</strong>
-                  </div>
-                  <div className="cajaSummaryCard balance">
-                    <span>Saldo actual</span>
-                    <strong>{money(cashSummary?.current_balance ?? Number(dashboard.current_cash_register.opening_balance))}</strong>
-                  </div>
-                  <div className="cajaSummaryCard">
-                    <span>{dashboard.current_cash_register.name}</span>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
-                      <button type="button" style={{ background: "#1d4ed8", color: "#fff", border: "none", borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 12 }} onClick={downloadCajaExcel} title="Descargar Excel con movimientos del día">
-                        ⬇ Excel
-                      </button>
-                      <button type="button" style={{ background: "#7c3aed", color: "#fff", border: "none", borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 12 }} onClick={printCajaMovimientos} title="Imprimir / PDF de movimientos">
-                        🖨 PDF
-                      </button>
-                      <button type="button" className="dangerBtn" onClick={() => closeCaja().catch((e) => addToast(e.message, "error"))}>
-                        Cerrar caja
-                      </button>
+                {/* Header profesional */}
+                <div style={{ background: "linear-gradient(135deg, #1f2937 0%, #111827 100%)", color: "white", padding: "24px", borderRadius: "10px", marginBottom: 24, boxShadow: "0 4px 12px rgba(0,0,0,0.1)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
+                    <div>
+                      <h2 style={{ margin: "0 0 4px", fontSize: 24, fontWeight: 700 }}>💰 {dashboard.current_cash_register.name}</h2>
+                      <p style={{ margin: 0, color: "#d1d5db", fontSize: 12 }}>Sesión activa | {new Date().toLocaleDateString("es-EC")}</p>
                     </div>
+                    <button type="button" style={{ padding: "8px 16px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13 }} onClick={() => closeCaja().catch((e) => addToast(e.message, "error"))}>
+                      ✕ Cerrar caja
+                    </button>
+                  </div>
+
+                  {/* Métricas principales */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 16 }}>
+                    <div style={{ background: "rgba(255,255,255,0.1)", padding: "14px 16px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.2)" }}>
+                      <div style={{ color: "#9ca3af", fontSize: 11, fontWeight: 600, marginBottom: 4 }}>SALDO ACTUAL</div>
+                      <div style={{ fontSize: 20, fontWeight: 700 }}>{money(cashSummary?.current_balance ?? Number(dashboard.current_cash_register.opening_balance))}</div>
+                    </div>
+                    <div style={{ background: "rgba(16, 185, 129, 0.15)", padding: "14px 16px", borderRadius: 8, border: "1px solid #10b98130" }}>
+                      <div style={{ color: "#10b981", fontSize: 11, fontWeight: 600, marginBottom: 4 }}>INGRESOS</div>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: "#10b981" }}>+{money(cashSummary?.total_income ?? 0)}</div>
+                    </div>
+                    <div style={{ background: "rgba(239, 68, 68, 0.15)", padding: "14px 16px", borderRadius: 8, border: "1px solid #ef444430" }}>
+                      <div style={{ color: "#ef4444", fontSize: 11, fontWeight: 600, marginBottom: 4 }}>EGRESOS</div>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: "#ef4444" }}>-{money(cashSummary?.total_expense ?? 0)}</div>
+                    </div>
+                    <div style={{ background: "rgba(59, 130, 246, 0.15)", padding: "14px 16px", borderRadius: 8, border: "1px solid #3b82f630" }}>
+                      <div style={{ color: "#3b82f6", fontSize: 11, fontWeight: 600, marginBottom: 4 }}>SALDO INICIAL</div>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: "#3b82f6" }}>{money(Number(dashboard.current_cash_register.opening_balance))}</div>
+                    </div>
+                  </div>
+
+                  {/* Acciones rápidas */}
+                  <div style={{ marginTop: 16, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <button type="button" onClick={downloadCajaExcel} style={{ padding: "6px 12px", background: "rgba(255,255,255,0.2)", border: "1px solid rgba(255,255,255,0.3)", color: "#fff", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600 }} title="Descargar Excel">
+                      📥 Descargar Excel
+                    </button>
+                    <button type="button" onClick={printCajaMovimientos} style={{ padding: "6px 12px", background: "rgba(255,255,255,0.2)", border: "1px solid rgba(255,255,255,0.3)", color: "#fff", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600 }} title="Imprimir PDF">
+                      🖨 Imprimir PDF
+                    </button>
                   </div>
                 </div>
 
-                {/* Sub-tabs */}
-                <nav className="cajaSubNav">
-                  {(["resumen", "anticipo", "gasto", "sacos", "mantenimiento", "mano_obra", "ingreso", "cuentas", "fomentos"] as const).map((t) => (
-                    <button
-                      key={t}
-                      type="button"
-                      className={cajaSubTab === t ? "active" : ""}
-                      onClick={() => {
-                        setCajaSubTab(t);
-                        if (t === "mantenimiento" && equipment.length === 0) refreshEquipment();
-                      }}
-                    >
-                      {{
-                        resumen: "Movimientos",
-                        anticipo: "Anticipo",
-                        gasto: "Gasto",
-                        sacos: "Compra de Sacos",
-                        mantenimiento: "Mantenimiento",
-                        mano_obra: "Mano de obra",
-                        ingreso: "Ingreso",
-                        cuentas: `Cuentas por pagar${cashPayables.length > 0 ? ` (${cashPayables.length})` : ""}`,
-                        fomentos: `Fomentos${fomentos.filter(f=>f.status==="ACTIVOS").length > 0 ? ` (${fomentos.filter(f=>f.status==="ACTIVOS").length})` : ""}`
-                      }[t]}
-                    </button>
-                  ))}
+                {/* Sub-tabs profesional */}
+                <nav style={{ display: "flex", gap: 4, borderBottom: "2px solid #e5e7eb", marginBottom: 24, flexWrap: "wrap", overflowX: "auto" }}>
+                  {(["resumen", "venta_detalle", "anticipo", "movimiento", "sacos", "mantenimiento", "cuentas", "fomentos"] as const).map((t) => {
+                    const icons = {
+                      resumen: "📋",
+                      anticipo: "💸",
+                      movimiento: "💳",
+                      sacos: "📦",
+                      mantenimiento: "🔧",
+                      venta_detalle: "🛒",
+                      cuentas: "📊",
+                      fomentos: "🌾"
+                    };
+                    const labels = {
+                      resumen: "Movimientos",
+                      anticipo: "Anticipo",
+                      movimiento: "Movimiento",
+                      sacos: "Sacos",
+                      mantenimiento: "Mantenimiento",
+                      venta_detalle: "Venta Detalle",
+                      cuentas: `Por pagar${cashPayables.length > 0 ? ` (${cashPayables.length})` : ""}`,
+                      fomentos: `Fomentos${fomentos.filter(f=>f.status==="ACTIVOS").length > 0 ? ` (${fomentos.filter(f=>f.status==="ACTIVOS").length})` : ""}`
+                    };
+                    return (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => {
+                          setCajaSubTab(t);
+                          if (t === "mantenimiento" && equipment.length === 0) refreshEquipment();
+                        }}
+                        style={{
+                          padding: "10px 14px",
+                          background: cajaSubTab === t ? "var(--c-brand)" : "transparent",
+                          color: cajaSubTab === t ? "#fff" : "#6b7280",
+                          border: cajaSubTab === t ? "none" : "1px solid transparent",
+                          borderBottom: cajaSubTab === t ? "none" : "2px solid transparent",
+                          borderRadius: "6px 6px 0 0",
+                          cursor: "pointer",
+                          fontSize: 12,
+                          fontWeight: cajaSubTab === t ? 700 : 600,
+                          whiteSpace: "nowrap",
+                          transition: "all 0.2s"
+                        }}
+                      >
+                        <span style={{ marginRight: 4 }}>{icons[t]}</span>{labels[t]}
+                      </button>
+                    );
+                  })}
                 </nav>
 
                 {/* ── Movimientos ── */}
                 {cajaSubTab === "resumen" && (
-                  <div className="cajaMovimientosPanel">
-                    {cashMovements.length === 0 && <p className="muted">Sin movimientos aun.</p>}
-                    <table className="cajaTable">
-                      <thead>
-                        <tr><th>Hora</th><th>Tipo</th><th>Categoría</th><th>Descripción</th><th>Monto</th></tr>
-                      </thead>
-                      <tbody>
-                        {cashMovements.map((m) => (
-                          <tr key={m.id} className={m.movement === "INCOME" ? "rowIncome" : "rowExpense"}>
-                            <td>{new Date(m.created_at).toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" })}</td>
-                            <td>{m.movement === "INCOME" ? "Ingreso" : "Egreso"}</td>
-                            <td>{categoryLabel(m.category)}</td>
-                            <td>{m.description ?? "—"}</td>
-                            <td className="amountCell">{m.movement === "EXPENSE" ? "-" : "+"}{money(Number(m.amount))}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                  <div style={{ background: "white", borderRadius: "10px", border: "1px solid #e5e7eb", overflow: "hidden" }}>
+                    {cashMovements.length === 0 ? (
+                      <div style={{ padding: "40px 20px", textAlign: "center", color: "#9ca3af" }}>
+                        <div style={{ fontSize: 32, marginBottom: 12 }}>📭</div>
+                        <p style={{ margin: 0 }}>Sin movimientos registrados aún</p>
+                      </div>
+                    ) : (
+                      <div style={{ maxHeight: "600px", overflowY: "auto" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                          <thead style={{ background: "#f9fafb", borderBottom: "1px solid #e5e7eb", position: "sticky", top: 0 }}>
+                            <tr>
+                              <th style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#374151" }}>Hora</th>
+                              <th style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#374151" }}>Tipo</th>
+                              <th style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#374151" }}>Categoría</th>
+                              <th style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#374151" }}>Descripción</th>
+                              <th style={{ padding: "12px 16px", textAlign: "right", fontWeight: 700, color: "#374151" }}>Monto</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {cashMovements.map((m, idx) => (
+                              <tr key={m.id} style={{ borderBottom: "1px solid #e5e7eb", background: idx % 2 === 0 ? "white" : "#fafafa", transition: "background 0.2s" }}>
+                                <td style={{ padding: "12px 16px", color: "#6b7280" }}>
+                                  {new Date(m.created_at).toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" })}
+                                </td>
+                                <td style={{ padding: "12px 16px" }}>
+                                  <span style={{ display: "inline-block", padding: "3px 8px", borderRadius: "4px", background: m.movement === "INCOME" ? "#dcfce7" : "#fee2e2", color: m.movement === "INCOME" ? "#16a34a" : "#dc2626", fontWeight: 600, fontSize: 11 }}>
+                                    {m.movement === "INCOME" ? "⬆ Ingreso" : "⬇ Egreso"}
+                                  </span>
+                                </td>
+                                <td style={{ padding: "12px 16px", color: "#6b7280" }}>{categoryLabel(m.category)}</td>
+                                <td style={{ padding: "12px 16px", color: "#6b7280" }}>{m.description ?? "—"}</td>
+                                <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 600, color: m.movement === "EXPENSE" ? "#dc2626" : "#16a34a" }}>
+                                  {m.movement === "EXPENSE" ? "-" : "+"}{money(Number(m.amount))}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </div>
                 )}
 
                 {/* ── Anticipo ── */}
                 {cajaSubTab === "anticipo" && (
-                  <form className="formPanel cajaForm" onSubmit={(event) => submitCajaAnticipo(event).then(() => setAnticipoFarmerId("")).catch((e) => addToast(e.message, "error"))}>
-                    <h2>Anticipo a agricultor</h2>
-                    {farmersWithPendingLiq.length === 0
-                      ? <p className="muted">No hay agricultores con saldo pendiente en liquidaciones.</p>
-                      : (
-                        <label>
-                          <span>Agricultor</span>
-                          <select
-                            name="farmer_id"
-                            required
-                            value={anticipoFarmerId}
-                            onChange={(e) => setAnticipoFarmerId(e.target.value)}
-                          >
-                            <option value="">Seleccione</option>
+                  <form onSubmit={(event) => submitCajaAnticipo(event).then(() => setAnticipoFarmerId("")).catch((e) => addToast(e.message, "error"))} style={{ background: "white", borderRadius: "10px", border: "1px solid #e5e7eb", padding: "24px" }}>
+                    <h2 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 700 }}>💸 Anticipo a agricultor</h2>
+                    {farmersWithPendingLiq.length === 0 ? (
+                      <div style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: "6px", padding: "12px 16px", color: "#92400e", fontSize: 13 }}>
+                        ⚠ No hay agricultores con saldo pendiente en liquidaciones
+                      </div>
+                    ) : (
+                      <>
+                        <label style={{ display: "block", marginBottom: 16 }}>
+                          <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Agricultor</span>
+                          <select name="farmer_id" required value={anticipoFarmerId} onChange={(e) => setAnticipoFarmerId(e.target.value)}
+                            style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
+                            <option value="">Seleccione un agricultor</option>
                             {farmersWithPendingLiq.map((f) => (
-                              <option key={f.id} value={f.id}>{f.full_name}</option>
+                              <option key={f.id} value={f.id}>{f.full_name} (Pendiente: ${f.pending_advance_balance.toFixed(2)})</option>
                             ))}
                           </select>
                         </label>
-                      )
-                    }
-                    <Input name="amount" label="Monto $" type="number" />
-                    <Input name="concept" label="Concepto" />
-                    <button className="primary" disabled={farmersWithPendingLiq.length === 0}>Registrar anticipo</button>
+                        <Input name="amount" label="Monto $" type="number" />
+                        <Input name="concept" label="Concepto" />
+                        <button className="primary" style={{ width: "100%", padding: "10px 0" }} disabled={farmersWithPendingLiq.length === 0}>💰 Registrar anticipo</button>
+                      </>
+                    )}
                   </form>
                 )}
 
-                {/* ── Gasto ── */}
-                {cajaSubTab === "gasto" && (
-                  <form className="formPanel cajaForm" onSubmit={(event) => submitCajaGasto(event).catch((e) => addToast(e.message, "error"))}>
-                    <h2>Gasto operativo</h2>
+                {/* ── Registrar movimiento (consolidado) ── */}
+                {cajaSubTab === "movimiento" && (
+                  <form onSubmit={(event) => submitCajaMovimiento(event).catch((e) => addToast(e.message, "error"))} style={{ background: "white", borderRadius: "10px", border: "1px solid #e5e7eb", padding: "24px", maxWidth: 500 }}>
+                    <h2 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 700 }}>💳 Registrar movimiento</h2>
+
+                    <fieldset style={{ border: "none", padding: 0, margin: 0, marginBottom: 16 }}>
+                      <legend style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, display: "block" }}>Tipo de movimiento</legend>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                        <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: 6, cursor: "pointer" }}>
+                          <input type="radio" name="movement" value="EXPENSE" defaultChecked style={{ cursor: "pointer" }} />
+                          <span style={{ fontWeight: 600 }}>⬇ Egreso</span>
+                        </label>
+                        <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: 6, cursor: "pointer" }}>
+                          <input type="radio" name="movement" value="INCOME" style={{ cursor: "pointer" }} />
+                          <span style={{ fontWeight: 600 }}>⬆ Ingreso</span>
+                        </label>
+                      </div>
+                    </fieldset>
+
+                    <label style={{ display: "block", marginBottom: 16 }}>
+                      <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Categoría</span>
+                      <select name="category" required style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
+                        <option value="">Seleccione una categoría</option>
+                        <optgroup label="Egresos">
+                          <option value="GASTO_OPERATIVO">Gasto operativo</option>
+                          <option value="GASTO_OFICINA">Gasto de oficina</option>
+                          <option value="SERVICIOS_BASICOS">Servicios básicos</option>
+                          <option value="PAGO_MANO_OBRA">Pago mano de obra</option>
+                          <option value="ANTICIPO_AGRICULTOR">Anticipo agricultor</option>
+                        </optgroup>
+                        <optgroup label="Ingresos">
+                          <option value="VENTA_CONTADO">Venta contado</option>
+                          <option value="COBRO_MAQUILA">Cobro maquila</option>
+                          <option value="OTRO_INGRESO">Otro ingreso</option>
+                        </optgroup>
+                      </select>
+                    </label>
+
                     <Input name="amount" label="Monto $" type="number" />
-                    <Input name="description" label="Descripción" />
-                    <Input name="paid_to" label="Pagado a" required={false} />
-                    <button className="primary">Registrar gasto</button>
+                    <Input name="description" label="Descripción (opcional)" required={false} />
+                    <button className="primary" style={{ width: "100%", padding: "10px 0", marginTop: 8 }}>💾 Registrar movimiento</button>
                   </form>
                 )}
 
                 {/* ── Compra de Sacos ── */}
                 {cajaSubTab === "sacos" && (
-                  <form className="formPanel cajaForm" onSubmit={(e) => { e.preventDefault(); submitSackBuy(); }}>
-                    <h2>Compra de Sacos</h2>
-                    <label>
-                      <span>Tipo de saco</span>
-                      <select
-                        value={sackBuyForm.sack_id}
-                        onChange={(e) => setSackBuyForm({ ...sackBuyForm, sack_id: e.target.value })}
-                        required
-                      >
-                        <option value="">Seleccione</option>
+                  <form onSubmit={(e) => { e.preventDefault(); submitSackBuy(); }} style={{ background: "white", borderRadius: "10px", border: "1px solid #e5e7eb", padding: "24px", maxWidth: 500 }}>
+                    <h2 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 700 }}>📦 Compra de Sacos</h2>
+                    <label style={{ display: "block", marginBottom: 16 }}>
+                      <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Tipo de saco</span>
+                      <select value={sackBuyForm.sack_id} onChange={(e) => setSackBuyForm({ ...sackBuyForm, sack_id: e.target.value })} required
+                        style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
+                        <option value="">Seleccione un tipo</option>
                         {sackInventory.map((s) => (
-                          <option key={s.id} value={s.id}>{s.tipo} (Stock: {s.stock})</option>
+                          <option key={s.id} value={s.id}>{s.tipo} (Stock actual: {s.stock})</option>
                         ))}
                       </select>
                     </label>
-                    <label>
-                      <span>Cantidad</span>
-                      <input
-                        type="number"
-                        value={sackBuyForm.cantidad}
-                        onChange={(e: any) => setSackBuyForm({ ...sackBuyForm, cantidad: e.target.value })}
-                        required
-                        style={{ width: "100%", padding: 8 }}
-                      />
-                    </label>
-                    <label>
-                      <span>Precio por unidad</span>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={sackBuyForm.precio}
-                        onChange={(e: any) => setSackBuyForm({ ...sackBuyForm, precio: e.target.value })}
-                        required
-                        style={{ width: "100%", padding: 8 }}
-                      />
-                    </label>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+                      <label style={{ display: "block" }}>
+                        <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Cantidad</span>
+                        <input type="number" value={sackBuyForm.cantidad} onChange={(e: any) => setSackBuyForm({ ...sackBuyForm, cantidad: e.target.value })} required
+                          style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} min="1" />
+                      </label>
+                      <label style={{ display: "block" }}>
+                        <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Precio unitario $</span>
+                        <input type="number" step="0.01" value={sackBuyForm.precio} onChange={(e: any) => setSackBuyForm({ ...sackBuyForm, precio: e.target.value })} required
+                          style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} min="0" />
+                      </label>
+                    </div>
                     {sackBuyForm.cantidad && sackBuyForm.precio && (
-                      <div style={{ background: "#f0f9ff", border: "1px solid #0ea5e9", borderRadius: 6, padding: 12, marginBottom: 12, fontSize: 14 }}>
-                        <strong>Total:</strong> ${(parseInt(sackBuyForm.cantidad || "0") * parseFloat(sackBuyForm.precio || "0")).toFixed(2)}
+                      <div style={{ background: "#dbeafe", border: "1px solid #93c5fd", borderRadius: 6, padding: "12px 16px", marginBottom: 16, fontSize: 13 }}>
+                        <div style={{ color: "#1e40af", marginBottom: 4 }}>Resumen de compra</div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: "#1e40af" }}>
+                          ${(parseInt(sackBuyForm.cantidad || "0") * parseFloat(sackBuyForm.precio || "0")).toFixed(2)}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#3b82f6", marginTop: 4 }}>
+                          {sackBuyForm.cantidad} unidades × ${parseFloat(sackBuyForm.precio || "0").toFixed(2)}
+                        </div>
                       </div>
                     )}
-                    <button className="primary">Registrar compra de sacos</button>
+                    <button className="primary" style={{ width: "100%", padding: "10px 0" }}>💾 Registrar compra</button>
                   </form>
                 )}
 
                 {/* ── Mantenimiento de Equipos ── */}
                 {cajaSubTab === "mantenimiento" && (
-                  <form className="formPanel cajaForm" onSubmit={(event: any) => {
-                    event.preventDefault();
-                    const fileInput = event.currentTarget.querySelector('input[type="file"]');
-                    const file = fileInput?.files?.[0];
-                    submitEquipmentMaintenance(file);
-                  }}>
-                    <h2>Mantenimiento de Equipos</h2>
+                  <div style={{ display: "flex", gap: 20 }}>
+                    {/* Formulario Crear Máquina */}
+                    <div style={{ flex: "0 0 350px", background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
+                      <h3 style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700 }}>+ Agregar Máquina</h3>
+                      <label style={{ display: "block", marginBottom: 12 }}>
+                        <span style={{ fontSize: 12, fontWeight: 600, display: "block", marginBottom: 4 }}>Nombre</span>
+                        <input
+                          type="text"
+                          value={newEquipmentForm.name}
+                          onChange={(e: any) => setNewEquipmentForm({ ...newEquipmentForm, name: e.target.value })}
+                          placeholder="Ej: Piladora 1, Motor Túnel 1"
+                          style={{ width: "100%", padding: 8, borderRadius: 4, border: "1px solid #d1d5db", fontSize: 13 }}
+                        />
+                      </label>
+                      <label style={{ display: "block", marginBottom: 12 }}>
+                        <span style={{ fontSize: 12, fontWeight: 600, display: "block", marginBottom: 4 }}>Tipo</span>
+                        <select
+                          value={newEquipmentForm.type}
+                          onChange={(e: any) => setNewEquipmentForm({ ...newEquipmentForm, type: e.target.value })}
+                          style={{ width: "100%", padding: 8, borderRadius: 4, border: "1px solid #d1d5db", fontSize: 13 }}
+                        >
+                          <option value="PILADORA">Piladora</option>
+                          <option value="SECADORA">Secadora</option>
+                          <option value="MOTOR">Motor</option>
+                          <option value="OTRO">Otro</option>
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={submitNewEquipment}
+                        style={{ width: "100%", padding: "8px 0", background: "#10b981", color: "white", border: "none", borderRadius: 4, fontSize: 13, fontWeight: 600, cursor: "pointer" }}
+                      >
+                        Agregar
+                      </button>
+                      <hr style={{ margin: "12px 0", border: "none", borderTop: "1px solid #d1d5db" }} />
+                      <h4 style={{ fontSize: 12, fontWeight: 600, margin: "12px 0 8px", color: "#6b7280" }}>Equipos</h4>
+                      {equipment.length === 0 && <p style={{ fontSize: 12, color: "#9ca3af", margin: 0 }}>Sin equipos aún</p>}
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        {equipment.filter((e) => e.status !== "FUERA_SERVICIO").map((eq) => (
+                          <div key={eq.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: 8, background: "#f3f4f6", borderRadius: 4, fontSize: 13 }}>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontWeight: 600 }}>{eq.name}</div>
+                              <div style={{ fontSize: 11, color: "#6b7280" }}>{eq.type}</div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => deleteEquipment(eq.id)}
+                              style={{ padding: "4px 8px", background: "#ef4444", color: "white", border: "none", borderRadius: 3, fontSize: 11, cursor: "pointer" }}
+                            >
+                              Eliminar
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Formulario Registrar Mantenimiento */}
+                    <form className="formPanel cajaForm" onSubmit={(event: any) => {
+                      event.preventDefault();
+                      const fileInput = event.currentTarget.querySelector('input[type="file"]');
+                      const file = fileInput?.files?.[0];
+                      submitEquipmentMaintenance(file);
+                    }} style={{ flex: 1 }}>
+                      <h2>Registrar Mantenimiento</h2>
                     <label>
                       <span>Máquina</span>
                       <select
@@ -2930,7 +3502,7 @@ export function App() {
                         required
                       >
                         <option value="">Seleccione</option>
-                        {equipment.map((eq) => (
+                        {equipment.filter((eq) => eq.status !== "FUERA_SERVICIO").map((eq) => (
                           <option key={eq.id} value={eq.id}>{eq.name} ({eq.type})</option>
                         ))}
                       </select>
@@ -2950,6 +3522,7 @@ export function App() {
                     <label>
                       <span>Descripción del trabajo/repuesto</span>
                       <textarea
+                        placeholder={getDescriptionPlaceholder()}
                         style={{ width: "100%", minHeight: 60, padding: 8, fontFamily: "inherit" }}
                         value={maintenanceForm.description}
                         onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, description: event.target.value })}
@@ -2994,59 +3567,108 @@ export function App() {
                       />
                     </label>
                     <button className="primary">Registrar mantenimiento</button>
-                  </form>
+                    </form>
+                    </div>
                 )}
 
-                {/* ── Mano de obra ── */}
-                {cajaSubTab === "mano_obra" && (
-                  <form className="formPanel cajaForm" onSubmit={(event) => submitCajaManoObra(event).catch((e) => addToast(e.message, "error"))}>
-                    <h2>Pago mano de obra</h2>
-                    <Input name="worker_group" label="Grupo / trabajador" />
-                    <Input name="sacks_moved" label="Sacos trabajados" type="number" />
-                    <Input name="price_per_sack" label="Precio por saco $" type="number" />
-                    <button className="primary">Registrar pago</button>
-                  </form>
-                )}
+                {/* ── Venta Detalle (por libra) ── */}
+                {cajaSubTab === "venta_detalle" && (
+                  <form onSubmit={(e) => { e.preventDefault(); submitVentaDetalle(); }} style={{ background: "white", borderRadius: "10px", border: "1px solid #e5e7eb", padding: "24px", maxWidth: 600 }}>
+                    <h2 style={{ margin: "0 0 8px", fontSize: 18, fontWeight: 700 }}>🛒 Venta Detalle por Libra</h2>
+                    <p style={{ margin: "0 0 20px", color: "#6b7280", fontSize: 13 }}>Registra ventas pequeñas. Se restan automáticamente del inventario y entra el dinero a la caja.</p>
 
-                {/* ── Ingreso manual ── */}
-                {cajaSubTab === "ingreso" && (
-                  <form className="formPanel cajaForm" onSubmit={(event) => submitCajaIngreso(event).catch((e) => addToast(e.message, "error"))}>
-                    <h2>Ingreso manual</h2>
-                    <label>
-                      <span>Categoría</span>
-                      <select name="category" required>
-                        <option value="">Seleccione</option>
-                        <option value="VENTA_CONTADO">Venta contado</option>
-                        <option value="COBRO_MAQUILA">Cobro maquila</option>
-                        <option value="OTRO_INGRESO">Otro ingreso</option>
-                      </select>
-                    </label>
-                    <Input name="amount" label="Monto $" type="number" />
-                    <Input name="description" label="Descripción" required={false} />
-                    <button className="primary">Registrar ingreso</button>
+                    <Select name="product_id" label="Producto"
+                      rows={products.filter(p => ['Flor', 'Oso', 'Lira Verde', 'Lira Azul', 'Conejo', 'Arrocillo 3/4', 'Arrocillo Fino', 'Polvillo / Afrecho'].includes(p.name))
+                        .map((product) => [product.id, product.name])}
+                      onChange={(e: any) => setVentaDetalleForm({ ...ventaDetalleForm, product_id: e.target.value })} />
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+                      <Input name="cantidad_libras" label="Cantidad (Libras)" type="number"
+                        value={ventaDetalleForm.cantidad_libras}
+                        onChange={(e: any) => setVentaDetalleForm({ ...ventaDetalleForm, cantidad_libras: e.target.value })}
+                        placeholder="0" required />
+                      <Input name="precio_por_libra" label="Precio por Libra $" type="number"
+                        value={ventaDetalleForm.precio_por_libra}
+                        onChange={(e: any) => setVentaDetalleForm({ ...ventaDetalleForm, precio_por_libra: e.target.value })}
+                        placeholder="0.00" required step="0.01" />
+                    </div>
+
+                    <Select name="customer_id" label="Cliente (opcional)"
+                      rows={customers.map((c) => [c.id, c.full_name])}
+                      onChange={(e: any) => setVentaDetalleForm({ ...ventaDetalleForm, customer_id: e.target.value })}
+                      required={false} />
+
+                    {ventaDetalleForm.cantidad_libras && ventaDetalleForm.precio_por_libra && (
+                      <div style={{ background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 6, padding: "16px", marginBottom: 16 }}>
+                        <div style={{ color: "#166534", fontSize: 12, fontWeight: 600, marginBottom: 8 }}>💰 RESUMEN DE VENTA</div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 8 }}>
+                          <div>
+                            <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>Cantidad</div>
+                            <div style={{ fontSize: 16, fontWeight: 700, color: "#16a34a" }}>{Number(ventaDetalleForm.cantidad_libras)} libras</div>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>Equivalencia</div>
+                            <div style={{ fontSize: 14, fontWeight: 600, color: "#16a34a" }}>{(Number(ventaDetalleForm.cantidad_libras) / 100).toFixed(2)} QQ</div>
+                          </div>
+                        </div>
+                        <div style={{ borderTop: "1px solid #86efac", paddingTop: 8 }}>
+                          <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>Total a cobrar</div>
+                          <div style={{ fontSize: 22, fontWeight: 700, color: "#16a34a" }}>${(Number(ventaDetalleForm.cantidad_libras) * Number(ventaDetalleForm.precio_por_libra)).toFixed(2)}</div>
+                        </div>
+                      </div>
+                    )}
+
+                    <button className="primary" style={{ width: "100%", padding: "10px 0" }}>✓ Registrar venta detalle</button>
                   </form>
                 )}
 
                 {/* ── Cuentas por pagar ── */}
                 {cajaSubTab === "cuentas" && (
-                  <div className="cajaMovimientosPanel">
-                    {cashPayables.length === 0 && <p className="muted">No hay cuentas por pagar pendientes.</p>}
-                    {cashPayables.map((ap) => (
-                      <article key={ap.id} className="payableCard">
-                        <div className="payableInfo">
-                          <strong>{ap.farmer_name}</strong>
-                          <small>{ap.liquidation_number ? `Liq. ${ap.liquidation_number}` : "Sin liquidación"}</small>
-                        </div>
-                        <div className="payableAmounts">
-                          <span className="muted">Total: {money(Number(ap.amount))}</span>
-                          <strong>Pendiente: {money(Number(ap.balance))}</strong>
-                        </div>
-                        <PayablePayForm
-                          payable={ap}
-                          onPay={(amount) => pagarCuenta(ap.id, amount).catch((e) => addToast(e.message, "error"))}
-                        />
-                      </article>
-                    ))}
+                  <div>
+                    {cashPayables.length === 0 ? (
+                      <div style={{ background: "white", borderRadius: "10px", border: "1px solid #e5e7eb", padding: "40px 20px", textAlign: "center", color: "#9ca3af" }}>
+                        <div style={{ fontSize: 32, marginBottom: 12 }}>✓</div>
+                        <p style={{ margin: 0, fontSize: 14 }}>No hay cuentas por pagar pendientes</p>
+                      </div>
+                    ) : (
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(350px, 1fr))", gap: 16 }}>
+                        {cashPayables.map((ap) => {
+                          const percentPaid = ((Number(ap.amount) - Number(ap.balance)) / Number(ap.amount)) * 100;
+                          return (
+                            <article key={ap.id} style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: "10px", padding: "16px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 12 }}>
+                                <div>
+                                  <strong style={{ fontSize: 14, display: "block", marginBottom: 2 }}>{ap.farmer_name}</strong>
+                                  <small style={{ color: "#6b7280", fontSize: 11 }}>{ap.liquidation_number ? `Liq. ${ap.liquidation_number}` : "Sin liquidación asociada"}</small>
+                                </div>
+                                <span style={{ background: "#dbeafe", color: "#1e40af", padding: "3px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
+                                  {percentPaid.toFixed(0)}%
+                                </span>
+                              </div>
+
+                              <div style={{ background: "#f9fafb", padding: "12px", borderRadius: 6, marginBottom: 12 }}>
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12 }}>
+                                  <div>
+                                    <div style={{ color: "#6b7280", fontSize: 10, marginBottom: 2 }}>Total</div>
+                                    <div style={{ fontWeight: 700, color: "#374151" }}>{money(Number(ap.amount))}</div>
+                                  </div>
+                                  <div>
+                                    <div style={{ color: "#6b7280", fontSize: 10, marginBottom: 2 }}>Pendiente</div>
+                                    <div style={{ fontWeight: 700, color: "#dc2626" }}>{money(Number(ap.balance))}</div>
+                                  </div>
+                                </div>
+                                <div style={{ background: "#e5e7eb", height: 4, borderRadius: 2, marginTop: 8, overflow: "hidden" }}>
+                                  <div style={{ background: "#10b981", height: "100%", width: `${percentPaid}%`, transition: "width 0.3s" }} />
+                                </div>
+                              </div>
+
+                              <PayablePayForm payable={ap}
+                                onPay={(amount) => pagarCuenta(ap.id, amount).catch((e) => addToast(e.message, "error"))} />
+                            </article>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -3873,7 +4495,8 @@ function Select({
   rows,
   defaultValue,
   disabled = false,
-  required = true
+  required = true,
+  onChange
 }: {
   name: string;
   label: string;
@@ -3881,11 +4504,12 @@ function Select({
   defaultValue?: string;
   disabled?: boolean;
   required?: boolean;
+  onChange?: (e: any) => void;
 }) {
   return (
     <label>
       <span>{label}</span>
-      <select name={name} defaultValue={defaultValue} disabled={disabled} required={required}>
+      <select name={name} defaultValue={defaultValue} disabled={disabled} required={required} onChange={onChange}>
         <option value="">Seleccione</option>
         {rows.map(([value, text]) => (
           <option key={value} value={value}>
@@ -4138,11 +4762,17 @@ function categoryLabel(cat: string) {
   const map: Record<string, string> = {
     ANTICIPO_AGRICULTOR: "Anticipo",
     GASTO_OPERATIVO: "Gasto operativo",
+    GASTO_OFICINA: "Gasto de oficina",
+    SERVICIOS_BASICOS: "Servicios básicos",
     PAGO_MANO_OBRA: "Mano de obra",
     PAGO_AGRICULTOR: "Pago agricultor",
     VENTA_CONTADO: "Venta contado",
     COBRO_MAQUILA: "Cobro maquila",
-    OTRO_INGRESO: "Otro ingreso"
+    OTRO_INGRESO: "Otro ingreso",
+    COMPRA_SACOS: "Compra de sacos",
+    MANTENIMIENTO_EQUIPO: "Mantenimiento de equipo",
+    CUENTAS_PAGAR: "Cuentas por pagar",
+    FOMENTOS: "Fomentos"
   };
   return map[cat] ?? cat;
 }
