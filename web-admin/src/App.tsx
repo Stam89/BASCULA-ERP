@@ -103,6 +103,17 @@ type AdminUser = {
   allowed_modules: string[] | null;
 };
 
+type AuditEntry = {
+  id: string;
+  username: string | null;
+  action: string;
+  table_name: string;
+  summary: string | null;
+  record_id: string | null;
+  status_code: number | null;
+  created_at: string;
+};
+
 const authStorageKey = "bascula-erp:auth";
 
 function loadStoredAuth(): AuthUser | null {
@@ -579,7 +590,8 @@ export function App() {
   const [laborForm, setLaborForm] = useState({ worker_group: "", sacks_moved: "", price_per_sack: "" });
 
   // ── Configuración ─────────────────────────────────────────────────────────
-  const [configSubTab, setConfigSubTab] = useState<"negocio" | "usuarios" | "datos">("negocio");
+  const [configSubTab, setConfigSubTab] = useState<"negocio" | "usuarios" | "actividad" | "datos">("negocio");
+  const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
   const [settingsForm, setSettingsForm] = useState<AppSettings>(defaultAppSettings);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
@@ -1165,12 +1177,14 @@ export function App() {
     setAppSettings(settings);
     setSettingsForm(settings);
     if (isAdmin) {
-      const [users, backups] = await Promise.all([
+      const [users, backups, audit] = await Promise.all([
         apiGet<AdminUser[]>("/auth/users"),
-        apiGet<{ directory: string; backups: Array<{ name: string; size_kb: number; created_at: string }> }>("/settings/backups").catch(() => null)
+        apiGet<{ directory: string; backups: Array<{ name: string; size_kb: number; created_at: string }> }>("/settings/backups").catch(() => null),
+        apiGet<AuditEntry[]>("/audit?limit=200").catch(() => [] as AuditEntry[])
       ]);
       setAdminUsers(users);
       if (backups) setBackupInfo(backups);
+      setAuditLog(audit);
     }
   }
 
@@ -4769,14 +4783,14 @@ export function App() {
         {activeTab === "Configuracion" && (
           <>
             <nav className="cajaSubNav">
-              {(["negocio", "usuarios", "datos"] as const).map((t) => (
+              {(["negocio", "usuarios", "actividad", "datos"] as const).map((t) => (
                 <button
                   key={t}
                   type="button"
                   className={configSubTab === t ? "active" : ""}
                   onClick={() => setConfigSubTab(t)}
                 >
-                  {t === "negocio" ? "🏢 Negocio" : t === "usuarios" ? "👥 Usuarios" : "🗄️ Datos"}
+                  {t === "negocio" ? "🏢 Negocio" : t === "usuarios" ? "👥 Usuarios" : t === "actividad" ? "🕓 Actividad" : "🗄️ Datos"}
                 </button>
               ))}
             </nav>
@@ -5041,6 +5055,50 @@ export function App() {
                   </div>
                 )}
               </section>
+            )}
+
+            {/* ── Actividad / auditoría ── */}
+            {configSubTab === "actividad" && (
+              <div className="tablePanel">
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                  <div>
+                    <h2 style={{ marginBottom: 4 }}>🕓 Actividad del sistema</h2>
+                    <p className="muted" style={{ margin: 0 }}>Registro de quién creó, modificó o eliminó información. Se guarda automáticamente.</p>
+                  </div>
+                  <button type="button" className="btnSecondary" onClick={() => refreshConfig().catch((e) => addToast(e.message, "error"))}>
+                    ↻ Actualizar
+                  </button>
+                </div>
+                {auditLog.length === 0 ? (
+                  <div className="emptyState">
+                    <div className="emptyIcon">🕓</div>
+                    <p>Aún no hay actividad registrada. Las acciones de los usuarios aparecerán aquí.</p>
+                  </div>
+                ) : (
+                  <table className="cajaTable" style={{ marginTop: 10 }}>
+                    <thead>
+                      <tr>
+                        <th>Fecha y hora</th>
+                        <th>Usuario</th>
+                        <th>Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {auditLog.map((a) => (
+                        <tr key={a.id}>
+                          <td style={{ whiteSpace: "nowrap" }}>{new Date(a.created_at).toLocaleString("es-EC")}</td>
+                          <td>{a.username ?? "—"}</td>
+                          <td>
+                            <span className={a.action === "ELIMINAR" ? "chip bad" : a.action === "CREAR" ? "chip ok" : "chip info"}>
+                              {a.summary ?? `${a.action} ${a.table_name}`}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
             )}
 
             {/* ── Puesta en marcha / datos ── */}

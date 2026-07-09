@@ -23,8 +23,14 @@ import { receivableRouter } from "./modules/receivable.js";
 import { equipmentRouter } from "./modules/equipment.js";
 import { enforceModulePermissions, requireAuth } from "../auth/require-auth.js";
 import { settingsRouter } from "./modules/settings.js";
+import { auditRouter } from "./modules/audit.js";
+import { auditMiddleware } from "../audit/audit.js";
 
 export const routes = Router();
+
+// Registra cada escritura exitosa con el usuario que la hizo (lee req.user si
+// ya fue autenticado más abajo). Va primero para cubrir también /auth (usuarios).
+routes.use(auditMiddleware);
 
 // Rutas públicas: login/bootstrap y sincronización de la app Android (no envía token)
 routes.use("/auth", authRouter);
@@ -56,3 +62,4 @@ routes.use("/products", productsRouter);
 routes.use("/receivable", receivableRouter);
 routes.use("/equipment", equipmentRouter);
 routes.use("/settings", settingsRouter);
+routes.use("/audit", auditRouter);
