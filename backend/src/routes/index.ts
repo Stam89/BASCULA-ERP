@@ -21,7 +21,7 @@ import { customersRouter } from "./modules/customers.js";
 import { productsRouter } from "./modules/products.js";
 import { receivableRouter } from "./modules/receivable.js";
 import { equipmentRouter } from "./modules/equipment.js";
-import { requireAuth } from "../auth/require-auth.js";
+import { enforceModulePermissions, requireAuth } from "../auth/require-auth.js";
 import { settingsRouter } from "./modules/settings.js";
 
 export const routes = Router();
@@ -30,8 +30,10 @@ export const routes = Router();
 routes.use("/auth", authRouter);
 routes.use("/tickets", mobileTicketsRouter);
 
-// Todo lo demás requiere sesión (Bearer token)
+// Todo lo demás requiere sesión (Bearer token). Las escrituras además
+// exigen permiso del módulo correspondiente (los administradores no tienen límite).
 routes.use(requireAuth);
+routes.use(enforceModulePermissions);
 
 routes.use("/dashboard", dashboardRouter);
 routes.use("/process-flow", processFlowRouter);

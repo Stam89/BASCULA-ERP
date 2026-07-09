@@ -59,7 +59,21 @@ type AuthUser = {
   name: string;
   role_id: string | null;
   role_name: string | null;
+  allowed_modules?: string[] | null;
 };
+
+// Módulos asignables a un operador (deben coincidir con el backend).
+const APP_MODULES = [
+  "Bascula",
+  "Secadoras",
+  "Produccion",
+  "Inventario",
+  "Ventas",
+  "Caja",
+  "Liquidaciones",
+  "Fomentos",
+  "Agricultores"
+] as const;
 
 type AppSettings = {
   business_name: string;
@@ -86,6 +100,7 @@ type AdminUser = {
   is_active: boolean;
   created_at: string;
   role_name: string | null;
+  allowed_modules: string[] | null;
 };
 
 const authStorageKey = "bascula-erp:auth";
@@ -568,7 +583,8 @@ export function App() {
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
   const [settingsForm, setSettingsForm] = useState<AppSettings>(defaultAppSettings);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
-  const [newUserForm, setNewUserForm] = useState({ name: "", username: "", password: "", role: "OPERADOR" as "ADMINISTRADOR" | "OPERADOR" });
+  const [newUserForm, setNewUserForm] = useState({ name: "", username: "", password: "", role: "OPERADOR" as "ADMINISTRADOR" | "OPERADOR", modules: [] as string[] });
+  const [permsEditor, setPermsEditor] = useState<{ user: AdminUser; modules: string[] } | null>(null);
   const [resetForm, setResetForm] = useState({ password: "", confirm: "" });
 
   // ── Fomentos ──────────────────────────────────────────────────────────────
@@ -1124,6 +1140,24 @@ export function App() {
   // ── Configuración ─────────────────────────────────────────────────────────
   const isAdmin = authUser?.role_name === "ADMINISTRADOR";
 
+  // Pestañas visibles según los módulos asignados al usuario.
+  const visibleTabs = useMemo(() => {
+    if (!authUser) return [] as string[];
+    if (isAdmin) return tabs;
+    const allowed = new Set(authUser.allowed_modules ?? []);
+    return tabs.filter((tab) => {
+      if (tab === "Dashboard") return true;
+      if (tab === "Configuracion") return false;
+      return allowed.has(tab);
+    });
+  }, [authUser, isAdmin]);
+
+  useEffect(() => {
+    if (authUser && !visibleTabs.includes(activeTab)) {
+      setActiveTab("Dashboard");
+    }
+  }, [authUser, visibleTabs, activeTab]);
+
   async function refreshConfig() {
     const settings = await apiGet<AppSettings>("/settings");
     setAppSettings(settings);
@@ -1148,14 +1182,31 @@ export function App() {
       addToast("Completa nombre, usuario y una clave de al menos 4 caracteres", "error");
       return;
     }
+    if (newUserForm.role === "OPERADOR" && newUserForm.modules.length === 0) {
+      addToast("Asigna al menos un módulo al operador", "error");
+      return;
+    }
     await apiPost("/auth/users", {
       name: newUserForm.name.trim(),
       username: newUserForm.username.trim().toLowerCase(),
       password: newUserForm.password,
-      role: newUserForm.role
+      role: newUserForm.role,
+      allowed_modules: newUserForm.role === "OPERADOR" ? newUserForm.modules : []
     });
-    setNewUserForm({ name: "", username: "", password: "", role: "OPERADOR" });
+    setNewUserForm({ name: "", username: "", password: "", role: "OPERADOR", modules: [] });
     addToast("Usuario creado", "success");
+    await refreshConfig();
+  }
+
+  async function savePermissions() {
+    if (!permsEditor) return;
+    if (permsEditor.modules.length === 0) {
+      addToast("Asigna al menos un módulo", "error");
+      return;
+    }
+    await apiPut(`/auth/users/${permsEditor.user.id}`, { allowed_modules: permsEditor.modules });
+    addToast(`Permisos de ${permsEditor.user.username} actualizados`, "success");
+    setPermsEditor(null);
     await refreshConfig();
   }
 
@@ -2570,17 +2621,20 @@ export function App() {
           </div>
         </div>
         <nav>
-          {navGroups.map((group) => (
-            <div className="navSection" key={group.label}>
-              <div className="navLabel">{group.label}</div>
-              {group.tabs.map((tab) => (
-                <button className={activeTab === tab ? "active" : ""} key={tab} onClick={() => setActiveTab(tab)}>
-                  <NavIcon tab={tab} />
-                  {tab}
-                </button>
-              ))}
-            </div>
-          ))}
+          {navGroups
+            .map((group) => ({ ...group, tabs: group.tabs.filter((tab) => visibleTabs.includes(tab)) }))
+            .filter((group) => group.tabs.length > 0)
+            .map((group) => (
+              <div className="navSection" key={group.label}>
+                <div className="navLabel">{group.label}</div>
+                {group.tabs.map((tab) => (
+                  <button className={activeTab === tab ? "active" : ""} key={tab} onClick={() => setActiveTab(tab)}>
+                    <NavIcon tab={tab} />
+                    {tab}
+                  </button>
+                ))}
+              </div>
+            ))}
         </nav>
         <div className="sidebarFooter">
           <div className="userBox">
@@ -4836,6 +4890,33 @@ export function App() {
                       <option value="ADMINISTRADOR">Administrador</option>
                     </select>
                   </label>
+                  {newUserForm.role === "OPERADOR" && (
+                    <div>
+                      <span className="permLabel">Módulos que puede modificar *</span>
+                      <div className="permGrid">
+                        {APP_MODULES.map((m) => (
+                          <label key={m} className={newUserForm.modules.includes(m) ? "permChip on" : "permChip"}>
+                            <input
+                              type="checkbox"
+                              checked={newUserForm.modules.includes(m)}
+                              onChange={() =>
+                                setNewUserForm({
+                                  ...newUserForm,
+                                  modules: newUserForm.modules.includes(m)
+                                    ? newUserForm.modules.filter((x) => x !== m)
+                                    : [...newUserForm.modules, m]
+                                })
+                              }
+                            />
+                            {m}
+                          </label>
+                        ))}
+                      </div>
+                      <p className="muted" style={{ marginTop: 6 }}>
+                        El operador verá solo estas pestañas (más el Dashboard) y solo podrá registrar cambios en ellas.
+                      </p>
+                    </div>
+                  )}
                   <button className="primary" disabled={!isAdmin}>Crear usuario</button>
                 </form>
 
@@ -4853,6 +4934,7 @@ export function App() {
                           <th>Nombre</th>
                           <th>Usuario</th>
                           <th>Rol</th>
+                          <th>Permisos</th>
                           <th>Estado</th>
                           <th />
                         </tr>
@@ -4864,15 +4946,34 @@ export function App() {
                             <td>{u.username}</td>
                             <td style={{ textTransform: "capitalize" }}>{(u.role_name ?? "—").toLowerCase()}</td>
                             <td>
+                              {u.role_name === "ADMINISTRADOR" ? (
+                                <span className="chip info">Acceso total</span>
+                              ) : (
+                                <span className="muted">
+                                  {(u.allowed_modules ?? []).length > 0 ? (u.allowed_modules ?? []).join(", ") : "Sin módulos"}
+                                </span>
+                              )}
+                            </td>
+                            <td>
                               <span className={u.is_active ? "chip ok" : "chip bad"}>
                                 {u.is_active ? "Activo" : "Inactivo"}
                               </span>
                             </td>
-                            <td style={{ textAlign: "right" }}>
+                            <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                              {u.role_name !== "ADMINISTRADOR" && (
+                                <button
+                                  type="button"
+                                  className="btnGhost"
+                                  onClick={() => setPermsEditor({ user: u, modules: [...(u.allowed_modules ?? [])] })}
+                                >
+                                  Permisos
+                                </button>
+                              )}
                               {u.id !== authUser.id && (
                                 <button
                                   type="button"
                                   className="btnGhost"
+                                  style={{ marginLeft: 6 }}
                                   onClick={() => toggleUserActive(u).catch((err) => addToast(err.message, "error"))}
                                 >
                                   {u.is_active ? "Desactivar" : "Activar"}
@@ -4885,6 +4986,41 @@ export function App() {
                     </table>
                   )}
                 </div>
+
+                {permsEditor && (
+                  <div className="modalOverlay" onClick={() => setPermsEditor(null)}>
+                    <div className="modalCard" onClick={(e) => e.stopPropagation()}>
+                      <h3>Permisos de {permsEditor.user.name}</h3>
+                      <p className="muted">Marca los módulos donde este operador puede registrar y modificar información.</p>
+                      <div className="permGrid">
+                        {APP_MODULES.map((m) => (
+                          <label key={m} className={permsEditor.modules.includes(m) ? "permChip on" : "permChip"}>
+                            <input
+                              type="checkbox"
+                              checked={permsEditor.modules.includes(m)}
+                              onChange={() =>
+                                setPermsEditor({
+                                  ...permsEditor,
+                                  modules: permsEditor.modules.includes(m)
+                                    ? permsEditor.modules.filter((x) => x !== m)
+                                    : [...permsEditor.modules, m]
+                                })
+                              }
+                            />
+                            {m}
+                          </label>
+                        ))}
+                      </div>
+                      <p className="muted">Nota: si el usuario tiene la sesión abierta, los cambios aplican cuando vuelva a iniciar sesión.</p>
+                      <div className="buttonRow">
+                        <button type="button" className="primary" onClick={() => savePermissions().catch((err) => addToast(err.message, "error"))}>
+                          Guardar permisos
+                        </button>
+                        <button type="button" onClick={() => setPermsEditor(null)}>Cancelar</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </section>
             )}
 

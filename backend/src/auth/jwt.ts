@@ -7,6 +7,7 @@ export type AuthUser = {
   name: string;
   role_id: string | null;
   role_name?: string | null;
+  allowed_modules?: string[] | null;
 };
 
 export function signToken(user: AuthUser): string {

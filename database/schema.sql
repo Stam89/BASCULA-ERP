@@ -637,3 +637,6 @@ CREATE TABLE IF NOT EXISTS app_settings (
   receipt_footer TEXT NOT NULL DEFAULT '',
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Permisos por módulo para operadores (los administradores no tienen límite)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS allowed_modules TEXT[] NOT NULL DEFAULT '{}';
