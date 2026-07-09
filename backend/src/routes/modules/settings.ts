@@ -1,4 +1,8 @@
 import bcrypt from "bcryptjs";
+import { spawn } from "child_process";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import { Router } from "express";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
@@ -8,6 +12,32 @@ import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const settingsRouter = Router();
+
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+// backend/src(o dist)/routes/modules -> backend
+const backupScript = path.join(moduleDir, "..", "..", "..", "scripts", "backup-db.cjs");
+
+function resolveBackupDir(): string {
+  if (process.env.BACKUP_DIR) return process.env.BACKUP_DIR;
+  const oneDrive = process.env.OneDrive || process.env.ONEDRIVE;
+  const base = oneDrive || path.join(process.env.USERPROFILE || process.env.HOME || ".", "OneDrive");
+  return path.join(base, "BASCULA-ERP-Backups");
+}
+
+function listBackups() {
+  const dir = resolveBackupDir();
+  if (!fs.existsSync(dir)) return { directory: dir, backups: [] as Array<{ name: string; size_kb: number; created_at: string }> };
+  const backups = fs
+    .readdirSync(dir)
+    .filter((f) => f.startsWith("bascula-erp_") && f.endsWith(".dump"))
+    .map((f) => {
+      const st = fs.statSync(path.join(dir, f));
+      return { name: f, size_kb: Math.max(1, Math.round(st.size / 1024)), created_at: st.mtime.toISOString() };
+    })
+    .sort((a, b) => b.name.localeCompare(a.name))
+    .slice(0, 15);
+  return { directory: dir, backups };
+}
 
 let tableReady: Promise<void> | null = null;
 
@@ -151,4 +181,26 @@ settingsRouter.post("/reset-transactions", requireAdmin, asyncRoute(async (req, 
   });
 
   res.json({ ok: true, wiped_tables: wiped.length });
+}));
+
+// ── Respaldos de base de datos ─────────────────────────────────────────────
+settingsRouter.get("/backups", requireAdmin, asyncRoute(async (_req, res) => {
+  res.json(listBackups());
+}));
+
+settingsRouter.post("/backup", requireAdmin, asyncRoute(async (_req, res) => {
+  if (!fs.existsSync(backupScript)) {
+    throw new ApiError(500, "No se encontró el script de respaldo en el servidor.");
+  }
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(process.execPath, [backupScript], { windowsHide: true });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => (stderr += chunk.toString()));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new ApiError(500, `El respaldo falló (código ${code}). ${stderr.slice(-300)}`));
+    });
+  });
+  res.json(listBackups());
 }));

@@ -586,6 +586,8 @@ export function App() {
   const [newUserForm, setNewUserForm] = useState({ name: "", username: "", password: "", role: "OPERADOR" as "ADMINISTRADOR" | "OPERADOR", modules: [] as string[] });
   const [permsEditor, setPermsEditor] = useState<{ user: AdminUser; modules: string[] } | null>(null);
   const [resetForm, setResetForm] = useState({ password: "", confirm: "" });
+  const [backupInfo, setBackupInfo] = useState<{ directory: string; backups: Array<{ name: string; size_kb: number; created_at: string }> } | null>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
 
   // ── Fomentos ──────────────────────────────────────────────────────────────
   const [fomentos, setFomentos] = useState<Fomento[]>([]);
@@ -1163,8 +1165,25 @@ export function App() {
     setAppSettings(settings);
     setSettingsForm(settings);
     if (isAdmin) {
-      const users = await apiGet<AdminUser[]>("/auth/users");
+      const [users, backups] = await Promise.all([
+        apiGet<AdminUser[]>("/auth/users"),
+        apiGet<{ directory: string; backups: Array<{ name: string; size_kb: number; created_at: string }> }>("/settings/backups").catch(() => null)
+      ]);
       setAdminUsers(users);
+      if (backups) setBackupInfo(backups);
+    }
+  }
+
+  async function runBackupNow() {
+    setBackupBusy(true);
+    try {
+      const info = await apiPost<{ directory: string; backups: Array<{ name: string; size_kb: number; created_at: string }> }>("/settings/backup", {});
+      setBackupInfo(info);
+      addToast("Respaldo creado correctamente", "success");
+    } catch (e) {
+      addToast(`Error al respaldar: ${e instanceof Error ? e.message : "desconocido"}`, "error");
+    } finally {
+      setBackupBusy(false);
     }
   }
 
@@ -5076,6 +5095,65 @@ export function App() {
                     Borrar datos de prueba definitivamente
                   </button>
                 </form>
+
+                <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                    <div>
+                      <h2 style={{ marginBottom: 4 }}>💾 Respaldos de la base de datos</h2>
+                      <p className="muted" style={{ margin: 0 }}>
+                        Copia de seguridad de toda la información. Se guarda en OneDrive y se sube a la nube automáticamente.
+                      </p>
+                    </div>
+                    <button type="button" className="primary" onClick={runBackupNow} disabled={!isAdmin || backupBusy}>
+                      {backupBusy ? "Respaldando…" : "Respaldar ahora"}
+                    </button>
+                  </div>
+
+                  {backupInfo && (
+                    <p className="muted" style={{ marginTop: 4 }}>
+                      Carpeta: <code>{backupInfo.directory}</code>
+                    </p>
+                  )}
+
+                  {backupInfo && backupInfo.backups.length > 0 && (
+                    <div className="alertBox" style={{ background: "var(--c-success-bg)", borderColor: "rgba(22,163,74,.3)", color: "var(--c-success-text)" }}>
+                      ✓ Último respaldo: {new Date(backupInfo.backups[0].created_at).toLocaleString("es-EC")} ({backupInfo.backups[0].size_kb} KB)
+                    </div>
+                  )}
+
+                  {backupInfo && backupInfo.backups.length === 0 && (
+                    <div className="alertBox">
+                      Aún no hay respaldos. Presiona "Respaldar ahora" o instala el respaldo automático con el archivo
+                      <strong> INSTALAR-RESPALDO-AUTOMATICO.bat</strong> de la carpeta del sistema.
+                    </div>
+                  )}
+
+                  {backupInfo && backupInfo.backups.length > 0 && (
+                    <table className="cajaTable" style={{ marginTop: 8 }}>
+                      <thead>
+                        <tr>
+                          <th>Fecha</th>
+                          <th>Archivo</th>
+                          <th style={{ textAlign: "right" }}>Tamaño</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {backupInfo.backups.map((b) => (
+                          <tr key={b.name}>
+                            <td>{new Date(b.created_at).toLocaleString("es-EC")}</td>
+                            <td style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>{b.name}</td>
+                            <td className="amountCell">{b.size_kb} KB</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+
+                  <p className="muted" style={{ marginTop: 8 }}>
+                    <strong>Recomendado:</strong> ejecuta una vez <strong>INSTALAR-RESPALDO-AUTOMATICO.bat</strong> para
+                    que se respalde solo cada día a las 8:00 PM.
+                  </p>
+                </div>
               </section>
             )}
           </>
