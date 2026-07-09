@@ -6,8 +6,13 @@ export type AuthUser = {
   username: string;
   name: string;
   role_id: string | null;
+  role_name?: string | null;
 };
 
 export function signToken(user: AuthUser): string {
   return jwt.sign(user, env.jwtSecret, { expiresIn: "12h" });
+}
+
+export function verifyToken(token: string): AuthUser {
+  return jwt.verify(token, env.jwtSecret) as AuthUser;
 }

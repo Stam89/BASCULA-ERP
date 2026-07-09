@@ -1,5 +1,5 @@
 import React, { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { apiGet, apiPost, apiPut, checkHealth } from "./api";
+import { apiFetch, apiGet, apiPost, apiPut, checkHealth } from "./api";
 
 type Farmer = {
   id: string;
@@ -44,6 +44,61 @@ type Dashboard = {
   sales_today: number;
   current_cash_register: { id: string; name: string; opening_balance: string } | null;
 };
+
+type Expense = {
+  id: string;
+  amount: string | number;
+  description: string;
+  paid_to: string | null;
+  created_at: string;
+};
+
+type AuthUser = {
+  id: string;
+  username: string;
+  name: string;
+  role_id: string | null;
+  role_name: string | null;
+};
+
+type AppSettings = {
+  business_name: string;
+  business_subtitle: string;
+  ruc: string;
+  phone: string;
+  address: string;
+  receipt_footer: string;
+};
+
+const defaultAppSettings: AppSettings = {
+  business_name: "BASCULA ERP",
+  business_subtitle: "Piladora de Arroz",
+  ruc: "",
+  phone: "",
+  address: "",
+  receipt_footer: ""
+};
+
+type AdminUser = {
+  id: string;
+  name: string;
+  username: string;
+  is_active: boolean;
+  created_at: string;
+  role_name: string | null;
+};
+
+const authStorageKey = "bascula-erp:auth";
+
+function loadStoredAuth(): AuthUser | null {
+  try {
+    const raw = localStorage.getItem(authStorageKey);
+    if (!raw) return null;
+    return (JSON.parse(raw) as { user?: AuthUser }).user ?? null;
+  } catch {
+    return null;
+  }
+}
 
 type StockRow = {
   code?: string;
@@ -370,7 +425,14 @@ type EquipmentMaintenance = {
   created_at: string;
 };
 
-const tabs = ["Dashboard", "Bascula", "Secadoras", "Produccion", "Agricultores", "Inventario", "Ventas", "Caja", "Liquidaciones", "Fomentos"];
+const navGroups: Array<{ label: string; tabs: string[] }> = [
+  { label: "Principal", tabs: ["Dashboard"] },
+  { label: "Operación", tabs: ["Bascula", "Secadoras", "Produccion", "Inventario"] },
+  { label: "Comercial", tabs: ["Ventas", "Caja"] },
+  { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores"] },
+  { label: "Sistema", tabs: ["Configuracion"] }
+];
+const tabs = navGroups.flatMap((group) => group.tabs);
 
 function NavIcon({ tab }: { tab: string }) {
   switch (tab) {
@@ -396,6 +458,8 @@ function NavIcon({ tab }: { tab: string }) {
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 14V8"/><path d="M5 11l3-3 3 3"/><path d="M2 14h12"/><path d="M4 8C4 5 6 2 8 2s4 3 4 6"/></svg>;
     case "Ventas":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 5h12M2 9h12"/><circle cx="8" cy="13" r="1"/><path d="M3 2h10v11H3z"/></svg>;
+    case "Configuracion":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><line x1="2" y1="4" x2="14" y2="4"/><circle cx="6" cy="4" r="1.7" fill="currentColor" stroke="none"/><line x1="2" y1="8" x2="14" y2="8"/><circle cx="10.5" cy="8" r="1.7" fill="currentColor" stroke="none"/><line x1="2" y1="12" x2="14" y2="12"/><circle cx="5" cy="12" r="1.7" fill="currentColor" stroke="none"/></svg>;
     default:
       return null;
   }
@@ -437,6 +501,7 @@ const emptyDashboard: Dashboard = {
 };
 
 export function App() {
+  const [authUser, setAuthUser] = useState<AuthUser | null>(() => loadStoredAuth());
   const [activeTab, setActiveTab] = useState("Dashboard");
   const [apiOnline, setApiOnline] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -487,11 +552,24 @@ export function App() {
   const [liqResult, setLiqResult] = useState<LiqResultItem[] | null>(null);
 
   // ── Caja ──────────────────────────────────────────────────────────────────
-  const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "movimiento" | "sacos" | "mantenimiento" | "venta_detalle" | "cuentas" | "fomentos">("resumen");
+  const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "movimiento" | "gastos" | "sacos" | "mantenimiento" | "venta_detalle" | "cuentas" | "fomentos">("resumen");
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
   const [cashSummary, setCashSummary] = useState<CashSummary | null>(null);
   const [cashPayables, setCashPayables] = useState<AccountPayable[]>([]);
   const [anticipoFarmerId, setAnticipoFarmerId] = useState("");
+
+  // ── Gastos ────────────────────────────────────────────────────────────────
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [expenseForm, setExpenseForm] = useState({ amount: "", description: "", paid_to: "" });
+  const [laborForm, setLaborForm] = useState({ worker_group: "", sacks_moved: "", price_per_sack: "" });
+
+  // ── Configuración ─────────────────────────────────────────────────────────
+  const [configSubTab, setConfigSubTab] = useState<"negocio" | "usuarios" | "datos">("negocio");
+  const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
+  const [settingsForm, setSettingsForm] = useState<AppSettings>(defaultAppSettings);
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [newUserForm, setNewUserForm] = useState({ name: "", username: "", password: "", role: "OPERADOR" as "ADMINISTRADOR" | "OPERADOR" });
+  const [resetForm, setResetForm] = useState({ password: "", confirm: "" });
 
   // ── Fomentos ──────────────────────────────────────────────────────────────
   const [fomentos, setFomentos] = useState<Fomento[]>([]);
@@ -822,7 +900,8 @@ export function App() {
     }
     return Array.from(pendingByFarmer.entries()).map(([id, v]) => ({
       id,
-      full_name: `${v.name} — debe $${v.pending.toFixed(2)}`
+      full_name: v.name,
+      pending_advance_balance: v.pending
     }));
   }, [liquidacionesList]);
 
@@ -970,23 +1049,138 @@ export function App() {
   }
 
   useEffect(() => {
+    if (!authUser) return;
     refresh().catch((error) => {
       setMessage(error.message);
       setLoading(false);
     });
-  }, []);
+    apiGet<AppSettings>("/settings").then(setAppSettings).catch(() => undefined);
+  }, [authUser]);
 
   async function refreshCaja(registerId?: string) {
     const id = registerId ?? dashboard.current_cash_register?.id;
     if (!id) return;
-    const [summary, movements, payables] = await Promise.all([
+    const [summary, movements, payables, expenseRows] = await Promise.all([
       apiGet<CashSummary>(`/cash/registers/${id}/summary`),
       apiGet<CashMovement[]>(`/cash/registers/${id}/movements`),
-      apiGet<AccountPayable[]>("/cash/payables")
+      apiGet<AccountPayable[]>("/cash/payables"),
+      apiGet<Expense[]>("/expenses").catch(() => [] as Expense[])
     ]);
     setCashSummary(summary);
     setCashMovements(movements);
     setCashPayables(payables);
+    setExpenses(expenseRows);
+  }
+
+  async function submitExpense(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) { addToast("No hay caja abierta", "error"); return; }
+    const amount = Number(expenseForm.amount);
+    if (!amount || amount <= 0 || expenseForm.description.trim().length < 2) {
+      addToast("Ingresa monto y descripción del gasto", "error");
+      return;
+    }
+    await apiPost("/expenses", {
+      cash_register_id: registerId,
+      amount,
+      description: expenseForm.description.trim(),
+      paid_to: expenseForm.paid_to.trim() || undefined
+    });
+    setExpenseForm({ amount: "", description: "", paid_to: "" });
+    addToast("Gasto registrado y descontado de caja", "success");
+    await refreshCaja(registerId);
+  }
+
+  async function submitLaborPayment(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) { addToast("No hay caja abierta", "error"); return; }
+    const sacks = Number(laborForm.sacks_moved);
+    const price = Number(laborForm.price_per_sack);
+    if (laborForm.worker_group.trim().length < 2 || !sacks || sacks <= 0 || price < 0) {
+      addToast("Ingresa cuadrilla, sacos y precio por saco", "error");
+      return;
+    }
+    const total = round2(sacks * price);
+    await apiPost("/expenses/labor-payments", {
+      cash_register_id: registerId,
+      worker_group: laborForm.worker_group.trim(),
+      sacks_moved: sacks,
+      price_per_sack: price
+    });
+    await apiPost("/cash/movements", {
+      cash_register_id: registerId,
+      movement: "EXPENSE",
+      category: "PAGO_CUADRILLA",
+      amount: total,
+      description: `Pago cuadrilla ${laborForm.worker_group.trim()}: ${sacks} sacos @ $${price.toFixed(2)}`
+    });
+    setLaborForm({ worker_group: "", sacks_moved: "", price_per_sack: "" });
+    addToast(`Pago de cuadrilla registrado (${money(total)})`, "success");
+    await refreshCaja(registerId);
+  }
+
+  // ── Configuración ─────────────────────────────────────────────────────────
+  const isAdmin = authUser?.role_name === "ADMINISTRADOR";
+
+  async function refreshConfig() {
+    const settings = await apiGet<AppSettings>("/settings");
+    setAppSettings(settings);
+    setSettingsForm(settings);
+    if (isAdmin) {
+      const users = await apiGet<AdminUser[]>("/auth/users");
+      setAdminUsers(users);
+    }
+  }
+
+  async function saveSettings(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const saved = await apiPut<AppSettings>("/settings", settingsForm);
+    setAppSettings(saved);
+    setSettingsForm(saved);
+    addToast("Datos del negocio guardados", "success");
+  }
+
+  async function submitConfigUser(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (newUserForm.name.trim().length < 2 || newUserForm.username.trim().length < 2 || newUserForm.password.length < 4) {
+      addToast("Completa nombre, usuario y una clave de al menos 4 caracteres", "error");
+      return;
+    }
+    await apiPost("/auth/users", {
+      name: newUserForm.name.trim(),
+      username: newUserForm.username.trim().toLowerCase(),
+      password: newUserForm.password,
+      role: newUserForm.role
+    });
+    setNewUserForm({ name: "", username: "", password: "", role: "OPERADOR" });
+    addToast("Usuario creado", "success");
+    await refreshConfig();
+  }
+
+  async function toggleUserActive(user: AdminUser) {
+    await apiPut(`/auth/users/${user.id}`, { is_active: !user.is_active });
+    addToast(user.is_active ? `Usuario ${user.username} desactivado` : `Usuario ${user.username} activado`, "success");
+    await refreshConfig();
+  }
+
+  async function submitResetData(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (resetForm.confirm.trim().toUpperCase() !== "BORRAR") {
+      addToast('Escribe "BORRAR" para confirmar', "error");
+      return;
+    }
+    const result = await apiPost<{ ok: boolean; wiped_tables: number }>("/settings/reset-transactions", {
+      password: resetForm.password,
+      confirm: "BORRAR"
+    });
+    setResetForm({ password: "", confirm: "" });
+    addToast(`Datos de prueba eliminados (${result.wiped_tables} tablas). El sistema quedó listo para operar.`, "success");
+    setCashSummary(null);
+    setCashMovements([]);
+    setExpenses([]);
+    await refresh();
   }
 
   useEffect(() => {
@@ -1077,10 +1271,9 @@ export function App() {
     const totalVenta = round2(cantidadLibras * precioLibra); // Total por libra
 
     try {
-      const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
 
       // Crear movimiento de inventario
-      await fetch(`${API}/api/v1/inventory/adjustments`, {
+      await apiFetch(`/inventory/adjustments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1114,8 +1307,7 @@ export function App() {
     setCustomerSearch(q);
     if (q.length < 2) { setFilteredCustomers([]); return; }
     try {
-      const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
-      const res = await fetch(`${API}/api/v1/customers/search?q=${encodeURIComponent(q)}`);
+      const res = await apiFetch(`/customers/search?q=${encodeURIComponent(q)}`);
       if (res.ok) {
         const data = await res.json();
         setFilteredCustomers(data);
@@ -1127,8 +1319,7 @@ export function App() {
   async function submitQuickNewCustomer() {
     if (!quickNewCustomerForm.full_name) { addToast("Ingresa el nombre del cliente", "error"); return; }
     try {
-      const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
-      const res = await fetch(`${API}/api/v1/customers/quick`, {
+      const res = await apiFetch(`/customers/quick`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(quickNewCustomerForm)
@@ -1151,8 +1342,7 @@ export function App() {
   async function loadProductPresentations(productId: string) {
     if (!productId) { setSaleProductPresentations([]); setSelectedPresentationId(""); return; }
     try {
-      const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
-      const res = await fetch(`${API}/api/v1/products/${productId}/presentations`);
+      const res = await apiFetch(`/products/${productId}/presentations`);
       if (res.ok) {
         const pres = await res.json();
         setSaleProductPresentations(pres);
@@ -1212,8 +1402,7 @@ export function App() {
   async function handleSaleLineProductChange(productId: string) {
     setSaleLineForm(prev => ({ ...prev, product_id: productId, presentation_id: "" }));
     try {
-      const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
-      const res = await fetch(`${API}/api/v1/products/${productId}/presentations`);
+      const res = await apiFetch(`/products/${productId}/presentations`);
       if (res.ok) {
         const pres = await res.json();
         setSaleProductPresentations(pres);
@@ -1227,6 +1416,7 @@ export function App() {
     if (activeTab === "Produccion") refreshSacks().catch(() => undefined);
     if (activeTab === "Inventario") refreshSacks().catch(() => undefined);
     if (activeTab === "Ventas") refreshCustomersAndSales().catch(() => undefined);
+    if (activeTab === "Configuracion") refreshConfig().catch(() => undefined);
   }, [activeTab]);
 
   async function submitFomento(e: FormEvent<HTMLFormElement>) {
@@ -1260,8 +1450,7 @@ export function App() {
   }
 
   async function deleteFomentoEntrega(fomentoId: string, entregaId: string) {
-    const apiBase = (import.meta.env.VITE_API_URL ?? "http://localhost:4000");
-    await fetch(`${apiBase}/api/v1/fomentos/${fomentoId}/entregas/${entregaId}`, { method: "DELETE" });
+    await apiFetch(`/fomentos/${fomentoId}/entregas/${entregaId}`, { method: "DELETE" });
     await loadFomentoDetalle(fomentoId);
     await refreshFomentos();
   }
@@ -1283,8 +1472,7 @@ export function App() {
   }
 
   async function deleteFomentoPago(fomentoId: string, pagoId: string) {
-    const apiBase = (import.meta.env.VITE_API_URL ?? "http://localhost:4000");
-    await fetch(`${apiBase}/api/v1/fomentos/${fomentoId}/pagos/${pagoId}`, { method: "DELETE" });
+    await apiFetch(`/fomentos/${fomentoId}/pagos/${pagoId}`, { method: "DELETE" });
     await loadFomentoDetalle(fomentoId);
     await refreshFomentos();
   }
@@ -1292,8 +1480,7 @@ export function App() {
   async function saveRenta(fomentoId: string) {
     const renta = Number(fomentoRentaInput) / 100;
     if (!renta || renta <= 0 || renta > 1) { addToast("Porcentaje inválido", "error"); return; }
-    const apiBase = (import.meta.env.VITE_API_URL ?? "http://localhost:4000");
-    await fetch(`${apiBase}/api/v1/fomentos/${fomentoId}`, {
+    await apiFetch(`/fomentos/${fomentoId}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ renta })
     });
@@ -1315,8 +1502,7 @@ export function App() {
 
     try {
       // Registrar gasto en caja
-      const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
-      const gastoRes = await fetch(`${API}/api/v1/cash/${registerId}/movements`, {
+      const gastoRes = await apiFetch(`/cash/${registerId}/movements`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1331,7 +1517,7 @@ export function App() {
       if (!gastoRes.ok) throw new Error(await gastoRes.text());
 
       // Actualizar inventario de sacos
-      const movRes = await fetch(`${API}/api/v1/sacks/movements`, {
+      const movRes = await apiFetch(`/sacks/movements`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1353,8 +1539,7 @@ export function App() {
   };
 
   const refreshEquipment = async () => {
-    const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
-    const res = await fetch(`${API}/api/v1/equipment`);
+    const res = await apiFetch(`/equipment`);
     if (res.ok) setEquipment(await res.json());
   };
 
@@ -1365,8 +1550,7 @@ export function App() {
     }
 
     try {
-      const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
-      const res = await fetch(`${API}/api/v1/equipment`, {
+      const res = await apiFetch(`/equipment`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1388,8 +1572,7 @@ export function App() {
   const deleteEquipment = async (equipmentId: string) => {
     if (!confirm("¿Eliminar este equipo?")) return;
     try {
-      const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
-      const res = await fetch(`${API}/api/v1/equipment/${equipmentId}`, {
+      const res = await apiFetch(`/equipment/${equipmentId}`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" }
       });
@@ -1418,7 +1601,6 @@ export function App() {
     const registerId = dashboard.current_cash_register.id;
 
     try {
-      const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
 
       // Convertir foto a base64 si existe
       let photoBase64: string | undefined;
@@ -1430,7 +1612,7 @@ export function App() {
         });
       }
 
-      const res = await fetch(`${API}/api/v1/equipment/${maintenanceForm.equipment_id}/maintenance`, {
+      const res = await apiFetch(`/equipment/${maintenanceForm.equipment_id}/maintenance`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1482,14 +1664,21 @@ export function App() {
     await refreshCaja(registerId);
   }
 
-  function downloadCajaExcel() {
+  async function downloadCajaExcel() {
     if (!cashSummary) return;
-    const apiBase = (import.meta.env.VITE_API_URL ?? "http://localhost:4000");
-    const url = `${apiBase}/api/v1/cash/registers/${cashSummary.id}/export-excel`;
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "cierre-caja.xlsx";
-    a.click();
+    try {
+      const res = await apiFetch(`/cash/registers/${cashSummary.id}/export-excel`);
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = "cierre-caja.xlsx";
+      a.click();
+      URL.revokeObjectURL(objectUrl);
+    } catch (e) {
+      addToast(`Error al descargar: ${e instanceof Error ? e.message : "desconocido"}`, "error");
+    }
   }
 
   function printCajaMovimientos() {
@@ -1510,7 +1699,9 @@ export function App() {
     const html = `<html><head><title>Cierre de Caja</title>
     <style>body{font-family:Arial;font-size:12px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:4px 8px}th{background:#16a34a;color:#fff}.tot{font-weight:bold}</style>
     </head><body>
-    <h2 style="text-align:center">${cashSummary.name} — Cierre de Caja</h2>
+    <h2 style="text-align:center;margin-bottom:2px">${appSettings.business_name}</h2>
+    <p style="text-align:center;margin:0 0 12px;color:#555">${[appSettings.business_subtitle, appSettings.ruc && `RUC: ${appSettings.ruc}`].filter(Boolean).join(" · ")}</p>
+    <h3 style="text-align:center">${cashSummary.name} — Cierre de Caja</h3>
     <p>Fecha apertura: ${new Date(cashSummary.opened_at).toLocaleString("es-EC")} | Saldo inicial: $${opening.toFixed(2)}</p>
     <table><thead><tr><th>#</th><th>Fecha/Hora</th><th>Categoría</th><th>Descripción</th><th>Ingreso</th><th>Egreso</th></tr></thead>
     <tbody>${rows}</tbody>
@@ -2318,8 +2509,10 @@ export function App() {
         @media print{body{margin:10mm}}
       </style></head><body>
       <div class="hdr">
-        <h1>BASCULA ERP</h1>
-        <h2>Piladora de Arroz</h2>
+        <h1>${appSettings.business_name}</h1>
+        <h2>${appSettings.business_subtitle}</h2>
+        ${appSettings.ruc ? `<h2>RUC: ${appSettings.ruc}</h2>` : ""}
+        ${appSettings.address || appSettings.phone ? `<h2>${[appSettings.address, appSettings.phone && `Telf: ${appSettings.phone}`].filter(Boolean).join(" · ")}</h2>` : ""}
         <h3>Comprobante de Liquidación</h3>
       </div>
       <div class="meta">
@@ -2350,9 +2543,19 @@ export function App() {
         <div class="sig"><hr/><span>Agricultor</span></div>
         <div class="sig"><hr/><span>Responsable</span></div>
       </div>
+      ${appSettings.receipt_footer ? `<p style="text-align:center;margin-top:28px;font-size:11px;color:#666">${appSettings.receipt_footer}</p>` : ""}
     </body></html>`;
     const win = window.open("", "_blank", "width=760,height=620");
     if (win) { win.document.write(html); win.document.close(); win.print(); }
+  }
+
+  function logout() {
+    localStorage.removeItem(authStorageKey);
+    setAuthUser(null);
+  }
+
+  if (!authUser) {
+    return <LoginScreen onLogin={setAuthUser} />;
   }
 
   return (
@@ -2367,13 +2570,35 @@ export function App() {
           </div>
         </div>
         <nav>
-          {tabs.map((tab) => (
-            <button className={activeTab === tab ? "active" : ""} key={tab} onClick={() => setActiveTab(tab)}>
-              <NavIcon tab={tab} />
-              {tab}
-            </button>
+          {navGroups.map((group) => (
+            <div className="navSection" key={group.label}>
+              <div className="navLabel">{group.label}</div>
+              {group.tabs.map((tab) => (
+                <button className={activeTab === tab ? "active" : ""} key={tab} onClick={() => setActiveTab(tab)}>
+                  <NavIcon tab={tab} />
+                  {tab}
+                </button>
+              ))}
+            </div>
           ))}
         </nav>
+        <div className="sidebarFooter">
+          <div className="userBox">
+            <span className="userAvatar">
+              {authUser.name.split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase() ?? "").join("")}
+            </span>
+            <div>
+              <strong>{authUser.name}</strong>
+              <small>{(authUser.role_name ?? "usuario").toLowerCase()}</small>
+            </div>
+            <button className="logoutBtn" title="Cerrar sesión" onClick={logout}>⏻</button>
+          </div>
+          <span className={apiOnline ? "apiState on" : "apiState"}>
+            <i />
+            API {apiOnline ? "conectada" : "sin conexión"}
+          </span>
+          <small>Bascula ERP · Web Admin</small>
+        </div>
       </aside>
 
       <section className="workspace">
@@ -2383,6 +2608,9 @@ export function App() {
             <p>{loading ? "Actualizando datos…" : message}</p>
           </div>
           <div className="topbarRight">
+            <span className="topbarDate">
+              {new Date().toLocaleDateString("es-EC", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+            </span>
             <button
               className="btnSecondary"
               onClick={() => refresh().catch((e) => setMessage(e.message))}
@@ -2400,14 +2628,14 @@ export function App() {
         {activeTab === "Dashboard" && (
           <>
             <section className="moduleGrid">
-              <Metric title="Agricultores" value={dashboard.active_farmers} />
-              <Metric title="Tickets hoy" value={dashboard.tickets_today} />
-              <Metric title="Stock propio" value={`${dashboard.owned_stock.toFixed(2)} QQ`} />
-              <Metric title="Anticipos" value={money(dashboard.pending_advances)} />
-              <Metric title="Por pagar" value={money(dashboard.pending_payables)} />
-              <Metric title="Ventas hoy" value={money(dashboard.sales_today)} />
-              <Metric title="Insumos criticos" value={criticalSupplies.length} />
-              <Metric title="Preparacion" value={`${setupScore}/5`} />
+              <Metric title="Agricultores" value={dashboard.active_farmers} icon="👨‍🌾" />
+              <Metric title="Tickets hoy" value={dashboard.tickets_today} icon="🎫" accent="accBlue" />
+              <Metric title="Stock propio" value={`${dashboard.owned_stock.toFixed(2)} QQ`} icon="🌾" accent="accGreen" />
+              <Metric title="Anticipos" value={money(dashboard.pending_advances)} icon="💸" accent="accAmber" />
+              <Metric title="Por pagar" value={money(dashboard.pending_payables)} icon="📑" accent="accRed" />
+              <Metric title="Ventas hoy" value={money(dashboard.sales_today)} icon="🛒" accent="accGreen" />
+              <Metric title="Insumos criticos" value={criticalSupplies.length} icon="⚠️" accent={criticalSupplies.length > 0 ? "accRed" : undefined} />
+              <Metric title="Preparacion" value={`${setupScore}/5`} icon="✅" accent="accBlue" />
             </section>
             <section className="setupPanel">
               <div>
@@ -2824,34 +3052,32 @@ export function App() {
           <section className="panelGrid">
             {/* Formulario de venta */}
             {showQuickNewCustomer && (
-              <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
-                <div style={{ background: "white", borderRadius: 10, padding: 20, maxWidth: 400, width: "90%" }}>
+              <div className="modalOverlay" onClick={() => { setShowQuickNewCustomer(false); setQuickNewCustomerForm({ full_name: "", phone: "" }); }}>
+                <div className="modalCard" onClick={(e) => e.stopPropagation()}>
                   <h3>Nuevo cliente rápido</h3>
-                  <label style={{ display: "block", marginBottom: 12 }}>
-                    <span style={{ display: "block", marginBottom: 4, fontWeight: 600, fontSize: 13 }}>Nombre *</span>
+                  <label>
+                    <span>Nombre *</span>
                     <input
                       type="text"
                       placeholder="Ej: Juan García"
                       value={quickNewCustomerForm.full_name}
                       onChange={(e) => setQuickNewCustomerForm({ ...quickNewCustomerForm, full_name: e.target.value })}
-                      style={{ width: "100%", padding: 8, border: "1px solid #d1d5db", borderRadius: 4 }}
                     />
                   </label>
-                  <label style={{ display: "block", marginBottom: 16 }}>
-                    <span style={{ display: "block", marginBottom: 4, fontWeight: 600, fontSize: 13 }}>Teléfono</span>
+                  <label>
+                    <span>Teléfono</span>
                     <input
                       type="text"
                       placeholder="0987654321"
                       value={quickNewCustomerForm.phone}
                       onChange={(e) => setQuickNewCustomerForm({ ...quickNewCustomerForm, phone: e.target.value })}
-                      style={{ width: "100%", padding: 8, border: "1px solid #d1d5db", borderRadius: 4 }}
                     />
                   </label>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button type="button" onClick={submitQuickNewCustomer} style={{ flex: 1, padding: "8px 12px", background: "#10b981", color: "white", border: "none", borderRadius: 4, fontWeight: 600, cursor: "pointer" }}>
-                      Crear
+                  <div className="buttonRow">
+                    <button type="button" className="primary" onClick={submitQuickNewCustomer}>
+                      Crear cliente
                     </button>
-                    <button type="button" onClick={() => { setShowQuickNewCustomer(false); setQuickNewCustomerForm({ full_name: "", phone: "" }); }} style={{ flex: 1, padding: "8px 12px", background: "#e5e7eb", color: "#333", border: "none", borderRadius: 4, fontWeight: 600, cursor: "pointer" }}>
+                    <button type="button" onClick={() => { setShowQuickNewCustomer(false); setQuickNewCustomerForm({ full_name: "", phone: "" }); }}>
                       Cancelar
                     </button>
                   </div>
@@ -2860,8 +3086,8 @@ export function App() {
             )}
 
             {/* SECCIÓN 1: Cliente */}
-            <div className="formPanel" style={{ gridColumn: "1 / -1", background: "#f0f9ff", borderLeft: "4px solid #0ea5e9" }}>
-              <h2 style={{ marginTop: 0 }}>1️⃣ Cliente</h2>
+            <div className="formPanel stepPanel stepInfo" style={{ gridColumn: "1 / -1" }}>
+              <h2 style={{ marginTop: 0 }}><span className="stepBadge">1</span>Cliente</h2>
               <label>
                 <span>Busca cliente o crea uno nuevo</span>
                 <div style={{ position: "relative", display: "flex", gap: 6 }}>
@@ -2894,8 +3120,8 @@ export function App() {
             </div>
 
             {/* SECCIÓN 2: Agregar líneas de pedido */}
-            <div className="formPanel" style={{ gridColumn: "1 / -1", background: "#fef3c7", borderLeft: "4px solid #f59e0b" }}>
-              <h2 style={{ marginTop: 0 }}>2️⃣ Agregar productos al pedido</h2>
+            <div className="formPanel stepPanel stepWarn" style={{ gridColumn: "1 / -1" }}>
+              <h2 style={{ marginTop: 0 }}><span className="stepBadge">2</span>Agregar productos al pedido</h2>
 
               {/* FILA 1: Marca y Presentación lado a lado */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
@@ -2976,8 +3202,8 @@ export function App() {
 
             {/* SECCIÓN 3: Líneas agregadas (carrito) */}
             {saleLineItems.length > 0 && (
-              <div className="formPanel" style={{ gridColumn: "1 / -1", background: "#f3f4f6", borderLeft: "4px solid #6b7280" }}>
-                <h2 style={{ marginTop: 0 }}>3️⃣ Líneas del pedido ({saleLineItems.length})</h2>
+              <div className="formPanel stepPanel" style={{ gridColumn: "1 / -1" }}>
+                <h2 style={{ marginTop: 0 }}><span className="stepBadge">3</span>Líneas del pedido ({saleLineItems.length})</h2>
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                     <thead>
@@ -2997,8 +3223,7 @@ export function App() {
                         const presentation = allPresentations.find(p => p.id === item.presentation_id) ||
                           (async () => {
                             try {
-                              const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
-                              const res = await fetch(`${API}/api/v1/products/${item.product_id}/presentations`);
+                              const res = await apiFetch(`/products/${item.product_id}/presentations`);
                               if (res.ok) {
                                 const preses = await res.json();
                                 return preses.find((p: any) => p.id === item.presentation_id);
@@ -3036,8 +3261,8 @@ export function App() {
             )}
 
             {/* SECCIÓN 4: Resumen y pago */}
-            <form className="formPanel" onSubmit={(event) => submitOrderSale(event).catch((error) => setMessage(error.message))} style={{ gridColumn: "1 / -1", background: "#f0fdf4", borderLeft: "4px solid #10b981" }}>
-              <h2 style={{ marginTop: 0 }}>4️⃣ Resumen y forma de pago</h2>
+            <form className="formPanel stepPanel stepSuccess" onSubmit={(event) => submitOrderSale(event).catch((error) => setMessage(error.message))} style={{ gridColumn: "1 / -1" }}>
+              <h2 style={{ marginTop: 0 }}><span className="stepBadge">4</span>Resumen y forma de pago</h2>
 
               <div className="totalBox" style={{ background: "#dcfce7", padding: 16, borderRadius: 8, marginBottom: 16 }}>
                 <span style={{ fontSize: 14 }}>TOTAL A COBRAR</span>
@@ -3158,11 +3383,11 @@ export function App() {
           <section className="cajaLayout">
             {/* ── Sin caja abierta ── */}
             {!dashboard.current_cash_register && (
-              <section style={{ display: "grid", gridTemplateColumns: "1fr", gap: 20, maxWidth: 600, margin: "40px auto" }}>
-                <div style={{ textAlign: "center", padding: "40px 20px" }}>
-                  <div style={{ fontSize: 48, marginBottom: 16 }}>💼</div>
-                  <h2 style={{ margin: "0 0 8px", fontSize: 24, fontWeight: 700 }}>No hay caja abierta</h2>
-                  <p style={{ margin: "0 0 24px", color: "#6b7280", fontSize: 14 }}>Abre una caja para comenzar a registrar movimientos de dinero</p>
+              <section style={{ display: "grid", gridTemplateColumns: "1fr", gap: 20, maxWidth: 600, margin: "40px auto", width: "100%" }}>
+                <div className="emptyState">
+                  <div className="emptyIcon">💼</div>
+                  <h2>No hay caja abierta</h2>
+                  <p>Abre una caja para comenzar a registrar movimientos de dinero</p>
                 </div>
                 <form className="formPanel" onSubmit={(event) => submitCash(event).catch((error) => addToast(error.message, "error"))} style={{ padding: 24 }}>
                   <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 700 }}>Abrir caja nueva</h3>
@@ -3220,12 +3445,13 @@ export function App() {
                 </div>
 
                 {/* Sub-tabs profesional */}
-                <nav style={{ display: "flex", gap: 4, borderBottom: "2px solid #e5e7eb", marginBottom: 24, flexWrap: "wrap", overflowX: "auto" }}>
-                  {(["resumen", "venta_detalle", "anticipo", "movimiento", "sacos", "mantenimiento", "cuentas", "fomentos"] as const).map((t) => {
+                <nav className="cajaSubNav">
+                  {(["resumen", "venta_detalle", "anticipo", "movimiento", "gastos", "sacos", "mantenimiento", "cuentas", "fomentos"] as const).map((t) => {
                     const icons = {
                       resumen: "📋",
                       anticipo: "💸",
                       movimiento: "💳",
+                      gastos: "🧾",
                       sacos: "📦",
                       mantenimiento: "🔧",
                       venta_detalle: "🛒",
@@ -3236,6 +3462,7 @@ export function App() {
                       resumen: "Movimientos",
                       anticipo: "Anticipo",
                       movimiento: "Movimiento",
+                      gastos: "Gastos",
                       sacos: "Sacos",
                       mantenimiento: "Mantenimiento",
                       venta_detalle: "Venta Detalle",
@@ -3246,22 +3473,10 @@ export function App() {
                       <button
                         key={t}
                         type="button"
+                        className={cajaSubTab === t ? "active" : ""}
                         onClick={() => {
                           setCajaSubTab(t);
                           if (t === "mantenimiento" && equipment.length === 0) refreshEquipment();
-                        }}
-                        style={{
-                          padding: "10px 14px",
-                          background: cajaSubTab === t ? "var(--c-brand)" : "transparent",
-                          color: cajaSubTab === t ? "#fff" : "#6b7280",
-                          border: cajaSubTab === t ? "none" : "1px solid transparent",
-                          borderBottom: cajaSubTab === t ? "none" : "2px solid transparent",
-                          borderRadius: "6px 6px 0 0",
-                          cursor: "pointer",
-                          fontSize: 12,
-                          fontWeight: cajaSubTab === t ? 700 : 600,
-                          whiteSpace: "nowrap",
-                          transition: "all 0.2s"
                         }}
                       >
                         <span style={{ marginRight: 4 }}>{icons[t]}</span>{labels[t]}
@@ -3272,11 +3487,11 @@ export function App() {
 
                 {/* ── Movimientos ── */}
                 {cajaSubTab === "resumen" && (
-                  <div style={{ background: "white", borderRadius: "10px", border: "1px solid #e5e7eb", overflow: "hidden" }}>
+                  <div className="cajaMovimientosPanel" style={{ padding: 0, overflow: "hidden" }}>
                     {cashMovements.length === 0 ? (
-                      <div style={{ padding: "40px 20px", textAlign: "center", color: "#9ca3af" }}>
-                        <div style={{ fontSize: 32, marginBottom: 12 }}>📭</div>
-                        <p style={{ margin: 0 }}>Sin movimientos registrados aún</p>
+                      <div className="emptyState">
+                        <div className="emptyIcon">📭</div>
+                        <p>Sin movimientos registrados aún</p>
                       </div>
                     ) : (
                       <div style={{ maxHeight: "600px", overflowY: "auto" }}>
@@ -3387,6 +3602,121 @@ export function App() {
                   </form>
                 )}
 
+                {/* ── Gastos operativos ── */}
+                {cajaSubTab === "gastos" && (
+                  <section className="panelGrid">
+                    <form className="formPanel" onSubmit={(e) => submitExpense(e).catch((err) => addToast(err.message, "error"))}>
+                      <h2>🧾 Registrar gasto operativo</h2>
+                      <p className="muted">Se guarda en el registro de gastos y se descuenta automáticamente de la caja abierta.</p>
+                      <label>
+                        <span>Monto $ *</span>
+                        <input
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          placeholder="0.00"
+                          value={expenseForm.amount}
+                          onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })}
+                        />
+                      </label>
+                      <label>
+                        <span>Descripción *</span>
+                        <input
+                          type="text"
+                          placeholder="Ej: Compra de repuestos, combustible…"
+                          value={expenseForm.description}
+                          onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })}
+                        />
+                      </label>
+                      <label>
+                        <span>Pagado a (opcional)</span>
+                        <input
+                          type="text"
+                          placeholder="Nombre del proveedor o persona"
+                          value={expenseForm.paid_to}
+                          onChange={(e) => setExpenseForm({ ...expenseForm, paid_to: e.target.value })}
+                        />
+                      </label>
+                      <button className="primary" disabled={busy}>Registrar gasto</button>
+                    </form>
+
+                    <form className="formPanel" onSubmit={(e) => submitLaborPayment(e).catch((err) => addToast(err.message, "error"))}>
+                      <h2>👷 Pago de cuadrilla (estibaje)</h2>
+                      <p className="muted">Calcula el total por sacos movidos y lo registra como egreso de caja.</p>
+                      <label>
+                        <span>Cuadrilla / Grupo *</span>
+                        <input
+                          type="text"
+                          placeholder="Ej: Cuadrilla de Juan"
+                          value={laborForm.worker_group}
+                          onChange={(e) => setLaborForm({ ...laborForm, worker_group: e.target.value })}
+                        />
+                      </label>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                        <label>
+                          <span>Sacos movidos *</span>
+                          <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            placeholder="0"
+                            value={laborForm.sacks_moved}
+                            onChange={(e) => setLaborForm({ ...laborForm, sacks_moved: e.target.value })}
+                          />
+                        </label>
+                        <label>
+                          <span>Precio por saco $ *</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            placeholder="0.00"
+                            value={laborForm.price_per_sack}
+                            onChange={(e) => setLaborForm({ ...laborForm, price_per_sack: e.target.value })}
+                          />
+                        </label>
+                      </div>
+                      <div className="totalBox">
+                        <span>Total a pagar</span>
+                        <strong>{money(round2((Number(laborForm.sacks_moved) || 0) * (Number(laborForm.price_per_sack) || 0)))}</strong>
+                        <small>{laborForm.sacks_moved || 0} sacos × ${Number(laborForm.price_per_sack || 0).toFixed(2)}</small>
+                      </div>
+                      <button className="primary" disabled={busy}>Registrar pago</button>
+                    </form>
+
+                    <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+                      <h2>Historial de gastos</h2>
+                      {expenses.length === 0 ? (
+                        <div className="emptyState">
+                          <div className="emptyIcon">🧾</div>
+                          <p>Aún no hay gastos registrados</p>
+                        </div>
+                      ) : (
+                        <table className="cajaTable" style={{ marginTop: 10 }}>
+                          <thead>
+                            <tr>
+                              <th>Fecha</th>
+                              <th>Descripción</th>
+                              <th>Pagado a</th>
+                              <th style={{ textAlign: "right" }}>Monto</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {expenses.map((exp) => (
+                              <tr key={exp.id} className="rowExpense">
+                                <td>{new Date(exp.created_at).toLocaleDateString("es-EC")}</td>
+                                <td>{exp.description}</td>
+                                <td>{exp.paid_to || "—"}</td>
+                                <td className="amountCell">-{money(Number(exp.amount))}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  </section>
+                )}
+
                 {/* ── Compra de Sacos ── */}
                 {cajaSubTab === "sacos" && (
                   <form onSubmit={(e) => { e.preventDefault(); submitSackBuy(); }} style={{ background: "white", borderRadius: "10px", border: "1px solid #e5e7eb", padding: "24px", maxWidth: 500 }}>
@@ -3430,26 +3760,24 @@ export function App() {
 
                 {/* ── Mantenimiento de Equipos ── */}
                 {cajaSubTab === "mantenimiento" && (
-                  <div style={{ display: "flex", gap: 20 }}>
+                  <div className="maintLayout">
                     {/* Formulario Crear Máquina */}
-                    <div style={{ flex: "0 0 350px", background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
-                      <h3 style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700 }}>+ Agregar Máquina</h3>
-                      <label style={{ display: "block", marginBottom: 12 }}>
-                        <span style={{ fontSize: 12, fontWeight: 600, display: "block", marginBottom: 4 }}>Nombre</span>
+                    <div className="formPanel">
+                      <h2>🔧 Agregar máquina</h2>
+                      <label>
+                        <span>Nombre</span>
                         <input
                           type="text"
                           value={newEquipmentForm.name}
                           onChange={(e: any) => setNewEquipmentForm({ ...newEquipmentForm, name: e.target.value })}
                           placeholder="Ej: Piladora 1, Motor Túnel 1"
-                          style={{ width: "100%", padding: 8, borderRadius: 4, border: "1px solid #d1d5db", fontSize: 13 }}
                         />
                       </label>
-                      <label style={{ display: "block", marginBottom: 12 }}>
-                        <span style={{ fontSize: 12, fontWeight: 600, display: "block", marginBottom: 4 }}>Tipo</span>
+                      <label>
+                        <span>Tipo</span>
                         <select
                           value={newEquipmentForm.type}
                           onChange={(e: any) => setNewEquipmentForm({ ...newEquipmentForm, type: e.target.value })}
-                          style={{ width: "100%", padding: 8, borderRadius: 4, border: "1px solid #d1d5db", fontSize: 13 }}
                         >
                           <option value="PILADORA">Piladora</option>
                           <option value="SECADORA">Secadora</option>
@@ -3457,28 +3785,20 @@ export function App() {
                           <option value="OTRO">Otro</option>
                         </select>
                       </label>
-                      <button
-                        type="button"
-                        onClick={submitNewEquipment}
-                        style={{ width: "100%", padding: "8px 0", background: "#10b981", color: "white", border: "none", borderRadius: 4, fontSize: 13, fontWeight: 600, cursor: "pointer" }}
-                      >
+                      <button type="button" className="primary" onClick={submitNewEquipment}>
                         Agregar
                       </button>
-                      <hr style={{ margin: "12px 0", border: "none", borderTop: "1px solid #d1d5db" }} />
-                      <h4 style={{ fontSize: 12, fontWeight: 600, margin: "12px 0 8px", color: "#6b7280" }}>Equipos</h4>
-                      {equipment.length === 0 && <p style={{ fontSize: 12, color: "#9ca3af", margin: 0 }}>Sin equipos aún</p>}
-                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <hr className="divider" />
+                      <h2 style={{ marginBottom: 0 }}>Equipos</h2>
+                      {equipment.length === 0 && <p className="muted">Sin equipos aún</p>}
+                      <div className="equipList">
                         {equipment.filter((e) => e.status !== "FUERA_SERVICIO").map((eq) => (
-                          <div key={eq.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: 8, background: "#f3f4f6", borderRadius: 4, fontSize: 13 }}>
-                            <div style={{ flex: 1 }}>
-                              <div style={{ fontWeight: 600 }}>{eq.name}</div>
-                              <div style={{ fontSize: 11, color: "#6b7280" }}>{eq.type}</div>
+                          <div key={eq.id} className="equipItem">
+                            <div>
+                              <strong>{eq.name}</strong>
+                              <small>{eq.type}</small>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => deleteEquipment(eq.id)}
-                              style={{ padding: "4px 8px", background: "#ef4444", color: "white", border: "none", borderRadius: 3, fontSize: 11, cursor: "pointer" }}
-                            >
+                            <button type="button" className="equipDelBtn" onClick={() => deleteEquipment(eq.id)}>
                               Eliminar
                             </button>
                           </div>
@@ -3492,7 +3812,7 @@ export function App() {
                       const fileInput = event.currentTarget.querySelector('input[type="file"]');
                       const file = fileInput?.files?.[0];
                       submitEquipmentMaintenance(file);
-                    }} style={{ flex: 1 }}>
+                    }}>
                       <h2>Registrar Mantenimiento</h2>
                     <label>
                       <span>Máquina</span>
@@ -3523,7 +3843,6 @@ export function App() {
                       <span>Descripción del trabajo/repuesto</span>
                       <textarea
                         placeholder={getDescriptionPlaceholder()}
-                        style={{ width: "100%", minHeight: 60, padding: 8, fontFamily: "inherit" }}
                         value={maintenanceForm.description}
                         onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, description: event.target.value })}
                         required
@@ -3535,7 +3854,6 @@ export function App() {
                         type="text"
                         value={maintenanceForm.provider}
                         onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, provider: event.target.value })}
-                        style={{ width: "100%", padding: 8 }}
                       />
                     </label>
                     <label>
@@ -3544,7 +3862,6 @@ export function App() {
                         type="text"
                         value={maintenanceForm.invoice_number}
                         onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, invoice_number: event.target.value })}
-                        style={{ width: "100%", padding: 8 }}
                       />
                     </label>
                     <label>
@@ -3555,7 +3872,6 @@ export function App() {
                         value={maintenanceForm.amount}
                         onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, amount: event.target.value })}
                         required
-                        style={{ width: "100%", padding: 8 }}
                       />
                     </label>
                     <label>
@@ -3563,7 +3879,6 @@ export function App() {
                       <input
                         type="file"
                         accept="image/jpeg,image/png,image/jpg"
-                        style={{ width: "100%", padding: 8 }}
                       />
                     </label>
                     <button className="primary">Registrar mantenimiento</button>
@@ -3573,7 +3888,7 @@ export function App() {
 
                 {/* ── Venta Detalle (por libra) ── */}
                 {cajaSubTab === "venta_detalle" && (
-                  <form onSubmit={(e) => { e.preventDefault(); submitVentaDetalle(); }} style={{ background: "white", borderRadius: "10px", border: "1px solid #e5e7eb", padding: "24px", maxWidth: 600 }}>
+                  <form className="formPanel" onSubmit={(e) => { e.preventDefault(); submitVentaDetalle(); }} style={{ maxWidth: 600 }}>
                     <h2 style={{ margin: "0 0 8px", fontSize: 18, fontWeight: 700 }}>🛒 Venta Detalle por Libra</h2>
                     <p style={{ margin: "0 0 20px", color: "#6b7280", fontSize: 13 }}>Registra ventas pequeñas. Se restan automáticamente del inventario y entra el dinero a la caja.</p>
 
@@ -4378,6 +4693,258 @@ export function App() {
           </section>
         )}
 
+        {activeTab === "Configuracion" && (
+          <>
+            <nav className="cajaSubNav">
+              {(["negocio", "usuarios", "datos"] as const).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  className={configSubTab === t ? "active" : ""}
+                  onClick={() => setConfigSubTab(t)}
+                >
+                  {t === "negocio" ? "🏢 Negocio" : t === "usuarios" ? "👥 Usuarios" : "🗄️ Datos"}
+                </button>
+              ))}
+            </nav>
+
+            {/* ── Datos del negocio ── */}
+            {configSubTab === "negocio" && (
+              <section className="panelGrid">
+                <form className="formPanel" onSubmit={(e) => saveSettings(e).catch((err) => addToast(err.message, "error"))}>
+                  <h2>🏢 Datos del negocio</h2>
+                  <p className="muted">Estos datos aparecen en los comprobantes de liquidación y reportes impresos.</p>
+                  <label>
+                    <span>Nombre comercial *</span>
+                    <input
+                      type="text"
+                      value={settingsForm.business_name}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, business_name: e.target.value })}
+                      required
+                      minLength={2}
+                    />
+                  </label>
+                  <label>
+                    <span>Subtítulo / Actividad</span>
+                    <input
+                      type="text"
+                      placeholder="Ej: Piladora de Arroz"
+                      value={settingsForm.business_subtitle}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, business_subtitle: e.target.value })}
+                    />
+                  </label>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <label>
+                      <span>RUC</span>
+                      <input
+                        type="text"
+                        placeholder="0999999999001"
+                        value={settingsForm.ruc}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, ruc: e.target.value })}
+                      />
+                    </label>
+                    <label>
+                      <span>Teléfono</span>
+                      <input
+                        type="text"
+                        placeholder="0987654321"
+                        value={settingsForm.phone}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, phone: e.target.value })}
+                      />
+                    </label>
+                  </div>
+                  <label>
+                    <span>Dirección</span>
+                    <input
+                      type="text"
+                      placeholder="Km 5 vía a Daule, Guayas"
+                      value={settingsForm.address}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, address: e.target.value })}
+                    />
+                  </label>
+                  <label>
+                    <span>Pie de comprobante (opcional)</span>
+                    <input
+                      type="text"
+                      placeholder="Ej: Gracias por su preferencia"
+                      value={settingsForm.receipt_footer}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, receipt_footer: e.target.value })}
+                    />
+                  </label>
+                  <button className="primary" disabled={!isAdmin}>Guardar cambios</button>
+                  {!isAdmin && <p className="muted">Solo un administrador puede modificar estos datos.</p>}
+                </form>
+
+                <div className="formPanel">
+                  <h2>Vista previa de encabezado</h2>
+                  <p className="muted">Así se verá el encabezado de tus comprobantes:</p>
+                  <div className="receiptPreview">
+                    <strong>{settingsForm.business_name || "—"}</strong>
+                    {settingsForm.business_subtitle && <span>{settingsForm.business_subtitle}</span>}
+                    {settingsForm.ruc && <small>RUC: {settingsForm.ruc}</small>}
+                    {settingsForm.address && <small>{settingsForm.address}</small>}
+                    {settingsForm.phone && <small>Telf: {settingsForm.phone}</small>}
+                    <hr />
+                    <span className="receiptDoc">COMPROBANTE DE LIQUIDACIÓN</span>
+                    {settingsForm.receipt_footer && <em>{settingsForm.receipt_footer}</em>}
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {/* ── Usuarios ── */}
+            {configSubTab === "usuarios" && (
+              <section className="panelGrid">
+                <form className="formPanel" onSubmit={(e) => submitConfigUser(e).catch((err) => addToast(err.message, "error"))}>
+                  <h2>👤 Crear usuario</h2>
+                  <p className="muted">Los operadores pueden usar todo el sistema; solo los administradores acceden a Configuración, crean usuarios y borran datos.</p>
+                  <label>
+                    <span>Nombre completo *</span>
+                    <input
+                      type="text"
+                      value={newUserForm.name}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, name: e.target.value })}
+                    />
+                  </label>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <label>
+                      <span>Usuario *</span>
+                      <input
+                        type="text"
+                        autoComplete="off"
+                        value={newUserForm.username}
+                        onChange={(e) => setNewUserForm({ ...newUserForm, username: e.target.value })}
+                      />
+                    </label>
+                    <label>
+                      <span>Clave *</span>
+                      <input
+                        type="password"
+                        autoComplete="new-password"
+                        value={newUserForm.password}
+                        onChange={(e) => setNewUserForm({ ...newUserForm, password: e.target.value })}
+                      />
+                    </label>
+                  </div>
+                  <label>
+                    <span>Rol</span>
+                    <select
+                      value={newUserForm.role}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, role: e.target.value as "ADMINISTRADOR" | "OPERADOR" })}
+                    >
+                      <option value="OPERADOR">Operador</option>
+                      <option value="ADMINISTRADOR">Administrador</option>
+                    </select>
+                  </label>
+                  <button className="primary" disabled={!isAdmin}>Crear usuario</button>
+                </form>
+
+                <div className="tablePanel">
+                  <h2>Usuarios registrados</h2>
+                  {adminUsers.length === 0 ? (
+                    <div className="emptyState">
+                      <div className="emptyIcon">👥</div>
+                      <p>{isAdmin ? "Cargando usuarios…" : "Solo un administrador puede ver los usuarios"}</p>
+                    </div>
+                  ) : (
+                    <table className="cajaTable" style={{ marginTop: 10 }}>
+                      <thead>
+                        <tr>
+                          <th>Nombre</th>
+                          <th>Usuario</th>
+                          <th>Rol</th>
+                          <th>Estado</th>
+                          <th />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {adminUsers.map((u) => (
+                          <tr key={u.id}>
+                            <td>{u.name}</td>
+                            <td>{u.username}</td>
+                            <td style={{ textTransform: "capitalize" }}>{(u.role_name ?? "—").toLowerCase()}</td>
+                            <td>
+                              <span className={u.is_active ? "chip ok" : "chip bad"}>
+                                {u.is_active ? "Activo" : "Inactivo"}
+                              </span>
+                            </td>
+                            <td style={{ textAlign: "right" }}>
+                              {u.id !== authUser.id && (
+                                <button
+                                  type="button"
+                                  className="btnGhost"
+                                  onClick={() => toggleUserActive(u).catch((err) => addToast(err.message, "error"))}
+                                >
+                                  {u.is_active ? "Desactivar" : "Activar"}
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </section>
+            )}
+
+            {/* ── Puesta en marcha / datos ── */}
+            {configSubTab === "datos" && (
+              <section className="panelGrid">
+                <div className="formPanel">
+                  <h2>✅ Puesta en marcha</h2>
+                  <p className="muted">
+                    Pasos recomendados antes de operar con datos reales:
+                  </p>
+                  <ol className="setupList">
+                    <li>Completa los <strong>datos del negocio</strong> (aparecen en los comprobantes).</li>
+                    <li>Crea un usuario para cada persona que use el sistema.</li>
+                    <li>Borra los datos de prueba con el panel de la derecha.</li>
+                    <li>Verifica productos, bodegas e insumos en el Dashboard ("Crear datos base" si están vacíos).</li>
+                    <li>Abre la caja del día y registra a tus agricultores reales.</li>
+                  </ol>
+                </div>
+
+                <form className="formPanel dangerZone" onSubmit={(e) => submitResetData(e).catch((err) => addToast(err.message, "error"))}>
+                  <h2>🗑️ Borrar datos de prueba</h2>
+                  <p className="muted">
+                    Elimina <strong>todos los movimientos</strong>: tickets, lotes, secado, producción, ventas, caja, gastos,
+                    anticipos, liquidaciones, fomentos, agricultores y clientes. Se conservan usuarios, configuración,
+                    productos, bodegas, equipos y los catálogos de insumos y sacos (con stock en 0).
+                  </p>
+                  <p className="dangerNote">Esta acción no se puede deshacer.</p>
+                  <label>
+                    <span>Tu clave de administrador</span>
+                    <input
+                      type="password"
+                      autoComplete="current-password"
+                      value={resetForm.password}
+                      onChange={(e) => setResetForm({ ...resetForm, password: e.target.value })}
+                      required
+                    />
+                  </label>
+                  <label>
+                    <span>Escribe BORRAR para confirmar</span>
+                    <input
+                      type="text"
+                      placeholder="BORRAR"
+                      value={resetForm.confirm}
+                      onChange={(e) => setResetForm({ ...resetForm, confirm: e.target.value })}
+                      required
+                    />
+                  </label>
+                  <button
+                    className="dangerBtn"
+                    disabled={!isAdmin || resetForm.confirm.trim().toUpperCase() !== "BORRAR" || resetForm.password.length < 4}
+                  >
+                    Borrar datos de prueba definitivamente
+                  </button>
+                </form>
+              </section>
+            )}
+          </>
+        )}
+
         </div>{/* .content */}
       </section>
     </main>
@@ -4395,11 +4962,126 @@ export function App() {
   );
 }
 
-function Metric({ title, value }: { title: string; value: string | number }) {
+function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
+  const [mode, setMode] = useState<"loading" | "login" | "bootstrap">("loading");
+  const [fullName, setFullName] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    apiGet<{ has_users: boolean }>("/auth/status")
+      .then((status) => setMode(status.has_users ? "login" : "bootstrap"))
+      .catch(() => setMode("login"));
+  }, []);
+
+  async function submit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    try {
+      const result = mode === "bootstrap"
+        ? await apiPost<{ token: string; user: AuthUser }>("/auth/bootstrap", { name: fullName, username, password })
+        : await apiPost<{ token: string; user: AuthUser }>("/auth/login", { username, password });
+      localStorage.setItem(authStorageKey, JSON.stringify(result));
+      onLogin(result.user);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <article className="moduleCard">
-      <span>{title}</span>
-      <strong>{value}</strong>
+    <main className="loginShell">
+      <form className="loginCard" onSubmit={submit}>
+        <div className="loginBrand">
+          <span className="brandMark">B</span>
+          <h1>Bascula ERP</h1>
+          <p>
+            {mode === "bootstrap"
+              ? "Bienvenido. Crea el usuario administrador para comenzar."
+              : "Piladora de arroz · Inicia sesión para continuar"}
+          </p>
+        </div>
+
+        {error && <div className="loginError">{error}</div>}
+
+        {mode === "loading" ? (
+          <p className="loginHint">Conectando con el servidor…</p>
+        ) : (
+          <>
+            {mode === "bootstrap" && (
+              <label>
+                <span>Nombre completo</span>
+                <input
+                  type="text"
+                  placeholder="Ej: Stalyn Marín"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  required
+                  minLength={2}
+                  autoFocus
+                />
+              </label>
+            )}
+            <label>
+              <span>Usuario</span>
+              <input
+                type="text"
+                placeholder="usuario"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                required
+                minLength={2}
+                autoComplete="username"
+                autoFocus={mode === "login"}
+              />
+            </label>
+            <label>
+              <span>Clave</span>
+              <input
+                type="password"
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={4}
+                autoComplete={mode === "bootstrap" ? "new-password" : "current-password"}
+              />
+            </label>
+            <button className="primary" disabled={busy}>
+              {busy ? "Ingresando…" : mode === "bootstrap" ? "Crear administrador e ingresar" : "Ingresar"}
+            </button>
+            {mode === "bootstrap" && (
+              <p className="loginHint">Este paso solo aparece la primera vez, cuando aún no existen usuarios.</p>
+            )}
+          </>
+        )}
+      </form>
+    </main>
+  );
+}
+
+function Metric({
+  title,
+  value,
+  icon,
+  accent
+}: {
+  title: string;
+  value: string | number;
+  icon?: string;
+  accent?: "accBlue" | "accAmber" | "accRed" | "accGreen";
+}) {
+  return (
+    <article className={accent ? `moduleCard ${accent}` : "moduleCard"}>
+      <div className="mIcon">{icon ?? "📊"}</div>
+      <div>
+        <span>{title}</span>
+        <strong>{value}</strong>
+      </div>
     </article>
   );
 }
@@ -4473,18 +5155,19 @@ function Input({
   label,
   type = "text",
   defaultValue,
-  required = true
+  required = true,
+  ...rest
 }: {
   name: string;
   label: string;
   type?: string;
   defaultValue?: string;
   required?: boolean;
-}) {
+} & Omit<React.InputHTMLAttributes<HTMLInputElement>, "name" | "type" | "defaultValue" | "required">) {
   return (
     <label>
       <span>{label}</span>
-      <input name={name} type={type} step={type === "number" ? "0.01" : undefined} defaultValue={defaultValue} required={required} />
+      <input name={name} type={type} step={type === "number" ? "0.01" : undefined} defaultValue={defaultValue} required={required} {...rest} />
     </label>
   );
 }

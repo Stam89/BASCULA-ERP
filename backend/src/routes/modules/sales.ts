@@ -25,6 +25,7 @@ salesRouter.post("/", asyncRoute(async (req, res) => {
       product_id: z.string().uuid(),
       warehouse_id: z.string().uuid(),
       lot_id: z.string().uuid().optional(),
+      presentation_id: z.string().uuid().optional(),
       quantity: z.number().positive(),
       unit_price: z.number().nonnegative()
     })).min(1)
@@ -40,17 +41,30 @@ salesRouter.post("/", asyncRoute(async (req, res) => {
     );
 
     for (const item of body.items) {
+      // Si hay presentation_id, obtener el peso en lb y convertir quantity a QQ
+      let quantityQQ = item.quantity;
+      if (item.presentation_id) {
+        const presentation = await client.query(
+          `SELECT weight_lb FROM product_presentations WHERE id = $1`,
+          [item.presentation_id]
+        );
+        if (presentation.rows[0]) {
+          const weightLb = Number(presentation.rows[0].weight_lb);
+          quantityQQ = round2((item.quantity * weightLb) / 100); // Convertir a QQ
+        }
+      }
+
       const itemTotal = round2(item.quantity * item.unit_price);
       await client.query(
         `INSERT INTO sale_items (sale_id, product_id, lot_id, warehouse_id, quantity, unit_price, total)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [sale.rows[0].id, item.product_id, item.lot_id, item.warehouse_id, item.quantity, item.unit_price, itemTotal]
+        [sale.rows[0].id, item.product_id, item.lot_id, item.warehouse_id, quantityQQ, item.unit_price, itemTotal]
       );
       await client.query(
         `INSERT INTO inventory_movements
          (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by)
          VALUES ($1, $2, $3, 'OUT', $4, 'sales', $5, 'OWNED', $6)`,
-        [item.product_id, item.warehouse_id, item.lot_id, -item.quantity, sale.rows[0].id, body.created_by]
+        [item.product_id, item.warehouse_id, item.lot_id, -quantityQQ, sale.rows[0].id, body.created_by]
       );
 
       if (item.lot_id) {

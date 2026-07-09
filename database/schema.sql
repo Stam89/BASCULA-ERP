@@ -625,3 +625,15 @@ SELECT
 FROM farmer_advances
 WHERE status IN ('CONFIRMED', 'PARTIAL')
 GROUP BY farmer_id;
+
+-- Configuración general del negocio (fila única)
+CREATE TABLE IF NOT EXISTS app_settings (
+  id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  business_name VARCHAR(160) NOT NULL DEFAULT 'BASCULA ERP',
+  business_subtitle VARCHAR(160) NOT NULL DEFAULT 'Piladora de Arroz',
+  ruc VARCHAR(20) NOT NULL DEFAULT '',
+  phone VARCHAR(40) NOT NULL DEFAULT '',
+  address TEXT NOT NULL DEFAULT '',
+  receipt_footer TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

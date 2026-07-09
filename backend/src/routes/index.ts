@@ -18,14 +18,22 @@ import { weighingRouter } from "./modules/weighing-tickets.js";
 import { fomentosRouter } from "./modules/fomentos.js";
 import { sacksRouter } from "./modules/sacks.js";
 import { customersRouter } from "./modules/customers.js";
+import { productsRouter } from "./modules/products.js";
 import { receivableRouter } from "./modules/receivable.js";
 import { equipmentRouter } from "./modules/equipment.js";
+import { requireAuth } from "../auth/require-auth.js";
+import { settingsRouter } from "./modules/settings.js";
 
 export const routes = Router();
 
+// Rutas públicas: login/bootstrap y sincronización de la app Android (no envía token)
 routes.use("/auth", authRouter);
-routes.use("/dashboard", dashboardRouter);
 routes.use("/tickets", mobileTicketsRouter);
+
+// Todo lo demás requiere sesión (Bearer token)
+routes.use(requireAuth);
+
+routes.use("/dashboard", dashboardRouter);
 routes.use("/process-flow", processFlowRouter);
 routes.use("/catalogs", catalogsRouter);
 routes.use("/farmers", farmersRouter);
@@ -42,5 +50,7 @@ routes.use("/documents", documentsRouter);
 routes.use("/fomentos", fomentosRouter);
 routes.use("/sacks", sacksRouter);
 routes.use("/customers", customersRouter);
+routes.use("/products", productsRouter);
 routes.use("/receivable", receivableRouter);
 routes.use("/equipment", equipmentRouter);
+routes.use("/settings", settingsRouter);

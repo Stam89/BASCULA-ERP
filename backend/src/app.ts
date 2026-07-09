@@ -14,6 +14,12 @@ app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 app.use(morgan("dev"));
 
+// Asegurar charset UTF-8 en respuestas JSON
+app.use((req, res, next) => {
+  res.type("application/json; charset=utf-8");
+  next();
+});
+
 // Servir archivos estáticos (uploads)
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 

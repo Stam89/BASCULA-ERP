@@ -18,8 +18,16 @@ if (!fs.existsSync(uploadsDir)) {
 
 export const equipmentRouter = Router();
 
-// GET todos los equipos
+// GET todos los equipos (activos o en mantenimiento)
 equipmentRouter.get("/", asyncRoute(async (_req, res) => {
+  const result = await pool.query(
+    `SELECT * FROM equipment WHERE status != 'FUERA_SERVICIO' ORDER BY type, name`
+  );
+  res.json(result.rows);
+}));
+
+// GET todos los equipos (incluido FUERA_SERVICIO)
+equipmentRouter.get("/all", asyncRoute(async (_req, res) => {
   const result = await pool.query(
     `SELECT * FROM equipment ORDER BY type, name`
   );
@@ -40,7 +48,7 @@ equipmentRouter.get("/:id", asyncRoute(async (req, res) => {
 equipmentRouter.post("/", asyncRoute(async (req, res) => {
   const body = z.object({
     name: z.string().min(1),
-    type: z.enum(["PILADORA", "SECADORA", "OTRO"]),
+    type: z.enum(["PILADORA", "SECADORA", "MOTOR", "OTRO"]),
     branch_id: z.string().uuid().optional(),
     status: z.enum(["ACTIVA", "MANTENIMIENTO", "FUERA_SERVICIO"]).default("ACTIVA")
   }).parse(req.body);
@@ -221,4 +229,28 @@ equipmentRouter.get("/maintenance/all", asyncRoute(async (req, res) => {
      LIMIT 200`
   );
   res.json(result.rows);
+}));
+
+// DELETE equipo (con lógica inteligente)
+equipmentRouter.delete("/:id", asyncRoute(async (req, res) => {
+  const equip = await pool.query("SELECT * FROM equipment WHERE id = $1", [req.params.id]);
+  if (!equip.rows[0]) { res.status(404).json({ error: "Equipo no encontrado" }); return; }
+
+  const maintenance = await pool.query(
+    "SELECT id FROM equipment_maintenance WHERE equipment_id = $1 LIMIT 1",
+    [req.params.id]
+  );
+
+  if (maintenance.rows.length > 0) {
+    // Si hay mantenimiento, cambiar a FUERA_SERVICIO
+    const result = await pool.query(
+      "UPDATE equipment SET status = 'FUERA_SERVICIO' WHERE id = $1 RETURNING *",
+      [req.params.id]
+    );
+    res.json(result.rows[0]);
+  } else {
+    // Si no hay mantenimiento, eliminar completamente
+    await pool.query("DELETE FROM equipment WHERE id = $1", [req.params.id]);
+    res.json({ id: req.params.id, deleted: true });
+  }
 }));

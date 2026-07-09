@@ -1,7 +1,30 @@
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
 
+const authStorageKey = "bascula-erp:auth";
+
+function authHeaders(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(authStorageKey);
+    if (!raw) return {};
+    const token = (JSON.parse(raw) as { token?: string }).token;
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
+  }
+}
+
+function handleUnauthorized(response: Response) {
+  // Solo cerramos sesión si había una sesión guardada (un 401 en /auth/login
+  // por clave incorrecta no debe recargar la página).
+  if (response.status === 401 && localStorage.getItem(authStorageKey)) {
+    localStorage.removeItem(authStorageKey);
+    window.location.reload();
+  }
+}
+
 async function parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
+    handleUnauthorized(response);
     const text = await response.text();
     let message = text || `API error ${response.status}`;
     try {
@@ -15,15 +38,26 @@ async function parseResponse<T>(response: Response): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+/** fetch con token para llamadas que necesitan control manual de la respuesta. */
+export function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(`${API_URL}/api/v1${path}`, {
+    ...init,
+    headers: { ...authHeaders(), ...(init.headers ?? {}) }
+  }).then((response) => {
+    handleUnauthorized(response);
+    return response;
+  });
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_URL}/api/v1${path}`);
+  const response = await fetch(`${API_URL}/api/v1${path}`, { headers: authHeaders() });
   return parseResponse<T>(response);
 }
 
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(`${API_URL}/api/v1${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(body)
   });
   return parseResponse<T>(response);
@@ -32,7 +66,7 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
 export async function apiPut<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(`${API_URL}/api/v1${path}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(body)
   });
   return parseResponse<T>(response);
