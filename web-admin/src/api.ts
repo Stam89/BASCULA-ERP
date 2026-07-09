@@ -1,4 +1,8 @@
-const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
+// En desarrollo (Vite en :5173) apuntamos al backend en :4000.
+// En producción la web se sirve desde el propio backend, así que usamos rutas
+// relativas al mismo origen — esto permite entrar desde cualquier PC de la red
+// por http://IP-del-servidor:4000 sin configurar nada.
+const API_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "http://localhost:4000" : "");
 
 const authStorageKey = "bascula-erp:auth";
 
