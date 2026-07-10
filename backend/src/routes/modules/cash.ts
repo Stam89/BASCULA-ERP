@@ -3,9 +3,26 @@ import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
+import { ApiError } from "../../http/error-handler.js";
+import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import ExcelJS from "exceljs";
 
 export const cashRouter = Router();
+
+// Columnas para la anulación de movimientos (contra-asiento). Migración
+// automática en instalaciones existentes.
+let cashColsReady: Promise<void> | null = null;
+function ensureCashColumns(): Promise<void> {
+  if (!cashColsReady) {
+    cashColsReady = (async () => {
+      await pool.query(`ALTER TABLE cash_movements ADD COLUMN IF NOT EXISTS reversal_of UUID`);
+      await pool.query(`ALTER TABLE cash_movements ADD COLUMN IF NOT EXISTS reversed_at TIMESTAMPTZ`);
+      await pool.query(`ALTER TABLE cash_movements ADD COLUMN IF NOT EXISTS reversed_by UUID`);
+      await pool.query(`ALTER TABLE cash_movements ADD COLUMN IF NOT EXISTS reversed_reason TEXT`);
+    })();
+  }
+  return cashColsReady;
+}
 
 // ── Abrir caja ──────────────────────────────────────────────────────────────
 cashRouter.post("/registers/open", asyncRoute(async (req, res) => {
@@ -78,6 +95,41 @@ cashRouter.get("/registers/:id/movements", asyncRoute(async (req, res) => {
     [req.params.id]
   );
   res.json(result.rows);
+}));
+
+// ── Anular un movimiento (contra-asiento, solo administradores) ──────────────
+cashRouter.post("/movements/:id/reverse", requireAdmin, asyncRoute(async (req, res) => {
+  await ensureCashColumns();
+  const body = z.object({ reason: z.string().min(3) }).parse(req.body);
+  const user = (req as AuthenticatedRequest).user;
+
+  const result = await inTransaction(async (client) => {
+    const orig = await client.query("SELECT * FROM cash_movements WHERE id = $1 FOR UPDATE", [req.params.id]);
+    if (!orig.rows[0]) throw new ApiError(404, "Movimiento no encontrado");
+    const m = orig.rows[0];
+    if (m.reversal_of) throw new ApiError(400, "No se puede anular un contra-asiento.");
+    if (m.reversed_at) throw new ApiError(400, "Este movimiento ya fue anulado.");
+
+    // Movimiento opuesto que neutraliza el efecto en el saldo.
+    const opposite = m.movement === "INCOME" ? "EXPENSE" : "INCOME";
+    const reversal = await client.query(
+      `INSERT INTO cash_movements
+         (cash_register_id, movement, category, amount, description, reference_type, reference_id, reversal_of, created_by)
+       VALUES ($1, $2, $3, $4, $5, 'reversal', $6, $6, $7)
+       RETURNING *`,
+      [m.cash_register_id, opposite, m.category, m.amount,
+       `Anulación: ${body.reason} (mov. ${String(m.id).slice(0, 8)})`, m.id, user?.id ?? null]
+    );
+
+    await client.query(
+      `UPDATE cash_movements SET reversed_at = now(), reversed_by = $2, reversed_reason = $3 WHERE id = $1`,
+      [m.id, user?.id ?? null, body.reason]
+    );
+
+    return reversal.rows[0];
+  });
+
+  res.status(201).json(result);
 }));
 
 // ── Registrar movimiento manual (ingreso o egreso) ───────────────────────────

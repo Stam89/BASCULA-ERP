@@ -640,3 +640,9 @@ CREATE TABLE IF NOT EXISTS app_settings (
 
 -- Permisos por módulo para operadores (los administradores no tienen límite)
 ALTER TABLE users ADD COLUMN IF NOT EXISTS allowed_modules TEXT[] NOT NULL DEFAULT '{}';
+
+-- Anulación de movimientos de caja (contra-asiento con motivo y auditoría)
+ALTER TABLE cash_movements ADD COLUMN IF NOT EXISTS reversal_of UUID;
+ALTER TABLE cash_movements ADD COLUMN IF NOT EXISTS reversed_at TIMESTAMPTZ;
+ALTER TABLE cash_movements ADD COLUMN IF NOT EXISTS reversed_by UUID;
+ALTER TABLE cash_movements ADD COLUMN IF NOT EXISTS reversed_reason TEXT;

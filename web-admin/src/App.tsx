@@ -279,6 +279,9 @@ type CashMovement = {
   description: string | null;
   reference_type: string | null;
   created_at: string;
+  reversal_of?: string | null;
+  reversed_at?: string | null;
+  reversed_reason?: string | null;
 };
 
 type CashSummary = {
@@ -1133,6 +1136,22 @@ export function App() {
     setCashMovements(movements);
     setCashPayables(payables);
     setExpenses(expenseRows);
+  }
+
+  async function reverseCashMovement(m: CashMovement) {
+    const reason = window.prompt(
+      `Anular ${m.movement === "INCOME" ? "ingreso" : "egreso"} de ${money(Number(m.amount))}?\n\nEscribe el motivo (queda registrado y no se puede deshacer):`
+    );
+    if (reason === null) return;
+    if (reason.trim().length < 3) { addToast("El motivo debe tener al menos 3 caracteres", "error"); return; }
+    const registerId = dashboard.current_cash_register?.id;
+    try {
+      await apiPost(`/cash/movements/${m.id}/reverse`, { reason: reason.trim() });
+      addToast("Movimiento anulado (contra-asiento registrado)", "success");
+      if (registerId) await refreshCaja(registerId);
+    } catch (err) {
+      addToast(`No se pudo anular: ${err instanceof Error ? err.message : "error"}`, "error");
+    }
   }
 
   async function submitExpense(e: FormEvent<HTMLFormElement>) {
@@ -3749,11 +3768,15 @@ export function App() {
                               <th style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#374151" }}>Categoría</th>
                               <th style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#374151" }}>Descripción</th>
                               <th style={{ padding: "12px 16px", textAlign: "right", fontWeight: 700, color: "#374151" }}>Monto</th>
+                              {isAdmin && <th style={{ padding: "12px 16px", textAlign: "right", fontWeight: 700, color: "#374151" }} />}
                             </tr>
                           </thead>
                           <tbody>
-                            {cashMovements.map((m, idx) => (
-                              <tr key={m.id} style={{ borderBottom: "1px solid #e5e7eb", background: idx % 2 === 0 ? "white" : "#fafafa", transition: "background 0.2s" }}>
+                            {cashMovements.map((m, idx) => {
+                              const isReversed = !!m.reversed_at;
+                              const isReversal = !!m.reversal_of;
+                              return (
+                              <tr key={m.id} style={{ borderBottom: "1px solid #e5e7eb", background: isReversed ? "#fef2f2" : isReversal ? "#f5f3ff" : idx % 2 === 0 ? "white" : "#fafafa", opacity: isReversed ? 0.7 : 1 }}>
                                 <td style={{ padding: "12px 16px", color: "#6b7280" }}>
                                   {new Date(m.created_at).toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" })}
                                 </td>
@@ -3761,14 +3784,26 @@ export function App() {
                                   <span style={{ display: "inline-block", padding: "3px 8px", borderRadius: "4px", background: m.movement === "INCOME" ? "#dcfce7" : "#fee2e2", color: m.movement === "INCOME" ? "#16a34a" : "#dc2626", fontWeight: 600, fontSize: 11 }}>
                                     {m.movement === "INCOME" ? "⬆ Ingreso" : "⬇ Egreso"}
                                   </span>
+                                  {isReversed && <span className="chip bad" style={{ marginLeft: 6 }}>ANULADO</span>}
+                                  {isReversal && <span className="chip info" style={{ marginLeft: 6 }}>Anulación</span>}
                                 </td>
                                 <td style={{ padding: "12px 16px", color: "#6b7280" }}>{categoryLabel(m.category)}</td>
-                                <td style={{ padding: "12px 16px", color: "#6b7280" }}>{m.description ?? "—"}</td>
-                                <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 600, color: m.movement === "EXPENSE" ? "#dc2626" : "#16a34a" }}>
+                                <td style={{ padding: "12px 16px", color: "#6b7280" }}>
+                                  {m.description ?? "—"}
+                                  {isReversed && m.reversed_reason && <div style={{ fontSize: 11, color: "#b91c1c" }}>Motivo: {m.reversed_reason}</div>}
+                                </td>
+                                <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 600, color: m.movement === "EXPENSE" ? "#dc2626" : "#16a34a", textDecoration: isReversed ? "line-through" : "none" }}>
                                   {m.movement === "EXPENSE" ? "-" : "+"}{money(Number(m.amount))}
                                 </td>
+                                {isAdmin && (
+                                  <td style={{ padding: "8px 16px", textAlign: "right" }}>
+                                    {!isReversed && !isReversal && (
+                                      <button type="button" className="btnGhost" onClick={() => reverseCashMovement(m)}>Anular</button>
+                                    )}
+                                  </td>
+                                )}
                               </tr>
-                            ))}
+                            );})}
                           </tbody>
                         </table>
                       </div>
