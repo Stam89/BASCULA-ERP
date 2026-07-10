@@ -1140,6 +1140,28 @@ export function App() {
     apiGet<AppSettings>("/settings").then(setAppSettings).catch(() => undefined);
   }, [authUser]);
 
+  // Renueva la sesión mientras la app está en uso, para no cerrar sesión a media
+  // jornada. Al renovar se releen los permisos (y expulsa a usuarios desactivados).
+  useEffect(() => {
+    if (!authUser) return;
+    let cancelled = false;
+    async function renewSession() {
+      try {
+        const result = await apiPost<{ token: string; user: AuthUser }>("/auth/refresh", {});
+        if (cancelled) return;
+        localStorage.setItem(authStorageKey, JSON.stringify(result));
+        setAuthUser(result.user);
+      } catch {
+        // Un 401 lo maneja api.ts (cierra sesión). Otros errores se ignoran.
+      }
+    }
+    const interval = window.setInterval(renewSession, 30 * 60 * 1000); // cada 30 min
+    const onFocus = () => renewSession();
+    window.addEventListener("focus", onFocus);
+    return () => { cancelled = true; window.clearInterval(interval); window.removeEventListener("focus", onFocus); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUser?.id]);
+
   async function refreshCaja(registerId?: string) {
     const id = registerId ?? dashboard.current_cash_register?.id;
     if (!id) return;

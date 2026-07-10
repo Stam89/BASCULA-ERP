@@ -105,6 +105,34 @@ authRouter.put("/users/:id", requireAuth, requireAdmin, asyncRoute(async (req, r
   res.json(result.rows[0]);
 }));
 
+// Renueva el token de una sesión válida y devuelve el usuario actualizado
+// (aplica cambios de permisos y expulsa a usuarios desactivados).
+authRouter.post("/refresh", requireAuth, asyncRoute(async (req, res) => {
+  await ensureUserColumns();
+  const current = (req as AuthenticatedRequest).user;
+  if (!current) throw new ApiError(401, "Sesión requerida");
+
+  const result = await pool.query(
+    `SELECT u.id, u.username, u.name, u.role_id, u.allowed_modules, r.name AS role_name
+     FROM users u
+     LEFT JOIN roles r ON r.id = u.role_id
+     WHERE u.id = $1 AND u.is_active = true`,
+    [current.id]
+  );
+  if (!result.rowCount) throw new ApiError(401, "Usuario inactivo o no encontrado");
+
+  const user = result.rows[0];
+  const publicUser = {
+    id: user.id,
+    username: user.username,
+    name: user.name,
+    role_id: user.role_id,
+    role_name: user.role_name,
+    allowed_modules: user.allowed_modules ?? []
+  };
+  res.json({ token: signToken(publicUser), user: publicUser });
+}));
+
 authRouter.get("/status", asyncRoute(async (_req, res) => {
   const result = await pool.query("SELECT COUNT(*)::int AS count FROM users WHERE is_active = true");
   res.json({ has_users: result.rows[0].count > 0 });
