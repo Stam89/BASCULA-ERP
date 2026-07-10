@@ -560,6 +560,18 @@ const emptyDashboard: Dashboard = {
 export function App() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(() => loadStoredAuth());
   const [activeTab, setActiveTab] = useState("Dashboard");
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("bascula-erp:nav-collapsed") || "[]") as string[]); }
+    catch { return new Set(); }
+  });
+  function toggleGroup(label: string) {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label); else next.add(label);
+      localStorage.setItem("bascula-erp:nav-collapsed", JSON.stringify([...next]));
+      return next;
+    });
+  }
   const [apiOnline, setApiOnline] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -2854,17 +2866,25 @@ export function App() {
           {navGroups
             .map((group) => ({ ...group, tabs: group.tabs.filter((tab) => visibleTabs.includes(tab)) }))
             .filter((group) => group.tabs.length > 0)
-            .map((group) => (
-              <div className="navSection" key={group.label}>
-                <div className="navLabel">{group.label}</div>
-                {group.tabs.map((tab) => (
-                  <button className={activeTab === tab ? "active" : ""} key={tab} onClick={() => setActiveTab(tab)}>
-                    <NavIcon tab={tab} />
-                    {tab}
+            .map((group) => {
+              const collapsed = collapsedGroups.has(group.label);
+              const hasActive = group.tabs.includes(activeTab);
+              return (
+                <div className={collapsed ? "navSection collapsed" : "navSection"} key={group.label}>
+                  <button type="button" className="navLabel" onClick={() => toggleGroup(group.label)} aria-expanded={!collapsed}>
+                    <span>{group.label}</span>
+                    {collapsed && hasActive && <i className="navDot" />}
+                    <svg className="navChevron" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 4L5 6.5 7.5 4" /></svg>
                   </button>
-                ))}
-              </div>
-            ))}
+                  {!collapsed && group.tabs.map((tab) => (
+                    <button className={activeTab === tab ? "active" : ""} key={tab} onClick={() => setActiveTab(tab)}>
+                      <NavIcon tab={tab} />
+                      {tab}
+                    </button>
+                  ))}
+                </div>
+              );
+            })}
         </nav>
         <div className="sidebarFooter">
           <div className="userBox">

@@ -172,12 +172,40 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 }
 
 .navLabel {
-  padding: 0 8px 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  margin-bottom: 2px;
   color: var(--c-sidebar-muted);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.09em;
   text-transform: uppercase;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: color var(--t), background var(--t);
+}
+
+.navLabel:hover { color: var(--c-sidebar-text); background: var(--c-sidebar-hover); }
+.navLabel > span { flex: 1; text-align: left; }
+
+.navChevron {
+  flex-shrink: 0;
+  opacity: 0.7;
+  transition: transform var(--t);
+}
+.navSection.collapsed .navChevron { transform: rotate(-90deg); }
+
+.navDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--c-brand-light);
+  flex-shrink: 0;
 }
 
 
