@@ -125,13 +125,14 @@ type ReportSummary = {
   payable_outstanding: number;
 };
 
-type ReportKind = "resumen" | "ventas" | "liquidaciones" | "gastos" | "produccion";
+type ReportKind = "resumen" | "ventas" | "liquidaciones" | "gastos" | "produccion" | "porcobrar";
 
 const reportEndpoint: Record<Exclude<ReportKind, "resumen">, string> = {
   ventas: "sales",
   liquidaciones: "liquidations",
   gastos: "expenses",
-  produccion: "production"
+  produccion: "production",
+  porcobrar: "receivable-aging"
 };
 
 const authStorageKey = "bascula-erp:auth";
@@ -1330,6 +1331,16 @@ export function App() {
       const rows = (data.rows || []).map((r: any) => [new Date(r.created_at).toLocaleDateString("es-EC"), r.description, r.paid_to || "", m2(r.amount)]);
       const total = (data.rows || []).reduce((a: number, r: any) => a + r.amount, 0);
       return { title: "Gastos del período", headers: ["Fecha", "Descripción", "Pagado a", "Monto"], rows, totals: ["TOTAL", "", "", m2(total)] };
+    }
+    if (kind === "porcobrar") {
+      const rows = (data.rows || []).map((r: any) => [r.customer_name, r.phone || "", m2(r.b0), m2(r.b30), m2(r.b60), m2(r.b90), m2(r.total), r.oldest_days]);
+      const t = data.totals || { b0: 0, b30: 0, b60: 0, b90: 0, total: 0 };
+      return {
+        title: "Cuentas por cobrar por antigüedad",
+        headers: ["Cliente", "Teléfono", "0-30 días", "31-60", "61-90", "+90 días", "Total", "Antigüedad (días)"],
+        rows,
+        totals: ["TOTAL", "", m2(t.b0), m2(t.b30), m2(t.b60), m2(t.b90), m2(t.total), ""]
+      };
     }
     // produccion
     const rows = (data.rows || []).map((r: any) => [new Date(r.created_at).toLocaleDateString("es-EC"), r.batch_number, r.lot_code || "—", m2(r.input_qty), m2(r.output_qty), r.status]);
@@ -4932,26 +4943,32 @@ export function App() {
           <>
             <div className="reportToolbar">
               <div className="reportKinds">
-                {(["resumen", "ventas", "liquidaciones", "gastos", "produccion"] as const).map((k) => (
+                {(["resumen", "ventas", "liquidaciones", "gastos", "produccion", "porcobrar"] as const).map((k) => (
                   <button
                     key={k}
                     type="button"
                     className={reportKind === k ? "active" : ""}
                     onClick={() => { setReportKind(k); loadReport(k).catch(() => undefined); }}
                   >
-                    {k === "resumen" ? "📊 Resumen" : k === "ventas" ? "🛒 Ventas" : k === "liquidaciones" ? "🌾 Liquidaciones" : k === "gastos" ? "🧾 Gastos" : "⚙️ Producción"}
+                    {k === "resumen" ? "📊 Resumen" : k === "ventas" ? "🛒 Ventas" : k === "liquidaciones" ? "🌾 Liquidaciones" : k === "gastos" ? "🧾 Gastos" : k === "produccion" ? "⚙️ Producción" : "📈 Por cobrar"}
                   </button>
                 ))}
               </div>
               <div className="reportDates">
-                <label>
-                  <span>Desde</span>
-                  <input type="date" value={reportFrom} max={reportTo} onChange={(e) => setReportFrom(e.target.value)} />
-                </label>
-                <label>
-                  <span>Hasta</span>
-                  <input type="date" value={reportTo} min={reportFrom} onChange={(e) => setReportTo(e.target.value)} />
-                </label>
+                {reportKind === "porcobrar" ? (
+                  <span className="muted" style={{ alignSelf: "center" }}>Saldos al día de hoy</span>
+                ) : (
+                  <>
+                    <label>
+                      <span>Desde</span>
+                      <input type="date" value={reportFrom} max={reportTo} onChange={(e) => setReportFrom(e.target.value)} />
+                    </label>
+                    <label>
+                      <span>Hasta</span>
+                      <input type="date" value={reportTo} min={reportFrom} onChange={(e) => setReportTo(e.target.value)} />
+                    </label>
+                  </>
+                )}
                 <button type="button" className="primary" disabled={reportBusy} onClick={() => loadReport().catch(() => undefined)}>
                   {reportBusy ? "Generando…" : "Generar"}
                 </button>
@@ -5034,6 +5051,61 @@ export function App() {
                   rows={(reportRows.data.rows || []).map((r: any) => [new Date(r.created_at).toLocaleDateString("es-EC"), r.description, r.paid_to || "—", money(r.amount)])}
                   empty="Sin gastos en el período"
                 />
+              </div>
+            )}
+
+            {/* ── Cuentas por cobrar con antigüedad ── */}
+            {reportKind === "porcobrar" && reportRows?.kind === "porcobrar" && (
+              <div className="tablePanel">
+                <h2>Cuentas por cobrar por antigüedad</h2>
+                <p className="muted" style={{ marginTop: -4, marginBottom: 8 }}>Saldos pendientes al día de hoy. Los tramos indican hace cuánto se generó la deuda.</p>
+                {(reportRows.data.rows || []).length === 0 ? (
+                  <div className="emptyState" style={{ padding: "26px 20px" }}><p>No hay cuentas por cobrar pendientes 🎉</p></div>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table className="cajaTable" style={{ marginTop: 8 }}>
+                      <thead>
+                        <tr>
+                          <th>Cliente</th>
+                          <th>Teléfono</th>
+                          <th className="num">0-30 días</th>
+                          <th className="num">31-60</th>
+                          <th className="num">61-90</th>
+                          <th className="num">+90 días</th>
+                          <th className="num">Total</th>
+                          <th className="num">Antigüedad</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(reportRows.data.rows || []).map((r: any, i: number) => (
+                          <tr key={i}>
+                            <td>{r.customer_name}</td>
+                            <td>{r.phone || "—"}</td>
+                            <td className="num">{r.b0 > 0 ? money(r.b0) : "—"}</td>
+                            <td className="num">{r.b30 > 0 ? money(r.b30) : "—"}</td>
+                            <td className="num">{r.b60 > 0 ? money(r.b60) : "—"}</td>
+                            <td className="num" style={r.b90 > 0 ? { color: "var(--c-danger)", fontWeight: 700 } : undefined}>{r.b90 > 0 ? money(r.b90) : "—"}</td>
+                            <td className="num" style={{ fontWeight: 700 }}>{money(r.total)}</td>
+                            <td className="num">
+                              <span className={r.oldest_days > 90 ? "chip bad" : r.oldest_days > 60 ? "chip warn" : "chip ok"}>{r.oldest_days} d</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr>
+                          <td colSpan={2} style={{ fontWeight: 700 }}>TOTAL</td>
+                          <td className="num" style={{ fontWeight: 700 }}>{money(reportRows.data.totals.b0)}</td>
+                          <td className="num" style={{ fontWeight: 700 }}>{money(reportRows.data.totals.b30)}</td>
+                          <td className="num" style={{ fontWeight: 700 }}>{money(reportRows.data.totals.b60)}</td>
+                          <td className="num" style={{ fontWeight: 700, color: reportRows.data.totals.b90 > 0 ? "var(--c-danger)" : undefined }}>{money(reportRows.data.totals.b90)}</td>
+                          <td className="num" style={{ fontWeight: 700 }}>{money(reportRows.data.totals.total)}</td>
+                          <td />
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                )}
               </div>
             )}
 

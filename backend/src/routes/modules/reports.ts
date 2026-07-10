@@ -160,6 +160,36 @@ reportsRouter.get("/expenses", asyncRoute(async (req, res) => {
   res.json({ range: { from, to }, rows: list.rows, labor: labor.rows[0] });
 }));
 
+// ── Cuentas por cobrar con antigüedad (foto al día de hoy) ─────────────────
+reportsRouter.get("/receivable-aging", asyncRoute(async (_req, res) => {
+  const result = await pool.query(
+    `SELECT COALESCE(c.full_name, ar.description, 'Sin cliente') AS customer_name,
+            c.phone AS phone,
+            SUM(ar.balance)::float total,
+            MAX(CURRENT_DATE - ar.created_at::date)::int oldest_days,
+            SUM(CASE WHEN CURRENT_DATE - ar.created_at::date <= 30 THEN ar.balance ELSE 0 END)::float b0,
+            SUM(CASE WHEN CURRENT_DATE - ar.created_at::date BETWEEN 31 AND 60 THEN ar.balance ELSE 0 END)::float b30,
+            SUM(CASE WHEN CURRENT_DATE - ar.created_at::date BETWEEN 61 AND 90 THEN ar.balance ELSE 0 END)::float b60,
+            SUM(CASE WHEN CURRENT_DATE - ar.created_at::date > 90 THEN ar.balance ELSE 0 END)::float b90
+     FROM accounts_receivable ar
+     LEFT JOIN customers c ON c.id = ar.customer_id
+     WHERE ar.status IN ('CONFIRMED','PARTIAL') AND ar.balance > 0
+     GROUP BY 1, 2
+     ORDER BY total DESC`
+  );
+  const totals = result.rows.reduce(
+    (a, r) => ({
+      total: a.total + r.total,
+      b0: a.b0 + r.b0,
+      b30: a.b30 + r.b30,
+      b60: a.b60 + r.b60,
+      b90: a.b90 + r.b90
+    }),
+    { total: 0, b0: 0, b30: 0, b60: 0, b90: 0 }
+  );
+  res.json({ rows: result.rows, totals });
+}));
+
 // ── Producción del período ─────────────────────────────────────────────────
 reportsRouter.get("/production", asyncRoute(async (req, res) => {
   const { from, to } = parseRange(req.query);
