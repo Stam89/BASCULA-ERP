@@ -25,6 +25,7 @@ import { enforceModulePermissions, requireAuth } from "../auth/require-auth.js";
 import { settingsRouter } from "./modules/settings.js";
 import { auditRouter } from "./modules/audit.js";
 import { auditMiddleware } from "../audit/audit.js";
+import { reportsRouter } from "./modules/reports.js";
 
 export const routes = Router();
 
@@ -63,3 +64,4 @@ routes.use("/receivable", receivableRouter);
 routes.use("/equipment", equipmentRouter);
 routes.use("/settings", settingsRouter);
 routes.use("/audit", auditRouter);
+routes.use("/reports", reportsRouter);

@@ -114,6 +114,26 @@ type AuditEntry = {
   created_at: string;
 };
 
+type ReportSummary = {
+  range: { from: string; to: string };
+  sales: { total: number; cnt: number };
+  liquidations: { net: number; gross: number; cnt: number };
+  expenses: { total: number; cnt: number };
+  cash: { income: number; expense: number; net: number };
+  production: { input: number; cnt: number };
+  receivable_outstanding: number;
+  payable_outstanding: number;
+};
+
+type ReportKind = "resumen" | "ventas" | "liquidaciones" | "gastos" | "produccion";
+
+const reportEndpoint: Record<Exclude<ReportKind, "resumen">, string> = {
+  ventas: "sales",
+  liquidaciones: "liquidations",
+  gastos: "expenses",
+  produccion: "production"
+};
+
 const authStorageKey = "bascula-erp:auth";
 
 function loadStoredAuth(): AuthUser | null {
@@ -456,7 +476,7 @@ const navGroups: Array<{ label: string; tabs: string[] }> = [
   { label: "Operación", tabs: ["Bascula", "Secadoras", "Produccion", "Inventario"] },
   { label: "Comercial", tabs: ["Ventas", "Caja"] },
   { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores"] },
-  { label: "Sistema", tabs: ["Configuracion"] }
+  { label: "Sistema", tabs: ["Reportes", "Configuracion"] }
 ];
 const tabs = navGroups.flatMap((group) => group.tabs);
 
@@ -484,6 +504,8 @@ function NavIcon({ tab }: { tab: string }) {
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 14V8"/><path d="M5 11l3-3 3 3"/><path d="M2 14h12"/><path d="M4 8C4 5 6 2 8 2s4 3 4 6"/></svg>;
     case "Ventas":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 5h12M2 9h12"/><circle cx="8" cy="13" r="1"/><path d="M3 2h10v11H3z"/></svg>;
+    case "Reportes":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="12" height="12" rx="1.5"/><line x1="5" y1="11" x2="5" y2="8"/><line x1="8" y1="11" x2="8" y2="5"/><line x1="11" y1="11" x2="11" y2="7"/></svg>;
     case "Configuracion":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><line x1="2" y1="4" x2="14" y2="4"/><circle cx="6" cy="4" r="1.7" fill="currentColor" stroke="none"/><line x1="2" y1="8" x2="14" y2="8"/><circle cx="10.5" cy="8" r="1.7" fill="currentColor" stroke="none"/><line x1="2" y1="12" x2="14" y2="12"/><circle cx="5" cy="12" r="1.7" fill="currentColor" stroke="none"/></svg>;
     default:
@@ -600,6 +622,16 @@ export function App() {
   const [resetForm, setResetForm] = useState({ password: "", confirm: "" });
   const [backupInfo, setBackupInfo] = useState<{ directory: string; backups: Array<{ name: string; size_kb: number; created_at: string }> } | null>(null);
   const [backupBusy, setBackupBusy] = useState(false);
+
+  // ── Reportes ──────────────────────────────────────────────────────────────
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const firstOfMonthIso = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10);
+  const [reportKind, setReportKind] = useState<ReportKind>("resumen");
+  const [reportFrom, setReportFrom] = useState(firstOfMonthIso);
+  const [reportTo, setReportTo] = useState(todayIso);
+  const [reportSummary, setReportSummary] = useState<ReportSummary | null>(null);
+  const [reportRows, setReportRows] = useState<{ kind: ReportKind; data: any } | null>(null);
+  const [reportBusy, setReportBusy] = useState(false);
 
   // ── Fomentos ──────────────────────────────────────────────────────────────
   const [fomentos, setFomentos] = useState<Fomento[]>([]);
@@ -1161,7 +1193,7 @@ export function App() {
     const allowed = new Set(authUser.allowed_modules ?? []);
     return tabs.filter((tab) => {
       if (tab === "Dashboard") return true;
-      if (tab === "Configuracion") return false;
+      if (tab === "Configuracion" || tab === "Reportes") return false;
       return allowed.has(tab);
     });
   }, [authUser, isAdmin]);
@@ -1186,6 +1218,122 @@ export function App() {
       if (backups) setBackupInfo(backups);
       setAuditLog(audit);
     }
+  }
+
+  async function loadReport(kind: ReportKind = reportKind) {
+    setReportBusy(true);
+    try {
+      const qs = `?from=${reportFrom}&to=${reportTo}`;
+      if (kind === "resumen") {
+        const data = await apiGet<ReportSummary>(`/reports/summary${qs}`);
+        setReportSummary(data);
+        setReportRows({ kind, data });
+      } else {
+        const data = await apiGet<any>(`/reports/${reportEndpoint[kind]}${qs}`);
+        setReportRows({ kind, data });
+      }
+    } catch (e) {
+      addToast(`Error al generar reporte: ${e instanceof Error ? e.message : "desconocido"}`, "error");
+    } finally {
+      setReportBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (activeTab === "Reportes") loadReport("resumen").catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
+
+  function exportReportCsv(headers: string[], rows: (string | number)[][], filename: string) {
+    const escape = (v: string | number) => {
+      const s = String(v);
+      return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const csv = [headers, ...rows].map((r) => r.map(escape).join(";")).join("\r\n");
+    // BOM para que Excel abra los acentos correctamente.
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function printReport(title: string, headers: string[], rows: (string | number)[][], totalsRow?: (string | number)[]) {
+    const thead = headers.map((h) => `<th>${h}</th>`).join("");
+    const tbody = rows
+      .map((r) => `<tr>${r.map((c, i) => `<td class="${i === 0 ? "" : "num"}">${c}</td>`).join("")}</tr>`)
+      .join("");
+    const tfoot = totalsRow
+      ? `<tfoot><tr>${totalsRow.map((c, i) => `<td class="${i === 0 ? "" : "num"}">${c}</td>`).join("")}</tr></tfoot>`
+      : "";
+    const html = `<html><head><meta charset="utf-8"><title>${title}</title><style>
+      body{font-family:Arial,sans-serif;font-size:12px;margin:16mm}
+      h1{font-size:18px;margin:0 0 2px;text-align:center}
+      h2{font-size:13px;font-weight:normal;margin:0 0 2px;text-align:center;color:#555}
+      h3{font-size:14px;margin:14px 0 2px;text-align:center;text-transform:uppercase;letter-spacing:1px}
+      .range{text-align:center;color:#555;margin-bottom:12px;font-size:12px}
+      table{width:100%;border-collapse:collapse;margin-top:8px}
+      th{background:#0f766e;color:#fff;padding:6px 8px;text-align:left;font-size:11px;text-transform:uppercase}
+      td{padding:5px 8px;border-bottom:1px solid #ddd}
+      td.num,th{text-align:left}
+      td.num{text-align:right;font-variant-numeric:tabular-nums}
+      tfoot td{font-weight:bold;border-top:2px solid #111;background:#f0f0f0}
+      @media print{body{margin:10mm}}
+    </style></head><body>
+      <h1>${appSettings.business_name}</h1>
+      <h2>${[appSettings.business_subtitle, appSettings.ruc && `RUC: ${appSettings.ruc}`].filter(Boolean).join(" · ")}</h2>
+      <h3>${title}</h3>
+      <div class="range">Del ${reportFrom} al ${reportTo}</div>
+      <table><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody>${tfoot}</table>
+    </body></html>`;
+    const w = window.open("", "_blank", "width=820,height=640");
+    if (w) { w.document.write(html); w.document.close(); w.print(); }
+  }
+
+  function getReportExport(): { title: string; headers: string[]; rows: (string | number)[][]; totals?: (string | number)[] } | null {
+    if (!reportRows) return null;
+    const m2 = (n: number) => Number(n || 0).toFixed(2);
+    const { kind, data } = reportRows;
+    if (kind === "resumen") {
+      const s = data as ReportSummary;
+      return {
+        title: "Resumen del período",
+        headers: ["Concepto", "Valor"],
+        rows: [
+          ["Ventas del período", m2(s.sales.total)],
+          ["N.º de ventas", s.sales.cnt],
+          ["Liquidaciones (neto)", m2(s.liquidations.net)],
+          ["Liquidaciones (bruto)", m2(s.liquidations.gross)],
+          ["Gastos", m2(s.expenses.total)],
+          ["Caja · ingresos", m2(s.cash.income)],
+          ["Caja · egresos", m2(s.cash.expense)],
+          ["Caja · neto", m2(s.cash.net)],
+          ["Procesos de producción", s.production.cnt],
+          ["Por cobrar (saldo actual)", m2(s.receivable_outstanding)],
+          ["Por pagar (saldo actual)", m2(s.payable_outstanding)]
+        ]
+      };
+    }
+    if (kind === "ventas") {
+      const rows = (data.by_product || []).map((r: any) => [r.name, r.qty, m2(r.total)]);
+      const total = (data.by_product || []).reduce((a: number, r: any) => a + r.total, 0);
+      return { title: "Ventas por producto", headers: ["Producto", "Cantidad", "Total"], rows, totals: ["TOTAL", "", m2(total)] };
+    }
+    if (kind === "liquidaciones") {
+      const rows = (data.rows || []).map((r: any) => [r.full_name, r.cnt, m2(r.qq), m2(r.gross), m2(r.discounts), m2(r.net)]);
+      const t = (data.rows || []).reduce((a: any, r: any) => ({ qq: a.qq + r.qq, gross: a.gross + r.gross, disc: a.disc + r.discounts, net: a.net + r.net }), { qq: 0, gross: 0, disc: 0, net: 0 });
+      return { title: "Liquidaciones por agricultor", headers: ["Agricultor", "N.º", "Quintales", "Bruto", "Descuentos", "Neto"], rows, totals: ["TOTAL", "", m2(t.qq), m2(t.gross), m2(t.disc), m2(t.net)] };
+    }
+    if (kind === "gastos") {
+      const rows = (data.rows || []).map((r: any) => [new Date(r.created_at).toLocaleDateString("es-EC"), r.description, r.paid_to || "", m2(r.amount)]);
+      const total = (data.rows || []).reduce((a: number, r: any) => a + r.amount, 0);
+      return { title: "Gastos del período", headers: ["Fecha", "Descripción", "Pagado a", "Monto"], rows, totals: ["TOTAL", "", "", m2(total)] };
+    }
+    // produccion
+    const rows = (data.rows || []).map((r: any) => [new Date(r.created_at).toLocaleDateString("es-EC"), r.batch_number, r.lot_code || "—", m2(r.input_qty), m2(r.output_qty), r.status]);
+    return { title: "Producción del período", headers: ["Fecha", "Lote/Proceso", "Lote", "Entrada", "Salida", "Estado"], rows };
   }
 
   async function runBackupNow() {
@@ -4780,6 +4928,129 @@ export function App() {
           </section>
         )}
 
+        {activeTab === "Reportes" && (
+          <>
+            <div className="reportToolbar">
+              <div className="reportKinds">
+                {(["resumen", "ventas", "liquidaciones", "gastos", "produccion"] as const).map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    className={reportKind === k ? "active" : ""}
+                    onClick={() => { setReportKind(k); loadReport(k).catch(() => undefined); }}
+                  >
+                    {k === "resumen" ? "📊 Resumen" : k === "ventas" ? "🛒 Ventas" : k === "liquidaciones" ? "🌾 Liquidaciones" : k === "gastos" ? "🧾 Gastos" : "⚙️ Producción"}
+                  </button>
+                ))}
+              </div>
+              <div className="reportDates">
+                <label>
+                  <span>Desde</span>
+                  <input type="date" value={reportFrom} max={reportTo} onChange={(e) => setReportFrom(e.target.value)} />
+                </label>
+                <label>
+                  <span>Hasta</span>
+                  <input type="date" value={reportTo} min={reportFrom} onChange={(e) => setReportTo(e.target.value)} />
+                </label>
+                <button type="button" className="primary" disabled={reportBusy} onClick={() => loadReport().catch(() => undefined)}>
+                  {reportBusy ? "Generando…" : "Generar"}
+                </button>
+              </div>
+              {reportRows && reportKind !== "resumen" && (
+                <div className="reportExportBtns">
+                  <button type="button" className="btnSecondary" onClick={() => { const e = getReportExport(); if (e) printReport(e.title, e.headers, e.rows, e.totals); }}>🖨 Imprimir</button>
+                  <button type="button" className="btnSecondary" onClick={() => { const e = getReportExport(); if (e) exportReportCsv(e.headers, e.rows, `${reportKind}_${reportFrom}_${reportTo}.csv`); }}>📥 Excel</button>
+                </div>
+              )}
+            </div>
+
+            {/* ── Resumen ── */}
+            {reportKind === "resumen" && reportSummary && (
+              <section className="moduleGrid">
+                <Metric title="Ventas del período" value={money(reportSummary.sales.total)} icon="🛒" accent="accGreen" />
+                <Metric title="Liquidaciones (neto)" value={money(reportSummary.liquidations.net)} icon="🌾" accent="accBlue" />
+                <Metric title="Gastos" value={money(reportSummary.expenses.total)} icon="🧾" accent="accAmber" />
+                <Metric title="Caja · neto" value={money(reportSummary.cash.net)} icon="💰" accent={reportSummary.cash.net >= 0 ? "accGreen" : "accRed"} />
+                <Metric title="Ventas realizadas" value={reportSummary.sales.cnt} icon="📋" />
+                <Metric title="Procesos producción" value={reportSummary.production.cnt} icon="⚙️" accent="accBlue" />
+                <Metric title="Por cobrar (saldo)" value={money(reportSummary.receivable_outstanding)} icon="📈" accent="accAmber" />
+                <Metric title="Por pagar (saldo)" value={money(reportSummary.payable_outstanding)} icon="📑" accent="accRed" />
+              </section>
+            )}
+
+            {/* ── Ventas ── */}
+            {reportKind === "ventas" && reportRows?.kind === "ventas" && (
+              <div className="reportGrid">
+                <div className="tablePanel">
+                  <h2>Ventas por producto</h2>
+                  <ReportTable
+                    headers={["Producto", "Cantidad", "Total"]}
+                    rows={(reportRows.data.by_product || []).map((r: any) => [r.name, Number(r.qty).toFixed(2), money(r.total)])}
+                    empty="Sin ventas en el período"
+                  />
+                </div>
+                <div className="tablePanel">
+                  <h2>Ventas por cliente</h2>
+                  <ReportTable
+                    headers={["Cliente", "N.º", "Total"]}
+                    rows={(reportRows.data.by_customer || []).map((r: any) => [r.name, r.cnt, money(r.total)])}
+                    empty="Sin ventas en el período"
+                  />
+                </div>
+                <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+                  <h2>Ventas por día</h2>
+                  <ReportTable
+                    headers={["Fecha", "N.º ventas", "Total"]}
+                    rows={(reportRows.data.daily || []).map((r: any) => [new Date(r.d).toLocaleDateString("es-EC"), r.cnt, money(r.total)])}
+                    empty="Sin ventas en el período"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* ── Liquidaciones ── */}
+            {reportKind === "liquidaciones" && reportRows?.kind === "liquidaciones" && (
+              <div className="tablePanel">
+                <h2>Liquidaciones por agricultor</h2>
+                <ReportTable
+                  headers={["Agricultor", "N.º", "Quintales", "Bruto", "Descuentos", "Neto"]}
+                  rows={(reportRows.data.rows || []).map((r: any) => [r.full_name, r.cnt, Number(r.qq).toFixed(2), money(r.gross), money(r.discounts), money(r.net)])}
+                  empty="Sin liquidaciones en el período"
+                />
+              </div>
+            )}
+
+            {/* ── Gastos ── */}
+            {reportKind === "gastos" && reportRows?.kind === "gastos" && (
+              <div className="tablePanel">
+                <h2>Gastos del período</h2>
+                {reportRows.data.labor?.total > 0 && (
+                  <div className="alertBox" style={{ marginBottom: 10 }}>
+                    Pagos de cuadrilla en el período: {money(reportRows.data.labor.total)} ({reportRows.data.labor.cnt})
+                  </div>
+                )}
+                <ReportTable
+                  headers={["Fecha", "Descripción", "Pagado a", "Monto"]}
+                  rows={(reportRows.data.rows || []).map((r: any) => [new Date(r.created_at).toLocaleDateString("es-EC"), r.description, r.paid_to || "—", money(r.amount)])}
+                  empty="Sin gastos en el período"
+                />
+              </div>
+            )}
+
+            {/* ── Producción ── */}
+            {reportKind === "produccion" && reportRows?.kind === "produccion" && (
+              <div className="tablePanel">
+                <h2>Producción del período</h2>
+                <ReportTable
+                  headers={["Fecha", "Lote/Proceso", "Lote", "Entrada", "Salida", "Estado"]}
+                  rows={(reportRows.data.rows || []).map((r: any) => [new Date(r.created_at).toLocaleDateString("es-EC"), r.batch_number, r.lot_code || "—", Number(r.input_qty).toFixed(2), Number(r.output_qty).toFixed(2), r.status])}
+                  empty="Sin producción registrada en el período"
+                />
+              </div>
+            )}
+          </>
+        )}
+
         {activeTab === "Configuracion" && (
           <>
             <nav className="cajaSubNav">
@@ -5355,6 +5626,26 @@ function Metric({
         <strong>{value}</strong>
       </div>
     </article>
+  );
+}
+
+function ReportTable({ headers, rows, empty }: { headers: string[]; rows: (string | number)[][]; empty: string }) {
+  if (!rows || rows.length === 0) {
+    return <div className="emptyState" style={{ padding: "26px 20px" }}><p>{empty}</p></div>;
+  }
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table className="cajaTable" style={{ marginTop: 8 }}>
+        <thead>
+          <tr>{headers.map((h, i) => <th key={i} className={i === 0 ? "" : "num"}>{h}</th>)}</tr>
+        </thead>
+        <tbody>
+          {rows.map((r, ri) => (
+            <tr key={ri}>{r.map((c, ci) => <td key={ci} className={ci === 0 ? "" : "num"}>{c}</td>)}</tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
