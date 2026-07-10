@@ -26,6 +26,7 @@ import { settingsRouter } from "./modules/settings.js";
 import { auditRouter } from "./modules/audit.js";
 import { auditMiddleware } from "../audit/audit.js";
 import { reportsRouter } from "./modules/reports.js";
+import { laborRouter } from "./modules/labor.js";
 
 export const routes = Router();
 
@@ -65,3 +66,4 @@ routes.use("/equipment", equipmentRouter);
 routes.use("/settings", settingsRouter);
 routes.use("/audit", auditRouter);
 routes.use("/reports", reportsRouter);
+routes.use("/labor", laborRouter);

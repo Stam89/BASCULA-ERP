@@ -6,6 +6,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
 import { createLotProcessReport } from "../../utils/process-reports.js";
 import { round2 } from "../../utils/rice-formulas.js";
+import { createProductionWorkerPayments } from "./labor.js";
 
 export const processingRouter = Router();
 
@@ -377,6 +378,22 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
        WHERE id = $1 RETURNING *`,
       [processingBatchId, body.pilador_name ?? null, body.estibador_name ?? null]
     );
+
+    // Nómina: calcula automáticamente el pago del pilador y estibador de esta
+    // pilada según las tarifas vigentes y lo deja pendiente de pago.
+    const arrocilloQq = round3(
+      (body.broken_rice ? outputToQq(body.broken_rice) : 0) +
+      (body.fine_broken_rice ? outputToQq(body.fine_broken_rice) : 0)
+    );
+    await createProductionWorkerPayments(client, {
+      batchId: processingBatchId,
+      piladorName: updatedBatch.rows[0].pilador_name,
+      estibadorName: updatedBatch.rows[0].estibador_name,
+      qq: processedQq,
+      sacas: sacksUsed,
+      arrocillo: arrocilloQq,
+      createdBy: body.created_by ?? null
+    });
 
     if (batch.drying_report_id) {
       await client.query(
