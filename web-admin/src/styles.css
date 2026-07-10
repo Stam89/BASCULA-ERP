@@ -1823,6 +1823,69 @@ input[type="datetime-local"] { height: 36px; }
   font-weight: 700;
 }
 
+/* ── Cuentas por cobrar / por pagar ───────────────────────────── */
+.cuentasLayout { display: flex; flex-direction: column; gap: 14px; }
+
+.cuentasHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.cuentasTotal {
+  display: grid;
+  gap: 2px;
+  padding: 12px 18px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-xs);
+  text-align: right;
+  min-width: 190px;
+}
+.cuentasTotal span { color: var(--c-text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
+.cuentasTotal strong { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; font-variant-numeric: tabular-nums; }
+.cuentasTotal.cobrar strong { color: var(--c-success); }
+.cuentasTotal.pagar strong { color: var(--c-danger); }
+
+.cuentasGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.cuentaCard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-xs);
+  border-left: 4px solid var(--c-border-strong);
+  transition: box-shadow var(--t);
+}
+.cuentaCard:hover { box-shadow: var(--shadow-sm); }
+.cuentaCard.cobrar { border-left-color: var(--c-success); }
+.cuentaCard.pagar { border-left-color: var(--c-danger); }
+
+.cuentaTop { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.cuentaLabel { display: block; color: var(--c-text-muted); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+.cuentaTop strong { font-size: 14.5px; font-weight: 700; color: var(--c-text); }
+.cuentaRef { color: var(--c-text-muted); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+
+.cuentaAmounts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cuentaAmounts > div { display: grid; gap: 1px; }
+.cuentaAmounts span { color: var(--c-text-muted); font-size: 11px; }
+.cuentaAmounts b { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.cuentaAmounts b.pend { color: var(--c-danger); }
+
+.cuentaBar { height: 5px; border-radius: 999px; background: var(--c-surface-3); overflow: hidden; }
+.cuentaBar > div { height: 100%; background: var(--c-success); border-radius: 999px; transition: width 0.3s; }
+
 /* ── Reportes ─────────────────────────────────────────────────── */
 .reportToolbar {
   display: flex;

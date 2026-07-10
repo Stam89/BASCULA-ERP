@@ -479,6 +479,7 @@ const navGroups: Array<{ label: string; tabs: string[] }> = [
   { label: "Principal", tabs: ["Dashboard"] },
   { label: "Operación", tabs: ["Bascula", "Secadoras", "Produccion", "Inventario"] },
   { label: "Comercial", tabs: ["Ventas", "Caja"] },
+  { label: "Cuentas", tabs: ["Por Cobrar", "Por Pagar"] },
   { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores"] },
   { label: "Sistema", tabs: ["Reportes", "Configuracion"] }
 ];
@@ -508,6 +509,10 @@ function NavIcon({ tab }: { tab: string }) {
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 14V8"/><path d="M5 11l3-3 3 3"/><path d="M2 14h12"/><path d="M4 8C4 5 6 2 8 2s4 3 4 6"/></svg>;
     case "Ventas":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 5h12M2 9h12"/><circle cx="8" cy="13" r="1"/><path d="M3 2h10v11H3z"/></svg>;
+    case "Por Cobrar":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 4h12v8H2z"/><circle cx="8" cy="8" r="2"/><path d="M13 6.5l1.5-1.5M3 9.5L1.5 11"/><path d="M8 1.5V3M8 13v1.5"/></svg>;
+    case "Por Pagar":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 4h12v8H2z"/><path d="M5 8h6M5 8l2-2M5 8l2 2"/></svg>;
     case "Reportes":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="12" height="12" rx="1.5"/><line x1="5" y1="11" x2="5" y2="8"/><line x1="8" y1="11" x2="8" y2="5"/><line x1="11" y1="11" x2="11" y2="7"/></svg>;
     case "Configuracion":
@@ -1214,6 +1219,7 @@ export function App() {
     return tabs.filter((tab) => {
       if (tab === "Dashboard") return true;
       if (tab === "Configuracion" || tab === "Reportes") return false;
+      if (tab === "Por Cobrar" || tab === "Por Pagar") return allowed.has("Caja") || allowed.has("Ventas");
       return allowed.has(tab);
     });
   }, [authUser, isAdmin]);
@@ -1476,6 +1482,17 @@ export function App() {
     setAccountsReceivable(ar.filter(a => a.status !== "PAID"));
   }
 
+  // Cargas ligeras para las pestañas de Cuentas (no requieren caja abierta).
+  async function refreshReceivables() {
+    const ar = await apiGet<AccountsReceivable[]>("/receivable");
+    setAccountsReceivable(ar.filter((a) => a.status !== "PAID"));
+  }
+
+  async function refreshPayables() {
+    const ap = await apiGet<AccountPayable[]>("/cash/payables");
+    setCashPayables(ap);
+  }
+
   async function submitNewCustomer(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!newCustomerForm.full_name) { addToast("Ingresa nombre del cliente", "error"); return; }
@@ -1678,6 +1695,8 @@ export function App() {
     if (activeTab === "Produccion") refreshSacks().catch(() => undefined);
     if (activeTab === "Inventario") refreshSacks().catch(() => undefined);
     if (activeTab === "Ventas") refreshCustomersAndSales().catch(() => undefined);
+    if (activeTab === "Por Cobrar") refreshReceivables().catch(() => undefined);
+    if (activeTab === "Por Pagar") refreshPayables().catch(() => undefined);
     if (activeTab === "Configuracion") refreshConfig().catch(() => undefined);
   }, [activeTab]);
 
@@ -3596,51 +3615,7 @@ export function App() {
               </div>
             )}
 
-            {/* Cuentas por cobrar pendientes */}
-            {accountsReceivable.length > 0 && (
-              <div style={{ gridColumn: "1 / -1", border: "1px solid #fee2e2", borderRadius: 10, padding: 16, background: "#fef2f2" }}>
-                <h3 style={{ marginTop: 0, marginBottom: 12, color: "#dc2626" }}>💰 Cuentas por Cobrar Pendientes</h3>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
-                  {accountsReceivable.map(ar => (
-                    <div key={ar.id} style={{ border: "1px solid #fecaca", borderRadius: 8, padding: 12, background: "#fff" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                        <div>
-                          <div style={{ fontSize: 11, color: "var(--c-muted)", fontWeight: 600 }}>Cliente</div>
-                          <div style={{ fontSize: 14, fontWeight: 700 }}>{ar.customer_name}</div>
-                        </div>
-                        <div style={{ textAlign: "right" }}>
-                          <div style={{ fontSize: 11, color: "var(--c-muted)", fontWeight: 600 }}>Venta</div>
-                          <div style={{ fontSize: 12, fontWeight: 700 }}>{ar.sale_number}</div>
-                        </div>
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10, fontSize: 11, textAlign: "center" }}>
-                        <div>
-                          <div style={{ color: "var(--c-muted)" }}>Monto total</div>
-                          <div style={{ fontSize: 14, fontWeight: 700 }}>${Number(ar.amount).toFixed(2)}</div>
-                        </div>
-                        <div>
-                          <div style={{ color: "var(--c-muted)" }}>Saldo pendiente</div>
-                          <div style={{ fontSize: 14, fontWeight: 700, color: "#dc2626" }}>${Number(ar.balance).toFixed(2)}</div>
-                        </div>
-                      </div>
-                      <form onSubmit={async (e) => {
-                        e.preventDefault();
-                        const amt = prompt(`Cobrar hasta $${Number(ar.balance).toFixed(2)}:`, Number(ar.balance).toFixed(2));
-                        if (amt) await payAccountReceivable(ar.id, Number(amt)).catch(e => setMessage(e.message));
-                      }} style={{ display: "flex", gap: 6 }}>
-                        <input type="hidden" />
-                        <button type="submit" style={{
-                          flex: 1, padding: "6px 10px", borderRadius: 6, border: "none", cursor: "pointer",
-                          background: "#16a34a", color: "#fff", fontWeight: 700, fontSize: 12
-                        }}>
-                          💵 Cobrar
-                        </button>
-                      </form>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            {/* Las cuentas por cobrar se administran en la pestaña "Por Cobrar" (grupo Cuentas). */}
           </section>
         )}
 
@@ -3711,7 +3686,7 @@ export function App() {
 
                 {/* Sub-tabs profesional */}
                 <nav className="cajaSubNav">
-                  {(["resumen", "venta_detalle", "anticipo", "movimiento", "gastos", "sacos", "mantenimiento", "cuentas", "fomentos"] as const).map((t) => {
+                  {(["resumen", "venta_detalle", "anticipo", "movimiento", "gastos", "sacos", "mantenimiento", "fomentos"] as const).map((t) => {
                     const icons = {
                       resumen: "📋",
                       anticipo: "💸",
@@ -4218,55 +4193,7 @@ export function App() {
                   </form>
                 )}
 
-                {/* ── Cuentas por pagar ── */}
-                {cajaSubTab === "cuentas" && (
-                  <div>
-                    {cashPayables.length === 0 ? (
-                      <div style={{ background: "white", borderRadius: "10px", border: "1px solid #e5e7eb", padding: "40px 20px", textAlign: "center", color: "#9ca3af" }}>
-                        <div style={{ fontSize: 32, marginBottom: 12 }}>✓</div>
-                        <p style={{ margin: 0, fontSize: 14 }}>No hay cuentas por pagar pendientes</p>
-                      </div>
-                    ) : (
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(350px, 1fr))", gap: 16 }}>
-                        {cashPayables.map((ap) => {
-                          const percentPaid = ((Number(ap.amount) - Number(ap.balance)) / Number(ap.amount)) * 100;
-                          return (
-                            <article key={ap.id} style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: "10px", padding: "16px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
-                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 12 }}>
-                                <div>
-                                  <strong style={{ fontSize: 14, display: "block", marginBottom: 2 }}>{ap.farmer_name}</strong>
-                                  <small style={{ color: "#6b7280", fontSize: 11 }}>{ap.liquidation_number ? `Liq. ${ap.liquidation_number}` : "Sin liquidación asociada"}</small>
-                                </div>
-                                <span style={{ background: "#dbeafe", color: "#1e40af", padding: "3px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
-                                  {percentPaid.toFixed(0)}%
-                                </span>
-                              </div>
-
-                              <div style={{ background: "#f9fafb", padding: "12px", borderRadius: 6, marginBottom: 12 }}>
-                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12 }}>
-                                  <div>
-                                    <div style={{ color: "#6b7280", fontSize: 10, marginBottom: 2 }}>Total</div>
-                                    <div style={{ fontWeight: 700, color: "#374151" }}>{money(Number(ap.amount))}</div>
-                                  </div>
-                                  <div>
-                                    <div style={{ color: "#6b7280", fontSize: 10, marginBottom: 2 }}>Pendiente</div>
-                                    <div style={{ fontWeight: 700, color: "#dc2626" }}>{money(Number(ap.balance))}</div>
-                                  </div>
-                                </div>
-                                <div style={{ background: "#e5e7eb", height: 4, borderRadius: 2, marginTop: 8, overflow: "hidden" }}>
-                                  <div style={{ background: "#10b981", height: "100%", width: `${percentPaid}%`, transition: "width 0.3s" }} />
-                                </div>
-                              </div>
-
-                              <PayablePayForm payable={ap}
-                                onPay={(amount) => pagarCuenta(ap.id, amount).catch((e) => addToast(e.message, "error"))} />
-                            </article>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )}
+                {/* Las cuentas por pagar se administran en la pestaña "Por Pagar" (grupo Cuentas). */}
 
                 {cajaSubTab === "fomentos" && (
                   <div className="cajaMovimientosPanel">
@@ -4971,6 +4898,99 @@ export function App() {
                 )}
               </div>
             </div>
+          </section>
+        )}
+
+        {activeTab === "Por Cobrar" && (
+          <section className="cuentasLayout">
+            <div className="cuentasHeader">
+              <div>
+                <h2 style={{ marginBottom: 2 }}>💵 Cuentas por cobrar</h2>
+                <p className="muted" style={{ margin: 0 }}>Clientes que deben dinero por ventas a crédito.</p>
+              </div>
+              <div className="cuentasTotal cobrar">
+                <span>Total por cobrar</span>
+                <strong>{money(accountsReceivable.reduce((a, r) => a + Number(r.balance), 0))}</strong>
+              </div>
+            </div>
+            {!dashboard.current_cash_register && (
+              <div className="alertBox">Abre una caja para poder registrar cobros.</div>
+            )}
+            {accountsReceivable.length === 0 ? (
+              <div className="emptyState"><div className="emptyIcon">✅</div><p>No hay cuentas por cobrar pendientes</p></div>
+            ) : (
+              <div className="cuentasGrid">
+                {accountsReceivable.map((ar) => (
+                  <article key={ar.id} className="cuentaCard cobrar">
+                    <div className="cuentaTop">
+                      <div>
+                        <span className="cuentaLabel">Cliente</span>
+                        <strong>{ar.customer_name}</strong>
+                      </div>
+                      <span className="cuentaRef">{ar.sale_number || ""}</span>
+                    </div>
+                    <div className="cuentaAmounts">
+                      <div><span>Monto total</span><b>{money(Number(ar.amount))}</b></div>
+                      <div><span>Saldo pendiente</span><b className="pend">{money(Number(ar.balance))}</b></div>
+                    </div>
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={() => {
+                        const amt = prompt(`Cobrar hasta ${money(Number(ar.balance))}:`, Number(ar.balance).toFixed(2));
+                        if (amt) payAccountReceivable(ar.id, Number(amt)).catch((e) => addToast(e.message, "error"));
+                      }}
+                    >
+                      💵 Registrar cobro
+                    </button>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {activeTab === "Por Pagar" && (
+          <section className="cuentasLayout">
+            <div className="cuentasHeader">
+              <div>
+                <h2 style={{ marginBottom: 2 }}>📑 Cuentas por pagar</h2>
+                <p className="muted" style={{ margin: 0 }}>Dinero que se debe a agricultores por liquidaciones.</p>
+              </div>
+              <div className="cuentasTotal pagar">
+                <span>Total por pagar</span>
+                <strong>{money(cashPayables.reduce((a, p) => a + Number(p.balance), 0))}</strong>
+              </div>
+            </div>
+            {!dashboard.current_cash_register && (
+              <div className="alertBox">Abre una caja para poder registrar pagos.</div>
+            )}
+            {cashPayables.length === 0 ? (
+              <div className="emptyState"><div className="emptyIcon">✅</div><p>No hay cuentas por pagar pendientes</p></div>
+            ) : (
+              <div className="cuentasGrid">
+                {cashPayables.map((ap) => {
+                  const percentPaid = ((Number(ap.amount) - Number(ap.balance)) / Number(ap.amount)) * 100;
+                  return (
+                    <article key={ap.id} className="cuentaCard pagar">
+                      <div className="cuentaTop">
+                        <div>
+                          <span className="cuentaLabel">Agricultor</span>
+                          <strong>{ap.farmer_name}</strong>
+                        </div>
+                        <span className="cuentaRef">{ap.liquidation_number ? `Liq. ${ap.liquidation_number}` : ""}</span>
+                      </div>
+                      <div className="cuentaAmounts">
+                        <div><span>Total</span><b>{money(Number(ap.amount))}</b></div>
+                        <div><span>Pendiente</span><b className="pend">{money(Number(ap.balance))}</b></div>
+                      </div>
+                      <div className="cuentaBar"><div style={{ width: `${percentPaid}%` }} /></div>
+                      <PayablePayForm payable={ap} onPay={(amount) => pagarCuenta(ap.id, amount).catch((e) => addToast(e.message, "error"))} />
+                    </article>
+                  );
+                })}
+              </div>
+            )}
           </section>
         )}
 
