@@ -125,6 +125,40 @@ type ReportSummary = {
   payable_outstanding: number;
 };
 
+type LaborRates = {
+  pilador_per_qq: number;
+  pilador_per_saca: number;
+  estibador_per_qq: number;
+  estibador_per_saca: number;
+  estibador_per_arrocillo: number;
+  secador_guardiania: number;
+  secador_per_tunel: number;
+};
+
+const defaultLaborRates: LaborRates = {
+  pilador_per_qq: 0.15,
+  pilador_per_saca: 0.15,
+  estibador_per_qq: 0.1,
+  estibador_per_saca: 0.25,
+  estibador_per_arrocillo: 0.1,
+  secador_guardiania: 10,
+  secador_per_tunel: 5
+};
+
+type WorkerSummary = {
+  worker_role: string;
+  worker_name: string;
+  cnt: number;
+  qq: number;
+  sacas: number;
+  arrocillo: number;
+  base_amount: number;
+  discount: number;
+  net_amount: number;
+  pending_amount: number | null;
+  paid_amount: number | null;
+};
+
 type ReportKind = "resumen" | "ventas" | "liquidaciones" | "gastos" | "produccion" | "porcobrar";
 
 const reportEndpoint: Record<Exclude<ReportKind, "resumen">, string> = {
@@ -480,7 +514,7 @@ const navGroups: Array<{ label: string; tabs: string[] }> = [
   { label: "Operación", tabs: ["Bascula", "Secadoras", "Produccion", "Inventario"] },
   { label: "Comercial", tabs: ["Ventas", "Caja"] },
   { label: "Cuentas", tabs: ["Por Cobrar", "Por Pagar"] },
-  { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores"] },
+  { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores", "Nomina"] },
   { label: "Sistema", tabs: ["Reportes", "Configuracion"] }
 ];
 const tabs = navGroups.flatMap((group) => group.tabs);
@@ -513,6 +547,8 @@ function NavIcon({ tab }: { tab: string }) {
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 4h12v8H2z"/><circle cx="8" cy="8" r="2"/><path d="M13 6.5l1.5-1.5M3 9.5L1.5 11"/><path d="M8 1.5V3M8 13v1.5"/></svg>;
     case "Por Pagar":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 4h12v8H2z"/><path d="M5 8h6M5 8l2-2M5 8l2 2"/></svg>;
+    case "Nomina":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="5" r="2.5"/><path d="M3 14c0-2.8 2.2-4.5 5-4.5s5 1.7 5 4.5"/><circle cx="12.5" cy="4" r="2" fill="currentColor" stroke="none"/></svg>;
     case "Reportes":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="12" height="12" rx="1.5"/><line x1="5" y1="11" x2="5" y2="8"/><line x1="8" y1="11" x2="8" y2="5"/><line x1="11" y1="11" x2="11" y2="7"/></svg>;
     case "Configuracion":
@@ -633,8 +669,17 @@ export function App() {
   const [laborForm, setLaborForm] = useState({ worker_group: "", sacks_moved: "", price_per_sack: "" });
 
   // ── Configuración ─────────────────────────────────────────────────────────
-  const [configSubTab, setConfigSubTab] = useState<"negocio" | "usuarios" | "actividad" | "datos">("negocio");
+  const [configSubTab, setConfigSubTab] = useState<"negocio" | "usuarios" | "tarifas" | "actividad" | "datos">("negocio");
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
+  const [laborRatesForm, setLaborRatesForm] = useState<LaborRates>(defaultLaborRates);
+
+  // ── Nómina (pagos de trabajadores) ────────────────────────────────────────
+  const nominaToday = new Date().toISOString().slice(0, 10);
+  const nominaMonday = (() => { const d = new Date(); const off = (d.getDay() + 6) % 7; d.setDate(d.getDate() - off); return d.toISOString().slice(0, 10); })();
+  const [nominaFrom, setNominaFrom] = useState(nominaMonday);
+  const [nominaTo, setNominaTo] = useState(nominaToday);
+  const [nominaRows, setNominaRows] = useState<WorkerSummary[]>([]);
+  const [nominaBusy, setNominaBusy] = useState(false);
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
   const [settingsForm, setSettingsForm] = useState<AppSettings>(defaultAppSettings);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
@@ -1254,6 +1299,7 @@ export function App() {
       if (tab === "Dashboard") return true;
       if (tab === "Configuracion" || tab === "Reportes") return false;
       if (tab === "Por Cobrar" || tab === "Por Pagar") return allowed.has("Caja") || allowed.has("Ventas");
+      if (tab === "Nomina") return allowed.has("Caja") || allowed.has("Produccion");
       return allowed.has(tab);
     });
   }, [authUser, isAdmin]);
@@ -1268,6 +1314,8 @@ export function App() {
     const settings = await apiGet<AppSettings>("/settings");
     setAppSettings(settings);
     setSettingsForm(settings);
+    const rates = await apiGet<LaborRates>("/labor/rates").catch(() => null);
+    if (rates) setLaborRatesForm(rates);
     if (isAdmin) {
       const [users, backups, audit] = await Promise.all([
         apiGet<AdminUser[]>("/auth/users"),
@@ -1277,6 +1325,45 @@ export function App() {
       setAdminUsers(users);
       if (backups) setBackupInfo(backups);
       setAuditLog(audit);
+    }
+  }
+
+  async function saveLaborRates(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const saved = await apiPut<LaborRates>("/labor/rates", laborRatesForm);
+    setLaborRatesForm(saved);
+    addToast("Tarifas de pago guardadas", "success");
+  }
+
+  async function refreshNomina() {
+    setNominaBusy(true);
+    try {
+      const data = await apiGet<{ rows: WorkerSummary[] }>(`/labor/summary?from=${nominaFrom}&to=${nominaTo}`);
+      setNominaRows(data.rows);
+    } catch (e) {
+      addToast(`Error al cargar nómina: ${e instanceof Error ? e.message : "desconocido"}`, "error");
+    } finally {
+      setNominaBusy(false);
+    }
+  }
+
+  async function payWorkerWeek(row: WorkerSummary) {
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) { addToast("Abre una caja para pagar", "error"); return; }
+    if (!window.confirm(`Pagar ${money(row.pending_amount ?? 0)} a ${row.worker_name} (${row.worker_role.toLowerCase()})?`)) return;
+    try {
+      await apiPost("/labor/pay-worker", {
+        worker_role: row.worker_role,
+        worker_name: row.worker_name,
+        from: nominaFrom,
+        to: nominaTo,
+        cash_register_id: registerId
+      });
+      addToast(`Pagado a ${row.worker_name}`, "success");
+      await refreshNomina();
+      await refreshCaja(registerId);
+    } catch (e) {
+      addToast(`No se pudo pagar: ${e instanceof Error ? e.message : "error"}`, "error");
     }
   }
 
@@ -1731,6 +1818,7 @@ export function App() {
     if (activeTab === "Ventas") refreshCustomersAndSales().catch(() => undefined);
     if (activeTab === "Por Cobrar") refreshReceivables().catch(() => undefined);
     if (activeTab === "Por Pagar") refreshPayables().catch(() => undefined);
+    if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
     if (activeTab === "Configuracion") refreshConfig().catch(() => undefined);
   }, [activeTab]);
 
@@ -5036,6 +5124,76 @@ export function App() {
           </section>
         )}
 
+        {activeTab === "Nomina" && (
+          <section className="cuentasLayout">
+            <div className="reportToolbar">
+              <div>
+                <h2 style={{ marginBottom: 2 }}>👷 Nómina · Pilador y Estibador</h2>
+                <p className="muted" style={{ margin: 0 }}>Pagos calculados automáticamente de lo que sale de Producción, según las tarifas.</p>
+              </div>
+              <div className="reportDates">
+                <label><span>Desde</span><input type="date" value={nominaFrom} max={nominaTo} onChange={(e) => setNominaFrom(e.target.value)} /></label>
+                <label><span>Hasta</span><input type="date" value={nominaTo} min={nominaFrom} onChange={(e) => setNominaTo(e.target.value)} /></label>
+                <button type="button" className="primary" disabled={nominaBusy} onClick={() => refreshNomina().catch(() => undefined)}>{nominaBusy ? "Cargando…" : "Ver"}</button>
+              </div>
+            </div>
+
+            {!dashboard.current_cash_register && nominaRows.some((r) => (r.pending_amount ?? 0) > 0) && (
+              <div className="alertBox">Abre una caja para poder registrar los pagos.</div>
+            )}
+
+            {nominaRows.length === 0 ? (
+              <div className="emptyState"><div className="emptyIcon">👷</div><p>No hay pagos de trabajadores en el período. Se generan al cerrar cada pilada en Producción.</p></div>
+            ) : (
+              <div className="tablePanel">
+                <div style={{ overflowX: "auto" }}>
+                  <table className="cajaTable">
+                    <thead>
+                      <tr>
+                        <th>Rol</th><th>Trabajador</th>
+                        <th className="num">Piladas</th><th className="num">QQ</th><th className="num">Sacas</th><th className="num">Arrocillo</th>
+                        <th className="num">A pagar</th><th className="num">Pagado</th><th className="num">Pendiente</th><th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {nominaRows.map((r, i) => {
+                        const pending = r.pending_amount ?? 0;
+                        return (
+                          <tr key={i}>
+                            <td><span className={r.worker_role === "PILADOR" ? "chip info" : "chip ok"}>{r.worker_role === "PILADOR" ? "Pilador" : r.worker_role === "ESTIBADOR" ? "Estibador" : "Secador"}</span></td>
+                            <td style={{ fontWeight: 600 }}>{r.worker_name}</td>
+                            <td className="num">{r.cnt}</td>
+                            <td className="num">{Number(r.qq).toFixed(2)}</td>
+                            <td className="num">{Number(r.sacas).toFixed(0)}</td>
+                            <td className="num">{Number(r.arrocillo).toFixed(2)}</td>
+                            <td className="num" style={{ fontWeight: 700 }}>{money(r.base_amount)}</td>
+                            <td className="num">{money(r.paid_amount ?? 0)}</td>
+                            <td className="num" style={{ fontWeight: 700, color: pending > 0 ? "var(--c-danger)" : "var(--c-success)" }}>{money(pending)}</td>
+                            <td className="num">
+                              {pending > 0
+                                ? <button type="button" className="liqAbonoBtn" onClick={() => payWorkerWeek(r)}>💵 Pagar</button>
+                                : <span className="chip ok">Pagado</span>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr>
+                        <td colSpan={6} style={{ fontWeight: 700 }}>TOTAL PENDIENTE</td>
+                        <td className="num" style={{ fontWeight: 700 }}>{money(nominaRows.reduce((a, r) => a + r.base_amount, 0))}</td>
+                        <td className="num" style={{ fontWeight: 700 }}>{money(nominaRows.reduce((a, r) => a + (r.paid_amount ?? 0), 0))}</td>
+                        <td className="num" style={{ fontWeight: 700, color: "var(--c-danger)" }}>{money(nominaRows.reduce((a, r) => a + (r.pending_amount ?? 0), 0))}</td>
+                        <td />
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+
         {activeTab === "Reportes" && (
           <>
             <div className="reportToolbar">
@@ -5223,14 +5381,14 @@ export function App() {
         {activeTab === "Configuracion" && (
           <>
             <nav className="cajaSubNav">
-              {(["negocio", "usuarios", "actividad", "datos"] as const).map((t) => (
+              {(["negocio", "usuarios", "tarifas", "actividad", "datos"] as const).map((t) => (
                 <button
                   key={t}
                   type="button"
                   className={configSubTab === t ? "active" : ""}
                   onClick={() => setConfigSubTab(t)}
                 >
-                  {t === "negocio" ? "🏢 Negocio" : t === "usuarios" ? "👥 Usuarios" : t === "actividad" ? "🕓 Actividad" : "🗄️ Datos"}
+                  {t === "negocio" ? "🏢 Negocio" : t === "usuarios" ? "👥 Usuarios" : t === "tarifas" ? "💲 Tarifas" : t === "actividad" ? "🕓 Actividad" : "🗄️ Datos"}
                 </button>
               ))}
             </nav>
@@ -5494,6 +5652,48 @@ export function App() {
                     </div>
                   </div>
                 )}
+              </section>
+            )}
+
+            {/* ── Tarifas de pago a trabajadores ── */}
+            {configSubTab === "tarifas" && (
+              <section className="panelGrid">
+                <form className="formPanel" onSubmit={(e) => saveLaborRates(e).catch((err) => addToast(err.message, "error"))}>
+                  <h2>💲 Tarifas de pago (Pilador y Estibador)</h2>
+                  <p className="muted">Con estas tarifas se calcula automáticamente el pago al cerrar cada pilada en Producción.</p>
+                  <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>Pilador</h2>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <label><span>$ por QQ de arroz</span><input type="number" step="0.01" min="0" value={laborRatesForm.pilador_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, pilador_per_qq: Number(e.target.value) })} /></label>
+                    <label><span>$ por saca (@)</span><input type="number" step="0.01" min="0" value={laborRatesForm.pilador_per_saca} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, pilador_per_saca: Number(e.target.value) })} /></label>
+                  </div>
+                  <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>Estibador</h2>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                    <label><span>$ por QQ</span><input type="number" step="0.01" min="0" value={laborRatesForm.estibador_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_qq: Number(e.target.value) })} /></label>
+                    <label><span>$ por saca (@)</span><input type="number" step="0.01" min="0" value={laborRatesForm.estibador_per_saca} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_saca: Number(e.target.value) })} /></label>
+                    <label><span>$ por arrocillo</span><input type="number" step="0.01" min="0" value={laborRatesForm.estibador_per_arrocillo} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_arrocillo: Number(e.target.value) })} /></label>
+                  </div>
+                  <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>Secador <span className="muted" style={{ fontWeight: 400 }}>(próxima fase)</span></h2>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <label><span>$ guardianía / día</span><input type="number" step="0.5" min="0" value={laborRatesForm.secador_guardiania} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secador_guardiania: Number(e.target.value) })} /></label>
+                    <label><span>$ por túnel secado</span><input type="number" step="0.5" min="0" value={laborRatesForm.secador_per_tunel} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secador_per_tunel: Number(e.target.value) })} /></label>
+                  </div>
+                  <button className="primary" disabled={!isAdmin}>Guardar tarifas</button>
+                  {!isAdmin && <p className="muted">Solo un administrador puede cambiar las tarifas.</p>}
+                </form>
+                <div className="formPanel">
+                  <h2>Ejemplo de cálculo</h2>
+                  <p className="muted">Para una pilada de 100 QQ de arroz, 20 sacas y 10 QQ de arrocillo:</p>
+                  <div className="totalBox" style={{ marginBottom: 10 }}>
+                    <span>Pilador</span>
+                    <strong>{money(100 * laborRatesForm.pilador_per_qq + 20 * laborRatesForm.pilador_per_saca)}</strong>
+                    <small>100 × {laborRatesForm.pilador_per_qq} + 20 × {laborRatesForm.pilador_per_saca}</small>
+                  </div>
+                  <div className="totalBox">
+                    <span>Estibador</span>
+                    <strong>{money(100 * laborRatesForm.estibador_per_qq + 20 * laborRatesForm.estibador_per_saca + 10 * laborRatesForm.estibador_per_arrocillo)}</strong>
+                    <small>100 × {laborRatesForm.estibador_per_qq} + 20 × {laborRatesForm.estibador_per_saca} + 10 × {laborRatesForm.estibador_per_arrocillo}</small>
+                  </div>
+                </div>
               </section>
             )}
 

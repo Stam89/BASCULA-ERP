@@ -240,6 +240,49 @@ laborRouter.put("/payments/:id", requireAdmin, asyncRoute(async (req, res) => {
   res.json(result.rows[0]);
 }));
 
+// ── Pagar toda la semana de un trabajador de una vez ───────────────────────
+laborRouter.post("/pay-worker", asyncRoute(async (req, res) => {
+  await ensureLaborTables();
+  const body = z.object({
+    worker_role: z.enum(["PILADOR", "ESTIBADOR", "SECADOR"]),
+    worker_name: z.string().min(1),
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    cash_register_id: z.string().uuid()
+  }).parse(req.body);
+  const user = (req as AuthenticatedRequest).user;
+
+  const result = await inTransaction(async (client) => {
+    const pending = await client.query(
+      `SELECT * FROM worker_payments
+       WHERE worker_role = $1 AND worker_name = $2 AND status = 'PENDING'
+         AND work_date BETWEEN $3 AND $4
+       FOR UPDATE`,
+      [body.worker_role, body.worker_name, body.from, body.to]
+    );
+    if (!pending.rowCount) throw new ApiError(400, "No hay pagos pendientes de este trabajador en el período");
+
+    const total = round2(pending.rows.reduce((s: number, p: { net_amount: string }) => s + Number(p.net_amount), 0));
+    if (total <= 0) throw new ApiError(400, "El monto a pagar es cero");
+
+    const ids = pending.rows.map((p: { id: string }) => p.id);
+    await client.query(
+      `UPDATE worker_payments SET status = 'PAID', paid_at = now(), cash_register_id = $2 WHERE id = ANY($1)`,
+      [ids, body.cash_register_id]
+    );
+    await client.query(
+      `INSERT INTO cash_movements
+         (cash_register_id, movement, category, reference_type, amount, description, created_by)
+       VALUES ($1, 'EXPENSE', 'PAGO_MANO_OBRA', 'worker_payments', $2, $3, $4)`,
+      [body.cash_register_id, total,
+       `Pago semana ${body.worker_role.toLowerCase()} ${body.worker_name}`, user?.id ?? null]
+    );
+    return { paid: total, count: ids.length };
+  });
+
+  res.json(result);
+}));
+
 // ── Registrar el pago (egreso de caja) ─────────────────────────────────────
 laborRouter.post("/payments/:id/pay", asyncRoute(async (req, res) => {
   await ensureLaborTables();
