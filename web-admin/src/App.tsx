@@ -153,10 +153,11 @@ type WorkerSummary = {
   sacas: number;
   arrocillo: number;
   base_amount: number;
-  discount: number;
   net_amount: number;
   pending_amount: number | null;
   paid_amount: number | null;
+  advances: number;
+  to_pay: number;
 };
 
 type ReportKind = "resumen" | "ventas" | "liquidaciones" | "gastos" | "produccion" | "porcobrar";
@@ -1376,10 +1377,35 @@ export function App() {
     setSecadorForm({ ...secadorForm, tunnels: "0" });
   }
 
+  async function registerAdvance(row: WorkerSummary) {
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) { addToast("Abre una caja para dar anticipos", "error"); return; }
+    const amtStr = window.prompt(`Anticipo a ${row.worker_name} (${row.worker_role.toLowerCase()}). Monto $:`, "");
+    if (amtStr === null) return;
+    const amount = Number(amtStr);
+    if (!amount || amount <= 0) { addToast("Monto inválido", "error"); return; }
+    const desc = window.prompt("Descripción (opcional):", "Anticipo") ?? undefined;
+    try {
+      await apiPost("/labor/advances", {
+        worker_role: row.worker_role,
+        worker_name: row.worker_name,
+        amount,
+        description: desc,
+        cash_register_id: registerId
+      });
+      addToast(`Anticipo de ${money(amount)} registrado a ${row.worker_name}`, "success");
+      await refreshNomina();
+      await refreshCaja(registerId);
+    } catch (e) {
+      addToast(`No se pudo registrar: ${e instanceof Error ? e.message : "error"}`, "error");
+    }
+  }
+
   async function payWorkerWeek(row: WorkerSummary) {
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) { addToast("Abre una caja para pagar", "error"); return; }
-    if (!window.confirm(`Pagar ${money(row.pending_amount ?? 0)} a ${row.worker_name} (${row.worker_role.toLowerCase()})?`)) return;
+    const toPay = row.to_pay ?? (row.pending_amount ?? 0);
+    if (!window.confirm(`Pagar ${money(toPay)} a ${row.worker_name} (${row.worker_role.toLowerCase()})?${(row.advances ?? 0) > 0 ? `\n(Ganó ${money(row.pending_amount ?? 0)}, menos ${money(row.advances)} de anticipos)` : ""}`)) return;
     try {
       await apiPost("/labor/pay-worker", {
         worker_role: row.worker_role,
@@ -5180,28 +5206,32 @@ export function App() {
                     <thead>
                       <tr>
                         <th>Rol</th><th>Trabajador</th>
-                        <th className="num">Piladas</th><th className="num">QQ</th><th className="num">Sacas</th><th className="num">Arrocillo</th>
-                        <th className="num">A pagar</th><th className="num">Pagado</th><th className="num">Pendiente</th><th />
+                        <th className="num">Reg.</th><th className="num">QQ</th><th className="num">Sacas</th>
+                        <th className="num">Ganó</th><th className="num">Anticipos</th><th className="num">A pagar</th><th className="num">Pagado</th><th />
                       </tr>
                     </thead>
                     <tbody>
                       {nominaRows.map((r, i) => {
                         const pending = r.pending_amount ?? 0;
+                        const toPay = r.to_pay ?? pending;
                         return (
                           <tr key={i}>
-                            <td><span className={r.worker_role === "PILADOR" ? "chip info" : "chip ok"}>{r.worker_role === "PILADOR" ? "Pilador" : r.worker_role === "ESTIBADOR" ? "Estibador" : "Secador"}</span></td>
+                            <td><span className={r.worker_role === "PILADOR" ? "chip info" : r.worker_role === "ESTIBADOR" ? "chip ok" : "chip warn"}>{r.worker_role === "PILADOR" ? "Pilador" : r.worker_role === "ESTIBADOR" ? "Estibador" : "Secador"}</span></td>
                             <td style={{ fontWeight: 600 }}>{r.worker_name}</td>
                             <td className="num">{r.cnt}</td>
                             <td className="num">{Number(r.qq).toFixed(2)}</td>
                             <td className="num">{Number(r.sacas).toFixed(0)}</td>
-                            <td className="num">{Number(r.arrocillo).toFixed(2)}</td>
                             <td className="num" style={{ fontWeight: 700 }}>{money(r.base_amount)}</td>
+                            <td className="num" style={{ color: (r.advances ?? 0) > 0 ? "var(--c-danger)" : "inherit" }}>{(r.advances ?? 0) > 0 ? `−${money(r.advances)}` : "—"}</td>
+                            <td className="num" style={{ fontWeight: 700, color: toPay > 0 ? "var(--c-danger)" : "var(--c-success)" }}>{pending > 0 ? money(toPay) : "—"}</td>
                             <td className="num">{money(r.paid_amount ?? 0)}</td>
-                            <td className="num" style={{ fontWeight: 700, color: pending > 0 ? "var(--c-danger)" : "var(--c-success)" }}>{money(pending)}</td>
-                            <td className="num">
-                              {pending > 0
-                                ? <button type="button" className="liqAbonoBtn" onClick={() => payWorkerWeek(r)}>💵 Pagar</button>
-                                : <span className="chip ok">Pagado</span>}
+                            <td className="num" style={{ whiteSpace: "nowrap" }}>
+                              {pending > 0 ? (
+                                <>
+                                  <button type="button" className="btnGhost" onClick={() => registerAdvance(r)}>Anticipo</button>
+                                  <button type="button" className="liqAbonoBtn" style={{ marginLeft: 6 }} onClick={() => payWorkerWeek(r)}>💵 Pagar</button>
+                                </>
+                              ) : <span className="chip ok">Pagado</span>}
                             </td>
                           </tr>
                         );
@@ -5209,10 +5239,11 @@ export function App() {
                     </tbody>
                     <tfoot>
                       <tr>
-                        <td colSpan={6} style={{ fontWeight: 700 }}>TOTAL PENDIENTE</td>
+                        <td colSpan={5} style={{ fontWeight: 700 }}>TOTALES</td>
                         <td className="num" style={{ fontWeight: 700 }}>{money(nominaRows.reduce((a, r) => a + r.base_amount, 0))}</td>
+                        <td className="num" style={{ fontWeight: 700, color: "var(--c-danger)" }}>−{money(nominaRows.reduce((a, r) => a + (r.advances ?? 0), 0))}</td>
+                        <td className="num" style={{ fontWeight: 700, color: "var(--c-danger)" }}>{money(nominaRows.reduce((a, r) => a + ((r.pending_amount ?? 0) > 0 ? (r.to_pay ?? 0) : 0), 0))}</td>
                         <td className="num" style={{ fontWeight: 700 }}>{money(nominaRows.reduce((a, r) => a + (r.paid_amount ?? 0), 0))}</td>
-                        <td className="num" style={{ fontWeight: 700, color: "var(--c-danger)" }}>{money(nominaRows.reduce((a, r) => a + (r.pending_amount ?? 0), 0))}</td>
                         <td />
                       </tr>
                     </tfoot>

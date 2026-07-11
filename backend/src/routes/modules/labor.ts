@@ -48,6 +48,21 @@ export function ensureLaborTables(): Promise<void> {
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )`);
       await pool.query(`CREATE INDEX IF NOT EXISTS idx_worker_payments_date ON worker_payments (work_date DESC)`);
+      // Anticipos/adelantos a trabajadores (se descuentan del pago semanal).
+      await pool.query(`CREATE TABLE IF NOT EXISTS worker_advances (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        worker_role VARCHAR(20) NOT NULL,
+        worker_name VARCHAR(140) NOT NULL,
+        amount NUMERIC(14,2) NOT NULL,
+        description TEXT,
+        advance_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        status VARCHAR(12) NOT NULL DEFAULT 'PENDING',
+        applied_at TIMESTAMPTZ,
+        cash_register_id UUID,
+        created_by UUID,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_worker_advances_date ON worker_advances (advance_date DESC)`);
       // Fila única de tarifas por defecto.
       await pool.query(`INSERT INTO labor_rates (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
     })();
@@ -206,23 +221,81 @@ laborRouter.get("/summary", asyncRoute(async (req, res) => {
   const to = q.to ?? today.toISOString().slice(0, 10);
 
   const result = await pool.query(
-    `SELECT worker_role, worker_name,
+    `SELECT wp.worker_role, wp.worker_name,
             COUNT(*)::int cnt,
-            SUM(qq)::float qq,
-            SUM(sacas)::float sacas,
-            SUM(arrocillo)::float arrocillo,
-            SUM(base_amount)::float base_amount,
-            SUM(discount)::float discount,
-            SUM(net_amount)::float net_amount,
-            SUM(net_amount) FILTER (WHERE status = 'PENDING')::float pending_amount,
-            SUM(net_amount) FILTER (WHERE status = 'PAID')::float paid_amount
-     FROM worker_payments
-     WHERE work_date BETWEEN $1 AND $2
-     GROUP BY worker_role, worker_name
-     ORDER BY worker_role, net_amount DESC`,
+            SUM(wp.qq)::float qq,
+            SUM(wp.sacas)::float sacas,
+            SUM(wp.arrocillo)::float arrocillo,
+            SUM(wp.base_amount)::float base_amount,
+            SUM(wp.net_amount)::float net_amount,
+            SUM(wp.net_amount) FILTER (WHERE wp.status = 'PENDING')::float pending_amount,
+            SUM(wp.net_amount) FILTER (WHERE wp.status = 'PAID')::float paid_amount,
+            (SELECT COALESCE(SUM(a.amount),0)::float FROM worker_advances a
+             WHERE a.worker_role = wp.worker_role AND a.worker_name = wp.worker_name
+               AND a.status = 'PENDING' AND a.advance_date BETWEEN $1 AND $2) AS advances
+     FROM worker_payments wp
+     WHERE wp.work_date BETWEEN $1 AND $2
+     GROUP BY wp.worker_role, wp.worker_name
+     ORDER BY wp.worker_role, net_amount DESC`,
     [from, to]
   );
-  res.json({ range: { from, to }, rows: result.rows });
+  const rows = result.rows.map((r) => ({
+    ...r,
+    to_pay: round2(Math.max(0, (r.pending_amount ?? 0) - (r.advances ?? 0)))
+  }));
+  res.json({ range: { from, to }, rows });
+}));
+
+// ── Anticipos a trabajadores ───────────────────────────────────────────────
+laborRouter.get("/advances", asyncRoute(async (req, res) => {
+  await ensureLaborTables();
+  const q = z.object({
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    role: z.enum(["PILADOR", "ESTIBADOR", "SECADOR"]).optional(),
+    name: z.string().optional()
+  }).parse(req.query);
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  if (q.from) { params.push(q.from); conditions.push(`advance_date >= $${params.length}`); }
+  if (q.to) { params.push(q.to); conditions.push(`advance_date <= $${params.length}`); }
+  if (q.role) { params.push(q.role); conditions.push(`worker_role = $${params.length}`); }
+  if (q.name) { params.push(q.name); conditions.push(`worker_name = $${params.length}`); }
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const result = await pool.query(`SELECT * FROM worker_advances ${where} ORDER BY advance_date DESC, created_at DESC LIMIT 500`, params);
+  res.json(result.rows);
+}));
+
+laborRouter.post("/advances", asyncRoute(async (req, res) => {
+  await ensureLaborTables();
+  const body = z.object({
+    worker_role: z.enum(["PILADOR", "ESTIBADOR", "SECADOR"]),
+    worker_name: z.string().min(1),
+    amount: z.number().positive(),
+    description: z.string().optional(),
+    advance_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    cash_register_id: z.string().uuid()
+  }).parse(req.body);
+  const user = (req as AuthenticatedRequest).user;
+
+  const result = await inTransaction(async (client) => {
+    const adv = await client.query(
+      `INSERT INTO worker_advances (worker_role, worker_name, amount, description, advance_date, cash_register_id, created_by)
+       VALUES ($1, $2, $3, $4, COALESCE($5::date, CURRENT_DATE), $6, $7)
+       RETURNING *`,
+      [body.worker_role, body.worker_name.trim(), body.amount, body.description ?? null, body.advance_date ?? null, body.cash_register_id, user?.id ?? null]
+    );
+    // El anticipo sale de caja en el momento en que se entrega.
+    await client.query(
+      `INSERT INTO cash_movements
+         (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)
+       VALUES ($1, 'EXPENSE', 'PAGO_MANO_OBRA', 'worker_advances', $2, $3, $4, $5)`,
+      [body.cash_register_id, adv.rows[0].id, body.amount,
+       `Anticipo ${body.worker_role.toLowerCase()} ${body.worker_name.trim()}`, user?.id ?? null]
+    );
+    return adv.rows[0];
+  });
+  res.status(201).json(result);
 }));
 
 // ── Ajustar descuento de un pago ───────────────────────────────────────────
@@ -339,22 +412,41 @@ laborRouter.post("/pay-worker", asyncRoute(async (req, res) => {
     );
     if (!pending.rowCount) throw new ApiError(400, "No hay pagos pendientes de este trabajador en el período");
 
-    const total = round2(pending.rows.reduce((s: number, p: { net_amount: string }) => s + Number(p.net_amount), 0));
-    if (total <= 0) throw new ApiError(400, "El monto a pagar es cero");
+    const gross = round2(pending.rows.reduce((s: number, p: { net_amount: string }) => s + Number(p.net_amount), 0));
+
+    // Anticipos pendientes del período: ya salieron de caja, se descuentan.
+    const advResult = await client.query(
+      `SELECT * FROM worker_advances
+       WHERE worker_role = $1 AND worker_name = $2 AND status = 'PENDING'
+         AND advance_date BETWEEN $3 AND $4
+       FOR UPDATE`,
+      [body.worker_role, body.worker_name, body.from, body.to]
+    );
+    const advances = round2(advResult.rows.reduce((s: number, a: { amount: string }) => s + Number(a.amount), 0));
+    const net = round2(Math.max(0, gross - advances));
 
     const ids = pending.rows.map((p: { id: string }) => p.id);
     await client.query(
       `UPDATE worker_payments SET status = 'PAID', paid_at = now(), cash_register_id = $2 WHERE id = ANY($1)`,
       [ids, body.cash_register_id]
     );
-    await client.query(
-      `INSERT INTO cash_movements
-         (cash_register_id, movement, category, reference_type, amount, description, created_by)
-       VALUES ($1, 'EXPENSE', 'PAGO_MANO_OBRA', 'worker_payments', $2, $3, $4)`,
-      [body.cash_register_id, total,
-       `Pago semana ${body.worker_role.toLowerCase()} ${body.worker_name}`, user?.id ?? null]
-    );
-    return { paid: total, count: ids.length };
+    if (advResult.rowCount) {
+      await client.query(
+        `UPDATE worker_advances SET status = 'APPLIED', applied_at = now() WHERE id = ANY($1)`,
+        [advResult.rows.map((a: { id: string }) => a.id)]
+      );
+    }
+    // El anticipo ya salió de caja antes; ahora solo sale el saldo restante.
+    if (net > 0) {
+      await client.query(
+        `INSERT INTO cash_movements
+           (cash_register_id, movement, category, reference_type, amount, description, created_by)
+         VALUES ($1, 'EXPENSE', 'PAGO_MANO_OBRA', 'worker_payments', $2, $3, $4)`,
+        [body.cash_register_id, net,
+         `Pago semana ${body.worker_role.toLowerCase()} ${body.worker_name}`, user?.id ?? null]
+      );
+    }
+    return { gross, advances, paid: net, count: ids.length };
   });
 
   res.json(result);

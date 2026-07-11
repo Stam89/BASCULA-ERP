@@ -679,3 +679,16 @@ CREATE TABLE IF NOT EXISTS worker_payments (
   created_by UUID,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS worker_advances (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  worker_role VARCHAR(20) NOT NULL,
+  worker_name VARCHAR(140) NOT NULL,
+  amount NUMERIC(14,2) NOT NULL,
+  description TEXT,
+  advance_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  status VARCHAR(12) NOT NULL DEFAULT 'PENDING',
+  applied_at TIMESTAMPTZ,
+  cash_register_id UUID,
+  created_by UUID,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
