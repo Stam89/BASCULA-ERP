@@ -1377,6 +1377,68 @@ export function App() {
     setSecadorForm({ ...secadorForm, tunnels: "0" });
   }
 
+  function nominaExportData(): { title: string; headers: string[]; rows: (string | number)[][]; totals: (string | number)[] } {
+    const m2 = (n: number) => Number(n || 0).toFixed(2);
+    const roleLabel = (r: string) => (r === "PILADOR" ? "Pilador" : r === "ESTIBADOR" ? "Estibador" : "Secador");
+    const rows = nominaRows.map((r) => [
+      roleLabel(r.worker_role), r.worker_name, r.cnt,
+      Number(r.qq).toFixed(2), Number(r.sacas).toFixed(0),
+      m2(r.base_amount), m2(r.advances ?? 0), m2((r.pending_amount ?? 0) > 0 ? (r.to_pay ?? 0) : 0), m2(r.paid_amount ?? 0)
+    ]);
+    const t = nominaRows.reduce((a, r) => ({
+      base: a.base + r.base_amount, adv: a.adv + (r.advances ?? 0),
+      pay: a.pay + ((r.pending_amount ?? 0) > 0 ? (r.to_pay ?? 0) : 0), paid: a.paid + (r.paid_amount ?? 0)
+    }), { base: 0, adv: 0, pay: 0, paid: 0 });
+    return {
+      title: "Nómina de trabajadores",
+      headers: ["Rol", "Trabajador", "Reg.", "QQ", "Sacas", "Ganó", "Anticipos", "A pagar", "Pagado"],
+      rows,
+      totals: ["TOTALES", "", "", "", "", m2(t.base), m2(t.adv), m2(t.pay), m2(t.paid)]
+    };
+  }
+
+  function printWorkerReceipt(row: WorkerSummary) {
+    const earned = row.base_amount;
+    const adv = row.advances ?? 0;
+    const net = row.pending_amount != null && row.pending_amount > 0 ? (row.to_pay ?? 0) : (row.paid_amount ?? 0);
+    const roleLabel = row.worker_role === "PILADOR" ? "Pilador" : row.worker_role === "ESTIBADOR" ? "Estibador" : "Secador";
+    const detailRows = row.worker_role === "SECADOR"
+      ? `<tr><td>Días trabajados</td><td class="r">${row.cnt}</td></tr>`
+      : `<tr><td>Piladas</td><td class="r">${row.cnt}</td></tr>
+         <tr><td>Quintales de arroz</td><td class="r">${Number(row.qq).toFixed(2)} QQ</td></tr>
+         <tr><td>Sacas (@)</td><td class="r">${Number(row.sacas).toFixed(0)}</td></tr>
+         ${Number(row.arrocillo) > 0 ? `<tr><td>Arrocillo</td><td class="r">${Number(row.arrocillo).toFixed(2)} QQ</td></tr>` : ""}`;
+    const html = `<html><head><meta charset="utf-8"><title>Recibo ${row.worker_name}</title><style>
+      body{font-family:Arial,sans-serif;font-size:13px;margin:16mm;max-width:520px}
+      h1{font-size:18px;margin:0 0 2px;text-align:center}
+      h2{font-size:12px;font-weight:normal;margin:0;text-align:center;color:#555}
+      h3{font-size:15px;margin:16px 0 4px;text-align:center;text-transform:uppercase;letter-spacing:1px}
+      .meta{display:flex;justify-content:space-between;margin:10px 0;font-size:12px}
+      table{width:100%;border-collapse:collapse;margin-top:8px}
+      td{padding:5px 8px;border-bottom:1px solid #eee}
+      td.r{text-align:right;font-variant-numeric:tabular-nums}
+      .tot td{border-top:2px solid #111;font-weight:bold;font-size:15px;padding-top:8px}
+      .disc td{color:#b91c1c}
+      .sig{margin-top:48px;text-align:center}
+      .sig hr{width:200px;border:none;border-top:1px solid #111;margin:0 auto 4px}
+      @media print{body{margin:10mm}}
+    </style></head><body>
+      <h1>${appSettings.business_name}</h1>
+      <h2>${[appSettings.business_subtitle, appSettings.ruc && `RUC: ${appSettings.ruc}`].filter(Boolean).join(" · ")}</h2>
+      <h3>Recibo de Pago</h3>
+      <div class="meta"><div><strong>Trabajador:</strong> ${row.worker_name} (${roleLabel})</div><div><strong>Período:</strong> ${nominaFrom} al ${nominaTo}</div></div>
+      <table>
+        ${detailRows}
+        <tr><td>Total ganado</td><td class="r">$${earned.toFixed(2)}</td></tr>
+        ${adv > 0 ? `<tr class="disc"><td>Anticipos recibidos</td><td class="r">-$${adv.toFixed(2)}</td></tr>` : ""}
+        <tr class="tot"><td>NETO A PAGAR</td><td class="r">$${net.toFixed(2)}</td></tr>
+      </table>
+      <div class="sig"><hr/><span>Firma del trabajador</span></div>
+    </body></html>`;
+    const w = window.open("", "_blank", "width=520,height=600");
+    if (w) { w.document.write(html); w.document.close(); w.print(); }
+  }
+
   async function registerAdvance(row: WorkerSummary) {
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) { addToast("Abre una caja para dar anticipos", "error"); return; }
@@ -5191,6 +5253,12 @@ export function App() {
                 <label><span>Hasta</span><input type="date" value={nominaTo} min={nominaFrom} onChange={(e) => setNominaTo(e.target.value)} /></label>
                 <button type="button" className="primary" disabled={nominaBusy} onClick={() => refreshNomina().catch(() => undefined)}>{nominaBusy ? "Cargando…" : "Ver"}</button>
               </div>
+              {nominaRows.length > 0 && (
+                <div className="reportExportBtns">
+                  <button type="button" className="btnSecondary" onClick={() => { const e = nominaExportData(); printReport(e.title, e.headers, e.rows, e.totals); }}>🖨 Imprimir</button>
+                  <button type="button" className="btnSecondary" onClick={() => { const e = nominaExportData(); exportReportCsv(e.headers, e.rows, `nomina_${nominaFrom}_${nominaTo}.csv`); }}>📥 Excel</button>
+                </div>
+              )}
             </div>
 
             {!dashboard.current_cash_register && nominaRows.some((r) => (r.pending_amount ?? 0) > 0) && (
@@ -5226,12 +5294,13 @@ export function App() {
                             <td className="num" style={{ fontWeight: 700, color: toPay > 0 ? "var(--c-danger)" : "var(--c-success)" }}>{pending > 0 ? money(toPay) : "—"}</td>
                             <td className="num">{money(r.paid_amount ?? 0)}</td>
                             <td className="num" style={{ whiteSpace: "nowrap" }}>
+                              <button type="button" className="btnGhost" title="Imprimir recibo" onClick={() => printWorkerReceipt(r)}>🧾</button>
                               {pending > 0 ? (
                                 <>
-                                  <button type="button" className="btnGhost" onClick={() => registerAdvance(r)}>Anticipo</button>
+                                  <button type="button" className="btnGhost" style={{ marginLeft: 6 }} onClick={() => registerAdvance(r)}>Anticipo</button>
                                   <button type="button" className="liqAbonoBtn" style={{ marginLeft: 6 }} onClick={() => payWorkerWeek(r)}>💵 Pagar</button>
                                 </>
-                              ) : <span className="chip ok">Pagado</span>}
+                              ) : <span className="chip ok" style={{ marginLeft: 6 }}>Pagado</span>}
                             </td>
                           </tr>
                         );
