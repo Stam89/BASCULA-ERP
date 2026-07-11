@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { inTransaction } from "../../db/transaction.js";
@@ -7,6 +8,36 @@ import { ApiError } from "../../http/error-handler.js";
 import { calculateNetWeight, calculateQuintals, round2 } from "../../utils/rice-formulas.js";
 
 export const mobileTicketsRouter = Router();
+
+// UUID determinístico (estilo v5) a partir de una clave estable, para que el
+// mismo ticket de la app (mismo número) siempre mapee al mismo registro.
+function stableUuid(key: string): string {
+  const h = crypto.createHash("sha1").update(`bascula:${key}`).digest("hex");
+  const variant = ((parseInt(h.slice(16, 17), 16) & 0x3) | 0x8).toString(16);
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-${variant}${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
+
+// Formato NATIVO de la app de báscula (com.example.bascula).
+const basculaTicketSchema = z.object({
+  numeroTicket: z.union([z.string(), z.number()]).transform((v) => String(v)),
+  modo: z.string().optional().default("principal"),
+  cliente: z.string().optional().default(""),
+  placa: z.string().optional(),
+  fecha: z.string().optional(),
+  calificacion: z.coerce.number().nonnegative().default(0),
+  pesoBruto: z.coerce.number().nonnegative().default(0),
+  pesoTara: z.coerce.number().nonnegative().default(0),
+  pesoNeto: z.coerce.number().optional(),
+  totalQQ: z.coerce.number().optional(),
+  valorPagar: z.union([z.string(), z.number()]).optional(),
+  actualizadoEn: z.coerce.number().optional(),
+  actualizadoPor: z.string().optional()
+});
+
+const basculaImportSchema = z.object({
+  deviceId: z.string().optional().default("bascula-app"),
+  tickets: z.array(basculaTicketSchema).min(1)
+});
 
 const ticketSchema = z.object({
   id: z.string().uuid(),
@@ -311,6 +342,48 @@ mobileTicketsRouter.post("/sync", asyncRoute(async (req, res) => {
     syncedIds,
     count: syncedIds.length
   });
+}));
+
+// Importa tickets en el formato NATIVO de la app de báscula (por ejemplo desde
+// un puente que los lee de Firebase). Mapea los nombres de campos al modelo del
+// ERP y es idempotente (mismo numeroTicket = mismo registro).
+mobileTicketsRouter.post("/import-bascula", asyncRoute(async (req, res) => {
+  const body = basculaImportSchema.parse(req.body);
+  const imported: Array<{ numeroTicket: string; id: string }> = [];
+
+  for (const t of body.tickets) {
+    const id = stableUuid(`${t.modo}_${t.numeroTicket}`);
+    const netWeight = t.pesoNeto ?? calculateNetWeight(t.pesoBruto, t.pesoTara);
+    if (netWeight < 0) {
+      throw new ApiError(400, `Ticket ${t.numeroTicket}: la tara no puede ser mayor que el bruto`);
+    }
+    const quintals = t.totalQQ ?? (t.calificacion > 0 ? calculateQuintals(netWeight, t.calificacion) : 0);
+    const ts = t.actualizadoEn ?? Date.now();
+
+    await pool.query(
+      `INSERT INTO mobile_synced_tickets (
+        id, device_id, farmer_id, farmer_name,
+        gross_weight, tare_weight, net_weight, qualification, quintals,
+        print_count, is_locked, price_per_quintal, gross_payable, advances_discount, net_payable,
+        liquidated_at, mobile_created_at, mobile_updated_at, synced_at, raw_payload
+      ) VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8, 0, false, 0, 0, 0, 0, NULL, $9, $9, now(), $10)
+      ON CONFLICT (id) DO UPDATE SET
+        device_id = EXCLUDED.device_id,
+        farmer_name = EXCLUDED.farmer_name,
+        gross_weight = EXCLUDED.gross_weight,
+        tare_weight = EXCLUDED.tare_weight,
+        net_weight = EXCLUDED.net_weight,
+        qualification = EXCLUDED.qualification,
+        quintals = EXCLUDED.quintals,
+        mobile_updated_at = EXCLUDED.mobile_updated_at,
+        synced_at = now(),
+        raw_payload = EXCLUDED.raw_payload`,
+      [id, body.deviceId, (t.cliente || "").trim(), t.pesoBruto, t.pesoTara, netWeight, t.calificacion, quintals, ts, JSON.stringify(t)]
+    );
+    imported.push({ numeroTicket: t.numeroTicket, id });
+  }
+
+  res.status(201).json({ imported, count: imported.length });
 }));
 
 mobileTicketsRouter.post("/:id/liquidation-preview", asyncRoute(async (req, res) => {

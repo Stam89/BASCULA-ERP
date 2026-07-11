@@ -17,3 +17,7 @@ logs/
 coverage/
 backend/uploads/
 .claude/
+
+# Credencial de Firebase (no subir)
+backend/scripts/firebase-key.json
+firebase-key.json
