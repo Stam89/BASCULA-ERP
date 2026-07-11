@@ -683,6 +683,11 @@ export function App() {
   const [nominaBusy, setNominaBusy] = useState(false);
   const [secadorSugg, setSecadorSugg] = useState<Array<{ worker_name: string; work_date: string; tunnels: number; suggested_amount: number; already_generated: boolean }> | null>(null);
   const [secadorForm, setSecadorForm] = useState({ worker_name: "", work_date: nominaToday, tunnels: "0" });
+  const [nominaView, setNominaView] = useState<"semana" | "historial">("semana");
+  const nomina60Ago = (() => { const d = new Date(); d.setDate(d.getDate() - 60); return d.toISOString().slice(0, 10); })();
+  const [histFrom, setHistFrom] = useState(nomina60Ago);
+  const [histTo, setHistTo] = useState(nominaToday);
+  const [histRows, setHistRows] = useState<Array<{ worker_role: string; worker_name: string; week_start: string; cnt: number; qq: number; sacas: number; arrocillo: number; earned: number; advances_applied: number; paid_at: string }>>([]);
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
   const [settingsForm, setSettingsForm] = useState<AppSettings>(defaultAppSettings);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
@@ -1377,6 +1382,29 @@ export function App() {
     setSecadorForm({ ...secadorForm, tunnels: "0" });
   }
 
+  async function loadNominaHistory() {
+    try {
+      const data = await apiGet<{ rows: typeof histRows }>(`/labor/history?from=${histFrom}&to=${histTo}`);
+      setHistRows(data.rows);
+    } catch (e) {
+      addToast(`Error al cargar historial: ${e instanceof Error ? e.message : "desconocido"}`, "error");
+    }
+  }
+
+  function printHistoryReceipt(h: { worker_role: string; worker_name: string; week_start: string; cnt: number; qq: number; sacas: number; arrocillo: number; earned: number; advances_applied: number }) {
+    // Reconstruye una fila de resumen para reutilizar el recibo.
+    const cashPaid = round2(h.earned - h.advances_applied);
+    const row: WorkerSummary = {
+      worker_role: h.worker_role, worker_name: h.worker_name, cnt: h.cnt,
+      qq: h.qq, sacas: h.sacas, arrocillo: h.arrocillo,
+      base_amount: h.earned,
+      net_amount: cashPaid, pending_amount: 0, paid_amount: cashPaid,
+      advances: h.advances_applied, to_pay: 0
+    };
+    const weekEnd = new Date(h.week_start); weekEnd.setDate(weekEnd.getDate() + 6);
+    printWorkerReceipt(row, h.week_start, weekEnd.toISOString().slice(0, 10));
+  }
+
   function nominaExportData(): { title: string; headers: string[]; rows: (string | number)[][]; totals: (string | number)[] } {
     const m2 = (n: number) => Number(n || 0).toFixed(2);
     const roleLabel = (r: string) => (r === "PILADOR" ? "Pilador" : r === "ESTIBADOR" ? "Estibador" : "Secador");
@@ -1397,7 +1425,9 @@ export function App() {
     };
   }
 
-  function printWorkerReceipt(row: WorkerSummary) {
+  function printWorkerReceipt(row: WorkerSummary, periodFrom?: string, periodTo?: string) {
+    const from = periodFrom ?? nominaFrom;
+    const to = periodTo ?? nominaTo;
     const earned = row.base_amount;
     const adv = row.advances ?? 0;
     const net = row.pending_amount != null && row.pending_amount > 0 ? (row.to_pay ?? 0) : (row.paid_amount ?? 0);
@@ -1426,7 +1456,7 @@ export function App() {
       <h1>${appSettings.business_name}</h1>
       <h2>${[appSettings.business_subtitle, appSettings.ruc && `RUC: ${appSettings.ruc}`].filter(Boolean).join(" · ")}</h2>
       <h3>Recibo de Pago</h3>
-      <div class="meta"><div><strong>Trabajador:</strong> ${row.worker_name} (${roleLabel})</div><div><strong>Período:</strong> ${nominaFrom} al ${nominaTo}</div></div>
+      <div class="meta"><div><strong>Trabajador:</strong> ${row.worker_name} (${roleLabel})</div><div><strong>Período:</strong> ${from} al ${to}</div></div>
       <table>
         ${detailRows}
         <tr><td>Total ganado</td><td class="r">$${earned.toFixed(2)}</td></tr>
@@ -5243,6 +5273,12 @@ export function App() {
 
         {activeTab === "Nomina" && (
           <section className="cuentasLayout">
+            <nav className="cajaSubNav">
+              <button type="button" className={nominaView === "semana" ? "active" : ""} onClick={() => setNominaView("semana")}>📅 Semana</button>
+              <button type="button" className={nominaView === "historial" ? "active" : ""} onClick={() => { setNominaView("historial"); loadNominaHistory().catch(() => undefined); }}>📜 Historial</button>
+            </nav>
+
+            {nominaView === "semana" && (<>
             <div className="reportToolbar">
               <div>
                 <h2 style={{ marginBottom: 2 }}>👷 Nómina · Pilador y Estibador</h2>
@@ -5378,6 +5414,60 @@ export function App() {
                 <button className="primary">Agregar día</button>
               </form>
             </div>
+            </>)}
+
+            {nominaView === "historial" && (
+              <>
+                <div className="reportToolbar">
+                  <div>
+                    <h2 style={{ marginBottom: 2 }}>📜 Historial de pagos</h2>
+                    <p className="muted" style={{ margin: 0 }}>Semanas ya pagadas a cada trabajador. Puedes reimprimir el recibo.</p>
+                  </div>
+                  <div className="reportDates">
+                    <label><span>Desde</span><input type="date" value={histFrom} max={histTo} onChange={(e) => setHistFrom(e.target.value)} /></label>
+                    <label><span>Hasta</span><input type="date" value={histTo} min={histFrom} onChange={(e) => setHistTo(e.target.value)} /></label>
+                    <button type="button" className="primary" onClick={() => loadNominaHistory().catch(() => undefined)}>Ver</button>
+                  </div>
+                </div>
+                {histRows.length === 0 ? (
+                  <div className="emptyState"><div className="emptyIcon">📜</div><p>No hay pagos registrados en el período.</p></div>
+                ) : (
+                  <div className="tablePanel">
+                    <div style={{ overflowX: "auto" }}>
+                      <table className="cajaTable">
+                        <thead>
+                          <tr>
+                            <th>Semana</th><th>Rol</th><th>Trabajador</th>
+                            <th className="num">Reg.</th><th className="num">Ganó</th><th className="num">Anticipos</th><th className="num">Pagado</th><th />
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {histRows.map((h, i) => (
+                            <tr key={i}>
+                              <td>{new Date(h.week_start).toLocaleDateString("es-EC")}</td>
+                              <td><span className={h.worker_role === "PILADOR" ? "chip info" : h.worker_role === "ESTIBADOR" ? "chip ok" : "chip warn"}>{h.worker_role === "PILADOR" ? "Pilador" : h.worker_role === "ESTIBADOR" ? "Estibador" : "Secador"}</span></td>
+                              <td style={{ fontWeight: 600 }}>{h.worker_name}</td>
+                              <td className="num">{h.cnt}</td>
+                              <td className="num">{money(h.earned)}</td>
+                              <td className="num" style={{ color: h.advances_applied > 0 ? "var(--c-danger)" : "inherit" }}>{h.advances_applied > 0 ? `−${money(h.advances_applied)}` : "—"}</td>
+                              <td className="num" style={{ fontWeight: 700 }}>{money(h.earned - h.advances_applied)}</td>
+                              <td className="num"><button type="button" className="btnGhost" title="Reimprimir recibo" onClick={() => printHistoryReceipt(h)}>🧾</button></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr>
+                            <td colSpan={6} style={{ fontWeight: 700 }}>TOTAL PAGADO</td>
+                            <td className="num" style={{ fontWeight: 700 }}>{money(histRows.reduce((a, h) => a + (h.earned - h.advances_applied), 0))}</td>
+                            <td />
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </section>
         )}
 

@@ -246,6 +246,41 @@ laborRouter.get("/summary", asyncRoute(async (req, res) => {
   res.json({ range: { from, to }, rows });
 }));
 
+// ── Historial de pagos (semanas ya pagadas) ───────────────────────────────
+laborRouter.get("/history", asyncRoute(async (req, res) => {
+  await ensureLaborTables();
+  const q = z.object({
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+  }).parse(req.query);
+  const today = new Date();
+  const past = new Date(today);
+  past.setDate(past.getDate() - 60);
+  const from = q.from ?? past.toISOString().slice(0, 10);
+  const to = q.to ?? today.toISOString().slice(0, 10);
+
+  const result = await pool.query(
+    `SELECT wp.worker_role, wp.worker_name,
+            date_trunc('week', wp.paid_at)::date AS week_start,
+            COUNT(*)::int cnt,
+            SUM(wp.qq)::float qq,
+            SUM(wp.sacas)::float sacas,
+            SUM(wp.arrocillo)::float arrocillo,
+            SUM(wp.net_amount)::float earned,
+            MAX(wp.paid_at) AS paid_at,
+            (SELECT COALESCE(SUM(a.amount),0)::float FROM worker_advances a
+             WHERE a.worker_role = wp.worker_role AND a.worker_name = wp.worker_name
+               AND a.status = 'APPLIED'
+               AND date_trunc('week', a.applied_at) = date_trunc('week', MAX(wp.paid_at))) AS advances_applied
+     FROM worker_payments wp
+     WHERE wp.status = 'PAID' AND wp.paid_at::date BETWEEN $1 AND $2
+     GROUP BY wp.worker_role, wp.worker_name, date_trunc('week', wp.paid_at)
+     ORDER BY week_start DESC, wp.worker_role, wp.worker_name`,
+    [from, to]
+  );
+  res.json({ range: { from, to }, rows: result.rows });
+}));
+
 // ── Anticipos a trabajadores ───────────────────────────────────────────────
 laborRouter.get("/advances", asyncRoute(async (req, res) => {
   await ensureLaborTables();
