@@ -680,6 +680,8 @@ export function App() {
   const [nominaTo, setNominaTo] = useState(nominaToday);
   const [nominaRows, setNominaRows] = useState<WorkerSummary[]>([]);
   const [nominaBusy, setNominaBusy] = useState(false);
+  const [secadorSugg, setSecadorSugg] = useState<Array<{ worker_name: string; work_date: string; tunnels: number; suggested_amount: number; already_generated: boolean }> | null>(null);
+  const [secadorForm, setSecadorForm] = useState({ worker_name: "", work_date: nominaToday, tunnels: "0" });
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
   const [settingsForm, setSettingsForm] = useState<AppSettings>(defaultAppSettings);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
@@ -1345,6 +1347,33 @@ export function App() {
     } finally {
       setNominaBusy(false);
     }
+  }
+
+  async function loadSecadorSuggestions() {
+    try {
+      const data = await apiGet<{ rows: Array<{ worker_name: string; work_date: string; tunnels: number; suggested_amount: number; already_generated: boolean }> }>(
+        `/labor/secador-suggestions?from=${nominaFrom}&to=${nominaTo}`
+      );
+      setSecadorSugg(data.rows);
+      if (data.rows.length === 0) addToast("No se encontraron días de secado en Secadora para este período", "warn");
+    } catch (e) {
+      addToast(`Error: ${e instanceof Error ? e.message : "desconocido"}`, "error");
+    }
+  }
+
+  async function generateSecadorDays(days: Array<{ worker_name: string; work_date: string; tunnels: number }>) {
+    if (days.length === 0) { addToast("No hay días nuevos para generar", "warn"); return; }
+    const res = await apiPost<{ created: number }>("/labor/secador-days", { days });
+    addToast(`${res.created} día(s) de secador generados`, "success");
+    await loadSecadorSuggestions();
+    await refreshNomina();
+  }
+
+  async function addSecadorDayManual(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (secadorForm.worker_name.trim().length < 2) { addToast("Ingresa el nombre del secador", "error"); return; }
+    await generateSecadorDays([{ worker_name: secadorForm.worker_name.trim(), work_date: secadorForm.work_date, tunnels: Number(secadorForm.tunnels) || 0 }]);
+    setSecadorForm({ ...secadorForm, tunnels: "0" });
   }
 
   async function payWorkerWeek(row: WorkerSummary) {
@@ -5191,6 +5220,64 @@ export function App() {
                 </div>
               </div>
             )}
+
+            {/* ── Secador (conectado a Secadora) ── */}
+            <div className="panelGrid">
+              <div className="tablePanel">
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                  <div>
+                    <h2 style={{ marginBottom: 2 }}>🌡️ Secador · desde Secadora</h2>
+                    <p className="muted" style={{ margin: 0 }}>Detecta los días de secado (guardianía $ + $ por túnel). Los días de solo guardianía se agregan a mano.</p>
+                  </div>
+                  <button type="button" className="btnSecondary" onClick={() => loadSecadorSuggestions().catch(() => undefined)}>🔍 Detectar de Secadora</button>
+                </div>
+                {secadorSugg && secadorSugg.length > 0 && (
+                  <>
+                    <table className="cajaTable" style={{ marginTop: 8 }}>
+                      <thead><tr><th>Fecha</th><th>Secador</th><th className="num">Túneles</th><th className="num">Pago</th><th className="num">Estado</th></tr></thead>
+                      <tbody>
+                        {secadorSugg.map((s, i) => (
+                          <tr key={i}>
+                            <td>{new Date(s.work_date).toLocaleDateString("es-EC")}</td>
+                            <td>{s.worker_name}</td>
+                            <td className="num">{s.tunnels}</td>
+                            <td className="num" style={{ fontWeight: 700 }}>{money(s.suggested_amount)}</td>
+                            <td className="num">{s.already_generated ? <span className="chip ok">Generado</span> : <span className="chip warn">Nuevo</span>}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <button
+                      type="button"
+                      className="primary"
+                      style={{ marginTop: 10 }}
+                      onClick={() => generateSecadorDays(secadorSugg.filter((s) => !s.already_generated).map((s) => ({ worker_name: s.worker_name, work_date: s.work_date.slice(0, 10), tunnels: s.tunnels }))).catch((e) => addToast(e.message, "error"))}
+                    >
+                      Generar pagos de los días nuevos
+                    </button>
+                  </>
+                )}
+                {secadorSugg && secadorSugg.length === 0 && (
+                  <div className="emptyState" style={{ padding: "22px 20px" }}><p>No hay días de secado en el período. Registra el secado en la pestaña Secadoras (con el nombre del secador).</p></div>
+                )}
+              </div>
+
+              <form className="formPanel" onSubmit={(e) => addSecadorDayManual(e).catch((err) => addToast(err.message, "error"))}>
+                <h2>➕ Agregar día de secador</h2>
+                <p className="muted">Para días de solo guardianía o ajustes manuales.</p>
+                <label><span>Secador</span><input type="text" placeholder="Ej: MARGARO" value={secadorForm.worker_name} onChange={(e) => setSecadorForm({ ...secadorForm, worker_name: e.target.value })} /></label>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <label><span>Fecha</span><input type="date" value={secadorForm.work_date} onChange={(e) => setSecadorForm({ ...secadorForm, work_date: e.target.value })} /></label>
+                  <label><span>Túneles secados</span><input type="number" min="0" max="10" step="1" value={secadorForm.tunnels} onChange={(e) => setSecadorForm({ ...secadorForm, tunnels: e.target.value })} /></label>
+                </div>
+                <div className="totalBox">
+                  <span>Pago de este día</span>
+                  <strong>{money(laborRatesForm.secador_guardiania + laborRatesForm.secador_per_tunel * (Number(secadorForm.tunnels) || 0))}</strong>
+                  <small>Guardianía {money(laborRatesForm.secador_guardiania)} + {Number(secadorForm.tunnels) || 0} × {money(laborRatesForm.secador_per_tunel)}</small>
+                </div>
+                <button className="primary">Agregar día</button>
+              </form>
+            </div>
           </section>
         )}
 

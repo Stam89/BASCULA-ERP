@@ -240,6 +240,83 @@ laborRouter.put("/payments/:id", requireAdmin, asyncRoute(async (req, res) => {
   res.json(result.rows[0]);
 }));
 
+// ── Secador: días detectados desde Secadora (reportes de secado) ───────────
+laborRouter.get("/secador-suggestions", asyncRoute(async (req, res) => {
+  await ensureLaborTables();
+  const q = z.object({
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+  }).parse(req.query);
+  const today = new Date();
+  const monday = new Date(today);
+  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+  const from = q.from ?? monday.toISOString().slice(0, 10);
+  const to = q.to ?? today.toISOString().slice(0, 10);
+  const rates = await getRates();
+
+  const result = await pool.query(
+    `SELECT sub.worker_name, sub.work_date, sub.tunnels,
+            EXISTS(
+              SELECT 1 FROM worker_payments wp
+              WHERE wp.worker_role = 'SECADOR' AND wp.worker_name = sub.worker_name AND wp.work_date = sub.work_date
+            ) AS already_generated
+     FROM (
+       SELECT COALESCE(NULLIF(TRIM(dryer_name), ''), 'Sin secador') AS worker_name,
+              COALESCE(dry_start_at, created_at)::date AS work_date,
+              COUNT(DISTINCT tunnel_number)::int AS tunnels
+       FROM drying_tunnel_reports
+       WHERE COALESCE(dry_start_at, created_at)::date BETWEEN $1 AND $2
+       GROUP BY 1, 2
+     ) sub
+     ORDER BY sub.work_date DESC, sub.worker_name`,
+    [from, to]
+  ).catch(() => ({ rows: [] as Array<{ worker_name: string; work_date: string; tunnels: number; already_generated: boolean }> }));
+
+  const rows = result.rows.map((r) => ({
+    worker_name: r.worker_name,
+    work_date: r.work_date,
+    tunnels: r.tunnels,
+    suggested_amount: round2(rates.secador_guardiania + rates.secador_per_tunel * r.tunnels),
+    already_generated: r.already_generated
+  }));
+  res.json({ range: { from, to }, rows });
+}));
+
+// Crea pagos de secador por día (guardianía + túneles). Sirve para "generar"
+// los días detectados de Secadora y para agregar días de solo guardianía.
+laborRouter.post("/secador-days", asyncRoute(async (req, res) => {
+  await ensureLaborTables();
+  const body = z.object({
+    days: z.array(z.object({
+      worker_name: z.string().min(1),
+      work_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      tunnels: z.number().int().min(0).max(10)
+    })).min(1)
+  }).parse(req.body);
+  const user = (req as AuthenticatedRequest).user;
+  const rates = await getRates();
+
+  const created = await inTransaction(async (client) => {
+    let count = 0;
+    for (const d of body.days) {
+      const dup = await client.query(
+        `SELECT 1 FROM worker_payments WHERE worker_role='SECADOR' AND worker_name=$1 AND work_date=$2 LIMIT 1`,
+        [d.worker_name.trim(), d.work_date]
+      );
+      if (dup.rowCount) continue;
+      const base = round2(rates.secador_guardiania + rates.secador_per_tunel * d.tunnels);
+      await client.query(
+        `INSERT INTO worker_payments (worker_role, worker_name, work_date, tunnels, base_amount, net_amount, created_by)
+         VALUES ('SECADOR', $1, $2, $3, $4, $4, $5)`,
+        [d.worker_name.trim(), d.work_date, d.tunnels, base, user?.id ?? null]
+      );
+      count++;
+    }
+    return count;
+  });
+  res.json({ created });
+}));
+
 // ── Pagar toda la semana de un trabajador de una vez ───────────────────────
 laborRouter.post("/pay-worker", asyncRoute(async (req, res) => {
   await ensureLaborTables();

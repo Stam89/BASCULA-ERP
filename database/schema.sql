@@ -646,3 +646,36 @@ ALTER TABLE cash_movements ADD COLUMN IF NOT EXISTS reversal_of UUID;
 ALTER TABLE cash_movements ADD COLUMN IF NOT EXISTS reversed_at TIMESTAMPTZ;
 ALTER TABLE cash_movements ADD COLUMN IF NOT EXISTS reversed_by UUID;
 ALTER TABLE cash_movements ADD COLUMN IF NOT EXISTS reversed_reason TEXT;
+
+-- Nómina de trabajadores (pilador, estibador, secador)
+CREATE TABLE IF NOT EXISTS labor_rates (
+  id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  pilador_per_qq NUMERIC(10,4) NOT NULL DEFAULT 0.15,
+  pilador_per_saca NUMERIC(10,4) NOT NULL DEFAULT 0.15,
+  estibador_per_qq NUMERIC(10,4) NOT NULL DEFAULT 0.10,
+  estibador_per_saca NUMERIC(10,4) NOT NULL DEFAULT 0.25,
+  estibador_per_arrocillo NUMERIC(10,4) NOT NULL DEFAULT 0.10,
+  secador_guardiania NUMERIC(10,4) NOT NULL DEFAULT 10,
+  secador_per_tunel NUMERIC(10,4) NOT NULL DEFAULT 5,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS worker_payments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  worker_role VARCHAR(20) NOT NULL,
+  worker_name VARCHAR(140) NOT NULL,
+  work_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  reference_type VARCHAR(40),
+  reference_id UUID,
+  qq NUMERIC(14,3) NOT NULL DEFAULT 0,
+  sacas NUMERIC(14,3) NOT NULL DEFAULT 0,
+  arrocillo NUMERIC(14,3) NOT NULL DEFAULT 0,
+  tunnels INT NOT NULL DEFAULT 0,
+  base_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+  discount NUMERIC(14,2) NOT NULL DEFAULT 0,
+  net_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+  status VARCHAR(12) NOT NULL DEFAULT 'PENDING',
+  paid_at TIMESTAMPTZ,
+  cash_register_id UUID,
+  created_by UUID,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
