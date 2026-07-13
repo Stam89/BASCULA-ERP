@@ -242,6 +242,55 @@ export async function procesarLiquidacionTicket(
   });
 }
 
+// Lista los tickets sincronizados/importados de la báscula (para la vista web).
+mobileTicketsRouter.get("/", asyncRoute(async (req, res) => {
+  const q = z.object({ status: z.enum(["pending", "liquidated"]).optional() }).parse(req.query);
+  const where = q.status === "pending" ? "WHERE t.liquidated_at IS NULL"
+    : q.status === "liquidated" ? "WHERE t.liquidated_at IS NOT NULL" : "";
+  const result = await pool.query(
+    `SELECT t.id, t.farmer_id, t.farmer_name, t.gross_weight, t.tare_weight, t.net_weight,
+            t.qualification, t.quintals, t.price_per_quintal, t.net_payable, t.liquidated_at,
+            t.mobile_updated_at,
+            t.raw_payload->>'numeroTicket' AS numero,
+            t.raw_payload->>'modo' AS modo,
+            t.raw_payload->>'fecha' AS fecha_app,
+            t.raw_payload->>'placa' AS placa,
+            t.raw_payload->>'calidad' AS calidad
+     FROM mobile_synced_tickets t
+     ${where}
+     ORDER BY t.liquidated_at IS NOT NULL, t.mobile_updated_at DESC NULLS LAST
+     LIMIT 500`
+  );
+  res.json(result.rows);
+}));
+
+// Vincula un ticket a un agricultor (existente por id, o crea uno por nombre).
+mobileTicketsRouter.post("/:id/link-farmer", asyncRoute(async (req, res) => {
+  const body = z.object({
+    farmer_id: z.string().uuid().optional(),
+    full_name: z.string().optional()
+  }).parse(req.body);
+
+  let farmerId = body.farmer_id;
+  if (!farmerId) {
+    const name = (body.full_name ?? "").trim();
+    if (name.length < 2) throw new ApiError(400, "Elige un agricultor o escribe un nombre para crearlo");
+    const created = await pool.query(
+      "INSERT INTO farmers (full_name) VALUES ($1) RETURNING id, full_name",
+      [name]
+    );
+    farmerId = created.rows[0].id;
+  }
+
+  const updated = await pool.query(
+    `UPDATE mobile_synced_tickets SET farmer_id = $2 WHERE id = $1
+     RETURNING id, farmer_id, farmer_name`,
+    [req.params.id, farmerId]
+  );
+  if (!updated.rowCount) throw new ApiError(404, "Ticket no encontrado");
+  res.json(updated.rows[0]);
+}));
+
 mobileTicketsRouter.post("/sync", asyncRoute(async (req, res) => {
   const body = syncSchema.parse(req.body);
   const syncedIds: string[] = [];

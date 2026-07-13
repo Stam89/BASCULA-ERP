@@ -114,6 +114,23 @@ type AuditEntry = {
   created_at: string;
 };
 
+type BasculaTicket = {
+  id: string;
+  farmer_id: string | null;
+  farmer_name: string | null;
+  gross_weight: string | number;
+  tare_weight: string | number;
+  net_weight: string | number;
+  qualification: string | number;
+  quintals: string | number;
+  liquidated_at: string | null;
+  numero: string | null;
+  modo: string | null;
+  fecha_app: string | null;
+  placa: string | null;
+  calidad: string | null;
+};
+
 type ReportSummary = {
   range: { from: string; to: string };
   sales: { total: number; cnt: number };
@@ -632,6 +649,15 @@ export function App() {
   const [productionPackages, setProductionPackages] = useState<ProductionPackageState>(defaultProductionPackages);
   const [orderPackage, setOrderPackage] = useState<OrderPackageState>(defaultOrderPackage);
   const [weighingRiceType, setWeighingRiceType] = useState<"0.11" | "CORRIENTE">("0.11");
+
+  // ── Tickets sincronizados de la app de báscula ──────────────────────────────
+  const [basculaTickets, setBasculaTickets] = useState<BasculaTicket[]>([]);
+  const [ticketFilter, setTicketFilter] = useState<"pending" | "liquidated" | "all">("pending");
+  const [linkTicket, setLinkTicket] = useState<BasculaTicket | null>(null);
+  const [linkFarmerId, setLinkFarmerId] = useState("");
+  const [liqTicket, setLiqTicket] = useState<BasculaTicket | null>(null);
+  const [liqPrecio, setLiqPrecio] = useState("");
+  const [liqPreview, setLiqPreview] = useState<{ quintals: number; grossPayable: number; advancesDiscount: number; netPayable: number } | null>(null);
   const [selectedDryer, setSelectedDryer] = useState(dryerOptions[0]);
   const [dryerProducer, setDryerProducer] = useState("");
   const [dryerWeightQq, setDryerWeightQq] = useState("");
@@ -1538,6 +1564,11 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
+  useEffect(() => {
+    if (activeTab === "Bascula") refreshBasculaTickets().catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, ticketFilter]);
+
   function exportReportCsv(headers: string[], rows: (string | number)[][], filename: string) {
     const escape = (v: string | number) => {
       const s = String(v);
@@ -1748,6 +1779,62 @@ export function App() {
     setCustomers(custs);
     setSales(sls);
     setAccountsReceivable(ar.filter(a => a.status !== "PAID"));
+  }
+
+  async function refreshBasculaTickets() {
+    const qs = ticketFilter === "all" ? "" : `?status=${ticketFilter}`;
+    const data = await apiGet<BasculaTicket[]>(`/tickets${qs}`);
+    setBasculaTickets(data);
+  }
+
+  async function submitLinkFarmer() {
+    if (!linkTicket) return;
+    if (!linkFarmerId) { addToast("Selecciona o crea un agricultor", "error"); return; }
+    try {
+      const body = linkFarmerId === "__new__"
+        ? { full_name: (linkTicket.farmer_name || "").trim() }
+        : { farmer_id: linkFarmerId };
+      await apiPost(`/tickets/${linkTicket.id}/link-farmer`, body);
+      addToast("Ticket vinculado al agricultor", "success");
+      setLinkTicket(null);
+      setLinkFarmerId("");
+      await Promise.all([refreshBasculaTickets(), refresh()]);
+    } catch (e) {
+      addToast(`No se pudo vincular: ${e instanceof Error ? e.message : "error"}`, "error");
+    }
+  }
+
+  async function previewTicketLiquidation() {
+    if (!liqTicket) return;
+    const precio = Number(liqPrecio);
+    if (!precio || precio <= 0) { addToast("Ingresa el precio por QQ", "error"); return; }
+    try {
+      const preview = await apiPost<{ quintals: number; grossPayable: number; advancesDiscount: number; netPayable: number }>(
+        `/tickets/${liqTicket.id}/liquidation-preview`, { precioQQ: precio }
+      );
+      setLiqPreview(preview);
+    } catch (e) {
+      addToast(`Error en vista previa: ${e instanceof Error ? e.message : "error"}`, "error");
+    }
+  }
+
+  async function confirmTicketLiquidation() {
+    if (!liqTicket) return;
+    const precio = Number(liqPrecio);
+    if (!precio || precio <= 0) { addToast("Ingresa el precio por QQ", "error"); return; }
+    try {
+      await apiPost(`/tickets/${liqTicket.id}/liquidate`, {
+        precioQQ: precio,
+        cash_register_id: dashboard.current_cash_register?.id
+      });
+      addToast(`Ticket liquidado (${money(liqPreview?.netPayable ?? 0)})`, "success");
+      setLiqTicket(null);
+      setLiqPrecio("");
+      setLiqPreview(null);
+      await Promise.all([refreshBasculaTickets(), refresh()]);
+    } catch (e) {
+      addToast(`No se pudo liquidar: ${e instanceof Error ? e.message : "error"}`, "error");
+    }
   }
 
   // Cargas ligeras para las pestañas de Cuentas (no requieren caja abierta).
@@ -3240,6 +3327,7 @@ export function App() {
         )}
 
         {activeTab === "Bascula" && (
+          <>
           <section className="panelGrid">
             <form className="formPanel" onSubmit={(event) => submitWeighing(event).catch((error) => setMessage(error.message))}>
               <h2>Registrar ingreso</h2>
@@ -3263,6 +3351,68 @@ export function App() {
               rows={lots.slice(0, 8).map((lot) => [lot.lot_code, lot.farmer_name ?? "—", riceTypeLabel(lot.rice_type), `${Number(lot.quintals ?? 0).toFixed(2)} QQ`])}
             />
           </section>
+
+          <div className="tablePanel">
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+              <div>
+                <h2 style={{ marginBottom: 2 }}>📲 Tickets de la app de báscula</h2>
+                <p className="muted" style={{ margin: 0 }}>Pesajes que llegan de tu app. Vincula cada uno a su agricultor y liquídalo.</p>
+              </div>
+              <div className="cajaSubNav" style={{ borderBottom: "none" }}>
+                {(["pending", "liquidated", "all"] as const).map((f) => (
+                  <button key={f} type="button" className={ticketFilter === f ? "active" : ""} onClick={() => { setTicketFilter(f); }}>
+                    {f === "pending" ? "Pendientes" : f === "liquidated" ? "Liquidados" : "Todos"}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {basculaTickets.length === 0 ? (
+              <div className="emptyState"><div className="emptyIcon">📲</div><p>No hay tickets. Importa desde tu app con IMPORTAR-BASCULA.bat.</p></div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table className="cajaTable" style={{ marginTop: 8 }}>
+                  <thead>
+                    <tr>
+                      <th>Ticket</th><th>Cliente</th><th>Placa</th>
+                      <th className="num">Bruto</th><th className="num">Tara</th><th className="num">Neto</th><th className="num">QQ</th>
+                      <th>Estado</th><th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {basculaTickets.map((t) => {
+                      const linked = !!t.farmer_id;
+                      const liquidated = !!t.liquidated_at;
+                      return (
+                        <tr key={t.id}>
+                          <td style={{ fontWeight: 600 }}>#{t.numero ?? "—"}</td>
+                          <td>{t.farmer_name || "—"}</td>
+                          <td>{t.placa || "—"}</td>
+                          <td className="num">{Number(t.gross_weight).toFixed(0)}</td>
+                          <td className="num">{Number(t.tare_weight).toFixed(0)}</td>
+                          <td className="num">{Number(t.net_weight).toFixed(0)}</td>
+                          <td className="num" style={{ fontWeight: 700 }}>{Number(t.quintals).toFixed(2)}</td>
+                          <td>
+                            {liquidated ? <span className="chip ok">Liquidado</span>
+                              : linked ? <span className="chip info">Vinculado</span>
+                              : <span className="chip warn">Sin agricultor</span>}
+                          </td>
+                          <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
+                            {!liquidated && (
+                              <>
+                                <button type="button" className="btnGhost" onClick={() => { setLinkTicket(t); setLinkFarmerId(""); }}>{linked ? "Cambiar" : "Vincular"}</button>
+                                {linked && <button type="button" className="liqAbonoBtn" style={{ marginLeft: 6 }} onClick={() => { setLiqTicket(t); setLiqPrecio(""); setLiqPreview(null); }}>Liquidar</button>}
+                              </>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+          </>
         )}
 
         {activeTab === "Secadoras" && (
@@ -6137,6 +6287,59 @@ export function App() {
         </div>{/* .content */}
       </section>
     </main>
+
+    {/* Modal: vincular ticket de báscula a un agricultor */}
+    {linkTicket && (
+      <div className="modalOverlay" onClick={() => setLinkTicket(null)}>
+        <div className="modalCard" onClick={(e) => e.stopPropagation()}>
+          <h3>Vincular ticket #{linkTicket.numero} a un agricultor</h3>
+          <p className="muted">En la báscula figura como: <strong>{linkTicket.farmer_name || "(sin nombre)"}</strong></p>
+          <label>
+            <span>Agricultor</span>
+            <select value={linkFarmerId} onChange={(e) => setLinkFarmerId(e.target.value)}>
+              <option value="">Selecciona…</option>
+              {(linkTicket.farmer_name || "").trim().length >= 2 && (
+                <option value="__new__">➕ Crear "{linkTicket.farmer_name}"</option>
+              )}
+              {farmers.map((f) => <option key={f.id} value={f.id}>{f.full_name}</option>)}
+            </select>
+          </label>
+          <div className="buttonRow">
+            <button type="button" className="primary" onClick={() => submitLinkFarmer().catch((e) => addToast(e.message, "error"))}>Vincular</button>
+            <button type="button" onClick={() => setLinkTicket(null)}>Cancelar</button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* Modal: liquidar ticket de báscula */}
+    {liqTicket && (
+      <div className="modalOverlay" onClick={() => setLiqTicket(null)}>
+        <div className="modalCard" onClick={(e) => e.stopPropagation()}>
+          <h3>Liquidar ticket #{liqTicket.numero}</h3>
+          <p className="muted">{liqTicket.farmer_name} · {Number(liqTicket.quintals).toFixed(2)} QQ</p>
+          {!dashboard.current_cash_register && <div className="alertBox">Abre una caja para que el pago quede registrado.</div>}
+          <label>
+            <span>Precio por quintal $</span>
+            <input type="number" step="0.01" min="0" placeholder="0.00" value={liqPrecio}
+              onChange={(e) => { setLiqPrecio(e.target.value); setLiqPreview(null); }} />
+          </label>
+          {liqPreview ? (
+            <div className="liqSummary">
+              <div className="liqSummaryRow"><span>Bruto ({Number(liqTicket.quintals).toFixed(2)} QQ × ${Number(liqPrecio).toFixed(2)})</span><span>{money(liqPreview.grossPayable)}</span></div>
+              {liqPreview.advancesDiscount > 0 && <div className="liqSummaryRow disc"><span>Descuento anticipos</span><span>−{money(liqPreview.advancesDiscount)}</span></div>}
+              <div className="liqSummaryRow total"><span>Neto a pagar</span><span>{money(liqPreview.netPayable)}</span></div>
+            </div>
+          ) : (
+            <button type="button" className="btnSecondary" onClick={() => previewTicketLiquidation().catch((e) => addToast(e.message, "error"))}>Calcular</button>
+          )}
+          <div className="buttonRow">
+            <button type="button" className="primary" disabled={!liqPreview} onClick={() => confirmTicketLiquidation().catch((e) => addToast(e.message, "error"))}>Confirmar liquidación</button>
+            <button type="button" onClick={() => setLiqTicket(null)}>Cancelar</button>
+          </div>
+        </div>
+      </div>
+    )}
 
     {toasts.length > 0 && (
       <div className="toastBar">
