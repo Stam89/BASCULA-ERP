@@ -34,9 +34,11 @@ function fail(msg) {
   process.exit(1);
 }
 
-let admin;
+let firebaseApp;
+let firebaseFirestore;
 try {
-  admin = require("firebase-admin");
+  firebaseApp = require("firebase-admin/app");
+  firebaseFirestore = require("firebase-admin/firestore");
 } catch {
   fail('Falta la dependencia. Ejecuta una vez:  cd backend && npm install firebase-admin');
 }
@@ -48,8 +50,8 @@ if (!NEGOCIO_ID) {
 }
 
 (async () => {
-  admin.initializeApp({ credential: admin.credential.cert(require(KEY_PATH)) });
-  const db = admin.firestore();
+  firebaseApp.initializeApp({ credential: firebaseApp.cert(require(KEY_PATH)) });
+  const db = firebaseFirestore.getFirestore();
 
   console.log(`Leyendo negocios/${NEGOCIO_ID}/${COLLECTION} …`);
   const snap = await db.collection("negocios").doc(NEGOCIO_ID).collection(COLLECTION).get();
