@@ -1,6 +1,7 @@
 import os from "os";
 import { app } from "./app.js";
 import { env } from "./config/env.js";
+import { startFirebaseAutoImport } from "./integrations/bascula-firebase.js";
 
 function lanAddresses(): string[] {
   const nets = os.networkInterfaces();
@@ -23,4 +24,6 @@ app.listen(env.port, "0.0.0.0", () => {
     console.log(`  Otras PCs/tablets: http://${ip}:${env.port}`);
   }
   console.log("");
+  // Importa automáticamente los tickets de la báscula desde Firebase.
+  startFirebaseAutoImport(3);
 });

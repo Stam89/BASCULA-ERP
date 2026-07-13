@@ -393,19 +393,19 @@ mobileTicketsRouter.post("/sync", asyncRoute(async (req, res) => {
   });
 }));
 
-// Importa tickets en el formato NATIVO de la app de báscula (por ejemplo desde
-// un puente que los lee de Firebase). Mapea los nombres de campos al modelo del
-// ERP y es idempotente (mismo numeroTicket = mismo registro).
-mobileTicketsRouter.post("/import-bascula", asyncRoute(async (req, res) => {
-  const body = basculaImportSchema.parse(req.body);
+// Mapea e inserta tickets en el formato NATIVO de la app de báscula. Idempotente
+// (mismo numeroTicket = mismo registro). Reutilizable por el endpoint HTTP y por
+// la importación automática desde Firebase.
+export async function importBasculaTickets(
+  rawTickets: unknown[],
+  deviceId = "bascula"
+): Promise<{ imported: Array<{ numeroTicket: string; id: string }>; count: number }> {
   const imported: Array<{ numeroTicket: string; id: string }> = [];
-
-  for (const t of body.tickets) {
+  for (const raw of rawTickets) {
+    const t = basculaTicketSchema.parse(raw);
     const id = stableUuid(`${t.modo}_${t.numeroTicket}`);
-    const netWeight = t.pesoNeto ?? calculateNetWeight(t.pesoBruto, t.pesoTara);
-    if (netWeight < 0) {
-      throw new ApiError(400, `Ticket ${t.numeroTicket}: la tara no puede ser mayor que el bruto`);
-    }
+    let netWeight = t.pesoNeto ?? calculateNetWeight(t.pesoBruto, t.pesoTara);
+    if (netWeight < 0) netWeight = 0; // no romper el lote por un ticket con tara mayor
     const quintals = t.totalQQ ?? (t.calificacion > 0 ? calculateQuintals(netWeight, t.calificacion) : 0);
     const ts = t.actualizadoEn ?? Date.now();
 
@@ -427,12 +427,27 @@ mobileTicketsRouter.post("/import-bascula", asyncRoute(async (req, res) => {
         mobile_updated_at = EXCLUDED.mobile_updated_at,
         synced_at = now(),
         raw_payload = EXCLUDED.raw_payload`,
-      [id, body.deviceId, (t.cliente || "").trim(), t.pesoBruto, t.pesoTara, netWeight, t.calificacion, quintals, ts, JSON.stringify(t)]
+      [id, deviceId, (t.cliente || "").trim(), t.pesoBruto, t.pesoTara, netWeight, t.calificacion, quintals, ts, JSON.stringify(t)]
     );
     imported.push({ numeroTicket: t.numeroTicket, id });
   }
+  return { imported, count: imported.length };
+}
 
-  res.status(201).json({ imported, count: imported.length });
+// Importa tickets en el formato NATIVO de la app de báscula (por ejemplo desde
+// un puente que los lee de Firebase).
+mobileTicketsRouter.post("/import-bascula", asyncRoute(async (req, res) => {
+  const body = basculaImportSchema.parse(req.body);
+  const result = await importBasculaTickets(body.tickets, body.deviceId);
+  res.status(201).json(result);
+}));
+
+// Trae los tickets desde Firebase ahora mismo (botón "Importar" en la app).
+mobileTicketsRouter.post("/refresh-firebase", asyncRoute(async (_req, res) => {
+  const { importFromFirebase } = await import("../../integrations/bascula-firebase.js");
+  const result = await importFromFirebase();
+  if (!result.ok) throw new ApiError(400, result.reason);
+  res.json(result);
 }));
 
 mobileTicketsRouter.post("/:id/liquidation-preview", asyncRoute(async (req, res) => {

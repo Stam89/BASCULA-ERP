@@ -1787,6 +1787,20 @@ export function App() {
     setBasculaTickets(data);
   }
 
+  const [basculaImporting, setBasculaImporting] = useState(false);
+  async function runFirebaseImport() {
+    setBasculaImporting(true);
+    try {
+      const res = await apiPost<{ ok: boolean; count: number }>("/tickets/refresh-firebase", {});
+      addToast(res.count > 0 ? `${res.count} tickets traídos de la báscula` : "Sin tickets nuevos en la báscula", "success");
+      await refreshBasculaTickets();
+    } catch (e) {
+      addToast(`No se pudo importar: ${e instanceof Error ? e.message : "error"}`, "error");
+    } finally {
+      setBasculaImporting(false);
+    }
+  }
+
   async function submitLinkFarmer() {
     if (!linkTicket) return;
     if (!linkFarmerId) { addToast("Selecciona o crea un agricultor", "error"); return; }
@@ -3356,8 +3370,11 @@ export function App() {
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
               <div>
                 <h2 style={{ marginBottom: 2 }}>📲 Tickets de la app de báscula</h2>
-                <p className="muted" style={{ margin: 0 }}>Pesajes que llegan de tu app. Vincula cada uno a su agricultor y liquídalo.</p>
+                <p className="muted" style={{ margin: 0 }}>Pesajes que llegan de tu app. Se importan solos; también puedes traerlos al instante.</p>
               </div>
+              <button type="button" className="btnSecondary" disabled={basculaImporting} onClick={() => runFirebaseImport()}>
+                {basculaImporting ? "Importando…" : "⟳ Importar de báscula"}
+              </button>
               <div className="cajaSubNav" style={{ borderBottom: "none" }}>
                 {(["pending", "liquidated", "all"] as const).map((f) => (
                   <button key={f} type="button" className={ticketFilter === f ? "active" : ""} onClick={() => { setTicketFilter(f); }}>
