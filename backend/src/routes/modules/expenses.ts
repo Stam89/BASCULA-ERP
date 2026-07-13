@@ -3,10 +3,12 @@ import { z } from "zod";
 import { inTransaction } from "../../db/transaction.js";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
+import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const expensesRouter = Router();
 
 expensesRouter.post("/", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const body = z.object({
     category_id: z.string().uuid().optional(),
     cash_register_id: z.string().uuid().optional(),
@@ -18,10 +20,10 @@ expensesRouter.post("/", asyncRoute(async (req, res) => {
 
   const result = await inTransaction(async (client) => {
     const expense = await client.query(
-      `INSERT INTO expenses (category_id, cash_register_id, amount, description, paid_to, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO expenses (category_id, cash_register_id, amount, description, paid_to, created_by, accionista_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [body.category_id, body.cash_register_id, body.amount, body.description, body.paid_to, body.created_by]
+      [body.category_id, body.cash_register_id, body.amount, body.description, body.paid_to, body.created_by, accionistaId]
     );
 
     if (body.cash_register_id) {
@@ -59,8 +61,12 @@ expensesRouter.post("/labor-payments", asyncRoute(async (req, res) => {
   res.status(201).json(result.rows[0]);
 }));
 
-expensesRouter.get("/", asyncRoute(async (_req, res) => {
-  const result = await pool.query("SELECT * FROM expenses ORDER BY created_at DESC LIMIT 500");
+expensesRouter.get("/", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const result = await pool.query(
+    "SELECT * FROM expenses WHERE accionista_id = $1 ORDER BY created_at DESC LIMIT 500",
+    [accionistaId]
+  );
   res.json(result.rows);
 }));
 

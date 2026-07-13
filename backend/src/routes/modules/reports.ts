@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
-import { requireAdmin } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const reportsRouter = Router();
 
@@ -39,38 +39,42 @@ reportsRouter.use(requireAdmin);
 // ── Resumen consolidado del período ────────────────────────────────────────
 reportsRouter.get("/summary", asyncRoute(async (req, res) => {
   const { from, to } = parseRange(req.query);
+  const acc = (req as AuthenticatedRequest).accionistaId;
   const hasProduction = await hasTable("processing_batches");
 
   const [sales, liq, exp, cash, prod, ar, ap] = await Promise.all([
     pool.query(
       `SELECT COALESCE(SUM(total_amount),0)::float total, COUNT(*)::int cnt
-       FROM sales WHERE sale_status <> 'CANCELLED' AND created_at::date BETWEEN $1 AND $2`,
-      [from, to]
+       FROM sales WHERE sale_status <> 'CANCELLED' AND created_at::date BETWEEN $1 AND $2 AND accionista_id = $3`,
+      [from, to, acc]
     ),
     pool.query(
       `SELECT COALESCE(SUM(net_amount),0)::float net, COALESCE(SUM(gross_amount),0)::float gross, COUNT(*)::int cnt
-       FROM liquidations WHERE status <> 'CANCELLED' AND created_at::date BETWEEN $1 AND $2`,
-      [from, to]
+       FROM liquidations WHERE status <> 'CANCELLED' AND created_at::date BETWEEN $1 AND $2 AND accionista_id = $3`,
+      [from, to, acc]
     ),
     pool.query(
       `SELECT COALESCE(SUM(amount),0)::float total, COUNT(*)::int cnt
-       FROM expenses WHERE created_at::date BETWEEN $1 AND $2`,
-      [from, to]
+       FROM expenses WHERE created_at::date BETWEEN $1 AND $2 AND accionista_id = $3`,
+      [from, to, acc]
     ),
     pool.query(
       `SELECT movement, COALESCE(SUM(amount),0)::float total
-       FROM cash_movements WHERE created_at::date BETWEEN $1 AND $2 GROUP BY movement`,
-      [from, to]
+       FROM cash_movements
+       WHERE created_at::date BETWEEN $1 AND $2
+         AND cash_register_id IN (SELECT id FROM cash_registers WHERE accionista_id = $3)
+       GROUP BY movement`,
+      [from, to, acc]
     ),
     hasProduction
       ? pool.query(
           `SELECT COALESCE(SUM(input_quantity),0)::float input, COUNT(*)::int cnt
-           FROM processing_batches WHERE created_at::date BETWEEN $1 AND $2`,
-          [from, to]
+           FROM processing_batches WHERE created_at::date BETWEEN $1 AND $2 AND accionista_id = $3`,
+          [from, to, acc]
         )
       : Promise.resolve({ rows: [{ input: 0, cnt: 0 }] }),
-    pool.query(`SELECT COALESCE(SUM(balance),0)::float total FROM accounts_receivable WHERE status <> 'PAID'`),
-    pool.query(`SELECT COALESCE(SUM(balance),0)::float total FROM accounts_payable WHERE status <> 'PAID'`)
+    pool.query(`SELECT COALESCE(SUM(balance),0)::float total FROM accounts_receivable WHERE status <> 'PAID' AND accionista_id = $1`, [acc]),
+    pool.query(`SELECT COALESCE(SUM(balance),0)::float total FROM accounts_payable WHERE status <> 'PAID' AND accionista_id = $1`, [acc])
   ]);
 
   const cashIncome = cash.rows.find((r) => r.movement === "INCOME")?.total ?? 0;
@@ -91,30 +95,31 @@ reportsRouter.get("/summary", asyncRoute(async (req, res) => {
 // ── Ventas: por producto, por cliente y por día ────────────────────────────
 reportsRouter.get("/sales", asyncRoute(async (req, res) => {
   const { from, to } = parseRange(req.query);
+  const acc = (req as AuthenticatedRequest).accionistaId;
   const [byProduct, byCustomer, daily] = await Promise.all([
     pool.query(
       `SELECT p.name, SUM(si.quantity)::float qty, SUM(si.total)::float total
        FROM sale_items si
        JOIN sales s ON s.id = si.sale_id
        JOIN products p ON p.id = si.product_id
-       WHERE s.sale_status <> 'CANCELLED' AND s.created_at::date BETWEEN $1 AND $2
+       WHERE s.sale_status <> 'CANCELLED' AND s.created_at::date BETWEEN $1 AND $2 AND s.accionista_id = $3
        GROUP BY p.name ORDER BY total DESC`,
-      [from, to]
+      [from, to, acc]
     ),
     pool.query(
       `SELECT COALESCE(c.full_name, 'Consumidor final') name, COUNT(*)::int cnt, SUM(s.total_amount)::float total
        FROM sales s
        LEFT JOIN customers c ON c.id = s.customer_id
-       WHERE s.sale_status <> 'CANCELLED' AND s.created_at::date BETWEEN $1 AND $2
+       WHERE s.sale_status <> 'CANCELLED' AND s.created_at::date BETWEEN $1 AND $2 AND s.accionista_id = $3
        GROUP BY 1 ORDER BY total DESC`,
-      [from, to]
+      [from, to, acc]
     ),
     pool.query(
       `SELECT s.created_at::date d, COUNT(*)::int cnt, SUM(s.total_amount)::float total
        FROM sales s
-       WHERE s.sale_status <> 'CANCELLED' AND s.created_at::date BETWEEN $1 AND $2
+       WHERE s.sale_status <> 'CANCELLED' AND s.created_at::date BETWEEN $1 AND $2 AND s.accionista_id = $3
        GROUP BY 1 ORDER BY 1`,
-      [from, to]
+      [from, to, acc]
     )
   ]);
   res.json({ range: { from, to }, by_product: byProduct.rows, by_customer: byCustomer.rows, daily: daily.rows });
@@ -123,6 +128,7 @@ reportsRouter.get("/sales", asyncRoute(async (req, res) => {
 // ── Liquidaciones por agricultor ───────────────────────────────────────────
 reportsRouter.get("/liquidations", asyncRoute(async (req, res) => {
   const { from, to } = parseRange(req.query);
+  const acc = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
     `SELECT f.full_name,
             COUNT(*)::int cnt,
@@ -132,9 +138,9 @@ reportsRouter.get("/liquidations", asyncRoute(async (req, res) => {
             SUM(l.net_amount)::float net
      FROM liquidations l
      JOIN farmers f ON f.id = l.farmer_id
-     WHERE l.status <> 'CANCELLED' AND l.created_at::date BETWEEN $1 AND $2
+     WHERE l.status <> 'CANCELLED' AND l.created_at::date BETWEEN $1 AND $2 AND l.accionista_id = $3
      GROUP BY f.full_name ORDER BY net DESC`,
-    [from, to]
+    [from, to, acc]
   );
   res.json({ range: { from, to }, rows: result.rows });
 }));
@@ -142,18 +148,21 @@ reportsRouter.get("/liquidations", asyncRoute(async (req, res) => {
 // ── Gastos del período ─────────────────────────────────────────────────────
 reportsRouter.get("/expenses", asyncRoute(async (req, res) => {
   const { from, to } = parseRange(req.query);
+  const acc = (req as AuthenticatedRequest).accionistaId;
   const hasLabor = await hasTable("labor_payments");
   const [list, labor] = await Promise.all([
     pool.query(
       `SELECT created_at, description, paid_to, amount::float amount
-       FROM expenses WHERE created_at::date BETWEEN $1 AND $2 ORDER BY created_at DESC`,
-      [from, to]
+       FROM expenses WHERE created_at::date BETWEEN $1 AND $2 AND accionista_id = $3 ORDER BY created_at DESC`,
+      [from, to, acc]
     ),
     hasLabor
       ? pool.query(
           `SELECT COALESCE(SUM(total_amount),0)::float total, COUNT(*)::int cnt
-           FROM labor_payments WHERE paid_at::date BETWEEN $1 AND $2`,
-          [from, to]
+           FROM labor_payments
+           WHERE paid_at::date BETWEEN $1 AND $2
+             AND cash_register_id IN (SELECT id FROM cash_registers WHERE accionista_id = $3)`,
+          [from, to, acc]
         )
       : Promise.resolve({ rows: [{ total: 0, cnt: 0 }] })
   ]);
@@ -161,7 +170,8 @@ reportsRouter.get("/expenses", asyncRoute(async (req, res) => {
 }));
 
 // ── Cuentas por cobrar con antigüedad (foto al día de hoy) ─────────────────
-reportsRouter.get("/receivable-aging", asyncRoute(async (_req, res) => {
+reportsRouter.get("/receivable-aging", asyncRoute(async (req, res) => {
+  const acc = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
     `SELECT COALESCE(c.full_name, ar.description, 'Sin cliente') AS customer_name,
             c.phone AS phone,
@@ -173,9 +183,10 @@ reportsRouter.get("/receivable-aging", asyncRoute(async (_req, res) => {
             SUM(CASE WHEN CURRENT_DATE - ar.created_at::date > 90 THEN ar.balance ELSE 0 END)::float b90
      FROM accounts_receivable ar
      LEFT JOIN customers c ON c.id = ar.customer_id
-     WHERE ar.status IN ('CONFIRMED','PARTIAL') AND ar.balance > 0
+     WHERE ar.status IN ('CONFIRMED','PARTIAL') AND ar.balance > 0 AND ar.accionista_id = $1
      GROUP BY 1, 2
-     ORDER BY total DESC`
+     ORDER BY total DESC`,
+    [acc]
   );
   const totals = result.rows.reduce(
     (a, r) => ({
@@ -193,6 +204,7 @@ reportsRouter.get("/receivable-aging", asyncRoute(async (_req, res) => {
 // ── Producción del período ─────────────────────────────────────────────────
 reportsRouter.get("/production", asyncRoute(async (req, res) => {
   const { from, to } = parseRange(req.query);
+  const acc = (req as AuthenticatedRequest).accionistaId;
   if (!(await hasTable("processing_batches"))) {
     res.json({ range: { from, to }, rows: [] });
     return;
@@ -208,9 +220,9 @@ reportsRouter.get("/production", asyncRoute(async (req, res) => {
             ${outputExpr} AS output_qty
      FROM processing_batches b
      LEFT JOIN lots l ON l.id = b.lot_id
-     WHERE b.created_at::date BETWEEN $1 AND $2
+     WHERE b.created_at::date BETWEEN $1 AND $2 AND b.accionista_id = $3
      ORDER BY b.created_at DESC`,
-    [from, to]
+    [from, to, acc]
   );
   res.json({ range: { from, to }, rows: result.rows });
 }));

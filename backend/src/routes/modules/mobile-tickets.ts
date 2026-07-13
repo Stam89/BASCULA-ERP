@@ -190,10 +190,10 @@ export async function procesarLiquidacionTicket(
     const netPayable = round2(grossPayable - advancesDiscount);
     const payable = netPayable > 0
       ? await client.query(
-        `INSERT INTO accounts_payable (farmer_id, amount, balance, status)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO accounts_payable (farmer_id, amount, balance, status, accionista_id)
+         VALUES ($1, $2, $3, $4, $5)
          RETURNING id`,
-        [row.farmer_id, netPayable, cashRegisterId ? 0 : netPayable, cashRegisterId ? "PAID" : "CONFIRMED"]
+        [row.farmer_id, netPayable, cashRegisterId ? 0 : netPayable, cashRegisterId ? "PAID" : "CONFIRMED", row.accionista_id]
       )
       : null;
 

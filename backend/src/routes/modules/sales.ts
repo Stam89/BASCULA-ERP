@@ -91,9 +91,9 @@ salesRouter.post("/", asyncRoute(async (req, res) => {
 
     if (body.payment_method === "CREDIT") {
       await client.query(
-        `INSERT INTO accounts_receivable (customer_id, sale_id, amount, balance)
-         VALUES ($1, $2, $3, $3)`,
-       [body.customer_id, sale.rows[0].id, total]
+        `INSERT INTO accounts_receivable (customer_id, sale_id, amount, balance, accionista_id)
+         VALUES ($1, $2, $3, $3, $4)`,
+       [body.customer_id, sale.rows[0].id, total, accionistaId]
       );
     } else if (body.cash_register_id) {
       await client.query(

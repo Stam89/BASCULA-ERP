@@ -112,9 +112,9 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
 
     if (preview.net_amount > 0) {
       await client.query(
-        `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance)
-         VALUES ($1, $2, $3, $3)`,
-        [data.farmer_id, liquidation.rows[0].id, preview.net_amount]
+        `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, accionista_id)
+         VALUES ($1, $2, $3, $3, $4)`,
+        [data.farmer_id, liquidation.rows[0].id, preview.net_amount, accionistaId]
       );
     }
 

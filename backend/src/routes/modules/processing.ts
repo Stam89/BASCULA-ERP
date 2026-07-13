@@ -274,14 +274,15 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
 
       const receivable = await client.query(
         `INSERT INTO accounts_receivable
-         (farmer_id, reference_type, reference_id, description, amount, balance)
-         VALUES ($1, 'maquila_orders', $2, $3, $4, $4)
+         (farmer_id, reference_type, reference_id, description, amount, balance, accionista_id)
+         VALUES ($1, 'maquila_orders', $2, $3, $4, $4, $5)
          RETURNING id`,
         [
           farmerId,
           maquilaOrderId,
           `Servicio de maquila por ${processedQq} QQ procesados`,
-          serviceAmount
+          serviceAmount,
+          accionistaId
         ]
       );
       receivableId = receivable.rows[0].id;
