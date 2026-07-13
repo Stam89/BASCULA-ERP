@@ -4,10 +4,12 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
+import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const inventoryRouter = Router();
 
-inventoryRouter.get("/stock", asyncRoute(async (_req, res) => {
+inventoryRouter.get("/stock", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
     `SELECT
        s.product_id,
@@ -22,9 +24,11 @@ inventoryRouter.get("/stock", asyncRoute(async (_req, res) => {
      FROM inventory_stock s
      JOIN products p ON p.id = s.product_id
      JOIN warehouses w ON w.id = s.warehouse_id
+     WHERE s.accionista_id = $1
      GROUP BY s.product_id, s.warehouse_id, s.ownership, p.code, p.name, p.product_type, p.unit, w.name
      HAVING SUM(s.quantity) <> 0
-     ORDER BY p.product_type, p.name, w.name`
+     ORDER BY p.product_type, p.name, w.name`,
+    [accionistaId]
   );
   res.json(result.rows);
 }));
@@ -183,6 +187,7 @@ inventoryRouter.post("/warehouses", asyncRoute(async (req, res) => {
 }));
 
 inventoryRouter.post("/adjustments", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const body = z.object({
     product_id: z.string().uuid(),
     warehouse_id: z.string().uuid(),
@@ -195,22 +200,25 @@ inventoryRouter.post("/adjustments", asyncRoute(async (req, res) => {
 
   const result = await pool.query(
     `INSERT INTO inventory_movements
-     (product_id, warehouse_id, lot_id, movement, quantity, reference_type, ownership, notes, created_by)
-     VALUES ($1, $2, $3, 'ADJUSTMENT', $4, 'manual_adjustment', $5, $6, $7)
+     (product_id, warehouse_id, lot_id, movement, quantity, reference_type, ownership, notes, created_by, accionista_id)
+     VALUES ($1, $2, $3, 'ADJUSTMENT', $4, 'manual_adjustment', $5, $6, $7, $8)
      RETURNING *`,
-    [body.product_id, body.warehouse_id, body.lot_id, body.quantity, body.ownership, body.notes, body.created_by]
+    [body.product_id, body.warehouse_id, body.lot_id, body.quantity, body.ownership, body.notes, body.created_by, accionistaId]
   );
   res.status(201).json(result.rows[0]);
 }));
 
-inventoryRouter.get("/movements", asyncRoute(async (_req, res) => {
+inventoryRouter.get("/movements", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
     `SELECT m.*, p.name AS product_name, w.name AS warehouse_name
      FROM inventory_movements m
      JOIN products p ON p.id = m.product_id
      JOIN warehouses w ON w.id = m.warehouse_id
+     WHERE m.accionista_id = $1
      ORDER BY m.created_at DESC
-     LIMIT 500`
+     LIMIT 500`,
+    [accionistaId]
   );
   res.json(result.rows);
 }));

@@ -5,6 +5,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
+import { requireAuth, resolveAccionista, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { calculateNetWeight, calculateQuintals, round2 } from "../../utils/rice-formulas.js";
 
 export const mobileTicketsRouter = Router();
@@ -103,8 +104,8 @@ async function previewLiquidacionTicket(ticketId: string, precioQQ: number): Pro
   const advances = await pool.query(
     `SELECT COALESCE(SUM(balance), 0) AS total
      FROM farmer_advances
-     WHERE farmer_id = $1 AND status IN ('CONFIRMED', 'PARTIAL') AND balance > 0`,
-    [row.farmer_id]
+     WHERE farmer_id = $1 AND accionista_id = $2 AND status IN ('CONFIRMED', 'PARTIAL') AND balance > 0`,
+    [row.farmer_id, row.accionista_id]
   );
   const pendingAdvancesTotal = round2(Number(advances.rows[0].total));
   const advancesDiscount = round2(Math.min(grossPayable, pendingAdvancesTotal));
@@ -153,10 +154,10 @@ export async function procesarLiquidacionTicket(
     const advances = await client.query(
       `SELECT *
        FROM farmer_advances
-       WHERE farmer_id = $1 AND status IN ('CONFIRMED', 'PARTIAL') AND balance > 0
+       WHERE farmer_id = $1 AND accionista_id = $2 AND status IN ('CONFIRMED', 'PARTIAL') AND balance > 0
        ORDER BY issued_at ASC
        FOR UPDATE`,
-      [row.farmer_id]
+      [row.farmer_id, row.accionista_id]
     );
 
     for (const advance of advances.rows) {
@@ -243,12 +244,17 @@ export async function procesarLiquidacionTicket(
 }
 
 // Lista los tickets sincronizados/importados de la báscula (para la vista web).
-mobileTicketsRouter.get("/", asyncRoute(async (req, res) => {
+// Muestra los ya vinculados al accionista activo, más los que aún no tienen
+// accionista asignado (recién importados de la báscula, pendientes de vincular).
+mobileTicketsRouter.get("/", requireAuth, resolveAccionista, asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const q = z.object({ status: z.enum(["pending", "liquidated"]).optional() }).parse(req.query);
-  const where = q.status === "pending" ? "WHERE t.liquidated_at IS NULL"
-    : q.status === "liquidated" ? "WHERE t.liquidated_at IS NOT NULL" : "";
+  const statusFilter = q.status === "pending" ? "t.liquidated_at IS NULL"
+    : q.status === "liquidated" ? "t.liquidated_at IS NOT NULL" : "";
+  const conditions = ["(t.accionista_id = $1 OR t.accionista_id IS NULL)"];
+  if (statusFilter) conditions.push(statusFilter);
   const result = await pool.query(
-    `SELECT t.id, t.farmer_id, t.farmer_name, t.gross_weight, t.tare_weight, t.net_weight,
+    `SELECT t.id, t.farmer_id, t.farmer_name, t.accionista_id, t.gross_weight, t.tare_weight, t.net_weight,
             t.qualification, t.quintals, t.price_per_quintal, t.net_payable, t.liquidated_at,
             t.mobile_updated_at,
             t.raw_payload->>'numeroTicket' AS numero,
@@ -257,15 +263,18 @@ mobileTicketsRouter.get("/", asyncRoute(async (req, res) => {
             t.raw_payload->>'placa' AS placa,
             t.raw_payload->>'calidad' AS calidad
      FROM mobile_synced_tickets t
-     ${where}
+     WHERE ${conditions.join(" AND ")}
      ORDER BY t.liquidated_at IS NOT NULL, t.mobile_updated_at DESC NULLS LAST
-     LIMIT 500`
+     LIMIT 500`,
+    [accionistaId]
   );
   res.json(result.rows);
 }));
 
-// Vincula un ticket a un agricultor (existente por id, o crea uno por nombre).
-mobileTicketsRouter.post("/:id/link-farmer", asyncRoute(async (req, res) => {
+// Vincula un ticket a un agricultor (existente por id, o crea uno por nombre)
+// y lo reclama para el accionista activo si aún no tenía uno asignado.
+mobileTicketsRouter.post("/:id/link-farmer", requireAuth, resolveAccionista, asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const body = z.object({
     farmer_id: z.string().uuid().optional(),
     full_name: z.string().optional()
@@ -282,12 +291,22 @@ mobileTicketsRouter.post("/:id/link-farmer", asyncRoute(async (req, res) => {
     farmerId = created.rows[0].id;
   }
 
-  const updated = await pool.query(
-    `UPDATE mobile_synced_tickets SET farmer_id = $2 WHERE id = $1
-     RETURNING id, farmer_id, farmer_name`,
-    [req.params.id, farmerId]
+  const existing = await pool.query(
+    "SELECT accionista_id FROM mobile_synced_tickets WHERE id = $1",
+    [req.params.id]
   );
-  if (!updated.rowCount) throw new ApiError(404, "Ticket no encontrado");
+  if (!existing.rowCount) throw new ApiError(404, "Ticket no encontrado");
+  if (existing.rows[0].accionista_id && existing.rows[0].accionista_id !== accionistaId) {
+    throw new ApiError(409, "Este ticket ya fue vinculado por otro accionista.");
+  }
+
+  const updated = await pool.query(
+    `UPDATE mobile_synced_tickets
+     SET farmer_id = $2, accionista_id = COALESCE(accionista_id, $3)
+     WHERE id = $1
+     RETURNING id, farmer_id, farmer_name, accionista_id`,
+    [req.params.id, farmerId, accionistaId]
+  );
   res.json(updated.rows[0]);
 }));
 
@@ -450,13 +469,26 @@ mobileTicketsRouter.post("/refresh-firebase", asyncRoute(async (_req, res) => {
   res.json(result);
 }));
 
-mobileTicketsRouter.post("/:id/liquidation-preview", asyncRoute(async (req, res) => {
+async function assertTicketBelongsToAccionista(ticketId: string, accionistaId: string | undefined) {
+  const ticket = await pool.query(
+    "SELECT accionista_id FROM mobile_synced_tickets WHERE id = $1",
+    [ticketId]
+  );
+  if (!ticket.rowCount) throw new ApiError(404, "Ticket no encontrado");
+  if (ticket.rows[0].accionista_id && ticket.rows[0].accionista_id !== accionistaId) {
+    throw new ApiError(403, "Este ticket pertenece a otro accionista.");
+  }
+}
+
+mobileTicketsRouter.post("/:id/liquidation-preview", requireAuth, resolveAccionista, asyncRoute(async (req, res) => {
   const body = liquidationSchema.parse(req.body);
+  await assertTicketBelongsToAccionista(String(req.params.id), (req as AuthenticatedRequest).accionistaId);
   res.json(await previewLiquidacionTicket(String(req.params.id), body.precioQQ));
 }));
 
-mobileTicketsRouter.post("/:id/liquidate", asyncRoute(async (req, res) => {
+mobileTicketsRouter.post("/:id/liquidate", requireAuth, resolveAccionista, asyncRoute(async (req, res) => {
   const body = liquidationSchema.parse(req.body);
+  await assertTicketBelongsToAccionista(String(req.params.id), (req as AuthenticatedRequest).accionistaId);
   const result = await procesarLiquidacionTicket(
     String(req.params.id),
     body.precioQQ,

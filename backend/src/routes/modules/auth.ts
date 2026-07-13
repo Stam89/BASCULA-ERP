@@ -9,6 +9,26 @@ import { APP_MODULES, requireAdmin, requireAuth, type AuthenticatedRequest } fro
 
 export const authRouter = Router();
 
+type Accionista = { id: string; name: string; code: string };
+
+// Accionistas a los que puede acceder el usuario: todos si es administrador,
+// solo los asignados en user_accionistas si no.
+async function accionistasForUser(userId: string, roleName: string | null): Promise<Accionista[]> {
+  const result = roleName === "ADMINISTRADOR"
+    ? await pool.query<Accionista>(
+      "SELECT id, name, code FROM accionistas WHERE is_active = true ORDER BY name"
+    )
+    : await pool.query<Accionista>(
+      `SELECT a.id, a.name, a.code
+       FROM accionistas a
+       JOIN user_accionistas ua ON ua.accionista_id = a.id
+       WHERE ua.user_id = $1 AND a.is_active = true
+       ORDER BY a.name`,
+      [userId]
+    );
+  return result.rows;
+}
+
 const moduleSchema = z.array(z.enum(APP_MODULES)).default([]);
 
 // Asegura la columna de permisos por módulo en instalaciones existentes.
@@ -105,6 +125,48 @@ authRouter.put("/users/:id", requireAuth, requireAdmin, asyncRoute(async (req, r
   res.json(result.rows[0]);
 }));
 
+// ── Accionistas (solo administradores) ──────────────────────────────────────
+
+authRouter.get("/accionistas", requireAuth, requireAdmin, asyncRoute(async (_req, res) => {
+  const result = await pool.query("SELECT id, name, code, is_active FROM accionistas ORDER BY name");
+  res.json(result.rows);
+}));
+
+authRouter.post("/accionistas", requireAuth, requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({
+    name: z.string().min(2),
+    code: z.string().min(2)
+  }).parse(req.body);
+
+  const duplicate = await pool.query("SELECT 1 FROM accionistas WHERE code = $1", [body.code]);
+  if (duplicate.rowCount) {
+    throw new ApiError(409, `Ya existe un accionista con el código "${body.code}".`);
+  }
+
+  const created = await pool.query(
+    "INSERT INTO accionistas (name, code) VALUES ($1, $2) RETURNING id, name, code, is_active",
+    [body.name, body.code]
+  );
+  res.status(201).json(created.rows[0]);
+}));
+
+// Reemplaza la lista de accionistas a los que tiene acceso un usuario.
+authRouter.put("/users/:id/accionistas", requireAuth, requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({ accionista_ids: z.array(z.string().uuid()) }).parse(req.body);
+
+  const user = await pool.query("SELECT 1 FROM users WHERE id = $1", [req.params.id]);
+  if (!user.rowCount) throw new ApiError(404, "Usuario no encontrado");
+
+  await pool.query("DELETE FROM user_accionistas WHERE user_id = $1", [req.params.id]);
+  for (const accionistaId of body.accionista_ids) {
+    await pool.query(
+      "INSERT INTO user_accionistas (user_id, accionista_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+      [req.params.id, accionistaId]
+    );
+  }
+  res.status(204).end();
+}));
+
 // Renueva el token de una sesión válida y devuelve el usuario actualizado
 // (aplica cambios de permisos y expulsa a usuarios desactivados).
 authRouter.post("/refresh", requireAuth, asyncRoute(async (req, res) => {
@@ -130,7 +192,8 @@ authRouter.post("/refresh", requireAuth, asyncRoute(async (req, res) => {
     role_name: user.role_name,
     allowed_modules: user.allowed_modules ?? []
   };
-  res.json({ token: signToken(publicUser), user: publicUser });
+  const accionistas = await accionistasForUser(user.id, user.role_name);
+  res.json({ token: signToken(publicUser), user: publicUser, accionistas });
 }));
 
 authRouter.get("/status", asyncRoute(async (_req, res) => {
@@ -166,9 +229,11 @@ authRouter.post("/bootstrap", asyncRoute(async (req, res) => {
   );
 
   const publicUser = { ...user.rows[0], role_name: "ADMINISTRADOR" };
+  const accionistas = await accionistasForUser(publicUser.id, "ADMINISTRADOR");
   res.status(201).json({
     token: signToken(publicUser),
-    user: publicUser
+    user: publicUser,
+    accionistas
   });
 }));
 
@@ -205,9 +270,11 @@ authRouter.post("/login", asyncRoute(async (req, res) => {
     role_name: user.role_name,
     allowed_modules: user.allowed_modules ?? []
   };
+  const accionistas = await accionistasForUser(publicUser.id, publicUser.role_name);
 
   res.json({
     token: signToken(publicUser),
-    user: publicUser
+    user: publicUser,
+    accionistas
   });
 }));

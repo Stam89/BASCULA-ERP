@@ -165,6 +165,32 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
   letter-spacing: 0.01em;
 }
 
+.accionistaSwitcher {
+  display: grid;
+  gap: 4px;
+  padding: 12px 16px 0;
+  flex-shrink: 0;
+}
+
+.accionistaSwitcher span {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--c-sidebar-muted);
+}
+
+.accionistaSwitcher select {
+  width: 100%;
+  padding: 7px 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--c-sidebar-border);
+  background: transparent;
+  color: var(--c-sidebar-text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
 .navSection {
   display: grid;
   gap: 1px;

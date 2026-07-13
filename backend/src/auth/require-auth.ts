@@ -1,8 +1,9 @@
 import type { NextFunction, Request, Response } from "express";
+import { pool } from "../db/pool.js";
 import { ApiError } from "../http/error-handler.js";
 import { verifyToken, type AuthUser } from "./jwt.js";
 
-export type AuthenticatedRequest = Request & { user?: AuthUser };
+export type AuthenticatedRequest = Request & { user?: AuthUser; accionistaId?: string };
 
 // Módulos asignables a un operador. Deben coincidir con las pestañas del web-admin.
 export const APP_MODULES = [
@@ -92,5 +93,42 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction) {
     next();
   } catch {
     next(new ApiError(401, "Sesión expirada o inválida. Inicia sesión nuevamente."));
+  }
+}
+
+// Resuelve a qué accionista (socio) pertenecen los datos de esta request, a
+// partir del header X-Accionista-Id que manda el selector del frontend.
+// Los administradores pueden operar con cualquier accionista; el resto solo
+// con los que tenga asignados en user_accionistas.
+export async function resolveAccionista(req: Request, _res: Response, next: NextFunction) {
+  const authReq = req as AuthenticatedRequest;
+  const user = authReq.user;
+  if (!user) {
+    next(new ApiError(401, "Sesión requerida"));
+    return;
+  }
+
+  const headerValue = req.headers["x-accionista-id"];
+  const accionistaId = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+  if (!accionistaId) {
+    next(new ApiError(400, "Selecciona un accionista antes de continuar."));
+    return;
+  }
+
+  try {
+    if (user.role_name !== "ADMINISTRADOR") {
+      const access = await pool.query(
+        "SELECT 1 FROM user_accionistas WHERE user_id = $1 AND accionista_id = $2",
+        [user.id, accionistaId]
+      );
+      if (!access.rowCount) {
+        next(new ApiError(403, "No tienes acceso a este accionista."));
+        return;
+      }
+    }
+    authReq.accionistaId = accionistaId;
+    next();
+  } catch (err) {
+    next(err);
   }
 }

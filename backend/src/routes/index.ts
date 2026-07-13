@@ -21,7 +21,7 @@ import { customersRouter } from "./modules/customers.js";
 import { productsRouter } from "./modules/products.js";
 import { receivableRouter } from "./modules/receivable.js";
 import { equipmentRouter } from "./modules/equipment.js";
-import { enforceModulePermissions, requireAuth } from "../auth/require-auth.js";
+import { enforceModulePermissions, requireAuth, resolveAccionista } from "../auth/require-auth.js";
 import { settingsRouter } from "./modules/settings.js";
 import { auditRouter } from "./modules/audit.js";
 import { auditMiddleware } from "../audit/audit.js";
@@ -42,6 +42,7 @@ routes.use("/tickets", mobileTicketsRouter);
 // exigen permiso del módulo correspondiente (los administradores no tienen límite).
 routes.use(requireAuth);
 routes.use(enforceModulePermissions);
+routes.use(resolveAccionista);
 
 routes.use("/dashboard", dashboardRouter);
 routes.use("/process-flow", processFlowRouter);

@@ -1,5 +1,5 @@
 import React, { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { apiFetch, apiGet, apiPost, apiPut, checkHealth } from "./api";
+import { apiFetch, apiGet, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId } from "./api";
 
 type Farmer = {
   id: string;
@@ -61,6 +61,8 @@ type AuthUser = {
   role_name: string | null;
   allowed_modules?: string[] | null;
 };
+
+type Accionista = { id: string; name: string; code: string };
 
 // Módulos asignables a un operador (deben coincidir con el backend).
 const APP_MODULES = [
@@ -197,6 +199,25 @@ function loadStoredAuth(): AuthUser | null {
   } catch {
     return null;
   }
+}
+
+function loadStoredAccionistas(): Accionista[] {
+  try {
+    const raw = localStorage.getItem(authStorageKey);
+    if (!raw) return [];
+    return (JSON.parse(raw) as { accionistas?: Accionista[] }).accionistas ?? [];
+  } catch {
+    return [];
+  }
+}
+
+// Si el accionista guardado ya no es válido para esta sesión (o no hay ninguno
+// guardado), selecciona el primero disponible para que la app tenga uno activo.
+function ensureActiveAccionista(accionistas: Accionista[]): void {
+  if (accionistas.length === 0) return;
+  const current = getActiveAccionistaId();
+  if (current && accionistas.some((a) => a.id === current)) return;
+  setActiveAccionistaId(accionistas[0].id);
 }
 
 type StockRow = {
@@ -612,7 +633,19 @@ const emptyDashboard: Dashboard = {
 };
 
 export function App() {
-  const [authUser, setAuthUser] = useState<AuthUser | null>(() => loadStoredAuth());
+  const [authUser, setAuthUser] = useState<AuthUser | null>(() => {
+    const user = loadStoredAuth();
+    if (user) ensureActiveAccionista(loadStoredAccionistas());
+    return user;
+  });
+  const [accionistas] = useState<Accionista[]>(() => loadStoredAccionistas());
+  const [activeAccionistaId, setActiveAccionistaIdState] = useState<string | null>(() => getActiveAccionistaId());
+
+  function switchAccionista(accionistaId: string) {
+    setActiveAccionistaId(accionistaId);
+    setActiveAccionistaIdState(accionistaId);
+    window.location.reload();
+  }
   const [activeTab, setActiveTab] = useState("Dashboard");
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
     try { return new Set(JSON.parse(localStorage.getItem("bascula-erp:nav-collapsed") || "[]") as string[]); }
@@ -1226,9 +1259,10 @@ export function App() {
     let cancelled = false;
     async function renewSession() {
       try {
-        const result = await apiPost<{ token: string; user: AuthUser }>("/auth/refresh", {});
+        const result = await apiPost<{ token: string; user: AuthUser; accionistas: Accionista[] }>("/auth/refresh", {});
         if (cancelled) return;
         localStorage.setItem(authStorageKey, JSON.stringify(result));
+        ensureActiveAccionista(result.accionistas);
         setAuthUser(result.user);
       } catch {
         // Un 401 lo maneja api.ts (cierra sesión). Otros errores se ignoran.
@@ -3220,6 +3254,19 @@ export function App() {
             <small>Piladora de arroz</small>
           </div>
         </div>
+        {accionistas.length > 1 && (
+          <label className="accionistaSwitcher">
+            <span>Accionista</span>
+            <select
+              value={activeAccionistaId ?? ""}
+              onChange={(e) => switchAccionista(e.target.value)}
+            >
+              {accionistas.map((a) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </select>
+          </label>
+        )}
         <nav>
           {navGroups
             .map((group) => ({ ...group, tabs: group.tabs.filter((tab) => visibleTabs.includes(tab)) }))
@@ -6391,9 +6438,10 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
     setBusy(true);
     try {
       const result = mode === "bootstrap"
-        ? await apiPost<{ token: string; user: AuthUser }>("/auth/bootstrap", { name: fullName, username, password })
-        : await apiPost<{ token: string; user: AuthUser }>("/auth/login", { username, password });
+        ? await apiPost<{ token: string; user: AuthUser; accionistas: Accionista[] }>("/auth/bootstrap", { name: fullName, username, password })
+        : await apiPost<{ token: string; user: AuthUser; accionistas: Accionista[] }>("/auth/login", { username, password });
       localStorage.setItem(authStorageKey, JSON.stringify(result));
+      ensureActiveAccionista(result.accionistas);
       onLogin(result.user);
     } catch (err) {
       setError((err as Error).message);
