@@ -5,16 +5,28 @@
 const API_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "http://localhost:4000" : "");
 
 const authStorageKey = "bascula-erp:auth";
+const activeAccionistaKey = "bascula-erp:active-accionista";
+
+export function getActiveAccionistaId(): string | null {
+  return localStorage.getItem(activeAccionistaKey);
+}
+
+export function setActiveAccionistaId(accionistaId: string): void {
+  localStorage.setItem(activeAccionistaKey, accionistaId);
+}
 
 function authHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {};
   try {
     const raw = localStorage.getItem(authStorageKey);
-    if (!raw) return {};
-    const token = (JSON.parse(raw) as { token?: string }).token;
-    return token ? { Authorization: `Bearer ${token}` } : {};
+    const token = raw ? (JSON.parse(raw) as { token?: string }).token : undefined;
+    if (token) headers.Authorization = `Bearer ${token}`;
   } catch {
-    return {};
+    // Sesión inválida o corrupta: se manda sin token, el backend responderá 401.
   }
+  const accionistaId = getActiveAccionistaId();
+  if (accionistaId) headers["X-Accionista-Id"] = accionistaId;
+  return headers;
 }
 
 function handleUnauthorized(response: Response) {

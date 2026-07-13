@@ -33,19 +33,22 @@ cashRouter.post("/registers/open", asyncRoute(async (req, res) => {
     opened_by: z.string().uuid().optional()
   }).parse(req.body);
 
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
-    `INSERT INTO cash_registers (branch_id, name, opening_balance, opened_by)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO cash_registers (branch_id, name, opening_balance, opened_by, accionista_id)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING *`,
-    [body.branch_id, body.name, body.opening_balance, body.opened_by]
+    [body.branch_id, body.name, body.opening_balance, body.opened_by, accionistaId]
   );
   res.status(201).json(result.rows[0]);
 }));
 
 // ── Caja actual abierta ──────────────────────────────────────────────────────
-cashRouter.get("/registers/current", asyncRoute(async (_req, res) => {
+cashRouter.get("/registers/current", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
-    "SELECT * FROM cash_registers WHERE status = 'OPEN' ORDER BY opened_at DESC LIMIT 1"
+    "SELECT * FROM cash_registers WHERE status = 'OPEN' AND accionista_id = $1 ORDER BY opened_at DESC LIMIT 1",
+    [accionistaId]
   );
   res.json(result.rows[0] ?? null);
 }));
@@ -182,15 +185,17 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
 }));
 
 // ── Cuentas por pagar pendientes ─────────────────────────────────────────────
-cashRouter.get("/payables", asyncRoute(async (_req, res) => {
+cashRouter.get("/payables", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
     `SELECT ap.*, f.full_name AS farmer_name,
             l.liquidation_number
      FROM accounts_payable ap
      JOIN farmers f ON f.id = ap.farmer_id
      LEFT JOIN liquidations l ON l.id = ap.liquidation_id
-     WHERE ap.status IN ('CONFIRMED', 'PARTIAL')
-     ORDER BY ap.created_at DESC`
+     WHERE ap.status IN ('CONFIRMED', 'PARTIAL') AND ap.accionista_id = $1
+     ORDER BY ap.created_at DESC`,
+    [accionistaId]
   );
   res.json(result.rows);
 }));

@@ -4,11 +4,13 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { round2 } from "../../utils/rice-formulas.js";
+import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const receivableRouter = Router();
 
 // GET cuentas por cobrar pendientes
-receivableRouter.get("/", asyncRoute(async (_req, res) => {
+receivableRouter.get("/", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
     `SELECT ar.*,
             c.full_name AS customer_name,
@@ -19,13 +21,16 @@ receivableRouter.get("/", asyncRoute(async (_req, res) => {
      LEFT JOIN sales s     ON s.id = ar.sale_id
      WHERE ar.status IN ('CONFIRMED','PARTIAL')
        AND ar.balance > 0
-     ORDER BY ar.created_at DESC`
+       AND ar.accionista_id = $1
+     ORDER BY ar.created_at DESC`,
+    [accionistaId]
   );
   res.json(result.rows);
 }));
 
 // GET historial completo (incluye pagadas)
-receivableRouter.get("/history", asyncRoute(async (_req, res) => {
+receivableRouter.get("/history", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
     `SELECT ar.*,
             c.full_name AS customer_name,
@@ -33,8 +38,10 @@ receivableRouter.get("/history", asyncRoute(async (_req, res) => {
      FROM accounts_receivable ar
      LEFT JOIN customers c ON c.id = ar.customer_id
      LEFT JOIN sales s     ON s.id = ar.sale_id
+     WHERE ar.accionista_id = $1
      ORDER BY ar.created_at DESC
-     LIMIT 200`
+     LIMIT 200`,
+    [accionistaId]
   );
   res.json(result.rows);
 }));

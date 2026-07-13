@@ -5,6 +5,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
+import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const liquidationsRouter = Router();
 
@@ -26,13 +27,13 @@ const liquidationInput = z.object({
   created_by: z.string().uuid().optional()
 });
 
-async function previewLiquidation(data: z.infer<typeof liquidationInput>) {
+async function previewLiquidation(data: z.infer<typeof liquidationInput>, accionistaId: string | undefined) {
   const gross = round2(data.quintals * data.price_per_quintal);
   const advances = await pool.query(
     `SELECT COALESCE(SUM(balance), 0) AS pending
      FROM farmer_advances
-     WHERE farmer_id = $1 AND status IN ('CONFIRMED', 'PARTIAL')`,
-    [data.farmer_id]
+     WHERE farmer_id = $1 AND accionista_id = $2 AND status IN ('CONFIRMED', 'PARTIAL')`,
+    [data.farmer_id, accionistaId]
   );
   const pendingAdvances = Number(advances.rows[0].pending);
   const advancesDiscount = Math.min(pendingAdvances, gross);
@@ -48,20 +49,22 @@ async function previewLiquidation(data: z.infer<typeof liquidationInput>) {
 }
 
 liquidationsRouter.post("/preview", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const data = liquidationInput.parse(req.body);
-  res.json(await previewLiquidation(data));
+  res.json(await previewLiquidation(data, accionistaId));
 }));
 
 liquidationsRouter.post("/", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const data = liquidationInput.parse(req.body);
-  const preview = await previewLiquidation(data);
+  const preview = await previewLiquidation(data, accionistaId);
 
   const result = await inTransaction(async (client) => {
     const liquidation = await client.query(
       `INSERT INTO liquidations
        (liquidation_number, farmer_id, lot_id, quintals, price_per_quintal, gross_amount,
-        advances_discount, other_discounts, discount_breakdown, net_amount, batch_id, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        advances_discount, other_discounts, discount_breakdown, net_amount, batch_id, created_by, accionista_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING *`,
       [
         nextCode("LIQ"),
@@ -75,17 +78,18 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
         data.discount_breakdown ? JSON.stringify(data.discount_breakdown) : null,
         preview.net_amount,
         data.batch_id ?? null,
-        data.created_by
+        data.created_by,
+        accionistaId
       ]
     );
 
     let remainingDiscount = preview.advances_discount;
     const advances = await client.query(
       `SELECT * FROM farmer_advances
-       WHERE farmer_id = $1 AND status IN ('CONFIRMED', 'PARTIAL') AND balance > 0
+       WHERE farmer_id = $1 AND accionista_id = $2 AND status IN ('CONFIRMED', 'PARTIAL') AND balance > 0
        ORDER BY issued_at ASC
        FOR UPDATE`,
-      [data.farmer_id]
+      [data.farmer_id, accionistaId]
     );
 
     for (const advance of advances.rows) {
@@ -108,9 +112,9 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
 
     if (preview.net_amount > 0) {
       await client.query(
-        `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance)
-         VALUES ($1, $2, $3, $3)`,
-        [data.farmer_id, liquidation.rows[0].id, preview.net_amount]
+        `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, accionista_id)
+         VALUES ($1, $2, $3, $3, $4)`,
+        [data.farmer_id, liquidation.rows[0].id, preview.net_amount, accionistaId]
       );
     }
 
@@ -121,7 +125,8 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
   res.status(201).json(result);
 }));
 
-liquidationsRouter.get("/", asyncRoute(async (_req, res) => {
+liquidationsRouter.get("/", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
     `SELECT l.*, f.full_name AS farmer_name,
             lo.lot_code, lo.rice_type,
@@ -130,7 +135,9 @@ liquidationsRouter.get("/", asyncRoute(async (_req, res) => {
      JOIN farmers f ON f.id = l.farmer_id
      LEFT JOIN lots lo ON lo.id = l.lot_id
      LEFT JOIN accounts_payable ap ON ap.liquidation_id = l.id
-     ORDER BY l.created_at DESC`
+     WHERE l.accionista_id = $1
+     ORDER BY l.created_at DESC`,
+    [accionistaId]
   );
   res.json(result.rows);
 }));
@@ -151,13 +158,13 @@ liquidationsRouter.post("/:id/apply-advances", asyncRoute(async (req, res) => {
     const apBalance = Number(row.ap_balance ?? 0);
     if (apBalance <= 0) throw new Error("Esta liquidación ya está pagada");
 
-    // Traer anticipos pendientes del agricultor
+    // Traer anticipos pendientes del agricultor (del mismo accionista que la liquidación)
     const advances = await client.query(
       `SELECT * FROM farmer_advances
-       WHERE farmer_id = $1 AND status IN ('CONFIRMED', 'PARTIAL') AND balance > 0
+       WHERE farmer_id = $1 AND accionista_id = $2 AND status IN ('CONFIRMED', 'PARTIAL') AND balance > 0
        ORDER BY issued_at ASC
        FOR UPDATE`,
-      [row.farmer_id]
+      [row.farmer_id, row.accionista_id]
     );
     if (advances.rows.length === 0) throw new Error("No hay anticipos pendientes para este agricultor");
 

@@ -113,7 +113,8 @@ function buildOutputRows(body: FinishProductionInput) {
 export async function cerrarProcesoProduccion(processingBatchId: string, body: FinishProductionInput) {
   return inTransaction(async (client) => {
     const batchResult = await client.query(
-      `SELECT b.*, l.farmer_id AS lot_farmer_id, l.is_maquila AS lot_is_maquila
+      `SELECT b.*, l.farmer_id AS lot_farmer_id, l.is_maquila AS lot_is_maquila,
+              l.accionista_id AS lot_accionista_id
        FROM processing_batches b
        JOIN lots l ON l.id = b.lot_id
        WHERE b.id = $1
@@ -124,6 +125,10 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
 
     const batch = batchResult.rows[0];
     if (batch.finished_at) throw new ApiError(409, "El proceso ya fue cerrado");
+
+    // El arroz procesado pertenece al accionista dueño del lote, sin importar
+    // qué accionista tenga seleccionado el usuario que cierra la pilada.
+    const accionistaId = batch.lot_accionista_id;
 
     const isMaquila = body.is_maquila || batch.ownership === "MAQUILA" || batch.lot_is_maquila;
     const farmerId = body.farmer_id ?? batch.lot_farmer_id;
@@ -187,15 +192,16 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       } else {
         await client.query(
           `INSERT INTO inventory_movements
-           (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by)
-           VALUES ($1, $2, $3, 'PROCESS_OUTPUT', $4, 'processing_batches', $5, 'OWNED', $6)`,
+           (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
+           VALUES ($1, $2, $3, 'PROCESS_OUTPUT', $4, 'processing_batches', $5, 'OWNED', $6, $7)`,
           [
             item.output.product_id,
             item.output.warehouse_id,
             body.lot_id,
             item.output.quantity,
             processingBatchId,
-            body.created_by
+            body.created_by,
+            accionistaId
           ]
         );
       }
@@ -268,14 +274,15 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
 
       const receivable = await client.query(
         `INSERT INTO accounts_receivable
-         (farmer_id, reference_type, reference_id, description, amount, balance)
-         VALUES ($1, 'maquila_orders', $2, $3, $4, $4)
+         (farmer_id, reference_type, reference_id, description, amount, balance, accionista_id)
+         VALUES ($1, 'maquila_orders', $2, $3, $4, $4, $5)
          RETURNING id`,
         [
           farmerId,
           maquilaOrderId,
           `Servicio de maquila por ${processedQq} QQ procesados`,
-          serviceAmount
+          serviceAmount,
+          accionistaId
         ]
       );
       receivableId = receivable.rows[0].id;
@@ -504,10 +511,14 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
       }
     }
 
+    // El batch hereda el accionista de su lote (no del header del usuario).
+    const batchLotOwner = await client.query("SELECT accionista_id FROM lots WHERE id = $1", [lotId]);
+    const batchAccionistaId = batchLotOwner.rows[0]?.accionista_id ?? null;
+
     const batch = await client.query(
       `INSERT INTO processing_batches
-       (batch_number, lot_id, drying_report_id, process_type, ownership, input_product_id, input_quantity, status, started_at, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'CONFIRMED', now(), $8)
+       (batch_number, lot_id, drying_report_id, process_type, ownership, input_product_id, input_quantity, status, started_at, created_by, accionista_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'CONFIRMED', now(), $8, $9)
        RETURNING *`,
       [
         nextCode("PROC"),
@@ -517,14 +528,15 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
         body.ownership,
         body.input_product_id,
         inputQuantity,
-        body.created_by
+        body.created_by,
+        batchAccionistaId
       ]
     );
 
     if (body.drying_report_id) {
       for (const linkedLot of dryingLots) {
         const sourceStock = await client.query(
-          `SELECT m.product_id, m.warehouse_id, m.ownership
+          `SELECT m.product_id, m.warehouse_id, m.ownership, m.accionista_id
            FROM inventory_movements m
            JOIN products p ON p.id = m.product_id
            WHERE m.lot_id = $1
@@ -537,6 +549,7 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
         const inputProductId = sourceStock.rows[0]?.product_id ?? body.input_product_id;
         const inputWarehouseId = sourceStock.rows[0]?.warehouse_id ?? body.input_warehouse_id;
         const inputOwnership = sourceStock.rows[0]?.ownership ?? body.ownership;
+        const inputAccionistaId = sourceStock.rows[0]?.accionista_id ?? batchAccionistaId;
 
         await client.query(
           `INSERT INTO processing_batch_drying_lots
@@ -554,8 +567,8 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
         );
         await client.query(
           `INSERT INTO inventory_movements
-           (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by)
-           VALUES ($1, $2, $3, 'PROCESS_INPUT', $4, 'processing_batches', $5, $6, $7)`,
+           (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
+           VALUES ($1, $2, $3, 'PROCESS_INPUT', $4, 'processing_batches', $5, $6, $7, $8)`,
           [
             inputProductId,
             inputWarehouseId,
@@ -563,7 +576,8 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
             -Number(linkedLot.quintals),
             batch.rows[0].id,
             inputOwnership,
-            body.created_by
+            body.created_by,
+            inputAccionistaId
           ]
         );
       }
@@ -591,12 +605,13 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
       const inputProductId = sourceStock.rows[0]?.product_id ?? body.input_product_id;
       const inputWarehouseId = sourceStock.rows[0]?.warehouse_id ?? body.input_warehouse_id;
       const inputOwnership = sourceStock.rows[0]?.ownership ?? body.ownership;
+      const inputAccionistaId = sourceStock.rows[0]?.accionista_id ?? batchAccionistaId;
 
       await client.query(
         `INSERT INTO inventory_movements
-         (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by)
-         VALUES ($1, $2, $3, 'PROCESS_INPUT', $4, 'processing_batches', $5, $6, $7)`,
-        [inputProductId, inputWarehouseId, lotId, -inputQuantity, batch.rows[0].id, inputOwnership, body.created_by]
+         (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
+         VALUES ($1, $2, $3, 'PROCESS_INPUT', $4, 'processing_batches', $5, $6, $7, $8)`,
+        [inputProductId, inputWarehouseId, lotId, -inputQuantity, batch.rows[0].id, inputOwnership, body.created_by, inputAccionistaId]
       );
       await client.query("UPDATE lots SET status = 'IN_PROCESS' WHERE id = $1", [lotId]);
     }
@@ -631,6 +646,11 @@ processingRouter.post("/:id/finish", asyncRoute(async (req, res) => {
   }).parse(req.body);
 
   const result = await inTransaction(async (client) => {
+    // El inventario producido se atribuye al accionista dueño del lote.
+    const lotOwner = await client.query("SELECT accionista_id FROM lots WHERE id = $1", [body.lot_id]);
+    if (!lotOwner.rowCount) throw new ApiError(404, "Lote no encontrado");
+    const accionistaId = lotOwner.rows[0].accionista_id;
+
     for (const output of body.outputs) {
       await client.query(
         `INSERT INTO processing_outputs
@@ -640,9 +660,9 @@ processingRouter.post("/:id/finish", asyncRoute(async (req, res) => {
       );
       await client.query(
         `INSERT INTO inventory_movements
-         (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by)
-         VALUES ($1, $2, $3, 'PROCESS_OUTPUT', $4, 'processing_batches', $5, $6, $7)`,
-        [output.product_id, output.warehouse_id, body.lot_id, output.quantity, req.params.id, body.ownership, body.created_by]
+         (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
+         VALUES ($1, $2, $3, 'PROCESS_OUTPUT', $4, 'processing_batches', $5, $6, $7, $8)`,
+        [output.product_id, output.warehouse_id, body.lot_id, output.quantity, req.params.id, body.ownership, body.created_by, accionistaId]
       );
     }
 
@@ -657,9 +677,9 @@ processingRouter.post("/:id/finish", asyncRoute(async (req, res) => {
     if (body.sacks_product_id && body.sacks_warehouse_id && body.sacks_used && body.sacks_used > 0) {
       await client.query(
         `INSERT INTO inventory_movements
-         (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by)
-         VALUES ($1, $2, $3, 'PACKAGING_CONSUMPTION', $4, 'processing_batches', $5, 'OWNED', $6)`,
-        [body.sacks_product_id, body.sacks_warehouse_id, body.lot_id, -body.sacks_used, req.params.id, body.created_by]
+         (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
+         VALUES ($1, $2, $3, 'PACKAGING_CONSUMPTION', $4, 'processing_batches', $5, 'OWNED', $6, $7)`,
+        [body.sacks_product_id, body.sacks_warehouse_id, body.lot_id, -body.sacks_used, req.params.id, body.created_by, accionistaId]
       );
     }
 

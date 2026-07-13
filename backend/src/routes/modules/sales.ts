@@ -7,12 +7,14 @@ import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
 import { createLotProcessReport } from "../../utils/process-reports.js";
 import { round2 } from "../../utils/rice-formulas.js";
+import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const salesRouter = Router();
 
 const QQ_TO_LB = 100;
 
 salesRouter.post("/", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const body = z.object({
     customer_id: z.string().uuid().optional(),
     cash_register_id: z.string().uuid().optional(),
@@ -34,10 +36,10 @@ salesRouter.post("/", asyncRoute(async (req, res) => {
   const result = await inTransaction(async (client) => {
     const total = round2(body.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0));
     const sale = await client.query(
-      `INSERT INTO sales (sale_number, customer_id, cash_register_id, total_amount, payment_status, sale_status, created_by)
-       VALUES ($1, $2, $3, $4, $5, 'CONFIRMED', $6)
+      `INSERT INTO sales (sale_number, customer_id, cash_register_id, total_amount, payment_status, sale_status, created_by, accionista_id)
+       VALUES ($1, $2, $3, $4, $5, 'CONFIRMED', $6, $7)
        RETURNING *`,
-      [nextCode("VEN"), body.customer_id, body.cash_register_id, total, body.payment_method === "CREDIT" ? "CONFIRMED" : "PAID", body.created_by]
+      [nextCode("VEN"), body.customer_id, body.cash_register_id, total, body.payment_method === "CREDIT" ? "CONFIRMED" : "PAID", body.created_by, accionistaId]
     );
 
     for (const item of body.items) {
@@ -62,9 +64,9 @@ salesRouter.post("/", asyncRoute(async (req, res) => {
       );
       await client.query(
         `INSERT INTO inventory_movements
-         (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by)
-         VALUES ($1, $2, $3, 'OUT', $4, 'sales', $5, 'OWNED', $6)`,
-        [item.product_id, item.warehouse_id, item.lot_id, -quantityQQ, sale.rows[0].id, body.created_by]
+         (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
+         VALUES ($1, $2, $3, 'OUT', $4, 'sales', $5, 'OWNED', $6, $7)`,
+        [item.product_id, item.warehouse_id, item.lot_id, -quantityQQ, sale.rows[0].id, body.created_by, accionistaId]
       );
 
       if (item.lot_id) {
@@ -89,9 +91,9 @@ salesRouter.post("/", asyncRoute(async (req, res) => {
 
     if (body.payment_method === "CREDIT") {
       await client.query(
-        `INSERT INTO accounts_receivable (customer_id, sale_id, amount, balance)
-         VALUES ($1, $2, $3, $3)`,
-       [body.customer_id, sale.rows[0].id, total]
+        `INSERT INTO accounts_receivable (customer_id, sale_id, amount, balance, accionista_id)
+         VALUES ($1, $2, $3, $3, $4)`,
+       [body.customer_id, sale.rows[0].id, total, accionistaId]
       );
     } else if (body.cash_register_id) {
       await client.query(
@@ -165,7 +167,8 @@ salesRouter.post("/", asyncRoute(async (req, res) => {
 }));
 
 // GET todas las ventas con detalles de cliente
-salesRouter.get("/", asyncRoute(async (_req, res) => {
+salesRouter.get("/", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(`
     SELECT s.*,
            c.full_name AS customer_name,
@@ -175,21 +178,23 @@ salesRouter.get("/", asyncRoute(async (_req, res) => {
     FROM sales s
     LEFT JOIN customers c ON c.id = s.customer_id
     LEFT JOIN sale_items si ON si.sale_id = s.id
+    WHERE s.accionista_id = $1
     GROUP BY s.id, c.full_name, c.phone
     ORDER BY s.created_at DESC
     LIMIT 500
-  `);
+  `, [accionistaId]);
   res.json(result.rows);
 }));
 
 // GET detalle de una venta con items
 salesRouter.get("/:id", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const sale = await pool.query(`
     SELECT s.*, c.full_name AS customer_name, c.phone AS customer_phone
     FROM sales s
     LEFT JOIN customers c ON c.id = s.customer_id
-    WHERE s.id = $1
-  `, [req.params.id]);
+    WHERE s.id = $1 AND s.accionista_id = $2
+  `, [req.params.id, accionistaId]);
 
   if (!sale.rows[0]) { res.status(404).json({ error: "Venta no encontrada" }); return; }
 

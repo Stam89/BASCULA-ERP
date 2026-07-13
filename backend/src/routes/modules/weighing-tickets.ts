@@ -7,6 +7,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
 import { createLotProcessReport } from "../../utils/process-reports.js";
 import { calculateNetWeight, calculateQuintals } from "../../utils/rice-formulas.js";
+import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const weighingRouter = Router();
 
@@ -22,11 +23,12 @@ const createSchema = z.object({
 });
 
 weighingRouter.post("/", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const data = createSchema.parse(req.body);
   const result = await inTransaction(async (client) => {
     const lot = await client.query(
-      `INSERT INTO lots (lot_code, print_batch_code, farmer_id, rice_type, ownership, is_maquila, status, notes)
-       VALUES ($1, $2, $3, $4, $5, $6, 'OPEN', $7)
+      `INSERT INTO lots (lot_code, print_batch_code, farmer_id, rice_type, ownership, is_maquila, status, notes, accionista_id)
+       VALUES ($1, $2, $3, $4, $5, $6, 'OPEN', $7, $8)
        RETURNING *`,
       [
         nextCode("LT"),
@@ -35,14 +37,15 @@ weighingRouter.post("/", asyncRoute(async (req, res) => {
         data.rice_type,
         data.is_maquila ? "MAQUILA" : data.ownership,
         data.is_maquila,
-        data.notes
+        data.notes,
+        accionistaId
       ]
     );
 
     const ticket = await client.query(
       `INSERT INTO weighing_tickets
-       (ticket_number, lot_id, farmer_id, vehicle_id, is_maquila, gross_weight, weighed_in_at, created_by, notes)
-       VALUES ($1, $2, $3, $4, $5, $6, now(), $7, $8)
+       (ticket_number, lot_id, farmer_id, vehicle_id, is_maquila, gross_weight, weighed_in_at, created_by, notes, accionista_id)
+       VALUES ($1, $2, $3, $4, $5, $6, now(), $7, $8, $9)
        RETURNING *`,
       [
         nextCode("BAS"),
@@ -52,7 +55,8 @@ weighingRouter.post("/", asyncRoute(async (req, res) => {
         data.is_maquila,
         data.gross_weight,
         data.created_by,
-        data.notes
+        data.notes,
+        accionistaId
       ]
     );
 
@@ -115,6 +119,7 @@ weighingRouter.put("/:id/qualification", asyncRoute(async (req, res) => {
 }));
 
 weighingRouter.post("/:id/close", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const body = z.object({
     product_id: z.string().uuid().optional(),
     warehouse_id: z.string().uuid().optional(),
@@ -144,8 +149,8 @@ weighingRouter.post("/:id/close", asyncRoute(async (req, res) => {
     if (body.product_id && body.warehouse_id) {
       await client.query(
         `INSERT INTO inventory_movements
-         (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by)
-         VALUES ($1, $2, $3, 'IN', $4, 'weighing_tickets', $5, $6, $7)`,
+         (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
+         VALUES ($1, $2, $3, 'IN', $4, 'weighing_tickets', $5, $6, $7, $8)`,
         [
           body.product_id,
           body.warehouse_id,
@@ -153,7 +158,8 @@ weighingRouter.post("/:id/close", asyncRoute(async (req, res) => {
           ticket.rows[0].quintals,
           ticket.rows[0].id,
           ticket.rows[0].ownership,
-          body.created_by
+          body.created_by,
+          accionistaId
         ]
       );
     }
