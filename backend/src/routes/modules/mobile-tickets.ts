@@ -7,6 +7,8 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { requireAuth, resolveAccionista, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { calculateNetWeight, calculateQuintals, round2 } from "../../utils/rice-formulas.js";
+import { nextCode } from "../../utils/codes.js";
+import { createLotProcessReport } from "../../utils/process-reports.js";
 
 export const mobileTicketsRouter = Router();
 
@@ -254,7 +256,7 @@ mobileTicketsRouter.get("/", requireAuth, resolveAccionista, asyncRoute(async (r
   const conditions = ["(t.accionista_id = $1 OR t.accionista_id IS NULL)"];
   if (statusFilter) conditions.push(statusFilter);
   const result = await pool.query(
-    `SELECT t.id, t.farmer_id, t.farmer_name, t.accionista_id, t.gross_weight, t.tare_weight, t.net_weight,
+    `SELECT t.id, t.farmer_id, t.farmer_name, t.accionista_id, t.lot_id, t.gross_weight, t.tare_weight, t.net_weight,
             t.qualification, t.quintals, t.price_per_quintal, t.net_payable, t.liquidated_at,
             t.mobile_updated_at,
             t.raw_payload->>'numeroTicket' AS numero,
@@ -318,6 +320,88 @@ mobileTicketsRouter.post("/:id/link-farmer", requireAuth, resolveAccionista, asy
     [req.params.id, farmerId, targetAccionista]
   );
   res.json(updated.rows[0]);
+}));
+
+// Crea un lote a partir de un ticket de báscula importado, usando sus pesos,
+// para que ese arroz entre al proceso (secado → pilado → inventario). Puede ser
+// COMPRA propia (entra a inventario) o MAQUILA/servicio (no entra a inventario).
+mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const body = z.object({
+    rice_type: z.enum(["0.11", "CORRIENTE"]).default("0.11"),
+    ownership: z.enum(["OWNED", "MAQUILA"]).default("OWNED"),
+    product_id: z.string().uuid().optional(),
+    warehouse_id: z.string().uuid().optional(),
+    created_by: z.string().uuid().optional()
+  }).parse(req.body);
+
+  const ticketRow = await pool.query("SELECT * FROM mobile_synced_tickets WHERE id = $1", [req.params.id]);
+  if (!ticketRow.rowCount) throw new ApiError(404, "Ticket no encontrado");
+  const t = ticketRow.rows[0];
+  if (t.lot_id) throw new ApiError(409, "Este ticket ya generó un lote.");
+  if (!t.farmer_id) throw new ApiError(400, "Primero vincula el ticket a un agricultor/cliente.");
+  if (Number(t.quintals) <= 0) throw new ApiError(400, "El ticket no tiene quintales calculados.");
+  const ticketAccionista = t.accionista_id ?? accionistaId;
+  const isMaquila = body.ownership === "MAQUILA";
+
+  const result = await inTransaction(async (client) => {
+    const lot = await client.query(
+      `INSERT INTO lots (lot_code, print_batch_code, farmer_id, rice_type, ownership, is_maquila, status, notes, accionista_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [
+        nextCode("LT"), nextCode("IMP"), t.farmer_id, body.rice_type,
+        isMaquila ? "MAQUILA" : "OWNED", isMaquila,
+        body.product_id && body.warehouse_id && !isMaquila ? "WEIGHED" : "OPEN",
+        `Desde ticket de báscula #${t.raw_payload?.numeroTicket ?? ""}`.trim(),
+        ticketAccionista
+      ]
+    );
+
+    const ticket = await client.query(
+      `INSERT INTO weighing_tickets
+       (ticket_number, lot_id, farmer_id, is_maquila, gross_weight, tare_weight, qualification, quintals,
+        weighed_in_at, status, is_locked, created_by, accionista_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), 'CONFIRMED', true, $9, $10)
+       RETURNING *`,
+      [
+        nextCode("BAS"), lot.rows[0].id, t.farmer_id, isMaquila,
+        t.gross_weight, t.tare_weight, t.qualification, t.quintals,
+        body.created_by ?? null, ticketAccionista
+      ]
+    );
+
+    // Compra propia con producto/bodega: el arroz entra al inventario.
+    if (!isMaquila && body.product_id && body.warehouse_id) {
+      await client.query(
+        `INSERT INTO inventory_movements
+         (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
+         VALUES ($1, $2, $3, 'IN', $4, 'weighing_tickets', $5, 'OWNED', $6, $7)`,
+        [body.product_id, body.warehouse_id, lot.rows[0].id, t.quintals, ticket.rows[0].id, body.created_by ?? null, ticketAccionista]
+      );
+    }
+
+    await createLotProcessReport(client, {
+      lotId: lot.rows[0].id,
+      stage: "BASCULA",
+      title: `Informe de báscula ${ticket.rows[0].ticket_number}`,
+      referenceType: "weighing_tickets",
+      referenceId: ticket.rows[0].id,
+      data: {
+        ticket_number: ticket.rows[0].ticket_number,
+        origen: "ticket_movil",
+        gross_weight: Number(t.gross_weight), tare_weight: Number(t.tare_weight),
+        net_weight: Number(t.net_weight), qualification: Number(t.qualification), quintals: Number(t.quintals),
+        is_maquila: isMaquila
+      },
+      createdBy: body.created_by
+    });
+
+    await client.query("UPDATE mobile_synced_tickets SET lot_id = $2 WHERE id = $1", [req.params.id, lot.rows[0].id]);
+    return { lot: lot.rows[0], ticket: ticket.rows[0] };
+  });
+
+  res.status(201).json(result);
 }));
 
 mobileTicketsRouter.post("/sync", asyncRoute(async (req, res) => {

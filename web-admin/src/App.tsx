@@ -130,6 +130,7 @@ type BasculaTicket = {
   qualification: string | number;
   quintals: string | number;
   liquidated_at: string | null;
+  lot_id: string | null;
   numero: string | null;
   modo: string | null;
   fecha_app: string | null;
@@ -735,6 +736,8 @@ export function App() {
   const [ticketFilter, setTicketFilter] = useState<"pending" | "liquidated" | "all">("pending");
   const [linkTicket, setLinkTicket] = useState<BasculaTicket | null>(null);
   const [linkFarmerId, setLinkFarmerId] = useState("");
+  const [lotTicket, setLotTicket] = useState<BasculaTicket | null>(null);
+  const [lotForm, setLotForm] = useState({ rice_type: "0.11" as "0.11" | "CORRIENTE", ownership: "OWNED" as "OWNED" | "MAQUILA", product_id: "", warehouse_id: "" });
   const [liqTicket, setLiqTicket] = useState<BasculaTicket | null>(null);
   const [liqPrecio, setLiqPrecio] = useState("");
   const [liqPreview, setLiqPreview] = useState<{ quintals: number; grossPayable: number; advancesDiscount: number; netPayable: number } | null>(null);
@@ -811,7 +814,7 @@ export function App() {
   // ── Servicio de pilado (CEYRO a otros accionistas) ────────────────────────
   const [piladoServices, setPiladoServices] = useState<PiladoService[]>([]);
   const [piladoBalances, setPiladoBalances] = useState<PiladoBalance[]>([]);
-  const [piladoForm, setPiladoForm] = useState({ client_accionista_id: "", quintals: "", rate_per_qq: localStorage.getItem("bascula-erp:pilado-rate") ?? "", service_date: nominaToday });
+  const [piladoForm, setPiladoForm] = useState({ client_kind: "accionista" as "accionista" | "externo", client_accionista_id: "", client_name: "", quintals: "", rate_per_qq: localStorage.getItem("bascula-erp:pilado-rate") ?? "", service_date: nominaToday });
 
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
   const [settingsForm, setSettingsForm] = useState<AppSettings>(defaultAppSettings);
@@ -1590,16 +1593,19 @@ export function App() {
   async function submitPilado(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const qq = Number(piladoForm.quintals), rate = Number(piladoForm.rate_per_qq);
-    if (!piladoForm.client_accionista_id) { addToast("Elige el accionista al que le pilaste", "error"); return; }
+    const esExterno = piladoForm.client_kind === "externo";
+    if (esExterno && piladoForm.client_name.trim().length < 2) { addToast("Escribe el nombre del cliente externo", "error"); return; }
+    if (!esExterno && !piladoForm.client_accionista_id) { addToast("Elige el accionista al que le pilaste", "error"); return; }
     if (!(qq > 0) || !(rate >= 0)) { addToast("Ingresa quintales y tarifa por QQ", "error"); return; }
     await apiPost("/pilado/services", {
-      client_accionista_id: piladoForm.client_accionista_id,
+      client_accionista_id: esExterno ? undefined : piladoForm.client_accionista_id,
+      client_name: esExterno ? piladoForm.client_name.trim() : undefined,
       quintals: qq,
       rate_per_qq: rate,
       service_date: piladoForm.service_date
     });
     localStorage.setItem("bascula-erp:pilado-rate", String(rate));
-    setPiladoForm({ ...piladoForm, quintals: "" });
+    setPiladoForm({ ...piladoForm, quintals: "", client_name: "" });
     addToast("Servicio de pilado registrado", "success");
     await refreshPilado();
   }
@@ -2127,6 +2133,27 @@ export function App() {
       await Promise.all([refreshBasculaTickets(), refresh()]);
     } catch (e) {
       addToast(`No se pudo vincular: ${e instanceof Error ? e.message : "error"}`, "error");
+    }
+  }
+
+  async function submitCreateLot() {
+    if (!lotTicket) return;
+    if (lotForm.ownership === "OWNED" && (!lotForm.product_id || !lotForm.warehouse_id)) {
+      addToast("Para una compra, elige producto y bodega (para que entre al inventario)", "error");
+      return;
+    }
+    try {
+      await apiPost(`/tickets/${lotTicket.id}/create-lot`, {
+        rice_type: lotForm.rice_type,
+        ownership: lotForm.ownership,
+        product_id: lotForm.ownership === "OWNED" ? lotForm.product_id : undefined,
+        warehouse_id: lotForm.ownership === "OWNED" ? lotForm.warehouse_id : undefined
+      });
+      addToast(lotForm.ownership === "OWNED" ? "Lote creado e ingresado al inventario. Ya puede ir a secado/pilado." : "Lote de servicio creado. Ya puede ir a secado/pilado.", "success");
+      setLotTicket(null);
+      await Promise.all([refreshBasculaTickets(), refresh()]);
+    } catch (e) {
+      addToast(`No se pudo crear el lote: ${e instanceof Error ? e.message : "error"}`, "error");
     }
   }
 
@@ -3765,9 +3792,12 @@ export function App() {
                               : <span className="chip warn">Sin agricultor</span>}
                           </td>
                           <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
-                            {!liquidated && (
+                            {t.lot_id ? (
+                              <span className="chip ok">Lote creado</span>
+                            ) : !liquidated && (
                               <>
                                 <button type="button" className="btnGhost" onClick={() => { setLinkTicket(t); setLinkFarmerId(""); }}>{linked ? "Cambiar" : "Vincular"}</button>
+                                {linked && <button type="button" className="btnSecondary" style={{ marginLeft: 6 }} onClick={() => { setLotTicket(t); setLotForm({ rice_type: "0.11", ownership: "OWNED", product_id: "", warehouse_id: "" }); }}>Crear lote</button>}
                                 {linked && <button type="button" className="liqAbonoBtn" style={{ marginLeft: 6 }} onClick={() => { setLiqTicket(t); setLiqPrecio(""); setLiqPreview(null); }}>Liquidar</button>}
                               </>
                             )}
@@ -5849,12 +5879,24 @@ export function App() {
               <label><span>Fecha</span>
                 <input type="date" value={piladoForm.service_date} onChange={(e) => setPiladoForm({ ...piladoForm, service_date: e.target.value })} />
               </label>
-              <label><span>Accionista al que le pilaste</span>
-                <select value={piladoForm.client_accionista_id} onChange={(e) => setPiladoForm({ ...piladoForm, client_accionista_id: e.target.value })}>
-                  <option value="">Seleccione</option>
-                  {clientes.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              <label><span>Tipo de cliente</span>
+                <select value={piladoForm.client_kind} onChange={(e) => setPiladoForm({ ...piladoForm, client_kind: e.target.value as "accionista" | "externo" })}>
+                  <option value="accionista">Accionista</option>
+                  <option value="externo">Cliente externo</option>
                 </select>
               </label>
+              {piladoForm.client_kind === "accionista" ? (
+                <label><span>Accionista al que le pilaste</span>
+                  <select value={piladoForm.client_accionista_id} onChange={(e) => setPiladoForm({ ...piladoForm, client_accionista_id: e.target.value })}>
+                    <option value="">Seleccione</option>
+                    {clientes.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  </select>
+                </label>
+              ) : (
+                <label><span>Nombre del cliente externo</span>
+                  <input type="text" value={piladoForm.client_name} onChange={(e) => setPiladoForm({ ...piladoForm, client_name: e.target.value })} placeholder="Ej: Juan Pérez" />
+                </label>
+              )}
               <label><span>Quintales procesados (QQ)</span>
                 <input type="number" step="0.01" min="0" value={piladoForm.quintals} onChange={(e) => setPiladoForm({ ...piladoForm, quintals: e.target.value })} />
               </label>
@@ -7154,6 +7196,52 @@ export function App() {
           <div className="buttonRow">
             <button type="button" className="primary" onClick={() => submitLinkFarmer().catch((e) => addToast(e.message, "error"))}>Vincular</button>
             <button type="button" onClick={() => setLinkTicket(null)}>Cancelar</button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* Modal: crear lote desde ticket de báscula */}
+    {lotTicket && (
+      <div className="modalOverlay" onClick={() => setLotTicket(null)}>
+        <div className="modalCard" onClick={(e) => e.stopPropagation()}>
+          <h3>Crear lote del ticket #{lotTicket.numero}</h3>
+          <p className="muted">{lotTicket.farmer_name} · {Number(lotTicket.quintals).toFixed(2)} QQ. Se creará el lote con estos pesos para que entre a secado → pilado.</p>
+          <label>
+            <span>Tipo de arroz</span>
+            <select value={lotForm.rice_type} onChange={(e) => setLotForm({ ...lotForm, rice_type: e.target.value as "0.11" | "CORRIENTE" })}>
+              <option value="0.11">0.11</option>
+              <option value="CORRIENTE">Corriente</option>
+            </select>
+          </label>
+          <label>
+            <span>¿Qué es este arroz?</span>
+            <select value={lotForm.ownership} onChange={(e) => setLotForm({ ...lotForm, ownership: e.target.value as "OWNED" | "MAQUILA" })}>
+              <option value="OWNED">Compra propia (entra a mi inventario)</option>
+              <option value="MAQUILA">Servicio de pilado (no entra a mi inventario)</option>
+            </select>
+          </label>
+          {lotForm.ownership === "OWNED" && (
+            <>
+              <label>
+                <span>Producto (a qué stock ingresa)</span>
+                <select value={lotForm.product_id} onChange={(e) => setLotForm({ ...lotForm, product_id: e.target.value })}>
+                  <option value="">Selecciona…</option>
+                  {products.filter((p) => p.product_type === "RAW_MATERIAL").map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </label>
+              <label>
+                <span>Bodega</span>
+                <select value={lotForm.warehouse_id} onChange={(e) => setLotForm({ ...lotForm, warehouse_id: e.target.value })}>
+                  <option value="">Selecciona…</option>
+                  {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+                </select>
+              </label>
+            </>
+          )}
+          <div className="buttonRow">
+            <button type="button" className="primary" onClick={() => submitCreateLot()}>Crear lote</button>
+            <button type="button" onClick={() => setLotTicket(null)}>Cancelar</button>
           </div>
         </div>
       </div>
