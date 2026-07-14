@@ -8,6 +8,7 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "db:init": "psql \"$DATABASE_URL\" -f ../database/schema.sql",
+    "db:migrate": "tsx src/scripts/migrate.ts",
     "db:seed": "tsx src/scripts/seed.ts"
   },
   "dependencies": {
