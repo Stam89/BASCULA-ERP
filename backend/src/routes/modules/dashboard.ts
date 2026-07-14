@@ -1,9 +1,125 @@
 import { Router } from "express";
+import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
-import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const dashboardRouter = Router();
+
+// ── Panel de Control Integral (todos los accionistas) ───────────────────────
+// Vista consolidada para el dueño/admin: compras, ventas, inventario y bancos
+// por accionista, con totales, utilidad, series de 6 meses y alertas.
+dashboardRouter.get("/panel", requireAdmin, asyncRoute(async (req, res) => {
+  const q = z.object({ month: z.string().regex(/^\d{4}-\d{2}$/).optional() }).parse(req.query);
+  const now = new Date();
+  const monthStr = q.month ?? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const [yy, mm] = monthStr.split("-").map(Number);
+  const from = `${monthStr}-01`;
+  const to = new Date(yy, mm, 0).toISOString().slice(0, 10); // último día del mes
+
+  const [accionistas, compras, ventas, inventario, bancos, ar, ap, prestamos, comprasSerie, ventasSerie] = await Promise.all([
+    pool.query("SELECT id, name FROM accionistas WHERE is_active = true ORDER BY name"),
+    pool.query(
+      `SELECT accionista_id, COALESCE(SUM(gross_amount),0)::float total, COALESCE(SUM(quintals),0)::float qq, COUNT(*)::int cnt
+       FROM liquidations WHERE status <> 'CANCELLED' AND created_at::date BETWEEN $1 AND $2
+       GROUP BY accionista_id`, [from, to]),
+    pool.query(
+      `SELECT s.accionista_id, COALESCE(SUM(s.total_amount),0)::float total, COUNT(DISTINCT s.id)::int cnt,
+              COALESCE(SUM(si.quantity),0)::float qq
+       FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id
+       WHERE s.sale_status <> 'CANCELLED' AND s.created_at::date BETWEEN $1 AND $2
+       GROUP BY s.accionista_id`, [from, to]),
+    pool.query(
+      `SELECT m.accionista_id, COALESCE(SUM(m.quantity),0)::float qq,
+              COALESCE(SUM(m.total_cost),0)::float valor
+       FROM inventory_movements m
+       WHERE m.ownership = 'OWNED'
+       GROUP BY m.accionista_id`),
+    pool.query(
+      `SELECT cr.accionista_id,
+              (COALESCE(SUM(cr.opening_balance),0) + COALESCE(SUM(mov.net),0))::float balance
+       FROM cash_registers cr
+       LEFT JOIN (
+         SELECT cash_register_id, SUM(CASE WHEN movement='INCOME' THEN amount ELSE -amount END) net
+         FROM cash_movements GROUP BY cash_register_id
+       ) mov ON mov.cash_register_id = cr.id
+       GROUP BY cr.accionista_id`),
+    pool.query(`SELECT COALESCE(SUM(balance),0)::float total, COUNT(DISTINCT customer_id)::int cnt FROM accounts_receivable WHERE status IN ('CONFIRMED','PARTIAL') AND balance > 0`),
+    pool.query(`SELECT COALESCE(SUM(balance),0)::float total, COUNT(*)::int cnt FROM accounts_payable WHERE status IN ('CONFIRMED','PARTIAL') AND balance > 0`),
+    pool.query(`SELECT COALESCE(SUM(balance),0)::float total, COUNT(DISTINCT farmer_id)::int cnt FROM farmer_advances WHERE status IN ('CONFIRMED','PARTIAL') AND balance > 0`),
+    pool.query(
+      `SELECT to_char(date_trunc('month', created_at),'YYYY-MM') m, COALESCE(SUM(gross_amount),0)::float total
+       FROM liquidations WHERE status <> 'CANCELLED' AND created_at >= (date_trunc('month', $1::date) - interval '5 months')
+       GROUP BY 1 ORDER BY 1`, [from]),
+    pool.query(
+      `SELECT to_char(date_trunc('month', created_at),'YYYY-MM') m, COALESCE(SUM(total_amount),0)::float total
+       FROM sales WHERE sale_status <> 'CANCELLED' AND created_at >= (date_trunc('month', $1::date) - interval '5 months')
+       GROUP BY 1 ORDER BY 1`, [from])
+  ]);
+
+  const byAcc = (rows: Array<Record<string, unknown>>) => {
+    const map = new Map<string, Record<string, unknown>>();
+    for (const r of rows) map.set(String(r.accionista_id), r);
+    return map;
+  };
+  const comprasMap = byAcc(compras.rows), ventasMap = byAcc(ventas.rows), invMap = byAcc(inventario.rows), bancosMap = byAcc(bancos.rows);
+
+  const perAccionista = accionistas.rows.map((a) => {
+    const c = comprasMap.get(a.id), v = ventasMap.get(a.id), i = invMap.get(a.id), b = bancosMap.get(a.id);
+    return {
+      id: a.id,
+      name: a.name,
+      compras_total: Number(c?.total ?? 0), compras_qq: Number(c?.qq ?? 0), compras_cnt: Number(c?.cnt ?? 0),
+      ventas_total: Number(v?.total ?? 0), ventas_qq: Number(v?.qq ?? 0), ventas_cnt: Number(v?.cnt ?? 0),
+      inventario_qq: Number(i?.qq ?? 0), inventario_valor: Number(i?.valor ?? 0),
+      banco_balance: Number(b?.balance ?? 0)
+    };
+  });
+
+  const sum = (f: (x: typeof perAccionista[number]) => number) => Math.round(perAccionista.reduce((s, x) => s + f(x), 0) * 100) / 100;
+  const totalCompras = sum((x) => x.compras_total);
+  const totalVentas = sum((x) => x.ventas_total);
+  const totalBancos = sum((x) => x.banco_balance);
+  const utilidad = Math.round((totalVentas - totalCompras) * 100) / 100;
+  const porCobrar = Number(ar.rows[0].total), porPagar = Number(ap.rows[0].total), totalPrestamos = Number(prestamos.rows[0].total);
+  const saldoGeneral = Math.round((totalBancos + porCobrar - porPagar) * 100) / 100;
+
+  // Serie de 6 meses (rellena meses sin datos con 0)
+  const cSerie = new Map(comprasSerie.rows.map((r) => [r.m, Number(r.total)]));
+  const vSerie = new Map(ventasSerie.rows.map((r) => [r.m, Number(r.total)]));
+  const serie: Array<{ month: string; compras: number; ventas: number }> = [];
+  for (let k = 5; k >= 0; k--) {
+    const d = new Date(yy, mm - 1 - k, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    serie.push({ month: key, compras: cSerie.get(key) ?? 0, ventas: vSerie.get(key) ?? 0 });
+  }
+
+  // Alertas automáticas
+  const alertas: string[] = [];
+  for (const x of perAccionista) {
+    if (x.ventas_total > x.compras_total && x.compras_total > 0) alertas.push(`${x.name}: ventas superiores a compras (revisar)`);
+  }
+  if (porCobrar > 0) alertas.push(`${ar.rows[0].cnt} cuenta(s) por cobrar pendientes`);
+  if (porPagar > 0) alertas.push(`${ap.rows[0].cnt} cuenta(s) por pagar pendientes`);
+
+  res.json({
+    month: monthStr,
+    range: { from, to },
+    kpis: { compras: totalCompras, ventas: totalVentas, utilidad, margen: totalVentas > 0 ? Math.round((utilidad / totalVentas) * 10000) / 100 : 0, bancos: totalBancos, saldo_general: saldoGeneral },
+    per_accionista: perAccionista,
+    totales: {
+      compras_qq: sum((x) => x.compras_qq), ventas_qq: sum((x) => x.ventas_qq),
+      inventario_qq: sum((x) => x.inventario_qq), inventario_valor: sum((x) => x.inventario_valor),
+      compras_cnt: perAccionista.reduce((s, x) => s + x.compras_cnt, 0),
+      ventas_cnt: perAccionista.reduce((s, x) => s + x.ventas_cnt, 0)
+    },
+    serie,
+    por_cobrar: { total: porCobrar, cnt: ar.rows[0].cnt },
+    por_pagar: { total: porPagar, cnt: ap.rows[0].cnt },
+    prestamos: { total: totalPrestamos, cnt: prestamos.rows[0].cnt },
+    alertas
+  });
+}));
 
 dashboardRouter.get("/", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
