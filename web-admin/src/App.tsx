@@ -188,6 +188,9 @@ type CuadrillaEntry = { id: string; work_date: string; activity_name: string; wo
 type CuadrillaSummaryRow = { worker_name: string; entradas: number; total: number; anticipos: number; neto: number };
 type CuadrillaAdvance = { id: string; worker_name: string; amount: number; balance: number; concept: string | null; status: string; issued_at: string };
 
+type PiladoService = { id: string; service_date: string; cliente: string; quintals: number; rate_per_qq: number; total: number; saldo: number; estado: string; notes: string | null };
+type PiladoBalance = { id: string; name: string; saldo: number };
+
 type PanelAccionista = {
   id: string; name: string;
   compras_total: number; compras_qq: number; compras_cnt: number;
@@ -580,7 +583,7 @@ const navGroups: Array<{ label: string; tabs: string[] }> = [
   { label: "Operación", tabs: ["Bascula", "Secadoras", "Produccion", "Inventario"] },
   { label: "Comercial", tabs: ["Ventas", "Caja"] },
   { label: "Cuentas", tabs: ["Por Cobrar", "Por Pagar"] },
-  { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores", "Nomina", "Cuadrilla"] },
+  { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores", "Nomina", "Cuadrilla", "Servicio Pilado"] },
   { label: "Sistema", tabs: ["Reportes", "Configuracion"] }
 ];
 const tabs = navGroups.flatMap((group) => group.tabs);
@@ -617,6 +620,8 @@ function NavIcon({ tab }: { tab: string }) {
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="5" r="2.5"/><path d="M3 14c0-2.8 2.2-4.5 5-4.5s5 1.7 5 4.5"/><circle cx="12.5" cy="4" r="2" fill="currentColor" stroke="none"/></svg>;
     case "Cuadrilla":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="5" cy="5" r="2"/><circle cx="11" cy="5" r="2"/><path d="M1.5 13c0-2 1.5-3.2 3.5-3.2S8.5 11 8.5 13"/><path d="M7.5 13c0-2 1.5-3.2 3.5-3.2s3.5 1.2 3.5 3.2"/></svg>;
+    case "Servicio Pilado":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.2 3.2l1.4 1.4M11.4 11.4l1.4 1.4M3.2 12.8l1.4-1.4M11.4 4.6l1.4-1.4"/></svg>;
     case "Reportes":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="12" height="12" rx="1.5"/><line x1="5" y1="11" x2="5" y2="8"/><line x1="8" y1="11" x2="8" y2="5"/><line x1="11" y1="11" x2="11" y2="7"/></svg>;
     case "Configuracion":
@@ -802,6 +807,11 @@ export function App() {
   const [cuadEntryForm, setCuadEntryForm] = useState({ work_date: nominaToday, activity_id: "", worker_name: "", quantity: "" });
   const [cuadAdvanceForm, setCuadAdvanceForm] = useState({ worker_name: "", amount: "", concept: "" });
   const [newActivityForm, setNewActivityForm] = useState({ name: "", unit_rate: "" });
+
+  // ── Servicio de pilado (CEYRO a otros accionistas) ────────────────────────
+  const [piladoServices, setPiladoServices] = useState<PiladoService[]>([]);
+  const [piladoBalances, setPiladoBalances] = useState<PiladoBalance[]>([]);
+  const [piladoForm, setPiladoForm] = useState({ client_accionista_id: "", quintals: "", rate_per_qq: localStorage.getItem("bascula-erp:pilado-rate") ?? "", service_date: nominaToday });
 
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
   const [settingsForm, setSettingsForm] = useState<AppSettings>(defaultAppSettings);
@@ -1431,6 +1441,7 @@ export function App() {
       if (tab === "Por Cobrar" || tab === "Por Pagar") return allowed.has("Caja") || allowed.has("Ventas");
       if (tab === "Nomina") return allowed.has("Caja") || allowed.has("Produccion");
       if (tab === "Cuadrilla") return allowed.has("Caja") || allowed.has("Produccion");
+      if (tab === "Servicio Pilado") return allowed.has("Caja") || allowed.has("Produccion");
       return allowed.has(tab);
     });
   }, [authUser, isAdmin]);
@@ -1560,6 +1571,43 @@ export function App() {
     } catch (e) {
       addToast(`Error al cargar el panel: ${e instanceof Error ? e.message : "desconocido"}`, "error");
     }
+  }
+
+  // ── Servicio de pilado ────────────────────────────────────────────────────
+  async function refreshPilado() {
+    try {
+      const [services, balances] = await Promise.all([
+        apiGet<{ rows: PiladoService[] }>("/pilado/services"),
+        apiGet<PiladoBalance[]>("/pilado/balances")
+      ]);
+      setPiladoServices(services.rows);
+      setPiladoBalances(balances);
+    } catch (e) {
+      addToast(`Error al cargar servicios de pilado: ${e instanceof Error ? e.message : "desconocido"}`, "error");
+    }
+  }
+
+  async function submitPilado(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const qq = Number(piladoForm.quintals), rate = Number(piladoForm.rate_per_qq);
+    if (!piladoForm.client_accionista_id) { addToast("Elige el accionista al que le pilaste", "error"); return; }
+    if (!(qq > 0) || !(rate >= 0)) { addToast("Ingresa quintales y tarifa por QQ", "error"); return; }
+    await apiPost("/pilado/services", {
+      client_accionista_id: piladoForm.client_accionista_id,
+      quintals: qq,
+      rate_per_qq: rate,
+      service_date: piladoForm.service_date
+    });
+    localStorage.setItem("bascula-erp:pilado-rate", String(rate));
+    setPiladoForm({ ...piladoForm, quintals: "" });
+    addToast("Servicio de pilado registrado", "success");
+    await refreshPilado();
+  }
+
+  async function settlePilado(id: string) {
+    await apiPost(`/pilado/services/${id}/settle`, {});
+    addToast("Servicio saldado", "success");
+    await refreshPilado();
   }
 
   // ── Cuadrilla ─────────────────────────────────────────────────────────────
@@ -2332,6 +2380,7 @@ export function App() {
     if (activeTab === "Por Pagar") refreshPayables().catch(() => undefined);
     if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
     if (activeTab === "Cuadrilla") refreshCuadrilla().catch(() => undefined);
+    if (activeTab === "Servicio Pilado") refreshPilado().catch(() => undefined);
     if (activeTab === "Dashboard" && isAdmin) refreshPanel().catch(() => undefined);
     if (activeTab === "Configuracion") refreshConfig().catch(() => undefined);
   }, [activeTab]);
@@ -5788,6 +5837,81 @@ export function App() {
             )}
           </section>
         )}
+
+        {activeTab === "Servicio Pilado" && (() => {
+          const clientes = accionistas.filter((a) => a.id !== "00000000-0000-0000-0000-000000000001");
+          const previewTotal = round2(Number(piladoForm.quintals || 0) * Number(piladoForm.rate_per_qq || 0));
+          return (
+          <section className="panelGrid">
+            <form className="formPanel" onSubmit={(e) => submitPilado(e).catch((err) => addToast(err.message, "error"))}>
+              <h2>🌾 Registrar servicio de pilado</h2>
+              <p className="muted">CEYRO le presta el servicio de secado + pilado a otro accionista y le cobra por quintal. Genera el ingreso para CEYRO y la cuenta por pagar del accionista.</p>
+              <label><span>Fecha</span>
+                <input type="date" value={piladoForm.service_date} onChange={(e) => setPiladoForm({ ...piladoForm, service_date: e.target.value })} />
+              </label>
+              <label><span>Accionista al que le pilaste</span>
+                <select value={piladoForm.client_accionista_id} onChange={(e) => setPiladoForm({ ...piladoForm, client_accionista_id: e.target.value })}>
+                  <option value="">Seleccione</option>
+                  {clientes.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+              </label>
+              <label><span>Quintales procesados (QQ)</span>
+                <input type="number" step="0.01" min="0" value={piladoForm.quintals} onChange={(e) => setPiladoForm({ ...piladoForm, quintals: e.target.value })} />
+              </label>
+              <label><span>Tarifa por QQ ($)</span>
+                <input type="number" step="0.01" min="0" value={piladoForm.rate_per_qq} onChange={(e) => setPiladoForm({ ...piladoForm, rate_per_qq: e.target.value })} />
+              </label>
+              <div className="totalBox" style={{ marginBottom: 10 }}>
+                <span>Total a cobrar</span>
+                <strong>{money(previewTotal)}</strong>
+                <small>{piladoForm.quintals || 0} QQ × ${piladoForm.rate_per_qq || 0}</small>
+              </div>
+              <button className="primary">Registrar servicio</button>
+              {clientes.length === 0 && <p className="muted">Crea los otros accionistas en Configuración → Accionistas.</p>}
+            </form>
+
+            <div className="tablePanel">
+              <h2>Saldos que deben a CEYRO</h2>
+              {piladoBalances.length === 0 ? (
+                <div className="emptyState"><div className="emptyIcon">✅</div><p>Nadie debe servicios de pilado.</p></div>
+              ) : (
+                <table className="cajaTable" style={{ marginTop: 6 }}>
+                  <thead><tr><th>Accionista</th><th>Saldo pendiente</th></tr></thead>
+                  <tbody>
+                    {piladoBalances.map((b) => (
+                      <tr key={b.id}><td>{b.name}</td><td><strong style={{ color: "#dc2626" }}>{money(b.saldo)}</strong></td></tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              <h2 style={{ marginTop: 18 }}>Servicios registrados</h2>
+              {piladoServices.length === 0 ? (
+                <div className="emptyState"><div className="emptyIcon">🌾</div><p>Sin servicios este mes</p></div>
+              ) : (
+                <table className="cajaTable" style={{ marginTop: 6 }}>
+                  <thead><tr><th>Fecha</th><th>Cliente</th><th>QQ</th><th>Tarifa</th><th>Total</th><th>Saldo</th><th /></tr></thead>
+                  <tbody>
+                    {piladoServices.map((s) => (
+                      <tr key={s.id}>
+                        <td>{String(s.service_date).slice(0, 10)}</td>
+                        <td>{s.cliente}</td>
+                        <td>{Number(s.quintals)}</td>
+                        <td>${Number(s.rate_per_qq)}</td>
+                        <td><strong>{money(Number(s.total))}</strong></td>
+                        <td>{Number(s.saldo) > 0 ? <span style={{ color: "#dc2626" }}>{money(Number(s.saldo))}</span> : <span className="chip ok">Pagado</span>}</td>
+                        <td style={{ textAlign: "right" }}>
+                          {Number(s.saldo) > 0 && <button type="button" className="btnGhost" onClick={() => settlePilado(s.id).catch((err) => addToast(err.message, "error"))}>Marcar pagado</button>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </section>
+          );
+        })()}
 
         {activeTab === "Cuadrilla" && (() => {
           const selAct = cuadActivities.find((a) => a.id === cuadEntryForm.activity_id);
