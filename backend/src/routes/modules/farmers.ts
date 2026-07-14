@@ -12,7 +12,8 @@ const farmerSchema = z.object({
   phone: z.string().optional(),
   address: z.string().optional(),
   bank_account: z.string().optional(),
-  notes: z.string().optional()
+  notes: z.string().optional(),
+  accionista_id: z.string().uuid().nullable().optional()
 });
 
 farmersRouter.get("/", asyncRoute(async (_req, res) => {
@@ -30,10 +31,10 @@ farmersRouter.get("/", asyncRoute(async (_req, res) => {
 farmersRouter.post("/", asyncRoute(async (req, res) => {
   const data = farmerSchema.parse(req.body);
   const result = await pool.query(
-    `INSERT INTO farmers (identification, full_name, phone, address, bank_account, notes)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO farmers (identification, full_name, phone, address, bank_account, notes, accionista_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING *`,
-    [data.identification, data.full_name, data.phone, data.address, data.bank_account, data.notes]
+    [data.identification, data.full_name, data.phone, data.address, data.bank_account, data.notes, data.accionista_id ?? null]
   );
   res.status(201).json(result.rows[0]);
 }));
@@ -53,10 +54,10 @@ farmersRouter.put("/:id", asyncRoute(async (req, res) => {
   const result = await pool.query(
     `UPDATE farmers
      SET identification = $2, full_name = $3, phone = $4, address = $5,
-         bank_account = $6, notes = $7, updated_at = now()
+         bank_account = $6, notes = $7, accionista_id = $8, updated_at = now()
      WHERE id = $1
      RETURNING *`,
-    [req.params.id, merged.identification, merged.full_name, merged.phone, merged.address, merged.bank_account, merged.notes]
+    [req.params.id, merged.identification, merged.full_name, merged.phone, merged.address, merged.bank_account, merged.notes, merged.accionista_id ?? null]
   );
   res.json(result.rows[0]);
 }));

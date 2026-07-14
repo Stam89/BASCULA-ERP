@@ -6,6 +6,7 @@ type Farmer = {
   identification: string | null;
   full_name: string;
   phone: string | null;
+  accionista_id: string | null;
   pending_advance_balance: number;
 };
 
@@ -641,13 +642,23 @@ export function App() {
     if (user) ensureActiveAccionista(loadStoredAccionistas());
     return user;
   });
-  const [accionistas] = useState<Accionista[]>(() => loadStoredAccionistas());
+  const [accionistas, setAccionistas] = useState<Accionista[]>(() => loadStoredAccionistas());
   const [activeAccionistaId, setActiveAccionistaIdState] = useState<string | null>(() => getActiveAccionistaId());
 
   function switchAccionista(accionistaId: string) {
     setActiveAccionistaId(accionistaId);
     setActiveAccionistaIdState(accionistaId);
     window.location.reload();
+  }
+
+  // Tras iniciar sesión, poblar la lista de accionistas y el activo desde el
+  // login recién guardado (evita que queden vacíos hasta recargar la página).
+  function handleLogin(user: AuthUser) {
+    const accs = loadStoredAccionistas();
+    setAccionistas(accs);
+    ensureActiveAccionista(accs);
+    setActiveAccionistaIdState(getActiveAccionistaId());
+    setAuthUser(user);
   }
   const [activeTab, setActiveTab] = useState("Dashboard");
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
@@ -758,6 +769,7 @@ export function App() {
   const [adminAccionistas, setAdminAccionistas] = useState<AdminAccionista[]>([]);
   const [newAccionistaForm, setNewAccionistaForm] = useState({ name: "", code: "" });
   const [accionistaEditor, setAccionistaEditor] = useState<{ user: AdminUser; ids: string[] } | null>(null);
+  const [renameAccionista, setRenameAccionista] = useState<{ id: string; name: string; code: string } | null>(null);
   const [resetForm, setResetForm] = useState({ password: "", confirm: "" });
   const [backupInfo, setBackupInfo] = useState<{ directory: string; backups: Array<{ name: string; size_kb: number; created_at: string }> } | null>(null);
   const [backupBusy, setBackupBusy] = useState(false);
@@ -1268,7 +1280,9 @@ export function App() {
         const result = await apiPost<{ token: string; user: AuthUser; accionistas: Accionista[] }>("/auth/refresh", {});
         if (cancelled) return;
         localStorage.setItem(authStorageKey, JSON.stringify(result));
+        setAccionistas(result.accionistas ?? []);
         ensureActiveAccionista(result.accionistas);
+        setActiveAccionistaIdState(getActiveAccionistaId());
         setAuthUser(result.user);
       } catch {
         // Un 401 lo maneja api.ts (cierra sesión). Otros errores se ignoran.
@@ -1423,6 +1437,20 @@ export function App() {
     await apiPut(`/auth/users/${accionistaEditor.user.id}/accionistas`, { accionista_ids: accionistaEditor.ids });
     addToast(`Accionistas de ${accionistaEditor.user.username} actualizados`, "success");
     setAccionistaEditor(null);
+    await refreshConfig();
+  }
+
+  async function saveRenameAccionista() {
+    if (!renameAccionista) return;
+    const name = renameAccionista.name.trim();
+    const code = renameAccionista.code.trim().toUpperCase();
+    if (name.length < 2 || code.length < 2) {
+      addToast("Escribe un nombre y un código (mínimo 2 caracteres)", "error");
+      return;
+    }
+    await apiPut(`/auth/accionistas/${renameAccionista.id}`, { name, code });
+    addToast("Accionista actualizado", "success");
+    setRenameAccionista(null);
     await refreshConfig();
   }
 
@@ -2439,10 +2467,17 @@ export function App() {
     await apiPost("/farmers", {
       full_name: form.get("full_name"),
       identification: form.get("identification") || undefined,
-      phone: form.get("phone") || undefined
+      phone: form.get("phone") || undefined,
+      accionista_id: form.get("accionista_id") || null
     });
     safeResetForm(formElement);
     setMessage("Agricultor guardado");
+    await refresh();
+  }
+
+  async function assignFarmerAccionista(farmerId: string, accionistaId: string) {
+    await apiPut(`/farmers/${farmerId}`, { accionista_id: accionistaId || null });
+    addToast("Accionista del agricultor actualizado", "success");
     await refresh();
   }
 
@@ -3270,7 +3305,7 @@ export function App() {
   }
 
   if (!authUser) {
-    return <LoginScreen onLogin={setAuthUser} />;
+    return <LoginScreen onLogin={handleLogin} />;
   }
 
   return (
@@ -3596,13 +3631,62 @@ export function App() {
               <Input name="full_name" label="Nombre completo" />
               <Input name="identification" label="Cedula/RUC" />
               <Input name="phone" label="Telefono" />
+              {accionistas.length > 0 && (
+                <Select
+                  name="accionista_id"
+                  label="Accionista"
+                  rows={accionistas.map((a) => [a.id, a.name])}
+                  defaultValue={activeAccionistaId ?? undefined}
+                  required={false}
+                />
+              )}
               <button className="primary">Guardar</button>
             </form>
-            <DataList
-              title="Agricultores registrados"
-              headers={["Nombre", "Cédula / RUC", "Teléfono"]}
-              rows={farmers.map((f) => [f.full_name, f.identification ?? "—", f.phone ?? "—"])}
-            />
+            <div className="tablePanel">
+              <h2>Agricultores registrados</h2>
+              {farmers.length === 0 ? (
+                <div className="emptyState"><div className="emptyIcon">👨‍🌾</div><p>Sin agricultores registrados</p></div>
+              ) : (
+                <table className="cajaTable" style={{ marginTop: 10 }}>
+                  <thead>
+                    <tr>
+                      <th>Nombre</th>
+                      <th>Cédula / RUC</th>
+                      <th>Teléfono</th>
+                      <th>Accionista</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {farmers.map((f) => (
+                      <tr key={f.id}>
+                        <td>{f.full_name}</td>
+                        <td>{f.identification ?? "—"}</td>
+                        <td>{f.phone ?? "—"}</td>
+                        <td>
+                          {accionistas.length > 0 ? (
+                            <select
+                              value={f.accionista_id ?? ""}
+                              onChange={(e) => assignFarmerAccionista(f.id, e.target.value).catch((err) => addToast(err.message, "error"))}
+                              style={{ padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12 }}
+                            >
+                              <option value="">Sin asignar</option>
+                              {accionistas.map((a) => (
+                                <option key={a.id} value={a.id}>{a.name}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <span className="muted">{f.accionista_id ? "Asignado" : "Sin asignar"}</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              <p className="muted" style={{ marginTop: 10 }}>
+                El accionista del agricultor define a quién se atribuye cada ticket de báscula al vincularlo. Si queda «Sin asignar», el ticket usa el accionista activo de quien lo vincula.
+              </p>
+            </div>
           </section>
         )}
 
@@ -6268,6 +6352,7 @@ export function App() {
                           <th>Código</th>
                           <th>Usuarios con acceso</th>
                           <th>Estado</th>
+                          <th />
                         </tr>
                       </thead>
                       <tbody>
@@ -6283,6 +6368,15 @@ export function App() {
                                 {a.is_active ? "Activo" : "Inactivo"}
                               </span>
                             </td>
+                            <td style={{ textAlign: "right" }}>
+                              <button
+                                type="button"
+                                className="btnGhost"
+                                onClick={() => setRenameAccionista({ id: a.id, name: a.name, code: a.code })}
+                              >
+                                Editar
+                              </button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -6292,6 +6386,36 @@ export function App() {
                     Para dar acceso a un usuario, ve a la pestaña «Usuarios» y usa el botón «Accionistas» en su fila. Los administradores ven todos los accionistas automáticamente.
                   </p>
                 </div>
+
+                {renameAccionista && (
+                  <div className="modalOverlay" onClick={() => setRenameAccionista(null)}>
+                    <div className="modalCard" onClick={(e) => e.stopPropagation()}>
+                      <h3>Editar accionista</h3>
+                      <label>
+                        <span>Nombre *</span>
+                        <input
+                          type="text"
+                          value={renameAccionista.name}
+                          onChange={(e) => setRenameAccionista({ ...renameAccionista, name: e.target.value })}
+                        />
+                      </label>
+                      <label>
+                        <span>Código *</span>
+                        <input
+                          type="text"
+                          value={renameAccionista.code}
+                          onChange={(e) => setRenameAccionista({ ...renameAccionista, code: e.target.value })}
+                        />
+                      </label>
+                      <div className="buttonRow">
+                        <button type="button" className="primary" onClick={() => saveRenameAccionista().catch((err) => addToast(err.message, "error"))}>
+                          Guardar
+                        </button>
+                        <button type="button" onClick={() => setRenameAccionista(null)}>Cancelar</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </section>
             )}
 
