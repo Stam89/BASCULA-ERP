@@ -188,6 +188,24 @@ type CuadrillaEntry = { id: string; work_date: string; activity_name: string; wo
 type CuadrillaSummaryRow = { worker_name: string; entradas: number; total: number; anticipos: number; neto: number };
 type CuadrillaAdvance = { id: string; worker_name: string; amount: number; balance: number; concept: string | null; status: string; issued_at: string };
 
+type PanelAccionista = {
+  id: string; name: string;
+  compras_total: number; compras_qq: number; compras_cnt: number;
+  ventas_total: number; ventas_qq: number; ventas_cnt: number;
+  inventario_qq: number; inventario_valor: number; banco_balance: number;
+};
+type PanelData = {
+  month: string;
+  kpis: { compras: number; ventas: number; utilidad: number; margen: number; bancos: number; saldo_general: number };
+  per_accionista: PanelAccionista[];
+  totales: { compras_qq: number; ventas_qq: number; inventario_qq: number; inventario_valor: number; compras_cnt: number; ventas_cnt: number };
+  serie: Array<{ month: string; compras: number; ventas: number }>;
+  por_cobrar: { total: number; cnt: number };
+  por_pagar: { total: number; cnt: number };
+  prestamos: { total: number; cnt: number };
+  alertas: string[];
+};
+
 type ReportKind = "resumen" | "ventas" | "liquidaciones" | "gastos" | "produccion" | "porcobrar";
 
 const reportEndpoint: Record<Exclude<ReportKind, "resumen">, string> = {
@@ -685,6 +703,9 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("Listo");
   const [dashboard, setDashboard] = useState<Dashboard>(emptyDashboard);
+  const [panelData, setPanelData] = useState<PanelData | null>(null);
+  const [panelMonth, setPanelMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [dashView, setDashView] = useState<"panel" | "resumen">("panel");
   const [farmers, setFarmers] = useState<Farmer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
@@ -1531,6 +1552,16 @@ export function App() {
     }
   }
 
+  // ── Panel de Control Integral (admin) ─────────────────────────────────────
+  async function refreshPanel(month?: string) {
+    try {
+      const data = await apiGet<PanelData>(`/dashboard/panel?month=${month ?? panelMonth}`);
+      setPanelData(data);
+    } catch (e) {
+      addToast(`Error al cargar el panel: ${e instanceof Error ? e.message : "desconocido"}`, "error");
+    }
+  }
+
   // ── Cuadrilla ─────────────────────────────────────────────────────────────
   async function refreshCuadrilla() {
     try {
@@ -1612,6 +1643,42 @@ export function App() {
     await apiPut(`/cuadrilla/activities/${id}`, { unit_rate });
     addToast("Tarifa actualizada", "success");
     await refreshCuadrilla();
+  }
+
+  function printCuadrillaSummary() {
+    if (!cuadSummary || cuadSummary.rows.length === 0) { addToast("No hay datos para imprimir", "warn"); return; }
+    const filas = cuadSummary.rows.map((r) => `
+      <tr><td>${r.worker_name || "(sin nombre)"}</td><td class="r">${r.entradas}</td>
+      <td class="r">$${r.total.toFixed(2)}</td>
+      <td class="r">${r.anticipos > 0 ? "-$" + r.anticipos.toFixed(2) : "—"}</td>
+      <td class="r"><strong>$${r.neto.toFixed(2)}</strong></td></tr>`).join("");
+    const html = `<html><head><meta charset="utf-8"><title>Nómina cuadrilla</title><style>
+      body{font-family:Arial,sans-serif;font-size:13px;margin:14mm}
+      h1{font-size:18px;margin:0 0 2px;text-align:center}
+      h2{font-size:12px;font-weight:normal;margin:0;text-align:center;color:#555}
+      h3{font-size:15px;margin:16px 0 4px;text-align:center;text-transform:uppercase;letter-spacing:1px}
+      table{width:100%;border-collapse:collapse;margin-top:8px}
+      th,td{padding:5px 8px;border-bottom:1px solid #eee;text-align:left}
+      th{background:#16a34a;color:#fff}
+      td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
+      tfoot td{border-top:2px solid #111;font-weight:bold}
+      @media print{body{margin:10mm}}
+    </style></head><body>
+      <h1>${appSettings.business_name}</h1>
+      <h2>${[appSettings.business_subtitle, appSettings.ruc && `RUC: ${appSettings.ruc}`].filter(Boolean).join(" · ")}</h2>
+      <h3>Nómina de Cuadrilla</h3>
+      <div style="text-align:center;color:#555;font-size:12px">Período: ${cuadFrom} al ${cuadTo}</div>
+      <table>
+        <thead><tr><th>Trabajador</th><th class="r">Trabajos</th><th class="r">Ganado</th><th class="r">Anticipos</th><th class="r">Neto a pagar</th></tr></thead>
+        <tbody>${filas}</tbody>
+        <tfoot><tr><td>TOTALES</td><td class="r">${cuadSummary.rows.reduce((s, r) => s + r.entradas, 0)}</td>
+          <td class="r">$${cuadSummary.total_general.toFixed(2)}</td>
+          <td class="r">${cuadSummary.total_anticipos > 0 ? "-$" + cuadSummary.total_anticipos.toFixed(2) : "—"}</td>
+          <td class="r">$${cuadSummary.total_neto.toFixed(2)}</td></tr></tfoot>
+      </table>
+    </body></html>`;
+    const w = window.open("", "_blank", "width=640,height=700");
+    if (w) { w.document.write(html); w.document.close(); w.print(); }
   }
 
   function printHistoryReceipt(h: { worker_role: string; worker_name: string; week_start: string; cnt: number; qq: number; sacas: number; arrocillo: number; earned: number; advances_applied: number }) {
@@ -2265,6 +2332,7 @@ export function App() {
     if (activeTab === "Por Pagar") refreshPayables().catch(() => undefined);
     if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
     if (activeTab === "Cuadrilla") refreshCuadrilla().catch(() => undefined);
+    if (activeTab === "Dashboard" && isAdmin) refreshPanel().catch(() => undefined);
     if (activeTab === "Configuracion") refreshConfig().catch(() => undefined);
   }, [activeTab]);
 
@@ -3507,6 +3575,20 @@ export function App() {
 
         {activeTab === "Dashboard" && (
           <>
+            {isAdmin && (
+              <nav className="cajaSubNav">
+                <button type="button" className={dashView === "panel" ? "active" : ""} onClick={() => { setDashView("panel"); if (!panelData) refreshPanel().catch(() => undefined); }}>📊 Panel integral</button>
+                <button type="button" className={dashView === "resumen" ? "active" : ""} onClick={() => setDashView("resumen")}>⚡ Resumen rápido</button>
+              </nav>
+            )}
+            {isAdmin && dashView === "panel" ? (
+              panelData ? (
+                <PanelIntegral data={panelData} month={panelMonth} onMonth={(m) => { setPanelMonth(m); refreshPanel(m).catch(() => undefined); }} />
+              ) : (
+                <section className="emptyState"><div className="emptyIcon">📊</div><p>Cargando panel…</p></section>
+              )
+            ) : (
+            <>
             <section className="moduleGrid">
               <Metric title="Agricultores" value={dashboard.active_farmers} icon="👨‍🌾" />
               <Metric title="Tickets hoy" value={dashboard.tickets_today} icon="🎫" accent="accBlue" />
@@ -3555,6 +3637,8 @@ export function App() {
               </div>
               <TicketPreview />
             </section>
+            </>
+            )}
           </>
         )}
 
@@ -5787,7 +5871,10 @@ export function App() {
             {cuadView === "resumen" && (
               <section className="panelGrid">
                 <div className="tablePanel">
-                  <h2>👥 Resumen por persona</h2>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <h2 style={{ margin: 0 }}>👥 Resumen por persona</h2>
+                    <button type="button" className="btnGhost" onClick={() => printCuadrillaSummary()}>🖨️ Imprimir</button>
+                  </div>
                   {!cuadSummary || cuadSummary.rows.length === 0 ? (
                     <div className="emptyState"><div className="emptyIcon">👥</div><p>Sin datos en este período</p></div>
                   ) : (
@@ -7250,6 +7337,179 @@ function Select({
         ))}
       </select>
     </label>
+  );
+}
+
+// Panel de Control Integral: vista consolidada de los 3 accionistas.
+function PanelIntegral({ data, month, onMonth }: { data: PanelData; month: string; onMonth: (m: string) => void }) {
+  const k = data.kpis;
+  const acc = data.per_accionista;
+  const monthNames = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+  const [yy, mm] = month.split("-").map(Number);
+  const today = new Date().toLocaleDateString("es-EC");
+  const card = (title: string, value: string, sub: string, color: string) => (
+    <div style={{ flex: "1 1 180px", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "14px 16px", borderTop: `4px solid ${color}` }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color, letterSpacing: 0.4 }}>{title}</div>
+      <div style={{ fontSize: 24, fontWeight: 800, margin: "6px 0 2px" }}>{value}</div>
+      <div className="muted" style={{ fontSize: 11 }}>{sub}</div>
+    </div>
+  );
+  const tbl = (title: string, color: string, headers: string[], rows: Array<Array<string | number>>, totals: Array<string | number>) => (
+    <div style={{ flex: "1 1 300px", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden" }}>
+      <div style={{ background: color, color: "#fff", fontWeight: 700, padding: "8px 14px", fontSize: 13 }}>{title}</div>
+      <table className="cajaTable" style={{ margin: 0 }}>
+        <thead><tr>{headers.map((h, i) => <th key={i} style={{ textAlign: i === 0 ? "left" : "right" }}>{h}</th>)}</tr></thead>
+        <tbody>
+          {rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j} style={{ textAlign: j === 0 ? "left" : "right" }}>{c}</td>)}</tr>)}
+          <tr style={{ fontWeight: 700, background: "#f8fafc" }}>{totals.map((c, j) => <td key={j} style={{ textAlign: j === 0 ? "left" : "right" }}>{c}</td>)}</tr>
+        </tbody>
+      </table>
+    </div>
+  );
+  return (
+    <section style={{ display: "grid", gap: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: 22, color: "#1e3a8a" }}>Panel de Control Integral</h1>
+          <p className="muted" style={{ margin: 0 }}>Consolidado de todos los accionistas</p>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <label style={{ fontSize: 12 }}>Mes
+            <input type="month" value={month} onChange={(e) => onMonth(e.target.value)} style={{ display: "block", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} />
+          </label>
+          <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "6px 12px", textAlign: "center" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b" }}>FECHA ACTUAL</div>
+            <div style={{ fontWeight: 800, color: "#dc2626" }}>{today}</div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        {card("TOTAL COMPRAS DEL MES", money(k.compras), `${data.totales.compras_qq.toFixed(2)} quintales`, "#16a34a")}
+        {card("TOTAL VENTAS DEL MES", money(k.ventas), `${data.totales.ventas_qq.toFixed(2)} quintales`, "#2563eb")}
+        {card("UTILIDAD DEL MES", money(k.utilidad), `${k.margen}% sobre ventas`, "#f59e0b")}
+        {card("TOTAL EN BANCOS/CAJA", money(k.bancos), "disponible", "#0d9488")}
+        {card("SALDO GENERAL", money(k.saldo_general), "bancos + por cobrar − por pagar", "#7c3aed")}
+      </div>
+
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        {tbl("INVENTARIO POR ACCIONISTA", "#16a34a", ["Accionista", "Quintales", "Valor"],
+          acc.map((a) => [a.name, a.inventario_qq.toFixed(2), money(a.inventario_valor)]),
+          ["TOTAL", data.totales.inventario_qq.toFixed(2), money(data.totales.inventario_valor)])}
+        {tbl("VENTAS POR ACCIONISTA", "#2563eb", ["Accionista", "Total ventas", "QQ", "Facturas"],
+          acc.map((a) => [a.name, money(a.ventas_total), a.ventas_qq.toFixed(2), a.ventas_cnt]),
+          ["TOTAL", money(k.ventas), data.totales.ventas_qq.toFixed(2), data.totales.ventas_cnt])}
+        {tbl("COMPRAS POR ACCIONISTA", "#0d9488", ["Accionista", "Total compras", "QQ", "Liquid."],
+          acc.map((a) => [a.name, money(a.compras_total), a.compras_qq.toFixed(2), a.compras_cnt]),
+          ["TOTAL", money(k.compras), data.totales.compras_qq.toFixed(2), data.totales.compras_cnt])}
+      </div>
+
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ flex: "2 1 380px", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 14 }}>
+          <h3 style={{ marginTop: 0, textAlign: "center", color: "#1e3a8a" }}>Compras vs Ventas (últimos 6 meses)</h3>
+          <div style={{ display: "flex", justifyContent: "center", gap: 20, fontSize: 12, marginBottom: 4 }}>
+            <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#16a34a", borderRadius: 2 }} /> Compras</span>
+            <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#2563eb", borderRadius: 2 }} /> Ventas</span>
+          </div>
+          <ComprasVentasChart serie={data.serie} />
+        </div>
+        <div style={{ flex: "1 1 220px", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 14 }}>
+          <h3 style={{ marginTop: 0, textAlign: "center", color: "#0d9488" }}>Bancos / Caja</h3>
+          {acc.map((a) => (
+            <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 4px", borderBottom: "1px solid #f1f5f9" }}>
+              <span>🏦 {a.name}</span><strong>{money(a.banco_balance)}</strong>
+            </div>
+          ))}
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 4px", fontWeight: 800, color: "#0d9488" }}>
+            <span>TOTAL</span><span>{money(k.bancos)}</span>
+          </div>
+        </div>
+        <div style={{ flex: "1 1 260px", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 14 }}>
+          <h3 style={{ marginTop: 0, textAlign: "center", color: "#1e3a8a" }}>Distribución de inventario</h3>
+          <InventarioDonut data={acc.map((a) => ({ name: a.name, value: a.inventario_qq }))} />
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        {card("CUENTAS POR COBRAR", money(data.por_cobrar.total), `${data.por_cobrar.cnt} cliente(s)`, "#2563eb")}
+        {card("CUENTAS POR PAGAR", money(data.por_pagar.total), `${data.por_pagar.cnt} proveedor(es)`, "#dc2626")}
+        {card("PRÉSTAMOS A AGRICULTORES", money(data.prestamos.total), `${data.prestamos.cnt} agricultor(es)`, "#16a34a")}
+        <div style={{ flex: "1 1 240px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 12, padding: 14 }}>
+          <div style={{ fontWeight: 700, color: "#dc2626", marginBottom: 6 }}>⚠️ Alertas importantes</div>
+          {data.alertas.length === 0 ? <p className="muted" style={{ margin: 0 }}>Sin alertas.</p> : (
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5 }}>
+              {data.alertas.map((a, i) => <li key={i} style={{ marginBottom: 3 }}>{a}</li>)}
+            </ul>
+          )}
+        </div>
+      </div>
+      <p className="muted" style={{ fontSize: 11, textAlign: "center" }}>Mes: {monthNames[mm - 1]} {yy} · Los valores se actualizan según los registros de cada módulo.</p>
+    </section>
+  );
+}
+
+// Gráfico de barras Compras vs Ventas (SVG puro, sin librerías).
+function ComprasVentasChart({ serie }: { serie: Array<{ month: string; compras: number; ventas: number }> }) {
+  const W = 520, H = 240, pad = 34, top = 20;
+  const max = Math.max(1, ...serie.flatMap((s) => [s.compras, s.ventas]));
+  const groupW = (W - pad * 2) / serie.length;
+  const barW = groupW * 0.32;
+  const yFor = (v: number) => top + (H - top - pad) * (1 - v / max);
+  const meses = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: 560 }}>
+      {[0, 0.25, 0.5, 0.75, 1].map((t) => (
+        <line key={t} x1={pad} x2={W - pad} y1={yFor(max * t)} y2={yFor(max * t)} stroke="#eef2f7" />
+      ))}
+      {serie.map((s, i) => {
+        const gx = pad + groupW * i + groupW / 2;
+        const mLabel = meses[Number(s.month.split("-")[1]) - 1] ?? s.month.slice(5);
+        return (
+          <g key={s.month}>
+            <rect x={gx - barW - 2} y={yFor(s.compras)} width={barW} height={Math.max(0, H - pad - yFor(s.compras))} fill="#16a34a" rx={2} />
+            <rect x={gx + 2} y={yFor(s.ventas)} width={barW} height={Math.max(0, H - pad - yFor(s.ventas))} fill="#2563eb" rx={2} />
+            <text x={gx} y={H - pad + 14} textAnchor="middle" fontSize="10" fill="#64748b">{mLabel}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+// Dona de distribución de inventario por accionista.
+function InventarioDonut({ data }: { data: Array<{ name: string; value: number }> }) {
+  const total = data.reduce((s, d) => s + d.value, 0);
+  const colors = ["#2563eb", "#16a34a", "#f59e0b", "#8b5cf6", "#ef4444"];
+  const R = 70, r = 42, C = 90;
+  let acc = 0;
+  const arcs = data.map((d, i) => {
+    const frac = total > 0 ? d.value / total : 0;
+    const a0 = acc * 2 * Math.PI - Math.PI / 2;
+    acc += frac;
+    const a1 = acc * 2 * Math.PI - Math.PI / 2;
+    const large = frac > 0.5 ? 1 : 0;
+    const x0 = C + R * Math.cos(a0), y0 = C + R * Math.sin(a0);
+    const x1 = C + R * Math.cos(a1), y1 = C + R * Math.sin(a1);
+    const xi1 = C + r * Math.cos(a1), yi1 = C + r * Math.sin(a1);
+    const xi0 = C + r * Math.cos(a0), yi0 = C + r * Math.sin(a0);
+    return { d: `M${x0} ${y0} A${R} ${R} 0 ${large} 1 ${x1} ${y1} L${xi1} ${yi1} A${r} ${r} 0 ${large} 0 ${xi0} ${yi0} Z`, color: colors[i % colors.length], pct: Math.round(frac * 100) };
+  });
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+      <svg viewBox="0 0 180 180" width="150" height="150">
+        {total === 0 ? <circle cx={C} cy={C} r={(R + r) / 2} fill="none" stroke="#e5e7eb" strokeWidth={R - r} /> :
+          arcs.map((a, i) => <path key={i} d={a.d} fill={a.color} />)}
+      </svg>
+      <div style={{ display: "grid", gap: 6 }}>
+        {data.map((d, i) => (
+          <div key={d.name} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+            <span style={{ width: 12, height: 12, borderRadius: 3, background: colors[i % colors.length], display: "inline-block" }} />
+            <span style={{ fontWeight: 600 }}>{d.name}</span>
+            <span className="muted">{Number(d.value).toFixed(1)} QQ ({total > 0 ? Math.round((d.value / total) * 100) : 0}%)</span>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
