@@ -153,6 +153,36 @@ authRouter.post("/accionistas", requireAuth, requireAdmin, asyncRoute(async (req
   res.status(201).json(created.rows[0]);
 }));
 
+// Editar un accionista (renombrar, cambiar código, activar/desactivar).
+authRouter.put("/accionistas/:id", requireAuth, requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({
+    name: z.string().min(2).optional(),
+    code: z.string().min(2).optional(),
+    is_active: z.boolean().optional()
+  }).parse(req.body);
+
+  if (body.name === undefined && body.code === undefined && body.is_active === undefined) {
+    throw new ApiError(400, "Nada que actualizar.");
+  }
+
+  if (body.code) {
+    const dup = await pool.query("SELECT 1 FROM accionistas WHERE code = $1 AND id <> $2", [body.code, req.params.id]);
+    if (dup.rowCount) throw new ApiError(409, `Ya existe otro accionista con el código "${body.code}".`);
+  }
+
+  const result = await pool.query(
+    `UPDATE accionistas
+     SET name = COALESCE($2, name),
+         code = COALESCE($3, code),
+         is_active = COALESCE($4, is_active)
+     WHERE id = $1
+     RETURNING id, name, code, is_active`,
+    [req.params.id, body.name ?? null, body.code ?? null, body.is_active ?? null]
+  );
+  if (!result.rowCount) throw new ApiError(404, "Accionista no encontrado");
+  res.json(result.rows[0]);
+}));
+
 // Reemplaza la lista de accionistas a los que tiene acceso un usuario.
 authRouter.put("/users/:id/accionistas", requireAuth, requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({ accionista_ids: z.array(z.string().uuid()) }).parse(req.body);

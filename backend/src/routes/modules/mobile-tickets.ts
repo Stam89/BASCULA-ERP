@@ -271,8 +271,9 @@ mobileTicketsRouter.get("/", requireAuth, resolveAccionista, asyncRoute(async (r
   res.json(result.rows);
 }));
 
-// Vincula un ticket a un agricultor (existente por id, o crea uno por nombre)
-// y lo reclama para el accionista activo si aún no tenía uno asignado.
+// Vincula un ticket a un agricultor (existente por id, o crea uno por nombre).
+// El ticket toma el accionista del agricultor; si el agricultor no tiene uno
+// asignado, cae al accionista activo del usuario que vincula.
 mobileTicketsRouter.post("/:id/link-farmer", requireAuth, resolveAccionista, asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const body = z.object({
@@ -281,31 +282,40 @@ mobileTicketsRouter.post("/:id/link-farmer", requireAuth, resolveAccionista, asy
   }).parse(req.body);
 
   let farmerId = body.farmer_id;
+  let farmerAccionistaId: string | null = null;
   if (!farmerId) {
     const name = (body.full_name ?? "").trim();
     if (name.length < 2) throw new ApiError(400, "Elige un agricultor o escribe un nombre para crearlo");
+    // Agricultor nuevo: se pre-asigna al accionista activo del usuario.
     const created = await pool.query(
-      "INSERT INTO farmers (full_name) VALUES ($1) RETURNING id, full_name",
-      [name]
+      "INSERT INTO farmers (full_name, accionista_id) VALUES ($1, $2) RETURNING id, accionista_id",
+      [name, accionistaId]
     );
     farmerId = created.rows[0].id;
+    farmerAccionistaId = created.rows[0].accionista_id;
+  } else {
+    const farmer = await pool.query("SELECT accionista_id FROM farmers WHERE id = $1", [farmerId]);
+    if (!farmer.rowCount) throw new ApiError(404, "Agricultor no encontrado");
+    farmerAccionistaId = farmer.rows[0].accionista_id;
   }
 
+  const targetAccionista = farmerAccionistaId ?? accionistaId;
+
   const existing = await pool.query(
-    "SELECT accionista_id FROM mobile_synced_tickets WHERE id = $1",
+    "SELECT liquidated_at FROM mobile_synced_tickets WHERE id = $1",
     [req.params.id]
   );
   if (!existing.rowCount) throw new ApiError(404, "Ticket no encontrado");
-  if (existing.rows[0].accionista_id && existing.rows[0].accionista_id !== accionistaId) {
-    throw new ApiError(409, "Este ticket ya fue vinculado por otro accionista.");
+  if (existing.rows[0].liquidated_at) {
+    throw new ApiError(409, "Este ticket ya fue liquidado y no se puede reasignar.");
   }
 
   const updated = await pool.query(
     `UPDATE mobile_synced_tickets
-     SET farmer_id = $2, accionista_id = COALESCE(accionista_id, $3)
+     SET farmer_id = $2, accionista_id = $3
      WHERE id = $1
      RETURNING id, farmer_id, farmer_name, accionista_id`,
-    [req.params.id, farmerId, accionistaId]
+    [req.params.id, farmerId, targetAccionista]
   );
   res.json(updated.rows[0]);
 }));
