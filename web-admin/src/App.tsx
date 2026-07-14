@@ -183,6 +183,11 @@ type WorkerSummary = {
   to_pay: number;
 };
 
+type CuadrillaActivity = { id: string; name: string; unit_rate: number; is_active: boolean };
+type CuadrillaEntry = { id: string; work_date: string; activity_name: string; worker_name: string; quantity: number; unit_rate: number; subtotal: number };
+type CuadrillaSummaryRow = { worker_name: string; entradas: number; total: number; anticipos: number; neto: number };
+type CuadrillaAdvance = { id: string; worker_name: string; amount: number; balance: number; concept: string | null; status: string; issued_at: string };
+
 type ReportKind = "resumen" | "ventas" | "liquidaciones" | "gastos" | "produccion" | "porcobrar";
 
 const reportEndpoint: Record<Exclude<ReportKind, "resumen">, string> = {
@@ -557,7 +562,7 @@ const navGroups: Array<{ label: string; tabs: string[] }> = [
   { label: "Operación", tabs: ["Bascula", "Secadoras", "Produccion", "Inventario"] },
   { label: "Comercial", tabs: ["Ventas", "Caja"] },
   { label: "Cuentas", tabs: ["Por Cobrar", "Por Pagar"] },
-  { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores", "Nomina"] },
+  { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores", "Nomina", "Cuadrilla"] },
   { label: "Sistema", tabs: ["Reportes", "Configuracion"] }
 ];
 const tabs = navGroups.flatMap((group) => group.tabs);
@@ -592,6 +597,8 @@ function NavIcon({ tab }: { tab: string }) {
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 4h12v8H2z"/><path d="M5 8h6M5 8l2-2M5 8l2 2"/></svg>;
     case "Nomina":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="5" r="2.5"/><path d="M3 14c0-2.8 2.2-4.5 5-4.5s5 1.7 5 4.5"/><circle cx="12.5" cy="4" r="2" fill="currentColor" stroke="none"/></svg>;
+    case "Cuadrilla":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="5" cy="5" r="2"/><circle cx="11" cy="5" r="2"/><path d="M1.5 13c0-2 1.5-3.2 3.5-3.2S8.5 11 8.5 13"/><path d="M7.5 13c0-2 1.5-3.2 3.5-3.2s3.5 1.2 3.5 3.2"/></svg>;
     case "Reportes":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="12" height="12" rx="1.5"/><line x1="5" y1="11" x2="5" y2="8"/><line x1="8" y1="11" x2="8" y2="5"/><line x1="11" y1="11" x2="11" y2="7"/></svg>;
     case "Configuracion":
@@ -761,6 +768,20 @@ export function App() {
   const [histFrom, setHistFrom] = useState(nomina60Ago);
   const [histTo, setHistTo] = useState(nominaToday);
   const [histRows, setHistRows] = useState<Array<{ worker_role: string; worker_name: string; week_start: string; cnt: number; qq: number; sacas: number; arrocillo: number; earned: number; advances_applied: number; paid_at: string }>>([]);
+
+  // ── Cuadrilla (nómina por actividad) ──────────────────────────────────────
+  const [cuadFrom, setCuadFrom] = useState(nominaMonday);
+  const [cuadTo, setCuadTo] = useState(nominaToday);
+  const [cuadActivities, setCuadActivities] = useState<CuadrillaActivity[]>([]);
+  const [cuadEntries, setCuadEntries] = useState<CuadrillaEntry[]>([]);
+  const [cuadEntriesTotal, setCuadEntriesTotal] = useState(0);
+  const [cuadSummary, setCuadSummary] = useState<{ rows: CuadrillaSummaryRow[]; total_general: number; total_anticipos: number; total_neto: number } | null>(null);
+  const [cuadAdvances, setCuadAdvances] = useState<CuadrillaAdvance[]>([]);
+  const [cuadView, setCuadView] = useState<"registro" | "resumen" | "actividades">("registro");
+  const [cuadEntryForm, setCuadEntryForm] = useState({ work_date: nominaToday, activity_id: "", worker_name: "", quantity: "" });
+  const [cuadAdvanceForm, setCuadAdvanceForm] = useState({ worker_name: "", amount: "", concept: "" });
+  const [newActivityForm, setNewActivityForm] = useState({ name: "", unit_rate: "" });
+
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
   const [settingsForm, setSettingsForm] = useState<AppSettings>(defaultAppSettings);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
@@ -1388,6 +1409,7 @@ export function App() {
       if (tab === "Configuracion" || tab === "Reportes") return false;
       if (tab === "Por Cobrar" || tab === "Por Pagar") return allowed.has("Caja") || allowed.has("Ventas");
       if (tab === "Nomina") return allowed.has("Caja") || allowed.has("Produccion");
+      if (tab === "Cuadrilla") return allowed.has("Caja") || allowed.has("Produccion");
       return allowed.has(tab);
     });
   }, [authUser, isAdmin]);
@@ -1507,6 +1529,89 @@ export function App() {
     } catch (e) {
       addToast(`Error al cargar historial: ${e instanceof Error ? e.message : "desconocido"}`, "error");
     }
+  }
+
+  // ── Cuadrilla ─────────────────────────────────────────────────────────────
+  async function refreshCuadrilla() {
+    try {
+      const [acts, entries, summary, advances] = await Promise.all([
+        apiGet<CuadrillaActivity[]>("/cuadrilla/activities"),
+        apiGet<{ rows: CuadrillaEntry[]; total: number }>(`/cuadrilla/entries?from=${cuadFrom}&to=${cuadTo}`),
+        apiGet<{ rows: CuadrillaSummaryRow[]; total_general: number; total_anticipos: number; total_neto: number }>(`/cuadrilla/summary?from=${cuadFrom}&to=${cuadTo}`),
+        apiGet<CuadrillaAdvance[]>("/cuadrilla/advances?status=pending")
+      ]);
+      setCuadActivities(acts);
+      setCuadEntries(entries.rows);
+      setCuadEntriesTotal(entries.total);
+      setCuadSummary(summary);
+      setCuadAdvances(advances);
+    } catch (e) {
+      addToast(`Error al cargar cuadrilla: ${e instanceof Error ? e.message : "desconocido"}`, "error");
+    }
+  }
+
+  async function submitCuadEntry(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!cuadEntryForm.activity_id) { addToast("Elige una actividad", "error"); return; }
+    const qty = Number(cuadEntryForm.quantity);
+    if (!(qty > 0)) { addToast("Ingresa la cantidad (mayor a 0)", "error"); return; }
+    await apiPost("/cuadrilla/entries", {
+      work_date: cuadEntryForm.work_date,
+      activity_id: cuadEntryForm.activity_id,
+      worker_name: cuadEntryForm.worker_name.trim(),
+      quantity: qty
+    });
+    setCuadEntryForm({ ...cuadEntryForm, worker_name: "", quantity: "" });
+    addToast("Registro agregado", "success");
+    await refreshCuadrilla();
+  }
+
+  async function deleteCuadEntry(id: string) {
+    await apiFetch(`/cuadrilla/entries/${id}`, { method: "DELETE" });
+    addToast("Registro eliminado", "success");
+    await refreshCuadrilla();
+  }
+
+  async function submitCuadAdvance(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const amount = Number(cuadAdvanceForm.amount);
+    if (cuadAdvanceForm.worker_name.trim().length < 2 || !(amount > 0)) {
+      addToast("Ingresa el nombre y un monto mayor a 0", "error");
+      return;
+    }
+    await apiPost("/cuadrilla/advances", {
+      worker_name: cuadAdvanceForm.worker_name.trim(),
+      amount,
+      concept: cuadAdvanceForm.concept.trim() || undefined
+    });
+    setCuadAdvanceForm({ worker_name: "", amount: "", concept: "" });
+    addToast("Anticipo registrado", "success");
+    await refreshCuadrilla();
+  }
+
+  async function settleCuadAdvance(id: string) {
+    await apiPost(`/cuadrilla/advances/${id}/settle`, {});
+    addToast("Anticipo saldado", "success");
+    await refreshCuadrilla();
+  }
+
+  async function createActivity(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const rate = Number(newActivityForm.unit_rate);
+    if (newActivityForm.name.trim().length < 2 || !(rate >= 0)) {
+      addToast("Ingresa nombre y valor unitario", "error");
+      return;
+    }
+    await apiPost("/cuadrilla/activities", { name: newActivityForm.name.trim(), unit_rate: rate });
+    setNewActivityForm({ name: "", unit_rate: "" });
+    addToast("Actividad guardada", "success");
+    await refreshCuadrilla();
+  }
+
+  async function updateActivityRate(id: string, unit_rate: number) {
+    await apiPut(`/cuadrilla/activities/${id}`, { unit_rate });
+    addToast("Tarifa actualizada", "success");
+    await refreshCuadrilla();
   }
 
   function printHistoryReceipt(h: { worker_role: string; worker_name: string; week_start: string; cnt: number; qq: number; sacas: number; arrocillo: number; earned: number; advances_applied: number }) {
@@ -2159,6 +2264,7 @@ export function App() {
     if (activeTab === "Por Cobrar") refreshReceivables().catch(() => undefined);
     if (activeTab === "Por Pagar") refreshPayables().catch(() => undefined);
     if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
+    if (activeTab === "Cuadrilla") refreshCuadrilla().catch(() => undefined);
     if (activeTab === "Configuracion") refreshConfig().catch(() => undefined);
   }, [activeTab]);
 
@@ -5598,6 +5704,199 @@ export function App() {
             )}
           </section>
         )}
+
+        {activeTab === "Cuadrilla" && (() => {
+          const selAct = cuadActivities.find((a) => a.id === cuadEntryForm.activity_id);
+          const previewSubtotal = selAct ? round2(Number(cuadEntryForm.quantity || 0) * Number(selAct.unit_rate)) : 0;
+          return (
+          <section className="cuentasLayout">
+            <nav className="cajaSubNav">
+              <button type="button" className={cuadView === "registro" ? "active" : ""} onClick={() => setCuadView("registro")}>📝 Registro</button>
+              <button type="button" className={cuadView === "resumen" ? "active" : ""} onClick={() => setCuadView("resumen")}>👥 Resumen y anticipos</button>
+              <button type="button" className={cuadView === "actividades" ? "active" : ""} onClick={() => setCuadView("actividades")}>🏷️ Actividades y tarifas</button>
+            </nav>
+
+            <div className="cajaSubNav" style={{ gap: 8, alignItems: "end", flexWrap: "wrap" }}>
+              <label style={{ fontSize: 12 }}>Desde<input type="date" value={cuadFrom} onChange={(e) => setCuadFrom(e.target.value)} style={{ display: "block", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} /></label>
+              <label style={{ fontSize: 12 }}>Hasta<input type="date" value={cuadTo} onChange={(e) => setCuadTo(e.target.value)} style={{ display: "block", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} /></label>
+              <button type="button" className="primary" onClick={() => refreshCuadrilla().catch(() => undefined)}>Ver</button>
+            </div>
+
+            {cuadView === "registro" && (
+              <section className="panelGrid">
+                <form className="formPanel" onSubmit={(e) => submitCuadEntry(e).catch((err) => addToast(err.message, "error"))}>
+                  <h2>📝 Registrar trabajo</h2>
+                  <label><span>Fecha</span>
+                    <input type="date" value={cuadEntryForm.work_date} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, work_date: e.target.value })} />
+                  </label>
+                  <label><span>Actividad</span>
+                    <select value={cuadEntryForm.activity_id} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, activity_id: e.target.value })}>
+                      <option value="">Seleccione</option>
+                      {cuadActivities.map((a) => (
+                        <option key={a.id} value={a.id}>{a.name} — ${Number(a.unit_rate)}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label><span>Trabajador (nombre o apodo)</span>
+                    <input type="text" value={cuadEntryForm.worker_name} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, worker_name: e.target.value })} placeholder="Ej: paola LIRA" />
+                  </label>
+                  <label><span>Cantidad (QQ, sacos, etc.)</span>
+                    <input type="number" step="0.01" min="0" value={cuadEntryForm.quantity} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, quantity: e.target.value })} />
+                  </label>
+                  <div className="totalBox" style={{ marginBottom: 10 }}>
+                    <span>Subtotal</span>
+                    <strong>{money(previewSubtotal)}</strong>
+                    <small>{selAct ? `${cuadEntryForm.quantity || 0} × $${Number(selAct.unit_rate)}` : "elige actividad"}</small>
+                  </div>
+                  <button className="primary">Agregar</button>
+                </form>
+
+                <div className="tablePanel">
+                  <h2>Registros del período</h2>
+                  <div className="totalBox" style={{ marginBottom: 10 }}>
+                    <span>Total del período</span>
+                    <strong>{money(cuadEntriesTotal)}</strong>
+                    <small>{cuadEntries.length} registro(s)</small>
+                  </div>
+                  {cuadEntries.length === 0 ? (
+                    <div className="emptyState"><div className="emptyIcon">📝</div><p>Sin registros en este período</p></div>
+                  ) : (
+                    <table className="cajaTable" style={{ marginTop: 6 }}>
+                      <thead><tr><th>Fecha</th><th>Actividad</th><th>Trabajador</th><th>Cant.</th><th>Valor</th><th>Subtotal</th><th /></tr></thead>
+                      <tbody>
+                        {cuadEntries.map((en) => (
+                          <tr key={en.id}>
+                            <td>{String(en.work_date).slice(0, 10)}</td>
+                            <td>{en.activity_name}</td>
+                            <td>{en.worker_name || "—"}</td>
+                            <td>{Number(en.quantity)}</td>
+                            <td>${Number(en.unit_rate)}</td>
+                            <td><strong>{money(Number(en.subtotal))}</strong></td>
+                            <td style={{ textAlign: "right" }}>
+                              <button type="button" className="btnGhost" onClick={() => deleteCuadEntry(en.id).catch((err) => addToast(err.message, "error"))}>Borrar</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </section>
+            )}
+
+            {cuadView === "resumen" && (
+              <section className="panelGrid">
+                <div className="tablePanel">
+                  <h2>👥 Resumen por persona</h2>
+                  {!cuadSummary || cuadSummary.rows.length === 0 ? (
+                    <div className="emptyState"><div className="emptyIcon">👥</div><p>Sin datos en este período</p></div>
+                  ) : (
+                    <>
+                      <table className="cajaTable" style={{ marginTop: 6 }}>
+                        <thead><tr><th>Trabajador</th><th>Trabajos</th><th>Ganado</th><th>Anticipos</th><th>Neto a pagar</th></tr></thead>
+                        <tbody>
+                          {cuadSummary.rows.map((r) => (
+                            <tr key={r.worker_name || "(sin nombre)"}>
+                              <td>{r.worker_name || "(sin nombre)"}</td>
+                              <td>{r.entradas}</td>
+                              <td>{money(r.total)}</td>
+                              <td style={{ color: r.anticipos > 0 ? "#dc2626" : undefined }}>{r.anticipos > 0 ? "−" + money(r.anticipos) : "—"}</td>
+                              <td><strong>{money(r.neto)}</strong></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr style={{ fontWeight: 700, borderTop: "2px solid #e5e7eb" }}>
+                            <td colSpan={2}>TOTALES</td>
+                            <td>{money(cuadSummary.total_general)}</td>
+                            <td>{cuadSummary.total_anticipos > 0 ? "−" + money(cuadSummary.total_anticipos) : "—"}</td>
+                            <td>{money(cuadSummary.total_neto)}</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </>
+                  )}
+                </div>
+
+                <div className="formPanel">
+                  <h2>💸 Registrar anticipo</h2>
+                  <form onSubmit={(e) => submitCuadAdvance(e).catch((err) => addToast(err.message, "error"))}>
+                    <label><span>Trabajador</span>
+                      <input type="text" value={cuadAdvanceForm.worker_name} onChange={(e) => setCuadAdvanceForm({ ...cuadAdvanceForm, worker_name: e.target.value })} placeholder="Nombre o apodo" />
+                    </label>
+                    <label><span>Monto</span>
+                      <input type="number" step="0.01" min="0" value={cuadAdvanceForm.amount} onChange={(e) => setCuadAdvanceForm({ ...cuadAdvanceForm, amount: e.target.value })} />
+                    </label>
+                    <label><span>Concepto (opcional)</span>
+                      <input type="text" value={cuadAdvanceForm.concept} onChange={(e) => setCuadAdvanceForm({ ...cuadAdvanceForm, concept: e.target.value })} placeholder="Ej: arroz, préstamo" />
+                    </label>
+                    <button className="primary">Registrar anticipo</button>
+                  </form>
+
+                  <h3 style={{ marginTop: 16 }}>Anticipos pendientes</h3>
+                  {cuadAdvances.length === 0 ? (
+                    <p className="muted">No hay anticipos pendientes.</p>
+                  ) : (
+                    <table className="cajaTable" style={{ marginTop: 6 }}>
+                      <thead><tr><th>Trabajador</th><th>Saldo</th><th>Concepto</th><th /></tr></thead>
+                      <tbody>
+                        {cuadAdvances.map((a) => (
+                          <tr key={a.id}>
+                            <td>{a.worker_name}</td>
+                            <td><strong>{money(Number(a.balance))}</strong></td>
+                            <td className="muted">{a.concept ?? "—"}</td>
+                            <td style={{ textAlign: "right" }}>
+                              <button type="button" className="btnGhost" onClick={() => settleCuadAdvance(a.id).catch((err) => addToast(err.message, "error"))}>Saldar</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </section>
+            )}
+
+            {cuadView === "actividades" && (
+              <section className="panelGrid">
+                <form className="formPanel" onSubmit={(e) => createActivity(e).catch((err) => addToast(err.message, "error"))}>
+                  <h2>🏷️ Nueva actividad</h2>
+                  <p className="muted">Agrega una actividad con su valor unitario. Si ya existe, actualiza su tarifa.</p>
+                  <label><span>Nombre</span>
+                    <input type="text" value={newActivityForm.name} onChange={(e) => setNewActivityForm({ ...newActivityForm, name: e.target.value })} placeholder="Ej: ENSACADO" />
+                  </label>
+                  <label><span>Valor unitario ($)</span>
+                    <input type="number" step="0.01" min="0" value={newActivityForm.unit_rate} onChange={(e) => setNewActivityForm({ ...newActivityForm, unit_rate: e.target.value })} />
+                  </label>
+                  <button className="primary">Guardar actividad</button>
+                </form>
+
+                <div className="tablePanel">
+                  <h2>Actividades y tarifas ({cuadActivities.length})</h2>
+                  <table className="cajaTable" style={{ marginTop: 6 }}>
+                    <thead><tr><th>Actividad</th><th>Valor unitario</th></tr></thead>
+                    <tbody>
+                      {cuadActivities.map((a) => (
+                        <tr key={a.id}>
+                          <td>{a.name}</td>
+                          <td>
+                            <input
+                              type="number" step="0.01" min="0" defaultValue={Number(a.unit_rate)}
+                              style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db" }}
+                              onBlur={(e) => { const v = Number(e.target.value); if (v !== Number(a.unit_rate)) updateActivityRate(a.id, v).catch((err) => addToast(err.message, "error")); }}
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <p className="muted" style={{ marginTop: 10 }}>Cambia una tarifa escribiendo el nuevo valor y saliendo del casillero. Los registros ya hechos conservan la tarifa que tenían.</p>
+                </div>
+              </section>
+            )}
+          </section>
+          );
+        })()}
 
         {activeTab === "Nomina" && (
           <section className="cuentasLayout">
