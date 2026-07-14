@@ -103,7 +103,10 @@ type AdminUser = {
   created_at: string;
   role_name: string | null;
   allowed_modules: string[] | null;
+  accionista_ids?: string[] | null;
 };
+
+type AdminAccionista = { id: string; name: string; code: string; is_active: boolean };
 
 type AuditEntry = {
   id: string;
@@ -729,7 +732,7 @@ export function App() {
   const [laborForm, setLaborForm] = useState({ worker_group: "", sacks_moved: "", price_per_sack: "" });
 
   // ── Configuración ─────────────────────────────────────────────────────────
-  const [configSubTab, setConfigSubTab] = useState<"negocio" | "usuarios" | "tarifas" | "actividad" | "datos">("negocio");
+  const [configSubTab, setConfigSubTab] = useState<"negocio" | "usuarios" | "accionistas" | "tarifas" | "actividad" | "datos">("negocio");
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
   const [laborRatesForm, setLaborRatesForm] = useState<LaborRates>(defaultLaborRates);
 
@@ -752,6 +755,9 @@ export function App() {
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [newUserForm, setNewUserForm] = useState({ name: "", username: "", password: "", role: "OPERADOR" as "ADMINISTRADOR" | "OPERADOR", modules: [] as string[] });
   const [permsEditor, setPermsEditor] = useState<{ user: AdminUser; modules: string[] } | null>(null);
+  const [adminAccionistas, setAdminAccionistas] = useState<AdminAccionista[]>([]);
+  const [newAccionistaForm, setNewAccionistaForm] = useState({ name: "", code: "" });
+  const [accionistaEditor, setAccionistaEditor] = useState<{ user: AdminUser; ids: string[] } | null>(null);
   const [resetForm, setResetForm] = useState({ password: "", confirm: "" });
   const [backupInfo, setBackupInfo] = useState<{ directory: string; backups: Array<{ name: string; size_kb: number; created_at: string }> } | null>(null);
   const [backupBusy, setBackupBusy] = useState(false);
@@ -1385,15 +1391,39 @@ export function App() {
     const rates = await apiGet<LaborRates>("/labor/rates").catch(() => null);
     if (rates) setLaborRatesForm(rates);
     if (isAdmin) {
-      const [users, backups, audit] = await Promise.all([
+      const [users, accionistas, backups, audit] = await Promise.all([
         apiGet<AdminUser[]>("/auth/users"),
+        apiGet<AdminAccionista[]>("/auth/accionistas").catch(() => [] as AdminAccionista[]),
         apiGet<{ directory: string; backups: Array<{ name: string; size_kb: number; created_at: string }> }>("/settings/backups").catch(() => null),
         apiGet<AuditEntry[]>("/audit?limit=200").catch(() => [] as AuditEntry[])
       ]);
       setAdminUsers(users);
+      setAdminAccionistas(accionistas);
       if (backups) setBackupInfo(backups);
       setAuditLog(audit);
     }
+  }
+
+  async function createAccionista(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const name = newAccionistaForm.name.trim();
+    const code = newAccionistaForm.code.trim().toUpperCase();
+    if (name.length < 2 || code.length < 2) {
+      addToast("Escribe un nombre y un código (mínimo 2 caracteres)", "error");
+      return;
+    }
+    await apiPost("/auth/accionistas", { name, code });
+    setNewAccionistaForm({ name: "", code: "" });
+    addToast("Accionista creado", "success");
+    await refreshConfig();
+  }
+
+  async function saveUserAccionistas() {
+    if (!accionistaEditor) return;
+    await apiPut(`/auth/users/${accionistaEditor.user.id}/accionistas`, { accionista_ids: accionistaEditor.ids });
+    addToast(`Accionistas de ${accionistaEditor.user.username} actualizados`, "success");
+    setAccionistaEditor(null);
+    await refreshConfig();
   }
 
   async function saveLaborRates(e: FormEvent<HTMLFormElement>) {
@@ -5872,14 +5902,14 @@ export function App() {
         {activeTab === "Configuracion" && (
           <>
             <nav className="cajaSubNav">
-              {(["negocio", "usuarios", "tarifas", "actividad", "datos"] as const).map((t) => (
+              {(["negocio", "usuarios", "accionistas", "tarifas", "actividad", "datos"] as const).map((t) => (
                 <button
                   key={t}
                   type="button"
                   className={configSubTab === t ? "active" : ""}
                   onClick={() => setConfigSubTab(t)}
                 >
-                  {t === "negocio" ? "🏢 Negocio" : t === "usuarios" ? "👥 Usuarios" : t === "tarifas" ? "💲 Tarifas" : t === "actividad" ? "🕓 Actividad" : "🗄️ Datos"}
+                  {t === "negocio" ? "🏢 Negocio" : t === "usuarios" ? "👥 Usuarios" : t === "accionistas" ? "🧑‍🤝‍🧑 Accionistas" : t === "tarifas" ? "💲 Tarifas" : t === "actividad" ? "🕓 Actividad" : "🗄️ Datos"}
                 </button>
               ))}
             </nav>
@@ -6091,6 +6121,16 @@ export function App() {
                                   Permisos
                                 </button>
                               )}
+                              {u.role_name !== "ADMINISTRADOR" && (
+                                <button
+                                  type="button"
+                                  className="btnGhost"
+                                  style={{ marginLeft: 6 }}
+                                  onClick={() => setAccionistaEditor({ user: u, ids: [...(u.accionista_ids ?? [])] })}
+                                >
+                                  Accionistas
+                                </button>
+                              )}
                               {u.id !== authUser.id && (
                                 <button
                                   type="button"
@@ -6143,6 +6183,115 @@ export function App() {
                     </div>
                   </div>
                 )}
+
+                {accionistaEditor && (
+                  <div className="modalOverlay" onClick={() => setAccionistaEditor(null)}>
+                    <div className="modalCard" onClick={(e) => e.stopPropagation()}>
+                      <h3>Accionistas de {accionistaEditor.user.name}</h3>
+                      <p className="muted">Marca a qué accionistas puede acceder este usuario. Si marcas más de uno, verá un selector para cambiar entre ellos.</p>
+                      {adminAccionistas.length === 0 ? (
+                        <p className="muted">Aún no hay accionistas. Créalos en la pestaña «Accionistas».</p>
+                      ) : (
+                        <div className="permGrid">
+                          {adminAccionistas.map((a) => (
+                            <label key={a.id} className={accionistaEditor.ids.includes(a.id) ? "permChip on" : "permChip"}>
+                              <input
+                                type="checkbox"
+                                checked={accionistaEditor.ids.includes(a.id)}
+                                onChange={() =>
+                                  setAccionistaEditor({
+                                    ...accionistaEditor,
+                                    ids: accionistaEditor.ids.includes(a.id)
+                                      ? accionistaEditor.ids.filter((x) => x !== a.id)
+                                      : [...accionistaEditor.ids, a.id]
+                                  })
+                                }
+                              />
+                              {a.name}
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                      <p className="muted">Nota: si el usuario tiene la sesión abierta, los cambios aplican cuando vuelva a iniciar sesión.</p>
+                      <div className="buttonRow">
+                        <button type="button" className="primary" onClick={() => saveUserAccionistas().catch((err) => addToast(err.message, "error"))}>
+                          Guardar accionistas
+                        </button>
+                        <button type="button" onClick={() => setAccionistaEditor(null)}>Cancelar</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </section>
+            )}
+
+            {/* ── Accionistas ── */}
+            {configSubTab === "accionistas" && (
+              <section className="panelGrid">
+                <form className="formPanel" onSubmit={(e) => createAccionista(e).catch((err) => addToast(err.message, "error"))}>
+                  <h2>🧑‍🤝‍🧑 Nuevo accionista</h2>
+                  <p className="muted">Cada accionista compra y maneja su arroz, inventario, caja y cuentas por separado, usando la misma app.</p>
+                  <label>
+                    <span>Nombre *</span>
+                    <input
+                      type="text"
+                      placeholder="Ej: Juan Pérez"
+                      value={newAccionistaForm.name}
+                      onChange={(e) => setNewAccionistaForm({ ...newAccionistaForm, name: e.target.value })}
+                    />
+                  </label>
+                  <label>
+                    <span>Código *</span>
+                    <input
+                      type="text"
+                      placeholder="Ej: ACC-2"
+                      value={newAccionistaForm.code}
+                      onChange={(e) => setNewAccionistaForm({ ...newAccionistaForm, code: e.target.value })}
+                    />
+                  </label>
+                  <button className="primary" disabled={!isAdmin}>Crear accionista</button>
+                  {!isAdmin && <p className="muted">Solo un administrador puede crear accionistas.</p>}
+                </form>
+
+                <div className="tablePanel">
+                  <h2>Accionistas registrados</h2>
+                  {adminAccionistas.length === 0 ? (
+                    <div className="emptyState">
+                      <div className="emptyIcon">🧑‍🤝‍🧑</div>
+                      <p>{isAdmin ? "Aún no hay accionistas. Crea el primero a la izquierda." : "Solo un administrador puede ver los accionistas"}</p>
+                    </div>
+                  ) : (
+                    <table className="cajaTable" style={{ marginTop: 10 }}>
+                      <thead>
+                        <tr>
+                          <th>Nombre</th>
+                          <th>Código</th>
+                          <th>Usuarios con acceso</th>
+                          <th>Estado</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {adminAccionistas.map((a) => (
+                          <tr key={a.id}>
+                            <td>{a.name}</td>
+                            <td>{a.code}</td>
+                            <td className="muted">
+                              {adminUsers.filter((u) => u.role_name === "ADMINISTRADOR" || (u.accionista_ids ?? []).includes(a.id)).length}
+                            </td>
+                            <td>
+                              <span className={a.is_active ? "chip ok" : "chip bad"}>
+                                {a.is_active ? "Activo" : "Inactivo"}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                  <p className="muted" style={{ marginTop: 10 }}>
+                    Para dar acceso a un usuario, ve a la pestaña «Usuarios» y usa el botón «Accionistas» en su fila. Los administradores ven todos los accionistas automáticamente.
+                  </p>
+                </div>
               </section>
             )}
 

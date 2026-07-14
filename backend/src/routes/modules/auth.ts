@@ -49,9 +49,12 @@ function ensureUserColumns(): Promise<void> {
 authRouter.get("/users", requireAuth, requireAdmin, asyncRoute(async (_req, res) => {
   await ensureUserColumns();
   const result = await pool.query(
-    `SELECT u.id, u.name, u.username, u.is_active, u.created_at, u.allowed_modules, r.name AS role_name
+    `SELECT u.id, u.name, u.username, u.is_active, u.created_at, u.allowed_modules, r.name AS role_name,
+            COALESCE(array_agg(ua.accionista_id) FILTER (WHERE ua.accionista_id IS NOT NULL), '{}') AS accionista_ids
      FROM users u
      LEFT JOIN roles r ON r.id = u.role_id
+     LEFT JOIN user_accionistas ua ON ua.user_id = u.id
+     GROUP BY u.id, r.name
      ORDER BY u.created_at`
   );
   res.json(result.rows);
