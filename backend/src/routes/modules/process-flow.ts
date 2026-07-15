@@ -5,6 +5,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
+import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import {
   createLotProcessReport,
   findStageReportId,
@@ -43,7 +44,10 @@ const dryingUpdateSchema = z.object({
   notes: z.string().optional()
 });
 
-processFlowRouter.get("/drying/available-lots", asyncRoute(async (_req, res) => {
+// Lotes disponibles para secar: solo los del accionista activo (cada uno seca
+// su propio arroz) y que no estén ya usados en otro informe de secado.
+processFlowRouter.get("/drying/available-lots", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
     `SELECT l.*, f.full_name AS farmer_name,
             t.ticket_number, t.net_weight, t.qualification, t.quintals
@@ -51,13 +55,15 @@ processFlowRouter.get("/drying/available-lots", asyncRoute(async (_req, res) => 
      JOIN weighing_tickets t ON t.lot_id = l.id
      LEFT JOIN farmers f ON f.id = l.farmer_id
      WHERE t.quintals IS NOT NULL
+       AND l.accionista_id = $1
        AND NOT EXISTS (
          SELECT 1
          FROM drying_tunnel_report_lots used_lots
          WHERE used_lots.lot_id = l.id
        )
      ORDER BY l.created_at DESC
-     LIMIT 500`
+     LIMIT 500`,
+    [accionistaId]
   );
   res.json(result.rows);
 }));

@@ -31,6 +31,7 @@ type Lot = {
   farmer_name: string | null;
   rice_type?: string | null;
   status: string;
+  accionista_id?: string | null;
   quintals: string | number | null;
   net_weight?: string | number | null;
   qualification: string | number | null;
@@ -2728,6 +2729,13 @@ export function App() {
     await refresh();
   }
 
+  async function changeLotAccionista(lotId: string, accionistaId: string) {
+    if (!accionistaId) return;
+    await apiPut(`/lots/${lotId}/accionista`, { accionista_id: accionistaId });
+    addToast("Lote cambiado de accionista (se movió también su inventario)", "success");
+    await refresh();
+  }
+
   async function assignFarmerAccionista(farmerId: string, accionistaId: string) {
     await apiPut(`/farmers/${farmerId}`, { accionista_id: accionistaId || null });
     addToast("Accionista del agricultor actualizado", "success");
@@ -3745,6 +3753,35 @@ export function App() {
               headers={["Lote", "Agricultor", "Tipo", "QQ"]}
               rows={lots.slice(0, 8).map((lot) => [lot.lot_code, lot.farmer_name ?? "—", riceTypeLabel(lot.rice_type), `${Number(lot.quintals ?? 0).toFixed(2)} QQ`])}
             />
+            {accionistas.length > 1 && lots.length > 0 && (
+              <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+                <h2>Cambiar accionista de un lote</h2>
+                <p className="muted">Por si un lote se creó con el accionista equivocado. Al cambiarlo se mueve también su inventario. No se puede si el lote ya se liquidó o vendió.</p>
+                <table className="cajaTable" style={{ marginTop: 8 }}>
+                  <thead><tr><th>Lote</th><th>Agricultor</th><th>QQ</th><th>Estado</th><th>Accionista</th></tr></thead>
+                  <tbody>
+                    {lots.slice(0, 10).map((lot) => (
+                      <tr key={lot.id}>
+                        <td style={{ fontWeight: 600 }}>{lot.lot_code}</td>
+                        <td>{lot.farmer_name ?? "—"}</td>
+                        <td className="num">{Number(lot.quintals ?? 0).toFixed(2)}</td>
+                        <td><span className="chip info">{lot.status}</span></td>
+                        <td>
+                          <select
+                            value={lot.accionista_id ?? ""}
+                            onChange={(e) => changeLotAccionista(lot.id, e.target.value).catch((err) => addToast(err.message, "error"))}
+                            style={{ padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12 }}
+                          >
+                            <option value="">Sin asignar</option>
+                            {accionistas.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                          </select>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
 
           <div className="tablePanel">
