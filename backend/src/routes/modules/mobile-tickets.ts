@@ -297,7 +297,8 @@ mobileTicketsRouter.get("/", requireAuth, resolveAccionista, asyncRoute(async (r
             t.raw_payload->>'calidad' AS calidad
      FROM mobile_synced_tickets t
      WHERE ${conditions.join(" AND ")}
-     ORDER BY t.liquidated_at IS NOT NULL, t.mobile_updated_at DESC NULLS LAST
+     ORDER BY NULLIF(regexp_replace(coalesce(t.raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '')::bigint DESC NULLS LAST,
+              t.mobile_updated_at DESC NULLS LAST
      LIMIT 500`,
     [accionistaId]
   );

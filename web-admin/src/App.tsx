@@ -734,6 +734,7 @@ export function App() {
   // ── Tickets sincronizados de la app de báscula ──────────────────────────────
   const [basculaTickets, setBasculaTickets] = useState<BasculaTicket[]>([]);
   const [ticketFilter, setTicketFilter] = useState<"pending" | "liquidated" | "all">("pending");
+  const [ticketSearch, setTicketSearch] = useState("");
   const [linkTicket, setLinkTicket] = useState<BasculaTicket | null>(null);
   const [linkFarmerId, setLinkFarmerId] = useState("");
   const [lotTicket, setLotTicket] = useState<BasculaTicket | null>(null);
@@ -3761,6 +3762,13 @@ export function App() {
                   </button>
                 ))}
               </div>
+              <input
+                type="search"
+                value={ticketSearch}
+                onChange={(e) => setTicketSearch(e.target.value)}
+                placeholder="Buscar ticket, cliente, placa…"
+                style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", minWidth: 220, fontSize: 13 }}
+              />
             </div>
             {basculaTickets.length === 0 ? (
               <div className="emptyState"><div className="emptyIcon">📲</div><p>No hay tickets. Importa desde tu app con IMPORTAR-BASCULA.bat.</p></div>
@@ -3776,7 +3784,11 @@ export function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {basculaTickets.map((t) => {
+                    {basculaTickets.filter((t) => {
+                      const q = ticketSearch.trim().toLowerCase();
+                      if (!q) return true;
+                      return [t.numero, t.farmer_name, t.placa, t.calidad].some((v) => (v ?? "").toLowerCase().includes(q));
+                    }).map((t) => {
                       const linked = !!t.farmer_id;
                       const liquidated = !!t.liquidated_at;
                       return (
@@ -3791,18 +3803,13 @@ export function App() {
                           <td>{t.calidad || "—"}</td>
                           <td className="num" style={{ fontWeight: 700 }}>{Number(t.quintals).toFixed(2)}</td>
                           <td>
-                            {liquidated ? <span className="chip ok">Liquidado</span>
-                              : linked ? <span className="chip info">Vinculado</span>
-                              : <span className="chip warn">Sin agricultor</span>}
+                            {t.lot_id ? <span className="chip ok">Lote creado</span>
+                              : liquidated ? <span className="chip ok">Liquidado</span>
+                              : <span className="chip info">Pendiente</span>}
                           </td>
                           <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
-                            {t.lot_id ? (
-                              <span className="chip ok">Lote creado</span>
-                            ) : !liquidated && (
-                              <>
-                                <button type="button" className="btnGhost" onClick={() => { setLinkTicket(t); setLinkFarmerId(""); }}>{linked ? "Cambiar" : "Vincular"}</button>
-                                {linked && <button type="button" className="btnSecondary" style={{ marginLeft: 6 }} onClick={() => { setLotTicket(t); setLotForm({ rice_type: (t.calidad ?? "").includes("0.11") ? "0.11" : "CORRIENTE", ownership: "OWNED", accionista_id: activeAccionistaId ?? (accionistas[0]?.id ?? ""), product_id: "", warehouse_id: "" }); }}>Crear lote</button>}
-                              </>
+                            {!t.lot_id && !liquidated && linked && (
+                              <button type="button" className="btnSecondary" onClick={() => { setLotTicket(t); setLotForm({ rice_type: (t.calidad ?? "").includes("0.11") ? "0.11" : "CORRIENTE", ownership: "OWNED", accionista_id: activeAccionistaId ?? (accionistas[0]?.id ?? ""), product_id: "", warehouse_id: "" }); }}>Crear lote</button>
                             )}
                           </td>
                         </tr>
