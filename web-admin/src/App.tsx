@@ -2141,19 +2141,20 @@ export function App() {
 
   async function submitCreateLot() {
     if (!lotTicket) return;
-    if (lotForm.ownership === "OWNED" && (!lotForm.product_id || !lotForm.warehouse_id)) {
-      addToast("Para una compra, elige producto y bodega (para que entre al inventario)", "error");
-      return;
-    }
     try {
+      // La compra entra sola a la bodega de materia prima; el servicio siempre
+      // es de CEYRO. El backend resuelve ambas cosas.
       await apiPost(`/tickets/${lotTicket.id}/create-lot`, {
         rice_type: lotForm.rice_type,
         ownership: lotForm.ownership,
-        accionista_id: lotForm.accionista_id || undefined,
-        product_id: lotForm.ownership === "OWNED" ? lotForm.product_id : undefined,
-        warehouse_id: lotForm.ownership === "OWNED" ? lotForm.warehouse_id : undefined
+        accionista_id: lotForm.ownership === "OWNED" ? (lotForm.accionista_id || undefined) : undefined
       });
-      addToast(lotForm.ownership === "OWNED" ? "Lote creado e ingresado al inventario. Ya puede ir a secado/pilado." : "Lote de servicio creado. Ya puede ir a secado/pilado.", "success");
+      addToast(
+        lotForm.ownership === "OWNED"
+          ? "Lote creado e ingresado a Bodega Materia Prima. Ya puede ir a secado/pilado."
+          : "Lote de servicio creado (a nombre de CEYRO). Ya puede ir a secado/pilado.",
+        "success"
+      );
       setLotTicket(null);
       await Promise.all([refreshBasculaTickets(), refresh()]);
     } catch (e) {
@@ -7270,31 +7271,24 @@ export function App() {
               <option value="MAQUILA">Servicio de pilado (no entra a mi inventario)</option>
             </select>
           </label>
-          {accionistas.length > 0 && (
-            <label>
-              <span>{lotForm.ownership === "OWNED" ? "¿Qué accionista compra este lote?" : "¿Para qué accionista es el servicio?"}</span>
-              <select value={lotForm.accionista_id} onChange={(e) => setLotForm({ ...lotForm, accionista_id: e.target.value })}>
-                {accionistas.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-              </select>
-            </label>
-          )}
-          {lotForm.ownership === "OWNED" && (
+          {lotForm.ownership === "OWNED" ? (
             <>
-              <label>
-                <span>Producto (a qué stock ingresa)</span>
-                <select value={lotForm.product_id} onChange={(e) => setLotForm({ ...lotForm, product_id: e.target.value })}>
-                  <option value="">Selecciona…</option>
-                  {products.filter((p) => p.product_type === "RAW_MATERIAL").map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-              </label>
-              <label>
-                <span>Bodega</span>
-                <select value={lotForm.warehouse_id} onChange={(e) => setLotForm({ ...lotForm, warehouse_id: e.target.value })}>
-                  <option value="">Selecciona…</option>
-                  {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
-                </select>
-              </label>
+              {accionistas.length > 0 && (
+                <label>
+                  <span>¿Qué accionista compra este lote?</span>
+                  <select value={lotForm.accionista_id} onChange={(e) => setLotForm({ ...lotForm, accionista_id: e.target.value })}>
+                    {accionistas.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  </select>
+                </label>
+              )}
+              <p className="muted" style={{ marginTop: 4 }}>
+                📦 Entra a <strong>Bodega Materia Prima</strong> como <strong>{lotForm.rice_type === "0.11" ? "Cáscara 0.11" : "Cáscara Corriente"}</strong>.
+              </p>
             </>
+          ) : (
+            <p className="muted" style={{ marginTop: 4 }}>
+              🌾 El servicio de pilado siempre queda a nombre de <strong>CEYRO</strong> y no entra a inventario (el arroz es del cliente).
+            </p>
           )}
           <div className="buttonRow">
             <button type="button" className="primary" onClick={() => submitCreateLot()}>Crear lote</button>
