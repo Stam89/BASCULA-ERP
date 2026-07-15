@@ -12,6 +12,8 @@ const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const KEY_PATH = process.env.FIREBASE_KEY || path.join(moduleDir, "..", "..", "scripts", "firebase-key.json");
 const NEGOCIO_ID = (process.env.NEGOCIO_ID || "").trim();
 const COLLECTION = process.env.FIREBASE_COLLECTION || "tickets";
+// Pesajes incompletos que aún esperan el segundo pesaje.
+const WAITING_COLLECTION = process.env.FIREBASE_WAITING_COLLECTION || "ticketsEnEspera";
 
 let firestore: unknown = null;
 let initTried = false;
@@ -52,11 +54,26 @@ export async function importFromFirebase(): Promise<FirebaseImportResult> {
   if (!db) return { ok: false, reason: "No se pudo conectar con Firebase (revisa la credencial y el internet)." };
 
   try {
-    const snap = await db.collection("negocios").doc(NEGOCIO_ID).collection(COLLECTION).get();
+    const negocio = db.collection("negocios").doc(NEGOCIO_ID);
+    // La app guarda los pesajes incompletos (falta el 2º pesaje) en
+    // "ticketsEnEspera" y los pasa a "tickets" al completarlos. Se traen los dos:
+    // primero los que esperan y luego los completos, para que si uno ya se
+    // completó gane el dato definitivo (mismo id, se actualiza).
+    const [snapEspera, snap] = await Promise.all([
+      negocio.collection(WAITING_COLLECTION).get().catch(() => null),
+      negocio.collection(COLLECTION).get()
+    ]);
+
+    let count = 0;
+    if (snapEspera && snapEspera.docs.length > 0) {
+      const enEspera = snapEspera.docs.map((d: { data: () => unknown }) => d.data());
+      count += (await importBasculaTickets(enEspera, "firebase-auto", { enEspera: true })).count;
+    }
     const tickets = snap.docs.map((d: { data: () => unknown }) => d.data());
-    if (tickets.length === 0) return { ok: true, count: 0 };
-    const result = await importBasculaTickets(tickets, "firebase-auto");
-    return { ok: true, count: result.count };
+    if (tickets.length > 0) {
+      count += (await importBasculaTickets(tickets, "firebase-auto", { enEspera: false })).count;
+    }
+    return { ok: true, count };
   } catch (err) {
     return { ok: false, reason: (err as Error).message };
   }

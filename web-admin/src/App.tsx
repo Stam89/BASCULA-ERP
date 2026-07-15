@@ -131,6 +131,7 @@ type BasculaTicket = {
   quintals: string | number;
   liquidated_at: string | null;
   lot_id: string | null;
+  en_espera?: boolean;
   numero: string | null;
   modo: string | null;
   fecha_app: string | null;
@@ -3803,12 +3804,13 @@ export function App() {
                           <td>{t.calidad || "—"}</td>
                           <td className="num" style={{ fontWeight: 700 }}>{Number(t.quintals).toFixed(2)}</td>
                           <td>
-                            {t.lot_id ? <span className="chip ok">Lote creado</span>
+                            {t.en_espera ? <span className="chip warn" title="La báscula aún espera el segundo pesaje">En espera 2º pesaje</span>
+                              : t.lot_id ? <span className="chip ok">Lote creado</span>
                               : liquidated ? <span className="chip ok">Liquidado</span>
                               : <span className="chip info">Pendiente</span>}
                           </td>
                           <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
-                            {!t.lot_id && !liquidated && linked && (
+                            {!t.en_espera && !t.lot_id && !liquidated && linked && (
                               <button type="button" className="btnSecondary" onClick={() => { setLotTicket(t); setLotForm({ rice_type: (t.calidad ?? "").includes("0.11") ? "0.11" : "CORRIENTE", ownership: "OWNED", accionista_id: activeAccionistaId ?? (accionistas[0]?.id ?? ""), product_id: "", warehouse_id: "" }); }}>Crear lote</button>
                             )}
                           </td>
