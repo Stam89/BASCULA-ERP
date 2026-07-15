@@ -3771,7 +3771,7 @@ export function App() {
                     <tr>
                       <th>Ticket</th><th>Fecha</th><th>Cliente</th><th>Placa</th>
                       <th className="num">Bruto</th><th className="num">Tara</th><th className="num">Neto</th>
-                      <th className="num">Calidad</th><th className="num">QQ</th>
+                      <th>Calidad</th><th className="num">QQ</th>
                       <th>Estado</th><th />
                     </tr>
                   </thead>
@@ -3788,7 +3788,7 @@ export function App() {
                           <td className="num">{Number(t.gross_weight).toFixed(0)}</td>
                           <td className="num">{Number(t.tare_weight).toFixed(0)}</td>
                           <td className="num">{Number(t.net_weight).toFixed(0)}</td>
-                          <td className="num">{Number(t.qualification) > 0 ? Number(t.qualification).toFixed(0) : "—"}</td>
+                          <td>{t.calidad || "—"}</td>
                           <td className="num" style={{ fontWeight: 700 }}>{Number(t.quintals).toFixed(2)}</td>
                           <td>
                             {liquidated ? <span className="chip ok">Liquidado</span>
@@ -3801,7 +3801,7 @@ export function App() {
                             ) : !liquidated && (
                               <>
                                 <button type="button" className="btnGhost" onClick={() => { setLinkTicket(t); setLinkFarmerId(""); }}>{linked ? "Cambiar" : "Vincular"}</button>
-                                {linked && <button type="button" className="btnSecondary" style={{ marginLeft: 6 }} onClick={() => { setLotTicket(t); setLotForm({ rice_type: "0.11", ownership: "OWNED", accionista_id: activeAccionistaId ?? (accionistas[0]?.id ?? ""), product_id: "", warehouse_id: "" }); }}>Crear lote</button>}
+                                {linked && <button type="button" className="btnSecondary" style={{ marginLeft: 6 }} onClick={() => { setLotTicket(t); setLotForm({ rice_type: (t.calidad ?? "").includes("0.11") ? "0.11" : "CORRIENTE", ownership: "OWNED", accionista_id: activeAccionistaId ?? (accionistas[0]?.id ?? ""), product_id: "", warehouse_id: "" }); }}>Crear lote</button>}
                               </>
                             )}
                           </td>
