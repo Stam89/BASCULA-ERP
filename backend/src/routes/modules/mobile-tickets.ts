@@ -287,7 +287,8 @@ mobileTicketsRouter.get("/", requireAuth, resolveAccionista, asyncRoute(async (r
   ];
   if (statusFilter) conditions.push(statusFilter);
   const result = await pool.query(
-    `SELECT t.id, t.farmer_id, t.farmer_name, t.accionista_id, t.lot_id, t.gross_weight, t.tare_weight, t.net_weight,
+    `SELECT t.id, t.farmer_id, t.farmer_name, t.accionista_id, t.lot_id, t.en_espera,
+            t.gross_weight, t.tare_weight, t.net_weight,
             t.qualification, t.quintals, t.price_per_quintal, t.net_payable, t.liquidated_at,
             t.mobile_updated_at,
             t.raw_payload->>'numeroTicket' AS numero,
@@ -560,8 +561,10 @@ mobileTicketsRouter.post("/sync", asyncRoute(async (req, res) => {
 // la importación automática desde Firebase.
 export async function importBasculaTickets(
   rawTickets: unknown[],
-  deviceId = "bascula"
+  deviceId = "bascula",
+  options: { enEspera?: boolean } = {}
 ): Promise<{ imported: Array<{ numeroTicket: string; id: string }>; count: number }> {
+  const enEspera = options.enEspera ?? false;
   const imported: Array<{ numeroTicket: string; id: string }> = [];
   for (const raw of rawTickets) {
     const t = basculaTicketSchema.parse(raw);
@@ -584,8 +587,8 @@ export async function importBasculaTickets(
         id, device_id, farmer_id, farmer_name, accionista_id,
         gross_weight, tare_weight, net_weight, qualification, quintals,
         print_count, is_locked, price_per_quintal, gross_payable, advances_discount, net_payable,
-        liquidated_at, mobile_created_at, mobile_updated_at, synced_at, raw_payload
-      ) VALUES ($1, $2, $11, $3, $12, $4, $5, $6, $7, $8, 0, false, 0, 0, 0, 0, NULL, $9, $9, now(), $10)
+        liquidated_at, mobile_created_at, mobile_updated_at, synced_at, raw_payload, en_espera
+      ) VALUES ($1, $2, $11, $3, $12, $4, $5, $6, $7, $8, 0, false, 0, 0, 0, 0, NULL, $9, $9, now(), $10, $13)
       ON CONFLICT (id) DO UPDATE SET
         device_id = EXCLUDED.device_id,
         farmer_name = EXCLUDED.farmer_name,
@@ -598,9 +601,10 @@ export async function importBasculaTickets(
         quintals = EXCLUDED.quintals,
         mobile_updated_at = EXCLUDED.mobile_updated_at,
         synced_at = now(),
-        raw_payload = EXCLUDED.raw_payload`,
+        raw_payload = EXCLUDED.raw_payload,
+        en_espera = EXCLUDED.en_espera`,
       [id, deviceId, clienteName, t.pesoBruto, t.pesoTara, netWeight, t.calificacion, quintals, ts, JSON.stringify(t),
-       farmer?.id ?? null, farmer?.accionista_id ?? null]
+       farmer?.id ?? null, farmer?.accionista_id ?? null, enEspera]
     );
     imported.push({ numeroTicket: t.numeroTicket, id });
   }
