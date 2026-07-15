@@ -288,13 +288,23 @@ mobileTicketsRouter.post("/:id/link-farmer", requireAuth, resolveAccionista, asy
   if (!farmerId) {
     const name = (body.full_name ?? "").trim();
     if (name.length < 2) throw new ApiError(400, "Elige un agricultor o escribe un nombre para crearlo");
-    // Agricultor nuevo: se pre-asigna al accionista activo del usuario.
-    const created = await pool.query(
-      "INSERT INTO farmers (full_name, accionista_id) VALUES ($1, $2) RETURNING id, accionista_id",
-      [name, accionistaId]
+    // Evita duplicados: si ya existe un agricultor con ese nombre, se reutiliza.
+    const existing = await pool.query(
+      "SELECT id, accionista_id FROM farmers WHERE lower(trim(full_name)) = lower($1) ORDER BY created_at ASC LIMIT 1",
+      [name]
     );
-    farmerId = created.rows[0].id;
-    farmerAccionistaId = created.rows[0].accionista_id;
+    if (existing.rowCount) {
+      farmerId = existing.rows[0].id;
+      farmerAccionistaId = existing.rows[0].accionista_id;
+    } else {
+      // Agricultor nuevo: se pre-asigna al accionista activo del usuario.
+      const created = await pool.query(
+        "INSERT INTO farmers (full_name, accionista_id) VALUES ($1, $2) RETURNING id, accionista_id",
+        [name, accionistaId]
+      );
+      farmerId = created.rows[0].id;
+      farmerAccionistaId = created.rows[0].accionista_id;
+    }
   } else {
     const farmer = await pool.query("SELECT accionista_id FROM farmers WHERE id = $1", [farmerId]);
     if (!farmer.rowCount) throw new ApiError(404, "Agricultor no encontrado");
@@ -330,6 +340,7 @@ mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, asyn
   const body = z.object({
     rice_type: z.enum(["0.11", "CORRIENTE"]).default("0.11"),
     ownership: z.enum(["OWNED", "MAQUILA"]).default("OWNED"),
+    accionista_id: z.string().uuid().optional(),
     product_id: z.string().uuid().optional(),
     warehouse_id: z.string().uuid().optional(),
     created_by: z.string().uuid().optional()
@@ -341,7 +352,13 @@ mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, asyn
   if (t.lot_id) throw new ApiError(409, "Este ticket ya generó un lote.");
   if (!t.farmer_id) throw new ApiError(400, "Primero vincula el ticket a un agricultor/cliente.");
   if (Number(t.quintals) <= 0) throw new ApiError(400, "El ticket no tiene quintales calculados.");
-  const ticketAccionista = t.accionista_id ?? accionistaId;
+  // Quién compra este lote: el accionista elegido; si no se indica, el del
+  // ticket/agricultor y como último recurso el activo del usuario.
+  const ticketAccionista = body.accionista_id ?? t.accionista_id ?? accionistaId;
+  if (body.accionista_id) {
+    const acc = await pool.query("SELECT 1 FROM accionistas WHERE id = $1 AND is_active = true", [body.accionista_id]);
+    if (!acc.rowCount) throw new ApiError(404, "Accionista no encontrado");
+  }
   const isMaquila = body.ownership === "MAQUILA";
 
   const result = await inTransaction(async (client) => {

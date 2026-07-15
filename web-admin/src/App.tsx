@@ -737,7 +737,7 @@ export function App() {
   const [linkTicket, setLinkTicket] = useState<BasculaTicket | null>(null);
   const [linkFarmerId, setLinkFarmerId] = useState("");
   const [lotTicket, setLotTicket] = useState<BasculaTicket | null>(null);
-  const [lotForm, setLotForm] = useState({ rice_type: "0.11" as "0.11" | "CORRIENTE", ownership: "OWNED" as "OWNED" | "MAQUILA", product_id: "", warehouse_id: "" });
+  const [lotForm, setLotForm] = useState({ rice_type: "0.11" as "0.11" | "CORRIENTE", ownership: "OWNED" as "OWNED" | "MAQUILA", accionista_id: "", product_id: "", warehouse_id: "" });
   const [liqTicket, setLiqTicket] = useState<BasculaTicket | null>(null);
   const [liqPrecio, setLiqPrecio] = useState("");
   const [liqPreview, setLiqPreview] = useState<{ quintals: number; grossPayable: number; advancesDiscount: number; netPayable: number } | null>(null);
@@ -2146,6 +2146,7 @@ export function App() {
       await apiPost(`/tickets/${lotTicket.id}/create-lot`, {
         rice_type: lotForm.rice_type,
         ownership: lotForm.ownership,
+        accionista_id: lotForm.accionista_id || undefined,
         product_id: lotForm.ownership === "OWNED" ? lotForm.product_id : undefined,
         warehouse_id: lotForm.ownership === "OWNED" ? lotForm.warehouse_id : undefined
       });
@@ -3797,7 +3798,7 @@ export function App() {
                             ) : !liquidated && (
                               <>
                                 <button type="button" className="btnGhost" onClick={() => { setLinkTicket(t); setLinkFarmerId(""); }}>{linked ? "Cambiar" : "Vincular"}</button>
-                                {linked && <button type="button" className="btnSecondary" style={{ marginLeft: 6 }} onClick={() => { setLotTicket(t); setLotForm({ rice_type: "0.11", ownership: "OWNED", product_id: "", warehouse_id: "" }); }}>Crear lote</button>}
+                                {linked && <button type="button" className="btnSecondary" style={{ marginLeft: 6 }} onClick={() => { setLotTicket(t); setLotForm({ rice_type: "0.11", ownership: "OWNED", accionista_id: activeAccionistaId ?? (accionistas[0]?.id ?? ""), product_id: "", warehouse_id: "" }); }}>Crear lote</button>}
                                 {linked && <button type="button" className="liqAbonoBtn" style={{ marginLeft: 6 }} onClick={() => { setLiqTicket(t); setLiqPrecio(""); setLiqPreview(null); }}>Liquidar</button>}
                               </>
                             )}
@@ -7221,6 +7222,14 @@ export function App() {
               <option value="MAQUILA">Servicio de pilado (no entra a mi inventario)</option>
             </select>
           </label>
+          {accionistas.length > 0 && (
+            <label>
+              <span>{lotForm.ownership === "OWNED" ? "¿Qué accionista compra este lote?" : "¿Para qué accionista es el servicio?"}</span>
+              <select value={lotForm.accionista_id} onChange={(e) => setLotForm({ ...lotForm, accionista_id: e.target.value })}>
+                {accionistas.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+            </label>
+          )}
           {lotForm.ownership === "OWNED" && (
             <>
               <label>
