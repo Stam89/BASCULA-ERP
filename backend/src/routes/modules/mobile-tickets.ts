@@ -39,12 +39,15 @@ async function findOrCreateFarmer(
 }
 
 // Formato NATIVO de la app de báscula (com.example.bascula).
+// passthrough: conserva tal cual cualquier campo extra que mande la app
+// (bajadaX, fechaPago, plazo…) para no perder información en raw_payload.
 const basculaTicketSchema = z.object({
   numeroTicket: z.union([z.string(), z.number()]).transform((v) => String(v)),
   modo: z.string().optional().default("principal"),
   cliente: z.string().optional().default(""),
   placa: z.string().optional(),
   fecha: z.string().optional(),
+  calidad: z.string().optional(), // tipo de arroz: "GRANO 0.11" | "CORRIENTE"
   calificacion: z.coerce.number().nonnegative().default(0),
   pesoBruto: z.coerce.number().nonnegative().default(0),
   pesoTara: z.coerce.number().nonnegative().default(0),
@@ -53,7 +56,13 @@ const basculaTicketSchema = z.object({
   valorPagar: z.union([z.string(), z.number()]).optional(),
   actualizadoEn: z.coerce.number().optional(),
   actualizadoPor: z.string().optional()
-});
+}).passthrough();
+
+// La calidad que manda la báscula ("GRANO 0.11" / "CORRIENTE") define el tipo
+// de arroz del lote.
+export function riceTypeFromCalidad(calidad: string | null | undefined): "0.11" | "CORRIENTE" {
+  return (calidad ?? "").includes("0.11") ? "0.11" : "CORRIENTE";
+}
 
 const basculaImportSchema = z.object({
   deviceId: z.string().optional().default("bascula-app"),
