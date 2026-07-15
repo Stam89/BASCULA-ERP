@@ -5,6 +5,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
+import { nextCode } from "../../utils/codes.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import {
   createLotProcessReport,
@@ -18,7 +19,10 @@ export const processFlowRouter = Router();
 const stageSchema = z.enum(["BASCULA", "SECADO", "TUNEL_1", "TUNEL_2", "TUNEL_3", "PILADO", "RENDIMIENTO", "VENTA"]);
 
 const dryingBodySchema = z.object({
-  lot_ids: z.array(z.string().uuid()).min(1),
+  // Ingresos de materia prima (pesajes de báscula) que forman el lote.
+  entry_ids: z.array(z.string().uuid()).min(1),
+  // Código del lote: se propone automático, pero se puede escribir otro.
+  lot_code: z.string().optional(),
   tunnel_number: z.number().int().min(1).max(3),
   rice_type: z.enum(["0.11", "CORRIENTE"]).default("0.11"),
   moisture_before: z.number().nonnegative().optional(),
@@ -44,24 +48,24 @@ const dryingUpdateSchema = z.object({
   notes: z.string().optional()
 });
 
-// Lotes disponibles para secar: solo los del accionista activo (cada uno seca
-// su propio arroz) y que no estén ya usados en otro informe de secado.
+// Ingresos de materia prima disponibles para formar un lote en la secadora:
+// pesajes del accionista activo que todavía no pertenecen a ningún lote.
 processFlowRouter.get("/drying/available-lots", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
-    `SELECT l.*, f.full_name AS farmer_name,
-            t.ticket_number, t.net_weight, t.qualification, t.quintals
-     FROM lots l
-     JOIN weighing_tickets t ON t.lot_id = l.id
-     LEFT JOIN farmers f ON f.id = l.farmer_id
-     WHERE t.quintals IS NOT NULL
-       AND l.accionista_id = $1
+    `SELECT w.id, w.ticket_number, w.rice_type, w.is_maquila, w.accionista_id,
+            w.net_weight, w.qualification, w.quintals, w.created_at,
+            f.full_name AS farmer_name
+     FROM weighing_tickets w
+     LEFT JOIN farmers f ON f.id = w.farmer_id
+     WHERE w.quintals IS NOT NULL AND w.quintals > 0
+       AND w.lot_id IS NULL
+       AND w.accionista_id = $1
        AND NOT EXISTS (
-         SELECT 1
-         FROM drying_tunnel_report_lots used_lots
-         WHERE used_lots.lot_id = l.id
+         SELECT 1 FROM drying_tunnel_report_lots used
+         WHERE used.weighing_ticket_id = w.id
        )
-     ORDER BY l.created_at DESC
+     ORDER BY w.created_at DESC
      LIMIT 500`,
     [accionistaId]
   );
@@ -208,36 +212,8 @@ processFlowRouter.post("/lots/:lotId/reports", asyncRoute(async (req, res) => {
   res.status(201).json(result);
 }));
 
-processFlowRouter.post("/lots/:lotId/drying", asyncRoute(async (req, res) => {
-  const lotId = String(req.params.lotId);
-  const legacyBody = z.object({
-    tunnel_number: z.number().int().min(1).max(3),
-    input_weight_kg: z.number().nonnegative().optional(),
-    output_weight_kg: z.number().nonnegative().optional(),
-    moisture_before: z.number().nonnegative().optional(),
-    moisture_after: z.number().nonnegative().optional(),
-    drying_hours: z.number().nonnegative().optional(),
-    operator_name: z.string().optional(),
-    notes: z.string().optional(),
-    created_by: z.string().uuid().optional()
-  }).parse(req.body);
-
-  const result = await inTransaction((client) =>
-    createDryingReport(client, {
-      lot_ids: [lotId],
-      tunnel_number: legacyBody.tunnel_number,
-      rice_type: "0.11",
-      moisture_before: legacyBody.moisture_before,
-      gas_used: 0,
-      diesel_used: 0,
-      operator_name: legacyBody.operator_name,
-      notes: legacyBody.notes,
-      created_by: legacyBody.created_by
-    })
-  );
-
-  res.status(201).json(result);
-}));
+// (Se eliminó POST /lots/:lotId/drying: en el modelo actual el lote no existe
+// antes del secado, se forma justamente al agrupar los ingresos en el túnel.)
 
 processFlowRouter.post("/lots/:lotId/link", asyncRoute(async (req, res) => {
   const lotId = String(req.params.lotId);
@@ -255,76 +231,106 @@ processFlowRouter.post("/lots/:lotId/link", asyncRoute(async (req, res) => {
   res.status(201).json({ ok: true });
 }));
 
+// Aquí NACE el lote: se agrupan varios ingresos de materia prima (pesajes de
+// báscula) en un túnel, y ese grupo es el lote. De aquí en adelante el proceso
+// (pilado, inventario, liquidación) trabaja con el lote.
 async function createDryingReport(client: PoolClient, input: z.infer<typeof dryingBodySchema>) {
-  const lotIds = [...new Set(input.lot_ids)];
-  const selectedLots = await client.query(
-    `SELECT l.id, l.lot_code, f.full_name AS farmer_name,
-            COALESCE(t.net_weight, 0) AS net_weight_kg,
-            COALESCE(t.quintals, 0) AS quintals,
-            used_lots.lot_id AS used_lot_id
-     FROM lots l
-     JOIN weighing_tickets t ON t.lot_id = l.id
-     LEFT JOIN farmers f ON f.id = l.farmer_id
-     LEFT JOIN drying_tunnel_report_lots used_lots ON used_lots.lot_id = l.id
-     WHERE l.id = ANY($1::uuid[])
-     ORDER BY l.created_at ASC`,
-    [lotIds]
+  const entryIds = [...new Set(input.entry_ids)];
+  const entries = await client.query(
+    `SELECT w.id, w.ticket_number, w.farmer_id, w.is_maquila, w.accionista_id, w.lot_id,
+            COALESCE(w.net_weight, 0) AS net_weight_kg,
+            COALESCE(w.quintals, 0) AS quintals,
+            f.full_name AS farmer_name,
+            used.id AS used_id
+     FROM weighing_tickets w
+     LEFT JOIN farmers f ON f.id = w.farmer_id
+     LEFT JOIN drying_tunnel_report_lots used ON used.weighing_ticket_id = w.id
+     WHERE w.id = ANY($1::uuid[])
+     ORDER BY w.created_at ASC`,
+    [entryIds]
   );
 
-  if (selectedLots.rowCount !== lotIds.length) {
-    throw new ApiError(404, "Uno o mas lotes no existen o aun no tienen ticket cerrado");
+  if (entries.rowCount !== entryIds.length) {
+    throw new ApiError(404, "Uno o más ingresos de materia prima no existen");
+  }
+  const yaUsados = entries.rows.filter((e) => e.used_id || e.lot_id);
+  if (yaUsados.length > 0) {
+    throw new ApiError(409, `Estos ingresos ya están en un lote: ${yaUsados.map((e) => e.ticket_number).join(", ")}`);
   }
 
-  const alreadyUsed = selectedLots.rows.filter((lot) => lot.used_lot_id);
-  if (alreadyUsed.length > 0) {
-    throw new ApiError(409, `Lote ya usado en secado: ${alreadyUsed.map((lot) => lot.lot_code).join(", ")}`);
+  // Un lote no puede mezclar accionistas ni compra con servicio de pilado.
+  if (new Set(entries.rows.map((e) => e.accionista_id)).size > 1) {
+    throw new ApiError(400, "No se puede formar un lote con ingresos de accionistas distintos.");
+  }
+  if (new Set(entries.rows.map((e) => e.is_maquila)).size > 1) {
+    throw new ApiError(400, "No se puede mezclar compra propia y servicio de pilado en el mismo lote.");
   }
 
-  const totalNetKg = selectedLots.rows.reduce((sum, lot) => sum + Number(lot.net_weight_kg), 0);
-  const totalQuintals = selectedLots.rows.reduce((sum, lot) => sum + Number(lot.quintals), 0);
-  const primaryLotId = selectedLots.rows[0].id as string;
+  const isMaquila = Boolean(entries.rows[0].is_maquila);
+  const lotAccionista = entries.rows[0].accionista_id as string | null;
+  const farmerIds = new Set(entries.rows.map((e) => e.farmer_id));
+  // Si el lote junta arroz de varios agricultores, no tiene un dueño único.
+  const lotFarmerId = farmerIds.size === 1 ? entries.rows[0].farmer_id : null;
+
+  const totalNetKg = entries.rows.reduce((sum, e) => sum + Number(e.net_weight_kg), 0);
+  const totalQuintals = entries.rows.reduce((sum, e) => sum + Number(e.quintals), 0);
   const dryingHours = calculateDryingHours(input.dry_start_at, input.dry_end_at);
   const status = input.dry_end_at ? "COMPLETED" : "IN_PROGRESS";
-  const lotSnapshot = selectedLots.rows.map((lot) => ({
-    lot_id: lot.id,
-    lot_code: lot.lot_code,
-    farmer_name: lot.farmer_name,
-    net_weight_kg: Number(lot.net_weight_kg),
-    quintals: Number(lot.quintals)
+
+  // El código del lote se propone automático, pero se puede escribir otro.
+  const lotCode = (input.lot_code ?? "").trim() || nextCode("LT");
+  const dup = await client.query("SELECT 1 FROM lots WHERE lot_code = $1", [lotCode]);
+  if (dup.rowCount) throw new ApiError(409, `Ya existe un lote con el código "${lotCode}".`);
+
+  const lot = await client.query(
+    `INSERT INTO lots (lot_code, print_batch_code, farmer_id, rice_type, ownership, is_maquila, status, notes, accionista_id)
+     VALUES ($1, $2, $3, $4, $5, $6, 'WEIGHED', $7, $8)
+     RETURNING *`,
+    [
+      lotCode, nextCode("IMP"), lotFarmerId, input.rice_type,
+      isMaquila ? "MAQUILA" : "OWNED", isMaquila,
+      `Lote formado en túnel ${input.tunnel_number} con ${entries.rowCount} ingreso(s) de materia prima`,
+      lotAccionista
+    ]
+  );
+  const lotId = lot.rows[0].id as string;
+
+  // Los ingresos (y el inventario que generaron) pasan a pertenecer al lote.
+  await client.query("UPDATE weighing_tickets SET lot_id = $1 WHERE id = ANY($2::uuid[])", [lotId, entryIds]);
+  await client.query(
+    `UPDATE inventory_movements SET lot_id = $1
+     WHERE reference_type = 'weighing_tickets' AND reference_id = ANY($2::uuid[]) AND lot_id IS NULL`,
+    [lotId, entryIds]
+  );
+
+  const lotSnapshot = entries.rows.map((e) => ({
+    weighing_ticket_id: e.id,
+    ticket_number: e.ticket_number,
+    farmer_name: e.farmer_name,
+    net_weight_kg: Number(e.net_weight_kg),
+    quintals: Number(e.quintals)
   }));
 
-  const tunnelReports: Array<{ lotId: string; reportId: string }> = [];
-  for (const lot of selectedLots.rows) {
-    let dryingReportId = await findStageReportId(client, lot.id, "SECADO");
-    if (!dryingReportId) {
-      const dryingReport = await createLotProcessReport(client, {
-        lotId: lot.id,
-        stage: "SECADO",
-        title: "Informe general de secado",
-        data: {
-          tunnel_count: 3,
-          flow: "Bascula -> Secado -> Tuneles"
-        },
-        createdBy: input.created_by
-      });
-      dryingReportId = dryingReport.id;
-    }
+  const dryingReport = await createLotProcessReport(client, {
+    lotId,
+    stage: "SECADO",
+    title: "Informe general de secado",
+    data: { tunnel_count: 3, flow: "Materia prima -> Secado -> Tuneles" },
+    createdBy: input.created_by
+  });
 
-    const tunnelStage = `TUNEL_${input.tunnel_number}` as ProcessStage;
-    const tunnelReport = await createLotProcessReport(client, {
-      lotId: lot.id,
-      stage: tunnelStage,
-      title: `Informe Tunel ${input.tunnel_number}`,
-      referenceType: "drying_tunnel_reports",
-      data: dryingReportData(input, totalNetKg, totalQuintals, dryingHours, status, lotSnapshot),
-      notes: input.notes,
-      createdBy: input.created_by,
-      parentReportId: dryingReportId,
-      linkType: "DRYING_BRANCH"
-    });
-
-    tunnelReports.push({ lotId: lot.id, reportId: tunnelReport.id });
-  }
+  const tunnelStage = `TUNEL_${input.tunnel_number}` as ProcessStage;
+  const tunnelReport = await createLotProcessReport(client, {
+    lotId,
+    stage: tunnelStage,
+    title: `Informe Tunel ${input.tunnel_number}`,
+    referenceType: "drying_tunnel_reports",
+    data: dryingReportData(input, totalNetKg, totalQuintals, dryingHours, status, lotSnapshot),
+    notes: input.notes,
+    createdBy: input.created_by,
+    parentReportId: dryingReport.id,
+    linkType: "DRYING_BRANCH"
+  });
 
   const tunnel = await client.query(
     `INSERT INTO drying_tunnel_reports
@@ -334,8 +340,8 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
      VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
      RETURNING *`,
     [
-      primaryLotId,
-      tunnelReports[0].reportId,
+      lotId,
+      tunnelReport.id,
       input.tunnel_number,
       input.rice_type,
       totalNetKg,
@@ -354,21 +360,13 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
     ]
   );
 
-  for (const lot of selectedLots.rows) {
-    const reportId = tunnelReports.find((report) => report.lotId === lot.id)?.reportId ?? null;
+  // Los miembros del grupo son los ingresos de materia prima.
+  for (const e of entries.rows) {
     await client.query(
       `INSERT INTO drying_tunnel_report_lots
-       (drying_report_id, lot_id, process_report_id, lot_code, farmer_name, net_weight_kg, quintals)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [
-        tunnel.rows[0].id,
-        lot.id,
-        reportId,
-        lot.lot_code,
-        lot.farmer_name,
-        lot.net_weight_kg,
-        lot.quintals
-      ]
+       (drying_report_id, weighing_ticket_id, lot_id, process_report_id, lot_code, farmer_name, net_weight_kg, quintals)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [tunnel.rows[0].id, e.id, lotId, tunnelReport.id, e.ticket_number, e.farmer_name, e.net_weight_kg, e.quintals]
     );
   }
 
@@ -376,12 +374,8 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
     `UPDATE lot_process_reports
      SET reference_id = $1,
          report_data = report_data || $2::jsonb
-     WHERE id = ANY($3::uuid[])`,
-    [
-      tunnel.rows[0].id,
-      JSON.stringify({ drying_report_id: tunnel.rows[0].id }),
-      tunnelReports.map((report) => report.reportId)
-    ]
+     WHERE id = $3`,
+    [tunnel.rows[0].id, JSON.stringify({ drying_report_id: tunnel.rows[0].id }), tunnelReport.id]
   );
 
   return getDryingReportById(client, tunnel.rows[0].id);

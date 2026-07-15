@@ -37,6 +37,19 @@ type Lot = {
   qualification: string | number | null;
 };
 
+// Ingreso de materia prima: un pesaje de báscula que todavía no pertenece a un
+// lote. El lote se forma agrupando varios de estos en un túnel de secado.
+type MateriaPrimaEntry = {
+  id: string;
+  ticket_number: string;
+  farmer_name: string | null;
+  rice_type: string | null;
+  is_maquila: boolean;
+  quintals: string | number | null;
+  net_weight: string | number | null;
+  qualification: string | number | null;
+};
+
 type Dashboard = {
   active_farmers: number;
   tickets_today: number;
@@ -132,6 +145,7 @@ type BasculaTicket = {
   quintals: string | number;
   liquidated_at: string | null;
   lot_id: string | null;
+  weighing_ticket_id?: string | null;
   en_espera?: boolean;
   numero: string | null;
   modo: string | null;
@@ -718,7 +732,7 @@ export function App() {
   const [products, setProducts] = useState<Product[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [lots, setLots] = useState<Lot[]>([]);
-  const [availableDryingLots, setAvailableDryingLots] = useState<Lot[]>([]);
+  const [availableDryingLots, setAvailableDryingLots] = useState<MateriaPrimaEntry[]>([]);
   const [dryingReports, setDryingReports] = useState<DryingTunnelReport[]>([]);
   const [liquidacionesList, setLiquidacionesList] = useState<LiqRecord[]>([]);
   const [stock, setStock] = useState<StockRow[]>([]);
@@ -1048,12 +1062,12 @@ export function App() {
     () =>
       editingDryingReport
         ? editingDryingReport.lots
-        : availableDryingLots.filter((lot) => selectedDryingLotIds.includes(lot.id)).map((lot) => ({
-            lot_id: lot.id,
-            lot_code: lot.lot_code,
-            farmer_name: lot.farmer_name,
-            net_weight_kg: lot.net_weight ?? 0,
-            quintals: lot.quintals ?? 0
+        : availableDryingLots.filter((entry) => selectedDryingLotIds.includes(entry.id)).map((entry) => ({
+            lot_id: entry.id,
+            lot_code: entry.ticket_number,
+            farmer_name: entry.farmer_name,
+            net_weight_kg: entry.net_weight ?? 0,
+            quintals: entry.quintals ?? 0
           })),
     [availableDryingLots, editingDryingReport, selectedDryingLotIds]
   );
@@ -1299,7 +1313,7 @@ export function App() {
         apiGet<Lot[]>("/lots"),
         apiGet<StockRow[]>("/inventory/stock"),
         apiGet<Insumo[]>("/inventory/insumos"),
-        apiGet<Lot[]>("/process-flow/drying/available-lots"),
+        apiGet<MateriaPrimaEntry[]>("/process-flow/drying/available-lots"),
         apiGet<DryingTunnelReport[]>("/process-flow/drying/reports"),
         apiGet<LiqRecord[]>("/liquidations")
       ]);
@@ -2151,14 +2165,14 @@ export function App() {
       });
       addToast(
         lotForm.ownership === "OWNED"
-          ? "Lote creado e ingresado a Bodega Materia Prima. Ya puede ir a secado/pilado."
-          : "Lote de servicio creado (a nombre de CEYRO). Ya puede ir a secado/pilado.",
+          ? "Materia prima ingresada a Bodega Materia Prima. Ya puedes formar el lote en Secadoras."
+          : "Ingreso de servicio registrado (a nombre de CEYRO). Ya puedes formar el lote en Secadoras.",
         "success"
       );
       setLotTicket(null);
       await Promise.all([refreshBasculaTickets(), refresh()]);
     } catch (e) {
-      addToast(`No se pudo crear el lote: ${e instanceof Error ? e.message : "error"}`, "error");
+      addToast(`No se pudo ingresar la materia prima: ${e instanceof Error ? e.message : "error"}`, "error");
     }
   }
 
@@ -3232,12 +3246,14 @@ export function App() {
     }
 
     if (selectedDryingLotIds.length === 0) {
-      setMessage("Seleccione uno o varios lotes para completar el tunel");
+      setMessage("Selecciona uno o varios ingresos de materia prima para formar el lote");
       return;
     }
 
+    // Aquí nace el lote: el grupo de ingresos que entra al túnel.
     const created = await apiPost<DryingTunnelReport>("/process-flow/drying", {
-      lot_ids: selectedDryingLotIds,
+      entry_ids: selectedDryingLotIds,
+      lot_code: String(form.get("lot_code") ?? "").trim() || undefined,
       tunnel_number: Number(form.get("tunnel_number")),
       ...payload
     });
@@ -3245,7 +3261,7 @@ export function App() {
     setSelectedDryingLotIds([]);
     await refresh();
     if (created.lots[0]?.lot_id) await loadProcessFlow(created.lots[0].lot_id);
-    setMessage("Informe de secado guardado; los lotes usados ya no aparecen disponibles");
+    setMessage(`Lote formado en el túnel; los ingresos usados ya no aparecen disponibles`);
   }
 
   async function submitProduction(event: FormEvent<HTMLFormElement>) {
@@ -3843,13 +3859,13 @@ export function App() {
                           <td className="num" style={{ fontWeight: 700 }}>{Number(t.quintals).toFixed(2)}</td>
                           <td>
                             {t.en_espera ? <span className="chip warn" title="La báscula aún espera el segundo pesaje">En espera 2º pesaje</span>
-                              : t.lot_id ? <span className="chip ok">Lote creado</span>
+                              : t.weighing_ticket_id ? <span className="chip ok">Ingresado</span>
                               : liquidated ? <span className="chip ok">Liquidado</span>
                               : <span className="chip info">Pendiente</span>}
                           </td>
                           <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
-                            {!t.en_espera && !t.lot_id && !liquidated && linked && (
-                              <button type="button" className="btnSecondary" onClick={() => { setLotTicket(t); setLotForm({ rice_type: (t.calidad ?? "").includes("0.11") ? "0.11" : "CORRIENTE", ownership: "OWNED", accionista_id: activeAccionistaId ?? (accionistas[0]?.id ?? ""), product_id: "", warehouse_id: "" }); }}>Crear lote</button>
+                            {!t.en_espera && !t.weighing_ticket_id && !liquidated && linked && (
+                              <button type="button" className="btnSecondary" onClick={() => { setLotTicket(t); setLotForm({ rice_type: (t.calidad ?? "").includes("0.11") ? "0.11" : "CORRIENTE", ownership: "OWNED", accionista_id: activeAccionistaId ?? (accionistas[0]?.id ?? ""), product_id: "", warehouse_id: "" }); }}>Ingresar materia prima</button>
                             )}
                           </td>
                         </tr>
@@ -3866,22 +3882,23 @@ export function App() {
         {activeTab === "Secadoras" && (
           <section className="traceLayout">
             <section className="formPanel">
-              <h2>Seleccionar lote</h2>
+              <h2>Armar el lote</h2>
+              <p className="muted">El lote se forma aquí: agrega los ingresos de materia prima (pesajes de báscula) que entran juntos al túnel.</p>
               <label>
-                <span>Lote para secado</span>
+                <span>Ingreso de materia prima</span>
                 <select value={traceLotId} onChange={(event) => setTraceLotId(event.target.value)}>
                   <option value="">Seleccione</option>
                   {selectableDryingLots.map((lot) => (
                     <option key={lot.id} value={lot.id}>
-                      {lot.farmer_name ?? "Sin agricultor"} - {Number(lot.quintals ?? 0).toFixed(2)} QQ - {lot.lot_code}
+                      {lot.farmer_name ?? "Sin agricultor"} - {Number(lot.quintals ?? 0).toFixed(2)} QQ - {lot.ticket_number}
                     </option>
                   ))}
                 </select>
               </label>
               <button className="primary" type="button" onClick={addSelectedDryingLot} disabled={Boolean(editingDryingReport)}>
-                Agregar a lotes utilizados
+                Agregar al lote
               </button>
-              <p className="muted">Al agregarlo desaparece de este selector para evitar repetir el mismo lote.</p>
+              <p className="muted">Al agregarlo desaparece de este selector para no repetirlo. Todos deben ser del mismo accionista y del mismo tipo (compra o servicio).</p>
             </section>
 
             <form
@@ -3891,6 +3908,12 @@ export function App() {
             >
               <h2>Informe de secado por tunel</h2>
               {editingDryingReport && <span className="editBadge">✎ Editando secado guardado</span>}
+              {!editingDryingReport && (
+                <label>
+                  <span>Número de lote <span className="muted">(se genera solo; puedes escribir otro)</span></span>
+                  <input name="lot_code" type="text" placeholder="Automático (LT-…)" />
+                </label>
+              )}
               <Select
                 name="rice_type"
                 label="Tipo de arroz"
@@ -7255,8 +7278,8 @@ export function App() {
     {lotTicket && (
       <div className="modalOverlay" onClick={() => setLotTicket(null)}>
         <div className="modalCard" onClick={(e) => e.stopPropagation()}>
-          <h3>Crear lote del ticket #{lotTicket.numero}</h3>
-          <p className="muted">{lotTicket.farmer_name} · {Number(lotTicket.quintals).toFixed(2)} QQ. Se creará el lote con estos pesos para que entre a secado → pilado.</p>
+          <h3>Ingresar materia prima · ticket #{lotTicket.numero}</h3>
+          <p className="muted">{lotTicket.farmer_name} · {Number(lotTicket.quintals).toFixed(2)} QQ. Entra como materia prima. El <strong>lote se formará después en la secadora</strong>, agrupando varios ingresos en un túnel.</p>
           <label>
             <span>Tipo de arroz</span>
             <select value={lotForm.rice_type} onChange={(e) => setLotForm({ ...lotForm, rice_type: e.target.value as "0.11" | "CORRIENTE" })}>
@@ -7275,7 +7298,7 @@ export function App() {
             <>
               {accionistas.length > 0 && (
                 <label>
-                  <span>¿Qué accionista compra este lote?</span>
+                  <span>¿Qué accionista compra esta materia prima?</span>
                   <select value={lotForm.accionista_id} onChange={(e) => setLotForm({ ...lotForm, accionista_id: e.target.value })}>
                     {accionistas.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                   </select>
@@ -7291,7 +7314,7 @@ export function App() {
             </p>
           )}
           <div className="buttonRow">
-            <button type="button" className="primary" onClick={() => submitCreateLot()}>Crear lote</button>
+            <button type="button" className="primary" onClick={() => submitCreateLot()}>Ingresar materia prima</button>
             <button type="button" onClick={() => setLotTicket(null)}>Cancelar</button>
           </div>
         </div>
