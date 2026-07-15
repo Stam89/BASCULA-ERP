@@ -20,6 +20,24 @@ function stableUuid(key: string): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-${variant}${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
+// Busca un agricultor por nombre (sin distinguir mayúsculas/espacios) y lo crea
+// si no existe. Evita duplicados al vincular tickets de báscula.
+async function findOrCreateFarmer(
+  name: string,
+  accionistaId: string | null = null
+): Promise<{ id: string; accionista_id: string | null }> {
+  const existing = await pool.query(
+    "SELECT id, accionista_id FROM farmers WHERE lower(trim(full_name)) = lower(trim($1)) ORDER BY created_at ASC LIMIT 1",
+    [name]
+  );
+  if (existing.rowCount) return existing.rows[0];
+  const created = await pool.query(
+    "INSERT INTO farmers (full_name, accionista_id) VALUES (trim($1), $2) RETURNING id, accionista_id",
+    [name, accionistaId]
+  );
+  return created.rows[0];
+}
+
 // Formato NATIVO de la app de báscula (com.example.bascula).
 const basculaTicketSchema = z.object({
   numeroTicket: z.union([z.string(), z.number()]).transform((v) => String(v)),
@@ -253,7 +271,11 @@ mobileTicketsRouter.get("/", requireAuth, resolveAccionista, asyncRoute(async (r
   const q = z.object({ status: z.enum(["pending", "liquidated"]).optional() }).parse(req.query);
   const statusFilter = q.status === "pending" ? "t.liquidated_at IS NULL"
     : q.status === "liquidated" ? "t.liquidated_at IS NOT NULL" : "";
-  const conditions = ["(t.accionista_id = $1 OR t.accionista_id IS NULL)"];
+  const conditions = [
+    "(t.accionista_id = $1 OR t.accionista_id IS NULL)",
+    // Solo pesajes del modo PRINCIPAL: los "particular" no se usan en el ERP.
+    "lower(coalesce(t.raw_payload->>'modo', 'principal')) = 'principal'"
+  ];
   if (statusFilter) conditions.push(statusFilter);
   const result = await pool.query(
     `SELECT t.id, t.farmer_id, t.farmer_name, t.accionista_id, t.lot_id, t.gross_weight, t.tare_weight, t.net_weight,
@@ -533,22 +555,32 @@ export async function importBasculaTickets(
   const imported: Array<{ numeroTicket: string; id: string }> = [];
   for (const raw of rawTickets) {
     const t = basculaTicketSchema.parse(raw);
+    // Solo se traen los pesajes del modo PRINCIPAL (los "particular" se ignoran).
+    if ((t.modo || "").trim().toLowerCase() !== "principal") continue;
+
     const id = stableUuid(`${t.modo}_${t.numeroTicket}`);
     let netWeight = t.pesoNeto ?? calculateNetWeight(t.pesoBruto, t.pesoTara);
     if (netWeight < 0) netWeight = 0; // no romper el lote por un ticket con tara mayor
     const quintals = t.totalQQ ?? (t.calificacion > 0 ? calculateQuintals(netWeight, t.calificacion) : 0);
     const ts = t.actualizadoEn ?? Date.now();
 
+    // El cliente que viene de la báscula es el agricultor: se vincula solo.
+    const clienteName = (t.cliente || "").trim();
+    let farmer: { id: string; accionista_id: string | null } | null = null;
+    if (clienteName.length >= 2) farmer = await findOrCreateFarmer(clienteName);
+
     await pool.query(
       `INSERT INTO mobile_synced_tickets (
-        id, device_id, farmer_id, farmer_name,
+        id, device_id, farmer_id, farmer_name, accionista_id,
         gross_weight, tare_weight, net_weight, qualification, quintals,
         print_count, is_locked, price_per_quintal, gross_payable, advances_discount, net_payable,
         liquidated_at, mobile_created_at, mobile_updated_at, synced_at, raw_payload
-      ) VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8, 0, false, 0, 0, 0, 0, NULL, $9, $9, now(), $10)
+      ) VALUES ($1, $2, $11, $3, $12, $4, $5, $6, $7, $8, 0, false, 0, 0, 0, 0, NULL, $9, $9, now(), $10)
       ON CONFLICT (id) DO UPDATE SET
         device_id = EXCLUDED.device_id,
         farmer_name = EXCLUDED.farmer_name,
+        farmer_id = COALESCE(mobile_synced_tickets.farmer_id, EXCLUDED.farmer_id),
+        accionista_id = COALESCE(mobile_synced_tickets.accionista_id, EXCLUDED.accionista_id),
         gross_weight = EXCLUDED.gross_weight,
         tare_weight = EXCLUDED.tare_weight,
         net_weight = EXCLUDED.net_weight,
@@ -557,7 +589,8 @@ export async function importBasculaTickets(
         mobile_updated_at = EXCLUDED.mobile_updated_at,
         synced_at = now(),
         raw_payload = EXCLUDED.raw_payload`,
-      [id, deviceId, (t.cliente || "").trim(), t.pesoBruto, t.pesoTara, netWeight, t.calificacion, quintals, ts, JSON.stringify(t)]
+      [id, deviceId, clienteName, t.pesoBruto, t.pesoTara, netWeight, t.calificacion, quintals, ts, JSON.stringify(t),
+       farmer?.id ?? null, farmer?.accionista_id ?? null]
     );
     imported.push({ numeroTicket: t.numeroTicket, id });
   }
