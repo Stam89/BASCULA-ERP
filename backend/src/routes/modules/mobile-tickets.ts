@@ -12,6 +12,9 @@ import { createLotProcessReport } from "../../utils/process-reports.js";
 
 export const mobileTicketsRouter = Router();
 
+// CEYRO (la piladora) es el accionista principal: todo servicio de pilado es suyo.
+const CEYRO_ID = "00000000-0000-0000-0000-000000000001";
+
 // UUID determinístico (estilo v5) a partir de una clave estable, para que el
 // mismo ticket de la app (mismo número) siempre mapee al mismo registro.
 function stableUuid(key: string): string {
@@ -384,14 +387,37 @@ mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, asyn
   if (t.lot_id) throw new ApiError(409, "Este ticket ya generó un lote.");
   if (!t.farmer_id) throw new ApiError(400, "Primero vincula el ticket a un agricultor/cliente.");
   if (Number(t.quintals) <= 0) throw new ApiError(400, "El ticket no tiene quintales calculados.");
-  // Quién compra este lote: el accionista elegido; si no se indica, el del
-  // ticket/agricultor y como último recurso el activo del usuario.
-  const ticketAccionista = body.accionista_id ?? t.accionista_id ?? accionistaId;
-  if (body.accionista_id) {
-    const acc = await pool.query("SELECT 1 FROM accionistas WHERE id = $1 AND is_active = true", [body.accionista_id]);
+  const isMaquila = body.ownership === "MAQUILA";
+
+  // Reglas del negocio:
+  // - El servicio de pilado siempre es de CEYRO (él presta el servicio).
+  // - Una compra es del accionista elegido (o del activo si no se indica).
+  let ticketAccionista: string;
+  if (isMaquila) {
+    ticketAccionista = CEYRO_ID;
+  } else {
+    ticketAccionista = body.accionista_id ?? t.accionista_id ?? accionistaId!;
+    const acc = await pool.query("SELECT 1 FROM accionistas WHERE id = $1 AND is_active = true", [ticketAccionista]);
     if (!acc.rowCount) throw new ApiError(404, "Accionista no encontrado");
   }
-  const isMaquila = body.ownership === "MAQUILA";
+
+  // Una compra siempre entra a la bodega de materia prima, con la cáscara que
+  // corresponde al tipo de arroz. No hace falta elegirlo a mano.
+  let productId = body.product_id ?? null;
+  let warehouseId = body.warehouse_id ?? null;
+  if (!isMaquila) {
+    if (!productId) {
+      const code = body.rice_type === "0.11" ? "CASCARA-011" : "CASCARA-CORRIENTE";
+      const p = await pool.query("SELECT id FROM products WHERE code = $1 AND is_active = true LIMIT 1", [code]);
+      if (!p.rowCount) throw new ApiError(400, `No existe el producto ${code}. Créalo en Inventario.`);
+      productId = p.rows[0].id;
+    }
+    if (!warehouseId) {
+      const w = await pool.query("SELECT id FROM warehouses WHERE type = 'RAW_MATERIAL' AND is_active = true ORDER BY name ASC LIMIT 1");
+      if (!w.rowCount) throw new ApiError(400, "No existe una bodega de materia prima. Créala en Inventario.");
+      warehouseId = w.rows[0].id;
+    }
+  }
 
   const result = await inTransaction(async (client) => {
     const lot = await client.query(
@@ -401,7 +427,7 @@ mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, asyn
       [
         nextCode("LT"), nextCode("IMP"), t.farmer_id, body.rice_type,
         isMaquila ? "MAQUILA" : "OWNED", isMaquila,
-        body.product_id && body.warehouse_id && !isMaquila ? "WEIGHED" : "OPEN",
+        !isMaquila ? "WEIGHED" : "OPEN",
         `Desde ticket de báscula #${t.raw_payload?.numeroTicket ?? ""}`.trim(),
         ticketAccionista
       ]
@@ -420,13 +446,14 @@ mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, asyn
       ]
     );
 
-    // Compra propia con producto/bodega: el arroz entra al inventario.
-    if (!isMaquila && body.product_id && body.warehouse_id) {
+    // Compra: el arroz entra a la bodega de materia prima del accionista.
+    // El servicio de pilado no entra al inventario (el arroz es del cliente).
+    if (!isMaquila && productId && warehouseId) {
       await client.query(
         `INSERT INTO inventory_movements
          (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
          VALUES ($1, $2, $3, 'IN', $4, 'weighing_tickets', $5, 'OWNED', $6, $7)`,
-        [body.product_id, body.warehouse_id, lot.rows[0].id, t.quintals, ticket.rows[0].id, body.created_by ?? null, ticketAccionista]
+        [productId, warehouseId, lot.rows[0].id, t.quintals, ticket.rows[0].id, body.created_by ?? null, ticketAccionista]
       );
     }
 
