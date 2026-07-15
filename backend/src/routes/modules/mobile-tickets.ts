@@ -273,15 +273,14 @@ export async function procesarLiquidacionTicket(
 }
 
 // Lista los tickets sincronizados/importados de la báscula (para la vista web).
-// Muestra los ya vinculados al accionista activo, más los que aún no tienen
-// accionista asignado (recién importados de la báscula, pendientes de vincular).
+// La báscula es compartida por los accionistas: un pesaje todavía no es de
+// nadie, por eso NO se filtra por accionista. El dueño se decide al crear el
+// lote (ahí se elige qué accionista compra). Filtrarlos aquí escondía tickets.
 mobileTicketsRouter.get("/", requireAuth, resolveAccionista, asyncRoute(async (req, res) => {
-  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const q = z.object({ status: z.enum(["pending", "liquidated"]).optional() }).parse(req.query);
   const statusFilter = q.status === "pending" ? "t.liquidated_at IS NULL"
     : q.status === "liquidated" ? "t.liquidated_at IS NOT NULL" : "";
   const conditions = [
-    "(t.accionista_id = $1 OR t.accionista_id IS NULL)",
     // Solo pesajes del modo PRINCIPAL: los "particular" no se usan en el ERP.
     "lower(coalesce(t.raw_payload->>'modo', 'principal')) = 'principal'"
   ];
@@ -300,15 +299,15 @@ mobileTicketsRouter.get("/", requireAuth, resolveAccionista, asyncRoute(async (r
      WHERE ${conditions.join(" AND ")}
      ORDER BY NULLIF(regexp_replace(coalesce(t.raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '')::bigint DESC NULLS LAST,
               t.mobile_updated_at DESC NULLS LAST
-     LIMIT 500`,
-    [accionistaId]
+     LIMIT 500`
   );
   res.json(result.rows);
 }));
 
 // Vincula un ticket a un agricultor (existente por id, o crea uno por nombre).
-// El ticket toma el accionista del agricultor; si el agricultor no tiene uno
-// asignado, cae al accionista activo del usuario que vincula.
+// El accionista del ticket solo se hereda del agricultor (si lo tiene); nunca
+// del accionista activo, porque el pesaje todavía no es de nadie: el dueño se
+// elige al crear el lote.
 mobileTicketsRouter.post("/:id/link-farmer", requireAuth, resolveAccionista, asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const body = z.object({
@@ -344,7 +343,7 @@ mobileTicketsRouter.post("/:id/link-farmer", requireAuth, resolveAccionista, asy
     farmerAccionistaId = farmer.rows[0].accionista_id;
   }
 
-  const targetAccionista = farmerAccionistaId ?? accionistaId;
+  const targetAccionista = farmerAccionistaId;
 
   const existing = await pool.query(
     "SELECT liquidated_at FROM mobile_synced_tickets WHERE id = $1",
@@ -627,26 +626,16 @@ mobileTicketsRouter.post("/refresh-firebase", asyncRoute(async (_req, res) => {
   res.json(result);
 }));
 
-async function assertTicketBelongsToAccionista(ticketId: string, accionistaId: string | undefined) {
-  const ticket = await pool.query(
-    "SELECT accionista_id FROM mobile_synced_tickets WHERE id = $1",
-    [ticketId]
-  );
-  if (!ticket.rowCount) throw new ApiError(404, "Ticket no encontrado");
-  if (ticket.rows[0].accionista_id && ticket.rows[0].accionista_id !== accionistaId) {
-    throw new ApiError(403, "Este ticket pertenece a otro accionista.");
-  }
-}
-
+// Nota: un pesaje de báscula no pertenece a ningún accionista (la báscula es
+// compartida); el dueño se define al crear el lote. Por eso estas rutas no
+// restringen el ticket por accionista.
 mobileTicketsRouter.post("/:id/liquidation-preview", requireAuth, resolveAccionista, asyncRoute(async (req, res) => {
   const body = liquidationSchema.parse(req.body);
-  await assertTicketBelongsToAccionista(String(req.params.id), (req as AuthenticatedRequest).accionistaId);
   res.json(await previewLiquidacionTicket(String(req.params.id), body.precioQQ));
 }));
 
 mobileTicketsRouter.post("/:id/liquidate", requireAuth, resolveAccionista, asyncRoute(async (req, res) => {
   const body = liquidationSchema.parse(req.body);
-  await assertTicketBelongsToAccionista(String(req.params.id), (req as AuthenticatedRequest).accionistaId);
   const result = await procesarLiquidacionTicket(
     String(req.params.id),
     body.precioQQ,
