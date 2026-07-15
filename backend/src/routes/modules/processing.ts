@@ -272,20 +272,48 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       );
       maquilaOrderId = maquila.rows[0].id;
 
+      // Cobro automático del servicio de pilado: el ingreso es de CEYRO. Si el
+      // dueño del lote es otro accionista, se le genera su cuenta por pagar; si
+      // es un cliente externo, solo queda la cuenta por cobrar de CEYRO.
+      const CEYRO_ID = "00000000-0000-0000-0000-000000000001";
+      const clienteEsAccionista = accionistaId && accionistaId !== CEYRO_ID;
+      const farmerRow = await client.query("SELECT full_name FROM farmers WHERE id = $1", [farmerId]);
+      const clienteNombre = clienteEsAccionista
+        ? (await client.query("SELECT name FROM accionistas WHERE id = $1", [accionistaId])).rows[0]?.name ?? "accionista"
+        : (farmerRow.rows[0]?.full_name ?? "cliente");
+      const desc = `Servicio de pilado (secado + pilado) a ${clienteNombre}: ${processedQq} QQ`;
+
       const receivable = await client.query(
         `INSERT INTO accounts_receivable
-         (farmer_id, reference_type, reference_id, description, amount, balance, accionista_id)
-         VALUES ($1, 'maquila_orders', $2, $3, $4, $4, $5)
+         (accionista_id, reference_type, reference_id, description, amount, balance)
+         VALUES ($1, 'pilado_service', $2, $3, $4, $4)
          RETURNING id`,
-        [
-          farmerId,
-          maquilaOrderId,
-          `Servicio de maquila por ${processedQq} QQ procesados`,
-          serviceAmount,
-          accionistaId
-        ]
+        [CEYRO_ID, maquilaOrderId, desc, serviceAmount]
       );
       receivableId = receivable.rows[0].id;
+
+      let payableId: string | null = null;
+      if (clienteEsAccionista) {
+        const ap = await client.query(
+          `INSERT INTO accounts_payable
+           (accionista_id, farmer_id, reference_type, reference_id, description, amount, balance)
+           VALUES ($1, NULL, 'pilado_service', $2, $3, $4, $4)
+           RETURNING id`,
+          [accionistaId, maquilaOrderId, desc, serviceAmount]
+        );
+        payableId = ap.rows[0].id;
+      }
+
+      const svc = await client.query(
+        `INSERT INTO pilado_services
+           (provider_accionista_id, client_accionista_id, client_name, lot_id, quintals, rate_per_qq, total, receivable_id, payable_id, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING id`,
+        [CEYRO_ID, clienteEsAccionista ? accionistaId : null, clienteEsAccionista ? null : clienteNombre,
+         body.lot_id, processedQq, serviceRate, serviceAmount, receivableId, payableId, body.created_by ?? null]
+      );
+      await client.query("UPDATE accounts_receivable SET reference_id = $2 WHERE id = $1", [receivableId, svc.rows[0].id]);
+      if (payableId) await client.query("UPDATE accounts_payable SET reference_id = $2 WHERE id = $1", [payableId, svc.rows[0].id]);
     }
 
     const yieldPercent = round3((totalOutputKg / inputPaddyKg) * 100);
