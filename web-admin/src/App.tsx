@@ -184,6 +184,8 @@ type LaborRates = {
   precio_gas_bombona: number;
   /** Precio fijo de cada cilindro de gas. */
   precio_gas_cilindro: number;
+  /** Precio fijo del diesel por unidad de medidor. */
+  precio_diesel: number;
 };
 
 const defaultLaborRates: LaborRates = {
@@ -195,7 +197,8 @@ const defaultLaborRates: LaborRates = {
   secador_guardiania: 10,
   secador_per_tunel: 5,
   precio_gas_bombona: 0,
-  precio_gas_cilindro: 0
+  precio_gas_cilindro: 0,
+  precio_diesel: 0
 };
 
 type WorkerSummary = {
@@ -761,8 +764,9 @@ export function App() {
   const [traceLotId, setTraceLotId] = useState("");
   const [processFlow, setProcessFlow] = useState<ProcessFlow | null>(null);
   const [selectedDryingLotIds, setSelectedDryingLotIds] = useState<string[]>([]);
-  // Gas del secado: bombona por medidor (fin - inicio) y/o cilindros por unidad.
-  const [gasForm, setGasForm] = useState({ bombona_inicio: "", bombona_fin: "", cilindro_cantidad: "" });
+  // Combustible del secado: bombona y diesel por medidor (fin - inicio), y
+  // cilindros por unidad.
+  const [gasForm, setGasForm] = useState({ bombona_inicio: "", bombona_fin: "", cilindro_cantidad: "", diesel_inicio: "", diesel_fin: "" });
   const [editingDryingReport, setEditingDryingReport] = useState<DryingTunnelReport | null>(null);
   const [productionDryingId, setProductionDryingId] = useState(() => loadMillingDraft().productionDryingId);
   const [productionPackages, setProductionPackages] = useState<ProductionPackageState>(defaultProductionPackages);
@@ -1104,10 +1108,14 @@ export function App() {
     () => availableDryingLots.filter((lot) => !selectedDryingLotIds.includes(lot.id)),
     [availableDryingLots, selectedDryingLotIds]
   );
-  // Gas del secado, calculado en vivo con los precios fijos de Configuración.
+  // Combustible del secado, calculado en vivo con los precios fijos de
+  // Configuración. El backend lo recalcula al guardar (esto es solo la vista).
   const gasBombonaTotal = Math.max(0, Number(gasForm.bombona_fin || 0) - Number(gasForm.bombona_inicio || 0));
   const gasBombonaCosto = round2(gasBombonaTotal * Number(laborRatesForm.precio_gas_bombona || 0));
   const gasCilindroCosto = round2(Number(gasForm.cilindro_cantidad || 0) * Number(laborRatesForm.precio_gas_cilindro || 0));
+  const dieselTotal = Math.max(0, Number(gasForm.diesel_fin || 0) - Number(gasForm.diesel_inicio || 0));
+  const dieselCosto = round2(dieselTotal * Number(laborRatesForm.precio_diesel || 0));
+  const combustibleTotal = round2(gasBombonaCosto + gasCilindroCosto + dieselCosto);
   const productionDryingReports = useMemo(
     () => dryingReports.filter((report) => report.status === "COMPLETED" && !report.is_processed),
     [dryingReports]
@@ -1497,12 +1505,18 @@ export function App() {
     }
   }, [authUser, visibleTabs, activeTab]);
 
+  // Las tarifas (incluidos los precios del combustible) las usan varias
+  // pantallas: Secadoras, Nómina y Configuración.
+  async function loadLaborRates() {
+    const rates = await apiGet<LaborRates>("/labor/rates").catch(() => null);
+    if (rates) setLaborRatesForm(rates);
+  }
+
   async function refreshConfig() {
     const settings = await apiGet<AppSettings>("/settings");
     setAppSettings(settings);
     setSettingsForm(settings);
-    const rates = await apiGet<LaborRates>("/labor/rates").catch(() => null);
-    if (rates) setLaborRatesForm(rates);
+    await loadLaborRates();
     if (isAdmin) {
       const [users, accionistas, backups, audit] = await Promise.all([
         apiGet<AdminUser[]>("/auth/users"),
@@ -2447,6 +2461,8 @@ export function App() {
     if (activeTab === "Ventas") refreshCustomersAndSales().catch(() => undefined);
     if (activeTab === "Por Cobrar") refreshReceivables().catch(() => undefined);
     if (activeTab === "Por Pagar") refreshPayables().catch(() => undefined);
+    // Secadoras y Nómina necesitan las tarifas (precios de gas/diesel).
+    if (activeTab === "Secadoras" || activeTab === "Nomina") loadLaborRates().catch(() => undefined);
     if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
     if (activeTab === "Cuadrilla") refreshCuadrilla().catch(() => undefined);
     if (activeTab === "Servicio Pilado") refreshPilado().catch(() => undefined);
@@ -3254,7 +3270,8 @@ export function App() {
       gas_bombona_inicio: Number(form.get("gas_bombona_inicio") || 0),
       gas_bombona_fin: Number(form.get("gas_bombona_fin") || 0),
       gas_cilindro_cantidad: Number(form.get("gas_cilindro_cantidad") || 0),
-      diesel_used: Number(form.get("diesel_used") || 0),
+      diesel_inicio: Number(form.get("diesel_inicio") || 0),
+      diesel_fin: Number(form.get("diesel_fin") || 0),
       dryer_name: form.get("dryer_name") || undefined,
       notes: form.get("notes") || undefined
     };
@@ -3975,47 +3992,53 @@ export function App() {
               <Input name="moisture_before" label="Humedad inicial %" type="number" defaultValue={String(editingDryingReport?.moisture_before ?? 0)} />
               <Input name="dry_start_at" label="Hora secado inicio" type="datetime-local" defaultValue={dateTimeLocalValue(editingDryingReport?.dry_start_at)} required={false} />
               <Input name="dry_end_at" label="Hora secado final" type="datetime-local" defaultValue={dateTimeLocalValue(editingDryingReport?.dry_end_at)} required={false} />
-              {/* ── GAS: bombona (por medidor) y/o cilindro (por unidades) ── */}
-              <fieldset style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 12, margin: "6px 0" }}>
-                <legend style={{ fontWeight: 700, fontSize: 13, padding: "0 6px" }}>GAS</legend>
+              {/* ── Combustible: gas (bombona/cilindro) y diesel ── */}
+              <fieldset className="medidorPanel">
+                <legend>⛽ Combustible</legend>
 
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#475569", marginBottom: 4 }}>BOMBONA</div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, alignItems: "end" }}>
-                  <label style={{ fontSize: 12 }}><span>Inicio</span>
-                    <input name="gas_bombona_inicio" type="number" step="0.01" min="0" value={gasForm.bombona_inicio}
-                      onChange={(e) => setGasForm({ ...gasForm, bombona_inicio: e.target.value })} />
-                  </label>
-                  <label style={{ fontSize: 12 }}><span>Fin</span>
-                    <input name="gas_bombona_fin" type="number" step="0.01" min="0" value={gasForm.bombona_fin}
-                      onChange={(e) => setGasForm({ ...gasForm, bombona_fin: e.target.value })} />
-                  </label>
-                  <div className="totalBox" style={{ margin: 0 }}>
-                    <span>Total utilizado</span>
-                    <strong>{gasBombonaTotal.toFixed(2)}</strong>
-                    <small>× {money(laborRatesForm.precio_gas_bombona)} = <strong>{money(gasBombonaCosto)}</strong></small>
-                  </div>
-                </div>
+                <MedidorRow
+                  label="Bombona" unidad="gas"
+                  nameInicio="gas_bombona_inicio" nameFin="gas_bombona_fin"
+                  inicio={gasForm.bombona_inicio} fin={gasForm.bombona_fin}
+                  onInicio={(v) => setGasForm({ ...gasForm, bombona_inicio: v })}
+                  onFin={(v) => setGasForm({ ...gasForm, bombona_fin: v })}
+                  precio={laborRatesForm.precio_gas_bombona}
+                />
 
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#475569", margin: "10px 0 4px" }}>CILINDRO</div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, alignItems: "end" }}>
-                  <label style={{ fontSize: 12 }}><span>Cilindros utilizados</span>
-                    <input name="gas_cilindro_cantidad" type="number" step="0.01" min="0" value={gasForm.cilindro_cantidad}
+                <div className="medidorRow">
+                  <span className="medidorLabel">Cilindro</span>
+                  <label><span>Utilizados</span>
+                    <input name="gas_cilindro_cantidad" type="number" step="0.01" min="0" placeholder="0"
+                      value={gasForm.cilindro_cantidad}
                       onChange={(e) => setGasForm({ ...gasForm, cilindro_cantidad: e.target.value })} />
                   </label>
-                  <div className="totalBox" style={{ margin: 0 }}>
-                    <span>Total en $</span>
+                  <span className="medidorOp">×</span>
+                  <div className="medidorOut muted">
+                    <small>Precio</small>
+                    <strong>{money(laborRatesForm.precio_gas_cilindro)}</strong>
+                  </div>
+                  <span className="medidorOp">=</span>
+                  <div className="medidorOut total">
+                    <small>Total $</small>
                     <strong>{money(gasCilindroCosto)}</strong>
-                    <small>× {money(laborRatesForm.precio_gas_cilindro)} c/u</small>
                   </div>
                 </div>
 
-                <div className="totalBox" style={{ marginTop: 10, background: "#f0fdf4" }}>
-                  <span>TOTAL GAS</span>
-                  <strong>{money(gasBombonaCosto + gasCilindroCosto)}</strong>
-                  <small>bombona + cilindro · precios fijos en Configuración → Tarifas</small>
+                <MedidorRow
+                  label="Diesel" unidad="diesel"
+                  nameInicio="diesel_inicio" nameFin="diesel_fin"
+                  inicio={gasForm.diesel_inicio} fin={gasForm.diesel_fin}
+                  onInicio={(v) => setGasForm({ ...gasForm, diesel_inicio: v })}
+                  onFin={(v) => setGasForm({ ...gasForm, diesel_fin: v })}
+                  precio={laborRatesForm.precio_diesel}
+                />
+
+                <div className="medidorTotal">
+                  <span>TOTAL COMBUSTIBLE</span>
+                  <strong>{money(combustibleTotal)}</strong>
                 </div>
+                <p className="muted medidorNota">Los precios se configuran en Configuración → Tarifas. Deja en cero lo que no uses.</p>
               </fieldset>
-              <Input name="diesel_used" label="Diesel utilizado" type="number" defaultValue={String(editingDryingReport?.diesel_used ?? 0)} />
               <Input name="notes" label="Observacion" defaultValue={editingDryingReport?.notes ?? "Secado registrado"} required={false} />
               <div className="buttonRow">
                 <button className="primary">{editingDryingReport ? "Guardar cambios" : "Guardar informe"}</button>
@@ -7153,10 +7176,11 @@ export function App() {
                     <label><span>$ guardianía / día</span><input type="number" step="0.5" min="0" value={laborRatesForm.secador_guardiania} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secador_guardiania: Number(e.target.value) })} /></label>
                     <label><span>$ por túnel secado</span><input type="number" step="0.5" min="0" value={laborRatesForm.secador_per_tunel} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secador_per_tunel: Number(e.target.value) })} /></label>
                   </div>
-                  <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>⛽ Precio del gas <span className="muted" style={{ fontWeight: 400 }}>(se usa en Secadoras)</span></h2>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <label><span>$ bombona (por unidad de medidor)</span><input type="number" step="0.01" min="0" value={laborRatesForm.precio_gas_bombona} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_bombona: Number(e.target.value) })} /></label>
+                  <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>⛽ Precio del combustible <span className="muted" style={{ fontWeight: 400 }}>(se usa en Secadoras)</span></h2>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                    <label><span>$ bombona (por medidor)</span><input type="number" step="0.01" min="0" value={laborRatesForm.precio_gas_bombona} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_bombona: Number(e.target.value) })} /></label>
                     <label><span>$ por cilindro</span><input type="number" step="0.01" min="0" value={laborRatesForm.precio_gas_cilindro} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_cilindro: Number(e.target.value) })} /></label>
+                    <label><span>$ diesel (por medidor)</span><input type="number" step="0.01" min="0" value={laborRatesForm.precio_diesel} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_diesel: Number(e.target.value) })} /></label>
                   </div>
                   <button className="primary" disabled={!isAdmin}>Guardar tarifas</button>
                   {!isAdmin && <p className="muted">Solo un administrador puede cambiar las tarifas.</p>}
@@ -7715,6 +7739,50 @@ function Select({
         ))}
       </select>
     </label>
+  );
+}
+
+/**
+ * Fila de consumo por medidor (bombona, diesel): inicio − fin = total × precio.
+ * Se usa en el informe de secado para que gas y diesel se lean igual.
+ */
+function MedidorRow({
+  label, nameInicio, nameFin, inicio, fin, onInicio, onFin, precio, unidad
+}: {
+  label: string;
+  nameInicio: string; nameFin: string;
+  inicio: string; fin: string;
+  onInicio: (v: string) => void; onFin: (v: string) => void;
+  precio: number; unidad: string;
+}) {
+  const total = Math.max(0, Number(fin || 0) - Number(inicio || 0));
+  const costo = Math.round(total * Number(precio || 0) * 100) / 100;
+  return (
+    <div className="medidorRow">
+      <span className="medidorLabel">{label}</span>
+      <label><span>Inicio</span>
+        <input name={nameInicio} type="number" step="0.01" min="0" value={inicio} onChange={(e) => onInicio(e.target.value)} placeholder="0" />
+      </label>
+      <span className="medidorOp">−</span>
+      <label><span>Fin</span>
+        <input name={nameFin} type="number" step="0.01" min="0" value={fin} onChange={(e) => onFin(e.target.value)} placeholder="0" />
+      </label>
+      <span className="medidorOp">=</span>
+      <div className="medidorOut">
+        <small>Total {unidad}</small>
+        <strong>{total.toFixed(2)}</strong>
+      </div>
+      <span className="medidorOp">×</span>
+      <div className="medidorOut muted">
+        <small>Precio</small>
+        <strong>{money(precio)}</strong>
+      </div>
+      <span className="medidorOp">=</span>
+      <div className="medidorOut total">
+        <small>Total $</small>
+        <strong>{money(costo)}</strong>
+      </div>
+    </div>
   );
 }
 

@@ -33,7 +33,9 @@ const dryingBodySchema = z.object({
   gas_bombona_inicio: z.number().nonnegative().default(0),
   gas_bombona_fin: z.number().nonnegative().default(0),
   gas_cilindro_cantidad: z.number().nonnegative().default(0),
-  diesel_used: z.number().nonnegative().default(0),
+  // Diesel: igual que la bombona, por medidor (fin - inicio).
+  diesel_inicio: z.number().nonnegative().default(0),
+  diesel_fin: z.number().nonnegative().default(0),
   dryer_name: z.string().optional(),
   notes: z.string().optional(),
   created_by: z.string().uuid().optional()
@@ -48,35 +50,50 @@ const dryingUpdateSchema = z.object({
   gas_bombona_inicio: z.number().nonnegative().default(0),
   gas_bombona_fin: z.number().nonnegative().default(0),
   gas_cilindro_cantidad: z.number().nonnegative().default(0),
-  diesel_used: z.number().nonnegative().default(0),
+  // Diesel: igual que la bombona, por medidor (fin - inicio).
+  diesel_inicio: z.number().nonnegative().default(0),
+  diesel_fin: z.number().nonnegative().default(0),
   dryer_name: z.string().optional(),
   notes: z.string().optional()
 });
 
-/** Calcula el gas del secado con los precios fijos de Configuración → Tarifas. */
-async function calcularGas(
+const round2 = (n: number) => Math.round(n * 100) / 100;
+/** Lo consumido en un medidor: la diferencia fin - inicio (nunca negativa). */
+const consumoMedidor = (inicio: number, fin: number) => Math.max(0, Number(fin) - Number(inicio));
+
+/**
+ * Calcula el combustible del secado (gas y diesel) con los precios fijos de
+ * Configuración → Tarifas. El costo nunca se acepta del formulario: siempre se
+ * recalcula aquí, así nadie puede alterarlo.
+ */
+async function calcularCombustible(
   client: PoolClient,
-  input: { gas_bombona_inicio: number; gas_bombona_fin: number; gas_cilindro_cantidad: number }
+  input: {
+    gas_bombona_inicio: number; gas_bombona_fin: number; gas_cilindro_cantidad: number;
+    diesel_inicio: number; diesel_fin: number;
+  }
 ) {
   const r = await client.query(
-    "SELECT COALESCE(precio_gas_bombona,0) bombona, COALESCE(precio_gas_cilindro,0) cilindro FROM labor_rates WHERE id = 1"
+    `SELECT COALESCE(precio_gas_bombona,0) bombona, COALESCE(precio_gas_cilindro,0) cilindro,
+            COALESCE(precio_diesel,0) diesel
+     FROM labor_rates WHERE id = 1`
   );
   const precioBombona = Number(r.rows[0]?.bombona ?? 0);
   const precioCilindro = Number(r.rows[0]?.cilindro ?? 0);
+  const precioDiesel = Number(r.rows[0]?.diesel ?? 0);
 
-  // Bombona: lo consumido es la diferencia del medidor (nunca negativo).
-  const bombonaTotal = Math.max(0, Number(input.gas_bombona_fin) - Number(input.gas_bombona_inicio));
-  const bombonaCosto = Math.round(bombonaTotal * precioBombona * 100) / 100;
-  const cilindroCosto = Math.round(Number(input.gas_cilindro_cantidad) * precioCilindro * 100) / 100;
+  const bombonaTotal = consumoMedidor(input.gas_bombona_inicio, input.gas_bombona_fin);
+  const bombonaCosto = round2(bombonaTotal * precioBombona);
+  const cilindroCosto = round2(Number(input.gas_cilindro_cantidad) * precioCilindro);
+  const dieselTotal = consumoMedidor(input.diesel_inicio, input.diesel_fin);
+  const dieselCosto = round2(dieselTotal * precioDiesel);
 
   return {
-    precioBombona,
-    precioCilindro,
-    bombonaTotal,
-    bombonaCosto,
-    cilindroCosto,
+    precioBombona, precioCilindro, precioDiesel,
+    bombonaTotal, bombonaCosto, cilindroCosto,
+    dieselTotal, dieselCosto,
     // El gas total del secado es la suma de lo que se haya usado.
-    costoTotal: Math.round((bombonaCosto + cilindroCosto) * 100) / 100,
+    costoTotal: round2(bombonaCosto + cilindroCosto),
     gasUsado: bombonaTotal + Number(input.gas_cilindro_cantidad)
   };
 }
@@ -376,7 +393,7 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
     linkType: "DRYING_BRANCH"
   });
 
-  const gas = await calcularGas(client, input);
+  const c = await calcularCombustible(client, input);
 
   const tunnel = await client.query(
     `INSERT INTO drying_tunnel_reports
@@ -384,8 +401,9 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
       moisture_before, drying_hours, filled_at, dry_start_at, dry_end_at, gas_used, diesel_used,
       gas_bombona_inicio, gas_bombona_fin, gas_bombona_precio, gas_bombona_costo,
       gas_cilindro_cantidad, gas_cilindro_precio, gas_cilindro_costo, gas_costo_total,
+      diesel_inicio, diesel_fin, diesel_precio, diesel_costo,
       dryer_name, status, notes, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+     VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
      RETURNING *`,
     [
       lotId,
@@ -399,16 +417,20 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
       input.filled_at ?? null,
       input.dry_start_at ?? null,
       input.dry_end_at ?? null,
-      gas.gasUsado,
-      input.diesel_used,
+      c.gasUsado,
+      c.dieselTotal,
       input.gas_bombona_inicio,
       input.gas_bombona_fin,
-      gas.precioBombona,
-      gas.bombonaCosto,
+      c.precioBombona,
+      c.bombonaCosto,
       input.gas_cilindro_cantidad,
-      gas.precioCilindro,
-      gas.cilindroCosto,
-      gas.costoTotal,
+      c.precioCilindro,
+      c.cilindroCosto,
+      c.costoTotal,
+      input.diesel_inicio,
+      input.diesel_fin,
+      c.precioDiesel,
+      c.dieselCosto,
       input.dryer_name ?? null,
       status,
       input.notes ?? null,
@@ -453,7 +475,7 @@ async function updateDryingReport(
   const dryingHours = calculateDryingHours(dryStartAt, dryEndAt);
   const status = dryEndAt ? "COMPLETED" : "IN_PROGRESS";
 
-  const gas = await calcularGas(client, input);
+  const c = await calcularCombustible(client, input);
 
   const updated = await client.query(
     `UPDATE drying_tunnel_reports
@@ -473,9 +495,13 @@ async function updateDryingReport(
          gas_cilindro_precio = $15,
          gas_cilindro_costo = $16,
          gas_costo_total = $17,
-         dryer_name = $18,
-         status = $19,
-         notes = $20
+         diesel_inicio = $18,
+         diesel_fin = $19,
+         diesel_precio = $20,
+         diesel_costo = $21,
+         dryer_name = $22,
+         status = $23,
+         notes = $24
      WHERE id = $1
      RETURNING *`,
     [
@@ -486,16 +512,20 @@ async function updateDryingReport(
       input.filled_at ?? current.rows[0].filled_at,
       dryStartAt,
       dryEndAt,
-      gas.gasUsado,
-      input.diesel_used,
+      c.gasUsado,
+      c.dieselTotal,
       input.gas_bombona_inicio,
       input.gas_bombona_fin,
-      gas.precioBombona,
-      gas.bombonaCosto,
+      c.precioBombona,
+      c.bombonaCosto,
       input.gas_cilindro_cantidad,
-      gas.precioCilindro,
-      gas.cilindroCosto,
-      gas.costoTotal,
+      c.precioCilindro,
+      c.cilindroCosto,
+      c.costoTotal,
+      input.diesel_inicio,
+      input.diesel_fin,
+      c.precioDiesel,
+      c.dieselCosto,
       input.dryer_name ?? current.rows[0].dryer_name,
       status,
       input.notes ?? current.rows[0].notes
@@ -586,7 +616,8 @@ function dryingReportData(
     gas_bombona_inicio: input.gas_bombona_inicio,
     gas_bombona_fin: input.gas_bombona_fin,
     gas_cilindro_cantidad: input.gas_cilindro_cantidad,
-    diesel_used: input.diesel_used,
+    diesel_inicio: input.diesel_inicio,
+    diesel_fin: input.diesel_fin,
     dryer_name: input.dryer_name,
     status,
     lots
