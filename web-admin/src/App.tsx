@@ -42,6 +42,8 @@ type Lot = {
 type MateriaPrimaEntry = {
   id: string;
   ticket_number: string;
+  /** Número del ticket en la app de báscula (ej: "000 074"): el que ve el usuario. */
+  numero_bascula: string | null;
   farmer_name: string | null;
   rice_type: string | null;
   is_maquila: boolean;
@@ -49,6 +51,11 @@ type MateriaPrimaEntry = {
   net_weight: string | number | null;
   qualification: string | number | null;
 };
+
+/** Etiqueta corta de un ingreso: el número de la báscula si se conoce. */
+function entryLabel(entry: { numero_bascula?: string | null; ticket_number: string }): string {
+  return entry.numero_bascula ? `Ticket #${entry.numero_bascula}` : entry.ticket_number;
+}
 
 type Dashboard = {
   active_farmers: number;
@@ -1064,7 +1071,7 @@ export function App() {
         ? editingDryingReport.lots
         : availableDryingLots.filter((entry) => selectedDryingLotIds.includes(entry.id)).map((entry) => ({
             lot_id: entry.id,
-            lot_code: entry.ticket_number,
+            lot_code: entryLabel(entry),
             farmer_name: entry.farmer_name,
             net_weight_kg: entry.net_weight ?? 0,
             quintals: entry.quintals ?? 0
@@ -3893,9 +3900,9 @@ export function App() {
                 <span>Ingreso de materia prima</span>
                 <select value={traceLotId} onChange={(event) => setTraceLotId(event.target.value)}>
                   <option value="">Seleccione</option>
-                  {selectableDryingLots.map((lot) => (
-                    <option key={lot.id} value={lot.id}>
-                      {lot.farmer_name ?? "Sin agricultor"} - {Number(lot.quintals ?? 0).toFixed(2)} QQ - {lot.ticket_number}
+                  {selectableDryingLots.map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {entryLabel(entry)} - {entry.farmer_name ?? "Sin agricultor"} - {Number(entry.quintals ?? 0).toFixed(2)} QQ
                     </option>
                   ))}
                 </select>
