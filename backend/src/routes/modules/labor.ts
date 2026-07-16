@@ -78,6 +78,8 @@ export type LaborRates = {
   estibador_per_arrocillo: number;
   secador_guardiania: number;
   secador_per_tunel: number;
+  precio_gas_bombona: number;
+  precio_gas_cilindro: number;
 };
 
 async function getRates(db: Queryable = pool): Promise<LaborRates> {
@@ -94,7 +96,9 @@ async function getRates(db: Queryable = pool): Promise<LaborRates> {
     estibador_per_saca: Number(row.estibador_per_saca),
     estibador_per_arrocillo: Number(row.estibador_per_arrocillo),
     secador_guardiania: Number(row.secador_guardiania),
-    secador_per_tunel: Number(row.secador_per_tunel)
+    secador_per_tunel: Number(row.secador_per_tunel),
+    precio_gas_bombona: Number(row.precio_gas_bombona ?? 0),
+    precio_gas_cilindro: Number(row.precio_gas_cilindro ?? 0)
   };
 }
 
@@ -166,17 +170,21 @@ laborRouter.put("/rates", requireAdmin, asyncRoute(async (req, res) => {
     estibador_per_saca: z.number().nonnegative(),
     estibador_per_arrocillo: z.number().nonnegative(),
     secador_guardiania: z.number().nonnegative(),
-    secador_per_tunel: z.number().nonnegative()
+    secador_per_tunel: z.number().nonnegative(),
+    precio_gas_bombona: z.number().nonnegative().default(0),
+    precio_gas_cilindro: z.number().nonnegative().default(0)
   }).parse(req.body);
 
   await pool.query(
     `UPDATE labor_rates SET
        pilador_per_qq = $1, pilador_per_saca = $2,
        estibador_per_qq = $3, estibador_per_saca = $4, estibador_per_arrocillo = $5,
-       secador_guardiania = $6, secador_per_tunel = $7, updated_at = now()
+       secador_guardiania = $6, secador_per_tunel = $7,
+       precio_gas_bombona = $8, precio_gas_cilindro = $9, updated_at = now()
      WHERE id = 1`,
     [body.pilador_per_qq, body.pilador_per_saca, body.estibador_per_qq, body.estibador_per_saca,
-     body.estibador_per_arrocillo, body.secador_guardiania, body.secador_per_tunel]
+     body.estibador_per_arrocillo, body.secador_guardiania, body.secador_per_tunel,
+     body.precio_gas_bombona, body.precio_gas_cilindro]
   );
   res.json(await getRates());
 }));
