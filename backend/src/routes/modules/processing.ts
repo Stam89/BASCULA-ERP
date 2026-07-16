@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { z } from "zod";
+import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
+import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
@@ -9,6 +11,72 @@ import { round2 } from "../../utils/rice-formulas.js";
 import { createProductionWorkerPayments } from "./labor.js";
 
 export const processingRouter = Router();
+
+// ── Borradores de pilado ────────────────────────────────────────────────────
+// "Guardar Proceso" deja el pilado a medias guardado en el servidor (por túnel),
+// para poder seguirlo desde cualquier equipo. Al finalizar el lote se borra.
+
+const draftSchema = z.object({
+  report: z.record(z.unknown()).default({}),
+  pilado_entries: z.array(z.object({
+    id: z.string(),
+    presentation: z.string(),
+    quantityQq: z.number().nonnegative()
+  })).default([]),
+  saved_by: z.string().uuid().optional()
+});
+
+// Procesos de pilado guardados (en curso) del accionista activo.
+processingRouter.get("/drafts", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const result = await pool.query(
+    `SELECT d.drying_report_id, d.report, d.pilado_entries, d.saved_at,
+            t.tunnel_number, t.total_quintals, t.rice_type,
+            l.lot_code
+     FROM milling_drafts d
+     JOIN drying_tunnel_reports t ON t.id = d.drying_report_id
+     JOIN lots l ON l.id = t.lot_id
+     WHERE l.accionista_id = $1
+       AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.drying_report_id)
+     ORDER BY d.saved_at DESC`,
+    [accionistaId]
+  );
+  res.json(result.rows);
+}));
+
+processingRouter.get("/drafts/:dryingId", asyncRoute(async (req, res) => {
+  const result = await pool.query(
+    "SELECT drying_report_id, report, pilado_entries, saved_at FROM milling_drafts WHERE drying_report_id = $1",
+    [req.params.dryingId]
+  );
+  res.json(result.rows[0] ?? null);
+}));
+
+processingRouter.put("/drafts/:dryingId", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const body = draftSchema.parse(req.body);
+
+  const drying = await pool.query("SELECT 1 FROM drying_tunnel_reports WHERE id = $1", [req.params.dryingId]);
+  if (!drying.rowCount) throw new ApiError(404, "Secado no encontrado");
+
+  const result = await pool.query(
+    `INSERT INTO milling_drafts (drying_report_id, accionista_id, report, pilado_entries, saved_by)
+     VALUES ($1, $2, $3::jsonb, $4::jsonb, $5)
+     ON CONFLICT (drying_report_id) DO UPDATE SET
+       report = EXCLUDED.report,
+       pilado_entries = EXCLUDED.pilado_entries,
+       saved_by = EXCLUDED.saved_by,
+       saved_at = now()
+     RETURNING drying_report_id, report, pilado_entries, saved_at`,
+    [req.params.dryingId, accionistaId, JSON.stringify(body.report), JSON.stringify(body.pilado_entries), body.saved_by ?? null]
+  );
+  res.json(result.rows[0]);
+}));
+
+processingRouter.delete("/drafts/:dryingId", asyncRoute(async (req, res) => {
+  await pool.query("DELETE FROM milling_drafts WHERE drying_report_id = $1", [req.params.dryingId]);
+  res.status(204).end();
+}));
 
 const QQ_TO_KG = 45.359237;
 

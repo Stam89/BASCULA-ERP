@@ -501,6 +501,18 @@ type MillingPiladoEntry = {
   quantityQq: number;
 };
 
+/** Pilado guardado a medias en el servidor (proceso en curso), por túnel. */
+type MillingDraft = {
+  drying_report_id: string;
+  report: Record<string, unknown>;
+  pilado_entries: MillingPiladoEntry[];
+  saved_at: string;
+  tunnel_number?: number;
+  total_quintals?: string | number;
+  rice_type?: string;
+  lot_code?: string;
+};
+
 type SackInventory = {
   id: string;
   tipo: string;
@@ -782,7 +794,9 @@ export function App() {
   // cilindros por unidad.
   const [gasForm, setGasForm] = useState({ bombona_inicio: "", bombona_fin: "", cilindro_cantidad: "", diesel_inicio: "", diesel_fin: "" });
   const [editingDryingReport, setEditingDryingReport] = useState<DryingTunnelReport | null>(null);
-  const [productionDryingId, setProductionDryingId] = useState(() => loadMillingDraft().productionDryingId);
+  const [productionDryingId, setProductionDryingId] = useState("");
+  // Procesos de pilado guardados en el servidor (en curso).
+  const [millingDrafts, setMillingDrafts] = useState<MillingDraft[]>([]);
   const [productionPackages, setProductionPackages] = useState<ProductionPackageState>(defaultProductionPackages);
   const [orderPackage, setOrderPackage] = useState<OrderPackageState>(defaultOrderPackage);
   const [weighingRiceType, setWeighingRiceType] = useState<"0.11" | "CORRIENTE">("0.11");
@@ -802,11 +816,11 @@ export function App() {
   const [dryerProducer, setDryerProducer] = useState("");
   const [dryerWeightQq, setDryerWeightQq] = useState("");
   const [dryerEntries, setDryerEntries] = useState<DryerControlEntry[]>([]);
-  const [millingReport, setMillingReport] = useState<MillingReportState>(() => loadMillingDraft().report);
-  const [millingPiladoEntries, setMillingPiladoEntries] = useState<MillingPiladoEntry[]>(() => loadMillingDraft().piladoEntries);
+  const [millingReport, setMillingReport] = useState<MillingReportState>(defaultMillingReport);
+  const [millingPiladoEntries, setMillingPiladoEntries] = useState<MillingPiladoEntry[]>([]);
   const [millingPiladoPresentation, setMillingPiladoPresentation] = useState(piladoPresentations[4]);
   const [millingPiladoQq, setMillingPiladoQq] = useState("");
-  const [millingDraftSavedAt, setMillingDraftSavedAt] = useState<string | null>(() => loadMillingDraft().savedAt);
+  const [millingDraftSavedAt, setMillingDraftSavedAt] = useState<string | null>(null);
   const [millingYields, setMillingYields] = useState<MillingYieldResult | null>(null);
 
   const [toasts, setToasts] = useState<Array<{ id: number; text: string; type?: "success" | "error" | "warn" }>>([]);
@@ -2479,7 +2493,10 @@ export function App() {
 
   useEffect(() => {
     if (activeTab === "Fomentos") refreshFomentos().catch(() => undefined);
-    if (activeTab === "Produccion") refreshSacks().catch(() => undefined);
+    if (activeTab === "Produccion") {
+      refreshSacks().catch(() => undefined);
+      loadMillingDrafts().catch(() => undefined);
+    }
     if (activeTab === "Inventario") refreshSacks().catch(() => undefined);
     if (activeTab === "Ventas") refreshCustomersAndSales().catch(() => undefined);
     if (activeTab === "Por Cobrar") refreshReceivables().catch(() => undefined);
@@ -3146,6 +3163,8 @@ export function App() {
   function updateProductionDryingId(value: string) {
     setProductionDryingId(value);
     setMillingYields(null);
+    // Trae del servidor el proceso guardado de ese túnel, si existe.
+    loadDraftFor(value).catch(() => undefined);
   }
 
   function addMillingPiladoEntry() {
@@ -3176,20 +3195,45 @@ export function App() {
     setMillingYields(null);
   }
 
-  function saveMillingProcess() {
+  // Guarda el pilado a medias EN EL SERVIDOR (por túnel), para poder
+  // retomarlo desde cualquier equipo.
+  async function saveMillingProcess() {
     if (!selectedProductionDrying) {
       setMessage("Seleccione la secadora antes de guardar el proceso");
       return;
     }
-
-    saveMillingDraft({
+    const saved = await apiPut<{ saved_at: string }>(`/processing-batches/drafts/${productionDryingId}`, {
       report: millingReport,
-      piladoEntries: safeMillingPiladoEntries,
-      productionDryingId
+      pilado_entries: safeMillingPiladoEntries
     });
-    const savedAt = new Date().toISOString();
-    setMillingDraftSavedAt(savedAt);
-    setMessage("Proceso guardado temporalmente en este equipo");
+    setMillingDraftSavedAt(saved.saved_at);
+    await loadMillingDrafts();
+    addToast("Proceso guardado en el servidor", "success");
+  }
+
+  async function loadMillingDrafts() {
+    const rows = await apiGet<MillingDraft[]>("/processing-batches/drafts").catch(() => [] as MillingDraft[]);
+    setMillingDrafts(rows);
+  }
+
+  // Al elegir una secadora, trae su proceso guardado (si lo hay).
+  async function loadDraftFor(dryingId: string) {
+    if (!dryingId) {
+      setMillingReport(defaultMillingReport);
+      setMillingPiladoEntries([]);
+      setMillingDraftSavedAt(null);
+      return;
+    }
+    const d = await apiGet<MillingDraft | null>(`/processing-batches/drafts/${dryingId}`).catch(() => null);
+    if (d) {
+      setMillingReport({ ...defaultMillingReport, ...(d.report as Partial<MillingReportState>) });
+      setMillingPiladoEntries(Array.isArray(d.pilado_entries) ? d.pilado_entries : []);
+      setMillingDraftSavedAt(d.saved_at);
+    } else {
+      setMillingReport(defaultMillingReport);
+      setMillingPiladoEntries([]);
+      setMillingDraftSavedAt(null);
+    }
   }
 
   async function finalizeMillingLot() {
@@ -3267,9 +3311,11 @@ export function App() {
     setProductionResult(production);
     setMillingPiladoEntries([]);
     setMillingReport(defaultMillingReport);
+    // El proceso ya se cerró: se borra el borrador del servidor.
+    await apiFetch(`/processing-batches/drafts/${drying.id}`, { method: "DELETE" }).catch(() => undefined);
     setProductionDryingId("");
-    clearMillingDraft();
     setMillingDraftSavedAt(null);
+    await loadMillingDrafts();
     setMessage("Lote finalizado: produccion agregada al stock");
     await refresh();
   }
@@ -4300,6 +4346,32 @@ export function App() {
 
         {activeTab === "Produccion" && (
           <section className="productionModuleGrid">
+            {millingDrafts.length > 0 && (
+              <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+                <h2>📋 Procesos guardados (en curso)</h2>
+                <p className="muted">Pilados guardados sin finalizar. Se guardan en el servidor, así que puedes seguirlos desde cualquier equipo.</p>
+                <table className="cajaTable" style={{ marginTop: 8 }}>
+                  <thead><tr><th>Lote</th><th>Túnel</th><th>Tipo</th><th className="num">QQ</th><th>Guardado</th><th /></tr></thead>
+                  <tbody>
+                    {millingDrafts.map((d) => (
+                      <tr key={d.drying_report_id}>
+                        <td style={{ fontWeight: 600 }}>{d.lot_code ?? "—"}</td>
+                        <td>Túnel {d.tunnel_number}</td>
+                        <td>{d.rice_type === "CORRIENTE" ? "Corriente" : "0.11"}</td>
+                        <td className="num">{Number(d.total_quintals ?? 0).toFixed(2)}</td>
+                        <td className="muted">{new Date(d.saved_at).toLocaleString("es-EC")}</td>
+                        <td style={{ textAlign: "right" }}>
+                          <button type="button" className="btnSecondary"
+                            onClick={() => updateProductionDryingId(d.drying_report_id)}>
+                            Retomar
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
             <section className="formPanel productionQuickCard">
               <h2>Secadora en produccion</h2>
               <label>
@@ -4394,7 +4466,7 @@ export function App() {
               </div>
 
               <div className="buttonRow">
-                <button type="button" onClick={saveMillingProcess} disabled={!selectedProductionDrying}>
+                <button type="button" onClick={() => saveMillingProcess().catch((e) => addToast(e.message, "error"))} disabled={!selectedProductionDrying}>
                   Guardar Proceso
                 </button>
                 <button className="primary" type="button" onClick={() => finalizeMillingLot().catch((error) => setMessage(error.message))} disabled={!selectedProductionDrying}>
@@ -4402,9 +4474,9 @@ export function App() {
                 </button>
               </div>
               <p className="muted">
-                Guardar Proceso conserva un borrador temporal en este equipo. Finalizar Lote agrega la produccion al stock.
+                Guardar Proceso deja el pilado a medias guardado en el servidor: aparece arriba en «Procesos guardados» y se puede seguir desde cualquier equipo. Finalizar Lote agrega la produccion al stock.
               </p>
-              {millingDraftSavedAt && <p className="muted">Guardado temporal: {new Date(millingDraftSavedAt).toLocaleString()}</p>}
+              {millingDraftSavedAt && <p className="muted">💾 Guardado en el servidor: {new Date(millingDraftSavedAt).toLocaleString("es-EC")}</p>}
 
               {millingYields && (
                 <section className="yieldResults">
@@ -8363,59 +8435,6 @@ function sacksNeededForOrder(item: OrderPackageState) {
   const sackWeight = Number(item.sackWeightLb || 0);
   if (totalPounds <= 0 || sackWeight <= 0) return 0;
   return Math.ceil(totalPounds / sackWeight);
-}
-
-function loadMillingDraft(): {
-  report: MillingReportState;
-  piladoEntries: MillingPiladoEntry[];
-  productionDryingId: string;
-  savedAt: string | null;
-} {
-  if (typeof window === "undefined") {
-    return { report: defaultMillingReport, piladoEntries: [], productionDryingId: "", savedAt: null };
-  }
-
-  try {
-    const stored = window.localStorage.getItem(millingDraftStorageKey);
-    if (!stored) return { report: defaultMillingReport, piladoEntries: [], productionDryingId: "", savedAt: null };
-    const parsed = JSON.parse(stored) as {
-      report?: Partial<MillingReportState>;
-      piladoEntries?: MillingPiladoEntry[];
-      productionDryingId?: string;
-      savedAt?: string;
-    };
-    return {
-      report: {
-        ...defaultMillingReport,
-        ...parsed.report
-      },
-      piladoEntries: Array.isArray(parsed.piladoEntries) ? parsed.piladoEntries : [],
-      productionDryingId: parsed.productionDryingId ?? "",
-      savedAt: parsed.savedAt ?? null
-    };
-  } catch {
-    return { report: defaultMillingReport, piladoEntries: [], productionDryingId: "", savedAt: null };
-  }
-}
-
-function saveMillingDraft(payload: {
-  report: MillingReportState;
-  piladoEntries: MillingPiladoEntry[];
-  productionDryingId: string;
-}) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(
-    millingDraftStorageKey,
-    JSON.stringify({
-      ...payload,
-      savedAt: new Date().toISOString()
-    })
-  );
-}
-
-function clearMillingDraft() {
-  if (typeof window === "undefined") return;
-  window.localStorage.removeItem(millingDraftStorageKey);
 }
 
 function calculateMillingYields(report: MillingReportState, pilado: number, totalCascara: number): MillingYieldResult | null {
