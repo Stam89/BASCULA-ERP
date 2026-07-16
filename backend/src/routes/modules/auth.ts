@@ -67,12 +67,18 @@ authRouter.post("/users", requireAuth, requireAdmin, asyncRoute(async (req, res)
     username: z.string().min(2),
     password: z.string().min(4),
     role: z.enum(["ADMINISTRADOR", "OPERADOR"]),
-    allowed_modules: moduleSchema
+    allowed_modules: moduleSchema,
+    // A qué accionistas puede acceder. Un operador sin accionista no puede
+    // trabajar, así que se pide desde la creación.
+    accionista_ids: z.array(z.string().uuid()).default([])
   }).parse(req.body);
 
   const duplicate = await pool.query("SELECT 1 FROM users WHERE username = $1", [body.username]);
   if (duplicate.rowCount) {
     throw new ApiError(409, `El usuario "${body.username}" ya existe.`);
+  }
+  if (body.role === "OPERADOR" && body.accionista_ids.length === 0) {
+    throw new ApiError(400, "Asigna al menos un accionista al operador: sin eso no podrá trabajar.");
   }
 
   const role = await pool.query(
@@ -93,7 +99,16 @@ authRouter.post("/users", requireAuth, requireAdmin, asyncRoute(async (req, res)
     [role.rows[0].id, body.name, body.username, passwordHash, allowedModules]
   );
 
-  res.status(201).json({ ...user.rows[0], role_name: body.role });
+  // Los administradores ven todos los accionistas; al operador se le asignan
+  // los elegidos.
+  for (const accionistaId of body.accionista_ids) {
+    await pool.query(
+      "INSERT INTO user_accionistas (user_id, accionista_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+      [user.rows[0].id, accionistaId]
+    );
+  }
+
+  res.status(201).json({ ...user.rows[0], role_name: body.role, accionista_ids: body.accionista_ids });
 }));
 
 authRouter.put("/users/:id", requireAuth, requireAdmin, asyncRoute(async (req, res) => {
