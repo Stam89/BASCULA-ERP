@@ -4004,7 +4004,7 @@ export function App() {
                 <legend>⛽ Combustible</legend>
 
                 <MedidorRow
-                  label="Bombona" unidad="gas"
+                  label="Bombona" unidad="%"
                   nameInicio="gas_bombona_inicio" nameFin="gas_bombona_fin"
                   inicio={gasForm.bombona_inicio} fin={gasForm.bombona_fin}
                   onInicio={(v) => setGasForm({ ...gasForm, bombona_inicio: v })}
@@ -7204,9 +7204,9 @@ export function App() {
                   </div>
                   <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>⛽ Precio del combustible <span className="muted" style={{ fontWeight: 400 }}>(se usa en Secadoras)</span></h2>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                    <label><span>$ bombona (por medidor)</span><input type="number" step="0.01" min="0" value={laborRatesForm.precio_gas_bombona} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_bombona: Number(e.target.value) })} /></label>
+                    <label><span>$ bombona por cada 1%</span><input type="number" step="0.01" min="0" value={laborRatesForm.precio_gas_bombona} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_bombona: Number(e.target.value) })} /></label>
                     <label><span>$ por cilindro</span><input type="number" step="0.01" min="0" value={laborRatesForm.precio_gas_cilindro} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_cilindro: Number(e.target.value) })} /></label>
-                    <label><span>$ diesel (por medidor)</span><input type="number" step="0.01" min="0" value={laborRatesForm.precio_diesel} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_diesel: Number(e.target.value) })} /></label>
+                    <label><span>$ diesel por unidad de medidor</span><input type="number" step="0.01" min="0" value={laborRatesForm.precio_diesel} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_diesel: Number(e.target.value) })} /></label>
                   </div>
                   <button className="primary" disabled={!isAdmin}>Guardar tarifas</button>
                   {!isAdmin && <p className="muted">Solo un administrador puede cambiar las tarifas.</p>}
