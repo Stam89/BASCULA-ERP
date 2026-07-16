@@ -2173,3 +2173,29 @@ input[type="datetime-local"] { height: 36px; }
   .medidorLabel { grid-column: 1 / -1; padding-bottom: 0; }
   .medidorOp { display: none; }
 }
+
+/* Costo de secar cada quintal (gas / diesel / total) */
+.costoQq {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 10px;
+}
+.costoQq > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+}
+.costoQq small { font-size: 10.5px; color: #94a3b8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; }
+.costoQq strong { font-size: 17px; font-variant-numeric: tabular-nums; color: #0f172a; }
+.costoQq span { font-size: 10.5px; }
+.costoQq .costoQqTotal, .costoQqTotal { border-color: #16a34a; background: #f0fdf4; }
+.costoQqTotal strong { color: #047857; }
+
+@media (max-width: 700px) {
+  .costoQq { grid-template-columns: 1fr; }
+}

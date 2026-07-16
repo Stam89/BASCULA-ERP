@@ -1110,12 +1110,19 @@ export function App() {
   );
   // Combustible del secado, calculado en vivo con los precios fijos de
   // Configuración. El backend lo recalcula al guardar (esto es solo la vista).
-  const gasBombonaTotal = Math.max(0, Number(gasForm.bombona_fin || 0) - Number(gasForm.bombona_inicio || 0));
+  // Los medidores marcan lo que queda: inicio − fin es lo consumido.
+  const gasBombonaTotal = Math.max(0, Number(gasForm.bombona_inicio || 0) - Number(gasForm.bombona_fin || 0));
   const gasBombonaCosto = round2(gasBombonaTotal * Number(laborRatesForm.precio_gas_bombona || 0));
   const gasCilindroCosto = round2(Number(gasForm.cilindro_cantidad || 0) * Number(laborRatesForm.precio_gas_cilindro || 0));
-  const dieselTotal = Math.max(0, Number(gasForm.diesel_fin || 0) - Number(gasForm.diesel_inicio || 0));
+  const dieselTotal = Math.max(0, Number(gasForm.diesel_inicio || 0) - Number(gasForm.diesel_fin || 0));
   const dieselCosto = round2(dieselTotal * Number(laborRatesForm.precio_diesel || 0));
-  const combustibleTotal = round2(gasBombonaCosto + gasCilindroCosto + dieselCosto);
+  const gasCostoTotal = round2(gasBombonaCosto + gasCilindroCosto);
+  const combustibleTotal = round2(gasCostoTotal + dieselCosto);
+  // Costo por quintal: lo que cuesta secar cada QQ de este lote.
+  const qqSecado = selectedDryingTotalQq || Number(editingDryingReport?.total_quintals ?? 0);
+  const gasPorQq = qqSecado > 0 ? round2(gasCostoTotal / qqSecado) : 0;
+  const dieselPorQq = qqSecado > 0 ? round2(dieselCosto / qqSecado) : 0;
+  const combustiblePorQq = qqSecado > 0 ? round2(combustibleTotal / qqSecado) : 0;
   const productionDryingReports = useMemo(
     () => dryingReports.filter((report) => report.status === "COMPLETED" && !report.is_processed),
     [dryingReports]
@@ -4036,6 +4043,25 @@ export function App() {
                 <div className="medidorTotal">
                   <span>TOTAL COMBUSTIBLE</span>
                   <strong>{money(combustibleTotal)}</strong>
+                </div>
+
+                {/* Costo de secar cada quintal de este lote */}
+                <div className="costoQq">
+                  <div>
+                    <small>Gas por QQ</small>
+                    <strong>{money(gasPorQq)}</strong>
+                    <span className="muted">{money(gasCostoTotal)} ÷ {qqSecado.toFixed(2)} QQ</span>
+                  </div>
+                  <div>
+                    <small>Diesel por QQ</small>
+                    <strong>{money(dieselPorQq)}</strong>
+                    <span className="muted">{money(dieselCosto)} ÷ {qqSecado.toFixed(2)} QQ</span>
+                  </div>
+                  <div className="costoQqTotal">
+                    <small>Combustible por QQ</small>
+                    <strong>{money(combustiblePorQq)}</strong>
+                    <span className="muted">{money(combustibleTotal)} ÷ {qqSecado.toFixed(2)} QQ</span>
+                  </div>
                 </div>
                 <p className="muted medidorNota">Los precios se configuran en Configuración → Tarifas. Deja en cero lo que no uses.</p>
               </fieldset>
@@ -7755,7 +7781,8 @@ function MedidorRow({
   onInicio: (v: string) => void; onFin: (v: string) => void;
   precio: number; unidad: string;
 }) {
-  const total = Math.max(0, Number(fin || 0) - Number(inicio || 0));
+  // El medidor marca lo que queda: baja al consumir (50 → 39.99 = 10.01 usado).
+  const total = Math.max(0, Number(inicio || 0) - Number(fin || 0));
   const costo = Math.round(total * Number(precio || 0) * 100) / 100;
   return (
     <div className="medidorRow">

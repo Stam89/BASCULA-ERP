@@ -58,8 +58,11 @@ const dryingUpdateSchema = z.object({
 });
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
-/** Lo consumido en un medidor: la diferencia fin - inicio (nunca negativa). */
-const consumoMedidor = (inicio: number, fin: number) => Math.max(0, Number(fin) - Number(inicio));
+/**
+ * Lo consumido en un medidor: INICIO − FIN. El medidor marca el nivel que
+ * queda, así que baja a medida que se consume (ej: 50 → 39.99 = 10.01 usado).
+ */
+const consumoMedidor = (inicio: number, fin: number) => Math.max(0, Number(inicio) - Number(fin));
 
 /**
  * Calcula el combustible del secado (gas y diesel) con los precios fijos de
