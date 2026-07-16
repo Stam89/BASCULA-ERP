@@ -52,6 +52,20 @@ type MateriaPrimaEntry = {
   qualification: string | number | null;
 };
 
+/** Ingreso de materia prima pendiente de pagarle al agricultor. */
+type PendingEntry = {
+  id: string;
+  ticket_number: string;
+  numero_bascula: string | null;
+  farmer_id: string;
+  farmer_name: string | null;
+  rice_type: string | null;
+  quintals: string | number | null;
+  net_weight: string | number | null;
+  /** Lote al que ya entró (si está secándose); null si aún es materia prima suelta. */
+  lot_code: string | null;
+};
+
 /** Etiqueta corta de un ingreso: el número de la báscula si se conoce. */
 function entryLabel(entry: { numero_bascula?: string | null; ticket_number: string }): string {
   return entry.numero_bascula ? `Ticket #${entry.numero_bascula}` : entry.ticket_number;
@@ -805,6 +819,8 @@ export function App() {
   };
   const [liqFarmerId, setLiqFarmerId] = useState("");
   const [liqLines, setLiqLines] = useState<LiqLine[]>([{ lot_id: "", quintals: "", price: "" }]);
+  // Ingresos de materia prima que aún no se le han pagado al agricultor.
+  const [pendingEntries, setPendingEntries] = useState<PendingEntry[]>([]);
   const [discountsOpen, setDiscountsOpen] = useState(false);
   const [liqDiscounts, setLiqDiscounts] = useState({ fomento: "", bascula: "", flete: "", cosechadora: "" });
   const [liqResult, setLiqResult] = useState<LiqResultItem[] | null>(null);
@@ -1158,14 +1174,11 @@ export function App() {
     () => (Array.isArray(selectedDryerEntries) ? selectedDryerEntries : []).reduce((sum, entry) => sum + entry.weightQq, 0),
     [selectedDryerEntries]
   );
-  const availableLots = useMemo(
-    () => lots.filter((l) => l.status !== "LIQUIDATED"),
-    [lots]
-  );
-
+  // Se liquida el ingreso de materia prima (lo que el agricultor entregó), no
+  // el lote: el lote se forma en la secadora y puede juntar varios agricultores.
   const farmerLots = useMemo(
-    () => liqFarmerId ? availableLots.filter((l) => l.farmer_id === liqFarmerId) : [],
-    [availableLots, liqFarmerId]
+    () => liqFarmerId ? pendingEntries.filter((e) => e.farmer_id === liqFarmerId) : [],
+    [pendingEntries, liqFarmerId]
   );
 
   const liqGrossTotal = useMemo(() =>
@@ -1188,8 +1201,8 @@ export function App() {
   );
 
   const farmersWithLots = useMemo(
-    () => farmers.filter((f) => availableLots.some((l) => l.farmer_id === f.id)),
-    [farmers, availableLots]
+    () => farmers.filter((f) => pendingEntries.some((e) => e.farmer_id === f.id)),
+    [farmers, pendingEntries]
   );
 
   const farmersWithAdvances = useMemo(
@@ -1202,12 +1215,12 @@ export function App() {
       .map((f) => ({
         id: f.id,
         full_name: f.full_name,
-        pendingQq: availableLots
-          .filter((l) => l.farmer_id === f.id)
-          .reduce((s, l) => s + Number(l.quintals ?? 0), 0),
+        pendingQq: pendingEntries
+          .filter((e) => e.farmer_id === f.id)
+          .reduce((s, e) => s + Number(e.quintals ?? 0), 0),
       }))
       .filter((f) => f.pendingQq > 0),
-    [farmers, availableLots]
+    [farmers, pendingEntries]
   );
 
   // Agricultores con saldo pendiente en liquidaciones (para anticipo en tab Liquidaciones)
@@ -1344,7 +1357,8 @@ export function App() {
         supplyRows,
         dryingLotRows,
         dryingReportRows,
-        liqRows
+        liqRows,
+        pendingEntryRows
       ] = await Promise.all([
         apiGet<Dashboard>("/dashboard"),
         apiGet<Farmer[]>("/farmers"),
@@ -1355,7 +1369,8 @@ export function App() {
         apiGet<Insumo[]>("/inventory/insumos"),
         apiGet<MateriaPrimaEntry[]>("/process-flow/drying/available-lots"),
         apiGet<DryingTunnelReport[]>("/process-flow/drying/reports"),
-        apiGet<LiqRecord[]>("/liquidations")
+        apiGet<LiqRecord[]>("/liquidations"),
+        apiGet<PendingEntry[]>("/liquidations/pending-entries")
       ]);
 
       setDashboard(dash);
@@ -1366,6 +1381,7 @@ export function App() {
       setAvailableDryingLots(dryingLotRows);
       setDryingReports(dryingReportRows);
       setLiquidacionesList(liqRows);
+      setPendingEntries(pendingEntryRows);
       setStock(stockRows);
       setInsumos(supplyRows);
     } finally {
@@ -2822,6 +2838,7 @@ export function App() {
     const form = new FormData(event.currentTarget);
     await apiPost("/cash/registers/open", {
       name: form.get("name"),
+      tipo: form.get("tipo") || "EFECTIVO",
       opening_balance: Number(form.get("opening_balance"))
     });
     addToast("Caja abierta", "success");
@@ -3488,12 +3505,13 @@ export function App() {
     }> = [];
     for (let i = 0; i < validLines.length; i++) {
       const line = validLines[i];
-      const lot = lots.find((l) => l.id === line.lot_id);
-      if (!lot) continue;
-      const qq = Number(line.quintals) || Number(lot.quintals ?? 0);
+      // line.lot_id guarda el id del INGRESO de materia prima elegido.
+      const entry = farmerLots.find((l) => l.id === line.lot_id);
+      if (!entry) continue;
+      const qq = Number(line.quintals) || Number(entry.quintals ?? 0);
       const result = await apiPost<LiqApiResult>("/liquidations", {
         farmer_id: liqFarmerId,
-        lot_id: line.lot_id,
+        weighing_ticket_id: line.lot_id,
         quintals: qq,
         price_per_quintal: Number(line.price),
         other_discounts: i === 0 ? liqDiscountsTotal : 0,
@@ -3506,8 +3524,8 @@ export function App() {
         batch_id: batchId
       });
       resultItems.push({
-        lot_code: lot.lot_code,
-        rice_type: lot.rice_type ?? null,
+        lot_code: entryLabel(entry),
+        rice_type: entry.rice_type ?? null,
         quintals: Number(result.quintals),
         price_per_quintal: Number(result.price_per_quintal),
         gross_amount: Number(result.gross_amount),
@@ -4700,6 +4718,12 @@ export function App() {
                 <form className="formPanel" onSubmit={(event) => submitCash(event).catch((error) => addToast(error.message, "error"))} style={{ padding: 24 }}>
                   <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 700 }}>Abrir caja nueva</h3>
                   <Input name="name" label="Nombre de la caja" defaultValue="Caja Principal" />
+                  <Select
+                    name="tipo"
+                    label="Tipo"
+                    rows={[["EFECTIVO", "💵 Efectivo"], ["BANCO", "🏦 Banco"]]}
+                    defaultValue="EFECTIVO"
+                  />
                   <Input name="opening_balance" label="Saldo inicial $" type="number" defaultValue="0" />
                   <button className="primary" style={{ width: "100%", padding: "10px 0", fontSize: 14, fontWeight: 700 }}>💰 Abrir caja</button>
                 </form>
@@ -5451,29 +5475,28 @@ export function App() {
                   </label>
 
                   <div className="liqLinesHeader">
-                    <span>Lote</span><span>QQ</span><span>Precio / QQ</span>
+                    <span>Ingreso de materia prima</span><span>QQ</span><span>Precio / QQ</span>
                   </div>
 
                   {liqLines.map((line, i) => {
-                    const lot = lots.find((l) => l.id === line.lot_id);
                     const takenIds = new Set(liqLines.filter((_, j) => j !== i).map((l) => l.lot_id).filter(Boolean));
                     return (
                       <div key={i} className="liqLine">
                         <select value={line.lot_id} onChange={(e) => {
-                          const sel = lots.find((l) => l.id === e.target.value);
+                          const sel = farmerLots.find((l) => l.id === e.target.value);
                           const updated = [...liqLines];
                           updated[i] = { ...updated[i], lot_id: e.target.value, quintals: sel ? String(Number(sel.quintals ?? 0).toFixed(2)) : "" };
                           setLiqLines(updated);
                         }} required>
-                          <option value="">— seleccionar lote —</option>
+                          <option value="">— seleccionar ingreso —</option>
                           {farmerLots.filter((l) => !takenIds.has(l.id)).map((l) => (
                             <option key={l.id} value={l.id}>
-                              {l.lot_code} · {l.rice_type ?? "—"} · {Number(l.quintals ?? 0).toFixed(2)} QQ
+                              {entryLabel(l)} · {l.rice_type ?? "—"} · {Number(l.quintals ?? 0).toFixed(2)} QQ{l.lot_code ? ` · ${l.lot_code}` : ""}
                             </option>
                           ))}
                         </select>
                         <input type="number" step="0.01" min="0"
-                          placeholder={lot ? String(Number(lot.quintals ?? 0).toFixed(2)) : "QQ"}
+                          placeholder={farmerLots.find((l) => l.id === line.lot_id) ? String(Number(farmerLots.find((l) => l.id === line.lot_id)!.quintals ?? 0).toFixed(2)) : "QQ"}
                           value={line.quintals}
                           onChange={(e) => { const u = [...liqLines]; u[i] = { ...u[i], quintals: e.target.value }; setLiqLines(u); }} />
                         <input type="number" step="0.01" min="0" placeholder="0.00"
@@ -5562,14 +5585,14 @@ export function App() {
 
 
             <DataList
-              title="Lotes disponibles"
-              headers={["Lote", "Tipo cáscara", "Agricultor", "Estado", "QQ"]}
-              rows={availableLots.map((lot) => [
-                lot.lot_code,
-                lot.rice_type ?? "—",
-                lot.farmer_name ?? "—",
-                lot.status,
-                `${Number(lot.quintals ?? 0).toFixed(2)} QQ`
+              title="Materia prima por liquidar"
+              headers={["Ingreso", "Tipo cáscara", "Agricultor", "Lote", "QQ"]}
+              rows={pendingEntries.map((e) => [
+                entryLabel(e),
+                e.rice_type ?? "—",
+                e.farmer_name ?? "—",
+                e.lot_code ?? "sin lote aún",
+                `${Number(e.quintals ?? 0).toFixed(2)} QQ`
               ])}
             />
 
