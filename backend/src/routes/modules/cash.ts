@@ -29,16 +29,18 @@ cashRouter.post("/registers/open", asyncRoute(async (req, res) => {
   const body = z.object({
     branch_id: z.string().uuid().optional(),
     name: z.string().default("Caja Principal"),
+    // Una caja maneja efectivo o es una cuenta de banco.
+    tipo: z.enum(["EFECTIVO", "BANCO"]).default("EFECTIVO"),
     opening_balance: z.number().nonnegative().default(0),
     opened_by: z.string().uuid().optional()
   }).parse(req.body);
 
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
-    `INSERT INTO cash_registers (branch_id, name, opening_balance, opened_by, accionista_id)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO cash_registers (branch_id, name, tipo, opening_balance, opened_by, accionista_id)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
-    [body.branch_id, body.name, body.opening_balance, body.opened_by, accionistaId]
+    [body.branch_id, body.name, body.tipo, body.opening_balance, body.opened_by, accionistaId]
   );
   res.status(201).json(result.rows[0]);
 }));

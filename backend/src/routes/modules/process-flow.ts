@@ -128,7 +128,9 @@ processFlowRouter.get("/drying/available-lots", asyncRoute(async (req, res) => {
   res.json(result.rows);
 }));
 
-processFlowRouter.get("/drying/reports", asyncRoute(async (_req, res) => {
+// Secados del accionista activo: cada uno ve solo sus propios túneles.
+processFlowRouter.get("/drying/reports", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
     `SELECT d.*,
             EXISTS (
@@ -148,10 +150,13 @@ processFlowRouter.get("/drying/reports", asyncRoute(async (_req, res) => {
               '[]'::jsonb
             ) AS lots
      FROM drying_tunnel_reports d
+     JOIN lots l ON l.id = d.lot_id
      LEFT JOIN drying_tunnel_report_lots dl ON dl.drying_report_id = d.id
+     WHERE l.accionista_id = $1
      GROUP BY d.id
      ORDER BY d.created_at DESC
-     LIMIT 100`
+     LIMIT 100`,
+    [accionistaId]
   );
   res.json(result.rows);
 }));
