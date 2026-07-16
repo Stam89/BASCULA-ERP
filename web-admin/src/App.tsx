@@ -836,7 +836,7 @@ export function App() {
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
   const [settingsForm, setSettingsForm] = useState<AppSettings>(defaultAppSettings);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
-  const [newUserForm, setNewUserForm] = useState({ name: "", username: "", password: "", role: "OPERADOR" as "ADMINISTRADOR" | "OPERADOR", modules: [] as string[] });
+  const [newUserForm, setNewUserForm] = useState({ name: "", username: "", password: "", role: "OPERADOR" as "ADMINISTRADOR" | "OPERADOR", modules: [] as string[], accionistas: [] as string[] });
   const [permsEditor, setPermsEditor] = useState<{ user: AdminUser; modules: string[] } | null>(null);
   const [adminAccionistas, setAdminAccionistas] = useState<AdminAccionista[]>([]);
   const [newAccionistaForm, setNewAccionistaForm] = useState({ name: "", code: "" });
@@ -2037,14 +2037,19 @@ export function App() {
       addToast("Asigna al menos un módulo al operador", "error");
       return;
     }
+    if (newUserForm.role === "OPERADOR" && newUserForm.accionistas.length === 0) {
+      addToast("Asigna al menos un accionista al operador: sin eso no podrá trabajar", "error");
+      return;
+    }
     await apiPost("/auth/users", {
       name: newUserForm.name.trim(),
       username: newUserForm.username.trim().toLowerCase(),
       password: newUserForm.password,
       role: newUserForm.role,
-      allowed_modules: newUserForm.role === "OPERADOR" ? newUserForm.modules : []
+      allowed_modules: newUserForm.role === "OPERADOR" ? newUserForm.modules : [],
+      accionista_ids: newUserForm.role === "OPERADOR" ? newUserForm.accionistas : []
     });
-    setNewUserForm({ name: "", username: "", password: "", role: "OPERADOR", modules: [] });
+    setNewUserForm({ name: "", username: "", password: "", role: "OPERADOR", modules: [], accionistas: [] });
     addToast("Usuario creado", "success");
     await refreshConfig();
   }
@@ -6777,6 +6782,36 @@ export function App() {
                         El operador verá solo estas pestañas (más el Dashboard) y solo podrá registrar cambios en ellas.
                       </p>
                     </div>
+                  )}
+                  {newUserForm.role === "OPERADOR" && (
+                    <div style={{ marginTop: 10 }}>
+                      <span className="permLabel">Accionistas que puede manejar *</span>
+                      <div className="permGrid">
+                        {adminAccionistas.filter((a) => a.is_active).map((a) => (
+                          <label key={a.id} className={newUserForm.accionistas.includes(a.id) ? "permChip on" : "permChip"}>
+                            <input
+                              type="checkbox"
+                              checked={newUserForm.accionistas.includes(a.id)}
+                              onChange={() =>
+                                setNewUserForm({
+                                  ...newUserForm,
+                                  accionistas: newUserForm.accionistas.includes(a.id)
+                                    ? newUserForm.accionistas.filter((x) => x !== a.id)
+                                    : [...newUserForm.accionistas, a.id]
+                                })
+                              }
+                            />
+                            {a.name}
+                          </label>
+                        ))}
+                      </div>
+                      <p className="muted" style={{ marginTop: 6 }}>
+                        Solo verá y registrará las operaciones de estos accionistas. Si marcas varios, podrá cambiar entre ellos con el selector.
+                      </p>
+                    </div>
+                  )}
+                  {newUserForm.role === "ADMINISTRADOR" && (
+                    <p className="muted" style={{ marginTop: 6 }}>Los administradores ven y manejan todos los accionistas.</p>
                   )}
                   <button className="primary" disabled={!isAdmin}>Crear usuario</button>
                 </form>
