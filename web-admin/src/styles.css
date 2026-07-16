@@ -2092,3 +2092,84 @@ input[type="datetime-local"] { height: 36px; }
   .yieldResults { grid-template-columns: 1fr; }
   .content { padding: 14px 16px; }
 }
+
+/* ── Combustible del secado: filas de medidor (inicio − fin = total × precio) ── */
+.medidorPanel {
+  border: 1px solid var(--c-border, #e5e7eb);
+  border-radius: 12px;
+  padding: 14px 16px 12px;
+  margin: 8px 0;
+  background: #fcfdfe;
+}
+.medidorPanel legend {
+  font-weight: 700;
+  font-size: 13px;
+  padding: 0 8px;
+  color: #0f172a;
+}
+.medidorRow {
+  display: grid;
+  grid-template-columns: 92px 1fr 14px 1fr 14px 1fr 14px 1fr 14px 1fr;
+  gap: 8px;
+  align-items: end;
+  padding: 8px 0;
+  border-bottom: 1px dashed #eef2f7;
+}
+.medidorRow:last-of-type { border-bottom: none; }
+.medidorLabel {
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding-bottom: 8px;
+}
+.medidorRow label { margin: 0; }
+.medidorRow label span {
+  font-size: 10.5px;
+  color: #94a3b8;
+  font-weight: 600;
+}
+.medidorRow input {
+  padding: 6px 8px;
+  font-size: 13px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.medidorOp {
+  text-align: center;
+  color: #cbd5e1;
+  font-weight: 700;
+  padding-bottom: 8px;
+}
+.medidorOut { display: flex; flex-direction: column; gap: 2px; }
+.medidorOut small { font-size: 10.5px; color: #94a3b8; font-weight: 600; }
+.medidorOut strong {
+  font-size: 14px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #f1f5f9;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.medidorOut.muted strong { background: transparent; color: #64748b; }
+.medidorOut.total strong { background: #ecfdf5; color: #047857; font-weight: 800; }
+.medidorTotal {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #16a34a;
+  color: #fff;
+}
+.medidorTotal span { font-size: 12px; font-weight: 700; letter-spacing: 0.4px; }
+.medidorTotal strong { font-size: 18px; font-variant-numeric: tabular-nums; }
+.medidorNota { font-size: 11px; margin: 8px 0 0; }
+
+@media (max-width: 900px) {
+  .medidorRow { grid-template-columns: 1fr 1fr; }
+  .medidorLabel { grid-column: 1 / -1; padding-bottom: 0; }
+  .medidorOp { display: none; }
+}

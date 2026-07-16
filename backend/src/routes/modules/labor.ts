@@ -80,6 +80,7 @@ export type LaborRates = {
   secador_per_tunel: number;
   precio_gas_bombona: number;
   precio_gas_cilindro: number;
+  precio_diesel: number;
 };
 
 async function getRates(db: Queryable = pool): Promise<LaborRates> {
@@ -98,7 +99,8 @@ async function getRates(db: Queryable = pool): Promise<LaborRates> {
     secador_guardiania: Number(row.secador_guardiania),
     secador_per_tunel: Number(row.secador_per_tunel),
     precio_gas_bombona: Number(row.precio_gas_bombona ?? 0),
-    precio_gas_cilindro: Number(row.precio_gas_cilindro ?? 0)
+    precio_gas_cilindro: Number(row.precio_gas_cilindro ?? 0),
+    precio_diesel: Number(row.precio_diesel ?? 0)
   };
 }
 
@@ -172,7 +174,8 @@ laborRouter.put("/rates", requireAdmin, asyncRoute(async (req, res) => {
     secador_guardiania: z.number().nonnegative(),
     secador_per_tunel: z.number().nonnegative(),
     precio_gas_bombona: z.number().nonnegative().default(0),
-    precio_gas_cilindro: z.number().nonnegative().default(0)
+    precio_gas_cilindro: z.number().nonnegative().default(0),
+    precio_diesel: z.number().nonnegative().default(0)
   }).parse(req.body);
 
   await pool.query(
@@ -180,11 +183,11 @@ laborRouter.put("/rates", requireAdmin, asyncRoute(async (req, res) => {
        pilador_per_qq = $1, pilador_per_saca = $2,
        estibador_per_qq = $3, estibador_per_saca = $4, estibador_per_arrocillo = $5,
        secador_guardiania = $6, secador_per_tunel = $7,
-       precio_gas_bombona = $8, precio_gas_cilindro = $9, updated_at = now()
+       precio_gas_bombona = $8, precio_gas_cilindro = $9, precio_diesel = $10, updated_at = now()
      WHERE id = 1`,
     [body.pilador_per_qq, body.pilador_per_saca, body.estibador_per_qq, body.estibador_per_saca,
      body.estibador_per_arrocillo, body.secador_guardiania, body.secador_per_tunel,
-     body.precio_gas_bombona, body.precio_gas_cilindro]
+     body.precio_gas_bombona, body.precio_gas_cilindro, body.precio_diesel]
   );
   res.json(await getRates());
 }));
@@ -377,11 +380,12 @@ laborRouter.get("/secador-suggestions", asyncRoute(async (req, res) => {
               WHERE wp.worker_role = 'SECADOR' AND wp.worker_name = sub.worker_name AND wp.work_date = sub.work_date
             ) AS already_generated
      FROM (
+       -- El día de trabajo del secador es la fecha de llenado del túnel.
        SELECT COALESCE(NULLIF(TRIM(dryer_name), ''), 'Sin secador') AS worker_name,
-              COALESCE(dry_start_at, created_at)::date AS work_date,
+              COALESCE(filled_at, dry_start_at::date, created_at::date) AS work_date,
               COUNT(DISTINCT tunnel_number)::int AS tunnels
        FROM drying_tunnel_reports
-       WHERE COALESCE(dry_start_at, created_at)::date BETWEEN $1 AND $2
+       WHERE COALESCE(filled_at, dry_start_at::date, created_at::date) BETWEEN $1 AND $2
        GROUP BY 1, 2
      ) sub
      ORDER BY sub.work_date DESC, sub.worker_name`,
