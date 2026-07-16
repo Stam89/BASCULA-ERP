@@ -180,6 +180,10 @@ type LaborRates = {
   estibador_per_arrocillo: number;
   secador_guardiania: number;
   secador_per_tunel: number;
+  /** Precio fijo del gas por unidad de bombona (medidor). */
+  precio_gas_bombona: number;
+  /** Precio fijo de cada cilindro de gas. */
+  precio_gas_cilindro: number;
 };
 
 const defaultLaborRates: LaborRates = {
@@ -189,7 +193,9 @@ const defaultLaborRates: LaborRates = {
   estibador_per_saca: 0.25,
   estibador_per_arrocillo: 0.1,
   secador_guardiania: 10,
-  secador_per_tunel: 5
+  secador_per_tunel: 5,
+  precio_gas_bombona: 0,
+  precio_gas_cilindro: 0
 };
 
 type WorkerSummary = {
@@ -370,9 +376,16 @@ type DryingTunnelReport = {
   total_quintals: string | number;
   moisture_before: string | number | null;
   drying_hours: string | number | null;
+  filled_at: string | null;
   dry_start_at: string | null;
   dry_end_at: string | null;
   gas_used: string | number;
+  gas_bombona_inicio?: string | number;
+  gas_bombona_fin?: string | number;
+  gas_bombona_costo?: string | number;
+  gas_cilindro_cantidad?: string | number;
+  gas_cilindro_costo?: string | number;
+  gas_costo_total?: string | number;
   diesel_used: string | number;
   dryer_name: string | null;
   status: string;
@@ -748,6 +761,8 @@ export function App() {
   const [traceLotId, setTraceLotId] = useState("");
   const [processFlow, setProcessFlow] = useState<ProcessFlow | null>(null);
   const [selectedDryingLotIds, setSelectedDryingLotIds] = useState<string[]>([]);
+  // Gas del secado: bombona por medidor (fin - inicio) y/o cilindros por unidad.
+  const [gasForm, setGasForm] = useState({ bombona_inicio: "", bombona_fin: "", cilindro_cantidad: "" });
   const [editingDryingReport, setEditingDryingReport] = useState<DryingTunnelReport | null>(null);
   const [productionDryingId, setProductionDryingId] = useState(() => loadMillingDraft().productionDryingId);
   const [productionPackages, setProductionPackages] = useState<ProductionPackageState>(defaultProductionPackages);
@@ -815,7 +830,6 @@ export function App() {
   const [nominaRows, setNominaRows] = useState<WorkerSummary[]>([]);
   const [nominaBusy, setNominaBusy] = useState(false);
   const [secadorSugg, setSecadorSugg] = useState<Array<{ worker_name: string; work_date: string; tunnels: number; suggested_amount: number; already_generated: boolean }> | null>(null);
-  const [secadorForm, setSecadorForm] = useState({ worker_name: "", work_date: nominaToday, tunnels: "0" });
   const [nominaView, setNominaView] = useState<"semana" | "historial">("semana");
   const nomina60Ago = (() => { const d = new Date(); d.setDate(d.getDate() - 60); return d.toISOString().slice(0, 10); })();
   const [histFrom, setHistFrom] = useState(nomina60Ago);
@@ -1090,6 +1104,10 @@ export function App() {
     () => availableDryingLots.filter((lot) => !selectedDryingLotIds.includes(lot.id)),
     [availableDryingLots, selectedDryingLotIds]
   );
+  // Gas del secado, calculado en vivo con los precios fijos de Configuración.
+  const gasBombonaTotal = Math.max(0, Number(gasForm.bombona_fin || 0) - Number(gasForm.bombona_inicio || 0));
+  const gasBombonaCosto = round2(gasBombonaTotal * Number(laborRatesForm.precio_gas_bombona || 0));
+  const gasCilindroCosto = round2(Number(gasForm.cilindro_cantidad || 0) * Number(laborRatesForm.precio_gas_cilindro || 0));
   const productionDryingReports = useMemo(
     () => dryingReports.filter((report) => report.status === "COMPLETED" && !report.is_processed),
     [dryingReports]
@@ -1572,13 +1590,6 @@ export function App() {
     addToast(`${res.created} día(s) de secador generados`, "success");
     await loadSecadorSuggestions();
     await refreshNomina();
-  }
-
-  async function addSecadorDayManual(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (secadorForm.worker_name.trim().length < 2) { addToast("Ingresa el nombre del secador", "error"); return; }
-    await generateSecadorDays([{ worker_name: secadorForm.worker_name.trim(), work_date: secadorForm.work_date, tunnels: Number(secadorForm.tunnels) || 0 }]);
-    setSecadorForm({ ...secadorForm, tunnels: "0" });
   }
 
   async function loadNominaHistory() {
@@ -3237,12 +3248,14 @@ export function App() {
     const payload = {
       rice_type: form.get("rice_type") || "0.11",
       moisture_before: numberOrUndefined(form.get("moisture_before")),
+      filled_at: stringOrUndefined(form.get("filled_at")),
       dry_start_at: stringOrUndefined(form.get("dry_start_at")),
       dry_end_at: stringOrUndefined(form.get("dry_end_at")),
-      gas_used: Number(form.get("gas_used") || 0),
+      gas_bombona_inicio: Number(form.get("gas_bombona_inicio") || 0),
+      gas_bombona_fin: Number(form.get("gas_bombona_fin") || 0),
+      gas_cilindro_cantidad: Number(form.get("gas_cilindro_cantidad") || 0),
       diesel_used: Number(form.get("diesel_used") || 0),
       dryer_name: form.get("dryer_name") || undefined,
-      operator_name: form.get("operator_name") || undefined,
       notes: form.get("notes") || undefined
     };
 
@@ -3920,6 +3933,16 @@ export function App() {
             >
               <h2>Informe de secado por tunel</h2>
               {editingDryingReport && <span className="editBadge">✎ Editando secado guardado</span>}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <Input name="dryer_name" label="Secador" defaultValue={editingDryingReport?.dryer_name ?? "Secador 1"} />
+                <Input
+                  name="filled_at"
+                  label="Fecha de llenado"
+                  type="date"
+                  defaultValue={(editingDryingReport?.filled_at ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10)}
+                  required={false}
+                />
+              </div>
               {!editingDryingReport && (
                 <label>
                   <span>Número de lote <span className="muted">(se genera solo; puedes escribir otro)</span></span>
@@ -3952,10 +3975,47 @@ export function App() {
               <Input name="moisture_before" label="Humedad inicial %" type="number" defaultValue={String(editingDryingReport?.moisture_before ?? 0)} />
               <Input name="dry_start_at" label="Hora secado inicio" type="datetime-local" defaultValue={dateTimeLocalValue(editingDryingReport?.dry_start_at)} required={false} />
               <Input name="dry_end_at" label="Hora secado final" type="datetime-local" defaultValue={dateTimeLocalValue(editingDryingReport?.dry_end_at)} required={false} />
-              <Input name="gas_used" label="Gas utilizado" type="number" defaultValue={String(editingDryingReport?.gas_used ?? 0)} />
+              {/* ── GAS: bombona (por medidor) y/o cilindro (por unidades) ── */}
+              <fieldset style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 12, margin: "6px 0" }}>
+                <legend style={{ fontWeight: 700, fontSize: 13, padding: "0 6px" }}>GAS</legend>
+
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#475569", marginBottom: 4 }}>BOMBONA</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, alignItems: "end" }}>
+                  <label style={{ fontSize: 12 }}><span>Inicio</span>
+                    <input name="gas_bombona_inicio" type="number" step="0.01" min="0" value={gasForm.bombona_inicio}
+                      onChange={(e) => setGasForm({ ...gasForm, bombona_inicio: e.target.value })} />
+                  </label>
+                  <label style={{ fontSize: 12 }}><span>Fin</span>
+                    <input name="gas_bombona_fin" type="number" step="0.01" min="0" value={gasForm.bombona_fin}
+                      onChange={(e) => setGasForm({ ...gasForm, bombona_fin: e.target.value })} />
+                  </label>
+                  <div className="totalBox" style={{ margin: 0 }}>
+                    <span>Total utilizado</span>
+                    <strong>{gasBombonaTotal.toFixed(2)}</strong>
+                    <small>× {money(laborRatesForm.precio_gas_bombona)} = <strong>{money(gasBombonaCosto)}</strong></small>
+                  </div>
+                </div>
+
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#475569", margin: "10px 0 4px" }}>CILINDRO</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, alignItems: "end" }}>
+                  <label style={{ fontSize: 12 }}><span>Cilindros utilizados</span>
+                    <input name="gas_cilindro_cantidad" type="number" step="0.01" min="0" value={gasForm.cilindro_cantidad}
+                      onChange={(e) => setGasForm({ ...gasForm, cilindro_cantidad: e.target.value })} />
+                  </label>
+                  <div className="totalBox" style={{ margin: 0 }}>
+                    <span>Total en $</span>
+                    <strong>{money(gasCilindroCosto)}</strong>
+                    <small>× {money(laborRatesForm.precio_gas_cilindro)} c/u</small>
+                  </div>
+                </div>
+
+                <div className="totalBox" style={{ marginTop: 10, background: "#f0fdf4" }}>
+                  <span>TOTAL GAS</span>
+                  <strong>{money(gasBombonaCosto + gasCilindroCosto)}</strong>
+                  <small>bombona + cilindro · precios fijos en Configuración → Tarifas</small>
+                </div>
+              </fieldset>
               <Input name="diesel_used" label="Diesel utilizado" type="number" defaultValue={String(editingDryingReport?.diesel_used ?? 0)} />
-              <Input name="dryer_name" label="Secador" defaultValue={editingDryingReport?.dryer_name ?? "Secador 1"} />
-              <Input name="operator_name" label="Operador" defaultValue={editingDryingReport?.operator_name ?? "Planta"} />
               <Input name="notes" label="Observacion" defaultValue={editingDryingReport?.notes ?? "Secado registrado"} required={false} />
               <div className="buttonRow">
                 <button className="primary">{editingDryingReport ? "Guardar cambios" : "Guardar informe"}</button>
@@ -6363,21 +6423,6 @@ export function App() {
                 )}
               </div>
 
-              <form className="formPanel" onSubmit={(e) => addSecadorDayManual(e).catch((err) => addToast(err.message, "error"))}>
-                <h2>➕ Agregar día de secador</h2>
-                <p className="muted">Para días de solo guardianía o ajustes manuales.</p>
-                <label><span>Secador</span><input type="text" placeholder="Ej: MARGARO" value={secadorForm.worker_name} onChange={(e) => setSecadorForm({ ...secadorForm, worker_name: e.target.value })} /></label>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  <label><span>Fecha</span><input type="date" value={secadorForm.work_date} onChange={(e) => setSecadorForm({ ...secadorForm, work_date: e.target.value })} /></label>
-                  <label><span>Túneles secados</span><input type="number" min="0" max="10" step="1" value={secadorForm.tunnels} onChange={(e) => setSecadorForm({ ...secadorForm, tunnels: e.target.value })} /></label>
-                </div>
-                <div className="totalBox">
-                  <span>Pago de este día</span>
-                  <strong>{money(laborRatesForm.secador_guardiania + laborRatesForm.secador_per_tunel * (Number(secadorForm.tunnels) || 0))}</strong>
-                  <small>Guardianía {money(laborRatesForm.secador_guardiania)} + {Number(secadorForm.tunnels) || 0} × {money(laborRatesForm.secador_per_tunel)}</small>
-                </div>
-                <button className="primary">Agregar día</button>
-              </form>
             </div>
             </>)}
 
@@ -7107,6 +7152,11 @@ export function App() {
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <label><span>$ guardianía / día</span><input type="number" step="0.5" min="0" value={laborRatesForm.secador_guardiania} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secador_guardiania: Number(e.target.value) })} /></label>
                     <label><span>$ por túnel secado</span><input type="number" step="0.5" min="0" value={laborRatesForm.secador_per_tunel} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secador_per_tunel: Number(e.target.value) })} /></label>
+                  </div>
+                  <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>⛽ Precio del gas <span className="muted" style={{ fontWeight: 400 }}>(se usa en Secadoras)</span></h2>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <label><span>$ bombona (por unidad de medidor)</span><input type="number" step="0.01" min="0" value={laborRatesForm.precio_gas_bombona} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_bombona: Number(e.target.value) })} /></label>
+                    <label><span>$ por cilindro</span><input type="number" step="0.01" min="0" value={laborRatesForm.precio_gas_cilindro} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_cilindro: Number(e.target.value) })} /></label>
                   </div>
                   <button className="primary" disabled={!isAdmin}>Guardar tarifas</button>
                   {!isAdmin && <p className="muted">Solo un administrador puede cambiar las tarifas.</p>}
