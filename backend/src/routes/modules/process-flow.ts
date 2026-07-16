@@ -55,9 +55,12 @@ processFlowRouter.get("/drying/available-lots", asyncRoute(async (req, res) => {
   const result = await pool.query(
     `SELECT w.id, w.ticket_number, w.rice_type, w.is_maquila, w.accionista_id,
             w.net_weight, w.qualification, w.quintals, w.created_at,
-            f.full_name AS farmer_name
+            f.full_name AS farmer_name,
+            -- Número que ve el usuario: el del ticket de la app de báscula.
+            m.raw_payload->>'numeroTicket' AS numero_bascula
      FROM weighing_tickets w
      LEFT JOIN farmers f ON f.id = w.farmer_id
+     LEFT JOIN mobile_synced_tickets m ON m.weighing_ticket_id = w.id
      WHERE w.quintals IS NOT NULL AND w.quintals > 0
        AND w.lot_id IS NULL
        AND w.accionista_id = $1
@@ -241,9 +244,11 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
             COALESCE(w.net_weight, 0) AS net_weight_kg,
             COALESCE(w.quintals, 0) AS quintals,
             f.full_name AS farmer_name,
+            m.raw_payload->>'numeroTicket' AS numero_bascula,
             used.id AS used_id
      FROM weighing_tickets w
      LEFT JOIN farmers f ON f.id = w.farmer_id
+     LEFT JOIN mobile_synced_tickets m ON m.weighing_ticket_id = w.id
      LEFT JOIN drying_tunnel_report_lots used ON used.weighing_ticket_id = w.id
      WHERE w.id = ANY($1::uuid[])
      ORDER BY w.created_at ASC`,
@@ -303,9 +308,15 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
     [lotId, entryIds]
   );
 
+  // En los informes se muestra el número del ticket de la báscula (el que
+  // conoce el usuario), no el código interno del ingreso.
+  const etiqueta = (e: { numero_bascula: string | null; ticket_number: string }) =>
+    e.numero_bascula ? `Ticket #${e.numero_bascula}` : e.ticket_number;
+
   const lotSnapshot = entries.rows.map((e) => ({
     weighing_ticket_id: e.id,
-    ticket_number: e.ticket_number,
+    ticket_number: etiqueta(e),
+    numero_bascula: e.numero_bascula,
     farmer_name: e.farmer_name,
     net_weight_kg: Number(e.net_weight_kg),
     quintals: Number(e.quintals)
@@ -366,7 +377,7 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
       `INSERT INTO drying_tunnel_report_lots
        (drying_report_id, weighing_ticket_id, lot_id, process_report_id, lot_code, farmer_name, net_weight_kg, quintals)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [tunnel.rows[0].id, e.id, lotId, tunnelReport.id, e.ticket_number, e.farmer_name, e.net_weight_kg, e.quintals]
+      [tunnel.rows[0].id, e.id, lotId, tunnelReport.id, etiqueta(e), e.farmer_name, e.net_weight_kg, e.quintals]
     );
   }
 
