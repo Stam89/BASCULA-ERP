@@ -38,6 +38,13 @@ export function errorHandler(error: Error, req: Request, res: Response, _next: N
 
   // Datos mal formados: antes salia el JSON crudo de zod. Se nombra el campo.
   if (error instanceof ZodError) {
+    // Si alguna regla trae mensaje propio (p.ej. "la clave debe tener 8
+    // caracteres"), se muestra ese; si no, se listan los campos a revisar.
+    const conMensaje = error.issues.find((i) => i.message && !/^(Required|Invalid)/i.test(i.message));
+    if (conMensaje) {
+      res.status(400).json({ error: conMensaje.message, statusCode: 400 });
+      return;
+    }
     const campos = error.issues
       .map((i) => i.path.join(".") || "el formulario")
       .filter((c, i, todos) => todos.indexOf(c) === i)
