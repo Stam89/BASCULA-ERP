@@ -298,10 +298,10 @@ cashRouter.post("/payables/:id/pay", asyncRoute(async (req, res) => {
       "SELECT * FROM accounts_payable WHERE id = $1 FOR UPDATE",
       [req.params.id]
     );
-    if (!ap.rows[0]) throw new Error("Cuenta por pagar no encontrada");
+    if (!ap.rows[0]) throw new ApiError(404, "Cuenta por pagar no encontrada");
 
     const current = Number(ap.rows[0].balance);
-    if (body.amount > current + 0.001) throw new Error(`El monto supera el saldo pendiente ($${current.toFixed(2)})`);
+    if (body.amount > current + 0.001) throw new ApiError(409, `El monto supera el saldo pendiente ($${current.toFixed(2)})`);
 
     const newBalance = Math.max(0, current - body.amount);
     const newStatus = newBalance < 0.01 ? "PAID" : "PARTIAL";

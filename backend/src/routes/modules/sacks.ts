@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
+import { ApiError } from "../../http/error-handler.js";
 import { inTransaction } from "../../db/transaction.js";
 
 export const sacksRouter = Router();
@@ -58,7 +59,7 @@ sacksRouter.post("/movements", asyncRoute(async (req, res) => {
         [body.sack_id]
       );
       if (Number(stock.rows[0]?.stock ?? 0) < body.cantidad) {
-        throw new Error(`Stock insuficiente. Disponible: ${stock.rows[0]?.stock ?? 0}`);
+        throw new ApiError(409, `Stock insuficiente. Disponible: ${stock.rows[0]?.stock ?? 0}`);
       }
     }
 

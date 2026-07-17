@@ -33,6 +33,11 @@ salesRouter.post("/", asyncRoute(async (req, res) => {
     })).min(1)
   }).parse(req.body);
 
+  // Una venta a crédito sin cliente es una deuda de nadie: no se puede cobrar.
+  if (body.payment_method === "CREDIT" && !body.customer_id) {
+    throw new ApiError(400, "La venta a crédito necesita un cliente para saber quién debe.");
+  }
+
   const result = await inTransaction(async (client) => {
     const total = round2(body.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0));
     const sale = await client.query(
@@ -54,6 +59,23 @@ salesRouter.post("/", asyncRoute(async (req, res) => {
           const weightLb = Number(presentation.rows[0].weight_lb);
           quantityQQ = round2((item.quantity * weightLb) / 100); // Convertir a QQ
         }
+      }
+
+      // No se vende lo que no hay: sin esta guarda el inventario quedaba en
+      // negativo y el stock dejaba de cuadrar con lo físico.
+      const disponible = await client.query(
+        `SELECT COALESCE(SUM(m.quantity), 0) AS stock, MAX(p.name) AS producto
+         FROM inventory_movements m
+         JOIN products p ON p.id = m.product_id
+         WHERE m.product_id = $1 AND m.warehouse_id = $2 AND m.accionista_id = $3`,
+        [item.product_id, item.warehouse_id, accionistaId]
+      );
+      const stockActual = Number(disponible.rows[0].stock);
+      if (stockActual + 0.001 < quantityQQ) {
+        throw new ApiError(
+          409,
+          `Stock insuficiente de ${disponible.rows[0].producto ?? "este producto"}: hay ${stockActual.toFixed(2)} QQ y la venta pide ${quantityQQ.toFixed(2)} QQ.`
+        );
       }
 
       const itemTotal = round2(item.quantity * item.unit_price);

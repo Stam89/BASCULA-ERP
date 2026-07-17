@@ -39,7 +39,15 @@ const WRITE_MODULES_BY_PREFIX: Record<string, AppModule[]> = {
   "advances": ["Caja"],
   "liquidations": ["Liquidaciones"],
   "fomentos": ["Fomentos", "Caja"],
-  "farmers": ["Agricultores"]
+  "farmers": ["Agricultores"],
+  // El traspaso de lotes vive en la pestaña Báscula y mueve plata entre
+  // accionistas: sin esta entrada cualquier usuario con sesión podía hacerlo.
+  "lots": ["Bascula"],
+  // Nómina, cuadrilla y servicio de pilado: la interfaz se los muestra a quien
+  // tiene Caja o Producción; el backend aplica la misma regla.
+  "labor": ["Caja", "Produccion"],
+  "cuadrilla": ["Caja", "Produccion"],
+  "pilado": ["Caja", "Produccion"]
 };
 
 // Las lecturas son compartidas por todo el equipo; las escrituras se limitan
