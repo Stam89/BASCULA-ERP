@@ -21,3 +21,8 @@ backend/uploads/
 # Credencial de Firebase (no subir)
 backend/scripts/firebase-key.json
 firebase-key.json
+
+# Logs del servidor (se generan solos, no son código)
+backend-log.txt
+*.log
+logs/
