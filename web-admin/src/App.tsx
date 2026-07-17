@@ -459,6 +459,7 @@ type AccountPayable = {
   farmer_id: string;
   farmer_name: string;
   liquidation_number: string | null;
+  batch_id: string | null;
   amount: string | number;
   balance: string | number;
   status: string;
@@ -610,6 +611,7 @@ type AccountsReceivable = {
   customer_name: string | null;
   sale_id: string | null;
   sale_number: string | null;
+  description: string | null;
   amount: number;
   balance: number;
   status: "PAID" | "CONFIRMED" | "PARTIAL";
@@ -735,12 +737,27 @@ function NavIcon({ tab }: { tab: string }) {
       return null;
   }
 }
+// CEYRO es el accionista principal (la piladora, dueño del negocio). Id sembrado.
+const CEYRO_ID = "00000000-0000-0000-0000-000000000001";
 const LB_TO_KG = 0.45359237;
 const QQ_TO_LB = 100;
 const millingDraftStorageKey = "bascula-erp:milling-report-draft";
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const dryerOptions = ["Secadora 1", "Secadora 2", "Secadora 3"];
 const piladoPresentations = ["10 LB", "25 LB", "50 LB", "98 LB", "100 LB"];
+
+// Junta las cuentas por pagar de una misma liquidación (mismo batch_id) para
+// que no salgan como 3 filas sueltas cuando fue una sola liquidación. Las que
+// no tienen batch (traspasos, pilado) quedan cada una en su grupo.
+function groupPayables(payables: AccountPayable[]): Array<{ key: string; items: AccountPayable[] }> {
+  const grupos = new Map<string, AccountPayable[]>();
+  for (const ap of payables) {
+    const key = ap.batch_id ? `batch:${ap.batch_id}` : `ap:${ap.id}`;
+    const arr = grupos.get(key);
+    if (arr) arr.push(ap); else grupos.set(key, [ap]);
+  }
+  return [...grupos.entries()].map(([key, items]) => ({ key, items }));
+}
 
 // "100 LB" -> 100. Sirve para guardar el peso del saco como número.
 function sackWeightLbOf(presentation: string): number | undefined {
@@ -1567,21 +1584,28 @@ export function App() {
   // ── Configuración ─────────────────────────────────────────────────────────
   const isAdmin = authUser?.role_name === "ADMINISTRADOR";
 
+  // Nómina y cuadrilla las paga CEYRO (dueño del negocio); los otros accionistas
+  // no cargan con ese gasto. Por eso esas pestañas solo aparecen con CEYRO activo.
+  const esCeyroActivo = activeAccionistaId === CEYRO_ID;
+
   // Pestañas visibles según los módulos asignados al usuario.
   const visibleTabs = useMemo(() => {
     if (!authUser) return [] as string[];
-    if (isAdmin) return tabs;
-    const allowed = new Set(authUser.allowed_modules ?? []);
-    return tabs.filter((tab) => {
-      if (tab === "Dashboard") return true;
-      if (tab === "Configuracion" || tab === "Reportes") return false;
-      if (tab === "Por Cobrar" || tab === "Por Pagar") return allowed.has("Caja") || allowed.has("Ventas");
-      if (tab === "Nomina") return allowed.has("Caja") || allowed.has("Produccion");
-      if (tab === "Cuadrilla") return allowed.has("Caja") || allowed.has("Produccion");
-      if (tab === "Servicio Pilado") return allowed.has("Caja") || allowed.has("Produccion");
-      return allowed.has(tab);
-    });
-  }, [authUser, isAdmin]);
+    const soloCeyro = new Set(["Nomina", "Cuadrilla"]);
+    const base = isAdmin
+      ? tabs
+      : tabs.filter((tab) => {
+          const allowed = new Set(authUser.allowed_modules ?? []);
+          if (tab === "Dashboard") return true;
+          if (tab === "Configuracion" || tab === "Reportes") return false;
+          if (tab === "Por Cobrar" || tab === "Por Pagar") return allowed.has("Caja") || allowed.has("Ventas");
+          if (tab === "Nomina") return allowed.has("Caja") || allowed.has("Produccion");
+          if (tab === "Cuadrilla") return allowed.has("Caja") || allowed.has("Produccion");
+          if (tab === "Servicio Pilado") return allowed.has("Caja") || allowed.has("Produccion");
+          return allowed.has(tab);
+        });
+    return base.filter((tab) => !soloCeyro.has(tab) || esCeyroActivo);
+  }, [authUser, isAdmin, esCeyroActivo]);
 
   useEffect(() => {
     if (authUser && !visibleTabs.includes(activeTab)) {
@@ -2905,11 +2929,6 @@ export function App() {
     await refresh();
   }
 
-  async function assignFarmerAccionista(farmerId: string, accionistaId: string) {
-    await apiPut(`/farmers/${farmerId}`, { accionista_id: accionistaId || null });
-    addToast("Accionista del agricultor actualizado", "success");
-    await refresh();
-  }
 
   async function submitAdvance(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -3690,6 +3709,13 @@ export function App() {
     } catch { /* sin detalle, igual imprime */ }
 
     const qqTotal = b.lots.reduce((s, l) => s + l.quintals, 0);
+    // El NETO se calcula aquí: bruto menos anticipos menos otros descuentos.
+    // No se confía en el net_amount guardado porque un anticipo aplicado
+    // después de liquidar podía dejarlo desactualizado.
+    const advancesSum = appliedAdvances.length > 0
+      ? appliedAdvances.reduce((s, a) => s + Number(a.amount_applied), 0)
+      : b.advances_total;
+    const netoReal = Math.max(0, b.gross_total - advancesSum - b.other_disc_total);
     const fecha = new Date(b.created_at).toLocaleDateString("es-EC", {
       year: "numeric", month: "long", day: "numeric",
     });
@@ -3768,7 +3794,7 @@ export function App() {
             ? `<tr><td class="lbl disc">Otros:</td><td class="val disc">-$${(b.other_disc_total - b.discount_breakdown.fomento - b.discount_breakdown.bascula - b.discount_breakdown.flete - b.discount_breakdown.cosechadora).toFixed(2)}</td></tr>`
             : ""}
         ` : ""}
-        <tr class="total-row"><td class="lbl">NETO A PAGAR:</td><td class="val">$${b.net_total.toFixed(2)}</td></tr>
+        <tr class="total-row"><td class="lbl">NETO A PAGAR:</td><td class="val">$${netoReal.toFixed(2)}</td></tr>
       </table>
       <div class="sigs">
         <div class="sig"><hr/><span>Agricultor</span></div>
@@ -4275,7 +4301,6 @@ export function App() {
                       <th>Nombre</th>
                       <th>Cédula / RUC</th>
                       <th>Teléfono</th>
-                      <th>Accionista</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -4284,29 +4309,13 @@ export function App() {
                         <td>{f.full_name}</td>
                         <td>{f.identification ?? "—"}</td>
                         <td>{f.phone ?? "—"}</td>
-                        <td>
-                          {accionistas.length > 0 ? (
-                            <select
-                              value={f.accionista_id ?? ""}
-                              onChange={(e) => assignFarmerAccionista(f.id, e.target.value).catch((err) => addToast(err.message, "error"))}
-                              style={{ padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12 }}
-                            >
-                              <option value="">Sin asignar</option>
-                              {accionistas.map((a) => (
-                                <option key={a.id} value={a.id}>{a.name}</option>
-                              ))}
-                            </select>
-                          ) : (
-                            <span className="muted">{f.accionista_id ? "Asignado" : "Sin asignar"}</span>
-                          )}
-                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               )}
               <p className="muted" style={{ marginTop: 10 }}>
-                El accionista del agricultor define a quién se atribuye cada ticket de báscula al vincularlo. Si queda «Sin asignar», el ticket usa el accionista activo de quien lo vincula.
+                Los agricultores son compartidos: cualquier accionista puede comprarles. Lo que separa la operación es el accionista de cada compra, no el del agricultor.
               </p>
             </div>
           </section>
@@ -6251,8 +6260,11 @@ export function App() {
                   <article key={ar.id} className="cuentaCard cobrar">
                     <div className="cuentaTop">
                       <div>
-                        <span className="cuentaLabel">Cliente</span>
-                        <strong>{ar.customer_name}</strong>
+                        <span className="cuentaLabel">{ar.sale_number ? "Cliente" : "Deudor"}</span>
+                        <strong>{ar.customer_name ?? "—"}</strong>
+                        {!ar.sale_number && ar.description && (
+                          <span className="muted" style={{ display: "block", fontSize: 12 }}>{ar.description}</span>
+                        )}
                       </div>
                       <span className="cuentaRef">{ar.sale_number || ""}</span>
                     </div>
@@ -6296,23 +6308,38 @@ export function App() {
               <div className="emptyState"><div className="emptyIcon">✅</div><p>No hay cuentas por pagar pendientes</p></div>
             ) : (
               <div className="cuentasGrid">
-                {cashPayables.map((ap) => {
-                  const percentPaid = ((Number(ap.amount) - Number(ap.balance)) / Number(ap.amount)) * 100;
+                {groupPayables(cashPayables).map((grupo) => {
+                  const total = grupo.items.reduce((a, p) => a + Number(p.amount), 0);
+                  const pendiente = grupo.items.reduce((a, p) => a + Number(p.balance), 0);
+                  const percentPaid = total > 0 ? ((total - pendiente) / total) * 100 : 0;
+                  const varios = grupo.items.length > 1;
                   return (
-                    <article key={ap.id} className="cuentaCard pagar">
+                    <article key={grupo.key} className="cuentaCard pagar">
                       <div className="cuentaTop">
                         <div>
                           <span className="cuentaLabel">Agricultor</span>
-                          <strong>{ap.farmer_name}</strong>
+                          <strong>{grupo.items[0].farmer_name}</strong>
                         </div>
-                        <span className="cuentaRef">{ap.liquidation_number ? `Liq. ${ap.liquidation_number}` : ""}</span>
+                        <span className="cuentaRef">
+                          {grupo.items[0].liquidation_number ? `Liq. ${grupo.items[0].liquidation_number}` : ""}
+                          {varios ? ` · ${grupo.items.length} ingresos` : ""}
+                        </span>
                       </div>
                       <div className="cuentaAmounts">
-                        <div><span>Total</span><b>{money(Number(ap.amount))}</b></div>
-                        <div><span>Pendiente</span><b className="pend">{money(Number(ap.balance))}</b></div>
+                        <div><span>Total</span><b>{money(total)}</b></div>
+                        <div><span>Pendiente</span><b className="pend">{money(pendiente)}</b></div>
                       </div>
                       <div className="cuentaBar"><div style={{ width: `${percentPaid}%` }} /></div>
-                      <PayablePayForm payable={ap} onPay={(amount) => pagarCuenta(ap.id, amount).catch((e) => addToast(e.message, "error"))} />
+                      {grupo.items.map((ap) => (
+                        <div key={ap.id} style={varios ? { borderTop: "1px dashed var(--c-border)", paddingTop: 6, marginTop: 6 } : undefined}>
+                          {varios && (
+                            <div className="muted" style={{ fontSize: 12, marginBottom: 2 }}>
+                              Ingreso: {money(Number(ap.amount))} · pendiente {money(Number(ap.balance))}
+                            </div>
+                          )}
+                          <PayablePayForm payable={ap} onPay={(amount) => pagarCuenta(ap.id, amount).catch((e) => addToast(e.message, "error"))} />
+                        </div>
+                      ))}
                     </article>
                   );
                 })}
@@ -6322,7 +6349,7 @@ export function App() {
         )}
 
         {activeTab === "Servicio Pilado" && (() => {
-          const clientes = accionistas.filter((a) => a.id !== "00000000-0000-0000-0000-000000000001");
+          const clientes = accionistas.filter((a) => a.id !== CEYRO_ID);
           const previewTotal = round2(Number(piladoForm.quintals || 0) * Number(piladoForm.rate_per_qq || 0));
           return (
           <section className="panelGrid">

@@ -14,12 +14,17 @@ receivableRouter.get("/", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
     `SELECT ar.*,
-            c.full_name AS customer_name,
+            -- Nombre de quien debe: un cliente en una venta, o el accionista que
+            -- recibió un lote traspasado. Antes las cuentas de traspaso salían
+            -- sin nombre porque no tienen cliente.
+            COALESCE(c.full_name, dest.name) AS customer_name,
             c.phone     AS customer_phone,
             s.sale_number
      FROM accounts_receivable ar
      LEFT JOIN customers c ON c.id = ar.customer_id
      LEFT JOIN sales s     ON s.id = ar.sale_id
+     LEFT JOIN lot_transfers lt ON lt.receivable_id = ar.id
+     LEFT JOIN accionistas dest ON dest.id = lt.to_accionista_id
      WHERE ar.status IN ('CONFIRMED','PARTIAL')
        AND ar.balance > 0
        AND ar.accionista_id = $1

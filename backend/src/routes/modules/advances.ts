@@ -54,14 +54,16 @@ advancesRouter.post("/", asyncRoute(async (req, res) => {
       );
     }
 
-    // Si se pide, aplicar el anticipo contra cuentas por pagar pendientes del agricultor
+    // Si se pide, aplicar el anticipo contra cuentas por pagar pendientes del
+    // agricultor. Solo del mismo accionista que dio el anticipo: la plata de un
+    // socio no paga la deuda de otro.
     if (data.apply_to_payables) {
       const payables = await client.query(
         `SELECT * FROM accounts_payable
-         WHERE farmer_id = $1 AND status IN ('CONFIRMED', 'PARTIAL') AND balance > 0
+         WHERE farmer_id = $1 AND accionista_id = $2 AND status IN ('CONFIRMED', 'PARTIAL') AND balance > 0
          ORDER BY created_at ASC
          FOR UPDATE`,
-        [data.farmer_id]
+        [data.farmer_id, accionistaId]
       );
 
       let remaining = data.amount;
@@ -78,12 +80,21 @@ advancesRouter.post("/", asyncRoute(async (req, res) => {
           [ap.id, newBal, newStatus]
         );
 
-        // Registrar la aplicación en advance_applications vinculada a la liquidación
+        // Registrar la aplicación y bajar TAMBIÉN el neto de la liquidación:
+        // antes solo se tocaba el saldo por pagar, así que el comprobante (que
+        // lee net_amount) seguía mostrando el total sin restar el anticipo.
         if (ap.liquidation_id) {
           await client.query(
             `INSERT INTO advance_applications (advance_id, liquidation_id, amount_applied)
              VALUES ($1, $2, $3)`,
             [advanceId, ap.liquidation_id, applyAmt]
+          );
+          await client.query(
+            `UPDATE liquidations
+             SET advances_discount = advances_discount + $2,
+                 net_amount = GREATEST(0, net_amount - $2)
+             WHERE id = $1`,
+            [ap.liquidation_id, applyAmt]
           );
         }
 
