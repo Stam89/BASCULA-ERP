@@ -571,12 +571,28 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
         throw new ApiError(400, "Debe finalizar el secado antes de pasarlo a produccion");
       }
 
+      // Finalizar son dos pasos: abrir el proceso y cerrarlo. Si un intento
+      // anterior alcanzo a abrirlo pero fallo al cerrar, se reusa el proceso
+      // abierto en vez de dejar el tunel trabado sin poder reintentar. La
+      // entrada de materia prima ya quedo registrada, no se vuelve a descontar.
+      // (El FOR UPDATE de arriba serializa dos clics seguidos en Finalizar.)
       const alreadyProcessed = await client.query(
-        "SELECT id FROM processing_batches WHERE drying_report_id = $1 LIMIT 1",
+        `SELECT *
+         FROM processing_batches
+         WHERE drying_report_id = $1
+         ORDER BY started_at ASC
+         LIMIT 1`,
         [body.drying_report_id]
       );
       if (alreadyProcessed.rowCount) {
-        throw new ApiError(409, "Este tunel ya fue enviado a produccion");
+        const abierto = alreadyProcessed.rows[0];
+        if (abierto.finished_at) {
+          throw new ApiError(409, "Este tunel ya fue cerrado");
+        }
+        if (abierto.status === "CANCELLED") {
+          throw new ApiError(409, "El proceso de este tunel fue anulado");
+        }
+        return abierto;
       }
 
       const linkedLots = await client.query(
@@ -594,17 +610,27 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
       lotId = drying.rows[0].lot_id;
       inputQuantity = Number(drying.rows[0].input_weight_kg);
     } else {
+      // Candado sobre el lote: serializa dos clics seguidos en Finalizar, para
+      // que el segundo espere y vea el proceso del primero en vez de abrir otro.
+      const lote = await client.query("SELECT id FROM lots WHERE id = $1 FOR UPDATE", [body.lot_id]);
+      if (!lote.rowCount) throw new ApiError(404, "Lote no encontrado");
+
       const alreadyStarted = await client.query(
-        `SELECT id
+        `SELECT *
          FROM processing_batches
          WHERE lot_id = $1
            AND drying_report_id IS NULL
            AND status <> 'CANCELLED'
+         ORDER BY started_at ASC
          LIMIT 1`,
         [body.lot_id]
       );
       if (alreadyStarted.rowCount) {
-        throw new ApiError(409, "Este lote ya fue enviado a produccion");
+        const abierto = alreadyStarted.rows[0];
+        if (abierto.finished_at) {
+          throw new ApiError(409, "Este lote ya fue cerrado");
+        }
+        return abierto;
       }
     }
 
