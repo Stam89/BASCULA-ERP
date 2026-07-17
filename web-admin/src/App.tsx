@@ -513,6 +513,18 @@ type MillingDraft = {
   lot_code?: string;
 };
 
+/** Resultado de pasar un lote a otro accionista, con la deuda que genera. */
+type LotTransferResult = {
+  lot_code: string;
+  accionista_name: string;
+  traspaso?: {
+    de: string;
+    para: string;
+    ya_cancelado: number;
+    pendiente_agricultor: number;
+  };
+};
+
 /** Pilado ya cerrado, con su rendimiento. Alimenta el historial de Producción. */
 type ProductionHistoryItem = {
   id: string;
@@ -2859,8 +2871,35 @@ export function App() {
 
   async function changeLotAccionista(lotId: string, accionistaId: string) {
     if (!accionistaId) return;
-    await apiPut(`/lots/${lotId}/accionista`, { accionista_id: accionistaId });
-    addToast("Lote cambiado de accionista (se movió también su inventario)", "success");
+    const lot = lots.find((item) => item.id === lotId);
+    const destino = accionistas.find((a) => a.id === accionistaId)?.name ?? "";
+    const origen = accionistas.find((a) => a.id === lot?.accionista_id)?.name ?? "sin asignar";
+
+    // El traspaso mueve plata: crea deuda entre accionistas. No se hace de un
+    // clic sin avisar qué implica.
+    const ok = window.confirm(
+      `¿Pasar el lote ${lot?.lot_code ?? ""} de ${origen} a ${destino}?\n\n` +
+      `Se mueve el lote con su inventario, su proceso y sus liquidaciones.\n\n` +
+      `Lo que ${origen} ya le pagó al agricultor queda como cuenta POR COBRAR suya, y como cuenta POR PAGAR de ${destino}. ` +
+      `Lo que aún se le deba al agricultor lo paga ${destino} de ahora en adelante.`
+    );
+    if (!ok) return;
+
+    const res = await apiPut<LotTransferResult>(`/lots/${lotId}/accionista`, {
+      accionista_id: accionistaId,
+      created_by: authUser?.id
+    });
+
+    const t = res.traspaso;
+    if (t && Number(t.ya_cancelado) > 0) {
+      addToast(
+        `Lote traspasado. ${t.de} tiene por cobrar ${money(Number(t.ya_cancelado))} a ${t.para}. ` +
+        `Pendiente con el agricultor: ${money(Number(t.pendiente_agricultor))}, ahora lo paga ${t.para}.`,
+        "success"
+      );
+    } else {
+      addToast("Lote cambiado de accionista (se movió también su inventario)", "success");
+    }
     await refresh();
   }
 
@@ -3934,8 +3973,12 @@ export function App() {
             />
             {accionistas.length > 1 && lots.length > 0 && (
               <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-                <h2>Cambiar accionista de un lote</h2>
-                <p className="muted">Por si un lote se creó con el accionista equivocado. Al cambiarlo se mueve también su inventario. No se puede si el lote ya se liquidó o vendió.</p>
+                <h2>Pasar un lote a otro accionista</h2>
+                <p className="muted">
+                  Se mueve el lote con su inventario, su proceso y sus liquidaciones. Si ya se le pagó algo al agricultor,
+                  eso queda como cuenta por cobrar del que entrega y por pagar del que recibe; lo que falte pagarle al
+                  agricultor lo asume el que recibe. No se puede si el lote ya tiene ventas.
+                </p>
                 <table className="cajaTable" style={{ marginTop: 8 }}>
                   <thead><tr><th>Lote</th><th>Agricultor</th><th>QQ</th><th>Estado</th><th>Accionista</th></tr></thead>
                   <tbody>
