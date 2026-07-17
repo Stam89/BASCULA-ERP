@@ -142,12 +142,18 @@ lotsRouter.put("/:id/accionista", asyncRoute(async (req, res) => {
 lotsRouter.get("/", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
+    // Un lote agrupa varios pesos de materia prima. El join los multiplicaba:
+    // el mismo lote salia repetido, una vez por peso. Aqui va sumado, una fila
+    // por lote. El detalle peso por peso se ve en la liquidacion y en /lots/:id.
     `SELECT l.*, f.full_name AS farmer_name,
-            t.ticket_number, t.gross_weight, t.tare_weight, t.net_weight, t.qualification, t.quintals
+            COUNT(t.id)::int AS entries_count,
+            COALESCE(SUM(t.net_weight), 0) AS net_weight,
+            COALESCE(SUM(t.quintals), 0) AS quintals
      FROM lots l
      LEFT JOIN farmers f ON f.id = l.farmer_id
      LEFT JOIN weighing_tickets t ON t.lot_id = l.id
      WHERE l.accionista_id = $2 AND ($1::text IS NULL OR l.status = $1::lot_status)
+     GROUP BY l.id, f.full_name
      ORDER BY l.created_at DESC
      LIMIT 500`,
     [req.query.status ?? null, accionistaId]

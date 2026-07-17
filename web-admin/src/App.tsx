@@ -32,9 +32,11 @@ type Lot = {
   rice_type?: string | null;
   status: string;
   accionista_id?: string | null;
+  /** Suma de los pesos de materia prima del lote (no de un pesaje suelto). */
   quintals: string | number | null;
   net_weight?: string | number | null;
-  qualification: string | number | null;
+  /** Cuántos pesos de báscula agrupa el lote. */
+  entries_count?: number;
 };
 
 // Ingreso de materia prima: un pesaje de báscula que todavía no pertenece a un
@@ -3980,12 +3982,13 @@ export function App() {
                   agricultor lo asume el que recibe. No se puede si el lote ya tiene ventas.
                 </p>
                 <table className="cajaTable" style={{ marginTop: 8 }}>
-                  <thead><tr><th>Lote</th><th>Agricultor</th><th>QQ</th><th>Estado</th><th>Accionista</th></tr></thead>
+                  <thead><tr><th>Lote</th><th>Agricultor</th><th>Pesos</th><th>QQ</th><th>Estado</th><th>Accionista</th></tr></thead>
                   <tbody>
                     {lots.slice(0, 10).map((lot) => (
                       <tr key={lot.id}>
                         <td style={{ fontWeight: 600 }}>{lot.lot_code}</td>
                         <td>{lot.farmer_name ?? "—"}</td>
+                        <td className="num">{lot.entries_count ?? 1}</td>
                         <td className="num">{Number(lot.quintals ?? 0).toFixed(2)}</td>
                         <td><span className="chip info">{lot.status}</span></td>
                         <td>
