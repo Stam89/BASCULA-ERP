@@ -52,7 +52,11 @@ const WRITE_MODULES_BY_PREFIX: Record<string, AppModule[]> = {
 
 // Las lecturas son compartidas por todo el equipo; las escrituras se limitan
 // a los módulos asignados al usuario. Los administradores no tienen límite.
-export function enforceModulePermissions(req: Request, _res: Response, next: NextFunction) {
+//
+// Los permisos se releen de la base en cada escritura, no del token: el token
+// dura 12 horas y traía los permisos "congelados", así que quitarle un módulo
+// a alguien (o desactivarlo) no surtía efecto hasta que caducara la sesión.
+export async function enforceModulePermissions(req: Request, _res: Response, next: NextFunction) {
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
     next();
     return;
@@ -62,22 +66,43 @@ export function enforceModulePermissions(req: Request, _res: Response, next: Nex
     next(new ApiError(401, "Sesión requerida"));
     return;
   }
-  if (user.role_name === "ADMINISTRADOR") {
-    next();
-    return;
+
+  try {
+    const fresh = await pool.query(
+      `SELECT u.is_active, u.allowed_modules, r.name AS role_name
+       FROM users u
+       LEFT JOIN roles r ON r.id = u.role_id
+       WHERE u.id = $1`,
+      [user.id]
+    );
+    if (!fresh.rowCount || !fresh.rows[0].is_active) {
+      next(new ApiError(401, "Tu usuario fue desactivado. Habla con un administrador."));
+      return;
+    }
+
+    // Mantener la request con los datos frescos para lo que venga después.
+    user.role_name = fresh.rows[0].role_name;
+    user.allowed_modules = fresh.rows[0].allowed_modules ?? [];
+
+    if (user.role_name === "ADMINISTRADOR") {
+      next();
+      return;
+    }
+    const prefix = req.path.split("/")[1] ?? "";
+    const requiredModules = WRITE_MODULES_BY_PREFIX[prefix];
+    if (!requiredModules) {
+      next();
+      return;
+    }
+    const allowed = user.allowed_modules ?? [];
+    if (requiredModules.some((module) => allowed.includes(module))) {
+      next();
+      return;
+    }
+    next(new ApiError(403, `Tu usuario no tiene permiso para registrar cambios en ${requiredModules[0]}. Pide acceso a un administrador.`));
+  } catch (err) {
+    next(err);
   }
-  const prefix = req.path.split("/")[1] ?? "";
-  const requiredModules = WRITE_MODULES_BY_PREFIX[prefix];
-  if (!requiredModules) {
-    next();
-    return;
-  }
-  const allowed = user.allowed_modules ?? [];
-  if (requiredModules.some((module) => allowed.includes(module))) {
-    next();
-    return;
-  }
-  next(new ApiError(403, `Tu usuario no tiene permiso para registrar cambios en ${requiredModules[0]}. Pide acceso a un administrador.`));
 }
 
 export function requireAdmin(req: Request, _res: Response, next: NextFunction) {

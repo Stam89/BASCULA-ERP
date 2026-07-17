@@ -454,7 +454,18 @@ mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, asyn
   res.status(201).json(result);
 }));
 
+// La app Android de la báscula no maneja sesiones, así que /sync queda abierto
+// por compatibilidad. Si el .env define DEVICE_SYNC_KEY, se exige ese valor en
+// el header X-Device-Key: con eso nadie en la red puede inyectar tickets falsos.
+const deviceSyncKey = process.env.DEVICE_SYNC_KEY;
+
 mobileTicketsRouter.post("/sync", asyncRoute(async (req, res) => {
+  if (deviceSyncKey) {
+    const provided = req.headers["x-device-key"];
+    if (provided !== deviceSyncKey) {
+      throw new ApiError(401, "Dispositivo no autorizado para sincronizar tickets.");
+    }
+  }
   const body = syncSchema.parse(req.body);
   const syncedIds: string[] = [];
 
@@ -612,15 +623,16 @@ export async function importBasculaTickets(
 }
 
 // Importa tickets en el formato NATIVO de la app de báscula (por ejemplo desde
-// un puente que los lee de Firebase).
-mobileTicketsRouter.post("/import-bascula", asyncRoute(async (req, res) => {
+// un puente que los lee de Firebase). Solo la web lo usa, así que exige sesión:
+// abierto permitía inyectar tickets falsos desde cualquier equipo de la red.
+mobileTicketsRouter.post("/import-bascula", requireAuth, asyncRoute(async (req, res) => {
   const body = basculaImportSchema.parse(req.body);
   const result = await importBasculaTickets(body.tickets, body.deviceId);
   res.status(201).json(result);
 }));
 
 // Trae los tickets desde Firebase ahora mismo (botón "Importar" en la app).
-mobileTicketsRouter.post("/refresh-firebase", asyncRoute(async (_req, res) => {
+mobileTicketsRouter.post("/refresh-firebase", requireAuth, asyncRoute(async (_req, res) => {
   const { importFromFirebase } = await import("../../integrations/bascula-firebase.js");
   const result = await importFromFirebase();
   if (!result.ok) throw new ApiError(400, result.reason);

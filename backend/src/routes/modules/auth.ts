@@ -285,8 +285,41 @@ authRouter.post("/bootstrap", asyncRoute(async (req, res) => {
   });
 }));
 
+// Freno de fuerza bruta: sin esto se podía probar claves sin límite. Tras 8
+// intentos fallidos desde la misma IP hay que esperar 15 minutos. Un login
+// correcto limpia el contador, así que a un usuario legítimo no le estorba.
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_FAILURES = 8;
+const loginFailures = new Map<string, { count: number; resetAt: number }>();
+
+function loginLimiter(ip: string): { blocked: boolean; minutes: number } {
+  const entry = loginFailures.get(ip);
+  if (!entry || Date.now() > entry.resetAt) return { blocked: false, minutes: 0 };
+  if (entry.count >= LOGIN_MAX_FAILURES) {
+    return { blocked: true, minutes: Math.ceil((entry.resetAt - Date.now()) / 60000) };
+  }
+  return { blocked: false, minutes: 0 };
+}
+
+function recordLoginFailure(ip: string): void {
+  const entry = loginFailures.get(ip);
+  if (!entry || Date.now() > entry.resetAt) {
+    loginFailures.set(ip, { count: 1, resetAt: Date.now() + LOGIN_WINDOW_MS });
+    return;
+  }
+  entry.count += 1;
+  // No dejar crecer el mapa sin límite si alguien rota IPs.
+  if (loginFailures.size > 5000) loginFailures.clear();
+}
+
 authRouter.post("/login", asyncRoute(async (req, res) => {
   await ensureUserColumns();
+  const ip = req.ip ?? "desconocida";
+  const limit = loginLimiter(ip);
+  if (limit.blocked) {
+    throw new ApiError(429, `Demasiados intentos fallidos. Espera ${limit.minutes} minuto(s) y vuelve a intentar.`);
+  }
+
   const body = z.object({
     username: z.string().min(2),
     password: z.string().min(4)
@@ -301,14 +334,17 @@ authRouter.post("/login", asyncRoute(async (req, res) => {
   );
 
   if (!result.rowCount) {
+    recordLoginFailure(ip);
     throw new ApiError(401, "Usuario o clave incorrectos");
   }
 
   const user = result.rows[0];
   const valid = await bcrypt.compare(body.password, user.password_hash);
   if (!valid) {
+    recordLoginFailure(ip);
     throw new ApiError(401, "Usuario o clave incorrectos");
   }
+  loginFailures.delete(ip);
 
   const publicUser = {
     id: user.id,

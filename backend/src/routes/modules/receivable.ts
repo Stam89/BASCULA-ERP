@@ -55,12 +55,14 @@ receivableRouter.post("/:id/pay", asyncRoute(async (req, res) => {
     concepto:         z.string().optional()
   }).parse(req.body);
 
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await inTransaction(async (client) => {
+    // Solo se cobran cuentas del accionista activo: cada socio con su plata.
     const ar = await client.query(
-      "SELECT * FROM accounts_receivable WHERE id = $1 FOR UPDATE",
-      [req.params.id]
+      "SELECT * FROM accounts_receivable WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
+      [req.params.id, accionistaId]
     );
-    if (!ar.rows[0]) throw new ApiError(404, "Cuenta no encontrada");
+    if (!ar.rows[0]) throw new ApiError(404, "Cuenta no encontrada para el accionista seleccionado");
 
     const current = Number(ar.rows[0].balance);
     if (body.amount > current + 0.01) {
