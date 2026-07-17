@@ -191,7 +191,7 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
     `SELECT ap.*, f.full_name AS farmer_name,
-            l.liquidation_number
+            l.liquidation_number, l.batch_id
      FROM accounts_payable ap
      JOIN farmers f ON f.id = ap.farmer_id
      LEFT JOIN liquidations l ON l.id = ap.liquidation_id
