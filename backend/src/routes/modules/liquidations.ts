@@ -224,10 +224,10 @@ liquidationsRouter.post("/:id/apply-advances", asyncRoute(async (req, res) => {
        WHERE l.id = $1`,
       [req.params.id]
     );
-    if (!liq.rows[0]) throw new Error("Liquidación no encontrada");
+    if (!liq.rows[0]) throw new ApiError(404, "Liquidación no encontrada");
     const row = liq.rows[0];
     const apBalance = Number(row.ap_balance ?? 0);
-    if (apBalance <= 0) throw new Error("Esta liquidación ya está pagada");
+    if (apBalance <= 0) throw new ApiError(409, "Esta liquidación ya está pagada");
 
     // Traer anticipos pendientes del agricultor (del mismo accionista que la liquidación)
     const advances = await client.query(
@@ -237,7 +237,7 @@ liquidationsRouter.post("/:id/apply-advances", asyncRoute(async (req, res) => {
        FOR UPDATE`,
       [row.farmer_id, row.accionista_id]
     );
-    if (advances.rows.length === 0) throw new Error("No hay anticipos pendientes para este agricultor");
+    if (advances.rows.length === 0) throw new ApiError(409, "No hay anticipos pendientes para este agricultor");
 
     let remaining = apBalance;
     let totalApplied = 0;

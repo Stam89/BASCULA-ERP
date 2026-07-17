@@ -26,3 +26,6 @@ firebase-key.json
 backend-log.txt
 *.log
 logs/
+
+# Secreto de firma de sesiones (se genera solo, nunca se versiona)
+.jwt-secret

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
+import { ApiError } from "../../http/error-handler.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
@@ -59,11 +60,11 @@ receivableRouter.post("/:id/pay", asyncRoute(async (req, res) => {
       "SELECT * FROM accounts_receivable WHERE id = $1 FOR UPDATE",
       [req.params.id]
     );
-    if (!ar.rows[0]) throw new Error("Cuenta no encontrada");
+    if (!ar.rows[0]) throw new ApiError(404, "Cuenta no encontrada");
 
     const current = Number(ar.rows[0].balance);
     if (body.amount > current + 0.01) {
-      throw new Error(`El monto ($${body.amount}) supera el saldo pendiente ($${current.toFixed(2)})`);
+      throw new ApiError(409, `El monto ($${body.amount}) supera el saldo pendiente ($${current.toFixed(2)})`);
     }
 
     const newBalance = round2(current - body.amount);

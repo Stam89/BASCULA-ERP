@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
+import { ApiError } from "../../http/error-handler.js";
 import { round2 } from "../../utils/rice-formulas.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -131,7 +132,7 @@ equipmentRouter.post("/:id/maintenance", asyncRoute(async (req, res) => {
       "SELECT * FROM equipment WHERE id = $1",
       [req.params.id]
     );
-    if (!equip.rows[0]) throw new Error("Equipo no encontrado");
+    if (!equip.rows[0]) throw new ApiError(404, "Equipo no encontrado");
 
     // Crear registro de mantenimiento
     const maintenance = await client.query(

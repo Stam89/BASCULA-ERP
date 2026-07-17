@@ -1,10 +1,12 @@
+import { ApiError } from "../http/error-handler.js";
+
 export function calculateNetWeight(grossWeight: number, tareWeight: number): number {
   return round3(grossWeight - tareWeight);
 }
 
 export function calculateQuintals(netWeight: number, qualification: number): number {
   if (qualification <= 0) {
-    throw new Error("La calificacion debe ser mayor que cero");
+    throw new ApiError(400, "La calificacion debe ser mayor que cero");
   }
   return round3((netWeight * 2.2) / qualification);
 }
