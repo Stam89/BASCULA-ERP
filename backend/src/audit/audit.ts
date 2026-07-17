@@ -42,6 +42,29 @@ const RESOURCE_LABELS: Record<string, string> = {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Copia el cuerpo de la petición para la auditoría, quitando lo que no debe
+// guardarse: claves y secretos (seguridad) y fotos en base64 (peso). Antes
+// new_data quedaba vacío y al investigar un problema no había forma de saber
+// QUÉ montos se enviaron (nos pasó con un cierre de producción perdido).
+const SENSITIVE_KEY = /password|clave|secret|token|base64/i;
+const MAX_STRING = 500;
+
+function sanitizeForAudit(value: unknown, depth = 0): unknown {
+  if (depth > 4) return "[…]";
+  if (typeof value === "string") {
+    return value.length > MAX_STRING ? `${value.slice(0, MAX_STRING)}…` : value;
+  }
+  if (Array.isArray(value)) return value.slice(0, 50).map((item) => sanitizeForAudit(item, depth + 1));
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = SENSITIVE_KEY.test(key) ? "[oculto]" : sanitizeForAudit(val, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+
 // Registra automáticamente cada escritura exitosa (POST/PUT/DELETE) con el
 // usuario que la realizó. Es "fire and forget": auditar nunca debe romper la
 // operación ni ralentizar la respuesta.
@@ -56,6 +79,7 @@ export function auditMiddleware(req: Request, res: Response, next: NextFunction)
   // para cuando dispara el evento finish, así que se calcula al entrar.
   const segment = (req.path.split("/")[1] || "").toLowerCase();
   const originalUrl = req.originalUrl;
+  const requestBody = sanitizeForAudit(req.body);
 
   // Capturar el id del registro creado desde la respuesta JSON (si lo hay).
   let capturedId: string | undefined;
@@ -88,9 +112,9 @@ export function auditMiddleware(req: Request, res: Response, next: NextFunction)
     ensureAuditTable()
       .then(() =>
         pool.query(
-          `INSERT INTO audit_logs (user_id, username, action, table_name, record_id, method, path, status_code, summary)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-          [user.id, user.name || user.username, action, segment, recordId, method, originalUrl, res.statusCode, summary]
+          `INSERT INTO audit_logs (user_id, username, action, table_name, record_id, method, path, status_code, summary, new_data)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [user.id, user.name || user.username, action, segment, recordId, method, originalUrl, res.statusCode, summary, JSON.stringify(requestBody ?? null)]
         )
       )
       .catch(() => {

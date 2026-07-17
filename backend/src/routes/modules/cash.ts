@@ -293,12 +293,19 @@ cashRouter.post("/payables/:id/pay", asyncRoute(async (req, res) => {
     amount: z.number().positive()
   }).parse(req.body);
 
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await inTransaction(async (client) => {
+    // Solo se pagan cuentas del accionista activo: cada socio con su plata.
+    // FOR UPDATE OF ap: el candado va sobre la cuenta, no sobre el agricultor.
     const ap = await client.query(
-      "SELECT * FROM accounts_payable WHERE id = $1 FOR UPDATE",
-      [req.params.id]
+      `SELECT ap.*, f.full_name AS farmer_name
+       FROM accounts_payable ap
+       LEFT JOIN farmers f ON f.id = ap.farmer_id
+       WHERE ap.id = $1 AND ap.accionista_id = $2
+       FOR UPDATE OF ap`,
+      [req.params.id, accionistaId]
     );
-    if (!ap.rows[0]) throw new ApiError(404, "Cuenta por pagar no encontrada");
+    if (!ap.rows[0]) throw new ApiError(404, "Cuenta por pagar no encontrada para el accionista seleccionado");
 
     const current = Number(ap.rows[0].balance);
     if (body.amount > current + 0.001) throw new ApiError(409, `El monto supera el saldo pendiente ($${current.toFixed(2)})`);
@@ -316,7 +323,8 @@ cashRouter.post("/payables/:id/pay", asyncRoute(async (req, res) => {
        (cash_register_id, movement, category, reference_type, reference_id, amount, description)
        VALUES ($1, 'EXPENSE', 'PAGO_AGRICULTOR', 'accounts_payable', $2, $3, $4)`,
       [body.cash_register_id, req.params.id, body.amount,
-       `Pago a ${ap.rows[0].farmer_id} - ${ap.rows[0].id.slice(0, 8)}`]
+       // El movimiento de caja debe decir A QUIÉN se pagó, no un código interno.
+       `Pago a ${ap.rows[0].farmer_name ?? ap.rows[0].description ?? "proveedor"}`]
     );
 
     return { paid: body.amount, remaining: newBalance, status: newStatus };
