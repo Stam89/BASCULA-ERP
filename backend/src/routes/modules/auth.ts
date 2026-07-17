@@ -65,7 +65,9 @@ authRouter.post("/users", requireAuth, requireAdmin, asyncRoute(async (req, res)
   const body = z.object({
     name: z.string().min(2),
     username: z.string().min(2),
-    password: z.string().min(4),
+    // Mínimo 8 al CREAR: una clave de 4 se adivina en segundos. El login sigue
+    // aceptando 4 para no dejar fuera a usuarios creados antes de esta regla.
+    password: z.string().min(8, "La clave debe tener al menos 8 caracteres."),
     role: z.enum(["ADMINISTRADOR", "OPERADOR"]),
     allowed_modules: moduleSchema,
     // A qué accionistas puede acceder. Un operador sin accionista no puede
@@ -254,7 +256,7 @@ authRouter.post("/bootstrap", asyncRoute(async (req, res) => {
   const body = z.object({
     name: z.string().min(2),
     username: z.string().min(2),
-    password: z.string().min(4)
+    password: z.string().min(8, "La clave debe tener al menos 8 caracteres.")
   }).parse(req.body);
 
   const existing = await pool.query("SELECT 1 FROM users LIMIT 1");

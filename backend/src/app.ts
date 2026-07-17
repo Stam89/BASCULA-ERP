@@ -6,6 +6,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { errorHandler, notFound } from "./http/error-handler.js";
 import { routes } from "./routes/index.js";
+import { verifyToken } from "./auth/jwt.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -21,7 +22,22 @@ app.use("/api", (_req, res, next) => {
   next();
 });
 
-// Servir archivos estáticos (uploads)
+// Archivos subidos (fotos de recibos de mantenimiento): son documentos del
+// negocio, así que exigen sesión. El token puede venir en el header o, para que
+// un <img src> pueda mostrarlos, como ?token=... en la URL.
+app.use("/uploads", (req, res, next) => {
+  const header = req.headers.authorization;
+  const fromHeader = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
+  const fromQuery = typeof req.query.token === "string" ? req.query.token : undefined;
+  const token = fromHeader ?? fromQuery;
+  try {
+    if (!token) throw new Error("sin token");
+    verifyToken(token);
+    next();
+  } catch {
+    res.status(401).json({ error: "Sesión requerida para ver este archivo.", statusCode: 401 });
+  }
+});
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
 app.get("/health", (_req, res) => {
