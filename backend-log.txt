@@ -8,12 +8,5 @@ BASCULA ERP escuchando en el puerto 4000
   Otras PCs/tablets: http://192.168.88.5:4000
 
 [bascula-firebase] importación automática activa cada 3 min.
-[0mGET /health [32m200[0m 6.483 ms - 43[0m
-[bascula-firebase] 111 tickets importados automáticamente.
-[0mPOST /api/v1/auth/users [33m400[0m 116.184 ms - 99[0m
-[0mPOST /api/v1/auth/users [32m201[0m 136.977 ms - 261[0m
-[0mPOST /api/v1/auth/login [32m200[0m 177.594 ms - 697[0m
-[0mPOST /api/v1/cash/registers/open [32m201[0m 12.244 ms - 296[0m
-[0mPOST /api/v1/cash/registers/open [32m201[0m 6.949 ms - 293[0m
-[0mGET /api/v1/cash/registers/current [32m200[0m 1.963 ms - 296[0m
-[0mGET /api/v1/cash/registers/current [32m200[0m 1.656 ms - 293[0m
+[0mGET /health [32m200[0m 2.974 ms - 43[0m
+[bascula-firebase] 116 tickets importados automáticamente.

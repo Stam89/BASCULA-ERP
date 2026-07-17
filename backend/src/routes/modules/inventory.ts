@@ -198,6 +198,23 @@ inventoryRouter.post("/adjustments", asyncRoute(async (req, res) => {
     created_by: z.string().uuid().optional()
   }).parse(req.body);
 
+  // El producto tiene que ir a una bodega de su tipo: la cáscara a materia
+  // prima y el arroz pilado a producto terminado. Mezclarlos descuadra el stock.
+  const check = await pool.query(
+    `SELECT p.name AS producto, p.product_type, w.name AS bodega, w.type AS tipo_bodega
+     FROM products p, warehouses w
+     WHERE p.id = $1 AND w.id = $2`,
+    [body.product_id, body.warehouse_id]
+  );
+  if (!check.rowCount) throw new ApiError(404, "Producto o bodega no encontrados");
+  const { producto, product_type, bodega, tipo_bodega } = check.rows[0];
+  if (product_type === "RAW_MATERIAL" && tipo_bodega !== "RAW_MATERIAL") {
+    throw new ApiError(400, `"${producto}" es materia prima y no puede ir a "${bodega}". Elige una bodega de materia prima.`);
+  }
+  if (product_type === "FINISHED_GOOD" && tipo_bodega === "RAW_MATERIAL") {
+    throw new ApiError(400, `"${producto}" es producto terminado y no puede ir a "${bodega}".`);
+  }
+
   const result = await pool.query(
     `INSERT INTO inventory_movements
      (product_id, warehouse_id, lot_id, movement, quantity, reference_type, ownership, notes, created_by, accionista_id)
