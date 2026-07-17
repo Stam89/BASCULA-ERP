@@ -513,6 +513,31 @@ type MillingDraft = {
   lot_code?: string;
 };
 
+/** Pilado ya cerrado, con su rendimiento. Alimenta el historial de Producción. */
+type ProductionHistoryItem = {
+  id: string;
+  batch_number: string;
+  finished_at: string;
+  pilador_name: string | null;
+  estibador_name: string | null;
+  lot_code: string;
+  tunnel_number: number | null;
+  rice_type: string | null;
+  input_paddy_kg: string | number | null;
+  white_rice_qty: string | number | null;
+  broken_rice_qty: string | number | null;
+  fine_broken_rice_qty: string | number | null;
+  bran_qty: string | number | null;
+  process_loss_kg: string | number | null;
+  yield_percent: string | number | null;
+  presentaciones: Array<{
+    presentation: string | null;
+    sack_weight_lb: string | number | null;
+    quantity: string | number;
+    unit: string;
+  }>;
+};
+
 type SackInventory = {
   id: string;
   tipo: string;
@@ -703,6 +728,12 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 const dryerOptions = ["Secadora 1", "Secadora 2", "Secadora 3"];
 const piladoPresentations = ["10 LB", "25 LB", "50 LB", "98 LB", "100 LB"];
 
+// "100 LB" -> 100. Sirve para guardar el peso del saco como número.
+function sackWeightLbOf(presentation: string): number | undefined {
+  const lb = Number(String(presentation).replace(/[^\d.]/g, ""));
+  return Number.isFinite(lb) && lb > 0 ? lb : undefined;
+}
+
 const defaultProductionPackages: ProductionPackageState = {
   whiteRice: { qq: 0, pounds: 0 },
   broken34: { qq: 0, pounds: 0 },
@@ -797,6 +828,8 @@ export function App() {
   const [productionDryingId, setProductionDryingId] = useState("");
   // Procesos de pilado guardados en el servidor (en curso).
   const [millingDrafts, setMillingDrafts] = useState<MillingDraft[]>([]);
+  const [productionHistory, setProductionHistory] = useState<ProductionHistoryItem[]>([]);
+  const [productionHistoryOpen, setProductionHistoryOpen] = useState(false);
   const [productionPackages, setProductionPackages] = useState<ProductionPackageState>(defaultProductionPackages);
   const [orderPackage, setOrderPackage] = useState<OrderPackageState>(defaultOrderPackage);
   const [weighingRiceType, setWeighingRiceType] = useState<"0.11" | "CORRIENTE">("0.11");
@@ -2496,6 +2529,7 @@ export function App() {
     if (activeTab === "Produccion") {
       refreshSacks().catch(() => undefined);
       loadMillingDrafts().catch(() => undefined);
+      loadProductionHistory().catch(() => undefined);
     }
     if (activeTab === "Inventario") refreshSacks().catch(() => undefined);
     if (activeTab === "Ventas") refreshCustomersAndSales().catch(() => undefined);
@@ -3216,6 +3250,13 @@ export function App() {
     setMillingDrafts(rows);
   }
 
+  async function loadProductionHistory() {
+    const rows = await apiGet<ProductionHistoryItem[]>("/processing-batches/history").catch(
+      () => [] as ProductionHistoryItem[]
+    );
+    setProductionHistory(rows);
+  }
+
   // Al elegir una secadora, trae su proceso guardado (si lo hay).
   async function loadDraftFor(dryingId: string) {
     if (!dryingId) {
@@ -3284,6 +3325,13 @@ export function App() {
         quantity: millingPiladoTotalQq,
         unit: "QQ"
       },
+      // Se manda el desglose (100 LB, 25 LB...) y no solo el total, para que en
+      // el historial se vea en que presentacion salio cada quintal.
+      white_rice_presentations: (Array.isArray(millingPiladoEntries) ? millingPiladoEntries : []).map((entry) => ({
+        presentation: entry.presentation,
+        sack_weight_lb: sackWeightLbOf(entry.presentation),
+        quantity: entry.quantityQq
+      })),
       broken_rice: Number(millingReport.broken34 || 0) > 0 ? {
         product_id: broken34Product.id,
         warehouse_id: finishedWarehouse.id,
@@ -3316,6 +3364,7 @@ export function App() {
     setProductionDryingId("");
     setMillingDraftSavedAt(null);
     await loadMillingDrafts();
+    await loadProductionHistory();
     setMessage("Lote finalizado: produccion agregada al stock");
     await refresh();
   }
@@ -4486,6 +4535,75 @@ export function App() {
                 </section>
               )}
             </section>
+
+            {/* Historial de pilados cerrados. Plegado por defecto para no tapar
+                la pantalla de trabajo. */}
+            <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+              <button
+                type="button"
+                onClick={() => setProductionHistoryOpen((open) => !open)}
+                style={{
+                  width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center",
+                  background: "none", border: "none", cursor: "pointer", padding: 0, font: "inherit", color: "inherit"
+                }}
+              >
+                <h2 style={{ margin: 0 }}>📚 Historial de produccion ({productionHistory.length})</h2>
+                <span className="muted">{productionHistoryOpen ? "▲ Ocultar" : "▼ Ver"}</span>
+              </button>
+
+              {productionHistoryOpen && (
+                productionHistory.length === 0 ? (
+                  <p className="tableEmpty">Todavia no hay pilados cerrados para este accionista.</p>
+                ) : (
+                  <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
+                    {productionHistory.map((item) => (
+                      <article key={item.id} style={{ border: "1px solid var(--c-border)", borderRadius: 8, padding: 12 }}>
+                        <header style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "space-between", alignItems: "baseline" }}>
+                          <div>
+                            <strong>{item.lot_code}</strong>
+                            <span className="muted">
+                              {item.tunnel_number ? ` · Tunel ${item.tunnel_number}` : ""}
+                              {item.rice_type ? ` · ${item.rice_type}` : ""}
+                            </span>
+                          </div>
+                          <span className="muted">{new Date(item.finished_at).toLocaleString("es-EC")}</span>
+                        </header>
+
+                        <section className="yieldResults" style={{ marginTop: 8 }}>
+                          <Metric title="Rendimiento" value={`${Number(item.yield_percent ?? 0).toFixed(2)} %`} />
+                          <Metric title="Pilado" value={`${Number(item.white_rice_qty ?? 0).toFixed(2)} QQ`} />
+                          <Metric title="Arrocillo 3/4" value={`${Number(item.broken_rice_qty ?? 0).toFixed(2)} QQ`} />
+                          <Metric title="Arrocillo fino" value={`${Number(item.fine_broken_rice_qty ?? 0).toFixed(2)} QQ`} />
+                          <Metric title="Polvillo" value={`${Number(item.bran_qty ?? 0).toFixed(2)} QQ`} />
+                        </section>
+
+                        <p style={{ margin: "10px 0 0" }}>
+                          <span className="muted">Presentaciones: </span>
+                          {item.presentaciones.every((p) => !p.presentation) ? (
+                            <span className="muted">sin desglose (se guardo solo el total)</span>
+                          ) : (
+                            item.presentaciones
+                              .filter((p) => p.presentation)
+                              .map((p, index, lista) => (
+                                <span key={`${item.id}-${index}`}>
+                                  <strong>{Number(p.quantity).toFixed(2)} QQ</strong> en {p.presentation}
+                                  {index < lista.length - 1 ? " · " : ""}
+                                </span>
+                              ))
+                          )}
+                        </p>
+
+                        {(item.pilador_name || item.estibador_name) && (
+                          <p className="muted" style={{ margin: "6px 0 0" }}>
+                            Pilador: {item.pilador_name ?? "—"} · Estibador: {item.estibador_name ?? "—"}
+                          </p>
+                        )}
+                      </article>
+                    ))}
+                  </div>
+                )
+              )}
+            </div>
 
           </section>
         )}
