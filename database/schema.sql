@@ -362,17 +362,24 @@ CREATE TABLE processing_batches (
   CONSTRAINT processing_input_positive CHECK (input_quantity > 0)
 );
 
+-- Una fila por peso de materia prima que entra al proceso (un lote agrupa
+-- varios pesos), por eso la llave es propia y no (batch, lote).
 CREATE TABLE processing_batch_drying_lots (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   processing_batch_id UUID NOT NULL REFERENCES processing_batches(id) ON DELETE CASCADE,
   drying_report_id UUID NOT NULL REFERENCES drying_tunnel_reports(id) ON DELETE RESTRICT,
   lot_id UUID NOT NULL REFERENCES lots(id) ON DELETE RESTRICT,
+  weighing_ticket_id UUID REFERENCES weighing_tickets(id) ON DELETE SET NULL,
   lot_code VARCHAR(60) NOT NULL,
   farmer_name VARCHAR(180),
   net_weight_kg NUMERIC(14,3) NOT NULL DEFAULT 0,
   quintals NUMERIC(14,3) NOT NULL DEFAULT 0,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (processing_batch_id, lot_id)
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE UNIQUE INDEX uq_processing_batch_drying_lots_ticket
+  ON processing_batch_drying_lots(processing_batch_id, weighing_ticket_id)
+  WHERE weighing_ticket_id IS NOT NULL;
 
 CREATE TABLE processing_outputs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

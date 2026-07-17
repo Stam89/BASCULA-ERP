@@ -555,6 +555,7 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
       farmer_name: string | null;
       net_weight_kg: string | number;
       quintals: string | number;
+      weighing_ticket_id: string | null;
     }> = [];
 
     if (body.drying_report_id) {
@@ -579,7 +580,7 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
       }
 
       const linkedLots = await client.query(
-        `SELECT lot_id, lot_code, farmer_name, net_weight_kg, quintals
+        `SELECT lot_id, lot_code, farmer_name, net_weight_kg, quintals, weighing_ticket_id
          FROM drying_tunnel_report_lots
          WHERE drying_report_id = $1
          ORDER BY created_at ASC`,
@@ -649,8 +650,8 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
 
         await client.query(
           `INSERT INTO processing_batch_drying_lots
-           (processing_batch_id, drying_report_id, lot_id, lot_code, farmer_name, net_weight_kg, quintals)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+           (processing_batch_id, drying_report_id, lot_id, lot_code, farmer_name, net_weight_kg, quintals, weighing_ticket_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
           [
             batch.rows[0].id,
             body.drying_report_id,
@@ -658,7 +659,8 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
             linkedLot.lot_code,
             linkedLot.farmer_name,
             linkedLot.net_weight_kg,
-            linkedLot.quintals
+            linkedLot.quintals,
+            linkedLot.weighing_ticket_id
           ]
         );
         await client.query(
