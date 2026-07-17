@@ -44,6 +44,52 @@ processingRouter.get("/drafts", asyncRoute(async (req, res) => {
   res.json(result.rows);
 }));
 
+// Historial de pilados ya cerrados del accionista activo, con su rendimiento y
+// el desglose por presentacion. Es el respaldo para revisar que salio de cada
+// lote sin tener que abrir la base de datos.
+processingRouter.get("/history", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const result = await pool.query(
+    `SELECT b.id,
+            b.batch_number,
+            b.finished_at,
+            b.pilador_name,
+            b.estibador_name,
+            l.lot_code,
+            t.tunnel_number,
+            t.rice_type,
+            y.input_paddy_kg,
+            y.white_rice_qty,
+            y.broken_rice_qty,
+            y.fine_broken_rice_qty,
+            y.bran_qty,
+            y.total_output_kg,
+            y.process_loss_kg,
+            y.yield_percent,
+            COALESCE((
+              SELECT json_agg(json_build_object(
+                       'presentation', po.presentation,
+                       'sack_weight_lb', po.sack_weight_lb,
+                       'quantity', po.quantity,
+                       'unit', po.unit
+                     ) ORDER BY po.sack_weight_lb DESC NULLS LAST)
+              FROM processing_outputs po
+              WHERE po.processing_batch_id = b.id
+                AND po.is_byproduct = false
+            ), '[]'::json) AS presentaciones
+     FROM processing_batches b
+     JOIN lots l ON l.id = b.lot_id
+     LEFT JOIN drying_tunnel_reports t ON t.id = b.drying_report_id
+     LEFT JOIN production_yields y ON y.processing_batch_id = b.id
+     WHERE b.finished_at IS NOT NULL
+       AND l.accionista_id = $1
+     ORDER BY b.finished_at DESC
+     LIMIT 100`,
+    [accionistaId]
+  );
+  res.json(result.rows);
+}));
+
 processingRouter.get("/drafts/:dryingId", asyncRoute(async (req, res) => {
   const result = await pool.query(
     "SELECT drying_report_id, report, pilado_entries, saved_at FROM milling_drafts WHERE drying_report_id = $1",
@@ -101,6 +147,14 @@ const finishProductionSchema = z.object({
   white_rice: productionOutputSchema.extend({
     unit: productionUnitSchema.default("QQ")
   }),
+  // Desglose del pilado por presentacion (100 LB, 25 LB...). Antes solo se
+  // guardaba el total y se perdia en cuantos sacos de cada tipo salio, que es
+  // justo lo que hace falta para vender y para revisar el historial.
+  white_rice_presentations: z.array(z.object({
+    presentation: z.string().min(1),
+    sack_weight_lb: z.number().positive().optional(),
+    quantity: z.number().positive()
+  })).optional(),
   broken_rice: productionOutputSchema.extend({
     unit: productionUnitSchema.default("QQ")
   }).optional(),
@@ -139,14 +193,41 @@ function round3(value: number): number {
 }
 
 function buildOutputRows(body: FinishProductionInput) {
-  const rows = [
-    {
-      label: "ARROZ_BLANCO",
-      isByproduct: false,
-      output: body.white_rice,
-      kg: outputToKg(body.white_rice)
+  const presentaciones = body.white_rice_presentations ?? [];
+
+  // El desglose no puede contradecir al total: si no cuadran, algo se quedo
+  // sin cargar y el stock saldria mal.
+  if (presentaciones.length) {
+    const suma = round3(presentaciones.reduce((total, p) => total + p.quantity, 0));
+    const totalPilado = round3(body.white_rice.quantity);
+    if (Math.abs(suma - totalPilado) > 0.01) {
+      throw new ApiError(
+        400,
+        `El desglose por presentacion suma ${suma} y el total de pilado es ${totalPilado}. Revisa las cantidades.`
+      );
     }
-  ];
+  }
+
+  // Una fila por presentacion, para que quede registrado cuanto salio en sacos
+  // de 100 LB, de 25 LB, etc. Sin desglose se guarda el total, como siempre.
+  const rows = presentaciones.length
+    ? presentaciones.map((p) => {
+        const output = {
+          ...body.white_rice,
+          quantity: p.quantity,
+          presentation: p.presentation,
+          sack_weight_lb: p.sack_weight_lb
+        };
+        return { label: "ARROZ_BLANCO", isByproduct: false, output, kg: outputToKg(output) };
+      })
+    : [
+        {
+          label: "ARROZ_BLANCO",
+          isByproduct: false,
+          output: body.white_rice,
+          kg: outputToKg(body.white_rice)
+        }
+      ];
 
   if (body.broken_rice) {
     rows.push({
