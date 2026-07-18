@@ -3059,6 +3059,20 @@ export function App() {
     await refreshCaja(registerId);
   }
 
+  // Paga una liquidación completa: un solo monto que el backend reparte entre
+  // sus cuentas (de la más vieja a la más nueva) y deja UN movimiento en caja.
+  async function pagarGrupoCuentas(payableIds: string[], amount: number) {
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) throw new Error("No hay caja abierta");
+    await apiPost("/cash/payables/pay-group", {
+      payable_ids: payableIds,
+      cash_register_id: registerId,
+      amount
+    });
+    addToast("Pago registrado", "success");
+    await refreshCaja(registerId);
+  }
+
   async function setupMasterData() {
     setBusy(true);
     try {
@@ -6425,16 +6439,15 @@ export function App() {
                         <div><span>Pendiente</span><b className="pend">{money(pendiente)}</b></div>
                       </div>
                       <div className="cuentaBar"><div style={{ width: `${percentPaid}%` }} /></div>
-                      {grupo.items.map((ap) => (
-                        <div key={ap.id} style={varios ? { borderTop: "1px dashed var(--c-border)", paddingTop: 6, marginTop: 6 } : undefined}>
-                          {varios && (
-                            <div className="muted" style={{ fontSize: 12, marginBottom: 2 }}>
-                              Ingreso: {money(Number(ap.amount))} · pendiente {money(Number(ap.balance))}
-                            </div>
-                          )}
-                          <PayablePayForm payable={ap} onPay={(amount) => pagarCuenta(ap.id, amount).catch((e) => addToast(e.message, "error"))} />
-                        </div>
-                      ))}
+                      {/* Un solo pago por el total: el sistema lo reparte entre
+                          los ingresos (del más viejo al más nuevo). */}
+                      <PayablePayForm
+                        key={`${grupo.key}-${pendiente.toFixed(2)}`}
+                        payable={{ ...grupo.items[0], amount: total, balance: pendiente }}
+                        onPay={(amount) =>
+                          pagarGrupoCuentas(grupo.items.map((ap) => ap.id), amount).catch((e) => addToast(e.message, "error"))
+                        }
+                      />
                     </article>
                   );
                 })}
