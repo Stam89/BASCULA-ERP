@@ -422,6 +422,17 @@ type DryingTunnelLot = {
   quintals: string | number;
 };
 
+/** Secado activo de un motor (puede ser de cualquier accionista). */
+type MotorActiveReport = {
+  id: string;
+  tunnel_number: number;
+  dryer_name: string | null;
+  total_quintals: string | number;
+  rice_type: string | null;
+  lot_code: string;
+  accionista_name: string | null;
+};
+
 type ProcessFlow = {
   lot: Lot & { print_batch_code: string; is_maquila: boolean };
   reports: ProcessReport[];
@@ -743,7 +754,16 @@ const LB_TO_KG = 0.45359237;
 const QQ_TO_LB = 100;
 const millingDraftStorageKey = "bascula-erp:milling-report-draft";
 const round2 = (n: number) => Math.round(n * 100) / 100;
-const dryerOptions = ["Secadora 1", "Secadora 2", "Secadora 3"];
+// Motor 1 mueve las Secadoras 1 y 2; Motor 2 la Secadora 3. El combustible es
+// del motor: se anota una vez y se reparte por QQ entre sus secados activos.
+const MOTOR_SECADORAS: Record<1 | 2, string[]> = {
+  1: ["Secadora 1", "Secadora 2"],
+  2: ["Secadora 3"]
+};
+const motorDeSecadora = (name?: string | null): 1 | 2 => (String(name ?? "").includes("3") ? 2 : 1);
+const dryerOptions = MOTOR_SECADORAS[1].concat(MOTOR_SECADORAS[2]);
+// La secadora N seca en el túnel N (mismo número).
+const tunelDeSecadora = (name: string) => Number(String(name).replace(/[^\d]/g, "")) || 1;
 const piladoPresentations = ["10 LB", "25 LB", "50 LB", "98 LB", "100 LB"];
 
 // Junta las cuentas por pagar de una misma liquidación (mismo batch_id) para
@@ -851,9 +871,16 @@ export function App() {
   const [productionResult, setProductionResult] = useState<ProductionResult | null>(null);
   const [traceLotId, setTraceLotId] = useState("");
   const [processFlow, setProcessFlow] = useState<ProcessFlow | null>(null);
-  const [selectedDryingLotIds, setSelectedDryingLotIds] = useState<string[]>([]);
-  // Combustible del secado: bombona y diesel por medidor (fin - inicio), y
-  // cilindros por unidad.
+  // Cada secadora arma su propio lote: selección de ingresos POR secadora.
+  const [dryingSelections, setDryingSelections] = useState<Record<string, string[]>>({});
+  const [dryingEntryPick, setDryingEntryPick] = useState<Record<string, string>>({});
+  // Motor activo en pantalla: el 1 mueve las Secadoras 1 y 2; el 2, la 3.
+  const [motorActivo, setMotorActivo] = useState<1 | 2>(1);
+  // Secados sin finalizar del motor (de TODOS los accionistas: el motor es
+  // compartido); entre ellos se reparte el combustible según sus QQ.
+  const [motorActiveReports, setMotorActiveReports] = useState<MotorActiveReport[]>([]);
+  // Combustible DEL MOTOR: bombona y diesel por medidor (inicio - fin), y
+  // cilindros por unidad. Se registra una vez y se reparte.
   const [gasForm, setGasForm] = useState({ bombona_inicio: "", bombona_fin: "", cilindro_cantidad: "", diesel_inicio: "", diesel_fin: "" });
   const [editingDryingReport, setEditingDryingReport] = useState<DryingTunnelReport | null>(null);
   const [productionDryingId, setProductionDryingId] = useState("");
@@ -1177,34 +1204,35 @@ export function App() {
     () => insumos.filter((item) => item.is_critical),
     [insumos]
   );
-  const selectedDryingLots = useMemo(
-    () =>
-      editingDryingReport
-        ? editingDryingReport.lots
-        : availableDryingLots.filter((entry) => selectedDryingLotIds.includes(entry.id)).map((entry) => ({
-            lot_id: entry.id,
-            lot_code: entryLabel(entry),
-            farmer_name: entry.farmer_name,
-            net_weight_kg: entry.net_weight ?? 0,
-            quintals: entry.quintals ?? 0
-          })),
-    [availableDryingLots, editingDryingReport, selectedDryingLotIds]
-  );
-  const selectedDryingTotalQq = useMemo(
-    () => (Array.isArray(selectedDryingLots) ? selectedDryingLots : []).reduce((sum, lot) => sum + Number(lot.quintals ?? 0), 0),
-    [selectedDryingLots]
-  );
-  const selectedDryingTotalKg = useMemo(
-    () => (Array.isArray(selectedDryingLots) ? selectedDryingLots : []).reduce((sum, lot) => sum + Number(lot.net_weight_kg ?? 0), 0),
-    [selectedDryingLots]
-  );
-  const selectableDryingLots = useMemo(
-    () => availableDryingLots.filter((lot) => !selectedDryingLotIds.includes(lot.id)),
-    [availableDryingLots, selectedDryingLotIds]
-  );
-  // Combustible del secado, calculado en vivo con los precios fijos de
-  // Configuración. El backend lo recalcula al guardar (esto es solo la vista).
-  // Los medidores marcan lo que queda: inicio − fin es lo consumido.
+  // ── Selección de ingresos POR SECADORA (cada una arma su propio lote) ──────
+  const seleccionDe = (secadora: string) => dryingSelections[secadora] ?? [];
+  // Un ingreso agregado en una secadora no debe aparecer en la otra.
+  const idsUsados = new Set(Object.values(dryingSelections).flat());
+  const entradasLibres = availableDryingLots.filter((lot) => !idsUsados.has(lot.id));
+  // Se compara por número ("Secador 1" viejo y "Secadora 1" son la misma).
+  const editandoEnSecadora = (secadora: string) =>
+    editingDryingReport && tunelDeSecadora(editingDryingReport.dryer_name ?? "1") === tunelDeSecadora(secadora)
+      ? editingDryingReport
+      : null;
+  const lotesDe = (secadora: string): DryingTunnelLot[] => {
+    const editando = editandoEnSecadora(secadora);
+    if (editando) return editando.lots;
+    return availableDryingLots
+      .filter((entry) => seleccionDe(secadora).includes(entry.id))
+      .map((entry) => ({
+        lot_id: entry.id,
+        lot_code: entryLabel(entry),
+        farmer_name: entry.farmer_name,
+        net_weight_kg: entry.net_weight ?? 0,
+        quintals: entry.quintals ?? 0
+      }));
+  };
+  const qqDe = (secadora: string) => lotesDe(secadora).reduce((s, l) => s + Number(l.quintals ?? 0), 0);
+  const kgDe = (secadora: string) => lotesDe(secadora).reduce((s, l) => s + Number(l.net_weight_kg ?? 0), 0);
+
+  // ── Combustible DEL MOTOR, calculado en vivo (el backend lo recalcula al
+  // guardar). Los medidores marcan lo que queda: inicio − fin es lo consumido.
+  // El costo se reparte entre los secados activos del motor según sus QQ.
   const gasBombonaTotal = Math.max(0, Number(gasForm.bombona_inicio || 0) - Number(gasForm.bombona_fin || 0));
   const gasBombonaCosto = round2(gasBombonaTotal * Number(laborRatesForm.precio_gas_bombona || 0));
   const gasCilindroCosto = round2(Number(gasForm.cilindro_cantidad || 0) * Number(laborRatesForm.precio_gas_cilindro || 0));
@@ -1212,11 +1240,9 @@ export function App() {
   const dieselCosto = round2(dieselTotal * Number(laborRatesForm.precio_diesel || 0));
   const gasCostoTotal = round2(gasBombonaCosto + gasCilindroCosto);
   const combustibleTotal = round2(gasCostoTotal + dieselCosto);
-  // Costo por quintal: lo que cuesta secar cada QQ de este lote.
-  const qqSecado = selectedDryingTotalQq || Number(editingDryingReport?.total_quintals ?? 0);
-  const gasPorQq = qqSecado > 0 ? round2(gasCostoTotal / qqSecado) : 0;
-  const dieselPorQq = qqSecado > 0 ? round2(dieselCosto / qqSecado) : 0;
-  const combustiblePorQq = qqSecado > 0 ? round2(combustibleTotal / qqSecado) : 0;
+  // QQ que están secándose con este motor (todos los accionistas juntos).
+  const qqMotor = motorActiveReports.reduce((s, r) => s + Number(r.total_quintals ?? 0), 0);
+  const combustiblePorQq = qqMotor > 0 ? round2(combustibleTotal / qqMotor) : 0;
   const productionDryingReports = useMemo(
     () => dryingReports.filter((report) => report.status === "COMPLETED" && !report.is_processed),
     [dryingReports]
@@ -2575,12 +2601,13 @@ export function App() {
     if (activeTab === "Por Pagar") refreshPayables().catch(() => undefined);
     // Secadoras y Nómina necesitan las tarifas (precios de gas/diesel).
     if (activeTab === "Secadoras" || activeTab === "Nomina") loadLaborRates().catch(() => undefined);
+    if (activeTab === "Secadoras") loadMotorActive(motorActivo).catch(() => undefined);
     if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
     if (activeTab === "Cuadrilla") refreshCuadrilla().catch(() => undefined);
     if (activeTab === "Servicio Pilado") refreshPilado().catch(() => undefined);
     if (activeTab === "Dashboard" && isAdmin) refreshPanel().catch(() => undefined);
     if (activeTab === "Configuracion") refreshConfig().catch(() => undefined);
-  }, [activeTab]);
+  }, [activeTab, motorActivo]);
 
   async function submitFomento(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -3164,43 +3191,69 @@ export function App() {
     setMessage(`Secadoras cargadas para ${flow.lot.lot_code}`);
   }
 
-  async function submitDryingReport(event: FormEvent<HTMLFormElement>) {
+  async function submitDryingReport(event: FormEvent<HTMLFormElement>, secadora: string) {
     event.preventDefault();
-    await submitDryingForm(event.currentTarget);
+    await submitDryingForm(event.currentTarget, secadora);
   }
 
-  function addSelectedDryingLot() {
-    if (!traceLotId) {
-      setMessage("Seleccione un lote para agregarlo al secado");
+  function addDryingEntry(secadora: string) {
+    const entryId = dryingEntryPick[secadora];
+    if (!entryId) {
+      setMessage("Selecciona un ingreso de materia prima");
       return;
     }
-    const lot = selectableDryingLots.find((item) => item.id === traceLotId);
-    if (!lot) {
-      setMessage("Ese lote ya fue agregado o ya esta usado en otro secado");
-      setTraceLotId("");
-      return;
-    }
-    setSelectedDryingLotIds((current) => [...current, lot.id]);
-    setTraceLotId("");
-    setMessage(`${lot.farmer_name ?? "Lote"} agregado a lotes utilizados`);
+    setDryingSelections((cur) => ({ ...cur, [secadora]: [...(cur[secadora] ?? []), entryId] }));
+    setDryingEntryPick((cur) => ({ ...cur, [secadora]: "" }));
   }
 
-  function removeSelectedDryingLot(lotId: string) {
-    if (editingDryingReport) return;
-    setSelectedDryingLotIds((current) => current.filter((id) => id !== lotId));
+  function removeDryingEntry(secadora: string, lotId: string) {
+    if (editandoEnSecadora(secadora)) return;
+    setDryingSelections((cur) => ({ ...cur, [secadora]: (cur[secadora] ?? []).filter((id) => id !== lotId) }));
   }
 
   function editDryingReport(report: DryingTunnelReport) {
     setEditingDryingReport(report);
-    setSelectedDryingLotIds(report.lots.map((lot) => lot.lot_id));
-    setMessage(`Editando secado del Tunel ${report.tunnel_number}`);
+    // El formulario del secado vive bajo su motor: cambiar a esa vista.
+    setMotorActivo(motorDeSecadora(report.dryer_name));
+    setMessage(`Editando secado del Tunel ${report.tunnel_number} (${report.dryer_name ?? "Secadora 1"})`);
   }
 
-  function clearDryingForm(form?: HTMLFormElement | null) {
+  function clearDryingForm(form?: HTMLFormElement | null, secadora?: string) {
     setEditingDryingReport(null);
-    setSelectedDryingLotIds([]);
+    if (secadora) setDryingSelections((cur) => ({ ...cur, [secadora]: [] }));
     safeResetForm(form);
     setMessage("Formulario listo para nuevo secado");
+  }
+
+  async function loadMotorActive(motor: 1 | 2 = motorActivo) {
+    const rows = await apiGet<MotorActiveReport[]>(`/process-flow/drying/motor/${motor}/active`).catch(
+      () => [] as MotorActiveReport[]
+    );
+    setMotorActiveReports(rows);
+  }
+
+  // Registra el combustible del motor: el backend reparte el costo entre los
+  // secados activos según los QQ de cada uno (aunque sean de otro accionista).
+  async function registrarCombustibleMotor() {
+    const result = await apiPost<{ costo_por_qq: number; reparto: Array<{ total: number }> }>(
+      "/process-flow/drying/motor-fuel",
+      {
+        motor_number: motorActivo,
+        gas_bombona_inicio: Number(gasForm.bombona_inicio || 0),
+        gas_bombona_fin: Number(gasForm.bombona_fin || 0),
+        gas_cilindro_cantidad: Number(gasForm.cilindro_cantidad || 0),
+        diesel_inicio: Number(gasForm.diesel_inicio || 0),
+        diesel_fin: Number(gasForm.diesel_fin || 0),
+        created_by: authUser?.id
+      }
+    );
+    setGasForm({ bombona_inicio: "", bombona_fin: "", cilindro_cantidad: "", diesel_inicio: "", diesel_fin: "" });
+    addToast(
+      `Combustible del Motor ${motorActivo} repartido entre ${result.reparto.length} secado(s) · ${money(result.costo_por_qq)} por QQ`,
+      "success"
+    );
+    await loadMotorActive();
+    await refresh();
   }
 
   function updateProductionPackage(key: ProductionPackageKey, changes: Partial<ProductionPackageState[ProductionPackageKey]>) {
@@ -3429,16 +3482,18 @@ export function App() {
     await refresh();
   }
 
-  async function finalizeDryingReport(formElement: HTMLFormElement | null) {
+  async function finalizeDryingReport(formElement: HTMLFormElement | null, secadora: string) {
     if (!editingDryingReport || !formElement) return;
     const endInput = formElement.elements.namedItem("dry_end_at") as HTMLInputElement | null;
     if (endInput && !endInput.value) {
       endInput.value = dateTimeLocalValue(new Date().toISOString());
     }
-    await submitDryingForm(formElement);
+    await submitDryingForm(formElement, secadora);
   }
 
-  async function submitDryingForm(formElement: HTMLFormElement) {
+  // El combustible ya no viaja aquí: se registra por MOTOR en su propio panel
+  // y el backend lo reparte entre los secados activos.
+  async function submitDryingForm(formElement: HTMLFormElement, secadora: string) {
     const form = new FormData(formElement);
     const payload = {
       rice_type: form.get("rice_type") || "0.11",
@@ -3446,43 +3501,41 @@ export function App() {
       filled_at: stringOrUndefined(form.get("filled_at")),
       dry_start_at: stringOrUndefined(form.get("dry_start_at")),
       dry_end_at: stringOrUndefined(form.get("dry_end_at")),
-      gas_bombona_inicio: Number(form.get("gas_bombona_inicio") || 0),
-      gas_bombona_fin: Number(form.get("gas_bombona_fin") || 0),
-      gas_cilindro_cantidad: Number(form.get("gas_cilindro_cantidad") || 0),
-      diesel_inicio: Number(form.get("diesel_inicio") || 0),
-      diesel_fin: Number(form.get("diesel_fin") || 0),
-      dryer_name: form.get("dryer_name") || undefined,
+      dryer_name: secadora,
       notes: form.get("notes") || undefined
     };
 
-    if (editingDryingReport) {
-      const updated = await apiPut<DryingTunnelReport>(`/process-flow/drying/${editingDryingReport.id}`, payload);
+    const editando = editandoEnSecadora(secadora);
+    if (editando) {
+      const updated = await apiPut<DryingTunnelReport>(`/process-flow/drying/${editando.id}`, payload);
       setMessage(updated.status === "COMPLETED" ? `Secado del Tunel ${updated.tunnel_number} finalizado` : `Secado del Tunel ${updated.tunnel_number} actualizado`);
       setEditingDryingReport(null);
-      setSelectedDryingLotIds([]);
       safeResetForm(formElement);
       await refresh();
+      await loadMotorActive();
       if (updated.lots[0]?.lot_id) await loadProcessFlow(updated.lots[0].lot_id);
       return;
     }
 
-    if (selectedDryingLotIds.length === 0) {
-      setMessage("Selecciona uno o varios ingresos de materia prima para formar el lote");
+    const entryIds = seleccionDe(secadora);
+    if (entryIds.length === 0) {
+      setMessage(`Agrega ingresos de materia prima a la ${secadora} para formar el lote`);
       return;
     }
 
     // Aquí nace el lote: el grupo de ingresos que entra al túnel.
     const created = await apiPost<DryingTunnelReport>("/process-flow/drying", {
-      entry_ids: selectedDryingLotIds,
+      entry_ids: entryIds,
       lot_code: String(form.get("lot_code") ?? "").trim() || undefined,
-      tunnel_number: Number(form.get("tunnel_number")),
+      tunnel_number: tunelDeSecadora(secadora),
       ...payload
     });
     safeResetForm(formElement);
-    setSelectedDryingLotIds([]);
+    setDryingSelections((cur) => ({ ...cur, [secadora]: [] }));
     await refresh();
+    await loadMotorActive();
     if (created.lots[0]?.lot_id) await loadProcessFlow(created.lots[0].lot_id);
-    setMessage(`Lote formado en el túnel; los ingresos usados ya no aparecen disponibles`);
+    setMessage(`Lote formado en la ${secadora}; los ingresos usados ya no aparecen disponibles`);
   }
 
   async function submitProduction(event: FormEvent<HTMLFormElement>) {
@@ -4114,79 +4167,137 @@ export function App() {
         )}
 
         {activeTab === "Secadoras" && (
-          <section className="traceLayout">
-            <section className="formPanel">
-              <h2>Armar el lote</h2>
-              <p className="muted">El lote se forma aquí: agrega los ingresos de materia prima (pesajes de báscula) que entran juntos al túnel.</p>
-              <label>
-                <span>Ingreso de materia prima</span>
-                <select value={traceLotId} onChange={(event) => setTraceLotId(event.target.value)}>
-                  <option value="">Seleccione</option>
-                  {selectableDryingLots.map((entry) => (
-                    <option key={entry.id} value={entry.id}>
-                      {entryLabel(entry)} - {entry.farmer_name ?? "Sin agricultor"} - {Number(entry.quintals ?? 0).toFixed(2)} QQ
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button className="primary" type="button" onClick={addSelectedDryingLot} disabled={Boolean(editingDryingReport)}>
-                Agregar al lote
-              </button>
-              <p className="muted">Al agregarlo desaparece de este selector para no repetirlo. Todos deben ser del mismo accionista y del mismo tipo (compra o servicio).</p>
-            </section>
+          <section className="panelGrid">
+            {/* ── Selector de motor: el 1 mueve las Secadoras 1 y 2; el 2, la 3 ── */}
+            <div className="tablePanel" style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <h2 style={{ margin: 0 }}>🔧 Motor</h2>
+              {([1, 2] as const).map((motor) => (
+                <button
+                  key={motor}
+                  type="button"
+                  className={motorActivo === motor ? "primary" : undefined}
+                  onClick={() => setMotorActivo(motor)}
+                >
+                  Motor {motor} · {MOTOR_SECADORAS[motor].join(" y ")}
+                </button>
+              ))}
+              <span className="muted">El combustible se registra por motor y se reparte entre sus secadoras según los quintales.</span>
+            </div>
 
-            <form
-              className="formPanel dryingForm"
-              key={editingDryingReport?.id ?? "new-drying"}
-              onSubmit={(event) => submitDryingReport(event).catch((error) => setMessage(error.message))}
-            >
-              <h2>Informe de secado por tunel</h2>
-              {editingDryingReport && <span className="editBadge">✎ Editando secado guardado</span>}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <Input name="dryer_name" label="Secador" defaultValue={editingDryingReport?.dryer_name ?? "Secador 1"} />
-                <Input
-                  name="filled_at"
-                  label="Fecha de llenado"
-                  type="date"
-                  defaultValue={(editingDryingReport?.filled_at ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10)}
-                  required={false}
-                />
-              </div>
-              {!editingDryingReport && (
-                <label>
-                  <span>Número de lote <span className="muted">(se genera solo; puedes escribir otro)</span></span>
-                  <input name="lot_code" type="text" placeholder="Automático (LT-…)" />
-                </label>
-              )}
-              <Select
-                name="rice_type"
-                label="Tipo de arroz"
-                rows={[["0.11", "0.11"], ["CORRIENTE", "Corriente"]]}
-                defaultValue={editingDryingReport?.rice_type ?? "0.11"}
-              />
-              <DryingLotSelector
-                selectedLots={selectedDryingLots}
-                editing={Boolean(editingDryingReport)}
-                onRemove={removeSelectedDryingLot}
-              />
-              <div className="totalBox">
-                <span>Peso total</span>
-                <strong>{selectedDryingTotalQq.toFixed(2)} QQ</strong>
-                <small>{selectedDryingTotalKg.toFixed(2)} kg netos sumados automaticamente</small>
-              </div>
-              <Select
-                name="tunnel_number"
-                label="Tunel"
-                rows={[["1", "Tunel 1"], ["2", "Tunel 2"], ["3", "Tunel 3"]]}
-                defaultValue={editingDryingReport ? String(editingDryingReport.tunnel_number) : undefined}
-                disabled={Boolean(editingDryingReport)}
-              />
-              <Input name="moisture_before" label="Humedad inicial %" type="number" defaultValue={String(editingDryingReport?.moisture_before ?? 0)} />
-              <Input name="dry_start_at" label="Hora secado inicio" type="datetime-local" defaultValue={dateTimeLocalValue(editingDryingReport?.dry_start_at)} required={false} />
-              <Input name="dry_end_at" label="Hora secado final" type="datetime-local" defaultValue={dateTimeLocalValue(editingDryingReport?.dry_end_at)} required={false} />
-              {/* ── Combustible: gas (bombona/cilindro) y diesel ── */}
+            {/* ── Un formulario por secadora del motor ── */}
+            {MOTOR_SECADORAS[motorActivo].map((secadora) => {
+              const editando = editandoEnSecadora(secadora);
+              const lotes = lotesDe(secadora);
+              return (
+                <form
+                  key={`${secadora}-${editando?.id ?? "nuevo"}`}
+                  className="formPanel dryingForm"
+                  onSubmit={(event) => submitDryingReport(event, secadora).catch((error) => setMessage(error.message))}
+                >
+                  <h2>🌀 {secadora} · Túnel {tunelDeSecadora(secadora)}</h2>
+                  {editando && <span className="editBadge">✎ Editando secado guardado</span>}
+
+                  {!editando && (
+                    <>
+                      <label>
+                        <span>Ingreso de materia prima</span>
+                        <select
+                          value={dryingEntryPick[secadora] ?? ""}
+                          onChange={(event) => setDryingEntryPick((cur) => ({ ...cur, [secadora]: event.target.value }))}
+                        >
+                          <option value="">Seleccione</option>
+                          {entradasLibres.map((entry) => (
+                            <option key={entry.id} value={entry.id}>
+                              {entryLabel(entry)} - {entry.farmer_name ?? "Sin agricultor"} - {Number(entry.quintals ?? 0).toFixed(2)} QQ
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button type="button" onClick={() => addDryingEntry(secadora)}>Agregar al lote</button>
+                    </>
+                  )}
+
+                  <DryingLotSelector
+                    selectedLots={lotes}
+                    editing={Boolean(editando)}
+                    onRemove={(id) => removeDryingEntry(secadora, id)}
+                  />
+                  <div className="totalBox">
+                    <span>Peso total</span>
+                    <strong>{qqDe(secadora).toFixed(2)} QQ</strong>
+                    <small>{kgDe(secadora).toFixed(2)} kg netos sumados automaticamente</small>
+                  </div>
+
+                  {!editando && (
+                    <label>
+                      <span>Número de lote <span className="muted">(se genera solo; puedes escribir otro)</span></span>
+                      <input name="lot_code" type="text" placeholder="Automático (LT-…)" />
+                    </label>
+                  )}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <Select
+                      name="rice_type"
+                      label="Tipo de arroz"
+                      rows={[["0.11", "0.11"], ["CORRIENTE", "Corriente"]]}
+                      defaultValue={editando?.rice_type ?? "0.11"}
+                    />
+                    <Input
+                      name="filled_at"
+                      label="Fecha de llenado"
+                      type="date"
+                      defaultValue={(editando?.filled_at ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10)}
+                      required={false}
+                    />
+                  </div>
+                  <Input name="moisture_before" label="Humedad inicial %" type="number" defaultValue={String(editando?.moisture_before ?? 0)} />
+                  <Input name="dry_start_at" label="Hora secado inicio" type="datetime-local" defaultValue={dateTimeLocalValue(editando?.dry_start_at)} required={false} />
+                  <Input name="dry_end_at" label="Hora secado final" type="datetime-local" defaultValue={dateTimeLocalValue(editando?.dry_end_at)} required={false} />
+                  <Input name="notes" label="Observacion" defaultValue={editando?.notes ?? "Secado registrado"} required={false} />
+                  <div className="buttonRow">
+                    <button className="primary">{editando ? "Guardar cambios" : "Guardar informe"}</button>
+                    {editando && (
+                      <>
+                        {editando.status !== "COMPLETED" && (
+                          <button type="button" onClick={(event) => finalizeDryingReport(event.currentTarget.form, secadora).catch((error) => setMessage(error.message))}>
+                            Finalizar secado
+                          </button>
+                        )}
+                        <button type="button" onClick={(event) => clearDryingForm(event.currentTarget.form, secadora)}>
+                          Nuevo informe
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </form>
+              );
+            })}
+
+            {/* ── Combustible DEL MOTOR: una sola vez, repartido por QQ ── */}
+            <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
               <fieldset className="medidorPanel">
-                <legend>⛽ Combustible</legend>
+                <legend>⛽ Combustible del Motor {motorActivo}</legend>
+                <p className="muted">
+                  El medidor es del motor, no de cada secadora. El costo se reparte entre los secados activos según
+                  los quintales de cada uno, aunque sean de accionistas distintos: cada lote paga su parte.
+                </p>
+
+                {motorActiveReports.length === 0 ? (
+                  <p className="muted">El Motor {motorActivo} no tiene secados activos. Guarda primero el informe de una secadora.</p>
+                ) : (
+                  <div style={{ display: "grid", gap: 4, marginBottom: 10 }}>
+                    {motorActiveReports.map((r) => (
+                      <div key={r.id} style={{ display: "flex", gap: 8, fontSize: 13, flexWrap: "wrap" }}>
+                        <strong>{r.dryer_name ?? `Túnel ${r.tunnel_number}`}</strong>
+                        <span>{r.lot_code}</span>
+                        <span className="muted">{r.accionista_name ?? "—"}</span>
+                        <span>{Number(r.total_quintals).toFixed(2)} QQ</span>
+                        <span className="muted">
+                          → le toca {money(qqMotor > 0 ? round2(combustibleTotal * (Number(r.total_quintals) / qqMotor)) : 0)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 <MedidorRow
                   label="Bombona" unidad="%"
@@ -4226,47 +4337,31 @@ export function App() {
                 />
 
                 <div className="medidorTotal">
-                  <span>TOTAL COMBUSTIBLE</span>
+                  <span>TOTAL COMBUSTIBLE DEL MOTOR</span>
                   <strong>{money(combustibleTotal)}</strong>
                 </div>
 
-                {/* Costo de secar cada quintal de este lote */}
                 <div className="costoQq">
-                  <div>
-                    <small>Gas por QQ</small>
-                    <strong>{money(gasPorQq)}</strong>
-                    <span className="muted">{money(gasCostoTotal)} ÷ {qqSecado.toFixed(2)} QQ</span>
-                  </div>
-                  <div>
-                    <small>Diesel por QQ</small>
-                    <strong>{money(dieselPorQq)}</strong>
-                    <span className="muted">{money(dieselCosto)} ÷ {qqSecado.toFixed(2)} QQ</span>
-                  </div>
                   <div className="costoQqTotal">
                     <small>Combustible por QQ</small>
                     <strong>{money(combustiblePorQq)}</strong>
-                    <span className="muted">{money(combustibleTotal)} ÷ {qqSecado.toFixed(2)} QQ</span>
+                    <span className="muted">{money(combustibleTotal)} ÷ {qqMotor.toFixed(2)} QQ en secado</span>
                   </div>
+                </div>
+
+                <div className="buttonRow" style={{ marginTop: 10 }}>
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={motorActiveReports.length === 0 || combustibleTotal <= 0}
+                    onClick={() => registrarCombustibleMotor().catch((error) => addToast(error.message, "error"))}
+                  >
+                    Registrar combustible del Motor {motorActivo}
+                  </button>
                 </div>
                 <p className="muted medidorNota">Los precios se configuran en Configuración → Tarifas. Deja en cero lo que no uses.</p>
               </fieldset>
-              <Input name="notes" label="Observacion" defaultValue={editingDryingReport?.notes ?? "Secado registrado"} required={false} />
-              <div className="buttonRow">
-                <button className="primary">{editingDryingReport ? "Guardar cambios" : "Guardar informe"}</button>
-                {editingDryingReport && (
-                  <>
-                    {editingDryingReport.status !== "COMPLETED" && (
-                      <button type="button" onClick={(event) => finalizeDryingReport(event.currentTarget.form).catch((error) => setMessage(error.message))}>
-                        Finalizar secado
-                      </button>
-                    )}
-                    <button type="button" onClick={(event) => clearDryingForm(event.currentTarget.form)}>
-                      Nuevo informe
-                    </button>
-                  </>
-                )}
-              </div>
-            </form>
+            </div>
 
             <DryingReportsPanel reports={dryingReports} onEdit={editDryingReport} />
           </section>
