@@ -5,6 +5,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { round2 } from "../../utils/rice-formulas.js";
 import ExcelJS from "exceljs";
 
 export const cashRouter = Router();
@@ -328,6 +329,65 @@ cashRouter.post("/payables/:id/pay", asyncRoute(async (req, res) => {
     );
 
     return { paid: body.amount, remaining: newBalance, status: newStatus };
+  });
+
+  res.json(result);
+}));
+
+// ── Pagar una liquidación completa (varias cuentas de una vez) ───────────────
+// Una liquidación con varios pesos genera varias cuentas por pagar. En la
+// pantalla se muestran como UNA deuda con su total; aquí un solo pago se
+// reparte entre ellas (de la más vieja a la más nueva) y en caja queda UN solo
+// movimiento, porque físicamente fue un solo pago.
+cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
+  const body = z.object({
+    payable_ids: z.array(z.string().uuid()).min(1),
+    cash_register_id: z.string().uuid(),
+    amount: z.number().positive()
+  }).parse(req.body);
+
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const result = await inTransaction(async (client) => {
+    const cuentas = await client.query(
+      `SELECT ap.*, f.full_name AS farmer_name
+       FROM accounts_payable ap
+       LEFT JOIN farmers f ON f.id = ap.farmer_id
+       WHERE ap.id = ANY($1) AND ap.accionista_id = $2
+       ORDER BY ap.created_at ASC
+       FOR UPDATE OF ap`,
+      [body.payable_ids, accionistaId]
+    );
+    if (cuentas.rowCount !== body.payable_ids.length) {
+      throw new ApiError(404, "Alguna cuenta no existe o es de otro accionista. Refresca la pantalla.");
+    }
+
+    const pendiente = cuentas.rows.reduce((s, ap) => s + Number(ap.balance), 0);
+    if (body.amount > pendiente + 0.001) {
+      throw new ApiError(409, `El monto supera el saldo pendiente ($${pendiente.toFixed(2)})`);
+    }
+
+    let restante = body.amount;
+    for (const ap of cuentas.rows) {
+      if (restante <= 0) break;
+      const abono = Math.min(restante, Number(ap.balance));
+      const nuevoSaldo = round2(Number(ap.balance) - abono);
+      await client.query(
+        "UPDATE accounts_payable SET balance = $2, status = $3 WHERE id = $1",
+        [ap.id, nuevoSaldo, nuevoSaldo < 0.01 ? "PAID" : "PARTIAL"]
+      );
+      restante = round2(restante - abono);
+    }
+
+    const primera = cuentas.rows[0];
+    await client.query(
+      `INSERT INTO cash_movements
+       (cash_register_id, movement, category, reference_type, reference_id, amount, description)
+       VALUES ($1, 'EXPENSE', 'PAGO_AGRICULTOR', 'accounts_payable', $2, $3, $4)`,
+      [body.cash_register_id, primera.id, body.amount,
+       `Pago a ${primera.farmer_name ?? primera.description ?? "proveedor"}`]
+    );
+
+    return { paid: body.amount, remaining: round2(pendiente - body.amount) };
   });
 
   res.json(result);
