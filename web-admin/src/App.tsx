@@ -754,6 +754,16 @@ const LB_TO_KG = 0.45359237;
 const QQ_TO_LB = 100;
 const millingDraftStorageKey = "bascula-erp:milling-report-draft";
 const round2 = (n: number) => Math.round(n * 100) / 100;
+// crypto.randomUUID solo existe en orígenes "seguros" (https o localhost).
+// Desde otra PC por http://IP:4000 —o dentro de una app Android— no está, y
+// liquidar reventaría. Este generador funciona en cualquier entorno.
+function safeUUID(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
 // Motor 1 mueve las Secadoras 1 y 2; Motor 2 la Secadora 3. El combustible es
 // del motor: se anota una vez y se reparte por QQ entre sus secados activos.
 const MOTOR_SECADORAS: Record<1 | 2, string[]> = {
@@ -3719,7 +3729,7 @@ export function App() {
       quintals: number; price_per_quintal: number;
       gross_amount: number; advances_discount: number; other_discounts: number; net_amount: number;
     };
-    const batchId = crypto.randomUUID();
+    const batchId = safeUUID();
     const resultItems: Array<{
       lot_code: string; rice_type: string | null;
       quintals: number; price_per_quintal: number;
@@ -3914,7 +3924,7 @@ export function App() {
               const collapsed = collapsedGroups.has(group.label);
               const hasActive = group.tabs.includes(activeTab);
               return (
-                <div className={collapsed ? "navSection collapsed" : "navSection"} key={group.label}>
+                <div className={collapsed ? "navSection collapsed" : "navSection"} data-group={group.label} key={group.label}>
                   <button type="button" className="navLabel" onClick={() => toggleGroup(group.label)} aria-expanded={!collapsed}>
                     <span>{group.label}</span>
                     {collapsed && hasActive && <i className="navDot" />}

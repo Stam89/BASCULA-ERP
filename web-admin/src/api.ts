@@ -2,6 +2,12 @@
 // En producción la web se sirve desde el propio backend, así que usamos rutas
 // relativas al mismo origen — esto permite entrar desde cualquier PC de la red
 // por http://IP-del-servidor:4000 sin configurar nada.
+//
+// PARA EMPAQUETAR COMO APP (PC con Electron o Android con Capacitor): la app
+// carga sus archivos localmente, así que las rutas relativas ya no apuntan al
+// servidor. Hay que compilar con la variable definida, por ejemplo:
+//   VITE_API_URL=http://192.168.1.50:4000 npm run build
+// y el resto funciona igual (token, accionista y sync usan esta misma base).
 const API_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "http://localhost:4000" : "");
 
 const authStorageKey = "bascula-erp:auth";
