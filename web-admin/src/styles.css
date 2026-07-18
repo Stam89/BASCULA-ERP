@@ -2199,3 +2199,260 @@ input[type="datetime-local"] { height: 36px; }
 @media (max-width: 700px) {
   .costoQq { grid-template-columns: 1fr; }
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   CAPA DE MODERNIZACIÓN (2026) — Solo estilo, cero cambios de estructura.
+   Va al final para ganar la cascada. Si algo se ve mal, borrar esta sección
+   devuelve el aspecto anterior intacto.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* Sombras con tinte de marca: profundidad suave, sin gris sucio. */
+  --shadow-xs: 0 1px 2px rgba(13, 92, 86, 0.05);
+  --shadow-sm: 0 2px 6px rgba(13, 92, 86, 0.07), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow:    0 6px 20px rgba(13, 92, 86, 0.09), 0 2px 6px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 14px 40px rgba(13, 92, 86, 0.12), 0 4px 10px rgba(0, 0, 0, 0.05);
+  --r: 12px;
+  --r-lg: 16px;
+  --t: 0.18s cubic-bezier(0.2, 0.6, 0.3, 1);
+}
+
+body {
+  background:
+    radial-gradient(1100px 560px at 88% -12%, rgba(20, 184, 166, 0.09), transparent 62%),
+    radial-gradient(900px 500px at -10% 108%, rgba(15, 118, 110, 0.05), transparent 55%),
+    var(--c-bg);
+}
+
+/* ── Barras de scroll finas y discretas ── */
+*::-webkit-scrollbar { width: 9px; height: 9px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--c-border-strong);
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover { background-color: var(--c-brand); background-clip: padding-box; }
+
+/* ── Sidebar: gradiente profundo + item activo tipo píldora con brillo ── */
+.sidebar {
+  background:
+    radial-gradient(420px 240px at 20% -6%, rgba(20, 184, 166, 0.16), transparent 60%),
+    linear-gradient(168deg, #0f2620 0%, #0c1b17 52%, #0a1714 100%);
+}
+
+nav button {
+  border-radius: 9px;
+  transition: background var(--t), color var(--t), transform var(--t);
+}
+
+nav button:hover { transform: translateX(2px); }
+
+nav button.active {
+  background: linear-gradient(135deg, rgba(20, 184, 166, 0.22), rgba(15, 118, 110, 0.14));
+  box-shadow: inset 0 0 0 1px rgba(20, 184, 166, 0.28), 0 2px 10px rgba(0, 0, 0, 0.25);
+  position: relative;
+}
+
+nav button.active::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 22%;
+  bottom: 22%;
+  width: 3px;
+  border-radius: 99px;
+  background: linear-gradient(180deg, var(--c-brand-light), var(--c-brand));
+  box-shadow: 0 0 10px rgba(20, 184, 166, 0.7);
+}
+
+.accionistaSwitcher select {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 9px;
+  transition: border-color var(--t), background var(--t);
+}
+.accionistaSwitcher select:hover { border-color: rgba(20, 184, 166, 0.45); }
+.accionistaSwitcher select:focus {
+  outline: none;
+  border-color: var(--c-brand-light);
+  box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.22);
+}
+.accionistaSwitcher select option { background: #0c1b17; color: var(--c-sidebar-text); }
+
+/* ── Topbar tipo vidrio, pegada arriba ── */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: rgba(255, 255, 255, 0.78);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
+  border-bottom: 1px solid rgba(216, 228, 223, 0.7);
+  box-shadow: 0 1px 12px rgba(13, 92, 86, 0.05);
+}
+
+/* ── Paneles y tarjetas: radio generoso, borde fino, luz superior ── */
+.formPanel,
+.tablePanel,
+.tracePanel,
+.workPanel,
+.setupPanel,
+.stepPanel,
+.cajaSummaryCard,
+.cajaMovimientosPanel,
+.productionQuickCard,
+.sackOutputCard {
+  border-radius: var(--r-lg);
+  border: 1px solid var(--c-border);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  transition: box-shadow var(--t), border-color var(--t);
+}
+
+.formPanel:hover,
+.tablePanel:hover,
+.tracePanel:hover { box-shadow: var(--shadow); }
+
+.formPanel h2,
+.tablePanel h2,
+.tracePanel h2 {
+  letter-spacing: -0.015em;
+}
+
+/* Tarjetas de cuentas y de secado: se levantan al pasar el mouse. */
+.cuentaCard,
+.dryingReportCard,
+.equipItem {
+  border-radius: var(--r-lg);
+  transition: box-shadow var(--t), transform var(--t), border-color var(--t);
+}
+
+.cuentaCard:hover,
+.dryingReportCard:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow);
+  border-color: rgba(15, 118, 110, 0.3);
+}
+
+/* Barra de progreso de las cuentas con gradiente vivo. */
+.cuentaBar { border-radius: 99px; overflow: hidden; }
+.cuentaBar > div {
+  background: linear-gradient(90deg, var(--c-brand), var(--c-brand-light));
+  border-radius: 99px;
+}
+
+/* ── Botones ── */
+button {
+  transition: background var(--t), color var(--t), border-color var(--t),
+              box-shadow var(--t), transform var(--t), opacity var(--t);
+}
+
+button.primary,
+.primary {
+  background: linear-gradient(140deg, var(--c-brand-light) -30%, var(--c-brand) 55%, var(--c-brand-dark) 130%);
+  border: none;
+  box-shadow: 0 2px 10px rgba(15, 118, 110, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+button.primary:hover,
+.primary:hover {
+  box-shadow: 0 4px 16px rgba(15, 118, 110, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  transform: translateY(-1px);
+  filter: brightness(1.04);
+}
+
+button.primary:active,
+.primary:active { transform: translateY(0); box-shadow: 0 1px 5px rgba(15, 118, 110, 0.3); }
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.3);
+}
+
+button:disabled { transform: none; filter: grayscale(0.35); }
+
+/* ── Campos de formulario ── */
+input, select, textarea {
+  border-radius: 9px;
+  transition: border-color var(--t), box-shadow var(--t), background var(--t);
+}
+
+input:hover:not(:focus):not(:disabled),
+select:hover:not(:focus):not(:disabled),
+textarea:hover:not(:focus):not(:disabled) { border-color: var(--c-border-strong); }
+
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--c-brand);
+  box-shadow: 0 0 0 3px var(--c-brand-glow);
+}
+
+label > span { letter-spacing: 0.01em; }
+
+/* ── Tablas: encabezado micro-mayúsculas, filas con hover ── */
+.cajaTable thead th,
+.table thead th,
+th {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--c-text-muted);
+}
+
+.cajaTable tbody tr,
+.table tbody tr { transition: background var(--t); }
+
+.cajaTable tbody tr:hover,
+.table tbody tr:hover { background: var(--c-surface-2); }
+
+/* ── Chips y badges tipo píldora con punto de estado ── */
+.chip, .pill, .editBadge, .liqBadgePaid, .liqBadgePending, .liqDiscBadge, .permChip {
+  border-radius: 99px;
+  letter-spacing: 0.02em;
+}
+
+/* ── Cajas de total y medidores: acento degradado ── */
+.totalBox,
+.medidorTotal,
+.dryerTotalBox,
+.costoQqTotal {
+  border-radius: var(--r);
+  background: linear-gradient(135deg, rgba(20, 184, 166, 0.10), rgba(15, 118, 110, 0.05));
+  border: 1px solid rgba(15, 118, 110, 0.22);
+}
+
+.medidorPanel {
+  border-radius: var(--r-lg);
+  border: 1px solid var(--c-border);
+  background: var(--c-surface-2);
+}
+
+/* ── Estado vacío más amable ── */
+.emptyState {
+  border-radius: var(--r-lg);
+  border: 1.5px dashed var(--c-border-strong);
+  background: var(--c-surface-2);
+}
+.emptyState .emptyIcon { filter: saturate(1.2); }
+
+/* ── Toasts tipo vidrio ── */
+.toast {
+  border-radius: var(--r);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-md);
+}
+
+/* ── Métricas del panel (yieldResults) ── */
+.yieldResults > * {
+  border-radius: var(--r);
+  transition: box-shadow var(--t), transform var(--t);
+}
+
+/* ── Accesibilidad: sin animaciones para quien las desactiva ── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
