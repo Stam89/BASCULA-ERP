@@ -58,6 +58,12 @@ const dryingUpdateSchema = z.object({
 });
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+// Motor 1 mueve las Secadoras 1 y 2; Motor 2 la Secadora 3. El combustible se
+// registra por motor (el medidor es del motor, no de cada secadora).
+function motorDeSecadora(dryerName: string | null | undefined): number {
+  return String(dryerName ?? "").includes("3") ? 2 : 1;
+}
 /**
  * Lo consumido en un medidor: INICIO − FIN. El medidor marca el nivel que
  * queda, así que baja a medida que se consume (ej: 50 → 39.99 = 10.01 usado).
@@ -159,6 +165,121 @@ processFlowRouter.get("/drying/reports", asyncRoute(async (req, res) => {
     [accionistaId]
   );
   res.json(result.rows);
+}));
+
+// Secados activos (sin finalizar) de un motor, de TODOS los accionistas: el
+// motor es compartido y puede estar secando lotes de socios distintos a la vez.
+processFlowRouter.get("/drying/motor/:motor/active", asyncRoute(async (req, res) => {
+  const motor = Number(req.params.motor);
+  if (motor !== 1 && motor !== 2) throw new ApiError(400, "Motor inválido");
+  const result = await pool.query(
+    `SELECT d.id, d.tunnel_number, d.dryer_name, d.total_quintals, d.rice_type, d.status,
+            l.lot_code, a.name AS accionista_name
+     FROM drying_tunnel_reports d
+     JOIN lots l ON l.id = d.lot_id
+     LEFT JOIN accionistas a ON a.id = l.accionista_id
+     WHERE d.motor_number = $1 AND d.status <> 'COMPLETED'
+     ORDER BY d.dryer_name, d.created_at`,
+    [motor]
+  );
+  res.json(result.rows);
+}));
+
+// Registra el combustible del MOTOR (los medidores son del motor) y reparte el
+// costo entre sus secados activos según los quintales de cada uno. Así cada
+// lote —y cada accionista— paga exactamente su parte.
+processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
+  const body = z.object({
+    motor_number: z.number().int().min(1).max(2),
+    gas_bombona_inicio: z.number().nonnegative().default(0),
+    gas_bombona_fin: z.number().nonnegative().default(0),
+    gas_cilindro_cantidad: z.number().nonnegative().default(0),
+    diesel_inicio: z.number().nonnegative().default(0),
+    diesel_fin: z.number().nonnegative().default(0),
+    created_by: z.string().uuid().optional()
+  }).parse(req.body);
+
+  const result = await inTransaction(async (client) => {
+    const reports = await client.query(
+      `SELECT d.id, d.total_quintals
+       FROM drying_tunnel_reports d
+       WHERE d.motor_number = $1 AND d.status <> 'COMPLETED'
+       ORDER BY d.created_at
+       FOR UPDATE`,
+      [body.motor_number]
+    );
+    if (!reports.rowCount) {
+      throw new ApiError(409, "El motor no tiene secados activos: llena primero las secadoras.");
+    }
+
+    const totalQq = reports.rows.reduce((s, r) => s + Number(r.total_quintals), 0);
+    if (totalQq <= 0) throw new ApiError(409, "Los secados del motor no tienen quintales registrados.");
+
+    const c = await calcularCombustible(client, body);
+    const costoTotal = round2(c.costoTotal + c.dieselCosto);
+    if (costoTotal <= 0) {
+      throw new ApiError(400, "No hay consumo que registrar: revisa los medidores y los precios en Configuración → Tarifas.");
+    }
+
+    const record = await client.query(
+      `INSERT INTO motor_fuel_records
+       (motor_number, gas_bombona_inicio, gas_bombona_fin, gas_cilindro_cantidad,
+        diesel_inicio, diesel_fin, gas_bombona_precio, gas_cilindro_precio, diesel_precio,
+        gas_costo, diesel_costo, costo_total, total_quintals, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+       RETURNING *`,
+      [
+        body.motor_number, body.gas_bombona_inicio, body.gas_bombona_fin, body.gas_cilindro_cantidad,
+        body.diesel_inicio, body.diesel_fin, c.precioBombona, c.precioCilindro, c.precioDiesel,
+        c.costoTotal, c.dieselCosto, costoTotal, totalQq, body.created_by ?? null
+      ]
+    );
+
+    // Reparto proporcional por QQ. El último secado se lleva el residuo del
+    // redondeo para que la suma de las partes sea exactamente el total.
+    const partes: Array<{ id: string; qq: number; gas: number; diesel: number }> = [];
+    let gasAsignado = 0;
+    let dieselAsignado = 0;
+    reports.rows.forEach((r, i) => {
+      const qq = Number(r.total_quintals);
+      const esUltimo = i === reports.rows.length - 1;
+      const gas = esUltimo ? round2(c.costoTotal - gasAsignado) : round2(c.costoTotal * (qq / totalQq));
+      const diesel = esUltimo ? round2(c.dieselCosto - dieselAsignado) : round2(c.dieselCosto * (qq / totalQq));
+      gasAsignado = round2(gasAsignado + gas);
+      dieselAsignado = round2(dieselAsignado + diesel);
+      partes.push({ id: r.id, qq, gas, diesel });
+    });
+
+    for (const parte of partes) {
+      // Se ACUMULA (no se pisa): un mismo secado puede recibir varios llenados
+      // de combustible mientras dura.
+      await client.query(
+        `UPDATE drying_tunnel_reports
+         SET gas_costo_total = COALESCE(gas_costo_total, 0) + $2,
+             diesel_costo = COALESCE(diesel_costo, 0) + $3,
+             gas_bombona_precio = $4,
+             gas_cilindro_precio = $5,
+             diesel_precio = $6,
+             motor_fuel_id = $7
+         WHERE id = $1`,
+        [parte.id, parte.gas, parte.diesel, c.precioBombona, c.precioCilindro, c.precioDiesel, record.rows[0].id]
+      );
+    }
+
+    return {
+      registro: record.rows[0],
+      reparto: partes.map((p) => ({
+        drying_report_id: p.id,
+        quintales: p.qq,
+        gas: p.gas,
+        diesel: p.diesel,
+        total: round2(p.gas + p.diesel)
+      })),
+      costo_por_qq: round2(costoTotal / totalQq)
+    };
+  });
+
+  res.status(201).json(result);
 }));
 
 processFlowRouter.post("/drying", asyncRoute(async (req, res) => {
@@ -410,8 +531,8 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
       gas_bombona_inicio, gas_bombona_fin, gas_bombona_precio, gas_bombona_costo,
       gas_cilindro_cantidad, gas_cilindro_precio, gas_cilindro_costo, gas_costo_total,
       diesel_inicio, diesel_fin, diesel_precio, diesel_costo,
-      dryer_name, status, notes, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
+      dryer_name, status, notes, created_by, motor_number)
+     VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
      RETURNING *`,
     [
       lotId,
@@ -442,7 +563,8 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
       input.dryer_name ?? null,
       status,
       input.notes ?? null,
-      input.created_by ?? null
+      input.created_by ?? null,
+      motorDeSecadora(input.dryer_name)
     ]
   );
 
@@ -509,7 +631,8 @@ async function updateDryingReport(
          diesel_costo = $21,
          dryer_name = $22,
          status = $23,
-         notes = $24
+         notes = $24,
+         motor_number = $25
      WHERE id = $1
      RETURNING *`,
     [
@@ -536,7 +659,8 @@ async function updateDryingReport(
       c.dieselCosto,
       input.dryer_name ?? current.rows[0].dryer_name,
       status,
-      input.notes ?? current.rows[0].notes
+      input.notes ?? current.rows[0].notes,
+      motorDeSecadora(input.dryer_name ?? current.rows[0].dryer_name)
     ]
   );
 
