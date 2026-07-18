@@ -300,6 +300,8 @@ function ensureActiveAccionista(accionistas: Accionista[]): void {
 }
 
 type StockRow = {
+  product_id?: string;
+  warehouse_id?: string;
   code?: string;
   product_name: string;
   product_type?: string;
@@ -1053,6 +1055,8 @@ export function App() {
     product_id: string;
     presentation_id: string;
     presentation_name: string; // Para mostrar en tabla
+    /** Libras por saco de la presentación: permite mostrar QQ y validar stock. */
+    weight_lb: number | null;
     quantity: number;
     unit_price: number;
   };
@@ -2550,6 +2554,7 @@ export function App() {
       product_id: saleLineForm.product_id,
       presentation_id: saleLineForm.presentation_id,
       presentation_name: presentation ? `${presentation.name}` : "",
+      weight_lb: presentation && presentation.weight_lb ? Number(presentation.weight_lb) : null,
       quantity: Number(saleLineForm.quantity),
       unit_price: Number(saleLineForm.unit_price)
     };
@@ -2574,6 +2579,21 @@ export function App() {
     const prod = products.find(p => p.name === brandName);
     return prod?.id || null;
   }
+
+  // Stock propio disponible (QQ) del producto de inventario que respalda una
+  // marca. El vendedor lo ve ANTES de armar el pedido, en vez de descubrir el
+  // "stock insuficiente" al guardar.
+  function stockDisponibleDeMarca(brandProductId: string): number | null {
+    const marca = products.find((p) => p.id === brandProductId);
+    const inventoryId = getInventoryProductForBrand(marca?.name || "") || brandProductId;
+    const filas = stock.filter((s) => s.product_id === inventoryId && s.ownership === "OWNED");
+    if (!filas.length) return 0;
+    return round2(filas.reduce((sum, s) => sum + Number(s.quantity), 0));
+  }
+
+  /** QQ que pide una línea del carrito (sacos × libras ÷ 100). */
+  const qqDeLinea = (item: SaleLineItem): number =>
+    item.weight_lb ? round2((item.quantity * item.weight_lb) / 100) : item.quantity;
 
   // ── Eliminar línea de pedido ──
   function removeSaleLineItem(id: string) {
@@ -3691,6 +3711,7 @@ export function App() {
     setMessage(
       `✓ Pedido ${sale.sale_number} guardado ${totalText}: ${money(sale.total_amount)}`
     );
+    addToast(`Venta ${sale.sale_number} guardada · ${money(sale.total_amount)} ${totalText}`, "success");
     await refresh();
     if (cashRegisterId) await refreshCaja(cashRegisterId);
   }
@@ -3772,6 +3793,73 @@ export function App() {
     setDiscountsOpen(false);
     setMessage(`${resultItems.length} lote(s) liquidado(s)`);
     await refresh();
+  }
+
+  // Comprobante de venta imprimible, con el membrete del negocio (igual que el
+  // de liquidación). Antes no había forma de darle un papel al cliente.
+  async function printSaleReceipt(saleId: string) {
+    type SaleDetail = {
+      sale_number: string; customer_name: string | null; total_amount: string | number;
+      payment_status: string; created_at: string;
+      items: Array<{ product_name: string; quantity: string | number; unit_price: string | number; total: string | number }>;
+    };
+    const venta = await apiGet<SaleDetail>(`/sales/${saleId}`);
+    const fecha = new Date(venta.created_at).toLocaleDateString("es-EC", { year: "numeric", month: "long", day: "numeric" });
+    const filas = venta.items.map((it) => `
+      <tr>
+        <td>${it.product_name}</td>
+        <td style="text-align:right">${Number(it.quantity).toFixed(2)}</td>
+        <td style="text-align:right">$${Number(it.unit_price).toFixed(2)}</td>
+        <td style="text-align:right">$${Number(it.total).toFixed(2)}</td>
+      </tr>`).join("");
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+      <title>Comprobante de Venta</title>
+      <style>
+        *{box-sizing:border-box}
+        body{font-family:Arial,sans-serif;font-size:13px;color:#111;margin:24px 32px}
+        .hdr{text-align:center;border-bottom:2px solid #111;padding-bottom:10px;margin-bottom:14px}
+        .hdr h1{margin:0;font-size:19px;letter-spacing:1px}
+        .hdr h2{margin:2px 0;font-size:13px;font-weight:normal}
+        .hdr h3{margin:6px 0 0;font-size:15px;letter-spacing:2px;text-transform:uppercase}
+        .meta{display:flex;justify-content:space-between;margin-bottom:14px}
+        table{width:100%;border-collapse:collapse;margin-bottom:10px}
+        th{background:#f0f0f0;padding:6px 8px;text-align:left;border:1px solid #bbb;font-size:12px;text-transform:uppercase}
+        td{padding:6px 8px;border:1px solid #ccc}
+        .tot{font-weight:700;font-size:15px}
+        .tot td{border-top:2px solid #111}
+        .sigs{display:flex;justify-content:space-around;margin-top:52px}
+        .sig{text-align:center}
+        .sig hr{width:180px;border:none;border-top:1px solid #111;margin:0 auto 4px}
+        @media print{body{margin:10mm}}
+      </style></head><body>
+      <div class="hdr">
+        <h1>${appSettings.business_name}</h1>
+        <h2>${appSettings.business_subtitle}</h2>
+        ${appSettings.ruc ? `<h2>RUC: ${appSettings.ruc}</h2>` : ""}
+        <h3>Comprobante de Venta</h3>
+      </div>
+      <div class="meta">
+        <div><strong>Cliente:</strong> ${venta.customer_name ?? "Consumidor final"}</div>
+        <div><strong>N.º:</strong> ${venta.sale_number} &nbsp; <strong>Fecha:</strong> ${fecha}</div>
+      </div>
+      <table>
+        <thead><tr><th>Producto</th><th style="text-align:right">QQ</th><th style="text-align:right">Precio</th><th style="text-align:right">Total</th></tr></thead>
+        <tbody>${filas}</tbody>
+        <tfoot><tr class="tot"><td colspan="3">TOTAL</td><td style="text-align:right">$${Number(venta.total_amount).toFixed(2)}</td></tr></tfoot>
+      </table>
+      ${venta.payment_status !== "PAID" ? `<p style="color:#b91c1c;font-weight:700">VENTA A CRÉDITO — saldo pendiente</p>` : ""}
+      <div class="sigs">
+        <div class="sig"><hr/><span>Cliente</span></div>
+        <div class="sig"><hr/><span>Responsable</span></div>
+      </div>
+      ${appSettings.receipt_footer ? `<p style="text-align:center;margin-top:28px;font-size:11px;color:#666">${appSettings.receipt_footer}</p>` : ""}
+    </body></html>`;
+    const win = window.open("", "_blank", "width=760,height=620");
+    if (!win) { addToast("El navegador bloqueó la ventana de impresión", "error"); return; }
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    win.print();
   }
 
   async function printLiqBatch(b: LiqBatch) {
@@ -4877,7 +4965,33 @@ export function App() {
                       const prod = products.find(p => p.name === brandName);
                       return prod ? <option key={prod.id} value={prod.id}>{prod.name}</option> : null;
                     })}
+                    {/* Productos vendibles nuevos: aparecen solos, sin tocar código. */}
+                    {(() => {
+                      const yaListados = new Set(['Flor', 'Oso', 'Lira Verde', 'Lira Azul', 'Conejo', 'Arrocillo 3/4', 'Arrocillo Fino', 'Polvillo / Afrecho']);
+                      const otros = products.filter(p =>
+                        !yaListados.has(p.name) &&
+                        (p.product_type === "FINISHED_GOOD" || p.product_type === "BYPRODUCT") &&
+                        !String(p.code || "").startsWith("ARROZ-PILADO") &&
+                        !String(p.code || "").startsWith("CASCARA")
+                      );
+                      return otros.length ? (
+                        <>
+                          <option value="" disabled>━━━ OTROS ━━━</option>
+                          {otros.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </>
+                      ) : null;
+                    })()}
                   </select>
+                  {saleLineForm.product_id && (() => {
+                    const disponible = stockDisponibleDeMarca(saleLineForm.product_id);
+                    return (
+                      <small style={{ marginTop: 4, fontWeight: 700, color: disponible !== null && disponible > 0 ? "#15803d" : "#b91c1c" }}>
+                        {disponible !== null && disponible > 0
+                          ? `📦 Disponible: ${disponible.toFixed(2)} QQ`
+                          : "⚠ Sin stock de este producto"}
+                      </small>
+                    );
+                  })()}
                 </label>
 
                 <label>
@@ -4944,51 +5058,62 @@ export function App() {
                       <tr style={{ background: "#6b7280", color: "#fff" }}>
                         <th style={{ padding: "8px 10px", textAlign: "left" }}>Marca</th>
                         <th style={{ padding: "8px 10px", textAlign: "left" }}>Presentación</th>
-                        <th style={{ padding: "8px 10px", textAlign: "right" }}>Cantidad</th>
+                        <th style={{ padding: "8px 10px", textAlign: "right" }}>Sacos</th>
+                        <th style={{ padding: "8px 10px", textAlign: "right" }}>QQ</th>
                         <th style={{ padding: "8px 10px", textAlign: "right" }}>Precio $</th>
                         <th style={{ padding: "8px 10px", textAlign: "right" }}>Subtotal $</th>
                         <th style={{ padding: "8px 10px", textAlign: "center" }}>Acción</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {saleLineItems.map((item, i) => {
-                        const product = products.find(p => p.id === item.product_id);
-                        const allPresentations = saleProductPresentations.length > 0 ? saleProductPresentations : [];
-                        const presentation = allPresentations.find(p => p.id === item.presentation_id) ||
-                          (async () => {
-                            try {
-                              const res = await apiFetch(`/products/${item.product_id}/presentations`);
-                              if (res.ok) {
-                                const preses = await res.json();
-                                return preses.find((p: any) => p.id === item.presentation_id);
-                              }
-                            } catch (e) { console.error(e); }
-                            return null;
-                          })();
-
-                        // Buscar presentación de forma síncrona desde lista guardada en item (mejor enfoque)
-                        // Para evitar async en render, guardamos la presentación en el item
-                        const subtotal = item.quantity * item.unit_price;
-                        return (
-                          <tr key={item.id} style={{ background: i % 2 === 0 ? "#fff" : "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>
-                            <td style={{ padding: "8px 10px" }}><strong>{product?.name}</strong></td>
-                            <td style={{ padding: "8px 10px" }}>{item.presentation_name || "—"}</td>
-                            <td style={{ padding: "8px 10px", textAlign: "right" }}>{item.quantity}</td>
-                            <td style={{ padding: "8px 10px", textAlign: "right" }}>${item.unit_price.toFixed(2)}</td>
-                            <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>${subtotal.toFixed(2)}</td>
-                            <td style={{ padding: "8px 10px", textAlign: "center" }}>
-                              <button
-                                type="button"
-                                onClick={() => removeSaleLineItem(item.id)}
-                                style={{ padding: "4px 8px", background: "#ef4444", color: "white", border: "none", borderRadius: 3, fontSize: 11, cursor: "pointer", fontWeight: 600 }}
-                              >
-                                Eliminar
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
+                      {(() => {
+                        // QQ acumulados por producto de inventario, para avisar
+                        // AQUÍ si el pedido supera el stock (no al guardar).
+                        const pedidoPorProducto = new Map<string, number>();
+                        return saleLineItems.map((item, i) => {
+                          const product = products.find(p => p.id === item.product_id);
+                          const inventoryId = getInventoryProductForBrand(product?.name || "") || item.product_id;
+                          const qq = qqDeLinea(item);
+                          const acumulado = (pedidoPorProducto.get(inventoryId) ?? 0) + qq;
+                          pedidoPorProducto.set(inventoryId, acumulado);
+                          const disponible = stockDisponibleDeMarca(item.product_id);
+                          const excede = disponible !== null && acumulado > disponible + 0.001;
+                          const subtotal = item.quantity * item.unit_price;
+                          return (
+                            <tr key={item.id} style={{ background: excede ? "#fee2e2" : i % 2 === 0 ? "#fff" : "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>
+                              <td style={{ padding: "8px 10px" }}>
+                                <strong>{product?.name}</strong>
+                                {excede && <small style={{ display: "block", color: "#b91c1c", fontWeight: 700 }}>⚠ Supera el stock ({(disponible ?? 0).toFixed(2)} QQ disponibles)</small>}
+                              </td>
+                              <td style={{ padding: "8px 10px" }}>{item.presentation_name || "—"}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "right" }}>{item.quantity}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "right" }}>{qq.toFixed(2)}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "right" }}>${item.unit_price.toFixed(2)}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>${subtotal.toFixed(2)}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "center" }}>
+                                <button
+                                  type="button"
+                                  onClick={() => removeSaleLineItem(item.id)}
+                                  style={{ padding: "4px 8px", background: "#ef4444", color: "white", border: "none", borderRadius: 3, fontSize: 11, cursor: "pointer", fontWeight: 600 }}
+                                >
+                                  Eliminar
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        });
+                      })()}
                     </tbody>
+                    <tfoot>
+                      <tr style={{ background: "#f0fdf4", fontWeight: 800 }}>
+                        <td colSpan={2} style={{ padding: "8px 10px" }}>TOTAL</td>
+                        <td style={{ padding: "8px 10px", textAlign: "right" }}>{saleLineItems.reduce((s, l) => s + l.quantity, 0)}</td>
+                        <td style={{ padding: "8px 10px", textAlign: "right" }}>{saleLineItems.reduce((s, l) => s + qqDeLinea(l), 0).toFixed(2)}</td>
+                        <td />
+                        <td style={{ padding: "8px 10px", textAlign: "right", color: "#15803d" }}>${calculateSaleTotal().toFixed(2)}</td>
+                        <td />
+                      </tr>
+                    </tfoot>
                   </table>
                 </div>
               </div>
@@ -5039,6 +5164,7 @@ export function App() {
                         <th style={{ padding: "6px 10px", textAlign: "right" }}>Monto</th>
                         <th style={{ padding: "6px 10px", textAlign: "left" }}>Pago</th>
                         <th style={{ padding: "6px 10px", textAlign: "left" }}>Fecha</th>
+                        <th style={{ padding: "6px 10px", textAlign: "center" }}>Recibo</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -5057,6 +5183,12 @@ export function App() {
                             </span>
                           </td>
                           <td style={{ padding: "5px 10px" }}>{new Date(s.created_at).toLocaleDateString("es-EC")}</td>
+                          <td style={{ padding: "5px 10px", textAlign: "center" }}>
+                            <button type="button" title="Imprimir comprobante" onClick={() => printSaleReceipt(s.id).catch((e) => addToast(e.message, "error"))}
+                              style={{ padding: "3px 10px", fontSize: 13, cursor: "pointer" }}>
+                              🖨
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
