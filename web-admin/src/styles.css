@@ -2456,3 +2456,120 @@ th {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   ORDEN + COLORES VIVOS
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── ARREGLO DE DESORDEN: las tablas anchas empujaban a los paneles vecinos
+   fuera de la pantalla (en Báscula la página se desbordaba ~150px). Un hijo de
+   grid no encoge por defecto (min-width:auto); con min-width:0 la columna
+   respeta su espacio y la tabla ancha se desplaza DENTRO de su panel. ── */
+.panelGrid > *,
+.traceLayout > *,
+.cajaLayout > *,
+.cuentasLayout > *,
+.productionModuleGrid > *,
+.reportGrid > *,
+.summaryGrid > *,
+.tunnelGrid > * { min-width: 0; }
+
+.tablePanel { overflow-x: auto; }
+.tablePanel table { width: 100%; }
+
+/* ── COLORES MÁS VIVOS ── */
+:root {
+  --c-brand:       #0d9488;   /* teal más brillante */
+  --c-brand-dark:  #0f766e;
+  --c-brand-light: #2dd4bf;
+  --c-brand-glow:  rgba(13, 148, 136, 0.18);
+
+  --c-success:      #16a34a;
+  --c-success-bg:   #d3f8df;
+  --c-warning:      #f59e0b;
+  --c-warning-bg:   #fef3c7;
+  --c-danger:       #ef4444;
+  --c-danger-bg:    #fee2e2;
+  --c-info:         #3b82f6;
+  --c-info-bg:      #dbeafe;
+}
+
+body {
+  background:
+    radial-gradient(1100px 560px at 88% -12%, rgba(45, 212, 191, 0.14), transparent 62%),
+    radial-gradient(800px 460px at -8% 30%, rgba(245, 158, 11, 0.06), transparent 55%),
+    radial-gradient(900px 500px at 50% 115%, rgba(13, 148, 136, 0.07), transparent 55%),
+    var(--c-bg);
+}
+
+/* Título de cada pantalla con acento de marca. */
+.topbar h1 {
+  background: linear-gradient(120deg, var(--c-brand-dark), var(--c-brand) 55%, var(--c-brand-light));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-weight: 800;
+}
+
+/* Paneles con una regleta superior de color al pasar el mouse. */
+.formPanel, .tablePanel, .tracePanel { position: relative; }
+.formPanel::before, .tablePanel::before, .tracePanel::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  background: linear-gradient(90deg, var(--c-brand-light), var(--c-brand), transparent 80%);
+  opacity: 0;
+  transition: opacity var(--t);
+  pointer-events: none;
+}
+.formPanel:hover::before, .tablePanel:hover::before, .tracePanel:hover::before { opacity: 1; }
+
+/* Cuentas: verde para lo que te deben, ámbar para lo que debes. */
+.cuentaCard.cobrar { border-top: 3px solid var(--c-success); }
+.cuentaCard.pagar  { border-top: 3px solid var(--c-warning); }
+.cuentaCard.cobrar .pend { color: var(--c-success); }
+.cuentaCard.pagar  .pend { color: #b45309; }
+
+/* Chips llenos y saturados, con su punto de estado. */
+.chip {
+  font-weight: 700;
+  border: none;
+}
+.chip.info    { background: var(--c-info-bg);    color: #1d4ed8; }
+.chip.success { background: var(--c-success-bg); color: #15803d; }
+.chip.warning { background: var(--c-warning-bg); color: #b45309; }
+.chip.danger  { background: var(--c-danger-bg);  color: #b91c1c; }
+
+/* Totales con más presencia. */
+.totalBox strong, .medidorTotal strong, .cuentasTotal strong {
+  color: var(--c-brand-dark);
+}
+.totalBox, .medidorTotal, .dryerTotalBox, .costoQqTotal {
+  background: linear-gradient(135deg, rgba(45, 212, 191, 0.16), rgba(13, 148, 136, 0.06));
+  border-color: rgba(13, 148, 136, 0.3);
+}
+
+/* Ingresos y egresos de caja bien diferenciados. */
+.rowIncome  { color: var(--c-success); font-weight: 700; }
+.rowExpense { color: var(--c-danger);  font-weight: 700; }
+
+/* Botones secundarios con personalidad al hover. */
+.btnSecondary:hover, .btnOutline:hover, .btnGhost:hover {
+  border-color: var(--c-brand);
+  color: var(--c-brand-dark);
+  background: rgba(13, 148, 136, 0.07);
+}
+
+/* Barra de estado online más viva. */
+.pill.online { background: var(--c-success-bg); color: #15803d; box-shadow: 0 0 0 1px rgba(22, 163, 74, 0.25); }
+.statusDot { box-shadow: 0 0 8px rgba(22, 163, 74, 0.8); }
+
+/* ── RAÍZ DEL DESBORDE: workspace es hijo del grid .shell y sin min-width:0
+   su ancho mínimo lo dictaba el contenido de la topbar, empujando toda la
+   columna 154px fuera de la pantalla. Con esto la columna respeta su espacio
+   y la topbar acomoda sus elementos en dos líneas si no caben. ── */
+.workspace, .content { min-width: 0; }
+.topbar { flex-wrap: wrap; row-gap: 6px; }
+.topbarRight { flex-wrap: wrap; min-width: 0; }
