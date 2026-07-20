@@ -1184,6 +1184,8 @@ export function App() {
   const [activosFijos, setActivosFijos] = useState<ActivosFijosData | null>(null);
   const [activoEdit, setActivoEdit] = useState<Record<string, { costo: string; fecha: string; vida: string }>>({});
   const [orderPayMethod, setOrderPayMethod] = useState<Record<string, string>>({});
+  /** Pedido que se está editando (sus líneas vuelven al carrito). */
+  const [pedidoEditando, setPedidoEditando] = useState<string | null>(null);
   const [saleLineForm, setSaleLineForm] = useState({
     product_id: "",
     presentation_id: "",
@@ -1763,7 +1765,9 @@ export function App() {
   // Pestañas visibles según los módulos asignados al usuario.
   const visibleTabs = useMemo(() => {
     if (!authUser) return [] as string[];
-    const soloCeyro = new Set(["Nomina", "Cuadrilla"]);
+    // CEYRO es la piladora: la nómina y la cuadrilla las paga él, y el servicio
+    // de pilado es un ingreso suyo. Esas pestañas no tienen sentido en otro socio.
+    const soloCeyro = new Set(["Nomina", "Cuadrilla", "Servicio Pilado"]);
     const base = isAdmin
       ? tabs
       : tabs.filter((tab) => {
@@ -3965,6 +3969,57 @@ export function App() {
     if (registerId) await refreshCaja(registerId);
   }
 
+  /**
+   * Trae el pedido al carrito para editarlo. Las líneas vuelven al formulario
+   * y al guardar se reemplazan; la cuenta por cobrar se ajusta sola.
+   */
+  async function editarPedido(order: SalesOrder) {
+    const detalle = await apiGet<{ items: Array<{ product_id: string; presentation_id: string | null; presentation_name: string | null; quantity: string | number; unit_price: string | number }>; delivery_date: string | null; notes: string | null; customer_id: string }>(`/orders/${order.id}`);
+    setSaleLineItems(detalle.items.map((it, i) => ({
+      id: `edit-${i}`,
+      product_id: it.product_id,
+      presentation_id: it.presentation_id ?? "",
+      presentation_name: it.presentation_name ?? "",
+      weight_lb: null,
+      quantity: Number(it.quantity),
+      unit_price: Number(it.unit_price)
+    })));
+    setSelectedCustomerId(detalle.customer_id);
+    setCustomerSearch(order.customer_name);
+    setPedidoEditando(order.id);
+    addToast(`Editando ${order.order_number}: ajusta las líneas y guarda`, "success");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function guardarEdicionPedido() {
+    if (!pedidoEditando) return;
+    if (saleLineItems.length === 0) throw new Error("El pedido debe tener al menos una línea");
+    const items = saleLineItems.map((line) => {
+      const brandProduct = products.find((p) => p.id === line.product_id);
+      const inventoryProductId = getInventoryProductForBrand(brandProduct?.name || "");
+      return {
+        product_id: line.product_id,
+        presentation_id: line.presentation_id || undefined,
+        presentation_name: line.presentation_name || undefined,
+        inventory_product_id: inventoryProductId || line.product_id,
+        quantity: line.quantity,
+        unit_price: line.unit_price
+      };
+    });
+    const r = await apiPut<{ order_number: string; total_amount: string | number }>(`/orders/${pedidoEditando}`, { items });
+    addToast(`Pedido ${r.order_number} actualizado: ${money(Number(r.total_amount))}`, "success");
+    cancelarEdicionPedido();
+    await refreshCustomersAndSales();
+  }
+
+  function cancelarEdicionPedido() {
+    setPedidoEditando(null);
+    setSaleLineItems([]);
+    setSelectedCustomerId("");
+    setCustomerSearch("");
+    setSaleLineForm({ product_id: "", presentation_id: "", quantity: "", unit_price: "" });
+  }
+
   async function cancelarPedido(order: SalesOrder) {
     if (!window.confirm(`¿Cancelar el pedido ${order.order_number} de ${order.customer_name}?`)) return;
     await apiPost(`/orders/${order.id}/cancel`, {});
@@ -5823,9 +5878,19 @@ export function App() {
                 <Input name="order_notes" label="Nota (opcional)" required={false} />
               </div>
 
-              <button className="primary" style={{ width: "100%", padding: 12, fontSize: 16 }}>
-                📋 TOMAR PEDIDO
-              </button>
+              {pedidoEditando ? (
+                <div className="buttonRow">
+                  <button type="button" className="primary" style={{ flex: 1, padding: 12, fontSize: 15 }}
+                    onClick={() => guardarEdicionPedido().catch((e) => addToast(e.message, "error"))}>
+                    💾 GUARDAR CAMBIOS DEL PEDIDO
+                  </button>
+                  <button type="button" onClick={cancelarEdicionPedido}>Cancelar edición</button>
+                </div>
+              ) : (
+                <button className="primary" style={{ width: "100%", padding: 12, fontSize: 16 }}>
+                  📋 TOMAR PEDIDO
+                </button>
+              )}
             </form>
 
             {/* Pedidos pendientes: aquí se despacha y cobra */}
@@ -5845,6 +5910,9 @@ export function App() {
                       <div className="muted" style={{ fontSize: 12.5, margin: "4px 0 8px" }}>
                         {o.items.map((it) => `${it.product_name}${it.presentation_name ? ` ${it.presentation_name}` : ""} × ${Number(it.quantity)}`).join(" · ")}
                         {o.notes ? ` — ${o.notes}` : ""}
+                        <span style={{ display: "block", color: "#b45309", fontWeight: 700, marginTop: 2 }}>
+                          Ya figura en Por Cobrar aunque no se haya despachado
+                        </span>
                       </div>
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                         <select
@@ -5860,6 +5928,9 @@ export function App() {
                         </select>
                         <button type="button" className="primary" onClick={() => despacharPedido(o).catch((e) => addToast(e.message, "error"))}>
                           🚚 Despachar y cobrar
+                        </button>
+                        <button type="button" onClick={() => editarPedido(o).catch((e) => addToast(e.message, "error"))}>
+                          ✎ Editar
                         </button>
                         <button type="button" onClick={() => cancelarPedido(o).catch((e) => addToast(e.message, "error"))}>
                           ✕ Cancelar

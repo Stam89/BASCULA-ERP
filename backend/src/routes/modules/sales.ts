@@ -40,12 +40,25 @@ export type SaleInput = z.infer<typeof saleInputSchema>;
  * directa y el despacho de pedidos, para que ambas hagan exactamente lo mismo.
  * Debe llamarse dentro de una transacción.
  */
-export async function crearVenta(client: PoolClient, accionistaId: string | undefined, body: SaleInput) {
+export type OpcionesVenta = {
+  /**
+   * El despacho de un pedido ya trae su cuenta por cobrar creada al tomarlo,
+   * así que la venta no debe crear otra: sería cobrar dos veces lo mismo.
+   */
+  omitirCuentaPorCobrar?: boolean;
+};
+
+export async function crearVenta(
+  client: PoolClient,
+  accionistaId: string | undefined,
+  body: SaleInput,
+  opciones: OpcionesVenta = {}
+) {
   // Una venta a crédito sin cliente es una deuda de nadie: no se puede cobrar.
   if (body.payment_method === "CREDIT" && !body.customer_id) {
     throw new ApiError(400, "La venta a crédito necesita un cliente para saber quién debe.");
   }
-  return crearVentaInterna(client, accionistaId, body);
+  return crearVentaInterna(client, accionistaId, body, opciones);
 }
 
 salesRouter.post("/", asyncRoute(async (req, res) => {
@@ -57,7 +70,12 @@ salesRouter.post("/", asyncRoute(async (req, res) => {
   res.status(201).json(result);
 }));
 
-async function crearVentaInterna(client: PoolClient, accionistaId: string | undefined, body: SaleInput) {
+async function crearVentaInterna(
+  client: PoolClient,
+  accionistaId: string | undefined,
+  body: SaleInput,
+  opciones: OpcionesVenta = {}
+) {
   {
     const total = round2(body.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0));
     const sale = await client.query(
@@ -131,13 +149,13 @@ async function crearVentaInterna(client: PoolClient, accionistaId: string | unde
       }
     }
 
-    if (body.payment_method === "CREDIT") {
+    if (body.payment_method === "CREDIT" && !opciones.omitirCuentaPorCobrar) {
       await client.query(
         `INSERT INTO accounts_receivable (customer_id, sale_id, amount, balance, accionista_id)
          VALUES ($1, $2, $3, $3, $4)`,
        [body.customer_id, sale.rows[0].id, total, accionistaId]
       );
-    } else if (body.cash_register_id) {
+    } else if (body.payment_method !== "CREDIT" && body.cash_register_id) {
       await client.query(
         `INSERT INTO cash_movements
          (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)
