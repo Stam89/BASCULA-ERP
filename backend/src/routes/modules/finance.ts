@@ -5,6 +5,7 @@ import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { inTransaction } from "../../db/transaction.js";
 import {
   getBalanceGeneral,
   getEstadoResultados,
@@ -13,6 +14,11 @@ import {
   getDashboardFinanciero,
   getActivosFijos
 } from "../../services/finance.js";
+import {
+  parsearExtracto,
+  conciliarAutomatico,
+  getConciliacion
+} from "../../services/bank-reconciliation.js";
 
 export const financeRouter = Router();
 
@@ -123,6 +129,184 @@ financeRouter.put("/settings", requireAdmin, asyncRoute(async (req, res) => {
      body.fecha_inicio_contable ?? null, body.precio_referencia_qq]
   );
   res.json(r.rows[0]);
+}));
+
+// ── CONCILIACIÓN BANCARIA ───────────────────────────────────────────────────
+
+/** Cuentas de banco del accionista (cajas tipo BANCO). */
+financeRouter.get("/bank/accounts", asyncRoute(async (req, res) => {
+  const accionistaId = accionista(req as AuthenticatedRequest);
+  const r = await pool.query(
+    `SELECT c.id, c.name, c.banco, c.numero_cuenta, c.status, c.opening_balance,
+            COALESCE(c.opening_balance + (
+              SELECT COALESCE(SUM(CASE WHEN m.movement = 'INCOME' THEN m.amount ELSE -m.amount END), 0)
+              FROM cash_movements m WHERE m.cash_register_id = c.id AND m.reversed_at IS NULL
+            ), 0) AS saldo_libros,
+            (SELECT COUNT(*)::int FROM bank_statements s WHERE s.cash_register_id = c.id) AS extractos
+     FROM cash_registers c
+     WHERE c.accionista_id = $1 AND c.tipo = 'BANCO'
+     ORDER BY c.name`,
+    [accionistaId]
+  );
+  res.json(r.rows);
+}));
+
+/** Datos del banco sobre una caja existente (nombre del banco y N.º de cuenta). */
+financeRouter.put("/bank/accounts/:id", requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({
+    banco: z.string().max(80).optional(),
+    numero_cuenta: z.string().max(40).optional()
+  }).parse(req.body);
+  const accionistaId = accionista(req as AuthenticatedRequest);
+  const r = await pool.query(
+    `UPDATE cash_registers SET banco = $2, numero_cuenta = $3
+     WHERE id = $1 AND accionista_id = $4 AND tipo = 'BANCO'
+     RETURNING id, name, banco, numero_cuenta`,
+    [req.params.id, body.banco ?? null, body.numero_cuenta ?? null, accionistaId]
+  );
+  if (!r.rowCount) throw new ApiError(404, "Cuenta bancaria no encontrada para este accionista");
+  res.json(r.rows[0]);
+}));
+
+financeRouter.get("/bank/statements", asyncRoute(async (req, res) => {
+  const accionistaId = accionista(req as AuthenticatedRequest);
+  const r = await pool.query(
+    `SELECT s.id, s.periodo_desde, s.periodo_hasta, s.saldo_inicial, s.saldo_final, s.created_at,
+            c.name AS caja, c.banco,
+            (SELECT COUNT(*)::int FROM bank_statement_lines l WHERE l.statement_id = s.id) AS lineas,
+            (SELECT COUNT(*)::int FROM bank_statement_lines l WHERE l.statement_id = s.id AND l.cash_movement_id IS NOT NULL) AS cruzadas
+     FROM bank_statements s
+     JOIN cash_registers c ON c.id = s.cash_register_id
+     WHERE s.accionista_id = $1
+     ORDER BY s.periodo_hasta DESC
+     LIMIT 50`,
+    [accionistaId]
+  );
+  res.json(r.rows);
+}));
+
+/**
+ * Carga el extracto: se pega el texto tal como lo entrega el banco (Excel,
+ * CSV o PDF copiado) y el sistema lo interpreta. Enseguida cruza en automático
+ * lo que coincide en importe y fecha con los movimientos ya registrados.
+ */
+financeRouter.post("/bank/statements", asyncRoute(async (req, res) => {
+  const body = z.object({
+    cash_register_id: z.string().uuid(),
+    periodo_desde: z.string(),
+    periodo_hasta: z.string(),
+    saldo_inicial: z.number().default(0),
+    saldo_final: z.number(),
+    texto: z.string().min(1),
+    notas: z.string().optional(),
+    created_by: z.string().uuid().optional()
+  }).parse(req.body);
+  const accionistaId = accionista(req as AuthenticatedRequest);
+
+  const lineas = parsearExtracto(body.texto);
+  if (!lineas.length) {
+    throw new ApiError(
+      400,
+      "No se reconoció ninguna línea. Pega el extracto con una línea por movimiento: fecha, descripción y monto (los egresos con signo menos)."
+    );
+  }
+
+  const result = await inTransaction(async (client) => {
+    const caja = await client.query(
+      "SELECT id FROM cash_registers WHERE id = $1 AND accionista_id = $2 AND tipo = 'BANCO'",
+      [body.cash_register_id, accionistaId]
+    );
+    if (!caja.rowCount) throw new ApiError(404, "Esa cuenta bancaria no es del accionista seleccionado");
+
+    const st = await client.query(
+      `INSERT INTO bank_statements
+       (cash_register_id, accionista_id, periodo_desde, periodo_hasta, saldo_inicial, saldo_final, notas, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id`,
+      [body.cash_register_id, accionistaId, body.periodo_desde, body.periodo_hasta,
+       body.saldo_inicial, body.saldo_final, body.notas ?? null, body.created_by ?? null]
+    );
+    const statementId = st.rows[0].id;
+
+    for (const l of lineas) {
+      await client.query(
+        `INSERT INTO bank_statement_lines (statement_id, fecha, descripcion, referencia, monto)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [statementId, l.fecha, l.descripcion, l.referencia, l.monto]
+      );
+    }
+
+    const cruzadas = await conciliarAutomatico(client, statementId);
+    return { statement_id: statementId, lineas_leidas: lineas.length, cruzadas_automatico: cruzadas };
+  });
+
+  res.status(201).json(result);
+}));
+
+financeRouter.get("/bank/statements/:id/reconciliation", asyncRoute(async (req, res) => {
+  const accionistaId = accionista(req as AuthenticatedRequest);
+  const dueno = await pool.query(
+    "SELECT 1 FROM bank_statements WHERE id = $1 AND accionista_id = $2",
+    [req.params.id, accionistaId]
+  );
+  if (!dueno.rowCount) throw new ApiError(404, "Extracto no encontrado para este accionista");
+  res.json(await getConciliacion(pool, String(req.params.id)));
+}));
+
+/** Cruce manual: para lo que el automático no pudo emparejar. */
+financeRouter.post("/bank/lines/:id/match", asyncRoute(async (req, res) => {
+  const body = z.object({ cash_movement_id: z.string().uuid() }).parse(req.body);
+  const accionistaId = accionista(req as AuthenticatedRequest);
+
+  const result = await inTransaction(async (client) => {
+    const linea = await client.query(
+      `SELECT l.id, l.monto, s.cash_register_id
+       FROM bank_statement_lines l
+       JOIN bank_statements s ON s.id = l.statement_id
+       WHERE l.id = $1 AND s.accionista_id = $2
+       FOR UPDATE OF l`,
+      [req.params.id, accionistaId]
+    );
+    if (!linea.rowCount) throw new ApiError(404, "Línea del extracto no encontrada");
+
+    const mov = await client.query(
+      `SELECT id, (CASE WHEN movement = 'INCOME' THEN amount ELSE -amount END) AS monto
+       FROM cash_movements
+       WHERE id = $1 AND cash_register_id = $2 AND reversed_at IS NULL`,
+      [body.cash_movement_id, linea.rows[0].cash_register_id]
+    );
+    if (!mov.rowCount) throw new ApiError(404, "Ese movimiento no pertenece a esta cuenta bancaria");
+
+    // Cruzar importes distintos escondería un error real en vez de mostrarlo.
+    if (Math.abs(Number(mov.rows[0].monto) - Number(linea.rows[0].monto)) > 0.01) {
+      throw new ApiError(
+        409,
+        `Los importes no coinciden: el extracto dice ${Number(linea.rows[0].monto).toFixed(2)} y el movimiento ${Number(mov.rows[0].monto).toFixed(2)}.`
+      );
+    }
+
+    await client.query(
+      "UPDATE bank_statement_lines SET cash_movement_id = $2, match_type = 'MANUAL' WHERE id = $1",
+      [req.params.id, body.cash_movement_id]
+    );
+    return { ok: true };
+  });
+
+  res.json(result);
+}));
+
+financeRouter.post("/bank/lines/:id/unmatch", asyncRoute(async (req, res) => {
+  const accionistaId = accionista(req as AuthenticatedRequest);
+  const r = await pool.query(
+    `UPDATE bank_statement_lines l
+     SET cash_movement_id = NULL, match_type = NULL
+     FROM bank_statements s
+     WHERE l.statement_id = s.id AND l.id = $1 AND s.accionista_id = $2
+     RETURNING l.id`,
+    [req.params.id, accionistaId]
+  );
+  if (!r.rowCount) throw new ApiError(404, "Línea del extracto no encontrada");
+  res.json({ ok: true });
 }));
 
 // ── EXPORTACIÓN A EXCEL ─────────────────────────────────────────────────────

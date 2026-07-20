@@ -582,6 +582,29 @@ type FinanzasData = {
   indicadores: Record<string, { valor: number; meta: string; ok: boolean }>;
 };
 
+/** Cuenta bancaria (caja tipo BANCO) y su conciliación. */
+type CuentaBancaria = {
+  id: string; name: string; banco: string | null; numero_cuenta: string | null;
+  saldo_libros: string | number; extractos: number;
+};
+type PartidaConciliacion = { id: string; fecha: string; descripcion: string; referencia: string | null; monto: number };
+type Conciliacion = {
+  extracto: {
+    id: string; caja: string; banco: string | null; numero_cuenta: string | null;
+    periodo_desde: string; periodo_hasta: string; saldo_inicial: number; saldo_final: number;
+  };
+  lineas_cruzadas: number; lineas_totales: number;
+  segun_libros: {
+    saldo: number; notas_credito: PartidaConciliacion[]; total_notas_credito: number;
+    notas_debito: PartidaConciliacion[]; total_notas_debito: number; saldo_ajustado: number;
+  };
+  segun_banco: {
+    saldo: number; depositos_transito: PartidaConciliacion[]; total_depositos_transito: number;
+    cheques_no_cobrados: PartidaConciliacion[]; total_cheques_no_cobrados: number; saldo_ajustado: number;
+  };
+  diferencia: number; conciliado: boolean;
+};
+
 /** Pedido de venta (preventa): promesa al cliente que al despacharse se vuelve venta. */
 type SalesOrder = {
   id: string;
@@ -1142,6 +1165,10 @@ export function App() {
   const [finanzas, setFinanzas] = useState<FinanzasData | null>(null);
   const [finanzasDesde, setFinanzasDesde] = useState(`${new Date().getFullYear()}-01-01`);
   const [finanzasHasta, setFinanzasHasta] = useState(new Date().toISOString().slice(0, 10));
+  // Conciliación bancaria
+  const [cuentasBanco, setCuentasBanco] = useState<CuentaBancaria[]>([]);
+  const [conciliacion, setConciliacion] = useState<Conciliacion | null>(null);
+  const [extractoForm, setExtractoForm] = useState({ cash_register_id: "", saldo_final: "", texto: "" });
   const [orderPayMethod, setOrderPayMethod] = useState<Record<string, string>>({});
   const [saleLineForm, setSaleLineForm] = useState({
     product_id: "",
@@ -3525,7 +3552,36 @@ export function App() {
 
   async function loadFinanzas() {
     const qs = `?desde=${finanzasDesde}&hasta=${finanzasHasta}`;
-    setFinanzas(await apiGet<FinanzasData>(`/finance/dashboard${qs}`));
+    const [datos, cuentas] = await Promise.all([
+      apiGet<FinanzasData>(`/finance/dashboard${qs}`),
+      apiGet<CuentaBancaria[]>("/finance/bank/accounts").catch(() => [] as CuentaBancaria[])
+    ]);
+    setFinanzas(datos);
+    setCuentasBanco(cuentas);
+  }
+
+  // Carga el extracto pegado del banco y muestra la conciliación al instante.
+  async function cargarExtracto() {
+    if (!extractoForm.cash_register_id) throw new Error("Elige la cuenta bancaria");
+    if (!extractoForm.texto.trim()) throw new Error("Pega el extracto del banco");
+    const res = await apiPost<{ statement_id: string; lineas_leidas: number; cruzadas_automatico: number }>(
+      "/finance/bank/statements",
+      {
+        cash_register_id: extractoForm.cash_register_id,
+        periodo_desde: finanzasDesde,
+        periodo_hasta: finanzasHasta,
+        saldo_final: Number(extractoForm.saldo_final || 0),
+        texto: extractoForm.texto,
+        created_by: authUser?.id
+      }
+    );
+    addToast(`${res.lineas_leidas} línea(s) leídas · ${res.cruzadas_automatico} cruzadas automáticamente`, "success");
+    setExtractoForm({ ...extractoForm, texto: "" });
+    await verConciliacion(res.statement_id);
+  }
+
+  async function verConciliacion(statementId: string) {
+    setConciliacion(await apiGet<Conciliacion>(`/finance/bank/statements/${statementId}/reconciliation`));
   }
 
   // Descarga el libro de Excel con los estados financieros del período.
@@ -4816,6 +4872,106 @@ export function App() {
                       })}
                     </tbody>
                   </table>
+                </div>
+
+                {/* Conciliación bancaria */}
+                <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+                  <h2>🏦 Conciliación bancaria</h2>
+                  {cuentasBanco.length === 0 ? (
+                    <p className="muted">
+                      No hay cuentas de banco. En <strong>Caja</strong>, abre una caja de tipo <strong>🏦 Banco</strong> y
+                      aparecerá aquí para conciliarla contra el extracto.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="muted">
+                        Pega el extracto tal como lo entrega el banco (Excel, CSV o PDF copiado): una línea por
+                        movimiento con fecha, descripción y monto. Los egresos con signo menos. El sistema cruza solo
+                        lo que coincide en importe y fecha, y te muestra las partidas que explican la diferencia.
+                      </p>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 8 }}>
+                        <label><span>Cuenta bancaria</span>
+                          <select
+                            value={extractoForm.cash_register_id}
+                            onChange={(e) => setExtractoForm({ ...extractoForm, cash_register_id: e.target.value })}
+                          >
+                            <option value="">Seleccione</option>
+                            {cuentasBanco.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.banco ? `${c.banco} — ` : ""}{c.name} (libros {money(Number(c.saldo_libros))})
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label><span>Saldo final según el banco *</span>
+                          <input
+                            type="number" step="0.01" placeholder="0.00"
+                            value={extractoForm.saldo_final}
+                            onChange={(e) => setExtractoForm({ ...extractoForm, saldo_final: e.target.value })}
+                          />
+                        </label>
+                      </div>
+                      <label>
+                        <span>Extracto del banco (período {finanzasDesde} al {finanzasHasta})</span>
+                        <textarea
+                          rows={6}
+                          value={extractoForm.texto}
+                          onChange={(e) => setExtractoForm({ ...extractoForm, texto: e.target.value })}
+                          placeholder={"15/07/2026  DEPOSITO CLIENTE A     1.200,00\n16/07/2026  PAGO PROVEEDOR B        -450,00\n19/07/2026  COMISION MANTENIMIENTO   -15,50"}
+                          style={{ width: "100%", fontFamily: "var(--font-mono)", fontSize: 12.5 }}
+                        />
+                      </label>
+                      <button type="button" className="primary" onClick={() => cargarExtracto().catch((e) => addToast(e.message, "error"))}>
+                        🔍 Conciliar
+                      </button>
+                    </>
+                  )}
+
+                  {conciliacion && (
+                    <div style={{ marginTop: 16, borderTop: "1px solid var(--c-border)", paddingTop: 12 }}>
+                      <h3 style={{ margin: "0 0 4px" }}>
+                        {conciliacion.extracto.banco ?? conciliacion.extracto.caja}
+                        {conciliacion.extracto.numero_cuenta ? ` · Cta. ${conciliacion.extracto.numero_cuenta}` : ""}
+                      </h3>
+                      <p className="muted" style={{ marginTop: 0 }}>
+                        {conciliacion.extracto.periodo_desde?.slice(0, 10)} al {conciliacion.extracto.periodo_hasta?.slice(0, 10)} ·
+                        {" "}{conciliacion.lineas_cruzadas} de {conciliacion.lineas_totales} líneas cruzadas
+                      </p>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 14 }}>
+                        <table className="cajaTable">
+                          <tbody>
+                            <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>SEGÚN LIBROS</td></tr>
+                            <tr style={{ fontWeight: 700 }}><td>Saldo en libros</td><td className="num">{money(conciliacion.segun_libros.saldo)}</td></tr>
+                            {conciliacion.segun_libros.notas_credito.map((x) => (
+                              <tr key={x.id}><td>(+) {x.descripcion}<small className="muted" style={{ display: "block" }}>{x.fecha} · nota de crédito no registrada</small></td><td className="num rowIncome">{money(x.monto)}</td></tr>
+                            ))}
+                            {conciliacion.segun_libros.notas_debito.map((x) => (
+                              <tr key={x.id}><td>(−) {x.descripcion}<small className="muted" style={{ display: "block" }}>{x.fecha} · nota de débito no registrada</small></td><td className="num rowExpense">{money(x.monto)}</td></tr>
+                            ))}
+                            <tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border-strong)" }}><td>SALDO AJUSTADO</td><td className="num">{money(conciliacion.segun_libros.saldo_ajustado)}</td></tr>
+                          </tbody>
+                        </table>
+                        <table className="cajaTable">
+                          <tbody>
+                            <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>SEGÚN BANCO</td></tr>
+                            <tr style={{ fontWeight: 700 }}><td>Saldo del extracto</td><td className="num">{money(conciliacion.segun_banco.saldo)}</td></tr>
+                            {conciliacion.segun_banco.depositos_transito.map((x) => (
+                              <tr key={x.id}><td>(+) {x.descripcion}<small className="muted" style={{ display: "block" }}>{x.fecha} · depósito en tránsito</small></td><td className="num rowIncome">{money(x.monto)}</td></tr>
+                            ))}
+                            {conciliacion.segun_banco.cheques_no_cobrados.map((x) => (
+                              <tr key={x.id}><td>(−) {x.descripcion}<small className="muted" style={{ display: "block" }}>{x.fecha} · girado, no cobrado</small></td><td className="num rowExpense">{money(x.monto)}</td></tr>
+                            ))}
+                            <tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border-strong)" }}><td>SALDO AJUSTADO</td><td className="num">{money(conciliacion.segun_banco.saldo_ajustado)}</td></tr>
+                          </tbody>
+                        </table>
+                      </div>
+                      <p style={{ marginTop: 10, fontWeight: 800, fontSize: 15, color: conciliacion.conciliado ? "#15803d" : "#b91c1c" }}>
+                        {conciliacion.conciliado
+                          ? "✓ CUENTA CONCILIADA — ambos saldos ajustados coinciden"
+                          : `⚠ DIFERENCIA DE ${money(conciliacion.diferencia)} — revisa las partidas o el saldo del extracto`}
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 {/* Flujo de caja */}
