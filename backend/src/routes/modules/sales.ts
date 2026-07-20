@@ -1,4 +1,5 @@
 import { Router } from "express";
+import type { PoolClient } from "pg";
 import { z } from "zod";
 import { inTransaction } from "../../db/transaction.js";
 import { pool } from "../../db/pool.js";
@@ -13,32 +14,51 @@ export const salesRouter = Router();
 
 const QQ_TO_LB = 100;
 
-salesRouter.post("/", asyncRoute(async (req, res) => {
-  const accionistaId = (req as AuthenticatedRequest).accionistaId;
-  const body = z.object({
-    customer_id: z.string().uuid().optional(),
-    cash_register_id: z.string().uuid().optional(),
-    payment_method: z.enum(["CASH", "TRANSFER", "CARD", "CHECK", "CREDIT"]).default("CASH"),
-    packaging_supply_id: z.string().uuid().optional(),
-    presentation: z.string().optional(),
-    sack_weight_lb: z.number().positive().default(100),
-    created_by: z.string().uuid().optional(),
-    items: z.array(z.object({
-      product_id: z.string().uuid(),
-      warehouse_id: z.string().uuid(),
-      lot_id: z.string().uuid().optional(),
-      presentation_id: z.string().uuid().optional(),
-      quantity: z.number().positive(),
-      unit_price: z.number().nonnegative()
-    })).min(1)
-  }).parse(req.body);
+export const saleInputSchema = z.object({
+  customer_id: z.string().uuid().optional(),
+  cash_register_id: z.string().uuid().optional(),
+  payment_method: z.enum(["CASH", "TRANSFER", "CARD", "CHECK", "CREDIT"]).default("CASH"),
+  packaging_supply_id: z.string().uuid().optional(),
+  presentation: z.string().optional(),
+  sack_weight_lb: z.number().positive().default(100),
+  created_by: z.string().uuid().optional(),
+  items: z.array(z.object({
+    product_id: z.string().uuid(),
+    warehouse_id: z.string().uuid(),
+    lot_id: z.string().uuid().optional(),
+    presentation_id: z.string().uuid().optional(),
+    quantity: z.number().positive(),
+    unit_price: z.number().nonnegative()
+  })).min(1)
+});
 
+export type SaleInput = z.infer<typeof saleInputSchema>;
+
+/**
+ * Crea la venta completa (venta + líneas + salida de inventario + caja o
+ * crédito + sacos). Es LA única fuente de esta lógica: la usan la venta
+ * directa y el despacho de pedidos, para que ambas hagan exactamente lo mismo.
+ * Debe llamarse dentro de una transacción.
+ */
+export async function crearVenta(client: PoolClient, accionistaId: string | undefined, body: SaleInput) {
   // Una venta a crédito sin cliente es una deuda de nadie: no se puede cobrar.
   if (body.payment_method === "CREDIT" && !body.customer_id) {
     throw new ApiError(400, "La venta a crédito necesita un cliente para saber quién debe.");
   }
+  return crearVentaInterna(client, accionistaId, body);
+}
 
-  const result = await inTransaction(async (client) => {
+salesRouter.post("/", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const body = saleInputSchema.parse(req.body);
+
+  const result = await inTransaction((client) => crearVenta(client, accionistaId, body));
+
+  res.status(201).json(result);
+}));
+
+async function crearVentaInterna(client: PoolClient, accionistaId: string | undefined, body: SaleInput) {
+  {
     const total = round2(body.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0));
     const sale = await client.query(
       `INSERT INTO sales (sale_number, customer_id, cash_register_id, total_amount, payment_status, sale_status, created_by, accionista_id)
@@ -183,10 +203,8 @@ salesRouter.post("/", asyncRoute(async (req, res) => {
       sacks_used: sacksUsed,
       packaging_alert: packagingAlert
     };
-  });
-
-  res.status(201).json(result);
-}));
+  }
+}
 
 // GET todas las ventas con detalles de cliente
 salesRouter.get("/", asyncRoute(async (req, res) => {

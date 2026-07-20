@@ -529,6 +529,21 @@ type MillingDraft = {
   lot_code?: string;
 };
 
+/** Pedido de venta (preventa): promesa al cliente que al despacharse se vuelve venta. */
+type SalesOrder = {
+  id: string;
+  order_number: string;
+  customer_name: string;
+  customer_phone: string | null;
+  status: "PENDING" | "DELIVERED" | "CANCELLED";
+  delivery_date: string | null;
+  notes: string | null;
+  total_amount: string | number;
+  sale_number: string | null;
+  created_at: string;
+  items: Array<{ product_name: string; presentation_name: string | null; quantity: string | number; unit_price: string | number; total: string | number }>;
+};
+
 /** Resultado de pasar un lote a otro accionista, con la deuda que genera. */
 type LotTransferResult = {
   lot_code: string;
@@ -1061,6 +1076,9 @@ export function App() {
     unit_price: number;
   };
   const [saleLineItems, setSaleLineItems] = useState<SaleLineItem[]>([]);
+  // Pedidos de venta (preventa) y forma de pago elegida al despachar cada uno.
+  const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([]);
+  const [orderPayMethod, setOrderPayMethod] = useState<Record<string, string>>({});
   const [saleLineForm, setSaleLineForm] = useState({
     product_id: "",
     presentation_id: "",
@@ -2291,14 +2309,16 @@ export function App() {
   }
 
   async function refreshCustomersAndSales() {
-    const [custs, sls, ar] = await Promise.all([
+    const [custs, sls, ar, ords] = await Promise.all([
       apiGet<Customer[]>("/customers"),
       apiGet<Sale[]>("/sales"),
-      apiGet<AccountsReceivable[]>("/receivable")
+      apiGet<AccountsReceivable[]>("/receivable"),
+      apiGet<SalesOrder[]>("/orders").catch(() => [] as SalesOrder[])
     ]);
     setCustomers(custs);
     setSales(sls);
     setAccountsReceivable(ar.filter(a => a.status !== "PAID"));
+    setSalesOrders(ords);
   }
 
   async function refreshBasculaTickets() {
@@ -3643,6 +3663,9 @@ export function App() {
     await refresh();
   }
 
+  // Venta en dos tiempos (preventa): aquí solo se TOMA EL PEDIDO —una promesa,
+  // sin mover inventario ni plata—. El cobro y la salida de bodega ocurren al
+  // despacharlo desde "Pedidos pendientes".
   async function submitOrderSale(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formElement = event.currentTarget;
@@ -3658,45 +3681,25 @@ export function App() {
       return;
     }
 
-    // Obtener warehouse_id del formulario o usar el por defecto
-    const warehouse_id = form.get("warehouse_id") as string || finishedWarehouse?.id;
-    if (!warehouse_id) {
-      setMessage("Falta seleccionar bodega");
-      return;
-    }
-
-    // Convertir líneas del carrito al formato esperado por API
-    // Mapear marcas a productos de inventario correctos
     const items = saleLineItems.map(line => {
       const brandProduct = products.find(p => p.id === line.product_id);
       const inventoryProductId = getInventoryProductForBrand(brandProduct?.name || "");
-
       return {
-        product_id: inventoryProductId || line.product_id, // Usar producto de inventario o fallback
-        warehouse_id: warehouse_id,
-        presentation_id: line.presentation_id,
+        product_id: line.product_id,
+        presentation_id: line.presentation_id || undefined,
+        presentation_name: line.presentation_name || undefined,
+        inventory_product_id: inventoryProductId || line.product_id,
         quantity: line.quantity,
         unit_price: line.unit_price
       };
     });
 
-    const cashRegisterId = form.get("cash_register_id") as string;
-    const paymentMethod = (form.get("payment_method") || "CASH") as string;
-
-    // Validar que haya caja abierta si no es crédito
-    if (paymentMethod !== "CREDIT" && !cashRegisterId) {
-      setMessage("Abre una caja para guardar la venta");
-      return;
-    }
-
-    const sale = await apiPost<{
-      sale_number: string;
-      total_amount: string | number;
-    }>("/sales", {
+    const pedido = await apiPost<{ order_number: string; total_amount: string | number }>("/orders", {
       customer_id: selectedCustomerId,
-      cash_register_id: cashRegisterId || undefined, // Agregar automáticamente a caja
-      payment_method: paymentMethod,
-      items: items
+      delivery_date: (form.get("delivery_date") as string) || undefined,
+      notes: (form.get("order_notes") as string) || undefined,
+      created_by: authUser?.id,
+      items
     });
 
     safeResetForm(formElement);
@@ -3707,13 +3710,48 @@ export function App() {
     setFilteredCustomers([]);
     setSelectedPresentationId("");
     setSaleProductPresentations([]);
-    const totalText = paymentMethod === "CREDIT" ? "a crédito" : "en efectivo";
-    setMessage(
-      `✓ Pedido ${sale.sale_number} guardado ${totalText}: ${money(sale.total_amount)}`
+    setMessage(`✓ Pedido ${pedido.order_number} tomado: ${money(pedido.total_amount)}`);
+    addToast(`Pedido ${pedido.order_number} tomado · ${money(pedido.total_amount)}. Se cobra al despachar.`, "success");
+    await refreshCustomersAndSales();
+  }
+
+  // Despachar y cobrar: el pedido se convierte en venta real (inventario +
+  // caja o crédito) en una sola operación del servidor.
+  async function despacharPedido(order: SalesOrder) {
+    const metodo = orderPayMethod[order.id] ?? "CASH";
+    const registerId = dashboard.current_cash_register?.id;
+    if (metodo !== "CREDIT" && !registerId) {
+      addToast("Abre una caja para cobrar, o despacha a crédito", "error");
+      return;
+    }
+    if (!finishedWarehouse?.id) {
+      addToast("Falta la bodega de producto terminado (Crear datos base en Dashboard)", "error");
+      return;
+    }
+    const ok = window.confirm(
+      `¿Despachar el pedido ${order.order_number} de ${order.customer_name} por ${money(Number(order.total_amount))}?\n\n` +
+      (metodo === "CREDIT" ? "Queda como CRÉDITO (cuenta por cobrar)." : "Se cobra ahora y entra a la caja abierta.") +
+      "\nLa mercadería sale del inventario."
     );
-    addToast(`Venta ${sale.sale_number} guardada · ${money(sale.total_amount)} ${totalText}`, "success");
+    if (!ok) return;
+
+    const result = await apiPost<{ sale: { sale_number: string } }>(`/orders/${order.id}/deliver`, {
+      payment_method: metodo,
+      cash_register_id: metodo === "CREDIT" ? undefined : registerId,
+      warehouse_id: finishedWarehouse.id,
+      created_by: authUser?.id
+    });
+    addToast(`Pedido ${order.order_number} despachado → venta ${result.sale.sale_number}`, "success");
+    await refreshCustomersAndSales();
     await refresh();
-    if (cashRegisterId) await refreshCaja(cashRegisterId);
+    if (registerId) await refreshCaja(registerId);
+  }
+
+  async function cancelarPedido(order: SalesOrder) {
+    if (!window.confirm(`¿Cancelar el pedido ${order.order_number} de ${order.customer_name}?`)) return;
+    await apiPost(`/orders/${order.id}/cancel`, {});
+    addToast(`Pedido ${order.order_number} cancelado`, "success");
+    await refreshCustomersAndSales();
   }
 
   async function submitStockAdjustment(event: FormEvent<HTMLFormElement>) {
@@ -5119,37 +5157,72 @@ export function App() {
               </div>
             )}
 
-            {/* SECCIÓN 4: Resumen y pago */}
+            {/* SECCIÓN 4: Guardar el pedido (preventa: se cobra al despachar) */}
             <form className="formPanel stepPanel stepSuccess" onSubmit={(event) => submitOrderSale(event).catch((error) => setMessage(error.message))} style={{ gridColumn: "1 / -1" }}>
-              <h2 style={{ marginTop: 0 }}><span className="stepBadge">4</span>Resumen y forma de pago</h2>
+              <h2 style={{ marginTop: 0 }}><span className="stepBadge">4</span>Guardar pedido</h2>
+              <p className="muted" style={{ marginTop: -4 }}>
+                El pedido es la promesa al cliente: no mueve inventario ni plata. El cobro y la salida de
+                bodega ocurren al <strong>despacharlo</strong> desde «Pedidos pendientes».
+              </p>
 
               <div className="totalBox" style={{ background: "#dcfce7", padding: 16, borderRadius: 8, marginBottom: 16 }}>
-                <span style={{ fontSize: 14 }}>TOTAL A COBRAR</span>
+                <span style={{ fontSize: 14 }}>TOTAL DEL PEDIDO</span>
                 <strong style={{ fontSize: 28, color: "#16a34a" }}>${calculateSaleTotal().toFixed(2)}</strong>
                 <small style={{ color: "#6b7280" }}>Suma de todos los subtotales</small>
               </div>
 
-              <Select
-                name="payment_method"
-                label="Forma de pago"
-                rows={[["CASH", "💵 Efectivo"], ["TRANSFER", "📱 Transferencia"], ["CARD", "💳 Tarjeta"], ["CHECK", "✓ Cheque"], ["CREDIT", "📋 Crédito"]]}
-                defaultValue="CASH"
-              />
-
-              <Select
-                name="cash_register_id"
-                label="Caja"
-                rows={dashboard.current_cash_register ? [[dashboard.current_cash_register.id, dashboard.current_cash_register.name]] : []}
-                defaultValue={dashboard.current_cash_register?.id}
-                required={false}
-              />
-
-              <Select name="warehouse_id" label="Bodega de salida" rows={warehouses.map((warehouse) => [warehouse.id, warehouse.name])} defaultValue={finishedWarehouse?.id} />
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12 }}>
+                <Input name="delivery_date" label="Fecha de entrega" type="date" required={false} />
+                <Input name="order_notes" label="Nota (opcional)" required={false} />
+              </div>
 
               <button className="primary" style={{ width: "100%", padding: 12, fontSize: 16 }}>
-                💾 GUARDAR PEDIDO
+                📋 TOMAR PEDIDO
               </button>
             </form>
+
+            {/* Pedidos pendientes: aquí se despacha y cobra */}
+            {salesOrders.some((o) => o.status === "PENDING") && (
+              <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+                <h2>🚚 Pedidos pendientes ({salesOrders.filter((o) => o.status === "PENDING").length})</h2>
+                <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
+                  {salesOrders.filter((o) => o.status === "PENDING").map((o) => (
+                    <article key={o.id} style={{ border: "1px solid var(--c-border)", borderLeft: "4px solid var(--c-warning)", borderRadius: 10, padding: "10px 14px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+                        <div>
+                          <strong>{o.order_number}</strong> · {o.customer_name}
+                          {o.delivery_date && <span className="muted"> · entrega {new Date(o.delivery_date + "T12:00:00").toLocaleDateString("es-EC")}</span>}
+                        </div>
+                        <strong style={{ color: "#b45309" }}>{money(Number(o.total_amount))}</strong>
+                      </div>
+                      <div className="muted" style={{ fontSize: 12.5, margin: "4px 0 8px" }}>
+                        {o.items.map((it) => `${it.product_name}${it.presentation_name ? ` ${it.presentation_name}` : ""} × ${Number(it.quantity)}`).join(" · ")}
+                        {o.notes ? ` — ${o.notes}` : ""}
+                      </div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                        <select
+                          value={orderPayMethod[o.id] ?? "CASH"}
+                          onChange={(e) => setOrderPayMethod((cur) => ({ ...cur, [o.id]: e.target.value }))}
+                          style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid var(--c-border)", fontSize: 12.5 }}
+                        >
+                          <option value="CASH">💵 Efectivo</option>
+                          <option value="TRANSFER">📱 Transferencia</option>
+                          <option value="CARD">💳 Tarjeta</option>
+                          <option value="CHECK">✓ Cheque</option>
+                          <option value="CREDIT">📋 Crédito</option>
+                        </select>
+                        <button type="button" className="primary" onClick={() => despacharPedido(o).catch((e) => addToast(e.message, "error"))}>
+                          🚚 Despachar y cobrar
+                        </button>
+                        <button type="button" onClick={() => cancelarPedido(o).catch((e) => addToast(e.message, "error"))}>
+                          ✕ Cancelar
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Historial de ventas */}
             {sales.length > 0 && (
