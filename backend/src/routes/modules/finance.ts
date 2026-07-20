@@ -64,7 +64,9 @@ financeRouter.get("/indicators", asyncRoute(async (req, res) => {
 
 financeRouter.get("/fixed-assets", asyncRoute(async (req, res) => {
   const { hasta } = rango(req);
-  res.json(await getActivosFijos(pool, accionista(req as AuthenticatedRequest), hasta));
+  // La pantalla de carga pide todos (incluidos los que aún no tienen costo).
+  const todos = String(req.query.todos ?? "") === "true";
+  res.json(await getActivosFijos(pool, accionista(req as AuthenticatedRequest), hasta, todos));
 }));
 
 // Datos contables de un equipo (costo, fecha, vida útil): sin esto no se puede

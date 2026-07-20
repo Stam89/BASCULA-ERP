@@ -582,6 +582,17 @@ type FinanzasData = {
   indicadores: Record<string, { valor: number; meta: string; ok: boolean }>;
 };
 
+/** Activo fijo (equipo) con su depreciación en línea recta. */
+type ActivoFijo = {
+  id: string; nombre: string; tipo: string | null; costo: number;
+  fecha_compra: string | null; vida_util: number;
+  depreciacion_anual: number; depreciacion_acumulada: number; valor_libros: number;
+};
+type ActivosFijosData = {
+  items: ActivoFijo[];
+  costo_total: number; depreciacion_acumulada: number; valor_libros: number; depreciacion_anual: number;
+};
+
 /** Cuenta bancaria (caja tipo BANCO) y su conciliación. */
 type CuentaBancaria = {
   id: string; name: string; banco: string | null; numero_cuenta: string | null;
@@ -1169,6 +1180,9 @@ export function App() {
   const [cuentasBanco, setCuentasBanco] = useState<CuentaBancaria[]>([]);
   const [conciliacion, setConciliacion] = useState<Conciliacion | null>(null);
   const [extractoForm, setExtractoForm] = useState({ cash_register_id: "", saldo_final: "", texto: "" });
+  // Activos fijos: los equipos ya existen; aquí se cargan sus datos contables.
+  const [activosFijos, setActivosFijos] = useState<ActivosFijosData | null>(null);
+  const [activoEdit, setActivoEdit] = useState<Record<string, { costo: string; fecha: string; vida: string }>>({});
   const [orderPayMethod, setOrderPayMethod] = useState<Record<string, string>>({});
   const [saleLineForm, setSaleLineForm] = useState({
     product_id: "",
@@ -3552,12 +3566,44 @@ export function App() {
 
   async function loadFinanzas() {
     const qs = `?desde=${finanzasDesde}&hasta=${finanzasHasta}`;
-    const [datos, cuentas] = await Promise.all([
+    const [datos, cuentas, activos] = await Promise.all([
       apiGet<FinanzasData>(`/finance/dashboard${qs}`),
-      apiGet<CuentaBancaria[]>("/finance/bank/accounts").catch(() => [] as CuentaBancaria[])
+      apiGet<CuentaBancaria[]>("/finance/bank/accounts").catch(() => [] as CuentaBancaria[]),
+      apiGet<ActivosFijosData>(`/finance/fixed-assets?hasta=${finanzasHasta}&todos=true`).catch(() => null)
     ]);
     setFinanzas(datos);
     setCuentasBanco(cuentas);
+    setActivosFijos(activos);
+  }
+
+  /** Vida útil sugerida en Ecuador según el tipo de bien. */
+  function vidaUtilSugerida(tipo: string | null): number {
+    const t = String(tipo ?? "").toUpperCase();
+    if (t.includes("VEHICULO") || t.includes("VEHÍCULO") || t.includes("CAMION")) return 5;
+    if (t.includes("COMPUTO") || t.includes("CÓMPUTO")) return 3;
+    if (t.includes("EDIFICIO") || t.includes("INMUEBLE")) return 20;
+    return 10; // maquinaria y equipo
+  }
+
+  // Guarda los datos contables de un equipo. Sin costo no hay depreciación
+  // posible, así que hasta que no se cargue no entra al balance.
+  async function guardarActivoFijo(item: ActivoFijo) {
+    const edit = activoEdit[item.id] ?? {
+      costo: String(item.costo || ""),
+      fecha: item.fecha_compra ? String(item.fecha_compra).slice(0, 10) : "",
+      vida: String(item.vida_util || vidaUtilSugerida(item.tipo))
+    };
+    const costo = Number(edit.costo || 0);
+    if (costo > 0 && !edit.fecha) throw new Error("Indica la fecha de compra: sin ella no se puede calcular la depreciación.");
+    await apiPut(`/finance/fixed-assets/${item.id}`, {
+      acquisition_cost: costo,
+      acquisition_date: edit.fecha || undefined,
+      useful_life_years: Number(edit.vida || vidaUtilSugerida(item.tipo)),
+      salvage_value: 0,
+      is_depreciable: true
+    });
+    addToast(`${item.nombre} actualizado`, "success");
+    await loadFinanzas();
   }
 
   // Carga el extracto pegado del banco y muestra la conciliación al instante.
@@ -4772,6 +4818,49 @@ export function App() {
                     <Metric title="Por pagar" value={money(finanzas.kpis.por_pagar)} />
                     <Metric title="Flujo neto" value={money(finanzas.kpis.flujo_neto)} />
                   </section>
+
+                  {/* Gráficos: estructura del balance, del resultado y medidores */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 20, marginTop: 18 }}>
+                    <div>
+                      <h3 style={{ fontSize: 13, margin: "0 0 2px" }}>Estructura del activo</h3>
+                      <BarrasFinancieras
+                        formato={money}
+                        datos={[
+                          { etiqueta: "Efectivo y bancos", valor: finanzas.kpis.efectivo + finanzas.kpis.bancos, color: "#0d9488" },
+                          { etiqueta: "Inventario", valor: finanzas.kpis.inventario, color: "#fbbf24" },
+                          { etiqueta: "Cuentas por cobrar", valor: finanzas.kpis.por_cobrar, color: "#60a5fa" },
+                          { etiqueta: "Activos fijos (neto)", valor: finanzas.balance.activo.no_corriente.total, color: "#a78bfa" }
+                        ]}
+                      />
+                    </div>
+                    <div>
+                      <h3 style={{ fontSize: 13, margin: "0 0 2px" }}>Origen del financiamiento</h3>
+                      <BarrasFinancieras
+                        formato={money}
+                        datos={[
+                          { etiqueta: "Pasivo (deuda)", valor: finanzas.kpis.total_pasivos, color: "#f472b6" },
+                          { etiqueta: "Patrimonio (propio)", valor: finanzas.kpis.patrimonio, color: "#4ade80" }
+                        ]}
+                      />
+                      <h3 style={{ fontSize: 13, margin: "14px 0 2px" }}>Resultado del período</h3>
+                      <BarrasFinancieras
+                        formato={money}
+                        datos={[
+                          { etiqueta: "Ingresos", valor: finanzas.resultados.ingresos.total, color: "#16a34a" },
+                          { etiqueta: "Costo de ventas", valor: finanzas.resultados.costo_ventas.total, color: "#f59e0b" },
+                          { etiqueta: "Gastos operativos", valor: finanzas.resultados.gastos_operativos.total, color: "#ef4444" },
+                          { etiqueta: "Utilidad neta", valor: finanzas.resultados.utilidad_neta, color: finanzas.resultados.utilidad_neta >= 0 ? "#0d9488" : "#b91c1c" }
+                        ]}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center", marginTop: 18, paddingTop: 14, borderTop: "1px solid var(--c-border)" }}>
+                    <MedidorIndicador titulo="Liquidez" valor={finanzas.indicadores.liquidez_corriente?.valor ?? 0} meta="> 1.5" ok={finanzas.indicadores.liquidez_corriente?.ok ?? false} />
+                    <MedidorIndicador titulo="Prueba ácida" valor={finanzas.indicadores.prueba_acida?.valor ?? 0} meta="> 1.0" ok={finanzas.indicadores.prueba_acida?.ok ?? false} />
+                    <MedidorIndicador titulo="Endeudamiento" valor={finanzas.indicadores.endeudamiento_pct?.valor ?? 0} meta="< 60%" ok={finanzas.indicadores.endeudamiento_pct?.ok ?? false} sufijo="%" />
+                    <MedidorIndicador titulo="Margen neto" valor={finanzas.indicadores.margen_neto_pct?.valor ?? 0} meta="> 5%" ok={finanzas.indicadores.margen_neto_pct?.ok ?? false} sufijo="%" />
+                  </div>
                 </div>
 
                 {/* Balance General */}
@@ -4873,6 +4962,86 @@ export function App() {
                     </tbody>
                   </table>
                 </div>
+
+                {/* Activos fijos y depreciación */}
+                {activosFijos && (
+                  <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+                    <h2>🏭 Activos fijos y depreciación</h2>
+                    <p className="muted">
+                      Carga el costo y la fecha de compra de cada equipo. Con eso el sistema calcula la depreciación en
+                      línea recta, la resta del balance y la lleva al Estado de Resultados. Sin costo, el equipo no entra
+                      al balance.
+                    </p>
+                    {(() => {
+                      // Aviso de duplicados: nombres repetidos o con caracteres
+                      // dañados confunden al cargar costos (se cargaría dos veces).
+                      const vistos = new Map<string, number>();
+                      activosFijos.items.forEach((i) => {
+                        const clave = i.nombre.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^\w\s]/g, "").toLowerCase().trim();
+                        vistos.set(clave, (vistos.get(clave) ?? 0) + 1);
+                      });
+                      const dup = [...vistos.entries()].filter(([, n]) => n > 1);
+                      const rotos = activosFijos.items.filter((i) => i.nombre.includes("�"));
+                      if (!dup.length && !rotos.length) return null;
+                      return (
+                        <p className="alertBox" style={{ background: "var(--c-warning-bg)", color: "#b45309", padding: "8px 12px", borderRadius: 8 }}>
+                          ⚠ Hay equipos repetidos{rotos.length > 0 ? " o con el nombre dañado" : ""}. Revísalos en
+                          Configuración antes de cargar costos, o cargarás el mismo bien dos veces.
+                        </p>
+                      );
+                    })()}
+                    <table className="cajaTable" style={{ marginTop: 8 }}>
+                      <thead>
+                        <tr>
+                          <th>Equipo</th><th>Tipo</th>
+                          <th className="num">Costo $</th><th>Fecha compra</th><th className="num">Vida (años)</th>
+                          <th className="num">Depr. anual</th><th className="num">Depr. acum.</th><th className="num">Valor libros</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {activosFijos.items.map((item) => {
+                          const edit = activoEdit[item.id] ?? {
+                            costo: item.costo ? String(item.costo) : "",
+                            fecha: item.fecha_compra ? String(item.fecha_compra).slice(0, 10) : "",
+                            vida: String(item.vida_util || vidaUtilSugerida(item.tipo))
+                          };
+                          const set = (campo: "costo" | "fecha" | "vida", valor: string) =>
+                            setActivoEdit((cur) => ({ ...cur, [item.id]: { ...edit, [campo]: valor } }));
+                          return (
+                            <tr key={item.id} style={item.costo > 0 ? undefined : { opacity: 0.75 }}>
+                              <td style={{ fontWeight: 600 }}>{item.nombre}</td>
+                              <td><span className="chip info">{item.tipo ?? "—"}</span></td>
+                              <td><input type="number" step="0.01" min="0" value={edit.costo} placeholder="0.00"
+                                onChange={(e) => set("costo", e.target.value)} style={{ width: 110 }} /></td>
+                              <td><input type="date" value={edit.fecha}
+                                onChange={(e) => set("fecha", e.target.value)} style={{ width: 140 }} /></td>
+                              <td><input type="number" min="1" max="50" value={edit.vida}
+                                onChange={(e) => set("vida", e.target.value)} style={{ width: 70 }} /></td>
+                              <td className="num">{money(item.depreciacion_anual)}</td>
+                              <td className="num">{money(item.depreciacion_acumulada)}</td>
+                              <td className="num" style={{ fontWeight: 700 }}>{money(item.valor_libros)}</td>
+                              <td>
+                                <button type="button" onClick={() => guardarActivoFijo(item).catch((e) => addToast(e.message, "error"))}>
+                                  Guardar
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border-strong)" }}>
+                          <td colSpan={5}>TOTALES</td>
+                          <td className="num">{money(activosFijos.depreciacion_anual)}</td>
+                          <td className="num">{money(activosFijos.depreciacion_acumulada)}</td>
+                          <td className="num">{money(activosFijos.valor_libros)}</td>
+                          <td></td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                )}
 
                 {/* Conciliación bancaria */}
                 <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
@@ -9009,6 +9178,65 @@ function PanelIntegral({ data, month, onMonth }: { data: PanelData; month: strin
 }
 
 // Gráfico de barras Compras vs Ventas (SVG puro, sin librerías).
+/**
+ * Barras horizontales comparativas. Sirve para leer de un vistazo la
+ * estructura del balance y del resultado, sin depender de librerías.
+ */
+function BarrasFinancieras({ datos, formato }: {
+  datos: Array<{ etiqueta: string; valor: number; color: string }>;
+  formato: (n: number) => string;
+}) {
+  const max = Math.max(1, ...datos.map((d) => Math.abs(d.valor)));
+  return (
+    <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
+      {datos.map((d) => (
+        <div key={d.etiqueta}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 3 }}>
+            <span style={{ fontWeight: 600 }}>{d.etiqueta}</span>
+            <span style={{ fontWeight: 700, color: d.valor < 0 ? "#b91c1c" : "inherit" }}>{formato(d.valor)}</span>
+          </div>
+          <div style={{ height: 12, background: "var(--c-surface-3)", borderRadius: 99, overflow: "hidden" }}>
+            <div
+              style={{
+                width: `${Math.max(2, (Math.abs(d.valor) / max) * 100)}%`,
+                height: "100%",
+                background: d.color,
+                borderRadius: 99,
+                transition: "width .4s cubic-bezier(.2,.6,.3,1)"
+              }}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Medidor semicircular para un indicador con su meta. */
+function MedidorIndicador({ titulo, valor, meta, ok, sufijo = "" }: {
+  titulo: string; valor: number; meta: string; ok: boolean; sufijo?: string;
+}) {
+  const R = 52, C = 62;
+  const pct = Math.max(0, Math.min(1, valor / (valor > 3 ? valor * 1.4 : 3)));
+  const angulo = Math.PI * (1 - pct);
+  const x = C + R * Math.cos(angulo);
+  const y = C - R * Math.sin(angulo) + 6;
+  const color = ok ? "#16a34a" : "#f59e0b";
+  return (
+    <div style={{ textAlign: "center", minWidth: 128 }}>
+      <svg viewBox="0 0 124 78" width="124" height="78">
+        <path d={`M ${C - R} ${C + 6} A ${R} ${R} 0 0 1 ${C + R} ${C + 6}`} fill="none" stroke="var(--c-surface-3)" strokeWidth="11" strokeLinecap="round" />
+        <path d={`M ${C - R} ${C + 6} A ${R} ${R} 0 0 1 ${x} ${y}`} fill="none" stroke={color} strokeWidth="11" strokeLinecap="round" />
+        <text x={C} y={C} textAnchor="middle" fontSize="17" fontWeight="800" fill="var(--c-text)">
+          {valor.toFixed(sufijo === "%" ? 1 : 2)}{sufijo}
+        </text>
+      </svg>
+      <div style={{ fontSize: 12, fontWeight: 700, marginTop: -6 }}>{titulo}</div>
+      <div className="muted" style={{ fontSize: 11 }}>Meta {meta}</div>
+    </div>
+  );
+}
+
 function ComprasVentasChart({ serie }: { serie: Array<{ month: string; compras: number; ventas: number }> }) {
   const W = 520, H = 240, pad = 34, top = 20;
   const max = Math.max(1, ...serie.flatMap((s) => [s.compras, s.ventas]));
