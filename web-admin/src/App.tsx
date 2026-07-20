@@ -54,6 +54,20 @@ type MateriaPrimaEntry = {
   qualification: string | number | null;
 };
 
+/** Ingreso de materia prima sin lote, de cualquier accionista: sirve para
+ *  corregir el accionista cuando se registró con el equivocado. */
+type MateriaPrimaCorreccion = {
+  id: string;
+  ticket_number: string;
+  numero_bascula: string | null;
+  farmer_name: string | null;
+  quintals: string | number | null;
+  accionista_id: string | null;
+  accionista_name: string | null;
+  liquidado: boolean;
+  created_at: string;
+};
+
 /** Ingreso de materia prima pendiente de pagarle al agricultor. */
 type PendingEntry = {
   id: string;
@@ -921,6 +935,10 @@ export function App() {
 
   // ── Tickets sincronizados de la app de báscula ──────────────────────────────
   const [basculaTickets, setBasculaTickets] = useState<BasculaTicket[]>([]);
+  // Ingresos de materia prima sin lote (de todos los accionistas) + su búsqueda,
+  // para corregir el accionista cuando se registró con el equivocado.
+  const [materiaPrimaEntries, setMateriaPrimaEntries] = useState<MateriaPrimaCorreccion[]>([]);
+  const [materiaPrimaSearch, setMateriaPrimaSearch] = useState("");
   const [ticketFilter, setTicketFilter] = useState<"pending" | "liquidated" | "all">("pending");
   const [ticketSearch, setTicketSearch] = useState("");
   const [linkTicket, setLinkTicket] = useState<BasculaTicket | null>(null);
@@ -1236,6 +1254,15 @@ export function App() {
     () => insumos.filter((item) => item.is_critical),
     [insumos]
   );
+  const materiaPrimaFiltrada = useMemo(() => {
+    const q = materiaPrimaSearch.trim().toLowerCase();
+    if (!q) return materiaPrimaEntries;
+    return materiaPrimaEntries.filter((e) =>
+      `${e.numero_bascula ?? ""} ${e.ticket_number} ${e.farmer_name ?? ""} ${e.accionista_name ?? ""}`
+        .toLowerCase()
+        .includes(q)
+    );
+  }, [materiaPrimaEntries, materiaPrimaSearch]);
   // ── Selección de ingresos POR SECADORA (cada una arma su propio lote) ──────
   const seleccionDe = (secadora: string) => dryingSelections[secadora] ?? [];
   // Un ingreso agregado en una secadora no debe aparecer en la otra.
@@ -2323,8 +2350,30 @@ export function App() {
 
   async function refreshBasculaTickets() {
     const qs = ticketFilter === "all" ? "" : `?status=${ticketFilter}`;
-    const data = await apiGet<BasculaTicket[]>(`/tickets${qs}`);
+    const [data, materia] = await Promise.all([
+      apiGet<BasculaTicket[]>(`/tickets${qs}`),
+      apiGet<MateriaPrimaCorreccion[]>("/weighing-tickets/materia-prima").catch(() => [] as MateriaPrimaCorreccion[])
+    ]);
     setBasculaTickets(data);
+    setMateriaPrimaEntries(materia);
+  }
+
+  // Corrige el accionista de un ingreso mal registrado. Pide confirmación
+  // porque mueve la cáscara de un socio a otro en el inventario.
+  async function corregirAccionistaIngreso(entry: MateriaPrimaCorreccion, accionistaId: string) {
+    if (!accionistaId || accionistaId === entry.accionista_id) return;
+    const destino = accionistas.find((a) => a.id === accionistaId)?.name ?? "";
+    const origen = entry.accionista_name ?? "sin asignar";
+    const etiqueta = entry.numero_bascula ? `#${entry.numero_bascula}` : entry.ticket_number;
+    const ok = window.confirm(
+      `¿Pasar el ingreso ${etiqueta} (${entry.farmer_name ?? "sin agricultor"}, ${Number(entry.quintals ?? 0).toFixed(2)} QQ) ` +
+      `de ${origen} a ${destino}?\n\nSe mueve también su cáscara en el inventario.`
+    );
+    if (!ok) return;
+    await apiPut(`/weighing-tickets/${entry.id}/accionista`, { accionista_id: accionistaId });
+    addToast(`Ingreso ${etiqueta} corregido: ahora es de ${destino}`, "success");
+    await refreshBasculaTickets();
+    await refresh();
   }
 
   const [basculaImporting, setBasculaImporting] = useState(false);
@@ -4202,6 +4251,50 @@ export function App() {
               headers={["Lote", "Agricultor", "Tipo", "QQ"]}
               rows={lots.slice(0, 8).map((lot) => [lot.lot_code, lot.farmer_name ?? "—", riceTypeLabel(lot.rice_type), `${Number(lot.quintals ?? 0).toFixed(2)} QQ`])}
             />
+            {accionistas.length > 1 && materiaPrimaEntries.length > 0 && (
+              <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+                <h2>🔁 Corregir el accionista de un ingreso de materia prima</h2>
+                <p className="muted">
+                  ¿Ingresaste un peso con el accionista equivocado? Aquí salen los ingresos de <strong>todos</strong> los
+                  accionistas que todavía no entraron a un lote. Al corregirlo se mueve también su cáscara en el
+                  inventario. Si ya está en un lote o ya se liquidó, el sistema te avisa qué hacer.
+                </p>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", margin: "8px 0" }}>
+                  <input
+                    type="search"
+                    value={materiaPrimaSearch}
+                    onChange={(e) => setMateriaPrimaSearch(e.target.value)}
+                    placeholder="Buscar por ticket o agricultor…"
+                    style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--c-border)", minWidth: 240, fontSize: 13 }}
+                  />
+                  <span className="muted">{materiaPrimaFiltrada.length} ingreso(s)</span>
+                </div>
+                <table className="cajaTable">
+                  <thead><tr><th>Ticket</th><th>Agricultor</th><th>Fecha</th><th>QQ</th><th>Accionista</th></tr></thead>
+                  <tbody>
+                    {materiaPrimaFiltrada.slice(0, 25).map((e) => (
+                      <tr key={e.id}>
+                        <td style={{ fontWeight: 600 }}>{e.numero_bascula ? `#${e.numero_bascula}` : e.ticket_number}</td>
+                        <td>{e.farmer_name ?? "—"}</td>
+                        <td>{new Date(e.created_at).toLocaleDateString("es-EC")}</td>
+                        <td className="num">{Number(e.quintals ?? 0).toFixed(2)}</td>
+                        <td>
+                          <select
+                            value={e.accionista_id ?? ""}
+                            onChange={(ev) => corregirAccionistaIngreso(e, ev.target.value).catch((err) => addToast(err.message, "error"))}
+                            style={{ padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12 }}
+                          >
+                            <option value="">Sin asignar</option>
+                            {accionistas.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                          </select>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
             {accionistas.length > 1 && lots.length > 0 && (
               <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
                 <h2>Pasar un lote a otro accionista</h2>
