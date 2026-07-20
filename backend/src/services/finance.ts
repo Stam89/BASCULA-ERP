@@ -147,14 +147,22 @@ async function getCajaBancos(client: PoolClient | typeof pool, accionistaId: str
 }
 
 /** Depreciación en línea recta de los equipos del accionista. */
-export async function getActivosFijos(client: PoolClient | typeof pool, accionistaId: string, hasta: string) {
+export async function getActivosFijos(
+  client: PoolClient | typeof pool,
+  accionistaId: string,
+  hasta: string,
+  // Para la pantalla de carga hacen falta también los equipos sin costo; el
+  // balance en cambio solo suma los que ya tienen costo registrado.
+  incluirSinCosto = false
+) {
   const r = await client.query(
     `SELECT id, name, type, acquisition_cost, acquisition_date, useful_life_years,
             salvage_value, is_depreciable
      FROM equipment
-     WHERE (accionista_id = $1 OR accionista_id IS NULL) AND acquisition_cost > 0
+     WHERE (accionista_id = $1 OR accionista_id IS NULL)
+       AND ($2::boolean OR acquisition_cost > 0)
      ORDER BY name`,
-    [accionistaId]
+    [accionistaId, incluirSinCosto]
   );
 
   const corte = new Date(hasta);
