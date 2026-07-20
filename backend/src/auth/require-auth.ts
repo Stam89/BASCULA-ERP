@@ -30,6 +30,7 @@ const WRITE_MODULES_BY_PREFIX: Record<string, AppModule[]> = {
   "inventory": ["Inventario", "Produccion", "Caja"],
   "sacks": ["Inventario", "Produccion", "Caja"],
   "sales": ["Ventas"],
+  "orders": ["Ventas"],
   "customers": ["Ventas"],
   "products": ["Ventas"],
   "receivable": ["Ventas", "Caja"],
