@@ -1,4 +1,5 @@
 import { Router } from "express";
+import type { PoolClient } from "pg";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
@@ -190,6 +191,60 @@ function outputToQq(output: z.infer<typeof productionOutputSchema>): number {
 
 function round3(value: number): number {
   return Math.round(value * 1000) / 1000;
+}
+
+/**
+ * Cobro del servicio de pilado. CEYRO es la piladora: cuando pila arroz que no
+ * es suyo, cobra por quintal SEGÚN EL REPORTE DE PILADO. La presentación
+ * encarece el trabajo (ensacar en arrobas o en 10 lb da muchos más sacos por
+ * quintal), así que suma un recargo. Los precios salen de Configuración.
+ */
+async function calcularServicioPilado(
+  client: PoolClient,
+  presentaciones: Array<{ presentation: string; quantity: number }>,
+  totalQq: number
+) {
+  const r = await client.query(
+    `SELECT COALESCE(pilado_precio_qq, 0) base,
+            COALESCE(pilado_recargo_arroba, 0) arroba,
+            COALESCE(pilado_recargo_10lb, 0) diez
+     FROM labor_rates WHERE id = 1`
+  );
+  const base = Number(r.rows[0]?.base ?? 0);
+  const recargoArroba = Number(r.rows[0]?.arroba ?? 0);
+  const recargo10 = Number(r.rows[0]?.diez ?? 0);
+
+  // Una arroba son 25 libras; el saco de 10 lb tiene su propio recargo.
+  const recargoDe = (presentacion: string): { valor: number; etiqueta: string } => {
+    const p = String(presentacion ?? "").toUpperCase().replace(/\s/g, "");
+    if (p.includes("10LB")) return { valor: recargo10, etiqueta: "10 lb" };
+    if (p.includes("@") || p.includes("ARROBA") || p.includes("25LB")) return { valor: recargoArroba, etiqueta: "arroba" };
+    return { valor: 0, etiqueta: "saco normal" };
+  };
+
+  // Sin desglose se cobra todo a precio base sobre el total del reporte.
+  const lineas = presentaciones.length
+    ? presentaciones
+    : [{ presentation: "", quantity: totalQq }];
+
+  const detalle = lineas.map((l) => {
+    const qq = round2(Number(l.quantity));
+    const rec = recargoDe(l.presentation);
+    const precioQq = round2(base + rec.valor);
+    return {
+      presentacion: l.presentation || "sin desglose",
+      quintales: qq,
+      precio_base_qq: base,
+      recargo_qq: rec.valor,
+      concepto_recargo: rec.etiqueta,
+      precio_total_qq: precioQq,
+      subtotal: round2(qq * precioQq)
+    };
+  });
+
+  const total = round2(detalle.reduce((s, d) => s + d.subtotal, 0));
+  const qq = round2(detalle.reduce((s, d) => s + d.quintales, 0));
+  return { detalle, total, quintales: qq, tarifa_promedio_qq: qq > 0 ? round2(total / qq) : base };
 }
 
 function buildOutputRows(body: FinishProductionInput) {
@@ -404,33 +459,43 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       [processingBatchId, processLossKg, "Merma calculada automaticamente al cerrar produccion"]
     );
 
-    const serviceRate = body.service_rate_per_qq ?? 0;
-    const serviceAmount = isMaquila ? round2(processedQq * serviceRate) : 0;
+    // ── Cobro del servicio de pilado ──
+    // CEYRO es la piladora. Cobra cuando pila arroz que NO es suyo: de otro
+    // accionista o de un cliente externo (maquila). Su propio arroz no se cobra
+    // a sí mismo. El valor sale del reporte de pilado y de la presentación.
+    const CEYRO_ID = "00000000-0000-0000-0000-000000000001";
+    const esDeOtroAccionista = Boolean(accionistaId) && accionistaId !== CEYRO_ID;
+    const cobraServicio = isMaquila || esDeOtroAccionista;
+
+    const servicio = await calcularServicioPilado(
+      client,
+      (body.white_rice_presentations ?? []).map((p) => ({ presentation: p.presentation, quantity: p.quantity })),
+      processedQq
+    );
+    const serviceRate = servicio.tarifa_promedio_qq;
+    const serviceAmount = cobraServicio ? servicio.total : 0;
     let maquilaOrderId: string | null = null;
     let receivableId: string | null = null;
 
-    if (isMaquila) {
-      if (serviceRate <= 0) throw new ApiError(400, "La maquila requiere tarifa de servicio por QQ");
-
+    if (cobraServicio && serviceAmount > 0) {
       const maquila = await client.query(
         `INSERT INTO maquila_orders
          (lot_id, farmer_id, service_type, input_quantity, price_per_quintal, total_service_amount, status)
          VALUES ($1, $2, 'PILADO_MAQUILA', $3, $4, $5, 'CONFIRMED')
          RETURNING id`,
-        [body.lot_id, farmerId, inputPaddyKg, serviceRate, serviceAmount]
+        [body.lot_id, farmerId ?? null, inputPaddyKg, serviceRate, serviceAmount]
       );
       maquilaOrderId = maquila.rows[0].id;
 
-      // Cobro automático del servicio de pilado: el ingreso es de CEYRO. Si el
-      // dueño del lote es otro accionista, se le genera su cuenta por pagar; si
-      // es un cliente externo, solo queda la cuenta por cobrar de CEYRO.
-      const CEYRO_ID = "00000000-0000-0000-0000-000000000001";
-      const clienteEsAccionista = accionistaId && accionistaId !== CEYRO_ID;
-      const farmerRow = await client.query("SELECT full_name FROM farmers WHERE id = $1", [farmerId]);
-      const clienteNombre = clienteEsAccionista
+      const clienteNombre = esDeOtroAccionista
         ? (await client.query("SELECT name FROM accionistas WHERE id = $1", [accionistaId])).rows[0]?.name ?? "accionista"
-        : (farmerRow.rows[0]?.full_name ?? "cliente");
-      const desc = `Servicio de pilado (secado + pilado) a ${clienteNombre}: ${processedQq} QQ`;
+        : (await client.query("SELECT full_name FROM farmers WHERE id = $1", [farmerId])).rows[0]?.full_name ?? "cliente";
+
+      // El detalle explica de dónde sale el valor, presentación por presentación.
+      const desglose = servicio.detalle
+        .map((d) => `${d.quintales} QQ en ${d.presentacion} a $${d.precio_total_qq}/QQ = $${d.subtotal}`)
+        .join(" · ");
+      const desc = `Pilado a ${clienteNombre}: ${servicio.quintales} QQ — ${desglose}`;
 
       const receivable = await client.query(
         `INSERT INTO accounts_receivable
@@ -442,7 +507,7 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       receivableId = receivable.rows[0].id;
 
       let payableId: string | null = null;
-      if (clienteEsAccionista) {
+      if (esDeOtroAccionista) {
         const ap = await client.query(
           `INSERT INTO accounts_payable
            (accionista_id, farmer_id, reference_type, reference_id, description, amount, balance)
@@ -455,11 +520,12 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
 
       const svc = await client.query(
         `INSERT INTO pilado_services
-           (provider_accionista_id, client_accionista_id, client_name, lot_id, quintals, rate_per_qq, total, receivable_id, payable_id, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           (provider_accionista_id, client_accionista_id, client_name, lot_id, quintals, rate_per_qq, total, receivable_id, payable_id, detalle, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          RETURNING id`,
-        [CEYRO_ID, clienteEsAccionista ? accionistaId : null, clienteEsAccionista ? null : clienteNombre,
-         body.lot_id, processedQq, serviceRate, serviceAmount, receivableId, payableId, body.created_by ?? null]
+        [CEYRO_ID, esDeOtroAccionista ? accionistaId : null, esDeOtroAccionista ? null : clienteNombre,
+         body.lot_id, servicio.quintales, serviceRate, serviceAmount, receivableId, payableId,
+         JSON.stringify(servicio.detalle), body.created_by ?? null]
       );
       await client.query("UPDATE accounts_receivable SET reference_id = $2 WHERE id = $1", [receivableId, svc.rows[0].id]);
       if (payableId) await client.query("UPDATE accounts_payable SET reference_id = $2 WHERE id = $1", [payableId, svc.rows[0].id]);
