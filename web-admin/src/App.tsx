@@ -543,6 +543,45 @@ type MillingDraft = {
   lot_code?: string;
 };
 
+/** Estados financieros: todo se calcula en el servidor desde la operación. */
+type FinanzasData = {
+  periodo: { desde: string; hasta: string };
+  kpis: {
+    total_activos: number; total_pasivos: number; patrimonio: number; liquidez: number;
+    ventas: number; compras: number; utilidad: number; bancos: number; efectivo: number;
+    inventario: number; por_cobrar: number; por_pagar: number; flujo_neto: number;
+  };
+  balance: {
+    fecha: string;
+    activo: {
+      corriente: {
+        efectivo: number; bancos: number; cuentas_por_cobrar: number;
+        anticipos_agricultores: number; inventario: number; total: number;
+        inventario_detalle: { materia_prima: number; producto_terminado: number; subproductos: number; costo_qq_materia_prima: number; costo_qq_terminado: number };
+      };
+      no_corriente: { activos_fijos: number; depreciacion_acumulada: number; total: number };
+      total: number;
+    };
+    pasivo: { corriente: { cuentas_por_pagar: number; total: number }; total: number };
+    patrimonio: { capital_social: number; resultados_acumulados: number; resultado_ejercicio: number; ajuste_apertura: number; total: number };
+    cuadre: number;
+  };
+  resultados: {
+    ingresos: { ventas: number; servicio_pilado: number; total: number };
+    costo_ventas: { mercaderia_vendida: number; combustible_secado: number; total: number };
+    utilidad_bruta: number; margen_bruto_pct: number;
+    gastos_operativos: { gastos_generales: number; mano_obra: number; depreciacion: number; total: number };
+    utilidad_neta: number; margen_neto_pct: number;
+  };
+  flujo: {
+    entradas: Array<{ concepto: string; valor: number }>;
+    salidas: Array<{ concepto: string; valor: number }>;
+    total_entradas: number; total_salidas: number; flujo_neto: number;
+    saldo_actual: number; efectivo: number; bancos: number;
+  };
+  indicadores: Record<string, { valor: number; meta: string; ok: boolean }>;
+};
+
 /** Pedido de venta (preventa): promesa al cliente que al despacharse se vuelve venta. */
 type SalesOrder = {
   id: string;
@@ -733,6 +772,7 @@ const navGroups: Array<{ label: string; tabs: string[] }> = [
   { label: "Comercial", tabs: ["Ventas", "Caja"] },
   { label: "Cuentas", tabs: ["Por Cobrar", "Por Pagar"] },
   { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores", "Nomina", "Cuadrilla", "Servicio Pilado"] },
+  { label: "Contabilidad", tabs: ["Estados Financieros"] },
   { label: "Sistema", tabs: ["Reportes", "Configuracion"] }
 ];
 const tabs = navGroups.flatMap((group) => group.tabs);
@@ -771,6 +811,8 @@ function NavIcon({ tab }: { tab: string }) {
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="5" cy="5" r="2"/><circle cx="11" cy="5" r="2"/><path d="M1.5 13c0-2 1.5-3.2 3.5-3.2S8.5 11 8.5 13"/><path d="M7.5 13c0-2 1.5-3.2 3.5-3.2s3.5 1.2 3.5 3.2"/></svg>;
     case "Servicio Pilado":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.2 3.2l1.4 1.4M11.4 11.4l1.4 1.4M3.2 12.8l1.4-1.4M11.4 4.6l1.4-1.4"/></svg>;
+    case "Estados Financieros":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 13h12"/><rect x="3" y="8" width="2.5" height="5"/><rect x="6.75" y="5" width="2.5" height="8"/><rect x="10.5" y="2" width="2.5" height="11"/></svg>;
     case "Reportes":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="12" height="12" rx="1.5"/><line x1="5" y1="11" x2="5" y2="8"/><line x1="8" y1="11" x2="8" y2="5"/><line x1="11" y1="11" x2="11" y2="7"/></svg>;
     case "Configuracion":
@@ -1096,6 +1138,10 @@ export function App() {
   const [saleLineItems, setSaleLineItems] = useState<SaleLineItem[]>([]);
   // Pedidos de venta (preventa) y forma de pago elegida al despachar cada uno.
   const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([]);
+  // Estados financieros: se piden al servidor, que los calcula desde la operación.
+  const [finanzas, setFinanzas] = useState<FinanzasData | null>(null);
+  const [finanzasDesde, setFinanzasDesde] = useState(`${new Date().getFullYear()}-01-01`);
+  const [finanzasHasta, setFinanzasHasta] = useState(new Date().toISOString().slice(0, 10));
   const [orderPayMethod, setOrderPayMethod] = useState<Record<string, string>>({});
   const [saleLineForm, setSaleLineForm] = useState({
     product_id: "",
@@ -2706,6 +2752,7 @@ export function App() {
     if (activeTab === "Servicio Pilado") refreshPilado().catch(() => undefined);
     if (activeTab === "Dashboard" && isAdmin) refreshPanel().catch(() => undefined);
     if (activeTab === "Configuracion") refreshConfig().catch(() => undefined);
+    if (activeTab === "Estados Financieros") loadFinanzas().catch((e) => addToast(e.message, "error"));
   }, [activeTab, motorActivo]);
 
   async function submitFomento(e: FormEvent<HTMLFormElement>) {
@@ -3474,6 +3521,26 @@ export function App() {
   async function loadMillingDrafts() {
     const rows = await apiGet<MillingDraft[]>("/processing-batches/drafts").catch(() => [] as MillingDraft[]);
     setMillingDrafts(rows);
+  }
+
+  async function loadFinanzas() {
+    const qs = `?desde=${finanzasDesde}&hasta=${finanzasHasta}`;
+    setFinanzas(await apiGet<FinanzasData>(`/finance/dashboard${qs}`));
+  }
+
+  // Descarga el libro de Excel con los estados financieros del período.
+  async function descargarEstadosExcel() {
+    const qs = `?desde=${finanzasDesde}&hasta=${finanzasHasta}`;
+    const res = await apiFetch(`/finance/export/excel${qs}`);
+    if (!res.ok) throw new Error("No se pudo generar el Excel");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `estados-financieros-${finanzasHasta}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+    addToast("Estados financieros descargados", "success");
   }
 
   async function loadProductionHistory() {
@@ -4607,6 +4674,168 @@ export function App() {
             </div>
 
             <DryingReportsPanel reports={dryingReports} onEdit={editDryingReport} />
+          </section>
+        )}
+
+        {activeTab === "Estados Financieros" && (
+          <section className="panelGrid">
+            {/* Barra de período + descarga */}
+            <div className="tablePanel" style={{ gridColumn: "1 / -1", display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+              <label style={{ margin: 0 }}><span>Desde</span>
+                <input type="date" value={finanzasDesde} onChange={(e) => setFinanzasDesde(e.target.value)} />
+              </label>
+              <label style={{ margin: 0 }}><span>Hasta</span>
+                <input type="date" value={finanzasHasta} onChange={(e) => setFinanzasHasta(e.target.value)} />
+              </label>
+              <button type="button" onClick={() => loadFinanzas().catch((e) => addToast(e.message, "error"))}>↻ Recalcular</button>
+              <button type="button" className="primary" onClick={() => descargarEstadosExcel().catch((e) => addToast(e.message, "error"))}>
+                📊 Descargar Excel
+              </button>
+              <span className="muted">Todo se calcula solo desde compras, ventas, caja, inventario y producción.</span>
+            </div>
+
+            {!finanzas ? (
+              <div className="emptyState" style={{ gridColumn: "1 / -1" }}><div className="emptyIcon">📊</div><p>Calculando estados financieros…</p></div>
+            ) : (
+              <>
+                {/* KPIs ejecutivos */}
+                <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+                  <h2>📈 Dashboard financiero</h2>
+                  <section className="yieldResults" style={{ marginTop: 8 }}>
+                    <Metric title="Total activos" value={money(finanzas.kpis.total_activos)} />
+                    <Metric title="Total pasivos" value={money(finanzas.kpis.total_pasivos)} />
+                    <Metric title="Patrimonio" value={money(finanzas.kpis.patrimonio)} />
+                    <Metric title="Liquidez" value={finanzas.kpis.liquidez.toFixed(2)} />
+                    <Metric title="Ventas" value={money(finanzas.kpis.ventas)} />
+                    <Metric title="Compras" value={money(finanzas.kpis.compras)} />
+                    <Metric title="Utilidad" value={money(finanzas.kpis.utilidad)} />
+                    <Metric title="Efectivo" value={money(finanzas.kpis.efectivo)} />
+                    <Metric title="Bancos" value={money(finanzas.kpis.bancos)} />
+                    <Metric title="Inventario" value={money(finanzas.kpis.inventario)} />
+                    <Metric title="Por cobrar" value={money(finanzas.kpis.por_cobrar)} />
+                    <Metric title="Por pagar" value={money(finanzas.kpis.por_pagar)} />
+                    <Metric title="Flujo neto" value={money(finanzas.kpis.flujo_neto)} />
+                  </section>
+                </div>
+
+                {/* Balance General */}
+                <div className="tablePanel">
+                  <h2>🏛️ Balance General <span className="muted">al {finanzas.balance.fecha}</span></h2>
+                  <table className="cajaTable" style={{ marginTop: 8 }}>
+                    <tbody>
+                      <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>ACTIVO CORRIENTE</td></tr>
+                      <tr><td>Efectivo en caja</td><td className="num">{money(finanzas.balance.activo.corriente.efectivo)}</td></tr>
+                      <tr><td>Bancos</td><td className="num">{money(finanzas.balance.activo.corriente.bancos)}</td></tr>
+                      <tr><td>Cuentas por cobrar</td><td className="num">{money(finanzas.balance.activo.corriente.cuentas_por_cobrar)}</td></tr>
+                      <tr><td>Anticipos a agricultores</td><td className="num">{money(finanzas.balance.activo.corriente.anticipos_agricultores)}</td></tr>
+                      <tr>
+                        <td>Inventarios
+                          <small className="muted" style={{ display: "block" }}>
+                            valorizado a ${finanzas.balance.activo.corriente.inventario_detalle.costo_qq_materia_prima}/QQ (costo promedio)
+                          </small>
+                        </td>
+                        <td className="num">{money(finanzas.balance.activo.corriente.inventario)}</td>
+                      </tr>
+                      <tr style={{ fontWeight: 700 }}><td>Total activo corriente</td><td className="num">{money(finanzas.balance.activo.corriente.total)}</td></tr>
+                      <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>ACTIVO NO CORRIENTE</td></tr>
+                      <tr><td>Propiedad, planta y equipo</td><td className="num">{money(finanzas.balance.activo.no_corriente.activos_fijos)}</td></tr>
+                      <tr><td>(-) Depreciación acumulada</td><td className="num">{money(finanzas.balance.activo.no_corriente.depreciacion_acumulada)}</td></tr>
+                      <tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border-strong)" }}><td>TOTAL ACTIVO</td><td className="num">{money(finanzas.balance.activo.total)}</td></tr>
+                      <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>PASIVO</td></tr>
+                      <tr><td>Cuentas por pagar</td><td className="num">{money(finanzas.balance.pasivo.corriente.cuentas_por_pagar)}</td></tr>
+                      <tr style={{ fontWeight: 700 }}><td>Total pasivo</td><td className="num">{money(finanzas.balance.pasivo.total)}</td></tr>
+                      <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>PATRIMONIO</td></tr>
+                      <tr><td>Capital social</td><td className="num">{money(finanzas.balance.patrimonio.capital_social)}</td></tr>
+                      <tr><td>Resultados acumulados</td><td className="num">{money(finanzas.balance.patrimonio.resultados_acumulados)}</td></tr>
+                      <tr><td>Resultado del ejercicio</td><td className="num">{money(finanzas.balance.patrimonio.resultado_ejercicio)}</td></tr>
+                      <tr><td>Ajuste de apertura <small className="muted">(antes del sistema)</small></td><td className="num">{money(finanzas.balance.patrimonio.ajuste_apertura)}</td></tr>
+                      <tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border-strong)" }}><td>TOTAL PATRIMONIO</td><td className="num">{money(finanzas.balance.patrimonio.total)}</td></tr>
+                    </tbody>
+                  </table>
+                  <p style={{ marginTop: 8, fontWeight: 700, color: Math.abs(finanzas.balance.cuadre) < 0.01 ? "#15803d" : "#b91c1c" }}>
+                    {Math.abs(finanzas.balance.cuadre) < 0.01 ? "✓ Balance cuadrado (Activo = Pasivo + Patrimonio)" : `⚠ Descuadre de ${money(finanzas.balance.cuadre)}`}
+                  </p>
+                </div>
+
+                {/* Estado de Resultados */}
+                <div className="tablePanel">
+                  <h2>📑 Estado de Resultados</h2>
+                  <table className="cajaTable" style={{ marginTop: 8 }}>
+                    <tbody>
+                      <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>INGRESOS</td></tr>
+                      <tr><td>Ventas</td><td className="num">{money(finanzas.resultados.ingresos.ventas)}</td></tr>
+                      <tr><td>Servicio de pilado</td><td className="num">{money(finanzas.resultados.ingresos.servicio_pilado)}</td></tr>
+                      <tr style={{ fontWeight: 700 }}><td>Total ingresos</td><td className="num">{money(finanzas.resultados.ingresos.total)}</td></tr>
+                      <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>COSTO DE VENTAS</td></tr>
+                      <tr><td>Mercadería vendida</td><td className="num">{money(finanzas.resultados.costo_ventas.mercaderia_vendida)}</td></tr>
+                      <tr><td>Combustible de secado</td><td className="num">{money(finanzas.resultados.costo_ventas.combustible_secado)}</td></tr>
+                      <tr style={{ fontWeight: 700, borderTop: "1px solid var(--c-border)" }}>
+                        <td>UTILIDAD BRUTA <small className="muted">({finanzas.resultados.margen_bruto_pct}%)</small></td>
+                        <td className="num">{money(finanzas.resultados.utilidad_bruta)}</td>
+                      </tr>
+                      <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>GASTOS OPERATIVOS</td></tr>
+                      <tr><td>Gastos generales</td><td className="num">{money(finanzas.resultados.gastos_operativos.gastos_generales)}</td></tr>
+                      <tr><td>Mano de obra</td><td className="num">{money(finanzas.resultados.gastos_operativos.mano_obra)}</td></tr>
+                      <tr><td>Depreciación</td><td className="num">{money(finanzas.resultados.gastos_operativos.depreciacion)}</td></tr>
+                      <tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border-strong)" }}>
+                        <td>UTILIDAD NETA <small className="muted">({finanzas.resultados.margen_neto_pct}%)</small></td>
+                        <td className="num" style={{ color: finanzas.resultados.utilidad_neta >= 0 ? "#15803d" : "#b91c1c" }}>{money(finanzas.resultados.utilidad_neta)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Indicadores */}
+                <div className="tablePanel">
+                  <h2>🎯 Indicadores financieros</h2>
+                  <table className="cajaTable" style={{ marginTop: 8 }}>
+                    <thead><tr><th>Indicador</th><th className="num">Valor</th><th>Meta</th><th>Estado</th></tr></thead>
+                    <tbody>
+                      {Object.entries({
+                        liquidez_corriente: "Liquidez corriente",
+                        prueba_acida: "Prueba ácida",
+                        capital_trabajo: "Capital de trabajo",
+                        endeudamiento_pct: "Endeudamiento",
+                        margen_bruto_pct: "Margen bruto",
+                        margen_neto_pct: "Margen neto",
+                        roa_pct: "Rentabilidad del activo",
+                        roe_pct: "Rentabilidad del patrimonio"
+                      }).map(([clave, etiqueta]) => {
+                        const i = finanzas.indicadores[clave];
+                        if (!i) return null;
+                        const esPct = clave.endsWith("_pct");
+                        const esDinero = clave === "capital_trabajo";
+                        return (
+                          <tr key={clave}>
+                            <td>{etiqueta}</td>
+                            <td className="num">{esDinero ? money(i.valor) : esPct ? `${i.valor}%` : i.valor.toFixed(2)}</td>
+                            <td className="muted">{i.meta}</td>
+                            <td><span className={i.ok ? "chip success" : "chip warning"}>{i.ok ? "✓ OK" : "⚠ Revisar"}</span></td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Flujo de caja */}
+                <div className="tablePanel">
+                  <h2>💵 Flujo de caja</h2>
+                  <table className="cajaTable" style={{ marginTop: 8 }}>
+                    <tbody>
+                      <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>ENTRADAS</td></tr>
+                      {finanzas.flujo.entradas.length === 0 && <tr><td colSpan={2} className="muted">Sin entradas en el período</td></tr>}
+                      {finanzas.flujo.entradas.map((x) => <tr key={`e-${x.concepto}`}><td>{x.concepto}</td><td className="num rowIncome">{money(x.valor)}</td></tr>)}
+                      <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>SALIDAS</td></tr>
+                      {finanzas.flujo.salidas.length === 0 && <tr><td colSpan={2} className="muted">Sin salidas en el período</td></tr>}
+                      {finanzas.flujo.salidas.map((x) => <tr key={`s-${x.concepto}`}><td>{x.concepto}</td><td className="num rowExpense">{money(x.valor)}</td></tr>)}
+                      <tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border-strong)" }}><td>FLUJO NETO</td><td className="num">{money(finanzas.flujo.flujo_neto)}</td></tr>
+                      <tr style={{ fontWeight: 700 }}><td>Saldo disponible hoy</td><td className="num">{money(finanzas.flujo.saldo_actual)}</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </section>
         )}
 

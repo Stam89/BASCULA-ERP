@@ -48,7 +48,11 @@ const WRITE_MODULES_BY_PREFIX: Record<string, AppModule[]> = {
   // tiene Caja o Producción; el backend aplica la misma regla.
   "labor": ["Caja", "Produccion"],
   "cuadrilla": ["Caja", "Produccion"],
-  "pilado": ["Caja", "Produccion"]
+  "pilado": ["Caja", "Produccion"],
+  // Los estados financieros se LEEN (y leer no exige módulo); lo único que se
+  // escribe aquí son los parámetros contables y el costo de los activos, que
+  // además piden rol de administrador en la propia ruta.
+  "finance": ["Caja"]
 };
 
 // Las lecturas son compartidas por todo el equipo; las escrituras se limitan
