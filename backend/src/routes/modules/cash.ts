@@ -190,11 +190,24 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
 // ── Cuentas por pagar pendientes ─────────────────────────────────────────────
 cashRouter.get("/payables", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  // LEFT JOIN a farmers: una cuenta por pagar NO siempre es a un agricultor.
+  // El servicio de pilado a CEYRO no tiene agricultor, y con el JOIN interno
+  // quedaba oculta (se veía en Por Cobrar pero no aquí). Cuando no hay
+  // agricultor, se muestra el concepto para saber a quién y por qué se paga.
   const result = await pool.query(
-    `SELECT ap.*, f.full_name AS farmer_name,
+    `SELECT ap.*,
+            COALESCE(
+              f.full_name,
+              CASE
+                WHEN ap.reference_type = 'pilado_service' THEN 'CEYRO — Servicio de pilado'
+                WHEN ap.reference_type = 'lot_transfer' THEN 'Traspaso de lote entre accionistas'
+                ELSE NULLIF(ap.description, '')
+              END,
+              'Cuenta por pagar'
+            ) AS farmer_name,
             l.liquidation_number, l.batch_id
      FROM accounts_payable ap
-     JOIN farmers f ON f.id = ap.farmer_id
+     LEFT JOIN farmers f ON f.id = ap.farmer_id
      LEFT JOIN liquidations l ON l.id = ap.liquidation_id
      WHERE ap.status IN ('CONFIRMED', 'PARTIAL') AND ap.accionista_id = $1
      ORDER BY ap.created_at DESC`,
