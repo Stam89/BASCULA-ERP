@@ -333,13 +333,24 @@ cashRouter.post("/payables/:id/pay", asyncRoute(async (req, res) => {
       [req.params.id, newBalance, newStatus]
     );
 
+    // La categoría del movimiento depende de QUÉ se paga: no todo es a un
+    // agricultor. Un servicio de pilado o un traspaso son entre socios.
+    const refType = ap.rows[0].reference_type;
+    const categoria =
+      refType === "pilado_service" ? "PAGO_SERVICIO_PILADO" :
+      refType === "lot_transfer" ? "PAGO_ENTRE_SOCIOS" :
+      "PAGO_AGRICULTOR";
+    // La descripción dice a quién se paga, sin repetir "Pago a" si ya lo trae.
+    const aQuien = ap.rows[0].farmer_name
+      ? `Pago a ${ap.rows[0].farmer_name}`
+      : (refType === "pilado_service" ? `Pago servicio de pilado a CEYRO — ${ap.rows[0].description ?? ""}`
+        : `Pago — ${ap.rows[0].description ?? "cuenta por pagar"}`);
+
     await client.query(
       `INSERT INTO cash_movements
        (cash_register_id, movement, category, reference_type, reference_id, amount, description)
-       VALUES ($1, 'EXPENSE', 'PAGO_AGRICULTOR', 'accounts_payable', $2, $3, $4)`,
-      [body.cash_register_id, req.params.id, body.amount,
-       // El movimiento de caja debe decir A QUIÉN se pagó, no un código interno.
-       `Pago a ${ap.rows[0].farmer_name ?? ap.rows[0].description ?? "proveedor"}`]
+       VALUES ($1, 'EXPENSE', $2, 'accounts_payable', $3, $4, $5)`,
+      [body.cash_register_id, categoria, req.params.id, body.amount, aQuien.trim()]
     );
 
     // Si es una deuda entre socios (pilado/traspaso), el abono baja también la
