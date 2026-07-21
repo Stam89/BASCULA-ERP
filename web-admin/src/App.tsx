@@ -2590,8 +2590,19 @@ export function App() {
   async function payAccountReceivable(id: string, amount: number) {
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) { addToast("No hay caja abierta", "error"); return; }
-    await apiPost(`/receivable/${id}/pay`, { amount, cash_register_id: registerId });
-    addToast("Pago registrado en caja", "success");
+    const r = await apiPost<{ remaining: number; espejo: null | { accionista: string; cuenta: string; caja_registrada: boolean } }>(
+      `/receivable/${id}/pay`, { amount, cash_register_id: registerId }
+    );
+    // Si era una deuda entre socios, confirmar que la contraparte se actualizó.
+    if (r.espejo) {
+      addToast(
+        `Abono de ${money(amount)} registrado. Se descontó la ${r.espejo.cuenta} de ${r.espejo.accionista}` +
+        (r.espejo.caja_registrada ? " y entró a su caja." : " (su caja está cerrada, el saldo igual bajó)."),
+        "success"
+      );
+    } else {
+      addToast(`Abono de ${money(amount)} registrado en caja`, "success");
+    }
     await refreshCustomersAndSales();
     await refreshCaja(registerId);
   }
@@ -7331,16 +7342,13 @@ export function App() {
                       <div><span>Monto total</span><b>{money(Number(ar.amount))}</b></div>
                       <div><span>Saldo pendiente</span><b className="pend">{money(Number(ar.balance))}</b></div>
                     </div>
-                    <button
-                      type="button"
-                      className="primary"
-                      onClick={() => {
-                        const amt = prompt(`Cobrar hasta ${money(Number(ar.balance))}:`, Number(ar.balance).toFixed(2));
-                        if (amt) payAccountReceivable(ar.id, Number(amt)).catch((e) => addToast(e.message, "error"));
-                      }}
-                    >
-                      💵 Registrar cobro
-                    </button>
+                    <div className="cuentaBar"><div style={{ width: `${((Number(ar.amount) - Number(ar.balance)) / Number(ar.amount)) * 100}%` }} /></div>
+                    {/* Abono: puede pagar todo o una parte (deja el saldo). */}
+                    <AbonoForm
+                      saldo={Number(ar.balance)}
+                      disabled={!dashboard.current_cash_register}
+                      onAbonar={(monto) => payAccountReceivable(ar.id, monto).catch((e) => addToast(e.message, "error"))}
+                    />
                   </article>
                 ))}
               </div>
@@ -9665,6 +9673,40 @@ function PayablePayForm({ payable, onPay }: { payable: AccountPayable; onPay: (a
       >
         Pagar
       </button>
+    </div>
+  );
+}
+
+/**
+ * Cobro con abono parcial: el campo viene con el saldo completo, pero el
+ * cobrador puede escribir menos si el cliente abona solo una parte hoy. El
+ * saldo restante queda pendiente para el próximo abono.
+ */
+function AbonoForm({ saldo, disabled, onAbonar }: { saldo: number; disabled?: boolean; onAbonar: (monto: number) => void }) {
+  const [monto, setMonto] = React.useState(String(saldo.toFixed(2)));
+  const valor = Number(monto);
+  const parcial = valor > 0 && valor < saldo - 0.001;
+  return (
+    <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 6 }}>
+      <input
+        type="number" min="0.01" step="0.01" max={saldo}
+        value={monto}
+        onChange={(e) => setMonto(e.target.value)}
+        disabled={disabled}
+        className="payableInput"
+        style={{ maxWidth: 130 }}
+        aria-label="Monto del abono"
+      />
+      <button
+        type="button"
+        className="primary"
+        disabled={disabled || !(valor > 0) || valor > saldo + 0.001}
+        onClick={() => onAbonar(valor)}
+        title={disabled ? "Abre una caja para registrar el cobro" : ""}
+      >
+        {valor >= saldo - 0.001 ? "💵 Cobrar todo" : "💵 Registrar abono"}
+      </button>
+      {parcial && <small className="muted">Queda {money(round2(saldo - valor))} pendiente</small>}
     </div>
   );
 }

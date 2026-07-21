@@ -5,6 +5,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { round2 } from "../../utils/rice-formulas.js";
+import { espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const receivableRouter = Router();
@@ -101,7 +102,16 @@ receivableRouter.post("/:id/pay", asyncRoute(async (req, res) => {
       );
     }
 
-    return { paid: body.amount, remaining: newBalance, status: newStatus };
+    // Si esta cuenta tiene contraparte (pilado o traspaso entre socios), el
+    // abono baja también la POR PAGAR del otro y sale de su caja.
+    const espejo = await espejarAbonoEnContraparte(client, {
+      desde: "receivable",
+      cuentaId: String(req.params.id),
+      monto: body.amount,
+      descripcion: body.concepto ?? "Abono de cuenta entre accionistas"
+    });
+
+    return { paid: body.amount, remaining: newBalance, status: newStatus, espejo };
   });
 
   res.json(result);
