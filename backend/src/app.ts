@@ -51,11 +51,24 @@ app.use("/api/v1", routes);
 // para que cualquier equipo entre por http://IP-del-servidor:4000.
 const webDist = path.join(__dirname, "../../web-admin/dist");
 if (fs.existsSync(path.join(webDist, "index.html"))) {
-  app.use(express.static(webDist));
-  // SPA: cualquier GET que no sea API/uploads/health devuelve index.html
+  // Los archivos con hash en el nombre (index-XXXX.js) son inmutables: se
+  // cachean fuerte. El index.html NO: debe revalidarse siempre para que, tras
+  // cada actualización, el navegador cargue el bundle nuevo y no una copia
+  // vieja. Sin esto, "no veo mis cambios" aunque el servidor ya esté al día.
+  app.use(express.static(webDist, {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith("index.html")) {
+        res.setHeader("Cache-Control", "no-cache, must-revalidate");
+      } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      }
+    }
+  }));
+  // SPA: cualquier GET que no sea API/uploads/health devuelve index.html.
   app.use((req, res, next) => {
     if (req.method !== "GET") return next();
     if (req.path.startsWith("/api/") || req.path.startsWith("/uploads/") || req.path === "/health") return next();
+    res.setHeader("Cache-Control", "no-cache, must-revalidate");
     res.sendFile(path.join(webDist, "index.html"));
   });
 }
