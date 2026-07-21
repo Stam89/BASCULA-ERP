@@ -476,6 +476,7 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
     const serviceAmount = cobraServicio ? servicio.total : 0;
     let maquilaOrderId: string | null = null;
     let receivableId: string | null = null;
+    let clienteNombre = "";
 
     if (cobraServicio && serviceAmount > 0) {
       const maquila = await client.query(
@@ -487,7 +488,7 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       );
       maquilaOrderId = maquila.rows[0].id;
 
-      const clienteNombre = esDeOtroAccionista
+      clienteNombre = esDeOtroAccionista
         ? (await client.query("SELECT name FROM accionistas WHERE id = $1", [accionistaId])).rows[0]?.name ?? "accionista"
         : (await client.query("SELECT full_name FROM farmers WHERE id = $1", [farmerId])).rows[0]?.full_name ?? "cliente";
 
@@ -663,10 +664,24 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       );
     }
 
+    // El cobro de pilado se informa SIEMPRE que se haya generado, no solo en
+    // maquila: así el frontend puede confirmar en pantalla que la cuenta por
+    // cobrar de CEYRO y la por pagar del accionista quedaron creadas.
+    const servicioPilado = cobraServicio && serviceAmount > 0
+      ? {
+        cliente: clienteNombre,
+        es_accionista: esDeOtroAccionista,
+        quintales: servicio.quintales,
+        total: serviceAmount,
+        detalle: servicio.detalle
+      }
+      : null;
+
     return {
       batch: updatedBatch.rows[0],
       yield: yieldResult.rows[0],
       packagingAlert,
+      servicio_pilado: servicioPilado,
       maquila: isMaquila
         ? {
           maquilaOrderId,
