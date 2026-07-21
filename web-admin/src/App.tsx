@@ -389,6 +389,14 @@ type ProductionResult = {
     serviceAmount: number;
     receivableId: string;
   };
+  // Cobro de pilado generado al finalizar (a otro accionista o cliente externo).
+  servicio_pilado: null | {
+    cliente: string;
+    es_accionista: boolean;
+    quintales: number;
+    total: number;
+    detalle: Array<{ presentacion: string; quintales: number; precio_total_qq: number; subtotal: number }>;
+  };
   custodyMode: boolean;
 };
 
@@ -3762,6 +3770,15 @@ export function App() {
     await apiFetch(`/processing-batches/drafts/${drying.id}`, { method: "DELETE" }).catch(() => undefined);
     setProductionDryingId("");
     setMillingDraftSavedAt(null);
+    // Confirmación clara del cobro de pilado creado al finalizar el lote.
+    if (production.servicio_pilado) {
+      const s = production.servicio_pilado;
+      addToast(
+        `Cobro de pilado creado: CEYRO cobra ${money(s.total)} por ${s.quintales} QQ` +
+        (s.es_accionista ? ` · queda como Por Pagar de ${s.cliente}` : ` · a ${s.cliente} (cliente externo)`),
+        "success"
+      );
+    }
     await loadMillingDrafts();
     await loadProductionHistory();
     setMessage("Lote finalizado: produccion agregada al stock");
