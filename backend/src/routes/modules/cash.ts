@@ -6,6 +6,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { round2 } from "../../utils/rice-formulas.js";
+import { espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
 import ExcelJS from "exceljs";
 
 export const cashRouter = Router();
@@ -341,7 +342,16 @@ cashRouter.post("/payables/:id/pay", asyncRoute(async (req, res) => {
        `Pago a ${ap.rows[0].farmer_name ?? ap.rows[0].description ?? "proveedor"}`]
     );
 
-    return { paid: body.amount, remaining: newBalance, status: newStatus };
+    // Si es una deuda entre socios (pilado/traspaso), el abono baja también la
+    // POR COBRAR del que cobra y entra a su caja.
+    const espejo = await espejarAbonoEnContraparte(client, {
+      desde: "payable",
+      cuentaId: String(req.params.id),
+      monto: body.amount,
+      descripcion: `Abono recibido de ${ap.rows[0].farmer_name ?? "accionista"}`
+    });
+
+    return { paid: body.amount, remaining: newBalance, status: newStatus, espejo };
   });
 
   res.json(result);
