@@ -169,6 +169,18 @@ processFlowRouter.get("/drying/reports", asyncRoute(async (req, res) => {
 
 // Secados activos (sin finalizar) de un motor, de TODOS los accionistas: el
 // motor es compartido y puede estar secando lotes de socios distintos a la vez.
+// Secados del motor que todavía esperan que se les cargue el combustible: los de
+// la ÚLTIMA corrida (misma fecha de llenado) sin combustible asignado. Incluye
+// los ya finalizados: el motor mueve las dos secadoras y puede que terminen en
+// momentos distintos, pero el combustible se reparte entre ambas al cerrar.
+const SECADOS_PENDIENTES_COMBUSTIBLE = `
+  d.motor_number = $1 AND d.motor_fuel_id IS NULL
+  AND COALESCE(d.filled_at, d.created_at)::date = (
+    SELECT MAX(COALESCE(filled_at, created_at)::date)
+    FROM drying_tunnel_reports
+    WHERE motor_number = $1 AND motor_fuel_id IS NULL
+  )`;
+
 processFlowRouter.get("/drying/motor/:motor/active", asyncRoute(async (req, res) => {
   const motor = Number(req.params.motor);
   if (motor !== 1 && motor !== 2) throw new ApiError(400, "Motor inválido");
@@ -178,7 +190,7 @@ processFlowRouter.get("/drying/motor/:motor/active", asyncRoute(async (req, res)
      FROM drying_tunnel_reports d
      JOIN lots l ON l.id = d.lot_id
      LEFT JOIN accionistas a ON a.id = l.accionista_id
-     WHERE d.motor_number = $1 AND d.status <> 'COMPLETED'
+     WHERE ${SECADOS_PENDIENTES_COMBUSTIBLE}
      ORDER BY d.dryer_name, d.created_at`,
     [motor]
   );
@@ -203,13 +215,13 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
     const reports = await client.query(
       `SELECT d.id, d.total_quintals
        FROM drying_tunnel_reports d
-       WHERE d.motor_number = $1 AND d.status <> 'COMPLETED'
+       WHERE ${SECADOS_PENDIENTES_COMBUSTIBLE}
        ORDER BY d.created_at
        FOR UPDATE`,
       [body.motor_number]
     );
     if (!reports.rowCount) {
-      throw new ApiError(409, "El motor no tiene secados activos: llena primero las secadoras.");
+      throw new ApiError(409, "El motor no tiene secados pendientes de combustible: llena y registra primero las secadoras.");
     }
 
     const totalQq = reports.rows.reduce((s, r) => s + Number(r.total_quintals), 0);
