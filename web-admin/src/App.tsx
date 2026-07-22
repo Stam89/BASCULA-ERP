@@ -16,6 +16,7 @@ type Product = {
   name: string;
   product_type: string;
   unit: string;
+  is_active?: boolean;
 };
 
 type Warehouse = {
@@ -116,25 +117,28 @@ type AuthUser = {
 
 type Accionista = { id: string; name: string; code: string; puede_envejecer?: boolean };
 
-// Servicio de selección / envejecido de producto terminado (persona externa).
+// Selección / envejecido de producto terminado (persona externa), por lotes.
 type ExternalProvider = { id: string; name: string; identification: string | null; phone: string | null };
 type SelectionRates = { seleccion_rate: number; envejecimiento_rate: number };
-type SelectionService = {
+type SelectionLine = { product_id: string; product_name: string; quantity: number | string; is_reject?: boolean };
+type SelectionBatch = {
   id: string;
-  service_number: string;
+  batch_number: string;
   service_date: string;
   service_type: "SELECCION" | "ENVEJECIMIENTO";
+  status: "IN_PROCESS" | "COMPLETED" | "CANCELLED";
   input_qq: number | string;
   output_qq: number | string;
   merma_qq: number | string;
   rate_per_qq: number | string;
   total_cost: number | string;
   provider_name: string;
-  product_name: string;
   warehouse_name: string;
   saldo: number;
-  estado: string;
+  pago_estado: string;
   notes: string | null;
+  inputs: SelectionLine[];
+  outputs: SelectionLine[];
 };
 
 // Módulos asignables a un operador (deben coincidir con el backend).
@@ -1131,21 +1135,25 @@ export function App() {
   const [piladoBalances, setPiladoBalances] = useState<PiladoBalance[]>([]);
   const [piladoForm, setPiladoForm] = useState({ client_kind: "accionista" as "accionista" | "externo", client_accionista_id: "", client_name: "", quintals: "", rate_per_qq: localStorage.getItem("bascula-erp:pilado-rate") ?? "", service_date: nominaToday });
 
-  // ── Selección / envejecido de producto terminado (persona externa) ─────────
-  const [selectionServices, setSelectionServices] = useState<SelectionService[]>([]);
+  // ── Selección / envejecido por lotes (persona externa) ─────────────────────
+  const [selectionBatches, setSelectionBatches] = useState<SelectionBatch[]>([]);
   const [selectionProviders, setSelectionProviders] = useState<ExternalProvider[]>([]);
   const [selectionRates, setSelectionRates] = useState<SelectionRates>({ seleccion_rate: 1.25, envejecimiento_rate: 3.5 });
+  type LineDraft = { product_id: string; quantity: string; is_reject?: boolean };
+  const emptyLine: LineDraft = { product_id: "", quantity: "" };
+  // Fase 1: lo que se manda a selectar (varias líneas de producto).
   const [selectionForm, setSelectionForm] = useState({
     service_type: "SELECCION" as "SELECCION" | "ENVEJECIMIENTO",
     provider_id: "",
-    product_id: "",
     warehouse_id: "",
-    input_qq: "",
-    output_qq: "",
     rate_per_qq: "",
     service_date: nominaToday,
-    notes: ""
+    notes: "",
+    inputs: [{ ...emptyLine }] as LineDraft[]
   });
+  // Fase 2: al recibir, las salidas de un lote en proceso (por lote id).
+  const [finishingBatchId, setFinishingBatchId] = useState<string | null>(null);
+  const [finishOutputs, setFinishOutputs] = useState<LineDraft[]>([{ ...emptyLine }]);
   const [newProviderForm, setNewProviderForm] = useState({ name: "", identification: "", phone: "" });
   const [selectionRatesForm, setSelectionRatesForm] = useState({ seleccion_rate: "", envejecimiento_rate: "" });
 
@@ -2028,15 +2036,15 @@ export function App() {
     if (registerId) await refreshCaja(registerId);
   }
 
-  // ── Selección / envejecido ────────────────────────────────────────────────
+  // ── Selección / envejecido por lotes ──────────────────────────────────────
   async function refreshSelection() {
     try {
-      const [services, providers, rates] = await Promise.all([
-        apiGet<{ rows: SelectionService[] }>("/selection/services"),
+      const [batches, providers, rates] = await Promise.all([
+        apiGet<{ rows: SelectionBatch[] }>("/selection/batches"),
         apiGet<ExternalProvider[]>("/selection/providers"),
         apiGet<SelectionRates>("/selection/rates")
       ]);
-      setSelectionServices(services.rows);
+      setSelectionBatches(batches.rows);
       setSelectionProviders(providers);
       setSelectionRates(rates);
       setSelectionRatesForm({ seleccion_rate: String(rates.seleccion_rate), envejecimiento_rate: String(rates.envejecimiento_rate) });
@@ -2050,30 +2058,49 @@ export function App() {
     if (rows) setStock(rows);
   }
 
-  async function submitSelectionService(e: FormEvent<HTMLFormElement>) {
+  // FASE 1 — mandar a selectar (baja las entradas del inventario).
+  async function submitStartBatch(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const input = Number(selectionForm.input_qq);
-    const output = Number(selectionForm.output_qq);
     if (!selectionForm.provider_id) { addToast("Elige la persona externa que hace el servicio", "error"); return; }
-    if (!selectionForm.product_id) { addToast("Elige el producto a selectar", "error"); return; }
-    if (!selectionForm.warehouse_id) { addToast("Elige la bodega", "error"); return; }
-    if (!(input > 0)) { addToast("Ingresa los QQ que salen a selectar", "error"); return; }
-    if (!(output > 0)) { addToast("Ingresa los QQ limpios que reingresan", "error"); return; }
-    if (output > input + 0.001) { addToast("Lo que reingresa no puede ser mayor que lo que sale", "error"); return; }
+    if (!selectionForm.warehouse_id) { addToast("Elige la bodega de donde sale", "error"); return; }
+    const inputs = selectionForm.inputs
+      .filter((l) => l.product_id && Number(l.quantity) > 0)
+      .map((l) => ({ product_id: l.product_id, quantity: Number(l.quantity) }));
+    if (inputs.length === 0) { addToast("Agrega al menos un producto con cantidad", "error"); return; }
+    if (new Set(inputs.map((i) => i.product_id)).size !== inputs.length) { addToast("Hay un producto repetido; súmalo en una sola línea", "error"); return; }
     const rate = selectionForm.rate_per_qq === "" ? undefined : Number(selectionForm.rate_per_qq);
-    await apiPost("/selection/services", {
+    await apiPost("/selection/batches", {
       provider_id: selectionForm.provider_id,
       service_type: selectionForm.service_type,
-      product_id: selectionForm.product_id,
       warehouse_id: selectionForm.warehouse_id,
-      input_qq: input,
-      output_qq: output,
       rate_per_qq: rate,
       service_date: selectionForm.service_date,
-      notes: selectionForm.notes.trim() || undefined
+      notes: selectionForm.notes.trim() || undefined,
+      inputs
     });
-    setSelectionForm({ ...selectionForm, input_qq: "", output_qq: "", notes: "" });
-    addToast("Servicio registrado. Producto reingresado y cuenta por pagar creada.", "success");
+    setSelectionForm((f) => ({ ...f, notes: "", inputs: [{ ...emptyLine }] }));
+    addToast("Enviado a selectar. Producto descontado del inventario y cuenta por pagar creada.", "success");
+    await Promise.all([refreshSelection(), reloadStock()]);
+  }
+
+  // FASE 2 — recibir lo procesado (ingresa las salidas al inventario).
+  async function submitFinishBatch(batchId: string) {
+    const outputs = finishOutputs
+      .filter((l) => l.product_id && Number(l.quantity) > 0)
+      .map((l) => ({ product_id: l.product_id, quantity: Number(l.quantity), is_reject: !!l.is_reject }));
+    if (outputs.length === 0) { addToast("Agrega al menos un producto que regresó", "error"); return; }
+    if (new Set(outputs.map((o) => o.product_id)).size !== outputs.length) { addToast("Hay un producto repetido en las salidas", "error"); return; }
+    await apiPost(`/selection/batches/${batchId}/finish`, { outputs });
+    setFinishingBatchId(null);
+    setFinishOutputs([{ ...emptyLine }]);
+    addToast("Lote cerrado. Producto procesado ingresado al inventario.", "success");
+    await Promise.all([refreshSelection(), reloadStock()]);
+  }
+
+  async function cancelBatch(batchId: string) {
+    if (!window.confirm("¿Cancelar este lote? Se devuelve el producto a bodega y se anula la cuenta por pagar.")) return;
+    await apiPost(`/selection/batches/${batchId}/cancel`, {});
+    addToast("Lote cancelado y producto devuelto a bodega", "success");
     await Promise.all([refreshSelection(), reloadStock()]);
   }
 
@@ -7663,29 +7690,38 @@ export function App() {
         {activeTab === "Seleccion" && (() => {
           const activeAcc = accionistas.find((a) => a.id === activeAccionistaId);
           const puedeEnvejecer = !!activeAcc?.puede_envejecer;
-          // Productos terminados con stock (para no mandar a selectar lo que no hay).
-          const finishedStock = stock.filter((r) => r.product_type === "FINISHED_GOOD" && Number(r.quantity) > 0);
-          const productOptions = Array.from(
-            new Map(finishedStock.map((r) => [r.product_id, r.product_name])).entries()
-          ).filter(([id]) => id);
+          const inputStyle = { display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 } as const;
+          // Productos que viven en producto terminado (terminados + subproductos):
+          // entran y salen del proceso. Se ordenan por nombre.
+          const selectableProducts = products
+            .filter((p) => ["FINISHED_GOOD", "BYPRODUCT"].includes(p.product_type) && p.is_active !== false)
+            .sort((a, b) => a.name.localeCompare(b.name));
           const availableFor = (pid: string, wid: string) =>
-            stock.filter((r) => r.product_id === pid && r.warehouse_id === wid)
-              .reduce((s, r) => s + Number(r.quantity), 0);
-          const disponible = selectionForm.product_id && selectionForm.warehouse_id
-            ? availableFor(selectionForm.product_id, selectionForm.warehouse_id) : null;
-          const defaultRate = selectionForm.service_type === "ENVEJECIMIENTO"
-            ? selectionRates.envejecimiento_rate : selectionRates.seleccion_rate;
+            stock.filter((r) => r.product_id === pid && r.warehouse_id === wid).reduce((s, r) => s + Number(r.quantity), 0);
+          const defaultRate = selectionForm.service_type === "ENVEJECIMIENTO" ? selectionRates.envejecimiento_rate : selectionRates.seleccion_rate;
           const effectiveRate = selectionForm.rate_per_qq === "" ? defaultRate : Number(selectionForm.rate_per_qq);
-          const inputN = Number(selectionForm.input_qq || 0);
-          const outputN = Number(selectionForm.output_qq || 0);
-          const mermaN = round2(Math.max(0, inputN - outputN));
-          const costoN = round2(inputN * (effectiveRate || 0));
+          const inputsTotal = selectionForm.inputs.reduce((s, l) => s + (Number(l.quantity) || 0), 0);
+          const costoN = round2(inputsTotal * (effectiveRate || 0));
+
+          const setInputLine = (i: number, patch: Partial<LineDraft>) =>
+            setSelectionForm((f) => ({ ...f, inputs: f.inputs.map((l, idx) => (idx === i ? { ...l, ...patch } : l)) }));
+          const addInputLine = () => setSelectionForm((f) => ({ ...f, inputs: [...f.inputs, { ...emptyLine }] }));
+          const removeInputLine = (i: number) => setSelectionForm((f) => ({ ...f, inputs: f.inputs.length > 1 ? f.inputs.filter((_, idx) => idx !== i) : f.inputs }));
+          const setOutLine = (i: number, patch: Partial<LineDraft>) =>
+            setFinishOutputs((o) => o.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
+          const addOutLine = () => setFinishOutputs((o) => [...o, { ...emptyLine }]);
+          const removeOutLine = (i: number) => setFinishOutputs((o) => (o.length > 1 ? o.filter((_, idx) => idx !== i) : o));
+          const openFinish = (batchId: string) => { setFinishingBatchId(batchId); setFinishOutputs([{ ...emptyLine }]); };
+
+          const inProcess = selectionBatches.filter((b) => b.status === "IN_PROCESS");
+          const completed = selectionBatches.filter((b) => b.status === "COMPLETED");
+
           return (
           <section className="panelGrid">
-            <form className="formPanel" onSubmit={(e) => submitSelectionService(e).catch((err) => addToast(err.message, "error"))}>
-              <h2>🧹 Selectar / envejecer producto</h2>
-              <p className="muted">El producto terminado sale del inventario a limpiar impurezas y reingresa lo limpio (la diferencia es merma). El costo lo cobra una persona externa y queda como cuenta por pagar.</p>
-              <label><span>Fecha</span>
+            <form className="formPanel" onSubmit={(e) => submitStartBatch(e).catch((err) => addToast(err.message, "error"))}>
+              <h2>📤 Mandar a selectar</h2>
+              <p className="muted">Registra lo que sale de bodega a selectar/envejecer (varios productos). Sale del inventario ahora y genera la cuenta por pagar. Cuando regrese lo procesado, lo cierras en «En proceso».</p>
+              <label><span>Fecha de envío</span>
                 <input type="date" value={selectionForm.service_date} onChange={(e) => setSelectionForm({ ...selectionForm, service_date: e.target.value })} />
               </label>
               <label><span>Tipo de servicio</span>
@@ -7701,96 +7737,147 @@ export function App() {
                   {selectionProviders.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </label>
-              <label><span>Producto</span>
-                <select value={selectionForm.product_id} onChange={(e) => setSelectionForm({ ...selectionForm, product_id: e.target.value })}>
-                  <option value="">Seleccione</option>
-                  {productOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-                </select>
-              </label>
-              <label><span>Bodega</span>
+              <label><span>Bodega de donde sale</span>
                 <select value={selectionForm.warehouse_id} onChange={(e) => setSelectionForm({ ...selectionForm, warehouse_id: e.target.value })}>
                   <option value="">Seleccione</option>
-                  {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+                  {warehouses.filter((w) => w.type === "FINISHED_GOODS").map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+                  {warehouses.filter((w) => w.type !== "FINISHED_GOODS").map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
                 </select>
               </label>
-              {disponible !== null && (
-                <p className="muted" style={{ marginTop: -4 }}>Disponible en esa bodega: <strong>{disponible.toFixed(2)} QQ</strong></p>
-              )}
-              <label><span>QQ que salen a selectar</span>
-                <input type="number" step="0.01" min="0" value={selectionForm.input_qq} onChange={(e) => setSelectionForm({ ...selectionForm, input_qq: e.target.value })} />
-              </label>
-              <label><span>QQ limpios que reingresan</span>
-                <input type="number" step="0.01" min="0" value={selectionForm.output_qq} onChange={(e) => setSelectionForm({ ...selectionForm, output_qq: e.target.value })} />
-              </label>
-              <label><span>Tarifa por QQ ($)</span>
+
+              <div style={{ marginTop: 6 }}>
+                <span style={{ fontSize: 13, fontWeight: 700 }}>Productos que salen a selectar</span>
+                {selectionForm.inputs.map((line, i) => {
+                  const disp = line.product_id && selectionForm.warehouse_id ? availableFor(line.product_id, selectionForm.warehouse_id) : null;
+                  return (
+                    <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 90px auto", gap: 6, alignItems: "center", marginTop: 6 }}>
+                      <select value={line.product_id} onChange={(e) => setInputLine(i, { product_id: e.target.value })} style={inputStyle}>
+                        <option value="">Producto…</option>
+                        {selectableProducts.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select>
+                      <input type="number" step="0.01" min="0" placeholder="QQ" value={line.quantity} onChange={(e) => setInputLine(i, { quantity: e.target.value })} style={inputStyle} />
+                      <button type="button" onClick={() => removeInputLine(i)} title="Quitar" style={{ border: "none", background: "transparent", color: "#dc2626", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
+                      {disp !== null && <small style={{ gridColumn: "1 / -1", color: disp + 0.001 < (Number(line.quantity) || 0) ? "#dc2626" : "var(--c-muted)", marginTop: -2 }}>Disponible: {disp.toFixed(2)} QQ</small>}
+                    </div>
+                  );
+                })}
+                <button type="button" onClick={addInputLine} style={{ marginTop: 8, background: "transparent", border: "1px dashed #cbd5e1", borderRadius: 6, padding: "6px 10px", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>+ Agregar producto</button>
+              </div>
+
+              <label style={{ marginTop: 10 }}><span>Tarifa por QQ ($)</span>
                 <input type="number" step="0.01" min="0" value={selectionForm.rate_per_qq} placeholder={`Por defecto ${defaultRate}`} onChange={(e) => setSelectionForm({ ...selectionForm, rate_per_qq: e.target.value })} />
               </label>
               <label><span>Notas (opcional)</span>
-                <input type="text" value={selectionForm.notes} onChange={(e) => setSelectionForm({ ...selectionForm, notes: e.target.value })} placeholder="Ej: lote, observación" />
+                <input type="text" value={selectionForm.notes} onChange={(e) => setSelectionForm({ ...selectionForm, notes: e.target.value })} placeholder="Ej: observación" />
               </label>
               <div className="totalBox" style={{ marginBottom: 4 }}>
                 <span>Costo a pagar</span>
                 <strong>{money(costoN)}</strong>
-                <small>{inputN || 0} QQ × ${effectiveRate || 0}</small>
+                <small>{round2(inputsTotal)} QQ × ${effectiveRate || 0}</small>
               </div>
-              <p className="muted" style={{ marginTop: 0 }}>Merma estimada: <strong>{mermaN.toFixed(2)} QQ</strong> (baja del inventario)</p>
-              <button className="primary">Registrar servicio</button>
+              <button className="primary">Enviar a selectar</button>
               {selectionProviders.length === 0 && <p className="muted">Primero agrega la persona externa en el panel de la derecha.</p>}
             </form>
 
             <div className="tablePanel">
-              <h2>👤 Personas externas</h2>
+              <h2>⏳ En proceso (fuera de bodega)</h2>
+              {inProcess.length === 0 ? (
+                <div className="emptyState"><div className="emptyIcon">📦</div><p>Nada en proceso ahora</p></div>
+              ) : (
+                <div style={{ display: "grid", gap: 10 }}>
+                  {inProcess.map((b) => (
+                    <div key={b.id} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 12 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+                        <div>
+                          <strong>{b.batch_number}</strong> · {b.service_type === "ENVEJECIMIENTO" ? "Envejecido" : "Selección"} · {b.provider_name}
+                          <div className="muted" style={{ fontSize: 12 }}>{String(b.service_date).slice(0, 10)} · {Number(b.input_qq).toFixed(2)} QQ enviados · costo {money(Number(b.total_cost))}</div>
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 12, marginTop: 6 }}>
+                        {b.inputs.map((l, idx) => <span key={idx} className="chip" style={{ marginRight: 4 }}>{l.product_name}: {Number(l.quantity).toFixed(2)}</span>)}
+                      </div>
+                      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                        {finishingBatchId === b.id ? (
+                          <button type="button" className="btnGhost" onClick={() => setFinishingBatchId(null)}>Cerrar formulario</button>
+                        ) : (
+                          <button type="button" className="primary" style={{ padding: "6px 12px" }} onClick={() => openFinish(b.id)}>📥 Registrar lo que regresó</button>
+                        )}
+                        <button type="button" className="btnGhost" style={{ color: "#dc2626" }} onClick={() => cancelBatch(b.id).catch((err) => addToast(err.message, "error"))}>Cancelar</button>
+                      </div>
+
+                      {finishingBatchId === b.id && (
+                        <div style={{ marginTop: 10, background: "#f9fafb", borderRadius: 8, padding: 10 }}>
+                          <span style={{ fontSize: 13, fontWeight: 700 }}>Productos que regresaron</span>
+                          {finishOutputs.map((line, i) => (
+                            <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 80px auto auto", gap: 6, alignItems: "center", marginTop: 6 }}>
+                              <select value={line.product_id} onChange={(e) => setOutLine(i, { product_id: e.target.value })} style={inputStyle}>
+                                <option value="">Producto…</option>
+                                {selectableProducts.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                              </select>
+                              <input type="number" step="0.01" min="0" placeholder="QQ" value={line.quantity} onChange={(e) => setOutLine(i, { quantity: e.target.value })} style={inputStyle} />
+                              <label style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 3 }} title="Marca si es el rechazo">
+                                <input type="checkbox" checked={!!line.is_reject} onChange={(e) => setOutLine(i, { is_reject: e.target.checked })} /> rechazo
+                              </label>
+                              <button type="button" onClick={() => removeOutLine(i)} title="Quitar" style={{ border: "none", background: "transparent", color: "#dc2626", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
+                            </div>
+                          ))}
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
+                            <button type="button" onClick={addOutLine} style={{ background: "transparent", border: "1px dashed #cbd5e1", borderRadius: 6, padding: "5px 10px", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>+ Agregar</button>
+                            <small className="muted">Total regresa: {round2(finishOutputs.reduce((s, l) => s + (Number(l.quantity) || 0), 0))} QQ · merma {round2(Number(b.input_qq) - finishOutputs.reduce((s, l) => s + (Number(l.quantity) || 0), 0))} QQ</small>
+                          </div>
+                          <button type="button" className="primary" style={{ marginTop: 8 }} onClick={() => submitFinishBatch(b.id).catch((err) => addToast(err.message, "error"))}>Guardar e ingresar al inventario</button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <h2 style={{ marginTop: 18 }}>👤 Personas externas</h2>
               <form onSubmit={(e) => submitNewProvider(e).catch((err) => addToast(err.message, "error"))} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, alignItems: "end", background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
                 <label style={{ fontSize: 12, fontWeight: 600 }}>Nombre
-                  <input value={newProviderForm.name} onChange={(e) => setNewProviderForm({ ...newProviderForm, name: e.target.value })} placeholder="Ej: Juan Pérez"
-                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
+                  <input value={newProviderForm.name} onChange={(e) => setNewProviderForm({ ...newProviderForm, name: e.target.value })} placeholder="Ej: Juan Pérez" style={inputStyle} />
                 </label>
                 <label style={{ fontSize: 12, fontWeight: 600 }}>Teléfono
-                  <input value={newProviderForm.phone} onChange={(e) => setNewProviderForm({ ...newProviderForm, phone: e.target.value })} placeholder="Opcional"
-                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
+                  <input value={newProviderForm.phone} onChange={(e) => setNewProviderForm({ ...newProviderForm, phone: e.target.value })} placeholder="Opcional" style={inputStyle} />
                 </label>
                 <button type="submit" style={{ padding: "7px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontWeight: 700, background: "var(--c-brand)", color: "#fff", fontSize: 12 }}>+ Agregar</button>
               </form>
               {selectionProviders.length > 0 && (
                 <table className="cajaTable" style={{ marginTop: 8 }}>
                   <thead><tr><th>Nombre</th><th>Teléfono</th></tr></thead>
-                  <tbody>
-                    {selectionProviders.map((p) => <tr key={p.id}><td>{p.name}</td><td>{p.phone ?? "—"}</td></tr>)}
-                  </tbody>
+                  <tbody>{selectionProviders.map((p) => <tr key={p.id}><td>{p.name}</td><td>{p.phone ?? "—"}</td></tr>)}</tbody>
                 </table>
               )}
 
               <h2 style={{ marginTop: 18 }}>💲 Tarifas por defecto</h2>
               <form onSubmit={(e) => saveSelectionRates(e).catch((err) => addToast(err.message, "error"))} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, alignItems: "end", background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
                 <label style={{ fontSize: 12, fontWeight: 600 }}>Selección ($/QQ)
-                  <input type="number" step="0.01" min="0" value={selectionRatesForm.seleccion_rate} onChange={(e) => setSelectionRatesForm({ ...selectionRatesForm, seleccion_rate: e.target.value })}
-                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
+                  <input type="number" step="0.01" min="0" value={selectionRatesForm.seleccion_rate} onChange={(e) => setSelectionRatesForm({ ...selectionRatesForm, seleccion_rate: e.target.value })} style={inputStyle} />
                 </label>
                 <label style={{ fontSize: 12, fontWeight: 600 }}>Envejecido ($/QQ)
-                  <input type="number" step="0.01" min="0" value={selectionRatesForm.envejecimiento_rate} onChange={(e) => setSelectionRatesForm({ ...selectionRatesForm, envejecimiento_rate: e.target.value })}
-                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
+                  <input type="number" step="0.01" min="0" value={selectionRatesForm.envejecimiento_rate} onChange={(e) => setSelectionRatesForm({ ...selectionRatesForm, envejecimiento_rate: e.target.value })} style={inputStyle} />
                 </label>
                 <button type="submit" style={{ padding: "7px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontWeight: 700, background: "var(--c-brand)", color: "#fff", fontSize: 12 }}>Guardar</button>
               </form>
 
-              <h2 style={{ marginTop: 18 }}>Servicios registrados</h2>
-              {selectionServices.length === 0 ? (
-                <div className="emptyState"><div className="emptyIcon">🧹</div><p>Sin servicios este mes</p></div>
+              <h2 style={{ marginTop: 18 }}>✅ Completados</h2>
+              {completed.length === 0 ? (
+                <div className="emptyState"><div className="emptyIcon">🧹</div><p>Sin lotes completados aún</p></div>
               ) : (
                 <table className="cajaTable" style={{ marginTop: 6 }}>
-                  <thead><tr><th>Fecha</th><th>Tipo</th><th>Persona</th><th>Producto</th><th>Sale</th><th>Reingresa</th><th>Merma</th><th>Costo</th><th>Saldo</th></tr></thead>
+                  <thead><tr><th>#</th><th>Fecha</th><th>Persona</th><th>Entró</th><th>Regresó</th><th>Merma</th><th>Costo</th><th>Saldo</th></tr></thead>
                   <tbody>
-                    {selectionServices.map((s) => (
-                      <tr key={s.id}>
-                        <td>{String(s.service_date).slice(0, 10)}</td>
-                        <td>{s.service_type === "ENVEJECIMIENTO" ? "Envejecido" : "Selección"}</td>
-                        <td>{s.provider_name}</td>
-                        <td>{s.product_name}</td>
-                        <td>{Number(s.input_qq).toFixed(2)}</td>
-                        <td>{Number(s.output_qq).toFixed(2)}</td>
-                        <td>{Number(s.merma_qq).toFixed(2)}</td>
-                        <td><strong>{money(Number(s.total_cost))}</strong></td>
-                        <td>{Number(s.saldo) > 0 ? <span style={{ color: "#dc2626" }}>{money(Number(s.saldo))}</span> : <span className="chip ok">Pagado</span>}</td>
+                    {completed.map((b) => (
+                      <tr key={b.id}>
+                        <td>{b.batch_number}</td>
+                        <td>{String(b.service_date).slice(0, 10)}</td>
+                        <td>{b.provider_name}</td>
+                        <td>{Number(b.input_qq).toFixed(2)}</td>
+                        <td>{Number(b.output_qq).toFixed(2)}</td>
+                        <td>{Number(b.merma_qq).toFixed(2)}</td>
+                        <td><strong>{money(Number(b.total_cost))}</strong></td>
+                        <td>{Number(b.saldo) > 0 ? <span style={{ color: "#dc2626" }}>{money(Number(b.saldo))}</span> : <span className="chip ok">Pagado</span>}</td>
                       </tr>
                     ))}
                   </tbody>

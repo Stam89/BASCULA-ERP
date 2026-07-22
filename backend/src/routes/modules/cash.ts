@@ -202,7 +202,7 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
               CASE
                 WHEN ap.reference_type = 'pilado_service' THEN 'CEYRO — Servicio de pilado'
                 WHEN ap.reference_type = 'lot_transfer' THEN 'Traspaso de lote entre accionistas'
-                WHEN ap.reference_type = 'selection_service' THEN COALESCE(sp.name || ' — servicio de selección/envejecido', 'Servicio de selección/envejecido')
+                WHEN ap.reference_type = 'selection_batch' THEN COALESCE(sp.name || ' — servicio de selección/envejecido', 'Servicio de selección/envejecido')
                 ELSE NULLIF(ap.description, '')
               END,
               'Cuenta por pagar'
@@ -211,8 +211,8 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
      FROM accounts_payable ap
      LEFT JOIN farmers f ON f.id = ap.farmer_id
      LEFT JOIN liquidations l ON l.id = ap.liquidation_id
-     LEFT JOIN selection_services ss ON ss.id = ap.reference_id AND ap.reference_type = 'selection_service'
-     LEFT JOIN external_providers sp ON sp.id = ss.provider_id
+     LEFT JOIN selection_batches sb ON sb.id = ap.reference_id AND ap.reference_type = 'selection_batch'
+     LEFT JOIN external_providers sp ON sp.id = sb.provider_id
      WHERE ap.status IN ('CONFIRMED', 'PARTIAL') AND ap.accionista_id = $1
      ORDER BY ap.created_at DESC`,
     [accionistaId]
@@ -342,7 +342,7 @@ cashRouter.post("/payables/:id/pay", asyncRoute(async (req, res) => {
     const categoria =
       refType === "pilado_service" ? "PAGO_SERVICIO_PILADO" :
       refType === "lot_transfer" ? "PAGO_ENTRE_SOCIOS" :
-      refType === "selection_service" ? "PAGO_SELECCION" :
+      refType === "selection_batch" ? "PAGO_SELECCION" :
       "PAGO_AGRICULTOR";
     // La descripción dice a quién se paga, sin repetir "Pago a" si ya lo trae.
     const aQuien = ap.rows[0].farmer_name

@@ -6,6 +6,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import type { PoolClient } from "pg";
 
 export const selectionRouter = Router();
 
@@ -19,7 +20,7 @@ const TYPE_LABEL: Record<string, string> = {
 
 // ── Proveedores externos ─────────────────────────────────────────────────────
 // La persona ajena al negocio que hace la selección/envejecido y a la que se le
-// queda debiendo. No se segrega por accionista: es un catálogo compartido.
+// queda debiendo. Catálogo compartido (no se segrega por accionista).
 selectionRouter.get("/providers", asyncRoute(async (_req, res) => {
   const result = await pool.query(
     "SELECT * FROM external_providers WHERE is_active = true ORDER BY name ASC"
@@ -53,10 +54,7 @@ selectionRouter.post("/providers", asyncRoute(async (req, res) => {
 selectionRouter.get("/rates", asyncRoute(async (_req, res) => {
   const result = await pool.query("SELECT seleccion_rate, envejecimiento_rate FROM selection_rates WHERE singleton = true");
   const row = result.rows[0] ?? { seleccion_rate: 1.25, envejecimiento_rate: 3.5 };
-  res.json({
-    seleccion_rate: Number(row.seleccion_rate),
-    envejecimiento_rate: Number(row.envejecimiento_rate)
-  });
+  res.json({ seleccion_rate: Number(row.seleccion_rate), envejecimiento_rate: Number(row.envejecimiento_rate) });
 }));
 
 selectionRouter.put("/rates", asyncRoute(async (req, res) => {
@@ -76,66 +74,76 @@ selectionRouter.put("/rates", asyncRoute(async (req, res) => {
   res.json({ seleccion_rate: Number(row.seleccion_rate), envejecimiento_rate: Number(row.envejecimiento_rate) });
 }));
 
-// ── Servicios (lista por rango, del accionista activo) ───────────────────────
-selectionRouter.get("/services", asyncRoute(async (req, res) => {
+// ── Lotes de selección/envejecido ────────────────────────────────────────────
+// Lista los lotes del accionista activo con sus entradas y salidas.
+selectionRouter.get("/batches", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const q = z.object({
+    status: z.enum(["IN_PROCESS", "COMPLETED", "CANCELLED"]).optional(),
     from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
   }).parse(req.query);
-  const today = new Date();
-  const from = q.from ?? new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10);
-  const to = q.to ?? today.toISOString().slice(0, 10);
 
   const result = await pool.query(
-    `SELECT s.id, s.service_number, s.service_date, s.service_type,
-            s.input_qq, s.output_qq, s.merma_qq, s.rate_per_qq, s.total_cost, s.notes,
+    `SELECT b.id, b.batch_number, b.service_date, b.service_type, b.status,
+            b.input_qq, b.output_qq, b.merma_qq, b.rate_per_qq, b.total_cost, b.notes,
+            b.started_at, b.finished_at,
             pr.name AS provider_name,
-            p.name AS product_name,
             w.name AS warehouse_name,
             COALESCE(ap.balance, 0)::float AS saldo,
-            COALESCE(ap.status, 'PAID') AS estado
-     FROM selection_services s
-     JOIN external_providers pr ON pr.id = s.provider_id
-     JOIN products p ON p.id = s.product_id
-     JOIN warehouses w ON w.id = s.warehouse_id
-     LEFT JOIN accounts_payable ap ON ap.id = s.payable_id
-     WHERE s.accionista_id = $1 AND s.service_date BETWEEN $2 AND $3
-     ORDER BY s.service_date DESC, s.created_at DESC`,
-    [accionistaId, from, to]
+            COALESCE(ap.status, 'PAID') AS pago_estado,
+            COALESCE((
+              SELECT json_agg(json_build_object('product_id', i.product_id, 'product_name', p.name, 'quantity', i.quantity) ORDER BY p.name)
+              FROM selection_batch_inputs i JOIN products p ON p.id = i.product_id
+              WHERE i.batch_id = b.id
+            ), '[]'::json) AS inputs,
+            COALESCE((
+              SELECT json_agg(json_build_object('product_id', o.product_id, 'product_name', p.name, 'quantity', o.quantity, 'is_reject', o.is_reject) ORDER BY o.is_reject, p.name)
+              FROM selection_batch_outputs o JOIN products p ON p.id = o.product_id
+              WHERE o.batch_id = b.id
+            ), '[]'::json) AS outputs
+     FROM selection_batches b
+     JOIN external_providers pr ON pr.id = b.provider_id
+     JOIN warehouses w ON w.id = b.warehouse_id
+     LEFT JOIN accounts_payable ap ON ap.id = b.payable_id
+     WHERE b.accionista_id = $1
+       AND ($2::text IS NULL OR b.status = $2)
+       AND ($3::date IS NULL OR b.service_date >= $3)
+       AND ($4::date IS NULL OR b.service_date <= $4)
+     ORDER BY b.started_at DESC`,
+    [accionistaId, q.status ?? null, q.from ?? null, q.to ?? null]
   );
-
-  const total = result.rows.reduce((sm, r) => sm + Number(r.total_cost), 0);
-  const pendiente = result.rows.reduce((sm, r) => sm + Number(r.saldo), 0);
-  const merma = result.rows.reduce((sm, r) => sm + Number(r.merma_qq), 0);
-  res.json({ range: { from, to }, rows: result.rows, total: round2(total), pendiente: round2(pendiente), merma: round3(merma) });
+  res.json({ rows: result.rows });
 }));
 
-// ── Registrar un servicio ────────────────────────────────────────────────────
-// Baja el producto del inventario (OUT), lo reingresa limpio (IN) y deja la
-// cuenta por pagar a la persona externa. Todo en una transacción.
-selectionRouter.post("/services", asyncRoute(async (req, res) => {
+const lineSchema = z.object({
+  product_id: z.string().uuid(),
+  quantity: z.number().positive()
+});
+
+async function resolveRate(client: PoolClient, serviceType: string, override?: number): Promise<number> {
+  if (override !== undefined) return override;
+  const r = await client.query("SELECT seleccion_rate, envejecimiento_rate FROM selection_rates WHERE singleton = true");
+  const row = r.rows[0] ?? { seleccion_rate: 1.25, envejecimiento_rate: 3.5 };
+  return Number(serviceType === "ENVEJECIMIENTO" ? row.envejecimiento_rate : row.seleccion_rate);
+}
+
+// FASE 1 — Mandar a selectar: baja las entradas del inventario y genera la
+// cuenta por pagar a la persona externa (sobre lo que sale). Queda IN_PROCESS.
+selectionRouter.post("/batches", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   if (!accionistaId) throw new ApiError(400, "No hay accionista activo.");
 
   const body = z.object({
     provider_id: z.string().uuid(),
     service_type: z.enum(["SELECCION", "ENVEJECIMIENTO"]),
-    product_id: z.string().uuid(),
     warehouse_id: z.string().uuid(),
-    lot_id: z.string().uuid().optional(),
-    ownership: z.enum(["OWNED", "MAQUILA", "SERVICE_ONLY"]).default("OWNED"),
-    input_qq: z.number().positive(),
-    output_qq: z.number().positive(),
     rate_per_qq: z.number().nonnegative().optional(),
     service_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     notes: z.string().optional(),
-    created_by: z.string().uuid().optional()
+    created_by: z.string().uuid().optional(),
+    inputs: z.array(lineSchema).min(1)
   }).parse(req.body);
-
-  if (body.output_qq > body.input_qq + 0.001) {
-    throw new ApiError(400, "Lo que reingresa no puede ser mayor que lo que sale a selectar.");
-  }
 
   // El envejecido solo lo hace el accionista habilitado (regla del negocio).
   const acc = await pool.query("SELECT name, puede_envejecer FROM accionistas WHERE id = $1", [accionistaId]);
@@ -147,79 +155,177 @@ selectionRouter.post("/services", asyncRoute(async (req, res) => {
   const provider = await pool.query("SELECT name FROM external_providers WHERE id = $1 AND is_active = true", [body.provider_id]);
   if (!provider.rowCount) throw new ApiError(404, "Proveedor externo no encontrado.");
 
-  // Tarifa: la enviada, o la de por defecto según el tipo.
-  let rate = body.rate_per_qq;
-  if (rate === undefined) {
-    const r = await pool.query("SELECT seleccion_rate, envejecimiento_rate FROM selection_rates WHERE singleton = true");
-    const row = r.rows[0] ?? { seleccion_rate: 1.25, envejecimiento_rate: 3.5 };
-    rate = Number(body.service_type === "ENVEJECIMIENTO" ? row.envejecimiento_rate : row.seleccion_rate);
+  // No se puede mandar dos veces el mismo producto en un lote (suma las líneas).
+  const seen = new Set<string>();
+  for (const line of body.inputs) {
+    if (seen.has(line.product_id)) throw new ApiError(400, "Hay un producto repetido en las entradas; súmalo en una sola línea.");
+    seen.add(line.product_id);
   }
 
-  const inputQq = round3(body.input_qq);
-  const outputQq = round3(body.output_qq);
-  const mermaQq = round3(inputQq - outputQq);
-  const totalCost = round2(inputQq * rate); // se cobra sobre lo que sale
-
   const result = await inTransaction(async (tx) => {
-    // No se puede mandar a selectar más de lo que hay en esa bodega.
-    const disp = await tx.query(
-      `SELECT COALESCE(SUM(m.quantity), 0) AS stock, MAX(p.name) AS producto
-       FROM inventory_movements m
-       JOIN products p ON p.id = m.product_id
-       WHERE m.product_id = $1 AND m.warehouse_id = $2 AND m.accionista_id = $3`,
-      [body.product_id, body.warehouse_id, accionistaId]
-    );
-    const stockActual = Number(disp.rows[0].stock);
-    if (stockActual + 0.001 < inputQq) {
-      throw new ApiError(409, `Stock insuficiente de ${disp.rows[0].producto ?? "este producto"}: hay ${stockActual.toFixed(2)} QQ y quieres mandar ${inputQq.toFixed(2)} QQ.`);
+    const rate = await resolveRate(tx, body.service_type, body.rate_per_qq);
+    const inputQq = round3(body.inputs.reduce((s, l) => s + l.quantity, 0));
+    const totalCost = round2(inputQq * rate);
+    const label = TYPE_LABEL[body.service_type];
+    const batchNumber = nextCode("SEL");
+
+    // Cada producto que sale tiene que existir en la bodega con stock suficiente.
+    for (const line of body.inputs) {
+      const disp = await tx.query(
+        `SELECT COALESCE(SUM(m.quantity), 0) AS stock, MAX(p.name) AS producto
+         FROM inventory_movements m JOIN products p ON p.id = m.product_id
+         WHERE m.product_id = $1 AND m.warehouse_id = $2 AND m.accionista_id = $3`,
+        [line.product_id, body.warehouse_id, accionistaId]
+      );
+      const stock = Number(disp.rows[0].stock);
+      if (stock + 0.001 < line.quantity) {
+        throw new ApiError(409, `Stock insuficiente de ${disp.rows[0].producto ?? "un producto"}: hay ${stock.toFixed(2)} QQ y quieres mandar ${line.quantity.toFixed(2)} QQ.`);
+      }
     }
 
-    const serviceNumber = nextCode("SEL");
-    const label = TYPE_LABEL[body.service_type];
-    const desc = `${label} ${serviceNumber} — ${provider.rows[0].name}: ${inputQq} QQ`;
-
-    // Cuenta por pagar a la persona externa (farmer_id NULL). reference_id se
-    // completa abajo, cuando ya existe el servicio.
+    const desc = `${label} ${batchNumber} — ${provider.rows[0].name}: ${inputQq} QQ`;
     const ap = await tx.query(
       `INSERT INTO accounts_payable (accionista_id, farmer_id, reference_type, reference_id, description, amount, balance)
-       VALUES ($1, NULL, 'selection_service', NULL, $2, $3, $3)
+       VALUES ($1, NULL, 'selection_batch', NULL, $2, $3, $3)
        RETURNING id`,
       [accionistaId, desc, totalCost]
     );
     const payableId = ap.rows[0].id;
 
-    const service = await tx.query(
-      `INSERT INTO selection_services
-         (service_number, service_date, accionista_id, provider_id, service_type, product_id, warehouse_id,
-          lot_id, ownership, input_qq, output_qq, merma_qq, rate_per_qq, total_cost, payable_id, notes, created_by)
-       VALUES ($1, COALESCE($2::date, CURRENT_DATE), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+    const batch = await tx.query(
+      `INSERT INTO selection_batches
+         (batch_number, accionista_id, provider_id, service_type, warehouse_id, status,
+          rate_per_qq, input_qq, total_cost, payable_id, notes, service_date, created_by)
+       VALUES ($1, $2, $3, $4, $5, 'IN_PROCESS', $6, $7, $8, $9, $10, COALESCE($11::date, CURRENT_DATE), $12)
        RETURNING *`,
-      [serviceNumber, body.service_date ?? null, accionistaId, body.provider_id, body.service_type, body.product_id,
-       body.warehouse_id, body.lot_id ?? null, body.ownership, inputQq, outputQq, mermaQq, rate, totalCost, payableId,
-       body.notes ?? null, body.created_by ?? null]
+      [batchNumber, accionistaId, body.provider_id, body.service_type, body.warehouse_id,
+       rate, inputQq, totalCost, payableId, body.notes ?? null, body.service_date ?? null, body.created_by ?? null]
     );
-    const serviceId = service.rows[0].id;
+    const batchId = batch.rows[0].id;
+    await tx.query("UPDATE accounts_payable SET reference_id = $2 WHERE id = $1", [payableId, batchId]);
 
-    // Sale del inventario (OUT = cantidad negativa) …
-    await tx.query(
-      `INSERT INTO inventory_movements
-       (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, notes, created_by, accionista_id)
-       VALUES ($1, $2, $3, 'OUT', $4, 'selection_service', $5, $6, $7, $8, $9)`,
-      [body.product_id, body.warehouse_id, body.lot_id ?? null, -inputQq, serviceId, body.ownership, `${label}: salida a selectar`, body.created_by ?? null, accionistaId]
-    );
-    // … y reingresa lo limpio (IN = positiva). La diferencia es la merma.
-    await tx.query(
-      `INSERT INTO inventory_movements
-       (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, notes, created_by, accionista_id)
-       VALUES ($1, $2, $3, 'IN', $4, 'selection_service', $5, $6, $7, $8, $9)`,
-      [body.product_id, body.warehouse_id, body.lot_id ?? null, outputQq, serviceId, body.ownership, `${label}: reingreso limpio (merma ${mermaQq} QQ)`, body.created_by ?? null, accionistaId]
-    );
+    for (const line of body.inputs) {
+      const qty = round3(line.quantity);
+      await tx.query(
+        "INSERT INTO selection_batch_inputs (batch_id, product_id, quantity) VALUES ($1, $2, $3)",
+        [batchId, line.product_id, qty]
+      );
+      // Sale del inventario (OUT = cantidad negativa).
+      await tx.query(
+        `INSERT INTO inventory_movements
+         (product_id, warehouse_id, movement, quantity, reference_type, reference_id, ownership, notes, created_by, accionista_id)
+         VALUES ($1, $2, 'OUT', $3, 'selection_batch', $4, 'OWNED', $5, $6, $7)`,
+        [line.product_id, body.warehouse_id, -qty, batchId, `${label}: enviado a selectar`, body.created_by ?? null, accionistaId]
+      );
+    }
 
-    // Deja la cuenta por pagar apuntando al servicio para poder rastrearla.
-    await tx.query("UPDATE accounts_payable SET reference_id = $2 WHERE id = $1", [payableId, serviceId]);
-
-    return { ...service.rows[0], provider_name: provider.rows[0].name };
+    return { ...batch.rows[0], provider_name: provider.rows[0].name };
   });
 
   res.status(201).json(result);
+}));
+
+// FASE 2 — Recibir lo procesado: ingresa las salidas al inventario y cierra el
+// lote (COMPLETED). Las salidas pueden ser productos distintos a las entradas.
+selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const body = z.object({
+    finished_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    created_by: z.string().uuid().optional(),
+    outputs: z.array(z.object({
+      product_id: z.string().uuid(),
+      warehouse_id: z.string().uuid().optional(),
+      quantity: z.number().positive(),
+      is_reject: z.boolean().optional()
+    })).min(1)
+  }).parse(req.body);
+
+  const result = await inTransaction(async (tx) => {
+    const batch = await tx.query(
+      "SELECT * FROM selection_batches WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
+      [req.params.id, accionistaId]
+    );
+    if (!batch.rowCount) throw new ApiError(404, "Lote no encontrado para el accionista activo.");
+    if (batch.rows[0].status !== "IN_PROCESS") throw new ApiError(409, "Este lote ya no está en proceso.");
+
+    const label = TYPE_LABEL[batch.rows[0].service_type] ?? "Selección";
+    const defaultWarehouse = batch.rows[0].warehouse_id;
+    const outputQq = round3(body.outputs.reduce((s, o) => s + o.quantity, 0));
+    const mermaQq = round3(Number(batch.rows[0].input_qq) - outputQq);
+
+    for (const o of body.outputs) {
+      const qty = round3(o.quantity);
+      const wid = o.warehouse_id ?? defaultWarehouse;
+      await tx.query(
+        "INSERT INTO selection_batch_outputs (batch_id, product_id, warehouse_id, quantity, is_reject) VALUES ($1, $2, $3, $4, $5)",
+        [req.params.id, o.product_id, wid, qty, o.is_reject ?? false]
+      );
+      // Reingresa al inventario (IN = cantidad positiva).
+      await tx.query(
+        `INSERT INTO inventory_movements
+         (product_id, warehouse_id, movement, quantity, reference_type, reference_id, ownership, notes, created_by, accionista_id)
+         VALUES ($1, $2, 'IN', $3, 'selection_batch', $4, 'OWNED', $5, $6, $7)`,
+        [o.product_id, wid, qty, req.params.id, `${label}: regresó procesado${o.is_reject ? " (rechazo)" : ""}`, body.created_by ?? null, accionistaId]
+      );
+    }
+
+    const updated = await tx.query(
+      `UPDATE selection_batches
+       SET status = 'COMPLETED', output_qq = $2, merma_qq = $3,
+           finished_at = now(), service_date = COALESCE($4::date, service_date)
+       WHERE id = $1
+       RETURNING *`,
+      [req.params.id, outputQq, mermaQq, body.finished_date ?? null]
+    );
+    return updated.rows[0];
+  });
+
+  res.json(result);
+}));
+
+// Cancelar un lote EN PROCESO: devuelve las entradas al inventario y anula la
+// cuenta por pagar (solo si no se ha abonado nada).
+selectionRouter.post("/batches/:id/cancel", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+
+  const result = await inTransaction(async (tx) => {
+    const batch = await tx.query(
+      "SELECT * FROM selection_batches WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
+      [req.params.id, accionistaId]
+    );
+    if (!batch.rowCount) throw new ApiError(404, "Lote no encontrado para el accionista activo.");
+    if (batch.rows[0].status !== "IN_PROCESS") throw new ApiError(409, "Solo se puede cancelar un lote en proceso.");
+
+    const label = TYPE_LABEL[batch.rows[0].service_type] ?? "Selección";
+
+    // Anular la cuenta por pagar solo si no se le abonó nada.
+    if (batch.rows[0].payable_id) {
+      const ap = await tx.query("SELECT amount, balance FROM accounts_payable WHERE id = $1 FOR UPDATE", [batch.rows[0].payable_id]);
+      if (ap.rowCount) {
+        if (Number(ap.rows[0].balance) + 0.001 < Number(ap.rows[0].amount)) {
+          throw new ApiError(409, "No se puede cancelar: la cuenta por pagar ya tiene abonos. Regularízala primero.");
+        }
+        await tx.query("UPDATE accounts_payable SET balance = 0, status = 'CANCELLED' WHERE id = $1", [batch.rows[0].payable_id]);
+      }
+    }
+
+    // Devolver al inventario lo que había salido (IN por cada entrada).
+    const inputs = await tx.query("SELECT product_id, quantity FROM selection_batch_inputs WHERE batch_id = $1", [req.params.id]);
+    for (const inp of inputs.rows) {
+      await tx.query(
+        `INSERT INTO inventory_movements
+         (product_id, warehouse_id, movement, quantity, reference_type, reference_id, ownership, notes, accionista_id)
+         VALUES ($1, $2, 'IN', $3, 'selection_batch_cancel', $4, 'OWNED', $5, $6)`,
+        [inp.product_id, batch.rows[0].warehouse_id, round3(Number(inp.quantity)), req.params.id, `${label}: cancelado, devuelto a bodega`, accionistaId]
+      );
+    }
+
+    const updated = await tx.query(
+      "UPDATE selection_batches SET status = 'CANCELLED', finished_at = now() WHERE id = $1 RETURNING *",
+      [req.params.id]
+    );
+    return updated.rows[0];
+  });
+
+  res.json(result);
 }));
