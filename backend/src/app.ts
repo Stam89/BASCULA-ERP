@@ -1,4 +1,5 @@
 import cors from "cors";
+import helmet from "helmet";
 import express from "express";
 import fs from "fs";
 import morgan from "morgan";
@@ -7,12 +8,20 @@ import { fileURLToPath } from "url";
 import { errorHandler, notFound } from "./http/error-handler.js";
 import { routes } from "./routes/index.js";
 import { verifyToken } from "./auth/jwt.js";
+import { env } from "./config/env.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const app = express();
 
-app.use(cors());
+// Cabeceras de seguridad (nosniff, anti-clickjacking, oculta X-Powered-By…).
+// CSP y CORP se desactivan a propósito: el panel usa estilos en línea de React
+// y una CSP estricta lo rompería; y CORP bloquearía a la app Android/otros PCs.
+app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false }));
+
+// CORS acotable por CORS_ORIGINS (ver config/env.ts). Sin esa variable, se
+// permite cualquier origen como antes (no rompe la red local ni la app móvil).
+app.use(cors(env.corsOrigins.length > 0 ? { origin: env.corsOrigins } : {}));
 app.use(express.json({ limit: "2mb" }));
 app.use(morgan("dev"));
 

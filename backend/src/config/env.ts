@@ -28,8 +28,18 @@ function loadJwtSecret(): string {
   return generated;
 }
 
+// Orígenes permitidos para CORS. En producción el panel se sirve desde el mismo
+// origen (no necesita CORS); dev (vite) y la app Android sí. Si CORS_ORIGINS no
+// se define, se permite cualquier origen (comportamiento anterior, sin romper la
+// red local ni la app). Para acotarlo: CORS_ORIGINS=http://IP:4000,http://localhost:5173
+const corsOrigins = (process.env.CORS_ORIGINS ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 export const env = {
   port: Number(process.env.PORT ?? 4000),
   databaseUrl: process.env.DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/bascula_erp",
-  jwtSecret: loadJwtSecret()
+  jwtSecret: loadJwtSecret(),
+  corsOrigins
 };
