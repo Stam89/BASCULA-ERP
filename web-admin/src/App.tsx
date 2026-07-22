@@ -3706,6 +3706,103 @@ export function App() {
     );
   }
 
+  // Cierra SOLO el combustible del motor: lo reparte entre los secados de la
+  // última corrida (aunque ya estén finalizados). Sirve cuando las secadoras
+  // terminan en momentos distintos y el combustible se registra al final.
+  async function cerrarCombustibleMotor() {
+    if (!(combustibleTotal > 0)) { setMessage("Ingresa los medidores del combustible del motor"); return; }
+    const activos = await apiGet<MotorActiveReport[]>(`/process-flow/drying/motor/${motorActivo}/active`).catch(() => [] as MotorActiveReport[]);
+    if (activos.length === 0) { addToast("Este motor no tiene secados pendientes de combustible.", "error"); return; }
+    const fuel = await apiPost<{ costo_por_qq: number }>("/process-flow/drying/motor-fuel", {
+      motor_number: motorActivo,
+      gas_bombona_inicio: Number(gasForm.bombona_inicio || 0),
+      gas_bombona_fin: Number(gasForm.bombona_fin || 0),
+      gas_cilindro_cantidad: Number(gasForm.cilindro_cantidad || 0),
+      diesel_inicio: Number(gasForm.diesel_inicio || 0),
+      diesel_fin: Number(gasForm.diesel_fin || 0),
+      created_by: authUser?.id
+    });
+    setGasForm({ bombona_inicio: "", bombona_fin: "", cilindro_cantidad: "", diesel_inicio: "", diesel_fin: "" });
+    addToast(`Combustible del Motor ${motorActivo} repartido entre sus secadoras (${money(fuel.costo_por_qq)}/QQ)`, "success");
+    await refresh();
+    await loadMotorActive();
+  }
+
+  // Guarda/finaliza UN secado por su id (para editar las dos secadoras del motor
+  // a la vez, cada una en su propio formulario).
+  async function guardarSecadoEditado(report: DryingTunnelReport, formElement: HTMLFormElement, finalizar: boolean) {
+    const form = new FormData(formElement);
+    const endInput = formElement.elements.namedItem("dry_end_at") as HTMLInputElement | null;
+    if (finalizar && endInput && !endInput.value) endInput.value = dateTimeLocalValue(new Date().toISOString());
+    const payload = {
+      rice_type: form.get("rice_type") || "0.11",
+      moisture_before: numberOrUndefined(form.get("moisture_before")),
+      filled_at: stringOrUndefined(form.get("filled_at")),
+      dry_start_at: stringOrUndefined(form.get("dry_start_at")),
+      dry_end_at: stringOrUndefined(endInput?.value ?? null),
+      dryer_name: report.dryer_name,
+      notes: form.get("notes") || undefined
+    };
+    const updated = await apiPut<DryingTunnelReport>(`/process-flow/drying/${report.id}`, payload);
+    setMessage(updated.status === "COMPLETED" ? `Secado del Túnel ${updated.tunnel_number} finalizado` : `Secado del Túnel ${updated.tunnel_number} actualizado`);
+    await refresh();
+    await loadMotorActive();
+  }
+
+  // Panel de medidores del combustible del motor, reutilizado en crear y editar.
+  function renderFuelFieldset() {
+    return (
+      <fieldset className="medidorPanel" style={{ marginTop: 16 }}>
+        <legend>⛽ Combustible del Motor {motorActivo}</legend>
+        <p className="muted">
+          El medidor es del motor y se reparte entre las secadoras de la corrida según sus quintales.
+          Como pueden terminar en momentos distintos, regístralo al final: se reparte igual entre las dos.
+        </p>
+        <MedidorRow
+          label="Bombona" unidad="%"
+          nameInicio="gas_bombona_inicio" nameFin="gas_bombona_fin"
+          inicio={gasForm.bombona_inicio} fin={gasForm.bombona_fin}
+          onInicio={(v) => setGasForm({ ...gasForm, bombona_inicio: v })}
+          onFin={(v) => setGasForm({ ...gasForm, bombona_fin: v })}
+          precio={laborRatesForm.precio_gas_bombona}
+        />
+        <div className="medidorRow">
+          <span className="medidorLabel">Cilindro</span>
+          <label><span>Utilizados</span>
+            <input type="number" step="0.01" min="0" placeholder="0" value={gasForm.cilindro_cantidad}
+              onChange={(e) => setGasForm({ ...gasForm, cilindro_cantidad: e.target.value })} />
+          </label>
+          <span className="medidorOp">×</span>
+          <div className="medidorOut muted"><small>Precio</small><strong>{money(laborRatesForm.precio_gas_cilindro)}</strong></div>
+          <span className="medidorOp">=</span>
+          <div className="medidorOut total"><small>Total $</small><strong>{money(gasCilindroCosto)}</strong></div>
+        </div>
+        <MedidorRow
+          label="Diesel" unidad="diesel"
+          nameInicio="diesel_inicio" nameFin="diesel_fin"
+          inicio={gasForm.diesel_inicio} fin={gasForm.diesel_fin}
+          onInicio={(v) => setGasForm({ ...gasForm, diesel_inicio: v })}
+          onFin={(v) => setGasForm({ ...gasForm, diesel_fin: v })}
+          precio={laborRatesForm.precio_diesel}
+        />
+        <div className="medidorTotal">
+          <span>TOTAL COMBUSTIBLE DEL MOTOR</span>
+          <strong>{money(combustibleTotal)}</strong>
+        </div>
+        {combustibleTotal > 0 && qqMotor > 0 && (
+          <div className="costoQq">
+            <div className="costoQqTotal">
+              <small>Combustible por QQ</small>
+              <strong>{money(combustiblePorQq)}</strong>
+              <span className="muted">{money(combustibleTotal)} ÷ {qqMotor.toFixed(2)} QQ</span>
+            </div>
+          </div>
+        )}
+        <p className="muted medidorNota">Los precios se configuran en Configuración → Tarifas. Deja en cero lo que no uses.</p>
+      </fieldset>
+    );
+  }
+
   function updateProductionPackage(key: ProductionPackageKey, changes: Partial<ProductionPackageState[ProductionPackageKey]>) {
     setProductionPackages((current) => ({
       ...current,
@@ -4906,39 +5003,67 @@ export function App() {
             </div>
 
             {editingDryingReport ? (
-              /* ── Modo edición: un secado ya guardado ── */
+              /* ── Modo edición: EL MOTOR COMPLETO (sus dos secadoras de la
+                    misma corrida) + el combustible, para cerrarlo al final ── */
               (() => {
-                const secadora = editingDryingReport.dryer_name ?? "Secadora 1";
+                const edDate = (editingDryingReport.filled_at ?? "").slice(0, 10);
+                const runReports = dryingReports
+                  .filter((r) =>
+                    motorDeSecadora(r.dryer_name) === motorActivo &&
+                    (r.id === editingDryingReport!.id || (edDate && (r.filled_at ?? "").slice(0, 10) === edDate))
+                  )
+                  .sort((a, b) => a.tunnel_number - b.tunnel_number);
+                const lista = runReports.length > 0 ? runReports : [editingDryingReport];
                 return (
-                  <form
-                    className="formPanel dryingForm"
-                    style={{ gridColumn: "1 / -1" }}
-                    onSubmit={(event) => submitDryingReport(event, secadora).catch((error) => setMessage(error.message))}
-                  >
-                    <h2>🌀 {secadora} · Túnel {editingDryingReport.tunnel_number} <span className="editBadge">✎ Editando</span></h2>
-                    <DryingLotSelector selectedLots={editingDryingReport.lots} editing onRemove={() => undefined} />
-                    <div className="totalBox">
-                      <span>Peso total</span>
-                      <strong>{Number(editingDryingReport.total_quintals ?? 0).toFixed(2)} QQ</strong>
+                  <div style={{ gridColumn: "1 / -1", display: "grid", gap: 16 }}>
+                    <div className="tablePanel" style={{ padding: "8px 12px" }}>
+                      <strong>✎ Editando informe del Motor {motorActivo}</strong>
+                      <span className="muted"> · {lista.length} secadora(s) de la corrida{edDate ? ` del ${edDate}` : ""}. Finaliza cada una y cierra el combustible abajo.</span>
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                      <Select name="rice_type" label="Tipo de arroz" rows={[["0.11", "0.11"], ["CORRIENTE", "Corriente"]]} defaultValue={editingDryingReport.rice_type ?? "0.11"} />
-                      <Input name="filled_at" label="Fecha de llenado" type="date" defaultValue={(editingDryingReport.filled_at ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10)} required={false} />
+                    <div className="panelGrid" style={{ gap: 16 }}>
+                      {lista.map((rep) => {
+                        const secadora = rep.dryer_name ?? `Secadora ${rep.tunnel_number}`;
+                        const done = rep.status === "COMPLETED";
+                        return (
+                          <form
+                            key={rep.id}
+                            className="formPanel dryingForm"
+                            onSubmit={(event) => { event.preventDefault(); guardarSecadoEditado(rep, event.currentTarget, false).catch((error) => setMessage(error.message)); }}
+                          >
+                            <h3 style={{ marginTop: 0 }}>🌀 {secadora} · Túnel {rep.tunnel_number} {done ? <span className="chip ok">Finalizado</span> : <span className="editBadge">✎ En secado</span>}</h3>
+                            <DryingLotSelector selectedLots={rep.lots} editing onRemove={() => undefined} />
+                            <div className="totalBox"><span>Peso total</span><strong>{Number(rep.total_quintals ?? 0).toFixed(2)} QQ</strong></div>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                              <Select name="rice_type" label="Tipo de arroz" rows={[["0.11", "0.11"], ["CORRIENTE", "Corriente"]]} defaultValue={rep.rice_type ?? "0.11"} />
+                              <Input name="filled_at" label="Fecha de llenado" type="date" defaultValue={(rep.filled_at ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10)} required={false} />
+                            </div>
+                            <Input name="moisture_before" label="Humedad inicial %" type="number" defaultValue={String(rep.moisture_before ?? 0)} required={false} />
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                              <Input name="dry_start_at" label="Hora secado inicio" type="datetime-local" defaultValue={dateTimeLocalValue(rep.dry_start_at)} required={false} />
+                              <Input name="dry_end_at" label="Hora secado final" type="datetime-local" defaultValue={dateTimeLocalValue(rep.dry_end_at)} required={false} />
+                            </div>
+                            <Input name="notes" label="Observacion" defaultValue={rep.notes ?? "Secado registrado"} required={false} />
+                            <div className="buttonRow">
+                              <button className="primary">Guardar cambios</button>
+                              {!done && (
+                                <button type="button" onClick={(event) => guardarSecadoEditado(rep, event.currentTarget.form as HTMLFormElement, true).catch((error) => setMessage(error.message))}>
+                                  Finalizar secado
+                                </button>
+                              )}
+                            </div>
+                          </form>
+                        );
+                      })}
                     </div>
-                    <Input name="moisture_before" label="Humedad inicial %" type="number" defaultValue={String(editingDryingReport.moisture_before ?? 0)} />
-                    <Input name="dry_start_at" label="Hora secado inicio" type="datetime-local" defaultValue={dateTimeLocalValue(editingDryingReport.dry_start_at)} required={false} />
-                    <Input name="dry_end_at" label="Hora secado final" type="datetime-local" defaultValue={dateTimeLocalValue(editingDryingReport.dry_end_at)} required={false} />
-                    <Input name="notes" label="Observacion" defaultValue={editingDryingReport.notes ?? "Secado registrado"} required={false} />
+
+                    {renderFuelFieldset()}
                     <div className="buttonRow">
-                      <button className="primary">Guardar cambios</button>
-                      {editingDryingReport.status !== "COMPLETED" && (
-                        <button type="button" onClick={(event) => finalizeDryingReport(event.currentTarget.form, secadora).catch((error) => setMessage(error.message))}>
-                          Finalizar secado
-                        </button>
-                      )}
-                      <button type="button" onClick={(event) => clearDryingForm(event.currentTarget.form, secadora)}>Cancelar</button>
+                      <button type="button" className="primary" onClick={() => cerrarCombustibleMotor().catch((error) => setMessage(error.message))}>
+                        ⛽ Cerrar combustible del Motor {motorActivo}
+                      </button>
+                      <button type="button" onClick={() => clearDryingForm()}>Volver</button>
                     </div>
-                  </form>
+                  </div>
                 );
               })()
             ) : (
@@ -4990,54 +5115,7 @@ export function App() {
                 </div>
 
                 {/* ── Combustible del motor: parte del mismo informe ── */}
-                <fieldset className="medidorPanel" style={{ marginTop: 16 }}>
-                  <legend>⛽ Combustible del Motor {motorActivo}</legend>
-                  <p className="muted">
-                    El medidor es del motor. Su costo se reparte entre las secadoras que llenes arriba según los
-                    quintales de cada una. No hace falta que las dos estén llenas.
-                  </p>
-                  <MedidorRow
-                    label="Bombona" unidad="%"
-                    nameInicio="gas_bombona_inicio" nameFin="gas_bombona_fin"
-                    inicio={gasForm.bombona_inicio} fin={gasForm.bombona_fin}
-                    onInicio={(v) => setGasForm({ ...gasForm, bombona_inicio: v })}
-                    onFin={(v) => setGasForm({ ...gasForm, bombona_fin: v })}
-                    precio={laborRatesForm.precio_gas_bombona}
-                  />
-                  <div className="medidorRow">
-                    <span className="medidorLabel">Cilindro</span>
-                    <label><span>Utilizados</span>
-                      <input type="number" step="0.01" min="0" placeholder="0" value={gasForm.cilindro_cantidad}
-                        onChange={(e) => setGasForm({ ...gasForm, cilindro_cantidad: e.target.value })} />
-                    </label>
-                    <span className="medidorOp">×</span>
-                    <div className="medidorOut muted"><small>Precio</small><strong>{money(laborRatesForm.precio_gas_cilindro)}</strong></div>
-                    <span className="medidorOp">=</span>
-                    <div className="medidorOut total"><small>Total $</small><strong>{money(gasCilindroCosto)}</strong></div>
-                  </div>
-                  <MedidorRow
-                    label="Diesel" unidad="diesel"
-                    nameInicio="diesel_inicio" nameFin="diesel_fin"
-                    inicio={gasForm.diesel_inicio} fin={gasForm.diesel_fin}
-                    onInicio={(v) => setGasForm({ ...gasForm, diesel_inicio: v })}
-                    onFin={(v) => setGasForm({ ...gasForm, diesel_fin: v })}
-                    precio={laborRatesForm.precio_diesel}
-                  />
-                  <div className="medidorTotal">
-                    <span>TOTAL COMBUSTIBLE DEL MOTOR</span>
-                    <strong>{money(combustibleTotal)}</strong>
-                  </div>
-                  {combustibleTotal > 0 && qqMotor > 0 && (
-                    <div className="costoQq">
-                      <div className="costoQqTotal">
-                        <small>Combustible por QQ</small>
-                        <strong>{money(combustiblePorQq)}</strong>
-                        <span className="muted">{money(combustibleTotal)} ÷ {qqMotor.toFixed(2)} QQ</span>
-                      </div>
-                    </div>
-                  )}
-                  <p className="muted medidorNota">Los precios se configuran en Configuración → Tarifas. Deja en cero lo que no uses.</p>
-                </fieldset>
+                {renderFuelFieldset()}
 
                 {/* ── UN SOLO botón, al final: guarda todo junto ── */}
                 <button className="primary" style={{ width: "100%", padding: 13, fontSize: 16, marginTop: 14 }}>
