@@ -266,6 +266,7 @@ type WorkerSummary = {
   qq: number;
   sacas: number;
   arrocillo: number;
+  tulas: number;
   base_amount: number;
   net_amount: number;
   pending_amount: number | null;
@@ -2255,12 +2256,12 @@ export function App() {
     if (w) { w.document.write(html); w.document.close(); w.print(); }
   }
 
-  function printHistoryReceipt(h: { worker_role: string; worker_name: string; week_start: string; cnt: number; qq: number; sacas: number; arrocillo: number; earned: number; advances_applied: number }) {
+  function printHistoryReceipt(h: { worker_role: string; worker_name: string; week_start: string; cnt: number; qq: number; sacas: number; arrocillo: number; tulas?: number; earned: number; advances_applied: number }) {
     // Reconstruye una fila de resumen para reutilizar el recibo.
     const cashPaid = round2(h.earned - h.advances_applied);
     const row: WorkerSummary = {
       worker_role: h.worker_role, worker_name: h.worker_name, cnt: h.cnt,
-      qq: h.qq, sacas: h.sacas, arrocillo: h.arrocillo,
+      qq: h.qq, sacas: h.sacas, arrocillo: h.arrocillo, tulas: h.tulas ?? 0,
       base_amount: h.earned,
       net_amount: cashPaid, pending_amount: 0, paid_amount: cashPaid,
       advances: h.advances_applied, to_pay: 0
@@ -2274,7 +2275,7 @@ export function App() {
     const roleLabel = (r: string) => (r === "PILADOR" ? "Pilador" : r === "ESTIBADOR" ? "Estibador" : "Secador");
     const rows = nominaRows.map((r) => [
       roleLabel(r.worker_role), r.worker_name, r.cnt,
-      Number(r.qq).toFixed(2), Number(r.sacas).toFixed(0),
+      Number(r.qq).toFixed(2), Number(r.tulas ?? 0).toFixed(0), Number(r.sacas).toFixed(0),
       m2(r.base_amount), m2(r.advances ?? 0), m2((r.pending_amount ?? 0) > 0 ? (r.to_pay ?? 0) : 0), m2(r.paid_amount ?? 0)
     ]);
     const t = nominaRows.reduce((a, r) => ({
@@ -2283,9 +2284,9 @@ export function App() {
     }), { base: 0, adv: 0, pay: 0, paid: 0 });
     return {
       title: "Nómina de trabajadores",
-      headers: ["Rol", "Trabajador", "Reg.", "QQ", "Sacas", "Ganó", "Anticipos", "A pagar", "Pagado"],
+      headers: ["Rol", "Trabajador", "Reg.", "QQ", "Tulas", "Sacas", "Ganó", "Anticipos", "A pagar", "Pagado"],
       rows,
-      totals: ["TOTALES", "", "", "", "", m2(t.base), m2(t.adv), m2(t.pay), m2(t.paid)]
+      totals: ["TOTALES", "", "", "", "", "", m2(t.base), m2(t.adv), m2(t.pay), m2(t.paid)]
     };
   }
 
@@ -2298,6 +2299,9 @@ export function App() {
     const roleLabel = row.worker_role === "PILADOR" ? "Pilador" : row.worker_role === "ESTIBADOR" ? "Estibador" : "Secador";
     const detailRows = row.worker_role === "SECADOR"
       ? `<tr><td>Días trabajados</td><td class="r">${row.cnt}</td></tr>`
+      : row.worker_role === "ESTIBADOR"
+      ? `<tr><td>Piladas</td><td class="r">${row.cnt}</td></tr>
+         <tr><td>Tulas</td><td class="r">${Number(row.tulas ?? 0).toFixed(0)}</td></tr>`
       : `<tr><td>Piladas</td><td class="r">${row.cnt}</td></tr>
          <tr><td>Quintales de arroz</td><td class="r">${Number(row.qq).toFixed(2)} QQ</td></tr>
          <tr><td>Sacas (@)</td><td class="r">${Number(row.sacas).toFixed(0)}</td></tr>
@@ -8243,7 +8247,7 @@ export function App() {
                     <thead>
                       <tr>
                         <th>Rol</th><th>Trabajador</th>
-                        <th className="num">Reg.</th><th className="num">QQ</th><th className="num">Sacas</th>
+                        <th className="num">Reg.</th><th className="num">QQ</th><th className="num">Tulas</th><th className="num">Sacas</th>
                         <th className="num">Ganó</th><th className="num">Anticipos</th><th className="num">A pagar</th><th className="num">Pagado</th><th />
                       </tr>
                     </thead>
@@ -8257,6 +8261,7 @@ export function App() {
                             <td style={{ fontWeight: 600 }}>{r.worker_name}</td>
                             <td className="num">{r.cnt}</td>
                             <td className="num">{Number(r.qq).toFixed(2)}</td>
+                            <td className="num">{Number(r.tulas ?? 0).toFixed(0)}</td>
                             <td className="num">{Number(r.sacas).toFixed(0)}</td>
                             <td className="num" style={{ fontWeight: 700 }}>{money(r.base_amount)}</td>
                             <td className="num" style={{ color: (r.advances ?? 0) > 0 ? "var(--c-danger)" : "inherit" }}>{(r.advances ?? 0) > 0 ? `−${money(r.advances)}` : "—"}</td>
@@ -8277,7 +8282,7 @@ export function App() {
                     </tbody>
                     <tfoot>
                       <tr>
-                        <td colSpan={5} style={{ fontWeight: 700 }}>TOTALES</td>
+                        <td colSpan={6} style={{ fontWeight: 700 }}>TOTALES</td>
                         <td className="num" style={{ fontWeight: 700 }}>{money(nominaRows.reduce((a, r) => a + r.base_amount, 0))}</td>
                         <td className="num" style={{ fontWeight: 700, color: "var(--c-danger)" }}>−{money(nominaRows.reduce((a, r) => a + (r.advances ?? 0), 0))}</td>
                         <td className="num" style={{ fontWeight: 700, color: "var(--c-danger)" }}>{money(nominaRows.reduce((a, r) => a + ((r.pending_amount ?? 0) > 0 ? (r.to_pay ?? 0) : 0), 0))}</td>

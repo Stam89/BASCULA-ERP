@@ -136,12 +136,15 @@ export async function createProductionWorkerPayments(
     const arrocillo = Number(opts.arrocillo) || 0;
     const tulas = Number(opts.tulas) || 0;
 
-    const rows: Array<{ role: string; name: string; base: number }> = [];
+    // Cada rol lleva SU base de cobro: el pilador por QQ; el estibador por
+    // tulas. Así en Nómina se ve el QQ del pilador y la tula del estibador.
+    const rows: Array<{ role: string; name: string; base: number; qq: number; tulas: number }> = [];
     if (opts.piladorName && opts.piladorName.trim()) {
       rows.push({
         role: "PILADOR",
         name: opts.piladorName.trim(),
-        base: round2(qq * rates.pilador_per_qq + sacas * rates.pilador_per_saca)
+        base: round2(qq * rates.pilador_per_qq + sacas * rates.pilador_per_saca),
+        qq, tulas: 0
       });
     }
     if (opts.estibadorName && opts.estibadorName.trim()) {
@@ -149,7 +152,8 @@ export async function createProductionWorkerPayments(
       rows.push({
         role: "ESTIBADOR",
         name: opts.estibadorName.trim(),
-        base: round2((tulas / 3) * rates.estibador_por_3tulas)
+        base: round2((tulas / 3) * rates.estibador_por_3tulas),
+        qq: 0, tulas
       });
     }
 
@@ -158,7 +162,7 @@ export async function createProductionWorkerPayments(
         `INSERT INTO worker_payments
            (worker_role, worker_name, reference_type, reference_id, qq, sacas, arrocillo, tulas, base_amount, net_amount, created_by)
          VALUES ($1, $2, 'processing_batch', $3, $4, $5, $6, $7, $8, $8, $9)`,
-        [r.role, r.name, opts.batchId, qq, sacas, arrocillo, tulas, r.base, opts.createdBy ?? null]
+        [r.role, r.name, opts.batchId, r.qq, sacas, arrocillo, r.tulas, r.base, opts.createdBy ?? null]
       );
     }
   } catch {
@@ -248,6 +252,7 @@ laborRouter.get("/summary", asyncRoute(async (req, res) => {
             SUM(wp.qq)::float qq,
             SUM(wp.sacas)::float sacas,
             SUM(wp.arrocillo)::float arrocillo,
+            SUM(wp.tulas)::float tulas,
             SUM(wp.base_amount)::float base_amount,
             SUM(wp.net_amount)::float net_amount,
             SUM(wp.net_amount) FILTER (WHERE wp.status = 'PENDING')::float pending_amount,
@@ -288,6 +293,7 @@ laborRouter.get("/history", asyncRoute(async (req, res) => {
             SUM(wp.qq)::float qq,
             SUM(wp.sacas)::float sacas,
             SUM(wp.arrocillo)::float arrocillo,
+            SUM(wp.tulas)::float tulas,
             SUM(wp.net_amount)::float earned,
             MAX(wp.paid_at) AS paid_at,
             (SELECT COALESCE(SUM(a.amount),0)::float FROM worker_advances a
