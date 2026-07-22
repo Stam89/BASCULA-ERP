@@ -226,3 +226,34 @@ reportsRouter.get("/production", asyncRoute(async (req, res) => {
   );
   res.json({ range: { from, to }, rows: result.rows });
 }));
+
+// Combustible de secado por fecha, lote y secadora, con GAS y DIÉSEL por
+// separado. El costo ya viene repartido a cada secado por el motor.
+reportsRouter.get("/fuel", asyncRoute(async (req, res) => {
+  const { from, to } = parseRange(req.query);
+  const acc = (req as AuthenticatedRequest).accionistaId;
+  if (!(await hasTable("drying_tunnel_reports"))) {
+    res.json({ range: { from, to }, rows: [] });
+    return;
+  }
+  const result = await pool.query(
+    `SELECT COALESCE(d.dry_end_at, d.filled_at, d.created_at) AS fecha,
+            d.dryer_name, d.tunnel_number, d.motor_number, l.lot_code,
+            d.total_quintals::float AS quintals,
+            COALESCE(d.gas_costo_total, 0)::float AS gas_costo,
+            COALESCE(d.diesel_costo, 0)::float AS diesel_costo,
+            (COALESCE(d.gas_costo_total, 0) + COALESCE(d.diesel_costo, 0))::float AS total
+     FROM drying_tunnel_reports d
+     JOIN lots l ON l.id = d.lot_id
+     WHERE COALESCE(d.dry_end_at, d.filled_at, d.created_at)::date BETWEEN $1 AND $2
+       AND l.accionista_id = $3
+     ORDER BY fecha DESC, d.dryer_name`,
+    [from, to, acc]
+  );
+  const tot = result.rows.reduce(
+    (a: { gas: number; diesel: number; total: number }, r: { gas_costo: number; diesel_costo: number; total: number }) =>
+      ({ gas: a.gas + Number(r.gas_costo), diesel: a.diesel + Number(r.diesel_costo), total: a.total + Number(r.total) }),
+    { gas: 0, diesel: 0, total: 0 }
+  );
+  res.json({ range: { from, to }, rows: result.rows, totals: tot });
+}));

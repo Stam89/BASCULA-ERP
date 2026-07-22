@@ -297,13 +297,14 @@ type PanelData = {
   alertas: string[];
 };
 
-type ReportKind = "resumen" | "ventas" | "liquidaciones" | "gastos" | "produccion" | "porcobrar";
+type ReportKind = "resumen" | "ventas" | "liquidaciones" | "gastos" | "produccion" | "combustible" | "porcobrar";
 
 const reportEndpoint: Record<Exclude<ReportKind, "resumen">, string> = {
   ventas: "sales",
   liquidaciones: "liquidations",
   gastos: "expenses",
   produccion: "production",
+  combustible: "fuel",
   porcobrar: "receivable-aging"
 };
 
@@ -2497,6 +2498,11 @@ export function App() {
         totals: ["TOTAL", "", m2(t.b0), m2(t.b30), m2(t.b60), m2(t.b90), m2(t.total), ""]
       };
     }
+    if (kind === "combustible") {
+      const rows = (data.rows || []).map((r: any) => [new Date(r.fecha).toLocaleDateString("es-EC"), r.dryer_name ?? `Túnel ${r.tunnel_number}`, r.lot_code || "—", m2(r.quintals), m2(r.gas_costo), m2(r.diesel_costo), m2(r.total)]);
+      const t = data.totals || { gas: 0, diesel: 0, total: 0 };
+      return { title: "Combustible de secado (gas y diésel)", headers: ["Fecha", "Secadora", "Lote", "QQ", "Gas $", "Diésel $", "Total $"], rows, totals: ["TOTAL", "", "", "", m2(t.gas), m2(t.diesel), m2(t.total)] };
+    }
     // produccion
     const rows = (data.rows || []).map((r: any) => [new Date(r.created_at).toLocaleDateString("es-EC"), r.batch_number, r.lot_code || "—", m2(r.input_qty), m2(r.output_qty), r.status]);
     return { title: "Producción del período", headers: ["Fecha", "Lote/Proceso", "Lote", "Entrada", "Salida", "Estado"], rows };
@@ -3901,7 +3907,15 @@ export function App() {
     });
     setMillingDraftSavedAt(saved.saved_at);
     await loadMillingDrafts();
-    addToast("Proceso guardado en el servidor", "success");
+    // Al guardar, el formulario queda limpio para el siguiente proceso. El
+    // borrador queda a salvo en el servidor (aparece en «Procesos guardados»).
+    setMillingReport(defaultMillingReport);
+    setMillingPiladoEntries([]);
+    setPiladorName("");
+    setEstibadorName("");
+    setProductionDryingId("");
+    setMillingDraftSavedAt(null);
+    addToast("Proceso guardado en el servidor. Formulario limpio para el siguiente.", "success");
   }
 
   async function loadMillingDrafts() {
@@ -4993,7 +5007,7 @@ export function App() {
                   key={motor}
                   type="button"
                   className={motorActivo === motor ? "primary" : undefined}
-                  onClick={() => setMotorActivo(motor)}
+                  onClick={() => { setEditingDryingReport(null); setMotorActivo(motor); }}
                 >
                   Motor {motor} · {MOTOR_SECADORAS[motor].join(" y ")}
                 </button>
@@ -8358,14 +8372,14 @@ export function App() {
           <>
             <div className="reportToolbar">
               <div className="reportKinds">
-                {(["resumen", "ventas", "liquidaciones", "gastos", "produccion", "porcobrar"] as const).map((k) => (
+                {(["resumen", "ventas", "liquidaciones", "gastos", "produccion", "combustible", "porcobrar"] as const).map((k) => (
                   <button
                     key={k}
                     type="button"
                     className={reportKind === k ? "active" : ""}
                     onClick={() => { setReportKind(k); loadReport(k).catch(() => undefined); }}
                   >
-                    {k === "resumen" ? "📊 Resumen" : k === "ventas" ? "🛒 Ventas" : k === "liquidaciones" ? "🌾 Liquidaciones" : k === "gastos" ? "🧾 Gastos" : k === "produccion" ? "⚙️ Producción" : "📈 Por cobrar"}
+                    {k === "resumen" ? "📊 Resumen" : k === "ventas" ? "🛒 Ventas" : k === "liquidaciones" ? "🌾 Liquidaciones" : k === "gastos" ? "🧾 Gastos" : k === "produccion" ? "⚙️ Producción" : k === "combustible" ? "⛽ Combustible" : "📈 Por cobrar"}
                   </button>
                 ))}
               </div>
@@ -8533,6 +8547,32 @@ export function App() {
                   rows={(reportRows.data.rows || []).map((r: any) => [new Date(r.created_at).toLocaleDateString("es-EC"), r.batch_number, r.lot_code || "—", Number(r.input_qty).toFixed(2), Number(r.output_qty).toFixed(2), r.status])}
                   empty="Sin producción registrada en el período"
                 />
+              </div>
+            )}
+
+            {/* ── Combustible (gas y diésel por separado) ── */}
+            {reportKind === "combustible" && reportRows?.kind === "combustible" && (
+              <div className="tablePanel">
+                <h2>Combustible de secado · gas y diésel por separado</h2>
+                <ReportTable
+                  headers={["Fecha", "Secadora", "Lote", "QQ", "Gas $", "Diésel $", "Total $"]}
+                  rows={(reportRows.data.rows || []).map((r: any) => [
+                    new Date(r.fecha).toLocaleDateString("es-EC"),
+                    r.dryer_name ?? `Túnel ${r.tunnel_number}`,
+                    r.lot_code || "—",
+                    Number(r.quintals).toFixed(2),
+                    money(r.gas_costo),
+                    money(r.diesel_costo),
+                    money(r.total)
+                  ])}
+                  empty="Sin combustible registrado en el período"
+                />
+                {reportRows.data.totals && (
+                  <div className="totalBox" style={{ marginTop: 10 }}>
+                    <span>Totales</span>
+                    <strong>Gas {money(reportRows.data.totals.gas)} · Diésel {money(reportRows.data.totals.diesel)} · Total {money(reportRows.data.totals.total)}</strong>
+                  </div>
+                )}
               </div>
             )}
           </>
