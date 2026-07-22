@@ -233,6 +233,8 @@ type LaborRates = {
   estibador_per_qq: number;
   estibador_per_saca: number;
   estibador_per_arrocillo: number;
+  /** El estibador cobra por tulas: $ por cada 3 tulas (proporcional). */
+  estibador_por_3tulas: number;
   secador_guardiania: number;
   secador_per_tunel: number;
   /** Precio fijo del gas por unidad de bombona (medidor). */
@@ -249,6 +251,7 @@ const defaultLaborRates: LaborRates = {
   estibador_per_qq: 0.1,
   estibador_per_saca: 0.25,
   estibador_per_arrocillo: 0.1,
+  estibador_por_3tulas: 5,
   secador_guardiania: 10,
   secador_per_tunel: 5,
   precio_gas_bombona: 0,
@@ -551,6 +554,8 @@ type MillingReportState = {
   broken34: string;
   fineBroken: string;
   polvillo: string;
+  /** N.º de tulas del proceso: base del pago al estibador. */
+  tulas: string;
 };
 
 type MillingYieldResult = {
@@ -954,7 +959,8 @@ const defaultOrderPackage: OrderPackageState = {
 const defaultMillingReport: MillingReportState = {
   broken34: "",
   fineBroken: "",
-  polvillo: ""
+  polvillo: "",
+  tulas: ""
 };
 
 const emptyDashboard: Dashboard = {
@@ -4106,7 +4112,8 @@ export function App() {
       } : undefined,
       sacks_used: 0,
       pilador_name: piladorName || undefined,
-      estibador_name: estibadorName || undefined
+      estibador_name: estibadorName || undefined,
+      tulas: Number(millingReport.tulas || 0)
     });
 
     setMillingYields(result);
@@ -5773,6 +5780,20 @@ export function App() {
                     style={{ width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
                     placeholder="Nombre del estibador" />
                 </label>
+                <label style={{ fontSize: 12 }}>
+                  <span style={{ fontWeight: 700, display: "block", marginBottom: 3 }}>📦 N.º de tulas</span>
+                  <input type="number" min="0" step="1" value={millingReport.tulas}
+                    onChange={e => setMillingReport(p => ({ ...p, tulas: e.target.value }))}
+                    style={{ width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
+                    placeholder="Ej: 6" />
+                </label>
+                <div style={{ fontSize: 12, alignSelf: "end" }}>
+                  <span style={{ fontWeight: 700, display: "block", marginBottom: 3 }}>Pago al estibador</span>
+                  <div style={{ padding: "6px 8px", background: "#fff", borderRadius: 6, border: "1px solid #d1d5db", fontWeight: 700 }}>
+                    {money((Number(millingReport.tulas || 0) / 3) * (laborRatesForm.estibador_por_3tulas || 0))}
+                    <small style={{ fontWeight: 400, color: "var(--c-muted)" }}> ({millingReport.tulas || 0} tulas ÷ 3 × ${laborRatesForm.estibador_por_3tulas || 0})</small>
+                  </div>
+                </div>
               </div>
               <div className="millingPiladoBuilder">
                 <label>
@@ -9073,6 +9094,7 @@ export function App() {
                     <label><span>$ por QQ</span><input type="number" step="0.01" min="0" value={laborRatesForm.estibador_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_qq: Number(e.target.value) })} /></label>
                     <label><span>$ por saca (@)</span><input type="number" step="0.01" min="0" value={laborRatesForm.estibador_per_saca} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_saca: Number(e.target.value) })} /></label>
                     <label><span>$ por arrocillo</span><input type="number" step="0.01" min="0" value={laborRatesForm.estibador_per_arrocillo} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_arrocillo: Number(e.target.value) })} /></label>
+                    <label><span>$ por cada 3 tulas ⭐</span><input type="number" step="0.01" min="0" value={laborRatesForm.estibador_por_3tulas} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_por_3tulas: Number(e.target.value) })} /></label>
                   </div>
                   <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>Secador <span className="muted" style={{ fontWeight: 400 }}>(próxima fase)</span></h2>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -9097,9 +9119,9 @@ export function App() {
                     <small>100 × {laborRatesForm.pilador_per_qq} + 20 × {laborRatesForm.pilador_per_saca}</small>
                   </div>
                   <div className="totalBox">
-                    <span>Estibador</span>
-                    <strong>{money(100 * laborRatesForm.estibador_per_qq + 20 * laborRatesForm.estibador_per_saca + 10 * laborRatesForm.estibador_per_arrocillo)}</strong>
-                    <small>100 × {laborRatesForm.estibador_per_qq} + 20 × {laborRatesForm.estibador_per_saca} + 10 × {laborRatesForm.estibador_per_arrocillo}</small>
+                    <span>Estibador (por 6 tulas)</span>
+                    <strong>{money((6 / 3) * laborRatesForm.estibador_por_3tulas)}</strong>
+                    <small>6 tulas ÷ 3 × {laborRatesForm.estibador_por_3tulas}. El estibador cobra por tulas.</small>
                   </div>
                 </div>
               </section>

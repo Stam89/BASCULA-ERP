@@ -170,6 +170,7 @@ const finishProductionSchema = z.object({
   service_rate_per_qq: z.number().nonnegative().optional(),
   pilador_name: z.string().optional(),
   estibador_name: z.string().optional(),
+  tulas: z.number().nonnegative().optional(),
   created_by: z.string().uuid().optional()
 });
 
@@ -643,6 +644,7 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       qq: processedQq,
       sacas: sacksUsed,
       arrocillo: arrocilloQq,
+      tulas: body.tulas ?? 0,
       createdBy: body.created_by ?? null
     });
 
