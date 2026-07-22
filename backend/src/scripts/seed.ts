@@ -1,8 +1,16 @@
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import { pool } from "../db/pool.js";
 
 async function main() {
-  const passwordHash = await bcrypt.hash("admin123", 10);
+  // El admin ya no se crea con una clave conocida ("admin123"). Se toma de
+  // SEED_ADMIN_PASSWORD o, si no está, se genera una aleatoria y se imprime UNA
+  // vez. Y si el admin YA existe, NO se toca su clave (antes el reseed la
+  // reseteaba, borrando la que el usuario hubiera puesto).
+  const adminExists = await pool.query("SELECT 1 FROM users WHERE username = 'admin'");
+  const isNewAdmin = adminExists.rowCount === 0;
+  const rawPassword = process.env.SEED_ADMIN_PASSWORD || crypto.randomBytes(9).toString("base64url");
+  const passwordHash = await bcrypt.hash(rawPassword, 10);
 
   const branch = await pool.query(
     `INSERT INTO branches (name, address, phone)
@@ -20,11 +28,12 @@ async function main() {
      RETURNING id`
   );
 
+  // Solo se fija la clave al CREAR el admin. Si ya existe, se asegura su rol y
+  // que esté activo, pero se respeta su clave actual.
   await pool.query(
     `INSERT INTO users (branch_id, role_id, name, username, email, password_hash)
      VALUES ($1, $2, 'Administrador', 'admin', 'admin@bascula.local', $3)
      ON CONFLICT (username) DO UPDATE SET
-       password_hash = EXCLUDED.password_hash,
        role_id = EXCLUDED.role_id,
        branch_id = EXCLUDED.branch_id,
        is_active = true`,
@@ -80,8 +89,12 @@ async function main() {
   );
 
   console.log("Seed completado");
-  console.log("Usuario: admin");
-  console.log("Clave: admin123");
+  if (isNewAdmin) {
+    console.log("Usuario: admin");
+    console.log("Clave (guárdala, NO se vuelve a mostrar):", rawPassword);
+  } else {
+    console.log("El usuario admin ya existía: su clave NO se modificó.");
+  }
 }
 
 main()
