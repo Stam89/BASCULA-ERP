@@ -6,6 +6,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { estibadorBaseFromTulas } from "../../utils/money.js";
 
 export const laborRouter = Router();
 
@@ -152,7 +153,7 @@ export async function createProductionWorkerPayments(
       rows.push({
         role: "ESTIBADOR",
         name: opts.estibadorName.trim(),
-        base: round2((tulas / 3) * rates.estibador_por_3tulas),
+        base: estibadorBaseFromTulas(tulas, rates.estibador_por_3tulas),
         qq: 0, tulas
       });
     }
