@@ -91,8 +91,10 @@ export function auditMiddleware(req: Request, res: Response, next: NextFunction)
         const cand = b.id ?? b.ticket?.id;
         if (typeof cand === "string") capturedId = cand;
       }
-    } catch {
-      // ignorar
+    } catch (err) {
+      // No romper la respuesta por no poder capturar el id para auditoría; se
+      // deja un aviso de bajo nivel para no perder el rastro por completo.
+      console.warn("[audit] No se pudo capturar el id de la entidad:", err instanceof Error ? err.message : err);
     }
     return originalJson(body);
   };

@@ -165,8 +165,18 @@ export async function createProductionWorkerPayments(
         [r.role, r.name, opts.batchId, r.qq, sacas, arrocillo, r.tulas, r.base, opts.createdBy ?? null]
       );
     }
-  } catch {
-    // Auditar/nómina nunca debe romper la producción.
+  } catch (err) {
+    // La nómina nunca debe romper la producción, PERO tampoco puede perderse en
+    // silencio: si falla el registro del pago, el trabajador queda sin cobrar.
+    // Se deja constancia con contexto para poder detectarlo y corregirlo.
+    console.error("[nomina] No se pudo registrar el pago de pilada", {
+      batchId: opts.batchId,
+      pilador: opts.piladorName ?? null,
+      estibador: opts.estibadorName ?? null,
+      qq: opts.qq,
+      tulas: opts.tulas ?? 0,
+      error: err instanceof Error ? err.message : String(err)
+    });
   }
 }
 
