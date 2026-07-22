@@ -7701,7 +7701,7 @@ export function App() {
           // Reglas del negocio: sale 0.11, corriente, arrocillo 3/4 y fino; regresa
           // lo mismo (el 0.11 o corriente que se envió, los arrocillos) más el rechazo.
           const INPUT_CODES = ["ARROZ-PILADO-011", "ARROZ-PILADO-CORRIENTE", "ARROCILLO-34", "ARROCILLO-FINO"];
-          const OUTPUT_CODES = [...INPUT_CODES, "RECHAZO"];
+          const OUTPUT_CODES = [...INPUT_CODES, "POLVILLO", "RECHAZO"];
           const inputProducts = selectableProducts.filter((p) => INPUT_CODES.includes(p.code));
           const outputProducts = selectableProducts.filter((p) => OUTPUT_CODES.includes(p.code));
           // Siempre sale de la bodega de producto terminado.
