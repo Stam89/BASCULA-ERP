@@ -29,6 +29,9 @@ const WRITE_MODULES_BY_PREFIX: Record<string, AppModule[]> = {
   "processing-batches": ["Produccion"],
   "inventory": ["Inventario", "Produccion", "Caja"],
   "sacks": ["Inventario", "Produccion", "Caja"],
+  // Selección/envejecido mueve producto terminado del inventario y crea cuentas
+  // por pagar: mismo permiso que el inventario.
+  "selection": ["Inventario", "Produccion", "Caja"],
   "sales": ["Ventas"],
   "orders": ["Ventas"],
   "customers": ["Ventas"],

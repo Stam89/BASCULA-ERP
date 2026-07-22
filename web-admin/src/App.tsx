@@ -114,7 +114,28 @@ type AuthUser = {
   allowed_modules?: string[] | null;
 };
 
-type Accionista = { id: string; name: string; code: string };
+type Accionista = { id: string; name: string; code: string; puede_envejecer?: boolean };
+
+// Servicio de selección / envejecido de producto terminado (persona externa).
+type ExternalProvider = { id: string; name: string; identification: string | null; phone: string | null };
+type SelectionRates = { seleccion_rate: number; envejecimiento_rate: number };
+type SelectionService = {
+  id: string;
+  service_number: string;
+  service_date: string;
+  service_type: "SELECCION" | "ENVEJECIMIENTO";
+  input_qq: number | string;
+  output_qq: number | string;
+  merma_qq: number | string;
+  rate_per_qq: number | string;
+  total_cost: number | string;
+  provider_name: string;
+  product_name: string;
+  warehouse_name: string;
+  saldo: number;
+  estado: string;
+  notes: string | null;
+};
 
 // Módulos asignables a un operador (deben coincidir con el backend).
 const APP_MODULES = [
@@ -158,7 +179,7 @@ type AdminUser = {
   accionista_ids?: string[] | null;
 };
 
-type AdminAccionista = { id: string; name: string; code: string; is_active: boolean };
+type AdminAccionista = { id: string; name: string; code: string; is_active: boolean; puede_envejecer?: boolean };
 
 type AuditEntry = {
   id: string;
@@ -810,7 +831,7 @@ type EquipmentMaintenance = {
 
 const navGroups: Array<{ label: string; tabs: string[] }> = [
   { label: "Principal", tabs: ["Dashboard"] },
-  { label: "Operación", tabs: ["Bascula", "Secadoras", "Produccion", "Inventario"] },
+  { label: "Operación", tabs: ["Bascula", "Secadoras", "Produccion", "Inventario", "Seleccion"] },
   { label: "Comercial", tabs: ["Ventas", "Caja"] },
   { label: "Cuentas", tabs: ["Por Cobrar", "Por Pagar"] },
   { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores", "Nomina", "Cuadrilla", "Servicio Pilado"] },
@@ -853,6 +874,8 @@ function NavIcon({ tab }: { tab: string }) {
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="5" cy="5" r="2"/><circle cx="11" cy="5" r="2"/><path d="M1.5 13c0-2 1.5-3.2 3.5-3.2S8.5 11 8.5 13"/><path d="M7.5 13c0-2 1.5-3.2 3.5-3.2s3.5 1.2 3.5 3.2"/></svg>;
     case "Servicio Pilado":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.2 3.2l1.4 1.4M11.4 11.4l1.4 1.4M3.2 12.8l1.4-1.4M11.4 4.6l1.4-1.4"/></svg>;
+    case "Seleccion":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10 3a5 5 0 100 10"/><path d="M13 5.5l-3 2.5-1.5-1.5"/><circle cx="5" cy="8" r="1" fill="currentColor" stroke="none"/></svg>;
     case "Estados Financieros":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 13h12"/><rect x="3" y="8" width="2.5" height="5"/><rect x="6.75" y="5" width="2.5" height="8"/><rect x="10.5" y="2" width="2.5" height="11"/></svg>;
     case "Reportes":
@@ -1107,6 +1130,24 @@ export function App() {
   const [piladoServices, setPiladoServices] = useState<PiladoService[]>([]);
   const [piladoBalances, setPiladoBalances] = useState<PiladoBalance[]>([]);
   const [piladoForm, setPiladoForm] = useState({ client_kind: "accionista" as "accionista" | "externo", client_accionista_id: "", client_name: "", quintals: "", rate_per_qq: localStorage.getItem("bascula-erp:pilado-rate") ?? "", service_date: nominaToday });
+
+  // ── Selección / envejecido de producto terminado (persona externa) ─────────
+  const [selectionServices, setSelectionServices] = useState<SelectionService[]>([]);
+  const [selectionProviders, setSelectionProviders] = useState<ExternalProvider[]>([]);
+  const [selectionRates, setSelectionRates] = useState<SelectionRates>({ seleccion_rate: 1.25, envejecimiento_rate: 3.5 });
+  const [selectionForm, setSelectionForm] = useState({
+    service_type: "SELECCION" as "SELECCION" | "ENVEJECIMIENTO",
+    provider_id: "",
+    product_id: "",
+    warehouse_id: "",
+    input_qq: "",
+    output_qq: "",
+    rate_per_qq: "",
+    service_date: nominaToday,
+    notes: ""
+  });
+  const [newProviderForm, setNewProviderForm] = useState({ name: "", identification: "", phone: "" });
+  const [selectionRatesForm, setSelectionRatesForm] = useState({ seleccion_rate: "", envejecimiento_rate: "" });
 
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
   const [settingsForm, setSettingsForm] = useState<AppSettings>(defaultAppSettings);
@@ -1796,6 +1837,7 @@ export function App() {
           if (tab === "Nomina") return allowed.has("Caja") || allowed.has("Produccion");
           if (tab === "Cuadrilla") return allowed.has("Caja") || allowed.has("Produccion");
           if (tab === "Servicio Pilado") return allowed.has("Caja") || allowed.has("Produccion");
+          if (tab === "Seleccion") return allowed.has("Inventario") || allowed.has("Produccion") || allowed.has("Caja");
           return allowed.has(tab);
         });
     return base.filter((tab) => !soloCeyro.has(tab) || esCeyroActivo);
@@ -1852,6 +1894,13 @@ export function App() {
     await apiPut(`/auth/users/${accionistaEditor.user.id}/accionistas`, { accionista_ids: accionistaEditor.ids });
     addToast(`Accionistas de ${accionistaEditor.user.username} actualizados`, "success");
     setAccionistaEditor(null);
+    await refreshConfig();
+  }
+
+  // Habilita/deshabilita que un accionista pueda mandar a envejecer producto.
+  async function toggleEnvejecer(a: AdminAccionista) {
+    await apiPut(`/auth/accionistas/${a.id}`, { puede_envejecer: !a.puede_envejecer });
+    addToast(`${a.name}: envejecido ${!a.puede_envejecer ? "habilitado" : "deshabilitado"}`, "success");
     await refreshConfig();
   }
 
@@ -1962,9 +2011,93 @@ export function App() {
   }
 
   async function settlePilado(id: string) {
-    await apiPost(`/pilado/services/${id}/settle`, {});
-    addToast("Servicio saldado", "success");
+    const registerId = dashboard.current_cash_register?.id;
+    const r = await apiPost<{ paid: number; caja_registrada: boolean; espejo: null | { accionista: string; cuenta: string; caja_registrada: boolean } }>(
+      `/pilado/services/${id}/settle`, { cash_register_id: registerId }
+    );
+    // El cobro de CEYRO entra a su caja; el espejo saca la plata del cliente.
+    let msg = r.caja_registrada
+      ? `Cobrado ${money(r.paid)} y registrado como ingreso en caja`
+      : `Servicio saldado, pero no había caja abierta para registrar el ingreso`;
+    if (r.espejo) {
+      msg += `. Se descontó la ${r.espejo.cuenta} de ${r.espejo.accionista}` +
+        (r.espejo.caja_registrada ? " y salió de su caja." : " (su caja está cerrada, el saldo igual bajó).");
+    }
+    addToast(msg, r.caja_registrada ? "success" : "error");
     await refreshPilado();
+    if (registerId) await refreshCaja(registerId);
+  }
+
+  // ── Selección / envejecido ────────────────────────────────────────────────
+  async function refreshSelection() {
+    try {
+      const [services, providers, rates] = await Promise.all([
+        apiGet<{ rows: SelectionService[] }>("/selection/services"),
+        apiGet<ExternalProvider[]>("/selection/providers"),
+        apiGet<SelectionRates>("/selection/rates")
+      ]);
+      setSelectionServices(services.rows);
+      setSelectionProviders(providers);
+      setSelectionRates(rates);
+      setSelectionRatesForm({ seleccion_rate: String(rates.seleccion_rate), envejecimiento_rate: String(rates.envejecimiento_rate) });
+    } catch (e) {
+      addToast(`Error al cargar selección: ${e instanceof Error ? e.message : "desconocido"}`, "error");
+    }
+  }
+
+  async function reloadStock() {
+    const rows = await apiGet<StockRow[]>("/inventory/stock").catch(() => null);
+    if (rows) setStock(rows);
+  }
+
+  async function submitSelectionService(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const input = Number(selectionForm.input_qq);
+    const output = Number(selectionForm.output_qq);
+    if (!selectionForm.provider_id) { addToast("Elige la persona externa que hace el servicio", "error"); return; }
+    if (!selectionForm.product_id) { addToast("Elige el producto a selectar", "error"); return; }
+    if (!selectionForm.warehouse_id) { addToast("Elige la bodega", "error"); return; }
+    if (!(input > 0)) { addToast("Ingresa los QQ que salen a selectar", "error"); return; }
+    if (!(output > 0)) { addToast("Ingresa los QQ limpios que reingresan", "error"); return; }
+    if (output > input + 0.001) { addToast("Lo que reingresa no puede ser mayor que lo que sale", "error"); return; }
+    const rate = selectionForm.rate_per_qq === "" ? undefined : Number(selectionForm.rate_per_qq);
+    await apiPost("/selection/services", {
+      provider_id: selectionForm.provider_id,
+      service_type: selectionForm.service_type,
+      product_id: selectionForm.product_id,
+      warehouse_id: selectionForm.warehouse_id,
+      input_qq: input,
+      output_qq: output,
+      rate_per_qq: rate,
+      service_date: selectionForm.service_date,
+      notes: selectionForm.notes.trim() || undefined
+    });
+    setSelectionForm({ ...selectionForm, input_qq: "", output_qq: "", notes: "" });
+    addToast("Servicio registrado. Producto reingresado y cuenta por pagar creada.", "success");
+    await Promise.all([refreshSelection(), reloadStock()]);
+  }
+
+  async function submitNewProvider(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (newProviderForm.name.trim().length < 2) { addToast("Escribe el nombre de la persona", "error"); return; }
+    const created = await apiPost<ExternalProvider>("/selection/providers", {
+      name: newProviderForm.name.trim(),
+      identification: newProviderForm.identification.trim() || undefined,
+      phone: newProviderForm.phone.trim() || undefined
+    });
+    setNewProviderForm({ name: "", identification: "", phone: "" });
+    addToast("Persona externa guardada", "success");
+    await refreshSelection();
+    setSelectionForm((f) => ({ ...f, provider_id: created.id }));
+  }
+
+  async function saveSelectionRates(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const sel = Number(selectionRatesForm.seleccion_rate), env = Number(selectionRatesForm.envejecimiento_rate);
+    if (!(sel >= 0) || !(env >= 0)) { addToast("Las tarifas deben ser números válidos", "error"); return; }
+    await apiPut("/selection/rates", { seleccion_rate: sel, envejecimiento_rate: env });
+    addToast("Tarifas actualizadas", "success");
+    await refreshSelection();
   }
 
   // ── Cuadrilla ─────────────────────────────────────────────────────────────
@@ -2824,6 +2957,7 @@ export function App() {
     if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
     if (activeTab === "Cuadrilla") refreshCuadrilla().catch(() => undefined);
     if (activeTab === "Servicio Pilado") refreshPilado().catch(() => undefined);
+    if (activeTab === "Seleccion") refreshSelection().catch(() => undefined);
     if (activeTab === "Dashboard" && isAdmin) refreshPanel().catch(() => undefined);
     if (activeTab === "Configuracion") refreshConfig().catch(() => undefined);
     if (activeTab === "Estados Financieros") loadFinanzas().catch((e) => addToast(e.message, "error"));
@@ -7526,6 +7660,148 @@ export function App() {
           );
         })()}
 
+        {activeTab === "Seleccion" && (() => {
+          const activeAcc = accionistas.find((a) => a.id === activeAccionistaId);
+          const puedeEnvejecer = !!activeAcc?.puede_envejecer;
+          // Productos terminados con stock (para no mandar a selectar lo que no hay).
+          const finishedStock = stock.filter((r) => r.product_type === "FINISHED_GOOD" && Number(r.quantity) > 0);
+          const productOptions = Array.from(
+            new Map(finishedStock.map((r) => [r.product_id, r.product_name])).entries()
+          ).filter(([id]) => id);
+          const availableFor = (pid: string, wid: string) =>
+            stock.filter((r) => r.product_id === pid && r.warehouse_id === wid)
+              .reduce((s, r) => s + Number(r.quantity), 0);
+          const disponible = selectionForm.product_id && selectionForm.warehouse_id
+            ? availableFor(selectionForm.product_id, selectionForm.warehouse_id) : null;
+          const defaultRate = selectionForm.service_type === "ENVEJECIMIENTO"
+            ? selectionRates.envejecimiento_rate : selectionRates.seleccion_rate;
+          const effectiveRate = selectionForm.rate_per_qq === "" ? defaultRate : Number(selectionForm.rate_per_qq);
+          const inputN = Number(selectionForm.input_qq || 0);
+          const outputN = Number(selectionForm.output_qq || 0);
+          const mermaN = round2(Math.max(0, inputN - outputN));
+          const costoN = round2(inputN * (effectiveRate || 0));
+          return (
+          <section className="panelGrid">
+            <form className="formPanel" onSubmit={(e) => submitSelectionService(e).catch((err) => addToast(err.message, "error"))}>
+              <h2>🧹 Selectar / envejecer producto</h2>
+              <p className="muted">El producto terminado sale del inventario a limpiar impurezas y reingresa lo limpio (la diferencia es merma). El costo lo cobra una persona externa y queda como cuenta por pagar.</p>
+              <label><span>Fecha</span>
+                <input type="date" value={selectionForm.service_date} onChange={(e) => setSelectionForm({ ...selectionForm, service_date: e.target.value })} />
+              </label>
+              <label><span>Tipo de servicio</span>
+                <select value={selectionForm.service_type} onChange={(e) => setSelectionForm({ ...selectionForm, service_type: e.target.value as "SELECCION" | "ENVEJECIMIENTO", rate_per_qq: "" })}>
+                  <option value="SELECCION">Selección (limpiar impureza)</option>
+                  {puedeEnvejecer && <option value="ENVEJECIMIENTO">Envejecido</option>}
+                </select>
+              </label>
+              {!puedeEnvejecer && <p className="muted" style={{ marginTop: -4 }}>Este accionista no está habilitado para envejecer. Se habilita en Configuración → Accionistas.</p>}
+              <label><span>Persona externa (quien lo hace)</span>
+                <select value={selectionForm.provider_id} onChange={(e) => setSelectionForm({ ...selectionForm, provider_id: e.target.value })}>
+                  <option value="">Seleccione</option>
+                  {selectionProviders.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </label>
+              <label><span>Producto</span>
+                <select value={selectionForm.product_id} onChange={(e) => setSelectionForm({ ...selectionForm, product_id: e.target.value })}>
+                  <option value="">Seleccione</option>
+                  {productOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                </select>
+              </label>
+              <label><span>Bodega</span>
+                <select value={selectionForm.warehouse_id} onChange={(e) => setSelectionForm({ ...selectionForm, warehouse_id: e.target.value })}>
+                  <option value="">Seleccione</option>
+                  {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+                </select>
+              </label>
+              {disponible !== null && (
+                <p className="muted" style={{ marginTop: -4 }}>Disponible en esa bodega: <strong>{disponible.toFixed(2)} QQ</strong></p>
+              )}
+              <label><span>QQ que salen a selectar</span>
+                <input type="number" step="0.01" min="0" value={selectionForm.input_qq} onChange={(e) => setSelectionForm({ ...selectionForm, input_qq: e.target.value })} />
+              </label>
+              <label><span>QQ limpios que reingresan</span>
+                <input type="number" step="0.01" min="0" value={selectionForm.output_qq} onChange={(e) => setSelectionForm({ ...selectionForm, output_qq: e.target.value })} />
+              </label>
+              <label><span>Tarifa por QQ ($)</span>
+                <input type="number" step="0.01" min="0" value={selectionForm.rate_per_qq} placeholder={`Por defecto ${defaultRate}`} onChange={(e) => setSelectionForm({ ...selectionForm, rate_per_qq: e.target.value })} />
+              </label>
+              <label><span>Notas (opcional)</span>
+                <input type="text" value={selectionForm.notes} onChange={(e) => setSelectionForm({ ...selectionForm, notes: e.target.value })} placeholder="Ej: lote, observación" />
+              </label>
+              <div className="totalBox" style={{ marginBottom: 4 }}>
+                <span>Costo a pagar</span>
+                <strong>{money(costoN)}</strong>
+                <small>{inputN || 0} QQ × ${effectiveRate || 0}</small>
+              </div>
+              <p className="muted" style={{ marginTop: 0 }}>Merma estimada: <strong>{mermaN.toFixed(2)} QQ</strong> (baja del inventario)</p>
+              <button className="primary">Registrar servicio</button>
+              {selectionProviders.length === 0 && <p className="muted">Primero agrega la persona externa en el panel de la derecha.</p>}
+            </form>
+
+            <div className="tablePanel">
+              <h2>👤 Personas externas</h2>
+              <form onSubmit={(e) => submitNewProvider(e).catch((err) => addToast(err.message, "error"))} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, alignItems: "end", background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
+                <label style={{ fontSize: 12, fontWeight: 600 }}>Nombre
+                  <input value={newProviderForm.name} onChange={(e) => setNewProviderForm({ ...newProviderForm, name: e.target.value })} placeholder="Ej: Juan Pérez"
+                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
+                </label>
+                <label style={{ fontSize: 12, fontWeight: 600 }}>Teléfono
+                  <input value={newProviderForm.phone} onChange={(e) => setNewProviderForm({ ...newProviderForm, phone: e.target.value })} placeholder="Opcional"
+                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
+                </label>
+                <button type="submit" style={{ padding: "7px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontWeight: 700, background: "var(--c-brand)", color: "#fff", fontSize: 12 }}>+ Agregar</button>
+              </form>
+              {selectionProviders.length > 0 && (
+                <table className="cajaTable" style={{ marginTop: 8 }}>
+                  <thead><tr><th>Nombre</th><th>Teléfono</th></tr></thead>
+                  <tbody>
+                    {selectionProviders.map((p) => <tr key={p.id}><td>{p.name}</td><td>{p.phone ?? "—"}</td></tr>)}
+                  </tbody>
+                </table>
+              )}
+
+              <h2 style={{ marginTop: 18 }}>💲 Tarifas por defecto</h2>
+              <form onSubmit={(e) => saveSelectionRates(e).catch((err) => addToast(err.message, "error"))} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, alignItems: "end", background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
+                <label style={{ fontSize: 12, fontWeight: 600 }}>Selección ($/QQ)
+                  <input type="number" step="0.01" min="0" value={selectionRatesForm.seleccion_rate} onChange={(e) => setSelectionRatesForm({ ...selectionRatesForm, seleccion_rate: e.target.value })}
+                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
+                </label>
+                <label style={{ fontSize: 12, fontWeight: 600 }}>Envejecido ($/QQ)
+                  <input type="number" step="0.01" min="0" value={selectionRatesForm.envejecimiento_rate} onChange={(e) => setSelectionRatesForm({ ...selectionRatesForm, envejecimiento_rate: e.target.value })}
+                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
+                </label>
+                <button type="submit" style={{ padding: "7px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontWeight: 700, background: "var(--c-brand)", color: "#fff", fontSize: 12 }}>Guardar</button>
+              </form>
+
+              <h2 style={{ marginTop: 18 }}>Servicios registrados</h2>
+              {selectionServices.length === 0 ? (
+                <div className="emptyState"><div className="emptyIcon">🧹</div><p>Sin servicios este mes</p></div>
+              ) : (
+                <table className="cajaTable" style={{ marginTop: 6 }}>
+                  <thead><tr><th>Fecha</th><th>Tipo</th><th>Persona</th><th>Producto</th><th>Sale</th><th>Reingresa</th><th>Merma</th><th>Costo</th><th>Saldo</th></tr></thead>
+                  <tbody>
+                    {selectionServices.map((s) => (
+                      <tr key={s.id}>
+                        <td>{String(s.service_date).slice(0, 10)}</td>
+                        <td>{s.service_type === "ENVEJECIMIENTO" ? "Envejecido" : "Selección"}</td>
+                        <td>{s.provider_name}</td>
+                        <td>{s.product_name}</td>
+                        <td>{Number(s.input_qq).toFixed(2)}</td>
+                        <td>{Number(s.output_qq).toFixed(2)}</td>
+                        <td>{Number(s.merma_qq).toFixed(2)}</td>
+                        <td><strong>{money(Number(s.total_cost))}</strong></td>
+                        <td>{Number(s.saldo) > 0 ? <span style={{ color: "#dc2626" }}>{money(Number(s.saldo))}</span> : <span className="chip ok">Pagado</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              <p className="muted" style={{ marginTop: 8 }}>El pago a la persona externa se registra en <strong>Por Pagar</strong>.</p>
+            </div>
+          </section>
+          );
+        })()}
+
         {activeTab === "Cuadrilla" && (() => {
           const selAct = cuadActivities.find((a) => a.id === cuadEntryForm.activity_id);
           const previewSubtotal = selAct ? round2(Number(cuadEntryForm.quantity || 0) * Number(selAct.unit_rate)) : 0;
@@ -8490,6 +8766,7 @@ export function App() {
                           <th>Código</th>
                           <th>Usuarios con acceso</th>
                           <th>Estado</th>
+                          <th>Envejece</th>
                           <th />
                         </tr>
                       </thead>
@@ -8505,6 +8782,18 @@ export function App() {
                               <span className={a.is_active ? "chip ok" : "chip bad"}>
                                 {a.is_active ? "Activo" : "Inactivo"}
                               </span>
+                            </td>
+                            <td>
+                              <button
+                                type="button"
+                                className={a.puede_envejecer ? "chip ok" : "chip"}
+                                style={{ cursor: isAdmin ? "pointer" : "default", border: "none" }}
+                                disabled={!isAdmin}
+                                title="Solo este accionista puede mandar a envejecer producto"
+                                onClick={() => toggleEnvejecer(a).catch((err) => addToast(err.message, "error"))}
+                              >
+                                {a.puede_envejecer ? "Sí" : "No"}
+                              </button>
                             </td>
                             <td style={{ textAlign: "right" }}>
                               <button

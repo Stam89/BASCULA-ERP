@@ -9,17 +9,17 @@ import { APP_MODULES, requireAdmin, requireAuth, type AuthenticatedRequest } fro
 
 export const authRouter = Router();
 
-type Accionista = { id: string; name: string; code: string };
+type Accionista = { id: string; name: string; code: string; puede_envejecer: boolean };
 
 // Accionistas a los que puede acceder el usuario: todos si es administrador,
 // solo los asignados en user_accionistas si no.
 async function accionistasForUser(userId: string, roleName: string | null): Promise<Accionista[]> {
   const result = roleName === "ADMINISTRADOR"
     ? await pool.query<Accionista>(
-      "SELECT id, name, code FROM accionistas WHERE is_active = true ORDER BY name"
+      "SELECT id, name, code, puede_envejecer FROM accionistas WHERE is_active = true ORDER BY name"
     )
     : await pool.query<Accionista>(
-      `SELECT a.id, a.name, a.code
+      `SELECT a.id, a.name, a.code, a.puede_envejecer
        FROM accionistas a
        JOIN user_accionistas ua ON ua.accionista_id = a.id
        WHERE ua.user_id = $1 AND a.is_active = true
@@ -148,7 +148,7 @@ authRouter.put("/users/:id", requireAuth, requireAdmin, asyncRoute(async (req, r
 // ── Accionistas (solo administradores) ──────────────────────────────────────
 
 authRouter.get("/accionistas", requireAuth, requireAdmin, asyncRoute(async (_req, res) => {
-  const result = await pool.query("SELECT id, name, code, is_active FROM accionistas ORDER BY name");
+  const result = await pool.query("SELECT id, name, code, is_active, puede_envejecer FROM accionistas ORDER BY name");
   res.json(result.rows);
 }));
 
@@ -175,10 +175,11 @@ authRouter.put("/accionistas/:id", requireAuth, requireAdmin, asyncRoute(async (
   const body = z.object({
     name: z.string().min(2).optional(),
     code: z.string().min(2).optional(),
-    is_active: z.boolean().optional()
+    is_active: z.boolean().optional(),
+    puede_envejecer: z.boolean().optional()
   }).parse(req.body);
 
-  if (body.name === undefined && body.code === undefined && body.is_active === undefined) {
+  if (body.name === undefined && body.code === undefined && body.is_active === undefined && body.puede_envejecer === undefined) {
     throw new ApiError(400, "Nada que actualizar.");
   }
 
@@ -191,10 +192,11 @@ authRouter.put("/accionistas/:id", requireAuth, requireAdmin, asyncRoute(async (
     `UPDATE accionistas
      SET name = COALESCE($2, name),
          code = COALESCE($3, code),
-         is_active = COALESCE($4, is_active)
+         is_active = COALESCE($4, is_active),
+         puede_envejecer = COALESCE($5, puede_envejecer)
      WHERE id = $1
-     RETURNING id, name, code, is_active`,
-    [req.params.id, body.name ?? null, body.code ?? null, body.is_active ?? null]
+     RETURNING id, name, code, is_active, puede_envejecer`,
+    [req.params.id, body.name ?? null, body.code ?? null, body.is_active ?? null, body.puede_envejecer ?? null]
   );
   if (!result.rowCount) throw new ApiError(404, "Accionista no encontrado");
   res.json(result.rows[0]);

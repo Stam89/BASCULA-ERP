@@ -4,6 +4,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
+import { espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
 
 export const piladoRouter = Router();
 
@@ -122,14 +123,29 @@ piladoRouter.post("/services", asyncRoute(async (req, res) => {
   res.status(201).json({ ...result, cliente: clientName, total });
 }));
 
-// Registra el pago (total o parcial) de un servicio: salda por cobrar y por pagar.
+// Registra el pago (total o parcial) de un servicio de pilado. CONTABLEMENTE:
+//   · Baja la cuenta por COBRAR de CEYRO e INGRESA la plata a su caja (INCOME).
+//   · Si el cliente es un accionista, el espejo baja su cuenta por PAGAR y SACA
+//     la plata de su caja (EXPENSE). Si es cliente externo, solo cobra CEYRO.
+// Antes solo bajaba los saldos y NO tocaba la caja: la plata cobrada nunca
+// aparecía como ingreso. Ese era el bug (dinero saldado que no subía a caja).
 piladoRouter.post("/services/:id/settle", asyncRoute(async (req, res) => {
-  const body = z.object({ amount: z.number().positive().optional() }).parse(req.body);
+  const body = z.object({
+    amount: z.number().positive().optional(),
+    cash_register_id: z.string().uuid().optional()
+  }).parse(req.body);
 
   const result = await inTransaction(async (tx) => {
-    const svc = await tx.query("SELECT receivable_id, payable_id FROM pilado_services WHERE id = $1", [req.params.id]);
+    const svc = await tx.query(
+      `SELECT ps.receivable_id, ps.provider_accionista_id,
+              COALESCE(a.name, ps.client_name, 'Cliente') AS cliente
+       FROM pilado_services ps
+       LEFT JOIN accionistas a ON a.id = ps.client_accionista_id
+       WHERE ps.id = $1`,
+      [req.params.id]
+    );
     if (!svc.rowCount) throw new ApiError(404, "Servicio no encontrado");
-    const { receivable_id, payable_id } = svc.rows[0];
+    const { receivable_id, provider_accionista_id, cliente } = svc.rows[0];
 
     // La cuenta por cobrar de CEYRO existe siempre; es la fuente del saldo.
     const ar = await tx.query("SELECT balance FROM accounts_receivable WHERE id = $1 FOR UPDATE", [receivable_id]);
@@ -141,10 +157,40 @@ piladoRouter.post("/services/:id/settle", asyncRoute(async (req, res) => {
     const newStatus = newBalance < 0.01 ? "PAID" : "PARTIAL";
 
     await tx.query("UPDATE accounts_receivable SET balance = $2, status = $3 WHERE id = $1", [receivable_id, newBalance, newStatus]);
-    if (payable_id) {
-      await tx.query("UPDATE accounts_payable SET balance = $2, status = $3 WHERE id = $1", [payable_id, newBalance, newStatus]);
+
+    // INGRESO en la caja de CEYRO (quien cobra): la indicada, o su caja abierta.
+    let cajaId: string | null = body.cash_register_id ?? null;
+    if (!cajaId) {
+      const caja = await tx.query(
+        `SELECT id FROM cash_registers
+         WHERE accionista_id = $1 AND status = 'OPEN'
+         ORDER BY (tipo = 'EFECTIVO') DESC, opened_at DESC
+         LIMIT 1`,
+        [provider_accionista_id]
+      );
+      cajaId = caja.rows[0]?.id ?? null;
     }
-    return { paid: pay, remaining: newBalance, status: newStatus };
+    let cajaRegistrada = false;
+    if (cajaId) {
+      await tx.query(
+        `INSERT INTO cash_movements
+         (cash_register_id, movement, category, reference_type, reference_id, amount, description)
+         VALUES ($1, 'INCOME', 'COBRO_SERVICIO_PILADO', 'accounts_receivable', $2, $3, $4)`,
+        [cajaId, receivable_id, pay, `Cobro servicio de pilado a ${cliente}`]
+      );
+      cajaRegistrada = true;
+    }
+
+    // Espejo: si el cliente es accionista, baja su POR PAGAR y saca la plata de
+    // su caja (EXPENSE). Para cliente externo no hay contraparte (devuelve null).
+    const espejo = await espejarAbonoEnContraparte(tx, {
+      desde: "receivable",
+      cuentaId: String(receivable_id),
+      monto: pay,
+      descripcion: "Pago de servicio de pilado a CEYRO"
+    });
+
+    return { paid: pay, remaining: newBalance, status: newStatus, caja_registrada: cajaRegistrada, espejo };
   });
 
   res.json(result);
