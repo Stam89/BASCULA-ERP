@@ -6,6 +6,7 @@ import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
+import { repartirPorPeso } from "../../utils/money.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import {
   createLotProcessReport,
@@ -247,20 +248,15 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
       ]
     );
 
-    // Reparto proporcional por QQ. El último secado se lleva el residuo del
-    // redondeo para que la suma de las partes sea exactamente el total.
-    const partes: Array<{ id: string; qq: number; gas: number; diesel: number }> = [];
-    let gasAsignado = 0;
-    let dieselAsignado = 0;
-    reports.rows.forEach((r, i) => {
-      const qq = Number(r.total_quintals);
-      const esUltimo = i === reports.rows.length - 1;
-      const gas = esUltimo ? round2(c.costoTotal - gasAsignado) : round2(c.costoTotal * (qq / totalQq));
-      const diesel = esUltimo ? round2(c.dieselCosto - dieselAsignado) : round2(c.dieselCosto * (qq / totalQq));
-      gasAsignado = round2(gasAsignado + gas);
-      dieselAsignado = round2(dieselAsignado + diesel);
-      partes.push({ id: r.id, qq, gas, diesel });
-    });
+    // Reparto proporcional por QQ (el último secado se lleva el residuo del
+    // redondeo para que la suma sea exacta). La lógica vive en utils/money.ts y
+    // está cubierta por tests: repartirPorPeso.
+    const pesos = reports.rows.map((r) => Number(r.total_quintals));
+    const gasPartes = repartirPorPeso(c.costoTotal, pesos);
+    const dieselPartes = repartirPorPeso(c.dieselCosto, pesos);
+    const partes = reports.rows.map((r, i) => ({
+      id: r.id, qq: pesos[i], gas: gasPartes[i], diesel: dieselPartes[i]
+    }));
 
     for (const parte of partes) {
       // Se ACUMULA (no se pisa): un mismo secado puede recibir varios llenados
