@@ -2062,7 +2062,9 @@ export function App() {
   async function submitStartBatch(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!selectionForm.provider_id) { addToast("Elige la persona externa que hace el servicio", "error"); return; }
-    if (!selectionForm.warehouse_id) { addToast("Elige la bodega de donde sale", "error"); return; }
+    // Siempre sale de la bodega de producto terminado.
+    const warehouseId = finishedWarehouse?.id;
+    if (!warehouseId) { addToast("No hay bodega de producto terminado configurada", "error"); return; }
     const inputs = selectionForm.inputs
       .filter((l) => l.product_id && Number(l.quantity) > 0)
       .map((l) => ({ product_id: l.product_id, quantity: Number(l.quantity) }));
@@ -2072,7 +2074,7 @@ export function App() {
     await apiPost("/selection/batches", {
       provider_id: selectionForm.provider_id,
       service_type: selectionForm.service_type,
-      warehouse_id: selectionForm.warehouse_id,
+      warehouse_id: warehouseId,
       rate_per_qq: rate,
       service_date: selectionForm.service_date,
       notes: selectionForm.notes.trim() || undefined,
@@ -7696,6 +7698,14 @@ export function App() {
           const selectableProducts = products
             .filter((p) => ["FINISHED_GOOD", "BYPRODUCT"].includes(p.product_type) && p.is_active !== false)
             .sort((a, b) => a.name.localeCompare(b.name));
+          // Reglas del negocio: sale 0.11, corriente, arrocillo 3/4 y fino; regresa
+          // lo mismo (el 0.11 o corriente que se envió, los arrocillos) más el rechazo.
+          const INPUT_CODES = ["ARROZ-PILADO-011", "ARROZ-PILADO-CORRIENTE", "ARROCILLO-34", "ARROCILLO-FINO"];
+          const OUTPUT_CODES = [...INPUT_CODES, "RECHAZO"];
+          const inputProducts = selectableProducts.filter((p) => INPUT_CODES.includes(p.code));
+          const outputProducts = selectableProducts.filter((p) => OUTPUT_CODES.includes(p.code));
+          // Siempre sale de la bodega de producto terminado.
+          const sourceWarehouseId = finishedWarehouse?.id ?? "";
           const availableFor = (pid: string, wid: string) =>
             stock.filter((r) => r.product_id === pid && r.warehouse_id === wid).reduce((s, r) => s + Number(r.quantity), 0);
           const defaultRate = selectionForm.service_type === "ENVEJECIMIENTO" ? selectionRates.envejecimiento_rate : selectionRates.seleccion_rate;
@@ -7738,22 +7748,18 @@ export function App() {
                 </select>
               </label>
               <label><span>Bodega de donde sale</span>
-                <select value={selectionForm.warehouse_id} onChange={(e) => setSelectionForm({ ...selectionForm, warehouse_id: e.target.value })}>
-                  <option value="">Seleccione</option>
-                  {warehouses.filter((w) => w.type === "FINISHED_GOODS").map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
-                  {warehouses.filter((w) => w.type !== "FINISHED_GOODS").map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
-                </select>
+                <input type="text" readOnly value={finishedWarehouse?.name ?? "Bodega Producto Terminado"} style={{ background: "#f3f4f6", color: "var(--c-muted)" }} />
               </label>
 
               <div style={{ marginTop: 6 }}>
                 <span style={{ fontSize: 13, fontWeight: 700 }}>Productos que salen a selectar</span>
                 {selectionForm.inputs.map((line, i) => {
-                  const disp = line.product_id && selectionForm.warehouse_id ? availableFor(line.product_id, selectionForm.warehouse_id) : null;
+                  const disp = line.product_id && sourceWarehouseId ? availableFor(line.product_id, sourceWarehouseId) : null;
                   return (
                     <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 90px auto", gap: 6, alignItems: "center", marginTop: 6 }}>
                       <select value={line.product_id} onChange={(e) => setInputLine(i, { product_id: e.target.value })} style={inputStyle}>
                         <option value="">Producto…</option>
-                        {selectableProducts.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        {inputProducts.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                       </select>
                       <input type="number" step="0.01" min="0" placeholder="QQ" value={line.quantity} onChange={(e) => setInputLine(i, { quantity: e.target.value })} style={inputStyle} />
                       <button type="button" onClick={() => removeInputLine(i)} title="Quitar" style={{ border: "none", background: "transparent", color: "#dc2626", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
@@ -7812,7 +7818,7 @@ export function App() {
                             <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 80px auto auto", gap: 6, alignItems: "center", marginTop: 6 }}>
                               <select value={line.product_id} onChange={(e) => setOutLine(i, { product_id: e.target.value })} style={inputStyle}>
                                 <option value="">Producto…</option>
-                                {selectableProducts.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                {outputProducts.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                               </select>
                               <input type="number" step="0.01" min="0" placeholder="QQ" value={line.quantity} onChange={(e) => setOutLine(i, { quantity: e.target.value })} style={inputStyle} />
                               <label style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 3 }} title="Marca si es el rechazo">
