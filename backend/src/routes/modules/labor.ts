@@ -63,6 +63,10 @@ export function ensureLaborTables(): Promise<void> {
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )`);
       await pool.query(`CREATE INDEX IF NOT EXISTS idx_worker_advances_date ON worker_advances (advance_date DESC)`);
+      // El estibador cobra por TULAS: $ por cada 3 tulas (proporcional). Las
+      // tulas se pesan y de ahí sale el QQ que va a producto terminado.
+      await pool.query(`ALTER TABLE labor_rates ADD COLUMN IF NOT EXISTS estibador_por_3tulas NUMERIC(10,4) NOT NULL DEFAULT 5`);
+      await pool.query(`ALTER TABLE worker_payments ADD COLUMN IF NOT EXISTS tulas NUMERIC(14,3) NOT NULL DEFAULT 0`);
       // Fila única de tarifas por defecto.
       await pool.query(`INSERT INTO labor_rates (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
     })();
@@ -76,6 +80,7 @@ export type LaborRates = {
   estibador_per_qq: number;
   estibador_per_saca: number;
   estibador_per_arrocillo: number;
+  estibador_por_3tulas: number;
   secador_guardiania: number;
   secador_per_tunel: number;
   precio_gas_bombona: number;
@@ -96,6 +101,7 @@ async function getRates(db: Queryable = pool): Promise<LaborRates> {
     estibador_per_qq: Number(row.estibador_per_qq),
     estibador_per_saca: Number(row.estibador_per_saca),
     estibador_per_arrocillo: Number(row.estibador_per_arrocillo),
+    estibador_por_3tulas: Number(row.estibador_por_3tulas ?? 5),
     secador_guardiania: Number(row.secador_guardiania),
     secador_per_tunel: Number(row.secador_per_tunel),
     precio_gas_bombona: Number(row.precio_gas_bombona ?? 0),
@@ -118,6 +124,7 @@ export async function createProductionWorkerPayments(
     qq: number;
     sacas: number;
     arrocillo: number;
+    tulas?: number;
     createdBy?: string | null;
   }
 ): Promise<void> {
@@ -127,6 +134,7 @@ export async function createProductionWorkerPayments(
     const qq = Number(opts.qq) || 0;
     const sacas = Number(opts.sacas) || 0;
     const arrocillo = Number(opts.arrocillo) || 0;
+    const tulas = Number(opts.tulas) || 0;
 
     const rows: Array<{ role: string; name: string; base: number }> = [];
     if (opts.piladorName && opts.piladorName.trim()) {
@@ -137,19 +145,20 @@ export async function createProductionWorkerPayments(
       });
     }
     if (opts.estibadorName && opts.estibadorName.trim()) {
+      // El estibador cobra por tulas: $ por cada 3 tulas, proporcional.
       rows.push({
         role: "ESTIBADOR",
         name: opts.estibadorName.trim(),
-        base: round2(qq * rates.estibador_per_qq + sacas * rates.estibador_per_saca + arrocillo * rates.estibador_per_arrocillo)
+        base: round2((tulas / 3) * rates.estibador_por_3tulas)
       });
     }
 
     for (const r of rows) {
       await client.query(
         `INSERT INTO worker_payments
-           (worker_role, worker_name, reference_type, reference_id, qq, sacas, arrocillo, base_amount, net_amount, created_by)
-         VALUES ($1, $2, 'processing_batch', $3, $4, $5, $6, $7, $7, $8)`,
-        [r.role, r.name, opts.batchId, qq, sacas, arrocillo, r.base, opts.createdBy ?? null]
+           (worker_role, worker_name, reference_type, reference_id, qq, sacas, arrocillo, tulas, base_amount, net_amount, created_by)
+         VALUES ($1, $2, 'processing_batch', $3, $4, $5, $6, $7, $8, $8, $9)`,
+        [r.role, r.name, opts.batchId, qq, sacas, arrocillo, tulas, r.base, opts.createdBy ?? null]
       );
     }
   } catch {
@@ -171,6 +180,7 @@ laborRouter.put("/rates", requireAdmin, asyncRoute(async (req, res) => {
     estibador_per_qq: z.number().nonnegative(),
     estibador_per_saca: z.number().nonnegative(),
     estibador_per_arrocillo: z.number().nonnegative(),
+    estibador_por_3tulas: z.number().nonnegative().default(5),
     secador_guardiania: z.number().nonnegative(),
     secador_per_tunel: z.number().nonnegative(),
     precio_gas_bombona: z.number().nonnegative().default(0),
@@ -183,11 +193,12 @@ laborRouter.put("/rates", requireAdmin, asyncRoute(async (req, res) => {
        pilador_per_qq = $1, pilador_per_saca = $2,
        estibador_per_qq = $3, estibador_per_saca = $4, estibador_per_arrocillo = $5,
        secador_guardiania = $6, secador_per_tunel = $7,
-       precio_gas_bombona = $8, precio_gas_cilindro = $9, precio_diesel = $10, updated_at = now()
+       precio_gas_bombona = $8, precio_gas_cilindro = $9, precio_diesel = $10,
+       estibador_por_3tulas = $11, updated_at = now()
      WHERE id = 1`,
     [body.pilador_per_qq, body.pilador_per_saca, body.estibador_per_qq, body.estibador_per_saca,
      body.estibador_per_arrocillo, body.secador_guardiania, body.secador_per_tunel,
-     body.precio_gas_bombona, body.precio_gas_cilindro, body.precio_diesel]
+     body.precio_gas_bombona, body.precio_gas_cilindro, body.precio_diesel, body.estibador_por_3tulas]
   );
   res.json(await getRates());
 }));
