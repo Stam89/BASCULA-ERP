@@ -435,15 +435,17 @@ laborRouter.get("/secador-suggestions", asyncRoute(async (req, res) => {
               WHERE wp.worker_role = 'SECADOR' AND wp.worker_name = sub.worker_name AND wp.work_date = sub.work_date
             ) AS already_generated
      FROM (
-       -- El día de trabajo del secador es la fecha de llenado del túnel.
-       SELECT COALESCE(NULLIF(TRIM(dryer_name), ''), 'Sin secador') AS worker_name,
+       -- La guardianía es UNA por DÍA (el secador cuida la planta esa noche, sin
+       -- importar cuántas secadoras). Por eso se agrupa por día, no por secadora:
+       -- guardianía una vez + $5 por cada túnel secado ese día.
+       SELECT 'Secador' AS worker_name,
               COALESCE(filled_at, dry_start_at::date, created_at::date) AS work_date,
               COUNT(DISTINCT tunnel_number)::int AS tunnels
        FROM drying_tunnel_reports
        WHERE COALESCE(filled_at, dry_start_at::date, created_at::date) BETWEEN $1 AND $2
-       GROUP BY 1, 2
+       GROUP BY 2
      ) sub
-     ORDER BY sub.work_date DESC, sub.worker_name`,
+     ORDER BY sub.work_date DESC`,
     [from, to]
   ).catch(() => ({ rows: [] as Array<{ worker_name: string; work_date: string; tunnels: number; already_generated: boolean }> }));
 
