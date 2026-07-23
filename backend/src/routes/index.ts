@@ -46,8 +46,10 @@ routes.use("/tickets", mobileTicketsRouter);
 // Todo lo demás requiere sesión (Bearer token). Las escrituras además
 // exigen permiso del módulo correspondiente (los administradores no tienen límite).
 routes.use(requireAuth);
-routes.use(enforceModulePermissions);
+// Resolver el accionista ANTES de validar permisos: los permisos ahora son por
+// accionista, así que la validación necesita saber cuál está activo.
 routes.use(resolveAccionista);
+routes.use(enforceModulePermissions);
 
 routes.use("/dashboard", dashboardRouter);
 routes.use("/process-flow", processFlowRouter);
