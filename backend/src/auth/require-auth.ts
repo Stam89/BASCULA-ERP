@@ -77,7 +77,7 @@ export async function enforceModulePermissions(req: Request, _res: Response, nex
 
   try {
     const fresh = await pool.query(
-      `SELECT u.is_active, u.allowed_modules, r.name AS role_name
+      `SELECT u.is_active, r.name AS role_name
        FROM users u
        LEFT JOIN roles r ON r.id = u.role_id
        WHERE u.id = $1`,
@@ -87,10 +87,7 @@ export async function enforceModulePermissions(req: Request, _res: Response, nex
       next(new ApiError(401, "Tu usuario fue desactivado. Habla con un administrador."));
       return;
     }
-
-    // Mantener la request con los datos frescos para lo que venga después.
     user.role_name = fresh.rows[0].role_name;
-    user.allowed_modules = fresh.rows[0].allowed_modules ?? [];
 
     if (user.role_name === "ADMINISTRADOR") {
       next();
@@ -102,12 +99,19 @@ export async function enforceModulePermissions(req: Request, _res: Response, nex
       next();
       return;
     }
-    const allowed = user.allowed_modules ?? [];
+    // Permisos POR ACCIONISTA: se leen los módulos del vínculo (operador,
+    // accionista activo). resolveAccionista ya corrió y dejó req.accionistaId.
+    const accionistaId = (req as AuthenticatedRequest).accionistaId;
+    const perm = await pool.query(
+      "SELECT allowed_modules FROM user_accionistas WHERE user_id = $1 AND accionista_id = $2",
+      [user.id, accionistaId ?? null]
+    );
+    const allowed: string[] = perm.rows[0]?.allowed_modules ?? [];
     if (requiredModules.some((module) => allowed.includes(module))) {
       next();
       return;
     }
-    next(new ApiError(403, `Tu usuario no tiene permiso para registrar cambios en ${requiredModules[0]}. Pide acceso a un administrador.`));
+    next(new ApiError(403, `Tu usuario no tiene permiso para registrar cambios en ${requiredModules[0]} en este accionista. Pide acceso a un administrador.`));
   } catch (err) {
     next(err);
   }

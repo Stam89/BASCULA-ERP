@@ -9,24 +9,28 @@ import { APP_MODULES, requireAdmin, requireAuth, type AuthenticatedRequest } fro
 
 export const authRouter = Router();
 
-type Accionista = { id: string; name: string; code: string; puede_envejecer: boolean };
+type Accionista = { id: string; name: string; code: string; puede_envejecer: boolean; allowed_modules: string[] };
 
-// Accionistas a los que puede acceder el usuario: todos si es administrador,
-// solo los asignados en user_accionistas si no.
+// Accionistas a los que puede acceder el usuario, CON los módulos permitidos en
+// cada uno (permisos por accionista). El administrador accede a todos con todos
+// los módulos; el operador, solo a los asignados y con SUS módulos por accionista.
 async function accionistasForUser(userId: string, roleName: string | null): Promise<Accionista[]> {
-  const result = roleName === "ADMINISTRADOR"
-    ? await pool.query<Accionista>(
+  if (roleName === "ADMINISTRADOR") {
+    const r = await pool.query<Omit<Accionista, "allowed_modules">>(
       "SELECT id, name, code, puede_envejecer FROM accionistas WHERE is_active = true ORDER BY name"
-    )
-    : await pool.query<Accionista>(
-      `SELECT a.id, a.name, a.code, a.puede_envejecer
-       FROM accionistas a
-       JOIN user_accionistas ua ON ua.accionista_id = a.id
-       WHERE ua.user_id = $1 AND a.is_active = true
-       ORDER BY a.name`,
-      [userId]
     );
-  return result.rows;
+    return r.rows.map((a) => ({ ...a, allowed_modules: [...APP_MODULES] }));
+  }
+  const r = await pool.query<Accionista>(
+    `SELECT a.id, a.name, a.code, a.puede_envejecer,
+            COALESCE(ua.allowed_modules, '{}') AS allowed_modules
+     FROM accionistas a
+     JOIN user_accionistas ua ON ua.accionista_id = a.id
+     WHERE ua.user_id = $1 AND a.is_active = true
+     ORDER BY a.name`,
+    [userId]
+  );
+  return r.rows;
 }
 
 const moduleSchema = z.array(z.enum(APP_MODULES)).default([]);
@@ -50,7 +54,12 @@ authRouter.get("/users", requireAuth, requireAdmin, asyncRoute(async (_req, res)
   await ensureUserColumns();
   const result = await pool.query(
     `SELECT u.id, u.name, u.username, u.is_active, u.created_at, u.allowed_modules, r.name AS role_name,
-            COALESCE(array_agg(ua.accionista_id) FILTER (WHERE ua.accionista_id IS NOT NULL), '{}') AS accionista_ids
+            COALESCE(array_agg(ua.accionista_id) FILTER (WHERE ua.accionista_id IS NOT NULL), '{}') AS accionista_ids,
+            COALESCE(
+              json_agg(json_build_object('accionista_id', ua.accionista_id, 'modules', ua.allowed_modules))
+                FILTER (WHERE ua.accionista_id IS NOT NULL),
+              '[]'
+            ) AS accionista_modules
      FROM users u
      LEFT JOIN roles r ON r.id = u.role_id
      LEFT JOIN user_accionistas ua ON ua.user_id = u.id
@@ -202,18 +211,31 @@ authRouter.put("/accionistas/:id", requireAuth, requireAdmin, asyncRoute(async (
   res.json(result.rows[0]);
 }));
 
-// Reemplaza la lista de accionistas a los que tiene acceso un usuario.
+// Reemplaza los accionistas de un usuario Y los módulos que puede usar en cada
+// uno. Formato nuevo: { accionistas: [{ accionista_id, modules: [...] }] }.
+// Compatibilidad: acepta también el viejo { accionista_ids } (sin módulos).
 authRouter.put("/users/:id/accionistas", requireAuth, requireAdmin, asyncRoute(async (req, res) => {
-  const body = z.object({ accionista_ids: z.array(z.string().uuid()) }).parse(req.body);
+  const body = z.object({
+    accionistas: z.array(z.object({
+      accionista_id: z.string().uuid(),
+      modules: moduleSchema
+    })).optional(),
+    accionista_ids: z.array(z.string().uuid()).optional()
+  }).parse(req.body);
 
   const user = await pool.query("SELECT 1 FROM users WHERE id = $1", [req.params.id]);
   if (!user.rowCount) throw new ApiError(404, "Usuario no encontrado");
 
+  const asignaciones = body.accionistas
+    ?? (body.accionista_ids ?? []).map((id) => ({ accionista_id: id, modules: [] as string[] }));
+
   await pool.query("DELETE FROM user_accionistas WHERE user_id = $1", [req.params.id]);
-  for (const accionistaId of body.accionista_ids) {
+  for (const a of asignaciones) {
     await pool.query(
-      "INSERT INTO user_accionistas (user_id, accionista_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-      [req.params.id, accionistaId]
+      `INSERT INTO user_accionistas (user_id, accionista_id, allowed_modules)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_id, accionista_id) DO UPDATE SET allowed_modules = EXCLUDED.allowed_modules`,
+      [req.params.id, a.accionista_id, a.modules]
     );
   }
   res.status(204).end();
