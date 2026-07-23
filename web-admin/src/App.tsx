@@ -36,7 +36,7 @@ type AuthUser = {
   allowed_modules?: string[] | null;
 };
 
-type Accionista = { id: string; name: string; code: string; puede_envejecer?: boolean };
+type Accionista = { id: string; name: string; code: string; puede_envejecer?: boolean; allowed_modules?: string[] };
 
 // Selección / envejecido de producto terminado (persona externa), por lotes.
 type ExternalProvider = { id: string; name: string; identification: string | null; phone: string | null };
@@ -102,6 +102,8 @@ type AdminUser = {
   role_name: string | null;
   allowed_modules: string[] | null;
   accionista_ids?: string[] | null;
+  /** Módulos permitidos por accionista (permisos individuales por accionista). */
+  accionista_modules?: Array<{ accionista_id: string; modules: string[] }> | null;
 };
 
 type AdminAccionista = { id: string; name: string; code: string; is_active: boolean; puede_envejecer?: boolean };
@@ -1093,7 +1095,7 @@ export function App() {
   const [permsEditor, setPermsEditor] = useState<{ user: AdminUser; modules: string[] } | null>(null);
   const [adminAccionistas, setAdminAccionistas] = useState<AdminAccionista[]>([]);
   const [newAccionistaForm, setNewAccionistaForm] = useState({ name: "", code: "" });
-  const [accionistaEditor, setAccionistaEditor] = useState<{ user: AdminUser; ids: string[] } | null>(null);
+  const [accionistaEditor, setAccionistaEditor] = useState<{ user: AdminUser; items: Array<{ accionista_id: string; access: boolean; modules: string[] }> } | null>(null);
   const [renameAccionista, setRenameAccionista] = useState<{ id: string; name: string; code: string } | null>(null);
   const [resetForm, setResetForm] = useState({ password: "", confirm: "" });
   const [backupInfo, setBackupInfo] = useState<{ directory: string; backups: Array<{ name: string; size_kb: number; created_at: string }> } | null>(null);
@@ -1764,10 +1766,13 @@ export function App() {
     // CEYRO es la piladora: la nómina y la cuadrilla las paga él, y el servicio
     // de pilado es un ingreso suyo. Esas pestañas no tienen sentido en otro socio.
     const soloCeyro = new Set(["Nomina", "Cuadrilla", "Servicio Pilado"]);
+    // Permisos POR ACCIONISTA: los módulos permitidos dependen del accionista
+    // activo, no de un set global. Al cambiar de accionista cambian las pestañas.
+    const activeAcc = accionistas.find((a) => a.id === activeAccionistaId);
+    const allowed = new Set(activeAcc?.allowed_modules ?? []);
     const base = isAdmin
       ? tabs
       : tabs.filter((tab) => {
-          const allowed = new Set(authUser.allowed_modules ?? []);
           if (tab === "Dashboard") return true;
           if (tab === "Configuracion" || tab === "Reportes") return false;
           if (tab === "Por Cobrar" || tab === "Por Pagar") return allowed.has("Caja") || allowed.has("Ventas");
@@ -1778,7 +1783,7 @@ export function App() {
           return allowed.has(tab);
         });
     return base.filter((tab) => !soloCeyro.has(tab) || esCeyroActivo);
-  }, [authUser, isAdmin, esCeyroActivo]);
+  }, [authUser, isAdmin, esCeyroActivo, accionistas, activeAccionistaId]);
 
   useEffect(() => {
     if (authUser && !visibleTabs.includes(activeTab)) {
@@ -1828,7 +1833,10 @@ export function App() {
 
   async function saveUserAccionistas() {
     if (!accionistaEditor) return;
-    await apiPut(`/auth/users/${accionistaEditor.user.id}/accionistas`, { accionista_ids: accionistaEditor.ids });
+    const accionistas = accionistaEditor.items
+      .filter((it) => it.access)
+      .map((it) => ({ accionista_id: it.accionista_id, modules: it.modules }));
+    await apiPut(`/auth/users/${accionistaEditor.user.id}/accionistas`, { accionistas });
     addToast(`Accionistas de ${accionistaEditor.user.username} actualizados`, "success");
     setAccionistaEditor(null);
     await refreshConfig();
@@ -8790,11 +8798,10 @@ export function App() {
                             <td>
                               {u.role_name === "ADMINISTRADOR" ? (
                                 <span className="chip info">Acceso total</span>
-                              ) : (
-                                <span className="muted">
-                                  {(u.allowed_modules ?? []).length > 0 ? (u.allowed_modules ?? []).join(", ") : "Sin módulos"}
-                                </span>
-                              )}
+                              ) : (() => {
+                                const conMod = (u.accionista_modules ?? []).filter((x) => (x.modules ?? []).length > 0).length;
+                                return <span className="muted">{conMod > 0 ? `${conMod} accionista(s) con permisos` : "Sin permisos"}</span>;
+                              })()}
                             </td>
                             <td>
                               <span className={u.is_active ? "chip ok" : "chip bad"}>
@@ -8806,19 +8813,19 @@ export function App() {
                                 <button
                                   type="button"
                                   className="btnGhost"
-                                  onClick={() => setPermsEditor({ user: u, modules: [...(u.allowed_modules ?? [])] })}
+                                  onClick={() => {
+                                    const byAcc = new Map((u.accionista_modules ?? []).map((x) => [x.accionista_id, x.modules ?? []]));
+                                    setAccionistaEditor({
+                                      user: u,
+                                      items: adminAccionistas.map((a) => ({
+                                        accionista_id: a.id,
+                                        access: byAcc.has(a.id),
+                                        modules: byAcc.get(a.id) ?? []
+                                      }))
+                                    });
+                                  }}
                                 >
-                                  Permisos
-                                </button>
-                              )}
-                              {u.role_name !== "ADMINISTRADOR" && (
-                                <button
-                                  type="button"
-                                  className="btnGhost"
-                                  style={{ marginLeft: 6 }}
-                                  onClick={() => setAccionistaEditor({ user: u, ids: [...(u.accionista_ids ?? [])] })}
-                                >
-                                  Accionistas
+                                  Accionistas y permisos
                                 </button>
                               )}
                               {u.id !== authUser.id && (
@@ -8876,36 +8883,46 @@ export function App() {
 
                 {accionistaEditor && (
                   <div className="modalOverlay" onClick={() => setAccionistaEditor(null)}>
-                    <div className="modalCard" onClick={(e) => e.stopPropagation()}>
-                      <h3>Accionistas de {accionistaEditor.user.name}</h3>
-                      <p className="muted">Marca a qué accionistas puede acceder este usuario. Si marcas más de uno, verá un selector para cambiar entre ellos.</p>
-                      {adminAccionistas.length === 0 ? (
+                    <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 580 }}>
+                      <h3>Accionistas y permisos de {accionistaEditor.user.name}</h3>
+                      <p className="muted">Por cada accionista, marca el acceso y qué módulos puede usar <strong>ahí</strong>. Los permisos son independientes por accionista.</p>
+                      {accionistaEditor.items.length === 0 ? (
                         <p className="muted">Aún no hay accionistas. Créalos en la pestaña «Accionistas».</p>
                       ) : (
-                        <div className="permGrid">
-                          {adminAccionistas.map((a) => (
-                            <label key={a.id} className={accionistaEditor.ids.includes(a.id) ? "permChip on" : "permChip"}>
-                              <input
-                                type="checkbox"
-                                checked={accionistaEditor.ids.includes(a.id)}
-                                onChange={() =>
-                                  setAccionistaEditor({
-                                    ...accionistaEditor,
-                                    ids: accionistaEditor.ids.includes(a.id)
-                                      ? accionistaEditor.ids.filter((x) => x !== a.id)
-                                      : [...accionistaEditor.ids, a.id]
-                                  })
-                                }
-                              />
-                              {a.name}
-                            </label>
-                          ))}
+                        <div style={{ display: "grid", gap: 10, maxHeight: "55vh", overflowY: "auto" }}>
+                          {accionistaEditor.items.map((it, idx) => {
+                            const acc = adminAccionistas.find((a) => a.id === it.accionista_id);
+                            const setItem = (patch: Partial<{ access: boolean; modules: string[] }>) =>
+                              setAccionistaEditor((ed) => ed && ({ ...ed, items: ed.items.map((x, i) => (i === idx ? { ...x, ...patch } : x)) }));
+                            return (
+                              <div key={it.accionista_id} style={{ border: "1px solid var(--c-border)", borderRadius: 8, padding: "8px 10px", background: it.access ? "#f0fdf4" : undefined }}>
+                                <label style={{ fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
+                                  <input type="checkbox" checked={it.access} onChange={(e) => setItem({ access: e.target.checked })} />
+                                  {acc?.name ?? it.accionista_id}
+                                </label>
+                                {it.access && (
+                                  <div className="permGrid" style={{ marginTop: 8 }}>
+                                    {APP_MODULES.map((m) => (
+                                      <label key={m} className={it.modules.includes(m) ? "permChip on" : "permChip"}>
+                                        <input
+                                          type="checkbox"
+                                          checked={it.modules.includes(m)}
+                                          onChange={() => setItem({ modules: it.modules.includes(m) ? it.modules.filter((x) => x !== m) : [...it.modules, m] })}
+                                        />
+                                        {m}
+                                      </label>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
-                      <p className="muted">Nota: si el usuario tiene la sesión abierta, los cambios aplican cuando vuelva a iniciar sesión.</p>
+                      <p className="muted">Nota: los cambios aplican cuando el usuario vuelva a iniciar sesión.</p>
                       <div className="buttonRow">
                         <button type="button" className="primary" onClick={() => saveUserAccionistas().catch((err) => addToast(err.message, "error"))}>
-                          Guardar accionistas
+                          Guardar
                         </button>
                         <button type="button" onClick={() => setAccionistaEditor(null)}>Cancelar</button>
                       </div>
