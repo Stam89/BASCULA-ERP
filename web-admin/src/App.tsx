@@ -7234,6 +7234,7 @@ export function App() {
                     {liqBatches.map((b) => {
                       const paid = b.pending_total === 0;
                       const qqTotal = b.lots.reduce((s, l) => s + l.quintals, 0);
+                      const lotsLabel = b.lots.map((l) => `${l.lot_code ?? "?"} (${l.rice_type ?? "—"})`).join(", ");
                       return (
                         <div key={b.key} className="liqHistRow">
                           <span>{b.farmer_name}</span>
@@ -9579,6 +9580,44 @@ function ControlledNumberInput({
   );
 }
 
+function ProductionQqFields({
+  label,
+  value,
+  onChange
+}: {
+  label: string;
+  value: ProductionPackageState[ProductionPackageKey];
+  onChange: (changes: Partial<ProductionPackageState[ProductionPackageKey]>) => void;
+}) {
+  return (
+    <article className="sackOutputCard">
+      <strong>{label}</strong>
+      <label>
+        <span>QQ</span>
+        <input
+          min="0"
+          step="1"
+          type="number"
+          value={value.qq}
+          onChange={(event) => onChange({ qq: Number(event.target.value || 0) })}
+        />
+      </label>
+      <label>
+        <span>Libras sobrantes</span>
+        <input
+          min="0"
+          max="99.99"
+          step="0.01"
+          type="number"
+          value={value.pounds}
+          onChange={(event) => onChange({ pounds: Number(event.target.value || 0) })}
+        />
+      </label>
+      <small>{qqAndPoundsToQq(value).toFixed(2)} QQ equivalentes</small>
+    </article>
+  );
+}
+
 function Input({
   name,
   label,
@@ -10026,6 +10065,123 @@ Firma: ______________`}</pre>
   );
 }
 
+function ProductionSummary({ result }: { result: ProductionResult | null }) {
+  if (!result) {
+    return (
+      <section className="tablePanel">
+        <h2>Resultado del proceso</h2>
+        <p className="muted">Cierra un pilado para ver merma, rendimiento, producto principal, subproductos y estado de maquila.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="tablePanel">
+      <h2>Resultado del proceso</h2>
+      {result.packagingAlert?.isCritical && (
+        <div className="alertBox">
+          Stock critico: {result.packagingAlert.nombre} quedo en {result.packagingAlert.stockActual.toFixed(0)} unidades.
+        </div>
+      )}
+      <div className="summaryGrid">
+        <Metric title="Entrada cascara" value={`${Number(result.yield.input_paddy_kg).toFixed(2)} kg`} />
+        <Metric title="Arroz blanco" value={`${Number(result.yield.white_rice_qty).toFixed(2)} ${result.yield.white_rice_unit}`} />
+        <Metric title="Arrocillo fino" value={`${Number(result.yield.fine_broken_rice_qty ?? 0).toFixed(2)} ${result.yield.fine_broken_rice_unit ?? "QQ"}`} />
+        <Metric title="Merma" value={`${Number(result.yield.process_loss_kg).toFixed(2)} kg`} />
+        <Metric title="Rendimiento" value={`${Number(result.yield.yield_percent).toFixed(2)}%`} />
+        <Metric title="Modo" value={result.custodyMode ? "Maquila" : "Propio"} />
+      </div>
+      {result.maquila && (
+        <div className="maquilaBox">
+          <strong>Cuenta por cobrar de maquila</strong>
+          <span>{Number(result.maquila.serviceQuantityQq).toFixed(2)} QQ x {money(result.maquila.serviceRatePerQq)} = {money(result.maquila.serviceAmount)}</span>
+          <small>Los productos quedaron en custodia de terceros, no en inventario propio.</small>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ProcessFlowPanel({ flow }: { flow: ProcessFlow | null }) {
+  if (!flow) {
+    return (
+      <section className="tracePanel">
+        <h2>Flujo enlazado del lote</h2>
+        <p className="muted">Selecciona un lote para ver sus informes: Bascula, Secado, Tuneles, Pilado, Rendimiento y Ventas.</p>
+      </section>
+    );
+  }
+
+  const reportsByStage = new Map(flow.reports.map((report) => [report.stage, report]));
+  const tunnelReports = [1, 2, 3].map((tunnel) => flow.reports.find((report) => report.stage === `TUNEL_${tunnel}`));
+
+  return (
+    <section className="tracePanel">
+      <div className="traceHeader">
+        <div>
+          <h2>{flow.lot.lot_code}</h2>
+          <p className="muted">
+            {flow.lot.farmer_name ?? "Sin agricultor"} · {flow.lot.status} · {flow.lot.is_maquila ? "Maquila" : "Propio"}
+          </p>
+        </div>
+        <span className="pill online">{flow.reports.length} informes</span>
+      </div>
+
+      <div className="flowLine">
+        <StageCard title="Bascula" report={reportsByStage.get("BASCULA")} />
+        <span className="flowArrow">→</span>
+        <div className="dryingBranch">
+          <StageCard title="Secado" report={reportsByStage.get("SECADO")} />
+          <div className="tunnelGrid">
+            {tunnelReports.map((report, index) => (
+              <StageCard key={index} title={`Tunel ${index + 1}`} report={report} />
+            ))}
+          </div>
+        </div>
+        <span className="flowArrow">→</span>
+        <StageCard title="Pilado" report={reportsByStage.get("PILADO")} />
+        <span className="flowArrow">→</span>
+        <StageCard title="Rendimiento" report={reportsByStage.get("RENDIMIENTO")} />
+        <span className="flowArrow">→</span>
+        <StageCard title="Ventas" report={reportsByStage.get("VENTA")} />
+      </div>
+
+      <div className="traceTables">
+        <DataList
+          title="Informes del lote"
+          headers={["#", "Etapa", "Informe", "Fecha"]}
+          rows={flow.reports.map((report) => [
+            report.sequence,
+            stageLabel(report.stage),
+            report.report_title,
+            new Date(report.created_at).toLocaleString("es-EC", { dateStyle: "short", timeStyle: "short" })
+          ])}
+        />
+        <DataList
+          title="Túneles registrados"
+          headers={["Túnel", "QQ", "Estado", "Consumo"]}
+          rows={flow.tunnels.map((tunnel) => [
+            `Túnel ${tunnel.tunnel_number}`,
+            `${Number(tunnel.total_quintals ?? 0).toFixed(2)} QQ`,
+            tunnel.status === "COMPLETED" ? "✓ Finalizado" : "En proceso",
+            `Gas ${Number(tunnel.gas_used ?? 0).toFixed(1)} / Diesel ${Number(tunnel.diesel_used ?? 0).toFixed(1)}`
+          ])}
+        />
+      </div>
+    </section>
+  );
+}
+
+function StageCard({ title, report }: { title: string; report?: ProcessReport }) {
+  return (
+    <article className={report ? "stageCard done" : "stageCard"}>
+      <span>{title}</span>
+      <strong>{report ? "Con informe" : "Pendiente"}</strong>
+      {report && <small>#{report.sequence} {report.report_title}</small>}
+    </article>
+  );
+}
+
 function money(value: string | number | null | undefined) {
   return `$${Number(value ?? 0).toFixed(2)}`;
 }
@@ -10217,3 +10373,12 @@ function packagePayload(productId: string, warehouseId: string, item: Production
   };
 }
 
+function stageLabel(stage: string) {
+  return stage
+    .replace("BASCULA", "Bascula")
+    .replace("SECADO", "Secado")
+    .replace("TUNEL_", "Tunel ")
+    .replace("PILADO", "Pilado")
+    .replace("RENDIMIENTO", "Rendimiento")
+    .replace("VENTA", "Venta");
+}
