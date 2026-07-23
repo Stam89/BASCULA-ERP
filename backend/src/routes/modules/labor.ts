@@ -243,6 +243,33 @@ laborRouter.get("/payments", asyncRoute(async (req, res) => {
   res.json(result.rows);
 }));
 
+// Detalle DÍA POR DÍA de un trabajador (para el recibo: qué hizo cada día).
+laborRouter.get("/worker-detail", asyncRoute(async (req, res) => {
+  await ensureLaborTables();
+  const q = z.object({
+    role: z.enum(["PILADOR", "ESTIBADOR", "SECADOR"]),
+    name: z.string().min(1),
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+  }).parse(req.query);
+
+  const result = await pool.query(
+    `SELECT work_date::date AS fecha,
+            COUNT(*)::int AS piladas,
+            SUM(qq)::float AS qq,
+            SUM(sacas)::float AS sacas,
+            SUM(arrocillo)::float AS arrocillo,
+            SUM(tulas)::float AS tulas,
+            SUM(base_amount)::float AS ganado
+     FROM worker_payments
+     WHERE worker_role = $1 AND worker_name = $2 AND work_date BETWEEN $3 AND $4
+     GROUP BY work_date::date
+     ORDER BY work_date::date ASC`,
+    [q.role, q.name, q.from, q.to]
+  );
+  res.json({ rows: result.rows });
+}));
+
 // ── Resumen por trabajador (para el pago semanal) ──────────────────────────
 laborRouter.get("/summary", asyncRoute(async (req, res) => {
   await ensureLaborTables();

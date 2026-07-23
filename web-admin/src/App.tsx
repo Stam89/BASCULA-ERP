@@ -2188,7 +2188,7 @@ export function App() {
       advances: h.advances_applied, to_pay: 0
     };
     const weekEnd = new Date(h.week_start); weekEnd.setDate(weekEnd.getDate() + 6);
-    printWorkerReceipt(row, h.week_start, weekEnd.toISOString().slice(0, 10));
+    printWorkerReceipt(row, h.week_start, weekEnd.toISOString().slice(0, 10)).catch(() => undefined);
   }
 
   function nominaExportData(): { title: string; headers: string[]; rows: (string | number)[][]; totals: (string | number)[] } {
@@ -2211,31 +2211,66 @@ export function App() {
     };
   }
 
-  function printWorkerReceipt(row: WorkerSummary, periodFrom?: string, periodTo?: string) {
+  async function printWorkerReceipt(row: WorkerSummary, periodFrom?: string, periodTo?: string) {
+    // La ventana se abre YA (dentro del click) para que el bloqueador de popups
+    // no la mate; el contenido se escribe después de traer el detalle.
+    const w = window.open("", "_blank", "width=560,height=680");
     const from = periodFrom ?? nominaFrom;
     const to = periodTo ?? nominaTo;
     const earned = row.base_amount;
     const adv = row.advances ?? 0;
     const net = row.pending_amount != null && row.pending_amount > 0 ? (row.to_pay ?? 0) : (row.paid_amount ?? 0);
     const roleLabel = row.worker_role === "PILADOR" ? "Pilador" : row.worker_role === "ESTIBADOR" ? "Estibador" : "Secador";
-    const detailRows = row.worker_role === "SECADOR"
-      ? `<tr><td>Días trabajados</td><td class="r">${row.cnt}</td></tr>`
-      : row.worker_role === "ESTIBADOR"
-      ? `<tr><td>Piladas</td><td class="r">${row.cnt}</td></tr>
-         <tr><td>Tulas</td><td class="r">${Number(row.tulas ?? 0).toFixed(0)}</td></tr>`
-      : `<tr><td>Piladas</td><td class="r">${row.cnt}</td></tr>
-         <tr><td>Quintales de arroz</td><td class="r">${Number(row.qq).toFixed(2)} QQ</td></tr>
-         <tr><td>Sacas (@)</td><td class="r">${Number(row.sacas).toFixed(0)}</td></tr>
-         ${Number(row.arrocillo) > 0 ? `<tr><td>Arrocillo</td><td class="r">${Number(row.arrocillo).toFixed(2)} QQ</td></tr>` : ""}`;
+    const isPilador = row.worker_role === "PILADOR";
+    const isEstibador = row.worker_role === "ESTIBADOR";
+
+    type DailyRow = { fecha: string; piladas: number; qq: number; sacas: number; arrocillo: number; tulas: number; ganado: number };
+    const detail = await apiGet<{ rows: DailyRow[] }>(
+      `/labor/worker-detail?role=${row.worker_role}&name=${encodeURIComponent(row.worker_name)}&from=${from}&to=${to}`
+    ).catch(() => ({ rows: [] as DailyRow[] }));
+
+    const fmtFecha = (f: string) => { const [y, m, d] = String(f).slice(0, 10).split("-"); return `${d}/${m}/${y}`; };
+    // Tabla día por día, con columnas según el rol.
+    let detalleDiario = "";
+    if (detail.rows.length > 0) {
+      const head = isEstibador
+        ? `<td>Fecha</td><td class="r">Piladas</td><td class="r">Tulas</td><td class="r">Ganado</td>`
+        : isPilador
+        ? `<td>Fecha</td><td class="r">Piladas</td><td class="r">QQ</td><td class="r">Ganado</td>`
+        : `<td>Fecha</td><td class="r">Ganado</td>`;
+      const fila = (d: DailyRow) => isEstibador
+        ? `<td>${fmtFecha(d.fecha)}</td><td class="r">${d.piladas}</td><td class="r">${Number(d.tulas).toFixed(0)}</td><td class="r">$${Number(d.ganado).toFixed(2)}</td>`
+        : isPilador
+        ? `<td>${fmtFecha(d.fecha)}</td><td class="r">${d.piladas}</td><td class="r">${Number(d.qq).toFixed(2)}</td><td class="r">$${Number(d.ganado).toFixed(2)}</td>`
+        : `<td>${fmtFecha(d.fecha)}</td><td class="r">$${Number(d.ganado).toFixed(2)}</td>`;
+      const colspan = isEstibador || isPilador ? 3 : 1;
+      detalleDiario = `<h4>Detalle por día</h4>
+        <table>
+          <tr class="th">${head}</tr>
+          ${detail.rows.map((d) => `<tr>${fila(d)}</tr>`).join("")}
+          <tr class="tot"><td colspan="${colspan}">Total</td><td class="r">$${detail.rows.reduce((s, d) => s + Number(d.ganado), 0).toFixed(2)}</td></tr>
+        </table>`;
+    } else {
+      // Sin detalle: se muestra el resumen agregado como antes.
+      const resumen = row.worker_role === "SECADOR"
+        ? `<tr><td>Días trabajados</td><td class="r">${row.cnt}</td></tr>`
+        : isEstibador
+        ? `<tr><td>Piladas</td><td class="r">${row.cnt}</td></tr><tr><td>Tulas</td><td class="r">${Number(row.tulas ?? 0).toFixed(0)}</td></tr>`
+        : `<tr><td>Piladas</td><td class="r">${row.cnt}</td></tr><tr><td>Quintales de arroz</td><td class="r">${Number(row.qq).toFixed(2)} QQ</td></tr><tr><td>Sacas (@)</td><td class="r">${Number(row.sacas).toFixed(0)}</td></tr>`;
+      detalleDiario = `<table>${resumen}</table>`;
+    }
+
     const html = `<html><head><meta charset="utf-8"><title>Recibo ${row.worker_name}</title><style>
       body{font-family:Arial,sans-serif;font-size:13px;margin:16mm;max-width:520px}
       h1{font-size:18px;margin:0 0 2px;text-align:center}
       h2{font-size:12px;font-weight:normal;margin:0;text-align:center;color:#555}
       h3{font-size:15px;margin:16px 0 4px;text-align:center;text-transform:uppercase;letter-spacing:1px}
+      h4{font-size:12px;margin:16px 0 2px;text-transform:uppercase;letter-spacing:1px;color:#333}
       .meta{display:flex;justify-content:space-between;margin:10px 0;font-size:12px}
       table{width:100%;border-collapse:collapse;margin-top:8px}
       td{padding:5px 8px;border-bottom:1px solid #eee}
       td.r{text-align:right;font-variant-numeric:tabular-nums}
+      .th td{font-weight:bold;background:#f3f4f6;border-bottom:1px solid #ccc}
       .tot td{border-top:2px solid #111;font-weight:bold;font-size:15px;padding-top:8px}
       .disc td{color:#b91c1c}
       .sig{margin-top:48px;text-align:center}
@@ -2246,15 +2281,14 @@ export function App() {
       <h2>${[appSettings.business_subtitle, appSettings.ruc && `RUC: ${appSettings.ruc}`].filter(Boolean).join(" · ")}</h2>
       <h3>Recibo de Pago</h3>
       <div class="meta"><div><strong>Trabajador:</strong> ${row.worker_name} (${roleLabel})</div><div><strong>Período:</strong> ${from} al ${to}</div></div>
+      ${detalleDiario}
       <table>
-        ${detailRows}
         <tr><td>Total ganado</td><td class="r">$${earned.toFixed(2)}</td></tr>
         ${adv > 0 ? `<tr class="disc"><td>Anticipos recibidos</td><td class="r">-$${adv.toFixed(2)}</td></tr>` : ""}
         <tr class="tot"><td>NETO A PAGAR</td><td class="r">$${net.toFixed(2)}</td></tr>
       </table>
       <div class="sig"><hr/><span>Firma del trabajador</span></div>
     </body></html>`;
-    const w = window.open("", "_blank", "width=520,height=600");
     if (w) { w.document.write(html); w.document.close(); w.print(); }
   }
 
@@ -8189,7 +8223,7 @@ export function App() {
                             <td className="num" style={{ fontWeight: 700, color: toPay > 0 ? "var(--c-danger)" : "var(--c-success)" }}>{pending > 0 ? money(toPay) : "—"}</td>
                             <td className="num">{money(r.paid_amount ?? 0)}</td>
                             <td className="num" style={{ whiteSpace: "nowrap" }}>
-                              <button type="button" className="btnGhost" title="Imprimir recibo" onClick={() => printWorkerReceipt(r)}>🧾</button>
+                              <button type="button" className="btnGhost" title="Imprimir recibo" onClick={() => printWorkerReceipt(r).catch(() => undefined)}>🧾</button>
                               {pending > 0 ? (
                                 <>
                                   <button type="button" className="btnGhost" style={{ marginLeft: 6 }} onClick={() => registerAdvance(r)}>Anticipo</button>
