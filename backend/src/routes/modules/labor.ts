@@ -137,23 +137,23 @@ export async function createProductionWorkerPayments(
     const sacas = Number(opts.sacas) || 0;
     const arrocillo = Number(opts.arrocillo) || 0;
     const tulas = Number(opts.tulas) || 0;
+    const tulasBonus = estibadorBaseFromTulas(tulas, rates.estibador_por_3tulas);
 
     // Cada rol lleva SU base de cobro: el pilador por QQ; el estibador por
     // tulas. Así en Nómina se ve el QQ del pilador y la tula del estibador.
-    const rows: Array<{ role: string; name: string; base: number; qq: number; tulas: number }> = [];
+    const rows: Array<{ role: string; name: string; base: number; qq: number; tulas: number; tulasBonus: number }> = [];
     if (opts.piladorName && opts.piladorName.trim()) {
       rows.push({
         role: "PILADOR",
         name: opts.piladorName.trim(),
         base: round2(qq * rates.pilador_per_qq + sacas * rates.pilador_per_saca),
-        qq, tulas: 0
+        qq, tulas: 0, tulasBonus: 0
       });
     }
     if (opts.estibadorName && opts.estibadorName.trim()) {
       // El estibador gana por QQ procesados, por sacas, por arrocillo y por
       // tulas (si en esa produccion hubo llenado en tula). Antes solo cobraba
       // por tulas, por eso quedaba en $0 cuando no se registraban.
-      const tulasBonus = estibadorBaseFromTulas(tulas, rates.estibador_por_3tulas);
       rows.push({
         role: "ESTIBADOR",
         name: opts.estibadorName.trim(),
@@ -163,16 +163,22 @@ export async function createProductionWorkerPayments(
           arrocillo * rates.estibador_per_arrocillo +
           tulasBonus
         ),
-        qq, tulas
+        qq, tulas, tulasBonus
       });
     }
 
     for (const r of rows) {
       await client.query(
         `INSERT INTO worker_payments
-           (worker_role, worker_name, reference_type, reference_id, qq, sacas, arrocillo, tulas, base_amount, net_amount, created_by)
-         VALUES ($1, $2, 'processing_batch', $3, $4, $5, $6, $7, $8, $8, $9)`,
-        [r.role, r.name, opts.batchId, r.qq, sacas, arrocillo, r.tulas, r.base, opts.createdBy ?? null]
+           (worker_role, worker_name, reference_type, reference_id, qq, sacas, arrocillo, tulas, base_amount, net_amount, created_by, detail)
+         VALUES ($1, $2, 'processing_batch', $3, $4, $5, $6, $7, $8, $8, $9, $10)`,
+        [r.role, r.name, opts.batchId, r.qq, sacas, arrocillo, r.tulas, r.base, opts.createdBy ?? null,
+         JSON.stringify({
+           qq: r.qq, qq_rate: r.role === "PILADOR" ? rates.pilador_per_qq : rates.estibador_per_qq, qq_amount: round2(r.qq * (r.role === "PILADOR" ? rates.pilador_per_qq : rates.estibador_per_qq)),
+           sacas, saca_rate: r.role === "PILADOR" ? rates.pilador_per_saca : rates.estibador_per_saca, saca_amount: round2(sacas * (r.role === "PILADOR" ? rates.pilador_per_saca : rates.estibador_per_saca)),
+           arrocillo, arrocillo_rate: r.role === "PILADOR" ? 0 : rates.estibador_per_arrocillo, arrocillo_amount: round2(arrocillo * (r.role === "PILADOR" ? 0 : rates.estibador_per_arrocillo)),
+           tulas: r.tulas, tulas_rate: r.role === "PILADOR" ? 0 : rates.estibador_por_3tulas, tulas_amount: r.tulasBonus
+         })]
       );
     }
   } catch (err) {
@@ -246,7 +252,9 @@ laborRouter.get("/payments", asyncRoute(async (req, res) => {
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
   const result = await pool.query(
-    `SELECT * FROM worker_payments ${where} ORDER BY work_date DESC, created_at DESC LIMIT 500`,
+    `SELECT id, worker_role, worker_name, work_date, reference_type, reference_id, qq, sacas, arrocillo, tulas, base_amount, discount, net_amount, status, paid_at, cash_register_id, created_by, created_at,
+            detail
+     FROM worker_payments ${where} ORDER BY work_date DESC, created_at DESC LIMIT 500`,
     params
   );
   res.json(result.rows);

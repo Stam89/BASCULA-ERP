@@ -198,6 +198,26 @@ type WorkerSummary = {
   to_pay: number;
 };
 
+type WorkerPaymentDetail = {
+  id: string;
+  worker_role: string;
+  worker_name: string;
+  work_date: string;
+  qq: number;
+  sacas: number;
+  arrocillo: number;
+  tulas: number;
+  base_amount: number;
+  net_amount: number;
+  status: string;
+  detail: {
+    qq?: number; qq_rate?: number; qq_amount?: number;
+    sacas?: number; saca_rate?: number; saca_amount?: number;
+    arrocillo?: number; arrocillo_rate?: number; arrocillo_amount?: number;
+    tulas?: number; tulas_rate?: number; tulas_amount?: number;
+  } | null;
+};
+
 type CuadrillaActivity = { id: string; name: string; unit_rate: number; is_active: boolean };
 type CuadrillaEntry = { id: string; work_date: string; activity_name: string; worker_name: string; quantity: number; unit_rate: number; subtotal: number };
 type CuadrillaSummaryRow = { worker_name: string; entradas: number; total: number; anticipos: number; neto: number };
@@ -1137,6 +1157,9 @@ export function App() {
   const [nominaTo, setNominaTo] = useState(nominaToday);
   const [nominaRows, setNominaRows] = useState<WorkerSummary[]>([]);
   const [nominaBusy, setNominaBusy] = useState(false);
+  const [nominaPaymentDetail, setNominaPaymentDetail] = useState<{ open: boolean; row: WorkerSummary | null; payments: WorkerPaymentDetail[]; loading: boolean }>({
+    open: false, row: null, payments: [], loading: false
+  });
   const [secadorSugg, setSecadorSugg] = useState<Array<{ worker_name: string; work_date: string; tunnels: number; suggested_amount: number; already_generated: boolean }> | null>(null);
   const [nominaView, setNominaView] = useState<"semana" | "historial">("semana");
   const nomina60Ago = (() => { const d = new Date(); d.setDate(d.getDate() - 60); return d.toISOString().slice(0, 10); })();
@@ -1982,6 +2005,19 @@ export function App() {
       addToast(`Error al cargar nómina: ${e instanceof Error ? e.message : "desconocido"}`, "error");
     } finally {
       setNominaBusy(false);
+    }
+  }
+
+  async function loadNominaPaymentDetail(row: WorkerSummary) {
+    setNominaPaymentDetail({ open: true, row, payments: [], loading: true });
+    try {
+      const data = await apiGet<{ rows: WorkerPaymentDetail[] }>(
+        `/labor/payments?role=${row.worker_role}&name=${encodeURIComponent(row.worker_name)}&from=${nominaFrom}&to=${nominaTo}`
+      );
+      setNominaPaymentDetail((cur) => ({ ...cur, payments: data.rows, loading: false }));
+    } catch (e) {
+      addToast(`Error al cargar detalle: ${e instanceof Error ? e.message : "desconocido"}`, "error");
+      setNominaPaymentDetail((cur) => ({ ...cur, loading: false }));
     }
   }
 
@@ -3924,6 +3960,11 @@ export function App() {
     setMessage(updated.status === "COMPLETED" ? `Secado del Túnel ${updated.tunnel_number} finalizado` : `Secado del Túnel ${updated.tunnel_number} actualizado`);
     await refresh();
     await loadMotorActive();
+    if (updated.status === "COMPLETED") {
+      // Al finalizar, limpiar el formulario y salir del modo edición de ese secado.
+      safeResetForm(formElement);
+      setEditingDryingReport(null);
+    }
   }
 
   // Panel de medidores del combustible del motor.
@@ -5217,10 +5258,14 @@ export function App() {
                 const enProceso = dryingReports.filter(
                   (r) => motorDeSecadora(r.dryer_name) === motorActivo && r.status !== "COMPLETED"
                 );
-                // Incluye el que se abrió aunque ya esté finalizado (por si se editó uno cerrado).
-                const lista = enProceso.some((r) => r.id === editingDryingReport!.id)
-                  ? enProceso
-                  : [editingDryingReport, ...enProceso];
+                // Incluye el que se abrió solo si aún está en proceso. Si ya fue
+                // finalizado (por ejemplo, al cerrar el combustible del motor), se
+                // quita de la edición para evitar que el formulario siga lleno.
+                const lista = editingDryingReport && editingDryingReport.status !== "COMPLETED"
+                  ? (enProceso.some((r) => r.id === editingDryingReport!.id)
+                    ? enProceso
+                    : [editingDryingReport, ...enProceso])
+                  : enProceso;
                 lista.sort((a, b) => a.tunnel_number - b.tunnel_number);
                 return (
                   <div style={{ gridColumn: "1 / -1", display: "grid", gap: 16 }}>
@@ -8695,7 +8740,8 @@ export function App() {
                             <td className="num" style={{ fontWeight: 700, color: toPay > 0 ? "var(--c-danger)" : "var(--c-success)" }}>{pending > 0 ? money(toPay) : "—"}</td>
                             <td className="num">{money(r.paid_amount ?? 0)}</td>
                             <td className="num" style={{ whiteSpace: "nowrap" }}>
-                              <button type="button" className="btnGhost" title="Imprimir recibo" onClick={() => printWorkerReceipt(r).catch(() => undefined)}>🧾</button>
+                              <button type="button" className="btnGhost" title="Ver detalle del cálculo" onClick={() => loadNominaPaymentDetail(r)}>🔍</button>
+                              <button type="button" className="btnGhost" title="Imprimir recibo" style={{ marginLeft: 6 }} onClick={() => printWorkerReceipt(r).catch(() => undefined)}>🧾</button>
                               {pending > 0 ? (
                                 <>
                                   <button type="button" className="btnGhost" style={{ marginLeft: 6 }} onClick={() => registerAdvance(r)}>Anticipo</button>
@@ -8817,6 +8863,61 @@ export function App() {
                   </div>
                 )}
               </>
+            )}
+
+            {/* Modal: detalle del cálculo de nómina por pilada */}
+            {nominaPaymentDetail.open && nominaPaymentDetail.row && (
+              <div className="modalOverlay" onClick={() => setNominaPaymentDetail({ open: false, row: null, payments: [], loading: false })}>
+                <div className="modalCard" style={{ maxWidth: 720 }} onClick={(e) => e.stopPropagation()}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                    <h3 style={{ margin: 0 }}>
+                      Detalle: {nominaPaymentDetail.row.worker_name} · {nominaPaymentDetail.row.worker_role === "PILADOR" ? "Pilador" : nominaPaymentDetail.row.worker_role === "ESTIBADOR" ? "Estibador" : "Secador"}
+                    </h3>
+                    <button type="button" className="btnGhost" onClick={() => setNominaPaymentDetail({ open: false, row: null, payments: [], loading: false })}>✕</button>
+                  </div>
+                  {nominaPaymentDetail.loading ? (
+                    <p className="muted">Cargando detalle…</p>
+                  ) : nominaPaymentDetail.payments.length === 0 ? (
+                    <p className="muted">No hay registros individuales en el período.</p>
+                  ) : (
+                    <div style={{ overflowX: "auto" }}>
+                      <table className="cajaTable" style={{ fontSize: 13 }}>
+                        <thead>
+                          <tr><th>Fecha</th><th className="num">QQ</th><th className="num">Tulas</th><th className="num">Sacas</th><th className="num">Arrocillo</th><th className="num">Monto</th><th>Desglose</th></tr>
+                        </thead>
+                        <tbody>
+                          {nominaPaymentDetail.payments.map((p) => {
+                            const d = p.detail ?? {};
+                            const parts: string[] = [];
+                            if (d.qq_amount) parts.push(`${d.qq}x $${d.qq_rate} = $${money(d.qq_amount as number)}`);
+                            if (d.tulas_amount) parts.push(`${d.tulas} tulas ÷ 3 × $${d.tulas_rate} = $${money(d.tulas_amount as number)}`);
+                            if (d.saca_amount) parts.push(`${d.sacas} sacas × $${d.saca_rate} = $${money(d.saca_amount as number)}`);
+                            if (d.arrocillo_amount) parts.push(`${d.arrocillo} arrocillo × $${d.arrocillo_rate} = $${money(d.arrocillo_amount as number)}`);
+                            return (
+                              <tr key={p.id}>
+                                <td>{new Date(p.work_date).toLocaleDateString("es-EC")}</td>
+                                <td className="num">{Number(p.qq).toFixed(2)}</td>
+                                <td className="num">{Number(p.tulas).toFixed(0)}</td>
+                                <td className="num">{Number(p.sacas).toFixed(0)}</td>
+                                <td className="num">{Number(p.arrocillo).toFixed(2)}</td>
+                                <td className="num" style={{ fontWeight: 700 }}>{money(p.base_amount)}</td>
+                                <td style={{ fontSize: 12, maxWidth: 260 }}>{parts.length > 0 ? parts.join(" · ") : "—"}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                        <tfoot>
+                          <tr>
+                            <td colSpan={5} style={{ fontWeight: 700 }}>TOTAL</td>
+                            <td className="num" style={{ fontWeight: 700 }}>{money(nominaPaymentDetail.payments.reduce((a, p) => a + p.base_amount, 0))}</td>
+                            <td />
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
           </section>
         )}
