@@ -139,6 +139,25 @@ processFlowRouter.get("/drying/available-lots", asyncRoute(async (req, res) => {
   res.json(result.rows);
 }));
 
+// Túneles ocupados por OTROS accionistas (secados en curso): el frontend los
+// bloquea en el formulario de llenado para que dos socios no usen el mismo
+// túnel a la vez. El accionista activo no se bloquea a sí mismo.
+processFlowRouter.get("/drying/tunnels-status", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const result = await pool.query(
+    `SELECT d.tunnel_number,
+            COALESCE(a.name, 'servicio de pilado/maquila') AS accionista_name
+     FROM drying_tunnel_reports d
+     JOIN lots l ON l.id = d.lot_id
+     LEFT JOIN accionistas a ON a.id = l.accionista_id
+     WHERE d.status = 'IN_PROGRESS'
+       AND l.accionista_id IS DISTINCT FROM $1
+     ORDER BY d.tunnel_number, d.created_at DESC`,
+    [accionistaId]
+  );
+  res.json(result.rows);
+}));
+
 // Secados del accionista activo: cada uno ve solo sus propios túneles.
 processFlowRouter.get("/drying/reports", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;

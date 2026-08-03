@@ -471,6 +471,12 @@ type MotorActiveReport = {
   accionista_name: string | null;
 };
 
+/** Túnel ocupado por OTRO accionista (secado en curso): se bloquea en el formulario. */
+type TunnelStatusRow = {
+  tunnel_number: number;
+  accionista_name: string;
+};
+
 type ProcessFlow = {
   lot: Lot & { print_batch_code: string; is_maquila: boolean };
   reports: ProcessReport[];
@@ -1044,6 +1050,9 @@ export function App() {
   // Secados sin finalizar del motor (de TODOS los accionistas: el motor es
   // compartido); entre ellos se reparte el combustible según sus QQ.
   const [motorActiveReports, setMotorActiveReports] = useState<MotorActiveReport[]>([]);
+  // Túneles ocupados por OTROS accionistas (secado en curso): túnel → nombre del
+  // accionista que lo usa. El formulario de llenado bloquea esas secciones.
+  const [occupiedTunnels, setOccupiedTunnels] = useState<Record<number, string>>({});
   // Combustible DEL MOTOR: bombona y diesel por medidor (inicio - fin), y
   // cilindros por unidad. Se registra una vez y se reparte.
   const [gasForm, setGasForm] = useState({ bombona_inicio: "", bombona_fin: "", cilindro_cantidad: "", diesel_inicio: "", diesel_fin: "" });
@@ -3761,10 +3770,19 @@ export function App() {
   }
 
   async function loadMotorActive(motor: 1 | 2 = motorActivo) {
-    const rows = await apiGet<MotorActiveReport[]>(`/process-flow/drying/motor/${motor}/active`).catch(
-      () => [] as MotorActiveReport[]
-    );
+    const [rows, tunnelRows] = await Promise.all([
+      apiGet<MotorActiveReport[]>(`/process-flow/drying/motor/${motor}/active`).catch(
+        () => [] as MotorActiveReport[]
+      ),
+      apiGet<TunnelStatusRow[]>("/process-flow/drying/tunnels-status").catch(() => [] as TunnelStatusRow[])
+    ]);
     setMotorActiveReports(rows);
+    // Un túnel ocupado por otro accionista no se puede llenar: se bloquea en el formulario.
+    const occupied: Record<number, string> = {};
+    for (const r of tunnelRows) {
+      if (!(r.tunnel_number in occupied)) occupied[r.tunnel_number] = r.accionista_name;
+    }
+    setOccupiedTunnels(occupied);
   }
 
   // Guarda TODO el informe del motor junto: crea el lote de cada secadora que
@@ -3776,6 +3794,15 @@ export function App() {
     const secadoras = MOTOR_SECADORAS[motorActivo];
     const conIngresos = secadoras.filter((s) => seleccionDe(s).length > 0);
     const hayCombustible = combustibleTotal > 0;
+
+    // Candado: no se puede guardar nada en un túnel que está secando a otro
+    // accionista (además del bloqueo visual del formulario).
+    const bloqueada = conIngresos.find((s) => occupiedTunnels[tunelDeSecadora(s)]);
+    if (bloqueada) {
+      const t = tunelDeSecadora(bloqueada);
+      setMessage(`El túnel ${t} está en uso por ${occupiedTunnels[t]}. Quita esos ingresos y usa otro túnel.`);
+      return;
+    }
 
     if (conIngresos.length === 0 && !hayCombustible) {
       setMessage("Agrega ingresos a alguna secadora o registra el combustible del motor");
@@ -5255,6 +5282,18 @@ export function App() {
                 <div className="panelGrid" style={{ gap: 16 }}>
                   {MOTOR_SECADORAS[motorActivo].map((secadora) => {
                     const t = tunelDeSecadora(secadora);
+                    const ocupadoPor = occupiedTunnels[t];
+                    // El túnel ya lo está secando OTRO accionista: se bloquea la
+                    // sección para que no se le carguen datos por equivocación.
+                    if (ocupadoPor) {
+                      return (
+                        <div key={secadora} className="dryingForm" style={{ border: "1px solid var(--c-danger)", borderRadius: "var(--r-lg)", padding: 14, background: "#fef2f2", opacity: 0.85 }}>
+                          <h3 style={{ marginTop: 0 }}>🌀 {secadora} · Túnel {t} <span className="chip danger">✗ En uso</span></h3>
+                          <p style={{ fontSize: 13, margin: "4px 0" }}><strong>OCUPADO POR:</strong> {ocupadoPor}</p>
+                          <p className="muted" style={{ fontSize: 13, margin: "4px 0" }}>Finaliza ese secado antes de usar este túnel con otro accionista.</p>
+                        </div>
+                      );
+                    }
                     const lotes = lotesDe(secadora);
                     return (
                       <div key={secadora} className="dryingForm" style={{ border: "1px solid var(--c-border)", borderRadius: "var(--r-lg)", padding: 14 }}>
