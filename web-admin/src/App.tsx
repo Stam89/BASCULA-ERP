@@ -16,7 +16,7 @@ type Dashboard = {
   pending_advances: number;
   pending_payables: number;
   sales_today: number;
-  current_cash_register: { id: string; name: string; opening_balance: string } | null;
+  current_cash_register: { id: string; name: string; opening_balance: string; opening_balance_cash: string; opening_balance_bank: string } | null;
 };
 
 type Expense = {
@@ -203,7 +203,46 @@ type CuadrillaEntry = { id: string; work_date: string; activity_name: string; wo
 type CuadrillaSummaryRow = { worker_name: string; entradas: number; total: number; anticipos: number; neto: number };
 type CuadrillaAdvance = { id: string; worker_name: string; amount: number; balance: number; concept: string | null; status: string; issued_at: string };
 
-type PiladoService = { id: string; service_date: string; cliente: string; quintals: number; rate_per_qq: number; total: number; saldo: number; estado: string; notes: string | null };
+type PiladoService = {
+  id: string;
+  service_date: string;
+  cliente: string;
+  quintals: number;
+  rate_per_qq: number;
+  total: number;
+  saldo: number;
+  estado: string;
+  notes: string | null;
+  detalle?: Array<{ presentacion: string; quintales: number; precio_total_qq: number; subtotal: number }> | null;
+  created_at?: string;
+};
+type PiladoOutput = {
+  product_id: string;
+  product_name: string;
+  quantity: number;
+  unit: string;
+  presentation: string | null;
+  sack_weight_lb: number | null;
+  is_byproduct: boolean;
+};
+
+type PiladoYield = {
+  input_paddy_kg: number;
+  white_rice_qty: number;
+  white_rice_unit: string;
+  broken_rice_qty: number;
+  fine_broken_rice_qty: number;
+  bran_qty: number;
+  total_output_kg: number;
+  process_loss_kg: number;
+  yield_percent: number;
+  qq_de_tulas: number;
+};
+
+type PiladoServiceDetail = PiladoService & {
+  outputs?: PiladoOutput[] | null;
+  yield?: PiladoYield | null;
+};
 type PiladoBalance = { id: string; name: string; saldo: number };
 
 type PanelAccionista = {
@@ -276,6 +315,28 @@ type StockRow = {
   ownership: string;
   quantity: string | number;
   unit: string;
+};
+
+type NegativeStockMovement = {
+  created_at: string;
+  movement: string;
+  quantity: number;
+  reference_type: string | null;
+  reference_id: string | null;
+  notes: string | null;
+  lot_id: string | null;
+};
+
+type NegativeStockRow = {
+  product_id: string;
+  code: string;
+  product_name: string;
+  unit: string;
+  warehouse_id: string;
+  warehouse_name: string;
+  ownership: string;
+  quantity: number;
+  movements: NegativeStockMovement[];
 };
 
 type DiscountBreakdown = {
@@ -436,6 +497,8 @@ type CashSummary = {
   name: string;
   status: string;
   opening_balance: string | number;
+  opening_balance_cash: string | number;
+  opening_balance_bank: string | number;
   total_income: number;
   total_expense: number;
   current_balance: number;
@@ -480,6 +543,8 @@ type MillingReportState = {
   polvillo: string;
   /** N.º de tulas del proceso: base del pago al estibador. */
   tulas: string;
+  /** QQ totales de las tulas: base INDEPENDIENTE para pagar al pilador. */
+  qqTulas: string;
 };
 
 type MillingYieldResult = {
@@ -504,6 +569,8 @@ type MillingDraft = {
   total_quintals?: string | number;
   rice_type?: string;
   lot_code?: string;
+  /** Si true, ya existe un processing_batch abierto para este túnel. */
+  has_open_batch?: boolean;
 };
 
 /** Estados financieros: todo se calcula en el servidor desde la operación. */
@@ -609,7 +676,7 @@ type LotTransferResult = {
 /** Pilado ya cerrado, con su rendimiento. Alimenta el historial de Producción. */
 type ProductionHistoryItem = {
   id: string;
-  batch_number: string;
+  batch_number: string | null;
   finished_at: string;
   pilador_name: string | null;
   estibador_name: string | null;
@@ -623,12 +690,18 @@ type ProductionHistoryItem = {
   bran_qty: string | number | null;
   process_loss_kg: string | number | null;
   yield_percent: string | number | null;
+  qq_de_tulas?: string | number | null;
   presentaciones: Array<{
     presentation: string | null;
     sack_weight_lb: string | number | null;
     quantity: string | number;
     unit: string;
   }>;
+  /** Si es true, este registro es un servicio de pilado (no una producción propia). */
+  is_service?: boolean;
+  service_rate?: string | number | null;
+  service_total?: string | number | null;
+  client_name?: string | null;
 };
 
 type SackInventory = {
@@ -846,6 +919,13 @@ const motorDeSecadora = (name?: string | null): 1 | 2 => (String(name ?? "").inc
 const dryerOptions = MOTOR_SECADORAS[1].concat(MOTOR_SECADORAS[2]);
 // La secadora N seca en el túnel N (mismo número).
 const tunelDeSecadora = (name: string) => Number(String(name).replace(/[^\d]/g, "")) || 1;
+const secadorStorageKey = (tunnel: number) => `bascula-erp:secador-name:${tunnel}`;
+function getSavedSecadorName(tunnel: number): string | undefined {
+  try { return localStorage.getItem(secadorStorageKey(tunnel)) || undefined; } catch { return undefined; }
+}
+function saveSecadorName(tunnel: number, name: string) {
+  try { if (name.trim()) localStorage.setItem(secadorStorageKey(tunnel), name.trim()); } catch { /* ignore */ }
+}
 const piladoPresentations = ["10 LB", "25 LB", "50 LB", "98 LB", "100 LB"];
 
 // Junta las cuentas por pagar de una misma liquidación (mismo batch_id) para
@@ -884,7 +964,9 @@ const defaultMillingReport: MillingReportState = {
   broken34: "",
   fineBroken: "",
   polvillo: "",
-  tulas: ""
+  tulas: "",
+  /** QQ totales de las tulas: base INDEPENDIENTE para pagar al pilador. */
+  qqTulas: ""
 };
 
 const emptyDashboard: Dashboard = {
@@ -1023,6 +1105,11 @@ export function App() {
   const [cashSummary, setCashSummary] = useState<CashSummary | null>(null);
   const [cashPayables, setCashPayables] = useState<AccountPayable[]>([]);
   const [anticipoFarmerId, setAnticipoFarmerId] = useState("");
+  const [newCajaTipo, setNewCajaTipo] = useState<"EFECTIVO" | "BANCO">("EFECTIVO");
+  const [newCajaName, setNewCajaName] = useState("Caja Principal");
+  const [newCajaCash, setNewCajaCash] = useState("0");
+  const [newCajaBank, setNewCajaBank] = useState("0");
+  const [editOpeningBalance, setEditOpeningBalance] = useState(false);
 
   // ── Gastos ────────────────────────────────────────────────────────────────
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -1065,6 +1152,7 @@ export function App() {
   const [piladoServices, setPiladoServices] = useState<PiladoService[]>([]);
   const [piladoBalances, setPiladoBalances] = useState<PiladoBalance[]>([]);
   const [piladoForm, setPiladoForm] = useState({ client_kind: "accionista" as "accionista" | "externo", client_accionista_id: "", client_name: "", quintals: "", rate_per_qq: localStorage.getItem("bascula-erp:pilado-rate") ?? "", service_date: nominaToday });
+  const [piladoReport, setPiladoReport] = useState<PiladoServiceDetail | null>(null);
 
   // ── Selección / envejecido por lotes (persona externa) ─────────────────────
   const [selectionBatches, setSelectionBatches] = useState<SelectionBatch[]>([]);
@@ -1128,6 +1216,9 @@ export function App() {
   const [sackInventory, setSackInventory] = useState<SackInventory[]>([]);
   const [sackMovements, setSackMovements] = useState<SackMovement[]>([]);
   const [sackMovForm, setSackMovForm] = useState({ sack_id: "", movement: "ENTRADA" as "ENTRADA"|"SALIDA", cantidad: "", concepto: "" });
+  // ── Diagnóstico de stocks negativos ────────────────────────────────────────
+  const [negativeStock, setNegativeStock] = useState<NegativeStockRow[]>([]);
+  const [negativeStockOpen, setNegativeStockOpen] = useState(false);
 
   // ── Clientes y Ventas ──────────────────────────────────────────────────────
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -1389,6 +1480,9 @@ export function App() {
     .reduce((s, r) => s + Number(r.total_quintals ?? 0), 0);
   const qqMotor = round2(qqEnForm + qqPreviosMotor);
   const combustiblePorQq = qqMotor > 0 ? round2(combustibleTotal / qqMotor) : 0;
+  // Por separado (gas = bombona + cilindro; diésel = medidor).
+  const gasPorQq = qqMotor > 0 ? round2(gasCostoTotal / qqMotor) : 0;
+  const dieselPorQq = qqMotor > 0 ? round2(dieselCosto / qqMotor) : 0;
   const productionDryingReports = useMemo(
     () => dryingReports.filter((report) => report.status === "COMPLETED" && !report.is_processed),
     [dryingReports]
@@ -1756,15 +1850,15 @@ export function App() {
   // ── Configuración ─────────────────────────────────────────────────────────
   const isAdmin = authUser?.role_name === "ADMINISTRADOR";
 
-  // Nómina y cuadrilla las paga CEYRO (dueño del negocio); los otros accionistas
-  // no cargan con ese gasto. Por eso esas pestañas solo aparecen con CEYRO activo.
+  // La nómina, cuadrilla y servicio de pilado son responsabilidad única del dueño
+  // de la piladora (CEYRO). Los accionistas/clientes solo pagan el servicio; nunca
+  // cargan con la nómina ni administran cobros de secado/pilado. Por eso esas
+  // pestañas solo aparecen con CEYRO activo.
   const esCeyroActivo = activeAccionistaId === CEYRO_ID;
 
   // Pestañas visibles según los módulos asignados al usuario.
   const visibleTabs = useMemo(() => {
     if (!authUser) return [] as string[];
-    // CEYRO es la piladora: la nómina y la cuadrilla las paga él, y el servicio
-    // de pilado es un ingreso suyo. Esas pestañas no tienen sentido en otro socio.
     const soloCeyro = new Set(["Nomina", "Cuadrilla", "Servicio Pilado"]);
     // Permisos POR ACCIONISTA: los módulos permitidos dependen del accionista
     // activo, no de un set global. Al cambiar de accionista cambian las pestañas.
@@ -1953,6 +2047,11 @@ export function App() {
     setPiladoForm({ ...piladoForm, quintals: "", client_name: "" });
     addToast("Servicio de pilado registrado", "success");
     await refreshPilado();
+  }
+
+  async function loadPiladoReport(id: string) {
+    const s = await apiGet<PiladoServiceDetail>(`/pilado/services/${id}`);
+    setPiladoReport(s);
   }
 
   async function settlePilado(id: string) {
@@ -2472,9 +2571,23 @@ export function App() {
       };
     }
     if (kind === "combustible") {
-      const rows = (data.rows || []).map((r: any) => [new Date(r.fecha).toLocaleDateString("es-EC"), r.dryer_name ?? `Túnel ${r.tunnel_number}`, r.lot_code || "—", m2(r.quintals), m2(r.gas_costo), m2(r.diesel_costo), m2(r.total)]);
+      const rows = (data.rows || []).map((r: any) => [
+        new Date(r.fecha).toLocaleDateString("es-EC"),
+        r.dryer_name ?? `Túnel ${r.tunnel_number}`,
+        m2(r.quintals),
+        m2(r.gas_costo),
+        m2(r.diesel_costo),
+        m2(r.costo_por_qq_gas),
+        m2(r.costo_por_qq_diesel),
+        m2(r.total)
+      ]);
       const t = data.totals || { gas: 0, diesel: 0, total: 0 };
-      return { title: "Combustible de secado (gas y diésel)", headers: ["Fecha", "Secadora", "Lote", "QQ", "Gas $", "Diésel $", "Total $"], rows, totals: ["TOTAL", "", "", "", m2(t.gas), m2(t.diesel), m2(t.total)] };
+      return {
+        title: "Combustible de secado (gas y diésel por separado)",
+        headers: ["Fecha", "Secadora", "QQ", "Gas $", "Diésel $", "Costo/QQ Gas", "Costo/QQ Diésel", "Total $"],
+        rows,
+        totals: ["TOTAL", "", "", m2(t.gas), m2(t.diesel), "", "", m2(t.total)]
+      };
     }
     // produccion
     const rows = (data.rows || []).map((r: any) => [new Date(r.created_at).toLocaleDateString("es-EC"), r.batch_number, r.lot_code || "—", m2(r.input_qty), m2(r.output_qty), r.status]);
@@ -2630,7 +2743,10 @@ export function App() {
   async function runFirebaseImport() {
     setBasculaImporting(true);
     try {
-      const res = await apiPost<{ ok: boolean; count: number }>("/tickets/refresh-firebase", {});
+      // El botón manual siempre hace importación COMPLETA (full): quien lo
+      // presiona quiere ver todo lo de la báscula, no solo el delta. El sync
+      // automático de cada 3 min sigue siendo incremental.
+      const res = await apiPost<{ ok: boolean; count: number }>("/tickets/refresh-firebase", { full: true });
       addToast(res.count > 0 ? `${res.count} tickets traídos de la báscula` : "Sin tickets nuevos en la báscula", "success");
       await refreshBasculaTickets();
     } catch (e) {
@@ -3236,6 +3352,8 @@ export function App() {
   function printCajaMovimientos() {
     if (!cashSummary) return;
     const opening = Number(cashSummary.opening_balance);
+    const openingCash = Number(cashSummary.opening_balance_cash ?? 0);
+    const openingBank = Number(cashSummary.opening_balance_bank ?? 0);
     const rows = cashMovements.map((m, i) => {
       const isIncome = m.movement === "INCOME";
       return `<tr>
@@ -3248,13 +3366,16 @@ export function App() {
       </tr>`;
     }).join("");
     const balance = (opening + cashSummary.total_income - cashSummary.total_expense).toFixed(2);
+    const saldoLinea = openingCash > 0 || openingBank > 0
+      ? `Efectivo: $${openingCash.toFixed(2)} · Banco: $${openingBank.toFixed(2)} · Total: $${opening.toFixed(2)}`
+      : `Saldo inicial: $${opening.toFixed(2)}`;
     const html = `<html><head><title>Cierre de Caja</title>
     <style>body{font-family:Arial;font-size:12px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:4px 8px}th{background:#16a34a;color:#fff}.tot{font-weight:bold}</style>
     </head><body>
     <h2 style="text-align:center;margin-bottom:2px">${appSettings.business_name}</h2>
     <p style="text-align:center;margin:0 0 12px;color:#555">${[appSettings.business_subtitle, appSettings.ruc && `RUC: ${appSettings.ruc}`].filter(Boolean).join(" · ")}</p>
     <h3 style="text-align:center">${cashSummary.name} — Cierre de Caja</h3>
-    <p>Fecha apertura: ${new Date(cashSummary.opened_at).toLocaleString("es-EC")} | Saldo inicial: $${opening.toFixed(2)}</p>
+    <p>Fecha apertura: ${new Date(cashSummary.opened_at).toLocaleString("es-EC")} | ${saldoLinea}</p>
     <table><thead><tr><th>#</th><th>Fecha/Hora</th><th>Categoría</th><th>Descripción</th><th>Ingreso</th><th>Egreso</th></tr></thead>
     <tbody>${rows}</tbody>
     <tfoot>
@@ -3335,14 +3456,52 @@ export function App() {
 
   async function submitCash(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
     await apiPost("/cash/registers/open", {
-      name: form.get("name"),
-      tipo: form.get("tipo") || "EFECTIVO",
-      opening_balance: Number(form.get("opening_balance"))
+      name: newCajaName,
+      tipo: newCajaTipo,
+      opening_balance_cash: Number(newCajaCash),
+      opening_balance_bank: Number(newCajaBank)
     });
     addToast("Caja abierta", "success");
+    setNewCajaCash("0");
+    setNewCajaBank("0");
     await refresh();
+  }
+
+  async function loadPreviousBalance(tipo: "EFECTIVO" | "BANCO") {
+    try {
+      const data = await apiGet<{ final_balance: number }>(`/cash/registers/previous-balance?tipo=${tipo}`);
+      const total = data.final_balance;
+      if (total <= 0) return;
+      if (tipo === "EFECTIVO") {
+        setNewCajaCash(total.toFixed(2));
+        setNewCajaBank("0");
+      } else {
+        setNewCajaBank(total.toFixed(2));
+        setNewCajaCash("0");
+      }
+    } catch {
+      // sin caja anterior: deja en 0
+    }
+  }
+
+  async function updateOpeningBalance() {
+    const id = dashboard.current_cash_register?.id;
+    if (!id) return;
+    try {
+      await apiPut(`/cash/registers/${id}/opening-balance`, {
+        opening_balance_cash: Number(newCajaCash),
+        opening_balance_bank: Number(newCajaBank)
+      });
+      addToast("Saldo inicial actualizado", "success");
+      setEditOpeningBalance(false);
+      setNewCajaCash("0");
+      setNewCajaBank("0");
+      await refreshCaja(id);
+      await refresh();
+    } catch (e) {
+      addToast(`Error: ${e instanceof Error ? e.message : "desconocido"}`, "error");
+    }
   }
 
   async function closeCaja() {
@@ -3627,6 +3786,8 @@ export function App() {
     let creados = 0;
     for (const secadora of conIngresos) {
       const t = tunelDeSecadora(secadora);
+      const operatorName = String(form.get(`secador_name_${t}`) ?? "").trim();
+      if (operatorName) saveSecadorName(t, operatorName);
       await apiPost<DryingTunnelReport>("/process-flow/drying", {
         entry_ids: seleccionDe(secadora),
         lot_code: String(form.get(`lot_code_${t}`) ?? "").trim() || undefined,
@@ -3637,6 +3798,7 @@ export function App() {
         dry_start_at: stringOrUndefined(form.get(`dry_start_at_${t}`)),
         dry_end_at: stringOrUndefined(form.get(`dry_end_at_${t}`)),
         dryer_name: secadora,
+        operator_name: operatorName || undefined,
         notes: form.get(`notes_${t}`) || undefined
       });
       creados++;
@@ -3645,6 +3807,11 @@ export function App() {
       setDryingSelections((cur) => {
         const next = { ...cur };
         conIngresos.forEach((s) => { next[s] = []; });
+        return next;
+      });
+      setDryingEntryPick((cur) => {
+        const next = { ...cur };
+        conIngresos.forEach((s) => { next[s] = ""; });
         return next;
       });
     }
@@ -3659,7 +3826,7 @@ export function App() {
         setMotorActiveReports(activos);
         addToast("Guardé los lotes, pero no hay secados activos para repartir el combustible.", "error");
       } else {
-        const fuel = await apiPost<{ costo_por_qq: number; reparto: Array<{ total: number }> }>(
+        const fuel = await apiPost<{ costo_por_qq: number; reparto: Array<{ total: number }>; finalized?: number }>(
           "/process-flow/drying/motor-fuel",
           {
             motor_number: motorActivo,
@@ -3668,15 +3835,17 @@ export function App() {
             gas_cilindro_cantidad: Number(gasForm.cilindro_cantidad || 0),
             diesel_inicio: Number(gasForm.diesel_inicio || 0),
             diesel_fin: Number(gasForm.diesel_fin || 0),
+            finalize: true,
             created_by: authUser?.id
           }
         );
         setGasForm({ bombona_inicio: "", bombona_fin: "", cilindro_cantidad: "", diesel_inicio: "", diesel_fin: "" });
-        msgFuel = ` · combustible ${money(combustibleTotal)} repartido (${money(fuel.costo_por_qq)}/QQ)`;
+        msgFuel = ` · gas ${money(gasCostoTotal)} + diésel ${money(dieselCosto)} repartidos (${money(fuel.costo_por_qq)}/QQ) · ${fuel.finalized ?? 0} secado(s) finalizado(s)`;
       }
     }
 
     safeResetForm(event.currentTarget);
+    setEditingDryingReport(null);
     await refresh();
     await loadMotorActive();
     addToast(
@@ -3691,17 +3860,19 @@ export function App() {
     if (!(combustibleTotal > 0)) { setMessage("Ingresa los medidores del combustible del motor"); return; }
     const activos = await apiGet<MotorActiveReport[]>(`/process-flow/drying/motor/${motorActivo}/active`).catch(() => [] as MotorActiveReport[]);
     if (activos.length === 0) { addToast("Este motor no tiene secados pendientes de combustible.", "error"); return; }
-    const fuel = await apiPost<{ costo_por_qq: number }>("/process-flow/drying/motor-fuel", {
+    const fuel = await apiPost<{ costo_por_qq: number; finalized?: number }>("/process-flow/drying/motor-fuel", {
       motor_number: motorActivo,
       gas_bombona_inicio: Number(gasForm.bombona_inicio || 0),
       gas_bombona_fin: Number(gasForm.bombona_fin || 0),
       gas_cilindro_cantidad: Number(gasForm.cilindro_cantidad || 0),
       diesel_inicio: Number(gasForm.diesel_inicio || 0),
       diesel_fin: Number(gasForm.diesel_fin || 0),
+      finalize: true,
       created_by: authUser?.id
     });
     setGasForm({ bombona_inicio: "", bombona_fin: "", cilindro_cantidad: "", diesel_inicio: "", diesel_fin: "" });
-    addToast(`Combustible del Motor ${motorActivo} repartido entre sus secadoras (${money(fuel.costo_por_qq)}/QQ)`, "success");
+    setEditingDryingReport(null);
+    addToast(`Combustible del Motor ${motorActivo} repartido (${money(fuel.costo_por_qq)}/QQ) y ${fuel.finalized ?? 0} secado(s) finalizado(s)`, "success");
     await refresh();
     await loadMotorActive();
   }
@@ -3719,6 +3890,7 @@ export function App() {
       dry_start_at: stringOrUndefined(form.get("dry_start_at")),
       dry_end_at: stringOrUndefined(endInput?.value ?? null),
       dryer_name: report.dryer_name,
+      operator_name: String(form.get("operator_name") ?? "").trim(),
       notes: form.get("notes") || undefined
     };
     const updated = await apiPut<DryingTunnelReport>(`/process-flow/drying/${report.id}`, payload);
@@ -3763,16 +3935,22 @@ export function App() {
           onFin={(v) => setGasForm({ ...gasForm, diesel_fin: v })}
           precio={laborRatesForm.precio_diesel}
         />
-        <div className="medidorTotal">
-          <span>TOTAL COMBUSTIBLE DEL MOTOR</span>
-          <strong>{money(combustibleTotal)}</strong>
+        <div className="medidorTotal" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div>
+            <span>TOTAL GAS</span>
+            <strong>{money(gasCostoTotal)}</strong>
+          </div>
+          <div>
+            <span>TOTAL DIÉSEL</span>
+            <strong>{money(dieselCosto)}</strong>
+          </div>
         </div>
-        {combustibleTotal > 0 && qqMotor > 0 && (
+        {(gasCostoTotal > 0 || dieselCosto > 0) && qqMotor > 0 && (
           <div className="costoQq">
             <div className="costoQqTotal">
               <small>Combustible por QQ</small>
-              <strong>{money(combustiblePorQq)}</strong>
-              <span className="muted">{money(combustibleTotal)} ÷ {qqMotor.toFixed(2)} QQ</span>
+              <strong>{money(gasPorQq)} gas + {money(dieselPorQq)} diésel</strong>
+              <span className="muted">{money(gasCostoTotal)} gas + {money(dieselCosto)} diésel ÷ {qqMotor.toFixed(2)} QQ</span>
             </div>
           </div>
         )}
@@ -3878,17 +4056,14 @@ export function App() {
       report: millingReport,
       pilado_entries: safeMillingPiladoEntries
     });
+    // Guardar timestamp para mostrar el mensaje de éxito.
     setMillingDraftSavedAt(saved.saved_at);
     await loadMillingDrafts();
-    // Al guardar, el formulario queda limpio para el siguiente proceso. El
-    // borrador queda a salvo en el servidor (aparece en «Procesos guardados»).
-    setMillingReport(defaultMillingReport);
-    setMillingPiladoEntries([]);
-    setPiladorName("");
-    setEstibadorName("");
-    setProductionDryingId("");
-    setMillingDraftSavedAt(null);
-    addToast("Proceso guardado en el servidor. Formulario limpio para el siguiente.", "success");
+    // NO limpiamos el formulario: el usuario sigue trabajando en el mismo
+    // proceso. El borrador ya está a salvo en el servidor y aparece arriba en
+    // «Procesos guardados». Para empezar otro, use Finalizar Lote o cambie de
+    // secadora.
+    addToast("Proceso guardado en el servidor. Sigue editando aquí mismo o retómalo desde «Procesos guardados».", "success");
   }
 
   async function loadMillingDrafts() {
@@ -4011,8 +4186,9 @@ export function App() {
       return;
     }
 
-    if (millingPiladoTotalQq <= 0) {
-      setMessage("Agregue al menos una cantidad de pilado");
+    const qqTulas = Number(millingReport.qqTulas || 0);
+    if (millingPiladoTotalQq <= 0 && qqTulas <= 0) {
+      setMessage("Agregue al menos una cantidad de pilado o QQ de tulas");
       return;
     }
 
@@ -4041,6 +4217,7 @@ export function App() {
       input_quantity: Number(drying.input_weight_kg)
     });
 
+    const whiteRiceQq = millingPiladoTotalQq > 0 ? millingPiladoTotalQq : qqTulas;
     const production = await apiPost<ProductionResult>(`/processing-batches/${batch.id}/finish-production`, {
       lot_id: drying.lot_id,
       drying_report_id: drying.id,
@@ -4049,7 +4226,7 @@ export function App() {
       white_rice: {
         product_id: outputProduct.id,
         warehouse_id: finishedWarehouse.id,
-        quantity: millingPiladoTotalQq,
+        quantity: whiteRiceQq,
         unit: "QQ"
       },
       // Se manda el desglose (100 LB, 25 LB...) y no solo el total, para que en
@@ -4080,7 +4257,8 @@ export function App() {
       sacks_used: 0,
       pilador_name: piladorName || undefined,
       estibador_name: estibadorName || undefined,
-      tulas: Number(millingReport.tulas || 0)
+      tulas: Number(millingReport.tulas || 0),
+      qq_de_tulas: Number(millingReport.qqTulas || 0)
     });
 
     setMillingYields(result);
@@ -4387,6 +4565,12 @@ export function App() {
     safeResetForm(formElement);
     setMessage("Cuadre de stock registrado");
     await refresh();
+  }
+
+  async function loadNegativeStock() {
+    const rows = await apiGet<NegativeStockRow[]>("/inventory/negative-stock");
+    setNegativeStock(rows);
+    setNegativeStockOpen(true);
   }
 
   async function submitLiquidations() {
@@ -4778,7 +4962,16 @@ export function App() {
                 <h2>Caja actual</h2>
                 <p className="muted">
                   {dashboard.current_cash_register
-                    ? `${dashboard.current_cash_register.name} abierta con ${money(dashboard.current_cash_register.opening_balance)}`
+                    ? (() => {
+                        const cash = Number(dashboard.current_cash_register.opening_balance_cash ?? 0);
+                        const bank = Number(dashboard.current_cash_register.opening_balance_bank ?? 0);
+                        const total = Number(dashboard.current_cash_register.opening_balance);
+                        const parts = [
+                          cash > 0 && `efectivo ${money(cash)}`,
+                          bank > 0 && `banco ${money(bank)}`
+                        ].filter(Boolean);
+                        return `${dashboard.current_cash_register.name} abierta con ${parts.length ? parts.join(" · ") : money(total)}`;
+                      })()
                     : "No hay caja abierta"}
                 </p>
               </div>
@@ -5006,7 +5199,7 @@ export function App() {
                   <div style={{ gridColumn: "1 / -1", display: "grid", gap: 16 }}>
                     <div className="tablePanel" style={{ padding: "8px 12px" }}>
                       <strong>✎ Editando el Motor {motorActivo}</strong>
-                      <span className="muted"> · {lista.length} secadora(s) en proceso. Finaliza cada una y registra el combustible del motor abajo.</span>
+                      <span className="muted"> · {lista.length} secadora(s) en proceso. Al registrar el combustible abajo se finaliza la corrida.</span>
                     </div>
                     <div className="panelGrid" style={{ gap: 16 }}>
                       {lista.map((rep) => {
@@ -5026,6 +5219,7 @@ export function App() {
                               <Input name="filled_at" label="Fecha de llenado" type="date" defaultValue={(rep.filled_at ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10)} required={false} />
                             </div>
                             <Input name="moisture_before" label="Humedad inicial %" type="number" defaultValue={String(rep.moisture_before ?? 0)} required={false} />
+                            <Input name="operator_name" label="Nombre del secador" placeholder="Quien seca este túnel (para la nómina)" defaultValue={rep.operator_name ?? ""} required={false} />
                             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                               <Input name="dry_start_at" label="Hora secado inicio" type="datetime-local" defaultValue={dateTimeLocalValue(rep.dry_start_at)} required={false} />
                               <Input name="dry_end_at" label="Hora secado final" type="datetime-local" defaultValue={dateTimeLocalValue(rep.dry_end_at)} required={false} />
@@ -5033,11 +5227,6 @@ export function App() {
                             <Input name="notes" label="Observacion" defaultValue={rep.notes ?? "Secado registrado"} required={false} />
                             <div className="buttonRow">
                               <button className="primary">Guardar cambios</button>
-                              {!done && (
-                                <button type="button" onClick={(event) => guardarSecadoEditado(rep, event.currentTarget.form as HTMLFormElement, true).catch((error) => setMessage(error.message))}>
-                                  Finalizar secado
-                                </button>
-                              )}
                             </div>
                           </form>
                         );
@@ -5047,7 +5236,7 @@ export function App() {
                     {renderFuelFieldset()}
                     <div className="buttonRow">
                       <button type="button" className="primary" onClick={() => cerrarCombustibleMotor().catch((error) => setMessage(error.message))}>
-                        ⛽ Registrar combustible del Motor {motorActivo}
+                        ⛽ Registrar combustible y finalizar secado
                       </button>
                       <button type="button" onClick={() => clearDryingForm()}>Volver</button>
                     </div>
@@ -5057,7 +5246,12 @@ export function App() {
             ) : (
               /* ── Modo crear: TODO el informe del motor en un solo formulario,
                     con el botón de guardar AL FINAL. El combustible va junto. ── */
-              <form className="formPanel" style={{ gridColumn: "1 / -1" }} onSubmit={(event) => guardarInformeMotor(event).catch((error) => setMessage(error.message))}>
+              <form
+                key={`motor-form-${motorActivo}`}
+                className="formPanel"
+                style={{ gridColumn: "1 / -1" }}
+                onSubmit={(event) => guardarInformeMotor(event).catch((error) => setMessage(error.message))}
+              >
                 <div className="panelGrid" style={{ gap: 16 }}>
                   {MOTOR_SECADORAS[motorActivo].map((secadora) => {
                     const t = tunelDeSecadora(secadora);
@@ -5092,6 +5286,7 @@ export function App() {
                           <Input name={`filled_at_${t}`} label="Fecha de llenado" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required={false} />
                         </div>
                         <Input name={`moisture_before_${t}`} label="Humedad inicial %" type="number" defaultValue="0" required={false} />
+                        <Input name={`secador_name_${t}`} label="Nombre del secador" placeholder="Quien seca este túnel (para la nómina)" defaultValue={getSavedSecadorName(t)} required={false} />
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                           <Input name={`dry_start_at_${t}`} label="Hora secado inicio" type="datetime-local" required={false} />
                           <Input name={`dry_end_at_${t}`} label="Hora secado final" type="datetime-local" required={false} />
@@ -5592,6 +5787,61 @@ export function App() {
               />
             )}
 
+            <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
+              <button type="button" className="btnSecondary" onClick={() => loadNegativeStock().catch((e) => addToast(e.message, "error"))}>
+                🔍 Diagnóstico de stocks negativos
+              </button>
+            </div>
+
+            {negativeStockOpen && (
+              <div className="modalOverlay" onClick={() => setNegativeStockOpen(false)}>
+                <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 720 }}>
+                  <h3>Stocks negativos</h3>
+                  {negativeStock.length === 0 ? (
+                    <p className="muted">No hay stocks negativos para este accionista.</p>
+                  ) : (
+                    <div style={{ display: "grid", gap: 16 }}>
+                      {negativeStock.map((row) => (
+                        <div key={`${row.product_id}-${row.warehouse_id}`} style={{ border: "1px solid var(--c-border)", borderRadius: 8, padding: 12 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                            <strong>{row.product_name} ({row.code})</strong>
+                            <span style={{ color: "var(--c-danger)", fontWeight: 700 }}>{row.quantity.toFixed(2)} {row.unit}</span>
+                          </div>
+                          <p className="muted" style={{ marginBottom: 8 }}>{row.warehouse_name} · {row.ownership}</p>
+                          <table className="cajaTable" style={{ fontSize: 11 }}>
+                            <thead>
+                              <tr>
+                                <th>Fecha</th>
+                                <th>Movimiento</th>
+                                <th className="num">Cantidad</th>
+                                <th>Origen</th>
+                                <th>Notas</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {row.movements.map((m, i) => (
+                                <tr key={i}>
+                                  <td>{new Date(m.created_at).toLocaleString("es-EC")}</td>
+                                  <td>{m.movement}</td>
+                                  <td className="num">{Number(m.quantity).toFixed(2)}</td>
+                                  <td>{m.reference_type || "—"}</td>
+                                  <td>{m.notes || "—"}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="buttonRow" style={{ marginTop: 16 }}>
+                    <button type="button" className="primary" onClick={() => window.print()}>Imprimir</button>
+                    <button type="button" onClick={() => setNegativeStockOpen(false)}>Cerrar</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* ── Inventario de Sacos ─────────────────────────────────── */}
             <section style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
               <h3 style={{ marginTop: 0, marginBottom: 14 }}>📦 Inventario de Sacos</h3>
@@ -5680,11 +5930,11 @@ export function App() {
         {activeTab === "Produccion" && (
           <section className="productionModuleGrid">
             {millingDrafts.length > 0 && (
-              <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+              <div id="procesos-guardados" className="tablePanel" style={{ gridColumn: "1 / -1" }}>
                 <h2>📋 Procesos guardados (en curso)</h2>
                 <p className="muted">Pilados guardados sin finalizar. Se guardan en el servidor, así que puedes seguirlos desde cualquier equipo.</p>
                 <table className="cajaTable" style={{ marginTop: 8 }}>
-                  <thead><tr><th>Lote</th><th>Túnel</th><th>Tipo</th><th className="num">QQ</th><th>Guardado</th><th /></tr></thead>
+                  <thead><tr><th>Lote</th><th>Túnel</th><th>Tipo</th><th className="num">QQ</th><th>Guardado</th><th>Estado</th><th /></tr></thead>
                   <tbody>
                     {millingDrafts.map((d) => (
                       <tr key={d.drying_report_id}>
@@ -5693,10 +5943,17 @@ export function App() {
                         <td>{d.rice_type === "CORRIENTE" ? "Corriente" : "0.11"}</td>
                         <td className="num">{Number(d.total_quintals ?? 0).toFixed(2)}</td>
                         <td className="muted">{new Date(d.saved_at).toLocaleString("es-EC")}</td>
+                        <td>
+                          {d.has_open_batch ? (
+                            <span className="chip warn" title="El lote quedó abierto; presiona Continuar para cerrarlo">Abierto</span>
+                          ) : (
+                            <span className="chip info">Guardado</span>
+                          )}
+                        </td>
                         <td style={{ textAlign: "right" }}>
                           <button type="button" className="btnSecondary"
                             onClick={() => updateProductionDryingId(d.drying_report_id)}>
-                            Retomar
+                            Continuar / Finalizar lote
                           </button>
                         </td>
                       </tr>
@@ -5726,7 +5983,13 @@ export function App() {
                   <small>{selectedProductionDrying.lots.map((lot) => `${lot.farmer_name ?? "Sin agricultor"} (${Number(lot.quintals ?? 0).toFixed(2)} QQ)`).join(" + ")}</small>
                 </div>
               ) : (
-                <p className="muted">Finaliza una secadora en la pestana Secadoras para poder producirla aqui.</p>
+                <div className="muted" style={{ padding: 10, background: "#fef3c7", borderRadius: 8, border: "1px solid #fde68a" }}>
+                  <strong>No hay secadoras finalizadas sin procesar.</strong>
+                  <p style={{ margin: "4px 0 0" }}>
+                    Ve a la pestaña <strong>Secadoras</strong>, finaliza un secado y vuelve aquí. Si ya guardaste un proceso,
+                    aparecerá arriba en <strong>Procesos guardados</strong>; presiona <em>Continuar / Finalizar lote</em>.
+                  </p>
+                </div>
               )}
             </section>
 
@@ -5754,13 +6017,13 @@ export function App() {
                     style={{ width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
                     placeholder="Ej: 6" />
                 </label>
-                <div style={{ fontSize: 12, alignSelf: "end" }}>
-                  <span style={{ fontWeight: 700, display: "block", marginBottom: 3 }}>Pago al estibador</span>
-                  <div style={{ padding: "6px 8px", background: "#fff", borderRadius: 6, border: "1px solid #d1d5db", fontWeight: 700 }}>
-                    {money((Number(millingReport.tulas || 0) / 3) * (laborRatesForm.estibador_por_3tulas || 0))}
-                    <small style={{ fontWeight: 400, color: "var(--c-muted)" }}> ({millingReport.tulas || 0} tulas ÷ 3 × ${laborRatesForm.estibador_por_3tulas || 0})</small>
-                  </div>
-                </div>
+                <label style={{ fontSize: 12 }}>
+                  <span style={{ fontWeight: 700, display: "block", marginBottom: 3 }}>⚖️ Total QQ de tulas</span>
+                  <input type="number" min="0" step="0.01" value={millingReport.qqTulas}
+                    onChange={e => setMillingReport(p => ({ ...p, qqTulas: e.target.value }))}
+                    style={{ width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
+                    placeholder="Ej: 12.50" />
+                </label>
               </div>
               <div className="millingPiladoBuilder">
                 <label>
@@ -5800,10 +6063,16 @@ export function App() {
                   </div>
                 ))}
               </section>
+              <div className="totalBox" style={{ background: "#eff6ff", borderColor: "#bfdbfe" }}>
+                <span>⚖️ TOTAL QQ DE TULAS</span>
+                <strong>{Number(millingReport.qqTulas || 0).toFixed(2)} QQ</strong>
+                <small>Independiente de las presentaciones; base para pagar al pilador</small>
+              </div>
+
               <div className="totalBox">
-                <span>TOTAL QQ</span>
+                <span>🌾 TOTAL ARROZ PILADO</span>
                 <strong>{millingPiladoTotalQq.toFixed(2)} QQ</strong>
-                <small>Suma de las cantidades agregadas por presentacion</small>
+                <small>Suma de las presentaciones (10 LB, 25 LB, 50 LB, etc.)</small>
               </div>
 
               <div className="productionSackGrid">
@@ -5858,38 +6127,58 @@ export function App() {
                       <article key={item.id} style={{ border: "1px solid var(--c-border)", borderRadius: 8, padding: 12 }}>
                         <header style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "space-between", alignItems: "baseline" }}>
                           <div>
-                            <strong>{item.lot_code}</strong>
-                            <span className="muted">
-                              {item.tunnel_number ? ` · Tunel ${item.tunnel_number}` : ""}
-                              {item.rice_type ? ` · ${item.rice_type}` : ""}
-                            </span>
+                            {item.is_service ? (
+                              <>
+                                <span className="chip warn">Servicio de pilado</span>
+                                <strong style={{ marginLeft: 8 }}>{item.client_name ?? "Cliente"}</strong>
+                                <span className="muted"> · {Number(item.white_rice_qty ?? 0).toFixed(2)} QQ</span>
+                              </>
+                            ) : (
+                              <>
+                                <strong>{item.lot_code}</strong>
+                                <span className="muted">
+                                  {item.tunnel_number ? ` · Tunel ${item.tunnel_number}` : ""}
+                                  {item.rice_type ? ` · ${item.rice_type}` : ""}
+                                </span>
+                              </>
+                            )}
                           </div>
                           <span className="muted">{new Date(item.finished_at).toLocaleString("es-EC")}</span>
                         </header>
 
-                        <section className="yieldResults" style={{ marginTop: 8 }}>
-                          <Metric title="Rendimiento" value={`${Number(item.yield_percent ?? 0).toFixed(2)} %`} />
-                          <Metric title="Pilado" value={`${Number(item.white_rice_qty ?? 0).toFixed(2)} QQ`} />
-                          <Metric title="Arrocillo 3/4" value={`${Number(item.broken_rice_qty ?? 0).toFixed(2)} QQ`} />
-                          <Metric title="Arrocillo fino" value={`${Number(item.fine_broken_rice_qty ?? 0).toFixed(2)} QQ`} />
-                          <Metric title="Polvillo" value={`${Number(item.bran_qty ?? 0).toFixed(2)} QQ`} />
-                        </section>
+                        {item.is_service ? (
+                          <section className="yieldResults" style={{ marginTop: 8 }}>
+                            <Metric title="QQ pilados" value={`${Number(item.white_rice_qty ?? 0).toFixed(2)} QQ`} />
+                            <Metric title="Tarifa" value={`$${Number(item.service_rate ?? 0).toFixed(2)}/QQ`} />
+                            <Metric title="Total" value={money(Number(item.service_total ?? 0))} />
+                          </section>
+                        ) : (
+                          <section className="yieldResults" style={{ marginTop: 8 }}>
+                            <Metric title="Rendimiento" value={`${Number(item.yield_percent ?? 0).toFixed(2)} %`} />
+                            <Metric title="Pilado" value={`${Number(item.white_rice_qty ?? 0).toFixed(2)} QQ`} />
+                            <Metric title="Arrocillo 3/4" value={`${Number(item.broken_rice_qty ?? 0).toFixed(2)} QQ`} />
+                            <Metric title="Arrocillo fino" value={`${Number(item.fine_broken_rice_qty ?? 0).toFixed(2)} QQ`} />
+                            <Metric title="Polvillo" value={`${Number(item.bran_qty ?? 0).toFixed(2)} QQ`} />
+                          </section>
+                        )}
 
-                        <p style={{ margin: "10px 0 0" }}>
-                          <span className="muted">Presentaciones: </span>
-                          {item.presentaciones.every((p) => !p.presentation) ? (
-                            <span className="muted">sin desglose (se guardo solo el total)</span>
-                          ) : (
-                            item.presentaciones
-                              .filter((p) => p.presentation)
-                              .map((p, index, lista) => (
-                                <span key={`${item.id}-${index}`}>
-                                  <strong>{Number(p.quantity).toFixed(2)} QQ</strong> en {p.presentation}
-                                  {index < lista.length - 1 ? " · " : ""}
-                                </span>
-                              ))
-                          )}
-                        </p>
+                        {!item.is_service && (
+                          <p style={{ margin: "10px 0 0" }}>
+                            <span className="muted">Presentaciones: </span>
+                            {item.presentaciones.every((p) => !p.presentation) ? (
+                              <span className="muted">sin desglose (se guardo solo el total)</span>
+                            ) : (
+                              item.presentaciones
+                                .filter((p) => p.presentation)
+                                .map((p, index, lista) => (
+                                  <span key={`${item.id}-${index}`}>
+                                    <strong>{Number(p.quantity).toFixed(2)} QQ</strong> en {p.presentation}
+                                    {index < lista.length - 1 ? " · " : ""}
+                                  </span>
+                                ))
+                            )}
+                          </p>
+                        )}
 
                         {(item.pilador_name || item.estibador_name) && (
                           <p className="muted" style={{ margin: "6px 0 0" }}>
@@ -6300,14 +6589,25 @@ export function App() {
                 </div>
                 <form className="formPanel" onSubmit={(event) => submitCash(event).catch((error) => addToast(error.message, "error"))} style={{ padding: 24 }}>
                   <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 700 }}>Abrir caja nueva</h3>
-                  <Input name="name" label="Nombre de la caja" defaultValue="Caja Principal" />
+                  <Input name="name" label="Nombre de la caja" value={newCajaName} onChange={(e) => setNewCajaName(e.target.value)} />
                   <Select
                     name="tipo"
                     label="Tipo"
                     rows={[["EFECTIVO", "💵 Efectivo"], ["BANCO", "🏦 Banco"]]}
-                    defaultValue="EFECTIVO"
+                    value={newCajaTipo}
+                    onChange={(e) => {
+                      const tipo = e.target.value as "EFECTIVO" | "BANCO";
+                      setNewCajaTipo(tipo);
+                      loadPreviousBalance(tipo).catch(() => undefined);
+                    }}
                   />
-                  <Input name="opening_balance" label="Saldo inicial $" type="number" defaultValue="0" />
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <Input name="opening_balance_cash" label="Saldo inicial efectivo $" type="number" value={newCajaCash} onChange={(e) => setNewCajaCash(e.target.value)} />
+                    <Input name="opening_balance_bank" label="Saldo inicial banco $" type="number" value={newCajaBank} onChange={(e) => setNewCajaBank(e.target.value)} />
+                  </div>
+                  <button type="button" className="btnSecondary" onClick={() => loadPreviousBalance(newCajaTipo).catch(() => undefined)}>
+                    🔄 Traer saldo anterior ({newCajaTipo === "EFECTIVO" ? "efectivo" : "banco"})
+                  </button>
                   <button className="primary" style={{ width: "100%", padding: "10px 0", fontSize: 14, fontWeight: 700 }}>💰 Abrir caja</button>
                 </form>
               </section>
@@ -6343,7 +6643,15 @@ export function App() {
                       <div style={{ fontSize: 20, fontWeight: 700, color: "#ef4444" }}>-{money(cashSummary?.total_expense ?? 0)}</div>
                     </div>
                     <div style={{ background: "rgba(59, 130, 246, 0.15)", padding: "14px 16px", borderRadius: 8, border: "1px solid #3b82f630" }}>
-                      <div style={{ color: "#3b82f6", fontSize: 11, fontWeight: 600, marginBottom: 4 }}>SALDO INICIAL</div>
+                      <div style={{ color: "#3b82f6", fontSize: 11, fontWeight: 600, marginBottom: 4 }}>SALDO INICIAL EFECTIVO</div>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: "#3b82f6" }}>{money(Number(dashboard.current_cash_register.opening_balance_cash ?? 0))}</div>
+                    </div>
+                    <div style={{ background: "rgba(59, 130, 246, 0.15)", padding: "14px 16px", borderRadius: 8, border: "1px solid #3b82f630" }}>
+                      <div style={{ color: "#3b82f6", fontSize: 11, fontWeight: 600, marginBottom: 4 }}>SALDO INICIAL BANCO</div>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: "#3b82f6" }}>{money(Number(dashboard.current_cash_register.opening_balance_bank ?? 0))}</div>
+                    </div>
+                    <div style={{ background: "rgba(59, 130, 246, 0.15)", padding: "14px 16px", borderRadius: 8, border: "1px solid #3b82f630" }}>
+                      <div style={{ color: "#3b82f6", fontSize: 11, fontWeight: 600, marginBottom: 4 }}>SALDO INICIAL TOTAL</div>
                       <div style={{ fontSize: 20, fontWeight: 700, color: "#3b82f6" }}>{money(Number(dashboard.current_cash_register.opening_balance))}</div>
                     </div>
                   </div>
@@ -6356,7 +6664,32 @@ export function App() {
                     <button type="button" onClick={printCajaMovimientos} style={{ padding: "6px 12px", background: "rgba(255,255,255,0.2)", border: "1px solid rgba(255,255,255,0.3)", color: "#fff", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600 }} title="Imprimir PDF">
                       🖨 Imprimir PDF
                     </button>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNewCajaCash(String(Number(dashboard.current_cash_register?.opening_balance_cash ?? 0).toFixed(2)));
+                          setNewCajaBank(String(Number(dashboard.current_cash_register?.opening_balance_bank ?? 0).toFixed(2)));
+                          setEditOpeningBalance(true);
+                        }}
+                        style={{ padding: "6px 12px", background: "rgba(59,130,246,0.25)", border: "1px solid rgba(59,130,246,0.4)", color: "#fff", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600 }}
+                      >
+                        ✏️ Editar saldo inicial
+                      </button>
+                    )}
                   </div>
+                  {editOpeningBalance && (
+                    <div style={{ marginTop: 12, padding: 12, background: "rgba(0,0,0,0.2)", borderRadius: 8, maxWidth: 420 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                        <Input name="edit_cash" label="Efectivo $" type="number" value={newCajaCash} onChange={(e) => setNewCajaCash(e.target.value)} />
+                        <Input name="edit_bank" label="Banco $" type="number" value={newCajaBank} onChange={(e) => setNewCajaBank(e.target.value)} />
+                      </div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button type="button" className="primary" onClick={() => updateOpeningBalance().catch((e) => addToast(e.message, "error"))}>Guardar</button>
+                        <button type="button" onClick={() => setEditOpeningBalance(false)}>Cancelar</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Sub-tabs profesional */}
@@ -7756,13 +8089,105 @@ export function App() {
                         <td>${Number(s.rate_per_qq)}</td>
                         <td><strong>{money(Number(s.total))}</strong></td>
                         <td>{Number(s.saldo) > 0 ? <span style={{ color: "#dc2626" }}>{money(Number(s.saldo))}</span> : <span className="chip ok">Pagado</span>}</td>
-                        <td style={{ textAlign: "right" }}>
-                          {Number(s.saldo) > 0 && <button type="button" className="btnGhost" onClick={() => settlePilado(s.id).catch((err) => addToast(err.message, "error"))}>Marcar pagado</button>}
+                        <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                          <button type="button" className="btnGhost" onClick={() => loadPiladoReport(s.id).catch((err) => addToast(err.message, "error"))}>Ver informe</button>
+                          {Number(s.saldo) > 0 && <button type="button" className="btnGhost" onClick={() => settlePilado(s.id).catch((err) => addToast(err.message, "error"))} style={{ marginLeft: 6 }}>Marcar pagado</button>}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+              )}
+
+              {piladoReport && (
+                <div className="modalOverlay" onClick={() => setPiladoReport(null)}>
+                  <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 640 }}>
+                    <h3>Informe de servicio de pilado</h3>
+                    <p className="muted">{new Date(piladoReport.service_date).toLocaleDateString("es-EC")} · {piladoReport.cliente}</p>
+                    <table className="cajaTable" style={{ marginTop: 10 }}>
+                      <tbody>
+                        <tr><td>Total QQ procesados</td><td className="num">{Number(piladoReport.quintals).toFixed(2)} QQ</td></tr>
+                        <tr><td>Tarifa por QQ</td><td className="num">${Number(piladoReport.rate_per_qq).toFixed(2)}</td></tr>
+                        <tr><td>Total a cobrar</td><td className="num"><strong>{money(Number(piladoReport.total))}</strong></td></tr>
+                        <tr><td>Saldo pendiente</td><td className="num">{Number(piladoReport.saldo) > 0 ? money(Number(piladoReport.saldo)) : "Pagado"}</td></tr>
+                      </tbody>
+                    </table>
+
+                    {Array.isArray(piladoReport.detalle) && piladoReport.detalle.length > 0 && (
+                      <>
+                        <h4 style={{ margin: "16px 0 6px" }}>Desglose por presentación</h4>
+                        <table className="cajaTable">
+                          <thead><tr><th>Presentación</th><th className="num">QQ</th><th className="num">Precio/QQ</th><th className="num">Subtotal</th></tr></thead>
+                          <tbody>
+                            {piladoReport.detalle.map((d, i) => (
+                              <tr key={i}>
+                                <td>{d.presentacion}</td>
+                                <td className="num">{Number(d.quintales).toFixed(2)}</td>
+                                <td className="num">${Number(d.precio_total_qq).toFixed(2)}</td>
+                                <td className="num">{money(Number(d.subtotal))}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </>
+                    )}
+
+                    {Array.isArray(piladoReport.outputs) && piladoReport.outputs.filter((o) => !o.is_byproduct).length > 0 && (
+                      <>
+                        <h4 style={{ margin: "16px 0 6px" }}>Producto entregado al cliente</h4>
+                        <table className="cajaTable">
+                          <thead>
+                            <tr>
+                              <th>Producto</th>
+                              <th className="num">Cantidad</th>
+                              <th className="num">Unidad</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {piladoReport.outputs.filter((o) => !o.is_byproduct).map((o, i) => (
+                              <tr key={i}>
+                                <td>{o.product_name}{o.presentation ? ` (${o.presentation})` : ""}</td>
+                                <td className="num">{Number(o.quantity).toFixed(2)}</td>
+                                <td className="num">{o.unit}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                          Arrocillo, polvillo y merma son retención de la piladora; no forman parte de la entrega al cliente.
+                        </p>
+                      </>
+                    )}
+
+                    {piladoReport.yield && (
+                      <>
+                        <h4 style={{ margin: "16px 0 6px" }}>Resumen técnico del proceso</h4>
+                        <table className="cajaTable">
+                          <tbody>
+                            <tr><td>Cascarilla / arroz ingresado</td><td className="num">{Number(piladoReport.yield.input_paddy_kg).toFixed(2)} kg</td></tr>
+                            <tr><td>Arroz blanco entregado</td><td className="num">{Number(piladoReport.yield.white_rice_qty).toFixed(2)} {piladoReport.yield.white_rice_unit}</td></tr>
+                            <tr><td>Arrocillo 3/4</td><td className="num">{Number(piladoReport.yield.broken_rice_qty).toFixed(2)} QQ</td></tr>
+                            <tr><td>Arrocillo fino</td><td className="num">{Number(piladoReport.yield.fine_broken_rice_qty).toFixed(2)} QQ</td></tr>
+                            <tr><td>Polvillo / afrecho</td><td className="num">{Number(piladoReport.yield.bran_qty).toFixed(2)} QQ</td></tr>
+                            <tr><td>Total de salida</td><td className="num">{Number(piladoReport.yield.total_output_kg).toFixed(2)} kg</td></tr>
+                            <tr><td>Merma de proceso</td><td className="num">{Number(piladoReport.yield.process_loss_kg).toFixed(2)} kg</td></tr>
+                            <tr><td>Rendimiento</td><td className="num">{Number(piladoReport.yield.yield_percent).toFixed(2)}%</td></tr>
+                            {Number(piladoReport.yield.qq_de_tulas) > 0 && (
+                              <tr><td>QQ de tulas</td><td className="num">{Number(piladoReport.yield.qq_de_tulas).toFixed(2)} QQ</td></tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </>
+                    )}
+
+                    {piladoReport.notes && <p className="muted" style={{ marginTop: 12 }}>Notas: {piladoReport.notes}</p>}
+
+                    <div className="buttonRow" style={{ marginTop: 16 }}>
+                      <button type="button" className="primary" onClick={() => window.print()}>Imprimir</button>
+                      <button type="button" onClick={() => setPiladoReport(null)}>Cerrar</button>
+                    </div>
+                  </div>
+                </div>
               )}
             </div>
           </section>
@@ -8542,15 +8967,15 @@ export function App() {
             {/* ── Combustible (gas y diésel por separado) ── */}
             {reportKind === "combustible" && reportRows?.kind === "combustible" && (
               <div className="tablePanel">
-                <h2>Combustible de secado · gas y diésel por separado</h2>
+                <h2>Combustible por motor · consumo real (consolidado CEYRO)</h2>
                 <ReportTable
-                  headers={["Fecha", "Secadora", "Lote", "QQ", "Gas $", "Diésel $", "Total $"]}
-                  rows={(reportRows.data.rows || []).map((r: any) => [
+                  headers={["Fecha", "Motor", "Gas consumo", "Gas $", "Diésel consumo", "Diésel $", "Total $"]}
+                  rows={(reportRows.data.motors || []).map((r: any) => [
                     new Date(r.fecha).toLocaleDateString("es-EC"),
-                    r.dryer_name ?? `Túnel ${r.tunnel_number}`,
-                    r.lot_code || "—",
-                    Number(r.quintals).toFixed(2),
+                    `Motor ${r.motor}`,
+                    `${Number(r.gas_consumo).toFixed(2)} + ${Number(r.gas_cilindros).toFixed(2)} cil.`,
                     money(r.gas_costo),
+                    `${Number(r.diesel_consumo).toFixed(2)}`,
                     money(r.diesel_costo),
                     money(r.total)
                   ])}
@@ -8558,10 +8983,27 @@ export function App() {
                 />
                 {reportRows.data.totals && (
                   <div className="totalBox" style={{ marginTop: 10 }}>
-                    <span>Totales</span>
+                    <span>Totales por motor</span>
                     <strong>Gas {money(reportRows.data.totals.gas)} · Diésel {money(reportRows.data.totals.diesel)} · Total {money(reportRows.data.totals.total)}</strong>
                   </div>
                 )}
+
+                <h3 style={{ marginTop: 20, fontSize: 14 }}>Reparto por secadora</h3>
+                <ReportTable
+                  headers={["Fecha", "Secadora", "Motor", "QQ", "Gas $", "Diésel $", "Costo/QQ Gas", "Costo/QQ Diésel", "Total $"]}
+                  rows={(reportRows.data.rows || []).map((r: any) => [
+                    new Date(r.fecha).toLocaleDateString("es-EC"),
+                    r.dryer_name ?? `Túnel ${r.tunnel_number}`,
+                    `Motor ${r.motor_number}`,
+                    Number(r.quintals).toFixed(2),
+                    money(r.gas_costo),
+                    money(r.diesel_costo),
+                    money(r.costo_por_qq_gas),
+                    money(r.costo_por_qq_diesel),
+                    money(r.total)
+                  ])}
+                  empty="Sin reparto por secadora"
+                />
               </div>
             )}
           </>
@@ -9089,16 +9531,26 @@ export function App() {
                 </form>
                 <div className="formPanel">
                   <h2>Ejemplo de cálculo</h2>
-                  <p className="muted">Para una pilada de 100 QQ de arroz, 20 sacas y 10 QQ de arrocillo:</p>
+                  <p className="muted">Para una pilada de 100 QQ de arroz, 20 sacas, 10 QQ de arrocillo y 6 tulas:</p>
                   <div className="totalBox" style={{ marginBottom: 10 }}>
                     <span>Pilador</span>
                     <strong>{money(100 * laborRatesForm.pilador_per_qq + 20 * laborRatesForm.pilador_per_saca)}</strong>
                     <small>100 × {laborRatesForm.pilador_per_qq} + 20 × {laborRatesForm.pilador_per_saca}</small>
                   </div>
                   <div className="totalBox">
-                    <span>Estibador (por 6 tulas)</span>
-                    <strong>{money((6 / 3) * laborRatesForm.estibador_por_3tulas)}</strong>
-                    <small>6 tulas ÷ 3 × {laborRatesForm.estibador_por_3tulas}. El estibador cobra por tulas.</small>
+                    <span>Estibador</span>
+                    <strong>{money(
+                      100 * laborRatesForm.estibador_per_qq +
+                      20 * laborRatesForm.estibador_per_saca +
+                      10 * laborRatesForm.estibador_per_arrocillo +
+                      (6 / 3) * laborRatesForm.estibador_por_3tulas
+                    )}</strong>
+                    <small>
+                      100 × {laborRatesForm.estibador_per_qq} +
+                      20 × {laborRatesForm.estibador_per_saca} +
+                      10 × {laborRatesForm.estibador_per_arrocillo} +
+                      6 tulas ÷ 3 × {laborRatesForm.estibador_por_3tulas}
+                    </small>
                   </div>
                 </div>
               </section>
@@ -9159,17 +9611,17 @@ export function App() {
                   <ol className="setupList">
                     <li>Completa los <strong>datos del negocio</strong> (aparecen en los comprobantes).</li>
                     <li>Crea un usuario para cada persona que use el sistema.</li>
-                    <li>Borra los datos de prueba con el panel de la derecha.</li>
+                    <li>Usa <strong>Restaurar de fábrica</strong> en el panel de la derecha para limpiar datos de prueba.</li>
                     <li>Verifica productos, bodegas e insumos en el Dashboard ("Crear datos base" si están vacíos).</li>
                     <li>Abre la caja del día y registra a tus agricultores reales.</li>
                   </ol>
                 </div>
 
                 <form className="formPanel dangerZone" onSubmit={(e) => submitResetData(e).catch((err) => addToast(err.message, "error"))}>
-                  <h2>🗑️ Borrar datos de prueba</h2>
+                  <h2>🗑️ Restaurar de fábrica</h2>
                   <p className="muted">
-                    Elimina <strong>todos los movimientos</strong>: tickets, lotes, secado, producción, ventas, caja, gastos,
-                    anticipos, liquidaciones, fomentos, agricultores y clientes. Se conservan usuarios, configuración,
+                    Limpia <strong>todos los movimientos operativos</strong>: tickets, lotes, secado, producción, ventas, caja, gastos,
+                    anticipos, liquidaciones, fomentos, agricultores, clientes y historial de auditoría. Se conservan usuarios, configuración,
                     productos, bodegas, equipos y los catálogos de insumos y sacos (con stock en 0).
                   </p>
                   <p className="dangerNote">Esta acción no se puede deshacer.</p>
@@ -9197,7 +9649,7 @@ export function App() {
                     className="dangerBtn"
                     disabled={!isAdmin || resetForm.confirm.trim().toUpperCase() !== "BORRAR" || resetForm.password.length < 4}
                   >
-                    Borrar datos de prueba definitivamente
+                    Restaurar de fábrica definitivamente
                   </button>
                 </form>
 
@@ -9825,7 +10277,7 @@ function DryingReportsPanel({
           <div>
             <strong>Tunel {report.tunnel_number} · {report.status === "COMPLETED" ? "Finalizado" : "En proceso"}</strong>
             <small>
-              {Number(report.total_quintals ?? 0).toFixed(2)} QQ · {report.lots.length} lote(s) · {report.dryer_name ?? "Sin secador"}
+              {Number(report.total_quintals ?? 0).toFixed(2)} QQ · {report.lots.length} lote(s) · {report.dryer_name ?? "Sin secadora"} · Secador: {report.operator_name || "—"}
             </small>
             <small>Tipo: {report.rice_type === "CORRIENTE" ? "Corriente" : "0.11"}</small>
             <small>{report.lots.map((lot) => `${lot.farmer_name ?? "Sin agricultor"} (${Number(lot.quintals ?? 0).toFixed(2)} QQ)`).join(" + ")}</small>

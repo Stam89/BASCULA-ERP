@@ -123,6 +123,7 @@ export async function createProductionWorkerPayments(
     piladorName?: string | null;
     estibadorName?: string | null;
     qq: number;
+    qqDeTulas?: number;
     sacas: number;
     arrocillo: number;
     tulas?: number;
@@ -149,12 +150,20 @@ export async function createProductionWorkerPayments(
       });
     }
     if (opts.estibadorName && opts.estibadorName.trim()) {
-      // El estibador cobra por tulas: $ por cada 3 tulas, proporcional.
+      // El estibador gana por QQ procesados, por sacas, por arrocillo y por
+      // tulas (si en esa produccion hubo llenado en tula). Antes solo cobraba
+      // por tulas, por eso quedaba en $0 cuando no se registraban.
+      const tulasBonus = estibadorBaseFromTulas(tulas, rates.estibador_por_3tulas);
       rows.push({
         role: "ESTIBADOR",
         name: opts.estibadorName.trim(),
-        base: estibadorBaseFromTulas(tulas, rates.estibador_por_3tulas),
-        qq: 0, tulas
+        base: round2(
+          qq * rates.estibador_per_qq +
+          sacas * rates.estibador_per_saca +
+          arrocillo * rates.estibador_per_arrocillo +
+          tulasBonus
+        ),
+        qq, tulas
       });
     }
 
@@ -435,15 +444,15 @@ laborRouter.get("/secador-suggestions", asyncRoute(async (req, res) => {
               WHERE wp.worker_role = 'SECADOR' AND wp.worker_name = sub.worker_name AND wp.work_date = sub.work_date
             ) AS already_generated
      FROM (
-       -- La guardianía es UNA por DÍA (el secador cuida la planta esa noche, sin
-       -- importar cuántas secadoras). Por eso se agrupa por día, no por secadora:
-       -- guardianía una vez + $5 por cada túnel secado ese día.
-       SELECT 'Secador' AS worker_name,
+       -- Cada secador se paga por su propio trabajo: guardianía por día + $ por
+       -- cada túnel que secó. Se agrupa por nombre del operador y por día para no
+       -- perder secadores cuando varias personas secaron la misma fecha.
+       SELECT COALESCE(NULLIF(TRIM(operator_name), ''), 'Secador') AS worker_name,
               COALESCE(filled_at, dry_start_at::date, created_at::date) AS work_date,
               COUNT(DISTINCT tunnel_number)::int AS tunnels
        FROM drying_tunnel_reports
        WHERE COALESCE(filled_at, dry_start_at::date, created_at::date) BETWEEN $1 AND $2
-       GROUP BY 2
+       GROUP BY 1, 2
      ) sub
      ORDER BY sub.work_date DESC`,
     [from, to]

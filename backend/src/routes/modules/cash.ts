@@ -33,16 +33,18 @@ cashRouter.post("/registers/open", asyncRoute(async (req, res) => {
     name: z.string().default("Caja Principal"),
     // Una caja maneja efectivo o es una cuenta de banco.
     tipo: z.enum(["EFECTIVO", "BANCO"]).default("EFECTIVO"),
-    opening_balance: z.number().nonnegative().default(0),
+    opening_balance_cash: z.number().nonnegative().default(0),
+    opening_balance_bank: z.number().nonnegative().default(0),
     opened_by: z.string().uuid().optional()
   }).parse(req.body);
 
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const openingTotal = round2(body.opening_balance_cash + body.opening_balance_bank);
   const result = await pool.query(
-    `INSERT INTO cash_registers (branch_id, name, tipo, opening_balance, opened_by, accionista_id)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO cash_registers (branch_id, name, tipo, opening_balance, opening_balance_cash, opening_balance_bank, opened_by, accionista_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING *`,
-    [body.branch_id, body.name, body.tipo, body.opening_balance, body.opened_by, accionistaId]
+    [body.branch_id, body.name, body.tipo, openingTotal, body.opening_balance_cash, body.opening_balance_bank, body.opened_by, accionistaId]
   );
   res.status(201).json(result.rows[0]);
 }));
@@ -55,6 +57,25 @@ cashRouter.get("/registers/current", asyncRoute(async (req, res) => {
     [accionistaId]
   );
   res.json(result.rows[0] ?? null);
+}));
+
+// ── Saldo final de la última caja cerrada del accionista (para sugerir apertura) ─
+cashRouter.get("/registers/previous-balance", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const tipo = String(req.query.tipo ?? "EFECTIVO");
+  const result = await pool.query(
+    `SELECT r.id,
+            COALESCE(r.opening_balance, 0) +
+            COALESCE(SUM(CASE WHEN m.movement = 'INCOME' THEN m.amount ELSE -m.amount END), 0) AS final_balance
+     FROM cash_registers r
+     LEFT JOIN cash_movements m ON m.cash_register_id = r.id
+     WHERE r.accionista_id = $1 AND r.status = 'CLOSED' AND r.tipo = $2
+     GROUP BY r.id
+     ORDER BY r.closed_at DESC NULLS LAST, r.opened_at DESC
+     LIMIT 1`,
+    [accionistaId, tipo]
+  );
+  res.json({ final_balance: Number(result.rows[0]?.final_balance ?? 0) });
 }));
 
 // ── Resumen de caja (balance) ────────────────────────────────────────────────
@@ -71,12 +92,16 @@ cashRouter.get("/registers/:id/summary", asyncRoute(async (req, res) => {
     [req.params.id]
   );
 
+  const openingCash = Number(reg.rows[0].opening_balance_cash ?? 0);
+  const openingBank = Number(reg.rows[0].opening_balance_bank ?? 0);
   const opening = Number(reg.rows[0].opening_balance);
   const income = Number(totals.rows[0].total_income);
   const expense = Number(totals.rows[0].total_expense);
 
   res.json({
     ...reg.rows[0],
+    opening_balance_cash: openingCash,
+    opening_balance_bank: openingBank,
     total_income: income,
     total_expense: expense,
     current_balance: opening + income - expense
@@ -92,6 +117,27 @@ cashRouter.post("/registers/:id/close", asyncRoute(async (req, res) => {
     [req.params.id]
   );
   if (!result.rows[0]) { res.status(400).json({ error: "Caja no está abierta o no existe" }); return; }
+  res.json(result.rows[0]);
+}));
+
+// ── Editar saldo inicial de una caja abierta (para corregir aperturas con saldo 0) ─
+cashRouter.put("/registers/:id/opening-balance", requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({
+    opening_balance_cash: z.number().nonnegative().default(0),
+    opening_balance_bank: z.number().nonnegative().default(0)
+  }).parse(req.body);
+
+  const openingTotal = round2(body.opening_balance_cash + body.opening_balance_bank);
+  const result = await pool.query(
+    `UPDATE cash_registers
+     SET opening_balance = $2,
+         opening_balance_cash = $3,
+         opening_balance_bank = $4
+     WHERE id = $1 AND status = 'OPEN'
+     RETURNING *`,
+    [req.params.id, openingTotal, body.opening_balance_cash, body.opening_balance_bank]
+  );
+  if (!result.rows[0]) throw new ApiError(400, "Caja no encontrada o ya está cerrada");
   res.json(result.rows[0]);
 }));
 
@@ -236,6 +282,8 @@ cashRouter.get("/registers/:id/export-excel", asyncRoute(async (req, res) => {
   );
 
   const opening = Number(reg.rows[0].opening_balance);
+  const openingCash = Number(reg.rows[0].opening_balance_cash ?? 0);
+  const openingBank = Number(reg.rows[0].opening_balance_bank ?? 0);
   const totalIncome  = movs.rows.reduce((a: number, r: { ingreso: string }) => a + Number(r.ingreso), 0);
   const totalExpense = movs.rows.reduce((a: number, r: { egreso: string }) => a + Number(r.egreso), 0);
   const balance = opening + totalIncome - totalExpense;
@@ -251,8 +299,11 @@ cashRouter.get("/registers/:id/export-excel", asyncRoute(async (req, res) => {
   ws.getCell("A1").alignment = { horizontal: "center" };
 
   const openedDate = new Date(reg.rows[0].opened_at).toLocaleDateString("es-EC");
+  const saldoLinea = openingCash > 0 && openingBank > 0
+    ? `Efectivo: $${openingCash.toFixed(2)} · Banco: $${openingBank.toFixed(2)} · Total: $${opening.toFixed(2)}`
+    : `Saldo inicial: $${opening.toFixed(2)}`;
   ws.mergeCells("A2:F2");
-  ws.getCell("A2").value = `Fecha: ${openedDate}   Saldo inicial: $${opening.toFixed(2)}`;
+  ws.getCell("A2").value = `Fecha: ${openedDate}   ${saldoLinea}`;
   ws.getCell("A2").alignment = { horizontal: "center" };
 
   ws.addRow([]);

@@ -2,21 +2,10 @@ import type { NextFunction, Request, Response } from "express";
 import { pool } from "../db/pool.js";
 import type { AuthenticatedRequest } from "../auth/require-auth.js";
 
-// Asegura las columnas extra de auditoría en instalaciones existentes.
-let ready: Promise<void> | null = null;
-export function ensureAuditTable(): Promise<void> {
-  if (!ready) {
-    ready = (async () => {
-      await pool.query(`ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS username VARCHAR(140)`);
-      await pool.query(`ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS method VARCHAR(10)`);
-      await pool.query(`ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS path TEXT`);
-      await pool.query(`ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS status_code INT`);
-      await pool.query(`ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS summary TEXT`);
-      await pool.query(`CREATE INDEX IF NOT EXISTS idx_audit_created_at ON audit_logs (created_at DESC)`);
-    })();
-  }
-  return ready;
-}
+// Las columnas extra de auditoría (username, method, path, status_code,
+// summary) las crea la migración 20260730_indices_fks_sync_y_auditoria.sql.
+// Antes se aseguraban con ALTER TABLE en runtime desde aquí: el DDL pertenece
+// a las migraciones, no al middleware.
 
 // Nombre legible de cada recurso (primer segmento de la ruta).
 const RESOURCE_LABELS: Record<string, string> = {
@@ -111,17 +100,13 @@ export function auditMiddleware(req: Request, res: Response, next: NextFunction)
     const action = method === "POST" ? "CREAR" : method === "PUT" ? "ACTUALIZAR" : method === "DELETE" ? "ELIMINAR" : method;
     const recordId = capturedId && UUID_RE.test(capturedId) ? capturedId : null;
 
-    ensureAuditTable()
-      .then(() =>
-        pool.query(
-          `INSERT INTO audit_logs (user_id, username, action, table_name, record_id, method, path, status_code, summary, new_data)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-          [user.id, user.name || user.username, action, segment, recordId, method, originalUrl, res.statusCode, summary, JSON.stringify(requestBody ?? null)]
-        )
-      )
-      .catch(() => {
-        // Nunca propagar errores de auditoría.
-      });
+    pool.query(
+      `INSERT INTO audit_logs (user_id, username, action, table_name, record_id, method, path, status_code, summary, new_data)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [user.id, user.name || user.username, action, segment, recordId, method, originalUrl, res.statusCode, summary, JSON.stringify(requestBody ?? null)]
+    ).catch(() => {
+      // Nunca propagar errores de auditoría.
+    });
   });
 
   next();

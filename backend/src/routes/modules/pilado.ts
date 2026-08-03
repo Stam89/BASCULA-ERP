@@ -41,6 +41,50 @@ piladoRouter.get("/services", asyncRoute(async (req, res) => {
   res.json({ range: { from, to }, rows: result.rows, total: round2(total), pendiente: round2(pendiente) });
 }));
 
+// Detalle de un servicio de pilado para entregar informe al cliente.
+piladoRouter.get("/services/:id", asyncRoute(async (req, res) => {
+  const serviceResult = await pool.query(
+    `SELECT s.id, s.service_date, s.quintals, s.rate_per_qq, s.total, s.notes, s.detalle,
+            s.created_at, s.processing_batch_id,
+            COALESCE(pc.name, s.client_name, 'Cliente') AS cliente,
+            (s.client_accionista_id IS NULL) AS externo,
+            COALESCE(ar.balance, 0)::float AS saldo,
+            COALESCE(ar.status, 'PAID') AS estado,
+            ar.id AS receivable_id
+     FROM pilado_services s
+     LEFT JOIN accionistas pc ON pc.id = s.client_accionista_id
+     LEFT JOIN accounts_receivable ar ON ar.id = s.receivable_id
+     WHERE s.id = $1`,
+    [req.params.id]
+  );
+  if (!serviceResult.rowCount) throw new ApiError(404, "Servicio no encontrado");
+  const service = serviceResult.rows[0];
+
+  const [outputs, yields] = await Promise.all([
+    pool.query(
+      `SELECT po.product_id, p.name AS product_name, po.quantity, po.unit, po.presentation, po.sack_weight_lb, po.is_byproduct
+       FROM processing_outputs po
+       JOIN products p ON p.id = po.product_id
+       WHERE po.processing_batch_id = $1
+       ORDER BY po.is_byproduct, po.presentation NULLS LAST`,
+      [service.processing_batch_id]
+    ),
+    pool.query(
+      `SELECT y.input_paddy_kg, y.white_rice_qty, y.white_rice_unit, y.broken_rice_qty, y.fine_broken_rice_qty,
+              y.bran_qty, y.total_output_kg, y.process_loss_kg, y.yield_percent, y.qq_de_tulas
+       FROM production_yields y
+       WHERE y.processing_batch_id = $1`,
+      [service.processing_batch_id]
+    )
+  ]);
+
+  res.json({
+    ...service,
+    outputs: outputs.rows,
+    yield: yields.rows[0] ?? null
+  });
+}));
+
 // Saldo pendiente que cada cliente (accionista o externo) le debe a CEYRO.
 piladoRouter.get("/balances", asyncRoute(async (_req, res) => {
   const result = await pool.query(

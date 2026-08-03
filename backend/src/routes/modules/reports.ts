@@ -227,33 +227,62 @@ reportsRouter.get("/production", asyncRoute(async (req, res) => {
   res.json({ range: { from, to }, rows: result.rows });
 }));
 
-// Combustible de secado por fecha, lote y secadora, con GAS y DIÉSEL por
-// separado. El costo ya viene repartido a cada secado por el motor.
+// Combustible de secado: se muestra a nivel MOTOR (consumo real) y a nivel
+// secadora (reparto proporcional). Todo es propiedad de CEYRO, así que no se
+// filtra por accionista: se consolida el consumo de todos los socios.
 reportsRouter.get("/fuel", asyncRoute(async (req, res) => {
   const { from, to } = parseRange(req.query);
-  const acc = (req as AuthenticatedRequest).accionistaId;
   if (!(await hasTable("drying_tunnel_reports"))) {
-    res.json({ range: { from, to }, rows: [] });
+    res.json({ range: { from, to }, motors: [], rows: [], totals: { gas: 0, diesel: 0, total: 0 } });
     return;
   }
-  const result = await pool.query(
+
+  const hasMotorFuel = await hasTable("motor_fuel_records");
+
+  const motors = hasMotorFuel
+    ? await pool.query(
+        `SELECT m.created_at AS fecha,
+                m.motor_number AS motor,
+                (m.gas_bombona_inicio - m.gas_bombona_fin + m.gas_cilindro_cantidad)::float AS gas_consumo,
+                m.gas_cilindro_cantidad::float AS gas_cilindros,
+                (m.diesel_inicio - m.diesel_fin)::float AS diesel_consumo,
+                m.gas_costo::float AS gas_costo,
+                m.diesel_costo::float AS diesel_costo,
+                m.costo_total::float AS total,
+                m.total_quintals::float AS quintals
+         FROM motor_fuel_records m
+         WHERE m.created_at::date BETWEEN $1 AND $2
+         ORDER BY m.created_at DESC, m.motor_number`,
+        [from, to]
+      )
+    : { rows: [] };
+
+  const rows = await pool.query(
     `SELECT COALESCE(d.dry_end_at, d.filled_at, d.created_at) AS fecha,
-            d.dryer_name, d.tunnel_number, d.motor_number, l.lot_code,
+            d.dryer_name, d.tunnel_number, d.motor_number,
             d.total_quintals::float AS quintals,
             COALESCE(d.gas_costo_total, 0)::float AS gas_costo,
             COALESCE(d.diesel_costo, 0)::float AS diesel_costo,
-            (COALESCE(d.gas_costo_total, 0) + COALESCE(d.diesel_costo, 0))::float AS total
+            (COALESCE(d.gas_costo_total, 0) + COALESCE(d.diesel_costo, 0))::float AS total,
+            CASE WHEN COALESCE(d.total_quintals, 0) > 0
+                 THEN round(COALESCE(d.gas_costo_total, 0) / d.total_quintals, 2)
+                 ELSE 0
+            END::float AS costo_por_qq_gas,
+            CASE WHEN COALESCE(d.total_quintals, 0) > 0
+                 THEN round(COALESCE(d.diesel_costo, 0) / d.total_quintals, 2)
+                 ELSE 0
+            END::float AS costo_por_qq_diesel
      FROM drying_tunnel_reports d
-     JOIN lots l ON l.id = d.lot_id
      WHERE COALESCE(d.dry_end_at, d.filled_at, d.created_at)::date BETWEEN $1 AND $2
-       AND l.accionista_id = $3
      ORDER BY fecha DESC, d.dryer_name`,
-    [from, to, acc]
+    [from, to]
   );
-  const tot = result.rows.reduce(
+
+  const motorTotals = motors.rows.reduce(
     (a: { gas: number; diesel: number; total: number }, r: { gas_costo: number; diesel_costo: number; total: number }) =>
       ({ gas: a.gas + Number(r.gas_costo), diesel: a.diesel + Number(r.diesel_costo), total: a.total + Number(r.total) }),
     { gas: 0, diesel: 0, total: 0 }
   );
-  res.json({ range: { from, to }, rows: result.rows, totals: tot });
+
+  res.json({ range: { from, to }, motors: motors.rows, rows: rows.rows, totals: motorTotals });
 }));

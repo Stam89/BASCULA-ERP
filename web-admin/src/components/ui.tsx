@@ -73,6 +73,7 @@ export function Select({
   label,
   rows,
   defaultValue,
+  value,
   disabled = false,
   required = true,
   onChange
@@ -81,6 +82,7 @@ export function Select({
   label: string;
   rows: Array<[string, string]>;
   defaultValue?: string;
+  value?: string;
   disabled?: boolean;
   required?: boolean;
   onChange?: (e: React.ChangeEvent<HTMLSelectElement>) => void;
@@ -88,7 +90,7 @@ export function Select({
   return (
     <label>
       <span>{label}</span>
-      <select name={name} defaultValue={defaultValue} disabled={disabled} required={required} onChange={onChange}>
+      <select name={name} defaultValue={defaultValue} value={value} disabled={disabled} required={required} onChange={onChange}>
         <option value="">Seleccione</option>
         {rows.map(([value, text]) => (
           <option key={value} value={value}>

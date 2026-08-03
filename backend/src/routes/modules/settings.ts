@@ -137,6 +137,8 @@ const WIPE_TABLES = [
   "payments_received",
   "expenses",
   "labor_payments",
+  "worker_payments",
+  "worker_advances",
   "print_jobs",
   "audit_logs",
   "fomentos",

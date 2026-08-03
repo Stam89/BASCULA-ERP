@@ -37,9 +37,23 @@ const corsOrigins = (process.env.CORS_ORIGINS ?? "")
   .map((s) => s.trim())
   .filter(Boolean);
 
+// La URL de la base NO tiene valor por defecto en producción: antes caía en
+// "postgres://postgres:postgres@localhost" (credenciales triviales conocidas)
+// si alguien olvidaba configurar el .env. En desarrollo se mantiene el default
+// para no estorbar, pero se avisa en consola.
+function loadDatabaseUrl(): string {
+  const fromEnv = process.env.DATABASE_URL;
+  if (fromEnv) return fromEnv;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("DATABASE_URL no está configurada. Defínela en backend/.env antes de arrancar en producción.");
+  }
+  console.warn("[seguridad] DATABASE_URL no definida: usando postgres://postgres:postgres@localhost:5432/bascula_erp (solo desarrollo)");
+  return "postgres://postgres:postgres@localhost:5432/bascula_erp";
+}
+
 export const env = {
   port: Number(process.env.PORT ?? 4000),
-  databaseUrl: process.env.DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/bascula_erp",
+  databaseUrl: loadDatabaseUrl(),
   jwtSecret: loadJwtSecret(),
   corsOrigins
 };

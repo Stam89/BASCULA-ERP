@@ -76,12 +76,17 @@ export async function enforceModulePermissions(req: Request, _res: Response, nex
   }
 
   try {
+    // Una sola consulta trae estado, rol y los módulos del vínculo
+    // (operador, accionista activo): antes eran dos round-trips por escritura.
+    // user_accionistas tiene PK (user_id, accionista_id), así que el JOIN
+    // devuelve a lo sumo una fila.
     const fresh = await pool.query(
-      `SELECT u.is_active, r.name AS role_name
+      `SELECT u.is_active, r.name AS role_name, ua.allowed_modules
        FROM users u
        LEFT JOIN roles r ON r.id = u.role_id
+       LEFT JOIN user_accionistas ua ON ua.user_id = u.id AND ua.accionista_id = $2
        WHERE u.id = $1`,
-      [user.id]
+      [user.id, (req as AuthenticatedRequest).accionistaId ?? null]
     );
     if (!fresh.rowCount || !fresh.rows[0].is_active) {
       next(new ApiError(401, "Tu usuario fue desactivado. Habla con un administrador."));
@@ -99,14 +104,9 @@ export async function enforceModulePermissions(req: Request, _res: Response, nex
       next();
       return;
     }
-    // Permisos POR ACCIONISTA: se leen los módulos del vínculo (operador,
-    // accionista activo). resolveAccionista ya corrió y dejó req.accionistaId.
-    const accionistaId = (req as AuthenticatedRequest).accionistaId;
-    const perm = await pool.query(
-      "SELECT allowed_modules FROM user_accionistas WHERE user_id = $1 AND accionista_id = $2",
-      [user.id, accionistaId ?? null]
-    );
-    const allowed: string[] = perm.rows[0]?.allowed_modules ?? [];
+    // Permisos POR ACCIONISTA: los módulos del vínculo (operador, accionista
+    // activo). resolveAccionista ya corrió y dejó req.accionistaId.
+    const allowed: string[] = fresh.rows[0].allowed_modules ?? [];
     if (requiredModules.some((module) => allowed.includes(module))) {
       next();
       return;

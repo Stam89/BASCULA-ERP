@@ -632,9 +632,12 @@ mobileTicketsRouter.post("/import-bascula", requireAuth, asyncRoute(async (req, 
 }));
 
 // Trae los tickets desde Firebase ahora mismo (botón "Importar" en la app).
-mobileTicketsRouter.post("/refresh-firebase", requireAuth, asyncRoute(async (_req, res) => {
+// Con { full: true } ignora la marca incremental y re-lee las colecciones
+// completas (recuperación tras borrar datos; la importación es idempotente).
+mobileTicketsRouter.post("/refresh-firebase", requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({ full: z.boolean().optional() }).parse(req.body ?? {});
   const { importFromFirebase } = await import("../../integrations/bascula-firebase.js");
-  const result = await importFromFirebase();
+  const result = await importFromFirebase({ full: body.full === true });
   if (!result.ok) throw new ApiError(400, result.reason);
   res.json(result);
 }));

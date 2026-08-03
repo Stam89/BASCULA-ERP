@@ -27,18 +27,28 @@ const draftSchema = z.object({
   saved_by: z.string().uuid().optional()
 });
 
-// Procesos de pilado guardados (en curso) del accionista activo.
+// Procesos de pilado guardados (en curso) del accionista activo. Se sigue
+// mostrando aunque exista un processing_batch ABIERTO (sin finished_at), así
+// se puede recuperar un lote que quedó a medio cerrar por un error de red o de
+// validación.
 processingRouter.get("/drafts", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
     `SELECT d.drying_report_id, d.report, d.pilado_entries, d.saved_at,
             t.tunnel_number, t.total_quintals, t.rice_type,
-            l.lot_code
+            l.lot_code,
+            EXISTS (
+              SELECT 1 FROM processing_batches b
+              WHERE b.drying_report_id = d.drying_report_id AND b.finished_at IS NULL
+            ) AS has_open_batch
      FROM milling_drafts d
      JOIN drying_tunnel_reports t ON t.id = d.drying_report_id
      JOIN lots l ON l.id = t.lot_id
      WHERE l.accionista_id = $1
-       AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.drying_report_id)
+       AND NOT EXISTS (
+         SELECT 1 FROM processing_batches b
+         WHERE b.drying_report_id = d.drying_report_id AND b.finished_at IS NOT NULL
+       )
      ORDER BY d.saved_at DESC`,
     [accionistaId]
   );
@@ -48,47 +58,88 @@ processingRouter.get("/drafts", asyncRoute(async (req, res) => {
 // Historial de pilados ya cerrados del accionista activo, con su rendimiento y
 // el desglose por presentacion. Es el respaldo para revisar que salio de cada
 // lote sin tener que abrir la base de datos.
+// Además incluye los SERVICIOS DE PILADO que CEYRO presta a otros accionistas o
+// clientes externos, para que todo quede en la misma vista de producción.
 processingRouter.get("/history", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
-  const result = await pool.query(
-    `SELECT b.id,
-            b.batch_number,
-            b.finished_at,
-            b.pilador_name,
-            b.estibador_name,
-            l.lot_code,
-            t.tunnel_number,
-            t.rice_type,
-            y.input_paddy_kg,
-            y.white_rice_qty,
-            y.broken_rice_qty,
-            y.fine_broken_rice_qty,
-            y.bran_qty,
-            y.total_output_kg,
-            y.process_loss_kg,
-            y.yield_percent,
-            COALESCE((
-              SELECT json_agg(json_build_object(
-                       'presentation', po.presentation,
-                       'sack_weight_lb', po.sack_weight_lb,
-                       'quantity', po.quantity,
-                       'unit', po.unit
-                     ) ORDER BY po.sack_weight_lb DESC NULLS LAST)
-              FROM processing_outputs po
-              WHERE po.processing_batch_id = b.id
-                AND po.is_byproduct = false
-            ), '[]'::json) AS presentaciones
-     FROM processing_batches b
-     JOIN lots l ON l.id = b.lot_id
-     LEFT JOIN drying_tunnel_reports t ON t.id = b.drying_report_id
-     LEFT JOIN production_yields y ON y.processing_batch_id = b.id
-     WHERE b.finished_at IS NOT NULL
-       AND l.accionista_id = $1
-     ORDER BY b.finished_at DESC
-     LIMIT 100`,
-    [accionistaId]
-  );
-  res.json(result.rows);
+
+  const [batches, services] = await Promise.all([
+    pool.query(
+      `SELECT b.id,
+              b.batch_number,
+              b.finished_at,
+              b.pilador_name,
+              b.estibador_name,
+              l.lot_code,
+              t.tunnel_number,
+              t.rice_type,
+              y.input_paddy_kg,
+              y.white_rice_qty,
+              y.broken_rice_qty,
+              y.fine_broken_rice_qty,
+              y.bran_qty,
+              y.total_output_kg,
+              y.process_loss_kg,
+              y.yield_percent,
+              y.qq_de_tulas,
+              COALESCE((
+                SELECT json_agg(json_build_object(
+                         'presentation', po.presentation,
+                         'sack_weight_lb', po.sack_weight_lb,
+                         'quantity', po.quantity,
+                         'unit', po.unit
+                       ) ORDER BY po.sack_weight_lb DESC NULLS LAST)
+                FROM processing_outputs po
+                WHERE po.processing_batch_id = b.id
+                  AND po.is_byproduct = false
+              ), '[]'::json) AS presentaciones,
+              FALSE AS is_service,
+              NULL::numeric AS service_rate,
+              NULL::numeric AS service_total,
+              NULL::varchar AS client_name
+       FROM processing_batches b
+       JOIN lots l ON l.id = b.lot_id
+       LEFT JOIN drying_tunnel_reports t ON t.id = b.drying_report_id
+       LEFT JOIN production_yields y ON y.processing_batch_id = b.id
+       WHERE b.finished_at IS NOT NULL
+         AND l.accionista_id = $1`,
+      [accionistaId]
+    ),
+    pool.query(
+      `SELECT s.id,
+              NULL::varchar AS batch_number,
+              s.service_date::timestamptz AS finished_at,
+              NULL::varchar AS pilador_name,
+              NULL::varchar AS estibador_name,
+              COALESCE(a.name, s.client_name, 'Cliente') AS lot_code,
+              NULL::int AS tunnel_number,
+              NULL::varchar AS rice_type,
+              NULL::numeric AS input_paddy_kg,
+              s.quintals AS white_rice_qty,
+              NULL::numeric AS broken_rice_qty,
+              NULL::numeric AS fine_broken_rice_qty,
+              NULL::numeric AS bran_qty,
+              NULL::numeric AS total_output_kg,
+              NULL::numeric AS process_loss_kg,
+              NULL::numeric AS yield_percent,
+              NULL::numeric AS qq_de_tulas,
+              '[]'::json AS presentaciones,
+              TRUE AS is_service,
+              s.rate_per_qq AS service_rate,
+              s.total AS service_total,
+              COALESCE(a.name, s.client_name, 'Cliente') AS client_name
+       FROM pilado_services s
+       LEFT JOIN accionistas a ON a.id = s.client_accionista_id
+       WHERE s.provider_accionista_id = $1`,
+      [accionistaId]
+    )
+  ]);
+
+  const rows = [...batches.rows, ...services.rows]
+    .sort((a, b) => new Date(b.finished_at).getTime() - new Date(a.finished_at).getTime())
+    .slice(0, 100);
+
+  res.json(rows);
 }));
 
 processingRouter.get("/drafts/:dryingId", asyncRoute(async (req, res) => {
@@ -171,6 +222,8 @@ const finishProductionSchema = z.object({
   pilador_name: z.string().optional(),
   estibador_name: z.string().optional(),
   tulas: z.number().nonnegative().optional(),
+  // QQ totales de las tulas: base INDEPENDIENTE del arroz pilado para pagar al pilador.
+  qq_de_tulas: z.number().nonnegative().optional(),
   created_by: z.string().uuid().optional()
 });
 
@@ -522,11 +575,11 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
 
       const svc = await client.query(
         `INSERT INTO pilado_services
-           (provider_accionista_id, client_accionista_id, client_name, lot_id, quintals, rate_per_qq, total, receivable_id, payable_id, detalle, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+           (provider_accionista_id, client_accionista_id, client_name, lot_id, processing_batch_id, quintals, rate_per_qq, total, receivable_id, payable_id, detalle, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING id`,
         [CEYRO_ID, esDeOtroAccionista ? accionistaId : null, esDeOtroAccionista ? null : clienteNombre,
-         body.lot_id, servicio.quintales, serviceRate, serviceAmount, receivableId, payableId,
+         body.lot_id, processingBatchId, servicio.quintales, serviceRate, serviceAmount, receivableId, payableId,
          JSON.stringify(servicio.detalle), body.created_by ?? null]
       );
       await client.query("UPDATE accounts_receivable SET reference_id = $2 WHERE id = $1", [receivableId, svc.rows[0].id]);
@@ -542,10 +595,11 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
         fine_broken_rice_qty, fine_broken_rice_unit, fine_broken_rice_kg,
         bran_qty, bran_unit, bran_kg,
         total_output_kg, process_loss_kg, yield_percent,
-        packaging_supply_id, sacks_used, sack_presentation_data, service_rate_per_qq, service_amount, created_by)
+        packaging_supply_id, sacks_used, sack_presentation_data, service_rate_per_qq, service_amount,
+        qq_de_tulas, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-               $21, $22::jsonb, $23, $24, $25)
+               $21, $22::jsonb, $23, $24, $25, $26)
        RETURNING *`,
       [
         processingBatchId,
@@ -580,6 +634,7 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
         }))),
         serviceRate,
         serviceAmount,
+        body.qq_de_tulas ?? 0,
         body.created_by
       ]
     );
@@ -642,6 +697,7 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       piladorName: updatedBatch.rows[0].pilador_name,
       estibadorName: updatedBatch.rows[0].estibador_name,
       qq: processedQq,
+      qqDeTulas: body.qq_de_tulas,
       sacas: sacksUsed,
       arrocillo: arrocilloQq,
       tulas: body.tulas ?? 0,

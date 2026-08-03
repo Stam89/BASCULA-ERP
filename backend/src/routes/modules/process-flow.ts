@@ -38,6 +38,9 @@ const dryingBodySchema = z.object({
   diesel_inicio: z.number().nonnegative().default(0),
   diesel_fin: z.number().nonnegative().default(0),
   dryer_name: z.string().optional(),
+  // Nombre de la PERSONA que seca (el secador). Se usa en Nómina para pagarle
+  // la guardianía + túneles de la semana. dryer_name es la MÁQUINA (Secadora N).
+  operator_name: z.string().optional(),
   notes: z.string().optional(),
   created_by: z.string().uuid().optional()
 });
@@ -55,6 +58,7 @@ const dryingUpdateSchema = z.object({
   diesel_inicio: z.number().nonnegative().default(0),
   diesel_fin: z.number().nonnegative().default(0),
   dryer_name: z.string().optional(),
+  operator_name: z.string().optional(),
   notes: z.string().optional()
 });
 
@@ -201,6 +205,9 @@ processFlowRouter.get("/drying/motor/:motor/active", asyncRoute(async (req, res)
 // Registra el combustible del MOTOR (los medidores son del motor) y reparte el
 // costo entre sus secados activos según los quintales de cada uno. Así cada
 // lote —y cada accionista— paga exactamente su parte.
+// Con finalize: true (botón "Registrar combustible" de la edición) además da
+// por TERMINADOS los secados de la corrida: el combustible se registra al
+// final, cuando el secado ya acabó.
 processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
   const body = z.object({
     motor_number: z.number().int().min(1).max(2),
@@ -209,6 +216,7 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
     gas_cilindro_cantidad: z.number().nonnegative().default(0),
     diesel_inicio: z.number().nonnegative().default(0),
     diesel_fin: z.number().nonnegative().default(0),
+    finalize: z.boolean().default(false),
     created_by: z.string().uuid().optional()
   }).parse(req.body);
 
@@ -274,6 +282,19 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
       );
     }
 
+    // finalize: el combustible se registra al terminar la corrida, así que los
+    // secados del reparto se dan por TERMINADOS (los que ya estaban finalizados
+    // conservan su hora de fin original).
+    if (body.finalize) {
+      await client.query(
+        `UPDATE drying_tunnel_reports
+         SET status = 'COMPLETED',
+             dry_end_at = COALESCE(dry_end_at, now())
+         WHERE id = ANY($1::uuid[])`,
+        [partes.map((p) => p.id)]
+      );
+    }
+
     return {
       registro: record.rows[0],
       reparto: partes.map((p) => ({
@@ -283,7 +304,8 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
         diesel: p.diesel,
         total: round2(p.gas + p.diesel)
       })),
-      costo_por_qq: round2(costoTotal / totalQq)
+      costo_por_qq: round2(costoTotal / totalQq),
+      finalized: body.finalize ? partes.length : 0
     };
   });
 
@@ -460,6 +482,25 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
 
   const isMaquila = Boolean(entries.rows[0].is_maquila);
   const lotAccionista = entries.rows[0].accionista_id as string | null;
+
+  // Validación: una secadora no puede tener dos secados activos de distintos
+  // accionistas para evitar que se mezclen datos entre socios.
+  const ocupado = await client.query(
+    `SELECT d.id, a.name AS accionista_name
+     FROM drying_tunnel_reports d
+     JOIN lots l ON l.id = d.lot_id
+     LEFT JOIN accionistas a ON a.id = l.accionista_id
+     WHERE d.tunnel_number = $1
+       AND d.status = 'IN_PROGRESS'
+       AND l.accionista_id IS DISTINCT FROM $2
+     LIMIT 1`,
+    [input.tunnel_number, lotAccionista]
+  );
+  if (ocupado.rowCount) {
+    const nombre = ocupado.rows[0].accionista_name ?? "servicio de pilado/maquila";
+    throw new ApiError(409, `El túnel ${input.tunnel_number} ya está en uso por ${nombre}. Finaliza ese secado antes de usarlo con otro accionista.`);
+  }
+
   const farmerIds = new Set(entries.rows.map((e) => e.farmer_id));
   // Si el lote junta arroz de varios agricultores, no tiene un dueño único.
   const lotFarmerId = farmerIds.size === 1 ? entries.rows[0].farmer_id : null;
@@ -539,8 +580,8 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
       gas_bombona_inicio, gas_bombona_fin, gas_bombona_precio, gas_bombona_costo,
       gas_cilindro_cantidad, gas_cilindro_precio, gas_cilindro_costo, gas_costo_total,
       diesel_inicio, diesel_fin, diesel_precio, diesel_costo,
-      dryer_name, status, notes, created_by, motor_number)
-     VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
+      dryer_name, operator_name, status, notes, created_by, motor_number)
+     VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31)
      RETURNING *`,
     [
       lotId,
@@ -569,6 +610,7 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
       c.precioDiesel,
       c.dieselCosto,
       input.dryer_name ?? null,
+      input.operator_name?.trim() || null,
       status,
       input.notes ?? null,
       input.created_by ?? null,
@@ -640,7 +682,8 @@ async function updateDryingReport(
          dryer_name = $22,
          status = $23,
          notes = $24,
-         motor_number = $25
+         motor_number = $25,
+         operator_name = $26
      WHERE id = $1
      RETURNING *`,
     [
@@ -668,7 +711,8 @@ async function updateDryingReport(
       input.dryer_name ?? current.rows[0].dryer_name,
       status,
       input.notes ?? current.rows[0].notes,
-      motorDeSecadora(input.dryer_name ?? current.rows[0].dryer_name)
+      motorDeSecadora(input.dryer_name ?? current.rows[0].dryer_name),
+      input.operator_name !== undefined ? (input.operator_name.trim() || null) : current.rows[0].operator_name
     ]
   );
 

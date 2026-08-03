@@ -215,6 +215,24 @@ inventoryRouter.post("/adjustments", asyncRoute(async (req, res) => {
     throw new ApiError(400, `"${producto}" es producto terminado y no puede ir a "${bodega}".`);
   }
 
+  // No se permite un ajuste negativo que deje stock negativo; eso descontrola
+  // el inventario y luego cuadra mal con lo físico.
+  if (body.quantity < 0) {
+    const disponible = await pool.query(
+      `SELECT COALESCE(SUM(quantity), 0)::numeric AS stock
+       FROM inventory_stock
+       WHERE product_id = $1 AND warehouse_id = $2 AND ownership = $3 AND accionista_id = $4`,
+      [body.product_id, body.warehouse_id, body.ownership, accionistaId]
+    );
+    const stockActual = Number(disponible.rows[0].stock);
+    if (stockActual + body.quantity < -0.001) {
+      throw new ApiError(
+        409,
+        `Ajuste no permitido: hay ${stockActual.toFixed(2)} QQ en esta bodega y el ajuste pide bajar ${Math.abs(body.quantity).toFixed(2)} QQ.`
+      );
+    }
+  }
+
   const result = await pool.query(
     `INSERT INTO inventory_movements
      (product_id, warehouse_id, lot_id, movement, quantity, reference_type, ownership, notes, created_by, accionista_id)
@@ -238,4 +256,44 @@ inventoryRouter.get("/movements", asyncRoute(async (req, res) => {
     [accionistaId]
   );
   res.json(result.rows);
+}));
+
+// Diagnóstico: lista stocks negativos con los movimientos que los originaron.
+// Útil cuando un producto (p. ej. Producto 0.11) aparece con cantidad negativa
+// en pantalla y hay que rastrear el ajuste/venta/proceso que lo dejó así.
+inventoryRouter.get("/negative-stock", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const negative = await pool.query(
+    `SELECT s.product_id, p.code, p.name AS product_name, p.unit,
+            s.warehouse_id, w.name AS warehouse_name,
+            s.ownership, SUM(s.quantity)::float AS quantity
+     FROM inventory_stock s
+     JOIN products p ON p.id = s.product_id
+     JOIN warehouses w ON w.id = s.warehouse_id
+     WHERE s.accionista_id = $1
+     GROUP BY s.product_id, p.code, p.name, p.unit, s.warehouse_id, w.name, s.ownership
+     HAVING SUM(s.quantity) < -0.001
+     ORDER BY SUM(s.quantity) ASC`,
+    [accionistaId]
+  );
+
+  const rows = await Promise.all(
+    negative.rows.map(async (row) => {
+      const movements = await pool.query(
+        `SELECT m.created_at, m.movement, m.quantity::float AS quantity,
+                m.reference_type, m.reference_id, m.notes, m.lot_id
+         FROM inventory_movements m
+         WHERE m.accionista_id = $1
+           AND m.product_id = $2
+           AND m.warehouse_id = $3
+           AND m.ownership = $4
+         ORDER BY m.created_at DESC
+         LIMIT 20`,
+        [accionistaId, row.product_id, row.warehouse_id, row.ownership]
+      );
+      return { ...row, movements: movements.rows };
+    })
+  );
+
+  res.json(rows);
 }));

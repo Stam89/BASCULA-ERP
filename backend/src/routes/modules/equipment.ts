@@ -8,6 +8,18 @@ import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { round2 } from "../../utils/rice-formulas.js";
+import { signUploadUrl } from "../../auth/upload-sign.js";
+
+// Agrega la URL firmada (válida 1 hora) para ver la foto del recibo en un
+// <img src> sin exponer el JWT de sesión. receipt_photo_url se guarda como
+// "/uploads/equipment/archivo.png"; la firma usa la ruta sin ese prefijo.
+function withSignedPhoto<T extends { receipt_photo_url?: string | null }>(row: T) {
+  const raw = row.receipt_photo_url ?? null;
+  return {
+    ...row,
+    receipt_photo_signed_url: raw ? signUploadUrl(raw.replace(/^\/uploads\//, "")) : null
+  };
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadsDir = path.join(__dirname, "../../../uploads/equipment");
@@ -171,7 +183,7 @@ equipmentRouter.post("/:id/maintenance", asyncRoute(async (req, res) => {
     return maintenance.rows[0];
   });
 
-  res.status(201).json(result);
+  res.status(201).json(withSignedPhoto(result));
 }));
 
 // GET historial de mantenimiento de un equipo
@@ -185,7 +197,7 @@ equipmentRouter.get("/:id/maintenance", asyncRoute(async (req, res) => {
      LIMIT 100`,
     [req.params.id]
   );
-  res.json(result.rows);
+  res.json(result.rows.map(withSignedPhoto));
 }));
 
 // GET resumen de gastos de mantenimiento (por mes y tipo)
@@ -229,7 +241,7 @@ equipmentRouter.get("/maintenance/all", asyncRoute(async (req, res) => {
      ORDER BY em.created_at DESC
      LIMIT 200`
   );
-  res.json(result.rows);
+  res.json(result.rows.map(withSignedPhoto));
 }));
 
 // DELETE equipo (con lógica inteligente)

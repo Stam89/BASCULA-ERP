@@ -1620,6 +1620,76 @@ input[type="datetime-local"] { height: 36px; }
   letter-spacing: -0.2px;
 }
 
+/* ── Impresión de modales (informes) ──────────────────────────── */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .modalOverlay,
+  .modalOverlay * {
+    visibility: visible;
+  }
+  .modalOverlay {
+    position: fixed;
+    inset: 0;
+    background: #fff;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    padding: 0;
+    display: block;
+    overflow: auto;
+  }
+  .modalCard {
+    position: relative;
+    left: auto;
+    top: auto;
+    transform: none;
+    width: 100%;
+    max-width: none;
+    max-height: none;
+    min-height: 100vh;
+    overflow: visible;
+    box-shadow: none;
+    border: none;
+    border-radius: 0;
+    padding: 18mm 14mm;
+    background: #fff;
+    color: #000;
+    font-size: 12px;
+    gap: 10px;
+  }
+  .modalCard h3 {
+    font-size: 16px;
+    margin-bottom: 8px;
+  }
+  .modalCard table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 6px;
+    page-break-inside: avoid;
+  }
+  .modalCard th,
+  .modalCard td {
+    border: 1px solid #999;
+    padding: 5px 6px;
+    text-align: left;
+  }
+  .modalCard th {
+    background: #f2f2f2;
+  }
+  .modalCard .num {
+    text-align: right;
+  }
+  .modalCard .muted {
+    color: #444;
+  }
+  /* Botones del modal no se imprimen */
+  .modalCard .buttonRow,
+  .modalCard button {
+    display: none !important;
+  }
+}
+
 /* ── Paneles de pasos (Ventas) ────────────────────────────────── */
 .stepPanel { border-left: 4px solid var(--c-brand); }
 .stepPanel.stepInfo    { border-left-color: var(--c-info);    background: linear-gradient(135deg, color-mix(in srgb, var(--c-info) 5%, var(--c-surface)), var(--c-surface)); }

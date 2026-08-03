@@ -8,6 +8,7 @@ import { fileURLToPath } from "url";
 import { errorHandler, notFound } from "./http/error-handler.js";
 import { routes } from "./routes/index.js";
 import { verifyToken } from "./auth/jwt.js";
+import { verifyUploadSignature } from "./auth/upload-sign.js";
 import { env } from "./config/env.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -33,16 +34,23 @@ app.use("/api", (_req, res, next) => {
 
 // Archivos subidos (fotos de recibos de mantenimiento): son documentos del
 // negocio, así que exigen sesión. El token puede venir en el header o, para que
-// un <img src> pueda mostrarlos, como ?token=... en la URL.
+// un <img src> pueda mostrarlos, como URL FIRMADA de corta duración
+// (?exp=...&sig=..., ver auth/upload-sign.ts). Ya NO se acepta el JWT por
+// query param: quedaba grabado en los logs y abría la sesión completa.
 app.use("/uploads", (req, res, next) => {
   const header = req.headers.authorization;
   const fromHeader = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
-  const fromQuery = typeof req.query.token === "string" ? req.query.token : undefined;
-  const token = fromHeader ?? fromQuery;
   try {
-    if (!token) throw new Error("sin token");
-    verifyToken(token);
-    next();
+    if (fromHeader) {
+      verifyToken(fromHeader);
+      next();
+      return;
+    }
+    if (verifyUploadSignature(req.path, req.query.exp, req.query.sig)) {
+      next();
+      return;
+    }
+    throw new Error("sin credencial válida");
   } catch {
     res.status(401).json({ error: "Sesión requerida para ver este archivo.", statusCode: 401 });
   }
