@@ -94,15 +94,6 @@ export async function apiPut<T>(path: string, body: unknown): Promise<T> {
   return parseResponse<T>(response);
 }
 
-export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${API_URL}/api/v1${path}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify(body)
-  });
-  return parseResponse<T>(response);
-}
-
 export async function checkHealth(): Promise<boolean> {
   try {
     const response = await fetch(`${API_URL}/health`);
