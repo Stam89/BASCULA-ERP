@@ -21,6 +21,18 @@ tunnelOccupancyRouter.get("/", asyncRoute(async (_req, res) => {
   res.json(result.rows);
 }));
 
+// GET /api/tunnel-occupancy/reports
+// Últimos 10 reportes de consumo de gas.
+tunnelOccupancyRouter.get("/reports", asyncRoute(async (_req, res) => {
+  const result = await pool.query(
+    `SELECT tunnel_number, accionista_name, gas_used, signed_by_name, created_at
+     FROM gas_consumption_reports
+     ORDER BY created_at DESC
+     LIMIT 10`
+  );
+  res.json(result.rows);
+}));
+
 // POST /api/tunnel-occupancy/:tunnel_number/occupy
 // Ocupa un túnel para el usuario logueado. Requiere que esté DISPONIBLE.
 tunnelOccupancyRouter.post("/:tunnel_number/occupy", asyncRoute(async (req, res) => {
