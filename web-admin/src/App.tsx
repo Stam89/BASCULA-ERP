@@ -1,5 +1,5 @@
 import React, { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { apiFetch, apiGet, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId } from "./api";
+import { apiFetch, apiGet, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId } from "./api";
 import { money, categoryLabel, stockGroupLabel } from "./format";
 import type { Farmer, Product, Warehouse, Lot, MateriaPrimaEntry, MateriaPrimaCorreccion, PendingEntry } from "./types";
 import { Metric, ReportTable, Input, Select, MedidorRow, DataList } from "./components/ui";
@@ -2245,7 +2245,7 @@ export function App() {
     if (!(gas >= 0)) { addToast("Ingresa el consumo de gas", "error"); return; }
 
     try {
-      await apiPost(`/tunnel-occupancy/${tunnelNumber}/complete`, {
+      await apiPatch(`/tunnel-occupancy/${tunnelNumber}/complete`, {
         gas_used: gas,
         notes: form.notes.trim() || undefined
       });
@@ -9103,12 +9103,16 @@ export function App() {
                   <h2 style={{ margin: 0 }}>🚇 Estado actual de túneles</h2>
                   {tunnelOccupancyBusy && <span className="muted">Actualizando…</span>}
                 </div>
+                {myOccupiedTunnel && (
+                  <div className="chip danger" style={{ marginBottom: 14, fontSize: 13, textAlign: "center", padding: 10 }}>
+                    ⚠️ Tienes el <strong>Túnel {myOccupiedTunnel.tunnel_number}</strong> ocupado. Debes completarlo antes de tomar otro.
+                  </div>
+                )}
                 <div className="panelGrid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}>
                   {[1, 2, 3].map((tunnel) => {
                     const t = tunnelOccupancy.find((x) => x.tunnel_number === tunnel);
                     const occupied = t?.status === "OCUPADO";
                     const isMine = t?.current_accionista_id === authUser?.id;
-                    const canTake = !myOccupiedTunnel;
                     return (
                       <div key={tunnel} className="formPanel" style={{ borderLeft: `6px solid ${occupied ? "var(--c-danger)" : "var(--c-success)"}`, background: occupied ? "#fef2f2" : "#f0fdf4" }}>
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
@@ -9125,16 +9129,21 @@ export function App() {
                         )}
 
                         {/* ACCIONES */}
-                        {!occupied && (
+                        {!occupied && !myOccupiedTunnel && (
                           <button
                             type="button"
                             className="primary"
                             style={{ width: "100%", padding: 12, fontSize: 14 }}
-                            disabled={!canTake || tunnelOccupyBusy === tunnel}
+                            disabled={tunnelOccupyBusy === tunnel}
                             onClick={() => occupyTunnel(tunnel).catch((err) => addToast(err.message, "error"))}
                           >
                             {tunnelOccupyBusy === tunnel ? "Tomando…" : `TOMAR TÚNEL ${tunnel}`}
                           </button>
+                        )}
+                        {!occupied && myOccupiedTunnel && myOccupiedTunnel.tunnel_number !== tunnel && (
+                          <div className="chip" style={{ width: "100%", textAlign: "center", fontSize: 12, padding: "8px 0" }}>
+                            Ya tienes el Túnel {myOccupiedTunnel.tunnel_number} ocupado.
+                          </div>
                         )}
                         {occupied && isMine && (
                           <div style={{ display: "grid", gap: 10 }}>

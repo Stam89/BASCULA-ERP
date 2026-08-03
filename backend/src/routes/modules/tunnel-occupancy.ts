@@ -41,6 +41,15 @@ tunnelOccupancyRouter.post("/:tunnel_number/occupy", asyncRoute(async (req, res)
   if (!user) throw new ApiError(401, "Sesión requerida");
 
   const result = await inTransaction(async (client) => {
+    const alreadyOccupied = await client.query(
+      `SELECT tunnel_number FROM tunnel_status WHERE current_accionista_id = $1 AND status = 'OCUPADO'`,
+      [user.id]
+    );
+    if (alreadyOccupied.rowCount && alreadyOccupied.rowCount > 0) {
+      const other = alreadyOccupied.rows[0];
+      throw new ApiError(409, `Ya ocupaste el túnel ${other.tunnel_number}. Debes completarlo antes de tomar otro.`);
+    }
+
     const current = await client.query(
       `SELECT * FROM tunnel_status WHERE tunnel_number = $1 FOR UPDATE`,
       [params.tunnel_number]
