@@ -53,6 +53,7 @@ const WRITE_MODULES_BY_PREFIX: Record<string, AppModule[]> = {
   "cuadrilla": ["Caja", "Produccion"],
   "pilado": ["Caja", "Produccion"],
   "tunnel-reservations": ["Secadoras"],
+  "tunnel-occupancy": ["Secadoras"],
   // Los estados financieros se LEEN (y leer no exige módulo); lo único que se
   // escribe aquí son los parámetros contables y el costo de los activos, que
   // además piden rol de administrador en la propia ruta.
