@@ -62,6 +62,11 @@ catalogsRouter.get("/customers", asyncRoute(async (_req, res) => {
   res.json(result.rows);
 }));
 
+catalogsRouter.get("/accionistas", asyncRoute(async (_req, res) => {
+  const result = await pool.query("SELECT id, name, code FROM accionistas WHERE is_active = true ORDER BY name ASC");
+  res.json(result.rows);
+}));
+
 catalogsRouter.post("/customers", asyncRoute(async (req, res) => {
   const body = z.object({
     identification: z.string().optional(),

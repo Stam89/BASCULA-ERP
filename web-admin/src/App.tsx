@@ -66,6 +66,7 @@ type SelectionBatch = {
 const APP_MODULES = [
   "Bascula",
   "Secadoras",
+  "Reserva de Túneles",
   "Produccion",
   "Inventario",
   "Ventas",
@@ -838,7 +839,7 @@ type EquipmentMaintenance = {
 
 const navGroups: Array<{ label: string; tabs: string[] }> = [
   { label: "Principal", tabs: ["Dashboard"] },
-  { label: "Operación", tabs: ["Bascula", "Secadoras", "Produccion", "Inventario", "Seleccion"] },
+  { label: "Operación", tabs: ["Bascula", "Secadoras", "Reserva de Túneles", "Produccion", "Inventario", "Seleccion"] },
   { label: "Comercial", tabs: ["Ventas", "Caja"] },
   { label: "Cuentas", tabs: ["Por Cobrar", "Por Pagar"] },
   { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores", "Nomina", "Cuadrilla", "Servicio Pilado"] },
@@ -855,6 +856,8 @@ function NavIcon({ tab }: { tab: string }) {
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><line x1="8" y1="2" x2="8" y2="14"/><line x1="5" y1="14" x2="11" y2="14"/><line x1="3" y1="4" x2="13" y2="4"/><path d="M3 4 L2 8 Q2 10 4.5 10 Q7 10 7 8 L6 4"/><path d="M13 4 L14 8 Q14 10 11.5 10 Q9 10 9 8 L10 4"/></svg>;
     case "Secadoras":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1C8 1 3.5 5 3.5 9a4.5 4.5 0 009 0C12.5 5 8 1 8 1zm0 11.5a2.5 2.5 0 01-2.5-2.5c0-1.6 1.3-3.5 2.5-5 1.2 1.5 2.5 3.4 2.5 5a2.5 2.5 0 01-2.5 2.5z"/></svg>;
+    case "Reserva de Túneles":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 14h12"/><path d="M3 14V7a5 5 0 0110 0v7"/></svg>;
     case "Agricultores":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="5.5" r="3"/><path d="M2 15c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5H2z"/></svg>;
     case "Inventario":
@@ -1175,6 +1178,31 @@ export function App() {
   const [finishOutputs, setFinishOutputs] = useState<LineDraft[]>([{ ...emptyLine }]);
   const [newProviderForm, setNewProviderForm] = useState({ name: "", identification: "", phone: "" });
   const [selectionRatesForm, setSelectionRatesForm] = useState({ seleccion_rate: "", envejecimiento_rate: "" });
+
+  // ── Reserva de túneles ──────────────────────────────────────────────────────
+  type TunnelReservation = {
+    id: string;
+    tunnel_number: number;
+    accionista_id: string | null;
+    accionista_name: string | null;
+    start_date: string;
+    end_date: string | null;
+    status: "ACTIVE" | "COMPLETED";
+    created_by: string | null;
+    created_at: string;
+  };
+  type CatalogAccionista = { id: string; name: string; code: string };
+  const [tunnelReservations, setTunnelReservations] = useState<TunnelReservation[]>([]);
+  const [tunnelReservationsBusy, setTunnelReservationsBusy] = useState(false);
+  const [tunnelAccionistas, setTunnelAccionistas] = useState<CatalogAccionista[]>([]);
+  const [tunnelForm, setTunnelForm] = useState({
+    accionista_id: "",
+    tunnel_number: "1" as "1" | "2" | "3",
+    start_date: new Date().toISOString().slice(0, 10),
+    end_date: new Date().toISOString().slice(0, 10)
+  });
+  const [tunnelCompleteModal, setTunnelCompleteModal] = useState<{ open: boolean; reservation: TunnelReservation | null }>({ open: false, reservation: null });
+  const [tunnelCompleteForm, setTunnelCompleteForm] = useState({ gas_used: "", notes: "" });
 
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
   const [settingsForm, setSettingsForm] = useState<AppSettings>(defaultAppSettings);
@@ -2086,6 +2114,73 @@ export function App() {
       setSelectionRatesForm({ seleccion_rate: String(rates.seleccion_rate), envejecimiento_rate: String(rates.envejecimiento_rate) });
     } catch (e) {
       addToast(`Error al cargar selección: ${e instanceof Error ? e.message : "desconocido"}`, "error");
+    }
+  }
+
+  // ── Reserva de túneles ────────────────────────────────────────────────────
+  async function loadTunnelReservations() {
+    setTunnelReservationsBusy(true);
+    try {
+      const [reservations, accs] = await Promise.all([
+        apiGet<TunnelReservation[]>("/tunnel-reservations").catch(() => [] as TunnelReservation[]),
+        apiGet<CatalogAccionista[]>("/catalogs/accionistas").catch(() => [] as CatalogAccionista[])
+      ]);
+      setTunnelReservations(reservations);
+      setTunnelAccionistas(accs);
+    } catch (e) {
+      addToast(`Error al cargar reservas: ${e instanceof Error ? e.message : "desconocido"}`, "error");
+    } finally {
+      setTunnelReservationsBusy(false);
+    }
+  }
+
+  async function createTunnelReservation(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!tunnelForm.accionista_id) { addToast("Elige un accionista", "error"); return; }
+    if (tunnelForm.start_date > tunnelForm.end_date) { addToast("La fecha de inicio no puede ser mayor que la fecha de fin", "error"); return; }
+
+    try {
+      const availability = await apiGet<{ available: boolean }>(
+        `/tunnel-reservations/available?date=${tunnelForm.start_date}&tunnel_number=${tunnelForm.tunnel_number}`
+      );
+      if (!availability.available) { addToast("El túnel no está disponible para la fecha de inicio", "error"); return; }
+
+      const created = await apiPost<TunnelReservation>("/tunnel-reservations", {
+        tunnel_number: Number(tunnelForm.tunnel_number),
+        accionista_id: tunnelForm.accionista_id,
+        start_date: new Date(tunnelForm.start_date).toISOString(),
+        end_date: new Date(tunnelForm.end_date).toISOString()
+      });
+      setTunnelReservations((cur) => [...cur, created].sort((a, b) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime()));
+      setTunnelForm({
+        accionista_id: "",
+        tunnel_number: "1",
+        start_date: new Date().toISOString().slice(0, 10),
+        end_date: new Date().toISOString().slice(0, 10)
+      });
+      addToast(`Reserva creada: Túnel ${created.tunnel_number} para ${created.accionista_name || "sin nombre"}`, "success");
+    } catch (e) {
+      addToast(`Error al crear reserva: ${e instanceof Error ? e.message : "desconocido"}`, "error");
+    }
+  }
+
+  async function completeTunnelReservation() {
+    const reservation = tunnelCompleteModal.reservation;
+    if (!reservation) return;
+    const gas = Number(tunnelCompleteForm.gas_used);
+    if (!(gas >= 0)) { addToast("Ingresa el consumo de gas", "error"); return; }
+
+    try {
+      await apiPost(`/tunnel-reservations/${reservation.id}/complete`, {
+        gas_used: gas,
+        notes: tunnelCompleteForm.notes.trim() || undefined
+      });
+      setTunnelReservations((cur) => cur.filter((r) => r.id !== reservation.id));
+      setTunnelCompleteModal({ open: false, reservation: null });
+      setTunnelCompleteForm({ gas_used: "", notes: "" });
+      addToast(`Informe de gas registrado - Túnel ${reservation.tunnel_number}, Consumo ${gas} m³`, "success");
+    } catch (e) {
+      addToast(`Error al completar secado: ${e instanceof Error ? e.message : "desconocido"}`, "error");
     }
   }
 
@@ -3082,10 +3177,19 @@ export function App() {
     if (activeTab === "Cuadrilla") refreshCuadrilla().catch(() => undefined);
     if (activeTab === "Servicio Pilado") refreshPilado().catch(() => undefined);
     if (activeTab === "Seleccion") refreshSelection().catch(() => undefined);
+    if (activeTab === "Reserva de Túneles") loadTunnelReservations().catch(() => undefined);
     if (activeTab === "Dashboard" && isAdmin) refreshPanel().catch(() => undefined);
     if (activeTab === "Configuracion") refreshConfig().catch(() => undefined);
     if (activeTab === "Estados Financieros") loadFinanzas().catch((e) => addToast(e.message, "error"));
   }, [activeTab, motorActivo]);
+
+  // Refrescar estado de reservas de túneles cada 2 minutos mientras el tab esté activo.
+  useEffect(() => {
+    if (activeTab !== "Reserva de Túneles") return;
+    loadTunnelReservations().catch(() => undefined);
+    const id = setInterval(() => loadTunnelReservations().catch(() => undefined), 120_000);
+    return () => clearInterval(id);
+  }, [activeTab]);
 
   async function submitFomento(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -8781,6 +8885,131 @@ export function App() {
             )}
           </section>
         )}
+
+        {activeTab === "Reserva de Túneles" && (() => {
+          const activeReservations = tunnelReservations.filter((r) => r.status === "ACTIVE");
+          const myReservations = activeReservations.filter((r) => r.accionista_id === activeAccionistaId);
+          return (
+            <section className="panelGrid">
+              {/* SECCIÓN 1: ESTADO DE TÚNELES */}
+              <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                  <h2 style={{ margin: 0 }}>🚇 Estado de túneles</h2>
+                  {tunnelReservationsBusy && <span className="muted">Actualizando…</span>}
+                </div>
+                <div className="panelGrid" style={{ marginTop: 14, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                  {[1, 2, 3].map((tunnel) => {
+                    const reservation = activeReservations.find((r) => r.tunnel_number === tunnel);
+                    const occupied = !!reservation;
+                    return (
+                      <div key={tunnel} className={`formPanel ${occupied ? "warn" : "ok"}`} style={{ borderLeft: `4px solid ${occupied ? "var(--c-warn)" : "var(--c-success)"}` }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                          <strong>Túnel {tunnel}</strong>
+                          <span className={occupied ? "chip warn" : "chip ok"}>{occupied ? "OCUPADO" : "DISPONIBLE"}</span>
+                        </div>
+                        {occupied ? (
+                          <div style={{ marginTop: 8, fontSize: 13 }}>
+                            <p style={{ margin: "4px 0" }}><strong>Accionista:</strong> {reservation.accionista_name || "—"}</p>
+                            <p style={{ margin: "4px 0" }}><strong>Desde:</strong> {new Date(reservation.start_date).toLocaleDateString("es-EC")}</p>
+                            <p style={{ margin: "4px 0" }}><strong>Hasta:</strong> {reservation.end_date ? new Date(reservation.end_date).toLocaleDateString("es-EC") : "—"}</p>
+                          </div>
+                        ) : (
+                          <p className="muted" style={{ marginTop: 8, fontSize: 13 }}>Sin reserva activa</p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* SECCIÓN 2: CREAR RESERVA */}
+              <form className="formPanel" onSubmit={(e) => createTunnelReservation(e).catch((err) => addToast(err.message, "error"))}>
+                <h2>📝 Crear reserva</h2>
+                <label>
+                  <span>Accionista</span>
+                  <select value={tunnelForm.accionista_id} onChange={(e) => setTunnelForm({ ...tunnelForm, accionista_id: e.target.value })} required>
+                    <option value="">Seleccione</option>
+                    {tunnelAccionistas.map((a) => (
+                      <option key={a.id} value={a.id}>{a.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Túnel</span>
+                  <select value={tunnelForm.tunnel_number} onChange={(e) => setTunnelForm({ ...tunnelForm, tunnel_number: e.target.value as "1" | "2" | "3" })} required>
+                    <option value="1">Túnel 1</option>
+                    <option value="2">Túnel 2</option>
+                    <option value="3">Túnel 3</option>
+                  </select>
+                </label>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <label>
+                    <span>Fecha inicio</span>
+                    <input type="date" value={tunnelForm.start_date} onChange={(e) => setTunnelForm({ ...tunnelForm, start_date: e.target.value })} required />
+                  </label>
+                  <label>
+                    <span>Fecha fin</span>
+                    <input type="date" value={tunnelForm.end_date} min={tunnelForm.start_date} onChange={(e) => setTunnelForm({ ...tunnelForm, end_date: e.target.value })} required />
+                  </label>
+                </div>
+                <div className="buttonRow">
+                  <button type="submit" className="primary">Reservar</button>
+                </div>
+              </form>
+
+              {/* SECCIÓN 3: MIS RESERVAS ACTIVAS */}
+              <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+                <h2>📋 Mis reservas activas</h2>
+                {myReservations.length === 0 ? (
+                  <div className="emptyState"><p>No tienes reservas activas.</p></div>
+                ) : (
+                  <table className="cajaTable">
+                    <thead>
+                      <tr><th>Túnel</th><th>Desde</th><th>Hasta</th><th>Estado</th><th /></tr>
+                    </thead>
+                    <tbody>
+                      {myReservations.map((r) => (
+                        <tr key={r.id}>
+                          <td>Túnel {r.tunnel_number}</td>
+                          <td>{new Date(r.start_date).toLocaleDateString("es-EC")}</td>
+                          <td>{r.end_date ? new Date(r.end_date).toLocaleDateString("es-EC") : "—"}</td>
+                          <td><span className="chip ok">{r.status}</span></td>
+                          <td>
+                            <button type="button" className="primary" onClick={() => { setTunnelCompleteModal({ open: true, reservation: r }); setTunnelCompleteForm({ gas_used: "", notes: "" }); }}>
+                              Completar secado
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              {/* Modal completar secado */}
+              {tunnelCompleteModal.open && tunnelCompleteModal.reservation && (
+                <div className="modalOverlay" onClick={() => setTunnelCompleteModal({ open: false, reservation: null })}>
+                  <div className="modalCard" onClick={(e) => e.stopPropagation()}>
+                    <h3>Completar secado - Túnel {tunnelCompleteModal.reservation.tunnel_number}</h3>
+                    <p className="muted">Registra el consumo de gas para finalizar la reserva.</p>
+                    <label>
+                      <span>Consumo de Gas (m³)</span>
+                      <input type="number" step="0.01" min="0" value={tunnelCompleteForm.gas_used} onChange={(e) => setTunnelCompleteForm({ ...tunnelCompleteForm, gas_used: e.target.value })} required />
+                    </label>
+                    <label>
+                      <span>Nota (opcional)</span>
+                      <textarea value={tunnelCompleteForm.notes} onChange={(e) => setTunnelCompleteForm({ ...tunnelCompleteForm, notes: e.target.value })} rows={3} />
+                    </label>
+                    <div className="buttonRow">
+                      <button type="button" className="primary" onClick={() => completeTunnelReservation().catch((err) => addToast(err.message, "error"))}>Guardar informe</button>
+                      <button type="button" onClick={() => setTunnelCompleteModal({ open: false, reservation: null })}>Cancelar</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </section>
+          );
+        })()}
 
         {activeTab === "Reportes" && (
           <>

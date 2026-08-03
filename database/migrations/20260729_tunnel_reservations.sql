@@ -5,7 +5,7 @@
 CREATE TABLE IF NOT EXISTS tunnel_reservations (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   tunnel_number INTEGER NOT NULL CHECK (tunnel_number BETWEEN 1 AND 3),
-  accionista_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  accionista_id UUID REFERENCES accionistas(id) ON DELETE SET NULL,
   start_date TIMESTAMPTZ NOT NULL,
   end_date TIMESTAMPTZ,
   status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',

@@ -4,7 +4,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { type AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const tunnelReservationsRouter = Router();
 
@@ -16,12 +16,12 @@ const isoDateSchema = z.string().refine(
 const tunnelNumberSchema = z.number().int().min(1).max(3);
 
 // GET todas las reservas ACTIVE ordenadas por start_date
-// Incluye nombre del accionista (JOIN users).
+// Incluye nombre del accionista (JOIN accionistas).
 tunnelReservationsRouter.get("/", asyncRoute(async (_req, res) => {
   const result = await pool.query(
-    `SELECT r.*, u.name AS accionista_name
+    `SELECT r.*, a.name AS accionista_name
      FROM tunnel_reservations r
-     LEFT JOIN users u ON u.id = r.accionista_id
+     LEFT JOIN accionistas a ON a.id = r.accionista_id
      WHERE r.status = 'ACTIVE'
      ORDER BY r.start_date ASC`
   );
@@ -107,9 +107,9 @@ tunnelReservationsRouter.patch("/:id/complete", asyncRoute(async (req, res) => {
 
   const result = await inTransaction(async (client) => {
     const reservation = await client.query(
-      `SELECT r.*, u.name AS accionista_name
+      `SELECT r.*, a.name AS accionista_name
        FROM tunnel_reservations r
-       LEFT JOIN users u ON u.id = r.accionista_id
+       LEFT JOIN accionistas a ON a.id = r.accionista_id
        WHERE r.id = $1
        FOR UPDATE`,
       [params.id]
