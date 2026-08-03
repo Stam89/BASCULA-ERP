@@ -9620,9 +9620,11 @@ export function App() {
                 <form className="formPanel dangerZone" onSubmit={(e) => submitResetData(e).catch((err) => addToast(err.message, "error"))}>
                   <h2>🗑️ Restaurar de fábrica</h2>
                   <p className="muted">
-                    Limpia <strong>todos los movimientos operativos</strong>: tickets, lotes, secado, producción, ventas, caja, gastos,
-                    anticipos, liquidaciones, fomentos, agricultores, clientes y historial de auditoría. Se conservan usuarios, configuración,
-                    productos, bodegas, equipos y los catálogos de insumos y sacos (con stock en 0).
+                    Limpia <strong>todos los movimientos operativos</strong>: tickets, lotes, traspasos, secado, producción, combustible,
+                    pilado, selección, pedidos, ventas, inventario (productos, insumos y sacos a 0), caja, gastos, nómina,
+                    anticipos, liquidaciones, fomentos, agricultores, clientes, cuentas por cobrar/pagar, conciliación bancaria,
+                    historial de auditoría y sincronización. Se conservan usuarios, accionistas, configuración, tarifas,
+                    productos, bodegas, equipos y catálogos de insumos/sacos.
                   </p>
                   <p className="dangerNote">Esta acción no se puede deshacer.</p>
                   <label>
