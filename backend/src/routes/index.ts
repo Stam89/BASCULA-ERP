@@ -32,6 +32,7 @@ import { laborRouter } from "./modules/labor.js";
 import { cuadrillaRouter } from "./modules/cuadrilla.js";
 import { piladoRouter } from "./modules/pilado.js";
 import { selectionRouter } from "./modules/selection.js";
+import { tunnelReservationsRouter } from "./modules/tunnel-reservations.js";
 
 export const routes = Router();
 
@@ -80,3 +81,4 @@ routes.use("/labor", laborRouter);
 routes.use("/cuadrilla", cuadrillaRouter);
 routes.use("/pilado", piladoRouter);
 routes.use("/selection", selectionRouter);
+routes.use("/tunnel-reservations", tunnelReservationsRouter);
