@@ -35,10 +35,9 @@ dashboardRouter.get("/panel", requireAdmin, asyncRoute(async (req, res) => {
               COALESCE(SUM(CASE WHEN p.code = 'CASCARA-CORRIENTE' THEN m.quantity ELSE 0 END),0)::float cascara_corriente,
               COALESCE(SUM(CASE WHEN p.code = 'ARROZ-PILADO-011' THEN m.quantity ELSE 0 END),0)::float producto_011,
               COALESCE(SUM(CASE WHEN p.code = 'ARROZ-PILADO-CORRIENTE' THEN m.quantity ELSE 0 END),0)::float producto_corriente,
-              COALESCE(SUM(CASE WHEN p.code IN ('ARROCILLO-34','ARROCILLO-FINO') THEN m.quantity ELSE 0 END),0)::float arrocillo,
-              COALESCE(SUM(CASE WHEN p.code = 'POLVILLO' THEN m.quantity ELSE 0 END),0)::float polvillo,
-              COALESCE(SUM(m.quantity),0)::float qq,
-              COALESCE(SUM(m.total_cost),0)::float valor
+              COALESCE(SUM(CASE WHEN p.code = 'ARROCILLO-34' THEN m.quantity ELSE 0 END),0)::float arrocillo_34,
+              COALESCE(SUM(CASE WHEN p.code = 'ARROCILLO-FINO' THEN m.quantity ELSE 0 END),0)::float arrocillo_fino,
+              COALESCE(SUM(CASE WHEN p.code = 'POLVILLO' THEN m.quantity ELSE 0 END),0)::float polvillo
        FROM inventory_movements m
        JOIN products p ON p.id = m.product_id
        WHERE m.ownership = 'OWNED'
@@ -79,12 +78,13 @@ dashboardRouter.get("/panel", requireAdmin, asyncRoute(async (req, res) => {
       name: a.name,
       compras_total: Number(c?.total ?? 0), compras_qq: Number(c?.qq ?? 0), compras_cnt: Number(c?.cnt ?? 0),
       ventas_total: Number(v?.total ?? 0), ventas_qq: Number(v?.qq ?? 0), ventas_cnt: Number(v?.cnt ?? 0),
-      inventario_qq: Number(i?.qq ?? 0), inventario_valor: Number(i?.valor ?? 0),
+      inventario_qq: 0, inventario_valor: 0,
       cascara_011: Number(i?.cascara_011 ?? 0),
       cascara_corriente: Number(i?.cascara_corriente ?? 0),
       producto_011: Number(i?.producto_011 ?? 0),
       producto_corriente: Number(i?.producto_corriente ?? 0),
-      arrocillo: Number(i?.arrocillo ?? 0),
+      arrocillo_34: Number(i?.arrocillo_34 ?? 0),
+      arrocillo_fino: Number(i?.arrocillo_fino ?? 0),
       polvillo: Number(i?.polvillo ?? 0),
       banco_balance: Number(b?.balance ?? 0)
     };
@@ -123,10 +123,11 @@ dashboardRouter.get("/panel", requireAdmin, asyncRoute(async (req, res) => {
     per_accionista: perAccionista,
     totales: {
       compras_qq: sum((x) => x.compras_qq), ventas_qq: sum((x) => x.ventas_qq),
-      inventario_qq: sum((x) => x.inventario_qq), inventario_valor: sum((x) => x.inventario_valor),
+      inventario_qq: 0, inventario_valor: 0,
       cascara_011: sum((x) => x.cascara_011), cascara_corriente: sum((x) => x.cascara_corriente),
       producto_011: sum((x) => x.producto_011), producto_corriente: sum((x) => x.producto_corriente),
-      arrocillo: sum((x) => x.arrocillo), polvillo: sum((x) => x.polvillo),
+      arrocillo_34: sum((x) => x.arrocillo_34), arrocillo_fino: sum((x) => x.arrocillo_fino),
+      polvillo: sum((x) => x.polvillo),
       compras_cnt: perAccionista.reduce((s, x) => s + x.compras_cnt, 0),
       ventas_cnt: perAccionista.reduce((s, x) => s + x.ventas_cnt, 0)
     },
