@@ -70,144 +70,6 @@ fomentosRouter.get("/", asyncRoute(async (_req, res) => {
   res.json(result.rows);
 }));
 
-fomentosRouter.get("/:id", asyncRoute(async (req, res) => {
-  const fomento = await pool.query(`${SELECT_FOMENTO} WHERE f.id = $1`, [req.params.id]);
-  if (!fomento.rows[0]) { res.status(404).json({ error: "No encontrado" }); return; }
-
-  const [entregas, pagos] = await Promise.all([
-    pool.query(
-      `SELECT e.*,
-        ROUND(e.valor * f.renta / 30.0 * GREATEST(CURRENT_DATE - e.fecha, 0), 2) AS interes,
-        ROUND(e.valor + e.valor * f.renta / 30.0 * GREATEST(CURRENT_DATE - e.fecha, 0), 2) AS suman
-       FROM fomento_entregas e
-       JOIN fomentos f ON f.id = e.fomento_id
-       WHERE e.fomento_id = $1
-       ORDER BY e.fecha`,
-      [req.params.id]
-    ),
-    pool.query(
-      `SELECT * FROM fomento_pagos WHERE fomento_id = $1 ORDER BY fecha`,
-      [req.params.id]
-    )
-  ]);
-
-  res.json({ ...fomento.rows[0], entregas: entregas.rows, pagos: pagos.rows });
-}));
-
-fomentosRouter.post("/", asyncRoute(async (req, res) => {
-  const data = fomentoSchema.parse(req.body);
-  const cosecha = data.cosecha ?? (() => {
-    const d = new Date(data.inicio);
-    d.setMonth(d.getMonth() + 4);
-    return d.toISOString().slice(0, 10);
-  })();
-
-  const result = await pool.query(
-    `INSERT INTO fomentos (farmer_name, farmer_id, cuadras, inicio, cosecha, renta, status, notes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-    [data.farmer_name, data.farmer_id ?? null, data.cuadras, data.inicio, cosecha,
-     data.renta, data.status, data.notes ?? null]
-  );
-  res.status(201).json(result.rows[0]);
-}));
-
-fomentosRouter.patch("/:id", asyncRoute(async (req, res) => {
-  const data = fomentoSchema.partial().parse(req.body);
-  const fields: string[] = [];
-  const vals: unknown[] = [];
-  let i = 1;
-  for (const [k, v] of Object.entries(data)) {
-    if (v !== undefined) { fields.push(`${k} = $${i++}`); vals.push(v); }
-  }
-  if (!fields.length) { res.json({ message: "nada que actualizar" }); return; }
-  vals.push(req.params.id);
-  const result = await pool.query(
-    `UPDATE fomentos SET ${fields.join(", ")} WHERE id = $${i} RETURNING *`,
-    vals
-  );
-  res.json(result.rows[0]);
-}));
-
-fomentosRouter.delete("/:id", asyncRoute(async (req, res) => {
-  await pool.query("DELETE FROM fomentos WHERE id = $1", [req.params.id]);
-  res.json({ ok: true });
-}));
-
-// ── Entregas (dinero entregado al agricultor) ────────────────────────────────
-fomentosRouter.post("/:id/entregas", asyncRoute(async (req, res) => {
-  const data = entregaSchema.parse(req.body);
-
-  const result = await inTransaction(async (client) => {
-    const entrega = await client.query(
-      `INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto)
-       VALUES ($1,$2,$3,$4) RETURNING *`,
-      [req.params.id, data.fecha, data.valor, data.concepto ?? null]
-    );
-
-    // Si hay caja abierta, registrar el egreso
-    if (data.cash_register_id) {
-      const fomento = await client.query(
-        "SELECT farmer_name FROM fomentos WHERE id = $1",
-        [req.params.id]
-      );
-      await client.query(
-        `INSERT INTO cash_movements
-         (cash_register_id, movement, category, reference_type, reference_id, amount, description)
-         VALUES ($1, 'EXPENSE', 'FOMENTO_ENTREGA', 'fomento_entregas', $2, $3, $4)`,
-        [data.cash_register_id, entrega.rows[0].id, data.valor,
-         `Fomento entregado a ${fomento.rows[0]?.farmer_name ?? "agricultor"}`]
-      );
-    }
-    return entrega.rows[0];
-  });
-
-  res.status(201).json(result);
-}));
-
-fomentosRouter.delete("/:fomentoId/entregas/:id", asyncRoute(async (req, res) => {
-  await pool.query("DELETE FROM fomento_entregas WHERE id=$1 AND fomento_id=$2",
-    [req.params.id, req.params.fomentoId]);
-  res.json({ ok: true });
-}));
-
-// ── Pagos (agricultor paga su deuda) ────────────────────────────────────────
-fomentosRouter.post("/:id/pagos", asyncRoute(async (req, res) => {
-  const data = pagoSchema.parse(req.body);
-
-  const result = await inTransaction(async (client) => {
-    const pago = await client.query(
-      `INSERT INTO fomento_pagos (fomento_id, cash_register_id, fecha, valor, concepto)
-       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [req.params.id, data.cash_register_id ?? null, data.fecha, data.valor,
-       data.concepto ?? null]
-    );
-
-    // Si hay caja, registrar el ingreso
-    if (data.cash_register_id) {
-      const fomento = await client.query(
-        "SELECT farmer_name FROM fomentos WHERE id = $1",
-        [req.params.id]
-      );
-      await client.query(
-        `INSERT INTO cash_movements
-         (cash_register_id, movement, category, reference_type, reference_id, amount, description)
-         VALUES ($1, 'INCOME', 'PAGO_FOMENTO', 'fomento_pagos', $2, $3, $4)`,
-        [data.cash_register_id, pago.rows[0].id, data.valor,
-         `Pago de fomento de ${fomento.rows[0]?.farmer_name ?? "agricultor"}`]
-      );
-    }
-    return pago.rows[0];
-  });
-
-  res.status(201).json(result);
-}));
-
-fomentosRouter.delete("/:fomentoId/pagos/:id", asyncRoute(async (req, res) => {
-  await pool.query("DELETE FROM fomento_pagos WHERE id=$1 AND fomento_id=$2",
-    [req.params.id, req.params.fomentoId]);
-  res.json({ ok: true });
-}));
-
 const upload = multer({ storage: multer.memoryStorage() });
 
 // ── Exportar fomentos a Excel ───────────────────────────────────────────────
@@ -370,4 +232,142 @@ fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res
   });
 
   res.json({ success: true, ...result, errors: [] });
+}));
+
+fomentosRouter.get("/:id", asyncRoute(async (req, res) => {
+  const fomento = await pool.query(`${SELECT_FOMENTO} WHERE f.id = $1`, [req.params.id]);
+  if (!fomento.rows[0]) { res.status(404).json({ error: "No encontrado" }); return; }
+
+  const [entregas, pagos] = await Promise.all([
+    pool.query(
+      `SELECT e.*,
+        ROUND(e.valor * f.renta / 30.0 * GREATEST(CURRENT_DATE - e.fecha, 0), 2) AS interes,
+        ROUND(e.valor + e.valor * f.renta / 30.0 * GREATEST(CURRENT_DATE - e.fecha, 0), 2) AS suman
+       FROM fomento_entregas e
+       JOIN fomentos f ON f.id = e.fomento_id
+       WHERE e.fomento_id = $1
+       ORDER BY e.fecha`,
+      [req.params.id]
+    ),
+    pool.query(
+      `SELECT * FROM fomento_pagos WHERE fomento_id = $1 ORDER BY fecha`,
+      [req.params.id]
+    )
+  ]);
+
+  res.json({ ...fomento.rows[0], entregas: entregas.rows, pagos: pagos.rows });
+}));
+
+fomentosRouter.post("/", asyncRoute(async (req, res) => {
+  const data = fomentoSchema.parse(req.body);
+  const cosecha = data.cosecha ?? (() => {
+    const d = new Date(data.inicio);
+    d.setMonth(d.getMonth() + 4);
+    return d.toISOString().slice(0, 10);
+  })();
+
+  const result = await pool.query(
+    `INSERT INTO fomentos (farmer_name, farmer_id, cuadras, inicio, cosecha, renta, status, notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [data.farmer_name, data.farmer_id ?? null, data.cuadras, data.inicio, cosecha,
+     data.renta, data.status, data.notes ?? null]
+  );
+  res.status(201).json(result.rows[0]);
+}));
+
+fomentosRouter.patch("/:id", asyncRoute(async (req, res) => {
+  const data = fomentoSchema.partial().parse(req.body);
+  const fields: string[] = [];
+  const vals: unknown[] = [];
+  let i = 1;
+  for (const [k, v] of Object.entries(data)) {
+    if (v !== undefined) { fields.push(`${k} = $${i++}`); vals.push(v); }
+  }
+  if (!fields.length) { res.json({ message: "nada que actualizar" }); return; }
+  vals.push(req.params.id);
+  const result = await pool.query(
+    `UPDATE fomentos SET ${fields.join(", ")} WHERE id = $${i} RETURNING *`,
+    vals
+  );
+  res.json(result.rows[0]);
+}));
+
+fomentosRouter.delete("/:id", asyncRoute(async (req, res) => {
+  await pool.query("DELETE FROM fomentos WHERE id = $1", [req.params.id]);
+  res.json({ ok: true });
+}));
+
+// ── Entregas (dinero entregado al agricultor) ────────────────────────────────
+fomentosRouter.post("/:id/entregas", asyncRoute(async (req, res) => {
+  const data = entregaSchema.parse(req.body);
+
+  const result = await inTransaction(async (client) => {
+    const entrega = await client.query(
+      `INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto)
+       VALUES ($1,$2,$3,$4) RETURNING *`,
+      [req.params.id, data.fecha, data.valor, data.concepto ?? null]
+    );
+
+    // Si hay caja abierta, registrar el egreso
+    if (data.cash_register_id) {
+      const fomento = await client.query(
+        "SELECT farmer_name FROM fomentos WHERE id = $1",
+        [req.params.id]
+      );
+      await client.query(
+        `INSERT INTO cash_movements
+         (cash_register_id, movement, category, reference_type, reference_id, amount, description)
+         VALUES ($1, 'EXPENSE', 'FOMENTO_ENTREGA', 'fomento_entregas', $2, $3, $4)`,
+        [data.cash_register_id, entrega.rows[0].id, data.valor,
+         `Fomento entregado a ${fomento.rows[0]?.farmer_name ?? "agricultor"}`]
+      );
+    }
+    return entrega.rows[0];
+  });
+
+  res.status(201).json(result);
+}));
+
+fomentosRouter.delete("/:fomentoId/entregas/:id", asyncRoute(async (req, res) => {
+  await pool.query("DELETE FROM fomento_entregas WHERE id=$1 AND fomento_id=$2",
+    [req.params.id, req.params.fomentoId]);
+  res.json({ ok: true });
+}));
+
+// ── Pagos (agricultor paga su deuda) ────────────────────────────────────────
+fomentosRouter.post("/:id/pagos", asyncRoute(async (req, res) => {
+  const data = pagoSchema.parse(req.body);
+
+  const result = await inTransaction(async (client) => {
+    const pago = await client.query(
+      `INSERT INTO fomento_pagos (fomento_id, cash_register_id, fecha, valor, concepto)
+       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [req.params.id, data.cash_register_id ?? null, data.fecha, data.valor,
+       data.concepto ?? null]
+    );
+
+    // Si hay caja, registrar el ingreso
+    if (data.cash_register_id) {
+      const fomento = await client.query(
+        "SELECT farmer_name FROM fomentos WHERE id = $1",
+        [req.params.id]
+      );
+      await client.query(
+        `INSERT INTO cash_movements
+         (cash_register_id, movement, category, reference_type, reference_id, amount, description)
+         VALUES ($1, 'INCOME', 'PAGO_FOMENTO', 'fomento_pagos', $2, $3, $4)`,
+        [data.cash_register_id, pago.rows[0].id, data.valor,
+         `Pago de fomento de ${fomento.rows[0]?.farmer_name ?? "agricultor"}`]
+      );
+    }
+    return pago.rows[0];
+  });
+
+  res.status(201).json(result);
+}));
+
+fomentosRouter.delete("/:fomentoId/pagos/:id", asyncRoute(async (req, res) => {
+  await pool.query("DELETE FROM fomento_pagos WHERE id=$1 AND fomento_id=$2",
+    [req.params.id, req.params.fomentoId]);
+  res.json({ ok: true });
 }));

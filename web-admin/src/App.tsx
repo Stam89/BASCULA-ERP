@@ -2767,7 +2767,16 @@ export function App() {
   async function exportFomentos() {
     try {
       const response = await apiFetch("/fomentos/export", { method: "GET" });
-      if (!response.ok) throw new Error("No se pudo descargar el archivo");
+      if (!response.ok) {
+        let msg = `Error ${response.status}`;
+        try {
+          const err = await response.json();
+          msg = err.error || err.message || msg;
+        } catch {
+          msg = await response.text().catch(() => msg);
+        }
+        throw new Error(msg);
+      }
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
