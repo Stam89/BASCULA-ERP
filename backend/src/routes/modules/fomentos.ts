@@ -114,44 +114,36 @@ const importRowSchema = z.object({
   id: z.string().uuid().optional(),
   farmer_name: z.string().min(2),
   cuadras: z.number().positive(),
-  inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  cosecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().or(z.literal("")),
+  inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}/),
+  cosecha: z.string().regex(/^\d{4}-\d{2}-\d{2}/).optional(),
   renta: z.number().min(0.001).max(1),
   status: z.enum(["ACTIVOS", "NO ACTIVOS", "APROBADOS"])
 });
 
-function parseExcelDate(value: unknown): string | null {
-  if (value === null || value === undefined || value === "") return null;
-  if (value instanceof Date) return value.toISOString().slice(0, 10);
-  const s = String(value).trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  if (typeof value === "number") {
-    const d = new Date(Math.round((value - 25569) * 86400 * 1000));
-    return d.toISOString().slice(0, 10);
+const cellString = (val: unknown): string | undefined => {
+  const s = String(val ?? "").trim();
+  return s.length > 0 ? s : undefined;
+};
+
+const cellNumber = (val: unknown): number | undefined => {
+  const n = parseFloat(String(val ?? ""));
+  return isNaN(n) ? undefined : n;
+};
+
+const parseExcelDate = (val: unknown): string | undefined => {
+  if (!val) return undefined;
+  if (typeof val === "string" && /^\d{4}-\d{2}-\d{2}/.test(val)) return val;
+  if (typeof val === "number") {
+    const d = new Date((val - 25569) * 86400000);
+    return d.toISOString().split("T")[0];
   }
-  return null;
-}
+  return undefined;
+};
 
-function parseRenta(value: unknown): number | null {
-  if (value === null || value === undefined || value === "") return null;
-  let n = Number(value);
-  if (Number.isNaN(n)) return null;
-  if (n > 1) n = n / 100;
-  return n;
-}
-
-function cellString(value: unknown): string | undefined {
-  if (value === null || value === undefined || value === "") return undefined;
-  if (typeof value === "object" && "text" in value && typeof value.text === "string") return value.text.trim();
-  return String(value).trim();
-}
-
-function cellNumber(value: unknown): number | undefined {
-  if (value === null || value === undefined || value === "") return undefined;
-  if (typeof value === "number") return value;
-  const n = Number(String(value).replace(/,/g, ""));
-  return Number.isNaN(n) ? undefined : n;
-}
+const parseRenta = (val: unknown): number | undefined => {
+  const n = cellNumber(val);
+  return n && n > 0 && n <= 1 ? n : undefined;
+};
 
 fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res) => {
   const file = (req as Request & { file?: Express.Multer.File }).file;
