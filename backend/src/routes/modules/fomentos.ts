@@ -171,16 +171,17 @@ fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res
 
   for (let i = 2; i <= sheet.rowCount; i++) {
     const row = sheet.getRow(i);
-    const firstCell = row.getCell(1).value;
-    if (firstCell === null || firstCell === undefined || String(firstCell).trim() === "") continue;
+    const farmerName = cellString(row.getCell(colIndex("Nombre Agricultor")).value);
+    const cuadras = cellNumber(row.getCell(colIndex("Cuadras")).value);
+    if (!farmerName && !cuadras) continue;
 
     const idValue = row.getCell(colIndex("ID")).value;
     const id = idValue ? String(idValue).trim() : undefined;
 
     const parsed = importRowSchema.safeParse({
       id,
-      farmer_name: cellString(row.getCell(colIndex("Nombre Agricultor")).value),
-      cuadras: cellNumber(row.getCell(colIndex("Cuadras")).value),
+      farmer_name: farmerName,
+      cuadras,
       inicio: parseExcelDate(row.getCell(colIndex("Fecha Inicio")).value),
       cosecha: parseExcelDate(row.getCell(colIndex("Fecha Cosecha")).value) ?? undefined,
       renta: parseRenta(row.getCell(colIndex("Renta (%)")).value),
@@ -193,6 +194,11 @@ fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res
       continue;
     }
     rows.push(parsed.data);
+  }
+
+  if (rows.length === 0) {
+    res.status(400).json({ success: false, created: 0, updated: 0, errors: [{ fila: 0, error: "No se encontraron filas con datos para importar. Verifica que el archivo tenga al menos Nombre Agricultor y Cuadras." }] });
+    return;
   }
 
   if (errors.length) {
