@@ -1,8 +1,13 @@
 import { Router } from "express";
+import type { Request } from "express";
 import { z } from "zod";
+import multer from "multer";
+import ExcelJS from "exceljs";
+import crypto from "crypto";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { inTransaction } from "../../db/transaction.js";
+import { ApiError } from "../../http/error-handler.js";
 
 export const fomentosRouter = Router();
 
@@ -201,4 +206,168 @@ fomentosRouter.delete("/:fomentoId/pagos/:id", asyncRoute(async (req, res) => {
   await pool.query("DELETE FROM fomento_pagos WHERE id=$1 AND fomento_id=$2",
     [req.params.id, req.params.fomentoId]);
   res.json({ ok: true });
+}));
+
+const upload = multer({ storage: multer.memoryStorage() });
+
+// ── Exportar fomentos a Excel ───────────────────────────────────────────────
+fomentosRouter.get("/export", asyncRoute(async (_req, res) => {
+  const result = await pool.query(`${SELECT_FOMENTO} ORDER BY f.created_at DESC`);
+
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Fomentos");
+  sheet.columns = [
+    { header: "ID", key: "id", width: 40 },
+    { header: "Nombre Agricultor", key: "farmer_name", width: 30 },
+    { header: "Cuadras", key: "cuadras", width: 12 },
+    { header: "Fecha Inicio", key: "inicio", width: 15 },
+    { header: "Fecha Cosecha", key: "cosecha", width: 15 },
+    { header: "Renta (%)", key: "renta", width: 12 },
+    { header: "Estado", key: "status", width: 14 },
+    { header: "Deuda Total", key: "deuda_total", width: 14 }
+  ];
+
+  for (const row of result.rows) {
+    sheet.addRow({
+      id: row.id,
+      farmer_name: row.farmer_name,
+      cuadras: Number(row.cuadras),
+      inicio: row.inicio ? new Date(row.inicio) : null,
+      cosecha: row.cosecha ? new Date(row.cosecha) : null,
+      renta: Number(row.renta),
+      status: row.status,
+      deuda_total: Number(row.deuda_total ?? 0)
+    });
+  }
+
+  const buffer = (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
+  const filename = `fomentos_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.send(buffer);
+}));
+
+// ── Importar fomentos desde Excel ─────────────────────────────────────────────
+const importRowSchema = z.object({
+  id: z.string().uuid().optional(),
+  farmer_name: z.string().min(2),
+  cuadras: z.number().positive(),
+  inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  cosecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().or(z.literal("")),
+  renta: z.number().min(0.001).max(1),
+  status: z.enum(["ACTIVOS", "NO ACTIVOS", "APROBADOS"])
+});
+
+function parseExcelDate(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  const s = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  if (typeof value === "number") {
+    const d = new Date(Math.round((value - 25569) * 86400 * 1000));
+    return d.toISOString().slice(0, 10);
+  }
+  return null;
+}
+
+function parseRenta(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  let n = Number(value);
+  if (Number.isNaN(n)) return null;
+  if (n > 1) n = n / 100;
+  return n;
+}
+
+function cellString(value: unknown): string | undefined {
+  if (value === null || value === undefined || value === "") return undefined;
+  if (typeof value === "object" && "text" in value && typeof value.text === "string") return value.text.trim();
+  return String(value).trim();
+}
+
+function cellNumber(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === "") return undefined;
+  if (typeof value === "number") return value;
+  const n = Number(String(value).replace(/,/g, ""));
+  return Number.isNaN(n) ? undefined : n;
+}
+
+fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res) => {
+  const file = (req as Request & { file?: Express.Multer.File }).file;
+  if (!file) throw new ApiError(400, "No se envio archivo");
+
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(file.buffer as unknown as ArrayBuffer);
+  const sheet = workbook.worksheets[0];
+  if (!sheet) throw new ApiError(400, "El archivo no tiene hojas");
+
+  const expected = ["ID", "Nombre Agricultor", "Cuadras", "Fecha Inicio", "Fecha Cosecha", "Renta (%)", "Estado", "Deuda Total"];
+  const headers = ((sheet.getRow(1).values ?? []) as unknown[]).slice(1).map((v) => String(v ?? "").trim());
+  const missing = expected.filter((h) => !headers.includes(h));
+  if (missing.length) throw new ApiError(400, `Columnas incorrectas. Faltan: ${missing.join(", ")}`);
+
+  const colIndex = (name: string) => headers.indexOf(name) + 1;
+  const rows: Array<z.infer<typeof importRowSchema>> = [];
+  const errors: Array<{ fila: number; error: string }> = [];
+
+  for (let i = 2; i <= sheet.rowCount; i++) {
+    const row = sheet.getRow(i);
+    const firstCell = row.getCell(1).value;
+    if (firstCell === null || firstCell === undefined || String(firstCell).trim() === "") continue;
+
+    const idValue = row.getCell(colIndex("ID")).value;
+    const id = idValue ? String(idValue).trim() : undefined;
+
+    const parsed = importRowSchema.safeParse({
+      id,
+      farmer_name: cellString(row.getCell(colIndex("Nombre Agricultor")).value),
+      cuadras: cellNumber(row.getCell(colIndex("Cuadras")).value),
+      inicio: parseExcelDate(row.getCell(colIndex("Fecha Inicio")).value),
+      cosecha: parseExcelDate(row.getCell(colIndex("Fecha Cosecha")).value) ?? undefined,
+      renta: parseRenta(row.getCell(colIndex("Renta (%)")).value),
+      status: cellString(row.getCell(colIndex("Estado")).value)?.toUpperCase()
+    });
+
+    if (!parsed.success) {
+      const msgs = parsed.error.errors.map((e) => `${e.path.join(".")}: ${e.message}`).join("; ");
+      errors.push({ fila: i, error: msgs });
+      continue;
+    }
+    rows.push(parsed.data);
+  }
+
+  if (errors.length) {
+    res.status(400).json({ success: false, created: 0, updated: 0, errors });
+    return;
+  }
+
+  const result = await inTransaction(async (client) => {
+    let created = 0;
+    let updated = 0;
+    for (const row of rows) {
+      const rowId = row.id;
+      const exists = rowId
+        ? ((await client.query("SELECT 1 FROM fomentos WHERE id = $1", [rowId])).rowCount ?? 0) > 0
+        : false;
+      if (exists) {
+        await client.query(
+          `UPDATE fomentos
+           SET farmer_name = $1, cuadras = $2, inicio = $3, cosecha = $4, renta = $5, status = $6
+           WHERE id = $7`,
+          [row.farmer_name, row.cuadras, row.inicio, row.cosecha || null, row.renta, row.status, rowId]
+        );
+        updated++;
+      } else {
+        const newId = rowId || crypto.randomUUID();
+        await client.query(
+          `INSERT INTO fomentos (id, farmer_name, cuadras, inicio, cosecha, renta, status)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [newId, row.farmer_name, row.cuadras, row.inicio, row.cosecha || null, row.renta, row.status]
+        );
+        created++;
+      }
+    }
+    return { created, updated };
+  });
+
+  res.json({ success: true, ...result, errors: [] });
 }));
