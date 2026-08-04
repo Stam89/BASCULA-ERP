@@ -1249,6 +1249,8 @@ export function App() {
   const [fomentoEditingRenta, setFomentoEditingRenta] = useState<string | null>(null);
   const [fomentoRentaInput, setFomentoRentaInput] = useState("");
   const [fomentoPagoForm, setFomentoPagoForm] = useState({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
+  const [fomentoImporting, setFomentoImporting] = useState(false);
+  const [fomentoImportModal, setFomentoImportModal] = useState<{ open: boolean; title: string; message: string; isError: boolean } | null>(null);
   // ── Pilador / Estibador en Producción ────────────────────────────────────
   const [piladorName, setPiladorName] = useState(() => {
     try { return localStorage.getItem("bascula-erp:pilador-name") || ""; } catch { return ""; }
@@ -2760,6 +2762,47 @@ export function App() {
   async function refreshFomentos() {
     const data = await apiGet<Fomento[]>("/fomentos");
     setFomentos(data);
+  }
+
+  async function exportFomentos() {
+    try {
+      const response = await apiFetch("/fomentos/export", { method: "GET" });
+      if (!response.ok) throw new Error("No se pudo descargar el archivo");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `fomentos_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      addToast(err instanceof Error ? err.message : "Error al descargar", "error");
+    }
+  }
+
+  async function importFomentos(file: File) {
+    setFomentoImporting(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await apiFetch("/fomentos/import", { method: "POST", body: formData });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        const details = Array.isArray(data.errors)
+          ? data.errors.map((e: { fila: number; error: string }) => `Fila ${e.fila}: ${e.error}`).join("\n")
+          : data.error || "Error desconocido";
+        setFomentoImportModal({ open: true, title: "❌ Error al importar", message: details, isError: true });
+      } else {
+        setFomentoImportModal({ open: true, title: "✓ Importado correctamente", message: `Creados: ${data.created}\nActualizados: ${data.updated}`, isError: false });
+        await refreshFomentos();
+      }
+    } catch (err) {
+      setFomentoImportModal({ open: true, title: "❌ Error al importar", message: err instanceof Error ? err.message : "Error desconocido", isError: true });
+    } finally {
+      setFomentoImporting(false);
+    }
   }
 
   async function refreshSacks() {
@@ -7719,6 +7762,23 @@ export function App() {
           <section className="tabSection">
             <h2>Fomentos de Insumos</h2>
 
+            <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+              <button type="button" onClick={() => exportFomentos().catch(() => undefined)}
+                style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid var(--c-brand)", background: "var(--c-brand)", color: "#fff", cursor: "pointer", fontWeight: 600, fontSize: 12 }}>
+                📥 DESCARGAR EXCEL
+              </button>
+              <label style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid var(--c-brand)", background: "transparent", color: "var(--c-brand)", cursor: "pointer", fontWeight: 600, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
+                {fomentoImporting ? <span className="spinner" /> : "📤 SUBIR EXCEL"}
+                <input type="file" accept=".xlsx" disabled={fomentoImporting}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) importFomentos(file).finally(() => { e.target.value = ""; });
+                  }}
+                  style={{ display: "none" }} />
+              </label>
+              {fomentoImporting && <span className="muted" style={{ fontSize: 12 }}>Importando...</span>}
+            </div>
+
             {/* Filtro de estado */}
             <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
               {(["TODOS","ACTIVOS","NO ACTIVOS","APROBADOS"] as const).map(f => (
@@ -8034,6 +8094,23 @@ export function App() {
                 )}
               </div>
             </div>
+
+            {fomentoImportModal && fomentoImportModal.open && (
+              <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+                <div style={{ background: "#fff", borderRadius: 12, padding: 20, maxWidth: 480, width: "100%", maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 25px -5px rgba(0,0,0,0.2)" }}>
+                  <h3 style={{ margin: "0 0 12px", color: fomentoImportModal.isError ? "#dc2626" : "#16a34a" }}>{fomentoImportModal.title}</h3>
+                  <div style={{ whiteSpace: "pre-line", fontSize: 13, lineHeight: 1.5, marginBottom: 16 }}>
+                    {fomentoImportModal.message}
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                    <button type="button" onClick={() => setFomentoImportModal(null)}
+                      style={{ padding: "8px 16px", borderRadius: 6, border: "none", background: "var(--c-brand)", color: "#fff", cursor: "pointer", fontWeight: 600 }}>
+                      Cerrar
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </section>
         )}
 
