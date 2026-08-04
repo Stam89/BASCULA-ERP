@@ -116,7 +116,7 @@ const importRowSchema = z.object({
   cuadras: z.number().positive(),
   inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}/),
   cosecha: z.string().regex(/^\d{4}-\d{2}-\d{2}/).optional(),
-  renta: z.number().min(0.001).max(1),
+  renta: z.number().min(0.001).max(1).default(0.07),
   status: z.enum(["ACTIVOS", "NO ACTIVOS", "APROBADOS"])
 });
 
@@ -150,6 +150,13 @@ const parseRenta = (val: unknown): number | undefined => {
   const n = cellNumber(val);
   return n && n > 0 && n <= 1 ? n : undefined;
 };
+
+function calcularCosecha(inicio: string): string {
+  const [yy, mm, dd] = inicio.split("-").map(Number);
+  const d = new Date(Date.UTC(yy, mm - 1, dd));
+  d.setUTCMonth(d.getUTCMonth() + 4);
+  return d.toISOString().slice(0, 10);
+}
 
 fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res) => {
   const file = (req as Request & { file?: Express.Multer.File }).file;
@@ -210,6 +217,8 @@ fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res
     let created = 0;
     let updated = 0;
     for (const row of rows) {
+      const cosecha = row.cosecha ?? calcularCosecha(row.inicio);
+      const renta = row.renta;
       const rowId = row.id;
       const exists = rowId
         ? ((await client.query("SELECT 1 FROM fomentos WHERE id = $1", [rowId])).rowCount ?? 0) > 0
@@ -219,7 +228,7 @@ fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res
           `UPDATE fomentos
            SET farmer_name = $1, cuadras = $2, inicio = $3, cosecha = $4, renta = $5, status = $6
            WHERE id = $7`,
-          [row.farmer_name, row.cuadras, row.inicio, row.cosecha || null, row.renta, row.status, rowId]
+          [row.farmer_name, row.cuadras, row.inicio, cosecha, renta, row.status, rowId]
         );
         updated++;
       } else {
@@ -227,7 +236,7 @@ fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res
         await client.query(
           `INSERT INTO fomentos (id, farmer_name, cuadras, inicio, cosecha, renta, status)
            VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [newId, row.farmer_name, row.cuadras, row.inicio, row.cosecha || null, row.renta, row.status]
+          [newId, row.farmer_name, row.cuadras, row.inicio, cosecha, renta, row.status]
         );
         created++;
       }
