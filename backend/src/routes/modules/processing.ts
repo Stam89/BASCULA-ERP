@@ -397,6 +397,38 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
     const inputPaddyKg = round3(body.input_paddy_kg ?? Number(batch.input_quantity));
     const outputs = buildOutputRows(body);
     const totalOutputKg = round3(outputs.reduce((sum, item) => sum + item.kg, 0));
+
+    // Llenado de polvillo: el 25% del polvillo producido se embolsa como
+    // "Polvillo Llenado" (producto POLVILLO-LLENADO) y el 75% restante queda
+    // como polvillo a granel. Solo si existe el producto configurado.
+    const branIndex = outputs.findIndex((item) => item.label === "POLVILLO_AFRECHO");
+    if (branIndex >= 0) {
+      const polvilloLlenado = await client.query(
+        "SELECT id FROM products WHERE code = 'POLVILLO-LLENADO' LIMIT 1"
+      );
+      if (polvilloLlenado.rowCount) {
+        const llenadoId = polvilloLlenado.rows[0].id;
+        const branRow = outputs[branIndex];
+        const totalBranQq = branRow.output.quantity;
+        const llenadoQq = round3(totalBranQq * 0.25);
+        const bulkQq = round3(totalBranQq - llenadoQq);
+
+        if (llenadoQq > 0) {
+          outputs[branIndex] = {
+            ...branRow,
+            output: { ...branRow.output, product_id: branRow.output.product_id, quantity: bulkQq },
+            kg: outputToKg({ ...branRow.output, quantity: bulkQq })
+          };
+          outputs.push({
+            label: "POLVILLO_LLENADO",
+            isByproduct: false,
+            output: { ...branRow.output, product_id: llenadoId, quantity: llenadoQq },
+            kg: outputToKg({ ...branRow.output, product_id: llenadoId, quantity: llenadoQq })
+          });
+        }
+      }
+    }
+
     const processLossKg = round3(inputPaddyKg - totalOutputKg);
     if (processLossKg < 0) {
       throw new ApiError(400, "La salida total no puede superar el peso neto inicial");

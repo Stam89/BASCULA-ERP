@@ -1241,8 +1241,21 @@ export function App() {
   const [fomentoRentaInput, setFomentoRentaInput] = useState("");
   const [fomentoPagoForm, setFomentoPagoForm] = useState({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
   // ── Pilador / Estibador en Producción ────────────────────────────────────
-  const [piladorName, setPiladorName] = useState("");
-  const [estibadorName, setEstibadorName] = useState("");
+  const [piladorName, setPiladorName] = useState(() => {
+    try { return localStorage.getItem("bascula-erp:pilador-name") || ""; } catch { return ""; }
+  });
+  const [estibadorName, setEstibadorName] = useState(() => {
+    try { return localStorage.getItem("bascula-erp:estibador-name") || ""; } catch { return ""; }
+  });
+
+  // Guardar automáticamente los nombres de pilador y estibador para no tener que
+  // tipearlos en cada pilada.
+  useEffect(() => {
+    try { if (piladorName.trim()) localStorage.setItem("bascula-erp:pilador-name", piladorName.trim()); } catch { /* ignore */ }
+  }, [piladorName]);
+  useEffect(() => {
+    try { if (estibadorName.trim()) localStorage.setItem("bascula-erp:estibador-name", estibadorName.trim()); } catch { /* ignore */ }
+  }, [estibadorName]);
 
   // ── Inventario de Sacos ───────────────────────────────────────────────────
   const [sackInventory, setSackInventory] = useState<SackInventory[]>([]);
@@ -1397,6 +1410,10 @@ export function App() {
           product.name.toUpperCase().includes("POLVILLO") ||
           product.name.toUpperCase().includes("AFRECHO")
       ) ?? products[0],
+    [products]
+  );
+  const polvilloLlenadoProduct = useMemo(
+    () => products.find((product) => product.code === "POLVILLO-LLENADO") ?? null,
     [products]
   );
   const sacksSupply = useMemo(
@@ -1772,7 +1789,7 @@ export function App() {
       setLoading(false);
     });
     apiGet<AppSettings>("/settings").then(setAppSettings).catch(() => undefined);
-  }, [authUser]);
+  }, [authUser, activeAccionistaId]);
 
   // Renueva la sesión mientras la app está en uso, para no cerrar sesión a media
   // jornada. Al renovar se releen los permisos (y expulsa a usuarios desactivados).
@@ -6164,6 +6181,13 @@ export function App() {
                 <ControlledNumberInput label="Arrocillo Fino" value={millingReport.fineBroken} onChange={(value) => updateMillingField("fineBroken", value)} />
                 <ControlledNumberInput label="Polvillo" value={millingReport.polvillo} onChange={(value) => updateMillingField("polvillo", value)} />
               </div>
+              {polvilloLlenadoProduct && Number(millingReport.polvillo || 0) > 0 && (
+                <div className="totalBox" style={{ background: "#f0fdf4", borderColor: "#bbf7d0", marginTop: 10 }}>
+                  <span>🟤 LLENADO DE POLVILLO (automático)</span>
+                  <strong>{(Number(millingReport.polvillo || 0) * 0.25).toFixed(2)} QQ</strong>
+                  <small>25% del polvillo se registra como {polvilloLlenadoProduct.name}; el 75% queda como polvillo a granel</small>
+                </div>
+              )}
 
               <div className="buttonRow">
                 <button type="button" onClick={() => saveMillingProcess().catch((e) => addToast(e.message, "error"))} disabled={!selectedProductionDrying}>
@@ -6243,6 +6267,9 @@ export function App() {
                             <Metric title="Arrocillo 3/4" value={`${Number(item.broken_rice_qty ?? 0).toFixed(2)} QQ`} />
                             <Metric title="Arrocillo fino" value={`${Number(item.fine_broken_rice_qty ?? 0).toFixed(2)} QQ`} />
                             <Metric title="Polvillo" value={`${Number(item.bran_qty ?? 0).toFixed(2)} QQ`} />
+                            {polvilloLlenadoProduct && Number(item.bran_qty ?? 0) > 0 && (
+                              <Metric title="Polvillo llenado" value={`${(Number(item.bran_qty ?? 0) * 0.25).toFixed(2)} QQ`} />
+                            )}
                           </section>
                         )}
 

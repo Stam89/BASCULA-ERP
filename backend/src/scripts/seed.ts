@@ -68,6 +68,7 @@ async function main() {
        ('ARROCILLO-FINO', 'Arrocillo Fino', 'BYPRODUCT', 'QQ'),
        ('POLVILLO', 'Polvillo', 'BYPRODUCT', 'QQ'),
        ('POLVILLO-SACO', 'Polvillo', 'BYPRODUCT', 'QQ'),
+       ('POLVILLO-LLENADO', 'Polvillo Llenado', 'FINISHED_GOOD', 'QQ'),
        ('SACO-VACIO', 'Saco Vacio', 'SUPPLY', 'UND')
      ON CONFLICT (code) DO UPDATE SET
        name = EXCLUDED.name,
