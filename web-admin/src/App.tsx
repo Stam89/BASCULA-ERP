@@ -158,6 +158,8 @@ type LaborRates = {
   estibador_per_arrocillo: number;
   /** El estibador cobra por tulas: $ por cada 3 tulas (proporcional). */
   estibador_por_3tulas: number;
+  /** Pago por QQ de polvillo llenado (trabajador aparte). */
+  polvillo_per_qq: number;
   secador_guardiania: number;
   secador_per_tunel: number;
   /** Precio fijo del gas por unidad de bombona (medidor). */
@@ -175,6 +177,7 @@ const defaultLaborRates: LaborRates = {
   estibador_per_saca: 0.25,
   estibador_per_arrocillo: 0.1,
   estibador_por_3tulas: 5,
+  polvillo_per_qq: 0.25,
   secador_guardiania: 10,
   secador_per_tunel: 5,
   precio_gas_bombona: 0,
@@ -706,6 +709,7 @@ type ProductionHistoryItem = {
   finished_at: string;
   pilador_name: string | null;
   estibador_name: string | null;
+  polvillo_worker_name: string | null;
   lot_code: string;
   tunnel_number: number | null;
   rice_type: string | null;
@@ -1247,15 +1251,21 @@ export function App() {
   const [estibadorName, setEstibadorName] = useState(() => {
     try { return localStorage.getItem("bascula-erp:estibador-name") || ""; } catch { return ""; }
   });
+  const [polvilloWorkerName, setPolvilloWorkerName] = useState(() => {
+    try { return localStorage.getItem("bascula-erp:polvillo-worker-name") || ""; } catch { return ""; }
+  });
 
-  // Guardar automáticamente los nombres de pilador y estibador para no tener que
-  // tipearlos en cada pilada.
+  // Guardar automáticamente los nombres de pilador, estibador y encargado de
+  // polvillo para no tener que tipearlos en cada pilada.
   useEffect(() => {
     try { if (piladorName.trim()) localStorage.setItem("bascula-erp:pilador-name", piladorName.trim()); } catch { /* ignore */ }
   }, [piladorName]);
   useEffect(() => {
     try { if (estibadorName.trim()) localStorage.setItem("bascula-erp:estibador-name", estibadorName.trim()); } catch { /* ignore */ }
   }, [estibadorName]);
+  useEffect(() => {
+    try { if (polvilloWorkerName.trim()) localStorage.setItem("bascula-erp:polvillo-worker-name", polvilloWorkerName.trim()); } catch { /* ignore */ }
+  }, [polvilloWorkerName]);
 
   // ── Inventario de Sacos ───────────────────────────────────────────────────
   const [sackInventory, setSackInventory] = useState<SackInventory[]>([]);
@@ -1410,10 +1420,6 @@ export function App() {
           product.name.toUpperCase().includes("POLVILLO") ||
           product.name.toUpperCase().includes("AFRECHO")
       ) ?? products[0],
-    [products]
-  );
-  const polvilloLlenadoProduct = useMemo(
-    () => products.find((product) => product.code === "POLVILLO-LLENADO") ?? null,
     [products]
   );
   const sacksSupply = useMemo(
@@ -4342,6 +4348,7 @@ export function App() {
       sacks_used: 0,
       pilador_name: piladorName || undefined,
       estibador_name: estibadorName || undefined,
+      polvillo_worker_name: polvilloWorkerName || undefined,
       tulas: Number(millingReport.tulas || 0),
       qq_de_tulas: Number(millingReport.qqTulas || 0)
     });
@@ -6097,7 +6104,7 @@ export function App() {
             <section className="formPanel productionQuickCard">
               <h2>Reporte de pilado</h2>
 
-              {/* Pilador y Estibador */}
+              {/* Pilador, Estibador y Encargado de polvillo */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12, padding: "10px 12px", background: "#f0fdf4", borderRadius: 8, border: "1px solid #bbf7d0" }}>
                 <label style={{ fontSize: 12 }}>
                   <span style={{ fontWeight: 700, display: "block", marginBottom: 3 }}>👷 Pilador</span>
@@ -6110,6 +6117,12 @@ export function App() {
                   <input value={estibadorName} onChange={e => setEstibadorName(e.target.value)}
                     style={{ width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
                     placeholder="Nombre del estibador" />
+                </label>
+                <label style={{ fontSize: 12 }}>
+                  <span style={{ fontWeight: 700, display: "block", marginBottom: 3 }}>🟤 Encargado de llenar polvillo</span>
+                  <input value={polvilloWorkerName} onChange={e => setPolvilloWorkerName(e.target.value)}
+                    style={{ width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
+                    placeholder="Nombre del encargado" />
                 </label>
                 <label style={{ fontSize: 12 }}>
                   <span style={{ fontWeight: 700, display: "block", marginBottom: 3 }}>📦 N.º de tulas</span>
@@ -6181,11 +6194,11 @@ export function App() {
                 <ControlledNumberInput label="Arrocillo Fino" value={millingReport.fineBroken} onChange={(value) => updateMillingField("fineBroken", value)} />
                 <ControlledNumberInput label="Polvillo" value={millingReport.polvillo} onChange={(value) => updateMillingField("polvillo", value)} />
               </div>
-              {polvilloLlenadoProduct && Number(millingReport.polvillo || 0) > 0 && (
+              {Number(millingReport.polvillo || 0) > 0 && (
                 <div className="totalBox" style={{ background: "#f0fdf4", borderColor: "#bbf7d0", marginTop: 10 }}>
-                  <span>🟤 LLENADO DE POLVILLO (automático)</span>
-                  <strong>{(Number(millingReport.polvillo || 0) * 0.25).toFixed(2)} QQ</strong>
-                  <small>25% del polvillo se registra como {polvilloLlenadoProduct.name}; el 75% queda como polvillo a granel</small>
+                  <span>🟤 PAGO POR LLENADO DE POLVILLO</span>
+                  <strong>{money(Number(millingReport.polvillo || 0) * laborRatesForm.polvillo_per_qq)}</strong>
+                  <small>{Number(millingReport.polvillo || 0).toFixed(2)} QQ × ${laborRatesForm.polvillo_per_qq}/QQ — se paga al encargado de llenar polvillo</small>
                 </div>
               )}
 
@@ -6267,8 +6280,8 @@ export function App() {
                             <Metric title="Arrocillo 3/4" value={`${Number(item.broken_rice_qty ?? 0).toFixed(2)} QQ`} />
                             <Metric title="Arrocillo fino" value={`${Number(item.fine_broken_rice_qty ?? 0).toFixed(2)} QQ`} />
                             <Metric title="Polvillo" value={`${Number(item.bran_qty ?? 0).toFixed(2)} QQ`} />
-                            {polvilloLlenadoProduct && Number(item.bran_qty ?? 0) > 0 && (
-                              <Metric title="Polvillo llenado" value={`${(Number(item.bran_qty ?? 0) * 0.25).toFixed(2)} QQ`} />
+                            {Number(item.bran_qty ?? 0) > 0 && (
+                              <Metric title="Pago polvillo" value={money(Number(item.bran_qty ?? 0) * laborRatesForm.polvillo_per_qq)} />
                             )}
                           </section>
                         )}
@@ -6291,9 +6304,9 @@ export function App() {
                           </p>
                         )}
 
-                        {(item.pilador_name || item.estibador_name) && (
+                        {(item.pilador_name || item.estibador_name || item.polvillo_worker_name) && (
                           <p className="muted" style={{ margin: "6px 0 0" }}>
-                            Pilador: {item.pilador_name ?? "—"} · Estibador: {item.estibador_name ?? "—"}
+                            Pilador: {item.pilador_name ?? "—"} · Estibador: {item.estibador_name ?? "—"} · Polvillo: {item.polvillo_worker_name ?? "—"}
                           </p>
                         )}
                       </article>
@@ -9681,6 +9694,7 @@ export function App() {
                     <label><span>$ por saca (@)</span><input type="number" step="0.01" min="0" value={laborRatesForm.estibador_per_saca} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_saca: Number(e.target.value) })} /></label>
                     <label><span>$ por arrocillo</span><input type="number" step="0.01" min="0" value={laborRatesForm.estibador_per_arrocillo} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_arrocillo: Number(e.target.value) })} /></label>
                     <label><span>$ por cada 3 tulas ⭐</span><input type="number" step="0.01" min="0" value={laborRatesForm.estibador_por_3tulas} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_por_3tulas: Number(e.target.value) })} /></label>
+                    <label><span>$ por QQ de polvillo llenado</span><input type="number" step="0.01" min="0" value={laborRatesForm.polvillo_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, polvillo_per_qq: Number(e.target.value) })} /></label>
                   </div>
                   <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>Secador <span className="muted" style={{ fontWeight: 400 }}>(próxima fase)</span></h2>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -9704,7 +9718,7 @@ export function App() {
                     <strong>{money(100 * laborRatesForm.pilador_per_qq + 20 * laborRatesForm.pilador_per_saca)}</strong>
                     <small>100 × {laborRatesForm.pilador_per_qq} + 20 × {laborRatesForm.pilador_per_saca}</small>
                   </div>
-                  <div className="totalBox">
+                  <div className="totalBox" style={{ marginBottom: 10 }}>
                     <span>Estibador</span>
                     <strong>{money(
                       100 * laborRatesForm.estibador_per_qq +
@@ -9718,6 +9732,11 @@ export function App() {
                       10 × {laborRatesForm.estibador_per_arrocillo} +
                       6 tulas ÷ 3 × {laborRatesForm.estibador_por_3tulas}
                     </small>
+                  </div>
+                  <div className="totalBox">
+                    <span>Encargado de polvillo</span>
+                    <strong>{money(5 * laborRatesForm.polvillo_per_qq)}</strong>
+                    <small>5 QQ de polvillo × {laborRatesForm.polvillo_per_qq}/QQ</small>
                   </div>
                 </div>
               </section>

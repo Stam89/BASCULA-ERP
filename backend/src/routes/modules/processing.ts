@@ -70,6 +70,7 @@ processingRouter.get("/history", asyncRoute(async (req, res) => {
               b.finished_at,
               b.pilador_name,
               b.estibador_name,
+              b.polvillo_worker_name,
               l.lot_code,
               t.tunnel_number,
               t.rice_type,
@@ -221,6 +222,7 @@ const finishProductionSchema = z.object({
   service_rate_per_qq: z.number().nonnegative().optional(),
   pilador_name: z.string().optional(),
   estibador_name: z.string().optional(),
+  polvillo_worker_name: z.string().optional(),
   tulas: z.number().nonnegative().optional(),
   // QQ totales de las tulas: base INDEPENDIENTE del arroz pilado para pagar al pilador.
   qq_de_tulas: z.number().nonnegative().optional(),
@@ -397,37 +399,6 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
     const inputPaddyKg = round3(body.input_paddy_kg ?? Number(batch.input_quantity));
     const outputs = buildOutputRows(body);
     const totalOutputKg = round3(outputs.reduce((sum, item) => sum + item.kg, 0));
-
-    // Llenado de polvillo: el 25% del polvillo producido se embolsa como
-    // "Polvillo Llenado" (producto POLVILLO-LLENADO) y el 75% restante queda
-    // como polvillo a granel. Solo si existe el producto configurado.
-    const branIndex = outputs.findIndex((item) => item.label === "POLVILLO_AFRECHO");
-    if (branIndex >= 0) {
-      const polvilloLlenado = await client.query(
-        "SELECT id FROM products WHERE code = 'POLVILLO-LLENADO' LIMIT 1"
-      );
-      if (polvilloLlenado.rowCount) {
-        const llenadoId = polvilloLlenado.rows[0].id;
-        const branRow = outputs[branIndex];
-        const totalBranQq = branRow.output.quantity;
-        const llenadoQq = round3(totalBranQq * 0.25);
-        const bulkQq = round3(totalBranQq - llenadoQq);
-
-        if (llenadoQq > 0) {
-          outputs[branIndex] = {
-            ...branRow,
-            output: { ...branRow.output, product_id: branRow.output.product_id, quantity: bulkQq },
-            kg: outputToKg({ ...branRow.output, quantity: bulkQq })
-          };
-          outputs.push({
-            label: "POLVILLO_LLENADO",
-            isByproduct: false,
-            output: { ...branRow.output, product_id: llenadoId, quantity: llenadoQq },
-            kg: outputToKg({ ...branRow.output, product_id: llenadoId, quantity: llenadoQq })
-          });
-        }
-      }
-    }
 
     const processLossKg = round3(inputPaddyKg - totalOutputKg);
     if (processLossKg < 0) {
@@ -713,25 +684,29 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       `UPDATE processing_batches
        SET status = 'PAID', finished_at = now(),
            pilador_name = COALESCE($2, pilador_name),
-           estibador_name = COALESCE($3, estibador_name)
+           estibador_name = COALESCE($3, estibador_name),
+           polvillo_worker_name = COALESCE($4, polvillo_worker_name)
        WHERE id = $1 RETURNING *`,
-      [processingBatchId, body.pilador_name ?? null, body.estibador_name ?? null]
+      [processingBatchId, body.pilador_name ?? null, body.estibador_name ?? null, body.polvillo_worker_name ?? null]
     );
 
-    // Nómina: calcula automáticamente el pago del pilador y estibador de esta
-    // pilada según las tarifas vigentes y lo deja pendiente de pago.
+    // Nómina: calcula automáticamente el pago del pilador, estibador y
+    // encargado de llenado de polvillo según las tarifas vigentes.
     const arrocilloQq = round3(
       (body.broken_rice ? outputToQq(body.broken_rice) : 0) +
       (body.fine_broken_rice ? outputToQq(body.fine_broken_rice) : 0)
     );
+    const polvilloQq = body.bran ? outputToQq(body.bran) : 0;
     await createProductionWorkerPayments(client, {
       batchId: processingBatchId,
       piladorName: updatedBatch.rows[0].pilador_name,
       estibadorName: updatedBatch.rows[0].estibador_name,
+      polvilloName: body.polvillo_worker_name || updatedBatch.rows[0].polvillo_worker_name || null,
       qq: processedQq,
       qqDeTulas: body.qq_de_tulas,
       sacas: sacksUsed,
       arrocillo: arrocilloQq,
+      polvillo: polvilloQq,
       tulas: body.tulas ?? 0,
       createdBy: body.created_by ?? null
     });

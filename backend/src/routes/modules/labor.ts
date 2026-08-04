@@ -24,6 +24,7 @@ export function ensureLaborTables(): Promise<void> {
         estibador_per_qq NUMERIC(10,4) NOT NULL DEFAULT 0.10,
         estibador_per_saca NUMERIC(10,4) NOT NULL DEFAULT 0.25,
         estibador_per_arrocillo NUMERIC(10,4) NOT NULL DEFAULT 0.10,
+        polvillo_per_qq NUMERIC(10,4) NOT NULL DEFAULT 0.25,
         secador_guardiania NUMERIC(10,4) NOT NULL DEFAULT 10,
         secador_per_tunel NUMERIC(10,4) NOT NULL DEFAULT 5,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -82,6 +83,7 @@ export type LaborRates = {
   estibador_per_saca: number;
   estibador_per_arrocillo: number;
   estibador_por_3tulas: number;
+  polvillo_per_qq: number;
   secador_guardiania: number;
   secador_per_tunel: number;
   precio_gas_bombona: number;
@@ -103,6 +105,7 @@ async function getRates(db: Queryable = pool): Promise<LaborRates> {
     estibador_per_saca: Number(row.estibador_per_saca),
     estibador_per_arrocillo: Number(row.estibador_per_arrocillo),
     estibador_por_3tulas: Number(row.estibador_por_3tulas ?? 5),
+    polvillo_per_qq: Number(row.polvillo_per_qq ?? 0.25),
     secador_guardiania: Number(row.secador_guardiania),
     secador_per_tunel: Number(row.secador_per_tunel),
     precio_gas_bombona: Number(row.precio_gas_bombona ?? 0),
@@ -122,10 +125,12 @@ export async function createProductionWorkerPayments(
     batchId: string;
     piladorName?: string | null;
     estibadorName?: string | null;
+    polvilloName?: string | null;
     qq: number;
     qqDeTulas?: number;
     sacas: number;
     arrocillo: number;
+    polvillo?: number;
     tulas?: number;
     createdBy?: string | null;
   }
@@ -138,16 +143,18 @@ export async function createProductionWorkerPayments(
     const arrocillo = Number(opts.arrocillo) || 0;
     const tulas = Number(opts.tulas) || 0;
     const tulasBonus = estibadorBaseFromTulas(tulas, rates.estibador_por_3tulas);
+    const polvillo = Number(opts.polvillo) || 0;
+    const polvilloAmount = round2(polvillo * rates.polvillo_per_qq);
 
     // Cada rol lleva SU base de cobro: el pilador por QQ; el estibador por
     // tulas. Así en Nómina se ve el QQ del pilador y la tula del estibador.
-    const rows: Array<{ role: string; name: string; base: number; qq: number; tulas: number; tulasBonus: number }> = [];
+    const rows: Array<{ role: string; name: string; base: number; qq: number; tulas: number; tulasBonus: number; polvillo: number; polvilloAmount: number }> = [];
     if (opts.piladorName && opts.piladorName.trim()) {
       rows.push({
         role: "PILADOR",
         name: opts.piladorName.trim(),
         base: round2(qq * rates.pilador_per_qq + sacas * rates.pilador_per_saca),
-        qq, tulas: 0, tulasBonus: 0
+        qq, tulas: 0, tulasBonus: 0, polvillo: 0, polvilloAmount: 0
       });
     }
     if (opts.estibadorName && opts.estibadorName.trim()) {
@@ -163,7 +170,16 @@ export async function createProductionWorkerPayments(
           arrocillo * rates.estibador_per_arrocillo +
           tulasBonus
         ),
-        qq, tulas, tulasBonus
+        qq, tulas, tulasBonus, polvillo: 0, polvilloAmount: 0
+      });
+    }
+    if (opts.polvilloName && opts.polvilloName.trim() && polvillo > 0 && polvilloAmount > 0) {
+      // Pago aparte al encargado de llenar polvillo: $ por QQ de polvillo producido.
+      rows.push({
+        role: "POLVILLO",
+        name: opts.polvilloName.trim(),
+        base: polvilloAmount,
+        qq: 0, tulas: 0, tulasBonus: 0, polvillo, polvilloAmount
       });
     }
 
@@ -177,7 +193,8 @@ export async function createProductionWorkerPayments(
            qq: r.qq, qq_rate: r.role === "PILADOR" ? rates.pilador_per_qq : rates.estibador_per_qq, qq_amount: round2(r.qq * (r.role === "PILADOR" ? rates.pilador_per_qq : rates.estibador_per_qq)),
            sacas, saca_rate: r.role === "PILADOR" ? rates.pilador_per_saca : rates.estibador_per_saca, saca_amount: round2(sacas * (r.role === "PILADOR" ? rates.pilador_per_saca : rates.estibador_per_saca)),
            arrocillo, arrocillo_rate: r.role === "PILADOR" ? 0 : rates.estibador_per_arrocillo, arrocillo_amount: round2(arrocillo * (r.role === "PILADOR" ? 0 : rates.estibador_per_arrocillo)),
-           tulas: r.tulas, tulas_rate: r.role === "PILADOR" ? 0 : rates.estibador_por_3tulas, tulas_amount: r.tulasBonus
+           tulas: r.tulas, tulas_rate: r.role === "PILADOR" ? 0 : rates.estibador_por_3tulas, tulas_amount: r.tulasBonus,
+           polvillo: r.polvillo, polvillo_rate: rates.polvillo_per_qq, polvillo_amount: r.polvilloAmount
          })]
       );
     }
@@ -211,6 +228,7 @@ laborRouter.put("/rates", requireAdmin, asyncRoute(async (req, res) => {
     estibador_per_saca: z.number().nonnegative(),
     estibador_per_arrocillo: z.number().nonnegative(),
     estibador_por_3tulas: z.number().nonnegative().default(5),
+    polvillo_per_qq: z.number().nonnegative().default(0.25),
     secador_guardiania: z.number().nonnegative(),
     secador_per_tunel: z.number().nonnegative(),
     precio_gas_bombona: z.number().nonnegative().default(0),
@@ -224,11 +242,11 @@ laborRouter.put("/rates", requireAdmin, asyncRoute(async (req, res) => {
        estibador_per_qq = $3, estibador_per_saca = $4, estibador_per_arrocillo = $5,
        secador_guardiania = $6, secador_per_tunel = $7,
        precio_gas_bombona = $8, precio_gas_cilindro = $9, precio_diesel = $10,
-       estibador_por_3tulas = $11, updated_at = now()
+       estibador_por_3tulas = $11, polvillo_per_qq = $12, updated_at = now()
      WHERE id = 1`,
     [body.pilador_per_qq, body.pilador_per_saca, body.estibador_per_qq, body.estibador_per_saca,
      body.estibador_per_arrocillo, body.secador_guardiania, body.secador_per_tunel,
-     body.precio_gas_bombona, body.precio_gas_cilindro, body.precio_diesel, body.estibador_por_3tulas]
+     body.precio_gas_bombona, body.precio_gas_cilindro, body.precio_diesel, body.estibador_por_3tulas, body.polvillo_per_qq]
   );
   res.json(await getRates());
 }));
