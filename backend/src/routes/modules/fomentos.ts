@@ -132,9 +132,15 @@ const cellNumber = (val: unknown): number | undefined => {
 
 const parseExcelDate = (val: unknown): string | undefined => {
   if (!val) return undefined;
-  if (typeof val === "string" && /^\d{4}-\d{2}-\d{2}/.test(val)) return val;
+  if (val instanceof Date) return val.toISOString().split("T")[0];
+  if (typeof val === "string") {
+    const s = val.trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  }
   if (typeof val === "number") {
-    const d = new Date((val - 25569) * 86400000);
+    const days = Math.floor(val);
+    const fraction = val - days;
+    const d = new Date(Date.UTC(1899, 11, 30 + days, 0, 0, fraction * 86400));
     return d.toISOString().split("T")[0];
   }
   return undefined;
