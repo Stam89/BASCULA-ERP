@@ -9,18 +9,14 @@ CREATE TABLE IF NOT EXISTS tunnel_status (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Tabla de informes de consumo de gas (histórico)
-CREATE TABLE IF NOT EXISTS gas_consumption_reports (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  tunnel_number INTEGER NOT NULL CHECK (tunnel_number BETWEEN 1 AND 3),
-  accionista_id UUID NOT NULL REFERENCES users(id),
-  accionista_name VARCHAR(160) NOT NULL,
-  gas_used NUMERIC(14,3) NOT NULL,
-  signed_by UUID NOT NULL REFERENCES users(id),
-  signed_by_name VARCHAR(160) NOT NULL,
-  notes TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+-- Adaptar la tabla de reportes de gas (ya existe desde la migración de reservas)
+-- para que también funcione con la ocupación directa de túneles.
+ALTER TABLE gas_consumption_reports
+  ADD COLUMN IF NOT EXISTS accionista_id UUID REFERENCES users(id),
+  ADD COLUMN IF NOT EXISTS signed_by_name VARCHAR(160);
+
+ALTER TABLE gas_consumption_reports
+  ALTER COLUMN reservation_id DROP NOT NULL;
 
 -- Inicializar los 3 túneles como DISPONIBLES
 INSERT INTO tunnel_status (tunnel_number, status, created_at, updated_at)

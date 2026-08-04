@@ -1,3 +1,4 @@
+import type { PoolClient } from "pg";
 import { Router } from "express";
 import type { Request } from "express";
 import { z } from "zod";
@@ -8,8 +9,26 @@ import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { inTransaction } from "../../db/transaction.js";
 import { ApiError } from "../../http/error-handler.js";
+import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const fomentosRouter = Router();
+
+function getAccionistaId(req: Request): string {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  if (!accionistaId) throw new ApiError(400, "Selecciona un accionista antes de continuar.");
+  return accionistaId;
+}
+
+async function assertFomentoAccionista(client: PoolClient, fomentoId: string, accionistaId: string) {
+  const result = await client.query<{ accionista_id: string | null }>(
+    "SELECT accionista_id FROM fomentos WHERE id = $1",
+    [fomentoId]
+  );
+  if (!result.rowCount) throw new ApiError(404, "Fomento no encontrado");
+  if (result.rows[0].accionista_id !== accionistaId) {
+    throw new ApiError(403, "Este fomento no pertenece al accionista activo");
+  }
+}
 
 const fomentoSchema = z.object({
   farmer_name:  z.string().min(2),
@@ -65,16 +84,18 @@ const SELECT_FOMENTO = `
   ) p ON p.fomento_id = f.id
 `;
 
-fomentosRouter.get("/", asyncRoute(async (_req, res) => {
-  const result = await pool.query(`${SELECT_FOMENTO} ORDER BY f.created_at DESC`);
+fomentosRouter.get("/", asyncRoute(async (req, res) => {
+  const accionistaId = getAccionistaId(req);
+  const result = await pool.query(`${SELECT_FOMENTO} WHERE f.accionista_id = $1 ORDER BY f.created_at DESC`, [accionistaId]);
   res.json(result.rows);
 }));
 
 const upload = multer({ storage: multer.memoryStorage() });
 
 // ── Exportar fomentos a Excel ───────────────────────────────────────────────
-fomentosRouter.get("/export", asyncRoute(async (_req, res) => {
-  const result = await pool.query(`${SELECT_FOMENTO} ORDER BY f.created_at DESC`);
+fomentosRouter.get("/export", asyncRoute(async (req, res) => {
+  const accionistaId = getAccionistaId(req);
+  const result = await pool.query(`${SELECT_FOMENTO} WHERE f.accionista_id = $1 ORDER BY f.created_at DESC`, [accionistaId]);
 
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("Fomentos");
@@ -159,6 +180,7 @@ function calcularCosecha(inicio: string): string {
 }
 
 fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res) => {
+  const accionistaId = getAccionistaId(req);
   const file = (req as Request & { file?: Express.Multer.File }).file;
   if (!file) throw new ApiError(400, "No se envio archivo");
 
@@ -220,10 +242,14 @@ fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res
       const cosecha = row.cosecha ?? calcularCosecha(row.inicio);
       const renta = row.renta;
       const rowId = row.id;
-      const exists = rowId
-        ? ((await client.query("SELECT 1 FROM fomentos WHERE id = $1", [rowId])).rowCount ?? 0) > 0
-        : false;
+      const existing = rowId
+        ? await client.query<{ accionista_id: string | null }>("SELECT accionista_id FROM fomentos WHERE id = $1", [rowId])
+        : null;
+      const exists = existing ? (existing.rowCount ?? 0) > 0 : false;
       if (exists) {
+        if (existing!.rows[0].accionista_id !== accionistaId) {
+          throw new ApiError(403, `El fomento con ID ${rowId} pertenece a otro accionista`);
+        }
         await client.query(
           `UPDATE fomentos
            SET farmer_name = $1, cuadras = $2, inicio = $3, cosecha = $4, renta = $5, status = $6
@@ -234,9 +260,9 @@ fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res
       } else {
         const newId = rowId || crypto.randomUUID();
         await client.query(
-          `INSERT INTO fomentos (id, farmer_name, cuadras, inicio, cosecha, renta, status)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [newId, row.farmer_name, row.cuadras, row.inicio, cosecha, renta, row.status]
+          `INSERT INTO fomentos (id, accionista_id, farmer_name, cuadras, inicio, cosecha, renta, status)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [newId, accionistaId, row.farmer_name, row.cuadras, row.inicio, cosecha, renta, row.status]
         );
         created++;
       }
@@ -248,7 +274,8 @@ fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res
 }));
 
 fomentosRouter.get("/:id", asyncRoute(async (req, res) => {
-  const fomento = await pool.query(`${SELECT_FOMENTO} WHERE f.id = $1`, [req.params.id]);
+  const accionistaId = getAccionistaId(req);
+  const fomento = await pool.query(`${SELECT_FOMENTO} WHERE f.id = $1 AND f.accionista_id = $2`, [req.params.id, accionistaId]);
   if (!fomento.rows[0]) { res.status(404).json({ error: "No encontrado" }); return; }
 
   const [entregas, pagos] = await Promise.all([
@@ -272,6 +299,7 @@ fomentosRouter.get("/:id", asyncRoute(async (req, res) => {
 }));
 
 fomentosRouter.post("/", asyncRoute(async (req, res) => {
+  const accionistaId = getAccionistaId(req);
   const data = fomentoSchema.parse(req.body);
   const cosecha = data.cosecha ?? (() => {
     const d = new Date(data.inicio);
@@ -280,15 +308,16 @@ fomentosRouter.post("/", asyncRoute(async (req, res) => {
   })();
 
   const result = await pool.query(
-    `INSERT INTO fomentos (farmer_name, farmer_id, cuadras, inicio, cosecha, renta, status, notes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-    [data.farmer_name, data.farmer_id ?? null, data.cuadras, data.inicio, cosecha,
+    `INSERT INTO fomentos (accionista_id, farmer_name, farmer_id, cuadras, inicio, cosecha, renta, status, notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [accionistaId, data.farmer_name, data.farmer_id ?? null, data.cuadras, data.inicio, cosecha,
      data.renta, data.status, data.notes ?? null]
   );
   res.status(201).json(result.rows[0]);
 }));
 
 fomentosRouter.patch("/:id", asyncRoute(async (req, res) => {
+  const accionistaId = getAccionistaId(req);
   const data = fomentoSchema.partial().parse(req.body);
   const fields: string[] = [];
   const vals: unknown[] = [];
@@ -297,35 +326,41 @@ fomentosRouter.patch("/:id", asyncRoute(async (req, res) => {
     if (v !== undefined) { fields.push(`${k} = $${i++}`); vals.push(v); }
   }
   if (!fields.length) { res.json({ message: "nada que actualizar" }); return; }
-  vals.push(req.params.id);
+  vals.push(req.params.id, accionistaId);
   const result = await pool.query(
-    `UPDATE fomentos SET ${fields.join(", ")} WHERE id = $${i} RETURNING *`,
+    `UPDATE fomentos SET ${fields.join(", ")} WHERE id = $${i} AND accionista_id = $${i + 1} RETURNING *`,
     vals
   );
+  if (!result.rowCount) throw new ApiError(404, "Fomento no encontrado o no pertenece al accionista activo");
   res.json(result.rows[0]);
 }));
 
 fomentosRouter.delete("/:id", asyncRoute(async (req, res) => {
-  await pool.query("DELETE FROM fomentos WHERE id = $1", [req.params.id]);
+  const accionistaId = getAccionistaId(req);
+  const result = await pool.query("DELETE FROM fomentos WHERE id = $1 AND accionista_id = $2", [req.params.id, accionistaId]);
+  if (!result.rowCount) throw new ApiError(404, "Fomento no encontrado o no pertenece al accionista activo");
   res.json({ ok: true });
 }));
 
 // ── Entregas (dinero entregado al agricultor) ────────────────────────────────
 fomentosRouter.post("/:id/entregas", asyncRoute(async (req, res) => {
+  const accionistaId = getAccionistaId(req);
+  const fomentoId = String(req.params.id);
   const data = entregaSchema.parse(req.body);
 
   const result = await inTransaction(async (client) => {
+    await assertFomentoAccionista(client, fomentoId, accionistaId);
     const entrega = await client.query(
       `INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto)
        VALUES ($1,$2,$3,$4) RETURNING *`,
-      [req.params.id, data.fecha, data.valor, data.concepto ?? null]
+      [fomentoId, data.fecha, data.valor, data.concepto ?? null]
     );
 
     // Si hay caja abierta, registrar el egreso
     if (data.cash_register_id) {
       const fomento = await client.query(
         "SELECT farmer_name FROM fomentos WHERE id = $1",
-        [req.params.id]
+        [fomentoId]
       );
       await client.query(
         `INSERT INTO cash_movements
@@ -342,20 +377,28 @@ fomentosRouter.post("/:id/entregas", asyncRoute(async (req, res) => {
 }));
 
 fomentosRouter.delete("/:fomentoId/entregas/:id", asyncRoute(async (req, res) => {
-  await pool.query("DELETE FROM fomento_entregas WHERE id=$1 AND fomento_id=$2",
-    [req.params.id, req.params.fomentoId]);
+  const accionistaId = getAccionistaId(req);
+  const fomentoId = String(req.params.fomentoId);
+  await inTransaction(async (client) => {
+    await assertFomentoAccionista(client, fomentoId, accionistaId);
+    await client.query("DELETE FROM fomento_entregas WHERE id=$1 AND fomento_id=$2",
+      [req.params.id, fomentoId]);
+  });
   res.json({ ok: true });
 }));
 
 // ── Pagos (agricultor paga su deuda) ────────────────────────────────────────
 fomentosRouter.post("/:id/pagos", asyncRoute(async (req, res) => {
+  const accionistaId = getAccionistaId(req);
+  const fomentoId = String(req.params.id);
   const data = pagoSchema.parse(req.body);
 
   const result = await inTransaction(async (client) => {
+    await assertFomentoAccionista(client, fomentoId, accionistaId);
     const pago = await client.query(
       `INSERT INTO fomento_pagos (fomento_id, cash_register_id, fecha, valor, concepto)
        VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [req.params.id, data.cash_register_id ?? null, data.fecha, data.valor,
+      [fomentoId, data.cash_register_id ?? null, data.fecha, data.valor,
        data.concepto ?? null]
     );
 
@@ -363,7 +406,7 @@ fomentosRouter.post("/:id/pagos", asyncRoute(async (req, res) => {
     if (data.cash_register_id) {
       const fomento = await client.query(
         "SELECT farmer_name FROM fomentos WHERE id = $1",
-        [req.params.id]
+        [fomentoId]
       );
       await client.query(
         `INSERT INTO cash_movements
@@ -380,7 +423,12 @@ fomentosRouter.post("/:id/pagos", asyncRoute(async (req, res) => {
 }));
 
 fomentosRouter.delete("/:fomentoId/pagos/:id", asyncRoute(async (req, res) => {
-  await pool.query("DELETE FROM fomento_pagos WHERE id=$1 AND fomento_id=$2",
-    [req.params.id, req.params.fomentoId]);
+  const accionistaId = getAccionistaId(req);
+  const fomentoId = String(req.params.fomentoId);
+  await inTransaction(async (client) => {
+    await assertFomentoAccionista(client, fomentoId, accionistaId);
+    await client.query("DELETE FROM fomento_pagos WHERE id=$1 AND fomento_id=$2",
+      [req.params.id, fomentoId]);
+  });
   res.json({ ok: true });
 }));

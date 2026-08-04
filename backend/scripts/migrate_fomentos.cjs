@@ -4,6 +4,7 @@ c.connect().then(async () => {
   await c.query(`
     CREATE TABLE IF NOT EXISTS fomentos (
       id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      accionista_id UUID REFERENCES accionistas(id),
       farmer_name   TEXT NOT NULL,
       farmer_id     UUID REFERENCES farmers(id) ON DELETE SET NULL,
       cuadras       NUMERIC(10,2) NOT NULL DEFAULT 0,
