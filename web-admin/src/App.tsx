@@ -272,13 +272,17 @@ type PanelAccionista = {
   id: string; name: string;
   compras_total: number; compras_qq: number; compras_cnt: number;
   ventas_total: number; ventas_qq: number; ventas_cnt: number;
-  inventario_qq: number; inventario_valor: number; banco_balance: number;
+  inventario_qq: number; inventario_valor: number;
+  cascara_011: number; cascara_corriente: number;
+  producto_011: number; producto_corriente: number;
+  arrocillo: number; polvillo: number;
+  banco_balance: number;
 };
 type PanelData = {
   month: string;
   kpis: { compras: number; ventas: number; utilidad: number; margen: number; bancos: number; saldo_general: number };
   per_accionista: PanelAccionista[];
-  totales: { compras_qq: number; ventas_qq: number; inventario_qq: number; inventario_valor: number; compras_cnt: number; ventas_cnt: number };
+  totales: { compras_qq: number; ventas_qq: number; inventario_qq: number; inventario_valor: number; compras_cnt: number; ventas_cnt: number; cascara_011: number; cascara_corriente: number; producto_011: number; producto_corriente: number; arrocillo: number; polvillo: number; };
   serie: Array<{ month: string; compras: number; ventas: number }>;
   por_cobrar: { total: number; cnt: number };
   por_pagar: { total: number; cnt: number };
@@ -10241,9 +10245,46 @@ function PanelIntegral({ data, month, onMonth }: { data: PanelData; month: strin
       </div>
 
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-        {tbl("INVENTARIO POR ACCIONISTA", "#16a34a", ["Accionista", "Quintales", "Valor"],
-          acc.map((a) => [a.name, a.inventario_qq.toFixed(2), money(a.inventario_valor)]),
-          ["TOTAL", data.totales.inventario_qq.toFixed(2), money(data.totales.inventario_valor)])}
+        <div style={{ flex: "2 1 500px", minWidth: 0, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden" }}>
+          <div style={{ background: "#16a34a", color: "#fff", fontWeight: 700, padding: "8px 14px", fontSize: 13 }}>INVENTARIO POR ACCIONISTA</div>
+          <div style={{ overflowX: "auto" }}>
+            <table className="cajaTable" style={{ margin: 0, fontSize: 11, whiteSpace: "nowrap" }}>
+              <thead>
+                <tr>
+                  {["Accionista", "CASC 0.11", "CASC CORR", "PROD 0.11", "PROD CORR", "3/4 FINO", "POLV", "Total QQ", "Valor"].map((h, i) => (
+                    <th key={i} style={{ textAlign: i === 0 ? "left" : "right", padding: "6px 8px" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {acc.map((a, i) => (
+                  <tr key={i}>
+                    <td style={{ textAlign: "left", padding: "6px 8px" }}>{a.name}</td>
+                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.cascara_011.toFixed(2)}</td>
+                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.cascara_corriente.toFixed(2)}</td>
+                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.producto_011.toFixed(2)}</td>
+                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.producto_corriente.toFixed(2)}</td>
+                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.arrocillo.toFixed(2)}</td>
+                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.polvillo.toFixed(2)}</td>
+                    <td style={{ textAlign: "right", padding: "6px 8px", fontWeight: 700 }}>{a.inventario_qq.toFixed(2)}</td>
+                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{money(a.inventario_valor)}</td>
+                  </tr>
+                ))}
+                <tr style={{ fontWeight: 700, background: "#f8fafc" }}>
+                  <td style={{ textAlign: "left", padding: "6px 8px" }}>TOTAL</td>
+                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.cascara_011.toFixed(2)}</td>
+                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.cascara_corriente.toFixed(2)}</td>
+                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.producto_011.toFixed(2)}</td>
+                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.producto_corriente.toFixed(2)}</td>
+                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.arrocillo.toFixed(2)}</td>
+                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.polvillo.toFixed(2)}</td>
+                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.inventario_qq.toFixed(2)}</td>
+                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{money(data.totales.inventario_valor)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
         {tbl("VENTAS POR ACCIONISTA", "#2563eb", ["Accionista", "Total ventas", "QQ", "Facturas"],
           acc.map((a) => [a.name, money(a.ventas_total), a.ventas_qq.toFixed(2), a.ventas_cnt]),
           ["TOTAL", money(k.ventas), data.totales.ventas_qq.toFixed(2), data.totales.ventas_cnt])}
