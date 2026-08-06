@@ -7,7 +7,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
 import { repartirPorPeso } from "../../utils/money.js";
-import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import {
   createLotProcessReport,
   findStageReportId,
@@ -63,22 +63,6 @@ const dryingUpdateSchema = z.object({
 });
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
-
-// Columnas de bloqueo de secadoras: se crean una sola vez si faltan (base vieja).
-// Regla de negocio: al guardar una edición de secadora el registro queda BLOQUEADO
-// y solo un ADMINISTRADOR puede desbloquearlo. Los registros antiguos quedan con
-// locked_at en NULL (editables) hasta su primera edición.
-let dryingLockColumnsPromise: Promise<unknown> | null = null;
-function ensureDryingLockColumns() {
-  if (!dryingLockColumnsPromise) {
-    dryingLockColumnsPromise = pool.query(`
-      ALTER TABLE drying_tunnel_reports
-        ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ DEFAULT NULL,
-        ADD COLUMN IF NOT EXISTS locked_by UUID DEFAULT NULL
-    `);
-  }
-  return dryingLockColumnsPromise;
-}
 
 // Motor 1 mueve las Secadoras 1 y 2; Motor 2 la Secadora 3. El combustible se
 // registra por motor (el medidor es del motor, no de cada secadora).
@@ -175,10 +159,8 @@ processFlowRouter.get("/drying/tunnels-status", asyncRoute(async (_req, res) => 
 // Secados del accionista activo: cada uno ve solo sus propios túneles.
 processFlowRouter.get("/drying/reports", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
-  await ensureDryingLockColumns();
   const result = await pool.query(
     `SELECT d.*,
-            u.name AS locked_by_name,
             EXISTS (
               SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id
             ) AS is_processed,
@@ -198,9 +180,8 @@ processFlowRouter.get("/drying/reports", asyncRoute(async (req, res) => {
      FROM drying_tunnel_reports d
      JOIN lots l ON l.id = d.lot_id
      LEFT JOIN drying_tunnel_report_lots dl ON dl.drying_report_id = d.id
-     LEFT JOIN users u ON u.id = d.locked_by
      WHERE l.accionista_id = $1
-     GROUP BY d.id, u.name
+     GROUP BY d.id
      ORDER BY d.created_at DESC
      LIMIT 100`,
     [accionistaId]
@@ -386,26 +367,8 @@ processFlowRouter.post("/drying", asyncRoute(async (req, res) => {
 processFlowRouter.put("/drying/:dryingId", asyncRoute(async (req, res) => {
   const dryingId = String(req.params.dryingId);
   const body = dryingUpdateSchema.parse(req.body);
-  await ensureDryingLockColumns();
-  const userId = (req as AuthenticatedRequest).user?.id ?? null;
-  const result = await inTransaction((client) => updateDryingReport(client, dryingId, body, userId));
+  const result = await inTransaction((client) => updateDryingReport(client, dryingId, body));
   res.json(result);
-}));
-
-// Desbloquear un registro de secadora: solo ADMINISTRADOR. Mientras esté
-// bloqueado, el PUT /drying/:id lo rechaza (el bloqueo se pone al guardar).
-processFlowRouter.post("/drying/:dryingId/unlock", requireAdmin, asyncRoute(async (req, res) => {
-  const dryingId = String(req.params.dryingId);
-  await ensureDryingLockColumns();
-  const result = await pool.query(
-    `UPDATE drying_tunnel_reports
-     SET locked_at = NULL, locked_by = NULL
-     WHERE id = $1
-     RETURNING id, locked_at, locked_by`,
-    [dryingId]
-  );
-  if (!result.rowCount) throw new ApiError(404, "Informe de secado no encontrado");
-  res.json({ ok: true, id: result.rows[0].id });
 }));
 
 processFlowRouter.get("/lots/:lotId", asyncRoute(async (req, res) => {
@@ -724,20 +687,13 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
 async function updateDryingReport(
   client: PoolClient,
   dryingId: string,
-  input: z.infer<typeof dryingUpdateSchema>,
-  userId: string | null
+  input: z.infer<typeof dryingUpdateSchema>
 ) {
   const current = await client.query(
     "SELECT * FROM drying_tunnel_reports WHERE id = $1",
     [dryingId]
   );
   if (!current.rowCount) throw new ApiError(404, "Informe de secado no encontrado");
-
-  // Candado: un registro bloqueado no admite más ediciones hasta que un
-  // administrador lo desbloquee (POST /drying/:id/unlock).
-  if (current.rows[0].locked_at) {
-    throw new ApiError(409, "Este registro está BLOQUEADO. Un administrador puede desbloquearlo desde Secadoras.");
-  }
 
   const dryStartAt = input.dry_start_at ?? current.rows[0].dry_start_at;
   const dryEndAt = input.dry_end_at ?? current.rows[0].dry_end_at;
@@ -772,9 +728,7 @@ async function updateDryingReport(
          status = $23,
          notes = $24,
          motor_number = $25,
-         operator_name = $26,
-         locked_at = now(),
-         locked_by = $27
+         operator_name = $26
      WHERE id = $1
      RETURNING *`,
     [
@@ -803,8 +757,7 @@ async function updateDryingReport(
       status,
       input.notes ?? current.rows[0].notes,
       motorDeSecadora(input.dryer_name ?? current.rows[0].dryer_name),
-      input.operator_name !== undefined ? (input.operator_name.trim() || null) : current.rows[0].operator_name,
-      userId
+      input.operator_name !== undefined ? (input.operator_name.trim() || null) : current.rows[0].operator_name
     ]
   );
 

@@ -480,9 +480,6 @@ type DryingTunnelReport = {
   operator_name: string | null;
   notes: string | null;
   is_processed?: boolean;
-  locked_at?: string | null;
-  locked_by?: string | null;
-  locked_by_name?: string | null;
   lots: DryingTunnelLot[];
 };
 
@@ -4094,23 +4091,13 @@ export function App() {
       notes: form.get("notes") || undefined
     };
     const updated = await apiPut<DryingTunnelReport>(`/process-flow/drying/${report.id}`, payload);
-    setMessage(updated.status === "COMPLETED" ? `Secado del Túnel ${updated.tunnel_number} finalizado y 🔒 bloqueado` : `Secado del Túnel ${updated.tunnel_number} guardado y 🔒 bloqueado`);
+    setMessage(updated.status === "COMPLETED" ? `Secado del Túnel ${updated.tunnel_number} finalizado` : `Secado del Túnel ${updated.tunnel_number} actualizado`);
     await refresh();
     await loadMotorActive();
-    if (updated.status === "COMPLETED") {
-      // Al finalizar, limpiar el formulario y salir del modo edición de ese secado.
-      safeResetForm(formElement);
-      setEditingDryingReport(null);
-    }
-  }
-
-  // Desbloquea un registro de secadora (solo ADMINISTRADOR en el backend).
-  async function desbloquearSecado(report: DryingTunnelReport) {
-    if (!window.confirm(`¿Desbloquear el secado del Túnel ${report.tunnel_number} (${report.dryer_name ?? "Secadora"})? Quedará editable de nuevo.`)) return;
-    await apiPost<{ ok: boolean }>(`/process-flow/drying/${report.id}/unlock`, {});
-    setMessage(`Secado del Túnel ${report.tunnel_number} desbloqueado`);
-    await refresh();
-    await loadMotorActive();
+    // Al guardar (con o sin finalizar) se sale del modo edición y se vuelve a
+    // la vista del motor, donde la secadora queda como "En uso / OCUPADO POR".
+    safeResetForm(formElement);
+    setEditingDryingReport(null);
   }
 
   // Panel de medidores del combustible del motor.
@@ -5426,7 +5413,6 @@ export function App() {
                       {lista.map((rep) => {
                         const secadora = rep.dryer_name ?? `Secadora ${rep.tunnel_number}`;
                         const done = rep.status === "COMPLETED";
-                        const bloqueado = Boolean(rep.locked_at);
                         return (
                           <form
                             key={rep.id}
@@ -5434,33 +5420,22 @@ export function App() {
                             onSubmit={(event) => { event.preventDefault(); guardarSecadoEditado(rep, event.currentTarget, false).catch((error) => setMessage(error.message)); }}
                           >
                             <h3 style={{ marginTop: 0 }}>🌀 {secadora} · Túnel {rep.tunnel_number} {done ? <span className="chip ok">Finalizado</span> : <span className="editBadge">✎ En secado</span>}</h3>
-                            {bloqueado && (
-                              <div className="alertBox" style={{ marginBottom: 8 }}>
-                                🔒 <strong>BLOQUEADO</strong> el {new Date(rep.locked_at as string).toLocaleString("es-PA", { dateStyle: "short", timeStyle: "short" })}
-                                {rep.locked_by_name ? ` por ${rep.locked_by_name}` : ""}.
-                                {" "}Solo un administrador puede desbloquearlo.
-                              </div>
-                            )}
                             <DryingLotSelector selectedLots={rep.lots} editing onRemove={() => undefined} />
                             <div className="totalBox"><span>Peso total</span><strong>{Number(rep.total_quintals ?? 0).toFixed(2)} QQ</strong></div>
-                            {!bloqueado && (
-                              <>
-                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                                  <Select name="rice_type" label="Tipo de arroz" rows={[["0.11", "0.11"], ["CORRIENTE", "Corriente"]]} defaultValue={rep.rice_type ?? "0.11"} />
-                                  <Input name="filled_at" label="Fecha de llenado" type="date" defaultValue={(rep.filled_at ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10)} required={false} />
-                                </div>
-                                <Input name="moisture_before" label="Humedad inicial %" type="number" defaultValue={String(rep.moisture_before ?? 0)} required={false} />
-                                <Input name="operator_name" label="Nombre del secador" placeholder="Quien seca este túnel (para la nómina)" defaultValue={rep.operator_name ?? ""} required={false} />
-                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                                  <Input name="dry_start_at" label="Hora secado inicio" type="datetime-local" defaultValue={dateTimeLocalValue(rep.dry_start_at)} required={false} />
-                                  <Input name="dry_end_at" label="Hora secado final" type="datetime-local" defaultValue={dateTimeLocalValue(rep.dry_end_at)} required={false} />
-                                </div>
-                                <Input name="notes" label="Observacion" defaultValue={rep.notes ?? "Secado registrado"} required={false} />
-                              </>
-                            )}
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                              <Select name="rice_type" label="Tipo de arroz" rows={[["0.11", "0.11"], ["CORRIENTE", "Corriente"]]} defaultValue={rep.rice_type ?? "0.11"} />
+                              <Input name="filled_at" label="Fecha de llenado" type="date" defaultValue={(rep.filled_at ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10)} required={false} />
+                            </div>
+                            <Input name="moisture_before" label="Humedad inicial %" type="number" defaultValue={String(rep.moisture_before ?? 0)} required={false} />
+                            <Input name="operator_name" label="Nombre del secador" placeholder="Quien seca este túnel (para la nómina)" defaultValue={rep.operator_name ?? ""} required={false} />
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                              <Input name="dry_start_at" label="Hora secado inicio" type="datetime-local" defaultValue={dateTimeLocalValue(rep.dry_start_at)} required={false} />
+                              <Input name="dry_end_at" label="Hora secado final" type="datetime-local" defaultValue={dateTimeLocalValue(rep.dry_end_at)} required={false} />
+                            </div>
+                            <Input name="notes" label="Observacion" defaultValue={rep.notes ?? "Secado registrado"} required={false} />
                             <div className="buttonRow">
-                              {!bloqueado && <button className="primary">Guardar cambios</button>}
-                              {!done && !bloqueado && (
+                              <button className="primary">Guardar cambios</button>
+                              {!done && (
                                 <button
                                   type="button"
                                   className="primary"
@@ -5471,14 +5446,6 @@ export function App() {
                                   }}
                                 >
                                   ✅ Finalizar este túnel
-                                </button>
-                              )}
-                              {bloqueado && isAdmin && (
-                                <button
-                                  type="button"
-                                  onClick={() => desbloquearSecado(rep).catch((error) => setMessage(error.message))}
-                                >
-                                  🔓 Desbloquear
                                 </button>
                               )}
                             </div>
@@ -5598,7 +5565,7 @@ export function App() {
               </form>
             )}
 
-            <DryingReportsPanel reports={dryingReports} onEdit={editDryingReport} isAdmin={isAdmin} onUnlock={desbloquearSecado} />
+            <DryingReportsPanel reports={dryingReports} onEdit={editDryingReport} />
           </section>
         )}
 
@@ -10734,14 +10701,10 @@ function DryingLotSelector({
 }
 function DryingReportsPanel({
   reports,
-  onEdit,
-  isAdmin,
-  onUnlock
+  onEdit
 }: {
   reports: DryingTunnelReport[];
   onEdit: (report: DryingTunnelReport) => void;
-  isAdmin: boolean;
-  onUnlock: (report: DryingTunnelReport) => Promise<void>;
 }) {
   return (
     <section className="tracePanel dryingReportsPanel">
@@ -10750,27 +10713,15 @@ function DryingReportsPanel({
       {reports.map((report) => (
         <article className="dryingReportCard" key={report.id}>
           <div>
-            <strong>
-              Tunel {report.tunnel_number} · {report.status === "COMPLETED" ? "Finalizado" : "En proceso"}
-              {report.locked_at ? " · 🔒 Bloqueado" : ""}
-            </strong>
+            <strong>Tunel {report.tunnel_number} · {report.status === "COMPLETED" ? "Finalizado" : "En proceso"}</strong>
             <small>
               {Number(report.total_quintals ?? 0).toFixed(2)} QQ · {report.lots.length} lote(s) · {report.dryer_name ?? "Sin secadora"} · Secador: {report.operator_name || "—"}
             </small>
             <small>Tipo: {report.rice_type === "CORRIENTE" ? "Corriente" : "0.11"}</small>
             <small>{report.lots.map((lot) => `${lot.farmer_name ?? "Sin agricultor"} (${Number(lot.quintals ?? 0).toFixed(2)} QQ)`).join(" + ")}</small>
-            {report.locked_at && (
-              <small style={{ color: "var(--c-danger, #b91c1c)" }}>
-                🔒 Bloqueado el {new Date(report.locked_at).toLocaleString("es-PA", { dateStyle: "short", timeStyle: "short" })}
-                {report.locked_by_name ? ` por ${report.locked_by_name}` : ""}
-              </small>
-            )}
           </div>
-          {report.status !== "COMPLETED" && !report.locked_at && (
+          {report.status !== "COMPLETED" && (
             <button type="button" onClick={() => onEdit(report)}>Editar</button>
-          )}
-          {report.locked_at && isAdmin && (
-            <button type="button" onClick={() => onUnlock(report).catch(() => undefined)}>🔓 Desbloquear</button>
           )}
         </article>
       ))}
