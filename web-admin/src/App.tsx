@@ -10398,8 +10398,13 @@ function PanelIntegral({ data, month, onMonth }: { data: PanelData; month: strin
             <table className="cajaTable" style={{ margin: 0, fontSize: 11, whiteSpace: "nowrap" }}>
               <thead>
                 <tr>
-                  {["Accionista", "CASC 0.11", "SECO 0.11", "CASC CORR", "SECO CORR", "PROD 0.11", "PROD CORR", "3/4", "FINO", "POLV"].map((h, i) => (
-                    <th key={i} style={{ textAlign: i === 0 ? "left" : "right", padding: "6px 8px" }}>{h}</th>
+                  {["Accionista", "CASC", "SECO", "CASC", "SECO", "PROD", "PROD", "3/4", "FINO", "POLV"].map((h, i) => (
+                    <th key={i} style={{ textAlign: i === 0 ? "left" : "right", padding: "6px 8px 0", borderBottom: "none" }}>{h}</th>
+                  ))}
+                </tr>
+                <tr>
+                  {["", "0.11", "0.11", "CORR", "CORR", "0.11", "CORR", "", "", ""].map((h, i) => (
+                    <th key={i} style={{ textAlign: i === 0 ? "left" : "right", padding: "0 8px 6px", fontSize: 10, color: "#64748b" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
