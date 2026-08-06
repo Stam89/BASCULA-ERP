@@ -72,7 +72,9 @@ const APP_MODULES = [
   "Caja",
   "Liquidaciones",
   "Fomentos",
-  "Agricultores"
+  "Agricultores",
+  "Nomina",
+  "Estados Financieros"
 ] as const;
 
 type AppSettings = {
@@ -1936,7 +1938,7 @@ export function App() {
           if (tab === "Dashboard") return true;
           if (tab === "Configuracion" || tab === "Reportes") return false;
           if (tab === "Por Cobrar" || tab === "Por Pagar") return allowed.has("Caja") || allowed.has("Ventas");
-          if (tab === "Nomina") return allowed.has("Caja") || allowed.has("Produccion");
+          if (tab === "Nomina") return allowed.has("Nomina") || allowed.has("Caja") || allowed.has("Produccion");
           if (tab === "Cuadrilla") return allowed.has("Caja") || allowed.has("Produccion");
           if (tab === "Servicio Pilado") return allowed.has("Caja") || allowed.has("Produccion");
           if (tab === "Seleccion") return allowed.has("Inventario") || allowed.has("Produccion") || allowed.has("Caja");

@@ -15,7 +15,9 @@ export const APP_MODULES = [
   "Caja",
   "Liquidaciones",
   "Fomentos",
-  "Agricultores"
+  "Agricultores",
+  "Nomina",
+  "Estados Financieros"
 ] as const;
 
 export type AppModule = (typeof APP_MODULES)[number];
@@ -48,8 +50,8 @@ const WRITE_MODULES_BY_PREFIX: Record<string, AppModule[]> = {
   // accionistas: sin esta entrada cualquier usuario con sesión podía hacerlo.
   "lots": ["Bascula"],
   // Nómina, cuadrilla y servicio de pilado: la interfaz se los muestra a quien
-  // tiene Caja o Producción; el backend aplica la misma regla.
-  "labor": ["Caja", "Produccion"],
+  // tiene Nómina, Caja o Producción; el backend aplica la misma regla.
+  "labor": ["Caja", "Produccion", "Nomina"],
   "cuadrilla": ["Caja", "Produccion"],
   "pilado": ["Caja", "Produccion"],
   "tunnel-reservations": ["Secadoras"],
@@ -57,7 +59,7 @@ const WRITE_MODULES_BY_PREFIX: Record<string, AppModule[]> = {
   // Los estados financieros se LEEN (y leer no exige módulo); lo único que se
   // escribe aquí son los parámetros contables y el costo de los activos, que
   // además piden rol de administrador en la propia ruta.
-  "finance": ["Caja"]
+  "finance": ["Caja", "Estados Financieros"]
 };
 
 // Las lecturas son compartidas por todo el equipo; las escrituras se limitan

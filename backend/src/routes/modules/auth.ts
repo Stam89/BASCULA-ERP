@@ -238,7 +238,9 @@ authRouter.put("/users/:id/accionistas", requireAuth, requireAdmin, asyncRoute(a
       [req.params.id, a.accionista_id, a.modules]
     );
   }
-  res.status(204).end();
+  // OJO: responder JSON, no 204 vacío: el frontend siempre parsea res.json()
+  // y un cuerpo vacío le lanzaba "Unexpected end of JSON input".
+  res.json({ ok: true, asignados: asignaciones.length });
 }));
 
 // Renueva el token de una sesión válida y devuelve el usuario actualizado
