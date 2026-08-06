@@ -274,6 +274,7 @@ type PanelAccionista = {
   ventas_total: number; ventas_qq: number; ventas_cnt: number;
   inventario_qq: number; inventario_valor: number;
   cascara_011: number; cascara_corriente: number;
+  seco_011: number; seco_corriente: number;
   producto_011: number; producto_corriente: number;
   arrocillo_34: number; arrocillo_fino: number;
   polvillo: number;
@@ -283,7 +284,7 @@ type PanelData = {
   month: string;
   kpis: { compras: number; ventas: number; utilidad: number; margen: number; bancos: number; saldo_general: number };
   per_accionista: PanelAccionista[];
-  totales: { compras_qq: number; ventas_qq: number; inventario_qq: number; inventario_valor: number; compras_cnt: number; ventas_cnt: number; cascara_011: number; cascara_corriente: number; producto_011: number; producto_corriente: number; arrocillo_34: number; arrocillo_fino: number; polvillo: number; };
+  totales: { compras_qq: number; ventas_qq: number; inventario_qq: number; inventario_valor: number; compras_cnt: number; ventas_cnt: number; cascara_011: number; cascara_corriente: number; seco_011: number; seco_corriente: number; producto_011: number; producto_corriente: number; arrocillo_34: number; arrocillo_fino: number; polvillo: number; };
   serie: Array<{ month: string; compras: number; ventas: number }>;
   por_cobrar: { total: number; cnt: number };
   por_pagar: { total: number; cnt: number };
@@ -10397,7 +10398,7 @@ function PanelIntegral({ data, month, onMonth }: { data: PanelData; month: strin
             <table className="cajaTable" style={{ margin: 0, fontSize: 11, whiteSpace: "nowrap" }}>
               <thead>
                 <tr>
-                  {["Accionista", "CASC 0.11", "CASC CORR", "PROD 0.11", "PROD CORR", "3/4", "FINO", "POLV"].map((h, i) => (
+                  {["Accionista", "CASC 0.11", "SECO 0.11", "CASC CORR", "SECO CORR", "PROD 0.11", "PROD CORR", "3/4", "FINO", "POLV"].map((h, i) => (
                     <th key={i} style={{ textAlign: i === 0 ? "left" : "right", padding: "6px 8px" }}>{h}</th>
                   ))}
                 </tr>
@@ -10407,7 +10408,9 @@ function PanelIntegral({ data, month, onMonth }: { data: PanelData; month: strin
                   <tr key={i}>
                     <td style={{ textAlign: "left", padding: "6px 8px" }}>{a.name}</td>
                     <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.cascara_011.toFixed(2)}</td>
+                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.seco_011.toFixed(2)}</td>
                     <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.cascara_corriente.toFixed(2)}</td>
+                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.seco_corriente.toFixed(2)}</td>
                     <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.producto_011.toFixed(2)}</td>
                     <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.producto_corriente.toFixed(2)}</td>
                     <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.arrocillo_34.toFixed(2)}</td>
@@ -10418,7 +10421,9 @@ function PanelIntegral({ data, month, onMonth }: { data: PanelData; month: strin
                 <tr style={{ fontWeight: 700, background: "#f8fafc" }}>
                   <td style={{ textAlign: "left", padding: "6px 8px" }}>TOTAL</td>
                   <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.cascara_011.toFixed(2)}</td>
+                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.seco_011.toFixed(2)}</td>
                   <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.cascara_corriente.toFixed(2)}</td>
+                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.seco_corriente.toFixed(2)}</td>
                   <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.producto_011.toFixed(2)}</td>
                   <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.producto_corriente.toFixed(2)}</td>
                   <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.arrocillo_34.toFixed(2)}</td>

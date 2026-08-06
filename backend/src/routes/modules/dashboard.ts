@@ -17,7 +17,7 @@ dashboardRouter.get("/panel", requireAdmin, asyncRoute(async (req, res) => {
   const from = `${monthStr}-01`;
   const to = new Date(yy, mm, 0).toISOString().slice(0, 10); // último día del mes
 
-  const [accionistas, compras, ventas, inventario, bancos, ar, ap, prestamos, comprasSerie, ventasSerie] = await Promise.all([
+  const [accionistas, compras, ventas, inventario, bancos, ar, ap, prestamos, comprasSerie, ventasSerie, seco] = await Promise.all([
     pool.query("SELECT id, name FROM accionistas WHERE is_active = true ORDER BY name"),
     pool.query(
       `SELECT accionista_id, COALESCE(SUM(gross_amount),0)::float total, COALESCE(SUM(quintals),0)::float qq, COUNT(*)::int cnt
@@ -61,7 +61,18 @@ dashboardRouter.get("/panel", requireAdmin, asyncRoute(async (req, res) => {
     pool.query(
       `SELECT to_char(date_trunc('month', created_at),'YYYY-MM') m, COALESCE(SUM(total_amount),0)::float total
        FROM sales WHERE sale_status <> 'CANCELLED' AND created_at >= (date_trunc('month', $1::date) - interval '5 months')
-       GROUP BY 1 ORDER BY 1`, [from])
+       GROUP BY 1 ORDER BY 1`, [from]),
+    // SECO: cáscara ya secada pero AÚN NO molida (secados COMPLETED sin lote de
+    // producción). Es lo mismo que aparece en el selector de Producción.
+    pool.query(
+      `SELECT l.accionista_id,
+              COALESCE(SUM(CASE WHEN d.rice_type = '0.11' THEN d.total_quintals ELSE 0 END),0)::float seco_011,
+              COALESCE(SUM(CASE WHEN d.rice_type = 'CORRIENTE' THEN d.total_quintals ELSE 0 END),0)::float seco_corriente
+       FROM drying_tunnel_reports d
+       JOIN lots l ON l.id = d.lot_id
+       WHERE d.status = 'COMPLETED'
+         AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id)
+       GROUP BY l.accionista_id`)
   ]);
 
   const byAcc = (rows: Array<Record<string, unknown>>) => {
@@ -69,10 +80,10 @@ dashboardRouter.get("/panel", requireAdmin, asyncRoute(async (req, res) => {
     for (const r of rows) map.set(String(r.accionista_id), r);
     return map;
   };
-  const comprasMap = byAcc(compras.rows), ventasMap = byAcc(ventas.rows), invMap = byAcc(inventario.rows), bancosMap = byAcc(bancos.rows);
+  const comprasMap = byAcc(compras.rows), ventasMap = byAcc(ventas.rows), invMap = byAcc(inventario.rows), bancosMap = byAcc(bancos.rows), secoMap = byAcc(seco.rows);
 
   const perAccionista = accionistas.rows.map((a) => {
-    const c = comprasMap.get(a.id), v = ventasMap.get(a.id), i = invMap.get(a.id), b = bancosMap.get(a.id);
+    const c = comprasMap.get(a.id), v = ventasMap.get(a.id), i = invMap.get(a.id), b = bancosMap.get(a.id), s = secoMap.get(a.id);
     return {
       id: a.id,
       name: a.name,
@@ -80,7 +91,9 @@ dashboardRouter.get("/panel", requireAdmin, asyncRoute(async (req, res) => {
       ventas_total: Number(v?.total ?? 0), ventas_qq: Number(v?.qq ?? 0), ventas_cnt: Number(v?.cnt ?? 0),
       inventario_qq: 0, inventario_valor: 0,
       cascara_011: Number(i?.cascara_011 ?? 0),
+      seco_011: Number(s?.seco_011 ?? 0),
       cascara_corriente: Number(i?.cascara_corriente ?? 0),
+      seco_corriente: Number(s?.seco_corriente ?? 0),
       producto_011: Number(i?.producto_011 ?? 0),
       producto_corriente: Number(i?.producto_corriente ?? 0),
       arrocillo_34: Number(i?.arrocillo_34 ?? 0),
@@ -125,6 +138,7 @@ dashboardRouter.get("/panel", requireAdmin, asyncRoute(async (req, res) => {
       compras_qq: sum((x) => x.compras_qq), ventas_qq: sum((x) => x.ventas_qq),
       inventario_qq: 0, inventario_valor: 0,
       cascara_011: sum((x) => x.cascara_011), cascara_corriente: sum((x) => x.cascara_corriente),
+      seco_011: sum((x) => x.seco_011), seco_corriente: sum((x) => x.seco_corriente),
       producto_011: sum((x) => x.producto_011), producto_corriente: sum((x) => x.producto_corriente),
       arrocillo_34: sum((x) => x.arrocillo_34), arrocillo_fino: sum((x) => x.arrocillo_fino),
       polvillo: sum((x) => x.polvillo),
