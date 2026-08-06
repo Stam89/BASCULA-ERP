@@ -139,11 +139,11 @@ processFlowRouter.get("/drying/available-lots", asyncRoute(async (req, res) => {
   res.json(result.rows);
 }));
 
-// Túneles ocupados por OTROS accionistas (secados en curso): el frontend los
-// bloquea en el formulario de llenado para que dos socios no usen el mismo
-// túnel a la vez. El accionista activo no se bloquea a sí mismo.
-processFlowRouter.get("/drying/tunnels-status", asyncRoute(async (req, res) => {
-  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+// Túneles ocupados (secados en curso): el frontend los bloquea en el
+// formulario de llenado. Si un túnel está en uso por CUALQUIER accionista
+// (incluyendo el activo), se bloquea: un túnel solo puede tener un secado
+// activo a la vez. Esto aplica para TODOS los accionistas.
+processFlowRouter.get("/drying/tunnels-status", asyncRoute(async (_req, res) => {
   const result = await pool.query(
     `SELECT d.tunnel_number,
             COALESCE(a.name, 'servicio de pilado/maquila') AS accionista_name
@@ -151,9 +151,7 @@ processFlowRouter.get("/drying/tunnels-status", asyncRoute(async (req, res) => {
      JOIN lots l ON l.id = d.lot_id
      LEFT JOIN accionistas a ON a.id = l.accionista_id
      WHERE d.status = 'IN_PROGRESS'
-       AND l.accionista_id IS DISTINCT FROM $1
-     ORDER BY d.tunnel_number, d.created_at DESC`,
-    [accionistaId]
+     ORDER BY d.tunnel_number, d.created_at DESC`
   );
   res.json(result.rows);
 }));
@@ -198,18 +196,15 @@ processFlowRouter.get("/drying/reports", asyncRoute(async (req, res) => {
 // los ya finalizados: el motor mueve las dos secadoras y puede que terminen en
 // momentos distintos, pero el combustible se reparte entre ambas al cerrar.
 const SECADOS_PENDIENTES_COMBUSTIBLE = `
-  d.motor_number = $1 AND d.motor_fuel_id IS NULL
-  AND COALESCE(d.filled_at, d.created_at)::date = (
-    SELECT MAX(COALESCE(filled_at, created_at)::date)
-    FROM drying_tunnel_reports
-    WHERE motor_number = $1 AND motor_fuel_id IS NULL
-  )`;
+  d.motor_number = $1 AND d.motor_fuel_id IS NULL`;
 
 processFlowRouter.get("/drying/motor/:motor/active", asyncRoute(async (req, res) => {
+
   const motor = Number(req.params.motor);
   if (motor !== 1 && motor !== 2) throw new ApiError(400, "Motor inválido");
   const result = await pool.query(
     `SELECT d.id, d.tunnel_number, d.dryer_name, d.total_quintals, d.rice_type, d.status,
+            d.dry_start_at,
             l.lot_code, a.name AS accionista_name
      FROM drying_tunnel_reports d
      JOIN lots l ON l.id = d.lot_id
@@ -329,6 +324,38 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
   });
 
   res.status(201).json(result);
+}));
+
+processFlowRouter.post("/drying/motor-finalize", asyncRoute(async (req, res) => {
+  const body = z.object({
+    motor_number: z.number().int().min(1).max(2)
+  }).parse(req.body);
+
+  const result = await inTransaction(async (client) => {
+    const reports = await client.query(
+      `SELECT id
+       FROM drying_tunnel_reports
+       WHERE motor_number = $1
+         AND status = 'IN_PROGRESS'
+       ORDER BY created_at`,
+      [body.motor_number]
+    );
+    if (!reports.rowCount) {
+      throw new ApiError(409, "El motor no tiene secados activos para finalizar.");
+    }
+
+    await client.query(
+      `UPDATE drying_tunnel_reports
+       SET status = 'COMPLETED',
+           dry_end_at = COALESCE(dry_end_at, now())
+       WHERE id = ANY($1::uuid[])`,
+      [reports.rows.map((r) => r.id)]
+    );
+
+    return { finalized: reports.rowCount };
+  });
+
+  res.json(result);
 }));
 
 processFlowRouter.post("/drying", asyncRoute(async (req, res) => {
@@ -502,8 +529,8 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
   const isMaquila = Boolean(entries.rows[0].is_maquila);
   const lotAccionista = entries.rows[0].accionista_id as string | null;
 
-  // Validación: una secadora no puede tener dos secados activos de distintos
-  // accionistas para evitar que se mezclen datos entre socios.
+  // Validación: una secadora no puede tener dos secados activos a la vez. Si un
+  // túnel está en uso por CUALQUIER accionista (incluido el mismo), se bloquea.
   const ocupado = await client.query(
     `SELECT d.id, a.name AS accionista_name
      FROM drying_tunnel_reports d
@@ -511,13 +538,12 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
      LEFT JOIN accionistas a ON a.id = l.accionista_id
      WHERE d.tunnel_number = $1
        AND d.status = 'IN_PROGRESS'
-       AND l.accionista_id IS DISTINCT FROM $2
      LIMIT 1`,
-    [input.tunnel_number, lotAccionista]
+    [input.tunnel_number]
   );
   if (ocupado.rowCount) {
     const nombre = ocupado.rows[0].accionista_name ?? "servicio de pilado/maquila";
-    throw new ApiError(409, `El túnel ${input.tunnel_number} ya está en uso por ${nombre}. Finaliza ese secado antes de usarlo con otro accionista.`);
+    throw new ApiError(409, `El túnel ${input.tunnel_number} ya está en uso por ${nombre}. Finaliza ese secado antes de usarlo.`);
   }
 
   const farmerIds = new Set(entries.rows.map((e) => e.farmer_id));

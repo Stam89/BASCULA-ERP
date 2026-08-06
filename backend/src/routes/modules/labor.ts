@@ -143,43 +143,52 @@ export async function createProductionWorkerPayments(
     const arrocillo = Number(opts.arrocillo) || 0;
     const tulas = Number(opts.tulas) || 0;
     const tulasBonus = estibadorBaseFromTulas(tulas, rates.estibador_por_3tulas);
-    const polvillo = Number(opts.polvillo) || 0;
-    const polvilloAmount = round2(polvillo * rates.polvillo_per_qq);
 
     // Cada rol lleva SU base de cobro: el pilador por QQ; el estibador por
-    // tulas. Así en Nómina se ve el QQ del pilador y la tula del estibador.
-    const rows: Array<{ role: string; name: string; base: number; qq: number; tulas: number; tulasBonus: number; polvillo: number; polvilloAmount: number }> = [];
+    // tulas + arrocillo cuando hay tulas, o por QQ/sacas/arrocillo cuando no.
+    const rows: Array<{ role: string; name: string; base: number; qq: number; tulas: number; tulasBonus: number; sacasCobradas: number }> = [];
     if (opts.piladorName && opts.piladorName.trim()) {
       rows.push({
         role: "PILADOR",
         name: opts.piladorName.trim(),
         base: round2(qq * rates.pilador_per_qq + sacas * rates.pilador_per_saca),
-        qq, tulas: 0, tulasBonus: 0, polvillo: 0, polvilloAmount: 0
+        qq, tulas: 0, tulasBonus: 0, sacasCobradas: sacas
       });
     }
     if (opts.estibadorName && opts.estibadorName.trim()) {
-      // El estibador gana por QQ procesados, por sacas, por arrocillo y por
-      // tulas (si en esa produccion hubo llenado en tula). Antes solo cobraba
-      // por tulas, por eso quedaba en $0 cuando no se registraban.
-      rows.push({
-        role: "ESTIBADOR",
-        name: opts.estibadorName.trim(),
-        base: round2(
-          qq * rates.estibador_per_qq +
-          sacas * rates.estibador_per_saca +
-          arrocillo * rates.estibador_per_arrocillo +
-          tulasBonus
-        ),
-        qq, tulas, tulasBonus, polvillo: 0, polvilloAmount: 0
-      });
+      if (tulas > 0) {
+        // Cuando hay tulas el estibador cobra por TULAS + ARROCILLO (3/4 y fino,
+        // con la tarifa estibador_per_arrocillo de Configuración → Tarifas).
+        // NO cobra por QQ ni sacas en esa producción.
+        const arrocilloPay = round2(arrocillo * rates.estibador_per_arrocillo);
+        rows.push({
+          role: "ESTIBADOR",
+          name: opts.estibadorName.trim(),
+          base: round2(tulasBonus + arrocilloPay),
+          qq: 0, tulas, tulasBonus: tulasBonus, sacasCobradas: 0
+        });
+      } else {
+        // Producción normal sin tulas: cobra por QQ, sacas y arrocillo como antes.
+        rows.push({
+          role: "ESTIBADOR",
+          name: opts.estibadorName.trim(),
+          base: round2(
+            qq * rates.estibador_per_qq +
+            sacas * rates.estibador_per_saca +
+            arrocillo * rates.estibador_per_arrocillo
+          ),
+          qq, tulas: 0, tulasBonus: 0, sacasCobradas: sacas
+        });
+      }
     }
-    if (opts.polvilloName && opts.polvilloName.trim() && polvillo > 0 && polvilloAmount > 0) {
-      // Pago aparte al encargado de llenar polvillo: $ por QQ de polvillo producido.
+
+    if (opts.polvilloName && opts.polvilloName.trim() && (opts.polvillo ?? 0) > 0) {
+      const polvilloQq = Number(opts.polvillo) || 0;
       rows.push({
         role: "POLVILLO",
         name: opts.polvilloName.trim(),
-        base: polvilloAmount,
-        qq: 0, tulas: 0, tulasBonus: 0, polvillo, polvilloAmount
+        base: round2(polvilloQq * rates.polvillo_per_qq),
+        qq: 0, tulas: 0, tulasBonus: 0, sacasCobradas: 0
       });
     }
 
@@ -191,10 +200,10 @@ export async function createProductionWorkerPayments(
         [r.role, r.name, opts.batchId, r.qq, sacas, arrocillo, r.tulas, r.base, opts.createdBy ?? null,
          JSON.stringify({
            qq: r.qq, qq_rate: r.role === "PILADOR" ? rates.pilador_per_qq : rates.estibador_per_qq, qq_amount: round2(r.qq * (r.role === "PILADOR" ? rates.pilador_per_qq : rates.estibador_per_qq)),
-           sacas, saca_rate: r.role === "PILADOR" ? rates.pilador_per_saca : rates.estibador_per_saca, saca_amount: round2(sacas * (r.role === "PILADOR" ? rates.pilador_per_saca : rates.estibador_per_saca)),
+           sacas, saca_rate: r.role === "PILADOR" ? rates.pilador_per_saca : rates.estibador_per_saca, saca_amount: round2(r.sacasCobradas * (r.role === "PILADOR" ? rates.pilador_per_saca : rates.estibador_per_saca)),
            arrocillo, arrocillo_rate: r.role === "PILADOR" ? 0 : rates.estibador_per_arrocillo, arrocillo_amount: round2(arrocillo * (r.role === "PILADOR" ? 0 : rates.estibador_per_arrocillo)),
            tulas: r.tulas, tulas_rate: r.role === "PILADOR" ? 0 : rates.estibador_por_3tulas, tulas_amount: r.tulasBonus,
-           polvillo: r.polvillo, polvillo_rate: rates.polvillo_per_qq, polvillo_amount: r.polvilloAmount
+           polvillo: r.role === "POLVILLO" ? (opts.polvillo ?? 0) : 0, polvillo_rate: r.role === "POLVILLO" ? rates.polvillo_per_qq : 0, polvillo_amount: r.role === "POLVILLO" ? r.base : 0
          })]
       );
     }
@@ -257,7 +266,7 @@ laborRouter.get("/payments", asyncRoute(async (req, res) => {
   const q = z.object({
     from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    role: z.enum(["PILADOR", "ESTIBADOR", "SECADOR"]).optional(),
+    role: z.enum(["PILADOR", "ESTIBADOR", "SECADOR", "POLVILLO"]).optional(),
     status: z.enum(["PENDING", "PAID"]).optional()
   }).parse(req.query);
 
@@ -282,7 +291,7 @@ laborRouter.get("/payments", asyncRoute(async (req, res) => {
 laborRouter.get("/worker-detail", asyncRoute(async (req, res) => {
   await ensureLaborTables();
   const q = z.object({
-    role: z.enum(["PILADOR", "ESTIBADOR", "SECADOR"]),
+    role: z.enum(["PILADOR", "ESTIBADOR", "SECADOR", "POLVILLO"]),
     name: z.string().min(1),
     from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
@@ -388,7 +397,7 @@ laborRouter.get("/advances", asyncRoute(async (req, res) => {
   const q = z.object({
     from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    role: z.enum(["PILADOR", "ESTIBADOR", "SECADOR"]).optional(),
+    role: z.enum(["PILADOR", "ESTIBADOR", "SECADOR", "POLVILLO"]).optional(),
     name: z.string().optional()
   }).parse(req.query);
   const conditions: string[] = [];
@@ -405,7 +414,7 @@ laborRouter.get("/advances", asyncRoute(async (req, res) => {
 laborRouter.post("/advances", asyncRoute(async (req, res) => {
   await ensureLaborTables();
   const body = z.object({
-    worker_role: z.enum(["PILADOR", "ESTIBADOR", "SECADOR"]),
+    worker_role: z.enum(["PILADOR", "ESTIBADOR", "SECADOR", "POLVILLO"]),
     worker_name: z.string().min(1),
     amount: z.number().positive(),
     description: z.string().optional(),
@@ -463,24 +472,39 @@ laborRouter.get("/secador-suggestions", asyncRoute(async (req, res) => {
   const to = q.to ?? today.toISOString().slice(0, 10);
   const rates = await getRates();
 
+  // Se usa dry_start_at::date como fecha de trabajo ("Hora secado inicio").
+  // El pago del secador depende de cuántas secadoras (túneles) estuvieron
+  // activas EN TOTAL ese día, no de cuántas atendió cada operador.
   const result = await pool.query(
-    `SELECT sub.worker_name, sub.work_date, sub.tunnels,
-            EXISTS(
-              SELECT 1 FROM worker_payments wp
-              WHERE wp.worker_role = 'SECADOR' AND wp.worker_name = sub.worker_name AND wp.work_date = sub.work_date
-            ) AS already_generated
-     FROM (
-       -- Cada secador se paga por su propio trabajo: guardianía por día + $ por
-       -- cada túnel que secó. Se agrupa por nombre del operador y por día para no
-       -- perder secadores cuando varias personas secaron la misma fecha.
-       SELECT COALESCE(NULLIF(TRIM(operator_name), ''), 'Secador') AS worker_name,
-              COALESCE(filled_at, dry_start_at::date, created_at::date) AS work_date,
-              COUNT(DISTINCT tunnel_number)::int AS tunnels
+    `WITH daily_tunnels AS (
+       -- Cuántos túneles distintos estuvieron activos cada día
+       SELECT COALESCE(dry_start_at::date, created_at::date) AS work_date,
+              COUNT(DISTINCT tunnel_number)::int AS total_tunnels_active
        FROM drying_tunnel_reports
-       WHERE COALESCE(filled_at, dry_start_at::date, created_at::date) BETWEEN $1 AND $2
-       GROUP BY 1, 2
-     ) sub
-     ORDER BY sub.work_date DESC`,
+       WHERE COALESCE(dry_start_at::date, created_at::date) BETWEEN $1 AND $2
+       GROUP BY COALESCE(dry_start_at::date, created_at::date)
+     ),
+     daily_workers AS (
+       -- Qué secadores trabajaron cada día (por nombre del operador en el reporte)
+       SELECT DISTINCT
+         COALESCE(NULLIF(TRIM(operator_name), ''), 'Secador') AS worker_name,
+         COALESCE(dry_start_at::date, created_at::date) AS work_date
+       FROM drying_tunnel_reports
+       WHERE COALESCE(dry_start_at::date, created_at::date) BETWEEN $1 AND $2
+     )
+     SELECT
+       dw.worker_name,
+       dw.work_date,
+       dt.total_tunnels_active AS tunnels,
+       EXISTS(
+         SELECT 1 FROM worker_payments wp
+         WHERE wp.worker_role = 'SECADOR'
+           AND wp.worker_name = dw.worker_name
+           AND wp.work_date = dw.work_date
+       ) AS already_generated
+     FROM daily_workers dw
+     JOIN daily_tunnels dt ON dw.work_date = dt.work_date
+     ORDER BY dw.work_date DESC`,
     [from, to]
   ).catch(() => ({ rows: [] as Array<{ worker_name: string; work_date: string; tunnels: number; already_generated: boolean }> }));
 
@@ -533,7 +557,7 @@ laborRouter.post("/secador-days", asyncRoute(async (req, res) => {
 laborRouter.post("/pay-worker", asyncRoute(async (req, res) => {
   await ensureLaborTables();
   const body = z.object({
-    worker_role: z.enum(["PILADOR", "ESTIBADOR", "SECADOR"]),
+    worker_role: z.enum(["PILADOR", "ESTIBADOR", "SECADOR", "POLVILLO"]),
     worker_name: z.string().min(1),
     from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
