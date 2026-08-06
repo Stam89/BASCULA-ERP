@@ -260,6 +260,9 @@ reportsRouter.get("/fuel", asyncRoute(async (req, res) => {
   const rows = await pool.query(
     `SELECT COALESCE(d.dry_end_at, d.filled_at, d.created_at) AS fecha,
             d.dry_start_at, d.dry_end_at,
+            CASE WHEN d.dry_start_at IS NOT NULL AND d.dry_end_at IS NOT NULL
+                 THEN round(EXTRACT(EPOCH FROM (d.dry_end_at - d.dry_start_at))::numeric / 3600, 1)
+            END::float AS horas_secado,
             d.dryer_name, d.tunnel_number, d.motor_number,
             d.total_quintals::float AS quintals,
             COALESCE(d.gas_costo_total, 0)::float AS gas_costo,

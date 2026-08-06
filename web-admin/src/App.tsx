@@ -480,6 +480,9 @@ type DryingTunnelReport = {
   operator_name: string | null;
   notes: string | null;
   is_processed?: boolean;
+  locked_at?: string | null;
+  locked_by?: string | null;
+  locked_by_name?: string | null;
   lots: DryingTunnelLot[];
 };
 
@@ -1740,6 +1743,38 @@ export function App() {
     Object.values(liqDiscounts).reduce((sum, v) => sum + Number(v || 0), 0),
     [liqDiscounts]
   );
+
+  // Deuda de fomento ACTIVA de un agricultor: al liquidarlo, este valor se
+  // carga automáticamente como descuento "Fomento" (último apartado del
+  // módulo Liquidación). Coincide por farmer_id y, como respaldo, por nombre
+  // (los fomentos antiguos no siempre traen farmer_id). Si no hay, null.
+  const fomentoDeudaDeAgricultor = useMemo(() => {
+    const norm = (s: string | null | undefined) => String(s ?? "").trim().toUpperCase();
+    const acumular = (mapa: Map<string, { deuda: number; nombres: string[] }>, clave: string, deuda: number, nombre: string) => {
+      const cur = mapa.get(clave) ?? { deuda: 0, nombres: [] };
+      cur.deuda += deuda;
+      if (!cur.nombres.includes(nombre)) cur.nombres.push(nombre);
+      mapa.set(clave, cur);
+    };
+    const mapa = new Map<string, { deuda: number; nombres: string[] }>();
+    for (const f of fomentos) {
+      if (f.status !== "ACTIVOS") continue;
+      const deuda = Number(f.deuda_total ?? 0);
+      if (deuda <= 0) continue;
+      if (f.farmer_id) acumular(mapa, `id:${f.farmer_id}`, deuda, f.farmer_name);
+      if (norm(f.farmer_name)) acumular(mapa, `nm:${norm(f.farmer_name)}`, deuda, f.farmer_name);
+    }
+    for (const v of mapa.values()) v.deuda = round2(v.deuda);
+    return mapa;
+  }, [fomentos]);
+  const liqFomentoAuto = useMemo(() => {
+    if (!liqFarmerId) return null;
+    const porId = fomentoDeudaDeAgricultor.get(`id:${liqFarmerId}`);
+    if (porId) return porId;
+    const farmer = farmers.find((f) => f.id === liqFarmerId);
+    const nombre = String(farmer?.full_name ?? "").trim().toUpperCase();
+    return nombre ? fomentoDeudaDeAgricultor.get(`nm:${nombre}`) ?? null : null;
+  }, [liqFarmerId, fomentoDeudaDeAgricultor, farmers]);
 
   const setupScore = useMemo(() => {
     const checks = [
@@ -3197,6 +3232,9 @@ export function App() {
 
   useEffect(() => {
     if (activeTab === "Fomentos") refreshFomentos().catch(() => undefined);
+    // Liquidaciones también necesita los fomentos: al elegir agricultor se
+    // carga automáticamente su deuda de fomento como descuento.
+    if (activeTab === "Liquidaciones") refreshFomentos().catch(() => undefined);
     if (activeTab === "Produccion") {
       refreshSacks().catch(() => undefined);
       loadMillingDrafts().catch(() => undefined);
@@ -4056,7 +4094,7 @@ export function App() {
       notes: form.get("notes") || undefined
     };
     const updated = await apiPut<DryingTunnelReport>(`/process-flow/drying/${report.id}`, payload);
-    setMessage(updated.status === "COMPLETED" ? `Secado del Túnel ${updated.tunnel_number} finalizado` : `Secado del Túnel ${updated.tunnel_number} actualizado`);
+    setMessage(updated.status === "COMPLETED" ? `Secado del Túnel ${updated.tunnel_number} finalizado y 🔒 bloqueado` : `Secado del Túnel ${updated.tunnel_number} guardado y 🔒 bloqueado`);
     await refresh();
     await loadMotorActive();
     if (updated.status === "COMPLETED") {
@@ -4064,6 +4102,15 @@ export function App() {
       safeResetForm(formElement);
       setEditingDryingReport(null);
     }
+  }
+
+  // Desbloquea un registro de secadora (solo ADMINISTRADOR en el backend).
+  async function desbloquearSecado(report: DryingTunnelReport) {
+    if (!window.confirm(`¿Desbloquear el secado del Túnel ${report.tunnel_number} (${report.dryer_name ?? "Secadora"})? Quedará editable de nuevo.`)) return;
+    await apiPost<{ ok: boolean }>(`/process-flow/drying/${report.id}/unlock`, {});
+    setMessage(`Secado del Túnel ${report.tunnel_number} desbloqueado`);
+    await refresh();
+    await loadMotorActive();
   }
 
   // Panel de medidores del combustible del motor.
@@ -5379,6 +5426,7 @@ export function App() {
                       {lista.map((rep) => {
                         const secadora = rep.dryer_name ?? `Secadora ${rep.tunnel_number}`;
                         const done = rep.status === "COMPLETED";
+                        const bloqueado = Boolean(rep.locked_at);
                         return (
                           <form
                             key={rep.id}
@@ -5386,22 +5434,33 @@ export function App() {
                             onSubmit={(event) => { event.preventDefault(); guardarSecadoEditado(rep, event.currentTarget, false).catch((error) => setMessage(error.message)); }}
                           >
                             <h3 style={{ marginTop: 0 }}>🌀 {secadora} · Túnel {rep.tunnel_number} {done ? <span className="chip ok">Finalizado</span> : <span className="editBadge">✎ En secado</span>}</h3>
+                            {bloqueado && (
+                              <div className="alertBox" style={{ marginBottom: 8 }}>
+                                🔒 <strong>BLOQUEADO</strong> el {new Date(rep.locked_at as string).toLocaleString("es-PA", { dateStyle: "short", timeStyle: "short" })}
+                                {rep.locked_by_name ? ` por ${rep.locked_by_name}` : ""}.
+                                {" "}Solo un administrador puede desbloquearlo.
+                              </div>
+                            )}
                             <DryingLotSelector selectedLots={rep.lots} editing onRemove={() => undefined} />
                             <div className="totalBox"><span>Peso total</span><strong>{Number(rep.total_quintals ?? 0).toFixed(2)} QQ</strong></div>
-                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                              <Select name="rice_type" label="Tipo de arroz" rows={[["0.11", "0.11"], ["CORRIENTE", "Corriente"]]} defaultValue={rep.rice_type ?? "0.11"} />
-                              <Input name="filled_at" label="Fecha de llenado" type="date" defaultValue={(rep.filled_at ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10)} required={false} />
-                            </div>
-                            <Input name="moisture_before" label="Humedad inicial %" type="number" defaultValue={String(rep.moisture_before ?? 0)} required={false} />
-                            <Input name="operator_name" label="Nombre del secador" placeholder="Quien seca este túnel (para la nómina)" defaultValue={rep.operator_name ?? ""} required={false} />
-                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                              <Input name="dry_start_at" label="Hora secado inicio" type="datetime-local" defaultValue={dateTimeLocalValue(rep.dry_start_at)} required={false} />
-                              <Input name="dry_end_at" label="Hora secado final" type="datetime-local" defaultValue={dateTimeLocalValue(rep.dry_end_at)} required={false} />
-                            </div>
-                            <Input name="notes" label="Observacion" defaultValue={rep.notes ?? "Secado registrado"} required={false} />
+                            {!bloqueado && (
+                              <>
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                                  <Select name="rice_type" label="Tipo de arroz" rows={[["0.11", "0.11"], ["CORRIENTE", "Corriente"]]} defaultValue={rep.rice_type ?? "0.11"} />
+                                  <Input name="filled_at" label="Fecha de llenado" type="date" defaultValue={(rep.filled_at ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10)} required={false} />
+                                </div>
+                                <Input name="moisture_before" label="Humedad inicial %" type="number" defaultValue={String(rep.moisture_before ?? 0)} required={false} />
+                                <Input name="operator_name" label="Nombre del secador" placeholder="Quien seca este túnel (para la nómina)" defaultValue={rep.operator_name ?? ""} required={false} />
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                                  <Input name="dry_start_at" label="Hora secado inicio" type="datetime-local" defaultValue={dateTimeLocalValue(rep.dry_start_at)} required={false} />
+                                  <Input name="dry_end_at" label="Hora secado final" type="datetime-local" defaultValue={dateTimeLocalValue(rep.dry_end_at)} required={false} />
+                                </div>
+                                <Input name="notes" label="Observacion" defaultValue={rep.notes ?? "Secado registrado"} required={false} />
+                              </>
+                            )}
                             <div className="buttonRow">
-                              <button className="primary">Guardar cambios</button>
-                              {!done && (
+                              {!bloqueado && <button className="primary">Guardar cambios</button>}
+                              {!done && !bloqueado && (
                                 <button
                                   type="button"
                                   className="primary"
@@ -5412,6 +5471,14 @@ export function App() {
                                   }}
                                 >
                                   ✅ Finalizar este túnel
+                                </button>
+                              )}
+                              {bloqueado && isAdmin && (
+                                <button
+                                  type="button"
+                                  onClick={() => desbloquearSecado(rep).catch((error) => setMessage(error.message))}
+                                >
+                                  🔓 Desbloquear
                                 </button>
                               )}
                             </div>
@@ -5531,7 +5598,7 @@ export function App() {
               </form>
             )}
 
-            <DryingReportsPanel reports={dryingReports} onEdit={editDryingReport} />
+            <DryingReportsPanel reports={dryingReports} onEdit={editDryingReport} isAdmin={isAdmin} onUnlock={desbloquearSecado} />
           </section>
         )}
 
@@ -6310,13 +6377,9 @@ export function App() {
                 <ControlledNumberInput label="Arrocillo Fino" value={millingReport.fineBroken} onChange={(value) => updateMillingField("fineBroken", value)} />
                 <ControlledNumberInput label="Polvillo" value={millingReport.polvillo} onChange={(value) => updateMillingField("polvillo", value)} />
               </div>
-              {Number(millingReport.polvillo || 0) > 0 && (
-                <div className="totalBox" style={{ background: "#f0fdf4", borderColor: "#bbf7d0", marginTop: 10 }}>
-                  <span>🟤 PAGO POR LLENADO DE POLVILLO</span>
-                  <strong>{money(Number(millingReport.polvillo || 0) * laborRatesForm.polvillo_per_qq)}</strong>
-                  <small>{Number(millingReport.polvillo || 0).toFixed(2)} QQ × ${laborRatesForm.polvillo_per_qq}/QQ — se paga al encargado de llenar polvillo (rol Polvillo en Nómina)</small>
-                </div>
-              )}
+              {/* Pago por llenado de polvillo: OCULTO a petición. El pago se sigue
+                  registrando en Nómina (backend) con el rol Polvillo; solo no se
+                  muestra el cálculo aquí. */}
 
               <div className="buttonRow">
                 <button type="button" onClick={() => saveMillingProcess().catch((e) => addToast(e.message, "error"))} disabled={!selectedProductionDrying}>
@@ -6396,9 +6459,8 @@ export function App() {
                             <Metric title="Arrocillo 3/4" value={`${Number(item.broken_rice_qty ?? 0).toFixed(2)} QQ`} />
                             <Metric title="Arrocillo fino" value={`${Number(item.fine_broken_rice_qty ?? 0).toFixed(2)} QQ`} />
                             <Metric title="Polvillo" value={`${Number(item.bran_qty ?? 0).toFixed(2)} QQ`} />
-                            {Number(item.bran_qty ?? 0) > 0 && (
-                              <Metric title="Pago polvillo" value={money(Number(item.bran_qty ?? 0) * laborRatesForm.polvillo_per_qq)} />
-                            )}
+                            {/* "Pago polvillo" oculto a petición: el pago sigue
+                                registrándose en Nómina, solo no se muestra aquí. */}
                           </section>
                         )}
 
@@ -7623,7 +7685,23 @@ export function App() {
                   <label>
                     <span>Agricultor</span>
                     <select value={liqFarmerId}
-                      onChange={(e) => { setLiqFarmerId(e.target.value); setLiqLines([{ lot_id: "", quintals: "", price: "" }]); }}
+                      onChange={(e) => {
+                        const id = e.target.value;
+                        setLiqFarmerId(id);
+                        setLiqLines([{ lot_id: "", quintals: "", price: "" }]);
+                        // Auto-integración Fomento → Liquidación: si el agricultor
+                        // tiene fomento activo con deuda, se carga sola como descuento;
+                        // si no tiene, queda vacío y se sigue normal.
+                        const f = id
+                          ? fomentoDeudaDeAgricultor.get(`id:${id}`) ?? (() => {
+                              const farmer = farmers.find((x) => x.id === id);
+                              const nombre = String(farmer?.full_name ?? "").trim().toUpperCase();
+                              return nombre ? fomentoDeudaDeAgricultor.get(`nm:${nombre}`) ?? null : null;
+                            })()
+                          : null;
+                        setLiqDiscounts((p) => ({ ...p, fomento: f ? f.deuda.toFixed(2) : "" }));
+                        if (f) setDiscountsOpen(true);
+                      }}
                       required>
                       <option value="">Seleccione</option>
                       {farmersWithLots.map((f) => <option key={f.id} value={f.id}>{f.full_name}</option>)}
@@ -7693,10 +7771,12 @@ export function App() {
                         <strong>Anticipo</strong> — se descuenta automáticamente del balance del agricultor
                       </div>
                       {([
-                        { key: "fomento",     label: "Fomento" },
                         { key: "bascula",     label: "Báscula" },
                         { key: "flete",       label: "Flete" },
                         { key: "cosechadora", label: "Cosechadora" },
+                        // Fomento va de ÚLTIMO: es el apartado final del módulo
+                        // Liquidación y se auto-carga con la deuda del agricultor.
+                        { key: "fomento",     label: "Fomento" },
                       ] as const).map(({ key, label }) => (
                         <label key={key} className="liqDiscRow">
                           <span>{label}</span>
@@ -7705,6 +7785,11 @@ export function App() {
                             onChange={(e) => setLiqDiscounts((p) => ({ ...p, [key]: e.target.value }))} />
                         </label>
                       ))}
+                      {liqFomentoAuto && (
+                        <small className="muted" style={{ display: "block" }}>
+                          🌾 {liqFomentoAuto.nombres.join(", ")} tiene fomento activo: deuda ${liqFomentoAuto.deuda.toFixed(2)} cargada automáticamente. Puedes ajustarla antes de liquidar.
+                        </small>
+                      )}
                     </div>
                   )}
 
@@ -9320,10 +9405,11 @@ export function App() {
 
                 <h3 style={{ marginTop: 20, fontSize: 14 }}>Reparto por secadora</h3>
                 <ReportTable
-                  headers={["Fecha", "Hora secado", "Secadora", "Motor", "QQ", "Gas $", "Diésel $", "Costo/QQ Gas", "Costo/QQ Diésel", "Total $"]}
+                  headers={["Fecha", "Hora secado", "Horas", "Secadora", "Motor", "QQ", "Gas $", "Diésel $", "Costo/QQ Gas", "Costo/QQ Diésel", "Total $"]}
                   rows={(reportRows.data.rows || []).map((r: any) => [
                     new Date(r.fecha).toLocaleDateString("es-EC"),
                     `${fmtHoraSecado(r.dry_start_at)} – ${fmtHoraSecado(r.dry_end_at)}`,
+                    r.horas_secado != null ? `${Number(r.horas_secado).toFixed(1)} h` : "—",
                     r.dryer_name ?? `Túnel ${r.tunnel_number}`,
                     `Motor ${r.motor_number}`,
                     Number(r.quintals).toFixed(2),
@@ -10648,10 +10734,14 @@ function DryingLotSelector({
 }
 function DryingReportsPanel({
   reports,
-  onEdit
+  onEdit,
+  isAdmin,
+  onUnlock
 }: {
   reports: DryingTunnelReport[];
   onEdit: (report: DryingTunnelReport) => void;
+  isAdmin: boolean;
+  onUnlock: (report: DryingTunnelReport) => Promise<void>;
 }) {
   return (
     <section className="tracePanel dryingReportsPanel">
@@ -10660,15 +10750,27 @@ function DryingReportsPanel({
       {reports.map((report) => (
         <article className="dryingReportCard" key={report.id}>
           <div>
-            <strong>Tunel {report.tunnel_number} · {report.status === "COMPLETED" ? "Finalizado" : "En proceso"}</strong>
+            <strong>
+              Tunel {report.tunnel_number} · {report.status === "COMPLETED" ? "Finalizado" : "En proceso"}
+              {report.locked_at ? " · 🔒 Bloqueado" : ""}
+            </strong>
             <small>
               {Number(report.total_quintals ?? 0).toFixed(2)} QQ · {report.lots.length} lote(s) · {report.dryer_name ?? "Sin secadora"} · Secador: {report.operator_name || "—"}
             </small>
             <small>Tipo: {report.rice_type === "CORRIENTE" ? "Corriente" : "0.11"}</small>
             <small>{report.lots.map((lot) => `${lot.farmer_name ?? "Sin agricultor"} (${Number(lot.quintals ?? 0).toFixed(2)} QQ)`).join(" + ")}</small>
+            {report.locked_at && (
+              <small style={{ color: "var(--c-danger, #b91c1c)" }}>
+                🔒 Bloqueado el {new Date(report.locked_at).toLocaleString("es-PA", { dateStyle: "short", timeStyle: "short" })}
+                {report.locked_by_name ? ` por ${report.locked_by_name}` : ""}
+              </small>
+            )}
           </div>
-          {report.status !== "COMPLETED" && (
+          {report.status !== "COMPLETED" && !report.locked_at && (
             <button type="button" onClick={() => onEdit(report)}>Editar</button>
+          )}
+          {report.locked_at && isAdmin && (
+            <button type="button" onClick={() => onUnlock(report).catch(() => undefined)}>🔓 Desbloquear</button>
           )}
         </article>
       ))}
