@@ -63,19 +63,9 @@ type SelectionBatch = {
 };
 
 // Módulos asignables a un operador (deben coincidir con el backend).
-const APP_MODULES = [
-  "Bascula",
-  "Secadoras",
-  "Produccion",
-  "Inventario",
-  "Ventas",
-  "Caja",
-  "Liquidaciones",
-  "Fomentos",
-  "Agricultores",
-  "Nomina",
-  "Estados Financieros"
-] as const;
+// APP_MODULES (modulos asignables a operadores) se define mas abajo, DERIVADO
+// de navGroups, para que al agregar una seccion nueva al Sidebar aparezca sola
+// como permiso. Ver justo despues de `const tabs = ...`.
 
 type AppSettings = {
   business_name: string;
@@ -99,6 +89,7 @@ type AdminUser = {
   id: string;
   name: string;
   username: string;
+  cedula?: string | null;
   is_active: boolean;
   created_at: string;
   role_name: string | null;
@@ -294,7 +285,7 @@ type PanelData = {
   alertas: string[];
 };
 
-type ReportKind = "resumen" | "ventas" | "liquidaciones" | "gastos" | "produccion" | "combustible" | "porcobrar";
+type ReportKind = "resumen" | "ventas" | "liquidaciones" | "gastos" | "produccion" | "combustible" | "porcobrar" | "arianos";
 
 const reportEndpoint: Record<Exclude<ReportKind, "resumen">, string> = {
   ventas: "sales",
@@ -302,7 +293,8 @@ const reportEndpoint: Record<Exclude<ReportKind, "resumen">, string> = {
   gastos: "expenses",
   produccion: "production",
   combustible: "fuel",
-  porcobrar: "receivable-aging"
+  porcobrar: "receivable-aging",
+  arianos: "arianos"
 };
 
 const authStorageKey = "bascula-erp:auth";
@@ -394,6 +386,8 @@ type LiqRecord = {
   pending_balance: number;
   batch_id: string | null;
   created_at: string;
+  /** true = un administrador la desbloqueó y se puede editar precio/descuentos. */
+  edit_unlocked?: boolean;
 };
 
 type Insumo = {
@@ -480,6 +474,7 @@ type DryingTunnelReport = {
   operator_name: string | null;
   notes: string | null;
   is_processed?: boolean;
+  apartado_arianos?: boolean;
   lots: DryingTunnelLot[];
 };
 
@@ -885,6 +880,10 @@ const navGroups: Array<{ label: string; tabs: string[] }> = [
   { label: "Sistema", tabs: ["Reportes", "Configuracion"] }
 ];
 const tabs = navGroups.flatMap((group) => group.tabs);
+// Modulos asignables a un operador = TODAS las pestanas del Sidebar excepto
+// Configuracion (solo-admin). Fuente unica: navGroups. Si manana se agrega una
+// seccion nueva al Sidebar, aparece SOLA como permiso, sin tocar esta lista.
+const APP_MODULES: string[] = tabs.filter((t) => t !== "Configuracion");
 
 function NavIcon({ tab }: { tab: string }) {
   switch (tab) {
@@ -1226,11 +1225,13 @@ export function App() {
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
   const [settingsForm, setSettingsForm] = useState<AppSettings>(defaultAppSettings);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
-  const [newUserForm, setNewUserForm] = useState({ name: "", username: "", password: "", role: "OPERADOR" as "ADMINISTRADOR" | "OPERADOR", modules: [] as string[], accionistas: [] as string[] });
+  const [newUserForm, setNewUserForm] = useState({ name: "", username: "", cedula: "", password: "", role: "OPERADOR" as "ADMINISTRADOR" | "OPERADOR", modules: [] as string[], accionistas: [] as string[] });
   const [permsEditor, setPermsEditor] = useState<{ user: AdminUser; modules: string[] } | null>(null);
   const [adminAccionistas, setAdminAccionistas] = useState<AdminAccionista[]>([]);
   const [newAccionistaForm, setNewAccionistaForm] = useState({ name: "", code: "" });
   const [accionistaEditor, setAccionistaEditor] = useState<{ user: AdminUser; items: Array<{ accionista_id: string; access: boolean; modules: string[] }> } | null>(null);
+  // Edición de datos de un usuario registrado (nombre, usuario, clave, rol).
+  const [userEditor, setUserEditor] = useState<{ user: AdminUser; name: string; username: string; cedula: string; password: string; role: "ADMINISTRADOR" | "OPERADOR" } | null>(null);
   const [renameAccionista, setRenameAccionista] = useState<{ id: string; name: string; code: string } | null>(null);
   const [resetForm, setResetForm] = useState({ password: "", confirm: "" });
   const [backupInfo, setBackupInfo] = useState<{ directory: string; backups: Array<{ name: string; size_kb: number; created_at: string }> } | null>(null);
@@ -1244,6 +1245,8 @@ export function App() {
   const [reportTo, setReportTo] = useState(todayIso);
   const [reportSummary, setReportSummary] = useState<ReportSummary | null>(null);
   const [reportRows, setReportRows] = useState<{ kind: ReportKind; data: any } | null>(null);
+  const [arianosUbic, setArianosUbic] = useState<Record<string, string>>({});
+  const [navSearch, setNavSearch] = useState("");
   const [reportBusy, setReportBusy] = useState(false);
 
   // ── Fomentos ──────────────────────────────────────────────────────────────
@@ -1552,7 +1555,7 @@ export function App() {
   const gasPorQq = qqMotor > 0 ? round2(gasCostoTotal / qqMotor) : 0;
   const dieselPorQq = qqMotor > 0 ? round2(dieselCosto / qqMotor) : 0;
   const productionDryingReports = useMemo(
-    () => dryingReports.filter((report) => report.status === "COMPLETED" && !report.is_processed),
+    () => dryingReports.filter((report) => report.status === "COMPLETED" && !report.is_processed && !report.apartado_arianos),
     [dryingReports]
   );
   const selectedProductionDrying = useMemo(
@@ -1669,6 +1672,8 @@ export function App() {
     discount_breakdown: DiscountBreakdown;
     net_total: number;
     pending_total: number;
+    /** true solo si TODAS las liquidaciones del grupo están desbloqueadas. */
+    unlocked: boolean;
   };
   const liqBatches = useMemo((): LiqBatch[] => {
     // Ordenar de más reciente a más antiguo para mostrar así
@@ -1692,6 +1697,7 @@ export function App() {
           existing.other_disc_total += Number(r.other_discounts);
           existing.net_total      += Number(r.net_amount);
           existing.pending_total  += Number(r.pending_balance);
+          existing.unlocked = existing.unlocked && (r.edit_unlocked ?? false);
           continue;
         }
       } else {
@@ -1710,6 +1716,7 @@ export function App() {
           existing.other_disc_total += Number(r.other_discounts);
           existing.net_total      += Number(r.net_amount);
           existing.pending_total  += Number(r.pending_balance);
+          existing.unlocked = existing.unlocked && (r.edit_unlocked ?? false);
           continue;
         }
       }
@@ -1730,11 +1737,15 @@ export function App() {
         discount_breakdown: { fomento: Number(bd.fomento), bascula: Number(bd.bascula), flete: Number(bd.flete), cosechadora: Number(bd.cosechadora) },
         net_total:          Number(r.net_amount),
         pending_total:      Number(r.pending_balance),
+        unlocked:           r.edit_unlocked ?? false,
       });
     }
 
     return batches;
   }, [liquidacionesList]);
+
+  const [liqEdit, setLiqEdit] = useState<LiqBatch | null>(null);
+  const [liqEditRows, setLiqEditRows] = useState<Array<{ id: string; lot_code: string | null; price: string; other: string }>>([]);
 
   const liqDiscountsTotal = useMemo(() =>
     Object.values(liqDiscounts).reduce((sum, v) => sum + Number(v || 0), 0),
@@ -1967,17 +1978,19 @@ export function App() {
     const base = isAdmin
       ? tabs
       : tabs.filter((tab) => {
-          if (tab === "Dashboard") return true;
-          if (tab === "Configuracion" || tab === "Reportes") return false;
-          if (tab === "Por Cobrar" || tab === "Por Pagar") return allowed.has("Caja") || allowed.has("Ventas");
-          if (tab === "Nomina") return allowed.has("Nomina") || allowed.has("Caja") || allowed.has("Produccion");
-          if (tab === "Cuadrilla") return allowed.has("Caja") || allowed.has("Produccion");
-          if (tab === "Servicio Pilado") return allowed.has("Caja") || allowed.has("Produccion");
-          if (tab === "Seleccion") return allowed.has("Inventario") || allowed.has("Produccion") || allowed.has("Caja");
+          if (tab === "Dashboard") return true;      // panel de inicio para todos
+          if (tab === "Configuracion") return false; // solo administradores
+          // Un permiso por pestana: si el admin marca la seccion, se ve. Las
+          // secciones nuevas del Sidebar entran solas por allowed.has(tab).
           return allowed.has(tab);
         });
     return base.filter((tab) => !soloCeyro.has(tab) || esCeyroActivo);
   }, [authUser, isAdmin, esCeyroActivo, accionistas, activeAccionistaId]);
+
+  // Puede ver el Panel Integral (vista del NEGOCIO COMPLETO: todos los
+  // accionistas)? Solo admin, o un operador con el permiso "Dashboard" en el
+  // accionista activo (se concede a proposito por ser vista global).
+  const canSeePanel = isAdmin || (accionistas.find((a) => a.id === activeAccionistaId)?.allowed_modules ?? []).includes("Dashboard");
 
   useEffect(() => {
     if (authUser && !visibleTabs.includes(activeTab)) {
@@ -2576,6 +2589,24 @@ export function App() {
     }
   }
 
+  // Apartar / devolver un secado como "arianos" (arroz seco que no se procesa
+  // todavia). Recarga el informe y los secados de Produccion para que el cambio
+  // se refleje en todos lados.
+  async function apartarArianos(id: string, apartar: boolean, ubicacion?: string) {
+    await apiPost("/reports/arianos/apartar", { ids: [id], apartar, ubicacion });
+    addToast(apartar ? "Apartado como arianos" : "Devuelto a proceso", "success");
+    await loadReport("arianos");
+    const dr = await apiGet<DryingTunnelReport[]>("/process-flow/drying/reports").catch(() => null);
+    if (dr) setDryingReports(dr);
+  }
+
+  // Actualizar solo la ubicacion de un lote ya guardado (si lo movieron).
+  async function actualizarUbicArianos(id: string, ubicacion?: string) {
+    await apiPost("/reports/arianos/ubicacion", { id, ubicacion });
+    addToast("Ubicación actualizada", "success");
+    await loadReport("arianos");
+  }
+
   useEffect(() => {
     if (activeTab === "Reportes") loadReport("resumen").catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2745,12 +2776,13 @@ export function App() {
     await apiPost("/auth/users", {
       name: newUserForm.name.trim(),
       username: newUserForm.username.trim().toLowerCase(),
+      cedula: newUserForm.cedula.trim() || undefined,
       password: newUserForm.password,
       role: newUserForm.role,
       allowed_modules: newUserForm.role === "OPERADOR" ? newUserForm.modules : [],
       accionista_ids: newUserForm.role === "OPERADOR" ? newUserForm.accionistas : []
     });
-    setNewUserForm({ name: "", username: "", password: "", role: "OPERADOR", modules: [], accionistas: [] });
+    setNewUserForm({ name: "", username: "", cedula: "", password: "", role: "OPERADOR", modules: [], accionistas: [] });
     addToast("Usuario creado", "success");
     await refreshConfig();
   }
@@ -2770,6 +2802,23 @@ export function App() {
   async function toggleUserActive(user: AdminUser) {
     await apiPut(`/auth/users/${user.id}`, { is_active: !user.is_active });
     addToast(user.is_active ? `Usuario ${user.username} desactivado` : `Usuario ${user.username} activado`, "success");
+    await refreshConfig();
+  }
+
+  // Guarda la edición de los datos de un usuario (nombre, usuario, rol y,
+  // solo si se escribió, una clave nueva de mínimo 8 caracteres).
+  async function saveUserEdit() {
+    if (!userEditor) return;
+    const payload: Record<string, unknown> = {
+      name: userEditor.name.trim(),
+      username: userEditor.username.trim(),
+      cedula: userEditor.cedula.trim(),
+      role: userEditor.role
+    };
+    if (userEditor.password.trim()) payload.password = userEditor.password.trim();
+    await apiPut(`/auth/users/${userEditor.user.id}`, payload);
+    addToast(`Usuario ${userEditor.username.trim()} actualizado`, "success");
+    setUserEditor(null);
     await refreshConfig();
   }
 
@@ -3248,7 +3297,7 @@ export function App() {
     if (activeTab === "Cuadrilla") refreshCuadrilla().catch(() => undefined);
     if (activeTab === "Servicio Pilado") refreshPilado().catch(() => undefined);
     if (activeTab === "Seleccion") refreshSelection().catch(() => undefined);
-    if (activeTab === "Dashboard" && isAdmin) refreshPanel().catch(() => undefined);
+    if (activeTab === "Dashboard" && canSeePanel) refreshPanel().catch(() => undefined);
     if (activeTab === "Configuracion") refreshConfig().catch(() => undefined);
     if (activeTab === "Estados Financieros") loadFinanzas().catch((e) => addToast(e.message, "error"));
   }, [activeTab, motorActivo]);
@@ -3331,42 +3380,20 @@ export function App() {
     }
     const cantidad = parseInt(sackBuyForm.cantidad);
     const precio = parseFloat(sackBuyForm.precio);
-    const monto = round2(cantidad * precio);
     const registerId = dashboard.current_cash_register.id;
-
     try {
-      // Registrar gasto en caja
-      const gastoRes = await apiFetch(`/cash/${registerId}/movements`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          movement: "EXPENSE",
-          category: "GASTO",
-          amount: monto,
-          description: `Compra de sacos: ${sackBuyForm.sack_id} (x${cantidad} @ $${precio})`,
-          reference_type: "sack_purchase",
-          reference_id: sackBuyForm.sack_id
-        })
+      // Compra ATOMICA: inventario + kardex + caja en una sola transaccion (backend).
+      // Un unico endpoint reemplaza las dos llamadas separadas anteriores.
+      await apiPost("/sacks/purchases", {
+        sack_id: sackBuyForm.sack_id,
+        cantidad,
+        precio,
+        cash_register_id: registerId
       });
-      if (!gastoRes.ok) throw new Error(await gastoRes.text());
-
-      // Actualizar inventario de sacos
-      const movRes = await apiFetch(`/sacks/movements`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sack_id: sackBuyForm.sack_id,
-          movement: "ENTRADA",
-          cantidad,
-          concepto: `Compra a $${precio}/unidad`
-        })
-      });
-      if (!movRes.ok) throw new Error(await movRes.text());
-
       setSackBuyForm({ sack_id: "", cantidad: "", precio: "" });
       await refreshSacks();
       await refreshCaja(registerId);
-      addToast("Compra de sacos registrada ✓", "success");
+      addToast("Compra de sacos registrada \u2713", "success");
     } catch (e) {
       addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error");
     }
@@ -3733,6 +3760,41 @@ export function App() {
     const [liqRows] = await Promise.all([apiGet<LiqRecord[]>("/liquidations")]);
     setLiquidacionesList(liqRows);
     await refresh();
+  }
+
+  // Desbloquear / bloquear la edicion de una liquidacion (grupo). SOLO admin:
+  // el candado protege las liquidaciones ya hechas.
+  async function toggleLiqLock(b: LiqBatch) {
+    await apiPost("/liquidations/set-lock", { ids: b.liquidation_ids, unlocked: !b.unlocked });
+    addToast(b.unlocked ? "Liquidacion BLOQUEADA" : "Liquidacion desbloqueada para editar", "success");
+    const liqRows = await apiGet<LiqRecord[]>("/liquidations");
+    setLiquidacionesList(liqRows);
+  }
+
+  // Abrir el editor de precio/otros descuentos de una liquidacion desbloqueada.
+  function openLiqEdit(b: LiqBatch) {
+    const rows = liquidacionesList
+      .filter((r) => b.liquidation_ids.includes(r.id))
+      .map((r) => ({ id: r.id, lot_code: r.lot_code, price: String(Number(r.price_per_quintal).toFixed(2)), other: String(Number(r.other_discounts).toFixed(2)) }));
+    setLiqEditRows(rows);
+    setLiqEdit(b);
+  }
+
+  // Guardar correcciones. El backend recalcula bruto/neto y ajusta la cuenta
+  // por pagar; el cambio queda auditado automaticamente (middleware de auditoria).
+  async function saveLiqEdit() {
+    if (!liqEdit) return;
+    for (const row of liqEditRows) {
+      await apiPut(`/liquidations/${row.id}`, {
+        price_per_quintal: Number(row.price) || 0,
+        other_discounts: Number(row.other) || 0
+      });
+    }
+    addToast("Liquidacion corregida", "success");
+    const liqRows = await apiGet<LiqRecord[]>("/liquidations");
+    setLiquidacionesList(liqRows);
+    await refresh();
+    setLiqEdit(null);
   }
 
   async function pagarCuenta(payableId: string, amount: number) {
@@ -5041,12 +5103,21 @@ export function App() {
             </select>
           </label>
         )}
+        <div className="navSearchBox" style={{ padding: "0 10px 8px" }}>
+          <input
+            type="text"
+            value={navSearch}
+            onChange={(e) => setNavSearch(e.target.value)}
+            placeholder="Buscar sección…"
+            style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: "1px solid var(--c-border)", fontSize: 13, background: "var(--c-surface)", color: "inherit" }}
+          />
+        </div>
         <nav>
           {navGroups
-            .map((group) => ({ ...group, tabs: group.tabs.filter((tab) => visibleTabs.includes(tab)) }))
+            .map((group) => ({ ...group, tabs: group.tabs.filter((tab) => visibleTabs.includes(tab) && (navSearch.trim() === "" || tab.toLowerCase().includes(navSearch.trim().toLowerCase()))) }))
             .filter((group) => group.tabs.length > 0)
             .map((group) => {
-              const collapsed = collapsedGroups.has(group.label);
+              const collapsed = navSearch.trim() !== "" ? false : collapsedGroups.has(group.label);
               const hasActive = group.tabs.includes(activeTab);
               return (
                 <div className={collapsed ? "navSection collapsed" : "navSection"} data-group={group.label} key={group.label}>
@@ -5110,13 +5181,13 @@ export function App() {
 
         {activeTab === "Dashboard" && (
           <>
-            {isAdmin && (
+            {canSeePanel && (
               <nav className="cajaSubNav">
                 <button type="button" className={dashView === "panel" ? "active" : ""} onClick={() => { setDashView("panel"); if (!panelData) refreshPanel().catch(() => undefined); }}>📊 Panel integral</button>
                 <button type="button" className={dashView === "resumen" ? "active" : ""} onClick={() => setDashView("resumen")}>⚡ Resumen rápido</button>
               </nav>
             )}
-            {isAdmin && dashView === "panel" ? (
+            {canSeePanel && dashView === "panel" ? (
               panelData ? (
                 <PanelIntegral data={panelData} month={panelMonth} onMonth={(m) => { setPanelMonth(m); refreshPanel(m).catch(() => undefined); }} />
               ) : (
@@ -7861,6 +7932,26 @@ export function App() {
                                 </button>
                               </>
                             )}
+                            {isAdmin && (
+                              <button
+                                type="button"
+                                className="liqApplyBtn"
+                                title={b.unlocked ? "Bloquear edicion (candado)" : "Desbloquear para corregir precio/descuentos"}
+                                onClick={() => toggleLiqLock(b).catch((e) => addToast(e.message, "error"))}
+                              >
+                                {b.unlocked ? "🔓" : "🔒"}
+                              </button>
+                            )}
+                            {b.unlocked && (
+                              <button
+                                type="button"
+                                className="liqApplyBtn"
+                                title="Corregir precio o descuentos"
+                                onClick={() => openLiqEdit(b)}
+                              >
+                                ✏ Editar
+                              </button>
+                            )}
                             <button type="button" className="liqPrintBtn" onClick={() => printLiqBatch(b).catch((e) => addToast(e.message, "error"))} title="Imprimir comprobante">
                               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
                                 <rect x="3" y="1" width="10" height="8" rx="1"/>
@@ -7877,6 +7968,37 @@ export function App() {
               }
             </div>
           </section>
+        )}
+        {liqEdit && (
+          <div className="modalOverlay" onClick={() => setLiqEdit(null)}>
+            <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 560 }}>
+              <h3>Corregir liquidacion de {liqEdit.farmer_name}</h3>
+              <p className="muted">Ajusta el precio por QQ o los otros descuentos si se capturaron mal. El sistema recalcula el neto y la cuenta por pagar. Queda registrado en auditoria.</p>
+              <div style={{ display: "grid", gap: 10, maxHeight: "55vh", overflowY: "auto" }}>
+                {liqEditRows.map((row, i) => (
+                  <div key={row.id} style={{ border: "1px solid var(--c-border)", borderRadius: 8, padding: "8px 10px" }}>
+                    <div style={{ fontWeight: 700, marginBottom: 6 }}>{row.lot_code ?? "Ingreso"}</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <label style={{ fontSize: 12 }}>Precio / QQ
+                        <input type="number" step="0.01" min="0" value={row.price}
+                          onChange={(e) => setLiqEditRows((rs) => rs.map((x, j) => (j === i ? { ...x, price: e.target.value } : x)))}
+                          style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3 }} />
+                      </label>
+                      <label style={{ fontSize: 12 }}>Otros descuentos
+                        <input type="number" step="0.01" min="0" value={row.other}
+                          onChange={(e) => setLiqEditRows((rs) => rs.map((x, j) => (j === i ? { ...x, other: e.target.value } : x)))}
+                          style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3 }} />
+                      </label>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="buttonRow" style={{ marginTop: 14 }}>
+                <button type="button" className="primary" onClick={() => saveLiqEdit().catch((e) => addToast(e.message, "error"))}>Guardar correcciones</button>
+                <button type="button" onClick={() => setLiqEdit(null)}>Cancelar</button>
+              </div>
+            </div>
+          </div>
         )}
         {activeTab === "Fomentos" && (
           <section className="tabSection">
@@ -8490,17 +8612,13 @@ export function App() {
                         <h4 style={{ margin: "16px 0 6px" }}>Resumen técnico del proceso</h4>
                         <table className="cajaTable">
                           <tbody>
-                            <tr><td>Cascarilla / arroz ingresado</td><td className="num">{Number(piladoReport.yield.input_paddy_kg).toFixed(2)} kg</td></tr>
+                            {/* Solo la entrega al cliente: se quitaron a petición
+                                Cascarilla ingresada, Total de salida, Merma,
+                                Rendimiento y QQ de tulas. */}
                             <tr><td>Arroz blanco entregado</td><td className="num">{Number(piladoReport.yield.white_rice_qty).toFixed(2)} {piladoReport.yield.white_rice_unit}</td></tr>
                             <tr><td>Arrocillo 3/4</td><td className="num">{Number(piladoReport.yield.broken_rice_qty).toFixed(2)} QQ</td></tr>
                             <tr><td>Arrocillo fino</td><td className="num">{Number(piladoReport.yield.fine_broken_rice_qty).toFixed(2)} QQ</td></tr>
                             <tr><td>Polvillo / afrecho</td><td className="num">{Number(piladoReport.yield.bran_qty).toFixed(2)} QQ</td></tr>
-                            <tr><td>Total de salida</td><td className="num">{Number(piladoReport.yield.total_output_kg).toFixed(2)} kg</td></tr>
-                            <tr><td>Merma de proceso</td><td className="num">{Number(piladoReport.yield.process_loss_kg).toFixed(2)} kg</td></tr>
-                            <tr><td>Rendimiento</td><td className="num">{Number(piladoReport.yield.yield_percent).toFixed(2)}%</td></tr>
-                            {Number(piladoReport.yield.qq_de_tulas) > 0 && (
-                              <tr><td>QQ de tulas</td><td className="num">{Number(piladoReport.yield.qq_de_tulas).toFixed(2)} QQ</td></tr>
-                            )}
                           </tbody>
                         </table>
                       </>
@@ -9168,20 +9286,20 @@ export function App() {
           <>
             <div className="reportToolbar">
               <div className="reportKinds">
-                {(["resumen", "ventas", "liquidaciones", "gastos", "produccion", "combustible", "porcobrar"] as const).map((k) => (
+                {(["resumen", "ventas", "liquidaciones", "gastos", "produccion", "combustible", "porcobrar", "arianos"] as const).map((k) => (
                   <button
                     key={k}
                     type="button"
                     className={reportKind === k ? "active" : ""}
                     onClick={() => { setReportKind(k); loadReport(k).catch(() => undefined); }}
                   >
-                    {k === "resumen" ? "📊 Resumen" : k === "ventas" ? "🛒 Ventas" : k === "liquidaciones" ? "🌾 Liquidaciones" : k === "gastos" ? "🧾 Gastos" : k === "produccion" ? "⚙️ Producción" : k === "combustible" ? "⛽ Combustible" : "📈 Por cobrar"}
+                    {k === "resumen" ? "📊 Resumen" : k === "ventas" ? "🛒 Ventas" : k === "liquidaciones" ? "🌾 Liquidaciones" : k === "gastos" ? "🧾 Gastos" : k === "produccion" ? "⚙️ Producción" : k === "combustible" ? "⛽ Combustible" : k === "porcobrar" ? "📈 Por cobrar" : "📦 Lotes guardados"}
                   </button>
                 ))}
               </div>
               <div className="reportDates">
-                {reportKind === "porcobrar" ? (
-                  <span className="muted" style={{ alignSelf: "center" }}>Saldos al día de hoy</span>
+                {reportKind === "porcobrar" || reportKind === "arianos" ? (
+                  <span className="muted" style={{ alignSelf: "center" }}>{reportKind === "arianos" ? "Estado actual (no depende de fechas)" : "Saldos al día de hoy"}</span>
                 ) : (
                   <>
                     <label>
@@ -9198,7 +9316,7 @@ export function App() {
                   {reportBusy ? "Generando…" : "Generar"}
                 </button>
               </div>
-              {reportRows && reportKind !== "resumen" && (
+              {reportRows && reportKind !== "resumen" && reportKind !== "arianos" && (
                 <div className="reportExportBtns">
                   <button type="button" className="btnSecondary" onClick={() => { const e = getReportExport(); if (e) printReport(e.title, e.headers, e.rows, e.totals); }}>🖨 Imprimir</button>
                   <button type="button" className="btnSecondary" onClick={() => { const e = getReportExport(); if (e) exportReportCsv(e.headers, e.rows, `${reportKind}_${reportFrom}_${reportTo}.csv`); }}>📥 Excel</button>
@@ -9333,6 +9451,81 @@ export function App() {
                 )}
               </div>
             )}
+
+            {/* ── Lotes guardados: arroz seco sin procesar ── */}
+            {reportKind === "arianos" && reportRows?.kind === "arianos" && (() => {
+              const pend = reportRows.data.pendientes || [];
+              const apart = reportRows.data.apartados || [];
+              const totQ = (rows: any[], t: string) => rows.filter((r) => r.rice_type === t).reduce((s: number, r: any) => s + Number(r.quintals ?? 0), 0);
+              const fmtF = (d: string | null) => d ? new Date(d).toLocaleDateString("es-EC") : "—";
+              const inp = { padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12, width: "100%" } as const;
+              return (
+              <div style={{ display: "grid", gap: 16 }}>
+                <div className="tablePanel">
+                  <h2>Arroz seco sin procesar (pendiente)</h2>
+                  <p className="muted" style={{ marginTop: -4, marginBottom: 8 }}>Secados terminados que aún no entran a producción. Escribe dónde lo vas a guardar y dale «Guardar»: deja de contar como pendiente y sale del selector de Producción. Es reversible.</p>
+                  {pend.length === 0 ? (
+                    <div className="emptyState" style={{ padding: "26px 20px" }}><p>No hay arroz seco pendiente de procesar</p></div>
+                  ) : (
+                    <div style={{ overflowX: "auto" }}>
+                      <table className="cajaTable" style={{ marginTop: 8 }}>
+                        <thead><tr><th>Fecha secado</th><th>Lote</th><th>Tipo</th><th className="num">QQ</th><th>Ubicación</th><th /></tr></thead>
+                        <tbody>
+                          {pend.map((r: any) => (
+                            <tr key={r.id}>
+                              <td>{fmtF(r.dry_end_at)}</td>
+                              <td>{r.lot_code ?? "—"}</td>
+                              <td>{r.rice_type}</td>
+                              <td className="num">{Number(r.quintals).toFixed(2)}</td>
+                              <td><input value={arianosUbic[r.id] ?? ""} placeholder="Bodega / sitio" style={inp} onChange={(e) => setArianosUbic((m) => ({ ...m, [r.id]: e.target.value }))} /></td>
+                              <td className="num"><button type="button" className="btnSecondary" onClick={() => apartarArianos(r.id, true, arianosUbic[r.id]).catch((e) => addToast(e.message, "error"))}>Guardar</button></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr><td colSpan={3} style={{ fontWeight: 700 }}>TOTAL 0.11</td><td className="num" style={{ fontWeight: 700 }}>{totQ(pend, "0.11").toFixed(2)}</td><td /><td /></tr>
+                          <tr><td colSpan={3} style={{ fontWeight: 700 }}>TOTAL CORRIENTE</td><td className="num" style={{ fontWeight: 700 }}>{totQ(pend, "CORRIENTE").toFixed(2)}</td><td /><td /></tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  )}
+                </div>
+                <div className="tablePanel">
+                  <h2>Lotes guardados</h2>
+                  <p className="muted" style={{ marginTop: -4, marginBottom: 8 }}>Arroz seco apartado, con la fecha en que terminó el secado y dónde está guardado. Puedes devolverlo a proceso cuando quieras.</p>
+                  {apart.length === 0 ? (
+                    <div className="emptyState" style={{ padding: "26px 20px" }}><p>Nada guardado todavía</p></div>
+                  ) : (
+                    <div style={{ overflowX: "auto" }}>
+                      <table className="cajaTable" style={{ marginTop: 8 }}>
+                        <thead><tr><th>Fecha secado</th><th>Lote</th><th>Tipo</th><th className="num">QQ</th><th>Ubicación</th><th /></tr></thead>
+                        <tbody>
+                          {apart.map((r: any) => (
+                            <tr key={r.id}>
+                              <td>{fmtF(r.dry_end_at)}</td>
+                              <td>{r.lot_code ?? "—"}</td>
+                              <td>{r.rice_type}</td>
+                              <td className="num">{Number(r.quintals).toFixed(2)}</td>
+                              <td><input value={arianosUbic[r.id] ?? (r.ubicacion_arianos ?? "")} placeholder="Bodega / sitio" style={inp} onChange={(e) => setArianosUbic((m) => ({ ...m, [r.id]: e.target.value }))} /></td>
+                              <td className="num" style={{ whiteSpace: "nowrap" }}>
+                                <button type="button" className="btnSecondary" onClick={() => actualizarUbicArianos(r.id, arianosUbic[r.id] ?? r.ubicacion_arianos).catch((e) => addToast(e.message, "error"))}>Actualizar</button>
+                                {" "}
+                                <button type="button" className="btnSecondary" onClick={() => apartarArianos(r.id, false).catch((e) => addToast(e.message, "error"))}>Devolver a proceso</button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr><td colSpan={3} style={{ fontWeight: 700 }}>TOTAL 0.11</td><td className="num" style={{ fontWeight: 700 }}>{totQ(apart, "0.11").toFixed(2)}</td><td /><td /></tr>
+                          <tr><td colSpan={3} style={{ fontWeight: 700 }}>TOTAL CORRIENTE</td><td className="num" style={{ fontWeight: 700 }}>{totQ(apart, "CORRIENTE").toFixed(2)}</td><td /><td /></tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+              );
+            })()}
 
             {/* ── Producción ── */}
             {reportKind === "produccion" && reportRows?.kind === "produccion" && (
@@ -9506,6 +9699,15 @@ export function App() {
                       onChange={(e) => setNewUserForm({ ...newUserForm, name: e.target.value })}
                     />
                   </label>
+                  <label>
+                    <span>Cedula</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={newUserForm.cedula}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, cedula: e.target.value })}
+                    />
+                  </label>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <label>
                       <span>Usuario *</span>
@@ -9635,6 +9837,20 @@ export function App() {
                               </span>
                             </td>
                             <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                              <button
+                                type="button"
+                                className="btnGhost"
+                                onClick={() => setUserEditor({
+                                  user: u,
+                                  name: u.name,
+                                  username: u.username,
+                                  cedula: u.cedula ?? "",
+                                  password: "",
+                                  role: u.role_name === "ADMINISTRADOR" ? "ADMINISTRADOR" : "OPERADOR"
+                                })}
+                              >
+                                ✎ Editar
+                              </button>
                               {u.role_name !== "ADMINISTRADOR" && (
                                 <button
                                   type="button"
@@ -9671,6 +9887,57 @@ export function App() {
                     </table>
                   )}
                 </div>
+
+                {/* Modal: editar datos de un usuario registrado */}
+                {userEditor && (
+                  <div className="modalOverlay" onClick={() => setUserEditor(null)}>
+                    <div className="modalCard" onClick={(e) => e.stopPropagation()}>
+                      <h3>✎ Editar usuario: {userEditor.user.name}</h3>
+                      <p className="muted">Corrige los datos si hubo una equivocación. La clave solo se cambia si escribes una nueva (mínimo 8 caracteres); si la dejas en blanco, se conserva la actual.</p>
+                      <form
+                        onSubmit={(e) => { e.preventDefault(); saveUserEdit().catch((err) => addToast(err.message, "error")); }}
+                        style={{ display: "grid", gap: 10, marginTop: 8 }}
+                      >
+                        <label>
+                          <span>Nombre completo</span>
+                          <input required minLength={2} value={userEditor.name}
+                            onChange={(e) => setUserEditor({ ...userEditor, name: e.target.value })} />
+                        </label>
+                        <label>
+                          <span>Usuario (con lo que inicia sesión)</span>
+                          <input required minLength={2} value={userEditor.username}
+                            onChange={(e) => setUserEditor({ ...userEditor, username: e.target.value })} />
+                        </label>
+                        <label>
+                          <span>Cedula</span>
+                          <input value={userEditor.cedula} inputMode="numeric"
+                            onChange={(e) => setUserEditor({ ...userEditor, cedula: e.target.value })} />
+                        </label>
+                        <label>
+                          <span>Clave nueva (opcional)</span>
+                          <input type="password" minLength={8} value={userEditor.password} placeholder="Dejar en blanco para conservar"
+                            onChange={(e) => setUserEditor({ ...userEditor, password: e.target.value })} />
+                        </label>
+                        <label>
+                          <span>Rol</span>
+                          <select value={userEditor.role}
+                            disabled={userEditor.user.id === authUser.id}
+                            onChange={(e) => setUserEditor({ ...userEditor, role: e.target.value as "ADMINISTRADOR" | "OPERADOR" })}>
+                            <option value="OPERADOR">Operador</option>
+                            <option value="ADMINISTRADOR">Administrador</option>
+                          </select>
+                          {userEditor.user.id === authUser.id && (
+                            <small className="muted">No puedes cambiar tu propio rol.</small>
+                          )}
+                        </label>
+                        <div className="buttonRow">
+                          <button type="submit" className="primary">Guardar cambios</button>
+                          <button type="button" onClick={() => setUserEditor(null)}>Cancelar</button>
+                        </div>
+                      </form>
+                    </div>
+                  </div>
+                )}
 
                 {permsEditor && (
                   <div className="modalOverlay" onClick={() => setPermsEditor(null)}>

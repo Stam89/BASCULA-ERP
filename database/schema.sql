@@ -230,7 +230,7 @@ CREATE INDEX idx_mobile_synced_tickets_updated_at ON mobile_synced_tickets (mobi
 
 CREATE TABLE mobile_advance_applications (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  advance_id UUID NOT NULL REFERENCES farmer_advances(id),
+  advance_id UUID NOT NULL,
   ticket_id UUID NOT NULL REFERENCES mobile_synced_tickets(id),
   amount_applied NUMERIC(14,2) NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -264,7 +264,7 @@ CREATE TABLE insumo_movements (
 
 CREATE TABLE production_yields (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  processing_batch_id UUID NOT NULL UNIQUE REFERENCES processing_batches(id) ON DELETE CASCADE,
+  processing_batch_id UUID NOT NULL UNIQUE,
   lot_id UUID NOT NULL REFERENCES lots(id),
   ownership ownership_type NOT NULL,
   input_paddy_kg NUMERIC(14,3) NOT NULL,
@@ -296,7 +296,7 @@ CREATE TABLE production_yields (
 
 CREATE TABLE third_party_custody (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  processing_batch_id UUID NOT NULL REFERENCES processing_batches(id) ON DELETE CASCADE,
+  processing_batch_id UUID NOT NULL,
   lot_id UUID NOT NULL REFERENCES lots(id),
   farmer_id UUID REFERENCES farmers(id),
   product_id UUID NOT NULL REFERENCES products(id),
@@ -698,4 +698,111 @@ CREATE TABLE IF NOT EXISTS worker_advances (
   cash_register_id UUID,
   created_by UUID,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ============================================================================
+-- FASE 0 — Reproducibilidad: tablas base de Equipos, Mantenimiento e Inventario
+-- de Sacos. Estas tablas se usaban por la aplicación pero su CREATE TABLE no
+-- estaba versionado (se habían creado manualmente sobre la BD). Se documentan
+-- aquí, en el esquema base, reproduciendo EXACTAMENTE la estructura real de
+-- PostgreSQL. Los campos contables de `equipment` (accionista_id,
+-- acquisition_cost, acquisition_date, useful_life_years, salvage_value,
+-- is_depreciable) y el índice idx_equipment_accionista los sigue agregando la
+-- migración 20260721_modulo_financiero.sql (NO se duplican aquí).
+-- gen_random_uuid() ya lo usa este mismo schema (worker_advances); no requiere
+-- extensión adicional.
+-- ============================================================================
+
+CREATE TABLE equipment (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name VARCHAR(100) NOT NULL,
+  type VARCHAR(20) NOT NULL,
+  branch_id UUID REFERENCES branches(id),
+  status VARCHAR(20) DEFAULT 'ACTIVA',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE equipment_maintenance (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  equipment_id UUID NOT NULL REFERENCES equipment(id),
+  maintenance_type VARCHAR(20) NOT NULL,
+  description TEXT NOT NULL,
+  provider VARCHAR(150),
+  invoice_number VARCHAR(50),
+  receipt_photo_url VARCHAR(255),
+  amount NUMERIC(14,2) NOT NULL,
+  created_by UUID REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT equipment_maintenance_amount_positive CHECK (amount > 0)
+);
+CREATE INDEX idx_equipment_maintenance_equipment ON equipment_maintenance(equipment_id, created_at);
+
+CREATE TABLE sack_inventory (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tipo TEXT NOT NULL,
+  stock NUMERIC(10,0) NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE sack_movements (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  sack_id UUID NOT NULL REFERENCES sack_inventory(id) ON DELETE CASCADE,
+  movement TEXT NOT NULL,
+  cantidad NUMERIC(10,0) NOT NULL,
+  concepto TEXT,
+  ref_batch UUID REFERENCES processing_batches(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  CONSTRAINT sack_movements_movement_check CHECK (movement IN ('ENTRADA','SALIDA'))
+);
+
+-- ============================================================================
+-- FASE 0.1 — FKs diferidas para evitar referencias hacia adelante en db:init.
+-- Son las MISMAS FKs de siempre (mismo nombre autogenerado y mismo ON DELETE);
+-- solo se crean aquí, cuando sus tablas destino ya existen. No cambian columnas,
+-- tipos, defaults, UNIQUE ni la logica de negocio.
+-- ============================================================================
+ALTER TABLE mobile_advance_applications ADD FOREIGN KEY (advance_id)          REFERENCES farmer_advances(id);
+ALTER TABLE production_yields           ADD FOREIGN KEY (processing_batch_id) REFERENCES processing_batches(id) ON DELETE CASCADE;
+ALTER TABLE third_party_custody         ADD FOREIGN KEY (processing_batch_id) REFERENCES processing_batches(id) ON DELETE CASCADE;
+
+-- ============================================================================
+-- FASE 0.3 — Reproducibilidad: tablas base del modulo Fomentos (fomentos,
+-- fomento_entregas, fomento_pagos). Se usaban por la aplicacion pero su
+-- CREATE TABLE no estaba versionado. Se reproduce la estructura real de
+-- PostgreSQL. La columna accionista_id y el indice idx_fomentos_accionista_id
+-- de `fomentos` los sigue agregando la migracion 20260805_fomentos_accionista.sql
+-- (NO se duplican aqui). gen_random_uuid() ya lo usa este mismo schema.
+-- ============================================================================
+
+CREATE TABLE fomentos (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  farmer_name TEXT NOT NULL,
+  farmer_id UUID REFERENCES farmers(id) ON DELETE SET NULL,
+  cuadras NUMERIC(10,2) NOT NULL DEFAULT 0,
+  inicio DATE NOT NULL,
+  cosecha DATE,
+  renta NUMERIC(5,4) NOT NULL DEFAULT 0.07,
+  status TEXT NOT NULL DEFAULT 'ACTIVOS',
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE fomento_entregas (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  fomento_id UUID NOT NULL REFERENCES fomentos(id) ON DELETE CASCADE,
+  fecha DATE NOT NULL DEFAULT CURRENT_DATE,
+  valor NUMERIC(12,2) NOT NULL,
+  concepto TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE fomento_pagos (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  fomento_id UUID NOT NULL REFERENCES fomentos(id) ON DELETE CASCADE,
+  cash_register_id UUID REFERENCES cash_registers(id) ON DELETE NO ACTION,
+  fecha DATE NOT NULL DEFAULT CURRENT_DATE,
+  valor NUMERIC(12,2) NOT NULL,
+  concepto TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
 );

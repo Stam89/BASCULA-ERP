@@ -6,9 +6,22 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
-import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const liquidationsRouter = Router();
+
+// Columna de bloqueo de edición: las liquidaciones nacen BLOQUEADAS y solo un
+// ADMINISTRADOR puede desbloquearlas (set-lock) para corregir precio o
+// descuentos mal ejecutados. Se crea sola si la base es vieja.
+let liqEditColumnPromise: Promise<unknown> | null = null;
+function ensureLiquidationEditColumn() {
+  if (!liqEditColumnPromise) {
+    liqEditColumnPromise = pool.query(
+      "ALTER TABLE liquidations ADD COLUMN IF NOT EXISTS edit_unlocked BOOLEAN NOT NULL DEFAULT false"
+    );
+  }
+  return liqEditColumnPromise;
+}
 
 const discountBreakdownSchema = z.object({
   fomento:     z.number().nonnegative().default(0),
@@ -198,6 +211,7 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
 
 liquidationsRouter.get("/", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  await ensureLiquidationEditColumn();
   const result = await pool.query(
     `SELECT l.*, f.full_name AS farmer_name,
             lo.lot_code, lo.rice_type,
@@ -211,6 +225,107 @@ liquidationsRouter.get("/", asyncRoute(async (req, res) => {
     [accionistaId]
   );
   res.json(result.rows);
+}));
+
+// Bloquear / desbloquear la edición de liquidaciones (una o varias de un mismo
+// grupo). SOLO administrador: es el candado que protege las liquidaciones.
+liquidationsRouter.post("/set-lock", requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({
+    ids: z.array(z.string().uuid()).min(1),
+    unlocked: z.boolean()
+  }).parse(req.body);
+  await ensureLiquidationEditColumn();
+  const result = await pool.query(
+    "UPDATE liquidations SET edit_unlocked = $2 WHERE id = ANY($1::uuid[]) RETURNING id",
+    [body.ids, body.unlocked]
+  );
+  res.json({ ok: true, updated: result.rowCount, unlocked: body.unlocked });
+}));
+
+// Editar precio y/o descuentos de una liquidación YA realizada (por error al
+// capturar). Solo si está DESBLOQUEADA (edit_unlocked = true, lo pone un admin).
+// Recalcula bruto/neto y mantiene la cuenta por pagar al día con la diferencia.
+const liquidationEditSchema = z.object({
+  price_per_quintal: z.number().nonnegative().optional(),
+  other_discounts: z.number().nonnegative().optional(),
+  discount_breakdown: discountBreakdownSchema
+});
+
+liquidationsRouter.put("/:id", asyncRoute(async (req, res) => {
+  const body = liquidationEditSchema.parse(req.body);
+  if (Object.values(body).every((v) => v === undefined)) {
+    throw new ApiError(400, "Nada que actualizar.");
+  }
+  await ensureLiquidationEditColumn();
+
+  const result = await inTransaction(async (client) => {
+    const current = await client.query(
+      "SELECT * FROM liquidations WHERE id = $1 FOR UPDATE",
+      [req.params.id]
+    );
+    if (!current.rowCount) throw new ApiError(404, "Liquidación no encontrada");
+    const liq = current.rows[0];
+    if (liq.status === "CANCELLED") throw new ApiError(400, "No se puede editar una liquidación cancelada.");
+    if (!liq.edit_unlocked) {
+      throw new ApiError(409, "Esta liquidación está BLOQUEADA. Un administrador debe desbloquearla (candado 🔒) para poder editarla.");
+    }
+
+    const price = body.price_per_quintal ?? Number(liq.price_per_quintal);
+    const other = body.other_discounts ?? Number(liq.other_discounts);
+    const gross = round2(Number(liq.quintals) * price);
+    const net = Math.max(0, round2(gross - Number(liq.advances_discount) - other));
+    const oldNet = Number(liq.net_amount);
+    const delta = round2(net - oldNet);
+
+    const updated = await client.query(
+      `UPDATE liquidations
+       SET price_per_quintal = $2,
+           gross_amount = $3,
+           other_discounts = $4,
+           discount_breakdown = $5,
+           net_amount = $6
+       WHERE id = $1
+       RETURNING *`,
+      [
+        req.params.id,
+        price,
+        gross,
+        other,
+        body.discount_breakdown ? JSON.stringify(body.discount_breakdown) : liq.discount_breakdown,
+        net
+      ]
+    );
+
+    // Mantener la cuenta por pagar al día con la diferencia del neto.
+    if (delta !== 0) {
+      const ap = await client.query(
+        "SELECT id, balance FROM accounts_payable WHERE liquidation_id = $1 FOR UPDATE",
+        [req.params.id]
+      );
+      if (ap.rowCount) {
+        const newBalance = Math.max(0, round2(Number(ap.rows[0].balance) + delta));
+        await client.query(
+          `UPDATE accounts_payable
+           SET amount = $2,
+               balance = $3,
+               status = CASE WHEN $3 < 0.01 THEN 'PAID' ELSE 'PARTIAL' END
+           WHERE id = $1`,
+          [ap.rows[0].id, net, newBalance]
+        );
+      } else if (net > 0) {
+        // Antes el neto era 0 (sin cuenta); al corregir aparece saldo a pagar.
+        await client.query(
+          `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, accionista_id)
+           VALUES ($1, $2, $3, $3, $4)`,
+          [liq.farmer_id, req.params.id, net, liq.accionista_id]
+        );
+      }
+    }
+
+    return updated.rows[0];
+  });
+
+  res.json(result);
 }));
 
 // Aplicar anticipos pendientes del agricultor contra una liquidación ya realizada

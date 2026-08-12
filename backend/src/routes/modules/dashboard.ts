@@ -2,14 +2,38 @@ import { Router } from "express";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
-import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import type { Request, Response, NextFunction } from "express";
+import { requireAuth, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { ApiError } from "../../http/error-handler.js";
 
 export const dashboardRouter = Router();
+
+// El Panel Integral es del NEGOCIO COMPLETO (todos los accionistas). Lo ve el
+// administrador, o un operador con el permiso "Dashboard" en el accionista
+// activo (se concede a proposito por ser una vista global). requireAuth y
+// resolveAccionista ya corrieron en la cadena global antes de este router.
+async function requirePanelAccess(req: Request, _res: Response, next: NextFunction) {
+  const user = (req as AuthenticatedRequest).user;
+  if (!user) { next(new ApiError(401, "Sesion requerida")); return; }
+  const accId = (req as AuthenticatedRequest).accionistaId ?? null;
+  const r = await pool.query(
+    `SELECT r.name AS role_name, COALESCE(ua.allowed_modules, '{}') AS mods
+       FROM users u
+       LEFT JOIN roles r ON r.id = u.role_id
+       LEFT JOIN user_accionistas ua ON ua.user_id = u.id AND ua.accionista_id = $2
+      WHERE u.id = $1`,
+    [user.id, accId]
+  );
+  const row = r.rows[0] as { role_name: string | null; mods: string[] } | undefined;
+  const mods: string[] = row?.mods ?? [];
+  if (row?.role_name === "ADMINISTRADOR" || mods.includes("Dashboard")) { next(); return; }
+  next(new ApiError(403, "No tienes acceso al Panel Integral."));
+}
 
 // ── Panel de Control Integral (todos los accionistas) ───────────────────────
 // Vista consolidada para el dueño/admin: compras, ventas, inventario y bancos
 // por accionista, con totales, utilidad, series de 6 meses y alertas.
-dashboardRouter.get("/panel", requireAdmin, asyncRoute(async (req, res) => {
+dashboardRouter.get("/panel", requireAuth, requirePanelAccess, asyncRoute(async (req, res) => {
   const q = z.object({ month: z.string().regex(/^\d{4}-\d{2}$/).optional() }).parse(req.query);
   const now = new Date();
   const monthStr = q.month ?? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -71,6 +95,7 @@ dashboardRouter.get("/panel", requireAdmin, asyncRoute(async (req, res) => {
        FROM drying_tunnel_reports d
        JOIN lots l ON l.id = d.lot_id
        WHERE d.status = 'COMPLETED'
+         AND COALESCE(d.apartado_arianos, false) = false
          AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id)
        GROUP BY l.accionista_id`)
   ]);

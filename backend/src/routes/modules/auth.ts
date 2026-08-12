@@ -33,14 +33,17 @@ async function accionistasForUser(userId: string, roleName: string | null): Prom
   return r.rows;
 }
 
-const moduleSchema = z.array(z.enum(APP_MODULES)).default([]);
+// z.string() (no z.enum) para aceptar modulos nuevos del Sidebar sin redeploy
+// del backend. La lista canonica de modulos vive en el web-admin (navGroups).
+const moduleSchema = z.array(z.string()).default([]);
 
 // Asegura la columna de permisos por módulo en instalaciones existentes.
 let columnsReady: Promise<void> | null = null;
 function ensureUserColumns(): Promise<void> {
   if (!columnsReady) {
     columnsReady = pool
-      .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS allowed_modules TEXT[] NOT NULL DEFAULT '{}'`)
+      .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS allowed_modules TEXT[] NOT NULL DEFAULT '{}';
+              ALTER TABLE users ADD COLUMN IF NOT EXISTS cedula VARCHAR(20)`)
       .then(() => undefined);
   }
   return columnsReady;
@@ -53,7 +56,7 @@ function ensureUserColumns(): Promise<void> {
 authRouter.get("/users", requireAuth, requireAdmin, asyncRoute(async (_req, res) => {
   await ensureUserColumns();
   const result = await pool.query(
-    `SELECT u.id, u.name, u.username, u.is_active, u.created_at, u.allowed_modules, r.name AS role_name,
+    `SELECT u.id, u.name, u.username, u.cedula, u.is_active, u.created_at, u.allowed_modules, r.name AS role_name,
             COALESCE(array_agg(ua.accionista_id) FILTER (WHERE ua.accionista_id IS NOT NULL), '{}') AS accionista_ids,
             COALESCE(
               json_agg(json_build_object('accionista_id', ua.accionista_id, 'modules', ua.allowed_modules))
@@ -74,6 +77,7 @@ authRouter.post("/users", requireAuth, requireAdmin, asyncRoute(async (req, res)
   const body = z.object({
     name: z.string().min(2),
     username: z.string().min(2),
+    cedula: z.string().trim().max(20).optional(),
     // Mínimo 8 al CREAR: una clave de 4 se adivina en segundos. El login sigue
     // aceptando 4 para no dejar fuera a usuarios creados antes de esta regla.
     password: z.string().min(8, "La clave debe tener al menos 8 caracteres."),
@@ -104,10 +108,10 @@ authRouter.post("/users", requireAuth, requireAdmin, asyncRoute(async (req, res)
 
   const passwordHash = await bcrypt.hash(body.password, 10);
   const user = await pool.query(
-    `INSERT INTO users (role_id, name, username, password_hash, allowed_modules)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, name, username, is_active, created_at, allowed_modules`,
-    [role.rows[0].id, body.name, body.username, passwordHash, allowedModules]
+    `INSERT INTO users (role_id, name, username, cedula, password_hash, allowed_modules)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, name, username, cedula, is_active, created_at, allowed_modules`,
+    [role.rows[0].id, body.name, body.username, body.cedula ?? null, passwordHash, allowedModules]
   );
 
   // Los administradores ven todos los accionistas; al operador se le asignan
@@ -125,11 +129,18 @@ authRouter.post("/users", requireAuth, requireAdmin, asyncRoute(async (req, res)
 authRouter.put("/users/:id", requireAuth, requireAdmin, asyncRoute(async (req, res) => {
   await ensureUserColumns();
   const body = z.object({
+    // Edición de datos del usuario (por equivocaciones de nombre, usuario, clave, rol).
+    name: z.string().min(2).optional(),
+    username: z.string().min(2).optional(),
+    cedula: z.string().trim().max(20).optional(),
+    // La clave es opcional: si no se envía, se conserva la actual.
+    password: z.string().min(8, "La clave debe tener al menos 8 caracteres.").optional(),
+    role: z.enum(["ADMINISTRADOR", "OPERADOR"]).optional(),
     is_active: z.boolean().optional(),
-    allowed_modules: z.array(z.enum(APP_MODULES)).optional()
+    allowed_modules: z.array(z.string()).optional()
   }).parse(req.body);
 
-  if (body.is_active === undefined && body.allowed_modules === undefined) {
+  if (Object.values(body).every((v) => v === undefined)) {
     throw new ApiError(400, "Nada que actualizar.");
   }
 
@@ -137,15 +148,48 @@ authRouter.put("/users/:id", requireAuth, requireAdmin, asyncRoute(async (req, r
   if (body.is_active === false && requester?.id === req.params.id) {
     throw new ApiError(400, "No puedes desactivar tu propio usuario.");
   }
+  if (body.role && requester?.id === req.params.id) {
+    throw new ApiError(400, "No puedes cambiar tu propio rol.");
+  }
+
+  if (body.username) {
+    const duplicate = await pool.query(
+      "SELECT 1 FROM users WHERE username = $1 AND id <> $2",
+      [body.username, req.params.id]
+    );
+    if (duplicate.rowCount) {
+      throw new ApiError(409, `El usuario "${body.username}" ya existe.`);
+    }
+  }
+
+  let roleId: string | null = null;
+  if (body.role) {
+    const role = await pool.query(
+      `INSERT INTO roles (name) VALUES ($1)
+       ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+       RETURNING id`,
+      [body.role]
+    );
+    roleId = role.rows[0].id;
+  }
+
+  const passwordHash = body.password ? await bcrypt.hash(body.password, 10) : null;
+  // Un ADMINISTRADOR no lleva lista de módulos: puede todo (igual que al crear).
+  const allowedModules = body.role === "ADMINISTRADOR" ? [] : (body.allowed_modules ?? null);
 
   const result = await pool.query(
     `UPDATE users SET
-       is_active = COALESCE($1, is_active),
-       allowed_modules = COALESCE($2, allowed_modules),
+       name = COALESCE($1, name),
+       username = COALESCE($2, username),
+       password_hash = COALESCE($3, password_hash),
+       role_id = COALESCE($4, role_id),
+       is_active = COALESCE($5, is_active),
+       allowed_modules = COALESCE($6, allowed_modules),
+       cedula = COALESCE($7, cedula),
        updated_at = now()
-     WHERE id = $3
-     RETURNING id, name, username, is_active, allowed_modules`,
-    [body.is_active ?? null, body.allowed_modules ?? null, req.params.id]
+     WHERE id = $8
+     RETURNING id, name, username, cedula, is_active, allowed_modules`,
+    [body.name ?? null, body.username ?? null, passwordHash, roleId, body.is_active ?? null, allowedModules, body.cedula ?? null, req.params.id]
   );
 
   if (!result.rowCount) {

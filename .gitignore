@@ -29,3 +29,6 @@ logs/
 
 # Secreto de firma de sesiones (se genera solo, nunca se versiona)
 .jwt-secret
+
+# Carpeta de respaldo previa a sync (no versionar)
+.respaldo-antes-sync-20260805/

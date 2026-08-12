@@ -7,17 +7,24 @@ export type AuthenticatedRequest = Request & { user?: AuthUser; accionistaId?: s
 
 // Módulos asignables a un operador. Deben coincidir con las pestañas del web-admin.
 export const APP_MODULES = [
+  "Dashboard",
   "Bascula",
   "Secadoras",
   "Produccion",
   "Inventario",
+  "Seleccion",
   "Ventas",
   "Caja",
+  "Por Cobrar",
+  "Por Pagar",
   "Liquidaciones",
   "Fomentos",
   "Agricultores",
   "Nomina",
-  "Estados Financieros"
+  "Cuadrilla",
+  "Servicio Pilado",
+  "Estados Financieros",
+  "Reportes"
 ] as const;
 
 export type AppModule = (typeof APP_MODULES)[number];
@@ -33,13 +40,13 @@ const WRITE_MODULES_BY_PREFIX: Record<string, AppModule[]> = {
   "sacks": ["Inventario", "Produccion", "Caja"],
   // Selección/envejecido mueve producto terminado del inventario y crea cuentas
   // por pagar: mismo permiso que el inventario.
-  "selection": ["Inventario", "Produccion", "Caja"],
+  "selection": ["Inventario", "Produccion", "Caja", "Seleccion"],
   "sales": ["Ventas"],
   "orders": ["Ventas"],
   "customers": ["Ventas"],
   "products": ["Ventas"],
-  "receivable": ["Ventas", "Caja"],
-  "cash": ["Caja"],
+  "receivable": ["Ventas", "Caja", "Por Cobrar"],
+  "cash": ["Caja", "Por Pagar"],
   "expenses": ["Caja"],
   "equipment": ["Caja"],
   "advances": ["Caja"],
@@ -52,8 +59,8 @@ const WRITE_MODULES_BY_PREFIX: Record<string, AppModule[]> = {
   // Nómina, cuadrilla y servicio de pilado: la interfaz se los muestra a quien
   // tiene Nómina, Caja o Producción; el backend aplica la misma regla.
   "labor": ["Caja", "Produccion", "Nomina"],
-  "cuadrilla": ["Caja", "Produccion"],
-  "pilado": ["Caja", "Produccion"],
+  "cuadrilla": ["Caja", "Produccion", "Cuadrilla"],
+  "pilado": ["Caja", "Produccion", "Servicio Pilado"],
   "tunnel-reservations": ["Secadoras"],
   "tunnel-occupancy": ["Secadoras"],
   // Los estados financieros se LEEN (y leer no exige módulo); lo único que se

@@ -36,6 +36,90 @@ async function hasTable(name: string): Promise<boolean> {
 // Todos los reportes requieren rol administrador (datos financieros del negocio).
 reportsRouter.use(requireAdmin);
 
+// ── Arianos: arroz ya secado que aun no se procesa ──────────────────────────
+// "Apartar como arianos" marca el secado para que deje de contar como pendiente
+// de procesar. Reversible. Solo secados COMPLETED del accionista activo que
+// todavia no tienen lote de produccion.
+let arianosColReady: Promise<unknown> | null = null;
+function ensureArianosColumns() {
+  if (!arianosColReady) {
+    arianosColReady = pool.query(
+      `ALTER TABLE drying_tunnel_reports ADD COLUMN IF NOT EXISTS apartado_arianos BOOLEAN NOT NULL DEFAULT false;
+       ALTER TABLE drying_tunnel_reports ADD COLUMN IF NOT EXISTS apartado_at TIMESTAMPTZ;
+       ALTER TABLE drying_tunnel_reports ADD COLUMN IF NOT EXISTS ubicacion_arianos VARCHAR(160)`
+    );
+  }
+  return arianosColReady;
+}
+
+reportsRouter.get("/arianos", asyncRoute(async (req, res) => {
+  await ensureArianosColumns();
+  const acc = (req as AuthenticatedRequest).accionistaId;
+  const result = await pool.query(
+    `SELECT d.id, l.lot_code, d.rice_type,
+            d.total_quintals::float AS quintals,
+            d.dry_end_at, d.apartado_arianos, d.apartado_at, d.ubicacion_arianos
+       FROM drying_tunnel_reports d
+       JOIN lots l ON l.id = d.lot_id
+      WHERE d.status = 'COMPLETED'
+        AND l.accionista_id = $1
+        AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id)
+      ORDER BY d.dry_end_at DESC NULLS LAST`,
+    [acc]
+  );
+  const pendientes = result.rows.filter((r) => !r.apartado_arianos);
+  const apartados = result.rows.filter((r) => r.apartado_arianos);
+  res.json({ pendientes, apartados });
+}));
+
+reportsRouter.post("/arianos/apartar", asyncRoute(async (req, res) => {
+  await ensureArianosColumns();
+  const body = z.object({
+    ids: z.array(z.string().uuid()).min(1),
+    apartar: z.boolean().default(true),
+    ubicacion: z.string().trim().max(160).optional()
+  }).parse(req.body);
+  const acc = (req as AuthenticatedRequest).accionistaId;
+  const result = await pool.query(
+    `UPDATE drying_tunnel_reports d
+        SET apartado_arianos = $2,
+            apartado_at = CASE WHEN $2 THEN now() ELSE NULL END,
+            ubicacion_arianos = CASE WHEN $2 THEN $4 ELSE NULL END
+       FROM lots l
+      WHERE d.lot_id = l.id
+        AND d.id = ANY($1::uuid[])
+        AND l.accionista_id = $3
+        AND d.status = 'COMPLETED'
+        AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id)
+      RETURNING d.id`,
+    [body.ids, body.apartar, acc, body.ubicacion ?? null]
+  );
+  res.json({ ok: true, updated: result.rowCount ?? 0, apartar: body.apartar });
+}));
+
+// Actualizar solo la ubicacion de un lote ya guardado (por si lo mueven de
+// sitio). No cambia el estado ni la fecha en que se aparto.
+reportsRouter.post("/arianos/ubicacion", asyncRoute(async (req, res) => {
+  await ensureArianosColumns();
+  const body = z.object({
+    id: z.string().uuid(),
+    ubicacion: z.string().trim().max(160).optional()
+  }).parse(req.body);
+  const acc = (req as AuthenticatedRequest).accionistaId;
+  const result = await pool.query(
+    `UPDATE drying_tunnel_reports d
+        SET ubicacion_arianos = $2
+       FROM lots l
+      WHERE d.lot_id = l.id
+        AND d.id = $1
+        AND l.accionista_id = $3
+        AND d.apartado_arianos = true
+      RETURNING d.id`,
+    [body.id, body.ubicacion ?? null, acc]
+  );
+  res.json({ ok: true, updated: result.rowCount ?? 0 });
+}));
+
 // ── Resumen consolidado del período ────────────────────────────────────────
 reportsRouter.get("/summary", asyncRoute(async (req, res) => {
   const { from, to } = parseRange(req.query);

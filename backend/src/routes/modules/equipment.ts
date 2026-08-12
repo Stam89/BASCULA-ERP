@@ -9,6 +9,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { signUploadUrl } from "../../auth/upload-sign.js";
+import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 // Agrega la URL firmada (válida 1 hora) para ver la foto del recibo en un
 // <img src> sin exponer el JWT de sesión. receipt_photo_url se guarda como
@@ -117,6 +118,20 @@ equipmentRouter.post("/:id/maintenance", asyncRoute(async (req, res) => {
     cash_register_id: z.string().uuid().optional(),
     created_by: z.string().uuid().optional()
   }).parse(req.body);
+
+  // Aislamiento por accionista: si se va a registrar el gasto en caja, la caja
+  // debe pertenecer al accionista ACTIVO y estar abierta. Se valida ANTES de
+  // guardar la foto para fallar rapido y no dejar archivos huerfanos en disco.
+  // Mismo patron ya validado en sacks.ts (compra de sacos).
+  const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
+  if (body.cash_register_id) {
+    const reg = await pool.query(
+      "SELECT id, status FROM cash_registers WHERE id = $1 AND accionista_id = $2",
+      [body.cash_register_id, accionistaId]
+    );
+    if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
+    if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+  }
 
   // Guardar foto si se envió
   let photoUrl = null;
