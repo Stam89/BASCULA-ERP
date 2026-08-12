@@ -25,12 +25,15 @@ purchasesRouter.get("/", asyncRoute(async (req, res) => {
   res.json(result.rows);
 }));
 
-// GET detalle con items
+// GET detalle con items + CxP vinculada (si la compra fue a credito)
 purchasesRouter.get("/:id", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
   const head = await pool.query(
-    `SELECT p.*, s.name AS supplier_name FROM purchases p
+    `SELECT p.*, s.name AS supplier_name,
+            ap.id AS payable_id, ap.balance AS payable_balance, ap.status AS payable_status
+     FROM purchases p
      JOIN suppliers s ON s.id = p.supplier_id
+     LEFT JOIN accounts_payable ap ON ap.reference_type = 'purchase' AND ap.reference_id = p.id
      WHERE p.id = $1 AND p.accionista_id = $2`,
     [req.params.id, accionistaId]
   );
@@ -47,7 +50,7 @@ purchasesRouter.get("/:id", asyncRoute(async (req, res) => {
   res.json({ ...head.rows[0], items: items.rows });
 }));
 
-// Esquemas de item: INSUMO (3.2) y PRODUCT (3.3)
+// Esquemas de item: INSUMO y PRODUCT
 const insumoItem = z.object({
   item_type: z.literal("INSUMO"),
   insumo_id: z.string().uuid(),
@@ -66,15 +69,16 @@ const productItem = z.object({
   unit_price: z.number().nonnegative()
 });
 
-// POST crear compra CONTADO (insumos y/o productos)
+// POST crear compra (CASH: gasto en caja | CREDIT: cuenta por pagar)
 purchasesRouter.post("/", asyncRoute(async (req, res) => {
   const authReq = req as AuthenticatedRequest;
   const accionistaId = authReq.accionistaId ?? null;
   const body = z.object({
     supplier_id: z.string().uuid(),
     purchase_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    payment_type: z.literal("CASH"),          // FASE 3.3: sigue contado
-    cash_register_id: z.string().uuid(),
+    payment_type: z.enum(["CASH", "CREDIT"]),
+    cash_register_id: z.string().uuid().optional(),   // requerido solo si CASH
+    due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), // opcional, solo credito
     invoice_number: z.string().optional(),
     notes: z.string().optional(),
     created_by: z.string().uuid().optional(),
@@ -84,24 +88,29 @@ purchasesRouter.post("/", asyncRoute(async (req, res) => {
   const total = round2(body.items.reduce((acc, it) => acc + it.quantity * it.unit_price, 0));
   if (total <= 0) throw new ApiError(400, "El total de la compra debe ser mayor a 0");
 
-  // Validaciones previas (fail-fast, ANTES de la transaccion):
-  const sup = await pool.query("SELECT id, is_active FROM suppliers WHERE id = $1", [body.supplier_id]);
+  // Proveedor
+  const sup = await pool.query("SELECT id, name, is_active FROM suppliers WHERE id = $1", [body.supplier_id]);
   if (!sup.rows[0]) throw new ApiError(404, "Proveedor no encontrado");
   if (!sup.rows[0].is_active) throw new ApiError(409, "El proveedor esta inactivo");
+  const supplierName = sup.rows[0].name;
 
-  const reg = await pool.query(
-    "SELECT id, status FROM cash_registers WHERE id = $1 AND accionista_id = $2",
-    [body.cash_register_id, accionistaId]
-  );
-  if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
-  if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+  // Caja: solo se valida/exige en compra a CONTADO
+  if (body.payment_type === "CASH") {
+    if (!body.cash_register_id) throw new ApiError(400, "La compra a contado requiere una caja (cash_register_id)");
+    const reg = await pool.query(
+      "SELECT id, status FROM cash_registers WHERE id = $1 AND accionista_id = $2",
+      [body.cash_register_id, accionistaId]
+    );
+    if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
+    if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+  }
 
+  // Existencia de insumos/productos + compatibilidad bodega<->tipo
   for (const it of body.items) {
     if (it.item_type === "INSUMO") {
       const ins = await pool.query("SELECT id FROM insumos WHERE id = $1", [it.insumo_id]);
       if (!ins.rows[0]) throw new ApiError(404, `Insumo no encontrado: ${it.insumo_id}`);
     } else {
-      // PRODUCT: producto y bodega existen, y son compatibles por tipo
       const chk = await pool.query(
         `SELECT p.name AS producto, p.product_type, w.name AS bodega, w.type AS tipo_bodega
          FROM products p, warehouses w WHERE p.id = $1 AND w.id = $2`,
@@ -122,9 +131,9 @@ purchasesRouter.post("/", asyncRoute(async (req, res) => {
     const purchase = await client.query(
       `INSERT INTO purchases
         (purchase_number, supplier_id, accionista_id, purchase_date, payment_type, total_amount, invoice_number, status, notes, created_by)
-       VALUES ($1, $2, $3, COALESCE($4, CURRENT_DATE), 'CASH', $5, $6, 'CONFIRMED', $7, $8)
+       VALUES ($1, $2, $3, COALESCE($4, CURRENT_DATE), $5, $6, $7, 'CONFIRMED', $8, $9)
        RETURNING *`,
-      [nextCode("COMP"), body.supplier_id, accionistaId, body.purchase_date ?? null, total, body.invoice_number ?? null, body.notes ?? null, body.created_by ?? null]
+      [nextCode("COMP"), body.supplier_id, accionistaId, body.purchase_date ?? null, body.payment_type, total, body.invoice_number ?? null, body.notes ?? null, body.created_by ?? null]
     );
     const purchaseId = purchase.rows[0].id;
     const purchaseNumber = purchase.rows[0].purchase_number;
@@ -149,7 +158,6 @@ purchasesRouter.post("/", asyncRoute(async (req, res) => {
           [it.insumo_id, it.quantity]
         );
       } else {
-        // PRODUCT: entra al kardex general (con costo). El stock se deriva del movimiento.
         await client.query(
           `INSERT INTO purchase_items
             (purchase_id, item_type, product_id, warehouse_id, ownership, description, quantity, unit, unit_price, line_total)
@@ -165,12 +173,23 @@ purchasesRouter.post("/", asyncRoute(async (req, res) => {
       }
     }
 
-    await client.query(
-      `INSERT INTO cash_movements
-        (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)
-       VALUES ($1, 'EXPENSE', 'COMPRA_GENERAL', 'purchase', $2, $3, $4, $5)`,
-      [body.cash_register_id, purchaseId, total, `Compra ${purchaseNumber}`, body.created_by ?? null]
-    );
+    if (body.payment_type === "CASH") {
+      // Contado: gasto en caja
+      await client.query(
+        `INSERT INTO cash_movements
+          (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)
+         VALUES ($1, 'EXPENSE', 'COMPRA_GENERAL', 'purchase', $2, $3, $4, $5)`,
+        [body.cash_register_id, purchaseId, total, `Compra ${purchaseNumber}`, body.created_by ?? null]
+      );
+    } else {
+      // Credito: cuenta por pagar al proveedor (se paga luego via /cash/payables/:id/pay)
+      await client.query(
+        `INSERT INTO accounts_payable
+          (farmer_id, accionista_id, amount, balance, status, due_date, reference_type, reference_id, description)
+         VALUES (NULL, $1, $2, $2, 'CONFIRMED', $3, 'purchase', $4, $5)`,
+        [accionistaId, total, body.due_date ?? null, purchaseId, `Compra ${purchaseNumber} a ${supplierName}`]
+      );
+    }
 
     return purchase.rows[0];
   });

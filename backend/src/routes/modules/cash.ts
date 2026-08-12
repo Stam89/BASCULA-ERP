@@ -8,8 +8,25 @@ import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth
 import { round2 } from "../../utils/rice-formulas.js";
 import { espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
 import ExcelJS from "exceljs";
+import type { PoolClient } from "pg";
 
 export const cashRouter = Router();
+
+// Valida que la caja pertenezca al accionista ACTIVO y este abierta antes de
+// registrar un movimiento. Evita imputar un pago a la caja de otro accionista o
+// a una caja cerrada (mismo blindaje ya aplicado en sacos, mantenimiento y compras).
+async function assertCajaDelAccionista(
+  client: PoolClient,
+  cashRegisterId: string,
+  accionistaId: string | null | undefined
+): Promise<void> {
+  const reg = await client.query(
+    "SELECT id, status FROM cash_registers WHERE id = $1 AND accionista_id = $2",
+    [cashRegisterId, accionistaId ?? null]
+  );
+  if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
+  if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+}
 
 // Columnas para la anulación de movimientos (contra-asiento). Migración
 // automática en instalaciones existentes.
@@ -364,6 +381,7 @@ cashRouter.post("/payables/:id/pay", asyncRoute(async (req, res) => {
 
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await inTransaction(async (client) => {
+    await assertCajaDelAccionista(client, body.cash_register_id, accionistaId);
     // Solo se pagan cuentas del accionista activo: cada socio con su plata.
     // FOR UPDATE OF ap: el candado va sobre la cuenta, no sobre el agricultor.
     const ap = await client.query(
@@ -394,6 +412,7 @@ cashRouter.post("/payables/:id/pay", asyncRoute(async (req, res) => {
       refType === "pilado_service" ? "PAGO_SERVICIO_PILADO" :
       refType === "lot_transfer" ? "PAGO_ENTRE_SOCIOS" :
       refType === "selection_batch" ? "PAGO_SELECCION" :
+      refType === "purchase" ? "PAGO_PROVEEDOR" :
       "PAGO_AGRICULTOR";
     // La descripción dice a quién se paga, sin repetir "Pago a" si ya lo trae.
     const aQuien = ap.rows[0].farmer_name
@@ -437,6 +456,7 @@ cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
 
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await inTransaction(async (client) => {
+    await assertCajaDelAccionista(client, body.cash_register_id, accionistaId);
     const cuentas = await client.query(
       `SELECT ap.*, f.full_name AS farmer_name
        FROM accounts_payable ap
