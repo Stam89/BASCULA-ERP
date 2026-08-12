@@ -870,10 +870,22 @@ type EquipmentMaintenance = {
   created_at: string;
 };
 
+type Supplier = {
+  id: string;
+  name: string;
+  identification: string | null;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  notes: string | null;
+  is_active: boolean;
+  created_at: string;
+};
+
 const navGroups: Array<{ label: string; tabs: string[] }> = [
   { label: "Principal", tabs: ["Dashboard"] },
   { label: "Operación", tabs: ["Bascula", "Secadoras", "Produccion", "Inventario", "Seleccion"] },
-  { label: "Comercial", tabs: ["Ventas", "Caja"] },
+  { label: "Comercial", tabs: ["Ventas", "Compras", "Caja"] },
   { label: "Cuentas", tabs: ["Por Cobrar", "Por Pagar"] },
   { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores", "Nomina", "Cuadrilla", "Servicio Pilado"] },
   { label: "Contabilidad", tabs: ["Estados Financieros"] },
@@ -909,6 +921,8 @@ function NavIcon({ tab }: { tab: string }) {
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 14V8"/><path d="M5 11l3-3 3 3"/><path d="M2 14h12"/><path d="M4 8C4 5 6 2 8 2s4 3 4 6"/></svg>;
     case "Ventas":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 5h12M2 9h12"/><circle cx="8" cy="13" r="1"/><path d="M3 2h10v11H3z"/></svg>;
+    case "Compras":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="14" r="1"/><circle cx="12" cy="14" r="1"/><path d="M1 1h2l2 9h8l2-6H4"/></svg>;
     case "Por Cobrar":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 4h12v8H2z"/><circle cx="8" cy="8" r="2"/><path d="M13 6.5l1.5-1.5M3 9.5L1.5 11"/><path d="M8 1.5V3M8 13v1.5"/></svg>;
     case "Por Pagar":
@@ -1376,6 +1390,10 @@ export function App() {
     type: "PILADORA" as "PILADORA" | "SECADORA" | "MOTOR" | "OTRO",
     status: "ACTIVA" as "ACTIVA" | "MANTENIMIENTO" | "FUERA_SERVICIO"
   });
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [supplierForm, setSupplierForm] = useState({ name: "", identification: "", phone: "", email: "", address: "", notes: "" });
+  const [editingSupplierId, setEditingSupplierId] = useState<string | null>(null);
+  const [supplierEdit, setSupplierEdit] = useState({ name: "", identification: "", phone: "", email: "", address: "", notes: "" });
 
   const addToast = useCallback((text: string, type?: "success" | "error" | "warn") => {
     const id = Date.now();
@@ -3288,6 +3306,7 @@ export function App() {
     }
     if (activeTab === "Inventario") refreshSacks().catch(() => undefined);
     if (activeTab === "Ventas") refreshCustomersAndSales().catch(() => undefined);
+    if (activeTab === "Compras") refreshSuppliers().catch(() => undefined);
     if (activeTab === "Por Cobrar") refreshReceivables().catch(() => undefined);
     if (activeTab === "Por Pagar") refreshPayables().catch(() => undefined);
     // Secadoras y Nómina necesitan las tarifas (precios de gas/diesel).
@@ -3402,6 +3421,68 @@ export function App() {
   const refreshEquipment = async () => {
     const res = await apiFetch(`/equipment`);
     if (res.ok) setEquipment(await res.json());
+  };
+
+  const refreshSuppliers = async () => {
+    try { setSuppliers(await apiGet<Supplier[]>("/suppliers?all=1")); }
+    catch { /* noop */ }
+  };
+
+  const submitNewSupplier = async () => {
+    if (!supplierForm.name || supplierForm.name.trim().length < 2) { addToast("Nombre del proveedor requerido", "error"); return; }
+    try {
+      await apiPost("/suppliers", {
+        name: supplierForm.name.trim(),
+        identification: supplierForm.identification || undefined,
+        phone: supplierForm.phone || undefined,
+        email: supplierForm.email || undefined,
+        address: supplierForm.address || undefined,
+        notes: supplierForm.notes || undefined
+      });
+      setSupplierForm({ name: "", identification: "", phone: "", email: "", address: "", notes: "" });
+      await refreshSuppliers();
+      addToast("Proveedor creado ✓", "success");
+    } catch (e) { addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error"); }
+  };
+
+  const startEditSupplier = (s: Supplier) => {
+    setEditingSupplierId(s.id);
+    setSupplierEdit({ name: s.name, identification: s.identification || "", phone: s.phone || "", email: s.email || "", address: s.address || "", notes: s.notes || "" });
+  };
+
+  const saveSupplierEdit = async (id: string) => {
+    if (!supplierEdit.name || supplierEdit.name.trim().length < 2) { addToast("Nombre requerido", "error"); return; }
+    try {
+      const res = await apiFetch(`/suppliers/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: supplierEdit.name.trim(),
+          identification: supplierEdit.identification || undefined,
+          phone: supplierEdit.phone || undefined,
+          email: supplierEdit.email || undefined,
+          address: supplierEdit.address || undefined,
+          notes: supplierEdit.notes || undefined
+        })
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setEditingSupplierId(null);
+      await refreshSuppliers();
+      addToast("Proveedor actualizado ✓", "success");
+    } catch (e) { addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error"); }
+  };
+
+  const toggleSupplierActive = async (s: Supplier) => {
+    try {
+      const res = await apiFetch(`/suppliers/${s.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_active: !s.is_active })
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await refreshSuppliers();
+      addToast(s.is_active ? "Proveedor desactivado" : "Proveedor reactivado", "success");
+    } catch (e) { addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error"); }
   };
 
   const submitNewEquipment = async () => {
@@ -6915,6 +6996,78 @@ export function App() {
 
             {/* Las cuentas por cobrar se administran en la pestaña "Por Cobrar" (grupo Cuentas). */}
           </section>
+        )}
+
+        {activeTab === "Compras" && (
+          <div className="maintLayout">
+            <div className="formPanel">
+              <h2>🏷️ Nuevo proveedor</h2>
+              <label><span>Nombre *</span>
+                <input type="text" value={supplierForm.name}
+                  onChange={(e: any) => setSupplierForm({ ...supplierForm, name: e.target.value })}
+                  placeholder="Razon social o nombre" />
+              </label>
+              <label><span>Identificacion (RUC/Cedula)</span>
+                <input type="text" value={supplierForm.identification}
+                  onChange={(e: any) => setSupplierForm({ ...supplierForm, identification: e.target.value })} />
+              </label>
+              <label><span>Telefono</span>
+                <input type="text" value={supplierForm.phone}
+                  onChange={(e: any) => setSupplierForm({ ...supplierForm, phone: e.target.value })} />
+              </label>
+              <label><span>Email</span>
+                <input type="email" value={supplierForm.email}
+                  onChange={(e: any) => setSupplierForm({ ...supplierForm, email: e.target.value })} />
+              </label>
+              <label><span>Direccion</span>
+                <input type="text" value={supplierForm.address}
+                  onChange={(e: any) => setSupplierForm({ ...supplierForm, address: e.target.value })} />
+              </label>
+              <label><span>Notas</span>
+                <input type="text" value={supplierForm.notes}
+                  onChange={(e: any) => setSupplierForm({ ...supplierForm, notes: e.target.value })} />
+              </label>
+              <button type="button" className="primary" onClick={submitNewSupplier}>Agregar proveedor</button>
+            </div>
+
+            <div className="formPanel">
+              <h2 style={{ marginBottom: 0 }}>Proveedores</h2>
+              {suppliers.length === 0 && <p className="muted">Sin proveedores aun</p>}
+              <div className="equipList">
+                {suppliers.map((s) => (
+                  <div key={s.id} className="equipItem" style={{ opacity: s.is_active ? 1 : 0.5 }}>
+                    {editingSupplierId === s.id ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
+                        <input type="text" value={supplierEdit.name}
+                          onChange={(e: any) => setSupplierEdit({ ...supplierEdit, name: e.target.value })} placeholder="Nombre" />
+                        <input type="text" value={supplierEdit.identification}
+                          onChange={(e: any) => setSupplierEdit({ ...supplierEdit, identification: e.target.value })} placeholder="RUC/Cedula" />
+                        <input type="text" value={supplierEdit.phone}
+                          onChange={(e: any) => setSupplierEdit({ ...supplierEdit, phone: e.target.value })} placeholder="Telefono" />
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button type="button" className="primary" onClick={() => saveSupplierEdit(s.id)}>Guardar</button>
+                          <button type="button" onClick={() => setEditingSupplierId(null)}>Cancelar</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div>
+                          <strong>{s.name}</strong>
+                          <small>{[s.identification, s.phone].filter(Boolean).join(" · ") || "—"}{s.is_active ? "" : " · inactivo"}</small>
+                        </div>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button type="button" onClick={() => startEditSupplier(s)}>Editar</button>
+                          <button type="button" className="equipDelBtn" onClick={() => toggleSupplierActive(s)}>
+                            {s.is_active ? "Desactivar" : "Reactivar"}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
         )}
 
         {activeTab === "Caja" && (
