@@ -1394,6 +1394,22 @@ export function App() {
   const [supplierForm, setSupplierForm] = useState({ name: "", identification: "", phone: "", email: "", address: "", notes: "" });
   const [editingSupplierId, setEditingSupplierId] = useState<string | null>(null);
   const [supplierEdit, setSupplierEdit] = useState({ name: "", identification: "", phone: "", email: "", address: "", notes: "" });
+  const [purchases, setPurchases] = useState<any[]>([]);
+  const [purchaseForm, setPurchaseForm] = useState({
+    supplier_id: "",
+    payment_type: "CASH" as "CASH" | "CREDIT",
+    due_date: "",
+    invoice_number: "",
+    notes: ""
+  });
+  const [purchaseItems, setPurchaseItems] = useState<Array<{
+    item_type: "INSUMO" | "PRODUCT";
+    insumo_id: string;
+    product_id: string;
+    warehouse_id: string;
+    quantity: string;
+    unit_price: string;
+  }>>([{ item_type: "INSUMO", insumo_id: "", product_id: "", warehouse_id: "", quantity: "", unit_price: "" }]);
 
   const addToast = useCallback((text: string, type?: "success" | "error" | "warn") => {
     const id = Date.now();
@@ -3306,7 +3322,7 @@ export function App() {
     }
     if (activeTab === "Inventario") refreshSacks().catch(() => undefined);
     if (activeTab === "Ventas") refreshCustomersAndSales().catch(() => undefined);
-    if (activeTab === "Compras") refreshSuppliers().catch(() => undefined);
+    if (activeTab === "Compras") { refreshSuppliers().catch(() => undefined); refreshPurchases().catch(() => undefined); }
     if (activeTab === "Por Cobrar") refreshReceivables().catch(() => undefined);
     if (activeTab === "Por Pagar") refreshPayables().catch(() => undefined);
     // Secadoras y Nómina necesitan las tarifas (precios de gas/diesel).
@@ -3426,6 +3442,74 @@ export function App() {
   const refreshSuppliers = async () => {
     try { setSuppliers(await apiGet<Supplier[]>("/suppliers?all=1")); }
     catch { /* noop */ }
+  };
+
+  const refreshPurchases = async () => {
+    try { setPurchases(await apiGet<any[]>("/purchases")); }
+    catch { /* noop */ }
+  };
+
+  const purchaseTotal = () =>
+    purchaseItems.reduce((acc, it) => {
+      const q = parseFloat(it.quantity) || 0;
+      const p = parseFloat(it.unit_price) || 0;
+      return acc + q * p;
+    }, 0);
+
+  const addPurchaseItem = () =>
+    setPurchaseItems((prev) => [...prev, { item_type: "INSUMO", insumo_id: "", product_id: "", warehouse_id: "", quantity: "", unit_price: "" }]);
+
+  const removePurchaseItem = (idx: number) =>
+    setPurchaseItems((prev) => prev.length > 1 ? prev.filter((_, i) => i !== idx) : prev);
+
+  const updatePurchaseItem = (idx: number, patch: Partial<{ item_type: "INSUMO" | "PRODUCT"; insumo_id: string; product_id: string; warehouse_id: string; quantity: string; unit_price: string; }>) =>
+    setPurchaseItems((prev) => prev.map((it, i) => i === idx ? { ...it, ...patch } : it));
+
+  const submitPurchase = async () => {
+    if (!purchaseForm.supplier_id) { addToast("Selecciona un proveedor", "error"); return; }
+    const items: any[] = [];
+    for (const it of purchaseItems) {
+      const quantity = parseFloat(it.quantity);
+      const unit_price = parseFloat(it.unit_price);
+      if (!quantity || quantity <= 0) { addToast("Cada item necesita cantidad mayor a 0", "error"); return; }
+      if (isNaN(unit_price) || unit_price < 0) { addToast("Precio invalido en un item", "error"); return; }
+      if (it.item_type === "INSUMO") {
+        if (!it.insumo_id) { addToast("Selecciona el insumo en cada item", "error"); return; }
+        items.push({ item_type: "INSUMO", insumo_id: it.insumo_id, quantity, unit_price });
+      } else {
+        if (!it.product_id || !it.warehouse_id) { addToast("Selecciona producto y bodega en cada item", "error"); return; }
+        items.push({ item_type: "PRODUCT", product_id: it.product_id, warehouse_id: it.warehouse_id, quantity, unit_price });
+      }
+    }
+    if (purchaseTotal() <= 0) { addToast("El total de la compra debe ser mayor a 0", "error"); return; }
+
+    const payload: any = {
+      supplier_id: purchaseForm.supplier_id,
+      payment_type: purchaseForm.payment_type,
+      invoice_number: purchaseForm.invoice_number || undefined,
+      notes: purchaseForm.notes || undefined,
+      items
+    };
+    if (purchaseForm.payment_type === "CASH") {
+      const registerId = dashboard.current_cash_register?.id;
+      if (!registerId) { addToast("No hay caja abierta para una compra a contado", "error"); return; }
+      payload.cash_register_id = registerId;
+    } else if (purchaseForm.due_date) {
+      payload.due_date = purchaseForm.due_date;
+    }
+
+    try {
+      await apiPost("/purchases", payload);
+      setPurchaseForm({ supplier_id: "", payment_type: "CASH", due_date: "", invoice_number: "", notes: "" });
+      setPurchaseItems([{ item_type: "INSUMO", insumo_id: "", product_id: "", warehouse_id: "", quantity: "", unit_price: "" }]);
+      await refreshPurchases();
+      if (purchaseForm.payment_type === "CASH" && dashboard.current_cash_register?.id) {
+        await refreshCaja(dashboard.current_cash_register.id);
+      }
+      addToast("Compra registrada ✓", "success");
+    } catch (e) {
+      addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error");
+    }
   };
 
   const submitNewSupplier = async () => {
@@ -6999,9 +7083,107 @@ export function App() {
         )}
 
         {activeTab === "Compras" && (
-          <div className="maintLayout">
-            <div className="formPanel">
-              <h2>🏷️ Nuevo proveedor</h2>
+          <div>
+            {/* ── Registrar compra ── */}
+            <div className="formPanel" style={{ marginBottom: 16 }}>
+              <h2>🛒 Registrar compra</h2>
+              <label><span>Proveedor *</span>
+                <select value={purchaseForm.supplier_id}
+                  onChange={(e: any) => setPurchaseForm({ ...purchaseForm, supplier_id: e.target.value })}>
+                  <option value="">— Selecciona —</option>
+                  {suppliers.filter((s) => s.is_active).map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label><span>Tipo de pago</span>
+                <select value={purchaseForm.payment_type}
+                  onChange={(e: any) => setPurchaseForm({ ...purchaseForm, payment_type: e.target.value })}>
+                  <option value="CASH">Contado (paga de caja)</option>
+                  <option value="CREDIT">Credito (cuenta por pagar)</option>
+                </select>
+              </label>
+              {purchaseForm.payment_type === "CASH" ? (
+                <p className="muted">
+                  {dashboard.current_cash_register?.id ? "Se registrara el gasto en la caja abierta." : "⚠️ No hay caja abierta; abre una para comprar a contado."}
+                </p>
+              ) : (
+                <label><span>Vencimiento (opcional)</span>
+                  <input type="date" value={purchaseForm.due_date}
+                    onChange={(e: any) => setPurchaseForm({ ...purchaseForm, due_date: e.target.value })} />
+                </label>
+              )}
+              <label><span>N° factura (opcional)</span>
+                <input type="text" value={purchaseForm.invoice_number}
+                  onChange={(e: any) => setPurchaseForm({ ...purchaseForm, invoice_number: e.target.value })} />
+              </label>
+              <label><span>Notas (opcional)</span>
+                <input type="text" value={purchaseForm.notes}
+                  onChange={(e: any) => setPurchaseForm({ ...purchaseForm, notes: e.target.value })} />
+              </label>
+
+              <h3 style={{ marginBottom: 6 }}>Items</h3>
+              {purchaseItems.map((it, idx) => (
+                <div key={idx} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 10, marginBottom: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+                  <select value={it.item_type}
+                    onChange={(e: any) => updatePurchaseItem(idx, { item_type: e.target.value, insumo_id: "", product_id: "", warehouse_id: "" })}>
+                    <option value="INSUMO">Insumo</option>
+                    <option value="PRODUCT">Producto</option>
+                  </select>
+                  {it.item_type === "INSUMO" ? (
+                    <select value={it.insumo_id} onChange={(e: any) => updatePurchaseItem(idx, { insumo_id: e.target.value })}>
+                      <option value="">— Insumo —</option>
+                      {insumos.map((i) => (<option key={i.id} value={i.id}>{i.nombre}</option>))}
+                    </select>
+                  ) : (
+                    <>
+                      <select value={it.product_id} onChange={(e: any) => updatePurchaseItem(idx, { product_id: e.target.value })}>
+                        <option value="">— Producto —</option>
+                        {products.map((p) => (<option key={p.id} value={p.id}>{p.name} ({p.product_type})</option>))}
+                      </select>
+                      <select value={it.warehouse_id} onChange={(e: any) => updatePurchaseItem(idx, { warehouse_id: e.target.value })}>
+                        <option value="">— Bodega —</option>
+                        {warehouses.map((w) => (<option key={w.id} value={w.id}>{w.name} ({w.type})</option>))}
+                      </select>
+                    </>
+                  )}
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <input type="number" step="0.001" min="0" placeholder="Cantidad" value={it.quantity}
+                      onChange={(e: any) => updatePurchaseItem(idx, { quantity: e.target.value })} style={{ flex: 1 }} />
+                    <input type="number" step="0.0001" min="0" placeholder="Precio unit." value={it.unit_price}
+                      onChange={(e: any) => updatePurchaseItem(idx, { unit_price: e.target.value })} style={{ flex: 1 }} />
+                    {purchaseItems.length > 1 && (
+                      <button type="button" className="equipDelBtn" onClick={() => removePurchaseItem(idx)}>✕</button>
+                    )}
+                  </div>
+                </div>
+              ))}
+              <button type="button" onClick={addPurchaseItem} style={{ marginBottom: 8 }}>+ Agregar item</button>
+              <p style={{ fontWeight: 600 }}>Total: ${purchaseTotal().toFixed(2)}</p>
+              <button type="button" className="primary" onClick={submitPurchase}>Registrar compra</button>
+            </div>
+
+            {/* ── Compras recientes ── */}
+            <div className="formPanel" style={{ marginBottom: 16 }}>
+              <h2 style={{ marginBottom: 0 }}>Compras recientes</h2>
+              {purchases.length === 0 && <p className="muted">Sin compras aun</p>}
+              <div className="equipList">
+                {purchases.map((c) => (
+                  <div key={c.id} className="equipItem">
+                    <div>
+                      <strong>{c.purchase_number} — {c.supplier_name}</strong>
+                      <small>{(c.purchase_date || "").slice(0, 10)} · {c.payment_type === "CASH" ? "Contado" : "Credito"} · {c.status}</small>
+                    </div>
+                    <strong>${Number(c.total_amount).toFixed(2)}</strong>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* ── Catalogo de proveedores (existente) ── */}
+            <div className="maintLayout">
+              <div className="formPanel">
+                <h2>🏷️ Nuevo proveedor</h2>
               <label><span>Nombre *</span>
                 <input type="text" value={supplierForm.name}
                   onChange={(e: any) => setSupplierForm({ ...supplierForm, name: e.target.value })}
@@ -7067,6 +7249,7 @@ export function App() {
                 ))}
               </div>
             </div>
+          </div>
           </div>
         )}
 
