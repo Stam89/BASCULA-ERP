@@ -34,6 +34,7 @@ import { piladoRouter } from "./modules/pilado.js";
 import { selectionRouter } from "./modules/selection.js";
 import { tunnelReservationsRouter } from "./modules/tunnel-reservations.js";
 import { tunnelOccupancyRouter } from "./modules/tunnel-occupancy.js";
+import { suppliersRouter } from "./modules/suppliers.js";
 
 export const routes = Router();
 
@@ -84,3 +85,4 @@ routes.use("/pilado", piladoRouter);
 routes.use("/selection", selectionRouter);
 routes.use("/tunnel-reservations", tunnelReservationsRouter);
 routes.use("/tunnel-occupancy", tunnelOccupancyRouter);
+routes.use("/suppliers", suppliersRouter);
