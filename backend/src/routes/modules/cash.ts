@@ -488,11 +488,18 @@ cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
     }
 
     const primera = cuentas.rows[0];
+    const refType = primera.reference_type;
+    const categoria =
+      refType === "pilado_service" ? "PAGO_SERVICIO_PILADO" :
+      refType === "lot_transfer" ? "PAGO_ENTRE_SOCIOS" :
+      refType === "selection_batch" ? "PAGO_SELECCION" :
+      refType === "purchase" ? "PAGO_PROVEEDOR" :
+      "PAGO_AGRICULTOR";
     await client.query(
       `INSERT INTO cash_movements
        (cash_register_id, movement, category, reference_type, reference_id, amount, description)
-       VALUES ($1, 'EXPENSE', 'PAGO_AGRICULTOR', 'accounts_payable', $2, $3, $4)`,
-      [body.cash_register_id, primera.id, body.amount,
+       VALUES ($1, 'EXPENSE', $2, 'accounts_payable', $3, $4, $5)`,
+      [body.cash_register_id, categoria, primera.id, body.amount,
        `Pago a ${primera.farmer_name ?? primera.description ?? "proveedor"}`]
     );
 
