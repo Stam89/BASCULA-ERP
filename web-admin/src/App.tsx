@@ -947,6 +947,13 @@ function NavIcon({ tab }: { tab: string }) {
 }
 // CEYRO es el accionista principal (la piladora, dueño del negocio). Id sembrado.
 const CEYRO_ID = "00000000-0000-0000-0000-000000000001";
+
+const SECCIONES_POR_AREA: Record<string, string[]> = {
+  SECADORA: ["MOTOR 1", "MOTOR 2", "TÚNEL 1", "TÚNEL 2", "TÚNEL 3"],
+  PILADORA: ["MOTOR", "CILINDRO 1", "CILINDRO 2", "PLAN SISTER", "MOTOR PLAN SISTER", "DESCASCARADOR", "PULIDOR 1", "PULIDOR 2", "BANDEJAS PEQUEÑA", "COSEDORAS", "OTROS"],
+  ADMINISTRATIVO: ["AIRE ACONDICIONADO", "COMPUTADORAS", "NEVERA PEQUEÑA", "NEVERA GRANDE", "HELERA", "IMPRESORAS", "BÁSCULA"],
+  MONTACARGA: ["MOTOR", "RADIADOR", "BATERÍA", "TRANSMISIÓN", "OTROS"]
+};
 const LB_TO_KG = 0.45359237;
 const QQ_TO_LB = 100;
 const millingDraftStorageKey = "bascula-erp:milling-report-draft";
@@ -1377,7 +1384,8 @@ export function App() {
   // ── Mantenimiento de Equipos ───────────────────────────────────────────
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [maintenanceForm, setMaintenanceForm] = useState({
-    equipment_id: "",
+    area: "",
+    section: "",
     maintenance_type: "CORRECTIVO" as "REPUESTO" | "MANO_OBRA" | "PREVENTIVO" | "CORRECTIVO",
     description: "",
     provider: "",
@@ -3611,15 +3619,14 @@ export function App() {
   };
 
   const getDescriptionPlaceholder = () => {
-    const selectedEquip = equipment.find(e => e.id === maintenanceForm.equipment_id);
-    if (selectedEquip?.name === "Piladora 1") {
-      return "Ej: cambio de faja - pulidora 2, rodamiento - elevador 3, malla - zaranda, ajuste - plan sister";
+    if (maintenanceForm.area === "PILADORA") {
+      return "Ej: cambio de faja - pulidor 2, rodamiento - descascarador, malla - zaranda, ajuste - plan sister";
     }
     return "Descripción del trabajo realizado";
   };
 
   const submitEquipmentMaintenance = async (photoFile?: File) => {
-    if (!dashboard.current_cash_register?.id || !maintenanceForm.equipment_id || !maintenanceForm.description || !maintenanceForm.amount) {
+    if (!dashboard.current_cash_register?.id || !maintenanceForm.area || !maintenanceForm.section || !maintenanceForm.description || !maintenanceForm.amount) {
       addToast("Completa los campos requeridos", "error");
       return;
     }
@@ -3638,10 +3645,12 @@ export function App() {
         });
       }
 
-      const res = await apiFetch(`/equipment/${maintenanceForm.equipment_id}/maintenance`, {
+      const res = await apiFetch(`/equipment/maintenance`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          area: maintenanceForm.area,
+          section: maintenanceForm.section,
           maintenance_type: maintenanceForm.maintenance_type,
           description: maintenanceForm.description,
           provider: maintenanceForm.provider || undefined,
@@ -3654,7 +3663,8 @@ export function App() {
       if (!res.ok) throw new Error(await res.text());
 
       setMaintenanceForm({
-        equipment_id: "",
+        area: "",
+        section: "",
         maintenance_type: "CORRECTIVO",
         description: "",
         provider: "",
@@ -7755,15 +7765,29 @@ export function App() {
                     }}>
                       <h2>Registrar Mantenimiento</h2>
                     <label>
-                      <span>Máquina</span>
+                      <span>Área</span>
                       <select
-                        value={maintenanceForm.equipment_id}
-                        onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, equipment_id: event.target.value })}
+                        value={maintenanceForm.area}
+                        onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, area: event.target.value, section: "" })}
                         required
                       >
                         <option value="">Seleccione</option>
-                        {equipment.filter((eq) => eq.status !== "FUERA_SERVICIO").map((eq) => (
-                          <option key={eq.id} value={eq.id}>{eq.name} ({eq.type})</option>
+                        {Object.keys(SECCIONES_POR_AREA).map((a) => (
+                          <option key={a} value={a}>{a}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span>Sección a reparar</span>
+                      <select
+                        value={maintenanceForm.section}
+                        onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, section: event.target.value })}
+                        required
+                        disabled={!maintenanceForm.area}
+                      >
+                        <option value="">Seleccione</option>
+                        {(SECCIONES_POR_AREA[maintenanceForm.area] || []).map((s) => (
+                          <option key={s} value={s}>{s}</option>
                         ))}
                       </select>
                     </label>

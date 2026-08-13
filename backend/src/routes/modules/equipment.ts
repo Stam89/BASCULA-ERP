@@ -237,6 +237,67 @@ equipmentRouter.post("/:id/maintenance", asyncRoute(async (req, res) => {
   res.status(201).json(withSignedPhoto(result));
 }));
 
+// POST registrar mantenimiento por AREA/SECCION (sin equipo del catalogo)
+equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
+  const body = z.object({
+    area: z.string().min(1),
+    section: z.string().min(1),
+    maintenance_type: z.enum(["REPUESTO", "MANO_OBRA", "PREVENTIVO", "CORRECTIVO"]),
+    description: z.string().min(1),
+    provider: z.string().optional(),
+    invoice_number: z.string().optional(),
+    receipt_photo_base64: z.string().optional(),
+    amount: z.number().positive(),
+    cash_register_id: z.string().uuid().optional(),
+    created_by: z.string().uuid().optional()
+  }).parse(req.body);
+
+  // Aislamiento de caja (igual que /:id/maintenance): la caja debe ser del
+  // accionista activo y estar abierta. Se valida antes de guardar la foto.
+  const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
+  if (body.cash_register_id) {
+    const reg = await pool.query(
+      "SELECT id, status FROM cash_registers WHERE id = $1 AND accionista_id = $2",
+      [body.cash_register_id, accionistaId]
+    );
+    if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
+    if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+  }
+
+  let photoUrl = null;
+  if (body.receipt_photo_base64 && body.receipt_photo_base64.length > 0) {
+    try {
+      const timestamp = Date.now();
+      const filename = `maintenance-${timestamp}.png`;
+      const filepath = path.join(uploadsDir, filename);
+      const buffer = Buffer.from(body.receipt_photo_base64.split(",")[1] || body.receipt_photo_base64, "base64");
+      fs.writeFileSync(filepath, buffer);
+      photoUrl = `/uploads/equipment/${filename}`;
+    } catch (e) { console.error("Error saving photo:", e); }
+  }
+
+  const result = await inTransaction(async (client) => {
+    const maintenance = await client.query(
+      `INSERT INTO equipment_maintenance
+       (equipment_id, area, section, maintenance_type, description, provider, invoice_number, receipt_photo_url, amount, created_by)
+       VALUES (NULL, $1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [body.area, body.section, body.maintenance_type, body.description, body.provider || null, body.invoice_number || null, photoUrl, round2(body.amount), body.created_by || null]
+    );
+    if (body.cash_register_id) {
+      await client.query(
+        `INSERT INTO cash_movements
+         (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)
+         VALUES ($1, 'EXPENSE', 'MANTENIMIENTO_EQUIPO', 'equipment_maintenance', $2, $3, $4, $5)`,
+        [body.cash_register_id, maintenance.rows[0].id, round2(body.amount), `Mantenimiento ${body.area}/${body.section}: ${body.description}`, body.created_by || null]
+      );
+    }
+    return maintenance.rows[0];
+  });
+
+  res.status(201).json(withSignedPhoto(result));
+}));
+
 // GET historial de mantenimiento de un equipo
 equipmentRouter.get("/:id/maintenance", asyncRoute(async (req, res) => {
   const result = await pool.query(
