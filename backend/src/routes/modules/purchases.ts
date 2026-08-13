@@ -6,7 +6,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
-import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const purchasesRouter = Router();
 
@@ -195,4 +195,99 @@ purchasesRouter.post("/", asyncRoute(async (req, res) => {
   });
 
   res.status(201).json(result);
+}));
+
+// POST anular una compra por contra-asiento (nunca borrado fisico). Solo admin.
+purchasesRouter.post("/:id/cancel", requireAdmin, asyncRoute(async (req, res) => {
+  const authReq = req as AuthenticatedRequest;
+  const accionistaId = authReq.accionistaId ?? null;
+  const body = z.object({
+    cash_register_id: z.string().uuid().optional(), // requerido si la compra fue CASH
+    reason: z.string().optional(),
+    created_by: z.string().uuid().optional()
+  }).parse(req.body);
+
+  const result = await inTransaction(async (client) => {
+    // 1) Bloquear y validar la compra
+    const pr = await client.query(
+      "SELECT * FROM purchases WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
+      [req.params.id, accionistaId]
+    );
+    if (!pr.rows[0]) throw new ApiError(404, "Compra no encontrada para el accionista activo");
+    const purchase = pr.rows[0];
+    if (purchase.status === "CANCELLED") throw new ApiError(409, "La compra ya esta anulada");
+
+    // 2) Reverso financiero
+    if (purchase.payment_type === "CASH") {
+      if (!body.cash_register_id) throw new ApiError(400, "Para anular una compra a contado se requiere una caja abierta (cash_register_id)");
+      const reg = await client.query(
+        "SELECT id, status FROM cash_registers WHERE id = $1 AND accionista_id = $2",
+        [body.cash_register_id, accionistaId]
+      );
+      if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
+      if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+      await client.query(
+        `INSERT INTO cash_movements
+          (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)
+         VALUES ($1, 'INCOME', 'REVERSA_COMPRA', 'purchase', $2, $3, $4, $5)`,
+        [body.cash_register_id, purchase.id, purchase.total_amount,
+         `Anulacion compra ${purchase.purchase_number}${body.reason ? " - " + body.reason : ""}`, body.created_by ?? null]
+      );
+    } else {
+      // CREDIT: anular la CxP solo si no tiene abonos
+      const ap = await client.query(
+        "SELECT id, amount, balance FROM accounts_payable WHERE reference_type = 'purchase' AND reference_id = $1 AND accionista_id = $2 FOR UPDATE",
+        [purchase.id, accionistaId]
+      );
+      if (ap.rows[0]) {
+        if (Number(ap.rows[0].balance) !== Number(ap.rows[0].amount)) {
+          throw new ApiError(409, "Esta compra a credito ya tiene pagos; no se puede anular (reembolsos parciales no soportados)");
+        }
+        await client.query("UPDATE accounts_payable SET status = 'CANCELLED', balance = 0 WHERE id = $1", [ap.rows[0].id]);
+      }
+    }
+
+    // 3) Reverso de inventario (contra-movimiento por item), con guarda de stock
+    const items = await client.query("SELECT * FROM purchase_items WHERE purchase_id = $1", [purchase.id]);
+    for (const it of items.rows) {
+      const qty = Number(it.quantity);
+      if (it.item_type === "INSUMO") {
+        const cur = await client.query("SELECT stock_actual FROM insumos WHERE id = $1 FOR UPDATE", [it.insumo_id]);
+        if (!cur.rows[0]) throw new ApiError(404, "Insumo del detalle no encontrado");
+        if (Number(cur.rows[0].stock_actual) < qty) {
+          throw new ApiError(409, `No se puede anular: el stock del insumo ya bajo de lo comprado (${cur.rows[0].stock_actual} < ${qty})`);
+        }
+        await client.query(
+          `INSERT INTO insumo_movements
+            (insumo_id, movement, quantity, reference_type, reference_id, notes, created_by)
+           VALUES ($1, 'REVERSA', $2, 'purchase_cancel', $3, $4, $5)`,
+          [it.insumo_id, -qty, purchase.id, `Anulacion compra ${purchase.purchase_number}`, body.created_by ?? null]
+        );
+        await client.query("UPDATE insumos SET stock_actual = stock_actual - $2, updated_at = now() WHERE id = $1", [it.insumo_id, qty]);
+      } else {
+        const disp = await client.query(
+          `SELECT COALESCE(SUM(quantity),0)::numeric AS stock
+           FROM inventory_movements
+           WHERE product_id = $1 AND warehouse_id = $2 AND ownership = 'OWNED' AND accionista_id = $3`,
+          [it.product_id, it.warehouse_id, accionistaId]
+        );
+        if (Number(disp.rows[0].stock) < qty) {
+          throw new ApiError(409, `No se puede anular: el stock del producto en esa bodega ya bajo de lo comprado (${disp.rows[0].stock} < ${qty})`);
+        }
+        await client.query(
+          `INSERT INTO inventory_movements
+            (product_id, warehouse_id, movement, quantity, unit, reference_type, reference_id, ownership, cost_unit, total_cost, notes, created_by, accionista_id)
+           VALUES ($1, $2, 'REVERSAL', $3, $4, 'purchase_cancel', $5, 'OWNED', $6, $7, $8, $9, $10)`,
+          [it.product_id, it.warehouse_id, -qty, it.unit ?? "QQ", purchase.id, it.unit_price, -Number(it.line_total),
+           `Anulacion compra ${purchase.purchase_number}`, body.created_by ?? null, accionistaId]
+        );
+      }
+    }
+
+    // 4) Marcar la compra como anulada (sin borrado fisico)
+    const upd = await client.query("UPDATE purchases SET status = 'CANCELLED' WHERE id = $1 RETURNING *", [purchase.id]);
+    return upd.rows[0];
+  });
+
+  res.json(result);
 }));
