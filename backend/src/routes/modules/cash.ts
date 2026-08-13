@@ -217,6 +217,14 @@ cashRouter.post("/movements", asyncRoute(async (req, res) => {
     created_by: z.string().uuid().optional()
   }).parse(req.body);
 
+  const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
+  const reg = await pool.query(
+    "SELECT id, status FROM cash_registers WHERE id = $1 AND accionista_id = $2",
+    [body.cash_register_id, accionistaId]
+  );
+  if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
+  if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+
   const result = await pool.query(
     `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, created_by)
      VALUES ($1, $2, $3, $4, $5, $6)
@@ -241,6 +249,14 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     reference_id: z.string().optional(),
     created_by: z.string().uuid().optional()
   }).parse(req.body);
+
+  const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
+  const reg = await pool.query(
+    "SELECT id, status FROM cash_registers WHERE id = $1 AND accionista_id = $2",
+    [req.params.id, accionistaId]
+  );
+  if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
+  if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
 
   const result = await pool.query(
     `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, reference_type, reference_id, created_by)
