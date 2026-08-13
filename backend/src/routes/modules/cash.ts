@@ -207,11 +207,7 @@ cashRouter.post("/movements", asyncRoute(async (req, res) => {
   const body = z.object({
     cash_register_id: z.string().uuid(),
     movement: z.enum(["INCOME", "EXPENSE"]),
-    category: z.enum([
-      "ANTICIPO_AGRICULTOR", "GASTO_OPERATIVO", "PAGO_MANO_OBRA", "PAGO_AGRICULTOR",
-      "VENTA_CONTADO", "COBRO_MAQUILA", "OTRO_INGRESO", "COMPRA_SACOS",
-      "MANTENIMIENTO_EQUIPO", "CUENTAS_PAGAR", "FOMENTOS", "GASTO_OFICINA", "SERVICIOS_BASICOS"
-    ]),
+    category: z.string().min(1).max(80),
     amount: z.number().positive(),
     description: z.string().optional(),
     created_by: z.string().uuid().optional()
@@ -238,11 +234,7 @@ cashRouter.post("/movements", asyncRoute(async (req, res) => {
 cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
   const body = z.object({
     movement: z.enum(["INCOME", "EXPENSE"]),
-    category: z.enum([
-      "ANTICIPO_AGRICULTOR", "GASTO_OPERATIVO", "PAGO_MANO_OBRA", "PAGO_AGRICULTOR",
-      "VENTA_CONTADO", "COBRO_MAQUILA", "OTRO_INGRESO", "COMPRA_SACOS",
-      "MANTENIMIENTO_EQUIPO", "CUENTAS_PAGAR", "FOMENTOS", "GASTO_OFICINA", "SERVICIOS_BASICOS"
-    ]),
+    category: z.string().min(1).max(80),
     amount: z.number().positive(),
     description: z.string().optional(),
     reference_type: z.string().optional(),
