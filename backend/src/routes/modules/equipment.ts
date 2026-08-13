@@ -346,12 +346,25 @@ equipmentRouter.get("/:id/maintenance/summary", asyncRoute(async (req, res) => {
 
 // GET todos los mantenimientos (vista global)
 equipmentRouter.get("/maintenance/all", asyncRoute(async (req, res) => {
+  const area = typeof req.query.area === "string" ? req.query.area : undefined;
+  const from = typeof req.query.from === "string" ? req.query.from : undefined;
+  const to = typeof req.query.to === "string" ? req.query.to : undefined;
+  const conds: string[] = [];
+  const params: any[] = [];
+  if (area) { params.push(area); conds.push(`em.area = $${params.length}`); }
+  if (from) { params.push(from); conds.push(`em.created_at >= $${params.length}`); }
+  if (to)   { params.push(to);   conds.push(`em.created_at < ($${params.length}::date + 1)`); }
+  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   const result = await pool.query(
-    `SELECT em.*, e.name as equipment_name, e.type as equipment_type
+    `SELECT em.*, e.name AS equipment_name, e.type AS equipment_type,
+            COALESCE(em.area, e.type) AS area_label,
+            COALESCE(em.section, e.name) AS section_label
      FROM equipment_maintenance em
-     JOIN equipment e ON e.id = em.equipment_id
+     LEFT JOIN equipment e ON e.id = em.equipment_id
+     ${where}
      ORDER BY em.created_at DESC
-     LIMIT 200`
+     LIMIT 300`,
+    params
   );
   res.json(result.rows.map(withSignedPhoto));
 }));

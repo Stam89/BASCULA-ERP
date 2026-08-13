@@ -1393,6 +1393,7 @@ export function App() {
     receipt_photo_url: "",
     amount: ""
   });
+  const [maintenanceHistory, setMaintenanceHistory] = useState<any[]>([]);
   const [newEquipmentForm, setNewEquipmentForm] = useState({
     name: "",
     type: "PILADORA" as "PILADORA" | "SECADORA" | "MOTOR" | "OTRO",
@@ -3447,6 +3448,11 @@ export function App() {
     if (res.ok) setEquipment(await res.json());
   };
 
+  const refreshMaintenanceHistory = async () => {
+    try { setMaintenanceHistory(await apiGet<any[]>("/equipment/maintenance/all")); }
+    catch { /* noop */ }
+  };
+
   const refreshSuppliers = async () => {
     try { setSuppliers(await apiGet<Supplier[]>("/suppliers?all=1")); }
     catch { /* noop */ }
@@ -3673,6 +3679,7 @@ export function App() {
         amount: ""
       });
       await refreshCaja(registerId);
+      await refreshMaintenanceHistory();
       addToast("Mantenimiento registrado ✓", "success");
     } catch (e) {
       addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error");
@@ -7410,7 +7417,7 @@ export function App() {
                         className={cajaSubTab === t ? "active" : ""}
                         onClick={() => {
                           setCajaSubTab(t);
-                          if (t === "mantenimiento" && equipment.length === 0) refreshEquipment();
+                          if (t === "mantenimiento") { if (equipment.length === 0) refreshEquipment(); refreshMaintenanceHistory(); }
                         }}
                       >
                         <span style={{ marginRight: 4 }}>{icons[t]}</span>{labels[t]}
@@ -7847,6 +7854,24 @@ export function App() {
                     </label>
                     <button className="primary">Registrar mantenimiento</button>
                     </form>
+                    <div className="formPanel">
+                      <h2 style={{ marginBottom: 0 }}>Historial de mantenimientos</h2>
+                      {maintenanceHistory.length === 0 && <p className="muted">Sin mantenimientos aún</p>}
+                      <div className="equipList">
+                        {maintenanceHistory.map((m: any) => (
+                          <div key={m.id} className="equipItem">
+                            <div>
+                              <strong>{m.area_label}{m.section_label ? " / " + m.section_label : ""}</strong>
+                              <small>{(m.created_at || "").slice(0, 10)} · {m.maintenance_type} · {m.description}{m.provider ? " · " + m.provider : ""}</small>
+                            </div>
+                            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                              <strong>${Number(m.amount).toFixed(2)}</strong>
+                              {m.receipt_photo_signed_url && <a href={m.receipt_photo_signed_url} target="_blank" rel="noreferrer">foto</a>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                     </div>
                 )}
 
