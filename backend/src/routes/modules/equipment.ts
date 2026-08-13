@@ -64,14 +64,20 @@ equipmentRouter.post("/", asyncRoute(async (req, res) => {
     name: z.string().min(1),
     type: z.enum(["PILADORA", "SECADORA", "MOTOR", "OTRO"]),
     branch_id: z.string().uuid().optional(),
-    status: z.enum(["ACTIVA", "MANTENIMIENTO", "FUERA_SERVICIO"]).default("ACTIVA")
+    status: z.enum(["ACTIVA", "MANTENIMIENTO", "FUERA_SERVICIO"]).default("ACTIVA"),
+    code: z.string().optional(),
+    brand: z.string().optional(),
+    model: z.string().optional(),
+    serial: z.string().optional(),
+    location: z.string().optional()
   }).parse(req.body);
 
   const result = await pool.query(
-    `INSERT INTO equipment (name, type, branch_id, status)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO equipment (name, type, branch_id, status, code, brand, model, serial, location)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING *`,
-    [body.name, body.type, body.branch_id || null, body.status]
+    [body.name, body.type, body.branch_id || null, body.status,
+     body.code || null, body.brand || null, body.model || null, body.serial || null, body.location || null]
   );
   res.status(201).json(result.rows[0]);
 }));
@@ -80,7 +86,12 @@ equipmentRouter.post("/", asyncRoute(async (req, res) => {
 equipmentRouter.patch("/:id", asyncRoute(async (req, res) => {
   const body = z.object({
     status: z.enum(["ACTIVA", "MANTENIMIENTO", "FUERA_SERVICIO"]).optional(),
-    name: z.string().optional()
+    name: z.string().optional(),
+    code: z.string().optional(),
+    brand: z.string().optional(),
+    model: z.string().optional(),
+    serial: z.string().optional(),
+    location: z.string().optional()
   }).parse(req.body);
 
   const updates = [];
@@ -94,6 +105,12 @@ equipmentRouter.patch("/:id", asyncRoute(async (req, res) => {
   if (body.name) {
     updates.push(`name = $${paramCount++}`);
     values.push(body.name);
+  }
+  for (const campo of ["code", "brand", "model", "serial", "location"] as const) {
+    if (body[campo] !== undefined) {
+      updates.push(`${campo} = $${paramCount++}`);
+      values.push(body[campo]);
+    }
   }
 
   if (updates.length === 0) { res.status(400).json({ error: "Sin cambios" }); return; }
@@ -116,7 +133,16 @@ equipmentRouter.post("/:id/maintenance", asyncRoute(async (req, res) => {
     receipt_photo_base64: z.string().optional(), // Base64 encoded image
     amount: z.number().positive(),
     cash_register_id: z.string().uuid().optional(),
-    created_by: z.string().uuid().optional()
+    created_by: z.string().uuid().optional(),
+    reported_failure: z.string().optional(),
+    diagnosis: z.string().optional(),
+    work_done: z.string().optional(),
+    parts_cost: z.number().nonnegative().optional(),
+    labor_cost: z.number().nonnegative().optional(),
+    other_cost: z.number().nonnegative().optional(),
+    responsible: z.string().optional(),
+    next_maintenance_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    status: z.string().optional()
   }).parse(req.body);
 
   // Aislamiento por accionista: si se va a registrar el gasto en caja, la caja
@@ -164,8 +190,9 @@ equipmentRouter.post("/:id/maintenance", asyncRoute(async (req, res) => {
     // Crear registro de mantenimiento
     const maintenance = await client.query(
       `INSERT INTO equipment_maintenance
-       (equipment_id, maintenance_type, description, provider, invoice_number, receipt_photo_url, amount, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       (equipment_id, maintenance_type, description, provider, invoice_number, receipt_photo_url, amount, created_by,
+        reported_failure, diagnosis, work_done, parts_cost, labor_cost, other_cost, responsible, next_maintenance_date, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, COALESCE($17, 'COMPLETADO'))
        RETURNING *`,
       [
         req.params.id,
@@ -175,7 +202,16 @@ equipmentRouter.post("/:id/maintenance", asyncRoute(async (req, res) => {
         body.invoice_number || null,
         photoUrl,
         round2(body.amount),
-        body.created_by || null
+        body.created_by || null,
+        body.reported_failure || null,
+        body.diagnosis || null,
+        body.work_done || null,
+        round2(body.parts_cost ?? 0),
+        round2(body.labor_cost ?? 0),
+        round2(body.other_cost ?? 0),
+        body.responsible || null,
+        body.next_maintenance_date || null,
+        body.status || null
       ]
     );
 
