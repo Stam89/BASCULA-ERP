@@ -1394,6 +1394,7 @@ export function App() {
     amount: ""
   });
   const [maintenanceHistory, setMaintenanceHistory] = useState<any[]>([]);
+  const [maintFilter, setMaintFilter] = useState({ from: "", to: "", area: "", type: "" });
   const [newEquipmentForm, setNewEquipmentForm] = useState({
     name: "",
     type: "PILADORA" as "PILADORA" | "SECADORA" | "MOTOR" | "OTRO",
@@ -3449,9 +3450,31 @@ export function App() {
   };
 
   const refreshMaintenanceHistory = async () => {
-    try { setMaintenanceHistory(await apiGet<any[]>("/equipment/maintenance/all")); }
-    catch { /* noop */ }
+    try {
+      const qs = new URLSearchParams();
+      if (maintFilter.area) qs.set("area", maintFilter.area);
+      if (maintFilter.from) qs.set("from", maintFilter.from);
+      if (maintFilter.to) qs.set("to", maintFilter.to);
+      const q = qs.toString();
+      setMaintenanceHistory(await apiGet<any[]>(`/equipment/maintenance/all${q ? "?" + q : ""}`));
+    } catch { /* noop */ }
   };
+
+  const maintReportRows = () =>
+    maintenanceHistory
+      .filter((m: any) => !maintFilter.type || m.maintenance_type === maintFilter.type)
+      .map((m: any) => [
+        (m.created_at || "").slice(0, 10),
+        m.area_label || "",
+        m.section_label || "",
+        m.maintenance_type,
+        m.description || "",
+        m.provider || "",
+        Number(m.amount || 0).toFixed(2)
+      ]);
+  const MAINT_HEADERS = ["Fecha", "Área", "Sección", "Tipo", "Descripción", "Proveedor", "Monto"];
+  const exportMaintCsv = () => exportReportCsv(MAINT_HEADERS, maintReportRows(), "mantenimiento.csv");
+  const printMaintReport = () => printReport("Reporte de Mantenimiento", MAINT_HEADERS, maintReportRows());
 
   const refreshSuppliers = async () => {
     try { setSuppliers(await apiGet<Supplier[]>("/suppliers?all=1")); }
@@ -7855,22 +7878,53 @@ export function App() {
                     <button className="primary">Registrar mantenimiento</button>
                     </form>
                     <div className="formPanel">
-                      <h2 style={{ marginBottom: 0 }}>Historial de mantenimientos</h2>
-                      {maintenanceHistory.length === 0 && <p className="muted">Sin mantenimientos aún</p>}
-                      <div className="equipList">
-                        {maintenanceHistory.map((m: any) => (
-                          <div key={m.id} className="equipItem">
-                            <div>
-                              <strong>{m.area_label}{m.section_label ? " / " + m.section_label : ""}</strong>
-                              <small>{(m.created_at || "").slice(0, 10)} · {m.maintenance_type} · {m.description}{m.provider ? " · " + m.provider : ""}</small>
-                            </div>
-                            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
-                              <strong>${Number(m.amount).toFixed(2)}</strong>
-                              {m.receipt_photo_signed_url && <a href={m.receipt_photo_signed_url} target="_blank" rel="noreferrer">foto</a>}
-                            </div>
-                          </div>
-                        ))}
+                      <h2 style={{ marginBottom: 8 }}>Historial de mantenimientos</h2>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8, alignItems: "flex-end" }}>
+                        <label style={{ margin: 0 }}><span>Desde</span>
+                          <input type="date" value={maintFilter.from} onChange={(e: any) => setMaintFilter({ ...maintFilter, from: e.target.value })} /></label>
+                        <label style={{ margin: 0 }}><span>Hasta</span>
+                          <input type="date" value={maintFilter.to} onChange={(e: any) => setMaintFilter({ ...maintFilter, to: e.target.value })} /></label>
+                        <label style={{ margin: 0 }}><span>Área</span>
+                          <select value={maintFilter.area} onChange={(e: any) => setMaintFilter({ ...maintFilter, area: e.target.value })}>
+                            <option value="">Todas</option>
+                            {Object.keys(SECCIONES_POR_AREA).map((a) => (<option key={a} value={a}>{a}</option>))}
+                          </select></label>
+                        <label style={{ margin: 0 }}><span>Tipo</span>
+                          <select value={maintFilter.type} onChange={(e: any) => setMaintFilter({ ...maintFilter, type: e.target.value })}>
+                            <option value="">Todos</option>
+                            <option value="CORRECTIVO">Correctivo</option>
+                            <option value="PREVENTIVO">Preventivo</option>
+                            <option value="REPUESTO">Repuesto</option>
+                            <option value="MANO_OBRA">Mano de obra</option>
+                          </select></label>
+                        <button type="button" onClick={refreshMaintenanceHistory}>Filtrar</button>
+                        <button type="button" onClick={exportMaintCsv}>Exportar CSV</button>
+                        <button type="button" onClick={printMaintReport}>Imprimir</button>
                       </div>
+                      {(() => {
+                        const vis = maintenanceHistory.filter((m: any) => !maintFilter.type || m.maintenance_type === maintFilter.type);
+                        const total = vis.reduce((s: number, m: any) => s + Number(m.amount || 0), 0);
+                        return (
+                          <>
+                            <p style={{ fontWeight: 600, margin: "4px 0" }}>{vis.length} registros · Total: ${total.toFixed(2)}</p>
+                            {vis.length === 0 && <p className="muted">Sin mantenimientos</p>}
+                            <div className="equipList">
+                              {vis.map((m: any) => (
+                                <div key={m.id} className="equipItem">
+                                  <div>
+                                    <strong>{m.area_label}{m.section_label ? " / " + m.section_label : ""}</strong>
+                                    <small>{(m.created_at || "").slice(0, 10)} · {m.maintenance_type} · {m.description}{m.provider ? " · " + m.provider : ""}</small>
+                                  </div>
+                                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                                    <strong>${Number(m.amount).toFixed(2)}</strong>
+                                    {m.receipt_photo_signed_url && <a href={m.receipt_photo_signed_url} target="_blank" rel="noreferrer">foto</a>}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        );
+                      })()}
                     </div>
                     </div>
                 )}
