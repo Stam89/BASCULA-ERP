@@ -1405,6 +1405,7 @@ export function App() {
   const [editingSupplierId, setEditingSupplierId] = useState<string | null>(null);
   const [supplierEdit, setSupplierEdit] = useState({ name: "", identification: "", phone: "", email: "", address: "", notes: "" });
   const [purchases, setPurchases] = useState<any[]>([]);
+  const [purchaseFilter, setPurchaseFilter] = useState({ from: "", to: "", supplier_id: "", payment_type: "" });
   const [purchaseForm, setPurchaseForm] = useState({
     supplier_id: "",
     payment_type: "CASH" as "CASH" | "CREDIT",
@@ -3480,6 +3481,26 @@ export function App() {
     try { setSuppliers(await apiGet<Supplier[]>("/suppliers?all=1")); }
     catch { /* noop */ }
   };
+
+  const purchasesFiltered = () => purchases.filter((c: any) => {
+    const d = (c.purchase_date || "").slice(0, 10);
+    if (purchaseFilter.from && d < purchaseFilter.from) return false;
+    if (purchaseFilter.to && d > purchaseFilter.to) return false;
+    if (purchaseFilter.supplier_id && c.supplier_id !== purchaseFilter.supplier_id) return false;
+    if (purchaseFilter.payment_type && c.payment_type !== purchaseFilter.payment_type) return false;
+    return true;
+  });
+  const PURCH_HEADERS = ["N°", "Fecha", "Proveedor", "Pago", "Estado", "Total"];
+  const purchReportRows = () => purchasesFiltered().map((c: any) => [
+    c.purchase_number,
+    (c.purchase_date || "").slice(0, 10),
+    c.supplier_name || "",
+    c.payment_type === "CASH" ? "Contado" : "Credito",
+    c.status,
+    Number(c.total_amount || 0).toFixed(2)
+  ]);
+  const exportPurchCsv = () => exportReportCsv(PURCH_HEADERS, purchReportRows(), "compras.csv");
+  const printPurchReport = () => printReport("Reporte de Compras", PURCH_HEADERS, purchReportRows());
 
   const refreshPurchases = async () => {
     try { setPurchases(await apiGet<any[]>("/purchases")); }
@@ -7203,21 +7224,49 @@ export function App() {
               <button type="button" className="primary" onClick={submitPurchase}>Registrar compra</button>
             </div>
 
-            {/* ── Compras recientes ── */}
+            {/* ── Compras (reporte) ── */}
             <div className="formPanel" style={{ marginBottom: 16 }}>
-              <h2 style={{ marginBottom: 0 }}>Compras recientes</h2>
-              {purchases.length === 0 && <p className="muted">Sin compras aun</p>}
-              <div className="equipList">
-                {purchases.map((c) => (
-                  <div key={c.id} className="equipItem">
-                    <div>
-                      <strong>{c.purchase_number} — {c.supplier_name}</strong>
-                      <small>{(c.purchase_date || "").slice(0, 10)} · {c.payment_type === "CASH" ? "Contado" : "Credito"} · {c.status}</small>
-                    </div>
-                    <strong>${Number(c.total_amount).toFixed(2)}</strong>
-                  </div>
-                ))}
+              <h2 style={{ marginBottom: 8 }}>Compras (reporte)</h2>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8, alignItems: "flex-end" }}>
+                <label style={{ margin: 0 }}><span>Desde</span>
+                  <input type="date" value={purchaseFilter.from} onChange={(e: any) => setPurchaseFilter({ ...purchaseFilter, from: e.target.value })} /></label>
+                <label style={{ margin: 0 }}><span>Hasta</span>
+                  <input type="date" value={purchaseFilter.to} onChange={(e: any) => setPurchaseFilter({ ...purchaseFilter, to: e.target.value })} /></label>
+                <label style={{ margin: 0 }}><span>Proveedor</span>
+                  <select value={purchaseFilter.supplier_id} onChange={(e: any) => setPurchaseFilter({ ...purchaseFilter, supplier_id: e.target.value })}>
+                    <option value="">Todos</option>
+                    {suppliers.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
+                  </select></label>
+                <label style={{ margin: 0 }}><span>Pago</span>
+                  <select value={purchaseFilter.payment_type} onChange={(e: any) => setPurchaseFilter({ ...purchaseFilter, payment_type: e.target.value })}>
+                    <option value="">Todos</option>
+                    <option value="CASH">Contado</option>
+                    <option value="CREDIT">Credito</option>
+                  </select></label>
+                <button type="button" onClick={exportPurchCsv}>Exportar CSV</button>
+                <button type="button" onClick={printPurchReport}>Imprimir</button>
               </div>
+              {(() => {
+                const vis = purchasesFiltered();
+                const total = vis.reduce((s: number, c: any) => s + Number(c.total_amount || 0), 0);
+                return (
+                  <>
+                    <p style={{ fontWeight: 600, margin: "4px 0" }}>{vis.length} compras · Total: ${total.toFixed(2)}</p>
+                    {vis.length === 0 && <p className="muted">Sin compras</p>}
+                    <div className="equipList">
+                      {vis.map((c: any) => (
+                        <div key={c.id} className="equipItem">
+                          <div>
+                            <strong>{c.purchase_number} — {c.supplier_name}</strong>
+                            <small>{(c.purchase_date || "").slice(0, 10)} · {c.payment_type === "CASH" ? "Contado" : "Credito"} · {c.status}</small>
+                          </div>
+                          <strong>${Number(c.total_amount).toFixed(2)}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                );
+              })()}
             </div>
 
             {/* ── Catalogo de proveedores (existente) ── */}
