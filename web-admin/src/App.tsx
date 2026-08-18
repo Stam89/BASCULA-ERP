@@ -1406,6 +1406,8 @@ export function App() {
   const [supplierEdit, setSupplierEdit] = useState({ name: "", identification: "", phone: "", email: "", address: "", notes: "" });
   const [purchases, setPurchases] = useState<any[]>([]);
   const [purchaseFilter, setPurchaseFilter] = useState({ from: "", to: "", supplier_id: "", payment_type: "" });
+  const [invMovs, setInvMovs] = useState<any[]>([]);
+  const [invFilter, setInvFilter] = useState({ from: "", to: "", movement: "" });
   const [purchaseForm, setPurchaseForm] = useState({
     supplier_id: "",
     payment_type: "CASH" as "CASH" | "CREDIT",
@@ -3331,7 +3333,7 @@ export function App() {
       loadMillingDrafts().catch(() => undefined);
       loadProductionHistory().catch(() => undefined);
     }
-    if (activeTab === "Inventario") refreshSacks().catch(() => undefined);
+    if (activeTab === "Inventario") { refreshSacks().catch(() => undefined); refreshInvMovs().catch(() => undefined); }
     if (activeTab === "Ventas") refreshCustomersAndSales().catch(() => undefined);
     if (activeTab === "Compras") { refreshSuppliers().catch(() => undefined); refreshPurchases().catch(() => undefined); }
     if (activeTab === "Por Cobrar") refreshReceivables().catch(() => undefined);
@@ -3501,6 +3503,28 @@ export function App() {
   ]);
   const exportPurchCsv = () => exportReportCsv(PURCH_HEADERS, purchReportRows(), "compras.csv");
   const printPurchReport = () => printReport("Reporte de Compras", PURCH_HEADERS, purchReportRows());
+  const refreshInvMovs = async () => {
+    try { setInvMovs(await apiGet<any[]>("/inventory/movements")); }
+    catch { /* noop */ }
+  };
+  const invMovsFiltered = () => invMovs.filter((m: any) => {
+    const d = (m.created_at || "").slice(0, 10);
+    if (invFilter.from && d < invFilter.from) return false;
+    if (invFilter.to && d > invFilter.to) return false;
+    if (invFilter.movement && m.movement !== invFilter.movement) return false;
+    return true;
+  });
+  const INV_HEADERS = ["Fecha", "Producto", "Bodega", "Movimiento", "Cantidad", "Referencia"];
+  const invReportRows = () => invMovsFiltered().map((m: any) => [
+    (m.created_at || "").slice(0, 10),
+    m.product_name || "",
+    m.warehouse_name || "",
+    m.movement,
+    Number(m.quantity || 0).toFixed(2),
+    m.reference_type || ""
+  ]);
+  const exportInvCsv = () => exportReportCsv(INV_HEADERS, invReportRows(), "inventario_movimientos.csv");
+  const printInvReport = () => printReport("Reporte de Movimientos de Inventario", INV_HEADERS, invReportRows());
 
   const refreshPurchases = async () => {
     try { setPurchases(await apiGet<any[]>("/purchases")); }
@@ -6302,6 +6326,49 @@ export function App() {
 
         {activeTab === "Inventario" && (
           <section className="panelGrid">
+            <div className="formPanel">
+              <h2 style={{ marginBottom: 8 }}>Movimientos de inventario (reporte)</h2>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8, alignItems: "flex-end" }}>
+                <label style={{ margin: 0 }}><span>Desde</span>
+                  <input type="date" value={invFilter.from} onChange={(e: any) => setInvFilter({ ...invFilter, from: e.target.value })} /></label>
+                <label style={{ margin: 0 }}><span>Hasta</span>
+                  <input type="date" value={invFilter.to} onChange={(e: any) => setInvFilter({ ...invFilter, to: e.target.value })} /></label>
+                <label style={{ margin: 0 }}><span>Movimiento</span>
+                  <select value={invFilter.movement} onChange={(e: any) => setInvFilter({ ...invFilter, movement: e.target.value })}>
+                    <option value="">Todos</option>
+                    <option value="IN">Entrada (IN)</option>
+                    <option value="OUT">Salida (OUT)</option>
+                    <option value="ADJUSTMENT">Ajuste</option>
+                    <option value="PROCESS_INPUT">Consumo proceso</option>
+                    <option value="PROCESS_OUTPUT">Salida proceso</option>
+                    <option value="REVERSAL">Reversa</option>
+                  </select></label>
+                <button type="button" onClick={exportInvCsv}>Exportar CSV</button>
+                <button type="button" onClick={printInvReport}>Imprimir</button>
+              </div>
+              {(() => {
+                const vis = invMovsFiltered();
+                const entradas = vis.filter((m: any) => Number(m.quantity) > 0).reduce((s: number, m: any) => s + Number(m.quantity), 0);
+                const salidas = vis.filter((m: any) => Number(m.quantity) < 0).reduce((s: number, m: any) => s + Number(m.quantity), 0);
+                return (
+                  <>
+                    <p style={{ fontWeight: 600, margin: "4px 0" }}>{vis.length} mov. · Entradas: {entradas.toFixed(2)} · Salidas: {salidas.toFixed(2)}</p>
+                    {vis.length === 0 && <p className="muted">Sin movimientos</p>}
+                    <div className="equipList">
+                      {vis.slice(0, 300).map((m: any) => (
+                        <div key={m.id} className="equipItem">
+                          <div>
+                            <strong>{m.product_name}</strong>
+                            <small>{(m.created_at || "").slice(0, 10)} · {m.warehouse_name} · {m.movement}{m.reference_type ? " · " + m.reference_type : ""}</small>
+                          </div>
+                          <strong>{Number(m.quantity).toFixed(2)}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
             <form className="formPanel" onSubmit={(event) => submitStockAdjustment(event).catch((error) => setMessage(error.message))}>
               <h2>Cuadre de stock</h2>
               <Select
