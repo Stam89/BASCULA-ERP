@@ -36,6 +36,7 @@ import { tunnelReservationsRouter } from "./modules/tunnel-reservations.js";
 import { tunnelOccupancyRouter } from "./modules/tunnel-occupancy.js";
 import { suppliersRouter } from "./modules/suppliers.js";
 import { purchasesRouter } from "./modules/purchases.js";
+import { costosRouter } from "./modules/costos.js";
 
 export const routes = Router();
 
@@ -88,3 +89,4 @@ routes.use("/tunnel-reservations", tunnelReservationsRouter);
 routes.use("/tunnel-occupancy", tunnelOccupancyRouter);
 routes.use("/suppliers", suppliersRouter);
 routes.use("/purchases", purchasesRouter);
+routes.use("/costos", costosRouter);
