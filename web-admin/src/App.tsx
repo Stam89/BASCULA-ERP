@@ -1398,7 +1398,12 @@ export function App() {
   const [newEquipmentForm, setNewEquipmentForm] = useState({
     name: "",
     type: "PILADORA" as "PILADORA" | "SECADORA" | "MOTOR" | "OTRO",
-    status: "ACTIVA" as "ACTIVA" | "MANTENIMIENTO" | "FUERA_SERVICIO"
+    status: "ACTIVA" as "ACTIVA" | "MANTENIMIENTO" | "FUERA_SERVICIO",
+    code: "",
+    brand: "",
+    model: "",
+    serial: "",
+    location: ""
   });
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [supplierForm, setSupplierForm] = useState({ name: "", identification: "", phone: "", email: "", address: "", notes: "" });
@@ -3664,12 +3669,17 @@ export function App() {
         body: JSON.stringify({
           name: newEquipmentForm.name,
           type: newEquipmentForm.type,
-          status: newEquipmentForm.status
+          status: newEquipmentForm.status,
+          code: newEquipmentForm.code || undefined,
+          brand: newEquipmentForm.brand || undefined,
+          model: newEquipmentForm.model || undefined,
+          serial: newEquipmentForm.serial || undefined,
+          location: newEquipmentForm.location || undefined
         })
       });
       if (!res.ok) throw new Error(await res.text());
 
-      setNewEquipmentForm({ name: "", type: "PILADORA", status: "ACTIVA" });
+      setNewEquipmentForm({ name: "", type: "PILADORA", status: "ACTIVA", code: "", brand: "", model: "", serial: "", location: "" });
       await refreshEquipment();
       addToast("Máquina creada ✓", "success");
     } catch (e) {
@@ -7880,6 +7890,32 @@ export function App() {
                           <option value="MOTOR">Motor</option>
                           <option value="OTRO">Otro</option>
                         </select>
+                      </label>
+                      <label>
+                        <span>Código</span>
+                        <input type="text" value={newEquipmentForm.code}
+                          onChange={(e: any) => setNewEquipmentForm({ ...newEquipmentForm, code: e.target.value })}
+                          placeholder="Ej: M-01" />
+                      </label>
+                      <label>
+                        <span>Marca</span>
+                        <input type="text" value={newEquipmentForm.brand}
+                          onChange={(e: any) => setNewEquipmentForm({ ...newEquipmentForm, brand: e.target.value })} />
+                      </label>
+                      <label>
+                        <span>Modelo</span>
+                        <input type="text" value={newEquipmentForm.model}
+                          onChange={(e: any) => setNewEquipmentForm({ ...newEquipmentForm, model: e.target.value })} />
+                      </label>
+                      <label>
+                        <span>Serie</span>
+                        <input type="text" value={newEquipmentForm.serial}
+                          onChange={(e: any) => setNewEquipmentForm({ ...newEquipmentForm, serial: e.target.value })} />
+                      </label>
+                      <label>
+                        <span>Ubicación</span>
+                        <input type="text" value={newEquipmentForm.location}
+                          onChange={(e: any) => setNewEquipmentForm({ ...newEquipmentForm, location: e.target.value })} />
                       </label>
                       <button type="button" className="primary" onClick={submitNewEquipment}>
                         Agregar
