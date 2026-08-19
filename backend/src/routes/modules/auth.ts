@@ -9,7 +9,7 @@ import { APP_MODULES, requireAdmin, requireAuth, type AuthenticatedRequest } fro
 
 export const authRouter = Router();
 
-type Accionista = { id: string; name: string; code: string; puede_envejecer: boolean; allowed_modules: string[] };
+type Accionista = { id: string; name: string; code: string; tipo: string; puede_envejecer: boolean; allowed_modules: string[] };
 
 // Accionistas a los que puede acceder el usuario, CON los módulos permitidos en
 // cada uno (permisos por accionista). El administrador accede a todos con todos
@@ -17,12 +17,12 @@ type Accionista = { id: string; name: string; code: string; puede_envejecer: boo
 async function accionistasForUser(userId: string, roleName: string | null): Promise<Accionista[]> {
   if (roleName === "ADMINISTRADOR") {
     const r = await pool.query<Omit<Accionista, "allowed_modules">>(
-      "SELECT id, name, code, puede_envejecer FROM accionistas WHERE is_active = true ORDER BY name"
+      "SELECT id, name, code, tipo, puede_envejecer FROM accionistas WHERE is_active = true ORDER BY name"
     );
     return r.rows.map((a) => ({ ...a, allowed_modules: [...APP_MODULES] }));
   }
   const r = await pool.query<Accionista>(
-    `SELECT a.id, a.name, a.code, a.puede_envejecer,
+    `SELECT a.id, a.name, a.code, a.tipo, a.puede_envejecer,
             COALESCE(ua.allowed_modules, '{}') AS allowed_modules
      FROM accionistas a
      JOIN user_accionistas ua ON ua.accionista_id = a.id
@@ -201,7 +201,7 @@ authRouter.put("/users/:id", requireAuth, requireAdmin, asyncRoute(async (req, r
 // ── Accionistas (solo administradores) ──────────────────────────────────────
 
 authRouter.get("/accionistas", requireAuth, requireAdmin, asyncRoute(async (_req, res) => {
-  const result = await pool.query("SELECT id, name, code, is_active, puede_envejecer FROM accionistas ORDER BY name");
+  const result = await pool.query("SELECT id, name, code, tipo, is_active, puede_envejecer FROM accionistas ORDER BY name");
   res.json(result.rows);
 }));
 

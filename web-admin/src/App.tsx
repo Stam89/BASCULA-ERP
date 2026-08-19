@@ -36,7 +36,7 @@ type AuthUser = {
   allowed_modules?: string[] | null;
 };
 
-type Accionista = { id: string; name: string; code: string; puede_envejecer?: boolean; allowed_modules?: string[] };
+type Accionista = { id: string; name: string; code: string; tipo?: string; puede_envejecer?: boolean; allowed_modules?: string[] };
 
 // Selección / envejecido de producto terminado (persona externa), por lotes.
 type ExternalProvider = { id: string; name: string; identification: string | null; phone: string | null };
@@ -5358,11 +5358,23 @@ export function App() {
               onChange={(e) => switchAccionista(e.target.value)}
             >
               {accionistas.map((a) => (
-                <option key={a.id} value={a.id}>{a.name}</option>
+                <option key={a.id} value={a.id}>{a.name}{a.tipo === "MATRIZ" ? " · Planta / Matriz" : " · Socio Operativo"}</option>
               ))}
             </select>
           </label>
         )}
+        {(() => {
+          const act = accionistas.find((a) => a.id === activeAccionistaId);
+          if (!act) return null;
+          const esMatriz = act.tipo === "MATRIZ";
+          return (
+            <div style={{ padding: "0 10px 8px" }}>
+              <span style={{ display: "inline-block", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: esMatriz ? "#065f46" : "#1e3a8a", color: "#fff" }}>
+                {esMatriz ? "🏭 Planta / Matriz" : "🤝 Socio Operativo"}
+              </span>
+            </div>
+          );
+        })()}
         <div className="navSearchBox" style={{ padding: "0 10px 8px" }}>
           <input
             type="text"
