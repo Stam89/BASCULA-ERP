@@ -1164,7 +1164,7 @@ export function App() {
   const [liqResult, setLiqResult] = useState<LiqResultItem[] | null>(null);
 
   // ── Caja ──────────────────────────────────────────────────────────────────
-  const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "movimiento" | "gastos" | "sacos" | "mantenimiento" | "venta_detalle" | "cuentas" | "fomentos">("resumen");
+  const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "movimiento" | "gastos" | "sacos" | "mantenimiento" | "equipos" | "venta_detalle" | "cuentas" | "fomentos">("resumen");
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
   const [cashSummary, setCashSummary] = useState<CashSummary | null>(null);
   const [cashPayables, setCashPayables] = useState<AccountPayable[]>([]);
@@ -7548,7 +7548,7 @@ export function App() {
 
                 {/* Sub-tabs profesional */}
                 <nav className="cajaSubNav">
-                  {(["resumen", "venta_detalle", "anticipo", "movimiento", "gastos", "sacos", "mantenimiento", "fomentos"] as const).map((t) => {
+                  {(["resumen", "venta_detalle", "anticipo", "movimiento", "gastos", "sacos", "mantenimiento", "equipos", "fomentos"] as const).map((t) => {
                     const icons = {
                       resumen: "📋",
                       anticipo: "💸",
@@ -7556,6 +7556,7 @@ export function App() {
                       gastos: "🧾",
                       sacos: "📦",
                       mantenimiento: "🔧",
+                      equipos: "⚙️",
                       venta_detalle: "🛒",
                       cuentas: "📊",
                       fomentos: "🌾"
@@ -7567,6 +7568,7 @@ export function App() {
                       gastos: "Gastos",
                       sacos: "Sacos",
                       mantenimiento: "Mantenimiento",
+                      equipos: "Equipos",
                       venta_detalle: "Venta Detalle",
                       cuentas: `Por pagar${cashPayables.length > 0 ? ` (${cashPayables.length})` : ""}`,
                       fomentos: `Fomentos${fomentos.filter(f=>f.status==="ACTIVOS").length > 0 ? ` (${fomentos.filter(f=>f.status==="ACTIVOS").length})` : ""}`
@@ -7579,6 +7581,7 @@ export function App() {
                         onClick={() => {
                           setCajaSubTab(t);
                           if (t === "mantenimiento") { if (equipment.length === 0) refreshEquipment(); refreshMaintenanceHistory(); }
+                          if (t === "equipos" && equipment.length === 0) refreshEquipment();
                         }}
                       >
                         <span style={{ marginRight: 4 }}>{icons[t]}</span>{labels[t]}
@@ -7877,9 +7880,9 @@ export function App() {
                 )}
 
                 {/* ── Mantenimiento de Equipos ── */}
-                {cajaSubTab === "mantenimiento" && (
+                {cajaSubTab === "equipos" && (
                   <div className="maintLayout">
-                    {/* Formulario Crear Máquina */}
+                    {/* Catálogo de máquinas */}
                     <div className="formPanel">
                       <h2>🔧 Agregar máquina</h2>
                       <label>
@@ -7949,7 +7952,11 @@ export function App() {
                         ))}
                       </div>
                     </div>
+                  </div>
+                )}
 
+                {cajaSubTab === "mantenimiento" && (
+                  <div className="maintLayout">
                     {/* Formulario Registrar Mantenimiento */}
                     <form className="formPanel cajaForm" onSubmit={(event: any) => {
                       event.preventDefault();
