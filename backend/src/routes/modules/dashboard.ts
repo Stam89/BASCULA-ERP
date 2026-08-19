@@ -41,7 +41,7 @@ dashboardRouter.get("/panel", requireAuth, requirePanelAccess, asyncRoute(async 
   const from = `${monthStr}-01`;
   const to = new Date(yy, mm, 0).toISOString().slice(0, 10); // último día del mes
 
-  const [accionistas, compras, ventas, inventario, bancos, ar, ap, prestamos, comprasSerie, ventasSerie, seco] = await Promise.all([
+  const [accionistas, compras, ventas, inventario, bancos, ar, ap, prestamos, comprasSerie, ventasSerie, seco, servicios, costoOp] = await Promise.all([
     pool.query("SELECT id, name FROM accionistas WHERE is_active = true ORDER BY name"),
     pool.query(
       `SELECT accionista_id, COALESCE(SUM(gross_amount),0)::float total, COALESCE(SUM(quintals),0)::float qq, COUNT(*)::int cnt
@@ -97,7 +97,24 @@ dashboardRouter.get("/panel", requireAuth, requirePanelAccess, asyncRoute(async 
        WHERE d.status = 'COMPLETED'
          AND COALESCE(d.apartado_arianos, false) = false
          AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id)
-       GROUP BY l.accionista_id`)
+       GROUP BY l.accionista_id`),
+    // F-D: ingresos por servicio de pilado a socios (facturado en el mes,
+    // pendiente por cobrar, y cobrado en el mes). Aditivo: no toca los totales.
+    pool.query(
+      `SELECT
+         (SELECT COALESCE(SUM(total),0) FROM pilado_services WHERE service_date BETWEEN $1 AND $2)::float AS facturado,
+         (SELECT COUNT(*) FROM pilado_services WHERE service_date BETWEEN $1 AND $2)::int AS cnt,
+         (SELECT COALESCE(SUM(ar.balance),0) FROM accounts_receivable ar
+            WHERE ar.reference_type='pilado_service' AND ar.status IN ('CONFIRMED','PARTIAL') AND ar.balance>0)::float AS pendiente,
+         (SELECT COALESCE(SUM(amount),0) FROM cash_movements
+            WHERE category='COBRO_SERVICIO_PILADO' AND movement='INCOME' AND created_at::date BETWEEN $1 AND $2)::float AS cobrado`,
+      [from, to]),
+    // F-D: costo operativo (planta/CEYRO) del mes y costo por QQ producido.
+    pool.query(
+      `SELECT COALESCE(SUM(luz+mantenimiento+mano_obra+combustible+desgaste+otros),0)::float AS total,
+              COALESCE(SUM(qq_producidos),0)::float AS qq
+       FROM costo_operativo WHERE fecha BETWEEN $1 AND $2`,
+      [from, to])
   ]);
 
   const byAcc = (rows: Array<Record<string, unknown>>) => {
@@ -174,6 +191,17 @@ dashboardRouter.get("/panel", requireAuth, requirePanelAccess, asyncRoute(async 
     por_cobrar: { total: porCobrar, cnt: ar.rows[0].cnt },
     por_pagar: { total: porPagar, cnt: ap.rows[0].cnt },
     prestamos: { total: totalPrestamos, cnt: prestamos.rows[0].cnt },
+    servicios_pilado: {
+      facturado: Number(servicios.rows[0].facturado),
+      pendiente: Number(servicios.rows[0].pendiente),
+      cobrado: Number(servicios.rows[0].cobrado),
+      cnt: Number(servicios.rows[0].cnt)
+    },
+    costo_operativo: {
+      total: Number(costoOp.rows[0].total),
+      qq: Number(costoOp.rows[0].qq),
+      por_qq: Number(costoOp.rows[0].qq) > 0 ? Math.round((Number(costoOp.rows[0].total) / Number(costoOp.rows[0].qq)) * 100) / 100 : 0
+    },
     alertas
   });
 }));

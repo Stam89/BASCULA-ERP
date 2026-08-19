@@ -282,6 +282,8 @@ type PanelData = {
   por_cobrar: { total: number; cnt: number };
   por_pagar: { total: number; cnt: number };
   prestamos: { total: number; cnt: number };
+  servicios_pilado?: { facturado: number; pendiente: number; cobrado: number; cnt: number };
+  costo_operativo?: { total: number; qq: number; por_qq: number };
   alertas: string[];
 };
 
@@ -11501,6 +11503,8 @@ function PanelIntegral({ data, month, onMonth }: { data: PanelData; month: strin
         {card("UTILIDAD DEL MES", money(k.utilidad), `${k.margen}% sobre ventas`, "#f59e0b")}
         {card("TOTAL EN BANCOS/CAJA", money(k.bancos), "disponible", "#0d9488")}
         {card("SALDO GENERAL", money(k.saldo_general), "bancos + por cobrar − por pagar", "#7c3aed")}
+        {data.servicios_pilado && card("INGRESOS POR SERVICIO (SOCIOS)", money(data.servicios_pilado.facturado), `pendiente ${money(data.servicios_pilado.pendiente)} · ${data.servicios_pilado.cnt} serv.`, "#0891b2")}
+        {data.costo_operativo && card("COSTO OPERATIVO (CEYRO)", money(data.costo_operativo.total), data.costo_operativo.qq > 0 ? `$${data.costo_operativo.por_qq.toFixed(2)}/QQ · ${data.costo_operativo.qq.toFixed(0)} QQ` : "sin corridas del mes", "#b91c1c")}
       </div>
 
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
