@@ -239,3 +239,94 @@ piladoRouter.post("/services/:id/settle", asyncRoute(async (req, res) => {
 
   res.json(result);
 }));
+
+// ── Tarifario dinamico de servicios (F-B) ────────────────────────────────────
+// Precio por QQ configurable por socio, servicio y fecha de vigencia. El form de
+// Servicio Pilado autocompleta con la tarifa vigente, pero el usuario puede
+// editarla en la transaccion (retrocompat: si no hay tarifa, sigue como antes).
+const SERVICIOS = ["PILADO", "SECADO", "FLETE"] as const;
+
+// GET tarifa VIGENTE para socio+servicio en una fecha (la de mayor fecha_vigencia
+// <= fecha, activa). Devuelve { precio_por_qq } o null si no hay configurada.
+piladoRouter.get("/tarifa-vigente", asyncRoute(async (req, res) => {
+  const q = z.object({
+    socio_id: z.string().uuid(),
+    servicio: z.enum(SERVICIOS).default("PILADO"),
+    fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+  }).parse(req.query);
+  const r = await pool.query(
+    `SELECT precio_por_qq::float AS precio_por_qq, fecha_vigencia
+     FROM tarifario_servicio
+     WHERE socio_id = $1 AND servicio = $2 AND is_active = true
+       AND fecha_vigencia <= COALESCE($3::date, CURRENT_DATE)
+     ORDER BY fecha_vigencia DESC, created_at DESC
+     LIMIT 1`,
+    [q.socio_id, q.servicio, q.fecha ?? null]
+  );
+  res.json(r.rows[0] ?? null);
+}));
+
+// GET listado de tarifas (opcional filtrar por socio/servicio), con nombre socio.
+piladoRouter.get("/tarifas", asyncRoute(async (req, res) => {
+  const q = z.object({
+    socio_id: z.string().uuid().optional(),
+    servicio: z.enum(SERVICIOS).optional()
+  }).parse(req.query);
+  const conds: string[] = [];
+  const params: any[] = [];
+  if (q.socio_id) { params.push(q.socio_id); conds.push(`t.socio_id = $${params.length}`); }
+  if (q.servicio) { params.push(q.servicio); conds.push(`t.servicio = $${params.length}`); }
+  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+  const r = await pool.query(
+    `SELECT t.id, t.socio_id, a.name AS socio_name, t.servicio, t.precio_por_qq::float AS precio_por_qq,
+            t.fecha_vigencia, t.is_active, t.notes, t.created_at
+     FROM tarifario_servicio t
+     JOIN accionistas a ON a.id = t.socio_id
+     ${where}
+     ORDER BY a.name, t.servicio, t.fecha_vigencia DESC`,
+    params
+  );
+  res.json(r.rows);
+}));
+
+// POST crear/registrar una tarifa vigente desde una fecha.
+piladoRouter.post("/tarifas", asyncRoute(async (req, res) => {
+  const body = z.object({
+    socio_id: z.string().uuid(),
+    servicio: z.enum(SERVICIOS).default("PILADO"),
+    precio_por_qq: z.number().nonnegative(),
+    fecha_vigencia: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    notes: z.string().optional()
+  }).parse(req.body);
+  if (body.socio_id === CEYRO_ID) throw new ApiError(400, "CEYRO es la matriz; el tarifario es para los socios.");
+  const socio = await pool.query("SELECT id FROM accionistas WHERE id = $1", [body.socio_id]);
+  if (!socio.rowCount) throw new ApiError(404, "Socio no encontrado");
+  const r = await pool.query(
+    `INSERT INTO tarifario_servicio (socio_id, servicio, precio_por_qq, fecha_vigencia, notes)
+     VALUES ($1, $2, $3, COALESCE($4::date, CURRENT_DATE), $5)
+     RETURNING *`,
+    [body.socio_id, body.servicio, body.precio_por_qq, body.fecha_vigencia ?? null, body.notes ?? null]
+  );
+  res.status(201).json(r.rows[0]);
+}));
+
+// PATCH editar precio / activar-desactivar una tarifa (baja logica).
+piladoRouter.patch("/tarifas/:id", asyncRoute(async (req, res) => {
+  const body = z.object({
+    precio_por_qq: z.number().nonnegative().optional(),
+    fecha_vigencia: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    is_active: z.boolean().optional(),
+    notes: z.string().optional()
+  }).parse(req.body);
+  const fields: string[] = [];
+  const values: any[] = [];
+  let i = 1;
+  for (const k of ["precio_por_qq", "fecha_vigencia", "is_active", "notes"] as const) {
+    if (body[k] !== undefined) { fields.push(`${k} = $${i++}`); values.push(body[k]); }
+  }
+  if (fields.length === 0) throw new ApiError(400, "Sin cambios");
+  values.push(req.params.id);
+  const r = await pool.query(`UPDATE tarifario_servicio SET ${fields.join(", ")} WHERE id = $${i} RETURNING *`, values);
+  if (!r.rows[0]) throw new ApiError(404, "Tarifa no encontrada");
+  res.json(r.rows[0]);
+}));

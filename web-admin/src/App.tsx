@@ -1220,6 +1220,9 @@ export function App() {
   const [piladoBalances, setPiladoBalances] = useState<PiladoBalance[]>([]);
   const [piladoForm, setPiladoForm] = useState({ client_kind: "accionista" as "accionista" | "externo", client_accionista_id: "", client_name: "", quintals: "", rate_per_qq: localStorage.getItem("bascula-erp:pilado-rate") ?? "", service_date: nominaToday });
   const [piladoReport, setPiladoReport] = useState<PiladoServiceDetail | null>(null);
+  const [tarifaVigenteHint, setTarifaVigenteHint] = useState<string>("");
+  const [servicioTarifas, setServicioTarifas] = useState<any[]>([]);
+  const [tarifaForm, setTarifaForm] = useState({ socio_id: "", servicio: "PILADO", precio_por_qq: "", fecha_vigencia: nominaToday });
 
   // ── Selección / envejecido por lotes (persona externa) ─────────────────────
   const [selectionBatches, setSelectionBatches] = useState<SelectionBatch[]>([]);
@@ -2062,6 +2065,7 @@ export function App() {
     setAppSettings(settings);
     setSettingsForm(settings);
     await loadLaborRates();
+    await refreshServicioTarifas();
     if (isAdmin) {
       const [users, accionistas, backups, audit] = await Promise.all([
         apiGet<AdminUser[]>("/auth/users"),
@@ -2206,6 +2210,48 @@ export function App() {
       addToast(`Error al cargar servicios de pilado: ${e instanceof Error ? e.message : "desconocido"}`, "error");
     }
   }
+
+  // Autocompleta la tarifa por QQ desde el tarifario vigente del socio/fecha,
+  // pero el usuario puede editarla en la transaccion (F-B: autocompleta-editable).
+  const autofillPiladoRate = async (socioId: string, fecha: string) => {
+    if (!socioId) { setTarifaVigenteHint(""); return; }
+    try {
+      const t = await apiGet<{ precio_por_qq: number } | null>(`/pilado/tarifa-vigente?socio_id=${socioId}&servicio=PILADO&fecha=${fecha}`);
+      if (t && typeof t.precio_por_qq === "number") {
+        setPiladoForm((f) => ({ ...f, rate_per_qq: String(t.precio_por_qq) }));
+        setTarifaVigenteHint(`Tarifa vigente: $${t.precio_por_qq.toFixed(2)}/QQ (editable)`);
+      } else {
+        setTarifaVigenteHint("Sin tarifa configurada para este socio (escríbela manual)");
+      }
+    } catch { setTarifaVigenteHint(""); }
+  };
+
+  const refreshServicioTarifas = async () => {
+    try { setServicioTarifas(await apiGet<any[]>("/pilado/tarifas")); }
+    catch { /* noop */ }
+  };
+  const submitServicioTarifa = async () => {
+    if (!tarifaForm.socio_id) { addToast("Elige el socio", "error"); return; }
+    const precio = parseFloat(tarifaForm.precio_por_qq);
+    if (isNaN(precio) || precio < 0) { addToast("Precio inválido", "error"); return; }
+    try {
+      await apiPost("/pilado/tarifas", {
+        socio_id: tarifaForm.socio_id,
+        servicio: tarifaForm.servicio,
+        precio_por_qq: precio,
+        fecha_vigencia: tarifaForm.fecha_vigencia || undefined
+      });
+      setTarifaForm({ socio_id: "", servicio: "PILADO", precio_por_qq: "", fecha_vigencia: nominaToday });
+      await refreshServicioTarifas();
+      addToast("Tarifa guardada ✓", "success");
+    } catch (e) { addToast(`Error: ${e instanceof Error ? e.message : "Error"}`, "error"); }
+  };
+  const toggleServicioTarifa = async (t: any) => {
+    try {
+      await apiFetch(`/pilado/tarifas/${t.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ is_active: !t.is_active }) });
+      await refreshServicioTarifas();
+    } catch (e) { addToast(`Error: ${e instanceof Error ? e.message : "Error"}`, "error"); }
+  };
 
   async function submitPilado(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -9082,7 +9128,7 @@ export function App() {
               <h2>🌾 Registrar servicio de pilado</h2>
               <p className="muted">CEYRO le presta el servicio de secado + pilado a otro accionista y le cobra por quintal. Genera el ingreso para CEYRO y la cuenta por pagar del accionista.</p>
               <label><span>Fecha</span>
-                <input type="date" value={piladoForm.service_date} onChange={(e) => setPiladoForm({ ...piladoForm, service_date: e.target.value })} />
+                <input type="date" value={piladoForm.service_date} onChange={(e) => { const v = e.target.value; setPiladoForm({ ...piladoForm, service_date: v }); if (piladoForm.client_kind === "accionista" && piladoForm.client_accionista_id) autofillPiladoRate(piladoForm.client_accionista_id, v); }} />
               </label>
               <label><span>Tipo de cliente</span>
                 <select value={piladoForm.client_kind} onChange={(e) => setPiladoForm({ ...piladoForm, client_kind: e.target.value as "accionista" | "externo" })}>
@@ -9092,7 +9138,7 @@ export function App() {
               </label>
               {piladoForm.client_kind === "accionista" ? (
                 <label><span>Accionista al que le pilaste</span>
-                  <select value={piladoForm.client_accionista_id} onChange={(e) => setPiladoForm({ ...piladoForm, client_accionista_id: e.target.value })}>
+                  <select value={piladoForm.client_accionista_id} onChange={(e) => { const v = e.target.value; setPiladoForm({ ...piladoForm, client_accionista_id: v }); autofillPiladoRate(v, piladoForm.service_date); }}>
                     <option value="">Seleccione</option>
                     {clientes.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                   </select>
@@ -9108,6 +9154,7 @@ export function App() {
               <label><span>Tarifa por QQ ($)</span>
                 <input type="number" step="0.01" min="0" value={piladoForm.rate_per_qq} onChange={(e) => setPiladoForm({ ...piladoForm, rate_per_qq: e.target.value })} />
               </label>
+              {tarifaVigenteHint && <p className="muted" style={{ margin: "-4px 0 8px", fontSize: 12 }}>{tarifaVigenteHint}</p>}
               <div className="totalBox" style={{ marginBottom: 10 }}>
                 <span>Total a cobrar</span>
                 <strong>{money(previewTotal)}</strong>
@@ -10820,6 +10867,47 @@ export function App() {
                     </small>
                   </div>
                   <div className="totalBox">
+                  </div>
+                </div>
+                <div className="formPanel">
+                  <h2>🧾 Tarifario de servicios (socios)</h2>
+                  <p className="muted">Precio por QQ por socio y servicio, con fecha de vigencia. Servicio Pilado autocompleta con la tarifa vigente (editable).</p>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <label><span>Socio</span>
+                      <select value={tarifaForm.socio_id} onChange={(e) => setTarifaForm({ ...tarifaForm, socio_id: e.target.value })}>
+                        <option value="">Seleccione</option>
+                        {accionistas.filter((a) => a.tipo !== "MATRIZ").map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
+                      </select>
+                    </label>
+                    <label><span>Servicio</span>
+                      <select value={tarifaForm.servicio} onChange={(e) => setTarifaForm({ ...tarifaForm, servicio: e.target.value })}>
+                        <option value="PILADO">Pilado</option>
+                        <option value="SECADO">Secado</option>
+                        <option value="FLETE">Flete</option>
+                      </select>
+                    </label>
+                    <label><span>$ por QQ</span>
+                      <input type="number" step="0.01" min="0" value={tarifaForm.precio_por_qq} onChange={(e) => setTarifaForm({ ...tarifaForm, precio_por_qq: e.target.value })} />
+                    </label>
+                    <label><span>Vigente desde</span>
+                      <input type="date" value={tarifaForm.fecha_vigencia} onChange={(e) => setTarifaForm({ ...tarifaForm, fecha_vigencia: e.target.value })} />
+                    </label>
+                  </div>
+                  <button type="button" className="primary" onClick={submitServicioTarifa} disabled={!isAdmin}>Guardar tarifa</button>
+                  {!isAdmin && <p className="muted">Solo un administrador puede cambiar tarifas.</p>}
+                  <hr className="divider" />
+                  <h2 style={{ marginBottom: 0 }}>Tarifas configuradas</h2>
+                  {servicioTarifas.length === 0 && <p className="muted">Sin tarifas configuradas.</p>}
+                  <div className="equipList">
+                    {servicioTarifas.map((t) => (
+                      <div key={t.id} className="equipItem" style={{ opacity: t.is_active ? 1 : 0.5 }}>
+                        <div>
+                          <strong>{t.socio_name} · {t.servicio}</strong>
+                          <small>${Number(t.precio_por_qq).toFixed(2)}/QQ · desde {(t.fecha_vigencia || "").slice(0, 10)}{t.is_active ? "" : " · inactiva"}</small>
+                        </div>
+                        <button type="button" className="equipDelBtn" onClick={() => toggleServicioTarifa(t)}>{t.is_active ? "Desactivar" : "Activar"}</button>
+                      </div>
+                    ))}
                   </div>
                 </div>
               </section>
