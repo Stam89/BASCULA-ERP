@@ -15,10 +15,15 @@ receivableRouter.get("/", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
     `SELECT ar.*,
-            -- Nombre de quien debe: un cliente en una venta, o el accionista que
-            -- recibió un lote traspasado. Antes las cuentas de traspaso salían
-            -- sin nombre porque no tienen cliente.
-            COALESCE(c.full_name, dest.name) AS customer_name,
+            -- Nombre de QUIEN DEBE, resuelto según el origen de la cuenta:
+            --  · venta            -> el cliente (customers)
+            --  · traspaso de lote -> el accionista que recibió el lote
+            --  · servicio pilado  -> el socio cliente (pilado_services)
+            --  · cobro de matriz  -> el socio (matriz_service_charges)
+            --  · cargo por sacos  -> el socio (matriz_packaging_charges)
+            -- Antes estas cuentas salían sin nombre y se veían como "—".
+            COALESCE(c.full_name, dest.name, ps_acc.name, ps.client_name,
+                     msc_acc.name, mpc_acc.name) AS customer_name,
             c.phone     AS customer_phone,
             s.sale_number
      FROM accounts_receivable ar
@@ -26,6 +31,12 @@ receivableRouter.get("/", asyncRoute(async (req, res) => {
      LEFT JOIN sales s     ON s.id = ar.sale_id
      LEFT JOIN lot_transfers lt ON lt.receivable_id = ar.id
      LEFT JOIN accionistas dest ON dest.id = lt.to_accionista_id
+     LEFT JOIN pilado_services ps ON ps.receivable_id = ar.id
+     LEFT JOIN accionistas ps_acc ON ps_acc.id = ps.client_accionista_id
+     LEFT JOIN matriz_service_charges msc ON msc.receivable_id = ar.id
+     LEFT JOIN accionistas msc_acc ON msc_acc.id = msc.client_accionista_id
+     LEFT JOIN matriz_packaging_charges mpc ON mpc.receivable_id = ar.id
+     LEFT JOIN accionistas mpc_acc ON mpc_acc.id = mpc.client_accionista_id
      WHERE ar.status IN ('CONFIRMED','PARTIAL')
        AND ar.balance > 0
        AND ar.accionista_id = $1
