@@ -42,12 +42,16 @@ export async function espejarAbonoEnContraparte(
          UNION ALL
          SELECT lt.receivable_id AS id FROM lot_transfers lt WHERE lt.payable_id = $1
          UNION ALL
-         SELECT msc.receivable_id AS id FROM matriz_service_charges msc WHERE msc.payable_id = $1`
+         SELECT msc.receivable_id AS id FROM matriz_service_charges msc WHERE msc.payable_id = $1
+         UNION ALL
+         SELECT mpc.receivable_id AS id FROM matriz_packaging_charges mpc WHERE mpc.payable_id = $1`
       : `SELECT ps.payable_id AS id FROM pilado_services ps WHERE ps.receivable_id = $1
          UNION ALL
          SELECT lt.payable_id AS id FROM lot_transfers lt WHERE lt.receivable_id = $1
          UNION ALL
-         SELECT msc.payable_id AS id FROM matriz_service_charges msc WHERE msc.receivable_id = $1`;
+         SELECT msc.payable_id AS id FROM matriz_service_charges msc WHERE msc.receivable_id = $1
+         UNION ALL
+         SELECT mpc.payable_id AS id FROM matriz_packaging_charges mpc WHERE mpc.receivable_id = $1`;
 
   const hermana = await client.query(buscaHermana, [opts.cuentaId]);
   const hermanaId = hermana.rows.find((r) => r.id)?.id;

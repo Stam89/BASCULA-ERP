@@ -99,6 +99,52 @@ settingsRouter.put("/", requireAdmin, asyncRoute(async (req, res) => {
   res.json(result.rows[0]);
 }));
 
+// ── Tarifas de empaque / uso de sacos de la MATRIZ (CEYRO) ──────────────────
+// El cargo automático al despachar (services/cargo-empaque.ts) lee estos precios.
+async function matrizIdOrThrow(): Promise<string> {
+  const m = await pool.query("SELECT id FROM accionistas WHERE tipo = 'MATRIZ' ORDER BY name LIMIT 1");
+  if (!m.rowCount) throw new ApiError(404, "No hay una matriz (CEYRO) configurada.");
+  return m.rows[0].id as string;
+}
+
+settingsRouter.get("/packaging-rates", asyncRoute(async (_req, res) => {
+  const matrizId = await matrizIdOrThrow();
+  const result = await pool.query(
+    `INSERT INTO matriz_packaging_rates (accionista_id) VALUES ($1)
+     ON CONFLICT (accionista_id) DO UPDATE SET accionista_id = EXCLUDED.accionista_id
+     RETURNING accionista_id, precio_saco_10lb::float, precio_saco_25lb::float,
+               precio_saco_50lb::float, updated_at`,
+    [matrizId]
+  );
+  res.json(result.rows[0]);
+}));
+
+settingsRouter.put("/packaging-rates", requireAdmin, asyncRoute(async (req, res) => {
+  const matrizId = await matrizIdOrThrow();
+  const body = z.object({
+    precio_saco_10lb: z.number().nonnegative(),
+    precio_saco_25lb: z.number().nonnegative(),
+    precio_saco_50lb: z.number().nonnegative()
+  }).parse(req.body);
+  const updatedBy = (req as AuthenticatedRequest).user?.id ?? null;
+
+  const result = await pool.query(
+    `INSERT INTO matriz_packaging_rates
+       (accionista_id, precio_saco_10lb, precio_saco_25lb, precio_saco_50lb, updated_at, updated_by)
+     VALUES ($1, $2, $3, $4, now(), $5)
+     ON CONFLICT (accionista_id) DO UPDATE SET
+       precio_saco_10lb = EXCLUDED.precio_saco_10lb,
+       precio_saco_25lb = EXCLUDED.precio_saco_25lb,
+       precio_saco_50lb = EXCLUDED.precio_saco_50lb,
+       updated_at = now(),
+       updated_by = EXCLUDED.updated_by
+     RETURNING accionista_id, precio_saco_10lb::float, precio_saco_25lb::float,
+               precio_saco_50lb::float, updated_at`,
+    [matrizId, body.precio_saco_10lb, body.precio_saco_25lb, body.precio_saco_50lb, updatedBy]
+  );
+  res.json(result.rows[0]);
+}));
+
 // Tablas transaccionales que se vacían al poner en marcha el negocio.
 // Se conservan: users/roles, app_settings, products, warehouses, equipment,
 // y los catálogos de insumos y sacos (con stock en 0).

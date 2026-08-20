@@ -8,6 +8,7 @@ import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { crearVenta } from "./sales.js";
+import { cobrarEmpaqueAlDespachar } from "../../services/cargo-empaque.js";
 
 export const ordersRouter = Router();
 
@@ -285,7 +286,17 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
       [req.params.id, sale.id]
     );
 
-    return { order_number: order.rows[0].order_number, sale };
+    // Cargo automático por empaque: si un SOCIO despachó sacos de 10/25/50 lb,
+    // la matriz (CEYRO) le cobra por su uso. Genera CxC (CEYRO) + CxP (socio)
+    // pendientes, en espejo, dentro de esta misma transacción. Si no aplica
+    // (matriz, sin sacos elegibles o tarifas en $0) devuelve null.
+    const cargoEmpaque = await cobrarEmpaqueAlDespachar(
+      client,
+      { id: order.rows[0].id as string, order_number: order.rows[0].order_number as string },
+      accionistaId as string
+    );
+
+    return { order_number: order.rows[0].order_number, sale, cargo_empaque: cargoEmpaque };
   });
 
   res.json(result);

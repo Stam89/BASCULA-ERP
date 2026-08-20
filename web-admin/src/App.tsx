@@ -1212,6 +1212,8 @@ export function App() {
   const [configSubTab, setConfigSubTab] = useState<"negocio" | "usuarios" | "accionistas" | "tarifas" | "categorias" | "actividad" | "datos">("negocio");
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
   const [laborRatesForm, setLaborRatesForm] = useState<LaborRates>(defaultLaborRates);
+  // Tarifas de empaque / uso de sacos que la MATRIZ cobra a los socios al despachar.
+  const [packagingRatesForm, setPackagingRatesForm] = useState({ precio_saco_10lb: 0, precio_saco_25lb: 0, precio_saco_50lb: 0 });
 
   // ── Nómina (pagos de trabajadores) ────────────────────────────────────────
   const nominaToday = new Date().toISOString().slice(0, 10);
@@ -2096,11 +2098,31 @@ export function App() {
     if (rates) setLaborRatesForm(rates);
   }
 
+  type PackagingRates = { precio_saco_10lb: number; precio_saco_25lb: number; precio_saco_50lb: number };
+  async function loadPackagingRates() {
+    const pkg = await apiGet<PackagingRates>("/settings/packaging-rates").catch(() => null);
+    if (pkg) setPackagingRatesForm({
+      precio_saco_10lb: Number(pkg.precio_saco_10lb) || 0,
+      precio_saco_25lb: Number(pkg.precio_saco_25lb) || 0,
+      precio_saco_50lb: Number(pkg.precio_saco_50lb) || 0
+    });
+  }
+  async function savePackagingRates() {
+    const saved = await apiPut<PackagingRates>("/settings/packaging-rates", packagingRatesForm);
+    setPackagingRatesForm({
+      precio_saco_10lb: Number(saved.precio_saco_10lb) || 0,
+      precio_saco_25lb: Number(saved.precio_saco_25lb) || 0,
+      precio_saco_50lb: Number(saved.precio_saco_50lb) || 0
+    });
+    addToast("Tarifas de empaque guardadas ✓", "success");
+  }
+
   async function refreshConfig() {
     const settings = await apiGet<AppSettings>("/settings");
     setAppSettings(settings);
     setSettingsForm(settings);
     await loadLaborRates();
+    await loadPackagingRates();
     await refreshServicioTarifas();
     if (isAdmin) {
       const [users, accionistas, backups, audit] = await Promise.all([
@@ -11133,6 +11155,32 @@ export function App() {
                       </div>
                     ))}
                   </div>
+                </div>
+                {/* ── Tarifas de empaque / uso de sacos (Matriz → Socios) ── */}
+                <div className="formPanel">
+                  <h2>📦 Tarifas de empaque / uso de sacos (Matriz)</h2>
+                  <p className="muted">
+                    Precio que la matriz (CEYRO) cobra a un socio por cada saco al despachar un pedido.
+                    Se genera automáticamente como cuenta por cobrar de la matriz y por pagar del socio.
+                    Déjalo en $0.00 para no cobrar.
+                  </p>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                    <label><span>$ por saco de 10 lb</span>
+                      <input type="number" step="0.01" min="0" value={packagingRatesForm.precio_saco_10lb}
+                        onChange={(e) => setPackagingRatesForm({ ...packagingRatesForm, precio_saco_10lb: Number(e.target.value) })} /></label>
+                    <label><span>$ por saco de 25 lb</span>
+                      <input type="number" step="0.01" min="0" value={packagingRatesForm.precio_saco_25lb}
+                        onChange={(e) => setPackagingRatesForm({ ...packagingRatesForm, precio_saco_25lb: Number(e.target.value) })} /></label>
+                    <label><span>$ por saco de 50 lb</span>
+                      <input type="number" step="0.01" min="0" value={packagingRatesForm.precio_saco_50lb}
+                        onChange={(e) => setPackagingRatesForm({ ...packagingRatesForm, precio_saco_50lb: Number(e.target.value) })} /></label>
+                  </div>
+                  <button type="button" className="primary" style={{ marginTop: 10 }}
+                    onClick={() => savePackagingRates().catch((err) => addToast(err.message, "error"))}
+                    disabled={!isAdmin}>
+                    Guardar tarifas de empaque
+                  </button>
+                  {!isAdmin && <p className="muted">Solo un administrador puede cambiar estas tarifas.</p>}
                 </div>
               </section>
             )}
