@@ -7065,6 +7065,11 @@ export function App() {
               </div>
             )}
 
+            {/* ===== TOMA DE PEDIDO · Vista dividida en 2 columnas ===== */}
+            <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 16, alignItems: "start" }}>
+            {/* Columna IZQUIERDA: buscar cliente + elegir producto/presentación con stock visible */}
+            <div style={{ display: "grid", gap: 16, alignItems: "start" }}>
+
             {/* SECCIÓN 1: Cliente */}
             <div className="formPanel stepPanel stepInfo" style={{ gridColumn: "1 / -1" }}>
               <h2 style={{ marginTop: 0 }}><span className="stepBadge">1</span>Cliente</h2>
@@ -7205,6 +7210,11 @@ export function App() {
                 </button>
               </div>
             </div>
+            {/* fin Columna IZQUIERDA */}
+            </div>
+
+            {/* Columna DERECHA: carrito acumulado + total + fecha de entrega + TOMAR PEDIDO */}
+            <div style={{ display: "grid", gap: 16, alignItems: "start" }}>
 
             {/* SECCIÓN 3: Líneas agregadas (carrito) */}
             {saleLineItems.length > 0 && (
@@ -7310,33 +7320,76 @@ export function App() {
                 </button>
               )}
             </form>
+            {/* fin Columna DERECHA */}
+            </div>
+            {/* ===== fin vista dividida (Toma de pedido) ===== */}
+            </div>
 
-            {/* Pedidos pendientes: aquí se despacha y cobra */}
+            {/* ===== COLA DE CARGA · vista para bodega. Aquí se DESPACHA y recién ahí se
+                    mueve inventario y plata (o se genera el crédito). ===== */}
             {salesOrders.some((o) => o.status === "PENDING") && (
               <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-                <h2>🚚 Pedidos pendientes ({salesOrders.filter((o) => o.status === "PENDING").length})</h2>
-                <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
-                  {salesOrders.filter((o) => o.status === "PENDING").map((o) => (
-                    <article key={o.id} style={{ border: "1px solid var(--c-border)", borderLeft: "4px solid var(--c-warning)", borderRadius: 10, padding: "10px 14px" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
-                        <div>
-                          <strong>{o.order_number}</strong> · {o.customer_name}
-                          {o.delivery_date && <span className="muted"> · entrega {new Date(o.delivery_date + "T12:00:00").toLocaleDateString("es-EC")}</span>}
-                        </div>
-                        <strong style={{ color: "#b45309" }}>{money(Number(o.total_amount))}</strong>
-                      </div>
-                      <div className="muted" style={{ fontSize: 12.5, margin: "4px 0 8px" }}>
-                        {o.items.map((it) => `${it.product_name}${it.presentation_name ? ` ${it.presentation_name}` : ""} × ${Number(it.quantity)}`).join(" · ")}
-                        {o.notes ? ` — ${o.notes}` : ""}
-                        <span style={{ display: "block", color: "#b45309", fontWeight: 700, marginTop: 2 }}>
-                          Ya figura en Por Cobrar aunque no se haya despachado
+                <h2 style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span>📦 Pedidos pendientes / Cola de carga</span>
+                  <span style={{ background: "#fef3c7", color: "#b45309", borderRadius: 999, padding: "2px 10px", fontSize: 13, fontWeight: 800 }}>
+                    {salesOrders.filter((o) => o.status === "PENDING").length}
+                  </span>
+                </h2>
+                <p className="muted" style={{ marginTop: -4 }}>
+                  Lista para bodega, ordenada por fecha de entrega: alista los sacos y presiona
+                  <strong> 🚚 Despachar</strong>. Recién ahí sale el inventario y entra la plata (o se
+                  genera el crédito).
+                </p>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, marginTop: 8 }}>
+                  {salesOrders
+                    .filter((o) => o.status === "PENDING")
+                    .slice()
+                    .sort((a, b) => {
+                      // Prioridad por fecha de entrega; los sin fecha van al final.
+                      const fa = a.delivery_date || "9999-12-31";
+                      const fb = b.delivery_date || "9999-12-31";
+                      return fa < fb ? -1 : fa > fb ? 1 : 0;
+                    })
+                    .map((o) => (
+                    <article key={o.id} style={{ border: "1px solid var(--c-border)", borderTop: "5px solid var(--c-warning)", borderRadius: 12, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ background: "#fef3c7", color: "#b45309", borderRadius: 999, padding: "3px 12px", fontSize: 12.5, fontWeight: 800, letterSpacing: 0.3 }}>
+                          🟡 Pendiente por cargar
                         </span>
+                        <strong style={{ fontSize: 18, color: "#b45309" }}>{money(Number(o.total_amount))}</strong>
                       </div>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+
+                      <div>
+                        <div style={{ fontSize: 15, fontWeight: 800 }}>{o.customer_name}</div>
+                        <div className="muted" style={{ fontSize: 12.5 }}>
+                          {o.order_number}
+                          {o.delivery_date && <> · 📅 entrega {new Date(o.delivery_date + "T12:00:00").toLocaleDateString("es-EC")}</>}
+                        </div>
+                      </div>
+
+                      {/* Lista GRANDE de sacos/presentaciones a alistar en bodega */}
+                      <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "10px 12px", display: "grid", gap: 6 }}>
+                        <span className="muted" style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: "#92400e" }}>A alistar</span>
+                        {o.items.map((it, idx) => (
+                          <div key={idx} style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                            <span style={{ fontSize: 22, fontWeight: 900, color: "#92400e", minWidth: 44, textAlign: "right" }}>{Number(it.quantity)}</span>
+                            <span style={{ fontSize: 15, fontWeight: 700 }}>
+                              {it.product_name}{it.presentation_name ? ` · ${it.presentation_name}` : ""}
+                            </span>
+                          </div>
+                        ))}
+                        {o.notes && <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>📝 {o.notes}</div>}
+                      </div>
+
+                      <div className="muted" style={{ fontSize: 11 }}>
+                        Ya figura en Por Cobrar; el cobro y la salida de inventario se concretan al despachar.
+                      </div>
+
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: "auto" }}>
                         <select
                           value={orderPayMethod[o.id] ?? "CASH"}
                           onChange={(e) => setOrderPayMethod((cur) => ({ ...cur, [o.id]: e.target.value }))}
-                          style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid var(--c-border)", fontSize: 12.5 }}
+                          style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid var(--c-border)", fontSize: 13 }}
                         >
                           <option value="CASH">💵 Efectivo</option>
                           <option value="TRANSFER">📱 Transferencia</option>
@@ -7344,15 +7397,13 @@ export function App() {
                           <option value="CHECK">✓ Cheque</option>
                           <option value="CREDIT">📋 Crédito</option>
                         </select>
-                        <button type="button" className="primary" onClick={() => despacharPedido(o).catch((e) => addToast(e.message, "error"))}>
-                          🚚 Despachar y cobrar
+                        <button type="button" className="primary" style={{ flex: 1, minWidth: 150, padding: "9px 12px", fontWeight: 800 }} onClick={() => despacharPedido(o).catch((e) => addToast(e.message, "error"))}>
+                          🚚 Despachar y entregar
                         </button>
-                        <button type="button" onClick={() => editarPedido(o).catch((e) => addToast(e.message, "error"))}>
-                          ✎ Editar
-                        </button>
-                        <button type="button" onClick={() => cancelarPedido(o).catch((e) => addToast(e.message, "error"))}>
-                          ✕ Cancelar
-                        </button>
+                      </div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button type="button" style={{ flex: 1 }} onClick={() => editarPedido(o).catch((e) => addToast(e.message, "error"))}>✎ Editar</button>
+                        <button type="button" style={{ flex: 1 }} onClick={() => cancelarPedido(o).catch((e) => addToast(e.message, "error"))}>✕ Cancelar</button>
                       </div>
                     </article>
                   ))}
