@@ -249,7 +249,8 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
     receipt_photo_base64: z.string().optional(),
     amount: z.number().positive(),
     cash_register_id: z.string().uuid().optional(),
-    created_by: z.string().uuid().optional()
+    created_by: z.string().uuid().optional(),
+    maquina: z.string().optional()
   }).parse(req.body);
 
   // Aislamiento de caja (igual que /:id/maintenance): la caja debe ser del
@@ -279,10 +280,10 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
   const result = await inTransaction(async (client) => {
     const maintenance = await client.query(
       `INSERT INTO equipment_maintenance
-       (equipment_id, area, section, maintenance_type, description, provider, invoice_number, receipt_photo_url, amount, created_by)
-       VALUES (NULL, $1, $2, $3, $4, $5, $6, $7, $8, $9)
+       (equipment_id, area, section, maquina, maintenance_type, description, provider, invoice_number, receipt_photo_url, amount, created_by)
+       VALUES (NULL, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
-      [body.area, body.section, body.maintenance_type, body.description, body.provider || null, body.invoice_number || null, photoUrl, round2(body.amount), body.created_by || null]
+      [body.area, body.section, body.maquina || null, body.maintenance_type, body.description, body.provider || null, body.invoice_number || null, photoUrl, round2(body.amount), body.created_by || null]
     );
     if (body.cash_register_id) {
       await client.query(

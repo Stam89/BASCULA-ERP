@@ -1185,7 +1185,7 @@ export function App() {
   const [liqResult, setLiqResult] = useState<LiqResultItem[] | null>(null);
 
   // ── Caja ──────────────────────────────────────────────────────────────────
-  const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "movimiento" | "gastos" | "sacos" | "mantenimiento" | "equipos" | "venta_detalle" | "cuentas" | "fomentos">("resumen");
+  const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "movimiento" | "gastos" | "sacos" | "mantenimiento" | "venta_detalle" | "cuentas" | "fomentos">("resumen");
   const [movCategory, setMovCategory] = useState("");
   const [movType, setMovType] = useState<"EXPENSE" | "INCOME">("EXPENSE");
   const [movPayableId, setMovPayableId] = useState("");
@@ -1422,6 +1422,7 @@ export function App() {
   const [maintenanceForm, setMaintenanceForm] = useState({
     area: "",
     section: "",
+    maquina: "",
     maintenance_type: "CORRECTIVO" as "REPUESTO" | "MANO_OBRA" | "PREVENTIVO" | "CORRECTIVO",
     description: "",
     provider: "",
@@ -1970,7 +1971,7 @@ export function App() {
   // de la matriz (Gastos/Sacos/Mantenimiento/Equipos), volver a "Movimientos".
   React.useEffect(() => {
     const esSocio = accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "SOCIO";
-    if (esSocio && ["gastos", "sacos", "mantenimiento", "equipos"].includes(cajaSubTab)) {
+    if (esSocio && ["gastos", "sacos", "mantenimiento"].includes(cajaSubTab)) {
       setCajaSubTab("resumen");
     }
   }, [activeAccionistaId, accionistas, cajaSubTab]);
@@ -3904,6 +3905,7 @@ export function App() {
         body: JSON.stringify({
           area: maintenanceForm.area,
           section: maintenanceForm.section,
+          maquina: maintenanceForm.maquina || undefined,
           maintenance_type: maintenanceForm.maintenance_type,
           description: maintenanceForm.description,
           provider: maintenanceForm.provider || undefined,
@@ -3918,6 +3920,7 @@ export function App() {
       setMaintenanceForm({
         area: "",
         section: "",
+        maquina: "",
         maintenance_type: "CORRECTIVO",
         description: "",
         provider: "",
@@ -7783,12 +7786,12 @@ export function App() {
 
                 {/* Sub-tabs profesional */}
                 <nav className="cajaSubNav">
-                  {(["resumen", "venta_detalle", "anticipo", "movimiento", "gastos", "sacos", "mantenimiento", "equipos", "fomentos"] as const)
+                  {(["resumen", "venta_detalle", "anticipo", "movimiento", "gastos", "sacos", "mantenimiento", "fomentos"] as const)
                     .filter((t) => {
                       // Subpestañas exclusivas de la planta/matriz (CEYRO). Los socios
                       // (ROVINSON/STALYN) operan solo lo comercial.
                       const esSocio = accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "SOCIO";
-                      const soloMatriz = ["gastos", "sacos", "mantenimiento", "equipos"];
+                      const soloMatriz = ["gastos", "sacos", "mantenimiento"];
                       return !(esSocio && soloMatriz.includes(t));
                     })
                     .map((t) => {
@@ -7799,7 +7802,6 @@ export function App() {
                       gastos: "🧾",
                       sacos: "📦",
                       mantenimiento: "🔧",
-                      equipos: "⚙️",
                       venta_detalle: "🛒",
                       cuentas: "📊",
                       fomentos: "🌾"
@@ -7811,7 +7813,6 @@ export function App() {
                       gastos: "Gastos",
                       sacos: "Sacos",
                       mantenimiento: "Mantenimiento",
-                      equipos: "Equipos",
                       venta_detalle: "Venta Detalle",
                       cuentas: `Por pagar${cashPayables.length > 0 ? ` (${cashPayables.length})` : ""}`,
                       fomentos: `Fomentos${fomentos.filter(f=>f.status==="ACTIVOS").length > 0 ? ` (${fomentos.filter(f=>f.status==="ACTIVOS").length})` : ""}`
@@ -7824,7 +7825,6 @@ export function App() {
                         onClick={() => {
                           setCajaSubTab(t);
                           if (t === "mantenimiento") { if (equipment.length === 0) refreshEquipment(); refreshMaintenanceHistory(); }
-                          if (t === "equipos" && equipment.length === 0) refreshEquipment();
                         }}
                       >
                         <span style={{ marginRight: 4 }}>{icons[t]}</span>{labels[t]}
@@ -8144,82 +8144,6 @@ export function App() {
                   </form>
                 )}
 
-                {/* ── Mantenimiento de Equipos ── */}
-                {cajaSubTab === "equipos" && (
-                  <div className="maintLayout">
-                    {/* Catálogo de máquinas */}
-                    <div className="formPanel">
-                      <h2>🔧 Agregar máquina</h2>
-                      <label>
-                        <span>Nombre</span>
-                        <input
-                          type="text"
-                          value={newEquipmentForm.name}
-                          onChange={(e: any) => setNewEquipmentForm({ ...newEquipmentForm, name: e.target.value })}
-                          placeholder="Ej: Piladora 1, Motor Túnel 1"
-                        />
-                      </label>
-                      <label>
-                        <span>Tipo</span>
-                        <select
-                          value={newEquipmentForm.type}
-                          onChange={(e: any) => setNewEquipmentForm({ ...newEquipmentForm, type: e.target.value })}
-                        >
-                          <option value="PILADORA">Piladora</option>
-                          <option value="SECADORA">Secadora</option>
-                          <option value="MOTOR">Motor</option>
-                          <option value="OTRO">Otro</option>
-                        </select>
-                      </label>
-                      <label>
-                        <span>Código</span>
-                        <input type="text" value={newEquipmentForm.code}
-                          onChange={(e: any) => setNewEquipmentForm({ ...newEquipmentForm, code: e.target.value })}
-                          placeholder="Ej: M-01" />
-                      </label>
-                      <label>
-                        <span>Marca</span>
-                        <input type="text" value={newEquipmentForm.brand}
-                          onChange={(e: any) => setNewEquipmentForm({ ...newEquipmentForm, brand: e.target.value })} />
-                      </label>
-                      <label>
-                        <span>Modelo</span>
-                        <input type="text" value={newEquipmentForm.model}
-                          onChange={(e: any) => setNewEquipmentForm({ ...newEquipmentForm, model: e.target.value })} />
-                      </label>
-                      <label>
-                        <span>Serie</span>
-                        <input type="text" value={newEquipmentForm.serial}
-                          onChange={(e: any) => setNewEquipmentForm({ ...newEquipmentForm, serial: e.target.value })} />
-                      </label>
-                      <label>
-                        <span>Ubicación</span>
-                        <input type="text" value={newEquipmentForm.location}
-                          onChange={(e: any) => setNewEquipmentForm({ ...newEquipmentForm, location: e.target.value })} />
-                      </label>
-                      <button type="button" className="primary" onClick={submitNewEquipment}>
-                        Agregar
-                      </button>
-                      <hr className="divider" />
-                      <h2 style={{ marginBottom: 0 }}>Equipos</h2>
-                      {equipment.length === 0 && <p className="muted">Sin equipos aún</p>}
-                      <div className="equipList">
-                        {equipment.filter((e) => e.status !== "FUERA_SERVICIO").map((eq) => (
-                          <div key={eq.id} className="equipItem">
-                            <div>
-                              <strong>{eq.name}</strong>
-                              <small>{eq.type}</small>
-                            </div>
-                            <button type="button" className="equipDelBtn" onClick={() => deleteEquipment(eq.id)}>
-                              Eliminar
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
                 {cajaSubTab === "mantenimiento" && (
                   <div className="maintLayout">
                     {/* Formulario Registrar Mantenimiento */}
@@ -8256,6 +8180,15 @@ export function App() {
                           <option key={s} value={s}>{s}</option>
                         ))}
                       </select>
+                    </label>
+                    <label>
+                      <span>Máquina / Activo (opcional)</span>
+                      <input
+                        type="text"
+                        value={maintenanceForm.maquina}
+                        onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, maquina: event.target.value })}
+                        placeholder="Ej: Secadora 1, Báscula, Piladora"
+                      />
                     </label>
                     <label>
                       <span>Tipo de mantenimiento</span>
@@ -8348,7 +8281,7 @@ export function App() {
                               {vis.map((m: any) => (
                                 <div key={m.id} className="equipItem">
                                   <div>
-                                    <strong>{m.area_label}{m.section_label ? " / " + m.section_label : ""}</strong>
+                                    <strong>{m.area_label}{m.section_label ? " / " + m.section_label : ""}{m.maquina ? " · " + m.maquina : ""}</strong>
                                     <small>{(m.created_at || "").slice(0, 10)} · {m.maintenance_type} · {m.description}{m.provider ? " · " + m.provider : ""}</small>
                                   </div>
                                   <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
