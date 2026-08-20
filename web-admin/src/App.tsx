@@ -3706,6 +3706,11 @@ export function App() {
   const maintTypes = maintCats.filter((c) => c.kind === "TYPE").map((c) => c.nombre);
   const maintSectionsFor = (area: string) =>
     maintCats.filter((c) => c.kind === "SECTION" && c.area === area).map((c) => c.nombre);
+  // Para los FILTROS del historial/reportes: todas (activas + inactivas). Las
+  // inactivas llevan el distintivo "(Inactiva)". Fuente: maintCatsAll. Si aún no
+  // se cargó, se cae a las activas para no quedar vacío.
+  const maintAreasFilter = (maintCatsAll.length ? maintCatsAll : maintCats).filter((c) => c.kind === "AREA");
+  const maintTypesFilter = (maintCatsAll.length ? maintCatsAll : maintCats).filter((c) => c.kind === "TYPE");
   const maintTypeLabel = (t: string) => {
     const known: Record<string, string> = {
       CORRECTIVO: "Correctivo (reparación)", PREVENTIVO: "Preventivo",
@@ -7948,7 +7953,7 @@ export function App() {
                         className={cajaSubTab === t ? "active" : ""}
                         onClick={() => {
                           setCajaSubTab(t);
-                          if (t === "mantenimiento") { refreshMaintenanceHistory(); loadMaintCategories(); }
+                          if (t === "mantenimiento") { refreshMaintenanceHistory(); loadMaintCategories(); loadMaintCategoriesAll(); }
                         }}
                       >
                         <span style={{ marginRight: 4 }}>{icons[t]}</span>{labels[t]}
@@ -8438,12 +8443,16 @@ export function App() {
                         <label style={{ margin: 0 }}><span>Área</span>
                           <select value={maintFilter.area} onChange={(e: any) => setMaintFilter({ ...maintFilter, area: e.target.value })}>
                             <option value="">Todas</option>
-                            {maintAreas.map((a) => (<option key={a} value={a}>{a}</option>))}
+                            {maintAreasFilter.map((c) => (
+                              <option key={c.id ?? c.nombre} value={c.nombre}>{c.nombre}{c.activo === false ? " (Inactiva)" : ""}</option>
+                            ))}
                           </select></label>
                         <label style={{ margin: 0 }}><span>Tipo</span>
                           <select value={maintFilter.type} onChange={(e: any) => setMaintFilter({ ...maintFilter, type: e.target.value })}>
                             <option value="">Todos</option>
-                            {maintTypes.map((t) => (<option key={t} value={t}>{maintTypeLabel(t)}</option>))}
+                            {maintTypesFilter.map((c) => (
+                              <option key={c.id ?? c.nombre} value={c.nombre}>{maintTypeLabel(c.nombre)}{c.activo === false ? " (Inactiva)" : ""}</option>
+                            ))}
                           </select></label>
                         <button type="button" onClick={refreshMaintenanceHistory}>Filtrar</button>
                         <button type="button" onClick={exportMaintCsv}>Exportar CSV</button>
