@@ -550,6 +550,9 @@ type AccountPayable = {
   balance: string | number;
   status: string;
   created_at: string;
+  reference_type?: string | null;
+  due_date?: string | null;
+  description?: string | null;
 };
 
 type ProductionPackageKey = "whiteRice" | "broken34" | "fineBroken" | "bran";
@@ -803,6 +806,9 @@ type AccountsReceivable = {
   balance: number;
   status: "PAID" | "CONFIRMED" | "PARTIAL";
   created_at: string;
+  farmer_id?: string | null;
+  reference_type?: string | null;
+  due_date?: string | null;
 };
 
 type Fomento = {
@@ -1341,6 +1347,8 @@ export function App() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [accountsReceivable, setAccountsReceivable] = useState<AccountsReceivable[]>([]);
+  const [arFilter, setArFilter] = useState<"todos" | "socios" | "agricultores" | "matriz">("todos");
+  const [apFilter, setApFilter] = useState<"todos" | "socios" | "agricultores" | "matriz">("todos");
   const [newCustomerForm, setNewCustomerForm] = useState({ full_name: "", phone: "", address: "", customer_type: "NATURAL" as "NATURAL"|"EMPRESA" });
 
   // ── Buscador de clientes en formulario de venta ──
@@ -9220,112 +9228,136 @@ export function App() {
           </section>
         )}
 
-        {activeTab === "Por Cobrar" && (
+        {activeTab === "Por Cobrar" && (() => {
+          const hoy = new Date().toISOString().slice(0, 10);
+          const socioNames = accionistas.filter((a) => a.tipo === "SOCIO").map((a) => (a.name || "").toUpperCase());
+          const clasif = (ar: AccountsReceivable) => {
+            if (ar.farmer_id) return "agricultores";
+            const rt = ar.reference_type || "";
+            if (["service_charge", "pilado_service", "lot_transfer"].includes(rt)) return "socios";
+            const nm = (ar.customer_name || ar.description || "").toUpperCase();
+            if (socioNames.some((s) => s && nm.includes(s))) return "socios";
+            return "matriz";
+          };
+          const esVencida = (ar: AccountsReceivable) => !!ar.due_date && ar.due_date.slice(0, 10) < hoy && Number(ar.balance) > 0.001;
+          const filtrado = accountsReceivable.filter((ar) => arFilter === "todos" || clasif(ar) === arFilter);
+          const totalPend = filtrado.reduce((a, r) => a + Number(r.balance), 0);
+          const vencidas = filtrado.filter(esVencida);
+          const tabs: Array<[typeof arFilter, string]> = [["todos", "Todos"], ["socios", "Socios"], ["agricultores", "Agricultores"], ["matriz", "Matriz (CEYRO)"]];
+          return (
           <section className="cuentasLayout">
-            <div className="cuentasHeader">
-              <div>
-                <h2 style={{ marginBottom: 2 }}>💵 Cuentas por cobrar</h2>
-                <p className="muted" style={{ margin: 0 }}>Clientes que deben dinero por ventas a crédito.</p>
-              </div>
-              <div className="cuentasTotal cobrar">
-                <span>Total por cobrar</span>
-                <strong>{money(accountsReceivable.reduce((a, r) => a + Number(r.balance), 0))}</strong>
-              </div>
+            <div>
+              <h2 style={{ marginBottom: 2 }}>💵 Cuentas por cobrar</h2>
+              <p className="muted" style={{ margin: "0 0 12px" }}>Quienes deben dinero: clientes, socios o agricultores.</p>
+            </div>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+              <KpiCard title="Total pendiente" value={money(totalPend)} sub={`${filtrado.length} cuenta(s)`} color="#16a34a" />
+              <KpiCard title="Vencido / por vencer" value={money(vencidas.reduce((a, r) => a + Number(r.balance), 0))} sub={`${vencidas.length} vencida(s)`} color="#dc2626" />
+              <KpiCard title="Transacciones activas" value={String(filtrado.length)} sub="facturas / servicios" color="#2563eb" />
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+              {tabs.map(([k, lbl]) => (
+                <button key={k} type="button" onClick={() => setArFilter(k)} className={arFilter === k ? "primary" : ""} style={{ fontSize: 12, padding: "6px 14px", borderRadius: 999 }}>{lbl}</button>
+              ))}
             </div>
             {!dashboard.current_cash_register && (
               <div className="alertBox">Abre una caja para poder registrar cobros.</div>
             )}
-            {accountsReceivable.length === 0 ? (
-              <div className="emptyState"><div className="emptyIcon">✅</div><p>No hay cuentas por cobrar pendientes</p></div>
+            {filtrado.length === 0 ? (
+              <div className="emptyState"><div className="emptyIcon">✅</div><p>No hay cuentas por cobrar en esta vista</p></div>
             ) : (
               <div className="cuentasGrid">
-                {accountsReceivable.map((ar) => (
-                  <article key={ar.id} className="cuentaCard cobrar">
-                    <div className="cuentaTop">
-                      <div>
-                        <span className="cuentaLabel">{ar.sale_number ? "Cliente" : "Deudor"}</span>
-                        <strong>{ar.customer_name ?? "—"}</strong>
-                        {!ar.sale_number && ar.description && (
-                          <span className="muted" style={{ display: "block", fontSize: 12 }}>{ar.description}</span>
-                        )}
-                      </div>
-                      <span className="cuentaRef">{ar.sale_number || ""}</span>
-                    </div>
-                    <div className="cuentaAmounts">
-                      <div><span>Monto total</span><b>{money(Number(ar.amount))}</b></div>
-                      <div><span>Saldo pendiente</span><b className="pend">{money(Number(ar.balance))}</b></div>
-                    </div>
-                    <div className="cuentaBar"><div style={{ width: `${((Number(ar.amount) - Number(ar.balance)) / Number(ar.amount)) * 100}%` }} /></div>
-                    {/* Abono: puede pagar todo o una parte (deja el saldo). */}
-                    <AbonoForm
-                      saldo={Number(ar.balance)}
-                      disabled={!dashboard.current_cash_register}
-                      onAbonar={(monto) => payAccountReceivable(ar.id, monto).catch((e) => addToast(e.message, "error"))}
-                    />
-                  </article>
+                {filtrado.map((ar) => (
+                  <CuentaCardNueva
+                    key={ar.id}
+                    color="cobrar"
+                    nombre={ar.customer_name ?? "—"}
+                    refTxt={ar.sale_number ? `Venta ${ar.sale_number}` : undefined}
+                    descripcion={ar.description ?? undefined}
+                    total={Number(ar.amount)}
+                    saldo={Number(ar.balance)}
+                    status={ar.status}
+                    vencido={esVencida(ar)}
+                    disabled={!dashboard.current_cash_register}
+                    onPagarTotal={(m) => payAccountReceivable(ar.id, m).catch((e) => addToast(e.message, "error"))}
+                    onAbonar={(m) => payAccountReceivable(ar.id, m).catch((e) => addToast(e.message, "error"))}
+                  />
                 ))}
               </div>
             )}
           </section>
-        )}
+          );
+        })()}
 
-        {activeTab === "Por Pagar" && (
+        {activeTab === "Por Pagar" && (() => {
+          const hoy = new Date().toISOString().slice(0, 10);
+          const socioNames = accionistas.filter((a) => a.tipo === "SOCIO").map((a) => (a.name || "").toUpperCase());
+          const clasif = (p: AccountPayable) => {
+            if (p.liquidation_number || p.farmer_id) return "agricultores";
+            const rt = p.reference_type || "";
+            if (["service_charge", "pilado_service", "lot_transfer"].includes(rt)) return "socios";
+            const nm = (p.farmer_name || "").toUpperCase();
+            if (socioNames.some((s) => s && nm.includes(s))) return "socios";
+            return "matriz";
+          };
+          const grupos = groupPayables(cashPayables)
+            .map((g) => ({ ...g, clase: clasif(g.items[0]) }))
+            .filter((g) => apFilter === "todos" || g.clase === apFilter);
+          const totalPend = grupos.reduce((a, g) => a + g.items.reduce((s, p) => s + Number(p.balance), 0), 0);
+          const vencidos = grupos.filter((g) => { const p = g.items[0]; return !!p.due_date && p.due_date.slice(0, 10) < hoy && g.items.reduce((s, x) => s + Number(x.balance), 0) > 0.001; });
+          const tabs: Array<[typeof apFilter, string]> = [["todos", "Todos"], ["socios", "Socios"], ["agricultores", "Agricultores"], ["matriz", "Matriz (CEYRO)"]];
+          return (
           <section className="cuentasLayout">
-            <div className="cuentasHeader">
-              <div>
-                <h2 style={{ marginBottom: 2 }}>📑 Cuentas por pagar</h2>
-                <p className="muted" style={{ margin: 0 }}>Dinero que se debe a agricultores por liquidaciones.</p>
-              </div>
-              <div className="cuentasTotal pagar">
-                <span>Total por pagar</span>
-                <strong>{money(cashPayables.reduce((a, p) => a + Number(p.balance), 0))}</strong>
-              </div>
+            <div>
+              <h2 style={{ marginBottom: 2 }}>📑 Cuentas por pagar</h2>
+              <p className="muted" style={{ margin: "0 0 12px" }}>Dinero que se debe: agricultores, socios o la matriz.</p>
+            </div>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+              <KpiCard title="Total pendiente" value={money(totalPend)} sub={`${grupos.length} cuenta(s)`} color="#dc2626" />
+              <KpiCard title="Vencido / por vencer" value={money(vencidos.reduce((a, g) => a + g.items.reduce((s, p) => s + Number(p.balance), 0), 0))} sub={`${vencidos.length} vencida(s)`} color="#b45309" />
+              <KpiCard title="Transacciones activas" value={String(grupos.length)} sub="liquidaciones / servicios" color="#2563eb" />
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+              {tabs.map(([k, lbl]) => (
+                <button key={k} type="button" onClick={() => setApFilter(k)} className={apFilter === k ? "primary" : ""} style={{ fontSize: 12, padding: "6px 14px", borderRadius: 999 }}>{lbl}</button>
+              ))}
             </div>
             {!dashboard.current_cash_register && (
               <div className="alertBox">Abre una caja para poder registrar pagos.</div>
             )}
-            {cashPayables.length === 0 ? (
-              <div className="emptyState"><div className="emptyIcon">✅</div><p>No hay cuentas por pagar pendientes</p></div>
+            {grupos.length === 0 ? (
+              <div className="emptyState"><div className="emptyIcon">✅</div><p>No hay cuentas por pagar en esta vista</p></div>
             ) : (
               <div className="cuentasGrid">
-                {groupPayables(cashPayables).map((grupo) => {
+                {grupos.map((grupo) => {
                   const total = grupo.items.reduce((a, p) => a + Number(p.amount), 0);
                   const pendiente = grupo.items.reduce((a, p) => a + Number(p.balance), 0);
-                  const percentPaid = total > 0 ? ((total - pendiente) / total) * 100 : 0;
+                  const p0 = grupo.items[0];
                   const varios = grupo.items.length > 1;
+                  const refTxt = [p0.liquidation_number ? `Liq. ${p0.liquidation_number}` : "", varios ? `${grupo.items.length} ingresos` : ""].filter(Boolean).join(" · ");
+                  const vencido = !!p0.due_date && p0.due_date.slice(0, 10) < hoy && pendiente > 0.001;
                   return (
-                    <article key={grupo.key} className="cuentaCard pagar">
-                      <div className="cuentaTop">
-                        <div>
-                          <span className="cuentaLabel">Agricultor</span>
-                          <strong>{grupo.items[0].farmer_name}</strong>
-                        </div>
-                        <span className="cuentaRef">
-                          {grupo.items[0].liquidation_number ? `Liq. ${grupo.items[0].liquidation_number}` : ""}
-                          {varios ? ` · ${grupo.items.length} ingresos` : ""}
-                        </span>
-                      </div>
-                      <div className="cuentaAmounts">
-                        <div><span>Total</span><b>{money(total)}</b></div>
-                        <div><span>Pendiente</span><b className="pend">{money(pendiente)}</b></div>
-                      </div>
-                      <div className="cuentaBar"><div style={{ width: `${percentPaid}%` }} /></div>
-                      {/* Un solo pago por el total: el sistema lo reparte entre
-                          los ingresos (del más viejo al más nuevo). */}
-                      <PayablePayForm
-                        key={`${grupo.key}-${pendiente.toFixed(2)}`}
-                        payable={{ ...grupo.items[0], amount: total, balance: pendiente }}
-                        onPay={(amount) =>
-                          pagarGrupoCuentas(grupo.items.map((ap) => ap.id), amount).catch((e) => addToast(e.message, "error"))
-                        }
-                      />
-                    </article>
+                    <CuentaCardNueva
+                      key={`${grupo.key}-${pendiente.toFixed(2)}`}
+                      color="pagar"
+                      nombre={p0.farmer_name}
+                      refTxt={refTxt || undefined}
+                      descripcion={p0.description ?? undefined}
+                      total={total}
+                      saldo={pendiente}
+                      status={pendiente < 0.01 ? "PAID" : p0.status}
+                      vencido={vencido}
+                      disabled={!dashboard.current_cash_register}
+                      onPagarTotal={(m) => pagarGrupoCuentas(grupo.items.map((ap) => ap.id), m).catch((e) => addToast(e.message, "error"))}
+                      onAbonar={(m) => pagarGrupoCuentas(grupo.items.map((ap) => ap.id), m).catch((e) => addToast(e.message, "error"))}
+                    />
                   );
                 })}
               </div>
             )}
           </section>
-        )}
+          );
+        })()}
 
         {activeTab === "Servicio Pilado" && (() => {
           const clientes = accionistas.filter((a) => a.id !== CEYRO_ID);
@@ -12130,6 +12162,80 @@ function StageCard({ title, report }: { title: string; report?: ProcessReport })
       <span>{title}</span>
       <strong>{report ? "Con informe" : "Pendiente"}</strong>
       {report && <small>#{report.sequence} {report.report_title}</small>}
+    </article>
+  );
+}
+
+// ── UI Cuentas por Cobrar / Pagar (rediseño visual) ─────────────────────────
+function KpiCard({ title, value, sub, color }: { title: string; value: string; sub?: string; color: string }) {
+  return (
+    <div style={{ flex: "1 1 200px", minWidth: 170, background: "var(--c-surface, #fff)", border: "1px solid var(--c-border, #e5e7eb)", borderRadius: 14, padding: "14px 18px", boxShadow: "0 1px 3px rgba(0,0,0,0.06)", borderTop: `3px solid ${color}` }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", letterSpacing: 0.4, textTransform: "uppercase" }}>{title}</div>
+      <div style={{ fontSize: 23, fontWeight: 800, marginTop: 4 }}>{value}</div>
+      {sub && <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function EstadoBadge({ status, vencido }: { status: string; vencido: boolean }) {
+  const cfg = status === "PAID"
+    ? { bg: "#dcfce7", fg: "#166534", txt: "🟢 Cancelado" }
+    : vencido
+    ? { bg: "#fee2e2", fg: "#991b1b", txt: "🔴 En mora" }
+    : { bg: "#fef9c3", fg: "#854d0e", txt: "🟡 Pendiente" };
+  return <span style={{ background: cfg.bg, color: cfg.fg, fontSize: 11, fontWeight: 700, padding: "2px 10px", borderRadius: 999, whiteSpace: "nowrap" }}>{cfg.txt}</span>;
+}
+
+function CuentaCardNueva(props: {
+  nombre: string; refTxt?: string; descripcion?: string;
+  total: number; saldo: number; status: string; vencido: boolean;
+  disabled?: boolean; color: "cobrar" | "pagar";
+  onPagarTotal: (m: number) => void; onAbonar: (m: number) => void;
+}) {
+  const [modo, setModo] = React.useState<"" | "abono" | "detalle">("");
+  const [monto, setMonto] = React.useState(String(props.saldo.toFixed(2)));
+  const abonos = Math.max(0, props.total - props.saldo);
+  const pct = props.total > 0 ? Math.min(100, Math.max(0, (abonos / props.total) * 100)) : 0;
+  const inicial = (props.nombre || "?").trim().charAt(0).toUpperCase() || "?";
+  const barColor = props.color === "cobrar" ? "#16a34a" : "#dc2626";
+  return (
+    <article style={{ background: "var(--c-surface, #fff)", border: "1px solid var(--c-border, #e5e7eb)", borderRadius: 14, padding: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.06)", display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ width: 38, height: 38, borderRadius: "50%", background: barColor, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, flexShrink: 0 }}>{inicial}</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <strong style={{ display: "block", fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{props.nombre}</strong>
+          {props.refTxt && <small className="muted">{props.refTxt}</small>}
+        </div>
+        <EstadoBadge status={props.status} vencido={props.vencido} />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, fontSize: 12 }}>
+        <div><span className="muted" style={{ display: "block" }}>Monto total</span><b>{money(props.total)}</b></div>
+        <div><span className="muted" style={{ display: "block" }}>Abonos</span><b style={{ color: "#0891b2" }}>{money(abonos)}</b></div>
+        <div><span className="muted" style={{ display: "block" }}>Saldo</span><b style={{ fontSize: 15, color: barColor }}>{money(props.saldo)}</b></div>
+      </div>
+      <div style={{ height: 7, background: "#f1f5f9", borderRadius: 999, overflow: "hidden" }}>
+        <div style={{ width: `${pct}%`, height: "100%", background: barColor, transition: "width .3s" }} />
+      </div>
+      <div style={{ fontSize: 11, color: "#64748b", marginTop: -4 }}>{pct.toFixed(0)}% pagado</div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <button type="button" className="primary" disabled={props.disabled} onClick={() => props.onPagarTotal(props.saldo)} style={{ fontSize: 12, padding: "6px 10px" }}>✅ Pagar total</button>
+        <button type="button" disabled={props.disabled} onClick={() => { setMonto(String(props.saldo.toFixed(2))); setModo(modo === "abono" ? "" : "abono"); }} style={{ fontSize: 12, padding: "6px 10px" }}>💳 Abono parcial</button>
+        {(props.descripcion || props.refTxt) && <button type="button" onClick={() => setModo(modo === "detalle" ? "" : "detalle")} style={{ fontSize: 12, padding: "6px 10px" }}>📄 Ver detalle</button>}
+      </div>
+      {modo === "abono" && (
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <input type="number" min="0.01" step="0.01" max={props.saldo} value={monto} onChange={(e) => setMonto(e.target.value)} className="payableInput" style={{ maxWidth: 130 }} />
+          <button type="button" className="primary" disabled={props.disabled || !(Number(monto) > 0) || Number(monto) > props.saldo + 0.001} onClick={() => props.onAbonar(Number(monto))} style={{ fontSize: 12, padding: "6px 10px" }}>Registrar abono</button>
+          {Number(monto) > 0 && Number(monto) < props.saldo - 0.001 && <small className="muted">Queda {money(round2(props.saldo - Number(monto)))}</small>}
+        </div>
+      )}
+      {modo === "detalle" && (
+        <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 10px", fontSize: 12, color: "#334155" }}>
+          {props.refTxt && <div><b>Referencia:</b> {props.refTxt}</div>}
+          {props.descripcion && <div>{props.descripcion}</div>}
+          {!props.refTxt && !props.descripcion && <div className="muted">Sin detalle adicional.</div>}
+        </div>
+      )}
     </article>
   );
 }
