@@ -1952,6 +1952,15 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUser?.id]);
 
+  // Si el accionista activo es SOCIO y la subpestaña de Caja abierta es exclusiva
+  // de la matriz (Gastos/Sacos/Mantenimiento/Equipos), volver a "Movimientos".
+  React.useEffect(() => {
+    const esSocio = accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "SOCIO";
+    if (esSocio && ["gastos", "sacos", "mantenimiento", "equipos"].includes(cajaSubTab)) {
+      setCajaSubTab("resumen");
+    }
+  }, [activeAccionistaId, accionistas, cajaSubTab]);
+
   async function refreshCaja(registerId?: string) {
     const id = registerId ?? dashboard.current_cash_register?.id;
     if (!id) return;
@@ -7737,7 +7746,15 @@ export function App() {
 
                 {/* Sub-tabs profesional */}
                 <nav className="cajaSubNav">
-                  {(["resumen", "venta_detalle", "anticipo", "movimiento", "gastos", "sacos", "mantenimiento", "equipos", "fomentos"] as const).map((t) => {
+                  {(["resumen", "venta_detalle", "anticipo", "movimiento", "gastos", "sacos", "mantenimiento", "equipos", "fomentos"] as const)
+                    .filter((t) => {
+                      // Subpestañas exclusivas de la planta/matriz (CEYRO). Los socios
+                      // (ROVINSON/STALYN) operan solo lo comercial.
+                      const esSocio = accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "SOCIO";
+                      const soloMatriz = ["gastos", "sacos", "mantenimiento", "equipos"];
+                      return !(esSocio && soloMatriz.includes(t));
+                    })
+                    .map((t) => {
                     const icons = {
                       resumen: "📋",
                       anticipo: "💸",
