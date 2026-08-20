@@ -899,7 +899,7 @@ const navGroups: Array<{ label: string; tabs: string[] }> = [
   { label: "Comercial", tabs: ["Ventas", "Compras", "Caja"] },
   { label: "Cuentas", tabs: ["Por Cobrar", "Por Pagar"] },
   { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores", "Nomina", "Cuadrilla", "Servicio Pilado"] },
-  { label: "Contabilidad", tabs: ["Estados Financieros"] },
+  { label: "Contabilidad", tabs: ["Costos Operativos", "Estados Financieros"] },
   { label: "Sistema", tabs: ["Reportes", "Configuracion"] }
 ];
 const tabs = navGroups.flatMap((group) => group.tabs);
@@ -946,6 +946,8 @@ function NavIcon({ tab }: { tab: string }) {
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.2 3.2l1.4 1.4M11.4 11.4l1.4 1.4M3.2 12.8l1.4-1.4M11.4 4.6l1.4-1.4"/></svg>;
     case "Seleccion":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10 3a5 5 0 100 10"/><path d="M13 5.5l-3 2.5-1.5-1.5"/><circle cx="5" cy="8" r="1" fill="currentColor" stroke="none"/></svg>;
+    case "Costos Operativos":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="6.5"/><path d="M8 4.5v7M9.8 6.2a1.8 1.8 0 00-1.8-1 1.5 1.5 0 000 3 1.5 1.5 0 010 3 1.8 1.8 0 01-1.8-1"/></svg>;
     case "Estados Financieros":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 13h12"/><rect x="3" y="8" width="2.5" height="5"/><rect x="6.75" y="5" width="2.5" height="8"/><rect x="10.5" y="2" width="2.5" height="11"/></svg>;
     case "Reportes":
@@ -3511,6 +3513,7 @@ export function App() {
     if (activeTab === "Seleccion") refreshSelection().catch(() => undefined);
     if (activeTab === "Dashboard" && canSeePanel) refreshPanel().catch(() => undefined);
     if (activeTab === "Configuracion") refreshConfig().catch(() => undefined);
+    if (activeTab === "Costos Operativos") refreshCostos().catch(() => undefined);
     if (activeTab === "Estados Financieros") loadFinanzas().catch((e) => addToast(e.message, "error"));
   }, [activeTab, motorActivo]);
 
@@ -6037,6 +6040,65 @@ export function App() {
           </section>
         )}
 
+        {/* ===== CONTABILIDAD · Costos Operativos (movido desde Producción) ===== */}
+        {activeTab === "Costos Operativos" && (
+          <section className="panelGrid">
+            <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
+              <h2 style={{ marginBottom: 4 }}>🏭 Costo operativo por corrida (Planta / CEYRO)</h2>
+              <p className="muted">Registra el costo real de operar una corrida (luz, mantenimiento, mano de obra, combustible, desgaste, otros) para saber el costo por QQ producido.</p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}>
+                <label style={{ margin: 0 }}><span>Corrida (opcional)</span>
+                  <select value={costoForm.processing_batch_id} onChange={(e) => {
+                    const id = e.target.value;
+                    const b = costoBatches.find((x: any) => x.id === id);
+                    setCostoForm({ ...costoForm, processing_batch_id: id, qq_producidos: b && b.qq_producidos ? String(b.qq_producidos) : costoForm.qq_producidos });
+                  }}>
+                    <option value="">— Sin ligar / manual —</option>
+                    {costoBatches.map((b: any) => (
+                      <option key={b.id} value={b.id}>{(b.created_at || "").slice(0, 10)} · {Number(b.qq_producidos).toFixed(2)} QQ · {b.status}</option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ margin: 0 }}><span>Fecha</span>
+                  <input type="date" value={costoForm.fecha} onChange={(e) => setCostoForm({ ...costoForm, fecha: e.target.value })} /></label>
+                <label style={{ margin: 0 }}><span>QQ producidos</span>
+                  <input type="number" step="0.01" min="0" value={costoForm.qq_producidos} onChange={(e) => setCostoForm({ ...costoForm, qq_producidos: e.target.value })} style={{ width: 110 }} /></label>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 8 }}>
+                <label style={{ margin: 0 }}><span>Luz</span><input type="number" step="0.01" min="0" value={costoForm.luz} onChange={(e) => setCostoForm({ ...costoForm, luz: e.target.value })} /></label>
+                <label style={{ margin: 0 }}><span>Mantenimiento</span><input type="number" step="0.01" min="0" value={costoForm.mantenimiento} onChange={(e) => setCostoForm({ ...costoForm, mantenimiento: e.target.value })} /></label>
+                <label style={{ margin: 0 }}><span>Mano de obra</span><input type="number" step="0.01" min="0" value={costoForm.mano_obra} onChange={(e) => setCostoForm({ ...costoForm, mano_obra: e.target.value })} /></label>
+                <label style={{ margin: 0 }}><span>Combustible</span><input type="number" step="0.01" min="0" value={costoForm.combustible} onChange={(e) => setCostoForm({ ...costoForm, combustible: e.target.value })} /></label>
+                <label style={{ margin: 0 }}><span>Desgaste</span><input type="number" step="0.01" min="0" value={costoForm.desgaste} onChange={(e) => setCostoForm({ ...costoForm, desgaste: e.target.value })} /></label>
+                <label style={{ margin: 0 }}><span>Otros</span><input type="number" step="0.01" min="0" value={costoForm.otros} onChange={(e) => setCostoForm({ ...costoForm, otros: e.target.value })} /></label>
+              </div>
+              {(() => {
+                const total = costoFormTotal();
+                const qq = parseFloat(costoForm.qq_producidos) || 0;
+                return <p style={{ fontWeight: 700, margin: "8px 0" }}>Costo total: ${total.toFixed(2)}{qq > 0 && ` · Costo por QQ: $${(total / qq).toFixed(2)}`}</p>;
+              })()}
+              <button type="button" className="primary" onClick={submitCosto}>Registrar costo</button>
+              <hr className="divider" />
+              <h2 style={{ marginBottom: 0 }}>Costos registrados</h2>
+              {costos.length === 0 && <p className="muted">Sin costos registrados.</p>}
+              <div className="equipList">
+                {costos.map((c: any) => (
+                  <div key={c.id} className="equipItem">
+                    <div>
+                      <strong>{(c.fecha || "").slice(0, 10)} · {Number(c.qq_producidos).toFixed(2)} QQ</strong>
+                      <small>Luz {Number(c.luz).toFixed(0)} · Mant {Number(c.mantenimiento).toFixed(0)} · M.obra {Number(c.mano_obra).toFixed(0)} · Comb {Number(c.combustible).toFixed(0)} · Desg {Number(c.desgaste).toFixed(0)} · Otros {Number(c.otros).toFixed(0)}</small>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <strong>${Number(c.costo_total).toFixed(2)}</strong>
+                      <small>${Number(c.costo_por_qq).toFixed(2)}/QQ</small>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+        )}
+
         {activeTab === "Estados Financieros" && (
           <section className="panelGrid">
             {/* Barra de período + descarga */}
@@ -6698,59 +6760,8 @@ export function App() {
 
         {activeTab === "Produccion" && (
           <section className="productionModuleGrid">
-            <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
-              <h2 style={{ marginBottom: 4 }}>🏭 Costo operativo por corrida (Planta / CEYRO)</h2>
-              <p className="muted">Registra el costo real de operar una corrida (luz, mantenimiento, mano de obra, combustible, desgaste, otros) para saber el costo por QQ producido.</p>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}>
-                <label style={{ margin: 0 }}><span>Corrida (opcional)</span>
-                  <select value={costoForm.processing_batch_id} onChange={(e) => {
-                    const id = e.target.value;
-                    const b = costoBatches.find((x: any) => x.id === id);
-                    setCostoForm({ ...costoForm, processing_batch_id: id, qq_producidos: b && b.qq_producidos ? String(b.qq_producidos) : costoForm.qq_producidos });
-                  }}>
-                    <option value="">— Sin ligar / manual —</option>
-                    {costoBatches.map((b: any) => (
-                      <option key={b.id} value={b.id}>{(b.created_at || "").slice(0, 10)} · {Number(b.qq_producidos).toFixed(2)} QQ · {b.status}</option>
-                    ))}
-                  </select>
-                </label>
-                <label style={{ margin: 0 }}><span>Fecha</span>
-                  <input type="date" value={costoForm.fecha} onChange={(e) => setCostoForm({ ...costoForm, fecha: e.target.value })} /></label>
-                <label style={{ margin: 0 }}><span>QQ producidos</span>
-                  <input type="number" step="0.01" min="0" value={costoForm.qq_producidos} onChange={(e) => setCostoForm({ ...costoForm, qq_producidos: e.target.value })} style={{ width: 110 }} /></label>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 8 }}>
-                <label style={{ margin: 0 }}><span>Luz</span><input type="number" step="0.01" min="0" value={costoForm.luz} onChange={(e) => setCostoForm({ ...costoForm, luz: e.target.value })} /></label>
-                <label style={{ margin: 0 }}><span>Mantenimiento</span><input type="number" step="0.01" min="0" value={costoForm.mantenimiento} onChange={(e) => setCostoForm({ ...costoForm, mantenimiento: e.target.value })} /></label>
-                <label style={{ margin: 0 }}><span>Mano de obra</span><input type="number" step="0.01" min="0" value={costoForm.mano_obra} onChange={(e) => setCostoForm({ ...costoForm, mano_obra: e.target.value })} /></label>
-                <label style={{ margin: 0 }}><span>Combustible</span><input type="number" step="0.01" min="0" value={costoForm.combustible} onChange={(e) => setCostoForm({ ...costoForm, combustible: e.target.value })} /></label>
-                <label style={{ margin: 0 }}><span>Desgaste</span><input type="number" step="0.01" min="0" value={costoForm.desgaste} onChange={(e) => setCostoForm({ ...costoForm, desgaste: e.target.value })} /></label>
-                <label style={{ margin: 0 }}><span>Otros</span><input type="number" step="0.01" min="0" value={costoForm.otros} onChange={(e) => setCostoForm({ ...costoForm, otros: e.target.value })} /></label>
-              </div>
-              {(() => {
-                const total = costoFormTotal();
-                const qq = parseFloat(costoForm.qq_producidos) || 0;
-                return <p style={{ fontWeight: 700, margin: "8px 0" }}>Costo total: ${total.toFixed(2)}{qq > 0 && ` · Costo por QQ: $${(total / qq).toFixed(2)}`}</p>;
-              })()}
-              <button type="button" className="primary" onClick={submitCosto}>Registrar costo</button>
-              <hr className="divider" />
-              <h2 style={{ marginBottom: 0 }}>Costos registrados</h2>
-              {costos.length === 0 && <p className="muted">Sin costos registrados.</p>}
-              <div className="equipList">
-                {costos.map((c: any) => (
-                  <div key={c.id} className="equipItem">
-                    <div>
-                      <strong>{(c.fecha || "").slice(0, 10)} · {Number(c.qq_producidos).toFixed(2)} QQ</strong>
-                      <small>Luz {Number(c.luz).toFixed(0)} · Mant {Number(c.mantenimiento).toFixed(0)} · M.obra {Number(c.mano_obra).toFixed(0)} · Comb {Number(c.combustible).toFixed(0)} · Desg {Number(c.desgaste).toFixed(0)} · Otros {Number(c.otros).toFixed(0)}</small>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <strong>${Number(c.costo_total).toFixed(2)}</strong>
-                      <small>${Number(c.costo_por_qq).toFixed(2)}/QQ</small>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
+            {/* El "Costo operativo por corrida" se movió a Contabilidad → «Costos
+                Operativos». Producción arranca directo en Secadora/Reporte de pilado. */}
             {millingDrafts.length > 0 && (
               <div id="procesos-guardados" className="tablePanel" style={{ gridColumn: "1 / -1" }}>
                 <h2>📋 Procesos guardados (en curso)</h2>
