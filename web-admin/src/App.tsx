@@ -1418,7 +1418,6 @@ export function App() {
   });
 
   // ── Mantenimiento de Equipos ───────────────────────────────────────────
-  const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [maintenanceForm, setMaintenanceForm] = useState({
     area: "",
     section: "",
@@ -1432,16 +1431,6 @@ export function App() {
   });
   const [maintenanceHistory, setMaintenanceHistory] = useState<any[]>([]);
   const [maintFilter, setMaintFilter] = useState({ from: "", to: "", area: "", type: "" });
-  const [newEquipmentForm, setNewEquipmentForm] = useState({
-    name: "",
-    type: "PILADORA" as "PILADORA" | "SECADORA" | "MOTOR" | "OTRO",
-    status: "ACTIVA" as "ACTIVA" | "MANTENIMIENTO" | "FUERA_SERVICIO",
-    code: "",
-    brand: "",
-    model: "",
-    serial: "",
-    location: ""
-  });
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [supplierForm, setSupplierForm] = useState({ name: "", identification: "", phone: "", email: "", address: "", notes: "" });
   const [editingSupplierId, setEditingSupplierId] = useState<string | null>(null);
@@ -3622,10 +3611,6 @@ export function App() {
     }
   };
 
-  const refreshEquipment = async () => {
-    const res = await apiFetch(`/equipment`);
-    if (res.ok) setEquipment(await res.json());
-  };
 
   const refreshMaintenanceHistory = async () => {
     try {
@@ -3826,51 +3811,6 @@ export function App() {
     } catch (e) { addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error"); }
   };
 
-  const submitNewEquipment = async () => {
-    if (!newEquipmentForm.name || !newEquipmentForm.type) {
-      addToast("Completa nombre y tipo", "error");
-      return;
-    }
-
-    try {
-      const res = await apiFetch(`/equipment`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: newEquipmentForm.name,
-          type: newEquipmentForm.type,
-          status: newEquipmentForm.status,
-          code: newEquipmentForm.code || undefined,
-          brand: newEquipmentForm.brand || undefined,
-          model: newEquipmentForm.model || undefined,
-          serial: newEquipmentForm.serial || undefined,
-          location: newEquipmentForm.location || undefined
-        })
-      });
-      if (!res.ok) throw new Error(await res.text());
-
-      setNewEquipmentForm({ name: "", type: "PILADORA", status: "ACTIVA", code: "", brand: "", model: "", serial: "", location: "" });
-      await refreshEquipment();
-      addToast("Máquina creada ✓", "success");
-    } catch (e) {
-      addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error");
-    }
-  };
-
-  const deleteEquipment = async (equipmentId: string) => {
-    if (!confirm("¿Eliminar este equipo?")) return;
-    try {
-      const res = await apiFetch(`/equipment/${equipmentId}`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" }
-      });
-      if (!res.ok) throw new Error(await res.text());
-      await refreshEquipment();
-      addToast("Equipo actualizado ✓", "success");
-    } catch (e) {
-      addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error");
-    }
-  };
 
   const getDescriptionPlaceholder = () => {
     if (maintenanceForm.area === "PILADORA") {
@@ -7824,7 +7764,7 @@ export function App() {
                         className={cajaSubTab === t ? "active" : ""}
                         onClick={() => {
                           setCajaSubTab(t);
-                          if (t === "mantenimiento") { if (equipment.length === 0) refreshEquipment(); refreshMaintenanceHistory(); }
+                          if (t === "mantenimiento") { refreshMaintenanceHistory(); }
                         }}
                       >
                         <span style={{ marginRight: 4 }}>{icons[t]}</span>{labels[t]}
