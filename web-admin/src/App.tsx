@@ -1240,6 +1240,8 @@ export function App() {
   const [tarifaVigenteHint, setTarifaVigenteHint] = useState<string>("");
   const [servicioTarifas, setServicioTarifas] = useState<any[]>([]);
   const [tarifaForm, setTarifaForm] = useState({ socio_id: "", servicio: "PILADO", precio_por_qq: "", fecha_vigencia: nominaToday });
+  const [cobros, setCobros] = useState<any[]>([]);
+  const [cobroForm, setCobroForm] = useState({ client_accionista_id: "", servicio: "FLETE", monto: "", pagado_al_instante: false });
   const [costos, setCostos] = useState<any[]>([]);
   const [costoBatches, setCostoBatches] = useState<any[]>([]);
   const [costoForm, setCostoForm] = useState({ processing_batch_id: "", fecha: nominaToday, qq_producidos: "", luz: "", mantenimiento: "", mano_obra: "", combustible: "", desgaste: "", otros: "" });
@@ -2336,6 +2338,29 @@ export function App() {
       setCostoForm({ processing_batch_id: "", fecha: nominaToday, qq_producidos: "", luz: "", mantenimiento: "", mano_obra: "", combustible: "", desgaste: "", otros: "" });
       await refreshCostos();
       addToast("Costo operativo registrado ✓", "success");
+    } catch (e) { addToast(`Error: ${e instanceof Error ? e.message : "Error"}`, "error"); }
+  };
+
+  const refreshCobros = async () => {
+    try { setCobros(await apiGet<any[]>("/cobros")); } catch { /* noop */ }
+  };
+  const submitCobro = async () => {
+    if (!cobroForm.client_accionista_id) { addToast("Elige el socio", "error"); return; }
+    const monto = parseFloat(cobroForm.monto);
+    if (!monto || monto <= 0) { addToast("Monto inválido", "error"); return; }
+    const payload: any = { client_accionista_id: cobroForm.client_accionista_id, servicio: cobroForm.servicio, monto };
+    if (cobroForm.pagado_al_instante) {
+      const registerId = dashboard.current_cash_register?.id;
+      if (!registerId) { addToast("Para cobrar de contado abre la caja de CEYRO", "error"); return; }
+      payload.pagado_al_instante = true;
+      payload.cash_register_id = registerId;
+    }
+    try {
+      await apiPost("/cobros", payload);
+      setCobroForm({ client_accionista_id: "", servicio: "FLETE", monto: "", pagado_al_instante: false });
+      await refreshCobros();
+      if (cobroForm.pagado_al_instante && dashboard.current_cash_register?.id) await refreshCaja(dashboard.current_cash_register.id);
+      addToast(cobroForm.pagado_al_instante ? "Cobro registrado y cobrado ✓" : "Cobro registrado (cuenta por cobrar) ✓", "success");
     } catch (e) { addToast(`Error: ${e instanceof Error ? e.message : "Error"}`, "error"); }
   };
 
@@ -3481,7 +3506,7 @@ export function App() {
     if (activeTab === "Secadoras") loadMotorActive(motorActivo).catch(() => undefined);
     if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
     if (activeTab === "Cuadrilla") refreshCuadrilla().catch(() => undefined);
-    if (activeTab === "Servicio Pilado") refreshPilado().catch(() => undefined);
+    if (activeTab === "Servicio Pilado") { refreshPilado().catch(() => undefined); refreshCobros().catch(() => undefined); }
     if (activeTab === "Seleccion") refreshSelection().catch(() => undefined);
     if (activeTab === "Dashboard" && canSeePanel) refreshPanel().catch(() => undefined);
     if (activeTab === "Configuracion") refreshConfig().catch(() => undefined);
@@ -9307,6 +9332,52 @@ export function App() {
           const previewTotal = round2(Number(piladoForm.quintals || 0) * Number(piladoForm.rate_per_qq || 0));
           return (
           <section className="panelGrid">
+            {accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "MATRIZ" && (
+              <div className="formPanel">
+                <h2>🧾 Registrar cobro a socio (servicios)</h2>
+                <p className="muted">CEYRO cobra un servicio (Flete, Secado, Mantenimiento, etc.) a un socio: genera su cuenta por cobrar y, en espejo, la cuenta por pagar del socio. Con opción de cobro de contado.</p>
+                <label><span>Socio</span>
+                  <select value={cobroForm.client_accionista_id} onChange={(e) => setCobroForm({ ...cobroForm, client_accionista_id: e.target.value })}>
+                    <option value="">Seleccione</option>
+                    {clientes.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  </select>
+                </label>
+                <label><span>Servicio</span>
+                  <select value={cobroForm.servicio} onChange={(e) => setCobroForm({ ...cobroForm, servicio: e.target.value })}>
+                    <option value="PILADO">Pilado</option>
+                    <option value="SECADO">Secado</option>
+                    <option value="FLETE">Flete</option>
+                    <option value="MANTENIMIENTO">Mantenimiento</option>
+                    <option value="OTRO">Otro</option>
+                  </select>
+                </label>
+                <label><span>Monto $</span>
+                  <input type="number" step="0.01" min="0" value={cobroForm.monto} onChange={(e) => setCobroForm({ ...cobroForm, monto: e.target.value })} />
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0" }}>
+                  <input type="checkbox" checked={cobroForm.pagado_al_instante} onChange={(e) => setCobroForm({ ...cobroForm, pagado_al_instante: e.target.checked })} />
+                  <span>Pagado al instante (ingresa a caja CEYRO y descuenta de la del socio)</span>
+                </label>
+                <button type="button" className="primary" onClick={submitCobro}>Registrar cobro</button>
+                {cobros.length > 0 && (
+                  <>
+                    <hr className="divider" />
+                    <h2 style={{ marginBottom: 0 }}>Cobros recientes</h2>
+                    <div className="equipList">
+                      {cobros.map((c) => (
+                        <div key={c.id} className="equipItem">
+                          <div>
+                            <strong>{c.cliente} · {c.servicio}</strong>
+                            <small>{(c.fecha || "").slice(0, 10)} · {c.estado_cxc === "PAID" ? "Pagado" : `saldo ${money(Number(c.saldo))}`}</small>
+                          </div>
+                          <strong>{money(Number(c.monto))}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
             <form className="formPanel" onSubmit={(e) => submitPilado(e).catch((err) => addToast(err.message, "error"))}>
               <h2>🌾 Registrar servicio de pilado</h2>
               <p className="muted">CEYRO le presta el servicio de secado + pilado a otro accionista y le cobra por quintal. Genera el ingreso para CEYRO y la cuenta por pagar del accionista.</p>
