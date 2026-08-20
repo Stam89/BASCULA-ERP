@@ -957,34 +957,15 @@ const SECCIONES_POR_AREA: Record<string, string[]> = {
   MONTACARGA: ["MOTOR", "RADIADOR", "BATERÍA", "TRANSMISIÓN", "OTROS"]
 };
 
-// Catálogo de categorías de caja por tipo de entidad (MATRIZ=CEYRO, SOCIO=ROVINSON/STALYN).
-// El código de categoría se guarda como string en cash_movements (sin tocar esa tabla).
-// `reuse` marca las que deben registrarse por su flujo dedicado (no como movimiento crudo).
-type CashCat = { code: string; label: string; movement: "INCOME" | "EXPENSE"; tipo: "MATRIZ" | "SOCIO" | "AMBOS"; reuse?: "pilado" | "agricultor" | "fomento" };
-const CASH_CATEGORIES: CashCat[] = [
-  // MATRIZ (CEYRO) — mantiene sus categorías actuales (retrocompatible)
-  { code: "GASTO_OPERATIVO", label: "Gasto operativo", movement: "EXPENSE", tipo: "MATRIZ" },
-  { code: "GASTO_OFICINA", label: "Gasto de oficina", movement: "EXPENSE", tipo: "MATRIZ" },
-  { code: "SERVICIOS_BASICOS", label: "Servicios básicos", movement: "EXPENSE", tipo: "MATRIZ" },
-  { code: "PAGO_MANO_OBRA", label: "Pago mano de obra", movement: "EXPENSE", tipo: "MATRIZ" },
-  { code: "ANTICIPO_AGRICULTOR", label: "Anticipo agricultor", movement: "EXPENSE", tipo: "MATRIZ" },
-  { code: "VENTA_CONTADO", label: "Venta contado", movement: "INCOME", tipo: "MATRIZ" },
-  { code: "COBRO_MAQUILA", label: "Cobro maquila", movement: "INCOME", tipo: "MATRIZ" },
-  { code: "OTRO_INGRESO", label: "Otro ingreso", movement: "INCOME", tipo: "MATRIZ" },
-  // SOCIOS (ROVINSON / STALYN) — operación comercial
-  { code: "VENTA_MAYOR", label: "Venta al por mayor", movement: "INCOME", tipo: "SOCIO" },
-  { code: "VENTA_DETALLE", label: "Venta al detalle", movement: "INCOME", tipo: "SOCIO" },
-  { code: "COBRO_CLIENTE", label: "Cobro cuentas por cobrar (clientes)", movement: "INCOME", tipo: "SOCIO" },
-  { code: "APORTE_CAPITAL", label: "Aporte / inyección de capital", movement: "INCOME", tipo: "SOCIO" },
-  { code: "OTRO_INGRESO_COMERCIAL", label: "Otro ingreso comercial", movement: "INCOME", tipo: "SOCIO" },
-  { code: "PAGO_AGRICULTOR", label: "Pago a agricultor (compra de cáscara)", movement: "EXPENSE", tipo: "SOCIO", reuse: "agricultor" },
-  { code: "FOMENTOS", label: "Fomentos / anticipos a agricultores", movement: "EXPENSE", tipo: "SOCIO", reuse: "fomento" },
-  { code: "PAGO_SERVICIO_PILADO", label: "Pago servicio de pilado (a CEYRO)", movement: "EXPENSE", tipo: "SOCIO", reuse: "pilado" },
-  { code: "FLETE", label: "Servicio de flete / movilización", movement: "EXPENSE", tipo: "SOCIO" },
-  { code: "ANTICIPO_CLIENTE_PROV", label: "Anticipo a cliente / proveedor", movement: "EXPENSE", tipo: "SOCIO" },
-  { code: "GASTO_COMERCIALIZACION", label: "Gasto operativo de comercialización", movement: "EXPENSE", tipo: "SOCIO" },
-  { code: "OTRO_EGRESO", label: "Otro egreso", movement: "EXPENSE", tipo: "SOCIO" }
-];
+// Categoría de caja (catálogo dinámico desde BD: cash_categories).
+type CashCat = { id: string; codigo: string; nombre: string; tipo: "INGRESO" | "EGRESO"; aplicable_a: "MATRIZ" | "SOCIO" | "AMBOS"; activo: boolean };
+// Categorías que NO se registran como movimiento crudo: van por su flujo dedicado.
+// 'agricultor' se resuelve enlazando una liquidación (Por Pagar) dentro del form.
+const CASH_REUSE: Record<string, "pilado" | "fomento" | "agricultor"> = {
+  PAGO_SERVICIO_PILADO: "pilado",
+  FOMENTOS: "fomento",
+  PAGO_AGRICULTOR: "agricultor"
+};
 const LB_TO_KG = 0.45359237;
 const QQ_TO_LB = 100;
 const millingDraftStorageKey = "bascula-erp:milling-report-draft";
@@ -1197,6 +1178,9 @@ export function App() {
   // ── Caja ──────────────────────────────────────────────────────────────────
   const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "movimiento" | "gastos" | "sacos" | "mantenimiento" | "equipos" | "venta_detalle" | "cuentas" | "fomentos">("resumen");
   const [movCategory, setMovCategory] = useState("");
+  const [movPayableId, setMovPayableId] = useState("");
+  const [cashCategories, setCashCategories] = useState<CashCat[]>([]);
+  const [catForm, setCatForm] = useState({ codigo: "", nombre: "", tipo: "EGRESO", aplicable_a: "AMBOS" });
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
   const [cashSummary, setCashSummary] = useState<CashSummary | null>(null);
   const [cashPayables, setCashPayables] = useState<AccountPayable[]>([]);
@@ -1213,7 +1197,7 @@ export function App() {
   const [laborForm, setLaborForm] = useState({ worker_group: "", sacks_moved: "", price_per_sack: "" });
 
   // ── Configuración ─────────────────────────────────────────────────────────
-  const [configSubTab, setConfigSubTab] = useState<"negocio" | "usuarios" | "accionistas" | "tarifas" | "actividad" | "datos">("negocio");
+  const [configSubTab, setConfigSubTab] = useState<"negocio" | "usuarios" | "accionistas" | "tarifas" | "categorias" | "actividad" | "datos">("negocio");
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
   const [laborRatesForm, setLaborRatesForm] = useState<LaborRates>(defaultLaborRates);
 
@@ -1971,13 +1955,15 @@ export function App() {
   async function refreshCaja(registerId?: string) {
     const id = registerId ?? dashboard.current_cash_register?.id;
     if (!id) return;
-    const [summary, movements, payables, expenseRows] = await Promise.all([
+    const [summary, movements, payables, expenseRows, categories] = await Promise.all([
       apiGet<CashSummary>(`/cash/registers/${id}/summary`),
       apiGet<CashMovement[]>(`/cash/registers/${id}/movements`),
       apiGet<AccountPayable[]>("/cash/payables"),
-      apiGet<Expense[]>("/expenses").catch(() => [] as Expense[])
+      apiGet<Expense[]>("/expenses").catch(() => [] as Expense[]),
+      apiGet<CashCat[]>("/cash/categories").catch(() => [] as CashCat[])
     ]);
     setCashSummary(summary);
+    setCashCategories(categories);
     setCashMovements(movements);
     setCashPayables(payables);
     setExpenses(expenseRows);
@@ -2285,6 +2271,26 @@ export function App() {
     try {
       await apiFetch(`/pilado/tarifas/${t.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ is_active: !t.is_active }) });
       await refreshServicioTarifas();
+    } catch (e) { addToast(`Error: ${e instanceof Error ? e.message : "Error"}`, "error"); }
+  };
+
+  // Catálogo de categorías de caja (Config): activar/desactivar y crear.
+  const reloadCashCategories = async () => {
+    try { setCashCategories(await apiGet<CashCat[]>("/cash/categories")); } catch { /* noop */ }
+  };
+  const toggleCashCategory = async (c: CashCat) => {
+    try {
+      await apiFetch(`/cash/categories/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ activo: !c.activo }) });
+      await reloadCashCategories();
+    } catch (e) { addToast(`Error: ${e instanceof Error ? e.message : "Error"}`, "error"); }
+  };
+  const submitCashCategory = async () => {
+    if (!catForm.codigo || !catForm.nombre) { addToast("Código y nombre requeridos", "error"); return; }
+    try {
+      await apiPost("/cash/categories", { codigo: catForm.codigo.toUpperCase().replace(/[^A-Z0-9_]/g, "_"), nombre: catForm.nombre, tipo: catForm.tipo, aplicable_a: catForm.aplicable_a });
+      setCatForm({ codigo: "", nombre: "", tipo: "EGRESO", aplicable_a: "AMBOS" });
+      await reloadCashCategories();
+      addToast("Categoría creada ✓", "success");
     } catch (e) { addToast(`Error: ${e instanceof Error ? e.message : "Error"}`, "error"); }
   };
 
@@ -4110,14 +4116,26 @@ export function App() {
     if (!registerId) throw new Error("No hay caja abierta");
     const movement = form.get("movement") as "INCOME" | "EXPENSE";
     const category = form.get("category") as string;
+    const amount = Number(form.get("amount"));
+    // Enlace directo: "Pago a Agricultor" con una liquidación vinculada usa el
+    // flujo de pago de cuentas (descuenta caja + abona la liquidación, un solo
+    // asiento; la relación queda cash_movement -> accounts_payable -> liquidation).
+    if (category === "PAGO_AGRICULTOR" && movPayableId) {
+      await pagarCuenta(movPayableId, amount);
+      safeResetForm(formElement);
+      setMovCategory("");
+      setMovPayableId("");
+      return;
+    }
     await apiPost(`/cash/${registerId}/movements`, {
       movement,
       category,
-      amount: Number(form.get("amount")),
+      amount,
       description: form.get("description") || undefined
     });
     safeResetForm(formElement);
     setMovCategory("");
+    setMovPayableId("");
     addToast(`${movement === "INCOME" ? "Ingreso" : "Egreso"} registrado`, "success");
     await refreshCaja(registerId);
   }
@@ -7874,30 +7892,40 @@ export function App() {
                       {(() => {
                         const activeTipo = accionistas.find((a) => a.id === activeAccionistaId)?.tipo;
                         const esSocio = activeTipo === "SOCIO";
-                        const visibles = CASH_CATEGORIES.filter((c) => esSocio ? (c.tipo === "SOCIO" || c.tipo === "AMBOS") : (c.tipo === "MATRIZ" || c.tipo === "AMBOS"));
-                        const egresos = visibles.filter((c) => c.movement === "EXPENSE");
-                        const ingresos = visibles.filter((c) => c.movement === "INCOME");
+                        const visibles = cashCategories.filter((c) => c.activo && (esSocio ? (c.aplicable_a === "SOCIO" || c.aplicable_a === "AMBOS") : (c.aplicable_a === "MATRIZ" || c.aplicable_a === "AMBOS")));
+                        const egresos = visibles.filter((c) => c.tipo === "EGRESO");
+                        const ingresos = visibles.filter((c) => c.tipo === "INGRESO");
                         return (
-                          <select name="category" required value={movCategory} onChange={(e: any) => setMovCategory(e.target.value)} style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
+                          <select name="category" required value={movCategory} onChange={(e: any) => { setMovCategory(e.target.value); setMovPayableId(""); }} style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
                             <option value="">Seleccione una categoría</option>
                             <optgroup label="Egresos">
-                              {egresos.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
+                              {egresos.map((c) => <option key={c.id} value={c.codigo}>{c.nombre}</option>)}
                             </optgroup>
                             <optgroup label="Ingresos">
-                              {ingresos.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
+                              {ingresos.map((c) => <option key={c.id} value={c.codigo}>{c.nombre}</option>)}
                             </optgroup>
                           </select>
                         );
                       })()}
                     </label>
-                    {(() => {
-                      const cat = CASH_CATEGORIES.find((c) => c.code === movCategory);
-                      if (!cat?.reuse) return null;
-                      const info = cat.reuse === "pilado"
+                    {CASH_REUSE[movCategory] === "agricultor" && (() => {
+                      const liqs = cashPayables.filter((p) => p.liquidation_number);
+                      return (
+                        <label style={{ display: "block", marginBottom: 16 }}>
+                          <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Vincular liquidación pendiente (opcional)</span>
+                          <select value={movPayableId} onChange={(e: any) => setMovPayableId(e.target.value)} style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
+                            <option value="">— Sin vincular (movimiento simple) —</option>
+                            {liqs.map((p) => <option key={p.id} value={p.id}>{p.farmer_name} · Liq {p.liquidation_number} · saldo {money(Number(p.balance))}</option>)}
+                          </select>
+                          {liqs.length === 0 && <small className="muted" style={{ display: "block", marginTop: 4 }}>Sin liquidaciones pendientes de este accionista.</small>}
+                          {movPayableId && <small className="muted" style={{ display: "block", marginTop: 4 }}>✔ Se abonará a la liquidación y se descontará de tu caja (un solo asiento).</small>}
+                        </label>
+                      );
+                    })()}
+                    {(CASH_REUSE[movCategory] === "pilado" || CASH_REUSE[movCategory] === "fomento") && (() => {
+                      const info = CASH_REUSE[movCategory] === "pilado"
                         ? { txt: "Para que el pago abone la cuenta de CEYRO, regístralo en Por Pagar (descuenta tu caja y abona la cuenta por cobrar de CEYRO).", go: () => setCajaSubTab("cuentas"), lbl: "Ir a Por Pagar" }
-                        : cat.reuse === "fomento"
-                        ? { txt: "Para enlazarlo con el agricultor, regístralo en Fomentos.", go: () => setCajaSubTab("fomentos"), lbl: "Ir a Fomentos" }
-                        : { txt: "Para enlazarlo a la liquidación del agricultor, regístralo en Liquidaciones.", go: () => setActiveTab("Liquidaciones"), lbl: "Ir a Liquidaciones" };
+                        : { txt: "Para enlazarlo con el agricultor, regístralo en Fomentos.", go: () => setCajaSubTab("fomentos"), lbl: "Ir a Fomentos" };
                       return (
                         <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "10px 12px", marginBottom: 16, fontSize: 12 }}>
                           <span style={{ display: "block", marginBottom: 6 }}>⚠️ {info.txt}</span>
@@ -7908,7 +7936,7 @@ export function App() {
 
                     <Input name="amount" label="Monto $" type="number" />
                     <Input name="description" label="Descripción (opcional)" required={false} />
-                    <button className="primary" disabled={CASH_CATEGORIES.find((c) => c.code === movCategory)?.reuse !== undefined} style={{ width: "100%", padding: "10px 0", marginTop: 8 }}>💾 Registrar movimiento</button>
+                    <button className="primary" disabled={CASH_REUSE[movCategory] === "pilado" || CASH_REUSE[movCategory] === "fomento"} style={{ width: "100%", padding: "10px 0", marginTop: 8 }}>💾 Registrar movimiento</button>
                   </form>
                 )}
 
@@ -10389,14 +10417,14 @@ export function App() {
         {activeTab === "Configuracion" && (
           <>
             <nav className="cajaSubNav">
-              {(["negocio", "usuarios", "accionistas", "tarifas", "actividad", "datos"] as const).map((t) => (
+              {(["negocio", "usuarios", "accionistas", "tarifas", "categorias", "actividad", "datos"] as const).map((t) => (
                 <button
                   key={t}
                   type="button"
                   className={configSubTab === t ? "active" : ""}
-                  onClick={() => setConfigSubTab(t)}
+                  onClick={() => { setConfigSubTab(t); if (t === "categorias") reloadCashCategories(); }}
                 >
-                  {t === "negocio" ? "🏢 Negocio" : t === "usuarios" ? "👥 Usuarios" : t === "accionistas" ? "🧑‍🤝‍🧑 Accionistas" : t === "tarifas" ? "💲 Tarifas" : t === "actividad" ? "🕓 Actividad" : "🗄️ Datos"}
+                  {t === "negocio" ? "🏢 Negocio" : t === "usuarios" ? "👥 Usuarios" : t === "accionistas" ? "🧑‍🤝‍🧑 Accionistas" : t === "tarifas" ? "💲 Tarifas" : t === "categorias" ? "🏷️ Categorías caja" : t === "actividad" ? "🕓 Actividad" : "🗄️ Datos"}
                 </button>
               ))}
             </nav>
@@ -11049,6 +11077,50 @@ export function App() {
                           <small>${Number(t.precio_por_qq).toFixed(2)}/QQ · desde {(t.fecha_vigencia || "").slice(0, 10)}{t.is_active ? "" : " · inactiva"}</small>
                         </div>
                         <button type="button" className="equipDelBtn" onClick={() => toggleServicioTarifa(t)}>{t.is_active ? "Desactivar" : "Activar"}</button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {/* ── Categorías de caja ── */}
+            {configSubTab === "categorias" && (
+              <section className="panelGrid">
+                <div className="formPanel">
+                  <h2>🏷️ Nueva categoría de caja</h2>
+                  <p className="muted">Se usa en el form de Movimiento, filtrada por tipo de accionista. No afecta movimientos ya registrados.</p>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <label><span>Código (MAYÚSCULAS_)</span>
+                      <input type="text" value={catForm.codigo} onChange={(e) => setCatForm({ ...catForm, codigo: e.target.value })} placeholder="Ej: VENTA_MAYOR" /></label>
+                    <label><span>Nombre visible</span>
+                      <input type="text" value={catForm.nombre} onChange={(e) => setCatForm({ ...catForm, nombre: e.target.value })} placeholder="Ej: Venta Mayor" /></label>
+                    <label><span>Tipo</span>
+                      <select value={catForm.tipo} onChange={(e) => setCatForm({ ...catForm, tipo: e.target.value })}>
+                        <option value="EGRESO">Egreso</option>
+                        <option value="INGRESO">Ingreso</option>
+                      </select></label>
+                    <label><span>Aplicable a</span>
+                      <select value={catForm.aplicable_a} onChange={(e) => setCatForm({ ...catForm, aplicable_a: e.target.value })}>
+                        <option value="AMBOS">Ambos</option>
+                        <option value="MATRIZ">Matriz (CEYRO)</option>
+                        <option value="SOCIO">Socio</option>
+                      </select></label>
+                  </div>
+                  <button type="button" className="primary" onClick={submitCashCategory} disabled={!isAdmin}>Crear categoría</button>
+                  {!isAdmin && <p className="muted">Solo un administrador puede editar categorías.</p>}
+                </div>
+                <div className="formPanel">
+                  <h2 style={{ marginBottom: 0 }}>Categorías configuradas</h2>
+                  {cashCategories.length === 0 && <p className="muted">Sin categorías.</p>}
+                  <div className="equipList">
+                    {cashCategories.map((c) => (
+                      <div key={c.id} className="equipItem" style={{ opacity: c.activo ? 1 : 0.5 }}>
+                        <div>
+                          <strong>{c.nombre}</strong>
+                          <small>{c.tipo} · {c.aplicable_a} · <code>{c.codigo}</code>{c.activo ? "" : " · inactiva"}</small>
+                        </div>
+                        <button type="button" className="equipDelBtn" disabled={!isAdmin} onClick={() => toggleCashCategory(c)}>{c.activo ? "Desactivar" : "Activar"}</button>
                       </div>
                     ))}
                   </div>

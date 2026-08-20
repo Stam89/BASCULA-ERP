@@ -28,6 +28,61 @@ async function assertCajaDelAccionista(
   if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
 }
 
+// ── Catalogo de categorias de caja (Fase 2) ─────────────────────────────────
+// Se leen dinamicamente en el form de Caja, filtradas por tipo de accionista.
+cashRouter.get("/categories", asyncRoute(async (req, res) => {
+  const q = z.object({
+    aplicable_a: z.enum(["MATRIZ", "SOCIO"]).optional(),
+    solo_activas: z.enum(["1", "true"]).optional()
+  }).parse(req.query);
+  const conds: string[] = [];
+  const params: any[] = [];
+  if (q.aplicable_a) { params.push(q.aplicable_a); conds.push(`(aplicable_a = $${params.length} OR aplicable_a = 'AMBOS')`); }
+  if (q.solo_activas) conds.push("activo = true");
+  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+  const r = await pool.query(
+    `SELECT id, codigo, nombre, tipo, aplicable_a, activo FROM cash_categories ${where} ORDER BY aplicable_a, tipo, nombre`,
+    params
+  );
+  res.json(r.rows);
+}));
+
+cashRouter.post("/categories", asyncRoute(async (req, res) => {
+  const body = z.object({
+    codigo: z.string().min(2).max(40).regex(/^[A-Z0-9_]+$/, "Solo mayusculas, numeros y guion bajo"),
+    nombre: z.string().min(2).max(80),
+    tipo: z.enum(["INGRESO", "EGRESO"]),
+    aplicable_a: z.enum(["MATRIZ", "SOCIO", "AMBOS"]).default("AMBOS")
+  }).parse(req.body);
+  const dup = await pool.query("SELECT 1 FROM cash_categories WHERE codigo = $1", [body.codigo]);
+  if (dup.rowCount) throw new ApiError(409, "Ya existe una categoria con ese codigo");
+  const r = await pool.query(
+    `INSERT INTO cash_categories (codigo, nombre, tipo, aplicable_a) VALUES ($1, $2, $3, $4) RETURNING *`,
+    [body.codigo, body.nombre, body.tipo, body.aplicable_a]
+  );
+  res.status(201).json(r.rows[0]);
+}));
+
+cashRouter.patch("/categories/:id", asyncRoute(async (req, res) => {
+  const body = z.object({
+    nombre: z.string().min(2).max(80).optional(),
+    tipo: z.enum(["INGRESO", "EGRESO"]).optional(),
+    aplicable_a: z.enum(["MATRIZ", "SOCIO", "AMBOS"]).optional(),
+    activo: z.boolean().optional()
+  }).parse(req.body);
+  const fields: string[] = [];
+  const values: any[] = [];
+  let i = 1;
+  for (const k of ["nombre", "tipo", "aplicable_a", "activo"] as const) {
+    if (body[k] !== undefined) { fields.push(`${k} = $${i++}`); values.push(body[k]); }
+  }
+  if (fields.length === 0) throw new ApiError(400, "Sin cambios");
+  values.push(req.params.id);
+  const r = await pool.query(`UPDATE cash_categories SET ${fields.join(", ")} WHERE id = $${i} RETURNING *`, values);
+  if (!r.rows[0]) throw new ApiError(404, "Categoria no encontrada");
+  res.json(r.rows[0]);
+}));
+
 // Columnas para la anulación de movimientos (contra-asiento). Migración
 // automática en instalaciones existentes.
 let cashColsReady: Promise<void> | null = null;
