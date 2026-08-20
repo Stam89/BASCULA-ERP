@@ -1206,7 +1206,7 @@ export function App() {
   const [laborForm, setLaborForm] = useState({ worker_group: "", sacks_moved: "", price_per_sack: "" });
 
   // ── Configuración ─────────────────────────────────────────────────────────
-  const [configSubTab, setConfigSubTab] = useState<"negocio" | "usuarios" | "accionistas" | "tarifas" | "categorias" | "actividad" | "datos">("negocio");
+  const [configSubTab, setConfigSubTab] = useState<"negocio" | "usuarios" | "accionistas" | "tarifas" | "categorias" | "mant_categorias" | "actividad" | "datos">("negocio");
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
   const [laborRatesForm, setLaborRatesForm] = useState<LaborRates>(defaultLaborRates);
   // Tarifas de empaque / uso de sacos que la MATRIZ cobra a los socios al despachar.
@@ -1433,9 +1433,12 @@ export function App() {
   const [maintenanceHistory, setMaintenanceHistory] = useState<any[]>([]);
   const [maintFilter, setMaintFilter] = useState({ from: "", to: "", area: "", type: "" });
   // Mantenedores dinámicos (áreas / secciones / tipos) del form de Mantenimiento.
-  type MaintCat = { id?: string; kind: "AREA" | "SECTION" | "TYPE"; nombre: string; area: string | null };
+  type MaintCat = { id?: string; kind: "AREA" | "SECTION" | "TYPE"; nombre: string; area: string | null; activo?: boolean };
   const [maintCats, setMaintCats] = useState<MaintCat[]>([]);
   const [maintCatModal, setMaintCatModal] = useState<{ kind: "AREA" | "SECTION" | "TYPE"; nombre: string } | null>(null);
+  // Mantenedor en Configuración (incluye inactivas) + edición inline.
+  const [maintCatsAll, setMaintCatsAll] = useState<MaintCat[]>([]);
+  const [editingMaintCat, setEditingMaintCat] = useState<{ id: string; nombre: string } | null>(null);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [supplierForm, setSupplierForm] = useState({ name: "", identification: "", phone: "", email: "", address: "", notes: "" });
   const [editingSupplierId, setEditingSupplierId] = useState<string | null>(null);
@@ -3641,6 +3644,63 @@ export function App() {
   const loadMaintCategories = async () => {
     const rows = await apiGet<MaintCat[]>("/equipment/categories").catch(() => [] as MaintCat[]);
     setMaintCats(rows);
+  };
+  const loadMaintCategoriesAll = async () => {
+    const rows = await apiGet<MaintCat[]>("/equipment/categories?includeInactive=true").catch(() => [] as MaintCat[]);
+    setMaintCatsAll(rows);
+  };
+  async function saveMaintCatRename(id: string, nombre: string) {
+    const nom = nombre.trim();
+    if (!nom) { addToast("El nombre no puede quedar vacío", "error"); return; }
+    try {
+      await apiPut(`/equipment/categories/${id}`, { nombre: nom });
+      setEditingMaintCat(null);
+      await loadMaintCategoriesAll();
+      await loadMaintCategories();
+      addToast("Categoría renombrada ✓ (histórico actualizado)", "success");
+    } catch (e) { addToast(e instanceof Error ? e.message : "Error al renombrar", "error"); }
+  }
+  async function toggleMaintCatActivo(cat: MaintCat) {
+    if (!cat.id) return;
+    try {
+      await apiPut(`/equipment/categories/${cat.id}`, { activo: !cat.activo });
+      await loadMaintCategoriesAll();
+      await loadMaintCategories();
+      addToast(cat.activo ? "Categoría desactivada" : "Categoría reactivada ✓", "success");
+    } catch (e) { addToast(e instanceof Error ? e.message : "Error", "error"); }
+  }
+  const renderMaintCatItem = (c: MaintCat) => {
+    const editing = editingMaintCat && editingMaintCat.id === c.id ? editingMaintCat : null;
+    return (
+    <div key={c.id} className="equipItem" style={{ opacity: c.activo ? 1 : 0.5 }}>
+      {editing ? (
+        <div style={{ display: "flex", gap: 6, flex: 1, alignItems: "center" }}>
+          <input type="text" value={editing.nombre} autoFocus
+            onChange={(e) => setEditingMaintCat({ id: c.id!, nombre: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") saveMaintCatRename(c.id!, editing.nombre);
+              if (e.key === "Escape") setEditingMaintCat(null);
+            }}
+            style={{ flex: 1 }} />
+          <button type="button" className="primary" onClick={() => saveMaintCatRename(c.id!, editing.nombre)}>Guardar</button>
+          <button type="button" onClick={() => setEditingMaintCat(null)}>Cancelar</button>
+        </div>
+      ) : (
+        <>
+          <div>
+            <strong>{c.nombre}</strong>
+            <small>{c.kind === "AREA" ? "Área" : c.kind === "TYPE" ? "Tipo" : `Sección · ${c.area}`}{c.activo ? "" : " · inactiva"}</small>
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button type="button" className="btnSecondary" disabled={!isAdmin}
+              onClick={() => setEditingMaintCat({ id: c.id!, nombre: c.nombre })}>✎ Renombrar</button>
+            <button type="button" className="equipDelBtn" disabled={!isAdmin}
+              onClick={() => toggleMaintCatActivo(c)}>{c.activo ? "Desactivar" : "Activar"}</button>
+          </div>
+        </>
+      )}
+    </div>
+    );
   };
   const maintAreas = maintCats.filter((c) => c.kind === "AREA").map((c) => c.nombre);
   const maintTypes = maintCats.filter((c) => c.kind === "TYPE").map((c) => c.nombre);
@@ -10587,14 +10647,14 @@ export function App() {
         {activeTab === "Configuracion" && (
           <>
             <nav className="cajaSubNav">
-              {(["negocio", "usuarios", "accionistas", "tarifas", "categorias", "actividad", "datos"] as const).map((t) => (
+              {(["negocio", "usuarios", "accionistas", "tarifas", "categorias", "mant_categorias", "actividad", "datos"] as const).map((t) => (
                 <button
                   key={t}
                   type="button"
                   className={configSubTab === t ? "active" : ""}
-                  onClick={() => { setConfigSubTab(t); if (t === "categorias") reloadCashCategories(); }}
+                  onClick={() => { setConfigSubTab(t); if (t === "categorias") reloadCashCategories(); if (t === "mant_categorias") loadMaintCategoriesAll(); }}
                 >
-                  {t === "negocio" ? "🏢 Negocio" : t === "usuarios" ? "👥 Usuarios" : t === "accionistas" ? "🧑‍🤝‍🧑 Accionistas" : t === "tarifas" ? "💲 Tarifas" : t === "categorias" ? "🏷️ Categorías caja" : t === "actividad" ? "🕓 Actividad" : "🗄️ Datos"}
+                  {t === "negocio" ? "🏢 Negocio" : t === "usuarios" ? "👥 Usuarios" : t === "accionistas" ? "🧑‍🤝‍🧑 Accionistas" : t === "tarifas" ? "💲 Tarifas" : t === "categorias" ? "🏷️ Categorías caja" : t === "mant_categorias" ? "🔧 Categorías mant." : t === "actividad" ? "🕓 Actividad" : "🗄️ Datos"}
                 </button>
               ))}
             </nav>
@@ -11320,6 +11380,58 @@ export function App() {
                       </div>
                     ))}
                   </div>
+                </div>
+              </section>
+            )}
+
+            {/* ── Categorías de Mantenimiento (áreas / secciones / tipos) ── */}
+            {configSubTab === "mant_categorias" && (
+              <section className="panelGrid">
+                <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                    <div>
+                      <h2 style={{ marginBottom: 4 }}>🔧 Categorías de Mantenimiento</h2>
+                      <p className="muted" style={{ margin: 0 }}>
+                        <strong>Renombrar</strong> corrige el nombre y lo actualiza también en todo el historial de
+                        mantenimientos. <strong>Desactivar</strong> es un borrado suave: la categoría deja de aparecer
+                        en el formulario de Caja → Mantenimiento, pero no se borra y los reportes antiguos se conservan.
+                      </p>
+                    </div>
+                    <button type="button" className="btnSecondary" onClick={() => loadMaintCategoriesAll().catch(() => undefined)}>↻ Actualizar</button>
+                  </div>
+                  {!isAdmin && <p className="muted">Solo un administrador puede editar estas categorías.</p>}
+                </div>
+
+                <div className="formPanel">
+                  <h2 style={{ marginBottom: 0 }}>Áreas</h2>
+                  <div className="equipList">
+                    {maintCatsAll.filter((c) => c.kind === "AREA").length === 0 && <p className="muted">Sin áreas.</p>}
+                    {maintCatsAll.filter((c) => c.kind === "AREA").map(renderMaintCatItem)}
+                  </div>
+                </div>
+
+                <div className="formPanel">
+                  <h2 style={{ marginBottom: 0 }}>Tipos de mantenimiento</h2>
+                  <div className="equipList">
+                    {maintCatsAll.filter((c) => c.kind === "TYPE").length === 0 && <p className="muted">Sin tipos.</p>}
+                    {maintCatsAll.filter((c) => c.kind === "TYPE").map(renderMaintCatItem)}
+                  </div>
+                </div>
+
+                <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <h2 style={{ marginBottom: 8 }}>Secciones / Sistemas</h2>
+                  {maintCatsAll.filter((c) => c.kind === "AREA").map((a) => {
+                    const secs = maintCatsAll.filter((c) => c.kind === "SECTION" && c.area === a.nombre);
+                    return (
+                      <div key={a.id} style={{ marginBottom: 12 }}>
+                        <h3 style={{ margin: "6px 0", fontSize: 13, color: "var(--c-muted)" }}>{a.nombre}{a.activo ? "" : " (área inactiva)"}</h3>
+                        <div className="equipList">
+                          {secs.length === 0 && <p className="muted" style={{ margin: 0 }}>Sin secciones.</p>}
+                          {secs.map(renderMaintCatItem)}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </section>
             )}

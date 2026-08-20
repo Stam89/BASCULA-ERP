@@ -36,22 +36,97 @@ export const equipmentRouter = Router();
 // Áreas, Secciones y Tipos administrables. Los valores se siguen guardando como
 // texto en equipment_maintenance, por eso son 100% retrocompatibles.
 
-// GET categorías activas (opcionalmente filtradas por kind).
+// GET categorías. Por defecto solo activas (para alimentar los selectores);
+// con ?includeInactive=true trae también las desactivadas (para el mantenedor).
 equipmentRouter.get("/categories", asyncRoute(async (req, res) => {
   const kind = typeof req.query.kind === "string" ? req.query.kind.toUpperCase() : undefined;
+  const includeInactive = req.query.includeInactive === "true" || req.query.includeInactive === "1";
   const params: any[] = [];
-  let where = "WHERE activo = true";
+  const conds: string[] = [];
+  if (!includeInactive) conds.push("activo = true");
   if (kind && ["AREA", "SECTION", "TYPE"].includes(kind)) {
     params.push(kind);
-    where += ` AND kind = $${params.length}`;
+    conds.push(`kind = $${params.length}`);
   }
+  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   const result = await pool.query(
-    `SELECT id, kind, nombre, area FROM maintenance_categories
+    `SELECT id, kind, nombre, area, activo FROM maintenance_categories
      ${where}
      ORDER BY kind, area NULLS FIRST, nombre`,
     params
   );
   res.json(result.rows);
+}));
+
+// PUT renombrar y/o activar-desactivar una categoría.
+//  · Renombrar corrige el nombre y lo propaga a TODO el histórico de
+//    equipment_maintenance (que guarda area/section/maintenance_type como texto),
+//    para que los registros pasados queden consistentes. Todo en una transacción.
+//  · activo=false es un soft-delete: deja de aparecer en los selectores del
+//    formulario, pero NO borra nada y los reportes antiguos se conservan.
+equipmentRouter.put("/categories/:id", asyncRoute(async (req, res) => {
+  const body = z.object({
+    nombre: z.string().min(1).max(80).optional(),
+    activo: z.boolean().optional()
+  }).parse(req.body);
+  if (body.nombre === undefined && body.activo === undefined) {
+    throw new ApiError(400, "Sin cambios.");
+  }
+
+  const result = await inTransaction(async (client) => {
+    const current = await client.query(
+      "SELECT id, kind, nombre, area, activo FROM maintenance_categories WHERE id = $1 FOR UPDATE",
+      [req.params.id]
+    );
+    if (!current.rowCount) throw new ApiError(404, "Categoría no encontrada");
+    const cat = current.rows[0] as { kind: "AREA" | "SECTION" | "TYPE"; nombre: string; area: string | null };
+
+    const nuevoNombre = body.nombre?.trim();
+    const renombra = nuevoNombre !== undefined && nuevoNombre !== cat.nombre;
+    if (nuevoNombre !== undefined && !nuevoNombre) throw new ApiError(400, "El nombre no puede quedar vacío.");
+
+    if (renombra) {
+      // Chequear que no choque con otra categoría del mismo tipo (y área).
+      const dup = await client.query(
+        `SELECT 1 FROM maintenance_categories
+         WHERE kind = $1 AND nombre = $2 AND area IS NOT DISTINCT FROM $3 AND id <> $4`,
+        [cat.kind, nuevoNombre, cat.area, req.params.id]
+      );
+      if (dup.rowCount) throw new ApiError(409, `Ya existe una categoría "${nuevoNombre}".`);
+
+      await client.query(
+        "UPDATE maintenance_categories SET nombre = $2 WHERE id = $1",
+        [req.params.id, nuevoNombre]
+      );
+
+      // Propagar el nuevo nombre al histórico de mantenimientos.
+      if (cat.kind === "AREA") {
+        // Al renombrar un área, también hay que mover sus secciones (columna area)
+        // y los registros historicos de esa área.
+        await client.query("UPDATE maintenance_categories SET area = $2 WHERE kind = 'SECTION' AND area = $1", [cat.nombre, nuevoNombre]);
+        await client.query("UPDATE equipment_maintenance SET area = $2 WHERE area = $1", [cat.nombre, nuevoNombre]);
+      } else if (cat.kind === "SECTION") {
+        await client.query(
+          "UPDATE equipment_maintenance SET section = $2 WHERE section = $1 AND area IS NOT DISTINCT FROM $3",
+          [cat.nombre, nuevoNombre, cat.area]
+        );
+      } else {
+        await client.query("UPDATE equipment_maintenance SET maintenance_type = $2 WHERE maintenance_type = $1", [cat.nombre, nuevoNombre]);
+      }
+    }
+
+    if (body.activo !== undefined) {
+      await client.query("UPDATE maintenance_categories SET activo = $2 WHERE id = $1", [req.params.id, body.activo]);
+    }
+
+    const updated = await client.query(
+      "SELECT id, kind, nombre, area, activo FROM maintenance_categories WHERE id = $1",
+      [req.params.id]
+    );
+    return updated.rows[0];
+  });
+
+  res.json(result);
 }));
 
 // POST nueva categoría (agregar rápido desde el modal del formulario).
