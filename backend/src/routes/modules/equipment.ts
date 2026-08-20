@@ -32,6 +32,63 @@ if (!fs.existsSync(uploadsDir)) {
 
 export const equipmentRouter = Router();
 
+// ── Mantenedores dinámicos del formulario de Mantenimiento ──────────────────
+// Áreas, Secciones y Tipos administrables. Los valores se siguen guardando como
+// texto en equipment_maintenance, por eso son 100% retrocompatibles.
+
+// GET categorías activas (opcionalmente filtradas por kind).
+equipmentRouter.get("/categories", asyncRoute(async (req, res) => {
+  const kind = typeof req.query.kind === "string" ? req.query.kind.toUpperCase() : undefined;
+  const params: any[] = [];
+  let where = "WHERE activo = true";
+  if (kind && ["AREA", "SECTION", "TYPE"].includes(kind)) {
+    params.push(kind);
+    where += ` AND kind = $${params.length}`;
+  }
+  const result = await pool.query(
+    `SELECT id, kind, nombre, area FROM maintenance_categories
+     ${where}
+     ORDER BY kind, area NULLS FIRST, nombre`,
+    params
+  );
+  res.json(result.rows);
+}));
+
+// POST nueva categoría (agregar rápido desde el modal del formulario).
+equipmentRouter.post("/categories", asyncRoute(async (req, res) => {
+  const body = z.object({
+    kind: z.enum(["AREA", "SECTION", "TYPE"]),
+    nombre: z.string().min(1).max(80),
+    area: z.string().max(40).optional()
+  }).parse(req.body);
+
+  const nombre = body.nombre.trim();
+  if (!nombre) throw new ApiError(400, "Escribe un nombre.");
+  const area = body.kind === "SECTION" ? (body.area?.trim() || "") : null;
+  if (body.kind === "SECTION" && !area) {
+    throw new ApiError(400, "Para una sección, primero elige el área a la que pertenece.");
+  }
+
+  // Insertar si no existe; si ya existe (o estaba inactiva), devolver la fila.
+  const inserted = await pool.query(
+    `INSERT INTO maintenance_categories (kind, nombre, area)
+     VALUES ($1, $2, $3)
+     ON CONFLICT DO NOTHING
+     RETURNING id, kind, nombre, area`,
+    [body.kind, nombre, area]
+  );
+  if (inserted.rowCount) { res.status(201).json(inserted.rows[0]); return; }
+
+  // Ya existía: reactivarla por si estaba inactiva y devolverla.
+  const existing = await pool.query(
+    `UPDATE maintenance_categories SET activo = true
+     WHERE kind = $1 AND nombre = $2 AND area IS NOT DISTINCT FROM $3
+     RETURNING id, kind, nombre, area`,
+    [body.kind, nombre, area]
+  );
+  res.status(200).json(existing.rows[0] ?? { kind: body.kind, nombre, area });
+}));
+
 // GET todos los equipos (activos o en mantenimiento)
 equipmentRouter.get("/", asyncRoute(async (_req, res) => {
   const result = await pool.query(
@@ -126,7 +183,10 @@ equipmentRouter.patch("/:id", asyncRoute(async (req, res) => {
 // POST registrar mantenimiento CON foto (base64 en JSON)
 equipmentRouter.post("/:id/maintenance", asyncRoute(async (req, res) => {
   const body = z.object({
-    maintenance_type: z.enum(["REPUESTO", "MANO_OBRA", "PREVENTIVO", "CORRECTIVO"]),
+    // Tipo de mantenimiento dinámico (catálogo maintenance_categories). Se
+    // mantiene como texto; los valores clásicos (REPUESTO/PREVENTIVO/…) siguen
+    // siendo válidos.
+    maintenance_type: z.string().min(1).max(40),
     description: z.string().min(1),
     provider: z.string().optional(),
     invoice_number: z.string().optional(),
@@ -242,7 +302,7 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
   const body = z.object({
     area: z.string().min(1),
     section: z.string().min(1),
-    maintenance_type: z.enum(["REPUESTO", "MANO_OBRA", "PREVENTIVO", "CORRECTIVO"]),
+    maintenance_type: z.string().min(1).max(40),
     description: z.string().min(1),
     provider: z.string().optional(),
     invoice_number: z.string().optional(),

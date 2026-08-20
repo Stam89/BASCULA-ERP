@@ -961,12 +961,9 @@ function NavIcon({ tab }: { tab: string }) {
 // CEYRO es el accionista principal (la piladora, dueño del negocio). Id sembrado.
 const CEYRO_ID = "00000000-0000-0000-0000-000000000001";
 
-const SECCIONES_POR_AREA: Record<string, string[]> = {
-  SECADORA: ["MOTOR 1", "MOTOR 2", "TÚNEL 1", "TÚNEL 2", "TÚNEL 3"],
-  PILADORA: ["MOTOR", "CILINDRO 1", "CILINDRO 2", "PLAN SISTER", "MOTOR PLAN SISTER", "DESCASCARADOR", "PULIDOR 1", "PULIDOR 2", "BANDEJAS PEQUEÑA", "COSEDORAS", "OTROS"],
-  ADMINISTRATIVO: ["AIRE ACONDICIONADO", "COMPUTADORAS", "NEVERA PEQUEÑA", "NEVERA GRANDE", "HELERA", "IMPRESORAS", "BÁSCULA"],
-  MONTACARGA: ["MOTOR", "RADIADOR", "BATERÍA", "TRANSMISIÓN", "OTROS"]
-};
+// Las áreas/secciones/tipos de Mantenimiento ahora son dinámicos (tabla
+// maintenance_categories, editables desde el propio formulario). Antes vivían
+// aquí como constante estática SECCIONES_POR_AREA.
 
 // Categoría de caja (catálogo dinámico desde BD: cash_categories).
 type CashCat = { id: string; codigo: string; nombre: string; tipo: "INGRESO" | "EGRESO"; aplicable_a: "MATRIZ" | "SOCIO" | "AMBOS"; activo: boolean };
@@ -1426,7 +1423,7 @@ export function App() {
     area: "",
     section: "",
     maquina: "",
-    maintenance_type: "CORRECTIVO" as "REPUESTO" | "MANO_OBRA" | "PREVENTIVO" | "CORRECTIVO",
+    maintenance_type: "CORRECTIVO" as string,
     description: "",
     provider: "",
     invoice_number: "",
@@ -1435,6 +1432,10 @@ export function App() {
   });
   const [maintenanceHistory, setMaintenanceHistory] = useState<any[]>([]);
   const [maintFilter, setMaintFilter] = useState({ from: "", to: "", area: "", type: "" });
+  // Mantenedores dinámicos (áreas / secciones / tipos) del form de Mantenimiento.
+  type MaintCat = { id?: string; kind: "AREA" | "SECTION" | "TYPE"; nombre: string; area: string | null };
+  const [maintCats, setMaintCats] = useState<MaintCat[]>([]);
+  const [maintCatModal, setMaintCatModal] = useState<{ kind: "AREA" | "SECTION" | "TYPE"; nombre: string } | null>(null);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [supplierForm, setSupplierForm] = useState({ name: "", identification: "", phone: "", email: "", address: "", notes: "" });
   const [editingSupplierId, setEditingSupplierId] = useState<string | null>(null);
@@ -3636,6 +3637,45 @@ export function App() {
     }
   };
 
+
+  const loadMaintCategories = async () => {
+    const rows = await apiGet<MaintCat[]>("/equipment/categories").catch(() => [] as MaintCat[]);
+    setMaintCats(rows);
+  };
+  const maintAreas = maintCats.filter((c) => c.kind === "AREA").map((c) => c.nombre);
+  const maintTypes = maintCats.filter((c) => c.kind === "TYPE").map((c) => c.nombre);
+  const maintSectionsFor = (area: string) =>
+    maintCats.filter((c) => c.kind === "SECTION" && c.area === area).map((c) => c.nombre);
+  const maintTypeLabel = (t: string) => {
+    const known: Record<string, string> = {
+      CORRECTIVO: "Correctivo (reparación)", PREVENTIVO: "Preventivo",
+      REPUESTO: "Repuesto", MANO_OBRA: "Mano de obra"
+    };
+    return known[t] ?? t;
+  };
+
+  async function submitMaintCat() {
+    if (!maintCatModal) return;
+    const nombre = maintCatModal.nombre.trim();
+    if (!nombre) { addToast("Escribe un nombre", "error"); return; }
+    const area = maintCatModal.kind === "SECTION" ? maintenanceForm.area : undefined;
+    if (maintCatModal.kind === "SECTION" && !area) {
+      addToast("Primero elige el área a la que pertenece la sección", "error");
+      return;
+    }
+    try {
+      const saved = await apiPost<MaintCat>("/equipment/categories", { kind: maintCatModal.kind, nombre, area });
+      await loadMaintCategories();
+      // Seleccionar de una vez el valor recién creado.
+      if (saved.kind === "AREA") setMaintenanceForm((f) => ({ ...f, area: saved.nombre, section: "" }));
+      else if (saved.kind === "SECTION") setMaintenanceForm((f) => ({ ...f, section: saved.nombre }));
+      else setMaintenanceForm((f) => ({ ...f, maintenance_type: saved.nombre }));
+      setMaintCatModal(null);
+      addToast("Categoría agregada ✓", "success");
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : "Error al agregar", "error");
+    }
+  }
 
   const refreshMaintenanceHistory = async () => {
     try {
@@ -7848,7 +7888,7 @@ export function App() {
                         className={cajaSubTab === t ? "active" : ""}
                         onClick={() => {
                           setCajaSubTab(t);
-                          if (t === "mantenimiento") { refreshMaintenanceHistory(); }
+                          if (t === "mantenimiento") { refreshMaintenanceHistory(); loadMaintCategories(); }
                         }}
                       >
                         <span style={{ marginRight: 4 }}>{icons[t]}</span>{labels[t]}
@@ -8170,6 +8210,42 @@ export function App() {
 
                 {cajaSubTab === "mantenimiento" && (
                   <div className="maintLayout">
+                    {/* Modal "Agregar rápido" para áreas / secciones / tipos */}
+                    {maintCatModal && (
+                      <div className="modalOverlay" onClick={() => setMaintCatModal(null)}>
+                        <div className="modalCard" onClick={(e) => e.stopPropagation()}>
+                          <h3>
+                            {maintCatModal.kind === "AREA" ? "Nueva área" :
+                             maintCatModal.kind === "SECTION" ? "Nueva sección / sistema" :
+                             "Nuevo tipo de mantenimiento"}
+                          </h3>
+                          {maintCatModal.kind === "SECTION" && (
+                            <p className="muted" style={{ marginTop: -4 }}>
+                              Se agregará dentro del área <strong>{maintenanceForm.area || "—"}</strong>.
+                            </p>
+                          )}
+                          <label>
+                            <span>Nombre</span>
+                            <input
+                              type="text"
+                              autoFocus
+                              value={maintCatModal.nombre}
+                              onChange={(e) => setMaintCatModal({ ...maintCatModal, nombre: e.target.value })}
+                              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); submitMaintCat(); } }}
+                              placeholder={
+                                maintCatModal.kind === "TYPE" ? "Ej: Gasolina, Diésel, Lubricante" :
+                                maintCatModal.kind === "SECTION" ? "Ej: Rodamientos, Bomba, Faja" :
+                                "Ej: BODEGA, GENERADOR"
+                              }
+                            />
+                          </label>
+                          <div className="buttonRow">
+                            <button type="button" className="primary" onClick={submitMaintCat}>Guardar</button>
+                            <button type="button" onClick={() => setMaintCatModal(null)}>Cancelar</button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                     {/* Formulario Registrar Mantenimiento */}
                     <form className="formPanel cajaForm" onSubmit={(event: any) => {
                       event.preventDefault();
@@ -8180,30 +8256,43 @@ export function App() {
                       <h2>Registrar Mantenimiento</h2>
                     <label>
                       <span>Área</span>
-                      <select
-                        value={maintenanceForm.area}
-                        onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, area: event.target.value, section: "" })}
-                        required
-                      >
-                        <option value="">Seleccione</option>
-                        {Object.keys(SECCIONES_POR_AREA).map((a) => (
-                          <option key={a} value={a}>{a}</option>
-                        ))}
-                      </select>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <select
+                          value={maintenanceForm.area}
+                          onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, area: event.target.value, section: "" })}
+                          required
+                          style={{ flex: 1 }}
+                        >
+                          <option value="">Seleccione</option>
+                          {maintAreas.map((a) => (
+                            <option key={a} value={a}>{a}</option>
+                          ))}
+                        </select>
+                        <button type="button" className="btnSecondary" title="Agregar nueva área"
+                          onClick={() => setMaintCatModal({ kind: "AREA", nombre: "" })}
+                          style={{ whiteSpace: "nowrap", padding: "0 10px" }}>+ Nueva</button>
+                      </div>
                     </label>
                     <label>
                       <span>Sección a reparar</span>
-                      <select
-                        value={maintenanceForm.section}
-                        onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, section: event.target.value })}
-                        required
-                        disabled={!maintenanceForm.area}
-                      >
-                        <option value="">Seleccione</option>
-                        {(SECCIONES_POR_AREA[maintenanceForm.area] || []).map((s) => (
-                          <option key={s} value={s}>{s}</option>
-                        ))}
-                      </select>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <select
+                          value={maintenanceForm.section}
+                          onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, section: event.target.value })}
+                          required
+                          disabled={!maintenanceForm.area}
+                          style={{ flex: 1 }}
+                        >
+                          <option value="">Seleccione</option>
+                          {maintSectionsFor(maintenanceForm.area).map((s) => (
+                            <option key={s} value={s}>{s}</option>
+                          ))}
+                        </select>
+                        <button type="button" className="btnSecondary" title="Agregar nueva sección"
+                          disabled={!maintenanceForm.area}
+                          onClick={() => setMaintCatModal({ kind: "SECTION", nombre: "" })}
+                          style={{ whiteSpace: "nowrap", padding: "0 10px" }}>+ Nueva</button>
+                      </div>
                     </label>
                     <label>
                       <span>Máquina / Activo (opcional)</span>
@@ -8216,15 +8305,24 @@ export function App() {
                     </label>
                     <label>
                       <span>Tipo de mantenimiento</span>
-                      <select
-                        value={maintenanceForm.maintenance_type}
-                        onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, maintenance_type: event.target.value as any })}
-                      >
-                        <option value="CORRECTIVO">Correctivo (reparación)</option>
-                        <option value="PREVENTIVO">Preventivo</option>
-                        <option value="REPUESTO">Repuesto</option>
-                        <option value="MANO_OBRA">Mano de obra</option>
-                      </select>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <select
+                          value={maintenanceForm.maintenance_type}
+                          onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, maintenance_type: event.target.value })}
+                          style={{ flex: 1 }}
+                        >
+                          {/* Si el valor actual aún no está en el catálogo cargado, mostrarlo igual. */}
+                          {maintenanceForm.maintenance_type && !maintTypes.includes(maintenanceForm.maintenance_type) && (
+                            <option value={maintenanceForm.maintenance_type}>{maintTypeLabel(maintenanceForm.maintenance_type)}</option>
+                          )}
+                          {maintTypes.map((t) => (
+                            <option key={t} value={t}>{maintTypeLabel(t)}</option>
+                          ))}
+                        </select>
+                        <button type="button" className="btnSecondary" title="Agregar nuevo tipo"
+                          onClick={() => setMaintCatModal({ kind: "TYPE", nombre: "" })}
+                          style={{ whiteSpace: "nowrap", padding: "0 10px" }}>+ Nueva</button>
+                      </div>
                     </label>
                     <label>
                       <span>Descripción del trabajo/repuesto</span>
@@ -8280,15 +8378,12 @@ export function App() {
                         <label style={{ margin: 0 }}><span>Área</span>
                           <select value={maintFilter.area} onChange={(e: any) => setMaintFilter({ ...maintFilter, area: e.target.value })}>
                             <option value="">Todas</option>
-                            {Object.keys(SECCIONES_POR_AREA).map((a) => (<option key={a} value={a}>{a}</option>))}
+                            {maintAreas.map((a) => (<option key={a} value={a}>{a}</option>))}
                           </select></label>
                         <label style={{ margin: 0 }}><span>Tipo</span>
                           <select value={maintFilter.type} onChange={(e: any) => setMaintFilter({ ...maintFilter, type: e.target.value })}>
                             <option value="">Todos</option>
-                            <option value="CORRECTIVO">Correctivo</option>
-                            <option value="PREVENTIVO">Preventivo</option>
-                            <option value="REPUESTO">Repuesto</option>
-                            <option value="MANO_OBRA">Mano de obra</option>
+                            {maintTypes.map((t) => (<option key={t} value={t}>{maintTypeLabel(t)}</option>))}
                           </select></label>
                         <button type="button" onClick={refreshMaintenanceHistory}>Filtrar</button>
                         <button type="button" onClick={exportMaintCsv}>Exportar CSV</button>
