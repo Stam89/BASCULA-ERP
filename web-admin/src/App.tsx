@@ -1010,16 +1010,6 @@ const piladoPresentations = ["10 LB", "25 LB", "50 LB", "98 LB", "100 LB"];
 // Junta las cuentas por pagar de una misma liquidación (mismo batch_id) para
 // que no salgan como 3 filas sueltas cuando fue una sola liquidación. Las que
 // no tienen batch (traspasos, pilado) quedan cada una en su grupo.
-function groupPayables(payables: AccountPayable[]): Array<{ key: string; items: AccountPayable[] }> {
-  const grupos = new Map<string, AccountPayable[]>();
-  for (const ap of payables) {
-    const key = ap.batch_id ? `batch:${ap.batch_id}` : `ap:${ap.id}`;
-    const arr = grupos.get(key);
-    if (arr) arr.push(ap); else grupos.set(key, [ap]);
-  }
-  return [...grupos.entries()].map(([key, items]) => ({ key, items }));
-}
-
 // Consolida las cuentas por cobrar por DEUDOR (persona/entidad): una tarjeta por
 // nombre, sumando el saldo de todas sus deudas. Agrupación solo en frontend; no
 // toca la base. El nombre ya viene resuelto del backend (cliente/socio/agricultor).
@@ -1047,6 +1037,34 @@ function conceptoReceivable(ar: AccountsReceivable): string {
     pilado_service: "Servicio de pilado", lot_transfer: "Traspaso de lote"
   };
   return m[ar.reference_type || ""] || "Cuenta por cobrar";
+}
+
+// Consolida las cuentas por PAGAR por ACREEDOR/proveedor/entidad. Mismo patrón
+// que groupReceivables; agrupación solo en frontend, no toca la base.
+function groupPayablesByAcreedor(list: AccountPayable[]): Array<{ key: string; nombre: string; items: AccountPayable[] }> {
+  const map = new Map<string, { nombre: string; items: AccountPayable[] }>();
+  for (const p of list) {
+    const nombre = (p.farmer_name || p.description || "Sin nombre").trim();
+    const key = nombre.toUpperCase();
+    const g = map.get(key);
+    if (g) g.items.push(p); else map.set(key, { nombre, items: [p] });
+  }
+  return [...map.entries()]
+    .map(([key, v]) => ({ key, nombre: v.nombre, items: v.items }))
+    .sort((a, b) =>
+      b.items.reduce((s, r) => s + Number(r.balance), 0) - a.items.reduce((s, r) => s + Number(r.balance), 0)
+    );
+}
+
+// Etiqueta corta del concepto de una cuenta por pagar, para el estado de cuenta.
+function conceptoPayable(p: AccountPayable): string {
+  if (p.liquidation_number) return `Liquidación ${p.liquidation_number}`;
+  if (p.description) return p.description;
+  const m: Record<string, string> = {
+    pilado_service: "Servicio de pilado", service_charge: "Servicio (maquila)", packaging_charge: "Cargo por sacos",
+    lot_transfer: "Traspaso de lote", selection_batch: "Selección / envejecido"
+  };
+  return m[p.reference_type || ""] || "Cuenta por pagar";
 }
 
 // "100 LB" -> 100. Sirve para guardar el peso del saco como número.
@@ -1384,6 +1402,8 @@ export function App() {
   // Modal "Estado de cuenta" por deudor: guarda la clave del grupo; los ítems se
   // recalculan en vivo desde accountsReceivable para reflejar los pagos al instante.
   const [arDetalleKey, setArDetalleKey] = useState<string | null>(null);
+  // Ídem para Por Pagar (acreedor).
+  const [apDetalleKey, setApDetalleKey] = useState<string | null>(null);
   const [apFilter, setApFilter] = useState<"todos" | "socios" | "agricultores" | "matriz">("todos");
   const [newCustomerForm, setNewCustomerForm] = useState({ full_name: "", phone: "", address: "", customer_type: "NATURAL" as "NATURAL"|"EMPRESA" });
 
@@ -3397,21 +3417,22 @@ export function App() {
   }
 
   // Estado de cuenta imprimible (ventana limpia, sin menú lateral ni botones).
-  function printReceivableStatement(nombre: string, items: AccountsReceivable[]) {
-    const filas = items.map((ar) => {
-      const monto = Number(ar.amount), saldo = Number(ar.balance), abonos = Math.max(0, monto - saldo);
+  // Genérico: sirve para "por cobrar" y "por pagar" según el título.
+  function printCuentaStatement(nombre: string, rows: DetalleRow[], titulo: string) {
+    const filas = rows.map((r) => {
+      const abonos = Math.max(0, r.monto - r.saldo);
       return `<tr>
-        <td>${(ar.created_at || "").slice(0, 10)}</td>
-        <td>${conceptoReceivable(ar)}</td>
-        <td class="num">${monto.toFixed(2)}</td>
+        <td>${(r.fecha || "").slice(0, 10)}</td>
+        <td>${r.concepto}</td>
+        <td class="num">${r.monto.toFixed(2)}</td>
         <td class="num">${abonos.toFixed(2)}</td>
-        <td class="num">${saldo.toFixed(2)}</td>
+        <td class="num">${r.saldo.toFixed(2)}</td>
       </tr>`;
     }).join("");
-    const totMonto = items.reduce((s, r) => s + Number(r.amount), 0);
-    const totAbonos = items.reduce((s, r) => s + Math.max(0, Number(r.amount) - Number(r.balance)), 0);
-    const totSaldo = items.reduce((s, r) => s + Number(r.balance), 0);
-    const html = `<html><head><meta charset="utf-8"><title>Estado de cuenta · ${nombre}</title><style>
+    const totMonto = rows.reduce((s, r) => s + r.monto, 0);
+    const totAbonos = rows.reduce((s, r) => s + Math.max(0, r.monto - r.saldo), 0);
+    const totSaldo = rows.reduce((s, r) => s + r.saldo, 0);
+    const html = `<html><head><meta charset="utf-8"><title>${titulo} · ${nombre}</title><style>
       body{font-family:Arial,sans-serif;font-size:12px;margin:16mm;color:#111}
       h1{font-size:18px;margin:0 0 2px;text-align:center}
       h2{font-size:13px;font-weight:normal;margin:0 0 2px;text-align:center;color:#555}
@@ -3427,7 +3448,7 @@ export function App() {
     </style></head><body>
       <h1>${appSettings.business_name}</h1>
       <h2>${[appSettings.business_subtitle, appSettings.ruc && `RUC: ${appSettings.ruc}`].filter(Boolean).join(" · ")}</h2>
-      <h3>Estado de cuenta por cobrar</h3>
+      <h3>${titulo}</h3>
       <div class="who">${nombre}</div>
       <table>
         <thead><tr><th>Fecha</th><th>Concepto</th><th class="num">Monto</th><th class="num">Abonos</th><th class="num">Saldo</th></tr></thead>
@@ -3438,6 +3459,28 @@ export function App() {
     </body></html>`;
     const w = window.open("", "_blank", "width=820,height=640");
     if (w) { w.document.write(html); w.document.close(); w.print(); }
+  }
+  // Filas normalizadas para el modal/impresión de cuentas por cobrar.
+  const receivableRows = (items: AccountsReceivable[]): DetalleRow[] =>
+    items.map((ar) => ({ id: ar.id, fecha: ar.created_at, concepto: conceptoReceivable(ar), monto: Number(ar.amount), saldo: Number(ar.balance) }));
+  // Ídem para cuentas por pagar.
+  const payableRows = (items: AccountPayable[]): DetalleRow[] =>
+    items.map((p) => ({ id: p.id, fecha: p.created_at, concepto: conceptoPayable(p), monto: Number(p.amount), saldo: Number(p.balance) }));
+
+  // Pagar TODO lo adeudado a un acreedor (reparte un solo monto entre sus cuentas).
+  async function pagarTotalPayableGrupo(items: AccountPayable[]) {
+    const ids = items.filter((p) => Number(p.balance) > 0.001).map((p) => p.id);
+    const total = round2(items.reduce((s, p) => s + Number(p.balance), 0));
+    if (!ids.length || total <= 0) return;
+    await pagarGrupoCuentas(ids, total);
+    await refreshPayables();
+  }
+  // Abono parcial a un acreedor: el backend lo reparte de la deuda más antigua a la más nueva.
+  async function abonarPayableGrupo(items: AccountPayable[], monto: number) {
+    const ids = items.map((p) => p.id);
+    if (!(monto > 0)) { addToast("Monto inválido", "error"); return; }
+    await pagarGrupoCuentas(ids, round2(monto));
+    await refreshPayables();
   }
 
   async function submitSackMovement(e: FormEvent<HTMLFormElement>) {
@@ -9545,14 +9588,16 @@ export function App() {
             )}
 
             {detalleGrupo && (
-              <ReceivableDetalleModal
+              <CuentaDetalleModal
                 nombre={detalleGrupo.nombre}
-                items={detalleGrupo.items}
+                rows={receivableRows(detalleGrupo.items)}
+                color="cobrar"
                 disabled={!dashboard.current_cash_register}
+                disabledMsg="Abre una caja para poder cobrar."
                 onClose={() => setArDetalleKey(null)}
                 onPagarTotal={() => pagarTotalReceivableGrupo(detalleGrupo.items).catch((e) => addToast(e.message, "error"))}
                 onAbonar={(m) => abonarReceivableGrupo(detalleGrupo.items, m).catch((e) => addToast(e.message, "error"))}
-                onImprimir={() => printReceivableStatement(detalleGrupo.nombre, detalleGrupo.items)}
+                onImprimir={() => printCuentaStatement(detalleGrupo.nombre, receivableRows(detalleGrupo.items), "Estado de cuenta por cobrar")}
               />
             )}
           </section>
@@ -9570,22 +9615,24 @@ export function App() {
             if (socioNames.some((s) => s && nm.includes(s))) return "socios";
             return "matriz";
           };
-          const grupos = groupPayables(cashPayables)
+          const grupos = groupPayablesByAcreedor(cashPayables)
             .map((g) => ({ ...g, clase: clasif(g.items[0]) }))
             .filter((g) => apFilter === "todos" || g.clase === apFilter);
           const totalPend = grupos.reduce((a, g) => a + g.items.reduce((s, p) => s + Number(p.balance), 0), 0);
-          const vencidos = grupos.filter((g) => { const p = g.items[0]; return !!p.due_date && p.due_date.slice(0, 10) < hoy && g.items.reduce((s, x) => s + Number(x.balance), 0) > 0.001; });
+          const totalTx = grupos.reduce((a, g) => a + g.items.length, 0);
+          const vencidos = grupos.filter((g) => g.items.some((p) => !!p.due_date && p.due_date.slice(0, 10) < hoy && Number(p.balance) > 0.001));
           const tabs: Array<[typeof apFilter, string]> = [["todos", "Todos"], ["socios", "Socios"], ["agricultores", "Agricultores"], ["matriz", "Matriz (CEYRO)"]];
+          const detalleGrupo = apDetalleKey ? grupos.find((g) => g.key === apDetalleKey) ?? null : null;
           return (
           <section className="cuentasLayout">
             <div>
               <h2 style={{ marginBottom: 2 }}>📑 Cuentas por pagar</h2>
-              <p className="muted" style={{ margin: "0 0 12px" }}>Dinero que se debe: agricultores, socios o la matriz.</p>
+              <p className="muted" style={{ margin: "0 0 12px" }}>Dinero que se debe, agrupado por acreedor o proveedor. Toca una tarjeta para ver el detalle y pagar.</p>
             </div>
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
-              <KpiCard title="Total pendiente" value={money(totalPend)} sub={`${grupos.length} cuenta(s)`} color="#dc2626" />
+              <KpiCard title="Total pendiente" value={money(totalPend)} sub={`${grupos.length} acreedor(es)`} color="#dc2626" />
               <KpiCard title="Vencido / por vencer" value={money(vencidos.reduce((a, g) => a + g.items.reduce((s, p) => s + Number(p.balance), 0), 0))} sub={`${vencidos.length} vencida(s)`} color="#b45309" />
-              <KpiCard title="Transacciones activas" value={String(grupos.length)} sub="liquidaciones / servicios" color="#2563eb" />
+              <KpiCard title="Transacciones activas" value={String(totalTx)} sub="liquidaciones / servicios" color="#2563eb" />
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
               {tabs.map(([k, lbl]) => (
@@ -9599,31 +9646,52 @@ export function App() {
               <div className="emptyState"><div className="emptyIcon">✅</div><p>No hay cuentas por pagar en esta vista</p></div>
             ) : (
               <div className="cuentasGrid">
-                {grupos.map((grupo) => {
-                  const total = grupo.items.reduce((a, p) => a + Number(p.amount), 0);
-                  const pendiente = grupo.items.reduce((a, p) => a + Number(p.balance), 0);
-                  const p0 = grupo.items[0];
-                  const varios = grupo.items.length > 1;
-                  const refTxt = [p0.liquidation_number ? `Liq. ${p0.liquidation_number}` : "", varios ? `${grupo.items.length} ingresos` : ""].filter(Boolean).join(" · ");
-                  const vencido = !!p0.due_date && p0.due_date.slice(0, 10) < hoy && pendiente > 0.001;
+                {grupos.map((g) => {
+                  const saldo = g.items.reduce((a, p) => a + Number(p.balance), 0);
+                  const total = g.items.reduce((a, p) => a + Number(p.amount), 0);
+                  const abonos = Math.max(0, total - saldo);
+                  const pct = total > 0 ? Math.min(100, (abonos / total) * 100) : 0;
+                  const hayVencida = g.items.some((p) => !!p.due_date && p.due_date.slice(0, 10) < hoy && Number(p.balance) > 0.001);
+                  const inicial = (g.nombre || "?").trim().charAt(0).toUpperCase() || "?";
                   return (
-                    <CuentaCardNueva
-                      key={`${grupo.key}-${pendiente.toFixed(2)}`}
-                      color="pagar"
-                      nombre={p0.farmer_name}
-                      refTxt={refTxt || undefined}
-                      descripcion={p0.description ?? undefined}
-                      total={total}
-                      saldo={pendiente}
-                      status={pendiente < 0.01 ? "PAID" : p0.status}
-                      vencido={vencido}
-                      disabled={!dashboard.current_cash_register}
-                      onPagarTotal={(m) => pagarGrupoCuentas(grupo.items.map((ap) => ap.id), m).catch((e) => addToast(e.message, "error"))}
-                      onAbonar={(m) => pagarGrupoCuentas(grupo.items.map((ap) => ap.id), m).catch((e) => addToast(e.message, "error"))}
-                    />
+                    <article key={g.key} style={{ background: "var(--c-surface, #fff)", border: "1px solid var(--c-border, #e5e7eb)", borderRadius: 14, padding: 18, boxShadow: "0 1px 3px rgba(0,0,0,0.06)", display: "flex", flexDirection: "column", gap: 12 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                        <div style={{ width: 44, height: 44, borderRadius: "50%", background: "#dc2626", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 18, flexShrink: 0 }}>{inicial}</div>
+                        <strong style={{ flex: 1, minWidth: 0, fontSize: 18, fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.nombre}</strong>
+                        {hayVencida && <EstadoBadge status="PARTIAL" vencido={true} />}
+                      </div>
+                      <div>
+                        <span className="muted" style={{ display: "block", fontSize: 12 }}>Saldo total adeudado</span>
+                        <b style={{ fontSize: 26, color: "#dc2626" }}>{money(saldo)}</b>
+                        <div className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>
+                          {g.items.length} transacci{g.items.length === 1 ? "ón" : "ones"} pendiente{g.items.length === 1 ? "" : "s"}
+                        </div>
+                      </div>
+                      <div style={{ height: 7, background: "#f1f5f9", borderRadius: 999, overflow: "hidden" }}>
+                        <div style={{ width: `${pct}%`, height: "100%", background: "#dc2626", transition: "width .3s" }} />
+                      </div>
+                      <button type="button" className="primary" onClick={() => setApDetalleKey(g.key)}
+                        style={{ fontSize: 13, padding: "10px 12px", fontWeight: 700 }}>
+                        📄 Ver detalle y Pagar
+                      </button>
+                    </article>
                   );
                 })}
               </div>
+            )}
+
+            {detalleGrupo && (
+              <CuentaDetalleModal
+                nombre={detalleGrupo.nombre}
+                rows={payableRows(detalleGrupo.items)}
+                color="pagar"
+                disabled={!dashboard.current_cash_register}
+                disabledMsg="Abre una caja para poder pagar."
+                onClose={() => setApDetalleKey(null)}
+                onPagarTotal={() => pagarTotalPayableGrupo(detalleGrupo.items).catch((e) => addToast(e.message, "error"))}
+                onAbonar={(m) => abonarPayableGrupo(detalleGrupo.items, m).catch((e) => addToast(e.message, "error"))}
+                onImprimir={() => printCuentaStatement(detalleGrupo.nombre, payableRows(detalleGrupo.items), "Estado de cuenta por pagar")}
+              />
             )}
           </section>
           );
@@ -12555,18 +12623,25 @@ function EstadoBadge({ status, vencido }: { status: string; vencido: boolean }) 
   return <span style={{ background: cfg.bg, color: cfg.fg, fontSize: 11, fontWeight: 700, padding: "2px 10px", borderRadius: 999, whiteSpace: "nowrap" }}>{cfg.txt}</span>;
 }
 
-// Modal "Estado de cuenta" de un deudor: tabla de sus deudas + acciones de cobro
-// (total / abono parcial) + impresión. El detalle vive aquí; la tarjeta solo consolida.
-function ReceivableDetalleModal(props: {
+// Fila normalizada del estado de cuenta (sirve para cobrar y pagar).
+type DetalleRow = { id: string; fecha: string; concepto: string; monto: number; saldo: number };
+
+// Modal "Estado de cuenta" GENÉRICO: mismo diseño y UX para Por Cobrar y Por
+// Pagar (solo cambia el color). Tabla de deudas + acciones (total / abono
+// parcial) + impresión. El detalle vive aquí; la tarjeta solo consolida.
+function CuentaDetalleModal(props: {
   nombre: string;
-  items: AccountsReceivable[];
+  rows: DetalleRow[];
+  color: "cobrar" | "pagar";
   disabled?: boolean;
+  disabledMsg?: string;
   onClose: () => void;
   onPagarTotal: () => void;
   onAbonar: (monto: number) => void;
   onImprimir: () => void;
 }) {
-  const saldoTotal = props.items.reduce((s, r) => s + Number(r.balance), 0);
+  const saldoTotal = props.rows.reduce((s, r) => s + Number(r.saldo), 0);
+  const barColor = props.color === "cobrar" ? "#16a34a" : "#dc2626";
   const [modoAbono, setModoAbono] = React.useState(false);
   const [monto, setMonto] = React.useState(String(saldoTotal.toFixed(2)));
   const valor = Number(monto);
@@ -12577,7 +12652,7 @@ function ReceivableDetalleModal(props: {
           <div>
             <h3 style={{ margin: 0, fontSize: 20 }}>{props.nombre}</h3>
             <p className="muted" style={{ margin: "2px 0 0" }}>
-              Estado de cuenta · {props.items.length} transacci{props.items.length === 1 ? "ón" : "ones"} · saldo {money(saldoTotal)}
+              Estado de cuenta · {props.rows.length} transacci{props.rows.length === 1 ? "ón" : "ones"} · saldo {money(saldoTotal)}
             </p>
           </div>
           <button type="button" onClick={props.onClose} style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
@@ -12587,25 +12662,24 @@ function ReceivableDetalleModal(props: {
           <table className="cajaTable" style={{ width: "100%" }}>
             <thead><tr><th>Fecha</th><th>Concepto</th><th className="num">Monto</th><th className="num">Abonos</th><th className="num">Saldo</th></tr></thead>
             <tbody>
-              {props.items.map((ar) => {
-                const m = Number(ar.amount), sal = Number(ar.balance);
-                const abonos = Math.max(0, m - sal);
+              {props.rows.map((r) => {
+                const abonos = Math.max(0, r.monto - r.saldo);
                 return (
-                  <tr key={ar.id}>
-                    <td>{(ar.created_at || "").slice(0, 10)}</td>
-                    <td>{conceptoReceivable(ar)}</td>
-                    <td className="num">{money(m)}</td>
+                  <tr key={r.id}>
+                    <td>{(r.fecha || "").slice(0, 10)}</td>
+                    <td>{r.concepto}</td>
+                    <td className="num">{money(r.monto)}</td>
                     <td className="num" style={{ color: "#0891b2" }}>{money(abonos)}</td>
-                    <td className="num" style={{ fontWeight: 700, color: "#16a34a" }}>{money(sal)}</td>
+                    <td className="num" style={{ fontWeight: 700, color: barColor }}>{money(r.saldo)}</td>
                   </tr>
                 );
               })}
             </tbody>
-            <tfoot><tr style={{ fontWeight: 800 }}><td colSpan={4}>SALDO TOTAL</td><td className="num" style={{ color: "#16a34a" }}>{money(saldoTotal)}</td></tr></tfoot>
+            <tfoot><tr style={{ fontWeight: 800 }}><td colSpan={4}>SALDO TOTAL</td><td className="num" style={{ color: barColor }}>{money(saldoTotal)}</td></tr></tfoot>
           </table>
         </div>
 
-        {props.disabled && <div className="alertBox" style={{ marginTop: 10 }}>Abre una caja para poder cobrar.</div>}
+        {props.disabled && <div className="alertBox" style={{ marginTop: 10 }}>{props.disabledMsg ?? "Abre una caja para continuar."}</div>}
 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
           <button type="button" className="primary" disabled={props.disabled} onClick={props.onPagarTotal} style={{ fontWeight: 700 }}>✅ Pagar total</button>
@@ -12624,60 +12698,6 @@ function ReceivableDetalleModal(props: {
         )}
       </div>
     </div>
-  );
-}
-
-function CuentaCardNueva(props: {
-  nombre: string; refTxt?: string; descripcion?: string;
-  total: number; saldo: number; status: string; vencido: boolean;
-  disabled?: boolean; color: "cobrar" | "pagar";
-  onPagarTotal: (m: number) => void; onAbonar: (m: number) => void;
-}) {
-  const [modo, setModo] = React.useState<"" | "abono" | "detalle">("");
-  const [monto, setMonto] = React.useState(String(props.saldo.toFixed(2)));
-  const abonos = Math.max(0, props.total - props.saldo);
-  const pct = props.total > 0 ? Math.min(100, Math.max(0, (abonos / props.total) * 100)) : 0;
-  const inicial = (props.nombre || "?").trim().charAt(0).toUpperCase() || "?";
-  const barColor = props.color === "cobrar" ? "#16a34a" : "#dc2626";
-  return (
-    <article style={{ background: "var(--c-surface, #fff)", border: "1px solid var(--c-border, #e5e7eb)", borderRadius: 14, padding: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.06)", display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <div style={{ width: 38, height: 38, borderRadius: "50%", background: barColor, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, flexShrink: 0 }}>{inicial}</div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <strong style={{ display: "block", fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{props.nombre}</strong>
-          {props.refTxt && <small className="muted">{props.refTxt}</small>}
-        </div>
-        <EstadoBadge status={props.status} vencido={props.vencido} />
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, fontSize: 12 }}>
-        <div><span className="muted" style={{ display: "block" }}>Monto total</span><b>{money(props.total)}</b></div>
-        <div><span className="muted" style={{ display: "block" }}>Abonos</span><b style={{ color: "#0891b2" }}>{money(abonos)}</b></div>
-        <div><span className="muted" style={{ display: "block" }}>Saldo</span><b style={{ fontSize: 15, color: barColor }}>{money(props.saldo)}</b></div>
-      </div>
-      <div style={{ height: 7, background: "#f1f5f9", borderRadius: 999, overflow: "hidden" }}>
-        <div style={{ width: `${pct}%`, height: "100%", background: barColor, transition: "width .3s" }} />
-      </div>
-      <div style={{ fontSize: 11, color: "#64748b", marginTop: -4 }}>{pct.toFixed(0)}% pagado</div>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        <button type="button" className="primary" disabled={props.disabled} onClick={() => props.onPagarTotal(props.saldo)} style={{ fontSize: 12, padding: "6px 10px" }}>✅ Pagar total</button>
-        <button type="button" disabled={props.disabled} onClick={() => { setMonto(String(props.saldo.toFixed(2))); setModo(modo === "abono" ? "" : "abono"); }} style={{ fontSize: 12, padding: "6px 10px" }}>💳 Abono parcial</button>
-        {(props.descripcion || props.refTxt) && <button type="button" onClick={() => setModo(modo === "detalle" ? "" : "detalle")} style={{ fontSize: 12, padding: "6px 10px" }}>📄 Ver detalle</button>}
-      </div>
-      {modo === "abono" && (
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <input type="number" min="0.01" step="0.01" max={props.saldo} value={monto} onChange={(e) => setMonto(e.target.value)} className="payableInput" style={{ maxWidth: 130 }} />
-          <button type="button" className="primary" disabled={props.disabled || !(Number(monto) > 0) || Number(monto) > props.saldo + 0.001} onClick={() => props.onAbonar(Number(monto))} style={{ fontSize: 12, padding: "6px 10px" }}>Registrar abono</button>
-          {Number(monto) > 0 && Number(monto) < props.saldo - 0.001 && <small className="muted">Queda {money(round2(props.saldo - Number(monto)))}</small>}
-        </div>
-      )}
-      {modo === "detalle" && (
-        <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 10px", fontSize: 12, color: "#334155" }}>
-          {props.refTxt && <div><b>Referencia:</b> {props.refTxt}</div>}
-          {props.descripcion && <div>{props.descripcion}</div>}
-          {!props.refTxt && !props.descripcion && <div className="muted">Sin detalle adicional.</div>}
-        </div>
-      )}
-    </article>
   );
 }
 

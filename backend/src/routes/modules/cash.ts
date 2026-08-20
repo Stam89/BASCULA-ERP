@@ -323,14 +323,21 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
   // agricultor, se muestra el concepto para saber a quién y por qué se paga.
   const result = await pool.query(
     `SELECT ap.*,
+            -- Nombre del ACREEDOR / proveedor / entidad a quien se le debe:
+            --  · liquidación   -> el agricultor (farmers)
+            --  · pilado        -> el proveedor del servicio (CEYRO)
+            --  · maquila/sacos -> el proveedor (matriz, CEYRO)
+            --  · traspaso lote -> el accionista que entregó el lote
+            --  · selección     -> el proveedor externo
+            -- Antes las de socio caían al texto de la descripción y no agrupaban.
             COALESCE(
               f.full_name,
-              CASE
-                WHEN ap.reference_type = 'pilado_service' THEN 'CEYRO — Servicio de pilado'
-                WHEN ap.reference_type = 'lot_transfer' THEN 'Traspaso de lote entre accionistas'
-                WHEN ap.reference_type = 'selection_batch' THEN COALESCE(sp.name || ' — servicio de selección/envejecido', 'Servicio de selección/envejecido')
-                ELSE NULLIF(ap.description, '')
-              END,
+              ps_prov.name,
+              msc_prov.name,
+              mpc_prov.name,
+              lt_from.name,
+              sp.name,
+              NULLIF(ap.description, ''),
               'Cuenta por pagar'
             ) AS farmer_name,
             l.liquidation_number, l.batch_id
@@ -339,6 +346,14 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
      LEFT JOIN liquidations l ON l.id = ap.liquidation_id
      LEFT JOIN selection_batches sb ON sb.id = ap.reference_id AND ap.reference_type = 'selection_batch'
      LEFT JOIN external_providers sp ON sp.id = sb.provider_id
+     LEFT JOIN pilado_services ps ON ps.payable_id = ap.id
+     LEFT JOIN accionistas ps_prov ON ps_prov.id = ps.provider_accionista_id
+     LEFT JOIN matriz_service_charges msc ON msc.payable_id = ap.id
+     LEFT JOIN accionistas msc_prov ON msc_prov.id = msc.provider_accionista_id
+     LEFT JOIN matriz_packaging_charges mpc ON mpc.payable_id = ap.id
+     LEFT JOIN accionistas mpc_prov ON mpc_prov.id = mpc.provider_accionista_id
+     LEFT JOIN lot_transfers lt ON lt.payable_id = ap.id
+     LEFT JOIN accionistas lt_from ON lt_from.id = lt.from_accionista_id
      WHERE ap.status IN ('CONFIRMED', 'PARTIAL') AND ap.accionista_id = $1
      ORDER BY ap.created_at DESC`,
     [accionistaId]
