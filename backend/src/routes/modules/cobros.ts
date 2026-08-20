@@ -20,7 +20,7 @@ cobrosRouter.get("/", asyncRoute(async (req, res) => {
   const result = await pool.query(
     `SELECT c.id, c.servicio, c.fecha, c.monto::float AS monto, c.status, c.notes, c.created_at,
             cli.name AS cliente,
-            COALESCE(ar.balance, 0)::float AS saldo, COALESCE(ar.status, c.status) AS estado_cxc
+            COALESCE(ar.balance, 0)::float AS saldo, COALESCE(ar.status::text, c.status) AS estado_cxc
      FROM matriz_service_charges c
      JOIN accionistas cli ON cli.id = c.client_accionista_id
      LEFT JOIN accounts_receivable ar ON ar.id = c.receivable_id
