@@ -956,6 +956,35 @@ const SECCIONES_POR_AREA: Record<string, string[]> = {
   ADMINISTRATIVO: ["AIRE ACONDICIONADO", "COMPUTADORAS", "NEVERA PEQUEÑA", "NEVERA GRANDE", "HELERA", "IMPRESORAS", "BÁSCULA"],
   MONTACARGA: ["MOTOR", "RADIADOR", "BATERÍA", "TRANSMISIÓN", "OTROS"]
 };
+
+// Catálogo de categorías de caja por tipo de entidad (MATRIZ=CEYRO, SOCIO=ROVINSON/STALYN).
+// El código de categoría se guarda como string en cash_movements (sin tocar esa tabla).
+// `reuse` marca las que deben registrarse por su flujo dedicado (no como movimiento crudo).
+type CashCat = { code: string; label: string; movement: "INCOME" | "EXPENSE"; tipo: "MATRIZ" | "SOCIO" | "AMBOS"; reuse?: "pilado" | "agricultor" | "fomento" };
+const CASH_CATEGORIES: CashCat[] = [
+  // MATRIZ (CEYRO) — mantiene sus categorías actuales (retrocompatible)
+  { code: "GASTO_OPERATIVO", label: "Gasto operativo", movement: "EXPENSE", tipo: "MATRIZ" },
+  { code: "GASTO_OFICINA", label: "Gasto de oficina", movement: "EXPENSE", tipo: "MATRIZ" },
+  { code: "SERVICIOS_BASICOS", label: "Servicios básicos", movement: "EXPENSE", tipo: "MATRIZ" },
+  { code: "PAGO_MANO_OBRA", label: "Pago mano de obra", movement: "EXPENSE", tipo: "MATRIZ" },
+  { code: "ANTICIPO_AGRICULTOR", label: "Anticipo agricultor", movement: "EXPENSE", tipo: "MATRIZ" },
+  { code: "VENTA_CONTADO", label: "Venta contado", movement: "INCOME", tipo: "MATRIZ" },
+  { code: "COBRO_MAQUILA", label: "Cobro maquila", movement: "INCOME", tipo: "MATRIZ" },
+  { code: "OTRO_INGRESO", label: "Otro ingreso", movement: "INCOME", tipo: "MATRIZ" },
+  // SOCIOS (ROVINSON / STALYN) — operación comercial
+  { code: "VENTA_MAYOR", label: "Venta al por mayor", movement: "INCOME", tipo: "SOCIO" },
+  { code: "VENTA_DETALLE", label: "Venta al detalle", movement: "INCOME", tipo: "SOCIO" },
+  { code: "COBRO_CLIENTE", label: "Cobro cuentas por cobrar (clientes)", movement: "INCOME", tipo: "SOCIO" },
+  { code: "APORTE_CAPITAL", label: "Aporte / inyección de capital", movement: "INCOME", tipo: "SOCIO" },
+  { code: "OTRO_INGRESO_COMERCIAL", label: "Otro ingreso comercial", movement: "INCOME", tipo: "SOCIO" },
+  { code: "PAGO_AGRICULTOR", label: "Pago a agricultor (compra de cáscara)", movement: "EXPENSE", tipo: "SOCIO", reuse: "agricultor" },
+  { code: "FOMENTOS", label: "Fomentos / anticipos a agricultores", movement: "EXPENSE", tipo: "SOCIO", reuse: "fomento" },
+  { code: "PAGO_SERVICIO_PILADO", label: "Pago servicio de pilado (a CEYRO)", movement: "EXPENSE", tipo: "SOCIO", reuse: "pilado" },
+  { code: "FLETE", label: "Servicio de flete / movilización", movement: "EXPENSE", tipo: "SOCIO" },
+  { code: "ANTICIPO_CLIENTE_PROV", label: "Anticipo a cliente / proveedor", movement: "EXPENSE", tipo: "SOCIO" },
+  { code: "GASTO_COMERCIALIZACION", label: "Gasto operativo de comercialización", movement: "EXPENSE", tipo: "SOCIO" },
+  { code: "OTRO_EGRESO", label: "Otro egreso", movement: "EXPENSE", tipo: "SOCIO" }
+];
 const LB_TO_KG = 0.45359237;
 const QQ_TO_LB = 100;
 const millingDraftStorageKey = "bascula-erp:milling-report-draft";
@@ -1167,6 +1196,7 @@ export function App() {
 
   // ── Caja ──────────────────────────────────────────────────────────────────
   const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "movimiento" | "gastos" | "sacos" | "mantenimiento" | "equipos" | "venta_detalle" | "cuentas" | "fomentos">("resumen");
+  const [movCategory, setMovCategory] = useState("");
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
   const [cashSummary, setCashSummary] = useState<CashSummary | null>(null);
   const [cashPayables, setCashPayables] = useState<AccountPayable[]>([]);
@@ -4087,6 +4117,7 @@ export function App() {
       description: form.get("description") || undefined
     });
     safeResetForm(formElement);
+    setMovCategory("");
     addToast(`${movement === "INCOME" ? "Ingreso" : "Egreso"} registrado`, "success");
     await refreshCaja(registerId);
   }
@@ -7840,26 +7871,44 @@ export function App() {
 
                     <label style={{ display: "block", marginBottom: 16 }}>
                       <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Categoría</span>
-                      <select name="category" required style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
-                        <option value="">Seleccione una categoría</option>
-                        <optgroup label="Egresos">
-                          <option value="GASTO_OPERATIVO">Gasto operativo</option>
-                          <option value="GASTO_OFICINA">Gasto de oficina</option>
-                          <option value="SERVICIOS_BASICOS">Servicios básicos</option>
-                          <option value="PAGO_MANO_OBRA">Pago mano de obra</option>
-                          <option value="ANTICIPO_AGRICULTOR">Anticipo agricultor</option>
-                        </optgroup>
-                        <optgroup label="Ingresos">
-                          <option value="VENTA_CONTADO">Venta contado</option>
-                          <option value="COBRO_MAQUILA">Cobro maquila</option>
-                          <option value="OTRO_INGRESO">Otro ingreso</option>
-                        </optgroup>
-                      </select>
+                      {(() => {
+                        const activeTipo = accionistas.find((a) => a.id === activeAccionistaId)?.tipo;
+                        const esSocio = activeTipo === "SOCIO";
+                        const visibles = CASH_CATEGORIES.filter((c) => esSocio ? (c.tipo === "SOCIO" || c.tipo === "AMBOS") : (c.tipo === "MATRIZ" || c.tipo === "AMBOS"));
+                        const egresos = visibles.filter((c) => c.movement === "EXPENSE");
+                        const ingresos = visibles.filter((c) => c.movement === "INCOME");
+                        return (
+                          <select name="category" required value={movCategory} onChange={(e: any) => setMovCategory(e.target.value)} style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
+                            <option value="">Seleccione una categoría</option>
+                            <optgroup label="Egresos">
+                              {egresos.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
+                            </optgroup>
+                            <optgroup label="Ingresos">
+                              {ingresos.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
+                            </optgroup>
+                          </select>
+                        );
+                      })()}
                     </label>
+                    {(() => {
+                      const cat = CASH_CATEGORIES.find((c) => c.code === movCategory);
+                      if (!cat?.reuse) return null;
+                      const info = cat.reuse === "pilado"
+                        ? { txt: "Para que el pago abone la cuenta de CEYRO, regístralo en Por Pagar (descuenta tu caja y abona la cuenta por cobrar de CEYRO).", go: () => setCajaSubTab("cuentas"), lbl: "Ir a Por Pagar" }
+                        : cat.reuse === "fomento"
+                        ? { txt: "Para enlazarlo con el agricultor, regístralo en Fomentos.", go: () => setCajaSubTab("fomentos"), lbl: "Ir a Fomentos" }
+                        : { txt: "Para enlazarlo a la liquidación del agricultor, regístralo en Liquidaciones.", go: () => setActiveTab("Liquidaciones"), lbl: "Ir a Liquidaciones" };
+                      return (
+                        <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "10px 12px", marginBottom: 16, fontSize: 12 }}>
+                          <span style={{ display: "block", marginBottom: 6 }}>⚠️ {info.txt}</span>
+                          <button type="button" onClick={info.go} style={{ fontSize: 12, padding: "4px 10px" }}>{info.lbl}</button>
+                        </div>
+                      );
+                    })()}
 
                     <Input name="amount" label="Monto $" type="number" />
                     <Input name="description" label="Descripción (opcional)" required={false} />
-                    <button className="primary" style={{ width: "100%", padding: "10px 0", marginTop: 8 }}>💾 Registrar movimiento</button>
+                    <button className="primary" disabled={CASH_CATEGORIES.find((c) => c.code === movCategory)?.reuse !== undefined} style={{ width: "100%", padding: "10px 0", marginTop: 8 }}>💾 Registrar movimiento</button>
                   </form>
                 )}
 

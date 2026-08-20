@@ -29,7 +29,17 @@ export function categoryLabel(cat: string): string {
     COMPRA_SACOS: "Compra de sacos",
     MANTENIMIENTO_EQUIPO: "Mantenimiento de equipo",
     CUENTAS_PAGAR: "Cuentas por pagar",
-    FOMENTOS: "Fomentos"
+    FOMENTOS: "Fomentos",
+    // Categorías comerciales de SOCIOS (F: caja por tipo de entidad)
+    VENTA_MAYOR: "Venta al por mayor",
+    VENTA_DETALLE: "Venta al detalle",
+    COBRO_CLIENTE: "Cobro a cliente (CxC)",
+    APORTE_CAPITAL: "Aporte de capital",
+    OTRO_INGRESO_COMERCIAL: "Otro ingreso comercial",
+    FLETE: "Flete / movilización",
+    ANTICIPO_CLIENTE_PROV: "Anticipo a cliente/proveedor",
+    GASTO_COMERCIALIZACION: "Gasto de comercialización",
+    OTRO_EGRESO: "Otro egreso"
   };
   return map[cat] ?? cat;
 }
