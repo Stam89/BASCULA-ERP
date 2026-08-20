@@ -1178,6 +1178,7 @@ export function App() {
   // ── Caja ──────────────────────────────────────────────────────────────────
   const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "movimiento" | "gastos" | "sacos" | "mantenimiento" | "equipos" | "venta_detalle" | "cuentas" | "fomentos">("resumen");
   const [movCategory, setMovCategory] = useState("");
+  const [movType, setMovType] = useState<"EXPENSE" | "INCOME">("EXPENSE");
   const [movPayableId, setMovPayableId] = useState("");
   const [cashCategories, setCashCategories] = useState<CashCat[]>([]);
   const [catForm, setCatForm] = useState({ codigo: "", nombre: "", tipo: "EGRESO", aplicable_a: "AMBOS" });
@@ -7894,11 +7895,11 @@ export function App() {
                       <legend style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, display: "block" }}>Tipo de movimiento</legend>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                         <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: 6, cursor: "pointer" }}>
-                          <input type="radio" name="movement" value="EXPENSE" defaultChecked style={{ cursor: "pointer" }} />
+                          <input type="radio" name="movement" value="EXPENSE" checked={movType === "EXPENSE"} onChange={() => { setMovType("EXPENSE"); setMovCategory(""); setMovPayableId(""); }} style={{ cursor: "pointer" }} />
                           <span style={{ fontWeight: 600 }}>⬇ Egreso</span>
                         </label>
                         <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: 6, cursor: "pointer" }}>
-                          <input type="radio" name="movement" value="INCOME" style={{ cursor: "pointer" }} />
+                          <input type="radio" name="movement" value="INCOME" checked={movType === "INCOME"} onChange={() => { setMovType("INCOME"); setMovCategory(""); setMovPayableId(""); }} style={{ cursor: "pointer" }} />
                           <span style={{ fontWeight: 600 }}>⬆ Ingreso</span>
                         </label>
                       </div>
@@ -7909,18 +7910,12 @@ export function App() {
                       {(() => {
                         const activeTipo = accionistas.find((a) => a.id === activeAccionistaId)?.tipo;
                         const esSocio = activeTipo === "SOCIO";
-                        const visibles = cashCategories.filter((c) => c.activo && (esSocio ? (c.aplicable_a === "SOCIO" || c.aplicable_a === "AMBOS") : (c.aplicable_a === "MATRIZ" || c.aplicable_a === "AMBOS")));
-                        const egresos = visibles.filter((c) => c.tipo === "EGRESO");
-                        const ingresos = visibles.filter((c) => c.tipo === "INGRESO");
+                        const esteTipo = movType === "EXPENSE" ? "EGRESO" : "INGRESO";
+                        const visibles = cashCategories.filter((c) => c.activo && c.tipo === esteTipo && (esSocio ? (c.aplicable_a === "SOCIO" || c.aplicable_a === "AMBOS") : (c.aplicable_a === "MATRIZ" || c.aplicable_a === "AMBOS")));
                         return (
                           <select name="category" required value={movCategory} onChange={(e: any) => { setMovCategory(e.target.value); setMovPayableId(""); }} style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
                             <option value="">Seleccione una categoría</option>
-                            <optgroup label="Egresos">
-                              {egresos.map((c) => <option key={c.id} value={c.codigo}>{c.nombre}</option>)}
-                            </optgroup>
-                            <optgroup label="Ingresos">
-                              {ingresos.map((c) => <option key={c.id} value={c.codigo}>{c.nombre}</option>)}
-                            </optgroup>
+                            {visibles.map((c) => <option key={c.id} value={c.codigo}>{c.nombre}</option>)}
                           </select>
                         );
                       })()}
