@@ -41,7 +41,7 @@ dashboardRouter.get("/panel", requireAuth, requirePanelAccess, asyncRoute(async 
   const from = `${monthStr}-01`;
   const to = new Date(yy, mm, 0).toISOString().slice(0, 10); // último día del mes
 
-  const [accionistas, compras, ventas, inventario, bancos, ar, ap, prestamos, comprasSerie, ventasSerie, seco, servicios, costoOp] = await Promise.all([
+  const [accionistas, compras, ventas, inventario, bancos, ar, ap, prestamos, comprasSerie, ventasSerie, seco, servicios, costoOp, arAcc, apAcc, prestAcc] = await Promise.all([
     pool.query("SELECT id, name FROM accionistas WHERE is_active = true ORDER BY name"),
     pool.query(
       `SELECT accionista_id, COALESCE(SUM(gross_amount),0)::float total, COALESCE(SUM(quintals),0)::float qq, COUNT(*)::int cnt
@@ -114,7 +114,14 @@ dashboardRouter.get("/panel", requireAuth, requirePanelAccess, asyncRoute(async 
       `SELECT COALESCE(SUM(luz+mantenimiento+mano_obra+combustible+desgaste+otros),0)::float AS total,
               COALESCE(SUM(qq_producidos),0)::float AS qq
        FROM costo_operativo WHERE fecha BETWEEN $1 AND $2`,
-      [from, to])
+      [from, to]),
+    // Bloque inferior POR ACCIONISTA (aditivo; no cambia los totales globales).
+    pool.query(`SELECT accionista_id, COALESCE(SUM(balance),0)::float total, COUNT(*)::int cnt
+                FROM accounts_receivable WHERE status IN ('CONFIRMED','PARTIAL') AND balance > 0 GROUP BY accionista_id`),
+    pool.query(`SELECT accionista_id, COALESCE(SUM(balance),0)::float total, COUNT(*)::int cnt
+                FROM accounts_payable WHERE status IN ('CONFIRMED','PARTIAL') AND balance > 0 GROUP BY accionista_id`),
+    pool.query(`SELECT accionista_id, COALESCE(SUM(balance),0)::float total, COUNT(DISTINCT farmer_id)::int cnt
+                FROM farmer_advances WHERE status IN ('CONFIRMED','PARTIAL') AND balance > 0 GROUP BY accionista_id`)
   ]);
 
   const byAcc = (rows: Array<Record<string, unknown>>) => {
@@ -191,6 +198,10 @@ dashboardRouter.get("/panel", requireAuth, requirePanelAccess, asyncRoute(async 
     por_cobrar: { total: porCobrar, cnt: ar.rows[0].cnt },
     por_pagar: { total: porPagar, cnt: ap.rows[0].cnt },
     prestamos: { total: totalPrestamos, cnt: prestamos.rows[0].cnt },
+    // Desglose por accionista para filtrar el bloque inferior en el frontend.
+    por_cobrar_por_acc: Object.fromEntries(arAcc.rows.map((r: any) => [r.accionista_id, { total: Number(r.total), cnt: Number(r.cnt) }])),
+    por_pagar_por_acc: Object.fromEntries(apAcc.rows.map((r: any) => [r.accionista_id, { total: Number(r.total), cnt: Number(r.cnt) }])),
+    prestamos_por_acc: Object.fromEntries(prestAcc.rows.map((r: any) => [r.accionista_id, { total: Number(r.total), cnt: Number(r.cnt) }])),
     servicios_pilado: {
       facturado: Number(servicios.rows[0].facturado),
       pendiente: Number(servicios.rows[0].pendiente),

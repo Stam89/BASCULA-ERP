@@ -282,6 +282,9 @@ type PanelData = {
   por_cobrar: { total: number; cnt: number };
   por_pagar: { total: number; cnt: number };
   prestamos: { total: number; cnt: number };
+  por_cobrar_por_acc?: Record<string, { total: number; cnt: number }>;
+  por_pagar_por_acc?: Record<string, { total: number; cnt: number }>;
+  prestamos_por_acc?: Record<string, { total: number; cnt: number }>;
   servicios_pilado?: { facturado: number; pendiente: number; cobrado: number; cnt: number };
   costo_operativo?: { total: number; qq: number; por_qq: number };
   alertas: string[];
@@ -5640,7 +5643,7 @@ export function App() {
             )}
             {canSeePanel && dashView === "panel" ? (
               panelData ? (
-                <PanelIntegral data={panelData} month={panelMonth} onMonth={(m) => { setPanelMonth(m); refreshPanel(m).catch(() => undefined); }} />
+                <PanelIntegral data={panelData} month={panelMonth} onMonth={(m) => { setPanelMonth(m); refreshPanel(m).catch(() => undefined); }} activeAccionistaId={activeAccionistaId} accionistas={accionistas} />
               ) : (
                 <section className="emptyState"><div className="emptyIcon">📊</div><p>Cargando panel…</p></section>
               )
@@ -11690,7 +11693,7 @@ function ProductionQqFields({
 }
 
 // Panel de Control Integral: vista consolidada de los 3 accionistas.
-function PanelIntegral({ data, month, onMonth }: { data: PanelData; month: string; onMonth: (m: string) => void }) {
+function PanelIntegral({ data, month, onMonth, activeAccionistaId, accionistas }: { data: PanelData; month: string; onMonth: (m: string) => void; activeAccionistaId: string | null; accionistas: Accionista[] }) {
   const k = data.kpis;
   const acc = data.per_accionista;
   const monthNames = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
@@ -11825,19 +11828,40 @@ function PanelIntegral({ data, month, onMonth }: { data: PanelData; month: strin
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-        {card("CUENTAS POR COBRAR", money(data.por_cobrar.total), `${data.por_cobrar.cnt} cliente(s)`, "#2563eb")}
-        {card("CUENTAS POR PAGAR", money(data.por_pagar.total), `${data.por_pagar.cnt} proveedor(es)`, "#dc2626")}
-        {card("PRÉSTAMOS A AGRICULTORES", money(data.prestamos.total), `${data.prestamos.cnt} agricultor(es)`, "#16a34a")}
-        <div style={{ flex: "1 1 240px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 12, padding: 14 }}>
-          <div style={{ fontWeight: 700, color: "#dc2626", marginBottom: 6 }}>⚠️ Alertas importantes</div>
-          {data.alertas.length === 0 ? <p className="muted" style={{ margin: 0 }}>Sin alertas.</p> : (
-            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5 }}>
-              {data.alertas.map((a, i) => <li key={i} style={{ marginBottom: 3 }}>{a}</li>)}
-            </ul>
-          )}
+      {(() => {
+        // Bloque inferior filtrado por el accionista activo (reactivo al dropdown).
+        const acc = accionistas.find((a) => a.id === activeAccionistaId);
+        const cobrar = (data.por_cobrar_por_acc && activeAccionistaId) ? (data.por_cobrar_por_acc[activeAccionistaId] ?? { total: 0, cnt: 0 }) : data.por_cobrar;
+        const pagar = (data.por_pagar_por_acc && activeAccionistaId) ? (data.por_pagar_por_acc[activeAccionistaId] ?? { total: 0, cnt: 0 }) : data.por_pagar;
+        const prest = (data.prestamos_por_acc && activeAccionistaId) ? (data.prestamos_por_acc[activeAccionistaId] ?? { total: 0, cnt: 0 }) : data.prestamos;
+        // Alertas del accionista activo (si hay uno seleccionado).
+        const alertas: string[] = [];
+        if (acc) {
+          const pa = data.per_accionista.find((x) => x.id === acc.id);
+          if (pa && pa.ventas_total > pa.compras_total && pa.compras_total > 0) alertas.push(`${acc.name}: ventas superiores a compras (revisar)`);
+          if (cobrar.total > 0) alertas.push(`${cobrar.cnt} cuenta(s) por cobrar pendientes`);
+          if (pagar.total > 0) alertas.push(`${pagar.cnt} cuenta(s) por pagar pendientes`);
+        }
+        const lista = acc ? alertas : data.alertas;
+        return (
+        <>
+        {acc && <p className="muted" style={{ fontSize: 12, margin: "2px 0 6px" }}>Bloque inferior filtrado por: <strong>{acc.name}{acc.tipo === "MATRIZ" ? " · Planta / Matriz" : " · Socio"}</strong></p>}
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          {card("CUENTAS POR COBRAR", money(cobrar.total), `${cobrar.cnt} cuenta(s)`, "#2563eb")}
+          {card("CUENTAS POR PAGAR", money(pagar.total), `${pagar.cnt} cuenta(s)`, "#dc2626")}
+          {card("PRÉSTAMOS A AGRICULTORES", money(prest.total), `${prest.cnt} agricultor(es)`, "#16a34a")}
+          <div style={{ flex: "1 1 240px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 12, padding: 14 }}>
+            <div style={{ fontWeight: 700, color: "#dc2626", marginBottom: 6 }}>⚠️ Alertas importantes</div>
+            {lista.length === 0 ? <p className="muted" style={{ margin: 0 }}>Sin alertas.</p> : (
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5 }}>
+                {lista.map((a, i) => <li key={i} style={{ marginBottom: 3 }}>{a}</li>)}
+              </ul>
+            )}
+          </div>
         </div>
-      </div>
+        </>
+        );
+      })()}
       <p className="muted" style={{ fontSize: 11, textAlign: "center" }}>Mes: {monthNames[mm - 1]} {yy} · Los valores se actualizan según los registros de cada módulo.</p>
     </section>
   );
