@@ -700,6 +700,11 @@ type SalesOrder = {
   sale_number: string | null;
   created_at: string;
   items: Array<{ product_name: string; presentation_name: string | null; quantity: string | number; unit_price: string | number; total: string | number }>;
+  // Guía de remisión (se completan al emitirla).
+  transportista_nombre?: string | null;
+  transportista_cedula?: string | null;
+  vehiculo_placa?: string | null;
+  guia_number?: string | null;
 };
 
 /** Resultado de pasar un lote a otro accionista, con la deuda que genera. */
@@ -1444,6 +1449,8 @@ export function App() {
   const [activosFijos, setActivosFijos] = useState<ActivosFijosData | null>(null);
   const [activoEdit, setActivoEdit] = useState<Record<string, { costo: string; fecha: string; vida: string }>>({});
   const [orderPayMethod, setOrderPayMethod] = useState<Record<string, string>>({});
+  // Modal de captura de datos del transportista para la Guía de Remisión.
+  const [guiaModal, setGuiaModal] = useState<{ order: SalesOrder; nombre: string; cedula: string; placa: string } | null>(null);
   /** Pedido que se está editando (sus líneas vuelven al carrito). */
   const [pedidoEditando, setPedidoEditando] = useState<string | null>(null);
   const [saleLineForm, setSaleLineForm] = useState({
@@ -5425,6 +5432,136 @@ export function App() {
     if (registerId) await refreshCaja(registerId);
   }
 
+  // Guía de Remisión: si el pedido ya tiene datos de transporte, imprime
+  // directo; si no, abre el modal para capturarlos primero.
+  function abrirGuia(order: SalesOrder) {
+    if (order.transportista_nombre && order.guia_number) { printGuiaRemision(order); return; }
+    setGuiaModal({
+      order,
+      nombre: order.transportista_nombre ?? "",
+      cedula: order.transportista_cedula ?? "",
+      placa: order.vehiculo_placa ?? ""
+    });
+  }
+
+  async function submitGuia() {
+    if (!guiaModal) return;
+    const { order, nombre, cedula, placa } = guiaModal;
+    if (!nombre.trim()) { addToast("Ingresa el nombre del transportista (chofer)", "error"); return; }
+    const saved = await apiPut<Pick<SalesOrder, "guia_number" | "transportista_nombre" | "transportista_cedula" | "vehiculo_placa">>(
+      `/orders/${order.id}/guia`,
+      { transportista_nombre: nombre.trim(), transportista_cedula: cedula.trim() || undefined, vehiculo_placa: placa.trim() || undefined }
+    );
+    // Conserva los items del pedido y adjunta lo guardado para imprimir al instante.
+    const merged: SalesOrder = { ...order, ...saved };
+    setGuiaModal(null);
+    await refreshCustomersAndSales();
+    printGuiaRemision(merged);
+    addToast("Guía de remisión emitida ✓", "success");
+  }
+
+  // Documento imprimible A4 (ventana limpia; solo la guía, sin menús ni botones).
+  function printGuiaRemision(order: SalesOrder) {
+    const remitente = accionistas.find((a) => a.id === activeAccionistaId)?.name ?? appSettings.business_name;
+    const fecha = new Date().toLocaleDateString("es-EC", { year: "numeric", month: "long", day: "numeric" });
+    const filas = order.items.map((it) => `
+      <tr>
+        <td class="c">${Number(it.quantity)}</td>
+        <td>${it.presentation_name ? `Sacos de ${it.presentation_name}` : "—"}</td>
+        <td>${it.product_name}</td>
+      </tr>`).join("");
+    const esc = (s: string | null | undefined) => (s ?? "").replace(/</g, "&lt;");
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+      <title>Guía de Remisión ${esc(order.guia_number)}</title>
+      <style>
+        @page { size: A4; margin: 14mm; }
+        *{box-sizing:border-box}
+        body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#111;margin:0}
+        .sheet{max-width:182mm;margin:0 auto}
+        .top{display:flex;justify-content:space-between;gap:16px;border-bottom:3px solid #0f766e;padding-bottom:10px;margin-bottom:14px}
+        .brand h1{margin:0;font-size:22px;color:#0f766e;letter-spacing:.5px}
+        .brand p{margin:2px 0;color:#444;font-size:11.5px}
+        .guiaBox{border:2px solid #0f766e;border-radius:8px;padding:8px 14px;text-align:center;min-width:210px}
+        .guiaBox .lbl{font-size:10px;letter-spacing:1px;color:#0f766e;font-weight:700;text-transform:uppercase}
+        .guiaBox .num{font-size:17px;font-weight:800;margin:2px 0}
+        .guiaBox .fch{font-size:11px;color:#444}
+        .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+        .box{border:1px solid #cbd5e1;border-radius:8px;padding:10px 12px}
+        .box.full{grid-column:1 / -1}
+        .box h3{margin:0 0 6px;font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:#0f766e}
+        .box .line{margin:2px 0}
+        .box .k{color:#555}
+        table{width:100%;border-collapse:collapse;margin-top:4px}
+        th{background:#0f766e;color:#fff;padding:7px 8px;text-align:left;font-size:11px;text-transform:uppercase}
+        td{padding:7px 8px;border-bottom:1px solid #e2e8f0}
+        td.c,th.c{text-align:center}
+        .sigs{display:flex;justify-content:space-between;gap:24px;margin-top:46px}
+        .sig{flex:1;text-align:center}
+        .sig hr{border:none;border-top:1px solid #111;margin:0 0 5px}
+        .sig span{font-size:11px;color:#333}
+        .muted{color:#777}
+        @media print{ button{display:none!important} }
+      </style></head><body>
+      <div class="sheet">
+        <div class="top">
+          <div class="brand">
+            <h1>${esc(appSettings.business_name) || "PILADORA CEYRO"}</h1>
+            ${appSettings.business_subtitle ? `<p>${esc(appSettings.business_subtitle)}</p>` : ""}
+            ${appSettings.address ? `<p>${esc(appSettings.address)}</p>` : ""}
+            ${appSettings.ruc ? `<p><strong>RUC:</strong> ${esc(appSettings.ruc)}</p>` : ""}
+            ${appSettings.phone ? `<p><strong>Tel:</strong> ${esc(appSettings.phone)}</p>` : ""}
+          </div>
+          <div class="guiaBox">
+            <div class="lbl">Guía de Remisión N°</div>
+            <div class="num">${esc(order.guia_number) || "—"}</div>
+            <div class="fch">Fecha de traslado:<br>${fecha}</div>
+          </div>
+        </div>
+
+        <div class="grid">
+          <div class="box">
+            <h3>Remitente</h3>
+            <div class="line">${esc(remitente)}</div>
+            <div class="line muted">Pedido ${esc(order.order_number)}</div>
+          </div>
+          <div class="box">
+            <h3>Destinatario</h3>
+            <div class="line"><strong>${esc(order.customer_name) || "Consumidor final"}</strong></div>
+            <div class="line"><span class="k">RUC/CI:</span> ${"________________"}</div>
+            <div class="line"><span class="k">Tel:</span> ${esc(order.customer_phone) || "—"}</div>
+            <div class="line"><span class="k">Dirección de entrega:</span> ${esc(order.notes) || "________________"}</div>
+          </div>
+          <div class="box full">
+            <h3>Datos del transportista</h3>
+            <div class="grid" style="margin:0">
+              <div class="line"><span class="k">Chofer:</span> <strong>${esc(order.transportista_nombre) || "—"}</strong></div>
+              <div class="line"><span class="k">Cédula/RUC:</span> ${esc(order.transportista_cedula) || "—"}</div>
+              <div class="line"><span class="k">Placa del vehículo:</span> <strong>${esc(order.vehiculo_placa) || "—"}</strong></div>
+              ${order.delivery_date ? `<div class="line"><span class="k">Fecha de entrega:</span> ${esc(order.delivery_date).slice(0,10)}</div>` : ""}
+            </div>
+          </div>
+        </div>
+
+        <table>
+          <thead><tr><th class="c" style="width:80px">Cantidad</th><th style="width:34%">Presentación</th><th>Descripción del producto</th></tr></thead>
+          <tbody>${filas}</tbody>
+        </table>
+
+        <div class="sigs">
+          <div class="sig"><hr><span>Firma Despachador (Matriz)</span></div>
+          <div class="sig"><hr><span>Firma Transportista</span></div>
+          <div class="sig"><hr><span>Firma Recibí Conforme (Cliente)</span></div>
+        </div>
+      </div>
+    </body></html>`;
+    const win = window.open("", "_blank", "width=820,height=900");
+    if (!win) { addToast("El navegador bloqueó la ventana de impresión", "error"); return; }
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    win.print();
+  }
+
   /**
    * Trae el pedido al carrito para editarlo. Las líneas vuelven al formulario
    * y al guardar se reemplazan; la cuenta por cobrar se ajusta sola.
@@ -7717,6 +7854,42 @@ export function App() {
               </div>
             )}
 
+            {/* Pedidos despachados: emisión de Guía de Remisión */}
+            {salesOrders.some((o) => o.status === "DELIVERED") && (
+              <div style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
+                <h3 style={{ marginTop: 0, marginBottom: 12 }}>🚚 Pedidos despachados</h3>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ background: "var(--c-brand)", color: "#fff" }}>
+                        <th style={{ padding: "6px 10px", textAlign: "left", color: "#fff", fontWeight: 700 }}>Pedido</th>
+                        <th style={{ padding: "6px 10px", textAlign: "left", color: "#fff", fontWeight: 700 }}>Cliente</th>
+                        <th style={{ padding: "6px 10px", textAlign: "left", color: "#fff", fontWeight: 700 }}>Entrega</th>
+                        <th style={{ padding: "6px 10px", textAlign: "left", color: "#fff", fontWeight: 700 }}>Guía N°</th>
+                        <th style={{ padding: "6px 10px", textAlign: "center", color: "#fff", fontWeight: 700 }}>Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {salesOrders.filter((o) => o.status === "DELIVERED").map((o, i) => (
+                        <tr key={o.id} style={{ background: i % 2 === 0 ? "#fff" : "#f9fafb" }}>
+                          <td style={{ padding: "5px 10px" }}><strong>{o.order_number}</strong></td>
+                          <td style={{ padding: "5px 10px" }}>{o.customer_name}</td>
+                          <td style={{ padding: "5px 10px" }}>{o.delivery_date ? new Date(o.delivery_date + "T12:00:00").toLocaleDateString("es-EC") : "—"}</td>
+                          <td style={{ padding: "5px 10px" }}>{o.guia_number ?? <span className="muted">sin emitir</span>}</td>
+                          <td style={{ padding: "5px 10px", textAlign: "center" }}>
+                            <button type="button" onClick={() => abrirGuia(o)}
+                              style={{ padding: "4px 10px", fontSize: 12, cursor: "pointer" }}>
+                              📄 Guía de Remisión
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
             {/* Historial de ventas */}
             {sales.length > 0 && (
               <div style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
@@ -7759,6 +7932,43 @@ export function App() {
                       ))}
                     </tbody>
                   </table>
+                </div>
+              </div>
+            )}
+
+            {/* Modal: captura de datos del transportista para la Guía de Remisión */}
+            {guiaModal && (
+              <div className="modalOverlay" onClick={() => setGuiaModal(null)}>
+                <div className="modalCard" onClick={(e) => e.stopPropagation()}>
+                  <h3 style={{ marginTop: 0 }}>📄 Datos del transporte</h3>
+                  <p className="muted" style={{ marginTop: -4 }}>
+                    Pedido <strong>{guiaModal.order.order_number}</strong> · {guiaModal.order.customer_name}. Se usarán para la guía de remisión.
+                  </p>
+                  <label>
+                    <span>Nombre del transportista (chofer) *</span>
+                    <input type="text" autoFocus value={guiaModal.nombre}
+                      onChange={(e) => setGuiaModal({ ...guiaModal, nombre: e.target.value })}
+                      placeholder="Ej: Juan Pérez" />
+                  </label>
+                  <label>
+                    <span>Cédula / RUC del transportista</span>
+                    <input type="text" value={guiaModal.cedula}
+                      onChange={(e) => setGuiaModal({ ...guiaModal, cedula: e.target.value })}
+                      placeholder="0999999999" />
+                  </label>
+                  <label>
+                    <span>Placa del vehículo</span>
+                    <input type="text" value={guiaModal.placa}
+                      onChange={(e) => setGuiaModal({ ...guiaModal, placa: e.target.value.toUpperCase() })}
+                      placeholder="ABC-1234" />
+                  </label>
+                  <div className="buttonRow">
+                    <button type="button" className="primary"
+                      onClick={() => submitGuia().catch((e) => addToast(e.message, "error"))}>
+                      Guardar e imprimir
+                    </button>
+                    <button type="button" onClick={() => setGuiaModal(null)}>Cancelar</button>
+                  </div>
                 </div>
               </div>
             )}

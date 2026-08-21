@@ -302,6 +302,50 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
   res.json(result);
 }));
 
+// Guía de Remisión: guarda los datos del transportista en un pedido YA
+// despachado y le asigna un número de guía la primera vez. Solo persiste datos
+// de transporte para el documento; no toca inventario ni contabilidad.
+ordersRouter.put("/:id/guia", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const body = z.object({
+    transportista_nombre: z.string().min(1).max(120),
+    transportista_cedula: z.string().max(20).optional(),
+    vehiculo_placa: z.string().max(15).optional()
+  }).parse(req.body);
+
+  const result = await inTransaction(async (client) => {
+    const order = await client.query(
+      "SELECT * FROM sales_orders WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
+      [req.params.id, accionistaId]
+    );
+    if (!order.rowCount) throw new ApiError(404, "Pedido no encontrado para el accionista seleccionado");
+    if (order.rows[0].status !== "DELIVERED") {
+      throw new ApiError(409, "La guía de remisión solo se emite para pedidos despachados.");
+    }
+
+    // Número de guía: se asigna una sola vez (se conserva si ya existía).
+    let guiaNumber: string = order.rows[0].guia_number;
+    if (!guiaNumber) {
+      const seq = await client.query("SELECT '001-001-' || LPAD(nextval('guia_remision_seq')::text, 9, '0') AS n");
+      guiaNumber = seq.rows[0].n;
+    }
+
+    const updated = await client.query(
+      `UPDATE sales_orders
+       SET transportista_nombre = $2, transportista_cedula = $3, vehiculo_placa = $4,
+           guia_number = $5,
+           guia_emitida_at = COALESCE(guia_emitida_at, now())
+       WHERE id = $1
+       RETURNING *`,
+      [req.params.id, body.transportista_nombre.trim(),
+       body.transportista_cedula?.trim() || null, body.vehiculo_placa?.trim() || null, guiaNumber]
+    );
+    return updated.rows[0];
+  });
+
+  res.json(result);
+}));
+
 ordersRouter.post("/:id/cancel", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await inTransaction(async (client) => {
