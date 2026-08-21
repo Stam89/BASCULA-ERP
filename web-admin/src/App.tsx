@@ -1201,6 +1201,10 @@ export function App() {
   const [materiaPrimaEntries, setMateriaPrimaEntries] = useState<MateriaPrimaCorreccion[]>([]);
   const [materiaPrimaSearch, setMateriaPrimaSearch] = useState("");
   const [ticketFilter, setTicketFilter] = useState<"pending" | "liquidated" | "all">("pending");
+  // Báscula como bandeja de entrada: el registro manual vive en un modal, y el
+  // traspaso de lote se movió a Inventario (también en modal).
+  const [ingresoModalOpen, setIngresoModalOpen] = useState(false);
+  const [transferLoteOpen, setTransferLoteOpen] = useState(false);
   const [ticketSearch, setTicketSearch] = useState("");
   const [linkTicket, setLinkTicket] = useState<BasculaTicket | null>(null);
   const [linkFarmerId, setLinkFarmerId] = useState("");
@@ -6106,30 +6110,9 @@ export function App() {
 
         {activeTab === "Bascula" && (
           <>
-          <section className="panelGrid">
-            <form className="formPanel" onSubmit={(event) => submitWeighing(event).catch((error) => setMessage(error.message))}>
-              <h2>Registrar ingreso</h2>
-              <Select name="farmer_id" label="Agricultor" rows={farmers.map((f) => [f.id, f.full_name])} />
-              <Select name="ownership" label="Tipo" rows={[["OWNED", "Compra"], ["MAQUILA", "Maquila"]]} />
-              <label>
-                <span>Tipo de arroz</span>
-                <select name="rice_type" value={weighingRiceType} onChange={(event) => setWeighingRiceType(event.target.value as "0.11" | "CORRIENTE")}>
-                  <option value="0.11">0.11</option>
-                  <option value="CORRIENTE">Corriente</option>
-                </select>
-              </label>
-              <Input name="gross_weight" label="Peso bruto kg" type="number" />
-              <Input name="tare_weight" label="Tara kg" type="number" />
-              <Input name="qualification" label="Calificacion" type="number" />
-              <button className="primary">Cerrar ticket</button>
-            </form>
-            <DataList
-              title="Últimos lotes"
-              headers={["Lote", "Agricultor", "Tipo", "QQ"]}
-              rows={lots.slice(0, 8).map((lot) => [lot.lot_code, lot.farmer_name ?? "—", riceTypeLabel(lot.rice_type), `${Number(lot.quintals ?? 0).toFixed(2)} QQ`])}
-            />
-            {accionistas.length > 1 && materiaPrimaEntries.length > 0 && (
-              <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+          {/* Corrección puntual del accionista de un ingreso de materia prima */}
+          {accionistas.length > 1 && materiaPrimaEntries.length > 0 && (
+              <div className="tablePanel" style={{ marginBottom: 16 }}>
                 <h2>🔁 Corregir el accionista de un ingreso de materia prima</h2>
                 <p className="muted">
                   ¿Ingresaste un peso con el accionista equivocado? Aquí salen los ingresos de <strong>todos</strong> los
@@ -6172,48 +6155,15 @@ export function App() {
               </div>
             )}
 
-            {accionistas.length > 1 && lots.length > 0 && (
-              <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-                <h2>Pasar un lote a otro accionista</h2>
-                <p className="muted">
-                  Se mueve el lote con su inventario, su proceso y sus liquidaciones. Si ya se le pagó algo al agricultor,
-                  eso queda como cuenta por cobrar del que entrega y por pagar del que recibe; lo que falte pagarle al
-                  agricultor lo asume el que recibe. No se puede si el lote ya tiene ventas.
-                </p>
-                <table className="cajaTable" style={{ marginTop: 8 }}>
-                  <thead><tr><th>Lote</th><th>Agricultor</th><th>Pesos</th><th>QQ</th><th>Estado</th><th>Accionista</th></tr></thead>
-                  <tbody>
-                    {lots.slice(0, 10).map((lot) => (
-                      <tr key={lot.id}>
-                        <td style={{ fontWeight: 600 }}>{lot.lot_code}</td>
-                        <td>{lot.farmer_name ?? "—"}</td>
-                        <td className="num">{lot.entries_count ?? 1}</td>
-                        <td className="num">{Number(lot.quintals ?? 0).toFixed(2)}</td>
-                        <td><span className="chip info">{lot.status}</span></td>
-                        <td>
-                          <select
-                            value={lot.accionista_id ?? ""}
-                            onChange={(e) => changeLotAccionista(lot.id, e.target.value).catch((err) => addToast(err.message, "error"))}
-                            style={{ padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12 }}
-                          >
-                            <option value="">Sin asignar</option>
-                            {accionistas.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                          </select>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-
           <div className="tablePanel">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
               <div>
                 <h2 style={{ marginBottom: 2 }}>📲 Tickets de la app de báscula</h2>
                 <p className="muted" style={{ margin: 0 }}>Pesajes que llegan de tu app. Se importan solos; también puedes traerlos al instante.</p>
               </div>
+              <button type="button" className="btnSecondary" onClick={() => setIngresoModalOpen(true)}>
+                + Ingreso Manual (Emergencia)
+              </button>
               <button type="button" className="btnSecondary" disabled={basculaImporting} onClick={() => runFirebaseImport()}>
                 {basculaImporting ? "Importando…" : "⟳ Importar de báscula"}
               </button>
@@ -6283,6 +6233,33 @@ export function App() {
               </div>
             )}
           </div>
+
+          {/* Modal: Ingreso Manual (emergencia) — mismo formulario y lógica de antes */}
+          {ingresoModalOpen && (
+            <div className="modalOverlay" onClick={() => setIngresoModalOpen(false)}>
+              <form className="modalCard formPanel" onClick={(e) => e.stopPropagation()}
+                onSubmit={(event) => submitWeighing(event).then(() => setIngresoModalOpen(false)).catch((error) => setMessage(error.message))}>
+                <h3 style={{ marginTop: 0 }}>⚖️ Ingreso manual (emergencia)</h3>
+                <p className="muted" style={{ marginTop: -4 }}>Usa esto solo si la báscula automática no envió el ticket.</p>
+                <Select name="farmer_id" label="Agricultor" rows={farmers.map((f) => [f.id, f.full_name])} />
+                <Select name="ownership" label="Tipo" rows={[["OWNED", "Compra"], ["MAQUILA", "Maquila"]]} />
+                <label>
+                  <span>Tipo de arroz</span>
+                  <select name="rice_type" value={weighingRiceType} onChange={(event) => setWeighingRiceType(event.target.value as "0.11" | "CORRIENTE")}>
+                    <option value="0.11">0.11</option>
+                    <option value="CORRIENTE">Corriente</option>
+                  </select>
+                </label>
+                <Input name="gross_weight" label="Peso bruto kg" type="number" />
+                <Input name="tare_weight" label="Tara kg" type="number" />
+                <Input name="qualification" label="Calificacion" type="number" />
+                <div className="buttonRow">
+                  <button className="primary">Cerrar ticket</button>
+                  <button type="button" onClick={() => setIngresoModalOpen(false)}>Cancelar</button>
+                </div>
+              </form>
+            </div>
+          )}
           </>
         )}
 
@@ -6989,6 +6966,9 @@ export function App() {
                 <p className="muted" style={{ margin: 0 }}>Panel de existencias del accionista activo.</p>
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {accionistas.length > 1 && (
+                  <button type="button" className="btnSecondary" onClick={() => setTransferLoteOpen(true)}>🔄 Transferir Lote</button>
+                )}
                 <button type="button" className="btnSecondary" onClick={() => setKardexOpen(true)}>📄 Ver Kardex / Movimientos</button>
                 <button type="button" className="primary" onClick={() => setCuadreOpen(true)}>⚖️ Ajuste / Cuadre Manual</button>
               </div>
@@ -7055,6 +7035,56 @@ export function App() {
                     <button type="button" onClick={() => setCuadreOpen(false)}>Cancelar</button>
                   </div>
                 </form>
+              </div>
+            )}
+
+            {/* Modal: Transferir lote a otro accionista (reubicado desde Báscula) */}
+            {transferLoteOpen && (
+              <div className="modalOverlay" onClick={() => setTransferLoteOpen(false)}>
+                <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 760, width: "100%" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                    <h3 style={{ marginTop: 0 }}>🔄 Transferir lote a otro accionista</h3>
+                    <button type="button" onClick={() => setTransferLoteOpen(false)} style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
+                  </div>
+                  <p className="muted" style={{ marginTop: -4 }}>
+                    Se mueve el lote con su inventario, su proceso y sus liquidaciones. Si ya se le pagó algo al agricultor,
+                    eso queda como cuenta por cobrar del que entrega y por pagar del que recibe; lo que falte pagarle al
+                    agricultor lo asume el que recibe. No se puede si el lote ya tiene ventas.
+                  </p>
+                  {lots.length === 0 ? (
+                    <p className="muted">No hay lotes para transferir.</p>
+                  ) : (
+                    <div style={{ overflowX: "auto" }}>
+                      <table className="cajaTable" style={{ marginTop: 8 }}>
+                        <thead><tr><th>Lote</th><th>Agricultor</th><th>Pesos</th><th>QQ</th><th>Estado</th><th>Accionista</th></tr></thead>
+                        <tbody>
+                          {lots.slice(0, 10).map((lot) => (
+                            <tr key={lot.id}>
+                              <td style={{ fontWeight: 600 }}>{lot.lot_code}</td>
+                              <td>{lot.farmer_name ?? "—"}</td>
+                              <td className="num">{lot.entries_count ?? 1}</td>
+                              <td className="num">{Number(lot.quintals ?? 0).toFixed(2)}</td>
+                              <td><span className="chip info">{lot.status}</span></td>
+                              <td>
+                                <select
+                                  value={lot.accionista_id ?? ""}
+                                  onChange={(e) => changeLotAccionista(lot.id, e.target.value).catch((err) => addToast(err.message, "error"))}
+                                  style={{ padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12 }}
+                                >
+                                  <option value="">Sin asignar</option>
+                                  {accionistas.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                                </select>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  <div className="buttonRow" style={{ marginTop: 14 }}>
+                    <button type="button" onClick={() => setTransferLoteOpen(false)}>Cerrar</button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -7281,6 +7311,14 @@ export function App() {
                 </table>
               </div>
             )}
+            {/* Últimos lotes (reubicado desde Báscula) */}
+            <div style={{ gridColumn: "1 / -1" }}>
+              <DataList
+                title="Últimos lotes"
+                headers={["Lote", "Agricultor", "Tipo", "QQ"]}
+                rows={lots.slice(0, 8).map((lot) => [lot.lot_code, lot.farmer_name ?? "—", riceTypeLabel(lot.rice_type), `${Number(lot.quintals ?? 0).toFixed(2)} QQ`])}
+              />
+            </div>
             <section className="formPanel productionQuickCard">
               <h2>Secadora en produccion</h2>
               <label>
