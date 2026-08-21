@@ -127,3 +127,59 @@ export async function cobrarEmpaqueAlDespachar(
     payable_id: ap.rows[0].id
   };
 }
+
+/**
+ * DESCUENTO FÍSICO DE SACOS AL DESPACHAR
+ *
+ * Regla de negocio: SOLO la matriz (CEYRO) compra y posee sacos. Por eso, aunque
+ * el arroz/subproductos salen del inventario del accionista que vende, los SACOS
+ * usados en el empaque se descuentan SIEMPRE del inventario de la matriz.
+ *
+ * `sack_inventory` es una tabla única (sin accionista_id) → ya es, por diseño, el
+ * inventario de la matriz. Se descuenta por cada presentación con peso conocido
+ * (Saco 10/25/50/100 LB, etc.) tantas unidades como sacos lleve el pedido.
+ *
+ * Corre DENTRO de la transacción del despacho, junto al cargo por empaque. No
+ * bloquea el despacho si falta stock (el saldo puede quedar negativo, señal de
+ * que la matriz debe registrar la compra de sacos); tampoco falla si el tipo de
+ * saco no está registrado (simplemente no descuenta esa línea).
+ */
+export async function descontarSacosDelDespacho(
+  client: PoolClient,
+  order: { id: string; order_number: string }
+): Promise<Array<{ tipo: string; sacos: number; nuevo_stock: number }>> {
+  const grupos = await client.query(
+    `SELECT pp.weight_lb::int AS peso, SUM(i.quantity)::float AS sacos
+     FROM sales_order_items i
+     JOIN product_presentations pp ON pp.id = i.presentation_id
+     WHERE i.order_id = $1 AND pp.weight_lb IS NOT NULL
+     GROUP BY pp.weight_lb`,
+    [order.id]
+  );
+
+  const resultado: Array<{ tipo: string; sacos: number; nuevo_stock: number }> = [];
+  for (const row of grupos.rows) {
+    const peso = Number(row.peso);
+    const sacos = Number(row.sacos);
+    if (sacos <= 0) continue;
+    const tipo = `Saco ${peso} LB`;
+    // SIEMPRE el inventario de la matriz (sack_inventory es único/global).
+    const sack = await client.query(
+      "SELECT id, stock FROM sack_inventory WHERE tipo = $1 FOR UPDATE",
+      [tipo]
+    );
+    if (!sack.rowCount) continue; // ese tipo de saco no está registrado: no se descuenta
+    const nuevoStock = round2(Number(sack.rows[0].stock) - sacos);
+    await client.query(
+      "UPDATE sack_inventory SET stock = $2, updated_at = now() WHERE id = $1",
+      [sack.rows[0].id, nuevoStock]
+    );
+    await client.query(
+      `INSERT INTO sack_movements (sack_id, movement, cantidad, concepto)
+       VALUES ($1, 'SALIDA', $2, $3)`,
+      [sack.rows[0].id, sacos, `Despacho pedido ${order.order_number} — sacos de la matriz`]
+    );
+    resultado.push({ tipo, sacos, nuevo_stock: nuevoStock });
+  }
+  return resultado;
+}
