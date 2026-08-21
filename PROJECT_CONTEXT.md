@@ -1,6 +1,6 @@
 # PROJECT_CONTEXT — BASCULA-ERP
 
-> Memoria compacta para continuar sin releer todo. Última actualización: 2026-08-21 (cierre).
+> Memoria compacta para continuar sin releer todo. Última actualización: 2026-08-21 (cierre 2).
 > Al empezar una sesión, **lee solo este archivo** primero.
 
 ## 0. Stack / cómo corre
@@ -14,7 +14,7 @@
 ## 1. ESTADO ACTUAL
 ERP para piladora de arroz con arquitectura **multi-accionista**: MATRIZ **CEYRO** (dueña, id `00000000-0000-0000-0000-000000000001`) y SOCIOS **ROVINSON** y **STALYN**. Selector de accionista activo manda header `X-Accionista-Id`; permisos por accionista.
 - Funciona: Dashboard, Báscula, Secadoras, Producción, Inventario, Selección/envejecido, Ventas (pedido→despacho), Compras, Caja, Por Cobrar, Por Pagar, Liquidaciones, Fomentos, Agricultores, Nómina, Cuadrilla, Servicio Pilado, Estados Financieros, Costos Operativos, Reportes, Configuración.
-- Todo está **commiteado y pusheado a main** (último `6d12837`). Typecheck y build en verde. Backend ya reiniciado por el usuario; cambios activos.
+- Todo está **commiteado y pusheado a main** (último `ffe0665`). Typecheck y build en verde. Backend reiniciado; cambios activos. Los últimos cambios (Báscula/Selección) son solo frontend → basta recargar (Ctrl+F5).
 
 ## 2. CAMBIOS DE ESTA SESIÓN (2026-08-20)
 1. **Ventas** — Toma de pedido en split-view 2 columnas + "Cola de carga" para bodega (badge 🟡, texto grande de sacos). Solo UI; estado sigue `PENDING`/`DELIVERED`. `4a2d90a`.
@@ -35,6 +35,8 @@ Archivos tocados: `web-admin/src/App.tsx` (todo); `backend/src/routes/modules/{o
 12. **Dashboard — 7 KPIs por accionista:** el Panel Integral (`PanelIntegral`) filtra sus 7 tarjetas por el accionista activo (deriva de `per_accionista` + `*_por_acc` que ya vienen en `/dashboard/panel`; sin cambiar fórmulas base). Subtítulo dinámico "Mostrando datos de: NOMBRE". Servicio de pilado y Costo Operativo son propios de la MATRIZ → un socio los ve en $0. Verificado en vivo. `2b96e13`.
 13. **Compra múltiple de sacos (carrito):** Caja→Sacos ahora es un carrito — [➕ Agregar a la lista] acumula ítems, tabla Tipo/Cantidad/Precio/Subtotal/🗑️ + TOTAL GENERAL, y [💾 Confirmar y Registrar Compra] envía todo. Backend `POST /sacks/purchases` recibe `items[]` (acepta el formato de 1 saco por compat.), en UNA transacción itera stock+kardex por ítem y hace UN solo egreso consolidado ("Compra de múltiples sacos", reference_id NULL). Archivos: `backend/src/routes/modules/sacks.ts` + App.tsx. `1756de7`. Probado en vivo (compra de 2 tipos → 1 egreso $11.60). **Fix:** el `<select>` de tipo de saco salía vacío en Caja→Sacos; ahora `refreshSacks()` corre al abrir esa subpestaña. `a9285b8`.
 14. **Sacos SIEMPRE de la matriz al despachar:** solo CEYRO posee inventario de sacos (`sack_inventory` es tabla ÚNICA, sin accionista_id). Al despachar, el arroz/subproductos salen del inventario del socio (crearVenta, sin cambios) pero los SACOS se descuentan del inventario de la matriz. Nueva `descontarSacosDelDespacho()` en `cargo-empaque.ts` (por presentación con peso → tipo "Saco N LB", movimiento SALIDA; no bloquea si falta stock o no existe el tipo), llamada en `orders.ts /:id/deliver` junto al cargo por empaque, misma transacción. Verificado en vivo: pedido ROVINSON 5×10lb → Saco 10 LB 112→107, arroz −0.5 QQ de ROVINSON, CxC/CxP $1.00. `6d12837`.
+15. **Báscula = Bandeja de entrada (Inbox):** se quitó de la vista el form "Registrar ingreso" (ahora modal via [+ Ingreso Manual (Emergencia)] en la cabecera de la tabla de tickets) y las secciones "Últimos lotes" y "Pasar un lote". La tabla de Tickets es full-width y el centro. Filtro por defecto ya era "Pendientes" (se conserva; "Todos" muestra historial). Se mantiene en Báscula la "Corrección puntual de accionista de materia prima". Reubicados: "Últimos lotes" → **Producción** (DataList); "Pasar un lote" → **Inventario**, botón [🔄 Transferir Lote] en la cabecera → modal (solo si accionistas>1). `fb51167`.
+16. **Selección más limpia:** "Personas externas" (form+tabla) → modal via botón [👤 Gestionar Personas Externas] junto al selector. "💲 Tarifas por defecto" → **Configuración → Tarifas → tarjeta "Tarifas de Procesos (Selección/Envejecido)"** (mismo `saveSelectionRates`; `refreshConfig` ahora carga `/selection/rates`). El form "Mandar a selectar" sigue leyendo `selectionRates` de la BD para autocompletar "Tarifa por QQ". "Completados" pasó a panel full-width. `ffe0665`.
 
 ## 3. REGLAS DE NEGOCIO (no romper)
 - **Toma de pedido NO mueve dinero ni inventario**; recién al **Despachar** sale stock + entra caja (Contado) o Cuenta por Cobrar (Crédito). Estados DB: `PENDING`/`DELIVERED`/`CANCELLED` (NO renombrar; hay CHECK). El pedido genera su CxC "(pendiente de despacho)" al tomarse; al despachar se salda o se enlaza, nunca se duplica.
@@ -56,7 +58,7 @@ Archivos tocados: `web-admin/src/App.tsx` (todo); `backend/src/routes/modules/{o
 - Nota de pruebas en vivo: la sesión del navegador in-app se limpia al reabrir el preview; para pruebas por API se puede generar un JWT admin con `signToken` (secreto en `backend/src/config/env.ts`) y llamar `http://localhost:4000/api/v1/...`. La extensión "Claude en Chrome" no está conectada (no se puede manejar el Chrome real del usuario).
 
 ## 5. PRÓXIMO PASO
-Sin tarea pendiente comprometida. Todo verificado en vivo (compra múltiple de sacos, descuento de sacos de la matriz al despachar, cargo por empaque). Preguntar al usuario la siguiente funcionalidad.
+Sin tarea pendiente comprometida. Opcional: verificar en vivo los rediseños de UI de hoy (Báscula inbox, Selección, y los modales reubicados en Inventario/Producción/Configuración) — no verificados en navegador aún, solo typecheck/build. Luego preguntar al usuario la siguiente funcionalidad.
 
 ## 6. ARCHIVOS IMPORTANTES
 - `web-admin/src/App.tsx` — TODO el frontend (tabs por `activeTab === "..."`; Config por `configSubTab`; Caja por `cajaSubTab`).
@@ -77,6 +79,8 @@ Sin tarea pendiente comprometida. Todo verificado en vivo (compra múltiple de s
 - Guía de Remisión y KPIs del dashboard: filtrar/derivar en el FRONTEND cuando el payload ya trae los datos por accionista (no duplicar en backend). Nº de guía vía secuencia `guia_remision_seq` (formato `001-001-…`).
 - Servicio de pilado y Costo Operativo son de la MATRIZ; un socio los ve en $0.
 - Compras "carrito" (sacos): frontend acumula en estado local y envía `items[]`; backend hace 1 solo egreso consolidado en la misma transacción. Endpoint retrocompatible con el formato de 1 ítem.
+- Patrón de limpieza de vistas: mover config/herramientas de uso no diario a modales (botón secundario en la cabecera) o a Configuración; dejar la vista principal enfocada en su tarea central. Las tarifas globales viven en Configuración→Tarifas.
+- En Báscula se dejó a propósito la "Corrección puntual de accionista de materia prima" (no se pidió moverla). Si se quiere quitar, avisar.
 
 ## 8. ADVERTENCIAS (revisar dependencias antes de tocar)
 - `cuentas-vinculadas.ts` (espejo CxC↔CxP): tocarlo mal desincroniza libros y cajas entre socios.
