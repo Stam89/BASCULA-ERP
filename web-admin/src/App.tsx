@@ -1334,6 +1334,8 @@ export function App() {
   const [finishOutputs, setFinishOutputs] = useState<LineDraft[]>([{ ...emptyLine }]);
   const [newProviderForm, setNewProviderForm] = useState({ name: "", identification: "", phone: "" });
   const [selectionRatesForm, setSelectionRatesForm] = useState({ seleccion_rate: "", envejecimiento_rate: "" });
+  // Personas externas: se editan en un modal desde Selección.
+  const [personasModalOpen, setPersonasModalOpen] = useState(false);
 
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
   const [settingsForm, setSettingsForm] = useState<AppSettings>(defaultAppSettings);
@@ -2197,6 +2199,13 @@ export function App() {
     setSettingsForm(settings);
     await loadLaborRates();
     await loadPackagingRates();
+    // Tarifas de procesos (selección/envejecido): se editan en Config y las lee
+    // el formulario de «Mandar a selectar» para autocompletar la tarifa por QQ.
+    const selRates = await apiGet<SelectionRates>("/selection/rates").catch(() => null);
+    if (selRates) {
+      setSelectionRates(selRates);
+      setSelectionRatesForm({ seleccion_rate: String(selRates.seleccion_rate), envejecimiento_rate: String(selRates.envejecimiento_rate) });
+    }
     await refreshServicioTarifas();
     if (isAdmin) {
       const [users, accionistas, backups, audit] = await Promise.all([
@@ -10309,6 +10318,9 @@ export function App() {
                   {selectionProviders.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </label>
+              <button type="button" className="btnSecondary" style={{ marginTop: 4 }} onClick={() => setPersonasModalOpen(true)}>
+                👤 Gestionar Personas Externas
+              </button>
               <label><span>Bodega de donde sale</span>
                 <input type="text" readOnly value={finishedWarehouse?.name ?? "Bodega Producto Terminado"} style={{ background: "#f3f4f6", color: "var(--c-muted)" }} />
               </label>
@@ -10401,58 +10413,66 @@ export function App() {
                 </div>
               )}
 
-              <h2 style={{ marginTop: 18 }}>👤 Personas externas</h2>
-              <form onSubmit={(e) => submitNewProvider(e).catch((err) => addToast(err.message, "error"))} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, alignItems: "end", background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
-                <label style={{ fontSize: 12, fontWeight: 600 }}>Nombre
-                  <input value={newProviderForm.name} onChange={(e) => setNewProviderForm({ ...newProviderForm, name: e.target.value })} placeholder="Ej: Juan Pérez" style={inputStyle} />
-                </label>
-                <label style={{ fontSize: 12, fontWeight: 600 }}>Teléfono
-                  <input value={newProviderForm.phone} onChange={(e) => setNewProviderForm({ ...newProviderForm, phone: e.target.value })} placeholder="Opcional" style={inputStyle} />
-                </label>
-                <button type="submit" style={{ padding: "7px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontWeight: 700, background: "var(--c-brand)", color: "#fff", fontSize: 12 }}>+ Agregar</button>
-              </form>
-              {selectionProviders.length > 0 && (
-                <table className="cajaTable" style={{ marginTop: 8 }}>
-                  <thead><tr><th>Nombre</th><th>Teléfono</th></tr></thead>
-                  <tbody>{selectionProviders.map((p) => <tr key={p.id}><td>{p.name}</td><td>{p.phone ?? "—"}</td></tr>)}</tbody>
-                </table>
-              )}
+            </div>
 
-              <h2 style={{ marginTop: 18 }}>💲 Tarifas por defecto</h2>
-              <form onSubmit={(e) => saveSelectionRates(e).catch((err) => addToast(err.message, "error"))} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, alignItems: "end", background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
-                <label style={{ fontSize: 12, fontWeight: 600 }}>Selección ($/QQ)
-                  <input type="number" step="0.01" min="0" value={selectionRatesForm.seleccion_rate} onChange={(e) => setSelectionRatesForm({ ...selectionRatesForm, seleccion_rate: e.target.value })} style={inputStyle} />
-                </label>
-                <label style={{ fontSize: 12, fontWeight: 600 }}>Envejecido ($/QQ)
-                  <input type="number" step="0.01" min="0" value={selectionRatesForm.envejecimiento_rate} onChange={(e) => setSelectionRatesForm({ ...selectionRatesForm, envejecimiento_rate: e.target.value })} style={inputStyle} />
-                </label>
-                <button type="submit" style={{ padding: "7px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontWeight: 700, background: "var(--c-brand)", color: "#fff", fontSize: 12 }}>Guardar</button>
-              </form>
-
-              <h2 style={{ marginTop: 18 }}>✅ Completados</h2>
+            {/* ✅ Completados: a lo ancho, aprovechando el espacio liberado */}
+            <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+              <h2>✅ Completados</h2>
               {completed.length === 0 ? (
                 <div className="emptyState"><div className="emptyIcon">🧹</div><p>Sin lotes completados aún</p></div>
               ) : (
-                <table className="cajaTable" style={{ marginTop: 6 }}>
-                  <thead><tr><th>#</th><th>Fecha</th><th>Persona</th><th>Entró</th><th>Regresó</th><th>Merma</th><th>Costo</th><th>Saldo</th></tr></thead>
-                  <tbody>
-                    {completed.map((b) => (
-                      <tr key={b.id}>
-                        <td>{b.batch_number}</td>
-                        <td>{String(b.service_date).slice(0, 10)}</td>
-                        <td>{b.provider_name}</td>
-                        <td>{Number(b.input_qq).toFixed(2)}</td>
-                        <td>{Number(b.output_qq).toFixed(2)}</td>
-                        <td>{Number(b.merma_qq).toFixed(2)}</td>
-                        <td><strong>{money(Number(b.total_cost))}</strong></td>
-                        <td>{Number(b.saldo) > 0 ? <span style={{ color: "#dc2626" }}>{money(Number(b.saldo))}</span> : <span className="chip ok">Pagado</span>}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div style={{ overflowX: "auto" }}>
+                  <table className="cajaTable" style={{ marginTop: 6 }}>
+                    <thead><tr><th>#</th><th>Fecha</th><th>Persona</th><th>Entró</th><th>Regresó</th><th>Merma</th><th>Costo</th><th>Saldo</th></tr></thead>
+                    <tbody>
+                      {completed.map((b) => (
+                        <tr key={b.id}>
+                          <td>{b.batch_number}</td>
+                          <td>{String(b.service_date).slice(0, 10)}</td>
+                          <td>{b.provider_name}</td>
+                          <td>{Number(b.input_qq).toFixed(2)}</td>
+                          <td>{Number(b.output_qq).toFixed(2)}</td>
+                          <td>{Number(b.merma_qq).toFixed(2)}</td>
+                          <td><strong>{money(Number(b.total_cost))}</strong></td>
+                          <td>{Number(b.saldo) > 0 ? <span style={{ color: "#dc2626" }}>{money(Number(b.saldo))}</span> : <span className="chip ok">Pagado</span>}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
               <p className="muted" style={{ marginTop: 8 }}>El pago a la persona externa se registra en <strong>Por Pagar</strong>.</p>
             </div>
+
+            {/* Modal: Gestionar Personas Externas (mismo form + tabla) */}
+            {personasModalOpen && (
+              <div className="modalOverlay" onClick={() => setPersonasModalOpen(false)}>
+                <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 560, width: "100%" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                    <h3 style={{ marginTop: 0 }}>👤 Personas externas</h3>
+                    <button type="button" onClick={() => setPersonasModalOpen(false)} style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
+                  </div>
+                  <form onSubmit={(e) => submitNewProvider(e).catch((err) => addToast(err.message, "error"))} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, alignItems: "end", background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>Nombre
+                      <input value={newProviderForm.name} onChange={(e) => setNewProviderForm({ ...newProviderForm, name: e.target.value })} placeholder="Ej: Juan Pérez" style={inputStyle} />
+                    </label>
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>Teléfono
+                      <input value={newProviderForm.phone} onChange={(e) => setNewProviderForm({ ...newProviderForm, phone: e.target.value })} placeholder="Opcional" style={inputStyle} />
+                    </label>
+                    <button type="submit" style={{ padding: "7px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontWeight: 700, background: "var(--c-brand)", color: "#fff", fontSize: 12 }}>+ Agregar</button>
+                  </form>
+                  {selectionProviders.length > 0 ? (
+                    <table className="cajaTable" style={{ marginTop: 8 }}>
+                      <thead><tr><th>Nombre</th><th>Teléfono</th></tr></thead>
+                      <tbody>{selectionProviders.map((p) => <tr key={p.id}><td>{p.name}</td><td>{p.phone ?? "—"}</td></tr>)}</tbody>
+                    </table>
+                  ) : <p className="muted" style={{ marginTop: 8 }}>Aún no hay personas externas.</p>}
+                  <div className="buttonRow" style={{ marginTop: 14 }}>
+                    <button type="button" onClick={() => setPersonasModalOpen(false)}>Cerrar</button>
+                  </div>
+                </div>
+              </div>
+            )}
           </section>
           );
         })()}
@@ -11891,6 +11911,26 @@ export function App() {
                     Guardar tarifas de empaque
                   </button>
                   {!isAdmin && <p className="muted">Solo un administrador puede cambiar estas tarifas.</p>}
+                </div>
+                {/* ── Tarifas de Procesos (Selección / Envejecido) — movido desde /seleccion ── */}
+                <div className="formPanel">
+                  <h2>🧹 Tarifas de Procesos (Selección / Envejecido)</h2>
+                  <p className="muted">
+                    Tarifa por defecto ($/QQ) para selección y envejecido. El formulario de «Mandar a selectar»
+                    en Selección la lee para autocompletar la «Tarifa por QQ».
+                  </p>
+                  <form onSubmit={(e) => saveSelectionRates(e).catch((err) => addToast(err.message, "error"))}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                      <label><span>Selección ($/QQ)</span>
+                        <input type="number" step="0.01" min="0" value={selectionRatesForm.seleccion_rate}
+                          onChange={(e) => setSelectionRatesForm({ ...selectionRatesForm, seleccion_rate: e.target.value })} /></label>
+                      <label><span>Envejecido ($/QQ)</span>
+                        <input type="number" step="0.01" min="0" value={selectionRatesForm.envejecimiento_rate}
+                          onChange={(e) => setSelectionRatesForm({ ...selectionRatesForm, envejecimiento_rate: e.target.value })} /></label>
+                    </div>
+                    <button className="primary" style={{ marginTop: 10 }} disabled={!isAdmin}>Guardar tarifas de procesos</button>
+                    {!isAdmin && <p className="muted">Solo un administrador puede cambiar estas tarifas.</p>}
+                  </form>
                 </div>
               </section>
             )}
