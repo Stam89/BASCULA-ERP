@@ -12349,6 +12349,34 @@ function ProductionQqFields({
 function PanelIntegral({ data, month, onMonth, activeAccionistaId, accionistas }: { data: PanelData; month: string; onMonth: (m: string) => void; activeAccionistaId: string | null; accionistas: Accionista[] }) {
   const k = data.kpis;
   const acc = data.per_accionista;
+  // ── Filtro por ACCIONISTA ACTIVO (selector superior) ──
+  // Los datos ya vienen por accionista en el payload; aquí solo se elige la
+  // porción del activo, SIN cambiar las fórmulas base. Si no hay accionista
+  // (o "Todos"), se muestra el consolidado como antes.
+  const accSel = accionistas.find((a) => a.id === activeAccionistaId) ?? null;
+  const accRow = activeAccionistaId ? acc.find((a) => a.id === activeAccionistaId) ?? null : null;
+  const filtrar = !!(activeAccionistaId && accRow);
+  const isMatriz = accSel?.tipo === "MATRIZ";
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const kView = filtrar
+    ? {
+        compras: accRow!.compras_total,
+        ventas: accRow!.ventas_total,
+        utilidad: r2(accRow!.ventas_total - accRow!.compras_total),
+        margen: accRow!.ventas_total > 0 ? r2(((accRow!.ventas_total - accRow!.compras_total) / accRow!.ventas_total) * 100) : 0,
+        bancos: accRow!.banco_balance,
+        saldo_general: r2(accRow!.banco_balance
+          + (data.por_cobrar_por_acc?.[activeAccionistaId!]?.total ?? 0)
+          - (data.por_pagar_por_acc?.[activeAccionistaId!]?.total ?? 0))
+      }
+    : k;
+  const comprasQqView = filtrar ? accRow!.compras_qq : data.totales.compras_qq;
+  const ventasQqView = filtrar ? accRow!.ventas_qq : data.totales.ventas_qq;
+  // Servicio de pilado y costo operativo son propios de la MATRIZ (CEYRO): el
+  // socio los ve en $0 (paga el servicio, no lo cobra; y no opera la planta).
+  const serviciosView = (!filtrar || isMatriz) ? data.servicios_pilado : { facturado: 0, pendiente: 0, cobrado: 0, cnt: 0 };
+  const costoView = (!filtrar || isMatriz) ? data.costo_operativo : { total: 0, qq: 0, por_qq: 0 };
+  const subtitulo = filtrar ? `Mostrando datos de: ${accRow!.name}` : "Consolidado de todos los accionistas";
   const monthNames = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
   const [yy, mm] = month.split("-").map(Number);
   const today = new Date().toLocaleDateString("es-EC");
@@ -12376,7 +12404,7 @@ function PanelIntegral({ data, month, onMonth, activeAccionistaId, accionistas }
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 22, color: "#1e3a8a" }}>Panel de Control Integral</h1>
-          <p className="muted" style={{ margin: 0 }}>Consolidado de todos los accionistas</p>
+          <p className="muted" style={{ margin: 0 }}>{subtitulo}</p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <label style={{ fontSize: 12 }}>Mes
@@ -12390,13 +12418,13 @@ function PanelIntegral({ data, month, onMonth, activeAccionistaId, accionistas }
       </div>
 
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-        {card("TOTAL COMPRAS DEL MES", money(k.compras), `${data.totales.compras_qq.toFixed(2)} quintales`, "#16a34a")}
-        {card("TOTAL VENTAS DEL MES", money(k.ventas), `${data.totales.ventas_qq.toFixed(2)} quintales`, "#2563eb")}
-        {card("UTILIDAD DEL MES", money(k.utilidad), `${k.margen}% sobre ventas`, "#f59e0b")}
-        {card("TOTAL EN BANCOS/CAJA", money(k.bancos), "disponible", "#0d9488")}
-        {card("SALDO GENERAL", money(k.saldo_general), "bancos + por cobrar − por pagar", "#7c3aed")}
-        {data.servicios_pilado && card("INGRESOS POR SERVICIO (SOCIOS)", money(data.servicios_pilado.facturado), `pendiente ${money(data.servicios_pilado.pendiente)} · ${data.servicios_pilado.cnt} serv.`, "#0891b2")}
-        {data.costo_operativo && card("COSTO OPERATIVO (CEYRO)", money(data.costo_operativo.total), data.costo_operativo.qq > 0 ? `$${data.costo_operativo.por_qq.toFixed(2)}/QQ · ${data.costo_operativo.qq.toFixed(0)} QQ` : "sin corridas del mes", "#b91c1c")}
+        {card("TOTAL COMPRAS DEL MES", money(kView.compras), `${comprasQqView.toFixed(2)} quintales`, "#16a34a")}
+        {card("TOTAL VENTAS DEL MES", money(kView.ventas), `${ventasQqView.toFixed(2)} quintales`, "#2563eb")}
+        {card("UTILIDAD DEL MES", money(kView.utilidad), `${kView.margen}% sobre ventas`, "#f59e0b")}
+        {card("TOTAL EN BANCOS/CAJA", money(kView.bancos), "disponible", "#0d9488")}
+        {card("SALDO GENERAL", money(kView.saldo_general), "bancos + por cobrar − por pagar", "#7c3aed")}
+        {serviciosView && card("INGRESOS POR SERVICIO (SOCIOS)", money(serviciosView.facturado), `pendiente ${money(serviciosView.pendiente)} · ${serviciosView.cnt} serv.`, "#0891b2")}
+        {costoView && card("COSTO OPERATIVO (CEYRO)", money(costoView.total), costoView.qq > 0 ? `$${costoView.por_qq.toFixed(2)}/QQ · ${costoView.qq.toFixed(0)} QQ` : "sin corridas del mes", "#b91c1c")}
       </div>
 
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
