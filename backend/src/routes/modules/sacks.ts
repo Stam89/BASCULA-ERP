@@ -100,14 +100,23 @@ sacksRouter.patch("/:id/adjust", asyncRoute(async (req, res) => {
 // Reemplaza las dos llamadas separadas del frontend (que ademas usaban una
 // categoria invalida). NO modifica /sacks/movements ni /cash/:id/movements.
 sacksRouter.post("/purchases", asyncRoute(async (req, res) => {
+  // Compra MÚLTIPLE: recibe un array de ítems (varios tipos de saco). Genera UN
+  // solo egreso consolidado en caja por el total y actualiza el stock iterando
+  // cada ítem. Se acepta el formato antiguo de un solo saco por compatibilidad.
+  const raw = req.body ?? {};
+  const single = raw.sack_id
+    ? [{ sack_id: raw.sack_id, cantidad: raw.cantidad, precio: raw.precio }]
+    : undefined;
   const body = z.object({
-    sack_id: z.string().uuid(),
-    cantidad: z.number().int().positive(),
-    precio: z.number().nonnegative(),
+    items: z.array(z.object({
+      sack_id: z.string().uuid(),
+      cantidad: z.number().int().positive(),
+      precio: z.number().nonnegative()
+    })).min(1),
     cash_register_id: z.string().uuid(),
     concepto: z.string().optional(),
     created_by: z.string().uuid().optional()
-  }).parse(req.body);
+  }).parse({ ...raw, items: raw.items ?? single });
 
   // Permisos: la compra mueve inventario Y genera egreso de dinero, por eso
   // exige Caja ADEMAS de Inventario/Produccion. El administrador no tiene limite.
@@ -133,9 +142,6 @@ sacksRouter.post("/purchases", asyncRoute(async (req, res) => {
   }
 
   const result = await inTransaction(async (client) => {
-    const sack = await client.query("SELECT id, tipo FROM sack_inventory WHERE id = $1 FOR UPDATE", [body.sack_id]);
-    if (!sack.rows[0]) throw new ApiError(404, "Tipo de saco no encontrado");
-
     // Aislamiento por accionista: la caja debe pertenecer al accionista ACTIVO
     // del usuario (mismo patron que /cash/payables/:id/pay). Sin esto, un usuario
     // podria cargar el egreso a la caja de otro socio.
@@ -146,28 +152,39 @@ sacksRouter.post("/purchases", asyncRoute(async (req, res) => {
     if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
     if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
 
-    const monto = round2(body.cantidad * body.precio);
+    // Iterar cada tipo de saco: kardex de entrada + suma de stock. Acumula el total.
+    let total = 0;
+    const detalle: string[] = [];
+    for (const item of body.items) {
+      const sack = await client.query("SELECT id, tipo FROM sack_inventory WHERE id = $1 FOR UPDATE", [item.sack_id]);
+      if (!sack.rows[0]) throw new ApiError(404, "Tipo de saco no encontrado");
 
-    const mov = await client.query(
-      `INSERT INTO sack_movements (sack_id, movement, cantidad, concepto)
-       VALUES ($1, 'ENTRADA', $2, $3) RETURNING *`,
-      [body.sack_id, body.cantidad, body.concepto ?? `Compra a $${body.precio}/unidad`]
-    );
+      const subtotal = round2(item.cantidad * item.precio);
+      total = round2(total + subtotal);
+      detalle.push(`${sack.rows[0].tipo} x${item.cantidad} @ $${item.precio}`);
 
-    await client.query(
-      "UPDATE sack_inventory SET stock = stock + $2, updated_at = NOW() WHERE id = $1",
-      [body.sack_id, body.cantidad]
-    );
+      await client.query(
+        `INSERT INTO sack_movements (sack_id, movement, cantidad, concepto)
+         VALUES ($1, 'ENTRADA', $2, $3)`,
+        [item.sack_id, item.cantidad, `Compra a $${item.precio}/unidad`]
+      );
+      await client.query(
+        "UPDATE sack_inventory SET stock = stock + $2, updated_at = NOW() WHERE id = $1",
+        [item.sack_id, item.cantidad]
+      );
+    }
 
+    // UN solo egreso consolidado por el total general.
+    const concepto = body.concepto?.trim()
+      || (body.items.length > 1 ? "Compra de múltiples sacos" : `Compra de sacos ${detalle[0]}`);
     await client.query(
       `INSERT INTO cash_movements
          (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)
-       VALUES ($1, 'EXPENSE', 'COMPRA_SACOS', 'sack_purchase', $2, $3, $4, $5)`,
-      [body.cash_register_id, body.sack_id, monto,
-       `Compra de sacos ${sack.rows[0].tipo} (x${body.cantidad} @ $${body.precio})`, body.created_by ?? null]
+       VALUES ($1, 'EXPENSE', 'COMPRA_SACOS', 'sack_purchase', NULL, $2, $3, $4)`,
+      [body.cash_register_id, total, `${concepto} — ${detalle.join(", ")}`, body.created_by ?? null]
     );
 
-    return { sack_movement: mov.rows[0], monto, tipo: sack.rows[0].tipo };
+    return { monto: total, items: body.items.length, detalle };
   });
 
   res.status(201).json(result);

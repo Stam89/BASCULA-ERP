@@ -1469,6 +1469,9 @@ export function App() {
 
   // ── Compra de Sacos en Caja ────────────────────────────────────────────
   const [sackBuyForm, setSackBuyForm] = useState({ sack_id: "", cantidad: "", precio: "" });
+  // Carrito de compra de sacos: se acumulan varios tipos y se envían juntos.
+  type SackCartItem = { sack_id: string; tipo: string; cantidad: number; precio: number };
+  const [sackCart, setSackCart] = useState<SackCartItem[]>([]);
 
   // ── Venta Detalle (por libra) en Caja ──────────────────────────────────
   const [ventaDetalleForm, setVentaDetalleForm] = useState({
@@ -3784,23 +3787,31 @@ export function App() {
     if (fomentoDetalle?.id === fomentoId) await loadFomentoDetalle(fomentoId);
   }
 
-  const submitSackBuy = async () => {
-    if (!dashboard.current_cash_register?.id || !sackBuyForm.sack_id || !sackBuyForm.cantidad || !sackBuyForm.precio) {
-      addToast("Completa todos los campos", "error");
-      return;
-    }
+  // Agrega el \u00edtem del formulario al carrito (a\u00fan no va al backend).
+  const agregarSacoALista = () => {
     const cantidad = parseInt(sackBuyForm.cantidad);
     const precio = parseFloat(sackBuyForm.precio);
-    const registerId = dashboard.current_cash_register.id;
+    if (!sackBuyForm.sack_id || !(cantidad > 0) || !(precio >= 0)) {
+      addToast("Completa tipo, cantidad y precio", "error");
+      return;
+    }
+    const tipo = sackInventory.find((s) => s.id === sackBuyForm.sack_id)?.tipo ?? "Saco";
+    setSackCart((cur) => [...cur, { sack_id: sackBuyForm.sack_id, tipo, cantidad, precio }]);
+    setSackBuyForm({ sack_id: "", cantidad: "", precio: "" });
+  };
+  const quitarSacoDeLista = (i: number) => setSackCart((cur) => cur.filter((_, idx) => idx !== i));
+
+  // Env\u00eda TODO el carrito: 1 solo egreso consolidado + stock por \u00edtem (backend at\u00f3mico).
+  const confirmarCompraSacos = async () => {
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) { addToast("No hay caja abierta", "error"); return; }
+    if (sackCart.length === 0) { addToast("Agrega al menos un saco a la lista", "error"); return; }
     try {
-      // Compra ATOMICA: inventario + kardex + caja en una sola transaccion (backend).
-      // Un unico endpoint reemplaza las dos llamadas separadas anteriores.
       await apiPost("/sacks/purchases", {
-        sack_id: sackBuyForm.sack_id,
-        cantidad,
-        precio,
+        items: sackCart.map((it) => ({ sack_id: it.sack_id, cantidad: it.cantidad, precio: it.precio })),
         cash_register_id: registerId
       });
+      setSackCart([]);
       setSackBuyForm({ sack_id: "", cantidad: "", precio: "" });
       await refreshSacks();
       await refreshCaja(registerId);
@@ -8633,43 +8644,85 @@ export function App() {
 
                 {/* ── Compra de Sacos ── */}
                 {cajaSubTab === "sacos" && (
-                  <form onSubmit={(e) => { e.preventDefault(); submitSackBuy(); }} style={{ background: "white", borderRadius: "10px", border: "1px solid #e5e7eb", padding: "24px", maxWidth: 500 }}>
-                    <h2 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 700 }}>📦 Compra de Sacos</h2>
-                    <label style={{ display: "block", marginBottom: 16 }}>
-                      <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Tipo de saco</span>
-                      <select value={sackBuyForm.sack_id} onChange={(e) => setSackBuyForm({ ...sackBuyForm, sack_id: e.target.value })} required
-                        style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
-                        <option value="">Seleccione un tipo</option>
-                        {sackInventory.map((s) => (
-                          <option key={s.id} value={s.id}>{s.tipo} (Stock actual: {s.stock})</option>
-                        ))}
-                      </select>
-                    </label>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-                      <label style={{ display: "block" }}>
-                        <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Cantidad</span>
-                        <input type="number" value={sackBuyForm.cantidad} onChange={(e: any) => setSackBuyForm({ ...sackBuyForm, cantidad: e.target.value })} required
-                          style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} min="1" />
+                  <div style={{ maxWidth: 640 }}>
+                    <form onSubmit={(e) => { e.preventDefault(); agregarSacoALista(); }} style={{ background: "white", borderRadius: "10px", border: "1px solid #e5e7eb", padding: "24px" }}>
+                      <h2 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 700 }}>📦 Compra de Sacos</h2>
+                      <label style={{ display: "block", marginBottom: 16 }}>
+                        <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Tipo de saco</span>
+                        <select value={sackBuyForm.sack_id} onChange={(e) => setSackBuyForm({ ...sackBuyForm, sack_id: e.target.value })} required
+                          style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
+                          <option value="">Seleccione un tipo</option>
+                          {sackInventory.map((s) => (
+                            <option key={s.id} value={s.id}>{s.tipo} (Stock actual: {s.stock})</option>
+                          ))}
+                        </select>
                       </label>
-                      <label style={{ display: "block" }}>
-                        <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Precio unitario $</span>
-                        <input type="number" step="0.01" value={sackBuyForm.precio} onChange={(e: any) => setSackBuyForm({ ...sackBuyForm, precio: e.target.value })} required
-                          style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} min="0" />
-                      </label>
-                    </div>
-                    {sackBuyForm.cantidad && sackBuyForm.precio && (
-                      <div style={{ background: "#dbeafe", border: "1px solid #93c5fd", borderRadius: 6, padding: "12px 16px", marginBottom: 16, fontSize: 13 }}>
-                        <div style={{ color: "#1e40af", marginBottom: 4 }}>Resumen de compra</div>
-                        <div style={{ fontSize: 18, fontWeight: 700, color: "#1e40af" }}>
-                          ${(parseInt(sackBuyForm.cantidad || "0") * parseFloat(sackBuyForm.precio || "0")).toFixed(2)}
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+                        <label style={{ display: "block" }}>
+                          <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Cantidad</span>
+                          <input type="number" value={sackBuyForm.cantidad} onChange={(e: any) => setSackBuyForm({ ...sackBuyForm, cantidad: e.target.value })}
+                            style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} min="1" />
+                        </label>
+                        <label style={{ display: "block" }}>
+                          <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Precio unitario $</span>
+                          <input type="number" step="0.01" value={sackBuyForm.precio} onChange={(e: any) => setSackBuyForm({ ...sackBuyForm, precio: e.target.value })}
+                            style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} min="0" />
+                        </label>
+                      </div>
+                      {sackBuyForm.cantidad && sackBuyForm.precio && (
+                        <div style={{ background: "#dbeafe", border: "1px solid #93c5fd", borderRadius: 6, padding: "10px 14px", marginBottom: 16, fontSize: 13, color: "#1e40af" }}>
+                          Subtotal del ítem: <strong>${(parseInt(sackBuyForm.cantidad || "0") * parseFloat(sackBuyForm.precio || "0")).toFixed(2)}</strong>
+                          <span style={{ color: "#3b82f6" }}> ({sackBuyForm.cantidad} × ${parseFloat(sackBuyForm.precio || "0").toFixed(2)})</span>
                         </div>
-                        <div style={{ fontSize: 11, color: "#3b82f6", marginTop: 4 }}>
-                          {sackBuyForm.cantidad} unidades × ${parseFloat(sackBuyForm.precio || "0").toFixed(2)}
+                      )}
+                      <button type="submit" className="btnSecondary" style={{ width: "100%", padding: "10px 0", fontWeight: 700 }}>➕ Agregar a la lista</button>
+                    </form>
+
+                    {sackCart.length > 0 && (
+                      <div style={{ background: "white", borderRadius: "10px", border: "1px solid #e5e7eb", padding: "20px", marginTop: 16 }}>
+                        <h3 style={{ marginTop: 0, marginBottom: 12 }}>🧾 Listado de compra ({sackCart.length})</h3>
+                        <div style={{ overflowX: "auto" }}>
+                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                            <thead>
+                              <tr style={{ background: "var(--c-brand)", color: "#fff" }}>
+                                <th style={{ padding: "6px 10px", textAlign: "left", color: "#fff", fontWeight: 700 }}>Tipo de Saco</th>
+                                <th style={{ padding: "6px 10px", textAlign: "right", color: "#fff", fontWeight: 700 }}>Cantidad</th>
+                                <th style={{ padding: "6px 10px", textAlign: "right", color: "#fff", fontWeight: 700 }}>Precio U.</th>
+                                <th style={{ padding: "6px 10px", textAlign: "right", color: "#fff", fontWeight: 700 }}>Subtotal</th>
+                                <th style={{ padding: "6px 10px", textAlign: "center", color: "#fff", fontWeight: 700 }}>Acción</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {sackCart.map((it, i) => (
+                                <tr key={i} style={{ background: i % 2 === 0 ? "#fff" : "#f9fafb" }}>
+                                  <td style={{ padding: "5px 10px" }}>{it.tipo}</td>
+                                  <td style={{ padding: "5px 10px", textAlign: "right" }}>{it.cantidad}</td>
+                                  <td style={{ padding: "5px 10px", textAlign: "right" }}>${it.precio.toFixed(2)}</td>
+                                  <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700 }}>${(it.cantidad * it.precio).toFixed(2)}</td>
+                                  <td style={{ padding: "5px 10px", textAlign: "center" }}>
+                                    <button type="button" title="Eliminar" onClick={() => quitarSacoDeLista(i)}
+                                      style={{ padding: "4px 8px", background: "#ef4444", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12 }}>🗑️</button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                            <tfoot>
+                              <tr style={{ background: "#f0fdf4", fontWeight: 800 }}>
+                                <td colSpan={3} style={{ padding: "8px 10px" }}>TOTAL GENERAL</td>
+                                <td style={{ padding: "8px 10px", textAlign: "right", color: "#15803d", fontSize: 16 }}>${sackCart.reduce((s, it) => s + it.cantidad * it.precio, 0).toFixed(2)}</td>
+                                <td />
+                              </tr>
+                            </tfoot>
+                          </table>
                         </div>
+                        <button type="button" className="primary" onClick={confirmarCompraSacos} disabled={!dashboard.current_cash_register}
+                          style={{ width: "100%", padding: "12px 0", marginTop: 16, fontSize: 15, fontWeight: 800 }}>
+                          💾 Confirmar y Registrar Compra
+                        </button>
+                        {!dashboard.current_cash_register && <p className="muted" style={{ marginTop: 8 }}>Abre una caja para registrar la compra.</p>}
                       </div>
                     )}
-                    <button className="primary" style={{ width: "100%", padding: "10px 0" }}>💾 Registrar compra</button>
-                  </form>
+                  </div>
                 )}
 
                 {cajaSubTab === "mantenimiento" && (
