@@ -697,6 +697,7 @@ type SalesOrder = {
   delivery_date: string | null;
   notes: string | null;
   total_amount: string | number;
+  sale_id: string | null;
   sale_number: string | null;
   created_at: string;
   items: Array<{ product_name: string; presentation_name: string | null; quantity: string | number; unit_price: string | number; total: string | number }>;
@@ -7854,43 +7855,7 @@ export function App() {
               </div>
             )}
 
-            {/* Pedidos despachados: emisión de Guía de Remisión */}
-            {salesOrders.some((o) => o.status === "DELIVERED") && (
-              <div style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
-                <h3 style={{ marginTop: 0, marginBottom: 12 }}>🚚 Pedidos despachados</h3>
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                    <thead>
-                      <tr style={{ background: "var(--c-brand)", color: "#fff" }}>
-                        <th style={{ padding: "6px 10px", textAlign: "left", color: "#fff", fontWeight: 700 }}>Pedido</th>
-                        <th style={{ padding: "6px 10px", textAlign: "left", color: "#fff", fontWeight: 700 }}>Cliente</th>
-                        <th style={{ padding: "6px 10px", textAlign: "left", color: "#fff", fontWeight: 700 }}>Entrega</th>
-                        <th style={{ padding: "6px 10px", textAlign: "left", color: "#fff", fontWeight: 700 }}>Guía N°</th>
-                        <th style={{ padding: "6px 10px", textAlign: "center", color: "#fff", fontWeight: 700 }}>Acción</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {salesOrders.filter((o) => o.status === "DELIVERED").map((o, i) => (
-                        <tr key={o.id} style={{ background: i % 2 === 0 ? "#fff" : "#f9fafb" }}>
-                          <td style={{ padding: "5px 10px" }}><strong>{o.order_number}</strong></td>
-                          <td style={{ padding: "5px 10px" }}>{o.customer_name}</td>
-                          <td style={{ padding: "5px 10px" }}>{o.delivery_date ? new Date(o.delivery_date + "T12:00:00").toLocaleDateString("es-EC") : "—"}</td>
-                          <td style={{ padding: "5px 10px" }}>{o.guia_number ?? <span className="muted">sin emitir</span>}</td>
-                          <td style={{ padding: "5px 10px", textAlign: "center" }}>
-                            <button type="button" onClick={() => abrirGuia(o)}
-                              style={{ padding: "4px 10px", fontSize: 12, cursor: "pointer" }}>
-                              📄 Guía de Remisión
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {/* Historial de ventas */}
+            {/* Historial de ventas (incluye Guía de Remisión por venta despachada) */}
             {sales.length > 0 && (
               <div style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
                 <h3 style={{ marginTop: 0, marginBottom: 12 }}>📊 Ventas realizadas</h3>
@@ -7903,11 +7868,15 @@ export function App() {
                         <th style={{ padding: "6px 10px", textAlign: "right", color: "#fff", fontWeight: 700 }}>Monto</th>
                         <th style={{ padding: "6px 10px", textAlign: "left", color: "#fff", fontWeight: 700 }}>Pago</th>
                         <th style={{ padding: "6px 10px", textAlign: "left", color: "#fff", fontWeight: 700 }}>Fecha</th>
-                        <th style={{ padding: "6px 10px", textAlign: "center", color: "#fff", fontWeight: 700 }}>Recibo</th>
+                        <th style={{ padding: "6px 10px", textAlign: "left", color: "#fff", fontWeight: 700 }}>Guía N°</th>
+                        <th style={{ padding: "6px 10px", textAlign: "center", color: "#fff", fontWeight: 700 }}>Documentos</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {sales.map((s, i) => (
+                      {sales.map((s, i) => {
+                        // Pedido despachado asociado a esta venta (si vino de un pedido): habilita la guía.
+                        const order = salesOrders.find((o) => o.status === "DELIVERED" && o.sale_id === s.id);
+                        return (
                         <tr key={s.id} style={{ background: i % 2 === 0 ? "#fff" : "#f9fafb" }}>
                           <td style={{ padding: "5px 10px" }}><strong>{s.sale_number}</strong></td>
                           <td style={{ padding: "5px 10px" }}>{s.customer_name ?? "Sin cliente"}</td>
@@ -7922,14 +7891,24 @@ export function App() {
                             </span>
                           </td>
                           <td style={{ padding: "5px 10px" }}>{new Date(s.created_at).toLocaleDateString("es-EC")}</td>
-                          <td style={{ padding: "5px 10px", textAlign: "center" }}>
-                            <button type="button" title="Imprimir comprobante" onClick={() => printSaleReceipt(s.id).catch((e) => addToast(e.message, "error"))}
+                          <td style={{ padding: "5px 10px" }}>
+                            {order ? (order.guia_number ?? <span className="muted">sin emitir</span>) : <span className="muted">—</span>}
+                          </td>
+                          <td style={{ padding: "5px 10px", textAlign: "center", whiteSpace: "nowrap" }}>
+                            <button type="button" title="Imprimir recibo" onClick={() => printSaleReceipt(s.id).catch((e) => addToast(e.message, "error"))}
                               style={{ padding: "3px 10px", fontSize: 13, cursor: "pointer" }}>
                               🖨
                             </button>
+                            {order && (
+                              <button type="button" title="Guía de Remisión" onClick={() => abrirGuia(order)}
+                                style={{ padding: "3px 10px", fontSize: 12, cursor: "pointer", marginLeft: 6 }}>
+                                📄 Guía
+                              </button>
+                            )}
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
