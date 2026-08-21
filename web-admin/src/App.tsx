@@ -1507,6 +1507,9 @@ export function App() {
   const [purchaseFilter, setPurchaseFilter] = useState({ from: "", to: "", supplier_id: "", payment_type: "" });
   const [invMovs, setInvMovs] = useState<any[]>([]);
   const [invFilter, setInvFilter] = useState({ from: "", to: "", movement: "" });
+  // Inventario como dashboard: el cuadre vive en un modal y el kardex en un drawer.
+  const [cuadreOpen, setCuadreOpen] = useState(false);
+  const [kardexOpen, setKardexOpen] = useState(false);
   const [purchaseForm, setPurchaseForm] = useState({
     supplier_id: "",
     payment_type: "CASH" as "CASH" | "CREDIT",
@@ -6968,66 +6971,26 @@ export function App() {
 
         {activeTab === "Inventario" && (
           <section className="panelGrid">
-            <div className="formPanel">
-              <h2 style={{ marginBottom: 8 }}>Movimientos de inventario (reporte)</h2>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8, alignItems: "flex-end" }}>
-                <label style={{ margin: 0 }}><span>Desde</span>
-                  <input type="date" value={invFilter.from} onChange={(e: any) => setInvFilter({ ...invFilter, from: e.target.value })} /></label>
-                <label style={{ margin: 0 }}><span>Hasta</span>
-                  <input type="date" value={invFilter.to} onChange={(e: any) => setInvFilter({ ...invFilter, to: e.target.value })} /></label>
-                <label style={{ margin: 0 }}><span>Movimiento</span>
-                  <select value={invFilter.movement} onChange={(e: any) => setInvFilter({ ...invFilter, movement: e.target.value })}>
-                    <option value="">Todos</option>
-                    <option value="IN">Entrada (IN)</option>
-                    <option value="OUT">Salida (OUT)</option>
-                    <option value="ADJUSTMENT">Ajuste</option>
-                    <option value="PROCESS_INPUT">Consumo proceso</option>
-                    <option value="PROCESS_OUTPUT">Salida proceso</option>
-                    <option value="REVERSAL">Reversa</option>
-                  </select></label>
-                <button type="button" onClick={exportInvCsv}>Exportar CSV</button>
-                <button type="button" onClick={printInvReport}>Imprimir</button>
+            {/* Cabecera del panel de existencias + acciones */}
+            <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 12 }}>
+              <div>
+                <h2 style={{ marginBottom: 2 }}>📦 Inventario</h2>
+                <p className="muted" style={{ margin: 0 }}>Panel de existencias del accionista activo.</p>
               </div>
-              {(() => {
-                const vis = invMovsFiltered();
-                const entradas = vis.filter((m: any) => Number(m.quantity) > 0).reduce((s: number, m: any) => s + Number(m.quantity), 0);
-                const salidas = vis.filter((m: any) => Number(m.quantity) < 0).reduce((s: number, m: any) => s + Number(m.quantity), 0);
-                return (
-                  <>
-                    <p style={{ fontWeight: 600, margin: "4px 0" }}>{vis.length} mov. · Entradas: {entradas.toFixed(2)} · Salidas: {salidas.toFixed(2)}</p>
-                    {vis.length === 0 && <p className="muted">Sin movimientos</p>}
-                    <div className="equipList">
-                      {vis.slice(0, 300).map((m: any) => (
-                        <div key={m.id} className="equipItem">
-                          <div>
-                            <strong>{m.product_name}</strong>
-                            <small>{(m.created_at || "").slice(0, 10)} · {m.warehouse_name} · {m.movement}{m.reference_type ? " · " + m.reference_type : ""}</small>
-                          </div>
-                          <strong>{Number(m.quantity).toFixed(2)}</strong>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                );
-              })()}
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button type="button" className="btnSecondary" onClick={() => setKardexOpen(true)}>📄 Ver Kardex / Movimientos</button>
+                <button type="button" className="primary" onClick={() => setCuadreOpen(true)}>⚖️ Ajuste / Cuadre Manual</button>
+              </div>
             </div>
-            <form className="formPanel" onSubmit={(event) => submitStockAdjustment(event).catch((error) => setMessage(error.message))}>
-              <h2>Cuadre de stock</h2>
-              <Select
-                name="product_id"
-                label="Producto"
-                rows={inventoryAdjustmentProducts.map((product) => [product.id, `${stockGroupLabel(product)} - ${product.name}`])}
-              />
-              <Select name="warehouse_id" label="Bodega" rows={warehouses.map((warehouse) => [warehouse.id, warehouse.name])} />
-              <Input name="quantity" label="Cantidad QQ (+ sube / - baja)" type="number" />
-              <Input name="notes" label="Motivo" defaultValue="Cuadre manual de inventario" required={false} />
-              <button className="primary">Registrar cuadre</button>
-            </form>
-            <DataList
-              title="Productos"
-              headers={["Código", "Nombre", "Tipo", "Unidad"]}
-              rows={visibleInventoryProducts.map((p) => [p.code, p.name, p.product_type, p.unit])}
-            />
+
+            {/* Tarjetas resumen (KPIs) — totales en QQ */}
+            <div style={{ gridColumn: "1 / -1", display: "flex", gap: 12, flexWrap: "wrap" }}>
+              <KpiCard title="Total Cáscara" value={`${rawStockRows.reduce((s, r) => s + Number(r.quantity), 0).toFixed(2)} QQ`} sub={`${rawStockRows.length} ítem(s)`} color="#b45309" />
+              <KpiCard title="Total Producto Terminado" value={`${finishedStockRows.reduce((s, r) => s + Number(r.quantity), 0).toFixed(2)} QQ`} sub={`${finishedStockRows.length} ítem(s)`} color="#16a34a" />
+              <KpiCard title="Total Subproductos" value={`${byproductStockRows.reduce((s, r) => s + Number(r.quantity), 0).toFixed(2)} QQ`} sub={`${byproductStockRows.length} ítem(s)`} color="#2563eb" />
+            </div>
+
+            {/* Tablas de existencias (tarjetas) */}
             <DataList
               title="Stock cáscara"
               headers={["Producto", "Bodega", "Cantidad"]}
@@ -7050,12 +7013,91 @@ export function App() {
                 rows={otherStockRows.map((row) => [row.product_name, row.warehouse_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
               />
             )}
+            <DataList
+              title="Productos"
+              headers={["Código", "Nombre", "Tipo", "Unidad"]}
+              rows={visibleInventoryProducts.map((p) => [p.code, p.name, p.product_type, p.unit])}
+            />
 
             <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
               <button type="button" className="btnSecondary" onClick={() => loadNegativeStock().catch((e) => addToast(e.message, "error"))}>
                 🔍 Diagnóstico de stocks negativos
               </button>
             </div>
+
+            {/* Modal: Ajuste / Cuadre manual (mismo formulario y lógica de antes) */}
+            {cuadreOpen && (
+              <div className="modalOverlay" onClick={() => setCuadreOpen(false)}>
+                <form className="modalCard formPanel" onClick={(e) => e.stopPropagation()}
+                  onSubmit={(event) => submitStockAdjustment(event).then(() => setCuadreOpen(false)).catch((error) => setMessage(error.message))}>
+                  <h3 style={{ marginTop: 0 }}>⚖️ Ajuste / Cuadre manual de stock</h3>
+                  <Select
+                    name="product_id"
+                    label="Producto"
+                    rows={inventoryAdjustmentProducts.map((product) => [product.id, `${stockGroupLabel(product)} - ${product.name}`])}
+                  />
+                  <Select name="warehouse_id" label="Bodega" rows={warehouses.map((warehouse) => [warehouse.id, warehouse.name])} />
+                  <Input name="quantity" label="Cantidad QQ (+ sube / - baja)" type="number" />
+                  <Input name="notes" label="Motivo" defaultValue="Cuadre manual de inventario" required={false} />
+                  <div className="buttonRow">
+                    <button className="primary">Registrar cuadre</button>
+                    <button type="button" onClick={() => setCuadreOpen(false)}>Cancelar</button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {/* Drawer lateral: Kardex / Movimientos de inventario (mismos filtros y datos) */}
+            {kardexOpen && (
+              <div className="modalOverlay" onClick={() => setKardexOpen(false)} style={{ justifyContent: "flex-end", alignItems: "stretch", padding: 0 }}>
+                <div onClick={(e) => e.stopPropagation()} style={{ width: "min(960px, 96vw)", height: "100vh", background: "var(--c-surface, #fff)", boxShadow: "-8px 0 24px rgba(0,0,0,0.18)", overflowY: "auto", padding: 20 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                    <h2 style={{ margin: 0 }}>📄 Kardex / Movimientos de inventario</h2>
+                    <button type="button" onClick={() => setKardexOpen(false)} style={{ fontSize: 18, lineHeight: 1, padding: "2px 10px" }}>✕</button>
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8, alignItems: "flex-end" }}>
+                    <label style={{ margin: 0 }}><span>Desde</span>
+                      <input type="date" value={invFilter.from} onChange={(e: any) => setInvFilter({ ...invFilter, from: e.target.value })} /></label>
+                    <label style={{ margin: 0 }}><span>Hasta</span>
+                      <input type="date" value={invFilter.to} onChange={(e: any) => setInvFilter({ ...invFilter, to: e.target.value })} /></label>
+                    <label style={{ margin: 0 }}><span>Movimiento</span>
+                      <select value={invFilter.movement} onChange={(e: any) => setInvFilter({ ...invFilter, movement: e.target.value })}>
+                        <option value="">Todos</option>
+                        <option value="IN">Entrada (IN)</option>
+                        <option value="OUT">Salida (OUT)</option>
+                        <option value="ADJUSTMENT">Ajuste</option>
+                        <option value="PROCESS_INPUT">Consumo proceso</option>
+                        <option value="PROCESS_OUTPUT">Salida proceso</option>
+                        <option value="REVERSAL">Reversa</option>
+                      </select></label>
+                    <button type="button" onClick={exportInvCsv}>Exportar CSV</button>
+                    <button type="button" onClick={printInvReport}>Imprimir</button>
+                  </div>
+                  {(() => {
+                    const vis = invMovsFiltered();
+                    const entradas = vis.filter((m: any) => Number(m.quantity) > 0).reduce((s: number, m: any) => s + Number(m.quantity), 0);
+                    const salidas = vis.filter((m: any) => Number(m.quantity) < 0).reduce((s: number, m: any) => s + Number(m.quantity), 0);
+                    return (
+                      <>
+                        <p style={{ fontWeight: 600, margin: "4px 0" }}>{vis.length} mov. · Entradas: {entradas.toFixed(2)} · Salidas: {salidas.toFixed(2)}</p>
+                        {vis.length === 0 && <p className="muted">Sin movimientos</p>}
+                        <div className="equipList">
+                          {vis.slice(0, 300).map((m: any) => (
+                            <div key={m.id} className="equipItem">
+                              <div>
+                                <strong>{m.product_name}</strong>
+                                <small>{(m.created_at || "").slice(0, 10)} · {m.warehouse_name} · {m.movement}{m.reference_type ? " · " + m.reference_type : ""}</small>
+                              </div>
+                              <strong>{Number(m.quantity).toFixed(2)}</strong>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+            )}
 
             {negativeStockOpen && (
               <div className="modalOverlay" onClick={() => setNegativeStockOpen(false)}>
