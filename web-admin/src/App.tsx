@@ -8364,6 +8364,7 @@ export function App() {
                         onClick={() => {
                           setCajaSubTab(t);
                           if (t === "mantenimiento") { refreshMaintenanceHistory(); loadMaintCategories(); loadMaintCategoriesAll(); }
+                          if (t === "sacos") { refreshSacks().catch(() => undefined); }
                         }}
                       >
                         <span style={{ marginRight: 4 }}>{icons[t]}</span>{labels[t]}
