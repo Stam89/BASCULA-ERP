@@ -5578,13 +5578,22 @@ export function App() {
     };
     const venta = await apiGet<SaleDetail>(`/sales/${saleId}`);
     const fecha = new Date(venta.created_at).toLocaleDateString("es-EC", { year: "numeric", month: "long", day: "numeric" });
-    const filas = venta.items.map((it) => `
+    const filas = venta.items.map((it) => {
+      // sale_items.quantity guarda los QQ convertidos, pero el precio y el total
+      // son POR UNIDAD vendida (saco/presentación). Para que el recibo cuadre
+      // (Cantidad × Precio = Total) mostramos la cantidad real = total / precio,
+      // que recupera lo que se vendió (p. ej. 50, no los 5 QQ equivalentes).
+      const precio = Number(it.unit_price);
+      const cant = precio > 0 ? Number(it.total) / precio : Number(it.quantity);
+      const cantTxt = Number.isInteger(cant) ? String(cant) : cant.toFixed(2);
+      return `
       <tr>
         <td>${it.product_name}</td>
-        <td style="text-align:right">${Number(it.quantity).toFixed(2)}</td>
-        <td style="text-align:right">$${Number(it.unit_price).toFixed(2)}</td>
+        <td style="text-align:right">${cantTxt}</td>
+        <td style="text-align:right">$${precio.toFixed(2)}</td>
         <td style="text-align:right">$${Number(it.total).toFixed(2)}</td>
-      </tr>`).join("");
+      </tr>`;
+    }).join("");
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
       <title>Comprobante de Venta</title>
       <style>
@@ -5616,7 +5625,7 @@ export function App() {
         <div><strong>N.º:</strong> ${venta.sale_number} &nbsp; <strong>Fecha:</strong> ${fecha}</div>
       </div>
       <table>
-        <thead><tr><th>Producto</th><th style="text-align:right">QQ</th><th style="text-align:right">Precio</th><th style="text-align:right">Total</th></tr></thead>
+        <thead><tr><th>Producto</th><th style="text-align:right">Cantidad</th><th style="text-align:right">Precio</th><th style="text-align:right">Total</th></tr></thead>
         <tbody>${filas}</tbody>
         <tfoot><tr class="tot"><td colspan="3">TOTAL</td><td style="text-align:right">$${Number(venta.total_amount).toFixed(2)}</td></tr></tfoot>
       </table>
@@ -7716,12 +7725,12 @@ export function App() {
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                     <thead>
                       <tr style={{ background: "var(--c-brand)", color: "#fff" }}>
-                        <th style={{ padding: "6px 10px", textAlign: "left" }}>Número</th>
-                        <th style={{ padding: "6px 10px", textAlign: "left" }}>Cliente</th>
-                        <th style={{ padding: "6px 10px", textAlign: "right" }}>Monto</th>
-                        <th style={{ padding: "6px 10px", textAlign: "left" }}>Pago</th>
-                        <th style={{ padding: "6px 10px", textAlign: "left" }}>Fecha</th>
-                        <th style={{ padding: "6px 10px", textAlign: "center" }}>Recibo</th>
+                        <th style={{ padding: "6px 10px", textAlign: "left", color: "#fff", fontWeight: 700 }}>Número</th>
+                        <th style={{ padding: "6px 10px", textAlign: "left", color: "#fff", fontWeight: 700 }}>Cliente</th>
+                        <th style={{ padding: "6px 10px", textAlign: "right", color: "#fff", fontWeight: 700 }}>Monto</th>
+                        <th style={{ padding: "6px 10px", textAlign: "left", color: "#fff", fontWeight: 700 }}>Pago</th>
+                        <th style={{ padding: "6px 10px", textAlign: "left", color: "#fff", fontWeight: 700 }}>Fecha</th>
+                        <th style={{ padding: "6px 10px", textAlign: "center", color: "#fff", fontWeight: 700 }}>Recibo</th>
                       </tr>
                     </thead>
                     <tbody>
