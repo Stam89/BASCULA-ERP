@@ -1175,6 +1175,8 @@ export function App() {
   const [dryingRiceType, setDryingRiceType] = useState<Record<string, "0.11" | "CORRIENTE">>({});
   // Motor activo en pantalla: el 1 mueve las Secadoras 1 y 2; el 2, la 3.
   const [motorActivo, setMotorActivo] = useState<1 | 2>(1);
+  // Los inputs de combustible viven en un modal que abre "Finalizar secado".
+  const [fuelModalOpen, setFuelModalOpen] = useState(false);
   // Secados sin finalizar del motor (de TODOS los accionistas: el motor es
   // compartido); entre ellos se reparte el combustible según sus QQ.
   const [motorActiveReports, setMotorActiveReports] = useState<MotorActiveReport[]>([]);
@@ -4849,6 +4851,15 @@ export function App() {
     await loadMotorActive();
   }
 
+  // Confirmación del modal de combustible: si se cargaron medidores, reparte el
+  // combustible y finaliza (cerrarCombustibleMotor); si no, solo finaliza. Reusa
+  // los handlers existentes: no altera la lógica de prorrateo.
+  async function confirmarFinalizarSecado() {
+    if (combustibleTotal > 0) await cerrarCombustibleMotor();
+    else await finalizarSecadoMotor();
+    setFuelModalOpen(false);
+  }
+
   // Guarda/finaliza UN secado por su id (para editar las dos secadoras en
   // proceso del motor a la vez, cada una en su propio formulario).
   async function guardarSecadoEditado(report: DryingTunnelReport, formElement: HTMLFormElement, finalizar: boolean) {
@@ -6285,7 +6296,8 @@ export function App() {
                 <button
                   key={motor}
                   type="button"
-                  className={motorActivo === motor ? "primary" : undefined}
+                  className={motorActivo === motor ? "primary" : "btnSecondary"}
+                  style={{ padding: "8px 16px", borderRadius: 8, fontWeight: 700 }}
                   onClick={() => { setEditingDryingReport(null); setMotorActivo(motor); }}
                 >
                   Motor {motor} · {MOTOR_SECADORAS[motor].join(" y ")}
@@ -6412,8 +6424,8 @@ export function App() {
                     }
                     const lotes = lotesDe(secadora);
                     return (
-                      <div key={secadora} className="dryingForm" style={{ border: "1px solid var(--c-border)", borderRadius: "var(--r-lg)", padding: 14 }}>
-                        <h3 style={{ marginTop: 0 }}>🌀 {secadora} · Túnel {t}</h3>
+                      <div key={secadora} className="dryingForm" style={{ border: "1px solid var(--c-border)", borderRadius: 14, padding: 18, background: "var(--c-surface, #fff)", boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
+                        <h3 style={{ marginTop: 0, paddingBottom: 8, borderBottom: "2px solid var(--c-border)" }}>🌀 {secadora} · Túnel {t}</h3>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 10 }}>
                           <Select name={`rice_type_${t}`} label="Tipo de arroz" rows={[["0.11", "0.11"], ["CORRIENTE", "Corriente"]]} defaultValue="0.11" onChange={(e) => setDryingRiceType((cur) => ({ ...cur, [secadora]: e.target.value as "0.11" | "CORRIENTE" }))} />
                           <label>
@@ -6434,7 +6446,10 @@ export function App() {
                             </select>
                           </label>
                         </div>
-                        <button type="button" onClick={() => addDryingEntry(secadora)}>Agregar al lote</button>
+                        <button type="button" className="btnSecondary" onClick={() => addDryingEntry(secadora)}
+                          style={{ padding: "8px 14px", borderRadius: 8, fontWeight: 700, marginTop: 4 }}>
+                          ➕ Agregar al lote
+                        </button>
                         <DryingLotSelector selectedLots={lotes} editing={false} onRemove={(id) => removeDryingEntry(secadora, id)} />
                         <div className="totalBox">
                           <span>Peso total</span>
@@ -6455,10 +6470,9 @@ export function App() {
                   })}
                 </div>
 
-                {/* ── Combustible del motor: parte del mismo informe ── */}
-                {renderFuelFieldset()}
+                {/* El combustible ya no va aquí: se registra al final, en el modal
+                    que abre «Finalizar secado» (menos ruido durante el proceso). */}
 
-                {/* ── UN SOLO botón, al final: guarda todo junto ── */}
                 <button className="primary" style={{ width: "100%", padding: 13, fontSize: 16, marginTop: 14 }}>
                   💾 Guardar informe completo del Motor {motorActivo}
                 </button>
@@ -6466,11 +6480,31 @@ export function App() {
                   type="button"
                   className="primary"
                   style={{ width: "100%", padding: 13, fontSize: 16, marginTop: 8, background: "var(--c-success)" }}
-                  onClick={() => finalizarSecadoMotor().catch((error) => setMessage(error.message))}
+                  onClick={() => setFuelModalOpen(true)}
                 >
                   ✅ Finalizar secado del Motor {motorActivo}
                 </button>
               </form>
+            )}
+
+            {/* Modal: combustible del motor + cierre (los inputs solo aquí, al final) */}
+            {fuelModalOpen && (
+              <div className="modalOverlay" onClick={() => setFuelModalOpen(false)}>
+                <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 620, width: "100%" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                    <h3 style={{ marginTop: 0 }}>⛽ Combustible y cierre — Motor {motorActivo}</h3>
+                    <button type="button" onClick={() => setFuelModalOpen(false)} style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
+                  </div>
+                  {renderFuelFieldset()}
+                  <div className="buttonRow" style={{ marginTop: 14 }}>
+                    <button type="button" className="primary" style={{ background: "var(--c-success)", fontWeight: 800 }}
+                      onClick={() => confirmarFinalizarSecado().catch((error) => setMessage(error.message))}>
+                      ✅ Confirmar y Finalizar Secado
+                    </button>
+                    <button type="button" onClick={() => setFuelModalOpen(false)}>Cancelar</button>
+                  </div>
+                </div>
+              </div>
             )}
 
             <DryingReportsPanel reports={dryingReports} onEdit={editDryingReport} />
