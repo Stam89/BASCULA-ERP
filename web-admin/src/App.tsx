@@ -6424,8 +6424,8 @@ export function App() {
                     }
                     const lotes = lotesDe(secadora);
                     return (
-                      <div key={secadora} className="dryingForm" style={{ border: "1px solid var(--c-border)", borderRadius: 14, padding: 18, background: "var(--c-surface, #fff)", boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
-                        <h3 style={{ marginTop: 0, paddingBottom: 8, borderBottom: "2px solid var(--c-border)" }}>🌀 {secadora} · Túnel {t}</h3>
+                      <div key={secadora} className="dryingForm" style={{ border: "1px solid #e2e8f0", borderRadius: 16, padding: 20, background: "#f8fafc", boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
+                        <h3 style={{ marginTop: 0, paddingBottom: 8, borderBottom: "2px solid #e2e8f0" }}>🌀 {secadora} · Túnel {t}</h3>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 10 }}>
                           <Select name={`rice_type_${t}`} label="Tipo de arroz" rows={[["0.11", "0.11"], ["CORRIENTE", "Corriente"]]} defaultValue="0.11" onChange={(e) => setDryingRiceType((cur) => ({ ...cur, [secadora]: e.target.value as "0.11" | "CORRIENTE" }))} />
                           <label>
@@ -6473,17 +6473,24 @@ export function App() {
                 {/* El combustible ya no va aquí: se registra al final, en el modal
                     que abre «Finalizar secado» (menos ruido durante el proceso). */}
 
-                <button className="primary" style={{ width: "100%", padding: 13, fontSize: 16, marginTop: 14 }}>
-                  💾 Guardar informe completo del Motor {motorActivo}
-                </button>
-                <button
-                  type="button"
-                  className="primary"
-                  style={{ width: "100%", padding: 13, fontSize: 16, marginTop: 8, background: "var(--c-success)" }}
-                  onClick={() => setFuelModalOpen(true)}
-                >
-                  ✅ Finalizar secado del Motor {motorActivo}
-                </button>
+                {/* Botonera final: jerarquía clara. En fila si hay espacio; el
+                    principal (Finalizar) destaca, el secundario (Guardar) va outline. */}
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center", marginTop: 18 }}>
+                  <button
+                    className="btnSecondary"
+                    style={{ flex: "1 1 240px", maxWidth: 320, padding: "12px 16px", fontSize: 15, fontWeight: 700, borderRadius: 10 }}
+                  >
+                    💾 Guardar informe completo
+                  </button>
+                  <button
+                    type="button"
+                    className="primary"
+                    style={{ flex: "1 1 240px", maxWidth: 340, padding: "12px 16px", fontSize: 15, fontWeight: 800, borderRadius: 10, background: "var(--c-success)" }}
+                    onClick={() => setFuelModalOpen(true)}
+                  >
+                    ✅ Finalizar secado del Motor {motorActivo}
+                  </button>
+                </div>
               </form>
             )}
 
