@@ -693,6 +693,8 @@ type SalesOrder = {
   order_number: string;
   customer_name: string;
   customer_phone: string | null;
+  customer_identification?: string | null;
+  customer_address?: string | null;
   status: "PENDING" | "DELIVERED" | "CANCELLED";
   delivery_date: string | null;
   notes: string | null;
@@ -1419,7 +1421,9 @@ export function App() {
   // Ídem para Por Pagar (acreedor).
   const [apDetalleKey, setApDetalleKey] = useState<string | null>(null);
   const [apFilter, setApFilter] = useState<"todos" | "socios" | "agricultores" | "matriz">("todos");
-  const [newCustomerForm, setNewCustomerForm] = useState({ full_name: "", phone: "", address: "", customer_type: "NATURAL" as "NATURAL"|"EMPRESA" });
+  const [newCustomerForm, setNewCustomerForm] = useState({ full_name: "", phone: "", identification: "", address: "", customer_type: "NATURAL" as "NATURAL"|"EMPRESA" });
+  // Modal de edición de un cliente existente (para completar/corregir datos fiscales).
+  const [editCustomer, setEditCustomer] = useState<Customer | null>(null);
 
   // ── Buscador de clientes en formulario de venta ──
   const [customerSearch, setCustomerSearch] = useState("");
@@ -3382,11 +3386,28 @@ export function App() {
     await apiPost("/customers", {
       full_name: newCustomerForm.full_name,
       phone: newCustomerForm.phone || undefined,
+      identification: newCustomerForm.identification || undefined,
       address: newCustomerForm.address || undefined,
       customer_type: newCustomerForm.customer_type
     });
-    setNewCustomerForm({ full_name: "", phone: "", address: "", customer_type: "NATURAL" });
+    setNewCustomerForm({ full_name: "", phone: "", identification: "", address: "", customer_type: "NATURAL" });
     addToast("Cliente agregado", "success");
+    await refreshCustomersAndSales();
+  }
+
+  // Guarda los cambios del cliente en edición (datos fiscales incluidos).
+  async function submitEditCustomer() {
+    if (!editCustomer) return;
+    if (!editCustomer.full_name.trim()) { addToast("El nombre no puede quedar vacío", "error"); return; }
+    await apiPut(`/customers/${editCustomer.id}`, {
+      full_name: editCustomer.full_name.trim(),
+      phone: editCustomer.phone || undefined,
+      identification: editCustomer.identification || undefined,
+      address: editCustomer.address || undefined,
+      customer_type: editCustomer.customer_type
+    });
+    setEditCustomer(null);
+    addToast("Cliente actualizado ✓", "success");
     await refreshCustomersAndSales();
   }
 
@@ -5571,9 +5592,10 @@ export function App() {
           <div class="box">
             <h3>Destinatario</h3>
             <div class="line"><strong>${esc(order.customer_name) || "Consumidor final"}</strong></div>
-            <div class="line"><span class="k">RUC/CI:</span> ${"________________"}</div>
+            <div class="line"><span class="k">RUC/CI:</span> ${esc(order.customer_identification) || "________________"}</div>
             <div class="line"><span class="k">Tel:</span> ${esc(order.customer_phone) || "—"}</div>
-            <div class="line"><span class="k">Dirección de entrega:</span> ${esc(order.notes) || "________________"}</div>
+            <div class="line"><span class="k">Dirección:</span> ${esc(order.customer_address) || "________________"}</div>
+            ${order.notes ? `<div class="line"><span class="k">Dirección de entrega:</span> ${esc(order.notes)}</div>` : ""}
           </div>
           <div class="box full">
             <h3>Datos del transportista</h3>
@@ -8109,35 +8131,120 @@ export function App() {
             {/* ── Clientes (reubicado desde Inventario: administración de clientes) ── */}
             <section style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
               <h3 style={{ marginTop: 0, marginBottom: 12 }}>👥 Clientes</h3>
-              <form onSubmit={submitNewCustomer} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 10, alignItems: "end", marginBottom: 14, background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
-                <label style={{ fontSize: 12, fontWeight: 600 }}>Nombre
+              <p className="muted" style={{ marginTop: 0, marginBottom: 10, fontSize: 12 }}>
+                El RUC/CI y la dirección se imprimen en la Guía de Remisión. Complétalos aquí o edita un cliente existente.
+              </p>
+              <form onSubmit={submitNewCustomer} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 0.9fr auto", gap: 10, alignItems: "end", marginBottom: 14, background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
+                <label style={{ fontSize: 12, fontWeight: 600 }}>Nombre / Razón social
                   <input required value={newCustomerForm.full_name} onChange={e => setNewCustomerForm(p => ({...p, full_name: e.target.value}))}
                     style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}
                     placeholder="Nombre del cliente" />
+                </label>
+                <label style={{ fontSize: 12, fontWeight: 600 }}>RUC / Cédula
+                  <input value={newCustomerForm.identification} onChange={e => setNewCustomerForm(p => ({...p, identification: e.target.value}))}
+                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}
+                    placeholder="0999999999001" />
                 </label>
                 <label style={{ fontSize: 12, fontWeight: 600 }}>Teléfono
                   <input value={newCustomerForm.phone} onChange={e => setNewCustomerForm(p => ({...p, phone: e.target.value}))}
                     style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}
                     placeholder="+593..." />
                 </label>
-                <select value={newCustomerForm.customer_type} onChange={e => setNewCustomerForm(p => ({...p, customer_type: e.target.value as "NATURAL"|"EMPRESA"}))}
-                  style={{ padding: "7px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12 }}>
-                  <option value="NATURAL">Natural</option>
-                  <option value="EMPRESA">Empresa</option>
-                </select>
+                <label style={{ fontSize: 12, fontWeight: 600 }}>Tipo
+                  <select value={newCustomerForm.customer_type} onChange={e => setNewCustomerForm(p => ({...p, customer_type: e.target.value as "NATURAL"|"EMPRESA"}))}
+                    style={{ display: "block", width: "100%", padding: "7px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}>
+                    <option value="NATURAL">Natural</option>
+                    <option value="EMPRESA">Empresa</option>
+                  </select>
+                </label>
                 <button type="submit" style={{ padding: "7px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontWeight: 700,
                   background: "var(--c-brand)", color: "#fff", fontSize: 12 }}>
                   + Agregar
                 </button>
+                <label style={{ fontSize: 12, fontWeight: 600, gridColumn: "1 / -1" }}>Dirección
+                  <input value={newCustomerForm.address} onChange={e => setNewCustomerForm(p => ({...p, address: e.target.value}))}
+                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}
+                    placeholder="Calle, ciudad..." />
+                </label>
               </form>
               {customers.length > 0 && (
-                <DataList
-                  title="Lista de clientes"
-                  headers={["Nombre", "Teléfono", "Tipo"]}
-                  rows={customers.map(c => [c.full_name, c.phone ?? "—", c.customer_type === "NATURAL" ? "Persona" : "Empresa"])}
-                />
+                <div style={{ overflowX: "auto" }}>
+                  <table className="cajaTable" style={{ fontSize: 12 }}>
+                    <thead>
+                      <tr>
+                        <th>Nombre / Razón social</th>
+                        <th>RUC / CI</th>
+                        <th>Teléfono</th>
+                        <th>Dirección</th>
+                        <th>Tipo</th>
+                        <th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {customers.map(c => (
+                        <tr key={c.id}>
+                          <td>{c.full_name}</td>
+                          <td>{c.identification || <span className="muted">— falta —</span>}</td>
+                          <td>{c.phone || "—"}</td>
+                          <td>{c.address || <span className="muted">— falta —</span>}</td>
+                          <td>{c.customer_type === "NATURAL" ? "Persona" : "Empresa"}</td>
+                          <td style={{ textAlign: "right" }}>
+                            <button type="button" className="btnSecondary" style={{ padding: "4px 10px", fontSize: 12 }}
+                              onClick={() => setEditCustomer({ ...c })}>
+                              ✏️ Editar
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </section>
+
+            {/* Modal: editar datos de un cliente (incluye datos fiscales para la Guía) */}
+            {editCustomer && (
+              <div className="modalOverlay" onClick={() => setEditCustomer(null)}>
+                <form className="modalCard formPanel" onClick={(e) => e.stopPropagation()}
+                  onSubmit={(e) => { e.preventDefault(); submitEditCustomer().catch((err) => addToast(err.message, "error")); }}>
+                  <h3 style={{ marginTop: 0 }}>✏️ Editar cliente</h3>
+                  <label>
+                    <span>Nombre / Razón social *</span>
+                    <input required value={editCustomer.full_name}
+                      onChange={(e) => setEditCustomer({ ...editCustomer, full_name: e.target.value })} />
+                  </label>
+                  <label>
+                    <span>RUC / Cédula</span>
+                    <input value={editCustomer.identification ?? ""}
+                      onChange={(e) => setEditCustomer({ ...editCustomer, identification: e.target.value })}
+                      placeholder="0999999999001" />
+                  </label>
+                  <label>
+                    <span>Teléfono</span>
+                    <input value={editCustomer.phone ?? ""}
+                      onChange={(e) => setEditCustomer({ ...editCustomer, phone: e.target.value })} />
+                  </label>
+                  <label>
+                    <span>Dirección</span>
+                    <input value={editCustomer.address ?? ""}
+                      onChange={(e) => setEditCustomer({ ...editCustomer, address: e.target.value })}
+                      placeholder="Calle, ciudad..." />
+                  </label>
+                  <label>
+                    <span>Tipo</span>
+                    <select value={editCustomer.customer_type}
+                      onChange={(e) => setEditCustomer({ ...editCustomer, customer_type: e.target.value as "NATURAL"|"EMPRESA" })}>
+                      <option value="NATURAL">Natural</option>
+                      <option value="EMPRESA">Empresa</option>
+                    </select>
+                  </label>
+                  <div className="buttonRow">
+                    <button type="submit" className="primary">Guardar cambios</button>
+                    <button type="button" onClick={() => setEditCustomer(null)}>Cancelar</button>
+                  </div>
+                </form>
+              </div>
+            )}
           </section>
         )}
 

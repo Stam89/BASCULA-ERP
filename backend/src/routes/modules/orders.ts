@@ -30,6 +30,7 @@ ordersRouter.get("/", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
     `SELECT o.*, c.full_name AS customer_name, c.phone AS customer_phone,
+            c.identification AS customer_identification, c.address AS customer_address,
             s.sale_number,
             COALESCE((
               SELECT json_agg(json_build_object(
@@ -119,7 +120,8 @@ async function crearCobroDelPedido(
 ordersRouter.get("/:id", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const r = await pool.query(
-    `SELECT o.*, c.full_name AS customer_name, c.phone AS customer_phone, s.sale_number,
+    `SELECT o.*, c.full_name AS customer_name, c.phone AS customer_phone,
+            c.identification AS customer_identification, c.address AS customer_address, s.sale_number,
             ar.balance AS saldo_por_cobrar
      FROM sales_orders o
      JOIN customers c ON c.id = o.customer_id

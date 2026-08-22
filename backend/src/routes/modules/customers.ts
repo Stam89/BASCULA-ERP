@@ -26,7 +26,7 @@ customersRouter.get("/search", asyncRoute(async (req, res) => {
 // GET todos los clientes
 customersRouter.get("/", asyncRoute(async (_req, res) => {
   const result = await pool.query(
-    `SELECT id, full_name, phone, identification, customer_type FROM customers ORDER BY full_name`
+    `SELECT id, full_name, phone, identification, address, customer_type FROM customers ORDER BY full_name`
   );
   res.json(result.rows);
 }));
@@ -74,6 +74,47 @@ customersRouter.post("/", asyncRoute(async (req, res) => {
     [body.full_name, body.phone || null, body.identification || null, body.address || null, body.customer_type]
   );
   res.status(201).json(result.rows[0]);
+}));
+
+// PUT actualizar datos de un cliente (incluye datos fiscales: RUC/CI y dirección)
+customersRouter.put("/:id", asyncRoute(async (req, res) => {
+  const body = z.object({
+    full_name: z.string().min(2),
+    phone: z.string().optional(),
+    identification: z.string().optional(),
+    address: z.string().optional(),
+    customer_type: z.string().optional()
+  }).parse(req.body);
+
+  try {
+    const result = await pool.query(
+      `UPDATE customers
+         SET full_name = $2,
+             phone = $3,
+             identification = $4,
+             address = $5,
+             customer_type = COALESCE($6, customer_type)
+       WHERE id = $1
+       RETURNING id, full_name, phone, identification, address, customer_type`,
+      [
+        req.params.id,
+        body.full_name,
+        body.phone || null,
+        body.identification || null,
+        body.address || null,
+        body.customer_type || null
+      ]
+    );
+    if (!result.rows[0]) { res.status(404).json({ error: "Cliente no encontrado" }); return; }
+    res.json(result.rows[0]);
+  } catch (err: unknown) {
+    // 23505 = unique_violation (identification duplicado)
+    if (typeof err === "object" && err !== null && (err as { code?: string }).code === "23505") {
+      res.status(409).json({ error: "Ya existe un cliente con esa identificación (RUC/CI)" });
+      return;
+    }
+    throw err;
+  }
 }));
 
 // GET presentaciones de un producto
