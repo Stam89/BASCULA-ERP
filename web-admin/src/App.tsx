@@ -1521,6 +1521,7 @@ export function App() {
   // Inventario como dashboard: el cuadre vive en un modal y el kardex en un drawer.
   const [cuadreOpen, setCuadreOpen] = useState(false);
   const [kardexOpen, setKardexOpen] = useState(false);
+  const [catalogoOpen, setCatalogoOpen] = useState(false);
   const [purchaseForm, setPurchaseForm] = useState({
     supplier_id: "",
     payment_type: "CASH" as "CASH" | "CREDIT",
@@ -7024,6 +7025,7 @@ export function App() {
                   <button type="button" className="btnSecondary" onClick={() => setTransferLoteOpen(true)}>🔄 Transferir Lote</button>
                 )}
                 <button type="button" className="btnSecondary" onClick={() => setKardexOpen(true)}>📄 Ver Kardex / Movimientos</button>
+                <button type="button" className="btnSecondary" onClick={() => setCatalogoOpen(true)}>⚙️ Catálogo de Productos</button>
                 <button type="button" className="primary" onClick={() => setCuadreOpen(true)}>⚖️ Ajuste / Cuadre Manual</button>
               </div>
             </div>
@@ -7035,40 +7037,62 @@ export function App() {
               <KpiCard title="Total Subproductos" value={`${byproductStockRows.reduce((s, r) => s + Number(r.quantity), 0).toFixed(2)} QQ`} sub={`${byproductStockRows.length} ítem(s)`} color="#2563eb" />
             </div>
 
-            {/* Tablas de existencias (tarjetas) */}
-            <DataList
-              title="Stock cáscara"
-              headers={["Producto", "Bodega", "Cantidad"]}
-              rows={rawStockRows.map((row) => [row.product_name, row.warehouse_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
-            />
-            <DataList
-              title="Stock producto terminado"
-              headers={["Producto", "Bodega", "Cantidad"]}
-              rows={finishedStockRows.map((row) => [row.product_name, row.warehouse_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
-            />
-            <DataList
-              title="Stock subproductos"
-              headers={["Producto", "Bodega", "Cantidad"]}
-              rows={byproductStockRows.map((row) => [row.product_name, row.warehouse_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
-            />
-            {otherStockRows.length > 0 && (
+            {/* Tablas de existencias (tarjetas) — grid balanceado que aprovecha el ancho */}
+            <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 14, alignItems: "start" }}>
               <DataList
-                title="Otros stocks"
+                title="Stock cáscara"
                 headers={["Producto", "Bodega", "Cantidad"]}
-                rows={otherStockRows.map((row) => [row.product_name, row.warehouse_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
+                rows={rawStockRows.map((row) => [row.product_name, row.warehouse_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
               />
-            )}
-            <DataList
-              title="Productos"
-              headers={["Código", "Nombre", "Tipo", "Unidad"]}
-              rows={visibleInventoryProducts.map((p) => [p.code, p.name, p.product_type, p.unit])}
-            />
+              <DataList
+                title="Stock producto terminado"
+                headers={["Producto", "Bodega", "Cantidad"]}
+                rows={finishedStockRows.map((row) => [row.product_name, row.warehouse_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
+              />
+              <DataList
+                title="Stock subproductos"
+                headers={["Producto", "Bodega", "Cantidad"]}
+                rows={byproductStockRows.map((row) => [row.product_name, row.warehouse_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
+              />
+              {otherStockRows.length > 0 && (
+                <DataList
+                  title="Otros stocks"
+                  headers={["Producto", "Bodega", "Cantidad"]}
+                  rows={otherStockRows.map((row) => [row.product_name, row.warehouse_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
+                />
+              )}
+            </div>
 
             <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
               <button type="button" className="btnSecondary" onClick={() => loadNegativeStock().catch((e) => addToast(e.message, "error"))}>
                 🔍 Diagnóstico de stocks negativos
               </button>
             </div>
+
+            {/* Modal: Catálogo de Productos (tabla estática reubicada desde el grid) */}
+            {catalogoOpen && (
+              <div className="modalOverlay" onClick={() => setCatalogoOpen(false)}>
+                <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 820, width: "100%" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                    <div>
+                      <h3 style={{ marginTop: 0, marginBottom: 2 }}>⚙️ Catálogo de Productos</h3>
+                      <p className="muted" style={{ margin: 0 }}>Productos definidos para el accionista activo. Solo consulta.</p>
+                    </div>
+                    <button type="button" onClick={() => setCatalogoOpen(false)} style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
+                  </div>
+                  <div style={{ marginTop: 12 }}>
+                    <DataList
+                      title="Productos"
+                      headers={["Código", "Nombre", "Tipo", "Unidad"]}
+                      rows={visibleInventoryProducts.map((p) => [p.code, p.name, p.product_type, p.unit])}
+                    />
+                  </div>
+                  <div className="buttonRow" style={{ marginTop: 16 }}>
+                    <button type="button" onClick={() => setCatalogoOpen(false)}>Cerrar</button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Modal: Ajuste / Cuadre manual (mismo formulario y lógica de antes) */}
             {cuadreOpen && (
@@ -7291,39 +7315,6 @@ export function App() {
                   Registrar
                 </button>
               </form>
-            </section>
-
-            {/* ── Clientes ──────────────────────────────────────────────── */}
-            <section style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
-              <h3 style={{ marginTop: 0, marginBottom: 12 }}>👥 Clientes</h3>
-              <form onSubmit={submitNewCustomer} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 10, alignItems: "end", marginBottom: 14, background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
-                <label style={{ fontSize: 12, fontWeight: 600 }}>Nombre
-                  <input required value={newCustomerForm.full_name} onChange={e => setNewCustomerForm(p => ({...p, full_name: e.target.value}))}
-                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}
-                    placeholder="Nombre del cliente" />
-                </label>
-                <label style={{ fontSize: 12, fontWeight: 600 }}>Teléfono
-                  <input value={newCustomerForm.phone} onChange={e => setNewCustomerForm(p => ({...p, phone: e.target.value}))}
-                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}
-                    placeholder="+593..." />
-                </label>
-                <select value={newCustomerForm.customer_type} onChange={e => setNewCustomerForm(p => ({...p, customer_type: e.target.value as "NATURAL"|"EMPRESA"}))}
-                  style={{ padding: "7px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12 }}>
-                  <option value="NATURAL">Natural</option>
-                  <option value="EMPRESA">Empresa</option>
-                </select>
-                <button type="submit" style={{ padding: "7px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontWeight: 700,
-                  background: "var(--c-brand)", color: "#fff", fontSize: 12 }}>
-                  + Agregar
-                </button>
-              </form>
-              {customers.length > 0 && (
-                <DataList
-                  title="Lista de clientes"
-                  headers={["Nombre", "Teléfono", "Tipo"]}
-                  rows={customers.map(c => [c.full_name, c.phone ?? "—", c.customer_type === "NATURAL" ? "Persona" : "Empresa"])}
-                />
-              )}
             </section>
           </section>
         )}
@@ -8109,6 +8100,39 @@ export function App() {
             )}
 
             {/* Las cuentas por cobrar se administran en la pestaña "Por Cobrar" (grupo Cuentas). */}
+
+            {/* ── Clientes (reubicado desde Inventario: administración de clientes) ── */}
+            <section style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
+              <h3 style={{ marginTop: 0, marginBottom: 12 }}>👥 Clientes</h3>
+              <form onSubmit={submitNewCustomer} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 10, alignItems: "end", marginBottom: 14, background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
+                <label style={{ fontSize: 12, fontWeight: 600 }}>Nombre
+                  <input required value={newCustomerForm.full_name} onChange={e => setNewCustomerForm(p => ({...p, full_name: e.target.value}))}
+                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}
+                    placeholder="Nombre del cliente" />
+                </label>
+                <label style={{ fontSize: 12, fontWeight: 600 }}>Teléfono
+                  <input value={newCustomerForm.phone} onChange={e => setNewCustomerForm(p => ({...p, phone: e.target.value}))}
+                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}
+                    placeholder="+593..." />
+                </label>
+                <select value={newCustomerForm.customer_type} onChange={e => setNewCustomerForm(p => ({...p, customer_type: e.target.value as "NATURAL"|"EMPRESA"}))}
+                  style={{ padding: "7px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12 }}>
+                  <option value="NATURAL">Natural</option>
+                  <option value="EMPRESA">Empresa</option>
+                </select>
+                <button type="submit" style={{ padding: "7px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontWeight: 700,
+                  background: "var(--c-brand)", color: "#fff", fontSize: 12 }}>
+                  + Agregar
+                </button>
+              </form>
+              {customers.length > 0 && (
+                <DataList
+                  title="Lista de clientes"
+                  headers={["Nombre", "Teléfono", "Tipo"]}
+                  rows={customers.map(c => [c.full_name, c.phone ?? "—", c.customer_type === "NATURAL" ? "Persona" : "Empresa"])}
+                />
+              )}
+            </section>
           </section>
         )}
 
