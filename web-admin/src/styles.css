@@ -1455,17 +1455,18 @@ input[type="datetime-local"] { height: 36px; }
   border-radius: 999px;
   padding: 7px 14px;
   cursor: pointer;
-  color: var(--c-text);
+  color: var(--c-text-muted);
   font-size: 12.5px;
   font-weight: 600;
   white-space: nowrap;
   transition: background .15s, color .15s, border-color .15s;
 }
 .cajaSubNav button:hover { background: var(--c-border); color: var(--c-text); }
+/* Pill activa: verde esmeralda + texto blanco. */
 .cajaSubNav button.active {
-  background: var(--c-brand);
+  background: #059669;
   color: #ffffff;
-  border-color: var(--c-brand);
+  border-color: #059669;
   font-weight: 700;
 }
 
