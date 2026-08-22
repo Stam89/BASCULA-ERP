@@ -10131,7 +10131,7 @@ export function App() {
                       </div>
                       <button type="button" className="primary" onClick={() => setArDetalleKey(g.key)}
                         style={{ fontSize: 13, padding: "10px 12px", fontWeight: 700 }}>
-                        📄 Ver detalle y Pagar
+                        📄 Ver detalle y Cobrar
                       </button>
                     </article>
                   );
