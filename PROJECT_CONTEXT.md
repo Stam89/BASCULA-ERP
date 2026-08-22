@@ -1,6 +1,6 @@
 # PROJECT_CONTEXT — BASCULA-ERP
 
-> Memoria compacta para continuar sin releer todo. Última actualización: 2026-08-21 (cierre 2).
+> Memoria compacta para continuar sin releer todo. Última actualización: 2026-08-22.
 > Al empezar una sesión, **lee solo este archivo** primero.
 
 ## 0. Stack / cómo corre
@@ -14,7 +14,7 @@
 ## 1. ESTADO ACTUAL
 ERP para piladora de arroz con arquitectura **multi-accionista**: MATRIZ **CEYRO** (dueña, id `00000000-0000-0000-0000-000000000001`) y SOCIOS **ROVINSON** y **STALYN**. Selector de accionista activo manda header `X-Accionista-Id`; permisos por accionista.
 - Funciona: Dashboard, Báscula, Secadoras, Producción, Inventario, Selección/envejecido, Ventas (pedido→despacho), Compras, Caja, Por Cobrar, Por Pagar, Liquidaciones, Fomentos, Agricultores, Nómina, Cuadrilla, Servicio Pilado, Estados Financieros, Costos Operativos, Reportes, Configuración.
-- Todo está **commiteado y pusheado a main** (último `ffe0665`). Typecheck y build en verde. Backend reiniciado; cambios activos. Los últimos cambios (Báscula/Selección) son solo frontend → basta recargar (Ctrl+F5).
+- Todo está **commiteado y pusheado a main** (último `2f8a451`). Typecheck y build en verde. Backend reiniciado y activo (el flujo de sacos por empaque se verificó en vivo). Secadoras es solo frontend → recargar (Ctrl+F5).
 
 ## 2. CAMBIOS DE ESTA SESIÓN (2026-08-20)
 1. **Ventas** — Toma de pedido en split-view 2 columnas + "Cola de carga" para bodega (badge 🟡, texto grande de sacos). Solo UI; estado sigue `PENDING`/`DELIVERED`. `4a2d90a`.
@@ -37,13 +37,15 @@ Archivos tocados: `web-admin/src/App.tsx` (todo); `backend/src/routes/modules/{o
 14. **Sacos SIEMPRE de la matriz al despachar:** solo CEYRO posee inventario de sacos (`sack_inventory` es tabla ÚNICA, sin accionista_id). Al despachar, el arroz/subproductos salen del inventario del socio (crearVenta, sin cambios) pero los SACOS se descuentan del inventario de la matriz. Nueva `descontarSacosDelDespacho()` en `cargo-empaque.ts` (por presentación con peso → tipo "Saco N LB", movimiento SALIDA; no bloquea si falta stock o no existe el tipo), llamada en `orders.ts /:id/deliver` junto al cargo por empaque, misma transacción. Verificado en vivo: pedido ROVINSON 5×10lb → Saco 10 LB 112→107, arroz −0.5 QQ de ROVINSON, CxC/CxP $1.00. `6d12837`.
 15. **Báscula = Bandeja de entrada (Inbox):** se quitó de la vista el form "Registrar ingreso" (ahora modal via [+ Ingreso Manual (Emergencia)] en la cabecera de la tabla de tickets) y las secciones "Últimos lotes" y "Pasar un lote". La tabla de Tickets es full-width y el centro. Filtro por defecto ya era "Pendientes" (se conserva; "Todos" muestra historial). Se mantiene en Báscula la "Corrección puntual de accionista de materia prima". Reubicados: "Últimos lotes" → **Producción** (DataList); "Pasar un lote" → **Inventario**, botón [🔄 Transferir Lote] en la cabecera → modal (solo si accionistas>1). `fb51167`.
 16. **Selección más limpia:** "Personas externas" (form+tabla) → modal via botón [👤 Gestionar Personas Externas] junto al selector. "💲 Tarifas por defecto" → **Configuración → Tarifas → tarjeta "Tarifas de Procesos (Selección/Envejecido)"** (mismo `saveSelectionRates`; `refreshConfig` ahora carga `/selection/rates`). El form "Mandar a selectar" sigue leyendo `selectionRates` de la BD para autocompletar "Tarifa por QQ". "Completados" pasó a panel full-width. `ffe0665`.
+17. **Sacos: consumo físico al EMPACAR, no en la venta (corrección de flujo).** El saco se gasta al cerrar Producción/Selección, NO al despachar (antes se descontaba en la venta → desfase/duplicidad). `descontarSacosDelDespacho` → helper genérico `descontarSacosPorPeso(client, Map<peso,sacos>, concepto)` en `cargo-empaque.ts` (descuenta de `sack_inventory` = matriz, movimiento SALIDA; permite negativo). Producción (`processing.ts` cerrarProcesoProduccion): sacos según `white_rice_presentations` (sacos = QQ*100/sack_weight_lb). Selección (`selection.ts` finish): nueva presentación POR LÍNEA — migración `20260825` (presentation + sack_weight_lb en `selection_batch_outputs`), UI con selector 100/50/25/10 LB por salida (deshabilitado en rechazo); descuenta exacto por tipo. `orders.ts /:id/deliver` YA NO descuenta sacos (mantiene el CARGO financiero por empaque + baja de producto terminado del socio). Verificado en vivo: cierre selección 2 QQ en Saco 25 LB → 8 sacos (8→0). Commits `3d8a241`, `55dbe8f`.
+18. **Secadoras (UI):** selector de Motor y "➕ Agregar al lote" como botones secundarios reales; tarjetas de Secadora con sombra/borde/padding. El bloque de combustible (Bombona/Cilindro/Diésel + totales) sale de la vista principal (modo crear) y vive en un MODAL que abre "✅ Finalizar secado del Motor X" → [Confirmar y Finalizar Secado] reusa los handlers (cerrarCombustibleMotor si hay medidores, si no finalizarSecadoMotor). Prorrateo intacto. `2f8a451`.
 
 ## 3. REGLAS DE NEGOCIO (no romper)
 - **Toma de pedido NO mueve dinero ni inventario**; recién al **Despachar** sale stock + entra caja (Contado) o Cuenta por Cobrar (Crédito). Estados DB: `PENDING`/`DELIVERED`/`CANCELLED` (NO renombrar; hay CHECK). El pedido genera su CxC "(pendiente de despacho)" al tomarse; al despachar se salda o se enlaza, nunca se duplica.
 - **Cuentas espejo entre accionistas**: un servicio/cargo de la matriz a un socio crea CxC (CEYRO) + CxP (socio) enlazadas en tablas puente (`pilado_services`, `lot_transfers`, `matriz_service_charges`, `matriz_packaging_charges`). Un abono en una cara debe reflejarse en la otra + caja del otro socio → `backend/src/services/cuentas-vinculadas.ts` (`espejarAbonoEnContraparte`). Saldar una cuenta debe mover caja + espejar, no solo bajar saldo.
 - **"PENDIENTE"** en cuentas = `document_status='CONFIRMED'` con `balance=amount`. El enum `document_status` (DRAFT/CONFIRMED/PARTIAL/PAID/CANCELLED) **NO tiene 'PENDING'** — no inventarlo.
 - **Cargo por empaque**: solo si el vendedor es SOCIO (la matriz no se cobra a sí misma); agrupa sacos 10/25/50 lb × tarifa; si total>0 crea CxC/CxP. Atómico dentro del despacho.
-- **Inventario de SACOS = solo de la MATRIZ (CEYRO)**: `sack_inventory` es tabla única (sin accionista_id). Al despachar, el arroz sale del inventario del socio pero los sacos SIEMPRE se descuentan de `sack_inventory` (la matriz), via `descontarSacosDelDespacho()`. No confundir con el CARGO por empaque (deuda CxC/CxP): son dos efectos distintos que conviven en la misma transacción del despacho.
+- **Inventario de SACOS = solo de la MATRIZ (CEYRO)**: `sack_inventory` es tabla única (sin accionista_id). El saco se consume al EMPACAR (cierre de Producción/Selección), NO en la venta. Siempre se descuenta de `sack_inventory` (la matriz) via `descontarSacosPorPeso()`, sin importar el accionista del lote. En la VENTA no se toca el stock de sacos: solo baja el producto terminado del socio + (si aplica) el CARGO financiero por empaque (CxC CEYRO / CxP socio). Son dos cosas distintas: consumo físico (empaque) vs deuda financiera (venta).
 - **Combustible secadoras**: por MOTOR y por corrida (`filled_at`), repartido entre las 2 secadoras aunque terminen distinto.
 - **Nómina**: estibador cobra por tulas (proporcional 5/3); guardianía del secador es UNA por día (no por secadora).
 - **Categorías de mantenimiento**: soft-delete (nunca borrar filas); inactivas salen de forms pero se conservan en histórico/reportes; `area`/`section`/`maintenance_type` se guardan como TEXTO en `equipment_maintenance` (retrocompat).
@@ -58,7 +60,7 @@ Archivos tocados: `web-admin/src/App.tsx` (todo); `backend/src/routes/modules/{o
 - Nota de pruebas en vivo: la sesión del navegador in-app se limpia al reabrir el preview; para pruebas por API se puede generar un JWT admin con `signToken` (secreto en `backend/src/config/env.ts`) y llamar `http://localhost:4000/api/v1/...`. La extensión "Claude en Chrome" no está conectada (no se puede manejar el Chrome real del usuario).
 
 ## 5. PRÓXIMO PASO
-Sin tarea pendiente comprometida. Opcional: verificar en vivo los rediseños de UI de hoy (Báscula inbox, Selección, y los modales reubicados en Inventario/Producción/Configuración) — no verificados en navegador aún, solo typecheck/build. Luego preguntar al usuario la siguiente funcionalidad.
+Sin tarea pendiente comprometida. Todo verificado en vivo (Secadoras UI; flujo de sacos por empaque probado con cierre real de selección). Preguntar al usuario la siguiente funcionalidad.
 
 ## 6. ARCHIVOS IMPORTANTES
 - `web-admin/src/App.tsx` — TODO el frontend (tabs por `activeTab === "..."`; Config por `configSubTab`; Caja por `cajaSubTab`).
@@ -66,7 +68,8 @@ Sin tarea pendiente comprometida. Opcional: verificar en vivo los rediseños de 
 - `backend/src/services/`: `cargo-empaque.ts`, `cuentas-vinculadas.ts` (espejo).
 - `backend/src/auth/require-auth.ts` — permisos por accionista (`WRITE_MODULES_BY_PREFIX`).
 - `backend/src/routes/modules/dashboard.ts` — `/dashboard/panel` (KPIs + `per_accionista` + `*_por_acc`); el filtro de las 7 tarjetas se hace en el frontend (`PanelIntegral`).
-- `database/migrations/` — últimas: `20260822_matriz_packaging_rates.sql`, `20260823_maintenance_categories.sql`, `20260824_guia_remision.sql`.
+- `backend/src/routes/modules/`: `processing.ts` (cierre de pilado + descuento de sacos por empaque), `selection.ts` (selección + descuento de sacos por presentación).
+- `database/migrations/` — últimas: `20260823_maintenance_categories.sql`, `20260824_guia_remision.sql`, `20260825_seleccion_presentacion_sacos.sql`.
 - Memoria del asistente: `C:\Users\Usuario\.claude\projects\C--Users-Usuario-...-BASCULA-ERP\memory\` (MEMORY.md + notas).
 
 ## 7. DECISIONES TOMADAS (no volver a preguntar)
@@ -84,8 +87,8 @@ Sin tarea pendiente comprometida. Opcional: verificar en vivo los rediseños de 
 
 ## 8. ADVERTENCIAS (revisar dependencias antes de tocar)
 - `cuentas-vinculadas.ts` (espejo CxC↔CxP): tocarlo mal desincroniza libros y cajas entre socios.
-- `orders.ts /:id/deliver`: transacción atómica (venta + cargo empaque + descuento de sacos de la matriz + saldo de CxC). No romper el orden.
-- `sack_inventory` es tabla ÚNICA (de la matriz), sin accionista_id: NO agregarle accionista_id sin revisar `descontarSacosDelDespacho()` y la compra de sacos, que asumen inventario global.
+- `orders.ts /:id/deliver`: transacción atómica (venta + cargo financiero por empaque + saldo de CxC). YA NO descuenta sacos físicos (eso pasó a Producción/Selección). No romper el orden.
+- `sack_inventory` es tabla ÚNICA (de la matriz), sin accionista_id: NO agregarle accionista_id sin revisar `descontarSacosPorPeso()` (usado en processing.ts/selection.ts) y la compra de sacos, que asumen inventario global.
 - Enum `document_status`: no agregar 'PENDING' ni cambiar valores.
 - Estados de `sales_orders` (PENDING/DELIVERED/CANCELLED): CHECK constraint, no renombrar a español.
 - `equipment_maintenance`: guarda textos, no FKs a categorías — no convertir a FK sin migrar histórico.
