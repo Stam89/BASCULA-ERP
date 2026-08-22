@@ -6478,7 +6478,7 @@ export function App() {
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center", marginTop: 18 }}>
                   <button
                     className="btnSecondary"
-                    style={{ flex: "1 1 240px", maxWidth: 320, padding: "12px 16px", fontSize: 15, fontWeight: 700, borderRadius: 10 }}
+                    style={{ flex: "1 1 240px", maxWidth: 320, padding: "12px 16px", fontSize: 15, fontWeight: 700, borderRadius: 10, background: "transparent", border: "1.5px solid #2563eb", color: "#2563eb" }}
                   >
                     💾 Guardar informe completo
                   </button>
