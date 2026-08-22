@@ -1424,6 +1424,8 @@ export function App() {
   const [newCustomerForm, setNewCustomerForm] = useState({ full_name: "", phone: "", identification: "", address: "", customer_type: "NATURAL" as "NATURAL"|"EMPRESA" });
   // Modal de edición de un cliente existente (para completar/corregir datos fiscales).
   const [editCustomer, setEditCustomer] = useState<Customer | null>(null);
+  // Modal de gestión de clientes (alta + tabla maestra), abierto desde el Paso 1 de Ventas.
+  const [clientesModalOpen, setClientesModalOpen] = useState(false);
 
   // ── Buscador de clientes en formulario de venta ──
   const [customerSearch, setCustomerSearch] = useState("");
@@ -7704,6 +7706,10 @@ export function App() {
                   <button type="button" onClick={() => setShowQuickNewCustomer(true)} style={{ padding: "8px 12px", background: "#059669", color: "white", border: "none", borderRadius: 4, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
                     + Nuevo
                   </button>
+                  <button type="button" onClick={() => setClientesModalOpen(true)} title="Alta completa, datos fiscales y edición de clientes"
+                    style={{ padding: "8px 12px", background: "transparent", border: "1.5px solid #2563eb", color: "#2563eb", borderRadius: 4, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
+                    👥 Gestionar
+                  </button>
                 </div>
                 {filteredCustomers.length > 0 && (
                   <div style={{ border: "1px solid #d1d5db", borderRadius: 4, marginTop: 4, maxHeight: 150, overflowY: "auto" }}>
@@ -7834,10 +7840,15 @@ export function App() {
             {/* Columna DERECHA: carrito acumulado + total + fecha de entrega + TOMAR PEDIDO */}
             <div style={{ display: "grid", gap: 16, alignItems: "start" }}>
 
-            {/* SECCIÓN 3: Líneas agregadas (carrito) */}
-            {saleLineItems.length > 0 && (
-              <div className="formPanel stepPanel" style={{ gridColumn: "1 / -1" }}>
-                <h2 style={{ marginTop: 0 }}><span className="stepBadge">3</span>Líneas del pedido ({saleLineItems.length})</h2>
+            {/* SECCIÓN 3: Detalle del pedido (carrito) — SIEMPRE visible para que el layout no salte */}
+            <div className="formPanel stepPanel" style={{ gridColumn: "1 / -1" }}>
+              <h2 style={{ marginTop: 0 }}><span className="stepBadge">3</span>Detalle del pedido{saleLineItems.length > 0 ? ` (${saleLineItems.length})` : ""}</h2>
+              {saleLineItems.length === 0 ? (
+                <div style={{ padding: "28px 16px", textAlign: "center", color: "#9ca3af", background: "#f9fafb", border: "1px dashed #d1d5db", borderRadius: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>🛒 No hay productos en el pedido aún</div>
+                  <div style={{ fontSize: 12, marginTop: 4 }}>Agrega productos desde el paso 2 y aparecerán aquí.</div>
+                </div>
+              ) : (
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                     <thead>
@@ -7902,8 +7913,8 @@ export function App() {
                     </tfoot>
                   </table>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
 
             {/* SECCIÓN 4: Guardar el pedido (preventa: se cobra al despachar) */}
             <form className="formPanel stepPanel stepSuccess" onSubmit={(event) => submitOrderSale(event).catch((error) => setMessage(error.message))} style={{ gridColumn: "1 / -1" }}>
@@ -8128,9 +8139,15 @@ export function App() {
 
             {/* Las cuentas por cobrar se administran en la pestaña "Por Cobrar" (grupo Cuentas). */}
 
-            {/* ── Clientes (reubicado desde Inventario: administración de clientes) ── */}
-            <section style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
-              <h3 style={{ marginTop: 0, marginBottom: 12 }}>👥 Clientes</h3>
+            {/* Modal: Gestión de Clientes (alta + tabla maestra, sacado de la vista principal
+                para que Ventas quede 100% enfocado en tomar el pedido). Se abre desde el Paso 1. */}
+            {clientesModalOpen && (
+            <div className="modalOverlay" onClick={() => setClientesModalOpen(false)}>
+            <section className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 960, width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                <h3 style={{ marginTop: 0, marginBottom: 12 }}>👥 Gestión de Clientes</h3>
+                <button type="button" onClick={() => setClientesModalOpen(false)} style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
+              </div>
               <p className="muted" style={{ marginTop: 0, marginBottom: 10, fontSize: 12 }}>
                 El RUC/CI y la dirección se imprimen en la Guía de Remisión. Complétalos aquí o edita un cliente existente.
               </p>
@@ -8201,6 +8218,8 @@ export function App() {
                 </div>
               )}
             </section>
+            </div>
+            )}
 
             {/* Modal: editar datos de un cliente (incluye datos fiscales para la Guía) */}
             {editCustomer && (
