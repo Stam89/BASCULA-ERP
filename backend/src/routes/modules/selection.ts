@@ -237,7 +237,10 @@ selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
       product_id: z.string().uuid(),
       warehouse_id: z.string().uuid().optional(),
       quantity: z.number().positive(),
-      is_reject: z.boolean().optional()
+      is_reject: z.boolean().optional(),
+      // Presentación/tamaño de saco en que regresó (para descontar el saco exacto).
+      presentation: z.string().optional(),
+      sack_weight_lb: z.number().positive().optional()
     })).min(1)
   }).parse(req.body);
 
@@ -254,13 +257,20 @@ selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
     const outputQq = round3(body.outputs.reduce((s, o) => s + o.quantity, 0));
     const mermaQq = round3(Number(batch.rows[0].input_qq) - outputQq);
 
+    // Sacos a descontar de la MATRIZ, agrupados por tamaño, según la presentación
+    // elegida por línea (solo producto NO rechazo). sacos = QQ*100/peso_lb.
+    const sacosPorPeso = new Map<number, number>();
     for (const o of body.outputs) {
       const qty = round3(o.quantity);
       const wid = o.warehouse_id ?? defaultWarehouse;
       await tx.query(
-        "INSERT INTO selection_batch_outputs (batch_id, product_id, warehouse_id, quantity, is_reject) VALUES ($1, $2, $3, $4, $5)",
-        [req.params.id, o.product_id, wid, qty, o.is_reject ?? false]
+        "INSERT INTO selection_batch_outputs (batch_id, product_id, warehouse_id, quantity, is_reject, presentation, sack_weight_lb) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        [req.params.id, o.product_id, wid, qty, o.is_reject ?? false, o.presentation ?? null, o.sack_weight_lb ?? null]
       );
+      if (!o.is_reject && o.sack_weight_lb && o.sack_weight_lb > 0) {
+        const nSacos = Math.round((qty * 100) / o.sack_weight_lb);
+        if (nSacos > 0) sacosPorPeso.set(o.sack_weight_lb, (sacosPorPeso.get(o.sack_weight_lb) ?? 0) + nSacos);
+      }
       // Reingresa al inventario (IN = cantidad positiva).
       await tx.query(
         `INSERT INTO inventory_movements
@@ -270,12 +280,10 @@ selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
       );
     }
 
-    // Descuento FÍSICO de sacos de la MATRIZ por el reempaque de lo que regresó.
-    // Selección no captura la presentación, así que se asume el saco estándar de
-    // 100 LB (1 saco por QQ) para el producto NO rechazo. El saco sale SIEMPRE de
-    // la bodega de la matriz (sack_inventory es única), sin importar el accionista.
-    const qqEmpacado = round3(body.outputs.filter((o) => !o.is_reject).reduce((s, o) => s + o.quantity, 0));
-    const sacosMatriz = await descontarSacosPorPeso(tx, new Map([[100, Math.round(qqEmpacado)]]), `Empaque en selección (${label})`);
+    // Descuento FÍSICO de sacos de la MATRIZ por el reempaque de lo que regresó,
+    // por presentación exacta (Saco 10/25/50/100 LB). El saco sale SIEMPRE de la
+    // bodega de la matriz (sack_inventory es única), sin importar el accionista.
+    const sacosMatriz = await descontarSacosPorPeso(tx, sacosPorPeso, `Empaque en selección (${label})`);
 
     const updated = await tx.query(
       `UPDATE selection_batches

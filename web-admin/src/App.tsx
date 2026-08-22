@@ -1317,7 +1317,7 @@ export function App() {
   const [selectionBatches, setSelectionBatches] = useState<SelectionBatch[]>([]);
   const [selectionProviders, setSelectionProviders] = useState<ExternalProvider[]>([]);
   const [selectionRates, setSelectionRates] = useState<SelectionRates>({ seleccion_rate: 1.25, envejecimiento_rate: 3.5 });
-  type LineDraft = { product_id: string; quantity: string; is_reject?: boolean };
+  type LineDraft = { product_id: string; quantity: string; is_reject?: boolean; sack_weight_lb?: string };
   const emptyLine: LineDraft = { product_id: "", quantity: "" };
   // Fase 1: lo que se manda a selectar (varias líneas de producto).
   const [selectionForm, setSelectionForm] = useState({
@@ -2568,7 +2568,11 @@ export function App() {
   async function submitFinishBatch(batchId: string) {
     const outputs = finishOutputs
       .filter((l) => l.product_id && Number(l.quantity) > 0)
-      .map((l) => ({ product_id: l.product_id, quantity: Number(l.quantity), is_reject: !!l.is_reject }));
+      .map((l) => {
+        const peso = Number(l.sack_weight_lb ?? "100") || 100;
+        return { product_id: l.product_id, quantity: Number(l.quantity), is_reject: !!l.is_reject,
+          sack_weight_lb: l.is_reject ? undefined : peso, presentation: l.is_reject ? undefined : `${peso} LB` };
+      });
     if (outputs.length === 0) { addToast("Agrega al menos un producto que regresó", "error"); return; }
     if (new Set(outputs.map((o) => o.product_id)).size !== outputs.length) { addToast("Hay un producto repetido en las salidas", "error"); return; }
     await apiPost(`/selection/batches/${batchId}/finish`, { outputs });
@@ -10389,12 +10393,19 @@ export function App() {
                         <div style={{ marginTop: 10, background: "#f9fafb", borderRadius: 8, padding: 10 }}>
                           <span style={{ fontSize: 13, fontWeight: 700 }}>Productos que regresaron</span>
                           {finishOutputs.map((line, i) => (
-                            <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 80px auto auto", gap: 6, alignItems: "center", marginTop: 6 }}>
+                            <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 70px 88px auto auto", gap: 6, alignItems: "center", marginTop: 6 }}>
                               <select value={line.product_id} onChange={(e) => setOutLine(i, { product_id: e.target.value })} style={inputStyle}>
                                 <option value="">Producto…</option>
                                 {outputProducts.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                               </select>
                               <input type="number" step="0.01" min="0" placeholder="QQ" value={line.quantity} onChange={(e) => setOutLine(i, { quantity: e.target.value })} style={inputStyle} />
+                              <select value={line.sack_weight_lb ?? "100"} disabled={!!line.is_reject} title="Tamaño de saco usado (descuenta de la matriz)"
+                                onChange={(e) => setOutLine(i, { sack_weight_lb: e.target.value })} style={{ ...inputStyle, opacity: line.is_reject ? 0.5 : 1 }}>
+                                <option value="100">100 LB</option>
+                                <option value="50">50 LB</option>
+                                <option value="25">25 LB</option>
+                                <option value="10">10 LB</option>
+                              </select>
                               <label style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 3 }} title="Marca si es el rechazo">
                                 <input type="checkbox" checked={!!line.is_reject} onChange={(e) => setOutLine(i, { is_reject: e.target.checked })} /> rechazo
                               </label>
