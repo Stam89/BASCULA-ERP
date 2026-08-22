@@ -7329,7 +7329,7 @@ export function App() {
         )}
 
         {activeTab === "Produccion" && (
-          <section className="productionModuleGrid">
+          <section className="productionModuleGrid" style={{ alignItems: "start" }}>
             {/* El "Costo operativo por corrida" se movió a Contabilidad → «Costos
                 Operativos». Producción arranca directo en Secadora/Reporte de pilado. */}
             {millingDrafts.length > 0 && (
@@ -7365,14 +7365,8 @@ export function App() {
                 </table>
               </div>
             )}
-            {/* Últimos lotes (reubicado desde Báscula) */}
-            <div style={{ gridColumn: "1 / -1" }}>
-              <DataList
-                title="Últimos lotes"
-                headers={["Lote", "Agricultor", "Tipo", "QQ"]}
-                rows={lots.slice(0, 8).map((lot) => [lot.lot_code, lot.farmer_name ?? "—", riceTypeLabel(lot.rice_type), `${Number(lot.quintals ?? 0).toFixed(2)} QQ`])}
-              />
-            </div>
+            {/* ── Columna IZQUIERDA: Materia prima (Secadora + Últimos lotes) ── */}
+            <div style={{ display: "grid", gap: 14, alignContent: "start" }}>
             <section className="formPanel productionQuickCard">
               <h2>Secadora en produccion</h2>
               <label>
@@ -7404,11 +7398,21 @@ export function App() {
               )}
             </section>
 
+            {/* Últimos lotes (debajo de Secadora, en la columna izquierda) */}
+            <DataList
+              title="Últimos lotes"
+              headers={["Lote", "Agricultor", "Tipo", "QQ"]}
+              rows={lots.slice(0, 8).map((lot) => [lot.lot_code, lot.farmer_name ?? "—", riceTypeLabel(lot.rice_type), `${Number(lot.quintals ?? 0).toFixed(2)} QQ`])}
+            />
+            </div>
+
+            {/* ── Columna DERECHA: Procesamiento (Reporte de pilado) ── */}
             <section className="formPanel productionQuickCard">
               <h2>Reporte de pilado</h2>
 
-              {/* Pilador, Estibador y N.º de tulas */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12, padding: "10px 12px", background: "#f0fdf4", borderRadius: 8, border: "1px solid #bbf7d0" }}>
+              {/* 👥 Personal de Turno — fondo tenue */}
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#475569", margin: "2px 0 6px" }}>👥 Personal de Turno</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16, padding: "12px", background: "#f8fafc", borderRadius: 10, border: "1px solid #e2e8f0" }}>
                 <label style={{ fontSize: 12 }}>
                   <span style={{ fontWeight: 700, display: "block", marginBottom: 3 }}>👷 Pilador</span>
                   <input value={piladorName} onChange={e => setPiladorName(e.target.value)}
@@ -7421,12 +7425,17 @@ export function App() {
                     style={{ width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
                     placeholder="Nombre del estibador" />
                 </label>
-                <label style={{ fontSize: 12 }}>
+                <label style={{ fontSize: 12, gridColumn: "1 / -1" }}>
                   <span style={{ fontWeight: 700, display: "block", marginBottom: 3 }}>🟤 Encargado de llenar polvillo</span>
                   <input value={polvilloWorkerName} onChange={e => setPolvilloWorkerName(e.target.value)}
                     style={{ width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
                     placeholder="Nombre del encargado" />
                 </label>
+              </div>
+
+              {/* ⚖️ Rendimiento de Pilado */}
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#475569", margin: "2px 0 6px" }}>⚖️ Rendimiento de Pilado</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
                 <label style={{ fontSize: 12 }}>
                   <span style={{ fontWeight: 700, display: "block", marginBottom: 3 }}>📦 N.º de tulas</span>
                   <input type="number" min="0" step="1" value={millingReport.tulas}
@@ -7501,12 +7510,14 @@ export function App() {
                   registrando en Nómina (backend) con el rol Polvillo; solo no se
                   muestra el cálculo aquí. */}
 
-              <div className="buttonRow">
-                <button type="button" onClick={() => saveMillingProcess().catch((e) => addToast(e.message, "error"))} disabled={!selectedProductionDrying}>
-                  Guardar Proceso
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center", marginTop: 8 }}>
+                <button type="button" className="btnSecondary" onClick={() => saveMillingProcess().catch((e) => addToast(e.message, "error"))} disabled={!selectedProductionDrying}
+                  style={{ flex: "1 1 200px", maxWidth: 300, padding: "12px 16px", fontSize: 15, fontWeight: 700, borderRadius: 10, background: "transparent", border: "1.5px solid #2563eb", color: "#2563eb" }}>
+                  💾 Guardar Proceso
                 </button>
-                <button className="primary" type="button" onClick={() => finalizeMillingLot().catch((error) => setMessage(error.message))} disabled={!selectedProductionDrying}>
-                  Finalizar Lote
+                <button className="primary" type="button" onClick={() => finalizeMillingLot().catch((error) => setMessage(error.message))} disabled={!selectedProductionDrying}
+                  style={{ flex: "1 1 200px", maxWidth: 320, padding: "12px 16px", fontSize: 15, fontWeight: 800, borderRadius: 10, background: "var(--c-success)" }}>
+                  ✅ Finalizar Lote
                 </button>
               </div>
               <p className="muted">
