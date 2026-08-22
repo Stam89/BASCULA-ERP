@@ -8,6 +8,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
 import { createLotProcessReport } from "../../utils/process-reports.js";
+import { descontarSacosPorPeso } from "../../services/cargo-empaque.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { createProductionWorkerPayments } from "./labor.js";
 
@@ -468,6 +469,19 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       }
     }
 
+    // ── Descuento FÍSICO de sacos de la MATRIZ por el empaque del arroz pilado ──
+    // El consumo del saco ocurre AQUÍ (al empacar), no en la venta. Se descuenta
+    // siempre de la bodega de la matriz (sack_inventory es única), sin importar de
+    // qué accionista sea el lote. Se usa el desglose por presentación para saber en
+    // qué tipos de saco (10/25/50/100 LB) salió el arroz.
+    const sacosPorPeso = new Map<number, number>();
+    for (const p of body.white_rice_presentations ?? []) {
+      if (!p.sack_weight_lb || p.sack_weight_lb <= 0) continue;
+      const nSacos = Math.round((Number(p.quantity) * 100) / p.sack_weight_lb);
+      if (nSacos > 0) sacosPorPeso.set(p.sack_weight_lb, (sacosPorPeso.get(p.sack_weight_lb) ?? 0) + nSacos);
+    }
+    const sacosMatriz = await descontarSacosPorPeso(client, sacosPorPeso, "Empaque en producción (arroz pilado)");
+
     if (body.packaging_supply_id && sacksUsed > 0) {
       const supply = await client.query(
         "SELECT * FROM insumos WHERE id = $1 FOR UPDATE",
@@ -746,6 +760,7 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       batch: updatedBatch.rows[0],
       yield: yieldResult.rows[0],
       packagingAlert,
+      sacos_matriz: sacosMatriz,
       servicio_pilado: servicioPilado,
       maquila: isMaquila
         ? {

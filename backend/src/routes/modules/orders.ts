@@ -8,7 +8,7 @@ import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { crearVenta } from "./sales.js";
-import { cobrarEmpaqueAlDespachar, descontarSacosDelDespacho } from "../../services/cargo-empaque.js";
+import { cobrarEmpaqueAlDespachar } from "../../services/cargo-empaque.js";
 
 export const ordersRouter = Router();
 
@@ -293,12 +293,12 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
     const ordRef = { id: order.rows[0].id as string, order_number: order.rows[0].order_number as string };
     const cargoEmpaque = await cobrarEmpaqueAlDespachar(client, ordRef, accionistaId as string);
 
-    // Descuento FÍSICO de sacos: aunque el arroz salió del inventario del socio,
-    // los sacos usados se descuentan SIEMPRE del inventario de la matriz (CEYRO),
-    // dentro de esta misma transacción (convive con el cargo por empaque).
-    const sacosDescontados = await descontarSacosDelDespacho(client, ordRef);
+    // NOTA: los sacos físicos NO se descuentan aquí. El producto que se despacha
+    // ya salió empacado de Producción/Selección, donde se descontó el saco de la
+    // bodega de la matriz. En la venta solo se mueve el producto terminado (en
+    // crearVenta) y, si aplica, el CARGO financiero por empaque (arriba).
 
-    return { order_number: order.rows[0].order_number, sale, cargo_empaque: cargoEmpaque, sacos_matriz: sacosDescontados };
+    return { order_number: order.rows[0].order_number, sale, cargo_empaque: cargoEmpaque };
   });
 
   res.json(result);

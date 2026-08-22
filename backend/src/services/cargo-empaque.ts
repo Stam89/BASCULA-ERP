@@ -129,46 +129,33 @@ export async function cobrarEmpaqueAlDespachar(
 }
 
 /**
- * DESCUENTO FÍSICO DE SACOS AL DESPACHAR
+ * DESCUENTO FÍSICO DE SACOS (siempre de la bodega de la MATRIZ)
  *
- * Regla de negocio: SOLO la matriz (CEYRO) compra y posee sacos. Por eso, aunque
- * el arroz/subproductos salen del inventario del accionista que vende, los SACOS
- * usados en el empaque se descuentan SIEMPRE del inventario de la matriz.
+ * Regla de negocio: SOLO la matriz (CEYRO) compra y posee sacos. El consumo
+ * físico ocurre al EMPACAR el producto: al cerrar una Producción (pilado) o una
+ * Selección. NO en la venta (el producto ya sale empacado). `sack_inventory` es
+ * una tabla única (sin accionista_id) → ya es, por diseño, el inventario de la
+ * matriz, sin importar de qué accionista sea el lote.
  *
- * `sack_inventory` es una tabla única (sin accionista_id) → ya es, por diseño, el
- * inventario de la matriz. Se descuenta por cada presentación con peso conocido
- * (Saco 10/25/50/100 LB, etc.) tantas unidades como sacos lleve el pedido.
- *
- * Corre DENTRO de la transacción del despacho, junto al cargo por empaque. No
- * bloquea el despacho si falta stock (el saldo puede quedar negativo, señal de
- * que la matriz debe registrar la compra de sacos); tampoco falla si el tipo de
- * saco no está registrado (simplemente no descuenta esa línea).
+ * `sacosPorPeso` mapea peso_lb → cantidad de sacos. Descuenta de cada tipo
+ * "Saco N LB" y registra un movimiento SALIDA. Corre DENTRO de la transacción
+ * del cierre. No bloquea si falta stock (el saldo puede quedar negativo, señal
+ * de que la matriz debe comprar sacos) ni si el tipo no está registrado.
  */
-export async function descontarSacosDelDespacho(
+export async function descontarSacosPorPeso(
   client: PoolClient,
-  order: { id: string; order_number: string }
+  sacosPorPeso: Map<number, number>,
+  concepto: string
 ): Promise<Array<{ tipo: string; sacos: number; nuevo_stock: number }>> {
-  const grupos = await client.query(
-    `SELECT pp.weight_lb::int AS peso, SUM(i.quantity)::float AS sacos
-     FROM sales_order_items i
-     JOIN product_presentations pp ON pp.id = i.presentation_id
-     WHERE i.order_id = $1 AND pp.weight_lb IS NOT NULL
-     GROUP BY pp.weight_lb`,
-    [order.id]
-  );
-
   const resultado: Array<{ tipo: string; sacos: number; nuevo_stock: number }> = [];
-  for (const row of grupos.rows) {
-    const peso = Number(row.peso);
-    const sacos = Number(row.sacos);
-    if (sacos <= 0) continue;
+  for (const [peso, sacos] of sacosPorPeso) {
+    if (!(sacos > 0)) continue;
     const tipo = `Saco ${peso} LB`;
-    // SIEMPRE el inventario de la matriz (sack_inventory es único/global).
     const sack = await client.query(
       "SELECT id, stock FROM sack_inventory WHERE tipo = $1 FOR UPDATE",
       [tipo]
     );
-    if (!sack.rowCount) continue; // ese tipo de saco no está registrado: no se descuenta
+    if (!sack.rowCount) continue; // tipo no registrado: no se descuenta
     const nuevoStock = round2(Number(sack.rows[0].stock) - sacos);
     await client.query(
       "UPDATE sack_inventory SET stock = $2, updated_at = now() WHERE id = $1",
@@ -177,7 +164,7 @@ export async function descontarSacosDelDespacho(
     await client.query(
       `INSERT INTO sack_movements (sack_id, movement, cantidad, concepto)
        VALUES ($1, 'SALIDA', $2, $3)`,
-      [sack.rows[0].id, sacos, `Despacho pedido ${order.order_number} — sacos de la matriz`]
+      [sack.rows[0].id, sacos, concepto]
     );
     resultado.push({ tipo, sacos, nuevo_stock: nuevoStock });
   }

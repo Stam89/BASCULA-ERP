@@ -4,6 +4,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
+import { descontarSacosPorPeso } from "../../services/cargo-empaque.js";
 import { nextCode } from "../../utils/codes.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import type { PoolClient } from "pg";
@@ -269,6 +270,13 @@ selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
       );
     }
 
+    // Descuento FÍSICO de sacos de la MATRIZ por el reempaque de lo que regresó.
+    // Selección no captura la presentación, así que se asume el saco estándar de
+    // 100 LB (1 saco por QQ) para el producto NO rechazo. El saco sale SIEMPRE de
+    // la bodega de la matriz (sack_inventory es única), sin importar el accionista.
+    const qqEmpacado = round3(body.outputs.filter((o) => !o.is_reject).reduce((s, o) => s + o.quantity, 0));
+    const sacosMatriz = await descontarSacosPorPeso(tx, new Map([[100, Math.round(qqEmpacado)]]), `Empaque en selección (${label})`);
+
     const updated = await tx.query(
       `UPDATE selection_batches
        SET status = 'COMPLETED', output_qq = $2, merma_qq = $3,
@@ -277,7 +285,7 @@ selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
        RETURNING *`,
       [req.params.id, outputQq, mermaQq, body.finished_date ?? null]
     );
-    return updated.rows[0];
+    return { ...updated.rows[0], sacos_matriz: sacosMatriz };
   });
 
   res.json(result);
