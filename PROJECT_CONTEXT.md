@@ -10,11 +10,12 @@
 - BD local: `postgres://postgres:1989@localhost:5432/bascula_erp`. psql en `C:/Program Files/PostgreSQL/18/bin/psql.exe`.
 - Verificación: FE `node ./node_modules/typescript/bin/tsc --noEmit` + `vite build`; BE `npx tsc --noEmit` / `npm run build`.
 - **Se trabaja y despliega desde el checkout MAIN** (`C:\Users\...\BASCULA-ERP`), rama `main`, commit+push cada fase. El worktree `determined-proskuriakova-259d21` está sobre una rama vieja/divergente: **ignorarlo**.
+- **DESPLIEGUE DEL BACKEND (importante):** el proceso en :4000 corría como **`node dist/server.js`** (build COMPILADO, via `npm start`), **NO** `tsx watch`. ⇒ Los cambios de backend **no se reflejan solos**: hay que `cd backend && npm run build` (tsc→dist) y **reiniciar** el proceso (`Stop-Process -Id <pid> -Force` del PID de :4000; luego `cd backend && npm start` en background). Confirma el modo con `Get-CimInstance Win32_Process -Filter "ProcessId=<pid>"` → `CommandLine`. El frontend igual: `cd web-admin && npm run build` + hard refresh.
 
 ## 1. ESTADO ACTUAL
 ERP para piladora de arroz con arquitectura **multi-accionista**: MATRIZ **CEYRO** (dueña, id `00000000-0000-0000-0000-000000000001`) y SOCIOS **ROVINSON** y **STALYN**. Selector de accionista activo manda header `X-Accionista-Id`; permisos por accionista.
 - Funciona: Dashboard, Báscula, Secadoras, Producción, Inventario, Selección/envejecido, Ventas (pedido→despacho), Compras, Caja, Por Cobrar, Por Pagar, Liquidaciones, Fomentos, Agricultores, Nómina, Cuadrilla, Servicio Pilado, Estados Financieros, Costos Operativos, Reportes, Configuración.
-- Todo está **commiteado y pusheado a main** (último `169e8dd`). Typecheck y build en verde. Backend reiniciado y activo (el flujo de sacos por empaque se verificó en vivo). Los últimos cambios (Secadoras/Producción) son solo frontend → recargar (Ctrl+F5).
+- Todo está **commiteado y pusheado a main** (último `5fa170e`). Typecheck y build (FE+BE) en verde. **Backend reconstruido y reiniciado hoy** (corre el código nuevo desde `dist/`). Frontend `dist` reconstruido → recargar (Ctrl+F5).
 
 ## 2. CAMBIOS DE ESTA SESIÓN (2026-08-20)
 1. **Ventas** — Toma de pedido en split-view 2 columnas + "Cola de carga" para bodega (badge 🟡, texto grande de sacos). Solo UI; estado sigue `PENDING`/`DELIVERED`. `4a2d90a`.
@@ -41,6 +42,13 @@ Archivos tocados: `web-admin/src/App.tsx` (todo); `backend/src/routes/modules/{o
 18. **Secadoras (UI):** selector de Motor y "➕ Agregar al lote" como botones secundarios reales; tarjetas de Secadora con sombra/borde/padding. El bloque de combustible (Bombona/Cilindro/Diésel + totales) sale de la vista principal (modo crear) y vive en un MODAL que abre "✅ Finalizar secado del Motor X" → [Confirmar y Finalizar Secado] reusa los handlers (cerrarCombustibleMotor si hay medidores, si no finalizarSecadoMotor). Prorrateo intacto. `2f8a451`. Botones finales en fila/centrados con jerarquía: "Guardar informe" outline azul (secundario), "Finalizar secado" verde (principal). `ec1b8cc`, `50a2511`.
 19. **Producción (UI):** layout de 2 columnas (grid existente `productionModuleGrid` + `align-items:start`): IZQUIERDA (materia prima) = "Secadora en producción" arriba + "Últimos lotes" debajo; DERECHA (procesamiento) = "Reporte de pilado". Dentro del reporte se separó **👥 Personal de Turno** (Pilador/Estibador/Polvillo, fondo tenue) de **⚖️ Rendimiento de Pilado** (N.º tulas, Total QQ, presentaciones, subproductos). Botones: "Guardar Proceso" outline azul (secundario), "Finalizar Lote" verde (principal). Solo layout/estilos; sin tocar cálculos de tulas/quintales. Verificado en vivo. `169e8dd`.
 
+## 2c. CAMBIOS 2026-08-22 (esta sesión)
+20. **Inventario = Dashboard de Bodega (limpieza):** la tabla estática "Productos" salió del grid → botón **[⚙️ Catálogo de Productos]** (junto a Ajuste/Cuadre) que abre modal de solo-consulta. La sección **👥 Clientes** se movió de Inventario a **Ventas** (no pertenecía a bodega). `e5fdbaf`.
+21. **Inventario — pulido 2×2:** las 3 tablas de stock (cáscara/terminado/subproductos) perdieron la columna "Bodega" (redundante, ya categoriza el título → headers `["Producto","Cantidad"]`). Grid explícito de 2 columnas y la card **📦 Inventario de Sacos** ocupa el 4º cuadrante (balancea el hueco). "Otros stocks" (condicional) queda full-width debajo. `e80bba9`.
+22. **Clientes — datos fiscales para la Guía de Remisión:** `customers` YA tenía `identification`/`address` pero no se capturaban ni imprimían. Ahora: **Backend** — `GET /customers` devuelve `address`; nuevo **`PUT /customers/:id`** (edita nombre/tel/RUC/dirección/tipo; RUC duplicado→409); `GET /orders` (lista+detalle) exponen `customer_identification`/`customer_address` vía JOIN. **Frontend** — form de alta con campos RUC/Cédula + Dirección; lista pasó a tabla con RUC/CI, Dirección y botón **✏️ Editar**→modal (completa datos de clientes existentes); la Guía imprime RUC/CI y Dirección reales (antes líneas en blanco), conservando la nota del pedido como "Dirección de entrega". Verificado en vivo por API (GET trae address, PUT guarda y persiste). `5fa170e`.
+
+Archivos tocados hoy: `web-admin/src/App.tsx`; `backend/src/routes/modules/{customers,orders}.ts`.
+
 ## 3. REGLAS DE NEGOCIO (no romper)
 - **Toma de pedido NO mueve dinero ni inventario**; recién al **Despachar** sale stock + entra caja (Contado) o Cuenta por Cobrar (Crédito). Estados DB: `PENDING`/`DELIVERED`/`CANCELLED` (NO renombrar; hay CHECK). El pedido genera su CxC "(pendiente de despacho)" al tomarse; al despachar se salda o se enlaza, nunca se duplica.
 - **Cuentas espejo entre accionistas**: un servicio/cargo de la matriz a un socio crea CxC (CEYRO) + CxP (socio) enlazadas en tablas puente (`pilado_services`, `lot_transfers`, `matriz_service_charges`, `matriz_packaging_charges`). Un abono en una cara debe reflejarse en la otra + caja del otro socio → `backend/src/services/cuentas-vinculadas.ts` (`espejarAbonoEnContraparte`). Saldar una cuenta debe mover caja + espejar, no solo bajar saldo.
@@ -56,16 +64,17 @@ Archivos tocados: `web-admin/src/App.tsx` (todo); `backend/src/routes/modules/{o
 - ~~Tarifas de empaque en $0.00~~ **RESUELTO**: 10/25/50 = 0.20/0.22/0.27, editables en UI.
 - ~~Verificación en navegador~~ **HECHA 2026-08-21**: Ventas, Por Cobrar, Por Pagar, Inventario y filtro de KPIs verificados en vivo. (Nota: el panel del navegador debe estar VISIBLE para clics/capturas; si está oculto, usar `read_page`/`get_page_text`.)
 - `web-admin/src/App.tsx` es enorme (~12.7k líneas) — sin modularizar (deuda técnica, no urgente).
-- Guía de Remisión: RUC/dirección del cliente salen en blanco (los `customers` no guardan esos campos); si se requieren, habría que añadirlos al modelo de clientes.
+- ~~Guía de Remisión: RUC/dirección en blanco~~ **RESUELTO 2026-08-22**: `customers` ya se capturan/editan (form + modal ✏️ Editar en Ventas→Clientes) y la Guía los imprime. Falta que el usuario **cargue los datos reales** de sus clientes desde la UI (hoy solo existe NANCY VELEZ, sin RUC/dirección).
 - Sacos especiales sin peso ("Saco Negro (Polvillo)", "Saco Usado (Arrocillo)") NO se descuentan al despachar (el mapeo es por peso → "Saco N LB"). Si se requiere, definir mapeo presentación→tipo para esos.
+- `POST /customers/quick` crea con `customer_type='RETAIL'` (no NATURAL/EMPRESA); el tipo del front es una unión de 2 valores → al editar un cliente RETAIL el select cae a "Natural". Menor; alinear si molesta.
 - Nota de pruebas en vivo: la sesión del navegador in-app se limpia al reabrir el preview; para pruebas por API se puede generar un JWT admin con `signToken` (secreto en `backend/src/config/env.ts`) y llamar `http://localhost:4000/api/v1/...`. La extensión "Claude en Chrome" no está conectada (no se puede manejar el Chrome real del usuario).
 
 ## 5. PRÓXIMO PASO
-Sin tarea pendiente comprometida. Todo verificado en vivo (Secadoras UI; flujo de sacos por empaque probado con cierre real de selección). Preguntar al usuario la siguiente funcionalidad.
+Sin tarea pendiente comprometida (la de datos fiscales de clientes quedó terminada y verificada). Preguntar al usuario la siguiente funcionalidad. Candidatos anotados: (a) mapeo de sacos especiales sin peso al despachar; (b) seguir el pulido UI/UX en otra vista (Caja/Producción/Ventas). Nota: si se tocan endpoints, recordar **rebuild + reinicio del backend** (ver §0).
 
 ## 6. ARCHIVOS IMPORTANTES
 - `web-admin/src/App.tsx` — TODO el frontend (tabs por `activeTab === "..."`; Config por `configSubTab`; Caja por `cajaSubTab`).
-- `backend/src/routes/modules/`: `orders.ts` (pedido/despacho/guía), `receivable.ts` (CxC), `cash.ts` (payables/pagos), `equipment.ts` (mantenimiento + categorías), `settings.ts` (tarifas empaque + config), `cobros.ts` (matriz→socio), `sacks.ts` (inventario + compra múltiple de sacos).
+- `backend/src/routes/modules/`: `orders.ts` (pedido/despacho/guía; JOIN trae `customer_identification`/`customer_address`), `customers.ts` (CRUD clientes: GET lista con address, POST, `PUT /:id`, quick), `receivable.ts` (CxC), `cash.ts` (payables/pagos), `equipment.ts` (mantenimiento + categorías), `settings.ts` (tarifas empaque + config), `cobros.ts` (matriz→socio), `sacks.ts` (inventario + compra múltiple de sacos).
 - `backend/src/services/`: `cargo-empaque.ts`, `cuentas-vinculadas.ts` (espejo).
 - `backend/src/auth/require-auth.ts` — permisos por accionista (`WRITE_MODULES_BY_PREFIX`).
 - `backend/src/routes/modules/dashboard.ts` — `/dashboard/panel` (KPIs + `per_accionista` + `*_por_acc`); el filtro de las 7 tarjetas se hace en el frontend (`PanelIntegral`).
@@ -86,6 +95,8 @@ Sin tarea pendiente comprometida. Todo verificado en vivo (Secadoras UI; flujo d
 - Patrón de limpieza de vistas: mover config/herramientas de uso no diario a modales (botón secundario en la cabecera) o a Configuración; dejar la vista principal enfocada en su tarea central. Las tarifas globales viven en Configuración→Tarifas.
 - En Báscula se dejó a propósito la "Corrección puntual de accionista de materia prima" (no se pidió moverla). Si se quiere quitar, avisar.
 - Jerarquía de botones finales (patrón UI): acción secundaria = outline azul (`background:transparent; border:1.5px solid #2563eb; color:#2563eb`); acción principal/definitiva = verde sólido (`var(--c-success)`). En fila, centrados, con `max-width` (no 100%). Aplicado en Secadoras y Producción.
+- Datos fiscales de clientes (RUC/CI + dirección) se gestionan en **Ventas→Clientes** (alta + ✏️ Editar); la Guía los consume vía JOIN en `/orders` (no se duplican en el pedido). No se añadió pantalla nueva ni ruta separada.
+- **El backend se despliega compilado** (`npm run build` + reinicio del proceso), no con watch. Tras cualquier cambio de backend hay que rebuild+restart para que surta efecto (ver §0/§8).
 
 ## 8. ADVERTENCIAS (revisar dependencias antes de tocar)
 - `cuentas-vinculadas.ts` (espejo CxC↔CxP): tocarlo mal desincroniza libros y cajas entre socios.
@@ -95,6 +106,8 @@ Sin tarea pendiente comprometida. Todo verificado en vivo (Secadoras UI; flujo d
 - Estados de `sales_orders` (PENDING/DELIVERED/CANCELLED): CHECK constraint, no renombrar a español.
 - `equipment_maintenance`: guarda textos, no FKs a categorías — no convertir a FK sin migrar histórico.
 - Migraciones: siempre aditivas; nunca DROP/TRUNCATE de tablas con datos.
+- **Backend compilado:** un cambio en `backend/src` NO tiene efecto hasta `npm run build` + reiniciar el proceso de :4000. Si "no se ve el cambio", verifica primero que el proceso corre el `dist/` nuevo (compara hora de `dist/server.js` y reinicia). No asumir hot-reload.
+- `customers.identification` es UNIQUE: el `PUT /customers/:id` captura la violación 23505 y responde 409; no quitar ese try/catch sin manejar el duplicado.
 
 ---
 
