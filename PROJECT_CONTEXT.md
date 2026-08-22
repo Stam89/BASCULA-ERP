@@ -15,7 +15,7 @@
 ## 1. ESTADO ACTUAL
 ERP para piladora de arroz con arquitectura **multi-accionista**: MATRIZ **CEYRO** (dueña, id `00000000-0000-0000-0000-000000000001`) y SOCIOS **ROVINSON** y **STALYN**. Selector de accionista activo manda header `X-Accionista-Id`; permisos por accionista.
 - Funciona: Dashboard, Báscula, Secadoras, Producción, Inventario, Selección/envejecido, Ventas (pedido→despacho), Compras, Caja, Por Cobrar, Por Pagar, Liquidaciones, Fomentos, Agricultores, Nómina, Cuadrilla, Servicio Pilado, Estados Financieros, Costos Operativos, Reportes, Configuración.
-- Todo está **commiteado y pusheado a main** (último `5fa170e`). Typecheck y build (FE+BE) en verde. **Backend reconstruido y reiniciado hoy** (corre el código nuevo desde `dist/`). Frontend `dist` reconstruido → recargar (Ctrl+F5).
+- Todo está **commiteado y pusheado a main** (último `ff63562`). Typecheck y build (FE+BE) en verde. Backend corre el código compilado desde `dist/`. Los cambios de hoy son **solo frontend** (UI/copy) → `dist` reconstruido, basta **Ctrl+F5** (no requiere reiniciar backend).
 
 ## 2. CAMBIOS DE ESTA SESIÓN (2026-08-20)
 1. **Ventas** — Toma de pedido en split-view 2 columnas + "Cola de carga" para bodega (badge 🟡, texto grande de sacos). Solo UI; estado sigue `PENDING`/`DELIVERED`. `4a2d90a`.
@@ -47,7 +47,15 @@ Archivos tocados: `web-admin/src/App.tsx` (todo); `backend/src/routes/modules/{o
 21. **Inventario — pulido 2×2:** las 3 tablas de stock (cáscara/terminado/subproductos) perdieron la columna "Bodega" (redundante, ya categoriza el título → headers `["Producto","Cantidad"]`). Grid explícito de 2 columnas y la card **📦 Inventario de Sacos** ocupa el 4º cuadrante (balancea el hueco). "Otros stocks" (condicional) queda full-width debajo. `e80bba9`.
 22. **Clientes — datos fiscales para la Guía de Remisión:** `customers` YA tenía `identification`/`address` pero no se capturaban ni imprimían. Ahora: **Backend** — `GET /customers` devuelve `address`; nuevo **`PUT /customers/:id`** (edita nombre/tel/RUC/dirección/tipo; RUC duplicado→409); `GET /orders` (lista+detalle) exponen `customer_identification`/`customer_address` vía JOIN. **Frontend** — form de alta con campos RUC/Cédula + Dirección; lista pasó a tabla con RUC/CI, Dirección y botón **✏️ Editar**→modal (completa datos de clientes existentes); la Guía imprime RUC/CI y Dirección reales (antes líneas en blanco), conservando la nota del pedido como "Dirección de entrega". Verificado en vivo por API (GET trae address, PUT guarda y persiste). `5fa170e`.
 
-Archivos tocados hoy: `web-admin/src/App.tsx`; `backend/src/routes/modules/{customers,orders}.ts`.
+Archivos tocados (2c): `web-admin/src/App.tsx`; `backend/src/routes/modules/{customers,orders}.ts`.
+
+## 2d. CAMBIOS 2026-08-22 (sesión UI/POS — solo frontend)
+23. **Ventas (POS):** Paso 3 "Detalle del pedido" (carrito) **siempre visible** — antes se ocultaba vacío y el layout saltaba del Paso 2 al 4; ahora muestra empty state ("🛒 No hay productos en el pedido aún"). El bloque **👥 Clientes** (alta + tabla maestra) salió de la vista y pasó a un **modal**, abierto con nuevo botón **[👥 Gestionar]** en el Paso 1 (junto a **[+ Nuevo]**, que sigue siendo el alta rápida). El layout 2 columnas (izq pasos 1-2 / der pasos 3-4) ya existía. Sin tocar lógica del carrito/total/API. `ecb820b`.
+24. **Caja — menú interno a pills horizontales:** `.cajaSubNav` (styles.css) pasó de `flex-wrap:wrap` (se apilaba en varias filas → alto) a **una sola fila con `overflow-x:auto`**, botones tipo **pills** (`border-radius:999px`): activa **verde esmeralda `#059669`** + texto blanco; inactivas fondo tenue + texto gris (`--c-text-muted`). Tabla queda pegada debajo (compacto). Solo estilos; sin tocar estados/cálculos/guardado ni las tarjetas de saldos. `ecd22f2`, `718c85e`.
+25. **Por Cobrar — copy:** botón principal de tarjetas de deudores dice **"📄 Ver detalle y Cobrar"** (antes "Pagar"). Por Pagar conserva "Ver detalle y Pagar". Solo texto (1 línea). `ff63562`.
+
+Archivos tocados (2d): `web-admin/src/App.tsx`, `web-admin/src/styles.css`.
+Nota: el proyecto **NO usa Tailwind** (React+Vite con `styles.css` + estilos inline); las peticiones que mencionan Tailwind se implementan con esa convención.
 
 ## 3. REGLAS DE NEGOCIO (no romper)
 - **Toma de pedido NO mueve dinero ni inventario**; recién al **Despachar** sale stock + entra caja (Contado) o Cuenta por Cobrar (Crédito). Estados DB: `PENDING`/`DELIVERED`/`CANCELLED` (NO renombrar; hay CHECK). El pedido genera su CxC "(pendiente de despacho)" al tomarse; al despachar se salda o se enlaza, nunca se duplica.
@@ -70,7 +78,7 @@ Archivos tocados hoy: `web-admin/src/App.tsx`; `backend/src/routes/modules/{cust
 - Nota de pruebas en vivo: la sesión del navegador in-app se limpia al reabrir el preview; para pruebas por API se puede generar un JWT admin con `signToken` (secreto en `backend/src/config/env.ts`) y llamar `http://localhost:4000/api/v1/...`. La extensión "Claude en Chrome" no está conectada (no se puede manejar el Chrome real del usuario).
 
 ## 5. PRÓXIMO PASO
-Sin tarea pendiente comprometida (la de datos fiscales de clientes quedó terminada y verificada). Preguntar al usuario la siguiente funcionalidad. Candidatos anotados: (a) mapeo de sacos especiales sin peso al despachar; (b) seguir el pulido UI/UX en otra vista (Caja/Producción/Ventas). Nota: si se tocan endpoints, recordar **rebuild + reinicio del backend** (ver §0).
+Sin tarea pendiente comprometida. La sesión de hoy fue puro pulido UI/copy (Ventas POS, pills de Caja, copy de Por Cobrar), todo commiteado. Preguntar al usuario la siguiente funcionalidad. Candidatos anotados: (a) mapeo de **sacos especiales sin peso** al despachar (única pendiente funcional real); (b) seguir el pulido UI/UX en otra vista (Producción, Compras, Estados Financieros); (c) que el usuario **cargue datos fiscales reales** de sus clientes y pruebe la Guía end-to-end. Nota: si se tocan endpoints, recordar **rebuild + reinicio del backend** (ver §0); los cambios solo-frontend basta rebuild + Ctrl+F5.
 
 ## 6. ARCHIVOS IMPORTANTES
 - `web-admin/src/App.tsx` — TODO el frontend (tabs por `activeTab === "..."`; Config por `configSubTab`; Caja por `cajaSubTab`).
@@ -97,6 +105,9 @@ Sin tarea pendiente comprometida (la de datos fiscales de clientes quedó termin
 - Jerarquía de botones finales (patrón UI): acción secundaria = outline azul (`background:transparent; border:1.5px solid #2563eb; color:#2563eb`); acción principal/definitiva = verde sólido (`var(--c-success)`). En fila, centrados, con `max-width` (no 100%). Aplicado en Secadoras y Producción.
 - Datos fiscales de clientes (RUC/CI + dirección) se gestionan en **Ventas→Clientes** (alta + ✏️ Editar); la Guía los consume vía JOIN en `/orders` (no se duplican en el pedido). No se añadió pantalla nueva ni ruta separada.
 - **El backend se despliega compilado** (`npm run build` + reinicio del proceso), no con watch. Tras cualquier cambio de backend hay que rebuild+restart para que surta efecto (ver §0/§8).
+- **NO usar Tailwind**: el proyecto no lo tiene instalado. El estilo se hace con `web-admin/src/styles.css` (clases) + estilos inline en `App.tsx`. Si una petición pide "usar Tailwind", implementar el mismo resultado con esa convención (no introducir la dependencia).
+- Patrón de selector de subvistas tipo **pills horizontales** (una fila, `overflow-x:auto`, activa verde + blanco, inactiva tenue): aplicado en Caja (`.cajaSubNav`). Reutilizable si otra vista tiene un menú interno que ocupe mucho alto.
+- Copy por naturaleza del módulo: en cuentas por cobrar el CTA es "Cobrar"; en por pagar, "Pagar".
 
 ## 8. ADVERTENCIAS (revisar dependencias antes de tocar)
 - `cuentas-vinculadas.ts` (espejo CxC↔CxP): tocarlo mal desincroniza libros y cajas entre socios.
