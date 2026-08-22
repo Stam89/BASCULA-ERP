@@ -1434,30 +1434,39 @@ input[type="datetime-local"] { height: 36px; }
 .cajaSummaryCard.expense strong { color: #ef4444; }
 .cajaSummaryCard.balance strong { color: var(--accent); }
 
+/* Selector de subvistas de Caja: pills horizontales en UNA sola fila con
+   scroll horizontal (antes era flex-wrap y con muchas opciones se apilaba en
+   varias filas, comiendo espacio vertical y empujando la tabla hacia abajo). */
 .cajaSubNav {
   display: flex;
-  gap: 4px;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 0;
-  flex-wrap: wrap;
+  gap: 8px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  margin-bottom: 10px;
+  scrollbar-width: thin;
 }
+.cajaSubNav::-webkit-scrollbar { height: 6px; }
+.cajaSubNav::-webkit-scrollbar-thumb { background: var(--c-border); border-radius: 999px; }
 .cajaSubNav button {
-  background: none;
-  border: none;
-  border-radius: var(--r-sm) var(--r-sm) 0 0;
-  padding: 8px 14px;
+  flex: 0 0 auto;
+  background: var(--c-surface-3);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 7px 14px;
   cursor: pointer;
-  color: var(--c-text-muted);
+  color: var(--c-text);
   font-size: 12.5px;
   font-weight: 600;
   white-space: nowrap;
-  transition: background .15s, color .15s;
+  transition: background .15s, color .15s, border-color .15s;
 }
-.cajaSubNav button:hover { background: var(--c-surface-3); color: var(--c-text); }
+.cajaSubNav button:hover { background: var(--c-border); color: var(--c-text); }
 .cajaSubNav button.active {
   background: var(--c-brand);
   color: #ffffff;
-  font-weight: 600;
+  border-color: var(--c-brand);
+  font-weight: 700;
 }
 
 .cajaMovimientosPanel {
