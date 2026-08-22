@@ -7037,31 +7037,86 @@ export function App() {
               <KpiCard title="Total Subproductos" value={`${byproductStockRows.reduce((s, r) => s + Number(r.quantity), 0).toFixed(2)} QQ`} sub={`${byproductStockRows.length} ítem(s)`} color="#2563eb" />
             </div>
 
-            {/* Tablas de existencias (tarjetas) — grid balanceado que aprovecha el ancho */}
-            <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 14, alignItems: "start" }}>
+            {/* Existencias en 2×2: cáscara | terminado (arriba) · subproductos | sacos (abajo).
+                Las tablas ya están categorizadas por su título, así que la columna "Bodega"
+                se omite por redundante. */}
+            <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 14, alignItems: "start" }}>
               <DataList
                 title="Stock cáscara"
-                headers={["Producto", "Bodega", "Cantidad"]}
-                rows={rawStockRows.map((row) => [row.product_name, row.warehouse_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
+                headers={["Producto", "Cantidad"]}
+                rows={rawStockRows.map((row) => [row.product_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
               />
               <DataList
                 title="Stock producto terminado"
-                headers={["Producto", "Bodega", "Cantidad"]}
-                rows={finishedStockRows.map((row) => [row.product_name, row.warehouse_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
+                headers={["Producto", "Cantidad"]}
+                rows={finishedStockRows.map((row) => [row.product_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
               />
               <DataList
                 title="Stock subproductos"
-                headers={["Producto", "Bodega", "Cantidad"]}
-                rows={byproductStockRows.map((row) => [row.product_name, row.warehouse_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
+                headers={["Producto", "Cantidad"]}
+                rows={byproductStockRows.map((row) => [row.product_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
               />
-              {otherStockRows.length > 0 && (
+
+              {/* ── Inventario de Sacos (cuarto cuadrante, balancea el grid) ── */}
+              <section style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
+                <h3 style={{ marginTop: 0, marginBottom: 14 }}>📦 Inventario de Sacos</h3>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 8, marginBottom: 14 }}>
+                  {sackInventory.map(s => (
+                    <div key={s.id} style={{
+                      background: Number(s.stock) <= 10 ? "#fef2f2" : "#f0fdf4",
+                      border: `1px solid ${Number(s.stock) <= 10 ? "#fecaca" : "#bbf7d0"}`,
+                      borderRadius: 8, padding: "10px", textAlign: "center"
+                    }}>
+                      <div style={{ fontSize: 11, color: "var(--c-muted)", fontWeight: 600, marginBottom: 4 }}>{s.tipo}</div>
+                      <div style={{ fontSize: 22, fontWeight: 800, color: Number(s.stock) <= 10 ? "#dc2626" : "#16a34a" }}>
+                        {Number(s.stock)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <form onSubmit={submitSackMovement} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10, alignItems: "end", background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
+                  <label style={{ fontSize: 12, fontWeight: 600 }}>Tipo
+                    <select required value={sackMovForm.sack_id} onChange={e => setSackMovForm(p => ({ ...p, sack_id: e.target.value }))}
+                      style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}>
+                      <option value="">— Seleccionar —</option>
+                      {sackInventory.map(s => (<option key={s.id} value={s.id}>{s.tipo} ({Number(s.stock)})</option>))}
+                    </select>
+                  </label>
+                  <label style={{ fontSize: 12, fontWeight: 600 }}>Movimiento
+                    <select value={sackMovForm.movement} onChange={e => setSackMovForm(p => ({ ...p, movement: e.target.value as "ENTRADA"|"SALIDA" }))}
+                      style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}>
+                      <option value="ENTRADA">⬇ ENTRADA</option>
+                      <option value="SALIDA">⬆ SALIDA</option>
+                    </select>
+                  </label>
+                  <label style={{ fontSize: 12, fontWeight: 600 }}>Cantidad
+                    <input required type="number" min="1" step="1" value={sackMovForm.cantidad}
+                      onChange={e => setSackMovForm(p => ({ ...p, cantidad: e.target.value }))}
+                      style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
+                  </label>
+                  <label style={{ fontSize: 12, fontWeight: 600 }}>Concepto
+                    <input value={sackMovForm.concepto}
+                      onChange={e => setSackMovForm(p => ({ ...p, concepto: e.target.value }))}
+                      style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}
+                      placeholder="Compra / Uso..." />
+                  </label>
+                  <button type="submit" style={{ padding: "7px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontWeight: 700,
+                    background: sackMovForm.movement === "ENTRADA" ? "var(--c-brand)" : "#dc2626", color: "#fff", fontSize: 12 }}>
+                    Registrar
+                  </button>
+                </form>
+              </section>
+            </div>
+
+            {otherStockRows.length > 0 && (
+              <div style={{ gridColumn: "1 / -1" }}>
                 <DataList
                   title="Otros stocks"
-                  headers={["Producto", "Bodega", "Cantidad"]}
-                  rows={otherStockRows.map((row) => [row.product_name, row.warehouse_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
+                  headers={["Producto", "Cantidad"]}
+                  rows={otherStockRows.map((row) => [row.product_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
                 />
-              )}
-            </div>
+              </div>
+            )}
 
             <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
               <button type="button" className="btnSecondary" onClick={() => loadNegativeStock().catch((e) => addToast(e.message, "error"))}>
@@ -7266,56 +7321,6 @@ export function App() {
                 </div>
               </div>
             )}
-
-            {/* ── Inventario de Sacos ─────────────────────────────────── */}
-            <section style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
-              <h3 style={{ marginTop: 0, marginBottom: 14 }}>📦 Inventario de Sacos</h3>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 8, marginBottom: 14 }}>
-                {sackInventory.map(s => (
-                  <div key={s.id} style={{
-                    background: Number(s.stock) <= 10 ? "#fef2f2" : "#f0fdf4",
-                    border: `1px solid ${Number(s.stock) <= 10 ? "#fecaca" : "#bbf7d0"}`,
-                    borderRadius: 8, padding: "10px", textAlign: "center"
-                  }}>
-                    <div style={{ fontSize: 11, color: "var(--c-muted)", fontWeight: 600, marginBottom: 4 }}>{s.tipo}</div>
-                    <div style={{ fontSize: 22, fontWeight: 800, color: Number(s.stock) <= 10 ? "#dc2626" : "#16a34a" }}>
-                      {Number(s.stock)}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <form onSubmit={submitSackMovement} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr auto", gap: 10, alignItems: "end", background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
-                <label style={{ fontSize: 12, fontWeight: 600 }}>Tipo
-                  <select required value={sackMovForm.sack_id} onChange={e => setSackMovForm(p => ({ ...p, sack_id: e.target.value }))}
-                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}>
-                    <option value="">— Seleccionar —</option>
-                    {sackInventory.map(s => (<option key={s.id} value={s.id}>{s.tipo} ({Number(s.stock)})</option>))}
-                  </select>
-                </label>
-                <label style={{ fontSize: 12, fontWeight: 600 }}>Movimiento
-                  <select value={sackMovForm.movement} onChange={e => setSackMovForm(p => ({ ...p, movement: e.target.value as "ENTRADA"|"SALIDA" }))}
-                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}>
-                    <option value="ENTRADA">⬇ ENTRADA</option>
-                    <option value="SALIDA">⬆ SALIDA</option>
-                  </select>
-                </label>
-                <label style={{ fontSize: 12, fontWeight: 600 }}>Cantidad
-                  <input required type="number" min="1" step="1" value={sackMovForm.cantidad}
-                    onChange={e => setSackMovForm(p => ({ ...p, cantidad: e.target.value }))}
-                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
-                </label>
-                <label style={{ fontSize: 12, fontWeight: 600 }}>Concepto
-                  <input value={sackMovForm.concepto}
-                    onChange={e => setSackMovForm(p => ({ ...p, concepto: e.target.value }))}
-                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}
-                    placeholder="Compra / Uso..." />
-                </label>
-                <button type="submit" style={{ padding: "7px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontWeight: 700,
-                  background: sackMovForm.movement === "ENTRADA" ? "var(--c-brand)" : "#dc2626", color: "#fff", fontSize: 12 }}>
-                  Registrar
-                </button>
-              </form>
-            </section>
           </section>
         )}
 
