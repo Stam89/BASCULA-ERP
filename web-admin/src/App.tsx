@@ -1167,6 +1167,9 @@ export function App() {
   const [panelMonth, setPanelMonth] = useState(new Date().toISOString().slice(0, 7));
   const [dashView, setDashView] = useState<"panel" | "resumen">("panel");
   const [farmers, setFarmers] = useState<Farmer[]>([]);
+  // Directorio de agricultores: búsqueda por nombre/RUC y modal de edición.
+  const [farmerSearch, setFarmerSearch] = useState("");
+  const [editFarmer, setEditFarmer] = useState<Farmer | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [lots, setLots] = useState<Lot[]>([]);
@@ -4337,6 +4340,21 @@ export function App() {
     await refresh();
   }
 
+  // Guarda los cambios del agricultor en edición (cédula, teléfono, accionista…).
+  async function submitEditFarmer() {
+    if (!editFarmer) return;
+    if (!editFarmer.full_name.trim()) { addToast("El nombre no puede quedar vacío", "error"); return; }
+    await apiPut(`/farmers/${editFarmer.id}`, {
+      full_name: editFarmer.full_name.trim(),
+      identification: editFarmer.identification || undefined,
+      phone: editFarmer.phone || undefined,
+      accionista_id: editFarmer.accionista_id || null
+    });
+    setEditFarmer(null);
+    addToast("Agricultor actualizado ✓", "success");
+    await refresh();
+  }
+
   async function changeLotAccionista(lotId: string, accionistaId: string) {
     if (!accionistaId) return;
     const lot = lots.find((item) => item.id === lotId);
@@ -7022,33 +7040,105 @@ export function App() {
               <button className="primary">Guardar</button>
             </form>
             <div className="tablePanel">
-              <h2>Agricultores registrados</h2>
-              {farmers.length === 0 ? (
-                <div className="emptyState"><div className="emptyIcon">👨‍🌾</div><p>Sin agricultores registrados</p></div>
-              ) : (
-                <table className="cajaTable" style={{ marginTop: 10 }}>
-                  <thead>
-                    <tr>
-                      <th>Nombre</th>
-                      <th>Cédula / RUC</th>
-                      <th>Teléfono</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {farmers.map((f) => (
-                      <tr key={f.id}>
-                        <td>{f.full_name}</td>
-                        <td>{f.identification ?? "—"}</td>
-                        <td>{f.phone ?? "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-              <p className="muted" style={{ marginTop: 10 }}>
-                Los agricultores son compartidos: cualquier accionista puede comprarles. Lo que separa la operación es el accionista de cada compra, no el del agricultor.
-              </p>
+              {(() => {
+                const q = farmerSearch.trim().toLowerCase();
+                const filtered = q
+                  ? farmers.filter((f) => (f.full_name ?? "").toLowerCase().includes(q) || (f.identification ?? "").toLowerCase().includes(q))
+                  : farmers;
+                // Header fijo al hacer scroll: fondo blanco + sombra sutil.
+                const thSticky: React.CSSProperties = { position: "sticky", top: 0, background: "#fff", boxShadow: "0 1px 0 rgba(0,0,0,0.10)", zIndex: 1 };
+                return (
+                  <>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
+                      <h2 style={{ margin: 0 }}>Agricultores registrados</h2>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "var(--c-text-muted)", background: "var(--c-surface-3)", borderRadius: 999, padding: "3px 11px", whiteSpace: "nowrap" }}>
+                        {filtered.length}{q ? ` / ${farmers.length}` : ""} agricultor{farmers.length === 1 ? "" : "es"}
+                      </span>
+                    </div>
+                    <input type="search" value={farmerSearch} onChange={(e) => setFarmerSearch(e.target.value)}
+                      placeholder="🔍 Buscar agricultor por nombre o RUC..."
+                      style={{ width: "100%", padding: "8px 12px", borderRadius: 8, border: "1px solid #d1d5db", marginBottom: 10, fontSize: 13 }} />
+                    {farmers.length === 0 ? (
+                      <div className="emptyState"><div className="emptyIcon">👨‍🌾</div><p>Sin agricultores registrados</p></div>
+                    ) : filtered.length === 0 ? (
+                      <p className="muted" style={{ textAlign: "center", padding: 16 }}>Sin resultados para “{farmerSearch}”.</p>
+                    ) : (
+                      <div style={{ maxHeight: 600, overflowY: "auto", border: "1px solid var(--c-border)", borderRadius: 8 }}>
+                        <table className="cajaTable" style={{ margin: 0 }}>
+                          <thead>
+                            <tr>
+                              <th style={thSticky}>Nombre</th>
+                              <th style={thSticky}>Cédula / RUC</th>
+                              <th style={thSticky}>Teléfono</th>
+                              <th style={{ ...thSticky, textAlign: "right" }}>Acciones</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filtered.map((f) => (
+                              <tr key={f.id}>
+                                <td>{f.full_name}</td>
+                                <td>{f.identification ?? "—"}</td>
+                                <td>{f.phone ?? "—"}</td>
+                                <td style={{ textAlign: "right" }}>
+                                  <button type="button" className="btnSecondary" style={{ padding: "4px 10px", fontSize: 12 }}
+                                    onClick={() => setEditFarmer({ ...f })}>✏️ Editar</button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                    <p className="muted" style={{ marginTop: 10 }}>
+                      Los agricultores son compartidos: cualquier accionista puede comprarles. Lo que separa la operación es el accionista de cada compra, no el del agricultor.
+                    </p>
+                  </>
+                );
+              })()}
             </div>
+
+            {/* Modal: editar agricultor (cédula, teléfono, accionista asignado). */}
+            {editFarmer && (
+              <div className="modalOverlay" onClick={() => setEditFarmer(null)}>
+                <form className="modalCard formPanel" onClick={(e) => e.stopPropagation()}
+                  onSubmit={(e) => { e.preventDefault(); submitEditFarmer().catch((err) => addToast(err.message, "error")); }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                    <h3 style={{ marginTop: 0 }}>✏️ Editar agricultor</h3>
+                    <button type="button" onClick={() => setEditFarmer(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--c-muted)" }}>✕</button>
+                  </div>
+                  <label>
+                    <span>Nombre completo *</span>
+                    <input required value={editFarmer.full_name}
+                      onChange={(e) => setEditFarmer({ ...editFarmer, full_name: e.target.value })} />
+                  </label>
+                  <label>
+                    <span>Cédula / RUC</span>
+                    <input value={editFarmer.identification ?? ""}
+                      onChange={(e) => setEditFarmer({ ...editFarmer, identification: e.target.value })}
+                      placeholder="0999999999001" />
+                  </label>
+                  <label>
+                    <span>Teléfono</span>
+                    <input value={editFarmer.phone ?? ""}
+                      onChange={(e) => setEditFarmer({ ...editFarmer, phone: e.target.value })} />
+                  </label>
+                  {accionistas.length > 0 && (
+                    <label>
+                      <span>Accionista asignado</span>
+                      <select value={editFarmer.accionista_id ?? ""}
+                        onChange={(e) => setEditFarmer({ ...editFarmer, accionista_id: e.target.value || null })}>
+                        <option value="">— Sin asignar —</option>
+                        {accionistas.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                      </select>
+                    </label>
+                  )}
+                  <div className="buttonRow">
+                    <button type="submit" className="primary">Guardar cambios</button>
+                    <button type="button" onClick={() => setEditFarmer(null)}>Cancelar</button>
+                  </div>
+                </form>
+              </div>
+            )}
           </section>
         )}
 
