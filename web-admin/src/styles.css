@@ -1439,6 +1439,7 @@ input[type="datetime-local"] { height: 36px; }
    varias filas, comiendo espacio vertical y empujando la tabla hacia abajo). */
 .cajaSubNav {
   display: flex;
+  flex-direction: row; /* anula el `nav { flex-direction: column }` global (menú lateral) */
   gap: 8px;
   flex-wrap: nowrap;
   overflow-x: auto;
@@ -1450,6 +1451,7 @@ input[type="datetime-local"] { height: 36px; }
 .cajaSubNav::-webkit-scrollbar-thumb { background: var(--c-border); border-radius: 999px; }
 .cajaSubNav button {
   flex: 0 0 auto;
+  width: auto; /* anula el `nav button { width: 100% }` global que las estiraba a todo el ancho */
   background: var(--c-surface-3);
   border: 1px solid transparent;
   border-radius: 999px;
