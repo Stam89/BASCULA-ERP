@@ -9485,7 +9485,7 @@ export function App() {
                   </label>
 
                   <div className="liqLinesHeader">
-                    <span>Ingreso de materia prima</span><span>QQ</span><span>Precio / QQ</span>
+                    <span>Ingreso de materia prima</span><span>QQ</span><span>Precio / QQ</span><span aria-hidden="true" />
                   </div>
 
                   {liqLines.map((line, i) => {
@@ -9607,18 +9607,40 @@ export function App() {
               // Sin agricultor seleccionado, muestra todos los pendientes.
               const filtrado = liqFarmerId ? farmerLots : pendingEntries;
               const nombreFiltro = liqFarmerId ? (farmers.find((f) => f.id === liqFarmerId)?.full_name ?? "") : "";
+              const th = { whiteSpace: "nowrap" as const, padding: "8px 12px" };
+              const td = { padding: "8px 12px" };
               return (
-                <DataList
-                  title={nombreFiltro ? `Materia prima por liquidar — ${nombreFiltro}` : "Materia prima por liquidar"}
-                  headers={["Ingreso", "Tipo cáscara", "Agricultor", "Lote", "QQ"]}
-                  rows={filtrado.map((e) => [
-                    entryLabel(e),
-                    e.rice_type ?? "—",
-                    e.farmer_name ?? "—",
-                    e.lot_code ?? "sin lote aún",
-                    `${Number(e.quintals ?? 0).toFixed(2)} QQ`
-                  ])}
-                />
+                <div className="tablePanel">
+                  <h2>{nombreFiltro ? `Materia prima por liquidar — ${nombreFiltro}` : "Materia prima por liquidar"}</h2>
+                  {/* overflow-x:auto → en pantallas angostas la tabla hace scroll
+                      horizontal en vez de deformarse; los <th> van en una sola línea. */}
+                  <div style={{ overflowX: "auto" }}>
+                    <table className="cajaTable" style={{ minWidth: 540 }}>
+                      <thead>
+                        <tr>
+                          <th style={{ ...th, textAlign: "left" }}>Ingreso</th>
+                          <th style={{ ...th, textAlign: "left" }}>Tipo cáscara</th>
+                          <th style={{ ...th, textAlign: "left" }}>Agricultor</th>
+                          <th style={{ ...th, textAlign: "left" }}>Lote</th>
+                          <th style={{ ...th, textAlign: "right" }}>QQ</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filtrado.length === 0 ? (
+                          <tr><td colSpan={5} className="muted" style={{ padding: 12, textAlign: "center" }}>Sin materia prima pendiente{nombreFiltro ? " para este agricultor" : ""}.</td></tr>
+                        ) : filtrado.map((e, i) => (
+                          <tr key={i}>
+                            <td style={td}>{entryLabel(e)}</td>
+                            <td style={td}>{e.rice_type ?? "—"}</td>
+                            <td style={td}>{e.farmer_name ?? "—"}</td>
+                            <td style={td}>{e.lot_code ?? "sin lote aún"}</td>
+                            <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>{Number(e.quintals ?? 0).toFixed(2)} QQ</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               );
             })()}
 

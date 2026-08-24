@@ -238,8 +238,9 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 /* ── Liquidación multi-lote ───────────────────────────────────── */
 .liqLinesHeader {
   display: grid;
-  grid-template-columns: 1fr 80px 100px;
-  gap: 6px;
+  /* 12 columnas conceptuales: Ingreso 6 · QQ 3 · Precio 3 (+ hueco del botón ×). */
+  grid-template-columns: 6fr 3fr 3fr 28px;
+  gap: 8px;
   padding: 0 2px 4px;
   font-size: 11px;
   font-weight: 600;
@@ -250,8 +251,9 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 
 .liqLine {
   display: grid;
-  grid-template-columns: 1fr 80px 100px auto;
-  gap: 6px;
+  /* Alinea con .liqLinesHeader: Ingreso 6 · QQ 3 · Precio 3 · botón × (28px). */
+  grid-template-columns: 6fr 3fr 3fr 28px;
+  gap: 8px;
   align-items: center;
   margin-bottom: 6px;
 }
