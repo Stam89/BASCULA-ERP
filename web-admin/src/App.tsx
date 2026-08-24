@@ -12791,6 +12791,21 @@ function PanelIntegral({ data, month, onMonth, activeAccionistaId, accionistas }
       <div className="muted" style={{ fontSize: 11 }}>{sub}</div>
     </div>
   );
+  // Chip secundario (métrica de apoyo) dentro de una tarjeta KPI destacada.
+  const chip = (label: string, value: string, color: string) => (
+    <span style={{ display: "inline-flex", gap: 5, alignItems: "baseline", background: `${color}14`, color, border: `1px solid ${color}33`, borderRadius: 999, padding: "3px 10px", fontSize: 11, fontWeight: 600 }}>
+      <span style={{ opacity: 0.85 }}>{label}</span><strong>{value}</strong>
+    </span>
+  );
+  // Tarjeta KPI destacada con valor grande + chips secundarios.
+  const bigCard = (title: string, value: string, sub: string, color: string, chips: React.ReactNode) => (
+    <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 14, padding: "16px 18px", borderTop: `4px solid ${color}`, display: "flex", flexDirection: "column", gap: 7, minWidth: 0 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color, letterSpacing: 0.4 }}>{title}</div>
+      <div style={{ fontSize: 26, fontWeight: 800, lineHeight: 1.1 }}>{value}</div>
+      <div className="muted" style={{ fontSize: 11 }}>{sub}</div>
+      {chips ? <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 2 }}>{chips}</div> : null}
+    </div>
+  );
   const tbl = (title: string, color: string, headers: string[], rows: Array<Array<string | number>>, totals: Array<string | number>) => (
     <div style={{ flex: "1 1 300px", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden" }}>
       <div style={{ background: color, color: "#fff", fontWeight: 700, padding: "8px 14px", fontSize: 13 }}>{title}</div>
@@ -12821,18 +12836,22 @@ function PanelIntegral({ data, month, onMonth, activeAccionistaId, accionistas }
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-        {card("TOTAL COMPRAS DEL MES", money(kView.compras), `${comprasQqView.toFixed(2)} quintales`, "#16a34a")}
-        {card("TOTAL VENTAS DEL MES", money(kView.ventas), `${ventasQqView.toFixed(2)} quintales`, "#2563eb")}
-        {card("UTILIDAD DEL MES", money(kView.utilidad), `${kView.margen}% sobre ventas`, "#f59e0b")}
-        {card("TOTAL EN BANCOS/CAJA", money(kView.bancos), "disponible", "#0d9488")}
-        {card("SALDO GENERAL", money(kView.saldo_general), "bancos + por cobrar − por pagar", "#7c3aed")}
-        {serviciosView && card("INGRESOS POR SERVICIO (SOCIOS)", money(serviciosView.facturado), `pendiente ${money(serviciosView.pendiente)} · ${serviciosView.cnt} serv.`, "#0891b2")}
-        {costoView && card("COSTO OPERATIVO (CEYRO)", money(costoView.total), costoView.qq > 0 ? `$${costoView.por_qq.toFixed(2)}/QQ · ${costoView.qq.toFixed(0)} QQ` : "sin corridas del mes", "#b91c1c")}
+      {/* 4 tarjetas destacadas. Las métricas de apoyo (Utilidad, Ingresos por
+          Servicio, Costo Operativo) van como chips dentro de la tarjeta afín. */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 12 }}>
+        {bigCard("COMPRAS DEL MES", money(kView.compras), `${comprasQqView.toFixed(2)} quintales`, "#16a34a",
+          costoView ? chip("Costo op.", costoView.qq > 0 ? `${money(costoView.total)} · $${costoView.por_qq.toFixed(2)}/QQ` : money(costoView.total), "#b91c1c") : null)}
+        {bigCard("VENTAS DEL MES", money(kView.ventas), `${ventasQqView.toFixed(2)} quintales`, "#2563eb",
+          <>
+            {chip("Utilidad", `${money(kView.utilidad)} · ${kView.margen}%`, "#f59e0b")}
+            {serviciosView ? chip("Ing. servicio", money(serviciosView.facturado), "#0891b2") : null}
+          </>)}
+        {bigCard("TOTAL EN BANCOS/CAJA", money(kView.bancos), "disponible", "#0d9488", null)}
+        {bigCard("SALDO GENERAL", money(kView.saldo_general), "bancos + por cobrar − por pagar", "#7c3aed", null)}
       </div>
 
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ flex: "2 1 500px", minWidth: 0, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden" }}>
+      {/* Inventario por accionista: fila propia a todo el ancho (muchas columnas). */}
+      <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden" }}>
           <div style={{ background: "#16a34a", color: "#fff", fontWeight: 700, padding: "8px 14px", fontSize: 13 }}>INVENTARIO POR ACCIONISTA</div>
           <div style={{ overflowX: "auto" }}>
             <table className="cajaTable" style={{ margin: 0, fontSize: 11, whiteSpace: "nowrap" }}>
@@ -12878,7 +12897,10 @@ function PanelIntegral({ data, month, onMonth, activeAccionistaId, accionistas }
               </tbody>
             </table>
           </div>
-        </div>
+      </div>
+
+      {/* Ventas y Compras por accionista, lado a lado (2 columnas en desktop). */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 12 }}>
         {tbl("VENTAS POR ACCIONISTA", "#2563eb", ["Accionista", "Total ventas", "QQ", "Facturas"],
           acc.map((a) => [a.name, money(a.ventas_total), a.ventas_qq.toFixed(2), a.ventas_cnt]),
           ["TOTAL", money(k.ventas), data.totales.ventas_qq.toFixed(2), data.totales.ventas_cnt])}
@@ -12896,23 +12918,29 @@ function PanelIntegral({ data, month, onMonth, activeAccionistaId, accionistas }
           </div>
           <ComprasVentasChart serie={data.serie} />
         </div>
-        <div style={{ flex: "1 1 220px", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 14 }}>
-          <h3 style={{ marginTop: 0, textAlign: "center", color: "#0d9488" }}>Bancos / Caja</h3>
-          {acc.map((a) => (
-            <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 4px", borderBottom: "1px solid #f1f5f9" }}>
-              <span>🏦 {a.name}</span><strong>{money(a.banco_balance)}</strong>
-            </div>
-          ))}
-          <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 4px", fontWeight: 800, color: "#0d9488" }}>
-            <span>TOTAL</span><span>{money(k.bancos)}</span>
-          </div>
-        </div>
         <div style={{ flex: "1 1 260px", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 14 }}>
           <h3 style={{ marginTop: 0, textAlign: "center", color: "#1e3a8a" }}>Distribución de inventario</h3>
           <InventarioDonut data={acc.map((a) => ({ name: a.name, value: a.inventario_qq }))} />
         </div>
       </div>
 
+      {/* ── Resumen ejecutivo: bancos por socio + cuentas por cobrar/pagar +
+             alertas, en un panel limpio y bien delimitado. ── */}
+      <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 14, padding: 16, display: "grid", gap: 12 }}>
+        <h3 style={{ margin: 0, color: "#1e3a8a" }}>📋 Resumen ejecutivo</h3>
+        <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 12, padding: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#0d9488", marginBottom: 8, letterSpacing: 0.3 }}>🏦 BANCOS / CAJA POR SOCIO</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 8 }}>
+            {acc.map((a) => (
+              <div key={a.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "7px 11px", background: "#fff", border: "1px solid #eef2f7", borderRadius: 8 }}>
+                <span>{a.name}</span><strong>{money(a.banco_balance)}</strong>
+              </div>
+            ))}
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "7px 11px", fontWeight: 800, color: "#0d9488", background: "#ecfdf5", border: "1px solid #d1fae5", borderRadius: 8 }}>
+              <span>TOTAL</span><span>{money(k.bancos)}</span>
+            </div>
+          </div>
+        </div>
       {(() => {
         // Bloque inferior filtrado por el accionista activo (reactivo al dropdown).
         const acc = accionistas.find((a) => a.id === activeAccionistaId);
@@ -12947,6 +12975,7 @@ function PanelIntegral({ data, month, onMonth, activeAccionistaId, accionistas }
         </>
         );
       })()}
+      </div>
       <p className="muted" style={{ fontSize: 11, textAlign: "center" }}>Mes: {monthNames[mm - 1]} {yy} · Los valores se actualizan según los registros de cada módulo.</p>
     </section>
   );
