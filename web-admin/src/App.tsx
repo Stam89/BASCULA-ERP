@@ -1295,7 +1295,7 @@ export function App() {
     open: false, row: null, payments: [], loading: false
   });
   const [secadorSugg, setSecadorSugg] = useState<Array<{ worker_name: string; work_date: string; tunnels: number; suggested_amount: number; already_generated: boolean }> | null>(null);
-  const [nominaView, setNominaView] = useState<"semana" | "historial">("semana");
+  const [nominaView, setNominaView] = useState<"planta" | "cuadrilla" | "historial">("planta");
   const nomina60Ago = (() => { const d = new Date(); d.setDate(d.getDate() - 60); return d.toISOString().slice(0, 10); })();
   const [histFrom, setHistFrom] = useState(nomina60Ago);
   const [histTo, setHistTo] = useState(nominaToday);
@@ -11103,12 +11103,16 @@ export function App() {
         {activeTab === "Nomina" && (
           <section className="cuentasLayout">
             <nav className="cajaSubNav">
-              <button type="button" className={nominaView === "semana" ? "active" : ""} onClick={() => setNominaView("semana")}>📅 Semana</button>
-              <button type="button" className={nominaView === "historial" ? "active" : ""} onClick={() => { setNominaView("historial"); loadNominaHistory().catch(() => undefined); }}>📜 Historial</button>
+              <button type="button" className={nominaView === "planta" ? "active" : ""} onClick={() => setNominaView("planta")}>🏭 Planta y Secadoras</button>
+              <button type="button" className={nominaView === "cuadrilla" ? "active" : ""} onClick={() => { setNominaView("cuadrilla"); refreshCuadrilla().catch(() => undefined); }}>👷‍♂️ Cuadrilla de Carga/Descarga</button>
+              <button type="button" className={nominaView === "historial" ? "active" : ""} onClick={() => { setNominaView("historial"); loadNominaHistory().catch(() => undefined); }}>📜 Historial de Pagos</button>
             </nav>
 
-            {nominaView === "semana" && (<>
-            <div className="reportToolbar">
+            {nominaView === "planta" && (
+            <div className="panelGrid" style={{ alignItems: "start" }}>
+            {/* Col 1: Nómina Pilador y Estibador (filtro de fechas + lista de pagos) */}
+            <div className="tablePanel">
+            <div className="reportToolbar" style={{ marginBottom: 10 }}>
               <div>
                 <h2 style={{ marginBottom: 2 }}>👷 Nómina · Pilador y Estibador</h2>
                 <p className="muted" style={{ margin: 0 }}>Pagos calculados automáticamente de lo que sale de Producción, según las tarifas.</p>
@@ -11133,8 +11137,7 @@ export function App() {
             {nominaRows.length === 0 ? (
               <div className="emptyState"><div className="emptyIcon">👷</div><p>No hay pagos de trabajadores en el período. Se generan al cerrar cada pilada en Producción.</p></div>
             ) : (
-              <div className="tablePanel">
-                <div style={{ overflowX: "auto" }}>
+              <div style={{ overflowX: "auto" }}>
                   <table className="cajaTable">
                     <thead>
                       <tr>
@@ -11185,12 +11188,11 @@ export function App() {
                     </tfoot>
                   </table>
                 </div>
-              </div>
             )}
+            </div>
 
-            {/* ── Secador (conectado a Secadora) ── */}
-            <div className="panelGrid">
-              <div className="tablePanel">
+            {/* Col 2: Secador / Guardianía (detección desde Secadora) */}
+            <div className="tablePanel">
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                   <div>
                     <h2 style={{ marginBottom: 2 }}>🌡️ Secador · desde Secadora</h2>
@@ -11227,10 +11229,84 @@ export function App() {
                 {secadorSugg && secadorSugg.length === 0 && (
                   <div className="emptyState" style={{ padding: "22px 20px" }}><p>No hay días de secado en el período. Registra el secado en la pestaña Secadoras (con el nombre del secador).</p></div>
                 )}
-              </div>
-
             </div>
-            </>)}
+            </div>
+            )}
+
+            {/* ── Cuadrilla de Carga/Descarga (registro rápido) ── */}
+            {nominaView === "cuadrilla" && (() => {
+              const selAct = cuadActivities.find((a) => a.id === cuadEntryForm.activity_id);
+              const previewSubtotal = selAct ? round2(Number(cuadEntryForm.quantity || 0) * Number(selAct.unit_rate)) : 0;
+              return (
+                <>
+                  <div className="cajaSubNav" style={{ gap: 8, alignItems: "end", flexWrap: "wrap" }}>
+                    <label style={{ fontSize: 12 }}>Desde<input type="date" value={cuadFrom} onChange={(e) => setCuadFrom(e.target.value)} style={{ display: "block", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} /></label>
+                    <label style={{ fontSize: 12 }}>Hasta<input type="date" value={cuadTo} onChange={(e) => setCuadTo(e.target.value)} style={{ display: "block", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} /></label>
+                    <button type="button" className="primary" onClick={() => refreshCuadrilla().catch(() => undefined)}>Ver</button>
+                    <span className="muted" style={{ fontSize: 11, marginLeft: "auto", alignSelf: "center" }}>Resumen, anticipos y tarifas están en la pestaña «Cuadrilla».</span>
+                  </div>
+                  <section className="panelGrid" style={{ alignItems: "start" }}>
+                    <form className="formPanel" onSubmit={(e) => submitCuadEntry(e).catch((err) => addToast(err.message, "error"))}>
+                      <h2>📝 Registrar carga/descarga</h2>
+                      <label><span>Fecha</span>
+                        <input type="date" value={cuadEntryForm.work_date} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, work_date: e.target.value })} />
+                      </label>
+                      <label><span>Actividad (tarifa por saco/unidad)</span>
+                        <select value={cuadEntryForm.activity_id} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, activity_id: e.target.value })}>
+                          <option value="">Seleccione</option>
+                          {cuadActivities.map((a) => (<option key={a.id} value={a.id}>{a.name} — ${Number(a.unit_rate)}</option>))}
+                        </select>
+                      </label>
+                      <label><span>Cuadrilla / Trabajador responsable</span>
+                        <input type="text" value={cuadEntryForm.worker_name} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, worker_name: e.target.value })} placeholder="Ej: cuadrilla LIRA" />
+                      </label>
+                      <label><span>N.º de sacos (cantidad)</span>
+                        <input type="number" step="0.01" min="0" value={cuadEntryForm.quantity} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, quantity: e.target.value })} />
+                      </label>
+                      <div className="totalBox" style={{ marginBottom: 10 }}>
+                        <span>Subtotal</span>
+                        <strong>{money(previewSubtotal)}</strong>
+                        <small>{selAct ? `${cuadEntryForm.quantity || 0} × $${Number(selAct.unit_rate)}` : "elige actividad"}</small>
+                      </div>
+                      <button className="primary">Agregar</button>
+                    </form>
+
+                    <div className="tablePanel">
+                      <h2>Registros del período</h2>
+                      <div className="totalBox" style={{ marginBottom: 10 }}>
+                        <span>Total del período</span>
+                        <strong>{money(cuadEntriesTotal)}</strong>
+                        <small>{cuadEntries.length} registro(s)</small>
+                      </div>
+                      {cuadEntries.length === 0 ? (
+                        <div className="emptyState"><div className="emptyIcon">📝</div><p>Sin registros en este período</p></div>
+                      ) : (
+                        <div style={{ overflowX: "auto" }}>
+                          <table className="cajaTable" style={{ marginTop: 6 }}>
+                            <thead><tr><th>Fecha</th><th>Actividad</th><th>Cuadrilla</th><th>Sacos</th><th>Valor</th><th>Subtotal</th><th /></tr></thead>
+                            <tbody>
+                              {cuadEntries.map((en) => (
+                                <tr key={en.id}>
+                                  <td>{String(en.work_date).slice(0, 10)}</td>
+                                  <td>{en.activity_name}</td>
+                                  <td>{en.worker_name || "—"}</td>
+                                  <td>{Number(en.quantity)}</td>
+                                  <td>${Number(en.unit_rate)}</td>
+                                  <td><strong>{money(Number(en.subtotal))}</strong></td>
+                                  <td style={{ textAlign: "right" }}>
+                                    <button type="button" className="btnGhost" onClick={() => deleteCuadEntry(en.id).catch((err) => addToast(err.message, "error"))}>Borrar</button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  </section>
+                </>
+              );
+            })()}
 
             {nominaView === "historial" && (
               <>
