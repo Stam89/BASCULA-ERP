@@ -1,6 +1,6 @@
 # PROJECT_CONTEXT — BASCULA-ERP
 
-> Memoria compacta para continuar sin releer todo. Última actualización: 2026-08-22.
+> Memoria compacta para continuar sin releer todo. Última actualización: 2026-08-24.
 > Al empezar una sesión, **lee solo este archivo** primero.
 
 ## 0. Stack / cómo corre
@@ -15,7 +15,7 @@
 ## 1. ESTADO ACTUAL
 ERP para piladora de arroz con arquitectura **multi-accionista**: MATRIZ **CEYRO** (dueña, id `00000000-0000-0000-0000-000000000001`) y SOCIOS **ROVINSON** y **STALYN**. Selector de accionista activo manda header `X-Accionista-Id`; permisos por accionista.
 - Funciona: Dashboard, Báscula, Secadoras, Producción, Inventario, Selección/envejecido, Ventas (pedido→despacho), Compras, Caja, Por Cobrar, Por Pagar, Liquidaciones, Fomentos, Agricultores, Nómina, Cuadrilla, Servicio Pilado, Estados Financieros, Costos Operativos, Reportes, Configuración.
-- Todo está **commiteado y pusheado a main** (último `ff63562`). Typecheck y build (FE+BE) en verde. Backend corre el código compilado desde `dist/`. Los cambios de hoy son **solo frontend** (UI/copy) → `dist` reconstruido, basta **Ctrl+F5** (no requiere reiniciar backend).
+- Todo está **commiteado y pusheado a main** (último `999f0cd`). Typecheck y build (FE+BE) en verde. Backend corre el código compilado desde `dist/`. La sesión 2026-08-24 fue mayormente FE (basta rebuild + Ctrl+F5), pero incluyó **2 features con backend** (sacos especiales, fomentos) que requirieron **rebuild + reinicio del backend** — ya hecho, corre el código nuevo.
 
 ## 2. CAMBIOS DE ESTA SESIÓN (2026-08-20)
 1. **Ventas** — Toma de pedido en split-view 2 columnas + "Cola de carga" para bodega (badge 🟡, texto grande de sacos). Solo UI; estado sigue `PENDING`/`DELIVERED`. `4a2d90a`.
@@ -57,12 +57,25 @@ Archivos tocados (2c): `web-admin/src/App.tsx`; `backend/src/routes/modules/{cus
 Archivos tocados (2d): `web-admin/src/App.tsx`, `web-admin/src/styles.css`.
 Nota: el proyecto **NO usa Tailwind** (React+Vite con `styles.css` + estilos inline); las peticiones que mencionan Tailwind se implementan con esa convención.
 
+## 2e. CAMBIOS 2026-08-24 (sesión UI + 2 features backend)
+26. **Caja — fix menú vertical (bug real):** reglas globales `nav{flex-direction:column}` y `nav button{width:100%}` (del menú lateral) se colaban en `.cajaSubNav` (que es un `<nav>`). Faltaba fijar `flex-direction:row` y `width:auto` → el menú salía vertical pese al CSS. Ahora sí pills horizontales. `e2113bf`. (Antes: `ecd22f2`/`718c85e` habían puesto pills+esmeralda pero sin el fix del `<nav>` global.)
+27. **Dashboard (Panel Integral) — layout:** 7 KPIs → **4 tarjetas** [Compras][Ventas][Bancos/Caja][Saldo General] con chips secundarios (Utilidad/margen, Ing. servicio, Costo op.). "Inventario por accionista" a fila propia full-width; "Ventas"/"Compras por accionista" en grid 2-col. Sección final agrupada en panel **"Resumen ejecutivo"** (bancos por socio + cobrar/pagar/préstamos + alertas). Solo layout. `9529690`.
+28. **Liquidaciones (2 rondas):** (a) filtro en vivo de "Materia prima por liquidar" por el agricultor elegido (reusa memo `farmerLots`) + `.tableHead span{min-width:0;overflow-wrap:anywhere}`. `4561412`. (b) esa tarjeta pasó de `DataList` a **tabla real** con `<th>` `white-space:nowrap`+padding dentro de `overflow-x:auto`; form de lotes en grid `6fr 3fr 3fr` (Ingreso/QQ/Precio). `8b4f9b2`.
+29. **Sacos especiales (BACKEND+FE):** al empacar subproductos se descuentan los sacos especiales sin peso. Mapeo FIJO por producto: Arrocillo→"Saco Usado (Arrocillo)", Polvillo→"Saco Negro (Polvillo)"; Rechazo/otros no. Conteo con **lb/saco variable** (95/96/100…): `sacos=QQ*100/lb`. Nuevos `tipoSacoEspecial()` y `descontarSacosPorTipo()` en `cargo-empaque.ts`; `descontarSacosPorPeso` delega. Aplica en `processing.ts` (subproductos del pilado) y `selection.ts` (por producto). FE: Selección input lb/saco para subproductos; Producción campos lb/saco por subproducto. Sin migración (tipos ya existen). Verificado con ROLLBACK. `f3e8643`.
+30. **Fomentos (BACKEND+FE):** botón verde **[+ Nuevo Fomento]** arriba-derecha; se quitó el `↺ Actualizar` de filtros; el form pasó a **modal**; empty state con CTA en la columna derecha. Campos nuevos **Variedad de Grano** y **Límite de Crédito ($)**. Migración `20260826` (columnas `variedad`, `limite_credito`, nullable). **Decisión: límite SOLO informativo** — NO cambia el crédito (`monto_limite` sigue = cuadras*800 en SELECT_FOMENTO). `c320974`.
+31. **Agricultores — directorio:** buscador `🔍 nombre/RUC` + conteo ("86 agricultores"); tabla en `max-height:600 overflow-y:auto` con `<th>` sticky (fondo blanco+sombra); nueva columna **Acciones** con **✏️ Editar** → modal (nombre/cédula/teléfono/accionista) que usa `PUT /farmers/:id` (ya existía). Solo FE. `370c4ac`.
+32. **Nómina — 3 pestañas pill unificadas:** [🏭 Planta y Secadoras] (Pilador/Estibador + Secador en grid 2-col) · [👷‍♂️ Cuadrilla de Carga/Descarga] (registro rápido: fecha/actividad=tarifa/cuadrilla/sacos, reusa handlers de Cuadrilla) · [📜 Historial de Pagos]. `nominaView: planta|cuadrilla|historial`. NO se removió la pestaña Cuadrilla del menú (gestión completa sigue ahí). Solo layout. `999f0cd`.
+
+Archivos tocados (2e): `web-admin/src/App.tsx`, `web-admin/src/styles.css`; `backend/src/services/cargo-empaque.ts`, `backend/src/routes/modules/{processing,selection,fomentos}.ts`; `database/migrations/20260826_fomentos_variedad_limite.sql`.
+**Aprendizaje CSS:** `.cajaSubNav` (y cualquier `<nav>`) hereda reglas globales `nav{flex-direction:column}`/`nav button{width:100%}` del menú lateral → al hacer menús horizontales hay que fijar `flex-direction:row` + `width:auto`.
+
 ## 3. REGLAS DE NEGOCIO (no romper)
 - **Toma de pedido NO mueve dinero ni inventario**; recién al **Despachar** sale stock + entra caja (Contado) o Cuenta por Cobrar (Crédito). Estados DB: `PENDING`/`DELIVERED`/`CANCELLED` (NO renombrar; hay CHECK). El pedido genera su CxC "(pendiente de despacho)" al tomarse; al despachar se salda o se enlaza, nunca se duplica.
 - **Cuentas espejo entre accionistas**: un servicio/cargo de la matriz a un socio crea CxC (CEYRO) + CxP (socio) enlazadas en tablas puente (`pilado_services`, `lot_transfers`, `matriz_service_charges`, `matriz_packaging_charges`). Un abono en una cara debe reflejarse en la otra + caja del otro socio → `backend/src/services/cuentas-vinculadas.ts` (`espejarAbonoEnContraparte`). Saldar una cuenta debe mover caja + espejar, no solo bajar saldo.
 - **"PENDIENTE"** en cuentas = `document_status='CONFIRMED'` con `balance=amount`. El enum `document_status` (DRAFT/CONFIRMED/PARTIAL/PAID/CANCELLED) **NO tiene 'PENDING'** — no inventarlo.
 - **Cargo por empaque**: solo si el vendedor es SOCIO (la matriz no se cobra a sí misma); agrupa sacos 10/25/50 lb × tarifa; si total>0 crea CxC/CxP. Atómico dentro del despacho.
 - **Inventario de SACOS = solo de la MATRIZ (CEYRO)**: `sack_inventory` es tabla única (sin accionista_id). El saco se consume al EMPACAR (cierre de Producción/Selección), NO en la venta. Siempre se descuenta de `sack_inventory` (la matriz) via `descontarSacosPorPeso()`, sin importar el accionista del lote. En la VENTA no se toca el stock de sacos: solo baja el producto terminado del socio + (si aplica) el CARGO financiero por empaque (CxC CEYRO / CxP socio). Son dos cosas distintas: consumo físico (empaque) vs deuda financiera (venta).
+- **Sacos ESPECIALES sin peso (subproductos):** al empacar, Arrocillo(*)→"Saco Usado (Arrocillo)" y Polvillo/Afrecho→"Saco Negro (Polvillo)" (mapeo fijo por producto en `tipoSacoEspecial()`); Rechazo/otros no descuentan. Nº sacos = QQ*100/(lb por saco), donde lb es variable por cliente (95/96/100…). Descuento vía `descontarSacosPorTipo()`. El arroz blanco sigue por peso ("Saco N LB") con `descontarSacosPorPeso` (que ahora delega en el anterior).
 - **Combustible secadoras**: por MOTOR y por corrida (`filled_at`), repartido entre las 2 secadoras aunque terminen distinto.
 - **Nómina**: estibador cobra por tulas (proporcional 5/3); guardianía del secador es UNA por día (no por secadora).
 - **Categorías de mantenimiento**: soft-delete (nunca borrar filas); inactivas salen de forms pero se conservan en histórico/reportes; `area`/`section`/`maintenance_type` se guardan como TEXTO en `equipment_maintenance` (retrocompat).
@@ -73,12 +86,14 @@ Nota: el proyecto **NO usa Tailwind** (React+Vite con `styles.css` + estilos inl
 - ~~Verificación en navegador~~ **HECHA 2026-08-21**: Ventas, Por Cobrar, Por Pagar, Inventario y filtro de KPIs verificados en vivo. (Nota: el panel del navegador debe estar VISIBLE para clics/capturas; si está oculto, usar `read_page`/`get_page_text`.)
 - `web-admin/src/App.tsx` es enorme (~12.7k líneas) — sin modularizar (deuda técnica, no urgente).
 - ~~Guía de Remisión: RUC/dirección en blanco~~ **RESUELTO 2026-08-22**: `customers` ya se capturan/editan (form + modal ✏️ Editar en Ventas→Clientes) y la Guía los imprime. Falta que el usuario **cargue los datos reales** de sus clientes desde la UI (hoy solo existe NANCY VELEZ, sin RUC/dirección).
-- Sacos especiales sin peso ("Saco Negro (Polvillo)", "Saco Usado (Arrocillo)") NO se descuentan al despachar (el mapeo es por peso → "Saco N LB"). Si se requiere, definir mapeo presentación→tipo para esos.
+- ~~Sacos especiales sin peso no se descuentan~~ **RESUELTO 2026-08-24** (`f3e8643`): se descuentan al empacar en Producción y Selección, con lb/saco variable. Ver regla en §3.
+- Fomentos: los campos nuevos `variedad`/`limite_credito` se GUARDAN pero **aún no se muestran** en el detalle/lista del fomento (solo en el form). Agregar si se quiere verlos.
+- Nómina «Planta y Secadoras»: la tabla Pilador/Estibador (11 columnas) queda en media columna con scroll horizontal. Si molesta, pasar esa tabla a ancho completo y el Secador debajo.
 - `POST /customers/quick` crea con `customer_type='RETAIL'` (no NATURAL/EMPRESA); el tipo del front es una unión de 2 valores → al editar un cliente RETAIL el select cae a "Natural". Menor; alinear si molesta.
 - Nota de pruebas en vivo: la sesión del navegador in-app se limpia al reabrir el preview; para pruebas por API se puede generar un JWT admin con `signToken` (secreto en `backend/src/config/env.ts`) y llamar `http://localhost:4000/api/v1/...`. La extensión "Claude en Chrome" no está conectada (no se puede manejar el Chrome real del usuario).
 
 ## 5. PRÓXIMO PASO
-Sin tarea pendiente comprometida. La sesión de hoy fue puro pulido UI/copy (Ventas POS, pills de Caja, copy de Por Cobrar), todo commiteado. Preguntar al usuario la siguiente funcionalidad. Candidatos anotados: (a) mapeo de **sacos especiales sin peso** al despachar (única pendiente funcional real); (b) seguir el pulido UI/UX en otra vista (Producción, Compras, Estados Financieros); (c) que el usuario **cargue datos fiscales reales** de sus clientes y pruebe la Guía end-to-end. Nota: si se tocan endpoints, recordar **rebuild + reinicio del backend** (ver §0); los cambios solo-frontend basta rebuild + Ctrl+F5.
+Sin tarea pendiente comprometida. La sesión de hoy (2026-08-24) fue rediseño UI de varias vistas + 2 features backend (sacos especiales, fomentos), todo commiteado y verificado. Preguntar al usuario la siguiente funcionalidad. Candidatos anotados: (a) **probar end-to-end en vivo** los sacos especiales (cerrar una Selección/Producción con arrocillo/polvillo y ver bajar "Saco Usado/Negro" en Caja→Sacos); (b) mostrar `variedad`/`limite_credito` en el detalle del fomento; (c) seguir pulido UI (Producción, Compras, Estados Financieros, Reportes, Servicio Pilado); (d) validar la Guía con datos fiscales reales. Nota: si se tocan endpoints, **rebuild + reinicio del backend** (ver §0); solo-FE basta rebuild + Ctrl+F5.
 
 ## 6. ARCHIVOS IMPORTANTES
 - `web-admin/src/App.tsx` — TODO el frontend (tabs por `activeTab === "..."`; Config por `configSubTab`; Caja por `cajaSubTab`).
@@ -86,8 +101,9 @@ Sin tarea pendiente comprometida. La sesión de hoy fue puro pulido UI/copy (Ven
 - `backend/src/services/`: `cargo-empaque.ts`, `cuentas-vinculadas.ts` (espejo).
 - `backend/src/auth/require-auth.ts` — permisos por accionista (`WRITE_MODULES_BY_PREFIX`).
 - `backend/src/routes/modules/dashboard.ts` — `/dashboard/panel` (KPIs + `per_accionista` + `*_por_acc`); el filtro de las 7 tarjetas se hace en el frontend (`PanelIntegral`).
-- `backend/src/routes/modules/`: `processing.ts` (cierre de pilado + descuento de sacos por empaque), `selection.ts` (selección + descuento de sacos por presentación).
-- `database/migrations/` — últimas: `20260823_maintenance_categories.sql`, `20260824_guia_remision.sql`, `20260825_seleccion_presentacion_sacos.sql`.
+- `backend/src/routes/modules/`: `processing.ts` (cierre de pilado + descuento de sacos por empaque, incl. especiales), `selection.ts` (selección + descuento por producto), `fomentos.ts` (CRUD fomentos; POST/PUT aceptan `variedad`/`limite_credito`; `monto_limite` computado = cuadras*800), `farmers.ts` (`PUT /:id` edita agricultor, merge parcial).
+- `web-admin/src/styles.css` — clases del front. OJO: `nav{flex-direction:column}` global (menú lateral) afecta a cualquier `<nav>` (ver §2e). `.cajaSubNav` = pills horizontales (activa esmeralda #059669).
+- `database/migrations/` — últimas: `20260824_guia_remision.sql`, `20260825_seleccion_presentacion_sacos.sql`, `20260826_fomentos_variedad_limite.sql`.
 - Memoria del asistente: `C:\Users\Usuario\.claude\projects\C--Users-Usuario-...-BASCULA-ERP\memory\` (MEMORY.md + notas).
 
 ## 7. DECISIONES TOMADAS (no volver a preguntar)
@@ -106,7 +122,10 @@ Sin tarea pendiente comprometida. La sesión de hoy fue puro pulido UI/copy (Ven
 - Datos fiscales de clientes (RUC/CI + dirección) se gestionan en **Ventas→Clientes** (alta + ✏️ Editar); la Guía los consume vía JOIN en `/orders` (no se duplican en el pedido). No se añadió pantalla nueva ni ruta separada.
 - **El backend se despliega compilado** (`npm run build` + reinicio del proceso), no con watch. Tras cualquier cambio de backend hay que rebuild+restart para que surta efecto (ver §0/§8).
 - **NO usar Tailwind**: el proyecto no lo tiene instalado. El estilo se hace con `web-admin/src/styles.css` (clases) + estilos inline en `App.tsx`. Si una petición pide "usar Tailwind", implementar el mismo resultado con esa convención (no introducir la dependencia).
-- Patrón de selector de subvistas tipo **pills horizontales** (una fila, `overflow-x:auto`, activa verde + blanco, inactiva tenue): aplicado en Caja (`.cajaSubNav`). Reutilizable si otra vista tiene un menú interno que ocupe mucho alto.
+- Patrón de selector de subvistas tipo **pills horizontales** (una fila, `overflow-x:auto`, activa verde + blanco, inactiva tenue): aplicado en Caja y Nómina (`.cajaSubNav`). Al ponerlo en un `<nav>`, fijar `flex-direction:row` + `width:auto` en los botones (por el `nav{}` global). Reutilizable en vistas con menú interno alto.
+- **Sacos especiales:** el "Límite de Crédito" del fomento es SOLO informativo (no cambia el crédito). Los sacos especiales se mapean fijo por producto (Arrocillo→Usado, Polvillo→Negro) y se cuentan con lb/saco variable. Confirmado por el usuario.
+- **Nómina unificada:** 3 pills en `/nomina` (Planta y Secadoras · Cuadrilla · Historial). NO se removió la pestaña Cuadrilla del menú (mantiene resumen/anticipos/actividades); la de Nómina es solo registro rápido.
+- **Edición por modal** (no en el form izquierdo) para clientes, agricultores y fomentos: los forms de alta usan inputs no controlados → editar en modal con inputs controlados es más limpio.
 - Copy por naturaleza del módulo: en cuentas por cobrar el CTA es "Cobrar"; en por pagar, "Pagar".
 
 ## 8. ADVERTENCIAS (revisar dependencias antes de tocar)
