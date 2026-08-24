@@ -38,7 +38,10 @@ const fomentoSchema = z.object({
   cosecha:      z.string().regex(/^\d{4}-\d{2}-\d{2}/).optional(),
   renta:        z.number().min(0.001).max(1).default(0.07),
   status:       z.enum(["ACTIVOS","NO ACTIVOS","APROBADOS"]).default("ACTIVOS"),
-  notes:        z.string().optional()
+  notes:        z.string().optional(),
+  // Informativos (NO alteran el cálculo del crédito, que sigue en cuadras*800).
+  variedad:       z.string().optional(),
+  limite_credito: z.number().nonnegative().optional()
 });
 
 const entregaSchema = z.object({
@@ -308,10 +311,10 @@ fomentosRouter.post("/", asyncRoute(async (req, res) => {
   })();
 
   const result = await pool.query(
-    `INSERT INTO fomentos (accionista_id, farmer_name, farmer_id, cuadras, inicio, cosecha, renta, status, notes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    `INSERT INTO fomentos (accionista_id, farmer_name, farmer_id, cuadras, inicio, cosecha, renta, status, notes, variedad, limite_credito)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
     [accionistaId, data.farmer_name, data.farmer_id ?? null, data.cuadras, data.inicio, cosecha,
-     data.renta, data.status, data.notes ?? null]
+     data.renta, data.status, data.notes ?? null, data.variedad ?? null, data.limite_credito ?? null]
   );
   res.status(201).json(result.rows[0]);
 }));

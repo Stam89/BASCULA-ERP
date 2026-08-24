@@ -1379,7 +1379,9 @@ export function App() {
   // ── Fomentos ──────────────────────────────────────────────────────────────
   const [fomentos, setFomentos] = useState<Fomento[]>([]);
   const [fomentoDetalle, setFomentoDetalle] = useState<FomentoDetalle | null>(null);
-  const [fomentoForm, setFomentoForm] = useState({ farmer_name: "", cuadras: "", inicio: new Date().toISOString().slice(0,10), status: "ACTIVOS" as "ACTIVOS"|"NO ACTIVOS"|"APROBADOS", notes: "" });
+  const [fomentoForm, setFomentoForm] = useState({ farmer_name: "", cuadras: "", inicio: new Date().toISOString().slice(0,10), status: "ACTIVOS" as "ACTIVOS"|"NO ACTIVOS"|"APROBADOS", notes: "", variedad: "", limite_credito: "" });
+  // Modal del formulario "Nuevo Fomento" (antes era un <details> al pie de la lista).
+  const [fomentoModalOpen, setFomentoModalOpen] = useState(false);
   const [fomentoEntregaForm, setFomentoEntregaForm] = useState({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
   const [fomentoFilter, setFomentoFilter] = useState<"TODOS"|"ACTIVOS"|"NO ACTIVOS"|"APROBADOS">("TODOS");
   const [fomentoEditingRenta, setFomentoEditingRenta] = useState<string | null>(null);
@@ -3774,9 +3776,12 @@ export function App() {
       cuadras: Number(fomentoForm.cuadras),
       inicio: fomentoForm.inicio,
       status: fomentoForm.status,
-      notes: fomentoForm.notes || undefined
+      notes: fomentoForm.notes || undefined,
+      variedad: fomentoForm.variedad || undefined,
+      limite_credito: fomentoForm.limite_credito !== "" ? Number(fomentoForm.limite_credito) : undefined
     });
-    setFomentoForm({ farmer_name: "", cuadras: "", inicio: new Date().toISOString().slice(0,10), status: "ACTIVOS", notes: "" });
+    setFomentoForm({ farmer_name: "", cuadras: "", inicio: new Date().toISOString().slice(0,10), status: "ACTIVOS", notes: "", variedad: "", limite_credito: "" });
+    setFomentoModalOpen(false);
     addToast("Fomento creado", "success");
     await refreshFomentos();
   }
@@ -9800,15 +9805,19 @@ export function App() {
                   onClick={() => { setFomentoFilter(f); setFomentoDetalle(null); }}
                 >{f}</button>
               ))}
-              <button type="button" style={{ marginLeft: "auto", padding: "4px 12px", borderRadius: 6, border: "1px solid #999", background: "transparent", cursor: "pointer" }}
-                onClick={() => refreshFomentos().catch(() => undefined)}>↺ Actualizar</button>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
 
-              {/* COLUMNA IZQUIERDA: Lista + Formulario nuevo */}
+              {/* COLUMNA IZQUIERDA: Lista (el formulario ahora abre en modal) */}
               <div>
-                <h3 style={{ marginBottom: 8 }}>Lista de Fomentos</h3>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 10 }}>
+                  <h3 style={{ margin: 0 }}>Lista de Fomentos</h3>
+                  <button type="button" onClick={() => setFomentoModalOpen(true)}
+                    style={{ background: "var(--c-success)", color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontWeight: 700, fontSize: 13, whiteSpace: "nowrap" }}>
+                    + Nuevo Fomento
+                  </button>
+                </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 420, overflowY: "auto" }}>
                   {fomentos
                     .filter(f => fomentoFilter === "TODOS" || f.status === fomentoFilter)
@@ -9840,44 +9849,6 @@ export function App() {
                   )}
                 </div>
 
-                {/* Formulario nuevo fomento */}
-                <details style={{ marginTop: 16 }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 600, color: "var(--c-brand)", padding: "6px 0" }}>+ Nuevo Fomento</summary>
-                  <form onSubmit={submitFomento} style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
-                    <label style={{ fontSize: 12, fontWeight: 600 }}>Agricultor / Cliente
-                      <input required value={fomentoForm.farmer_name} onChange={e => setFomentoForm(p => ({...p, farmer_name: e.target.value}))}
-                        style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Nombre completo" />
-                    </label>
-                    <label style={{ fontSize: 12, fontWeight: 600 }}>Cuadras
-                      <input required type="number" step="0.01" min="0.01" value={fomentoForm.cuadras} onChange={e => setFomentoForm(p => ({...p, cuadras: e.target.value}))}
-                        style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Ej: 2.5" />
-                    </label>
-                    {fomentoForm.cuadras && (
-                      <div style={{ fontSize: 12, color: "var(--c-muted)", background: "#f0fdf4", borderRadius: 6, padding: "4px 8px" }}>
-                        Paradas: {(Number(fomentoForm.cuadras)*16).toFixed(0)} | Límite: ${(Number(fomentoForm.cuadras)*800).toFixed(2)}
-                      </div>
-                    )}
-                    <label style={{ fontSize: 12, fontWeight: 600 }}>Fecha Inicio
-                      <input required type="date" value={fomentoForm.inicio} onChange={e => setFomentoForm(p => ({...p, inicio: e.target.value}))}
-                        style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} />
-                    </label>
-                    <label style={{ fontSize: 12, fontWeight: 600 }}>Estado
-                      <select value={fomentoForm.status} onChange={e => setFomentoForm(p => ({...p, status: e.target.value as "ACTIVOS"|"NO ACTIVOS"|"APROBADOS"}))}
-                        style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }}>
-                        <option>ACTIVOS</option>
-                        <option>NO ACTIVOS</option>
-                        <option>APROBADOS</option>
-                      </select>
-                    </label>
-                    <label style={{ fontSize: 12, fontWeight: 600 }}>Notas
-                      <input value={fomentoForm.notes} onChange={e => setFomentoForm(p => ({...p, notes: e.target.value}))}
-                        style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Opcional" />
-                    </label>
-                    <button type="submit" style={{ background: "var(--c-brand)", color: "#fff", border: "none", borderRadius: 6, padding: "8px 16px", cursor: "pointer", fontWeight: 700 }}>
-                      Guardar Fomento
-                    </button>
-                  </form>
-                </details>
               </div>
 
               {/* COLUMNA DERECHA: Detalle del fomento seleccionado */}
@@ -10096,15 +10067,78 @@ export function App() {
                     </details>
                   </div>
                 ) : (
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 300, color: "var(--c-muted)", textAlign: "center" }}>
-                    <svg width="48" height="48" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.3, marginBottom: 12 }}>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", minHeight: 320, background: "#f8fafc", border: "1px dashed #cbd5e1", borderRadius: 14, padding: 28, color: "var(--c-muted)" }}>
+                    <svg width="52" height="52" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.35, marginBottom: 14 }}>
                       <path d="M8 14V8"/><path d="M5 11l3-3 3 3"/><path d="M2 14h12"/><path d="M4 8C4 5 6 2 8 2s4 3 4 6"/>
                     </svg>
-                    <p>Selecciona un fomento de la lista<br/>para ver su detalle y registrar entregas</p>
+                    <h3 style={{ margin: "0 0 6px", color: "var(--c-text)" }}>Ningún fomento seleccionado</h3>
+                    <p style={{ margin: "0 0 16px", fontSize: 13 }}>Selecciona un fomento de la lista para ver su detalle y registrar entregas, o crea uno nuevo.</p>
+                    <button type="button" onClick={() => setFomentoModalOpen(true)}
+                      style={{ background: "var(--c-success)", color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", cursor: "pointer", fontWeight: 700, fontSize: 13 }}>
+                      + Nuevo Fomento
+                    </button>
                   </div>
                 )}
               </div>
             </div>
+
+            {/* Modal: Nuevo Fomento (el formulario ya no se despliega al pie de la lista). */}
+            {fomentoModalOpen && (
+              <div className="modalOverlay" onClick={() => setFomentoModalOpen(false)}>
+                <form className="modalCard formPanel" onClick={(e) => e.stopPropagation()}
+                  onSubmit={(e) => submitFomento(e).catch((err) => addToast(err.message, "error"))}
+                  style={{ maxWidth: 480, width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                    <h3 style={{ marginTop: 0 }}>+ Nuevo Fomento</h3>
+                    <button type="button" onClick={() => setFomentoModalOpen(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--c-muted)" }}>✕</button>
+                  </div>
+                  <label style={{ fontSize: 12, fontWeight: 600 }}>Agricultor / Cliente
+                    <input required value={fomentoForm.farmer_name} onChange={e => setFomentoForm(p => ({...p, farmer_name: e.target.value}))}
+                      style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Nombre completo" />
+                  </label>
+                  <label style={{ fontSize: 12, fontWeight: 600 }}>Variedad de Grano
+                    <input value={fomentoForm.variedad} onChange={e => setFomentoForm(p => ({...p, variedad: e.target.value}))}
+                      style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Ej: INIAP-15, SFL-11…" />
+                  </label>
+                  <label style={{ fontSize: 12, fontWeight: 600 }}>Cuadras
+                    <input required type="number" step="0.01" min="0.01" value={fomentoForm.cuadras} onChange={e => setFomentoForm(p => ({...p, cuadras: e.target.value}))}
+                      style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Ej: 2.5" />
+                  </label>
+                  {fomentoForm.cuadras && (
+                    <div style={{ fontSize: 12, color: "var(--c-muted)", background: "#f0fdf4", borderRadius: 6, padding: "4px 8px" }}>
+                      Paradas: {(Number(fomentoForm.cuadras)*16).toFixed(0)} | Límite automático: ${(Number(fomentoForm.cuadras)*800).toFixed(2)}
+                    </div>
+                  )}
+                  <label style={{ fontSize: 12, fontWeight: 600 }}>Límite de Crédito ($)
+                    <input type="number" step="0.01" min="0" value={fomentoForm.limite_credito} onChange={e => setFomentoForm(p => ({...p, limite_credito: e.target.value}))}
+                      style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Opcional · referencial" />
+                    <small className="muted" style={{ fontSize: 11 }}>Referencial. La habilitación de crédito sigue usando cuadras × 800.</small>
+                  </label>
+                  <label style={{ fontSize: 12, fontWeight: 600 }}>Fecha Inicio
+                    <input required type="date" value={fomentoForm.inicio} onChange={e => setFomentoForm(p => ({...p, inicio: e.target.value}))}
+                      style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} />
+                  </label>
+                  <label style={{ fontSize: 12, fontWeight: 600 }}>Estado
+                    <select value={fomentoForm.status} onChange={e => setFomentoForm(p => ({...p, status: e.target.value as "ACTIVOS"|"NO ACTIVOS"|"APROBADOS"}))}
+                      style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }}>
+                      <option>ACTIVOS</option>
+                      <option>NO ACTIVOS</option>
+                      <option>APROBADOS</option>
+                    </select>
+                  </label>
+                  <label style={{ fontSize: 12, fontWeight: 600 }}>Notas
+                    <input value={fomentoForm.notes} onChange={e => setFomentoForm(p => ({...p, notes: e.target.value}))}
+                      style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Opcional" />
+                  </label>
+                  <div className="buttonRow" style={{ marginTop: 6 }}>
+                    <button type="submit" style={{ background: "var(--c-success)", color: "#fff", border: "none", borderRadius: 6, padding: "8px 16px", cursor: "pointer", fontWeight: 700 }}>
+                      Guardar Fomento
+                    </button>
+                    <button type="button" onClick={() => setFomentoModalOpen(false)}>Cancelar</button>
+                  </div>
+                </form>
+              </div>
+            )}
 
             {fomentoImportModal && fomentoImportModal.open && (
               <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
