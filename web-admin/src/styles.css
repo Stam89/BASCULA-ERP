@@ -993,6 +993,10 @@ input[type="datetime-local"] { height: 36px; }
   margin-bottom: 4px;
   margin-top: 6px;
 }
+/* Los <span> de encabezado deben poder encogerse y romper palabra; si no, en
+   columnas angostas (5+ columnas) headers largos como "AGRICULTOR" desbordan y
+   se enciman con el de al lado ("LOTE"). */
+.tableHead span { min-width: 0; overflow-wrap: anywhere; }
 
 .table { display: grid; gap: 3px; }
 

@@ -9601,17 +9601,26 @@ export function App() {
             </div>
 
 
-            <DataList
-              title="Materia prima por liquidar"
-              headers={["Ingreso", "Tipo cáscara", "Agricultor", "Lote", "QQ"]}
-              rows={pendingEntries.map((e) => [
-                entryLabel(e),
-                e.rice_type ?? "—",
-                e.farmer_name ?? "—",
-                e.lot_code ?? "sin lote aún",
-                `${Number(e.quintals ?? 0).toFixed(2)} QQ`
-              ])}
-            />
+            {(() => {
+              // Filtro automático: al elegir un agricultor en el formulario, la
+              // lista muestra en tiempo real solo sus ingresos (reusa `farmerLots`).
+              // Sin agricultor seleccionado, muestra todos los pendientes.
+              const filtrado = liqFarmerId ? farmerLots : pendingEntries;
+              const nombreFiltro = liqFarmerId ? (farmers.find((f) => f.id === liqFarmerId)?.full_name ?? "") : "";
+              return (
+                <DataList
+                  title={nombreFiltro ? `Materia prima por liquidar — ${nombreFiltro}` : "Materia prima por liquidar"}
+                  headers={["Ingreso", "Tipo cáscara", "Agricultor", "Lote", "QQ"]}
+                  rows={filtrado.map((e) => [
+                    entryLabel(e),
+                    e.rice_type ?? "—",
+                    e.farmer_name ?? "—",
+                    e.lot_code ?? "sin lote aún",
+                    `${Number(e.quintals ?? 0).toFixed(2)} QQ`
+                  ])}
+                />
+              );
+            })()}
 
             <div className="tablePanel liqHistPanel">
               <h2>Liquidaciones realizadas</h2>
