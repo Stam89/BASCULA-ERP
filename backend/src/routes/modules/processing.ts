@@ -8,7 +8,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
 import { createLotProcessReport } from "../../utils/process-reports.js";
-import { descontarSacosPorPeso } from "../../services/cargo-empaque.js";
+import { descontarSacosPorPeso, descontarSacosPorTipo, tipoSacoEspecial } from "../../services/cargo-empaque.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { createProductionWorkerPayments } from "./labor.js";
 
@@ -481,6 +481,25 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       if (nSacos > 0) sacosPorPeso.set(p.sack_weight_lb, (sacosPorPeso.get(p.sack_weight_lb) ?? 0) + nSacos);
     }
     const sacosMatriz = await descontarSacosPorPeso(client, sacosPorPeso, "Empaque en producción (arroz pilado)");
+
+    // Subproductos (arrocillo/polvillo) empacados en sacos ESPECIALES sin peso
+    // fijo. El tipo lo fija el producto (Arrocillo→Saco Usado, Polvillo→Saco
+    // Negro); el nº de sacos usa el peso por saco indicado en la salida (variable
+    // según cliente: 95, 96, 100 lb…). sacos = QQ*100/peso_por_saco.
+    const sacosEspeciales = new Map<string, number>();
+    for (const item of outputs) {
+      if (!item.isByproduct) continue;
+      const peso = Number(item.output.sack_weight_lb);
+      if (!peso || peso <= 0) continue;
+      const tipo = tipoSacoEspecial(item.label);
+      if (!tipo) continue; // Rechazo u otros: sin saco especial
+      const nSacos = Math.round((Number(item.output.quantity) * 100) / peso);
+      if (nSacos > 0) sacosEspeciales.set(tipo, (sacosEspeciales.get(tipo) ?? 0) + nSacos);
+    }
+    if (sacosEspeciales.size) {
+      const esp = await descontarSacosPorTipo(client, sacosEspeciales, "Empaque en producción (subproductos)");
+      sacosMatriz.push(...esp);
+    }
 
     if (body.packaging_supply_id && sacksUsed > 0) {
       const supply = await client.query(

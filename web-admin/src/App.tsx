@@ -582,6 +582,11 @@ type MillingReportState = {
   broken34: string;
   fineBroken: string;
   polvillo: string;
+  /** Libras por saco de cada subproducto (variable según cliente: 95, 96, 100…).
+   *  Definen cuántos sacos especiales descuenta la matriz (sacos = QQ×100/lb). */
+  broken34_lb: string;
+  fineBroken_lb: string;
+  polvillo_lb: string;
   /** N.º de tulas del proceso: base del pago al estibador. */
   tulas: string;
   /** QQ totales de las tulas: base INDEPENDIENTE para pagar al pilador. */
@@ -1098,6 +1103,9 @@ const defaultMillingReport: MillingReportState = {
   broken34: "",
   fineBroken: "",
   polvillo: "",
+  broken34_lb: "100",
+  fineBroken_lb: "100",
+  polvillo_lb: "100",
   tulas: "",
   /** QQ totales de las tulas: base INDEPENDIENTE para pagar al pilador. */
   qqTulas: ""
@@ -5253,19 +5261,22 @@ export function App() {
         product_id: broken34Product.id,
         warehouse_id: finishedWarehouse.id,
         quantity: Number(millingReport.broken34 || 0),
-        unit: "QQ"
+        unit: "QQ",
+        sack_weight_lb: Number(millingReport.broken34_lb) > 0 ? Number(millingReport.broken34_lb) : undefined
       } : undefined,
       fine_broken_rice: Number(millingReport.fineBroken || 0) > 0 ? {
         product_id: fineBrokenProduct.id,
         warehouse_id: finishedWarehouse.id,
         quantity: Number(millingReport.fineBroken || 0),
-        unit: "QQ"
+        unit: "QQ",
+        sack_weight_lb: Number(millingReport.fineBroken_lb) > 0 ? Number(millingReport.fineBroken_lb) : undefined
       } : undefined,
       bran: Number(millingReport.polvillo || 0) > 0 ? {
         product_id: branProduct.id,
         warehouse_id: finishedWarehouse.id,
         quantity: Number(millingReport.polvillo || 0),
-        unit: "QQ"
+        unit: "QQ",
+        sack_weight_lb: Number(millingReport.polvillo_lb) > 0 ? Number(millingReport.polvillo_lb) : undefined
       } : undefined,
       sacks_used: 0,
       pilador_name: piladorName || undefined,
@@ -7525,6 +7536,26 @@ export function App() {
                 <ControlledNumberInput label="Arrocillo 3/4" value={millingReport.broken34} onChange={(value) => updateMillingField("broken34", value)} />
                 <ControlledNumberInput label="Arrocillo Fino" value={millingReport.fineBroken} onChange={(value) => updateMillingField("fineBroken", value)} />
                 <ControlledNumberInput label="Polvillo" value={millingReport.polvillo} onChange={(value) => updateMillingField("polvillo", value)} />
+              </div>
+              {/* Libras por saco de cada subproducto (variable según cliente: 95, 96,
+                  100…). Definen cuántos sacos ESPECIALES descuenta la matriz:
+                  Arrocillo → "Saco Usado", Polvillo → "Saco Negro". sacos = QQ×100/lb. */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginTop: 8 }}>
+                <label style={{ fontSize: 11, fontWeight: 600, color: "var(--c-muted)" }}>lb/saco Arrocillo 3/4
+                  <input type="number" min="1" step="1" value={millingReport.broken34_lb} title="Descuenta de Saco Usado (Arrocillo)"
+                    onChange={(e) => updateMillingField("broken34_lb", e.target.value)}
+                    style={{ display: "block", width: "100%", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
+                </label>
+                <label style={{ fontSize: 11, fontWeight: 600, color: "var(--c-muted)" }}>lb/saco Arrocillo Fino
+                  <input type="number" min="1" step="1" value={millingReport.fineBroken_lb} title="Descuenta de Saco Usado (Arrocillo)"
+                    onChange={(e) => updateMillingField("fineBroken_lb", e.target.value)}
+                    style={{ display: "block", width: "100%", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
+                </label>
+                <label style={{ fontSize: 11, fontWeight: 600, color: "var(--c-muted)" }}>lb/saco Polvillo
+                  <input type="number" min="1" step="1" value={millingReport.polvillo_lb} title="Descuenta de Saco Negro (Polvillo)"
+                    onChange={(e) => updateMillingField("polvillo_lb", e.target.value)}
+                    style={{ display: "block", width: "100%", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
+                </label>
               </div>
               {/* Pago por llenado de polvillo: OCULTO a petición. El pago se sigue
                   registrando en Nómina (backend) con el rol Polvillo; solo no se
@@ -10475,6 +10506,15 @@ export function App() {
           const activeAcc = accionistas.find((a) => a.id === activeAccionistaId);
           const puedeEnvejecer = !!activeAcc?.puede_envejecer;
           const inputStyle = { display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 } as const;
+          // Subproducto → saco especial (fijo por producto). Debe coincidir con
+          // `tipoSacoEspecial` del backend. Devuelve null si no aplica (rechazo/arroz).
+          const sacoEspecialLabel = (p?: { code?: string; name?: string }) => {
+            const c = (p?.code ?? "").toUpperCase();
+            const n = (p?.name ?? "").toUpperCase();
+            if (c.startsWith("ARROCILLO") || n.includes("ARROCILLO")) return "Saco Usado (Arrocillo)";
+            if (c.startsWith("POLVILLO") || n.includes("POLVILLO") || n.includes("AFRECHO")) return "Saco Negro (Polvillo)";
+            return null;
+          };
           // Productos que viven en producto terminado (terminados + subproductos):
           // entran y salen del proceso. Se ordenan por nombre.
           const selectableProducts = products
@@ -10606,13 +10646,27 @@ export function App() {
                                 {outputProducts.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                               </select>
                               <input type="number" step="0.01" min="0" placeholder="QQ" value={line.quantity} onChange={(e) => setOutLine(i, { quantity: e.target.value })} style={inputStyle} />
-                              <select value={line.sack_weight_lb ?? "100"} disabled={!!line.is_reject} title="Tamaño de saco usado (descuenta de la matriz)"
-                                onChange={(e) => setOutLine(i, { sack_weight_lb: e.target.value })} style={{ ...inputStyle, opacity: line.is_reject ? 0.5 : 1 }}>
-                                <option value="100">100 LB</option>
-                                <option value="50">50 LB</option>
-                                <option value="25">25 LB</option>
-                                <option value="10">10 LB</option>
-                              </select>
+                              {(() => {
+                                // Subproducto (arrocillo/polvillo): saco especial fijo por
+                                // producto + lb/saco variable (95, 96, 100… según cliente).
+                                const especial = !line.is_reject ? sacoEspecialLabel(outputProducts.find((p) => p.id === line.product_id)) : null;
+                                if (especial) {
+                                  return (
+                                    <input type="number" step="1" min="1" placeholder="lb/saco" value={line.sack_weight_lb ?? "100"}
+                                      title={`Libras por saco. Descuenta "${especial}" de la matriz (sacos = QQ×100/lb).`}
+                                      onChange={(e) => setOutLine(i, { sack_weight_lb: e.target.value })} style={inputStyle} />
+                                  );
+                                }
+                                return (
+                                  <select value={line.sack_weight_lb ?? "100"} disabled={!!line.is_reject} title="Tamaño de saco usado (descuenta de la matriz)"
+                                    onChange={(e) => setOutLine(i, { sack_weight_lb: e.target.value })} style={{ ...inputStyle, opacity: line.is_reject ? 0.5 : 1 }}>
+                                    <option value="100">100 LB</option>
+                                    <option value="50">50 LB</option>
+                                    <option value="25">25 LB</option>
+                                    <option value="10">10 LB</option>
+                                  </select>
+                                );
+                              })()}
                               <label style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 3 }} title="Marca si es el rechazo">
                                 <input type="checkbox" checked={!!line.is_reject} onChange={(e) => setOutLine(i, { is_reject: e.target.checked })} /> rechazo
                               </label>

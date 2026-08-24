@@ -142,15 +142,40 @@ export async function cobrarEmpaqueAlDespachar(
  * del cierre. No bloquea si falta stock (el saldo puede quedar negativo, señal
  * de que la matriz debe comprar sacos) ni si el tipo no está registrado.
  */
-export async function descontarSacosPorPeso(
+/** Tipos de saco ESPECIAL (sin peso) para subproductos. Existen como filas en
+ *  `sack_inventory`. El mapeo producto→tipo es fijo (regla de negocio confirmada):
+ *  Polvillo/Afrecho → Saco Negro; Arrocillo (cualquiera) → Saco Usado. */
+export const SACO_POLVILLO = "Saco Negro (Polvillo)";
+export const SACO_ARROCILLO = "Saco Usado (Arrocillo)";
+
+/**
+ * Devuelve el tipo de saco ESPECIAL que corresponde a un subproducto, por su
+ * código y/o nombre. Devuelve null si no aplica (p. ej. Rechazo u otros): en ese
+ * caso el llamador cae al saco por peso ("Saco N LB").
+ */
+export function tipoSacoEspecial(code?: string | null, name?: string | null): string | null {
+  const c = (code ?? "").toUpperCase();
+  const n = (name ?? "").toUpperCase();
+  if (c.startsWith("ARROCILLO") || n.includes("ARROCILLO")) return SACO_ARROCILLO;
+  if (c.startsWith("POLVILLO") || n.includes("POLVILLO") || n.includes("AFRECHO")) return SACO_POLVILLO;
+  return null;
+}
+
+/**
+ * Descuenta sacos de `sack_inventory` (la matriz) por TIPO exacto de saco y
+ * registra un movimiento SALIDA por cada uno. Base común para el descuento por
+ * peso ("Saco N LB") y por saco especial ("Saco Negro (Polvillo)", etc.).
+ * No bloquea si falta stock (permite negativo, señal de comprar) ni si el tipo
+ * no está registrado.
+ */
+export async function descontarSacosPorTipo(
   client: PoolClient,
-  sacosPorPeso: Map<number, number>,
+  sacosPorTipo: Map<string, number>,
   concepto: string
 ): Promise<Array<{ tipo: string; sacos: number; nuevo_stock: number }>> {
   const resultado: Array<{ tipo: string; sacos: number; nuevo_stock: number }> = [];
-  for (const [peso, sacos] of sacosPorPeso) {
+  for (const [tipo, sacos] of sacosPorTipo) {
     if (!(sacos > 0)) continue;
-    const tipo = `Saco ${peso} LB`;
     const sack = await client.query(
       "SELECT id, stock FROM sack_inventory WHERE tipo = $1 FOR UPDATE",
       [tipo]
@@ -169,4 +194,16 @@ export async function descontarSacosPorPeso(
     resultado.push({ tipo, sacos, nuevo_stock: nuevoStock });
   }
   return resultado;
+}
+
+/** Igual que `descontarSacosPorTipo`, pero recibe el mapa por peso_lb y arma el
+ *  tipo "Saco N LB". Se conserva para el empaque de arroz blanco por peso. */
+export async function descontarSacosPorPeso(
+  client: PoolClient,
+  sacosPorPeso: Map<number, number>,
+  concepto: string
+): Promise<Array<{ tipo: string; sacos: number; nuevo_stock: number }>> {
+  const porTipo = new Map<string, number>();
+  for (const [peso, sacos] of sacosPorPeso) porTipo.set(`Saco ${peso} LB`, sacos);
+  return descontarSacosPorTipo(client, porTipo, concepto);
 }

@@ -4,7 +4,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { descontarSacosPorPeso } from "../../services/cargo-empaque.js";
+import { descontarSacosPorTipo, tipoSacoEspecial } from "../../services/cargo-empaque.js";
 import { nextCode } from "../../utils/codes.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import type { PoolClient } from "pg";
@@ -257,9 +257,18 @@ selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
     const outputQq = round3(body.outputs.reduce((s, o) => s + o.quantity, 0));
     const mermaQq = round3(Number(batch.rows[0].input_qq) - outputQq);
 
-    // Sacos a descontar de la MATRIZ, agrupados por tamaño, según la presentación
-    // elegida por línea (solo producto NO rechazo). sacos = QQ*100/peso_lb.
-    const sacosPorPeso = new Map<number, number>();
+    // Productos de las salidas (para saber cuáles son subproductos y qué saco
+    // especial les toca: Arrocillo→Saco Usado, Polvillo→Saco Negro).
+    const prodIds = [...new Set(body.outputs.map((o) => o.product_id))];
+    const prodRows = prodIds.length
+      ? await tx.query("SELECT id, code, name FROM products WHERE id = ANY($1)", [prodIds])
+      : { rows: [] as Array<{ id: string; code: string; name: string }> };
+    const prodMap = new Map(prodRows.rows.map((r: { id: string; code: string; name: string }) => [r.id, r]));
+
+    // Sacos a descontar de la MATRIZ, por TIPO exacto, según la presentación
+    // elegida por línea (solo producto NO rechazo). Subproductos → saco especial
+    // (por producto); resto → "Saco N LB". sacos = QQ*100/peso_por_saco.
+    const sacosPorTipo = new Map<string, number>();
     for (const o of body.outputs) {
       const qty = round3(o.quantity);
       const wid = o.warehouse_id ?? defaultWarehouse;
@@ -268,8 +277,10 @@ selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
         [req.params.id, o.product_id, wid, qty, o.is_reject ?? false, o.presentation ?? null, o.sack_weight_lb ?? null]
       );
       if (!o.is_reject && o.sack_weight_lb && o.sack_weight_lb > 0) {
+        const p = prodMap.get(o.product_id);
+        const tipo = tipoSacoEspecial(p?.code, p?.name) ?? `Saco ${o.sack_weight_lb} LB`;
         const nSacos = Math.round((qty * 100) / o.sack_weight_lb);
-        if (nSacos > 0) sacosPorPeso.set(o.sack_weight_lb, (sacosPorPeso.get(o.sack_weight_lb) ?? 0) + nSacos);
+        if (nSacos > 0) sacosPorTipo.set(tipo, (sacosPorTipo.get(tipo) ?? 0) + nSacos);
       }
       // Reingresa al inventario (IN = cantidad positiva).
       await tx.query(
@@ -283,7 +294,7 @@ selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
     // Descuento FÍSICO de sacos de la MATRIZ por el reempaque de lo que regresó,
     // por presentación exacta (Saco 10/25/50/100 LB). El saco sale SIEMPRE de la
     // bodega de la matriz (sack_inventory es única), sin importar el accionista.
-    const sacosMatriz = await descontarSacosPorPeso(tx, sacosPorPeso, `Empaque en selección (${label})`);
+    const sacosMatriz = await descontarSacosPorTipo(tx, sacosPorTipo, `Empaque en selección (${label})`);
 
     const updated = await tx.query(
       `UPDATE selection_batches
