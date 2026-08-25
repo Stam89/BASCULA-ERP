@@ -911,7 +911,7 @@ const navGroups: Array<{ label: string; tabs: string[] }> = [
   { label: "Operación", tabs: ["Bascula", "Secadoras", "Produccion", "Inventario", "Seleccion"] },
   { label: "Comercial", tabs: ["Ventas", "Compras", "Caja"] },
   { label: "Cuentas", tabs: ["Por Cobrar", "Por Pagar"] },
-  { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores", "Nomina", "Cuadrilla", "Servicio Pilado"] },
+  { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores", "Nomina", "Servicio Pilado"] },
   { label: "Contabilidad", tabs: ["Costos Operativos", "Estados Financieros"] },
   { label: "Sistema", tabs: ["Reportes", "Configuracion"] }
 ];
@@ -1310,7 +1310,7 @@ export function App() {
   const [cuadSummary, setCuadSummary] = useState<{ rows: CuadrillaSummaryRow[]; total_general: number; total_anticipos: number; total_neto: number } | null>(null);
   const [cuadAdvances, setCuadAdvances] = useState<CuadrillaAdvance[]>([]);
   const [cuadView, setCuadView] = useState<"registro" | "resumen" | "actividades">("registro");
-  const [cuadEntryForm, setCuadEntryForm] = useState({ work_date: nominaToday, activity_id: "", worker_name: "", quantity: "" });
+  const [cuadEntryForm, setCuadEntryForm] = useState({ work_date: nominaToday, activity_id: "", worker_name: "", quantity: "", anticipo: "" });
   const [cuadAdvanceForm, setCuadAdvanceForm] = useState({ worker_name: "", amount: "", concept: "" });
   const [newActivityForm, setNewActivityForm] = useState({ name: "", unit_rate: "" });
 
@@ -2658,14 +2658,29 @@ export function App() {
     if (!cuadEntryForm.activity_id) { addToast("Elige una actividad", "error"); return; }
     const qty = Number(cuadEntryForm.quantity);
     if (!(qty > 0)) { addToast("Ingresa la cantidad (mayor a 0)", "error"); return; }
+    const anticipo = Number(cuadEntryForm.anticipo);
+    // El anticipo/adelanto se registra como un ADELANTO real de la cuadrilla (mismo
+    // endpoint que "Resumen y anticipos"), así el neto a pagar ya lo descuenta.
+    // Requiere nombre del trabajador para poder asociarlo.
+    if (anticipo > 0 && cuadEntryForm.worker_name.trim().length < 2) {
+      addToast("Para registrar un anticipo, indica la cuadrilla/trabajador", "error");
+      return;
+    }
     await apiPost("/cuadrilla/entries", {
       work_date: cuadEntryForm.work_date,
       activity_id: cuadEntryForm.activity_id,
       worker_name: cuadEntryForm.worker_name.trim(),
       quantity: qty
     });
-    setCuadEntryForm({ ...cuadEntryForm, worker_name: "", quantity: "" });
-    addToast("Registro agregado", "success");
+    if (anticipo > 0) {
+      await apiPost("/cuadrilla/advances", {
+        worker_name: cuadEntryForm.worker_name.trim(),
+        amount: anticipo,
+        concept: "Adelanto en carga/descarga"
+      });
+    }
+    setCuadEntryForm({ ...cuadEntryForm, worker_name: "", quantity: "", anticipo: "" });
+    addToast(anticipo > 0 ? "Registro + anticipo agregados" : "Registro agregado", "success");
     await refreshCuadrilla();
   }
 
@@ -10904,202 +10919,6 @@ export function App() {
           );
         })()}
 
-        {activeTab === "Cuadrilla" && (() => {
-          const selAct = cuadActivities.find((a) => a.id === cuadEntryForm.activity_id);
-          const previewSubtotal = selAct ? round2(Number(cuadEntryForm.quantity || 0) * Number(selAct.unit_rate)) : 0;
-          return (
-          <section className="cuentasLayout">
-            <nav className="cajaSubNav">
-              <button type="button" className={cuadView === "registro" ? "active" : ""} onClick={() => setCuadView("registro")}>📝 Registro</button>
-              <button type="button" className={cuadView === "resumen" ? "active" : ""} onClick={() => setCuadView("resumen")}>👥 Resumen y anticipos</button>
-              <button type="button" className={cuadView === "actividades" ? "active" : ""} onClick={() => setCuadView("actividades")}>🏷️ Actividades y tarifas</button>
-            </nav>
-
-            <div className="cajaSubNav" style={{ gap: 8, alignItems: "end", flexWrap: "wrap" }}>
-              <label style={{ fontSize: 12 }}>Desde<input type="date" value={cuadFrom} onChange={(e) => setCuadFrom(e.target.value)} style={{ display: "block", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} /></label>
-              <label style={{ fontSize: 12 }}>Hasta<input type="date" value={cuadTo} onChange={(e) => setCuadTo(e.target.value)} style={{ display: "block", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} /></label>
-              <button type="button" className="primary" onClick={() => refreshCuadrilla().catch(() => undefined)}>Ver</button>
-            </div>
-
-            {cuadView === "registro" && (
-              <section className="panelGrid">
-                <form className="formPanel" onSubmit={(e) => submitCuadEntry(e).catch((err) => addToast(err.message, "error"))}>
-                  <h2>📝 Registrar trabajo</h2>
-                  <label><span>Fecha</span>
-                    <input type="date" value={cuadEntryForm.work_date} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, work_date: e.target.value })} />
-                  </label>
-                  <label><span>Actividad</span>
-                    <select value={cuadEntryForm.activity_id} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, activity_id: e.target.value })}>
-                      <option value="">Seleccione</option>
-                      {cuadActivities.map((a) => (
-                        <option key={a.id} value={a.id}>{a.name} — ${Number(a.unit_rate)}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label><span>Trabajador (nombre o apodo)</span>
-                    <input type="text" value={cuadEntryForm.worker_name} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, worker_name: e.target.value })} placeholder="Ej: paola LIRA" />
-                  </label>
-                  <label><span>Cantidad (QQ, sacos, etc.)</span>
-                    <input type="number" step="0.01" min="0" value={cuadEntryForm.quantity} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, quantity: e.target.value })} />
-                  </label>
-                  <div className="totalBox" style={{ marginBottom: 10 }}>
-                    <span>Subtotal</span>
-                    <strong>{money(previewSubtotal)}</strong>
-                    <small>{selAct ? `${cuadEntryForm.quantity || 0} × $${Number(selAct.unit_rate)}` : "elige actividad"}</small>
-                  </div>
-                  <button className="primary">Agregar</button>
-                </form>
-
-                <div className="tablePanel">
-                  <h2>Registros del período</h2>
-                  <div className="totalBox" style={{ marginBottom: 10 }}>
-                    <span>Total del período</span>
-                    <strong>{money(cuadEntriesTotal)}</strong>
-                    <small>{cuadEntries.length} registro(s)</small>
-                  </div>
-                  {cuadEntries.length === 0 ? (
-                    <div className="emptyState"><div className="emptyIcon">📝</div><p>Sin registros en este período</p></div>
-                  ) : (
-                    <table className="cajaTable" style={{ marginTop: 6 }}>
-                      <thead><tr><th>Fecha</th><th>Actividad</th><th>Trabajador</th><th>Cant.</th><th>Valor</th><th>Subtotal</th><th /></tr></thead>
-                      <tbody>
-                        {cuadEntries.map((en) => (
-                          <tr key={en.id}>
-                            <td>{String(en.work_date).slice(0, 10)}</td>
-                            <td>{en.activity_name}</td>
-                            <td>{en.worker_name || "—"}</td>
-                            <td>{Number(en.quantity)}</td>
-                            <td>${Number(en.unit_rate)}</td>
-                            <td><strong>{money(Number(en.subtotal))}</strong></td>
-                            <td style={{ textAlign: "right" }}>
-                              <button type="button" className="btnGhost" onClick={() => deleteCuadEntry(en.id).catch((err) => addToast(err.message, "error"))}>Borrar</button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
-              </section>
-            )}
-
-            {cuadView === "resumen" && (
-              <section className="panelGrid">
-                <div className="tablePanel">
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <h2 style={{ margin: 0 }}>👥 Resumen por persona</h2>
-                    <button type="button" className="btnGhost" onClick={() => printCuadrillaSummary()}>🖨️ Imprimir</button>
-                  </div>
-                  {!cuadSummary || cuadSummary.rows.length === 0 ? (
-                    <div className="emptyState"><div className="emptyIcon">👥</div><p>Sin datos en este período</p></div>
-                  ) : (
-                    <>
-                      <table className="cajaTable" style={{ marginTop: 6 }}>
-                        <thead><tr><th>Trabajador</th><th>Trabajos</th><th>Ganado</th><th>Anticipos</th><th>Neto a pagar</th></tr></thead>
-                        <tbody>
-                          {cuadSummary.rows.map((r) => (
-                            <tr key={r.worker_name || "(sin nombre)"}>
-                              <td>{r.worker_name || "(sin nombre)"}</td>
-                              <td>{r.entradas}</td>
-                              <td>{money(r.total)}</td>
-                              <td style={{ color: r.anticipos > 0 ? "#dc2626" : undefined }}>{r.anticipos > 0 ? "−" + money(r.anticipos) : "—"}</td>
-                              <td><strong>{money(r.neto)}</strong></td>
-                            </tr>
-                          ))}
-                        </tbody>
-                        <tfoot>
-                          <tr style={{ fontWeight: 700, borderTop: "2px solid #e5e7eb" }}>
-                            <td colSpan={2}>TOTALES</td>
-                            <td>{money(cuadSummary.total_general)}</td>
-                            <td>{cuadSummary.total_anticipos > 0 ? "−" + money(cuadSummary.total_anticipos) : "—"}</td>
-                            <td>{money(cuadSummary.total_neto)}</td>
-                          </tr>
-                        </tfoot>
-                      </table>
-                    </>
-                  )}
-                </div>
-
-                <div className="formPanel">
-                  <h2>💸 Registrar anticipo</h2>
-                  <form onSubmit={(e) => submitCuadAdvance(e).catch((err) => addToast(err.message, "error"))}>
-                    <label><span>Trabajador</span>
-                      <input type="text" value={cuadAdvanceForm.worker_name} onChange={(e) => setCuadAdvanceForm({ ...cuadAdvanceForm, worker_name: e.target.value })} placeholder="Nombre o apodo" />
-                    </label>
-                    <label><span>Monto</span>
-                      <input type="number" step="0.01" min="0" value={cuadAdvanceForm.amount} onChange={(e) => setCuadAdvanceForm({ ...cuadAdvanceForm, amount: e.target.value })} />
-                    </label>
-                    <label><span>Concepto (opcional)</span>
-                      <input type="text" value={cuadAdvanceForm.concept} onChange={(e) => setCuadAdvanceForm({ ...cuadAdvanceForm, concept: e.target.value })} placeholder="Ej: arroz, préstamo" />
-                    </label>
-                    <button className="primary">Registrar anticipo</button>
-                  </form>
-
-                  <h3 style={{ marginTop: 16 }}>Anticipos pendientes</h3>
-                  {cuadAdvances.length === 0 ? (
-                    <p className="muted">No hay anticipos pendientes.</p>
-                  ) : (
-                    <table className="cajaTable" style={{ marginTop: 6 }}>
-                      <thead><tr><th>Trabajador</th><th>Saldo</th><th>Concepto</th><th /></tr></thead>
-                      <tbody>
-                        {cuadAdvances.map((a) => (
-                          <tr key={a.id}>
-                            <td>{a.worker_name}</td>
-                            <td><strong>{money(Number(a.balance))}</strong></td>
-                            <td className="muted">{a.concept ?? "—"}</td>
-                            <td style={{ textAlign: "right" }}>
-                              <button type="button" className="btnGhost" onClick={() => settleCuadAdvance(a.id).catch((err) => addToast(err.message, "error"))}>Saldar</button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
-              </section>
-            )}
-
-            {cuadView === "actividades" && (
-              <section className="panelGrid">
-                <form className="formPanel" onSubmit={(e) => createActivity(e).catch((err) => addToast(err.message, "error"))}>
-                  <h2>🏷️ Nueva actividad</h2>
-                  <p className="muted">Agrega una actividad con su valor unitario. Si ya existe, actualiza su tarifa.</p>
-                  <label><span>Nombre</span>
-                    <input type="text" value={newActivityForm.name} onChange={(e) => setNewActivityForm({ ...newActivityForm, name: e.target.value })} placeholder="Ej: ENSACADO" />
-                  </label>
-                  <label><span>Valor unitario ($)</span>
-                    <input type="number" step="0.01" min="0" value={newActivityForm.unit_rate} onChange={(e) => setNewActivityForm({ ...newActivityForm, unit_rate: e.target.value })} />
-                  </label>
-                  <button className="primary">Guardar actividad</button>
-                </form>
-
-                <div className="tablePanel">
-                  <h2>Actividades y tarifas ({cuadActivities.length})</h2>
-                  <table className="cajaTable" style={{ marginTop: 6 }}>
-                    <thead><tr><th>Actividad</th><th>Valor unitario</th></tr></thead>
-                    <tbody>
-                      {cuadActivities.map((a) => (
-                        <tr key={a.id}>
-                          <td>{a.name}</td>
-                          <td>
-                            <input
-                              type="number" step="0.01" min="0" defaultValue={Number(a.unit_rate)}
-                              style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db" }}
-                              onBlur={(e) => { const v = Number(e.target.value); if (v !== Number(a.unit_rate)) updateActivityRate(a.id, v).catch((err) => addToast(err.message, "error")); }}
-                            />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  <p className="muted" style={{ marginTop: 10 }}>Cambia una tarifa escribiendo el nuevo valor y saliendo del casillero. Los registros ya hechos conservan la tarifa que tenían.</p>
-                </div>
-              </section>
-            )}
-          </section>
-          );
-        })()}
-
         {activeTab === "Nomina" && (
           <section className="cuentasLayout">
             <nav className="cajaSubNav">
@@ -11236,15 +11055,25 @@ export function App() {
             {/* ── Cuadrilla de Carga/Descarga (registro rápido) ── */}
             {nominaView === "cuadrilla" && (() => {
               const selAct = cuadActivities.find((a) => a.id === cuadEntryForm.activity_id);
-              const previewSubtotal = selAct ? round2(Number(cuadEntryForm.quantity || 0) * Number(selAct.unit_rate)) : 0;
+              const bruto = selAct ? round2(Number(cuadEntryForm.quantity || 0) * Number(selAct.unit_rate)) : 0;
+              const anticipo = Number(cuadEntryForm.anticipo || 0);
+              const previewSubtotal = round2(bruto - (anticipo > 0 ? anticipo : 0));
               return (
                 <>
+                  {/* Todo el flujo de Cuadrilla vive aquí (centralizado en /nomina). */}
+                  <nav className="cajaSubNav">
+                    <button type="button" className={cuadView === "registro" ? "active" : ""} onClick={() => setCuadView("registro")}>📝 Registro</button>
+                    <button type="button" className={cuadView === "resumen" ? "active" : ""} onClick={() => setCuadView("resumen")}>👥 Resumen y anticipos</button>
+                    <button type="button" className={cuadView === "actividades" ? "active" : ""} onClick={() => setCuadView("actividades")}>🏷️ Actividades y tarifas</button>
+                  </nav>
+
                   <div className="cajaSubNav" style={{ gap: 8, alignItems: "end", flexWrap: "wrap" }}>
                     <label style={{ fontSize: 12 }}>Desde<input type="date" value={cuadFrom} onChange={(e) => setCuadFrom(e.target.value)} style={{ display: "block", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} /></label>
                     <label style={{ fontSize: 12 }}>Hasta<input type="date" value={cuadTo} onChange={(e) => setCuadTo(e.target.value)} style={{ display: "block", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} /></label>
                     <button type="button" className="primary" onClick={() => refreshCuadrilla().catch(() => undefined)}>Ver</button>
-                    <span className="muted" style={{ fontSize: 11, marginLeft: "auto", alignSelf: "center" }}>Resumen, anticipos y tarifas están en la pestaña «Cuadrilla».</span>
                   </div>
+
+                  {cuadView === "registro" && (
                   <section className="panelGrid" style={{ alignItems: "start" }}>
                     <form className="formPanel" onSubmit={(e) => submitCuadEntry(e).catch((err) => addToast(err.message, "error"))}>
                       <h2>📝 Registrar carga/descarga</h2>
@@ -11263,10 +11092,13 @@ export function App() {
                       <label><span>N.º de sacos (cantidad)</span>
                         <input type="number" step="0.01" min="0" value={cuadEntryForm.quantity} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, quantity: e.target.value })} />
                       </label>
+                      <label><span>Anticipo / Adelanto ($) <small className="muted">— opcional</small></span>
+                        <input type="number" step="0.01" min="0" value={cuadEntryForm.anticipo} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, anticipo: e.target.value })} placeholder="0.00" />
+                      </label>
                       <div className="totalBox" style={{ marginBottom: 10 }}>
-                        <span>Subtotal</span>
+                        <span>Subtotal{anticipo > 0 ? " (neto)" : ""}</span>
                         <strong>{money(previewSubtotal)}</strong>
-                        <small>{selAct ? `${cuadEntryForm.quantity || 0} × $${Number(selAct.unit_rate)}` : "elige actividad"}</small>
+                        <small>{selAct ? `${cuadEntryForm.quantity || 0} × $${Number(selAct.unit_rate)}${anticipo > 0 ? ` − $${anticipo.toFixed(2)} anticipo` : ""}` : "elige actividad"}</small>
                       </div>
                       <button className="primary">Agregar</button>
                     </form>
@@ -11304,6 +11136,115 @@ export function App() {
                       )}
                     </div>
                   </section>
+                  )}
+
+                  {cuadView === "resumen" && (
+                  <section className="panelGrid">
+                    <div className="tablePanel">
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <h2 style={{ margin: 0 }}>👥 Resumen por persona</h2>
+                        <button type="button" className="btnGhost" onClick={() => printCuadrillaSummary()}>🖨️ Imprimir</button>
+                      </div>
+                      {!cuadSummary || cuadSummary.rows.length === 0 ? (
+                        <div className="emptyState"><div className="emptyIcon">👥</div><p>Sin datos en este período</p></div>
+                      ) : (
+                        <table className="cajaTable" style={{ marginTop: 6 }}>
+                          <thead><tr><th>Trabajador</th><th>Trabajos</th><th>Ganado</th><th>Anticipos</th><th>Neto a pagar</th></tr></thead>
+                          <tbody>
+                            {cuadSummary.rows.map((r) => (
+                              <tr key={r.worker_name || "(sin nombre)"}>
+                                <td>{r.worker_name || "(sin nombre)"}</td>
+                                <td>{r.entradas}</td>
+                                <td>{money(r.total)}</td>
+                                <td style={{ color: r.anticipos > 0 ? "#dc2626" : undefined }}>{r.anticipos > 0 ? "−" + money(r.anticipos) : "—"}</td>
+                                <td><strong>{money(r.neto)}</strong></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot>
+                            <tr style={{ fontWeight: 700, borderTop: "2px solid #e5e7eb" }}>
+                              <td colSpan={2}>TOTALES</td>
+                              <td>{money(cuadSummary.total_general)}</td>
+                              <td>{cuadSummary.total_anticipos > 0 ? "−" + money(cuadSummary.total_anticipos) : "—"}</td>
+                              <td>{money(cuadSummary.total_neto)}</td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      )}
+                    </div>
+
+                    <div className="formPanel">
+                      <h2>💸 Registrar anticipo</h2>
+                      <form onSubmit={(e) => submitCuadAdvance(e).catch((err) => addToast(err.message, "error"))}>
+                        <label><span>Trabajador</span>
+                          <input type="text" value={cuadAdvanceForm.worker_name} onChange={(e) => setCuadAdvanceForm({ ...cuadAdvanceForm, worker_name: e.target.value })} placeholder="Nombre o apodo" />
+                        </label>
+                        <label><span>Monto</span>
+                          <input type="number" step="0.01" min="0" value={cuadAdvanceForm.amount} onChange={(e) => setCuadAdvanceForm({ ...cuadAdvanceForm, amount: e.target.value })} />
+                        </label>
+                        <label><span>Concepto (opcional)</span>
+                          <input type="text" value={cuadAdvanceForm.concept} onChange={(e) => setCuadAdvanceForm({ ...cuadAdvanceForm, concept: e.target.value })} placeholder="Ej: arroz, préstamo" />
+                        </label>
+                        <button className="primary">Registrar anticipo</button>
+                      </form>
+
+                      <h3 style={{ marginTop: 16 }}>Anticipos pendientes</h3>
+                      {cuadAdvances.length === 0 ? (
+                        <p className="muted">No hay anticipos pendientes.</p>
+                      ) : (
+                        <table className="cajaTable" style={{ marginTop: 6 }}>
+                          <thead><tr><th>Trabajador</th><th>Saldo</th><th>Concepto</th><th /></tr></thead>
+                          <tbody>
+                            {cuadAdvances.map((a) => (
+                              <tr key={a.id}>
+                                <td>{a.worker_name}</td>
+                                <td><strong>{money(Number(a.balance))}</strong></td>
+                                <td className="muted">{a.concept ?? "—"}</td>
+                                <td style={{ textAlign: "right" }}>
+                                  <button type="button" className="btnGhost" onClick={() => settleCuadAdvance(a.id).catch((err) => addToast(err.message, "error"))}>Saldar</button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  </section>
+                  )}
+
+                  {cuadView === "actividades" && (
+                  <section className="panelGrid">
+                    <form className="formPanel" onSubmit={(e) => createActivity(e).catch((err) => addToast(err.message, "error"))}>
+                      <h2>🏷️ Nueva actividad</h2>
+                      <p className="muted">Agrega una actividad con su valor unitario. Si ya existe, actualiza su tarifa.</p>
+                      <label><span>Nombre</span>
+                        <input type="text" value={newActivityForm.name} onChange={(e) => setNewActivityForm({ ...newActivityForm, name: e.target.value })} placeholder="Ej: ENSACADO" />
+                      </label>
+                      <label><span>Valor unitario ($)</span>
+                        <input type="number" step="0.01" min="0" value={newActivityForm.unit_rate} onChange={(e) => setNewActivityForm({ ...newActivityForm, unit_rate: e.target.value })} />
+                      </label>
+                      <button className="primary">Guardar actividad</button>
+                    </form>
+
+                    <div className="tablePanel">
+                      <h2>Actividades y tarifas ({cuadActivities.length})</h2>
+                      <table className="cajaTable" style={{ marginTop: 6 }}>
+                        <thead><tr><th>Actividad</th><th>Valor unitario</th></tr></thead>
+                        <tbody>
+                          {cuadActivities.map((a) => (
+                            <tr key={a.id}>
+                              <td>{a.name}</td>
+                              <td>
+                                <input type="number" step="0.01" min="0" defaultValue={Number(a.unit_rate)} style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db" }} onBlur={(e) => { const v = Number(e.target.value); if (v !== Number(a.unit_rate)) updateActivityRate(a.id, v).catch((err) => addToast(err.message, "error")); }} />
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <p className="muted" style={{ marginTop: 10 }}>Cambia una tarifa escribiendo el nuevo valor y saliendo del casillero. Los registros ya hechos conservan la tarifa que tenían.</p>
+                    </div>
+                  </section>
+                  )}
                 </>
               );
             })()}
