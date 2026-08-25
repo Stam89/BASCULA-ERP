@@ -1291,7 +1291,7 @@ export function App() {
   const [laborForm, setLaborForm] = useState({ worker_group: "", sacks_moved: "", price_per_sack: "" });
 
   // ── Configuración ─────────────────────────────────────────────────────────
-  const [configSubTab, setConfigSubTab] = useState<"negocio" | "usuarios" | "accionistas" | "tarifas" | "categorias" | "mant_categorias" | "actividad" | "datos">("negocio");
+  const [configSubTab, setConfigSubTab] = useState<"operacion" | "cuadrilla" | "socios" | "secuenciales" | "usuarios">("operacion");
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
   const [laborRatesForm, setLaborRatesForm] = useState<LaborRates>(defaultLaborRates);
   // Tarifas de empaque / uso de sacos que la MATRIZ cobra a los socios al despachar.
@@ -3133,6 +3133,20 @@ export function App() {
     setAppSettings(saved);
     setSettingsForm(saved);
     addToast("Datos del negocio guardados", "success");
+  }
+
+  // Botón persistente [💾 Guardar Configuración]: guarda la config de la pestaña
+  // activa (los handlers solo usan preventDefault + estado, así que un evento
+  // sintético es seguro). Cada save emite su propio toast de confirmación.
+  async function guardarConfig() {
+    const fakeEvent = { preventDefault: () => {} } as unknown as FormEvent<HTMLFormElement>;
+    try {
+      if (configSubTab === "operacion") await saveSettings(fakeEvent);
+      else if (configSubTab === "cuadrilla") await saveLaborRates(fakeEvent);
+      else addToast("En esta pestaña, cada tarjeta se guarda con su propio botón.", "warn");
+    } catch (err) {
+      addToast(err instanceof Error ? err.message : "No se pudo guardar", "error");
+    }
   }
 
   async function submitConfigUser(e: FormEvent<HTMLFormElement>) {
@@ -11779,22 +11793,46 @@ export function App() {
         )}
 
         {activeTab === "Configuracion" && (
-          <>
-            <nav className="cajaSubNav">
-              {(["negocio", "usuarios", "accionistas", "tarifas", "categorias", "mant_categorias", "actividad", "datos"] as const).map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  className={configSubTab === t ? "active" : ""}
-                  onClick={() => { setConfigSubTab(t); if (t === "categorias") reloadCashCategories(); if (t === "mant_categorias") loadMaintCategoriesAll(); }}
-                >
-                  {t === "negocio" ? "🏢 Negocio" : t === "usuarios" ? "👥 Usuarios" : t === "accionistas" ? "🧑‍🤝‍🧑 Accionistas" : t === "tarifas" ? "💲 Tarifas" : t === "categorias" ? "🏷️ Categorías caja" : t === "mant_categorias" ? "🔧 Categorías mant." : t === "actividad" ? "🕓 Actividad" : "🗄️ Datos"}
+          <div className="configLayout">
+            {/* Pestañas verticales (panel lateral) para los parámetros del sistema. */}
+            <aside className="configVTabs">
+              {([
+                ["operacion", "⚙️ Operación y Planta"],
+                ["cuadrilla", "👷 Tarifario de Cuadrilla"],
+                ["socios", "👥 Socios & Bancos"],
+                ["secuenciales", "📄 Secuenciales"],
+                ["usuarios", "🔐 Control de Usuarios"]
+              ] as const).map(([t, label]) => (
+                <button key={t} type="button" className={configSubTab === t ? "active" : ""}
+                  onClick={() => { setConfigSubTab(t); if (t === "operacion") { reloadCashCategories(); loadMaintCategoriesAll(); } }}>
+                  {label}
                 </button>
               ))}
-            </nav>
+            </aside>
 
-            {/* ── Datos del negocio ── */}
-            {configSubTab === "negocio" && (
+            <div className="configVContent">
+
+            {/* ── Operación y Planta: parámetros (algunos aún no configurables) ── */}
+            {configSubTab === "operacion" && (
+              <section className="panelGrid">
+                <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <h2>⚙️ Parámetros de planta</h2>
+                  <p className="muted">Parámetros operativos de la piladora. Los marcados «próximamente» aún no son configurables.</p>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <label><span>Tarifa de pilado ($/QQ)</span>
+                      <input type="number" step="0.01" disabled placeholder="Próximamente" />
+                    </label>
+                    <label><span>Humedad base (%)</span>
+                      <input type="number" step="0.1" disabled placeholder="Próximamente" />
+                    </label>
+                  </div>
+                  <p className="muted" style={{ fontSize: 12 }}>El <strong>costo de secado</strong> (guardianía + por túnel) se edita en «👷 Tarifario de Cuadrilla».</p>
+                </div>
+              </section>
+            )}
+
+            {/* ── Datos del negocio (Operación y Planta) ── */}
+            {configSubTab === "operacion" && (
               <section className="panelGrid">
                 <form className="formPanel" onSubmit={(e) => saveSettings(e).catch((err) => addToast(err.message, "error"))}>
                   <h2>🏢 Datos del negocio</h2>
@@ -12218,7 +12256,7 @@ export function App() {
             )}
 
             {/* ── Accionistas ── */}
-            {configSubTab === "accionistas" && (
+            {configSubTab === "socios" && (
               <section className="panelGrid">
                 <form className="formPanel" onSubmit={(e) => createAccionista(e).catch((err) => addToast(err.message, "error"))}>
                   <h2>🧑‍🤝‍🧑 Nuevo accionista</h2>
@@ -12341,7 +12379,7 @@ export function App() {
             )}
 
             {/* ── Tarifas de pago a trabajadores ── */}
-            {configSubTab === "tarifas" && (
+            {configSubTab === "cuadrilla" && (
               <section className="panelGrid">
                 <form className="formPanel" onSubmit={(e) => saveLaborRates(e).catch((err) => addToast(err.message, "error"))}>
                   <h2>💲 Tarifas de pago (Pilador y Estibador)</h2>
@@ -12495,7 +12533,8 @@ export function App() {
             )}
 
             {/* ── Categorías de caja ── */}
-            {configSubTab === "categorias" && (
+            {/* Categorías de caja (Operación y Planta) */}
+            {configSubTab === "operacion" && (
               <section className="panelGrid">
                 <div className="formPanel">
                   <h2>🏷️ Nueva categoría de caja</h2>
@@ -12539,7 +12578,8 @@ export function App() {
             )}
 
             {/* ── Categorías de Mantenimiento (áreas / secciones / tipos) ── */}
-            {configSubTab === "mant_categorias" && (
+            {/* Categorías de mantenimiento (Operación y Planta) */}
+            {configSubTab === "operacion" && (
               <section className="panelGrid">
                 <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
@@ -12591,7 +12631,8 @@ export function App() {
             )}
 
             {/* ── Actividad / auditoría ── */}
-            {configSubTab === "actividad" && (
+            {/* Log de actividad (Control de Usuarios) */}
+            {configSubTab === "usuarios" && (
               <div className="tablePanel">
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
                   <div>
@@ -12635,7 +12676,8 @@ export function App() {
             )}
 
             {/* ── Puesta en marcha / datos ── */}
-            {configSubTab === "datos" && (
+            {/* Puesta en marcha + datos (Operación y Planta) */}
+            {configSubTab === "operacion" && (
               <section className="panelGrid">
                 <div className="formPanel">
                   <h2>✅ Puesta en marcha</h2>
@@ -12749,7 +12791,68 @@ export function App() {
                 </div>
               </section>
             )}
-          </>
+
+            {/* ── Tarifario de Cuadrilla: CRUD de actividades (tarifa por saco) ── */}
+            {configSubTab === "cuadrilla" && (
+              <section className="panelGrid">
+                <form className="formPanel" onSubmit={(e) => createActivity(e).catch((err) => addToast(err.message, "error"))}>
+                  <h2>🏷️ Nueva actividad de cuadrilla</h2>
+                  <p className="muted">Actividad + tarifa por saco/unidad. Si ya existe, actualiza su tarifa.</p>
+                  <label><span>Nombre / Descripción</span>
+                    <input type="text" value={newActivityForm.name} onChange={(e) => setNewActivityForm({ ...newActivityForm, name: e.target.value })} placeholder="Ej: ENSACADO" />
+                  </label>
+                  <label><span>Tarifa por saco ($)</span>
+                    <input type="number" step="0.01" min="0" value={newActivityForm.unit_rate} onChange={(e) => setNewActivityForm({ ...newActivityForm, unit_rate: e.target.value })} />
+                  </label>
+                  <button className="primary">Guardar actividad</button>
+                </form>
+                <div className="tablePanel">
+                  <h2>Actividades y tarifas ({cuadActivities.length})</h2>
+                  <div style={{ overflowX: "auto" }}>
+                    <table className="cajaTable" style={{ marginTop: 6 }}>
+                      <thead><tr><th>Actividad / Descripción</th><th className="num">Tarifa por saco</th></tr></thead>
+                      <tbody>
+                        {cuadActivities.map((a) => (
+                          <tr key={a.id}>
+                            <td>{a.name}</td>
+                            <td className="num">
+                              <input type="number" step="0.01" min="0" defaultValue={Number(a.unit_rate)} style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db" }}
+                                onBlur={(e) => { const v = Number(e.target.value); if (v !== Number(a.unit_rate)) updateActivityRate(a.id, v).catch((err) => addToast(err.message, "error")); }} />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="muted" style={{ marginTop: 10 }}>Cambia una tarifa escribiendo el nuevo valor y saliendo del casillero. Los registros ya hechos conservan su tarifa.</p>
+                </div>
+              </section>
+            )}
+
+            {/* ── Secuenciales (maqueta; aún no editables) ── */}
+            {configSubTab === "secuenciales" && (
+              <section className="panelGrid">
+                <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <h2>📄 Secuenciales</h2>
+                  <p className="muted">Números que el sistema asigna automáticamente. La edición manual aún no está habilitada (los números vigentes se generan por secuencia en el servidor).</p>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <label><span>Siguiente N.º de comprobante</span><input type="number" disabled placeholder="Próximamente" /></label>
+                    <label><span>Siguiente N.º de liquidación</span><input type="number" disabled placeholder="Próximamente" /></label>
+                    <label><span>Siguiente N.º de venta</span><input type="number" disabled placeholder="Próximamente" /></label>
+                    <label><span>Siguiente N.º de guía de remisión</span><input type="number" disabled placeholder="Próximamente" /></label>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {/* Botón persistente de guardado (parte inferior, sticky). */}
+            <div className="configSaveBar">
+              <span className="muted" style={{ fontSize: 12 }}>Cada tarjeta se guarda con su propio botón; este guarda la configuración de la pestaña activa.</span>
+              <button type="button" className="primary" disabled={!isAdmin} onClick={() => guardarConfig()}>💾 Guardar Configuración</button>
+            </div>
+
+            </div>
+          </div>
         )}
 
         </div>{/* .content */}
