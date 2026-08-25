@@ -123,42 +123,63 @@ reportsRouter.post("/arianos/ubicacion", asyncRoute(async (req, res) => {
 // ── Resumen consolidado del período ────────────────────────────────────────
 reportsRouter.get("/summary", asyncRoute(async (req, res) => {
   const { from, to } = parseRange(req.query);
-  const acc = (req as AuthenticatedRequest).accionistaId;
+  const headerAcc = (req as AuthenticatedRequest).accionistaId;
+  // Segmentación por socio: ?accionista=<id> filtra por ese socio; ?accionista=all
+  // consolida TODOS; ausente = usa el accionista activo (header, compat). Cuando
+  // `acc` es null, el patrón `$N::uuid IS NULL` desactiva el filtro (consolidado).
+  const accParam = typeof req.query.accionista === "string" ? req.query.accionista.trim() : "";
+  const acc: string | null = accParam === "all" ? null : (accParam || headerAcc || null);
   const hasProduction = await hasTable("processing_batches");
 
-  const [sales, liq, exp, cash, prod, ar, ap] = await Promise.all([
+  const [sales, liq, exp, cash, prod, ar, ap, breakdown] = await Promise.all([
     pool.query(
       `SELECT COALESCE(SUM(total_amount),0)::float total, COUNT(*)::int cnt
-       FROM sales WHERE sale_status <> 'CANCELLED' AND created_at::date BETWEEN $1 AND $2 AND accionista_id = $3`,
+       FROM sales WHERE sale_status <> 'CANCELLED' AND created_at::date BETWEEN $1 AND $2 AND ($3::uuid IS NULL OR accionista_id = $3)`,
       [from, to, acc]
     ),
     pool.query(
       `SELECT COALESCE(SUM(net_amount),0)::float net, COALESCE(SUM(gross_amount),0)::float gross, COUNT(*)::int cnt
-       FROM liquidations WHERE status <> 'CANCELLED' AND created_at::date BETWEEN $1 AND $2 AND accionista_id = $3`,
+       FROM liquidations WHERE status <> 'CANCELLED' AND created_at::date BETWEEN $1 AND $2 AND ($3::uuid IS NULL OR accionista_id = $3)`,
       [from, to, acc]
     ),
     pool.query(
       `SELECT COALESCE(SUM(amount),0)::float total, COUNT(*)::int cnt
-       FROM expenses WHERE created_at::date BETWEEN $1 AND $2 AND accionista_id = $3`,
+       FROM expenses WHERE created_at::date BETWEEN $1 AND $2 AND ($3::uuid IS NULL OR accionista_id = $3)`,
       [from, to, acc]
     ),
     pool.query(
       `SELECT movement, COALESCE(SUM(amount),0)::float total
        FROM cash_movements
        WHERE created_at::date BETWEEN $1 AND $2
-         AND cash_register_id IN (SELECT id FROM cash_registers WHERE accionista_id = $3)
+         AND cash_register_id IN (SELECT id FROM cash_registers WHERE ($3::uuid IS NULL OR accionista_id = $3))
        GROUP BY movement`,
       [from, to, acc]
     ),
     hasProduction
       ? pool.query(
           `SELECT COALESCE(SUM(input_quantity),0)::float input, COUNT(*)::int cnt
-           FROM processing_batches WHERE created_at::date BETWEEN $1 AND $2 AND accionista_id = $3`,
+           FROM processing_batches WHERE created_at::date BETWEEN $1 AND $2 AND ($3::uuid IS NULL OR accionista_id = $3)`,
           [from, to, acc]
         )
       : Promise.resolve({ rows: [{ input: 0, cnt: 0 }] }),
-    pool.query(`SELECT COALESCE(SUM(balance),0)::float total FROM accounts_receivable WHERE status <> 'PAID' AND accionista_id = $1`, [acc]),
-    pool.query(`SELECT COALESCE(SUM(balance),0)::float total FROM accounts_payable WHERE status <> 'PAID' AND accionista_id = $1`, [acc])
+    pool.query(`SELECT COALESCE(SUM(balance),0)::float total FROM accounts_receivable WHERE status <> 'PAID' AND ($1::uuid IS NULL OR accionista_id = $1)`, [acc]),
+    pool.query(`SELECT COALESCE(SUM(balance),0)::float total FROM accounts_payable WHERE status <> 'PAID' AND ($1::uuid IS NULL OR accionista_id = $1)`, [acc]),
+    // Desglose del período: movimientos de caja (fecha, concepto, socio, tipo, monto).
+    pool.query(
+      `SELECT cm.created_at::date AS fecha,
+              COALESCE(NULLIF(cm.description, ''), cm.category, 'Movimiento') AS concepto,
+              a.name AS socio,
+              cm.movement AS tipo,
+              cm.amount::float AS monto
+       FROM cash_movements cm
+       JOIN cash_registers cr ON cr.id = cm.cash_register_id
+       JOIN accionistas a ON a.id = cr.accionista_id
+       WHERE cm.created_at::date BETWEEN $1 AND $2
+         AND ($3::uuid IS NULL OR cr.accionista_id = $3)
+       ORDER BY cm.created_at DESC
+       LIMIT 300`,
+      [from, to, acc]
+    )
   ]);
 
   const cashIncome = cash.rows.find((r) => r.movement === "INCOME")?.total ?? 0;
@@ -166,13 +187,15 @@ reportsRouter.get("/summary", asyncRoute(async (req, res) => {
 
   res.json({
     range: { from, to },
+    consolidado: acc === null,
     sales: sales.rows[0],
     liquidations: liq.rows[0],
     expenses: exp.rows[0],
     cash: { income: cashIncome, expense: cashExpense, net: cashIncome - cashExpense },
     production: { input: prod.rows[0].input, cnt: prod.rows[0].cnt },
     receivable_outstanding: ar.rows[0].total,
-    payable_outstanding: ap.rows[0].total
+    payable_outstanding: ap.rows[0].total,
+    breakdown: breakdown.rows
   });
 }));
 
