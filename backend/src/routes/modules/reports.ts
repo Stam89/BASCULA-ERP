@@ -129,6 +129,10 @@ reportsRouter.get("/summary", asyncRoute(async (req, res) => {
   // `acc` es null, el patrón `$N::uuid IS NULL` desactiva el filtro (consolidado).
   const accParam = typeof req.query.accionista === "string" ? req.query.accionista.trim() : "";
   const acc: string | null = accParam === "all" ? null : (accParam || headerAcc || null);
+  // Alcance: 'cash' = solo liquidez real (movimientos de caja, comportamiento
+  // actual, fuente de verdad intacta); 'accrued' = además suma lo DEVENGADO que
+  // aún no pasó por caja (ventas a crédito por cobrar + liquidaciones por pagar).
+  const scope = req.query.scope === "accrued" ? "accrued" : "cash";
   const hasProduction = await hasTable("processing_batches");
 
   const [sales, liq, exp, cash, prod, ar, ap, breakdown] = await Promise.all([
@@ -185,17 +189,66 @@ reportsRouter.get("/summary", asyncRoute(async (req, res) => {
   const cashIncome = cash.rows.find((r) => r.movement === "INCOME")?.total ?? 0;
   const cashExpense = cash.rows.find((r) => r.movement === "EXPENSE")?.total ?? 0;
 
+  // Devengado (solo si scope='accrued'): lo que NO ha pasado por caja todavía.
+  //  · Ventas a crédito por cobrar  → accounts_receivable ligadas a una venta,
+  //    creadas en el período, con saldo pendiente (tipo CREDIT_IN).
+  //  · Liquidaciones por pagar      → accounts_payable ligadas a una liquidación,
+  //    creadas en el período, con saldo pendiente (tipo CREDIT_OUT).
+  // No hay doble-conteo: lo ya cobrado/pagado vive en cash_movements; aquí solo
+  // se toma el `balance` pendiente. No altera los números de caja.
+  let accruedRows: Array<Record<string, unknown>> = [];
+  let creditIn = 0;
+  let creditOut = 0;
+  if (scope === "accrued") {
+    const [arDet, apDet] = await Promise.all([
+      pool.query(
+        `SELECT ar.created_at::date AS fecha,
+                COALESCE(NULLIF(ar.description, ''), 'Venta a crédito') AS concepto,
+                a.name AS socio, 'CREDIT_IN' AS tipo, ar.balance::float AS monto
+         FROM accounts_receivable ar
+         JOIN accionistas a ON a.id = ar.accionista_id
+         WHERE ar.created_at::date BETWEEN $1 AND $2
+           AND ar.sale_id IS NOT NULL AND ar.status <> 'PAID' AND ar.balance > 0
+           AND ($3::uuid IS NULL OR ar.accionista_id = $3)
+         ORDER BY ar.created_at DESC LIMIT 300`,
+        [from, to, acc]
+      ),
+      pool.query(
+        `SELECT ap.created_at::date AS fecha,
+                ('Liquidación a ' || COALESCE(f.full_name, '—')) AS concepto,
+                a.name AS socio, 'CREDIT_OUT' AS tipo, ap.balance::float AS monto
+         FROM accounts_payable ap
+         JOIN accionistas a ON a.id = ap.accionista_id
+         LEFT JOIN farmers f ON f.id = ap.farmer_id
+         WHERE ap.created_at::date BETWEEN $1 AND $2
+           AND ap.liquidation_id IS NOT NULL AND ap.status <> 'PAID' AND ap.balance > 0
+           AND ($3::uuid IS NULL OR ap.accionista_id = $3)
+         ORDER BY ap.created_at DESC LIMIT 300`,
+        [from, to, acc]
+      )
+    ]);
+    creditIn = arDet.rows.reduce((s, r) => s + Number(r.monto), 0);
+    creditOut = apDet.rows.reduce((s, r) => s + Number(r.monto), 0);
+    accruedRows = [...arDet.rows, ...apDet.rows];
+  }
+
+  // Desglose final: caja + (si aplica) devengado, ordenado por fecha desc.
+  const fullBreakdown = [...breakdown.rows, ...accruedRows]
+    .sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+
   res.json({
     range: { from, to },
+    scope,
     consolidado: acc === null,
     sales: sales.rows[0],
     liquidations: liq.rows[0],
     expenses: exp.rows[0],
     cash: { income: cashIncome, expense: cashExpense, net: cashIncome - cashExpense },
+    accrued: { receivable_pending: creditIn, payable_pending: creditOut },
     production: { input: prod.rows[0].input, cnt: prod.rows[0].cnt },
     receivable_outstanding: ar.rows[0].total,
     payable_outstanding: ap.rows[0].total,
-    breakdown: breakdown.rows
+    breakdown: fullBreakdown
   });
 }));
 

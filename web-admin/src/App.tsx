@@ -139,11 +139,22 @@ type ReportSummary = {
   liquidations: { net: number; gross: number; cnt: number };
   expenses: { total: number; cnt: number };
   cash: { income: number; expense: number; net: number };
+  accrued?: { receivable_pending: number; payable_pending: number };
+  scope?: string;
   production: { input: number; cnt: number };
   receivable_outstanding: number;
   payable_outstanding: number;
   breakdown?: Array<{ fecha: string; concepto: string; socio: string; tipo: string; monto: number }>;
 };
+
+/** Etiqueta legible del tipo de movimiento del desglose de Reportes. */
+function reportTipoLabel(t: string): string {
+  return t === "INCOME" ? "Ingreso"
+    : t === "EXPENSE" ? "Egreso"
+    : t === "CREDIT_IN" ? "Crédito (cobrar)"
+    : t === "CREDIT_OUT" ? "Crédito (pagar)"
+    : t;
+}
 
 type LaborRates = {
   pilador_per_qq: number;
@@ -1378,6 +1389,8 @@ export function App() {
   // Segmentación del reporte por accionista ("all" = consolidado) y pestaña inferior.
   const [reportAccionista, setReportAccionista] = useState("all");
   const [reportBottomTab, setReportBottomTab] = useState<"tabla" | "grafico">("tabla");
+  // Alcance del reporte: solo caja (liquidez) o incluir créditos/pendientes (devengado).
+  const [reportScope, setReportScope] = useState<"cash" | "accrued">("cash");
   const [reportSummary, setReportSummary] = useState<ReportSummary | null>(null);
   const [reportRows, setReportRows] = useState<{ kind: ReportKind; data: any } | null>(null);
   const [arianosUbic, setArianosUbic] = useState<Record<string, string>>({});
@@ -2938,7 +2951,7 @@ export function App() {
     try {
       const qs = `?from=${reportFrom}&to=${reportTo}`;
       if (kind === "resumen") {
-        const data = await apiGet<ReportSummary>(`/reports/summary${qs}&accionista=${encodeURIComponent(reportAccionista)}`);
+        const data = await apiGet<ReportSummary>(`/reports/summary${qs}&accionista=${encodeURIComponent(reportAccionista)}&scope=${reportScope}`);
         setReportSummary(data);
         setReportRows({ kind, data });
       } else {
@@ -11382,10 +11395,19 @@ export function App() {
               <div className="reportDates">
                 {accionistas.length > 1 && (
                   <label>
-                    <span>👥 Accionista</span>
+                    <span>👥 Socio</span>
                     <select value={reportAccionista} onChange={(e) => setReportAccionista(e.target.value)}>
                       <option value="all">Todos</option>
                       {accionistas.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>
+                  </label>
+                )}
+                {reportKind === "resumen" && (
+                  <label>
+                    <span>🔎 Alcance</span>
+                    <select value={reportScope} onChange={(e) => setReportScope(e.target.value as "cash" | "accrued")} title="Solo Caja = liquidez real; Devengado = suma ventas a crédito y liquidaciones pendientes que aún no pasan por caja">
+                      <option value="cash">Solo Caja (Liquidez)</option>
+                      <option value="accrued">Incluir Créditos (Devengado)</option>
                     </select>
                   </label>
                 )}
@@ -11407,24 +11429,18 @@ export function App() {
                   {reportBusy ? "Generando…" : "Generar"}
                 </button>
                 {reportKind === "resumen" && reportSummary && (() => {
-                  const exp = {
-                    title: `Resumen ${reportFrom} a ${reportTo}${reportAccionista === "all" ? " · Todos" : ""}`,
-                    headers: ["Métrica", "Valor"],
-                    rows: [
-                      ["Ventas del período", money(reportSummary.sales.total)],
-                      ["Liquidaciones (neto)", money(reportSummary.liquidations.net)],
-                      ["Gastos", money(reportSummary.expenses.total)],
-                      ["Caja · neto", money(reportSummary.cash.net)],
-                      ["Ventas realizadas", String(reportSummary.sales.cnt)],
-                      ["Procesos producción", String(reportSummary.production.cnt)],
-                      ["Por cobrar (saldo)", money(reportSummary.receivable_outstanding)],
-                      ["Por pagar (saldo)", money(reportSummary.payable_outstanding)]
-                    ] as Array<Array<string | number>>
-                  };
+                  // Exporta el DESGLOSE con los filtros actuales (rango, socio, alcance).
+                  const socioTxt = reportAccionista === "all" ? "Todos" : (accionistas.find((a) => a.id === reportAccionista)?.name ?? "");
+                  const alcanceTxt = reportScope === "accrued" ? "Devengado (incluye créditos)" : "Solo caja (liquidez)";
+                  const headers = ["Fecha", "Concepto", "Socio", "Tipo", "Monto"];
+                  const rows = (reportSummary.breakdown ?? []).map((m) => [
+                    new Date(m.fecha).toLocaleDateString("es-EC"), m.concepto, m.socio, reportTipoLabel(m.tipo), money(m.monto)
+                  ]) as Array<Array<string | number>>;
+                  const title = `Reporte ${reportFrom} a ${reportTo} · Socio: ${socioTxt} · ${alcanceTxt}`;
                   return (
                     <>
-                      <button type="button" className="btnSecondary" onClick={() => printReport(exp.title, exp.headers, exp.rows, [])}>📥 PDF</button>
-                      <button type="button" className="btnSecondary" onClick={() => exportReportCsv(exp.headers, exp.rows, `resumen_${reportFrom}_${reportTo}.csv`)}>📊 Excel</button>
+                      <button type="button" className="btnSecondary" onClick={() => printReport(title, headers, rows, [])}>📥 Exportar PDF</button>
+                      <button type="button" className="btnSecondary" onClick={() => exportReportCsv(headers, rows, `reporte_${reportFrom}_${reportTo}.csv`)}>📊 Exportar Excel</button>
                     </>
                   );
                 })()}
@@ -11472,8 +11488,8 @@ export function App() {
                               <td style={{ whiteSpace: "nowrap" }}>{new Date(m.fecha).toLocaleDateString("es-EC")}</td>
                               <td>{m.concepto}</td>
                               <td>{m.socio}</td>
-                              <td><span className={m.tipo === "INCOME" ? "chip ok" : "chip bad"}>{m.tipo === "INCOME" ? "Ingreso" : "Egreso"}</span></td>
-                              <td className="num" style={{ fontWeight: 700, color: m.tipo === "INCOME" ? "var(--c-success)" : "var(--c-danger)" }}>{m.tipo === "INCOME" ? "" : "−"}{money(m.monto)}</td>
+                              <td><span className={m.tipo === "INCOME" ? "chip ok" : m.tipo === "EXPENSE" ? "chip bad" : m.tipo === "CREDIT_IN" ? "chip info" : "chip warn"}>{reportTipoLabel(m.tipo)}</span></td>
+                              <td className="num" style={{ fontWeight: 700, fontStyle: (m.tipo === "CREDIT_IN" || m.tipo === "CREDIT_OUT") ? "italic" : undefined, color: (m.tipo === "INCOME" || m.tipo === "CREDIT_IN") ? "var(--c-success)" : "var(--c-danger)" }}>{(m.tipo === "INCOME" || m.tipo === "CREDIT_IN") ? "" : "−"}{money(m.monto)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -11486,15 +11502,28 @@ export function App() {
                   <div style={{ maxWidth: 560, margin: "0 auto", padding: "8px 0 4px" }}>
                     <BarrasFinancieras
                       datos={[
-                        { etiqueta: "Ingresos", valor: reportSummary.cash.income, color: "#16a34a" },
-                        { etiqueta: "Egresos", valor: reportSummary.cash.expense, color: "#dc2626" }
+                        { etiqueta: "Ingresos (caja)", valor: reportSummary.cash.income, color: "#16a34a" },
+                        { etiqueta: "Egresos (caja)", valor: reportSummary.cash.expense, color: "#dc2626" },
+                        ...(reportScope === "accrued" ? [
+                          { etiqueta: "Crédito por cobrar", valor: reportSummary.accrued?.receivable_pending ?? 0, color: "#2563eb" },
+                          { etiqueta: "Crédito por pagar", valor: reportSummary.accrued?.payable_pending ?? 0, color: "#f59e0b" }
+                        ] : [])
                       ]}
                       formato={money}
                     />
                     <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--c-border)", fontWeight: 800 }}>
-                      <span>Neto de caja</span>
+                      <span>Neto de caja (liquidez)</span>
                       <span style={{ color: reportSummary.cash.net >= 0 ? "var(--c-success)" : "var(--c-danger)" }}>{money(reportSummary.cash.net)}</span>
                     </div>
+                    {reportScope === "accrued" && (() => {
+                      const devengadoNeto = reportSummary.cash.net + (reportSummary.accrued?.receivable_pending ?? 0) - (reportSummary.accrued?.payable_pending ?? 0);
+                      return (
+                        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, fontWeight: 800 }}>
+                          <span>Neto devengado (incl. créditos)</span>
+                          <span style={{ color: devengadoNeto >= 0 ? "var(--c-success)" : "var(--c-danger)" }}>{money(devengadoNeto)}</span>
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
               </div>
