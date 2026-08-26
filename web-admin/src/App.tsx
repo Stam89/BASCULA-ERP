@@ -1294,6 +1294,10 @@ export function App() {
   const [configSubTab, setConfigSubTab] = useState<"operacion" | "tarifas" | "cuadrilla" | "socios" | "secuenciales" | "usuarios">("operacion");
   // Cuentas bancarias por socio (cash_registers tipo BANCO) para Configuración → Socios & Bancos.
   const [bankAccounts, setBankAccounts] = useState<Array<{ id: string; name: string; banco: string | null; numero_cuenta: string | null; socio: string; socio_tipo: string; accionista_id: string }>>([]);
+  // Secuenciales de documentos (Configuración → Secuenciales). Solo la Guía es editable.
+  type SeqRow = { tipo: string; label: string; prefijo: string; next_number: number | null; ejemplo: string; activo: boolean; editable: boolean; modo: string };
+  const [sequences, setSequences] = useState<SeqRow[]>([]);
+  const [seqModal, setSeqModal] = useState<{ prefijo: string; next_number: string } | null>(null);
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
   const [laborRatesForm, setLaborRatesForm] = useState<LaborRates>(defaultLaborRates);
   // Tarifas de empaque / uso de sacos que la MATRIZ cobra a los socios al despachar.
@@ -3151,6 +3155,21 @@ export function App() {
     }
     addToast("Datos bancarios de los socios guardados", "success");
     await loadBankAccounts();
+  }
+
+  // Secuenciales de documentos (Configuración → Secuenciales).
+  async function loadSequences() {
+    try { setSequences(await apiGet<SeqRow[]>("/settings/sequences")); }
+    catch { /* sin permiso / sin datos */ }
+  }
+  async function saveGuiaSequence() {
+    if (!seqModal) return;
+    const next = Number(seqModal.next_number);
+    if (!Number.isInteger(next) || next < 1) { addToast("El próximo número debe ser un entero ≥ 1", "error"); return; }
+    await apiPut("/settings/sequences/guia", { prefijo: seqModal.prefijo.trim() || undefined, next_number: next });
+    setSeqModal(null);
+    addToast("Numeración de guías actualizada ✓", "success");
+    await loadSequences();
   }
 
   async function submitConfigUser(e: FormEvent<HTMLFormElement>) {
@@ -11809,7 +11828,7 @@ export function App() {
                 ["usuarios", "🔐 Control de Usuarios"]
               ] as const).map(([t, label]) => (
                 <button key={t} type="button" className={configSubTab === t ? "active" : ""}
-                  onClick={() => { setConfigSubTab(t); if (t === "operacion") { reloadCashCategories(); loadMaintCategoriesAll(); } if (t === "socios") loadBankAccounts(); if (t === "cuadrilla") refreshCuadrilla().catch(() => undefined); }}>
+                  onClick={() => { setConfigSubTab(t); if (t === "operacion") { reloadCashCategories(); loadMaintCategoriesAll(); } if (t === "socios") loadBankAccounts(); if (t === "cuadrilla") refreshCuadrilla().catch(() => undefined); if (t === "secuenciales") loadSequences(); }}>
                   {label}
                 </button>
               ))}
@@ -12886,16 +12905,73 @@ export function App() {
             {/* ── Secuenciales (maqueta; aún no editables) ── */}
             {configSubTab === "secuenciales" && (
               <section className="panelGrid">
-                <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
-                  <h2>📄 Secuenciales</h2>
-                  <p className="muted">Números que el sistema asigna automáticamente. La edición manual aún no está habilitada (los números vigentes se generan por secuencia en el servidor).</p>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <label><span>Siguiente N.º de comprobante</span><input type="number" disabled placeholder="Próximamente" /></label>
-                    <label><span>Siguiente N.º de liquidación</span><input type="number" disabled placeholder="Próximamente" /></label>
-                    <label><span>Siguiente N.º de venta</span><input type="number" disabled placeholder="Próximamente" /></label>
-                    <label><span>Siguiente N.º de guía de remisión</span><input type="number" disabled placeholder="Próximamente" /></label>
+                <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+                  <h2>📄 Secuenciales de documentos</h2>
+                  <p className="muted" style={{ marginTop: -4 }}>Numeración que asigna el servidor. Solo la <strong>Guía de Remisión</strong> es un contador secuencial editable (prefijo/punto de emisión y próximo número); el resto se numera automáticamente por fecha.</p>
+                  <div style={{ overflowX: "auto" }}>
+                    <table className="cajaTable" style={{ minWidth: 720 }}>
+                      <thead>
+                        <tr>
+                          <th style={{ whiteSpace: "nowrap" }}>Tipo de Documento</th>
+                          <th style={{ whiteSpace: "nowrap" }}>Prefijo / Punto de Emisión</th>
+                          <th style={{ whiteSpace: "nowrap" }}>Próximo Número</th>
+                          <th>Modo</th>
+                          <th>Estado</th>
+                          <th />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sequences.length === 0 ? (
+                          <tr><td colSpan={6} className="muted" style={{ padding: 16, textAlign: "center" }}>Cargando secuencias…</td></tr>
+                        ) : sequences.map((s) => (
+                          <tr key={s.tipo}>
+                            <td style={{ fontWeight: 600 }}>{s.label}</td>
+                            <td style={{ fontFamily: "var(--font-mono)" }}>{s.prefijo}</td>
+                            <td style={{ fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>
+                              {s.next_number != null ? <strong>{s.ejemplo}</strong> : <span className="muted">{s.ejemplo}</span>}
+                            </td>
+                            <td><span className="chip" style={{ background: "#eef2ff", color: "#3730a3", whiteSpace: "nowrap" }}>Auto-incremental (Servidor)</span></td>
+                            <td><span className={s.activo ? "chip ok" : "chip bad"}>{s.activo ? "Activo" : "Inactivo"}</span></td>
+                            <td style={{ textAlign: "right" }}>
+                              {s.editable ? (
+                                <button type="button" className="btnSecondary" disabled={!isAdmin}
+                                  onClick={() => setSeqModal({ prefijo: s.prefijo, next_number: String(s.next_number ?? 1) })}>
+                                  ✏️ Ajustar
+                                </button>
+                              ) : <span className="muted" style={{ fontSize: 12 }}>solo lectura</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
+                  {!isAdmin && <p className="muted" style={{ marginTop: 10 }}>Solo un administrador puede ajustar la numeración de guías.</p>}
                 </div>
+
+                {/* Modal seguro: ajustar prefijo y próximo número de la Guía de Remisión. */}
+                {seqModal && (
+                  <div className="modalOverlay" onClick={() => setSeqModal(null)}>
+                    <div className="modalCard" onClick={(e) => e.stopPropagation()}>
+                      <h3>Ajustar numeración de Guía de Remisión</h3>
+                      <div className="alertBox" style={{ marginBottom: 12 }}>
+                        ⚠️ Cambiar el próximo número o el prefijo afecta la numeración fiscal de las guías. Úsalo solo al iniciar un nuevo año o una nueva libreta.
+                      </div>
+                      <label>
+                        <span>Prefijo / Punto de emisión</span>
+                        <input type="text" value={seqModal.prefijo} onChange={(e) => setSeqModal({ ...seqModal, prefijo: e.target.value })} placeholder="001-001-" />
+                      </label>
+                      <label>
+                        <span>Próximo número a asignar</span>
+                        <input type="number" min="1" step="1" value={seqModal.next_number} onChange={(e) => setSeqModal({ ...seqModal, next_number: e.target.value })} />
+                      </label>
+                      <p className="muted" style={{ fontSize: 12 }}>Vista previa: <strong style={{ fontFamily: "var(--font-mono)" }}>{(seqModal.prefijo || "001-001-") + String(Number(seqModal.next_number) || 1).padStart(9, "0")}</strong></p>
+                      <div className="buttonRow">
+                        <button type="button" className="primary" onClick={() => saveGuiaSequence().catch((err) => addToast(err.message, "error"))}>Guardar y confirmar</button>
+                        <button type="button" onClick={() => setSeqModal(null)}>Cancelar</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </section>
             )}
 

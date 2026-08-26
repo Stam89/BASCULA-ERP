@@ -330,7 +330,7 @@ ordersRouter.put("/:id/guia", asyncRoute(async (req, res) => {
     // Número de guía: se asigna una sola vez (se conserva si ya existía).
     let guiaNumber: string = order.rows[0].guia_number;
     if (!guiaNumber) {
-      const seq = await client.query("SELECT '001-001-' || LPAD(nextval('guia_remision_seq')::text, 9, '0') AS n");
+      const seq = await client.query("SELECT COALESCE((SELECT guia_prefix FROM app_settings WHERE id = 1), '001-001-') || LPAD(nextval('guia_remision_seq')::text, 9, '0') AS n");
       guiaNumber = seq.rows[0].n;
     }
 

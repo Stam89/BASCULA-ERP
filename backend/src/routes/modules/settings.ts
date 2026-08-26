@@ -56,6 +56,9 @@ function ensureTable(): Promise<void> {
            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
          )`
       )
+      // Prefijo / punto de emisión de la Guía de Remisión (única secuencia
+      // realmente secuencial del sistema). Aditivo.
+      .then(() => pool.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS guia_prefix VARCHAR(20) NOT NULL DEFAULT '001-001-'`))
       .then(() => undefined);
   }
   return tableReady;
@@ -97,6 +100,63 @@ settingsRouter.put("/", requireAdmin, asyncRoute(async (req, res) => {
     [body.business_name, body.business_subtitle, body.ruc, body.phone, body.address, body.receipt_footer]
   );
   res.json(result.rows[0]);
+}));
+
+// ── Secuenciales de documentos ──────────────────────────────────────────────
+// La ÚNICA secuencia realmente secuencial es la Guía de Remisión (guia_remision_seq
+// + prefijo/punto de emisión configurable). El resto (Venta, Liquidación,
+// Comprobante) se numera automáticamente por fecha en el servidor (nextCode),
+// NO son contadores editables: se muestran solo como información (último código).
+settingsRouter.get("/sequences", asyncRoute(async (_req, res) => {
+  await ensureTable();
+  const [cfg, seq, lastVen, lastLiq] = await Promise.all([
+    pool.query("INSERT INTO app_settings (id) VALUES (1) ON CONFLICT (id) DO UPDATE SET id = 1 RETURNING guia_prefix"),
+    pool.query("SELECT last_value, is_called FROM guia_remision_seq"),
+    pool.query("SELECT sale_number FROM sales ORDER BY created_at DESC LIMIT 1"),
+    pool.query("SELECT liquidation_number FROM liquidations ORDER BY created_at DESC LIMIT 1")
+  ]);
+  const guiaPrefix = cfg.rows[0]?.guia_prefix ?? "001-001-";
+  const sr = seq.rows[0];
+  const guiaNext = sr.is_called ? Number(sr.last_value) + 1 : Number(sr.last_value);
+  res.json([
+    { tipo: "GUIA", label: "Guía de Remisión", prefijo: guiaPrefix, next_number: guiaNext,
+      ejemplo: `${guiaPrefix}${String(guiaNext).padStart(9, "0")}`, activo: true, editable: true,
+      modo: "Secuencial (servidor)" },
+    { tipo: "VENTA", label: "Venta", prefijo: "VEN-", next_number: null,
+      ejemplo: lastVen.rows[0]?.sale_number ?? "VEN-…", activo: true, editable: false,
+      modo: "Auto-incremental por fecha (servidor)" },
+    { tipo: "LIQUIDACION", label: "Liquidación", prefijo: "LIQ-", next_number: null,
+      ejemplo: lastLiq.rows[0]?.liquidation_number ?? "LIQ-…", activo: true, editable: false,
+      modo: "Auto-incremental por fecha (servidor)" },
+    { tipo: "COMPROBANTE", label: "Comprobante de Caja", prefijo: "—", next_number: null,
+      ejemplo: "Automático por movimiento", activo: true, editable: false,
+      modo: "Auto (por movimiento de caja)" }
+  ]);
+}));
+
+/** Ajuste manual de la numeración de la Guía de Remisión (admin): prefijo / punto
+ *  de emisión y/o el próximo número a asignar (p. ej. nuevo año o nueva libreta).
+ *  setval(..., N, false) hace que el PRÓXIMO nextval devuelva exactamente N. */
+settingsRouter.put("/sequences/guia", requireAdmin, asyncRoute(async (req, res) => {
+  await ensureTable();
+  const body = z.object({
+    prefijo: z.string().max(20).optional(),
+    next_number: z.number().int().min(1).optional()
+  }).parse(req.body);
+  if (body.prefijo !== undefined) {
+    await pool.query("UPDATE app_settings SET guia_prefix = $1, updated_at = now() WHERE id = 1", [body.prefijo]);
+  }
+  if (body.next_number !== undefined) {
+    await pool.query("SELECT setval('guia_remision_seq', $1, false)", [body.next_number]);
+  }
+  const [cfg, seq] = await Promise.all([
+    pool.query("SELECT guia_prefix FROM app_settings WHERE id = 1"),
+    pool.query("SELECT last_value, is_called FROM guia_remision_seq")
+  ]);
+  const guiaPrefix = cfg.rows[0].guia_prefix as string;
+  const sr = seq.rows[0];
+  const guiaNext = sr.is_called ? Number(sr.last_value) + 1 : Number(sr.last_value);
+  res.json({ tipo: "GUIA", prefijo: guiaPrefix, next_number: guiaNext, ejemplo: `${guiaPrefix}${String(guiaNext).padStart(9, "0")}` });
 }));
 
 // ── Tarifas de empaque / uso de sacos de la MATRIZ (CEYRO) ──────────────────
