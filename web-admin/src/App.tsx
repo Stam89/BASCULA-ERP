@@ -11941,7 +11941,7 @@ export function App() {
 
             {/* ── Usuarios ── */}
             {configSubTab === "usuarios" && (
-              <section className="panelGrid">
+              <section style={{ display: "grid", gridTemplateColumns: "minmax(0, 5fr) minmax(0, 7fr)", gap: 16, alignItems: "start" }} className="configUsersGrid">
                 <form className="formPanel" onSubmit={(e) => submitConfigUser(e).catch((err) => addToast(err.message, "error"))}>
                   <h2>👤 Crear usuario</h2>
                   <p className="muted">Los operadores pueden usar todo el sistema; solo los administradores acceden a Configuración, crean usuarios y borran datos.</p>
@@ -11994,7 +11994,13 @@ export function App() {
                   </label>
                   {newUserForm.role === "OPERADOR" && (
                     <div>
-                      <span className="permLabel">Módulos que puede modificar *</span>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                        <span className="permLabel">Módulos que puede modificar *</span>
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button type="button" className="btnGhost" style={{ fontSize: 12, padding: "2px 8px" }} onClick={() => setNewUserForm({ ...newUserForm, modules: [...APP_MODULES] })}>☑️ Seleccionar todos</button>
+                          <button type="button" className="btnGhost" style={{ fontSize: 12, padding: "2px 8px" }} onClick={() => setNewUserForm({ ...newUserForm, modules: [] })}>⬜ Limpiar selección</button>
+                        </div>
+                      </div>
                       <div className="permGrid">
                         {APP_MODULES.map((m) => (
                           <label key={m} className={newUserForm.modules.includes(m) ? "permChip on" : "permChip"}>
@@ -12060,15 +12066,16 @@ export function App() {
                       <p>{isAdmin ? "Cargando usuarios…" : "Solo un administrador puede ver los usuarios"}</p>
                     </div>
                   ) : (
-                    <table className="cajaTable" style={{ marginTop: 10 }}>
+                    <div style={{ overflowX: "auto" }}>
+                    <table className="cajaTable" style={{ marginTop: 10, minWidth: 640 }}>
                       <thead>
                         <tr>
                           <th>Nombre</th>
                           <th>Usuario</th>
-                          <th>Rol</th>
-                          <th>Permisos</th>
+                          <th style={{ whiteSpace: "nowrap" }}>Rol</th>
+                          <th style={{ whiteSpace: "nowrap" }}>Permisos</th>
                           <th>Estado</th>
-                          <th />
+                          <th style={{ whiteSpace: "nowrap" }}>Acciones</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -12139,6 +12146,7 @@ export function App() {
                         ))}
                       </tbody>
                     </table>
+                    </div>
                   )}
                 </div>
 
@@ -12722,12 +12730,13 @@ export function App() {
                     <p>Aún no hay actividad registrada. Las acciones de los usuarios aparecerán aquí.</p>
                   </div>
                 ) : (
-                  <table className="cajaTable" style={{ marginTop: 10 }}>
+                  <div style={{ maxHeight: 350, overflowY: "auto", border: "1px solid var(--c-border)", borderRadius: 8, marginTop: 10 }}>
+                  <table className="cajaTable" style={{ margin: 0 }}>
                     <thead>
                       <tr>
-                        <th>Fecha y hora</th>
-                        <th>Usuario</th>
-                        <th>Acción</th>
+                        <th style={{ position: "sticky", top: 0, background: "#fff", boxShadow: "0 1px 0 rgba(0,0,0,0.1)", zIndex: 1 }}>Fecha y hora</th>
+                        <th style={{ position: "sticky", top: 0, background: "#fff", boxShadow: "0 1px 0 rgba(0,0,0,0.1)", zIndex: 1 }}>Usuario</th>
+                        <th style={{ position: "sticky", top: 0, background: "#fff", boxShadow: "0 1px 0 rgba(0,0,0,0.1)", zIndex: 1 }}>Acción</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -12744,6 +12753,7 @@ export function App() {
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 )}
               </div>
             )}
