@@ -1291,7 +1291,7 @@ export function App() {
   const [laborForm, setLaborForm] = useState({ worker_group: "", sacks_moved: "", price_per_sack: "" });
 
   // ── Configuración ─────────────────────────────────────────────────────────
-  const [configSubTab, setConfigSubTab] = useState<"operacion" | "cuadrilla" | "socios" | "secuenciales" | "usuarios">("operacion");
+  const [configSubTab, setConfigSubTab] = useState<"operacion" | "tarifas" | "cuadrilla" | "socios" | "secuenciales" | "usuarios">("operacion");
   // Cuentas bancarias por socio (cash_registers tipo BANCO) para Configuración → Socios & Bancos.
   const [bankAccounts, setBankAccounts] = useState<Array<{ id: string; name: string; banco: string | null; numero_cuenta: string | null; socio: string; socio_tipo: string; accionista_id: string }>>([]);
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
@@ -3135,21 +3135,6 @@ export function App() {
     setAppSettings(saved);
     setSettingsForm(saved);
     addToast("Datos del negocio guardados", "success");
-  }
-
-  // Botón persistente [💾 Guardar Configuración]: guarda la config de la pestaña
-  // activa (los handlers solo usan preventDefault + estado, así que un evento
-  // sintético es seguro). Cada save emite su propio toast de confirmación.
-  async function guardarConfig() {
-    const fakeEvent = { preventDefault: () => {} } as unknown as FormEvent<HTMLFormElement>;
-    try {
-      if (configSubTab === "operacion") await saveSettings(fakeEvent);
-      else if (configSubTab === "cuadrilla") await saveLaborRates(fakeEvent);
-      else if (configSubTab === "socios") await saveBankAccounts();
-      else addToast("En esta pestaña, cada tarjeta se guarda con su propio botón.", "warn");
-    } catch (err) {
-      addToast(err instanceof Error ? err.message : "No se pudo guardar", "error");
-    }
   }
 
   // Cuentas bancarias de los socios (Configuración → Socios & Bancos).
@@ -11817,13 +11802,14 @@ export function App() {
             <aside className="configVTabs">
               {([
                 ["operacion", "⚙️ Operación y Planta"],
-                ["cuadrilla", "👷 Tarifario de Cuadrilla"],
+                ["tarifas", "⚙️ Tarifas y Servicios de Planta"],
+                ["cuadrilla", "👷 Cuadrilla"],
                 ["socios", "👥 Socios & Bancos"],
                 ["secuenciales", "📄 Secuenciales"],
                 ["usuarios", "🔐 Control de Usuarios"]
               ] as const).map(([t, label]) => (
                 <button key={t} type="button" className={configSubTab === t ? "active" : ""}
-                  onClick={() => { setConfigSubTab(t); if (t === "operacion") { reloadCashCategories(); loadMaintCategoriesAll(); } if (t === "socios") loadBankAccounts(); }}>
+                  onClick={() => { setConfigSubTab(t); if (t === "operacion") { reloadCashCategories(); loadMaintCategoriesAll(); } if (t === "socios") loadBankAccounts(); if (t === "cuadrilla") refreshCuadrilla().catch(() => undefined); }}>
                   {label}
                 </button>
               ))}
@@ -12400,6 +12386,11 @@ export function App() {
                       </table>
                     </div>
                   )}
+                  {isAdmin && bankAccounts.length > 0 && (
+                    <div className="buttonRow" style={{ marginTop: 12 }}>
+                      <button type="button" className="primary" onClick={() => saveBankAccounts().catch((err) => addToast(err.message, "error"))}>💾 Guardar datos bancarios</button>
+                    </div>
+                  )}
                   {!isAdmin && <p className="muted">Solo un administrador puede editar los datos bancarios.</p>}
                 </div>
 
@@ -12435,9 +12426,11 @@ export function App() {
               </section>
             )}
 
-            {/* ── Tarifas de pago a trabajadores ── */}
-            {configSubTab === "cuadrilla" && (
-              <section className="panelGrid">
+            {/* ── Tarifas y Servicios de Planta (2 columnas) ── */}
+            {configSubTab === "tarifas" && (
+              <section className="configTarifasGrid">
+                {/* Columna 1: pago a trabajadores + ejemplo de cálculo */}
+                <div className="configTarifasCol">
                 <form className="formPanel" onSubmit={(e) => saveLaborRates(e).catch((err) => addToast(err.message, "error"))}>
                   <h2>💲 Tarifas de pago (Pilador y Estibador)</h2>
                   <p className="muted">Con estas tarifas se calcula automáticamente el pago al cerrar cada pilada en Producción.</p>
@@ -12499,6 +12492,9 @@ export function App() {
                   <div className="totalBox">
                   </div>
                 </div>
+                </div>{/* fin Columna 1 */}
+                {/* Columna 2: servicios a socios + empaque + selección/envejecido */}
+                <div className="configTarifasCol">
                 <div className="formPanel">
                   <h2>🧾 Tarifario de servicios (socios)</h2>
                   <p className="muted">Precio por QQ por socio y servicio, con fecha de vigencia. Servicio Pilado autocompleta con la tarifa vigente (editable).</p>
@@ -12586,6 +12582,7 @@ export function App() {
                     {!isAdmin && <p className="muted">Solo un administrador puede cambiar estas tarifas.</p>}
                   </form>
                 </div>
+                </div>{/* fin Columna 2 */}
               </section>
             )}
 
@@ -12854,7 +12851,7 @@ export function App() {
               <section className="panelGrid">
                 <form className="formPanel" onSubmit={(e) => createActivity(e).catch((err) => addToast(err.message, "error"))}>
                   <h2>🏷️ Nueva actividad de cuadrilla</h2>
-                  <p className="muted">Actividad + tarifa por saco/unidad. Si ya existe, actualiza su tarifa.</p>
+                  <p className="muted">Actividad + tarifa por saco/unidad. Si ya existe, actualiza su tarifa. Es el <strong>mismo tarifario dinámico</strong> que usa «Nómina → Cuadrilla».</p>
                   <label><span>Nombre / Descripción</span>
                     <input type="text" value={newActivityForm.name} onChange={(e) => setNewActivityForm({ ...newActivityForm, name: e.target.value })} placeholder="Ej: ENSACADO" />
                   </label>
@@ -12902,25 +12899,8 @@ export function App() {
               </section>
             )}
 
-            {/* Botón persistente de guardado (parte inferior, sticky). El texto
-                deja claro QUÉ guarda la pestaña activa; se deshabilita donde no hay
-                un guardado consolidado (cada tarjeta guarda por su cuenta). */}
-            {(() => {
-              const info: Record<string, { label: string; can: boolean }> = {
-                operacion:    { label: "Guarda los Datos del negocio de esta pestaña.", can: true },
-                cuadrilla:    { label: "Guarda las Tarifas de pago a trabajadores.", can: true },
-                socios:       { label: "Guarda los datos bancarios de los socios.", can: true },
-                secuenciales: { label: "No hay datos que guardar (los números se generan automáticamente).", can: false },
-                usuarios:     { label: "Los usuarios y accesos se guardan con el botón de cada tarjeta.", can: false }
-              };
-              const cur = info[configSubTab];
-              return (
-                <div className="configSaveBar">
-                  <span className="muted" style={{ fontSize: 12 }}>{cur.label}</span>
-                  <button type="button" className="primary" disabled={!isAdmin || !cur.can} onClick={() => guardarConfig()}>💾 Guardar Configuración</button>
-                </div>
-              );
-            })()}
+            {/* Cada tarjeta se guarda con su propio botón (no hay guardado global
+                consolidado), así que se removió la barra flotante duplicada. */}
 
             </div>
           </div>
