@@ -682,6 +682,18 @@ type ActivosFijosData = {
   costo_total: number; depreciacion_acumulada: number; valor_libros: number; depreciacion_anual: number;
 };
 
+/** Desglose del costo de ventas para el drill-down del Estado de Resultados. */
+type CostoVentaLinea = {
+  fecha: string | null; concepto: string; referencia: string;
+  cantidad?: number; costo_unitario?: number; gas?: number; diesel?: number; monto: number;
+};
+type CostoVentasDetalle = {
+  periodo: { desde: string; hasta: string };
+  costo_qq_terminado: number;
+  mercaderia: { items: CostoVentaLinea[]; total: number };
+  combustible: { items: CostoVentaLinea[]; total: number };
+};
+
 /**
  * Repara nombres de equipos guardados con codificación rota: el carácter de
  * reemplazo U+FFFD (�) aparece donde debía ir "ú" (p. ej. "T�nel" → "Túnel").
@@ -1510,6 +1522,11 @@ export function App() {
   // Activos fijos: los equipos ya existen; aquí se cargan sus datos contables.
   const [activosFijos, setActivosFijos] = useState<ActivosFijosData | null>(null);
   const [activoEdit, setActivoEdit] = useState<Record<string, { costo: string; fecha: string; vida: string }>>({});
+  // Alta manual de un activo fijo (vehículos, muebles, equipo de oficina…).
+  const [modalNuevoActivo, setModalNuevoActivo] = useState(false);
+  const [nuevoActivo, setNuevoActivo] = useState({ nombre: "", tipo: "VEHICULO", costo: "", fecha: "", vida: "" });
+  // Drill-down del costo de ventas (mercadería vendida / combustible de secado).
+  const [detalleCosto, setDetalleCosto] = useState<{ concepto: "mercaderia" | "combustible"; data: CostoVentasDetalle } | null>(null);
   const [orderPayMethod, setOrderPayMethod] = useState<Record<string, string>>({});
   // Modal de captura de datos del transportista para la Guía de Remisión.
   const [guiaModal, setGuiaModal] = useState<{ order: SalesOrder; nombre: string; cedula: string; placa: string } | null>(null);
@@ -5351,6 +5368,41 @@ export function App() {
     await loadFinanzas();
   }
 
+  // Borra los equipos con costo $0 que duplican a otro registro (nombres rotos
+  // o repetidos), dejando siempre uno por nombre. La cuenta la calcula el server.
+  async function limpiarDuplicadosActivos() {
+    if (!confirm("¿Eliminar los activos fijos con costo $0.00 que están repetidos?\n\nSe conserva uno por nombre y no se tocan los que tengan costo o historial de mantenimiento.")) return;
+    const r = await apiPost<{ eliminados: number }>("/finance/fixed-assets/limpiar-duplicados", {});
+    addToast(r.eliminados > 0 ? `${r.eliminados} duplicado(s) sin costo eliminados` : "No había duplicados sin costo", "success");
+    await loadFinanzas();
+  }
+
+  // Registra un activo fijo manual (no proviene de la maquinaria de planta).
+  async function agregarActivoFijo() {
+    const nombre = nuevoActivo.nombre.trim();
+    if (!nombre) throw new Error("Indica el nombre del activo");
+    const costo = Number(nuevoActivo.costo || 0);
+    if (costo > 0 && !nuevoActivo.fecha) throw new Error("Con costo debes indicar la fecha de compra para depreciar");
+    await apiPost("/finance/fixed-assets", {
+      name: nombre,
+      type: nuevoActivo.tipo,
+      acquisition_cost: costo,
+      acquisition_date: nuevoActivo.fecha || undefined,
+      useful_life_years: Number(nuevoActivo.vida || vidaUtilSugerida(nuevoActivo.tipo)),
+      salvage_value: 0,
+      is_depreciable: true
+    });
+    addToast(`Activo fijo "${nombre}" registrado`, "success");
+    setModalNuevoActivo(false);
+    await loadFinanzas();
+  }
+
+  // Abre el drill-down: pide al servidor los registros que componen la partida.
+  async function abrirDetalleCosto(concepto: "mercaderia" | "combustible") {
+    const data = await apiGet<CostoVentasDetalle>(`/finance/costo-ventas/detalle?desde=${finanzasDesde}&hasta=${finanzasHasta}`);
+    setDetalleCosto({ concepto, data });
+  }
+
   async function loadProductionHistory() {
     const rows = await apiGet<ProductionHistoryItem[]>("/processing-batches/history").catch(
       () => [] as ProductionHistoryItem[]
@@ -6932,8 +6984,14 @@ export function App() {
                       <tr><td>Servicio de pilado</td><td className="num">{money(finanzas.resultados.ingresos.servicio_pilado)}</td></tr>
                       <tr style={{ fontWeight: 700 }}><td>Total ingresos</td><td className="num">{money(finanzas.resultados.ingresos.total)}</td></tr>
                       <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>COSTO DE VENTAS</td></tr>
-                      <tr><td>Mercadería vendida</td><td className="num">{money(finanzas.resultados.costo_ventas.mercaderia_vendida)}</td></tr>
-                      <tr><td>Combustible de secado</td><td className="num">{money(finanzas.resultados.costo_ventas.combustible_secado)}</td></tr>
+                      <tr>
+                        <td><button type="button" className="linkBtn" onClick={() => abrirDetalleCosto("mercaderia")} title="Ver los movimientos que componen esta cifra">Mercadería vendida 🔍</button></td>
+                        <td className="num">{money(finanzas.resultados.costo_ventas.mercaderia_vendida)}</td>
+                      </tr>
+                      <tr>
+                        <td><button type="button" className="linkBtn" onClick={() => abrirDetalleCosto("combustible")} title="Ver los registros que componen esta cifra">Combustible de secado 🔍</button></td>
+                        <td className="num">{money(finanzas.resultados.costo_ventas.combustible_secado)}</td>
+                      </tr>
                       <tr style={{ fontWeight: 700, borderTop: "1px solid var(--c-border)" }}>
                         <td>UTILIDAD BRUTA <small className="muted">({finanzas.resultados.margen_bruto_pct}%)</small></td>
                         <td className="num">{money(finanzas.resultados.utilidad_bruta)}</td>
@@ -6973,9 +7031,9 @@ export function App() {
                         return (
                           <tr key={clave}>
                             <td>{etiqueta}</td>
-                            <td className="num">{esDinero ? money(i.valor) : esPct ? `${i.valor}%` : i.valor.toFixed(2)}</td>
-                            <td className="muted">{i.meta}</td>
-                            <td><span className={i.ok ? "chip success" : "chip warning"}>{i.ok ? "✓ OK" : "⚠ Revisar"}</span></td>
+                            <td className="num">{i.sin_deuda ? "N/A" : esDinero ? money(i.valor) : esPct ? `${i.valor}%` : i.valor.toFixed(2)}</td>
+                            <td className="muted">{i.sin_deuda ? "Sin deuda" : i.meta}</td>
+                            <td><span className={i.ok ? "chip success" : "chip warning"}>{i.sin_deuda ? "✓ Sin deuda" : i.ok ? "✓ OK" : "⚠ Revisar"}</span></td>
                           </tr>
                         );
                       })}
@@ -6986,7 +7044,17 @@ export function App() {
                 {/* Activos fijos y depreciación */}
                 {activosFijos && (
                   <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-                    <h2>🏭 Activos fijos y depreciación</h2>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      <h2 style={{ margin: 0 }}>🏭 Activos fijos y depreciación</h2>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button type="button" onClick={() => limpiarDuplicadosActivos().catch((e) => addToast(e.message, "error"))}>
+                          🧹 Limpiar duplicados sin costo
+                        </button>
+                        <button type="button" className="primary" onClick={() => { setNuevoActivo({ nombre: "", tipo: "VEHICULO", costo: "", fecha: "", vida: "" }); setModalNuevoActivo(true); }}>
+                          ➕ Agregar Activo Fijo
+                        </button>
+                      </div>
+                    </div>
                     <p className="muted">
                       Carga el costo y la fecha de compra de cada equipo. Con eso el sistema calcula la depreciación en
                       línea recta, la resta del balance y la lleva al Estado de Resultados. Sin costo, el equipo no entra
@@ -7074,10 +7142,15 @@ export function App() {
                 <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
                   <h2>🏦 Conciliación bancaria</h2>
                   {cuentasBanco.length === 0 ? (
-                    <p className="muted">
-                      No hay cuentas de banco. En <strong>Caja</strong>, abre una caja de tipo <strong>🏦 Banco</strong> y
-                      aparecerá aquí para conciliarla contra el extracto.
-                    </p>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 10 }}>
+                      <p className="muted" style={{ margin: 0 }}>
+                        No hay cuentas de banco. Abre una caja de tipo <strong>🏦 Banco</strong> para conciliarla
+                        contra el extracto.
+                      </p>
+                      <button type="button" className="primary" onClick={() => setActiveTab("Caja")}>
+                        🏦 Ir a Caja para Aperturar Banco
+                      </button>
+                    </div>
                   ) : (
                     <>
                       <p className="muted">
@@ -7188,6 +7261,109 @@ export function App() {
                 </div>
               </>
             )}
+
+            {/* Modal: alta manual de un activo fijo */}
+            {modalNuevoActivo && (
+              <div className="modalOverlay" onClick={() => setModalNuevoActivo(false)}>
+                <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
+                  <h2 style={{ marginTop: 0 }}>➕ Agregar Activo Fijo</h2>
+                  <p className="muted" style={{ marginTop: 0 }}>Para bienes que no son maquinaria de planta: vehículos, muebles, equipo de oficina, etc.</p>
+                  <label><span>Nombre del bien</span>
+                    <input value={nuevoActivo.nombre} autoFocus placeholder="Ej. Camioneta Mazda BT-50"
+                      onChange={(e) => setNuevoActivo({ ...nuevoActivo, nombre: e.target.value })} />
+                  </label>
+                  <label><span>Categoría</span>
+                    <select value={nuevoActivo.tipo} onChange={(e) => setNuevoActivo({ ...nuevoActivo, tipo: e.target.value })}>
+                      <option value="VEHICULO">Vehículo</option>
+                      <option value="MUEBLES Y ENSERES">Muebles y enseres</option>
+                      <option value="EQUIPO DE OFICINA">Equipo de oficina</option>
+                      <option value="EQUIPO DE COMPUTO">Equipo de cómputo</option>
+                      <option value="EDIFICIO">Edificio / inmueble</option>
+                      <option value="MAQUINARIA">Maquinaria</option>
+                      <option value="OTRO">Otro</option>
+                    </select>
+                  </label>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <label><span>Costo $</span>
+                      <input type="number" step="0.01" min="0" placeholder="0.00" value={nuevoActivo.costo}
+                        onChange={(e) => setNuevoActivo({ ...nuevoActivo, costo: e.target.value })} />
+                    </label>
+                    <label><span>Fecha de compra</span>
+                      <input type="date" value={nuevoActivo.fecha}
+                        onChange={(e) => setNuevoActivo({ ...nuevoActivo, fecha: e.target.value })} />
+                    </label>
+                  </div>
+                  <label><span>Vida útil (años) <small className="muted">— sugerido {vidaUtilSugerida(nuevoActivo.tipo)}</small></span>
+                    <input type="number" min="1" max="50" placeholder={String(vidaUtilSugerida(nuevoActivo.tipo))} value={nuevoActivo.vida}
+                      onChange={(e) => setNuevoActivo({ ...nuevoActivo, vida: e.target.value })} />
+                  </label>
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
+                    <button type="button" onClick={() => setModalNuevoActivo(false)}>Cancelar</button>
+                    <button type="button" className="primary" onClick={() => agregarActivoFijo().catch((e) => addToast(e.message, "error"))}>
+                      Guardar activo
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Modal: drill-down del costo de ventas */}
+            {detalleCosto && (() => {
+              const esMerc = detalleCosto.concepto === "mercaderia";
+              const bloque = esMerc ? detalleCosto.data.mercaderia : detalleCosto.data.combustible;
+              return (
+                <div className="modalOverlay" onClick={() => setDetalleCosto(null)}>
+                  <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 760, width: "92%" }}>
+                    <h2 style={{ marginTop: 0 }}>
+                      {esMerc ? "🧾 Mercadería vendida" : "🔥 Combustible de secado"}
+                      <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}> · {detalleCosto.data.periodo.desde} al {detalleCosto.data.periodo.hasta}</span>
+                    </h2>
+                    {esMerc && (
+                      <p className="muted" style={{ marginTop: 0 }}>
+                        Salidas de inventario valorizadas al costo del producto terminado
+                        (${detalleCosto.data.costo_qq_terminado.toFixed(2)}/QQ).
+                      </p>
+                    )}
+                    {bloque.items.length === 0 ? (
+                      <div className="emptyState"><div className="emptyIcon">📭</div><p>Sin registros en el período.</p></div>
+                    ) : (
+                      <div style={{ maxHeight: 420, overflowY: "auto" }}>
+                        <table className="cajaTable">
+                          <thead>
+                            <tr>
+                              <th>Fecha</th><th>Concepto</th>
+                              {esMerc ? <><th className="num">QQ</th><th className="num">$/QQ</th></> : <><th className="num">Gas</th><th className="num">Diésel</th></>}
+                              <th className="num">Monto</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {bloque.items.map((it, idx) => (
+                              <tr key={idx}>
+                                <td>{it.fecha ? String(it.fecha).slice(0, 10) : "—"}</td>
+                                <td>{it.concepto}<small className="muted" style={{ display: "block" }}>{it.referencia}</small></td>
+                                {esMerc
+                                  ? <><td className="num">{(it.cantidad ?? 0).toFixed(2)}</td><td className="num">{money(it.costo_unitario ?? 0)}</td></>
+                                  : <><td className="num">{money(it.gas ?? 0)}</td><td className="num">{money(it.diesel ?? 0)}</td></>}
+                                <td className="num" style={{ fontWeight: 600 }}>{money(it.monto)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot>
+                            <tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border-strong)" }}>
+                              <td colSpan={esMerc ? 4 : 4}>TOTAL ({bloque.items.length} registro{bloque.items.length === 1 ? "" : "s"})</td>
+                              <td className="num">{money(bloque.total)}</td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    )}
+                    <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
+                      <button type="button" onClick={() => setDetalleCosto(null)}>Cerrar</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </section>
         )}
 

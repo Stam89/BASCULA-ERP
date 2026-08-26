@@ -12,7 +12,8 @@ import {
   getFlujoCaja,
   getIndicadores,
   getDashboardFinanciero,
-  getActivosFijos
+  getActivosFijos,
+  getCostoVentasDetalle
 } from "../../services/finance.js";
 import {
   parsearExtracto,
@@ -93,6 +94,79 @@ financeRouter.put("/fixed-assets/:id", requireAdmin, asyncRoute(async (req, res)
   );
   if (!r.rowCount) throw new ApiError(404, "Equipo no encontrado");
   res.json(r.rows[0]);
+}));
+
+// Registrar un activo fijo manual (vehículos, muebles, equipo de oficina…) que
+// no proviene de la maquinaria de planta. Solo admin: entra al balance.
+financeRouter.post("/fixed-assets", requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({
+    name: z.string().min(1),
+    type: z.string().min(1).default("OTRO"),
+    acquisition_cost: z.number().nonnegative().default(0),
+    acquisition_date: z.string().optional(),
+    useful_life_years: z.number().int().positive().max(50).default(10),
+    salvage_value: z.number().nonnegative().default(0),
+    is_depreciable: z.boolean().default(true)
+  }).parse(req.body);
+  const accionistaId = accionista(req as AuthenticatedRequest);
+  const r = await pool.query(
+    `INSERT INTO equipment
+       (name, type, status, accionista_id, acquisition_cost, acquisition_date, useful_life_years, salvage_value, is_depreciable)
+     VALUES ($1, $2, 'ACTIVA', $3, $4, $5, $6, $7, $8)
+     RETURNING id, name`,
+    [body.name.trim().toUpperCase(), body.type.trim().toUpperCase(), accionistaId,
+     body.acquisition_cost, body.acquisition_date ?? null, body.useful_life_years,
+     body.salvage_value, body.is_depreciable]
+  );
+  res.status(201).json(r.rows[0]);
+}));
+
+// Limpieza de duplicados sin costo: elimina los equipos con costo $0 cuyo nombre
+// (saneado, sin tildes) coincide con otro equipo. Deja siempre al menos uno por
+// nombre y respeta los que tienen historial de mantenimiento.
+financeRouter.post("/fixed-assets/limpiar-duplicados", requireAdmin, asyncRoute(async (req, res) => {
+  const accionistaId = accionista(req as AuthenticatedRequest);
+  const eliminados = await inTransaction(async (client) => {
+    const r = await client.query(
+      `SELECT id, name, acquisition_cost FROM equipment
+       WHERE (accionista_id = $1 OR accionista_id IS NULL)`,
+      [accionistaId]
+    );
+    const canon = (s: string) =>
+      String(s || "")
+        .replace(/T�nel/g, "Túnel").replace(/�/g, "ú")
+        .normalize("NFD").replace(/[̀-ͯ]/g, "")
+        .replace(/[^\w\s]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+    const grupos = new Map<string, Array<{ id: string; costo: number }>>();
+    for (const e of r.rows) {
+      const k = canon(e.name);
+      if (!grupos.has(k)) grupos.set(k, []);
+      grupos.get(k)!.push({ id: e.id, costo: Number(e.acquisition_cost) });
+    }
+    const aEliminar: string[] = [];
+    for (const arr of grupos.values()) {
+      if (arr.length < 2) continue;
+      const conCosto = arr.filter((e) => e.costo > 0);
+      const conservar = new Set((conCosto.length ? conCosto : [arr[0]]).map((e) => e.id));
+      for (const e of arr) if (!conservar.has(e.id) && e.costo === 0) aEliminar.push(e.id);
+    }
+    let n = 0;
+    for (const id of aEliminar) {
+      const mant = await client.query("SELECT 1 FROM equipment_maintenance WHERE equipment_id = $1 LIMIT 1", [id]);
+      if (mant.rowCount) continue; // podría ser un equipo real; no lo borres
+      await client.query("DELETE FROM equipment WHERE id = $1", [id]);
+      n++;
+    }
+    return n;
+  });
+  res.json({ eliminados });
+}));
+
+// Drill-down del costo de ventas: los movimientos/registros que componen
+// "mercadería vendida" y "combustible de secado" del período.
+financeRouter.get("/costo-ventas/detalle", asyncRoute(async (req, res) => {
+  const { desde, hasta } = rango(req);
+  res.json(await getCostoVentasDetalle(pool, accionista(req as AuthenticatedRequest), desde, hasta));
 }));
 
 // ── Parámetros contables ────────────────────────────────────────────────────

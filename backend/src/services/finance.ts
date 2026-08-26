@@ -286,6 +286,78 @@ export async function getEstadoResultados(
   };
 }
 
+// Desglose de las dos partidas del costo de ventas, para el "drill-down" en el
+// Estado de Resultados: qué movimientos/registros componen cada cifra.
+export async function getCostoVentasDetalle(
+  client: PoolClient | typeof pool,
+  accionistaId: string,
+  desde: string,
+  hasta: string
+) {
+  const rango = [accionistaId, desde, hasta];
+  const costoMp = await costoQqMateriaPrima(client, accionistaId);
+  const costoPt = await costoQqTerminado(client, accionistaId, costoMp);
+
+  // Mercadería vendida: cada salida de inventario valorizada al costo del PT.
+  const salidas = await client.query(
+    `SELECT m.created_at, COALESCE(p.name, 'Producto') AS producto,
+            m.reference_type, (-m.quantity) AS qq
+     FROM inventory_movements m
+     LEFT JOIN products p ON p.id = m.product_id
+     WHERE m.accionista_id = $1 AND m.movement = 'OUT'
+       AND m.created_at::date BETWEEN $2 AND $3
+     ORDER BY m.created_at DESC`,
+    rango
+  );
+  const mercaderia = salidas.rows.map((r) => {
+    const qq = round2(Number(r.qq));
+    return {
+      fecha: r.created_at,
+      concepto: r.producto,
+      referencia: r.reference_type || "—",
+      cantidad: qq,
+      costo_unitario: round2(costoPt),
+      monto: round2(qq * costoPt)
+    };
+  });
+
+  // Combustible de secado: cada corrida de secadora con su gas + diésel.
+  const secados = await client.query(
+    `SELECT d.created_at, d.filled_at, d.tunnel_number, d.dryer_name,
+            l.lot_code, d.gas_costo_total, d.diesel_costo
+     FROM drying_tunnel_reports d
+     JOIN lots l ON l.id = d.lot_id
+     WHERE l.accionista_id = $1 AND d.created_at::date BETWEEN $2 AND $3
+     ORDER BY d.created_at DESC`,
+    rango
+  );
+  const combustible = secados.rows.map((r) => {
+    const gas = round2(Number(r.gas_costo_total));
+    const diesel = round2(Number(r.diesel_costo));
+    return {
+      fecha: r.filled_at || r.created_at,
+      concepto: `${r.dryer_name || `Secadora ${r.tunnel_number ?? ""}`.trim()} · Lote ${r.lot_code || "—"}`,
+      referencia: "Gas + Diésel",
+      gas,
+      diesel,
+      monto: round2(gas + diesel)
+    };
+  });
+
+  return {
+    periodo: { desde, hasta },
+    costo_qq_terminado: round2(costoPt),
+    mercaderia: {
+      items: mercaderia,
+      total: round2(mercaderia.reduce((s, i) => s + i.monto, 0))
+    },
+    combustible: {
+      items: combustible,
+      total: round2(combustible.reduce((s, i) => s + i.monto, 0))
+    }
+  };
+}
+
 // ── BALANCE GENERAL ─────────────────────────────────────────────────────────
 export async function getBalanceGeneral(
   client: PoolClient | typeof pool,
