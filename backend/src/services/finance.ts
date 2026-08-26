@@ -426,10 +426,14 @@ export async function getIndicadores(
   const ac = balance.activo.corriente.total;
   const pc = balance.pasivo.corriente.total;
   const inv = balance.activo.corriente.inventario;
+  // Sin pasivo corriente no hay deuda que cubrir: los ratios de liquidez no
+  // aplican (dividir por 0). Se marca como "sin deuda" y OK (verde), en vez de
+  // mostrar 0.00 con alerta ⚠.
+  const sinDeuda = pc <= 0;
 
   return {
-    liquidez_corriente: { valor: div(ac, pc), meta: "> 1.5", ok: div(ac, pc) >= 1.5 },
-    prueba_acida: { valor: div(ac - inv, pc), meta: "> 1.0", ok: div(ac - inv, pc) >= 1 },
+    liquidez_corriente: { valor: sinDeuda ? 0 : div(ac, pc), meta: "> 1.5", ok: sinDeuda ? true : div(ac, pc) >= 1.5, sin_deuda: sinDeuda },
+    prueba_acida: { valor: sinDeuda ? 0 : div(ac - inv, pc), meta: "> 1.0", ok: sinDeuda ? true : div(ac - inv, pc) >= 1, sin_deuda: sinDeuda },
     capital_trabajo: { valor: round2(ac - pc), meta: "> 0", ok: ac - pc > 0 },
     endeudamiento_pct: {
       valor: balance.activo.total > 0 ? round2((balance.pasivo.total / balance.activo.total) * 100) : 0,

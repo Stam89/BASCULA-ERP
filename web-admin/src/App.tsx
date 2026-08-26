@@ -668,7 +668,7 @@ type FinanzasData = {
     total_entradas: number; total_salidas: number; flujo_neto: number;
     saldo_actual: number; efectivo: number; bancos: number;
   };
-  indicadores: Record<string, { valor: number; meta: string; ok: boolean }>;
+  indicadores: Record<string, { valor: number; meta: string; ok: boolean; sin_deuda?: boolean }>;
 };
 
 /** Activo fijo (equipo) con su depreciación en línea recta. */
@@ -681,6 +681,16 @@ type ActivosFijosData = {
   items: ActivoFijo[];
   costo_total: number; depreciacion_acumulada: number; valor_libros: number; depreciacion_anual: number;
 };
+
+/**
+ * Repara nombres de equipos guardados con codificación rota: el carácter de
+ * reemplazo U+FFFD (�) aparece donde debía ir "ú" (p. ej. "T�nel" → "Túnel").
+ * Solo cosmético para la vista; no reescribe el dato en la base.
+ */
+function sanitizeEquipName(nombre: string): string {
+  if (!nombre) return nombre;
+  return nombre.replace(/T�nel/g, "Túnel").replace(/�/g, "ú");
+}
 
 /** Cuenta bancaria (caja tipo BANCO) y su conciliación. */
 type CuentaBancaria = {
@@ -5185,12 +5195,14 @@ export function App() {
     setMillingDrafts(rows);
   }
 
-  async function loadFinanzas() {
-    const qs = `?desde=${finanzasDesde}&hasta=${finanzasHasta}`;
+  async function loadFinanzas(desdeOverride?: string, hastaOverride?: string) {
+    const desde = desdeOverride ?? finanzasDesde;
+    const hasta = hastaOverride ?? finanzasHasta;
+    const qs = `?desde=${desde}&hasta=${hasta}`;
     const [datos, cuentas, activos] = await Promise.all([
       apiGet<FinanzasData>(`/finance/dashboard${qs}`),
       apiGet<CuentaBancaria[]>("/finance/bank/accounts").catch(() => [] as CuentaBancaria[]),
-      apiGet<ActivosFijosData>(`/finance/fixed-assets?hasta=${finanzasHasta}&todos=true`).catch(() => null)
+      apiGet<ActivosFijosData>(`/finance/fixed-assets?hasta=${hasta}&todos=true`).catch(() => null)
     ]);
     setFinanzas(datos);
     setCuentasBanco(cuentas);
@@ -5264,6 +5276,79 @@ export function App() {
     a.click();
     URL.revokeObjectURL(url);
     addToast("Estados financieros descargados", "success");
+  }
+
+  // Rangos rápidos del período financiero: fija desde/hasta y recarga.
+  function rangoFinanzas(preset: "hoy" | "mes" | "anio") {
+    const hoy = new Date();
+    const iso = (d: Date) => d.toISOString().slice(0, 10);
+    let desde = "";
+    if (preset === "hoy") desde = iso(hoy);
+    else if (preset === "mes") desde = iso(new Date(hoy.getFullYear(), hoy.getMonth(), 1));
+    else desde = iso(new Date(hoy.getFullYear(), 0, 1));
+    const hasta = iso(hoy);
+    setFinanzasDesde(desde);
+    setFinanzasHasta(hasta);
+    loadFinanzas(desde, hasta).catch((e) => addToast(e.message, "error"));
+  }
+
+  // Abre una vista imprimible (→ Guardar como PDF) con el resumen financiero del período.
+  function descargarEstadosPDF() {
+    if (!finanzas) { addToast("Aún no hay datos del período", "error"); return; }
+    const f = finanzas;
+    const money = (n: number) => "$" + (Number(n) || 0).toLocaleString("es-EC", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fila = (k: string, v: number, bold = false) =>
+      `<tr${bold ? ' style="font-weight:700;border-top:1px solid #cbd5e1"' : ""}><td>${k}</td><td style="text-align:right">${money(v)}</td></tr>`;
+    const ind = Object.entries(f.indicadores).map(([k, v]) => {
+      const nombre = k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+      const val = v.sin_deuda ? "Sin Deuda (N/A)" : (Number(v.valor) || 0).toFixed(2);
+      const estado = v.sin_deuda ? "✓ OK" : (v.ok ? "✓ OK" : "⚠ Revisar");
+      return `<tr><td>${nombre}</td><td style="text-align:right">${val}</td><td>${v.meta}</td><td>${estado}</td></tr>`;
+    }).join("");
+    const win = window.open("", "_blank", "width=820,height=1000");
+    if (!win) { addToast("Habilita las ventanas emergentes para descargar el PDF", "error"); return; }
+    win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Estados Financieros ${f.periodo.hasta}</title>
+      <style>body{font-family:system-ui,Arial,sans-serif;color:#1e293b;margin:32px;font-size:13px}
+      h1{font-size:20px;margin:0 0 2px}h2{font-size:14px;margin:22px 0 6px;border-bottom:2px solid #059669;padding-bottom:3px;color:#065f46}
+      .sub{color:#64748b;margin-bottom:8px}table{width:100%;border-collapse:collapse;margin-bottom:4px}
+      td,th{padding:4px 6px}th{text-align:left;background:#f1f5f9;font-size:11px;text-transform:uppercase;color:#475569}
+      .grid{display:flex;gap:24px}.grid>div{flex:1}@media print{@page{margin:14mm}}</style></head><body>
+      <h1>Estados Financieros</h1>
+      <div class="sub">Período: ${f.periodo.desde} — ${f.periodo.hasta}</div>
+      <div class="grid">
+        <div><h2>Balance General</h2><table>
+          ${fila("Efectivo", f.balance.activo.corriente.efectivo)}
+          ${fila("Bancos", f.balance.activo.corriente.bancos)}
+          ${fila("Cuentas por cobrar", f.balance.activo.corriente.cuentas_por_cobrar)}
+          ${fila("Inventario", f.balance.activo.corriente.inventario)}
+          ${fila("Total Activo Corriente", f.balance.activo.corriente.total, true)}
+          ${fila("Activos Fijos (neto)", f.balance.activo.no_corriente.total)}
+          ${fila("TOTAL ACTIVO", f.balance.activo.total, true)}
+          ${fila("Cuentas por pagar", f.balance.pasivo.corriente.cuentas_por_pagar)}
+          ${fila("TOTAL PASIVO", f.balance.pasivo.total, true)}
+          ${fila("TOTAL PATRIMONIO", f.balance.patrimonio.total, true)}
+        </table></div>
+        <div><h2>Estado de Resultados</h2><table>
+          ${fila("Ingresos", f.resultados.ingresos.total)}
+          ${fila("Costo de ventas", f.resultados.costo_ventas.total)}
+          ${fila("Utilidad Bruta", f.resultados.utilidad_bruta, true)}
+          ${fila("Gastos operativos", f.resultados.gastos_operativos.total)}
+          ${fila("Utilidad Neta", f.resultados.utilidad_neta, true)}
+        </table></div>
+      </div>
+      <h2>Indicadores Financieros</h2>
+      <table><thead><tr><th>Indicador</th><th style="text-align:right">Valor</th><th>Meta</th><th>Estado</th></tr></thead><tbody>${ind}</tbody></table>
+      <script>window.onload=function(){window.print()}</script></body></html>`);
+    win.document.close();
+  }
+
+  // Elimina (descarta) un activo fijo/equipo del catálogo.
+  async function eliminarActivoFijo(item: ActivoFijo) {
+    if (!confirm(`¿Descartar "${sanitizeEquipName(item.nombre)}" del catálogo de activos fijos?\n\nDejará de contar en el balance. Esta acción no se puede deshacer.`)) return;
+    const res = await apiFetch(`/equipment/${item.id}`, { method: "DELETE" });
+    if (!res.ok) throw new Error("No se pudo descartar el activo fijo");
+    addToast(`${sanitizeEquipName(item.nombre)} descartado`, "success");
+    await loadFinanzas();
   }
 
   async function loadProductionHistory() {
@@ -6708,8 +6793,8 @@ export function App() {
 
         {activeTab === "Estados Financieros" && (
           <section className="panelGrid">
-            {/* Barra de período + descarga */}
-            <div className="tablePanel" style={{ gridColumn: "1 / -1", display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+            {/* Barra de período + accesos rápidos + descargas */}
+            <div className="tablePanel" style={{ gridColumn: "1 / -1", display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", padding: "12px 16px" }}>
               <label style={{ margin: 0 }}><span>Desde</span>
                 <input type="date" value={finanzasDesde} onChange={(e) => setFinanzasDesde(e.target.value)} />
               </label>
@@ -6717,10 +6802,18 @@ export function App() {
                 <input type="date" value={finanzasHasta} onChange={(e) => setFinanzasHasta(e.target.value)} />
               </label>
               <button type="button" onClick={() => loadFinanzas().catch((e) => addToast(e.message, "error"))}>↻ Recalcular</button>
-              <button type="button" className="primary" onClick={() => descargarEstadosExcel().catch((e) => addToast(e.message, "error"))}>
-                📊 Descargar Excel
-              </button>
-              <span className="muted">Todo se calcula solo desde compras, ventas, caja, inventario y producción.</span>
+              <div style={{ display: "flex", gap: 6, marginLeft: 4 }}>
+                <button type="button" className="chip" onClick={() => rangoFinanzas("hoy")}>Hoy</button>
+                <button type="button" className="chip" onClick={() => rangoFinanzas("mes")}>Este Mes</button>
+                <button type="button" className="chip" onClick={() => rangoFinanzas("anio")}>Año Actual</button>
+              </div>
+              <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
+                <button type="button" onClick={() => descargarEstadosPDF()}>📄 Descargar PDF</button>
+                <button type="button" className="primary" onClick={() => descargarEstadosExcel().catch((e) => addToast(e.message, "error"))}>
+                  📊 Descargar Excel
+                </button>
+              </div>
+              <span className="muted" style={{ flexBasis: "100%", marginTop: 2 }}>Todo se calcula solo desde compras, ventas, caja, inventario y producción.</span>
             </div>
 
             {!finanzas ? (
@@ -6783,8 +6876,8 @@ export function App() {
                   </div>
 
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center", marginTop: 18, paddingTop: 14, borderTop: "1px solid var(--c-border)" }}>
-                    <MedidorIndicador titulo="Liquidez" valor={finanzas.indicadores.liquidez_corriente?.valor ?? 0} meta="> 1.5" ok={finanzas.indicadores.liquidez_corriente?.ok ?? false} />
-                    <MedidorIndicador titulo="Prueba ácida" valor={finanzas.indicadores.prueba_acida?.valor ?? 0} meta="> 1.0" ok={finanzas.indicadores.prueba_acida?.ok ?? false} />
+                    <MedidorIndicador titulo="Liquidez" valor={finanzas.indicadores.liquidez_corriente?.valor ?? 0} meta="> 1.5" ok={finanzas.indicadores.liquidez_corriente?.ok ?? false} sinDeuda={finanzas.indicadores.liquidez_corriente?.sin_deuda ?? false} />
+                    <MedidorIndicador titulo="Prueba ácida" valor={finanzas.indicadores.prueba_acida?.valor ?? 0} meta="> 1.0" ok={finanzas.indicadores.prueba_acida?.ok ?? false} sinDeuda={finanzas.indicadores.prueba_acida?.sin_deuda ?? false} />
                     <MedidorIndicador titulo="Endeudamiento" valor={finanzas.indicadores.endeudamiento_pct?.valor ?? 0} meta="< 60%" ok={finanzas.indicadores.endeudamiento_pct?.ok ?? false} sufijo="%" />
                     <MedidorIndicador titulo="Margen neto" valor={finanzas.indicadores.margen_neto_pct?.valor ?? 0} meta="> 5%" ok={finanzas.indicadores.margen_neto_pct?.ok ?? false} sufijo="%" />
                   </div>
@@ -6937,7 +7030,7 @@ export function App() {
                             setActivoEdit((cur) => ({ ...cur, [item.id]: { ...edit, [campo]: valor } }));
                           return (
                             <tr key={item.id} style={item.costo > 0 ? undefined : { opacity: 0.75 }}>
-                              <td style={{ fontWeight: 600 }}>{item.nombre}</td>
+                              <td style={{ fontWeight: 600 }}>{sanitizeEquipName(item.nombre)}</td>
                               <td><span className="chip info">{item.tipo ?? "—"}</span></td>
                               <td><input type="number" step="0.01" min="0" value={edit.costo} placeholder="0.00"
                                 onChange={(e) => set("costo", e.target.value)} style={{ width: 110 }} /></td>
@@ -6949,9 +7042,16 @@ export function App() {
                               <td className="num">{money(item.depreciacion_acumulada)}</td>
                               <td className="num" style={{ fontWeight: 700 }}>{money(item.valor_libros)}</td>
                               <td>
-                                <button type="button" onClick={() => guardarActivoFijo(item).catch((e) => addToast(e.message, "error"))}>
-                                  Guardar
-                                </button>
+                                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                                  <button type="button" onClick={() => guardarActivoFijo(item).catch((e) => addToast(e.message, "error"))}>
+                                    Guardar
+                                  </button>
+                                  <button type="button" title="Descartar / eliminar este activo fijo"
+                                    onClick={() => eliminarActivoFijo(item).catch((e) => addToast(e.message, "error"))}
+                                    style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--c-danger-text)", fontSize: 15, padding: "2px 4px" }}>
+                                    🗑️
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           );
@@ -13544,26 +13644,27 @@ function BarrasFinancieras({ datos, formato }: {
 }
 
 /** Medidor semicircular para un indicador con su meta. */
-function MedidorIndicador({ titulo, valor, meta, ok, sufijo = "" }: {
-  titulo: string; valor: number; meta: string; ok: boolean; sufijo?: string;
+function MedidorIndicador({ titulo, valor, meta, ok, sufijo = "", sinDeuda = false }: {
+  titulo: string; valor: number; meta: string; ok: boolean; sufijo?: string; sinDeuda?: boolean;
 }) {
   const R = 52, C = 62;
-  const pct = Math.max(0, Math.min(1, valor / (valor > 3 ? valor * 1.4 : 3)));
+  // Sin pasivo corriente el ratio no aplica: arco lleno en verde y "N/A".
+  const pct = sinDeuda ? 1 : Math.max(0, Math.min(1, valor / (valor > 3 ? valor * 1.4 : 3)));
   const angulo = Math.PI * (1 - pct);
   const x = C + R * Math.cos(angulo);
   const y = C - R * Math.sin(angulo) + 6;
-  const color = ok ? "#16a34a" : "#f59e0b";
+  const color = sinDeuda || ok ? "#16a34a" : "#f59e0b";
   return (
     <div style={{ textAlign: "center", minWidth: 128 }}>
       <svg viewBox="0 0 124 78" width="124" height="78">
         <path d={`M ${C - R} ${C + 6} A ${R} ${R} 0 0 1 ${C + R} ${C + 6}`} fill="none" stroke="var(--c-surface-3)" strokeWidth="11" strokeLinecap="round" />
         <path d={`M ${C - R} ${C + 6} A ${R} ${R} 0 0 1 ${x} ${y}`} fill="none" stroke={color} strokeWidth="11" strokeLinecap="round" />
-        <text x={C} y={C} textAnchor="middle" fontSize="17" fontWeight="800" fill="var(--c-text)">
-          {valor.toFixed(sufijo === "%" ? 1 : 2)}{sufijo}
+        <text x={C} y={C} textAnchor="middle" fontSize={sinDeuda ? 14 : 17} fontWeight="800" fill="var(--c-text)">
+          {sinDeuda ? "N/A" : `${valor.toFixed(sufijo === "%" ? 1 : 2)}${sufijo}`}
         </text>
       </svg>
       <div style={{ fontSize: 12, fontWeight: 700, marginTop: -6 }}>{titulo}</div>
-      <div className="muted" style={{ fontSize: 11 }}>Meta {meta}</div>
+      <div className="muted" style={{ fontSize: 11 }}>{sinDeuda ? "Sin deuda ✓" : `Meta ${meta}`}</div>
     </div>
   );
 }
