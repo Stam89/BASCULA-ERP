@@ -1525,6 +1525,9 @@ export function App() {
   // Alta manual de un activo fijo (vehículos, muebles, equipo de oficina…).
   const [modalNuevoActivo, setModalNuevoActivo] = useState(false);
   const [nuevoActivo, setNuevoActivo] = useState({ nombre: "", tipo: "VEHICULO", costo: "", fecha: "", vida: "" });
+  // Por defecto la tabla de activos fijos oculta los equipos sin costo (0.00)
+  // para reducir el scroll; este toggle los muestra para cargarles el costo.
+  const [mostrarSinCosto, setMostrarSinCosto] = useState(false);
   // Drill-down del costo de ventas (mercadería vendida / combustible de secado).
   const [detalleCosto, setDetalleCosto] = useState<{ concepto: "mercaderia" | "combustible"; data: CostoVentasDetalle } | null>(null);
   const [orderPayMethod, setOrderPayMethod] = useState<Record<string, string>>({});
@@ -5372,8 +5375,11 @@ export function App() {
   // o repetidos), dejando siempre uno por nombre. La cuenta la calcula el server.
   async function limpiarDuplicadosActivos() {
     if (!confirm("¿Eliminar los activos fijos con costo $0.00 que están repetidos?\n\nSe conserva uno por nombre y no se tocan los que tengan costo o historial de mantenimiento.")) return;
-    const r = await apiPost<{ eliminados: number }>("/finance/fixed-assets/limpiar-duplicados", {});
-    addToast(r.eliminados > 0 ? `${r.eliminados} duplicado(s) sin costo eliminados` : "No había duplicados sin costo", "success");
+    const res = await apiFetch("/finance/fixed-assets/duplicados-sin-costo", { method: "DELETE" });
+    if (!res.ok) throw new Error("No se pudo limpiar los duplicados");
+    const r = (await res.json()) as { eliminados: number; protegidos: number };
+    const extra = r.protegidos > 0 ? ` · ${r.protegidos} conservado(s) por mantenimiento` : "";
+    addToast(r.eliminados > 0 ? `${r.eliminados} duplicado(s) sin costo eliminados${extra}` : `No había duplicados sin costo${extra}`, "success");
     await loadFinanzas();
   }
 
@@ -7061,6 +7067,16 @@ export function App() {
                       al balance.
                     </p>
                     {(() => {
+                      const sinCosto = activosFijos.items.filter((i) => !(i.costo > 0)).length;
+                      if (sinCosto === 0) return null;
+                      return (
+                        <label style={{ display: "inline-flex", alignItems: "center", gap: 8, margin: "0 0 8px", cursor: "pointer", fontWeight: 500 }}>
+                          <input type="checkbox" checked={mostrarSinCosto} onChange={(e) => setMostrarSinCosto(e.target.checked)} style={{ width: "auto" }} />
+                          <span>Mostrar equipos sin costo ($0.00) <span className="muted">— {sinCosto} oculto{sinCosto === 1 ? "" : "s"}</span></span>
+                        </label>
+                      );
+                    })()}
+                    {(() => {
                       // Aviso de duplicados: nombres repetidos o con caracteres
                       // dañados confunden al cargar costos (se cargaría dos veces).
                       const vistos = new Map<string, number>();
@@ -7088,7 +7104,11 @@ export function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {activosFijos.items.map((item) => {
+                        {activosFijos.items
+                          .filter((item) => mostrarSinCosto || item.costo > 0)
+                          .slice()
+                          .sort((a, b) => (b.costo > 0 ? 1 : 0) - (a.costo > 0 ? 1 : 0) || a.nombre.localeCompare(b.nombre))
+                          .map((item) => {
                           const edit = activoEdit[item.id] ?? {
                             costo: item.costo ? String(item.costo) : "",
                             fecha: item.fecha_compra ? String(item.fecha_compra).slice(0, 10) : "",
