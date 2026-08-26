@@ -281,7 +281,10 @@ export async function procesarLiquidacionTicket(
 // lote (ahí se elige qué accionista compra). Filtrarlos aquí escondía tickets.
 mobileTicketsRouter.get("/", requireAuth, resolveAccionista, asyncRoute(async (req, res) => {
   const q = z.object({ status: z.enum(["pending", "liquidated"]).optional() }).parse(req.query);
-  const statusFilter = q.status === "pending" ? "t.liquidated_at IS NULL"
+  // "Pendiente" = todavía por procesar: ni ingresado como materia prima
+  // (weighing_ticket_id) ni liquidado (liquidated_at). Así la lista de pendientes
+  // solo muestra lo accionable; los ingresados/liquidados quedan en "Todos".
+  const statusFilter = q.status === "pending" ? "t.liquidated_at IS NULL AND t.weighing_ticket_id IS NULL"
     : q.status === "liquidated" ? "t.liquidated_at IS NOT NULL" : "";
   const conditions = [
     // Solo pesajes del modo PRINCIPAL: los "particular" no se usan en el ERP.
