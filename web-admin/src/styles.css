@@ -716,6 +716,7 @@ small { font-size: 11.5px; color: var(--c-text-muted); }
   .configLayout { grid-template-columns: 1fr; }
   .configVTabs { flex-direction: row; overflow-x: auto; position: static; }
   .configVTabs button { flex: 0 0 auto; }
+  .configSociosGrid { grid-template-columns: 1fr !important; }
 }
 
 .moduleCard {

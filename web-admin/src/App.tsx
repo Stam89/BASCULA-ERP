@@ -1292,6 +1292,8 @@ export function App() {
 
   // ── Configuración ─────────────────────────────────────────────────────────
   const [configSubTab, setConfigSubTab] = useState<"operacion" | "cuadrilla" | "socios" | "secuenciales" | "usuarios">("operacion");
+  // Cuentas bancarias por socio (cash_registers tipo BANCO) para Configuración → Socios & Bancos.
+  const [bankAccounts, setBankAccounts] = useState<Array<{ id: string; name: string; banco: string | null; numero_cuenta: string | null; socio: string; socio_tipo: string; accionista_id: string }>>([]);
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
   const [laborRatesForm, setLaborRatesForm] = useState<LaborRates>(defaultLaborRates);
   // Tarifas de empaque / uso de sacos que la MATRIZ cobra a los socios al despachar.
@@ -3143,10 +3145,27 @@ export function App() {
     try {
       if (configSubTab === "operacion") await saveSettings(fakeEvent);
       else if (configSubTab === "cuadrilla") await saveLaborRates(fakeEvent);
+      else if (configSubTab === "socios") await saveBankAccounts();
       else addToast("En esta pestaña, cada tarjeta se guarda con su propio botón.", "warn");
     } catch (err) {
       addToast(err instanceof Error ? err.message : "No se pudo guardar", "error");
     }
+  }
+
+  // Cuentas bancarias de los socios (Configuración → Socios & Bancos).
+  async function loadBankAccounts() {
+    try { setBankAccounts(await apiGet("/finance/bank/accounts/all")); }
+    catch { /* sin permiso o sin cuentas: se deja vacío */ }
+  }
+  async function saveBankAccounts() {
+    for (const b of bankAccounts) {
+      await apiPut(`/finance/bank/accounts/${b.id}`, {
+        banco: (b.banco ?? "").trim() || undefined,
+        numero_cuenta: (b.numero_cuenta ?? "").trim() || undefined
+      });
+    }
+    addToast("Datos bancarios de los socios guardados", "success");
+    await loadBankAccounts();
   }
 
   async function submitConfigUser(e: FormEvent<HTMLFormElement>) {
@@ -11804,7 +11823,7 @@ export function App() {
                 ["usuarios", "🔐 Control de Usuarios"]
               ] as const).map(([t, label]) => (
                 <button key={t} type="button" className={configSubTab === t ? "active" : ""}
-                  onClick={() => { setConfigSubTab(t); if (t === "operacion") { reloadCashCategories(); loadMaintCategoriesAll(); } }}>
+                  onClick={() => { setConfigSubTab(t); if (t === "operacion") { reloadCashCategories(); loadMaintCategoriesAll(); } if (t === "socios") loadBankAccounts(); }}>
                   {label}
                 </button>
               ))}
@@ -12257,7 +12276,7 @@ export function App() {
 
             {/* ── Accionistas ── */}
             {configSubTab === "socios" && (
-              <section className="panelGrid">
+              <section style={{ display: "grid", gridTemplateColumns: "minmax(0, 5fr) minmax(0, 7fr)", gap: 14, alignItems: "start" }} className="configSociosGrid">
                 <form className="formPanel" onSubmit={(e) => createAccionista(e).catch((err) => addToast(err.message, "error"))}>
                   <h2>🧑‍🤝‍🧑 Nuevo accionista</h2>
                   <p className="muted">Cada accionista compra y maneja su arroz, inventario, caja y cuentas por separado, usando la misma app.</p>
@@ -12291,15 +12310,16 @@ export function App() {
                       <p>{isAdmin ? "Aún no hay accionistas. Crea el primero a la izquierda." : "Solo un administrador puede ver los accionistas"}</p>
                     </div>
                   ) : (
-                    <table className="cajaTable" style={{ marginTop: 10 }}>
+                    <div style={{ overflowX: "auto" }}>
+                    <table className="cajaTable" style={{ marginTop: 10, minWidth: 560 }}>
                       <thead>
                         <tr>
                           <th>Nombre</th>
                           <th>Código</th>
-                          <th>Usuarios con acceso</th>
+                          <th style={{ whiteSpace: "nowrap" }}>Usuarios con acceso</th>
                           <th>Estado</th>
                           <th>Envejece</th>
-                          <th />
+                          <th style={{ whiteSpace: "nowrap" }}>Acciones</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -12340,10 +12360,47 @@ export function App() {
                         ))}
                       </tbody>
                     </table>
+                    </div>
                   )}
                   <p className="muted" style={{ marginTop: 10 }}>
                     Para dar acceso a un usuario, ve a la pestaña «Usuarios» y usa el botón «Accionistas» en su fila. Los administradores ven todos los accionistas automáticamente.
                   </p>
+                </div>
+
+                {/* ── Cuentas bancarias oficiales de cada socio ── */}
+                <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+                  <h2>🏦 Cuentas Bancarias de Socios</h2>
+                  <p className="muted" style={{ marginTop: -4 }}>Datos bancarios oficiales de cada accionista. Edita y guárdalos con «💾 Guardar Configuración» al pie.</p>
+                  {bankAccounts.length === 0 ? (
+                    <div className="emptyState" style={{ padding: "22px 20px" }}><p>No hay cuentas de banco registradas. Crea una caja tipo <strong>BANCO</strong> en «Caja» para el socio y vuelve aquí a completar Banco y N.º de cuenta.</p></div>
+                  ) : (
+                    <div style={{ overflowX: "auto" }}>
+                      <table className="cajaTable" style={{ minWidth: 620 }}>
+                        <thead><tr><th style={{ whiteSpace: "nowrap" }}>Socio</th><th>Cuenta (caja)</th><th>Banco / Tipo de cuenta</th><th>N.º de cuenta</th></tr></thead>
+                        <tbody>
+                          {bankAccounts.map((b) => (
+                            <tr key={b.id}>
+                              <td style={{ fontWeight: 600, whiteSpace: "nowrap" }}>{b.socio}{b.socio_tipo === "MATRIZ" ? " · Matriz" : ""}</td>
+                              <td className="muted">{b.name}</td>
+                              <td>
+                                <input type="text" value={b.banco ?? ""} disabled={!isAdmin}
+                                  placeholder="Ej: Banco Pichincha · Cta. Corriente"
+                                  onChange={(e) => setBankAccounts((prev) => prev.map((x) => x.id === b.id ? { ...x, banco: e.target.value } : x))}
+                                  style={{ width: "100%", minWidth: 210, padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} />
+                              </td>
+                              <td>
+                                <input type="text" value={b.numero_cuenta ?? ""} disabled={!isAdmin}
+                                  placeholder="Ej: 2200XXXXXX"
+                                  onChange={(e) => setBankAccounts((prev) => prev.map((x) => x.id === b.id ? { ...x, numero_cuenta: e.target.value } : x))}
+                                  style={{ width: "100%", minWidth: 160, padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} />
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  {!isAdmin && <p className="muted">Solo un administrador puede editar los datos bancarios.</p>}
                 </div>
 
                 {renameAccionista && (
@@ -12845,11 +12902,25 @@ export function App() {
               </section>
             )}
 
-            {/* Botón persistente de guardado (parte inferior, sticky). */}
-            <div className="configSaveBar">
-              <span className="muted" style={{ fontSize: 12 }}>Cada tarjeta se guarda con su propio botón; este guarda la configuración de la pestaña activa.</span>
-              <button type="button" className="primary" disabled={!isAdmin} onClick={() => guardarConfig()}>💾 Guardar Configuración</button>
-            </div>
+            {/* Botón persistente de guardado (parte inferior, sticky). El texto
+                deja claro QUÉ guarda la pestaña activa; se deshabilita donde no hay
+                un guardado consolidado (cada tarjeta guarda por su cuenta). */}
+            {(() => {
+              const info: Record<string, { label: string; can: boolean }> = {
+                operacion:    { label: "Guarda los Datos del negocio de esta pestaña.", can: true },
+                cuadrilla:    { label: "Guarda las Tarifas de pago a trabajadores.", can: true },
+                socios:       { label: "Guarda los datos bancarios de los socios.", can: true },
+                secuenciales: { label: "No hay datos que guardar (los números se generan automáticamente).", can: false },
+                usuarios:     { label: "Los usuarios y accesos se guardan con el botón de cada tarjeta.", can: false }
+              };
+              const cur = info[configSubTab];
+              return (
+                <div className="configSaveBar">
+                  <span className="muted" style={{ fontSize: 12 }}>{cur.label}</span>
+                  <button type="button" className="primary" disabled={!isAdmin || !cur.can} onClick={() => guardarConfig()}>💾 Guardar Configuración</button>
+                </div>
+              );
+            })()}
 
             </div>
           </div>

@@ -153,20 +153,35 @@ financeRouter.get("/bank/accounts", asyncRoute(async (req, res) => {
   res.json(r.rows);
 }));
 
-/** Datos del banco sobre una caja existente (nombre del banco y N.º de cuenta). */
+/** Cuentas de banco de TODOS los accionistas (admin). Para configurar en un solo
+ *  lugar los datos bancarios oficiales de cada socio (Configuración → Socios). */
+financeRouter.get("/bank/accounts/all", requireAdmin, asyncRoute(async (_req, res) => {
+  const r = await pool.query(
+    `SELECT c.id, c.name, c.banco, c.numero_cuenta, c.accionista_id,
+            a.name AS socio, a.tipo AS socio_tipo
+     FROM cash_registers c
+     JOIN accionistas a ON a.id = c.accionista_id
+     WHERE c.tipo = 'BANCO'
+     ORDER BY a.name, c.name`
+  );
+  res.json(r.rows);
+}));
+
+/** Datos del banco sobre una caja existente (nombre del banco y N.º de cuenta).
+ *  Solo admin: puede editar la cuenta de cualquier accionista (por eso NO se
+ *  filtra por accionista activo; se identifica por el id de la caja). */
 financeRouter.put("/bank/accounts/:id", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({
     banco: z.string().max(80).optional(),
     numero_cuenta: z.string().max(40).optional()
   }).parse(req.body);
-  const accionistaId = accionista(req as AuthenticatedRequest);
   const r = await pool.query(
     `UPDATE cash_registers SET banco = $2, numero_cuenta = $3
-     WHERE id = $1 AND accionista_id = $4 AND tipo = 'BANCO'
+     WHERE id = $1 AND tipo = 'BANCO'
      RETURNING id, name, banco, numero_cuenta`,
-    [req.params.id, body.banco ?? null, body.numero_cuenta ?? null, accionistaId]
+    [req.params.id, body.banco ?? null, body.numero_cuenta ?? null]
   );
-  if (!r.rowCount) throw new ApiError(404, "Cuenta bancaria no encontrada para este accionista");
+  if (!r.rowCount) throw new ApiError(404, "Cuenta bancaria no encontrada");
   res.json(r.rows[0]);
 }));
 
