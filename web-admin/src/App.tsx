@@ -3,6 +3,7 @@ import { apiFetch, apiGet, apiPost, apiPut, checkHealth, getActiveAccionistaId, 
 import { money, categoryLabel, stockGroupLabel } from "./format";
 import type { Farmer, Product, Warehouse, Lot, MateriaPrimaEntry, MateriaPrimaCorreccion, PendingEntry } from "./types";
 import { Metric, ReportTable, Input, Select, MedidorRow, DataList } from "./components/ui";
+import CampoModule from "./campo/CampoModule";
 
 /** Etiqueta corta de un ingreso: el número de la báscula si se conoce. */
 function entryLabel(entry: { numero_bascula?: string | null; ticket_number: string }): string {
@@ -953,6 +954,8 @@ const navGroups: Array<{ label: string; tabs: string[] }> = [
   { label: "Cuentas", tabs: ["Por Cobrar", "Por Pagar"] },
   { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores", "Nomina", "Servicio Pilado"] },
   { label: "Contabilidad", tabs: ["Costos Operativos", "Estados Financieros"] },
+  // Módulo INDEPENDIENTE (cosechadora/transporte/caja de campo), aparte del resto.
+  { label: "Campo", tabs: ["Caja de Campo"] },
   { label: "Sistema", tabs: ["Reportes", "Configuracion"] }
 ];
 const tabs = navGroups.flatMap((group) => group.tabs);
@@ -1007,6 +1010,8 @@ function NavIcon({ tab }: { tab: string }) {
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="12" height="12" rx="1.5"/><line x1="5" y1="11" x2="5" y2="8"/><line x1="8" y1="11" x2="8" y2="5"/><line x1="11" y1="11" x2="11" y2="7"/></svg>;
     case "Configuracion":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><line x1="2" y1="4" x2="14" y2="4"/><circle cx="6" cy="4" r="1.7" fill="currentColor" stroke="none"/><line x1="2" y1="8" x2="14" y2="8"/><circle cx="10.5" cy="8" r="1.7" fill="currentColor" stroke="none"/><line x1="2" y1="12" x2="14" y2="12"/><circle cx="5" cy="12" r="1.7" fill="currentColor" stroke="none"/></svg>;
+    case "Caja de Campo":
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="4.5" cy="12" r="2"/><circle cx="12" cy="12.5" r="1.5"/><path d="M2.5 12V6h4l2 3h2.5"/><path d="M6.5 6V4h3l1.5 5"/></svg>;
     default:
       return null;
   }
@@ -6541,6 +6546,9 @@ export function App() {
           </div>
         </header>
         <div className="content">
+
+        {/* Módulo independiente de Caja de Campo (cosechadora/transporte). */}
+        {activeTab === "Caja de Campo" && <CampoModule />}
 
         {activeTab === "Dashboard" && (
           <>
