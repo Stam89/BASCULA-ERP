@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
+import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
@@ -291,18 +292,37 @@ campoRouter.post("/movimientos", asyncRoute(async (req, res) => {
     const cat = await pool.query("SELECT 1 FROM campo_categorias_gasto WHERE id = $1", [body.categoria_id]);
     if (!cat.rowCount) throw new ApiError(404, "Categoría de gasto no encontrada");
   }
-  if (body.servicio_id) {
-    const svc = await pool.query("SELECT 1 FROM campo_servicios WHERE id = $1", [body.servicio_id]);
-    if (!svc.rowCount) throw new ApiError(404, "Servicio no encontrado");
-    if (body.signo !== "entrada") throw new ApiError(400, "El cobro de un servicio debe ser una entrada.");
-  }
 
-  const result = await pool.query(
+  // El abono/cobro de un servicio se valida DENTRO de una transacción con lock
+  // sobre el servicio: se toma el saldo pendiente y se rechaza el sobrepago
+  // (422). El FOR UPDATE evita la carrera de dos abonos simultáneos que juntos
+  // superarían el saldo. Un movimiento suelto (sin servicio) no necesita lock.
+  const insert = async (client: { query: typeof pool.query }) => (await client.query(
     `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, categoria_id, activo_id, servicio_id, created_by)
      VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING *`,
     [body.fecha ?? null, body.cuenta_id, body.signo, body.monto, body.concepto?.trim() || null,
      body.categoria_id ?? null, body.activo_id ?? null, body.servicio_id ?? null, userId(req)]
-  );
-  res.status(201).json(result.rows[0]);
+  )).rows[0];
+
+  if (!body.servicio_id) {
+    res.status(201).json(await insert(pool));
+    return;
+  }
+
+  if (body.signo !== "entrada") throw new ApiError(400, "El cobro de un servicio debe ser una entrada.");
+  const row = await inTransaction(async (client) => {
+    const svc = await client.query("SELECT valor FROM campo_servicios WHERE id = $1 FOR UPDATE", [body.servicio_id]);
+    if (!svc.rowCount) throw new ApiError(404, "Servicio no encontrado");
+    const cobrado = Number((await client.query(
+      "SELECT COALESCE(SUM(monto), 0) AS c FROM campo_movimientos WHERE servicio_id = $1 AND signo = 'entrada'",
+      [body.servicio_id]
+    )).rows[0].c);
+    const saldo = Math.round((Number(svc.rows[0].valor) - cobrado) * 100) / 100;
+    if (body.monto > saldo + 0.005) {
+      throw new ApiError(422, `El abono (${body.monto.toFixed(2)}) supera el saldo pendiente (${saldo.toFixed(2)}) del servicio.`);
+    }
+    return insert(client);
+  });
+  res.status(201).json(row);
 }));

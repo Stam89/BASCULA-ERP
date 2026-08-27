@@ -949,13 +949,11 @@ type Supplier = {
 
 const navGroups: Array<{ label: string; tabs: string[] }> = [
   { label: "Principal", tabs: ["Dashboard"] },
-  { label: "Operación", tabs: ["Bascula", "Secadoras", "Produccion", "Inventario", "Seleccion"] },
+  { label: "Operación", tabs: ["Bascula", "Secadoras", "Produccion", "Inventario", "Seleccion", "Caja de Campo"] },
   { label: "Comercial", tabs: ["Ventas", "Compras", "Caja"] },
   { label: "Cuentas", tabs: ["Por Cobrar", "Por Pagar"] },
   { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores", "Nomina", "Servicio Pilado"] },
   { label: "Contabilidad", tabs: ["Costos Operativos", "Estados Financieros"] },
-  // Módulo INDEPENDIENTE (cosechadora/transporte/caja de campo), aparte del resto.
-  { label: "Campo", tabs: ["Caja de Campo"] },
   { label: "Sistema", tabs: ["Reportes", "Configuracion"] }
 ];
 const tabs = navGroups.flatMap((group) => group.tabs);
