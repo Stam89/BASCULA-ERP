@@ -143,31 +143,21 @@ campoRouter.post("/clientes", asyncRoute(async (req, res) => {
   res.status(201).json(result.rows[0]);
 }));
 
-// ── Servicios (con cobrado / saldo_pendiente / estado DERIVADOS) ─────────────
-// cobrado = SUMA de movimientos entrada ligados al servicio; saldo = valor -
-// cobrado; estado = pendiente | abonado | pagado. Nada de esto se guarda.
+// ── Servicios (cobrado / saldo_pendiente / estado DERIVADOS) ─────────────────
+// FUENTE ÚNICA: la vista campo_servicios_saldo (misma fórmula que el reporte).
+// Aquí solo se le agregan los nombres de cliente y activo.
 const SERVICIO_SELECT = `
   s.id, s.fecha, s.cliente_id, s.activo_id, s.tipo, s.qq, s.precio_unitario, s.valor, s.notas, s.created_at,
   cl.nombre AS cliente_nombre, cl.tipo AS cliente_tipo,
   a.nombre AS activo_nombre, a.tipo AS activo_tipo,
-  COALESCE(mov.cobrado, 0)::float AS cobrado,
-  (s.valor - COALESCE(mov.cobrado, 0))::float AS saldo_pendiente,
-  CASE
-    WHEN COALESCE(mov.cobrado, 0) <= 0 THEN 'pendiente'
-    WHEN COALESCE(mov.cobrado, 0) + 0.005 >= s.valor THEN 'pagado'
-    ELSE 'abonado'
-  END AS estado`;
+  s.cobrado::float AS cobrado,
+  s.saldo_pendiente::float AS saldo_pendiente,
+  s.estado AS estado`;
 
 const SERVICIO_FROM = `
-  FROM campo_servicios s
+  FROM campo_servicios_saldo s
   JOIN campo_clientes cl ON cl.id = s.cliente_id
-  JOIN campo_activos a ON a.id = s.activo_id
-  LEFT JOIN (
-    SELECT servicio_id, SUM(monto) AS cobrado
-    FROM campo_movimientos
-    WHERE signo = 'entrada' AND servicio_id IS NOT NULL
-    GROUP BY servicio_id
-  ) mov ON mov.servicio_id = s.id`;
+  JOIN campo_activos a ON a.id = s.activo_id`;
 
 campoRouter.get("/servicios", asyncRoute(async (req, res) => {
   const q = z.object({
@@ -312,17 +302,147 @@ campoRouter.post("/movimientos", asyncRoute(async (req, res) => {
 
   if (body.signo !== "entrada") throw new ApiError(400, "El cobro de un servicio debe ser una entrada.");
   const row = await inTransaction(async (client) => {
-    const svc = await client.query("SELECT valor FROM campo_servicios WHERE id = $1 FOR UPDATE", [body.servicio_id]);
+    // Lock de la fila base para serializar dos abonos simultáneos…
+    const svc = await client.query("SELECT 1 FROM campo_servicios WHERE id = $1 FOR UPDATE", [body.servicio_id]);
     if (!svc.rowCount) throw new ApiError(404, "Servicio no encontrado");
-    const cobrado = Number((await client.query(
-      "SELECT COALESCE(SUM(monto), 0) AS c FROM campo_movimientos WHERE servicio_id = $1 AND signo = 'entrada'",
-      [body.servicio_id]
-    )).rows[0].c);
-    const saldo = Math.round((Number(svc.rows[0].valor) - cobrado) * 100) / 100;
+    // …y el saldo sale de la MISMA fuente que el reporte (la vista).
+    const saldo = Number((await client.query(
+      "SELECT saldo_pendiente FROM campo_servicios_saldo WHERE id = $1", [body.servicio_id]
+    )).rows[0].saldo_pendiente);
     if (body.monto > saldo + 0.005) {
       throw new ApiError(422, `El abono (${body.monto.toFixed(2)}) supera el saldo pendiente (${saldo.toFixed(2)}) del servicio.`);
     }
     return insert(client);
   });
   res.status(201).json(row);
+}));
+
+// ════════════════════════════════════════════════════════════════════════════
+// REPORTES DE CAMPO (V2). Solo lectura. TODO el cálculo es SQL (GROUP BY / SUM);
+// el servidor solo arma la forma de la respuesta. No hay tablas nuevas: todo
+// sale de campo_servicios / campo_movimientos / vista campo_servicios_saldo.
+// ════════════════════════════════════════════════════════════════════════════
+
+// Rango del período: por mes (YYYY-MM) o por desde/hasta. Devuelve fechas ISO.
+function rangoPeriodo(q: { mes?: string; desde?: string; hasta?: string }): { desde: string; hasta: string } {
+  if (q.mes) {
+    const [y, m] = q.mes.split("-").map(Number);
+    const desde = `${q.mes}-01`;
+    const hasta = new Date(y, m, 0).toISOString().slice(0, 10); // último día del mes
+    return { desde, hasta };
+  }
+  const hoy = new Date().toISOString().slice(0, 10);
+  return { desde: q.desde ?? "1900-01-01", hasta: q.hasta ?? hoy };
+}
+
+// 1) SALDO DE CAJA por cuenta (entradas − salidas) a una fecha de corte, + total.
+campoRouter.get("/reportes/saldo-caja", asyncRoute(async (req, res) => {
+  const q = z.object({ hasta: fechaSchema.optional() }).parse(req.query);
+  const hasta = q.hasta ?? new Date().toISOString().slice(0, 10);
+  const cuentas = (await pool.query(
+    `SELECT c.id, c.nombre,
+            COALESCE(SUM(CASE WHEN m.signo = 'entrada' THEN m.monto ELSE -m.monto END), 0)::float AS saldo
+     FROM campo_cuentas c
+     LEFT JOIN campo_movimientos m ON m.cuenta_id = c.id AND m.fecha <= $1
+     GROUP BY c.id, c.nombre
+     ORDER BY c.nombre`,
+    [hasta]
+  )).rows;
+  const total = (await pool.query(
+    `SELECT COALESCE(SUM(CASE WHEN signo = 'entrada' THEN monto ELSE -monto END), 0)::float AS total
+     FROM campo_movimientos WHERE fecha <= $1`,
+    [hasta]
+  )).rows[0].total;
+  res.json({ corte: hasta, cuentas, total });
+}));
+
+// 2) CUENTAS POR COBRAR: servicios con saldo > 0, agrupados por cliente
+//    (saldo por cliente + antigüedad en días) y el detalle por servicio.
+campoRouter.get("/reportes/por-cobrar", asyncRoute(async (_req, res) => {
+  const porCliente = (await pool.query(
+    `SELECT cl.id AS cliente_id, cl.nombre AS cliente_nombre,
+            COUNT(*)::int AS servicios,
+            SUM(v.saldo_pendiente)::float AS saldo,
+            MAX((CURRENT_DATE - v.fecha))::int AS antiguedad_max_dias,
+            MIN((CURRENT_DATE - v.fecha))::int AS antiguedad_min_dias
+     FROM campo_servicios_saldo v
+     JOIN campo_clientes cl ON cl.id = v.cliente_id
+     WHERE v.saldo_pendiente > 0.005
+     GROUP BY cl.id, cl.nombre
+     ORDER BY saldo DESC`
+  )).rows;
+  const detalle = (await pool.query(
+    `SELECT v.id AS servicio_id, v.fecha, cl.nombre AS cliente_nombre, a.nombre AS activo_nombre,
+            v.tipo, v.valor::float AS valor, v.cobrado::float AS cobrado, v.saldo_pendiente::float AS saldo,
+            (CURRENT_DATE - v.fecha)::int AS antiguedad_dias
+     FROM campo_servicios_saldo v
+     JOIN campo_clientes cl ON cl.id = v.cliente_id
+     JOIN campo_activos a ON a.id = v.activo_id
+     WHERE v.saldo_pendiente > 0.005
+     ORDER BY antiguedad_dias DESC, cl.nombre`
+  )).rows;
+  const total = (await pool.query(
+    `SELECT COALESCE(SUM(saldo_pendiente), 0)::float AS total
+     FROM campo_servicios_saldo WHERE saldo_pendiente > 0.005`
+  )).rows[0].total;
+  res.json({ por_cliente: porCliente, detalle, total_general: total });
+}));
+
+// 3) POR MÁQUINA Y MES: ingresos, gastos por categoría y ganancia por activo.
+//    Los gastos SIN activo_id NO se prorratean: van en la fila "SIN ASIGNAR".
+campoRouter.get("/reportes/por-maquina", asyncRoute(async (req, res) => {
+  const q = z.object({
+    mes: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+    desde: fechaSchema.optional(),
+    hasta: fechaSchema.optional()
+  }).parse(req.query);
+  const { desde, hasta } = rangoPeriodo(q);
+
+  // Ingresos y gastos por activo + ganancia, en un solo FULL JOIN (todo SQL).
+  const filas = (await pool.query(
+    `WITH ing AS (
+       SELECT activo_id, SUM(valor) AS v
+       FROM campo_servicios WHERE fecha BETWEEN $1 AND $2 GROUP BY activo_id
+     ), gas AS (
+       SELECT activo_id, SUM(monto) AS g
+       FROM campo_movimientos WHERE signo = 'salida' AND fecha BETWEEN $1 AND $2 GROUP BY activo_id
+     )
+     SELECT COALESCE(ing.activo_id, gas.activo_id) AS activo_id,
+            a.nombre AS activo_nombre, a.tipo AS activo_tipo,
+            COALESCE(ing.v, 0)::float AS ingresos,
+            COALESCE(gas.g, 0)::float AS gastos,
+            (COALESCE(ing.v, 0) - COALESCE(gas.g, 0))::float AS ganancia
+     FROM ing FULL OUTER JOIN gas ON ing.activo_id = gas.activo_id
+     LEFT JOIN campo_activos a ON a.id = COALESCE(ing.activo_id, gas.activo_id)
+     ORDER BY (COALESCE(ing.activo_id, gas.activo_id) IS NULL), ganancia DESC`,
+    [desde, hasta]
+  )).rows;
+
+  // Desglose de gastos por categoría y activo (incluye activo_id NULL = SIN ASIGNAR).
+  const desglose = (await pool.query(
+    `SELECT m.activo_id, COALESCE(cat.nombre, 'SIN CATEGORÍA') AS categoria, SUM(m.monto)::float AS gasto
+     FROM campo_movimientos m
+     LEFT JOIN campo_categorias_gasto cat ON cat.id = m.categoria_id
+     WHERE m.signo = 'salida' AND m.fecha BETWEEN $1 AND $2
+     GROUP BY m.activo_id, cat.nombre`,
+    [desde, hasta]
+  )).rows;
+
+  // Armado (no cálculo): pegar el desglose de categorías a cada fila.
+  const catPorActivo = new Map<string, Array<{ categoria: string; gasto: number }>>();
+  for (const d of desglose) {
+    const k = d.activo_id ?? "SIN_ASIGNAR";
+    if (!catPorActivo.has(k)) catPorActivo.set(k, []);
+    catPorActivo.get(k)!.push({ categoria: d.categoria, gasto: d.gasto });
+  }
+  const maquinas = filas.map((f) => ({
+    activo_id: f.activo_id,
+    activo_nombre: f.activo_id ? f.activo_nombre : "SIN ASIGNAR",
+    activo_tipo: f.activo_tipo ?? null,
+    ingresos: f.ingresos,
+    gastos: f.gastos,
+    ganancia: f.ganancia,
+    gastos_por_categoria: (catPorActivo.get(f.activo_id ?? "SIN_ASIGNAR") ?? []).sort((a, b) => b.gasto - a.gasto)
+  }));
+  res.json({ periodo: { desde, hasta }, maquinas });
 }));
