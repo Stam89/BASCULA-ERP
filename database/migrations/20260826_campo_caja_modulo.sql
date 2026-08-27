@@ -47,7 +47,9 @@ CREATE TABLE IF NOT EXISTS campo_servicios (
   precio_unitario NUMERIC(14,4),
   valor           NUMERIC(14,2) NOT NULL CHECK (valor >= 0),
   notas           TEXT,
-  created_by      UUID,
+  -- Auditoría: quién lo registró. FK real a users (uuid, igual que el resto del
+  -- esquema). SET NULL para no bloquear el borrado de un usuario.
+  created_by      UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -64,7 +66,8 @@ CREATE TABLE IF NOT EXISTS campo_movimientos (
   categoria_id UUID REFERENCES campo_categorias_gasto(id),
   activo_id    UUID REFERENCES campo_activos(id),
   servicio_id  UUID REFERENCES campo_servicios(id),
-  created_by   UUID,
+  -- Auditoría: FK real a users (uuid). SET NULL al borrar el usuario.
+  created_by   UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
