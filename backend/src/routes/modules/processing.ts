@@ -876,11 +876,13 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
       const lote = await client.query("SELECT id FROM lots WHERE id = $1 FOR UPDATE", [body.lot_id]);
       if (!lote.rowCount) throw new ApiError(404, "Lote no encontrado");
 
+      // Pilado directo desde stock (sin secadora): se rechaza cualquier lote que
+      // ya tenga un proceso (abierto o cerrado, con o sin secadora), para no
+      // duplicar la producción de un lote ya pilado por la vía de la secadora.
       const alreadyStarted = await client.query(
         `SELECT *
          FROM processing_batches
          WHERE lot_id = $1
-           AND drying_report_id IS NULL
            AND status <> 'CANCELLED'
          ORDER BY started_at ASC
          LIMIT 1`,
@@ -889,9 +891,11 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
       if (alreadyStarted.rowCount) {
         const abierto = alreadyStarted.rows[0];
         if (abierto.finished_at) {
-          throw new ApiError(409, "Este lote ya fue cerrado");
+          throw new ApiError(409, "Este lote ya fue procesado (pilado)");
         }
-        return abierto;
+        // Solo se reutiliza un proceso abierto del mismo origen directo (sin secadora).
+        if (!abierto.drying_report_id) return abierto;
+        throw new ApiError(409, "Este lote ya tiene un proceso en curso desde secadora");
       }
     }
 
