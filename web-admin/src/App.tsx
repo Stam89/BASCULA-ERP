@@ -1365,6 +1365,8 @@ export function App() {
   const [cuadFrom, setCuadFrom] = useState(nominaMonday);
   const [cuadTo, setCuadTo] = useState(nominaToday);
   const [cuadActivities, setCuadActivities] = useState<CuadrillaActivity[]>([]);
+  // Filtro en vivo de la lista de actividades (Configuración → Cuadrilla).
+  const [cuadActivitySearch, setCuadActivitySearch] = useState("");
   const [cuadEntries, setCuadEntries] = useState<CuadrillaEntry[]>([]);
   const [cuadEntriesTotal, setCuadEntriesTotal] = useState(0);
   const [cuadSummary, setCuadSummary] = useState<{ rows: CuadrillaSummaryRow[]; total_general: number; total_anticipos: number; total_neto: number } | null>(null);
@@ -2846,6 +2848,16 @@ export function App() {
   async function updateActivityRate(id: string, unit_rate: number) {
     await apiPut(`/cuadrilla/activities/${id}`, { unit_rate });
     addToast("Tarifa actualizada", "success");
+    await refreshCuadrilla();
+  }
+
+  // Inactiva (oculta) una actividad que ya no se usa en la planta. No se borra:
+  // los registros históricos conservan su tarifa; solo deja de aparecer aquí y
+  // en «Nómina → Cuadrilla».
+  async function inactivarActividad(id: string, name: string) {
+    if (!window.confirm(`¿Ocultar la actividad "${name}"?\n\nDejará de aparecer al registrar cuadrilla. Los registros ya hechos no cambian.`)) return;
+    await apiPut(`/cuadrilla/activities/${id}`, { is_active: false });
+    addToast(`Actividad "${name}" ocultada`, "success");
     await refreshCuadrilla();
   }
 
@@ -13494,8 +13506,14 @@ export function App() {
             )}
 
             {/* ── Tarifario de Cuadrilla: CRUD de actividades (tarifa por saco) ── */}
-            {configSubTab === "cuadrilla" && (
-              <section className="panelGrid">
+            {configSubTab === "cuadrilla" && (() => {
+              const q = cuadActivitySearch.trim().toLowerCase();
+              const actividadesFiltradas = q
+                ? cuadActivities.filter((a) => a.name.toLowerCase().includes(q))
+                : cuadActivities;
+              return (
+              <section className="cuadCfgGrid">
+                {/* Columna izquierda (5/12): alta de actividad */}
                 <form className="formPanel" onSubmit={(e) => createActivity(e).catch((err) => addToast(err.message, "error"))}>
                   <h2>🏷️ Nueva actividad de cuadrilla</h2>
                   <p className="muted">Actividad + tarifa por saco/unidad. Si ya existe, actualiza su tarifa. Es el <strong>mismo tarifario dinámico</strong> que usa «Nómina → Cuadrilla».</p>
@@ -13507,28 +13525,54 @@ export function App() {
                   </label>
                   <button className="primary">Guardar actividad</button>
                 </form>
+
+                {/* Columna derecha (7/12): lista + buscador */}
                 <div className="tablePanel">
-                  <h2>Actividades y tarifas ({cuadActivities.length})</h2>
+                  <h2>Actividades y tarifas ({actividadesFiltradas.length}{q ? ` de ${cuadActivities.length}` : ""})</h2>
+                  <input
+                    type="search"
+                    value={cuadActivitySearch}
+                    onChange={(e) => setCuadActivitySearch(e.target.value)}
+                    placeholder="🔍 Buscar actividad..."
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, margin: "4px 0 8px" }}
+                  />
                   <div style={{ overflowX: "auto" }}>
-                    <table className="cajaTable" style={{ marginTop: 6 }}>
-                      <thead><tr><th>Actividad / Descripción</th><th className="num">Tarifa por saco</th></tr></thead>
+                    <table className="cajaTable" style={{ marginTop: 2 }}>
+                      <thead><tr><th>Actividad / Descripción</th><th className="num">Tarifa por saco</th><th /></tr></thead>
                       <tbody>
-                        {cuadActivities.map((a) => (
+                        {actividadesFiltradas.length === 0 ? (
+                          <tr><td colSpan={3} className="muted" style={{ padding: 16, textAlign: "center" }}>
+                            {q ? "Ninguna actividad coincide con la búsqueda." : "No hay actividades registradas."}
+                          </td></tr>
+                        ) : actividadesFiltradas.map((a) => (
                           <tr key={a.id}>
                             <td>{a.name}</td>
                             <td className="num">
-                              <input type="number" step="0.01" min="0" defaultValue={Number(a.unit_rate)} style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db" }}
-                                onBlur={(e) => { const v = Number(e.target.value); if (v !== Number(a.unit_rate)) updateActivityRate(a.id, v).catch((err) => addToast(err.message, "error")); }} />
+                              <input type="number" step="0.01" min="0" defaultValue={Number(a.unit_rate).toFixed(2)} style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }}
+                                onBlur={(e) => {
+                                  const v = Number(e.target.value);
+                                  // Siempre muestra 2 decimales al salir del casillero.
+                                  e.target.value = (v >= 0 ? v : 0).toFixed(2);
+                                  if (v >= 0 && v !== Number(a.unit_rate)) updateActivityRate(a.id, v).catch((err) => addToast(err.message, "error"));
+                                }} />
+                            </td>
+                            <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                              <button type="button" title="Ocultar / inactivar esta actividad" disabled={!isAdmin}
+                                onClick={() => inactivarActividad(a.id, a.name).catch((err) => addToast(err.message, "error"))}
+                                style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--c-muted)", fontSize: 15, padding: "2px 6px" }}>
+                                🚫
+                              </button>
                             </td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
-                  <p className="muted" style={{ marginTop: 10 }}>Cambia una tarifa escribiendo el nuevo valor y saliendo del casillero. Los registros ya hechos conservan su tarifa.</p>
+                  <p className="muted" style={{ marginTop: 10 }}>Cambia una tarifa escribiendo el nuevo valor y saliendo del casillero. El botón 🚫 oculta una actividad que ya no se usa (no borra el histórico).</p>
                 </div>
               </section>
-            )}
+              );
+            })()}
 
             {/* ── Secuenciales (maqueta; aún no editables) ── */}
             {configSubTab === "secuenciales" && (
