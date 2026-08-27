@@ -1,6 +1,6 @@
 # PROJECT_CONTEXT — BASCULA-ERP
 
-> Memoria compacta para continuar sin releer todo. Última actualización: 2026-08-27.
+> Memoria compacta para continuar sin releer todo. Última actualización: 2026-08-27 (V2 reportes campo).
 > Al empezar una sesión, **lee solo este archivo** primero.
 
 ## 0. Stack / cómo corre
@@ -15,9 +15,10 @@
 ## 1. ESTADO ACTUAL
 ERP para piladora de arroz con arquitectura **multi-accionista**: MATRIZ **CEYRO** (dueña, id `00000000-0000-0000-0000-000000000001`) y SOCIOS **ROVINSON** y **STALYN**. Selector de accionista activo manda header `X-Accionista-Id`; permisos por accionista.
 - Funciona: Dashboard, Báscula, Secadoras, Producción, Inventario, Selección/envejecido, Ventas (pedido→despacho), Compras, Caja, Por Cobrar, Por Pagar, Liquidaciones, Fomentos, Agricultores, Nómina, Cuadrilla, Servicio Pilado, Estados Financieros, Costos Operativos, Reportes, Configuración.
-- **main** está commiteado+pusheado (último `f587730`). Typecheck y build (FE+BE) en verde. Backend corre compilado desde `dist/`.
-- ⚠️ **RAMA ACTIVA HOY: `feat/modulo-caja-campo`** (NO pusheada, por pedido del usuario). Contiene el módulo nuevo "Caja de Campo" (commit `8bf3678`) + esta memoria. Lo demás de la sesión 2026-08-26/27 (§2g) ya está en `main`. Para seguir con el módulo campo, hacer `git checkout feat/modulo-caja-campo`.
-- **PENDIENTE CRÍTICO:** la migración `20260826_campo_caja_modulo.sql` **NO se ha aplicado** (esperando OK del usuario). Sin ella, los endpoints `/campo/*` fallan (tablas no existen).
+- **main** commiteado+pusheado (último `92f0694`, incluye módulo **Caja de Campo V1** ya mergeado). Typecheck/build FE+BE en verde. Backend corre compilado desde `dist/`. **No hay auto-deploy** (el `ci.yml` solo hace typecheck/tests/build/lint en runners de GitHub, sin BD; producción se despliega a mano).
+- ⚠️ **RAMA ACTIVA HOY: `feat/campo-reportes`** (2 commits sobre main, NO pusheada). Contiene la **V2: Reportes de Campo** + esta memoria. Para seguir: `git checkout feat/campo-reportes`.
+- **Caja de Campo V1** (mergeada en main): tab en grupo **Operación** del sidebar; captura de movimientos, servicios, abonos; migración `20260826_campo_caja_modulo.sql` **aplicada en la BD local**. Bloqueo de sobrepago (422) activo.
+- **Caja de Campo V2** (rama, funcional): vista `campo_servicios_saldo` + 3 reportes (saldo-caja, por-cobrar con tramos, por-máquina) + pantalla "📊 Reportes". Migración `20260827_campo_servicios_saldo_view.sql` aplicada en local. **Datos de prueba `RPT*` sembrados en la BD local** (a limpiar antes del merge).
 
 ## 2. CAMBIOS DE ESTA SESIÓN (2026-08-20)
 1. **Ventas** — Toma de pedido en split-view 2 columnas + "Cola de carga" para bodega (badge 🟡, texto grande de sacos). Solo UI; estado sigue `PENDING`/`DELIVERED`. `4a2d90a`.
@@ -100,6 +101,18 @@ Archivos tocados (2f): `web-admin/src/App.tsx`, `web-admin/src/styles.css`; `bac
 
 Archivos (2g): `web-admin/src/App.tsx`, `web-admin/src/styles.css`; `backend/src/routes/modules/{settings,processing,labor,campo}.ts`, `backend/src/routes/index.ts`; **nuevos**: `backend/src/routes/modules/campo.ts`, `web-admin/src/campo/CampoModule.tsx`; migraciones `20260826_{plant_params,campo_caja_modulo}.sql`.
 
+## 2h. CAMBIOS 2026-08-27 tarde (V2 Reportes de Campo — rama `feat/campo-reportes`, NO pusheada)
+Reportes del módulo Campo. **No crea tablas**; todo sale de `campo_servicios`/`campo_movimientos`. Cálculos **en SQL** (GROUP BY/SUM/FULL JOIN), no en JS.
+1. **Fuente única de saldo:** vista **`campo_servicios_saldo`** (migración `20260827_..._view.sql`) expone por servicio `cobrado`/`saldo_pendiente`/`estado`. El endpoint `GET /campo/servicios` y el chequeo de sobrepago **leen de la vista** (ya no recalculan). Commit `97c81fd`.
+2. **3 endpoints de reportes:**
+   - `GET /campo/reportes/saldo-caja?hasta=` → saldo por cuenta (entradas−salidas) a fecha de corte + total.
+   - `GET /campo/reportes/por-cobrar` (siempre **a hoy**, sin corte histórico) → servicios con saldo>0 por cliente (saldo, antigüedad, **tramo** 0-30/31-60/61-90/+90) + **subtotales por tramo** + detalle por servicio + total general.
+   - `GET /campo/reportes/por-maquina?mes=|desde=&hasta=` → por activo: ingresos, gastos por categoría, ganancia; gastos **sin `activo_id` van en fila "SIN ASIGNAR"** (cero prorrateo).
+3. **Pantalla "📊 Reportes"** (pill nueva dentro del módulo Caja de Campo, NO dashboard aparte): selector período mes/rango; Panel saldo caja (tarjetas+total); Panel por cobrar (subtotales por tramo, tabla por cliente **expandible** al detalle, total); Panel por máquina (ingresos/gastos desglosados/ganancia negativa en rojo, fila SIN ASIGNAR, fila TOTALES). Montos 2 decimales, números a la derecha. Commit `855a85e`.
+Verificado en navegador con datos `RPT*`: saldo caja 315; por cobrar 1000 en 4 tramos (450/200/100/250); por máquina cosA 680 / camB 100 / SIN ASIGNAR −15, totales 950/185/765.
+
+Archivos (2h): `backend/src/routes/modules/campo.ts`, `web-admin/src/campo/CampoModule.tsx`; **nuevo**: `database/migrations/20260827_campo_servicios_saldo_view.sql`.
+
 ## 3. REGLAS DE NEGOCIO (no romper)
 - **Toma de pedido NO mueve dinero ni inventario**; recién al **Despachar** sale stock + entra caja (Contado) o Cuenta por Cobrar (Crédito). Estados DB: `PENDING`/`DELIVERED`/`CANCELLED` (NO renombrar; hay CHECK). El pedido genera su CxC "(pendiente de despacho)" al tomarse; al despachar se salda o se enlaza, nunca se duplica.
 - **Cuentas espejo entre accionistas**: un servicio/cargo de la matriz a un socio crea CxC (CEYRO) + CxP (socio) enlazadas en tablas puente (`pilado_services`, `lot_transfers`, `matriz_service_charges`, `matriz_packaging_charges`). Un abono en una cara debe reflejarse en la otra + caja del otro socio → `backend/src/services/cuentas-vinculadas.ts` (`espejarAbonoEnContraparte`). Saldar una cuenta debe mover caja + espejar, no solo bajar saldo.
@@ -117,7 +130,7 @@ Archivos (2g): `web-admin/src/App.tsx`, `web-admin/src/styles.css`; `backend/src
 - **Activos fijos**: viven en la tabla `equipment` (`acquisition_cost`/`acquisition_date`/`useful_life_years`/`salvage_value`/`is_depreciable`). `type` es varchar libre (PILADORA/SECADORA/MOTOR/OTRO + categorías manuales VEHICULO/MUEBLES…). Alta manual vía `POST /finance/fixed-assets`; depreciación lineal calculada en `getActivosFijos`. Los de costo 0 no entran al balance (solo se listan para cargarles el costo).
 - **Producción — destino del arroz pilado (nuevo)**: **Selección (tulas)** → arroz a producto terminado SIN descontar sacos (tula reutilizable), `finish-production` con `destino:"SELECCION"`, sin presentaciones/subproductos; nómina estibador = SOLO `(tulas/3)×tarifa_3tulas`. **Empaque (sacos)** → `destino:"EMPAQUE"`, presentaciones descuentan sacos exactos; nómina estibador = `qq×tarifa+sacas×tarifa+arrocillo×tarifa`. Pilador SIEMPRE `qq×tarifa+sacas×tarifa`. El pago por saca usa los sacos REALES consumidos (backend), no lo que mande el front.
 - **Merma en báscula (nuevo)**: humedad base configurable (`app_settings.humedad_base_pct`, default 13). Desc. humedad = `(H−base)/(100−base)`; 1 QQ = 100 lb; kg→lb ×2.2046. Es **solo cálculo visual** en el ingreso; NO cambia los QQ que se guardan (el ticket conserva su modelo de calificación).
-- **Módulo Caja de Campo (NUEVO, independiente)**: aparte del ERP de piladora — NO comparte tablas ni lógica con túneles/piladora/ventas/fomentos. Tablas `campo_*` (UUID). Derivados (NO columnas): saldo cuenta=entradas−salidas; por servicio cobrado=Σ movimientos entrada con ese `servicio_id`, saldo=valor−cobrado, estado=pendiente/abonado/pagado. Valor del servicio: qq+precio→calculado, si no manual. Router bajo prefijo `/campo` (no está en `WRITE_MODULES_BY_PREFIX` → escrituras permitidas a cualquier autenticado; admin sin límite).
+- **Módulo Caja de Campo (independiente)**: aparte del ERP de piladora — NO comparte tablas ni lógica con túneles/piladora/ventas/fomentos. Tablas `campo_*` (UUID; `created_by` FK a `users`). **Fuente única de saldo = vista `campo_servicios_saldo`** (cobrado/saldo/estado); endpoint de servicios, chequeo de sobrepago y reportes leen de ahí (no recalcular en otro lado). Derivados: saldo cuenta=entradas−salidas; por servicio cobrado=Σ movimientos entrada con ese `servicio_id`, saldo=valor−cobrado, estado=pendiente/abonado/pagado. Valor del servicio: qq+precio→calculado, si no manual. Sobrepago bloqueado (422) con lock. Reportes: cálculo SQL, gastos sin `activo_id` → "SIN ASIGNAR" (cero prorrateo). Router `/campo` (no está en `WRITE_MODULES_BY_PREFIX` → escrituras a cualquier autenticado; admin sin límite). Tab en grupo "Operación" del sidebar, visible para todos como los túneles.
 
 ## 4. PROBLEMAS PENDIENTES
 - ~~Tarifas de empaque en $0.00~~ **RESUELTO**: 10/25/50 = 0.20/0.22/0.27, editables en UI.
@@ -130,12 +143,12 @@ Archivos (2g): `web-admin/src/App.tsx`, `web-admin/src/styles.css`; `backend/src
 - Nómina «Planta y Secadoras»: la tabla Pilador/Estibador (11 columnas) queda en media columna con scroll horizontal. Si molesta, pasar esa tabla a ancho completo y el Secador debajo.
 - `POST /customers/quick` crea con `customer_type='RETAIL'` (no NATURAL/EMPRESA); el tipo del front es una unión de 2 valores → al editar un cliente RETAIL el select cae a "Natural". Menor; alinear si molesta.
 - Nota de pruebas en vivo: la sesión del navegador in-app se limpia al reabrir el preview; para pruebas por API se puede generar un JWT admin con `signToken` (secreto en `backend/src/config/env.ts`) y llamar `http://localhost:4000/api/v1/...`. La extensión "Claude en Chrome" no está conectada (no se puede manejar el Chrome real del usuario).
-- **CAMPO — migración sin aplicar** (`20260826_campo_caja_modulo.sql`): DDL validado por dry-run (ROLLBACK) pero NO corrido. Hasta aplicarla, `/campo/*` responde error (tablas no existen) y el frontend "Caja de Campo" no carga datos.
-- **CAMPO — sin smoke-test en vivo**: falta probar el flujo real (activo→cliente→servicio→abono→saldo/estado) una vez aplicada la migración.
+- **CAMPO V2 — sin mergear a main**: rama `feat/campo-reportes` (2 commits, no pusheada). Falta: **limpiar los datos `RPT*`** (DELETE por nombre ILIKE 'RPT%' en orden FK: movimientos→servicios→clientes→activos) y luego merge+push (como la V1). Las migraciones V1+V2 ya están aplicadas en la BD local; en producción habrá que correr `db:migrate` al desplegar.
+- **CAMPO — corte histórico en por-cobrar**: hoy es "a hoy". Un corte a fecha pasada necesitaría filtrar los abonos por fecha (otra consulta); se dejó para después si hace falta.
 - **Producción destino (a validar por el usuario)**: el pago **por saca** del pilador ahora SÍ suma (antes 0). Si el negocio quería pilador solo por QQ, hay que dejar `sacas=0` en empaque. Confirmar.
 
 ## 5. PRÓXIMO PASO
-**Primero mañana:** decidir sobre el módulo **Caja de Campo** (rama `feat/modulo-caja-campo`, NO pusheada). El usuario debe dar OK para **aplicar la migración** `20260826_campo_caja_modulo.sql` (`cd backend && npm run db:migrate`); luego **rebuild + reinicio backend**, y hacer el **smoke-test en vivo** (crear activo → cliente → servicio → abono → verificar saldo de cuenta y estado del servicio derivados, reversible). Solo tras eso, decidir si se mergea a main. Ojo: la migración crea FK `created_by → users(id)`; todo es UUID (confirmado). Candidatos posteriores: (a) validar el cambio de pago-por-saca del pilador; (b) mostrar `variedad`/`limite_credito` en fomentos; (c) pulido UI (Compras, Servicio Pilado, Costos Operativos).
+**Primero mañana:** cerrar la **V2 Reportes de Campo** (rama `feat/campo-reportes`). Ya está funcional y verificada en navegador; el usuario aprobó los 3 paneles. Falta solo: **(1) limpiar los datos de prueba `RPT*`** de la BD local (DELETE por `nombre ILIKE 'RPT%'`, en orden FK), **(2) `git checkout feat/campo-reportes` → merge a `main` (fast-forward) → `git push origin main`** (mismo flujo que la V1), **(3) borrar la rama** `git branch -d feat/campo-reportes`. No hay auto-deploy, así que el push no corre migraciones en prod. Candidatos posteriores: (a) validar el cambio de pago-por-saca del pilador (§2g #5); (b) mostrar `variedad`/`limite_credito` en fomentos; (c) más reportes de Campo (PDF/export, corte histórico); (d) pulido UI (Compras, Servicio Pilado, Costos Operativos).
 
 ## 6. ARCHIVOS IMPORTANTES
 - `web-admin/src/App.tsx` — TODO el frontend (tabs por `activeTab === "..."`; Config por `configSubTab`; Caja por `cajaSubTab`).
@@ -150,8 +163,8 @@ Archivos (2g): `web-admin/src/App.tsx`, `web-admin/src/styles.css`; `backend/src
 - `backend/src/routes/modules/settings.ts` — tarifas empaque + config + **`GET/PUT /settings/sequences`** (Guía editable, `guia_prefix` en `app_settings`).
 - `web-admin/src/styles.css` — clases del front. OJO: `nav{flex-direction:column}` global (menú lateral) afecta a cualquier `<nav>` (ver §2e). `.cajaSubNav` = pills horizontales (activa esmeralda #059669). Config: `.configLayout`/`.configVTabs`/`.configVContent`/`.configSociosGrid`/`.configTarifasGrid`/`.configUsersGrid`. `.reportKpiGrid` (2→4). `.linkBtn` (enlace discreto para drill-down).
 - `backend/src/routes/modules/labor.ts` — nómina de pilada (`createProductionWorkerPayments`): pilador `qq×tarifa+sacas×tarifa`; estibador XOR (con tulas→`(tulas/3)×tarifa_3tulas`; sin tulas→`qq+sacas+arrocillo`). Tarifas en `labor_rates` (fila única). `processing.ts finish-production` acepta `destino` (SELECCION no descuenta sacos / EMPAQUE sí) y pasa a nómina los sacos reales.
-- **MÓDULO CAMPO (nuevo, independiente):** `backend/src/routes/modules/campo.ts` (router `/campo`: activos, categorias-gasto, cuentas [saldo], clientes [alta rápida], servicios [derivados cobrado/saldo/estado], movimientos). `web-admin/src/campo/CampoModule.tsx` (componente autocontenido, 4 pantallas). Enganche: `routes/index.ts` (`routes.use("/campo", campoRouter)`) + App.tsx (navGroup "Campo", NavIcon, render `activeTab==="Caja de Campo"`).
-- `database/migrations/` — últimas: `20260826_{guia_prefix,plant_params}.sql` (aplicadas en main), `20260826_campo_caja_modulo.sql` (**SIN aplicar**, rama campo).
+- **MÓDULO CAMPO:** `backend/src/routes/modules/campo.ts` (router `/campo`: catálogos activos/categorias-gasto/cuentas[saldo]/clientes[alta rápida]; servicios [leen vista, sobrepago 422 con lock]; movimientos; **reportes** `/reportes/{saldo-caja,por-cobrar,por-maquina}`). `web-admin/src/campo/CampoModule.tsx` (componente autocontenido: pills Movimiento/Servicio/Abono/Listas/**Reportes**). Enganche en `routes/index.ts` + App.tsx (tab "Caja de Campo" en grupo Operación).
+- `database/migrations/` — últimas: `20260826_{guia_prefix,plant_params,campo_caja_modulo}.sql` (aplicadas en main), `20260827_campo_servicios_saldo_view.sql` (aplicada en local, **rama campo-reportes, sin mergear**).
 - Memoria del asistente: `C:\Users\Usuario\.claude\projects\C--Users-Usuario-...-BASCULA-ERP\memory\` (MEMORY.md + notas).
 
 ## 7. DECISIONES TOMADAS (no volver a preguntar)
@@ -180,7 +193,9 @@ Archivos (2g): `web-admin/src/App.tsx`, `web-admin/src/styles.css`; `backend/src
 - **Estados Financieros:** activos fijos manuales entran por `equipment` (no tabla nueva); `type` libre. Limpieza de duplicados = verbo DELETE, idempotente, conserva 1 por nombre y respeta mantenimiento. Ratios con pasivo 0 → "sin deuda" (N/A verde), no 0.00. Drill-down del costo de ventas reusa los mismos criterios del agregado (no recalcula distinto). Nombres rotos se sanean solo en la vista.
 - **Báscula "Pendientes":** el filtro excluye Ingresado y Liquidado (definición de pendiente en §3). Fix en backend (una cláusula WHERE), sin tocar contrato/tipos ni la vista.
 - **IDs = UUID en TODO el esquema** (confirmado 2026-08-27: `users.id` uuid, PG 18.4 → `gen_random_uuid()` nativo, sin pgcrypto). Tablas nuevas usan UUID; `created_by` = FK real a `users(id) ON DELETE SET NULL`.
-- **Módulo Campo es INDEPENDIENTE**: prefijo `campo_`, no toca tablas existentes, se trabaja en rama `feat/modulo-caja-campo`, migración se muestra ANTES de aplicar. Parámetros de planta (tarifa pilado / humedad base) viven en `app_settings` (`PUT /settings/plant-params`, admin).
+- **Módulo Campo es INDEPENDIENTE**: prefijo `campo_`, no toca tablas existentes, se trabaja en rama propia, migración se muestra ANTES de aplicar. Parámetros de planta (tarifa pilado / humedad base) viven en `app_settings` (`PUT /settings/plant-params`, admin).
+- **Campo — reportes:** todo el cálculo en SQL (GROUP BY/SUM/FULL JOIN), no en JS. Fuente única del saldo = vista `campo_servicios_saldo` (no duplicar la fórmula). Gastos sin `activo_id` = fila "SIN ASIGNAR", nunca prorrateo. Por-cobrar es "a hoy" con tramos 0-30/31-60/61-90/+90. Pantalla de reportes es una pill dentro del módulo (NO dashboard aparte).
+- **CI/deploy:** `.github/workflows/ci.yml` es solo CI (typecheck+tests+build+lint, sin BD). NO hay auto-deploy (Render/Railway/etc.). Un push a main NO corre migraciones en producción; el despliegue a prod es manual.
 - **Producción destino/nómina**: `labor.ts` estibador es XOR estricta por `tulas`; el pago por saca usa sacos reales. No revertir a `sacas=0` ni volver a sumar arrocillo cuando hay tulas sin confirmarlo con el usuario.
 
 ## 8. ADVERTENCIAS (revisar dependencias antes de tocar)
@@ -197,7 +212,8 @@ Archivos (2g): `web-admin/src/App.tsx`, `web-admin/src/styles.css`; `backend/src
 - `finance.ts` (`services`): las agregaciones del Balance/Resultados son `SUM` parametrizadas server-side; NO traerse filas al cliente para sumar. `getBalanceGeneral` llama internamente a `getEstadoResultados` (para la utilidad del ejercicio) → cuidado con recomputar de más. Los ratios con pasivo 0 dependen de `sin_deuda`; no revertir a `div()` crudo.
 - `DELETE /finance/fixed-assets/duplicados-sin-costo`: borra de `equipment`. Solo toca costo 0/NULL duplicados y respeta mantenimiento; no ampliar a costo>0 sin confirmar (borraría bienes reales del balance).
 - `processing.ts finish-production` + `labor.ts`: transacción de cierre = inventario (PROCESS_OUTPUT) + sacos (según destino) + nómina + servicio de pilado. Delicada: cambiar el destino, los sacos o la XOR de nómina desalinea pagos/stock. Verificar con ROLLBACK antes.
-- **Migración campo SIN aplicar**: no asumir que `/campo/*` funciona hasta correr `db:migrate` en esa rama.
+- **Campo — vista `campo_servicios_saldo` es la fuente única del saldo**: servicios, sobrepago y reportes leen de ahí. Si cambia la fórmula de saldo/estado, se cambia en la VISTA (migración), no en cada endpoint. El sobrepago bloquea con lock (`FOR UPDATE` sobre `campo_servicios`) + lee `saldo_pendiente` de la vista.
+- **Campo V2 tiene datos `RPT*` en la BD local** (de prueba): limpiarlos antes del merge.
 
 ---
 
@@ -207,9 +223,10 @@ Archivos (2g): `web-admin/src/App.tsx`, `web-admin/src/styles.css`; `backend/src
 ```
 Continuemos el proyecto BASCULA-ERP. Antes de nada, lee SOLO el archivo
 PROJECT_CONTEXT.md (raíz del repo) y NO analices todo el código.
-Contexto rápido: el grueso está en main; el módulo NUEVO "Caja de Campo" está en
-la rama feat/modulo-caja-campo (NO pusheada) y su migración 20260826_campo_caja_modulo.sql
-AÚN NO se aplicó. Si vamos a seguir con Campo: `git checkout feat/modulo-caja-campo`.
-Recuérdame el "PRÓXIMO PASO" (§5) y espera mi confirmación antes de codear o de
-aplicar cualquier migración.
+Contexto rápido: la V1 del módulo "Caja de Campo" ya está en main. La V2
+(Reportes de Campo) está lista y verificada en la rama feat/campo-reportes
+(NO pusheada). Para seguir: `git checkout feat/campo-reportes`.
+El PRÓXIMO PASO (§5) es cerrar la V2: limpiar los datos de prueba RPT*, mergear
+a main y pushear. Recuérdamelo y espera mi confirmación antes de codear, mergear
+o aplicar cualquier migración.
 ```
