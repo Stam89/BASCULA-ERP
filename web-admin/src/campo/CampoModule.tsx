@@ -3,9 +3,16 @@
 // No depende de la lógica de piladora/ventas/fomentos. Se engancha en App.tsx
 // con una entrada de sidebar y un único render.
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { apiGet, apiPost } from "../api";
 import { money } from "../format";
+
+// Menú propio de la operación Campo (contexto aislado). Para agregar secciones
+// nuevas: añade una entrada aquí y su caso en CampoModule (prop `section`).
+const CAMPO_SECCIONES: Array<{ id: CampoSeccion; label: string; icon: string }> = [
+  { id: "captura", label: "Captura", icon: "➕" },
+  { id: "reportes", label: "Reportes", icon: "📊" }
+];
 
 type Activo = { id: string; nombre: string; tipo: "cosechadora" | "transporte"; operador: string | null; activo: boolean };
 type Categoria = { id: string; nombre: string };
@@ -22,7 +29,11 @@ type Movimiento = {
 };
 
 const hoy = () => new Date().toISOString().slice(0, 10);
-type Vista = "movimiento" | "servicio" | "abono" | "listas" | "reportes";
+// Sub-pestañas de la sección "Captura" (movimientos/servicios/abonos/listas).
+type Vista = "movimiento" | "servicio" | "abono" | "listas";
+// Secciones del menú propio de Campo (contexto aislado). Se amplía agregando
+// entradas aquí y en CAMPO_SECCIONES (ver CampoWorkspace).
+export type CampoSeccion = "captura" | "reportes";
 
 // ── Tipos de los reportes (V2) ───────────────────────────────────────────────
 type SaldoCaja = { corte: string; cuentas: Array<{ id: string; nombre: string; saldo: number }>; total: number };
@@ -32,7 +43,7 @@ type PorCobrar = { por_cliente: PorCobrarCliente[]; detalle: PorCobrarDetalle[];
 type Maquina = { activo_id: string | null; activo_nombre: string; activo_tipo: string | null; ingresos: number; gastos: number; ganancia: number; gastos_por_categoria: Array<{ categoria: string; gasto: number }> };
 type PorMaquina = { periodo: { desde: string; hasta: string }; maquinas: Maquina[] };
 
-export default function CampoModule() {
+export default function CampoModule({ section = "captura" }: { section?: CampoSeccion }) {
   const [vista, setVista] = useState<Vista>("movimiento");
   const [flash, setFlash] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
   const notify = (text: string, kind: "ok" | "err" = "ok") => { setFlash({ text, kind }); setTimeout(() => setFlash(null), 3500); };
@@ -67,11 +78,28 @@ export default function CampoModule() {
   const activosActivos = useMemo(() => activos.filter((a) => a.activo), [activos]);
   const pendientes = useMemo(() => servicios.filter((s) => s.estado !== "pagado"), [servicios]);
 
+  const flashEl = flash && (
+    <p style={{ margin: "0 0 10px", padding: "8px 12px", borderRadius: 8, fontWeight: 600,
+      background: flash.kind === "ok" ? "var(--c-success-bg)" : "var(--c-danger-bg)",
+      color: flash.kind === "ok" ? "#15803d" : "#b91c1c" }}>{flash.text}</p>
+  );
+
+  // Sección "Reportes": solo los 3 paneles. El menú de Campo (Captura/Reportes)
+  // lo controla CampoWorkspace; aquí solo se pinta el contenido de la sección.
+  if (section === "reportes") {
+    return (
+      <section className="panelGrid">
+        {flashEl}
+        <ReportesView onError={(m) => notify(m, "err")} />
+      </section>
+    );
+  }
+
+  // Sección "Captura": movimientos + servicios + abonos + listas.
   return (
     <section className="panelGrid">
       <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-        <h2 style={{ marginBottom: 2 }}>🚜 Caja de Campo <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· cosechadora, transporte y fletes</span></h2>
-        <p className="muted" style={{ marginTop: 0 }}>Módulo aparte para el negocio de campo. Solo captura rápida: movimientos de caja, servicios y sus abonos.</p>
+        <h2 style={{ marginBottom: 2 }}>🚜 Captura <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· movimientos, servicios y abonos</span></h2>
 
         {/* Saldos por cuenta (derivados) */}
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "6px 0 10px" }}>
@@ -84,18 +112,14 @@ export default function CampoModule() {
           ))}
         </div>
 
-        {/* Pestañas del módulo */}
+        {/* Sub-pestañas de captura */}
         <nav className="cajaSubNav" style={{ borderBottom: "none" }}>
-          {([["movimiento", "➕ Movimiento"], ["servicio", "🚜 Servicio"], ["abono", "💵 Abono"], ["listas", "📋 Listas"], ["reportes", "📊 Reportes"]] as Array<[Vista, string]>).map(([v, label]) => (
+          {([["movimiento", "➕ Movimiento"], ["servicio", "🚜 Servicio"], ["abono", "💵 Abono"], ["listas", "📋 Listas"]] as Array<[Vista, string]>).map(([v, label]) => (
             <button key={v} type="button" className={vista === v ? "active" : ""} onClick={() => setVista(v)}>{label}</button>
           ))}
         </nav>
 
-        {flash && (
-          <p style={{ margin: "8px 0 0", padding: "8px 12px", borderRadius: 8, fontWeight: 600,
-            background: flash.kind === "ok" ? "var(--c-success-bg)" : "var(--c-danger-bg)",
-            color: flash.kind === "ok" ? "#15803d" : "#b91c1c" }}>{flash.text}</p>
-        )}
+        {flashEl}
       </div>
 
       {vista === "movimiento" && (
@@ -165,8 +189,6 @@ export default function CampoModule() {
           </div>
         </>
       )}
-
-      {vista === "reportes" && <ReportesView onError={(m) => notify(m, "err")} />}
 
       {/* Gestión mínima de activos (para poder registrar servicios) */}
       {(vista === "servicio" || vista === "movimiento") && (
@@ -682,5 +704,73 @@ function ActivosPanel({ activos, onChanged, onError }: {
         </div>
       )}
     </div>
+  );
+}
+
+// ── Contexto AISLADO de Campo: layout propio (sidebar + menú Captura/Reportes) ──
+// Se renderiza en lugar del layout estándar cuando la operación activa es Campo.
+// El resto de operaciones (Planta/Matriz, socios) no se ven aquí.
+export function CampoWorkspace({ operationSelector, userName, roleName, apiOnline, onLogout }: {
+  operationSelector: ReactNode;
+  userName: string;
+  roleName: string;
+  apiOnline: boolean;
+  onLogout: () => void;
+}) {
+  const [seccion, setSeccion] = useState<CampoSeccion>("captura");
+  const activa = CAMPO_SECCIONES.find((s) => s.id === seccion) ?? CAMPO_SECCIONES[0];
+  const iniciales = userName.split(/\s+/).slice(0, 2).map((p) => p[0]?.toUpperCase() ?? "").join("");
+  return (
+    <main className="shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <span className="brandMark">🚜</span>
+          <div>
+            <strong>Caja de Campo</strong>
+            <small>Operación · CEYRO</small>
+          </div>
+        </div>
+        {operationSelector}
+        <nav>
+          <div className="navSection" data-group="Campo">
+            <button type="button" className="navLabel" style={{ cursor: "default" }}><span>Campo</span></button>
+            {CAMPO_SECCIONES.map((s) => (
+              <button key={s.id} className={seccion === s.id ? "active" : ""} onClick={() => setSeccion(s.id)}>
+                <span style={{ width: 15, display: "inline-block", textAlign: "center" }}>{s.icon}</span>
+                {s.label}
+              </button>
+            ))}
+          </div>
+        </nav>
+        <div className="sidebarFooter">
+          <div className="userBox">
+            <span className="userAvatar">{iniciales}</span>
+            <div>
+              <strong>{userName}</strong>
+              <small>{(roleName ?? "usuario").toLowerCase()}</small>
+            </div>
+            <button className="logoutBtn" title="Cerrar sesión" onClick={onLogout}>⏻</button>
+          </div>
+          <span className={apiOnline ? "apiState on" : "apiState"}><i />API {apiOnline ? "conectada" : "sin conexión"}</span>
+          <small>Caja de Campo · CEYRO</small>
+        </div>
+      </aside>
+
+      <section className="workspace">
+        <header className="topbar">
+          <div className="topbarLeft">
+            <h1>Campo · {activa.label}</h1>
+            <p>Operación de campo (cosechadora, transporte, fletes)</p>
+          </div>
+          <div className="topbarRight">
+            <span className="topbarDate">{new Date().toLocaleDateString("es-EC", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</span>
+            <span className={apiOnline ? "pill online" : "pill offline"}>API {apiOnline ? "conectada" : "sin conexión"}</span>
+          </div>
+        </header>
+        <div className="content">
+          <CampoModule section={seccion} />
+        </div>
+      </section>
+    </main>
   );
 }

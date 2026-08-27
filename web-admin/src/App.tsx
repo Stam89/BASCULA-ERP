@@ -3,7 +3,7 @@ import { apiFetch, apiGet, apiPost, apiPut, checkHealth, getActiveAccionistaId, 
 import { money, categoryLabel, stockGroupLabel } from "./format";
 import type { Farmer, Product, Warehouse, Lot, MateriaPrimaEntry, MateriaPrimaCorreccion, PendingEntry } from "./types";
 import { Metric, ReportTable, Input, Select, MedidorRow, DataList } from "./components/ui";
-import CampoModule from "./campo/CampoModule";
+import { CampoWorkspace } from "./campo/CampoModule";
 
 /** Etiqueta corta de un ingreso: el número de la báscula si se conoce. */
 function entryLabel(entry: { numero_bascula?: string | null; ticket_number: string }): string {
@@ -6449,6 +6449,52 @@ export function App() {
     return <LoginScreen onLogin={handleLogin} />;
   }
 
+  // Selector de operación (accionistas + "CEYRO · Campo"). Se usa tanto en el
+  // layout estándar como en el shell aislado de Campo.
+  const operationSelectorEl = (() => {
+    const SUF = "::campo";
+    const opciones: Array<{ value: string; label: string }> = [];
+    for (const a of accionistas) {
+      opciones.push({ value: a.id, label: `${a.name}${a.tipo === "MATRIZ" ? " · Planta / Matriz" : " · Socio Operativo"}` });
+      if (a.tipo === "MATRIZ") opciones.push({ value: a.id + SUF, label: `${a.name} · Campo` });
+    }
+    if (opciones.length <= 1) return null;
+    const inCampo = esCeyroActivo && activeTab === "Caja de Campo";
+    const valor = inCampo ? (activeAccionistaId ?? "") + SUF : (activeAccionistaId ?? "");
+    return (
+      <label className="accionistaSwitcher">
+        <span>Accionista</span>
+        <select value={valor} onChange={(e) => {
+          const v = e.target.value;
+          if (v.endsWith(SUF)) {
+            const id = v.slice(0, -SUF.length);
+            if (id === activeAccionistaId) setActiveTab("Caja de Campo");
+            else { try { localStorage.setItem("bascula-erp:campo-pending", "1"); } catch { /* ignore */ } switchAccionista(id); }
+          } else {
+            if (v !== activeAccionistaId) switchAccionista(v);
+            else if (activeTab === "Caja de Campo") setActiveTab("Dashboard");
+          }
+        }}>
+          {opciones.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      </label>
+    );
+  })();
+
+  // CONTEXTO AISLADO: cuando la operación activa es Campo (bajo CEYRO), se
+  // renderiza SU PROPIO layout (menú Captura/Reportes), sin nada del resto.
+  if (esCeyroActivo && activeTab === "Caja de Campo") {
+    return (
+      <CampoWorkspace
+        operationSelector={operationSelectorEl}
+        userName={authUser.name}
+        roleName={authUser.role_name ?? "usuario"}
+        apiOnline={apiOnline}
+        onLogout={logout}
+      />
+    );
+  }
+
   return (
     <>
     <main className="shell">
@@ -6460,47 +6506,13 @@ export function App() {
             <small>Piladora de arroz</small>
           </div>
         </div>
-        {(() => {
-          // Opciones del selector: cada accionista y, para CEYRO (MATRIZ), su
-          // operación "Campo" al lado de "Planta / Matriz" (mismo patrón: elegir
-          // aquí cambia de operación). Campo entra al módulo Caja de Campo.
-          const SUF = "::campo";
-          const opciones: Array<{ value: string; label: string }> = [];
-          for (const a of accionistas) {
-            opciones.push({ value: a.id, label: `${a.name}${a.tipo === "MATRIZ" ? " · Planta / Matriz" : " · Socio Operativo"}` });
-            if (a.tipo === "MATRIZ") opciones.push({ value: a.id + SUF, label: `${a.name} · Campo` });
-          }
-          if (opciones.length <= 1) return null;
-          const enCampo = esCeyroActivo && activeTab === "Caja de Campo";
-          const valor = enCampo ? (activeAccionistaId ?? "") + SUF : (activeAccionistaId ?? "");
-          return (
-            <label className="accionistaSwitcher">
-              <span>Accionista</span>
-              <select value={valor} onChange={(e) => {
-                const v = e.target.value;
-                if (v.endsWith(SUF)) {
-                  const id = v.slice(0, -SUF.length);
-                  // Ya en CEYRO: entra al módulo sin recargar. Desde otro
-                  // accionista: marca + switchAccionista (recarga) → aterriza en Campo.
-                  if (id === activeAccionistaId) setActiveTab("Caja de Campo");
-                  else { try { localStorage.setItem("bascula-erp:campo-pending", "1"); } catch { /* ignore */ } switchAccionista(id); }
-                } else {
-                  if (v !== activeAccionistaId) switchAccionista(v);          // recarga (sale de Campo)
-                  else if (activeTab === "Caja de Campo") setActiveTab("Dashboard"); // "Planta / Matriz" sin recargar
-                }
-              }}>
-                {opciones.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            </label>
-          );
-        })()}
+        {operationSelectorEl}
         {(() => {
           const act = accionistas.find((a) => a.id === activeAccionistaId);
           if (!act) return null;
-          const enCampo = esCeyroActivo && activeTab === "Caja de Campo";
           const esMatriz = act.tipo === "MATRIZ";
-          const bg = enCampo ? "#7c2d12" : esMatriz ? "#065f46" : "#1e3a8a";
-          const txt = enCampo ? "🚜 Campo" : esMatriz ? "🏭 Planta / Matriz" : "🤝 Socio Operativo";
+          const bg = esMatriz ? "#065f46" : "#1e3a8a";
+          const txt = esMatriz ? "🏭 Planta / Matriz" : "🤝 Socio Operativo";
           return (
             <div style={{ padding: "0 10px 8px" }}>
               <span style={{ display: "inline-block", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: bg, color: "#fff" }}>
@@ -6584,9 +6596,6 @@ export function App() {
           </div>
         </header>
         <div className="content">
-
-        {/* Módulo independiente de Caja de Campo (cosechadora/transporte). */}
-        {activeTab === "Caja de Campo" && <CampoModule />}
 
         {activeTab === "Dashboard" && (
           <>
