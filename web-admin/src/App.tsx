@@ -1200,6 +1200,9 @@ export function App() {
     } catch { /* ignore */ }
     return "Dashboard";
   });
+  // Nombre editable de la operación Campo (campo_config). Solo la etiqueta de
+  // Campo lo usa; las demás operaciones no cambian.
+  const [campoNombre, setCampoNombre] = useState("Campo");
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
     try { return new Set(JSON.parse(localStorage.getItem("bascula-erp:nav-collapsed") || "[]") as string[]); }
     catch { return new Set(); }
@@ -2168,6 +2171,8 @@ export function App() {
       setLoading(false);
     });
     apiGet<AppSettings>("/settings").then(setAppSettings).catch(() => undefined);
+    // Nombre editable de la operación Campo (solo etiqueta de Campo).
+    apiGet<{ nombre_operacion: string }>("/campo/config").then((c) => setCampoNombre(c.nombre_operacion)).catch(() => undefined);
   }, [authUser, activeAccionistaId]);
 
   // Renueva la sesión mientras la app está en uso, para no cerrar sesión a media
@@ -6456,7 +6461,7 @@ export function App() {
     const opciones: Array<{ value: string; label: string }> = [];
     for (const a of accionistas) {
       opciones.push({ value: a.id, label: `${a.name}${a.tipo === "MATRIZ" ? " · Planta / Matriz" : " · Socio Operativo"}` });
-      if (a.tipo === "MATRIZ") opciones.push({ value: a.id + SUF, label: `${a.name} · Campo` });
+      if (a.tipo === "MATRIZ") opciones.push({ value: a.id + SUF, label: `${a.name} · ${campoNombre}` });
     }
     if (opciones.length <= 1) return null;
     const inCampo = esCeyroActivo && activeTab === "Caja de Campo";
@@ -6491,6 +6496,8 @@ export function App() {
         roleName={authUser.role_name ?? "usuario"}
         apiOnline={apiOnline}
         onLogout={logout}
+        nombre={campoNombre}
+        onNombreChange={setCampoNombre}
       />
     );
   }

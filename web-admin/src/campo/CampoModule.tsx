@@ -4,14 +4,16 @@
 // con una entrada de sidebar y un único render.
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { apiGet, apiPost } from "../api";
+import { apiGet, apiPost, apiPut } from "../api";
 import { money } from "../format";
 
 // Menú propio de la operación Campo (contexto aislado). Para agregar secciones
 // nuevas: añade una entrada aquí y su caso en CampoModule (prop `section`).
 const CAMPO_SECCIONES: Array<{ id: CampoSeccion; label: string; icon: string }> = [
-  { id: "captura", label: "Captura", icon: "➕" },
-  { id: "reportes", label: "Reportes", icon: "📊" }
+  { id: "caja", label: "Caja", icon: "💰" },
+  { id: "servicios", label: "Servicios", icon: "🚜" },
+  { id: "reportes", label: "Reportes", icon: "📊" },
+  { id: "config", label: "Configuración", icon: "⚙️" }
 ];
 
 type Activo = { id: string; nombre: string; tipo: "cosechadora" | "transporte"; operador: string | null; activo: boolean };
@@ -23,17 +25,11 @@ type Servicio = {
   valor: number; cliente_nombre: string; activo_nombre: string; cobrado: number; saldo_pendiente: number;
   estado: "pendiente" | "abonado" | "pagado"; notas: string | null;
 };
-type Movimiento = {
-  id: string; fecha: string; signo: "entrada" | "salida"; monto: number; concepto: string | null;
-  cuenta_nombre: string; categoria_nombre: string | null; activo_nombre: string | null; servicio_id: string | null;
-};
 
 const hoy = () => new Date().toISOString().slice(0, 10);
-// Sub-pestañas de la sección "Captura" (movimientos/servicios/abonos/listas).
-type Vista = "movimiento" | "servicio" | "abono" | "listas";
 // Secciones del menú propio de Campo (contexto aislado). Se amplía agregando
 // entradas aquí y en CAMPO_SECCIONES (ver CampoWorkspace).
-export type CampoSeccion = "captura" | "reportes";
+export type CampoSeccion = "caja" | "servicios" | "reportes" | "config";
 
 // ── Tipos de los reportes (V2) ───────────────────────────────────────────────
 type SaldoCaja = { corte: string; cuentas: Array<{ id: string; nombre: string; saldo: number }>; total: number };
@@ -43,8 +39,9 @@ type PorCobrar = { por_cliente: PorCobrarCliente[]; detalle: PorCobrarDetalle[];
 type Maquina = { activo_id: string | null; activo_nombre: string; activo_tipo: string | null; ingresos: number; gastos: number; ganancia: number; gastos_por_categoria: Array<{ categoria: string; gasto: number }> };
 type PorMaquina = { periodo: { desde: string; hasta: string }; maquinas: Maquina[] };
 
-export default function CampoModule({ section = "captura" }: { section?: CampoSeccion }) {
-  const [vista, setVista] = useState<Vista>("movimiento");
+export default function CampoModule({ section = "caja", nombre, onNombreChange }: {
+  section?: CampoSeccion; nombre?: string; onNombreChange?: (n: string) => void;
+}) {
   const [flash, setFlash] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
   const notify = (text: string, kind: "ok" | "err" = "ok") => { setFlash({ text, kind }); setTimeout(() => setFlash(null), 3500); };
 
@@ -52,7 +49,9 @@ export default function CampoModule({ section = "captura" }: { section?: CampoSe
   const [categorias, setCategorias] = useState<Categoria[]>([]);
   const [cuentas, setCuentas] = useState<Cuenta[]>([]);
   const [servicios, setServicios] = useState<Servicio[]>([]);
-  const [movimientos, setMovimientos] = useState<Movimiento[]>([]);
+  const [cajaTab, setCajaTab] = useState<"ingreso" | "egreso" | "transferencia">("ingreso");
+  const [servTab, setServTab] = useState<"servicio" | "abono" | "lista">("servicio");
+  const [libroVersion, setLibroVersion] = useState(0); // fuerza recarga del libro tras cada movimiento
 
   const refreshCatalogos = useCallback(async () => {
     const [a, cat, ct] = await Promise.all([
@@ -62,139 +61,144 @@ export default function CampoModule({ section = "captura" }: { section?: CampoSe
     ]);
     setActivos(a); setCategorias(cat); setCuentas(ct);
   }, []);
-  const refreshDatos = useCallback(async () => {
-    const [s, m] = await Promise.all([
-      apiGet<Servicio[]>("/campo/servicios"),
-      apiGet<Movimiento[]>("/campo/movimientos")
-    ]);
-    setServicios(s); setMovimientos(m);
+  const refreshServicios = useCallback(async () => {
+    setServicios(await apiGet<Servicio[]>("/campo/servicios"));
   }, []);
-  const refreshAll = useCallback(async () => {
-    await Promise.all([refreshCatalogos(), refreshDatos()]);
-  }, [refreshCatalogos, refreshDatos]);
 
-  useEffect(() => { refreshAll().catch((e) => notify(e.message, "err")); }, [refreshAll]);
+  useEffect(() => { Promise.all([refreshCatalogos(), refreshServicios()]).catch((e) => notify(e.message, "err")); }, [refreshCatalogos, refreshServicios]);
 
   const activosActivos = useMemo(() => activos.filter((a) => a.activo), [activos]);
   const pendientes = useMemo(() => servicios.filter((s) => s.estado !== "pagado"), [servicios]);
+  const totalCuentas = useMemo(() => cuentas.reduce((s, c) => s + c.saldo, 0), [cuentas]);
 
   const flashEl = flash && (
     <p style={{ margin: "0 0 10px", padding: "8px 12px", borderRadius: 8, fontWeight: 600,
       background: flash.kind === "ok" ? "var(--c-success-bg)" : "var(--c-danger-bg)",
       color: flash.kind === "ok" ? "#15803d" : "#b91c1c" }}>{flash.text}</p>
   );
+  // Tras registrar un movimiento de caja: refresca saldos + servicios + libro.
+  const onCajaSaved = async (msg: string) => {
+    await Promise.all([refreshCatalogos(), refreshServicios()]);
+    setLibroVersion((v) => v + 1);
+    notify(msg);
+  };
 
-  // Sección "Reportes": solo los 3 paneles. El menú de Campo (Captura/Reportes)
-  // lo controla CampoWorkspace; aquí solo se pinta el contenido de la sección.
   if (section === "reportes") {
+    return <section className="panelGrid">{flashEl}<ReportesView onError={(m) => notify(m, "err")} /></section>;
+  }
+
+  if (section === "config") {
     return (
       <section className="panelGrid">
         {flashEl}
-        <ReportesView onError={(m) => notify(m, "err")} />
+        <ConfigSection nombreActual={nombre ?? "Campo"}
+          onSaved={(n) => { onNombreChange?.(n); notify(`Nombre de la operación actualizado a “${n}”`); }}
+          onError={(m) => notify(m, "err")} />
       </section>
     );
   }
 
-  // Sección "Captura": movimientos + servicios + abonos + listas.
+  if (section === "servicios") {
+    return (
+      <section className="panelGrid">
+        <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+          <h2 style={{ marginBottom: 2 }}>🚜 Servicios <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· cosecha y flete + abonos</span></h2>
+          <nav className="cajaSubNav" style={{ borderBottom: "none" }}>
+            {([["servicio", "➕ Nuevo servicio"], ["abono", "💵 Abono"], ["lista", "📋 Lista"]] as Array<["servicio" | "abono" | "lista", string]>).map(([v, label]) => (
+              <button key={v} type="button" className={servTab === v ? "active" : ""} onClick={() => setServTab(v)}>{label}</button>
+            ))}
+          </nav>
+          {flashEl}
+        </div>
+        {servTab === "servicio" && (
+          <ServicioForm activos={activosActivos}
+            onSaved={async () => { await refreshServicios(); notify("Servicio registrado"); }}
+            onError={(m) => notify(m, "err")} />
+        )}
+        {servTab === "abono" && (
+          <AbonoForm pendientes={pendientes} cuentas={cuentas}
+            onSaved={() => onCajaSaved("Abono registrado")}
+            onError={(m) => notify(m, "err")} />
+        )}
+        {servTab === "lista" && <ServiciosList servicios={servicios} />}
+        {(servTab === "servicio" || servTab === "abono") && (
+          <ActivosPanel activos={activos} onChanged={async () => { await refreshCatalogos(); notify("Activo guardado"); }} onError={(m) => notify(m, "err")} />
+        )}
+      </section>
+    );
+  }
+
+  // section === "caja"
   return (
     <section className="panelGrid">
       <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-        <h2 style={{ marginBottom: 2 }}>🚜 Captura <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· movimientos, servicios y abonos</span></h2>
-
-        {/* Saldos por cuenta (derivados) */}
+        <h2 style={{ marginBottom: 2 }}>💰 Caja <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· ingresos, egresos y transferencias</span></h2>
+        {/* Saldos por cuenta + total */}
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "6px 0 10px" }}>
           {cuentas.map((c) => (
-            <div key={c.id} className="totalBox" style={{ minWidth: 130, margin: 0 }}>
+            <div key={c.id} className="totalBox" style={{ minWidth: 120, margin: 0 }}>
               <span>{c.nombre}</span>
               <strong style={{ color: c.saldo >= 0 ? "#15803d" : "#b91c1c" }}>{money(c.saldo)}</strong>
-              <small>saldo (entradas − salidas)</small>
+              <small>saldo</small>
             </div>
           ))}
+          <div className="totalBox" style={{ minWidth: 130, margin: 0, background: "#eff6ff", borderColor: "#bfdbfe" }}>
+            <span>TOTAL</span>
+            <strong style={{ color: totalCuentas >= 0 ? "#15803d" : "#b91c1c" }}>{money(totalCuentas)}</strong>
+          </div>
         </div>
-
-        {/* Sub-pestañas de captura */}
         <nav className="cajaSubNav" style={{ borderBottom: "none" }}>
-          {([["movimiento", "➕ Movimiento"], ["servicio", "🚜 Servicio"], ["abono", "💵 Abono"], ["listas", "📋 Listas"]] as Array<[Vista, string]>).map(([v, label]) => (
-            <button key={v} type="button" className={vista === v ? "active" : ""} onClick={() => setVista(v)}>{label}</button>
+          {([["ingreso", "＋ Ingreso"], ["egreso", "－ Egreso"], ["transferencia", "⇄ Transferencia"]] as Array<["ingreso" | "egreso" | "transferencia", string]>).map(([v, label]) => (
+            <button key={v} type="button" className={cajaTab === v ? "active" : ""} onClick={() => setCajaTab(v)}>{label}</button>
           ))}
         </nav>
-
         {flashEl}
       </div>
 
-      {vista === "movimiento" && (
-        <MovimientoForm cuentas={cuentas} categorias={categorias} activos={activosActivos}
-          onSaved={async () => { await Promise.all([refreshCatalogos(), refreshDatos()]); notify("Movimiento registrado"); }}
-          onError={(m) => notify(m, "err")} />
+      {cajaTab === "ingreso" && (
+        <IngresoForm cuentas={cuentas} pendientes={pendientes}
+          onSaved={() => onCajaSaved("Ingreso registrado")} onError={(m) => notify(m, "err")} />
+      )}
+      {cajaTab === "egreso" && (
+        <EgresoForm cuentas={cuentas} categorias={categorias} activos={activosActivos}
+          onSaved={() => onCajaSaved("Egreso registrado")} onError={(m) => notify(m, "err")} />
+      )}
+      {cajaTab === "transferencia" && (
+        <TransferenciaForm cuentas={cuentas}
+          onSaved={() => onCajaSaved("Transferencia registrada")} onError={(m) => notify(m, "err")} />
       )}
 
-      {vista === "servicio" && (
-        <ServicioForm activos={activosActivos}
-          onSaved={async () => { await refreshDatos(); notify("Servicio registrado"); }}
-          onError={(m) => notify(m, "err")} />
-      )}
-
-      {vista === "abono" && (
-        <AbonoForm pendientes={pendientes} cuentas={cuentas}
-          onSaved={async () => { await Promise.all([refreshCatalogos(), refreshDatos()]); notify("Abono registrado"); }}
-          onError={(m) => notify(m, "err")} />
-      )}
-
-      {vista === "listas" && (
-        <>
-          <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-            <h2>Servicios <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>({servicios.length})</span></h2>
-            <div style={{ overflowX: "auto" }}>
-              <table className="cajaTable" style={{ marginTop: 6 }}>
-                <thead><tr><th>Fecha</th><th>Cliente</th><th>Activo</th><th>Tipo</th><th className="num">Valor</th><th className="num">Cobrado</th><th className="num">Saldo</th><th>Estado</th></tr></thead>
-                <tbody>
-                  {servicios.length === 0 ? <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin servicios registrados.</td></tr>
-                    : servicios.map((s) => (
-                    <tr key={s.id}>
-                      <td style={{ whiteSpace: "nowrap" }}>{s.fecha}</td>
-                      <td>{s.cliente_nombre}</td>
-                      <td>{s.activo_nombre}</td>
-                      <td>{s.tipo === "cosecha" ? "Cosecha" : "Flete"}</td>
-                      <td className="num">{money(s.valor)}</td>
-                      <td className="num">{money(s.cobrado)}</td>
-                      <td className="num" style={{ fontWeight: 700 }}>{money(s.saldo_pendiente)}</td>
-                      <td><span className={s.estado === "pagado" ? "chip ok" : s.estado === "abonado" ? "chip warn" : "chip info"}>{s.estado}</span></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-            <h2>Movimientos <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>({movimientos.length})</span></h2>
-            <div style={{ overflowX: "auto" }}>
-              <table className="cajaTable" style={{ marginTop: 6 }}>
-                <thead><tr><th>Fecha</th><th>Cuenta</th><th>Signo</th><th className="num">Monto</th><th>Concepto</th><th>Categoría</th><th>Activo</th></tr></thead>
-                <tbody>
-                  {movimientos.length === 0 ? <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin movimientos registrados.</td></tr>
-                    : movimientos.map((m) => (
-                    <tr key={m.id}>
-                      <td style={{ whiteSpace: "nowrap" }}>{m.fecha}</td>
-                      <td>{m.cuenta_nombre}</td>
-                      <td><span className={m.signo === "entrada" ? "chip ok" : "chip bad"}>{m.signo}</span></td>
-                      <td className="num" style={{ fontWeight: 700, color: m.signo === "entrada" ? "#15803d" : "#b91c1c" }}>{money(m.monto)}</td>
-                      <td>{m.concepto || "—"}{m.servicio_id ? <small className="muted" style={{ display: "block" }}>abono a servicio</small> : null}</td>
-                      <td>{m.categoria_nombre || "—"}</td>
-                      <td>{m.activo_nombre || "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* Gestión mínima de activos (para poder registrar servicios) */}
-      {(vista === "servicio" || vista === "movimiento") && (
-        <ActivosPanel activos={activos} onChanged={async () => { await refreshCatalogos(); notify("Activo guardado"); }} onError={(m) => notify(m, "err")} />
-      )}
+      <LibroView cuentas={cuentas} version={libroVersion} onError={(m) => notify(m, "err")} />
     </section>
+  );
+}
+
+// Lista de servicios (tabla) — extraída de la antigua vista "Listas".
+function ServiciosList({ servicios }: { servicios: Servicio[] }) {
+  return (
+    <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+      <h2>Servicios <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>({servicios.length})</span></h2>
+      <div style={{ overflowX: "auto" }}>
+        <table className="cajaTable" style={{ marginTop: 6 }}>
+          <thead><tr><th>Fecha</th><th>Cliente</th><th>Activo</th><th>Tipo</th><th className="num">Valor</th><th className="num">Cobrado</th><th className="num">Saldo</th><th>Estado</th></tr></thead>
+          <tbody>
+            {servicios.length === 0 ? <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin servicios registrados.</td></tr>
+              : servicios.map((s) => (
+              <tr key={s.id}>
+                <td style={{ whiteSpace: "nowrap" }}>{String(s.fecha).slice(0, 10)}</td>
+                <td>{s.cliente_nombre}</td>
+                <td>{s.activo_nombre}</td>
+                <td>{s.tipo === "cosecha" ? "Cosecha" : "Flete"}</td>
+                <td className="num">{money(s.valor)}</td>
+                <td className="num">{money(s.cobrado)}</td>
+                <td className="num" style={{ fontWeight: 700 }}>{money(s.saldo_pendiente)}</td>
+                <td><span className={s.estado === "pagado" ? "chip ok" : s.estado === "abonado" ? "chip warn" : "chip info"}>{s.estado}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
@@ -390,13 +394,16 @@ function ReportesView({ onError }: { onError: (m: string) => void }) {
 }
 
 // ── Nuevo movimiento de caja ─────────────────────────────────────────────────
-function MovimientoForm({ cuentas, categorias, activos, onSaved, onError }: {
-  cuentas: Cuenta[]; categorias: Categoria[]; activos: Activo[];
-  onSaved: () => Promise<void>; onError: (m: string) => void;
-}) {
-  const [f, setF] = useState({ fecha: hoy(), cuenta_id: "", signo: "salida" as "entrada" | "salida", monto: "", concepto: "", categoria_id: "", activo_id: "" });
-  const [busy, setBusy] = useState(false);
+type OnSaved = () => void | Promise<void>;
 
+// ＋ INGRESO: entrada a una cuenta. Opcional: ligarlo a un servicio como abono
+// (respeta el bloqueo de sobrepago 422 del backend).
+function IngresoForm({ cuentas, pendientes, onSaved, onError }: {
+  cuentas: Cuenta[]; pendientes: Servicio[]; onSaved: OnSaved; onError: (m: string) => void;
+}) {
+  const [f, setF] = useState({ fecha: hoy(), cuenta_id: "", monto: "", concepto: "", servicio_id: "" });
+  const [busy, setBusy] = useState(false);
+  const svc = pendientes.find((s) => s.id === f.servicio_id);
   async function submit() {
     try {
       setBusy(true);
@@ -404,55 +411,224 @@ function MovimientoForm({ cuentas, categorias, activos, onSaved, onError }: {
       const monto = Number(f.monto);
       if (!(monto > 0)) throw new Error("Ingresa un monto válido");
       await apiPost("/campo/movimientos", {
-        fecha: f.fecha, cuenta_id: f.cuenta_id, signo: f.signo, monto,
-        concepto: f.concepto.trim() || undefined,
-        categoria_id: f.signo === "salida" && f.categoria_id ? f.categoria_id : undefined,
-        activo_id: f.activo_id || undefined
+        fecha: f.fecha, cuenta_id: f.cuenta_id, signo: "entrada", monto,
+        concepto: f.concepto.trim() || (f.servicio_id ? "Abono de servicio" : undefined),
+        servicio_id: f.servicio_id || undefined
       });
-      setF({ ...f, monto: "", concepto: "", categoria_id: "", activo_id: "" });
+      setF({ ...f, monto: "", concepto: "", servicio_id: "" });
       await onSaved();
     } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
   }
-
   return (
     <form className="formPanel" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-      <h2>➕ Nuevo movimiento de caja</h2>
+      <h2>＋ Nuevo ingreso</h2>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         <label><span>Fecha</span><input type="date" value={f.fecha} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
-        <label><span>Cuenta</span>
+        <label><span>Cuenta (entra a)</span>
           <select value={f.cuenta_id} onChange={(e) => setF({ ...f, cuenta_id: e.target.value })}>
             <option value="">Seleccione</option>
             {cuentas.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
           </select>
         </label>
       </div>
-      <div style={{ display: "flex", gap: 10, margin: "6px 0" }}>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, cursor: "pointer" }}>
-          <input type="radio" name="signo" checked={f.signo === "entrada"} style={{ width: "auto" }} onChange={() => setF({ ...f, signo: "entrada" })} /> ⬆️ Entrada
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, cursor: "pointer" }}>
-          <input type="radio" name="signo" checked={f.signo === "salida"} style={{ width: "auto" }} onChange={() => setF({ ...f, signo: "salida" })} /> ⬇️ Salida (gasto)
+      <label><span>Monto $</span><input type="number" step="0.01" min="0" value={f.monto} onChange={(e) => setF({ ...f, monto: e.target.value })} placeholder="0.00" /></label>
+      <label><span>Ligar a un servicio (opcional — cuenta como abono)</span>
+        <select value={f.servicio_id} onChange={(e) => setF({ ...f, servicio_id: e.target.value })}>
+          <option value="">(ingreso suelto, sin servicio)</option>
+          {pendientes.map((s) => <option key={s.id} value={s.id}>{String(s.fecha).slice(0, 10)} · {s.cliente_nombre} · saldo {money(s.saldo_pendiente)}</option>)}
+        </select>
+      </label>
+      {svc && <p className="muted" style={{ marginTop: -4, fontSize: 12 }}>Saldo del servicio: <strong>{money(svc.saldo_pendiente)}</strong>. Un abono mayor al saldo se rechaza.</p>}
+      <label><span>Concepto</span><input type="text" value={f.concepto} onChange={(e) => setF({ ...f, concepto: e.target.value })} placeholder="Ej: Pago cosecha" /></label>
+      <button className="primary" disabled={busy}>{busy ? "Guardando…" : "Registrar ingreso"}</button>
+    </form>
+  );
+}
+
+// － EGRESO: salida de una cuenta. Categoría OBLIGATORIA; activo opcional.
+function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
+  cuentas: Cuenta[]; categorias: Categoria[]; activos: Activo[]; onSaved: OnSaved; onError: (m: string) => void;
+}) {
+  const [f, setF] = useState({ fecha: hoy(), cuenta_id: "", monto: "", concepto: "", categoria_id: "", activo_id: "" });
+  const [busy, setBusy] = useState(false);
+  async function submit() {
+    try {
+      setBusy(true);
+      if (!f.cuenta_id) throw new Error("Elige la cuenta");
+      if (!f.categoria_id) throw new Error("La categoría del gasto es obligatoria");
+      const monto = Number(f.monto);
+      if (!(monto > 0)) throw new Error("Ingresa un monto válido");
+      await apiPost("/campo/movimientos", {
+        fecha: f.fecha, cuenta_id: f.cuenta_id, signo: "salida", monto,
+        concepto: f.concepto.trim() || undefined, categoria_id: f.categoria_id, activo_id: f.activo_id || undefined
+      });
+      setF({ ...f, monto: "", concepto: "", categoria_id: "", activo_id: "" });
+      await onSaved();
+    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+  return (
+    <form className="formPanel" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+      <h2>－ Nuevo egreso (gasto)</h2>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <label><span>Fecha</span><input type="date" value={f.fecha} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
+        <label><span>Cuenta (sale de)</span>
+          <select value={f.cuenta_id} onChange={(e) => setF({ ...f, cuenta_id: e.target.value })}>
+            <option value="">Seleccione</option>
+            {cuentas.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+          </select>
         </label>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         <label><span>Monto $</span><input type="number" step="0.01" min="0" value={f.monto} onChange={(e) => setF({ ...f, monto: e.target.value })} placeholder="0.00" /></label>
-        {f.signo === "salida" && (
-          <label><span>Categoría de gasto</span>
-            <select value={f.categoria_id} onChange={(e) => setF({ ...f, categoria_id: e.target.value })}>
-              <option value="">(sin categoría)</option>
-              {categorias.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-            </select>
-          </label>
-        )}
+        <label><span>Categoría <span style={{ color: "#ef4444" }}>*</span></span>
+          <select value={f.categoria_id} onChange={(e) => setF({ ...f, categoria_id: e.target.value })}>
+            <option value="">Seleccione</option>
+            {categorias.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+          </select>
+        </label>
       </div>
-      <label><span>Concepto</span><input type="text" value={f.concepto} onChange={(e) => setF({ ...f, concepto: e.target.value })} placeholder="Ej: Diésel cosechadora" /></label>
       <label><span>Activo (opcional)</span>
         <select value={f.activo_id} onChange={(e) => setF({ ...f, activo_id: e.target.value })}>
-          <option value="">(ninguno)</option>
+          <option value="">(ninguno — irá a “SIN ASIGNAR”)</option>
           {activos.map((a) => <option key={a.id} value={a.id}>{a.nombre} · {a.tipo}</option>)}
         </select>
       </label>
-      <button className="primary" disabled={busy}>{busy ? "Guardando…" : "Registrar movimiento"}</button>
+      <label><span>Concepto</span><input type="text" value={f.concepto} onChange={(e) => setF({ ...f, concepto: e.target.value })} placeholder="Ej: Diésel cosechadora" /></label>
+      <button className="primary" disabled={busy}>{busy ? "Guardando…" : "Registrar egreso"}</button>
+    </form>
+  );
+}
+
+// ⇄ TRANSFERENCIA: mueve dinero entre dos cuentas (par de movimientos). NO es
+// ingreso ni egreso real; sí cambia el saldo de cada cuenta.
+function TransferenciaForm({ cuentas, onSaved, onError }: {
+  cuentas: Cuenta[]; onSaved: OnSaved; onError: (m: string) => void;
+}) {
+  const [f, setF] = useState({ fecha: hoy(), origen: "", destino: "", monto: "", concepto: "" });
+  const [busy, setBusy] = useState(false);
+  async function submit() {
+    try {
+      setBusy(true);
+      if (!f.origen || !f.destino) throw new Error("Elige cuenta origen y destino");
+      if (f.origen === f.destino) throw new Error("Origen y destino deben ser distintas");
+      const monto = Number(f.monto);
+      if (!(monto > 0)) throw new Error("Ingresa un monto válido");
+      await apiPost("/campo/transferencias", {
+        fecha: f.fecha, cuenta_origen_id: f.origen, cuenta_destino_id: f.destino, monto,
+        concepto: f.concepto.trim() || undefined
+      });
+      setF({ ...f, monto: "", concepto: "" });
+      await onSaved();
+    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+  return (
+    <form className="formPanel" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+      <h2>⇄ Transferencia entre cuentas</h2>
+      <p className="muted" style={{ marginTop: -4, fontSize: 12 }}>No cuenta como ingreso ni egreso en los reportes; solo mueve el saldo entre cuentas.</p>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <label><span>Cuenta origen</span>
+          <select value={f.origen} onChange={(e) => setF({ ...f, origen: e.target.value })}>
+            <option value="">Seleccione</option>
+            {cuentas.map((c) => <option key={c.id} value={c.id}>{c.nombre} ({money(c.saldo)})</option>)}
+          </select>
+        </label>
+        <label><span>Cuenta destino</span>
+          <select value={f.destino} onChange={(e) => setF({ ...f, destino: e.target.value })}>
+            <option value="">Seleccione</option>
+            {cuentas.filter((c) => c.id !== f.origen).map((c) => <option key={c.id} value={c.id}>{c.nombre} ({money(c.saldo)})</option>)}
+          </select>
+        </label>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <label><span>Fecha</span><input type="date" value={f.fecha} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
+        <label><span>Monto $</span><input type="number" step="0.01" min="0" value={f.monto} onChange={(e) => setF({ ...f, monto: e.target.value })} placeholder="0.00" /></label>
+      </div>
+      <label><span>Concepto</span><input type="text" value={f.concepto} onChange={(e) => setF({ ...f, concepto: e.target.value })} placeholder="Ej: Depósito de caja a banco" /></label>
+      <button className="primary" disabled={busy}>{busy ? "Guardando…" : "Registrar transferencia"}</button>
+    </form>
+  );
+}
+
+// LIBRO DE MOVIMIENTOS con SALDO CORRIDO. Filtros por cuenta y rango de fecha.
+type LibroRow = { id: string; fecha: string; concepto: string | null; cuenta_nombre: string; categoria_nombre: string | null; naturaleza: string; entrada: number; salida: number; saldo_corrido: number };
+function LibroView({ cuentas, version, onError }: { cuentas: Cuenta[]; version: number; onError: (m: string) => void }) {
+  const [filtro, setFiltro] = useState({ cuenta_id: "", from: "", to: "" });
+  const [rows, setRows] = useState<LibroRow[]>([]);
+  const cargar = useCallback(async () => {
+    try {
+      const qs = new URLSearchParams();
+      if (filtro.cuenta_id) qs.set("cuenta_id", filtro.cuenta_id);
+      if (filtro.from) qs.set("from", filtro.from);
+      if (filtro.to) qs.set("to", filtro.to);
+      setRows(await apiGet<LibroRow[]>(`/campo/caja/libro?${qs.toString()}`));
+    } catch (e) { onError((e as Error).message); }
+  }, [filtro.cuenta_id, filtro.from, filtro.to, onError]);
+  useEffect(() => { cargar(); }, [cargar, version]);
+
+  return (
+    <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+        <h2 style={{ margin: 0 }}>📒 Libro de movimientos</h2>
+        <label style={{ margin: 0 }}><span>Cuenta</span>
+          <select value={filtro.cuenta_id} onChange={(e) => setFiltro({ ...filtro, cuenta_id: e.target.value })}>
+            <option value="">Todas</option>
+            {cuentas.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+          </select>
+        </label>
+        <label style={{ margin: 0 }}><span>Desde</span><input type="date" value={filtro.from} onChange={(e) => setFiltro({ ...filtro, from: e.target.value })} /></label>
+        <label style={{ margin: 0 }}><span>Hasta</span><input type="date" value={filtro.to} onChange={(e) => setFiltro({ ...filtro, to: e.target.value })} /></label>
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table className="cajaTable" style={{ marginTop: 8 }}>
+          <thead><tr>
+            <th>Fecha</th><th>Concepto</th><th>Categoría</th><th>Cuenta</th>
+            <th className="num">Entrada</th><th className="num">Salida</th><th className="num">Saldo</th>
+          </tr></thead>
+          <tbody>
+            {rows.length === 0 ? <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin movimientos.</td></tr>
+              : rows.map((r) => (
+              <tr key={r.id}>
+                <td style={{ whiteSpace: "nowrap" }}>{String(r.fecha).slice(0, 10)}</td>
+                <td>{r.concepto || "—"}{r.naturaleza === "transferencia" ? <span className="chip info" style={{ marginLeft: 6 }}>transfer.</span> : null}</td>
+                <td>{r.categoria_nombre || "—"}</td>
+                <td>{r.cuenta_nombre}</td>
+                <td className="num" style={{ color: r.entrada > 0 ? "#15803d" : undefined }}>{r.entrada > 0 ? money(r.entrada) : "—"}</td>
+                <td className="num" style={{ color: r.salida > 0 ? "#b91c1c" : undefined }}>{r.salida > 0 ? money(r.salida) : "—"}</td>
+                <td className="num" style={{ fontWeight: 700, color: r.saldo_corrido < 0 ? "#b91c1c" : undefined }}>{money(r.saldo_corrido)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>Saldo corrido acumulado por orden de fecha. Con una cuenta filtrada es el saldo de esa cuenta.</p>
+    </div>
+  );
+}
+
+// ⚙️ CONFIGURACIÓN: nombre editable de la operación.
+function ConfigSection({ nombreActual, onSaved, onError }: {
+  nombreActual: string; onSaved: (n: string) => void; onError: (m: string) => void;
+}) {
+  const [nombre, setNombre] = useState(nombreActual);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setNombre(nombreActual); }, [nombreActual]);
+  async function submit() {
+    try {
+      setBusy(true);
+      const n = nombre.trim();
+      if (n.length < 1) throw new Error("El nombre no puede estar vacío");
+      const r = await apiPut<{ nombre_operacion: string }>("/campo/config", { nombre_operacion: n });
+      onSaved(r.nombre_operacion);
+    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+  return (
+    <form className="formPanel" onSubmit={(e) => { e.preventDefault(); submit(); }} style={{ gridColumn: "1 / -1", maxWidth: 520 }}>
+      <h2>⚙️ Configuración de la operación</h2>
+      <p className="muted" style={{ marginTop: -4 }}>El nombre se refleja en el selector de operación, el título del sidebar y la barra superior.</p>
+      <label><span>Nombre de la operación</span>
+        <input type="text" maxLength={60} value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Ej: Cosechadora & Fletes" />
+      </label>
+      <button className="primary" disabled={busy || nombre.trim() === nombreActual}>{busy ? "Guardando…" : "Guardar nombre"}</button>
     </form>
   );
 }
@@ -710,14 +886,16 @@ function ActivosPanel({ activos, onChanged, onError }: {
 // ── Contexto AISLADO de Campo: layout propio (sidebar + menú Captura/Reportes) ──
 // Se renderiza en lugar del layout estándar cuando la operación activa es Campo.
 // El resto de operaciones (Planta/Matriz, socios) no se ven aquí.
-export function CampoWorkspace({ operationSelector, userName, roleName, apiOnline, onLogout }: {
+export function CampoWorkspace({ operationSelector, userName, roleName, apiOnline, onLogout, nombre, onNombreChange }: {
   operationSelector: ReactNode;
   userName: string;
   roleName: string;
   apiOnline: boolean;
   onLogout: () => void;
+  nombre: string;               // nombre editable de la operación (campo_config)
+  onNombreChange: (n: string) => void;
 }) {
-  const [seccion, setSeccion] = useState<CampoSeccion>("captura");
+  const [seccion, setSeccion] = useState<CampoSeccion>("caja");
   const activa = CAMPO_SECCIONES.find((s) => s.id === seccion) ?? CAMPO_SECCIONES[0];
   const iniciales = userName.split(/\s+/).slice(0, 2).map((p) => p[0]?.toUpperCase() ?? "").join("");
   return (
@@ -726,14 +904,14 @@ export function CampoWorkspace({ operationSelector, userName, roleName, apiOnlin
         <div className="brand">
           <span className="brandMark">🚜</span>
           <div>
-            <strong>Caja de Campo</strong>
+            <strong>{nombre}</strong>
             <small>Operación · CEYRO</small>
           </div>
         </div>
         {operationSelector}
         <nav>
           <div className="navSection" data-group="Campo">
-            <button type="button" className="navLabel" style={{ cursor: "default" }}><span>Campo</span></button>
+            <button type="button" className="navLabel" style={{ cursor: "default" }}><span>{nombre}</span></button>
             {CAMPO_SECCIONES.map((s) => (
               <button key={s.id} className={seccion === s.id ? "active" : ""} onClick={() => setSeccion(s.id)}>
                 <span style={{ width: 15, display: "inline-block", textAlign: "center" }}>{s.icon}</span>
@@ -752,14 +930,14 @@ export function CampoWorkspace({ operationSelector, userName, roleName, apiOnlin
             <button className="logoutBtn" title="Cerrar sesión" onClick={onLogout}>⏻</button>
           </div>
           <span className={apiOnline ? "apiState on" : "apiState"}><i />API {apiOnline ? "conectada" : "sin conexión"}</span>
-          <small>Caja de Campo · CEYRO</small>
+          <small>{nombre} · CEYRO</small>
         </div>
       </aside>
 
       <section className="workspace">
         <header className="topbar">
           <div className="topbarLeft">
-            <h1>Campo · {activa.label}</h1>
+            <h1>{nombre} · {activa.label}</h1>
             <p>Operación de campo (cosechadora, transporte, fletes)</p>
           </div>
           <div className="topbarRight">
@@ -768,7 +946,7 @@ export function CampoWorkspace({ operationSelector, userName, roleName, apiOnlin
           </div>
         </header>
         <div className="content">
-          <CampoModule section={seccion} />
+          <CampoModule section={seccion} nombre={nombre} onNombreChange={onNombreChange} />
         </div>
       </section>
     </main>

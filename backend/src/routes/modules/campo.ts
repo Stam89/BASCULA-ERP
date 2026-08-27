@@ -429,8 +429,9 @@ campoRouter.get("/reportes/por-maquina", asyncRoute(async (req, res) => {
        SELECT activo_id, SUM(valor) AS v
        FROM campo_servicios WHERE fecha BETWEEN $1 AND $2 GROUP BY activo_id
      ), gas AS (
+       -- Las TRANSFERENCIAS no son gasto real: se excluyen (naturaleza operativo).
        SELECT activo_id, SUM(monto) AS g
-       FROM campo_movimientos WHERE signo = 'salida' AND fecha BETWEEN $1 AND $2 GROUP BY activo_id
+       FROM campo_movimientos WHERE signo = 'salida' AND naturaleza = 'operativo' AND fecha BETWEEN $1 AND $2 GROUP BY activo_id
      )
      SELECT COALESCE(ing.activo_id, gas.activo_id) AS activo_id,
             a.nombre AS activo_nombre, a.tipo AS activo_tipo,
@@ -448,7 +449,7 @@ campoRouter.get("/reportes/por-maquina", asyncRoute(async (req, res) => {
     `SELECT m.activo_id, COALESCE(cat.nombre, 'SIN CATEGORÍA') AS categoria, SUM(m.monto)::float AS gasto
      FROM campo_movimientos m
      LEFT JOIN campo_categorias_gasto cat ON cat.id = m.categoria_id
-     WHERE m.signo = 'salida' AND m.fecha BETWEEN $1 AND $2
+     WHERE m.signo = 'salida' AND m.naturaleza = 'operativo' AND m.fecha BETWEEN $1 AND $2
      GROUP BY m.activo_id, cat.nombre`,
     [desde, hasta]
   )).rows;
@@ -470,4 +471,115 @@ campoRouter.get("/reportes/por-maquina", asyncRoute(async (req, res) => {
     gastos_por_categoria: (catPorActivo.get(f.activo_id ?? "SIN_ASIGNAR") ?? []).sort((a, b) => b.gasto - a.gasto)
   }));
   res.json({ periodo: { desde, hasta }, maquinas });
+}));
+
+// ════════════════════════════════════════════════════════════════════════════
+// CONFIG de la operación (nombre editable) · TRANSFERENCIAS · LIBRO de caja (V3)
+// ════════════════════════════════════════════════════════════════════════════
+
+async function ensureConfig(): Promise<void> {
+  await pool.query(`CREATE TABLE IF NOT EXISTS campo_config (
+    id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    nombre_operacion VARCHAR(60) NOT NULL DEFAULT 'Campo',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+  await pool.query("INSERT INTO campo_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING");
+}
+
+campoRouter.get("/config", asyncRoute(async (_req, res) => {
+  await ensureConfig();
+  const r = await pool.query("SELECT nombre_operacion FROM campo_config WHERE id = 1");
+  res.json({ nombre_operacion: r.rows[0]?.nombre_operacion ?? "Campo" });
+}));
+
+campoRouter.put("/config", asyncRoute(async (req, res) => {
+  await ensureConfig();
+  const body = z.object({ nombre_operacion: z.string().trim().min(1).max(60) }).parse(req.body);
+  const r = await pool.query(
+    "UPDATE campo_config SET nombre_operacion = $1, updated_at = now() WHERE id = 1 RETURNING nombre_operacion",
+    [body.nombre_operacion]
+  );
+  res.json({ nombre_operacion: r.rows[0].nombre_operacion });
+}));
+
+// Transferencia entre dos cuentas: PAR de movimientos (salida en origen +
+// entrada en destino), naturaleza='transferencia', mismo par_id. En una sola
+// transacción. NO cuenta como ingreso/egreso real (los reportes la excluyen),
+// pero SÍ mueve el saldo de cada cuenta.
+campoRouter.post("/transferencias", asyncRoute(async (req, res) => {
+  const body = z.object({
+    fecha: fechaSchema.optional(),
+    cuenta_origen_id: z.string().uuid(),
+    cuenta_destino_id: z.string().uuid(),
+    monto: z.number().positive(),
+    concepto: z.string().max(400).optional()
+  }).parse(req.body);
+  if (body.cuenta_origen_id === body.cuenta_destino_id) {
+    throw new ApiError(400, "La cuenta origen y destino deben ser distintas.");
+  }
+  const cuentas = await pool.query(
+    "SELECT id, nombre FROM campo_cuentas WHERE id = ANY($1)",
+    [[body.cuenta_origen_id, body.cuenta_destino_id]]
+  );
+  if (cuentas.rowCount !== 2) throw new ApiError(404, "Cuenta origen o destino no encontrada.");
+  const nombre = (id: string) => cuentas.rows.find((c) => c.id === id)?.nombre ?? "";
+  const uid = userId(req);
+  const concepto = body.concepto?.trim() ||
+    `Transferencia ${nombre(body.cuenta_origen_id)} → ${nombre(body.cuenta_destino_id)}`;
+
+  const result = await inTransaction(async (client) => {
+    const par = (await client.query("SELECT gen_random_uuid() AS id")).rows[0].id;
+    const insert = (cuentaId: string, signo: "salida" | "entrada") => client.query(
+      `INSERT INTO campo_movimientos
+         (fecha, cuenta_id, signo, monto, concepto, naturaleza, par_id, created_by)
+       VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, 'transferencia', $6, $7)
+       RETURNING *`,
+      [body.fecha ?? null, cuentaId, signo, body.monto, concepto, par, uid]
+    );
+    const salida = (await insert(body.cuenta_origen_id, "salida")).rows[0];
+    const entrada = (await insert(body.cuenta_destino_id, "entrada")).rows[0];
+    return { par_id: par, salida, entrada };
+  });
+  res.status(201).json(result);
+}));
+
+// Libro de movimientos con SALDO CORRIDO (running balance). El saldo acumula
+// desde el inicio (respetando el filtro de cuenta) y luego se muestran solo las
+// filas del rango de fechas. Incluye transferencias (afectan el saldo).
+campoRouter.get("/caja/libro", asyncRoute(async (req, res) => {
+  const q = z.object({
+    cuenta_id: z.string().uuid().optional(),
+    from: fechaSchema.optional(),
+    to: fechaSchema.optional()
+  }).parse(req.query);
+  const params: unknown[] = [];
+  const cuentaCond = q.cuenta_id ? `WHERE m.cuenta_id = $${(params.push(q.cuenta_id), params.length)}` : "";
+  const fromCond = q.from ? `AND l.fecha >= $${(params.push(q.from), params.length)}` : "";
+  const toCond = q.to ? `AND l.fecha <= $${(params.push(q.to), params.length)}` : "";
+  const rows = (await pool.query(
+    `WITH libro AS (
+       SELECT m.id, m.fecha, m.created_at, m.cuenta_id, m.signo, m.monto, m.concepto,
+              m.categoria_id, m.naturaleza, m.par_id,
+              c.nombre AS cuenta_nombre, cat.nombre AS categoria_nombre, a.nombre AS activo_nombre,
+              SUM(CASE WHEN m.signo = 'entrada' THEN m.monto ELSE -m.monto END)
+                OVER (ORDER BY m.fecha, m.created_at ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS saldo_corrido
+       FROM campo_movimientos m
+       JOIN campo_cuentas c ON c.id = m.cuenta_id
+       LEFT JOIN campo_categorias_gasto cat ON cat.id = m.categoria_id
+       LEFT JOIN campo_activos a ON a.id = m.activo_id
+       ${cuentaCond}
+     )
+     SELECT l.id, l.fecha, l.cuenta_id, l.signo, l.monto::float AS monto, l.concepto,
+            l.categoria_id, l.naturaleza, l.par_id,
+            l.cuenta_nombre, l.categoria_nombre, l.activo_nombre,
+            l.saldo_corrido::float AS saldo_corrido,
+            (CASE WHEN l.signo = 'entrada' THEN l.monto ELSE 0 END)::float AS entrada,
+            (CASE WHEN l.signo = 'salida' THEN l.monto ELSE 0 END)::float AS salida
+     FROM libro l
+     WHERE 1 = 1 ${fromCond} ${toCond}
+     ORDER BY l.fecha DESC, l.created_at DESC
+     LIMIT 1000`,
+    params
+  )).rows;
+  res.json(rows);
 }));
