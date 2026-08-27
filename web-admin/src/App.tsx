@@ -12478,7 +12478,7 @@ export function App() {
                   <h2>🏢 Datos del negocio</h2>
                   <p className="muted">Estos datos aparecen en los comprobantes de liquidación y reportes impresos.</p>
                   <label>
-                    <span>Nombre comercial *</span>
+                    <span>Nombre comercial <span style={{ color: "#ef4444" }}>*</span></span>
                     <input
                       type="text"
                       value={settingsForm.business_name}
@@ -12496,9 +12496,9 @@ export function App() {
                       onChange={(e) => setSettingsForm({ ...settingsForm, business_subtitle: e.target.value })}
                     />
                   </label>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
                     <label>
-                      <span>RUC</span>
+                      <span>RUC <span style={{ color: "#ef4444" }}>*</span></span>
                       <input
                         type="text"
                         placeholder="0999999999001"
@@ -12541,7 +12541,9 @@ export function App() {
                 <div className="formPanel">
                   <h2>Vista previa de encabezado</h2>
                   <p className="muted">Así se verá el encabezado de tus comprobantes:</p>
-                  <div className="receiptPreview">
+                  {/* Simula papel térmico: ancho de ticket, mono, punteado y centrado
+                      (borde/mono/centrado/fondo vienen de .receiptPreview). */}
+                  <div className="receiptPreview" style={{ maxWidth: 280, margin: "0 auto", fontSize: 13, boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
                     <strong>{settingsForm.business_name || "—"}</strong>
                     {settingsForm.business_subtitle && <span>{settingsForm.business_subtitle}</span>}
                     {settingsForm.ruc && <small>RUC: {settingsForm.ruc}</small>}
@@ -13258,7 +13260,7 @@ export function App() {
                 </div>
                 <div className="formPanel">
                   <h2 style={{ marginBottom: 0 }}>Categorías configuradas</h2>
-                  {cashCategories.length === 0 && <p className="muted">Sin categorías.</p>}
+                  {cashCategories.length === 0 && <CatEmptyState />}
                   <div className="equipList">
                     {cashCategories.map((c) => (
                       <div key={c.id} className="equipItem" style={{ opacity: c.activo ? 1 : 0.5 }}>
@@ -13296,7 +13298,7 @@ export function App() {
                 <div className="formPanel">
                   <h2 style={{ marginBottom: 0 }}>Áreas</h2>
                   <div className="equipList">
-                    {maintCatsAll.filter((c) => c.kind === "AREA").length === 0 && <p className="muted">Sin áreas.</p>}
+                    {maintCatsAll.filter((c) => c.kind === "AREA").length === 0 && <CatEmptyState text="No hay áreas registradas" />}
                     {maintCatsAll.filter((c) => c.kind === "AREA").map(renderMaintCatItem)}
                   </div>
                 </div>
@@ -13304,7 +13306,7 @@ export function App() {
                 <div className="formPanel">
                   <h2 style={{ marginBottom: 0 }}>Tipos de mantenimiento</h2>
                   <div className="equipList">
-                    {maintCatsAll.filter((c) => c.kind === "TYPE").length === 0 && <p className="muted">Sin tipos.</p>}
+                    {maintCatsAll.filter((c) => c.kind === "TYPE").length === 0 && <CatEmptyState text="No hay tipos registrados" />}
                     {maintCatsAll.filter((c) => c.kind === "TYPE").map(renderMaintCatItem)}
                   </div>
                 </div>
@@ -13825,6 +13827,22 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
         )}
       </form>
     </main>
+  );
+}
+
+/** Empty state elegante para listas de categorías vacías: ícono de caja tenue
+ *  centrado + texto en gris medio. */
+function CatEmptyState({ text = "No hay categorías registradas" }: { text?: string }) {
+  return (
+    <div style={{ textAlign: "center", padding: "26px 12px" }}>
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" strokeWidth="1.6"
+        strokeLinecap="round" strokeLinejoin="round" style={{ display: "block", margin: "0 auto 8px" }} aria-hidden="true">
+        <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
+        <path d="m3.3 7 8.7 5 8.7-5" />
+        <path d="M12 22V12" />
+      </svg>
+      <p style={{ color: "#6b7280", margin: 0, fontSize: 13 }}>{text}</p>
+    </div>
   );
 }
 
