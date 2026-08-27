@@ -2,7 +2,8 @@
 // V1 = solo captura. Autocontenido: su propio estado y llamadas a /campo/*.
 // No depende de la lógica de piladora/ventas/fomentos. Se engancha en App.tsx
 // con una entrada de sidebar y un único render.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import type { CSSProperties } from "react";
 import { apiGet, apiPost } from "../api";
 import { money } from "../format";
 
@@ -21,7 +22,15 @@ type Movimiento = {
 };
 
 const hoy = () => new Date().toISOString().slice(0, 10);
-type Vista = "movimiento" | "servicio" | "abono" | "listas";
+type Vista = "movimiento" | "servicio" | "abono" | "listas" | "reportes";
+
+// ── Tipos de los reportes (V2) ───────────────────────────────────────────────
+type SaldoCaja = { corte: string; cuentas: Array<{ id: string; nombre: string; saldo: number }>; total: number };
+type PorCobrarCliente = { cliente_id: string; cliente_nombre: string; servicios: number; saldo: number; antiguedad_max_dias: number; tramo: string };
+type PorCobrarDetalle = { servicio_id: string; fecha: string; cliente_id: string; cliente_nombre: string; activo_nombre: string; tipo: string; valor: number; cobrado: number; saldo: number; antiguedad_dias: number; tramo: string };
+type PorCobrar = { por_cliente: PorCobrarCliente[]; detalle: PorCobrarDetalle[]; por_tramo: Array<{ tramo: string; saldo: number; servicios: number }>; total_general: number };
+type Maquina = { activo_id: string | null; activo_nombre: string; activo_tipo: string | null; ingresos: number; gastos: number; ganancia: number; gastos_por_categoria: Array<{ categoria: string; gasto: number }> };
+type PorMaquina = { periodo: { desde: string; hasta: string }; maquinas: Maquina[] };
 
 export default function CampoModule() {
   const [vista, setVista] = useState<Vista>("movimiento");
@@ -77,7 +86,7 @@ export default function CampoModule() {
 
         {/* Pestañas del módulo */}
         <nav className="cajaSubNav" style={{ borderBottom: "none" }}>
-          {([["movimiento", "➕ Movimiento"], ["servicio", "🚜 Servicio"], ["abono", "💵 Abono"], ["listas", "📋 Listas"]] as Array<[Vista, string]>).map(([v, label]) => (
+          {([["movimiento", "➕ Movimiento"], ["servicio", "🚜 Servicio"], ["abono", "💵 Abono"], ["listas", "📋 Listas"], ["reportes", "📊 Reportes"]] as Array<[Vista, string]>).map(([v, label]) => (
             <button key={v} type="button" className={vista === v ? "active" : ""} onClick={() => setVista(v)}>{label}</button>
           ))}
         </nav>
@@ -157,11 +166,204 @@ export default function CampoModule() {
         </>
       )}
 
+      {vista === "reportes" && <ReportesView onError={(m) => notify(m, "err")} />}
+
       {/* Gestión mínima de activos (para poder registrar servicios) */}
       {(vista === "servicio" || vista === "movimiento") && (
         <ActivosPanel activos={activos} onChanged={async () => { await refreshCatalogos(); notify("Activo guardado"); }} onError={(m) => notify(m, "err")} />
       )}
     </section>
+  );
+}
+
+// ── Reportes de Campo (V2) ───────────────────────────────────────────────────
+// Selector de período (mes o rango) arriba + 3 paneles. El saldo de caja usa la
+// fecha de corte (fin del período). Todo sale de los endpoints /campo/reportes/*.
+function ReportesView({ onError }: { onError: (m: string) => void }) {
+  const [modo, setModo] = useState<"mes" | "rango">("mes");
+  const [mes, setMes] = useState(hoy().slice(0, 7));
+  const [desde, setDesde] = useState(hoy().slice(0, 8) + "01");
+  const [hasta, setHasta] = useState(hoy());
+  const [saldo, setSaldo] = useState<SaldoCaja | null>(null);
+  const [cobrar, setCobrar] = useState<PorCobrar | null>(null);
+  const [maquinas, setMaquinas] = useState<PorMaquina | null>(null);
+  const [expandido, setExpandido] = useState<string | null>(null);
+
+  // Rango efectivo del período: por mes (1º→último día) o por fechas.
+  const periodo = useMemo(() => {
+    if (modo === "mes") {
+      const [y, m] = mes.split("-").map(Number);
+      const ini = `${mes}-01`;
+      const fin = new Date(y, m, 0).toISOString().slice(0, 10);
+      return { desde: ini, hasta: fin };
+    }
+    return { desde, hasta };
+  }, [modo, mes, desde, hasta]);
+
+  const cargar = useCallback(async () => {
+    try {
+      const qsMaq = modo === "mes" ? `?mes=${mes}` : `?desde=${periodo.desde}&hasta=${periodo.hasta}`;
+      const [s, c, mq] = await Promise.all([
+        apiGet<SaldoCaja>(`/campo/reportes/saldo-caja?hasta=${periodo.hasta}`),
+        apiGet<PorCobrar>("/campo/reportes/por-cobrar"),
+        apiGet<PorMaquina>(`/campo/reportes/por-maquina${qsMaq}`)
+      ]);
+      setSaldo(s); setCobrar(c); setMaquinas(mq);
+    } catch (e) { onError((e as Error).message); }
+  }, [modo, mes, periodo.desde, periodo.hasta, onError]);
+
+  useEffect(() => { cargar(); }, [cargar]);
+
+  const num = (n: number) => money(Number(n) || 0);
+  const rojoSiNeg = (n: number): CSSProperties => ({ color: n < 0 ? "#b91c1c" : undefined, fontWeight: 700 });
+  // Totales de la tabla por máquina (suma de columnas para la fila de totales).
+  const totMaq = useMemo(() => {
+    const ms = maquinas?.maquinas ?? [];
+    return {
+      ingresos: ms.reduce((s, m) => s + m.ingresos, 0),
+      gastos: ms.reduce((s, m) => s + m.gastos, 0),
+      ganancia: ms.reduce((s, m) => s + m.ganancia, 0)
+    };
+  }, [maquinas]);
+
+  return (
+    <>
+      {/* Selector de período */}
+      <div className="tablePanel" style={{ gridColumn: "1 / -1", display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button type="button" className={modo === "mes" ? "chip" : "chip"} style={modo === "mes" ? { background: "#059669", color: "#fff" } : undefined} onClick={() => setModo("mes")}>Por mes</button>
+          <button type="button" className="chip" style={modo === "rango" ? { background: "#059669", color: "#fff" } : undefined} onClick={() => setModo("rango")}>Por rango</button>
+        </div>
+        {modo === "mes" ? (
+          <label style={{ margin: 0 }}><span>Mes</span><input type="month" value={mes} onChange={(e) => setMes(e.target.value)} /></label>
+        ) : (
+          <>
+            <label style={{ margin: 0 }}><span>Desde</span><input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} /></label>
+            <label style={{ margin: 0 }}><span>Hasta</span><input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} /></label>
+          </>
+        )}
+        <button type="button" onClick={() => cargar()}>↻ Actualizar</button>
+        <span className="muted" style={{ fontSize: 12 }}>Saldo de caja a corte {periodo.hasta}. Por cobrar es siempre a hoy.</span>
+      </div>
+
+      {/* Panel 1 — Saldo de caja */}
+      <div className="tablePanel">
+        <h2>💰 Saldo de caja <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>a corte {saldo?.corte ?? "—"}</span></h2>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
+          {(saldo?.cuentas ?? []).map((c) => (
+            <div key={c.id} className="totalBox" style={{ minWidth: 120, margin: 0 }}>
+              <span>{c.nombre}</span>
+              <strong style={{ color: c.saldo >= 0 ? "#15803d" : "#b91c1c" }}>{num(c.saldo)}</strong>
+            </div>
+          ))}
+          <div className="totalBox" style={{ minWidth: 120, margin: 0, background: "#eff6ff", borderColor: "#bfdbfe" }}>
+            <span>TOTAL</span>
+            <strong style={{ color: (saldo?.total ?? 0) >= 0 ? "#15803d" : "#b91c1c" }}>{num(saldo?.total ?? 0)}</strong>
+          </div>
+        </div>
+      </div>
+
+      {/* Panel 2 — Cuentas por cobrar */}
+      <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+        <h2>📥 Cuentas por cobrar <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· a hoy</span></h2>
+        {/* Subtotales por tramo de antigüedad */}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "6px 0 12px" }}>
+          {(cobrar?.por_tramo ?? []).map((t) => (
+            <div key={t.tramo} className="totalBox" style={{ minWidth: 110, margin: 0 }}>
+              <span>{t.tramo} días</span>
+              <strong>{num(t.saldo)}</strong>
+              <small>{t.servicios} serv.</small>
+            </div>
+          ))}
+          <div className="totalBox" style={{ minWidth: 130, margin: 0, background: "#fef3c7", borderColor: "#fde68a" }}>
+            <span>TOTAL POR COBRAR</span>
+            <strong style={{ color: "#b45309" }}>{num(cobrar?.total_general ?? 0)}</strong>
+          </div>
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table className="cajaTable">
+            <thead><tr><th>Cliente</th><th className="num">Servicios</th><th className="num">Saldo</th><th className="num">Antigüedad</th><th>Tramo</th><th /></tr></thead>
+            <tbody>
+              {(cobrar?.por_cliente ?? []).length === 0 ? (
+                <tr><td colSpan={6} className="muted" style={{ textAlign: "center", padding: 14 }}>Nadie debe: sin saldos pendientes.</td></tr>
+              ) : (cobrar?.por_cliente ?? []).map((c) => (
+                <Fragment key={c.cliente_id}>
+                  <tr>
+                    <td style={{ fontWeight: 600 }}>{c.cliente_nombre}</td>
+                    <td className="num">{c.servicios}</td>
+                    <td className="num" style={{ fontWeight: 700 }}>{num(c.saldo)}</td>
+                    <td className="num">{c.antiguedad_max_dias} d</td>
+                    <td><span className={c.tramo === "+90" ? "chip bad" : c.tramo === "61-90" ? "chip warn" : "chip info"}>{c.tramo}</span></td>
+                    <td style={{ textAlign: "right" }}>
+                      <button type="button" className="btnSecondary" onClick={() => setExpandido(expandido === c.cliente_id ? null : c.cliente_id)}>
+                        {expandido === c.cliente_id ? "▲ Ocultar" : "▼ Detalle"}
+                      </button>
+                    </td>
+                  </tr>
+                  {expandido === c.cliente_id && (
+                    <tr>
+                      <td colSpan={6} style={{ background: "var(--c-surface-2)", padding: 8 }}>
+                        <table className="cajaTable" style={{ margin: 0 }}>
+                          <thead><tr><th>Fecha</th><th>Activo</th><th>Tipo</th><th className="num">Valor</th><th className="num">Cobrado</th><th className="num">Saldo</th><th className="num">Días</th><th>Tramo</th></tr></thead>
+                          <tbody>
+                            {(cobrar?.detalle ?? []).filter((d) => d.cliente_id === c.cliente_id).map((d) => (
+                              <tr key={d.servicio_id}>
+                                <td style={{ whiteSpace: "nowrap" }}>{String(d.fecha).slice(0, 10)}</td>
+                                <td>{d.activo_nombre}</td>
+                                <td>{d.tipo}</td>
+                                <td className="num">{num(d.valor)}</td>
+                                <td className="num">{num(d.cobrado)}</td>
+                                <td className="num" style={{ fontWeight: 700 }}>{num(d.saldo)}</td>
+                                <td className="num">{d.antiguedad_dias}</td>
+                                <td><span className={d.tramo === "+90" ? "chip bad" : d.tramo === "61-90" ? "chip warn" : "chip info"}>{d.tramo}</span></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Panel 3 — Por máquina y mes */}
+      <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+        <h2>🚜 Por máquina <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· {maquinas?.periodo.desde} a {maquinas?.periodo.hasta}</span></h2>
+        <div style={{ overflowX: "auto" }}>
+          <table className="cajaTable">
+            <thead><tr><th>Máquina</th><th className="num">Ingresos</th><th>Gastos por categoría</th><th className="num">Gastos</th><th className="num">Ganancia</th></tr></thead>
+            <tbody>
+              {(maquinas?.maquinas ?? []).length === 0 ? (
+                <tr><td colSpan={5} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin movimientos en el período.</td></tr>
+              ) : (maquinas?.maquinas ?? []).map((m) => (
+                <tr key={m.activo_id ?? "SIN"} style={m.activo_id ? undefined : { fontStyle: "italic", background: "var(--c-surface-2)" }}>
+                  <td style={{ fontWeight: 600 }}>{m.activo_nombre}{m.activo_tipo ? <small className="muted" style={{ display: "block" }}>{m.activo_tipo}</small> : null}</td>
+                  <td className="num">{num(m.ingresos)}</td>
+                  <td>{m.gastos_por_categoria.length === 0 ? <span className="muted">—</span> : m.gastos_por_categoria.map((g) => `${g.categoria} ${num(g.gasto)}`).join(" · ")}</td>
+                  <td className="num">{num(m.gastos)}</td>
+                  <td className="num" style={rojoSiNeg(m.ganancia)}>{num(m.ganancia)}</td>
+                </tr>
+              ))}
+            </tbody>
+            {(maquinas?.maquinas ?? []).length > 0 && (
+              <tfoot>
+                <tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border-strong)" }}>
+                  <td>TOTALES</td>
+                  <td className="num">{num(totMaq.ingresos)}</td>
+                  <td />
+                  <td className="num">{num(totMaq.gastos)}</td>
+                  <td className="num" style={rojoSiNeg(totMaq.ganancia)}>{num(totMaq.ganancia)}</td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      </div>
+    </>
   );
 }
 

@@ -356,15 +356,26 @@ campoRouter.get("/reportes/saldo-caja", asyncRoute(async (req, res) => {
   res.json({ corte: hasta, cuentas, total });
 }));
 
-// 2) CUENTAS POR COBRAR: servicios con saldo > 0, agrupados por cliente
-//    (saldo por cliente + antigüedad en días) y el detalle por servicio.
+// 2) CUENTAS POR COBRAR (a HOY): servicios con saldo > 0, agrupados por cliente
+//    con antigüedad y TRAMO (0-30/31-60/61-90/+90 según hoy − fecha), subtotales
+//    por tramo, detalle por servicio y total general. Todo el cálculo en SQL.
+// Expresión de tramo reutilizada (recibe la columna de días).
+const TRAMO_SQL = (dias: string) => `
+  CASE WHEN ${dias} <= 30 THEN '0-30'
+       WHEN ${dias} <= 60 THEN '31-60'
+       WHEN ${dias} <= 90 THEN '61-90'
+       ELSE '+90' END`;
+const TRAMOS = ["0-30", "31-60", "61-90", "+90"];
+
 campoRouter.get("/reportes/por-cobrar", asyncRoute(async (_req, res) => {
+  // Por cliente: saldo, antigüedad máx/mín y el tramo según su deuda más vieja.
   const porCliente = (await pool.query(
     `SELECT cl.id AS cliente_id, cl.nombre AS cliente_nombre,
             COUNT(*)::int AS servicios,
             SUM(v.saldo_pendiente)::float AS saldo,
             MAX((CURRENT_DATE - v.fecha))::int AS antiguedad_max_dias,
-            MIN((CURRENT_DATE - v.fecha))::int AS antiguedad_min_dias
+            MIN((CURRENT_DATE - v.fecha))::int AS antiguedad_min_dias,
+            ${TRAMO_SQL("MAX((CURRENT_DATE - v.fecha))")} AS tramo
      FROM campo_servicios_saldo v
      JOIN campo_clientes cl ON cl.id = v.cliente_id
      WHERE v.saldo_pendiente > 0.005
@@ -372,20 +383,34 @@ campoRouter.get("/reportes/por-cobrar", asyncRoute(async (_req, res) => {
      ORDER BY saldo DESC`
   )).rows;
   const detalle = (await pool.query(
-    `SELECT v.id AS servicio_id, v.fecha, cl.nombre AS cliente_nombre, a.nombre AS activo_nombre,
+    `SELECT v.id AS servicio_id, v.fecha, v.cliente_id, cl.nombre AS cliente_nombre, a.nombre AS activo_nombre,
             v.tipo, v.valor::float AS valor, v.cobrado::float AS cobrado, v.saldo_pendiente::float AS saldo,
-            (CURRENT_DATE - v.fecha)::int AS antiguedad_dias
+            (CURRENT_DATE - v.fecha)::int AS antiguedad_dias,
+            ${TRAMO_SQL("(CURRENT_DATE - v.fecha)")} AS tramo
      FROM campo_servicios_saldo v
      JOIN campo_clientes cl ON cl.id = v.cliente_id
      JOIN campo_activos a ON a.id = v.activo_id
      WHERE v.saldo_pendiente > 0.005
      ORDER BY antiguedad_dias DESC, cl.nombre`
   )).rows;
+  // Subtotal por tramo (por SERVICIO): cada saldo cae en su bucket de antigüedad.
+  const tramoRows = (await pool.query(
+    `SELECT ${TRAMO_SQL("(CURRENT_DATE - fecha)")} AS tramo,
+            SUM(saldo_pendiente)::float AS saldo, COUNT(*)::int AS servicios
+     FROM campo_servicios_saldo
+     WHERE saldo_pendiente > 0.005
+     GROUP BY tramo`
+  )).rows;
   const total = (await pool.query(
     `SELECT COALESCE(SUM(saldo_pendiente), 0)::float AS total
      FROM campo_servicios_saldo WHERE saldo_pendiente > 0.005`
   )).rows[0].total;
-  res.json({ por_cliente: porCliente, detalle, total_general: total });
+  // Los 4 tramos SIEMPRE presentes y en orden (relleno a 0 lo que SQL no trajo).
+  const porTramo = TRAMOS.map((t) => {
+    const r = tramoRows.find((x) => x.tramo === t);
+    return { tramo: t, saldo: r ? r.saldo : 0, servicios: r ? r.servicios : 0 };
+  });
+  res.json({ por_cliente: porCliente, detalle, por_tramo: porTramo, total_general: total });
 }));
 
 // 3) POR MÁQUINA Y MES: ingresos, gastos por categoría y ganancia por activo.
