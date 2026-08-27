@@ -1,4 +1,4 @@
-import React, { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, apiGet, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId } from "./api";
 import { money, categoryLabel, stockGroupLabel } from "./format";
 import type { Farmer, Product, Warehouse, Lot, MateriaPrimaEntry, MateriaPrimaCorreccion, PendingEntry } from "./types";
@@ -74,6 +74,9 @@ type AppSettings = {
   phone: string;
   address: string;
   receipt_footer: string;
+  // Parámetros operativos de planta (pg los devuelve como string numérico).
+  tarifa_pilado_qq?: string | number;
+  humedad_base_pct?: string | number;
 };
 
 const defaultAppSettings: AppSettings = {
@@ -82,7 +85,9 @@ const defaultAppSettings: AppSettings = {
   ruc: "",
   phone: "",
   address: "",
-  receipt_footer: ""
+  receipt_footer: "",
+  tarifa_pilado_qq: 3.5,
+  humedad_base_pct: 13
 };
 
 type AdminUser = {
@@ -1254,6 +1259,15 @@ export function App() {
   // Báscula como bandeja de entrada: el registro manual vive en un modal, y el
   // traspaso de lote se movió a Inventario (también en modal).
   const [ingresoModalOpen, setIngresoModalOpen] = useState(false);
+  // Calculadora de merma del ingreso manual (peso en kg; humedad/impureza en %).
+  // Solo apoyo visual: NO cambia lo que se guarda (el ticket sigue su modelo).
+  const [mermaForm, setMermaForm] = useState({ gross: "", tara: "", humedad: "", impureza: "" });
+  // Conector de báscula por Web Serial (RS232). Refs para el bucle de lectura.
+  const serialPortRef = useRef<any>(null);
+  const serialReaderRef = useRef<any>(null);
+  const serialKeepRef = useRef(false);
+  const [serialConnected, setSerialConnected] = useState(false);
+  const [serialWeight, setSerialWeight] = useState<string>(""); // última lectura estable (kg)
   const [transferLoteOpen, setTransferLoteOpen] = useState(false);
   const [ticketSearch, setTicketSearch] = useState("");
   const [linkTicket, setLinkTicket] = useState<BasculaTicket | null>(null);
@@ -3171,6 +3185,22 @@ export function App() {
     addToast("Datos del negocio guardados", "success");
   }
 
+  // Guarda los parámetros operativos de planta (tarifa de pilado y humedad base).
+  async function savePlantParams(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const tarifa = Number(settingsForm.tarifa_pilado_qq ?? 0);
+    const humedad = Number(settingsForm.humedad_base_pct ?? 0);
+    if (!(tarifa >= 0)) throw new Error("La tarifa de pilado no es válida");
+    if (!(humedad >= 0 && humedad < 100)) throw new Error("La humedad base debe estar entre 0 y 100");
+    const saved = await apiPut<AppSettings>("/settings/plant-params", {
+      tarifa_pilado_qq: tarifa,
+      humedad_base_pct: humedad
+    });
+    setAppSettings((cur) => ({ ...cur, ...saved }));
+    setSettingsForm((cur) => ({ ...cur, ...saved }));
+    addToast("Parámetros de planta guardados", "success");
+  }
+
   // Cuentas bancarias de los socios (Configuración → Socios & Bancos).
   async function loadBankAccounts() {
     try { setBankAccounts(await apiGet("/finance/bank/accounts/all")); }
@@ -4795,7 +4825,84 @@ export function App() {
 
     safeResetForm(formElement);
     setMessage("Ticket de bascula cerrado e inventario actualizado");
+    await desconectarBascula();
+    setMermaForm({ gross: "", tara: "", humedad: "", impureza: "" });
     await refresh();
+  }
+
+  // ── Conector de báscula (Web Serial API) ──────────────────────────────────
+  // Escucha la trama RS232 del indicador y extrae el último peso estable. El
+  // formato varía por marca; se toma el primer número decimal de cada línea.
+  function parseWeightFrame(line: string): string | null {
+    // Ej.: "ST,GS,+  012.34 kg", "US,NT,+000123", "  12.34\r" → primer número.
+    const m = line.replace(",", "").match(/-?\d+(?:\.\d+)?/);
+    if (!m) return null;
+    const n = Number(m[0]);
+    if (!Number.isFinite(n)) return null;
+    return String(n);
+  }
+
+  async function conectarBascula() {
+    const serial = (navigator as any).serial;
+    if (!serial?.requestPort) {
+      addToast("Este navegador no soporta Web Serial. Usa Chrome/Edge de escritorio.", "error");
+      return;
+    }
+    try {
+      const port = await serial.requestPort();
+      await port.open({ baudRate: 9600 });
+      serialPortRef.current = port;
+      serialKeepRef.current = true;
+      setSerialConnected(true);
+      addToast("Báscula conectada. Leyendo peso…", "success");
+      // Bucle de lectura: decodifica bytes → líneas → último número.
+      (async () => {
+        let buffer = "";
+        try {
+          while (serialKeepRef.current && port.readable) {
+            const reader = port.readable.getReader();
+            serialReaderRef.current = reader;
+            try {
+              for (;;) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                buffer += new TextDecoder().decode(value);
+                let idx;
+                while ((idx = buffer.search(/[\r\n]/)) >= 0) {
+                  const line = buffer.slice(0, idx);
+                  buffer = buffer.slice(idx + 1);
+                  const w = parseWeightFrame(line);
+                  if (w !== null) setSerialWeight(w);
+                }
+              }
+            } finally {
+              reader.releaseLock();
+            }
+          }
+        } catch {
+          /* lectura interrumpida (desconexión) — se ignora */
+        }
+      })();
+    } catch (e: any) {
+      // El usuario canceló el diálogo de puertos o falló la apertura.
+      if (e?.name !== "NotFoundError") addToast(`No se pudo conectar: ${e?.message ?? e}`, "error");
+    }
+  }
+
+  async function desconectarBascula() {
+    serialKeepRef.current = false;
+    try { await serialReaderRef.current?.cancel(); } catch { /* noop */ }
+    try { await serialPortRef.current?.close(); } catch { /* noop */ }
+    serialReaderRef.current = null;
+    serialPortRef.current = null;
+    setSerialConnected(false);
+  }
+
+  // Vuelca la última lectura de la báscula en el campo Peso bruto del form.
+  function capturarPeso() {
+    if (!serialWeight) { addToast("Aún no hay lectura de la báscula", "error"); return; }
+    setMermaForm((cur) => ({ ...cur, gross: serialWeight }));
+    addToast(`Peso capturado: ${serialWeight} kg`, "success");
   }
 
   async function submitSupply(event: FormEvent<HTMLFormElement>) {
@@ -6457,7 +6564,7 @@ export function App() {
                 <h2 style={{ marginBottom: 2 }}>📲 Tickets de la app de báscula</h2>
                 <p className="muted" style={{ margin: 0 }}>Pesajes que llegan de tu app. Se importan solos; también puedes traerlos al instante.</p>
               </div>
-              <button type="button" className="btnSecondary" onClick={() => setIngresoModalOpen(true)}>
+              <button type="button" className="btnSecondary" onClick={() => { setMermaForm({ gross: "", tara: "", humedad: "", impureza: "" }); setIngresoModalOpen(true); }}>
                 + Ingreso Manual (Emergencia)
               </button>
               <button type="button" className="btnSecondary" disabled={basculaImporting} onClick={() => runFirebaseImport()}>
@@ -6532,7 +6639,7 @@ export function App() {
 
           {/* Modal: Ingreso Manual (emergencia) — mismo formulario y lógica de antes */}
           {ingresoModalOpen && (
-            <div className="modalOverlay" onClick={() => setIngresoModalOpen(false)}>
+            <div className="modalOverlay" onClick={() => { desconectarBascula(); setIngresoModalOpen(false); }}>
               <form className="modalCard formPanel" onClick={(e) => e.stopPropagation()}
                 onSubmit={(event) => submitWeighing(event).then(() => setIngresoModalOpen(false)).catch((error) => setMessage(error.message))}>
                 <h3 style={{ marginTop: 0 }}>⚖️ Ingreso manual (emergencia)</h3>
@@ -6546,12 +6653,72 @@ export function App() {
                     <option value="CORRIENTE">Corriente</option>
                   </select>
                 </label>
-                <Input name="gross_weight" label="Peso bruto kg" type="number" />
-                <Input name="tare_weight" label="Tara kg" type="number" />
+                {/* Peso bruto + conector de báscula (Web Serial RS232) */}
+                <label><span>Peso bruto kg</span>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <input name="gross_weight" type="number" step="0.01" min="0" required style={{ flex: 1 }}
+                      value={mermaForm.gross}
+                      onChange={(e) => setMermaForm({ ...mermaForm, gross: e.target.value })} />
+                    {!serialConnected ? (
+                      <button type="button" className="btnSecondary" title="Conectar el indicador de báscula por USB/Serial"
+                        onClick={() => conectarBascula()}>🔌 Conectar Báscula</button>
+                    ) : (
+                      <>
+                        <button type="button" className="primary" onClick={() => capturarPeso()}>Capturar Peso</button>
+                        <button type="button" className="btnSecondary" title="Desconectar" onClick={() => desconectarBascula()}>✖</button>
+                      </>
+                    )}
+                  </div>
+                  {serialConnected && (
+                    <small className="muted">Lectura en vivo: <strong>{serialWeight || "—"}</strong> kg</small>
+                  )}
+                </label>
+                <Input name="tare_weight" label="Tara kg" type="number"
+                  value={mermaForm.tara} onChange={(e) => setMermaForm({ ...mermaForm, tara: e.target.value })} />
                 <Input name="qualification" label="Calificacion" type="number" />
+                {/* Calculadora de merma (apoyo visual; no cambia lo que se guarda) */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <label><span>Humedad (%)</span>
+                    <input type="number" step="0.1" min="0" max="99.9" placeholder="0.0" value={mermaForm.humedad}
+                      onChange={(e) => setMermaForm({ ...mermaForm, humedad: e.target.value })} />
+                  </label>
+                  <label><span>Impureza (%)</span>
+                    <input type="number" step="0.1" min="0" max="99.9" placeholder="0.0" value={mermaForm.impureza}
+                      onChange={(e) => setMermaForm({ ...mermaForm, impureza: e.target.value })} />
+                  </label>
+                </div>
+                {(() => {
+                  const LB_KG = 2.2046, QQ_LB = 100;
+                  const base = Number(appSettings.humedad_base_pct ?? 13);
+                  const gross = Number(mermaForm.gross || 0);
+                  const tara = Number(mermaForm.tara || 0);
+                  const hum = Number(mermaForm.humedad || 0);
+                  const imp = Number(mermaForm.impureza || 0);
+                  const netoKg = Math.max(0, gross - tara);
+                  const netoLb = netoKg * LB_KG;
+                  const descHumPct = hum > base ? (hum - base) / (100 - base) : 0;
+                  const descHumLb = netoLb * descHumPct;
+                  const descImpLb = netoLb * (imp / 100);
+                  const liqLb = Math.max(0, netoLb - descHumLb - descImpLb);
+                  const netoQq = netoLb / QQ_LB;
+                  const liqQq = liqLb / QQ_LB;
+                  const n = (v: number, d = 2) => v.toLocaleString("es-EC", { minimumFractionDigits: d, maximumFractionDigits: d });
+                  if (netoKg <= 0) return null;
+                  return (
+                    <div style={{ background: "var(--c-surface-2)", borderRadius: 8, padding: "10px 12px", marginTop: 4, fontSize: 13 }}>
+                      <strong style={{ display: "block", marginBottom: 6 }}>🌾 Cálculo de merma <span className="muted" style={{ fontWeight: 400 }}>(humedad base {n(base, 1)}%)</span></strong>
+                      <div style={{ display: "flex", justifyContent: "space-between" }}><span>Peso Neto Verde</span><span>{n(netoLb)} lb · {n(netoQq)} QQ</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", color: "var(--c-danger-text)" }}><span>Descuento por Humedad ({n(descHumPct * 100)}%)</span><span>− {n(descHumLb)} lb</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", color: "var(--c-danger-text)" }}><span>Descuento por Impureza ({n(imp, 1)}%)</span><span>− {n(descImpLb)} lb</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, borderTop: "1px solid var(--c-border)", marginTop: 6, paddingTop: 6 }}>
+                        <span>Quintales Liquidados Finales</span><span>{n(liqLb)} lb · {n(liqQq)} QQ</span>
+                      </div>
+                    </div>
+                  );
+                })()}
                 <div className="buttonRow">
                   <button className="primary">Cerrar ticket</button>
-                  <button type="button" onClick={() => setIngresoModalOpen(false)}>Cancelar</button>
+                  <button type="button" onClick={() => { desconectarBascula(); setIngresoModalOpen(false); }}>Cancelar</button>
                 </div>
               </form>
             </div>
@@ -12132,22 +12299,30 @@ export function App() {
 
             <div className="configVContent">
 
-            {/* ── Operación y Planta: parámetros (algunos aún no configurables) ── */}
+            {/* ── Operación y Planta: parámetros ── */}
             {configSubTab === "operacion" && (
               <section className="panelGrid">
-                <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                <form className="formPanel" style={{ gridColumn: "1 / -1" }}
+                  onSubmit={(e) => savePlantParams(e).catch((err) => addToast(err.message, "error"))}>
                   <h2>⚙️ Parámetros de planta</h2>
-                  <p className="muted">Parámetros operativos de la piladora. Los marcados «próximamente» aún no son configurables.</p>
+                  <p className="muted">Parámetros operativos de la piladora. La humedad base se usa para calcular la merma al pesar en báscula.</p>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <label><span>Tarifa de pilado ($/QQ)</span>
-                      <input type="number" step="0.01" disabled placeholder="Próximamente" />
+                      <input type="number" step="0.01" min="0" required
+                        value={String(settingsForm.tarifa_pilado_qq ?? "")}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, tarifa_pilado_qq: e.target.value })} />
                     </label>
                     <label><span>Humedad base (%)</span>
-                      <input type="number" step="0.1" disabled placeholder="Próximamente" />
+                      <input type="number" step="0.1" min="0" max="99.9" required
+                        value={String(settingsForm.humedad_base_pct ?? "")}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, humedad_base_pct: e.target.value })} />
                     </label>
                   </div>
+                  <div className="buttonRow" style={{ marginTop: 10 }}>
+                    <button className="primary">Guardar parámetros</button>
+                  </div>
                   <p className="muted" style={{ fontSize: 12 }}>El <strong>costo de secado</strong> (guardianía + por túnel) se edita en «👷 Tarifario de Cuadrilla».</p>
-                </div>
+                </form>
               </section>
             )}
 

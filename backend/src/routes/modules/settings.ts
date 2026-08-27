@@ -59,6 +59,10 @@ function ensureTable(): Promise<void> {
       // Prefijo / punto de emisión de la Guía de Remisión (única secuencia
       // realmente secuencial del sistema). Aditivo.
       .then(() => pool.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS guia_prefix VARCHAR(20) NOT NULL DEFAULT '001-001-'`))
+      // Parámetros operativos de planta (tarifa de pilado por QQ y humedad base
+      // para la merma en báscula). Aditivo; defaults pactados.
+      .then(() => pool.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS tarifa_pilado_qq NUMERIC(10,2) NOT NULL DEFAULT 3.50`))
+      .then(() => pool.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS humedad_base_pct NUMERIC(5,2) NOT NULL DEFAULT 13.00`))
       .then(() => undefined);
   }
   return tableReady;
@@ -98,6 +102,28 @@ settingsRouter.put("/", requireAdmin, asyncRoute(async (req, res) => {
        updated_at = now()
      RETURNING *`,
     [body.business_name, body.business_subtitle, body.ruc, body.phone, body.address, body.receipt_footer]
+  );
+  res.json(result.rows[0]);
+}));
+
+// Parámetros operativos de planta: tarifa de pilado ($/QQ) y humedad base (%)
+// para el cálculo de merma en báscula. Solo admin.
+settingsRouter.put("/plant-params", requireAdmin, asyncRoute(async (req, res) => {
+  await ensureTable();
+  const body = z.object({
+    tarifa_pilado_qq: z.number().nonnegative().max(9999),
+    humedad_base_pct: z.number().min(0).max(100)
+  }).parse(req.body);
+
+  const result = await pool.query(
+    `INSERT INTO app_settings (id, tarifa_pilado_qq, humedad_base_pct, updated_at)
+     VALUES (1, $1, $2, now())
+     ON CONFLICT (id) DO UPDATE SET
+       tarifa_pilado_qq = EXCLUDED.tarifa_pilado_qq,
+       humedad_base_pct = EXCLUDED.humedad_base_pct,
+       updated_at = now()
+     RETURNING *`,
+    [body.tarifa_pilado_qq, body.humedad_base_pct]
   );
   res.json(result.rows[0]);
 }));
