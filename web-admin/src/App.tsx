@@ -1059,6 +1059,7 @@ function saveSecadorName(tunnel: number, name: string) {
   try { if (name.trim()) localStorage.setItem(secadorStorageKey(tunnel), name.trim()); } catch { /* ignore */ }
 }
 const piladoPresentations = ["10 LB", "25 LB", "50 LB", "98 LB", "100 LB"];
+const PESO_PERSONALIZADO = "⚙️ Peso Personalizado / Pico";
 
 // Junta las cuentas por pagar de una misma liquidación (mismo batch_id) para
 // que no salgan como 3 filas sueltas cuando fue una sola liquidación. Las que
@@ -1290,6 +1291,10 @@ export function App() {
   const [millingPiladoEntries, setMillingPiladoEntries] = useState<MillingPiladoEntry[]>([]);
   const [millingPiladoPresentation, setMillingPiladoPresentation] = useState(piladoPresentations[4]);
   const [millingPiladoQq, setMillingPiladoQq] = useState("");
+  // Destino del arroz pilado: SELECCIÓN (en tulas, sin sacos) o EMPAQUE (en sacos).
+  const [millingDestino, setMillingDestino] = useState<"seleccion" | "empaque">("empaque");
+  // Peso personalizado (lb) para la opción "Pico" del selector de presentaciones.
+  const [millingCustomLb, setMillingCustomLb] = useState("");
   const [millingDraftSavedAt, setMillingDraftSavedAt] = useState<string | null>(null);
   const [millingYields, setMillingYields] = useState<MillingYieldResult | null>(null);
 
@@ -5334,20 +5339,33 @@ export function App() {
       return;
     }
 
+    // "⚙️ Peso Personalizado / Pico": la presentación es el peso en lb que digita
+    // el usuario (ej. 96 LB o un saco pico incompleto).
+    let presentation = millingPiladoPresentation;
+    if (millingPiladoPresentation === PESO_PERSONALIZADO) {
+      const lb = Number(millingCustomLb);
+      if (!Number.isFinite(lb) || lb <= 0) {
+        setMessage("Ingrese el peso personalizado en libras");
+        return;
+      }
+      presentation = `${lb} LB`;
+    }
+
     setMillingPiladoEntries((current) => {
       const entries = Array.isArray(current) ? current : [];
       return [
       ...entries,
       {
         id: `${Date.now()}-${entries.length}`,
-        presentation: millingPiladoPresentation,
+        presentation,
         quantityQq
       }
     ];
     });
     setMillingPiladoQq("");
+    setMillingCustomLb("");
     setMillingYields(null);
-    setMessage(`Pilado ${millingPiladoPresentation} agregado`);
+    setMessage(`Pilado ${presentation} agregado`);
   }
 
   function removeMillingPiladoEntry(entryId: string) {
@@ -5615,8 +5633,11 @@ export function App() {
     }
 
     const qqTulas = Number(millingReport.qqTulas || 0);
-    if (millingPiladoTotalQq <= 0 && qqTulas <= 0) {
-      setMessage("Agregue al menos una cantidad de pilado o QQ de tulas");
+    const esSeleccion = millingDestino === "seleccion";
+    if (esSeleccion) {
+      if (qqTulas <= 0) { setMessage("Ingrese el peso total (QQ) que va en tulas a Selección"); return; }
+    } else if (millingPiladoTotalQq <= 0) {
+      setMessage("Agregue al menos una presentación de arroz empacado");
       return;
     }
 
@@ -5653,40 +5674,45 @@ export function App() {
       input_quantity: inputKg
     });
 
-    const whiteRiceQq = millingPiladoTotalQq > 0 ? millingPiladoTotalQq : qqTulas;
+    // Selección: el arroz va en tulas (peso total QQ), SIN presentaciones ni
+    // subproductos → el backend no descuenta sacos. Empaque: presentaciones +
+    // subproductos → descuenta sacos. La regla XOR de nómina la dispara `tulas`.
+    const whiteRiceQq = esSeleccion ? qqTulas : millingPiladoTotalQq;
     const production = await apiPost<ProductionResult>(`/processing-batches/${batch.id}/finish-production`, {
       lot_id: src.lot_id,
       drying_report_id: src.drying_report_id,
       is_maquila: false,
       input_paddy_kg: inputKg,
+      destino: esSeleccion ? "SELECCION" : "EMPAQUE",
       white_rice: {
         product_id: outputProduct.id,
         warehouse_id: finishedWarehouse.id,
         quantity: whiteRiceQq,
         unit: "QQ"
       },
-      // Se manda el desglose (100 LB, 25 LB...) y no solo el total, para que en
-      // el historial se vea en que presentacion salio cada quintal.
-      white_rice_presentations: (Array.isArray(millingPiladoEntries) ? millingPiladoEntries : []).map((entry) => ({
-        presentation: entry.presentation,
-        sack_weight_lb: sackWeightLbOf(entry.presentation),
-        quantity: entry.quantityQq
-      })),
-      broken_rice: Number(millingReport.broken34 || 0) > 0 ? {
+      // Empaque: se manda el desglose por presentación (100 LB, 25 LB…) que
+      // también define cuántos sacos se descuentan. Selección: sin presentaciones.
+      white_rice_presentations: esSeleccion ? [] :
+        (Array.isArray(millingPiladoEntries) ? millingPiladoEntries : []).map((entry) => ({
+          presentation: entry.presentation,
+          sack_weight_lb: sackWeightLbOf(entry.presentation),
+          quantity: entry.quantityQq
+        })),
+      broken_rice: !esSeleccion && Number(millingReport.broken34 || 0) > 0 ? {
         product_id: broken34Product.id,
         warehouse_id: finishedWarehouse.id,
         quantity: Number(millingReport.broken34 || 0),
         unit: "QQ",
         sack_weight_lb: Number(millingReport.broken34_lb) > 0 ? Number(millingReport.broken34_lb) : undefined
       } : undefined,
-      fine_broken_rice: Number(millingReport.fineBroken || 0) > 0 ? {
+      fine_broken_rice: !esSeleccion && Number(millingReport.fineBroken || 0) > 0 ? {
         product_id: fineBrokenProduct.id,
         warehouse_id: finishedWarehouse.id,
         quantity: Number(millingReport.fineBroken || 0),
         unit: "QQ",
         sack_weight_lb: Number(millingReport.fineBroken_lb) > 0 ? Number(millingReport.fineBroken_lb) : undefined
       } : undefined,
-      bran: Number(millingReport.polvillo || 0) > 0 ? {
+      bran: !esSeleccion && Number(millingReport.polvillo || 0) > 0 ? {
         product_id: branProduct.id,
         warehouse_id: finishedWarehouse.id,
         quantity: Number(millingReport.polvillo || 0),
@@ -5696,9 +5722,10 @@ export function App() {
       sacks_used: 0,
       pilador_name: piladorName || undefined,
       estibador_name: estibadorName || undefined,
-      polvillo_worker_name: polvilloWorkerName || undefined,
-      tulas: Number(millingReport.tulas || 0),
-      qq_de_tulas: Number(millingReport.qqTulas || 0)
+      polvillo_worker_name: esSeleccion ? undefined : (polvilloWorkerName || undefined),
+      // XOR del estibador: en selección paga por tulas; en empaque, tulas = 0 → destajo.
+      tulas: esSeleccion ? Number(millingReport.tulas || 0) : 0,
+      qq_de_tulas: esSeleccion ? Number(millingReport.qqTulas || 0) : 0
     });
 
     setMillingYields(result);
@@ -8221,97 +8248,129 @@ export function App() {
 
               {/* ⚖️ Rendimiento de Pilado */}
               <div style={{ fontSize: 12, fontWeight: 800, color: "#475569", margin: "2px 0 6px" }}>⚖️ Rendimiento de Pilado</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
-                <label style={{ fontSize: 12 }}>
-                  <span style={{ fontWeight: 700, display: "block", marginBottom: 3 }}>📦 N.º de tulas</span>
-                  <input type="number" min="0" step="1" value={millingReport.tulas}
-                    onChange={e => setMillingReport(p => ({ ...p, tulas: e.target.value }))}
-                    style={{ width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
-                    placeholder="Ej: 6" />
+
+              {/* Destino del arroz pilado: Selección (tulas) o Empaque (sacos) */}
+              <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+                  <input type="radio" name="millingDestino" checked={millingDestino === "seleccion"} style={{ width: "auto" }}
+                    onChange={() => setMillingDestino("seleccion")} />
+                  🧺 Enviar a Selección (Uso de Tulas)
                 </label>
-                <label style={{ fontSize: 12 }}>
-                  <span style={{ fontWeight: 700, display: "block", marginBottom: 3 }}>⚖️ Total QQ de tulas</span>
-                  <input type="number" min="0" step="0.01" value={millingReport.qqTulas}
-                    onChange={e => setMillingReport(p => ({ ...p, qqTulas: e.target.value }))}
-                    style={{ width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
-                    placeholder="Ej: 12.50" />
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+                  <input type="radio" name="millingDestino" checked={millingDestino === "empaque"} style={{ width: "auto" }}
+                    onChange={() => setMillingDestino("empaque")} />
+                  📦 Empaque Comercial (Uso de Sacos)
                 </label>
               </div>
-              <div className="millingPiladoBuilder">
-                <label>
-                  <span>Pilado (QQ)</span>
-                  <select value={millingPiladoPresentation} onChange={(event) => setMillingPiladoPresentation(event.target.value)}>
-                    {piladoPresentations.map((presentation) => (
-                      <option key={presentation} value={presentation}>
-                        {presentation}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  <span>Cantidad en QQ</span>
-                  <input
-                    min="0"
-                    step="0.01"
-                    type="number"
-                    value={millingPiladoQq}
-                    onChange={(event) => setMillingPiladoQq(event.target.value)}
-                    placeholder="0.00"
-                  />
-                </label>
-                <button className="addLineButton" type="button" onClick={addMillingPiladoEntry}>
-                  <span>+</span> Añadir
-                </button>
-              </div>
-              <section className="millingEntryList">
-                {millingPiladoEntries.length === 0 && <p className="muted">Agrega una o varias presentaciones de pilado.</p>}
-                {millingPiladoEntries.map((entry) => (
-                  <div className="dryerEntryRow" key={entry.id}>
-                    <strong>{entry.presentation}</strong>
-                    <span>{entry.quantityQq.toFixed(2)} QQ</span>
-                    <button type="button" onClick={() => removeMillingPiladoEntry(entry.id)}>
-                      Quitar
+
+              {millingDestino === "seleccion" ? (
+                /* ── Selección: solo Cantidad de Tulas y Peso Total (QQ) ── */
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+                    <label style={{ fontSize: 12 }}>
+                      <span style={{ fontWeight: 700, display: "block", marginBottom: 3 }}>📦 Cantidad de Tulas</span>
+                      <input type="number" min="0" step="1" value={millingReport.tulas}
+                        onChange={e => setMillingReport(p => ({ ...p, tulas: e.target.value }))}
+                        style={{ width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
+                        placeholder="Ej: 6" />
+                    </label>
+                    <label style={{ fontSize: 12 }}>
+                      <span style={{ fontWeight: 700, display: "block", marginBottom: 3 }}>⚖️ Peso Total (QQ)</span>
+                      <input type="number" min="0" step="0.01" value={millingReport.qqTulas}
+                        onChange={e => setMillingReport(p => ({ ...p, qqTulas: e.target.value }))}
+                        style={{ width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
+                        placeholder="Ej: 12.50" />
+                    </label>
+                  </div>
+                  <div className="totalBox" style={{ background: "#eff6ff", borderColor: "#bfdbfe" }}>
+                    <span>⚖️ TOTAL QQ EN TULAS</span>
+                    <strong>{Number(millingReport.qqTulas || 0).toFixed(2)} QQ</strong>
+                    <small>Va al módulo de Selección en tulas reutilizables — no se descuentan sacos.</small>
+                  </div>
+                </>
+              ) : (
+                /* ── Empaque Comercial: presentaciones (sacos) + subproductos ── */
+                <>
+                  <div className="millingPiladoBuilder">
+                    <label>
+                      <span>Presentación</span>
+                      <select value={millingPiladoPresentation} onChange={(event) => setMillingPiladoPresentation(event.target.value)}>
+                        {piladoPresentations.map((presentation) => (
+                          <option key={presentation} value={presentation}>
+                            {presentation}
+                          </option>
+                        ))}
+                        <option value={PESO_PERSONALIZADO}>{PESO_PERSONALIZADO}</option>
+                      </select>
+                    </label>
+                    {millingPiladoPresentation === PESO_PERSONALIZADO && (
+                      <label>
+                        <span>Peso del saco (lb)</span>
+                        <input min="1" step="0.01" type="number" value={millingCustomLb}
+                          onChange={(event) => setMillingCustomLb(event.target.value)} placeholder="Ej: 96" />
+                      </label>
+                    )}
+                    <label>
+                      <span>Cantidad en QQ</span>
+                      <input
+                        min="0"
+                        step="0.01"
+                        type="number"
+                        value={millingPiladoQq}
+                        onChange={(event) => setMillingPiladoQq(event.target.value)}
+                        placeholder="0.00"
+                      />
+                    </label>
+                    <button className="addLineButton" type="button" onClick={addMillingPiladoEntry}>
+                      <span>+</span> Añadir
                     </button>
                   </div>
-                ))}
-              </section>
-              <div className="totalBox" style={{ background: "#eff6ff", borderColor: "#bfdbfe" }}>
-                <span>⚖️ TOTAL QQ DE TULAS</span>
-                <strong>{Number(millingReport.qqTulas || 0).toFixed(2)} QQ</strong>
-                <small>Independiente de las presentaciones; base para pagar al pilador</small>
-              </div>
+                  <section className="millingEntryList">
+                    {millingPiladoEntries.length === 0 && <p className="muted">Agrega una o varias presentaciones de pilado.</p>}
+                    {millingPiladoEntries.map((entry) => (
+                      <div className="dryerEntryRow" key={entry.id}>
+                        <strong>{entry.presentation}</strong>
+                        <span>{entry.quantityQq.toFixed(2)} QQ</span>
+                        <button type="button" onClick={() => removeMillingPiladoEntry(entry.id)}>
+                          Quitar
+                        </button>
+                      </div>
+                    ))}
+                  </section>
 
-              <div className="totalBox">
-                <span>🌾 TOTAL ARROZ PILADO</span>
-                <strong>{millingPiladoTotalQq.toFixed(2)} QQ</strong>
-                <small>Suma de las presentaciones (10 LB, 25 LB, 50 LB, etc.)</small>
-              </div>
+                  <div className="totalBox">
+                    <span>🌾 TOTAL ARROZ PILADO</span>
+                    <strong>{millingPiladoTotalQq.toFixed(2)} QQ</strong>
+                    <small>Suma de las presentaciones (10 LB, 25 LB, 50 LB, etc.)</small>
+                  </div>
 
-              <div className="productionSackGrid">
-                <ControlledNumberInput label="Arrocillo 3/4" value={millingReport.broken34} onChange={(value) => updateMillingField("broken34", value)} />
-                <ControlledNumberInput label="Arrocillo Fino" value={millingReport.fineBroken} onChange={(value) => updateMillingField("fineBroken", value)} />
-                <ControlledNumberInput label="Polvillo" value={millingReport.polvillo} onChange={(value) => updateMillingField("polvillo", value)} />
-              </div>
-              {/* Libras por saco de cada subproducto (variable según cliente: 95, 96,
-                  100…). Definen cuántos sacos ESPECIALES descuenta la matriz:
-                  Arrocillo → "Saco Usado", Polvillo → "Saco Negro". sacos = QQ×100/lb. */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginTop: 8 }}>
-                <label style={{ fontSize: 11, fontWeight: 600, color: "var(--c-muted)" }}>lb/saco Arrocillo 3/4
-                  <input type="number" min="1" step="1" value={millingReport.broken34_lb} title="Descuenta de Saco Usado (Arrocillo)"
-                    onChange={(e) => updateMillingField("broken34_lb", e.target.value)}
-                    style={{ display: "block", width: "100%", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
-                </label>
-                <label style={{ fontSize: 11, fontWeight: 600, color: "var(--c-muted)" }}>lb/saco Arrocillo Fino
-                  <input type="number" min="1" step="1" value={millingReport.fineBroken_lb} title="Descuenta de Saco Usado (Arrocillo)"
-                    onChange={(e) => updateMillingField("fineBroken_lb", e.target.value)}
-                    style={{ display: "block", width: "100%", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
-                </label>
-                <label style={{ fontSize: 11, fontWeight: 600, color: "var(--c-muted)" }}>lb/saco Polvillo
-                  <input type="number" min="1" step="1" value={millingReport.polvillo_lb} title="Descuenta de Saco Negro (Polvillo)"
-                    onChange={(e) => updateMillingField("polvillo_lb", e.target.value)}
-                    style={{ display: "block", width: "100%", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
-                </label>
-              </div>
+                  <div className="productionSackGrid">
+                    <ControlledNumberInput label="Arrocillo 3/4" value={millingReport.broken34} onChange={(value) => updateMillingField("broken34", value)} />
+                    <ControlledNumberInput label="Arrocillo Fino" value={millingReport.fineBroken} onChange={(value) => updateMillingField("fineBroken", value)} />
+                    <ControlledNumberInput label="Polvillo" value={millingReport.polvillo} onChange={(value) => updateMillingField("polvillo", value)} />
+                  </div>
+                  {/* Libras por saco de cada subproducto (variable según cliente: 95, 96,
+                      100…). Definen cuántos sacos ESPECIALES descuenta la matriz:
+                      Arrocillo → "Saco Usado", Polvillo → "Saco Negro". sacos = QQ×100/lb. */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginTop: 8 }}>
+                    <label style={{ fontSize: 11, fontWeight: 600, color: "var(--c-muted)" }}>lb/saco Arrocillo 3/4
+                      <input type="number" min="1" step="1" value={millingReport.broken34_lb} title="Descuenta de Saco Usado (Arrocillo)"
+                        onChange={(e) => updateMillingField("broken34_lb", e.target.value)}
+                        style={{ display: "block", width: "100%", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
+                    </label>
+                    <label style={{ fontSize: 11, fontWeight: 600, color: "var(--c-muted)" }}>lb/saco Arrocillo Fino
+                      <input type="number" min="1" step="1" value={millingReport.fineBroken_lb} title="Descuenta de Saco Usado (Arrocillo)"
+                        onChange={(e) => updateMillingField("fineBroken_lb", e.target.value)}
+                        style={{ display: "block", width: "100%", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
+                    </label>
+                    <label style={{ fontSize: 11, fontWeight: 600, color: "var(--c-muted)" }}>lb/saco Polvillo
+                      <input type="number" min="1" step="1" value={millingReport.polvillo_lb} title="Descuenta de Saco Negro (Polvillo)"
+                        onChange={(e) => updateMillingField("polvillo_lb", e.target.value)}
+                        style={{ display: "block", width: "100%", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
+                    </label>
+                  </div>
+                </>
+              )}
               {/* Pago por llenado de polvillo: OCULTO a petición. El pago se sigue
                   registrando en Nómina (backend) con el rol Polvillo; solo no se
                   muestra el cálculo aquí. */}

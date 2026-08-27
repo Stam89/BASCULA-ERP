@@ -144,31 +144,32 @@ export async function createProductionWorkerPayments(
     const tulas = Number(opts.tulas) || 0;
     const tulasBonus = estibadorBaseFromTulas(tulas, rates.estibador_por_3tulas);
 
-    // Cada rol lleva SU base de cobro: el pilador por QQ; el estibador por
-    // tulas + arrocillo cuando hay tulas, o por QQ/sacas/arrocillo cuando no.
-    const rows: Array<{ role: string; name: string; base: number; qq: number; tulas: number; tulasBonus: number; sacasCobradas: number }> = [];
+    // Cada rol lleva SU base de cobro. Regla XOR ESTRICTA del estibador:
+    //  · con tulas (cantidad_tulas > 0) → cobra EXCLUSIVAMENTE por volumen:
+    //    (cantidad_tulas / 3) × tarifa_3_tulas. NO cobra QQ, sacas ni arrocillo.
+    //  · sin tulas (empaque directo) → destajo: qq×tarifa + sacas×tarifa + arrocillo×tarifa.
+    // El pilador es INMUTABLE: siempre qq×tarifa_qq + sacas×tarifa_saca.
+    const usaTulas = tulas > 0;
+    const rows: Array<{ role: string; name: string; base: number; qq: number; tulas: number; tulasBonus: number; sacasCobradas: number; arrocilloPaga: number }> = [];
     if (opts.piladorName && opts.piladorName.trim()) {
       rows.push({
         role: "PILADOR",
         name: opts.piladorName.trim(),
         base: round2(qq * rates.pilador_per_qq + sacas * rates.pilador_per_saca),
-        qq, tulas: 0, tulasBonus: 0, sacasCobradas: sacas
+        qq, tulas: 0, tulasBonus: 0, sacasCobradas: sacas, arrocilloPaga: 0
       });
     }
     if (opts.estibadorName && opts.estibadorName.trim()) {
-      if (tulas > 0) {
-        // Cuando hay tulas el estibador cobra por TULAS + ARROCILLO (3/4 y fino,
-        // con la tarifa estibador_per_arrocillo de Configuración → Tarifas).
-        // NO cobra por QQ ni sacas en esa producción.
-        const arrocilloPay = round2(arrocillo * rates.estibador_per_arrocillo);
+      if (usaTulas) {
+        // Volumen puro por tulas: nada de arrocillo/QQ/sacas.
         rows.push({
           role: "ESTIBADOR",
           name: opts.estibadorName.trim(),
-          base: round2(tulasBonus + arrocilloPay),
-          qq: 0, tulas, tulasBonus: tulasBonus, sacasCobradas: 0
+          base: tulasBonus,
+          qq: 0, tulas, tulasBonus, sacasCobradas: 0, arrocilloPaga: 0
         });
       } else {
-        // Producción normal sin tulas: cobra por QQ, sacas y arrocillo como antes.
+        // Empaque directo (sin tulas): destajo por QQ, sacas y arrocillo.
         rows.push({
           role: "ESTIBADOR",
           name: opts.estibadorName.trim(),
@@ -177,7 +178,7 @@ export async function createProductionWorkerPayments(
             sacas * rates.estibador_per_saca +
             arrocillo * rates.estibador_per_arrocillo
           ),
-          qq, tulas: 0, tulasBonus: 0, sacasCobradas: sacas
+          qq, tulas: 0, tulasBonus: 0, sacasCobradas: sacas, arrocilloPaga: arrocillo
         });
       }
     }
@@ -188,20 +189,22 @@ export async function createProductionWorkerPayments(
         role: "POLVILLO",
         name: opts.polvilloName.trim(),
         base: round2(polvilloQq * rates.polvillo_per_qq),
-        qq: 0, tulas: 0, tulasBonus: 0, sacasCobradas: 0
+        qq: 0, tulas: 0, tulasBonus: 0, sacasCobradas: 0, arrocilloPaga: 0
       });
     }
 
     for (const r of rows) {
+      const qqRate = r.role === "PILADOR" ? rates.pilador_per_qq : rates.estibador_per_qq;
+      const sacaRate = r.role === "PILADOR" ? rates.pilador_per_saca : rates.estibador_per_saca;
       await client.query(
         `INSERT INTO worker_payments
            (worker_role, worker_name, reference_type, reference_id, qq, sacas, arrocillo, tulas, base_amount, net_amount, created_by, detail)
          VALUES ($1, $2, 'processing_batch', $3, $4, $5, $6, $7, $8, $8, $9, $10)`,
-        [r.role, r.name, opts.batchId, r.qq, sacas, arrocillo, r.tulas, r.base, opts.createdBy ?? null,
+        [r.role, r.name, opts.batchId, r.qq, r.sacasCobradas, r.arrocilloPaga, r.tulas, r.base, opts.createdBy ?? null,
          JSON.stringify({
-           qq: r.qq, qq_rate: r.role === "PILADOR" ? rates.pilador_per_qq : rates.estibador_per_qq, qq_amount: round2(r.qq * (r.role === "PILADOR" ? rates.pilador_per_qq : rates.estibador_per_qq)),
-           sacas, saca_rate: r.role === "PILADOR" ? rates.pilador_per_saca : rates.estibador_per_saca, saca_amount: round2(r.sacasCobradas * (r.role === "PILADOR" ? rates.pilador_per_saca : rates.estibador_per_saca)),
-           arrocillo, arrocillo_rate: r.role === "PILADOR" ? 0 : rates.estibador_per_arrocillo, arrocillo_amount: round2(arrocillo * (r.role === "PILADOR" ? 0 : rates.estibador_per_arrocillo)),
+           qq: r.qq, qq_rate: qqRate, qq_amount: round2(r.qq * qqRate),
+           sacas: r.sacasCobradas, saca_rate: sacaRate, saca_amount: round2(r.sacasCobradas * sacaRate),
+           arrocillo: r.arrocilloPaga, arrocillo_rate: r.arrocilloPaga > 0 ? rates.estibador_per_arrocillo : 0, arrocillo_amount: round2(r.arrocilloPaga * rates.estibador_per_arrocillo),
            tulas: r.tulas, tulas_rate: r.role === "PILADOR" ? 0 : rates.estibador_por_3tulas, tulas_amount: r.tulasBonus,
            polvillo: r.role === "POLVILLO" ? (opts.polvillo ?? 0) : 0, polvillo_rate: r.role === "POLVILLO" ? rates.polvillo_per_qq : 0, polvillo_amount: r.role === "POLVILLO" ? r.base : 0
          })]
