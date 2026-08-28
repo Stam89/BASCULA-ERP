@@ -1,6 +1,6 @@
 # PROJECT_CONTEXT — BASCULA-ERP
 
-> Memoria compacta para continuar sin releer todo. Última actualización: 2026-08-27 (V3 caja campo).
+> Memoria compacta para continuar sin releer todo. Última actualización: 2026-08-28 (Campo: Flota y Maquinaria).
 > Al empezar una sesión, **lee solo este archivo** primero.
 
 ## 0. Stack / cómo corre
@@ -15,10 +15,10 @@
 ## 1. ESTADO ACTUAL
 ERP para piladora de arroz con arquitectura **multi-accionista**: MATRIZ **CEYRO** (dueña, id `00000000-0000-0000-0000-000000000001`) y SOCIOS **ROVINSON** y **STALYN**. Selector de accionista activo manda header `X-Accionista-Id`; permisos por accionista.
 - Funciona: Dashboard, Báscula, Secadoras, Producción, Inventario, Selección/envejecido, Ventas (pedido→despacho), Compras, Caja, Por Cobrar, Por Pagar, Liquidaciones, Fomentos, Agricultores, Nómina, Cuadrilla, Servicio Pilado, Estados Financieros, Costos Operativos, Reportes, Configuración.
-- **main** commiteado+pusheado (último `c99c23e`). Typecheck/build FE+BE en verde. Backend corre compilado desde `dist/`. **No hay auto-deploy** (el `ci.yml` solo hace typecheck/tests/build/lint en runners de GitHub, sin BD; producción se despliega a mano).
-- **En main ya está el módulo Caja de Campo completo hasta V2 + reubicación + aislamiento**: V1 captura, V2 reportes (vista `campo_servicios_saldo` + 3 reportes), "Campo" como operación de CEYRO en el selector de arriba (no pastilla de sidebar) y **contexto AISLADO** (layout propio con menú de Campo, sin módulos compartidos). Migraciones `20260826_campo_caja_modulo.sql` y `20260827_campo_servicios_saldo_view.sql` aplicadas en local.
-- ⚠️ **RAMA ACTIVA HOY: `feat/campo-caja`** (1 commit `5d822ae` sobre main, NO pusheada). Contiene la **V3: nombre de operación editable + sección Caja (ingreso/egreso/transferencia/libro)**. Para seguir: `git checkout feat/campo-caja`.
-- **V3 pendiente de merge**: migración `20260827_campo_config_transferencias.sql` **aplicada en local**; hay **datos de prueba `RPT2*` en la BD local** (a limpiar antes del merge, junto con revisar que no queden `RPT*`).
+- **main** commiteado+pusheado (último `00676f4`). Typecheck/build FE+BE en verde. Backend corre compilado desde `dist/`. **No hay auto-deploy** (el `ci.yml` solo hace typecheck/tests/build/lint en runners de GitHub, sin BD; producción se despliega a mano).
+- **En main ya está el módulo Caja de Campo completo hasta V3**: V1 captura, V2 reportes (vista `campo_servicios_saldo` + 3 reportes), Campo como **operación de CEYRO** en el selector de arriba (no pastilla de sidebar), **contexto AISLADO** (layout propio `CampoWorkspace`, menú `CAMPO_SECCIONES`) y **V3** (nombre de operación editable en `campo_config`, sección **Caja** con ingreso/egreso/transferencia/libro con saldo corrido). Migraciones aplicadas en local hasta `20260827_campo_config_transferencias.sql`. BD local **limpia** (0 movimientos/activos; semillas: 3 cuentas, 8 categorías).
+- ⚠️ **RAMA ACTIVA HOY: `feat/campo-maquinaria`** (1 commit `1b1e394` sobre main `00676f4`, NO pusheada). Contiene **Flota y Maquinaria (Centros de Costo)**: extiende `campo_activos` con `placa_codigo`+tipos de flota, CRUD "🚜 Flota y Maquinaria" en Configuración, selector de máquina en Egreso y badge en el Libro. Verificado en navegador; QA data limpiada. **Falta solo: pedir OK del usuario → merge FF a main + push + borrar rama.** Para seguir: `git checkout feat/campo-maquinaria`.
+- Migración de esta rama `20260828_campo_maquinaria.sql` **aplicada en local** (aditiva sobre `campo_activos`).
 
 ## 2. CAMBIOS DE ESTA SESIÓN (2026-08-20)
 1. **Ventas** — Toma de pedido en split-view 2 columnas + "Cola de carga" para bodega (badge 🟡, texto grande de sacos). Solo UI; estado sigue `PENDING`/`DELIVERED`. `4a2d90a`.
@@ -126,6 +126,18 @@ Archivos (2h): `backend/src/routes/modules/campo.ts`, `web-admin/src/campo/Campo
 
 Archivos (2i): `web-admin/src/App.tsx`, `web-admin/src/campo/CampoModule.tsx`, `backend/src/routes/modules/campo.ts`; **nuevo**: `database/migrations/20260827_campo_config_transferencias.sql`.
 
+## 2j. CAMBIOS 2026-08-28 (esta sesión)
+**Ya en `main` (merge FF de `feat/campo-caja`, commit `00676f4`):** se cerró la **V3 Caja de Campo** — limpieza de datos de prueba `RPT*/RPT2*` + demo (BD local en cero, semillas intactas), `campo_config.nombre_operacion='Campo'`, merge+push, rama borrada.
+
+**En rama `feat/campo-maquinaria` (`1b1e394`, NO pusheada):** **Flota y Maquinaria (Centros de Costo)** para Transporte/Cosecha.
+- **Decisión de arquitectura**: en vez de crear tablas paralelas (`maquinaria` + `movimientos_caja.maquinaria_id`) que duplicarían el dominio de Campo, se **extiende** el catálogo existente `campo_activos` (= maquinaria) y la FK ya existente `campo_movimientos.activo_id` (= maquinaria_id). El usuario eligió "Extender Campo (Recomendado)".
+- **Migración** `20260828_campo_maquinaria.sql` (aditiva): `campo_activos` + `placa_codigo VARCHAR(40)` y `tipo` ampliado a `cosechadora|camion|vehiculo|transporte|otro` (CHECK `campo_activos_tipo_check` recreado).
+- **Backend** (`campo.ts`): GET/POST/PATCH `/campo/activos` con `placa_codigo` + `z.enum(TIPO_MAQUINARIA)`. (El endpoint de edición es **PATCH**, no PUT.) El libro ya devolvía `activo_nombre`.
+- **Frontend** (`CampoModule.tsx`): nueva tarjeta **"🚜 Flota y Maquinaria"** en Configuración con CRUD completo (alta/edición/archivar-activar; nombre-alias, tipo, placa/código, operador, estado) — reemplaza el `ActivosPanel` mínimo; Servicios muestra hint a Configuración si no hay flota. Egreso: selector **"Asignar a Máquina / Vehículo (Opcional)"** debajo de Concepto (maquinaria activa). Libro: **badge "🚜 &lt;máquina&gt;"** junto al concepto cuando el egreso está asignado. Helper `patchMaquina` (usa `apiFetch` con method PATCH).
+- **Verificado en navegador**: alta/edición(PATCH)/archivar de flota, egreso asignado, badge en libro ("Cambio de aceite 🚜 Cosechadora 1"), 4 tipos. QA data limpiada tras probar.
+
+Archivos (2j): `backend/src/routes/modules/campo.ts`, `web-admin/src/campo/CampoModule.tsx`; **nuevo**: `database/migrations/20260828_campo_maquinaria.sql`.
+
 ## 3. REGLAS DE NEGOCIO (no romper)
 - **Toma de pedido NO mueve dinero ni inventario**; recién al **Despachar** sale stock + entra caja (Contado) o Cuenta por Cobrar (Crédito). Estados DB: `PENDING`/`DELIVERED`/`CANCELLED` (NO renombrar; hay CHECK). El pedido genera su CxC "(pendiente de despacho)" al tomarse; al despachar se salda o se enlaza, nunca se duplica.
 - **Cuentas espejo entre accionistas**: un servicio/cargo de la matriz a un socio crea CxC (CEYRO) + CxP (socio) enlazadas en tablas puente (`pilado_services`, `lot_transfers`, `matriz_service_charges`, `matriz_packaging_charges`). Un abono en una cara debe reflejarse en la otra + caja del otro socio → `backend/src/services/cuentas-vinculadas.ts` (`espejarAbonoEnContraparte`). Saldar una cuenta debe mover caja + espejar, no solo bajar saldo.
@@ -157,13 +169,14 @@ Archivos (2i): `web-admin/src/App.tsx`, `web-admin/src/campo/CampoModule.tsx`, `
 - Nómina «Planta y Secadoras»: la tabla Pilador/Estibador (11 columnas) queda en media columna con scroll horizontal. Si molesta, pasar esa tabla a ancho completo y el Secador debajo.
 - `POST /customers/quick` crea con `customer_type='RETAIL'` (no NATURAL/EMPRESA); el tipo del front es una unión de 2 valores → al editar un cliente RETAIL el select cae a "Natural". Menor; alinear si molesta.
 - Nota de pruebas en vivo: la sesión del navegador in-app se limpia al reabrir el preview; para pruebas por API se puede generar un JWT admin con `signToken` (secreto en `backend/src/config/env.ts`) y llamar `http://localhost:4000/api/v1/...`. La extensión "Claude en Chrome" no está conectada (no se puede manejar el Chrome real del usuario).
-- **CAMPO V3 — sin mergear a main**: rama `feat/campo-caja` (1 commit `5d822ae`). Falta: **limpiar datos de prueba `RPT*` y `RPT2*`** (DELETE por `nombre ILIKE 'RPT%'` en orden FK: movimientos→servicios→clientes→activos; y movimientos sueltos de prueba) y restaurar `campo_config` a 'Campo' si quedó cambiado; luego merge+push. Migración `20260827_campo_config_transferencias.sql` ya aplicada en local; en producción correr `db:migrate` al desplegar.
+- ~~CAMPO V3 — sin mergear~~ **RESUELTO 2026-08-28**: mergeado a main (`00676f4`), datos de prueba limpiados, `campo_config='Campo'`, rama borrada.
+- **CAMPO Flota/Maquinaria — sin mergear a main**: rama `feat/campo-maquinaria` (1 commit `1b1e394`). Verificado y QA limpio. Falta solo el **OK del usuario → merge FF + push + borrar rama**. Migración `20260828_campo_maquinaria.sql` aplicada en local; en producción correr `db:migrate` al desplegar.
 - **CAMPO — corte histórico en por-cobrar**: hoy es "a hoy". Un corte a fecha pasada necesitaría filtrar los abonos por fecha (otra consulta); se dejó para después si hace falta.
 - **Libro de movimientos — saldo corrido**: es acumulado por orden de fecha sobre el conjunto filtrado por cuenta; sin filtro de cuenta es el saldo combinado de todas. No arranca de un "saldo de apertura" del rango (empieza desde el inicio de los movimientos de esa cuenta). Suficiente por ahora.
 - **Producción destino (a validar por el usuario)**: el pago **por saca** del pilador ahora SÍ suma (antes 0). Si el negocio quería pilador solo por QQ, hay que dejar `sacas=0` en empaque. Confirmar.
 
 ## 5. PRÓXIMO PASO
-**Primero mañana:** cerrar la **V3 Caja de Campo** (rama `feat/campo-caja`, ya funcional y verificada en navegador — el usuario aprobó ingreso/egreso/transferencia con saldos cuadrando, nombre editable y reportes correctos con transferencia). Falta solo: **(1) limpiar datos de prueba `RPT*`/`RPT2*`** de la BD local (DELETE en orden FK) y confirmar `campo_config` = 'Campo'; **(2) `git checkout feat/campo-caja` → merge FF a `main` → `git push origin main`** (mismo flujo que las fases previas); **(3) borrar la rama** `git branch -d feat/campo-caja`. No hay auto-deploy, así que el push no corre migraciones en prod (al desplegar prod: `git pull` + `db:migrate` + build + restart). Candidatos posteriores de Campo: (a) más secciones del menú (fácil: `CAMPO_SECCIONES` + prop `section`); (b) PDF/export de reportes; (c) corte histórico en por-cobrar. Otros: validar pago-por-saca del pilador (§2g #5); `variedad`/`limite_credito` en fomentos.
+**Primero mañana:** cerrar **Flota y Maquinaria** (rama `feat/campo-maquinaria`, commit `1b1e394`, ya funcional y verificada en navegador — CRUD de flota, selector de máquina en egreso y badge en libro). Esperar el **OK del usuario** y luego: **(1)** `git checkout feat/campo-maquinaria` (ya estamos en ella) → **merge FF a `main`** → `git push origin main`; **(2) borrar la rama** `git branch -d feat/campo-maquinaria`. No hay auto-deploy, así que el push no corre migraciones en prod (al desplegar prod: `git pull` + `db:migrate` [incluye `20260828_campo_maquinaria.sql`] + build FE/BE + restart del proceso :4000). Candidatos posteriores de Campo: (a) más secciones del menú (fácil: `CAMPO_SECCIONES` + prop `section`); (b) PDF/export de reportes; (c) corte histórico en por-cobrar; (d) reporte por-máquina que muestre placa/operador. Otros: validar pago-por-saca del pilador (§2g #5); `variedad`/`limite_credito` en fomentos.
 
 ## 6. ARCHIVOS IMPORTANTES
 - `web-admin/src/App.tsx` — TODO el frontend (tabs por `activeTab === "..."`; Config por `configSubTab`; Caja por `cajaSubTab`).
@@ -231,7 +244,7 @@ Archivos (2i): `web-admin/src/App.tsx`, `web-admin/src/campo/CampoModule.tsx`, `
 - `DELETE /finance/fixed-assets/duplicados-sin-costo`: borra de `equipment`. Solo toca costo 0/NULL duplicados y respeta mantenimiento; no ampliar a costo>0 sin confirmar (borraría bienes reales del balance).
 - `processing.ts finish-production` + `labor.ts`: transacción de cierre = inventario (PROCESS_OUTPUT) + sacos (según destino) + nómina + servicio de pilado. Delicada: cambiar el destino, los sacos o la XOR de nómina desalinea pagos/stock. Verificar con ROLLBACK antes.
 - **Campo — vista `campo_servicios_saldo` es la fuente única del saldo**: servicios, sobrepago y reportes leen de ahí. Si cambia la fórmula de saldo/estado, se cambia en la VISTA (migración), no en cada endpoint. El sobrepago bloquea con lock (`FOR UPDATE` sobre `campo_servicios`) + lee `saldo_pendiente` de la vista.
-- **Campo V2 tiene datos `RPT*` en la BD local** (de prueba): limpiarlos antes del merge.
+- **Campo — `campo_activos` es ahora el catálogo de maquinaria** (Flota): no crear tablas paralelas `maquinaria`/`movimientos_caja`. La FK máquina↔egreso es `campo_movimientos.activo_id`. El endpoint de edición de activos es **PATCH** `/campo/activos/:id` (no PUT).
 
 ---
 
@@ -241,11 +254,12 @@ Archivos (2i): `web-admin/src/App.tsx`, `web-admin/src/campo/CampoModule.tsx`, `
 ```
 Continuemos el proyecto BASCULA-ERP. Antes de nada, lee SOLO el archivo
 PROJECT_CONTEXT.md (raíz del repo) y NO analices todo el código.
-Contexto rápido: el módulo "Caja de Campo" (V1 captura + V2 reportes + operación
-de CEYRO + contexto aislado) ya está en main. La V3 (nombre de operación editable
-+ sección Caja con ingreso/egreso/transferencia/libro) está lista y verificada en
-la rama feat/campo-caja (NO pusheada). Para seguir: `git checkout feat/campo-caja`.
-El PRÓXIMO PASO (§5) es cerrar la V3: limpiar datos de prueba RPT*/RPT2*, mergear FF
-a main y pushear. Recuérdamelo y espera mi confirmación antes de codear, mergear
-o aplicar cualquier migración.
+Contexto rápido: el módulo "Caja de Campo" ya está en main hasta la V3 (captura +
+reportes + operación de CEYRO + contexto aislado + nombre editable + sección Caja
+con ingreso/egreso/transferencia/libro). Lo último trabajado es "Flota y Maquinaria
+(Centros de Costo)": CRUD de flota en Configuración, selector de máquina en el egreso
+y badge en el libro. Está listo y verificado en la rama feat/campo-maquinaria (commit
+1b1e394, NO pusheada). Para seguir: `git checkout feat/campo-maquinaria`.
+El PRÓXIMO PASO (§5) es cerrar esa feature: merge FF a main + push + borrar la rama.
+Recuérdamelo y espera mi confirmación antes de mergear, pushear o aplicar migraciones.
 ```
