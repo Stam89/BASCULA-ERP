@@ -1,6 +1,6 @@
 # PROJECT_CONTEXT — BASCULA-ERP
 
-> Memoria compacta para continuar sin releer todo. Última actualización: 2026-08-28 (Campo: Flota y Maquinaria).
+> Memoria compacta para continuar sin releer todo. Última actualización: 2026-08-28 (Campo: Flota/Maquinaria + Egreso reordenado + Vales/Anticipos).
 > Al empezar una sesión, **lee solo este archivo** primero.
 
 ## 0. Stack / cómo corre
@@ -15,10 +15,10 @@
 ## 1. ESTADO ACTUAL
 ERP para piladora de arroz con arquitectura **multi-accionista**: MATRIZ **CEYRO** (dueña, id `00000000-0000-0000-0000-000000000001`) y SOCIOS **ROVINSON** y **STALYN**. Selector de accionista activo manda header `X-Accionista-Id`; permisos por accionista.
 - Funciona: Dashboard, Báscula, Secadoras, Producción, Inventario, Selección/envejecido, Ventas (pedido→despacho), Compras, Caja, Por Cobrar, Por Pagar, Liquidaciones, Fomentos, Agricultores, Nómina, Cuadrilla, Servicio Pilado, Estados Financieros, Costos Operativos, Reportes, Configuración.
-- **main** commiteado+pusheado (último `00676f4`). Typecheck/build FE+BE en verde. Backend corre compilado desde `dist/`. **No hay auto-deploy** (el `ci.yml` solo hace typecheck/tests/build/lint en runners de GitHub, sin BD; producción se despliega a mano).
-- **En main ya está el módulo Caja de Campo completo hasta V3**: V1 captura, V2 reportes (vista `campo_servicios_saldo` + 3 reportes), Campo como **operación de CEYRO** en el selector de arriba (no pastilla de sidebar), **contexto AISLADO** (layout propio `CampoWorkspace`, menú `CAMPO_SECCIONES`) y **V3** (nombre de operación editable en `campo_config`, sección **Caja** con ingreso/egreso/transferencia/libro con saldo corrido). Migraciones aplicadas en local hasta `20260827_campo_config_transferencias.sql`. BD local **limpia** (0 movimientos/activos; semillas: 3 cuentas, 8 categorías).
-- ⚠️ **RAMA ACTIVA HOY: `feat/campo-maquinaria`** (1 commit `1b1e394` sobre main `00676f4`, NO pusheada). Contiene **Flota y Maquinaria (Centros de Costo)**: extiende `campo_activos` con `placa_codigo`+tipos de flota, CRUD "🚜 Flota y Maquinaria" en Configuración, selector de máquina en Egreso y badge en el Libro. Verificado en navegador; QA data limpiada. **Falta solo: pedir OK del usuario → merge FF a main + push + borrar rama.** Para seguir: `git checkout feat/campo-maquinaria`.
-- Migración de esta rama `20260828_campo_maquinaria.sql` **aplicada en local** (aditiva sobre `campo_activos`).
+- **main** commiteado+pusheado (último `b904b4c`, feature de vales; el commit final de esta sesión es el de estos docs). Typecheck/build FE+BE en verde, lint 0 errores. Backend corre compilado desde `dist/`. **No hay auto-deploy** (el `ci.yml` solo hace typecheck/tests/build/lint en runners de GitHub, sin BD; producción se despliega a mano).
+- **En main ya está el módulo Caja de Campo completo hasta V3 + Flota/Maquinaria + Egreso reordenado + Vales**: V1 captura, V2 reportes (vista `campo_servicios_saldo` + 3 reportes), Campo como **operación de CEYRO** en el selector de arriba (no pastilla de sidebar), **contexto AISLADO** (layout propio `CampoWorkspace`, menú `CAMPO_SECCIONES`) y **V3** (nombre de operación editable en `campo_config`, sección **Caja** con ingreso/egreso/transferencia/libro con saldo corrido). Migraciones aplicadas en local hasta `20260828_campo_vales_anticipos.sql`. BD local **limpia** (0 movimientos; semillas: 3 cuentas, 8 categorías; flota intacta).
+- **Flota y Maquinaria** (`1b1e394`): `campo_activos` extendida con `placa_codigo`+tipos de flota (cosechadora/camión/vehículo/otro); CRUD "🚜 Flota y Maquinaria" en Configuración; selector de máquina en Egreso; badge en el Libro. Migración `20260828_campo_maquinaria.sql`.
+- **Egreso reordenado + Vales/Anticipos** (`b904b4c`): egreso con orden estricto (Fecha·Máquina*·Categoría*·Concepto·Monto·Cuenta), máquina OBLIGATORIA con default "🏢 Gastos Generales / Administración"; Concepto dinámico (datalist) si la categoría es REPARACION_MANT; **Vales por rendir** (sección 📋, estado + ajuste `naturaleza='ajuste_vale'`). Migración `20260828_campo_vales_anticipos.sql`. Ver §2k.
 
 ## 2. CAMBIOS DE ESTA SESIÓN (2026-08-20)
 1. **Ventas** — Toma de pedido en split-view 2 columnas + "Cola de carga" para bodega (badge 🟡, texto grande de sacos). Solo UI; estado sigue `PENDING`/`DELIVERED`. `4a2d90a`.
@@ -138,6 +138,17 @@ Archivos (2i): `web-admin/src/App.tsx`, `web-admin/src/campo/CampoModule.tsx`, `
 
 Archivos (2j): `backend/src/routes/modules/campo.ts`, `web-admin/src/campo/CampoModule.tsx`; **nuevo**: `database/migrations/20260828_campo_maquinaria.sql`.
 
+## 2k. CAMBIOS 2026-08-28 (Egreso reordenado + Vales/Anticipos — `b904b4c`, en main)
+Reestructura del egreso de Campo y gestión de fondos por rendir. **Se apoya en Flota/Maquinaria** (el selector de máquina, ahora obligatorio, viene de §2j).
+1. **Egreso reordenado (orden estricto)**: Fecha · **Máquina/Vehículo\*** · Categoría\* · Concepto · Monto · Cuenta. La máquina es **obligatoria** con opción por defecto **"🏢 Gastos Generales / Administración"** = `activo_id` nulo. En `por-maquina` la fila nula se renombró de "SIN ASIGNAR" a "Gastos Generales / Administración".
+2. **Concepto dinámico por subcategoría**: si la categoría es **REPARACION_MANT**, el Concepto pasa a `<input list>` (datalist, elegir de lista **o** escribir libre) con 20 opciones en 6 subcategorías (Cabezal, Trilla/Limpieza, Motor/Eléctrico, Rodaje/Orugas, Hidráulico/Transmisión, Descarga). Otras categorías = texto libre. Constante `REPARACION_SUBCATS` en `CampoModule.tsx`.
+3. **Fondos por rendir / Vales de anticipo**: checkbox en el egreso → `estado='PENDIENTE_RENDICION'`. Nueva sección de menú **📋 Vales** (pendientes/liquidados) con **🧾 Liquidar/Rendir**. Modal de liquidación: al ingresar el **monto real gastado** genera un movimiento de **AJUSTE** (`naturaleza='ajuste_vale'`, hereda cuenta/activo/categoría del vale): **devolución** (entrada) si sobró, **reembolso** (salida) si faltó; marca el vale **LIQUIDADO** y guarda `monto_rendido`.
+4. **Reportes**: `por-maquina` GASTOS **netea `ajuste_vale`** (devolución resta, reembolso suma) → el gasto de la máquina queda en el REAL; INGRESOS salen SOLO de `campo_servicios` (el ajuste **nunca** aparece como ingreso). `saldo-caja` cuenta el ajuste (mueve caja real). Transferencias y abonos sin cambios.
+5. **Backend**: `es_anticipo` en `POST /movimientos` (solo egreso, si no → 400); **`GET /campo/movimientos/vales?estado=`**; **`POST /campo/movimientos/:id/liquidar`** (lock `FOR UPDATE`, 409 si ya liquidado). Migración `20260828_campo_vales_anticipos.sql`: `+ estado, monto_rendido, vale_id` en `campo_movimientos` + índice de pendientes.
+Verificado E2E por API (neto de caja y gasto por-máquina correctos en devolución/reembolso; 400/409 de borde) y en navegador (orden del form, default General, datalist REPARACION_MANT, sección Vales + modal con preview + refresco, chips del libro). BD local limpia tras QA.
+
+Archivos (2k): `backend/src/routes/modules/campo.ts`, `web-admin/src/campo/CampoModule.tsx`; **nuevo**: `database/migrations/20260828_campo_vales_anticipos.sql`.
+
 ## 3. REGLAS DE NEGOCIO (no romper)
 - **Toma de pedido NO mueve dinero ni inventario**; recién al **Despachar** sale stock + entra caja (Contado) o Cuenta por Cobrar (Crédito). Estados DB: `PENDING`/`DELIVERED`/`CANCELLED` (NO renombrar; hay CHECK). El pedido genera su CxC "(pendiente de despacho)" al tomarse; al despachar se salda o se enlaza, nunca se duplica.
 - **Cuentas espejo entre accionistas**: un servicio/cargo de la matriz a un socio crea CxC (CEYRO) + CxP (socio) enlazadas en tablas puente (`pilado_services`, `lot_transfers`, `matriz_service_charges`, `matriz_packaging_charges`). Un abono en una cara debe reflejarse en la otra + caja del otro socio → `backend/src/services/cuentas-vinculadas.ts` (`espejarAbonoEnContraparte`). Saldar una cuenta debe mover caja + espejar, no solo bajar saldo.
@@ -157,6 +168,8 @@ Archivos (2j): `backend/src/routes/modules/campo.ts`, `web-admin/src/campo/Campo
 - **Merma en báscula (nuevo)**: humedad base configurable (`app_settings.humedad_base_pct`, default 13). Desc. humedad = `(H−base)/(100−base)`; 1 QQ = 100 lb; kg→lb ×2.2046. Es **solo cálculo visual** en el ingreso; NO cambia los QQ que se guardan (el ticket conserva su modelo de calificación).
 - **Módulo Caja de Campo (independiente)**: aparte del ERP de piladora — NO comparte tablas ni lógica con túneles/piladora/ventas/fomentos. Tablas `campo_*` (UUID; `created_by` FK a `users`). **Fuente única de saldo = vista `campo_servicios_saldo`** (cobrado/saldo/estado); endpoint de servicios, chequeo de sobrepago y reportes leen de ahí (no recalcular en otro lado). Derivados: saldo cuenta=entradas−salidas; por servicio cobrado=Σ movimientos entrada con ese `servicio_id`, saldo=valor−cobrado, estado=pendiente/abonado/pagado. Valor del servicio: qq+precio→calculado, si no manual. Sobrepago bloqueado (422) con lock. Reportes: cálculo SQL, gastos sin `activo_id` → "SIN ASIGNAR" (cero prorrateo). Router `/campo` (no está en `WRITE_MODULES_BY_PREFIX` → escrituras a cualquier autenticado; admin sin límite). Es una **operación de CEYRO** (selector de arriba), con **contexto aislado** (layout propio, menú `CAMPO_SECCIONES`: Caja·Servicios·Reportes·Configuración). Nombre de la operación **editable** en `campo_config` (solo la etiqueta de Campo lo usa).
 - **Campo — transferencias**: una transferencia entre cuentas = PAR de movimientos (salida origen + entrada destino), `naturaleza='transferencia'` + `par_id` común, en 1 transacción. Regla clave para no descuadrar reportes: las transferencias **NO cuentan como ingreso/egreso real** (los reportes de gasto las excluyen con `naturaleza='operativo'`), pero **SÍ mueven el saldo de cada cuenta** (saldo-caja las incluye; el total neto no cambia porque salida y entrada se cancelan). Los movimientos normales son `naturaleza='operativo'`.
+- **Campo — egreso**: orden estricto de campos (Fecha·Máquina*·Categoría*·Concepto·Monto·Cuenta). La **máquina es obligatoria** con default "🏢 Gastos Generales / Administración" = `activo_id` nulo (esos gastos van a la fila general, antes "SIN ASIGNAR"). Si la categoría es `REPARACION_MANT`, el Concepto es un datalist con opciones por subcategoría (lista o texto libre); otras categorías = texto libre.
+- **Campo — vales / anticipos (fondos por rendir)**: un egreso con checkbox de anticipo se guarda `estado='PENDIENTE_RENDICION'` (sigue siendo `operativo`, cuenta como gasto comprometido de su máquina). Al **liquidar** (rendir) se ingresa lo REAL gastado y se genera un movimiento **`naturaleza='ajuste_vale'`** (hereda cuenta/activo/categoría del vale): devolución=entrada si sobró, reembolso=salida si faltó; el vale pasa a `LIQUIDADO` con `monto_rendido`. Regla clave: **`ajuste_vale` NO es ingreso real** — los ingresos de `por-maquina` salen SOLO de `campo_servicios`; en GASTOS de `por-maquina` el ajuste **se netea** (devolución resta, reembolso suma) → el gasto de la máquina queda en el REAL; `saldo-caja` sí lo cuenta (mueve caja). Todo bajo lock `FOR UPDATE` (409 si ya liquidado; 400 si el anticipo no es egreso).
 
 ## 4. PROBLEMAS PENDIENTES
 - ~~Tarifas de empaque en $0.00~~ **RESUELTO**: 10/25/50 = 0.20/0.22/0.27, editables en UI.
@@ -170,13 +183,16 @@ Archivos (2j): `backend/src/routes/modules/campo.ts`, `web-admin/src/campo/Campo
 - `POST /customers/quick` crea con `customer_type='RETAIL'` (no NATURAL/EMPRESA); el tipo del front es una unión de 2 valores → al editar un cliente RETAIL el select cae a "Natural". Menor; alinear si molesta.
 - Nota de pruebas en vivo: la sesión del navegador in-app se limpia al reabrir el preview; para pruebas por API se puede generar un JWT admin con `signToken` (secreto en `backend/src/config/env.ts`) y llamar `http://localhost:4000/api/v1/...`. La extensión "Claude en Chrome" no está conectada (no se puede manejar el Chrome real del usuario).
 - ~~CAMPO V3 — sin mergear~~ **RESUELTO 2026-08-28**: mergeado a main (`00676f4`), datos de prueba limpiados, `campo_config='Campo'`, rama borrada.
-- **CAMPO Flota/Maquinaria — sin mergear a main**: rama `feat/campo-maquinaria` (1 commit `1b1e394`). Verificado y QA limpio. Falta solo el **OK del usuario → merge FF + push + borrar rama**. Migración `20260828_campo_maquinaria.sql` aplicada en local; en producción correr `db:migrate` al desplegar.
+- ~~CAMPO Flota/Maquinaria — sin mergear~~ **RESUELTO 2026-08-28**: mergeado a main (`1b1e394`), rama borrada.
+- ~~CAMPO Egreso reordenado + Vales — sin mergear~~ **RESUELTO 2026-08-28**: mergeado a main (`b904b4c`), QA limpio, rama borrada.
 - **CAMPO — corte histórico en por-cobrar**: hoy es "a hoy". Un corte a fecha pasada necesitaría filtrar los abonos por fecha (otra consulta); se dejó para después si hace falta.
+- **CAMPO Vales — anticipo pendiente cuenta como gasto comprometido**: mientras el vale NO está liquidado, aparece en `por-maquina` como gasto por su monto entregado (a propósito, es plata que ya salió). Al rendir, el `ajuste_vale` lo netea al real. Si se quisiera EXCLUIR el pendiente del gasto hasta rendir, habría que darle una naturaleza propia y filtrarla (no pedido).
 - **Libro de movimientos — saldo corrido**: es acumulado por orden de fecha sobre el conjunto filtrado por cuenta; sin filtro de cuenta es el saldo combinado de todas. No arranca de un "saldo de apertura" del rango (empieza desde el inicio de los movimientos de esa cuenta). Suficiente por ahora.
 - **Producción destino (a validar por el usuario)**: el pago **por saca** del pilador ahora SÍ suma (antes 0). Si el negocio quería pilador solo por QQ, hay que dejar `sacas=0` en empaque. Confirmar.
 
 ## 5. PRÓXIMO PASO
-**Primero mañana:** cerrar **Flota y Maquinaria** (rama `feat/campo-maquinaria`, commit `1b1e394`, ya funcional y verificada en navegador — CRUD de flota, selector de máquina en egreso y badge en libro). Esperar el **OK del usuario** y luego: **(1)** `git checkout feat/campo-maquinaria` (ya estamos en ella) → **merge FF a `main`** → `git push origin main`; **(2) borrar la rama** `git branch -d feat/campo-maquinaria`. No hay auto-deploy, así que el push no corre migraciones en prod (al desplegar prod: `git pull` + `db:migrate` [incluye `20260828_campo_maquinaria.sql`] + build FE/BE + restart del proceso :4000). Candidatos posteriores de Campo: (a) más secciones del menú (fácil: `CAMPO_SECCIONES` + prop `section`); (b) PDF/export de reportes; (c) corte histórico en por-cobrar; (d) reporte por-máquina que muestre placa/operador. Otros: validar pago-por-saca del pilador (§2g #5); `variedad`/`limite_credito` en fomentos.
+**No hay trabajo a medias.** Flota/Maquinaria (`1b1e394`) y Egreso reordenado + Vales (`b904b4c`) están **mergeados y pusheados a main**; ramas borradas; BD local limpia. **Pendiente de DESPLIEGUE A PRODUCCIÓN (manual):** en el server `git pull` → `cd backend && npm run db:migrate` (corre las migraciones aditivas nuevas: `20260828_campo_maquinaria.sql` y `20260828_campo_vales_anticipos.sql`) → `cd backend && npm run build` + `cd web-admin && npm run build` → reiniciar el proceso de :4000. Sin auto-deploy: producción intacta hasta hacerlo.
+Candidatos siguientes de Campo: (a) más secciones del menú (fácil: `CAMPO_SECCIONES` + prop `section`); (b) PDF/export de reportes; (c) corte histórico en por-cobrar; (d) reporte por-máquina que muestre placa/operador; (e) si se quiere, EXCLUIR el vale pendiente del gasto por-máquina hasta rendir (naturaleza propia). Otros: validar pago-por-saca del pilador (§2g #5); `variedad`/`limite_credito` en fomentos.
 
 ## 6. ARCHIVOS IMPORTANTES
 - `web-admin/src/App.tsx` — TODO el frontend (tabs por `activeTab === "..."`; Config por `configSubTab`; Caja por `cajaSubTab`).
@@ -245,6 +261,7 @@ Archivos (2j): `backend/src/routes/modules/campo.ts`, `web-admin/src/campo/Campo
 - `processing.ts finish-production` + `labor.ts`: transacción de cierre = inventario (PROCESS_OUTPUT) + sacos (según destino) + nómina + servicio de pilado. Delicada: cambiar el destino, los sacos o la XOR de nómina desalinea pagos/stock. Verificar con ROLLBACK antes.
 - **Campo — vista `campo_servicios_saldo` es la fuente única del saldo**: servicios, sobrepago y reportes leen de ahí. Si cambia la fórmula de saldo/estado, se cambia en la VISTA (migración), no en cada endpoint. El sobrepago bloquea con lock (`FOR UPDATE` sobre `campo_servicios`) + lee `saldo_pendiente` de la vista.
 - **Campo — `campo_activos` es ahora el catálogo de maquinaria** (Flota): no crear tablas paralelas `maquinaria`/`movimientos_caja`. La FK máquina↔egreso es `campo_movimientos.activo_id`. El endpoint de edición de activos es **PATCH** `/campo/activos/:id` (no PUT).
+- **Campo — netting de `ajuste_vale` en `por-maquina`**: el reporte por-máquina cuenta como gasto las salidas `operativo` y **netea** los movimientos `ajuste_vale` (entrada resta, salida suma). Depende de que NINGÚN movimiento normal ponga `activo_id` en una entrada (los abonos usan `servicio_id`, no `activo_id`). Si algún flujo nuevo crea entradas con `activo_id` que NO sean rendiciones, revisar el CTE `gas` y el `desglose` de `/reportes/por-maquina` para no restar de más. La liquidación de vales usa lock `FOR UPDATE` sobre el vale.
 
 ---
 
@@ -254,12 +271,12 @@ Archivos (2j): `backend/src/routes/modules/campo.ts`, `web-admin/src/campo/Campo
 ```
 Continuemos el proyecto BASCULA-ERP. Antes de nada, lee SOLO el archivo
 PROJECT_CONTEXT.md (raíz del repo) y NO analices todo el código.
-Contexto rápido: el módulo "Caja de Campo" ya está en main hasta la V3 (captura +
-reportes + operación de CEYRO + contexto aislado + nombre editable + sección Caja
-con ingreso/egreso/transferencia/libro). Lo último trabajado es "Flota y Maquinaria
-(Centros de Costo)": CRUD de flota en Configuración, selector de máquina en el egreso
-y badge en el libro. Está listo y verificado en la rama feat/campo-maquinaria (commit
-1b1e394, NO pusheada). Para seguir: `git checkout feat/campo-maquinaria`.
-El PRÓXIMO PASO (§5) es cerrar esa feature: merge FF a main + push + borrar la rama.
-Recuérdamelo y espera mi confirmación antes de mergear, pushear o aplicar migraciones.
+Contexto rápido: el módulo "Caja de Campo" ya está TODO en main y pusheado: V1
+captura + V2 reportes + operación de CEYRO + contexto aislado + V3 (nombre editable
++ Caja ingreso/egreso/transferencia/libro) + Flota/Maquinaria (CRUD de flota,
+selector de máquina en egreso, badge en libro) + Egreso reordenado + Vales/Anticipos
+(estado + ajuste_vale al rendir). No hay trabajo a medias ni ramas abiertas.
+El único PENDIENTE (§5) es DESPLEGAR A PRODUCCIÓN a mano cuando el usuario quiera:
+git pull → cd backend && npm run db:migrate (migraciones aditivas 20260828_campo_*) →
+build FE+BE → reiniciar :4000. Sin auto-deploy. Pregúntame qué sigue.
 ```
