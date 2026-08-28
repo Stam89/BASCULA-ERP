@@ -278,8 +278,16 @@ campoRouter.post("/movimientos", asyncRoute(async (req, res) => {
     concepto: z.string().max(400).optional(),
     categoria_id: z.string().uuid().nullable().optional(),
     activo_id: z.string().uuid().nullable().optional(),
-    servicio_id: z.string().uuid().nullable().optional()
+    servicio_id: z.string().uuid().nullable().optional(),
+    // Fondos por rendir: marca el egreso como anticipo pendiente de rendición.
+    es_anticipo: z.boolean().optional()
   }).parse(req.body);
+
+  // Un anticipo (vale por rendir) es SIEMPRE un egreso suelto (no un abono).
+  if (body.es_anticipo && (body.signo !== "salida" || body.servicio_id)) {
+    throw new ApiError(400, "Un anticipo por rendir debe ser un egreso (salida), no un abono de servicio.");
+  }
+  const estado = body.es_anticipo ? "PENDIENTE_RENDICION" : null;
 
   const cta = await pool.query("SELECT 1 FROM campo_cuentas WHERE id = $1", [body.cuenta_id]);
   if (!cta.rowCount) throw new ApiError(404, "Cuenta no encontrada");
@@ -293,11 +301,11 @@ campoRouter.post("/movimientos", asyncRoute(async (req, res) => {
   // (422). El FOR UPDATE evita la carrera de dos abonos simultáneos que juntos
   // superarían el saldo. Un movimiento suelto (sin servicio) no necesita lock.
   const insert = async (client: { query: typeof pool.query }) => (await client.query(
-    `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, categoria_id, activo_id, servicio_id, created_by)
-     VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, $9)
+    `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, categoria_id, activo_id, servicio_id, estado, created_by)
+     VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING *`,
     [body.fecha ?? null, body.cuenta_id, body.signo, body.monto, body.concepto?.trim() || null,
-     body.categoria_id ?? null, body.activo_id ?? null, body.servicio_id ?? null, userId(req)]
+     body.categoria_id ?? null, body.activo_id ?? null, body.servicio_id ?? null, estado, userId(req)]
   )).rows[0];
 
   if (!body.servicio_id) {
@@ -320,6 +328,87 @@ campoRouter.post("/movimientos", asyncRoute(async (req, res) => {
     return insert(client);
   });
   res.status(201).json(row);
+}));
+
+// ── Fondos por rendir / Vales de anticipo ────────────────────────────────────
+// Un vale es un egreso con estado 'PENDIENTE_RENDICION'. Al liquidarlo se compara
+// lo entregado (monto del vale) con lo realmente gastado y se genera un ajuste.
+const VALE_SELECT = `
+  m.id, m.fecha, m.monto::float AS entregado, m.monto_rendido::float AS monto_rendido,
+  m.concepto, m.estado, m.cuenta_id, c.nombre AS cuenta_nombre,
+  m.categoria_id, cat.nombre AS categoria_nombre, m.activo_id, a.nombre AS activo_nombre
+  FROM campo_movimientos m
+  JOIN campo_cuentas c ON c.id = m.cuenta_id
+  LEFT JOIN campo_categorias_gasto cat ON cat.id = m.categoria_id
+  LEFT JOIN campo_activos a ON a.id = m.activo_id
+  WHERE m.signo = 'salida' AND m.estado IN ('PENDIENTE_RENDICION', 'LIQUIDADO')`;
+
+campoRouter.get("/movimientos/vales", asyncRoute(async (req, res) => {
+  const q = z.object({ estado: z.enum(["PENDIENTE_RENDICION", "LIQUIDADO"]).optional() }).parse(req.query);
+  const params: unknown[] = [];
+  const cond = q.estado ? ` AND m.estado = $${(params.push(q.estado), params.length)}` : "";
+  const rows = (await pool.query(
+    `SELECT ${VALE_SELECT}${cond} ORDER BY (m.estado = 'PENDIENTE_RENDICION') DESC, m.fecha DESC, m.created_at DESC LIMIT 500`,
+    params
+  )).rows;
+  res.json(rows);
+}));
+
+// Liquidar (rendir) un vale: se ingresa el monto REALMENTE gastado. Todo en una
+// transacción con lock sobre el vale (evita doble rendición). El ajuste hereda
+// cuenta/activo/categoría del vale para que la caja y el reporte por-máquina
+// queden en el gasto REAL (ver netting de 'ajuste_vale' en /reportes/por-maquina).
+campoRouter.post("/movimientos/:id/liquidar", asyncRoute(async (req, res) => {
+  const body = z.object({
+    monto_real: z.number().nonnegative(),
+    fecha: fechaSchema.optional()
+  }).parse(req.body);
+
+  const result = await inTransaction(async (client) => {
+    const vale = (await client.query(
+      "SELECT * FROM campo_movimientos WHERE id = $1 AND signo = 'salida' FOR UPDATE",
+      [req.params.id]
+    )).rows[0];
+    if (!vale) throw new ApiError(404, "Vale no encontrado");
+    if (vale.estado !== "PENDIENTE_RENDICION") {
+      throw new ApiError(409, "Este movimiento no es un vale pendiente de rendición.");
+    }
+    const entregado = Number(vale.monto);
+    const real = body.monto_real;
+    const diff = Math.round((entregado - real) * 100) / 100; // >0 = devuelve; <0 = reembolso
+
+    let ajuste = null;
+    if (Math.abs(diff) > 0.005) {
+      const esDevolucion = diff > 0;                    // gastó menos → entra dinero
+      const signo = esDevolucion ? "entrada" : "salida";
+      const monto = Math.abs(diff);
+      const concepto = esDevolucion
+        ? `Devolución de saldo de vale${vale.concepto ? ` · ${vale.concepto}` : ""}`
+        : `Reembolso adicional de vale${vale.concepto ? ` · ${vale.concepto}` : ""}`;
+      ajuste = (await client.query(
+        `INSERT INTO campo_movimientos
+           (fecha, cuenta_id, signo, monto, concepto, categoria_id, activo_id, naturaleza, vale_id, created_by)
+         VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, 'ajuste_vale', $8, $9)
+         RETURNING *`,
+        [body.fecha ?? null, vale.cuenta_id, signo, monto, concepto,
+         vale.categoria_id, vale.activo_id, vale.id, userId(req)]
+      )).rows[0];
+    }
+
+    const upd = (await client.query(
+      "UPDATE campo_movimientos SET estado = 'LIQUIDADO', monto_rendido = $2 WHERE id = $1 RETURNING *",
+      [vale.id, real]
+    )).rows[0];
+
+    return {
+      vale: upd,
+      entregado, monto_real: real,
+      devolucion: diff > 0 ? diff : 0,
+      reembolso: diff < 0 ? -diff : 0,
+      ajuste
+    };
+  });
+  res.status(201).json(result);
 }));
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -434,9 +523,15 @@ campoRouter.get("/reportes/por-maquina", asyncRoute(async (req, res) => {
        SELECT activo_id, SUM(valor) AS v
        FROM campo_servicios WHERE fecha BETWEEN $1 AND $2 GROUP BY activo_id
      ), gas AS (
-       -- Las TRANSFERENCIAS no son gasto real: se excluyen (naturaleza operativo).
-       SELECT activo_id, SUM(monto) AS g
-       FROM campo_movimientos WHERE signo = 'salida' AND naturaleza = 'operativo' AND fecha BETWEEN $1 AND $2 GROUP BY activo_id
+       -- Gasto REAL por activo. Las TRANSFERENCIAS se excluyen. Los AJUSTES de
+       -- vale (naturaleza 'ajuste_vale') netean: la devolución (entrada) baja el
+       -- gasto y el reembolso (salida) lo sube. Los abonos (operativo/entrada)
+       -- no son gasto.
+       SELECT activo_id, SUM(CASE WHEN signo = 'salida' THEN monto ELSE -monto END) AS g
+       FROM campo_movimientos
+       WHERE fecha BETWEEN $1 AND $2
+         AND ((naturaleza = 'operativo' AND signo = 'salida') OR naturaleza = 'ajuste_vale')
+       GROUP BY activo_id
      )
      SELECT COALESCE(ing.activo_id, gas.activo_id) AS activo_id,
             a.nombre AS activo_nombre, a.tipo AS activo_tipo,
@@ -451,10 +546,12 @@ campoRouter.get("/reportes/por-maquina", asyncRoute(async (req, res) => {
 
   // Desglose de gastos por categoría y activo (incluye activo_id NULL = SIN ASIGNAR).
   const desglose = (await pool.query(
-    `SELECT m.activo_id, COALESCE(cat.nombre, 'SIN CATEGORÍA') AS categoria, SUM(m.monto)::float AS gasto
+    `SELECT m.activo_id, COALESCE(cat.nombre, 'SIN CATEGORÍA') AS categoria,
+            SUM(CASE WHEN m.signo = 'salida' THEN m.monto ELSE -m.monto END)::float AS gasto
      FROM campo_movimientos m
      LEFT JOIN campo_categorias_gasto cat ON cat.id = m.categoria_id
-     WHERE m.signo = 'salida' AND m.naturaleza = 'operativo' AND m.fecha BETWEEN $1 AND $2
+     WHERE m.fecha BETWEEN $1 AND $2
+       AND ((m.naturaleza = 'operativo' AND m.signo = 'salida') OR m.naturaleza = 'ajuste_vale')
      GROUP BY m.activo_id, cat.nombre`,
     [desde, hasta]
   )).rows;
@@ -468,7 +565,7 @@ campoRouter.get("/reportes/por-maquina", asyncRoute(async (req, res) => {
   }
   const maquinas = filas.map((f) => ({
     activo_id: f.activo_id,
-    activo_nombre: f.activo_id ? f.activo_nombre : "SIN ASIGNAR",
+    activo_nombre: f.activo_id ? f.activo_nombre : "Gastos Generales / Administración",
     activo_tipo: f.activo_tipo ?? null,
     ingresos: f.ingresos,
     gastos: f.gastos,
@@ -564,7 +661,7 @@ campoRouter.get("/caja/libro", asyncRoute(async (req, res) => {
   const rows = (await pool.query(
     `WITH libro AS (
        SELECT m.id, m.fecha, m.created_at, m.cuenta_id, m.signo, m.monto, m.concepto,
-              m.categoria_id, m.naturaleza, m.par_id,
+              m.categoria_id, m.naturaleza, m.par_id, m.estado,
               c.nombre AS cuenta_nombre, cat.nombre AS categoria_nombre, a.nombre AS activo_nombre,
               SUM(CASE WHEN m.signo = 'entrada' THEN m.monto ELSE -m.monto END)
                 OVER (ORDER BY m.fecha, m.created_at ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS saldo_corrido
@@ -575,7 +672,7 @@ campoRouter.get("/caja/libro", asyncRoute(async (req, res) => {
        ${cuentaCond}
      )
      SELECT l.id, l.fecha, l.cuenta_id, l.signo, l.monto::float AS monto, l.concepto,
-            l.categoria_id, l.naturaleza, l.par_id,
+            l.categoria_id, l.naturaleza, l.par_id, l.estado,
             l.cuenta_nombre, l.categoria_nombre, l.activo_nombre,
             l.saldo_corrido::float AS saldo_corrido,
             (CASE WHEN l.signo = 'entrada' THEN l.monto ELSE 0 END)::float AS entrada,

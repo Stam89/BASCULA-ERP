@@ -18,6 +18,7 @@ import { money } from "../format";
 const CAMPO_SECCIONES: Array<{ id: CampoSeccion; label: string; icon: string }> = [
   { id: "caja", label: "Caja", icon: "💰" },
   { id: "servicios", label: "Servicios", icon: "🚜" },
+  { id: "vales", label: "Vales", icon: "📋" },
   { id: "reportes", label: "Reportes", icon: "📊" },
   { id: "config", label: "Configuración", icon: "⚙️" }
 ];
@@ -44,7 +45,47 @@ type Servicio = {
 const hoy = () => new Date().toISOString().slice(0, 10);
 // Secciones del menú propio de Campo (contexto aislado). Se amplía agregando
 // entradas aquí y en CAMPO_SECCIONES (ver CampoWorkspace).
-export type CampoSeccion = "caja" | "servicios" | "reportes" | "config";
+export type CampoSeccion = "caja" | "servicios" | "vales" | "reportes" | "config";
+
+// Concepto sugerido para egresos de REPARACION_MANT (autocompletado por
+// subcategoría). El usuario puede elegir de la lista o escribir un texto libre.
+const REPARACION_SUBCATS: Array<{ grupo: string; items: string[] }> = [
+  { grupo: "Cabezal y Alimentación", items: [
+    "Reemplazo de cuchillas y puntones", "Reparación de púas o barras del molinete",
+    "Mantenimiento de sinfín de alimentación", "Cambio de cadenas y paletas del acarreador"
+  ] },
+  { grupo: "Sistema de Trilla y Limpieza", items: [
+    "Cambio de muelas o dientes del rotor", "Reparación de cóncavo (rejilla) o zarandas",
+    "Reemplazo de correas y poleas del ventilador", "Mantenimiento de cadenas y cangilones de elevadores"
+  ] },
+  { grupo: "Motor y Eléctrico", items: [
+    "Cambio de filtros (aceite, combustible, aire)", "Reparación de inyectores o bomba de combustible",
+    "Mantenimiento de radiador y mangueras", "Cambio de batería o reparación de alternador/arranque"
+  ] },
+  { grupo: "Tren de Rodaje (Orugas)", items: [
+    "Reemplazo o reparación de orugas de goma", "Cambio de rodillos (inferiores o superiores)",
+    "Mantenimiento de rueda tensora o catalina (motriz)"
+  ] },
+  { grupo: "Hidráulico y Transmisión", items: [
+    "Reparación de bomba hidrostática (HST)", "Cambio de mangueras, acoples o sellos (O-rings) por fugas",
+    "Reemplazo de bandas/correas de transmisión"
+  ] },
+  { grupo: "Sistema de Descarga", items: [
+    "Reparación del mecanismo del tubo de descarga", "Cambio del sinfín interno de descarga"
+  ] }
+];
+const REPARACION_MANT = "REPARACION_MANT"; // nombre de la categoría gatillo (semilla)
+
+// Opción por defecto del selector de máquina en el egreso: gasto general/admin
+// (se guarda como activo_id nulo → fila "Gastos Generales / Administración").
+const ACTIVO_GENERAL = "GENERAL";
+
+// Vale / anticipo por rendir (egreso con estado). entregado = monto del vale.
+type Vale = {
+  id: string; fecha: string; entregado: number; monto_rendido: number | null;
+  concepto: string | null; estado: "PENDIENTE_RENDICION" | "LIQUIDADO";
+  cuenta_nombre: string; categoria_nombre: string | null; activo_nombre: string | null;
+};
 
 // ── Tipos de los reportes (V2) ───────────────────────────────────────────────
 type SaldoCaja = { corte: string; cuentas: Array<{ id: string; nombre: string; saldo: number }>; total: number };
@@ -144,6 +185,15 @@ export default function CampoModule({ section = "caja", nombre, onNombreChange }
             <p className="muted" style={{ margin: 0 }}>No hay maquinaria activa. Da de alta cosechadoras/vehículos en <strong>⚙️ Configuración → 🚜 Flota y Maquinaria</strong> antes de registrar servicios.</p>
           </div>
         )}
+      </section>
+    );
+  }
+
+  if (section === "vales") {
+    return (
+      <section className="panelGrid">
+        {flashEl}
+        <ValesPanel onLiquidated={() => onCajaSaved("Vale liquidado")} onError={(m) => notify(m, "err")} />
       </section>
     );
   }
@@ -465,57 +515,227 @@ function IngresoForm({ cuentas, pendientes, onSaved, onError }: {
   );
 }
 
-// － EGRESO: salida de una cuenta. Categoría OBLIGATORIA; activo opcional.
+// － EGRESO: salida de una cuenta. Orden estricto de campos (ver requisito):
+// Fecha · Máquina/Vehículo* · Categoría* · Concepto · Monto · Cuenta. La máquina
+// es OBLIGATORIA (por defecto "🏢 Gastos Generales / Administración" = sin activo).
+// Si la categoría es REPARACION_MANT, el Concepto pasa a autocompletado por
+// subcategoría (elegir de lista o escribir libre). Un checkbox lo marca como
+// anticipo (fondo por rendir) → se guarda pendiente de rendición.
 function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
   cuentas: Cuenta[]; categorias: Categoria[]; activos: Activo[]; onSaved: OnSaved; onError: (m: string) => void;
 }) {
-  const [f, setF] = useState({ fecha: hoy(), cuenta_id: "", monto: "", concepto: "", categoria_id: "", activo_id: "" });
+  const [f, setF] = useState({
+    fecha: hoy(), activo_sel: ACTIVO_GENERAL, categoria_id: "", concepto: "", monto: "", cuenta_id: "", es_anticipo: false
+  });
   const [busy, setBusy] = useState(false);
+  const catNombre = categorias.find((c) => c.id === f.categoria_id)?.nombre ?? "";
+  const esReparacion = catNombre === REPARACION_MANT;
+
   async function submit() {
     try {
       setBusy(true);
-      if (!f.cuenta_id) throw new Error("Elige la cuenta");
+      if (!f.activo_sel) throw new Error("Elige la máquina/vehículo o Gastos Generales");
       if (!f.categoria_id) throw new Error("La categoría del gasto es obligatoria");
+      if (!f.cuenta_id) throw new Error("Elige la cuenta");
       const monto = Number(f.monto);
       if (!(monto > 0)) throw new Error("Ingresa un monto válido");
       await apiPost("/campo/movimientos", {
         fecha: f.fecha, cuenta_id: f.cuenta_id, signo: "salida", monto,
-        concepto: f.concepto.trim() || undefined, categoria_id: f.categoria_id, activo_id: f.activo_id || undefined
+        concepto: f.concepto.trim() || undefined, categoria_id: f.categoria_id,
+        activo_id: f.activo_sel === ACTIVO_GENERAL ? undefined : f.activo_sel,
+        es_anticipo: f.es_anticipo || undefined
       });
-      setF({ ...f, monto: "", concepto: "", categoria_id: "", activo_id: "" });
+      setF({ ...f, concepto: "", monto: "", categoria_id: "", es_anticipo: false });
       await onSaved();
     } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
   }
+  const req = <span style={{ color: "#ef4444" }}>*</span>;
   return (
     <form className="formPanel" onSubmit={(e) => { e.preventDefault(); submit(); }}>
       <h2>－ Nuevo egreso (gasto)</h2>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <label><span>Fecha</span><input type="date" value={f.fecha} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
-        <label><span>Cuenta (sale de)</span>
-          <select value={f.cuenta_id} onChange={(e) => setF({ ...f, cuenta_id: e.target.value })}>
-            <option value="">Seleccione</option>
-            {cuentas.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-          </select>
-        </label>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <label><span>Monto $</span><input type="number" step="0.01" min="0" value={f.monto} onChange={(e) => setF({ ...f, monto: e.target.value })} placeholder="0.00" /></label>
-        <label><span>Categoría <span style={{ color: "#ef4444" }}>*</span></span>
-          <select value={f.categoria_id} onChange={(e) => setF({ ...f, categoria_id: e.target.value })}>
-            <option value="">Seleccione</option>
-            {categorias.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-          </select>
-        </label>
-      </div>
-      <label><span>Concepto</span><input type="text" value={f.concepto} onChange={(e) => setF({ ...f, concepto: e.target.value })} placeholder="Ej: Diésel cosechadora" /></label>
-      <label><span>Asignar a Máquina / Vehículo (Opcional)</span>
-        <select value={f.activo_id} onChange={(e) => setF({ ...f, activo_id: e.target.value })}>
-          <option value="">(ninguna — irá a “SIN ASIGNAR”)</option>
+      {/* 1 · Fecha */}
+      <label><span>Fecha</span><input type="date" value={f.fecha} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
+      {/* 2 · Máquina / Vehículo (obligatorio, default = Gastos Generales) */}
+      <label><span>Asignar a Máquina / Vehículo {req}</span>
+        <select value={f.activo_sel} onChange={(e) => setF({ ...f, activo_sel: e.target.value })}>
+          <option value={ACTIVO_GENERAL}>🏢 Gastos Generales / Administración</option>
           {activos.map((a) => <option key={a.id} value={a.id}>{a.nombre} · {tipoLabel(a.tipo)}{a.placa_codigo ? ` · ${a.placa_codigo}` : ""}</option>)}
         </select>
       </label>
-      <button className="primary" disabled={busy}>{busy ? "Guardando…" : "Registrar egreso"}</button>
+      {/* 3 · Categoría (obligatoria) */}
+      <label><span>Categoría {req}</span>
+        <select value={f.categoria_id} onChange={(e) => setF({ ...f, categoria_id: e.target.value })}>
+          <option value="">Seleccione</option>
+          {categorias.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+        </select>
+      </label>
+      {/* 4 · Concepto (autocompletado por subcategoría si es REPARACION_MANT) */}
+      <label><span>Concepto{esReparacion ? " · elige de la lista o escribe" : ""}</span>
+        {esReparacion ? (
+          <>
+            <input type="text" list="egreso-reparacion-mant" value={f.concepto}
+              onChange={(e) => setF({ ...f, concepto: e.target.value })}
+              placeholder="Ej: Cambio de filtros (aceite, combustible, aire)" />
+            <datalist id="egreso-reparacion-mant">
+              {REPARACION_SUBCATS.flatMap((g) => g.items.map((it) => (
+                <option key={it} value={it} label={g.grupo} />
+              )))}
+            </datalist>
+          </>
+        ) : (
+          <input type="text" value={f.concepto} onChange={(e) => setF({ ...f, concepto: e.target.value })} placeholder="Ej: Diésel cosechadora" />
+        )}
+      </label>
+      {/* 5 · Monto */}
+      <label><span>Monto $</span><input type="number" step="0.01" min="0" value={f.monto} onChange={(e) => setF({ ...f, monto: e.target.value })} placeholder="0.00" /></label>
+      {/* 6 · Cuenta */}
+      <label><span>Cuenta (sale de) {req}</span>
+        <select value={f.cuenta_id} onChange={(e) => setF({ ...f, cuenta_id: e.target.value })}>
+          <option value="">Seleccione</option>
+          {cuentas.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+        </select>
+      </label>
+      {/* Fondos por rendir (vale de anticipo) */}
+      <label style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 8, cursor: "pointer" }}>
+        <input type="checkbox" checked={f.es_anticipo} onChange={(e) => setF({ ...f, es_anticipo: e.target.checked })} style={{ width: "auto" }} />
+        <span style={{ margin: 0 }}>Marca si es dinero entregado por rendir (Anticipo)</span>
+      </label>
+      {f.es_anticipo && <p className="muted" style={{ marginTop: -4, fontSize: 12 }}>Se guardará como <strong>vale pendiente</strong>. Podrás liquidarlo en 📋 Vales / Anticipos.</p>}
+      <button className="primary" disabled={busy}>{busy ? "Guardando…" : f.es_anticipo ? "Registrar anticipo" : "Registrar egreso"}</button>
     </form>
+  );
+}
+
+// ── 📋 Vales / Anticipos: fondos por rendir ──────────────────────────────────
+// Lista los egresos marcados como anticipo. Los PENDIENTES se pueden liquidar
+// (rendir): se ingresa lo realmente gastado y el backend genera el ajuste de
+// caja (devolución si sobró, reembolso si faltó) y marca el vale como liquidado.
+function ValesPanel({ onLiquidated, onError }: {
+  onLiquidated: () => void | Promise<void>; onError: (m: string) => void;
+}) {
+  const [vista, setVista] = useState<"PENDIENTE_RENDICION" | "LIQUIDADO">("PENDIENTE_RENDICION");
+  const [vales, setVales] = useState<Vale[]>([]);
+  const [liquidando, setLiquidando] = useState<Vale | null>(null);
+
+  const cargar = useCallback(async () => {
+    try { setVales(await apiGet<Vale[]>(`/campo/movimientos/vales?estado=${vista}`)); }
+    catch (e) { onError((e as Error).message); }
+  }, [vista, onError]);
+  useEffect(() => { cargar(); }, [cargar]);
+
+  const pend = vista === "PENDIENTE_RENDICION";
+  const totalPend = useMemo(() => vales.reduce((s, v) => s + v.entregado, 0), [vales]);
+
+  return (
+    <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <h2 style={{ margin: 0 }}>📋 Vales / Anticipos <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· fondos por rendir</span></h2>
+        <nav className="cajaSubNav" style={{ borderBottom: "none", marginLeft: "auto" }}>
+          <button type="button" className={pend ? "active" : ""} onClick={() => setVista("PENDIENTE_RENDICION")}>⏳ Pendientes</button>
+          <button type="button" className={!pend ? "active" : ""} onClick={() => setVista("LIQUIDADO")}>✅ Liquidados</button>
+        </nav>
+      </div>
+      {pend && vales.length > 0 && (
+        <div className="totalBox" style={{ minWidth: 180, margin: "8px 0", background: "#fef3c7", borderColor: "#fde68a" }}>
+          <span>TOTAL POR RENDIR</span>
+          <strong style={{ color: "#b45309" }}>{money(totalPend)}</strong>
+          <small>{vales.length} vale(s)</small>
+        </div>
+      )}
+      <div style={{ overflowX: "auto" }}>
+        <table className="cajaTable" style={{ marginTop: 6 }}>
+          <thead><tr>
+            <th>Fecha</th><th>Máquina / Destino</th><th>Categoría</th><th>Concepto</th>
+            <th className="num">Entregado</th>{!pend && <th className="num">Rendido</th>}<th>Cuenta</th><th />
+          </tr></thead>
+          <tbody>
+            {vales.length === 0 ? (
+              <tr><td colSpan={pend ? 7 : 8} className="muted" style={{ textAlign: "center", padding: 14 }}>
+                {pend ? "No hay vales pendientes de rendición." : "No hay vales liquidados."}
+              </td></tr>
+            ) : vales.map((v) => (
+              <tr key={v.id}>
+                <td style={{ whiteSpace: "nowrap" }}>{String(v.fecha).slice(0, 10)}</td>
+                <td>{v.activo_nombre || "🏢 Gastos Generales"}</td>
+                <td>{v.categoria_nombre || "—"}</td>
+                <td>{v.concepto || "—"}</td>
+                <td className="num" style={{ fontWeight: 700 }}>{money(v.entregado)}</td>
+                {!pend && <td className="num">{v.monto_rendido != null ? money(v.monto_rendido) : "—"}</td>}
+                <td>{v.cuenta_nombre}</td>
+                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                  {pend
+                    ? <button type="button" className="primary" onClick={() => setLiquidando(v)}>🧾 Liquidar / Rendir</button>
+                    : <span className="chip ok">Liquidado</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {liquidando && (
+        <LiquidarValeModal vale={liquidando}
+          onClose={() => setLiquidando(null)}
+          onDone={async () => { setLiquidando(null); await cargar(); await onLiquidated(); }}
+          onError={onError} />
+      )}
+    </div>
+  );
+}
+
+// Modal de liquidación: ingresa el monto REAL gastado y muestra el ajuste que se
+// hará (devolución si sobró, reembolso si faltó). Confirma → liquida en backend.
+function LiquidarValeModal({ vale, onClose, onDone, onError }: {
+  vale: Vale; onClose: () => void; onDone: () => void | Promise<void>; onError: (m: string) => void;
+}) {
+  const [montoReal, setMontoReal] = useState("");
+  const [fecha, setFecha] = useState(hoy());
+  const [busy, setBusy] = useState(false);
+  const real = Number(montoReal);
+  const valido = montoReal !== "" && real >= 0;
+  const diff = valido ? Math.round((vale.entregado - real) * 100) / 100 : 0;
+
+  async function submit() {
+    try {
+      setBusy(true);
+      if (!valido) throw new Error("Ingresa el monto realmente gastado (0 o más)");
+      await apiPost(`/campo/movimientos/${vale.id}/liquidar`, { monto_real: real, fecha });
+      await onDone();
+    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <form className="formPanel" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submit(); }}
+        style={{ maxWidth: 460, width: "100%", margin: 0 }}>
+        <h2 style={{ marginTop: 0 }}>🧾 Liquidar vale / rendición</h2>
+        <div className="totalBox" style={{ margin: "0 0 6px" }}>
+          <span>ENTREGADO (por rendir)</span>
+          <strong>{money(vale.entregado)}</strong>
+          <small>{vale.activo_nombre || "🏢 Gastos Generales"}{vale.concepto ? ` · ${vale.concepto}` : ""}</small>
+        </div>
+        <label><span>Monto real gastado $</span>
+          <input type="number" step="0.01" min="0" autoFocus value={montoReal}
+            onChange={(e) => setMontoReal(e.target.value)} placeholder="0.00" />
+        </label>
+        <label><span>Fecha de la rendición</span><input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} /></label>
+        {valido && Math.abs(diff) > 0.005 && (
+          <p style={{ margin: "2px 0 4px", padding: "8px 12px", borderRadius: 8, fontWeight: 600,
+            background: diff > 0 ? "var(--c-success-bg)" : "var(--c-danger-bg)",
+            color: diff > 0 ? "#15803d" : "#b91c1c" }}>
+            {diff > 0
+              ? <>Sobró: se creará un <strong>Ingreso a caja</strong> por la devolución de {money(diff)}.</>
+              : <>Faltó: se creará un <strong>Egreso adicional</strong> (reembolso) por {money(-diff)}.</>}
+          </p>
+        )}
+        {valido && Math.abs(diff) <= 0.005 && (
+          <p className="muted" style={{ marginTop: 2, fontSize: 12 }}>Gastó exactamente lo entregado: no habrá devolución ni reembolso.</p>
+        )}
+        <div className="buttonRow">
+          <button type="submit" className="primary" disabled={busy || !valido}>{busy ? "Liquidando…" : "Confirmar rendición"}</button>
+          <button type="button" onClick={onClose} disabled={busy}>Cancelar</button>
+        </div>
+      </form>
+    </div>
   );
 }
 
@@ -570,7 +790,7 @@ function TransferenciaForm({ cuentas, onSaved, onError }: {
 }
 
 // LIBRO DE MOVIMIENTOS con SALDO CORRIDO. Filtros por cuenta y rango de fecha.
-type LibroRow = { id: string; fecha: string; concepto: string | null; cuenta_nombre: string; categoria_nombre: string | null; activo_nombre: string | null; naturaleza: string; entrada: number; salida: number; saldo_corrido: number };
+type LibroRow = { id: string; fecha: string; concepto: string | null; cuenta_nombre: string; categoria_nombre: string | null; activo_nombre: string | null; naturaleza: string; estado: string | null; entrada: number; salida: number; saldo_corrido: number };
 function LibroView({ cuentas, version, onError }: { cuentas: Cuenta[]; version: number; onError: (m: string) => void }) {
   const [filtro, setFiltro] = useState({ cuenta_id: "", from: "", to: "" });
   const [rows, setRows] = useState<LibroRow[]>([]);
@@ -613,6 +833,9 @@ function LibroView({ cuentas, version, onError }: { cuentas: Cuenta[]; version: 
                   {r.concepto || "—"}
                   {r.activo_nombre ? <span className="chip" style={{ marginLeft: 6, background: "#065f46", color: "#fff" }}>🚜 {r.activo_nombre}</span> : null}
                   {r.naturaleza === "transferencia" ? <span className="chip info" style={{ marginLeft: 6 }}>transfer.</span> : null}
+                  {r.naturaleza === "ajuste_vale" ? <span className="chip info" style={{ marginLeft: 6 }}>ajuste vale</span> : null}
+                  {r.estado === "PENDIENTE_RENDICION" ? <span className="chip warn" style={{ marginLeft: 6 }}>📋 por rendir</span> : null}
+                  {r.estado === "LIQUIDADO" ? <span className="chip ok" style={{ marginLeft: 6 }}>vale liquidado</span> : null}
                 </td>
                 <td>{r.categoria_nombre || "—"}</td>
                 <td>{r.cuenta_nombre}</td>
