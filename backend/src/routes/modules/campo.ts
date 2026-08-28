@@ -17,12 +17,15 @@ const userId = (req: unknown): string | null =>
 
 const fechaSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
-// ── Catálogo: activos (cosechadora / transporte) ─────────────────────────────
+// ── Catálogo: maquinaria/flota (activos: cosechadora/camión/vehículo/otro) ────
+// La FK "maquinaria_id" es campo_movimientos.activo_id → campo_activos.
+const TIPO_MAQUINARIA = ["cosechadora", "camion", "vehiculo", "transporte", "otro"] as const;
+
 campoRouter.get("/activos", asyncRoute(async (req, res) => {
   const q = z.object({ solo_activos: z.enum(["1", "0"]).optional() }).parse(req.query);
   const where = q.solo_activos === "1" ? "WHERE activo = true" : "";
   const result = await pool.query(
-    `SELECT id, nombre, tipo, operador, activo, created_at
+    `SELECT id, nombre, tipo, placa_codigo, operador, activo, created_at
      FROM campo_activos ${where} ORDER BY activo DESC, nombre`
   );
   res.json(result.rows);
@@ -31,15 +34,16 @@ campoRouter.get("/activos", asyncRoute(async (req, res) => {
 campoRouter.post("/activos", asyncRoute(async (req, res) => {
   const body = z.object({
     nombre: z.string().min(2).max(140),
-    tipo: z.enum(["cosechadora", "transporte"]),
+    tipo: z.enum(TIPO_MAQUINARIA),
+    placa_codigo: z.string().max(40).optional(),
     operador: z.string().max(140).optional(),
     activo: z.boolean().optional()
   }).parse(req.body);
   const result = await pool.query(
-    `INSERT INTO campo_activos (nombre, tipo, operador, activo)
-     VALUES ($1, $2, $3, COALESCE($4, true))
+    `INSERT INTO campo_activos (nombre, tipo, placa_codigo, operador, activo)
+     VALUES ($1, $2, $3, $4, COALESCE($5, true))
      RETURNING *`,
-    [body.nombre.trim(), body.tipo, body.operador?.trim() || null, body.activo ?? null]
+    [body.nombre.trim(), body.tipo, body.placa_codigo?.trim() || null, body.operador?.trim() || null, body.activo ?? null]
   );
   res.status(201).json(result.rows[0]);
 }));
@@ -47,14 +51,15 @@ campoRouter.post("/activos", asyncRoute(async (req, res) => {
 campoRouter.patch("/activos/:id", asyncRoute(async (req, res) => {
   const body = z.object({
     nombre: z.string().min(2).max(140).optional(),
-    tipo: z.enum(["cosechadora", "transporte"]).optional(),
+    tipo: z.enum(TIPO_MAQUINARIA).optional(),
+    placa_codigo: z.string().max(40).nullable().optional(),
     operador: z.string().max(140).nullable().optional(),
     activo: z.boolean().optional()
   }).parse(req.body);
   const fields: string[] = [];
   const values: unknown[] = [];
   let i = 1;
-  for (const k of ["nombre", "tipo", "operador", "activo"] as const) {
+  for (const k of ["nombre", "tipo", "placa_codigo", "operador", "activo"] as const) {
     if (body[k] !== undefined) { fields.push(`${k} = $${i++}`); values.push(body[k]); }
   }
   if (fields.length === 0) throw new ApiError(400, "Sin cambios");
@@ -63,7 +68,7 @@ campoRouter.patch("/activos/:id", asyncRoute(async (req, res) => {
     `UPDATE campo_activos SET ${fields.join(", ")} WHERE id = $${i} RETURNING *`,
     values
   );
-  if (!result.rows[0]) throw new ApiError(404, "Activo no encontrado");
+  if (!result.rows[0]) throw new ApiError(404, "Maquinaria no encontrada");
   res.json(result.rows[0]);
 }));
 

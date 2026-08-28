@@ -4,7 +4,13 @@
 // con una entrada de sidebar y un único render.
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { apiGet, apiPost, apiPut } from "../api";
+import { apiFetch, apiGet, apiPost, apiPut } from "../api";
+
+// PATCH a la maquinaria (campo_activos): el endpoint es PATCH (no PUT).
+async function patchMaquina(id: string, body: unknown): Promise<void> {
+  const r = await apiFetch(`/campo/activos/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error || "No se pudo actualizar la maquinaria");
+}
 import { money } from "../format";
 
 // Menú propio de la operación Campo (contexto aislado). Para agregar secciones
@@ -16,7 +22,16 @@ const CAMPO_SECCIONES: Array<{ id: CampoSeccion; label: string; icon: string }> 
   { id: "config", label: "Configuración", icon: "⚙️" }
 ];
 
-type Activo = { id: string; nombre: string; tipo: "cosechadora" | "transporte"; operador: string | null; activo: boolean };
+// Maquinaria / flota (tabla campo_activos). `activo` bool = estado (Activo/Inactivo).
+type TipoMaquina = "cosechadora" | "camion" | "vehiculo" | "transporte" | "otro";
+type Activo = { id: string; nombre: string; tipo: TipoMaquina; placa_codigo: string | null; operador: string | null; activo: boolean };
+const TIPOS_MAQUINA: Array<{ id: TipoMaquina; label: string }> = [
+  { id: "cosechadora", label: "Cosechadora" },
+  { id: "camion", label: "Camión" },
+  { id: "vehiculo", label: "Vehículo" },
+  { id: "otro", label: "Otro" }
+];
+const tipoLabel = (t: string) => TIPOS_MAQUINA.find((x) => x.id === t)?.label ?? (t === "transporte" ? "Transporte" : t);
 type Categoria = { id: string; nombre: string };
 type Cuenta = { id: string; nombre: string; saldo: number };
 type Cliente = { id: string; nombre: string; tipo: "piladora" | "externo" };
@@ -94,6 +109,9 @@ export default function CampoModule({ section = "caja", nombre, onNombreChange }
         <ConfigSection nombreActual={nombre ?? "Campo"}
           onSaved={(n) => { onNombreChange?.(n); notify(`Nombre de la operación actualizado a “${n}”`); }}
           onError={(m) => notify(m, "err")} />
+        <FlotaMaquinaria activos={activos}
+          onChanged={async (msg) => { await refreshCatalogos(); notify(msg); }}
+          onError={(m) => notify(m, "err")} />
       </section>
     );
   }
@@ -121,8 +139,10 @@ export default function CampoModule({ section = "caja", nombre, onNombreChange }
             onError={(m) => notify(m, "err")} />
         )}
         {servTab === "lista" && <ServiciosList servicios={servicios} />}
-        {(servTab === "servicio" || servTab === "abono") && (
-          <ActivosPanel activos={activos} onChanged={async () => { await refreshCatalogos(); notify("Activo guardado"); }} onError={(m) => notify(m, "err")} />
+        {servTab === "servicio" && activosActivos.length === 0 && (
+          <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+            <p className="muted" style={{ margin: 0 }}>No hay maquinaria activa. Da de alta cosechadoras/vehículos en <strong>⚙️ Configuración → 🚜 Flota y Maquinaria</strong> antes de registrar servicios.</p>
+          </div>
         )}
       </section>
     );
@@ -487,13 +507,13 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
           </select>
         </label>
       </div>
-      <label><span>Activo (opcional)</span>
+      <label><span>Concepto</span><input type="text" value={f.concepto} onChange={(e) => setF({ ...f, concepto: e.target.value })} placeholder="Ej: Diésel cosechadora" /></label>
+      <label><span>Asignar a Máquina / Vehículo (Opcional)</span>
         <select value={f.activo_id} onChange={(e) => setF({ ...f, activo_id: e.target.value })}>
-          <option value="">(ninguno — irá a “SIN ASIGNAR”)</option>
-          {activos.map((a) => <option key={a.id} value={a.id}>{a.nombre} · {a.tipo}</option>)}
+          <option value="">(ninguna — irá a “SIN ASIGNAR”)</option>
+          {activos.map((a) => <option key={a.id} value={a.id}>{a.nombre} · {tipoLabel(a.tipo)}{a.placa_codigo ? ` · ${a.placa_codigo}` : ""}</option>)}
         </select>
       </label>
-      <label><span>Concepto</span><input type="text" value={f.concepto} onChange={(e) => setF({ ...f, concepto: e.target.value })} placeholder="Ej: Diésel cosechadora" /></label>
       <button className="primary" disabled={busy}>{busy ? "Guardando…" : "Registrar egreso"}</button>
     </form>
   );
@@ -550,7 +570,7 @@ function TransferenciaForm({ cuentas, onSaved, onError }: {
 }
 
 // LIBRO DE MOVIMIENTOS con SALDO CORRIDO. Filtros por cuenta y rango de fecha.
-type LibroRow = { id: string; fecha: string; concepto: string | null; cuenta_nombre: string; categoria_nombre: string | null; naturaleza: string; entrada: number; salida: number; saldo_corrido: number };
+type LibroRow = { id: string; fecha: string; concepto: string | null; cuenta_nombre: string; categoria_nombre: string | null; activo_nombre: string | null; naturaleza: string; entrada: number; salida: number; saldo_corrido: number };
 function LibroView({ cuentas, version, onError }: { cuentas: Cuenta[]; version: number; onError: (m: string) => void }) {
   const [filtro, setFiltro] = useState({ cuenta_id: "", from: "", to: "" });
   const [rows, setRows] = useState<LibroRow[]>([]);
@@ -589,7 +609,11 @@ function LibroView({ cuentas, version, onError }: { cuentas: Cuenta[]; version: 
               : rows.map((r) => (
               <tr key={r.id}>
                 <td style={{ whiteSpace: "nowrap" }}>{String(r.fecha).slice(0, 10)}</td>
-                <td>{r.concepto || "—"}{r.naturaleza === "transferencia" ? <span className="chip info" style={{ marginLeft: 6 }}>transfer.</span> : null}</td>
+                <td>
+                  {r.concepto || "—"}
+                  {r.activo_nombre ? <span className="chip" style={{ marginLeft: 6, background: "#065f46", color: "#fff" }}>🚜 {r.activo_nombre}</span> : null}
+                  {r.naturaleza === "transferencia" ? <span className="chip info" style={{ marginLeft: 6 }}>transfer.</span> : null}
+                </td>
                 <td>{r.categoria_nombre || "—"}</td>
                 <td>{r.cuenta_nombre}</td>
                 <td className="num" style={{ color: r.entrada > 0 ? "#15803d" : undefined }}>{r.entrada > 0 ? money(r.entrada) : "—"}</td>
@@ -835,44 +859,80 @@ function ClientePicker({ value, onChange, onError }: {
 }
 
 // ── Gestión mínima de activos (cosechadora / transporte) ─────────────────────
-function ActivosPanel({ activos, onChanged, onError }: {
-  activos: Activo[]; onChanged: () => Promise<void>; onError: (m: string) => void;
+// 🚜 FLOTA Y MAQUINARIA — CRUD de la maquinaria (campo_activos): alta, edición y
+// archivar/activar. Los egresos y servicios se asignan a esta flota.
+const flotaVacia = { nombre: "", tipo: "cosechadora" as TipoMaquina, placa_codigo: "", operador: "" };
+function FlotaMaquinaria({ activos, onChanged, onError }: {
+  activos: Activo[]; onChanged: (msg: string) => Promise<void>; onError: (m: string) => void;
 }) {
-  const [f, setF] = useState({ nombre: "", tipo: "cosechadora" as "cosechadora" | "transporte", operador: "" });
+  const [f, setF] = useState(flotaVacia);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  async function crear() {
+  function editar(a: Activo) {
+    setEditId(a.id);
+    setF({ nombre: a.nombre, tipo: a.tipo, placa_codigo: a.placa_codigo ?? "", operador: a.operador ?? "" });
+  }
+  function cancelar() { setEditId(null); setF(flotaVacia); }
+
+  async function guardar() {
     try {
-      if (f.nombre.trim().length < 2) throw new Error("Escribe el nombre del activo");
-      await apiPost("/campo/activos", { nombre: f.nombre.trim(), tipo: f.tipo, operador: f.operador.trim() || undefined });
-      setF({ nombre: "", tipo: f.tipo, operador: "" });
-      await onChanged();
+      setBusy(true);
+      if (f.nombre.trim().length < 2) throw new Error("Escribe el nombre / alias de la máquina");
+      const payload = {
+        nombre: f.nombre.trim(), tipo: f.tipo,
+        placa_codigo: f.placa_codigo.trim() || null,
+        operador: f.operador.trim() || null
+      };
+      if (editId) await patchMaquina(editId, payload);
+      else await apiPost("/campo/activos", { ...payload, placa_codigo: payload.placa_codigo ?? undefined, operador: payload.operador ?? undefined });
+      cancelar();
+      await onChanged(editId ? "Maquinaria actualizada" : "Maquinaria agregada");
+    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+
+  async function archivar(a: Activo) {
+    try {
+      await patchMaquina(a.id, { activo: !a.activo });
+      if (editId === a.id) cancelar();
+      await onChanged(a.activo ? "Maquinaria archivada" : "Maquinaria reactivada");
     } catch (e) { onError((e as Error).message); }
   }
 
   return (
-    <div className="formPanel">
-      <h2>🛠️ Activos (cosechadora / transporte)</h2>
-      <p className="muted" style={{ marginTop: -4 }}>Da de alta las máquinas antes de registrar servicios.</p>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <label><span>Nombre</span><input type="text" value={f.nombre} onChange={(e) => setF({ ...f, nombre: e.target.value })} placeholder="Ej: Cosechadora John Deere" /></label>
+    <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
+      <h2>🚜 Flota y Maquinaria</h2>
+      <p className="muted" style={{ marginTop: -4 }}>Vehículos y cosechadoras de la empresa. Los egresos y servicios se asignan aquí.</p>
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10 }}>
+        <label><span>Nombre / Alias</span><input type="text" value={f.nombre} onChange={(e) => setF({ ...f, nombre: e.target.value })} placeholder="Ej: Cosechadora 1" /></label>
         <label><span>Tipo</span>
-          <select value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value as "cosechadora" | "transporte" })}>
-            <option value="cosechadora">Cosechadora</option>
-            <option value="transporte">Transporte</option>
+          <select value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value as TipoMaquina })}>
+            {TIPOS_MAQUINA.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
           </select>
         </label>
+        <label><span>Placa / Código</span><input type="text" value={f.placa_codigo} onChange={(e) => setF({ ...f, placa_codigo: e.target.value })} placeholder="Ej: PBA-1234" /></label>
       </div>
       <label><span>Operador (opcional)</span><input type="text" value={f.operador} onChange={(e) => setF({ ...f, operador: e.target.value })} /></label>
-      <button type="button" className="btnSecondary" onClick={crear}>➕ Agregar activo</button>
+      <div className="buttonRow">
+        <button type="button" className="primary" onClick={guardar} disabled={busy}>{busy ? "Guardando…" : editId ? "Guardar cambios" : "➕ Agregar máquina"}</button>
+        {editId && <button type="button" onClick={cancelar}>Cancelar</button>}
+      </div>
       {activos.length > 0 && (
         <div style={{ overflowX: "auto", marginTop: 10 }}>
           <table className="cajaTable">
-            <thead><tr><th>Nombre</th><th>Tipo</th><th>Operador</th><th>Estado</th></tr></thead>
+            <thead><tr><th>Nombre / Alias</th><th>Tipo</th><th>Placa / Código</th><th>Operador</th><th>Estado</th><th /></tr></thead>
             <tbody>
               {activos.map((a) => (
-                <tr key={a.id} style={{ opacity: a.activo ? 1 : 0.5 }}>
-                  <td>{a.nombre}</td><td>{a.tipo}</td><td>{a.operador || "—"}</td>
-                  <td><span className={a.activo ? "chip ok" : "chip bad"}>{a.activo ? "activo" : "inactivo"}</span></td>
+                <tr key={a.id} style={{ opacity: a.activo ? 1 : 0.55 }}>
+                  <td style={{ fontWeight: 600 }}>{a.nombre}</td>
+                  <td>{tipoLabel(a.tipo)}</td>
+                  <td>{a.placa_codigo || "—"}</td>
+                  <td>{a.operador || "—"}</td>
+                  <td><span className={a.activo ? "chip ok" : "chip bad"}>{a.activo ? "Activo" : "Inactivo"}</span></td>
+                  <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                    <button type="button" className="btnSecondary" style={{ marginRight: 6 }} onClick={() => editar(a)}>✏️ Editar</button>
+                    <button type="button" className="btnSecondary" onClick={() => archivar(a)}>{a.activo ? "🗄️ Archivar" : "↩️ Activar"}</button>
+                  </td>
                 </tr>
               ))}
             </tbody>
