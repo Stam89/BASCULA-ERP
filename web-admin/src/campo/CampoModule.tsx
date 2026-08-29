@@ -12,6 +12,7 @@ async function patchMaquina(id: string, body: unknown): Promise<void> {
   if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error || "No se pudo actualizar la maquinaria");
 }
 import { money } from "../format";
+import PartesModule from "./PartesModule";
 
 // Menú propio de la operación Campo (contexto aislado). Para agregar secciones
 // nuevas: añade una entrada aquí y su caso en CampoModule (prop `section`).
@@ -19,6 +20,7 @@ const CAMPO_SECCIONES: Array<{ id: CampoSeccion; label: string; icon: string }> 
   { id: "caja", label: "Caja", icon: "💰" },
   { id: "servicios", label: "Servicios", icon: "🚜" },
   { id: "vales", label: "Vales", icon: "📋" },
+  { id: "partes", label: "Partes Diarios", icon: "📝" },
   { id: "reportes", label: "Reportes", icon: "📊" },
   { id: "config", label: "Configuración", icon: "⚙️" }
 ];
@@ -45,7 +47,7 @@ type Servicio = {
 const hoy = () => new Date().toISOString().slice(0, 10);
 // Secciones del menú propio de Campo (contexto aislado). Se amplía agregando
 // entradas aquí y en CAMPO_SECCIONES (ver CampoWorkspace).
-export type CampoSeccion = "caja" | "servicios" | "vales" | "reportes" | "config";
+export type CampoSeccion = "caja" | "servicios" | "vales" | "partes" | "reportes" | "config";
 
 // Estandarización de mantenimientos: para egresos de REPARACION_MANT el Concepto
 // se arma con dos selects (Pieza + Acción) que se concatenan "Pieza - Acción".
@@ -227,6 +229,10 @@ export default function CampoModule({ section = "caja", nombre, onNombreChange }
         <ValesPanel onLiquidated={() => onCajaSaved("Vale liquidado")} onError={(m) => notify(m, "err")} />
       </section>
     );
+  }
+
+  if (section === "partes") {
+    return <PartesModule />;
   }
 
   // section === "caja"
