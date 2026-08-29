@@ -47,34 +47,36 @@ const hoy = () => new Date().toISOString().slice(0, 10);
 // entradas aquí y en CAMPO_SECCIONES (ver CampoWorkspace).
 export type CampoSeccion = "caja" | "servicios" | "vales" | "reportes" | "config";
 
-// Concepto sugerido para egresos de REPARACION_MANT (autocompletado por
-// subcategoría). El usuario puede elegir de la lista o escribir un texto libre.
-const REPARACION_SUBCATS: Array<{ grupo: string; items: string[] }> = [
-  { grupo: "Cabezal y Alimentación", items: [
-    "Reemplazo de cuchillas y puntones", "Reparación de púas o barras del molinete",
-    "Mantenimiento de sinfín de alimentación", "Cambio de cadenas y paletas del acarreador"
+// Estandarización de mantenimientos: para egresos de REPARACION_MANT el Concepto
+// se arma con dos selects (Pieza + Acción) que se concatenan "Pieza - Acción".
+const REPARACION_MANT = "REPARACION_MANT"; // nombre de la categoría gatillo (semilla)
+const ACCIONES_MANT: string[] = [
+  "Cambio / Reemplazo",
+  "Reparación / Soldadura / Relleno",
+  "Ajuste / Tensionado",
+  "Mantenimiento / Engrase"
+];
+const PIEZAS_MANT: Array<{ grupo: string; items: string[] }> = [
+  { grupo: "Cabezal y Acarreador", items: [
+    "Cuchillas de corte", "Puntones / Mandíbulas", "Púas / Dedos del molinete",
+    "Sinfín de alimentación", "Cadenas y paletas del acarreador"
   ] },
   { grupo: "Sistema de Trilla y Limpieza", items: [
-    "Cambio de muelas o dientes del rotor", "Reparación de cóncavo (rejilla) o zarandas",
-    "Reemplazo de correas y poleas del ventilador", "Mantenimiento de cadenas y cangilones de elevadores"
-  ] },
-  { grupo: "Motor y Eléctrico", items: [
-    "Cambio de filtros (aceite, combustible, aire)", "Reparación de inyectores o bomba de combustible",
-    "Mantenimiento de radiador y mangueras", "Cambio de batería o reparación de alternador/arranque"
+    "Dientes / Muelas del rotor", "Cóncavo (rejilla de trilla)", "Zarandas / Cribas de limpieza",
+    "Correas y poleas del ventilador", "Cadenas y cangilones del elevador"
   ] },
   { grupo: "Tren de Rodaje (Orugas)", items: [
-    "Reemplazo o reparación de orugas de goma", "Cambio de rodillos (inferiores o superiores)",
-    "Mantenimiento de rueda tensora o catalina (motriz)"
+    "Orugas de goma (bandas)", "Rodillos inferiores / superiores",
+    "Rueda motriz (Catalina)", "Rueda tensora (Idler)"
   ] },
-  { grupo: "Hidráulico y Transmisión", items: [
-    "Reparación de bomba hidrostática (HST)", "Cambio de mangueras, acoples o sellos (O-rings) por fugas",
-    "Reemplazo de bandas/correas de transmisión"
+  { grupo: "Motor, Hidráulico y Descarga", items: [
+    "Filtros (aceite, diésel, aire)", "Mangueras y acoples hidráulicos", "Bomba hidrostática (HST)",
+    "Radiador y mangueras", "Sinfín interno del tubo de descarga"
   ] },
-  { grupo: "Sistema de Descarga", items: [
-    "Reparación del mecanismo del tubo de descarga", "Cambio del sinfín interno de descarga"
+  { grupo: "Vehículos / General", items: [
+    "Batería y sistema eléctrico", "Frenos y suspensión", "Llantas / Neumáticos", "Lubricantes y fluidos"
   ] }
 ];
-const REPARACION_MANT = "REPARACION_MANT"; // nombre de la categoría gatillo (semilla)
 
 // Opción por defecto del selector de máquina en el egreso: gasto general/admin
 // (se guarda como activo_id nulo → fila "Gastos Generales / Administración").
@@ -518,18 +520,24 @@ function IngresoForm({ cuentas, pendientes, onSaved, onError }: {
 // － EGRESO: salida de una cuenta. Orden estricto de campos (ver requisito):
 // Fecha · Máquina/Vehículo* · Categoría* · Concepto · Monto · Cuenta. La máquina
 // es OBLIGATORIA (por defecto "🏢 Gastos Generales / Administración" = sin activo).
-// Si la categoría es REPARACION_MANT, el Concepto pasa a autocompletado por
-// subcategoría (elegir de lista o escribir libre). Un checkbox lo marca como
-// anticipo (fondo por rendir) → se guarda pendiente de rendición.
+// Si la categoría es REPARACION_MANT, el Concepto se arma con dos selects
+// (Pieza + Acción → "Pieza - Acción"), quedando editable para un detalle extra.
+// Un checkbox lo marca como anticipo (fondo por rendir) → pendiente de rendición.
 function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
   cuentas: Cuenta[]; categorias: Categoria[]; activos: Activo[]; onSaved: OnSaved; onError: (m: string) => void;
 }) {
   const [f, setF] = useState({
-    fecha: hoy(), activo_sel: ACTIVO_GENERAL, categoria_id: "", concepto: "", monto: "", cuenta_id: "", es_anticipo: false
+    fecha: hoy(), activo_sel: ACTIVO_GENERAL, categoria_id: "", concepto: "", monto: "", cuenta_id: "", es_anticipo: false,
+    // Solo para REPARACION_MANT: la pieza y la acción arman el concepto "Pieza - Acción".
+    pieza: "", accion: ""
   });
   const [busy, setBusy] = useState(false);
   const catNombre = categorias.find((c) => c.id === f.categoria_id)?.nombre ?? "";
   const esReparacion = catNombre === REPARACION_MANT;
+
+  // Al elegir pieza/acción, se reescribe el concepto (queda editable después).
+  const setMant = (pieza: string, accion: string) =>
+    setF((prev) => ({ ...prev, pieza, accion, concepto: [pieza, accion].filter(Boolean).join(" - ") }));
 
   async function submit() {
     try {
@@ -545,7 +553,7 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
         activo_id: f.activo_sel === ACTIVO_GENERAL ? undefined : f.activo_sel,
         es_anticipo: f.es_anticipo || undefined
       });
-      setF({ ...f, concepto: "", monto: "", categoria_id: "", es_anticipo: false });
+      setF({ ...f, concepto: "", monto: "", categoria_id: "", es_anticipo: false, pieza: "", accion: "" });
       await onSaved();
     } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
   }
@@ -569,22 +577,31 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
           {categorias.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
         </select>
       </label>
-      {/* 4 · Concepto (autocompletado por subcategoría si es REPARACION_MANT) */}
-      <label><span>Concepto{esReparacion ? " · elige de la lista o escribe" : ""}</span>
-        {esReparacion ? (
-          <>
-            <input type="text" list="egreso-reparacion-mant" value={f.concepto}
-              onChange={(e) => setF({ ...f, concepto: e.target.value })}
-              placeholder="Ej: Cambio de filtros (aceite, combustible, aire)" />
-            <datalist id="egreso-reparacion-mant">
-              {REPARACION_SUBCATS.flatMap((g) => g.items.map((it) => (
-                <option key={it} value={it} label={g.grupo} />
-              )))}
-            </datalist>
-          </>
-        ) : (
-          <input type="text" value={f.concepto} onChange={(e) => setF({ ...f, concepto: e.target.value })} placeholder="Ej: Diésel cosechadora" />
-        )}
+      {/* 4 · Concepto. Para REPARACION_MANT se arma con Pieza + Acción; el input
+          queda editable para agregar un detalle extra. Otras categorías: texto libre. */}
+      {esReparacion && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <label><span>Pieza Afectada</span>
+            <select value={f.pieza} onChange={(e) => setMant(e.target.value, f.accion)}>
+              <option value="">Seleccione…</option>
+              {PIEZAS_MANT.map((g) => (
+                <optgroup key={g.grupo} label={g.grupo}>
+                  {g.items.map((it) => <option key={it} value={it}>{it}</option>)}
+                </optgroup>
+              ))}
+            </select>
+          </label>
+          <label><span>Acción Realizada</span>
+            <select value={f.accion} onChange={(e) => setMant(f.pieza, e.target.value)}>
+              <option value="">Seleccione…</option>
+              {ACCIONES_MANT.map((a) => <option key={a} value={a}>{a}</option>)}
+            </select>
+          </label>
+        </div>
+      )}
+      <label><span>Concepto{esReparacion ? " · autollenado (editable para detalle extra)" : ""}</span>
+        <input type="text" value={f.concepto} onChange={(e) => setF({ ...f, concepto: e.target.value })}
+          placeholder={esReparacion ? "Ej: Orugas de goma (bandas) - Cambio / Reemplazo" : "Ej: Diésel cosechadora"} />
       </label>
       {/* 5 · Monto */}
       <label><span>Monto $</span><input type="number" step="0.01" min="0" value={f.monto} onChange={(e) => setF({ ...f, monto: e.target.value })} placeholder="0.00" /></label>
