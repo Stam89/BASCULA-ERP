@@ -423,15 +423,65 @@ campoRouter.get("/partes", asyncRoute(async (req, res) => {
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   const result = await pool.query(
     `SELECT p.id, p.fecha, p.activo_id, p.operador, p.cliente, p.qq::float AS qq,
-            p.observaciones, p.estado, p.created_at, a.nombre AS activo_nombre
+            p.observaciones, p.estado, p.created_at, a.nombre AS activo_nombre,
+            p.servicio_id,
+            sv.valor::float AS servicio_valor,
+            sv.saldo_pendiente::float AS servicio_saldo,
+            sv.estado AS servicio_estado
      FROM campo_partes p
      JOIN campo_activos a ON a.id = p.activo_id
+     LEFT JOIN campo_servicios_saldo sv ON sv.id = p.servicio_id
      ${where}
      ORDER BY p.fecha DESC, p.created_at DESC
      LIMIT 500`,
     params
   );
   res.json(result.rows);
+}));
+
+// Generar el COBRO de un parte: crea un campo_servicio (tipo cosecha) desde el
+// parte (qq × precio) y marca el parte 'cobrado' enlazándolo. El cliente (texto
+// libre del parte) se resuelve/crea en campo_clientes (alta rápida). El cobro
+// real (abonos/saldo) sigue con la maquinaria de servicios. Todo en 1 transacción
+// con lock sobre el parte (evita doble cobro).
+campoRouter.post("/partes/:id/cobrar", asyncRoute(async (req, res) => {
+  const body = z.object({ precio_unitario: z.number().positive() }).parse(req.body);
+  const result = await inTransaction(async (client) => {
+    const parte = (await client.query(
+      "SELECT * FROM campo_partes WHERE id = $1 FOR UPDATE", [req.params.id]
+    )).rows[0];
+    if (!parte) throw new ApiError(404, "Parte no encontrado");
+    if (parte.estado !== "por_cobrar") throw new ApiError(409, "Este parte ya tiene un cobro generado.");
+
+    // Resolver/crear el cliente por nombre (alta rápida, tipo externo).
+    const nombre = String(parte.cliente).trim();
+    let cliente = (await client.query(
+      "SELECT id FROM campo_clientes WHERE lower(trim(nombre)) = lower(trim($1)) LIMIT 1", [nombre]
+    )).rows[0];
+    if (!cliente) {
+      cliente = (await client.query(
+        "INSERT INTO campo_clientes (nombre, tipo) VALUES (trim($1), 'externo') RETURNING id", [nombre]
+      )).rows[0];
+    }
+
+    const qq = Number(parte.qq);
+    const valor = Math.round(qq * body.precio_unitario * 100) / 100;
+    const servicio = (await client.query(
+      `INSERT INTO campo_servicios (fecha, cliente_id, activo_id, tipo, qq, precio_unitario, valor, notas, created_by)
+       VALUES ($1, $2, $3, 'cosecha', $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [parte.fecha, cliente.id, parte.activo_id, qq, body.precio_unitario, valor,
+       `Cobro de parte de cosecha (${nombre})`, userId(req)]
+    )).rows[0];
+
+    const parteUpd = (await client.query(
+      "UPDATE campo_partes SET estado = 'cobrado', servicio_id = $2 WHERE id = $1 RETURNING *",
+      [parte.id, servicio.id]
+    )).rows[0];
+
+    return { parte: parteUpd, servicio, cliente_id: cliente.id, valor };
+  });
+  res.status(201).json(result);
 }));
 
 campoRouter.post("/partes", asyncRoute(async (req, res) => {

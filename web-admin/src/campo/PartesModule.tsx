@@ -4,6 +4,7 @@
 // pero queda editable. Mantiene los estilos de CajaModule.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost } from "../api";
+import { money } from "../format";
 
 const hoy = () => new Date().toISOString().slice(0, 10);
 const qqFmt = (n: number) => n.toLocaleString("es-EC", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
@@ -13,18 +14,17 @@ type Activo = { id: string; nombre: string; operador: string | null; activo: boo
 type Parte = {
   id: string; fecha: string; activo_id: string; activo_nombre: string; operador: string | null;
   cliente: string; qq: number; observaciones: string | null; estado: "por_cobrar" | "cobrado";
+  // Cobro generado (campo_servicio) enlazado, si estado='cobrado'.
+  servicio_id: string | null; servicio_valor: number | null; servicio_saldo: number | null;
+  servicio_estado: "pendiente" | "abonado" | "pagado" | null;
 };
-
-const estadoChip = (e: string) =>
-  e === "cobrado"
-    ? <span className="chip ok">Cobrado</span>
-    : <span className="chip warn">Por cobrar</span>;
 
 export default function PartesModule() {
   const [activos, setActivos] = useState<Activo[]>([]);
   const [partes, setPartes] = useState<Parte[]>([]);
   const [f, setF] = useState({ fecha: hoy(), activo_id: "", operador: "", cliente: "", qq: "", observaciones: "" });
   const [busy, setBusy] = useState(false);
+  const [cobrando, setCobrando] = useState<Parte | null>(null);
   const [flash, setFlash] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
   const notify = (text: string, kind: "ok" | "err" = "ok") => { setFlash({ text, kind }); setTimeout(() => setFlash(null), 3000); };
 
@@ -135,13 +135,85 @@ export default function PartesModule() {
                   <td style={{ fontWeight: 600 }}>{p.cliente}</td>
                   <td className="num" style={{ fontWeight: 700 }}>{qqFmt(p.qq)}</td>
                   <td>{p.observaciones || "—"}</td>
-                  <td>{estadoChip(p.estado)}</td>
+                  <td>
+                    {p.estado === "cobrado" ? (
+                      <>
+                        <span className="chip ok">Cobro generado</span>
+                        {p.servicio_estado && (
+                          <small className="muted" style={{ display: "block", marginTop: 2 }}>
+                            servicio: {p.servicio_estado}{p.servicio_saldo != null ? ` · saldo ${money(p.servicio_saldo)}` : ""}
+                          </small>
+                        )}
+                      </>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
+                        <span className="chip warn">Por cobrar</span>
+                        <button type="button" className="btnSecondary" onClick={() => setCobrando(p)}>💵 Generar cobro</button>
+                      </div>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </div>
+
+      {cobrando && (
+        <GenerarCobroModal parte={cobrando}
+          onClose={() => setCobrando(null)}
+          onDone={async () => { setCobrando(null); await refrescar(); notify("Cobro generado (servicio de cosecha)"); }}
+          onError={(m) => notify(m, "err")} />
+      )}
     </section>
+  );
+}
+
+// Modal para generar el cobro de un parte: se ingresa el precio por QQ y se
+// muestra el valor (QQ × precio). Confirma → crea el servicio y marca cobrado.
+function GenerarCobroModal({ parte, onClose, onDone, onError }: {
+  parte: Parte; onClose: () => void; onDone: () => void | Promise<void>; onError: (m: string) => void;
+}) {
+  const [precio, setPrecio] = useState("");
+  const [busy, setBusy] = useState(false);
+  const pu = Number(precio);
+  const valido = precio !== "" && pu > 0;
+  const valor = valido ? Math.round(parte.qq * pu * 100) / 100 : 0;
+
+  async function submit() {
+    try {
+      setBusy(true);
+      if (!valido) throw new Error("Ingresa el precio por QQ (mayor a 0)");
+      await apiPost(`/campo/partes/${parte.id}/cobrar`, { precio_unitario: pu });
+      await onDone();
+    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <form className="formPanel" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submit(); }}
+        style={{ maxWidth: 440, width: "100%", margin: 0 }}>
+        <h2 style={{ marginTop: 0 }}>💵 Generar cobro del parte</h2>
+        <div className="totalBox" style={{ margin: "0 0 6px" }}>
+          <span>{parte.cliente} · {parte.activo_nombre}</span>
+          <strong>{qqFmt(parte.qq)} QQ</strong>
+          <small>{String(parte.fecha).slice(0, 10)}{parte.operador ? ` · ${parte.operador}` : ""}</small>
+        </div>
+        <label><span>Precio por QQ $</span>
+          <input type="number" step="0.0001" min="0" autoFocus value={precio} onChange={(e) => setPrecio(e.target.value)} placeholder="Ej: 1.50" />
+        </label>
+        {valido && (
+          <div className="totalBox" style={{ background: "#eff6ff", borderColor: "#bfdbfe" }}>
+            <span>VALOR DEL COBRO ({qqFmt(parte.qq)} × {money(pu)})</span>
+            <strong>{money(valor)}</strong>
+          </div>
+        )}
+        <p className="muted" style={{ fontSize: 12, marginTop: 2 }}>Crea un servicio de cosecha (cliente + máquina del parte) que aparece en Servicios y en el reporte de Por Cobrar. Los abonos se registran ahí.</p>
+        <div className="buttonRow">
+          <button type="submit" className="primary" disabled={busy || !valido}>{busy ? "Generando…" : "Generar cobro"}</button>
+          <button type="button" onClick={onClose} disabled={busy}>Cancelar</button>
+        </div>
+      </form>
+    </div>
   );
 }
