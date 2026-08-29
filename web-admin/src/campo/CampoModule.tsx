@@ -93,6 +93,20 @@ const PIEZAS_MANT: Array<{ grupo: string; items: string[] }> = [
   ] }
 ];
 
+// Conceptos predefinidos para el INGRESO (select con optgroups). El usuario puede
+// elegir uno y agregarle un detalle extra, o escribir el concepto a mano.
+const CONCEPTOS_INGRESO: Array<{ grupo: string; items: string[] }> = [
+  { grupo: "Servicios Agrícolas", items: [
+    "Pago por servicio de cosecha", "Abono por servicio de cosecha"
+  ] },
+  { grupo: "Transporte", items: [
+    "Pago por flete / transporte", "Abono por flete"
+  ] },
+  { grupo: "Otros Ingresos", items: [
+    "Venta de chatarra/repuestos", "Devolución de proveedor", "Aporte de socio"
+  ] }
+];
+
 // Opción por defecto del selector de máquina en el egreso: gasto general/admin
 // (se guarda como activo_id nulo → fila "Gastos Generales / Administración").
 const ACTIVO_GENERAL = "GENERAL";
@@ -488,9 +502,14 @@ type OnSaved = () => void | Promise<void>;
 function IngresoForm({ cuentas, pendientes, onSaved, onError }: {
   cuentas: Cuenta[]; pendientes: Servicio[]; onSaved: OnSaved; onError: (m: string) => void;
 }) {
-  const [f, setF] = useState({ fecha: hoy(), cuenta_id: "", monto: "", concepto: "", servicio_id: "" });
+  // Concepto = base (predefinido, opcional) + detalle extra. Si no hay base, el
+  // detalle ES el concepto escrito a mano ("Escribir concepto manualmente…").
+  const [f, setF] = useState({ fecha: hoy(), cuenta_id: "", monto: "", concepto_base: "", concepto_extra: "", servicio_id: "" });
   const [busy, setBusy] = useState(false);
   const svc = pendientes.find((s) => s.id === f.servicio_id);
+  const conceptoFinal = f.concepto_base
+    ? (f.concepto_extra.trim() ? `${f.concepto_base} - ${f.concepto_extra.trim()}` : f.concepto_base)
+    : f.concepto_extra.trim();
   async function submit() {
     try {
       setBusy(true);
@@ -499,10 +518,10 @@ function IngresoForm({ cuentas, pendientes, onSaved, onError }: {
       if (!(monto > 0)) throw new Error("Ingresa un monto válido");
       await apiPost("/campo/movimientos", {
         fecha: f.fecha, cuenta_id: f.cuenta_id, signo: "entrada", monto,
-        concepto: f.concepto.trim() || (f.servicio_id ? "Abono de servicio" : undefined),
+        concepto: conceptoFinal || (f.servicio_id ? "Abono de servicio" : undefined),
         servicio_id: f.servicio_id || undefined
       });
-      setF({ ...f, monto: "", concepto: "", servicio_id: "" });
+      setF({ ...f, monto: "", concepto_base: "", concepto_extra: "", servicio_id: "" });
       await onSaved();
     } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
   }
@@ -526,7 +545,22 @@ function IngresoForm({ cuentas, pendientes, onSaved, onError }: {
         </select>
       </label>
       {svc && <p className="muted" style={{ marginTop: -4, fontSize: 12 }}>Saldo del servicio: <strong>{money(svc.saldo_pendiente)}</strong>. Un abono mayor al saldo se rechaza.</p>}
-      <label><span>Concepto</span><input type="text" value={f.concepto} onChange={(e) => setF({ ...f, concepto: e.target.value })} placeholder="Ej: Pago cosecha" /></label>
+      {/* Concepto: select de opciones predefinidas (o manual) + detalle extra. */}
+      <label><span>Concepto</span>
+        <select value={f.concepto_base} onChange={(e) => setF({ ...f, concepto_base: e.target.value })}>
+          <option value="">✍️ Escribir concepto manualmente…</option>
+          {CONCEPTOS_INGRESO.map((g) => (
+            <optgroup key={g.grupo} label={g.grupo}>
+              {g.items.map((it) => <option key={it} value={it}>{it}</option>)}
+            </optgroup>
+          ))}
+        </select>
+      </label>
+      <label><span>{f.concepto_base ? "Detalle adicional (opcional)" : "Concepto (texto libre)"}</span>
+        <input type="text" value={f.concepto_extra} onChange={(e) => setF({ ...f, concepto_extra: e.target.value })}
+          placeholder={f.concepto_base ? "Ej: Finca El Tesoro" : "Ej: Pago cosecha"} />
+      </label>
+      {conceptoFinal && <p className="muted" style={{ marginTop: -4, fontSize: 12 }}>Concepto: <strong>{conceptoFinal}</strong></p>}
       <button className="primary" disabled={busy}>{busy ? "Guardando…" : "Registrar ingreso"}</button>
     </form>
   );
