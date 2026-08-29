@@ -73,8 +73,23 @@ const PIEZAS_MANT: Array<{ grupo: string; items: string[] }> = [
     "Filtros (aceite, diésel, aire)", "Mangueras y acoples hidráulicos", "Bomba hidrostática (HST)",
     "Radiador y mangueras", "Sinfín interno del tubo de descarga"
   ] },
-  { grupo: "Vehículos / General", items: [
-    "Batería y sistema eléctrico", "Frenos y suspensión", "Llantas / Neumáticos", "Lubricantes y fluidos"
+  { grupo: "Motor y Combustible (Vehículos)", items: [
+    "Filtros (aceite, aire, diésel)", "Inyectores y bomba", "Bandas/correas de accesorios", "Mangueras y turbo"
+  ] },
+  { grupo: "Frenos (Vehículos)", items: [
+    "Pastillas, bandas y zapatas", "Discos y tambores", "Cilindros o válvulas de aire"
+  ] },
+  { grupo: "Suspensión y Dirección", items: [
+    "Llantas / Neumáticos", "Amortiguadores y ballestas", "Rótulas y terminales", "Rodamientos/rulimanes de bocín"
+  ] },
+  { grupo: "Transmisión (Vehículos)", items: [
+    "Kit de embrague", "Crucetas y cardán", "Juntas y retenes", "Aceite de caja y diferencial"
+  ] },
+  { grupo: "Eléctrico y Climatización", items: [
+    "Alternador y motor de arranque", "Faros y bombillos", "Sensores y cableado", "Compresor y gas A/C"
+  ] },
+  { grupo: "Carrocería y Estructura", items: [
+    "Parabrisas y plumas", "Cerraduras y elevavidrios", "Soldadura de chasis o cajón"
   ] }
 ];
 
