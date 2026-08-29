@@ -63,7 +63,7 @@ const PIEZAS_MANT: Array<{ grupo: string; items: string[] }> = [
   ] },
   { grupo: "Sistema de Trilla y Limpieza", items: [
     "Dientes / Muelas del rotor", "Cóncavo (rejilla de trilla)", "Zarandas / Cribas de limpieza",
-    "Correas y poleas del ventilador", "Cadenas y cangilones del elevador"
+    "Correas y poleas del ventilador", "Cadenas y cangilones del elevador de grano"
   ] },
   { grupo: "Tren de Rodaje (Orugas)", items: [
     "Orugas de goma (bandas)", "Rodillos inferiores / superiores",
