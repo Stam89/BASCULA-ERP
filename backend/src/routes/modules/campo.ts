@@ -411,6 +411,50 @@ campoRouter.post("/movimientos/:id/liquidar", asyncRoute(async (req, res) => {
   res.status(201).json(result);
 }));
 
+// ── Partes Diarios de Cosecha (reporte de operadores) ───────────────────────
+// Registro diario por máquina (campo_activos). El estado del cobro es
+// 'por_cobrar' por defecto.
+campoRouter.get("/partes", asyncRoute(async (req, res) => {
+  const q = z.object({ from: fechaSchema.optional(), to: fechaSchema.optional() }).parse(req.query);
+  const conds: string[] = [];
+  const params: unknown[] = [];
+  if (q.from) { params.push(q.from); conds.push(`p.fecha >= $${params.length}`); }
+  if (q.to) { params.push(q.to); conds.push(`p.fecha <= $${params.length}`); }
+  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+  const result = await pool.query(
+    `SELECT p.id, p.fecha, p.activo_id, p.operador, p.cliente, p.qq::float AS qq,
+            p.observaciones, p.estado, p.created_at, a.nombre AS activo_nombre
+     FROM campo_partes p
+     JOIN campo_activos a ON a.id = p.activo_id
+     ${where}
+     ORDER BY p.fecha DESC, p.created_at DESC
+     LIMIT 500`,
+    params
+  );
+  res.json(result.rows);
+}));
+
+campoRouter.post("/partes", asyncRoute(async (req, res) => {
+  const body = z.object({
+    fecha: fechaSchema.optional(),
+    activo_id: z.string().uuid(),
+    operador: z.string().max(140).optional(),
+    cliente: z.string().min(1).max(160),
+    qq: z.number().positive(),
+    observaciones: z.string().max(400).optional()
+  }).parse(req.body);
+  const act = await pool.query("SELECT 1 FROM campo_activos WHERE id = $1", [body.activo_id]);
+  if (!act.rowCount) throw new ApiError(404, "Máquina no encontrada");
+  const result = await pool.query(
+    `INSERT INTO campo_partes (fecha, activo_id, operador, cliente, qq, observaciones, created_by)
+     VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7)
+     RETURNING id, fecha, activo_id, operador, cliente, qq::float AS qq, observaciones, estado, created_at`,
+    [body.fecha ?? null, body.activo_id, body.operador?.trim() || null, body.cliente.trim(),
+     body.qq, body.observaciones?.trim() || null, userId(req)]
+  );
+  res.status(201).json(result.rows[0]);
+}));
+
 // ════════════════════════════════════════════════════════════════════════════
 // REPORTES DE CAMPO (V2). Solo lectura. TODO el cálculo es SQL (GROUP BY / SUM);
 // el servidor solo arma la forma de la respuesta. No hay tablas nuevas: todo
