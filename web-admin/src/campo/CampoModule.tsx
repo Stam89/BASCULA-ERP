@@ -53,6 +53,12 @@ export type CampoSeccion = "caja" | "servicios" | "clientes" | "vales" | "partes
 // Parte Diario pendiente (para importar/liquidar desde el form de servicio).
 type PartePendiente = { id: string; fecha: string; activo_id: string; activo_nombre: string; operador: string | null; cliente: string; qq: number };
 
+// Sesión de caja (apertura/arqueo/cierre).
+type ArqueoResumen = { saldo_inicial: number; ingresos: number; egresos: number; saldo_teorico: number };
+type SesionActiva = { id: string; usuario_nombre: string | null; fecha_apertura: string; saldo_inicial: number; observaciones: string | null; arqueo: ArqueoResumen };
+type SesionResp = { activa: SesionActiva | null; saldo_sugerido: number };
+type SesionHist = { id: string; fecha_apertura: string; fecha_cierre: string | null; saldo_inicial: number; saldo_teorico: number | null; saldo_real: number | null; diferencia: number | null; estado: "ABIERTA" | "CERRADA"; observaciones: string | null; usuario_nombre: string | null };
+
 // Estado de cuenta de clientes (Campo).
 type ClienteCuenta = { id: string; nombre: string; identificacion: string | null; tipo: string; debe: number; haber: number; saldo: number; servicios: number };
 type EstadoLinea = { fecha: string; clase: "servicio" | "abono"; detalle: string; maquina: string | null; qq: number | null; precio_unitario: number | null; debe: number; haber: number; cuenta: string | null; saldo: number };
@@ -151,7 +157,12 @@ export default function CampoModule({ section = "caja", nombre, onNombreChange }
   const [cuentas, setCuentas] = useState<Cuenta[]>([]);
   const [operadores, setOperadores] = useState<Operador[]>([]);
   const [servicios, setServicios] = useState<Servicio[]>([]);
-  const [cajaTab, setCajaTab] = useState<"ingreso" | "egreso" | "transferencia">("ingreso");
+  const [cajaTab, setCajaTab] = useState<"ingreso" | "egreso" | "transferencia" | "cierres">("ingreso");
+  const [sesion, setSesion] = useState<SesionResp | null>(null);
+  const [modalCaja, setModalCaja] = useState<"" | "abrir" | "cerrar">("");
+  const refreshSesion = useCallback(async () => {
+    try { setSesion(await apiGet<SesionResp>("/campo/caja/sesion-activa")); } catch { /* opcional */ }
+  }, []);
   const [servTab, setServTab] = useState<"servicio" | "abono" | "lista">("servicio");
   const [libroVersion, setLibroVersion] = useState(0); // fuerza recarga del libro tras cada movimiento
 
@@ -168,7 +179,7 @@ export default function CampoModule({ section = "caja", nombre, onNombreChange }
     setServicios(await apiGet<Servicio[]>("/campo/servicios"));
   }, []);
 
-  useEffect(() => { Promise.all([refreshCatalogos(), refreshServicios()]).catch((e) => notify(e.message, "err")); }, [refreshCatalogos, refreshServicios]);
+  useEffect(() => { Promise.all([refreshCatalogos(), refreshServicios(), refreshSesion()]).catch((e) => notify(e.message, "err")); }, [refreshCatalogos, refreshServicios, refreshSesion]);
 
   const activosActivos = useMemo(() => activos.filter((a) => a.activo), [activos]);
   const pendientes = useMemo(() => servicios.filter((s) => s.estado !== "pagado"), [servicios]);
@@ -181,7 +192,7 @@ export default function CampoModule({ section = "caja", nombre, onNombreChange }
   );
   // Tras registrar un movimiento de caja: refresca saldos + servicios + libro.
   const onCajaSaved = async (msg: string) => {
-    await Promise.all([refreshCatalogos(), refreshServicios()]);
+    await Promise.all([refreshCatalogos(), refreshServicios(), refreshSesion()]);
     setLibroVersion((v) => v + 1);
     notify(msg);
   };
@@ -257,8 +268,27 @@ export default function CampoModule({ section = "caja", nombre, onNombreChange }
   }
 
   // section === "caja"
+  const cajaAbierta = !!sesion?.activa;
   return (
     <section className="panelGrid">
+      {/* Barra de estado de la sesión de caja */}
+      <div className="tablePanel" style={{ gridColumn: "1 / -1", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap",
+        background: cajaAbierta ? "var(--c-success-bg)" : "var(--c-danger-bg)" }}>
+        {cajaAbierta ? (
+          <>
+            <strong style={{ color: "#15803d" }}>🟢 Caja Abierta</strong>
+            <span className="muted">por {sesion!.activa!.usuario_nombre ?? "—"} · Saldo Inicial: <strong>{money(sesion!.activa!.saldo_inicial)}</strong> · abierta {new Date(sesion!.activa!.fecha_apertura).toLocaleString("es-EC")}</span>
+            <button type="button" className="primary" style={{ marginLeft: "auto" }} onClick={() => setModalCaja("cerrar")}>🔒 Cerrar / Arquear Caja</button>
+          </>
+        ) : (
+          <>
+            <strong style={{ color: "#b91c1c" }}>🔴 Caja Cerrada</strong>
+            <span className="muted">Debes abrir caja para registrar ingresos/egresos en CAJA.</span>
+            <button type="button" className="primary" style={{ marginLeft: "auto" }} onClick={() => setModalCaja("abrir")}>🔓 Abrir Caja</button>
+          </>
+        )}
+      </div>
+
       <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
         <h2 style={{ marginBottom: 2 }}>💰 Caja <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· ingresos, egresos y transferencias</span></h2>
         {/* Saldos por cuenta + total */}
@@ -276,7 +306,7 @@ export default function CampoModule({ section = "caja", nombre, onNombreChange }
           </div>
         </div>
         <nav className="cajaSubNav" style={{ borderBottom: "none" }}>
-          {([["ingreso", "＋ Ingreso"], ["egreso", "－ Egreso"], ["transferencia", "⇄ Transferencia"]] as Array<["ingreso" | "egreso" | "transferencia", string]>).map(([v, label]) => (
+          {([["ingreso", "＋ Ingreso"], ["egreso", "－ Egreso"], ["transferencia", "⇄ Transferencia"], ["cierres", "📋 Cierres de Caja"]] as Array<["ingreso" | "egreso" | "transferencia" | "cierres", string]>).map(([v, label]) => (
             <button key={v} type="button" className={cajaTab === v ? "active" : ""} onClick={() => setCajaTab(v)}>{label}</button>
           ))}
         </nav>
@@ -295,8 +325,22 @@ export default function CampoModule({ section = "caja", nombre, onNombreChange }
         <TransferenciaForm cuentas={cuentas}
           onSaved={() => onCajaSaved("Transferencia registrada")} onError={(m) => notify(m, "err")} />
       )}
+      {cajaTab === "cierres" && <CierresCajaView />}
 
-      <LibroView cuentas={cuentas} version={libroVersion} onError={(m) => notify(m, "err")} />
+      {cajaTab !== "cierres" && <LibroView cuentas={cuentas} version={libroVersion} onError={(m) => notify(m, "err")} />}
+
+      {modalCaja === "abrir" && (
+        <AperturaCajaModal saldoSugerido={sesion?.saldo_sugerido ?? 0}
+          onClose={() => setModalCaja("")}
+          onDone={async () => { setModalCaja(""); await refreshSesion(); notify("Caja abierta"); }}
+          onError={(m) => notify(m, "err")} />
+      )}
+      {modalCaja === "cerrar" && (
+        <CierreCajaModal
+          onClose={() => setModalCaja("")}
+          onDone={async (msg) => { setModalCaja(""); await Promise.all([refreshSesion(), refreshCatalogos()]); setLibroVersion((v) => v + 1); notify(msg); }}
+          onError={(m) => notify(m, "err")} />
+      )}
     </section>
   );
 }
@@ -1181,6 +1225,142 @@ function LibroView({ cuentas, version, onError }: { cuentas: Cuenta[]; version: 
         </table>
       </div>
       <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>Saldo corrido acumulado por orden de fecha. Con una cuenta filtrada es el saldo de esa cuenta.</p>
+    </div>
+  );
+}
+
+// ── 🔓 Apertura de caja ──────────────────────────────────────────────────────
+function AperturaCajaModal({ saldoSugerido, onClose, onDone, onError }: {
+  saldoSugerido: number; onClose: () => void; onDone: () => void | Promise<void>; onError: (m: string) => void;
+}) {
+  const [monto, setMonto] = useState(saldoSugerido ? String(saldoSugerido) : "");
+  const [obs, setObs] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function submit() {
+    try {
+      setBusy(true);
+      const saldo = Number(monto);
+      if (!(saldo >= 0)) throw new Error("Ingresa el monto inicial (0 o más)");
+      await apiPost("/campo/caja/abrir", { saldo_inicial: saldo, observaciones: obs.trim() || undefined });
+      await onDone();
+    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <form className="formPanel" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submit(); }} style={{ maxWidth: 440, width: "100%", margin: 0 }}>
+        <h2 style={{ marginTop: 0 }}>🔓 Abrir caja</h2>
+        <label><span>Monto inicial en efectivo $</span>
+          <input type="number" step="0.01" min="0" autoFocus value={monto} onChange={(e) => setMonto(e.target.value)} placeholder="0.00" />
+          <small className="muted" style={{ cursor: "pointer" }} onClick={() => setMonto(String(saldoSugerido))}>› Sugerido (cierre anterior): {money(saldoSugerido)}</small>
+        </label>
+        <label><span>Observaciones (opcional)</span><input type="text" value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Ej: Turno mañana" /></label>
+        <div className="buttonRow">
+          <button type="submit" className="primary" disabled={busy}>{busy ? "Abriendo…" : "Abrir caja"}</button>
+          <button type="button" onClick={onClose} disabled={busy}>Cancelar</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ── 🔒 Arqueo y cierre de caja ───────────────────────────────────────────────
+function CierreCajaModal({ onClose, onDone, onError }: {
+  onClose: () => void; onDone: (msg: string) => void | Promise<void>; onError: (m: string) => void;
+}) {
+  const [prev, setPrev] = useState<{ saldo_inicial: number; ingresos: number; egresos: number; saldo_teorico: number } | null>(null);
+  const [real, setReal] = useState("");
+  const [obs, setObs] = useState("");
+  const [ajuste, setAjuste] = useState(true);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { apiGet<{ saldo_inicial: number; ingresos: number; egresos: number; saldo_teorico: number }>("/campo/caja/cierre-preview").then(setPrev).catch((e) => onError((e as Error).message)); }, [onError]);
+
+  const real$ = Number(real);
+  const valido = real !== "" && real$ >= 0;
+  const dif = valido && prev ? Math.round((real$ - prev.saldo_teorico) * 100) / 100 : 0;
+  const estadoDif = !valido ? "" : Math.abs(dif) <= 0.005 ? "cuadrado" : dif > 0 ? "sobrante" : "faltante";
+
+  async function submit() {
+    try {
+      setBusy(true);
+      if (!valido) throw new Error("Ingresa el efectivo físico contado");
+      const r = await apiPost<{ diferencia: number }>("/campo/caja/cerrar", { saldo_real: real$, observaciones: obs.trim() || undefined, generar_ajuste: ajuste });
+      const d = r.diferencia;
+      await onDone(Math.abs(d) <= 0.005 ? "Caja cerrada · cuadrada" : d > 0 ? `Caja cerrada · sobrante ${money(d)}` : `Caja cerrada · faltante ${money(-d)}`);
+    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <form className="formPanel" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submit(); }} style={{ maxWidth: 460, width: "100%", margin: 0 }}>
+        <h2 style={{ marginTop: 0 }}>🔒 Arqueo y cierre de caja</h2>
+        <table className="cajaTable" style={{ marginBottom: 8 }}>
+          <tbody>
+            <tr><td>Saldo inicial</td><td className="num">{money(prev?.saldo_inicial ?? 0)}</td></tr>
+            <tr><td>＋ Ingresos en efectivo</td><td className="num" style={{ color: "#15803d" }}>{money(prev?.ingresos ?? 0)}</td></tr>
+            <tr><td>－ Egresos en efectivo</td><td className="num" style={{ color: "#b91c1c" }}>{money(prev?.egresos ?? 0)}</td></tr>
+            <tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border-strong)" }}><td>= Saldo teórico</td><td className="num">{money(prev?.saldo_teorico ?? 0)}</td></tr>
+          </tbody>
+        </table>
+        <label><span>Efectivo físico contado $</span>
+          <input type="number" step="0.01" min="0" autoFocus value={real} onChange={(e) => setReal(e.target.value)} placeholder="0.00" />
+        </label>
+        {valido && (
+          <p style={{ margin: "2px 0 4px", padding: "8px 12px", borderRadius: 8, fontWeight: 700,
+            background: estadoDif === "cuadrado" ? "var(--c-success-bg)" : "var(--c-danger-bg)",
+            color: estadoDif === "cuadrado" ? "#15803d" : estadoDif === "sobrante" ? "#b45309" : "#b91c1c" }}>
+            {estadoDif === "cuadrado" ? "✅ Cuadrado (sin diferencia)" : estadoDif === "sobrante" ? `⬆️ Sobrante: ${money(dif)}` : `⬇️ Faltante: ${money(-dif)}`}
+          </p>
+        )}
+        {valido && estadoDif !== "cuadrado" && (
+          <label style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 8, cursor: "pointer" }}>
+            <input type="checkbox" checked={ajuste} onChange={(e) => setAjuste(e.target.checked)} style={{ width: "auto" }} />
+            <span style={{ margin: 0 }}>Generar ajuste en el libro por el descuadre</span>
+          </label>
+        )}
+        <label><span>Observaciones (opcional)</span><input type="text" value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Ej: cierre turno tarde" /></label>
+        <div className="buttonRow">
+          <button type="submit" className="primary" disabled={busy || !valido || !prev}>{busy ? "Cerrando…" : "Confirmar cierre"}</button>
+          <button type="button" onClick={onClose} disabled={busy}>Cancelar</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ── 📋 Historial de cierres de caja (auditoría) ──────────────────────────────
+function CierresCajaView() {
+  const [rows, setRows] = useState<SesionHist[]>([]);
+  useEffect(() => { apiGet<SesionHist[]>("/campo/caja/sesiones").then(setRows).catch(() => setRows([])); }, []);
+  const fmt = (d: string | null) => d ? new Date(d).toLocaleString("es-EC") : "—";
+  const difChip = (d: number | null) => d == null ? <span className="muted">—</span>
+    : Math.abs(d) <= 0.005 ? <span className="chip ok">Cuadrado</span>
+    : d > 0 ? <span className="chip warn">Sobrante {money(d)}</span>
+    : <span className="chip bad">Faltante {money(-d)}</span>;
+  return (
+    <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+      <h2>📋 Cierres de Caja <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· auditoría ({rows.length})</span></h2>
+      <div style={{ overflowX: "auto" }}>
+        <table className="cajaTable" style={{ marginTop: 6 }}>
+          <thead><tr>
+            <th>Apertura</th><th>Cierre</th><th>Responsable</th>
+            <th className="num">Saldo inicial</th><th className="num">Teórico</th><th className="num">Real</th><th>Diferencia</th><th>Estado</th>
+          </tr></thead>
+          <tbody>
+            {rows.length === 0 ? <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin sesiones de caja.</td></tr>
+              : rows.map((s) => (
+              <tr key={s.id}>
+                <td style={{ whiteSpace: "nowrap" }}>{fmt(s.fecha_apertura)}</td>
+                <td style={{ whiteSpace: "nowrap" }}>{fmt(s.fecha_cierre)}</td>
+                <td>{s.usuario_nombre ?? "—"}</td>
+                <td className="num">{money(s.saldo_inicial)}</td>
+                <td className="num">{s.saldo_teorico != null ? money(s.saldo_teorico) : "—"}</td>
+                <td className="num" style={{ fontWeight: 700 }}>{s.saldo_real != null ? money(s.saldo_real) : "—"}</td>
+                <td>{difChip(s.diferencia)}</td>
+                <td><span className={s.estado === "ABIERTA" ? "chip info" : "chip ok"}>{s.estado}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

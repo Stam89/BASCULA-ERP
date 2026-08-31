@@ -17,6 +17,27 @@ const userId = (req: unknown): string | null =>
 
 const fechaSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
+// ── Sesión de caja (apertura/arqueo/cierre) ─────────────────────────────────
+// La cuenta "CAJA" requiere una sesión ABIERTA para registrar ingresos/egresos
+// (y transferencias que la toquen). Helpers reutilizados por varios endpoints.
+type Q = { query: typeof pool.query };
+async function cajaCuentaId(client: Q = pool): Promise<string | null> {
+  return (await client.query("SELECT id FROM campo_cuentas WHERE nombre = 'CAJA' LIMIT 1")).rows[0]?.id ?? null;
+}
+async function sesionAbierta(client: Q = pool): Promise<{ id: string; fecha_apertura: string; saldo_inicial: string } | null> {
+  return (await client.query(
+    "SELECT id, fecha_apertura, saldo_inicial FROM campo_caja_sesiones WHERE estado = 'ABIERTA' ORDER BY fecha_apertura DESC LIMIT 1"
+  )).rows[0] ?? null;
+}
+// Bloquea si alguna de las cuentas es CAJA y no hay sesión abierta (400).
+async function requireCajaAbierta(cuentaIds: string[], client: Q = pool): Promise<void> {
+  const cajaId = await cajaCuentaId(client);
+  if (!cajaId || !cuentaIds.includes(cajaId)) return;
+  if (!(await sesionAbierta(client))) {
+    throw new ApiError(400, "Debe abrir caja antes de registrar movimientos");
+  }
+}
+
 // ── Catálogo: maquinaria/flota (activos: cosechadora/camión/vehículo/otro) ────
 // La FK "maquinaria_id" es campo_movimientos.activo_id → campo_activos.
 const TIPO_MAQUINARIA = ["cosechadora", "camion", "vehiculo", "transporte", "otro"] as const;
@@ -471,6 +492,8 @@ campoRouter.post("/movimientos", asyncRoute(async (req, res) => {
 
   const cta = await pool.query("SELECT 1 FROM campo_cuentas WHERE id = $1", [body.cuenta_id]);
   if (!cta.rowCount) throw new ApiError(404, "Cuenta no encontrada");
+  // Integridad: si el movimiento es sobre CAJA, exige una sesión de caja abierta.
+  await requireCajaAbierta([body.cuenta_id]);
   if (body.categoria_id) {
     const cat = await pool.query("SELECT 1 FROM campo_categorias_gasto WHERE id = $1", [body.categoria_id]);
     if (!cat.rowCount) throw new ApiError(404, "Categoría de gasto no encontrada");
@@ -1022,6 +1045,8 @@ campoRouter.post("/transferencias", asyncRoute(async (req, res) => {
     [[body.cuenta_origen_id, body.cuenta_destino_id]]
   );
   if (cuentas.rowCount !== 2) throw new ApiError(404, "Cuenta origen o destino no encontrada.");
+  // Integridad: una transferencia que toca CAJA también exige sesión abierta.
+  await requireCajaAbierta([body.cuenta_origen_id, body.cuenta_destino_id]);
   const nombre = (id: string) => cuentas.rows.find((c) => c.id === id)?.nombre ?? "";
   const uid = userId(req);
   const concepto = body.concepto?.trim() ||
@@ -1080,6 +1105,127 @@ campoRouter.get("/caja/libro", asyncRoute(async (req, res) => {
      ORDER BY l.fecha DESC, l.created_at DESC
      LIMIT 1000`,
     params
+  )).rows;
+  res.json(rows);
+}));
+
+// ════════════════════════════════════════════════════════════════════════════
+// SESIÓN DE CAJA · Apertura / Arqueo / Cierre (cuenta CAJA)
+// El saldo teórico = saldo_inicial + ingresos − egresos de CAJA desde la
+// apertura (por created_at). El arqueo compara con el efectivo físico contado.
+// ════════════════════════════════════════════════════════════════════════════
+
+// Resumen del arqueo de una sesión (ingresos/egresos de CAJA desde su apertura).
+async function calcularArqueo(client: Q, sesion: { fecha_apertura: string; saldo_inicial: string | number }) {
+  const cajaId = await cajaCuentaId(client);
+  const r = (await client.query(
+    `SELECT COALESCE(SUM(CASE WHEN signo = 'entrada' THEN monto ELSE 0 END), 0)::float AS ingresos,
+            COALESCE(SUM(CASE WHEN signo = 'salida' THEN monto ELSE 0 END), 0)::float AS egresos
+     FROM campo_movimientos WHERE cuenta_id = $1 AND created_at >= $2`,
+    [cajaId, sesion.fecha_apertura]
+  )).rows[0];
+  const saldoInicial = Number(sesion.saldo_inicial);
+  const saldoTeorico = Math.round((saldoInicial + r.ingresos - r.egresos) * 100) / 100;
+  return { saldo_inicial: saldoInicial, ingresos: r.ingresos, egresos: r.egresos, saldo_teorico: saldoTeorico };
+}
+
+// Estado actual: la sesión abierta (con su arqueo en vivo) + el saldo sugerido
+// para la próxima apertura (= saldo_real de la última sesión cerrada).
+campoRouter.get("/caja/sesion-activa", asyncRoute(async (_req, res) => {
+  const activa = (await pool.query(
+    `SELECT ses.*, u.name AS usuario_nombre
+     FROM campo_caja_sesiones ses LEFT JOIN users u ON u.id = ses.usuario_id
+     WHERE ses.estado = 'ABIERTA' ORDER BY ses.fecha_apertura DESC LIMIT 1`
+  )).rows[0] ?? null;
+  const sugerido = (await pool.query(
+    "SELECT saldo_real FROM campo_caja_sesiones WHERE estado = 'CERRADA' ORDER BY fecha_cierre DESC LIMIT 1"
+  )).rows[0]?.saldo_real;
+  const resp: Record<string, unknown> = { saldo_sugerido: sugerido != null ? Number(sugerido) : 0 };
+  if (activa) {
+    resp.activa = {
+      id: activa.id, usuario_nombre: activa.usuario_nombre, fecha_apertura: activa.fecha_apertura,
+      saldo_inicial: Number(activa.saldo_inicial), observaciones: activa.observaciones,
+      arqueo: await calcularArqueo(pool, activa)
+    };
+  } else {
+    resp.activa = null;
+  }
+  res.json(resp);
+}));
+
+// Abrir caja: crea una sesión ABIERTA (409 si ya hay una).
+campoRouter.post("/caja/abrir", asyncRoute(async (req, res) => {
+  const body = z.object({
+    saldo_inicial: z.number().nonnegative(),
+    observaciones: z.string().max(400).optional()
+  }).parse(req.body);
+  const row = await inTransaction(async (client) => {
+    if (await sesionAbierta(client)) throw new ApiError(409, "Ya hay una caja abierta. Ciérrala antes de abrir otra.");
+    return (await client.query(
+      `INSERT INTO campo_caja_sesiones (usuario_id, saldo_inicial, observaciones)
+       VALUES ($1, $2, $3) RETURNING *`,
+      [userId(req), body.saldo_inicial, body.observaciones?.trim() || null]
+    )).rows[0];
+  });
+  res.status(201).json(row);
+}));
+
+// Vista previa del arqueo (sin cerrar): saldo inicial, ingresos, egresos y teórico.
+campoRouter.get("/caja/cierre-preview", asyncRoute(async (_req, res) => {
+  const s = await sesionAbierta();
+  if (!s) throw new ApiError(400, "No hay una caja abierta.");
+  res.json({ sesion_id: s.id, fecha_apertura: s.fecha_apertura, ...(await calcularArqueo(pool, s)) });
+}));
+
+// Cerrar/arquear: compara el efectivo físico con el teórico, registra la
+// diferencia y cierra la sesión. Opcional: genera un ajuste en el libro (CAJA)
+// por el descuadre (entrada si sobra, salida si falta).
+campoRouter.post("/caja/cerrar", asyncRoute(async (req, res) => {
+  const body = z.object({
+    saldo_real: z.number().nonnegative(),
+    observaciones: z.string().max(400).optional(),
+    generar_ajuste: z.boolean().optional()
+  }).parse(req.body);
+  const result = await inTransaction(async (client) => {
+    const s = (await client.query("SELECT * FROM campo_caja_sesiones WHERE estado = 'ABIERTA' ORDER BY fecha_apertura DESC LIMIT 1 FOR UPDATE")).rows[0];
+    if (!s) throw new ApiError(400, "No hay una caja abierta.");
+    const arq = await calcularArqueo(client, s);
+    const diferencia = Math.round((body.saldo_real - arq.saldo_teorico) * 100) / 100; // >0 sobrante, <0 faltante
+    const cerrada = (await client.query(
+      `UPDATE campo_caja_sesiones
+       SET fecha_cierre = now(), saldo_teorico = $2, saldo_real = $3, diferencia = $4, estado = 'CERRADA',
+           observaciones = COALESCE($5, observaciones)
+       WHERE id = $1 RETURNING *`,
+      [s.id, arq.saldo_teorico, body.saldo_real, diferencia, body.observaciones?.trim() || null]
+    )).rows[0];
+
+    let ajuste = null;
+    if (body.generar_ajuste && Math.abs(diferencia) > 0.005) {
+      const cajaId = await cajaCuentaId(client);
+      const signo = diferencia > 0 ? "entrada" : "salida";
+      const concepto = diferencia > 0 ? "Ajuste por sobrante de arqueo de caja" : "Ajuste por faltante de arqueo de caja";
+      // Inserción directa (naturaleza 'ajuste_caja'): reconcilia CAJA con el
+      // conteo físico. No pasa por el bloqueo de sesión (la sesión ya cerró).
+      ajuste = (await client.query(
+        `INSERT INTO campo_movimientos (cuenta_id, signo, monto, concepto, naturaleza, created_by)
+         VALUES ($1, $2, $3, $4, 'ajuste_caja', $5) RETURNING *`,
+        [cajaId, signo, Math.abs(diferencia), concepto, userId(req)]
+      )).rows[0];
+    }
+    return { sesion: cerrada, arqueo: arq, diferencia, ajuste };
+  });
+  res.status(201).json(result);
+}));
+
+// Historial de cierres (auditoría).
+campoRouter.get("/caja/sesiones", asyncRoute(async (_req, res) => {
+  const rows = (await pool.query(
+    `SELECT ses.id, ses.fecha_apertura, ses.fecha_cierre,
+            ses.saldo_inicial::float AS saldo_inicial, ses.saldo_teorico::float AS saldo_teorico,
+            ses.saldo_real::float AS saldo_real, ses.diferencia::float AS diferencia,
+            ses.estado, ses.observaciones, u.name AS usuario_nombre
+     FROM campo_caja_sesiones ses LEFT JOIN users u ON u.id = ses.usuario_id
+     ORDER BY ses.fecha_apertura DESC LIMIT 200`
   )).rows;
   res.json(rows);
 }));
