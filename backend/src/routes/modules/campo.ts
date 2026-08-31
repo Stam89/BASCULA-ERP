@@ -415,11 +415,17 @@ campoRouter.post("/movimientos/:id/liquidar", asyncRoute(async (req, res) => {
 // Registro diario por máquina (campo_activos). El estado del cobro es
 // 'por_cobrar' por defecto.
 campoRouter.get("/partes", asyncRoute(async (req, res) => {
-  const q = z.object({ from: fechaSchema.optional(), to: fechaSchema.optional() }).parse(req.query);
+  const q = z.object({
+    from: fechaSchema.optional(), to: fechaSchema.optional(),
+    activo_id: z.string().uuid().optional(),
+    estado: z.enum(["por_cobrar", "cobrado"]).optional()
+  }).parse(req.query);
   const conds: string[] = [];
   const params: unknown[] = [];
   if (q.from) { params.push(q.from); conds.push(`p.fecha >= $${params.length}`); }
   if (q.to) { params.push(q.to); conds.push(`p.fecha <= $${params.length}`); }
+  if (q.activo_id) { params.push(q.activo_id); conds.push(`p.activo_id = $${params.length}`); }
+  if (q.estado) { params.push(q.estado); conds.push(`p.estado = $${params.length}`); }
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   const result = await pool.query(
     `SELECT p.id, p.fecha, p.activo_id, p.operador, p.cliente, p.qq::float AS qq,
@@ -482,6 +488,77 @@ campoRouter.post("/partes/:id/cobrar", asyncRoute(async (req, res) => {
     return { parte: parteUpd, servicio, cliente_id: cliente.id, valor };
   });
   res.status(201).json(result);
+}));
+
+// Editar un parte. Solo si aún NO tiene cobro generado (estado 'por_cobrar'):
+// cambiar qq/cliente/máquina de un parte ya cobrado desincronizaría su servicio.
+campoRouter.patch("/partes/:id", asyncRoute(async (req, res) => {
+  const body = z.object({
+    fecha: fechaSchema.optional(),
+    activo_id: z.string().uuid().optional(),
+    operador: z.string().max(140).nullable().optional(),
+    cliente: z.string().min(1).max(160).optional(),
+    qq: z.number().positive().optional(),
+    observaciones: z.string().max(400).nullable().optional()
+  }).parse(req.body);
+  if (body.activo_id) {
+    const act = await pool.query("SELECT 1 FROM campo_activos WHERE id = $1", [body.activo_id]);
+    if (!act.rowCount) throw new ApiError(404, "Máquina no encontrada");
+  }
+  const row = await inTransaction(async (client) => {
+    const parte = (await client.query("SELECT estado FROM campo_partes WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
+    if (!parte) throw new ApiError(404, "Parte no encontrado");
+    if (parte.estado !== "por_cobrar") throw new ApiError(409, "El parte ya tiene un cobro generado; anula el cobro (des-cobrar) antes de editarlo.");
+    const fields: string[] = [];
+    const values: unknown[] = [];
+    let i = 1;
+    for (const k of ["fecha", "activo_id", "operador", "cliente", "qq", "observaciones"] as const) {
+      if (body[k] !== undefined) {
+        const v = (k === "operador" || k === "observaciones" || k === "cliente")
+          ? (typeof body[k] === "string" ? (body[k] as string).trim() || (k === "cliente" ? undefined : null) : body[k])
+          : body[k];
+        if (k === "cliente" && (v === undefined || v === null)) throw new ApiError(400, "El cliente no puede quedar vacío.");
+        fields.push(`${k} = $${i++}`); values.push(v);
+      }
+    }
+    if (fields.length === 0) throw new ApiError(400, "Sin cambios");
+    values.push(req.params.id);
+    return (await client.query(`UPDATE campo_partes SET ${fields.join(", ")} WHERE id = $${i} RETURNING *`, values)).rows[0];
+  });
+  res.json(row);
+}));
+
+// Anular (borrar) un parte. Solo si NO tiene cobro generado (sin servicio).
+campoRouter.delete("/partes/:id", asyncRoute(async (req, res) => {
+  const row = await inTransaction(async (client) => {
+    const parte = (await client.query("SELECT estado FROM campo_partes WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
+    if (!parte) throw new ApiError(404, "Parte no encontrado");
+    if (parte.estado !== "por_cobrar") throw new ApiError(409, "El parte ya tiene un cobro generado; anula el cobro (des-cobrar) antes de borrarlo.");
+    await client.query("DELETE FROM campo_partes WHERE id = $1", [req.params.id]);
+    return { id: req.params.id };
+  });
+  res.json(row);
+}));
+
+// Des-cobrar: revierte 'cobrado' → 'por_cobrar', borrando el servicio generado.
+// Solo si ese servicio NO tiene abonos (movimientos); si ya cobró algo, se rechaza
+// (primero hay que reversar los abonos en Caja/Servicios).
+campoRouter.post("/partes/:id/descobrar", asyncRoute(async (req, res) => {
+  const row = await inTransaction(async (client) => {
+    const parte = (await client.query("SELECT * FROM campo_partes WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
+    if (!parte) throw new ApiError(404, "Parte no encontrado");
+    if (parte.estado !== "cobrado" || !parte.servicio_id) throw new ApiError(409, "El parte no tiene un cobro para anular.");
+    const abonos = await client.query(
+      "SELECT 1 FROM campo_movimientos WHERE servicio_id = $1 LIMIT 1", [parte.servicio_id]
+    );
+    if (abonos.rowCount) throw new ApiError(409, "El cobro ya tiene abonos registrados; reversa los abonos en Caja antes de des-cobrar.");
+    const parteUpd = (await client.query(
+      "UPDATE campo_partes SET estado = 'por_cobrar', servicio_id = NULL WHERE id = $1 RETURNING *", [req.params.id]
+    )).rows[0];
+    await client.query("DELETE FROM campo_servicios WHERE id = $1", [parte.servicio_id]);
+    return { parte: parteUpd, servicio_id_borrado: parte.servicio_id };
+  });
+  res.json(row);
 }));
 
 campoRouter.post("/partes", asyncRoute(async (req, res) => {

@@ -3,11 +3,21 @@
 // máquina sale de la flota real (campo_activos); el operador se copia del activo
 // pero queda editable. Mantiene los estilos de CajaModule.
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { apiGet, apiPost } from "../api";
+import { apiFetch, apiGet, apiPost } from "../api";
 import { money } from "../format";
 
 const hoy = () => new Date().toISOString().slice(0, 10);
 const qqFmt = (n: number) => n.toLocaleString("es-EC", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+
+// PATCH/DELETE a /campo/partes/:id (apiPost solo cubre POST/GET).
+async function parteReq(path: string, method: "PATCH" | "DELETE", body?: unknown): Promise<unknown> {
+  const r = await apiFetch(path, {
+    method, headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined
+  });
+  if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error || "No se pudo completar la operación");
+  return r.json().catch(() => ({}));
+}
 
 // Máquina = flota (campo_activos). Solo se usan nombre/operador/estado aquí.
 type Activo = { id: string; nombre: string; operador: string | null; activo: boolean };
@@ -25,19 +35,39 @@ export default function PartesModule() {
   const [f, setF] = useState({ fecha: hoy(), activo_id: "", operador: "", cliente: "", qq: "", observaciones: "" });
   const [busy, setBusy] = useState(false);
   const [cobrando, setCobrando] = useState<Parte | null>(null);
+  const [editando, setEditando] = useState<Parte | null>(null);
+  const [filtro, setFiltro] = useState({ from: "", to: "", activo_id: "", estado: "" });
   const [flash, setFlash] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
   const notify = (text: string, kind: "ok" | "err" = "ok") => { setFlash({ text, kind }); setTimeout(() => setFlash(null), 3000); };
 
   const activosActivos = useMemo(() => activos.filter((a) => a.activo), [activos]);
   const totalQQ = useMemo(() => partes.reduce((s, p) => s + p.qq, 0), [partes]);
 
+  const cargarPartes = useCallback(async () => {
+    const qs = new URLSearchParams();
+    if (filtro.from) qs.set("from", filtro.from);
+    if (filtro.to) qs.set("to", filtro.to);
+    if (filtro.activo_id) qs.set("activo_id", filtro.activo_id);
+    if (filtro.estado) qs.set("estado", filtro.estado);
+    setPartes(await apiGet<Parte[]>(`/campo/partes?${qs.toString()}`));
+  }, [filtro]);
   const refrescar = useCallback(async () => {
     try {
-      const [a, p] = await Promise.all([apiGet<Activo[]>("/campo/activos?solo_activos=1"), apiGet<Parte[]>("/campo/partes")]);
-      setActivos(a); setPartes(p);
+      await Promise.all([apiGet<Activo[]>("/campo/activos?solo_activos=1").then(setActivos), cargarPartes()]);
     } catch (e) { notify((e as Error).message, "err"); }
-  }, []);
+  }, [cargarPartes]);
   useEffect(() => { refrescar(); }, [refrescar]);
+
+  async function anular(p: Parte) {
+    if (!window.confirm(`¿Anular el parte de ${p.cliente} (${qqFmt(p.qq)} QQ)? Esta acción no se puede deshacer.`)) return;
+    try { await parteReq(`/campo/partes/${p.id}`, "DELETE"); await refrescar(); notify("Parte anulado"); }
+    catch (e) { notify((e as Error).message, "err"); }
+  }
+  async function descobrar(p: Parte) {
+    if (!window.confirm(`¿Des-cobrar el parte de ${p.cliente}? Se borrará el servicio de cobro generado.`)) return;
+    try { await apiPost(`/campo/partes/${p.id}/descobrar`, {}); await refrescar(); notify("Cobro anulado; el parte vuelve a Por cobrar"); }
+    catch (e) { notify((e as Error).message, "err"); }
+  }
 
   // Al elegir máquina, se autocompleta el operador (editable).
   function elegirMaquina(activo_id: string) {
@@ -118,15 +148,36 @@ export default function PartesModule() {
             <strong>{qqFmt(totalQQ)}</strong>
           </div>
         </div>
+        {/* Filtros */}
+        <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginTop: 8 }}>
+          <label style={{ margin: 0 }}><span>Desde</span><input type="date" value={filtro.from} onChange={(e) => setFiltro({ ...filtro, from: e.target.value })} /></label>
+          <label style={{ margin: 0 }}><span>Hasta</span><input type="date" value={filtro.to} onChange={(e) => setFiltro({ ...filtro, to: e.target.value })} /></label>
+          <label style={{ margin: 0 }}><span>Máquina</span>
+            <select value={filtro.activo_id} onChange={(e) => setFiltro({ ...filtro, activo_id: e.target.value })}>
+              <option value="">Todas</option>
+              {activos.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}
+            </select>
+          </label>
+          <label style={{ margin: 0 }}><span>Estado</span>
+            <select value={filtro.estado} onChange={(e) => setFiltro({ ...filtro, estado: e.target.value })}>
+              <option value="">Todos</option>
+              <option value="por_cobrar">Por cobrar</option>
+              <option value="cobrado">Cobro generado</option>
+            </select>
+          </label>
+          {(filtro.from || filtro.to || filtro.activo_id || filtro.estado) && (
+            <button type="button" className="btnSecondary" onClick={() => setFiltro({ from: "", to: "", activo_id: "", estado: "" })}>Limpiar</button>
+          )}
+        </div>
         <div style={{ overflowX: "auto" }}>
           <table className="cajaTable" style={{ marginTop: 8 }}>
             <thead><tr>
               <th>Fecha</th><th>Operador</th><th>Máquina</th><th>Cliente</th>
-              <th className="num">QQ cosechados</th><th>Observaciones</th><th>Estado</th>
+              <th className="num">QQ cosechados</th><th>Observaciones</th><th>Estado</th><th>Acciones</th>
             </tr></thead>
             <tbody>
               {partes.length === 0 ? (
-                <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin partes registrados.</td></tr>
+                <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin partes registrados.</td></tr>
               ) : partes.map((p) => (
                 <tr key={p.id}>
                   <td style={{ whiteSpace: "nowrap" }}>{String(p.fecha).slice(0, 10)}</td>
@@ -145,11 +196,19 @@ export default function PartesModule() {
                           </small>
                         )}
                       </>
-                    ) : (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
-                        <span className="chip warn">Por cobrar</span>
-                        <button type="button" className="btnSecondary" onClick={() => setCobrando(p)}>💵 Generar cobro</button>
+                    ) : <span className="chip warn">Por cobrar</span>}
+                  </td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    {p.estado === "por_cobrar" ? (
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <button type="button" className="btnSecondary" onClick={() => setCobrando(p)}>💵 Cobrar</button>
+                        <button type="button" className="btnSecondary" onClick={() => setEditando(p)}>✏️ Editar</button>
+                        <button type="button" className="btnSecondary" onClick={() => anular(p)}>🗑️ Anular</button>
                       </div>
+                    ) : (
+                      <button type="button" className="btnSecondary" disabled={p.servicio_estado !== "pendiente"}
+                        title={p.servicio_estado !== "pendiente" ? "El cobro ya tiene abonos; reversa los abonos en Caja primero." : "Anular el cobro y volver a Por cobrar"}
+                        onClick={() => descobrar(p)}>↩️ Des-cobrar</button>
                     )}
                   </td>
                 </tr>
@@ -165,7 +224,66 @@ export default function PartesModule() {
           onDone={async () => { setCobrando(null); await refrescar(); notify("Cobro generado (servicio de cosecha)"); }}
           onError={(m) => notify(m, "err")} />
       )}
+      {editando && (
+        <EditarParteModal parte={editando} activos={activosActivos}
+          onClose={() => setEditando(null)}
+          onDone={async () => { setEditando(null); await refrescar(); notify("Parte actualizado"); }}
+          onError={(m) => notify(m, "err")} />
+      )}
     </section>
+  );
+}
+
+// Modal de edición de un parte (solo partes 'por cobrar'; el backend rechaza
+// editar uno ya cobrado). Mismos campos del alta.
+function EditarParteModal({ parte, activos, onClose, onDone, onError }: {
+  parte: Parte; activos: Activo[]; onClose: () => void; onDone: () => void | Promise<void>; onError: (m: string) => void;
+}) {
+  const [f, setF] = useState({
+    fecha: String(parte.fecha).slice(0, 10), activo_id: parte.activo_id, operador: parte.operador ?? "",
+    cliente: parte.cliente, qq: String(parte.qq), observaciones: parte.observaciones ?? ""
+  });
+  const [busy, setBusy] = useState(false);
+  async function submit() {
+    try {
+      setBusy(true);
+      if (!f.activo_id) throw new Error("Elige la máquina");
+      const cliente = f.cliente.trim();
+      if (!cliente) throw new Error("Ingresa el cliente");
+      const qq = Number(f.qq);
+      if (!(qq > 0)) throw new Error("Ingresa los quintales (mayor a 0)");
+      await parteReq(`/campo/partes/${parte.id}`, "PATCH", {
+        fecha: f.fecha, activo_id: f.activo_id, operador: f.operador.trim() || null,
+        cliente, qq, observaciones: f.observaciones.trim() || null
+      });
+      await onDone();
+    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <form className="formPanel" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submit(); }}
+        style={{ maxWidth: 480, width: "100%", margin: 0 }}>
+        <h2 style={{ marginTop: 0 }}>✏️ Editar parte de cosecha</h2>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <label><span>Fecha</span><input type="date" value={f.fecha} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
+          <label><span>Máquina</span>
+            <select value={f.activo_id} onChange={(e) => setF({ ...f, activo_id: e.target.value })}>
+              {activos.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}
+            </select>
+          </label>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <label><span>Operador</span><input type="text" value={f.operador} onChange={(e) => setF({ ...f, operador: e.target.value })} /></label>
+          <label><span>Quintales [QQ]</span><input type="number" step="0.01" min="0" value={f.qq} onChange={(e) => setF({ ...f, qq: e.target.value })} /></label>
+        </div>
+        <label><span>Cliente / Dueño del cultivo</span><input type="text" value={f.cliente} onChange={(e) => setF({ ...f, cliente: e.target.value })} /></label>
+        <label><span>Observaciones (opcional)</span><input type="text" value={f.observaciones} onChange={(e) => setF({ ...f, observaciones: e.target.value })} /></label>
+        <div className="buttonRow">
+          <button type="submit" className="primary" disabled={busy}>{busy ? "Guardando…" : "Guardar cambios"}</button>
+          <button type="button" onClick={onClose} disabled={busy}>Cancelar</button>
+        </div>
+      </form>
+    </div>
   );
 }
 
