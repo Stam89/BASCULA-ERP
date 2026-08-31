@@ -1,6 +1,6 @@
 # PROJECT_CONTEXT — BASCULA-ERP
 
-> Memoria compacta para continuar sin releer todo. Última actualización: 2026-08-31 (Campo: Operadores + QQ por máquina + tarifa en partes cobrados; Ops: deploy.sh + PM2).
+> Memoria compacta para continuar sin releer todo. Última actualización: 2026-08-31 (Campo: Operadores + QQ por máquina + tarifa en partes + Estado de Cuenta de Clientes; Ops: deploy.sh + PM2).
 > Al empezar una sesión, **lee solo este archivo** primero.
 
 ## 0. Stack / cómo corre
@@ -16,7 +16,7 @@
 ## 1. ESTADO ACTUAL
 ERP para piladora de arroz con arquitectura **multi-accionista**: MATRIZ **CEYRO** (dueña, id `00000000-0000-0000-0000-000000000001`) y SOCIOS **ROVINSON** y **STALYN**. Selector de accionista activo manda header `X-Accionista-Id`; permisos por accionista.
 - Funciona: Dashboard, Báscula, Secadoras, Producción, Inventario, Selección/envejecido, Ventas (pedido→despacho), Compras, Caja, Por Cobrar, Por Pagar, Liquidaciones, Fomentos, Agricultores, Nómina, Cuadrilla, Servicio Pilado, Estados Financieros, Costos Operativos, Reportes, Configuración.
-- **main** commiteado+pusheado (último `ab80b4a`: operadores + QQ por máquina + tarifa en partes; el commit final es el de estos docs). Typecheck/build FE+BE en verde, lint 0 errores. Backend corre compilado desde `dist/`. **No hay auto-deploy** (el `ci.yml` solo hace typecheck/tests/build/lint en runners de GitHub, sin BD; producción se despliega a mano).
+- **main** commiteado+pusheado (último `23e3f81`: Estado de Cuenta de Clientes; el commit final es el de estos docs). Menú Campo: Caja·Servicios·**Clientes**·Vales·Partes Diarios·Reportes·Configuración. Typecheck/build FE+BE en verde, lint 0 errores. Backend corre compilado desde `dist/`. **No hay auto-deploy** (el `ci.yml` solo hace typecheck/tests/build/lint en runners de GitHub, sin BD; producción se despliega a mano).
 - **En main ya está el módulo Caja de Campo completo hasta V3 + Flota/Maquinaria + Egreso/Ingreso estandarizados + Vales + Partes Diarios de Cosecha (con cobro)**: V1 captura, V2 reportes (vista `campo_servicios_saldo` + 3 reportes), Campo como **operación de CEYRO** en el selector de arriba (no pastilla de sidebar), **contexto AISLADO** (layout propio `CampoWorkspace`, menú `CAMPO_SECCIONES`: Caja·Servicios·Vales·**Partes Diarios**·Reportes·Configuración) y **V3** (nombre de operación editable en `campo_config`, sección **Caja** con ingreso/egreso/transferencia/libro con saldo corrido). Migraciones aplicadas en local hasta `20260829_campo_partes_cobro.sql`. BD local **limpia** (0 movimientos/partes; semillas: 3 cuentas, 8 categorías; flota intacta).
 - **Flota y Maquinaria** (`1b1e394`): `campo_activos` extendida con `placa_codigo`+tipos de flota; CRUD "🚜 Flota y Maquinaria" en Configuración; selector de máquina en Egreso; badge en el Libro. Migración `20260828_campo_maquinaria.sql`.
 - **Egreso reordenado + Vales/Anticipos** (`b904b4c`): egreso con orden estricto (Fecha·Máquina*·Categoría*·Concepto·Monto·Cuenta), máquina OBLIGATORIA con default "🏢 Gastos Generales / Administración"; **Vales por rendir** (sección 📋, estado + ajuste `naturaleza='ajuste_vale'`). Migración `20260828_campo_vales_anticipos.sql`. Ver §2k.
@@ -174,6 +174,15 @@ Todo en `main`. Rama propia cerrada con FF+push.
 Verificado E2E (API + navegador): operadores CRUD/filtro; QQ por máquina=200; tarifa 1.5→180 y monto 200→200; **409 al editar tarifa con abono**. BD limpia tras QA.
 
 Archivos (2m): `backend/src/routes/modules/campo.ts`, `web-admin/src/campo/{CampoModule,PartesModule}.tsx`; **nuevos**: `database/migrations/20260831_campo_operadores.sql`, `deploy.sh`, `ecosystem.config.js`, `.gitattributes`.
+
+## 2n. CAMBIOS 2026-08-31 (Estado de Cuenta de Clientes — `23e3f81`) — en main
+Nueva sección **👥 Clientes** en el workspace de Campo (menú entre Servicios y Vales). **Alcance SOLO Campo** (aislado del ERP de piladora; el usuario descartó unir con Planta). Migración `20260831_campo_clientes_identificacion.sql`: + `identificacion` en `campo_clientes`.
+- **Endpoints**: `GET /campo/clientes/estado-cuenta` (lista: debe=Σ servicios, haber=Σ abonos, saldo histórico real, + `total_pendiente`; filtros `q` nombre/identificación y `estado` al_dia/pendiente — se filtran en JS sobre el agregado SQL). `GET /campo/clientes/:id/estado-cuenta?from&to` (línea de tiempo: servicios cosecha/flete = Debe con máquina+QQ, abonos = Haber con cuenta; **saldo corrido**; `saldo_apertura` = neto previo a `from`; totales). `POST /clientes` acepta `identificacion`; nuevo `PATCH /clientes/:id`. `GET /clientes` busca también por identificación.
+- **Frontend** (CampoModule): `ClientesView` (buscador + filtro estado + total por cobrar + tabla con saldo), `EstadoCuentaModal` (rango fecha, timeline Debe/Haber/Saldo, **ficha imprimible/PDF** con QQ/máquina/desglose de abonos vía `window.open`), `EditarClienteModal`.
+- **Integridad**: el saldo se DERIVA en vivo (no se almacena) → ajustes de tarifa y des-cobros de Campo se reflejan al recargar. Abonos siguen atados a servicio→cliente; sobrepago con guard 422 intacto.
+Verificado E2E (API: lista debe/haber/saldo, filtros, buscador por identificación, timeline con apertura/totales; navegador: sección, lista, modal, imprimir). BD limpia tras QA.
+
+Archivos (2n): `backend/src/routes/modules/campo.ts`, `web-admin/src/campo/CampoModule.tsx`; **nuevo**: `database/migrations/20260831_campo_clientes_identificacion.sql`.
 
 ## 3. REGLAS DE NEGOCIO (no romper)
 - **Toma de pedido NO mueve dinero ni inventario**; recién al **Despachar** sale stock + entra caja (Contado) o Cuenta por Cobrar (Crédito). Estados DB: `PENDING`/`DELIVERED`/`CANCELLED` (NO renombrar; hay CHECK). El pedido genera su CxC "(pendiente de despacho)" al tomarse; al despachar se salda o se enlaza, nunca se duplica.
