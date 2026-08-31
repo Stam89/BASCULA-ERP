@@ -190,7 +190,7 @@ campoRouter.get("/clientes", asyncRoute(async (req, res) => {
     where = `WHERE lower(nombre) LIKE $1 OR lower(coalesce(identificacion,'')) LIKE $1`;
   }
   const result = await pool.query(
-    `SELECT id, nombre, tipo, identificacion, created_at FROM campo_clientes ${where} ORDER BY nombre LIMIT 50`,
+    `SELECT id, nombre, tipo, identificacion, telefono, created_at FROM campo_clientes ${where} ORDER BY nombre LIMIT 50`,
     params
   );
   res.json(result.rows);
@@ -200,18 +200,19 @@ campoRouter.post("/clientes", asyncRoute(async (req, res) => {
   const body = z.object({
     nombre: z.string().min(2).max(160),
     tipo: z.enum(["piladora", "externo"]).default("externo"),
-    identificacion: z.string().max(40).optional()
+    identificacion: z.string().max(40).optional(),
+    telefono: z.string().max(40).optional()
   }).parse(req.body);
   // Alta rápida: si ya existe uno con ese nombre (sin distinguir mayúsculas), se
   // reutiliza para no duplicar al capturar rápido.
   const existing = await pool.query(
-    "SELECT id, nombre, tipo, identificacion, created_at FROM campo_clientes WHERE lower(trim(nombre)) = lower(trim($1)) LIMIT 1",
+    "SELECT id, nombre, tipo, identificacion, telefono, created_at FROM campo_clientes WHERE lower(trim(nombre)) = lower(trim($1)) LIMIT 1",
     [body.nombre]
   );
   if (existing.rowCount) { res.status(200).json(existing.rows[0]); return; }
   const result = await pool.query(
-    `INSERT INTO campo_clientes (nombre, tipo, identificacion) VALUES (trim($1), $2, $3) RETURNING id, nombre, tipo, identificacion, created_at`,
-    [body.nombre, body.tipo, body.identificacion?.trim() || null]
+    `INSERT INTO campo_clientes (nombre, tipo, identificacion, telefono) VALUES (trim($1), $2, $3, $4) RETURNING id, nombre, tipo, identificacion, telefono, created_at`,
+    [body.nombre, body.tipo, body.identificacion?.trim() || null, body.telefono?.trim() || null]
   );
   res.status(201).json(result.rows[0]);
 }));
@@ -220,17 +221,18 @@ campoRouter.patch("/clientes/:id", asyncRoute(async (req, res) => {
   const body = z.object({
     nombre: z.string().min(2).max(160).optional(),
     tipo: z.enum(["piladora", "externo"]).optional(),
-    identificacion: z.string().max(40).nullable().optional()
+    identificacion: z.string().max(40).nullable().optional(),
+    telefono: z.string().max(40).nullable().optional()
   }).parse(req.body);
   const fields: string[] = [];
   const values: unknown[] = [];
   let i = 1;
-  for (const k of ["nombre", "tipo", "identificacion"] as const) {
+  for (const k of ["nombre", "tipo", "identificacion", "telefono"] as const) {
     if (body[k] !== undefined) { fields.push(`${k} = $${i++}`); values.push(typeof body[k] === "string" ? (body[k] as string).trim() : body[k]); }
   }
   if (fields.length === 0) throw new ApiError(400, "Sin cambios");
   values.push(req.params.id);
-  const result = await pool.query(`UPDATE campo_clientes SET ${fields.join(", ")} WHERE id = $${i} RETURNING id, nombre, tipo, identificacion, created_at`, values);
+  const result = await pool.query(`UPDATE campo_clientes SET ${fields.join(", ")} WHERE id = $${i} RETURNING id, nombre, tipo, identificacion, telefono, created_at`, values);
   if (!result.rows[0]) throw new ApiError(404, "Cliente no encontrado");
   res.json(result.rows[0]);
 }));
@@ -252,7 +254,7 @@ campoRouter.get("/clientes/estado-cuenta", asyncRoute(async (req, res) => {
        FROM campo_movimientos m JOIN campo_servicios s ON s.id = m.servicio_id
        WHERE m.signo = 'entrada' GROUP BY s.cliente_id
      )
-     SELECT c.id, c.nombre, c.identificacion, c.tipo,
+     SELECT c.id, c.nombre, c.identificacion, c.telefono, c.tipo,
             COALESCE(serv.debe, 0)::float AS debe,
             COALESCE(ab.haber, 0)::float AS haber,
             (COALESCE(serv.debe, 0) - COALESCE(ab.haber, 0))::float AS saldo,

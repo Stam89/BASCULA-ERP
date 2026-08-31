@@ -60,7 +60,7 @@ type SesionResp = { activa: SesionActiva | null; saldo_sugerido: number };
 type SesionHist = { id: string; fecha_apertura: string; fecha_cierre: string | null; saldo_inicial: number; saldo_teorico: number | null; saldo_real: number | null; diferencia: number | null; estado: "ABIERTA" | "CERRADA"; observaciones: string | null; usuario_nombre: string | null };
 
 // Estado de cuenta de clientes (Campo).
-type ClienteCuenta = { id: string; nombre: string; identificacion: string | null; tipo: string; debe: number; haber: number; saldo: number; servicios: number };
+type ClienteCuenta = { id: string; nombre: string; identificacion: string | null; telefono: string | null; tipo: string; debe: number; haber: number; saldo: number; servicios: number };
 type EstadoLinea = { fecha: string; clase: "servicio" | "abono"; detalle: string; maquina: string | null; qq: number | null; precio_unitario: number | null; debe: number; haber: number; cuenta: string | null; saldo: number };
 type EstadoCuenta = { cliente: { id: string; nombre: string; identificacion: string | null; tipo: string }; periodo: { from: string; to: string }; saldo_apertura: number; lineas: EstadoLinea[]; total_debe: number; total_haber: number; saldo_final: number };
 
@@ -589,6 +589,7 @@ function ClientesView({ nombreOperacion, onNotify, onError }: {
   const [data, setData] = useState<{ clientes: ClienteCuenta[]; total_pendiente: number } | null>(null);
   const [verCuenta, setVerCuenta] = useState<ClienteCuenta | null>(null);
   const [editar, setEditar] = useState<ClienteCuenta | null>(null);
+  const [nuevo, setNuevo] = useState(false);
 
   const cargar = useCallback(async () => {
     try {
@@ -606,6 +607,7 @@ function ClientesView({ nombreOperacion, onNotify, onError }: {
       <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <h2 style={{ margin: 0 }}>👥 Clientes <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· estado de cuenta</span></h2>
+          <button type="button" className="primary" onClick={() => setNuevo(true)}>＋ Nuevo Cliente</button>
           <div className="totalBox" style={{ minWidth: 170, margin: 0, marginLeft: "auto", background: "#fef3c7", borderColor: "#fde68a" }}>
             <span>TOTAL POR COBRAR</span>
             <strong style={{ color: "#b45309" }}>{money(data?.total_pendiente ?? 0)}</strong>
@@ -664,7 +666,60 @@ function ClientesView({ nombreOperacion, onNotify, onError }: {
           onDone={async () => { setEditar(null); await cargar(); onNotify("Cliente actualizado"); }}
           onError={onError} />
       )}
+      {nuevo && (
+        <NuevoClienteModal
+          onClose={() => setNuevo(false)}
+          onDone={async () => { setNuevo(false); await cargar(); onNotify("Cliente creado"); }}
+          onError={onError} />
+      )}
     </>
+  );
+}
+
+// Modal: crear un nuevo cliente (nombre obligatorio; identificación y teléfono
+// opcionales). POST a /campo/clientes; el alta rápida reutiliza si el nombre ya existe.
+function NuevoClienteModal({ onClose, onDone, onError }: {
+  onClose: () => void; onDone: () => void | Promise<void>; onError: (m: string) => void;
+}) {
+  const [f, setF] = useState({ nombre: "", identificacion: "", telefono: "", tipo: "externo" as "piladora" | "externo" });
+  const [busy, setBusy] = useState(false);
+  async function submit() {
+    try {
+      setBusy(true);
+      if (f.nombre.trim().length < 2) throw new Error("Escribe el nombre / razón social");
+      await apiPost("/campo/clientes", {
+        nombre: f.nombre.trim(), tipo: f.tipo,
+        identificacion: f.identificacion.trim() || undefined,
+        telefono: f.telefono.trim() || undefined
+      });
+      await onDone();
+    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <form className="formPanel" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submit(); }} style={{ maxWidth: 440, width: "100%", margin: 0 }}>
+        <h2 style={{ marginTop: 0 }}>＋ Nuevo cliente</h2>
+        <label><span>Nombre / Razón social <span style={{ color: "#ef4444" }}>*</span></span>
+          <input type="text" autoFocus value={f.nombre} onChange={(e) => setF({ ...f, nombre: e.target.value })} placeholder="Ej: Juan Piguave" />
+        </label>
+        <label><span>Identificación / RUC / Cédula (opcional)</span>
+          <input type="text" value={f.identificacion} onChange={(e) => setF({ ...f, identificacion: e.target.value })} placeholder="Ej: 0912345678" />
+        </label>
+        <label><span>Teléfono (opcional)</span>
+          <input type="text" value={f.telefono} onChange={(e) => setF({ ...f, telefono: e.target.value })} placeholder="Ej: 0991234567" />
+        </label>
+        <label><span>Tipo</span>
+          <select value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value as "piladora" | "externo" })}>
+            <option value="externo">externo</option>
+            <option value="piladora">piladora</option>
+          </select>
+        </label>
+        <div className="buttonRow">
+          <button type="submit" className="primary" disabled={busy}>{busy ? "Guardando…" : "Crear cliente"}</button>
+          <button type="button" onClick={onClose} disabled={busy}>Cancelar</button>
+        </div>
+      </form>
+    </div>
   );
 }
 
@@ -777,13 +832,13 @@ function EstadoCuentaModal({ cliente, nombreOperacion, onClose, onError }: {
 function EditarClienteModal({ cliente, onClose, onDone, onError }: {
   cliente: ClienteCuenta; onClose: () => void; onDone: () => void | Promise<void>; onError: (m: string) => void;
 }) {
-  const [f, setF] = useState({ nombre: cliente.nombre, identificacion: cliente.identificacion ?? "", tipo: cliente.tipo as "piladora" | "externo" });
+  const [f, setF] = useState({ nombre: cliente.nombre, identificacion: cliente.identificacion ?? "", telefono: cliente.telefono ?? "", tipo: cliente.tipo as "piladora" | "externo" });
   const [busy, setBusy] = useState(false);
   async function submit() {
     try {
       setBusy(true);
       if (f.nombre.trim().length < 2) throw new Error("Escribe el nombre del cliente");
-      await patchCliente(cliente.id, { nombre: f.nombre.trim(), identificacion: f.identificacion.trim() || null, tipo: f.tipo });
+      await patchCliente(cliente.id, { nombre: f.nombre.trim(), identificacion: f.identificacion.trim() || null, telefono: f.telefono.trim() || null, tipo: f.tipo });
       await onDone();
     } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
   }
@@ -793,6 +848,7 @@ function EditarClienteModal({ cliente, onClose, onDone, onError }: {
         <h2 style={{ marginTop: 0 }}>✏️ Editar cliente</h2>
         <label><span>Nombre</span><input type="text" value={f.nombre} onChange={(e) => setF({ ...f, nombre: e.target.value })} /></label>
         <label><span>Identificación (RUC / cédula)</span><input type="text" value={f.identificacion} onChange={(e) => setF({ ...f, identificacion: e.target.value })} placeholder="Ej: 0912345678" /></label>
+        <label><span>Teléfono</span><input type="text" value={f.telefono} onChange={(e) => setF({ ...f, telefono: e.target.value })} placeholder="Ej: 0991234567" /></label>
         <label><span>Tipo</span>
           <select value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value as "piladora" | "externo" })}>
             <option value="externo">externo</option>
