@@ -12,11 +12,13 @@ import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 export const weighingRouter = Router();
 
 // ── Corregir el accionista de un ingreso de materia prima ───────────────────
-// Si un ingreso se registró con el accionista equivocado, desaparece de la
-// vista del correcto (todo se filtra por accionista). Esta lista muestra los
-// ingresos que aún NO forman parte de un lote, de TODOS los accionistas, para
-// poder encontrarlo y corregirlo.
-weighingRouter.get("/materia-prima", asyncRoute(async (_req, res) => {
+// Ingresos que aún NO forman parte de un lote. Filtrado por el accionista ACTIVO
+// (header X-Accionista-Id → req.accionistaId):
+//   · Vista global (MATRIZ/admin): todos los ingresos pendientes.
+//   · Un socio específico: solo los suyos O los "Sin asignar" (accionista_id NULL);
+//     se ocultan los que ya pertenecen a OTRO socio.
+weighingRouter.get("/materia-prima", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
   const result = await pool.query(
     `SELECT w.id, w.ticket_number, w.quintals, w.net_weight, w.rice_type, w.created_at,
             w.accionista_id,
@@ -33,8 +35,16 @@ weighingRouter.get("/materia-prima", asyncRoute(async (_req, res) => {
      LEFT JOIN mobile_synced_tickets m ON m.weighing_ticket_id = w.id
      WHERE w.lot_id IS NULL
        AND w.is_maquila = false
+       AND (
+         -- Vista global (MATRIZ) o sin contexto: todos.
+         COALESCE((SELECT tipo FROM accionistas WHERE id = $1), 'MATRIZ') = 'MATRIZ'
+         -- Socio activo: los suyos o los sin asignar.
+         OR w.accionista_id = $1
+         OR w.accionista_id IS NULL
+       )
      ORDER BY w.created_at DESC
-     LIMIT 300`
+     LIMIT 300`,
+    [accionistaId]
   );
   res.json(result.rows);
 }));

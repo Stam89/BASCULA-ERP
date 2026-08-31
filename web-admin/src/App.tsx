@@ -3129,9 +3129,11 @@ export function App() {
   }, [activeTab]);
 
   useEffect(() => {
+    // Reconsulta al cambiar de pestaña, filtro o ACCIONISTA activo, para que la
+    // lista de "Corregir accionista" y los tickets reflejen el contexto del socio.
     if (activeTab === "Bascula") refreshBasculaTickets().catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, ticketFilter]);
+  }, [activeTab, ticketFilter, activeAccionistaId]);
 
   function exportReportCsv(headers: string[], rows: (string | number)[][], filename: string) {
     const escape = (v: string | number) => {
