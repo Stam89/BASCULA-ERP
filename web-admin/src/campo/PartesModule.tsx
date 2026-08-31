@@ -21,6 +21,8 @@ async function parteReq(path: string, method: "PATCH" | "DELETE", body?: unknown
 
 // Máquina = flota (campo_activos). Solo se usan nombre/operador/estado aquí.
 type Activo = { id: string; nombre: string; operador: string | null; activo: boolean };
+// Operador (catálogo campo_operadores). En el parte se guarda su NOMBRE (texto).
+type Operador = { id: string; nombre: string; activo: boolean };
 type Parte = {
   id: string; fecha: string; activo_id: string; activo_nombre: string; operador: string | null;
   cliente: string; qq: number; observaciones: string | null; estado: "por_cobrar" | "cobrado";
@@ -31,11 +33,13 @@ type Parte = {
 
 export default function PartesModule() {
   const [activos, setActivos] = useState<Activo[]>([]);
+  const [operadores, setOperadores] = useState<Operador[]>([]);
   const [partes, setPartes] = useState<Parte[]>([]);
   const [f, setF] = useState({ fecha: hoy(), activo_id: "", operador: "", cliente: "", qq: "", observaciones: "" });
   const [busy, setBusy] = useState(false);
   const [cobrando, setCobrando] = useState<Parte | null>(null);
   const [editando, setEditando] = useState<Parte | null>(null);
+  const [editandoTarifa, setEditandoTarifa] = useState<Parte | null>(null);
   const [filtro, setFiltro] = useState({ from: "", to: "", activo_id: "", estado: "" });
   const [flash, setFlash] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
   const notify = (text: string, kind: "ok" | "err" = "ok") => { setFlash({ text, kind }); setTimeout(() => setFlash(null), 3000); };
@@ -53,7 +57,11 @@ export default function PartesModule() {
   }, [filtro]);
   const refrescar = useCallback(async () => {
     try {
-      await Promise.all([apiGet<Activo[]>("/campo/activos?solo_activos=1").then(setActivos), cargarPartes()]);
+      await Promise.all([
+        apiGet<Activo[]>("/campo/activos?solo_activos=1").then(setActivos),
+        apiGet<Operador[]>("/campo/operadores?solo_activos=1").then(setOperadores),
+        cargarPartes()
+      ]);
     } catch (e) { notify((e as Error).message, "err"); }
   }, [cargarPartes]);
   useEffect(() => { refrescar(); }, [refrescar]);
@@ -67,12 +75,6 @@ export default function PartesModule() {
     if (!window.confirm(`¿Des-cobrar el parte de ${p.cliente}? Se borrará el servicio de cobro generado.`)) return;
     try { await apiPost(`/campo/partes/${p.id}/descobrar`, {}); await refrescar(); notify("Cobro anulado; el parte vuelve a Por cobrar"); }
     catch (e) { notify((e as Error).message, "err"); }
-  }
-
-  // Al elegir máquina, se autocompleta el operador (editable).
-  function elegirMaquina(activo_id: string) {
-    const a = activos.find((x) => x.id === activo_id);
-    setF((prev) => ({ ...prev, activo_id, operador: prev.operador || (a?.operador ?? "") }));
   }
 
   async function guardar() {
@@ -113,7 +115,7 @@ export default function PartesModule() {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <label><span>Fecha</span><input type="date" value={f.fecha} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
           <label><span>Máquina</span>
-            <select value={f.activo_id} onChange={(e) => elegirMaquina(e.target.value)}>
+            <select value={f.activo_id} onChange={(e) => setF({ ...f, activo_id: e.target.value })}>
               <option value="">Seleccione</option>
               {activosActivos.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}
             </select>
@@ -121,12 +123,18 @@ export default function PartesModule() {
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <label><span>Operador</span>
-            <input type="text" value={f.operador} onChange={(e) => setF({ ...f, operador: e.target.value })} placeholder="Ej: Juan Pérez" />
+            <select value={f.operador} onChange={(e) => setF({ ...f, operador: e.target.value })}>
+              <option value="">(sin operador)</option>
+              {operadores.map((o) => <option key={o.id} value={o.nombre}>{o.nombre}</option>)}
+            </select>
           </label>
           <label><span>Quintales cosechados [QQ]</span>
             <input type="number" step="0.01" min="0" value={f.qq} onChange={(e) => setF({ ...f, qq: e.target.value })} placeholder="Ej: 120" />
           </label>
         </div>
+        {operadores.length === 0 && (
+          <p className="muted" style={{ marginTop: -4, fontSize: 12 }}>No hay operadores. Agrégalos en <strong>⚙️ Configuración → 👷 Operadores</strong>.</p>
+        )}
         <label><span>Cliente / Dueño del cultivo</span>
           <input type="text" value={f.cliente} onChange={(e) => setF({ ...f, cliente: e.target.value })} placeholder="Ej: Juan Piguave" />
         </label>
@@ -206,9 +214,14 @@ export default function PartesModule() {
                         <button type="button" className="btnSecondary" onClick={() => anular(p)}>🗑️ Anular</button>
                       </div>
                     ) : (
-                      <button type="button" className="btnSecondary" disabled={p.servicio_estado !== "pendiente"}
-                        title={p.servicio_estado !== "pendiente" ? "El cobro ya tiene abonos; reversa los abonos en Caja primero." : "Anular el cobro y volver a Por cobrar"}
-                        onClick={() => descobrar(p)}>↩️ Des-cobrar</button>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <button type="button" className="btnSecondary" disabled={p.servicio_estado !== "pendiente"}
+                          title={p.servicio_estado !== "pendiente" ? "El cobro ya tiene abonos; reversa los abonos en Caja primero." : "Editar el precio por QQ / monto total del cobro"}
+                          onClick={() => setEditandoTarifa(p)}>✏️ Tarifa</button>
+                        <button type="button" className="btnSecondary" disabled={p.servicio_estado !== "pendiente"}
+                          title={p.servicio_estado !== "pendiente" ? "El cobro ya tiene abonos; reversa los abonos en Caja primero." : "Anular el cobro y volver a Por cobrar"}
+                          onClick={() => descobrar(p)}>↩️ Des-cobrar</button>
+                      </div>
                     )}
                   </td>
                 </tr>
@@ -225,19 +238,84 @@ export default function PartesModule() {
           onError={(m) => notify(m, "err")} />
       )}
       {editando && (
-        <EditarParteModal parte={editando} activos={activosActivos}
+        <EditarParteModal parte={editando} activos={activosActivos} operadores={operadores}
           onClose={() => setEditando(null)}
           onDone={async () => { setEditando(null); await refrescar(); notify("Parte actualizado"); }}
+          onError={(m) => notify(m, "err")} />
+      )}
+      {editandoTarifa && (
+        <EditarTarifaModal parte={editandoTarifa}
+          onClose={() => setEditandoTarifa(null)}
+          onDone={async () => { setEditandoTarifa(null); await refrescar(); notify("Tarifa del cobro actualizada"); }}
           onError={(m) => notify(m, "err")} />
       )}
     </section>
   );
 }
 
+// Modal de edición de TARIFA de un parte ya cobrado (sin des-cobrar). Se ingresa
+// el precio por QQ (o el monto total) y se actualiza el servicio vinculado. El
+// backend bloquea con 409 si el servicio ya tiene abonos.
+function EditarTarifaModal({ parte, onClose, onDone, onError }: {
+  parte: Parte; onClose: () => void; onDone: () => void | Promise<void>; onError: (m: string) => void;
+}) {
+  const [modo, setModo] = useState<"precio" | "total">("precio");
+  const [precio, setPrecio] = useState(parte.qq > 0 && parte.servicio_valor != null ? String(Math.round((parte.servicio_valor / parte.qq) * 10000) / 10000) : "");
+  const [total, setTotal] = useState(parte.servicio_valor != null ? String(parte.servicio_valor) : "");
+  const [busy, setBusy] = useState(false);
+  const pu = Number(precio), tot = Number(total);
+  const valido = modo === "precio" ? (precio !== "" && pu > 0) : (total !== "" && tot >= 0);
+  const valorPrev = modo === "precio" ? (valido ? Math.round(parte.qq * pu * 100) / 100 : 0) : (valido ? Math.round(tot * 100) / 100 : 0);
+
+  async function submit() {
+    try {
+      setBusy(true);
+      if (!valido) throw new Error("Ingresa un valor válido");
+      const body = modo === "precio" ? { precio_unitario: pu } : { valor: tot };
+      await parteReq(`/campo/partes/${parte.id}/tarifa`, "PATCH", body);
+      await onDone();
+    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <form className="formPanel" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submit(); }}
+        style={{ maxWidth: 460, width: "100%", margin: 0 }}>
+        <h2 style={{ marginTop: 0 }}>✏️ Editar tarifa del cobro</h2>
+        <div className="totalBox" style={{ margin: "0 0 6px" }}>
+          <span>{parte.cliente} · {parte.activo_nombre}</span>
+          <strong>{qqFmt(parte.qq)} QQ</strong>
+          <small>valor actual del cobro: {parte.servicio_valor != null ? money(parte.servicio_valor) : "—"}</small>
+        </div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+          <button type="button" className="chip" style={modo === "precio" ? { background: "#059669", color: "#fff" } : undefined} onClick={() => setModo("precio")}>Por precio/QQ</button>
+          <button type="button" className="chip" style={modo === "total" ? { background: "#059669", color: "#fff" } : undefined} onClick={() => setModo("total")}>Por monto total</button>
+        </div>
+        {modo === "precio" ? (
+          <label><span>Precio por QQ $</span><input type="number" step="0.0001" min="0" autoFocus value={precio} onChange={(e) => setPrecio(e.target.value)} placeholder="Ej: 1.50" /></label>
+        ) : (
+          <label><span>Monto total $</span><input type="number" step="0.01" min="0" autoFocus value={total} onChange={(e) => setTotal(e.target.value)} placeholder="Ej: 180.00" /></label>
+        )}
+        {valido && (
+          <div className="totalBox" style={{ background: "#eff6ff", borderColor: "#bfdbfe" }}>
+            <span>NUEVO VALOR DEL COBRO</span>
+            <strong>{money(valorPrev)}</strong>
+          </div>
+        )}
+        <p className="muted" style={{ fontSize: 12, marginTop: 2 }}>Actualiza el servicio de cosecha vinculado. Si ya tiene abonos, el sistema bloquea el cambio.</p>
+        <div className="buttonRow">
+          <button type="submit" className="primary" disabled={busy || !valido}>{busy ? "Guardando…" : "Guardar tarifa"}</button>
+          <button type="button" onClick={onClose} disabled={busy}>Cancelar</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 // Modal de edición de un parte (solo partes 'por cobrar'; el backend rechaza
 // editar uno ya cobrado). Mismos campos del alta.
-function EditarParteModal({ parte, activos, onClose, onDone, onError }: {
-  parte: Parte; activos: Activo[]; onClose: () => void; onDone: () => void | Promise<void>; onError: (m: string) => void;
+function EditarParteModal({ parte, activos, operadores, onClose, onDone, onError }: {
+  parte: Parte; activos: Activo[]; operadores: Operador[]; onClose: () => void; onDone: () => void | Promise<void>; onError: (m: string) => void;
 }) {
   const [f, setF] = useState({
     fecha: String(parte.fecha).slice(0, 10), activo_id: parte.activo_id, operador: parte.operador ?? "",
@@ -273,7 +351,14 @@ function EditarParteModal({ parte, activos, onClose, onDone, onError }: {
           </label>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <label><span>Operador</span><input type="text" value={f.operador} onChange={(e) => setF({ ...f, operador: e.target.value })} /></label>
+          <label><span>Operador</span>
+            <select value={f.operador} onChange={(e) => setF({ ...f, operador: e.target.value })}>
+              <option value="">(sin operador)</option>
+              {/* Conserva el operador actual aunque ya no esté en el catálogo activo. */}
+              {f.operador && !operadores.some((o) => o.nombre === f.operador) && <option value={f.operador}>{f.operador}</option>}
+              {operadores.map((o) => <option key={o.id} value={o.nombre}>{o.nombre}</option>)}
+            </select>
+          </label>
           <label><span>Quintales [QQ]</span><input type="number" step="0.01" min="0" value={f.qq} onChange={(e) => setF({ ...f, qq: e.target.value })} /></label>
         </div>
         <label><span>Cliente / Dueño del cultivo</span><input type="text" value={f.cliente} onChange={(e) => setF({ ...f, cliente: e.target.value })} /></label>

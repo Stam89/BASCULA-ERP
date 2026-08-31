@@ -113,6 +113,9 @@ const CONCEPTOS_INGRESO: Array<{ grupo: string; items: string[] }> = [
 // (se guarda como activo_id nulo → fila "Gastos Generales / Administración").
 const ACTIVO_GENERAL = "GENERAL";
 
+// Operador (catálogo para Partes Diarios).
+type Operador = { id: string; nombre: string; identificacion: string | null; telefono: string | null; activo: boolean };
+
 // Vale / anticipo por rendir (egreso con estado). entregado = monto del vale.
 type Vale = {
   id: string; fecha: string; entregado: number; monto_rendido: number | null;
@@ -125,7 +128,7 @@ type SaldoCaja = { corte: string; cuentas: Array<{ id: string; nombre: string; s
 type PorCobrarCliente = { cliente_id: string; cliente_nombre: string; servicios: number; saldo: number; antiguedad_max_dias: number; tramo: string };
 type PorCobrarDetalle = { servicio_id: string; fecha: string; cliente_id: string; cliente_nombre: string; activo_nombre: string; tipo: string; valor: number; cobrado: number; saldo: number; antiguedad_dias: number; tramo: string };
 type PorCobrar = { por_cliente: PorCobrarCliente[]; detalle: PorCobrarDetalle[]; por_tramo: Array<{ tramo: string; saldo: number; servicios: number }>; total_general: number };
-type Maquina = { activo_id: string | null; activo_nombre: string; activo_tipo: string | null; ingresos: number; gastos: number; ganancia: number; gastos_por_categoria: Array<{ categoria: string; gasto: number }> };
+type Maquina = { activo_id: string | null; activo_nombre: string; activo_tipo: string | null; ingresos: number; gastos: number; ganancia: number; qq: number; gastos_por_categoria: Array<{ categoria: string; gasto: number }> };
 type PorMaquina = { periodo: { desde: string; hasta: string }; maquinas: Maquina[] };
 
 export default function CampoModule({ section = "caja", nombre, onNombreChange }: {
@@ -137,18 +140,20 @@ export default function CampoModule({ section = "caja", nombre, onNombreChange }
   const [activos, setActivos] = useState<Activo[]>([]);
   const [categorias, setCategorias] = useState<Categoria[]>([]);
   const [cuentas, setCuentas] = useState<Cuenta[]>([]);
+  const [operadores, setOperadores] = useState<Operador[]>([]);
   const [servicios, setServicios] = useState<Servicio[]>([]);
   const [cajaTab, setCajaTab] = useState<"ingreso" | "egreso" | "transferencia">("ingreso");
   const [servTab, setServTab] = useState<"servicio" | "abono" | "lista">("servicio");
   const [libroVersion, setLibroVersion] = useState(0); // fuerza recarga del libro tras cada movimiento
 
   const refreshCatalogos = useCallback(async () => {
-    const [a, cat, ct] = await Promise.all([
+    const [a, cat, ct, op] = await Promise.all([
       apiGet<Activo[]>("/campo/activos"),
       apiGet<Categoria[]>("/campo/categorias-gasto"),
-      apiGet<Cuenta[]>("/campo/cuentas")
+      apiGet<Cuenta[]>("/campo/cuentas"),
+      apiGet<Operador[]>("/campo/operadores")
     ]);
-    setActivos(a); setCategorias(cat); setCuentas(ct);
+    setActivos(a); setCategorias(cat); setCuentas(ct); setOperadores(op);
   }, []);
   const refreshServicios = useCallback(async () => {
     setServicios(await apiGet<Servicio[]>("/campo/servicios"));
@@ -184,6 +189,9 @@ export default function CampoModule({ section = "caja", nombre, onNombreChange }
           onSaved={(n) => { onNombreChange?.(n); notify(`Nombre de la operación actualizado a “${n}”`); }}
           onError={(m) => notify(m, "err")} />
         <FlotaMaquinaria activos={activos}
+          onChanged={async (msg) => { await refreshCatalogos(); notify(msg); }}
+          onError={(m) => notify(m, "err")} />
+        <OperadoresCatalogo operadores={operadores}
           onChanged={async (msg) => { await refreshCatalogos(); notify(msg); }}
           onError={(m) => notify(m, "err")} />
       </section>
@@ -355,9 +363,11 @@ function ReportesView({ onError }: { onError: (m: string) => void }) {
     return {
       ingresos: ms.reduce((s, m) => s + m.ingresos, 0),
       gastos: ms.reduce((s, m) => s + m.gastos, 0),
-      ganancia: ms.reduce((s, m) => s + m.ganancia, 0)
+      ganancia: ms.reduce((s, m) => s + m.ganancia, 0),
+      qq: ms.reduce((s, m) => s + (m.qq ?? 0), 0)
     };
   }, [maquinas]);
+  const qqFmt = (n: number) => (Number(n) || 0).toLocaleString("es-EC", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 
   return (
     <>
@@ -468,13 +478,14 @@ function ReportesView({ onError }: { onError: (m: string) => void }) {
         <h2>🚜 Por máquina <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· {maquinas?.periodo.desde} a {maquinas?.periodo.hasta}</span></h2>
         <div style={{ overflowX: "auto" }}>
           <table className="cajaTable">
-            <thead><tr><th>Máquina</th><th className="num">Ingresos</th><th>Gastos por categoría</th><th className="num">Gastos</th><th className="num">Ganancia</th></tr></thead>
+            <thead><tr><th>Máquina</th><th className="num">QQ trab.</th><th className="num">Ingresos</th><th>Gastos por categoría</th><th className="num">Gastos</th><th className="num">Ganancia</th></tr></thead>
             <tbody>
               {(maquinas?.maquinas ?? []).length === 0 ? (
-                <tr><td colSpan={5} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin movimientos en el período.</td></tr>
+                <tr><td colSpan={6} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin movimientos en el período.</td></tr>
               ) : (maquinas?.maquinas ?? []).map((m) => (
                 <tr key={m.activo_id ?? "SIN"} style={m.activo_id ? undefined : { fontStyle: "italic", background: "var(--c-surface-2)" }}>
                   <td style={{ fontWeight: 600 }}>{m.activo_nombre}{m.activo_tipo ? <small className="muted" style={{ display: "block" }}>{m.activo_tipo}</small> : null}</td>
+                  <td className="num" style={{ fontWeight: 700 }}>{qqFmt(m.qq)}</td>
                   <td className="num">{num(m.ingresos)}</td>
                   <td>{m.gastos_por_categoria.length === 0 ? <span className="muted">—</span> : m.gastos_por_categoria.map((g) => `${g.categoria} ${num(g.gasto)}`).join(" · ")}</td>
                   <td className="num">{num(m.gastos)}</td>
@@ -486,6 +497,7 @@ function ReportesView({ onError }: { onError: (m: string) => void }) {
               <tfoot>
                 <tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border-strong)" }}>
                   <td>TOTALES</td>
+                  <td className="num">{qqFmt(totMaq.qq)}</td>
                   <td className="num">{num(totMaq.ingresos)}</td>
                   <td />
                   <td className="num">{num(totMaq.gastos)}</td>
@@ -1227,6 +1239,84 @@ function FlotaMaquinaria({ activos, onChanged, onError }: {
                   <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                     <button type="button" className="btnSecondary" style={{ marginRight: 6 }} onClick={() => editar(a)}>✏️ Editar</button>
                     <button type="button" className="btnSecondary" onClick={() => archivar(a)}>{a.activo ? "🗄️ Archivar" : "↩️ Activar"}</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 👷 OPERADORES — catálogo (campo_operadores): alta, edición y archivar/activar.
+// Se usa en el selector de Operador de Partes Diarios.
+async function patchOperador(id: string, body: unknown): Promise<void> {
+  const r = await apiFetch(`/campo/operadores/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error || "No se pudo actualizar el operador");
+}
+const operadorVacio = { nombre: "", identificacion: "", telefono: "" };
+function OperadoresCatalogo({ operadores, onChanged, onError }: {
+  operadores: Operador[]; onChanged: (msg: string) => Promise<void>; onError: (m: string) => void;
+}) {
+  const [f, setF] = useState(operadorVacio);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  function editar(o: Operador) {
+    setEditId(o.id);
+    setF({ nombre: o.nombre, identificacion: o.identificacion ?? "", telefono: o.telefono ?? "" });
+  }
+  function cancelar() { setEditId(null); setF(operadorVacio); }
+
+  async function guardar() {
+    try {
+      setBusy(true);
+      if (f.nombre.trim().length < 2) throw new Error("Escribe el nombre del operador");
+      const payload = { nombre: f.nombre.trim(), identificacion: f.identificacion.trim() || null, telefono: f.telefono.trim() || null };
+      if (editId) await patchOperador(editId, payload);
+      else await apiPost("/campo/operadores", { ...payload, identificacion: payload.identificacion ?? undefined, telefono: payload.telefono ?? undefined });
+      cancelar();
+      await onChanged(editId ? "Operador actualizado" : "Operador agregado");
+    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+
+  async function archivar(o: Operador) {
+    try {
+      await patchOperador(o.id, { activo: !o.activo });
+      if (editId === o.id) cancelar();
+      await onChanged(o.activo ? "Operador archivado" : "Operador reactivado");
+    } catch (e) { onError((e as Error).message); }
+  }
+
+  return (
+    <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
+      <h2>👷 Operadores</h2>
+      <p className="muted" style={{ marginTop: -4 }}>Personal que opera la maquinaria. Alimenta el selector de Operador en Partes Diarios.</p>
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10 }}>
+        <label><span>Nombre</span><input type="text" value={f.nombre} onChange={(e) => setF({ ...f, nombre: e.target.value })} placeholder="Ej: Juan Pérez" /></label>
+        <label><span>Cédula / Identificación</span><input type="text" value={f.identificacion} onChange={(e) => setF({ ...f, identificacion: e.target.value })} placeholder="Ej: 0912345678" /></label>
+        <label><span>Teléfono</span><input type="text" value={f.telefono} onChange={(e) => setF({ ...f, telefono: e.target.value })} placeholder="Ej: 0991234567" /></label>
+      </div>
+      <div className="buttonRow">
+        <button type="button" className="primary" onClick={guardar} disabled={busy}>{busy ? "Guardando…" : editId ? "Guardar cambios" : "➕ Agregar operador"}</button>
+        {editId && <button type="button" onClick={cancelar}>Cancelar</button>}
+      </div>
+      {operadores.length > 0 && (
+        <div style={{ overflowX: "auto", marginTop: 10 }}>
+          <table className="cajaTable">
+            <thead><tr><th>Nombre</th><th>Cédula / ID</th><th>Teléfono</th><th>Estado</th><th /></tr></thead>
+            <tbody>
+              {operadores.map((o) => (
+                <tr key={o.id} style={{ opacity: o.activo ? 1 : 0.55 }}>
+                  <td style={{ fontWeight: 600 }}>{o.nombre}</td>
+                  <td>{o.identificacion || "—"}</td>
+                  <td>{o.telefono || "—"}</td>
+                  <td><span className={o.activo ? "chip ok" : "chip bad"}>{o.activo ? "Activo" : "Inactivo"}</span></td>
+                  <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                    <button type="button" className="btnSecondary" style={{ marginRight: 6 }} onClick={() => editar(o)}>✏️ Editar</button>
+                    <button type="button" className="btnSecondary" onClick={() => archivar(o)}>{o.activo ? "🗄️ Archivar" : "↩️ Activar"}</button>
                   </td>
                 </tr>
               ))}

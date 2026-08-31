@@ -72,6 +72,52 @@ campoRouter.patch("/activos/:id", asyncRoute(async (req, res) => {
   res.json(result.rows[0]);
 }));
 
+// ── Catálogo: operadores (para Partes Diarios) ───────────────────────────────
+campoRouter.get("/operadores", asyncRoute(async (req, res) => {
+  const q = z.object({ solo_activos: z.enum(["1", "0"]).optional() }).parse(req.query);
+  const where = q.solo_activos === "1" ? "WHERE activo = true" : "";
+  const result = await pool.query(
+    `SELECT id, nombre, identificacion, telefono, activo, created_at
+     FROM campo_operadores ${where} ORDER BY activo DESC, nombre`
+  );
+  res.json(result.rows);
+}));
+
+campoRouter.post("/operadores", asyncRoute(async (req, res) => {
+  const body = z.object({
+    nombre: z.string().min(2).max(140),
+    identificacion: z.string().max(40).optional(),
+    telefono: z.string().max(40).optional(),
+    activo: z.boolean().optional()
+  }).parse(req.body);
+  const result = await pool.query(
+    `INSERT INTO campo_operadores (nombre, identificacion, telefono, activo, created_by)
+     VALUES ($1, $2, $3, COALESCE($4, true), $5) RETURNING *`,
+    [body.nombre.trim(), body.identificacion?.trim() || null, body.telefono?.trim() || null, body.activo ?? null, userId(req)]
+  );
+  res.status(201).json(result.rows[0]);
+}));
+
+campoRouter.patch("/operadores/:id", asyncRoute(async (req, res) => {
+  const body = z.object({
+    nombre: z.string().min(2).max(140).optional(),
+    identificacion: z.string().max(40).nullable().optional(),
+    telefono: z.string().max(40).nullable().optional(),
+    activo: z.boolean().optional()
+  }).parse(req.body);
+  const fields: string[] = [];
+  const values: unknown[] = [];
+  let i = 1;
+  for (const k of ["nombre", "identificacion", "telefono", "activo"] as const) {
+    if (body[k] !== undefined) { fields.push(`${k} = $${i++}`); values.push(body[k]); }
+  }
+  if (fields.length === 0) throw new ApiError(400, "Sin cambios");
+  values.push(req.params.id);
+  const result = await pool.query(`UPDATE campo_operadores SET ${fields.join(", ")} WHERE id = $${i} RETURNING *`, values);
+  if (!result.rows[0]) throw new ApiError(404, "Operador no encontrado");
+  res.json(result.rows[0]);
+}));
+
 // ── Catálogo: categorías de gasto ────────────────────────────────────────────
 campoRouter.get("/categorias-gasto", asyncRoute(async (_req, res) => {
   const result = await pool.query("SELECT id, nombre FROM campo_categorias_gasto ORDER BY nombre");
@@ -561,6 +607,45 @@ campoRouter.post("/partes/:id/descobrar", asyncRoute(async (req, res) => {
   res.json(row);
 }));
 
+// Editar la TARIFA de un parte ya cobrado SIN des-cobrar: actualiza el
+// campo_servicio vinculado (precio_unitario y/o valor). Se acepta precio por QQ
+// (valor = qq × precio) o un monto total directo. BLOQUEA con 409 si el servicio
+// ya tiene abonos (primero reversar los abonos en Caja). Lock sobre el parte.
+campoRouter.patch("/partes/:id/tarifa", asyncRoute(async (req, res) => {
+  const body = z.object({
+    precio_unitario: z.number().positive().optional(),
+    valor: z.number().nonnegative().optional()
+  }).parse(req.body);
+  if (body.precio_unitario == null && body.valor == null) {
+    throw new ApiError(400, "Indica el precio por QQ o el monto total.");
+  }
+  const row = await inTransaction(async (client) => {
+    const parte = (await client.query("SELECT * FROM campo_partes WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
+    if (!parte) throw new ApiError(404, "Parte no encontrado");
+    if (parte.estado !== "cobrado" || !parte.servicio_id) throw new ApiError(409, "El parte no tiene un cobro para editar su tarifa.");
+    const abonos = await client.query("SELECT 1 FROM campo_movimientos WHERE servicio_id = $1 LIMIT 1", [parte.servicio_id]);
+    if (abonos.rowCount) throw new ApiError(409, "Reverse los abonos en Caja antes de modificar la tarifa.");
+
+    const qq = Number(parte.qq);
+    // Precio manda si viene; si no, se deriva del monto total (precio = valor/qq).
+    let precio: number | null;
+    let valor: number;
+    if (body.precio_unitario != null) {
+      precio = body.precio_unitario;
+      valor = Math.round(qq * precio * 100) / 100;
+    } else {
+      valor = Math.round((body.valor as number) * 100) / 100;
+      precio = qq > 0 ? Math.round((valor / qq) * 10000) / 10000 : null;
+    }
+    const svc = (await client.query(
+      "UPDATE campo_servicios SET precio_unitario = $2, valor = $3 WHERE id = $1 RETURNING *",
+      [parte.servicio_id, precio, valor]
+    )).rows[0];
+    return { servicio: svc, precio_unitario: precio, valor };
+  });
+  res.json(row);
+}));
+
 campoRouter.post("/partes", asyncRoute(async (req, res) => {
   const body = z.object({
     fecha: fechaSchema.optional(),
@@ -703,15 +788,22 @@ campoRouter.get("/reportes/por-maquina", asyncRoute(async (req, res) => {
        WHERE fecha BETWEEN $1 AND $2
          AND ((naturaleza = 'operativo' AND signo = 'salida') OR naturaleza = 'ajuste_vale')
        GROUP BY activo_id
+     ), prod AS (
+       -- QQ trabajados por máquina (de los Partes Diarios) en el rango.
+       SELECT activo_id, SUM(qq) AS qq
+       FROM campo_partes WHERE fecha BETWEEN $1 AND $2 GROUP BY activo_id
      )
-     SELECT COALESCE(ing.activo_id, gas.activo_id) AS activo_id,
+     SELECT COALESCE(ing.activo_id, gas.activo_id, prod.activo_id) AS activo_id,
             a.nombre AS activo_nombre, a.tipo AS activo_tipo,
             COALESCE(ing.v, 0)::float AS ingresos,
             COALESCE(gas.g, 0)::float AS gastos,
-            (COALESCE(ing.v, 0) - COALESCE(gas.g, 0))::float AS ganancia
-     FROM ing FULL OUTER JOIN gas ON ing.activo_id = gas.activo_id
-     LEFT JOIN campo_activos a ON a.id = COALESCE(ing.activo_id, gas.activo_id)
-     ORDER BY (COALESCE(ing.activo_id, gas.activo_id) IS NULL), ganancia DESC`,
+            (COALESCE(ing.v, 0) - COALESCE(gas.g, 0))::float AS ganancia,
+            COALESCE(prod.qq, 0)::float AS qq
+     FROM ing
+       FULL OUTER JOIN gas ON ing.activo_id = gas.activo_id
+       FULL OUTER JOIN prod ON COALESCE(ing.activo_id, gas.activo_id) = prod.activo_id
+     LEFT JOIN campo_activos a ON a.id = COALESCE(ing.activo_id, gas.activo_id, prod.activo_id)
+     ORDER BY (COALESCE(ing.activo_id, gas.activo_id, prod.activo_id) IS NULL), ganancia DESC`,
     [desde, hasta]
   )).rows;
 
@@ -741,6 +833,7 @@ campoRouter.get("/reportes/por-maquina", asyncRoute(async (req, res) => {
     ingresos: f.ingresos,
     gastos: f.gastos,
     ganancia: f.ganancia,
+    qq: f.qq,
     gastos_por_categoria: (catPorActivo.get(f.activo_id ?? "SIN_ASIGNAR") ?? []).sort((a, b) => b.gasto - a.gasto)
   }));
   res.json({ periodo: { desde, hasta }, maquinas });
