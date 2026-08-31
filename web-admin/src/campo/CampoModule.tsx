@@ -19,6 +19,7 @@ import PartesModule from "./PartesModule";
 const CAMPO_SECCIONES: Array<{ id: CampoSeccion; label: string; icon: string }> = [
   { id: "caja", label: "Caja", icon: "💰" },
   { id: "servicios", label: "Servicios", icon: "🚜" },
+  { id: "clientes", label: "Clientes", icon: "👥" },
   { id: "vales", label: "Vales", icon: "📋" },
   { id: "partes", label: "Partes Diarios", icon: "📝" },
   { id: "reportes", label: "Reportes", icon: "📊" },
@@ -47,7 +48,12 @@ type Servicio = {
 const hoy = () => new Date().toISOString().slice(0, 10);
 // Secciones del menú propio de Campo (contexto aislado). Se amplía agregando
 // entradas aquí y en CAMPO_SECCIONES (ver CampoWorkspace).
-export type CampoSeccion = "caja" | "servicios" | "vales" | "partes" | "reportes" | "config";
+export type CampoSeccion = "caja" | "servicios" | "clientes" | "vales" | "partes" | "reportes" | "config";
+
+// Estado de cuenta de clientes (Campo).
+type ClienteCuenta = { id: string; nombre: string; identificacion: string | null; tipo: string; debe: number; haber: number; saldo: number; servicios: number };
+type EstadoLinea = { fecha: string; clase: "servicio" | "abono"; detalle: string; maquina: string | null; qq: number | null; precio_unitario: number | null; debe: number; haber: number; cuenta: string | null; saldo: number };
+type EstadoCuenta = { cliente: { id: string; nombre: string; identificacion: string | null; tipo: string }; periodo: { from: string; to: string }; saldo_apertura: number; lineas: EstadoLinea[]; total_debe: number; total_haber: number; saldo_final: number };
 
 // Estandarización de mantenimientos: para egresos de REPARACION_MANT el Concepto
 // se arma con dos selects (Pieza + Acción) que se concatenan "Pieza - Acción".
@@ -179,6 +185,10 @@ export default function CampoModule({ section = "caja", nombre, onNombreChange }
 
   if (section === "reportes") {
     return <section className="panelGrid">{flashEl}<ReportesView onError={(m) => notify(m, "err")} /></section>;
+  }
+
+  if (section === "clientes") {
+    return <section className="panelGrid">{flashEl}<ClientesView nombreOperacion={nombre ?? "Campo"} onNotify={notify} onError={(m) => notify(m, "err")} /></section>;
   }
 
   if (section === "config") {
@@ -514,6 +524,242 @@ function ReportesView({ onError }: { onError: (m: string) => void }) {
 
 // ── Nuevo movimiento de caja ─────────────────────────────────────────────────
 type OnSaved = () => void | Promise<void>;
+
+// ── 👥 CLIENTES · Estado de Cuenta (Campo) ───────────────────────────────────
+// Lista de clientes con saldo (debe−haber) + buscador y filtro de estado. Al
+// elegir uno, abre su Estado de Cuenta (línea de tiempo Debe/Haber/Saldo) con
+// rango de fecha y ficha imprimible. El saldo se deriva en vivo, así que los
+// ajustes de tarifa / des-cobros de Campo se reflejan al recargar.
+async function patchCliente(id: string, body: unknown): Promise<void> {
+  const r = await apiFetch(`/campo/clientes/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error || "No se pudo actualizar el cliente");
+}
+function ClientesView({ nombreOperacion, onNotify, onError }: {
+  nombreOperacion: string; onNotify: (m: string, k?: "ok" | "err") => void; onError: (m: string) => void;
+}) {
+  const [q, setQ] = useState("");
+  const [estado, setEstado] = useState<"" | "al_dia" | "pendiente">("");
+  const [data, setData] = useState<{ clientes: ClienteCuenta[]; total_pendiente: number } | null>(null);
+  const [verCuenta, setVerCuenta] = useState<ClienteCuenta | null>(null);
+  const [editar, setEditar] = useState<ClienteCuenta | null>(null);
+
+  const cargar = useCallback(async () => {
+    try {
+      const qs = new URLSearchParams();
+      if (q.trim()) qs.set("q", q.trim());
+      if (estado) qs.set("estado", estado);
+      setData(await apiGet<{ clientes: ClienteCuenta[]; total_pendiente: number }>(`/campo/clientes/estado-cuenta?${qs.toString()}`));
+    } catch (e) { onError((e as Error).message); }
+  }, [q, estado, onError]);
+  useEffect(() => { const t = setTimeout(cargar, 200); return () => clearTimeout(t); }, [cargar]);
+
+  const clientes = data?.clientes ?? [];
+  return (
+    <>
+      <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <h2 style={{ margin: 0 }}>👥 Clientes <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· estado de cuenta</span></h2>
+          <div className="totalBox" style={{ minWidth: 170, margin: 0, marginLeft: "auto", background: "#fef3c7", borderColor: "#fde68a" }}>
+            <span>TOTAL POR COBRAR</span>
+            <strong style={{ color: "#b45309" }}>{money(data?.total_pendiente ?? 0)}</strong>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginTop: 8 }}>
+          <label style={{ margin: 0, flex: "1 1 240px" }}><span>Buscar (nombre o identificación)</span>
+            <input type="text" value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔍 Ej: Juan / 0912345678" />
+          </label>
+          <label style={{ margin: 0 }}><span>Estado</span>
+            <select value={estado} onChange={(e) => setEstado(e.target.value as "" | "al_dia" | "pendiente")}>
+              <option value="">Todos</option>
+              <option value="pendiente">Con saldo pendiente</option>
+              <option value="al_dia">Al día</option>
+            </select>
+          </label>
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table className="cajaTable" style={{ marginTop: 8 }}>
+            <thead><tr>
+              <th>Cliente</th><th>Identificación</th><th className="num">Servicios</th>
+              <th className="num">Debe</th><th className="num">Haber</th><th className="num">Saldo</th><th>Acciones</th>
+            </tr></thead>
+            <tbody>
+              {clientes.length === 0 ? (
+                <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin clientes.</td></tr>
+              ) : clientes.map((c) => (
+                <tr key={c.id}>
+                  <td style={{ fontWeight: 600 }}>{c.nombre}<small className="muted" style={{ display: "block" }}>{c.tipo}</small></td>
+                  <td>{c.identificacion || "—"}</td>
+                  <td className="num">{c.servicios}</td>
+                  <td className="num">{money(c.debe)}</td>
+                  <td className="num" style={{ color: "#15803d" }}>{money(c.haber)}</td>
+                  <td className="num" style={{ fontWeight: 700, color: c.saldo > 0.005 ? "#b45309" : "#15803d" }}>{money(c.saldo)}</td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <button type="button" className="btnSecondary" onClick={() => setVerCuenta(c)}>📄 Estado de cuenta</button>
+                      <button type="button" className="btnSecondary" onClick={() => setEditar(c)}>✏️ Editar</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>Debe = servicios de cosecha/flete · Haber = abonos en Caja · Saldo = pendiente por cobrar (histórico, en vivo).</p>
+      </div>
+
+      {verCuenta && (
+        <EstadoCuentaModal cliente={verCuenta} nombreOperacion={nombreOperacion}
+          onClose={() => setVerCuenta(null)} onError={onError} />
+      )}
+      {editar && (
+        <EditarClienteModal cliente={editar}
+          onClose={() => setEditar(null)}
+          onDone={async () => { setEditar(null); await cargar(); onNotify("Cliente actualizado"); }}
+          onError={onError} />
+      )}
+    </>
+  );
+}
+
+// Modal: ficha de Estado de Cuenta con rango de fecha, línea de tiempo y impresión.
+function EstadoCuentaModal({ cliente, nombreOperacion, onClose, onError }: {
+  cliente: ClienteCuenta; nombreOperacion: string; onClose: () => void; onError: (m: string) => void;
+}) {
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [ec, setEc] = useState<EstadoCuenta | null>(null);
+  const cargar = useCallback(async () => {
+    try {
+      const qs = new URLSearchParams();
+      if (from) qs.set("from", from);
+      if (to) qs.set("to", to);
+      setEc(await apiGet<EstadoCuenta>(`/campo/clientes/${cliente.id}/estado-cuenta?${qs.toString()}`));
+    } catch (e) { onError((e as Error).message); }
+  }, [cliente.id, from, to, onError]);
+  useEffect(() => { cargar(); }, [cargar]);
+
+  function imprimir() {
+    if (!ec) return;
+    const filas = ec.lineas.map((l) => `<tr>
+      <td>${String(l.fecha).slice(0, 10)}</td>
+      <td>${l.detalle}${l.cuenta ? ` (${l.cuenta})` : ""}</td>
+      <td>${l.maquina ?? ""}</td>
+      <td style="text-align:right">${l.qq != null ? l.qq : ""}</td>
+      <td style="text-align:right">${l.debe ? l.debe.toFixed(2) : ""}</td>
+      <td style="text-align:right;color:#15803d">${l.haber ? l.haber.toFixed(2) : ""}</td>
+      <td style="text-align:right;font-weight:700">${l.saldo.toFixed(2)}</td></tr>`).join("");
+    const w = window.open("", "_blank", "width=820,height=900");
+    if (!w) return;
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Estado de Cuenta · ${cliente.nombre}</title>
+      <style>@page{size:A4;margin:14mm} body{font-family:Arial,sans-serif;color:#111;font-size:12px}
+        h1{font-size:18px;margin:0} .muted{color:#555} table{width:100%;border-collapse:collapse;margin-top:10px}
+        th,td{border:1px solid #ccc;padding:5px 7px} th{background:#f3f4f6;text-align:left}
+        .tot{font-weight:700} .head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px}
+        .box{border:1px solid #ccc;border-radius:8px;padding:8px 10px;min-width:150px;text-align:right}</style></head>
+      <body>
+        <div class="head">
+          <div><h1>${nombreOperacion} · CEYRO</h1><div class="muted">Estado de Cuenta de Cliente</div></div>
+          <div class="box"><div class="muted">SALDO ACTUAL</div><div style="font-size:18px;font-weight:700">$ ${ec.saldo_final.toFixed(2)}</div></div>
+        </div>
+        <div><strong>${cliente.nombre}</strong> ${cliente.identificacion ? `· ${cliente.identificacion}` : ""}</div>
+        <div class="muted">Período: ${ec.periodo.from} a ${ec.periodo.to} · Emitido: ${new Date().toLocaleDateString("es-EC")}</div>
+        <table>
+          <thead><tr><th>Fecha</th><th>Detalle</th><th>Máquina</th><th style="text-align:right">QQ</th><th style="text-align:right">Debe</th><th style="text-align:right">Haber</th><th style="text-align:right">Saldo</th></tr></thead>
+          <tbody>
+            <tr><td colspan="6" class="muted">Saldo anterior</td><td style="text-align:right;font-weight:700">${ec.saldo_apertura.toFixed(2)}</td></tr>
+            ${filas}
+            <tr class="tot"><td colspan="4">TOTALES DEL PERÍODO</td><td style="text-align:right">${ec.total_debe.toFixed(2)}</td><td style="text-align:right">${ec.total_haber.toFixed(2)}</td><td style="text-align:right">${ec.saldo_final.toFixed(2)}</td></tr>
+          </tbody>
+        </table>
+        <p class="muted" style="margin-top:14px">Debe = servicios de cosecha/flete · Haber = abonos recibidos.</p>
+      </body></html>`);
+    w.document.close(); w.focus(); w.print();
+  }
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 16, overflowY: "auto" }}>
+      <div className="tablePanel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 900, width: "100%", margin: "16px 0" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <h2 style={{ margin: 0 }}>📄 Estado de Cuenta</h2>
+          <span className="muted">· {cliente.nombre}{cliente.identificacion ? ` · ${cliente.identificacion}` : ""}</span>
+          <button type="button" className="btnSecondary" style={{ marginLeft: "auto" }} onClick={imprimir}>🖨️ Imprimir / PDF</button>
+          <button type="button" onClick={onClose}>Cerrar</button>
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginTop: 8 }}>
+          <label style={{ margin: 0 }}><span>Desde</span><input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
+          <label style={{ margin: 0 }}><span>Hasta</span><input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
+          <div className="totalBox" style={{ minWidth: 140, margin: 0, marginLeft: "auto", background: "#eff6ff", borderColor: "#bfdbfe" }}>
+            <span>SALDO FINAL</span>
+            <strong style={{ color: (ec?.saldo_final ?? 0) > 0.005 ? "#b45309" : "#15803d" }}>{money(ec?.saldo_final ?? 0)}</strong>
+          </div>
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table className="cajaTable" style={{ marginTop: 8 }}>
+            <thead><tr><th>Fecha</th><th>Detalle</th><th>Máquina</th><th className="num">QQ</th><th className="num">Debe</th><th className="num">Haber</th><th className="num">Saldo</th></tr></thead>
+            <tbody>
+              <tr><td colSpan={6} className="muted">Saldo anterior</td><td className="num" style={{ fontWeight: 700 }}>{money(ec?.saldo_apertura ?? 0)}</td></tr>
+              {(ec?.lineas ?? []).map((l, i) => (
+                <tr key={i}>
+                  <td style={{ whiteSpace: "nowrap" }}>{String(l.fecha).slice(0, 10)}</td>
+                  <td>{l.detalle}{l.cuenta ? <small className="muted"> · {l.cuenta}</small> : null}{l.clase === "abono" ? <span className="chip ok" style={{ marginLeft: 6 }}>abono</span> : null}</td>
+                  <td>{l.maquina ?? "—"}</td>
+                  <td className="num">{l.qq != null ? l.qq : "—"}</td>
+                  <td className="num">{l.debe ? money(l.debe) : "—"}</td>
+                  <td className="num" style={{ color: l.haber ? "#15803d" : undefined }}>{l.haber ? money(l.haber) : "—"}</td>
+                  <td className="num" style={{ fontWeight: 700 }}>{money(l.saldo)}</td>
+                </tr>
+              ))}
+              {(ec?.lineas ?? []).length === 0 && <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: 12 }}>Sin movimientos en el período.</td></tr>}
+            </tbody>
+            <tfoot>
+              <tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border-strong)" }}>
+                <td colSpan={4}>TOTALES DEL PERÍODO</td>
+                <td className="num">{money(ec?.total_debe ?? 0)}</td>
+                <td className="num">{money(ec?.total_haber ?? 0)}</td>
+                <td className="num">{money(ec?.saldo_final ?? 0)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Modal: editar datos del cliente (nombre, identificación, tipo).
+function EditarClienteModal({ cliente, onClose, onDone, onError }: {
+  cliente: ClienteCuenta; onClose: () => void; onDone: () => void | Promise<void>; onError: (m: string) => void;
+}) {
+  const [f, setF] = useState({ nombre: cliente.nombre, identificacion: cliente.identificacion ?? "", tipo: cliente.tipo as "piladora" | "externo" });
+  const [busy, setBusy] = useState(false);
+  async function submit() {
+    try {
+      setBusy(true);
+      if (f.nombre.trim().length < 2) throw new Error("Escribe el nombre del cliente");
+      await patchCliente(cliente.id, { nombre: f.nombre.trim(), identificacion: f.identificacion.trim() || null, tipo: f.tipo });
+      await onDone();
+    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <form className="formPanel" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submit(); }} style={{ maxWidth: 440, width: "100%", margin: 0 }}>
+        <h2 style={{ marginTop: 0 }}>✏️ Editar cliente</h2>
+        <label><span>Nombre</span><input type="text" value={f.nombre} onChange={(e) => setF({ ...f, nombre: e.target.value })} /></label>
+        <label><span>Identificación (RUC / cédula)</span><input type="text" value={f.identificacion} onChange={(e) => setF({ ...f, identificacion: e.target.value })} placeholder="Ej: 0912345678" /></label>
+        <label><span>Tipo</span>
+          <select value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value as "piladora" | "externo" })}>
+            <option value="externo">externo</option>
+            <option value="piladora">piladora</option>
+          </select>
+        </label>
+        <div className="buttonRow">
+          <button type="submit" className="primary" disabled={busy}>{busy ? "Guardando…" : "Guardar"}</button>
+          <button type="button" onClick={onClose} disabled={busy}>Cancelar</button>
+        </div>
+      </form>
+    </div>
+  );
+}
 
 // ＋ INGRESO: entrada a una cuenta. Opcional: ligarlo a un servicio como abono
 // (respeta el bloqueo de sobrepago 422 del backend).

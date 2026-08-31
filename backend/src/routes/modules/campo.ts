@@ -166,10 +166,10 @@ campoRouter.get("/clientes", asyncRoute(async (req, res) => {
   let where = "";
   if (q.q && q.q.trim()) {
     params.push(`%${q.q.trim().toLowerCase()}%`);
-    where = `WHERE lower(nombre) LIKE $1`;
+    where = `WHERE lower(nombre) LIKE $1 OR lower(coalesce(identificacion,'')) LIKE $1`;
   }
   const result = await pool.query(
-    `SELECT id, nombre, tipo, created_at FROM campo_clientes ${where} ORDER BY nombre LIMIT 50`,
+    `SELECT id, nombre, tipo, identificacion, created_at FROM campo_clientes ${where} ORDER BY nombre LIMIT 50`,
     params
   );
   res.json(result.rows);
@@ -178,20 +178,133 @@ campoRouter.get("/clientes", asyncRoute(async (req, res) => {
 campoRouter.post("/clientes", asyncRoute(async (req, res) => {
   const body = z.object({
     nombre: z.string().min(2).max(160),
-    tipo: z.enum(["piladora", "externo"]).default("externo")
+    tipo: z.enum(["piladora", "externo"]).default("externo"),
+    identificacion: z.string().max(40).optional()
   }).parse(req.body);
   // Alta rápida: si ya existe uno con ese nombre (sin distinguir mayúsculas), se
   // reutiliza para no duplicar al capturar rápido.
   const existing = await pool.query(
-    "SELECT id, nombre, tipo, created_at FROM campo_clientes WHERE lower(trim(nombre)) = lower(trim($1)) LIMIT 1",
+    "SELECT id, nombre, tipo, identificacion, created_at FROM campo_clientes WHERE lower(trim(nombre)) = lower(trim($1)) LIMIT 1",
     [body.nombre]
   );
   if (existing.rowCount) { res.status(200).json(existing.rows[0]); return; }
   const result = await pool.query(
-    `INSERT INTO campo_clientes (nombre, tipo) VALUES (trim($1), $2) RETURNING id, nombre, tipo, created_at`,
-    [body.nombre, body.tipo]
+    `INSERT INTO campo_clientes (nombre, tipo, identificacion) VALUES (trim($1), $2, $3) RETURNING id, nombre, tipo, identificacion, created_at`,
+    [body.nombre, body.tipo, body.identificacion?.trim() || null]
   );
   res.status(201).json(result.rows[0]);
+}));
+
+campoRouter.patch("/clientes/:id", asyncRoute(async (req, res) => {
+  const body = z.object({
+    nombre: z.string().min(2).max(160).optional(),
+    tipo: z.enum(["piladora", "externo"]).optional(),
+    identificacion: z.string().max(40).nullable().optional()
+  }).parse(req.body);
+  const fields: string[] = [];
+  const values: unknown[] = [];
+  let i = 1;
+  for (const k of ["nombre", "tipo", "identificacion"] as const) {
+    if (body[k] !== undefined) { fields.push(`${k} = $${i++}`); values.push(typeof body[k] === "string" ? (body[k] as string).trim() : body[k]); }
+  }
+  if (fields.length === 0) throw new ApiError(400, "Sin cambios");
+  values.push(req.params.id);
+  const result = await pool.query(`UPDATE campo_clientes SET ${fields.join(", ")} WHERE id = $${i} RETURNING id, nombre, tipo, identificacion, created_at`, values);
+  if (!result.rows[0]) throw new ApiError(404, "Cliente no encontrado");
+  res.json(result.rows[0]);
+}));
+
+// ── Estado de Cuenta de clientes (Campo) ─────────────────────────────────────
+// Lista: cada cliente con debe (Σ servicios), haber (Σ abonos) y saldo (todo el
+// histórico = saldo pendiente real). Filtros: q (nombre/identificación), estado.
+campoRouter.get("/clientes/estado-cuenta", asyncRoute(async (req, res) => {
+  const q = z.object({
+    q: z.string().optional(),
+    estado: z.enum(["al_dia", "pendiente"]).optional()
+  }).parse(req.query);
+  const rows = (await pool.query(
+    `WITH serv AS (
+       SELECT cliente_id, SUM(valor)::float AS debe, COUNT(*)::int AS servicios
+       FROM campo_servicios GROUP BY cliente_id
+     ), ab AS (
+       SELECT s.cliente_id, SUM(m.monto)::float AS haber
+       FROM campo_movimientos m JOIN campo_servicios s ON s.id = m.servicio_id
+       WHERE m.signo = 'entrada' GROUP BY s.cliente_id
+     )
+     SELECT c.id, c.nombre, c.identificacion, c.tipo,
+            COALESCE(serv.debe, 0)::float AS debe,
+            COALESCE(ab.haber, 0)::float AS haber,
+            (COALESCE(serv.debe, 0) - COALESCE(ab.haber, 0))::float AS saldo,
+            COALESCE(serv.servicios, 0)::int AS servicios
+     FROM campo_clientes c
+     LEFT JOIN serv ON serv.cliente_id = c.id
+     LEFT JOIN ab ON ab.cliente_id = c.id
+     ORDER BY saldo DESC, c.nombre`
+  )).rows;
+  const term = q.q?.trim().toLowerCase();
+  let out = rows;
+  if (term) out = out.filter((r) => r.nombre.toLowerCase().includes(term) || (r.identificacion ?? "").toLowerCase().includes(term));
+  if (q.estado === "al_dia") out = out.filter((r) => r.saldo <= 0.005);
+  if (q.estado === "pendiente") out = out.filter((r) => r.saldo > 0.005);
+  const totalPendiente = out.reduce((s, r) => s + (r.saldo > 0 ? r.saldo : 0), 0);
+  res.json({ clientes: out, total_pendiente: Math.round(totalPendiente * 100) / 100 });
+}));
+
+// Detalle: línea de tiempo del cliente (servicios = Debe, abonos = Haber) con
+// saldo corrido. Rango opcional from/to: se incluye un SALDO ANTERIOR (apertura)
+// con el neto previo a `from`, para que el corrido del período sea correcto.
+campoRouter.get("/clientes/:id/estado-cuenta", asyncRoute(async (req, res) => {
+  const q = z.object({ from: fechaSchema.optional(), to: fechaSchema.optional() }).parse(req.query);
+  const from = q.from ?? "1900-01-01";
+  const to = q.to ?? new Date().toISOString().slice(0, 10);
+  const cli = (await pool.query("SELECT id, nombre, identificacion, tipo FROM campo_clientes WHERE id = $1", [req.params.id])).rows[0];
+  if (!cli) throw new ApiError(404, "Cliente no encontrado");
+
+  // Saldo de apertura = (servicios − abonos) con fecha < from.
+  const apertura = (await pool.query(
+    `SELECT (
+       COALESCE((SELECT SUM(valor) FROM campo_servicios WHERE cliente_id = $1 AND fecha < $2), 0)
+       - COALESCE((SELECT SUM(m.monto) FROM campo_movimientos m JOIN campo_servicios s ON s.id = m.servicio_id
+                   WHERE s.cliente_id = $1 AND m.signo = 'entrada' AND m.fecha < $2), 0)
+     )::float AS saldo`,
+    [req.params.id, from]
+  )).rows[0].saldo;
+
+  // Servicios (Debe) y abonos (Haber) del rango, unificados y ordenados.
+  const movs = (await pool.query(
+    `SELECT * FROM (
+       SELECT s.fecha, s.created_at, 'servicio' AS clase,
+              CASE WHEN s.tipo = 'cosecha' THEN 'Servicio de cosecha' ELSE 'Servicio de flete' END AS detalle,
+              a.nombre AS maquina, s.qq::float AS qq, s.precio_unitario::float AS precio_unitario,
+              s.valor::float AS debe, 0::float AS haber, NULL::text AS cuenta
+       FROM campo_servicios s JOIN campo_activos a ON a.id = s.activo_id
+       WHERE s.cliente_id = $1 AND s.fecha BETWEEN $2 AND $3
+       UNION ALL
+       SELECT m.fecha, m.created_at, 'abono' AS clase,
+              COALESCE(m.concepto, 'Abono') AS detalle,
+              NULL AS maquina, NULL::float AS qq, NULL::float AS precio_unitario,
+              0::float AS debe, m.monto::float AS haber, ct.nombre AS cuenta
+       FROM campo_movimientos m
+         JOIN campo_servicios s ON s.id = m.servicio_id
+         JOIN campo_cuentas ct ON ct.id = m.cuenta_id
+       WHERE s.cliente_id = $1 AND m.signo = 'entrada' AND m.fecha BETWEEN $2 AND $3
+     ) t ORDER BY t.fecha, t.created_at`,
+    [req.params.id, from, to]
+  )).rows;
+
+  let saldo = Number(apertura);
+  const lineas = movs.map((m) => {
+    saldo = Math.round((saldo + m.debe - m.haber) * 100) / 100;
+    return { ...m, saldo };
+  });
+  const totalDebe = Math.round(movs.reduce((s, m) => s + m.debe, 0) * 100) / 100;
+  const totalHaber = Math.round(movs.reduce((s, m) => s + m.haber, 0) * 100) / 100;
+  res.json({
+    cliente: cli, periodo: { from, to },
+    saldo_apertura: Math.round(Number(apertura) * 100) / 100,
+    lineas, total_debe: totalDebe, total_haber: totalHaber,
+    saldo_final: Math.round((Number(apertura) + totalDebe - totalHaber) * 100) / 100
+  });
 }));
 
 // ── Servicios (cobrado / saldo_pendiente / estado DERIVADOS) ─────────────────
