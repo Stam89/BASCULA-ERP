@@ -5,6 +5,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { crearParteDesdeBascula } from "../../services/campo-flete-bascula.js";
 
 // MÓDULO INDEPENDIENTE: Caja de Campo (cosechadora + transporte/fletes).
 // V1 = solo captura (CRUD). Sin relación con túneles, piladora, ventas ni
@@ -634,7 +635,7 @@ campoRouter.get("/partes", asyncRoute(async (req, res) => {
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   const result = await pool.query(
     `SELECT p.id, p.fecha, p.activo_id, p.operador, p.cliente, p.qq::float AS qq,
-            p.observaciones, p.estado, p.created_at, a.nombre AS activo_nombre,
+            p.observaciones, p.estado, p.origen, p.created_at, a.nombre AS activo_nombre,
             p.servicio_id,
             sv.valor::float AS servicio_valor,
             sv.saldo_pendiente::float AS servicio_saldo,
@@ -803,6 +804,25 @@ campoRouter.patch("/partes/:id/tarifa", asyncRoute(async (req, res) => {
     return { servicio: svc, precio_unitario: precio, valor };
   });
   res.json(row);
+}));
+
+// Integración Báscula → Campo: crea un Parte Diario de flete interno a partir de
+// un ingreso de materia prima (cliente_id = cliente 'piladora', maquina_id = flota,
+// qq = peso neto, referencia = ticket). estado 'por_cobrar', operador NULL,
+// observaciones = referencia, origen 'bascula'.
+campoRouter.post("/partes/integracion-bascula", asyncRoute(async (req, res) => {
+  const body = z.object({
+    fecha: fechaSchema.optional(),
+    cliente_id: z.string().uuid(),
+    maquina_id: z.string().uuid(),
+    qq: z.number().positive(),
+    referencia: z.string().min(1).max(300)
+  }).parse(req.body);
+  const parte = await crearParteDesdeBascula({
+    fecha: body.fecha ?? null, cliente_id: body.cliente_id, maquina_id: body.maquina_id,
+    qq: body.qq, referencia: body.referencia, created_by: userId(req)
+  });
+  res.status(201).json(parte);
 }));
 
 campoRouter.post("/partes", asyncRoute(async (req, res) => {

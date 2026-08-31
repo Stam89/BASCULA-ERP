@@ -9,6 +9,7 @@ import { requireAuth, resolveAccionista, type AuthenticatedRequest } from "../..
 import { calculateNetWeight, calculateQuintals, round2 } from "../../utils/rice-formulas.js";
 import { nextCode } from "../../utils/codes.js";
 import { createLotProcessReport } from "../../utils/process-reports.js";
+import { dispararFleteInternoBascula } from "../../services/campo-flete-bascula.js";
 
 export const mobileTicketsRouter = Router();
 
@@ -452,6 +453,18 @@ mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, asyn
 
     await client.query("UPDATE mobile_synced_tickets SET weighing_ticket_id = $2 WHERE id = $1", [req.params.id, ticket.rows[0].id]);
     return { ingreso: ticket.rows[0] };
+  });
+
+  // Integración Campo (flete interno): si el ingreso usó un vehículo propio de la
+  // flota y la materia prima es de un socio, se crea un Parte Diario de flete.
+  // NO bloqueante: nunca frena ni falla el ingreso de báscula.
+  void dispararFleteInternoBascula({
+    placa: t.raw_payload?.placa ?? null,
+    accionistaId: ticketAccionista,
+    isMaquila,
+    quintals: Number(t.quintals),
+    ticketNumber: t.raw_payload?.numeroTicket ?? null,
+    createdBy: body.created_by ?? null
   });
 
   res.status(201).json(result);

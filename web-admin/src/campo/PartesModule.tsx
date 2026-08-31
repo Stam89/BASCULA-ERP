@@ -25,7 +25,7 @@ type Activo = { id: string; nombre: string; operador: string | null; activo: boo
 type Operador = { id: string; nombre: string; activo: boolean };
 type Parte = {
   id: string; fecha: string; activo_id: string; activo_nombre: string; operador: string | null;
-  cliente: string; qq: number; observaciones: string | null; estado: "por_cobrar" | "cobrado";
+  cliente: string; qq: number; observaciones: string | null; estado: "por_cobrar" | "cobrado"; origen: string;
   // Cobro generado (campo_servicio) enlazado, si estado='cobrado'.
   servicio_id: string | null; servicio_valor: number | null; servicio_saldo: number | null;
   servicio_estado: "pendiente" | "abonado" | "pagado" | null;
@@ -191,7 +191,13 @@ export default function PartesModule() {
                   <td style={{ whiteSpace: "nowrap" }}>{String(p.fecha).slice(0, 10)}</td>
                   <td>{p.operador || "—"}</td>
                   <td>{p.activo_nombre}</td>
-                  <td style={{ fontWeight: 600 }}>{p.cliente}</td>
+                  <td style={{ fontWeight: 600 }}>
+                    {p.cliente}
+                    {p.origen === "bascula" && (
+                      <span className="chip" style={{ marginLeft: 6, background: "#1d4ed8", color: "#fff", fontWeight: 600 }}
+                        title={p.observaciones ?? "Generado desde el ingreso de báscula"}>⚖️ Báscula</span>
+                    )}
+                  </td>
                   <td className="num" style={{ fontWeight: 700 }}>{qqFmt(p.qq)}</td>
                   <td>{p.observaciones || "—"}</td>
                   <td>
