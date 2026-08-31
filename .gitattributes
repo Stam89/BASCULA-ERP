@@ -1,0 +1,3 @@
+# Los scripts de shell DEBEN usar saltos de línea LF (si quedan con CRLF, el
+# server Linux falla con "bad interpreter"). Fuerza LF sin importar el SO.
+*.sh text eol=lf
