@@ -50,6 +50,9 @@ const hoy = () => new Date().toISOString().slice(0, 10);
 // entradas aquí y en CAMPO_SECCIONES (ver CampoWorkspace).
 export type CampoSeccion = "caja" | "servicios" | "clientes" | "vales" | "partes" | "reportes" | "config";
 
+// Parte Diario pendiente (para importar/liquidar desde el form de servicio).
+type PartePendiente = { id: string; fecha: string; activo_id: string; activo_nombre: string; operador: string | null; cliente: string; qq: number };
+
 // Estado de cuenta de clientes (Campo).
 type ClienteCuenta = { id: string; nombre: string; identificacion: string | null; tipo: string; debe: number; haber: number; saldo: number; servicios: number };
 type EstadoLinea = { fecha: string; clase: "servicio" | "abono"; detalle: string; maquina: string | null; qq: number | null; precio_unitario: number | null; debe: number; haber: number; cuenta: string | null; saldo: number };
@@ -1217,11 +1220,34 @@ function ServicioForm({ activos, onSaved, onError }: {
   const [f, setF] = useState({ fecha: hoy(), activo_id: "", tipo: "cosecha" as "cosecha" | "flete", qq: "", precio_unitario: "", valor: "", notas: "" });
   const [cliente, setCliente] = useState<Cliente | null>(null);
   const [busy, setBusy] = useState(false);
+  // Importar/liquidar un Parte Diario pendiente.
+  const [partes, setPartes] = useState<PartePendiente[]>([]);
+  const [parteId, setParteId] = useState("");
+
+  const cargarPartes = useCallback(async () => {
+    try { setPartes(await apiGet<PartePendiente[]>("/campo/partes?estado=por_cobrar")); } catch { /* opcional */ }
+  }, []);
+  useEffect(() => { cargarPartes(); }, [cargarPartes]);
 
   const valorCalc = useMemo(() => {
     const qq = Number(f.qq), pu = Number(f.precio_unitario);
     return qq > 0 && pu > 0 ? Math.round(qq * pu * 100) / 100 : null;
   }, [f.qq, f.precio_unitario]);
+
+  // Al elegir un parte: autocompleta fecha/máquina/QQ, resuelve/crea el cliente y
+  // guarda el parte_id. El precio unitario lo ingresa el usuario (o ajuste manual).
+  async function elegirParte(id: string) {
+    setParteId(id);
+    if (!id) return;
+    const p = partes.find((x) => x.id === id);
+    if (!p) return;
+    try {
+      const c = await apiPost<Cliente>("/campo/clientes", { nombre: p.cliente });
+      setCliente(c);
+      setF((prev) => ({ ...prev, fecha: String(p.fecha).slice(0, 10), activo_id: p.activo_id, tipo: "cosecha", qq: String(p.qq), valor: "" }));
+    } catch (e) { onError((e as Error).message); }
+  }
+  function quitarParte() { setParteId(""); }
 
   async function submit() {
     try {
@@ -1238,17 +1264,34 @@ function ServicioForm({ activos, onSaved, onError }: {
         fecha: f.fecha, cliente_id: cliente.id, activo_id: f.activo_id, tipo: f.tipo,
         qq: qq ?? undefined, precio_unitario: pu ?? undefined,
         valor: valorCalc == null ? valorManual : undefined,
-        notas: f.notas.trim() || undefined
+        notas: f.notas.trim() || undefined,
+        parte_id: parteId || undefined
       });
       setF({ fecha: f.fecha, activo_id: f.activo_id, tipo: f.tipo, qq: "", precio_unitario: "", valor: "", notas: "" });
-      setCliente(null);
-      await onSaved();
+      setCliente(null); setParteId("");
+      await Promise.all([onSaved(), cargarPartes()]);
     } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
   }
 
   return (
     <form className="formPanel" onSubmit={(e) => { e.preventDefault(); submit(); }}>
       <h2>🚜 Nuevo servicio</h2>
+      {/* Importar un Parte Diario pendiente (opcional). Autollena y lo liquida. */}
+      <label><span>📋 Seleccionar Parte Diario pendiente (opcional)</span>
+        <select value={parteId} onChange={(e) => elegirParte(e.target.value)}>
+          <option value="">— Registro manual (sin parte) —</option>
+          {partes.map((p) => (
+            <option key={p.id} value={p.id}>
+              {String(p.fecha).slice(0, 10)} · {p.activo_nombre} · {p.cliente}{p.operador ? ` · ${p.operador}` : ""} · {p.qq} QQ
+            </option>
+          ))}
+        </select>
+      </label>
+      {parteId && (
+        <p className="muted" style={{ marginTop: -4, fontSize: 12 }}>
+          Al guardar se liquidará el parte (pasa a <strong>Cobro generado</strong>). <span style={{ cursor: "pointer", color: "#2563eb" }} onClick={quitarParte}>✕ quitar parte</span>
+        </p>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         <label><span>Fecha</span><input type="date" value={f.fecha} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
         <label><span>Tipo</span>

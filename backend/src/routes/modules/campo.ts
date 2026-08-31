@@ -370,7 +370,9 @@ campoRouter.post("/servicios", asyncRoute(async (req, res) => {
     qq: z.number().positive().nullable().optional(),
     precio_unitario: z.number().positive().nullable().optional(),
     valor: z.number().nonnegative().optional(),
-    notas: z.string().max(400).optional()
+    notas: z.string().max(400).optional(),
+    // Opcional: crear el servicio DESDE un Parte Diario pendiente (lo liquida).
+    parte_id: z.string().uuid().optional()
   }).parse(req.body);
 
   // Regla del valor: con qq y precio_unitario se calcula; si no, se ingresa a mano.
@@ -387,14 +389,33 @@ campoRouter.post("/servicios", asyncRoute(async (req, res) => {
   const act = await pool.query("SELECT 1 FROM campo_activos WHERE id = $1", [body.activo_id]);
   if (!act.rowCount) throw new ApiError(404, "Activo (cosechadora/transporte) no encontrado");
 
-  const result = await pool.query(
+  const insertSvc = (client: { query: typeof pool.query }) => client.query(
     `INSERT INTO campo_servicios (fecha, cliente_id, activo_id, tipo, qq, precio_unitario, valor, notas, created_by)
      VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING *`,
     [body.fecha ?? null, body.cliente_id, body.activo_id, body.tipo,
      body.qq ?? null, body.precio_unitario ?? null, valor, body.notas?.trim() || null, userId(req)]
   );
-  res.status(201).json(result.rows[0]);
+
+  // Registro manual (sin parte): comportamiento habitual.
+  if (!body.parte_id) {
+    const result = await insertSvc(pool);
+    res.status(201).json(result.rows[0]);
+    return;
+  }
+
+  // Importar/liquidar un Parte Diario: transacción atómica con lock. Verifica que
+  // el parte siga 'por_cobrar', crea el servicio y marca el parte 'cobrado'
+  // enlazándolo (misma semántica que POST /partes/:id/cobrar).
+  const row = await inTransaction(async (client) => {
+    const parte = (await client.query("SELECT estado FROM campo_partes WHERE id = $1 FOR UPDATE", [body.parte_id])).rows[0];
+    if (!parte) throw new ApiError(404, "Parte no encontrado");
+    if (parte.estado !== "por_cobrar") throw new ApiError(409, "El parte ya fue liquidado (tiene un cobro generado).");
+    const svc = (await insertSvc(client)).rows[0];
+    await client.query("UPDATE campo_partes SET estado = 'cobrado', servicio_id = $2 WHERE id = $1", [body.parte_id, svc.id]);
+    return svc;
+  });
+  res.status(201).json(row);
 }));
 
 // ── Movimientos de caja (gastos, cobros/abonos, entradas/salidas) ────────────
