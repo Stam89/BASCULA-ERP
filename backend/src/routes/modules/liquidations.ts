@@ -8,7 +8,7 @@ import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { cruzarFleteInterno, type CruceFleteResultado } from "../../services/campo-cruce-flete.js";
-import { aplicarPagosFomento, type PagoFomentoResultado } from "../../services/fomento-liquidacion.js";
+import { aplicarPagosFomento, revertirPagosFomentoDeLiquidacion, type PagoFomentoResultado } from "../../services/fomento-liquidacion.js";
 
 export const liquidationsRouter = Router();
 
@@ -490,4 +490,102 @@ liquidationsRouter.get("/applied-advances", asyncRoute(async (req, res) => {
     [ids]
   );
   res.json(result.rows);
+}));
+
+// Fomentos ACTIVOS del agricultor, de CUALQUIER socio (visibilidad global para el
+// cruce inter-socios). Marca cuáles son de otro socio distinto al activo. El saldo
+// es la MISMA fórmula que el reporte de fomentos (entregas + interés − pagos).
+liquidationsRouter.get("/fomentos-agricultor", asyncRoute(async (req, res) => {
+  const activo = (req as AuthenticatedRequest).accionistaId ?? null;
+  const q = z.object({ farmer_id: z.string().uuid().optional(), farmer_name: z.string().optional() }).parse(req.query);
+  if (!q.farmer_id && !q.farmer_name) { res.json([]); return; }
+  const rows = (await pool.query(
+    `SELECT f.id, f.farmer_name, f.accionista_id, a.name AS accionista_nombre,
+            (f.accionista_id IS DISTINCT FROM $3) AS es_de_otro_socio,
+            ROUND(
+              COALESCE((SELECT SUM(fe.valor) FROM fomento_entregas fe WHERE fe.fomento_id = f.id), 0)
+              + COALESCE((SELECT SUM(fe.valor * f.renta / 30.0 * GREATEST(CURRENT_DATE - fe.fecha, 0)) FROM fomento_entregas fe WHERE fe.fomento_id = f.id), 0)
+              - COALESCE((SELECT SUM(fp.valor) FROM fomento_pagos fp WHERE fp.fomento_id = f.id), 0)
+            , 2)::float AS saldo
+     FROM fomentos f
+     LEFT JOIN accionistas a ON a.id = f.accionista_id
+     WHERE f.status = 'ACTIVOS'
+       AND (
+         ($1::uuid IS NOT NULL AND f.farmer_id = $1)
+         OR ($2::text IS NOT NULL AND upper(trim(f.farmer_name)) = upper(trim($2)))
+       )
+     ORDER BY es_de_otro_socio ASC, f.inicio ASC`,
+    [q.farmer_id ?? null, q.farmer_name ?? null, activo]
+  )).rows.filter((r) => Number(r.saldo) > 0.005);
+  res.json(rows);
+}));
+
+// Anular una liquidación con REVERSA completa (SOLO administrador). Todo en una
+// transacción: revierte pagos de fomento + deuda inter-socios, cruce de flete de
+// Campo, aplicaciones de anticipos, la CxP del agricultor y el estado del lote.
+// Se BLOQUEA si la CxP del agricultor ya tiene pagos (revertir efectivo real es
+// responsabilidad del módulo Por Pagar). Registra el motivo.
+liquidationsRouter.post("/:id/anular", requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({ motivo: z.string().trim().min(3, "Indica el motivo de la anulación.") }).parse(req.body);
+  const liqId = String(req.params.id);
+  await ensureLiquidationEditColumn();
+
+  const result = await inTransaction(async (client) => {
+    const liq = (await client.query("SELECT * FROM liquidations WHERE id = $1 FOR UPDATE", [liqId])).rows[0];
+    if (!liq) throw new ApiError(404, "Liquidación no encontrada");
+    if (liq.status === "CANCELLED") throw new ApiError(409, "Esta liquidación ya está anulada.");
+
+    // 1) CxP del agricultor (neto). Si ya tiene pagos, se bloquea la anulación.
+    const ap = (await client.query(
+      "SELECT id, amount, balance FROM accounts_payable WHERE liquidation_id = $1 AND reference_type IS DISTINCT FROM 'fomento_cruce' FOR UPDATE",
+      [liqId]
+    )).rows[0];
+    if (ap && round2(Number(ap.balance)) < round2(Number(ap.amount)) - 0.005) {
+      throw new ApiError(409, "Esta liquidación ya tiene pagos al agricultor. Reversa los pagos en 'Por Pagar' antes de anular.");
+    }
+    if (ap) {
+      await client.query("UPDATE accounts_payable SET balance = 0, status = 'CANCELLED' WHERE id = $1", [ap.id]);
+    }
+
+    // 2) Restaurar anticipos consumidos (farmer_advances) y borrar sus aplicaciones.
+    await client.query(
+      `UPDATE farmer_advances fa
+       SET balance = fa.balance + sub.total,
+           status = (CASE WHEN fa.balance + sub.total >= fa.amount THEN 'CONFIRMED' ELSE 'PARTIAL' END)::document_status
+       FROM (SELECT advance_id, SUM(amount_applied) AS total FROM advance_applications
+             WHERE liquidation_id = $1 GROUP BY advance_id) sub
+       WHERE fa.id = sub.advance_id`,
+      [liqId]
+    );
+    await client.query("DELETE FROM advance_applications WHERE liquidation_id = $1", [liqId]);
+
+    // 3) Revertir pagos de fomento + deuda inter-socios (servicio compartido).
+    const fom = await revertirPagosFomentoDeLiquidacion(client, liqId);
+
+    // 4) Revertir el cruce de flete de Campo (si lo hubo): los movimientos llevan
+    //    el número de la liquidación en el concepto. No bloquea si Campo no aplica.
+    let fleteRevertido = 0;
+    try {
+      const del = await client.query(
+        "DELETE FROM campo_movimientos WHERE concepto LIKE $1",
+        [`Cruce flete Flota Propia · ${liq.liquidation_number}%`]
+      );
+      fleteRevertido = del.rowCount ?? 0;
+    } catch { /* Campo opcional */ }
+
+    // 5) Revertir el estado del lote si esta liquidación lo había marcado liquidado.
+    if (liq.lot_id) {
+      await client.query("UPDATE lots SET status = 'PROCESSED' WHERE id = $1 AND status = 'LIQUIDATED'", [liq.lot_id]);
+    }
+
+    // 6) Marcar la liquidación anulada con su motivo (traza contable).
+    await client.query(
+      "UPDATE liquidations SET status = 'CANCELLED', cancelled_at = now(), cancelled_reason = $2 WHERE id = $1",
+      [req.params.id, body.motivo]
+    );
+
+    return { ok: true, liquidation_number: liq.liquidation_number, fomento_abonos_revertidos: fom.abonos, flete_movimientos_revertidos: fleteRevertido };
+  });
+
+  res.json(result);
 }));

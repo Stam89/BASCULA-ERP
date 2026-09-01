@@ -412,6 +412,7 @@ type LiqRecord = {
   created_at: string;
   /** true = un administrador la desbloqueó y se puede editar precio/descuentos. */
   edit_unlocked?: boolean;
+  status?: string;
 };
 
 type Insumo = {
@@ -1333,8 +1334,14 @@ export function App() {
   // Ingresos de materia prima que aún no se le han pagado al agricultor.
   const [pendingEntries, setPendingEntries] = useState<PendingEntry[]>([]);
   const [discountsOpen, setDiscountsOpen] = useState(false);
-  // Flete se maneja por línea (arriba); aquí solo los descuentos a nivel lote.
-  const [liqDiscounts, setLiqDiscounts] = useState({ fomento: "", bascula: "", cosechadora: "" });
+  // Flete se maneja por línea (arriba); el fomento en su propia lista (abajo);
+  // aquí solo los descuentos manuales a nivel lote.
+  const [liqDiscounts, setLiqDiscounts] = useState({ bascula: "", cosechadora: "" });
+  // Fomentos ACTIVOS del agricultor, de CUALQUIER socio (visibilidad global para el
+  // cruce inter-socios). Cada uno con su monto a descontar en esta liquidación.
+  type FomentoAgricultor = { id: string; farmer_name: string; accionista_id: string | null; accionista_nombre: string | null; es_de_otro_socio: boolean; saldo: number };
+  const [liqFomentosList, setLiqFomentosList] = useState<FomentoAgricultor[]>([]);
+  const [liqFomentoMontos, setLiqFomentoMontos] = useState<Record<string, string>>({});
   // Flota Propia (campo_activos) para el selector de vehículo del cruce de flete.
   const [fletaActivos, setFletaActivos] = useState<Array<{ id: string; nombre: string }>>([]);
   // Carga tolerante a fallos: si el módulo Campo no responde, el cruce de flete
@@ -1344,6 +1351,22 @@ export function App() {
       .then((rows) => setFletaActivos(rows.map((r) => ({ id: r.id, nombre: r.nombre }))))
       .catch(() => { /* Campo opcional: se ignora */ });
   }, []);
+  // Carga los fomentos ACTIVOS del agricultor (de todos los socios) al elegirlo, y
+  // prellena el monto a descontar con el saldo de cada uno.
+  useEffect(() => {
+    if (!liqFarmerId) { setLiqFomentosList([]); setLiqFomentoMontos({}); return; }
+    // Se manda también el nombre: los fomentos antiguos no traen farmer_id.
+    const nombre = farmers.find((f) => f.id === liqFarmerId)?.full_name ?? "";
+    const qs = new URLSearchParams({ farmer_id: liqFarmerId });
+    if (nombre) qs.set("farmer_name", nombre);
+    apiGet<FomentoAgricultor[]>(`/liquidations/fomentos-agricultor?${qs.toString()}`)
+      .then((rows) => {
+        setLiqFomentosList(rows);
+        setLiqFomentoMontos(Object.fromEntries(rows.map((f) => [f.id, f.saldo.toFixed(2)])));
+        if (rows.length > 0) setDiscountsOpen(true);
+      })
+      .catch(() => { setLiqFomentosList([]); setLiqFomentoMontos({}); });
+  }, [liqFarmerId, farmers]);
   const [liqResult, setLiqResult] = useState<LiqResultItem[] | null>(null);
 
   // ── Caja ──────────────────────────────────────────────────────────────────
@@ -2010,6 +2033,8 @@ export function App() {
     pending_total: number;
     /** true solo si TODAS las liquidaciones del grupo están desbloqueadas. */
     unlocked: boolean;
+    /** true si TODAS las liquidaciones del grupo están anuladas (CANCELLED). */
+    anulada: boolean;
   };
   const liqBatches = useMemo((): LiqBatch[] => {
     // Ordenar de más reciente a más antiguo para mostrar así
@@ -2034,6 +2059,7 @@ export function App() {
           existing.net_total      += Number(r.net_amount);
           existing.pending_total  += Number(r.pending_balance);
           existing.unlocked = existing.unlocked && (r.edit_unlocked ?? false);
+          existing.anulada = existing.anulada && (r.status === "CANCELLED");
           continue;
         }
       } else {
@@ -2053,6 +2079,7 @@ export function App() {
           existing.net_total      += Number(r.net_amount);
           existing.pending_total  += Number(r.pending_balance);
           existing.unlocked = existing.unlocked && (r.edit_unlocked ?? false);
+          existing.anulada = existing.anulada && (r.status === "CANCELLED");
           continue;
         }
       }
@@ -2074,6 +2101,7 @@ export function App() {
         net_total:          Number(r.net_amount),
         pending_total:      Number(r.pending_balance),
         unlocked:           r.edit_unlocked ?? false,
+        anulada:            r.status === "CANCELLED",
       });
     }
 
@@ -2093,43 +2121,16 @@ export function App() {
     [liqLines]
   );
   const liqFleteTotal = liqFleteInterno + liqFleteTerceros;
-  // Descuentos a nivel lote (fomento/báscula/cosechadora) + el flete de todas las líneas.
-  const liqDiscountsTotal = useMemo(() =>
-    Object.values(liqDiscounts).reduce((sum, v) => sum + Number(v || 0), 0) + liqFleteTotal,
-    [liqDiscounts, liqFleteTotal]
+  // Total de fomento = suma de los montos por fomento del agricultor.
+  const liqFomentoTotal = useMemo(() =>
+    Object.values(liqFomentoMontos).reduce((s, v) => s + Number(v || 0), 0),
+    [liqFomentoMontos]
   );
-
-  // Deuda de fomento ACTIVA de un agricultor: al liquidarlo, este valor se
-  // carga automáticamente como descuento "Fomento" (último apartado del
-  // módulo Liquidación). Coincide por farmer_id y, como respaldo, por nombre
-  // (los fomentos antiguos no siempre traen farmer_id). Si no hay, null.
-  const fomentoDeudaDeAgricultor = useMemo(() => {
-    const norm = (s: string | null | undefined) => String(s ?? "").trim().toUpperCase();
-    const acumular = (mapa: Map<string, { deuda: number; nombres: string[] }>, clave: string, deuda: number, nombre: string) => {
-      const cur = mapa.get(clave) ?? { deuda: 0, nombres: [] };
-      cur.deuda += deuda;
-      if (!cur.nombres.includes(nombre)) cur.nombres.push(nombre);
-      mapa.set(clave, cur);
-    };
-    const mapa = new Map<string, { deuda: number; nombres: string[] }>();
-    for (const f of fomentos) {
-      if (f.status !== "ACTIVOS") continue;
-      const deuda = Number(f.deuda_total ?? 0);
-      if (deuda <= 0) continue;
-      if (f.farmer_id) acumular(mapa, `id:${f.farmer_id}`, deuda, f.farmer_name);
-      if (norm(f.farmer_name)) acumular(mapa, `nm:${norm(f.farmer_name)}`, deuda, f.farmer_name);
-    }
-    for (const v of mapa.values()) v.deuda = round2(v.deuda);
-    return mapa;
-  }, [fomentos]);
-  const liqFomentoAuto = useMemo(() => {
-    if (!liqFarmerId) return null;
-    const porId = fomentoDeudaDeAgricultor.get(`id:${liqFarmerId}`);
-    if (porId) return porId;
-    const farmer = farmers.find((f) => f.id === liqFarmerId);
-    const nombre = String(farmer?.full_name ?? "").trim().toUpperCase();
-    return nombre ? fomentoDeudaDeAgricultor.get(`nm:${nombre}`) ?? null : null;
-  }, [liqFarmerId, fomentoDeudaDeAgricultor, farmers]);
+  // Descuentos a nivel lote (báscula/cosechadora) + fomento(s) + flete de todas las líneas.
+  const liqDiscountsTotal = useMemo(() =>
+    Object.values(liqDiscounts).reduce((sum, v) => sum + Number(v || 0), 0) + liqFleteTotal + liqFomentoTotal,
+    [liqDiscounts, liqFleteTotal, liqFomentoTotal]
+  );
 
   const setupScore = useMemo(() => {
     const checks = [
@@ -4790,6 +4791,27 @@ export function App() {
     setLiquidacionesList(liqRows);
   }
 
+  // Anular una liquidación (o el lote completo) con REVERSA total (solo admin).
+  // Confirma y pide el MOTIVO (queda registrado). Revierte por cada liquidación.
+  async function anularLiquidacion(b: LiqBatch) {
+    const motivo = window.prompt(
+      `Anular la liquidación de ${b.farmer_name} (neto $${b.net_total.toFixed(2)}).\n\n` +
+      "Esto revierte los pagos de fomento, la deuda inter-socios y la cuenta por pagar. " +
+      "NO se puede si ya hay pagos al agricultor.\n\nEscribe el MOTIVO (obligatorio, queda registrado):"
+    );
+    if (motivo === null) return;                 // cancelado
+    if (motivo.trim().length < 3) { addToast("El motivo es obligatorio (mín. 3 caracteres).", "error"); return; }
+    let anuladas = 0;
+    for (const id of b.liquidation_ids) {
+      await apiPost(`/liquidations/${id}/anular`, { motivo: motivo.trim() });
+      anuladas++;
+    }
+    addToast(`Liquidación anulada (${anuladas}) — reversa aplicada.`, "success");
+    const liqRows = await apiGet<LiqRecord[]>("/liquidations");
+    setLiquidacionesList(liqRows);
+    await refresh();
+  }
+
   // Abrir el editor de precio/otros descuentos de una liquidacion desbloqueada.
   function openLiqEdit(b: LiqBatch) {
     const rows = liquidacionesList
@@ -6244,10 +6266,17 @@ export function App() {
       quintals: number; price_per_quintal: number;
       gross_amount: number; advances_discount: number; other_discounts: number; net_amount: number;
       cruce_flete?: { cruzado: number; abonado_servicios: number; credito_a_favor: number; cliente_piladora: string | null } | null;
+      fomento_pagos?: { total_abonado: number; cruce_inter_socios: number } | null;
     };
+    // Abonos de fomento explícitos (fomento_id + monto>0), del/los fomento(s) del
+    // agricultor (de cualquier socio). Van SOLO en la primera línea del lote.
+    const fomentoPagos = liqFomentosList
+      .map((f) => ({ fomento_id: f.id, monto: Math.round(Number(liqFomentoMontos[f.id] || 0) * 100) / 100 }))
+      .filter((p) => p.monto > 0.005);
     // Descuentos a nivel lote (sin flete: el flete es por línea). Van solo en i===0.
-    const batchDiscountsTotal = Number(liqDiscounts.fomento || 0) + Number(liqDiscounts.bascula || 0) + Number(liqDiscounts.cosechadora || 0);
+    const batchDiscountsTotal = liqFomentoTotal + Number(liqDiscounts.bascula || 0) + Number(liqDiscounts.cosechadora || 0);
     let cruceInterno = 0; let cruceAbonado = 0; let cruceCredito = 0;
+    let fomentoCruceSocios = 0;
     const batchId = safeUUID();
     const resultItems: Array<{
       lot_code: string; rice_type: string | null;
@@ -6269,11 +6298,13 @@ export function App() {
         price_per_quintal: Number(line.price),
         other_discounts: (i === 0 ? batchDiscountsTotal : 0) + lineFlete,
         discount_breakdown: {
-          fomento:     i === 0 ? Number(liqDiscounts.fomento     || 0) : 0,
+          fomento:     i === 0 ? liqFomentoTotal : 0,
           bascula:     i === 0 ? Number(liqDiscounts.bascula     || 0) : 0,
           cosechadora: i === 0 ? Number(liqDiscounts.cosechadora || 0) : 0,
           flete:       lineFlete
         },
+        // Los abonos de fomento se aplican una vez, en la primera línea del lote.
+        fomento_pagos: i === 0 && fomentoPagos.length ? fomentoPagos : undefined,
         flete_detalle: lineFlete > 0
           ? { monto: lineFlete, tipo: line.flete_tipo, activo_id: line.flete_activo_id || null }
           : undefined,
@@ -6284,6 +6315,7 @@ export function App() {
         cruceAbonado += result.cruce_flete.abonado_servicios;
         cruceCredito += result.cruce_flete.credito_a_favor;
       }
+      if (result.fomento_pagos) fomentoCruceSocios += result.fomento_pagos.cruce_inter_socios;
       resultItems.push({
         lot_code: entryLabel(entry),
         rice_type: entry.rice_type ?? null,
@@ -6297,7 +6329,8 @@ export function App() {
     }
     setLiqResult(resultItems);
     setLiqLines([nuevaLiqLine()]);
-    setLiqDiscounts({ fomento: "", bascula: "", cosechadora: "" });
+    setLiqDiscounts({ bascula: "", cosechadora: "" });
+    setLiqFomentoMontos({});
     setDiscountsOpen(false);
     // Reporte del cruce de flete interno (Flota Propia), si lo hubo.
     let cruceMsg = "";
@@ -6307,6 +6340,7 @@ export function App() {
       if (cruceCredito > 0.005) cruceMsg += `${cruceAbonado > 0.005 ? ", " : " ("}crédito a favor $${cruceCredito.toFixed(2)}`;
       if (cruceAbonado > 0.005 || cruceCredito > 0.005) cruceMsg += ")";
     }
+    if (fomentoCruceSocios > 0.005) cruceMsg += ` · Cruce inter-socios (fomento): $${fomentoCruceSocios.toFixed(2)}`;
     setMessage(`${resultItems.length} lote(s) liquidado(s)${cruceMsg}`);
     await refresh();
   }
@@ -10419,21 +10453,10 @@ export function App() {
                     <span>Agricultor</span>
                     <select value={liqFarmerId}
                       onChange={(e) => {
-                        const id = e.target.value;
-                        setLiqFarmerId(id);
+                        setLiqFarmerId(e.target.value);
                         setLiqLines([nuevaLiqLine()]);
-                        // Auto-integración Fomento → Liquidación: si el agricultor
-                        // tiene fomento activo con deuda, se carga sola como descuento;
-                        // si no tiene, queda vacío y se sigue normal.
-                        const f = id
-                          ? fomentoDeudaDeAgricultor.get(`id:${id}`) ?? (() => {
-                              const farmer = farmers.find((x) => x.id === id);
-                              const nombre = String(farmer?.full_name ?? "").trim().toUpperCase();
-                              return nombre ? fomentoDeudaDeAgricultor.get(`nm:${nombre}`) ?? null : null;
-                            })()
-                          : null;
-                        setLiqDiscounts((p) => ({ ...p, fomento: f ? f.deuda.toFixed(2) : "" }));
-                        if (f) setDiscountsOpen(true);
+                        // Los fomentos del agricultor (de todos los socios) los carga el
+                        // efecto por `liqFarmerId` y prellena su monto con el saldo.
                       }}
                       required>
                       <option value="">Seleccione</option>
@@ -10558,9 +10581,6 @@ export function App() {
                       {([
                         { key: "bascula",     label: "Báscula" },
                         { key: "cosechadora", label: "Cosechadora" },
-                        // Fomento va de ÚLTIMO: es el apartado final del módulo
-                        // Liquidación y se auto-carga con la deuda del agricultor.
-                        { key: "fomento",     label: "Fomento" },
                       ] as const).map(({ key, label }) => (
                         <label key={key} className="liqDiscRow">
                           <span>{label}</span>
@@ -10569,6 +10589,30 @@ export function App() {
                             onChange={(e) => setLiqDiscounts((p) => ({ ...p, [key]: e.target.value }))} />
                         </label>
                       ))}
+                      {/* ─ Fomentos del agricultor (de todos los socios) ─ */}
+                      {liqFomentosList.length > 0 && (
+                        <div className="liqFleteDesglose">
+                          <div className="liqFleteDesgloseHd">🌱 Fomentos del agricultor</div>
+                          {liqFomentosList.map((f) => (
+                            <label key={f.id} className="liqDiscRow" title={`Saldo: $${f.saldo.toFixed(2)}`}>
+                              <span>
+                                {f.es_de_otro_socio
+                                  ? <><span className="chip" style={{ background: "#f0fdf4", color: "#15803d", border: "1px solid #bbf7d0", marginRight: 6 }}>Fomento de {f.accionista_nombre}</span></>
+                                  : <>Fomento propio </>}
+                                <small className="muted">saldo ${f.saldo.toFixed(2)}</small>
+                              </span>
+                              <input type="number" step="0.01" min="0" max={f.saldo} placeholder="0.00"
+                                value={liqFomentoMontos[f.id] ?? ""}
+                                onChange={(e) => setLiqFomentoMontos((p) => ({ ...p, [f.id]: e.target.value }))} />
+                            </label>
+                          ))}
+                          {liqFomentosList.some((f) => f.es_de_otro_socio) && (
+                            <small className="muted" style={{ display: "block" }}>
+                              Descontar un fomento de otro socio genera una deuda inter-socios (a favor de su dueño).
+                            </small>
+                          )}
+                        </div>
+                      )}
                       {/* ─ Desglose de fletes: hacia dónde va lo descontado ─ */}
                       {liqFleteTotal > 0 && (
                         <div className="liqFleteDesglose">
@@ -10585,11 +10629,6 @@ export function App() {
                             Flota Propia salda la deuda interna con Campo (no entra a caja). Terceros queda como saldo a pagar al chofer.
                           </small>
                         </div>
-                      )}
-                      {liqFomentoAuto && (
-                        <small className="muted" style={{ display: "block" }}>
-                          🌾 {liqFomentoAuto.nombres.join(", ")} tiene fomento activo: deuda ${liqFomentoAuto.deuda.toFixed(2)} cargada automáticamente. Puedes ajustarla antes de liquidar.
-                        </small>
                       )}
                     </div>
                   )}
@@ -10748,6 +10787,18 @@ export function App() {
                                 ✏ Editar
                               </button>
                             )}
+                            {isAdmin && !b.anulada && (
+                              <button
+                                type="button"
+                                className="liqApplyBtn"
+                                style={{ color: "#b91c1c", borderColor: "#fecaca" }}
+                                title="Anular la liquidación con reversa completa (admin)"
+                                onClick={() => anularLiquidacion(b).catch((e) => addToast(e.message, "error"))}
+                              >
+                                🚫 Anular
+                              </button>
+                            )}
+                            {b.anulada && <span className="muted" style={{ fontSize: 12 }}>Anulada</span>}
                             <button type="button" className="liqPrintBtn" onClick={() => printLiqBatch(b).catch((e) => addToast(e.message, "error"))} title="Imprimir comprobante">
                               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
                                 <rect x="3" y="1" width="10" height="8" rx="1"/>
