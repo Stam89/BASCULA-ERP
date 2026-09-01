@@ -1316,18 +1316,31 @@ export function App() {
 
   const [toasts, setToasts] = useState<Array<{ id: number; text: string; type?: "success" | "error" | "warn" }>>([]);
 
-  type LiqLine = { lot_id: string; quintals: string; price: string };
+  // El flete se captura POR INGRESO (cada uno lo pudo traer un vehículo distinto).
+  // flete_tipo: 'propia' = flota de Campo (cruza deuda interna) · 'tercero' = particular.
+  type LiqLine = { lot_id: string; quintals: string; price: string; flete_monto: string; flete_tipo: "propia" | "tercero"; flete_activo_id: string };
+  const nuevaLiqLine = (): LiqLine => ({ lot_id: "", quintals: "", price: "", flete_monto: "", flete_tipo: "tercero", flete_activo_id: "" });
   type LiqResultItem = {
     lot_code: string; rice_type: string | null;
     quintals: number; price_per_quintal: number;
     gross_amount: number; advances_discount: number; other_discounts: number; net_amount: number;
   };
   const [liqFarmerId, setLiqFarmerId] = useState("");
-  const [liqLines, setLiqLines] = useState<LiqLine[]>([{ lot_id: "", quintals: "", price: "" }]);
+  const [liqLines, setLiqLines] = useState<LiqLine[]>([nuevaLiqLine()]);
   // Ingresos de materia prima que aún no se le han pagado al agricultor.
   const [pendingEntries, setPendingEntries] = useState<PendingEntry[]>([]);
   const [discountsOpen, setDiscountsOpen] = useState(false);
-  const [liqDiscounts, setLiqDiscounts] = useState({ fomento: "", bascula: "", flete: "", cosechadora: "" });
+  // Flete se maneja por línea (arriba); aquí solo los descuentos a nivel lote.
+  const [liqDiscounts, setLiqDiscounts] = useState({ fomento: "", bascula: "", cosechadora: "" });
+  // Flota Propia (campo_activos) para el selector de vehículo del cruce de flete.
+  const [fletaActivos, setFletaActivos] = useState<Array<{ id: string; nombre: string }>>([]);
+  // Carga tolerante a fallos: si el módulo Campo no responde, el cruce de flete
+  // sigue disponible (auto-detección desde la placa); solo faltaría el override manual.
+  useEffect(() => {
+    apiGet<Array<{ id: string; nombre: string }>>("/campo/activos?solo_activos=1")
+      .then((rows) => setFletaActivos(rows.map((r) => ({ id: r.id, nombre: r.nombre }))))
+      .catch(() => { /* Campo opcional: se ignora */ });
+  }, []);
   const [liqResult, setLiqResult] = useState<LiqResultItem[] | null>(null);
 
   // ── Caja ──────────────────────────────────────────────────────────────────
@@ -2067,9 +2080,20 @@ export function App() {
   const [liqEdit, setLiqEdit] = useState<LiqBatch | null>(null);
   const [liqEditRows, setLiqEditRows] = useState<Array<{ id: string; lot_code: string | null; price: string; other: string }>>([]);
 
+  // Desglose de fletes (por línea): Flota Propia (cruce interno) vs Terceros (a pagar).
+  const liqFleteInterno = useMemo(() =>
+    liqLines.reduce((s, l) => s + (l.flete_tipo === "propia" ? Number(l.flete_monto || 0) : 0), 0),
+    [liqLines]
+  );
+  const liqFleteTerceros = useMemo(() =>
+    liqLines.reduce((s, l) => s + (l.flete_tipo === "tercero" ? Number(l.flete_monto || 0) : 0), 0),
+    [liqLines]
+  );
+  const liqFleteTotal = liqFleteInterno + liqFleteTerceros;
+  // Descuentos a nivel lote (fomento/báscula/cosechadora) + el flete de todas las líneas.
   const liqDiscountsTotal = useMemo(() =>
-    Object.values(liqDiscounts).reduce((sum, v) => sum + Number(v || 0), 0),
-    [liqDiscounts]
+    Object.values(liqDiscounts).reduce((sum, v) => sum + Number(v || 0), 0) + liqFleteTotal,
+    [liqDiscounts, liqFleteTotal]
   );
 
   // Deuda de fomento ACTIVA de un agricultor: al liquidarlo, este valor se
@@ -6216,7 +6240,11 @@ export function App() {
     type LiqApiResult = {
       quintals: number; price_per_quintal: number;
       gross_amount: number; advances_discount: number; other_discounts: number; net_amount: number;
+      cruce_flete?: { cruzado: number; abonado_servicios: number; credito_a_favor: number; cliente_piladora: string | null } | null;
     };
+    // Descuentos a nivel lote (sin flete: el flete es por línea). Van solo en i===0.
+    const batchDiscountsTotal = Number(liqDiscounts.fomento || 0) + Number(liqDiscounts.bascula || 0) + Number(liqDiscounts.cosechadora || 0);
+    let cruceInterno = 0; let cruceAbonado = 0; let cruceCredito = 0;
     const batchId = safeUUID();
     const resultItems: Array<{
       lot_code: string; rice_type: string | null;
@@ -6229,20 +6257,30 @@ export function App() {
       const entry = farmerLots.find((l) => l.id === line.lot_id);
       if (!entry) continue;
       const qq = Number(line.quintals) || Number(entry.quintals ?? 0);
+      // El flete es de ESTA línea (su propio transporte); los demás descuentos van en i===0.
+      const lineFlete = Math.round(Number(line.flete_monto || 0) * 100) / 100;
       const result = await apiPost<LiqApiResult>("/liquidations", {
         farmer_id: liqFarmerId,
         weighing_ticket_id: line.lot_id,
         quintals: qq,
         price_per_quintal: Number(line.price),
-        other_discounts: i === 0 ? liqDiscountsTotal : 0,
-        discount_breakdown: i === 0 ? {
-          fomento:     Number(liqDiscounts.fomento     || 0),
-          bascula:     Number(liqDiscounts.bascula     || 0),
-          flete:       Number(liqDiscounts.flete       || 0),
-          cosechadora: Number(liqDiscounts.cosechadora || 0)
-        } : undefined,
+        other_discounts: (i === 0 ? batchDiscountsTotal : 0) + lineFlete,
+        discount_breakdown: {
+          fomento:     i === 0 ? Number(liqDiscounts.fomento     || 0) : 0,
+          bascula:     i === 0 ? Number(liqDiscounts.bascula     || 0) : 0,
+          cosechadora: i === 0 ? Number(liqDiscounts.cosechadora || 0) : 0,
+          flete:       lineFlete
+        },
+        flete_detalle: lineFlete > 0
+          ? { monto: lineFlete, tipo: line.flete_tipo, activo_id: line.flete_activo_id || null }
+          : undefined,
         batch_id: batchId
       });
+      if (result.cruce_flete) {
+        cruceInterno += result.cruce_flete.cruzado;
+        cruceAbonado += result.cruce_flete.abonado_servicios;
+        cruceCredito += result.cruce_flete.credito_a_favor;
+      }
       resultItems.push({
         lot_code: entryLabel(entry),
         rice_type: entry.rice_type ?? null,
@@ -6255,10 +6293,18 @@ export function App() {
       });
     }
     setLiqResult(resultItems);
-    setLiqLines([{ lot_id: "", quintals: "", price: "" }]);
-    setLiqDiscounts({ fomento: "", bascula: "", flete: "", cosechadora: "" });
+    setLiqLines([nuevaLiqLine()]);
+    setLiqDiscounts({ fomento: "", bascula: "", cosechadora: "" });
     setDiscountsOpen(false);
-    setMessage(`${resultItems.length} lote(s) liquidado(s)`);
+    // Reporte del cruce de flete interno (Flota Propia), si lo hubo.
+    let cruceMsg = "";
+    if (cruceInterno > 0.005) {
+      cruceMsg = ` · Cruce Flota Propia: $${cruceInterno.toFixed(2)}`;
+      if (cruceAbonado > 0.005) cruceMsg += ` (saldó $${cruceAbonado.toFixed(2)} de servicios`;
+      if (cruceCredito > 0.005) cruceMsg += `${cruceAbonado > 0.005 ? ", " : " ("}crédito a favor $${cruceCredito.toFixed(2)}`;
+      if (cruceAbonado > 0.005 || cruceCredito > 0.005) cruceMsg += ")";
+    }
+    setMessage(`${resultItems.length} lote(s) liquidado(s)${cruceMsg}`);
     await refresh();
   }
 
@@ -10372,7 +10418,7 @@ export function App() {
                       onChange={(e) => {
                         const id = e.target.value;
                         setLiqFarmerId(id);
-                        setLiqLines([{ lot_id: "", quintals: "", price: "" }]);
+                        setLiqLines([nuevaLiqLine()]);
                         // Auto-integración Fomento → Liquidación: si el agricultor
                         // tiene fomento activo con deuda, se carga sola como descuento;
                         // si no tiene, queda vacío y se sigue normal.
@@ -10398,12 +10444,23 @@ export function App() {
 
                   {liqLines.map((line, i) => {
                     const takenIds = new Set(liqLines.filter((_, j) => j !== i).map((l) => l.lot_id).filter(Boolean));
+                    const selEntry = farmerLots.find((l) => l.id === line.lot_id);
                     return (
-                      <div key={i} className="liqLine">
+                      <React.Fragment key={i}>
+                      <div className="liqLine">
                         <select value={line.lot_id} onChange={(e) => {
                           const sel = farmerLots.find((l) => l.id === e.target.value);
                           const updated = [...liqLines];
-                          updated[i] = { ...updated[i], lot_id: e.target.value, quintals: sel ? String(Number(sel.quintals ?? 0).toFixed(2)) : "" };
+                          // Auto-detección del transporte: si la placa del ingreso es de la
+                          // Flota Propia, prellena 'propia' + vehículo; si no, 'tercero'.
+                          const esPropia = !!sel?.flota_activo_id;
+                          updated[i] = {
+                            ...updated[i],
+                            lot_id: e.target.value,
+                            quintals: sel ? String(Number(sel.quintals ?? 0).toFixed(2)) : "",
+                            flete_tipo: esPropia ? "propia" : "tercero",
+                            flete_activo_id: esPropia ? String(sel!.flota_activo_id) : ""
+                          };
                           setLiqLines(updated);
                         }} required>
                           <option value="">— seleccionar ingreso —</option>
@@ -10426,11 +10483,36 @@ export function App() {
                             onClick={() => setLiqLines(liqLines.filter((_, j) => j !== i))}>×</button>
                         )}
                       </div>
+                      {/* ─ Flete de ESTE ingreso: quién lo transportó ─ */}
+                      <div className="liqFleteRow">
+                        <span className="liqFleteLbl">🚚 Flete</span>
+                        <input type="number" step="0.01" min="0" placeholder="0.00"
+                          value={line.flete_monto}
+                          onChange={(e) => { const u = [...liqLines]; u[i] = { ...u[i], flete_monto: e.target.value }; setLiqLines(u); }} />
+                        <select value={line.flete_tipo}
+                          onChange={(e) => { const u = [...liqLines]; const t = e.target.value as "propia" | "tercero"; u[i] = { ...u[i], flete_tipo: t, flete_activo_id: t === "propia" ? (u[i].flete_activo_id || String(selEntry?.flota_activo_id ?? "")) : "" }; setLiqLines(u); }}>
+                          <option value="propia">Flota Propia (interno)</option>
+                          <option value="tercero">Tercero (a pagar)</option>
+                        </select>
+                        {line.flete_tipo === "propia" ? (
+                          <select value={line.flete_activo_id}
+                            onChange={(e) => { const u = [...liqLines]; u[i] = { ...u[i], flete_activo_id: e.target.value }; setLiqLines(u); }}>
+                            <option value="">— vehículo —</option>
+                            {fletaActivos.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}
+                          </select>
+                        ) : (
+                          <span className="muted liqFleteHint">{selEntry?.placa ? `Placa ${selEntry.placa}` : "particular"}</span>
+                        )}
+                        {selEntry?.flota_activo_id && line.flete_tipo === "propia" && (
+                          <span className="liqFleteAuto" title="Detectado automáticamente por la placa del ticket">auto ✓</span>
+                        )}
+                      </div>
+                      </React.Fragment>
                     );
                   })}
 
                   <button type="button" className="liqAddBtn"
-                    onClick={() => setLiqLines([...liqLines, { lot_id: "", quintals: "", price: "" }])}>
+                    onClick={() => setLiqLines([...liqLines, nuevaLiqLine()])}>
                     + Agregar lote
                   </button>
 
@@ -10456,7 +10538,6 @@ export function App() {
                       </div>
                       {([
                         { key: "bascula",     label: "Báscula" },
-                        { key: "flete",       label: "Flete" },
                         { key: "cosechadora", label: "Cosechadora" },
                         // Fomento va de ÚLTIMO: es el apartado final del módulo
                         // Liquidación y se auto-carga con la deuda del agricultor.
@@ -10469,6 +10550,23 @@ export function App() {
                             onChange={(e) => setLiqDiscounts((p) => ({ ...p, [key]: e.target.value }))} />
                         </label>
                       ))}
+                      {/* ─ Desglose de fletes: hacia dónde va lo descontado ─ */}
+                      {liqFleteTotal > 0 && (
+                        <div className="liqFleteDesglose">
+                          <div className="liqFleteDesgloseHd">Fletes (por transporte)</div>
+                          <div className="liqDiscRow">
+                            <span>🏭 Flota Propia (interno)</span>
+                            <strong>-${liqFleteInterno.toFixed(2)}</strong>
+                          </div>
+                          <div className="liqDiscRow">
+                            <span>🚚 Terceros (a pagar)</span>
+                            <strong>-${liqFleteTerceros.toFixed(2)}</strong>
+                          </div>
+                          <small className="muted" style={{ display: "block" }}>
+                            Flota Propia salda la deuda interna con Campo (no entra a caja). Terceros queda como saldo a pagar al chofer.
+                          </small>
+                        </div>
+                      )}
                       {liqFomentoAuto && (
                         <small className="muted" style={{ display: "block" }}>
                           🌾 {liqFomentoAuto.nombres.join(", ")} tiene fomento activo: deuda ${liqFomentoAuto.deuda.toFixed(2)} cargada automáticamente. Puedes ajustarla antes de liquidar.

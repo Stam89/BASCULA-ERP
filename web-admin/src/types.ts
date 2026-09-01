@@ -82,4 +82,9 @@ export type PendingEntry = {
   net_weight: string | number | null;
   /** Lote al que ya entró (si está secándose); null si aún es materia prima suelta. */
   lot_code: string | null;
+  /** Placa del vehículo que trajo el ingreso (del ticket de báscula), si se conoce. */
+  placa?: string | null;
+  /** Vehículo de la Flota Propia (campo_activos) auto-detectado por la placa; null = tercero/particular. */
+  flota_activo_id?: string | null;
+  flota_activo_nombre?: string | null;
 };

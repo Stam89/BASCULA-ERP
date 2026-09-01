@@ -274,6 +274,27 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 .liqLine select:focus,
 .liqLine input:focus { outline: none; border-color: var(--c-brand); }
 
+/* Flete por ingreso (quién lo transportó): fila secundaria bajo cada .liqLine. */
+.liqFleteRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -2px 0 10px 12px;
+  padding-left: 10px;
+  border-left: 2px solid var(--c-border);
+  font-size: 12px;
+}
+.liqFleteRow .liqFleteLbl { color: var(--c-muted); white-space: nowrap; }
+.liqFleteRow input { width: 90px; padding: 5px 8px; border: 1px solid var(--c-border); border-radius: var(--r-sm); background: var(--c-surface); color: var(--c-text); font-size: 12px; }
+.liqFleteRow select { padding: 5px 8px; border: 1px solid var(--c-border); border-radius: var(--r-sm); background: var(--c-surface); color: var(--c-text); font-size: 12px; }
+.liqFleteRow input:focus, .liqFleteRow select:focus { outline: none; border-color: var(--c-brand); }
+.liqFleteHint { font-size: 11px; }
+.liqFleteAuto { font-size: 11px; color: #15803d; font-weight: 600; }
+
+/* Desglose de fletes dentro del panel de descuentos. */
+.liqFleteDesglose { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--c-border); }
+.liqFleteDesgloseHd { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--c-muted); margin-bottom: 4px; }
+
 .liqRemoveBtn {
   width: 28px; height: 28px;
   border: none; border-radius: var(--r-sm);

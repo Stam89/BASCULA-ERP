@@ -7,6 +7,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { cruzarFleteInterno, type CruceFleteResultado } from "../../services/campo-cruce-flete.js";
 
 export const liquidationsRouter = Router();
 
@@ -39,10 +40,25 @@ liquidationsRouter.get("/pending-entries", asyncRoute(async (req, res) => {
     `SELECT w.id, w.ticket_number, w.farmer_id, w.rice_type, w.quintals, w.net_weight, w.created_at,
             f.full_name AS farmer_name,
             m.raw_payload->>'numeroTicket' AS numero_bascula,
+            m.raw_payload->>'placa' AS placa,
+            -- Auto-detección del transporte: si la placa del ticket coincide con un
+            -- vehículo de la Flota Propia (campo_activos), se devuelve para prellenar
+            -- el cruce de flete como 'propia'. Si no, queda 'tercero'.
+            fa.id AS flota_activo_id,
+            fa.nombre AS flota_activo_nombre,
             l.lot_code
      FROM weighing_tickets w
      JOIN farmers f ON f.id = w.farmer_id
      LEFT JOIN mobile_synced_tickets m ON m.weighing_ticket_id = w.id
+     LEFT JOIN LATERAL (
+       SELECT a.id, a.nombre
+       FROM campo_activos a
+       WHERE a.activo = true
+         AND m.raw_payload->>'placa' IS NOT NULL
+         AND (lower(a.placa_codigo) = lower(m.raw_payload->>'placa')
+              OR lower(a.nombre) = lower(m.raw_payload->>'placa'))
+       LIMIT 1
+     ) fa ON true
      LEFT JOIN lots l ON l.id = w.lot_id
      WHERE w.accionista_id = $1
        AND w.is_maquila = false
@@ -68,6 +84,14 @@ const liquidationInput = z.object({
   price_per_quintal: z.number().nonnegative(),
   other_discounts: z.number().nonnegative().default(0),
   discount_breakdown: discountBreakdownSchema,
+  // Cruce de fletes: de dónde vino el transporte de ESTE ingreso. 'propia' = flota
+  // de Campo → el flete descontado salda la deuda interna (no entra a caja).
+  // 'tercero' = chofer particular → solo informativo (no genera asiento aún).
+  flete_detalle: z.object({
+    monto: z.number().nonnegative(),
+    tipo: z.enum(["propia", "tercero"]),
+    activo_id: z.string().uuid().nullable().optional()
+  }).optional(),
   batch_id: z.string().uuid().optional(),
   created_by: z.string().uuid().optional()
 });
@@ -203,7 +227,21 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
         await client.query("UPDATE lots SET status = 'LIQUIDATED' WHERE id = $1", [lotId]);
       }
     }
-    return liquidation.rows[0];
+
+    // Cruce de flete interno: si el transporte fue de la Flota Propia, el flete
+    // descontado salda la deuda interna con Campo (mismo tx: revierte junto si algo
+    // falla). Tercero/particular = informativo, no genera asiento.
+    let cruce: CruceFleteResultado | null = null;
+    if (data.flete_detalle?.tipo === "propia" && data.flete_detalle.monto > 0) {
+      cruce = await cruzarFleteInterno(client, {
+        accionistaId,
+        monto: data.flete_detalle.monto,
+        activoId: data.flete_detalle.activo_id ?? null,
+        referencia: liquidation.rows[0].liquidation_number,
+        createdBy: data.created_by ?? null
+      });
+    }
+    return { ...liquidation.rows[0], cruce_flete: cruce };
   });
 
   res.status(201).json(result);
