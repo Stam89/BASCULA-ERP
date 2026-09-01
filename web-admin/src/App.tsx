@@ -6302,7 +6302,7 @@ export function App() {
       gross_amount: number; advances_discount: number; other_discounts: number; net_amount: number;
       cruce_flete?: { cruzado: number; abonado_servicios: number; credito_a_favor: number; cliente_piladora: string | null } | null;
       fomento_pagos?: { total_abonado: number; cruce_inter_socios: number } | null;
-      saldo_en_contra?: { fomento_id: string; monto: number } | null;
+      saldo_en_contra?: { fomento_id: string; monto: number; acreedor: string | null } | null;
     };
     // Abonos de fomento explícitos (fomento_id + monto>0), del/los fomento(s) del
     // agricultor (de cualquier socio). Van SOLO en la primera línea del lote.
@@ -6315,7 +6315,7 @@ export function App() {
     // debiendo). Se manda en la 1ª línea → el backend genera el nuevo fomento.
     const saldoEnContra = Math.max(0, Math.round((liqDiscountsTotal - liqGrossTotal) * 100) / 100);
     let cruceInterno = 0; let cruceAbonado = 0; let cruceCredito = 0;
-    let fomentoCruceSocios = 0; let saldoContraMonto = 0;
+    let fomentoCruceSocios = 0; let saldoContraMonto = 0; let saldoContraAcreedor: string | null = null;
     const batchId = safeUUID();
     const resultItems: Array<{
       lot_code: string; rice_type: string | null;
@@ -6352,7 +6352,7 @@ export function App() {
           : undefined,
         batch_id: batchId
       });
-      if (result.saldo_en_contra) saldoContraMonto += result.saldo_en_contra.monto;
+      if (result.saldo_en_contra) { saldoContraMonto += result.saldo_en_contra.monto; saldoContraAcreedor = result.saldo_en_contra.acreedor; }
       if (result.cruce_flete) {
         cruceInterno += result.cruce_flete.cruzado;
         cruceAbonado += result.cruce_flete.abonado_servicios;
@@ -6384,7 +6384,7 @@ export function App() {
       if (cruceAbonado > 0.005 || cruceCredito > 0.005) cruceMsg += ")";
     }
     if (fomentoCruceSocios > 0.005) cruceMsg += ` · Cruce inter-socios (fomento): $${fomentoCruceSocios.toFixed(2)}`;
-    if (saldoContraMonto > 0.005) cruceMsg += ` · ⚠️ Saldo en contra: nuevo fomento por $${saldoContraMonto.toFixed(2)}`;
+    if (saldoContraMonto > 0.005) cruceMsg += ` · ⚠️ Saldo en contra: nuevo fomento por $${saldoContraMonto.toFixed(2)}${saldoContraAcreedor ? ` (a favor de ${saldoContraAcreedor})` : ""}`;
     setMessage(`${resultItems.length} lote(s) liquidado(s)${cruceMsg}`);
     await refresh();
   }
@@ -11131,10 +11131,10 @@ export function App() {
                       <div onClick={() => !borrandoEntrega && setConfirmarEntrega(null)}
                         style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100, padding: 16 }}>
                         <div onClick={(ev) => ev.stopPropagation()} className="formPanel" style={{ maxWidth: 440, width: "100%", margin: 0 }}>
-                          <h3 style={{ marginTop: 0, color: "#b91c1c" }}>⚠️ Eliminar entrega</h3>
+                          <h3 style={{ marginTop: 0, color: "#b91c1c" }}>⚠️ ¿Eliminar entrega de crédito?</h3>
                           <p style={{ lineHeight: 1.5 }}>
-                            ¿Estás seguro de eliminar esta entrega de <strong>${confirmarEntrega.valor.toFixed(2)}</strong> del <strong>{confirmarEntrega.fecha}</strong>?
-                            <br />Esta acción recalculará los intereses y la deuda total del agricultor.
+                            Estás a punto de borrar la entrega de <strong>${confirmarEntrega.valor.toFixed(2)}</strong> del <strong>{confirmarEntrega.fecha}</strong>.
+                            Esto recalculará la deuda total y los intereses del fomento.
                           </p>
                           <div className="buttonRow" style={{ marginTop: 14 }}>
                             <button type="button" onClick={() => setConfirmarEntrega(null)} disabled={borrandoEntrega}>Cancelar</button>

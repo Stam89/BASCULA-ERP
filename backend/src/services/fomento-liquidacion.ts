@@ -26,6 +26,9 @@ export type PagoFomentoResultado = {
   total_abonado: number;
   cruce_inter_socios: number;
   detalle: Array<{ fomento_id: string; abono: number; inter_socios: boolean; dueno: string | null; liquidado: boolean }>;
+  // Socio ACREEDOR original (dueño del fomento principal pagado). El fomento de
+  // "saldo en contra" se asigna a él, NUNCA al socio que liquida.
+  acreedor: { accionista_id: string | null; nombre: string | null } | null;
 };
 
 // Aplica los abonos de fomento de una liquidación. `pagos` explícito (con
@@ -40,9 +43,13 @@ export async function aplicarPagosFomento(
     pagos?: Array<{ fomento_id: string; monto: number }>;
     montoFallback?: number;
     qqLiquidados?: number | null;
+    // Saldo EN CONTRA del lote: el remanente de fomento NO cubierto por el arroz.
+    // Reduce el cruce inter-socios del fomento acreedor (ese remanente no es deuda
+    // entre socios, sino cartera que continúa a nombre del acreedor original).
+    deficit?: number | null;
   }
 ): Promise<PagoFomentoResultado> {
-  const out: PagoFomentoResultado = { total_abonado: 0, cruce_inter_socios: 0, detalle: [] };
+  const out: PagoFomentoResultado = { total_abonado: 0, cruce_inter_socios: 0, detalle: [], acreedor: null };
 
   // 1) Resolver la lista de objetivos (fomento_id + monto solicitado).
   let objetivos: Array<{ fomento_id: string; monto: number }> = [];
@@ -70,7 +77,10 @@ export async function aplicarPagosFomento(
   }
   if (!objetivos.length) return out;
 
-  // 2) Aplicar cada abono con lock del fomento y cap al saldo.
+  // 2) Pasada 1 — registrar los abonos (cap al saldo del fomento). Se guardan
+  //    fom + abono + pago_id para armar los cruces después.
+  const liqAcc = input.liquidatingAccionistaId ?? null;
+  const aplicados: Array<{ fom: { id: string; accionista_id: string | null; farmer_id: string | null }; abono: number; pagoId: string }> = [];
   for (const obj of objetivos) {
     const fom = (await client.query(
       "SELECT id, accionista_id, farmer_id, farmer_name FROM fomentos WHERE id = $1 FOR UPDATE",
@@ -87,70 +97,77 @@ export async function aplicarPagosFomento(
        VALUES ($1, CURRENT_DATE, $2, $3, $4, $5) RETURNING id`,
       [fom.id, abono, `Abono por Liquidación #${input.liquidationNumber}`, input.liquidationId, input.qqLiquidados ?? null]
     )).rows[0];
-
-    // Estado Pagado/Liquidado: si el saldo quedó en 0 (o menos), se marca la fecha.
     const liquidado = Math.round((saldo - abono) * 100) / 100 <= 0.005;
-    if (liquidado) {
-      await client.query("UPDATE fomentos SET liquidado_at = now() WHERE id = $1", [fom.id]);
-    }
+    if (liquidado) await client.query("UPDATE fomentos SET liquidado_at = now() WHERE id = $1", [fom.id]);
 
-    // 3) Cruce inter-socios: el fomento es de OTRO socio distinto al que liquida.
-    let interSocios = false; let duenoNombre: string | null = null;
-    const liqAcc = input.liquidatingAccionistaId ?? null;
-    if (fom.accionista_id && liqAcc && fom.accionista_id !== liqAcc) {
-      interSocios = true;
-      const dueno = (await client.query("SELECT name FROM accionistas WHERE id = $1", [fom.accionista_id])).rows[0];
-      const liquidador = (await client.query("SELECT name FROM accionistas WHERE id = $1", [liqAcc])).rows[0];
-      duenoNombre = dueno?.name ?? null;
-      const nota = `Cruce inter-socios por Liquidación #${input.liquidationNumber}`;
-      // CxP del socio que liquida (asume la deuda) …
-      await client.query(
-        `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
-         VALUES ($1, $2, $3, $3, 'CONFIRMED', $4, 'fomento_cruce', $5, $6)`,
-        [fom.farmer_id ?? null, input.liquidationId, abono, liqAcc, pago.id,
-         `${nota}: fomento de ${duenoNombre ?? "socio"}`]
-      );
-      // … y CxC del socio dueño del fomento (a su favor).
-      await client.query(
-        `INSERT INTO accounts_receivable (farmer_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
-         VALUES ($1, $2, $2, 'CONFIRMED', $3, 'fomento_cruce', $4, $5)`,
-        [fom.farmer_id ?? null, abono, fom.accionista_id, pago.id,
-         `${nota}: liquidada por ${liquidador?.name ?? "otro socio"}`]
-      );
-      out.cruce_inter_socios = Math.round((out.cruce_inter_socios + abono) * 100) / 100;
-    }
-
+    aplicados.push({ fom, abono, pagoId: pago.id });
     out.total_abonado = Math.round((out.total_abonado + abono) * 100) / 100;
-    out.detalle.push({ fomento_id: fom.id, abono, inter_socios: interSocios, dueno: duenoNombre, liquidado });
+    out.detalle.push({ fomento_id: fom.id, abono, inter_socios: false, dueno: null, liquidado });
+  }
+  if (!aplicados.length) return out;
+
+  // 3) Acreedor = dueño del fomento con MAYOR abono (el fomento principal). El
+  //    remanente de saldo en contra se le atribuirá a él.
+  const principal = aplicados.reduce((a, b) => (b.abono > a.abono ? b : a));
+  const dueñoPrincipal = (await client.query("SELECT name FROM accionistas WHERE id = $1", [principal.fom.accionista_id])).rows[0];
+  out.acreedor = { accionista_id: principal.fom.accionista_id, nombre: dueñoPrincipal?.name ?? null };
+
+  // 4) Cruce inter-socios: el fomento es de OTRO socio distinto al que liquida. La
+  //    parte NO cubierta por el arroz (déficit) se resta del cruce del principal:
+  //    ese remanente continúa como fomento del acreedor, no como deuda entre socios.
+  const deficit = Math.max(0, Math.round(Number(input.deficit ?? 0) * 100) / 100);
+  const liquidador = liqAcc ? (await client.query("SELECT name FROM accionistas WHERE id = $1", [liqAcc])).rows[0] : null;
+  const nota = `Cruce inter-socios por Liquidación #${input.liquidationNumber}`;
+  for (const ap of aplicados) {
+    if (!(ap.fom.accionista_id && liqAcc && ap.fom.accionista_id !== liqAcc)) continue;
+    // El déficit reduce el cruce SOLO del fomento principal (el que genera el remanente).
+    const cruce = ap.pagoId === principal.pagoId ? Math.round((ap.abono - deficit) * 100) / 100 : ap.abono;
+    const det = out.detalle.find((d) => d.fomento_id === ap.fom.id);
+    if (det) det.inter_socios = true;
+    if (cruce <= 0.005) continue;
+    const dueno = (await client.query("SELECT name FROM accionistas WHERE id = $1", [ap.fom.accionista_id])).rows[0];
+    if (det) det.dueno = dueno?.name ?? null;
+    await client.query(
+      `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
+       VALUES ($1, $2, $3, $3, 'CONFIRMED', $4, 'fomento_cruce', $5, $6)`,
+      [ap.fom.farmer_id ?? null, input.liquidationId, cruce, liqAcc, ap.pagoId, `${nota}: fomento de ${dueno?.name ?? "socio"}`]
+    );
+    await client.query(
+      `INSERT INTO accounts_receivable (farmer_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
+       VALUES ($1, $2, $2, 'CONFIRMED', $3, 'fomento_cruce', $4, $5)`,
+      [ap.fom.farmer_id ?? null, cruce, ap.fom.accionista_id, ap.pagoId, `${nota}: liquidada por ${liquidador?.name ?? "otro socio"}`]
+    );
+    out.cruce_inter_socios = Math.round((out.cruce_inter_socios + cruce) * 100) / 100;
   }
 
   return out;
 }
 
 // Saldo EN CONTRA: cuando los descuentos superan el bruto (neto < 0), el arroz
-// entregado ya saldó (parcial o totalmente) el/los fomento(s) vía los abonos de
-// arriba; el remanente que el agricultor sigue debiendo se registra como un NUEVO
-// fomento a favor del socio que liquida (deuda fresca, ligada a la liquidación
-// para poder revertirla). Devuelve el fomento creado, o null si no hay déficit.
+// entregado ya saldó (parcial o totalmente) el/los fomento(s); el remanente que el
+// agricultor sigue debiendo se registra como un NUEVO fomento a nombre del SOCIO
+// ACREEDOR ORIGINAL (el dueño del fomento que financió el insumo), NUNCA del socio
+// que liquida. Ligado a la liquidación para poder revertirlo. La titularidad del
+// capital se mantiene intacta a lo largo de las refinanciaciones.
 export async function generarFomentoSaldoEnContra(
   client: PoolClient,
-  input: { liquidationId: string; liquidationNumber: string; accionistaId: string | undefined; farmerId: string; farmerName: string; deficit: number; createdBy?: string | null }
-): Promise<{ fomento_id: string; monto: number } | null> {
+  input: { liquidationId: string; liquidationNumber: string; acreedorAccionistaId: string | null; acreedorNombre: string | null; farmerId: string; farmerName: string; deficit: number; createdBy?: string | null }
+): Promise<{ fomento_id: string; monto: number; acreedor: string | null } | null> {
   const monto = Math.round(Number(input.deficit) * 100) / 100;
   if (!(monto > 0.005)) return null;
-  // cuadras=0: es un fomento de deuda pura (no de crédito por cuadras). La deuda
-  // se registra con una entrega por el déficit (deuda_total = entregas − pagos).
+  const nota = `Fomento remanente por saldo en contra de Liquidación #${input.liquidationNumber} (Originalmente otorgado por ${input.acreedorNombre ?? "socio acreedor"})`;
+  // cuadras=0: fomento de deuda pura. La deuda se registra con una entrega por el
+  // déficit (deuda_total = entregas − pagos). Dueño = socio acreedor original.
   const fom = (await client.query(
     `INSERT INTO fomentos (farmer_name, farmer_id, cuadras, inicio, renta, status, accionista_id, notes, origen_liquidation_id)
      VALUES ($1, $2, 0, CURRENT_DATE, 0, 'ACTIVOS', $3, $4, $5) RETURNING id`,
-    [input.farmerName, input.farmerId ?? null, input.accionistaId ?? null,
-     `Saldo en contra de Liquidación #${input.liquidationNumber}`, input.liquidationId]
+    [input.farmerName, input.farmerId ?? null, input.acreedorAccionistaId ?? null, nota, input.liquidationId]
   )).rows[0];
   await client.query(
     "INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto) VALUES ($1, CURRENT_DATE, $2, $3)",
-    [fom.id, monto, `Saldo en contra por Liquidación #${input.liquidationNumber}`]
+    [fom.id, monto, nota]
   );
-  return { fomento_id: fom.id, monto };
+  return { fomento_id: fom.id, monto, acreedor: input.acreedorNombre };
 }
 
 // Reversa completa (para "anular liquidación"): borra los abonos de la liquidación,

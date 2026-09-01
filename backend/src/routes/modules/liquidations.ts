@@ -272,18 +272,24 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
         farmerName,
         pagos: data.fomento_pagos,
         montoFallback: fomentoDiscount,
-        qqLiquidados: data.qq_liquidados ?? null
+        qqLiquidados: data.qq_liquidados ?? null,
+        deficit: data.saldo_en_contra ?? null
       });
     }
 
-    // Saldo EN CONTRA (Descuentos > Bruto): el remanente que el agricultor sigue
-    // debiendo se registra como un NUEVO fomento a favor del socio que liquida.
-    let saldoContra: { fomento_id: string; monto: number } | null = null;
+    // Saldo EN CONTRA (Descuentos > Bruto): el remanente se registra como un NUEVO
+    // fomento a nombre del SOCIO ACREEDOR ORIGINAL (dueño del fomento financiado),
+    // nunca del socio que liquida. Si no hubo fomento (déficit por otros descuentos),
+    // no hay acreedor de fomento → se atribuye al socio que liquida (único posible).
+    let saldoContra: { fomento_id: string; monto: number; acreedor: string | null } | null = null;
     if ((data.saldo_en_contra ?? 0) > 0) {
+      const acreedorId = fomentoPagos?.acreedor?.accionista_id ?? accionistaId ?? null;
+      const acreedorNombre = fomentoPagos?.acreedor?.nombre ?? null;
       saldoContra = await generarFomentoSaldoEnContra(client, {
         liquidationId: liquidation.rows[0].id,
         liquidationNumber: liquidation.rows[0].liquidation_number,
-        accionistaId,
+        acreedorAccionistaId: acreedorId,
+        acreedorNombre,
         farmerId: data.farmer_id,
         farmerName,
         deficit: data.saldo_en_contra ?? 0,
