@@ -831,7 +831,7 @@ function ConvertirAplicarModal({ credito, onClose, onDone, onError }: {
             <option value="">{partes === null ? "Cargando…" : partes.length ? "— seleccionar parte —" : "Sin partes pendientes de este cliente"}</option>
             {(partes ?? []).map((p) => (
               <option key={p.id} value={p.id}>
-                {p.fecha} · {p.activo_nombre} · {p.qq.toFixed(2)} QQ{p.origen === "bascula" ? " · ⚖️ Báscula" : ""}
+                {String(p.fecha).slice(0, 10)} · {p.activo_nombre} · {p.qq.toFixed(2)} QQ{p.origen === "bascula" ? " · ⚖️ Báscula" : ""}
               </option>
             ))}
           </select>
