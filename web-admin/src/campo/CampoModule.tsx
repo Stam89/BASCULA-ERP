@@ -61,6 +61,10 @@ type SesionHist = { id: string; fecha_apertura: string; fecha_cierre: string | n
 
 // Estado de cuenta de clientes (Campo).
 type ClienteCuenta = { id: string; nombre: string; identificacion: string | null; telefono: string | null; tipo: string; debe: number; haber: number; saldo: number; servicios: number };
+// Crédito a favor por fletes retenidos en liquidaciones (cruce Planta→Campo).
+type CreditoConcil = { cliente_id: string; cliente_nombre: string; credito: number; partes_pendientes: number };
+// Parte pendiente para el modal de conversión (subset de /campo/partes).
+type ParteConcil = { id: string; fecha: string; activo_nombre: string; cliente: string; qq: number; observaciones: string | null; origen: string; estado: string };
 type EstadoLinea = { fecha: string; clase: "servicio" | "abono"; detalle: string; maquina: string | null; qq: number | null; precio_unitario: number | null; debe: number; haber: number; cuenta: string | null; saldo: number };
 type EstadoCuenta = { cliente: { id: string; nombre: string; identificacion: string | null; tipo: string }; periodo: { from: string; to: string }; saldo_apertura: number; lineas: EstadoLinea[]; total_debe: number; total_haber: number; saldo_final: number };
 
@@ -590,16 +594,25 @@ function ClientesView({ nombreOperacion, onNotify, onError }: {
   const [verCuenta, setVerCuenta] = useState<ClienteCuenta | null>(null);
   const [editar, setEditar] = useState<ClienteCuenta | null>(null);
   const [nuevo, setNuevo] = useState(false);
+  // Conciliación / cruce de fletes: créditos a favor por cliente-piladora.
+  const [creditos, setCreditos] = useState<CreditoConcil[]>([]);
+  const [conciliar, setConciliar] = useState<CreditoConcil | null>(null);
 
   const cargar = useCallback(async () => {
     try {
       const qs = new URLSearchParams();
       if (q.trim()) qs.set("q", q.trim());
       if (estado) qs.set("estado", estado);
-      setData(await apiGet<{ clientes: ClienteCuenta[]; total_pendiente: number }>(`/campo/clientes/estado-cuenta?${qs.toString()}`));
+      const [ec, cr] = await Promise.all([
+        apiGet<{ clientes: ClienteCuenta[]; total_pendiente: number }>(`/campo/clientes/estado-cuenta?${qs.toString()}`),
+        apiGet<{ creditos: CreditoConcil[]; total_credito: number }>("/campo/conciliacion/creditos").catch(() => ({ creditos: [], total_credito: 0 }))
+      ]);
+      setData(ec);
+      setCreditos(cr.creditos);
     } catch (e) { onError((e as Error).message); }
   }, [q, estado, onError]);
   useEffect(() => { const t = setTimeout(cargar, 200); return () => clearTimeout(t); }, [cargar]);
+  const creditoDe = (cid: string) => creditos.find((x) => x.cliente_id === cid) ?? null;
 
   const clientes = data?.clientes ?? [];
   return (
@@ -613,6 +626,25 @@ function ClientesView({ nombreOperacion, onNotify, onError }: {
             <strong style={{ color: "#b45309" }}>{money(data?.total_pendiente ?? 0)}</strong>
           </div>
         </div>
+        {creditos.length > 0 && (
+          <div style={{ marginTop: 10, padding: "10px 12px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8 }}>
+            <strong style={{ color: "#1d4ed8" }}>⚡ Conciliación de fletes</strong>
+            <span className="muted" style={{ marginLeft: 8, fontSize: 13 }}>
+              {creditos.length} cliente(s) con crédito a favor por fletes retenidos en liquidaciones. Convierte sus partes pendientes a servicio y aplica el crédito.
+            </span>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+              {creditos.map((cr) => (
+                <button key={cr.cliente_id} type="button" className="btnSecondary"
+                  onClick={() => setConciliar(cr)}
+                  style={{ borderColor: "#93c5fd" }}
+                  title={`${cr.partes_pendientes} parte(s) pendiente(s)`}>
+                  {cr.cliente_nombre}: <strong style={{ color: "#1d4ed8" }}>{money(cr.credito)}</strong>
+                  {cr.partes_pendientes > 0 && <span className="muted"> · {cr.partes_pendientes} parte(s)</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginTop: 8 }}>
           <label style={{ margin: 0, flex: "1 1 240px" }}><span>Buscar (nombre o identificación)</span>
             <input type="text" value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔍 Ej: Juan / 0912345678" />
@@ -644,6 +676,13 @@ function ClientesView({ nombreOperacion, onNotify, onError }: {
                   <td className="num" style={{ fontWeight: 700, color: c.saldo > 0.005 ? "#b45309" : "#15803d" }}>{money(c.saldo)}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {creditoDe(c.id) && (
+                        <button type="button" className="btnSecondary" style={{ borderColor: "#93c5fd", color: "#1d4ed8" }}
+                          onClick={() => setConciliar(creditoDe(c.id)!)}
+                          title={`Crédito a favor ${money(creditoDe(c.id)!.credito)} · ${creditoDe(c.id)!.partes_pendientes} parte(s) pendiente(s)`}>
+                          ⚡ Convertir parte y aplicar crédito
+                        </button>
+                      )}
                       <button type="button" className="btnSecondary" onClick={() => setVerCuenta(c)}>📄 Estado de cuenta</button>
                       <button type="button" className="btnSecondary" onClick={() => setEditar(c)}>✏️ Editar</button>
                     </div>
@@ -664,6 +703,12 @@ function ClientesView({ nombreOperacion, onNotify, onError }: {
         <EditarClienteModal cliente={editar}
           onClose={() => setEditar(null)}
           onDone={async () => { setEditar(null); await cargar(); onNotify("Cliente actualizado"); }}
+          onError={onError} />
+      )}
+      {conciliar && (
+        <ConvertirAplicarModal credito={conciliar}
+          onClose={() => setConciliar(null)}
+          onDone={async (msg) => { setConciliar(null); await cargar(); onNotify(msg); }}
           onError={onError} />
       )}
       {nuevo && (
@@ -716,6 +761,109 @@ function NuevoClienteModal({ onClose, onDone, onError }: {
         </label>
         <div className="buttonRow">
           <button type="submit" className="primary" disabled={busy}>{busy ? "Guardando…" : "Crear cliente"}</button>
+          <button type="button" onClick={onClose} disabled={busy}>Cancelar</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// Modal: convertir un Parte Diario a Servicio y aplicar el crédito a favor del
+// cliente (cruce de fletes). Elige el parte, fija la tarifa y confirma el crédito.
+function ConvertirAplicarModal({ credito, onClose, onDone, onError }: {
+  credito: CreditoConcil;
+  onClose: () => void; onDone: (msg: string) => void | Promise<void>; onError: (m: string) => void;
+}) {
+  const [partes, setPartes] = useState<ParteConcil[] | null>(null);
+  const [parteId, setParteId] = useState("");
+  const [modo, setModo] = useState<"precio" | "valor">("precio");
+  const [precio, setPrecio] = useState("");
+  const [valorFijo, setValorFijo] = useState("");
+  const [aplicar, setAplicar] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    apiGet<ParteConcil[]>("/campo/partes?estado=por_cobrar")
+      .then((rows) => {
+        const nombre = credito.cliente_nombre.trim().toLowerCase();
+        setPartes(rows.filter((p) => (p.cliente ?? "").trim().toLowerCase() === nombre));
+      })
+      .catch((e) => { onError((e as Error).message); setPartes([]); });
+  }, [credito.cliente_nombre, onError]);
+
+  const parte = partes?.find((p) => p.id === parteId) ?? null;
+  const valor = modo === "precio"
+    ? Math.round((Number(parte?.qq ?? 0) * Number(precio || 0)) * 100) / 100
+    : Math.round(Number(valorFijo || 0) * 100) / 100;
+  // Por defecto se aplica el máximo posible (min entre crédito y valor del servicio).
+  const aplicarDefault = Math.min(credito.credito, valor);
+  const aplicarReal = aplicar.trim() ? Math.min(Number(aplicar || 0), credito.credito, valor) : aplicarDefault;
+  const saldoRestante = Math.max(0, Math.round((valor - aplicarReal) * 100) / 100);
+  const creditoRestante = Math.max(0, Math.round((credito.credito - aplicarReal) * 100) / 100);
+
+  async function submit() {
+    try {
+      setBusy(true);
+      if (!parteId) throw new Error("Elige el parte a convertir");
+      if (!(valor > 0)) throw new Error("Indica la tarifa del flete (precio por QQ o valor cerrado)");
+      const body: Record<string, unknown> = { parte_id: parteId, cliente_id: credito.cliente_id };
+      if (modo === "precio") body.precio_unitario = Number(precio);
+      else body.valor = Number(valorFijo);
+      if (aplicar.trim()) body.aplicar_credito = Number(aplicar);
+      const r = await apiPost<{ aplicado: number; credito_restante: number; saldo_servicio: number }>(
+        "/campo/conciliacion/convertir-y-aplicar", body
+      );
+      await onDone(`Parte convertido · aplicado ${money(r.aplicado)} de crédito · saldo del servicio ${money(r.saldo_servicio)}`);
+    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <form className="formPanel" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submit(); }} style={{ maxWidth: 480, width: "100%", margin: 0 }}>
+        <h2 style={{ marginTop: 0 }}>⚡ Convertir parte y aplicar crédito</h2>
+        <div style={{ padding: "8px 12px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, marginBottom: 10 }}>
+          <strong>{credito.cliente_nombre}</strong>
+          <span style={{ marginLeft: 8 }}>Crédito a favor disponible: <strong style={{ color: "#1d4ed8" }}>{money(credito.credito)}</strong></span>
+        </div>
+
+        <label><span>Parte Diario a convertir <span style={{ color: "#ef4444" }}>*</span></span>
+          <select autoFocus value={parteId} onChange={(e) => setParteId(e.target.value)}>
+            <option value="">{partes === null ? "Cargando…" : partes.length ? "— seleccionar parte —" : "Sin partes pendientes de este cliente"}</option>
+            {(partes ?? []).map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.fecha} · {p.activo_nombre} · {p.qq.toFixed(2)} QQ{p.origen === "bascula" ? " · ⚖️ Báscula" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label><span>Tarifa del flete</span>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <select value={modo} onChange={(e) => setModo(e.target.value as "precio" | "valor")} style={{ flex: "0 0 auto" }}>
+              <option value="precio">$ por QQ</option>
+              <option value="valor">Valor cerrado</option>
+            </select>
+            {modo === "precio" ? (
+              <input type="number" step="0.0001" min="0" placeholder="Precio/QQ" value={precio} onChange={(e) => setPrecio(e.target.value)} />
+            ) : (
+              <input type="number" step="0.01" min="0" placeholder="Valor $" value={valorFijo} onChange={(e) => setValorFijo(e.target.value)} />
+            )}
+          </div>
+        </label>
+
+        <label><span>Crédito a aplicar (por defecto el máximo)</span>
+          <input type="number" step="0.01" min="0" placeholder={aplicarDefault.toFixed(2)} value={aplicar} onChange={(e) => setAplicar(e.target.value)} />
+        </label>
+
+        <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 12px", fontSize: 13, display: "grid", gap: 4 }}>
+          <div style={{ display: "flex", justifyContent: "space-between" }}><span>Valor del servicio</span><strong>{money(valor)}</strong></div>
+          <div style={{ display: "flex", justifyContent: "space-between", color: "#1d4ed8" }}><span>Crédito a aplicar</span><strong>-{money(aplicarReal)}</strong></div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700 }}><span>Saldo del servicio</span><span style={{ color: saldoRestante > 0.005 ? "#b45309" : "#15803d" }}>{money(saldoRestante)}</span></div>
+          <div style={{ display: "flex", justifyContent: "space-between", color: "#64748b" }}><span>Crédito restante</span><span>{money(creditoRestante)}</span></div>
+        </div>
+
+        <div className="buttonRow" style={{ marginTop: 12 }}>
+          <button type="submit" className="primary" disabled={busy || !parteId || !(valor > 0)}>{busy ? "Procesando…" : "⚡ Convertir y aplicar"}</button>
           <button type="button" onClick={onClose} disabled={busy}>Cancelar</button>
         </div>
       </form>

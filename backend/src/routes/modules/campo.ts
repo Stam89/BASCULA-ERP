@@ -846,6 +846,121 @@ campoRouter.post("/partes", asyncRoute(async (req, res) => {
   res.status(201).json(result.rows[0]);
 }));
 
+// ── Conciliación / Cruce de fletes: crédito a favor → convertir parte y aplicar ─
+// El "crédito a favor" de un cliente-piladora = Σ(entradas − salidas) en la cuenta
+// interna 'CRUCE PILADORA' con servicio_id NULL (entrada = crédito generado al
+// cruzar un flete sin servicio que emparejar; salida = crédito consumido al
+// aplicarlo). El SELECT es la ÚNICA fuente del crédito disponible.
+const CREDITO_DISPONIBLE_SQL = `
+  COALESCE(SUM(CASE WHEN m.signo = 'entrada' THEN m.monto ELSE -m.monto END)
+    FILTER (WHERE m.servicio_id IS NULL AND ct.nombre = 'CRUCE PILADORA'), 0)`;
+
+// Lista de clientes-piladora con crédito a favor disponible + cuántos partes
+// pendientes ('por_cobrar') tienen (por nombre) para poder convertirlos.
+campoRouter.get("/conciliacion/creditos", asyncRoute(async (_req, res) => {
+  const rows = (await pool.query(
+    `SELECT c.id AS cliente_id, c.nombre AS cliente_nombre,
+            (${CREDITO_DISPONIBLE_SQL})::float AS credito,
+            (SELECT COUNT(*) FROM campo_partes p
+              WHERE p.estado = 'por_cobrar' AND lower(trim(p.cliente)) = lower(trim(c.nombre)))::int AS partes_pendientes
+     FROM campo_clientes c
+     LEFT JOIN campo_movimientos m ON m.cliente_id = c.id
+     LEFT JOIN campo_cuentas ct ON ct.id = m.cuenta_id
+     WHERE c.tipo = 'piladora'
+     GROUP BY c.id, c.nombre
+     HAVING (${CREDITO_DISPONIBLE_SQL}) > 0.005
+     ORDER BY credito DESC`
+  )).rows;
+  const total = rows.reduce((s: number, r: { credito: number }) => s + r.credito, 0);
+  res.json({ creditos: rows, total_credito: Math.round(total * 100) / 100 });
+}));
+
+// Convertir un Parte Diario en Servicio y aplicar el crédito a favor del cliente.
+// Transacción atómica: (a) crea el servicio desde el parte, (b) marca el parte
+// 'cobrado', (c) aplica el crédito con doble asiento en 'CRUCE PILADORA' (salida
+// que consume el crédito + entrada/abono que salda el servicio).
+campoRouter.post("/conciliacion/convertir-y-aplicar", asyncRoute(async (req, res) => {
+  const body = z.object({
+    parte_id: z.string().uuid(),
+    cliente_id: z.string().uuid(),
+    // Tarifa del flete: valor cerrado, o precio por QQ (se calcula con el qq del parte).
+    precio_unitario: z.number().positive().nullable().optional(),
+    valor: z.number().positive().nullable().optional(),
+    // Crédito a aplicar; por defecto el máximo posible (min entre disponible y valor).
+    aplicar_credito: z.number().nonnegative().nullable().optional()
+  }).parse(req.body);
+
+  const result = await inTransaction(async (client) => {
+    const parte = (await client.query("SELECT * FROM campo_partes WHERE id = $1 FOR UPDATE", [body.parte_id])).rows[0];
+    if (!parte) throw new ApiError(404, "Parte no encontrado");
+    if (parte.estado !== "por_cobrar") throw new ApiError(409, "Este parte ya tiene un cobro generado.");
+
+    const cli = (await client.query("SELECT id, nombre FROM campo_clientes WHERE id = $1", [body.cliente_id])).rows[0];
+    if (!cli) throw new ApiError(404, "Cliente no encontrado");
+
+    // Valor del servicio: por precio×qq o valor cerrado.
+    const qq = Number(parte.qq);
+    let valor = body.valor ?? null;
+    if (body.precio_unitario != null) valor = Math.round(qq * body.precio_unitario * 100) / 100;
+    if (valor == null || !(valor > 0)) throw new ApiError(400, "Indica la tarifa del flete (valor cerrado o precio por QQ).");
+
+    // (a) Servicio (tipo 'flete') desde el parte + (b) marcar parte cobrado.
+    const servicio = (await client.query(
+      `INSERT INTO campo_servicios (fecha, cliente_id, activo_id, tipo, qq, precio_unitario, valor, notas, created_by)
+       VALUES ($1, $2, $3, 'flete', $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [parte.fecha, cli.id, parte.activo_id, qq, body.precio_unitario ?? null, valor,
+       `Conversión de parte de flete (${String(parte.cliente).trim()})`, userId(req)]
+    )).rows[0];
+    await client.query("UPDATE campo_partes SET estado = 'cobrado', servicio_id = $2 WHERE id = $1", [parte.id, servicio.id]);
+
+    // (c) Crédito disponible del cliente (lock de sus filas de crédito para serializar).
+    const cuentaCruce = (await client.query("SELECT id FROM campo_cuentas WHERE nombre = 'CRUCE PILADORA'")).rows[0]?.id ?? null;
+    let disponible = 0;
+    if (cuentaCruce) {
+      await client.query(
+        "SELECT 1 FROM campo_movimientos WHERE cliente_id = $1 AND cuenta_id = $2 AND servicio_id IS NULL FOR UPDATE",
+        [cli.id, cuentaCruce]
+      );
+      disponible = Number((await client.query(
+        `SELECT COALESCE(SUM(CASE WHEN signo = 'entrada' THEN monto ELSE -monto END), 0)::float AS c
+         FROM campo_movimientos WHERE cliente_id = $1 AND cuenta_id = $2 AND servicio_id IS NULL`,
+        [cli.id, cuentaCruce]
+      )).rows[0].c);
+    }
+
+    // Aplicar = min(pedido|disponible, disponible, valor). No sobrepasa el servicio.
+    const pedido = body.aplicar_credito != null ? body.aplicar_credito : disponible;
+    const aplicar = Math.round(Math.min(pedido, disponible, valor) * 100) / 100;
+    if (aplicar > 0.005 && cuentaCruce) {
+      // Salida que CONSUME el crédito a favor (servicio_id NULL).
+      await client.query(
+        `INSERT INTO campo_movimientos (cuenta_id, signo, monto, concepto, cliente_id, created_by)
+         VALUES ($1, 'salida', $2, $3, $4, $5)`,
+        [cuentaCruce, aplicar, `Consumo de crédito a favor · Servicio de flete`, cli.id, userId(req)]
+      );
+      // Entrada/abono que SALDA el nuevo servicio (servicio_id set).
+      await client.query(
+        `INSERT INTO campo_movimientos (cuenta_id, signo, monto, concepto, servicio_id, cliente_id, created_by)
+         VALUES ($1, 'entrada', $2, $3, $4, $5, $6)`,
+        [cuentaCruce, aplicar, `Aplicación de crédito a favor`, servicio.id, cli.id, userId(req)]
+      );
+    }
+
+    const saldo = Number((await client.query(
+      "SELECT saldo_pendiente FROM campo_servicios_saldo WHERE id = $1", [servicio.id]
+    )).rows[0].saldo_pendiente);
+
+    return {
+      servicio,
+      aplicado: aplicar,
+      credito_restante: Math.round((disponible - aplicar) * 100) / 100,
+      saldo_servicio: saldo
+    };
+  });
+  res.status(201).json(result);
+}));
+
 // ════════════════════════════════════════════════════════════════════════════
 // REPORTES DE CAMPO (V2). Solo lectura. TODO el cálculo es SQL (GROUP BY / SUM);
 // el servidor solo arma la forma de la respuesta. No hay tablas nuevas: todo

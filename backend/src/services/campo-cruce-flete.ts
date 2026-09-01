@@ -71,9 +71,9 @@ export async function cruzarFleteInterno(
       if (saldo <= 0.005) continue;
       const abono = Math.round(Math.min(remaining, saldo) * 100) / 100;
       await client.query(
-        `INSERT INTO campo_movimientos (cuenta_id, signo, monto, concepto, servicio_id, created_by)
-         VALUES ($1, 'entrada', $2, $3, $4, $5)`,
-        [cuenta, abono, concepto, c.id, input.createdBy ?? null]
+        `INSERT INTO campo_movimientos (cuenta_id, signo, monto, concepto, servicio_id, cliente_id, created_by)
+         VALUES ($1, 'entrada', $2, $3, $4, $5, $6)`,
+        [cuenta, abono, concepto, c.id, cli.id, input.createdBy ?? null]
       );
       abonado = Math.round((abonado + abono) * 100) / 100;
       remaining = Math.round((remaining - abono) * 100) / 100;
@@ -84,10 +84,12 @@ export async function cruzarFleteInterno(
   let credito = 0;
   if (remaining > 0.005) {
     credito = remaining;
+    // El crédito a favor se atribuye al cliente-piladora (si se conoce) para poder
+    // aplicarlo después en la conciliación. Sin cliente, queda sin atribuir.
     await client.query(
-      `INSERT INTO campo_movimientos (cuenta_id, signo, monto, concepto, created_by)
-       VALUES ($1, 'entrada', $2, $3, $4)`,
-      [cuenta, credito, `${concepto} (crédito a favor)`, input.createdBy ?? null]
+      `INSERT INTO campo_movimientos (cuenta_id, signo, monto, concepto, cliente_id, created_by)
+       VALUES ($1, 'entrada', $2, $3, $4, $5)`,
+      [cuenta, credito, `${concepto} (crédito a favor)`, cli?.id ?? null, input.createdBy ?? null]
     );
   }
 
