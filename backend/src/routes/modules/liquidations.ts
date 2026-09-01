@@ -8,6 +8,7 @@ import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { cruzarFleteInterno, type CruceFleteResultado } from "../../services/campo-cruce-flete.js";
+import { aplicarPagosFomento, type PagoFomentoResultado } from "../../services/fomento-liquidacion.js";
 
 export const liquidationsRouter = Router();
 
@@ -92,6 +93,12 @@ const liquidationInput = z.object({
     tipo: z.enum(["propia", "tercero"]),
     activo_id: z.string().uuid().nullable().optional()
   }).optional(),
+  // Abonos de fomento explícitos (fomento_id + monto). Si no vienen, el backend
+  // reparte el descuento de fomento entre los fomentos del socio que liquida.
+  fomento_pagos: z.array(z.object({
+    fomento_id: z.string().uuid(),
+    monto: z.number().positive()
+  })).optional(),
   batch_id: z.string().uuid().optional(),
   created_by: z.string().uuid().optional()
 });
@@ -241,7 +248,26 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
         createdBy: data.created_by ?? null
       });
     }
-    return { ...liquidation.rows[0], cruce_flete: cruce };
+
+    // Pagos REALES de fomento: el descuento de fomento aplica un abono a la deuda
+    // del/los fomento(s) del agricultor (cap al saldo), referenciando la liquidación,
+    // y si el fomento es de otro socio genera la deuda inter-socios. Mismo tx.
+    let fomentoPagos: PagoFomentoResultado | null = null;
+    const fomentoDiscount = data.discount_breakdown?.fomento ?? 0;
+    if ((data.fomento_pagos && data.fomento_pagos.length) || fomentoDiscount > 0) {
+      const farmerName = (await client.query("SELECT full_name FROM farmers WHERE id = $1", [data.farmer_id])).rows[0]?.full_name ?? "";
+      fomentoPagos = await aplicarPagosFomento(client, {
+        liquidationId: liquidation.rows[0].id,
+        liquidationNumber: liquidation.rows[0].liquidation_number,
+        liquidatingAccionistaId: accionistaId,
+        farmerId: data.farmer_id,
+        farmerName,
+        pagos: data.fomento_pagos,
+        montoFallback: fomentoDiscount
+      });
+    }
+
+    return { ...liquidation.rows[0], cruce_flete: cruce, fomento_pagos: fomentoPagos };
   });
 
   res.status(201).json(result);
