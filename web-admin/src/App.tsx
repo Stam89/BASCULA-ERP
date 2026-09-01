@@ -10466,7 +10466,7 @@ export function App() {
                           <option value="">— seleccionar ingreso —</option>
                           {farmerLots.filter((l) => !takenIds.has(l.id)).map((l) => (
                             <option key={l.id} value={l.id}>
-                              {entryLabel(l)} · {l.rice_type ?? "—"} · {Number(l.quintals ?? 0).toFixed(2)} QQ{l.lot_code ? ` · ${l.lot_code}` : ""}
+                              {entryLabel(l)} · {l.placa?.trim() || "S/P"} · {l.rice_type ?? "—"} · {Number(l.quintals ?? 0).toFixed(2)} QQ{l.lot_code ? ` · ${l.lot_code}` : ""}
                             </option>
                           ))}
                         </select>
@@ -10627,18 +10627,20 @@ export function App() {
                           <th style={{ ...th, textAlign: "left" }}>Ingreso</th>
                           <th style={{ ...th, textAlign: "left" }}>Tipo cáscara</th>
                           <th style={{ ...th, textAlign: "left" }}>Agricultor</th>
+                          <th style={{ ...th, textAlign: "left" }}>Placa</th>
                           <th style={{ ...th, textAlign: "left" }}>Lote</th>
                           <th style={{ ...th, textAlign: "right" }}>QQ</th>
                         </tr>
                       </thead>
                       <tbody>
                         {filtrado.length === 0 ? (
-                          <tr><td colSpan={5} className="muted" style={{ padding: 12, textAlign: "center" }}>Sin materia prima pendiente{nombreFiltro ? " para este agricultor" : ""}.</td></tr>
+                          <tr><td colSpan={6} className="muted" style={{ padding: 12, textAlign: "center" }}>Sin materia prima pendiente{nombreFiltro ? " para este agricultor" : ""}.</td></tr>
                         ) : filtrado.map((e, i) => (
                           <tr key={i}>
                             <td style={td}>{entryLabel(e)}</td>
                             <td style={td}>{e.rice_type ?? "—"}</td>
                             <td style={td}>{e.farmer_name ?? "—"}</td>
+                            <td style={td}>{e.placa?.trim() || "S/P"}</td>
                             <td style={td}>{e.lot_code ?? "sin lote aún"}</td>
                             <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>{Number(e.quintals ?? 0).toFixed(2)} QQ</td>
                           </tr>
