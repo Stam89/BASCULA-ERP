@@ -1322,8 +1322,20 @@ export function App() {
   // flete_tarifa ($/QQ) y flete_monto (Total $) están entrelazados: al escribir uno
   // se recalcula el otro con el QQ del ingreso. El valor que fluye a la liquidación
   // sigue siendo flete_monto (Total) — la tarifa es solo ayuda de captura.
-  type LiqLine = { lot_id: string; quintals: string; price: string; flete_tarifa: string; flete_monto: string; flete_tipo: "propia" | "tercero"; flete_activo_id: string };
-  const nuevaLiqLine = (): LiqLine => ({ lot_id: "", quintals: "", price: "", flete_tarifa: "", flete_monto: "", flete_tipo: "tercero", flete_activo_id: "" });
+  // price_manual / flete_manual: la fila ya se editó a mano → deja de heredar el
+  // Precio/QQ y el Flete $/QQ de la primera fila (override individual).
+  type LiqLine = { lot_id: string; quintals: string; price: string; flete_tarifa: string; flete_monto: string; flete_tipo: "propia" | "tercero"; flete_activo_id: string; price_manual: boolean; flete_manual: boolean };
+  const nuevaLiqLine = (): LiqLine => ({ lot_id: "", quintals: "", price: "", flete_tarifa: "", flete_monto: "", flete_tipo: "tercero", flete_activo_id: "", price_manual: false, flete_manual: false });
+  // Nueva fila que HEREDA el precio y la tarifa de flete de la primera fila.
+  const liqLineHeredada = (base: LiqLine | undefined): LiqLine => ({ ...nuevaLiqLine(), price: base?.price ?? "", flete_tarifa: base?.flete_tarifa ?? "" });
+  // QQ de una fila (los que se liquidan; por defecto los del ingreso de báscula). NUNCA se replican.
+  const qqDeLiqLinea = (ln: LiqLine): number => Number(ln.quintals) || Number(farmerLots.find((l) => l.id === ln.lot_id)?.quintals ?? 0);
+  // Aplica una tarifa de flete a una fila recalculando su Total con SU PROPIO QQ.
+  const aplicarTarifaFleteLiq = (ln: LiqLine, tarifa: string): LiqLine => {
+    const qq = qqDeLiqLinea(ln);
+    const monto = tarifa.trim() !== "" && qq > 0 ? (Math.round(qq * Number(tarifa) * 100) / 100).toFixed(2) : "";
+    return { ...ln, flete_tarifa: tarifa, flete_monto: monto };
+  };
   type LiqResultItem = {
     lot_code: string; rice_type: string | null;
     quintals: number; price_per_quintal: number;
@@ -10482,13 +10494,17 @@ export function App() {
                           // Auto-detección del transporte: si la placa del ingreso es de la
                           // Flota Propia, prellena 'propia' + vehículo; si no, 'tercero'.
                           const esPropia = !!sel?.flota_activo_id;
-                          updated[i] = {
+                          let ln: LiqLine = {
                             ...updated[i],
                             lot_id: e.target.value,
                             quintals: sel ? String(Number(sel.quintals ?? 0).toFixed(2)) : "",
                             flete_tipo: esPropia ? "propia" : "tercero",
                             flete_activo_id: esPropia ? String(sel!.flota_activo_id) : ""
                           };
+                          // Con el QQ ya conocido, recalcula el Total del flete desde la tarifa
+                          // (heredada o propia). Los QQ NO se replican: son los del ticket.
+                          if (ln.flete_tarifa.trim() !== "") ln = aplicarTarifaFleteLiq(ln, ln.flete_tarifa);
+                          updated[i] = ln;
                           setLiqLines(updated);
                         }} required>
                           <option value="">— seleccionar ingreso —</option>
@@ -10504,7 +10520,17 @@ export function App() {
                           onChange={(e) => { const u = [...liqLines]; u[i] = { ...u[i], quintals: e.target.value }; setLiqLines(u); }} />
                         <input type="number" step="0.01" min="0" placeholder="0.00"
                           value={line.price}
-                          onChange={(e) => { const u = [...liqLines]; u[i] = { ...u[i], price: e.target.value }; setLiqLines(u); }}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setLiqLines((prev) => {
+                              const u = [...prev];
+                              // La fila editada guarda su valor; si es secundaria, queda como override.
+                              u[i] = { ...u[i], price: v, price_manual: i > 0 ? true : u[i].price_manual };
+                              // Desde la PRIMERA fila se replica a las que no tienen override.
+                              if (i === 0) for (let j = 1; j < u.length; j++) if (!u[j].price_manual) u[j] = { ...u[j], price: v };
+                              return u;
+                            });
+                          }}
                           required />
                         {liqLines.length > 1 && (
                           <button type="button" className="liqRemoveBtn"
@@ -10519,8 +10545,14 @@ export function App() {
                           value={line.flete_tarifa}
                           onChange={(e) => {
                             const tarifa = e.target.value;
-                            const monto = tarifa.trim() !== "" && fleteQq > 0 ? (Math.round(fleteQq * Number(tarifa) * 100) / 100).toFixed(2) : "";
-                            const u = [...liqLines]; u[i] = { ...u[i], flete_tarifa: tarifa, flete_monto: monto }; setLiqLines(u);
+                            setLiqLines((prev) => {
+                              const u = [...prev];
+                              u[i] = { ...aplicarTarifaFleteLiq(u[i], tarifa), flete_manual: i > 0 ? true : u[i].flete_manual };
+                              // Desde la 1ª fila se replica la TARIFA (no el Total) a las no-override;
+                              // cada fila recalcula su Total con SU propio QQ.
+                              if (i === 0) for (let j = 1; j < u.length; j++) if (!u[j].flete_manual) u[j] = aplicarTarifaFleteLiq(u[j], tarifa);
+                              return u;
+                            });
                           }} />
                         <span className="liqFleteEq" aria-hidden="true">=</span>
                         <input title="Total del flete" type="number" step="0.01" min="0" placeholder="Total $"
@@ -10529,7 +10561,13 @@ export function App() {
                             const monto = e.target.value;
                             // Tarifa referencial = Total / QQ (sin forzar, solo informativa).
                             const tarifa = monto.trim() !== "" && fleteQq > 0 ? String(Math.round((Number(monto) / fleteQq) * 10000) / 10000) : "";
-                            const u = [...liqLines]; u[i] = { ...u[i], flete_monto: monto, flete_tarifa: tarifa }; setLiqLines(u);
+                            setLiqLines((prev) => {
+                              const u = [...prev];
+                              u[i] = { ...u[i], flete_monto: monto, flete_tarifa: tarifa, flete_manual: i > 0 ? true : u[i].flete_manual };
+                              // Editar el Total en la 1ª fila cambia su tarifa → se replica a las no-override.
+                              if (i === 0) for (let j = 1; j < u.length; j++) if (!u[j].flete_manual) u[j] = aplicarTarifaFleteLiq(u[j], tarifa);
+                              return u;
+                            });
                           }} />
                         <select value={line.flete_tipo}
                           onChange={(e) => { const u = [...liqLines]; const t = e.target.value as "propia" | "tercero"; u[i] = { ...u[i], flete_tipo: t, flete_activo_id: t === "propia" ? (u[i].flete_activo_id || String(selEntry?.flota_activo_id ?? "")) : "" }; setLiqLines(u); }}>
@@ -10554,7 +10592,7 @@ export function App() {
                   })}
 
                   <button type="button" className="liqAddBtn"
-                    onClick={() => setLiqLines([...liqLines, nuevaLiqLine()])}>
+                    onClick={() => setLiqLines((prev) => [...prev, liqLineHeredada(prev[0])])}>
                     + Agregar lote
                   </button>
 
