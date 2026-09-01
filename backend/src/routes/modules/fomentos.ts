@@ -382,10 +382,28 @@ fomentosRouter.post("/:id/entregas", asyncRoute(async (req, res) => {
 fomentosRouter.delete("/:fomentoId/entregas/:id", asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
   const fomentoId = String(req.params.fomentoId);
+  const entregaId = String(req.params.id);
   await inTransaction(async (client) => {
     await assertFomentoAccionista(client, fomentoId, accionistaId);
-    await client.query("DELETE FROM fomento_entregas WHERE id=$1 AND fomento_id=$2",
-      [req.params.id, fomentoId]);
+    // La entrega debe existir en ESTE fomento (lock para serializar).
+    const entrega = (await client.query(
+      "SELECT valor FROM fomento_entregas WHERE id=$1 AND fomento_id=$2 FOR UPDATE",
+      [entregaId, fomentoId]
+    )).rows[0];
+    if (!entrega) throw new ApiError(404, "Entrega no encontrada");
+
+    // Integridad: lo entregado NUNCA puede quedar por debajo de lo ya pagado.
+    const pagado = Number((await client.query(
+      "SELECT COALESCE(SUM(valor),0)::float AS t FROM fomento_pagos WHERE fomento_id=$1", [fomentoId]
+    )).rows[0].t);
+    const entregasRestantes = Number((await client.query(
+      "SELECT COALESCE(SUM(valor),0)::float AS t FROM fomento_entregas WHERE fomento_id=$1 AND id<>$2", [fomentoId, entregaId]
+    )).rows[0].t);
+    if (pagado > 0.005 && entregasRestantes < pagado - 0.005) {
+      throw new ApiError(400, "No se puede eliminar la entrega porque excede los pagos ya registrados en este fomento.");
+    }
+
+    await client.query("DELETE FROM fomento_entregas WHERE id=$1 AND fomento_id=$2", [entregaId, fomentoId]);
   });
   res.json({ ok: true });
 }));

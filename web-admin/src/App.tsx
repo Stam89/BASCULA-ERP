@@ -1525,6 +1525,9 @@ export function App() {
   // Modal del formulario "Nuevo Fomento" (antes era un <details> al pie de la lista).
   const [fomentoModalOpen, setFomentoModalOpen] = useState(false);
   const [fomentoEntregaForm, setFomentoEntregaForm] = useState({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
+  // Confirmación de eliminación de una entrega (con su valor/fecha para el mensaje).
+  const [confirmarEntrega, setConfirmarEntrega] = useState<{ fomentoId: string; entregaId: string; valor: number; fecha: string } | null>(null);
+  const [borrandoEntrega, setBorrandoEntrega] = useState(false);
   const [fomentoFilter, setFomentoFilter] = useState<"TODOS"|"ACTIVOS"|"NO ACTIVOS"|"APROBADOS">("TODOS");
   const [fomentoEditingRenta, setFomentoEditingRenta] = useState<string | null>(null);
   const [fomentoRentaInput, setFomentoRentaInput] = useState("");
@@ -4070,9 +4073,12 @@ export function App() {
   }
 
   async function deleteFomentoEntrega(fomentoId: string, entregaId: string) {
+    // El backend valida integridad (no dejar entregas por debajo de lo pagado);
+    // si rechaza, se muestra el error y NO se recalcula nada.
     await apiFetch(`/fomentos/${fomentoId}/entregas/${entregaId}`, { method: "DELETE" });
-    await loadFomentoDetalle(fomentoId);
+    await loadFomentoDetalle(fomentoId);   // recalcula pedido/intereses/deuda (derivados)
     await refreshFomentos();
+    addToast("Entrega eliminada correctamente", "success");
   }
 
   async function submitFomentoPago(e: FormEvent<HTMLFormElement>) {
@@ -11095,7 +11101,7 @@ export function App() {
                                 <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700 }}>${Number(e.suman).toFixed(2)}</td>
                                 <td style={{ padding: "4px 8px" }}>
                                   <button type="button" title="Eliminar entrega"
-                                    onClick={() => deleteFomentoEntrega(fomentoDetalle.id, e.id).catch(() => undefined)}
+                                    onClick={() => setConfirmarEntrega({ fomentoId: fomentoDetalle.id, entregaId: e.id, valor: Number(e.valor), fecha: e.fecha?.slice(0, 10) ?? "" })}
                                     style={{ background: "none", border: "none", cursor: "pointer", color: "#dc2626", fontSize: 14 }}>✕</button>
                                 </td>
                               </tr>
@@ -11119,6 +11125,37 @@ export function App() {
                         )}
                       </table>
                     </div>
+
+                    {/* Modal de confirmación de eliminación de entrega */}
+                    {confirmarEntrega && (
+                      <div onClick={() => !borrandoEntrega && setConfirmarEntrega(null)}
+                        style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100, padding: 16 }}>
+                        <div onClick={(ev) => ev.stopPropagation()} className="formPanel" style={{ maxWidth: 440, width: "100%", margin: 0 }}>
+                          <h3 style={{ marginTop: 0, color: "#b91c1c" }}>⚠️ Eliminar entrega</h3>
+                          <p style={{ lineHeight: 1.5 }}>
+                            ¿Estás seguro de eliminar esta entrega de <strong>${confirmarEntrega.valor.toFixed(2)}</strong> del <strong>{confirmarEntrega.fecha}</strong>?
+                            <br />Esta acción recalculará los intereses y la deuda total del agricultor.
+                          </p>
+                          <div className="buttonRow" style={{ marginTop: 14 }}>
+                            <button type="button" onClick={() => setConfirmarEntrega(null)} disabled={borrandoEntrega}>Cancelar</button>
+                            <button type="button" className="primary" disabled={borrandoEntrega}
+                              style={{ background: "#dc2626", borderColor: "#dc2626" }}
+                              onClick={async () => {
+                                const c = confirmarEntrega;
+                                try {
+                                  setBorrandoEntrega(true);
+                                  await deleteFomentoEntrega(c.fomentoId, c.entregaId);
+                                  setConfirmarEntrega(null);
+                                } catch (err) {
+                                  addToast((err as Error).message, "error");
+                                } finally { setBorrandoEntrega(false); }
+                              }}>
+                              {borrandoEntrega ? "Eliminando…" : "Sí, Eliminar"}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Formulario nueva entrega */}
                     <details open style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 14px" }}>
