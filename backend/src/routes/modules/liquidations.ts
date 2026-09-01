@@ -8,7 +8,7 @@ import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { cruzarFleteInterno, type CruceFleteResultado } from "../../services/campo-cruce-flete.js";
-import { aplicarPagosFomento, revertirPagosFomentoDeLiquidacion, type PagoFomentoResultado } from "../../services/fomento-liquidacion.js";
+import { aplicarPagosFomento, generarFomentoSaldoEnContra, revertirPagosFomentoDeLiquidacion, type PagoFomentoResultado } from "../../services/fomento-liquidacion.js";
 
 export const liquidationsRouter = Router();
 
@@ -99,6 +99,11 @@ const liquidationInput = z.object({
     fomento_id: z.string().uuid(),
     monto: z.number().positive()
   })).optional(),
+  // QQ liquidados del lote (para registrar en fomento_pagos.qq_liquidados).
+  qq_liquidados: z.number().nonnegative().optional(),
+  // Saldo EN CONTRA del lote (Descuentos − Bruto, calculado en el front): si > 0,
+  // genera un nuevo fomento por ese déficit a favor del socio que liquida.
+  saldo_en_contra: z.number().nonnegative().optional(),
   batch_id: z.string().uuid().optional(),
   created_by: z.string().uuid().optional()
 });
@@ -254,8 +259,11 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
     // y si el fomento es de otro socio genera la deuda inter-socios. Mismo tx.
     let fomentoPagos: PagoFomentoResultado | null = null;
     const fomentoDiscount = data.discount_breakdown?.fomento ?? 0;
+    const necesitaFarmerName = (data.fomento_pagos && data.fomento_pagos.length) || fomentoDiscount > 0 || (data.saldo_en_contra ?? 0) > 0;
+    const farmerName = necesitaFarmerName
+      ? ((await client.query("SELECT full_name FROM farmers WHERE id = $1", [data.farmer_id])).rows[0]?.full_name ?? "")
+      : "";
     if ((data.fomento_pagos && data.fomento_pagos.length) || fomentoDiscount > 0) {
-      const farmerName = (await client.query("SELECT full_name FROM farmers WHERE id = $1", [data.farmer_id])).rows[0]?.full_name ?? "";
       fomentoPagos = await aplicarPagosFomento(client, {
         liquidationId: liquidation.rows[0].id,
         liquidationNumber: liquidation.rows[0].liquidation_number,
@@ -263,11 +271,27 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
         farmerId: data.farmer_id,
         farmerName,
         pagos: data.fomento_pagos,
-        montoFallback: fomentoDiscount
+        montoFallback: fomentoDiscount,
+        qqLiquidados: data.qq_liquidados ?? null
       });
     }
 
-    return { ...liquidation.rows[0], cruce_flete: cruce, fomento_pagos: fomentoPagos };
+    // Saldo EN CONTRA (Descuentos > Bruto): el remanente que el agricultor sigue
+    // debiendo se registra como un NUEVO fomento a favor del socio que liquida.
+    let saldoContra: { fomento_id: string; monto: number } | null = null;
+    if ((data.saldo_en_contra ?? 0) > 0) {
+      saldoContra = await generarFomentoSaldoEnContra(client, {
+        liquidationId: liquidation.rows[0].id,
+        liquidationNumber: liquidation.rows[0].liquidation_number,
+        accionistaId,
+        farmerId: data.farmer_id,
+        farmerName,
+        deficit: data.saldo_en_contra ?? 0,
+        createdBy: data.created_by ?? null
+      });
+    }
+
+    return { ...liquidation.rows[0], cruce_flete: cruce, fomento_pagos: fomentoPagos, saldo_en_contra: saldoContra };
   });
 
   res.status(201).json(result);
@@ -587,5 +611,35 @@ liquidationsRouter.post("/:id/anular", requireAdmin, asyncRoute(async (req, res)
     return { ok: true, liquidation_number: liq.liquidation_number, fomento_abonos_revertidos: fom.abonos, flete_movimientos_revertidos: fleteRevertido };
   });
 
+  res.json(result);
+}));
+
+// Eliminar DEFINITIVAMENTE una liquidación ANULADA (SOLO admin). Es una limpieza
+// pura: la anulación ya revirtió todo (fomentos, anticipos, deuda inter-socios,
+// caja), así que aquí NO se re-disparan reversas ni se tocan saldos de fomentos
+// existentes; solo se borran la fila y sus referencias ya neutralizadas.
+liquidationsRouter.delete("/:id", requireAdmin, asyncRoute(async (req, res) => {
+  const liqId = String(req.params.id);
+  const result = await inTransaction(async (client) => {
+    const liq = (await client.query("SELECT id, liquidation_number, status FROM liquidations WHERE id = $1 FOR UPDATE", [liqId])).rows[0];
+    if (!liq) throw new ApiError(404, "Liquidación no encontrada");
+    if (liq.status !== "CANCELLED") {
+      throw new ApiError(400, "Solo se pueden eliminar liquidaciones ANULADAS. Anúlala primero.");
+    }
+    // Referencias ya neutralizadas por la anulación (se borran por integridad FK,
+    // sin recalcular nada). Los saldos de fomentos existentes NO se tocan.
+    const contras = (await client.query("SELECT id FROM fomentos WHERE origen_liquidation_id = $1", [liqId])).rows.map((r: { id: string }) => r.id);
+    if (contras.length) {
+      await client.query("DELETE FROM fomento_pagos    WHERE fomento_id = ANY($1::uuid[])", [contras]);
+      await client.query("DELETE FROM fomento_entregas WHERE fomento_id = ANY($1::uuid[])", [contras]);
+      await client.query("DELETE FROM fomentos         WHERE id        = ANY($1::uuid[])", [contras]);
+    }
+    await client.query("DELETE FROM accounts_receivable WHERE reference_type = 'fomento_cruce' AND reference_id IN (SELECT id FROM fomento_pagos WHERE liquidation_id = $1)", [liqId]);
+    await client.query("DELETE FROM accounts_payable    WHERE liquidation_id = $1", [liqId]);
+    await client.query("DELETE FROM fomento_pagos       WHERE liquidation_id = $1", [liqId]);
+    await client.query("DELETE FROM advance_applications WHERE liquidation_id = $1", [liqId]);
+    await client.query("DELETE FROM liquidations         WHERE id = $1", [liqId]);
+    return { ok: true, deleted: liq.liquidation_number };
+  });
   res.json(result);
 }));

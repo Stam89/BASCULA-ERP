@@ -2143,6 +2143,8 @@ export function App() {
     Object.values(liqDiscounts).reduce((sum, v) => sum + Number(v || 0), 0) + liqFleteTotal + liqFomentoTotal,
     [liqDiscounts, liqFleteTotal, liqFomentoTotal]
   );
+  // Saldo EN CONTRA: cuando los descuentos superan el bruto (el agricultor queda debiendo).
+  const liqSaldoEnContra = Math.max(0, Math.round((liqDiscountsTotal - liqGrossTotal) * 100) / 100);
 
   const setupScore = useMemo(() => {
     const checks = [
@@ -4824,6 +4826,21 @@ export function App() {
     await refresh();
   }
 
+  // Eliminar DEFINITIVAMENTE una liquidación anulada (limpieza; el backend exige
+  // estado CANCELLED y no re-dispara reversas). Solo admin, con confirmación.
+  async function eliminarLiquidacion(b: LiqBatch) {
+    if (!window.confirm(`Eliminar definitivamente la liquidación ANULADA de ${b.farmer_name}?\n\nEsta acción no se puede deshacer.`)) return;
+    let borradas = 0;
+    for (const id of b.liquidation_ids) {
+      await apiFetch(`/liquidations/${id}`, { method: "DELETE" });
+      borradas++;
+    }
+    addToast(`Liquidación eliminada (${borradas}).`, "success");
+    const liqRows = await apiGet<LiqRecord[]>("/liquidations");
+    setLiquidacionesList(liqRows);
+    await refresh();
+  }
+
   // Abrir el editor de precio/otros descuentos de una liquidacion desbloqueada.
   function openLiqEdit(b: LiqBatch) {
     const rows = liquidacionesList
@@ -6279,6 +6296,7 @@ export function App() {
       gross_amount: number; advances_discount: number; other_discounts: number; net_amount: number;
       cruce_flete?: { cruzado: number; abonado_servicios: number; credito_a_favor: number; cliente_piladora: string | null } | null;
       fomento_pagos?: { total_abonado: number; cruce_inter_socios: number } | null;
+      saldo_en_contra?: { fomento_id: string; monto: number } | null;
     };
     // Abonos de fomento explícitos (fomento_id + monto>0), del/los fomento(s) del
     // agricultor (de cualquier socio). Van SOLO en la primera línea del lote.
@@ -6287,8 +6305,11 @@ export function App() {
       .filter((p) => p.monto > 0.005);
     // Descuentos a nivel lote (sin flete: el flete es por línea). Van solo en i===0.
     const batchDiscountsTotal = liqFomentoTotal + Number(liqDiscounts.bascula || 0) + Number(liqDiscounts.cosechadora || 0);
+    // Saldo EN CONTRA del lote: los Descuentos superan al Bruto (el agricultor queda
+    // debiendo). Se manda en la 1ª línea → el backend genera el nuevo fomento.
+    const saldoEnContra = Math.max(0, Math.round((liqDiscountsTotal - liqGrossTotal) * 100) / 100);
     let cruceInterno = 0; let cruceAbonado = 0; let cruceCredito = 0;
-    let fomentoCruceSocios = 0;
+    let fomentoCruceSocios = 0; let saldoContraMonto = 0;
     const batchId = safeUUID();
     const resultItems: Array<{
       lot_code: string; rice_type: string | null;
@@ -6317,11 +6338,15 @@ export function App() {
         },
         // Los abonos de fomento se aplican una vez, en la primera línea del lote.
         fomento_pagos: i === 0 && fomentoPagos.length ? fomentoPagos : undefined,
+        // QQ del lote (registro en el abono) y saldo en contra (nuevo fomento): 1ª línea.
+        qq_liquidados: i === 0 ? Math.round(liqQqTotal * 100) / 100 : undefined,
+        saldo_en_contra: i === 0 && saldoEnContra > 0 ? saldoEnContra : undefined,
         flete_detalle: lineFlete > 0
           ? { monto: lineFlete, tipo: line.flete_tipo, activo_id: line.flete_activo_id || null }
           : undefined,
         batch_id: batchId
       });
+      if (result.saldo_en_contra) saldoContraMonto += result.saldo_en_contra.monto;
       if (result.cruce_flete) {
         cruceInterno += result.cruce_flete.cruzado;
         cruceAbonado += result.cruce_flete.abonado_servicios;
@@ -6353,6 +6378,7 @@ export function App() {
       if (cruceAbonado > 0.005 || cruceCredito > 0.005) cruceMsg += ")";
     }
     if (fomentoCruceSocios > 0.005) cruceMsg += ` · Cruce inter-socios (fomento): $${fomentoCruceSocios.toFixed(2)}`;
+    if (saldoContraMonto > 0.005) cruceMsg += ` · ⚠️ Saldo en contra: nuevo fomento por $${saldoContraMonto.toFixed(2)}`;
     setMessage(`${resultItems.length} lote(s) liquidado(s)${cruceMsg}`);
     await refresh();
   }
@@ -10691,6 +10717,12 @@ export function App() {
                       <span>Estimado a pagar</span>
                       <strong>${Math.max(0, liqGrossTotal - liqDiscountsTotal).toFixed(2)}</strong>
                     </div>
+                    {liqSaldoEnContra > 0 && (
+                      <div className="liqSummaryRow" style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, padding: "6px 8px", marginTop: 4 }}>
+                        <span style={{ color: "#b91c1c", fontWeight: 600 }}>⚠️ Saldo en contra: -${liqSaldoEnContra.toFixed(2)}</span>
+                        <small style={{ color: "#b91c1c" }}>Se generará nuevo fomento</small>
+                      </div>
+                    )}
                     <small>* Anticipos pendientes se descuentan automáticamente</small>
                   </div>
 
@@ -10837,6 +10869,17 @@ export function App() {
                               </button>
                             )}
                             {b.anulada && <span className="muted" style={{ fontSize: 12 }}>Anulada</span>}
+                            {isAdmin && b.anulada && (
+                              <button
+                                type="button"
+                                className="liqApplyBtn"
+                                style={{ color: "#b91c1c", borderColor: "#fecaca" }}
+                                title="Eliminar definitivamente esta liquidación anulada (admin)"
+                                onClick={() => eliminarLiquidacion(b).catch((e) => addToast(e.message, "error"))}
+                              >
+                                🗑️
+                              </button>
+                            )}
                             <button type="button" className="liqPrintBtn" onClick={() => printLiqBatch(b).catch((e) => addToast(e.message, "error"))} title="Imprimir comprobante">
                               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
                                 <rect x="3" y="1" width="10" height="8" rx="1"/>

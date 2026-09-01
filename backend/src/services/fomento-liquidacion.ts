@@ -39,6 +39,7 @@ export async function aplicarPagosFomento(
     farmerId: string; farmerName: string;
     pagos?: Array<{ fomento_id: string; monto: number }>;
     montoFallback?: number;
+    qqLiquidados?: number | null;
   }
 ): Promise<PagoFomentoResultado> {
   const out: PagoFomentoResultado = { total_abonado: 0, cruce_inter_socios: 0, detalle: [] };
@@ -82,9 +83,9 @@ export async function aplicarPagosFomento(
     if (abono <= 0.005) continue;
 
     const pago = (await client.query(
-      `INSERT INTO fomento_pagos (fomento_id, fecha, valor, concepto, liquidation_id)
-       VALUES ($1, CURRENT_DATE, $2, $3, $4) RETURNING id`,
-      [fom.id, abono, `Abono por Liquidación #${input.liquidationNumber}`, input.liquidationId]
+      `INSERT INTO fomento_pagos (fomento_id, fecha, valor, concepto, liquidation_id, qq_liquidados)
+       VALUES ($1, CURRENT_DATE, $2, $3, $4, $5) RETURNING id`,
+      [fom.id, abono, `Abono por Liquidación #${input.liquidationNumber}`, input.liquidationId, input.qqLiquidados ?? null]
     )).rows[0];
 
     // Estado Pagado/Liquidado: si el saldo quedó en 0 (o menos), se marca la fecha.
@@ -126,21 +127,57 @@ export async function aplicarPagosFomento(
   return out;
 }
 
-// Reversa completa (para un futuro "anular liquidación"): borra los abonos de la
-// liquidación, revierte la deuda inter-socios y limpia el estado liquidado. Al
-// borrar los fomento_pagos, el saldo (derivado) se restaura solo. Idempotente.
-export async function revertirPagosFomentoDeLiquidacion(client: PoolClient, liquidationId: string): Promise<{ abonos: number }> {
+// Saldo EN CONTRA: cuando los descuentos superan el bruto (neto < 0), el arroz
+// entregado ya saldó (parcial o totalmente) el/los fomento(s) vía los abonos de
+// arriba; el remanente que el agricultor sigue debiendo se registra como un NUEVO
+// fomento a favor del socio que liquida (deuda fresca, ligada a la liquidación
+// para poder revertirla). Devuelve el fomento creado, o null si no hay déficit.
+export async function generarFomentoSaldoEnContra(
+  client: PoolClient,
+  input: { liquidationId: string; liquidationNumber: string; accionistaId: string | undefined; farmerId: string; farmerName: string; deficit: number; createdBy?: string | null }
+): Promise<{ fomento_id: string; monto: number } | null> {
+  const monto = Math.round(Number(input.deficit) * 100) / 100;
+  if (!(monto > 0.005)) return null;
+  // cuadras=0: es un fomento de deuda pura (no de crédito por cuadras). La deuda
+  // se registra con una entrega por el déficit (deuda_total = entregas − pagos).
+  const fom = (await client.query(
+    `INSERT INTO fomentos (farmer_name, farmer_id, cuadras, inicio, renta, status, accionista_id, notes, origen_liquidation_id)
+     VALUES ($1, $2, 0, CURRENT_DATE, 0, 'ACTIVOS', $3, $4, $5) RETURNING id`,
+    [input.farmerName, input.farmerId ?? null, input.accionistaId ?? null,
+     `Saldo en contra de Liquidación #${input.liquidationNumber}`, input.liquidationId]
+  )).rows[0];
+  await client.query(
+    "INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto) VALUES ($1, CURRENT_DATE, $2, $3)",
+    [fom.id, monto, `Saldo en contra por Liquidación #${input.liquidationNumber}`]
+  );
+  return { fomento_id: fom.id, monto };
+}
+
+// Reversa completa (para "anular liquidación"): borra los abonos de la liquidación,
+// revierte la deuda inter-socios, limpia el estado liquidado y elimina el fomento
+// de saldo en contra que la liquidación hubiera generado. Al borrar los
+// fomento_pagos, el saldo (derivado) se restaura solo. Idempotente.
+export async function revertirPagosFomentoDeLiquidacion(client: PoolClient, liquidationId: string): Promise<{ abonos: number; saldo_contra_eliminado: number }> {
   const pagos = (await client.query(
     "SELECT id, fomento_id FROM fomento_pagos WHERE liquidation_id = $1", [liquidationId]
   )).rows as Array<{ id: string; fomento_id: string }>;
-  if (!pagos.length) return { abonos: 0 };
   const pagoIds = pagos.map((p) => p.id);
   const fomentoIds = [...new Set(pagos.map((p) => p.fomento_id))];
-  // Deuda inter-socios ligada a estos abonos.
-  await client.query("DELETE FROM accounts_payable    WHERE reference_type = 'fomento_cruce' AND reference_id = ANY($1::uuid[])", [pagoIds]);
-  await client.query("DELETE FROM accounts_receivable WHERE reference_type = 'fomento_cruce' AND reference_id = ANY($1::uuid[])", [pagoIds]);
-  // Abonos → al borrarlos, deuda_total sube sola. Se limpia el estado liquidado.
-  await client.query("DELETE FROM fomento_pagos WHERE liquidation_id = $1", [liquidationId]);
-  await client.query("UPDATE fomentos SET liquidado_at = NULL WHERE id = ANY($1::uuid[])", [fomentoIds]);
-  return { abonos: pagos.length };
+  if (pagoIds.length) {
+    // Deuda inter-socios ligada a estos abonos.
+    await client.query("DELETE FROM accounts_payable    WHERE reference_type = 'fomento_cruce' AND reference_id = ANY($1::uuid[])", [pagoIds]);
+    await client.query("DELETE FROM accounts_receivable WHERE reference_type = 'fomento_cruce' AND reference_id = ANY($1::uuid[])", [pagoIds]);
+    // Abonos → al borrarlos, deuda_total sube sola. Se limpia el estado liquidado.
+    await client.query("DELETE FROM fomento_pagos WHERE liquidation_id = $1", [liquidationId]);
+    await client.query("UPDATE fomentos SET liquidado_at = NULL WHERE id = ANY($1::uuid[])", [fomentoIds]);
+  }
+  // Fomento(s) de saldo en contra generados por esta liquidación: se eliminan.
+  const contras = (await client.query("SELECT id FROM fomentos WHERE origen_liquidation_id = $1", [liquidationId])).rows as Array<{ id: string }>;
+  if (contras.length) {
+    const ids = contras.map((c) => c.id);
+    await client.query("DELETE FROM fomento_pagos WHERE fomento_id = ANY($1::uuid[])", [ids]);
+    await client.query("DELETE FROM fomento_entregas WHERE fomento_id = ANY($1::uuid[])", [ids]);
+    await client.query("DELETE FROM fomentos WHERE id = ANY($1::uuid[])", [ids]);
+  }
+  return { abonos: pagos.length, saldo_contra_eliminado: contras.length };
 }
