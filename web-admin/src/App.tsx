@@ -1318,8 +1318,11 @@ export function App() {
 
   // El flete se captura POR INGRESO (cada uno lo pudo traer un vehículo distinto).
   // flete_tipo: 'propia' = flota de Campo (cruza deuda interna) · 'tercero' = particular.
-  type LiqLine = { lot_id: string; quintals: string; price: string; flete_monto: string; flete_tipo: "propia" | "tercero"; flete_activo_id: string };
-  const nuevaLiqLine = (): LiqLine => ({ lot_id: "", quintals: "", price: "", flete_monto: "", flete_tipo: "tercero", flete_activo_id: "" });
+  // flete_tarifa ($/QQ) y flete_monto (Total $) están entrelazados: al escribir uno
+  // se recalcula el otro con el QQ del ingreso. El valor que fluye a la liquidación
+  // sigue siendo flete_monto (Total) — la tarifa es solo ayuda de captura.
+  type LiqLine = { lot_id: string; quintals: string; price: string; flete_tarifa: string; flete_monto: string; flete_tipo: "propia" | "tercero"; flete_activo_id: string };
+  const nuevaLiqLine = (): LiqLine => ({ lot_id: "", quintals: "", price: "", flete_tarifa: "", flete_monto: "", flete_tipo: "tercero", flete_activo_id: "" });
   type LiqResultItem = {
     lot_code: string; rice_type: string | null;
     quintals: number; price_per_quintal: number;
@@ -10445,6 +10448,8 @@ export function App() {
                   {liqLines.map((line, i) => {
                     const takenIds = new Set(liqLines.filter((_, j) => j !== i).map((l) => l.lot_id).filter(Boolean));
                     const selEntry = farmerLots.find((l) => l.id === line.lot_id);
+                    // QQ base del flete (los que se liquidan; por defecto los del ingreso).
+                    const fleteQq = Number(line.quintals) || Number(selEntry?.quintals ?? 0);
                     return (
                       <React.Fragment key={i}>
                       <div className="liqLine">
@@ -10486,9 +10491,23 @@ export function App() {
                       {/* ─ Flete de ESTE ingreso: quién lo transportó ─ */}
                       <div className="liqFleteRow">
                         <span className="liqFleteLbl">🚚 Flete</span>
-                        <input type="number" step="0.01" min="0" placeholder="0.00"
+                        {/* Tarifa $/QQ y Total $ entrelazados por el QQ del ingreso. */}
+                        <input title="Tarifa por quintal" type="number" step="0.0001" min="0" placeholder="$/QQ"
+                          value={line.flete_tarifa}
+                          onChange={(e) => {
+                            const tarifa = e.target.value;
+                            const monto = tarifa.trim() !== "" && fleteQq > 0 ? (Math.round(fleteQq * Number(tarifa) * 100) / 100).toFixed(2) : "";
+                            const u = [...liqLines]; u[i] = { ...u[i], flete_tarifa: tarifa, flete_monto: monto }; setLiqLines(u);
+                          }} />
+                        <span className="liqFleteEq" aria-hidden="true">=</span>
+                        <input title="Total del flete" type="number" step="0.01" min="0" placeholder="Total $"
                           value={line.flete_monto}
-                          onChange={(e) => { const u = [...liqLines]; u[i] = { ...u[i], flete_monto: e.target.value }; setLiqLines(u); }} />
+                          onChange={(e) => {
+                            const monto = e.target.value;
+                            // Tarifa referencial = Total / QQ (sin forzar, solo informativa).
+                            const tarifa = monto.trim() !== "" && fleteQq > 0 ? String(Math.round((Number(monto) / fleteQq) * 10000) / 10000) : "";
+                            const u = [...liqLines]; u[i] = { ...u[i], flete_monto: monto, flete_tarifa: tarifa }; setLiqLines(u);
+                          }} />
                         <select value={line.flete_tipo}
                           onChange={(e) => { const u = [...liqLines]; const t = e.target.value as "propia" | "tercero"; u[i] = { ...u[i], flete_tipo: t, flete_activo_id: t === "propia" ? (u[i].flete_activo_id || String(selEntry?.flota_activo_id ?? "")) : "" }; setLiqLines(u); }}>
                           <option value="propia">Flota Propia (interno)</option>
