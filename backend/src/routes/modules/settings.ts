@@ -318,26 +318,41 @@ settingsRouter.post("/reset-transactions", requireAdmin, asyncRoute(async (req, 
   const valid = await bcrypt.compare(body.password, userRow.rows[0].password_hash);
   if (!valid) throw new ApiError(401, "Clave incorrecta");
 
-  const wiped = await inTransaction(async (client) => {
+  const result = await inTransaction(async (client) => {
+    // Nombres REALES presentes en el esquema (Postgres). Lo que NO exista se reporta
+    // FUERTE (log en terminal) para detectar un nombre mal escrito — nunca en silencio.
     const existing = await client.query(
       `SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = ANY($1)`,
       [[...WIPE_TABLES, "insumos", "sack_inventory"]]
     );
     const present = new Set<string>(existing.rows.map((r: { tablename: string }) => r.tablename));
     const tables = WIPE_TABLES.filter((t) => present.has(t));
-    if (tables.length > 0) {
-      await client.query(`TRUNCATE TABLE ${tables.map((t) => `"${t}"`).join(", ")} RESTART IDENTITY CASCADE`);
+    const notFound = WIPE_TABLES.filter((t) => !present.has(t));
+    if (notFound.length > 0) {
+      console.error(`[reset-transactions] ⚠️ Tablas de la lista NO encontradas en el esquema (posible nombre incorrecto): ${notFound.join(", ")}`);
     }
-    if (present.has("insumos")) {
-      await client.query(`UPDATE insumos SET stock_actual = 0`);
+
+    // Truncado agresivo, tabla POR tabla, con CASCADE (Postgres: equivale a
+    // desactivar las FKs — no existe SET FOREIGN_KEY_CHECKS aquí). Si UNA falla, se
+    // lanza un error VISIBLE nombrando exactamente la tabla que bloqueó, y toda la
+    // transacción hace rollback (nada de fallar en silencio).
+    for (const t of tables) {
+      try {
+        await client.query(`TRUNCATE TABLE "${t}" RESTART IDENTITY CASCADE`);
+      } catch (err) {
+        const msg = `[reset-transactions] ❌ BLOQUEADO al truncar la tabla "${t}": ${(err as Error).message}`;
+        console.error(msg);
+        throw new ApiError(500, `Restauración bloqueada en la tabla "${t}". ${(err as Error).message}`);
+      }
     }
-    if (present.has("sack_inventory")) {
-      await client.query(`UPDATE sack_inventory SET stock = 0, updated_at = now()`);
-    }
-    return tables;
+    if (present.has("insumos")) await client.query(`UPDATE insumos SET stock_actual = 0`);
+    if (present.has("sack_inventory")) await client.query(`UPDATE sack_inventory SET stock = 0, updated_at = now()`);
+
+    console.log(`[reset-transactions] ✅ Truncadas ${tables.length} tabla(s): ${tables.join(", ")}`);
+    return { wiped: tables, notFound };
   });
 
-  res.json({ ok: true, wiped_tables: wiped.length });
+  res.json({ ok: true, wiped_tables: result.wiped.length, wiped: result.wiped, not_found: result.notFound });
 }));
 
 // ── Respaldos de base de datos ─────────────────────────────────────────────
