@@ -1542,6 +1542,9 @@ input[type="datetime-local"] { height: 36px; }
 .cajaSubNav {
   display: flex;
   flex-direction: row; /* anula el `nav { flex-direction: column }` global (menú lateral) */
+  align-items: center; /* los botones NO se estiran verticalmente (evita el óvalo gigante) */
+  flex: 0 0 auto;      /* anula el `nav { flex: 1 }` global que estiraba el nav a todo el alto */
+  align-self: flex-start;
   gap: 8px;
   flex-wrap: nowrap;
   overflow-x: auto;
