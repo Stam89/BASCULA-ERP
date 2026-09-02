@@ -233,8 +233,8 @@ type WorkerPaymentDetail = {
   } | null;
 };
 
-type CuadrillaActivity = { id: string; name: string; unit_rate: number; is_active: boolean };
-type CuadrillaEntry = { id: string; work_date: string; activity_name: string; worker_name: string; quantity: number; unit_rate: number; subtotal: number };
+type CuadrillaActivity = { id: string; name: string; unit_rate: number; is_active: boolean; categoria?: string };
+type CuadrillaEntry = { id: string; work_date: string; activity_name: string; worker_name: string; quantity: number; unit_rate: number; subtotal: number; origen?: string; referencia_id?: string | null; tunnel_number?: number | null; momento?: string | null };
 type CuadrillaSummaryRow = { worker_name: string; entradas: number; total: number; anticipos: number; neto: number };
 type CuadrillaAdvance = { id: string; worker_name: string; amount: number; balance: number; concept: string | null; status: string; issued_at: string };
 
@@ -1233,6 +1233,10 @@ export function App() {
   const [lots, setLots] = useState<Lot[]>([]);
   const [availableDryingLots, setAvailableDryingLots] = useState<MateriaPrimaEntry[]>([]);
   const [dryingReports, setDryingReports] = useState<DryingTunnelReport[]>([]);
+  // Pago automático de cuadrilla desde Secadoras: labores de túnel y cuadrillas
+  // conocidas, para los selects opcionales del formulario de llenado/vaciado.
+  const [secadoraLabores, setSecadoraLabores] = useState<CuadrillaActivity[]>([]);
+  const [cuadrillaCrews, setCuadrillaCrews] = useState<string[]>([]);
   const [liquidacionesList, setLiquidacionesList] = useState<LiqRecord[]>([]);
   const [stock, setStock] = useState<StockRow[]>([]);
   const [insumos, setInsumos] = useState<Insumo[]>([]);
@@ -4049,7 +4053,7 @@ export function App() {
     if (activeTab === "Por Pagar") refreshPayables().catch(() => undefined);
     // Secadoras y Nómina necesitan las tarifas (precios de gas/diesel).
     if (activeTab === "Secadoras" || activeTab === "Nomina") loadLaborRates().catch(() => undefined);
-    if (activeTab === "Secadoras") loadMotorActive(motorActivo).catch(() => undefined);
+    if (activeTab === "Secadoras") { loadMotorActive(motorActivo).catch(() => undefined); loadSecadoraCuadrilla().catch(() => undefined); }
     if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
     if (activeTab === "Cuadrilla") refreshCuadrilla().catch(() => undefined);
     if (activeTab === "Servicio Pilado") { refreshPilado().catch(() => undefined); refreshCobros().catch(() => undefined); }
@@ -5162,6 +5166,46 @@ export function App() {
     setMessage("Formulario listo para nuevo secado");
   }
 
+  // Carga las labores de secadora (categoría SECADORA) y las cuadrillas conocidas
+  // para los selects opcionales de pago automático en el formulario de secado.
+  async function loadSecadoraCuadrilla() {
+    const [labores, crews] = await Promise.all([
+      apiGet<CuadrillaActivity[]>("/cuadrilla/activities?categoria=SECADORA").catch(() => [] as CuadrillaActivity[]),
+      apiGet<string[]>("/cuadrilla/workers").catch(() => [] as string[])
+    ]);
+    setSecadoraLabores(labores);
+    setCuadrillaCrews(crews);
+  }
+
+  // Campos OPCIONALES de pago automático de cuadrilla dentro del form de secado.
+  // workerField/laborField son los names para el FormData (con sufijo _N en el
+  // form de llenado, sin sufijo en el de edición/vaciado).
+  function renderCuadrillaSecadoraFields(workerField: string, laborField: string) {
+    return (
+      <fieldset style={{ marginTop: 10, border: "1px dashed #cbd5e1", borderRadius: 10, padding: "8px 12px 12px" }}>
+        <legend style={{ fontSize: 12, color: "#64748b", padding: "0 6px" }}>👷 Pago de cuadrilla (opcional)</legend>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <label>
+            <span>Cuadrilla responsable</span>
+            <input name={workerField} type="text" list="cuadrilla-crews-list" placeholder="Ej: cuadrilla LIRA" autoComplete="off" />
+          </label>
+          <label>
+            <span>Labor / Tarifa</span>
+            <select name={laborField} defaultValue="">
+              <option value="">— Ninguna —</option>
+              {secadoraLabores.map((a) => (
+                <option key={a.id} value={a.id}>{a.name} (${Number(a.unit_rate)}/QQ)</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <p className="muted" style={{ fontSize: 11, margin: "6px 0 0" }}>
+          Si eliges ambos, se genera el pago en Nómina automáticamente (QQ del túnel × tarifa).
+        </p>
+      </fieldset>
+    );
+  }
+
   async function loadMotorActive(motor: 1 | 2 = motorActivo) {
     const [rows, tunnelRows] = await Promise.all([
       apiGet<MotorActiveReport[]>(`/process-flow/drying/motor/${motor}/active`).catch(
@@ -5193,6 +5237,10 @@ export function App() {
     // hay un secado activo con hora de inicio, esa manda sobre lo digitado.
     const inicioActivo = motorActiveReports.find((r) => r.dry_start_at)?.dry_start_at ?? null;
     const horaInicioMotor = inicioActivo ?? stringOrUndefined(form.get("dry_start_at_motor"));
+    // Fecha de llenado y secador ÚNICOS de la corrida del motor: se aplican a
+    // TODAS las secadoras para que la tanda entera quede con la misma fecha.
+    const fechaLlenadoMotor = stringOrUndefined(form.get("filled_at_motor"));
+    const secadorMotor = String(form.get("secador_motor") ?? "").trim();
 
     // Candado: no se puede guardar nada en un túnel que está secando a otro
     // accionista (además del bloqueo visual del formulario).
@@ -5212,7 +5260,8 @@ export function App() {
     let creados = 0;
     for (const secadora of conIngresos) {
       const t = tunelDeSecadora(secadora);
-      const operatorName = String(form.get(`secador_name_${t}`) ?? "").trim();
+      // El secador es de la corrida (motor), igual para todas las secadoras.
+      const operatorName = secadorMotor;
       if (operatorName) saveSecadorName(t, operatorName);
       await apiPost<DryingTunnelReport>("/process-flow/drying", {
         entry_ids: seleccionDe(secadora),
@@ -5220,12 +5269,14 @@ export function App() {
         tunnel_number: t,
         rice_type: form.get(`rice_type_${t}`) || "0.11",
         moisture_before: numberOrUndefined(form.get(`moisture_before_${t}`)),
-        filled_at: stringOrUndefined(form.get(`filled_at_${t}`)),
+        filled_at: fechaLlenadoMotor,
         dry_start_at: horaInicioMotor,
         dry_end_at: stringOrUndefined(form.get(`dry_end_at_${t}`)),
         dryer_name: secadora,
         operator_name: operatorName || undefined,
-        notes: form.get(`notes_${t}`) || undefined
+        notes: form.get(`notes_${t}`) || undefined,
+        cuadrilla_worker: stringOrUndefined(form.get(`cuad_worker_${t}`)),
+        cuadrilla_labor_id: stringOrUndefined(form.get(`cuad_labor_${t}`))
       });
       creados++;
     }
@@ -5333,7 +5384,9 @@ export function App() {
       dry_end_at: stringOrUndefined(endInput?.value ?? null),
       dryer_name: report.dryer_name,
       operator_name: String(form.get("operator_name") ?? "").trim(),
-      notes: form.get("notes") || undefined
+      notes: form.get("notes") || undefined,
+      cuadrilla_worker: stringOrUndefined(form.get("cuad_worker")),
+      cuadrilla_labor_id: stringOrUndefined(form.get("cuad_labor"))
     };
     const updated = await apiPut<DryingTunnelReport>(`/process-flow/drying/${report.id}`, payload);
     setMessage(updated.status === "COMPLETED" ? `Secado del Túnel ${updated.tunnel_number} finalizado` : `Secado del Túnel ${updated.tunnel_number} actualizado`);
@@ -5342,6 +5395,29 @@ export function App() {
     // Al guardar (con o sin finalizar) se sale del modo edición y se vuelve a
     // la vista del motor, donde la secadora queda como "En uso / OCUPADO POR".
     safeResetForm(formElement);
+    setEditingDryingReport(null);
+  }
+
+  // Aplica la fecha de llenado, hora de inicio y secador de ESTE túnel a TODOS
+  // los túneles activos de su motor (la corrida en curso), en un solo paso.
+  async function aplicarCorridaATodos(report: DryingTunnelReport, formElement: HTMLFormElement) {
+    const form = new FormData(formElement);
+    const motor = motorDeSecadora(report.dryer_name);
+    const filled = stringOrUndefined(form.get("filled_at"));
+    const inicio = stringOrUndefined(form.get("dry_start_at"));
+    const secador = String(form.get("operator_name") ?? "").trim();
+    if (!filled && !inicio && !secador) {
+      addToast("Escribe fecha, hora de inicio o secador para aplicar a la corrida", "error");
+      return;
+    }
+    if (!window.confirm(`¿Aplicar esta fecha de llenado, hora de inicio y secador a TODOS los túneles activos del Motor ${motor}?`)) return;
+    const res = await apiPost<{ sincronizados: number; cuadrilla_refechada: number }>(
+      `/process-flow/drying/motor/${motor}/sync-run`,
+      { filled_at: filled, dry_start_at: inicio, operator_name: secador || undefined }
+    );
+    addToast(`Corrida sincronizada: ${res.sincronizados} túnel(es)${res.cuadrilla_refechada ? `, ${res.cuadrilla_refechada} pago(s) re-fechado(s)` : ""}`, "success");
+    await refresh();
+    await loadMotorActive();
     setEditingDryingReport(null);
   }
 
@@ -7065,6 +7141,10 @@ export function App() {
 
         {activeTab === "Secadoras" && (
           <section className="panelGrid">
+            {/* Cuadrillas conocidas para el autocompletado de "Cuadrilla responsable". */}
+            <datalist id="cuadrilla-crews-list">
+              {cuadrillaCrews.map((c) => <option key={c} value={c} />)}
+            </datalist>
             {/* ── Selector de motor: el 1 mueve las Secadoras 1 y 2; el 2, la 3 ── */}
             <div className="tablePanel" style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
               <h2 style={{ margin: 0 }}>🔧 Motor</h2>
@@ -7129,8 +7209,20 @@ export function App() {
                               <Input name="dry_end_at" label="Hora secado final" type="datetime-local" defaultValue={dateTimeLocalValue(rep.dry_end_at)} required={false} />
                             </div>
                             <Input name="notes" label="Observacion" defaultValue={rep.notes ?? "Secado registrado"} required={false} />
+                            {renderCuadrillaSecadoraFields("cuad_worker", "cuad_labor")}
                             <div className="buttonRow">
                               <button className="primary">Guardar cambios</button>
+                              <button
+                                type="button"
+                                className="btnSecondary"
+                                title="Copia la fecha de llenado, hora de inicio y secador de este túnel a todos los túneles activos del mismo motor"
+                                onClick={(e) => {
+                                  const form = e.currentTarget.closest("form") as HTMLFormElement | null;
+                                  if (form) aplicarCorridaATodos(rep, form).catch((error) => setMessage(error.message));
+                                }}
+                              >
+                                📌 Aplicar fecha y secador a todo el motor
+                              </button>
                               {!done && (
                                 <button
                                   type="button"
@@ -7169,18 +7261,35 @@ export function App() {
                 style={{ gridColumn: "1 / -1" }}
                 onSubmit={(event) => guardarInformeMotor(event).catch((error) => setMessage(error.message))}
               >
-                {/* Hora de inicio ÚNICA del motor: el motor arranca una vez y las
-                    dos secadoras comparten esa hora; solo la hora final varía. */}
+                {/* Datos ÚNICOS de la corrida del motor: fecha de llenado, hora de
+                    inicio y secador se aplican por igual a TODAS las secadoras del
+                    motor. Así toda la tanda queda con la misma fecha y no se desfasa. */}
                 <div style={{ marginBottom: 12, padding: "10px 12px", background: "#eff6ff", borderRadius: 8, border: "1px solid #bfdbfe" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <Input
+                      name="filled_at_motor"
+                      label="📅 Fecha de llenado (única para el motor)"
+                      type="date"
+                      defaultValue={new Date().toISOString().slice(0, 10)}
+                      required={false}
+                    />
+                    <Input
+                      name="dry_start_at_motor"
+                      label="⏱️ Hora secado inicio (única para el motor)"
+                      type="datetime-local"
+                      defaultValue={dateTimeLocalValue(motorActiveReports.find((r) => r.dry_start_at)?.dry_start_at)}
+                      required={false}
+                    />
+                  </div>
                   <Input
-                    name="dry_start_at_motor"
-                    label="⏱️ Hora secado inicio (una sola para el motor: es la misma en las dos secadoras)"
-                    type="datetime-local"
-                    defaultValue={dateTimeLocalValue(motorActiveReports.find((r) => r.dry_start_at)?.dry_start_at)}
+                    name="secador_motor"
+                    label="👷 Secador (se aplica a todas las secadoras del motor)"
+                    placeholder="Quien seca esta corrida (para la nómina)"
+                    defaultValue={getSavedSecadorName(MOTOR_SECADORAS[motorActivo][0] ? tunelDeSecadora(MOTOR_SECADORAS[motorActivo][0]) : 1)}
                     required={false}
                   />
                   <p className="muted" style={{ fontSize: 12, margin: "6px 0 0" }}>
-                    El motor arranca una sola vez: ambas secadoras comparten esta hora de inicio. Solo la hora final se registra por separado en cada secadora.
+                    Estos tres datos son de la corrida completa: se aplican a todas las secadoras del motor. Solo la hora final se registra por separado en cada una.
                   </p>
                 </div>
                 <div className="panelGrid" style={{ gap: 16 }}>
@@ -7236,11 +7345,12 @@ export function App() {
                           <span>Número de lote <span className="muted">(automático)</span></span>
                           <input name={`lot_code_${t}`} type="text" placeholder="Automático (LT-…)" />
                         </label>
-                        <Input name={`filled_at_${t}`} label="Fecha de llenado" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required={false} />
+                        {/* Fecha de llenado y secador se toman del MOTOR (arriba),
+                            no por túnel: así toda la corrida queda sincronizada. */}
                         <Input name={`moisture_before_${t}`} label="Humedad inicial %" type="number" defaultValue="0" required={false} />
-                        <Input name={`secador_name_${t}`} label="Nombre del secador" placeholder="Quien seca este túnel (para la nómina)" defaultValue={getSavedSecadorName(t)} required={false} />
                         <Input name={`dry_end_at_${t}`} label="Hora secado final" type="datetime-local" required={false} />
                         <Input name={`notes_${t}`} label="Observacion" defaultValue="Secado registrado" required={false} />
+                        {renderCuadrillaSecadoraFields(`cuad_worker_${t}`, `cuad_labor_${t}`)}
                       </div>
                     );
                   })}
@@ -12240,19 +12350,39 @@ export function App() {
                           <table className="cajaTable" style={{ marginTop: 6 }}>
                             <thead><tr><th>Fecha</th><th>Actividad</th><th>Cuadrilla</th><th>Sacos</th><th>Valor</th><th>Subtotal</th><th /></tr></thead>
                             <tbody>
-                              {cuadEntries.map((en) => (
-                                <tr key={en.id}>
+                              {cuadEntries.map((en) => {
+                                // Los registros que vienen de Secadoras no se editan/borran aquí:
+                                // se corrigen en el módulo de Secadoras para no descuadrar el túnel.
+                                const auto = en.origen === "SECADORA";
+                                return (
+                                <tr key={en.id} style={auto ? { background: "rgba(37,99,235,0.05)" } : undefined}>
                                   <td>{String(en.work_date).slice(0, 10)}</td>
-                                  <td>{en.activity_name}</td>
+                                  <td>
+                                    {en.activity_name}
+                                    {auto && (
+                                      <span
+                                        className="chip info"
+                                        style={{ marginLeft: 6, fontSize: 11 }}
+                                        title="Generado automáticamente desde Secadoras. Para corregirlo, edita el movimiento del túnel."
+                                      >
+                                        🤖 Automático · Túnel {en.tunnel_number ?? "?"}
+                                      </span>
+                                    )}
+                                  </td>
                                   <td>{en.worker_name || "—"}</td>
                                   <td>{Number(en.quantity)}</td>
                                   <td>${Number(en.unit_rate)}</td>
                                   <td><strong>{money(Number(en.subtotal))}</strong></td>
                                   <td style={{ textAlign: "right" }}>
-                                    <button type="button" className="btnGhost" onClick={() => deleteCuadEntry(en.id).catch((err) => addToast(err.message, "error"))}>Borrar</button>
+                                    {auto ? (
+                                      <span className="muted" style={{ fontSize: 12 }} title="Se corrige desde Secadoras">🔒 Secadoras</span>
+                                    ) : (
+                                      <button type="button" className="btnGhost" onClick={() => deleteCuadEntry(en.id).catch((err) => addToast(err.message, "error"))}>Borrar</button>
+                                    )}
                                   </td>
                                 </tr>
-                              ))}
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>

@@ -14,6 +14,7 @@ import {
   linkLotProcessReports,
   type ProcessStage
 } from "../../utils/process-reports.js";
+import { upsertCuadrillaSecadoraEntry } from "./cuadrilla.js";
 
 export const processFlowRouter = Router();
 
@@ -42,6 +43,10 @@ const dryingBodySchema = z.object({
   // la guardianía + túneles de la semana. dryer_name es la MÁQUINA (Secadora N).
   operator_name: z.string().optional(),
   notes: z.string().optional(),
+  // Pago automático de cuadrilla (opcional): quién y qué labor de secadora se
+  // paga por este llenado. Si ambos vienen, se genera la entrada en Nómina.
+  cuadrilla_worker: z.string().optional(),
+  cuadrilla_labor_id: z.string().uuid().optional(),
   created_by: z.string().uuid().optional()
 });
 
@@ -59,10 +64,22 @@ const dryingUpdateSchema = z.object({
   diesel_fin: z.number().nonnegative().default(0),
   dryer_name: z.string().optional(),
   operator_name: z.string().optional(),
-  notes: z.string().optional()
+  notes: z.string().optional(),
+  // Pago automático de cuadrilla por el vaciado/salida del túnel (opcional).
+  cuadrilla_worker: z.string().optional(),
+  cuadrilla_labor_id: z.string().uuid().optional()
 });
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+// Devuelve YYYY-MM-DD de un valor que puede venir como Date (de la BD) o string
+// (del body), o null si no hay fecha válida. Para fechar la nómina de cuadrilla.
+function toDateOnly(value: unknown): string | null {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString().slice(0, 10);
+  const s = String(value).trim();
+  return s ? s.slice(0, 10) : null;
+}
 
 // Motor 1 mueve las Secadoras 1 y 2; Motor 2 la Secadora 3. El combustible se
 // registra por motor (el medidor es del motor, no de cada secadora).
@@ -214,6 +231,57 @@ processFlowRouter.get("/drying/motor/:motor/active", asyncRoute(async (req, res)
     [motor]
   );
   res.json(result.rows);
+}));
+
+// Aplica una MISMA fecha de llenado, hora de inicio y secador a TODOS los túneles
+// activos de un motor (la corrida en curso), en un solo paso. Evita entrar túnel
+// por túnel y desfasar las fechas. NO toca los tickets de báscula ni cantidades:
+// solo unifica los metadatos operativos. Re-fecha la nómina de cuadrilla ligada.
+processFlowRouter.post("/drying/motor/:motor/sync-run", asyncRoute(async (req, res) => {
+  const motor = Number(req.params.motor);
+  if (motor !== 1 && motor !== 2) throw new ApiError(400, "Motor inválido");
+  const body = z.object({
+    filled_at: z.string().optional(),
+    dry_start_at: z.string().optional(),
+    operator_name: z.string().optional()
+  }).parse(req.body);
+
+  const filledAt = (body.filled_at ?? "").slice(0, 10) || null;
+  const dryStartAt = body.dry_start_at?.trim() || null;
+  const operator = body.operator_name !== undefined ? (body.operator_name.trim() || null) : null;
+
+  const result = await inTransaction(async (client) => {
+    // Los túneles de la corrida (mismo motor, combustible aún no cerrado).
+    const updated = await client.query(
+      `UPDATE drying_tunnel_reports d SET
+         filled_at = COALESCE($2::date, d.filled_at),
+         dry_start_at = COALESCE($3::timestamptz, d.dry_start_at),
+         operator_name = COALESCE($4, d.operator_name),
+         drying_hours = CASE
+           WHEN d.dry_end_at IS NOT NULL AND COALESCE($3::timestamptz, d.dry_start_at) IS NOT NULL
+           THEN GREATEST(0, EXTRACT(EPOCH FROM (d.dry_end_at - COALESCE($3::timestamptz, d.dry_start_at))) / 3600.0)
+           ELSE d.drying_hours END
+       WHERE d.motor_number = $1 AND d.motor_fuel_id IS NULL
+       RETURNING d.id, d.filled_at`,
+      [motor, filledAt, dryStartAt, operator]
+    );
+    if (!updated.rowCount) throw new ApiError(409, "El motor no tiene túneles activos para sincronizar.");
+
+    // Alinea la nómina de cuadrilla autogenerada con la fecha oficial de la corrida.
+    let refechados = 0;
+    if (filledAt) {
+      const ids = updated.rows.map((r) => r.id);
+      const cuad = await client.query(
+        `UPDATE cuadrilla_entries SET work_date = $2::date
+         WHERE origen = 'SECADORA' AND referencia_id = ANY($1::uuid[])`,
+        [ids, filledAt]
+      );
+      refechados = cuad.rowCount ?? 0;
+    }
+    return { sincronizados: updated.rowCount, cuadrilla_refechada: refechados };
+  });
+
+  res.json(result);
 }));
 
 // Registra el combustible del MOTOR (los medidores son del motor) y reparte el
@@ -546,6 +614,28 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
     throw new ApiError(409, `El túnel ${input.tunnel_number} ya está en uso por ${nombre}. Finaliza ese secado antes de usarlo.`);
   }
 
+  // Sincronización de la CORRIDA por motor: si ya hay un túnel activo de este
+  // mismo motor (misma corrida, aún sin combustible cerrado), esta secadora
+  // HEREDA obligatoriamente su fecha de llenado y hora de inicio. Así toda la
+  // tanda camina con la misma fecha aunque al digitar se ponga otra por error
+  // (evita el túnel con 1-sep y el otro con 2-sep). Los tickets no se tocan.
+  const motorNumber = motorDeSecadora(input.dryer_name);
+  const corrida = await client.query(
+    `SELECT filled_at, dry_start_at FROM drying_tunnel_reports
+     WHERE motor_number = $1 AND motor_fuel_id IS NULL
+       AND (filled_at IS NOT NULL OR dry_start_at IS NOT NULL)
+     ORDER BY created_at ASC LIMIT 1`,
+    [motorNumber]
+  );
+  if (corrida.rowCount) {
+    const anchorFilled = toDateOnly(corrida.rows[0].filled_at);
+    const anchorStart = corrida.rows[0].dry_start_at instanceof Date
+      ? corrida.rows[0].dry_start_at.toISOString()
+      : (corrida.rows[0].dry_start_at ? String(corrida.rows[0].dry_start_at) : null);
+    if (anchorFilled) input.filled_at = anchorFilled;
+    if (anchorStart) input.dry_start_at = anchorStart;
+  }
+
   const farmerIds = new Set(entries.rows.map((e) => e.farmer_id));
   // Si el lote junta arroz de varios agricultores, no tiene un dueño único.
   const lotFarmerId = farmerIds.size === 1 ? entries.rows[0].farmer_id : null;
@@ -681,6 +771,18 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
     [tunnel.rows[0].id, JSON.stringify({ drying_report_id: tunnel.rows[0].id }), tunnelReport.id]
   );
 
+  // Pago automático de cuadrilla por el LLENADO del túnel (si se indicó labor+cuadrilla).
+  await upsertCuadrillaSecadoraEntry(client, {
+    referencia_id: tunnel.rows[0].id,
+    tunnel_number: input.tunnel_number,
+    momento: "LLENADO",
+    activity_id: input.cuadrilla_labor_id ?? null,
+    worker_name: input.cuadrilla_worker ?? null,
+    quantity: totalQuintals,
+    work_date: (input.filled_at ?? "").slice(0, 10) || null,
+    created_by: input.created_by ?? null
+  });
+
   return getDryingReportById(client, tunnel.rows[0].id);
 }
 
@@ -792,6 +894,22 @@ async function updateDryingReport(
       ]
     );
   }
+
+  // Pago automático de cuadrilla por el VACIADO/salida del túnel (si se indicó).
+  // Usa la fecha OFICIAL UNIFICADA de la corrida (fecha de llenado del motor), no
+  // una fecha independiente por túnel: así el reporte de pagos sale agrupado y
+  // sin saltos de días artificiales entre secadoras del mismo motor.
+  const fechaVaciado = toDateOnly(updated.rows[0].filled_at) ?? toDateOnly(dryEndAt) ?? toDateOnly(dryStartAt);
+  await upsertCuadrillaSecadoraEntry(client, {
+    referencia_id: dryingId,
+    tunnel_number: updated.rows[0].tunnel_number,
+    momento: "VACIADO",
+    activity_id: input.cuadrilla_labor_id ?? null,
+    worker_name: input.cuadrilla_worker ?? null,
+    quantity: Number(updated.rows[0].total_quintals) || 0,
+    work_date: fechaVaciado,
+    created_by: null
+  });
 
   return getDryingReportById(client, dryingId);
 }
