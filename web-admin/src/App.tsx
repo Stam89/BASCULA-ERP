@@ -1433,7 +1433,7 @@ export function App() {
   const [nominaPaymentDetail, setNominaPaymentDetail] = useState<{ open: boolean; row: WorkerSummary | null; payments: WorkerPaymentDetail[]; loading: boolean }>({
     open: false, row: null, payments: [], loading: false
   });
-  const [secadorSugg, setSecadorSugg] = useState<Array<{ worker_name: string; work_date: string; tunnels: number; suggested_amount: number; already_generated: boolean }> | null>(null);
+  const [secadorSugg, setSecadorSugg] = useState<Array<{ worker_name: string; work_date: string; tunnels: number; suggested_amount: number; already_generated: boolean; dia_inicio?: string; dia_fin?: string; dias_corrida?: number }> | null>(null);
   const [nominaView, setNominaView] = useState<"planta" | "cuadrilla" | "historial">("planta");
   const nomina60Ago = (() => { const d = new Date(); d.setDate(d.getDate() - 60); return d.toISOString().slice(0, 10); })();
   const [histFrom, setHistFrom] = useState(nomina60Ago);
@@ -12254,18 +12254,31 @@ export function App() {
                 </div>
                 {secadorSugg && secadorSugg.length > 0 && (
                   <>
+                    <p className="muted" style={{ margin: "4px 0 0", fontSize: 12 }}>
+                      Cada fila es una <strong>corrida</strong> (por fecha de llenado del motor), no un día calendario: una corrida que cruza la medianoche cuenta como una sola guardianía. Para pagar guardianías de días independientes, agrégalas a mano.
+                    </p>
                     <table className="cajaTable" style={{ marginTop: 8 }}>
-                      <thead><tr><th>Fecha</th><th>Secador</th><th className="num">Túneles</th><th className="num">Pago</th><th className="num">Estado</th></tr></thead>
+                      <thead><tr><th>Corrida</th><th>Secador</th><th className="num">Túneles</th><th className="num">Pago</th><th className="num">Estado</th></tr></thead>
                       <tbody>
-                        {secadorSugg.map((s, i) => (
+                        {secadorSugg.map((s, i) => {
+                          const multiDia = (s.dias_corrida ?? 1) > 1 && s.dia_inicio && s.dia_fin;
+                          return (
                           <tr key={i}>
-                            <td>{new Date(s.work_date).toLocaleDateString("es-EC")}</td>
+                            <td>
+                              {new Date(s.work_date).toLocaleDateString("es-EC")}
+                              {multiDia && (
+                                <span className="chip info" style={{ marginLeft: 6, fontSize: 11 }} title={`Corrida continua del ${s.dia_inicio} al ${s.dia_fin}`}>
+                                  🔁 {new Date(s.dia_inicio as string).toLocaleDateString("es-EC")}–{new Date(s.dia_fin as string).toLocaleDateString("es-EC")} · {s.dias_corrida} días
+                                </span>
+                              )}
+                            </td>
                             <td>{s.worker_name}</td>
                             <td className="num">{s.tunnels}</td>
                             <td className="num" style={{ fontWeight: 700 }}>{money(s.suggested_amount)}</td>
                             <td className="num">{s.already_generated ? <span className="chip ok">Generado</span> : <span className="chip warn">Nuevo</span>}</td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                     <button

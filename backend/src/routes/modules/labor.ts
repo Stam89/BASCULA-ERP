@@ -475,46 +475,58 @@ laborRouter.get("/secador-suggestions", asyncRoute(async (req, res) => {
   const to = q.to ?? today.toISOString().slice(0, 10);
   const rates = await getRates();
 
-  // Se usa dry_start_at::date como fecha de trabajo ("Hora secado inicio").
-  // El pago del secador depende de cuántas secadoras (túneles) estuvieron
-  // activas EN TOTAL ese día, no de cuántas atendió cada operador.
+  // La CORRIDA (no el día calendario) es la unidad de cobro del secador: los
+  // túneles de un mismo motor comparten la FECHA DE LLENADO (filled_at), que es
+  // la fecha oficial unificada de la corrida. Agrupar por filled_at evita que una
+  // corrida continua que cruza la medianoche (llenó el 1, terminó el 2) se
+  // fragmente en dos filas y se duplique la guardianía. Solo si el secador
+  // trabaja corridas distintas (otra fecha de llenado) salen filas separadas.
+  // Los días de guardianía independientes se pueden agregar a mano en secador-days.
   const result = await pool.query(
-    `WITH daily_tunnels AS (
-       -- Cuántos túneles distintos estuvieron activos cada día
-       SELECT COALESCE(dry_start_at::date, created_at::date) AS work_date,
-              COUNT(DISTINCT tunnel_number)::int AS total_tunnels_active
+    `WITH corrida_tunnels AS (
+       -- Túneles distintos de cada CORRIDA (por fecha oficial de llenado)
+       SELECT COALESCE(filled_at, dry_start_at::date, created_at::date) AS work_date,
+              COUNT(DISTINCT tunnel_number)::int AS total_tunnels_active,
+              MIN(COALESCE(dry_start_at::date, filled_at, created_at::date)) AS dia_inicio,
+              MAX(COALESCE(dry_end_at::date, dry_start_at::date, filled_at, created_at::date)) AS dia_fin
        FROM drying_tunnel_reports
-       WHERE COALESCE(dry_start_at::date, created_at::date) BETWEEN $1 AND $2
-       GROUP BY COALESCE(dry_start_at::date, created_at::date)
+       WHERE COALESCE(filled_at, dry_start_at::date, created_at::date) BETWEEN $1 AND $2
+       GROUP BY COALESCE(filled_at, dry_start_at::date, created_at::date)
      ),
-     daily_workers AS (
-       -- Qué secadores trabajaron cada día (por nombre del operador en el reporte)
+     corrida_workers AS (
+       -- Qué secadores trabajaron cada corrida (por nombre del operador)
        SELECT DISTINCT
          COALESCE(NULLIF(TRIM(operator_name), ''), 'Secador') AS worker_name,
-         COALESCE(dry_start_at::date, created_at::date) AS work_date
+         COALESCE(filled_at, dry_start_at::date, created_at::date) AS work_date
        FROM drying_tunnel_reports
-       WHERE COALESCE(dry_start_at::date, created_at::date) BETWEEN $1 AND $2
+       WHERE COALESCE(filled_at, dry_start_at::date, created_at::date) BETWEEN $1 AND $2
      )
      SELECT
-       dw.worker_name,
-       dw.work_date,
-       dt.total_tunnels_active AS tunnels,
+       cw.worker_name,
+       cw.work_date,
+       ct.total_tunnels_active AS tunnels,
+       ct.dia_inicio,
+       ct.dia_fin,
+       (ct.dia_fin - ct.dia_inicio + 1)::int AS dias_corrida,
        EXISTS(
          SELECT 1 FROM worker_payments wp
          WHERE wp.worker_role = 'SECADOR'
-           AND wp.worker_name = dw.worker_name
-           AND wp.work_date = dw.work_date
+           AND wp.worker_name = cw.worker_name
+           AND wp.work_date = cw.work_date
        ) AS already_generated
-     FROM daily_workers dw
-     JOIN daily_tunnels dt ON dw.work_date = dt.work_date
-     ORDER BY dw.work_date DESC`,
+     FROM corrida_workers cw
+     JOIN corrida_tunnels ct ON cw.work_date = ct.work_date
+     ORDER BY cw.work_date DESC`,
     [from, to]
-  ).catch(() => ({ rows: [] as Array<{ worker_name: string; work_date: string; tunnels: number; already_generated: boolean }> }));
+  ).catch(() => ({ rows: [] as Array<{ worker_name: string; work_date: string; tunnels: number; dia_inicio: string; dia_fin: string; dias_corrida: number; already_generated: boolean }> }));
 
   const rows = result.rows.map((r) => ({
     worker_name: r.worker_name,
     work_date: r.work_date,
     tunnels: r.tunnels,
+    dia_inicio: r.dia_inicio,
+    dia_fin: r.dia_fin,
+    dias_corrida: r.dias_corrida,
     suggested_amount: round2(rates.secador_guardiania + rates.secador_per_tunel * r.tunnels),
     already_generated: r.already_generated
   }));
