@@ -20,6 +20,8 @@ const CAMPO_SECCIONES: Array<{ id: CampoSeccion; label: string; icon: string }> 
   { id: "caja", label: "Caja", icon: "💰" },
   { id: "servicios", label: "Servicios", icon: "🚜" },
   { id: "clientes", label: "Clientes", icon: "👥" },
+  { id: "cxc", label: "Cuentas por Cobrar", icon: "📥" },
+  { id: "cxp", label: "Cuentas por Pagar", icon: "📤" },
   { id: "vales", label: "Vales", icon: "📋" },
   { id: "partes", label: "Partes Diarios", icon: "📝" },
   { id: "reportes", label: "Reportes", icon: "📊" },
@@ -48,7 +50,7 @@ type Servicio = {
 const hoy = () => new Date().toISOString().slice(0, 10);
 // Secciones del menú propio de Campo (contexto aislado). Se amplía agregando
 // entradas aquí y en CAMPO_SECCIONES (ver CampoWorkspace).
-export type CampoSeccion = "caja" | "servicios" | "clientes" | "vales" | "partes" | "reportes" | "config";
+export type CampoSeccion = "caja" | "servicios" | "clientes" | "cxc" | "cxp" | "vales" | "partes" | "reportes" | "config";
 
 // Parte Diario pendiente (para importar/liquidar desde el form de servicio).
 type PartePendiente = { id: string; fecha: string; activo_id: string; activo_nombre: string; operador: string | null; cliente: string; qq: number };
@@ -207,6 +209,14 @@ export default function CampoModule({ section = "caja", nombre, onNombreChange }
 
   if (section === "clientes") {
     return <section className="panelGrid">{flashEl}<ClientesView nombreOperacion={nombre ?? "Campo"} onNotify={notify} onError={(m) => notify(m, "err")} /></section>;
+  }
+
+  if (section === "cxc") {
+    return <section className="panelGrid">{flashEl}<CxCView nombreOperacion={nombre ?? "Campo"} onNotify={notify} onError={(m) => notify(m, "err")} /></section>;
+  }
+
+  if (section === "cxp") {
+    return <section className="panelGrid">{flashEl}<CxPView onNotify={notify} onError={(m) => notify(m, "err")} /></section>;
   }
 
   if (section === "config") {
@@ -1523,6 +1533,293 @@ function CierreCajaModal({ onClose, onDone, onError }: {
         <label><span>Observaciones (opcional)</span><input type="text" value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Ej: cierre turno tarde" /></label>
         <div className="buttonRow">
           <button type="submit" className="primary" disabled={busy || !valido || !prev}>{busy ? "Cerrando…" : "Confirmar cierre"}</button>
+          <button type="button" onClick={onClose} disabled={busy}>Cancelar</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ── 📥 Cuentas por Cobrar (Transporte): lee los saldos de campo_servicios ─────
+// (misma fuente única que Clientes/Reportes → cero doble contabilidad) y permite
+// registrar un abono directo del agricultor que se reparte FIFO entre sus servicios.
+function CxCView({ nombreOperacion, onNotify, onError }: {
+  nombreOperacion: string; onNotify: (m: string, k?: "ok" | "err") => void; onError: (m: string) => void;
+}) {
+  const [data, setData] = useState<{ clientes: ClienteCuenta[]; total_pendiente: number } | null>(null);
+  const [cuentas, setCuentas] = useState<Cuenta[]>([]);
+  const [abonar, setAbonar] = useState<ClienteCuenta | null>(null);
+  const [verCuenta, setVerCuenta] = useState<ClienteCuenta | null>(null);
+
+  const cargar = useCallback(async () => {
+    try {
+      const [ec, cts] = await Promise.all([
+        apiGet<{ clientes: ClienteCuenta[]; total_pendiente: number }>("/campo/clientes/estado-cuenta?estado=pendiente"),
+        apiGet<Cuenta[]>("/campo/cuentas")
+      ]);
+      setData(ec); setCuentas(cts);
+    } catch (e) { onError((e as Error).message); }
+  }, [onError]);
+  useEffect(() => { cargar(); }, [cargar]);
+
+  const clientes = data?.clientes ?? [];
+  return (
+    <>
+      <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <h2 style={{ margin: 0 }}>📥 Cuentas por Cobrar <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· fletes y cosecha pendientes</span></h2>
+          <div className="totalBox" style={{ minWidth: 170, margin: 0, marginLeft: "auto", background: "#fef3c7", borderColor: "#fde68a" }}>
+            <span>TOTAL POR COBRAR</span>
+            <strong style={{ color: "#b45309" }}>{money(data?.total_pendiente ?? 0)}</strong>
+          </div>
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table className="cajaTable" style={{ marginTop: 8 }}>
+            <thead><tr>
+              <th>Cliente</th><th className="num">Servicios</th><th className="num">Debe</th>
+              <th className="num">Haber</th><th className="num">Saldo</th><th>Acciones</th>
+            </tr></thead>
+            <tbody>
+              {clientes.length === 0 ? (
+                <tr><td colSpan={6} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin cuentas por cobrar pendientes.</td></tr>
+              ) : clientes.map((c) => (
+                <tr key={c.id}>
+                  <td style={{ fontWeight: 600 }}>{c.nombre}<small className="muted" style={{ display: "block" }}>{c.tipo}</small></td>
+                  <td className="num">{c.servicios}</td>
+                  <td className="num">{money(c.debe)}</td>
+                  <td className="num" style={{ color: "#15803d" }}>{money(c.haber)}</td>
+                  <td className="num" style={{ fontWeight: 700, color: c.saldo > 0.005 ? "#b45309" : "#15803d" }}>{money(c.saldo)}</td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <button type="button" className="primary" onClick={() => setAbonar(c)}>💵 Abonar</button>
+                      <button type="button" className="btnSecondary" onClick={() => setVerCuenta(c)}>📄 Detalle</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>Saldo = servicios (cosecha/flete) − abonos, en vivo. Si un servicio se cruza desde la Liquidación, su saldo baja aquí automáticamente.</p>
+      </div>
+
+      {abonar && (
+        <AbonoCxCModal cliente={abonar} cuentas={cuentas}
+          onClose={() => setAbonar(null)}
+          onDone={async (m) => { setAbonar(null); await cargar(); onNotify(m); }}
+          onError={onError} />
+      )}
+      {verCuenta && (
+        <EstadoCuentaModal cliente={verCuenta} nombreOperacion={nombreOperacion}
+          onClose={() => setVerCuenta(null)} onError={onError} />
+      )}
+    </>
+  );
+}
+
+// Modal: abono directo del agricultor (FIFO entre sus servicios pendientes).
+function AbonoCxCModal({ cliente, cuentas, onClose, onDone, onError }: {
+  cliente: ClienteCuenta; cuentas: Cuenta[];
+  onClose: () => void; onDone: (m: string) => void | Promise<void>; onError: (m: string) => void;
+}) {
+  const [monto, setMonto] = useState(cliente.saldo > 0 ? cliente.saldo.toFixed(2) : "");
+  const [cuentaId, setCuentaId] = useState(cuentas[0]?.id ?? "");
+  const [fecha, setFecha] = useState(hoy());
+  const [busy, setBusy] = useState(false);
+  async function submit() {
+    try {
+      setBusy(true);
+      const m = Number(monto);
+      if (!(m > 0)) throw new Error("Indica el monto del abono");
+      if (!cuentaId) throw new Error("Elige la cuenta donde entra el efectivo");
+      const r = await apiPost<{ aplicado: number; servicios_afectados: number }>("/campo/cxc/abono", {
+        cliente_id: cliente.id, monto: m, cuenta_id: cuentaId, fecha, concepto: "Abono directo de flete/cosecha"
+      });
+      await onDone(`Abono de ${money(r.aplicado)} aplicado a ${r.servicios_afectados} servicio(s)`);
+    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <form className="formPanel" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submit(); }} style={{ maxWidth: 440, width: "100%", margin: 0 }}>
+        <h2 style={{ marginTop: 0 }}>💵 Abono directo · {cliente.nombre}</h2>
+        <p className="muted" style={{ marginTop: 0 }}>Saldo pendiente: <strong>{money(cliente.saldo)}</strong>. Se reparte entre los servicios más antiguos.</p>
+        <label><span>Monto del abono</span>
+          <input type="number" step="0.01" min="0" autoFocus value={monto} onChange={(e) => setMonto(e.target.value)} placeholder="0.00" />
+        </label>
+        <label><span>Cuenta (entra el efectivo)</span>
+          <select value={cuentaId} onChange={(e) => setCuentaId(e.target.value)}>
+            {cuentas.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+          </select>
+        </label>
+        <label><span>Fecha</span>
+          <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} />
+        </label>
+        <div className="buttonRow">
+          <button type="submit" className="primary" disabled={busy}>{busy ? "Registrando…" : "Registrar abono"}</button>
+          <button type="button" onClick={onClose} disabled={busy}>Cancelar</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ── 📤 Cuentas por Pagar (Transporte): deudas operativas propias (CRUD) ───────
+type CxP = { id: string; fecha: string; acreedor: string; concepto: string | null; monto: number; pagado: number; saldo: number; estado: "pendiente" | "pagado" };
+function CxPView({ onNotify, onError }: { onNotify: (m: string, k?: "ok" | "err") => void; onError: (m: string) => void; }) {
+  const [data, setData] = useState<{ cuentas: CxP[]; total_pendiente: number } | null>(null);
+  const [cuentas, setCuentas] = useState<Cuenta[]>([]);
+  const [nuevo, setNuevo] = useState(false);
+  const [pagar, setPagar] = useState<CxP | null>(null);
+
+  const cargar = useCallback(async () => {
+    try {
+      const [cx, cts] = await Promise.all([
+        apiGet<{ cuentas: CxP[]; total_pendiente: number }>("/campo/cxp"),
+        apiGet<Cuenta[]>("/campo/cuentas")
+      ]);
+      setData(cx); setCuentas(cts);
+    } catch (e) { onError((e as Error).message); }
+  }, [onError]);
+  useEffect(() => { cargar(); }, [cargar]);
+
+  async function eliminar(c: CxP) {
+    if (!window.confirm(`¿Eliminar la cuenta por pagar de ${c.acreedor} (${money(c.monto)})?`)) return;
+    try {
+      await apiFetch(`/campo/cxp/${c.id}`, { method: "DELETE" });
+      await cargar(); onNotify("Cuenta por pagar eliminada");
+    } catch (e) { onError((e as Error).message); }
+  }
+
+  const rows = data?.cuentas ?? [];
+  return (
+    <>
+      <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <h2 style={{ margin: 0 }}>📤 Cuentas por Pagar <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· deudas operativas de Transporte</span></h2>
+          <button type="button" className="primary" onClick={() => setNuevo(true)}>＋ Nueva CxP</button>
+          <div className="totalBox" style={{ minWidth: 170, margin: 0, marginLeft: "auto", background: "#fee2e2", borderColor: "#fecaca" }}>
+            <span>TOTAL POR PAGAR</span>
+            <strong style={{ color: "#b91c1c" }}>{money(data?.total_pendiente ?? 0)}</strong>
+          </div>
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table className="cajaTable" style={{ marginTop: 8 }}>
+            <thead><tr>
+              <th>Fecha</th><th>Acreedor</th><th>Concepto</th><th className="num">Monto</th>
+              <th className="num">Pagado</th><th className="num">Saldo</th><th>Estado</th><th>Acciones</th>
+            </tr></thead>
+            <tbody>
+              {rows.length === 0 ? (
+                <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin cuentas por pagar.</td></tr>
+              ) : rows.map((c) => (
+                <tr key={c.id}>
+                  <td>{c.fecha?.slice(0, 10)}</td>
+                  <td style={{ fontWeight: 600 }}>{c.acreedor}</td>
+                  <td className="muted">{c.concepto || "—"}</td>
+                  <td className="num">{money(c.monto)}</td>
+                  <td className="num" style={{ color: "#15803d" }}>{money(c.pagado)}</td>
+                  <td className="num" style={{ fontWeight: 700, color: c.saldo > 0.005 ? "#b91c1c" : "#15803d" }}>{money(c.saldo)}</td>
+                  <td><span className="chip" style={{ background: c.estado === "pagado" ? "#dcfce7" : "#fef3c7", color: c.estado === "pagado" ? "#15803d" : "#b45309" }}>{c.estado}</span></td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {c.saldo > 0.005 && <button type="button" className="primary" onClick={() => setPagar(c)}>💵 Pagar</button>}
+                      {c.pagado <= 0.005 && <button type="button" className="btnSecondary" style={{ color: "#b91c1c" }} onClick={() => eliminar(c)}>🗑️</button>}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>Cada pago sale de la Caja de Transporte. Saldo/estado se derivan de los pagos, en vivo.</p>
+      </div>
+
+      {nuevo && (
+        <NuevaCxPModal onClose={() => setNuevo(false)}
+          onDone={async () => { setNuevo(false); await cargar(); onNotify("Cuenta por pagar creada"); }}
+          onError={onError} />
+      )}
+      {pagar && (
+        <PagarCxPModal cxp={pagar} cuentas={cuentas}
+          onClose={() => setPagar(null)}
+          onDone={async (m) => { setPagar(null); await cargar(); onNotify(m); }}
+          onError={onError} />
+      )}
+    </>
+  );
+}
+
+function NuevaCxPModal({ onClose, onDone, onError }: {
+  onClose: () => void; onDone: () => void | Promise<void>; onError: (m: string) => void;
+}) {
+  const [f, setF] = useState({ fecha: hoy(), acreedor: "", concepto: "", monto: "" });
+  const [busy, setBusy] = useState(false);
+  async function submit() {
+    try {
+      setBusy(true);
+      if (f.acreedor.trim().length < 2) throw new Error("Indica el proveedor/acreedor");
+      if (!(Number(f.monto) > 0)) throw new Error("Indica el monto total");
+      await apiPost("/campo/cxp", { fecha: f.fecha, acreedor: f.acreedor.trim(), concepto: f.concepto.trim() || undefined, monto: Number(f.monto) });
+      await onDone();
+    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <form className="formPanel" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submit(); }} style={{ maxWidth: 460, width: "100%", margin: 0 }}>
+        <h2 style={{ marginTop: 0 }}>＋ Nueva Cuenta por Pagar</h2>
+        <label><span>Fecha</span><input type="date" value={f.fecha} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
+        <label><span>Proveedor / Acreedor <span style={{ color: "#ef4444" }}>*</span></span>
+          <input type="text" autoFocus value={f.acreedor} onChange={(e) => setF({ ...f, acreedor: e.target.value })} placeholder="Ej: Taller Mecánico / Gasolinera / Chofer Juan" />
+        </label>
+        <label><span>Concepto</span>
+          <input type="text" value={f.concepto} onChange={(e) => setF({ ...f, concepto: e.target.value })} placeholder="Ej: Repuestos / Combustible / Mano de obra" />
+        </label>
+        <label><span>Monto total <span style={{ color: "#ef4444" }}>*</span></span>
+          <input type="number" step="0.01" min="0" value={f.monto} onChange={(e) => setF({ ...f, monto: e.target.value })} placeholder="0.00" />
+        </label>
+        <div className="buttonRow">
+          <button type="submit" className="primary" disabled={busy}>{busy ? "Guardando…" : "Crear"}</button>
+          <button type="button" onClick={onClose} disabled={busy}>Cancelar</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function PagarCxPModal({ cxp, cuentas, onClose, onDone, onError }: {
+  cxp: CxP; cuentas: Cuenta[];
+  onClose: () => void; onDone: (m: string) => void | Promise<void>; onError: (m: string) => void;
+}) {
+  const [monto, setMonto] = useState(cxp.saldo > 0 ? cxp.saldo.toFixed(2) : "");
+  const [cuentaId, setCuentaId] = useState(cuentas[0]?.id ?? "");
+  const [fecha, setFecha] = useState(hoy());
+  const [busy, setBusy] = useState(false);
+  async function submit() {
+    try {
+      setBusy(true);
+      const m = Number(monto);
+      if (!(m > 0)) throw new Error("Indica el monto del pago");
+      if (!cuentaId) throw new Error("Elige la cuenta de donde sale el efectivo");
+      await apiPost(`/campo/cxp/${cxp.id}/abono`, { monto: m, cuenta_id: cuentaId, fecha });
+      await onDone(`Pago de ${money(m)} registrado a ${cxp.acreedor}`);
+    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <form className="formPanel" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submit(); }} style={{ maxWidth: 440, width: "100%", margin: 0 }}>
+        <h2 style={{ marginTop: 0 }}>💵 Pagar · {cxp.acreedor}</h2>
+        <p className="muted" style={{ marginTop: 0 }}>Saldo pendiente: <strong>{money(cxp.saldo)}</strong>. El pago sale de la Caja de Transporte.</p>
+        <label><span>Monto del pago</span>
+          <input type="number" step="0.01" min="0" autoFocus value={monto} onChange={(e) => setMonto(e.target.value)} placeholder="0.00" />
+        </label>
+        <label><span>Cuenta (sale el efectivo)</span>
+          <select value={cuentaId} onChange={(e) => setCuentaId(e.target.value)}>
+            {cuentas.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+          </select>
+        </label>
+        <label><span>Fecha</span><input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} /></label>
+        <div className="buttonRow">
+          <button type="submit" className="primary" disabled={busy}>{busy ? "Registrando…" : "Registrar pago"}</button>
           <button type="button" onClick={onClose} disabled={busy}>Cancelar</button>
         </div>
       </form>

@@ -961,6 +961,135 @@ campoRouter.post("/conciliacion/convertir-y-aplicar", asyncRoute(async (req, res
   res.status(201).json(result);
 }));
 
+// ── Cuentas por Cobrar (CxC) de Transporte: abono manual del agricultor ──────
+// La CxC se LEE del estado de cuenta de clientes (saldos de campo_servicios, misma
+// fuente única). Aquí solo se agrega un abono directo (efectivo) que se reparte
+// FIFO entre los servicios pendientes del cliente. NO hay doble contabilidad: si
+// un servicio ya se cruzó desde la Liquidación, su saldo ya viene reducido.
+campoRouter.post("/cxc/abono", asyncRoute(async (req, res) => {
+  const body = z.object({
+    cliente_id: z.string().uuid(),
+    monto: z.number().positive(),
+    cuenta_id: z.string().uuid(),
+    fecha: fechaSchema.optional(),
+    concepto: z.string().max(300).optional()
+  }).parse(req.body);
+  const cta = await pool.query("SELECT 1 FROM campo_cuentas WHERE id = $1", [body.cuenta_id]);
+  if (!cta.rowCount) throw new ApiError(404, "Cuenta no encontrada");
+  const cli = await pool.query("SELECT nombre FROM campo_clientes WHERE id = $1", [body.cliente_id]);
+  if (!cli.rowCount) throw new ApiError(404, "Cliente no encontrado");
+
+  const result = await inTransaction(async (client) => {
+    await requireCajaAbierta([body.cuenta_id], client);
+    // Servicios pendientes del cliente (FIFO por fecha) con su saldo real.
+    const pend = (await client.query(
+      `SELECT s.id, sv.saldo_pendiente::float AS saldo
+       FROM campo_servicios s JOIN campo_servicios_saldo sv ON sv.id = s.id
+       WHERE s.cliente_id = $1 AND sv.saldo_pendiente > 0.005
+       ORDER BY s.fecha ASC, s.created_at ASC
+       FOR UPDATE OF s`,
+      [body.cliente_id]
+    )).rows as Array<{ id: string; saldo: number }>;
+    const totalPend = Math.round(pend.reduce((s, r) => s + Number(r.saldo), 0) * 100) / 100;
+    if (body.monto > totalPend + 0.005) {
+      throw new ApiError(422, `El abono (${body.monto.toFixed(2)}) supera el saldo pendiente del cliente (${totalPend.toFixed(2)}).`);
+    }
+    let restante = Math.round(body.monto * 100) / 100;
+    let afectados = 0;
+    for (const s of pend) {
+      if (restante <= 0.005) break;
+      const abono = Math.round(Math.min(restante, Number(s.saldo)) * 100) / 100;
+      await client.query(
+        `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, servicio_id, cliente_id, created_by)
+         VALUES (COALESCE($1::date, CURRENT_DATE), $2, 'entrada', $3, $4, $5, $6, $7)`,
+        [body.fecha ?? null, body.cuenta_id, abono, body.concepto?.trim() || "Abono directo de flete/cosecha", s.id, body.cliente_id, userId(req)]
+      );
+      restante = Math.round((restante - abono) * 100) / 100;
+      afectados++;
+    }
+    return { aplicado: Math.round((body.monto - restante) * 100) / 100, servicios_afectados: afectados };
+  });
+  res.status(201).json(result);
+}));
+
+// ── Cuentas por Pagar (CxP) de Transporte: deudas operativas propias ─────────
+// Mantenedor independiente (talleres, repuestos, gasolinera, choferes…). El saldo
+// y el estado se DERIVAN de los abonos (campo_movimientos 'salida' con cxp_id).
+const CXP_SELECT = `
+  SELECT c.id, c.fecha, c.acreedor, c.concepto, c.monto::float AS monto, c.created_at,
+    COALESCE((SELECT SUM(m.monto) FROM campo_movimientos m WHERE m.cxp_id = c.id AND m.signo = 'salida'), 0)::float AS pagado,
+    (c.monto - COALESCE((SELECT SUM(m.monto) FROM campo_movimientos m WHERE m.cxp_id = c.id AND m.signo = 'salida'), 0))::float AS saldo,
+    CASE WHEN c.monto - COALESCE((SELECT SUM(m.monto) FROM campo_movimientos m WHERE m.cxp_id = c.id AND m.signo = 'salida'), 0) <= 0.005
+         THEN 'pagado' ELSE 'pendiente' END AS estado
+  FROM campo_cxp c`;
+
+campoRouter.get("/cxp", asyncRoute(async (req, res) => {
+  const q = z.object({ estado: z.enum(["pendiente", "pagado"]).optional() }).parse(req.query);
+  const rows = (await pool.query(`${CXP_SELECT} ORDER BY c.fecha DESC, c.created_at DESC LIMIT 500`)).rows;
+  const out = q.estado ? rows.filter((r) => r.estado === q.estado) : rows;
+  const totalPendiente = out.reduce((s: number, r: { saldo: number }) => s + (r.saldo > 0 ? r.saldo : 0), 0);
+  res.json({ cuentas: out, total_pendiente: Math.round(totalPendiente * 100) / 100 });
+}));
+
+campoRouter.post("/cxp", asyncRoute(async (req, res) => {
+  const body = z.object({
+    fecha: fechaSchema.optional(),
+    acreedor: z.string().min(1).max(160),
+    concepto: z.string().max(400).optional(),
+    monto: z.number().positive()
+  }).parse(req.body);
+  const row = (await pool.query(
+    `INSERT INTO campo_cxp (fecha, acreedor, concepto, monto, created_by)
+     VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5) RETURNING id`,
+    [body.fecha ?? null, body.acreedor.trim(), body.concepto?.trim() || null, body.monto, userId(req)]
+  )).rows[0];
+  const full = (await pool.query(`${CXP_SELECT} WHERE c.id = $1`, [row.id])).rows[0];
+  res.status(201).json(full);
+}));
+
+campoRouter.post("/cxp/:id/abono", asyncRoute(async (req, res) => {
+  const body = z.object({
+    monto: z.number().positive(),
+    cuenta_id: z.string().uuid(),
+    fecha: fechaSchema.optional(),
+    concepto: z.string().max(300).optional()
+  }).parse(req.body);
+  const cta = await pool.query("SELECT 1 FROM campo_cuentas WHERE id = $1", [body.cuenta_id]);
+  if (!cta.rowCount) throw new ApiError(404, "Cuenta no encontrada");
+  const row = await inTransaction(async (client) => {
+    const cxp = (await client.query("SELECT id, acreedor, monto FROM campo_cxp WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
+    if (!cxp) throw new ApiError(404, "Cuenta por pagar no encontrada");
+    await requireCajaAbierta([body.cuenta_id], client);
+    const pagado = Number((await client.query(
+      "SELECT COALESCE(SUM(monto),0)::float AS p FROM campo_movimientos WHERE cxp_id = $1 AND signo = 'salida'", [req.params.id]
+    )).rows[0].p);
+    const saldo = Math.round((Number(cxp.monto) - pagado) * 100) / 100;
+    if (body.monto > saldo + 0.005) {
+      throw new ApiError(422, `El pago (${body.monto.toFixed(2)}) supera el saldo pendiente (${saldo.toFixed(2)}).`);
+    }
+    await client.query(
+      `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, cxp_id, created_by)
+       VALUES (COALESCE($1::date, CURRENT_DATE), $2, 'salida', $3, $4, $5, $6)`,
+      [body.fecha ?? null, body.cuenta_id, body.monto, body.concepto?.trim() || `Pago CxP · ${cxp.acreedor}`, req.params.id, userId(req)]
+    );
+    return (await client.query(`${CXP_SELECT} WHERE c.id = $1`, [req.params.id])).rows[0];
+  });
+  res.status(201).json(row);
+}));
+
+campoRouter.delete("/cxp/:id", asyncRoute(async (req, res) => {
+  await inTransaction(async (client) => {
+    const cxp = (await client.query("SELECT 1 FROM campo_cxp WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
+    if (!cxp) throw new ApiError(404, "Cuenta por pagar no encontrada");
+    const pagos = Number((await client.query(
+      "SELECT COUNT(*)::int AS n FROM campo_movimientos WHERE cxp_id = $1", [req.params.id]
+    )).rows[0].n);
+    if (pagos > 0) throw new ApiError(409, "No se puede eliminar: la cuenta ya tiene pagos registrados. Reversa los pagos primero.");
+    await client.query("DELETE FROM campo_cxp WHERE id = $1", [req.params.id]);
+  });
+  res.json({ ok: true });
+}));
+
 // ════════════════════════════════════════════════════════════════════════════
 // REPORTES DE CAMPO (V2). Solo lectura. TODO el cálculo es SQL (GROUP BY / SUM);
 // el servidor solo arma la forma de la respuesta. No hay tablas nuevas: todo
