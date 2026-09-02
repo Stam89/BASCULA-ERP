@@ -292,7 +292,15 @@ const WIPE_TABLES = [
   "fomento_entregas",
   "fomento_pagos",
   "sack_movements",
-  "equipment_maintenance"
+  "equipment_maintenance",
+  // Transporte y Cosechadora (Campo): SOLO históricos operativos. Se preservan los
+  // catálogos maestros (campo_activos flota, campo_operadores choferes,
+  // campo_clientes, campo_cuentas, campo_categorias_gasto, campo_config).
+  "campo_movimientos",
+  "campo_servicios",
+  "campo_partes",
+  "campo_cxp",
+  "campo_caja_sesiones"
 ];
 
 settingsRouter.post("/reset-transactions", requireAdmin, asyncRoute(async (req, res) => {
