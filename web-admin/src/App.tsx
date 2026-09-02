@@ -13811,20 +13811,22 @@ export function App() {
                   <ol className="setupList">
                     <li>Completa los <strong>datos del negocio</strong> (aparecen en los comprobantes).</li>
                     <li>Crea un usuario para cada persona que use el sistema.</li>
-                    <li>Usa <strong>Restaurar de fábrica</strong> en el panel de la derecha para limpiar datos de prueba.</li>
+                    {esCeyroActivo && <li>Usa <strong>Restaurar de fábrica</strong> (Zona de peligro, a la derecha) para limpiar datos de prueba.</li>}
                     <li>Verifica productos, bodegas e insumos en el Dashboard ("Crear datos base" si están vacíos).</li>
                     <li>Abre la caja del día y registra a tus agricultores reales.</li>
                   </ol>
                 </div>
 
+                {esCeyroActivo && (
                 <form className="formPanel dangerZone" onSubmit={(e) => submitResetData(e).catch((err) => addToast(err.message, "error"))}>
-                  <h2>🗑️ Restaurar de fábrica</h2>
+                  <h2>⚠️ Zona de peligro · Restaurar de fábrica</h2>
                   <p className="muted">
-                    Limpia <strong>todos los movimientos operativos</strong>: tickets, lotes, traspasos, secado, producción, combustible,
-                    pilado, selección, pedidos, ventas, inventario (productos, insumos y sacos a 0), caja, gastos, nómina,
+                    Limpia <strong>todos los movimientos operativos</strong> del ERP: tickets, lotes, traspasos, secado, producción,
+                    combustible, pilado, selección, pedidos, ventas, inventario (productos, insumos y sacos a 0), caja, gastos, nómina,
                     anticipos, liquidaciones, fomentos, agricultores, clientes, cuentas por cobrar/pagar, conciliación bancaria,
-                    historial de auditoría y sincronización. Se conservan usuarios, accionistas, configuración, tarifas,
-                    productos, bodegas, equipos y catálogos de insumos/sacos.
+                    <strong> y los históricos de Transporte y Cosechadora</strong> (servicios de fletes/cosecha, partes diarios, caja de
+                    transporte y CxP), historial de auditoría y sincronización. Se conservan usuarios, accionistas, configuración,
+                    tarifas, productos, bodegas, equipos y catálogos de insumos/sacos <strong>y la flota/choferes de Transporte</strong>.
                   </p>
                   <p className="dangerNote">Esta acción no se puede deshacer.</p>
                   <label>
@@ -13854,6 +13856,7 @@ export function App() {
                     Restaurar de fábrica definitivamente
                   </button>
                 </form>
+                )}
 
                 <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>

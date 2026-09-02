@@ -16,18 +16,17 @@ import PartesModule from "./PartesModule";
 
 // Menú propio de la operación Campo (contexto aislado). Para agregar secciones
 // nuevas: añade una entrada aquí y su caso en CampoModule (prop `section`).
-// `grupo: "maquinaria"` reubica visualmente Servicios/Partes/CxC/CxP bajo el
-// encabezado "🚜 MAQUINARIA" en el sidebar. Mismas rutas/componentes/API.
-const CAMPO_SECCIONES: Array<{ id: CampoSeccion; label: string; icon: string; grupo?: "maquinaria" }> = [
+// Menú propio de la operación aislada "Transporte y Cosechadora". El workspace
+// completo (CampoWorkspace) solo se renderiza cuando esta operación está activa en
+// el selector superior, así que el sidebar ya es contextual por operación.
+const CAMPO_SECCIONES: Array<{ id: CampoSeccion; label: string; icon: string }> = [
   { id: "caja", label: "Caja", icon: "💰" },
   { id: "clientes", label: "Clientes", icon: "👥" },
-  { id: "vales", label: "Vales", icon: "📋" },
-  { id: "reportes", label: "Reportes", icon: "📊" },
-  { id: "config", label: "Configuración", icon: "⚙️" },
-  { id: "servicios", label: "Servicios", icon: "🚜", grupo: "maquinaria" },
-  { id: "partes", label: "Partes Diarios", icon: "📝", grupo: "maquinaria" },
-  { id: "cxc", label: "Cuentas por Cobrar", icon: "📥", grupo: "maquinaria" },
-  { id: "cxp", label: "Cuentas por Pagar", icon: "📤", grupo: "maquinaria" }
+  { id: "servicios", label: "Servicios", icon: "🚜" },
+  { id: "partes", label: "Partes Diarios", icon: "📝" },
+  { id: "cxc", label: "Cuentas por Cobrar", icon: "📥" },
+  { id: "cxp", label: "Cuentas por Pagar", icon: "📤" },
+  { id: "config", label: "Configuración", icon: "⚙️" }
 ];
 
 // Maquinaria / flota (tabla campo_activos). `activo` bool = estado (Activo/Inactivo).
@@ -2352,16 +2351,7 @@ export function CampoWorkspace({ operationSelector, userName, roleName, apiOnlin
         <nav>
           <div className="navSection" data-group="Campo">
             <button type="button" className="navLabel" style={{ cursor: "default" }}><span>{nombre}</span></button>
-            {CAMPO_SECCIONES.filter((s) => !s.grupo).map((s) => (
-              <button key={s.id} className={seccion === s.id ? "active" : ""} onClick={() => setSeccion(s.id)}>
-                <span style={{ width: 15, display: "inline-block", textAlign: "center" }}>{s.icon}</span>
-                {s.label}
-              </button>
-            ))}
-          </div>
-          <div className="navSection" data-group="Maquinaria">
-            <button type="button" className="navLabel" style={{ cursor: "default" }}><span>🚜 Maquinaria</span></button>
-            {CAMPO_SECCIONES.filter((s) => s.grupo === "maquinaria").map((s) => (
+            {CAMPO_SECCIONES.map((s) => (
               <button key={s.id} className={seccion === s.id ? "active" : ""} onClick={() => setSeccion(s.id)}>
                 <span style={{ width: 15, display: "inline-block", textAlign: "center" }}>{s.icon}</span>
                 {s.label}
