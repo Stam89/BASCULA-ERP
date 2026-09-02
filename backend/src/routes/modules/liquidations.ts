@@ -12,6 +12,10 @@ import { aplicarPagosFomento, generarFomentoSaldoEnContra, revertirPagosFomentoD
 
 export const liquidationsRouter = Router();
 
+// MATRIZ CEYRO (Planta). Las retenciones de Báscula se le acreditan; si el que
+// liquida ES la matriz, no se genera deuda inter-compañía consigo misma.
+const CEYRO_MATRIZ_ID = "00000000-0000-0000-0000-000000000001";
+
 // Columna de bloqueo de edición: las liquidaciones nacen BLOQUEADAS y solo un
 // ADMINISTRADOR puede desbloquearlas (set-lock) para corregir precio o
 // descuentos mal ejecutados. Se crea sola si la base es vieja.
@@ -297,7 +301,39 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
       });
     }
 
-    return { ...liquidation.rows[0], cruce_flete: cruce, fomento_pagos: fomentoPagos, saldo_en_contra: saldoContra };
+    // ── Distribución de retenciones inter-compañías (movimiento INTERNO; NO altera
+    // el bruto/neto del agricultor: esos descuentos ya redujeron su pago). Solo en
+    // la primera línea del lote (donde vienen los descuentos a nivel lote). ──
+    let retenciones: { bascula_matriz: number; cosechadora_campo: number } | null = null;
+    const bascula = data.discount_breakdown?.bascula ?? 0;
+    const cosechadora = data.discount_breakdown?.cosechadora ?? 0;
+    if ((bascula > 0 || cosechadora > 0) && accionistaId && accionistaId !== CEYRO_MATRIZ_ID) {
+      const liqNum = liquidation.rows[0].liquidation_number;
+      // (1) BÁSCULA → Matriz (CEYRO): el socio asume CxP a favor de la Matriz.
+      if (bascula > 0) {
+        await client.query(
+          `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
+           VALUES (NULL, $1, $2, $2, 'CONFIRMED', $3, 'retencion_matriz', $1, $4)`,
+          [liquidation.rows[0].id, bascula, accionistaId, `Retención de Báscula por Liquidación #${liqNum}`]
+        );
+        await client.query(
+          `INSERT INTO accounts_receivable (farmer_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
+           VALUES (NULL, $1, $1, 'CONFIRMED', $2, 'retencion_matriz', $3, $4)`,
+          [bascula, CEYRO_MATRIZ_ID, liquidation.rows[0].id, `Retención de Báscula por Liquidación #${liqNum}`]
+        );
+      }
+      // (2) COSECHADORA → Transporte y Cosechadora (Campo): mismo cruce que los
+      //     fletes (abona un campo_servicio o queda como crédito a favor).
+      if (cosechadora > 0) {
+        await cruzarFleteInterno(client, {
+          accionistaId, monto: cosechadora, activoId: null, referencia: liqNum,
+          conceptoPrefijo: "Cruce cosechadora", createdBy: data.created_by ?? null
+        });
+      }
+      retenciones = { bascula_matriz: bascula, cosechadora_campo: cosechadora };
+    }
+
+    return { ...liquidation.rows[0], cruce_flete: cruce, fomento_pagos: fomentoPagos, saldo_en_contra: saldoContra, retenciones };
   });
 
   res.status(201).json(result);
@@ -313,7 +349,7 @@ liquidationsRouter.get("/", asyncRoute(async (req, res) => {
      FROM liquidations l
      JOIN farmers f ON f.id = l.farmer_id
      LEFT JOIN lots lo ON lo.id = l.lot_id
-     LEFT JOIN accounts_payable ap ON ap.liquidation_id = l.id
+     LEFT JOIN accounts_payable ap ON ap.liquidation_id = l.id AND ap.reference_type IS NULL
      WHERE l.accionista_id = $1
      ORDER BY l.created_at DESC`,
     [accionistaId]
@@ -393,7 +429,7 @@ liquidationsRouter.put("/:id", asyncRoute(async (req, res) => {
     // Mantener la cuenta por pagar al día con la diferencia del neto.
     if (delta !== 0) {
       const ap = await client.query(
-        "SELECT id, balance FROM accounts_payable WHERE liquidation_id = $1 FOR UPDATE",
+        "SELECT id, balance FROM accounts_payable WHERE liquidation_id = $1 AND reference_type IS NULL FOR UPDATE",
         [req.params.id]
       );
       if (ap.rowCount) {
@@ -429,7 +465,7 @@ liquidationsRouter.post("/:id/apply-advances", asyncRoute(async (req, res) => {
     const liq = await client.query(
       `SELECT l.*, ap.id AS ap_id, ap.balance AS ap_balance
        FROM liquidations l
-       LEFT JOIN accounts_payable ap ON ap.liquidation_id = l.id
+       LEFT JOIN accounts_payable ap ON ap.liquidation_id = l.id AND ap.reference_type IS NULL
        WHERE l.id = $1`,
       [req.params.id]
     );
@@ -565,9 +601,10 @@ liquidationsRouter.post("/:id/anular", requireAdmin, asyncRoute(async (req, res)
     if (!liq) throw new ApiError(404, "Liquidación no encontrada");
     if (liq.status === "CANCELLED") throw new ApiError(409, "Esta liquidación ya está anulada.");
 
-    // 1) CxP del agricultor (neto). Si ya tiene pagos, se bloquea la anulación.
+    // 1) CxP del agricultor (neto): es la única SIN reference_type (las internas
+    //    llevan 'fomento_cruce' o 'retencion_matriz'). Si ya tiene pagos, se bloquea.
     const ap = (await client.query(
-      "SELECT id, amount, balance FROM accounts_payable WHERE liquidation_id = $1 AND reference_type IS DISTINCT FROM 'fomento_cruce' FOR UPDATE",
+      "SELECT id, amount, balance FROM accounts_payable WHERE liquidation_id = $1 AND reference_type IS NULL FOR UPDATE",
       [liqId]
     )).rows[0];
     if (ap && round2(Number(ap.balance)) < round2(Number(ap.amount)) - 0.005) {
@@ -592,16 +629,20 @@ liquidationsRouter.post("/:id/anular", requireAdmin, asyncRoute(async (req, res)
     // 3) Revertir pagos de fomento + deuda inter-socios (servicio compartido).
     const fom = await revertirPagosFomentoDeLiquidacion(client, liqId);
 
-    // 4) Revertir el cruce de flete de Campo (si lo hubo): los movimientos llevan
+    // 4) Revertir el cruce de Campo (flete y cosechadora): los movimientos llevan
     //    el número de la liquidación en el concepto. No bloquea si Campo no aplica.
     let fleteRevertido = 0;
     try {
       const del = await client.query(
-        "DELETE FROM campo_movimientos WHERE concepto LIKE $1",
-        [`Cruce flete Flota Propia · ${liq.liquidation_number}%`]
+        "DELETE FROM campo_movimientos WHERE concepto LIKE $1 OR concepto LIKE $2",
+        [`Cruce flete Flota Propia · ${liq.liquidation_number}%`, `Cruce cosechadora · ${liq.liquidation_number}%`]
       );
       fleteRevertido = del.rowCount ?? 0;
     } catch { /* Campo opcional */ }
+
+    // 4b) Revertir la retención de Báscula → Matriz (CxP del socio + CxC de CEYRO).
+    await client.query("DELETE FROM accounts_payable    WHERE reference_type = 'retencion_matriz' AND liquidation_id = $1", [liqId]);
+    await client.query("DELETE FROM accounts_receivable WHERE reference_type = 'retencion_matriz' AND reference_id = $1", [liqId]);
 
     // 5) Revertir el estado del lote si esta liquidación lo había marcado liquidado.
     if (liq.lot_id) {
@@ -641,6 +682,8 @@ liquidationsRouter.delete("/:id", requireAdmin, asyncRoute(async (req, res) => {
       await client.query("DELETE FROM fomentos         WHERE id        = ANY($1::uuid[])", [contras]);
     }
     await client.query("DELETE FROM accounts_receivable WHERE reference_type = 'fomento_cruce' AND reference_id IN (SELECT id FROM fomento_pagos WHERE liquidation_id = $1)", [liqId]);
+    // CxC de la retención de Báscula → Matriz (no cuelga de liquidation_id).
+    await client.query("DELETE FROM accounts_receivable WHERE reference_type = 'retencion_matriz' AND reference_id = $1", [liqId]);
     await client.query("DELETE FROM accounts_payable    WHERE liquidation_id = $1", [liqId]);
     await client.query("DELETE FROM fomento_pagos       WHERE liquidation_id = $1", [liqId]);
     await client.query("DELETE FROM advance_applications WHERE liquidation_id = $1", [liqId]);

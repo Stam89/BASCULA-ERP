@@ -28,14 +28,16 @@ async function cuentaCruceId(client: PoolClient): Promise<string> {
 // preferir el servicio de ese mismo vehículo). `referencia` va en el concepto.
 export async function cruzarFleteInterno(
   client: PoolClient,
-  input: { accionistaId: string | undefined; monto: number; activoId?: string | null; referencia: string; createdBy?: string | null }
+  input: { accionistaId: string | undefined; monto: number; activoId?: string | null; referencia: string; createdBy?: string | null; conceptoPrefijo?: string }
 ): Promise<CruceFleteResultado> {
   const vacio: CruceFleteResultado = { cruzado: 0, abonado_servicios: 0, credito_a_favor: 0, cliente_piladora: null };
   const monto = Math.round(Number(input.monto) * 100) / 100;
   if (!(monto > 0.005) || !input.accionistaId) return vacio;
 
   const cuenta = await cuentaCruceId(client);
-  const concepto = `Cruce flete Flota Propia · ${input.referencia}`;
+  // Prefijo del concepto (p.ej. "Cruce flete Flota Propia" o "Cruce cosechadora").
+  // El número de liquidación en la referencia permite revertirlo al anular.
+  const concepto = `${input.conceptoPrefijo ?? "Cruce flete Flota Propia"} · ${input.referencia}`;
 
   // Cliente-piladora del socio (mismo mapeo por nombre que la integración de báscula).
   const acc = (await client.query("SELECT name FROM accionistas WHERE id = $1", [input.accionistaId])).rows[0];
