@@ -30,5 +30,8 @@ logs/
 # Secreto de firma de sesiones (se genera solo, nunca se versiona)
 .jwt-secret
 
+# API key del endpoint externo de báscula (se genera sola, nunca se versiona)
+.external-api-key
+
 # Carpeta de respaldo previa a sync (no versionar)
 .respaldo-antes-sync-20260805/

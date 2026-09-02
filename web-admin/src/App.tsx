@@ -1295,6 +1295,9 @@ export function App() {
   const [ticketSearch, setTicketSearch] = useState("");
   const [linkTicket, setLinkTicket] = useState<BasculaTicket | null>(null);
   const [linkFarmerId, setLinkFarmerId] = useState("");
+  // Filtro de autocompletado en el modal de vinculación (se precarga con el
+  // nombre externo del ticket para encontrar rápido al agricultor oficial).
+  const [linkFarmerFilter, setLinkFarmerFilter] = useState("");
   const [lotTicket, setLotTicket] = useState<BasculaTicket | null>(null);
   const [lotForm, setLotForm] = useState({ rice_type: "0.11" as "0.11" | "CORRIENTE", ownership: "OWNED" as "OWNED" | "MAQUILA", accionista_id: "", product_id: "", warehouse_id: "" });
   const [liqTicket, setLiqTicket] = useState<BasculaTicket | null>(null);
@@ -3582,13 +3585,31 @@ export function App() {
     if (!linkTicket) return;
     if (!linkFarmerId) { addToast("Selecciona o crea un agricultor", "error"); return; }
     try {
+      const externalName = (linkTicket.farmer_name || "").trim();
+      // Al vincular a un agricultor EXISTENTE cuyo nombre difiere del que mandó la
+      // báscula, ofrecemos guardar ese nombre como alias para homologar futuros
+      // ingresos automáticamente. (Al "Crear" no aplica: el nombre será el mismo.)
+      let guardarAlias = false;
+      if (linkFarmerId !== "__new__" && externalName.length >= 2) {
+        const oficial = farmers.find((f) => f.id === linkFarmerId);
+        const oficialName = (oficial?.full_name || "").trim();
+        if (oficialName && oficialName.toLowerCase() !== externalName.toLowerCase()) {
+          guardarAlias = window.confirm(
+            `¿Deseas guardar “${externalName}” como un alias de “${oficialName}” para vincular automáticamente los próximos ingresos con ese nombre?`
+          );
+        }
+      }
       const body = linkFarmerId === "__new__"
-        ? { full_name: (linkTicket.farmer_name || "").trim() }
-        : { farmer_id: linkFarmerId };
-      await apiPost(`/tickets/${linkTicket.id}/link-farmer`, body);
-      addToast("Ticket vinculado al agricultor", "success");
+        ? { full_name: externalName }
+        : { farmer_id: linkFarmerId, guardar_alias: guardarAlias };
+      const res = await apiPost<{ alias_guardado?: string | null }>(`/tickets/${linkTicket.id}/link-farmer`, body);
+      addToast(
+        res?.alias_guardado ? `Vinculado. Alias “${res.alias_guardado}” guardado.` : "Ticket vinculado al agricultor",
+        "success"
+      );
       setLinkTicket(null);
       setLinkFarmerId("");
+      setLinkFarmerFilter("");
       await Promise.all([refreshBasculaTickets(), refresh()]);
     } catch (e) {
       addToast(`No se pudo vincular: ${e instanceof Error ? e.message : "error"}`, "error");
@@ -6906,11 +6927,23 @@ export function App() {
                     }).map((t) => {
                       const linked = !!t.farmer_id;
                       const liquidated = !!t.liquidated_at;
+                      // Cliente sin homologar: la app externa mandó un nombre que no
+                      // coincide con ningún agricultor ni alias. Se resalta para que
+                      // un operador lo vincule antes de poder ingresarlo.
+                      const desconocido = !linked && !liquidated;
                       return (
-                        <tr key={t.id}>
+                        <tr key={t.id} style={desconocido ? { background: "rgba(220,38,38,0.06)" } : undefined}>
                           <td style={{ fontWeight: 600 }}>#{t.numero ?? "—"}</td>
                           <td style={{ whiteSpace: "nowrap" }}>{t.fecha_app || "—"}</td>
-                          <td>{t.farmer_name || "—"}</td>
+                          <td>
+                            {linked ? (t.farmer_name || "—")
+                              : (
+                                <span style={{ color: "#b91c1c", fontWeight: 600 }} title={`La báscula lo registró como: ${t.farmer_name || "(sin nombre)"}`}>
+                                  ⚠️ Cliente Desconocido
+                                  {t.farmer_name ? <span style={{ display: "block", fontWeight: 400, fontSize: 12, color: "#9ca3af" }}>“{t.farmer_name}”</span> : null}
+                                </span>
+                              )}
+                          </td>
                           <td>{t.placa || "—"}</td>
                           <td className="num">{Number(t.gross_weight).toFixed(0)}</td>
                           <td className="num">{Number(t.tare_weight).toFixed(0)}</td>
@@ -6921,9 +6954,13 @@ export function App() {
                             {t.en_espera ? <span className="chip warn" title="La báscula aún espera el segundo pesaje">En espera 2º pesaje</span>
                               : t.weighing_ticket_id ? <span className="chip ok">Ingresado</span>
                               : liquidated ? <span className="chip ok">Liquidado</span>
+                              : !linked ? <span className="chip danger" title="Falta vincular el cliente">Sin vincular</span>
                               : <span className="chip info">Pendiente</span>}
                           </td>
                           <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
+                            {!t.weighing_ticket_id && !liquidated && !linked && (
+                              <button type="button" className="btnSecondary" onClick={() => { setLinkTicket(t); setLinkFarmerId(""); setLinkFarmerFilter(t.farmer_name || ""); }}>Vincular cliente</button>
+                            )}
                             {!t.en_espera && !t.weighing_ticket_id && !liquidated && linked && (
                               <button type="button" className="btnSecondary" onClick={() => { setLotTicket(t); setLotForm({ rice_type: (t.calidad ?? "").includes("0.11") ? "0.11" : "CORRIENTE", ownership: "OWNED", accionista_id: activeAccionistaId ?? (accionistas[0]?.id ?? ""), product_id: "", warehouse_id: "" }); }}>Ingresar materia prima</button>
                             )}
@@ -14073,11 +14110,26 @@ export function App() {
     </main>
 
     {/* Modal: vincular ticket de báscula a un agricultor */}
-    {linkTicket && (
-      <div className="modalOverlay" onClick={() => setLinkTicket(null)}>
+    {linkTicket && (() => {
+      const filtro = linkFarmerFilter.trim().toLowerCase();
+      const opciones = filtro
+        ? farmers.filter((f) => (f.full_name || "").toLowerCase().includes(filtro))
+        : farmers;
+      return (
+      <div className="modalOverlay" onClick={() => { setLinkTicket(null); setLinkFarmerFilter(""); }}>
         <div className="modalCard" onClick={(e) => e.stopPropagation()}>
           <h3>Vincular ticket #{linkTicket.numero} a un agricultor</h3>
           <p className="muted">En la báscula figura como: <strong>{linkTicket.farmer_name || "(sin nombre)"}</strong></p>
+          <label>
+            <span>Buscar agricultor oficial</span>
+            <input
+              type="text"
+              placeholder="Escribe para filtrar…"
+              value={linkFarmerFilter}
+              onChange={(e) => setLinkFarmerFilter(e.target.value)}
+              autoFocus
+            />
+          </label>
           <label>
             <span>Agricultor</span>
             <select value={linkFarmerId} onChange={(e) => setLinkFarmerId(e.target.value)}>
@@ -14085,16 +14137,20 @@ export function App() {
               {(linkTicket.farmer_name || "").trim().length >= 2 && (
                 <option value="__new__">➕ Crear "{linkTicket.farmer_name}"</option>
               )}
-              {farmers.map((f) => <option key={f.id} value={f.id}>{f.full_name}</option>)}
+              {opciones.map((f) => <option key={f.id} value={f.id}>{f.full_name}</option>)}
             </select>
           </label>
+          {filtro && opciones.length === 0 && (
+            <p className="muted" style={{ marginTop: -4 }}>Sin coincidencias. Borra el filtro para ver todos.</p>
+          )}
           <div className="buttonRow">
             <button type="button" className="primary" onClick={() => submitLinkFarmer().catch((e) => addToast(e.message, "error"))}>Vincular</button>
-            <button type="button" onClick={() => setLinkTicket(null)}>Cancelar</button>
+            <button type="button" onClick={() => { setLinkTicket(null); setLinkFarmerFilter(""); }}>Cancelar</button>
           </div>
         </div>
       </div>
-    )}
+      );
+    })()}
 
     {/* Modal: crear lote desde ticket de báscula */}
     {lotTicket && (

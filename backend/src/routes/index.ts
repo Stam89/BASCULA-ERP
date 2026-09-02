@@ -39,6 +39,7 @@ import { purchasesRouter } from "./modules/purchases.js";
 import { costosRouter } from "./modules/costos.js";
 import { cobrosRouter } from "./modules/cobros.js";
 import { campoRouter } from "./modules/campo.js";
+import { externalRouter } from "./modules/external.js";
 
 export const routes = Router();
 
@@ -49,6 +50,8 @@ routes.use(auditMiddleware);
 // Rutas públicas: login/bootstrap y sincronización de la app Android (no envía token)
 routes.use("/auth", authRouter);
 routes.use("/tickets", mobileTicketsRouter);
+// API para la app EXTERNA de báscula: protegida por API Key propia (no por sesión).
+routes.use("/external", externalRouter);
 
 // Todo lo demás requiere sesión (Bearer token). Las escrituras además
 // exigen permiso del módulo correspondiente (los administradores no tienen límite).

@@ -51,9 +51,28 @@ function loadDatabaseUrl(): string {
   return "postgres://postgres:postgres@localhost:5432/bascula_erp";
 }
 
+// API key para el endpoint externo (/api/v1/external/*) que consume la app de
+// báscula. Si no se define EXTERNAL_API_KEY en el .env, se genera una y se guarda
+// en backend/.external-api-key (fuera de git); se muestra en consola para poder
+// copiarla a la app. Así el endpoint nunca queda sin protección.
+function loadExternalApiKey(): string {
+  const fromEnv = process.env.EXTERNAL_API_KEY;
+  if (fromEnv && fromEnv.length >= 16) return fromEnv;
+  const keyFile = path.join(backendDir, ".external-api-key");
+  try {
+    const existing = fs.readFileSync(keyFile, "utf8").trim();
+    if (existing.length >= 16) return existing;
+  } catch { /* se crea abajo */ }
+  const generated = crypto.randomBytes(24).toString("hex");
+  fs.writeFileSync(keyFile, generated, { encoding: "utf8" });
+  console.warn(`[external] EXTERNAL_API_KEY no configurada: se generó una nueva en backend/.external-api-key → ${generated}`);
+  return generated;
+}
+
 export const env = {
   port: Number(process.env.PORT ?? 4000),
   databaseUrl: loadDatabaseUrl(),
   jwtSecret: loadJwtSecret(),
+  externalApiKey: loadExternalApiKey(),
   corsOrigins
 };

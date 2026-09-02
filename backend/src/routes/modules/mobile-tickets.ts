@@ -24,22 +24,32 @@ function stableUuid(key: string): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-${variant}${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
-// Busca un agricultor por nombre (sin distinguir mayúsculas/espacios) y lo crea
-// si no existe. Evita duplicados al vincular tickets de báscula.
-async function findOrCreateFarmer(
-  name: string,
-  accionistaId: string | null = null
-): Promise<{ id: string; accionista_id: string | null }> {
-  const existing = await pool.query(
+// Homologación de nombres: la app EXTERNA de báscula manda el nombre tal cual lo
+// escribió el balancero (con typos: "AIDITA" por "AIDITHA"). NO creamos agricultores
+// automáticamente. Resolvemos así:
+//   1) coincidencia exacta en farmers.full_name  → ese agricultor
+//   2) coincidencia en agricultor_alias          → el agricultor oficial mapeado
+//   3) nada                                       → null (ticket "Pendiente de Vincular")
+async function resolveFarmerHomologado(
+  name: string
+): Promise<{ id: string; accionista_id: string | null } | null> {
+  const clean = (name ?? "").trim();
+  if (clean.length < 2) return null;
+  const exact = await pool.query(
     "SELECT id, accionista_id FROM farmers WHERE lower(trim(full_name)) = lower(trim($1)) ORDER BY created_at ASC LIMIT 1",
-    [name]
+    [clean]
   );
-  if (existing.rowCount) return existing.rows[0];
-  const created = await pool.query(
-    "INSERT INTO farmers (full_name, accionista_id) VALUES (trim($1), $2) RETURNING id, accionista_id",
-    [name, accionistaId]
+  if (exact.rowCount) return exact.rows[0];
+  const alias = await pool.query(
+    `SELECT f.id, f.accionista_id
+       FROM agricultor_alias a
+       JOIN farmers f ON f.id = a.agricultor_id
+      WHERE lower(trim(a.alias_nombre)) = lower(trim($1))
+      LIMIT 1`,
+    [clean]
   );
-  return created.rows[0];
+  if (alias.rowCount) return alias.rows[0];
+  return null;
 }
 
 // Formato NATIVO de la app de báscula (com.example.bascula).
@@ -317,9 +327,13 @@ mobileTicketsRouter.get("/", requireAuth, resolveAccionista, asyncRoute(async (r
 // elige al crear el lote.
 mobileTicketsRouter.post("/:id/link-farmer", requireAuth, resolveAccionista, asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const userId = (req as AuthenticatedRequest).user?.id ?? null;
   const body = z.object({
     farmer_id: z.string().uuid().optional(),
-    full_name: z.string().optional()
+    full_name: z.string().optional(),
+    // Si es true, el nombre externo del ticket (farmer_name) se guarda como alias
+    // del agricultor vinculado, para homologar automáticamente futuros ingresos.
+    guardar_alias: z.boolean().optional().default(false)
   }).parse(req.body);
 
   let farmerId = body.farmer_id;
@@ -368,7 +382,33 @@ mobileTicketsRouter.post("/:id/link-farmer", requireAuth, resolveAccionista, asy
      RETURNING id, farmer_id, farmer_name, accionista_id`,
     [req.params.id, farmerId, targetAccionista]
   );
-  res.json(updated.rows[0]);
+
+  // Homologación: guardar el nombre externo del ticket como alias del agricultor
+  // oficial, para que futuros ingresos con ese mismo nombre se vinculen solos.
+  let aliasGuardado: string | null = null;
+  const externalName = (updated.rows[0]?.farmer_name ?? "").trim();
+  if (body.guardar_alias && externalName.length >= 2) {
+    // No guardar como alias un nombre que YA es el del agricultor (sería redundante).
+    const same = await pool.query(
+      "SELECT 1 FROM farmers WHERE id = $1 AND lower(trim(full_name)) = lower(trim($2))",
+      [farmerId, externalName]
+    );
+    if (!same.rowCount) {
+      // ON CONFLICT sobre el índice único normalizado: si el alias ya existe se
+      // reapunta al agricultor recién elegido (corrige un mapeo previo).
+      const ins = await pool.query(
+        `INSERT INTO agricultor_alias (alias_nombre, agricultor_id, created_by)
+         VALUES (trim($1), $2, $3)
+         ON CONFLICT (lower(trim(alias_nombre)))
+         DO UPDATE SET agricultor_id = EXCLUDED.agricultor_id, created_by = EXCLUDED.created_by
+         RETURNING alias_nombre`,
+        [externalName, farmerId, userId]
+      );
+      aliasGuardado = ins.rows[0]?.alias_nombre ?? null;
+    }
+  }
+
+  res.json({ ...updated.rows[0], alias_guardado: aliasGuardado });
 }));
 
 // Ingresa la materia prima de un ticket de báscula: registra el pesaje y mete
@@ -604,10 +644,12 @@ export async function importBasculaTickets(
     const quintals = t.totalQQ ?? (t.calificacion > 0 ? calculateQuintals(netWeight, t.calificacion) : 0);
     const ts = t.actualizadoEn ?? Date.now();
 
-    // El cliente que viene de la báscula es el agricultor: se vincula solo.
+    // El cliente que viene de la app externa de báscula puede traer typos. Se
+    // homologa (exact → alias) SIN crear agricultores: si no se reconoce, el
+    // ticket queda con farmer_id = null ("Pendiente de Vincular") para que un
+    // operador lo enlace manualmente desde el ERP.
     const clienteName = (t.cliente || "").trim();
-    let farmer: { id: string; accionista_id: string | null } | null = null;
-    if (clienteName.length >= 2) farmer = await findOrCreateFarmer(clienteName);
+    const farmer = await resolveFarmerHomologado(clienteName);
 
     await pool.query(
       `INSERT INTO mobile_synced_tickets (
