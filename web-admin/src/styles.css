@@ -2807,3 +2807,23 @@ body {
 
 /* Punto de "grupo colapsado con pestaña activa" también en su color. */
 .navDot { background: var(--grupo, var(--c-brand-light)); box-shadow: 0 0 6px var(--grupo, var(--c-brand-light)); }
+
+/* ── Segmented control (pestañas Servicios de Campo) ────────────────────────── */
+.segmented { display: inline-flex; background: #f1f3f5; border-radius: 10px; padding: 3px; gap: 2px; }
+.segmented button { border: none; background: transparent; padding: 6px 16px; border-radius: 8px;
+  font-size: 13px; font-weight: 600; color: var(--c-text-2); cursor: pointer; transition: all .15s; white-space: nowrap; }
+.segmented button:hover { color: var(--c-text); }
+.segmented button.active { background: var(--c-surface); color: var(--c-text); box-shadow: 0 1px 2px rgba(0,0,0,.10); }
+
+/* ── Nuevo Servicio — formulario minimalista ────────────────────────────────── */
+.svcForm .svcSection { padding-top: 14px; margin-top: 14px; border-top: 1px solid var(--c-border); }
+.svcForm .svcSection:first-of-type { padding-top: 0; margin-top: 4px; border-top: none; }
+.svcForm .svcSectionHd { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--c-muted); margin-bottom: 10px; font-weight: 700; }
+.svcForm label { margin: 0; gap: 4px; }
+.svcForm input, .svcForm select { background: #f9fafb; border: 1.5px solid transparent; box-shadow: inset 0 0 0 1px #eceef1; }
+.svcForm input:focus, .svcForm select:focus { background: var(--c-surface); border-color: transparent; box-shadow: 0 0 0 3px rgba(99,102,241,.18); }
+.svcForm .svcHelp { font-size: 11px; color: #9ca3af; margin-top: 2px; display: block; }
+.svcForm .svcGrid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.svcForm .svcGrid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+.svcForm .svcValor input { font-weight: 700; }
+@media (max-width: 560px) { .svcForm .svcGrid2, .svcForm .svcGrid3 { grid-template-columns: 1fr; } }

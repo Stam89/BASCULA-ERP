@@ -240,12 +240,14 @@ export default function CampoModule({ section = "caja", nombre, onNombreChange }
     return (
       <section className="panelGrid">
         <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-          <h2 style={{ marginBottom: 2 }}>🚜 Servicios <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· cosecha y flete + abonos</span></h2>
-          <nav className="cajaSubNav" style={{ borderBottom: "none" }}>
-            {([["servicio", "➕ Nuevo servicio"], ["abono", "💵 Abono"], ["lista", "📋 Lista"]] as Array<["servicio" | "abono" | "lista", string]>).map(([v, label]) => (
-              <button key={v} type="button" className={servTab === v ? "active" : ""} onClick={() => setServTab(v)}>{label}</button>
-            ))}
-          </nav>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <h2 style={{ margin: 0 }}>🚜 Servicios <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· cosecha y flete</span></h2>
+            <div className="segmented">
+              {([["servicio", "Nuevo servicio"], ["abono", "Abono"], ["lista", "Lista"]] as Array<["servicio" | "abono" | "lista", string]>).map(([v, label]) => (
+                <button key={v} type="button" className={servTab === v ? "active" : ""} onClick={() => setServTab(v)}>{label}</button>
+              ))}
+            </div>
+          </div>
           {flashEl}
         </div>
         {servTab === "servicio" && (
@@ -1901,6 +1903,9 @@ function ServicioForm({ activos, onSaved, onError }: {
   const [f, setF] = useState({ fecha: hoy(), activo_id: "", tipo: "cosecha" as "cosecha" | "flete", qq: "", precio_unitario: "", valor: "", notas: "" });
   const [cliente, setCliente] = useState<Cliente | null>(null);
   const [busy, setBusy] = useState(false);
+  // El Valor se auto-calcula (QQ × Precio) mientras no se edite a mano; al editarlo
+  // queda como override (flete de valor fijo acordado).
+  const [valorTouched, setValorTouched] = useState(false);
   // Importar/liquidar un Parte Diario pendiente.
   const [partes, setPartes] = useState<PartePendiente[]>([]);
   const [parteId, setParteId] = useState("");
@@ -1910,10 +1915,14 @@ function ServicioForm({ activos, onSaved, onError }: {
   }, []);
   useEffect(() => { cargarPartes(); }, [cargarPartes]);
 
-  const valorCalc = useMemo(() => {
-    const qq = Number(f.qq), pu = Number(f.precio_unitario);
-    return qq > 0 && pu > 0 ? Math.round(qq * pu * 100) / 100 : null;
-  }, [f.qq, f.precio_unitario]);
+  // Valor auto = QQ × Precio (2 decimales) o "" si falta alguno.
+  const calcValor = (qq: string, pu: string): string => {
+    const n = Number(qq) * Number(pu);
+    return qq.trim() !== "" && pu.trim() !== "" && n > 0 ? (Math.round(n * 100) / 100).toFixed(2) : "";
+  };
+  const setQq = (qq: string) => setF((p) => ({ ...p, qq, valor: valorTouched ? p.valor : calcValor(qq, p.precio_unitario) }));
+  const setPu = (pu: string) => setF((p) => ({ ...p, precio_unitario: pu, valor: valorTouched ? p.valor : calcValor(p.qq, pu) }));
+  const setValor = (v: string) => { setValorTouched(true); setF((p) => ({ ...p, valor: v })); };
 
   // Al elegir un parte: autocompleta fecha/máquina/QQ, resuelve/crea el cliente y
   // guarda el parte_id. El precio unitario lo ingresa el usuario (o ajuste manual).
@@ -1925,6 +1934,7 @@ function ServicioForm({ activos, onSaved, onError }: {
     try {
       const c = await apiPost<Cliente>("/campo/clientes", { nombre: p.cliente });
       setCliente(c);
+      setValorTouched(false);
       setF((prev) => ({ ...prev, fecha: String(p.fecha).slice(0, 10), activo_id: p.activo_id, tipo: "cosecha", qq: String(p.qq), valor: "" }));
     } catch (e) { onError((e as Error).message); }
   }
@@ -1938,72 +1948,85 @@ function ServicioForm({ activos, onSaved, onError }: {
       const qq = f.qq ? Number(f.qq) : null;
       const pu = f.precio_unitario ? Number(f.precio_unitario) : null;
       const valorManual = f.valor ? Number(f.valor) : undefined;
-      if (valorCalc == null && (valorManual == null || !(valorManual >= 0))) {
+      // Si hay QQ y Precio y NO se sobreescribió el valor → el backend lo calcula.
+      // Si se sobreescribió (o falta QQ/Precio) → se manda el valor a mano.
+      const usarCalculo = !valorTouched && qq != null && qq > 0 && pu != null && pu > 0;
+      if (!usarCalculo && (valorManual == null || !(valorManual >= 0))) {
         throw new Error("Ingresa el valor, o el QQ y el precio unitario");
       }
       await apiPost("/campo/servicios", {
         fecha: f.fecha, cliente_id: cliente.id, activo_id: f.activo_id, tipo: f.tipo,
-        qq: qq ?? undefined, precio_unitario: pu ?? undefined,
-        valor: valorCalc == null ? valorManual : undefined,
+        qq: usarCalculo ? qq : undefined, precio_unitario: usarCalculo ? pu : undefined,
+        valor: usarCalculo ? undefined : valorManual,
         notas: f.notas.trim() || undefined,
         parte_id: parteId || undefined
       });
       setF({ fecha: f.fecha, activo_id: f.activo_id, tipo: f.tipo, qq: "", precio_unitario: "", valor: "", notas: "" });
-      setCliente(null); setParteId("");
+      setCliente(null); setParteId(""); setValorTouched(false);
       await Promise.all([onSaved(), cargarPartes()]);
     } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
   }
 
   return (
-    <form className="formPanel" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-      <h2>🚜 Nuevo servicio</h2>
-      {/* Importar un Parte Diario pendiente (opcional). Autollena y lo liquida. */}
-      <label><span>📋 Seleccionar Parte Diario pendiente (opcional)</span>
-        <select value={parteId} onChange={(e) => elegirParte(e.target.value)}>
-          <option value="">— Registro manual (sin parte) —</option>
-          {partes.map((p) => (
-            <option key={p.id} value={p.id}>
-              {String(p.fecha).slice(0, 10)} · {p.activo_nombre} · {p.cliente}{p.operador ? ` · ${p.operador}` : ""} · {p.qq} QQ
-            </option>
-          ))}
-        </select>
-      </label>
-      {parteId && (
-        <p className="muted" style={{ marginTop: -4, fontSize: 12 }}>
-          Al guardar se liquidará el parte (pasa a <strong>Cobro generado</strong>). <span style={{ cursor: "pointer", color: "#2563eb" }} onClick={quitarParte}>✕ quitar parte</span>
-        </p>
-      )}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <label><span>Fecha</span><input type="date" value={f.fecha} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
-        <label><span>Tipo</span>
-          <select value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value as "cosecha" | "flete" })}>
-            <option value="cosecha">Cosecha</option>
-            <option value="flete">Flete</option>
+    <form className="formPanel svcForm" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+      {/* ── Sección 1 · Operación ── */}
+      <div className="svcSection">
+        <div className="svcSectionHd">Operación</div>
+        <label>
+          <span>Parte Diario pendiente</span>
+          <select value={parteId} onChange={(e) => elegirParte(e.target.value)}>
+            <option value="">— Registro manual (sin parte) —</option>
+            {partes.map((p) => (
+              <option key={p.id} value={p.id}>
+                {String(p.fecha).slice(0, 10)} · {p.activo_nombre} · {p.cliente}{p.operador ? ` · ${p.operador}` : ""} · {p.qq} QQ
+              </option>
+            ))}
+          </select>
+          {parteId
+            ? <small className="svcHelp">Al guardar se liquida el parte. <span style={{ cursor: "pointer", color: "#2563eb" }} onClick={quitarParte}>✕ quitar</span></small>
+            : <small className="svcHelp">Opcional · autollena y liquida el parte al guardar</small>}
+        </label>
+
+        <div className="svcGrid2">
+          <label><span>Fecha</span><input type="date" value={f.fecha} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
+          <label><span>Tipo</span>
+            <select value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value as "cosecha" | "flete" })}>
+              <option value="cosecha">Cosecha</option>
+              <option value="flete">Flete</option>
+            </select>
+          </label>
+        </div>
+
+        <ClientePicker value={cliente} onChange={setCliente} onError={onError} />
+
+        <label><span>Cosechadora / Transporte</span>
+          <select value={f.activo_id} onChange={(e) => setF({ ...f, activo_id: e.target.value })}>
+            <option value="">Seleccione</option>
+            {activos.map((a) => <option key={a.id} value={a.id}>{a.nombre} · {a.tipo}</option>)}
           </select>
         </label>
       </div>
-      <ClientePicker value={cliente} onChange={setCliente} onError={onError} />
-      <label><span>Cosechadora / Transporte</span>
-        <select value={f.activo_id} onChange={(e) => setF({ ...f, activo_id: e.target.value })}>
-          <option value="">Seleccione</option>
-          {activos.map((a) => <option key={a.id} value={a.id}>{a.nombre} · {a.tipo}</option>)}
-        </select>
-      </label>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <label><span>QQ (opcional)</span><input type="number" step="0.01" min="0" value={f.qq} onChange={(e) => setF({ ...f, qq: e.target.value })} placeholder="Ej: 120" /></label>
-        <label><span>Precio unitario (opcional)</span><input type="number" step="0.0001" min="0" value={f.precio_unitario} onChange={(e) => setF({ ...f, precio_unitario: e.target.value })} placeholder="Ej: 1.50" /></label>
-      </div>
-      {valorCalc != null ? (
-        <div className="totalBox" style={{ background: "#eff6ff", borderColor: "#bfdbfe" }}>
-          <span>VALOR (calculado = QQ × precio)</span>
-          <strong>{money(valorCalc)}</strong>
+
+      {/* ── Sección 2 · Cobro (QQ × Precio = Valor, en una línea) ── */}
+      <div className="svcSection">
+        <div className="svcSectionHd">Cobro</div>
+        <div className="svcGrid3">
+          <label><span>QQ</span>
+            <input type="number" step="0.01" min="0" value={f.qq} onChange={(e) => setQq(e.target.value)} />
+            <small className="svcHelp">Ej: 120</small>
+          </label>
+          <label><span>Precio unitario</span>
+            <input type="number" step="0.0001" min="0" value={f.precio_unitario} onChange={(e) => setPu(e.target.value)} />
+            <small className="svcHelp">Ej: 1.50</small>
+          </label>
+          <label className="svcValor"><span>Valor del servicio $</span>
+            <input type="number" step="0.01" min="0" value={f.valor} onChange={(e) => setValor(e.target.value)} />
+            <small className="svcHelp">{valorTouched ? "Valor fijo (manual)" : (f.valor ? "= QQ × precio · editable" : "Ingresar a mano")}</small>
+          </label>
         </div>
-      ) : (
-        <label><span>Valor del servicio $ <span style={{ color: "#ef4444" }}>*</span></span>
-          <input type="number" step="0.01" min="0" value={f.valor} onChange={(e) => setF({ ...f, valor: e.target.value })} placeholder="Ingresar a mano (flete varía)" />
-        </label>
-      )}
-      <label><span>Notas (opcional)</span><input type="text" value={f.notas} onChange={(e) => setF({ ...f, notas: e.target.value })} /></label>
+        <label><span>Notas (opcional)</span><input type="text" value={f.notas} onChange={(e) => setF({ ...f, notas: e.target.value })} /></label>
+      </div>
+
       <button className="primary" disabled={busy}>{busy ? "Guardando…" : "Registrar servicio"}</button>
     </form>
   );
