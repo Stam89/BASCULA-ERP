@@ -9,6 +9,23 @@ import { type AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const sacksRouter = Router();
 
+// REGLA DE NEGOCIO: solo la MATRIZ (CEYRO / Planta) posee y maneja el stock de
+// sacos; los socios operativos no compran ni mueven empaques. Toda ESCRITURA de
+// sacos (entradas/salidas/ajustes/compras) debe hacerse bajo el contexto de la
+// matriz. Si el accionista activo no es MATRIZ, se rechaza. Las LECTURAS quedan
+// abiertas (p. ej. el indicador de stock de la matriz en el reporte de pilado).
+async function assertMatriz(req: AuthenticatedRequest): Promise<void> {
+  const accionistaId = req.accionistaId ?? null;
+  if (!accionistaId) throw new ApiError(400, "Selecciona un accionista antes de continuar.");
+  const r = await pool.query("SELECT tipo FROM accionistas WHERE id = $1", [accionistaId]);
+  if (r.rows[0]?.tipo !== "MATRIZ") {
+    throw new ApiError(
+      403,
+      "El inventario de sacos es exclusivo de la Matriz (CEYRO / Planta). Cámbiate al contexto de la Matriz para registrar movimientos de empaques."
+    );
+  }
+}
+
 // GET todos los tipos de sacos con stock actual
 sacksRouter.get("/", asyncRoute(async (_req, res) => {
   const result = await pool.query(
@@ -45,6 +62,7 @@ sacksRouter.get("/movements/recent", asyncRoute(async (_req, res) => {
 
 // POST registrar movimiento (entrada o salida)
 sacksRouter.post("/movements", asyncRoute(async (req, res) => {
+  await assertMatriz(req as AuthenticatedRequest);
   const body = z.object({
     sack_id:  z.string().uuid(),
     movement: z.enum(["ENTRADA", "SALIDA"]),
@@ -88,6 +106,7 @@ sacksRouter.post("/movements", asyncRoute(async (req, res) => {
 
 // PATCH ajuste manual de stock
 sacksRouter.patch("/:id/adjust", asyncRoute(async (req, res) => {
+  await assertMatriz(req as AuthenticatedRequest);
   const body = z.object({ stock: z.number().int().nonnegative() }).parse(req.body);
   const result = await pool.query(
     "UPDATE sack_inventory SET stock = $2, updated_at = NOW() WHERE id = $1 RETURNING *",
@@ -121,6 +140,7 @@ sacksRouter.post("/purchases", asyncRoute(async (req, res) => {
   // Permisos: la compra mueve inventario Y genera egreso de dinero, por eso
   // exige Caja ADEMAS de Inventario/Produccion. El administrador no tiene limite.
   const authReq = req as AuthenticatedRequest;
+  await assertMatriz(authReq);
   const user = authReq.user;
   if (!user) throw new ApiError(401, "Sesion requerida");
   const perm = await pool.query(

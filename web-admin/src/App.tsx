@@ -8352,7 +8352,11 @@ export function App() {
                 rows={byproductStockRows.map((row) => [row.product_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
               />
 
-              {/* ── Inventario de Sacos (cuarto cuadrante, balancea el grid) ── */}
+              {/* ── Inventario de Sacos (cuarto cuadrante, balancea el grid) ──
+                  Los sacos son propiedad EXCLUSIVA de la Matriz (CEYRO). Un socio
+                  operativo no maneja empaques: se oculta por completo (tabla +
+                  formulario de movimientos). Solo visible en contexto Matriz. */}
+              {esCeyroActivo && (
               <section style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
                 <h3 style={{ marginTop: 0, marginBottom: 14 }}>📦 Inventario de Sacos</h3>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 8, marginBottom: 14 }}>
@@ -8401,6 +8405,7 @@ export function App() {
                   </button>
                 </form>
               </section>
+              )}
             </div>
 
             {otherStockRows.length > 0 && (
