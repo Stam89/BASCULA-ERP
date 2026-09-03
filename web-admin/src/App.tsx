@@ -234,7 +234,7 @@ type WorkerPaymentDetail = {
 };
 
 type CuadrillaActivity = { id: string; name: string; unit_rate: number; is_active: boolean; categoria?: string };
-type CuadrillaEntry = { id: string; work_date: string; activity_name: string; worker_name: string; quantity: number; unit_rate: number; subtotal: number; origen?: string; referencia_id?: string | null; tunnel_number?: number | null; momento?: string | null };
+type CuadrillaEntry = { id: string; work_date: string; activity_id?: string | null; activity_name: string; worker_name: string; quantity: number; unit_rate: number; subtotal: number; origen?: string; referencia_id?: string | null; tunnel_number?: number | null; momento?: string | null };
 type CuadrillaSummaryRow = { worker_name: string; entradas: number; total: number; anticipos: number; neto: number };
 type CuadrillaAdvance = { id: string; worker_name: string; amount: number; balance: number; concept: string | null; status: string; issued_at: string };
 
@@ -1233,10 +1233,6 @@ export function App() {
   const [lots, setLots] = useState<Lot[]>([]);
   const [availableDryingLots, setAvailableDryingLots] = useState<MateriaPrimaEntry[]>([]);
   const [dryingReports, setDryingReports] = useState<DryingTunnelReport[]>([]);
-  // Pago automático de cuadrilla desde Secadoras: labores de túnel y cuadrillas
-  // conocidas, para los selects opcionales del formulario de llenado/vaciado.
-  const [secadoraLabores, setSecadoraLabores] = useState<CuadrillaActivity[]>([]);
-  const [cuadrillaCrews, setCuadrillaCrews] = useState<string[]>([]);
   const [liquidacionesList, setLiquidacionesList] = useState<LiqRecord[]>([]);
   const [stock, setStock] = useState<StockRow[]>([]);
   const [insumos, setInsumos] = useState<Insumo[]>([]);
@@ -1451,7 +1447,15 @@ export function App() {
   const [cuadSummary, setCuadSummary] = useState<{ rows: CuadrillaSummaryRow[]; total_general: number; total_anticipos: number; total_neto: number } | null>(null);
   const [cuadAdvances, setCuadAdvances] = useState<CuadrillaAdvance[]>([]);
   const [cuadView, setCuadView] = useState<"registro" | "resumen" | "actividades">("registro");
+  // Detección + registro AUTOMÁTICO de labores de túnel (Recepción/Botada).
+  const [cuadWorkers, setCuadWorkers] = useState<string[]>([]);           // cuadrillas del sistema
+  const [cuadDetectMsg, setCuadDetectMsg] = useState<string | null>(null); // resultado del último "Detectar"
+  const [cuadBatchWorker, setCuadBatchWorker] = useState("");             // cuadrilla elegida si hay varias
+  const [cuadNeedsWorker, setCuadNeedsWorker] = useState(false);          // mostrar selector cuando hay varias
+  const [cuadGroupModalOpen, setCuadGroupModalOpen] = useState(false);    // pop-up de creación rápida de cuadrilla
+  const [cuadGroupName, setCuadGroupName] = useState("");
   const [cuadEntryForm, setCuadEntryForm] = useState({ work_date: nominaToday, activity_id: "", worker_name: "", quantity: "", anticipo: "" });
+  const [editingCuadId, setEditingCuadId] = useState<string | null>(null); // id del registro manual en edición
   const [cuadAdvanceForm, setCuadAdvanceForm] = useState({ worker_name: "", amount: "", concept: "" });
   const [newActivityForm, setNewActivityForm] = useState({ name: "", unit_rate: "" });
 
@@ -2835,6 +2839,58 @@ export function App() {
   }
 
   // ── Cuadrilla ─────────────────────────────────────────────────────────────
+  // Etiqueta amigable de la labor de túnel según el momento.
+  function labelMomento(momento: string, tunnel: number) {
+    return momento === "VACIADO" ? `Botada Túnel ${tunnel}` : `Recepción Túnel ${tunnel}`;
+  }
+
+  // Creación rápida de una cuadrilla (solo el nombre): queda disponible al
+  // instante en el selector de la alerta, sin bajar al formulario manual.
+  async function createCuadGroup() {
+    const name = cuadGroupName.trim();
+    if (name.length < 2) { addToast("Escribe el nombre de la cuadrilla", "error"); return; }
+    await apiPost("/cuadrilla/groups", { name });
+    const workers = await apiGet<string[]>("/cuadrilla/workers").catch(() => cuadWorkers);
+    setCuadWorkers(workers);
+    setCuadGroupName("");
+    setCuadGroupModalOpen(false);
+    addToast(`Cuadrilla "${name}" creada`, "success");
+  }
+
+  // AUTOMATIZACIÓN 100%: detecta TODOS los túneles nuevos del período (Recepción
+  // y Botada) y los registra automáticamente a la cuadrilla activa, generando el
+  // pago (QQ × tarifa). Caen directo a "Registros del período". Sin cola de
+  // pendientes. Si hay 0 cuadrillas, abre el pop-up de crear; si hay varias, pide
+  // elegir una para todo el lote.
+  async function detectarYRegistrar() {
+    const workers = await apiGet<string[]>("/cuadrilla/workers").catch(() => [] as string[]);
+    setCuadWorkers(workers);
+    if (workers.length === 0) {
+      setCuadDetectMsg(null);
+      addToast("Primero crea una cuadrilla para registrar los túneles.", "error");
+      setCuadGroupName(""); setCuadGroupModalOpen(true);
+      return;
+    }
+    const worker = workers.length === 1 ? workers[0] : cuadBatchWorker.trim();
+    if (!worker) {
+      setCuadNeedsWorker(true);
+      addToast("Hay varias cuadrillas: elige a cuál registrar los túneles.", "error");
+      return;
+    }
+    const res = await apiPost<{ created: number; worker_name: string; sin_tarifa: string[] }>(
+      "/cuadrilla/tunnel-autoprocess", { from: cuadFrom, to: cuadTo, worker_name: worker }
+    );
+    setCuadNeedsWorker(false);
+    await refreshCuadrilla();
+    if (res.created > 0) {
+      setCuadDetectMsg(`✔️ ${res.created} labor(es) de túnel registrada(s) a «${res.worker_name}». Ya están abajo en Registros del período.`);
+      addToast(`${res.created} labor(es) de túnel registrada(s) a ${res.worker_name}`, "success");
+    } else {
+      setCuadDetectMsg("Sin túneles nuevos por registrar en el período.");
+    }
+    if (res.sin_tarifa?.length) addToast(`Falta configurar la tarifa de: ${res.sin_tarifa.join(", ")}`, "error");
+  }
+
   async function refreshCuadrilla() {
     try {
       const [acts, entries, summary, advances] = await Promise.all([
@@ -2862,6 +2918,20 @@ export function App() {
     // El anticipo/adelanto se registra como un ADELANTO real de la cuadrilla (mismo
     // endpoint que "Resumen y anticipos"), así el neto a pagar ya lo descuenta.
     // Requiere nombre del trabajador para poder asociarlo.
+    // Edición de un registro MANUAL existente: solo actualiza (sin anticipo).
+    if (editingCuadId) {
+      await apiPut(`/cuadrilla/entries/${editingCuadId}`, {
+        work_date: cuadEntryForm.work_date,
+        activity_id: cuadEntryForm.activity_id,
+        worker_name: cuadEntryForm.worker_name.trim(),
+        quantity: qty
+      });
+      setEditingCuadId(null);
+      setCuadEntryForm({ ...cuadEntryForm, activity_id: "", worker_name: "", quantity: "", anticipo: "" });
+      addToast("Registro actualizado", "success");
+      await refreshCuadrilla();
+      return;
+    }
     if (anticipo > 0 && cuadEntryForm.worker_name.trim().length < 2) {
       addToast("Para registrar un anticipo, indica la cuadrilla/trabajador", "error");
       return;
@@ -2882,6 +2952,27 @@ export function App() {
     setCuadEntryForm({ ...cuadEntryForm, worker_name: "", quantity: "", anticipo: "" });
     addToast(anticipo > 0 ? "Registro + anticipo agregados" : "Registro agregado", "success");
     await refreshCuadrilla();
+  }
+
+  // Carga un registro MANUAL en el formulario para editarlo. Los automáticos no.
+  function editCuadEntry(en: CuadrillaEntry) {
+    if (en.origen === "SECADORA") { avisoRegistroAuto(); return; }
+    setEditingCuadId(en.id);
+    setCuadEntryForm({
+      work_date: String(en.work_date).slice(0, 10),
+      activity_id: en.activity_id ?? "",
+      worker_name: en.worker_name ?? "",
+      quantity: String(en.quantity ?? ""),
+      anticipo: ""
+    });
+  }
+  function cancelEditCuad() {
+    setEditingCuadId(null);
+    setCuadEntryForm({ ...cuadEntryForm, activity_id: "", worker_name: "", quantity: "", anticipo: "" });
+  }
+  // Mensaje al intentar tocar un registro automático de Secadoras.
+  function avisoRegistroAuto() {
+    addToast("Este registro proviene de Secadoras. Para modificar los quintales, edite el túnel directamente.", "error");
   }
 
   async function deleteCuadEntry(id: string) {
@@ -4053,7 +4144,7 @@ export function App() {
     if (activeTab === "Por Pagar") refreshPayables().catch(() => undefined);
     // Secadoras y Nómina necesitan las tarifas (precios de gas/diesel).
     if (activeTab === "Secadoras" || activeTab === "Nomina") loadLaborRates().catch(() => undefined);
-    if (activeTab === "Secadoras") { loadMotorActive(motorActivo).catch(() => undefined); loadSecadoraCuadrilla().catch(() => undefined); }
+    if (activeTab === "Secadoras") loadMotorActive(motorActivo).catch(() => undefined);
     if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
     if (activeTab === "Cuadrilla") refreshCuadrilla().catch(() => undefined);
     if (activeTab === "Servicio Pilado") { refreshPilado().catch(() => undefined); refreshCobros().catch(() => undefined); }
@@ -5166,46 +5257,6 @@ export function App() {
     setMessage("Formulario listo para nuevo secado");
   }
 
-  // Carga las labores de secadora (categoría SECADORA) y las cuadrillas conocidas
-  // para los selects opcionales de pago automático en el formulario de secado.
-  async function loadSecadoraCuadrilla() {
-    const [labores, crews] = await Promise.all([
-      apiGet<CuadrillaActivity[]>("/cuadrilla/activities?categoria=SECADORA").catch(() => [] as CuadrillaActivity[]),
-      apiGet<string[]>("/cuadrilla/workers").catch(() => [] as string[])
-    ]);
-    setSecadoraLabores(labores);
-    setCuadrillaCrews(crews);
-  }
-
-  // Campos OPCIONALES de pago automático de cuadrilla dentro del form de secado.
-  // workerField/laborField son los names para el FormData (con sufijo _N en el
-  // form de llenado, sin sufijo en el de edición/vaciado).
-  function renderCuadrillaSecadoraFields(workerField: string, laborField: string) {
-    return (
-      <fieldset style={{ marginTop: 10, border: "1px dashed #cbd5e1", borderRadius: 10, padding: "8px 12px 12px" }}>
-        <legend style={{ fontSize: 12, color: "#64748b", padding: "0 6px" }}>👷 Pago de cuadrilla (opcional)</legend>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <label>
-            <span>Cuadrilla responsable</span>
-            <input name={workerField} type="text" list="cuadrilla-crews-list" placeholder="Ej: cuadrilla LIRA" autoComplete="off" />
-          </label>
-          <label>
-            <span>Labor / Tarifa</span>
-            <select name={laborField} defaultValue="">
-              <option value="">— Ninguna —</option>
-              {secadoraLabores.map((a) => (
-                <option key={a.id} value={a.id}>{a.name} (${Number(a.unit_rate)}/QQ)</option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <p className="muted" style={{ fontSize: 11, margin: "6px 0 0" }}>
-          Si eliges ambos, se genera el pago en Nómina automáticamente (QQ del túnel × tarifa).
-        </p>
-      </fieldset>
-    );
-  }
-
   async function loadMotorActive(motor: 1 | 2 = motorActivo) {
     const [rows, tunnelRows] = await Promise.all([
       apiGet<MotorActiveReport[]>(`/process-flow/drying/motor/${motor}/active`).catch(
@@ -5274,9 +5325,7 @@ export function App() {
         dry_end_at: stringOrUndefined(form.get(`dry_end_at_${t}`)),
         dryer_name: secadora,
         operator_name: operatorName || undefined,
-        notes: form.get(`notes_${t}`) || undefined,
-        cuadrilla_worker: stringOrUndefined(form.get(`cuad_worker_${t}`)),
-        cuadrilla_labor_id: stringOrUndefined(form.get(`cuad_labor_${t}`))
+        notes: form.get(`notes_${t}`) || undefined
       });
       creados++;
     }
@@ -5384,9 +5433,7 @@ export function App() {
       dry_end_at: stringOrUndefined(endInput?.value ?? null),
       dryer_name: report.dryer_name,
       operator_name: String(form.get("operator_name") ?? "").trim(),
-      notes: form.get("notes") || undefined,
-      cuadrilla_worker: stringOrUndefined(form.get("cuad_worker")),
-      cuadrilla_labor_id: stringOrUndefined(form.get("cuad_labor"))
+      notes: form.get("notes") || undefined
     };
     const updated = await apiPut<DryingTunnelReport>(`/process-flow/drying/${report.id}`, payload);
     setMessage(updated.status === "COMPLETED" ? `Secado del Túnel ${updated.tunnel_number} finalizado` : `Secado del Túnel ${updated.tunnel_number} actualizado`);
@@ -7141,10 +7188,6 @@ export function App() {
 
         {activeTab === "Secadoras" && (
           <section className="panelGrid">
-            {/* Cuadrillas conocidas para el autocompletado de "Cuadrilla responsable". */}
-            <datalist id="cuadrilla-crews-list">
-              {cuadrillaCrews.map((c) => <option key={c} value={c} />)}
-            </datalist>
             {/* ── Selector de motor: el 1 mueve las Secadoras 1 y 2; el 2, la 3 ── */}
             <div className="tablePanel" style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
               <h2 style={{ margin: 0 }}>🔧 Motor</h2>
@@ -7209,7 +7252,6 @@ export function App() {
                               <Input name="dry_end_at" label="Hora secado final" type="datetime-local" defaultValue={dateTimeLocalValue(rep.dry_end_at)} required={false} />
                             </div>
                             <Input name="notes" label="Observacion" defaultValue={rep.notes ?? "Secado registrado"} required={false} />
-                            {renderCuadrillaSecadoraFields("cuad_worker", "cuad_labor")}
                             <div className="buttonRow">
                               <button className="primary">Guardar cambios</button>
                               <button
@@ -7350,7 +7392,6 @@ export function App() {
                         <Input name={`moisture_before_${t}`} label="Humedad inicial %" type="number" defaultValue="0" required={false} />
                         <Input name={`dry_end_at_${t}`} label="Hora secado final" type="datetime-local" required={false} />
                         <Input name={`notes_${t}`} label="Observacion" defaultValue="Secado registrado" required={false} />
-                        {renderCuadrillaSecadoraFields(`cuad_worker_${t}`, `cuad_labor_${t}`)}
                       </div>
                     );
                   })}
@@ -12320,9 +12361,58 @@ export function App() {
                   </div>
 
                   {cuadView === "registro" && (
+                  <>
+                  {/* Recepción y Botada a Túnel: detección + registro AUTOMÁTICO */}
+                  <section className="tablePanel" style={{ marginBottom: 12 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                      <h2 style={{ margin: 0 }}>🏗️ Recepción y Botada a Túnel · desde Secadora</h2>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button type="button" className="btnSecondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => { setCuadGroupName(""); setCuadGroupModalOpen(true); }}>+ Crear Cuadrilla</button>
+                        <button type="button" className="primary" onClick={() => detectarYRegistrar().catch((e) => addToast(e.message, "error"))}>🔍 Detectar labores de túnel</button>
+                      </div>
+                    </div>
+                    <p className="muted" style={{ margin: "6px 0 0", fontSize: 12 }}>
+                      Detecta los túneles nuevos (Recepción y Botada) y los registra automáticamente a la cuadrilla activa, con su cálculo QQ × tarifa. Caen directo abajo en «Registros del período» (🔒 🤖 Automático).
+                    </p>
+                    {cuadNeedsWorker && cuadWorkers.length > 1 && (
+                      <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 13 }}>Hay varias cuadrillas. Registrar los túneles nuevos a:</span>
+                        <select value={cuadBatchWorker} onChange={(e) => setCuadBatchWorker(e.target.value)} style={{ padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", minWidth: 180 }}>
+                          <option value="">Cuadrilla…</option>
+                          {cuadWorkers.map((w) => <option key={w} value={w}>{w}</option>)}
+                        </select>
+                        <button type="button" className="primary" style={{ padding: "6px 12px" }} onClick={() => detectarYRegistrar().catch((e) => addToast(e.message, "error"))}>Registrar todo</button>
+                      </div>
+                    )}
+                    {cuadDetectMsg && (
+                      <div style={{ marginTop: 8, fontSize: 13, color: "#166534", fontWeight: 600 }}>{cuadDetectMsg}</div>
+                    )}
+                  </section>
+
+                  {/* Pop-up de creación rápida de cuadrilla (solo el nombre) */}
+                  {cuadGroupModalOpen && (
+                    <div className="modalOverlay" onClick={() => setCuadGroupModalOpen(false)}>
+                      <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
+                        <h3 style={{ marginTop: 0 }}>👷‍♂️ Crear cuadrilla</h3>
+                        <p className="muted" style={{ marginTop: -4, fontSize: 13 }}>Solo el nombre del grupo. Quedará disponible al instante en el selector.</p>
+                        <label>
+                          <span>Nombre de la cuadrilla</span>
+                          <input type="text" autoFocus value={cuadGroupName}
+                            onChange={(e) => setCuadGroupName(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); createCuadGroup().catch((err) => addToast(err.message, "error")); } }}
+                            placeholder="Ej: cuadrilla LIRA" />
+                        </label>
+                        <div className="buttonRow" style={{ marginTop: 12 }}>
+                          <button type="button" className="primary" onClick={() => createCuadGroup().catch((err) => addToast(err.message, "error"))}>Crear</button>
+                          <button type="button" onClick={() => setCuadGroupModalOpen(false)}>Cancelar</button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   <section className="panelGrid" style={{ alignItems: "start" }}>
                     <form className="formPanel" onSubmit={(e) => submitCuadEntry(e).catch((err) => addToast(err.message, "error"))}>
-                      <h2>📝 Registrar carga/descarga</h2>
+                      <h2>{editingCuadId ? "✏️ Editar registro" : "📝 Registrar carga/descarga"}</h2>
                       <label><span>Fecha</span>
                         <input type="date" value={cuadEntryForm.work_date} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, work_date: e.target.value })} />
                       </label>
@@ -12338,15 +12428,20 @@ export function App() {
                       <label><span>N.º de sacos (cantidad)</span>
                         <input type="number" step="0.01" min="0" value={cuadEntryForm.quantity} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, quantity: e.target.value })} />
                       </label>
-                      <label><span>Anticipo / Adelanto ($) <small className="muted">— opcional</small></span>
-                        <input type="number" step="0.01" min="0" value={cuadEntryForm.anticipo} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, anticipo: e.target.value })} placeholder="0.00" />
-                      </label>
+                      {!editingCuadId && (
+                        <label><span>Anticipo / Adelanto ($) <small className="muted">— opcional</small></span>
+                          <input type="number" step="0.01" min="0" value={cuadEntryForm.anticipo} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, anticipo: e.target.value })} placeholder="0.00" />
+                        </label>
+                      )}
                       <div className="totalBox" style={{ marginBottom: 10 }}>
                         <span>Subtotal{anticipo > 0 ? " (neto)" : ""}</span>
                         <strong>{money(previewSubtotal)}</strong>
                         <small>{selAct ? `${cuadEntryForm.quantity || 0} × $${Number(selAct.unit_rate)}${anticipo > 0 ? ` − $${anticipo.toFixed(2)} anticipo` : ""}` : "elige actividad"}</small>
                       </div>
-                      <button className="primary">Agregar</button>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button className="primary">{editingCuadId ? "Guardar cambios" : "Agregar"}</button>
+                        {editingCuadId && <button type="button" onClick={() => cancelEditCuad()}>Cancelar</button>}
+                      </div>
                     </form>
 
                     <div className="tablePanel">
@@ -12361,36 +12456,41 @@ export function App() {
                       ) : (
                         <div style={{ overflowX: "auto" }}>
                           <table className="cajaTable" style={{ marginTop: 6 }}>
-                            <thead><tr><th>Fecha</th><th>Actividad</th><th>Cuadrilla</th><th>Sacos</th><th>Valor</th><th>Subtotal</th><th /></tr></thead>
+                            <thead><tr><th>Día</th><th>Actividad</th><th>Cuadrilla</th><th className="num">Tarifa</th><th className="num">Cantidad</th><th className="num">Subtotal</th><th /></tr></thead>
                             <tbody>
                               {cuadEntries.map((en) => {
-                                // Los registros que vienen de Secadoras no se editan/borran aquí:
-                                // se corrigen en el módulo de Secadoras para no descuadrar el túnel.
+                                // Los registros que vienen de Secadoras son INMUTABLES aquí:
+                                // se corrigen editando el túnel para no descuadrar el inventario.
                                 const auto = en.origen === "SECADORA";
+                                // Etiqueta de actividad: para automáticos, la labor del túnel.
+                                const actividad = auto
+                                  ? labelMomento(en.momento ?? "LLENADO", en.tunnel_number ?? 0)
+                                  : en.activity_name;
                                 return (
                                 <tr key={en.id} style={auto ? { background: "rgba(37,99,235,0.05)" } : undefined}>
                                   <td>{String(en.work_date).slice(0, 10)}</td>
                                   <td>
-                                    {en.activity_name}
-                                    {auto && (
-                                      <span
-                                        className="chip info"
-                                        style={{ marginLeft: 6, fontSize: 11 }}
-                                        title="Generado automáticamente desde Secadoras. Para corregirlo, edita el movimiento del túnel."
-                                      >
-                                        🤖 Automático · Túnel {en.tunnel_number ?? "?"}
+                                    {actividad}
+                                    {auto ? (
+                                      <span className="chip info" style={{ marginLeft: 6, fontSize: 11 }} title="Generado automáticamente desde Secadoras. Para modificar los quintales, edita el túnel.">
+                                        🔒 🤖 Automático
                                       </span>
+                                    ) : (
+                                      <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>({en.activity_name})</span>
                                     )}
                                   </td>
                                   <td>{en.worker_name || "—"}</td>
-                                  <td>{Number(en.quantity)}</td>
-                                  <td>${Number(en.unit_rate)}</td>
-                                  <td><strong>{money(Number(en.subtotal))}</strong></td>
-                                  <td style={{ textAlign: "right" }}>
+                                  <td className="num">${Number(en.unit_rate)}</td>
+                                  <td className="num">{Number(en.quantity)}{auto ? " QQ" : ""}</td>
+                                  <td className="num"><strong>{money(Number(en.subtotal))}</strong></td>
+                                  <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                                     {auto ? (
-                                      <span className="muted" style={{ fontSize: 12 }} title="Se corrige desde Secadoras">🔒 Secadoras</span>
+                                      <button type="button" className="btnGhost" style={{ color: "#64748b" }} title="Este registro proviene de Secadoras" onClick={() => avisoRegistroAuto()}>🔒 Automático</button>
                                     ) : (
-                                      <button type="button" className="btnGhost" onClick={() => deleteCuadEntry(en.id).catch((err) => addToast(err.message, "error"))}>Borrar</button>
+                                      <>
+                                        <button type="button" className="btnGhost" onClick={() => editCuadEntry(en)}>Editar</button>
+                                        <button type="button" className="btnGhost" onClick={() => deleteCuadEntry(en.id).catch((err) => addToast(err.message, "error"))}>Eliminar</button>
+                                      </>
                                     )}
                                   </td>
                                 </tr>
@@ -12402,6 +12502,7 @@ export function App() {
                       )}
                     </div>
                   </section>
+                  </>
                   )}
 
                   {cuadView === "resumen" && (
@@ -14953,6 +15054,7 @@ function DryingLotSelector({
     </section>
   );
 }
+
 function DryingReportsPanel({
   reports,
   onEdit

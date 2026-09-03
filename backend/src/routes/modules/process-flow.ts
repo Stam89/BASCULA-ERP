@@ -439,6 +439,178 @@ processFlowRouter.put("/drying/:dryingId", asyncRoute(async (req, res) => {
   res.json(result);
 }));
 
+// Cuadrilla(s) que llenaron un túnel (división por QQ). Lo consume la vista de
+// Secadoras: por defecto una sola cuadrilla = 100% del QQ; se puede dividir.
+processFlowRouter.get("/drying/:dryingId/cuadrilla", asyncRoute(async (req, res) => {
+  const dryingId = String(req.params.dryingId);
+  const report = await pool.query(
+    "SELECT id, tunnel_number, total_quintals::float AS total_quintals FROM drying_tunnel_reports WHERE id = $1",
+    [dryingId]
+  );
+  if (!report.rowCount) throw new ApiError(404, "Secado no encontrado");
+  const splits = await pool.query(
+    `SELECT a.id, a.worker_name, a.activity_id, act.name AS activity_name,
+            act.unit_rate::float AS unit_rate, a.quintals::float AS quintals,
+            EXISTS(
+              SELECT 1 FROM cuadrilla_entries e
+              WHERE e.origen='SECADORA' AND e.momento='LLENADO'
+                AND e.referencia_id = a.drying_report_id
+                AND lower(btrim(e.worker_name)) = lower(btrim(a.worker_name))
+            ) AS already_generated
+     FROM drying_tunnel_cuadrilla a
+     JOIN cuadrilla_activities act ON act.id = a.activity_id
+     WHERE a.drying_report_id = $1 AND a.momento = 'LLENADO'
+     ORDER BY a.worker_name`,
+    [dryingId]
+  );
+  res.json({ report: report.rows[0], splits: splits.rows });
+}));
+
+// Asigna/actualiza la(s) cuadrilla(s) del llenado. Acepta quintals explícitos o
+// percent (del QQ del túnel). Un array vacío borra las asignaciones. Valida que
+// la suma no supere el QQ del túnel. NO toca los tickets ni el inventario.
+processFlowRouter.post("/drying/:dryingId/cuadrilla", asyncRoute(async (req, res) => {
+  const dryingId = String(req.params.dryingId);
+  const body = z.object({
+    splits: z.array(z.object({
+      worker_name: z.string().min(2),
+      activity_id: z.string().uuid(),
+      quintals: z.number().nonnegative().optional(),
+      percent: z.number().min(0).max(100).optional()
+    })).max(6)
+  }).parse(req.body);
+  const userId = (req as AuthenticatedRequest).user?.id ?? null;
+
+  const result = await inTransaction(async (client) => {
+    const report = await client.query(
+      "SELECT total_quintals::float AS total_quintals FROM drying_tunnel_reports WHERE id = $1 FOR UPDATE",
+      [dryingId]
+    );
+    if (!report.rowCount) throw new ApiError(404, "Secado no encontrado");
+    const totalQQ = Number(report.rows[0].total_quintals) || 0;
+
+    // Resuelve el QQ de cada cuadrilla: explícito, o por porcentaje, o —si es una
+    // sola sin dato— el 100% del túnel.
+    const single = body.splits.length === 1;
+    const resolved = body.splits.map((s) => {
+      let qq = s.quintals;
+      if (qq == null && s.percent != null) qq = round2((s.percent / 100) * totalQQ);
+      if (qq == null && single) qq = totalQQ;
+      return { worker_name: s.worker_name.trim(), activity_id: s.activity_id, quintals: round2(qq ?? 0) };
+    });
+    // Sin trabajadores repetidos (case-insensitive).
+    const nombres = new Set(resolved.map((r) => r.worker_name.toLowerCase()));
+    if (nombres.size !== resolved.length) throw new ApiError(400, "Hay cuadrillas repetidas en la división.");
+    const suma = round2(resolved.reduce((s, r) => s + r.quintals, 0));
+    if (suma - totalQQ > 0.01) {
+      throw new ApiError(400, `La suma de la división (${suma} QQ) supera el total del túnel (${totalQQ} QQ).`);
+    }
+
+    // Reemplaza las asignaciones. Además borra los pagos ya generados de las
+    // cuadrillas que se quitan, para no dejar cobros huérfanos.
+    const nuevosNombres = resolved.map((r) => r.worker_name);
+    await client.query(
+      `DELETE FROM cuadrilla_entries
+       WHERE origen='SECADORA' AND momento='LLENADO' AND referencia_id = $1
+         AND ($2::text[] = '{}' OR lower(btrim(worker_name)) <> ALL(SELECT lower(btrim(x)) FROM unnest($2::text[]) x))`,
+      [req.params.dryingId, nuevosNombres]
+    );
+    await client.query("DELETE FROM drying_tunnel_cuadrilla WHERE drying_report_id = $1 AND momento = 'LLENADO'", [dryingId]);
+    for (const r of resolved) {
+      await client.query(
+        `INSERT INTO drying_tunnel_cuadrilla (drying_report_id, worker_name, activity_id, quintals, momento, created_by)
+         VALUES ($1, $2, $3, $4, 'LLENADO', $5)`,
+        [req.params.dryingId, r.worker_name, r.activity_id, r.quintals, userId]
+      );
+    }
+    return { splits: resolved.length, total_asignado: suma, total_tunel: totalQQ };
+  });
+  res.json(result);
+}));
+
+// Asignar cuadrilla y LIQUIDAR el túnel en un solo paso (la cuadrilla es una sola
+// entidad: cobra el 100% del QQ del túnel; ellos se reparten internamente). Asigna
+// el grupo y genera el pago en la MISMA transacción. Devuelve el pago generado
+// para que el frontend lo baje a la tabla sin recargar.
+processFlowRouter.patch("/drying/:dryingId/cuadrilla", asyncRoute(async (req, res) => {
+  const dryingId = String(req.params.dryingId);
+  const body = z.object({
+    worker_name: z.string().min(2),
+    momento: z.enum(["LLENADO", "VACIADO"]).default("LLENADO")
+  }).parse(req.body);
+  const worker = body.worker_name.trim();
+  const momento = body.momento;
+  const userId = (req as AuthenticatedRequest).user?.id ?? null;
+
+  const result = await inTransaction(async (client) => {
+    const rep = await client.query(
+      `SELECT tunnel_number, total_quintals::float AS total_quintals,
+              COALESCE(filled_at, dry_start_at::date, created_at::date) AS work_date
+       FROM drying_tunnel_reports WHERE id = $1 FOR UPDATE`,
+      [dryingId]
+    );
+    if (!rep.rowCount) throw new ApiError(404, "Secado no encontrado");
+    const tunnel = Number(rep.rows[0].tunnel_number);
+    const totalQQ = Number(rep.rows[0].total_quintals) || 0;
+
+    // La labor depende del momento: LLENADO → "RECEPCION A TUNEL N";
+    // VACIADO → "BOTADA DE TUNEL". Ambas con su tarifa por QQ del catálogo.
+    const laborName = momento === "VACIADO" ? "BOTADA DE TUNEL" : `RECEPCION A TUNEL ${tunnel}`;
+    const act = await client.query(
+      "SELECT id, name, unit_rate::float AS unit_rate FROM cuadrilla_activities WHERE upper(btrim(name)) = $1 AND is_active = true LIMIT 1",
+      [laborName]
+    );
+    if (!act.rowCount) {
+      throw new ApiError(400, `Configura la tarifa de la labor "${laborName}" en Cuadrilla → Actividades antes de procesar.`);
+    }
+    const activityId = act.rows[0].id as string;
+    const rate = Number(act.rows[0].unit_rate);
+    const workDate = toDateOnly(rep.rows[0].work_date);
+
+    // Asignación única al grupo (100% del QQ) para ESE momento — reemplaza la previa.
+    await client.query("DELETE FROM drying_tunnel_cuadrilla WHERE drying_report_id = $1 AND momento = $2", [dryingId, momento]);
+    await client.query(
+      `INSERT INTO drying_tunnel_cuadrilla (drying_report_id, worker_name, activity_id, quintals, momento, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [dryingId, worker, activityId, totalQQ, momento, userId]
+    );
+    // Quita pagos previos de otras cuadrillas en este túnel/momento (sin huérfanos).
+    await client.query(
+      `DELETE FROM cuadrilla_entries
+       WHERE origen='SECADORA' AND momento = $3 AND referencia_id = $1
+         AND lower(btrim(worker_name)) <> lower(btrim($2))`,
+      [dryingId, worker, momento]
+    );
+    // Genera el pago global (100%).
+    const entry = await upsertCuadrillaSecadoraEntry(client, {
+      referencia_id: dryingId,
+      tunnel_number: tunnel,
+      momento,
+      activity_id: activityId,
+      worker_name: worker,
+      quantity: totalQQ,
+      work_date: workDate,
+      created_by: userId
+    });
+    if (!entry) throw new ApiError(400, "No se pudo generar el pago (revisa la cuadrilla y la tarifa).");
+
+    return {
+      drying_report_id: dryingId,
+      tunnel_number: tunnel,
+      momento,
+      work_date: workDate,
+      worker_name: worker,
+      activity_id: activityId,
+      activity_name: act.rows[0].name,
+      unit_rate: rate,
+      quintals: round2(totalQQ),
+      subtotal: round2(totalQQ * rate),
+      already_generated: true
+    };
+  });
+  res.json(result);
+}));
+
 processFlowRouter.get("/lots/:lotId", asyncRoute(async (req, res) => {
   const lotId = String(req.params.lotId);
   const lot = await pool.query(
@@ -771,17 +943,20 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
     [tunnel.rows[0].id, JSON.stringify({ drying_report_id: tunnel.rows[0].id }), tunnelReport.id]
   );
 
-  // Pago automático de cuadrilla por el LLENADO del túnel (si se indicó labor+cuadrilla).
-  await upsertCuadrillaSecadoraEntry(client, {
-    referencia_id: tunnel.rows[0].id,
-    tunnel_number: input.tunnel_number,
-    momento: "LLENADO",
-    activity_id: input.cuadrilla_labor_id ?? null,
-    worker_name: input.cuadrilla_worker ?? null,
-    quantity: totalQuintals,
-    work_date: (input.filled_at ?? "").slice(0, 10) || null,
-    created_by: input.created_by ?? null
-  });
+  // Recepción a Túnel (LLENADO): si se indicó cuadrilla + labor, se registra la
+  // ASIGNACIÓN (100% del QQ del túnel por defecto). NO se paga aquí: Nómina la
+  // detecta y genera el pago ("Detectar labores de túnel"). Así se puede además
+  // dividir el llenado entre dos cuadrillas antes de enviarlo a Nómina.
+  const llenadoWorker = (input.cuadrilla_worker ?? "").trim();
+  if (input.cuadrilla_labor_id && llenadoWorker.length >= 2) {
+    await client.query(
+      `INSERT INTO drying_tunnel_cuadrilla (drying_report_id, worker_name, activity_id, quintals, momento, created_by)
+       VALUES ($1, $2, $3, $4, 'LLENADO', $5)
+       ON CONFLICT (drying_report_id, momento, (lower(btrim(worker_name))))
+       DO UPDATE SET activity_id = EXCLUDED.activity_id, quintals = EXCLUDED.quintals`,
+      [tunnel.rows[0].id, llenadoWorker, input.cuadrilla_labor_id, totalQuintals, input.created_by ?? null]
+    );
+  }
 
   return getDryingReportById(client, tunnel.rows[0].id);
 }
@@ -895,21 +1070,20 @@ async function updateDryingReport(
     );
   }
 
-  // Pago automático de cuadrilla por el VACIADO/salida del túnel (si se indicó).
-  // Usa la fecha OFICIAL UNIFICADA de la corrida (fecha de llenado del motor), no
-  // una fecha independiente por túnel: así el reporte de pagos sale agrupado y
-  // sin saltos de días artificiales entre secadoras del mismo motor.
-  const fechaVaciado = toDateOnly(updated.rows[0].filled_at) ?? toDateOnly(dryEndAt) ?? toDateOnly(dryStartAt);
-  await upsertCuadrillaSecadoraEntry(client, {
-    referencia_id: dryingId,
-    tunnel_number: updated.rows[0].tunnel_number,
-    momento: "VACIADO",
-    activity_id: input.cuadrilla_labor_id ?? null,
-    worker_name: input.cuadrilla_worker ?? null,
-    quantity: Number(updated.rows[0].total_quintals) || 0,
-    work_date: fechaVaciado,
-    created_by: null
-  });
+  // Botada/Sacado del túnel (VACIADO): si se indicó cuadrilla + labor en la ficha,
+  // se registra la ASIGNACIÓN (100% del QQ). NO se paga aquí: Nómina la detecta y
+  // genera ("Botada / Sacado de Túnel"), igual que el llenado. Si no se indicó,
+  // el vaciado queda pendiente en la alerta amarilla al finalizar el túnel.
+  const vaciadoWorker = (input.cuadrilla_worker ?? "").trim();
+  if (input.cuadrilla_labor_id && vaciadoWorker.length >= 2) {
+    await client.query(
+      `INSERT INTO drying_tunnel_cuadrilla (drying_report_id, worker_name, activity_id, quintals, momento, created_by)
+       VALUES ($1, $2, $3, $4, 'VACIADO', $5)
+       ON CONFLICT (drying_report_id, momento, (lower(btrim(worker_name))))
+       DO UPDATE SET activity_id = EXCLUDED.activity_id, quintals = EXCLUDED.quintals`,
+      [dryingId, vaciadoWorker, input.cuadrilla_labor_id, Number(updated.rows[0].total_quintals) || 0, null]
+    );
+  }
 
   return getDryingReportById(client, dryingId);
 }

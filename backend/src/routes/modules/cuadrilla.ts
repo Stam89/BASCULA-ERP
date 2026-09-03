@@ -2,8 +2,10 @@ import { Router } from "express";
 import { z } from "zod";
 import type { PoolClient } from "pg";
 import { pool } from "../../db/pool.js";
+import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
+import { type AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const cuadrillaRouter = Router();
 
@@ -47,7 +49,7 @@ export async function upsertCuadrillaSecadoraEntry(
          (work_date, activity_id, activity_name, worker_name, quantity, unit_rate, subtotal, notes,
           origen, referencia_id, tunnel_number, momento, created_by)
        VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, 'SECADORA', $9, $10, $11, $12)
-       ON CONFLICT (referencia_id, momento) WHERE origen = 'SECADORA'
+       ON CONFLICT (referencia_id, momento, (lower(btrim(worker_name)))) WHERE origen = 'SECADORA'
        DO UPDATE SET
          work_date = COALESCE(EXCLUDED.work_date, cuadrilla_entries.work_date),
          activity_id = EXCLUDED.activity_id,
@@ -100,13 +102,240 @@ cuadrillaRouter.get("/activities", asyncRoute(async (req, res) => {
   res.json(result.rows);
 }));
 
-// Nombres de cuadrillas ya usados (para el Select "Cuadrilla responsable").
+// Nombres de cuadrillas (grupos): el maestro + los ya usados en registros y
+// asignaciones. Alimenta el selector de la alerta de Nómina.
 cuadrillaRouter.get("/workers", asyncRoute(async (_req, res) => {
   const result = await pool.query(
-    `SELECT DISTINCT worker_name FROM cuadrilla_entries
-     WHERE COALESCE(TRIM(worker_name), '') <> '' ORDER BY worker_name`
+    `SELECT DISTINCT worker_name FROM (
+       SELECT worker_name FROM cuadrilla_entries
+       UNION SELECT worker_name FROM drying_tunnel_cuadrilla
+       UNION SELECT name AS worker_name FROM cuadrillas WHERE is_active
+     ) w WHERE COALESCE(TRIM(worker_name), '') <> '' ORDER BY worker_name`
   );
   res.json(result.rows.map((r) => r.worker_name));
+}));
+
+// Crea (o reactiva) una cuadrilla por su nombre. Sirve para el botón de creación
+// rápida: solo el nombre, para tenerla disponible en el selector al instante.
+cuadrillaRouter.post("/groups", asyncRoute(async (req, res) => {
+  const { name } = z.object({ name: z.string().min(2) }).parse(req.body);
+  const clean = name.trim();
+  await pool.query(
+    "INSERT INTO cuadrillas (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET is_active = true",
+    [clean]
+  );
+  res.status(201).json({ name: clean });
+}));
+
+// ── Recepción a Túnel (LLENADO): detectar y generar desde Secadora ──────────
+// Rango por defecto: semana en curso (lunes a hoy), igual que el resto de nómina.
+function defaultRange(query: unknown): { from: string; to: string } {
+  const { from, to } = z.object({
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+  }).parse(query);
+  const today = new Date();
+  const monday = new Date(today);
+  monday.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+  return { from: from ?? monday.toISOString().slice(0, 10), to: to ?? today.toISOString().slice(0, 10) };
+}
+
+// Detecta el CICLO COMPLETO de cuadrilla en Secadoras en un rango: llenado
+// (Recepción a Túnel) y vaciado (Botada/Sacado de Túnel), cada uno con el QQ del
+// túnel y su tarifa. Reporta también los eventos SIN cuadrilla asignada (para la
+// alerta amarilla): túneles llenados sin recepción y túneles vaciados sin botada.
+cuadrillaRouter.get("/tunnel-suggestions", asyncRoute(async (req, res) => {
+  const { from, to } = defaultRange(req.query);
+
+  // La fecha de la corrida es la fecha de llenado (filled_at) unificada por motor.
+  const asignadas = await pool.query(
+    `SELECT a.drying_report_id, d.tunnel_number, a.momento,
+            COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) AS work_date,
+            a.worker_name, a.activity_id, act.name AS activity_name,
+            act.unit_rate::float AS unit_rate, a.quintals::float AS quintals,
+            EXISTS(
+              SELECT 1 FROM cuadrilla_entries e
+              WHERE e.origen='SECADORA' AND e.momento = a.momento
+                AND e.referencia_id = a.drying_report_id
+                AND lower(btrim(e.worker_name)) = lower(btrim(a.worker_name))
+            ) AS already_generated
+     FROM drying_tunnel_cuadrilla a
+     JOIN drying_tunnel_reports d ON d.id = a.drying_report_id
+     JOIN cuadrilla_activities act ON act.id = a.activity_id
+     WHERE COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) BETWEEN $1 AND $2
+     ORDER BY work_date DESC, d.tunnel_number, a.momento, a.worker_name`,
+    [from, to]
+  );
+
+  // Llenados sin recepción asignada. El pago se computa AUTOMÁTICAMENTE:
+  // total_quintals del túnel × tarifa de "RECEPCION A TUNEL N" (sin tabla ni
+  // guardado intermedio en Secadoras). Se muestra ya calculado en la alerta.
+  const sinLlenado = await pool.query(
+    `SELECT d.id AS drying_report_id, d.tunnel_number, 'LLENADO'::text AS momento,
+            COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) AS work_date,
+            d.total_quintals::float AS quintals,
+            act.unit_rate::float AS unit_rate,
+            round(d.total_quintals * COALESCE(act.unit_rate,0), 2)::float AS subtotal,
+            act.name AS activity_name
+     FROM drying_tunnel_reports d
+     LEFT JOIN cuadrilla_activities act
+       ON upper(btrim(act.name)) = 'RECEPCION A TUNEL ' || d.tunnel_number AND act.is_active
+     WHERE COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) BETWEEN $1 AND $2
+       AND COALESCE(d.total_quintals,0) > 0
+       AND NOT EXISTS (SELECT 1 FROM drying_tunnel_cuadrilla a WHERE a.drying_report_id = d.id AND a.momento='LLENADO')
+     ORDER BY work_date DESC, d.tunnel_number`,
+    [from, to]
+  );
+
+  // Vaciados (túnel ya finalizado = botado) sin botada asignada: total_quintals ×
+  // tarifa de "BOTADA DE TUNEL", también computado automáticamente.
+  const sinVaciado = await pool.query(
+    `SELECT d.id AS drying_report_id, d.tunnel_number, 'VACIADO'::text AS momento,
+            COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) AS work_date,
+            d.total_quintals::float AS quintals,
+            act.unit_rate::float AS unit_rate,
+            round(d.total_quintals * COALESCE(act.unit_rate,0), 2)::float AS subtotal,
+            act.name AS activity_name
+     FROM drying_tunnel_reports d
+     LEFT JOIN cuadrilla_activities act
+       ON upper(btrim(act.name)) = 'BOTADA DE TUNEL' AND act.is_active
+     WHERE COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) BETWEEN $1 AND $2
+       AND COALESCE(d.total_quintals,0) > 0
+       AND d.dry_end_at IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM drying_tunnel_cuadrilla a WHERE a.drying_report_id = d.id AND a.momento='VACIADO')
+     ORDER BY work_date DESC, d.tunnel_number`,
+    [from, to]
+  );
+
+  const rows = asignadas.rows.map((r) => ({
+    drying_report_id: r.drying_report_id,
+    tunnel_number: r.tunnel_number,
+    momento: r.momento,
+    work_date: r.work_date,
+    worker_name: r.worker_name,
+    activity_id: r.activity_id,
+    activity_name: r.activity_name,
+    unit_rate: r.unit_rate,
+    quintals: r.quintals,
+    subtotal: round2(Number(r.quintals) * Number(r.unit_rate)),
+    already_generated: r.already_generated
+  }));
+  res.json({ range: { from, to }, rows, sin_asignar: [...sinLlenado.rows, ...sinVaciado.rows] });
+}));
+
+// Genera los pagos de nómina (cuadrilla_entries) desde las asignaciones de túnel
+// del rango que aún no se generaron. Los registros quedan como origen='SECADORA'
+// (no editables desde Nómina) para no descuadrar con el inventario del túnel.
+cuadrillaRouter.post("/tunnel-generate", asyncRoute(async (req, res) => {
+  const body = z.object({
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+  }).parse(req.body ?? {});
+  const { from, to } = defaultRange(body);
+  const userId = (req as AuthenticatedRequest).user?.id ?? null;
+
+  const created = await inTransaction(async (client) => {
+    const asignaciones = await client.query(
+      `SELECT a.drying_report_id, d.tunnel_number, a.momento,
+              COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) AS work_date,
+              a.worker_name, a.activity_id, a.quintals
+       FROM drying_tunnel_cuadrilla a
+       JOIN drying_tunnel_reports d ON d.id = a.drying_report_id
+       WHERE COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) BETWEEN $1 AND $2`,
+      [from, to]
+    );
+    let count = 0;
+    for (const a of asignaciones.rows) {
+      const entry = await upsertCuadrillaSecadoraEntry(client, {
+        referencia_id: a.drying_report_id,
+        tunnel_number: a.tunnel_number,
+        momento: a.momento === "VACIADO" ? "VACIADO" : "LLENADO",
+        activity_id: a.activity_id,
+        worker_name: a.worker_name,
+        quantity: Number(a.quintals) || 0,
+        work_date: a.work_date ? new Date(a.work_date).toISOString().slice(0, 10) : null,
+        created_by: userId
+      });
+      if (entry) count++;
+    }
+    return count;
+  });
+  res.json({ created });
+}));
+
+// AUTOMATIZACIÓN 100%: detecta TODOS los eventos nuevos de túnel (Recepción y
+// Botada) sin nómina en el rango, les asigna la cuadrilla indicada y genera el
+// pago (QQ del túnel × tarifa) EN UN SOLO PASO. Sin cola de pendientes: al
+// detectar, cae directo a "Registros del período". Devuelve cuántos se crearon.
+cuadrillaRouter.post("/tunnel-autoprocess", asyncRoute(async (req, res) => {
+  const body = z.object({
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    worker_name: z.string().min(2)
+  }).parse(req.body);
+  const { from, to } = defaultRange(body);
+  const worker = body.worker_name.trim();
+  const userId = (req as AuthenticatedRequest).user?.id ?? null;
+
+  const result = await inTransaction(async (client) => {
+    // Eventos pendientes: llenados sin recepción + túneles finalizados sin botada.
+    const eventos = await client.query(
+      `SELECT d.id AS drying_report_id, d.tunnel_number, 'LLENADO'::text AS momento,
+              COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) AS work_date,
+              d.total_quintals::float AS quintals
+       FROM drying_tunnel_reports d
+       WHERE COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) BETWEEN $1 AND $2
+         AND COALESCE(d.total_quintals,0) > 0
+         AND NOT EXISTS (SELECT 1 FROM drying_tunnel_cuadrilla a WHERE a.drying_report_id = d.id AND a.momento='LLENADO')
+       UNION ALL
+       SELECT d.id, d.tunnel_number, 'VACIADO'::text,
+              COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date),
+              d.total_quintals::float
+       FROM drying_tunnel_reports d
+       WHERE COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) BETWEEN $1 AND $2
+         AND COALESCE(d.total_quintals,0) > 0
+         AND d.dry_end_at IS NOT NULL
+         AND NOT EXISTS (SELECT 1 FROM drying_tunnel_cuadrilla a WHERE a.drying_report_id = d.id AND a.momento='VACIADO')`,
+      [from, to]
+    );
+
+    let count = 0;
+    const sinTarifa: string[] = [];
+    for (const e of eventos.rows) {
+      const tunnel = Number(e.tunnel_number);
+      const laborName = e.momento === "VACIADO" ? "BOTADA DE TUNEL" : `RECEPCION A TUNEL ${tunnel}`;
+      const act = await client.query(
+        "SELECT id FROM cuadrilla_activities WHERE upper(btrim(name)) = $1 AND is_active = true LIMIT 1",
+        [laborName]
+      );
+      if (!act.rowCount) { sinTarifa.push(laborName); continue; } // sin tarifa configurada: se omite
+      const activityId = act.rows[0].id as string;
+      const qq = Number(e.quintals) || 0;
+      const workDate = e.work_date ? new Date(e.work_date).toISOString().slice(0, 10) : null;
+
+      // Asignación (100% al grupo) + pago, en la misma transacción.
+      await client.query(
+        `INSERT INTO drying_tunnel_cuadrilla (drying_report_id, worker_name, activity_id, quintals, momento, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (drying_report_id, momento, (lower(btrim(worker_name))))
+         DO UPDATE SET activity_id = EXCLUDED.activity_id, quintals = EXCLUDED.quintals`,
+        [e.drying_report_id, worker, activityId, qq, e.momento, userId]
+      );
+      const entry = await upsertCuadrillaSecadoraEntry(client, {
+        referencia_id: e.drying_report_id,
+        tunnel_number: tunnel,
+        momento: e.momento === "VACIADO" ? "VACIADO" : "LLENADO",
+        activity_id: activityId,
+        worker_name: worker,
+        quantity: qq,
+        work_date: workDate,
+        created_by: userId
+      });
+      if (entry) count++;
+    }
+    return { created: count, worker_name: worker, sin_tarifa: [...new Set(sinTarifa)] };
+  });
+  res.json(result);
 }));
 
 cuadrillaRouter.post("/activities", asyncRoute(async (req, res) => {
@@ -164,7 +393,7 @@ function parseRange(query: unknown): { from: string; to: string } {
 cuadrillaRouter.get("/entries", asyncRoute(async (req, res) => {
   const { from, to } = parseRange(req.query);
   const result = await pool.query(
-    `SELECT id, work_date, activity_name, worker_name, quantity, unit_rate, subtotal, notes,
+    `SELECT id, work_date, activity_id, activity_name, worker_name, quantity, unit_rate, subtotal, notes,
             origen, referencia_id, tunnel_number, momento
      FROM cuadrilla_entries
      WHERE work_date BETWEEN $1 AND $2
@@ -224,6 +453,38 @@ cuadrillaRouter.delete("/entries/:id", asyncRoute(async (req, res) => {
   }
   await pool.query("DELETE FROM cuadrilla_entries WHERE id = $1", [req.params.id]);
   res.status(204).end();
+}));
+
+// Editar un registro MANUAL de cuadrilla. Los automáticos (Secadora) son
+// inmutables: se corrigen editando el túnel en el módulo de Secadoras.
+cuadrillaRouter.put("/entries/:id", asyncRoute(async (req, res) => {
+  const body = z.object({
+    work_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    activity_id: z.string().uuid(),
+    worker_name: z.string().optional().default(""),
+    quantity: z.number().positive()
+  }).parse(req.body);
+
+  const current = await pool.query("SELECT origen, tunnel_number FROM cuadrilla_entries WHERE id = $1", [req.params.id]);
+  if (!current.rowCount) throw new ApiError(404, "Registro no encontrado");
+  if (current.rows[0].origen === "SECADORA") {
+    throw new ApiError(409, "Este registro proviene de Secadoras. Para modificar los quintales, edite el túnel directamente.");
+  }
+  const activity = await pool.query("SELECT name, unit_rate FROM cuadrilla_activities WHERE id = $1", [body.activity_id]);
+  if (!activity.rowCount) throw new ApiError(404, "Actividad no encontrada");
+  const rate = Number(activity.rows[0].unit_rate);
+  const subtotal = round2(body.quantity * rate);
+
+  const result = await pool.query(
+    `UPDATE cuadrilla_entries
+     SET work_date = COALESCE($2::date, work_date),
+         activity_id = $3, activity_name = $4, worker_name = $5,
+         quantity = $6, unit_rate = $7, subtotal = $8
+     WHERE id = $1 AND origen <> 'SECADORA'
+     RETURNING id, work_date, activity_name, worker_name, quantity, unit_rate, subtotal, notes, origen, referencia_id, tunnel_number, momento`,
+    [req.params.id, body.work_date ?? null, body.activity_id, activity.rows[0].name, body.worker_name.trim(), body.quantity, rate, subtotal]
+  );
+  res.json(result.rows[0]);
 }));
 
 // ── Resumen por persona (total ganado, anticipos pendientes, neto) ──────────
