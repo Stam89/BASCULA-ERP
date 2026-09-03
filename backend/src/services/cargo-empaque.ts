@@ -171,7 +171,8 @@ export function tipoSacoEspecial(code?: string | null, name?: string | null): st
 export async function descontarSacosPorTipo(
   client: PoolClient,
   sacosPorTipo: Map<string, number>,
-  concepto: string
+  concepto: string,
+  refBatch?: string | null
 ): Promise<Array<{ tipo: string; sacos: number; nuevo_stock: number }>> {
   const resultado: Array<{ tipo: string; sacos: number; nuevo_stock: number }> = [];
   for (const [tipo, sacos] of sacosPorTipo) {
@@ -186,10 +187,12 @@ export async function descontarSacosPorTipo(
       "UPDATE sack_inventory SET stock = $2, updated_at = now() WHERE id = $1",
       [sack.rows[0].id, nuevoStock]
     );
+    // Kardex de insumos de la MATRIZ. `concepto` lleva la trazabilidad (lote +
+    // socio) y `ref_batch` enlaza al proceso de pilado que consumió los sacos.
     await client.query(
-      `INSERT INTO sack_movements (sack_id, movement, cantidad, concepto)
-       VALUES ($1, 'SALIDA', $2, $3)`,
-      [sack.rows[0].id, sacos, concepto]
+      `INSERT INTO sack_movements (sack_id, movement, cantidad, concepto, ref_batch)
+       VALUES ($1, 'SALIDA', $2, $3, $4)`,
+      [sack.rows[0].id, sacos, concepto, refBatch ?? null]
     );
     resultado.push({ tipo, sacos, nuevo_stock: nuevoStock });
   }
@@ -201,9 +204,10 @@ export async function descontarSacosPorTipo(
 export async function descontarSacosPorPeso(
   client: PoolClient,
   sacosPorPeso: Map<number, number>,
-  concepto: string
+  concepto: string,
+  refBatch?: string | null
 ): Promise<Array<{ tipo: string; sacos: number; nuevo_stock: number }>> {
   const porTipo = new Map<string, number>();
   for (const [peso, sacos] of sacosPorPeso) porTipo.set(`Saco ${peso} LB`, sacos);
-  return descontarSacosPorTipo(client, porTipo, concepto);
+  return descontarSacosPorTipo(client, porTipo, concepto, refBatch);
 }

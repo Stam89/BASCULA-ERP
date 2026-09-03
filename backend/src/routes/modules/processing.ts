@@ -388,11 +388,12 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
   return inTransaction(async (client) => {
     const batchResult = await client.query(
       `SELECT b.*, l.farmer_id AS lot_farmer_id, l.is_maquila AS lot_is_maquila,
-              l.accionista_id AS lot_accionista_id
+              l.accionista_id AS lot_accionista_id, l.lot_code AS lot_code,
+              (SELECT name FROM accionistas WHERE id = l.accionista_id) AS lot_accionista_name
        FROM processing_batches b
        JOIN lots l ON l.id = b.lot_id
        WHERE b.id = $1
-       FOR UPDATE`,
+       FOR UPDATE OF b, l`,
       [processingBatchId]
     );
     if (!batchResult.rowCount) throw new ApiError(404, "Proceso no encontrado");
@@ -503,6 +504,13 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       ? presLines.filter((p) => p.destino === "TULA").reduce((s, p) => s + (Number(p.tulas) || 0), 0)
       : Number(body.tulas ?? 0);
 
+    // TRAZABILIDAD: el egreso de sacos se registra SIEMPRE en el kardex de la
+    // MATRIZ (sack_inventory es tabla única; los socios no manejan stock de sacos),
+    // con la nota "…Lote [código] - Socio: [nombre]" y enlazado al proceso.
+    const lotCode = (batch.lot_code as string | null) ?? body.lot_id;
+    const socioNombre = (batch.lot_accionista_name as string | null) ?? "Matriz";
+    const conceptoSacos = `Consumo de empaque por pilado de Lote ${lotCode} - Socio: ${socioNombre}`;
+
     let sacosMatriz: Awaited<ReturnType<typeof descontarSacosPorPeso>> = [];
     // Sacos comerciales de arroz blanco consumidos (para el pago por saca del
     // pilador/estibador). SOLO las líneas en SACO; las de TULA se saltan.
@@ -515,7 +523,7 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
     }
     const sacasArrozBlanco = [...sacosPorPeso.values()].reduce((a, b) => a + b, 0);
     if (sacosPorPeso.size) {
-      sacosMatriz = await descontarSacosPorPeso(client, sacosPorPeso, "Empaque en producción (arroz pilado)");
+      sacosMatriz = await descontarSacosPorPeso(client, sacosPorPeso, conceptoSacos, processingBatchId);
     }
 
     // Subproductos (arrocillo/polvillo) empacados en sacos ESPECIALES sin peso
@@ -534,7 +542,7 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       if (nSacos > 0) sacosEspeciales.set(tipo, (sacosEspeciales.get(tipo) ?? 0) + nSacos);
     }
     if (sacosEspeciales.size) {
-      const esp = await descontarSacosPorTipo(client, sacosEspeciales, "Empaque en producción (subproductos)");
+      const esp = await descontarSacosPorTipo(client, sacosEspeciales, `${conceptoSacos} (subproductos)`, processingBatchId);
       sacosMatriz.push(...esp);
     }
 
@@ -1106,14 +1114,12 @@ processingRouter.post("/:id/finish", asyncRoute(async (req, res) => {
       );
     }
 
-    if (body.sacks_product_id && body.sacks_warehouse_id && body.sacks_used && body.sacks_used > 0) {
-      await client.query(
-        `INSERT INTO inventory_movements
-         (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
-         VALUES ($1, $2, $3, 'PACKAGING_CONSUMPTION', $4, 'processing_batches', $5, 'OWNED', $6, $7)`,
-        [body.sacks_product_id, body.sacks_warehouse_id, body.lot_id, -body.sacks_used, req.params.id, body.created_by, accionistaId]
-      );
-    }
+    // REGLA DE NEGOCIO: solo la MATRIZ maneja stock de sacos (sack_inventory es
+    // tabla única, sin accionista_id). Los socios NO deben tener egresos de sacos
+    // en su inventario individual (inventory_movements por accionista). Por eso el
+    // bloque que descontaba sacos como PACKAGING_CONSUMPTION del inventario del
+    // socio se eliminó: el consumo físico de sacos ocurre en finish-production,
+    // siempre contra la matriz (ver descontarSacosPorPeso / cargo-empaque.ts).
 
     const batch = await client.query(
       `UPDATE processing_batches

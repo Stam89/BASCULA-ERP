@@ -8804,6 +8804,33 @@ export function App() {
                               onChange={(event) => setMillingCustomLb(event.target.value)} placeholder="Ej: 96" />
                           </label>
                         )}
+                        {/* Stock real de sacos de la MATRIZ para la presentación
+                            elegida (solo la matriz maneja sacos). Informativo. */}
+                        {(() => {
+                          const lb = millingPiladoPresentation === PESO_PERSONALIZADO
+                            ? Number(millingCustomLb)
+                            : sackWeightLbOf(millingPiladoPresentation);
+                          if (!lb || lb <= 0) return null;
+                          const tipo = `Saco ${lb} LB`;
+                          const row = sackInventory.find((s) => s.tipo === tipo);
+                          const stock = row ? Number(row.stock) : null;
+                          const sinTipo = stock == null;
+                          const bajo = stock != null && stock <= 0;
+                          return (
+                            <div style={{
+                              gridColumn: "1 / -1",
+                              fontSize: 12, fontWeight: 700,
+                              color: sinTipo ? "#b45309" : bajo ? "#b91c1c" : "#15803d",
+                              background: sinTipo ? "#fffbeb" : bajo ? "#fef2f2" : "#f0fdf4",
+                              border: `1px solid ${sinTipo ? "#fde68a" : bajo ? "#fecaca" : "#bbf7d0"}`,
+                              borderRadius: 8, padding: "5px 10px", marginTop: 2
+                            }}>
+                              {sinTipo
+                                ? `📦 Stock Matriz: sin registrar el tipo "${tipo}"`
+                                : `📦 Stock Matriz: ${stock.toLocaleString("es-EC")} saco${stock === 1 ? "" : "s"} disp${bajo ? " · ⚠️ sin stock, la matriz debe comprar" : "s."}`}
+                            </div>
+                          );
+                        })()}
                       </>
                     ) : (
                       <label>
