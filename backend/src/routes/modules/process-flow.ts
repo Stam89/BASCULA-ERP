@@ -43,6 +43,11 @@ const dryingBodySchema = z.object({
   // la guardianía + túneles de la semana. dryer_name es la MÁQUINA (Secadora N).
   operator_name: z.string().optional(),
   notes: z.string().optional(),
+  // Tipo de empaque de la RECEPCIÓN (llenado): Tulas por defecto, o Sacos si se
+  // agotaron las Tulas. En Sacos, recepcion_sacos = Nº de sacos (para el pago por
+  // saco de la cuadrilla). No altera pesos ni tickets.
+  recepcion_empaque: z.enum(["TULAS", "SACOS"]).default("TULAS"),
+  recepcion_sacos: z.number().nonnegative().nullable().optional(),
   // Pago automático de cuadrilla (opcional): quién y qué labor de secadora se
   // paga por este llenado. Si ambos vienen, se genera la entrada en Nómina.
   cuadrilla_worker: z.string().optional(),
@@ -65,6 +70,13 @@ const dryingUpdateSchema = z.object({
   dryer_name: z.string().optional(),
   operator_name: z.string().optional(),
   notes: z.string().optional(),
+  // Empaque de la Recepción (llenado) y de la Botada (vaciado). Cada uno puede ser
+  // Tulas o Sacos; en Sacos, *_sacos = Nº de sacos para el pago por saco. Omitir
+  // un campo conserva el valor actual.
+  recepcion_empaque: z.enum(["TULAS", "SACOS"]).optional(),
+  recepcion_sacos: z.number().nonnegative().nullable().optional(),
+  botada_empaque: z.enum(["TULAS", "SACOS"]).optional(),
+  botada_sacos: z.number().nonnegative().nullable().optional(),
   // Pago automático de cuadrilla por el vaciado/salida del túnel (opcional).
   cuadrilla_worker: z.string().optional(),
   cuadrilla_labor_id: z.string().uuid().optional()
@@ -887,8 +899,9 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
       gas_bombona_inicio, gas_bombona_fin, gas_bombona_precio, gas_bombona_costo,
       gas_cilindro_cantidad, gas_cilindro_precio, gas_cilindro_costo, gas_costo_total,
       diesel_inicio, diesel_fin, diesel_precio, diesel_costo,
-      dryer_name, operator_name, status, notes, created_by, motor_number)
-     VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31)
+      dryer_name, operator_name, status, notes, created_by, motor_number,
+      recepcion_empaque, recepcion_sacos)
+     VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33)
      RETURNING *`,
     [
       lotId,
@@ -921,7 +934,9 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
       status,
       input.notes ?? null,
       input.created_by ?? null,
-      motorDeSecadora(input.dryer_name)
+      motorDeSecadora(input.dryer_name),
+      input.recepcion_empaque,
+      input.recepcion_empaque === "SACOS" ? (input.recepcion_sacos ?? null) : null
     ]
   );
 
@@ -1005,7 +1020,11 @@ async function updateDryingReport(
          status = $23,
          notes = $24,
          motor_number = $25,
-         operator_name = $26
+         operator_name = $26,
+         recepcion_empaque = COALESCE($27, recepcion_empaque),
+         recepcion_sacos = COALESCE($28, recepcion_sacos),
+         botada_empaque = COALESCE($29, botada_empaque),
+         botada_sacos = COALESCE($30, botada_sacos)
      WHERE id = $1
      RETURNING *`,
     [
@@ -1034,7 +1053,11 @@ async function updateDryingReport(
       status,
       input.notes ?? current.rows[0].notes,
       motorDeSecadora(input.dryer_name ?? current.rows[0].dryer_name),
-      input.operator_name !== undefined ? (input.operator_name.trim() || null) : current.rows[0].operator_name
+      input.operator_name !== undefined ? (input.operator_name.trim() || null) : current.rows[0].operator_name,
+      input.recepcion_empaque ?? null,
+      input.recepcion_sacos ?? null,
+      input.botada_empaque ?? null,
+      input.botada_sacos ?? null
     ]
   );
 

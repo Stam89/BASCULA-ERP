@@ -498,6 +498,10 @@ type DryingTunnelReport = {
   status: string;
   operator_name: string | null;
   notes: string | null;
+  recepcion_empaque?: string | null;
+  recepcion_sacos?: string | number | null;
+  botada_empaque?: string | null;
+  botada_sacos?: string | number | null;
   is_processed?: boolean;
   apartado_arianos?: boolean;
   lots: DryingTunnelLot[];
@@ -1244,6 +1248,10 @@ export function App() {
   const [dryingEntryPick, setDryingEntryPick] = useState<Record<string, string>>({});
   // Tipo de arroz seleccionado por túnel (para filtrar ingresos de materia prima).
   const [dryingRiceType, setDryingRiceType] = useState<Record<string, "0.11" | "CORRIENTE">>({});
+  // Tipo de empaque elegido por control (Tulas vs Sacos). Clave: identificador del
+  // control (ej. `new-1-rec`, `<reportId>-bot`). Solo decide si mostrar el Nº de
+  // sacos; el valor final se lee del form (input no controlado).
+  const [empaqueSel, setEmpaqueSel] = useState<Record<string, "TULAS" | "SACOS">>({});
   // Motor activo en pantalla: el 1 mueve las Secadoras 1 y 2; el 2, la 3.
   const [motorActivo, setMotorActivo] = useState<1 | 2>(1);
   // Los inputs de combustible viven en un modal que abre "Finalizar secado".
@@ -5325,7 +5333,9 @@ export function App() {
         dry_end_at: stringOrUndefined(form.get(`dry_end_at_${t}`)),
         dryer_name: secadora,
         operator_name: operatorName || undefined,
-        notes: form.get(`notes_${t}`) || undefined
+        notes: form.get(`notes_${t}`) || undefined,
+        recepcion_empaque: (form.get(`recepcion_empaque_${t}`) as string) || "TULAS",
+        recepcion_sacos: numberOrUndefined(form.get(`recepcion_sacos_${t}`))
       });
       creados++;
     }
@@ -5433,7 +5443,11 @@ export function App() {
       dry_end_at: stringOrUndefined(endInput?.value ?? null),
       dryer_name: report.dryer_name,
       operator_name: String(form.get("operator_name") ?? "").trim(),
-      notes: form.get("notes") || undefined
+      notes: form.get("notes") || undefined,
+      recepcion_empaque: (form.get("recepcion_empaque") as string) || undefined,
+      recepcion_sacos: numberOrUndefined(form.get("recepcion_sacos")),
+      botada_empaque: (form.get("botada_empaque") as string) || undefined,
+      botada_sacos: numberOrUndefined(form.get("botada_sacos"))
     };
     const updated = await apiPut<DryingTunnelReport>(`/process-flow/drying/${report.id}`, payload);
     setMessage(updated.status === "COMPLETED" ? `Secado del Túnel ${updated.tunnel_number} finalizado` : `Secado del Túnel ${updated.tunnel_number} actualizado`);
@@ -5466,6 +5480,66 @@ export function App() {
     await refresh();
     await loadMotorActive();
     setEditingDryingReport(null);
+  }
+
+  // Control "Tipo de Empaque" (Tulas vs Sacos) para un momento del túnel. Cuando
+  // se elige Sacos, aparece el Nº de sacos (con un botón para aproximarlo desde
+  // los QQ). Se usa en el llenado (Recepción) y en el vaciado (Botada). No es un
+  // component anidado a propósito: se invoca como función para no remontar el
+  // input no controlado en cada render del formulario.
+  function renderEmpaqueField(opts: {
+    keyId: string;
+    empaqueName: string;
+    sacosName: string;
+    label: string;
+    defEmpaque?: string | null;
+    defSacos?: string | number | null;
+    qq: number;
+  }) {
+    const val = empaqueSel[opts.keyId] ?? ((String(opts.defEmpaque ?? "TULAS").toUpperCase() === "SACOS") ? "SACOS" : "TULAS");
+    return (
+      <div style={{ display: "grid", gridTemplateColumns: val === "SACOS" ? "1fr 1fr" : "1fr", gap: 10, marginTop: 4 }}>
+        <label style={{ margin: 0 }}>
+          <span>{opts.label}</span>
+          <select
+            name={opts.empaqueName}
+            value={val}
+            onChange={(e) => setEmpaqueSel((cur) => ({ ...cur, [opts.keyId]: e.target.value as "TULAS" | "SACOS" }))}
+          >
+            <option value="TULAS">Tulas (Bulk)</option>
+            <option value="SACOS">Sacos</option>
+          </select>
+        </label>
+        {val === "SACOS" && (
+          <label style={{ margin: 0 }}>
+            <span>N.º de sacos</span>
+            <div style={{ display: "flex", gap: 6 }}>
+              <input
+                name={opts.sacosName}
+                type="number"
+                min="0"
+                step="1"
+                defaultValue={opts.defSacos != null && opts.defSacos !== "" ? String(opts.defSacos) : ""}
+                placeholder="0"
+                style={{ flex: 1 }}
+              />
+              <button
+                type="button"
+                className="btnSecondary"
+                title="Aproximar desde los QQ del túnel (1 saco ≈ 1 QQ / 100 lb). Ajústalo si tus sacos pesan distinto."
+                style={{ padding: "0 10px", whiteSpace: "nowrap" }}
+                onClick={(e) => {
+                  const inp = e.currentTarget.previousElementSibling as HTMLInputElement | null;
+                  if (inp) inp.value = String(Math.max(0, Math.round(opts.qq)));
+                }}
+              >
+                ≈ QQ
+              </button>
+            </div>
+          </label>
+        )}
+      </div>
+    );
   }
 
   // Panel de medidores del combustible del motor.
@@ -7252,6 +7326,27 @@ export function App() {
                               <Input name="dry_end_at" label="Hora secado final" type="datetime-local" defaultValue={dateTimeLocalValue(rep.dry_end_at)} required={false} />
                             </div>
                             <Input name="notes" label="Observacion" defaultValue={rep.notes ?? "Secado registrado"} required={false} />
+                            {/* Empaque por momento. Recepción = cómo entró al túnel;
+                                Botada = cómo salió. Sacos paga por saco (ENSACADO);
+                                Tulas paga por QQ. Solo cambia el pago de cuadrilla. */}
+                            {renderEmpaqueField({
+                              keyId: `${rep.id}-rec`,
+                              empaqueName: "recepcion_empaque",
+                              sacosName: "recepcion_sacos",
+                              label: "📦 Empaque de recepción (llenado)",
+                              defEmpaque: rep.recepcion_empaque,
+                              defSacos: rep.recepcion_sacos ?? null,
+                              qq: Number(rep.total_quintals ?? 0)
+                            })}
+                            {renderEmpaqueField({
+                              keyId: `${rep.id}-bot`,
+                              empaqueName: "botada_empaque",
+                              sacosName: "botada_sacos",
+                              label: "📦 Empaque de botada (vaciado)",
+                              defEmpaque: rep.botada_empaque,
+                              defSacos: rep.botada_sacos ?? null,
+                              qq: Number(rep.total_quintals ?? 0)
+                            })}
                             <div className="buttonRow">
                               <button className="primary">Guardar cambios</button>
                               <button
@@ -7392,6 +7487,15 @@ export function App() {
                         <Input name={`moisture_before_${t}`} label="Humedad inicial %" type="number" defaultValue="0" required={false} />
                         <Input name={`dry_end_at_${t}`} label="Hora secado final" type="datetime-local" required={false} />
                         <Input name={`notes_${t}`} label="Observacion" defaultValue="Secado registrado" required={false} />
+                        {/* Empaque de la Recepción: Tulas (por QQ) o Sacos (por saco)
+                            cuando se agotan las Tulas. Solo afecta el pago de cuadrilla. */}
+                        {renderEmpaqueField({
+                          keyId: `new-${t}-rec`,
+                          empaqueName: `recepcion_empaque_${t}`,
+                          sacosName: `recepcion_sacos_${t}`,
+                          label: "📦 Empaque de recepción",
+                          qq: qqDe(secadora)
+                        })}
                       </div>
                     );
                   })}

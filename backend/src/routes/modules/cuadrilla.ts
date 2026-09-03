@@ -11,6 +11,65 @@ export const cuadrillaRouter = Router();
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+// Labores por saco (cuando la corrida se maneja en Sacos porque se agotaron las
+// Tulas). Se busca la primera activa en este orden de preferencia.
+const SACOS_LABOR_CANDIDATES = ["ENSACADO", "SACADO EN SACO"];
+
+// Resuelve la LABOR (actividad + tarifa) y la CANTIDAD a pagar a la cuadrilla por
+// un evento de túnel, según el TIPO DE EMPAQUE registrado para ese momento:
+//   TULAS -> "RECEPCION A TUNEL N" (llenado) / "BOTADA DE TUNEL" (vaciado), pagado
+//            por QQ del túnel.
+//   SACOS -> "ENSACADO"/"SACADO EN SACO", pagado por Nº de sacos (si no se
+//            registró el conteo, cae al QQ del túnel para no dejar el evento sin
+//            pago). NO toca pesos ni tickets: solo cambia labor/tarifa/cantidad.
+// Devuelve {missing} con el nombre de la labor faltante si no hay tarifa activa.
+async function resolveTunnelLabor(
+  client: PoolClient,
+  opts: {
+    tunnel_number: number;
+    momento: "LLENADO" | "VACIADO";
+    empaque: string | null;
+    sacos: number | null;
+    quintals: number;
+  }
+): Promise<
+  | { activity_id: string; activity_name: string; unit_rate: number; quantity: number }
+  | { missing: string }
+> {
+  const esSacos = String(opts.empaque ?? "TULAS").toUpperCase() === "SACOS";
+  if (esSacos) {
+    const act = await client.query(
+      `SELECT id, name, unit_rate::float AS unit_rate
+       FROM cuadrilla_activities
+       WHERE upper(btrim(name)) = ANY($1::text[]) AND is_active = true
+       ORDER BY array_position($1::text[], upper(btrim(name)))
+       LIMIT 1`,
+      [SACOS_LABOR_CANDIDATES]
+    );
+    if (!act.rowCount) return { missing: SACOS_LABOR_CANDIDATES[0] };
+    const sacos = Number(opts.sacos) || 0;
+    const quantity = sacos > 0 ? sacos : Number(opts.quintals) || 0;
+    return {
+      activity_id: act.rows[0].id as string,
+      activity_name: act.rows[0].name as string,
+      unit_rate: Number(act.rows[0].unit_rate),
+      quantity
+    };
+  }
+  const laborName = opts.momento === "VACIADO" ? "BOTADA DE TUNEL" : `RECEPCION A TUNEL ${opts.tunnel_number}`;
+  const act = await client.query(
+    "SELECT id, name, unit_rate::float AS unit_rate FROM cuadrilla_activities WHERE upper(btrim(name)) = $1 AND is_active = true LIMIT 1",
+    [laborName]
+  );
+  if (!act.rowCount) return { missing: laborName };
+  return {
+    activity_id: act.rows[0].id as string,
+    activity_name: act.rows[0].name as string,
+    unit_rate: Number(act.rows[0].unit_rate),
+    quantity: Number(opts.quintals) || 0
+  };
+}
+
 // Autogenera (o actualiza) la entrada de nómina de la cuadrilla a partir de un
 // movimiento de secadora (llenado o vaciado de un túnel). Se llama DENTRO de la
 // transacción del movimiento. Nunca lanza: si algo falla, no debe tumbar el
@@ -282,7 +341,8 @@ cuadrillaRouter.post("/tunnel-autoprocess", asyncRoute(async (req, res) => {
     const eventos = await client.query(
       `SELECT d.id AS drying_report_id, d.tunnel_number, 'LLENADO'::text AS momento,
               COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) AS work_date,
-              d.total_quintals::float AS quintals
+              d.total_quintals::float AS quintals,
+              d.recepcion_empaque AS empaque, d.recepcion_sacos::float AS sacos
        FROM drying_tunnel_reports d
        WHERE COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) BETWEEN $1 AND $2
          AND COALESCE(d.total_quintals,0) > 0
@@ -290,7 +350,8 @@ cuadrillaRouter.post("/tunnel-autoprocess", asyncRoute(async (req, res) => {
        UNION ALL
        SELECT d.id, d.tunnel_number, 'VACIADO'::text,
               COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date),
-              d.total_quintals::float
+              d.total_quintals::float,
+              d.botada_empaque AS empaque, d.botada_sacos::float AS sacos
        FROM drying_tunnel_reports d
        WHERE COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) BETWEEN $1 AND $2
          AND COALESCE(d.total_quintals,0) > 0
@@ -303,31 +364,37 @@ cuadrillaRouter.post("/tunnel-autoprocess", asyncRoute(async (req, res) => {
     const sinTarifa: string[] = [];
     for (const e of eventos.rows) {
       const tunnel = Number(e.tunnel_number);
-      const laborName = e.momento === "VACIADO" ? "BOTADA DE TUNEL" : `RECEPCION A TUNEL ${tunnel}`;
-      const act = await client.query(
-        "SELECT id FROM cuadrilla_activities WHERE upper(btrim(name)) = $1 AND is_active = true LIMIT 1",
-        [laborName]
-      );
-      if (!act.rowCount) { sinTarifa.push(laborName); continue; } // sin tarifa configurada: se omite
-      const activityId = act.rows[0].id as string;
+      const momento = e.momento === "VACIADO" ? "VACIADO" : "LLENADO";
       const qq = Number(e.quintals) || 0;
+
+      // La labor y cantidad dependen del EMPAQUE del túnel (Tulas por QQ vs Sacos
+      // por saco). Si falta la tarifa configurada, se omite y se reporta.
+      const resolved = await resolveTunnelLabor(client, {
+        tunnel_number: tunnel,
+        momento,
+        empaque: e.empaque,
+        sacos: e.sacos == null ? null : Number(e.sacos),
+        quintals: qq
+      });
+      if ("missing" in resolved) { sinTarifa.push(resolved.missing); continue; }
       const workDate = e.work_date ? new Date(e.work_date).toISOString().slice(0, 10) : null;
 
-      // Asignación (100% al grupo) + pago, en la misma transacción.
+      // Asignación (100% al grupo) + pago, en la misma transacción. La cantidad
+      // asignada es QQ (Tulas) o Nº de sacos (Sacos), según el empaque.
       await client.query(
         `INSERT INTO drying_tunnel_cuadrilla (drying_report_id, worker_name, activity_id, quintals, momento, created_by)
          VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (drying_report_id, momento, (lower(btrim(worker_name))))
          DO UPDATE SET activity_id = EXCLUDED.activity_id, quintals = EXCLUDED.quintals`,
-        [e.drying_report_id, worker, activityId, qq, e.momento, userId]
+        [e.drying_report_id, worker, resolved.activity_id, resolved.quantity, momento, userId]
       );
       const entry = await upsertCuadrillaSecadoraEntry(client, {
         referencia_id: e.drying_report_id,
         tunnel_number: tunnel,
-        momento: e.momento === "VACIADO" ? "VACIADO" : "LLENADO",
-        activity_id: activityId,
+        momento,
+        activity_id: resolved.activity_id,
         worker_name: worker,
-        quantity: qq,
+        quantity: resolved.quantity,
         work_date: workDate,
         created_by: userId
       });
