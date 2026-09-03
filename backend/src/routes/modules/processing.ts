@@ -23,7 +23,10 @@ const draftSchema = z.object({
   pilado_entries: z.array(z.object({
     id: z.string(),
     presentation: z.string(),
-    quantityQq: z.number().nonnegative()
+    quantityQq: z.number().nonnegative(),
+    // MIX Tula/Saco por línea (opcionales por retrocompatibilidad del borrador).
+    destino: z.enum(["TULA", "SACO"]).optional(),
+    tulas: z.number().nonnegative().optional()
   })).default([]),
   saved_by: z.string().uuid().optional()
 });
@@ -212,7 +215,12 @@ const finishProductionSchema = z.object({
   white_rice_presentations: z.array(z.object({
     presentation: z.string().min(1),
     sack_weight_lb: z.number().positive().optional(),
-    quantity: z.number().positive()
+    quantity: z.number().positive(),
+    // MIX por línea: TULA (va a Selección, no descuenta sacos) o SACO (comercial,
+    // descuenta sacos). Sin destino explícito se trata como SACO (retrocompat).
+    // `tulas` = N.º de tulas de esa línea (base del estibador), solo si TULA.
+    destino: z.enum(["TULA", "SACO"]).optional(),
+    tulas: z.number().nonnegative().optional()
   })).optional(),
   broken_rice: productionOutputSchema.extend({
     unit: productionUnitSchema.default("QQ")
@@ -474,49 +482,60 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       }
     }
 
-    // ── Descuento FÍSICO de sacos de la MATRIZ por el empaque del arroz pilado ──
-    // El consumo del saco ocurre AQUÍ (al empacar), no en la venta. Se descuenta
-    // siempre de la bodega de la matriz (sack_inventory es única), sin importar de
-    // qué accionista sea el lote. Se usa el desglose por presentación para saber en
-    // qué tipos de saco (10/25/50/100 LB) salió el arroz.
-    // Destino efectivo: explícito, o inferido por si hay presentaciones (empaque)
-    // o no (selección en tulas).
-    const destino = body.destino
-      ?? ((body.white_rice_presentations?.length ?? 0) > 0 ? "EMPAQUE" : "SELECCION");
+    // ── MIX Tula/Saco por línea: inventario y descuento de sacos diferenciado ──
+    // Las tulas suelen agotarse a mitad del proceso, así que un mismo lote puede
+    // salir parte en TULAS (van a Selección, tula reutilizable → NO descuenta
+    // sacos comerciales) y parte en SACOS (producto terminado comercial → SÍ
+    // descuenta sacos de la matriz). Cada presentación trae su `destino`; sin él
+    // se trata como SACO (retrocompat: el empaque de siempre). El arroz blanco
+    // completo (tula + saco) igual entra al stock de producto terminado, de donde
+    // Selección jala su parte. NO se tocan pesos ni tickets.
+    const presLines = body.white_rice_presentations ?? [];
+    const anyLineDestino = presLines.some((p) => p.destino);
+    // QQ en tulas: de las líneas marcadas, o del campo antiguo qq_de_tulas.
+    const tulaQq = anyLineDestino
+      ? round3(presLines.filter((p) => p.destino === "TULA").reduce((s, p) => s + Number(p.quantity), 0))
+      : round3(body.qq_de_tulas ?? 0);
+    // QQ en sacos = total del arroz blanco − lo que fue en tulas.
+    const sacoQq = round3(Math.max(0, processedQq - tulaQq));
+    // N.º de tulas (base del estibador): de las líneas, o del campo antiguo `tulas`.
+    const tulasCount = anyLineDestino
+      ? presLines.filter((p) => p.destino === "TULA").reduce((s, p) => s + (Number(p.tulas) || 0), 0)
+      : Number(body.tulas ?? 0);
 
     let sacosMatriz: Awaited<ReturnType<typeof descontarSacosPorPeso>> = [];
-    // Sacos de arroz blanco consumidos (para el pago por saca de la cuadrilla en
-    // empaque directo). En selección queda en 0.
-    let sacasArrozBlanco = 0;
-    // Selección (tulas reutilizables): NO se descuenta ningún saco de empaque.
-    if (destino === "EMPAQUE") {
-      const sacosPorPeso = new Map<number, number>();
-      for (const p of body.white_rice_presentations ?? []) {
-        if (!p.sack_weight_lb || p.sack_weight_lb <= 0) continue;
-        const nSacos = Math.round((Number(p.quantity) * 100) / p.sack_weight_lb);
-        if (nSacos > 0) sacosPorPeso.set(p.sack_weight_lb, (sacosPorPeso.get(p.sack_weight_lb) ?? 0) + nSacos);
-      }
-      sacasArrozBlanco = [...sacosPorPeso.values()].reduce((a, b) => a + b, 0);
+    // Sacos comerciales de arroz blanco consumidos (para el pago por saca del
+    // pilador/estibador). SOLO las líneas en SACO; las de TULA se saltan.
+    const sacosPorPeso = new Map<number, number>();
+    for (const p of presLines) {
+      if (p.destino === "TULA") continue; // tula reutilizable: no descuenta saco
+      if (!p.sack_weight_lb || p.sack_weight_lb <= 0) continue;
+      const nSacos = Math.round((Number(p.quantity) * 100) / p.sack_weight_lb);
+      if (nSacos > 0) sacosPorPeso.set(p.sack_weight_lb, (sacosPorPeso.get(p.sack_weight_lb) ?? 0) + nSacos);
+    }
+    const sacasArrozBlanco = [...sacosPorPeso.values()].reduce((a, b) => a + b, 0);
+    if (sacosPorPeso.size) {
       sacosMatriz = await descontarSacosPorPeso(client, sacosPorPeso, "Empaque en producción (arroz pilado)");
+    }
 
-      // Subproductos (arrocillo/polvillo) empacados en sacos ESPECIALES sin peso
-      // fijo. El tipo lo fija el producto (Arrocillo→Saco Usado, Polvillo→Saco
-      // Negro); el nº de sacos usa el peso por saco indicado en la salida (variable
-      // según cliente: 95, 96, 100 lb…). sacos = QQ*100/peso_por_saco.
-      const sacosEspeciales = new Map<string, number>();
-      for (const item of outputs) {
-        if (!item.isByproduct) continue;
-        const peso = Number(item.output.sack_weight_lb);
-        if (!peso || peso <= 0) continue;
-        const tipo = tipoSacoEspecial(item.label);
-        if (!tipo) continue; // Rechazo u otros: sin saco especial
-        const nSacos = Math.round((Number(item.output.quantity) * 100) / peso);
-        if (nSacos > 0) sacosEspeciales.set(tipo, (sacosEspeciales.get(tipo) ?? 0) + nSacos);
-      }
-      if (sacosEspeciales.size) {
-        const esp = await descontarSacosPorTipo(client, sacosEspeciales, "Empaque en producción (subproductos)");
-        sacosMatriz.push(...esp);
-      }
+    // Subproductos (arrocillo/polvillo) empacados en sacos ESPECIALES sin peso
+    // fijo. El tipo lo fija el producto (Arrocillo→Saco Usado, Polvillo→Saco
+    // Negro); el nº de sacos usa el peso por saco indicado en la salida (variable
+    // según cliente: 95, 96, 100 lb…). sacos = QQ*100/peso_por_saco. Es
+    // independiente del destino del arroz blanco.
+    const sacosEspeciales = new Map<string, number>();
+    for (const item of outputs) {
+      if (!item.isByproduct) continue;
+      const peso = Number(item.output.sack_weight_lb);
+      if (!peso || peso <= 0) continue;
+      const tipo = tipoSacoEspecial(item.label);
+      if (!tipo) continue; // Rechazo u otros: sin saco especial
+      const nSacos = Math.round((Number(item.output.quantity) * 100) / peso);
+      if (nSacos > 0) sacosEspeciales.set(tipo, (sacosEspeciales.get(tipo) ?? 0) + nSacos);
+    }
+    if (sacosEspeciales.size) {
+      const esp = await descontarSacosPorTipo(client, sacosEspeciales, "Empaque en producción (subproductos)");
+      sacosMatriz.push(...esp);
     }
 
     if (body.packaging_supply_id && sacksUsed > 0) {
@@ -688,7 +707,7 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
         }))),
         serviceRate,
         serviceAmount,
-        body.qq_de_tulas ?? 0,
+        tulaQq,
         body.created_by
       ]
     );
@@ -753,14 +772,18 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       piladorName: updatedBatch.rows[0].pilador_name,
       estibadorName: updatedBatch.rows[0].estibador_name,
       polvilloName: body.polvillo_worker_name || updatedBatch.rows[0].polvillo_worker_name || null,
+      // Pilador: cobra por TODO el arroz pilado (tula + saco) por QQ + sacas.
       qq: processedQq,
-      qqDeTulas: body.qq_de_tulas,
-      // Pago por saca (pilador y estibador en empaque): usa los sacos físicos de
-      // arroz blanco realmente consumidos. En selección (tulas) es 0.
+      // Estibador (MIX): la porción en TULAS se paga por N.º de tulas y la porción
+      // en SACOS por QQ + sacas + arrocillo. En un lote mixto cobra ambas partes.
+      qqSaco: sacoQq,
+      qqDeTulas: tulaQq,
+      // Pago por saca (pilador y estibador): sacos físicos de arroz blanco
+      // realmente consumidos (solo líneas en saco). En tulas es 0.
       sacas: sacasArrozBlanco,
       arrocillo: arrocilloQq,
       polvillo: polvilloQq,
-      tulas: body.tulas ?? 0,
+      tulas: tulasCount,
       createdBy: body.created_by ?? null
     });
 

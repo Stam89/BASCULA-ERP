@@ -127,6 +127,10 @@ export async function createProductionWorkerPayments(
     estibadorName?: string | null;
     polvilloName?: string | null;
     qq: number;
+    // Base del ESTIBADOR por la porción en sacos (QQ). En un lote mixto es solo
+    // la parte que salió en sacos; la parte en tulas se paga por `tulas`. Si no
+    // se indica, se asume el modelo antiguo (todo el QQ si no hay tulas).
+    qqSaco?: number;
     qqDeTulas?: number;
     sacas: number;
     arrocillo: number;
@@ -144,12 +148,15 @@ export async function createProductionWorkerPayments(
     const tulas = Number(opts.tulas) || 0;
     const tulasBonus = estibadorBaseFromTulas(tulas, rates.estibador_por_3tulas);
 
-    // Cada rol lleva SU base de cobro. Regla XOR ESTRICTA del estibador:
-    //  · con tulas (cantidad_tulas > 0) → cobra EXCLUSIVAMENTE por volumen:
-    //    (cantidad_tulas / 3) × tarifa_3_tulas. NO cobra QQ, sacas ni arrocillo.
-    //  · sin tulas (empaque directo) → destajo: qq×tarifa + sacas×tarifa + arrocillo×tarifa.
-    // El pilador es INMUTABLE: siempre qq×tarifa_qq + sacas×tarifa_saca.
-    const usaTulas = tulas > 0;
+    // El pilador es INMUTABLE: siempre qq×tarifa_qq + sacas×tarifa_saca sobre TODO
+    // el arroz pilado (tula + saco). El estibador cobra por el MIX del lote:
+    //  · porción en TULAS → volumen: (cantidad_tulas / 3) × tarifa_3_tulas.
+    //  · porción en SACOS → destajo: qq_saco×tarifa + sacas×tarifa + arrocillo×tarifa.
+    // En un lote 100% tulas cobra solo el volumen; 100% sacos, solo el destajo; y
+    // en un lote MIXTO cobra ambas partes (las tulas suelen agotarse a mitad del
+    // proceso). qqSaco = QQ que salió en sacos; si no viene, se asume el modelo
+    // anterior (todo el QQ si no hay tulas, 0 si hay tulas).
+    const qqSaco = opts.qqSaco != null ? (Number(opts.qqSaco) || 0) : (tulas > 0 ? 0 : qq);
     const rows: Array<{ role: string; name: string; base: number; qq: number; tulas: number; tulasBonus: number; sacasCobradas: number; arrocilloPaga: number }> = [];
     if (opts.piladorName && opts.piladorName.trim()) {
       rows.push({
@@ -160,27 +167,18 @@ export async function createProductionWorkerPayments(
       });
     }
     if (opts.estibadorName && opts.estibadorName.trim()) {
-      if (usaTulas) {
-        // Volumen puro por tulas: nada de arrocillo/QQ/sacas.
-        rows.push({
-          role: "ESTIBADOR",
-          name: opts.estibadorName.trim(),
-          base: tulasBonus,
-          qq: 0, tulas, tulasBonus, sacasCobradas: 0, arrocilloPaga: 0
-        });
-      } else {
-        // Empaque directo (sin tulas): destajo por QQ, sacas y arrocillo.
-        rows.push({
-          role: "ESTIBADOR",
-          name: opts.estibadorName.trim(),
-          base: round2(
-            qq * rates.estibador_per_qq +
-            sacas * rates.estibador_per_saca +
-            arrocillo * rates.estibador_per_arrocillo
-          ),
-          qq, tulas: 0, tulasBonus: 0, sacasCobradas: sacas, arrocilloPaga: arrocillo
-        });
-      }
+      // MIX: suma la parte de tulas (volumen) + la parte de sacos (destajo).
+      const destajoSaco = round2(
+        qqSaco * rates.estibador_per_qq +
+        sacas * rates.estibador_per_saca +
+        arrocillo * rates.estibador_per_arrocillo
+      );
+      rows.push({
+        role: "ESTIBADOR",
+        name: opts.estibadorName.trim(),
+        base: round2(tulasBonus + destajoSaco),
+        qq: qqSaco, tulas, tulasBonus, sacasCobradas: sacas, arrocilloPaga: arrocillo
+      });
     }
 
     if (opts.polvilloName && opts.polvilloName.trim() && (opts.polvillo ?? 0) > 0) {

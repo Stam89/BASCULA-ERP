@@ -627,6 +627,11 @@ type MillingPiladoEntry = {
   id: string;
   presentation: string;
   quantityQq: number;
+  // MIX por línea: TULA (→ Selección, tula reutilizable) o SACO (comercial).
+  // Sin destino se asume SACO (retrocompat con borradores viejos).
+  destino?: "TULA" | "SACO";
+  // N.º de tulas de la línea (base del estibador), solo para líneas TULA.
+  tulas?: number;
 };
 
 /** Pilado guardado a medias en el servidor (proceso en curso), por túnel. */
@@ -1319,8 +1324,12 @@ export function App() {
   const [millingPiladoEntries, setMillingPiladoEntries] = useState<MillingPiladoEntry[]>([]);
   const [millingPiladoPresentation, setMillingPiladoPresentation] = useState(piladoPresentations[4]);
   const [millingPiladoQq, setMillingPiladoQq] = useState("");
-  // Destino del arroz pilado: SELECCIÓN (en tulas, sin sacos) o EMPAQUE (en sacos).
-  const [millingDestino, setMillingDestino] = useState<"seleccion" | "empaque">("empaque");
+  // Destino/Empaque de la LÍNEA que se está agregando: TULA (→ Selección) o SACO
+  // (comercial). Las tulas suelen agotarse a mitad del proceso, así que un mismo
+  // lote puede mezclar líneas de Tula y de Saco.
+  const [millingPiladoDestino, setMillingPiladoDestino] = useState<"TULA" | "SACO">("SACO");
+  // N.º de tulas de la línea (base del estibador), solo cuando el destino es TULA.
+  const [millingPiladoTulas, setMillingPiladoTulas] = useState("");
   // Peso personalizado (lb) para la opción "Pico" del selector de presentaciones.
   const [millingCustomLb, setMillingCustomLb] = useState("");
   const [millingDraftSavedAt, setMillingDraftSavedAt] = useState<string | null>(null);
@@ -1946,6 +1955,17 @@ export function App() {
     () => (Array.isArray(millingPiladoEntries) ? millingPiladoEntries : []).reduce((sum, entry) => sum + entry.quantityQq, 0),
     [millingPiladoEntries]
   );
+  // Desglose del MIX: QQ que va en tulas (→ Selección) vs en sacos (comercial) y
+  // el conteo de tulas (base del estibador). Alimenta los totales y el submit.
+  const millingMix = useMemo(() => {
+    const list = Array.isArray(millingPiladoEntries) ? millingPiladoEntries : [];
+    let tulaQq = 0, sacoQq = 0, tulasCount = 0;
+    for (const e of list) {
+      if (e.destino === "TULA") { tulaQq += e.quantityQq; tulasCount += Number(e.tulas) || 0; }
+      else sacoQq += e.quantityQq;
+    }
+    return { tulaQq, sacoQq, tulasCount };
+  }, [millingPiladoEntries]);
   // Eficiencia del lote en vivo: % arroz blanco, % subproductos y % merma/cáscara
   // sobre los QQ de entrada. Badge según el rendimiento de arroz blanco.
   const millingEficiencia = useMemo(() => {
@@ -5667,18 +5687,33 @@ export function App() {
       return;
     }
 
-    // "⚙️ Peso Personalizado / Pico": la presentación es el peso en lb que digita
-    // el usuario (ej. 96 LB o un saco pico incompleto).
-    let presentation = millingPiladoPresentation;
-    if (millingPiladoPresentation === PESO_PERSONALIZADO) {
-      const lb = Number(millingCustomLb);
-      if (!Number.isFinite(lb) || lb <= 0) {
-        setMessage("Ingrese el peso personalizado en libras");
+    let presentation: string;
+    let tulas: number | undefined;
+    if (millingPiladoDestino === "TULA") {
+      // Línea en TULAS (va a Selección). Se captura el N.º de tulas para el pago
+      // del estibador; la presentación queda como "Tula".
+      const count = Number(millingPiladoTulas);
+      if (!Number.isFinite(count) || count <= 0) {
+        setMessage("Ingrese la cantidad de tulas de esta línea");
         return;
       }
-      presentation = `${lb} LB`;
+      presentation = "🧺 Tula";
+      tulas = count;
+    } else {
+      // Línea en SACOS. "⚙️ Peso Personalizado / Pico": la presentación es el peso
+      // en lb que digita el usuario (ej. 96 LB o un saco pico incompleto).
+      presentation = millingPiladoPresentation;
+      if (millingPiladoPresentation === PESO_PERSONALIZADO) {
+        const lb = Number(millingCustomLb);
+        if (!Number.isFinite(lb) || lb <= 0) {
+          setMessage("Ingrese el peso personalizado en libras");
+          return;
+        }
+        presentation = `${lb} LB`;
+      }
     }
 
+    const destino = millingPiladoDestino;
     setMillingPiladoEntries((current) => {
       const entries = Array.isArray(current) ? current : [];
       return [
@@ -5686,11 +5721,14 @@ export function App() {
       {
         id: `${Date.now()}-${entries.length}`,
         presentation,
-        quantityQq
+        quantityQq,
+        destino,
+        tulas
       }
     ];
     });
     setMillingPiladoQq("");
+    setMillingPiladoTulas("");
     setMillingCustomLb("");
     setMillingYields(null);
     setMessage(`Pilado ${presentation} agregado`);
@@ -5960,12 +5998,8 @@ export function App() {
       return;
     }
 
-    const qqTulas = Number(millingReport.qqTulas || 0);
-    const esSeleccion = millingDestino === "seleccion";
-    if (esSeleccion) {
-      if (qqTulas <= 0) { setMessage("Ingrese el peso total (QQ) que va en tulas a Selección"); return; }
-    } else if (millingPiladoTotalQq <= 0) {
-      setMessage("Agregue al menos una presentación de arroz empacado");
+    if (millingPiladoTotalQq <= 0) {
+      setMessage("Agregue al menos una línea de arroz pilado (en Tula o en Saco)");
       return;
     }
 
@@ -6002,45 +6036,50 @@ export function App() {
       input_quantity: inputKg
     });
 
-    // Selección: el arroz va en tulas (peso total QQ), SIN presentaciones ni
-    // subproductos → el backend no descuenta sacos. Empaque: presentaciones +
-    // subproductos → descuenta sacos. La regla XOR de nómina la dispara `tulas`.
-    const whiteRiceQq = esSeleccion ? qqTulas : millingPiladoTotalQq;
+    // MIX Tula/Saco por línea: todo el arroz blanco (tula + saco) entra al stock
+    // de producto terminado. El backend descuenta sacos SOLO de las líneas en
+    // Saco; las de Tula van a Selección sin descontar. La nómina del estibador
+    // usa el desglose (tulas por N.º de tulas + sacos por QQ/sacas).
+    const whiteRiceQq = millingPiladoTotalQq;
+    const piladoEntries = Array.isArray(millingPiladoEntries) ? millingPiladoEntries : [];
     const production = await apiPost<ProductionResult>(`/processing-batches/${batch.id}/finish-production`, {
       lot_id: src.lot_id,
       drying_report_id: src.drying_report_id,
       is_maquila: false,
       input_paddy_kg: inputKg,
-      destino: esSeleccion ? "SELECCION" : "EMPAQUE",
       white_rice: {
         product_id: outputProduct.id,
         warehouse_id: finishedWarehouse.id,
         quantity: whiteRiceQq,
         unit: "QQ"
       },
-      // Empaque: se manda el desglose por presentación (100 LB, 25 LB…) que
-      // también define cuántos sacos se descuentan. Selección: sin presentaciones.
-      white_rice_presentations: esSeleccion ? [] :
-        (Array.isArray(millingPiladoEntries) ? millingPiladoEntries : []).map((entry) => ({
-          presentation: entry.presentation,
-          sack_weight_lb: sackWeightLbOf(entry.presentation),
-          quantity: entry.quantityQq
-        })),
-      broken_rice: !esSeleccion && Number(millingReport.broken34 || 0) > 0 ? {
+      // Una línea por renglón del reporte, con su destino. Tula: sin peso de saco
+      // (no descuenta) + N.º de tulas. Saco: con peso (descuenta sacos comerciales).
+      white_rice_presentations: piladoEntries.map((entry) => {
+        const esTula = entry.destino === "TULA";
+        return {
+          presentation: esTula ? "TULA" : entry.presentation,
+          sack_weight_lb: esTula ? undefined : sackWeightLbOf(entry.presentation),
+          quantity: entry.quantityQq,
+          destino: esTula ? "TULA" : "SACO",
+          tulas: esTula ? (Number(entry.tulas) || 0) : undefined
+        };
+      }),
+      broken_rice: Number(millingReport.broken34 || 0) > 0 ? {
         product_id: broken34Product.id,
         warehouse_id: finishedWarehouse.id,
         quantity: Number(millingReport.broken34 || 0),
         unit: "QQ",
         sack_weight_lb: Number(millingReport.broken34_lb) > 0 ? Number(millingReport.broken34_lb) : undefined
       } : undefined,
-      fine_broken_rice: !esSeleccion && Number(millingReport.fineBroken || 0) > 0 ? {
+      fine_broken_rice: Number(millingReport.fineBroken || 0) > 0 ? {
         product_id: fineBrokenProduct.id,
         warehouse_id: finishedWarehouse.id,
         quantity: Number(millingReport.fineBroken || 0),
         unit: "QQ",
         sack_weight_lb: Number(millingReport.fineBroken_lb) > 0 ? Number(millingReport.fineBroken_lb) : undefined
       } : undefined,
-      bran: !esSeleccion && Number(millingReport.polvillo || 0) > 0 ? {
+      bran: Number(millingReport.polvillo || 0) > 0 ? {
         product_id: branProduct.id,
         warehouse_id: finishedWarehouse.id,
         quantity: Number(millingReport.polvillo || 0),
@@ -6050,10 +6089,11 @@ export function App() {
       sacks_used: 0,
       pilador_name: piladorName || undefined,
       estibador_name: estibadorName || undefined,
-      polvillo_worker_name: esSeleccion ? undefined : (polvilloWorkerName || undefined),
-      // XOR del estibador: en selección paga por tulas; en empaque, tulas = 0 → destajo.
-      tulas: esSeleccion ? Number(millingReport.tulas || 0) : 0,
-      qq_de_tulas: esSeleccion ? Number(millingReport.qqTulas || 0) : 0
+      polvillo_worker_name: polvilloWorkerName || undefined,
+      // Nómina: el estibador cobra la porción en tulas (N.º de tulas) + la porción
+      // en sacos (QQ/sacas). El backend recalcula todo desde el desglose.
+      tulas: millingMix.tulasCount,
+      qq_de_tulas: millingMix.tulaQq
     });
 
     setMillingYields(result);
@@ -8732,65 +8772,44 @@ export function App() {
               {/* ⚖️ Rendimiento de Pilado */}
               <div style={{ fontSize: 12, fontWeight: 800, color: "#475569", margin: "2px 0 6px" }}>⚖️ Rendimiento de Pilado</div>
 
-              {/* Destino del arroz pilado: Selección (tulas) o Empaque (sacos) */}
-              <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
-                  <input type="radio" name="millingDestino" checked={millingDestino === "seleccion"} style={{ width: "auto" }}
-                    onChange={() => setMillingDestino("seleccion")} />
-                  🧺 Enviar a Selección (Uso de Tulas)
-                </label>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
-                  <input type="radio" name="millingDestino" checked={millingDestino === "empaque"} style={{ width: "auto" }}
-                    onChange={() => setMillingDestino("empaque")} />
-                  📦 Empaque Comercial (Uso de Sacos)
-                </label>
-              </div>
-
-              {millingDestino === "seleccion" ? (
-                /* ── Selección: solo Cantidad de Tulas y Peso Total (QQ) ── */
-                <>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
-                    <label style={{ fontSize: 12 }}>
-                      <span style={{ fontWeight: 700, display: "block", marginBottom: 3 }}>📦 Cantidad de Tulas</span>
-                      <input type="number" min="0" step="1" value={millingReport.tulas}
-                        onChange={e => setMillingReport(p => ({ ...p, tulas: e.target.value }))}
-                        style={{ width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
-                        placeholder="Ej: 6" />
-                    </label>
-                    <label style={{ fontSize: 12 }}>
-                      <span style={{ fontWeight: 700, display: "block", marginBottom: 3 }}>⚖️ Peso Total (QQ)</span>
-                      <input type="number" min="0" step="0.01" value={millingReport.qqTulas}
-                        onChange={e => setMillingReport(p => ({ ...p, qqTulas: e.target.value }))}
-                        style={{ width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
-                        placeholder="Ej: 12.50" />
-                    </label>
-                  </div>
-                  <div className="totalBox" style={{ background: "#eff6ff", borderColor: "#bfdbfe" }}>
-                    <span>⚖️ TOTAL QQ EN TULAS</span>
-                    <strong>{Number(millingReport.qqTulas || 0).toFixed(2)} QQ</strong>
-                    <small>Va al módulo de Selección en tulas reutilizables — no se descuentan sacos.</small>
-                  </div>
-                </>
-              ) : (
-                /* ── Empaque Comercial: presentaciones (sacos) + subproductos ── */
-                <>
+              {/* MIX por línea: cada renglón de arroz pilado tiene su Destino/Empaque
+                  (🧺 Tula → Selección · 📦 Saco Comercial). Se pueden mezclar en el
+                  mismo lote (las tulas suelen agotarse a mitad del proceso). */}
+              <>
                   <div className="millingPiladoBuilder">
                     <label>
-                      <span>Presentación</span>
-                      <select value={millingPiladoPresentation} onChange={(event) => setMillingPiladoPresentation(event.target.value)}>
-                        {piladoPresentations.map((presentation) => (
-                          <option key={presentation} value={presentation}>
-                            {presentation}
-                          </option>
-                        ))}
-                        <option value={PESO_PERSONALIZADO}>{PESO_PERSONALIZADO}</option>
+                      <span>Destino / Empaque</span>
+                      <select value={millingPiladoDestino} onChange={(event) => setMillingPiladoDestino(event.target.value as "TULA" | "SACO")}>
+                        <option value="TULA">🧺 Tula (Enviar a Selección)</option>
+                        <option value="SACO">📦 Saco Comercial</option>
                       </select>
                     </label>
-                    {millingPiladoPresentation === PESO_PERSONALIZADO && (
+                    {millingPiladoDestino === "SACO" ? (
+                      <>
+                        <label>
+                          <span>Presentación (saco)</span>
+                          <select value={millingPiladoPresentation} onChange={(event) => setMillingPiladoPresentation(event.target.value)}>
+                            {piladoPresentations.map((presentation) => (
+                              <option key={presentation} value={presentation}>
+                                {presentation}
+                              </option>
+                            ))}
+                            <option value={PESO_PERSONALIZADO}>{PESO_PERSONALIZADO}</option>
+                          </select>
+                        </label>
+                        {millingPiladoPresentation === PESO_PERSONALIZADO && (
+                          <label>
+                            <span>Peso del saco (lb)</span>
+                            <input min="1" step="0.01" type="number" value={millingCustomLb}
+                              onChange={(event) => setMillingCustomLb(event.target.value)} placeholder="Ej: 96" />
+                          </label>
+                        )}
+                      </>
+                    ) : (
                       <label>
-                        <span>Peso del saco (lb)</span>
-                        <input min="1" step="0.01" type="number" value={millingCustomLb}
-                          onChange={(event) => setMillingCustomLb(event.target.value)} placeholder="Ej: 96" />
+                        <span>N.º de tulas</span>
+                        <input min="1" step="1" type="number" value={millingPiladoTulas}
+                          onChange={(event) => setMillingPiladoTulas(event.target.value)} placeholder="Ej: 6" />
                       </label>
                     )}
                     <label>
@@ -8809,10 +8828,13 @@ export function App() {
                     </button>
                   </div>
                   <section className="millingEntryList">
-                    {millingPiladoEntries.length === 0 && <p className="muted">Agrega una o varias presentaciones de pilado.</p>}
+                    {millingPiladoEntries.length === 0 && <p className="muted">Agrega renglones de arroz pilado (en Tula o en Saco). Se pueden mezclar.</p>}
                     {millingPiladoEntries.map((entry) => (
                       <div className="dryerEntryRow" key={entry.id}>
-                        <strong>{entry.presentation}</strong>
+                        <strong>
+                          {entry.destino === "TULA" ? "🧺 Tula" : `📦 ${entry.presentation}`}
+                          {entry.destino === "TULA" && entry.tulas ? <span className="muted" style={{ fontWeight: 400 }}> · {entry.tulas} tula(s)</span> : null}
+                        </strong>
                         <span>{entry.quantityQq.toFixed(2)} QQ</span>
                         <button type="button" onClick={() => removeMillingPiladoEntry(entry.id)}>
                           Quitar
@@ -8824,7 +8846,7 @@ export function App() {
                   <div className="totalBox">
                     <span>🌾 TOTAL ARROZ PILADO</span>
                     <strong>{millingPiladoTotalQq.toFixed(2)} QQ</strong>
-                    <small>Suma de las presentaciones (10 LB, 25 LB, 50 LB, etc.)</small>
+                    <small>🧺 Tula (Selección): {millingMix.tulaQq.toFixed(2)} QQ · 📦 Sacos (Comercial): {millingMix.sacoQq.toFixed(2)} QQ</small>
                   </div>
 
                   <div className="productionSackGrid">
@@ -8852,8 +8874,7 @@ export function App() {
                         style={{ display: "block", width: "100%", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
                     </label>
                   </div>
-                </>
-              )}
+              </>
               {/* Pago por llenado de polvillo: OCULTO a petición. El pago se sigue
                   registrando en Nómina (backend) con el rol Polvillo; solo no se
                   muestra el cálculo aquí. */}
