@@ -1406,6 +1406,10 @@ export function App() {
   const [movCategory, setMovCategory] = useState("");
   const [movType, setMovType] = useState<"EXPENSE" | "INCOME">("EXPENSE");
   const [movPayableId, setMovPayableId] = useState("");
+  // Detalle de sacos cuando el egreso es "Compra de sacos": tipo + cantidad por
+  // línea. Alimenta la ENTRADA automática al inventario (matriz) al registrar.
+  const [movSackLines, setMovSackLines] = useState<Array<{ sack_id: string; cantidad: number }>>([]);
+  const [movSackPick, setMovSackPick] = useState<{ sack_id: string; cantidad: string }>({ sack_id: "", cantidad: "" });
   const [cashCategories, setCashCategories] = useState<CashCat[]>([]);
   const [catForm, setCatForm] = useState({ codigo: "", nombre: "", tipo: "EGRESO", aplicable_a: "AMBOS" });
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
@@ -3579,6 +3583,9 @@ export function App() {
   useEffect(() => {
     if (activeTab === "Caja" && dashboard.current_cash_register?.id) {
       refreshCaja().catch(() => undefined);
+      // El inventario de sacos alimenta el detalle de "Compra de sacos" del
+      // movimiento de caja; se carga al entrar a Caja.
+      refreshSacks().catch(() => undefined);
     }
   }, [activeTab, dashboard.current_cash_register?.id]);
 
@@ -4896,6 +4903,15 @@ export function App() {
     await refreshCaja(registerId);
   }
 
+  // Una categoría es "compra de sacos" si tiene el código COMPRA_SACOS o su
+  // nombre menciona "saco" (robusto ante categorías creadas por el usuario).
+  function esCategoriaSacos(codigo: string): boolean {
+    if (!codigo) return false;
+    if (codigo === "COMPRA_SACOS") return true;
+    const cat = cashCategories.find((c) => c.codigo === codigo);
+    return /saco/i.test(cat?.nombre ?? "");
+  }
+
   async function submitCajaMovimiento(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formElement = event.currentTarget;
@@ -4915,16 +4931,31 @@ export function App() {
       setMovPayableId("");
       return;
     }
+    // Compra de sacos: el egreso arrastra el detalle de tipos/cantidades para que
+    // el backend genere la ENTRADA automática al inventario de la matriz.
+    const compraSacos = movement === "EXPENSE" && esCategoriaSacos(category);
+    if (compraSacos && movSackLines.length === 0) {
+      throw new Error("Agrega al menos un tipo de saco con su cantidad.");
+    }
     await apiPost(`/cash/${registerId}/movements`, {
       movement,
       category,
       amount,
-      description: form.get("description") || undefined
+      description: form.get("description") || undefined,
+      sacos: compraSacos ? movSackLines : undefined
     });
     safeResetForm(formElement);
     setMovCategory("");
     setMovPayableId("");
-    addToast(`${movement === "INCOME" ? "Ingreso" : "Egreso"} registrado`, "success");
+    setMovSackLines([]);
+    setMovSackPick({ sack_id: "", cantidad: "" });
+    if (compraSacos) await refreshSacks();
+    addToast(
+      compraSacos
+        ? `Egreso registrado · ${movSackLines.reduce((s, l) => s + l.cantidad, 0)} saco(s) ingresados al inventario`
+        : `${movement === "INCOME" ? "Ingreso" : "Egreso"} registrado`,
+      "success"
+    );
     await refreshCaja(registerId);
   }
 
@@ -10190,6 +10221,50 @@ export function App() {
                         </div>
                       );
                     })()}
+
+                    {/* Compra de sacos: detalle de tipos/cantidades. Al registrar,
+                        el backend suma estas cantidades al Inventario de Sacos de la
+                        Matriz (ENTRADA en el kardex). Anular el egreso lo revierte. */}
+                    {movType === "EXPENSE" && esCategoriaSacos(movCategory) && (
+                      <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "12px", marginBottom: 16 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#15803d", marginBottom: 8 }}>📦 Detalle de sacos comprados (suma al inventario de la Matriz)</div>
+                        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr auto", gap: 8, alignItems: "end" }}>
+                          <label style={{ fontSize: 12, fontWeight: 600 }}>Tipo
+                            <select value={movSackPick.sack_id} onChange={(e) => setMovSackPick((p) => ({ ...p, sack_id: e.target.value }))}
+                              style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}>
+                              <option value="">— Seleccionar —</option>
+                              {sackInventory.map((s) => <option key={s.id} value={s.id}>{s.tipo} ({Number(s.stock)})</option>)}
+                            </select>
+                          </label>
+                          <label style={{ fontSize: 12, fontWeight: 600 }}>Cantidad
+                            <input type="number" min="1" step="1" value={movSackPick.cantidad}
+                              onChange={(e) => setMovSackPick((p) => ({ ...p, cantidad: e.target.value }))}
+                              style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
+                          </label>
+                          <button type="button" onClick={() => {
+                            const cant = parseInt(movSackPick.cantidad);
+                            if (!movSackPick.sack_id || !(cant > 0)) { addToast("Elige tipo y cantidad de saco", "error"); return; }
+                            setMovSackLines((cur) => [...cur, { sack_id: movSackPick.sack_id, cantidad: cant }]);
+                            setMovSackPick({ sack_id: "", cantidad: "" });
+                          }} style={{ padding: "7px 12px", borderRadius: 6, border: "none", cursor: "pointer", fontWeight: 700, background: "var(--c-brand)", color: "#fff", fontSize: 12 }}>+ Añadir</button>
+                        </div>
+                        {movSackLines.length > 0 && (
+                          <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+                            {movSackLines.map((l, i) => {
+                              const tipo = sackInventory.find((s) => s.id === l.sack_id)?.tipo ?? "Saco";
+                              return (
+                                <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 6, padding: "5px 10px", fontSize: 12 }}>
+                                  <span><strong>{tipo}</strong> · {l.cantidad} saco(s)</span>
+                                  <button type="button" onClick={() => setMovSackLines((cur) => cur.filter((_, idx) => idx !== i))}
+                                    style={{ fontSize: 11, padding: "3px 8px" }}>Quitar</button>
+                                </div>
+                              );
+                            })}
+                            <div style={{ fontSize: 12, fontWeight: 700, color: "#15803d" }}>Total: {movSackLines.reduce((s, l) => s + l.cantidad, 0)} saco(s)</div>
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     <Input name="amount" label="Monto $" type="number" />
                     <Input name="description" label="Descripción (opcional)" required={false} />

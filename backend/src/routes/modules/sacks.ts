@@ -172,37 +172,42 @@ sacksRouter.post("/purchases", asyncRoute(async (req, res) => {
     if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
     if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
 
-    // Iterar cada tipo de saco: kardex de entrada + suma de stock. Acumula el total.
+    // Paso 1: validar + bloquear cada tipo de saco y calcular el total.
     let total = 0;
     const detalle: string[] = [];
     for (const item of body.items) {
       const sack = await client.query("SELECT id, tipo FROM sack_inventory WHERE id = $1 FOR UPDATE", [item.sack_id]);
       if (!sack.rows[0]) throw new ApiError(404, "Tipo de saco no encontrado");
-
-      const subtotal = round2(item.cantidad * item.precio);
-      total = round2(total + subtotal);
+      total = round2(total + round2(item.cantidad * item.precio));
       detalle.push(`${sack.rows[0].tipo} x${item.cantidad} @ $${item.precio}`);
+    }
 
+    // Paso 2: UN solo egreso consolidado por el total general. Se crea ANTES de
+    // los movimientos de kardex para enlazarlos por ref_batch = id del egreso, de
+    // modo que anular esta compra en Caja revierta también el inventario.
+    const concepto = body.concepto?.trim()
+      || (body.items.length > 1 ? "Compra de múltiples sacos" : `Compra de sacos ${detalle[0]}`);
+    const cash = await client.query(
+      `INSERT INTO cash_movements
+         (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)
+       VALUES ($1, 'EXPENSE', 'COMPRA_SACOS', 'sack_purchase', NULL, $2, $3, $4)
+       RETURNING id`,
+      [body.cash_register_id, total, `${concepto} — ${detalle.join(", ")}`, body.created_by ?? null]
+    );
+    const cashId = cash.rows[0].id as string;
+
+    // Paso 3: kardex de ENTRADA (enlazado al egreso) + suma de stock por ítem.
+    for (const item of body.items) {
       await client.query(
-        `INSERT INTO sack_movements (sack_id, movement, cantidad, concepto)
-         VALUES ($1, 'ENTRADA', $2, $3)`,
-        [item.sack_id, item.cantidad, `Compra a $${item.precio}/unidad`]
+        `INSERT INTO sack_movements (sack_id, movement, cantidad, concepto, ref_cash_movement)
+         VALUES ($1, 'ENTRADA', $2, $3, $4)`,
+        [item.sack_id, item.cantidad, `Compra a $${item.precio}/unidad`, cashId]
       );
       await client.query(
         "UPDATE sack_inventory SET stock = stock + $2, updated_at = NOW() WHERE id = $1",
         [item.sack_id, item.cantidad]
       );
     }
-
-    // UN solo egreso consolidado por el total general.
-    const concepto = body.concepto?.trim()
-      || (body.items.length > 1 ? "Compra de múltiples sacos" : `Compra de sacos ${detalle[0]}`);
-    await client.query(
-      `INSERT INTO cash_movements
-         (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)
-       VALUES ($1, 'EXPENSE', 'COMPRA_SACOS', 'sack_purchase', NULL, $2, $3, $4)`,
-      [body.cash_register_id, total, `${concepto} — ${detalle.join(", ")}`, body.created_by ?? null]
-    );
 
     return { monto: total, items: body.items.length, detalle };
   });

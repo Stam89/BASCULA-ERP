@@ -223,6 +223,70 @@ cashRouter.get("/registers/:id/movements", asyncRoute(async (req, res) => {
 }));
 
 // ── Anular un movimiento (contra-asiento, solo administradores) ──────────────
+// Detalle de sacos comprados en un egreso de Caja (categoría "Compra de sacos").
+const sacosCompraSchema = z
+  .array(z.object({ sack_id: z.string().uuid(), cantidad: z.number().int().positive() }))
+  .optional();
+
+// Conecta Caja ↔ Inventario de Sacos: por cada tipo comprado suma stock en el
+// inventario ÚNICO de la matriz (sack_inventory no tiene accionista_id → siempre
+// es de la matriz) y registra la ENTRADA en el kardex, enlazada al movimiento de
+// caja (ref_batch) para poder revertirla si la compra se anula.
+async function registrarEntradaSacosDesdeCaja(
+  client: PoolClient,
+  cashMovementId: string,
+  sacos: Array<{ sack_id: string; cantidad: number }>
+): Promise<number> {
+  let total = 0;
+  for (const s of sacos) {
+    if (!(s.cantidad > 0)) continue;
+    const sack = await client.query("SELECT id FROM sack_inventory WHERE id = $1 FOR UPDATE", [s.sack_id]);
+    if (!sack.rowCount) throw new ApiError(404, "Tipo de saco no encontrado");
+    await client.query(
+      `INSERT INTO sack_movements (sack_id, movement, cantidad, concepto, ref_cash_movement)
+       VALUES ($1, 'ENTRADA', $2, $3, $4)`,
+      [s.sack_id, s.cantidad, "Ingreso automático por compra registrada en Caja", cashMovementId]
+    );
+    await client.query(
+      "UPDATE sack_inventory SET stock = stock + $2, updated_at = NOW() WHERE id = $1",
+      [s.sack_id, s.cantidad]
+    );
+    total += s.cantidad;
+  }
+  return total;
+}
+
+// Reverso automático del inventario cuando se ANULA un egreso de compra de sacos:
+// descuenta lo que había entrado (neto por tipo), para mantener el cuadre. Es
+// idempotente: si ya se revirtió, el neto por tipo es 0 y no hace nada.
+async function reversarEntradaSacosDeCaja(client: PoolClient, cashMovementId: string): Promise<number> {
+  const netos = await client.query(
+    `SELECT sack_id, SUM(CASE WHEN movement = 'ENTRADA' THEN cantidad ELSE -cantidad END)::numeric AS neto
+     FROM sack_movements
+     WHERE ref_cash_movement = $1
+     GROUP BY sack_id
+     HAVING SUM(CASE WHEN movement = 'ENTRADA' THEN cantidad ELSE -cantidad END) > 0`,
+    [cashMovementId]
+  );
+  let count = 0;
+  for (const row of netos.rows) {
+    const qty = Number(row.neto);
+    if (!(qty > 0)) continue;
+    await client.query("SELECT id FROM sack_inventory WHERE id = $1 FOR UPDATE", [row.sack_id]);
+    await client.query(
+      `INSERT INTO sack_movements (sack_id, movement, cantidad, concepto, ref_cash_movement)
+       VALUES ($1, 'SALIDA', $2, $3, $4)`,
+      [row.sack_id, qty, "Reverso automático por anulación de compra en Caja", cashMovementId]
+    );
+    await client.query(
+      "UPDATE sack_inventory SET stock = stock - $2, updated_at = NOW() WHERE id = $1",
+      [row.sack_id, qty]
+    );
+    count += 1;
+  }
+  return count;
+}
+
 cashRouter.post("/movements/:id/reverse", requireAdmin, asyncRoute(async (req, res) => {
   await ensureCashColumns();
   const body = z.object({ reason: z.string().min(3) }).parse(req.body);
@@ -251,7 +315,11 @@ cashRouter.post("/movements/:id/reverse", requireAdmin, asyncRoute(async (req, r
       [m.id, user?.id ?? null, body.reason]
     );
 
-    return reversal.rows[0];
+    // Si el egreso anulado fue una compra de sacos, descuenta del inventario lo
+    // que había ingresado (reverso automático para mantener el cuadre).
+    const sacosRevertidos = await reversarEntradaSacosDeCaja(client, m.id);
+
+    return { ...reversal.rows[0], sacos_revertidos: sacosRevertidos };
   });
 
   res.status(201).json(result);
@@ -294,6 +362,8 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     description: z.string().optional(),
     reference_type: z.string().optional(),
     reference_id: z.string().optional(),
+    // Compra de sacos: detalle de tipos/cantidades para conectar con el inventario.
+    sacos: sacosCompraSchema,
     created_by: z.string().uuid().optional()
   }).parse(req.body);
 
@@ -305,13 +375,23 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
   if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
   if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
 
-  const result = await pool.query(
-    `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, reference_type, reference_id, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-     RETURNING *`,
-    [req.params.id, body.movement, body.category, body.amount, body.description, body.reference_type, body.reference_id, body.created_by]
-  );
-  res.status(201).json(result.rows[0]);
+  const conSacos = (body.sacos?.length ?? 0) > 0;
+  const row = await inTransaction(async (client) => {
+    const mov = await client.query(
+      `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, reference_type, reference_id, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [req.params.id, body.movement, body.category, body.amount, body.description, body.reference_type, body.reference_id, body.created_by]
+    );
+    // Egreso de compra de sacos con detalle → ENTRADA automática al inventario
+    // de la matriz (kardex), enlazada a este movimiento para poder revertirla.
+    if (conSacos) {
+      const sacos = await registrarEntradaSacosDesdeCaja(client, mov.rows[0].id, body.sacos!);
+      return { ...mov.rows[0], sacos_ingresados: sacos };
+    }
+    return mov.rows[0];
+  });
+  res.status(201).json(row);
 }));
 
 // ── Cuentas por pagar pendientes ─────────────────────────────────────────────
