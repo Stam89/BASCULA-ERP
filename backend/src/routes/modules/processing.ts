@@ -87,6 +87,7 @@ processingRouter.get("/history", asyncRoute(async (req, res) => {
               y.process_loss_kg,
               y.yield_percent,
               y.qq_de_tulas,
+              y.rendimiento_snapshot,
               COALESCE((
                 SELECT json_agg(json_build_object(
                          'presentation', po.presentation,
@@ -719,6 +720,61 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
         body.created_by
       ]
     );
+
+    // ── CUADRO DE RENDIMIENTO (foto exacta al cierre, estilo Excel de piladora) ──
+    // Se congela el desglose y los porcentajes del lote y se guarda como snapshot
+    // en el rendimiento. Queda ligado al lote (y por tanto a su ACCIONISTA dueño),
+    // de modo que en el historial cada socio ve exclusivamente sus propios cuadros.
+    {
+      const entradaQq = round3(inputPaddyKg / QQ_TO_KG);
+      const blancoTotal = processedQq;
+      const brokenQq = body.broken_rice ? outputToQq(body.broken_rice) : 0;
+      const fineQq = body.fine_broken_rice ? outputToQq(body.fine_broken_rice) : 0;
+      const branQq = body.bran ? outputToQq(body.bran) : 0;
+      const subTotal = round3(brokenQq + fineQq + branQq);
+      const pct = (x: number) => (entradaQq > 0 ? round2((x / entradaQq) * 100) : 0);
+      const snapshot = {
+        fecha: new Date().toISOString(),
+        accionista_id: accionistaId,
+        accionista_nombre: (batch.lot_accionista_name as string | null) ?? null,
+        lote: (batch.lot_code as string | null) ?? null,
+        entrada_cascara_qq: entradaQq,
+        arroz_blanco: {
+          total_qq: round2(blancoTotal),
+          tula_qq: round2(tulaQq),
+          saco_qq: round2(sacoQq),
+          tulas_count: tulasCount,
+          presentaciones: presLines.map((p) => ({
+            presentation: p.destino === "TULA" ? "TULA" : p.presentation,
+            quantity: round2(Number(p.quantity)),
+            sack_weight_lb: p.sack_weight_lb ?? null,
+            destino: p.destino ?? "SACO"
+          }))
+        },
+        subproductos: [
+          { label: "Arrocillo 3/4", qq: round2(brokenQq), lb_por_saco: body.broken_rice?.sack_weight_lb ?? null },
+          { label: "Arrocillo Fino", qq: round2(fineQq), lb_por_saco: body.fine_broken_rice?.sack_weight_lb ?? null },
+          { label: "Polvillo", qq: round2(branQq), lb_por_saco: body.bran?.sack_weight_lb ?? null }
+        ].filter((s) => s.qq > 0),
+        rendimientos: {
+          // Rendimiento estándar (arroz blanco sobre cáscara de entrada).
+          arroz_blanco_pct: pct(blancoTotal),
+          // Excedente/crecimiento: (blanco − entrada)/entrada (negativo = merma).
+          arroz_blanco_crecimiento_pct: entradaQq > 0 ? round2(((blancoTotal - entradaQq) / entradaQq) * 100) : 0,
+          subproductos: {
+            "Arrocillo 3/4": pct(brokenQq),
+            "Arrocillo Fino": pct(fineQq),
+            "Polvillo": pct(branQq)
+          },
+          subproductos_pct_total: pct(subTotal),
+          merma_pct: round2(Math.max(0, 100 - pct(blancoTotal) - pct(subTotal)))
+        }
+      };
+      await client.query(
+        "UPDATE production_yields SET rendimiento_snapshot = $2::jsonb WHERE id = $1",
+        [yieldResult.rows[0].id, JSON.stringify(snapshot)]
+      );
+    }
 
     const piladoReport = await createLotProcessReport(client, {
       lotId: body.lot_id,

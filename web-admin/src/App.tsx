@@ -808,6 +808,30 @@ type ProductionHistoryItem = {
   service_rate?: string | number | null;
   service_total?: string | number | null;
   client_name?: string | null;
+  /** Cuadro de rendimiento congelado al cerrar el lote (foto estilo Excel). */
+  rendimiento_snapshot?: RendimientoSnapshot | null;
+};
+
+type RendimientoSnapshot = {
+  fecha?: string;
+  accionista_nombre?: string | null;
+  lote?: string | null;
+  entrada_cascara_qq: number;
+  arroz_blanco: {
+    total_qq: number;
+    tula_qq: number;
+    saco_qq: number;
+    tulas_count: number;
+    presentaciones: Array<{ presentation: string | null; quantity: number; sack_weight_lb: number | null; destino?: string }>;
+  };
+  subproductos: Array<{ label: string; qq: number; lb_por_saco: number | null }>;
+  rendimientos: {
+    arroz_blanco_pct: number;
+    arroz_blanco_crecimiento_pct: number;
+    subproductos: Record<string, number>;
+    subproductos_pct_total: number;
+    merma_pct: number;
+  };
 };
 
 type SackInventory = {
@@ -1977,13 +2001,24 @@ export function App() {
   const millingEficiencia = useMemo(() => {
     const entrada = millingSource?.entrada_qq ?? 0;
     const blanco = millingPiladoTotalQq > 0 ? millingPiladoTotalQq : Number(millingReport.qqTulas || 0);
-    const subproductos = Number(millingReport.broken34 || 0) + Number(millingReport.fineBroken || 0) + Number(millingReport.polvillo || 0);
+    const broken34 = Number(millingReport.broken34 || 0);
+    const fineBroken = Number(millingReport.fineBroken || 0);
+    const polvillo = Number(millingReport.polvillo || 0);
+    const subproductos = broken34 + fineBroken + polvillo;
     if (entrada <= 0) return null;
-    const blancoPct = (blanco / entrada) * 100;
-    const subPct = (subproductos / entrada) * 100;
+    const pct = (x: number) => (x / entrada) * 100;
+    const blancoPct = pct(blanco);
+    const subPct = pct(subproductos);
     const mermaPct = Math.max(0, 100 - blancoPct - subPct);
+    // Excedente/crecimiento del arroz blanco frente a la cáscara de entrada:
+    // ((blanco − entrada) / entrada) × 100 (negativo = merma respecto a la cáscara).
+    const crecimientoPct = ((blanco - entrada) / entrada) * 100;
     const estado = blancoPct >= 62 ? "optimo" : blancoPct < 60 ? "alto" : "medio";
-    return { entrada, blanco, subproductos, blancoPct, subPct, mermaPct, estado };
+    return {
+      entrada, blanco, subproductos, blancoPct, subPct, mermaPct, crecimientoPct, estado,
+      broken34, fineBroken, polvillo,
+      broken34Pct: pct(broken34), fineBrokenPct: pct(fineBroken), polvilloPct: pct(polvillo)
+    };
   }, [millingSource, millingPiladoTotalQq, millingReport]);
   const productionTotalQq = useMemo(
     () => Object.values(productionPackages ?? defaultProductionPackages).reduce((sum, item) => sum + qqAndPoundsToQq(item), 0),
@@ -8995,10 +9030,19 @@ export function App() {
                       <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, color: badge.col }}>
                         <span>% Arroz Blanco Comercial</span><span>{n1(e.blancoPct)}% · {e.blanco.toFixed(2)} QQ</span>
                       </div>
-                      <div style={{ display: "flex", justifyContent: "space-between" }}><span>% Subproductos (arrocillo + polvillo)</span><span>{n1(e.subPct)}% · {e.subproductos.toFixed(2)} QQ</span></div>
+                      {/* Excedente/Crecimiento del arroz blanco vs cáscara de entrada. */}
+                      <div style={{ display: "flex", justifyContent: "space-between", color: e.crecimientoPct >= 0 ? "#15803d" : "#b91c1c" }}>
+                        <span>% Arroz Blanco (Excedente/Crecimiento)</span>
+                        <span title="((QQ Arroz Blanco − QQ Cáscara) / QQ Cáscara) × 100">{e.crecimientoPct >= 0 ? "+" : ""}{n1(e.crecimientoPct)}%</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 600 }}><span>% Subproductos (total)</span><span>{n1(e.subPct)}% · {e.subproductos.toFixed(2)} QQ</span></div>
+                      {/* Rendimiento individual por subproducto vs cáscara de entrada. */}
+                      {e.broken34 > 0 && <div style={{ display: "flex", justifyContent: "space-between", color: "var(--c-muted)", paddingLeft: 10 }}><span>· Arrocillo 3/4</span><span>{n1(e.broken34Pct)}% · {e.broken34.toFixed(2)} QQ</span></div>}
+                      {e.fineBroken > 0 && <div style={{ display: "flex", justifyContent: "space-between", color: "var(--c-muted)", paddingLeft: 10 }}><span>· Arrocillo Fino</span><span>{n1(e.fineBrokenPct)}% · {e.fineBroken.toFixed(2)} QQ</span></div>}
+                      {e.polvillo > 0 && <div style={{ display: "flex", justifyContent: "space-between", color: "var(--c-muted)", paddingLeft: 10 }}><span>· Polvillo</span><span>{n1(e.polvilloPct)}% · {e.polvillo.toFixed(2)} QQ</span></div>}
                       <div style={{ display: "flex", justifyContent: "space-between", color: "var(--c-muted)" }}><span>% Merma / Cáscara</span><span>{n1(e.mermaPct)}%</span></div>
                     </div>
-                    <p className="muted" style={{ fontSize: 11, margin: "6px 0 0" }}>Óptimo &gt; 62% · Alerta de desperdicio &lt; 60% (arroz blanco / QQ de entrada).</p>
+                    <p className="muted" style={{ fontSize: 11, margin: "6px 0 0" }}>Óptimo &gt; 62% · Alerta de desperdicio &lt; 60% (arroz blanco / QQ de entrada). El excedente compara el arroz blanco total contra la cáscara que entró.</p>
                   </div>
                 );
               })()}
@@ -9113,6 +9157,49 @@ export function App() {
                             )}
                           </p>
                         )}
+
+                        {/* 📋 Cuadro de rendimiento congelado al cierre (foto del lote). */}
+                        {!item.is_service && item.rendimiento_snapshot && (() => {
+                          const s = item.rendimiento_snapshot!;
+                          const ab = s.arroz_blanco;
+                          const r = s.rendimientos;
+                          const p1 = (v: number) => `${v >= 0 ? "" : ""}${Number(v).toFixed(1)}%`;
+                          return (
+                            <div style={{ marginTop: 10, border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 8, padding: "10px 12px" }}>
+                              <div style={{ fontWeight: 800, fontSize: 12, color: "#15803d", marginBottom: 6 }}>
+                                📋 Cuadro de rendimiento{s.accionista_nombre ? ` · ${s.accionista_nombre}` : ""}
+                              </div>
+                              <div style={{ overflowX: "auto" }}>
+                                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                                  <tbody>
+                                    <tr style={{ borderBottom: "1px solid #d1fae5" }}>
+                                      <td style={{ padding: "4px 6px" }}>Cáscara de entrada</td>
+                                      <td style={{ padding: "4px 6px", textAlign: "right", fontWeight: 700 }}>{Number(s.entrada_cascara_qq).toFixed(2)} QQ</td>
+                                      <td style={{ padding: "4px 6px", textAlign: "right", color: "var(--c-muted)" }}>—</td>
+                                    </tr>
+                                    <tr style={{ borderBottom: "1px solid #d1fae5" }}>
+                                      <td style={{ padding: "4px 6px", fontWeight: 700 }}>Arroz Blanco (Tulas {Number(ab.tula_qq).toFixed(2)} + Sacos {Number(ab.saco_qq).toFixed(2)})</td>
+                                      <td style={{ padding: "4px 6px", textAlign: "right", fontWeight: 700, color: "#15803d" }}>{Number(ab.total_qq).toFixed(2)} QQ</td>
+                                      <td style={{ padding: "4px 6px", textAlign: "right" }}>{p1(r.arroz_blanco_pct)} · exc. {r.arroz_blanco_crecimiento_pct >= 0 ? "+" : ""}{Number(r.arroz_blanco_crecimiento_pct).toFixed(1)}%</td>
+                                    </tr>
+                                    {s.subproductos.map((sp) => (
+                                      <tr key={sp.label} style={{ borderBottom: "1px solid #d1fae5" }}>
+                                        <td style={{ padding: "4px 6px", paddingLeft: 14, color: "#374151" }}>{sp.label}{sp.lb_por_saco ? ` (${sp.lb_por_saco} lb/saco)` : ""}</td>
+                                        <td style={{ padding: "4px 6px", textAlign: "right" }}>{Number(sp.qq).toFixed(2)} QQ</td>
+                                        <td style={{ padding: "4px 6px", textAlign: "right", color: "var(--c-muted)" }}>{p1(r.subproductos?.[sp.label] ?? 0)}</td>
+                                      </tr>
+                                    ))}
+                                    <tr>
+                                      <td style={{ padding: "4px 6px", color: "var(--c-muted)" }}>Subproductos (total) · Merma</td>
+                                      <td style={{ padding: "4px 6px", textAlign: "right", color: "var(--c-muted)" }}>{p1(r.subproductos_pct_total)}</td>
+                                      <td style={{ padding: "4px 6px", textAlign: "right", color: "var(--c-muted)" }}>Merma {p1(r.merma_pct)}</td>
+                                    </tr>
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </article>
                     ))}
                   </div>
