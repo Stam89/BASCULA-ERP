@@ -929,6 +929,9 @@ type Fomento = {
   renta: number;
   status: "ACTIVOS" | "NO ACTIVOS" | "APROBADOS" | "CERRADO_LIQUIDACION";
   notes: string | null;
+  folio: string | null;
+  variedad: string | null;
+  limite_credito: number | null;
   liquidado_at?: string | null;
   created_at: string;
   paradas: number;
@@ -1600,9 +1603,14 @@ export function App() {
   // ── Fomentos ──────────────────────────────────────────────────────────────
   const [fomentos, setFomentos] = useState<Fomento[]>([]);
   const [fomentoDetalle, setFomentoDetalle] = useState<FomentoDetalle | null>(null);
-  const [fomentoForm, setFomentoForm] = useState({ farmer_name: "", cuadras: "", inicio: new Date().toISOString().slice(0,10), status: "ACTIVOS" as "ACTIVOS"|"NO ACTIVOS"|"APROBADOS", notes: "", variedad: "", limite_credito: "" });
+  const [fomentoForm, setFomentoForm] = useState({ farmer_name: "", cuadras: "", inicio: new Date().toISOString().slice(0,10), status: "ACTIVOS" as "ACTIVOS"|"NO ACTIVOS"|"APROBADOS", notes: "", variedad: "", limite_credito: "", folio: "" });
   // Modal del formulario "Nuevo Fomento" (antes era un <details> al pie de la lista).
   const [fomentoModalOpen, setFomentoModalOpen] = useState(false);
+  // Si tiene id → el modal edita ese fomento; si es null → crea uno nuevo.
+  const [fomentoEditingId, setFomentoEditingId] = useState<string | null>(null);
+  // Confirmación de borrado de un fomento completo (con su historial).
+  const [confirmarEliminarFomento, setConfirmarEliminarFomento] = useState<{ id: string; nombre: string } | null>(null);
+  const [borrandoFomento, setBorrandoFomento] = useState(false);
   const [fomentoEntregaForm, setFomentoEntregaForm] = useState({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
   // Confirmación de eliminación de una entrega (con su valor/fecha para el mensaje).
   const [confirmarEntrega, setConfirmarEntrega] = useState<{ fomentoId: string; entregaId: string; valor: number; fecha: string } | null>(null);
@@ -4283,21 +4291,69 @@ export function App() {
     if (activeTab === "Estados Financieros") loadFinanzas().catch((e) => addToast(e.message, "error"));
   }, [activeTab, motorActivo]);
 
+  function resetFomentoForm() {
+    setFomentoForm({ farmer_name: "", cuadras: "", inicio: new Date().toISOString().slice(0,10), status: "ACTIVOS", notes: "", variedad: "", limite_credito: "", folio: "" });
+  }
+
+  // Abre el modal en modo EDICIÓN, precargado con los datos del fomento.
+  function openEditFomento(f: Fomento | FomentoDetalle) {
+    setFomentoForm({
+      farmer_name: f.farmer_name ?? "",
+      cuadras: String(f.cuadras ?? ""),
+      inicio: f.inicio?.slice(0,10) ?? new Date().toISOString().slice(0,10),
+      status: (f.status === "CERRADO_LIQUIDACION" ? "NO ACTIVOS" : f.status) as "ACTIVOS"|"NO ACTIVOS"|"APROBADOS",
+      notes: f.notes ?? "",
+      variedad: f.variedad ?? "",
+      limite_credito: f.limite_credito != null ? String(f.limite_credito) : "",
+      folio: f.folio ?? ""
+    });
+    setFomentoEditingId(f.id);
+    setFomentoModalOpen(true);
+  }
+
   async function submitFomento(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    await apiPost("/fomentos", {
+    const payload = {
       farmer_name: fomentoForm.farmer_name,
       cuadras: Number(fomentoForm.cuadras),
       inicio: fomentoForm.inicio,
       status: fomentoForm.status,
       notes: fomentoForm.notes || undefined,
       variedad: fomentoForm.variedad || undefined,
-      limite_credito: fomentoForm.limite_credito !== "" ? Number(fomentoForm.limite_credito) : undefined
-    });
-    setFomentoForm({ farmer_name: "", cuadras: "", inicio: new Date().toISOString().slice(0,10), status: "ACTIVOS", notes: "", variedad: "", limite_credito: "" });
+      limite_credito: fomentoForm.limite_credito !== "" ? Number(fomentoForm.limite_credito) : undefined,
+      folio: fomentoForm.folio.trim()   // "" limpia el folio
+    };
+    if (fomentoEditingId) {
+      await apiFetch(`/fomentos/${fomentoEditingId}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+      }).then(async (r) => { if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "No se pudo editar"); });
+      addToast("Fomento actualizado", "success");
+      if (fomentoDetalle?.id === fomentoEditingId) await loadFomentoDetalle(fomentoEditingId);
+    } else {
+      await apiPost("/fomentos", payload);
+      addToast("Fomento creado", "success");
+    }
+    resetFomentoForm();
+    setFomentoEditingId(null);
     setFomentoModalOpen(false);
-    addToast("Fomento creado", "success");
     await refreshFomentos();
+  }
+
+  // Borra el fomento COMPLETO (entregas y pagos en cascada). Solo tras confirmar.
+  async function eliminarFomento(id: string) {
+    setBorrandoFomento(true);
+    try {
+      const r = await apiFetch(`/fomentos/${id}`, { method: "DELETE" });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "No se pudo eliminar");
+      addToast("Fomento eliminado", "success");
+      setConfirmarEliminarFomento(null);
+      if (fomentoDetalle?.id === id) setFomentoDetalle(null);
+      await refreshFomentos();
+    } catch (err) {
+      addToast((err as Error).message, "error");
+    } finally {
+      setBorrandoFomento(false);
+    }
   }
 
   async function submitFomentoEntrega(e: FormEvent<HTMLFormElement>) {
@@ -11764,7 +11820,7 @@ export function App() {
               <div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 10 }}>
                   <h3 style={{ margin: 0 }}>Lista de Fomentos</h3>
-                  <button type="button" onClick={() => setFomentoModalOpen(true)}
+                  <button type="button" onClick={() => { setFomentoEditingId(null); resetFomentoForm(); setFomentoModalOpen(true); }}
                     style={{ background: "var(--c-success)", color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontWeight: 700, fontSize: 13, whiteSpace: "nowrap" }}>
                     + Nuevo Fomento
                   </button>
@@ -11781,9 +11837,12 @@ export function App() {
                         <div key={f.id} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 14px", cursor: "pointer",
                           background: fomentoDetalle?.id === f.id ? "#f0fdf4" : "var(--c-surface)" }}
                           onClick={() => loadFomentoDetalle(f.id).catch(() => undefined)}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, gap: 6 }}>
                             <strong style={{ fontSize: 14 }}>{f.farmer_name}</strong>
-                            <span style={{ fontSize: 11, background: statusColor, color: "#fff", borderRadius: 4, padding: "2px 6px" }}>{f.status === "CERRADO_LIQUIDACION" ? "🗄️ CERRADO" : f.status}</span>
+                            <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              {f.folio && <span title="N.º de Página / Libreta" style={{ fontSize: 11, background: "#eef2ff", color: "#4338ca", borderRadius: 4, padding: "2px 6px", fontWeight: 700, whiteSpace: "nowrap" }}>📖 Pag: {f.folio}</span>}
+                              <span style={{ fontSize: 11, background: statusColor, color: "#fff", borderRadius: 4, padding: "2px 6px" }}>{f.status === "CERRADO_LIQUIDACION" ? "🗄️ CERRADO" : f.status}</span>
+                            </span>
                           </div>
                           <div style={{ fontSize: 12, color: "var(--c-muted)", display: "flex", gap: 12, flexWrap: "wrap" }}>
                             <span>{f.cuadras} cuadras</span>
@@ -11814,15 +11873,26 @@ export function App() {
               <div>
                 {fomentoDetalle ? (
                   <div>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, gap: 8 }}>
-                      <h3 style={{ margin: 0 }}>{fomentoDetalle.farmer_name}</h3>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <button type="button" onClick={() => printEstadoCuentaFomento(fomentoDetalle)}
-                          style={{ background: "#0f766e", color: "#fff", border: "none", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
-                          🖨️ Imprimir Estado de Cuenta
-                        </button>
-                        <button type="button" onClick={() => setFomentoDetalle(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--c-muted)" }}>✕</button>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4, gap: 8 }}>
+                      <div>
+                        <h3 style={{ margin: 0 }}>{fomentoDetalle.farmer_name}</h3>
+                        {fomentoDetalle.folio && <span style={{ fontSize: 12, color: "#4338ca", fontWeight: 600 }}>📖 Pag/Libreta: {fomentoDetalle.folio}</span>}
                       </div>
+                      <button type="button" onClick={() => setFomentoDetalle(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--c-muted)" }}>✕</button>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+                      <button type="button" onClick={() => printEstadoCuentaFomento(fomentoDetalle)}
+                        style={{ background: "#0f766e", color: "#fff", border: "none", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
+                        🖨️ Imprimir Estado de Cuenta
+                      </button>
+                      <button type="button" onClick={() => openEditFomento(fomentoDetalle)}
+                        style={{ background: "#1d4ed8", color: "#fff", border: "none", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
+                        ✏️ Editar
+                      </button>
+                      <button type="button" onClick={() => setConfirmarEliminarFomento({ id: fomentoDetalle.id, nombre: fomentoDetalle.farmer_name })}
+                        style={{ background: "#fff", color: "#dc2626", border: "1px solid #dc2626", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
+                        🗑️ Eliminar Fomento
+                      </button>
                     </div>
                     {fomentoDetalle.status === "CERRADO_LIQUIDACION" && (
                       <div style={{ background: "#f3f4f6", border: "1px solid #d1d5db", borderRadius: 8, padding: "8px 12px", marginBottom: 12, fontSize: 12, color: "#374151" }}>
@@ -12078,7 +12148,7 @@ export function App() {
                     </svg>
                     <h3 style={{ margin: "0 0 6px", color: "var(--c-text)" }}>Ningún fomento seleccionado</h3>
                     <p style={{ margin: "0 0 16px", fontSize: 13 }}>Selecciona un fomento de la lista para ver su detalle y registrar entregas, o crea uno nuevo.</p>
-                    <button type="button" onClick={() => setFomentoModalOpen(true)}
+                    <button type="button" onClick={() => { setFomentoEditingId(null); resetFomentoForm(); setFomentoModalOpen(true); }}
                       style={{ background: "var(--c-success)", color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", cursor: "pointer", fontWeight: 700, fontSize: 13 }}>
                       + Nuevo Fomento
                     </button>
@@ -12089,17 +12159,21 @@ export function App() {
 
             {/* Modal: Nuevo Fomento (el formulario ya no se despliega al pie de la lista). */}
             {fomentoModalOpen && (
-              <div className="modalOverlay" onClick={() => setFomentoModalOpen(false)}>
+              <div className="modalOverlay" onClick={() => { setFomentoModalOpen(false); setFomentoEditingId(null); }}>
                 <form className="modalCard formPanel" onClick={(e) => e.stopPropagation()}
                   onSubmit={(e) => submitFomento(e).catch((err) => addToast(err.message, "error"))}
                   style={{ maxWidth: 480, width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-                    <h3 style={{ marginTop: 0 }}>+ Nuevo Fomento</h3>
-                    <button type="button" onClick={() => setFomentoModalOpen(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--c-muted)" }}>✕</button>
+                    <h3 style={{ marginTop: 0 }}>{fomentoEditingId ? "✏️ Editar Fomento" : "+ Nuevo Fomento"}</h3>
+                    <button type="button" onClick={() => { setFomentoModalOpen(false); setFomentoEditingId(null); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--c-muted)" }}>✕</button>
                   </div>
                   <label style={{ fontSize: 12, fontWeight: 600 }}>Agricultor / Cliente
                     <input required value={fomentoForm.farmer_name} onChange={e => setFomentoForm(p => ({...p, farmer_name: e.target.value}))}
                       style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Nombre completo" />
+                  </label>
+                  <label style={{ fontSize: 12, fontWeight: 600 }}>N.° de Página / Libreta (Folio)
+                    <input value={fomentoForm.folio} onChange={e => setFomentoForm(p => ({...p, folio: e.target.value}))}
+                      style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Ej: 23 · dónde está la firma física" />
                   </label>
                   <label style={{ fontSize: 12, fontWeight: 600 }}>Variedad de Grano
                     <input value={fomentoForm.variedad} onChange={e => setFomentoForm(p => ({...p, variedad: e.target.value}))}
@@ -12136,12 +12210,35 @@ export function App() {
                       style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Opcional" />
                   </label>
                   <div className="buttonRow" style={{ marginTop: 6 }}>
-                    <button type="submit" style={{ background: "var(--c-success)", color: "#fff", border: "none", borderRadius: 6, padding: "8px 16px", cursor: "pointer", fontWeight: 700 }}>
-                      Guardar Fomento
+                    <button type="submit" style={{ background: fomentoEditingId ? "#1d4ed8" : "var(--c-success)", color: "#fff", border: "none", borderRadius: 6, padding: "8px 16px", cursor: "pointer", fontWeight: 700 }}>
+                      {fomentoEditingId ? "Guardar Cambios" : "Guardar Fomento"}
                     </button>
-                    <button type="button" onClick={() => setFomentoModalOpen(false)}>Cancelar</button>
+                    <button type="button" onClick={() => { setFomentoModalOpen(false); setFomentoEditingId(null); }}>Cancelar</button>
                   </div>
                 </form>
+              </div>
+            )}
+
+            {/* Confirmación de eliminación de fomento COMPLETO (con su historial) */}
+            {confirmarEliminarFomento && (
+              <div onClick={() => !borrandoFomento && setConfirmarEliminarFomento(null)}
+                style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1200, padding: 16 }}>
+                <div onClick={(ev) => ev.stopPropagation()} className="formPanel"
+                  style={{ maxWidth: 460, width: "100%", margin: 0, borderTop: "5px solid #dc2626" }}>
+                  <h3 style={{ marginTop: 0, color: "#b91c1c" }}>⚠️ ¿Eliminar fomento?</h3>
+                  <p style={{ lineHeight: 1.55, fontSize: 14 }}>
+                    ¿Estás seguro de eliminar el fomento de <strong>{confirmarEliminarFomento.nombre}</strong>?
+                    Si elimina este registro se <strong>perderá el historial asociado</strong> (todas las entregas y pagos registrados). Esta acción no se puede deshacer.
+                  </p>
+                  <div className="buttonRow" style={{ marginTop: 14 }}>
+                    <button type="button" onClick={() => setConfirmarEliminarFomento(null)} disabled={borrandoFomento}>Cancelar</button>
+                    <button type="button" className="primary" disabled={borrandoFomento}
+                      style={{ background: "#dc2626", borderColor: "#dc2626" }}
+                      onClick={() => eliminarFomento(confirmarEliminarFomento.id)}>
+                      {borrandoFomento ? "Eliminando…" : "Sí, Eliminar"}
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 

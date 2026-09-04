@@ -41,7 +41,10 @@ const fomentoSchema = z.object({
   notes:        z.string().optional(),
   // Informativos (NO alteran el cálculo del crédito, que sigue en cuadras*800).
   variedad:       z.string().optional(),
-  limite_credito: z.number().nonnegative().optional()
+  limite_credito: z.number().nonnegative().optional(),
+  // N.º de Página / Libreta (Folio): ubicación de la firma física. Se acepta
+  // cadena vacía para poder LIMPIARLO desde la edición.
+  folio:          z.string().max(50).optional()
 });
 
 const entregaSchema = z.object({
@@ -311,10 +314,11 @@ fomentosRouter.post("/", asyncRoute(async (req, res) => {
   })();
 
   const result = await pool.query(
-    `INSERT INTO fomentos (accionista_id, farmer_name, farmer_id, cuadras, inicio, cosecha, renta, status, notes, variedad, limite_credito)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+    `INSERT INTO fomentos (accionista_id, farmer_name, farmer_id, cuadras, inicio, cosecha, renta, status, notes, variedad, limite_credito, folio)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
     [accionistaId, data.farmer_name, data.farmer_id ?? null, data.cuadras, data.inicio, cosecha,
-     data.renta, data.status, data.notes ?? null, data.variedad ?? null, data.limite_credito ?? null]
+     data.renta, data.status, data.notes ?? null, data.variedad ?? null, data.limite_credito ?? null,
+     data.folio && data.folio.trim() !== "" ? data.folio.trim() : null]
   );
   res.status(201).json(result.rows[0]);
 }));
