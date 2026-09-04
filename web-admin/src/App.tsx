@@ -985,7 +985,7 @@ type Supplier = {
 
 const navGroups: Array<{ label: string; tabs: string[] }> = [
   { label: "Principal", tabs: ["Dashboard"] },
-  { label: "Operación", tabs: ["Bascula", "Secadoras", "Produccion", "Inventario", "Seleccion"] },
+  { label: "Operación", tabs: ["Bascula", "Secadoras", "Produccion", "Gana", "Inventario", "Seleccion"] },
   { label: "Comercial", tabs: ["Ventas", "Compras", "Caja"] },
   { label: "Cuentas", tabs: ["Por Cobrar", "Por Pagar"] },
   { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores", "Nomina", "Servicio Pilado"] },
@@ -1046,6 +1046,9 @@ function NavIcon({ tab }: { tab: string }) {
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><line x1="2" y1="4" x2="14" y2="4"/><circle cx="6" cy="4" r="1.7" fill="currentColor" stroke="none"/><line x1="2" y1="8" x2="14" y2="8"/><circle cx="10.5" cy="8" r="1.7" fill="currentColor" stroke="none"/><line x1="2" y1="12" x2="14" y2="12"/><circle cx="5" cy="12" r="1.7" fill="currentColor" stroke="none"/></svg>;
     case "Caja de Campo":
       return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="4.5" cy="12" r="2"/><circle cx="12" cy="12.5" r="1.5"/><path d="M2.5 12V6h4l2 3h2.5"/><path d="M6.5 6V4h3l1.5 5"/></svg>;
+    case "Gana":
+      // Liquidación de rendimiento (cuadros por lote). Icono de gráfico/ganancia.
+      return <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 13h12"/><rect x="3" y="8" width="2.4" height="5"/><rect x="6.8" y="5" width="2.4" height="8"/><rect x="10.6" y="2.5" width="2.4" height="10.5"/></svg>;
     default:
       return null;
   }
@@ -4228,6 +4231,8 @@ export function App() {
       refreshCostos().catch(() => undefined);
     }
     if (activeTab === "Inventario") { refreshSacks().catch(() => undefined); refreshInvMovs().catch(() => undefined); }
+    // Gana: liquidación de rendimiento (lee el historial de producción del accionista).
+    if (activeTab === "Gana") loadProductionHistory().catch(() => undefined);
     if (activeTab === "Ventas") refreshCustomersAndSales().catch(() => undefined);
     if (activeTab === "Compras") { refreshSuppliers().catch(() => undefined); refreshPurchases().catch(() => undefined); }
     if (activeTab === "Por Cobrar") refreshReceivables().catch(() => undefined);
@@ -6211,7 +6216,16 @@ export function App() {
     }
     await loadMillingDrafts();
     await loadProductionHistory();
-    setMessage("Lote finalizado: produccion agregada al stock");
+    // La liquidación de rendimiento vive en su propio módulo "Gana": el cierre no
+    // muestra cuadros en Producción; se guarda el reporte y se lleva al usuario a
+    // Gana (donde ya está disponible su cuadro), respetando el permiso del módulo.
+    if (visibleTabs.includes("Gana")) {
+      setActiveTab("Gana");
+      addToast("📋 Cuadro de rendimiento disponible en «Gana».", "success");
+    } else {
+      addToast("📋 Cuadro de rendimiento guardado (módulo «Gana»).", "success");
+    }
+    setMessage("Lote finalizado: reporte de rendimiento disponible en «Gana»");
     await refresh();
   }
 
@@ -9010,42 +9024,9 @@ export function App() {
                   registrando en Nómina (backend) con el rol Polvillo; solo no se
                   muestra el cálculo aquí. */}
 
-              {/* 📊 Eficiencia del Lote (rendimiento de pilado en tiempo real) */}
-              {millingEficiencia && (() => {
-                const e = millingEficiencia;
-                const n1 = (v: number) => v.toLocaleString("es-EC", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-                const badge = e.estado === "optimo"
-                  ? { txt: "✓ Rendimiento Óptimo", bg: "var(--c-success-bg)", col: "#15803d" }
-                  : e.estado === "alto"
-                  ? { txt: "⚠️ Alto Desperdicio", bg: "var(--c-danger-bg)", col: "#b91c1c" }
-                  : { txt: "Rendimiento medio", bg: "var(--c-warning-bg)", col: "#b45309" };
-                return (
-                  <div style={{ border: "1px solid var(--c-border)", borderRadius: 10, padding: "12px 14px", margin: "8px 0", background: "var(--c-surface-2)" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
-                      <strong>📊 Eficiencia del Lote</strong>
-                      <span style={{ background: badge.bg, color: badge.col, fontWeight: 700, fontSize: 12, padding: "3px 10px", borderRadius: 999 }}>{badge.txt}</span>
-                    </div>
-                    <div style={{ fontSize: 13, display: "grid", gap: 4 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between" }}><span>Entrada (cáscara)</span><span>{e.entrada.toFixed(2)} QQ</span></div>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, color: badge.col }}>
-                        <span>% Arroz Blanco Comercial</span><span>{n1(e.blancoPct)}% · {e.blanco.toFixed(2)} QQ</span>
-                      </div>
-                      {/* Excedente/Crecimiento del arroz blanco vs cáscara de entrada. */}
-                      <div style={{ display: "flex", justifyContent: "space-between", color: e.crecimientoPct >= 0 ? "#15803d" : "#b91c1c" }}>
-                        <span>% Arroz Blanco (Excedente/Crecimiento)</span>
-                        <span title="((QQ Arroz Blanco − QQ Cáscara) / QQ Cáscara) × 100">{e.crecimientoPct >= 0 ? "+" : ""}{n1(e.crecimientoPct)}%</span>
-                      </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 600 }}><span>% Subproductos (total)</span><span>{n1(e.subPct)}% · {e.subproductos.toFixed(2)} QQ</span></div>
-                      {/* Rendimiento individual por subproducto vs cáscara de entrada. */}
-                      {e.broken34 > 0 && <div style={{ display: "flex", justifyContent: "space-between", color: "var(--c-muted)", paddingLeft: 10 }}><span>· Arrocillo 3/4</span><span>{n1(e.broken34Pct)}% · {e.broken34.toFixed(2)} QQ</span></div>}
-                      {e.fineBroken > 0 && <div style={{ display: "flex", justifyContent: "space-between", color: "var(--c-muted)", paddingLeft: 10 }}><span>· Arrocillo Fino</span><span>{n1(e.fineBrokenPct)}% · {e.fineBroken.toFixed(2)} QQ</span></div>}
-                      {e.polvillo > 0 && <div style={{ display: "flex", justifyContent: "space-between", color: "var(--c-muted)", paddingLeft: 10 }}><span>· Polvillo</span><span>{n1(e.polvilloPct)}% · {e.polvillo.toFixed(2)} QQ</span></div>}
-                      <div style={{ display: "flex", justifyContent: "space-between", color: "var(--c-muted)" }}><span>% Merma / Cáscara</span><span>{n1(e.mermaPct)}%</span></div>
-                    </div>
-                    <p className="muted" style={{ fontSize: 11, margin: "6px 0 0" }}>Óptimo &gt; 62% · Alerta de desperdicio &lt; 60% (arroz blanco / QQ de entrada). El excedente compara el arroz blanco total contra la cáscara que entró.</p>
-                  </div>
-                );
-              })()}
+              {/* La liquidación de rendimiento vive en su propio módulo «Gana»:
+                  al finalizar el lote se guarda el cuadro y se abre allí. */}
+              <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>📋 Al finalizar, el cuadro de rendimiento se guarda y se abre en el módulo <strong>«Gana»</strong>.</p>
 
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center", marginTop: 8 }}>
                 <button type="button" className="btnSecondary" onClick={() => saveMillingProcess().catch((e) => addToast(e.message, "error"))}
@@ -9063,150 +9044,110 @@ export function App() {
                 Guardar Proceso deja el pilado a medias en «Procesos guardados» y limpia el formulario; para seguir editándolo presiona «Continuar / Finalizar lote». Finalizar Lote agrega la produccion al stock.
               </p>
               {millingDraftSavedAt && <p className="muted">💾 Guardado en el servidor: {new Date(millingDraftSavedAt).toLocaleString("es-EC")}</p>}
-
-              {millingYields && (
-                <section className="yieldResults">
-                  <Metric title="Rend. Pilado" value={formatYield(millingYields.pilado)} />
-                  <Metric title="Rend. Arrocillo" value={formatYield(millingYields.arrocillo)} />
-                  <Metric title="Rend. Polvillo" value={formatYield(millingYields.polvillo)} />
-                </section>
-              )}
             </section>
 
-            {/* Historial de pilados cerrados. Plegado por defecto para no tapar
-                la pantalla de trabajo. */}
+
+          </section>
+        )}
+
+        {/* ===== GANA · Liquidación de rendimiento por lote (módulo propio) ===== */}
+        {activeTab === "Gana" && (
+          <section className="panelGrid">
             <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-              <button
-                type="button"
-                onClick={() => setProductionHistoryOpen((open) => !open)}
-                style={{
-                  width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center",
-                  background: "none", border: "none", cursor: "pointer", padding: 0, font: "inherit", color: "inherit"
-                }}
-              >
-                <h2 style={{ margin: 0 }}>📚 Historial de produccion ({productionHistory.length})</h2>
-                <span className="muted">{productionHistoryOpen ? "▲ Ocultar" : "▼ Ver"}</span>
-              </button>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                <div>
+                  <h2 style={{ margin: 0 }}>🏆 Gana · Liquidación de rendimiento</h2>
+                  <p className="muted" style={{ margin: "4px 0 0" }}>
+                    Cuadros de rendimiento de los lotes finalizados de <strong>{accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "este accionista"}</strong>. La cáscara de entrada es la suma de las secadoras del lote.
+                  </p>
+                </div>
+                <button type="button" className="btnSecondary" onClick={() => loadProductionHistory().catch(() => undefined)}>↻ Actualizar</button>
+              </div>
 
-              {productionHistoryOpen && (
-                productionHistory.length === 0 ? (
-                  <p className="tableEmpty">Todavia no hay pilados cerrados para este accionista.</p>
-                ) : (
-                  <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
-                    {productionHistory.map((item) => (
-                      <article key={item.id} style={{ border: "1px solid var(--c-border)", borderRadius: 8, padding: 12 }}>
-                        <header style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "space-between", alignItems: "baseline" }}>
-                          <div>
-                            {item.is_service ? (
-                              <>
-                                <span className="chip warn">Servicio de pilado</span>
-                                <strong style={{ marginLeft: 8 }}>{item.client_name ?? "Cliente"}</strong>
-                                <span className="muted"> · {Number(item.white_rice_qty ?? 0).toFixed(2)} QQ</span>
-                              </>
-                            ) : (
-                              <>
-                                <strong>{item.lot_code}</strong>
-                                <span className="muted">
-                                  {item.tunnel_number ? ` · Tunel ${item.tunnel_number}` : ""}
-                                  {item.rice_type ? ` · ${item.rice_type}` : ""}
-                                </span>
-                              </>
-                            )}
+              {(() => {
+                const lotes = productionHistory.filter((it) => !it.is_service);
+                if (lotes.length === 0) {
+                  return <p className="tableEmpty" style={{ marginTop: 16 }}>Aún no hay lotes finalizados para este accionista. Al finalizar un lote en Producción, su cuadro aparece aquí.</p>;
+                }
+                const KG_QQ = 45.359237;
+                const n2 = (v: number) => Number(v).toFixed(2);
+                const p1 = (v: number) => `${Number(v).toFixed(1)}%`;
+                return (
+                  <div style={{ display: "grid", gap: 14, marginTop: 14 }}>
+                    {lotes.map((item) => {
+                      const snap = item.rendimiento_snapshot ?? null;
+                      // Cáscara de entrada = suma de las secadoras del lote (peso de
+                      // entrada del/los túnel(es) en QQ).
+                      const entrada = snap ? Number(snap.entrada_cascara_qq) : Number(item.input_paddy_kg ?? 0) / KG_QQ;
+                      const blanco = Number(item.white_rice_qty ?? 0);
+                      const broken = Number(item.broken_rice_qty ?? 0);
+                      const fino = Number(item.fine_broken_rice_qty ?? 0);
+                      const arrocillos = broken + fino;
+                      const polvillo = Number(item.bran_qty ?? 0);
+                      const tula = Number(item.qq_de_tulas ?? snap?.arroz_blanco.tula_qq ?? 0);
+                      const saco = Math.max(0, blanco - tula);
+                      const div = (x: number) => (entrada > 0 ? (x / entrada) * 100 : 0);
+                      // Fórmulas de DIVISIÓN DIRECTA (estándar del cuadro "Gana"):
+                      const blancoPct = div(blanco);
+                      const arrocillosPct = div(arrocillos);
+                      const polvilloPct = div(polvillo);
+                      const mermaPct = Math.max(0, 100 - blancoPct - arrocillosPct - polvilloPct);
+                      return (
+                        <article key={item.id} style={{ border: "1px solid var(--c-border)", borderRadius: 10, padding: 14 }}>
+                          <header style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+                            <strong style={{ fontSize: 15 }}>{item.lot_code}{item.rice_type ? ` · ${item.rice_type}` : ""}</strong>
+                            <span className="muted">{new Date(item.finished_at).toLocaleString("es-EC")}</span>
+                          </header>
+                          <div style={{ overflowX: "auto" }}>
+                            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                              <thead>
+                                <tr style={{ background: "#15803d", color: "#fff" }}>
+                                  <th style={{ padding: "6px 10px", textAlign: "left", color: "#fff" }}>Concepto</th>
+                                  <th style={{ padding: "6px 10px", textAlign: "right", color: "#fff" }}>QQ</th>
+                                  <th style={{ padding: "6px 10px", textAlign: "right", color: "#fff" }}>% s/ cáscara</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                <tr style={{ borderBottom: "1px solid var(--c-border)" }}>
+                                  <td style={{ padding: "6px 10px", fontWeight: 700 }}>Cáscara de Entrada <span className="muted" style={{ fontWeight: 400 }}>(secadoras del lote)</span></td>
+                                  <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 700 }}>{n2(entrada)}</td>
+                                  <td style={{ padding: "6px 10px", textAlign: "right", color: "var(--c-muted)" }}>100.0%</td>
+                                </tr>
+                                <tr style={{ borderBottom: "1px solid var(--c-border)" }}>
+                                  <td style={{ padding: "6px 10px", fontWeight: 700, color: "#15803d" }}>Arroz Blanco <span className="muted" style={{ fontWeight: 400 }}>(Tulas {n2(tula)} + Sacos {n2(saco)})</span></td>
+                                  <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 700, color: "#15803d" }}>{n2(blanco)}</td>
+                                  <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 700, color: "#15803d" }}>{p1(blancoPct)}</td>
+                                </tr>
+                                <tr style={{ borderBottom: "1px solid var(--c-border)" }}>
+                                  <td style={{ padding: "6px 10px" }}>Arrocillos <span className="muted">(3/4 {n2(broken)} + Fino {n2(fino)})</span></td>
+                                  <td style={{ padding: "6px 10px", textAlign: "right" }}>{n2(arrocillos)}</td>
+                                  <td style={{ padding: "6px 10px", textAlign: "right" }}>{p1(arrocillosPct)}</td>
+                                </tr>
+                                <tr style={{ borderBottom: "1px solid var(--c-border)" }}>
+                                  <td style={{ padding: "6px 10px" }}>Polvillo</td>
+                                  <td style={{ padding: "6px 10px", textAlign: "right" }}>{n2(polvillo)}</td>
+                                  <td style={{ padding: "6px 10px", textAlign: "right" }}>{p1(polvilloPct)}</td>
+                                </tr>
+                                <tr>
+                                  <td style={{ padding: "6px 10px", color: "var(--c-muted)" }}>Merma / diferencia</td>
+                                  <td style={{ padding: "6px 10px", textAlign: "right", color: "var(--c-muted)" }}>{n2(Math.max(0, entrada - blanco - arrocillos - polvillo))}</td>
+                                  <td style={{ padding: "6px 10px", textAlign: "right", color: "var(--c-muted)" }}>{p1(mermaPct)}</td>
+                                </tr>
+                              </tbody>
+                            </table>
                           </div>
-                          <span className="muted">{new Date(item.finished_at).toLocaleString("es-EC")}</span>
-                        </header>
-
-                        {item.is_service ? (
-                          <section className="yieldResults" style={{ marginTop: 8 }}>
-                            <Metric title="QQ pilados" value={`${Number(item.white_rice_qty ?? 0).toFixed(2)} QQ`} />
-                            <Metric title="Tarifa" value={`$${Number(item.service_rate ?? 0).toFixed(2)}/QQ`} />
-                            <Metric title="Total" value={money(Number(item.service_total ?? 0))} />
-                          </section>
-                        ) : (
-                          <section className="yieldResults" style={{ marginTop: 8 }}>
-                            <Metric title="Rendimiento" value={`${Number(item.yield_percent ?? 0).toFixed(2)} %`} />
-                            <Metric title="Pilado" value={`${Number(item.white_rice_qty ?? 0).toFixed(2)} QQ`} />
-                            <Metric title="Arrocillo 3/4" value={`${Number(item.broken_rice_qty ?? 0).toFixed(2)} QQ`} />
-                            <Metric title="Arrocillo fino" value={`${Number(item.fine_broken_rice_qty ?? 0).toFixed(2)} QQ`} />
-                            <Metric title="Polvillo" value={`${Number(item.bran_qty ?? 0).toFixed(2)} QQ`} />
-                            {/* "Pago polvillo" oculto a petición: el pago sigue
-                                registrándose en Nómina, solo no se muestra aquí. */}
-                          </section>
-                        )}
-
-                        {(item.pilador_name || item.estibador_name || item.polvillo_worker_name) && (
-                          <p className="muted" style={{ margin: "6px 0 0" }}>
-                            Pilador: {item.pilador_name ?? "—"} · Estibador: {item.estibador_name ?? "—"} · Polvillo: {item.polvillo_worker_name ?? "—"}
-                          </p>
-                        )}
-
-                        {!item.is_service && (
-                          <p style={{ margin: "10px 0 0" }}>
-                            <span className="muted">Presentaciones: </span>
-                            {item.presentaciones.every((p) => !p.presentation) ? (
-                              <span className="muted">sin desglose (se guardo solo el total)</span>
-                            ) : (
-                              item.presentaciones
-                                .filter((p) => p.presentation)
-                                .map((p, index, lista) => (
-                                  <span key={`${item.id}-${index}`}>
-                                    <strong>{Number(p.quantity).toFixed(2)} QQ</strong> en {p.presentation}
-                                    {index < lista.length - 1 ? " · " : ""}
-                                  </span>
-                                ))
-                            )}
-                          </p>
-                        )}
-
-                        {/* 📋 Cuadro de rendimiento congelado al cierre (foto del lote). */}
-                        {!item.is_service && item.rendimiento_snapshot && (() => {
-                          const s = item.rendimiento_snapshot!;
-                          const ab = s.arroz_blanco;
-                          const r = s.rendimientos;
-                          const p1 = (v: number) => `${v >= 0 ? "" : ""}${Number(v).toFixed(1)}%`;
-                          return (
-                            <div style={{ marginTop: 10, border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 8, padding: "10px 12px" }}>
-                              <div style={{ fontWeight: 800, fontSize: 12, color: "#15803d", marginBottom: 6 }}>
-                                📋 Cuadro de rendimiento{s.accionista_nombre ? ` · ${s.accionista_nombre}` : ""}
-                              </div>
-                              <div style={{ overflowX: "auto" }}>
-                                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                                  <tbody>
-                                    <tr style={{ borderBottom: "1px solid #d1fae5" }}>
-                                      <td style={{ padding: "4px 6px" }}>Cáscara de entrada</td>
-                                      <td style={{ padding: "4px 6px", textAlign: "right", fontWeight: 700 }}>{Number(s.entrada_cascara_qq).toFixed(2)} QQ</td>
-                                      <td style={{ padding: "4px 6px", textAlign: "right", color: "var(--c-muted)" }}>—</td>
-                                    </tr>
-                                    <tr style={{ borderBottom: "1px solid #d1fae5" }}>
-                                      <td style={{ padding: "4px 6px", fontWeight: 700 }}>Arroz Blanco (Tulas {Number(ab.tula_qq).toFixed(2)} + Sacos {Number(ab.saco_qq).toFixed(2)})</td>
-                                      <td style={{ padding: "4px 6px", textAlign: "right", fontWeight: 700, color: "#15803d" }}>{Number(ab.total_qq).toFixed(2)} QQ</td>
-                                      <td style={{ padding: "4px 6px", textAlign: "right" }}>{p1(r.arroz_blanco_pct)} · exc. {r.arroz_blanco_crecimiento_pct >= 0 ? "+" : ""}{Number(r.arroz_blanco_crecimiento_pct).toFixed(1)}%</td>
-                                    </tr>
-                                    {s.subproductos.map((sp) => (
-                                      <tr key={sp.label} style={{ borderBottom: "1px solid #d1fae5" }}>
-                                        <td style={{ padding: "4px 6px", paddingLeft: 14, color: "#374151" }}>{sp.label}{sp.lb_por_saco ? ` (${sp.lb_por_saco} lb/saco)` : ""}</td>
-                                        <td style={{ padding: "4px 6px", textAlign: "right" }}>{Number(sp.qq).toFixed(2)} QQ</td>
-                                        <td style={{ padding: "4px 6px", textAlign: "right", color: "var(--c-muted)" }}>{p1(r.subproductos?.[sp.label] ?? 0)}</td>
-                                      </tr>
-                                    ))}
-                                    <tr>
-                                      <td style={{ padding: "4px 6px", color: "var(--c-muted)" }}>Subproductos (total) · Merma</td>
-                                      <td style={{ padding: "4px 6px", textAlign: "right", color: "var(--c-muted)" }}>{p1(r.subproductos_pct_total)}</td>
-                                      <td style={{ padding: "4px 6px", textAlign: "right", color: "var(--c-muted)" }}>Merma {p1(r.merma_pct)}</td>
-                                    </tr>
-                                  </tbody>
-                                </table>
-                              </div>
-                            </div>
-                          );
-                        })()}
-                      </article>
-                    ))}
+                          {(item.pilador_name || item.estibador_name) && (
+                            <p className="muted" style={{ margin: "8px 0 0", fontSize: 12 }}>
+                              Pilador: {item.pilador_name ?? "—"} · Estibador: {item.estibador_name ?? "—"}
+                            </p>
+                          )}
+                        </article>
+                      );
+                    })}
                   </div>
-                )
-              )}
+                );
+              })()}
             </div>
-
           </section>
         )}
 
