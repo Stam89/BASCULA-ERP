@@ -219,11 +219,14 @@ export async function amortizarFomentosLIFO(
          VALUES ($1, CURRENT_DATE, $2, $3, $4)`,
         [f.id, remanente, `Traspaso a fomento nuevo (renovación) por Liq #${input.liquidationNumber}`, input.liquidationId]
       );
+      // Nuevo fomento (renovación): MISMO socio, HABILITADO en ACTIVOS, con
+      // limite_credito = deuda arrastrada exacta y nota de arrastre referenciando
+      // el fomento anterior (regla de negocio del cliente).
       const nuevo = (await client.query(
-        `INSERT INTO fomentos (farmer_name, farmer_id, cuadras, inicio, renta, variedad, status, accionista_id, notes, origen_liquidation_id)
-         VALUES ($1, $2, 0, CURRENT_DATE, $3, $4, 'ACTIVOS', $5, $6, $7) RETURNING id`,
+        `INSERT INTO fomentos (farmer_name, farmer_id, cuadras, inicio, renta, variedad, status, accionista_id, notes, limite_credito, origen_liquidation_id)
+         VALUES ($1, $2, 0, CURRENT_DATE, $3, $4, 'ACTIVOS', $5, $6, $7, $8) RETURNING id`,
         [f.farmer_name, f.farmer_id ?? null, Number(f.renta) || 0, f.variedad ?? null, f.accionista_id ?? null,
-         `Renovación por saldo restante de Liquidación #${input.liquidationNumber}`, input.liquidationId]
+         `Arrastre de saldo en contra - Fomento anterior #${f.id}`, remanente, input.liquidationId]
       )).rows[0];
       await client.query(
         "INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto) VALUES ($1, CURRENT_DATE, $2, $3)",

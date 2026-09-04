@@ -927,8 +927,9 @@ type Fomento = {
   inicio: string;
   cosecha: string | null;
   renta: number;
-  status: "ACTIVOS" | "NO ACTIVOS" | "APROBADOS";
+  status: "ACTIVOS" | "NO ACTIVOS" | "APROBADOS" | "CERRADO_LIQUIDACION";
   notes: string | null;
+  liquidado_at?: string | null;
   created_at: string;
   paradas: number;
   monto_limite: number;
@@ -1606,7 +1607,7 @@ export function App() {
   // Confirmación de eliminación de una entrega (con su valor/fecha para el mensaje).
   const [confirmarEntrega, setConfirmarEntrega] = useState<{ fomentoId: string; entregaId: string; valor: number; fecha: string } | null>(null);
   const [borrandoEntrega, setBorrandoEntrega] = useState(false);
-  const [fomentoFilter, setFomentoFilter] = useState<"TODOS"|"ACTIVOS"|"NO ACTIVOS"|"APROBADOS">("TODOS");
+  const [fomentoFilter, setFomentoFilter] = useState<"TODOS"|"ACTIVOS"|"NO ACTIVOS"|"APROBADOS"|"ARCHIVADOS">("TODOS");
   const [fomentoEditingRenta, setFomentoEditingRenta] = useState<string | null>(null);
   const [fomentoRentaInput, setFomentoRentaInput] = useState("");
   const [fomentoPagoForm, setFomentoPagoForm] = useState({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
@@ -6998,6 +6999,128 @@ export function App() {
     if (win) { win.document.write(html); win.document.close(); win.print(); }
   }
 
+  // Estado de Cuenta imprimible de UN fomento (histórico o activo): detalle de
+  // entregas/créditos + intereses, total abonado por liquidación(es) y saldo
+  // resultante (Saldado $0.00 o Saldo en Contra pendiente).
+  function printEstadoCuentaFomento(f: FomentoDetalle) {
+    const cerrado = f.status === "CERRADO_LIQUIDACION";
+    const totalPedido = Number(f.total_pedido ?? 0);
+    const totalInteres = Number(f.gasto_adm ?? 0);
+    const totalPagado = Number(f.total_pagado ?? 0);
+    const saldo = Number(f.deuda_total ?? 0);
+    const saldado = saldo <= 0.005;
+    const fechaDoc = new Date().toLocaleDateString("es-EC", { year: "numeric", month: "long", day: "numeric" });
+    const liqFecha = f.liquidado_at ? new Date(f.liquidado_at).toLocaleDateString("es-EC", { year: "numeric", month: "long", day: "numeric" }) : null;
+
+    const entregaRows = (f.entregas ?? []).map((e) => {
+      const dias = Math.max(0, Math.floor((Date.now() - new Date(e.fecha).getTime()) / 86400000));
+      return `<tr>
+        <td>${e.fecha?.slice(0,10) ?? "—"}</td>
+        <td>${(e.concepto ?? "").replace(/</g,"&lt;") || "Crédito / insumo"}</td>
+        <td style="text-align:right">$${Number(e.valor).toFixed(2)}</td>
+        <td style="text-align:right">${dias}</td>
+        <td style="text-align:right;color:#b45309">$${Number(e.interes ?? 0).toFixed(2)}</td>
+        <td style="text-align:right;font-weight:600">$${Number(e.suman ?? (Number(e.valor)+Number(e.interes ?? 0))).toFixed(2)}</td>
+      </tr>`;
+    }).join("");
+
+    const pagos = f.pagos ?? [];
+    const pagoRows = pagos.length
+      ? pagos.map((p) => `<tr>
+          <td>${p.fecha?.slice(0,10) ?? "—"}</td>
+          <td>${(p.concepto ?? "Abono").replace(/</g,"&lt;")}</td>
+          <td style="text-align:right;color:#15803d;font-weight:600">$${Number(p.valor).toFixed(2)}</td>
+        </tr>`).join("")
+      : `<tr><td colspan="3" style="text-align:center;color:#888">Sin abonos registrados</td></tr>`;
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+      <title>Estado de Cuenta — Fomento</title>
+      <style>
+        *{box-sizing:border-box}
+        body{font-family:Arial,sans-serif;font-size:13px;color:#111;margin:24px 32px}
+        .hdr{text-align:center;border-bottom:2px solid #111;padding-bottom:10px;margin-bottom:14px}
+        .hdr h1{margin:0;font-size:19px;letter-spacing:1px}
+        .hdr h2{margin:2px 0;font-size:13px;font-weight:normal}
+        .hdr h3{margin:6px 0 0;font-size:15px;letter-spacing:2px;text-transform:uppercase}
+        .meta{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:8px;font-size:13px}
+        .badge{display:inline-block;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:700;letter-spacing:.05em}
+        .b-cerrado{background:#374151;color:#fff}
+        .b-activo{background:#dcfce7;color:#15803d}
+        .note{background:#f9fafb;border-left:3px solid #94a3b8;padding:6px 10px;margin:8px 0;font-size:12px;color:#475569}
+        h4{margin:14px 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:#374151}
+        table{width:100%;border-collapse:collapse;margin-bottom:6px}
+        th{background:#f0f0f0;padding:6px 8px;text-align:left;border:1px solid #bbb;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+        td{padding:5px 8px;border:1px solid #ccc;font-size:12px}
+        tfoot td{font-weight:700;background:#fafafa}
+        .totals{width:340px;margin-left:auto;border-collapse:collapse;margin-top:8px}
+        .totals td{padding:5px 8px;border:none;font-size:13px}
+        .lbl{font-weight:600;text-align:right;padding-right:12px}
+        .val{text-align:right}
+        .saldo-row td{font-weight:700;font-size:16px;border-top:2px solid #111;padding-top:8px}
+        .saldado{color:#15803d}
+        .contra{color:#b91c1c}
+        .sigs{display:flex;justify-content:space-around;margin-top:52px}
+        .sig{text-align:center}
+        .sig hr{width:180px;border:none;border-top:1px solid #111;margin:0 auto 4px}
+        .sig span{font-size:12px}
+        @media print{body{margin:10mm}}
+      </style></head><body>
+      <div class="hdr">
+        <h1>${appSettings.business_name}</h1>
+        <h2>${appSettings.business_subtitle}</h2>
+        ${appSettings.ruc ? `<h2>RUC: ${appSettings.ruc}</h2>` : ""}
+        ${appSettings.address || appSettings.phone ? `<h2>${[appSettings.address, appSettings.phone && `Telf: ${appSettings.phone}`].filter(Boolean).join(" · ")}</h2>` : ""}
+        <h3>Estado de Cuenta — Fomento</h3>
+      </div>
+      <div class="meta">
+        <div><strong>Agricultor:</strong> ${f.farmer_name}</div>
+        <div><strong>Fecha emisión:</strong> ${fechaDoc}</div>
+      </div>
+      <div class="meta">
+        <div><strong>Fomento N.º:</strong> ${f.id}</div>
+        <div><span class="badge ${cerrado ? "b-cerrado" : "b-activo"}">${cerrado ? "🗄️ CERRADO POR LIQUIDACIÓN" : "ACTIVO"}</span>${liqFecha ? ` &nbsp;<strong>Liquidado:</strong> ${liqFecha}` : ""}</div>
+      </div>
+      ${f.notes ? `<div class="note">📌 ${f.notes.replace(/</g,"&lt;")}</div>` : ""}
+
+      <h4>Detalle de Entregas / Créditos e Intereses</h4>
+      <table>
+        <thead><tr><th>Fecha</th><th>Concepto</th><th style="text-align:right">Valor</th><th style="text-align:right">Días</th><th style="text-align:right">Interés</th><th style="text-align:right">Total</th></tr></thead>
+        <tbody>${entregaRows || `<tr><td colspan="6" style="text-align:center;color:#888">Sin entregas registradas</td></tr>`}</tbody>
+        <tfoot><tr>
+          <td colspan="2">TOTALES</td>
+          <td style="text-align:right">$${totalPedido.toFixed(2)}</td>
+          <td></td>
+          <td style="text-align:right;color:#b45309">$${totalInteres.toFixed(2)}</td>
+          <td style="text-align:right">$${(totalPedido + totalInteres).toFixed(2)}</td>
+        </tr></tfoot>
+      </table>
+
+      <h4>Abonos Recibidos (incl. Liquidación de Arroz)</h4>
+      <table>
+        <thead><tr><th>Fecha</th><th>Concepto</th><th style="text-align:right">Monto abonado</th></tr></thead>
+        <tbody>${pagoRows}</tbody>
+      </table>
+
+      <table class="totals">
+        <tr><td class="lbl">Total pedido:</td><td class="val">$${totalPedido.toFixed(2)}</td></tr>
+        <tr><td class="lbl">Interés acumulado:</td><td class="val" style="color:#b45309">$${totalInteres.toFixed(2)}</td></tr>
+        <tr><td class="lbl">Deuda bruta:</td><td class="val">$${(totalPedido + totalInteres).toFixed(2)}</td></tr>
+        <tr><td class="lbl">Total abonado:</td><td class="val" style="color:#15803d">-$${totalPagado.toFixed(2)}</td></tr>
+        <tr class="saldo-row"><td class="lbl">SALDO RESULTANTE:</td>
+          <td class="val ${saldado ? "saldado" : "contra"}">${saldado ? "SALDADO $0.00" : `SALDO EN CONTRA $${saldo.toFixed(2)}`}</td></tr>
+      </table>
+      ${!saldado ? `<div class="note contra" style="border-left-color:#b91c1c">⚠️ Saldo en contra pendiente de $${saldo.toFixed(2)}. ${cerrado ? "Trasladado a un nuevo fomento activo (arrastre de saldo)." : "El agricultor mantiene deuda pendiente."}</div>` : ""}
+
+      <div class="sigs">
+        <div class="sig"><hr/><span>Agricultor</span></div>
+        <div class="sig"><hr/><span>Responsable</span></div>
+      </div>
+      ${appSettings.receipt_footer ? `<p style="text-align:center;margin-top:28px;font-size:11px;color:#666">${appSettings.receipt_footer}</p>` : ""}
+    </body></html>`;
+    const win = window.open("", "_blank", "width=780,height=640");
+    if (win) { win.document.write(html); win.document.close(); win.print(); }
+  }
+
   function logout() {
     localStorage.removeItem(authStorageKey);
     setAuthUser(null);
@@ -11620,14 +11743,19 @@ export function App() {
 
             {/* Filtro de estado */}
             <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-              {(["TODOS","ACTIVOS","NO ACTIVOS","APROBADOS"] as const).map(f => (
-                <button key={f} type="button"
-                  style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid var(--c-brand)",
-                    background: fomentoFilter === f ? "var(--c-brand)" : "transparent",
-                    color: fomentoFilter === f ? "#fff" : "var(--c-brand)", cursor: "pointer", fontWeight: fomentoFilter === f ? 700 : 400 }}
-                  onClick={() => { setFomentoFilter(f); setFomentoDetalle(null); }}
-                >{f}</button>
-              ))}
+              {(["TODOS","ACTIVOS","NO ACTIVOS","APROBADOS","ARCHIVADOS"] as const).map(f => {
+                const esArch = f === "ARCHIVADOS";
+                const activo = fomentoFilter === f;
+                const col = esArch ? "#6b7280" : "var(--c-brand)";
+                return (
+                  <button key={f} type="button"
+                    style={{ padding: "4px 12px", borderRadius: 6, border: `1px solid ${col}`,
+                      background: activo ? col : "transparent",
+                      color: activo ? "#fff" : col, cursor: "pointer", fontWeight: activo ? 700 : 400 }}
+                    onClick={() => { setFomentoFilter(f); setFomentoDetalle(null); }}
+                  >{esArch ? "🗄️ ARCHIVADOS" : f}</button>
+                );
+              })}
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
@@ -11643,17 +11771,19 @@ export function App() {
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 420, overflowY: "auto" }}>
                   {fomentos
-                    .filter(f => fomentoFilter === "TODOS" || f.status === fomentoFilter)
+                    .filter(f => fomentoFilter === "ARCHIVADOS" ? f.status === "CERRADO_LIQUIDACION"
+                               : fomentoFilter === "TODOS" ? f.status !== "CERRADO_LIQUIDACION"
+                               : f.status === fomentoFilter)
                     .map(f => {
                       const habilitado = f.estado_credito === "HABILITADO";
-                      const statusColor = f.status === "ACTIVOS" ? "#16a34a" : f.status === "APROBADOS" ? "#1d4ed8" : "#6b7280";
+                      const statusColor = f.status === "ACTIVOS" ? "#16a34a" : f.status === "APROBADOS" ? "#1d4ed8" : f.status === "CERRADO_LIQUIDACION" ? "#374151" : "#6b7280";
                       return (
                         <div key={f.id} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 14px", cursor: "pointer",
                           background: fomentoDetalle?.id === f.id ? "#f0fdf4" : "var(--c-surface)" }}
                           onClick={() => loadFomentoDetalle(f.id).catch(() => undefined)}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                             <strong style={{ fontSize: 14 }}>{f.farmer_name}</strong>
-                            <span style={{ fontSize: 11, background: statusColor, color: "#fff", borderRadius: 4, padding: "2px 6px" }}>{f.status}</span>
+                            <span style={{ fontSize: 11, background: statusColor, color: "#fff", borderRadius: 4, padding: "2px 6px" }}>{f.status === "CERRADO_LIQUIDACION" ? "🗄️ CERRADO" : f.status}</span>
                           </div>
                           <div style={{ fontSize: 12, color: "var(--c-muted)", display: "flex", gap: 12, flexWrap: "wrap" }}>
                             <span>{f.cuadras} cuadras</span>
@@ -11662,13 +11792,19 @@ export function App() {
                             <span style={{ color: habilitado ? "#16a34a" : "#dc2626", fontWeight: 700 }}>{f.estado_credito}</span>
                           </div>
                           <div style={{ fontSize: 11, color: "var(--c-muted)", marginTop: 2 }}>
-                            Inicio: {f.inicio?.slice(0,10)} | Cosecha: {f.cosecha?.slice(0,10) ?? "—"} | Interés: ${Number(f.gasto_adm).toFixed(2)}
+                            {f.status === "CERRADO_LIQUIDACION"
+                              ? <>Liquidado: {f.liquidado_at?.slice(0,10) ?? "—"} | Saldo final: <strong style={{ color: Number(f.deuda_total ?? 0) > 0.005 ? "#dc2626" : "#16a34a" }}>${Number(f.deuda_total ?? 0).toFixed(2)}</strong></>
+                              : <>Inicio: {f.inicio?.slice(0,10)} | Cosecha: {f.cosecha?.slice(0,10) ?? "—"} | Interés: ${Number(f.gasto_adm).toFixed(2)}</>}
                           </div>
                         </div>
                       );
                     })}
-                  {fomentos.filter(f => fomentoFilter === "TODOS" || f.status === fomentoFilter).length === 0 && (
-                    <p style={{ color: "var(--c-muted)", textAlign: "center", padding: 20 }}>No hay fomentos {fomentoFilter !== "TODOS" ? `con estado ${fomentoFilter}` : "registrados"}</p>
+                  {fomentos.filter(f => fomentoFilter === "ARCHIVADOS" ? f.status === "CERRADO_LIQUIDACION"
+                                      : fomentoFilter === "TODOS" ? f.status !== "CERRADO_LIQUIDACION"
+                                      : f.status === fomentoFilter).length === 0 && (
+                    <p style={{ color: "var(--c-muted)", textAlign: "center", padding: 20 }}>
+                      {fomentoFilter === "ARCHIVADOS" ? "No hay fomentos archivados (cerrados por liquidación)" : `No hay fomentos ${fomentoFilter !== "TODOS" ? `con estado ${fomentoFilter}` : "registrados"}`}
+                    </p>
                   )}
                 </div>
 
@@ -11678,10 +11814,25 @@ export function App() {
               <div>
                 {fomentoDetalle ? (
                   <div>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, gap: 8 }}>
                       <h3 style={{ margin: 0 }}>{fomentoDetalle.farmer_name}</h3>
-                      <button type="button" onClick={() => setFomentoDetalle(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--c-muted)" }}>✕</button>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <button type="button" onClick={() => printEstadoCuentaFomento(fomentoDetalle)}
+                          style={{ background: "#0f766e", color: "#fff", border: "none", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
+                          🖨️ Imprimir Estado de Cuenta
+                        </button>
+                        <button type="button" onClick={() => setFomentoDetalle(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--c-muted)" }}>✕</button>
+                      </div>
                     </div>
+                    {fomentoDetalle.status === "CERRADO_LIQUIDACION" && (
+                      <div style={{ background: "#f3f4f6", border: "1px solid #d1d5db", borderRadius: 8, padding: "8px 12px", marginBottom: 12, fontSize: 12, color: "#374151" }}>
+                        🗄️ <strong>Fomento archivado</strong> — cerrado por liquidación
+                        {fomentoDetalle.liquidado_at ? ` el ${fomentoDetalle.liquidado_at.slice(0,10)}` : ""}.
+                        Saldo final: <strong style={{ color: Number(fomentoDetalle.deuda_total ?? 0) > 0.005 ? "#dc2626" : "#16a34a" }}>
+                          {Number(fomentoDetalle.deuda_total ?? 0) > 0.005 ? `Saldo en contra $${Number(fomentoDetalle.deuda_total).toFixed(2)} (arrastrado a nuevo fomento)` : "Saldado $0.00"}
+                        </strong>.
+                      </div>
+                    )}
 
                     {/* Tasa de interés editable */}
                     <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 12px", marginBottom: 12, display: "flex", alignItems: "center", gap: 10 }}>
