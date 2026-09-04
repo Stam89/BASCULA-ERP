@@ -1,6 +1,6 @@
 # PROJECT_CONTEXT — BASCULA-ERP
 
-> Memoria compacta para continuar sin releer todo. Última actualización: 2026-09-03 (sesión de 8 features: empaque Tulas/Sacos en Secadoras y Pilado, sacos exclusivos de la Matriz + Caja↔Inventario + precio base, cuadro de rendimiento por lote y **módulo nuevo «Gana»**). Todo en main `f79221e`. (Antes 2026-09-02, `4264463`.)
+> Memoria compacta para continuar sin releer todo. Última actualización: 2026-09-04 (**Gana → liquidación financiera de pilado**: costos de cáscara por partida cruzados con Liquidaciones + precio de venta e ingreso por CADA producto de salida). Todo en main `3519c8a`. (Antes 2026-09-03 `f79221e` = 8 features incl. módulo Gana; 2026-09-02 `4264463`.)
 > Al empezar una sesión, **lee solo este archivo** primero.
 > Nota: el checkout de trabajo/despliegue es el **MAIN** (`C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`). Ignorar cualquier worktree en `.claude/worktrees/*` (están sobre ramas viejas).
 
@@ -224,6 +224,14 @@ Commits en orden: `7447ad6` (empaque túnel), `1391c19` (MIX pilado), `f54988a` 
 6. **Cuadro de rendimiento por lote (snapshot)** (`fda8bc7`, `20260917_*.sql`): al cerrar el pilado se congela `production_yields.rendimiento_snapshot` (JSONB): cáscara entrada, arroz blanco total + split Tulas/Sacos + presentaciones, subproductos con lb/saco, y porcentajes (blanco, excedente=(blanco−entrada)/entrada, por subproducto, total, merma) + accionista. `/processing-batches/history` lo expone.
 7. **Módulo «Gana»** (`f79221e`, solo frontend): nuevo tab en el Sidebar OPERACIÓN **entre Producción e Inventario**. Muestra los cuadros de rendimiento de los lotes finalizados **filtrados por accionista** (multi-socio). Fórmulas de **división directa** sobre la cáscara de entrada (= suma de secadoras del lote): %Blanco=blanco/cáscara; %Arrocillos=(3/4+Fino)/cáscara (agrupados); %Polvillo=polvillo/cáscara. Se **quitó de Producción** la tarjeta verde de eficiencia, el panel post-cierre y el historial con cuadros; **al Finalizar Lote redirige a «Gana»**. Reusa `/processing-batches/history` (ya per-accionista). Nota: `millingEficiencia` memo + `productionHistoryOpen` quedaron sin uso (dead code inofensivo).
 
+## 2s. CAMBIOS 2026-09-04 (Gana → liquidación FINANCIERA de pilado)
+Commits `7dcb86d` (base financiera) + `3519c8a` (precio por producto). Migraciones `20260918`, `20260919`. Todo en main `3519c8a`.
+1. **Costo · Cáscara desglosada por partida**: se eliminó la fila única; ahora una sub-fila por secadora/ticket (agricultor · ticket · QQ **calificado** · **precio de compra** · costo=QQ×precio). El precio de compra se **cruza desde Liquidaciones** (`liquidations.price_per_quintal` por `weighing_ticket_id`, última no CANCELLED); partida sin liquidar → "— pend.". Fuente de partidas: `processing_batch_drying_lots` (por batch).
+2. **CORRIGE el total de cáscara** (bug 269.18): antes `input_paddy_kg/45.359` (peso BRUTO en kg); ahora **SUMA los QQ calificados de las partidas** (ej. real 122.10). Los % de rendimiento usan el total corregido. `entrada = Σ partidas.quintals` (fallback snapshot/input si no hay partidas — lotes viejos).
+3. **Ingreso · precio de venta por CADA producto de salida** (Arroz Blanco, Arrocillo 3/4, Arrocillo Fino, Polvillo): input editable por producto; **Total($)=QQ×precio**; fila **INGRESO TOTAL PROYECTADO** = Σ. Guardado en `production_yields.precio_venta_blanco/broken/fine/bran` vía **`PATCH /processing-batches/:id/precio-venta {producto, precio}`** (whitelist de columnas `PRECIO_VENTA_COL`, aislado por accionista → 403 si es de otro). En la tabla los arrocillos van en **2 filas separadas** (3/4 y Fino) para precio individual. `/history` expone `entradas[]` + los 4 precios.
+4. **Separación Costos↔Ingresos + Utilidad**: sección superior Cáscara = costos; inferior Productos = ingresos; resumen `Utilidad proyectada = Ingreso Total − Costo cáscara`. Columnas nuevas de la tabla: **Precio Unit.** y **Total ($)** (sin perder los %).
+Verificado E2E sobre lote real de ROVINSON (`LT-20260902182415`, 3 partidas de Liberato): total 122.10 (no 269.18), cruce precio compra $15.50→$651, ingreso por producto (135×40+20×20+4×12+100×6=6448), aislamiento STALYN→403, datos reales restaurados a null.
+
 ## 3. REGLAS DE NEGOCIO (no romper)
 - **Toma de pedido NO mueve dinero ni inventario**; recién al **Despachar** sale stock + entra caja (Contado) o Cuenta por Cobrar (Crédito). Estados DB: `PENDING`/`DELIVERED`/`CANCELLED` (NO renombrar; hay CHECK). El pedido genera su CxC "(pendiente de despacho)" al tomarse; al despachar se salda o se enlaza, nunca se duplica.
 - **Cuentas espejo entre accionistas**: un servicio/cargo de la matriz a un socio crea CxC (CEYRO) + CxP (socio) enlazadas en tablas puente (`pilado_services`, `lot_transfers`, `matriz_service_charges`, `matriz_packaging_charges`). Un abono en una cara debe reflejarse en la otra + caja del otro socio → `backend/src/services/cuentas-vinculadas.ts` (`espejarAbonoEnContraparte`). Saldar una cuenta debe mover caja + espejar, no solo bajar saldo.
@@ -281,7 +289,7 @@ Commits en orden: `7447ad6` (empaque túnel), `1391c19` (MIX pilado), `f54988a` 
 - **Cuadrilla túnel — tarifas del catálogo**: si no existe la actividad "RECEPCION A TUNEL N" o "BOTADA DE TUNEL" (activa), ese evento se **omite** en autoprocess (se reporta en `sin_tarifa`). Configurar tarifas en Cuadrilla→Actividades si falta alguna.
 
 ## 5. PRÓXIMO PASO
-**No hay trabajo a medias.** Las 8 features de la sesión 2026-09-03 están **mergeadas y pusheadas a main** (`f79221e`); ramas borradas; datos de prueba ZZ limpiados (0 residuos, 0 huérfanas). **La máquina local ya corre este código con migraciones aplicadas** (`20260914`…`20260917`). **Solo si se despliega en OTRO servidor:** `git pull` → `./deploy.sh` (migrate + build BE/FE + reinicio; ver §0). Sin auto-deploy.
+**No hay trabajo a medias.** Todo mergeado y pusheado a main (`3519c8a`, incl. Gana financiera §2s + las 8 features de 2026-09-03 §2r); ramas borradas; datos de prueba ZZ limpiados (0 residuos, 0 huérfanas); dato real de ROVINSON restaurado (precios de venta a null). **La máquina local ya corre este código con migraciones aplicadas** (`20260914`…`20260919`). **Solo si se despliega en OTRO servidor:** `git pull` → `./deploy.sh` (migrate + build BE/FE + reinicio; ver §0). Sin auto-deploy.
 Primero mañana: **preguntar al usuario qué sigue.** Pendientes/candidatos: (a) **DEADLOCK LATENTE de `ensureLaborTables`** — se lanzó una tarea aparte para arreglarlo (ver §8); confirmar si se cerró. (b) ¿restaurar la **tarjeta verde de eficiencia en vivo** en Producción? (se quitó al mover rendimiento a Gana; si la querían durante la captura, se repone). (c) botadas reales pendientes de T1/T2 ("🔍 Detectar labores de túnel"); (d) entregar la API Key externa de báscula (`backend/.external-api-key`); (e) probar el ciclo de fletes en vivo (§2p); (f) PDF/export de reportes; (g) mostrar `variedad`/`limite_credito` en fomentos.
 
 ## 6. ARCHIVOS IMPORTANTES
@@ -383,8 +391,15 @@ Primero mañana: **preguntar al usuario qué sigue.** Pendientes/candidatos: (a)
 Continuemos el proyecto BASCULA-ERP. Antes de nada, lee SOLO el archivo
 PROJECT_CONTEXT.md (raíz del repo) y NO analices todo el código. Trabaja desde el
 checkout MAIN (ignora .claude/worktrees/*).
-Contexto rápido: todo en main y pusheado (último f79221e). La última sesión
-(2026-09-03, §2r) cerró 8 features: (1) EMPAQUE Tulas/Sacos por túnel en Secadoras —
+Contexto rápido: todo en main y pusheado (último 3519c8a). LO MÁS RECIENTE
+(2026-09-04, §2s): «GANA» ES AHORA UNA LIQUIDACIÓN FINANCIERA — la cáscara se
+desglosa por partida con su PRECIO DE COMPRA (cruzado desde Liquidaciones) y costo;
+se CORRIGIÓ el total de cáscara (suma de QQ calificados, no input_paddy_kg/45.359,
+el bug 269.18); y cada producto de salida (Blanco, Arrocillo 3/4, Fino, Polvillo)
+tiene precio de VENTA editable → Total=QQ×precio, con INGRESO TOTAL PROYECTADO y
+Utilidad. Precios en production_yields.precio_venta_{blanco,broken,fine,bran} vía
+PATCH /processing-batches/:id/precio-venta {producto,precio} (aislado por accionista).
+La sesión 2026-09-03 (§2r) cerró 8 features: (1) EMPAQUE Tulas/Sacos por túnel en Secadoras —
 el pago de cuadrilla por "Detectar labores de túnel" usa RECEPCION/BOTADA por QQ
 (Tulas) o ENSACADO por saco (Sacos). (2) MIX Tula/Saco POR LÍNEA en Pilado — cada
 renglón elige destino (Tula→Selección / Saco); el estibador cobra tula+saco en el
@@ -400,7 +415,7 @@ ACCIONISTA, fórmulas de división directa (blanco/cáscara, arrocillos agrupado
 polvillo). Producción YA NO muestra cuadros y al Finalizar Lote redirige a Gana.
 Pendientes: (a) DEADLOCK LATENTE de ensureLaborTables (§8; se lanzó tarea aparte —
 confirmar si se cerró); (b) ¿reponer la tarjeta verde de eficiencia en vivo en
-Producción? No hay ramas abiertas. Migraciones 20260914…20260917 aplicadas en
+Producción? No hay ramas abiertas. Migraciones 20260914…20260919 aplicadas en
 local; en otro server: git pull → ./deploy.sh (sin auto-deploy).
 Pregúntame qué sigue (candidatos en §5).
 ```
