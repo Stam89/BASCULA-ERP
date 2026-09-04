@@ -143,6 +143,133 @@ export async function aplicarPagosFomento(
   return out;
 }
 
+// ── AMORTIZACIÓN LIFO CON RENOVACIÓN (regla de negocio del cliente) ──────────
+// Al liquidar, el "estimado a pagar" (monto disponible) amortiza los fomentos
+// ACTIVOS del agricultor (de CUALQUIER accionista) en orden LIFO (created_at DESC:
+// el más reciente / último accionista primero), en cascada. Regla:
+//   · Cada fomento tocado se CIERRA como histórico (status='CERRADO_LIQUIDACION').
+//   · Si el pago no cubre todo su saldo → el remanente se traspasa a un fomento
+//     NUEVO del MISMO accionista (renovación de deuda); el viejo queda en 0.
+//   · El abono real conserva el cruce inter-socios (fomento de otro socio → CxP
+//     del que liquida + CxC del dueño). El traspaso NO genera cruce (misma cartera).
+// Devuelve el detalle por accionista para el recibo. No borra datos (auditoría).
+export type AmortizacionFomentoResultado = {
+  total_abonado: number;
+  cruce_inter_socios: number;
+  detalle: Array<{
+    fomento_id: string; accionista_id: string | null; accionista_nombre: string | null;
+    saldo_original: number; abono: number; cerrado: boolean; inter_socios: boolean;
+    nuevo_fomento_id: string | null; nuevo_saldo: number;
+  }>;
+  acreedor: { accionista_id: string | null; nombre: string | null } | null;
+};
+
+const r2 = (n: number) => Math.round(Number(n) * 100) / 100;
+
+export async function amortizarFomentosLIFO(
+  client: PoolClient,
+  input: {
+    liquidationId: string; liquidationNumber: string; liquidatingAccionistaId: string | undefined;
+    farmerId: string; farmerName: string; montoDisponible: number; qqLiquidados?: number | null;
+  }
+): Promise<AmortizacionFomentoResultado> {
+  const out: AmortizacionFomentoResultado = { total_abonado: 0, cruce_inter_socios: 0, detalle: [], acreedor: null };
+  let restante = r2(input.montoDisponible);
+  if (restante <= 0.005) return out;
+
+  // Fomentos ACTIVOS del agricultor (cualquier accionista), LIFO por creación.
+  const fomentos = (await client.query(
+    `SELECT f.id, f.accionista_id, f.farmer_id, f.farmer_name, f.renta, f.variedad,
+            a.name AS accionista_nombre
+     FROM fomentos f
+     LEFT JOIN accionistas a ON a.id = f.accionista_id
+     WHERE f.status = 'ACTIVOS'
+       AND (f.farmer_id = $1 OR upper(trim(f.farmer_name)) = upper(trim($2)))
+     ORDER BY f.created_at DESC NULLS LAST, f.inicio DESC
+     FOR UPDATE OF f`,
+    [input.farmerId, input.farmerName]
+  )).rows as Array<{ id: string; accionista_id: string | null; farmer_id: string | null; farmer_name: string; renta: string; variedad: string | null; accionista_nombre: string | null }>;
+
+  const liqAcc = input.liquidatingAccionistaId ?? null;
+  const liquidador = liqAcc ? (await client.query("SELECT name FROM accionistas WHERE id = $1", [liqAcc])).rows[0] : null;
+  let mejorAbono = -1; // para elegir el acreedor "principal" (mayor abono)
+
+  for (const f of fomentos) {
+    if (restante <= 0.005) break;
+    const saldo = await saldoFomento(client, f.id);
+    if (saldo <= 0.005) continue;
+    const abono = r2(Math.min(restante, saldo));
+    if (abono <= 0.005) continue;
+    const remanente = r2(saldo - abono);
+
+    // Abono real por la liquidación (para cruce + reversa).
+    await client.query(
+      `INSERT INTO fomento_pagos (fomento_id, fecha, valor, concepto, liquidation_id, qq_liquidados)
+       VALUES ($1, CURRENT_DATE, $2, $3, $4, $5)`,
+      [f.id, abono, `Abono por Liquidación #${input.liquidationNumber}`, input.liquidationId, input.qqLiquidados ?? null]
+    );
+
+    // Renovación: si queda saldo, se traspasa a un fomento NUEVO del mismo
+    // accionista (el viejo queda en 0). El traspaso se liga a la liquidación
+    // para poder revertirlo. El nuevo hereda la renta (mismos términos).
+    let nuevoFomentoId: string | null = null;
+    if (remanente > 0.005) {
+      await client.query(
+        `INSERT INTO fomento_pagos (fomento_id, fecha, valor, concepto, liquidation_id)
+         VALUES ($1, CURRENT_DATE, $2, $3, $4)`,
+        [f.id, remanente, `Traspaso a fomento nuevo (renovación) por Liq #${input.liquidationNumber}`, input.liquidationId]
+      );
+      const nuevo = (await client.query(
+        `INSERT INTO fomentos (farmer_name, farmer_id, cuadras, inicio, renta, variedad, status, accionista_id, notes, origen_liquidation_id)
+         VALUES ($1, $2, 0, CURRENT_DATE, $3, $4, 'ACTIVOS', $5, $6, $7) RETURNING id`,
+        [f.farmer_name, f.farmer_id ?? null, Number(f.renta) || 0, f.variedad ?? null, f.accionista_id ?? null,
+         `Renovación por saldo restante de Liquidación #${input.liquidationNumber}`, input.liquidationId]
+      )).rows[0];
+      await client.query(
+        "INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto) VALUES ($1, CURRENT_DATE, $2, $3)",
+        [nuevo.id, remanente, `Saldo trasladado del fomento anterior (renovación) · Liq #${input.liquidationNumber}`]
+      );
+      nuevoFomentoId = nuevo.id;
+    }
+
+    // Cierre histórico del fomento original (no se borra: auditoría).
+    await client.query(
+      "UPDATE fomentos SET status = 'CERRADO_LIQUIDACION', liquidado_at = now() WHERE id = $1",
+      [f.id]
+    );
+
+    // Cruce inter-socios por el ABONO real (no por el traspaso) si el fomento es
+    // de otro socio distinto al que liquida.
+    let interSocios = false;
+    if (f.accionista_id && liqAcc && f.accionista_id !== liqAcc) {
+      interSocios = true;
+      const nota = `Cruce inter-socios por Liquidación #${input.liquidationNumber}`;
+      await client.query(
+        `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
+         VALUES ($1, $2, $3, $3, 'CONFIRMED', $4, 'fomento_cruce', $5, $6)`,
+        [f.farmer_id ?? null, input.liquidationId, abono, liqAcc, f.id, `${nota}: fomento de ${f.accionista_nombre ?? "socio"}`]
+      );
+      await client.query(
+        `INSERT INTO accounts_receivable (farmer_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
+         VALUES ($1, $2, $2, 'CONFIRMED', $3, 'fomento_cruce', $4, $5)`,
+        [f.farmer_id ?? null, abono, f.accionista_id, f.id, `${nota}: liquidada por ${liquidador?.name ?? "otro socio"}`]
+      );
+      out.cruce_inter_socios = r2(out.cruce_inter_socios + abono);
+    }
+
+    out.total_abonado = r2(out.total_abonado + abono);
+    out.detalle.push({
+      fomento_id: f.id, accionista_id: f.accionista_id, accionista_nombre: f.accionista_nombre,
+      saldo_original: saldo, abono, cerrado: true, inter_socios: interSocios,
+      nuevo_fomento_id: nuevoFomentoId, nuevo_saldo: remanente
+    });
+    if (abono > mejorAbono) { mejorAbono = abono; out.acreedor = { accionista_id: f.accionista_id, nombre: f.accionista_nombre }; }
+    restante = r2(restante - abono);
+  }
+
+  return out;
+}
+
 // Saldo EN CONTRA: cuando los descuentos superan el bruto (neto < 0), el arroz
 // entregado ya saldó (parcial o totalmente) el/los fomento(s); el remanente que el
 // agricultor sigue debiendo se registra como un NUEVO fomento a nombre del SOCIO
@@ -181,12 +308,24 @@ export async function revertirPagosFomentoDeLiquidacion(client: PoolClient, liqu
   const pagoIds = pagos.map((p) => p.id);
   const fomentoIds = [...new Set(pagos.map((p) => p.fomento_id))];
   if (pagoIds.length) {
-    // Deuda inter-socios ligada a estos abonos.
-    await client.query("DELETE FROM accounts_payable    WHERE reference_type = 'fomento_cruce' AND reference_id = ANY($1::uuid[])", [pagoIds]);
-    await client.query("DELETE FROM accounts_receivable WHERE reference_type = 'fomento_cruce' AND reference_id = ANY($1::uuid[])", [pagoIds]);
-    // Abonos → al borrarlos, deuda_total sube sola. Se limpia el estado liquidado.
+    // Deuda inter-socios ligada a estos abonos. El cruce referencia el FOMENTO
+    // (amortización LIFO nueva) o el pago (modelo anterior); se cubren ambos.
+    await client.query(
+      "DELETE FROM accounts_payable    WHERE reference_type = 'fomento_cruce' AND (reference_id = ANY($1::uuid[]) OR reference_id = ANY($2::uuid[]))",
+      [fomentoIds, pagoIds]
+    );
+    await client.query(
+      "DELETE FROM accounts_receivable WHERE reference_type = 'fomento_cruce' AND (reference_id = ANY($1::uuid[]) OR reference_id = ANY($2::uuid[]))",
+      [fomentoIds, pagoIds]
+    );
+    // Abonos (y traspasos de renovación) → al borrarlos, la deuda_total sube sola.
+    // Se limpia el estado liquidado y se REABRE el fomento cerrado por la
+    // liquidación (vuelve a ACTIVOS, restaurando su saldo original).
     await client.query("DELETE FROM fomento_pagos WHERE liquidation_id = $1", [liquidationId]);
-    await client.query("UPDATE fomentos SET liquidado_at = NULL WHERE id = ANY($1::uuid[])", [fomentoIds]);
+    await client.query(
+      "UPDATE fomentos SET liquidado_at = NULL, status = CASE WHEN status = 'CERRADO_LIQUIDACION' THEN 'ACTIVOS' ELSE status END WHERE id = ANY($1::uuid[])",
+      [fomentoIds]
+    );
   }
   // Fomento(s) de saldo en contra generados por esta liquidación: se eliminan.
   const contras = (await client.query("SELECT id FROM fomentos WHERE origen_liquidation_id = $1", [liquidationId])).rows as Array<{ id: string }>;

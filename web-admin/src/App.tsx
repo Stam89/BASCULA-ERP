@@ -2236,11 +2236,26 @@ export function App() {
     [liqLines]
   );
   const liqFleteTotal = liqFleteInterno + liqFleteTerceros;
-  // Total de fomento = suma de los montos por fomento del agricultor.
-  const liqFomentoTotal = useMemo(() =>
-    Object.values(liqFomentoMontos).reduce((s, v) => s + Number(v || 0), 0),
-    [liqFomentoMontos]
-  );
+  // AMORTIZACIÓN LIFO (preview): el "estimado a pagar" (bruto − descuentos manuales)
+  // se aplica a los fomentos del agricultor en orden LIFO (la lista ya viene por
+  // created_at DESC). Cada fomento tocado se cierra; si el pago no lo cubre, el
+  // remanente se renueva en un fomento nuevo. Solo cálculo visual; el backend hace
+  // la amortización real (idéntica) al liquidar.
+  const liqFomentoLifo = useMemo(() => {
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const manual = Number(liqDiscounts.bascula || 0) + Number(liqDiscounts.cosechadora || 0) + liqFleteTotal;
+    const disponible = Math.max(0, r2(liqGrossTotal - manual));
+    let restante = disponible;
+    const items = liqFomentosList.map((f) => {
+      const abono = r2(Math.min(restante, f.saldo));
+      restante = r2(restante - abono);
+      const tocado = abono > 0.005;
+      const nuevoSaldo = tocado ? r2(f.saldo - abono) : 0;
+      return { ...f, abono, tocado, renovado: tocado && nuevoSaldo > 0.005, nuevoSaldo };
+    });
+    return { disponible, items, total: r2(items.reduce((s, i) => s + i.abono, 0)) };
+  }, [liqFomentosList, liqGrossTotal, liqDiscounts, liqFleteTotal]);
+  const liqFomentoTotal = liqFomentoLifo.total;
   // Descuentos a nivel lote (báscula/cosechadora) + fomento(s) + flete de todas las líneas.
   const liqDiscountsTotal = useMemo(() =>
     Object.values(liqDiscounts).reduce((sum, v) => sum + Number(v || 0), 0) + liqFleteTotal + liqFomentoTotal,
@@ -6699,11 +6714,8 @@ export function App() {
       fomento_pagos?: { total_abonado: number; cruce_inter_socios: number } | null;
       saldo_en_contra?: { fomento_id: string; monto: number; acreedor: string | null } | null;
     };
-    // Abonos de fomento explícitos (fomento_id + monto>0), del/los fomento(s) del
-    // agricultor (de cualquier socio). Van SOLO en la primera línea del lote.
-    const fomentoPagos = liqFomentosList
-      .map((f) => ({ fomento_id: f.id, monto: Math.round(Number(liqFomentoMontos[f.id] || 0) * 100) / 100 }))
-      .filter((p) => p.monto > 0.005);
+    // El descuento de fomento se amortiza LIFO en el backend (cierra+renueva); se
+    // manda solo el TOTAL (liqFomentoTotal = suma de la amortización LIFO). Va en i===0.
     // Descuentos a nivel lote (sin flete: el flete es por línea). Van solo en i===0.
     const batchDiscountsTotal = liqFomentoTotal + Number(liqDiscounts.bascula || 0) + Number(liqDiscounts.cosechadora || 0);
     // Saldo EN CONTRA del lote: los Descuentos superan al Bruto (el agricultor queda
@@ -6737,8 +6749,6 @@ export function App() {
           cosechadora: i === 0 ? Number(liqDiscounts.cosechadora || 0) : 0,
           flete:       lineFlete
         },
-        // Los abonos de fomento se aplican una vez, en la primera línea del lote.
-        fomento_pagos: i === 0 && fomentoPagos.length ? fomentoPagos : undefined,
         // QQ del lote (registro en el abono) y saldo en contra (nuevo fomento): 1ª línea.
         qq_liquidados: i === 0 ? Math.round(liqQqTotal * 100) / 100 : undefined,
         saldo_en_contra: i === 0 && saldoEnContra > 0 ? saldoEnContra : undefined,
@@ -6871,6 +6881,24 @@ export function App() {
       appliedAdvances = await apiGet<AppliedAdvance[]>(`/liquidations/applied-advances?${qs}`);
     } catch { /* sin detalle, igual imprime */ }
 
+    // Desglose de amortización de fomentos: descuento por accionista + nuevo saldo
+    // pendiente (renovación). Para el recibo/estado de cuenta del agricultor.
+    type FomentoRecibo = {
+      descuentos: Array<{ accionista_nombre: string; monto: number }>;
+      nuevos_saldos: Array<{ accionista_nombre: string; monto: number }>;
+      total_descontado: number; total_nuevo_saldo: number;
+    };
+    let fomentoRecibo: FomentoRecibo | null = null;
+    if (b.batch_id) {
+      try { fomentoRecibo = await apiGet<FomentoRecibo>(`/liquidations/${b.batch_id}/fomento-recibo`); }
+      catch { /* sin desglose de fomento */ }
+    }
+    const fomentoRows = fomentoRecibo && (fomentoRecibo.descuentos.length || fomentoRecibo.nuevos_saldos.length)
+      ? `<tr><td colspan="2" style="padding-top:6px;font-weight:bold;color:#15803d">Amortización de Fomentos (LIFO)</td></tr>`
+        + fomentoRecibo.descuentos.map((d) => `<tr><td class="lbl">Descuento a ${d.accionista_nombre}:</td><td class="val disc">-$${Number(d.monto).toFixed(2)}</td></tr>`).join("")
+        + fomentoRecibo.nuevos_saldos.map((n) => `<tr><td class="lbl">Nuevo saldo pendiente (${n.accionista_nombre}):</td><td class="val" style="color:#b45309">$${Number(n.monto).toFixed(2)}</td></tr>`).join("")
+      : "";
+
     const qqTotal = b.lots.reduce((s, l) => s + l.quintals, 0);
     // El NETO se calcula aquí: bruto menos anticipos menos otros descuentos.
     // No se confía en el net_amount guardado porque un anticipo aplicado
@@ -6958,6 +6986,7 @@ export function App() {
             : ""}
         ` : ""}
         <tr class="total-row"><td class="lbl">NETO A PAGAR:</td><td class="val">$${netoReal.toFixed(2)}</td></tr>
+        ${fomentoRows}
       </table>
       <div class="sigs">
         <div class="sig"><hr/><span>Agricultor</span></div>
@@ -11289,28 +11318,32 @@ export function App() {
                             onChange={(e) => setLiqDiscounts((p) => ({ ...p, [key]: e.target.value }))} />
                         </label>
                       ))}
-                      {/* ─ Fomentos del agricultor (de todos los socios) ─ */}
+                      {/* ─ Fomentos del agricultor: amortización AUTOMÁTICA LIFO ─ */}
                       {liqFomentosList.length > 0 && (
                         <div className="liqFleteDesglose">
-                          <div className="liqFleteDesgloseHd">🌱 Fomentos del agricultor</div>
-                          {liqFomentosList.map((f) => (
-                            <label key={f.id} className="liqDiscRow" title={`Saldo: $${f.saldo.toFixed(2)}`}>
+                          <div className="liqFleteDesgloseHd">🌱 Fomentos · amortización LIFO (más reciente primero)</div>
+                          {liqFomentoLifo.items.map((f) => (
+                            <div key={f.id} className="liqDiscRow" title={`Saldo: $${f.saldo.toFixed(2)}`}
+                              style={{ opacity: f.tocado ? 1 : 0.55, alignItems: "flex-start" }}>
                               <span>
                                 {f.es_de_otro_socio
-                                  ? <><span className="chip" style={{ background: "#f0fdf4", color: "#15803d", border: "1px solid #bbf7d0", marginRight: 6 }}>Fomento de {f.accionista_nombre}</span></>
+                                  ? <span className="chip" style={{ background: "#f0fdf4", color: "#15803d", border: "1px solid #bbf7d0", marginRight: 6 }}>Fomento de {f.accionista_nombre}</span>
                                   : <>Fomento propio </>}
                                 <small className="muted">saldo ${f.saldo.toFixed(2)}</small>
+                                {f.tocado && (
+                                  <small style={{ display: "block", color: f.renovado ? "#b45309" : "#15803d", fontSize: 11 }}>
+                                    {f.renovado
+                                      ? `→ se cierra (histórico) · renueva $${f.nuevoSaldo.toFixed(2)}`
+                                      : "→ se cierra (pagado)"}
+                                  </small>
+                                )}
                               </span>
-                              <input type="number" step="0.01" min="0" max={f.saldo} placeholder="0.00"
-                                value={liqFomentoMontos[f.id] ?? ""}
-                                onChange={(e) => setLiqFomentoMontos((p) => ({ ...p, [f.id]: e.target.value }))} />
-                            </label>
+                              <strong style={{ color: f.tocado ? "#b91c1c" : "var(--c-muted)" }}>-${f.abono.toFixed(2)}</strong>
+                            </div>
                           ))}
-                          {liqFomentosList.some((f) => f.es_de_otro_socio) && (
-                            <small className="muted" style={{ display: "block" }}>
-                              Descontar un fomento de otro socio genera una deuda inter-socios (a favor de su dueño).
-                            </small>
-                          )}
+                          <small className="muted" style={{ display: "block", marginTop: 2 }}>
+                            El estimado a pagar (${liqFomentoLifo.disponible.toFixed(2)}) amortiza los fomentos del más reciente al más antiguo. Descontar un fomento de otro socio genera una deuda inter-socios.
+                          </small>
                         </div>
                       )}
                       {/* ─ Desglose de fletes: hacia dónde va lo descontado ─ */}

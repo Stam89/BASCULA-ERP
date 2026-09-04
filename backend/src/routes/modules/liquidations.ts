@@ -8,7 +8,7 @@ import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { cruzarFleteInterno, type CruceFleteResultado } from "../../services/campo-cruce-flete.js";
-import { aplicarPagosFomento, generarFomentoSaldoEnContra, revertirPagosFomentoDeLiquidacion, type PagoFomentoResultado } from "../../services/fomento-liquidacion.js";
+import { amortizarFomentosLIFO, generarFomentoSaldoEnContra, revertirPagosFomentoDeLiquidacion, type AmortizacionFomentoResultado } from "../../services/fomento-liquidacion.js";
 
 export const liquidationsRouter = Router();
 
@@ -258,26 +258,25 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
       });
     }
 
-    // Pagos REALES de fomento: el descuento de fomento aplica un abono a la deuda
-    // del/los fomento(s) del agricultor (cap al saldo), referenciando la liquidación,
-    // y si el fomento es de otro socio genera la deuda inter-socios. Mismo tx.
-    let fomentoPagos: PagoFomentoResultado | null = null;
+    // AMORTIZACIÓN LIFO CON RENOVACIÓN: el descuento de fomento (monto disponible)
+    // amortiza los fomentos ACTIVOS del agricultor (de cualquier socio) en orden
+    // LIFO; cada fomento tocado se cierra como histórico y su remanente se traspasa
+    // a un fomento nuevo (renovación); el abono conserva el cruce inter-socios.
+    let fomentoPagos: AmortizacionFomentoResultado | null = null;
     const fomentoDiscount = data.discount_breakdown?.fomento ?? 0;
-    const necesitaFarmerName = (data.fomento_pagos && data.fomento_pagos.length) || fomentoDiscount > 0 || (data.saldo_en_contra ?? 0) > 0;
+    const necesitaFarmerName = fomentoDiscount > 0 || (data.saldo_en_contra ?? 0) > 0;
     const farmerName = necesitaFarmerName
       ? ((await client.query("SELECT full_name FROM farmers WHERE id = $1", [data.farmer_id])).rows[0]?.full_name ?? "")
       : "";
-    if ((data.fomento_pagos && data.fomento_pagos.length) || fomentoDiscount > 0) {
-      fomentoPagos = await aplicarPagosFomento(client, {
+    if (fomentoDiscount > 0) {
+      fomentoPagos = await amortizarFomentosLIFO(client, {
         liquidationId: liquidation.rows[0].id,
         liquidationNumber: liquidation.rows[0].liquidation_number,
         liquidatingAccionistaId: accionistaId,
         farmerId: data.farmer_id,
         farmerName,
-        pagos: data.fomento_pagos,
-        montoFallback: fomentoDiscount,
-        qqLiquidados: data.qq_liquidados ?? null,
-        deficit: data.saldo_en_contra ?? null
+        montoDisponible: fomentoDiscount,
+        qqLiquidados: data.qq_liquidados ?? null
       });
     }
 
@@ -566,7 +565,7 @@ liquidationsRouter.get("/fomentos-agricultor", asyncRoute(async (req, res) => {
   const q = z.object({ farmer_id: z.string().uuid().optional(), farmer_name: z.string().optional() }).parse(req.query);
   if (!q.farmer_id && !q.farmer_name) { res.json([]); return; }
   const rows = (await pool.query(
-    `SELECT f.id, f.farmer_name, f.accionista_id, a.name AS accionista_nombre,
+    `SELECT f.id, f.farmer_name, f.accionista_id, a.name AS accionista_nombre, f.created_at,
             (f.accionista_id IS DISTINCT FROM $3) AS es_de_otro_socio,
             ROUND(
               COALESCE((SELECT SUM(fe.valor) FROM fomento_entregas fe WHERE fe.fomento_id = f.id), 0)
@@ -580,10 +579,52 @@ liquidationsRouter.get("/fomentos-agricultor", asyncRoute(async (req, res) => {
          ($1::uuid IS NOT NULL AND f.farmer_id = $1)
          OR ($2::text IS NOT NULL AND upper(trim(f.farmer_name)) = upper(trim($2)))
        )
-     ORDER BY es_de_otro_socio ASC, f.inicio ASC`,
+     ORDER BY f.created_at DESC NULLS LAST, f.inicio DESC`,
     [q.farmer_id ?? null, q.farmer_name ?? null, activo]
   )).rows.filter((r) => Number(r.saldo) > 0.005);
   res.json(rows);
+}));
+
+// Desglose de amortización de fomentos de una liquidación (batch) para el
+// "Recibo de Liquidación": descuento por accionista (abonos reales, sin traspasos)
+// y nuevo saldo pendiente (fomentos de renovación generados por la liquidación).
+liquidationsRouter.get("/:batchId/fomento-recibo", asyncRoute(async (req, res) => {
+  const batchId = String(req.params.batchId);
+  const [descuentos, nuevos] = await Promise.all([
+    pool.query(
+      `SELECT f.accionista_id, COALESCE(a.name, 'Sin socio') AS accionista_nombre, SUM(fp.valor)::float AS monto
+       FROM fomento_pagos fp
+       JOIN liquidations l ON l.id = fp.liquidation_id
+       JOIN fomentos f ON f.id = fp.fomento_id
+       LEFT JOIN accionistas a ON a.id = f.accionista_id
+       WHERE l.batch_id = $1 AND fp.concepto NOT LIKE 'Traspaso%'
+       GROUP BY f.accionista_id, a.name
+       ORDER BY monto DESC`,
+      [batchId]
+    ),
+    pool.query(
+      `SELECT f.accionista_id, COALESCE(a.name, 'Sin socio') AS accionista_nombre,
+              ROUND(
+                COALESCE((SELECT SUM(fe.valor) FROM fomento_entregas fe WHERE fe.fomento_id = f.id), 0)
+                - COALESCE((SELECT SUM(fp.valor) FROM fomento_pagos fp WHERE fp.fomento_id = f.id), 0)
+              , 2)::float AS monto
+       FROM fomentos f
+       JOIN liquidations l ON l.id = f.origen_liquidation_id
+       LEFT JOIN accionistas a ON a.id = f.accionista_id
+       WHERE l.batch_id = $1`,
+      [batchId]
+    )
+  ]);
+  // Agrupa nuevos saldos por accionista.
+  const nuevosMap = new Map<string, number>();
+  for (const r of nuevos.rows) {
+    if (Number(r.monto) <= 0.005) continue;
+    nuevosMap.set(r.accionista_nombre, Math.round(((nuevosMap.get(r.accionista_nombre) ?? 0) + Number(r.monto)) * 100) / 100);
+  }
+  const nuevos_saldos = [...nuevosMap.entries()].map(([accionista_nombre, monto]) => ({ accionista_nombre, monto }));
+  const total_descontado = Math.round(descuentos.rows.reduce((s, r) => s + Number(r.monto), 0) * 100) / 100;
+  const total_nuevo_saldo = Math.round(nuevos_saldos.reduce((s, r) => s + r.monto, 0) * 100) / 100;
+  res.json({ descuentos: descuentos.rows, nuevos_saldos, total_descontado, total_nuevo_saldo });
 }));
 
 // Anular una liquidación con REVERSA completa (SOLO administrador). Todo en una
