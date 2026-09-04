@@ -115,6 +115,20 @@ sacksRouter.patch("/:id/adjust", asyncRoute(async (req, res) => {
   res.json(result.rows[0]);
 }));
 
+// PATCH precio de compra por defecto (tarifa de referencia editable). Exclusivo de
+// la matriz (los sacos son inventario de la planta). Solo autocompleta la compra;
+// el valor sigue siendo editable línea por línea al comprar.
+sacksRouter.patch("/:id/precio", asyncRoute(async (req, res) => {
+  await assertMatriz(req as AuthenticatedRequest);
+  const body = z.object({ precio_compra_default: z.number().nonnegative() }).parse(req.body);
+  const result = await pool.query(
+    "UPDATE sack_inventory SET precio_compra_default = $2, updated_at = NOW() WHERE id = $1 RETURNING *",
+    [req.params.id, body.precio_compra_default]
+  );
+  if (!result.rowCount) throw new ApiError(404, "Tipo de saco no encontrado");
+  res.json(result.rows[0]);
+}));
+
 // ── Compra de sacos ATOMICA (inventario + kardex + caja en UNA transaccion) ──
 // Reemplaza las dos llamadas separadas del frontend (que ademas usaban una
 // categoria invalida). NO modifica /sacks/movements ni /cash/:id/movements.

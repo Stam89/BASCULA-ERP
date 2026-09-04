@@ -814,6 +814,8 @@ type SackInventory = {
   id: string;
   tipo: string;
   stock: number;
+  /** Precio de compra por defecto (autocompleta el "Precio unitario" en Caja). */
+  precio_compra_default?: string | number;
   updated_at: string;
 };
 
@@ -3983,6 +3985,24 @@ export function App() {
     setSackMovForm(p => ({ ...p, cantidad: "", concepto: "" }));
     addToast(`${sackMovForm.movement === "ENTRADA" ? "Entrada" : "Salida"} de sacos registrada`, "success");
     await refreshSacks();
+  }
+
+  // Guarda el precio de compra por defecto de un tipo de saco (tarifa de
+  // referencia editable). Solo si cambió, para no llamar por cada foco.
+  async function saveSackPrice(sack: SackInventory, nuevo: number) {
+    if (!Number.isFinite(nuevo) || nuevo < 0) return;
+    if (Number(sack.precio_compra_default ?? 0) === nuevo) return;
+    try {
+      await apiFetch(`/sacks/${sack.id}/precio`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ precio_compra_default: nuevo })
+      }).then((r) => { if (!r.ok) throw new Error("No se pudo guardar el precio"); });
+      await refreshSacks();
+      addToast(`Precio base de ${sack.tipo}: $${nuevo.toFixed(2)}`, "success");
+    } catch (err) {
+      addToast(err instanceof Error ? err.message : "Error al guardar el precio", "error");
+    }
   }
 
   async function loadFomentoDetalle(id: string) {
@@ -8390,7 +8410,7 @@ export function App() {
               {esCeyroActivo && (
               <section style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
                 <h3 style={{ marginTop: 0, marginBottom: 14 }}>📦 Inventario de Sacos</h3>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 8, marginBottom: 14 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 8, marginBottom: 14 }}>
                   {sackInventory.map(s => (
                     <div key={s.id} style={{
                       background: Number(s.stock) <= 10 ? "#fef2f2" : "#f0fdf4",
@@ -8401,6 +8421,19 @@ export function App() {
                       <div style={{ fontSize: 22, fontWeight: 800, color: Number(s.stock) <= 10 ? "#dc2626" : "#16a34a" }}>
                         {Number(s.stock)}
                       </div>
+                      {/* Precio base editable (autocompleta la compra en Caja). Guarda al salir del campo. */}
+                      <label style={{ display: "block", marginTop: 6, fontSize: 10, fontWeight: 600, color: "var(--c-muted)" }}>
+                        Precio base $
+                        <input
+                          type="number" min="0" step="0.01"
+                          defaultValue={Number(s.precio_compra_default ?? 0).toFixed(2)}
+                          key={`${s.id}-${s.precio_compra_default}`}
+                          onBlur={(e) => saveSackPrice(s, Number(e.target.value)).catch(() => undefined)}
+                          onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                          title="Precio de compra por defecto; autocompleta el Precio unitario en Caja → Compra de Sacos"
+                          style={{ display: "block", width: "100%", marginTop: 3, padding: "4px 6px", borderRadius: 5, border: "1px solid #d1d5db", fontSize: 12, textAlign: "center" }}
+                        />
+                      </label>
                     </div>
                   ))}
                 </div>
@@ -10394,7 +10427,13 @@ export function App() {
                       <h2 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 700 }}>📦 Compra de Sacos</h2>
                       <label style={{ display: "block", marginBottom: 16 }}>
                         <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Tipo de saco</span>
-                        <select value={sackBuyForm.sack_id} onChange={(e) => setSackBuyForm({ ...sackBuyForm, sack_id: e.target.value })} required
+                        <select value={sackBuyForm.sack_id} onChange={(e) => {
+                            // Auto-completa el precio unitario con el precio base del
+                            // tipo elegido (editable: el usuario puede sobrescribirlo).
+                            const sel = sackInventory.find((s) => s.id === e.target.value);
+                            const base = sel && Number(sel.precio_compra_default) > 0 ? Number(sel.precio_compra_default).toFixed(2) : "";
+                            setSackBuyForm({ ...sackBuyForm, sack_id: e.target.value, precio: base });
+                          }} required
                           style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
                           <option value="">Seleccione un tipo</option>
                           {sackInventory.map((s) => (
@@ -10412,6 +10451,12 @@ export function App() {
                           <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Precio unitario $</span>
                           <input type="number" step="0.01" value={sackBuyForm.precio} onChange={(e: any) => setSackBuyForm({ ...sackBuyForm, precio: e.target.value })}
                             style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} min="0" />
+                          {(() => {
+                            const sel = sackInventory.find((s) => s.id === sackBuyForm.sack_id);
+                            const base = sel ? Number(sel.precio_compra_default) : 0;
+                            if (!(base > 0)) return null;
+                            return <small style={{ display: "block", marginTop: 4, color: "var(--c-muted)", fontSize: 11 }}>Sugerido ${base.toFixed(2)} (base del tipo) · editable si cambió la tarifa</small>;
+                          })()}
                         </label>
                       </div>
                       {sackBuyForm.cantidad && sackBuyForm.precio && (
