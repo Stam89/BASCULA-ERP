@@ -810,8 +810,11 @@ type ProductionHistoryItem = {
   client_name?: string | null;
   /** Cuadro de rendimiento congelado al cerrar el lote (foto estilo Excel). */
   rendimiento_snapshot?: RendimientoSnapshot | null;
-  /** Precio de venta manual del arroz blanco (liquidación "Gana"). */
+  /** Precios de venta manuales por producto de salida (liquidación "Gana"). */
   precio_venta_blanco?: string | number | null;
+  precio_venta_broken?: string | number | null;
+  precio_venta_fine?: string | number | null;
+  precio_venta_bran?: string | number | null;
   /** Partidas de cáscara que formaron el lote, con su precio de compra (liquidación). */
   entradas?: Array<{
     weighing_ticket_id: string | null;
@@ -6073,19 +6076,21 @@ export function App() {
     setProductionHistory(rows);
   }
 
-  // Guarda el precio de venta manual del arroz blanco de un lote (liquidación «Gana»).
-  async function saveGanaPrecioVenta(batchId: string, raw: string) {
+  // Guarda el precio de venta manual de un producto de salida de un lote
+  // (liquidación «Gana»): producto ∈ blanco | broken | fine | bran.
+  async function saveGanaPrecioVenta(batchId: string, producto: "blanco" | "broken" | "fine" | "bran", raw: string) {
     const num = raw.trim() === "" ? null : Number(raw);
     if (num != null && (!Number.isFinite(num) || num < 0)) { addToast("Precio de venta inválido", "error"); return; }
+    const campo = ({ blanco: "precio_venta_blanco", broken: "precio_venta_broken", fine: "precio_venta_fine", bran: "precio_venta_bran" } as const)[producto];
     try {
       await apiFetch(`/processing-batches/${batchId}/precio-venta`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ precio_venta_blanco: num })
+        body: JSON.stringify({ producto, precio: num })
       }).then((r) => { if (!r.ok) throw new Error("No se pudo guardar el precio de venta"); });
       // Refleja en memoria sin recargar toda la lista.
-      setProductionHistory((cur) => cur.map((it) => it.id === batchId ? { ...it, precio_venta_blanco: num } : it));
-      addToast(num != null ? `Precio de venta guardado: $${num.toFixed(2)}/QQ` : "Precio de venta borrado", "success");
+      setProductionHistory((cur) => cur.map((it) => it.id === batchId ? { ...it, [campo]: num } : it));
+      addToast(num != null ? `Precio guardado: $${num.toFixed(2)}/QQ` : "Precio borrado", "success");
     } catch (err) {
       addToast(err instanceof Error ? err.message : "Error al guardar el precio", "error");
     }
@@ -9130,12 +9135,35 @@ export function App() {
                       const arrocillosPct = div(arrocillos);
                       const polvilloPct = div(polvillo);
                       const mermaPct = Math.max(0, 100 - blancoPct - arrocillosPct - polvilloPct);
-                      // Precio de VENTA manual del arroz blanco (borrador de UI, o el guardado).
-                      const precioVentaStr = ganaPrecioVenta[item.id] ?? (item.precio_venta_blanco != null ? String(Number(item.precio_venta_blanco)) : "");
-                      const precioVenta = Number(precioVentaStr) || 0;
-                      const ingresoBlanco = blanco * precioVenta;
-                      const utilidad = ingresoBlanco - costoCascara;
+                      // Precio de VENTA manual POR PRODUCTO de salida (borrador de UI, o
+                      // el guardado). Total ($) = QQ del producto × su precio unitario.
+                      const precioStr = (prod: "blanco" | "broken" | "fine" | "bran", stored: string | number | null | undefined) =>
+                        ganaPrecioVenta[`${item.id}:${prod}`] ?? (stored != null ? String(Number(stored)) : "");
+                      const pBlancoStr = precioStr("blanco", item.precio_venta_blanco);
+                      const pBrokenStr = precioStr("broken", item.precio_venta_broken);
+                      const pFineStr = precioStr("fine", item.precio_venta_fine);
+                      const pBranStr = precioStr("bran", item.precio_venta_bran);
+                      const pBlanco = Number(pBlancoStr) || 0, pBroken = Number(pBrokenStr) || 0, pFine = Number(pFineStr) || 0, pBran = Number(pBranStr) || 0;
+                      const ingBlanco = blanco * pBlanco, ingBroken = broken * pBroken, ingFine = fino * pFine, ingBran = polvillo * pBran;
+                      // Ingreso Total Proyectado = Σ de los totales de los productos de salida.
+                      const ingresoTotal = ingBlanco + ingBroken + ingFine + ingBran;
+                      const utilidad = ingresoTotal - costoCascara;
                       const dcell = { padding: "6px 10px", textAlign: "right" as const };
+                      // Celdas [Precio Unit. editable | Total ($)] para un producto de salida.
+                      const precioTds = (prod: "blanco" | "broken" | "fine" | "bran", str: string, qq: number, pnum: number) => (
+                        <>
+                          <td style={dcell}>
+                            <input type="number" min="0" step="0.01" placeholder="Precio"
+                              value={str}
+                              onChange={(e) => setGanaPrecioVenta((cur) => ({ ...cur, [`${item.id}:${prod}`]: e.target.value }))}
+                              onBlur={(e) => saveGanaPrecioVenta(item.id, prod, e.target.value).catch(() => undefined)}
+                              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                              title="Precio de venta por QQ (editable, se guarda en la BD)"
+                              style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #86efac", textAlign: "right", fontSize: 12 }} />
+                          </td>
+                          <td style={{ ...dcell, fontWeight: 700, color: "#15803d" }}>{pnum > 0 ? money(qq * pnum) : "—"}</td>
+                        </>
+                      );
                       return (
                         <article key={item.id} style={{ border: "1px solid var(--c-border)", borderRadius: 10, padding: 14 }}>
                           <header style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
@@ -9186,35 +9214,39 @@ export function App() {
                                   <td style={{ ...dcell, fontWeight: 700, color: "#b45309" }}>{money(costoCascara)}</td>
                                 </tr>
 
-                                {/* ── INGRESO · Arroz Blanco con precio de venta editable ── */}
+                                {/* ── INGRESO · Productos de salida con precio de venta editable c/u.
+                                        Total ($) = QQ del producto × su precio unitario. ── */}
+                                <tr style={{ background: "#f9fafb" }}>
+                                  <td colSpan={5} style={{ padding: "5px 10px", fontWeight: 700, fontSize: 12, color: "#15803d" }}>🌾 INGRESO · Productos terminados (precio de venta por QQ)</td>
+                                </tr>
                                 <tr style={{ background: "#f0fdf4" }}>
                                   <td style={{ padding: "6px 10px", fontWeight: 700, color: "#15803d" }}>Arroz Blanco <span className="muted" style={{ fontWeight: 400 }}>(Tulas {n2(tula)} + Sacos {n2(saco)})</span></td>
                                   <td style={{ ...dcell, fontWeight: 700, color: "#15803d" }}>{n2(blanco)}</td>
                                   <td style={{ ...dcell, fontWeight: 700, color: "#15803d" }}>{p1(blancoPct)}</td>
-                                  <td style={dcell}>
-                                    <input type="number" min="0" step="0.01" placeholder="Precio venta"
-                                      value={precioVentaStr}
-                                      onChange={(e) => setGanaPrecioVenta((cur) => ({ ...cur, [item.id]: e.target.value }))}
-                                      onBlur={(e) => saveGanaPrecioVenta(item.id, e.target.value).catch(() => undefined)}
-                                      onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-                                      title="Precio de venta por QQ (editable, se guarda en la BD)"
-                                      style={{ width: 96, padding: "4px 6px", borderRadius: 6, border: "1px solid #86efac", textAlign: "right", fontSize: 12 }} />
-                                  </td>
-                                  <td style={{ ...dcell, fontWeight: 700, color: "#15803d" }}>{precioVenta > 0 ? money(ingresoBlanco) : "—"}</td>
+                                  {precioTds("blanco", pBlancoStr, blanco, pBlanco)}
                                 </tr>
-
-                                {/* ── Subproductos (rendimiento; sin precio) ── */}
                                 <tr style={{ borderBottom: "1px solid var(--c-border)" }}>
-                                  <td style={{ padding: "6px 10px" }}>Arrocillos <span className="muted">(3/4 {n2(broken)} + Fino {n2(fino)})</span></td>
-                                  <td style={dcell}>{n2(arrocillos)}</td>
-                                  <td style={dcell}>{p1(arrocillosPct)}</td>
-                                  <td style={dcell}></td><td style={dcell}></td>
+                                  <td style={{ padding: "6px 10px" }}>Arrocillo 3/4</td>
+                                  <td style={dcell}>{n2(broken)}</td>
+                                  <td style={dcell}>{p1(div(broken))}</td>
+                                  {precioTds("broken", pBrokenStr, broken, pBroken)}
+                                </tr>
+                                <tr style={{ borderBottom: "1px solid var(--c-border)" }}>
+                                  <td style={{ padding: "6px 10px" }}>Arrocillo Fino</td>
+                                  <td style={dcell}>{n2(fino)}</td>
+                                  <td style={dcell}>{p1(div(fino))}</td>
+                                  {precioTds("fine", pFineStr, fino, pFine)}
                                 </tr>
                                 <tr style={{ borderBottom: "1px solid var(--c-border)" }}>
                                   <td style={{ padding: "6px 10px" }}>Polvillo</td>
                                   <td style={dcell}>{n2(polvillo)}</td>
                                   <td style={dcell}>{p1(polvilloPct)}</td>
-                                  <td style={dcell}></td><td style={dcell}></td>
+                                  {precioTds("bran", pBranStr, polvillo, pBran)}
+                                </tr>
+                                {/* Ingreso total proyectado = Σ Total ($) de los productos. */}
+                                <tr style={{ borderTop: "2px solid var(--c-border)", background: "#ecfdf5" }}>
+                                  <td style={{ padding: "6px 10px", fontWeight: 800, color: "#15803d" }} colSpan={4}>INGRESO TOTAL PROYECTADO</td>
+                                  <td style={{ ...dcell, fontWeight: 800, color: "#15803d" }}>{ingresoTotal > 0 ? money(ingresoTotal) : "—"}</td>
                                 </tr>
                                 <tr>
                                   <td style={{ padding: "6px 10px", color: "var(--c-muted)" }}>Merma / diferencia</td>
@@ -9233,12 +9265,12 @@ export function App() {
                               <div style={{ fontSize: 16, fontWeight: 800, color: "#b45309" }}>{money(costoCascara)}</div>
                             </div>
                             <div style={{ flex: "1 1 150px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "8px 12px" }}>
-                              <div style={{ fontSize: 11, color: "#15803d", fontWeight: 700 }}>Ingreso arroz blanco</div>
-                              <div style={{ fontSize: 16, fontWeight: 800, color: "#15803d" }}>{precioVenta > 0 ? money(ingresoBlanco) : "—"}</div>
+                              <div style={{ fontSize: 11, color: "#15803d", fontWeight: 700 }}>Ingreso total proyectado</div>
+                              <div style={{ fontSize: 16, fontWeight: 800, color: "#15803d" }}>{ingresoTotal > 0 ? money(ingresoTotal) : "—"}</div>
                             </div>
                             <div style={{ flex: "1 1 150px", background: utilidad >= 0 ? "#eff6ff" : "#fef2f2", border: `1px solid ${utilidad >= 0 ? "#bfdbfe" : "#fecaca"}`, borderRadius: 8, padding: "8px 12px" }}>
                               <div style={{ fontSize: 11, color: utilidad >= 0 ? "#1d4ed8" : "#b91c1c", fontWeight: 700 }}>Utilidad proyectada</div>
-                              <div style={{ fontSize: 16, fontWeight: 800, color: utilidad >= 0 ? "#1d4ed8" : "#b91c1c" }}>{precioVenta > 0 ? money(utilidad) : "—"}</div>
+                              <div style={{ fontSize: 16, fontWeight: 800, color: utilidad >= 0 ? "#1d4ed8" : "#b91c1c" }}>{ingresoTotal > 0 ? money(utilidad) : "—"}</div>
                             </div>
                           </div>
                           {(item.pilador_name || item.estibador_name) && (

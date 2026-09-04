@@ -89,6 +89,9 @@ processingRouter.get("/history", asyncRoute(async (req, res) => {
               y.qq_de_tulas,
               y.rendimiento_snapshot,
               y.precio_venta_blanco,
+              y.precio_venta_broken,
+              y.precio_venta_fine,
+              y.precio_venta_bran,
               COALESCE((
                 SELECT json_agg(json_build_object(
                          'presentation', po.presentation,
@@ -1223,12 +1226,23 @@ processingRouter.post("/:id/finish-production", asyncRoute(async (req, res) => {
   res.json(result);
 }));
 
-// Precio de venta MANUAL del arroz blanco de un lote finalizado (liquidación
-// "Gana"). Se guarda en production_yields; aislado por accionista dueño del lote.
+// Precio de venta MANUAL por producto de salida de un lote finalizado (liquidación
+// "Gana"): arroz blanco, arrocillo 3/4, arrocillo fino, polvillo. Se guarda en
+// production_yields; aislado por accionista dueño del lote. Whitelist de columnas.
+const PRECIO_VENTA_COL: Record<string, string> = {
+  blanco: "precio_venta_blanco",
+  broken: "precio_venta_broken",
+  fine: "precio_venta_fine",
+  bran: "precio_venta_bran"
+};
 processingRouter.patch("/:id/precio-venta", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
-  const body = z.object({ precio_venta_blanco: z.number().nonnegative().nullable() }).parse(req.body);
+  const body = z.object({
+    producto: z.enum(["blanco", "broken", "fine", "bran"]).default("blanco"),
+    precio: z.number().nonnegative().nullable()
+  }).parse(req.body);
   const batchId = String(req.params.id);
+  const col = PRECIO_VENTA_COL[body.producto];
 
   // El lote debe pertenecer al accionista activo (aislamiento multi-socio).
   const owner = await pool.query(
@@ -1241,10 +1255,10 @@ processingRouter.patch("/:id/precio-venta", asyncRoute(async (req, res) => {
   }
 
   const result = await pool.query(
-    `UPDATE production_yields SET precio_venta_blanco = $2 WHERE processing_batch_id = $1
-     RETURNING processing_batch_id, precio_venta_blanco`,
-    [batchId, body.precio_venta_blanco]
+    `UPDATE production_yields SET ${col} = $2 WHERE processing_batch_id = $1
+     RETURNING processing_batch_id, ${col} AS precio`,
+    [batchId, body.precio]
   );
   if (!result.rowCount) throw new ApiError(404, "Rendimiento del lote no encontrado");
-  res.json(result.rows[0]);
+  res.json({ producto: body.producto, precio: result.rows[0].precio });
 }));
