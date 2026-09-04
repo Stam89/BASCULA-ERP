@@ -88,6 +88,7 @@ processingRouter.get("/history", asyncRoute(async (req, res) => {
               y.yield_percent,
               y.qq_de_tulas,
               y.rendimiento_snapshot,
+              y.precio_venta_blanco,
               COALESCE((
                 SELECT json_agg(json_build_object(
                          'presentation', po.presentation,
@@ -99,6 +100,30 @@ processingRouter.get("/history", asyncRoute(async (req, res) => {
                 WHERE po.processing_batch_id = b.id
                   AND po.is_byproduct = false
               ), '[]'::json) AS presentaciones,
+              -- Partidas de cáscara que formaron el lote (cada secadora/ticket) con
+              -- su QQ CALIFICADO (el real que entró) y el PRECIO DE COMPRA cruzado
+              -- desde su liquidación (module Liquidaciones). Corrige el total de
+              -- cáscara (suma de partidas, no un peso arrastrado).
+              COALESCE((
+                SELECT json_agg(json_build_object(
+                         'weighing_ticket_id', dl.weighing_ticket_id,
+                         'farmer_name', dl.farmer_name,
+                         'lot_code', dl.lot_code,
+                         'quintals', dl.quintals,
+                         'numero_bascula', m.raw_payload->>'numeroTicket',
+                         'ticket_number', w.ticket_number,
+                         'price_per_quintal', liq.price_per_quintal
+                       ) ORDER BY dl.created_at ASC)
+                FROM processing_batch_drying_lots dl
+                LEFT JOIN weighing_tickets w ON w.id = dl.weighing_ticket_id
+                LEFT JOIN mobile_synced_tickets m ON m.weighing_ticket_id = dl.weighing_ticket_id
+                LEFT JOIN LATERAL (
+                  SELECT price_per_quintal FROM liquidations lq
+                  WHERE lq.weighing_ticket_id = dl.weighing_ticket_id AND lq.status <> 'CANCELLED'
+                  ORDER BY lq.created_at DESC LIMIT 1
+                ) liq ON true
+                WHERE dl.processing_batch_id = b.id
+              ), '[]'::json) AS entradas,
               FALSE AS is_service,
               NULL::numeric AS service_rate,
               NULL::numeric AS service_total,
@@ -1196,4 +1221,30 @@ processingRouter.post("/:id/finish-production", asyncRoute(async (req, res) => {
   const body = finishProductionSchema.parse(req.body);
   const result = await cerrarProcesoProduccion(String(req.params.id), body);
   res.json(result);
+}));
+
+// Precio de venta MANUAL del arroz blanco de un lote finalizado (liquidación
+// "Gana"). Se guarda en production_yields; aislado por accionista dueño del lote.
+processingRouter.patch("/:id/precio-venta", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
+  const body = z.object({ precio_venta_blanco: z.number().nonnegative().nullable() }).parse(req.body);
+  const batchId = String(req.params.id);
+
+  // El lote debe pertenecer al accionista activo (aislamiento multi-socio).
+  const owner = await pool.query(
+    `SELECT l.accionista_id FROM processing_batches b JOIN lots l ON l.id = b.lot_id WHERE b.id = $1`,
+    [batchId]
+  );
+  if (!owner.rowCount) throw new ApiError(404, "Lote de producción no encontrado");
+  if (owner.rows[0].accionista_id !== accionistaId) {
+    throw new ApiError(403, "Este lote pertenece a otro accionista.");
+  }
+
+  const result = await pool.query(
+    `UPDATE production_yields SET precio_venta_blanco = $2 WHERE processing_batch_id = $1
+     RETURNING processing_batch_id, precio_venta_blanco`,
+    [batchId, body.precio_venta_blanco]
+  );
+  if (!result.rowCount) throw new ApiError(404, "Rendimiento del lote no encontrado");
+  res.json(result.rows[0]);
 }));
