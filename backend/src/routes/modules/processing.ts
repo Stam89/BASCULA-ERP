@@ -131,9 +131,13 @@ processingRouter.get("/history", asyncRoute(async (req, res) => {
               NULL::numeric AS service_rate,
               NULL::numeric AS service_total,
               NULL::varchar AS client_name,
-              -- Tarifa GLOBAL de Servicio de Pilada (Configuración → Tarifas):
-              -- labor_rates.pilador_per_qq. Alimenta la columna COSTO PROD. de «Gana».
-              (SELECT pilador_per_qq FROM labor_rates WHERE id = 1) AS pilada_rate_per_qq
+              -- Tarifa de SERVICIO DE PILADO del SOCIO OPERATIVO dueño del lote
+              -- (tarifario_servicio, NO la tarifa de pago al trabajador). Vigente:
+              -- última fecha_vigencia <= hoy, activa. Alimenta COSTO PROD. de «Gana».
+              (SELECT ts.precio_por_qq FROM tarifario_servicio ts
+                WHERE ts.socio_id = l.accionista_id AND ts.servicio = 'PILADO' AND ts.is_active = true
+                  AND ts.fecha_vigencia <= CURRENT_DATE
+                ORDER BY ts.fecha_vigencia DESC, ts.created_at DESC LIMIT 1) AS pilada_rate_per_qq
        FROM processing_batches b
        JOIN lots l ON l.id = b.lot_id
        LEFT JOIN drying_tunnel_reports t ON t.id = b.drying_report_id
@@ -165,7 +169,7 @@ processingRouter.get("/history", asyncRoute(async (req, res) => {
               s.rate_per_qq AS service_rate,
               s.total AS service_total,
               COALESCE(a.name, s.client_name, 'Cliente') AS client_name,
-              (SELECT pilador_per_qq FROM labor_rates WHERE id = 1) AS pilada_rate_per_qq
+              NULL::numeric AS pilada_rate_per_qq
        FROM pilado_services s
        LEFT JOIN accionistas a ON a.id = s.client_accionista_id
        WHERE s.provider_accionista_id = $1`,

@@ -1489,11 +1489,11 @@ export function App() {
   const [seqModal, setSeqModal] = useState<{ prefijo: string; next_number: string } | null>(null);
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
   const [laborRatesForm, setLaborRatesForm] = useState<LaborRates>(defaultLaborRates);
-  // Tarifa GLOBAL de Servicio de Pilada ($/QQ) para «Gana»: se toma del backend
-  // (history expone labor_rates.pilador_per_qq); fallback a la tarifa ya cargada.
+  // Tarifa de SERVICIO DE PILADO del socio operativo ($/QQ) para «Gana»: la trae el
+  // backend en /processing-batches/history (tarifario_servicio del socio dueño del
+  // lote). NO se usa la tarifa de pago al trabajador. 0 si el socio no la tiene.
   const tarifaPiladaGlobal = Number(
-    productionHistory.find((h) => h.pilada_rate_per_qq != null)?.pilada_rate_per_qq
-    ?? laborRatesForm.pilador_per_qq ?? 0
+    productionHistory.find((h) => !h.is_service && h.pilada_rate_per_qq != null)?.pilada_rate_per_qq ?? 0
   );
   // Tarifas de empaque / uso de sacos que la MATRIZ cobra a los socios al despachar.
   const [packagingRatesForm, setPackagingRatesForm] = useState({ precio_saco_10lb: 0, precio_saco_25lb: 0, precio_saco_50lb: 0 });
