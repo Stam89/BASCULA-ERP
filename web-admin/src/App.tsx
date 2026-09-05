@@ -1331,6 +1331,11 @@ export function App() {
   const [productionHistoryOpen, setProductionHistoryOpen] = useState(false);
   // Precio de venta editable por lote en «Gana» (borrador de UI antes de guardar).
   const [ganaPrecioVenta, setGanaPrecioVenta] = useState<Record<string, string>>({});
+  // Precio de Servicio de Pilada ($/QQ), general para «Gana». Alimenta la columna
+  // COSTO PROD. de la sección de cáscara. Se persiste en localStorage (solo UI).
+  const [ganaPrecioPilada, setGanaPrecioPilada] = useState<string>(() => {
+    try { return localStorage.getItem("bascula-erp:precio-pilada") ?? ""; } catch { return ""; }
+  });
   const [productionPackages, setProductionPackages] = useState<ProductionPackageState>(defaultProductionPackages);
   const [orderPackage, setOrderPackage] = useState<OrderPackageState>(defaultOrderPackage);
   const [weighingRiceType, setWeighingRiceType] = useState<"0.11" | "CORRIENTE">("0.11");
@@ -9306,11 +9311,24 @@ export function App() {
                     Cuadros de rendimiento de los lotes finalizados de <strong>{accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "este accionista"}</strong>. La cáscara de entrada es la suma de las secadoras del lote.
                   </p>
                 </div>
-                <button type="button" className="btnSecondary" onClick={() => loadProductionHistory().catch(() => undefined)}>↻ Actualizar</button>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "6px 10px" }}>
+                    ⚙️ Precio Servicio de Pilada ($/QQ)
+                    <input type="number" min="0" step="0.01" placeholder="0.00" value={ganaPrecioPilada}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setGanaPrecioPilada(v);
+                        try { localStorage.setItem("bascula-erp:precio-pilada", v); } catch { /* ignore */ }
+                      }}
+                      style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #fcd34d", textAlign: "right", fontSize: 13 }} />
+                  </label>
+                  <button type="button" className="btnSecondary" onClick={() => loadProductionHistory().catch(() => undefined)}>↻ Actualizar</button>
+                </div>
               </div>
 
               {(() => {
                 const lotes = productionHistory.filter((it) => !it.is_service);
+                const precioPilada = Number(ganaPrecioPilada) || 0;
                 if (lotes.length === 0) {
                   return <p className="tableEmpty" style={{ marginTop: 16 }}>Aún no hay lotes finalizados para este accionista. Al finalizar un lote en Producción, su cuadro aparece aquí.</p>;
                 }
@@ -9337,12 +9355,17 @@ export function App() {
                       const polvillo = Number(item.bran_qty ?? 0);
                       const tula = Number(item.qq_de_tulas ?? snap?.arroz_blanco.tula_qq ?? 0);
                       const saco = Math.max(0, blanco - tula);
-                      const div = (x: number) => (entrada > 0 ? (x / entrada) * 100 : 0);
-                      // Fórmulas de DIVISIÓN DIRECTA (estándar del cuadro "Gana"):
-                      const blancoPct = div(blanco);
-                      const arrocillosPct = div(arrocillos);
-                      const polvilloPct = div(polvillo);
-                      const mermaPct = Math.max(0, 100 - blancoPct - arrocillosPct - polvilloPct);
+                      // % Arroz Blanco (Medición de Excedente/Crecimiento del Excel del
+                      // cliente): ((QQ Blanco − QQ Cáscara Entrada) / QQ Cáscara Entrada)×100.
+                      // Se TRUNCA a 2 decimales como en su Excel (no se redondea):
+                      // (135 − 122.10) / 122.10 × 100 = 10.5651… → 10.56%.
+                      const blancoExcedentePct = entrada > 0 ? ((blanco - entrada) / entrada) * 100 : 0;
+                      const blancoExcedenteStr = (Math.trunc(blancoExcedentePct * 100) / 100).toFixed(2);
+                      // Costo de producción (pilada) por QQ de cáscara, constante en el lote:
+                      // (Total QQ Arroz Blanco × Precio Servicio Pilada) / Total QQ Cáscara.
+                      const costoProdUnit = entrada > 0 ? (blanco * precioPilada) / entrada : 0;
+                      // Costo total de pilada del lote = Σ (QQ secadora × costoProdUnit).
+                      const costoProdTotal = entrada * costoProdUnit;
                       // Precio de VENTA manual POR PRODUCTO de salida (borrador de UI, o
                       // el guardado). Total ($) = QQ del producto × su precio unitario.
                       const precioStr = (prod: "blanco" | "broken" | "fine" | "bran", stored: string | number | null | undefined) =>
@@ -9357,7 +9380,8 @@ export function App() {
                       const ingresoTotal = ingBlanco + ingBroken + ingFine + ingBran;
                       const utilidad = ingresoTotal - costoCascara;
                       const dcell = { padding: "6px 10px", textAlign: "right" as const };
-                      // Celdas [Precio Unit. editable | Total ($)] para un producto de salida.
+                      // Celdas [Precio Unit. editable | Costo Prod. | Total ($)] para un
+                      // producto de salida. Costo Prod. solo aplica a la cáscara → "—".
                       const precioTds = (prod: "blanco" | "broken" | "fine" | "bran", str: string, qq: number, pnum: number) => (
                         <>
                           <td style={dcell}>
@@ -9369,6 +9393,7 @@ export function App() {
                               title="Precio de venta por QQ (editable, se guarda en la BD)"
                               style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #86efac", textAlign: "right", fontSize: 12 }} />
                           </td>
+                          <td style={{ ...dcell, color: "var(--c-muted)" }}>—</td>
                           <td style={{ ...dcell, fontWeight: 700, color: "#15803d" }}>{pnum > 0 ? money(qq * pnum) : "—"}</td>
                         </>
                       );
@@ -9376,7 +9401,13 @@ export function App() {
                         <article key={item.id} style={{ border: "1px solid var(--c-border)", borderRadius: 10, padding: 14 }}>
                           <header style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
                             <strong style={{ fontSize: 15 }}>{item.lot_code}{item.rice_type ? ` · ${item.rice_type}` : ""}</strong>
-                            <span className="muted">{new Date(item.finished_at).toLocaleString("es-EC")}</span>
+                            <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                              <span title="% Arroz Blanco (excedente/crecimiento): ((QQ Blanco − QQ Cáscara) / QQ Cáscara) × 100"
+                                style={{ fontSize: 12, fontWeight: 700, color: blancoExcedentePct >= 0 ? "#15803d" : "#b91c1c", background: blancoExcedentePct >= 0 ? "#dcfce7" : "#fee2e2", borderRadius: 6, padding: "3px 10px" }}>
+                                % Arroz Blanco: {blancoExcedenteStr}%
+                              </span>
+                              <span className="muted">{new Date(item.finished_at).toLocaleString("es-EC")}</span>
+                            </span>
                           </header>
                           <div style={{ overflowX: "auto" }}>
                             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 620 }}>
@@ -9384,8 +9415,8 @@ export function App() {
                                 <tr style={{ background: "#15803d", color: "#fff" }}>
                                   <th style={{ padding: "6px 10px", textAlign: "left", color: "#fff" }}>Concepto</th>
                                   <th style={{ ...dcell, color: "#fff" }}>QQ</th>
-                                  <th style={{ ...dcell, color: "#fff" }}>% s/ cáscara</th>
                                   <th style={{ ...dcell, color: "#fff" }}>Precio Unit.</th>
+                                  <th style={{ ...dcell, color: "#fff" }}>Costo Prod.</th>
                                   <th style={{ ...dcell, color: "#fff" }}>Total ($)</th>
                                 </tr>
                               </thead>
@@ -9402,24 +9433,25 @@ export function App() {
                                 {entradas.map((p, idx) => {
                                   const qq = Number(p.quintals || 0);
                                   const precio = p.price_per_quintal != null ? Number(p.price_per_quintal) : null;
-                                  const sub = precio != null ? qq * precio : null;
                                   const etq = p.numero_bascula ? `Ticket #${p.numero_bascula}` : (p.ticket_number ?? p.lot_code ?? "Partida");
+                                  // Total ($) de la cáscara = QQ de la secadora × Costo Prod. (pilada).
+                                  const totalProd = qq * costoProdUnit;
                                   return (
                                     <tr key={p.weighing_ticket_id ?? idx} style={{ borderBottom: "1px solid var(--c-border)" }}>
                                       <td style={{ padding: "6px 10px 6px 22px" }}>· {p.farmer_name ?? "Sin agricultor"} <span className="muted">· {etq}</span></td>
                                       <td style={dcell}>{n2(qq)}</td>
-                                      <td style={{ ...dcell, color: "var(--c-muted)" }}>—</td>
                                       <td style={dcell}>{precio != null ? `$${precio.toFixed(2)}` : <span className="muted" title="Aún no liquidado">— pend.</span>}</td>
-                                      <td style={dcell}>{sub != null ? money(sub) : "—"}</td>
+                                      <td style={dcell}>{costoProdUnit > 0 ? `$${costoProdUnit.toFixed(4)}` : <span className="muted" title="Ingresa el Precio Servicio de Pilada">—</span>}</td>
+                                      <td style={dcell}>{costoProdUnit > 0 ? money(totalProd) : "—"}</td>
                                     </tr>
                                   );
                                 })}
                                 <tr style={{ borderBottom: "2px solid var(--c-border)" }}>
                                   <td style={{ padding: "6px 10px", fontWeight: 700 }}>Cáscara de Entrada (total)</td>
                                   <td style={{ ...dcell, fontWeight: 700 }}>{n2(entrada)}</td>
-                                  <td style={{ ...dcell, color: "var(--c-muted)" }}>100.0%</td>
                                   <td style={dcell}></td>
-                                  <td style={{ ...dcell, fontWeight: 700, color: "#b45309" }}>{money(costoCascara)}</td>
+                                  <td style={{ ...dcell, fontWeight: 700 }}>{costoProdUnit > 0 ? `$${costoProdUnit.toFixed(4)}` : "—"}</td>
+                                  <td style={{ ...dcell, fontWeight: 700, color: "#b45309" }}>{costoProdUnit > 0 ? money(costoProdTotal) : "—"}</td>
                                 </tr>
 
                                 {/* ── INGRESO · Productos de salida con precio de venta editable c/u.
@@ -9430,25 +9462,21 @@ export function App() {
                                 <tr style={{ background: "#f0fdf4" }}>
                                   <td style={{ padding: "6px 10px", fontWeight: 700, color: "#15803d" }}>Arroz Blanco <span className="muted" style={{ fontWeight: 400 }}>(Tulas {n2(tula)} + Sacos {n2(saco)})</span></td>
                                   <td style={{ ...dcell, fontWeight: 700, color: "#15803d" }}>{n2(blanco)}</td>
-                                  <td style={{ ...dcell, fontWeight: 700, color: "#15803d" }}>{p1(blancoPct)}</td>
                                   {precioTds("blanco", pBlancoStr, blanco, pBlanco)}
                                 </tr>
                                 <tr style={{ borderBottom: "1px solid var(--c-border)" }}>
                                   <td style={{ padding: "6px 10px" }}>Arrocillo 3/4</td>
                                   <td style={dcell}>{n2(broken)}</td>
-                                  <td style={dcell}>{p1(div(broken))}</td>
                                   {precioTds("broken", pBrokenStr, broken, pBroken)}
                                 </tr>
                                 <tr style={{ borderBottom: "1px solid var(--c-border)" }}>
                                   <td style={{ padding: "6px 10px" }}>Arrocillo Fino</td>
                                   <td style={dcell}>{n2(fino)}</td>
-                                  <td style={dcell}>{p1(div(fino))}</td>
                                   {precioTds("fine", pFineStr, fino, pFine)}
                                 </tr>
                                 <tr style={{ borderBottom: "1px solid var(--c-border)" }}>
                                   <td style={{ padding: "6px 10px" }}>Polvillo</td>
                                   <td style={dcell}>{n2(polvillo)}</td>
-                                  <td style={dcell}>{p1(polvilloPct)}</td>
                                   {precioTds("bran", pBranStr, polvillo, pBran)}
                                 </tr>
                                 {/* Ingreso total proyectado = Σ Total ($) de los productos. */}
@@ -9459,8 +9487,7 @@ export function App() {
                                 <tr>
                                   <td style={{ padding: "6px 10px", color: "var(--c-muted)" }}>Merma / diferencia</td>
                                   <td style={{ ...dcell, color: "var(--c-muted)" }}>{n2(Math.max(0, entrada - blanco - arrocillos - polvillo))}</td>
-                                  <td style={{ ...dcell, color: "var(--c-muted)" }}>{p1(mermaPct)}</td>
-                                  <td style={dcell}></td><td style={dcell}></td>
+                                  <td style={dcell}></td><td style={dcell}></td><td style={dcell}></td>
                                 </tr>
                               </tbody>
                             </table>
