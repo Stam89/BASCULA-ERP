@@ -130,7 +130,10 @@ processingRouter.get("/history", asyncRoute(async (req, res) => {
               FALSE AS is_service,
               NULL::numeric AS service_rate,
               NULL::numeric AS service_total,
-              NULL::varchar AS client_name
+              NULL::varchar AS client_name,
+              -- Tarifa GLOBAL de Servicio de Pilada (Configuración → Tarifas):
+              -- labor_rates.pilador_per_qq. Alimenta la columna COSTO PROD. de «Gana».
+              (SELECT pilador_per_qq FROM labor_rates WHERE id = 1) AS pilada_rate_per_qq
        FROM processing_batches b
        JOIN lots l ON l.id = b.lot_id
        LEFT JOIN drying_tunnel_reports t ON t.id = b.drying_report_id
@@ -161,7 +164,8 @@ processingRouter.get("/history", asyncRoute(async (req, res) => {
               TRUE AS is_service,
               s.rate_per_qq AS service_rate,
               s.total AS service_total,
-              COALESCE(a.name, s.client_name, 'Cliente') AS client_name
+              COALESCE(a.name, s.client_name, 'Cliente') AS client_name,
+              (SELECT pilador_per_qq FROM labor_rates WHERE id = 1) AS pilada_rate_per_qq
        FROM pilado_services s
        LEFT JOIN accionistas a ON a.id = s.client_accionista_id
        WHERE s.provider_accionista_id = $1`,

@@ -815,6 +815,8 @@ type ProductionHistoryItem = {
   precio_venta_broken?: string | number | null;
   precio_venta_fine?: string | number | null;
   precio_venta_bran?: string | number | null;
+  /** Tarifa GLOBAL de Servicio de Pilada (Configuración → Tarifas · pilador_per_qq). */
+  pilada_rate_per_qq?: string | number | null;
   /** Partidas de cáscara que formaron el lote, con su precio de compra (liquidación). */
   entradas?: Array<{
     weighing_ticket_id: string | null;
@@ -1331,11 +1333,6 @@ export function App() {
   const [productionHistoryOpen, setProductionHistoryOpen] = useState(false);
   // Precio de venta editable por lote en «Gana» (borrador de UI antes de guardar).
   const [ganaPrecioVenta, setGanaPrecioVenta] = useState<Record<string, string>>({});
-  // Precio de Servicio de Pilada ($/QQ), general para «Gana». Alimenta la columna
-  // COSTO PROD. de la sección de cáscara. Se persiste en localStorage (solo UI).
-  const [ganaPrecioPilada, setGanaPrecioPilada] = useState<string>(() => {
-    try { return localStorage.getItem("bascula-erp:precio-pilada") ?? ""; } catch { return ""; }
-  });
   const [productionPackages, setProductionPackages] = useState<ProductionPackageState>(defaultProductionPackages);
   const [orderPackage, setOrderPackage] = useState<OrderPackageState>(defaultOrderPackage);
   const [weighingRiceType, setWeighingRiceType] = useState<"0.11" | "CORRIENTE">("0.11");
@@ -1492,6 +1489,12 @@ export function App() {
   const [seqModal, setSeqModal] = useState<{ prefijo: string; next_number: string } | null>(null);
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
   const [laborRatesForm, setLaborRatesForm] = useState<LaborRates>(defaultLaborRates);
+  // Tarifa GLOBAL de Servicio de Pilada ($/QQ) para «Gana»: se toma del backend
+  // (history expone labor_rates.pilador_per_qq); fallback a la tarifa ya cargada.
+  const tarifaPiladaGlobal = Number(
+    productionHistory.find((h) => h.pilada_rate_per_qq != null)?.pilada_rate_per_qq
+    ?? laborRatesForm.pilador_per_qq ?? 0
+  );
   // Tarifas de empaque / uso de sacos que la MATRIZ cobra a los socios al despachar.
   const [packagingRatesForm, setPackagingRatesForm] = useState({ precio_saco_10lb: 0, precio_saco_25lb: 0, precio_saco_50lb: 0 });
 
@@ -4277,8 +4280,9 @@ export function App() {
       refreshCostos().catch(() => undefined);
     }
     if (activeTab === "Inventario") { refreshSacks().catch(() => undefined); refreshInvMovs().catch(() => undefined); }
-    // Gana: liquidación de rendimiento (lee el historial de producción del accionista).
-    if (activeTab === "Gana") loadProductionHistory().catch(() => undefined);
+    // Gana: liquidación de rendimiento (lee el historial de producción del accionista)
+    // + tarifas (fallback de la Tarifa de Pilada global si aún no hay lotes cargados).
+    if (activeTab === "Gana") { loadProductionHistory().catch(() => undefined); loadLaborRates().catch(() => undefined); }
     if (activeTab === "Ventas") refreshCustomersAndSales().catch(() => undefined);
     if (activeTab === "Compras") { refreshSuppliers().catch(() => undefined); refreshPurchases().catch(() => undefined); }
     if (activeTab === "Por Cobrar") refreshReceivables().catch(() => undefined);
@@ -9312,23 +9316,16 @@ export function App() {
                   </p>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "6px 10px" }}>
-                    ⚙️ Precio Servicio de Pilada ($/QQ)
-                    <input type="number" min="0" step="0.01" placeholder="0.00" value={ganaPrecioPilada}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setGanaPrecioPilada(v);
-                        try { localStorage.setItem("bascula-erp:precio-pilada", v); } catch { /* ignore */ }
-                      }}
-                      style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #fcd34d", textAlign: "right", fontSize: 13 }} />
-                  </label>
+                  <span title="Tarifa global de Servicio de Pilada (Configuración → Tarifas · $ por QQ del Pilador). Solo lectura."
+                    style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "6px 10px" }}>
+                    ⚙️ Tarifa de pilada aplicada: ${tarifaPiladaGlobal.toFixed(2)} <span className="muted" style={{ fontWeight: 400 }}>(Configuración)</span>
+                  </span>
                   <button type="button" className="btnSecondary" onClick={() => loadProductionHistory().catch(() => undefined)}>↻ Actualizar</button>
                 </div>
               </div>
 
               {(() => {
                 const lotes = productionHistory.filter((it) => !it.is_service);
-                const precioPilada = Number(ganaPrecioPilada) || 0;
                 if (lotes.length === 0) {
                   return <p className="tableEmpty" style={{ marginTop: 16 }}>Aún no hay lotes finalizados para este accionista. Al finalizar un lote en Producción, su cuadro aparece aquí.</p>;
                 }
@@ -9362,7 +9359,9 @@ export function App() {
                       const blancoExcedentePct = entrada > 0 ? ((blanco - entrada) / entrada) * 100 : 0;
                       const blancoExcedenteStr = (Math.trunc(blancoExcedentePct * 100) / 100).toFixed(2);
                       // Costo de producción (pilada) por QQ de cáscara, constante en el lote:
-                      // (Total QQ Arroz Blanco × Precio Servicio Pilada) / Total QQ Cáscara.
+                      // (Total QQ Arroz Blanco × Tarifa GLOBAL de Pilada) / Total QQ Cáscara.
+                      // La tarifa viene de Configuración → Tarifas (backend), NO de un input.
+                      const precioPilada = Number(item.pilada_rate_per_qq ?? tarifaPiladaGlobal) || 0;
                       const costoProdUnit = entrada > 0 ? (blanco * precioPilada) / entrada : 0;
                       // Costo total de pilada del lote = Σ (QQ secadora × costoProdUnit).
                       const costoProdTotal = entrada * costoProdUnit;
@@ -9441,7 +9440,7 @@ export function App() {
                                       <td style={{ padding: "6px 10px 6px 22px" }}>· {p.farmer_name ?? "Sin agricultor"} <span className="muted">· {etq}</span></td>
                                       <td style={dcell}>{n2(qq)}</td>
                                       <td style={dcell}>{precio != null ? `$${precio.toFixed(2)}` : <span className="muted" title="Aún no liquidado">— pend.</span>}</td>
-                                      <td style={dcell}>{costoProdUnit > 0 ? `$${costoProdUnit.toFixed(4)}` : <span className="muted" title="Ingresa el Precio Servicio de Pilada">—</span>}</td>
+                                      <td style={dcell}>{costoProdUnit > 0 ? `$${costoProdUnit.toFixed(4)}` : <span className="muted" title="Define la Tarifa de Pilada en Configuración → Tarifas">—</span>}</td>
                                       <td style={dcell}>{costoProdUnit > 0 ? money(totalProd) : "—"}</td>
                                     </tr>
                                   );
