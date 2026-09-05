@@ -9433,15 +9433,17 @@ export function App() {
                                   const qq = Number(p.quintals || 0);
                                   const precio = p.price_per_quintal != null ? Number(p.price_per_quintal) : null;
                                   const etq = p.numero_bascula ? `Ticket #${p.numero_bascula}` : (p.ticket_number ?? p.lot_code ?? "Partida");
-                                  // Total ($) de la cáscara = QQ de la secadora × Costo Prod. (pilada).
-                                  const totalProd = qq * costoProdUnit;
+                                  // Total ($) de la cáscara = (Precio Unitario compra + Costo Prod.) × QQ de la fila.
+                                  const costoUnitFila = (precio ?? 0) + costoProdUnit;
+                                  const totalFila = costoUnitFila * qq;
+                                  const tieneValor = precio != null || costoProdUnit > 0;
                                   return (
                                     <tr key={p.weighing_ticket_id ?? idx} style={{ borderBottom: "1px solid var(--c-border)" }}>
                                       <td style={{ padding: "6px 10px 6px 22px" }}>· {p.farmer_name ?? "Sin agricultor"} <span className="muted">· {etq}</span></td>
                                       <td style={dcell}>{n2(qq)}</td>
                                       <td style={dcell}>{precio != null ? `$${precio.toFixed(2)}` : <span className="muted" title="Aún no liquidado">— pend.</span>}</td>
                                       <td style={dcell}>{costoProdUnit > 0 ? `$${costoProdUnit.toFixed(4)}` : <span className="muted" title="Define la Tarifa de Pilada en Configuración → Tarifas">—</span>}</td>
-                                      <td style={dcell}>{costoProdUnit > 0 ? money(totalProd) : "—"}</td>
+                                      <td style={dcell}>{tieneValor ? money(totalFila) : "—"}</td>
                                     </tr>
                                   );
                                 })}
@@ -9450,7 +9452,7 @@ export function App() {
                                   <td style={{ ...dcell, fontWeight: 700 }}>{n2(entrada)}</td>
                                   <td style={dcell}></td>
                                   <td style={{ ...dcell, fontWeight: 700 }}>{costoProdUnit > 0 ? `$${costoProdUnit.toFixed(4)}` : "—"}</td>
-                                  <td style={{ ...dcell, fontWeight: 700, color: "#b45309" }}>{costoProdUnit > 0 ? money(costoProdTotal) : "—"}</td>
+                                  <td style={{ ...dcell, fontWeight: 700, color: "#b45309" }}>{(costoCascara > 0 || costoProdUnit > 0) ? money(costoCascara + costoProdTotal) : "—"}</td>
                                 </tr>
 
                                 {/* ── INGRESO · Productos de salida con precio de venta editable c/u.
