@@ -1558,16 +1558,22 @@ export function App() {
     const KG_QQ = 45.359237;
     const snap = item.rendimiento_snapshot ?? null;
     const entradas = item.entradas ?? [];
-    const entrada = entradas.length
+    // Guarda anti-NaN: un snapshot parcial/antiguo o datos vacíos NUNCA deben
+    // volver la pantalla con "NaN" ni colapsarla (protocolo de máxima precaución).
+    const entradaRaw = entradas.length
       ? entradas.reduce((s, p) => s + Number(p.quintals || 0), 0)
-      : (snap ? Number(snap.entrada_cascara_qq) : Number(item.input_paddy_kg ?? 0) / KG_QQ);
+      : (snap ? Number(snap.entrada_cascara_qq ?? 0) : Number(item.input_paddy_kg ?? 0) / KG_QQ);
+    const entrada = Number.isFinite(entradaRaw) ? entradaRaw : 0;
     const costoCascara = entradas.reduce((s, p) => s + (p.price_per_quintal != null ? Number(p.quintals || 0) * Number(p.price_per_quintal) : 0), 0);
     const blanco = Number(item.white_rice_qty ?? 0);
     const broken = Number(item.broken_rice_qty ?? 0);
     const fino = Number(item.fine_broken_rice_qty ?? 0);
     const arrocillos = broken + fino;
     const polvillo = Number(item.bran_qty ?? 0);
-    const tula = Number(item.qq_de_tulas ?? snap?.arroz_blanco.tula_qq ?? 0);
+    // Optional-chaining COMPLETO: si el snapshot existe pero no trae arroz_blanco
+    // (dato parcial), no debe lanzar TypeError y romper el render.
+    const tulaRaw = Number(item.qq_de_tulas ?? snap?.arroz_blanco?.tula_qq ?? 0);
+    const tula = Number.isFinite(tulaRaw) ? tulaRaw : 0;
     const saco = Math.max(0, blanco - tula);
     // % Arroz Blanco (excedente): ((QQ Blanco − QQ Cáscara)/QQ Cáscara)×100, truncado 2 dec.
     const blancoExcedentePct = entrada > 0 ? ((blanco - entrada) / entrada) * 100 : 0;
