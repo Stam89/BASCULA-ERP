@@ -13161,10 +13161,10 @@ export function App() {
               <div>
                 <div style={{ fontSize: 12, fontWeight: 600, opacity: 0.9, letterSpacing: ".03em" }}>💰 COSTO TOTAL DE NÓMINA · A PAGAR</div>
                 <div style={{ fontSize: 30, fontWeight: 800, lineHeight: 1.1 }}>{money(nominaResumen.total)}</div>
-                <div style={{ fontSize: 11, opacity: 0.85, marginTop: 2 }}>Período {nominaFrom} → {nominaTo} · Pilador/Estibador/Polvillo/Secador</div>
+                <div style={{ fontSize: 11, opacity: 0.85, marginTop: 2 }}>Período {nominaFrom} → {nominaTo} · Cuadrilla / Piladores / Polvillo / Secadores</div>
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                {([["Piladores", nominaResumen.PILADOR], ["Estibadores", nominaResumen.ESTIBADOR], ["Polvillo", nominaResumen.POLVILLO], ["Secadores", nominaResumen.SECADOR]] as [string, number][])
+                {([["Cuadrilla", nominaResumen.ESTIBADOR], ["Piladores", nominaResumen.PILADOR], ["Polvillo", nominaResumen.POLVILLO], ["Secadores", nominaResumen.SECADOR], ["Otros", nominaResumen.OTROS]] as [string, number][])
                   .filter(([, v]) => v > 0)
                   .map(([label, v]) => (
                     <div key={label} style={{ background: "rgba(255,255,255,.15)", borderRadius: 8, padding: "6px 12px", textAlign: "right", minWidth: 92 }}>
