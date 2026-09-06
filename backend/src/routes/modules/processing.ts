@@ -132,13 +132,15 @@ processingRouter.get("/history", asyncRoute(async (req, res) => {
               NULL::numeric AS service_rate,
               NULL::numeric AS service_total,
               NULL::varchar AS client_name,
-              -- Tarifa de SERVICIO DE PILADO del SOCIO OPERATIVO dueño del lote
-              -- (tarifario_servicio, NO la tarifa de pago al trabajador). Vigente:
-              -- última fecha_vigencia <= hoy, activa. Alimenta COSTO PROD. de «Gana».
-              (SELECT ts.precio_por_qq FROM tarifario_servicio ts
-                WHERE ts.socio_id = l.accionista_id AND ts.servicio = 'PILADO' AND ts.is_active = true
-                  AND ts.fecha_vigencia <= CURRENT_DATE
-                ORDER BY ts.fecha_vigencia DESC, ts.created_at DESC LIMIT 1) AS pilada_rate_per_qq
+              -- Tarifa de SERVICIO DE PILADO CONGELADA al finalizar el lote
+              -- (inmutabilidad histórica). Fallback a la vigente del socio solo si el
+              -- lote no tiene valor congelado (lotes muy viejos). Alimenta COSTO PROD.
+              COALESCE(y.tarifa_pilada_aplicada, (
+                SELECT ts.precio_por_qq FROM tarifario_servicio ts
+                 WHERE ts.socio_id = l.accionista_id AND ts.servicio = 'PILADO' AND ts.is_active = true
+                   AND ts.fecha_vigencia <= CURRENT_DATE
+                 ORDER BY ts.fecha_vigencia DESC, ts.created_at DESC LIMIT 1
+              )) AS pilada_rate_per_qq
        FROM processing_batches b
        JOIN lots l ON l.id = b.lot_id
        LEFT JOIN drying_tunnel_reports t ON t.id = b.drying_report_id
@@ -728,6 +730,16 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
     }
 
     const yieldPercent = round3((totalOutputKg / inputPaddyKg) * 100);
+    // INMUTABILIDAD HISTÓRICA: se congela la tarifa PILADO vigente del socio dueño
+    // del lote al momento de finalizar. Los lotes anteriores no cambian si luego
+    // se edita la tarifa en Configuración.
+    const tarifaPiladaRow = await client.query(
+      `SELECT precio_por_qq FROM tarifario_servicio
+        WHERE socio_id = $1 AND servicio = 'PILADO' AND is_active = true AND fecha_vigencia <= CURRENT_DATE
+        ORDER BY fecha_vigencia DESC, created_at DESC LIMIT 1`,
+      [accionistaId]
+    );
+    const tarifaPiladaAplicada = tarifaPiladaRow.rows[0]?.precio_por_qq ?? null;
     const yieldResult = await client.query(
         `INSERT INTO production_yields
        (processing_batch_id, lot_id, ownership, input_paddy_kg,
@@ -737,10 +749,10 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
         bran_qty, bran_unit, bran_kg,
         total_output_kg, process_loss_kg, yield_percent,
         packaging_supply_id, sacks_used, sack_presentation_data, service_rate_per_qq, service_amount,
-        qq_de_tulas, created_by)
+        qq_de_tulas, tarifa_pilada_aplicada, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-               $21, $22::jsonb, $23, $24, $25, $26)
+               $21, $22::jsonb, $23, $24, $25, $26, $27)
        RETURNING *`,
       [
         processingBatchId,
@@ -776,6 +788,7 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
         serviceRate,
         serviceAmount,
         tulaQq,
+        tarifaPiladaAplicada,
         body.created_by
       ]
     );

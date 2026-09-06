@@ -9480,9 +9480,9 @@ export function App() {
                   </p>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <span title="Tarifa global de Servicio de Pilada (Configuración → Tarifas · $ por QQ del Pilador). Solo lectura."
-                    style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "6px 10px" }}>
-                    ⚙️ Tarifa de pilada aplicada: ${tarifaPiladaGlobal.toFixed(2)} <span className="muted" style={{ fontWeight: 400 }}>(Configuración)</span>
+                  <span title="La tarifa de pilado se congela al finalizar cada lote (histórica). Se muestra por lote al abrir su Gana."
+                    style={{ fontSize: 11, color: "var(--c-muted)" }}>
+                    🔒 Tarifa de pilado congelada por lote (histórica)
                   </span>
                   <button type="button" className="btnSecondary" onClick={() => loadProductionHistory().catch(() => undefined)}>↻ Actualizar</button>
                 </div>
@@ -9521,7 +9521,7 @@ export function App() {
                           </div>
                           <button type="button" onClick={() => setGanaModalId(item.id)}
                             style={{ width: "100%", padding: "8px 0", borderRadius: 8, border: "none", cursor: "pointer", fontWeight: 700, fontSize: 13, background: "#15803d", color: "#fff" }}>
-                            👁️ Ver Liquidación
+                            👁️ Ver Gana
                           </button>
                         </article>
                       );
@@ -9576,6 +9576,10 @@ export function App() {
                             </span>
                             <span className="muted">{new Date(item.finished_at).toLocaleString("es-EC")}</span>
                           </span>
+                        </div>
+                        {/* Tarifa de pilado CONGELADA para este lote (histórica). */}
+                        <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "4px 10px", marginBottom: 10 }}>
+                          ⚙️ Tarifa de pilada aplicada: ${c.precioPilada.toFixed(2)} <span className="muted" style={{ fontWeight: 400 }}>(Histórica)</span>
                         </div>
                         <div style={{ overflowX: "auto" }}>
                           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 620 }}>
