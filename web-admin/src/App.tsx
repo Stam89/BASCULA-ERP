@@ -1610,6 +1610,22 @@ export function App() {
   const [nominaTo, setNominaTo] = useState(nominaToday);
   const [nominaRows, setNominaRows] = useState<WorkerSummary[]>([]);
   const [nominaBusy, setNominaBusy] = useState(false);
+  // Costo Total de Nómina (A PAGAR) del período activo: suma EXACTA de la columna
+  // "A pagar" de la tabla (pending>0 ? to_pay : 0), por rol y total. Se recalcula
+  // cuando cambian nominaRows (fechas, pagos o anticipos → refreshNomina).
+  const nominaResumen = useMemo(() => {
+    const acc = { total: 0, PILADOR: 0, ESTIBADOR: 0, POLVILLO: 0, SECADOR: 0, OTROS: 0 };
+    for (const r of nominaRows) {
+      const pay = (r.pending_amount ?? 0) > 0 ? (Number(r.to_pay) || 0) : 0;
+      acc.total += pay;
+      if (r.worker_role === "PILADOR") acc.PILADOR += pay;
+      else if (r.worker_role === "ESTIBADOR") acc.ESTIBADOR += pay;
+      else if (r.worker_role === "POLVILLO") acc.POLVILLO += pay;
+      else if (r.worker_role === "SECADOR") acc.SECADOR += pay;
+      else acc.OTROS += pay;
+    }
+    return acc;
+  }, [nominaRows]);
   const [nominaPaymentDetail, setNominaPaymentDetail] = useState<{ open: boolean; row: WorkerSummary | null; payments: WorkerPaymentDetail[]; loading: boolean }>({
     open: false, row: null, payments: [], loading: false
   });
@@ -13137,6 +13153,28 @@ export function App() {
               <button type="button" className={nominaView === "cuadrilla" ? "active" : ""} onClick={() => { setNominaView("cuadrilla"); refreshCuadrilla().catch(() => undefined); }}>👷‍♂️ Cuadrilla de Carga/Descarga</button>
               <button type="button" className={nominaView === "historial" ? "active" : ""} onClick={() => { setNominaView("historial"); loadNominaHistory().catch(() => undefined); }}>📜 Historial de Pagos</button>
             </nav>
+
+            {/* Banner: Costo Total de Nómina (A PAGAR) del período — piladores,
+                estibadores, polvillo y secadores. Se actualiza dinámicamente. */}
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 12,
+              background: "linear-gradient(90deg,#065f46,#15803d)", color: "#fff", borderRadius: 12, padding: "14px 18px", margin: "4px 0 14px" }}>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, opacity: 0.9, letterSpacing: ".03em" }}>💰 COSTO TOTAL DE NÓMINA · A PAGAR</div>
+                <div style={{ fontSize: 30, fontWeight: 800, lineHeight: 1.1 }}>{money(nominaResumen.total)}</div>
+                <div style={{ fontSize: 11, opacity: 0.85, marginTop: 2 }}>Período {nominaFrom} → {nominaTo} · Pilador/Estibador/Polvillo/Secador</div>
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {([["Piladores", nominaResumen.PILADOR], ["Estibadores", nominaResumen.ESTIBADOR], ["Polvillo", nominaResumen.POLVILLO], ["Secadores", nominaResumen.SECADOR]] as [string, number][])
+                  .filter(([, v]) => v > 0)
+                  .map(([label, v]) => (
+                    <div key={label} style={{ background: "rgba(255,255,255,.15)", borderRadius: 8, padding: "6px 12px", textAlign: "right", minWidth: 92 }}>
+                      <div style={{ fontSize: 10, opacity: 0.9 }}>{label}</div>
+                      <div style={{ fontSize: 15, fontWeight: 700 }}>{money(v)}</div>
+                    </div>
+                  ))}
+                {nominaResumen.total === 0 && <div style={{ fontSize: 12, opacity: 0.85, alignSelf: "center" }}>Sin pagos pendientes en el período.</div>}
+              </div>
+            </div>
 
             {nominaView === "planta" && (
             <div className="panelGrid" style={{ alignItems: "start" }}>
