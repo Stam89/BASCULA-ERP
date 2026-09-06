@@ -266,7 +266,33 @@ piladoRouter.get("/tarifa-vigente", asyncRoute(async (req, res) => {
   res.json(r.rows[0] ?? null);
 }));
 
-// GET listado de tarifas (opcional filtrar por socio/servicio), con nombre socio.
+// Entidades para el autocomplete del tarifario: SOCIOS (accionistas no matriz) +
+// CLIENTES (customers). Etiqueta unificada {tipo, id, nombre, extra}.
+piladoRouter.get("/entidades", asyncRoute(async (_req, res) => {
+  const [socios, clientes] = await Promise.all([
+    pool.query("SELECT id, name FROM accionistas WHERE tipo <> 'MATRIZ' ORDER BY name"),
+    pool.query("SELECT id, full_name, identification FROM customers ORDER BY full_name")
+  ]);
+  res.json([
+    ...socios.rows.map((s) => ({ tipo: "SOCIO", id: s.id, nombre: s.name, extra: null })),
+    ...clientes.rows.map((c) => ({ tipo: "CLIENTE", id: c.id, nombre: c.full_name, extra: c.identification }))
+  ]);
+}));
+
+// Resuelve la entidad (socio o cliente) a columnas + nombre denormalizado.
+async function resolverEntidadTarifa(tipo: "SOCIO" | "CLIENTE", id: string) {
+  if (tipo === "SOCIO") {
+    if (id === CEYRO_ID) throw new ApiError(400, "CEYRO es la matriz; no se le asigna tarifa de servicio.");
+    const a = await pool.query("SELECT name FROM accionistas WHERE id = $1", [id]);
+    if (!a.rowCount) throw new ApiError(404, "Socio no encontrado");
+    return { socio_id: id, customer_id: null as string | null, cliente_nombre: a.rows[0].name as string };
+  }
+  const c = await pool.query("SELECT full_name FROM customers WHERE id = $1", [id]);
+  if (!c.rowCount) throw new ApiError(404, "Cliente no encontrado");
+  return { socio_id: null as string | null, customer_id: id, cliente_nombre: c.rows[0].full_name as string };
+}
+
+// GET listado de tarifas (socios Y clientes), con nombre y tipo unificados.
 piladoRouter.get("/tarifas", asyncRoute(async (req, res) => {
   const q = z.object({
     socio_id: z.string().uuid().optional(),
@@ -278,51 +304,71 @@ piladoRouter.get("/tarifas", asyncRoute(async (req, res) => {
   if (q.servicio) { params.push(q.servicio); conds.push(`t.servicio = $${params.length}`); }
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   const r = await pool.query(
-    `SELECT t.id, t.socio_id, a.name AS socio_name, t.servicio, t.precio_por_qq::float AS precio_por_qq,
+    `SELECT t.id, t.socio_id, t.customer_id, t.cliente_tipo,
+            COALESCE(t.cliente_nombre, a.name, c.full_name) AS cliente_nombre,
+            COALESCE(t.cliente_nombre, a.name, c.full_name) AS socio_name,
+            COALESCE(t.socio_id, t.customer_id) AS entity_id,
+            t.servicio, t.precio_por_qq::float AS precio_por_qq,
             t.fecha_vigencia, t.is_active, t.notes, t.created_at
      FROM tarifario_servicio t
-     JOIN accionistas a ON a.id = t.socio_id
+     LEFT JOIN accionistas a ON a.id = t.socio_id
+     LEFT JOIN customers   c ON c.id = t.customer_id
      ${where}
-     ORDER BY a.name, t.servicio, t.fecha_vigencia DESC`,
+     ORDER BY t.servicio, cliente_nombre, t.fecha_vigencia DESC`,
     params
   );
   res.json(r.rows);
 }));
 
-// POST crear/registrar una tarifa vigente desde una fecha.
+// POST crear/registrar una tarifa vigente desde una fecha (socio o cliente).
 piladoRouter.post("/tarifas", asyncRoute(async (req, res) => {
   const body = z.object({
-    socio_id: z.string().uuid(),
+    cliente_tipo: z.enum(["SOCIO", "CLIENTE"]).optional(),
+    entity_id: z.string().uuid().optional(),
+    socio_id: z.string().uuid().optional(), // compat: llamadas antiguas
     servicio: z.enum(SERVICIOS).default("PILADO"),
     precio_por_qq: z.number().nonnegative(),
     fecha_vigencia: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     notes: z.string().optional()
   }).parse(req.body);
-  if (body.socio_id === CEYRO_ID) throw new ApiError(400, "CEYRO es la matriz; el tarifario es para los socios.");
-  const socio = await pool.query("SELECT id FROM accionistas WHERE id = $1", [body.socio_id]);
-  if (!socio.rowCount) throw new ApiError(404, "Socio no encontrado");
+  const tipo = body.cliente_tipo ?? "SOCIO";
+  const id = body.entity_id ?? body.socio_id;
+  if (!id) throw new ApiError(400, "Elige el cliente o socio.");
+  const ent = await resolverEntidadTarifa(tipo, id);
   const r = await pool.query(
-    `INSERT INTO tarifario_servicio (socio_id, servicio, precio_por_qq, fecha_vigencia, notes)
-     VALUES ($1, $2, $3, COALESCE($4::date, CURRENT_DATE), $5)
+    `INSERT INTO tarifario_servicio (socio_id, customer_id, cliente_tipo, cliente_nombre, servicio, precio_por_qq, fecha_vigencia, notes)
+     VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::date, CURRENT_DATE), $8)
      RETURNING *`,
-    [body.socio_id, body.servicio, body.precio_por_qq, body.fecha_vigencia ?? null, body.notes ?? null]
+    [ent.socio_id, ent.customer_id, tipo, ent.cliente_nombre, body.servicio, body.precio_por_qq, body.fecha_vigencia ?? null, body.notes ?? null]
   );
   res.status(201).json(r.rows[0]);
 }));
 
-// PATCH editar precio / activar-desactivar una tarifa (baja logica).
+// PATCH editar una tarifa: precio, servicio, fecha, notas, activar/desactivar y
+// (opcional) reasignar el cliente/socio. Actualiza in-place (edición del form).
 piladoRouter.patch("/tarifas/:id", asyncRoute(async (req, res) => {
   const body = z.object({
     precio_por_qq: z.number().nonnegative().optional(),
+    servicio: z.enum(SERVICIOS).optional(),
     fecha_vigencia: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     is_active: z.boolean().optional(),
-    notes: z.string().optional()
+    notes: z.string().optional(),
+    // Reasignación opcional de la entidad (ambos juntos).
+    cliente_tipo: z.enum(["SOCIO", "CLIENTE"]).optional(),
+    entity_id: z.string().uuid().optional()
   }).parse(req.body);
   const fields: string[] = [];
-  const values: any[] = [];
+  const values: unknown[] = [];
   let i = 1;
-  for (const k of ["precio_por_qq", "fecha_vigencia", "is_active", "notes"] as const) {
+  for (const k of ["precio_por_qq", "servicio", "fecha_vigencia", "is_active", "notes"] as const) {
     if (body[k] !== undefined) { fields.push(`${k} = $${i++}`); values.push(body[k]); }
+  }
+  if (body.cliente_tipo && body.entity_id) {
+    const ent = await resolverEntidadTarifa(body.cliente_tipo, body.entity_id);
+    fields.push(`socio_id = $${i++}`); values.push(ent.socio_id);
+    fields.push(`customer_id = $${i++}`); values.push(ent.customer_id);
+    fields.push(`cliente_tipo = $${i++}`); values.push(body.cliente_tipo);
+    fields.push(`cliente_nombre = $${i++}`); values.push(ent.cliente_nombre);
   }
   if (fields.length === 0) throw new ApiError(400, "Sin cambios");
   values.push(req.params.id);

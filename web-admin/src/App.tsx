@@ -1228,6 +1228,57 @@ const emptyDashboard: Dashboard = {
   current_cash_register: null
 };
 
+// Entidad del tarifario (socio o cliente) para el autocomplete con buscador.
+type TarifaEntidad = { tipo: "SOCIO" | "CLIENTE"; id: string; nombre: string; extra?: string | null };
+
+// Autocomplete con buscador: filtra socios/clientes por nombre y devuelve la
+// entidad elegida. Sin librerías externas (input + dropdown filtrado).
+function EntityAutocomplete({ options, value, onSelect, disabled, placeholder }: {
+  options: TarifaEntidad[]; value: TarifaEntidad | null;
+  onSelect: (o: TarifaEntidad | null) => void; disabled?: boolean; placeholder?: string;
+}) {
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState(false);
+  // Si el valor cambia desde fuera (selección, editar, cancelar), limpia la
+  // búsqueda y cierra el dropdown para que el input muestre el nombre elegido.
+  useEffect(() => { setQ(""); setOpen(false); }, [value]);
+  const term = q.trim().toLowerCase();
+  const filtered = (term
+    ? options.filter((o) => o.nombre.toLowerCase().includes(term) || (o.extra ?? "").toLowerCase().includes(term))
+    : options
+  ).slice(0, 40);
+  const badge = (t: "SOCIO" | "CLIENTE") => (
+    <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 4, padding: "1px 6px", marginRight: 6,
+      background: t === "SOCIO" ? "#dbeafe" : "#fef3c7", color: t === "SOCIO" ? "#1d4ed8" : "#b45309" }}>
+      {t === "SOCIO" ? "Socio" : "Tercero"}
+    </span>
+  );
+  return (
+    <div style={{ position: "relative" }}>
+      <input type="text" disabled={disabled}
+        value={open ? q : (value?.nombre ?? "")}
+        placeholder={placeholder ?? "Buscar cliente o socio…"}
+        onFocus={() => { setOpen(true); setQ(""); }}
+        onChange={(e) => { setQ(e.target.value); setOpen(true); }}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        style={{ width: "100%" }} />
+      {open && (
+        <div style={{ position: "absolute", zIndex: 50, top: "100%", left: 0, right: 0, maxHeight: 240, overflowY: "auto",
+          background: "var(--c-surface)", border: "1px solid var(--c-border)", borderRadius: 8, boxShadow: "0 8px 20px rgba(0,0,0,.15)", marginTop: 2 }}>
+          {filtered.length === 0 && <div style={{ padding: "8px 12px", color: "var(--c-muted)", fontSize: 13 }}>Sin coincidencias</div>}
+          {filtered.map((o) => (
+            <div key={`${o.tipo}:${o.id}`} onMouseDown={() => { onSelect(o); setOpen(false); setQ(""); }}
+              style={{ padding: "7px 12px", cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center",
+                borderBottom: "1px solid var(--c-border)", background: value?.id === o.id && value?.tipo === o.tipo ? "#f0fdf4" : "transparent" }}>
+              {badge(o.tipo)}<span>{o.nombre}</span>{o.extra ? <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>· {o.extra}</span> : null}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function App() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(() => {
     const user = loadStoredAuth();
@@ -1593,7 +1644,11 @@ export function App() {
   const [piladoReport, setPiladoReport] = useState<PiladoServiceDetail | null>(null);
   const [tarifaVigenteHint, setTarifaVigenteHint] = useState<string>("");
   const [servicioTarifas, setServicioTarifas] = useState<any[]>([]);
-  const [tarifaForm, setTarifaForm] = useState({ socio_id: "", servicio: "PILADO", precio_por_qq: "", fecha_vigencia: nominaToday });
+  // Entidades (socios + clientes) para el autocomplete del tarifario.
+  const [tarifaEntidades, setTarifaEntidades] = useState<TarifaEntidad[]>([]);
+  const [tarifaForm, setTarifaForm] = useState<{ entidad: TarifaEntidad | null; servicio: string; precio_por_qq: string; fecha_vigencia: string; editingId: string | null }>(
+    { entidad: null, servicio: "PILADO", precio_por_qq: "", fecha_vigencia: nominaToday, editingId: null }
+  );
   const [cobros, setCobros] = useState<any[]>([]);
   const [cobroForm, setCobroForm] = useState({ client_accionista_id: "", servicio: "FLETE", monto: "", pagado_al_instante: false });
   const [costos, setCostos] = useState<any[]>([]);
@@ -2765,22 +2820,41 @@ export function App() {
   const refreshServicioTarifas = async () => {
     try { setServicioTarifas(await apiGet<any[]>("/pilado/tarifas")); }
     catch { /* noop */ }
+    try { setTarifaEntidades(await apiGet<TarifaEntidad[]>("/pilado/entidades")); }
+    catch { /* noop */ }
   };
+  const resetTarifaForm = () => setTarifaForm({ entidad: null, servicio: "PILADO", precio_por_qq: "", fecha_vigencia: nominaToday, editingId: null });
   const submitServicioTarifa = async () => {
-    if (!tarifaForm.socio_id) { addToast("Elige el socio", "error"); return; }
+    if (!tarifaForm.entidad) { addToast("Elige el cliente o socio", "error"); return; }
     const precio = parseFloat(tarifaForm.precio_por_qq);
     if (isNaN(precio) || precio < 0) { addToast("Precio inválido", "error"); return; }
+    const payload = {
+      cliente_tipo: tarifaForm.entidad.tipo,
+      entity_id: tarifaForm.entidad.id,
+      servicio: tarifaForm.servicio,
+      precio_por_qq: precio,
+      fecha_vigencia: tarifaForm.fecha_vigencia || undefined
+    };
     try {
-      await apiPost("/pilado/tarifas", {
-        socio_id: tarifaForm.socio_id,
-        servicio: tarifaForm.servicio,
-        precio_por_qq: precio,
-        fecha_vigencia: tarifaForm.fecha_vigencia || undefined
-      });
-      setTarifaForm({ socio_id: "", servicio: "PILADO", precio_por_qq: "", fecha_vigencia: nominaToday });
+      if (tarifaForm.editingId) {
+        await apiFetch(`/pilado/tarifas/${tarifaForm.editingId}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+        }).then((r) => { if (!r.ok) throw new Error("No se pudo actualizar la tarifa"); });
+        addToast("Tarifa actualizada ✓", "success");
+      } else {
+        await apiPost("/pilado/tarifas", payload);
+        addToast("Tarifa guardada ✓", "success");
+      }
+      resetTarifaForm();
       await refreshServicioTarifas();
-      addToast("Tarifa guardada ✓", "success");
     } catch (e) { addToast(`Error: ${e instanceof Error ? e.message : "Error"}`, "error"); }
+  };
+  // Sube una tarifa existente al formulario para editarla in-place.
+  const startEditTarifa = (t: any) => {
+    const tipo = (t.cliente_tipo === "CLIENTE" ? "CLIENTE" : "SOCIO") as "SOCIO" | "CLIENTE";
+    const id = t.entity_id ?? t.socio_id ?? t.customer_id;
+    const entidad: TarifaEntidad | null = id ? { tipo, id, nombre: t.cliente_nombre ?? t.socio_name ?? "" } : null;
+    setTarifaForm({ entidad, servicio: t.servicio ?? "PILADO", precio_por_qq: String(t.precio_por_qq ?? ""), fecha_vigencia: (t.fecha_vigencia || "").slice(0, 10) || nominaToday, editingId: t.id });
   };
   const toggleServicioTarifa = async (t: any) => {
     try {
@@ -14698,45 +14772,86 @@ export function App() {
                 {/* Columna 2: servicios a socios + empaque + selección/envejecido */}
                 <div className="configTarifasCol">
                 <div className="formPanel">
-                  <h2>🧾 Tarifario de servicios (socios)</h2>
-                  <p className="muted">Precio por QQ por socio y servicio, con fecha de vigencia. Servicio Pilado autocompleta con la tarifa vigente (editable).</p>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <label><span>Socio</span>
-                      <select value={tarifaForm.socio_id} onChange={(e) => setTarifaForm({ ...tarifaForm, socio_id: e.target.value })}>
-                        <option value="">Seleccione</option>
-                        {accionistas.filter((a) => a.tipo !== "MATRIZ").map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
-                      </select>
-                    </label>
-                    <label><span>Servicio</span>
-                      <select value={tarifaForm.servicio} onChange={(e) => setTarifaForm({ ...tarifaForm, servicio: e.target.value })}>
-                        <option value="PILADO">Pilado</option>
-                        <option value="SECADO">Secado</option>
-                        <option value="FLETE">Flete</option>
-                      </select>
-                    </label>
-                    <label><span>$ por QQ</span>
-                      <input type="number" step="0.01" min="0" value={tarifaForm.precio_por_qq} onChange={(e) => setTarifaForm({ ...tarifaForm, precio_por_qq: e.target.value })} />
-                    </label>
-                    <label><span>Vigente desde</span>
-                      <input type="date" value={tarifaForm.fecha_vigencia} onChange={(e) => setTarifaForm({ ...tarifaForm, fecha_vigencia: e.target.value })} />
-                    </label>
+                  <h2>🧾 Tarifario de Servicios (Socios y Clientes)</h2>
+                  <p className="muted">Precio por QQ por <strong>socio o cliente</strong> y servicio, con fecha de vigencia. El monto es libre: asigna la tarifa negociada con cada quien.</p>
+
+                  {/* Formulario en tarjeta: cuadrícula armónica con iconos */}
+                  <div style={{ border: `1px solid ${tarifaForm.editingId ? "#93c5fd" : "var(--c-border)"}`, borderRadius: 12, padding: 14, background: tarifaForm.editingId ? "#eff6ff" : "var(--c-surface)" }}>
+                    {tarifaForm.editingId && <div style={{ fontSize: 12, fontWeight: 700, color: "#1d4ed8", marginBottom: 8 }}>✏️ Editando tarifa</div>}
+                    <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
+                      <label style={{ gridColumn: "1 / -1" }}><span>👤 Cliente / Socio</span>
+                        <EntityAutocomplete options={tarifaEntidades} value={tarifaForm.entidad}
+                          disabled={!isAdmin}
+                          placeholder="Buscar cualquier cliente o socio…"
+                          onSelect={(o) => setTarifaForm((f) => ({ ...f, entidad: o }))} />
+                      </label>
+                      <label><span>⚙️ Servicio</span>
+                        <select value={tarifaForm.servicio} onChange={(e) => setTarifaForm({ ...tarifaForm, servicio: e.target.value })}>
+                          <option value="PILADO">Pilado</option>
+                          <option value="SECADO">Secado</option>
+                          <option value="FLETE">Flete</option>
+                        </select>
+                      </label>
+                      <label><span>💲 Precio ($ por QQ)</span>
+                        <input type="number" step="0.01" min="0" placeholder="0.00" value={tarifaForm.precio_por_qq} onChange={(e) => setTarifaForm({ ...tarifaForm, precio_por_qq: e.target.value })} />
+                      </label>
+                      <label style={{ gridColumn: "1 / -1" }}><span>📅 Vigente desde</span>
+                        <input type="date" value={tarifaForm.fecha_vigencia} onChange={(e) => setTarifaForm({ ...tarifaForm, fecha_vigencia: e.target.value })} />
+                      </label>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
+                      <button type="button" className="primary" onClick={submitServicioTarifa} disabled={!isAdmin}>
+                        {tarifaForm.editingId ? "💾 Actualizar tarifa" : "＋ Guardar tarifa"}
+                      </button>
+                      {tarifaForm.editingId && <button type="button" onClick={resetTarifaForm}>Cancelar</button>}
+                    </div>
+                    {!isAdmin && <p className="muted" style={{ marginBottom: 0 }}>Solo un administrador puede cambiar tarifas.</p>}
                   </div>
-                  <button type="button" className="primary" onClick={submitServicioTarifa} disabled={!isAdmin}>Guardar tarifa</button>
-                  {!isAdmin && <p className="muted">Solo un administrador puede cambiar tarifas.</p>}
-                  <hr className="divider" />
-                  <h2 style={{ marginBottom: 0 }}>Tarifas configuradas</h2>
+
+                  <h2 style={{ marginBottom: 6, marginTop: 18 }}>Tarifas configuradas</h2>
                   {servicioTarifas.length === 0 && <p className="muted">Sin tarifas configuradas.</p>}
-                  <div className="equipList">
-                    {servicioTarifas.map((t) => (
-                      <div key={t.id} className="equipItem" style={{ opacity: t.is_active ? 1 : 0.5 }}>
-                        <div>
-                          <strong>{t.socio_name} · {t.servicio}</strong>
-                          <small>${Number(t.precio_por_qq).toFixed(2)}/QQ · desde {(t.fecha_vigencia || "").slice(0, 10)}{t.is_active ? "" : " · inactiva"}</small>
-                        </div>
-                        <button type="button" className="equipDelBtn" onClick={() => toggleServicioTarifa(t)}>{t.is_active ? "Desactivar" : "Activar"}</button>
-                      </div>
-                    ))}
-                  </div>
+                  {servicioTarifas.length > 0 && (
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                        <thead>
+                          <tr style={{ background: "#f9fafb", textAlign: "left" }}>
+                            <th style={{ padding: "6px 8px" }}>Cliente / Socio</th>
+                            <th style={{ padding: "6px 8px" }}>Servicio</th>
+                            <th style={{ padding: "6px 8px", textAlign: "right" }}>$ / QQ</th>
+                            <th style={{ padding: "6px 8px" }}>Desde</th>
+                            <th style={{ padding: "6px 8px", textAlign: "right" }}>Acciones</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {servicioTarifas.map((t) => {
+                            const esCliente = t.cliente_tipo === "CLIENTE";
+                            return (
+                              <tr key={t.id} style={{ borderBottom: "1px solid var(--c-border)", opacity: t.is_active ? 1 : 0.5 }}>
+                                <td style={{ padding: "6px 8px" }}>
+                                  <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 4, padding: "1px 6px", marginRight: 6,
+                                    background: esCliente ? "#fef3c7" : "#dbeafe", color: esCliente ? "#b45309" : "#1d4ed8" }}>
+                                    {esCliente ? "Tercero" : "Socio"}
+                                  </span>
+                                  <strong>{t.cliente_nombre ?? t.socio_name}</strong>
+                                  {!t.is_active && <span className="muted" style={{ fontSize: 11 }}> · inactiva</span>}
+                                </td>
+                                <td style={{ padding: "6px 8px" }}>
+                                  <span style={{ fontSize: 11, fontWeight: 600, borderRadius: 4, padding: "2px 8px", background: "#ecfdf5", color: "#15803d" }}>{t.servicio}</span>
+                                </td>
+                                <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700 }}>${Number(t.precio_por_qq).toFixed(2)}</td>
+                                <td style={{ padding: "6px 8px", color: "var(--c-muted)" }}>{(t.fecha_vigencia || "").slice(0, 10)}</td>
+                                <td style={{ padding: "6px 8px", textAlign: "right", whiteSpace: "nowrap" }}>
+                                  <button type="button" disabled={!isAdmin} onClick={() => startEditTarifa(t)}
+                                    style={{ background: "none", border: "1px solid #93c5fd", color: "#1d4ed8", borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontSize: 12, marginRight: 6 }}>✏️ Editar</button>
+                                  <button type="button" className="equipDelBtn" disabled={!isAdmin} onClick={() => toggleServicioTarifa(t)}>{t.is_active ? "Desactivar" : "Activar"}</button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
                 {/* ── Tarifas de empaque / uso de sacos (Matriz → Socios) ── */}
                 <div className="formPanel">
