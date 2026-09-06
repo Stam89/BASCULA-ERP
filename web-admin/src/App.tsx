@@ -9482,12 +9482,15 @@ export function App() {
                 );
                 return (
                   <div className="modalOverlay" onClick={() => setGanaModalId(null)}>
-                    <div className="modalCard formPanel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 780, width: "100%", maxHeight: "92vh", overflowY: "auto" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 4 }}>
-                        <h3 style={{ margin: 0 }}>🏆 Liquidación · {item.lot_code}</h3>
+                    <div className="modalCard formPanel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: "min(1200px, 95vw)", width: "95vw", maxHeight: "92vh", padding: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                      {/* Encabezado FIJO (siempre visible) */}
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, padding: "14px 18px", borderBottom: "1px solid var(--c-border)", flexShrink: 0 }}>
+                        <h3 style={{ margin: 0 }}>🏆 Liquidación · {item.lot_code} <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· {new Date(item.finished_at).toLocaleDateString("es-EC")}</span></h3>
                         <button type="button" onClick={() => setGanaModalId(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--c-muted)" }}>✕</button>
                       </div>
 
+                      {/* Cuerpo con SCROLL interno (x/y): el modal no se sale de la pantalla */}
+                      <div style={{ flex: 1, overflow: "auto", padding: 16 }}>
                       {/* Bloque capturable para compartir por WhatsApp (html2canvas). */}
                       <div ref={ganaTablaRef} style={{ background: "#fff", padding: 12, borderRadius: 8 }}>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
@@ -9604,9 +9607,10 @@ export function App() {
                           </p>
                         )}
                       </div>
+                      </div>{/* /cuerpo con scroll */}
 
-                      {/* Acciones del modal */}
-                      <div className="buttonRow" style={{ marginTop: 12, justifyContent: "space-between" }}>
+                      {/* Pie FIJO (siempre visible) */}
+                      <div className="buttonRow" style={{ margin: 0, padding: "12px 18px", borderTop: "1px solid var(--c-border)", flexShrink: 0, justifyContent: "space-between" }}>
                         <button type="button" onClick={() => setGanaModalId(null)}>Cerrar</button>
                         <button type="button" disabled={ganaCompartiendo}
                           onClick={() => compartirGanaWhatsApp(item, resumen)}
