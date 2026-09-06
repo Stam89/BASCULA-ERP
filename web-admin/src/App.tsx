@@ -1,4 +1,5 @@
 import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import html2canvas from "html2canvas";
 import { apiFetch, apiGet, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId } from "./api";
 import { money, categoryLabel, stockGroupLabel } from "./format";
 import type { Farmer, Product, Warehouse, Lot, MateriaPrimaEntry, MateriaPrimaCorreccion, PendingEntry } from "./types";
@@ -817,6 +818,8 @@ type ProductionHistoryItem = {
   precio_venta_bran?: string | number | null;
   /** Tarifa GLOBAL de Servicio de Pilada (Configuración → Tarifas · pilador_per_qq). */
   pilada_rate_per_qq?: string | number | null;
+  /** Cuadro «Gana» ya compartido por WhatsApp (tarjeta verde + distintivo). */
+  compartido_whatsapp?: boolean;
   /** Partidas de cáscara que formaron el lote, con su precio de compra (liquidación). */
   entradas?: Array<{
     weighing_ticket_id: string | null;
@@ -1333,6 +1336,10 @@ export function App() {
   const [productionHistoryOpen, setProductionHistoryOpen] = useState(false);
   // Precio de venta editable por lote en «Gana» (borrador de UI antes de guardar).
   const [ganaPrecioVenta, setGanaPrecioVenta] = useState<Record<string, string>>({});
+  // Modal de liquidación «Gana»: id del lote abierto (null = cerrado).
+  const [ganaModalId, setGanaModalId] = useState<string | null>(null);
+  const ganaTablaRef = useRef<HTMLDivElement | null>(null);
+  const [ganaCompartiendo, setGanaCompartiendo] = useState(false);
   const [productionPackages, setProductionPackages] = useState<ProductionPackageState>(defaultProductionPackages);
   const [orderPackage, setOrderPackage] = useState<OrderPackageState>(defaultOrderPackage);
   const [weighingRiceType, setWeighingRiceType] = useState<"0.11" | "CORRIENTE">("0.11");
@@ -1495,6 +1502,47 @@ export function App() {
   const tarifaPiladaGlobal = Number(
     productionHistory.find((h) => !h.is_service && h.pilada_rate_per_qq != null)?.pilada_rate_per_qq ?? 0
   );
+  // Cálculos base de un lote «Gana» (compartidos por la tarjeta y el modal).
+  const ganaCalc = (item: ProductionHistoryItem) => {
+    const KG_QQ = 45.359237;
+    const snap = item.rendimiento_snapshot ?? null;
+    const entradas = item.entradas ?? [];
+    const entrada = entradas.length
+      ? entradas.reduce((s, p) => s + Number(p.quintals || 0), 0)
+      : (snap ? Number(snap.entrada_cascara_qq) : Number(item.input_paddy_kg ?? 0) / KG_QQ);
+    const costoCascara = entradas.reduce((s, p) => s + (p.price_per_quintal != null ? Number(p.quintals || 0) * Number(p.price_per_quintal) : 0), 0);
+    const blanco = Number(item.white_rice_qty ?? 0);
+    const broken = Number(item.broken_rice_qty ?? 0);
+    const fino = Number(item.fine_broken_rice_qty ?? 0);
+    const arrocillos = broken + fino;
+    const polvillo = Number(item.bran_qty ?? 0);
+    const tula = Number(item.qq_de_tulas ?? snap?.arroz_blanco.tula_qq ?? 0);
+    const saco = Math.max(0, blanco - tula);
+    // % Arroz Blanco (excedente): ((QQ Blanco − QQ Cáscara)/QQ Cáscara)×100, truncado 2 dec.
+    const blancoExcedentePct = entrada > 0 ? ((blanco - entrada) / entrada) * 100 : 0;
+    const blancoExcedenteStr = (Math.trunc(blancoExcedentePct * 100) / 100).toFixed(2);
+    // % Subproductos = (QQ subproducto / Total QQ Cáscara) × 100.
+    const subPct = (x: number) => (entrada > 0 ? (x / entrada) * 100 : 0);
+    // Costo Prod. (pilada) por QQ de cáscara = (QQ Blanco × Tarifa PILADO socio)/QQ Cáscara.
+    const precioPilada = Number(item.pilada_rate_per_qq ?? tarifaPiladaGlobal) || 0;
+    const costoProdUnit = entrada > 0 ? (blanco * precioPilada) / entrada : 0;
+    const costoProdTotal = entrada * costoProdUnit;
+    const precioStr = (prod: "blanco" | "broken" | "fine" | "bran", stored: string | number | null | undefined) =>
+      ganaPrecioVenta[`${item.id}:${prod}`] ?? (stored != null ? String(Number(stored)) : "");
+    const pBlancoStr = precioStr("blanco", item.precio_venta_blanco);
+    const pBrokenStr = precioStr("broken", item.precio_venta_broken);
+    const pFineStr = precioStr("fine", item.precio_venta_fine);
+    const pBranStr = precioStr("bran", item.precio_venta_bran);
+    const pBlanco = Number(pBlancoStr) || 0, pBroken = Number(pBrokenStr) || 0, pFine = Number(pFineStr) || 0, pBran = Number(pBranStr) || 0;
+    const ingBlanco = blanco * pBlanco, ingBroken = broken * pBroken, ingFine = fino * pFine, ingBran = polvillo * pBran;
+    const ingresoTotal = ingBlanco + ingBroken + ingFine + ingBran;
+    const utilidad = ingresoTotal - costoCascara;
+    const totalCascaraSeccion = costoCascara + costoProdTotal;
+    return { entradas, entrada, costoCascara, blanco, broken, fino, arrocillos, polvillo, tula, saco,
+      blancoExcedentePct, blancoExcedenteStr, subPct, precioPilada, costoProdUnit, costoProdTotal,
+      pBlancoStr, pBrokenStr, pFineStr, pBranStr, pBlanco, pBroken, pFine, pBran,
+      ingresoTotal, utilidad, totalCascaraSeccion };
+  };
   // Tarifas de empaque / uso de sacos que la MATRIZ cobra a los socios al despachar.
   const [packagingRatesForm, setPackagingRatesForm] = useState({ precio_saco_10lb: 0, precio_saco_25lb: 0, precio_saco_50lb: 0 });
 
@@ -6177,6 +6225,48 @@ export function App() {
     }
   }
 
+  // Marca el cuadro «Gana» de un lote como compartido por WhatsApp (tarjeta verde).
+  async function marcarGanaWhatsApp(batchId: string) {
+    await apiFetch(`/processing-batches/${batchId}/gana-whatsapp`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ compartido: true })
+    }).then((r) => { if (!r.ok) throw new Error("No se pudo marcar como compartido"); });
+    setProductionHistory((cur) => cur.map((it) => it.id === batchId ? { ...it, compartido_whatsapp: true } : it));
+  }
+
+  // Captura la tabla de liquidación como imagen (html2canvas) y la comparte por
+  // WhatsApp. Si el navegador soporta Web Share con archivos (contexto seguro), la
+  // envía; si no, descarga la imagen y abre WhatsApp con un resumen. Al éxito,
+  // marca compartido_whatsapp = true en la BD.
+  async function compartirGanaWhatsApp(item: ProductionHistoryItem, resumen: string) {
+    const el = ganaTablaRef.current;
+    if (!el) return;
+    setGanaCompartiendo(true);
+    try {
+      const canvas = await html2canvas(el, { backgroundColor: "#ffffff", scale: 2, useCORS: true });
+      const blob: Blob | null = await new Promise((res) => canvas.toBlob((b) => res(b), "image/png"));
+      if (!blob) throw new Error("No se pudo generar la imagen");
+      const file = new File([blob], `liquidacion-${item.lot_code ?? "lote"}.png`, { type: "image/png" });
+      const texto = `📊 Liquidación de Pilado — ${item.lot_code ?? ""}\n${resumen}`;
+      const nav = navigator as Navigator & { canShare?: (d: unknown) => boolean };
+      if (nav.canShare && nav.canShare({ files: [file] }) && navigator.share) {
+        await navigator.share({ files: [file], title: "Liquidación de Pilado", text: texto });
+      } else {
+        // Fallback (LAN/HTTP sin contexto seguro): descarga la imagen + abre WhatsApp.
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a"); a.href = url; a.download = file.name; document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+        window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, "_blank");
+      }
+      await marcarGanaWhatsApp(item.id);
+      addToast("Compartido por WhatsApp ✅", "success");
+    } catch (err) {
+      if ((err as Error)?.name === "AbortError") return; // el usuario canceló el share
+      addToast(err instanceof Error ? err.message : "No se pudo compartir", "error");
+    } finally {
+      setGanaCompartiendo(false);
+    }
+  }
+
   // Al elegir una secadora, trae su proceso guardado (si lo hay).
   async function loadDraftFor(dryingId: string) {
     if (!dryingId) {
@@ -9329,194 +9419,202 @@ export function App() {
                 if (lotes.length === 0) {
                   return <p className="tableEmpty" style={{ marginTop: 16 }}>Aún no hay lotes finalizados para este accionista. Al finalizar un lote en Producción, su cuadro aparece aquí.</p>;
                 }
-                const KG_QQ = 45.359237;
-                const n2 = (v: number) => Number(v).toFixed(2);
-                const p1 = (v: number) => `${Number(v).toFixed(1)}%`;
+                // Vista principal: LISTA DE TARJETAS de resumen. El detalle financiero
+                // (tabla completa) se abre en un modal con [👁️ Ver Liquidación].
                 return (
-                  <div style={{ display: "grid", gap: 14, marginTop: 14 }}>
+                  <div style={{ display: "grid", gap: 12, marginTop: 14, gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
                     {lotes.map((item) => {
-                      const snap = item.rendimiento_snapshot ?? null;
-                      // Partidas de cáscara (cada secadora/ticket) con su QQ CALIFICADO
-                      // real y su precio de compra (liquidación). La cáscara de entrada
-                      // = SUMA de estas partidas (corrige el arrastre de datos). Si no
-                      // hay partidas (lotes viejos), cae al snapshot/input.
-                      const entradas = item.entradas ?? [];
-                      const entrada = entradas.length
-                        ? entradas.reduce((s, p) => s + Number(p.quintals || 0), 0)
-                        : (snap ? Number(snap.entrada_cascara_qq) : Number(item.input_paddy_kg ?? 0) / KG_QQ);
-                      const costoCascara = entradas.reduce((s, p) => s + (p.price_per_quintal != null ? Number(p.quintals || 0) * Number(p.price_per_quintal) : 0), 0);
-                      const blanco = Number(item.white_rice_qty ?? 0);
-                      const broken = Number(item.broken_rice_qty ?? 0);
-                      const fino = Number(item.fine_broken_rice_qty ?? 0);
-                      const arrocillos = broken + fino;
-                      const polvillo = Number(item.bran_qty ?? 0);
-                      const tula = Number(item.qq_de_tulas ?? snap?.arroz_blanco.tula_qq ?? 0);
-                      const saco = Math.max(0, blanco - tula);
-                      // % Arroz Blanco (Medición de Excedente/Crecimiento del Excel del
-                      // cliente): ((QQ Blanco − QQ Cáscara Entrada) / QQ Cáscara Entrada)×100.
-                      // Se TRUNCA a 2 decimales como en su Excel (no se redondea):
-                      // (135 − 122.10) / 122.10 × 100 = 10.5651… → 10.56%.
-                      const blancoExcedentePct = entrada > 0 ? ((blanco - entrada) / entrada) * 100 : 0;
-                      const blancoExcedenteStr = (Math.trunc(blancoExcedentePct * 100) / 100).toFixed(2);
-                      // Costo de producción (pilada) por QQ de cáscara, constante en el lote:
-                      // (Total QQ Arroz Blanco × Tarifa GLOBAL de Pilada) / Total QQ Cáscara.
-                      // La tarifa viene de Configuración → Tarifas (backend), NO de un input.
-                      const precioPilada = Number(item.pilada_rate_per_qq ?? tarifaPiladaGlobal) || 0;
-                      const costoProdUnit = entrada > 0 ? (blanco * precioPilada) / entrada : 0;
-                      // Costo total de pilada del lote = Σ (QQ secadora × costoProdUnit).
-                      const costoProdTotal = entrada * costoProdUnit;
-                      // Precio de VENTA manual POR PRODUCTO de salida (borrador de UI, o
-                      // el guardado). Total ($) = QQ del producto × su precio unitario.
-                      const precioStr = (prod: "blanco" | "broken" | "fine" | "bran", stored: string | number | null | undefined) =>
-                        ganaPrecioVenta[`${item.id}:${prod}`] ?? (stored != null ? String(Number(stored)) : "");
-                      const pBlancoStr = precioStr("blanco", item.precio_venta_blanco);
-                      const pBrokenStr = precioStr("broken", item.precio_venta_broken);
-                      const pFineStr = precioStr("fine", item.precio_venta_fine);
-                      const pBranStr = precioStr("bran", item.precio_venta_bran);
-                      const pBlanco = Number(pBlancoStr) || 0, pBroken = Number(pBrokenStr) || 0, pFine = Number(pFineStr) || 0, pBran = Number(pBranStr) || 0;
-                      const ingBlanco = blanco * pBlanco, ingBroken = broken * pBroken, ingFine = fino * pFine, ingBran = polvillo * pBran;
-                      // Ingreso Total Proyectado = Σ de los totales de los productos de salida.
-                      const ingresoTotal = ingBlanco + ingBroken + ingFine + ingBran;
-                      const utilidad = ingresoTotal - costoCascara;
-                      const dcell = { padding: "6px 10px", textAlign: "right" as const };
-                      // Celdas [Precio Unit. editable | Costo Prod. | Total ($)] para un
-                      // producto de salida. Costo Prod. solo aplica a la cáscara → "—".
-                      const precioTds = (prod: "blanco" | "broken" | "fine" | "bran", str: string, qq: number, pnum: number) => (
-                        <>
-                          <td style={dcell}>
-                            <input type="number" min="0" step="0.01" placeholder="Precio"
-                              value={str}
-                              onChange={(e) => setGanaPrecioVenta((cur) => ({ ...cur, [`${item.id}:${prod}`]: e.target.value }))}
-                              onBlur={(e) => saveGanaPrecioVenta(item.id, prod, e.target.value).catch(() => undefined)}
-                              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-                              title="Precio de venta por QQ (editable, se guarda en la BD)"
-                              style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #86efac", textAlign: "right", fontSize: 12 }} />
-                          </td>
-                          <td style={{ ...dcell, color: "var(--c-muted)" }}>—</td>
-                          <td style={{ ...dcell, fontWeight: 700, color: "#15803d" }}>{pnum > 0 ? money(qq * pnum) : "—"}</td>
-                        </>
-                      );
+                      const c = ganaCalc(item);
+                      const enviado = !!item.compartido_whatsapp;
                       return (
-                        <article key={item.id} style={{ border: "1px solid var(--c-border)", borderRadius: 10, padding: 14 }}>
-                          <header style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
-                            <strong style={{ fontSize: 15 }}>{item.lot_code}{item.rice_type ? ` · ${item.rice_type}` : ""}</strong>
-                            <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                              <span title="% Arroz Blanco (excedente/crecimiento): ((QQ Blanco − QQ Cáscara) / QQ Cáscara) × 100"
-                                style={{ fontSize: 12, fontWeight: 700, color: blancoExcedentePct >= 0 ? "#15803d" : "#b91c1c", background: blancoExcedentePct >= 0 ? "#dcfce7" : "#fee2e2", borderRadius: 6, padding: "3px 10px" }}>
-                                % Arroz Blanco: {blancoExcedenteStr}%
-                              </span>
-                              <span className="muted">{new Date(item.finished_at).toLocaleString("es-EC")}</span>
-                            </span>
+                        <article key={item.id} style={{ border: `1px solid ${enviado ? "#86efac" : "var(--c-border)"}`, borderRadius: 10, padding: 14, background: enviado ? "#f0fdf4" : "var(--c-surface)" }}>
+                          <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
+                            <strong style={{ fontSize: 14 }}>{item.lot_code}{item.rice_type ? ` · ${item.rice_type}` : ""}</strong>
+                            {enviado
+                              ? <span title="Compartido por WhatsApp" style={{ fontSize: 11, fontWeight: 700, color: "#15803d", background: "#dcfce7", borderRadius: 6, padding: "2px 8px", whiteSpace: "nowrap" }}>✅ Enviado</span>
+                              : <span style={{ fontSize: 11, color: "var(--c-muted)" }}>Sin enviar</span>}
                           </header>
-                          <div style={{ overflowX: "auto" }}>
-                            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 620 }}>
-                              <thead>
-                                <tr style={{ background: "#15803d", color: "#fff" }}>
-                                  <th style={{ padding: "6px 10px", textAlign: "left", color: "#fff" }}>Concepto</th>
-                                  <th style={{ ...dcell, color: "#fff" }}>QQ</th>
-                                  <th style={{ ...dcell, color: "#fff" }}>Precio Unit.</th>
-                                  <th style={{ ...dcell, color: "#fff" }}>Costo Prod.</th>
-                                  <th style={{ ...dcell, color: "#fff" }}>Total ($)</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {/* ── COSTO · Cáscara de entrada desglosada por partida ── */}
-                                <tr style={{ background: "#f9fafb" }}>
-                                  <td colSpan={5} style={{ padding: "5px 10px", fontWeight: 700, fontSize: 12, color: "#b45309" }}>💵 COSTO · Cáscara de Entrada (por secadora/lote)</td>
-                                </tr>
-                                {entradas.length === 0 && (
-                                  <tr style={{ borderBottom: "1px solid var(--c-border)" }}>
-                                    <td colSpan={5} style={{ padding: "6px 10px", color: "var(--c-muted)", fontStyle: "italic" }}>Sin partidas registradas (lote previo a esta versión); total tomado del rendimiento.</td>
-                                  </tr>
-                                )}
-                                {entradas.map((p, idx) => {
-                                  const qq = Number(p.quintals || 0);
-                                  const precio = p.price_per_quintal != null ? Number(p.price_per_quintal) : null;
-                                  const etq = p.numero_bascula ? `Ticket #${p.numero_bascula}` : (p.ticket_number ?? p.lot_code ?? "Partida");
-                                  // Total ($) de la cáscara = (Precio Unitario compra + Costo Prod.) × QQ de la fila.
-                                  const costoUnitFila = (precio ?? 0) + costoProdUnit;
-                                  const totalFila = costoUnitFila * qq;
-                                  const tieneValor = precio != null || costoProdUnit > 0;
-                                  return (
-                                    <tr key={p.weighing_ticket_id ?? idx} style={{ borderBottom: "1px solid var(--c-border)" }}>
-                                      <td style={{ padding: "6px 10px 6px 22px" }}>· {p.farmer_name ?? "Sin agricultor"} <span className="muted">· {etq}</span></td>
-                                      <td style={dcell}>{n2(qq)}</td>
-                                      <td style={dcell}>{precio != null ? `$${precio.toFixed(2)}` : <span className="muted" title="Aún no liquidado">— pend.</span>}</td>
-                                      <td style={dcell}>{costoProdUnit > 0 ? `$${costoProdUnit.toFixed(4)}` : <span className="muted" title="Define la Tarifa de Pilada en Configuración → Tarifas">—</span>}</td>
-                                      <td style={dcell}>{tieneValor ? money(totalFila) : "—"}</td>
-                                    </tr>
-                                  );
-                                })}
-                                <tr style={{ borderBottom: "2px solid var(--c-border)" }}>
-                                  <td style={{ padding: "6px 10px", fontWeight: 700 }}>Cáscara de Entrada (total)</td>
-                                  <td style={{ ...dcell, fontWeight: 700 }}>{n2(entrada)}</td>
-                                  <td style={dcell}></td>
-                                  <td style={{ ...dcell, fontWeight: 700 }}>{costoProdUnit > 0 ? `$${costoProdUnit.toFixed(4)}` : "—"}</td>
-                                  <td style={{ ...dcell, fontWeight: 700, color: "#b45309" }}>{(costoCascara > 0 || costoProdUnit > 0) ? money(costoCascara + costoProdTotal) : "—"}</td>
-                                </tr>
-
-                                {/* ── INGRESO · Productos de salida con precio de venta editable c/u.
-                                        Total ($) = QQ del producto × su precio unitario. ── */}
-                                <tr style={{ background: "#f9fafb" }}>
-                                  <td colSpan={5} style={{ padding: "5px 10px", fontWeight: 700, fontSize: 12, color: "#15803d" }}>🌾 INGRESO · Productos terminados (precio de venta por QQ)</td>
-                                </tr>
-                                <tr style={{ background: "#f0fdf4" }}>
-                                  <td style={{ padding: "6px 10px", fontWeight: 700, color: "#15803d" }}>Arroz Blanco <span className="muted" style={{ fontWeight: 400 }}>(Tulas {n2(tula)} + Sacos {n2(saco)})</span></td>
-                                  <td style={{ ...dcell, fontWeight: 700, color: "#15803d" }}>{n2(blanco)}</td>
-                                  {precioTds("blanco", pBlancoStr, blanco, pBlanco)}
-                                </tr>
-                                <tr style={{ borderBottom: "1px solid var(--c-border)" }}>
-                                  <td style={{ padding: "6px 10px" }}>Arrocillo 3/4</td>
-                                  <td style={dcell}>{n2(broken)}</td>
-                                  {precioTds("broken", pBrokenStr, broken, pBroken)}
-                                </tr>
-                                <tr style={{ borderBottom: "1px solid var(--c-border)" }}>
-                                  <td style={{ padding: "6px 10px" }}>Arrocillo Fino</td>
-                                  <td style={dcell}>{n2(fino)}</td>
-                                  {precioTds("fine", pFineStr, fino, pFine)}
-                                </tr>
-                                <tr style={{ borderBottom: "1px solid var(--c-border)" }}>
-                                  <td style={{ padding: "6px 10px" }}>Polvillo</td>
-                                  <td style={dcell}>{n2(polvillo)}</td>
-                                  {precioTds("bran", pBranStr, polvillo, pBran)}
-                                </tr>
-                                {/* Ingreso total proyectado = Σ Total ($) de los productos. */}
-                                <tr style={{ borderTop: "2px solid var(--c-border)", background: "#ecfdf5" }}>
-                                  <td style={{ padding: "6px 10px", fontWeight: 800, color: "#15803d" }} colSpan={4}>INGRESO TOTAL PROYECTADO</td>
-                                  <td style={{ ...dcell, fontWeight: 800, color: "#15803d" }}>{ingresoTotal > 0 ? money(ingresoTotal) : "—"}</td>
-                                </tr>
-                                <tr>
-                                  <td style={{ padding: "6px 10px", color: "var(--c-muted)" }}>Merma / diferencia</td>
-                                  <td style={{ ...dcell, color: "var(--c-muted)" }}>{n2(Math.max(0, entrada - blanco - arrocillos - polvillo))}</td>
-                                  <td style={dcell}></td><td style={dcell}></td><td style={dcell}></td>
-                                </tr>
-                              </tbody>
-                            </table>
-                          </div>
-
-                          {/* Resumen de rentabilidad proyectada del lote. */}
-                          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 10 }}>
-                            <div style={{ flex: "1 1 150px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 12px" }}>
-                              <div style={{ fontSize: 11, color: "#b45309", fontWeight: 700 }}>Costo cáscara</div>
-                              <div style={{ fontSize: 16, fontWeight: 800, color: "#b45309" }}>{money(costoCascara)}</div>
+                          <p className="muted" style={{ margin: "0 0 8px", fontSize: 12 }}>{new Date(item.finished_at).toLocaleString("es-EC")}</p>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+                            <div style={{ background: "#fffbeb", borderRadius: 8, padding: "6px 10px" }}>
+                              <div style={{ fontSize: 10, color: "#b45309", fontWeight: 700 }}>TOTAL CÁSCARA</div>
+                              <div style={{ fontSize: 15, fontWeight: 800, color: "#b45309" }}>{(c.costoCascara > 0 || c.costoProdUnit > 0) ? money(c.totalCascaraSeccion) : "—"}</div>
                             </div>
-                            <div style={{ flex: "1 1 150px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "8px 12px" }}>
-                              <div style={{ fontSize: 11, color: "#15803d", fontWeight: 700 }}>Ingreso total proyectado</div>
-                              <div style={{ fontSize: 16, fontWeight: 800, color: "#15803d" }}>{ingresoTotal > 0 ? money(ingresoTotal) : "—"}</div>
-                            </div>
-                            <div style={{ flex: "1 1 150px", background: utilidad >= 0 ? "#eff6ff" : "#fef2f2", border: `1px solid ${utilidad >= 0 ? "#bfdbfe" : "#fecaca"}`, borderRadius: 8, padding: "8px 12px" }}>
-                              <div style={{ fontSize: 11, color: utilidad >= 0 ? "#1d4ed8" : "#b91c1c", fontWeight: 700 }}>Utilidad proyectada</div>
-                              <div style={{ fontSize: 16, fontWeight: 800, color: utilidad >= 0 ? "#1d4ed8" : "#b91c1c" }}>{ingresoTotal > 0 ? money(utilidad) : "—"}</div>
+                            <div style={{ background: c.utilidad >= 0 ? "#eff6ff" : "#fef2f2", borderRadius: 8, padding: "6px 10px" }}>
+                              <div style={{ fontSize: 10, fontWeight: 700, color: c.utilidad >= 0 ? "#1d4ed8" : "#b91c1c" }}>UTILIDAD PROY.</div>
+                              <div style={{ fontSize: 15, fontWeight: 800, color: c.utilidad >= 0 ? "#1d4ed8" : "#b91c1c" }}>{c.ingresoTotal > 0 ? money(c.utilidad) : "—"}</div>
                             </div>
                           </div>
-                          {(item.pilador_name || item.estibador_name) && (
-                            <p className="muted" style={{ margin: "8px 0 0", fontSize: 12 }}>
-                              Pilador: {item.pilador_name ?? "—"} · Estibador: {item.estibador_name ?? "—"}
-                            </p>
-                          )}
+                          <button type="button" onClick={() => setGanaModalId(item.id)}
+                            style={{ width: "100%", padding: "8px 0", borderRadius: 8, border: "none", cursor: "pointer", fontWeight: 700, fontSize: 13, background: "#15803d", color: "#fff" }}>
+                            👁️ Ver Liquidación
+                          </button>
                         </article>
                       );
                     })}
+                  </div>
+                );
+              })()}
+
+              {/* ── MODAL: liquidación detallada del lote (tabla financiera) ── */}
+              {ganaModalId && (() => {
+                const item = productionHistory.find((h) => h.id === ganaModalId);
+                if (!item) return null;
+                const c = ganaCalc(item);
+                const n2 = (v: number) => Number(v).toFixed(2);
+                const p1 = (v: number) => `${Number(v).toFixed(1)}%`;
+                const dcell = { padding: "6px 10px", textAlign: "right" as const };
+                const resumen = `Total cáscara: ${money(c.totalCascaraSeccion)}\nIngreso proyectado: ${money(c.ingresoTotal)}\nUtilidad proyectada: ${money(c.utilidad)}\n% Arroz Blanco: ${c.blancoExcedenteStr}%`;
+                // Celdas [Precio Unit. editable | Costo Prod. (—) | Total ($)] de un producto.
+                const precioTds = (prod: "blanco" | "broken" | "fine" | "bran", str: string, qq: number, pnum: number) => (
+                  <>
+                    <td style={dcell}>
+                      <input type="number" min="0" step="0.01" placeholder="Precio" value={str}
+                        onChange={(e) => setGanaPrecioVenta((cur) => ({ ...cur, [`${item.id}:${prod}`]: e.target.value }))}
+                        onBlur={(e) => saveGanaPrecioVenta(item.id, prod, e.target.value).catch(() => undefined)}
+                        onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                        title="Precio de venta por QQ (editable, se guarda en la BD)"
+                        style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #86efac", textAlign: "right", fontSize: 12 }} />
+                    </td>
+                    <td style={{ ...dcell, color: "var(--c-muted)" }}>—</td>
+                    <td style={{ ...dcell, fontWeight: 700, color: "#15803d" }}>{pnum > 0 ? money(qq * pnum) : "—"}</td>
+                  </>
+                );
+                return (
+                  <div className="modalOverlay" onClick={() => setGanaModalId(null)}>
+                    <div className="modalCard formPanel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 780, width: "100%", maxHeight: "92vh", overflowY: "auto" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 4 }}>
+                        <h3 style={{ margin: 0 }}>🏆 Liquidación · {item.lot_code}</h3>
+                        <button type="button" onClick={() => setGanaModalId(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--c-muted)" }}>✕</button>
+                      </div>
+
+                      {/* Bloque capturable para compartir por WhatsApp (html2canvas). */}
+                      <div ref={ganaTablaRef} style={{ background: "#fff", padding: 12, borderRadius: 8 }}>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+                          <strong style={{ fontSize: 15 }}>{item.lot_code}{item.rice_type ? ` · ${item.rice_type}` : ""}</strong>
+                          <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                            <span title="% Arroz Blanco (excedente): ((QQ Blanco − QQ Cáscara)/QQ Cáscara)×100"
+                              style={{ fontSize: 12, fontWeight: 700, color: c.blancoExcedentePct >= 0 ? "#15803d" : "#b91c1c", background: c.blancoExcedentePct >= 0 ? "#dcfce7" : "#fee2e2", borderRadius: 6, padding: "3px 10px" }}>
+                              % Arroz Blanco: {c.blancoExcedenteStr}%
+                            </span>
+                            <span className="muted">{new Date(item.finished_at).toLocaleString("es-EC")}</span>
+                          </span>
+                        </div>
+                        <div style={{ overflowX: "auto" }}>
+                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 620 }}>
+                            <thead>
+                              <tr style={{ background: "#15803d", color: "#fff" }}>
+                                <th style={{ padding: "6px 10px", textAlign: "left", color: "#fff" }}>Concepto</th>
+                                <th style={{ ...dcell, color: "#fff" }}>QQ</th>
+                                <th style={{ ...dcell, color: "#fff" }}>Precio Unit.</th>
+                                <th style={{ ...dcell, color: "#fff" }}>Costo Prod.</th>
+                                <th style={{ ...dcell, color: "#fff" }}>Total ($)</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {/* ── COSTO · Cáscara de entrada por partida ── */}
+                              <tr style={{ background: "#f9fafb" }}>
+                                <td colSpan={5} style={{ padding: "5px 10px", fontWeight: 700, fontSize: 12, color: "#b45309" }}>💵 COSTO · Cáscara de Entrada (por secadora/lote)</td>
+                              </tr>
+                              {c.entradas.length === 0 && (
+                                <tr style={{ borderBottom: "1px solid var(--c-border)" }}>
+                                  <td colSpan={5} style={{ padding: "6px 10px", color: "var(--c-muted)", fontStyle: "italic" }}>Sin partidas registradas (lote previo a esta versión); total tomado del rendimiento.</td>
+                                </tr>
+                              )}
+                              {c.entradas.map((p, idx) => {
+                                const qq = Number(p.quintals || 0);
+                                const precio = p.price_per_quintal != null ? Number(p.price_per_quintal) : null;
+                                const etq = p.numero_bascula ? `Ticket #${p.numero_bascula}` : (p.ticket_number ?? p.lot_code ?? "Partida");
+                                // Total ($) = (Precio Unitario de Compra + Costo Prod.) × QQ de la fila.
+                                const totalFila = ((precio ?? 0) + c.costoProdUnit) * qq;
+                                const tieneValor = precio != null || c.costoProdUnit > 0;
+                                return (
+                                  <tr key={p.weighing_ticket_id ?? idx} style={{ borderBottom: "1px solid var(--c-border)" }}>
+                                    <td style={{ padding: "6px 10px 6px 22px" }}>· {p.farmer_name ?? "Sin agricultor"} <span className="muted">· {etq}</span></td>
+                                    <td style={dcell}>{n2(qq)}</td>
+                                    <td style={dcell}>{precio != null ? `$${precio.toFixed(2)}` : <span className="muted" title="Aún no liquidado">— pend.</span>}</td>
+                                    <td style={dcell}>{c.costoProdUnit > 0 ? `$${c.costoProdUnit.toFixed(4)}` : <span className="muted" title="Define la Tarifa de Pilado del socio en Configuración → Tarifas">—</span>}</td>
+                                    <td style={dcell}>{tieneValor ? money(totalFila) : "—"}</td>
+                                  </tr>
+                                );
+                              })}
+                              <tr style={{ borderBottom: "2px solid var(--c-border)" }}>
+                                <td style={{ padding: "6px 10px", fontWeight: 700 }}>Cáscara de Entrada (total)</td>
+                                <td style={{ ...dcell, fontWeight: 700 }}>{n2(c.entrada)}</td>
+                                <td style={dcell}></td>
+                                <td style={{ ...dcell, fontWeight: 700 }}>{c.costoProdUnit > 0 ? `$${c.costoProdUnit.toFixed(4)}` : "—"}</td>
+                                <td style={{ ...dcell, fontWeight: 700, color: "#b45309" }}>{(c.costoCascara > 0 || c.costoProdUnit > 0) ? money(c.totalCascaraSeccion) : "—"}</td>
+                              </tr>
+
+                              {/* ── INGRESO · Productos terminados (Total = QQ × Precio venta) ── */}
+                              <tr style={{ background: "#f9fafb" }}>
+                                <td colSpan={5} style={{ padding: "5px 10px", fontWeight: 700, fontSize: 12, color: "#15803d" }}>🌾 INGRESO · Productos terminados (precio de venta por QQ)</td>
+                              </tr>
+                              <tr style={{ background: "#f0fdf4" }}>
+                                <td style={{ padding: "6px 10px", fontWeight: 700, color: "#15803d" }}>Arroz Blanco <span className="muted" style={{ fontWeight: 400 }}>(Tulas {n2(c.tula)} + Sacos {n2(c.saco)}) · Rend. {c.blancoExcedenteStr}%</span></td>
+                                <td style={{ ...dcell, fontWeight: 700, color: "#15803d" }}>{n2(c.blanco)}</td>
+                                {precioTds("blanco", c.pBlancoStr, c.blanco, c.pBlanco)}
+                              </tr>
+                              <tr style={{ borderBottom: "1px solid var(--c-border)" }}>
+                                <td style={{ padding: "6px 10px" }}>Arrocillo 3/4 <span className="muted">· {p1(c.subPct(c.broken))} s/cáscara</span></td>
+                                <td style={dcell}>{n2(c.broken)}</td>
+                                {precioTds("broken", c.pBrokenStr, c.broken, c.pBroken)}
+                              </tr>
+                              <tr style={{ borderBottom: "1px solid var(--c-border)" }}>
+                                <td style={{ padding: "6px 10px" }}>Arrocillo Fino <span className="muted">· {p1(c.subPct(c.fino))} s/cáscara</span></td>
+                                <td style={dcell}>{n2(c.fino)}</td>
+                                {precioTds("fine", c.pFineStr, c.fino, c.pFine)}
+                              </tr>
+                              <tr style={{ borderBottom: "1px solid var(--c-border)" }}>
+                                <td style={{ padding: "6px 10px" }}>Polvillo <span className="muted">· {p1(c.subPct(c.polvillo))} s/cáscara</span></td>
+                                <td style={dcell}>{n2(c.polvillo)}</td>
+                                {precioTds("bran", c.pBranStr, c.polvillo, c.pBran)}
+                              </tr>
+                              <tr style={{ borderTop: "2px solid var(--c-border)", background: "#ecfdf5" }}>
+                                <td style={{ padding: "6px 10px", fontWeight: 800, color: "#15803d" }} colSpan={4}>INGRESO TOTAL PROYECTADO</td>
+                                <td style={{ ...dcell, fontWeight: 800, color: "#15803d" }}>{c.ingresoTotal > 0 ? money(c.ingresoTotal) : "—"}</td>
+                              </tr>
+                              <tr>
+                                <td style={{ padding: "6px 10px", color: "var(--c-muted)" }}>Merma / diferencia</td>
+                                <td style={{ ...dcell, color: "var(--c-muted)" }}>{n2(Math.max(0, c.entrada - c.blanco - c.arrocillos - c.polvillo))}</td>
+                                <td style={dcell}></td><td style={dcell}></td><td style={dcell}></td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {/* Resumen de rentabilidad proyectada. */}
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 10 }}>
+                          <div style={{ flex: "1 1 150px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 12px" }}>
+                            <div style={{ fontSize: 11, color: "#b45309", fontWeight: 700 }}>Costo cáscara (compra)</div>
+                            <div style={{ fontSize: 16, fontWeight: 800, color: "#b45309" }}>{money(c.costoCascara)}</div>
+                          </div>
+                          <div style={{ flex: "1 1 150px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "8px 12px" }}>
+                            <div style={{ fontSize: 11, color: "#15803d", fontWeight: 700 }}>Ingreso total proyectado</div>
+                            <div style={{ fontSize: 16, fontWeight: 800, color: "#15803d" }}>{c.ingresoTotal > 0 ? money(c.ingresoTotal) : "—"}</div>
+                          </div>
+                          <div style={{ flex: "1 1 150px", background: c.utilidad >= 0 ? "#eff6ff" : "#fef2f2", border: `1px solid ${c.utilidad >= 0 ? "#bfdbfe" : "#fecaca"}`, borderRadius: 8, padding: "8px 12px" }}>
+                            <div style={{ fontSize: 11, color: c.utilidad >= 0 ? "#1d4ed8" : "#b91c1c", fontWeight: 700 }}>Utilidad proyectada</div>
+                            <div style={{ fontSize: 16, fontWeight: 800, color: c.utilidad >= 0 ? "#1d4ed8" : "#b91c1c" }}>{c.ingresoTotal > 0 ? money(c.utilidad) : "—"}</div>
+                          </div>
+                        </div>
+                        {(item.pilador_name || item.estibador_name) && (
+                          <p className="muted" style={{ margin: "8px 0 0", fontSize: 12 }}>
+                            Pilador: {item.pilador_name ?? "—"} · Estibador: {item.estibador_name ?? "—"}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Acciones del modal */}
+                      <div className="buttonRow" style={{ marginTop: 12, justifyContent: "space-between" }}>
+                        <button type="button" onClick={() => setGanaModalId(null)}>Cerrar</button>
+                        <button type="button" disabled={ganaCompartiendo}
+                          onClick={() => compartirGanaWhatsApp(item, resumen)}
+                          style={{ background: "#25D366", color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", cursor: "pointer", fontWeight: 700, fontSize: 14 }}>
+                          {ganaCompartiendo ? "Generando imagen…" : (item.compartido_whatsapp ? "📱 Compartir de nuevo" : "📱 Compartir por WhatsApp")}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 );
               })()}

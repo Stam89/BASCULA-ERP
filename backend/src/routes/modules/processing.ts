@@ -92,6 +92,7 @@ processingRouter.get("/history", asyncRoute(async (req, res) => {
               y.precio_venta_broken,
               y.precio_venta_fine,
               y.precio_venta_bran,
+              COALESCE(y.compartido_whatsapp, false) AS compartido_whatsapp,
               COALESCE((
                 SELECT json_agg(json_build_object(
                          'presentation', po.presentation,
@@ -182,6 +183,28 @@ processingRouter.get("/history", asyncRoute(async (req, res) => {
     .slice(0, 100);
 
   res.json(rows);
+}));
+
+// Marca el cuadro «Gana» de un lote como compartido por WhatsApp (tarjeta verde).
+// Valida que el lote pertenezca al accionista activo.
+processingRouter.patch("/:id/gana-whatsapp", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const batchId = String(req.params.id);
+  const owner = await pool.query(
+    `SELECT l.accionista_id FROM processing_batches b JOIN lots l ON l.id = b.lot_id WHERE b.id = $1`,
+    [batchId]
+  );
+  if (!owner.rowCount) throw new ApiError(404, "Lote no encontrado");
+  if (accionistaId && owner.rows[0].accionista_id !== accionistaId) {
+    throw new ApiError(403, "Este lote no pertenece al accionista activo");
+  }
+  const shared = req.body?.compartido === false ? false : true;
+  const r = await pool.query(
+    `UPDATE production_yields SET compartido_whatsapp = $2 WHERE processing_batch_id = $1 RETURNING compartido_whatsapp`,
+    [batchId, shared]
+  );
+  if (!r.rowCount) throw new ApiError(404, "Este lote aún no tiene cuadro de rendimiento");
+  res.json({ ok: true, compartido_whatsapp: r.rows[0].compartido_whatsapp });
 }));
 
 processingRouter.get("/drafts/:dryingId", asyncRoute(async (req, res) => {
