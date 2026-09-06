@@ -1,6 +1,6 @@
 # PROJECT_CONTEXT — BASCULA-ERP
 
-> Memoria compacta para continuar sin releer todo. Última actualización: 2026-09-06 (**Gana: tarifa de pilada HISTÓRICA inmutable (congelada por lote) + botón "Ver Gana"**). Todo en main `fa4aeb8`. (Antes 2026-09-06 `f02ce82` = Tarifario socios+clientes; `0d46491` = Gana tarjetas+modal+WhatsApp; `de36377` = Costo Prod tarifa PILADO socio $3.75.)
+> Memoria compacta para continuar sin releer todo. Última actualización: 2026-09-06 (**Nómina: banner "Costo Total de Nómina" (A PAGAR); + endurecimiento defensivo Gana (anti-NaN/optional-chaining)**). Todo en main `9d222b7`. (Antes 2026-09-06 `fa4aeb8` = Gana tarifa pilada histórica inmutable; `f02ce82` = Tarifario socios+clientes; `0d46491` = Gana tarjetas+modal+WhatsApp.)
 > Al empezar una sesión, **lee solo este archivo** primero.
 > Nota: el checkout de trabajo/despliegue es el **MAIN** (`C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`). Ignorar cualquier worktree en `.claude/worktrees/*` (están sobre ramas viejas).
 
