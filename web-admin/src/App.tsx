@@ -1022,6 +1022,35 @@ const tabs = navGroups.flatMap((group) => group.tabs);
 // seccion nueva al Sidebar, aparece SOLA como permiso, sin tocar esta lista.
 const APP_MODULES: string[] = tabs.filter((t) => t !== "Configuracion");
 
+// Matriz de permisos (modal "Accionistas y permisos"): filas agrupadas por sección
+// del menú + módulos especiales + permisos de acción críticos. Las claves se guardan
+// como strings en allowed_modules (el backend acepta strings arbitrarios). Los
+// permisos "PERM:*" no son pestañas del Sidebar (no lo alteran); son banderas de acción.
+const PERM_MATRIX: Array<{ label: string; rows: Array<{ key: string; label: string }> }> = [
+  { label: "PRINCIPAL", rows: [{ key: "Dashboard", label: "Dashboard" }] },
+  { label: "OPERACIÓN", rows: [
+    { key: "Bascula", label: "Báscula" }, { key: "Secadoras", label: "Secadoras" },
+    { key: "Produccion", label: "Producción" }, { key: "Gana", label: "Gana" },
+    { key: "Inventario", label: "Inventario" }, { key: "Seleccion", label: "Selección" },
+    { key: "Transporte / Cosechadora", label: "Transporte / Cosechadora" },
+    { key: "Gestión de Cuadrilla", label: "Gestión de Cuadrilla" },
+  ] },
+  { label: "COMERCIAL", rows: [{ key: "Ventas", label: "Ventas" }, { key: "Compras", label: "Compras" }, { key: "Caja", label: "Caja" }] },
+  { label: "CUENTAS", rows: [{ key: "Por Cobrar", label: "Por Cobrar" }, { key: "Por Pagar", label: "Por Pagar" }] },
+  { label: "FINANZAS", rows: [
+    { key: "Liquidaciones", label: "Liquidaciones" }, { key: "Fomentos", label: "Fomentos" },
+    { key: "Agricultores", label: "Agricultores" }, { key: "Nomina", label: "Nómina" },
+    { key: "Servicio Pilado", label: "Servicio Pilado" }, { key: "Bancos", label: "Bancos" },
+  ] },
+  { label: "CONTABILIDAD", rows: [{ key: "Costos Operativos", label: "Costos Operativos" }, { key: "Estados Financieros", label: "Estados Financieros" }] },
+  { label: "SISTEMA", rows: [{ key: "Reportes", label: "Reportes" }] },
+  { label: "PERMISOS ESPECIALES", rows: [
+    { key: "PERM:ANULAR", label: "Permitir Anular / Eliminar registros" },
+    { key: "PERM:EDITAR_PRECIOS", label: "Permitir Editar Precios y Tarifas" },
+  ] },
+];
+const PERM_ALL_KEYS: string[] = PERM_MATRIX.flatMap((g) => g.rows.map((r) => r.key));
+
 function NavIcon({ tab }: { tab: string }) {
   switch (tab) {
     case "Dashboard":
@@ -14533,54 +14562,102 @@ export function App() {
                   </div>
                 )}
 
-                {accionistaEditor && (
+                {accionistaEditor && (() => {
+                  const items = accionistaEditor.items;
+                  const nombreAcc = (id: string) => adminAccionistas.find((a) => a.id === id)?.name ?? id;
+                  const setItem = (idx: number, patch: Partial<{ access: boolean; modules: string[] }>) =>
+                    setAccionistaEditor((ed) => ed && ({ ...ed, items: ed.items.map((x, i) => (i === idx ? { ...x, ...patch } : x)) }));
+                  // Alterna una celda (módulo × accionista). Marcar un módulo activa el acceso.
+                  const toggleCell = (idx: number, key: string) => {
+                    const it = items[idx];
+                    const has = it.modules.includes(key);
+                    const modules = has ? it.modules.filter((x) => x !== key) : [...it.modules, key];
+                    setItem(idx, { modules, access: it.access || (!has) });
+                  };
+                  const colMarcarTodo = (idx: number) => setItem(idx, { access: true, modules: [...PERM_ALL_KEYS] });
+                  const colLimpiar = (idx: number) => setItem(idx, { access: false, modules: [] });
+                  // Copia los permisos del PRIMER accionista (plantilla) al resto.
+                  const duplicarATodos = () => {
+                    const src = items[0];
+                    if (!src) return;
+                    setAccionistaEditor((ed) => ed && ({ ...ed, items: ed.items.map((x) => ({ ...x, access: src.access, modules: [...src.modules] })) }));
+                    addToast(`Permisos de ${nombreAcc(src.accionista_id)} duplicados a todos`, "success");
+                  };
+                  const cellStyle = { padding: "4px 8px", textAlign: "center" as const, borderBottom: "1px solid var(--c-border)" };
+                  return (
                   <div className="modalOverlay" onClick={() => setAccionistaEditor(null)}>
-                    <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 580 }}>
-                      <h3>Accionistas y permisos de {accionistaEditor.user.name}</h3>
-                      <p className="muted">Por cada accionista, marca el acceso y qué módulos puede usar <strong>ahí</strong>. Los permisos son independientes por accionista.</p>
-                      {accionistaEditor.items.length === 0 ? (
-                        <p className="muted">Aún no hay accionistas. Créalos en la pestaña «Accionistas».</p>
-                      ) : (
-                        <div style={{ display: "grid", gap: 10, maxHeight: "55vh", overflowY: "auto" }}>
-                          {accionistaEditor.items.map((it, idx) => {
-                            const acc = adminAccionistas.find((a) => a.id === it.accionista_id);
-                            const setItem = (patch: Partial<{ access: boolean; modules: string[] }>) =>
-                              setAccionistaEditor((ed) => ed && ({ ...ed, items: ed.items.map((x, i) => (i === idx ? { ...x, ...patch } : x)) }));
-                            return (
-                              <div key={it.accionista_id} style={{ border: "1px solid var(--c-border)", borderRadius: 8, padding: "8px 10px", background: it.access ? "#f0fdf4" : undefined }}>
-                                <label style={{ fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
-                                  <input type="checkbox" checked={it.access} onChange={(e) => setItem({ access: e.target.checked })} />
-                                  {acc?.name ?? it.accionista_id}
-                                </label>
-                                {it.access && (
-                                  <div className="permGrid" style={{ marginTop: 8 }}>
-                                    {APP_MODULES.map((m) => (
-                                      <label key={m} className={it.modules.includes(m) ? "permChip on" : "permChip"}>
-                                        <input
-                                          type="checkbox"
-                                          checked={it.modules.includes(m)}
-                                          onChange={() => setItem({ modules: it.modules.includes(m) ? it.modules.filter((x) => x !== m) : [...it.modules, m] })}
-                                        />
-                                        {m}
-                                      </label>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
+                    <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: "min(1050px, 96vw)", width: "96vw", maxHeight: "92vh", padding: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                      {/* Encabezado fijo */}
+                      <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--c-border)", flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+                        <div>
+                          <h3 style={{ margin: 0 }}>🔐 Accionistas y permisos · {accionistaEditor.user.name}</h3>
+                          <p className="muted" style={{ margin: "2px 0 0", fontSize: 12 }}>Marca por accionista qué módulos y acciones puede usar. Los permisos son independientes por accionista.</p>
                         </div>
-                      )}
-                      <p className="muted">Nota: los cambios aplican cuando el usuario vuelva a iniciar sesión.</p>
-                      <div className="buttonRow">
-                        <button type="button" className="primary" onClick={() => saveUserAccionistas().catch((err) => addToast(err.message, "error"))}>
-                          Guardar
-                        </button>
+                        {items.length > 1 && (
+                          <button type="button" className="btnSecondary" title={`Copia los permisos de ${nombreAcc(items[0].accionista_id)} (1ª columna) a todos`} onClick={duplicarATodos}>
+                            📋 Duplicar permisos a todos los accionistas
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Cuerpo con scroll: TABLA MATRIZ */}
+                      <div style={{ flex: 1, overflow: "auto", padding: 16 }}>
+                        {items.length === 0 ? (
+                          <p className="muted">Aún no hay accionistas. Créalos en la pestaña «Accionistas».</p>
+                        ) : (
+                          <table style={{ borderCollapse: "collapse", fontSize: 13, width: "100%" }}>
+                            <thead>
+                              <tr>
+                                <th style={{ position: "sticky", left: 0, background: "var(--c-surface)", textAlign: "left", padding: "6px 10px", borderBottom: "2px solid var(--c-border)", minWidth: 220, zIndex: 2 }}>Módulo / Permiso</th>
+                                {items.map((it, idx) => (
+                                  <th key={it.accionista_id} style={{ padding: "6px 10px", borderBottom: "2px solid var(--c-border)", textAlign: "center", minWidth: 130, background: it.access ? "#f0fdf4" : "transparent" }}>
+                                    <div style={{ fontWeight: 700 }}>{nombreAcc(it.accionista_id)}</div>
+                                    <label style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 400, marginTop: 2 }}>
+                                      <input type="checkbox" checked={it.access} onChange={(e) => setItem(idx, { access: e.target.checked })} /> Acceso
+                                    </label>
+                                    <div style={{ display: "flex", gap: 4, justifyContent: "center", marginTop: 4 }}>
+                                      <button type="button" onClick={() => colMarcarTodo(idx)} style={{ fontSize: 10, padding: "2px 6px", borderRadius: 5, border: "1px solid #86efac", background: "transparent", color: "#15803d", cursor: "pointer" }}>Marcar todo</button>
+                                      <button type="button" onClick={() => colLimpiar(idx)} style={{ fontSize: 10, padding: "2px 6px", borderRadius: 5, border: "1px solid #fca5a5", background: "transparent", color: "#b91c1c", cursor: "pointer" }}>Limpiar</button>
+                                    </div>
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {PERM_MATRIX.map((group) => (
+                                <React.Fragment key={group.label}>
+                                  <tr>
+                                    <td colSpan={1 + items.length} style={{ padding: "6px 10px", fontWeight: 800, fontSize: 11, letterSpacing: ".05em", color: "var(--c-muted)", background: "#f9fafb", borderBottom: "1px solid var(--c-border)" }}>
+                                      {group.label === "PERMISOS ESPECIALES" ? "⚡ " : ""}{group.label}
+                                    </td>
+                                  </tr>
+                                  {group.rows.map((row) => (
+                                    <tr key={row.key}>
+                                      <td style={{ position: "sticky", left: 0, background: "var(--c-surface)", padding: "5px 10px 5px 18px", borderBottom: "1px solid var(--c-border)", whiteSpace: "nowrap" }}>{row.label}</td>
+                                      {items.map((it, idx) => (
+                                        <td key={it.accionista_id} style={{ ...cellStyle, background: it.access ? undefined : "rgba(0,0,0,.02)" }}>
+                                          <input type="checkbox" checked={it.modules.includes(row.key)} onChange={() => toggleCell(idx, row.key)} />
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  ))}
+                                </React.Fragment>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                        <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>Nota: los cambios aplican cuando el usuario vuelva a iniciar sesión.</p>
+                      </div>
+
+                      {/* Pie fijo */}
+                      <div className="buttonRow" style={{ margin: 0, padding: "12px 18px", borderTop: "1px solid var(--c-border)", flexShrink: 0 }}>
+                        <button type="button" className="primary" onClick={() => saveUserAccionistas().catch((err) => addToast(err.message, "error"))}>Guardar</button>
                         <button type="button" onClick={() => setAccionistaEditor(null)}>Cancelar</button>
                       </div>
                     </div>
                   </div>
-                )}
+                  );
+                })()}
               </section>
             )}
 
