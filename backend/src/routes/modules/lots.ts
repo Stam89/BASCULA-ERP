@@ -161,6 +161,49 @@ lotsRouter.get("/", asyncRoute(async (req, res) => {
   res.json(result.rows);
 }));
 
+// Lotes de ARROZ SECO EN BODEGA disponibles para pilar directo (dropdown
+// "Lote de arroz seco (bodega)" de Producción). Filtro ESTRICTO: solo lotes cuyo
+// secado ya TERMINÓ y quedaron guardados en bodega. Un lote pasa el filtro cuando:
+//   • su secado está COMPLETADO (drying_tunnel_reports.status = 'COMPLETED') y no
+//     fue apartado como arianos, y NINGÚN túnel suyo sigue 'IN_PROGRESS'
+//     (esto excluye lo que aún está EN LA SECADORA), y
+//   • todavía no entró a producción (lot.status = 'WEIGHED', sin processing_batch
+//     vivo). Los lotes solo pesados/recepcionados que aún no secaron no tienen
+//     reporte COMPLETED, así que también quedan fuera.
+// Nunca devuelve lotes en báscula, recepcionados sin secar ni en secadora.
+lotsRouter.get("/dry-in-storage", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const result = await pool.query(
+    `SELECT l.*, f.full_name AS farmer_name,
+            COUNT(t.id)::int AS entries_count,
+            COALESCE(SUM(t.net_weight), 0) AS net_weight,
+            COALESCE(SUM(t.quintals), 0) AS quintals
+     FROM lots l
+     LEFT JOIN farmers f ON f.id = l.farmer_id
+     LEFT JOIN weighing_tickets t ON t.lot_id = l.id
+     WHERE l.accionista_id = $1
+       AND l.status = 'WEIGHED'
+       AND EXISTS (
+         SELECT 1 FROM drying_tunnel_reports d
+         WHERE d.lot_id = l.id AND d.status = 'COMPLETED' AND d.apartado_arianos = false
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM drying_tunnel_reports d
+         WHERE d.lot_id = l.id AND d.status = 'IN_PROGRESS'
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM processing_batches b
+         WHERE b.lot_id = l.id AND b.status <> 'CANCELLED'
+       )
+     GROUP BY l.id, f.full_name
+     HAVING COALESCE(SUM(t.quintals), 0) > 0
+     ORDER BY l.created_at DESC
+     LIMIT 500`,
+    [accionistaId]
+  );
+  res.json(result.rows);
+}));
+
 lotsRouter.get("/:id", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const lot = await pool.query(

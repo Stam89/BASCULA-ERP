@@ -1373,6 +1373,9 @@ export function App() {
   const [products, setProducts] = useState<Product[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [lots, setLots] = useState<Lot[]>([]);
+  // Arroz seco YA en bodega, listo para pilar directo (secado terminado, sin
+  // procesar). Lo sirve el backend con filtro estricto: /lots/dry-in-storage.
+  const [dryStorageLots, setDryStorageLots] = useState<Lot[]>([]);
   const [availableDryingLots, setAvailableDryingLots] = useState<MateriaPrimaEntry[]>([]);
   const [dryingReports, setDryingReports] = useState<DryingTunnelReport[]>([]);
   const [liquidacionesList, setLiquidacionesList] = useState<LiqRecord[]>([]);
@@ -2141,11 +2144,13 @@ export function App() {
     () => dryingReports.find((report) => report.id === productionDryingId) ?? null,
     [dryingReports, productionDryingId]
   );
-  // Lotes de arroz seco disponibles en bodega para pilar directo (con quintales
-  // registrados). El backend impide re-procesar uno ya cerrado.
+  // Lotes de arroz seco disponibles en bodega para pilar directo. La fuente es el
+  // endpoint /lots/dry-in-storage, que ya aplica el filtro ESTRICTO (secado
+  // terminado + en bodega + sin procesar); NO se listan lotes en secadora ni sin
+  // secar. El guard de quintales es defensa extra por si llega alguno en 0.
   const stockLotsDisponibles = useMemo(
-    () => lots.filter((lot) => Number(lot.quintals ?? 0) > 0),
-    [lots]
+    () => dryStorageLots.filter((lot) => Number(lot.quintals ?? 0) > 0),
+    [dryStorageLots]
   );
   const selectedStockLot = useMemo(
     () => stockLotsDisponibles.find((lot) => lot.id === productionStockLotId) ?? null,
@@ -2464,7 +2469,8 @@ export function App() {
         dryingLotRows,
         dryingReportRows,
         liqRows,
-        pendingEntryRows
+        pendingEntryRows,
+        dryStorageRows
       ] = await Promise.all([
         apiGet<Dashboard>("/dashboard"),
         apiGet<Farmer[]>("/farmers"),
@@ -2476,7 +2482,8 @@ export function App() {
         apiGet<MateriaPrimaEntry[]>("/process-flow/drying/available-lots"),
         apiGet<DryingTunnelReport[]>("/process-flow/drying/reports"),
         apiGet<LiqRecord[]>("/liquidations"),
-        apiGet<PendingEntry[]>("/liquidations/pending-entries")
+        apiGet<PendingEntry[]>("/liquidations/pending-entries"),
+        apiGet<Lot[]>("/lots/dry-in-storage")
       ]);
 
       setDashboard(dash);
@@ -2484,6 +2491,7 @@ export function App() {
       setProducts(productRows);
       setWarehouses(warehouseRows);
       setLots(lotRows);
+      setDryStorageLots(dryStorageRows);
       setAvailableDryingLots(dryingLotRows);
       setDryingReports(dryingReportRows);
       setLiquidacionesList(liqRows);
@@ -9305,8 +9313,10 @@ export function App() {
                 <>
                   <label>
                     <span>Lote de arroz seco (bodega)</span>
-                    <select value={productionStockLotId} onChange={(event) => setProductionStockLotId(event.target.value)} required>
-                      <option value="">Seleccione</option>
+                    <select value={productionStockLotId} onChange={(event) => setProductionStockLotId(event.target.value)} required disabled={stockLotsDisponibles.length === 0}>
+                      <option value="">
+                        {stockLotsDisponibles.length === 0 ? "No hay lotes de arroz seco en bodega" : "Seleccione"}
+                      </option>
                       {stockLotsDisponibles.map((lot) => (
                         <option key={lot.id} value={lot.id}>
                           {lot.lot_code} · {lot.farmer_name ?? "s/agricultor"} · {riceTypeLabel(lot.rice_type)} · {Number(lot.quintals ?? 0).toFixed(2)} QQ
@@ -9314,7 +9324,15 @@ export function App() {
                       ))}
                     </select>
                   </label>
-                  {selectedStockLot ? (
+                  {stockLotsDisponibles.length === 0 ? (
+                    <div className="muted" style={{ padding: 10, background: "#fef3c7", borderRadius: 8, border: "1px solid #fde68a" }}>
+                      <strong>No hay lotes de arroz seco en bodega.</strong>
+                      <p style={{ margin: "4px 0 0" }}>
+                        Solo aparecen los lotes cuyo secado ya <strong>terminó</strong> y están guardados en bodega, sin procesar.
+                        Finaliza un secado en <strong>Secadoras</strong> para que su lote quede disponible aquí.
+                      </p>
+                    </div>
+                  ) : selectedStockLot ? (
                     <div className="totalBox dryerTotalBox">
                       <span>Total cascara desde Stock</span>
                       <strong>{Number(selectedStockLot.quintals ?? 0).toFixed(2)} QQ</strong>
