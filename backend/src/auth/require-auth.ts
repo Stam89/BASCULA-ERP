@@ -122,12 +122,18 @@ export async function enforceModulePermissions(req: Request, _res: Response, nex
     }
     // Permisos POR ACCIONISTA: los módulos del vínculo (operador, accionista
     // activo). resolveAccionista ya corrió y dejó req.accionistaId.
+    // Nivel VER vs EDITAR: el nombre plano da lectura (GET, ya permitido arriba);
+    // ESCRIBIR exige la clave 'EDIT:<módulo>'. Un operador "Solo Ver" recibe 403.
     const allowed: string[] = fresh.rows[0].allowed_modules ?? [];
-    if (requiredModules.some((module) => allowed.includes(module))) {
+    if (requiredModules.some((module) => allowed.includes(`EDIT:${module}`))) {
       next();
       return;
     }
-    next(new ApiError(403, `Tu usuario no tiene permiso para registrar cambios en ${requiredModules[0]} en este accionista. Pide acceso a un administrador.`));
+    // Mensaje según el motivo: tiene el módulo (solo Ver) vs no lo tiene.
+    const soloVer = requiredModules.some((module) => allowed.includes(module));
+    next(new ApiError(403, soloVer
+      ? `Tu acceso a ${requiredModules[0]} en este accionista es de SOLO LECTURA. Pide permiso de edición a un administrador.`
+      : `Tu usuario no tiene permiso para registrar cambios en ${requiredModules[0]} en este accionista. Pide acceso a un administrador.`));
   } catch (err) {
     next(err);
   }

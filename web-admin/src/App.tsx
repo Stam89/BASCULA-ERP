@@ -2630,6 +2630,10 @@ export function App() {
   const activeAllowedPerms = new Set(accionistas.find((a) => a.id === activeAccionistaId)?.allowed_modules ?? []);
   const canAnular = isAdmin || activeAllowedPerms.has("PERM:ANULAR");
   const canEditarPrecios = isAdmin || activeAllowedPerms.has("PERM:EDITAR_PRECIOS");
+  // Nivel VER vs EDITAR por módulo (accionista activo): el nombre plano = Ver,
+  // "EDIT:<módulo>" = Editar. Un operador "Solo Ver" (sin EDIT:) NO debe ver los
+  // botones de crear/editar/guardar de ese módulo (el backend también lo bloquea).
+  const canEdit = (module: string) => isAdmin || activeAllowedPerms.has(`EDIT:${module}`);
 
   // La nómina, cuadrilla y servicio de pilado son responsabilidad única del dueño
   // de la piladora (CEYRO). Los accionistas/clientes solo pagan el servicio; nunca
@@ -12085,10 +12089,12 @@ export function App() {
               <div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 10 }}>
                   <h3 style={{ margin: 0 }}>Lista de Fomentos</h3>
-                  <button type="button" onClick={() => { setFomentoEditingId(null); resetFomentoForm(); setFomentoModalOpen(true); }}
-                    style={{ background: "var(--c-success)", color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontWeight: 700, fontSize: 13, whiteSpace: "nowrap" }}>
-                    + Nuevo Fomento
-                  </button>
+                  {canEdit("Fomentos") && (
+                    <button type="button" onClick={() => { setFomentoEditingId(null); resetFomentoForm(); setFomentoModalOpen(true); }}
+                      style={{ background: "var(--c-success)", color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontWeight: 700, fontSize: 13, whiteSpace: "nowrap" }}>
+                      + Nuevo Fomento
+                    </button>
+                  )}
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 420, overflowY: "auto" }}>
                   {fomentos
@@ -12150,10 +12156,12 @@ export function App() {
                         style={{ background: "#0f766e", color: "#fff", border: "none", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
                         🖨️ Imprimir Estado de Cuenta
                       </button>
-                      <button type="button" onClick={() => openEditFomento(fomentoDetalle)}
-                        style={{ background: "#1d4ed8", color: "#fff", border: "none", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
-                        ✏️ Editar
-                      </button>
+                      {canEdit("Fomentos") && (
+                        <button type="button" onClick={() => openEditFomento(fomentoDetalle)}
+                          style={{ background: "#1d4ed8", color: "#fff", border: "none", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
+                          ✏️ Editar
+                        </button>
+                      )}
                       {canAnular && (
                         <button type="button" onClick={() => setConfirmarEliminarFomento({ id: fomentoDetalle.id, nombre: fomentoDetalle.farmer_name })}
                           style={{ background: "#fff", color: "#dc2626", border: "1px solid #dc2626", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
@@ -14581,14 +14589,35 @@ export function App() {
                   const nombreAcc = (id: string) => adminAccionistas.find((a) => a.id === id)?.name ?? id;
                   const setItem = (idx: number, patch: Partial<{ access: boolean; modules: string[] }>) =>
                     setAccionistaEditor((ed) => ed && ({ ...ed, items: ed.items.map((x, i) => (i === idx ? { ...x, ...patch } : x)) }));
-                  // Alterna una celda (módulo × accionista). Marcar un módulo activa el acceso.
+                  // Alterna un permiso simple (fila PERM:* de acción). Activa el acceso.
                   const toggleCell = (idx: number, key: string) => {
                     const it = items[idx];
                     const has = it.modules.includes(key);
                     const modules = has ? it.modules.filter((x) => x !== key) : [...it.modules, key];
                     setItem(idx, { modules, access: it.access || (!has) });
                   };
-                  const colMarcarTodo = (idx: number) => setItem(idx, { access: true, modules: [...PERM_ALL_KEYS] });
+                  // VER (nombre plano) y EDITAR (EDIT:<key>). Cascada: EDITAR implica VER;
+                  // quitar VER quita también EDITAR (no se puede editar sin ver).
+                  const toggleVer = (idx: number, key: string) => {
+                    const it = items[idx];
+                    const has = it.modules.includes(key);
+                    const modules = has
+                      ? it.modules.filter((x) => x !== key && x !== `EDIT:${key}`)
+                      : [...it.modules, key];
+                    setItem(idx, { modules, access: it.access || (!has) });
+                  };
+                  const toggleEditar = (idx: number, key: string) => {
+                    const it = items[idx];
+                    const editKey = `EDIT:${key}`;
+                    const has = it.modules.includes(editKey);
+                    const modules = has
+                      ? it.modules.filter((x) => x !== editKey)
+                      : [...new Set([...it.modules, key, editKey])]; // cascada: marca VER
+                    setItem(idx, { modules, access: it.access || (!has) });
+                  };
+                  // Marcar todo = VER + EDITAR de cada módulo + permisos especiales.
+                  const allKeysConEdit = [...PERM_ALL_KEYS, ...PERM_ALL_KEYS.filter((k) => !k.startsWith("PERM:")).map((k) => `EDIT:${k}`)];
+                  const colMarcarTodo = (idx: number) => setItem(idx, { access: true, modules: [...new Set(allKeysConEdit)] });
                   const colLimpiar = (idx: number) => setItem(idx, { access: false, modules: [] });
                   // Copia los permisos del PRIMER accionista (plantilla) al resto.
                   const duplicarATodos = () => {
@@ -14645,16 +14674,32 @@ export function App() {
                                       {group.label === "PERMISOS ESPECIALES" ? "⚡ " : ""}{group.label}
                                     </td>
                                   </tr>
-                                  {group.rows.map((row) => (
+                                  {group.rows.map((row) => {
+                                    const esPerm = row.key.startsWith("PERM:");
+                                    return (
                                     <tr key={row.key}>
                                       <td style={{ position: "sticky", left: 0, background: "var(--c-surface)", padding: "5px 10px 5px 18px", borderBottom: "1px solid var(--c-border)", whiteSpace: "nowrap" }}>{row.label}</td>
                                       {items.map((it, idx) => (
                                         <td key={it.accionista_id} style={{ ...cellStyle, background: it.access ? undefined : "rgba(0,0,0,.02)" }}>
-                                          <input type="checkbox" checked={it.modules.includes(row.key)} onChange={() => toggleCell(idx, row.key)} />
+                                          {esPerm ? (
+                                            <input type="checkbox" checked={it.modules.includes(row.key)} onChange={() => toggleCell(idx, row.key)} />
+                                          ) : (
+                                            <span style={{ display: "inline-flex", gap: 10, justifyContent: "center" }}>
+                                              <label title="Ver (solo lectura)" style={{ display: "inline-flex", alignItems: "center", gap: 2, cursor: "pointer" }}>
+                                                <input type="checkbox" checked={it.modules.includes(row.key)} onChange={() => toggleVer(idx, row.key)} />
+                                                <span style={{ fontSize: 11 }}>👁️</span>
+                                              </label>
+                                              <label title="Editar (crear/guardar/eliminar)" style={{ display: "inline-flex", alignItems: "center", gap: 2, cursor: "pointer" }}>
+                                                <input type="checkbox" checked={it.modules.includes(`EDIT:${row.key}`)} onChange={() => toggleEditar(idx, row.key)} />
+                                                <span style={{ fontSize: 11 }}>✏️</span>
+                                              </label>
+                                            </span>
+                                          )}
                                         </td>
                                       ))}
                                     </tr>
-                                  ))}
+                                    );
+                                  })}
                                 </React.Fragment>
                               ))}
                             </tbody>
