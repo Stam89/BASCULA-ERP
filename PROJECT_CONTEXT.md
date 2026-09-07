@@ -1,6 +1,6 @@
 # PROJECT_CONTEXT — BASCULA-ERP
 
-> Memoria compacta para continuar sin releer todo. Última actualización: 2026-09-06 (**Nómina: banner "Costo Total de Nómina" (A PAGAR) con desglose Cuadrilla/Piladores/Polvillo/Secadores en badges inline; + hardening Gana**). Todo en main `0dfed88`. (Antes 2026-09-06 `9d222b7` = banner Nómina inicial + hardening Gana; `fa4aeb8` = Gana tarifa pilada histórica; `f02ce82` = Tarifario socios+clientes.)
+> Memoria compacta para continuar sin releer todo. Última actualización: 2026-09-07 (**Config→Usuarios: modal "Accionistas y permisos" como TABLA MATRIZ (columnas=accionistas, filas por sección) + módulos nuevos + permisos de acción + batch (Marcar todo/Limpiar/Duplicar)**). Todo en main `869e97e`. (Antes 2026-09-06 `0dfed88` = Nómina banner Costo Total + badges; `9d222b7` = hardening Gana; `fa4aeb8` = Gana tarifa histórica.) (Antes 2026-09-06 `9d222b7` = banner Nómina inicial + hardening Gana; `fa4aeb8` = Gana tarifa pilada histórica; `f02ce82` = Tarifario socios+clientes.)
 > Al empezar una sesión, **lee solo este archivo** primero.
 > Nota: el checkout de trabajo/despliegue es el **MAIN** (`C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`). Ignorar cualquier worktree en `.claude/worktrees/*` (están sobre ramas viejas).
 
@@ -423,3 +423,5 @@ Producción? No hay ramas abiertas. Migraciones 20260914…20260919 aplicadas en
 local; en otro server: git pull → ./deploy.sh (sin auto-deploy).
 Pregúntame qué sigue (candidatos en §5).
 ```
+
+- **Permisos por accionista (Config→Control de Usuarios, `869e97e`)**: modal `accionistaEditor` = TABLA MATRIZ `PERM_MATRIX` (const a nivel módulo, tras APP_MODULES): filas agrupadas por sección (Principal/Operación/Comercial/Cuentas/Finanzas/Contabilidad/Sistema/Permisos Especiales), columnas = accionistas. Módulos NUEVOS asignables: "Transporte / Cosechadora", "Gestión de Cuadrilla", "Bancos". Permisos de acción: claves `PERM:ANULAR` y `PERM:EDITAR_PRECIOS` (banderas en allowed_modules; NO son pestañas → no alteran Sidebar; hoy son metadata, falta hacerlas cumplir en la app). Batch: [Marcar todo]/[Limpiar] por columna, [📋 Duplicar] copia la 1ª columna. Backend intacto: `moduleSchema=z.array(z.string())` acepta strings arbitrarios (incl. acentos y PERM:*).
