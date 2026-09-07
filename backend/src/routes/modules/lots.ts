@@ -162,15 +162,22 @@ lotsRouter.get("/", asyncRoute(async (req, res) => {
 }));
 
 // Lotes de ARROZ SECO EN BODEGA disponibles para pilar directo (dropdown
-// "Lote de arroz seco (bodega)" de Producción). Filtro ESTRICTO: solo lotes cuyo
-// secado ya TERMINÓ y quedaron guardados en bodega. Un lote pasa el filtro cuando:
-//   • su secado está COMPLETADO (drying_tunnel_reports.status = 'COMPLETED') y no
-//     fue apartado como arianos, y NINGÚN túnel suyo sigue 'IN_PROGRESS'
-//     (esto excluye lo que aún está EN LA SECADORA), y
-//   • todavía no entró a producción (lot.status = 'WEIGHED', sin processing_batch
-//     vivo). Los lotes solo pesados/recepcionados que aún no secaron no tienen
-//     reporte COMPLETED, así que también quedan fuera.
-// Nunca devuelve lotes en báscula, recepcionados sin secar ni en secadora.
+// "Lote de arroz seco (bodega)" de Producción). Filtro ESTRICTO: NO basta con que
+// el secado esté COMPLETED — eso solo dice que el arroz terminó de secar DENTRO
+// del túnel. Para estar EN BODEGA el lote tuvo que ser BOTADO/VACIADO del túnel,
+// que es el paso físico de sacarlo y guardarlo. El vaciado se registra como la
+// labor de cuadrilla "BOTADA DE TUNEL" (drying_tunnel_cuadrilla.momento='VACIADO')
+// y es la marca inequívoca de "enviado a bodega" (equivale a ubicacion=BODEGA_SECO).
+//
+// Un lote pasa el filtro solo cuando TODO se cumple:
+//   • Tiene un secado COMPLETED, no apartado como arianos, Y con VACIADO
+//     registrado (botado a bodega). Un secado recién finalizado sin botar NO
+//     entra aquí: se pila por "Desde Secadoras" (arroz aún en el túnel).
+//   • Ningún túnel suyo sigue 'IN_PROGRESS' (excluye lo que aún se está secando).
+//   • Aún no entró a producción: lot.status = 'WEIGHED' y sin processing_batch
+//     vivo (excluye lo ya pilado/liquidado).
+// Los lotes solo pesados/recepcionados en báscula (sin secar ni botar) nunca
+// tienen ese VACIADO, así que quedan fuera por definición.
 lotsRouter.get("/dry-in-storage", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
@@ -184,8 +191,13 @@ lotsRouter.get("/dry-in-storage", asyncRoute(async (req, res) => {
      WHERE l.accionista_id = $1
        AND l.status = 'WEIGHED'
        AND EXISTS (
-         SELECT 1 FROM drying_tunnel_reports d
-         WHERE d.lot_id = l.id AND d.status = 'COMPLETED' AND d.apartado_arianos = false
+         SELECT 1
+         FROM drying_tunnel_reports d
+         JOIN drying_tunnel_cuadrilla c
+           ON c.drying_report_id = d.id AND c.momento = 'VACIADO'
+         WHERE d.lot_id = l.id
+           AND d.status = 'COMPLETED'
+           AND d.apartado_arianos = false
        )
        AND NOT EXISTS (
          SELECT 1 FROM drying_tunnel_reports d
