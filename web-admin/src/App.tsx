@@ -2624,6 +2624,12 @@ export function App() {
 
   // ── Configuración ─────────────────────────────────────────────────────────
   const isAdmin = authUser?.role_name === "ADMINISTRADOR";
+  // Permisos de ACCIÓN por accionista activo (banderas PERM:* en allowed_modules).
+  // El administrador siempre puede. Un operador solo si su accionista activo se lo
+  // concede en Config → Control de Usuarios (tabla matriz de permisos).
+  const activeAllowedPerms = new Set(accionistas.find((a) => a.id === activeAccionistaId)?.allowed_modules ?? []);
+  const canAnular = isAdmin || activeAllowedPerms.has("PERM:ANULAR");
+  const canEditarPrecios = isAdmin || activeAllowedPerms.has("PERM:EDITAR_PRECIOS");
 
   // La nómina, cuadrilla y servicio de pilado son responsabilidad única del dueño
   // de la piladora (CEYRO). Los accionistas/clientes solo pagan el servicio; nunca
@@ -9594,12 +9600,12 @@ export function App() {
                 const precioTds = (prod: "blanco" | "broken" | "fine" | "bran", str: string, qq: number, pnum: number) => (
                   <>
                     <td style={dcell}>
-                      <input type="number" min="0" step="0.01" placeholder="Precio" value={str}
+                      <input type="number" min="0" step="0.01" placeholder="Precio" value={str} disabled={!canEditarPrecios}
                         onChange={(e) => setGanaPrecioVenta((cur) => ({ ...cur, [`${item.id}:${prod}`]: e.target.value }))}
                         onBlur={(e) => saveGanaPrecioVenta(item.id, prod, e.target.value).catch(() => undefined)}
                         onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-                        title="Precio de venta por QQ (editable, se guarda en la BD)"
-                        style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #86efac", textAlign: "right", fontSize: 12 }} />
+                        title={canEditarPrecios ? "Precio de venta por QQ (editable, se guarda en la BD)" : "No tienes permiso para editar precios y tarifas"}
+                        style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #86efac", textAlign: "right", fontSize: 12, opacity: canEditarPrecios ? 1 : 0.5 }} />
                     </td>
                     <td style={{ ...dcell, color: "var(--c-muted)" }}>—</td>
                     <td style={{ ...dcell, fontWeight: 700, color: "#15803d" }}>{pnum > 0 ? money(qq * pnum) : "—"}</td>
@@ -10756,7 +10762,7 @@ export function App() {
                               <th style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#374151" }}>Categoría</th>
                               <th style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#374151" }}>Descripción</th>
                               <th style={{ padding: "12px 16px", textAlign: "right", fontWeight: 700, color: "#374151" }}>Monto</th>
-                              {isAdmin && <th style={{ padding: "12px 16px", textAlign: "right", fontWeight: 700, color: "#374151" }} />}
+                              {canAnular && <th style={{ padding: "12px 16px", textAlign: "right", fontWeight: 700, color: "#374151" }} />}
                             </tr>
                           </thead>
                           <tbody>
@@ -10783,7 +10789,7 @@ export function App() {
                                 <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 600, color: m.movement === "EXPENSE" ? "#dc2626" : "#16a34a", textDecoration: isReversed ? "line-through" : "none" }}>
                                   {m.movement === "EXPENSE" ? "-" : "+"}{money(Number(m.amount))}
                                 </td>
-                                {isAdmin && (
+                                {canAnular && (
                                   <td style={{ padding: "8px 16px", textAlign: "right" }}>
                                     {!isReversed && !isReversal && (
                                       <button type="button" className="btnGhost" onClick={() => reverseCashMovement(m)}>Anular</button>
@@ -11944,7 +11950,7 @@ export function App() {
                                 </button>
                               </>
                             )}
-                            {isAdmin && (
+                            {canEditarPrecios && (
                               <button
                                 type="button"
                                 className="liqApplyBtn"
@@ -11964,12 +11970,12 @@ export function App() {
                                 ✏ Editar
                               </button>
                             )}
-                            {isAdmin && !b.anulada && (
+                            {canAnular && !b.anulada && (
                               <button
                                 type="button"
                                 className="liqApplyBtn"
                                 style={{ color: "#b91c1c", borderColor: "#fecaca" }}
-                                title="Anular la liquidación con reversa completa (admin)"
+                                title="Anular la liquidación con reversa completa"
                                 onClick={() => anularLiquidacion(b).catch((e) => addToast(e.message, "error"))}
                               >
                                 🚫 Anular
@@ -12148,10 +12154,12 @@ export function App() {
                         style={{ background: "#1d4ed8", color: "#fff", border: "none", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
                         ✏️ Editar
                       </button>
-                      <button type="button" onClick={() => setConfirmarEliminarFomento({ id: fomentoDetalle.id, nombre: fomentoDetalle.farmer_name })}
-                        style={{ background: "#fff", color: "#dc2626", border: "1px solid #dc2626", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
-                        🗑️ Eliminar Fomento
-                      </button>
+                      {canAnular && (
+                        <button type="button" onClick={() => setConfirmarEliminarFomento({ id: fomentoDetalle.id, nombre: fomentoDetalle.farmer_name })}
+                          style={{ background: "#fff", color: "#dc2626", border: "1px solid #dc2626", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
+                          🗑️ Eliminar Fomento
+                        </button>
+                      )}
                     </div>
                     {fomentoDetalle.status === "CERRADO_LIQUIDACION" && (
                       <div style={{ background: "#f3f4f6", border: "1px solid #d1d5db", borderRadius: 8, padding: "8px 12px", marginBottom: 12, fontSize: 12, color: "#374151" }}>
@@ -12186,10 +12194,12 @@ export function App() {
                         <>
                           <strong style={{ fontSize: 15, color: "#b45309" }}>{(Number(fomentoDetalle.renta) * 100).toFixed(2)}%</strong>
                           <span style={{ fontSize: 10, color: "var(--c-muted)" }}>mensual</span>
-                          <button type="button" onClick={() => { setFomentoEditingRenta(fomentoDetalle.id); setFomentoRentaInput((Number(fomentoDetalle.renta)*100).toFixed(2)); }}
-                            style={{ background: "none", border: "1px solid #fcd34d", borderRadius: 5, padding: "3px 8px", cursor: "pointer", fontSize: 11, color: "#92400e" }}>
-                            ✏ Editar %
-                          </button>
+                          {canEditarPrecios && (
+                            <button type="button" onClick={() => { setFomentoEditingRenta(fomentoDetalle.id); setFomentoRentaInput((Number(fomentoDetalle.renta)*100).toFixed(2)); }}
+                              style={{ background: "none", border: "1px solid #fcd34d", borderRadius: 5, padding: "3px 8px", cursor: "pointer", fontSize: 11, color: "#92400e" }}>
+                              ✏ Editar %
+                            </button>
+                          )}
                         </>
                       )}
                     </div>
@@ -12243,9 +12253,11 @@ export function App() {
                                 <td style={{ padding: "4px 8px", textAlign: "right", color: "#b45309" }}>${Number(e.interes).toFixed(2)}</td>
                                 <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700 }}>${Number(e.suman).toFixed(2)}</td>
                                 <td style={{ padding: "4px 8px" }}>
-                                  <button type="button" title="Eliminar entrega"
-                                    onClick={() => setConfirmarEntrega({ fomentoId: fomentoDetalle.id, entregaId: e.id, valor: Number(e.valor), fecha: e.fecha?.slice(0, 10) ?? "" })}
-                                    style={{ background: "none", border: "none", cursor: "pointer", color: "#dc2626", fontSize: 14 }}>✕</button>
+                                  {canAnular && (
+                                    <button type="button" title="Eliminar entrega"
+                                      onClick={() => setConfirmarEntrega({ fomentoId: fomentoDetalle.id, entregaId: e.id, valor: Number(e.valor), fecha: e.fecha?.slice(0, 10) ?? "" })}
+                                      style={{ background: "none", border: "none", cursor: "pointer", color: "#dc2626", fontSize: 14 }}>✕</button>
+                                  )}
                                 </td>
                               </tr>
                             );
@@ -12357,9 +12369,11 @@ export function App() {
                                 <td style={{ padding: "4px 8px", textAlign: "right", color: "#16a34a", fontWeight: 700 }}>${Number(p.valor).toFixed(2)}</td>
                                 <td style={{ padding: "4px 8px" }}>{p.concepto ?? "—"}</td>
                                 <td style={{ padding: "4px 8px" }}>
-                                  <button type="button" title="Eliminar"
-                                    onClick={() => deleteFomentoPago(fomentoDetalle.id, p.id).catch(() => undefined)}
-                                    style={{ background: "none", border: "none", cursor: "pointer", color: "#dc2626", fontSize: 13 }}>✕</button>
+                                  {canAnular && (
+                                    <button type="button" title="Eliminar"
+                                      onClick={() => deleteFomentoPago(fomentoDetalle.id, p.id).catch(() => undefined)}
+                                      style={{ background: "none", border: "none", cursor: "pointer", color: "#dc2626", fontSize: 13 }}>✕</button>
+                                  )}
                                 </td>
                               </tr>
                             ))}
