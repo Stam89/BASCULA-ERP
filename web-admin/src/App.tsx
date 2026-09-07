@@ -1859,6 +1859,9 @@ export function App() {
   const [saleLineItems, setSaleLineItems] = useState<SaleLineItem[]>([]);
   // Pedidos de venta (preventa) y forma de pago elegida al despachar cada uno.
   const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([]);
+  // Ventas se divide en dos sub-vistas: "nuevo" (POS limpio, tomar pedido) y
+  // "despachos" (cola de carga/fulfillment para bodega).
+  const [ventasView, setVentasView] = useState<"nuevo" | "despachos">("nuevo");
   // Estados financieros: se piden al servidor, que los calcula desde la operación.
   const [finanzas, setFinanzas] = useState<FinanzasData | null>(null);
   const [finanzasDesde, setFinanzasDesde] = useState(`${new Date().getFullYear()}-01-01`);
@@ -2648,6 +2651,14 @@ export function App() {
   // cargan con la nómina ni administran cobros de secado/pilado. Por eso esas
   // pestañas solo aparecen con CEYRO activo.
   const esCeyroActivo = activeAccionistaId === CEYRO_ID;
+
+  // Pedidos pendientes de carga (cola de despachos). Alimenta el badge de la
+  // pestaña "Cola de Despachos" y del menú lateral, para que bodega sepa cuándo
+  // hay trabajo. Se recalcula solo al cambiar los pedidos.
+  const pedidosPendientesCount = useMemo(
+    () => salesOrders.filter((o) => o.status === "PENDING").length,
+    [salesOrders]
+  );
 
   // Pestañas visibles según los módulos asignados al usuario.
   const visibleTabs = useMemo(() => {
@@ -4490,6 +4501,17 @@ export function App() {
     if (activeTab === "Costos Operativos") refreshCostos().catch(() => undefined);
     if (activeTab === "Estados Financieros") loadFinanzas().catch((e) => addToast(e.message, "error"));
   }, [activeTab, motorActivo]);
+
+  // Cola de despachos en (casi) tiempo real: mientras se esté en Ventas, se
+  // refrescan los pedidos cada 15 s para que el equipo de bodega vea llegar los
+  // pedidos nuevos y el badge se actualice sin recargar.
+  useEffect(() => {
+    if (!authUser || activeTab !== "Ventas") return;
+    const id = window.setInterval(() => {
+      refreshCustomersAndSales().catch(() => undefined);
+    }, 15000);
+    return () => window.clearInterval(id);
+  }, [authUser, activeTab]);
 
   function resetFomentoForm() {
     setFomentoForm({ farmer_name: "", cuadras: "", inicio: new Date().toISOString().slice(0,10), status: "ACTIVOS", notes: "", variedad: "", limite_credito: "", folio: "" });
@@ -6745,7 +6767,7 @@ export function App() {
     setSelectedPresentationId("");
     setSaleProductPresentations([]);
     setMessage(`✓ Pedido ${pedido.order_number} tomado: ${money(pedido.total_amount)}`);
-    addToast(`Pedido ${pedido.order_number} tomado · ${money(pedido.total_amount)}. Se cobra al despachar.`, "success");
+    addToast(`🚚 Pedido enviado a bodega · ${pedido.order_number} · ${money(pedido.total_amount)}`, "success");
     await refreshCustomersAndSales();
   }
 
@@ -6930,6 +6952,8 @@ export function App() {
     setSelectedCustomerId(detalle.customer_id);
     setCustomerSearch(order.customer_name);
     setPedidoEditando(order.id);
+    // Editar un pedido usa el formulario del POS: se vuelve a la vista "Nuevo Pedido".
+    setVentasView("nuevo");
     addToast(`Editando ${order.order_number}: ajusta las líneas y guarda`, "success");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -7529,6 +7553,14 @@ export function App() {
                     <button className={activeTab === tab ? "active" : ""} key={tab} onClick={() => setActiveTab(tab)}>
                       <NavIcon tab={tab} />
                       {tab}
+                      {tab === "Ventas" && pedidosPendientesCount > 0 && (
+                        <span
+                          title={`${pedidosPendientesCount} pedido(s) pendiente(s) de carga`}
+                          style={{ marginLeft: "auto", background: "#ef4444", color: "#fff", borderRadius: 999, minWidth: 18, height: 18, padding: "0 6px", fontSize: 11, fontWeight: 800, display: "inline-flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}
+                        >
+                          {pedidosPendientesCount}
+                        </span>
+                      )}
                     </button>
                   ))}
                 </div>
@@ -9820,6 +9852,40 @@ export function App() {
               </div>
             )}
 
+            {/* ===== Pestañas del módulo: Nuevo Pedido (POS) vs Cola de Despachos (bodega) ===== */}
+            <div style={{ gridColumn: "1 / -1", display: "flex", gap: 8, borderBottom: "2px solid var(--c-border)", marginBottom: 4 }}>
+              {([
+                { key: "nuevo", label: "🛒 Nuevo Pedido" },
+                { key: "despachos", label: "🚚 Cola de Despachos" }
+              ] as const).map((t) => {
+                const active = ventasView === t.key;
+                return (
+                  <button
+                    key={t.key}
+                    type="button"
+                    onClick={() => setVentasView(t.key)}
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: 8,
+                      padding: "10px 18px", border: "none", cursor: "pointer",
+                      background: "transparent", fontSize: 14, fontWeight: 800,
+                      color: active ? "var(--c-brand)" : "#64748b",
+                      borderBottom: active ? "3px solid var(--c-brand)" : "3px solid transparent",
+                      marginBottom: -2
+                    }}
+                  >
+                    {t.label}
+                    {t.key === "despachos" && pedidosPendientesCount > 0 && (
+                      <span style={{ background: "#ef4444", color: "#fff", borderRadius: 999, minWidth: 20, height: 20, padding: "0 6px", fontSize: 11.5, fontWeight: 800, display: "inline-flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}>
+                        {pedidosPendientesCount}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {ventasView === "nuevo" && (
+            <>
             {/* ===== TOMA DE PEDIDO · Vista dividida en 2 columnas ===== */}
             <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 16, alignItems: "start" }}>
             {/* Columna IZQUIERDA: buscar cliente + elegir producto/presentación con stock visible */}
@@ -10088,15 +10154,19 @@ export function App() {
             </div>
             {/* ===== fin vista dividida (Toma de pedido) ===== */}
             </div>
+            </>
+            )}
 
-            {/* ===== COLA DE CARGA · vista para bodega. Aquí se DESPACHA y recién ahí se
-                    mueve inventario y plata (o se genera el crédito). ===== */}
-            {salesOrders.some((o) => o.status === "PENDING") && (
+            {/* ===== VISTA 2: COLA DE DESPACHOS · pantalla exclusiva para bodega.
+                    Aquí se DESPACHA y recién ahí se mueve inventario y plata
+                    (o se genera el crédito). ===== */}
+            {ventasView === "despachos" && (
+            <>
               <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
                 <h2 style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span>📦 Pedidos pendientes / Cola de carga</span>
-                  <span style={{ background: "#fef3c7", color: "#b45309", borderRadius: 999, padding: "2px 10px", fontSize: 13, fontWeight: 800 }}>
-                    {salesOrders.filter((o) => o.status === "PENDING").length}
+                  <span style={{ background: pedidosPendientesCount > 0 ? "#fef3c7" : "#e5e7eb", color: pedidosPendientesCount > 0 ? "#b45309" : "#6b7280", borderRadius: 999, padding: "2px 10px", fontSize: 13, fontWeight: 800 }}>
+                    {pedidosPendientesCount}
                   </span>
                 </h2>
                 <p className="muted" style={{ marginTop: -4 }}>
@@ -10104,6 +10174,13 @@ export function App() {
                   <strong> 🚚 Despachar</strong>. Recién ahí sale el inventario y entra la plata (o se
                   genera el crédito).
                 </p>
+                {pedidosPendientesCount === 0 ? (
+                  <div style={{ padding: "40px 20px", textAlign: "center", color: "#9ca3af", background: "#f9fafb", border: "1px dashed #d1d5db", borderRadius: 12, marginTop: 8 }}>
+                    <div style={{ fontSize: 40, marginBottom: 8 }}>✅</div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: "#6b7280" }}>No hay pedidos pendientes de carga</div>
+                    <div style={{ fontSize: 13, marginTop: 4 }}>Los pedidos que se tomen en «🛒 Nuevo Pedido» aparecerán aquí para despacharlos.</div>
+                  </div>
+                ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, marginTop: 8 }}>
                   {salesOrders
                     .filter((o) => o.status === "PENDING")
@@ -10127,7 +10204,10 @@ export function App() {
                         <div style={{ fontSize: 15, fontWeight: 800 }}>{o.customer_name}</div>
                         <div className="muted" style={{ fontSize: 12.5 }}>
                           {o.order_number}
-                          {o.delivery_date && <> · 📅 entrega {new Date(o.delivery_date + "T12:00:00").toLocaleDateString("es-EC")}</>}
+                          {o.delivery_date && <> · 📅 entrega {new Date(o.delivery_date.slice(0, 10) + "T12:00:00").toLocaleDateString("es-EC")}</>}
+                        </div>
+                        <div className="muted" style={{ fontSize: 11.5 }}>
+                          🕐 tomado {new Date(o.created_at).toLocaleString("es-EC", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}
                         </div>
                       </div>
 
@@ -10172,8 +10252,8 @@ export function App() {
                     </article>
                   ))}
                 </div>
+                )}
               </div>
-            )}
 
             {/* Historial de ventas (incluye Guía de Remisión por venta despachada) */}
             {sales.length > 0 && (
@@ -10233,6 +10313,8 @@ export function App() {
                   </table>
                 </div>
               </div>
+            )}
+            </>
             )}
 
             {/* Modal: captura de datos del transportista para la Guía de Remisión */}
