@@ -205,6 +205,43 @@ ordersRouter.put("/:id", asyncRoute(async (req, res) => {
   res.json(result);
 }));
 
+// Preparación (picking): paso intermedio de la cola de despachos. El bodeguero
+// alista los sacos, confirma la ubicación/lote de donde salen y marca el pedido
+// como "Listo para cargar". NO cambia el status (sigue PENDING) ni mueve nada:
+// solo sella prepared_at + picking_location. Enviar prepared:false lo revierte a
+// "Pendiente por cargar" (mientras no se haya despachado).
+ordersRouter.patch("/:id/prepare", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const body = z.object({
+    prepared: z.boolean().default(true),
+    picking_location: z.string().max(200).optional(),
+    prepared_by: z.string().uuid().optional()
+  }).parse(req.body);
+
+  const order = await pool.query(
+    "SELECT id, status FROM sales_orders WHERE id = $1 AND accionista_id = $2",
+    [req.params.id, accionistaId]
+  );
+  if (!order.rowCount) throw new ApiError(404, "Pedido no encontrado para el accionista seleccionado");
+  if (order.rows[0].status !== "PENDING") {
+    throw new ApiError(409, "Solo se puede preparar un pedido pendiente: este ya fue despachado o cancelado.");
+  }
+
+  const location = body.picking_location?.trim() || null;
+  const updated = await pool.query(
+    `UPDATE sales_orders
+        SET prepared_at = CASE WHEN $2 THEN COALESCE(prepared_at, now()) ELSE NULL END,
+            prepared_by = CASE WHEN $2 THEN $3::uuid ELSE NULL END,
+            -- La ubicación se conserva aunque se revierta la preparación, para
+            -- no obligar a re-teclearla si el bodeguero solo corrige el estado.
+            picking_location = COALESCE($4, picking_location)
+      WHERE id = $1
+      RETURNING *`,
+    [req.params.id, body.prepared, body.prepared_by ?? null, location]
+  );
+  res.json(updated.rows[0]);
+}));
+
 // Despachar y cobrar: el pedido se convierte en venta en UNA transacción.
 // Si algo falla (stock, caja), el pedido sigue PENDIENTE y se puede reintentar.
 ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
@@ -228,6 +265,11 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
     if (!order.rowCount) throw new ApiError(404, "Pedido no encontrado para el accionista seleccionado");
     if (order.rows[0].status === "DELIVERED") throw new ApiError(409, "Este pedido ya fue despachado.");
     if (order.rows[0].status === "CANCELLED") throw new ApiError(409, "Este pedido fue cancelado.");
+    // Flujo de 2 pasos: hay que CONFIRMAR LA PREPARACIÓN (picking) antes de
+    // despachar. Evita que se cargue un pedido cuyos sacos no se alistaron.
+    if (!order.rows[0].prepared_at) {
+      throw new ApiError(409, "Confirma la preparación del pedido (📦 Confirmar Preparación) antes de despacharlo.");
+    }
 
     const items = await client.query(
       "SELECT * FROM sales_order_items WHERE order_id = $1",

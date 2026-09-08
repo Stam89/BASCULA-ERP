@@ -1,6 +1,6 @@
 import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import html2canvas from "html2canvas";
-import { apiFetch, apiGet, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId } from "./api";
+import { apiFetch, apiGet, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId } from "./api";
 import { money, categoryLabel, stockGroupLabel } from "./format";
 import type { Farmer, Product, Warehouse, Lot, MateriaPrimaEntry, MateriaPrimaCorreccion, PendingEntry } from "./types";
 import { Metric, ReportTable, Input, Select, MedidorRow, DataList } from "./components/ui";
@@ -759,6 +759,10 @@ type SalesOrder = {
   sale_id: string | null;
   sale_number: string | null;
   created_at: string;
+  // Preparación (picking): "Listo para cargar" cuando prepared_at != null; de
+  // qué bodega/lote se extrae el producto en picking_location.
+  prepared_at?: string | null;
+  picking_location?: string | null;
   items: Array<{ product_name: string; presentation_name: string | null; quantity: string | number; unit_price: string | number; total: string | number }>;
   // Guía de remisión (se completan al emitirla).
   transportista_nombre?: string | null;
@@ -1882,6 +1886,9 @@ export function App() {
   // Drill-down del costo de ventas (mercadería vendida / combustible de secado).
   const [detalleCosto, setDetalleCosto] = useState<{ concepto: "mercaderia" | "combustible"; data: CostoVentasDetalle } | null>(null);
   const [orderPayMethod, setOrderPayMethod] = useState<Record<string, string>>({});
+  // Ubicación/lote de picking que el bodeguero escribe por pedido (borrador local
+  // hasta confirmar la preparación). Sin entrada usa la ubicación ya guardada.
+  const [orderPickLocation, setOrderPickLocation] = useState<Record<string, string>>({});
   // Modal de captura de datos del transportista para la Guía de Remisión.
   const [guiaModal, setGuiaModal] = useState<{ order: SalesOrder; nombre: string; cedula: string; placa: string } | null>(null);
   /** Pedido que se está editando (sus líneas vuelven al carrito). */
@@ -1994,6 +2001,9 @@ export function App() {
     () => warehouses.find((warehouse) => warehouse.type === "FINISHED_GOODS") ?? warehouses[0],
     [warehouses]
   );
+  // Ubicación de picking sugerida por defecto: la bodega de producto terminado
+  // (de donde sale el arroz blanco despachado). El bodeguero puede ajustarla.
+  const ubicacionSugerida = finishedWarehouse?.name ?? "Bodega Principal";
   const whiteRiceProduct = useMemo(
     () =>
       products.find((product) => product.code === "ARROZ-PILADO-011") ??
@@ -6771,9 +6781,33 @@ export function App() {
     await refreshCustomersAndSales();
   }
 
+  // Confirmar preparación (picking): el bodeguero alista los sacos y marca el
+  // pedido como "Listo para cargar", guardando de qué bodega/lote salen. No mueve
+  // inventario ni plata; solo habilita el despacho. `prepared:false` lo revierte.
+  async function prepararPedido(order: SalesOrder, prepared: boolean) {
+    const location = (orderPickLocation[order.id] ?? order.picking_location ?? "").trim() || ubicacionSugerida;
+    await apiPatch<SalesOrder>(`/orders/${order.id}/prepare`, {
+      prepared,
+      picking_location: location || undefined,
+      prepared_by: authUser?.id
+    });
+    addToast(
+      prepared
+        ? `📦 Pedido ${order.order_number} preparado · Listo para cargar${location ? ` · ${location}` : ""}`
+        : `Pedido ${order.order_number} devuelto a Pendiente por cargar`,
+      "success"
+    );
+    await refreshCustomersAndSales();
+  }
+
   // Despachar y cobrar: el pedido se convierte en venta real (inventario +
   // caja o crédito) en una sola operación del servidor.
   async function despacharPedido(order: SalesOrder) {
+    // Flujo de 2 pasos: no se puede despachar sin haber confirmado la preparación.
+    if (!order.prepared_at) {
+      addToast("Primero confirma la preparación del pedido (📦 Confirmar Preparación).", "error");
+      return;
+    }
     const metodo = orderPayMethod[order.id] ?? "CASH";
     const registerId = dashboard.current_cash_register?.id;
     if (metodo !== "CREDIT" && !registerId) {
@@ -10191,13 +10225,22 @@ export function App() {
                       const fb = b.delivery_date || "9999-12-31";
                       return fa < fb ? -1 : fa > fb ? 1 : 0;
                     })
-                    .map((o) => (
-                    <article key={o.id} style={{ border: "1px solid var(--c-border)", borderTop: "5px solid var(--c-warning)", borderRadius: 12, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+                    .map((o) => {
+                    // "Listo para cargar" = ya se confirmó la preparación (picking).
+                    const listo = Boolean(o.prepared_at);
+                    return (
+                    <article key={o.id} style={{ border: "1px solid var(--c-border)", borderTop: `5px solid ${listo ? "var(--c-success, #16a34a)" : "var(--c-warning)"}`, borderRadius: 12, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                        <span style={{ background: "#fef3c7", color: "#b45309", borderRadius: 999, padding: "3px 12px", fontSize: 12.5, fontWeight: 800, letterSpacing: 0.3 }}>
-                          🟡 Pendiente por cargar
-                        </span>
-                        <strong style={{ fontSize: 18, color: "#b45309" }}>{money(Number(o.total_amount))}</strong>
+                        {listo ? (
+                          <span style={{ background: "#dcfce7", color: "#15803d", borderRadius: 999, padding: "3px 12px", fontSize: 12.5, fontWeight: 800, letterSpacing: 0.3 }}>
+                            🟢 Listo para cargar
+                          </span>
+                        ) : (
+                          <span style={{ background: "#fef3c7", color: "#b45309", borderRadius: 999, padding: "3px 12px", fontSize: 12.5, fontWeight: 800, letterSpacing: 0.3 }}>
+                            🟡 Pendiente por cargar
+                          </span>
+                        )}
+                        <strong style={{ fontSize: 18, color: listo ? "#15803d" : "#b45309" }}>{money(Number(o.total_amount))}</strong>
                       </div>
 
                       <div>
@@ -10225,32 +10268,60 @@ export function App() {
                         {o.notes && <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>📝 {o.notes}</div>}
                       </div>
 
+                      {/* Ubicación / Lote de picking: de qué bodega/lote de arroz blanco se extrae. */}
+                      <div style={{ background: listo ? "#f0fdf4" : "#f8fafc", border: `1px solid ${listo ? "#bbf7d0" : "#e2e8f0"}`, borderRadius: 8, padding: "8px 12px" }}>
+                        <span className="muted" style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>📍 Ubicación / Lote</span>
+                        {listo ? (
+                          <div style={{ fontSize: 14, fontWeight: 700, marginTop: 2 }}>{o.picking_location || ubicacionSugerida}</div>
+                        ) : (
+                          <input
+                            type="text"
+                            value={orderPickLocation[o.id] ?? o.picking_location ?? ubicacionSugerida}
+                            onChange={(e) => setOrderPickLocation((cur) => ({ ...cur, [o.id]: e.target.value }))}
+                            placeholder="Ej: Bodega Principal - Fila A"
+                            style={{ width: "100%", marginTop: 4, padding: "7px 9px", borderRadius: 6, border: "1px solid var(--c-border)", fontSize: 13 }}
+                          />
+                        )}
+                      </div>
+
                       <div className="muted" style={{ fontSize: 11 }}>
                         Ya figura en Por Cobrar; el cobro y la salida de inventario se concretan al despachar.
                       </div>
 
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: "auto" }}>
-                        <select
-                          value={orderPayMethod[o.id] ?? "CASH"}
-                          onChange={(e) => setOrderPayMethod((cur) => ({ ...cur, [o.id]: e.target.value }))}
-                          style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid var(--c-border)", fontSize: 13 }}
-                        >
-                          <option value="CASH">💵 Efectivo</option>
-                          <option value="TRANSFER">📱 Transferencia</option>
-                          <option value="CARD">💳 Tarjeta</option>
-                          <option value="CHECK">✓ Cheque</option>
-                          <option value="CREDIT">📋 Crédito</option>
-                        </select>
-                        <button type="button" className="primary" style={{ flex: 1, minWidth: 150, padding: "9px 12px", fontWeight: 800 }} onClick={() => despacharPedido(o).catch((e) => addToast(e.message, "error"))}>
-                          🚚 Despachar y entregar
+                      {!listo ? (
+                        // PASO 1: confirmar preparación. Aún NO se puede despachar.
+                        <button type="button" className="primary" style={{ padding: "10px 12px", fontWeight: 800, marginTop: "auto" }} onClick={() => prepararPedido(o, true).catch((e) => addToast(e.message, "error"))}>
+                          📦 Confirmar Preparación
                         </button>
-                      </div>
+                      ) : (
+                        // PASO 2: ya está listo → elegir método de pago y despachar.
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: "auto" }}>
+                          <select
+                            value={orderPayMethod[o.id] ?? "CASH"}
+                            onChange={(e) => setOrderPayMethod((cur) => ({ ...cur, [o.id]: e.target.value }))}
+                            style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid var(--c-border)", fontSize: 13 }}
+                          >
+                            <option value="CASH">💵 Efectivo</option>
+                            <option value="TRANSFER">📱 Transferencia</option>
+                            <option value="CARD">💳 Tarjeta</option>
+                            <option value="CHECK">✓ Cheque</option>
+                            <option value="CREDIT">📋 Crédito</option>
+                          </select>
+                          <button type="button" className="primary" style={{ flex: 1, minWidth: 150, padding: "9px 12px", fontWeight: 800 }} onClick={() => despacharPedido(o).catch((e) => addToast(e.message, "error"))}>
+                            🚚 Despachar y entregar
+                          </button>
+                        </div>
+                      )}
                       <div style={{ display: "flex", gap: 8 }}>
+                        {listo && (
+                          <button type="button" style={{ flex: 1 }} onClick={() => prepararPedido(o, false).catch((e) => addToast(e.message, "error"))} title="Volver a Pendiente por cargar">↩ Revertir</button>
+                        )}
                         <button type="button" style={{ flex: 1 }} onClick={() => editarPedido(o).catch((e) => addToast(e.message, "error"))}>✎ Editar</button>
                         <button type="button" style={{ flex: 1 }} onClick={() => cancelarPedido(o).catch((e) => addToast(e.message, "error"))}>✕ Cancelar</button>
                       </div>
                     </article>
-                  ))}
+                    );
+                  })}
                 </div>
                 )}
               </div>
