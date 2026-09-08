@@ -7004,6 +7004,70 @@ export function App() {
     win.print();
   }
 
+  // Ticket de Salida a Selección (guía de salida de bodega): comprobante de lo que
+  // sale a la persona externa para selectar/envejecer. Firma "Entregado por /
+  // Recibido por". No mueve nada: refleja el lote ya creado.
+  function printTicketSalidaSeleccion(b: SelectionBatch) {
+    const esc = (s: string | null | undefined) => (s ?? "").replace(/</g, "&lt;");
+    const tipo = b.service_type === "ENVEJECIMIENTO" ? "Envejecimiento" : "Selección";
+    const fecha = new Date(String(b.service_date).slice(0, 10) + "T12:00:00").toLocaleDateString("es-EC", { year: "numeric", month: "long", day: "numeric" });
+    const totalQq = (b.inputs || []).reduce((s, l) => s + Number(l.quantity), 0);
+    const filas = (b.inputs || []).map((l) => `
+      <tr><td>${esc(l.product_name)}</td><td class="c">${Number(l.quantity).toFixed(2)} QQ</td></tr>`).join("");
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+      <title>Ticket de Salida ${esc(b.batch_number)}</title>
+      <style>
+        @page { size: 80mm auto; margin: 6mm; }
+        *{box-sizing:border-box}
+        body{font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#111;margin:0}
+        .tk{width:72mm;margin:0 auto}
+        h1{font-size:15px;margin:0;text-align:center;letter-spacing:.5px}
+        .sub{text-align:center;color:#444;font-size:11px;margin:2px 0 8px}
+        .row{display:flex;justify-content:space-between;margin:2px 0;gap:8px}
+        .k{color:#555}
+        .lote{font-size:15px;font-weight:800;text-align:center;background:#111;color:#fff;border-radius:6px;padding:5px;margin:6px 0}
+        table{width:100%;border-collapse:collapse;margin-top:6px}
+        th{border-bottom:2px solid #111;padding:4px;text-align:left;font-size:11px;text-transform:uppercase}
+        td{padding:5px 4px;border-bottom:1px dotted #bbb}
+        td.c,th.c{text-align:right}
+        .tot{font-size:14px;font-weight:800;text-align:right;margin-top:6px}
+        .cost{border:1px dashed #333;border-radius:6px;padding:6px 8px;margin:8px 0}
+        .sigs{display:flex;gap:14px;margin-top:36px}
+        .sig{flex:1;text-align:center}
+        .sig hr{border:none;border-top:1px solid #111;margin:0 0 4px}
+        .sig span{font-size:10.5px;color:#333}
+        @media print{ button{display:none!important} }
+      </style></head><body>
+      <div class="tk">
+        <h1>TICKET DE SALIDA · ${tipo.toUpperCase()}</h1>
+        <div class="sub">${esc(appSettings.business_name) || "PILADORA CEYRO"}</div>
+        <div class="lote">Lote ${esc(b.batch_number)}</div>
+        <div class="row"><span class="k">Fecha:</span> <strong>${fecha}</strong></div>
+        <div class="row"><span class="k">Persona externa:</span> <strong>${esc(b.provider_name)}</strong></div>
+        <div class="row"><span class="k">Bodega origen:</span> ${esc(b.warehouse_name)}</div>
+        <table>
+          <thead><tr><th>Producto</th><th class="c">Cantidad</th></tr></thead>
+          <tbody>${filas}</tbody>
+        </table>
+        <div class="tot">Total: ${totalQq.toFixed(2)} QQ</div>
+        <div class="cost">
+          <div class="row"><span class="k">Tarifa acordada:</span> <strong>$${Number(b.rate_per_qq).toFixed(2)} / QQ</strong></div>
+          <div class="row"><span class="k">Costo estimado:</span> <strong>$${Number(b.total_cost).toFixed(2)}</strong></div>
+        </div>
+        <div class="sigs">
+          <div class="sig"><hr><span>Entregado por (Bodega)</span></div>
+          <div class="sig"><hr><span>Recibido por (${esc(b.provider_name)})</span></div>
+        </div>
+      </div>
+    </body></html>`;
+    const win = window.open("", "_blank", "width=420,height=720");
+    if (!win) { addToast("El navegador bloqueó la ventana de impresión", "error"); return; }
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    win.print();
+  }
+
   function printGuiaRemision(order: SalesOrder) {
     const remitente = accionistas.find((a) => a.id === activeAccionistaId)?.name ?? appSettings.business_name;
     const fecha = new Date().toLocaleDateString("es-EC", { year: "numeric", month: "long", day: "numeric" });
@@ -13360,6 +13424,19 @@ export function App() {
           const effectiveRate = selectionForm.rate_per_qq === "" ? defaultRate : Number(selectionForm.rate_per_qq);
           const inputsTotal = selectionForm.inputs.reduce((s, l) => s + (Number(l.quantity) || 0), 0);
           const costoN = round2(inputsTotal * (effectiveRate || 0));
+          // Validación de stock (Parte 1): QQ pedidos por producto (sumando líneas
+          // repetidas) vs disponible en la bodega origen. Si algún producto se pasa,
+          // se bloquea el envío para no sacar más de lo que hay.
+          const qqPorProductoSel = new Map<string, number>();
+          for (const l of selectionForm.inputs) {
+            if (l.product_id && Number(l.quantity) > 0) qqPorProductoSel.set(l.product_id, (qqPorProductoSel.get(l.product_id) ?? 0) + Number(l.quantity));
+          }
+          const stockExcedidoSel = sourceWarehouseId
+            ? [...qqPorProductoSel.entries()].some(([pid, qq]) => qq > availableFor(pid, sourceWarehouseId) + 0.001)
+            : false;
+          // Envejecido (Parte 4): solo el accionista habilitado puede envejecer.
+          const envejecidoBloqueado = selectionForm.service_type === "ENVEJECIMIENTO" && !puedeEnvejecer;
+          const enviarSelDeshabilitado = stockExcedidoSel || envejecidoBloqueado || inputsTotal <= 0;
 
           const setInputLine = (i: number, patch: Partial<LineDraft>) =>
             setSelectionForm((f) => ({ ...f, inputs: f.inputs.map((l, idx) => (idx === i ? { ...l, ...patch } : l)) }));
@@ -13385,10 +13462,15 @@ export function App() {
               <label><span>Tipo de servicio</span>
                 <select value={selectionForm.service_type} onChange={(e) => setSelectionForm({ ...selectionForm, service_type: e.target.value as "SELECCION" | "ENVEJECIMIENTO", rate_per_qq: "" })}>
                   <option value="SELECCION">Selección (limpiar impureza)</option>
-                  {puedeEnvejecer && <option value="ENVEJECIMIENTO">Envejecido</option>}
+                  <option value="ENVEJECIMIENTO">Envejecimiento</option>
                 </select>
               </label>
-              {!puedeEnvejecer && <p className="muted" style={{ marginTop: -4 }}>Este accionista no está habilitado para envejecer. Se habilita en Configuración → Accionistas.</p>}
+              {/* Aviso de envejecido: SOLO cuando se elige "Envejecimiento" y el accionista no está habilitado. */}
+              {envejecidoBloqueado && (
+                <div style={{ marginTop: -2, marginBottom: 6, padding: "8px 12px", background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 8, color: "#92400e", fontSize: 12.5, fontWeight: 600 }}>
+                  ⚠ Este accionista no está habilitado para envejecer. Se habilita en Configuración → Accionistas. (La selección para limpiar impureza sí está permitida.)
+                </div>
+              )}
               <label><span>Persona externa (quien lo hace)</span>
                 <select value={selectionForm.provider_id} onChange={(e) => setSelectionForm({ ...selectionForm, provider_id: e.target.value })}>
                   <option value="">Seleccione</option>
@@ -13410,7 +13492,11 @@ export function App() {
                     <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 90px auto", gap: 6, alignItems: "center", marginTop: 6 }}>
                       <select value={line.product_id} onChange={(e) => setInputLine(i, { product_id: e.target.value })} style={inputStyle}>
                         <option value="">Producto…</option>
-                        {inputProducts.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        {inputProducts.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name} [Disp: {(sourceWarehouseId ? availableFor(p.id, sourceWarehouseId) : 0).toFixed(2)} QQ]
+                          </option>
+                        ))}
                       </select>
                       <input type="number" step="0.01" min="0" placeholder="QQ" value={line.quantity} onChange={(e) => setInputLine(i, { quantity: e.target.value })} style={inputStyle} />
                       <button type="button" onClick={() => removeInputLine(i)} title="Quitar" style={{ border: "none", background: "transparent", color: "#dc2626", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
@@ -13432,7 +13518,12 @@ export function App() {
                 <strong>{money(costoN)}</strong>
                 <small>{round2(inputsTotal)} QQ × ${effectiveRate || 0}</small>
               </div>
-              <button className="primary">Enviar a selectar</button>
+              {stockExcedidoSel && (
+                <div style={{ marginBottom: 6, padding: "8px 12px", background: "#fee2e2", border: "1px solid #fecaca", borderRadius: 8, color: "#b91c1c", fontSize: 12.5, fontWeight: 700 }}>
+                  ⛔ La cantidad supera el stock disponible en bodega. Ajusta los QQ antes de enviar.
+                </div>
+              )}
+              <button className="primary" disabled={enviarSelDeshabilitado} style={enviarSelDeshabilitado ? { opacity: 0.5, cursor: "not-allowed" } : undefined}>Enviar a selectar</button>
               {selectionProviders.length === 0 && <p className="muted">Primero agrega la persona externa en el panel de la derecha.</p>}
             </form>
 
@@ -13459,12 +13550,14 @@ export function App() {
                         ) : (
                           <button type="button" className="primary" style={{ padding: "6px 12px" }} onClick={() => openFinish(b.id)}>📥 Registrar lo que regresó</button>
                         )}
+                        <button type="button" className="btnGhost" onClick={() => printTicketSalidaSeleccion(b)} title="Imprimir guía de salida de bodega">🖨️ Ticket de Salida</button>
                         <button type="button" className="btnGhost" style={{ color: "#dc2626" }} onClick={() => cancelBatch(b.id).catch((err) => addToast(err.message, "error"))}>Cancelar</button>
                       </div>
 
                       {finishingBatchId === b.id && (
                         <div style={{ marginTop: 10, background: "#f9fafb", borderRadius: 8, padding: 10 }}>
-                          <span style={{ fontSize: 13, fontWeight: 700 }}>Productos que regresaron</span>
+                          <span style={{ fontSize: 13, fontWeight: 700 }}>📥 Recepción del lote — controla merma y subproductos</span>
+                          <p className="muted" style={{ fontSize: 11.5, margin: "2px 0 4px" }}>Registra los QQ limpios que entran a bodega y el subproducto recuperado; la merma se calcula sola.</p>
                           {finishOutputs.map((line, i) => (
                             <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 70px 88px auto auto", gap: 6, alignItems: "center", marginTop: 6 }}>
                               <select value={line.product_id} onChange={(e) => setOutLine(i, { product_id: e.target.value })} style={inputStyle}>
@@ -13499,10 +13592,41 @@ export function App() {
                               <button type="button" onClick={() => removeOutLine(i)} title="Quitar" style={{ border: "none", background: "transparent", color: "#dc2626", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
                             </div>
                           ))}
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
+                          <div style={{ marginTop: 8 }}>
                             <button type="button" onClick={addOutLine} style={{ background: "transparent", border: "1px dashed #cbd5e1", borderRadius: 6, padding: "5px 10px", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>+ Agregar</button>
-                            <small className="muted">Total regresa: {round2(finishOutputs.reduce((s, l) => s + (Number(l.quantity) || 0), 0))} QQ · merma {round2(Number(b.input_qq) - finishOutputs.reduce((s, l) => s + (Number(l.quantity) || 0), 0))} QQ</small>
                           </div>
+                          {/* Resumen de recepción: QQ Limpios / Subproducto / Merma (auto). */}
+                          {(() => {
+                            const num = (l: LineDraft) => Number(l.quantity) || 0;
+                            const esSub = (l: LineDraft) => !l.is_reject && !!sacoEspecialLabel(outputProducts.find((p) => p.id === l.product_id));
+                            const limpios = round2(finishOutputs.filter((l) => !l.is_reject && !esSub(l)).reduce((s, l) => s + num(l), 0));
+                            const sub = round2(finishOutputs.filter((l) => esSub(l)).reduce((s, l) => s + num(l), 0));
+                            const rechazo = round2(finishOutputs.filter((l) => !!l.is_reject).reduce((s, l) => s + num(l), 0));
+                            const enviados = round2(Number(b.input_qq));
+                            const merma = round2(enviados - (limpios + sub + rechazo));
+                            const cell = (label: string, val: number, color: string) => (
+                              <div style={{ textAlign: "center", padding: "6px 8px" }}>
+                                <div style={{ fontSize: 10.5, color: "#64748b", fontWeight: 700, textTransform: "uppercase" }}>{label}</div>
+                                <div style={{ fontSize: 16, fontWeight: 800, color }}>{val.toFixed(2)}</div>
+                              </div>
+                            );
+                            return (
+                              <div style={{ marginTop: 8, border: "1px solid #e2e8f0", borderRadius: 8, background: "#fff" }}>
+                                <div style={{ display: "grid", gridTemplateColumns: `repeat(${rechazo > 0 ? 5 : 4}, 1fr)`, gap: 0 }}>
+                                  {cell("Enviados", enviados, "#334155")}
+                                  {cell("Limpios recibidos", limpios, "#15803d")}
+                                  {cell("Subproducto", sub, "#b45309")}
+                                  {rechazo > 0 && cell("Rechazo", rechazo, "#6b7280")}
+                                  {cell("Merma / Desecho", merma, merma > 0.001 ? "#b91c1c" : "#15803d")}
+                                </div>
+                                {merma < -0.001 && (
+                                  <div style={{ padding: "6px 10px", background: "#fef2f2", color: "#b91c1c", fontSize: 11.5, fontWeight: 700, borderTop: "1px solid #fecaca" }}>
+                                    ⛔ Lo recibido supera lo enviado ({(-merma).toFixed(2)} QQ de más). Revisa las cantidades.
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
                           <button type="button" className="primary" style={{ marginTop: 8 }} onClick={() => submitFinishBatch(b.id).catch((err) => addToast(err.message, "error"))}>Guardar e ingresar al inventario</button>
                         </div>
                       )}
