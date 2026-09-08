@@ -1843,7 +1843,9 @@ export function App() {
   const [filteredCustomers, setFilteredCustomers] = useState<Customer[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [showQuickNewCustomer, setShowQuickNewCustomer] = useState(false);
-  const [quickNewCustomerForm, setQuickNewCustomerForm] = useState({ full_name: "", phone: "" });
+  const [quickNewCustomerForm, setQuickNewCustomerForm] = useState({ full_name: "", phone: "", identification: "", address: "" });
+  // Spinner compartido de "Buscando en SRI…" mientras se consulta el SRI.
+  const [sriLoading, setSriLoading] = useState(false);
 
   // ── Presentaciones dinámicas en venta ──
   const [saleProductPresentations, setSaleProductPresentations] = useState<any[]>([]);
@@ -4126,6 +4128,7 @@ export function App() {
       addToast("Ingresa una cédula (10 dígitos) o RUC (13) antes de consultar el SRI", "error");
       return;
     }
+    setSriLoading(true);
     try {
       const r = await apiGetSRI(id);
       if (r.encontrado && r.razonSocial) {
@@ -4136,7 +4139,10 @@ export function App() {
         addToast(r.mensaje ?? "El SRI no devolvió datos; ingrésalos manualmente.", "warn");
       }
     } catch (e) {
+      // Fallback: nunca bloquea al operador; puede seguir escribiendo a mano.
       addToast(e instanceof Error ? e.message : "No se pudo consultar el SRI", "error");
+    } finally {
+      setSriLoading(false);
     }
   }
 
@@ -4394,20 +4400,22 @@ export function App() {
     } catch (e) { console.error(e); }
   }
 
-  // ── Crear cliente rápido (nombre + teléfono) ──
+  // ── Crear cliente desde el modal "+ Nuevo" de Ventas ──
+  // Usa el MISMO endpoint que "Gestionar Clientes" (POST /customers) para unificar
+  // la creación: así el cliente nace con Nombre/RUC/Dirección (los datos que pide
+  // la Guía de Remisión), no solo nombre+teléfono.
   async function submitQuickNewCustomer() {
     if (!quickNewCustomerForm.full_name) { addToast("Ingresa el nombre del cliente", "error"); return; }
     try {
-      const res = await apiFetch(`/customers/quick`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(quickNewCustomerForm)
+      const newCust = await apiPost<Customer>("/customers", {
+        full_name: quickNewCustomerForm.full_name,
+        phone: quickNewCustomerForm.phone || undefined,
+        identification: quickNewCustomerForm.identification || undefined,
+        address: quickNewCustomerForm.address || undefined
       });
-      if (!res.ok) throw new Error(await res.text());
-      const newCust = await res.json();
       setCustomers(prev => [...prev, newCust]);
       setSelectedCustomerId(newCust.id);
-      setQuickNewCustomerForm({ full_name: "", phone: "" });
+      setQuickNewCustomerForm({ full_name: "", phone: "", identification: "", address: "" });
       setShowQuickNewCustomer(false);
       setCustomerSearch("");
       setFilteredCustomers([]);
@@ -10092,11 +10100,39 @@ export function App() {
           <section className="panelGrid">
             {/* Formulario de venta */}
             {showQuickNewCustomer && (
-              <div className="modalOverlay" onClick={() => { setShowQuickNewCustomer(false); setQuickNewCustomerForm({ full_name: "", phone: "" }); }}>
+              <div className="modalOverlay" onClick={() => { setShowQuickNewCustomer(false); setQuickNewCustomerForm({ full_name: "", phone: "", identification: "", address: "" }); }}>
                 <div className="modalCard" onClick={(e) => e.stopPropagation()}>
-                  <h3>Nuevo cliente rápido</h3>
+                  <h3>Nuevo cliente</h3>
                   <label>
-                    <span>Nombre *</span>
+                    <span>Cédula / RUC</span>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <input
+                        type="text"
+                        placeholder="0999999999001"
+                        value={quickNewCustomerForm.identification}
+                        style={{ flex: 1 }}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setQuickNewCustomerForm((p) => ({ ...p, identification: val }));
+                          // Consulta automática al completar 10 (cédula) o 13 (RUC) dígitos.
+                          const dig = val.replace(/\D/g, "");
+                          if (dig.length === 10 || dig.length === 13) {
+                            consultarSRIyRellenar(dig, ({ razonSocial, direccion }) =>
+                              setQuickNewCustomerForm((p) => ({ ...p, full_name: razonSocial, address: direccion ?? p.address })));
+                          }
+                        }}
+                      />
+                      <button type="button" disabled={sriLoading} title="Consultar SRI"
+                        onClick={() => consultarSRIyRellenar(quickNewCustomerForm.identification, ({ razonSocial, direccion }) =>
+                          setQuickNewCustomerForm((p) => ({ ...p, full_name: razonSocial, address: direccion ?? p.address })))}
+                        style={{ padding: "0 12px", borderRadius: 6, border: "1px solid #2563eb", background: "#eff6ff", color: "#2563eb", cursor: sriLoading ? "wait" : "pointer", fontWeight: 700, whiteSpace: "nowrap", opacity: sriLoading ? 0.6 : 1 }}>
+                        🔍 SRI
+                      </button>
+                    </div>
+                    {sriLoading && <small style={{ color: "#2563eb", fontWeight: 600 }}>⏳ Buscando en SRI…</small>}
+                  </label>
+                  <label>
+                    <span>Nombre / Razón social *</span>
                     <NameInput
                       type="text"
                       placeholder="Ej: Juan García"
@@ -10113,11 +10149,20 @@ export function App() {
                       onChange={(e) => setQuickNewCustomerForm({ ...quickNewCustomerForm, phone: e.target.value })}
                     />
                   </label>
+                  <label>
+                    <span>Dirección</span>
+                    <input
+                      type="text"
+                      placeholder="Calle, ciudad..."
+                      value={quickNewCustomerForm.address}
+                      onChange={(e) => setQuickNewCustomerForm({ ...quickNewCustomerForm, address: e.target.value })}
+                    />
+                  </label>
                   <div className="buttonRow">
                     <button type="button" className="primary" onClick={submitQuickNewCustomer}>
                       Crear cliente
                     </button>
-                    <button type="button" onClick={() => { setShowQuickNewCustomer(false); setQuickNewCustomerForm({ full_name: "", phone: "" }); }}>
+                    <button type="button" onClick={() => { setShowQuickNewCustomer(false); setQuickNewCustomerForm({ full_name: "", phone: "", identification: "", address: "" }); }}>
                       Cancelar
                     </button>
                   </div>
