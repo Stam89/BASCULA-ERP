@@ -1,6 +1,7 @@
 import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import html2canvas from "html2canvas";
-import { apiFetch, apiGet, apiGetSRI, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId } from "./api";
+import { apiFetch, apiGet, apiGetSRI, apiGetBasculaStatus, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId } from "./api";
+import type { BasculaSyncStatus } from "./api";
 import { money, categoryLabel, stockGroupLabel, formatPersonName } from "./format";
 import type { Farmer, Product, Warehouse, Lot, MateriaPrimaEntry, MateriaPrimaCorreccion, PendingEntry } from "./types";
 import { Metric, ReportTable, Input, Select, MedidorRow, DataList } from "./components/ui";
@@ -4121,6 +4122,12 @@ export function App() {
     await refresh();
   }
 
+  // Mini-dashboard de la sincronización DIRECTA por WiFi (tablet → ERP). Es
+  // informativo y convive con la importación desde Firebase; no reemplaza nada.
+  // `basculaSyncErr` = true cuando no se pudo leer el estado (backend inaccesible).
+  const [basculaSync, setBasculaSync] = useState<BasculaSyncStatus | null>(null);
+  const [basculaSyncErr, setBasculaSyncErr] = useState(false);
+
   const [basculaImporting, setBasculaImporting] = useState(false);
   async function runFirebaseImport() {
     setBasculaImporting(true);
@@ -4759,6 +4766,22 @@ export function App() {
       refreshCustomersAndSales().catch(() => undefined);
     }, 15000);
     return () => window.clearInterval(id);
+  }, [authUser, activeTab]);
+
+  // Mini-dashboard de sincronización WiFi: mientras se esté en Báscula, se
+  // consulta el estado del enlace directo (tablet → ERP) cada 8 s. Es solo
+  // lectura y tolerante a fallos: si el backend no responde, marca "sin enlace"
+  // sin romper la vista ni afectar la importación desde Firebase.
+  useEffect(() => {
+    if (!authUser || activeTab !== "Bascula") return;
+    let vivo = true;
+    const cargar = () =>
+      apiGetBasculaStatus()
+        .then((s) => { if (vivo) { setBasculaSync(s); setBasculaSyncErr(false); } })
+        .catch(() => { if (vivo) setBasculaSyncErr(true); });
+    cargar();
+    const id = window.setInterval(cargar, 8000);
+    return () => { vivo = false; window.clearInterval(id); };
   }, [authUser, activeTab]);
 
   function resetFomentoForm() {
@@ -8133,6 +8156,53 @@ export function App() {
                 </table>
               </div>
             )}
+
+          {/* Mini-dashboard de sincronización directa por WiFi (tablet → ERP).
+              Panel INDEPENDIENTE: no envuelve ni altera la tabla de tickets ni
+              los botones de abajo. Convive con la importación desde Firebase. */}
+          <div className="tablePanel" style={{ marginBottom: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 16 }}>
+              <div style={{ marginRight: "auto" }}>
+                <h2 style={{ marginBottom: 2 }}>🔗 Sincronización de báscula</h2>
+                <p className="muted" style={{ margin: 0 }}>
+                  Enlace directo por WiFi (tablet → ERP) en paralelo con la importación automática desde Firebase.
+                </p>
+              </div>
+              {/* Estado del enlace ERP */}
+              <div style={{ textAlign: "center", minWidth: 110 }}>
+                <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Estado ERP</div>
+                {(() => {
+                  const online = !basculaSyncErr && basculaSync != null;
+                  const cargando = basculaSync == null && !basculaSyncErr;
+                  const color = cargando ? "#9ca3af" : online ? "#16a34a" : "#dc2626";
+                  const label = cargando ? "Conectando…" : online ? "En línea" : "Sin enlace";
+                  return (
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 700, color }}>
+                      <span style={{ width: 10, height: 10, borderRadius: 999, background: color, display: "inline-block" }} />
+                      {label}
+                      {basculaSync?.deviceKeyRequerida ? <span title="Requiere clave de dispositivo (X-Device-Key)">🔒</span> : null}
+                    </div>
+                  );
+                })()}
+              </div>
+              {/* Tickets pendientes */}
+              <div style={{ textAlign: "center", minWidth: 90 }}>
+                <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Pendientes</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: (basculaSync?.pendientes ?? 0) > 0 ? "#b45309" : "#111827" }}>
+                  {basculaSync ? basculaSync.pendientes : "—"}
+                </div>
+              </div>
+              {/* Último envío recibido */}
+              <div style={{ textAlign: "center", minWidth: 150 }}>
+                <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Último envío</div>
+                <div style={{ fontWeight: 700 }}>
+                  {basculaSync?.ultimoEnvio
+                    ? new Date(basculaSync.ultimoEnvio).toLocaleString("es-EC", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })
+                    : "—"}
+                </div>
+              </div>
+            </div>
+          </div>
 
           <div className="tablePanel">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>

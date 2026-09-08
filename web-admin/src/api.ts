@@ -128,6 +128,22 @@ export async function apiGetSRI(identificacion: string): Promise<SriResult> {
   return apiGet<SriResult>(`/sri/consultar/${id}`);
 }
 
+// ── Estado de la sincronización directa por WiFi (tablet → ERP) ──────────────
+// Alimenta el mini-dashboard de la pestaña Báscula. Pega a /api/bascula/status,
+// que va montado APARTE de /api/v1 (por eso no usa apiGet, que antepone /api/v1).
+// Convive con la importación desde Firebase; es solo lectura.
+export type BasculaSyncStatus = {
+  ok: boolean;
+  pendientes: number;
+  ultimoEnvio: string | null;
+  deviceKeyRequerida: boolean;
+};
+
+export async function apiGetBasculaStatus(): Promise<BasculaSyncStatus> {
+  const response = await fetch(`${API_URL}/api/bascula/status`, { headers: authHeaders() });
+  return parseResponse<BasculaSyncStatus>(response);
+}
+
 export async function checkHealth(): Promise<boolean> {
   try {
     const response = await fetch(`${API_URL}/health`);
