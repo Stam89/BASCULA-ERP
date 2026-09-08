@@ -4245,7 +4245,8 @@ export function App() {
   // si no hay red o el contribuyente no existe (se ingresa manual).
   async function consultarSRIyRellenar(
     identificacion: string,
-    apply: (data: { razonSocial: string; direccion: string | null }) => void
+    apply: (data: { razonSocial: string; direccion: string | null }) => void,
+    opts?: { onNotFound?: () => void }
   ) {
     const id = String(identificacion ?? "").replace(/\D/g, "");
     if (id.length !== 10 && id.length !== 13) {
@@ -4255,15 +4256,16 @@ export function App() {
     setSriLoading(true);
     try {
       const r = await apiGetSRI(id);
-      // Diagnóstico: inspeccionar la respuesta cruda del SRI en la consola.
+      // Diagnóstico: inspeccionar la respuesta cruda (multi-fuente) en la consola.
       console.log("[SRI Response]:", r);
-      // Éxito = el backend no marcó success:false Y trajo razón social.
+      // Éxito = alguna fuente (BD interna / SRI / registro público) trajo el nombre.
       if (r.success !== false && r.razonSocial) {
         const nombre = formatPersonName(r.razonSocial);
         apply({ razonSocial: nombre, direccion: r.direccion });
-        addToast(`SRI: ${nombre}`, "success");
+        addToast(`✓ Encontrado (${r.origen ?? "SRI"}): ${nombre}`, "success");
       } else {
-        addToast("No se encontraron datos en el SRI para esta cédula. Ingrese el nombre manualmente.", "warn");
+        addToast("Cédula sin registro público. Ingrese el nombre manualmente.", "warn");
+        opts?.onNotFound?.();
       }
     } catch (e) {
       // Fallback: nunca bloquea al operador; puede seguir escribiendo a mano.
@@ -10245,13 +10247,15 @@ export function App() {
                           const dig = val.replace(/\D/g, "");
                           if (dig.length === 10 || dig.length === 13) {
                             consultarSRIyRellenar(dig, ({ razonSocial, direccion }) =>
-                              setQuickNewCustomerForm((p) => ({ ...p, full_name: razonSocial, address: direccion ?? p.address })));
+                              setQuickNewCustomerForm((p) => ({ ...p, full_name: razonSocial, address: direccion ?? p.address })),
+                              { onNotFound: () => document.getElementById("quickCliNombre")?.focus() });
                           }
                         }}
                       />
                       <button type="button" disabled={sriLoading} title="Consultar SRI"
                         onClick={() => consultarSRIyRellenar(quickNewCustomerForm.identification, ({ razonSocial, direccion }) =>
-                          setQuickNewCustomerForm((p) => ({ ...p, full_name: razonSocial, address: direccion ?? p.address })))}
+                          setQuickNewCustomerForm((p) => ({ ...p, full_name: razonSocial, address: direccion ?? p.address })),
+                          { onNotFound: () => document.getElementById("quickCliNombre")?.focus() })}
                         style={{ padding: "0 12px", borderRadius: 6, border: "1px solid #2563eb", background: "#eff6ff", color: "#2563eb", cursor: sriLoading ? "wait" : "pointer", fontWeight: 700, whiteSpace: "nowrap", opacity: sriLoading ? 0.6 : 1, minWidth: 92 }}>
                         {sriLoading ? "⏳ Buscando…" : "🔍 SRI"}
                       </button>
@@ -10265,6 +10269,7 @@ export function App() {
                   <label>
                     <span>Nombre / Razón social *</span>
                     <NameInput
+                      id="quickCliNombre"
                       type="text"
                       placeholder="Ej: Juan García"
                       value={quickNewCustomerForm.full_name}

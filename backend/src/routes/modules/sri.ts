@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 
@@ -47,6 +48,8 @@ type SriResult = {
   encontrado: boolean;
   // Contrato estructurado que consume el frontend.
   success: boolean;
+  // Fuente que resolvió el nombre: "BD Interna" | "SRI" | "Registro público".
+  origen?: string | null;
   message?: string;
   // Alias retrocompatible (versiones previas leían `mensaje`).
   mensaje?: string;
@@ -97,6 +100,60 @@ async function consultarSri(ruc: string): Promise<{ razonSocial: string | null; 
   return { razonSocial: razonSocial?.trim() || null, direccion: direccion?.trim() || null };
 }
 
+// FUENTE 1 — Base de datos interna del ERP. Busca la identificación (cédula o
+// RUC) en clientes, agricultores, proveedores, personas externas, usuarios y
+// choferes (transportistas de guías). Las liquidaciones apuntan a agricultores,
+// así que quedan cubiertas por `farmers`. Compara los dígitos normalizados
+// (sin espacios/guiones) contra los candidatos (cédula 10, RUC 13, base+001).
+async function buscarInterno(
+  candidatos: string[]
+): Promise<{ razonSocial: string; direccion: string | null; origen: string } | null> {
+  const r = await pool.query(
+    `SELECT nombre, direccion, origen FROM (
+        SELECT full_name AS nombre, address AS direccion, 'Cliente' AS origen, identification AS ident, 1 AS pri FROM customers
+        UNION ALL SELECT full_name, address, 'Agricultor', identification, 2 FROM farmers
+        UNION ALL SELECT name, address, 'Proveedor', identification, 3 FROM suppliers
+        UNION ALL SELECT name, NULL, 'Persona externa', identification, 4 FROM external_providers
+        UNION ALL SELECT name, NULL, 'Usuario', cedula, 5 FROM users
+        UNION ALL SELECT transportista_nombre, NULL, 'Chofer', transportista_cedula, 6 FROM sales_orders WHERE transportista_nombre IS NOT NULL
+     ) s
+     WHERE s.nombre IS NOT NULL
+       AND regexp_replace(COALESCE(s.ident, ''), '[^0-9]', '', 'g') = ANY($1::text[])
+     ORDER BY s.pri
+     LIMIT 1`,
+    [candidatos]
+  );
+  if (!r.rowCount) return null;
+  const row = r.rows[0] as { nombre: string; direccion: string | null; origen: string };
+  return {
+    razonSocial: String(row.nombre).trim(),
+    direccion: row.direccion ? String(row.direccion).trim() || null : null,
+    origen: `BD Interna (${row.origen})`
+  };
+}
+
+// FUENTE 3 — API pública de cédulas (Registro Civil/CNE). No existe un servicio
+// oficial gratuito y estable para cédula→nombre en Ecuador, así que el endpoint
+// es CONFIGURABLE por variable de entorno para no acoplar el ERP a un tercero
+// frágil: CEDULA_API_URL con el marcador {id} (ej.
+// "https://mi-proveedor/cedula/{id}"). Se toma el nombre del primer campo común
+// que aparezca. Sin configurar, no hace nada (se degrada a ingreso manual).
+async function consultarCedulaPublica(cedula10: string): Promise<{ razonSocial: string; origen: string } | null> {
+  const tpl = process.env.CEDULA_API_URL;
+  if (!tpl) return null;
+  const url = tpl.includes("{id}") ? tpl.replace("{id}", cedula10) : `${tpl}${cedula10}`;
+  const data = await fetchJson(url);
+  if (!data || typeof data !== "object") return null;
+  const obj = data as Record<string, unknown>;
+  // Algunos servicios envuelven el resultado en {data:{...}} o {result:{...}}.
+  const src = (obj.data ?? obj.result ?? obj) as Record<string, unknown>;
+  const nombre =
+    (src.nombreCompleto as string) ?? (src.nombre as string) ?? (src.nombres as string) ??
+    (src.razonSocial as string) ?? (src.name as string) ?? (src.fullName as string) ?? null;
+  const limpio = typeof nombre === "string" ? nombre.trim() : "";
+  return limpio ? { razonSocial: limpio, origen: "Registro público" } : null;
+}
+
 // GET /sri/consultar/:identificacion → { razonSocial, direccion, tipo, encontrado }
 // Requiere sesión (se monta tras requireAuth) pero NO exige accionista ni módulo:
 // es una consulta de apoyo para llenar formularios de cliente/agricultor/proveedor.
@@ -113,23 +170,46 @@ sriRouter.get("/consultar/:identificacion", asyncRoute(async (req, res) => {
     throw new ApiError(400, `${tipo === "RUC" ? "RUC" : "Cédula"} inválida: revisa los dígitos.`);
   }
 
-  // Para una cédula, el RUC de persona natural es cédula + "001".
-  const ruc = raw.length === 13 ? raw : `${raw}001`;
-  const { razonSocial, direccion } = await consultarSri(ruc);
-  const encontrado = Boolean(razonSocial);
+  // Candidatos de identificación para la búsqueda interna: la cédula/RUC tal
+  // cual, su base de 10 dígitos y el RUC natural (base+001), por si se guardó en
+  // cualquiera de esas formas.
+  const base10 = raw.slice(0, 10);
+  const candidatos = Array.from(new Set([raw, base10, `${base10}001`]));
 
-  // Respuesta SIEMPRE estructurada (nunca objeto vacío ni 500): éxito con datos,
-  // o { success:false, message } cuando el SRI no tiene registro / no responde.
-  const noEncontrado = "No se encontraron datos tributarios en el SRI";
-  const result: SriResult = {
-    identificacion: raw,
-    tipo,
-    razonSocial,
-    direccion,
-    encontrado,
-    success: encontrado,
-    message: encontrado ? undefined : noEncontrado,
-    mensaje: encontrado ? undefined : noEncontrado
+  const responder = (
+    razonSocial: string | null,
+    direccion: string | null,
+    origen: string | null
+  ) => {
+    const encontrado = Boolean(razonSocial);
+    const noEncontrado = "No se encontraron datos tributarios en el SRI";
+    const result: SriResult = {
+      identificacion: raw,
+      tipo,
+      razonSocial,
+      direccion,
+      encontrado,
+      success: encontrado,
+      origen: encontrado ? origen : null,
+      message: encontrado ? undefined : noEncontrado,
+      mensaje: encontrado ? undefined : noEncontrado
+    };
+    res.json(result);
   };
-  res.json(result);
+
+  // Búsqueda multi-fuente por prioridad: 1) BD interna, 2) catastro SRI,
+  // 3) API pública de cédulas (configurable). La primera que resuelve, gana.
+  const interno = await buscarInterno(candidatos);
+  if (interno) return responder(interno.razonSocial, interno.direccion, interno.origen);
+
+  // Para una cédula, el RUC de persona natural es cédula + "001".
+  const ruc = raw.length === 13 ? raw : `${base10}001`;
+  const sri = await consultarSri(ruc);
+  if (sri.razonSocial) return responder(sri.razonSocial, sri.direccion, "SRI");
+
+  // Respaldo público (Registro Civil/CNE) solo con cédula de 10 dígitos.
+  const publico = tipo === "CEDULA" ? await consultarCedulaPublica(base10) : null;
+  if (publico) return responder(publico.razonSocial, null, publico.origen);
+
+  return responder(null, null, null);
 }));

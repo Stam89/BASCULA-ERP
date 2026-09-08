@@ -112,6 +112,7 @@ export type SriResult = {
   direccion: string | null;
   encontrado: boolean;
   success?: boolean;
+  origen?: string | null;
   message?: string;
   mensaje?: string;
 };
