@@ -56,6 +56,30 @@ ordersRouter.get("/", asyncRoute(async (req, res) => {
   res.json(result.rows);
 }));
 
+// Precio sugerido para una marca+presentación: el ÚLTIMO precio unitario al que
+// se vendió/pidió esa combinación para el accionista activo. Es una sugerencia
+// editable (no una tarifa fija); si nunca se ha pedido, devuelve null y la UI
+// deja el precio en blanco. Se registra en /suggest-price ANTES de /:id para que
+// la ruta literal no la capture el parámetro.
+ordersRouter.get("/suggest-price", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const productId = typeof req.query.product_id === "string" ? req.query.product_id : null;
+  const presentationId = typeof req.query.presentation_id === "string" ? req.query.presentation_id : null;
+  if (!productId) throw new ApiError(400, "Falta product_id");
+  const r = await pool.query(
+    `SELECT i.unit_price
+       FROM sales_order_items i
+       JOIN sales_orders o ON o.id = i.order_id
+      WHERE o.accionista_id = $1
+        AND i.product_id = $2
+        AND ($3::uuid IS NULL OR i.presentation_id = $3::uuid)
+      ORDER BY o.created_at DESC
+      LIMIT 1`,
+    [accionistaId, productId, presentationId]
+  );
+  res.json({ unit_price: r.rowCount ? Number(r.rows[0].unit_price) : null });
+}));
+
 ordersRouter.post("/", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const body = z.object({

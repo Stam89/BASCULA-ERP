@@ -4457,6 +4457,78 @@ export function App() {
   const qqDeLinea = (item: SaleLineItem): number =>
     item.weight_lb ? round2((item.quantity * item.weight_lb) / 100) : item.quantity;
 
+  // Stock disponible expresado en SACOS de una presentación concreta:
+  // sacos = QQ_disponibles × 100 ÷ libras_por_saco. Sin peso de saco (venta a
+  // granel por QQ) devuelve los QQ tal cual. Alimenta el badge "Disponibles en
+  // bodega: XX sacos" y el control de sobreventa.
+  function sacosDisponiblesDeMarca(brandProductId: string, weightLb: number | null): number | null {
+    const qq = stockDisponibleDeMarca(brandProductId);
+    if (qq === null) return null;
+    return weightLb && weightLb > 0 ? Math.floor((qq * 100) / weightLb) : round2(qq);
+  }
+
+  // Salud crediticia del cliente seleccionado: saldo pendiente (suma de sus
+  // cuentas por cobrar sin saldar) y si está EN MORA (alguna cuenta vencida por
+  // due_date; sin fecha, se considera vencida a los 30 días de tomada). Solo lee
+  // accountsReceivable, ya cargado en Ventas; no pega a la red.
+  const creditoClienteSel = useMemo(() => {
+    if (!selectedCustomerId) return null;
+    const lineas = accountsReceivable.filter((a) => a.customer_id === selectedCustomerId && Number(a.balance) > 0.001);
+    const saldo = round2(lineas.reduce((s, a) => s + Number(a.balance), 0));
+    const now = Date.now();
+    const D30 = 30 * 24 * 60 * 60 * 1000;
+    const enMora = lineas.some((a) => {
+      const venc = a.due_date ? new Date(a.due_date).getTime() : new Date(a.created_at).getTime() + D30;
+      return venc < now;
+    });
+    return { saldo, enMora, cuentas: lineas.length };
+  }, [selectedCustomerId, accountsReceivable]);
+
+  // ¿La línea que se está por agregar supera el stock disponible? Compara los QQ
+  // de la línea MÁS lo ya puesto en el carrito para el mismo producto de
+  // inventario contra el disponible. Bloquea el botón Agregar para no vender lo
+  // que no existe.
+  const lineaExcedeStock = useMemo(() => {
+    const cant = Number(saleLineForm.quantity);
+    if (!saleLineForm.product_id || !cant || cant <= 0) return false;
+    const pres = saleProductPresentations.find((p) => p.id === saleLineForm.presentation_id);
+    const wl = pres?.weight_lb ? Number(pres.weight_lb) : null;
+    const qqLinea = wl ? round2((cant * wl) / 100) : cant;
+    const invId = getInventoryProductForBrand(products.find((p) => p.id === saleLineForm.product_id)?.name || "") || saleLineForm.product_id;
+    const yaCarrito = saleLineItems
+      .filter((it) => (getInventoryProductForBrand(products.find((p) => p.id === it.product_id)?.name || "") || it.product_id) === invId)
+      .reduce((s, it) => s + qqDeLinea(it), 0);
+    const disp = stockDisponibleDeMarca(saleLineForm.product_id) ?? 0;
+    return qqLinea + yaCarrito > disp + 0.001;
+  }, [saleLineForm, saleProductPresentations, saleLineItems, products, stock]);
+
+  // Precio sugerido: último precio al que se pidió esa marca+presentación. Solo
+  // rellena si el campo está vacío/0 (no pisa un precio que el vendedor ya tecleó).
+  async function sugerirPrecioLinea(productId: string, presentationId: string) {
+    if (!productId) return;
+    try {
+      let r = await apiGet<{ unit_price: number | null }>(
+        `/orders/suggest-price?product_id=${productId}${presentationId ? `&presentation_id=${presentationId}` : ""}`
+      );
+      // Sin historial de ESA presentación, cae al último precio del producto (cualquier presentación).
+      if ((r.unit_price == null || r.unit_price <= 0) && presentationId) {
+        r = await apiGet<{ unit_price: number | null }>(`/orders/suggest-price?product_id=${productId}`);
+      }
+      if (r.unit_price != null && r.unit_price > 0) {
+        setSaleLineForm((prev) => {
+          const yaTecleado = prev.unit_price !== "" && Number(prev.unit_price) > 0;
+          return yaTecleado ? prev : { ...prev, unit_price: String(r.unit_price) };
+        });
+      }
+    } catch { /* la sugerencia es opcional: si falla, el precio queda editable en blanco */ }
+  }
+
+  // Cambio de presentación: actualiza la línea y auto-sugiere su precio base.
+  function handleSalePresentationChange(presentationId: string) {
+    setSaleLineForm((prev) => ({ ...prev, presentation_id: presentationId }));
+    if (saleLineForm.product_id) sugerirPrecioLinea(saleLineForm.product_id, presentationId).catch(() => undefined);
+  }
+
   // ── Eliminar línea de pedido ──
   function removeSaleLineItem(id: string) {
     setSaleLineItems(prev => prev.filter(item => item.id !== id));
@@ -4475,7 +4547,10 @@ export function App() {
       if (res.ok) {
         const pres = await res.json();
         setSaleProductPresentations(pres);
-        setSaleLineForm(prev => ({ ...prev, presentation_id: pres[0]?.id || "" }));
+        const firstPres = pres[0]?.id || "";
+        setSaleLineForm(prev => ({ ...prev, presentation_id: firstPres }));
+        // Auto-sugiere el precio base de la primera presentación (editable).
+        if (firstPres) sugerirPrecioLinea(productId, firstPres).catch(() => undefined);
       }
     } catch (e) { console.error(e); }
   }
@@ -6866,6 +6941,69 @@ export function App() {
   }
 
   // Documento imprimible A4 (ventana limpia; solo la guía, sin menús ni botones).
+  // Orden de Carga (ticket de bodega): comprobante compacto para el estibador/
+  // chofer con qué sacos alistar, de qué ubicación y firma de salida. Se imprime
+  // cuando el pedido ya está preparado. No mueve nada: es solo el papel de carga.
+  function printOrdenCarga(order: SalesOrder) {
+    const esc = (s: string | null | undefined) => (s ?? "").replace(/</g, "&lt;");
+    const fecha = new Date().toLocaleString("es-EC", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    const totalSacos = order.items.reduce((s, it) => s + Number(it.quantity), 0);
+    const ubic = order.picking_location || ubicacionSugerida;
+    const filas = order.items.map((it) => `
+      <tr>
+        <td class="c big">${Number(it.quantity)}</td>
+        <td>${esc(it.product_name)}${it.presentation_name ? ` · ${esc(it.presentation_name)}` : ""}</td>
+        <td class="c chk">☐</td>
+      </tr>`).join("");
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+      <title>Orden de Carga ${esc(order.order_number)}</title>
+      <style>
+        @page { size: 80mm auto; margin: 6mm; }
+        *{box-sizing:border-box}
+        body{font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#111;margin:0}
+        .tk{width:72mm;margin:0 auto}
+        h1{font-size:16px;margin:0;text-align:center;letter-spacing:.5px}
+        .sub{text-align:center;color:#444;font-size:11px;margin:2px 0 8px}
+        .row{display:flex;justify-content:space-between;margin:2px 0}
+        .k{color:#555}
+        .box{border:1px dashed #333;border-radius:6px;padding:6px 8px;margin:8px 0}
+        .ubic{font-size:15px;font-weight:800;text-align:center;background:#111;color:#fff;border-radius:6px;padding:6px;margin:6px 0}
+        table{width:100%;border-collapse:collapse;margin-top:6px}
+        th{border-bottom:2px solid #111;padding:4px 4px;text-align:left;font-size:11px;text-transform:uppercase}
+        td{padding:6px 4px;border-bottom:1px dotted #bbb}
+        td.c,th.c{text-align:center}
+        td.big{font-size:18px;font-weight:900;width:44px}
+        td.chk{font-size:16px;width:34px}
+        .tot{font-size:15px;font-weight:800;text-align:right;margin-top:6px}
+        .sig{margin-top:34px;text-align:center}
+        .sig hr{border:none;border-top:1px solid #111;margin:0 0 4px}
+        .sig span{font-size:11px;color:#333}
+        @media print{ button{display:none!important} }
+      </style></head><body>
+      <div class="tk">
+        <h1>ORDEN DE CARGA</h1>
+        <div class="sub">${esc(appSettings.business_name) || "PILADORA CEYRO"} · ${fecha}</div>
+        <div class="row"><span class="k">Pedido N°:</span> <strong>${esc(order.order_number)}</strong></div>
+        <div class="row"><span class="k">Cliente:</span> <strong>${esc(order.customer_name) || "—"}</strong></div>
+        ${order.delivery_date ? `<div class="row"><span class="k">Entrega:</span> ${esc(order.delivery_date).slice(0, 10)}</div>` : ""}
+        <div class="ubic">📍 ${esc(ubic)}</div>
+        <table>
+          <thead><tr><th class="c" style="width:44px">Cant.</th><th>Producto</th><th class="c" style="width:34px">✔</th></tr></thead>
+          <tbody>${filas}</tbody>
+        </table>
+        <div class="tot">Total a cargar: ${totalSacos} sacos</div>
+        ${order.notes ? `<div class="box"><span class="k">Nota:</span> ${esc(order.notes)}</div>` : ""}
+        <div class="sig"><hr><span>Firma de Salida (Bodega / Chofer)</span></div>
+      </div>
+    </body></html>`;
+    const win = window.open("", "_blank", "width=420,height=720");
+    if (!win) { addToast("El navegador bloqueó la ventana de impresión", "error"); return; }
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    win.print();
+  }
+
   function printGuiaRemision(order: SalesOrder) {
     const remitente = accionistas.find((a) => a.id === activeAccionistaId)?.name ?? appSettings.business_name;
     const fecha = new Date().toLocaleDateString("es-EC", { year: "numeric", month: "long", day: "numeric" });
@@ -9961,6 +10099,27 @@ export function App() {
                   ✓ {customers.find(c => c.id === selectedCustomerId)?.full_name} seleccionado
                 </div>
               )}
+              {/* Salud crediticia del cliente: saldo pendiente y estado (al día / en mora). */}
+              {selectedCustomerId && creditoClienteSel && (
+                <div style={{ marginTop: 8, padding: "10px 12px", borderRadius: 8, border: `1px solid ${creditoClienteSel.enMora ? "#fecaca" : "#bbf7d0"}`, background: creditoClienteSel.enMora ? "#fef2f2" : "#f0fdf4" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 12.5, color: "#374151" }}>
+                      Saldo pendiente: <strong style={{ color: creditoClienteSel.saldo > 0 ? "#b45309" : "#15803d" }}>{money(creditoClienteSel.saldo)}</strong>
+                      {creditoClienteSel.cuentas > 0 && <span className="muted"> · {creditoClienteSel.cuentas} cuenta(s)</span>}
+                    </span>
+                    {creditoClienteSel.enMora ? (
+                      <span style={{ background: "#fee2e2", color: "#b91c1c", borderRadius: 999, padding: "3px 10px", fontSize: 12, fontWeight: 800 }}>🔴 En Mora / Límite excedido</span>
+                    ) : (
+                      <span style={{ background: "#dcfce7", color: "#15803d", borderRadius: 999, padding: "3px 10px", fontSize: 12, fontWeight: 800 }}>🟢 Al día</span>
+                    )}
+                  </div>
+                  {creditoClienteSel.enMora && (
+                    <div style={{ marginTop: 6, fontSize: 12, color: "#b91c1c", fontWeight: 600 }}>
+                      ⚠ Cliente en mora: este pedido requiere autorización o cobro de contado.
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* SECCIÓN 2: Agregar líneas de pedido */}
@@ -10005,11 +10164,17 @@ export function App() {
                     })()}
                   </select>
                   {saleLineForm.product_id && (() => {
-                    const disponible = stockDisponibleDeMarca(saleLineForm.product_id);
+                    const qq = stockDisponibleDeMarca(saleLineForm.product_id);
+                    const pres = saleProductPresentations.find((p) => p.id === saleLineForm.presentation_id);
+                    const wl = pres?.weight_lb ? Number(pres.weight_lb) : null;
+                    const sacos = sacosDisponiblesDeMarca(saleLineForm.product_id, wl);
+                    const hay = qq !== null && qq > 0;
                     return (
-                      <small style={{ marginTop: 4, fontWeight: 700, color: disponible !== null && disponible > 0 ? "#15803d" : "#b91c1c" }}>
-                        {disponible !== null && disponible > 0
-                          ? `📦 Disponible: ${disponible.toFixed(2)} QQ`
+                      <small style={{ marginTop: 4, fontWeight: 700, color: hay ? "#15803d" : "#b91c1c" }}>
+                        {hay
+                          ? (wl
+                              ? `📦 Disponibles en bodega: ${sacos} sacos (${qq.toFixed(2)} QQ)`
+                              : `📦 Disponibles en bodega: ${qq.toFixed(2)} QQ`)
                           : "⚠ Sin stock de este producto"}
                       </small>
                     );
@@ -10020,7 +10185,7 @@ export function App() {
                   <span>Presentación *</span>
                   <select
                     value={saleLineForm.presentation_id}
-                    onChange={(e) => setSaleLineForm({...saleLineForm, presentation_id: e.target.value})}
+                    onChange={(e) => handleSalePresentationChange(e.target.value)}
                     style={{ width: "100%", padding: 8, border: "1px solid #d1d5db", borderRadius: 4, fontSize: 13 }}
                     disabled={saleProductPresentations.length === 0}
                   >
@@ -10048,7 +10213,7 @@ export function App() {
                 </label>
 
                 <label>
-                  <span>Precio $ (manual) *</span>
+                  <span>Precio $ (sugerido, editable)</span>
                   <input
                     type="number"
                     placeholder="0.00"
@@ -10063,11 +10228,20 @@ export function App() {
                 <button
                   type="button"
                   onClick={addSaleLineItem}
-                  style={{ padding: "8px 12px", background: "#f59e0b", color: "white", border: "none", borderRadius: 4, fontWeight: 700, cursor: "pointer", alignSelf: "flex-end", fontSize: 13 }}
+                  disabled={lineaExcedeStock}
+                  title={lineaExcedeStock ? "La cantidad supera el stock disponible" : "Agregar al pedido"}
+                  style={{ padding: "8px 12px", background: lineaExcedeStock ? "#d1d5db" : "#f59e0b", color: lineaExcedeStock ? "#6b7280" : "white", border: "none", borderRadius: 4, fontWeight: 700, cursor: lineaExcedeStock ? "not-allowed" : "pointer", alignSelf: "flex-end", fontSize: 13 }}
                 >
                   ➕ Agregar
                 </button>
               </div>
+
+              {/* Alerta de sobreventa: la cantidad digitada supera el stock disponible. */}
+              {lineaExcedeStock && (
+                <div style={{ padding: "8px 12px", background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 6, color: "#92400e", fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>
+                  ⚠ La cantidad supera el stock disponible en bodega. Reduce la cantidad para poder agregar la línea.
+                </div>
+              )}
             </div>
             {/* fin Columna IZQUIERDA */}
             </div>
@@ -10156,7 +10330,7 @@ export function App() {
               <h2 style={{ marginTop: 0 }}><span className="stepBadge">4</span>Guardar pedido</h2>
               <p className="muted" style={{ marginTop: -4 }}>
                 El pedido es la promesa al cliente: no mueve inventario ni plata. El cobro y la salida de
-                bodega ocurren al <strong>despacharlo</strong> desde «Pedidos pendientes».
+                bodega ocurren al <strong>despacharlo</strong> desde la «Cola de Despachos».
               </p>
 
               <div className="totalBox" style={{ background: "#dcfce7", padding: 16, borderRadius: 8, marginBottom: 16 }}>
@@ -10228,6 +10402,17 @@ export function App() {
                     .map((o) => {
                     // "Listo para cargar" = ya se confirmó la preparación (picking).
                     const listo = Boolean(o.prepared_at);
+                    // Condición de pago elegida (por defecto contado). CREDIT = a crédito.
+                    const metodoPago = orderPayMethod[o.id] ?? "CASH";
+                    const esCredito = metodoPago === "CREDIT";
+                    // Stock disponible (QQ) en bodega de los productos del pedido: pista de
+                    // picking junto a la ubicación. Sin modelo por fila, es a nivel bodega.
+                    const invIdsPedido = new Set(
+                      o.items.map((it) => getInventoryProductForBrand(it.product_name)).filter((x): x is string => Boolean(x))
+                    );
+                    const dispUbicQq = round2([...invIdsPedido].reduce((s, id) =>
+                      s + stock.filter((r) => r.product_id === id && r.ownership === "OWNED").reduce((a, r) => a + Number(r.quantity), 0)
+                    , 0));
                     return (
                     <article key={o.id} style={{ border: "1px solid var(--c-border)", borderTop: `5px solid ${listo ? "var(--c-success, #16a34a)" : "var(--c-warning)"}`, borderRadius: 12, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -10241,6 +10426,18 @@ export function App() {
                           </span>
                         )}
                         <strong style={{ fontSize: 18, color: listo ? "#15803d" : "#b45309" }}>{money(Number(o.total_amount))}</strong>
+                      </div>
+
+                      {/* Condición de pago (junto al valor): contado/contra entrega vs crédito. */}
+                      <div>
+                        {esCredito ? (
+                          <span style={{ background: "#ede9fe", color: "#6d28d9", borderRadius: 6, padding: "3px 10px", fontSize: 12.5, fontWeight: 800 }}>💳 Crédito (a convenir)</span>
+                        ) : (
+                          <>
+                            <span style={{ background: "#dbeafe", color: "#1d4ed8", borderRadius: 6, padding: "3px 10px", fontSize: 12.5, fontWeight: 800 }}>💵 Contado / Contra Entrega</span>
+                            <div style={{ marginTop: 4, fontSize: 11.5, color: "#b45309", fontWeight: 600 }}>⚠ Verificar cobro en caja antes de autorizar salida.</div>
+                          </>
+                        )}
                       </div>
 
                       <div>
@@ -10270,7 +10467,12 @@ export function App() {
 
                       {/* Ubicación / Lote de picking: de qué bodega/lote de arroz blanco se extrae. */}
                       <div style={{ background: listo ? "#f0fdf4" : "#f8fafc", border: `1px solid ${listo ? "#bbf7d0" : "#e2e8f0"}`, borderRadius: 8, padding: "8px 12px" }}>
-                        <span className="muted" style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>📍 Ubicación / Lote</span>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
+                          <span className="muted" style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>📍 Ubicación / Lote</span>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: dispUbicQq > 0 ? "#15803d" : "#b91c1c" }}>
+                            {dispUbicQq > 0 ? `${dispUbicQq.toFixed(2)} QQ disp.` : "sin stock"}
+                          </span>
+                        </div>
                         {listo ? (
                           <div style={{ fontSize: 14, fontWeight: 700, marginTop: 2 }}>{o.picking_location || ubicacionSugerida}</div>
                         ) : (
@@ -10311,6 +10513,11 @@ export function App() {
                             🚚 Despachar y entregar
                           </button>
                         </div>
+                      )}
+                      {listo && (
+                        <button type="button" style={{ padding: "8px 12px", fontWeight: 700, background: "#0f766e", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }} onClick={() => printOrdenCarga(o)} title="Imprimir ticket de carga para bodega/chofer">
+                          🖨️ Orden de Carga
+                        </button>
                       )}
                       <div style={{ display: "flex", gap: 8 }}>
                         {listo && (
