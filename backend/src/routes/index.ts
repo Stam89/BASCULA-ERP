@@ -40,6 +40,7 @@ import { costosRouter } from "./modules/costos.js";
 import { cobrosRouter } from "./modules/cobros.js";
 import { campoRouter } from "./modules/campo.js";
 import { externalRouter } from "./modules/external.js";
+import { sriRouter } from "./modules/sri.js";
 
 export const routes = Router();
 
@@ -56,6 +57,9 @@ routes.use("/external", externalRouter);
 // Todo lo demás requiere sesión (Bearer token). Las escrituras además
 // exigen permiso del módulo correspondiente (los administradores no tienen límite).
 routes.use(requireAuth);
+// Consulta SRI (cédula/RUC): solo necesita sesión, NO un accionista activo ni
+// permiso de módulo (es apoyo para llenar formularios). Va antes de resolveAccionista.
+routes.use("/sri", sriRouter);
 // Resolver el accionista ANTES de validar permisos: los permisos ahora son por
 // accionista, así que la validación necesita saber cuál está activo.
 routes.use(resolveAccionista);

@@ -7,6 +7,33 @@ export function money(value: string | number | null | undefined): string {
   return `$${Number(value ?? 0).toFixed(2)}`;
 }
 
+// Conectores de nombres/razones sociales que van en minúscula cuando NO son la
+// primera palabra ("María de la Cruz", "Comercial del Río").
+const NAME_CONNECTORS = new Set(["de", "del", "la", "las", "los", "y", "e", "da", "das", "do", "dos"]);
+
+/**
+ * Normaliza un nombre de persona o razón social a Title Case limpio:
+ * - colapsa espacios dobles y recorta extremos,
+ * - capitaliza cada palabra (y cada parte de apellidos con guion: "García-López"),
+ * - mantiene los conectores en minúscula si no son la primera palabra (de, del, la…).
+ * No toca siglas ni fuerza mayúsculas intermedias: "juan carlos garcia" -> "Juan Carlos Garcia".
+ */
+export function formatPersonName(val: string | null | undefined): string {
+  if (!val) return "";
+  const cap = (w: string) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w);
+  return String(val)
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+    .split(" ")
+    .map((word, i) => {
+      if (i > 0 && NAME_CONNECTORS.has(word)) return word;
+      // Apellidos compuestos con guion: capitaliza ambas partes.
+      return word.split("-").map(cap).join("-");
+    })
+    .join(" ");
+}
+
 /** Traduce la categoría de un movimiento de caja a texto legible. */
 export function categoryLabel(cat: string): string {
   const map: Record<string, string> = {

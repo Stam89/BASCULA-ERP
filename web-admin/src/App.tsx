@@ -1,7 +1,7 @@
 import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import html2canvas from "html2canvas";
-import { apiFetch, apiGet, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId } from "./api";
-import { money, categoryLabel, stockGroupLabel } from "./format";
+import { apiFetch, apiGet, apiGetSRI, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId } from "./api";
+import { money, categoryLabel, stockGroupLabel, formatPersonName } from "./format";
 import type { Farmer, Product, Warehouse, Lot, MateriaPrimaEntry, MateriaPrimaCorreccion, PendingEntry } from "./types";
 import { Metric, ReportTable, Input, Select, MedidorRow, DataList } from "./components/ui";
 import { CampoWorkspace } from "./campo/CampoModule";
@@ -4112,6 +4112,32 @@ export function App() {
   async function refreshPayables() {
     const ap = await apiGet<AccountPayable[]>("/cash/payables");
     setCashPayables(ap);
+  }
+
+  // Consulta el SRI por cédula/RUC y rellena Nombre/Razón Social (Title Case) y
+  // Dirección. Reutilizable en Cliente, Agricultor y Proveedor. Degrada a aviso
+  // si no hay red o el contribuyente no existe (se ingresa manual).
+  async function consultarSRIyRellenar(
+    identificacion: string,
+    apply: (data: { razonSocial: string; direccion: string | null }) => void
+  ) {
+    const id = String(identificacion ?? "").replace(/\D/g, "");
+    if (id.length !== 10 && id.length !== 13) {
+      addToast("Ingresa una cédula (10 dígitos) o RUC (13) antes de consultar el SRI", "error");
+      return;
+    }
+    try {
+      const r = await apiGetSRI(id);
+      if (r.encontrado && r.razonSocial) {
+        const nombre = formatPersonName(r.razonSocial);
+        apply({ razonSocial: nombre, direccion: r.direccion });
+        addToast(`SRI: ${nombre}`, "success");
+      } else {
+        addToast(r.mensaje ?? "El SRI no devolvió datos; ingrésalos manualmente.", "warn");
+      }
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : "No se pudo consultar el SRI", "error");
+    }
   }
 
   async function submitNewCustomer(e: FormEvent<HTMLFormElement>) {
@@ -9045,8 +9071,15 @@ export function App() {
           <section className="panelGrid">
             <form className="formPanel" onSubmit={(event) => submitFarmer(event).catch((error) => setMessage(error.message))}>
               <h2>Nuevo agricultor</h2>
-              <Input name="full_name" label="Nombre completo" />
+              <Input name="full_name" label="Nombre completo" onBlur={reformatNameOnBlur} />
               <Input name="identification" label="Cedula/RUC" />
+              <button type="button" style={{ marginBottom: 10, padding: "6px 12px", borderRadius: 6, border: "1px solid #2563eb", background: "#eff6ff", color: "#2563eb", cursor: "pointer", fontWeight: 700, fontSize: 13 }}
+                onClick={(e) => {
+                  const form = e.currentTarget.closest("form");
+                  const idEl = form?.elements.namedItem("identification") as HTMLInputElement | null;
+                  const nameEl = form?.elements.namedItem("full_name") as HTMLInputElement | null;
+                  consultarSRIyRellenar(idEl?.value ?? "", ({ razonSocial }) => { if (nameEl) nameEl.value = razonSocial; });
+                }}>🔍 Consultar SRI</button>
               <Input name="phone" label="Telefono" />
               {accionistas.length > 0 && (
                 <Select
@@ -9128,14 +9161,18 @@ export function App() {
                   </div>
                   <label>
                     <span>Nombre completo *</span>
-                    <input required value={editFarmer.full_name}
-                      onChange={(e) => setEditFarmer({ ...editFarmer, full_name: e.target.value })} />
+                    <NameInput required value={editFarmer.full_name}
+                      onChange={(v) => setEditFarmer({ ...editFarmer, full_name: v })} />
                   </label>
                   <label>
                     <span>Cédula / RUC</span>
-                    <input value={editFarmer.identification ?? ""}
-                      onChange={(e) => setEditFarmer({ ...editFarmer, identification: e.target.value })}
-                      placeholder="0999999999001" />
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <input value={editFarmer.identification ?? ""}
+                        onChange={(e) => setEditFarmer({ ...editFarmer, identification: e.target.value })}
+                        placeholder="0999999999001" style={{ flex: 1 }} />
+                      <button type="button" title="Consultar SRI" onClick={() => consultarSRIyRellenar(editFarmer.identification ?? "", ({ razonSocial }) => setEditFarmer((f) => f ? { ...f, full_name: razonSocial } : f))}
+                        style={{ padding: "0 12px", borderRadius: 6, border: "1px solid #2563eb", background: "#eff6ff", color: "#2563eb", cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}>🔍 SRI</button>
+                    </div>
                   </label>
                   <label>
                     <span>Teléfono</span>
@@ -10060,11 +10097,11 @@ export function App() {
                   <h3>Nuevo cliente rápido</h3>
                   <label>
                     <span>Nombre *</span>
-                    <input
+                    <NameInput
                       type="text"
                       placeholder="Ej: Juan García"
                       value={quickNewCustomerForm.full_name}
-                      onChange={(e) => setQuickNewCustomerForm({ ...quickNewCustomerForm, full_name: e.target.value })}
+                      onChange={(v) => setQuickNewCustomerForm({ ...quickNewCustomerForm, full_name: v })}
                     />
                   </label>
                   <label>
@@ -10669,8 +10706,8 @@ export function App() {
                   </p>
                   <label>
                     <span>Nombre del transportista (chofer) *</span>
-                    <input type="text" autoFocus value={guiaModal.nombre}
-                      onChange={(e) => setGuiaModal({ ...guiaModal, nombre: e.target.value })}
+                    <NameInput autoFocus value={guiaModal.nombre}
+                      onChange={(v) => setGuiaModal({ ...guiaModal, nombre: v })}
                       placeholder="Ej: Juan Pérez" />
                   </label>
                   <label>
@@ -10712,14 +10749,18 @@ export function App() {
               </p>
               <form onSubmit={submitNewCustomer} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 0.9fr auto", gap: 10, alignItems: "end", marginBottom: 14, background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
                 <label style={{ fontSize: 12, fontWeight: 600 }}>Nombre / Razón social
-                  <input required value={newCustomerForm.full_name} onChange={e => setNewCustomerForm(p => ({...p, full_name: e.target.value}))}
+                  <NameInput required value={newCustomerForm.full_name} onChange={(v) => setNewCustomerForm(p => ({...p, full_name: v}))}
                     style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}
                     placeholder="Nombre del cliente" />
                 </label>
                 <label style={{ fontSize: 12, fontWeight: 600 }}>RUC / Cédula
-                  <input value={newCustomerForm.identification} onChange={e => setNewCustomerForm(p => ({...p, identification: e.target.value}))}
-                    style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}
-                    placeholder="0999999999001" />
+                  <div style={{ display: "flex", gap: 4, marginTop: 3 }}>
+                    <input value={newCustomerForm.identification} onChange={e => setNewCustomerForm(p => ({...p, identification: e.target.value}))}
+                      style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12 }}
+                      placeholder="0999999999001" />
+                    <button type="button" title="Consultar SRI" onClick={() => consultarSRIyRellenar(newCustomerForm.identification, ({ razonSocial, direccion }) => setNewCustomerForm(p => ({ ...p, full_name: razonSocial, address: direccion ?? p.address })))}
+                      style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #2563eb", background: "#eff6ff", color: "#2563eb", cursor: "pointer", fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>🔍 SRI</button>
+                  </div>
                 </label>
                 <label style={{ fontSize: 12, fontWeight: 600 }}>Teléfono
                   <input value={newCustomerForm.phone} onChange={e => setNewCustomerForm(p => ({...p, phone: e.target.value}))}
@@ -10788,14 +10829,18 @@ export function App() {
                   <h3 style={{ marginTop: 0 }}>✏️ Editar cliente</h3>
                   <label>
                     <span>Nombre / Razón social *</span>
-                    <input required value={editCustomer.full_name}
-                      onChange={(e) => setEditCustomer({ ...editCustomer, full_name: e.target.value })} />
+                    <NameInput required value={editCustomer.full_name}
+                      onChange={(v) => setEditCustomer({ ...editCustomer, full_name: v })} />
                   </label>
                   <label>
                     <span>RUC / Cédula</span>
-                    <input value={editCustomer.identification ?? ""}
-                      onChange={(e) => setEditCustomer({ ...editCustomer, identification: e.target.value })}
-                      placeholder="0999999999001" />
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <input value={editCustomer.identification ?? ""}
+                        onChange={(e) => setEditCustomer({ ...editCustomer, identification: e.target.value })}
+                        placeholder="0999999999001" style={{ flex: 1 }} />
+                      <button type="button" title="Consultar SRI" onClick={() => consultarSRIyRellenar(editCustomer.identification ?? "", ({ razonSocial, direccion }) => setEditCustomer((c) => c ? { ...c, full_name: razonSocial, address: direccion ?? c.address } : c))}
+                        style={{ padding: "0 12px", borderRadius: 6, border: "1px solid #2563eb", background: "#eff6ff", color: "#2563eb", cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}>🔍 SRI</button>
+                    </div>
                   </label>
                   <label>
                     <span>Teléfono</span>
@@ -10957,13 +11002,17 @@ export function App() {
               <div className="formPanel">
                 <h2>🏷️ Nuevo proveedor</h2>
               <label><span>Nombre *</span>
-                <input type="text" value={supplierForm.name}
-                  onChange={(e: any) => setSupplierForm({ ...supplierForm, name: e.target.value })}
+                <NameInput type="text" value={supplierForm.name}
+                  onChange={(v) => setSupplierForm({ ...supplierForm, name: v })}
                   placeholder="Razon social o nombre" />
               </label>
               <label><span>Identificacion (RUC/Cedula)</span>
-                <input type="text" value={supplierForm.identification}
-                  onChange={(e: any) => setSupplierForm({ ...supplierForm, identification: e.target.value })} />
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input type="text" value={supplierForm.identification}
+                    onChange={(e: any) => setSupplierForm({ ...supplierForm, identification: e.target.value })} style={{ flex: 1 }} />
+                  <button type="button" title="Consultar SRI" onClick={() => consultarSRIyRellenar(supplierForm.identification, ({ razonSocial, direccion }) => setSupplierForm((p) => ({ ...p, name: razonSocial, address: direccion ?? p.address })))}
+                    style={{ padding: "0 12px", borderRadius: 6, border: "1px solid #2563eb", background: "#eff6ff", color: "#2563eb", cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}>🔍 SRI</button>
+                </div>
               </label>
               <label><span>Telefono</span>
                 <input type="text" value={supplierForm.phone}
@@ -10992,8 +11041,8 @@ export function App() {
                   <div key={s.id} className="equipItem" style={{ opacity: s.is_active ? 1 : 0.5 }}>
                     {editingSupplierId === s.id ? (
                       <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
-                        <input type="text" value={supplierEdit.name}
-                          onChange={(e: any) => setSupplierEdit({ ...supplierEdit, name: e.target.value })} placeholder="Nombre" />
+                        <NameInput type="text" value={supplierEdit.name}
+                          onChange={(v) => setSupplierEdit({ ...supplierEdit, name: v })} placeholder="Nombre" />
                         <input type="text" value={supplierEdit.identification}
                           onChange={(e: any) => setSupplierEdit({ ...supplierEdit, identification: e.target.value })} placeholder="RUC/Cedula" />
                         <input type="text" value={supplierEdit.phone}
@@ -13674,9 +13723,16 @@ export function App() {
                     <h3 style={{ marginTop: 0 }}>👤 Personas externas</h3>
                     <button type="button" onClick={() => setPersonasModalOpen(false)} style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
                   </div>
-                  <form onSubmit={(e) => submitNewProvider(e).catch((err) => addToast(err.message, "error"))} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, alignItems: "end", background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
-                    <label style={{ fontSize: 12, fontWeight: 600 }}>Nombre
-                      <input value={newProviderForm.name} onChange={(e) => setNewProviderForm({ ...newProviderForm, name: e.target.value })} placeholder="Ej: Juan Pérez" style={inputStyle} />
+                  <form onSubmit={(e) => submitNewProvider(e).catch((err) => addToast(err.message, "error"))} style={{ display: "grid", gridTemplateColumns: "1.3fr 1.3fr 1fr auto", gap: 8, alignItems: "end", background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>Nombre / Razón social
+                      <NameInput value={newProviderForm.name} onChange={(v) => setNewProviderForm({ ...newProviderForm, name: v })} placeholder="Ej: Juan Pérez" style={inputStyle} />
+                    </label>
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>Cédula / RUC
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <input value={newProviderForm.identification} onChange={(e) => setNewProviderForm({ ...newProviderForm, identification: e.target.value })} placeholder="0999999999001" style={inputStyle} />
+                        <button type="button" title="Consultar SRI" onClick={() => consultarSRIyRellenar(newProviderForm.identification, ({ razonSocial }) => setNewProviderForm((p) => ({ ...p, name: razonSocial })))}
+                          style={{ padding: "0 8px", borderRadius: 6, border: "1px solid #2563eb", background: "#eff6ff", color: "#2563eb", cursor: "pointer", fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>🔍</button>
+                      </div>
                     </label>
                     <label style={{ fontSize: 12, fontWeight: 600 }}>Teléfono
                       <input value={newProviderForm.phone} onChange={(e) => setNewProviderForm({ ...newProviderForm, phone: e.target.value })} placeholder="Opcional" style={inputStyle} />
@@ -14797,10 +14853,10 @@ export function App() {
                   <p className="muted">Los operadores pueden usar todo el sistema; solo los administradores acceden a Configuración, crean usuarios y borran datos.</p>
                   <label>
                     <span>Nombre completo *</span>
-                    <input
+                    <NameInput
                       type="text"
                       value={newUserForm.name}
-                      onChange={(e) => setNewUserForm({ ...newUserForm, name: e.target.value })}
+                      onChange={(v) => setNewUserForm({ ...newUserForm, name: v })}
                     />
                   </label>
                   <label>
@@ -15230,11 +15286,11 @@ export function App() {
                   <p className="muted">Cada accionista compra y maneja su arroz, inventario, caja y cuentas por separado, usando la misma app.</p>
                   <label>
                     <span>Nombre *</span>
-                    <input
+                    <NameInput
                       type="text"
                       placeholder="Ej: Juan Pérez"
                       value={newAccionistaForm.name}
-                      onChange={(e) => setNewAccionistaForm({ ...newAccionistaForm, name: e.target.value })}
+                      onChange={(v) => setNewAccionistaForm({ ...newAccionistaForm, name: v })}
                     />
                   </label>
                   <label>
@@ -16282,6 +16338,39 @@ function ControlledNumberInput({
       <input min="0" step="0.01" type="number" value={value} onChange={(event) => onChange(event.target.value)} />
     </label>
   );
+}
+
+// Input CONTROLADO para nombres de persona/razón social: normaliza a Title Case
+// (formatPersonName) al salir del campo (onBlur), sin estorbar mientras se
+// escribe. Reutilizable en todos los formularios. `onChange` recibe el string ya
+// listo para el estado del formulario.
+function NameInput({
+  value,
+  onChange,
+  ...rest
+}: {
+  value: string;
+  onChange: (value: string) => void;
+} & Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "onChange">) {
+  return (
+    <input
+      {...rest}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={(e) => {
+        const formateado = formatPersonName(e.target.value);
+        if (formateado !== value) onChange(formateado);
+        rest.onBlur?.(e);
+      }}
+    />
+  );
+}
+
+// onBlur para inputs NO controlados (helper <Input>): reescribe el valor del DOM
+// a Title Case al salir del campo. Se pasa como prop onBlur.
+function reformatNameOnBlur(e: React.FocusEvent<HTMLInputElement>) {
+  const formateado = formatPersonName(e.currentTarget.value);
+  if (formateado !== e.currentTarget.value) e.currentTarget.value = formateado;
 }
 
 function ProductionQqFields({

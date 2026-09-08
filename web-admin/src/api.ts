@@ -103,6 +103,28 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
   return parseResponse<T>(response);
 }
 
+// ── Consulta SRI (Cédula/RUC) ────────────────────────────────────────────────
+// Resuelve la razón social y dirección de un contribuyente por su identificación.
+export type SriResult = {
+  identificacion: string;
+  tipo: "CEDULA" | "RUC" | "DESCONOCIDO";
+  razonSocial: string | null;
+  direccion: string | null;
+  encontrado: boolean;
+  mensaje?: string;
+};
+
+/**
+ * Consulta al backend la razón social/dirección de una identificación (10 dígitos
+ * = cédula, 13 = RUC). El backend valida y hace la búsqueda en el SRI; si no hay
+ * red o no existe, devuelve `encontrado: false` para que la UI siga funcionando
+ * con ingreso manual. Solo dígitos se envían.
+ */
+export async function apiGetSRI(identificacion: string): Promise<SriResult> {
+  const id = String(identificacion ?? "").replace(/\D/g, "");
+  return apiGet<SriResult>(`/sri/consultar/${id}`);
+}
+
 export async function checkHealth(): Promise<boolean> {
   try {
     const response = await fetch(`${API_URL}/health`);
