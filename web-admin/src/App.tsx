@@ -4772,16 +4772,35 @@ export function App() {
   // consulta el estado del enlace directo (tablet → ERP) cada 8 s. Es solo
   // lectura y tolerante a fallos: si el backend no responde, marca "sin enlace"
   // sin romper la vista ni afectar la importación desde Firebase.
+  //
+  // INYECCIÓN LIMPIA AL ESTADO: cuando el "último envío" avanza (llegó un ticket
+  // nuevo por WiFi directo o por Firebase), se dispara el MISMO cargador
+  // existente refreshBasculaTickets(), que alimenta el estado `basculaTickets`
+  // (el que ya usa la tabla). No se reescriben hooks ni efectos: la vía nueva
+  // aparece en la tabla por el mismo camino que la importación de siempre.
+  const ultimoEnvioRef = useRef<string | null>(null);
   useEffect(() => {
     if (!authUser || activeTab !== "Bascula") return;
     let vivo = true;
     const cargar = () =>
       apiGetBasculaStatus()
-        .then((s) => { if (vivo) { setBasculaSync(s); setBasculaSyncErr(false); } })
+        .then((s) => {
+          if (!vivo) return;
+          setBasculaSync(s);
+          setBasculaSyncErr(false);
+          const previo = ultimoEnvioRef.current;
+          if (s.ultimoEnvio && s.ultimoEnvio !== previo) {
+            // No refrescar en la primera lectura (previo === null): la tabla ya
+            // se carga al entrar a la pestaña. Solo ante un envío MÁS nuevo.
+            if (previo !== null) refreshBasculaTickets().catch(() => undefined);
+            ultimoEnvioRef.current = s.ultimoEnvio;
+          }
+        })
         .catch(() => { if (vivo) setBasculaSyncErr(true); });
     cargar();
     const id = window.setInterval(cargar, 8000);
     return () => { vivo = false; window.clearInterval(id); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUser, activeTab]);
 
   function resetFomentoForm() {
