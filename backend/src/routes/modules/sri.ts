@@ -45,6 +45,10 @@ type SriResult = {
   razonSocial: string | null;
   direccion: string | null;
   encontrado: boolean;
+  // Contrato estructurado que consume el frontend.
+  success: boolean;
+  message?: string;
+  // Alias retrocompatible (versiones previas leían `mensaje`).
   mensaje?: string;
 };
 
@@ -56,10 +60,14 @@ async function fetchJson(url: string): Promise<unknown | null> {
       headers: { Accept: "application/json", "User-Agent": "bascula-erp/1.0" },
       signal: AbortSignal.timeout(6000)
     });
-    if (!res.ok) return null;
-    return await res.json();
+    // 204 (sin contenido) o cuerpo vacío = el SRI no tiene datos para ese RUC:
+    // no es un error, es "no encontrado". Se evita que res.json() lance por body vacío.
+    if (!res.ok || res.status === 204) return null;
+    const text = await res.text();
+    if (!text.trim()) return null;
+    return JSON.parse(text);
   } catch {
-    // Sin red / bloqueado / timeout / SRI caído: se degrada a ingreso manual.
+    // Sin red / bloqueado / timeout / SRI caído / JSON inválido: se degrada a manual.
     return null;
   }
 }
@@ -108,16 +116,22 @@ sriRouter.get("/consultar/:identificacion", asyncRoute(async (req, res) => {
   // Para una cédula, el RUC de persona natural es cédula + "001".
   const ruc = raw.length === 13 ? raw : `${raw}001`;
   const { razonSocial, direccion } = await consultarSri(ruc);
+  const encontrado = Boolean(razonSocial);
 
+  // Respuesta SIEMPRE estructurada (nunca objeto vacío ni 500): éxito con datos,
+  // o { success:false, message } cuando el SRI no tiene registro / no responde.
+  const noEncontrado = tipo === "CEDULA"
+    ? "No se encontraron datos tributarios para esta cédula"
+    : "No se encontraron datos tributarios para este RUC";
   const result: SriResult = {
     identificacion: raw,
     tipo,
     razonSocial,
     direccion,
-    encontrado: Boolean(razonSocial),
-    mensaje: razonSocial
-      ? undefined
-      : "No se pudo obtener del SRI (sin conexión o no registrado). Puedes ingresar los datos manualmente."
+    encontrado,
+    success: encontrado,
+    message: encontrado ? undefined : noEncontrado,
+    mensaje: encontrado ? undefined : noEncontrado
   };
   res.json(result);
 }));

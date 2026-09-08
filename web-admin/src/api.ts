@@ -111,6 +111,8 @@ export type SriResult = {
   razonSocial: string | null;
   direccion: string | null;
   encontrado: boolean;
+  success?: boolean;
+  message?: string;
   mensaje?: string;
 };
 

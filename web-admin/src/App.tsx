@@ -4260,7 +4260,7 @@ export function App() {
         apply({ razonSocial: nombre, direccion: r.direccion });
         addToast(`SRI: ${nombre}`, "success");
       } else {
-        addToast(r.mensaje ?? "El SRI no devolvió datos; ingrésalos manualmente.", "warn");
+        addToast("No se encontraron datos en el SRI para esta cédula. Por favor ingrese el nombre manualmente.", "warn");
       }
     } catch (e) {
       // Fallback: nunca bloquea al operador; puede seguir escribiendo a mano.
