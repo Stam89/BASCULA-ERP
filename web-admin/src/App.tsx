@@ -10249,11 +10249,15 @@ export function App() {
                       <button type="button" disabled={sriLoading} title="Consultar SRI"
                         onClick={() => consultarSRIyRellenar(quickNewCustomerForm.identification, ({ razonSocial, direccion }) =>
                           setQuickNewCustomerForm((p) => ({ ...p, full_name: razonSocial, address: direccion ?? p.address })))}
-                        style={{ padding: "0 12px", borderRadius: 6, border: "1px solid #2563eb", background: "#eff6ff", color: "#2563eb", cursor: sriLoading ? "wait" : "pointer", fontWeight: 700, whiteSpace: "nowrap", opacity: sriLoading ? 0.6 : 1 }}>
-                        🔍 SRI
+                        style={{ padding: "0 12px", borderRadius: 6, border: "1px solid #2563eb", background: "#eff6ff", color: "#2563eb", cursor: sriLoading ? "wait" : "pointer", fontWeight: 700, whiteSpace: "nowrap", opacity: sriLoading ? 0.6 : 1, minWidth: 92 }}>
+                        {sriLoading ? "⏳ Buscando…" : "🔍 SRI"}
+                      </button>
+                      <button type="button" title="Autocompletar como Consumidor Final"
+                        onClick={() => setQuickNewCustomerForm({ identification: "9999999999999", full_name: "CONSUMIDOR FINAL", phone: "0999999999", address: "S/N" })}
+                        style={{ padding: "0 12px", borderRadius: 6, border: "1px solid #64748b", background: "#f8fafc", color: "#475569", cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}>
+                        👤 Consumidor Final
                       </button>
                     </div>
-                    {sriLoading && <small style={{ color: "#2563eb", fontWeight: 600 }}>⏳ Buscando en SRI…</small>}
                   </label>
                   <label>
                     <span>Nombre / Razón social *</span>
