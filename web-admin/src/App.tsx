@@ -4255,12 +4255,15 @@ export function App() {
     setSriLoading(true);
     try {
       const r = await apiGetSRI(id);
-      if (r.encontrado && r.razonSocial) {
+      // Diagnóstico: inspeccionar la respuesta cruda del SRI en la consola.
+      console.log("[SRI Response]:", r);
+      // Éxito = el backend no marcó success:false Y trajo razón social.
+      if (r.success !== false && r.razonSocial) {
         const nombre = formatPersonName(r.razonSocial);
         apply({ razonSocial: nombre, direccion: r.direccion });
         addToast(`SRI: ${nombre}`, "success");
       } else {
-        addToast("No se encontraron datos en el SRI para esta cédula. Por favor ingrese el nombre manualmente.", "warn");
+        addToast("No se encontraron datos en el SRI para esta cédula. Ingrese el nombre manualmente.", "warn");
       }
     } catch (e) {
       // Fallback: nunca bloquea al operador; puede seguir escribiendo a mano.

@@ -120,9 +120,7 @@ sriRouter.get("/consultar/:identificacion", asyncRoute(async (req, res) => {
 
   // Respuesta SIEMPRE estructurada (nunca objeto vacío ni 500): éxito con datos,
   // o { success:false, message } cuando el SRI no tiene registro / no responde.
-  const noEncontrado = tipo === "CEDULA"
-    ? "No se encontraron datos tributarios para esta cédula"
-    : "No se encontraron datos tributarios para este RUC";
+  const noEncontrado = "No se encontraron datos tributarios en el SRI";
   const result: SriResult = {
     identificacion: raw,
     tipo,
