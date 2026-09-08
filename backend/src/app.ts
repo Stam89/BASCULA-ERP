@@ -7,6 +7,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { errorHandler, notFound } from "./http/error-handler.js";
 import { routes } from "./routes/index.js";
+import { basculaSyncRouter } from "./routes/modules/bascula-sync.js";
 import { verifyToken } from "./auth/jwt.js";
 import { verifyUploadSignature } from "./auth/upload-sign.js";
 import { env } from "./config/env.js";
@@ -62,6 +63,12 @@ app.get("/health", (_req, res) => {
 });
 
 app.use("/api/v1", routes);
+
+// Sincronización DIRECTA por WiFi de la tablet de báscula (arquitectura en
+// paralelo / shadowing). Se monta APARTE de /api/v1 para exponer exactamente
+// POST /api/bascula/sync. Convive con la importación desde Firebase: ambas
+// escriben en la misma tabla con la misma lógica (ver bascula-sync.ts).
+app.use("/api/bascula", basculaSyncRouter);
 
 // ── Servir la app web compilada (acceso multi-PC por la red local) ──────────
 // Tras `npm run build` en web-admin existe web-admin/dist. El backend la sirve
