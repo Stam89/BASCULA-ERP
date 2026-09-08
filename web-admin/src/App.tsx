@@ -234,6 +234,14 @@ type WorkerPaymentDetail = {
   } | null;
 };
 
+// Recibo semanal desglosado (Rol de Pago Individual) que devuelve /labor/worker-receipt.
+type ReciboSemanal = {
+  worker: { role: string; name: string };
+  range: { from: string; to: string };
+  rows: Array<{ fecha: string; concepto: string; lote: string | null; cantidad: string; tarifa: string; subtotal: number; status: string }>;
+  totals: { earned: number; advances: number; net: number };
+};
+
 type CuadrillaActivity = { id: string; name: string; unit_rate: number; is_active: boolean; categoria?: string };
 type CuadrillaEntry = { id: string; work_date: string; activity_id?: string | null; activity_name: string; worker_name: string; quantity: number; unit_rate: number; subtotal: number; origen?: string; referencia_id?: string | null; tunnel_number?: number | null; momento?: string | null };
 type CuadrillaSummaryRow = { worker_name: string; entradas: number; total: number; anticipos: number; neto: number };
@@ -1664,6 +1672,10 @@ export function App() {
   }, [nominaRows]);
   const [nominaPaymentDetail, setNominaPaymentDetail] = useState<{ open: boolean; row: WorkerSummary | null; payments: WorkerPaymentDetail[]; loading: boolean }>({
     open: false, row: null, payments: [], loading: false
+  });
+  // Recibo semanal (Rol de Pago Individual): modal de vista previa + impresión.
+  const [reciboModal, setReciboModal] = useState<{ open: boolean; loading: boolean; data: ReciboSemanal | null }>({
+    open: false, loading: false, data: null
   });
   const [secadorSugg, setSecadorSugg] = useState<Array<{ worker_name: string; work_date: string; tunnels: number; suggested_amount: number; already_generated: boolean; dia_inicio?: string; dia_fin?: string; dias_corrida?: number }> | null>(null);
   const [nominaView, setNominaView] = useState<"planta" | "cuadrilla" | "historial">("planta");
@@ -3438,6 +3450,115 @@ export function App() {
     };
   }
 
+  // Rol de pago: etiqueta legible del rol.
+  function roleLabelNomina(role: string): string {
+    return role === "PILADOR" ? "Pilador" : role === "ESTIBADOR" ? "Estibador" : role === "POLVILLO" ? "Polvillo" : "Secador";
+  }
+  const fmtFechaRecibo = (f: string) => { const [y, m, d] = String(f).slice(0, 10).split("-"); return `${d}/${m}/${y}`; };
+
+  // Abre el modal de vista previa del Recibo Semanal Desglosado (Rol de Pago).
+  async function openReciboSemanal(row: WorkerSummary, periodFrom?: string, periodTo?: string) {
+    const from = periodFrom ?? nominaFrom;
+    const to = periodTo ?? nominaTo;
+    setReciboModal({ open: true, loading: true, data: null });
+    try {
+      const data = await apiGet<ReciboSemanal>(
+        `/labor/worker-receipt?role=${row.worker_role}&name=${encodeURIComponent(row.worker_name)}&from=${from}&to=${to}`
+      );
+      setReciboModal({ open: true, loading: false, data });
+    } catch (e) {
+      setReciboModal({ open: false, loading: false, data: null });
+      addToast(e instanceof Error ? e.message : "No se pudo cargar el recibo", "error");
+    }
+  }
+
+  // Filas de la tabla de trabajo (compartidas por ambas impresiones).
+  function reciboFilasHtml(data: ReciboSemanal): string {
+    if (!data.rows.length) return `<tr><td colspan="5" style="text-align:center;color:#888">Sin registros en el período</td></tr>`;
+    return data.rows.map((r) =>
+      `<tr><td>${fmtFechaRecibo(r.fecha)}</td><td>${r.concepto}</td><td class="r">${r.cantidad}</td><td class="r">${r.tarifa}</td><td class="r">$${r.subtotal.toFixed(2)}</td></tr>`
+    ).join("");
+  }
+
+  // Comprobante formal A4.
+  function printReciboA4(data: ReciboSemanal) {
+    const w = window.open("", "_blank", "width=640,height=800");
+    if (!w) { addToast("El navegador bloqueó la ventana de impresión", "error"); return; }
+    const t = data.totals;
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Rol de Pago ${data.worker.name}</title><style>
+      @page{size:A4;margin:16mm} *{box-sizing:border-box}
+      body{font-family:Arial,sans-serif;font-size:13px;color:#111;margin:0;max-width:180mm}
+      h1{font-size:20px;margin:0;text-align:center;color:#0f766e} h2{font-size:12px;font-weight:normal;margin:2px 0 0;text-align:center;color:#555}
+      h3{font-size:14px;margin:16px 0 6px;text-transform:uppercase;letter-spacing:1px;text-align:center}
+      .meta{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;margin:12px 0;font-size:12.5px;border:1px solid #cbd5e1;border-radius:8px;padding:10px 12px}
+      table{width:100%;border-collapse:collapse;margin-top:8px} th{background:#0f766e;color:#fff;padding:7px 8px;text-align:left;font-size:11.5px;text-transform:uppercase}
+      td{padding:6px 8px;border-bottom:1px solid #e5e7eb} td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
+      .cierre{margin-top:14px;margin-left:auto;width:52%;border:1px solid #cbd5e1;border-radius:8px;overflow:hidden}
+      .cierre .row{display:flex;justify-content:space-between;padding:7px 12px;border-bottom:1px solid #eee} .cierre .row:last-child{border-bottom:none}
+      .cierre .disc{color:#b91c1c} .cierre .net{background:#0f766e;color:#fff;font-weight:800;font-size:16px}
+      .sigs{display:flex;justify-content:space-between;gap:40px;margin-top:56px} .sig{flex:1;text-align:center} .sig hr{border:none;border-top:1px solid #111;margin:0 0 5px} .sig span{font-size:11.5px;color:#333}
+    </style></head><body>
+      <h1>${appSettings.business_name || "PILADORA CEYRO"}</h1>
+      <h2>${[appSettings.business_subtitle, appSettings.ruc && `RUC: ${appSettings.ruc}`].filter(Boolean).join(" · ")}</h2>
+      <h3>Rol de Pago Semanal</h3>
+      <div class="meta">
+        <div><strong>Trabajador:</strong> ${data.worker.name}</div>
+        <div><strong>Rol:</strong> ${roleLabelNomina(data.worker.role)}</div>
+        <div><strong>Período:</strong> ${fmtFechaRecibo(data.range.from)} — ${fmtFechaRecibo(data.range.to)}</div>
+      </div>
+      <table>
+        <thead><tr><th>Fecha</th><th>Concepto / Lote</th><th class="r">Cantidad</th><th class="r">Tarifa</th><th class="r">Subtotal</th></tr></thead>
+        <tbody>${reciboFilasHtml(data)}</tbody>
+      </table>
+      <div class="cierre">
+        <div class="row"><span>(+) Total ganado</span><strong>$${t.earned.toFixed(2)}</strong></div>
+        <div class="row disc"><span>(−) Anticipos</span><strong>-$${t.advances.toFixed(2)}</strong></div>
+        <div class="row net"><span>(=) LÍQUIDO A PAGAR</span><strong>$${t.net.toFixed(2)}</strong></div>
+      </div>
+      <div class="sigs">
+        <div class="sig"><hr><span>Entregado por (Caja / Admin)</span></div>
+        <div class="sig"><hr><span>Recibido Conforme (${data.worker.name})</span></div>
+      </div>
+    </body></html>`;
+    w.document.write(html); w.document.close(); w.focus(); w.print();
+  }
+
+  // Ticket térmico 80mm.
+  function printRecibo80mm(data: ReciboSemanal) {
+    const w = window.open("", "_blank", "width=380,height=680");
+    if (!w) { addToast("El navegador bloqueó la ventana de impresión", "error"); return; }
+    const t = data.totals;
+    const filas = (data.rows.length ? data.rows : []).map((r) =>
+      `<div class="it"><div class="l1"><span>${fmtFechaRecibo(r.fecha)}</span><span>$${r.subtotal.toFixed(2)}</span></div><div class="l2">${r.concepto} · ${r.cantidad} · ${r.tarifa}</div></div>`
+    ).join("") || `<div class="l2" style="text-align:center">Sin registros</div>`;
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Recibo ${data.worker.name}</title><style>
+      @page{size:80mm auto;margin:5mm} *{box-sizing:border-box}
+      body{font-family:Arial,sans-serif;font-size:12px;color:#111;margin:0;width:72mm}
+      h1{font-size:14px;margin:0;text-align:center} .sub{font-size:10.5px;text-align:center;color:#444;margin:1px 0 6px}
+      .rol{text-align:center;font-weight:800;margin:4px 0;text-transform:uppercase;font-size:12px}
+      .meta{font-size:11px;margin:2px 0} .meta b{display:inline-block;min-width:52px;color:#555}
+      .it{border-bottom:1px dotted #bbb;padding:4px 0} .l1{display:flex;justify-content:space-between;font-weight:700} .l2{font-size:10.5px;color:#333}
+      .cierre{margin-top:8px;border-top:2px solid #111;padding-top:6px} .cierre .row{display:flex;justify-content:space-between;margin:2px 0} .disc{color:#b91c1c}
+      .net{font-size:15px;font-weight:900;border-top:1px dashed #111;padding-top:4px;margin-top:4px}
+      .sig{margin-top:26px;text-align:center;font-size:10.5px} .sig hr{border:none;border-top:1px solid #111;margin:0 0 3px}
+    </style></head><body>
+      <h1>${appSettings.business_name || "PILADORA CEYRO"}</h1>
+      <div class="sub">${[appSettings.ruc && `RUC: ${appSettings.ruc}`].filter(Boolean).join(" ")}</div>
+      <div class="rol">Rol de Pago · ${roleLabelNomina(data.worker.role)}</div>
+      <div class="meta"><b>Trabajador:</b> ${data.worker.name}</div>
+      <div class="meta"><b>Período:</b> ${fmtFechaRecibo(data.range.from)} — ${fmtFechaRecibo(data.range.to)}</div>
+      <div style="margin-top:6px">${filas}</div>
+      <div class="cierre">
+        <div class="row"><span>(+) Ganado</span><span>$${t.earned.toFixed(2)}</span></div>
+        <div class="row disc"><span>(−) Anticipos</span><span>-$${t.advances.toFixed(2)}</span></div>
+        <div class="row net"><span>LÍQUIDO</span><span>$${t.net.toFixed(2)}</span></div>
+      </div>
+      <div class="sig"><hr>Entregado por (Caja/Admin)</div>
+      <div class="sig"><hr>Recibido Conforme (Trabajador)</div>
+    </body></html>`;
+    w.document.write(html); w.document.close(); w.focus(); w.print();
+  }
+
   async function printWorkerReceipt(row: WorkerSummary, periodFrom?: string, periodTo?: string) {
     // La ventana se abre YA (dentro del click) para que el bloqueador de popups
     // no la mate; el contenido se escribe después de traer el detalle.
@@ -3557,6 +3678,9 @@ export function App() {
         cash_register_id: registerId
       });
       addToast(`Pagado a ${row.worker_name}`, "success");
+      // Abre el recibo semanal para firma (con el período que se acaba de pagar,
+      // antes de que refreshNomina reordene las filas).
+      await openReciboSemanal(row, nominaFrom, nominaTo);
       await refreshNomina();
       await refreshCaja(registerId);
     } catch (e) {
@@ -13886,7 +14010,7 @@ export function App() {
                             <td className="num">{money(r.paid_amount ?? 0)}</td>
                             <td className="num" style={{ whiteSpace: "nowrap" }}>
                               <button type="button" className="btnGhost" title="Ver detalle del cálculo" onClick={() => loadNominaPaymentDetail(r)}>🔍</button>
-                              <button type="button" className="btnGhost" title="Imprimir recibo" style={{ marginLeft: 6 }} onClick={() => printWorkerReceipt(r).catch(() => undefined)}>🧾</button>
+                              <button type="button" className="btnGhost" title="Recibo semanal (Rol de Pago)" style={{ marginLeft: 6 }} onClick={() => openReciboSemanal(r).catch(() => undefined)}>🧾</button>
                               {pending > 0 ? (
                                 <>
                                   <button type="button" className="btnGhost" style={{ marginLeft: 6 }} onClick={() => registerAdvance(r)}>Anticipo</button>
@@ -14299,6 +14423,90 @@ export function App() {
             )}
 
             {/* Modal: detalle del cálculo de nómina por pilada */}
+            {/* ── Recibo Semanal Desglosado (Rol de Pago Individual) ── */}
+            {reciboModal.open && (
+              <div className="modalOverlay" onClick={() => setReciboModal({ open: false, loading: false, data: null })}>
+                <div className="modalCard" style={{ maxWidth: 760, width: "100%" }} onClick={(e) => e.stopPropagation()}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                    <h3 style={{ margin: 0 }}>🧾 Rol de Pago Semanal</h3>
+                    <button type="button" className="btnGhost" onClick={() => setReciboModal({ open: false, loading: false, data: null })}>✕</button>
+                  </div>
+                  {reciboModal.loading || !reciboModal.data ? (
+                    <p className="muted">Cargando recibo…</p>
+                  ) : (() => {
+                    const d = reciboModal.data;
+                    return (
+                      <>
+                        {/* Encabezado */}
+                        <div style={{ border: "1px solid var(--c-border)", borderRadius: 10, padding: "10px 14px", marginBottom: 10 }}>
+                          <div style={{ fontWeight: 800, fontSize: 16, color: "#0f766e" }}>{appSettings.business_name || "PILADORA CEYRO"}</div>
+                          {appSettings.ruc && <div className="muted" style={{ fontSize: 12 }}>RUC: {appSettings.ruc}</div>}
+                          <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginTop: 6, fontSize: 13 }}>
+                            <span><strong>Trabajador:</strong> {d.worker.name}</span>
+                            <span><strong>Rol:</strong> {roleLabelNomina(d.worker.role)}</span>
+                            <span><strong>Período:</strong> {fmtFechaRecibo(d.range.from)} — {fmtFechaRecibo(d.range.to)}</span>
+                          </div>
+                        </div>
+
+                        {/* Tabla de trabajo de la semana */}
+                        <div style={{ overflowX: "auto", maxHeight: 320, overflowY: "auto" }}>
+                          <table className="cajaTable" style={{ fontSize: 12.5 }}>
+                            <thead>
+                              <tr>
+                                <th>Fecha</th><th>Concepto / Lote</th>
+                                <th style={{ textAlign: "right" }}>Cantidad</th>
+                                <th style={{ textAlign: "right" }}>Tarifa</th>
+                                <th style={{ textAlign: "right" }}>Subtotal</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {d.rows.length === 0 ? (
+                                <tr><td colSpan={5} className="muted" style={{ textAlign: "center" }}>Sin registros en el período</td></tr>
+                              ) : d.rows.map((r, i) => (
+                                <tr key={i}>
+                                  <td>{fmtFechaRecibo(r.fecha)}</td>
+                                  <td>{r.concepto}</td>
+                                  <td className="num">{r.cantidad}</td>
+                                  <td className="num">{r.tarifa}</td>
+                                  <td className="num" style={{ fontWeight: 700 }}>{money(r.subtotal)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {/* Caja de cierre financiero */}
+                        <div style={{ marginTop: 12, marginLeft: "auto", maxWidth: 320, border: "1px solid var(--c-border)", borderRadius: 10, overflow: "hidden" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", padding: "7px 14px", borderBottom: "1px solid #eee" }}>
+                            <span>(+) Total ganado</span><strong>{money(d.totals.earned)}</strong>
+                          </div>
+                          <div style={{ display: "flex", justifyContent: "space-between", padding: "7px 14px", borderBottom: "1px solid #eee", color: "var(--c-danger)" }}>
+                            <span>(−) Anticipos</span><strong>-{money(d.totals.advances)}</strong>
+                          </div>
+                          <div style={{ display: "flex", justifyContent: "space-between", padding: "9px 14px", background: "#0f766e", color: "#fff", fontWeight: 800, fontSize: 16 }}>
+                            <span>(=) LÍQUIDO A PAGAR</span><strong>{money(d.totals.net)}</strong>
+                          </div>
+                        </div>
+
+                        {/* Firmas */}
+                        <div style={{ display: "flex", gap: 40, marginTop: 34, marginBottom: 6 }}>
+                          <div style={{ flex: 1, textAlign: "center" }}><div style={{ borderTop: "1px solid #111", paddingTop: 4, fontSize: 12, color: "#333" }}>Entregado por (Caja / Admin)</div></div>
+                          <div style={{ flex: 1, textAlign: "center" }}><div style={{ borderTop: "1px solid #111", paddingTop: 4, fontSize: 12, color: "#333" }}>Recibido Conforme ({d.worker.name})</div></div>
+                        </div>
+
+                        {/* Acciones de impresión */}
+                        <div className="buttonRow" style={{ marginTop: 14, flexWrap: "wrap" }}>
+                          <button type="button" className="primary" onClick={() => printRecibo80mm(d)}>🖨️ Imprimir Ticket 80mm</button>
+                          <button type="button" onClick={() => printReciboA4(d)} style={{ fontWeight: 700 }}>📄 Imprimir PDF / A4</button>
+                          <button type="button" onClick={() => setReciboModal({ open: false, loading: false, data: null })}>Cerrar</button>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+            )}
+
             {nominaPaymentDetail.open && nominaPaymentDetail.row && (
               <div className="modalOverlay" onClick={() => setNominaPaymentDetail({ open: false, row: null, payments: [], loading: false })}>
                 <div className="modalCard" style={{ maxWidth: 720 }} onClick={(e) => e.stopPropagation()}>

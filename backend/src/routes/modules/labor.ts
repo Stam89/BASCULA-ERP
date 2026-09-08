@@ -315,6 +315,87 @@ laborRouter.get("/worker-detail", asyncRoute(async (req, res) => {
   res.json({ rows: result.rows });
 }));
 
+// ── Recibo semanal desglosado (Rol de Pago Individual) ─────────────────────
+// Detalle registro por registro para el recibo: cada pilada/estibaje/día con su
+// LOTE, cantidad, tarifa aplicada y subtotal, + la caja de cierre financiero
+// (Total ganado − Anticipos = Líquido). No cambia el endpoint /worker-detail
+// (que agrega por día): es aditivo.
+laborRouter.get("/worker-receipt", asyncRoute(async (req, res) => {
+  await ensureLaborTables();
+  const q = z.object({
+    role: z.enum(["PILADOR", "ESTIBADOR", "SECADOR", "POLVILLO"]),
+    name: z.string().min(1),
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+  }).parse(req.query);
+
+  const rates = await getRates();
+  const recs = await pool.query(
+    `SELECT wp.id, wp.work_date::date AS fecha, wp.reference_type, wp.reference_id,
+            wp.qq::float qq, wp.sacas::float sacas, wp.arrocillo::float arrocillo,
+            wp.tulas::float tulas, wp.tunnels, wp.base_amount::float base_amount,
+            wp.discount::float discount, wp.net_amount::float net_amount, wp.status,
+            l.lot_code, b.batch_number
+       FROM worker_payments wp
+       LEFT JOIN processing_batches b
+         ON wp.reference_type IN ('processing_batch', 'processing_batches') AND b.id = wp.reference_id
+       LEFT JOIN lots l ON l.id = b.lot_id
+      WHERE wp.worker_role = $1 AND wp.worker_name = $2 AND wp.work_date BETWEEN $3 AND $4
+      ORDER BY wp.work_date ASC, wp.created_at ASC`,
+    [q.role, q.name, q.from, q.to]
+  );
+
+  const rows = recs.rows.map((r: Record<string, unknown>) => {
+    const qq = Number(r.qq) || 0, sacas = Number(r.sacas) || 0, tulas = Number(r.tulas) || 0;
+    const arrocillo = Number(r.arrocillo) || 0, tunnels = Number(r.tunnels) || 0;
+    const lote = (r.lot_code as string) ?? null;
+    let concepto = "", cantidad = "", tarifa = "";
+    if (q.role === "SECADOR") {
+      concepto = `Guardianía${tunnels ? ` + ${tunnels} túnel(es)` : ""}`;
+      cantidad = `${tunnels} túnel(es)`;
+      tarifa = `$${rates.secador_per_tunel}/túnel`;
+    } else if (q.role === "PILADOR") {
+      concepto = lote ? `Pilada · Lote ${lote}` : "Pilada";
+      cantidad = `${qq.toFixed(2)} QQ${sacas ? ` · ${sacas.toFixed(0)} sacas` : ""}`;
+      tarifa = `$${rates.pilador_per_qq}/QQ`;
+    } else if (q.role === "POLVILLO") {
+      concepto = lote ? `Polvillo · Lote ${lote}` : "Polvillo";
+      cantidad = `${qq.toFixed(2)} QQ`;
+      tarifa = `$${rates.polvillo_per_qq}/QQ`;
+    } else {
+      const parts: string[] = [];
+      if (tulas) parts.push(`${tulas.toFixed(0)} tulas`);
+      if (qq) parts.push(`${qq.toFixed(2)} QQ`);
+      if (sacas) parts.push(`${sacas.toFixed(0)} sacas`);
+      if (arrocillo) parts.push(`${arrocillo.toFixed(2)} arroc.`);
+      concepto = lote ? `Estibaje · Lote ${lote}` : "Estibaje";
+      cantidad = parts.join(" · ") || "—";
+      tarifa = tulas ? `$${rates.estibador_por_3tulas}/3 tulas` : `$${rates.estibador_per_qq}/QQ`;
+    }
+    return {
+      fecha: r.fecha, concepto, lote, cantidad, tarifa,
+      subtotal: round2(Number(r.net_amount) || 0), status: r.status
+    };
+  });
+
+  const earned = round2(rows.reduce((s, r) => s + r.subtotal, 0));
+  const adv = await pool.query(
+    `SELECT COALESCE(SUM(amount), 0)::float total FROM worker_advances
+      WHERE worker_role = $1 AND worker_name = $2 AND status <> 'CANCELLED' AND advance_date BETWEEN $3 AND $4`,
+    [q.role, q.name, q.from, q.to]
+  );
+  const advances = round2(Number(adv.rows[0].total));
+  const net = round2(Math.max(0, earned - advances));
+
+  res.json({
+    worker: { role: q.role, name: q.name },
+    range: { from: q.from, to: q.to },
+    rows,
+    totals: { earned, advances, net },
+    rates
+  });
+}));
+
 // ── Resumen por trabajador (para el pago semanal) ──────────────────────────
 laborRouter.get("/summary", asyncRoute(async (req, res) => {
   await ensureLaborTables();
