@@ -1590,6 +1590,9 @@ export function App() {
 
   // ── Configuración ─────────────────────────────────────────────────────────
   const [configSubTab, setConfigSubTab] = useState<"operacion" | "tarifas" | "cuadrilla" | "socios" | "secuenciales" | "usuarios">("operacion");
+  // Qué acordeones de Configuración dejó abiertos el usuario, por subpestaña.
+  // Es una comodidad por equipo (no dato del negocio), por eso vive en localStorage.
+  const acordeonesKey = "bascula-erp:config-acordeones";
   // Cuentas bancarias por socio (cash_registers tipo BANCO) para Configuración → Socios & Bancos.
   const [bankAccounts, setBankAccounts] = useState<Array<{ id: string; name: string; banco: string | null; numero_cuenta: string | null; socio: string; socio_tipo: string; accionista_id: string }>>([]);
   // Secuenciales de documentos (Configuración → Secuenciales). Solo la Guía es editable.
@@ -5046,6 +5049,44 @@ export function App() {
     if (configSubTab === "socios") loadBankAccounts().catch(fail);
     if (configSubTab === "cuadrilla") refreshCuadrilla().catch(fail);
     if (configSubTab === "secuenciales") loadSequences().catch(fail);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, configSubTab]);
+
+  // Memoria de los acordeones de Configuración. Al pasar todas las tarjetas a
+  // <details>, entrar a una subpestaña mostraba solo títulos. Aquí se restaura,
+  // POR SUBPESTAÑA, cuáles dejó abiertos el usuario; y la primera vez (cuando
+  // aún no hay ninguna preferencia guardada para esa subpestaña) se abre la
+  // PRIMERA tarjeta, para no entrar nunca a una pantalla en blanco.
+  // Los <details> siguen SIN controlar por React (nunca les pasamos `open`), así
+  // que esto no pelea con el render: solo lee/escribe la propiedad del DOM y
+  // escucha su evento `toggle`. La clave es el texto del <summary>, estable aunque
+  // se reordenen las tarjetas.
+  useEffect(() => {
+    if (activeTab !== "Configuracion") return;
+    const cont = document.querySelector<HTMLElement>(".configVContent");
+    if (!cont) return;
+    const items = Array.from(cont.querySelectorAll("details"));
+    if (items.length === 0) return;
+    const idDe = (d: HTMLDetailsElement) =>
+      `${configSubTab}:${(d.querySelector("summary")?.textContent ?? "").trim().slice(0, 48)}`;
+    const leer = (): Record<string, boolean> => {
+      try { return JSON.parse(localStorage.getItem(acordeonesKey) || "{}") as Record<string, boolean>; }
+      catch { return {}; }
+    };
+    const prefs = leer();
+    const sinPreferencia = items.every((d) => prefs[idDe(d)] === undefined);
+    items.forEach((d, i) => { d.open = prefs[idDe(d)] ?? (sinPreferencia && i === 0); });
+    const onToggle = (e: Event) => {
+      const d = e.currentTarget as HTMLDetailsElement;
+      const id = idDe(d);
+      const actual = leer();
+      if (actual[id] === d.open) return; // sin cambio real: no reescribir
+      actual[id] = d.open;
+      try { localStorage.setItem(acordeonesKey, JSON.stringify(actual)); }
+      catch { /* almacenamiento no disponible */ }
+    };
+    items.forEach((d) => d.addEventListener("toggle", onToggle));
+    return () => items.forEach((d) => d.removeEventListener("toggle", onToggle));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, configSubTab]);
 
