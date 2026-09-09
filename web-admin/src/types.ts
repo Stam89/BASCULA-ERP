@@ -18,6 +18,8 @@ export type Product = {
   product_type: string;
   unit: string;
   is_active?: boolean;
+  /** Tarifa por libra para venta al detalle (0 = sin tarifa configurada). */
+  price_per_pound?: string | number | null;
 };
 
 export type Warehouse = {

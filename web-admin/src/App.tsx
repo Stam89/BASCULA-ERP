@@ -4519,12 +4519,19 @@ export function App() {
   function vdLibrasDesdeTotal(total: string, precio: string): string {
     const t = Number(total), p = Number(precio);
     if (!total || p <= 0 || !Number.isFinite(t)) return "";  // guarda contra división por 0
-    return round2(t / p).toFixed(2);
+    // Peso al detalle con precisión de 3 decimales (ej. 17.857 lb).
+    return (Math.round((t / p) * 1000) / 1000).toFixed(3);
   }
   // (a) Cambio de producto: precarga el precio/libra sugerido y recalcula.
+  // Prioridad de la tarifa: (1) la configurada en BD (Inventario/Productos,
+  // price_per_pound); (2) el último precio usado en este equipo (localStorage).
+  // Queda editable por si el cajero necesita una excepción manual.
   function vdSetProducto(id: string) {
     setVentaDetalleForm((prev) => {
-      const sugerido = preciosLibraPorProducto[id];
+      const prod = products.find((p) => p.id === id);
+      const tarifaDb = prod ? Number(prod.price_per_pound ?? 0) : 0;
+      const ultimo = preciosLibraPorProducto[id];
+      const sugerido = tarifaDb > 0 ? tarifaDb : (ultimo != null && ultimo > 0 ? ultimo : null);
       const precio = sugerido != null ? String(sugerido) : prev.precio_por_libra;
       let cantidad = prev.cantidad_libras, total = prev.total_dolares;
       if (prev.cantidad_libras) total = vdTotalDesdeLibras(prev.cantidad_libras, precio) || total;
@@ -4562,9 +4569,11 @@ export function App() {
       return;
     }
 
-    const cantidadLibras = Number(ventaDetalleForm.cantidad_libras);
+    // Peso exacto en libras con 3 decimales; QQ conserva esa precisión (5 dec)
+    // para no perder el peso al convertir (100 lb = 1 QQ).
+    const cantidadLibras = Math.round(Number(ventaDetalleForm.cantidad_libras) * 1000) / 1000;
     const precioLibra = Number(ventaDetalleForm.precio_por_libra);
-    const cantidadQQ = round2(cantidadLibras / 100); // Convertir libras a QQ
+    const cantidadQQ = Math.round((cantidadLibras / 100) * 100000) / 100000; // libras → QQ
     // Monto a cobrar: si el cajero fijó el Total $ explícito, ese manda (respeta
     // el redondeo que ve en pantalla); si no, se calcula libras × precio.
     const totalVenta = ventaDetalleForm.total_dolares !== ""
@@ -4574,6 +4583,13 @@ export function App() {
       addToast("La cantidad y el total deben ser mayores a 0", "error");
       return;
     }
+
+    // Datos para el ticket, capturados ANTES de limpiar el formulario.
+    const prodTicket = products.find((p) => p.id === ventaDetalleForm.product_id);
+    const cliTicket = ventaDetalleForm.customer_id
+      ? customers.find((c) => c.id === ventaDetalleForm.customer_id) ?? null
+      : null;
+    const librasStr = cantidadLibras.toFixed(3);
 
     try {
 
@@ -4586,7 +4602,7 @@ export function App() {
           warehouse_id: finishedWarehouse?.id,
           quantity: -cantidadQQ, // Negativo = salida
           ownership: "OWNED",
-          notes: `Venta al detalle: ${cantidadLibras} lb @ $${precioLibra.toFixed(2)}/lb`
+          notes: `Venta al detalle: ${librasStr} lb @ $${precioLibra.toFixed(2)}/lb`
         })
       });
 
@@ -4596,7 +4612,7 @@ export function App() {
         movement: "INCOME",
         category: "VENTA",
         amount: totalVenta,
-        description: `Venta detalle ${cantidadLibras} lb @ $${precioLibra.toFixed(2)}/lb`
+        description: `Venta detalle ${librasStr} lb @ $${precioLibra.toFixed(2)}/lb`
       });
 
       // Recordar el precio/libra usado para este producto (precarga futura).
@@ -4605,11 +4621,91 @@ export function App() {
       try { localStorage.setItem(preciosLibraKey, JSON.stringify(nuevosPrecios)); } catch { /* almacenamiento no disponible */ }
 
       setVentaDetalleForm({ product_id: "", cantidad_libras: "", precio_por_libra: "", total_dolares: "", customer_id: "" });
-      addToast(`✓ Venta ${cantidadLibras} lb por ${money(totalVenta)} registrada`, "success");
+      addToast(`✓ Venta ${librasStr} lb por ${money(totalVenta)} registrada`, "success");
+      // Ticket térmico 80mm (comprobante de mostrador).
+      printTicketVentaDetalle({
+        producto: prodTicket?.name ?? "—",
+        cliente: cliTicket?.full_name || "Consumidor Final",
+        libras: librasStr,
+        precioLibra,
+        total: totalVenta
+      });
       await refreshCaja(registerId);
     } catch (e) {
       addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error");
     }
+  }
+
+  // Guarda/actualiza la tarifa por libra de un producto (Inventario/Productos).
+  // Actualiza el estado local `products` para que el cotizador la use al instante.
+  async function guardarTarifaLibra(productId: string, valor: string) {
+    const price = Number(valor);
+    if (!Number.isFinite(price) || price < 0) { addToast("Precio inválido", "error"); return; }
+    try {
+      const upd = await apiPatch<Product>(`/products/${productId}/tarifa-libra`, { price_per_pound: price });
+      setProducts((prev) => prev.map((p) => (p.id === productId ? { ...p, price_per_pound: upd.price_per_pound } : p)));
+      addToast(`Tarifa guardada: ${money(price)}/lb`, "success");
+    } catch (e) {
+      addToast(`No se pudo guardar la tarifa: ${e instanceof Error ? e.message : "error"}`, "error");
+    }
+  }
+
+  // ── Ticket térmico 80mm de Venta al Detalle ────────────────────────────────
+  function printTicketVentaDetalle(t: {
+    producto: string; cliente: string; libras: string; precioLibra: number; total: number;
+  }) {
+    const esc = (s: string | null | undefined) => (s ?? "").replace(/</g, "&lt;");
+    const fecha = new Date().toLocaleString("es-EC", {
+      day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit"
+    });
+    const piladora = (appSettings?.business_name || "").trim() || "PILADORA CEYRO";
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+      <title>Recibo Venta Detalle</title>
+      <style>
+        @page { size: 80mm auto; margin: 5mm; }
+        *{box-sizing:border-box}
+        body{font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#111;margin:0}
+        .tk{width:72mm;margin:0 auto}
+        h1{font-size:16px;margin:0;text-align:center;letter-spacing:.5px}
+        .sub{text-align:center;font-weight:700;font-size:12px;margin:2px 0 6px}
+        .row{display:flex;justify-content:space-between;margin:2px 0}
+        .k{color:#555}
+        hr{border:none;border-top:1px dashed #333;margin:6px 0}
+        table{width:100%;border-collapse:collapse;margin-top:4px}
+        th{border-bottom:2px solid #111;padding:4px 2px;text-align:left;font-size:11px;text-transform:uppercase}
+        td{padding:5px 2px;border-bottom:1px dotted #bbb;vertical-align:top}
+        td.n,th.n{text-align:right}
+        .tot{display:flex;justify-content:space-between;font-size:18px;font-weight:900;margin-top:8px;border-top:2px solid #111;padding-top:6px}
+        .foot{text-align:center;color:#333;font-size:11px;margin-top:12px}
+        @media print{ button{display:none!important} }
+      </style></head><body>
+      <div class="tk">
+        <h1>${esc(piladora)}</h1>
+        <div class="sub">Recibo de Venta al Detalle</div>
+        <div class="row"><span class="k">Fecha:</span> <span>${esc(fecha)}</span></div>
+        <div class="row"><span class="k">Cliente:</span> <strong>${esc(t.cliente)}</strong></div>
+        <hr>
+        <table>
+          <thead><tr><th>Producto</th><th class="n">Libras</th><th class="n">$/lb</th><th class="n">Subtotal</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>${esc(t.producto)}</td>
+              <td class="n">${esc(t.libras)}</td>
+              <td class="n">${money(t.precioLibra)}</td>
+              <td class="n">${money(t.total)}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="tot"><span>TOTAL</span><span>${money(t.total)}</span></div>
+        <div class="foot">¡Gracias por su compra!<br>Vuelva pronto 🌾</div>
+      </div>
+    </body></html>`;
+    const win = window.open("", "_blank", "width=420,height=720");
+    if (!win) { addToast("El navegador bloqueó la ventana de impresión", "error"); return; }
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    win.print();
   }
 
   // ── Búsqueda de clientes (autocompletado) ──
@@ -12222,6 +12318,7 @@ export function App() {
 
                 {/* ── Venta Detalle (por libra) ── */}
                 {cajaSubTab === "venta_detalle" && (
+                  <>
                   <form className="formPanel" onSubmit={(e) => { e.preventDefault(); submitVentaDetalle(); }} style={{ maxWidth: 600 }}>
                     <h2 style={{ margin: "0 0 8px", fontSize: 18, fontWeight: 700 }}>🛒 Venta Detalle por Libra</h2>
                     <p style={{ margin: "0 0 20px", color: "#6b7280", fontSize: 13 }}>Registra ventas pequeñas. Se restan automáticamente del inventario y entra el dinero a la caja.</p>
@@ -12265,7 +12362,7 @@ export function App() {
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 8 }}>
                           <div>
                             <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>Cantidad</div>
-                            <div style={{ fontSize: 16, fontWeight: 700, color: "#16a34a" }}>{Number(ventaDetalleForm.cantidad_libras)} libras</div>
+                            <div style={{ fontSize: 16, fontWeight: 700, color: "#16a34a" }}>{Number(ventaDetalleForm.cantidad_libras).toFixed(3)} libras</div>
                           </div>
                           <div>
                             <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>Equivalencia</div>
@@ -12281,6 +12378,34 @@ export function App() {
 
                     <button className="primary" style={{ width: "100%", padding: "10px 0" }}>✓ Registrar venta detalle</button>
                   </form>
+
+                  {/* Tarifario por libra (Inventario/Productos): se guarda en la BD y
+                      precarga el precio al elegir el producto arriba. Colapsable para
+                      no estorbar la venta rápida. */}
+                  <details style={{ maxWidth: 600, marginTop: 16 }}>
+                    <summary style={{ cursor: "pointer", fontWeight: 700, color: "#166534" }}>⚙️ Tarifas por libra (precio sugerido)</summary>
+                    <p className="muted" style={{ fontSize: 12, margin: "6px 0 10px" }}>
+                      Define el precio por libra de cada producto. Se guarda en Inventario/Productos y se autocompleta al vender. Deja 0 para no sugerir.
+                    </p>
+                    <table className="cajaTable" style={{ width: "100%" }}>
+                      <thead><tr><th>Producto</th><th className="num">Precio/lb $</th></tr></thead>
+                      <tbody>
+                        {products.filter(p => ['Flor', 'Oso', 'Lira Verde', 'Lira Azul', 'Conejo', 'Arrocillo 3/4', 'Arrocillo Fino', 'Polvillo / Afrecho'].includes(p.name)).map((p) => (
+                          <tr key={p.id}>
+                            <td>{p.name}</td>
+                            <td className="num">
+                              <input type="number" step="0.01" min="0" defaultValue={Number(p.price_per_pound ?? 0) || ""}
+                                placeholder="0.00"
+                                onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                                onBlur={(e) => { const v = e.target.value.trim(); if (v !== "" && Number(v) !== Number(p.price_per_pound ?? 0)) guardarTarifaLibra(p.id, v); }}
+                                style={{ width: 100, padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }} />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </details>
+                  </>
                 )}
 
                 {/* Las cuentas por pagar se administran en la pestaña "Por Pagar" (grupo Cuentas). */}
