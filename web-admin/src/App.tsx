@@ -1935,6 +1935,16 @@ export function App() {
     total_dolares: "",
     customer_id: ""
   });
+  // Los ÚNICOS 5 productos que se venden al detalle por libra. Se matchean por
+  // `code` (estable) contra el catálogo; el `label` es como los ve el cajero.
+  // El catálogo de ventas MAYORISTAS no se toca (usa sus propias listas).
+  const PRODUCTOS_DETALLE: Array<{ code: string; label: string }> = [
+    { code: "ARROZ-PILADO-011", label: "0.11" },
+    { code: "ARROZ-PILADO-CORRIENTE", label: "CORRIENTE" },
+    { code: "ARROCILLO-34", label: "ARROCILLO 3/4" },
+    { code: "ARROCILLO-FINO", label: "ARROCILLO FINO" },
+    { code: "POLVILLO", label: "POLVILLO" }
+  ];
   // Precio por libra "sugerido": el catálogo de productos no guarda precio, así
   // que recordamos el ÚLTIMO precio/libra usado por producto (de facto, la config
   // del punto de venta) en localStorage y lo precargamos al elegir el producto.
@@ -4593,8 +4603,11 @@ export function App() {
 
     try {
 
-      // Crear movimiento de inventario
-      await apiFetch(`/inventory/adjustments`, {
+      // Descuento en kárdex (Producto Terminado / Arroz Pilado). El backend valida
+      // que haya stock suficiente y devuelve 409 si no; como apiFetch NO lanza en
+      // error, revisamos res.ok y abortamos ANTES de tocar la caja o imprimir, con
+      // una alerta amigable. Así nunca se cobra una venta sin descontar inventario.
+      const invRes = await apiFetch(`/inventory/adjustments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4605,6 +4618,12 @@ export function App() {
           notes: `Venta al detalle: ${librasStr} lb @ $${precioLibra.toFixed(2)}/lb`
         })
       });
+      if (!invRes.ok) {
+        let msg = "No hay stock suficiente de este producto para la venta.";
+        try { const j = await invRes.json(); msg = j.error || j.message || msg; } catch { /* sin cuerpo JSON */ }
+        addToast(msg, "error");
+        return; // No se registra caja ni se imprime ticket.
+      }
 
       // Crear movimiento de caja
       await apiPost("/cash/movements", {
@@ -4624,7 +4643,7 @@ export function App() {
       addToast(`✓ Venta ${librasStr} lb por ${money(totalVenta)} registrada`, "success");
       // Ticket térmico 80mm (comprobante de mostrador).
       printTicketVentaDetalle({
-        producto: prodTicket?.name ?? "—",
+        producto: PRODUCTOS_DETALLE.find((dp) => dp.code === prodTicket?.code)?.label ?? prodTicket?.name ?? "—",
         cliente: cliTicket?.full_name || "Consumidor Final",
         libras: librasStr,
         precioLibra,
@@ -12323,8 +12342,9 @@ export function App() {
                     <p style={{ margin: "0 0 20px", color: "#6b7280", fontSize: 13 }}>Registra ventas pequeñas. Se restan automáticamente del inventario y entra el dinero a la caja.</p>
 
                     <Select name="product_id" label="Producto"
-                      rows={products.filter(p => ['Flor', 'Oso', 'Lira Verde', 'Lira Azul', 'Conejo', 'Arrocillo 3/4', 'Arrocillo Fino', 'Polvillo / Afrecho'].includes(p.name))
-                        .map((product) => [product.id, product.name])}
+                      rows={PRODUCTOS_DETALLE
+                        .map((dp) => { const p = products.find((x) => x.code === dp.code); return p ? [p.id, dp.label] as [string, string] : null; })
+                        .filter((r): r is [string, string] => r !== null)}
                       onChange={(e: any) => vdSetProducto(e.target.value)} />
 
                     {/* Cotizador: Cantidad (Libras) ↔ Total $. El precio por libra se
@@ -16207,9 +16227,12 @@ export function App() {
                     <table className="cajaTable" style={{ width: "100%" }}>
                       <thead><tr><th>Producto</th><th className="num">Precio/lb $</th></tr></thead>
                       <tbody>
-                        {products.filter(p => ['Flor', 'Oso', 'Lira Verde', 'Lira Azul', 'Conejo', 'Arrocillo 3/4', 'Arrocillo Fino', 'Polvillo / Afrecho'].includes(p.name)).map((p) => (
+                        {PRODUCTOS_DETALLE.map((dp) => {
+                          const p = products.find((x) => x.code === dp.code);
+                          if (!p) return null;
+                          return (
                           <tr key={p.id}>
-                            <td>{p.name}</td>
+                            <td>{dp.label}</td>
                             <td className="num">
                               <input type="number" step="0.01" min="0" defaultValue={Number(p.price_per_pound ?? 0) || ""}
                                 placeholder="0.00" disabled={!isAdmin}
@@ -16218,7 +16241,8 @@ export function App() {
                                 style={{ width: 110, padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }} />
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                     {!isAdmin && <p className="muted">Solo un administrador puede cambiar estas tarifas.</p>}
