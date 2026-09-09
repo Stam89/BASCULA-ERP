@@ -61,6 +61,28 @@ basculaSyncRouter.post("/sync", asyncRoute(async (req, res) => {
   res.status(201).json({ ok: true, via: "wifi-directo", ...result });
 }));
 
+// GET /api/bascula/restore
+// Recupera el respaldo del negocio guardado en esta instalación del ERP. Se protege con la
+// misma clave del dispositivo y entrega el payload nativo para poder reconstruir
+// Room después de una desinstalación, sin depender de la cuota de Firebase.
+basculaSyncRouter.get("/restore", asyncRoute(async (req, res) => {
+  requireDeviceKey(req);
+  const result = await pool.query<{ raw_payload: unknown; en_espera: boolean }>(
+    `SELECT raw_payload, en_espera
+       FROM mobile_synced_tickets
+      ORDER BY mobile_updated_at ASC, synced_at ASC
+      LIMIT 5000`
+  );
+
+  res.json({
+    ok: true,
+    tickets: result.rows.map((row) => ({
+      ticket: row.raw_payload,
+      enEspera: row.en_espera
+    }))
+  });
+}));
+
 // GET /api/bascula/discover
 // Respuesta mínima para que la tablet pueda encontrar el ERP si cambia la IP.
 // La clave evita confundir otro servicio del puerto 4000 con este servidor.
