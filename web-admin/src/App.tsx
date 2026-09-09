@@ -16020,11 +16020,13 @@ export function App() {
 
             {/* ── Tarifas y Servicios de Planta (2 columnas) ── */}
             {configSubTab === "tarifas" && (
-              <section className="configTarifasGrid">
-                {/* Columna 1: pago a trabajadores + ejemplo de cálculo */}
-                <div className="configTarifasCol">
+              <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {/* Todas las tarjetas son acordeones (<details>) apilados a lo ancho.
+                    Cambio 100% visual: inputs, estado, onChange, botones y API intactos. */}
+                {/* 1) Tarifas de pago (Pilador y Estibador) */}
                 <form className="formPanel" onSubmit={(e) => saveLaborRates(e).catch((err) => addToast(err.message, "error"))}>
-                  <h2>💲 Tarifas de pago (Pilador y Estibador)</h2>
+                  <details>
+                    <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>💲 Tarifas de pago (Pilador y Estibador)</summary>
                   <p className="muted">Con estas tarifas se calcula automáticamente el pago al cerrar cada pilada en Producción.</p>
                   <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>Pilador</h2>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -16051,44 +16053,12 @@ export function App() {
                   </div>
                   <button className="primary" disabled={!isAdmin}>Guardar tarifas</button>
                   {!isAdmin && <p className="muted">Solo un administrador puede cambiar las tarifas.</p>}
+                  </details>
                 </form>
+                {/* 2) Tarifario de Servicios (Socios y Clientes) */}
                 <div className="formPanel">
-                  <h2>Ejemplo de cálculo</h2>
-                  <p className="muted">Para una pilada de 100 QQ de arroz, 20 sacas, 10 QQ de arrocillo y 6 tulas:</p>
-                  <div className="totalBox" style={{ marginBottom: 10 }}>
-                    <span>Pilador</span>
-                    <strong>{money(100 * laborRatesForm.pilador_per_qq + 20 * laborRatesForm.pilador_per_saca)}</strong>
-                    <small>100 × {laborRatesForm.pilador_per_qq} + 20 × {laborRatesForm.pilador_per_saca}</small>
-                  </div>
-                  <div className="totalBox" style={{ marginBottom: 10 }}>
-                    <span>Estibador (con tulas)</span>
-                    <strong>{money((6 / 3) * laborRatesForm.estibador_por_3tulas)}</strong>
-                    <small>
-                      Solo tulas: 6 tulas ÷ 3 × {laborRatesForm.estibador_por_3tulas}
-                      {' '}(sin QQ, sacas ni arrocillo cuando hay tulas)
-                    </small>
-                  </div>
-                  <div className="totalBox" style={{ marginBottom: 10 }}>
-                    <span>Estibador (sin tulas)</span>
-                    <strong>{money(
-                      100 * laborRatesForm.estibador_per_qq +
-                      20 * laborRatesForm.estibador_per_saca +
-                      10 * laborRatesForm.estibador_per_arrocillo
-                    )}</strong>
-                    <small>
-                      100 × {laborRatesForm.estibador_per_qq} +
-                      20 × {laborRatesForm.estibador_per_saca} +
-                      10 × {laborRatesForm.estibador_per_arrocillo}
-                    </small>
-                  </div>
-                  <div className="totalBox">
-                  </div>
-                </div>
-                </div>{/* fin Columna 1 */}
-                {/* Columna 2: servicios a socios + empaque + selección/envejecido */}
-                <div className="configTarifasCol">
-                <div className="formPanel">
-                  <h2>🧾 Tarifario de Servicios (Socios y Clientes)</h2>
+                  <details>
+                    <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🧾 Tarifario de Servicios (Socios y Clientes)</summary>
                   <p className="muted">Precio por QQ por <strong>socio o cliente</strong> y servicio, con fecha de vigencia. El monto es libre: asigna la tarifa negociada con cada quien.</p>
 
                   {/* Formulario en tarjeta: cuadrícula armónica con iconos */}
@@ -16168,10 +16138,12 @@ export function App() {
                       </table>
                     </div>
                   )}
+                  </details>
                 </div>
-                {/* ── Tarifas de empaque / uso de sacos (Matriz → Socios) ── */}
+                {/* 3) Tarifas de empaque / uso de sacos (Matriz) */}
                 <div className="formPanel">
-                  <h2>📦 Tarifas de empaque / uso de sacos (Matriz)</h2>
+                  <details>
+                    <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>📦 Tarifas de empaque / uso de sacos (Matriz)</summary>
                   <p className="muted">
                     Precio que la matriz (CEYRO) cobra a un socio por cada saco al despachar un pedido.
                     Se genera automáticamente como cuenta por cobrar de la matriz y por pagar del socio.
@@ -16194,10 +16166,12 @@ export function App() {
                     Guardar tarifas de empaque
                   </button>
                   {!isAdmin && <p className="muted">Solo un administrador puede cambiar estas tarifas.</p>}
+                  </details>
                 </div>
-                {/* ── Tarifas de Procesos (Selección / Envejecido) — movido desde /seleccion ── */}
+                {/* 4) Tarifas de Procesos (Selección / Envejecido) */}
                 <div className="formPanel">
-                  <h2>🧹 Tarifas de Procesos (Selección / Envejecido)</h2>
+                  <details>
+                    <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🧹 Tarifas de Procesos (Selección / Envejecido)</summary>
                   <p className="muted">
                     Tarifa por defecto ($/QQ) para selección y envejecido. El formulario de «Mandar a selectar»
                     en Selección la lee para autocompletar la «Tarifa por QQ».
@@ -16214,9 +16188,10 @@ export function App() {
                     <button className="primary" style={{ marginTop: 10 }} disabled={!isAdmin}>Guardar tarifas de procesos</button>
                     {!isAdmin && <p className="muted">Solo un administrador puede cambiar estas tarifas.</p>}
                   </form>
+                  </details>
                 </div>
 
-                {/* ── Tarifas por libra (Venta al Detalle) — movido desde Caja ── */}
+                {/* 5) Tarifas por libra (Venta al Detalle) — ya era acordeón */}
                 <div className="formPanel">
                   <details>
                     <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🛒 Tarifas por libra (Venta al Detalle)</summary>
@@ -16248,7 +16223,6 @@ export function App() {
                     {!isAdmin && <p className="muted">Solo un administrador puede cambiar estas tarifas.</p>}
                   </details>
                 </div>
-                </div>{/* fin Columna 2 */}
               </section>
             )}
 
