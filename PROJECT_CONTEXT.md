@@ -1,6 +1,7 @@
 # PROJECT_CONTEXT — BASCULA-ERP
 
-> Memoria compacta para continuar sin releer todo. Última actualización: 2026-09-09 (**Caja/Venta Detalle: el input 'Precio por Libra $' y la tabla de tarifas se QUITARON de la pantalla; el precio se carga en segundo plano y el editor de tarifas se movió a Configuración → Tarifas y Servicios de Planta como acordeón (`7277f74`)**). Todo en main `7277f74`. (Antes 2026-09-08 `e22ed6a` = tarifa BD + 3 decimales + ticket 80mm; `bc88585` = cotizador bidireccional Venta Detalle; `6a49c96` = bascula-sync X-Device-Key; `f68bd7c` = vinculación cascada; `e2cbab3` = Báscula sync WiFi + respaldo 7 días.) (Antes 2026-09-08 `3fd19aa` = SRI multi-fuente; `f4dbf44` = SRI estructurado + Consumidor Final; `15c3acd` = recibo nómina semanal; `b1ea04b` = nombres Title Case + SRI global.)
+> Memoria compacta para continuar sin releer todo. Última actualización: 2026-09-09 (**Configuración → Tarifas y Servicios de Planta: las 5 tarjetas ahora son acordeones `<details>` full-width y se quitó 'Ejemplo de cálculo'; Venta Detalle usa dropdown EXCLUSIVO de 5 productos por code + validación de stock en kárdex antes de cobrar (`ca3e030`)**). Todo en main `ca3e030`. (Antes 2026-09-09 `7277f74` = editor tarifas a Config + ocultar precio; `e22ed6a` = tarifa BD + 3 decimales + ticket 80mm; `bc88585` = cotizador bidireccional; `6a49c96` = bascula-sync X-Device-Key; `f68bd7c` = vinculación cascada.)
+> ⚠️ WIP AJENO en curso (otra sesión, sin commitear en el working tree): refactor lazy-load de CampoWorkspace/Reportes + `web-admin/src/reports/ReportReadOnlyViews.tsx` (UNTRACKED). Los commits de estas sesiones se aislaron para NO incluirlo. No borrarlo ni commitearlo aquí. (Antes 2026-09-08 `3fd19aa` = SRI multi-fuente; `f4dbf44` = SRI estructurado + Consumidor Final; `15c3acd` = recibo nómina semanal; `b1ea04b` = nombres Title Case + SRI global.)
 > Al empezar una sesión, **lee solo este archivo** primero.
 > Nota: el checkout de trabajo/despliegue es el **MAIN** (`C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`). Ignorar cualquier worktree en `.claude/worktrees/*` (están sobre ramas viejas).
 
@@ -315,6 +316,19 @@ Solo frontend (`App.tsx`), cero rupturas. UX de mostrador más limpia.
 - **Cero rupturas**: no se tocaron hooks/estados (`ventaDetalleForm`, `preciosLibraPorProducto`) ni las API; `vdSetPrecio` se conserva aunque ya no tenga input (noUnusedLocals off).
 - Verificado E2E: acordeón guarda Flor=0.55 en BD; en Caja no existe input de precio ni editor, precio autocargado (hint $0.55/lb), cálculo Total 11→20.000 lb. Prueba reseteada a 0.
 - **Nota de proceso**: `App.tsx` tenía WIP AJENO sin commitear al llegar (refactor lazy-load de CampoWorkspace/Reportes + `web-admin/src/reports/ReportReadOnlyViews.tsx` UNTRACKED). Se aisló: `7277f74` contiene SOLO los cambios de esta feature; el WIP ajeno sigue sin commitear en el working tree (no tocarlo/no borrarlo; ese refactor lo termina otra sesión).
+
+## 2ae. CAMBIOS 2026-09-09 (Venta Detalle: dropdown de 5 productos + validación de stock en kárdex — `5567d4a`)
+Solo frontend (`App.tsx`). Refina el módulo de venta al detalle por libra.
+- **Dropdown EXCLUSIVO de 5 productos** (const `PRODUCTOS_DETALLE`, match por `code` + label de mostrador): `ARROZ-PILADO-011`→"0.11", `ARROZ-PILADO-CORRIENTE`→"CORRIENTE", `ARROCILLO-34`→"ARROCILLO 3/4", `ARROCILLO-FINO`→"ARROCILLO FINO", `POLVILLO`→"POLVILLO". Reutilizado en el selector de Caja Y en el acordeón de Config. El catálogo mayorista (Conejo/Flor/Lira/Oso…) NO se toca.
+- **Kárdex + stock**: el submit descuenta `libras/100` QQ del Producto Terminado vía `POST /inventory/adjustments` (backend YA valida stock: 409 con mensaje si falta). **FIX**: `apiFetch` no lanza en error → ahora se revisa `res.ok` y se ABORTA con alerta amigable ANTES de registrar caja o imprimir (nunca se cobra sin descontar inventario). El ticket 80mm muestra el label del producto.
+- Nota: bajo el accionista activo, el stock de PT se filtra por `accionista_id`; CEYRO puede tener 0 (la venta al detalle exige stock del accionista activo).
+
+## 2af. CAMBIOS 2026-09-09 (Config/Tarifas: todas las tarjetas como acordeones + quitar 'Ejemplo de cálculo' — `ca3e030`)
+Rediseño 100% visual de Configuración → Tarifas y Servicios de Planta (cero rupturas: inputs/useState/onChange/botones/API intactos).
+- Las **5 tarjetas** son ahora acordeones `<details>/<summary>` (mismo estilo que "Tarifas por libra"): el `<h2>` pasó a `<summary>` y el formulario completo quedó dentro del `<details>`. Orden: 💲 Tarifas de pago · 🧾 Tarifario de Servicios · 📦 Tarifas de empaque · 🧹 Tarifas de Procesos · 🛒 Tarifas por libra.
+- Se **eliminó** la tarjeta 'Ejemplo de cálculo' (Pilador/Estibador con/sin tulas).
+- **Grid**: de 2 columnas (`configTarifasGrid`/`configTarifasCol`) a stack vertical full-width (`flex column`, gap 12).
+- Verificado E2E: 5 acordeones en orden, 'Ejemplo de cálculo' ausente, el de pago abre con sus 11 inputs y 'Guardar' dispara `PUT /api/v1/labor/rates`.
 
 ## 3. REGLAS DE NEGOCIO (no romper)
 - **Toma de pedido NO mueve dinero ni inventario**; recién al **Despachar** sale stock + entra caja (Contado) o Cuenta por Cobrar (Crédito). Estados DB: `PENDING`/`DELIVERED`/`CANCELLED` (NO renombrar; hay CHECK). El pedido genera su CxC "(pendiente de despacho)" al tomarse; al despachar se salda o se enlaza, nunca se duplica.
