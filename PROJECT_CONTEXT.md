@@ -1,6 +1,6 @@
 # PROJECT_CONTEXT — BASCULA-ERP
 
-> Memoria compacta para continuar sin releer todo. Última actualización: 2026-09-08 (**Báscula: vinculación EN CASCADA — al homologar un "Cliente Desconocido", `POST /tickets/:id/link-farmer` hace UPDATE masivo de todos los tickets aún "Sin vincular" con el mismo `farmer_name` normalizado; frontend actualiza `basculaTickets` al instante (`f68bd7c`)**). Todo en main `6a49c96` (incl. `bascula-sync.ts`: `/sync` exige SIEMPRE `X-Device-Key` + `/discover`). (Antes 2026-09-08 `f68bd7c` = vinculación cascada; `e2cbab3` = Báscula sync directa WiFi + respaldo 7 días shadowing; `3fd19aa` = SRI multi-fuente.) (Antes 2026-09-08 `3fd19aa` = SRI multi-fuente; `f4dbf44` = SRI estructurado + Consumidor Final; `15c3acd` = recibo nómina semanal; `b1ea04b` = nombres Title Case + SRI global.)
+> Memoria compacta para continuar sin releer todo. Última actualización: 2026-09-08 (**Caja/Venta Detalle: cotizador BIDIRECCIONAL Libras ↔ Precio ↔ Total $ en tiempo real; precio/libra sugerido = último usado por producto en localStorage; guarda ÷0; onBlur 2 dec; submit envía libras exactas (→QQ) y total correcto; Ventas mayoristas intacto (`bc88585`)**). Todo en main `bc88585`. (Antes 2026-09-08 `6a49c96` = bascula-sync exige X-Device-Key + /discover; `f68bd7c` = vinculación cascada; `e2cbab3` = Báscula sync directa WiFi + respaldo 7 días; `3fd19aa` = SRI multi-fuente.) (Antes 2026-09-08 `3fd19aa` = SRI multi-fuente; `f4dbf44` = SRI estructurado + Consumidor Final; `15c3acd` = recibo nómina semanal; `b1ea04b` = nombres Title Case + SRI global.)
 > Al empezar una sesión, **lee solo este archivo** primero.
 > Nota: el checkout de trabajo/despliegue es el **MAIN** (`C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`). Ignorar cualquier worktree en `.claude/worktrees/*` (están sobre ramas viejas).
 
@@ -291,6 +291,15 @@ Fix de usabilidad. La báscula manda los pesajes en lote con el MISMO nombre en 
 - **#3 diccionario de alias YA EXISTÍA**: `agricultor_alias` + `resolveFarmerHomologado` (exact → alias). Al aceptar "guardar alias" al vincular, los FUTUROS ingresos por WiFi/Firebase con ese nombre mal escrito se auto-vinculan al importarse. No se duplicó.
 - Verificado E2E: 3 tickets "JOSE PIZA TEST" (farmer_id null); al vincular uno → `cascada_count:2` y los 3 con el mismo `farmer_id`. Datos de prueba borrados.
 - Relacionado (`6a49c96`, ya en main): `bascula-sync.ts` endurecido — `requireDeviceKey()` + `GET /api/bascula/discover`. `POST /api/bascula/sync` ahora exige SIEMPRE `X-Device-Key`; **sin `DEVICE_SYNC_KEY` en `.env` responde 401** (verificado). **Prod**: definir `DEVICE_SYNC_KEY` en `backend/.env` y que la tablet mande `X-Device-Key`, o la sync WiFi queda bloqueada. Firebase no se afecta.
+
+## 2ab. CAMBIOS 2026-09-08 (Caja/Venta Detalle: cotizador bidireccional Libras ↔ Total $ — `bc88585`)
+Solo frontend (`App.tsx`), cero rupturas. El form `🛒 Venta Detalle por Libra` (Caja, `cajaSubTab==='venta_detalle'`) ahora cotiza en ambos sentidos en tiempo real.
+- Nuevo campo **Total $ (Monto a cobrar)** + estado `ventaDetalleForm.total_dolares`. Handlers `vdSetProducto/vdSetLibras/vdSetPrecio/vdSetTotal` + `vdFormatTotalBlur`. Reglas: (a) cambiar Producto precarga precio/libra sugerido; (b) Total→Libras=Total/Precio; (c) Libras→Total=Libras×Precio; (d) Precio→Total (respeta libras). Todo `round2`.
+- **Precio sugerido**: el catálogo `Product` (types.ts) NO tiene precio → se usa el ÚLTIMO precio/libra por producto guardado en `localStorage` (`bascula-erp:precio-libra-por-producto`, mapa `{product_id: number}`), persistido tras cada venta. De facto la "config" del POS.
+- **Guarda ÷0**: `vdLibrasDesdeTotal` retorna "" si precio≤0 (sin Infinity/NaN) + aviso en UI. **onBlur**: Total a 2 decimales. Resumen usa `money()`.
+- **Submit** `submitVentaDetalle`: envía `quantity=-round2(libras/100)` QQ a `/inventory/adjustments` y `amount` a `/cash/movements` usando el **Total $ explícito** si el cajero lo fijó (si no, libras×precio). Valida libras>0 y total>0.
+- **Ventas mayoristas NO tocado**: el módulo comercial (precios por saco/quintal editables) queda igual.
+- Verificado E2E en navegador (fetch interceptado, sin escrituras reales): 100×0.55=55.00; 10/0.55=18.18; precio 0.50→9.09; guarda ÷0; onBlur 7.5→7.50; submit `quantity:-1`+`amount:55`; precarga 0.55 tras venta.
 
 ## 3. REGLAS DE NEGOCIO (no romper)
 - **Toma de pedido NO mueve dinero ni inventario**; recién al **Despachar** sale stock + entra caja (Contado) o Cuenta por Cobrar (Crédito). Estados DB: `PENDING`/`DELIVERED`/`CANCELLED` (NO renombrar; hay CHECK). El pedido genera su CxC "(pendiente de despacho)" al tomarse; al despachar se salda o se enlaza, nunca se duplica.
