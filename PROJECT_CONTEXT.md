@@ -1,7 +1,7 @@
 # PROJECT_CONTEXT — BASCULA-ERP
 
-> Memoria compacta para continuar sin releer todo. Última actualización: 2026-09-09 (**Configuración: TODOS los subtabs con tarjetas como acordeones `<details>` full-width uniformes — Operación y Planta (7), Cuadrilla (2), Socios & Bancos (3), Secuenciales (1), Control de Usuarios (3); modales quedan fuera de los acordeones (`647f9b6`)**). Todo en main `647f9b6`. (Antes 2026-09-09 `3689755` = Operación y Planta acordeones; `ca3e030` = Tarifas acordeones + 5 productos; `7277f74` = editor tarifas a Config.) (Antes 2026-09-09 `7277f74` = editor tarifas a Config + ocultar precio; `e22ed6a` = tarifa BD + 3 decimales + ticket 80mm; `bc88585` = cotizador bidireccional; `6a49c96` = bascula-sync X-Device-Key; `f68bd7c` = vinculación cascada.)
-> ⚠️ WIP AJENO en curso (otra sesión, sin commitear en el working tree): refactor lazy-load de CampoWorkspace/Reportes + `web-admin/src/reports/ReportReadOnlyViews.tsx` (UNTRACKED). Los commits de estas sesiones se aislaron para NO incluirlo. No borrarlo ni commitearlo aquí. (Antes 2026-09-08 `3fd19aa` = SRI multi-fuente; `f4dbf44` = SRI estructurado + Consumidor Final; `15c3acd` = recibo nómina semanal; `b1ea04b` = nombres Title Case + SRI global.)
+> Memoria compacta para continuar sin releer todo. Última actualización: 2026-09-09 (**Cuadrilla: recibo Rol de Pago DESGLOSADO por actividad (`printCuadrillaRecibo`), con 🧾 en «Registros del período» y por persona en «Resumen»; lista cada registro (Día/Actividad/Cantidad/Tarifa/Subtotal) + Ganado−Anticipos=Neto (`acf5ea9`)**). Todo en main `acf5ea9`. (Antes 2026-09-09 `f8a7da7` = "harden operations + optimize ERP loading" de OTRA sesión: backend hardening + `inventory-lock` + lazy-load de App.tsx + nuevos `web-admin/src/reports/ReportReadOnlyViews.tsx` y `web-admin/src/finance/FinancialOverview.tsx`; `647f9b6`/`3689755`/`ca3e030` = acordeones de Configuración.)
+> ⚠️ El refactor lazy-load ajeno YA está commiteado en `f8a7da7` (main); `reports/ReportReadOnlyViews.tsx` y `finance/FinancialOverview.tsx` ahora son archivos rastreados. Sigue habiendo UN cambio suelto sin commitear en `backend/src/routes/modules/bascula-sync.ts` (endpoint `GET /api/bascula/restore`, protegido por X-Device-Key) de esa sesión: NO borrarlo. (Antes 2026-09-08 `3fd19aa` = SRI multi-fuente; `15c3acd` = recibo nómina semanal.)
 > Al empezar una sesión, **lee solo este archivo** primero.
 > Nota: el checkout de trabajo/despliegue es el **MAIN** (`C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`). Ignorar cualquier worktree en `.claude/worktrees/*` (están sobre ramas viejas).
 
@@ -339,6 +339,13 @@ Rediseño 100% visual de Configuración (cero rupturas: inputs/useState/onChange
 - **🔐 Control de Usuarios** (`647f9b6`, 3): Crear usuario · Usuarios registrados · Actividad del sistema.
 - (La ⚙️ Tarifas y Servicios de Planta ya era acordeones desde `ca3e030`.)
 - **Modales** (editar usuario/permisos/accionista, renombrar, ajustar secuencial, seqModal) quedan como HERMANOS fuera de los `<details>`. Verificado E2E: cada subtab muestra sus acordeones y la lógica sigue (p.ej. Parámetros→`PUT /settings/plant-params`, Cuadrilla→`POST /cuadrilla/activities`).
+
+## 2ah. CAMBIOS 2026-09-09 (Cuadrilla: recibo Rol de Pago desglosado — `acf5ea9`)
+Solo frontend (`App.tsx`). El cliente quería que lo pagado a la Cuadrilla apareciera en un recibo desglosado, como el Rol de Pago de la Nómina (Pilador/Estibador).
+- **`printCuadrillaRecibo(workerName?)`** (junto a `printCuadrillaSummary`): imprime un recibo que lista CADA registro del período (Día · Actividad · Cantidad · Tarifa · Subtotal) y cierra con **Ganado − Anticipos = Neto a pagar**. Con `workerName` filtra a esa persona; sin él, todo el período. Para autos (origen SECADORA) usa `labelMomento`. Solo lee estado ya cargado (`cuadEntries`/`cuadSummary`/`cuadFrom`/`cuadTo`); NO toca la API.
+- UI (Nómina → «👷‍♂️ Cuadrilla de Carga/Descarga»): botón **🧾 "Recibo desglosado"** en la cabecera de «Registros del período» (todo el período) y **🧾 "Recibo"** por persona en «Resumen y anticipos» (nueva 6ª columna).
+- Verificado E2E con datos reales: 6 registros → recibo con las 6 actividades (Recepción/Botada Túnel 1/2) y Ganado $73.85 = Neto $73.85. Sin escrituras.
+- Nota de proceso: se integró SOBRE `f8a7da7` (commit de otra sesión) sin mezclarse; el diff del commit es solo cuadrilla.
 
 ## 3. REGLAS DE NEGOCIO (no romper)
 - **Toma de pedido NO mueve dinero ni inventario**; recién al **Despachar** sale stock + entra caja (Contado) o Cuenta por Cobrar (Crédito). Estados DB: `PENDING`/`DELIVERED`/`CANCELLED` (NO renombrar; hay CHECK). El pedido genera su CxC "(pendiente de despacho)" al tomarse; al despachar se salda o se enlaza, nunca se duplica.
