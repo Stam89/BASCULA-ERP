@@ -1761,6 +1761,49 @@ export function App() {
 
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
   const [settingsForm, setSettingsForm] = useState<AppSettings>(defaultAppSettings);
+
+  // ── Cambios sin guardar en Configuración ──────────────────────────────────
+  // Al SALIR del módulo y volver, refreshConfig() vuelve a pedir los ajustes y
+  // SOBREESCRIBE estos formularios, así que lo tecleado y no guardado se perdía
+  // en silencio. (Cambiar de subpestaña NO lo pierde: el estado vive aquí.)
+  // Copias "limpias" de lo último que vino del servidor: settingsForm y
+  // selectionRatesForm ya tienen contraparte (appSettings / selectionRates), así
+  // que solo hacen falta estas dos.
+  const laborRatesPristine = useRef<LaborRates>(defaultLaborRates);
+  const packagingRatesPristine = useRef({ precio_saco_10lb: 0, precio_saco_25lb: 0, precio_saco_50lb: 0 });
+
+  // Qué tarjetas de Configuración tienen cambios pendientes (comparando el
+  // formulario contra lo último cargado del servidor). Derivado: no guarda estado
+  // nuevo ni toca los guardados existentes.
+  const configPendientes = useMemo(() => {
+    const list: string[] = [];
+    const negocio = ["business_name", "business_subtitle", "ruc", "phone", "address", "receipt_footer"] as const;
+    const dif = (a: unknown, b: unknown) => String(a ?? "") !== String(b ?? "");
+    if (negocio.some((k) => dif(settingsForm[k], appSettings[k]))) list.push("Datos del negocio");
+    if (dif(settingsForm.tarifa_pilado_qq, appSettings.tarifa_pilado_qq) || dif(settingsForm.humedad_base_pct, appSettings.humedad_base_pct)) {
+      list.push("Parámetros de planta");
+    }
+    if (JSON.stringify(laborRatesForm) !== JSON.stringify(laborRatesPristine.current)) list.push("Tarifas de pago");
+    if (JSON.stringify(packagingRatesForm) !== JSON.stringify(packagingRatesPristine.current)) list.push("Tarifas de empaque");
+    if (dif(selectionRatesForm.seleccion_rate, selectionRates.seleccion_rate) || dif(selectionRatesForm.envejecimiento_rate, selectionRates.envejecimiento_rate)) {
+      list.push("Tarifas de Procesos");
+    }
+    return list;
+  }, [settingsForm, appSettings, laborRatesForm, packagingRatesForm, selectionRatesForm, selectionRates]);
+
+  // Navegación entre módulos (único punto de salida del menú lateral). Solo
+  // intercepta el caso "salir de Configuración con cambios pendientes"; cualquier
+  // otra navegación pasa igual que antes.
+  function irATab(tab: typeof activeTab) {
+    if (tab !== activeTab && activeTab === "Configuracion" && configPendientes.length > 0) {
+      const ok = window.confirm(
+        `Tienes cambios sin guardar en Configuración:\n\n• ${configPendientes.join("\n• ")}\n\n` +
+        "Si sales ahora se descartarán (al volver se recargan los valores del servidor).\n¿Salir de todas formas?"
+      );
+      if (!ok) return;
+    }
+    setActiveTab(tab);
+  }
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [newUserForm, setNewUserForm] = useState({ name: "", username: "", cedula: "", password: "", role: "OPERADOR" as "ADMINISTRADOR" | "OPERADOR", modules: [] as string[], accionistas: [] as string[] });
   const [permsEditor, setPermsEditor] = useState<{ user: AdminUser; modules: string[] } | null>(null);
@@ -2754,25 +2797,31 @@ export function App() {
   // pantallas: Secadoras, Nómina y Configuración.
   async function loadLaborRates() {
     const rates = await apiGet<LaborRates>("/labor/rates").catch(() => null);
-    if (rates) setLaborRatesForm(rates);
+    if (rates) { laborRatesPristine.current = rates; setLaborRatesForm(rates); }
   }
 
   type PackagingRates = { precio_saco_10lb: number; precio_saco_25lb: number; precio_saco_50lb: number };
   async function loadPackagingRates() {
     const pkg = await apiGet<PackagingRates>("/settings/packaging-rates").catch(() => null);
-    if (pkg) setPackagingRatesForm({
-      precio_saco_10lb: Number(pkg.precio_saco_10lb) || 0,
-      precio_saco_25lb: Number(pkg.precio_saco_25lb) || 0,
-      precio_saco_50lb: Number(pkg.precio_saco_50lb) || 0
-    });
+    if (pkg) {
+      const norm = {
+        precio_saco_10lb: Number(pkg.precio_saco_10lb) || 0,
+        precio_saco_25lb: Number(pkg.precio_saco_25lb) || 0,
+        precio_saco_50lb: Number(pkg.precio_saco_50lb) || 0
+      };
+      packagingRatesPristine.current = norm;
+      setPackagingRatesForm(norm);
+    }
   }
   async function savePackagingRates() {
     const saved = await apiPut<PackagingRates>("/settings/packaging-rates", packagingRatesForm);
-    setPackagingRatesForm({
+    const norm = {
       precio_saco_10lb: Number(saved.precio_saco_10lb) || 0,
       precio_saco_25lb: Number(saved.precio_saco_25lb) || 0,
       precio_saco_50lb: Number(saved.precio_saco_50lb) || 0
-    });
+    };
+    packagingRatesPristine.current = norm; // nueva referencia "limpia"
+    setPackagingRatesForm(norm);
     addToast("Tarifas de empaque guardadas ✓", "success");
   }
 
@@ -2853,6 +2902,7 @@ export function App() {
   async function saveLaborRates(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const saved = await apiPut<LaborRates>("/labor/rates", laborRatesForm);
+    laborRatesPristine.current = saved; // nueva referencia "limpia": apaga el aviso de sin guardar
     setLaborRatesForm(saved);
     addToast("Tarifas de pago guardadas", "success");
   }
@@ -8327,7 +8377,7 @@ export function App() {
                     <svg className="navChevron" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 4L5 6.5 7.5 4" /></svg>
                   </button>
                   {!collapsed && group.tabs.map((tab) => (
-                    <button className={activeTab === tab ? "active" : ""} key={tab} onClick={() => setActiveTab(tab)}>
+                    <button className={activeTab === tab ? "active" : ""} key={tab} onClick={() => irATab(tab)}>
                       <NavIcon tab={tab} />
                       {tab}
                       {tab === "Ventas" && pedidosPendientesCount > 0 && (
@@ -15115,6 +15165,14 @@ export function App() {
             </aside>
 
             <div className="configVContent">
+
+            {/* Aviso de cambios pendientes: se pierden si se sale del módulo,
+                porque al volver refreshConfig() recarga los valores del servidor. */}
+            {configPendientes.length > 0 && (
+              <div className="alertBox" style={{ marginBottom: 12, background: "#fffbeb", borderColor: "rgba(180,83,9,.35)", color: "#92400e" }}>
+                ● Cambios <strong>sin guardar</strong> en: <strong>{configPendientes.join(", ")}</strong>. Usa el botón «Guardar» de cada tarjeta; si sales del módulo se descartarán.
+              </div>
+            )}
 
             {/* ── Operación y Planta: parámetros ── */}
             {configSubTab === "operacion" && (
