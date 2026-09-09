@@ -3442,6 +3442,71 @@ export function App() {
     if (w) { w.document.write(html); w.document.close(); w.print(); }
   }
 
+  // Recibo DESGLOSADO de la Cuadrilla (Rol de Pago): lista CADA actividad/registro
+  // del período con su cantidad, tarifa y subtotal, y cierra con Ganado − Anticipos
+  // = Neto a pagar. Es el equivalente al Rol de Pago de la Nómina, pero para la
+  // cuadrilla. Con `workerName` filtra a esa persona; sin él, imprime todo el
+  // período. Solo lee estado ya cargado (cuadEntries/cuadSummary); no toca la API.
+  function printCuadrillaRecibo(workerName?: string) {
+    const entradas = workerName
+      ? cuadEntries.filter((e) => (e.worker_name || "") === workerName)
+      : cuadEntries;
+    if (entradas.length === 0) { addToast("No hay registros para el recibo", "warn"); return; }
+    const esc = (s: string | number | null | undefined) => String(s ?? "").replace(/</g, "&lt;");
+    const nombre = workerName || "Cuadrilla";
+    const resumen = workerName ? cuadSummary?.rows.find((r) => r.worker_name === workerName) ?? null : null;
+    const ganado = round2(entradas.reduce((s, e) => s + Number(e.subtotal || 0), 0));
+    const anticipos = resumen ? resumen.anticipos : (cuadSummary?.total_anticipos ?? 0);
+    const neto = resumen ? resumen.neto : round2(ganado - anticipos);
+    const filas = entradas.map((e) => {
+      const auto = e.origen === "SECADORA";
+      const actividad = auto ? labelMomento(e.momento ?? "LLENADO", e.tunnel_number ?? 0) : e.activity_name;
+      return `<tr>
+        <td>${esc(String(e.work_date).slice(0, 10))}</td>
+        <td>${esc(actividad)}</td>
+        <td class="r">${Number(e.quantity)}</td>
+        <td class="r">$${Number(e.unit_rate).toFixed(2)}</td>
+        <td class="r"><strong>$${Number(e.subtotal).toFixed(2)}</strong></td>
+      </tr>`;
+    }).join("");
+    const html = `<html><head><meta charset="utf-8"><title>Rol de Pago Cuadrilla · ${esc(nombre)}</title><style>
+      body{font-family:Arial,sans-serif;font-size:13px;margin:14mm}
+      h1{font-size:18px;margin:0 0 2px;text-align:center}
+      h2{font-size:12px;font-weight:normal;margin:0;text-align:center;color:#555}
+      h3{font-size:15px;margin:16px 0 2px;text-align:center;text-transform:uppercase;letter-spacing:1px}
+      .sub{text-align:center;color:#555;font-size:12px;margin-bottom:4px}
+      table{width:100%;border-collapse:collapse;margin-top:8px}
+      th,td{padding:5px 8px;border-bottom:1px solid #eee;text-align:left}
+      th{background:#16a34a;color:#fff}
+      td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
+      .tot{margin-top:12px;width:60%;margin-left:auto;border-collapse:collapse}
+      .tot td{padding:4px 8px;border:none}
+      .tot td.r{text-align:right}
+      .tot tr.neto td{border-top:2px solid #111;font-size:16px;font-weight:bold;color:#16a34a}
+      .sig{margin-top:40px;text-align:center}
+      .sig hr{border:none;border-top:1px solid #111;width:60%;margin:0 auto 4px}
+      .sig span{font-size:12px;color:#333}
+      @media print{body{margin:10mm}}
+    </style></head><body>
+      <h1>${esc(appSettings.business_name)}</h1>
+      <h2>${[appSettings.business_subtitle, appSettings.ruc && `RUC: ${appSettings.ruc}`].filter(Boolean).join(" · ")}</h2>
+      <h3>Rol de Pago · Cuadrilla</h3>
+      <div class="sub"><strong>${esc(nombre)}</strong> · Período: ${esc(cuadFrom)} al ${esc(cuadTo)}</div>
+      <table>
+        <thead><tr><th>Día</th><th>Actividad</th><th class="r">Cantidad</th><th class="r">Tarifa</th><th class="r">Subtotal</th></tr></thead>
+        <tbody>${filas}</tbody>
+      </table>
+      <table class="tot">
+        <tr><td>Ganado (${entradas.length} registro(s))</td><td class="r">$${ganado.toFixed(2)}</td></tr>
+        <tr><td>Anticipos descontados</td><td class="r">${anticipos > 0 ? "-$" + anticipos.toFixed(2) : "$0.00"}</td></tr>
+        <tr class="neto"><td>NETO A PAGAR</td><td class="r">$${neto.toFixed(2)}</td></tr>
+      </table>
+      <div class="sig"><hr><span>Recibí conforme — ${esc(nombre)}</span></div>
+    </body></html>`;
+    const w = window.open("", "_blank", "width=680,height=760");
+    if (w) { w.document.write(html); w.document.close(); w.print(); }
+  }
+
   function printHistoryReceipt(h: { worker_role: string; worker_name: string; week_start: string; cnt: number; qq: number; sacas: number; arrocillo: number; tulas?: number; earned: number; advances_applied: number }) {
     // Reconstruye una fila de resumen para reutilizar el recibo.
     const cashPaid = round2(h.earned - h.advances_applied);
@@ -14363,7 +14428,10 @@ export function App() {
                     </form>
 
                     <div className="tablePanel">
-                      <h2>Registros del período</h2>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <h2 style={{ margin: 0 }}>Registros del período</h2>
+                        <button type="button" className="btnGhost" onClick={() => printCuadrillaRecibo()} title="Imprime el recibo con cada actividad desglosada y el total a pagar">🧾 Recibo desglosado</button>
+                      </div>
                       <div className="totalBox" style={{ marginBottom: 10 }}>
                         <span>Total del período</span>
                         <strong>{money(cuadEntriesTotal)}</strong>
@@ -14434,7 +14502,7 @@ export function App() {
                         <div className="emptyState"><div className="emptyIcon">👥</div><p>Sin datos en este período</p></div>
                       ) : (
                         <table className="cajaTable" style={{ marginTop: 6 }}>
-                          <thead><tr><th>Trabajador</th><th>Trabajos</th><th>Ganado</th><th>Anticipos</th><th>Neto a pagar</th></tr></thead>
+                          <thead><tr><th>Trabajador</th><th>Trabajos</th><th>Ganado</th><th>Anticipos</th><th>Neto a pagar</th><th /></tr></thead>
                           <tbody>
                             {cuadSummary.rows.map((r) => (
                               <tr key={r.worker_name || "(sin nombre)"}>
@@ -14443,6 +14511,9 @@ export function App() {
                                 <td>{money(r.total)}</td>
                                 <td style={{ color: r.anticipos > 0 ? "#dc2626" : undefined }}>{r.anticipos > 0 ? "−" + money(r.anticipos) : "—"}</td>
                                 <td><strong>{money(r.neto)}</strong></td>
+                                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                                  <button type="button" className="btnGhost" title="Recibo desglosado de esta persona" onClick={() => printCuadrillaRecibo(r.worker_name)}>🧾 Recibo</button>
+                                </td>
                               </tr>
                             ))}
                           </tbody>
@@ -14452,6 +14523,7 @@ export function App() {
                               <td>{money(cuadSummary.total_general)}</td>
                               <td>{cuadSummary.total_anticipos > 0 ? "−" + money(cuadSummary.total_anticipos) : "—"}</td>
                               <td>{money(cuadSummary.total_neto)}</td>
+                              <td />
                             </tr>
                           </tfoot>
                         </table>
