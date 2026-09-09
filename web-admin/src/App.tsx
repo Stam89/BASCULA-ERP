@@ -15309,9 +15309,9 @@ export function App() {
             {/* ── Operación y Planta: parámetros ── */}
             {configSubTab === "operacion" && (
               <section className="panelGrid">
-                <form className="formPanel" style={{ gridColumn: "1 / -1" }}
-                  onSubmit={(e) => savePlantParams(e).catch((err) => addToast(err.message, "error"))}>
-                  <h2>⚙️ Parámetros de planta</h2>
+                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>⚙️ Parámetros de planta</summary>
+                <form onSubmit={(e) => savePlantParams(e).catch((err) => addToast(err.message, "error"))}>
                   <p className="muted">Parámetros operativos de la piladora. La humedad base se usa para calcular la merma al pesar en báscula.</p>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <label><span>Tarifa de pilado ($/QQ)</span>
@@ -15330,14 +15330,16 @@ export function App() {
                   </div>
                   <p className="muted" style={{ fontSize: 12 }}>El <strong>costo de secado</strong> (guardianía + por túnel) se edita en «👷 Tarifario de Cuadrilla».</p>
                 </form>
+                </details>
               </section>
             )}
 
             {/* ── Datos del negocio (Operación y Planta) ── */}
             {configSubTab === "operacion" && (
               <section className="panelGrid">
-                <form className="formPanel" onSubmit={(e) => saveSettings(e).catch((err) => addToast(err.message, "error"))}>
-                  <h2>🏢 Datos del negocio</h2>
+                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🏢 Datos del negocio y Vista previa de encabezado</summary>
+                <form onSubmit={(e) => saveSettings(e).catch((err) => addToast(err.message, "error"))}>
                   <p className="muted">Estos datos aparecen en los comprobantes de liquidación y reportes impresos.</p>
                   <label>
                     <span>Nombre comercial <span style={{ color: "#ef4444" }}>*</span></span>
@@ -15399,9 +15401,8 @@ export function App() {
                   <button className="primary" disabled={!isAdmin}>Guardar cambios</button>
                   {!isAdmin && <p className="muted">Solo un administrador puede modificar estos datos.</p>}
                 </form>
-
-                <div className="formPanel">
-                  <h2>Vista previa de encabezado</h2>
+                <div style={{ marginTop: 12 }}>
+                  <h3 style={{ marginTop: 0 }}>Vista previa de encabezado</h3>
                   <p className="muted">Así se verá el encabezado de tus comprobantes:</p>
                   {/* Simula papel térmico: ancho de ticket, mono, punteado y centrado
                       (borde/mono/centrado/fondo vienen de .receiptPreview). */}
@@ -15416,6 +15417,7 @@ export function App() {
                     {settingsForm.receipt_footer && <em>{settingsForm.receipt_footer}</em>}
                   </div>
                 </div>
+                </details>
               </section>
             )}
 
@@ -16230,8 +16232,10 @@ export function App() {
             {/* Categorías de caja (Operación y Planta) */}
             {configSubTab === "operacion" && (
               <section className="panelGrid">
-                <div className="formPanel">
-                  <h2>🏷️ Nueva categoría de caja</h2>
+                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🏷️ Categorías de caja</summary>
+                <div>
+                  <h3 style={{ marginTop: 8 }}>Nueva categoría</h3>
                   <p className="muted">Se usa en el form de Movimiento, filtrada por tipo de accionista. No afecta movimientos ya registrados.</p>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <label><span>Código (MAYÚSCULAS_)</span>
@@ -16253,8 +16257,8 @@ export function App() {
                   <button type="button" className="primary" onClick={submitCashCategory} disabled={!isAdmin}>Crear categoría</button>
                   {!isAdmin && <p className="muted">Solo un administrador puede editar categorías.</p>}
                 </div>
-                <div className="formPanel">
-                  <h2 style={{ marginBottom: 0 }}>Categorías configuradas</h2>
+                <div style={{ marginTop: 12 }}>
+                  <h3 style={{ marginBottom: 0 }}>Categorías configuradas</h3>
                   {cashCategories.length === 0 && <CatEmptyState />}
                   <div className="equipList">
                     {cashCategories.map((c) => (
@@ -16268,6 +16272,7 @@ export function App() {
                     ))}
                   </div>
                 </div>
+                </details>
               </section>
             )}
 
@@ -16275,10 +16280,11 @@ export function App() {
             {/* Categorías de mantenimiento (Operación y Planta) */}
             {configSubTab === "operacion" && (
               <section className="panelGrid">
-                <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🔧 Categorías de Mantenimiento</summary>
+                <div>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
                     <div>
-                      <h2 style={{ marginBottom: 4 }}>🔧 Categorías de Mantenimiento</h2>
                       <p className="muted" style={{ margin: 0 }}>
                         <strong>Renombrar</strong> corrige el nombre y lo actualiza también en todo el historial de
                         mantenimientos. <strong>Desactivar</strong> es un borrado suave: la categoría deja de aparecer
@@ -16289,25 +16295,22 @@ export function App() {
                   </div>
                   {!isAdmin && <p className="muted">Solo un administrador puede editar estas categorías.</p>}
                 </div>
-
-                <div className="formPanel">
-                  <h2 style={{ marginBottom: 0 }}>Áreas</h2>
+                <div style={{ marginTop: 12 }}>
+                  <h3 style={{ marginBottom: 0 }}>Áreas</h3>
                   <div className="equipList">
                     {maintCatsAll.filter((c) => c.kind === "AREA").length === 0 && <CatEmptyState text="No hay áreas registradas" />}
                     {maintCatsAll.filter((c) => c.kind === "AREA").map(renderMaintCatItem)}
                   </div>
                 </div>
-
-                <div className="formPanel">
-                  <h2 style={{ marginBottom: 0 }}>Tipos de mantenimiento</h2>
+                <div style={{ marginTop: 12 }}>
+                  <h3 style={{ marginBottom: 0 }}>Tipos de mantenimiento</h3>
                   <div className="equipList">
                     {maintCatsAll.filter((c) => c.kind === "TYPE").length === 0 && <CatEmptyState text="No hay tipos registrados" />}
                     {maintCatsAll.filter((c) => c.kind === "TYPE").map(renderMaintCatItem)}
                   </div>
                 </div>
-
-                <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
-                  <h2 style={{ marginBottom: 8 }}>Secciones / Sistemas</h2>
+                <div style={{ marginTop: 12 }}>
+                  <h3 style={{ marginBottom: 8 }}>Secciones / Sistemas</h3>
                   {maintCatsAll.filter((c) => c.kind === "AREA").map((a) => {
                     const secs = maintCatsAll.filter((c) => c.kind === "SECTION" && c.area === a.nombre);
                     return (
@@ -16321,6 +16324,7 @@ export function App() {
                     );
                   })}
                 </div>
+                </details>
               </section>
             )}
 
@@ -16375,8 +16379,8 @@ export function App() {
             {/* Puesta en marcha + datos (Operación y Planta) */}
             {configSubTab === "operacion" && (
               <section className="panelGrid">
-                <div className="formPanel">
-                  <h2>✅ Puesta en marcha</h2>
+                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>✅ Puesta en marcha</summary>
                   <p className="muted">
                     Pasos recomendados antes de operar con datos reales:
                   </p>
@@ -16387,11 +16391,12 @@ export function App() {
                     <li>Verifica productos, bodegas e insumos en el Dashboard ("Crear datos base" si están vacíos).</li>
                     <li>Abre la caja del día y registra a tus agricultores reales.</li>
                   </ol>
-                </div>
+                </details>
 
                 {esCeyroActivo && (
-                <form className="formPanel dangerZone" onSubmit={(e) => submitResetData(e).catch((err) => addToast(err.message, "error"))}>
-                  <h2>⚠️ Zona de peligro · Restaurar de fábrica</h2>
+                <details className="formPanel dangerZone" style={{ gridColumn: "1 / -1" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>⚠️ Zona de peligro · Restaurar de fábrica</summary>
+                <form onSubmit={(e) => submitResetData(e).catch((err) => addToast(err.message, "error"))}>
                   <p className="muted">
                     Limpia <strong>todos los movimientos operativos</strong> del ERP: tickets, lotes, traspasos, secado, producción,
                     combustible, pilado, selección, pedidos, ventas, inventario (productos, insumos y sacos a 0), caja, gastos, nómina,
@@ -16428,12 +16433,14 @@ export function App() {
                     Restaurar de fábrica definitivamente
                   </button>
                 </form>
+                </details>
                 )}
 
-                <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>💾 Respaldos de la base de datos</summary>
+                <div>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
                     <div>
-                      <h2 style={{ marginBottom: 4 }}>💾 Respaldos de la base de datos</h2>
                       <p className="muted" style={{ margin: 0 }}>
                         Copia de seguridad de toda la información. Se guarda en OneDrive y se sube a la nube automáticamente.
                       </p>
@@ -16488,6 +16495,7 @@ export function App() {
                     que se respalde solo cada día a las 8:00 PM.
                   </p>
                 </div>
+                </details>
               </section>
             )}
 
