@@ -5032,6 +5032,23 @@ export function App() {
     if (activeTab === "Estados Financieros") loadFinanzas().catch((e) => addToast(e.message, "error"));
   }, [activeTab, motorActivo]);
 
+  // Carga de datos de cada subpestaña de Configuración. Va en un EFECTO (antes
+  // estaba en el onClick de la pestaña), por dos razones: (1) al entrar a
+  // Configuración el subtab por defecto es "operacion" y sus datos nunca se
+  // cargaban hasta hacer clic en la pestaña ya activa —«Categorías de caja» y
+  // «Categorías de Mantenimiento» salían vacías—; (2) todas las cargas capturan
+  // su error y avisan, en vez de dejar una promesa sin manejar.
+  useEffect(() => {
+    if (activeTab !== "Configuracion") return;
+    const fail = (e: unknown) =>
+      addToast(`No se pudo cargar la configuración: ${e instanceof Error ? e.message : "error"}`, "error");
+    if (configSubTab === "operacion") { reloadCashCategories().catch(fail); loadMaintCategoriesAll().catch(fail); }
+    if (configSubTab === "socios") loadBankAccounts().catch(fail);
+    if (configSubTab === "cuadrilla") refreshCuadrilla().catch(fail);
+    if (configSubTab === "secuenciales") loadSequences().catch(fail);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, configSubTab]);
+
   // Cola de despachos en (casi) tiempo real: mientras se esté en Ventas, se
   // refrescan los pedidos cada 15 s para que el equipo de bodega vea llegar los
   // pedidos nuevos y el badge se actualice sin recargar.
@@ -14592,7 +14609,7 @@ export function App() {
                             <tr key={a.id}>
                               <td>{a.name}</td>
                               <td>
-                                <input type="number" step="0.01" min="0" defaultValue={Number(a.unit_rate)} style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db" }} onBlur={(e) => { const v = Number(e.target.value); if (v !== Number(a.unit_rate)) updateActivityRate(a.id, v).catch((err) => addToast(err.message, "error")); }} />
+                                <input type="number" step="0.01" min="0" key={`act-${a.id}-${a.unit_rate}`} defaultValue={Number(a.unit_rate)} style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db" }} onBlur={(e) => { const v = Number(e.target.value); if (v !== Number(a.unit_rate)) updateActivityRate(a.id, v).catch((err) => addToast(err.message, "error")); }} />
                               </td>
                             </tr>
                           ))}
@@ -15050,7 +15067,7 @@ export function App() {
                 ["usuarios", "🔐 Control de Usuarios"]
               ] as const).map(([t, label]) => (
                 <button key={t} type="button" className={configSubTab === t ? "active" : ""}
-                  onClick={() => { setConfigSubTab(t); if (t === "operacion") { reloadCashCategories(); loadMaintCategoriesAll(); } if (t === "socios") loadBankAccounts(); if (t === "cuadrilla") refreshCuadrilla().catch(() => undefined); if (t === "secuenciales") loadSequences(); }}>
+                  onClick={() => setConfigSubTab(t)}>
                   {label}
                 </button>
               ))}
@@ -15067,19 +15084,20 @@ export function App() {
                   <p className="muted">Parámetros operativos de la piladora. La humedad base se usa para calcular la merma al pesar en báscula.</p>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <label><span>Tarifa de pilado ($/QQ)</span>
-                      <input type="number" step="0.01" min="0" required
+                      <input type="number" step="0.01" min="0" required disabled={!isAdmin}
                         value={String(settingsForm.tarifa_pilado_qq ?? "")}
                         onChange={(e) => setSettingsForm({ ...settingsForm, tarifa_pilado_qq: e.target.value })} />
                     </label>
                     <label><span>Humedad base (%)</span>
-                      <input type="number" step="0.1" min="0" max="99.9" required
+                      <input type="number" step="0.1" min="0" max="99.9" required disabled={!isAdmin}
                         value={String(settingsForm.humedad_base_pct ?? "")}
                         onChange={(e) => setSettingsForm({ ...settingsForm, humedad_base_pct: e.target.value })} />
                     </label>
                   </div>
                   <div className="buttonRow" style={{ marginTop: 10 }}>
-                    <button className="primary">Guardar parámetros</button>
+                    <button className="primary" disabled={!isAdmin}>Guardar parámetros</button>
                   </div>
+                  {!isAdmin && <p className="muted">Solo un administrador puede cambiar estos parámetros.</p>}
                   <p className="muted" style={{ fontSize: 12 }}>El <strong>costo de secado</strong> (guardianía + por túnel) se edita en «👷 Tarifario de Cuadrilla».</p>
                 </form>
                 </details>
@@ -15097,6 +15115,7 @@ export function App() {
                     <span>Nombre comercial <span style={{ color: "#ef4444" }}>*</span></span>
                     <input
                       type="text"
+                      disabled={!isAdmin}
                       value={settingsForm.business_name}
                       onChange={(e) => setSettingsForm({ ...settingsForm, business_name: e.target.value })}
                       required
@@ -15108,6 +15127,7 @@ export function App() {
                     <input
                       type="text"
                       placeholder="Ej: Piladora de Arroz"
+                      disabled={!isAdmin}
                       value={settingsForm.business_subtitle}
                       onChange={(e) => setSettingsForm({ ...settingsForm, business_subtitle: e.target.value })}
                     />
@@ -15118,6 +15138,7 @@ export function App() {
                       <input
                         type="text"
                         placeholder="0999999999001"
+                        disabled={!isAdmin}
                         value={settingsForm.ruc}
                         onChange={(e) => setSettingsForm({ ...settingsForm, ruc: e.target.value })}
                       />
@@ -15127,6 +15148,7 @@ export function App() {
                       <input
                         type="text"
                         placeholder="0987654321"
+                        disabled={!isAdmin}
                         value={settingsForm.phone}
                         onChange={(e) => setSettingsForm({ ...settingsForm, phone: e.target.value })}
                       />
@@ -15137,6 +15159,7 @@ export function App() {
                     <input
                       type="text"
                       placeholder="Km 5 vía a Daule, Guayas"
+                      disabled={!isAdmin}
                       value={settingsForm.address}
                       onChange={(e) => setSettingsForm({ ...settingsForm, address: e.target.value })}
                     />
@@ -15146,6 +15169,7 @@ export function App() {
                     <input
                       type="text"
                       placeholder="Ej: Gracias por su preferencia"
+                      disabled={!isAdmin}
                       value={settingsForm.receipt_footer}
                       onChange={(e) => setSettingsForm({ ...settingsForm, receipt_footer: e.target.value })}
                     />
@@ -15788,26 +15812,26 @@ export function App() {
                   <p className="muted">Con estas tarifas se calcula automáticamente el pago al cerrar cada pilada en Producción.</p>
                   <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>Pilador</h2>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <label><span>$ por QQ de arroz</span><input type="number" step="0.01" min="0" value={laborRatesForm.pilador_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, pilador_per_qq: Number(e.target.value) })} /></label>
-                    <label><span>$ por saca (@)</span><input type="number" step="0.01" min="0" value={laborRatesForm.pilador_per_saca} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, pilador_per_saca: Number(e.target.value) })} /></label>
+                    <label><span>$ por QQ de arroz</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.pilador_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, pilador_per_qq: Number(e.target.value) })} /></label>
+                    <label><span>$ por saca (@)</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.pilador_per_saca} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, pilador_per_saca: Number(e.target.value) })} /></label>
                   </div>
                   <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>Estibador</h2>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                    <label><span>$ por QQ</span><input type="number" step="0.01" min="0" value={laborRatesForm.estibador_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_qq: Number(e.target.value) })} /></label>
-                    <label><span>$ por saca (@)</span><input type="number" step="0.01" min="0" value={laborRatesForm.estibador_per_saca} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_saca: Number(e.target.value) })} /></label>
-                    <label><span>$ por arrocillo</span><input type="number" step="0.01" min="0" value={laborRatesForm.estibador_per_arrocillo} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_arrocillo: Number(e.target.value) })} /></label>
-                    <label><span>$ por cada 3 tulas ⭐</span><input type="number" step="0.01" min="0" value={laborRatesForm.estibador_por_3tulas} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_por_3tulas: Number(e.target.value) })} /></label>
+                    <label><span>$ por QQ</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.estibador_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_qq: Number(e.target.value) })} /></label>
+                    <label><span>$ por saca (@)</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.estibador_per_saca} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_saca: Number(e.target.value) })} /></label>
+                    <label><span>$ por arrocillo</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.estibador_per_arrocillo} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_arrocillo: Number(e.target.value) })} /></label>
+                    <label><span>$ por cada 3 tulas ⭐</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.estibador_por_3tulas} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_por_3tulas: Number(e.target.value) })} /></label>
                   </div>
                   <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>Secador <span className="muted" style={{ fontWeight: 400 }}>(próxima fase)</span></h2>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <label><span>$ guardianía / día</span><input type="number" step="0.5" min="0" value={laborRatesForm.secador_guardiania} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secador_guardiania: Number(e.target.value) })} /></label>
-                    <label><span>$ por túnel secado</span><input type="number" step="0.5" min="0" value={laborRatesForm.secador_per_tunel} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secador_per_tunel: Number(e.target.value) })} /></label>
+                    <label><span>$ guardianía / día</span><input type="number" step="0.5" min="0" disabled={!isAdmin} value={laborRatesForm.secador_guardiania} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secador_guardiania: Number(e.target.value) })} /></label>
+                    <label><span>$ por túnel secado</span><input type="number" step="0.5" min="0" disabled={!isAdmin} value={laborRatesForm.secador_per_tunel} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secador_per_tunel: Number(e.target.value) })} /></label>
                   </div>
                   <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>⛽ Precio del combustible <span className="muted" style={{ fontWeight: 400 }}>(se usa en Secadoras)</span></h2>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                    <label><span>$ bombona por cada 1%</span><input type="number" step="0.01" min="0" value={laborRatesForm.precio_gas_bombona} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_bombona: Number(e.target.value) })} /></label>
-                    <label><span>$ por cilindro</span><input type="number" step="0.01" min="0" value={laborRatesForm.precio_gas_cilindro} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_cilindro: Number(e.target.value) })} /></label>
-                    <label><span>$ diesel por unidad de medidor</span><input type="number" step="0.01" min="0" value={laborRatesForm.precio_diesel} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_diesel: Number(e.target.value) })} /></label>
+                    <label><span>$ bombona por cada 1%</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.precio_gas_bombona} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_bombona: Number(e.target.value) })} /></label>
+                    <label><span>$ por cilindro</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.precio_gas_cilindro} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_cilindro: Number(e.target.value) })} /></label>
+                    <label><span>$ diesel por unidad de medidor</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.precio_diesel} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_diesel: Number(e.target.value) })} /></label>
                   </div>
                   <button className="primary" disabled={!isAdmin}>Guardar tarifas</button>
                   {!isAdmin && <p className="muted">Solo un administrador puede cambiar las tarifas.</p>}
@@ -15909,13 +15933,13 @@ export function App() {
                   </p>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
                     <label><span>$ por saco de 10 lb</span>
-                      <input type="number" step="0.01" min="0" value={packagingRatesForm.precio_saco_10lb}
+                      <input type="number" step="0.01" min="0" disabled={!isAdmin} value={packagingRatesForm.precio_saco_10lb}
                         onChange={(e) => setPackagingRatesForm({ ...packagingRatesForm, precio_saco_10lb: Number(e.target.value) })} /></label>
                     <label><span>$ por saco de 25 lb</span>
-                      <input type="number" step="0.01" min="0" value={packagingRatesForm.precio_saco_25lb}
+                      <input type="number" step="0.01" min="0" disabled={!isAdmin} value={packagingRatesForm.precio_saco_25lb}
                         onChange={(e) => setPackagingRatesForm({ ...packagingRatesForm, precio_saco_25lb: Number(e.target.value) })} /></label>
                     <label><span>$ por saco de 50 lb</span>
-                      <input type="number" step="0.01" min="0" value={packagingRatesForm.precio_saco_50lb}
+                      <input type="number" step="0.01" min="0" disabled={!isAdmin} value={packagingRatesForm.precio_saco_50lb}
                         onChange={(e) => setPackagingRatesForm({ ...packagingRatesForm, precio_saco_50lb: Number(e.target.value) })} /></label>
                   </div>
                   <button type="button" className="primary" style={{ marginTop: 10 }}
@@ -15937,10 +15961,10 @@ export function App() {
                   <form onSubmit={(e) => saveSelectionRates(e).catch((err) => addToast(err.message, "error"))}>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                       <label><span>Selección ($/QQ)</span>
-                        <input type="number" step="0.01" min="0" value={selectionRatesForm.seleccion_rate}
+                        <input type="number" step="0.01" min="0" disabled={!isAdmin} value={selectionRatesForm.seleccion_rate}
                           onChange={(e) => setSelectionRatesForm({ ...selectionRatesForm, seleccion_rate: e.target.value })} /></label>
                       <label><span>Envejecido ($/QQ)</span>
-                        <input type="number" step="0.01" min="0" value={selectionRatesForm.envejecimiento_rate}
+                        <input type="number" step="0.01" min="0" disabled={!isAdmin} value={selectionRatesForm.envejecimiento_rate}
                           onChange={(e) => setSelectionRatesForm({ ...selectionRatesForm, envejecimiento_rate: e.target.value })} /></label>
                     </div>
                     <button className="primary" style={{ marginTop: 10 }} disabled={!isAdmin}>Guardar tarifas de procesos</button>
@@ -15967,7 +15991,9 @@ export function App() {
                           <tr key={p.id}>
                             <td>{dp.label}</td>
                             <td className="num">
-                              <input type="number" step="0.01" min="0" defaultValue={Number(p.price_per_pound ?? 0) || ""}
+                              <input type="number" step="0.01" min="0"
+                                key={`lb-${p.id}-${p.price_per_pound ?? 0}`}
+                                defaultValue={Number(p.price_per_pound ?? 0) || ""}
                                 placeholder="0.00" disabled={!isAdmin}
                                 onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
                                 onBlur={(e) => { const v = e.target.value.trim(); if (v !== "" && Number(v) !== Number(p.price_per_pound ?? 0)) guardarTarifaLibra(p.id, v); }}
@@ -16300,7 +16326,7 @@ export function App() {
                           <tr key={a.id}>
                             <td>{a.name}</td>
                             <td className="num">
-                              <input type="number" step="0.01" min="0" defaultValue={Number(a.unit_rate).toFixed(2)} style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }}
+                              <input type="number" step="0.01" min="0" key={`cuad-${a.id}-${a.unit_rate}`} defaultValue={Number(a.unit_rate).toFixed(2)} style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }}
                                 onBlur={(e) => {
                                   const v = Number(e.target.value);
                                   // Siempre muestra 2 decimales al salir del casillero.
