@@ -1932,7 +1932,16 @@ export function App() {
     product_id: "",
     cantidad_libras: "",
     precio_por_libra: "",
+    total_dolares: "",
     customer_id: ""
+  });
+  // Precio por libra "sugerido": el catálogo de productos no guarda precio, así
+  // que recordamos el ÚLTIMO precio/libra usado por producto (de facto, la config
+  // del punto de venta) en localStorage y lo precargamos al elegir el producto.
+  const preciosLibraKey = "bascula-erp:precio-libra-por-producto";
+  const [preciosLibraPorProducto, setPreciosLibraPorProducto] = useState<Record<string, number>>(() => {
+    try { return JSON.parse(localStorage.getItem(preciosLibraKey) || "{}") as Record<string, number>; }
+    catch { return {}; }
   });
 
   // ── Mantenimiento de Equipos ───────────────────────────────────────────
@@ -4497,6 +4506,53 @@ export function App() {
     setFomentoDetalle(data);
   }
 
+  // ── Cotizador bidireccional (Venta Detalle por libra) ──────────────────────
+  // Tres campos interdependientes: Cantidad (Libras), Precio por Libra $ y
+  // Total $. Al tocar uno, se recalcula el derivado en tiempo real. Guardas:
+  // nunca se divide por un precio 0 (o vacío). Los valores viven como strings en
+  // el form (inputs controlados); los cálculos se redondean a 2 decimales.
+  function vdTotalDesdeLibras(cantidad: string, precio: string): string {
+    const c = Number(cantidad), p = Number(precio);
+    if (!cantidad || !precio || !Number.isFinite(c) || !Number.isFinite(p)) return "";
+    return round2(c * p).toFixed(2);
+  }
+  function vdLibrasDesdeTotal(total: string, precio: string): string {
+    const t = Number(total), p = Number(precio);
+    if (!total || p <= 0 || !Number.isFinite(t)) return "";  // guarda contra división por 0
+    return round2(t / p).toFixed(2);
+  }
+  // (a) Cambio de producto: precarga el precio/libra sugerido y recalcula.
+  function vdSetProducto(id: string) {
+    setVentaDetalleForm((prev) => {
+      const sugerido = preciosLibraPorProducto[id];
+      const precio = sugerido != null ? String(sugerido) : prev.precio_por_libra;
+      let cantidad = prev.cantidad_libras, total = prev.total_dolares;
+      if (prev.cantidad_libras) total = vdTotalDesdeLibras(prev.cantidad_libras, precio) || total;
+      else if (prev.total_dolares) cantidad = vdLibrasDesdeTotal(prev.total_dolares, precio) || cantidad;
+      return { ...prev, product_id: id, precio_por_libra: precio, cantidad_libras: cantidad, total_dolares: total };
+    });
+  }
+  // (c) Digitar Cantidad (Libras) → Total = Cantidad × Precio.
+  function vdSetLibras(v: string) {
+    setVentaDetalleForm((prev) => ({ ...prev, cantidad_libras: v, total_dolares: vdTotalDesdeLibras(v, prev.precio_por_libra) }));
+  }
+  // (d) Editar Precio por Libra → Total = Cantidad × Precio (respeta las libras).
+  function vdSetPrecio(v: string) {
+    setVentaDetalleForm((prev) => ({ ...prev, precio_por_libra: v, total_dolares: vdTotalDesdeLibras(prev.cantidad_libras, v) }));
+  }
+  // (b) Digitar Total $ → Cantidad (Libras) = Total / Precio.
+  function vdSetTotal(v: string) {
+    setVentaDetalleForm((prev) => ({ ...prev, total_dolares: v, cantidad_libras: vdLibrasDesdeTotal(v, prev.precio_por_libra) }));
+  }
+  // Formatea Total $ a 2 decimales al perder el foco (estilo money, sin el "$"
+  // para que el número siga siendo editable/parseable).
+  function vdFormatTotalBlur() {
+    setVentaDetalleForm((prev) =>
+      prev.total_dolares === "" || !Number.isFinite(Number(prev.total_dolares))
+        ? prev
+        : { ...prev, total_dolares: Number(prev.total_dolares).toFixed(2) });
+  }
+
   // ── Venta Detalle (por libra) ──
   async function submitVentaDetalle() {
     const registerId = dashboard.current_cash_register?.id;
@@ -4509,7 +4565,15 @@ export function App() {
     const cantidadLibras = Number(ventaDetalleForm.cantidad_libras);
     const precioLibra = Number(ventaDetalleForm.precio_por_libra);
     const cantidadQQ = round2(cantidadLibras / 100); // Convertir libras a QQ
-    const totalVenta = round2(cantidadLibras * precioLibra); // Total por libra
+    // Monto a cobrar: si el cajero fijó el Total $ explícito, ese manda (respeta
+    // el redondeo que ve en pantalla); si no, se calcula libras × precio.
+    const totalVenta = ventaDetalleForm.total_dolares !== ""
+      ? round2(Number(ventaDetalleForm.total_dolares))
+      : round2(cantidadLibras * precioLibra);
+    if (!(cantidadLibras > 0) || !(totalVenta > 0)) {
+      addToast("La cantidad y el total deben ser mayores a 0", "error");
+      return;
+    }
 
     try {
 
@@ -4535,8 +4599,13 @@ export function App() {
         description: `Venta detalle ${cantidadLibras} lb @ $${precioLibra.toFixed(2)}/lb`
       });
 
-      setVentaDetalleForm({ product_id: "", cantidad_libras: "", precio_por_libra: "", customer_id: "" });
-      addToast(`✓ Venta ${cantidadLibras} lb por $${totalVenta.toFixed(2)} registrada`, "success");
+      // Recordar el precio/libra usado para este producto (precarga futura).
+      const nuevosPrecios = { ...preciosLibraPorProducto, [ventaDetalleForm.product_id]: precioLibra };
+      setPreciosLibraPorProducto(nuevosPrecios);
+      try { localStorage.setItem(preciosLibraKey, JSON.stringify(nuevosPrecios)); } catch { /* almacenamiento no disponible */ }
+
+      setVentaDetalleForm({ product_id: "", cantidad_libras: "", precio_por_libra: "", total_dolares: "", customer_id: "" });
+      addToast(`✓ Venta ${cantidadLibras} lb por ${money(totalVenta)} registrada`, "success");
       await refreshCaja(registerId);
     } catch (e) {
       addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error");
@@ -12160,18 +12229,30 @@ export function App() {
                     <Select name="product_id" label="Producto"
                       rows={products.filter(p => ['Flor', 'Oso', 'Lira Verde', 'Lira Azul', 'Conejo', 'Arrocillo 3/4', 'Arrocillo Fino', 'Polvillo / Afrecho'].includes(p.name))
                         .map((product) => [product.id, product.name])}
-                      onChange={(e: any) => setVentaDetalleForm({ ...ventaDetalleForm, product_id: e.target.value })} />
+                      onChange={(e: any) => vdSetProducto(e.target.value)} />
 
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+                    {/* Cotizador bidireccional en tiempo real: Libras ↔ Precio ↔ Total $.
+                        Al tocar cualquiera, el derivado se recalcula solo. */}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 8 }}>
                       <Input name="cantidad_libras" label="Cantidad (Libras)" type="number"
                         value={ventaDetalleForm.cantidad_libras}
-                        onChange={(e: any) => setVentaDetalleForm({ ...ventaDetalleForm, cantidad_libras: e.target.value })}
+                        onChange={(e: any) => vdSetLibras(e.target.value)}
                         placeholder="0" required />
                       <Input name="precio_por_libra" label="Precio por Libra $" type="number"
                         value={ventaDetalleForm.precio_por_libra}
-                        onChange={(e: any) => setVentaDetalleForm({ ...ventaDetalleForm, precio_por_libra: e.target.value })}
+                        onChange={(e: any) => vdSetPrecio(e.target.value)}
                         placeholder="0.00" required step="0.01" />
+                      <Input name="total_dolares" label="Total $ (Monto a cobrar)" type="number"
+                        value={ventaDetalleForm.total_dolares}
+                        onChange={(e: any) => vdSetTotal(e.target.value)}
+                        onBlur={vdFormatTotalBlur}
+                        placeholder="0.00" required={false} step="0.01" />
                     </div>
+                    {ventaDetalleForm.total_dolares !== "" && !(Number(ventaDetalleForm.precio_por_libra) > 0) && (
+                      <p style={{ margin: "0 0 12px", color: "#b45309", fontSize: 12 }}>
+                        Ingresa el precio por libra para calcular las libras desde el total.
+                      </p>
+                    )}
 
                     <Select name="customer_id" label="Cliente (opcional)"
                       rows={customers.map((c) => [c.id, c.full_name])}
@@ -12193,7 +12274,7 @@ export function App() {
                         </div>
                         <div style={{ borderTop: "1px solid #86efac", paddingTop: 8 }}>
                           <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>Total a cobrar</div>
-                          <div style={{ fontSize: 22, fontWeight: 700, color: "#16a34a" }}>${(Number(ventaDetalleForm.cantidad_libras) * Number(ventaDetalleForm.precio_por_libra)).toFixed(2)}</div>
+                          <div style={{ fontSize: 22, fontWeight: 700, color: "#16a34a" }}>{money(ventaDetalleForm.total_dolares !== "" ? Number(ventaDetalleForm.total_dolares) : Number(ventaDetalleForm.cantidad_libras) * Number(ventaDetalleForm.precio_por_libra))}</div>
                         </div>
                       </div>
                     )}
