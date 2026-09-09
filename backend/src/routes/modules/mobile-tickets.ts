@@ -383,10 +383,34 @@ mobileTicketsRouter.post("/:id/link-farmer", requireAuth, resolveAccionista, asy
     [req.params.id, farmerId, targetAccionista]
   );
 
+  const externalName = (updated.rows[0]?.farmer_name ?? "").trim();
+
+  // VINCULACIÓN EN CASCADA: la báscula manda los pesajes en lote con el MISMO
+  // nombre en crudo (p. ej. "JOSE PIZA" en los tickets 249, 248, 247). Al
+  // homologar uno, vinculamos también sus HERMANOS que siguen "Sin vincular"
+  // (farmer_id NULL, ni ingresados ni liquidados) con ese mismo nombre, para no
+  // repetir la vinculación uno por uno. Se compara normalizado (trim/lower) para
+  // tolerar espacios extra. Solo modo principal (los "particular" no se usan).
+  let cascada: string[] = [];
+  if (externalName.length >= 2) {
+    const bulk = await pool.query(
+      `UPDATE mobile_synced_tickets
+          SET farmer_id = $2, accionista_id = $3
+        WHERE id <> $1
+          AND farmer_id IS NULL
+          AND liquidated_at IS NULL
+          AND weighing_ticket_id IS NULL
+          AND lower(coalesce(raw_payload->>'modo', 'principal')) = 'principal'
+          AND lower(trim(farmer_name)) = lower(trim($4))
+        RETURNING id`,
+      [req.params.id, farmerId, targetAccionista, externalName]
+    );
+    cascada = bulk.rows.map((r) => String(r.id));
+  }
+
   // Homologación: guardar el nombre externo del ticket como alias del agricultor
   // oficial, para que futuros ingresos con ese mismo nombre se vinculen solos.
   let aliasGuardado: string | null = null;
-  const externalName = (updated.rows[0]?.farmer_name ?? "").trim();
   if (body.guardar_alias && externalName.length >= 2) {
     // No guardar como alias un nombre que YA es el del agricultor (sería redundante).
     const same = await pool.query(
@@ -408,7 +432,7 @@ mobileTicketsRouter.post("/:id/link-farmer", requireAuth, resolveAccionista, asy
     }
   }
 
-  res.json({ ...updated.rows[0], alias_guardado: aliasGuardado });
+  res.json({ ...updated.rows[0], alias_guardado: aliasGuardado, cascada, cascada_count: cascada.length });
 }));
 
 // Ingresa la materia prima de un ticket de báscula: registra el pesaje y mete

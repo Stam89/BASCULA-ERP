@@ -4166,14 +4166,34 @@ export function App() {
       const body = linkFarmerId === "__new__"
         ? { full_name: externalName }
         : { farmer_id: linkFarmerId, guardar_alias: guardarAlias };
-      const res = await apiPost<{ alias_guardado?: string | null }>(`/tickets/${linkTicket.id}/link-farmer`, body);
+      const res = await apiPost<{
+        id: string; farmer_id: string; farmer_name: string; accionista_id: string | null;
+        alias_guardado?: string | null; cascada?: string[]; cascada_count?: number;
+      }>(`/tickets/${linkTicket.id}/link-farmer`, body);
+
+      // ACTUALIZACIÓN MASIVA DEL ESTADO: el backend vincula en cascada todos los
+      // tickets "Sin vincular" con el MISMO nombre crudo. Reflejamos esos cambios
+      // al instante sobre el estado existente `basculaTickets` (mismo que usa la
+      // tabla), para que las franjas rojas desaparezcan y aparezca [Ingresar
+      // materia prima] sin esperar la recarga.
+      const vinculados = new Set<string>([linkTicket.id, ...(res.cascada ?? [])]);
+      setBasculaTickets((prev) => prev.map((t) =>
+        vinculados.has(t.id) ? { ...t, farmer_id: res.farmer_id, accionista_id: res.accionista_id } : t
+      ));
+
+      const extra = res.cascada_count ?? res.cascada?.length ?? 0;
       addToast(
-        res?.alias_guardado ? `Vinculado. Alias “${res.alias_guardado}” guardado.` : "Ticket vinculado al agricultor",
+        extra > 0
+          ? `Vinculado. ${extra} ticket(s) más con el mismo nombre se vincularon en cascada.`
+          : res?.alias_guardado
+            ? `Vinculado. Alias “${res.alias_guardado}” guardado.`
+            : "Ticket vinculado al agricultor",
         "success"
       );
       setLinkTicket(null);
       setLinkFarmerId("");
       setLinkFarmerFilter("");
+      // Reconciliación con el servidor (fuente de verdad); la UI ya se actualizó.
       await Promise.all([refreshBasculaTickets(), refresh()]);
     } catch (e) {
       addToast(`No se pudo vincular: ${e instanceof Error ? e.message : "error"}`, "error");
