@@ -1,11 +1,17 @@
 import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import html2canvas from "html2canvas";
 import { apiFetch, apiGet, apiGetSRI, apiGetBasculaStatus, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId } from "./api";
 import type { BasculaSyncStatus } from "./api";
 import { money, categoryLabel, stockGroupLabel, formatPersonName } from "./format";
 import type { Farmer, Product, Warehouse, Lot, MateriaPrimaEntry, MateriaPrimaCorreccion, PendingEntry } from "./types";
 import { Metric, ReportTable, Input, Select, MedidorRow, DataList } from "./components/ui";
-import { CampoWorkspace } from "./campo/CampoModule";
+import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
+
+const CampoWorkspace = React.lazy(async () => {
+  const module = await import("./campo/CampoModule");
+  return { default: module.CampoWorkspace };
+});
+const ReportReadOnlyViews = React.lazy(() => import("./reports/ReportReadOnlyViews"));
+const FinancialOverview = React.lazy(() => import("./finance/FinancialOverview"));
 
 /** Etiqueta corta de un ingreso: el número de la báscula si se conoce. */
 function entryLabel(entry: { numero_bascula?: string | null; ticket_number: string }): string {
@@ -6901,6 +6907,7 @@ export function App() {
     if (!el) return;
     setGanaCompartiendo(true);
     try {
+      const { default: html2canvas } = await import("html2canvas");
       const canvas = await html2canvas(el, { backgroundColor: "#ffffff", scale: 2, useCORS: true });
       const blob: Blob | null = await new Promise((res) => canvas.toBlob((b) => res(b), "image/png"));
       if (!blob) throw new Error("No se pudo generar la imagen");
@@ -8133,15 +8140,17 @@ export function App() {
   // renderiza SU PROPIO layout (menú Captura/Reportes), sin nada del resto.
   if (esCeyroActivo && activeTab === "Caja de Campo") {
     return (
-      <CampoWorkspace
-        operationSelector={operationSelectorEl}
-        userName={authUser.name}
-        roleName={authUser.role_name ?? "usuario"}
-        apiOnline={apiOnline}
-        onLogout={logout}
-        nombre={campoNombre}
-        onNombreChange={setCampoNombre}
-      />
+      <React.Suspense fallback={<div className="muted" style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>Cargando Caja de Campo...</div>}>
+        <CampoWorkspace
+          operationSelector={operationSelectorEl}
+          userName={authUser.name}
+          roleName={authUser.role_name ?? "usuario"}
+          apiOnline={apiOnline}
+          onLogout={logout}
+          nombre={campoNombre}
+          onNombreChange={setCampoNombre}
+        />
+      </React.Suspense>
     );
   }
 
@@ -8988,174 +8997,9 @@ export function App() {
               <div className="emptyState" style={{ gridColumn: "1 / -1" }}><div className="emptyIcon">📊</div><p>Calculando estados financieros…</p></div>
             ) : (
               <>
-                {/* KPIs ejecutivos */}
-                <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-                  <h2>📈 Dashboard financiero</h2>
-                  <section className="yieldResults" style={{ marginTop: 8 }}>
-                    <Metric title="Total activos" value={money(finanzas.kpis.total_activos)} />
-                    <Metric title="Total pasivos" value={money(finanzas.kpis.total_pasivos)} />
-                    <Metric title="Patrimonio" value={money(finanzas.kpis.patrimonio)} />
-                    <Metric title="Liquidez" value={finanzas.kpis.liquidez.toFixed(2)} />
-                    <Metric title="Ventas" value={money(finanzas.kpis.ventas)} />
-                    <Metric title="Compras" value={money(finanzas.kpis.compras)} />
-                    <Metric title="Utilidad" value={money(finanzas.kpis.utilidad)} />
-                    <Metric title="Efectivo" value={money(finanzas.kpis.efectivo)} />
-                    <Metric title="Bancos" value={money(finanzas.kpis.bancos)} />
-                    <Metric title="Inventario" value={money(finanzas.kpis.inventario)} />
-                    <Metric title="Por cobrar" value={money(finanzas.kpis.por_cobrar)} />
-                    <Metric title="Por pagar" value={money(finanzas.kpis.por_pagar)} />
-                    <Metric title="Flujo neto" value={money(finanzas.kpis.flujo_neto)} />
-                  </section>
-
-                  {/* Gráficos: estructura del balance, del resultado y medidores */}
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 20, marginTop: 18 }}>
-                    <div>
-                      <h3 style={{ fontSize: 13, margin: "0 0 2px" }}>Estructura del activo</h3>
-                      <BarrasFinancieras
-                        formato={money}
-                        datos={[
-                          { etiqueta: "Efectivo y bancos", valor: finanzas.kpis.efectivo + finanzas.kpis.bancos, color: "#0d9488" },
-                          { etiqueta: "Inventario", valor: finanzas.kpis.inventario, color: "#fbbf24" },
-                          { etiqueta: "Cuentas por cobrar", valor: finanzas.kpis.por_cobrar, color: "#60a5fa" },
-                          { etiqueta: "Activos fijos (neto)", valor: finanzas.balance.activo.no_corriente.total, color: "#a78bfa" }
-                        ]}
-                      />
-                    </div>
-                    <div>
-                      <h3 style={{ fontSize: 13, margin: "0 0 2px" }}>Origen del financiamiento</h3>
-                      <BarrasFinancieras
-                        formato={money}
-                        datos={[
-                          { etiqueta: "Pasivo (deuda)", valor: finanzas.kpis.total_pasivos, color: "#f472b6" },
-                          { etiqueta: "Patrimonio (propio)", valor: finanzas.kpis.patrimonio, color: "#4ade80" }
-                        ]}
-                      />
-                      <h3 style={{ fontSize: 13, margin: "14px 0 2px" }}>Resultado del período</h3>
-                      <BarrasFinancieras
-                        formato={money}
-                        datos={[
-                          { etiqueta: "Ingresos", valor: finanzas.resultados.ingresos.total, color: "#16a34a" },
-                          { etiqueta: "Costo de ventas", valor: finanzas.resultados.costo_ventas.total, color: "#f59e0b" },
-                          { etiqueta: "Gastos operativos", valor: finanzas.resultados.gastos_operativos.total, color: "#ef4444" },
-                          { etiqueta: "Utilidad neta", valor: finanzas.resultados.utilidad_neta, color: finanzas.resultados.utilidad_neta >= 0 ? "#0d9488" : "#b91c1c" }
-                        ]}
-                      />
-                    </div>
-                  </div>
-
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center", marginTop: 18, paddingTop: 14, borderTop: "1px solid var(--c-border)" }}>
-                    <MedidorIndicador titulo="Liquidez" valor={finanzas.indicadores.liquidez_corriente?.valor ?? 0} meta="> 1.5" ok={finanzas.indicadores.liquidez_corriente?.ok ?? false} sinDeuda={finanzas.indicadores.liquidez_corriente?.sin_deuda ?? false} />
-                    <MedidorIndicador titulo="Prueba ácida" valor={finanzas.indicadores.prueba_acida?.valor ?? 0} meta="> 1.0" ok={finanzas.indicadores.prueba_acida?.ok ?? false} sinDeuda={finanzas.indicadores.prueba_acida?.sin_deuda ?? false} />
-                    <MedidorIndicador titulo="Endeudamiento" valor={finanzas.indicadores.endeudamiento_pct?.valor ?? 0} meta="< 60%" ok={finanzas.indicadores.endeudamiento_pct?.ok ?? false} sufijo="%" />
-                    <MedidorIndicador titulo="Margen neto" valor={finanzas.indicadores.margen_neto_pct?.valor ?? 0} meta="> 5%" ok={finanzas.indicadores.margen_neto_pct?.ok ?? false} sufijo="%" />
-                  </div>
-                </div>
-
-                {/* Balance General */}
-                <div className="tablePanel">
-                  <h2>🏛️ Balance General <span className="muted">al {finanzas.balance.fecha}</span></h2>
-                  <table className="cajaTable" style={{ marginTop: 8 }}>
-                    <tbody>
-                      <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>ACTIVO CORRIENTE</td></tr>
-                      <tr><td>Efectivo en caja</td><td className="num">{money(finanzas.balance.activo.corriente.efectivo)}</td></tr>
-                      <tr><td>Bancos</td><td className="num">{money(finanzas.balance.activo.corriente.bancos)}</td></tr>
-                      <tr><td>Cuentas por cobrar</td><td className="num">{money(finanzas.balance.activo.corriente.cuentas_por_cobrar)}</td></tr>
-                      <tr><td>Anticipos a agricultores</td><td className="num">{money(finanzas.balance.activo.corriente.anticipos_agricultores)}</td></tr>
-                      <tr>
-                        <td>Inventarios
-                          <small className="muted" style={{ display: "block" }}>
-                            valorizado a ${finanzas.balance.activo.corriente.inventario_detalle.costo_qq_materia_prima}/QQ (costo promedio)
-                          </small>
-                        </td>
-                        <td className="num">{money(finanzas.balance.activo.corriente.inventario)}</td>
-                      </tr>
-                      <tr style={{ fontWeight: 700 }}><td>Total activo corriente</td><td className="num">{money(finanzas.balance.activo.corriente.total)}</td></tr>
-                      <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>ACTIVO NO CORRIENTE</td></tr>
-                      <tr><td>Propiedad, planta y equipo</td><td className="num">{money(finanzas.balance.activo.no_corriente.activos_fijos)}</td></tr>
-                      <tr><td>(-) Depreciación acumulada</td><td className="num">{money(finanzas.balance.activo.no_corriente.depreciacion_acumulada)}</td></tr>
-                      <tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border-strong)" }}><td>TOTAL ACTIVO</td><td className="num">{money(finanzas.balance.activo.total)}</td></tr>
-                      <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>PASIVO</td></tr>
-                      <tr><td>Cuentas por pagar</td><td className="num">{money(finanzas.balance.pasivo.corriente.cuentas_por_pagar)}</td></tr>
-                      <tr style={{ fontWeight: 700 }}><td>Total pasivo</td><td className="num">{money(finanzas.balance.pasivo.total)}</td></tr>
-                      <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>PATRIMONIO</td></tr>
-                      <tr><td>Capital social</td><td className="num">{money(finanzas.balance.patrimonio.capital_social)}</td></tr>
-                      <tr><td>Resultados acumulados</td><td className="num">{money(finanzas.balance.patrimonio.resultados_acumulados)}</td></tr>
-                      <tr><td>Resultado del ejercicio</td><td className="num">{money(finanzas.balance.patrimonio.resultado_ejercicio)}</td></tr>
-                      <tr><td>Ajuste de apertura <small className="muted">(antes del sistema)</small></td><td className="num">{money(finanzas.balance.patrimonio.ajuste_apertura)}</td></tr>
-                      <tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border-strong)" }}><td>TOTAL PATRIMONIO</td><td className="num">{money(finanzas.balance.patrimonio.total)}</td></tr>
-                    </tbody>
-                  </table>
-                  <p style={{ marginTop: 8, fontWeight: 700, color: Math.abs(finanzas.balance.cuadre) < 0.01 ? "#15803d" : "#b91c1c" }}>
-                    {Math.abs(finanzas.balance.cuadre) < 0.01 ? "✓ Balance cuadrado (Activo = Pasivo + Patrimonio)" : `⚠ Descuadre de ${money(finanzas.balance.cuadre)}`}
-                  </p>
-                </div>
-
-                {/* Estado de Resultados */}
-                <div className="tablePanel">
-                  <h2>📑 Estado de Resultados</h2>
-                  <table className="cajaTable" style={{ marginTop: 8 }}>
-                    <tbody>
-                      <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>INGRESOS</td></tr>
-                      <tr><td>Ventas</td><td className="num">{money(finanzas.resultados.ingresos.ventas)}</td></tr>
-                      <tr><td>Servicio de pilado</td><td className="num">{money(finanzas.resultados.ingresos.servicio_pilado)}</td></tr>
-                      <tr style={{ fontWeight: 700 }}><td>Total ingresos</td><td className="num">{money(finanzas.resultados.ingresos.total)}</td></tr>
-                      <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>COSTO DE VENTAS</td></tr>
-                      <tr>
-                        <td><button type="button" className="linkBtn" onClick={() => abrirDetalleCosto("mercaderia")} title="Ver los movimientos que componen esta cifra">Mercadería vendida 🔍</button></td>
-                        <td className="num">{money(finanzas.resultados.costo_ventas.mercaderia_vendida)}</td>
-                      </tr>
-                      <tr>
-                        <td><button type="button" className="linkBtn" onClick={() => abrirDetalleCosto("combustible")} title="Ver los registros que componen esta cifra">Combustible de secado 🔍</button></td>
-                        <td className="num">{money(finanzas.resultados.costo_ventas.combustible_secado)}</td>
-                      </tr>
-                      <tr style={{ fontWeight: 700, borderTop: "1px solid var(--c-border)" }}>
-                        <td>UTILIDAD BRUTA <small className="muted">({finanzas.resultados.margen_bruto_pct}%)</small></td>
-                        <td className="num">{money(finanzas.resultados.utilidad_bruta)}</td>
-                      </tr>
-                      <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>GASTOS OPERATIVOS</td></tr>
-                      <tr><td>Gastos generales</td><td className="num">{money(finanzas.resultados.gastos_operativos.gastos_generales)}</td></tr>
-                      <tr><td>Mano de obra</td><td className="num">{money(finanzas.resultados.gastos_operativos.mano_obra)}</td></tr>
-                      <tr><td>Depreciación</td><td className="num">{money(finanzas.resultados.gastos_operativos.depreciacion)}</td></tr>
-                      <tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border-strong)" }}>
-                        <td>UTILIDAD NETA <small className="muted">({finanzas.resultados.margen_neto_pct}%)</small></td>
-                        <td className="num" style={{ color: finanzas.resultados.utilidad_neta >= 0 ? "#15803d" : "#b91c1c" }}>{money(finanzas.resultados.utilidad_neta)}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Indicadores */}
-                <div className="tablePanel">
-                  <h2>🎯 Indicadores financieros</h2>
-                  <table className="cajaTable" style={{ marginTop: 8 }}>
-                    <thead><tr><th>Indicador</th><th className="num">Valor</th><th>Meta</th><th>Estado</th></tr></thead>
-                    <tbody>
-                      {Object.entries({
-                        liquidez_corriente: "Liquidez corriente",
-                        prueba_acida: "Prueba ácida",
-                        capital_trabajo: "Capital de trabajo",
-                        endeudamiento_pct: "Endeudamiento",
-                        margen_bruto_pct: "Margen bruto",
-                        margen_neto_pct: "Margen neto",
-                        roa_pct: "Rentabilidad del activo",
-                        roe_pct: "Rentabilidad del patrimonio"
-                      }).map(([clave, etiqueta]) => {
-                        const i = finanzas.indicadores[clave];
-                        if (!i) return null;
-                        const esPct = clave.endsWith("_pct");
-                        const esDinero = clave === "capital_trabajo";
-                        return (
-                          <tr key={clave}>
-                            <td>{etiqueta}</td>
-                            <td className="num">{i.sin_deuda ? "N/A" : esDinero ? money(i.valor) : esPct ? `${i.valor}%` : i.valor.toFixed(2)}</td>
-                            <td className="muted">{i.sin_deuda ? "Sin deuda" : i.meta}</td>
-                            <td><span className={i.ok ? "chip success" : "chip warning"}>{i.sin_deuda ? "✓ Sin deuda" : i.ok ? "✓ OK" : "⚠ Revisar"}</span></td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                <React.Suspense fallback={<div className="tablePanel muted" style={{ gridColumn: "1 / -1" }}>Cargando análisis financiero...</div>}>
+                  <FinancialOverview data={finanzas} onOpenCostDetail={abrirDetalleCosto} />
+                </React.Suspense>
 
                 {/* Activos fijos y depreciación */}
                 {activosFijos && (
@@ -15037,118 +14881,10 @@ export function App() {
               </>
             )}
 
-            {/* ── Ventas ── */}
-            {reportKind === "ventas" && reportRows?.kind === "ventas" && (
-              <div className="reportGrid">
-                <div className="tablePanel">
-                  <h2>Ventas por producto</h2>
-                  <ReportTable
-                    headers={["Producto", "Cantidad", "Total"]}
-                    rows={(reportRows.data.by_product || []).map((r: any) => [r.name, Number(r.qty).toFixed(2), money(r.total)])}
-                    empty="Sin ventas en el período"
-                  />
-                </div>
-                <div className="tablePanel">
-                  <h2>Ventas por cliente</h2>
-                  <ReportTable
-                    headers={["Cliente", "N.º", "Total"]}
-                    rows={(reportRows.data.by_customer || []).map((r: any) => [r.name, r.cnt, money(r.total)])}
-                    empty="Sin ventas en el período"
-                  />
-                </div>
-                <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-                  <h2>Ventas por día</h2>
-                  <ReportTable
-                    headers={["Fecha", "N.º ventas", "Total"]}
-                    rows={(reportRows.data.daily || []).map((r: any) => [new Date(r.d).toLocaleDateString("es-EC"), r.cnt, money(r.total)])}
-                    empty="Sin ventas en el período"
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* ── Liquidaciones ── */}
-            {reportKind === "liquidaciones" && reportRows?.kind === "liquidaciones" && (
-              <div className="tablePanel">
-                <h2>Liquidaciones por agricultor</h2>
-                <ReportTable
-                  headers={["Agricultor", "N.º", "Quintales", "Bruto", "Descuentos", "Neto"]}
-                  rows={(reportRows.data.rows || []).map((r: any) => [r.full_name, r.cnt, Number(r.qq).toFixed(2), money(r.gross), money(r.discounts), money(r.net)])}
-                  empty="Sin liquidaciones en el período"
-                />
-              </div>
-            )}
-
-            {/* ── Gastos ── */}
-            {reportKind === "gastos" && reportRows?.kind === "gastos" && (
-              <div className="tablePanel">
-                <h2>Gastos del período</h2>
-                {reportRows.data.labor?.total > 0 && (
-                  <div className="alertBox" style={{ marginBottom: 10 }}>
-                    Pagos de cuadrilla en el período: {money(reportRows.data.labor.total)} ({reportRows.data.labor.cnt})
-                  </div>
-                )}
-                <ReportTable
-                  headers={["Fecha", "Descripción", "Pagado a", "Monto"]}
-                  rows={(reportRows.data.rows || []).map((r: any) => [new Date(r.created_at).toLocaleDateString("es-EC"), r.description, r.paid_to || "—", money(r.amount)])}
-                  empty="Sin gastos en el período"
-                />
-              </div>
-            )}
-
-            {/* ── Cuentas por cobrar con antigüedad ── */}
-            {reportKind === "porcobrar" && reportRows?.kind === "porcobrar" && (
-              <div className="tablePanel">
-                <h2>Cuentas por cobrar por antigüedad</h2>
-                <p className="muted" style={{ marginTop: -4, marginBottom: 8 }}>Saldos pendientes al día de hoy. Los tramos indican hace cuánto se generó la deuda.</p>
-                {(reportRows.data.rows || []).length === 0 ? (
-                  <div className="emptyState" style={{ padding: "26px 20px" }}><p>No hay cuentas por cobrar pendientes 🎉</p></div>
-                ) : (
-                  <div style={{ overflowX: "auto" }}>
-                    <table className="cajaTable" style={{ marginTop: 8 }}>
-                      <thead>
-                        <tr>
-                          <th>Cliente</th>
-                          <th>Teléfono</th>
-                          <th className="num">0-30 días</th>
-                          <th className="num">31-60</th>
-                          <th className="num">61-90</th>
-                          <th className="num">+90 días</th>
-                          <th className="num">Total</th>
-                          <th className="num">Antigüedad</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(reportRows.data.rows || []).map((r: any, i: number) => (
-                          <tr key={i}>
-                            <td>{r.customer_name}</td>
-                            <td>{r.phone || "—"}</td>
-                            <td className="num">{r.b0 > 0 ? money(r.b0) : "—"}</td>
-                            <td className="num">{r.b30 > 0 ? money(r.b30) : "—"}</td>
-                            <td className="num">{r.b60 > 0 ? money(r.b60) : "—"}</td>
-                            <td className="num" style={r.b90 > 0 ? { color: "var(--c-danger)", fontWeight: 700 } : undefined}>{r.b90 > 0 ? money(r.b90) : "—"}</td>
-                            <td className="num" style={{ fontWeight: 700 }}>{money(r.total)}</td>
-                            <td className="num">
-                              <span className={r.oldest_days > 90 ? "chip bad" : r.oldest_days > 60 ? "chip warn" : "chip ok"}>{r.oldest_days} d</span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                      <tfoot>
-                        <tr>
-                          <td colSpan={2} style={{ fontWeight: 700 }}>TOTAL</td>
-                          <td className="num" style={{ fontWeight: 700 }}>{money(reportRows.data.totals.b0)}</td>
-                          <td className="num" style={{ fontWeight: 700 }}>{money(reportRows.data.totals.b30)}</td>
-                          <td className="num" style={{ fontWeight: 700 }}>{money(reportRows.data.totals.b60)}</td>
-                          <td className="num" style={{ fontWeight: 700, color: reportRows.data.totals.b90 > 0 ? "var(--c-danger)" : undefined }}>{money(reportRows.data.totals.b90)}</td>
-                          <td className="num" style={{ fontWeight: 700 }}>{money(reportRows.data.totals.total)}</td>
-                          <td />
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
-                )}
-              </div>
+            {reportRows && reportRows.kind !== "resumen" && reportRows.kind !== "arianos" && (
+              <React.Suspense fallback={<div className="tablePanel muted">Cargando reporte...</div>}>
+                <ReportReadOnlyViews report={reportRows as ReadOnlyReport} />
+              </React.Suspense>
             )}
 
             {/* ── Lotes guardados: arroz seco sin procesar ── */}
@@ -15226,62 +14962,6 @@ export function App() {
               );
             })()}
 
-            {/* ── Producción ── */}
-            {reportKind === "produccion" && reportRows?.kind === "produccion" && (
-              <div className="tablePanel">
-                <h2>Producción del período</h2>
-                <ReportTable
-                  headers={["Fecha", "Lote/Proceso", "Lote", "Entrada", "Salida", "Estado"]}
-                  rows={(reportRows.data.rows || []).map((r: any) => [new Date(r.created_at).toLocaleDateString("es-EC"), r.batch_number, r.lot_code || "—", Number(r.input_qty).toFixed(2), Number(r.output_qty).toFixed(2), r.status])}
-                  empty="Sin producción registrada en el período"
-                />
-              </div>
-            )}
-
-            {/* ── Combustible (gas y diésel por separado) ── */}
-            {reportKind === "combustible" && reportRows?.kind === "combustible" && (
-              <div className="tablePanel">
-                <h2>Combustible por motor · consumo real (consolidado CEYRO)</h2>
-                <ReportTable
-                  headers={["Fecha", "Motor", "Gas consumo", "Gas $", "Diésel consumo", "Diésel $", "Total $"]}
-                  rows={(reportRows.data.motors || []).map((r: any) => [
-                    new Date(r.fecha).toLocaleDateString("es-EC"),
-                    `Motor ${r.motor}`,
-                    `${Number(r.gas_consumo).toFixed(2)} + ${Number(r.gas_cilindros).toFixed(2)} cil.`,
-                    money(r.gas_costo),
-                    `${Number(r.diesel_consumo).toFixed(2)}`,
-                    money(r.diesel_costo),
-                    money(r.total)
-                  ])}
-                  empty="Sin combustible registrado en el período"
-                />
-                {reportRows.data.totals && (
-                  <div className="totalBox" style={{ marginTop: 10 }}>
-                    <span>Totales por motor</span>
-                    <strong>Gas {money(reportRows.data.totals.gas)} · Diésel {money(reportRows.data.totals.diesel)} · Total {money(reportRows.data.totals.total)}</strong>
-                  </div>
-                )}
-
-                <h3 style={{ marginTop: 20, fontSize: 14 }}>Reparto por secadora</h3>
-                <ReportTable
-                  headers={["Fecha", "Hora secado", "Horas", "Secadora", "Motor", "QQ", "Gas $", "Diésel $", "Costo/QQ Gas", "Costo/QQ Diésel", "Total $"]}
-                  rows={(reportRows.data.rows || []).map((r: any) => [
-                    new Date(r.fecha).toLocaleDateString("es-EC"),
-                    `${fmtHoraSecado(r.dry_start_at)} – ${fmtHoraSecado(r.dry_end_at)}`,
-                    r.horas_secado != null ? `${Number(r.horas_secado).toFixed(1)} h` : "—",
-                    r.dryer_name ?? `Túnel ${r.tunnel_number}`,
-                    `Motor ${r.motor_number}`,
-                    Number(r.quintals).toFixed(2),
-                    money(r.gas_costo),
-                    money(r.diesel_costo),
-                    money(r.costo_por_qq_gas),
-                    money(r.costo_por_qq_diesel),
-                    money(r.total)
-                  ])}
-                  empty="Sin reparto por secadora"
-                />
-              </div>
-            )}
           </>
         )}
 
@@ -17269,32 +16949,6 @@ function BarrasFinancieras({ datos, formato }: {
           </div>
         </div>
       ))}
-    </div>
-  );
-}
-
-/** Medidor semicircular para un indicador con su meta. */
-function MedidorIndicador({ titulo, valor, meta, ok, sufijo = "", sinDeuda = false }: {
-  titulo: string; valor: number; meta: string; ok: boolean; sufijo?: string; sinDeuda?: boolean;
-}) {
-  const R = 52, C = 62;
-  // Sin pasivo corriente el ratio no aplica: arco lleno en verde y "N/A".
-  const pct = sinDeuda ? 1 : Math.max(0, Math.min(1, valor / (valor > 3 ? valor * 1.4 : 3)));
-  const angulo = Math.PI * (1 - pct);
-  const x = C + R * Math.cos(angulo);
-  const y = C - R * Math.sin(angulo) + 6;
-  const color = sinDeuda || ok ? "#16a34a" : "#f59e0b";
-  return (
-    <div style={{ textAlign: "center", minWidth: 128 }}>
-      <svg viewBox="0 0 124 78" width="124" height="78">
-        <path d={`M ${C - R} ${C + 6} A ${R} ${R} 0 0 1 ${C + R} ${C + 6}`} fill="none" stroke="var(--c-surface-3)" strokeWidth="11" strokeLinecap="round" />
-        <path d={`M ${C - R} ${C + 6} A ${R} ${R} 0 0 1 ${x} ${y}`} fill="none" stroke={color} strokeWidth="11" strokeLinecap="round" />
-        <text x={C} y={C} textAnchor="middle" fontSize={sinDeuda ? 14 : 17} fontWeight="800" fill="var(--c-text)">
-          {sinDeuda ? "N/A" : `${valor.toFixed(sufijo === "%" ? 1 : 2)}${sufijo}`}
-        </text>
-      </svg>
-      <div style={{ fontSize: 12, fontWeight: 700, marginTop: -6 }}>{titulo}</div>
-      <div className="muted" style={{ fontSize: 11 }}>{sinDeuda ? "Sin deuda ✓" : `Meta ${meta}`}</div>
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
+import { lockInventoryStock } from "../../db/inventory-lock.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
@@ -200,46 +201,49 @@ inventoryRouter.post("/adjustments", asyncRoute(async (req, res) => {
 
   // El producto tiene que ir a una bodega de su tipo: la cáscara a materia
   // prima y el arroz pilado a producto terminado. Mezclarlos descuadra el stock.
-  const check = await pool.query(
-    `SELECT p.name AS producto, p.product_type, w.name AS bodega, w.type AS tipo_bodega
-     FROM products p, warehouses w
-     WHERE p.id = $1 AND w.id = $2`,
-    [body.product_id, body.warehouse_id]
-  );
-  if (!check.rowCount) throw new ApiError(404, "Producto o bodega no encontrados");
-  const { producto, product_type, bodega, tipo_bodega } = check.rows[0];
-  if (product_type === "RAW_MATERIAL" && tipo_bodega !== "RAW_MATERIAL") {
-    throw new ApiError(400, `"${producto}" es materia prima y no puede ir a "${bodega}". Elige una bodega de materia prima.`);
-  }
-  if (product_type === "FINISHED_GOOD" && tipo_bodega === "RAW_MATERIAL") {
-    throw new ApiError(400, `"${producto}" es producto terminado y no puede ir a "${bodega}".`);
-  }
-
-  // No se permite un ajuste negativo que deje stock negativo; eso descontrola
-  // el inventario y luego cuadra mal con lo físico.
-  if (body.quantity < 0) {
-    const disponible = await pool.query(
-      `SELECT COALESCE(SUM(quantity), 0)::numeric AS stock
-       FROM inventory_stock
-       WHERE product_id = $1 AND warehouse_id = $2 AND ownership = $3 AND accionista_id = $4`,
-      [body.product_id, body.warehouse_id, body.ownership, accionistaId]
+  const result = await inTransaction(async (client) => {
+    const check = await client.query(
+      `SELECT p.name AS producto, p.product_type, w.name AS bodega, w.type AS tipo_bodega
+       FROM products p, warehouses w
+       WHERE p.id = $1 AND w.id = $2`,
+      [body.product_id, body.warehouse_id]
     );
-    const stockActual = Number(disponible.rows[0].stock);
-    if (stockActual + body.quantity < -0.001) {
-      throw new ApiError(
-        409,
-        `Ajuste no permitido: hay ${stockActual.toFixed(2)} QQ en esta bodega y el ajuste pide bajar ${Math.abs(body.quantity).toFixed(2)} QQ.`
-      );
+    if (!check.rowCount) throw new ApiError(404, "Producto o bodega no encontrados");
+    const { producto, product_type, bodega, tipo_bodega } = check.rows[0];
+    if (product_type === "RAW_MATERIAL" && tipo_bodega !== "RAW_MATERIAL") {
+      throw new ApiError(400, `"${producto}" es materia prima y no puede ir a "${bodega}". Elige una bodega de materia prima.`);
     }
-  }
+    if (product_type === "FINISHED_GOOD" && tipo_bodega === "RAW_MATERIAL") {
+      throw new ApiError(400, `"${producto}" es producto terminado y no puede ir a "${bodega}".`);
+    }
 
-  const result = await pool.query(
-    `INSERT INTO inventory_movements
-     (product_id, warehouse_id, lot_id, movement, quantity, reference_type, ownership, notes, created_by, accionista_id)
-     VALUES ($1, $2, $3, 'ADJUSTMENT', $4, 'manual_adjustment', $5, $6, $7, $8)
-     RETURNING *`,
-    [body.product_id, body.warehouse_id, body.lot_id, body.quantity, body.ownership, body.notes, body.created_by, accionistaId]
-  );
+    await lockInventoryStock(client, {
+      productId: body.product_id,
+      warehouseId: body.warehouse_id,
+      accionistaId,
+      ownership: body.ownership
+    });
+    if (body.quantity < 0) {
+      const disponible = await client.query(
+        `SELECT COALESCE(SUM(quantity), 0)::numeric AS stock
+         FROM inventory_stock
+         WHERE product_id = $1 AND warehouse_id = $2 AND ownership = $3 AND accionista_id = $4`,
+        [body.product_id, body.warehouse_id, body.ownership, accionistaId]
+      );
+      const stockActual = Number(disponible.rows[0].stock);
+      if (stockActual + body.quantity < -0.001) {
+        throw new ApiError(409, `Ajuste no permitido: hay ${stockActual.toFixed(2)} QQ en esta bodega y el ajuste pide bajar ${Math.abs(body.quantity).toFixed(2)} QQ.`);
+      }
+    }
+
+    return client.query(
+      `INSERT INTO inventory_movements
+       (product_id, warehouse_id, lot_id, movement, quantity, reference_type, ownership, notes, created_by, accionista_id)
+       VALUES ($1, $2, $3, 'ADJUSTMENT', $4, 'manual_adjustment', $5, $6, $7, $8)
+       RETURNING *`,
+      [body.product_id, body.warehouse_id, body.lot_id, body.quantity, body.ownership, body.notes, body.created_by, accionistaId]
+    );
+  });
   res.status(201).json(result.rows[0]);
 }));
 

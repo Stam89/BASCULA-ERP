@@ -2,6 +2,7 @@ import { Router } from "express";
 import type { PoolClient } from "pg";
 import { z } from "zod";
 import { inTransaction } from "../../db/transaction.js";
+import { lockInventoryStock } from "../../db/inventory-lock.js";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
@@ -77,6 +78,21 @@ async function crearVentaInterna(
   opciones: OpcionesVenta = {}
 ) {
   {
+    // Tomar todos los candados en orden estable evita interbloqueos cuando dos
+    // ventas incluyen los mismos productos en distinto orden.
+    const stockScopes = [...new Map(body.items.map((item) => {
+      const key = `${item.product_id}:${item.warehouse_id}`;
+      return [key, item] as const;
+    })).entries()].sort(([a], [b]) => a.localeCompare(b));
+    for (const [, item] of stockScopes) {
+      await lockInventoryStock(client, {
+        productId: item.product_id,
+        warehouseId: item.warehouse_id,
+        accionistaId,
+        ownership: "OWNED"
+      });
+    }
+
     const total = round2(body.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0));
     const sale = await client.query(
       `INSERT INTO sales (sale_number, customer_id, cash_register_id, total_amount, payment_status, sale_status, created_by, accionista_id)
@@ -105,7 +121,8 @@ async function crearVentaInterna(
         `SELECT COALESCE(SUM(m.quantity), 0) AS stock, MAX(p.name) AS producto
          FROM inventory_movements m
          JOIN products p ON p.id = m.product_id
-         WHERE m.product_id = $1 AND m.warehouse_id = $2 AND m.accionista_id = $3`,
+         WHERE m.product_id = $1 AND m.warehouse_id = $2 AND m.accionista_id = $3
+           AND m.ownership = 'OWNED'`,
         [item.product_id, item.warehouse_id, accionistaId]
       );
       const stockActual = Number(disponible.rows[0].stock);

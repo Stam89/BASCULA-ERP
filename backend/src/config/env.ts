@@ -74,5 +74,6 @@ export const env = {
   databaseUrl: loadDatabaseUrl(),
   jwtSecret: loadJwtSecret(),
   externalApiKey: loadExternalApiKey(),
+  deviceSyncKey: (process.env.DEVICE_SYNC_KEY ?? "").trim(),
   corsOrigins
 };

@@ -4,6 +4,7 @@ import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { requireAuth } from "../../auth/require-auth.js";
+import { env } from "../../config/env.js";
 import { importBasculaTickets } from "./mobile-tickets.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -26,12 +27,8 @@ import { importBasculaTickets } from "./mobile-tickets.js";
 
 export const basculaSyncRouter = Router();
 
-function configuredDeviceSyncKey(): string {
-  return (process.env.DEVICE_SYNC_KEY ?? "").trim();
-}
-
 function requireDeviceKey(req: { headers: Record<string, unknown> }): void {
-  const expected = configuredDeviceSyncKey();
+  const expected = env.deviceSyncKey;
   const provided = req.headers["x-device-key"];
   if (!expected || provided !== expected) {
     throw new ApiError(401, "Dispositivo no autorizado para sincronizar tickets.");
@@ -77,7 +74,6 @@ basculaSyncRouter.get("/discover", asyncRoute(async (req, res) => {
 // Último envío). Requiere sesión (lo consume el admin autenticado). Solo lectura
 // y agregados; no toca ni bloquea la tabla.
 basculaSyncRouter.get("/status", requireAuth, asyncRoute(async (_req, res) => {
-  const deviceSyncKey = configuredDeviceSyncKey();
   const [pend, last] = await Promise.all([
     // "Pendiente" = pesaje del modo principal que aún no se ingresó como materia
     // prima ni se liquidó (mismo criterio que la lista de la vista Báscula).
@@ -97,6 +93,6 @@ basculaSyncRouter.get("/status", requireAuth, asyncRoute(async (_req, res) => {
     ok: true,
     pendientes: pend.rows[0]?.n ?? 0,
     ultimoEnvio: last.rows[0]?.t ?? null,
-    deviceKeyRequerida: Boolean(deviceSyncKey)
+    deviceKeyRequerida: Boolean(env.deviceSyncKey)
   });
 }));

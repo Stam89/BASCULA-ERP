@@ -20,8 +20,8 @@
     "dotenv": "^16.4.7",
     "exceljs": "^4.4.0",
     "express": "^4.21.2",
-    "helmet": "^8.0.0",
     "firebase-admin": "^14.1.0",
+    "helmet": "^8.0.0",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
     "multer": "^2.2.0",
@@ -38,7 +38,8 @@
     "@types/pg": "^8.11.10",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.9"
+    "vite": "^8.2.2",
+    "vitest": "^5.0.0"
   },
   "allowScripts": {
     "esbuild@0.28.0": true

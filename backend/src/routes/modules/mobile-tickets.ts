@@ -10,6 +10,7 @@ import { calculateNetWeight, calculateQuintals, round2 } from "../../utils/rice-
 import { nextCode } from "../../utils/codes.js";
 import { createLotProcessReport } from "../../utils/process-reports.js";
 import { dispararFleteInternoBascula } from "../../services/campo-flete-bascula.js";
+import { env } from "../../config/env.js";
 
 export const mobileTicketsRouter = Router();
 
@@ -534,17 +535,12 @@ mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, asyn
   res.status(201).json(result);
 }));
 
-// La app Android de la báscula no maneja sesiones, así que /sync queda abierto
-// por compatibilidad. Si el .env define DEVICE_SYNC_KEY, se exige ese valor en
-// el header X-Device-Key: con eso nadie en la red puede inyectar tickets falsos.
-const deviceSyncKey = process.env.DEVICE_SYNC_KEY;
-
+// La app Android no maneja sesiones, por eso autentica con la clave exclusiva
+// DEVICE_SYNC_KEY en X-Device-Key. Si falta la configuración, se rechaza todo.
 mobileTicketsRouter.post("/sync", asyncRoute(async (req, res) => {
-  if (deviceSyncKey) {
-    const provided = req.headers["x-device-key"];
-    if (provided !== deviceSyncKey) {
-      throw new ApiError(401, "Dispositivo no autorizado para sincronizar tickets.");
-    }
+  const provided = req.headers["x-device-key"];
+  if (!env.deviceSyncKey || provided !== env.deviceSyncKey) {
+    throw new ApiError(401, "Dispositivo no autorizado para sincronizar tickets.");
   }
   const body = syncSchema.parse(req.body);
   const syncedIds: string[] = [];
@@ -675,7 +671,7 @@ export async function importBasculaTickets(
     const clienteName = (t.cliente || "").trim();
     const farmer = await resolveFarmerHomologado(clienteName);
 
-    await pool.query(
+    const saved = await pool.query(
       `INSERT INTO mobile_synced_tickets (
         id, device_id, farmer_id, farmer_name, accionista_id,
         gross_weight, tare_weight, net_weight, qualification, quintals,
@@ -695,11 +691,15 @@ export async function importBasculaTickets(
         mobile_updated_at = EXCLUDED.mobile_updated_at,
         synced_at = now(),
         raw_payload = EXCLUDED.raw_payload,
-        en_espera = EXCLUDED.en_espera`,
+        en_espera = EXCLUDED.en_espera
+      WHERE mobile_synced_tickets.mobile_updated_at <= EXCLUDED.mobile_updated_at
+        AND mobile_synced_tickets.weighing_ticket_id IS NULL
+        AND mobile_synced_tickets.liquidated_at IS NULL
+      RETURNING id`,
       [id, deviceId, clienteName, t.pesoBruto, t.pesoTara, netWeight, t.calificacion, quintals, ts, JSON.stringify(t),
        farmer?.id ?? null, farmer?.accionista_id ?? null, enEspera]
     );
-    imported.push({ numeroTicket: t.numeroTicket, id });
+    if (saved.rowCount) imported.push({ numeroTicket: t.numeroTicket, id });
   }
   return { imported, count: imported.length };
 }
