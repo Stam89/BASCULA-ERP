@@ -12318,7 +12318,6 @@ export function App() {
 
                 {/* ── Venta Detalle (por libra) ── */}
                 {cajaSubTab === "venta_detalle" && (
-                  <>
                   <form className="formPanel" onSubmit={(e) => { e.preventDefault(); submitVentaDetalle(); }} style={{ maxWidth: 600 }}>
                     <h2 style={{ margin: "0 0 8px", fontSize: 18, fontWeight: 700 }}>🛒 Venta Detalle por Libra</h2>
                     <p style={{ margin: "0 0 20px", color: "#6b7280", fontSize: 13 }}>Registra ventas pequeñas. Se restan automáticamente del inventario y entra el dinero a la caja.</p>
@@ -12328,26 +12327,29 @@ export function App() {
                         .map((product) => [product.id, product.name])}
                       onChange={(e: any) => vdSetProducto(e.target.value)} />
 
-                    {/* Cotizador bidireccional en tiempo real: Libras ↔ Precio ↔ Total $.
-                        Al tocar cualquiera, el derivado se recalcula solo. */}
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 8 }}>
+                    {/* Cotizador: Cantidad (Libras) ↔ Total $. El precio por libra se
+                        carga en SEGUNDO PLANO desde la tarifa del producto (se configura
+                        en Administración → Tarifas y servicios de planta); el cajero ya
+                        no lo ve ni lo edita aquí. */}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 8 }}>
                       <Input name="cantidad_libras" label="Cantidad (Libras)" type="number"
                         value={ventaDetalleForm.cantidad_libras}
                         onChange={(e: any) => vdSetLibras(e.target.value)}
                         placeholder="0" required />
-                      <Input name="precio_por_libra" label="Precio por Libra $" type="number"
-                        value={ventaDetalleForm.precio_por_libra}
-                        onChange={(e: any) => vdSetPrecio(e.target.value)}
-                        placeholder="0.00" required step="0.01" />
                       <Input name="total_dolares" label="Total $ (Monto a cobrar)" type="number"
                         value={ventaDetalleForm.total_dolares}
                         onChange={(e: any) => vdSetTotal(e.target.value)}
                         onBlur={vdFormatTotalBlur}
                         placeholder="0.00" required={false} step="0.01" />
                     </div>
-                    {ventaDetalleForm.total_dolares !== "" && !(Number(ventaDetalleForm.precio_por_libra) > 0) && (
+                    {ventaDetalleForm.product_id && Number(ventaDetalleForm.precio_por_libra) > 0 && (
+                      <p style={{ margin: "0 0 12px", color: "#166534", fontSize: 12 }}>
+                        Precio aplicado: <strong>{money(ventaDetalleForm.precio_por_libra)}/lb</strong> · tarifa configurada en Administración.
+                      </p>
+                    )}
+                    {ventaDetalleForm.product_id && !(Number(ventaDetalleForm.precio_por_libra) > 0) && (
                       <p style={{ margin: "0 0 12px", color: "#b45309", fontSize: 12 }}>
-                        Ingresa el precio por libra para calcular las libras desde el total.
+                        Este producto no tiene tarifa por libra configurada. Un administrador puede definirla en Configuración → Tarifas y servicios de planta.
                       </p>
                     )}
 
@@ -12378,34 +12380,6 @@ export function App() {
 
                     <button className="primary" style={{ width: "100%", padding: "10px 0" }}>✓ Registrar venta detalle</button>
                   </form>
-
-                  {/* Tarifario por libra (Inventario/Productos): se guarda en la BD y
-                      precarga el precio al elegir el producto arriba. Colapsable para
-                      no estorbar la venta rápida. */}
-                  <details style={{ maxWidth: 600, marginTop: 16 }}>
-                    <summary style={{ cursor: "pointer", fontWeight: 700, color: "#166534" }}>⚙️ Tarifas por libra (precio sugerido)</summary>
-                    <p className="muted" style={{ fontSize: 12, margin: "6px 0 10px" }}>
-                      Define el precio por libra de cada producto. Se guarda en Inventario/Productos y se autocompleta al vender. Deja 0 para no sugerir.
-                    </p>
-                    <table className="cajaTable" style={{ width: "100%" }}>
-                      <thead><tr><th>Producto</th><th className="num">Precio/lb $</th></tr></thead>
-                      <tbody>
-                        {products.filter(p => ['Flor', 'Oso', 'Lira Verde', 'Lira Azul', 'Conejo', 'Arrocillo 3/4', 'Arrocillo Fino', 'Polvillo / Afrecho'].includes(p.name)).map((p) => (
-                          <tr key={p.id}>
-                            <td>{p.name}</td>
-                            <td className="num">
-                              <input type="number" step="0.01" min="0" defaultValue={Number(p.price_per_pound ?? 0) || ""}
-                                placeholder="0.00"
-                                onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-                                onBlur={(e) => { const v = e.target.value.trim(); if (v !== "" && Number(v) !== Number(p.price_per_pound ?? 0)) guardarTarifaLibra(p.id, v); }}
-                                style={{ width: 100, padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }} />
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </details>
-                  </>
                 )}
 
                 {/* Las cuentas por pagar se administran en la pestaña "Por Pagar" (grupo Cuentas). */}
@@ -16220,6 +16194,35 @@ export function App() {
                     <button className="primary" style={{ marginTop: 10 }} disabled={!isAdmin}>Guardar tarifas de procesos</button>
                     {!isAdmin && <p className="muted">Solo un administrador puede cambiar estas tarifas.</p>}
                   </form>
+                </div>
+
+                {/* ── Tarifas por libra (Venta al Detalle) — movido desde Caja ── */}
+                <div className="formPanel">
+                  <details>
+                    <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🛒 Tarifas por libra (Venta al Detalle)</summary>
+                    <p className="muted" style={{ marginTop: 8 }}>
+                      Precio por libra de cada producto de mostrador. El cotizador de «Venta Detalle» (Caja) lo
+                      autocompleta al elegir el producto. Se guarda solo al salir del campo. Deja 0 para no sugerir.
+                    </p>
+                    <table className="cajaTable" style={{ width: "100%" }}>
+                      <thead><tr><th>Producto</th><th className="num">Precio/lb $</th></tr></thead>
+                      <tbody>
+                        {products.filter(p => ['Flor', 'Oso', 'Lira Verde', 'Lira Azul', 'Conejo', 'Arrocillo 3/4', 'Arrocillo Fino', 'Polvillo / Afrecho'].includes(p.name)).map((p) => (
+                          <tr key={p.id}>
+                            <td>{p.name}</td>
+                            <td className="num">
+                              <input type="number" step="0.01" min="0" defaultValue={Number(p.price_per_pound ?? 0) || ""}
+                                placeholder="0.00" disabled={!isAdmin}
+                                onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                                onBlur={(e) => { const v = e.target.value.trim(); if (v !== "" && Number(v) !== Number(p.price_per_pound ?? 0)) guardarTarifaLibra(p.id, v); }}
+                                style={{ width: 110, padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }} />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {!isAdmin && <p className="muted">Solo un administrador puede cambiar estas tarifas.</p>}
+                  </details>
                 </div>
                 </div>{/* fin Columna 2 */}
               </section>
