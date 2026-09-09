@@ -1,6 +1,6 @@
 # PROJECT_CONTEXT — BASCULA-ERP
 
-> Memoria compacta para continuar sin releer todo. Última actualización: 2026-09-09 (**Configuración → Tarifas y Servicios de Planta: las 5 tarjetas ahora son acordeones `<details>` full-width y se quitó 'Ejemplo de cálculo'; Venta Detalle usa dropdown EXCLUSIVO de 5 productos por code + validación de stock en kárdex antes de cobrar (`ca3e030`)**). Todo en main `ca3e030`. (Antes 2026-09-09 `7277f74` = editor tarifas a Config + ocultar precio; `e22ed6a` = tarifa BD + 3 decimales + ticket 80mm; `bc88585` = cotizador bidireccional; `6a49c96` = bascula-sync X-Device-Key; `f68bd7c` = vinculación cascada.)
+> Memoria compacta para continuar sin releer todo. Última actualización: 2026-09-09 (**Configuración: TODOS los subtabs con tarjetas como acordeones `<details>` full-width uniformes — Operación y Planta (7), Cuadrilla (2), Socios & Bancos (3), Secuenciales (1), Control de Usuarios (3); modales quedan fuera de los acordeones (`647f9b6`)**). Todo en main `647f9b6`. (Antes 2026-09-09 `3689755` = Operación y Planta acordeones; `ca3e030` = Tarifas acordeones + 5 productos; `7277f74` = editor tarifas a Config.) (Antes 2026-09-09 `7277f74` = editor tarifas a Config + ocultar precio; `e22ed6a` = tarifa BD + 3 decimales + ticket 80mm; `bc88585` = cotizador bidireccional; `6a49c96` = bascula-sync X-Device-Key; `f68bd7c` = vinculación cascada.)
 > ⚠️ WIP AJENO en curso (otra sesión, sin commitear en el working tree): refactor lazy-load de CampoWorkspace/Reportes + `web-admin/src/reports/ReportReadOnlyViews.tsx` (UNTRACKED). Los commits de estas sesiones se aislaron para NO incluirlo. No borrarlo ni commitearlo aquí. (Antes 2026-09-08 `3fd19aa` = SRI multi-fuente; `f4dbf44` = SRI estructurado + Consumidor Final; `15c3acd` = recibo nómina semanal; `b1ea04b` = nombres Title Case + SRI global.)
 > Al empezar una sesión, **lee solo este archivo** primero.
 > Nota: el checkout de trabajo/despliegue es el **MAIN** (`C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`). Ignorar cualquier worktree en `.claude/worktrees/*` (están sobre ramas viejas).
@@ -329,6 +329,16 @@ Rediseño 100% visual de Configuración → Tarifas y Servicios de Planta (cero 
 - Se **eliminó** la tarjeta 'Ejemplo de cálculo' (Pilador/Estibador con/sin tulas).
 - **Grid**: de 2 columnas (`configTarifasGrid`/`configTarifasCol`) a stack vertical full-width (`flex column`, gap 12).
 - Verificado E2E: 5 acordeones en orden, 'Ejemplo de cálculo' ausente, el de pago abre con sus 11 inputs y 'Guardar' dispara `PUT /api/v1/labor/rates`.
+
+## 2ag. CAMBIOS 2026-09-09 (Configuración: TODAS las tarjetas como acordeones — `3689755` + `647f9b6`)
+Rediseño 100% visual de Configuración (cero rupturas: inputs/useState/onChange/onSubmit/clave admin/endpoints intactos). Cada tarjeta de cada subtab es un acordeón `<details className="formPanel|tablePanel" style={{gridColumn:"1/-1"}}><summary>…</summary>…</details>` (el `<h2>` pasó a `<summary>`, con `style cursor:pointer,fontWeight:700,fontSize:15`). Full-width apilados.
+- **⚙️ Operación y Planta** (`3689755`, 7 acordeones): Parámetros de planta · Datos del negocio + Vista previa (unificados) · Categorías de caja · Categorías de Mantenimiento · Puesta en marcha · Zona de peligro (dangerZone) · Respaldos. Se ELIMINÓ la tarjeta 'Ejemplo de cálculo'.
+- **👷 Cuadrilla** (`647f9b6`, 2): Nueva actividad · Actividades y tarifas.
+- **👥 Socios & Bancos** (`647f9b6`, 3): Nuevo accionista · Accionistas registrados · Cuentas Bancarias de Socios.
+- **📄 Secuenciales** (`647f9b6`, 1): Secuenciales de documentos.
+- **🔐 Control de Usuarios** (`647f9b6`, 3): Crear usuario · Usuarios registrados · Actividad del sistema.
+- (La ⚙️ Tarifas y Servicios de Planta ya era acordeones desde `ca3e030`.)
+- **Modales** (editar usuario/permisos/accionista, renombrar, ajustar secuencial, seqModal) quedan como HERMANOS fuera de los `<details>`. Verificado E2E: cada subtab muestra sus acordeones y la lógica sigue (p.ej. Parámetros→`PUT /settings/plant-params`, Cuadrilla→`POST /cuadrilla/activities`).
 
 ## 3. REGLAS DE NEGOCIO (no romper)
 - **Toma de pedido NO mueve dinero ni inventario**; recién al **Despachar** sale stock + entra caja (Contado) o Cuenta por Cobrar (Crédito). Estados DB: `PENDING`/`DELIVERED`/`CANCELLED` (NO renombrar; hay CHECK). El pedido genera su CxC "(pendiente de despacho)" al tomarse; al despachar se salda o se enlaza, nunca se duplica.
