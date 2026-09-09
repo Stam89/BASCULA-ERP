@@ -15424,8 +15424,9 @@ export function App() {
             {/* ── Usuarios ── */}
             {configSubTab === "usuarios" && (
               <section style={{ display: "grid", gridTemplateColumns: "minmax(0, 5fr) minmax(0, 7fr)", gap: 16, alignItems: "start" }} className="configUsersGrid">
-                <form className="formPanel" onSubmit={(e) => submitConfigUser(e).catch((err) => addToast(err.message, "error"))}>
-                  <h2>👤 Crear usuario</h2>
+                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>👤 Crear usuario</summary>
+                <form onSubmit={(e) => submitConfigUser(e).catch((err) => addToast(err.message, "error"))}>
                   <p className="muted">Los operadores pueden usar todo el sistema; solo los administradores acceden a Configuración, crean usuarios y borran datos.</p>
                   <label>
                     <span>Nombre completo *</span>
@@ -15539,9 +15540,10 @@ export function App() {
                   )}
                   <button className="primary" disabled={!isAdmin}>Crear usuario</button>
                 </form>
+                </details>
 
-                <div className="tablePanel">
-                  <h2>Usuarios registrados</h2>
+                <details className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>Usuarios registrados</summary>
                   {adminUsers.length === 0 ? (
                     <div className="emptyState">
                       <div className="emptyIcon">👥</div>
@@ -15630,7 +15632,7 @@ export function App() {
                     </table>
                     </div>
                   )}
-                </div>
+                </details>
 
                 {/* Modal: editar datos de un usuario registrado */}
                 {userEditor && (
@@ -15857,8 +15859,9 @@ export function App() {
             {/* ── Accionistas ── */}
             {configSubTab === "socios" && (
               <section style={{ display: "grid", gridTemplateColumns: "minmax(0, 5fr) minmax(0, 7fr)", gap: 14, alignItems: "start" }} className="configSociosGrid">
-                <form className="formPanel" onSubmit={(e) => createAccionista(e).catch((err) => addToast(err.message, "error"))}>
-                  <h2>🧑‍🤝‍🧑 Nuevo accionista</h2>
+                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🧑‍🤝‍🧑 Nuevo accionista</summary>
+                <form onSubmit={(e) => createAccionista(e).catch((err) => addToast(err.message, "error"))}>
                   <p className="muted">Cada accionista compra y maneja su arroz, inventario, caja y cuentas por separado, usando la misma app.</p>
                   <label>
                     <span>Nombre *</span>
@@ -15881,9 +15884,10 @@ export function App() {
                   <button className="primary" disabled={!isAdmin}>Crear accionista</button>
                   {!isAdmin && <p className="muted">Solo un administrador puede crear accionistas.</p>}
                 </form>
+                </details>
 
-                <div className="tablePanel">
-                  <h2>Accionistas registrados</h2>
+                <details className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>Accionistas registrados</summary>
                   {adminAccionistas.length === 0 ? (
                     <div className="emptyState">
                       <div className="emptyIcon">🧑‍🤝‍🧑</div>
@@ -15945,11 +15949,11 @@ export function App() {
                   <p className="muted" style={{ marginTop: 10 }}>
                     Para dar acceso a un usuario, ve a la pestaña «Usuarios» y usa el botón «Accionistas» en su fila. Los administradores ven todos los accionistas automáticamente.
                   </p>
-                </div>
+                </details>
 
                 {/* ── Cuentas bancarias oficiales de cada socio ── */}
-                <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-                  <h2>🏦 Cuentas Bancarias de Socios</h2>
+                <details className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🏦 Cuentas Bancarias de Socios</summary>
                   <p className="muted" style={{ marginTop: -4 }}>Datos bancarios oficiales de cada accionista. Edita y guárdalos con «💾 Guardar Configuración» al pie.</p>
                   {bankAccounts.length === 0 ? (
                     <div className="emptyState" style={{ padding: "22px 20px" }}><p>No hay cuentas de banco registradas. Crea una caja tipo <strong>BANCO</strong> en «Caja» para el socio y vuelve aquí a completar Banco y N.º de cuenta.</p></div>
@@ -15986,7 +15990,7 @@ export function App() {
                     </div>
                   )}
                   {!isAdmin && <p className="muted">Solo un administrador puede editar los datos bancarios.</p>}
-                </div>
+                </details>
 
                 {renameAccionista && (
                   <div className="modalOverlay" onClick={() => setRenameAccionista(null)}>
@@ -16331,10 +16335,10 @@ export function App() {
             {/* ── Actividad / auditoría ── */}
             {/* Log de actividad (Control de Usuarios) */}
             {configSubTab === "usuarios" && (
-              <div className="tablePanel">
+              <details className="tablePanel">
+                <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🕓 Actividad del sistema</summary>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
                   <div>
-                    <h2 style={{ marginBottom: 4 }}>🕓 Actividad del sistema</h2>
                     <p className="muted" style={{ margin: 0 }}>Registro de quién creó, modificó o eliminó información. Se guarda automáticamente.</p>
                   </div>
                   <button type="button" className="btnSecondary" onClick={() => refreshConfig().catch((e) => addToast(e.message, "error"))}>
@@ -16372,7 +16376,7 @@ export function App() {
                   </table>
                   </div>
                 )}
-              </div>
+              </details>
             )}
 
             {/* ── Puesta en marcha / datos ── */}
@@ -16508,8 +16512,9 @@ export function App() {
               return (
               <section className="cuadCfgGrid">
                 {/* Columna izquierda (5/12): alta de actividad */}
-                <form className="formPanel" onSubmit={(e) => createActivity(e).catch((err) => addToast(err.message, "error"))}>
-                  <h2>🏷️ Nueva actividad de cuadrilla</h2>
+                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🏷️ Nueva actividad de cuadrilla</summary>
+                <form onSubmit={(e) => createActivity(e).catch((err) => addToast(err.message, "error"))}>
                   <p className="muted">Actividad + tarifa por saco/unidad. Si ya existe, actualiza su tarifa. Es el <strong>mismo tarifario dinámico</strong> que usa «Nómina → Cuadrilla».</p>
                   <label><span>Nombre / Descripción</span>
                     <input type="text" value={newActivityForm.name} onChange={(e) => setNewActivityForm({ ...newActivityForm, name: e.target.value })} placeholder="Ej: ENSACADO" />
@@ -16519,10 +16524,11 @@ export function App() {
                   </label>
                   <button className="primary">Guardar actividad</button>
                 </form>
+                </details>
 
                 {/* Columna derecha (7/12): lista + buscador */}
-                <div className="tablePanel">
-                  <h2>Actividades y tarifas ({actividadesFiltradas.length}{q ? ` de ${cuadActivities.length}` : ""})</h2>
+                <details className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>Actividades y tarifas ({actividadesFiltradas.length}{q ? ` de ${cuadActivities.length}` : ""})</summary>
                   <input
                     type="search"
                     value={cuadActivitySearch}
@@ -16563,7 +16569,7 @@ export function App() {
                     </table>
                   </div>
                   <p className="muted" style={{ marginTop: 10 }}>Cambia una tarifa escribiendo el nuevo valor y saliendo del casillero. El botón 🚫 oculta una actividad que ya no se usa (no borra el histórico).</p>
-                </div>
+                </details>
               </section>
               );
             })()}
@@ -16571,8 +16577,8 @@ export function App() {
             {/* ── Secuenciales (maqueta; aún no editables) ── */}
             {configSubTab === "secuenciales" && (
               <section className="panelGrid">
-                <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-                  <h2>📄 Secuenciales de documentos</h2>
+                <details className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>📄 Secuenciales de documentos</summary>
                   <p className="muted" style={{ marginTop: -4 }}>Numeración que asigna el servidor. Solo la <strong>Guía de Remisión</strong> es un contador secuencial editable (prefijo/punto de emisión y próximo número); el resto se numera automáticamente por fecha.</p>
                   <div style={{ overflowX: "auto" }}>
                     <table className="cajaTable" style={{ minWidth: 720 }}>
@@ -16612,7 +16618,7 @@ export function App() {
                     </table>
                   </div>
                   {!isAdmin && <p className="muted" style={{ marginTop: 10 }}>Solo un administrador puede ajustar la numeración de guías.</p>}
-                </div>
+                </details>
 
                 {/* Modal seguro: ajustar prefijo y próximo número de la Guía de Remisión. */}
                 {seqModal && (
