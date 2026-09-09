@@ -26,7 +26,17 @@ import { importBasculaTickets } from "./mobile-tickets.js";
 
 export const basculaSyncRouter = Router();
 
-const deviceSyncKey = process.env.DEVICE_SYNC_KEY;
+function configuredDeviceSyncKey(): string {
+  return (process.env.DEVICE_SYNC_KEY ?? "").trim();
+}
+
+function requireDeviceKey(req: { headers: Record<string, unknown> }): void {
+  const expected = configuredDeviceSyncKey();
+  const provided = req.headers["x-device-key"];
+  if (!expected || provided !== expected) {
+    throw new ApiError(401, "Dispositivo no autorizado para sincronizar tickets.");
+  }
+}
 
 // El cuerpo llega en el formato NATIVO de la app de báscula. No validamos aquí
 // cada campo: importBasculaTickets() ya valida ticket por ticket con su propio
@@ -43,12 +53,7 @@ const syncBodySchema = z.object({
 // Recibe los tickets de la tablet por red local e inserta/actualiza en
 // PostgreSQL con la MISMA lógica que Firebase. Idempotente.
 basculaSyncRouter.post("/sync", asyncRoute(async (req, res) => {
-  if (deviceSyncKey) {
-    const provided = req.headers["x-device-key"];
-    if (provided !== deviceSyncKey) {
-      throw new ApiError(401, "Dispositivo no autorizado para sincronizar tickets.");
-    }
-  }
+  requireDeviceKey(req);
 
   const body = syncBodySchema.parse(req.body);
   const deviceId = body.deviceId?.trim() || "wifi-directo";
@@ -59,11 +64,20 @@ basculaSyncRouter.post("/sync", asyncRoute(async (req, res) => {
   res.status(201).json({ ok: true, via: "wifi-directo", ...result });
 }));
 
+// GET /api/bascula/discover
+// Respuesta mínima para que la tablet pueda encontrar el ERP si cambia la IP.
+// La clave evita confundir otro servicio del puerto 4000 con este servidor.
+basculaSyncRouter.get("/discover", asyncRoute(async (req, res) => {
+  requireDeviceKey(req);
+  res.json({ ok: true, service: "BASCULA-ERP", version: 1 });
+}));
+
 // GET /api/bascula/status
 // Alimenta el mini-dashboard de conexión del panel web (Estado ERP, Pendientes,
 // Último envío). Requiere sesión (lo consume el admin autenticado). Solo lectura
 // y agregados; no toca ni bloquea la tabla.
 basculaSyncRouter.get("/status", requireAuth, asyncRoute(async (_req, res) => {
+  const deviceSyncKey = configuredDeviceSyncKey();
   const [pend, last] = await Promise.all([
     // "Pendiente" = pesaje del modo principal que aún no se ingresó como materia
     // prima ni se liquidó (mismo criterio que la lista de la vista Báscula).
