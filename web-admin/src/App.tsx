@@ -1922,6 +1922,8 @@ export function App() {
   const [adminEditId, setAdminEditId] = useState<string | null>(null);
   const [adminHistory, setAdminHistory] = useState<AdminSalaryPayment[]>([]);
   const [adminPay, setAdminPay] = useState<null | { staff: AdminStaff; incentivo: string; descuentos: string }>(null);
+  // Sueldos administrativos por pagar del accionista activo (suma de sueldos base).
+  const adminPendienteTotal = useMemo(() => adminStaff.reduce((sum, st) => sum + (st.base_salary || 0), 0), [adminStaff]);
   const fmtFechaCorta = (f?: string | null) => { if (!f) return ""; const [, m, d] = String(f).slice(0, 10).split("-"); return `${d}/${m}`; };
   const diasDesde = (f?: string | null) => { if (!f) return 0; const t = new Date(String(f).slice(0, 10) + "T00:00:00"); return Math.max(0, Math.round((Date.now() - t.getTime()) / 86400000)); };
   const antiguedadLabel = (f?: string | null, n?: number) => {
@@ -3008,7 +3010,7 @@ export function App() {
   // Pestañas visibles según los módulos asignados al usuario.
   const visibleTabs = useMemo(() => {
     if (!authUser) return [] as string[];
-    const soloCeyro = new Set(["Nomina", "Cuadrilla", "Servicio Pilado"]);
+    const soloCeyro = new Set(["Cuadrilla", "Servicio Pilado"]);
     // Permisos POR ACCIONISTA: los módulos permitidos dependen del accionista
     // activo, no de un set global. Al cambiar de accionista cambian las pestañas.
     const activeAcc = accionistas.find((a) => a.id === activeAccionistaId);
@@ -3160,18 +3162,22 @@ export function App() {
     setNominaBusy(true);
     try {
       // Tablas de REVISIÓN de las pestañas operativas: por período elegido.
-      const data = await apiGet<{ rows: WorkerSummary[] }>(`/labor/summary?from=${nominaFrom}&to=${nominaTo}`);
-      setNominaRows(data.rows);
-      // 💵 PAGOS: todo el histórico pendiente (sin filtro de fecha). Nómina y
-      // cuadrilla de carga/descarga, acumulado hasta liquidar.
-      try {
-        const pag = await apiGet<{ rows: WorkerSummary[] }>(`/labor/summary?from=${PAGOS_FROM}&to=${PAGOS_TO}`);
-        setPagosNominaRows(pag.rows);
-      } catch { setPagosNominaRows([]); }
-      try {
-        const cuad = await apiGet<{ rows: CuadrillaSummaryRow[] }>(`/cuadrilla/summary?from=${PAGOS_FROM}&to=${PAGOS_TO}`);
-        setPagosCuadRows(cuad.rows);
-      } catch { setPagosCuadRows([]); }
+      // La nómina de PRODUCCIÓN y la cuadrilla son de la matriz (CEYRO).
+      if (esCeyroActivo) {
+        const data = await apiGet<{ rows: WorkerSummary[] }>(`/labor/summary?from=${nominaFrom}&to=${nominaTo}`);
+        setNominaRows(data.rows);
+        try {
+          const pag = await apiGet<{ rows: WorkerSummary[] }>(`/labor/summary?from=${PAGOS_FROM}&to=${PAGOS_TO}`);
+          setPagosNominaRows(pag.rows);
+        } catch { setPagosNominaRows([]); }
+        try {
+          const cuad = await apiGet<{ rows: CuadrillaSummaryRow[] }>(`/cuadrilla/summary?from=${PAGOS_FROM}&to=${PAGOS_TO}`);
+          setPagosCuadRows(cuad.rows);
+        } catch { setPagosCuadRows([]); }
+      } else { setNominaRows([]); setPagosNominaRows([]); setPagosCuadRows([]); }
+      // Personal administrativo: por accionista, se paga en Pagos (todos los accionistas).
+      await loadAdminStaff();
+      await loadAdminHistory();
     } catch (e) {
       addToast(`Error al cargar nómina: ${e instanceof Error ? e.message : "desconocido"}`, "error");
     } finally {
@@ -5418,6 +5424,7 @@ export function App() {
     if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
     if (activeTab === "Cuadrilla") refreshCuadrilla().catch(() => undefined);
     if (activeTab === "Sueldos") { loadAdminStaff().catch(() => undefined); loadAdminHistory().catch(() => undefined); }
+    if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
     if (activeTab === "Servicio Pilado") { refreshPilado().catch(() => undefined); refreshCobros().catch(() => undefined); }
     if (activeTab === "Seleccion") refreshSelection().catch(() => undefined);
     if (activeTab === "Dashboard" && canSeePanel) refreshPanel().catch(() => undefined);
@@ -14664,8 +14671,6 @@ export function App() {
                             <td className="num" style={{ whiteSpace: "nowrap" }}>
                               <button type="button" className="btnGhost" title="Editar" onClick={() => editAdminStaff(st)}>✏️</button>
                               <button type="button" className="btnGhost" title="Dar de baja" style={{ marginLeft: 6 }} onClick={() => removeAdminStaff(st)}>🗑</button>
-                              <button type="button" disabled={!cajaAbierta} onClick={() => abrirAdminPay(st)}
-                                style={{ marginLeft: 8, padding: "7px 16px", borderRadius: 8, border: "none", cursor: cajaAbierta ? "pointer" : "not-allowed", background: cajaAbierta ? "#047857" : "#9ca3af", color: "#fff", fontWeight: 800, fontSize: 13 }}>💵 Pagar</button>
                             </td>
                           </tr>
                         ))}
@@ -14702,32 +14707,6 @@ export function App() {
               </div>
             </div>
 
-            {adminPay && (() => {
-              const base = adminPay.staff.base_salary ?? 0;
-              const inc = Number(adminPay.incentivo || 0);
-              const desc = Number(adminPay.descuentos || 0);
-              const neto = Math.max(0, base + inc - desc);
-              return (
-                <div className="modalOverlay" onClick={() => setAdminPay(null)}>
-                  <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 400 }}>
-                    <h3 style={{ marginTop: 0, marginBottom: 10 }}>Pagar sueldo</h3>
-                    <p style={{ margin: "0 0 12px" }}>A <strong>{adminPay.staff.worker_name}</strong>{adminPay.staff.cargo ? ` · ${adminPay.staff.cargo}` : ""}.</p>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr auto", rowGap: 8, columnGap: 12, alignItems: "center", fontSize: 14 }}>
-                      <span>Sueldo base (quincena)</span><strong className="num">{money(base)}</strong>
-                      <span>Incentivo</span><input type="number" step="0.01" min="0" value={adminPay.incentivo} onChange={(e) => setAdminPay({ ...adminPay, incentivo: e.target.value })} placeholder="0.00" style={{ width: 110, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }} />
-                      <span>Descuentos</span><input type="number" step="0.01" min="0" value={adminPay.descuentos} onChange={(e) => setAdminPay({ ...adminPay, descuentos: e.target.value })} placeholder="0.00" style={{ width: 110, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }} />
-                      <span style={{ borderTop: "1px solid #e5e7eb", paddingTop: 8, fontWeight: 800 }}>Neto a pagar</span>
-                      <strong className="num" style={{ borderTop: "1px solid #e5e7eb", paddingTop: 8, fontWeight: 800, color: "#047857", fontSize: 17 }}>{money(neto)}</strong>
-                    </div>
-                    <p className="muted" style={{ fontSize: 12, margin: "12px 0 16px" }}>Sale de la caja abierta de {accName} y queda guardado en el historial.</p>
-                    <div className="buttonRow" style={{ justifyContent: "flex-end", gap: 8 }}>
-                      <button type="button" onClick={() => setAdminPay(null)}>Cancelar</button>
-                      <button type="button" disabled={!(neto > 0)} onClick={() => confirmarAdminPay()} style={{ background: neto > 0 ? "#047857" : "#9ca3af", color: "#fff", border: "none", borderRadius: 8, padding: "8px 18px", fontWeight: 800, cursor: neto > 0 ? "pointer" : "not-allowed" }}>💵 Confirmar pago</button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
           </section>
           );
         })()}
@@ -14740,14 +14719,15 @@ export function App() {
               <button type="button" className={nominaView === "pagos" ? "active" : ""} onClick={() => setNominaView("pagos")}
                 style={{ fontWeight: 700 }}>
                 💵 Pagos
-                {(nominaPendientes.length + pagosCuadPendientes.length) > 0 && (
-                  <span style={{ marginLeft: 6, background: "#dc2626", color: "#fff", borderRadius: 999, padding: "1px 8px", fontSize: 12, fontWeight: 800 }}>{nominaPendientes.length + pagosCuadPendientes.length}</span>
+                {(nominaPendientes.length + pagosCuadPendientes.length + adminStaff.length) > 0 && (
+                  <span style={{ marginLeft: 6, background: "#dc2626", color: "#fff", borderRadius: 999, padding: "1px 8px", fontSize: 12, fontWeight: 800 }}>{nominaPendientes.length + pagosCuadPendientes.length + adminStaff.length}</span>
                 )}
               </button>
+              {esCeyroActivo && (<>
               <button type="button" className={nominaView === "secadora" ? "active" : ""} onClick={() => setNominaView("secadora")}>🔥 Secadora</button>
               <button type="button" className={nominaView === "cuadrilla" ? "active" : ""} onClick={() => { setNominaView("cuadrilla"); refreshCuadrilla().catch(() => undefined); }}>👷‍♂️ Cuadrilla</button>
-              <button type="button" className={nominaView === "administrativo" ? "active" : ""} onClick={() => setNominaView("administrativo")}>💼 Personal Administrativo</button>
               <button type="button" className={nominaView === "historial" ? "active" : ""} onClick={() => { setNominaView("historial"); loadNominaHistory().catch(() => undefined); }}>📜 Historial de Pagos</button>
+              </>)}
             </nav>
 
             {/* Banner: Costo Total de Nómina (A PAGAR) del período — piladores,
@@ -14758,7 +14738,7 @@ export function App() {
                 <div style={{ fontSize: 12, fontWeight: 600, opacity: 0.9, letterSpacing: ".03em" }}>💰 COSTO TOTAL DE NÓMINA · A PAGAR</div>
                 <button type="button" onClick={() => setNominaView("pagos")} title="Ir a Pagos"
                   style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "#fff", fontSize: 30, fontWeight: 800, lineHeight: 1.1, textAlign: "left" }}>
-                  {money(nominaResumen.total + cuadPendienteTotal)} <span style={{ fontSize: 13, fontWeight: 600, opacity: 0.85 }}>›</span>
+                  {money(nominaResumen.total + cuadPendienteTotal + adminPendienteTotal)} <span style={{ fontSize: 13, fontWeight: 600, opacity: 0.85 }}>›</span>
                 </button>
                 <div style={{ fontSize: 11, opacity: 0.85, marginTop: 2 }}>Todo lo pendiente por pagar (nómina + cuadrilla) · se acumula hasta liquidar</div>
               </div>
@@ -14768,12 +14748,12 @@ export function App() {
 
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(112px, 1fr))", gap: 10 }}>
 
-                {([["Planta", nominaResumen.planta], ["Secadora", nominaResumen.secadora], ["Cuadrilla", nominaResumen.cuadrilla + cuadPendienteTotal], ["Administrativo", nominaResumen.administrativo]] as [string, number][])
+                {([["Planta", nominaResumen.planta], ["Secadora", nominaResumen.secadora], ["Cuadrilla", nominaResumen.cuadrilla + cuadPendienteTotal], ["Administrativo", adminPendienteTotal]] as [string, number][])
 
                   .map(([label, v]) => (
 
                     <button key={label} type="button" title={`Ver ${label}`}
-                      onClick={() => { const g = label.toLowerCase() as NominaGrupo; if (g === "planta") { setNominaView("pagos"); return; } setNominaView(g); if (g === "cuadrilla") refreshCuadrilla().catch(() => undefined); }}
+                      onClick={() => { const g = label.toLowerCase() as NominaGrupo; if (g === "planta" || g === "administrativo") { setNominaView("pagos"); return; } setNominaView(g); if (g === "cuadrilla") refreshCuadrilla().catch(() => undefined); }}
                       style={{ background: "rgba(255,255,255,.18)", border: "1px solid rgba(255,255,255,.12)", borderRadius: 10, padding: "7px 12px", textAlign: "right", cursor: "pointer", color: "#fff" }}>
                       <div style={{ fontSize: 11, opacity: 0.9, whiteSpace: "nowrap" }}>{label}</div>
                       <strong style={{ fontWeight: 800, fontSize: 16 }}>{money(v)}</strong>
@@ -14787,7 +14767,7 @@ export function App() {
             {/* Pestañas operativas (Planta / Secadora / Cuadrilla / Administrativo).
                 Las cuatro comparten la misma tabla, el mismo estado y las mismas
                 acciones; solo cambian el filtro por rol y las columnas del medio. */}
-            {nominaView !== "historial" && nominaView !== "pagos" && (() => {
+            {nominaView !== "historial" && nominaView !== "pagos" && esCeyroActivo && (() => {
               const grupo = nominaGrupoActivo;
               const info = NOMINA_GRUPO_TITULO[grupo];
               const cols = nominaColumnas(grupo);
@@ -15229,15 +15209,18 @@ export function App() {
               const coincide = (nombre: string) => !buscar || String(nombre).toLowerCase().includes(buscar);
               const nominaOrden = nominaPendientes.filter((r) => coincide(r.worker_name));
               const cuadConActividad = pagosCuadPendientes.filter((r) => coincide(r.worker_name));
-              const totalPendientes = nominaPendientes.length + pagosCuadPendientes.length;
-              const totalMonto = nominaPendientes.reduce((a, r) => a + (r.to_pay ?? (r.pending_amount ?? 0)), 0) + cuadPendienteTotal;
-              const nada = nominaPendientes.length === 0 && pagosCuadPendientes.length === 0;
+              const adminFiltrado = adminStaff.filter((st) => coincide(st.worker_name));
+              const adminUltimoPago = new Map();
+              for (const h of adminHistory) { if (!adminUltimoPago.has(h.worker_name)) adminUltimoPago.set(h.worker_name, h.paid_at); }
+              const totalPendientes = nominaPendientes.length + pagosCuadPendientes.length + adminStaff.length;
+              const totalMonto = nominaPendientes.reduce((a, r) => a + (r.to_pay ?? (r.pending_amount ?? 0)), 0) + cuadPendienteTotal + adminPendienteTotal;
+              const nada = nominaPendientes.length === 0 && pagosCuadPendientes.length === 0 && adminStaff.length === 0;
               return (
               <div className="tablePanel">
                 <div className="reportToolbar" style={{ marginBottom: 10 }}>
                   <div>
                     <h2 style={{ marginBottom: 2 }}>💵 Pagos · todo lo pendiente</h2>
-                    <p className="muted" style={{ margin: 0 }}>Todo lo que se le debe a cada quien (nómina y cuadrilla), sin filtrar por fecha: se acumula hasta liquidarlo. Al pagar, pasa al Historial y empieza un rol nuevo.</p>
+                    <p className="muted" style={{ margin: 0 }}>Todo lo que se le debe a cada quien (nómina, cuadrilla y sueldos administrativos), sin filtrar por fecha. Al pagar, sale de la caja y queda en el historial.</p>
                   </div>
                   <button type="button" className="btnSecondary" disabled={nominaBusy} onClick={() => refreshNomina().catch(() => undefined)}>{nominaBusy ? "Cargando…" : "↻ Actualizar"}</button>
                 </div>
@@ -15267,7 +15250,8 @@ export function App() {
                   <span style={{ fontWeight: 800, fontSize: 18, color: "#047857" }}>{money(totalMonto)}</span>
                 </div>
 
-                {/* ── Bloque 1: Nómina (pilador, secador, estibador, polvillo) ── */}
+                {/* Bloque Nómina de producción: SOLO la matriz (CEYRO). */}
+                {esCeyroActivo && (
                 <div style={{ overflowX: "auto" }}>
                   <table className="cajaTable">
                     <thead>
@@ -15310,8 +15294,9 @@ export function App() {
                   </table>
                 </div>
 
+                )}
                 {/* ── Bloque 2: Cuadrilla de carga/descarga (módulo aparte) ── */}
-                {cuadConActividad.length > 0 && (
+                {esCeyroActivo && cuadConActividad.length > 0 && (
                   <div style={{ overflowX: "auto", marginTop: 18 }}>
                     <h3 style={{ margin: "0 0 8px", fontSize: 15 }}>👷‍♂️ Cuadrilla de carga/descarga</h3>
                     <table className="cajaTable">
@@ -15345,6 +15330,36 @@ export function App() {
                     <p className="muted" style={{ margin: "6px 0 0", fontSize: 12 }}>El recibo desglosado de la cuadrilla se imprime desde la pestaña 👷‍♂️ Cuadrilla → Resumen.</p>
                   </div>
                 )}
+                {/* Bloque Personal administrativo: del accionista activo (matriz y socios). */}
+                {adminFiltrado.length > 0 && (
+                  <div style={{ overflowX: "auto", marginTop: esCeyroActivo ? 18 : 0 }}>
+                    {esCeyroActivo && <h3 style={{ margin: "0 0 8px", fontSize: 15 }}>💼 Personal administrativo</h3>}
+                    <table className="cajaTable">
+                      <thead>
+                        <tr><th>Área</th><th>Cargo</th><th>Trabajador</th><th className="num">Sueldo base</th><th className="num">A pagar</th><th /></tr>
+                      </thead>
+                      <tbody>
+                        {adminFiltrado.map((st) => {
+                          const ult = adminUltimoPago.get(st.worker_name);
+                          return (
+                            <tr key={st.id}>
+                              <td><span className="chip">💼 Administrativo</span></td>
+                              <td>{st.cargo || "—"}</td>
+                              <td style={{ fontWeight: 600 }}>{st.worker_name}<div style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>{ult ? `último pago: ${new Date(ult).toLocaleDateString("es-EC")}` : "aún sin pagar"}</div></td>
+                              <td className="num" style={{ fontWeight: 700 }}>{money(st.base_salary)}</td>
+                              <td className="num" style={{ fontWeight: 700, color: "#047857" }}>{money(st.base_salary)}</td>
+                              <td className="num" style={{ whiteSpace: "nowrap" }}>
+                                <button type="button" disabled={!cajaAbierta} onClick={() => abrirAdminPay(st)}
+                                  style={{ padding: "7px 16px", borderRadius: 8, border: "none", cursor: cajaAbierta ? "pointer" : "not-allowed", background: cajaAbierta ? "#047857" : "#9ca3af", color: "#fff", fontWeight: 800, fontSize: 13 }}>💵 Pagar</button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                    <p className="muted" style={{ margin: "6px 0 0", fontSize: 12 }}>Sueldo fijo quincenal; al pagar puedes sumar incentivo o restar descuentos. El personal se agrega en la pestaña 💼 Sueldos.</p>
+                  </div>
+                )}
                 </>
                 )}
                 {pagoConfirm && (() => {
@@ -15373,11 +15388,37 @@ export function App() {
                     </div>
                   );
                 })()}
+                {adminPay && (() => {
+                  const base = adminPay.staff.base_salary ?? 0;
+                  const inc = Number(adminPay.incentivo || 0);
+                  const desc = Number(adminPay.descuentos || 0);
+                  const neto = Math.max(0, base + inc - desc);
+                  return (
+                    <div className="modalOverlay" onClick={() => setAdminPay(null)}>
+                      <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 400 }}>
+                        <h3 style={{ marginTop: 0, marginBottom: 10 }}>Pagar sueldo</h3>
+                        <p style={{ margin: "0 0 12px" }}>A <strong>{adminPay.staff.worker_name}</strong>{adminPay.staff.cargo ? ` · ${adminPay.staff.cargo}` : ""}.</p>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", rowGap: 8, columnGap: 12, alignItems: "center", fontSize: 14 }}>
+                          <span>Sueldo base (quincena)</span><strong className="num">{money(base)}</strong>
+                          <span>Incentivo</span><input type="number" step="0.01" min="0" value={adminPay.incentivo} onChange={(e) => setAdminPay({ ...adminPay, incentivo: e.target.value })} placeholder="0.00" style={{ width: 110, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }} />
+                          <span>Descuentos</span><input type="number" step="0.01" min="0" value={adminPay.descuentos} onChange={(e) => setAdminPay({ ...adminPay, descuentos: e.target.value })} placeholder="0.00" style={{ width: 110, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }} />
+                          <span style={{ borderTop: "1px solid #e5e7eb", paddingTop: 8, fontWeight: 800 }}>Neto a pagar</span>
+                          <strong className="num" style={{ borderTop: "1px solid #e5e7eb", paddingTop: 8, fontWeight: 800, color: "#047857", fontSize: 17 }}>{money(neto)}</strong>
+                        </div>
+                        <p className="muted" style={{ fontSize: 12, margin: "12px 0 16px" }}>Sale de la caja abierta del accionista activo y queda guardado en el historial.</p>
+                        <div className="buttonRow" style={{ justifyContent: "flex-end", gap: 8 }}>
+                          <button type="button" onClick={() => setAdminPay(null)}>Cancelar</button>
+                          <button type="button" disabled={!(neto > 0)} onClick={() => confirmarAdminPay()} style={{ background: neto > 0 ? "#047857" : "#9ca3af", color: "#fff", border: "none", borderRadius: 8, padding: "8px 18px", fontWeight: 800, cursor: neto > 0 ? "pointer" : "not-allowed" }}>💵 Confirmar pago</button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
               );
             })()}
 
-            {nominaView === "historial" && (
+            {nominaView === "historial" && esCeyroActivo && (
               <>
                 <div className="reportToolbar">
                   <div>
