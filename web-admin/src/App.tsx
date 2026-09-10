@@ -1593,6 +1593,73 @@ export function App() {
   // Qué acordeones de Configuración dejó abiertos el usuario, por subpestaña.
   // Es una comodidad por equipo (no dato del negocio), por eso vive en localStorage.
   const acordeonesKey = "bascula-erp:config-acordeones";
+
+  // ── Buscador de ajustes ───────────────────────────────────────────────────
+  // Con ~21 tarjetas repartidas en 6 subpestañas, el problema real es no saber
+  // DÓNDE está un ajuste. Este índice permite buscar en TODAS las subpestañas a
+  // la vez y saltar directo a la tarjeta. `tarjeta` debe coincidir con el texto
+  // del <summary> (así se localiza en el DOM al saltar); `claves` son sinónimos
+  // que la gente teclea. Si se renombra una tarjeta, actualizar aquí también.
+  const [configBuscar, setConfigBuscar] = useState("");
+  const abrirTarjetaRef = useRef<string | null>(null);
+  type AjusteIndex = { sub: typeof configSubTab; tarjeta: string; claves: string };
+  const CONFIG_INDICE: AjusteIndex[] = [
+    { sub: "operacion", tarjeta: "⚙️ Parámetros de planta", claves: "tarifa de pilado humedad base merma quintal" },
+    { sub: "operacion", tarjeta: "🏢 Datos del negocio", claves: "nombre comercial ruc telefono direccion pie de comprobante encabezado ticket" },
+    { sub: "operacion", tarjeta: "🏷️ Categorías de caja", claves: "categoria ingreso egreso movimiento caja" },
+    { sub: "operacion", tarjeta: "🔧 Categorías de Mantenimiento", claves: "areas tipos secciones sistemas equipos mantenimiento" },
+    { sub: "operacion", tarjeta: "✅ Puesta en marcha", claves: "checklist pasos inicio configuracion inicial" },
+    { sub: "operacion", tarjeta: "⚠️ Zona de peligro", claves: "restaurar de fabrica borrar datos reset limpiar pruebas" },
+    { sub: "operacion", tarjeta: "💾 Respaldos de la base de datos", claves: "backup respaldo copia de seguridad onedrive pg_dump" },
+    { sub: "tarifas", tarjeta: "💲 Tarifas de pago", claves: "pilador estibador secador saca tulas arrocillo combustible gas diesel guardiania" },
+    { sub: "tarifas", tarjeta: "🧾 Tarifario de Servicios", claves: "socios clientes pilado secado flete precio por qq vigencia" },
+    { sub: "tarifas", tarjeta: "📦 Tarifas de empaque", claves: "sacos 10 25 50 libras empaque matriz" },
+    { sub: "tarifas", tarjeta: "🧹 Tarifas de Procesos", claves: "seleccion envejecido envejecimiento por qq" },
+    { sub: "tarifas", tarjeta: "🛒 Tarifas por libra", claves: "venta al detalle mostrador precio por libra 0.11 corriente arrocillo polvillo" },
+    { sub: "cuadrilla", tarjeta: "🏷️ Nueva actividad de cuadrilla", claves: "crear actividad tarifa por saco" },
+    { sub: "cuadrilla", tarjeta: "Actividades y tarifas", claves: "cuadrilla actividades tarifas listado" },
+    { sub: "socios", tarjeta: "🧑‍🤝‍🧑 Nuevo accionista", claves: "crear socio accionista codigo" },
+    { sub: "socios", tarjeta: "Accionistas registrados", claves: "socios accionistas lista renombrar" },
+    { sub: "socios", tarjeta: "🏦 Cuentas Bancarias de Socios", claves: "banco numero de cuenta datos bancarios" },
+    { sub: "secuenciales", tarjeta: "📄 Secuenciales de documentos", claves: "numeracion guia de remision prefijo punto de emision factura" },
+    { sub: "usuarios", tarjeta: "👤 Crear usuario", claves: "usuario clave contrasena rol operador administrador cedula" },
+    { sub: "usuarios", tarjeta: "Usuarios registrados", claves: "usuarios permisos modulos accionistas editar" },
+    { sub: "usuarios", tarjeta: "🕓 Actividad del sistema", claves: "auditoria log historial quien creo modifico elimino" }
+  ];
+
+  const subLabel: Record<typeof configSubTab, string> = {
+    operacion: "⚙️ Operación y Planta", tarifas: "⚙️ Tarifas y Servicios de Planta", cuadrilla: "👷 Cuadrilla",
+    socios: "👥 Socios & Bancos", secuenciales: "📄 Secuenciales", usuarios: "🔐 Control de Usuarios"
+  };
+
+  // Búsqueda sin acentos ni mayúsculas: "parametros" encuentra "Parámetros".
+  // (̀-ͯ = marcas diacríticas que deja NFD al separar los acentos.)
+  const normaliza = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const configResultados = useMemo(() => {
+    const q = normaliza(configBuscar.trim());
+    if (q.length < 2) return [] as AjusteIndex[];
+    return CONFIG_INDICE.filter((a) => normaliza(`${a.tarjeta} ${a.claves} ${subLabel[a.sub]}`).includes(q)).slice(0, 8);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configBuscar]);
+
+  // Abre (y desplaza a) la tarjeta cuyo <summary> contiene el texto dado.
+  function abrirTarjetaEnDom(tarjeta: string) {
+    const cont = document.querySelector<HTMLElement>(".configVContent");
+    const d = Array.from(cont?.querySelectorAll("details") ?? [])
+      .find((x) => (x.querySelector("summary")?.textContent ?? "").includes(tarjeta));
+    if (!d) return;
+    d.open = true;
+    d.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  // Salta al ajuste elegido: si está en otra subpestaña, se cambia y se deja
+  // anotado cuál abrir (lo hace el efecto de acordeones, ya con el DOM montado).
+  function irAAjuste(a: AjusteIndex) {
+    setConfigBuscar("");
+    if (a.sub === configSubTab) { window.setTimeout(() => abrirTarjetaEnDom(a.tarjeta), 0); return; }
+    abrirTarjetaRef.current = a.tarjeta;
+    setConfigSubTab(a.sub);
+  }
   // Cuentas bancarias por socio (cash_registers tipo BANCO) para Configuración → Socios & Bancos.
   const [bankAccounts, setBankAccounts] = useState<Array<{ id: string; name: string; banco: string | null; numero_cuenta: string | null; socio: string; socio_tipo: string; accionista_id: string }>>([]);
   // Secuenciales de documentos (Configuración → Secuenciales). Solo la Guía es editable.
@@ -5136,6 +5203,14 @@ export function App() {
       catch { /* almacenamiento no disponible */ }
     };
     items.forEach((d) => d.addEventListener("toggle", onToggle));
+    // Si se llegó aquí desde el buscador de ajustes, abrir y desplazar a la
+    // tarjeta pedida (ya con el DOM de la nueva subpestaña montado).
+    if (abrirTarjetaRef.current) {
+      const objetivo = abrirTarjetaRef.current;
+      abrirTarjetaRef.current = null;
+      const d = items.find((x) => (x.querySelector("summary")?.textContent ?? "").includes(objetivo));
+      if (d) { d.open = true; d.scrollIntoView({ behavior: "smooth", block: "start" }); }
+    }
     return () => items.forEach((d) => d.removeEventListener("toggle", onToggle));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, configSubTab]);
@@ -15165,6 +15240,39 @@ export function App() {
             </aside>
 
             <div className="configVContent">
+
+            {/* Buscador de ajustes: busca en LAS 6 subpestañas a la vez y salta
+                a la tarjeta (la abre y desplaza). Resuelve el "¿dónde estaba esto?" */}
+            <div style={{ position: "relative", marginBottom: 12 }}>
+              <input
+                type="search"
+                value={configBuscar}
+                onChange={(e) => setConfigBuscar(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setConfigBuscar("");
+                  if (e.key === "Enter" && configResultados.length > 0) { e.preventDefault(); irAAjuste(configResultados[0]); }
+                }}
+                placeholder="🔍 Buscar ajuste… (ej: humedad, respaldo, RUC, permisos, saco)"
+                style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "1px solid var(--c-border)", fontSize: 13 }}
+              />
+              {configBuscar.trim().length >= 2 && (
+                <div style={{ position: "absolute", zIndex: 20, left: 0, right: 0, marginTop: 4, background: "var(--c-surface)", border: "1px solid var(--c-border)", borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,.12)", overflow: "hidden" }}>
+                  {configResultados.length === 0 ? (
+                    <div className="muted" style={{ padding: "10px 12px", fontSize: 13 }}>Sin coincidencias.</div>
+                  ) : configResultados.map((a) => (
+                    <button
+                      key={`${a.sub}-${a.tarjeta}`}
+                      type="button"
+                      onClick={() => irAAjuste(a)}
+                      style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 12px", background: "none", border: "none", borderBottom: "1px solid var(--c-border)", cursor: "pointer", fontSize: 13 }}
+                    >
+                      <strong>{a.tarjeta}</strong>
+                      <span className="muted" style={{ display: "block", fontSize: 11.5 }}>{subLabel[a.sub]}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
 
             {/* Aviso de cambios pendientes: se pierden si se sale del módulo,
                 porque al volver refreshConfig() recarga los valores del servidor. */}
