@@ -360,6 +360,9 @@ type ReciboSemanal = {
 type CuadrillaActivity = { id: string; name: string; unit_rate: number; is_active: boolean; categoria?: string };
 type CuadrillaEntry = { id: string; work_date: string; activity_id?: string | null; activity_name: string; worker_name: string; quantity: number; unit_rate: number; subtotal: number; origen?: string; referencia_id?: string | null; tunnel_number?: number | null; momento?: string | null };
 type CuadrillaSummaryRow = { worker_name: string; entradas: number; total: number; pagado?: number; anticipos: number; neto: number; oldest_pending?: string | null; pending_count?: number };
+// Personal administrativo (sueldo fijo quincenal), por accionista.
+type AdminStaff = { id: string; cargo: string; worker_name: string; base_salary: number; is_active?: boolean };
+type AdminSalaryPayment = { id: string; worker_name: string; cargo: string; base_salary: number; incentivo: number; descuentos: number; net_amount: number; periodo: string | null; paid_at: string };
 type CuadrillaAdvance = { id: string; worker_name: string; amount: number; balance: number; concept: string | null; status: string; issued_at: string };
 
 type PiladoService = {
@@ -1139,7 +1142,7 @@ const navGroups: Array<{ label: string; tabs: string[] }> = [
   { label: "Operación", tabs: ["Bascula", "Secadoras", "Produccion", "Gana", "Inventario", "Seleccion"] },
   { label: "Comercial", tabs: ["Ventas", "Compras", "Caja"] },
   { label: "Cuentas", tabs: ["Por Cobrar", "Por Pagar"] },
-  { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores", "Nomina", "Servicio Pilado"] },
+  { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores", "Nomina", "Sueldos", "Servicio Pilado"] },
   { label: "Contabilidad", tabs: ["Costos Operativos", "Estados Financieros"] },
   { label: "Sistema", tabs: ["Reportes", "Configuracion"] }
 ];
@@ -1913,6 +1916,12 @@ export function App() {
   const [pagoBuscar, setPagoBuscar] = useState("");
   const [pagoConfirm, setPagoConfirm] = useState<null | { kind: "nomina" | "cuadrilla"; nRow: WorkerSummary | null; cRow: CuadrillaSummaryRow | null }>(null);
   const cajaAbierta = Boolean(dashboard.current_cash_register?.id);
+  // Personal administrativo (por accionista activo): staff, formulario, historial y modal de pago.
+  const [adminStaff, setAdminStaff] = useState<AdminStaff[]>([]);
+  const [adminStaffForm, setAdminStaffForm] = useState({ cargo: "", worker_name: "", base_salary: "" });
+  const [adminEditId, setAdminEditId] = useState<string | null>(null);
+  const [adminHistory, setAdminHistory] = useState<AdminSalaryPayment[]>([]);
+  const [adminPay, setAdminPay] = useState<null | { staff: AdminStaff; incentivo: string; descuentos: string }>(null);
   const fmtFechaCorta = (f?: string | null) => { if (!f) return ""; const [, m, d] = String(f).slice(0, 10).split("-"); return `${d}/${m}`; };
   const diasDesde = (f?: string | null) => { if (!f) return 0; const t = new Date(String(f).slice(0, 10) + "T00:00:00"); return Math.max(0, Math.round((Date.now() - t.getTime()) / 86400000)); };
   const antiguedadLabel = (f?: string | null, n?: number) => {
@@ -4114,6 +4123,55 @@ export function App() {
     }
   }
 
+  // ── Personal administrativo (Sueldos) ──────────────────────────────────
+  async function loadAdminStaff() {
+    try { setAdminStaff(await apiGet<AdminStaff[]>("/admin-payroll/staff")); }
+    catch (e) { addToast(`No se pudo cargar el personal: ${e instanceof Error ? e.message : "error"}`, "error"); }
+  }
+  async function loadAdminHistory() {
+    try { setAdminHistory(await apiGet<AdminSalaryPayment[]>("/admin-payroll/history")); } catch { setAdminHistory([]); }
+  }
+  async function submitAdminStaff(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const base = Number(adminStaffForm.base_salary);
+    if (adminStaffForm.worker_name.trim().length < 2) { addToast("Escribe el nombre del empleado", "error"); return; }
+    if (!(base >= 0)) { addToast("Sueldo base inválido", "error"); return; }
+    try {
+      const payload = { cargo: adminStaffForm.cargo.trim(), worker_name: adminStaffForm.worker_name.trim(), base_salary: base };
+      if (adminEditId) await apiPut(`/admin-payroll/staff/${adminEditId}`, payload);
+      else await apiPost("/admin-payroll/staff", payload);
+      setAdminStaffForm({ cargo: "", worker_name: "", base_salary: "" });
+      setAdminEditId(null);
+      addToast(adminEditId ? "Empleado actualizado" : "Empleado agregado", "success");
+      await loadAdminStaff();
+    } catch (e) { addToast(`No se pudo guardar: ${e instanceof Error ? e.message : "error"}`, "error"); }
+  }
+  function editAdminStaff(st: AdminStaff) {
+    setAdminEditId(st.id);
+    setAdminStaffForm({ cargo: st.cargo ?? "", worker_name: st.worker_name, base_salary: String(st.base_salary ?? "") });
+  }
+  async function removeAdminStaff(st: AdminStaff) {
+    if (!window.confirm(`¿Quitar a ${st.worker_name} de la nómina administrativa? (no borra su historial de pagos)`)) return;
+    try { const r = await apiFetch(`/admin-payroll/staff/${st.id}`, { method: "DELETE" }); if (!r.ok) throw new Error("No se pudo quitar"); addToast("Empleado dado de baja", "success"); await loadAdminStaff(); }
+    catch (e) { addToast(`${e instanceof Error ? e.message : "error"}`, "error"); }
+  }
+  function abrirAdminPay(st: AdminStaff) {
+    if (!cajaAbierta) { addToast("Abre una caja para pagar", "error"); return; }
+    setAdminPay({ staff: st, incentivo: "", descuentos: "" });
+  }
+  async function confirmarAdminPay() {
+    const ap = adminPay; if (!ap) return;
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) { addToast("Abre una caja para pagar", "error"); return; }
+    try {
+      await apiPost("/admin-payroll/pay", { staff_id: ap.staff.id, incentivo: Number(ap.incentivo || 0), descuentos: Number(ap.descuentos || 0), cash_register_id: registerId });
+      addToast(`Sueldo pagado a ${ap.staff.worker_name}`, "success");
+      setAdminPay(null);
+      await loadAdminHistory();
+      await refreshCaja(registerId);
+    } catch (e) { addToast(`No se pudo pagar: ${e instanceof Error ? e.message : "error"}`, "error"); }
+  }
+
   async function loadReport(kind: ReportKind = reportKind) {
     setReportBusy(true);
     try {
@@ -5359,6 +5417,7 @@ export function App() {
     if (activeTab === "Secadoras") loadMotorActive(motorActivo).catch(() => undefined);
     if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
     if (activeTab === "Cuadrilla") refreshCuadrilla().catch(() => undefined);
+    if (activeTab === "Sueldos") { loadAdminStaff().catch(() => undefined); loadAdminHistory().catch(() => undefined); }
     if (activeTab === "Servicio Pilado") { refreshPilado().catch(() => undefined); refreshCobros().catch(() => undefined); }
     if (activeTab === "Seleccion") refreshSelection().catch(() => undefined);
     if (activeTab === "Dashboard" && canSeePanel) refreshPanel().catch(() => undefined);
@@ -5366,6 +5425,11 @@ export function App() {
     if (activeTab === "Costos Operativos") refreshCostos().catch(() => undefined);
     if (activeTab === "Estados Financieros") loadFinanzas().catch((e) => addToast(e.message, "error"));
   }, [activeTab, motorActivo]);
+  // Al cambiar de accionista, recarga Sueldos al cambiar de accionista (personal y pagos son por accionista).
+  useEffect(() => {
+    if (activeTab === "Sueldos") { loadAdminStaff().catch(() => undefined); loadAdminHistory().catch(() => undefined); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeAccionistaId]);
 
   // Carga de datos de cada subpestaña de Configuración. Va en un EFECTO (antes
   // estaba en el onClick de la pestaña), por dos razones: (1) al entrar a
@@ -14548,6 +14612,122 @@ export function App() {
                 </div>
               </div>
             )}
+          </section>
+          );
+        })()}
+
+        {activeTab === "Sueldos" && (() => {
+          const accName = accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "—";
+          const totalStaff = adminStaff.reduce((sum, r) => sum + (r.base_salary ?? 0), 0);
+          return (
+          <section className="cuentasLayout">
+            <div className="reportToolbar" style={{ marginBottom: 12 }}>
+              <div>
+                <h2 style={{ marginBottom: 2 }}>💼 Sueldos · Personal administrativo</h2>
+                <p className="muted" style={{ margin: 0 }}>Sueldo fijo quincenal (+ incentivo − descuentos). El pago sale de la caja de <strong>{accName}</strong>. Cada accionista tiene su propio personal.</p>
+              </div>
+              <button type="button" className="btnSecondary" onClick={() => { loadAdminStaff().catch(() => undefined); loadAdminHistory().catch(() => undefined); }}>↻ Actualizar</button>
+            </div>
+
+            {!cajaAbierta && (
+              <div className="alertBox" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <span>No hay una caja abierta de {accName}: puedes registrar personal, pero para pagar abre una caja.</span>
+                <button type="button" className="primary" onClick={() => irATab("Caja")}>Abrir caja</button>
+              </div>
+            )}
+
+            <div className="panelGrid" style={{ alignItems: "start" }}>
+              <div className="tablePanel">
+                <form className="formPanel" onSubmit={submitAdminStaff} style={{ marginBottom: 12 }}>
+                  <h3 style={{ margin: "0 0 4px" }}>{adminEditId ? "Editar empleado" : "Agregar empleado"}</h3>
+                  <label><span>Cargo</span><input value={adminStaffForm.cargo} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, cargo: e.target.value })} placeholder="Ej. Contadora, Oficina" /></label>
+                  <label><span>Trabajador</span><input value={adminStaffForm.worker_name} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, worker_name: e.target.value })} placeholder="Nombre y apellido" /></label>
+                  <label><span>Sueldo base (quincenal)</span><input type="number" step="0.01" min="0" value={adminStaffForm.base_salary} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, base_salary: e.target.value })} placeholder="0.00" /></label>
+                  <div className="buttonRow">
+                    <button type="submit" className="primary">{adminEditId ? "Guardar" : "+ Agregar"}</button>
+                    {adminEditId && <button type="button" onClick={() => { setAdminEditId(null); setAdminStaffForm({ cargo: "", worker_name: "", base_salary: "" }); }}>Cancelar</button>}
+                  </div>
+                </form>
+
+                {adminStaff.length === 0 ? (
+                  <div className="emptyState"><div className="emptyIcon">💼</div><p>Aún no hay personal administrativo para {accName}. Agrégalo con el formulario de arriba.</p></div>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table className="cajaTable">
+                      <thead><tr><th>Cargo</th><th>Trabajador</th><th className="num">Sueldo base</th><th /></tr></thead>
+                      <tbody>
+                        {adminStaff.map((st) => (
+                          <tr key={st.id}>
+                            <td>{st.cargo || "—"}</td>
+                            <td style={{ fontWeight: 600 }}>{st.worker_name}</td>
+                            <td className="num" style={{ fontWeight: 700 }}>{money(st.base_salary)}</td>
+                            <td className="num" style={{ whiteSpace: "nowrap" }}>
+                              <button type="button" className="btnGhost" title="Editar" onClick={() => editAdminStaff(st)}>✏️</button>
+                              <button type="button" className="btnGhost" title="Dar de baja" style={{ marginLeft: 6 }} onClick={() => removeAdminStaff(st)}>🗑</button>
+                              <button type="button" disabled={!cajaAbierta} onClick={() => abrirAdminPay(st)}
+                                style={{ marginLeft: 8, padding: "7px 16px", borderRadius: 8, border: "none", cursor: cajaAbierta ? "pointer" : "not-allowed", background: cajaAbierta ? "#047857" : "#9ca3af", color: "#fff", fontWeight: 800, fontSize: 13 }}>💵 Pagar</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot><tr><td colSpan={2} style={{ fontWeight: 700 }}>TOTAL sueldos base (quincena)</td><td className="num" style={{ fontWeight: 700 }}>{money(totalStaff)}</td><td /></tr></tfoot>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              <div className="tablePanel">
+                <h3 style={{ margin: "0 0 8px" }}>📜 Sueldos pagados</h3>
+                {adminHistory.length === 0 ? (
+                  <div className="emptyState" style={{ padding: "22px 20px" }}><p>Aún no hay sueldos pagados para {accName}.</p></div>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table className="cajaTable">
+                      <thead><tr><th>Fecha</th><th>Trabajador</th><th className="num">Base</th><th className="num">Incent.</th><th className="num">Desc.</th><th className="num">Pagado</th></tr></thead>
+                      <tbody>
+                        {adminHistory.map((h) => (
+                          <tr key={h.id}>
+                            <td>{new Date(h.paid_at).toLocaleDateString("es-EC")}</td>
+                            <td style={{ fontWeight: 600 }}>{h.worker_name}{h.cargo ? <span className="muted"> · {h.cargo}</span> : null}</td>
+                            <td className="num">{money(h.base_salary)}</td>
+                            <td className="num">{h.incentivo > 0 ? money(h.incentivo) : "—"}</td>
+                            <td className="num" style={{ color: h.descuentos > 0 ? "var(--c-danger)" : "inherit" }}>{h.descuentos > 0 ? `−${money(h.descuentos)}` : "—"}</td>
+                            <td className="num" style={{ fontWeight: 700, color: "#047857" }}>{money(h.net_amount)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {adminPay && (() => {
+              const base = adminPay.staff.base_salary ?? 0;
+              const inc = Number(adminPay.incentivo || 0);
+              const desc = Number(adminPay.descuentos || 0);
+              const neto = Math.max(0, base + inc - desc);
+              return (
+                <div className="modalOverlay" onClick={() => setAdminPay(null)}>
+                  <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 400 }}>
+                    <h3 style={{ marginTop: 0, marginBottom: 10 }}>Pagar sueldo</h3>
+                    <p style={{ margin: "0 0 12px" }}>A <strong>{adminPay.staff.worker_name}</strong>{adminPay.staff.cargo ? ` · ${adminPay.staff.cargo}` : ""}.</p>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr auto", rowGap: 8, columnGap: 12, alignItems: "center", fontSize: 14 }}>
+                      <span>Sueldo base (quincena)</span><strong className="num">{money(base)}</strong>
+                      <span>Incentivo</span><input type="number" step="0.01" min="0" value={adminPay.incentivo} onChange={(e) => setAdminPay({ ...adminPay, incentivo: e.target.value })} placeholder="0.00" style={{ width: 110, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }} />
+                      <span>Descuentos</span><input type="number" step="0.01" min="0" value={adminPay.descuentos} onChange={(e) => setAdminPay({ ...adminPay, descuentos: e.target.value })} placeholder="0.00" style={{ width: 110, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }} />
+                      <span style={{ borderTop: "1px solid #e5e7eb", paddingTop: 8, fontWeight: 800 }}>Neto a pagar</span>
+                      <strong className="num" style={{ borderTop: "1px solid #e5e7eb", paddingTop: 8, fontWeight: 800, color: "#047857", fontSize: 17 }}>{money(neto)}</strong>
+                    </div>
+                    <p className="muted" style={{ fontSize: 12, margin: "12px 0 16px" }}>Sale de la caja abierta de {accName} y queda guardado en el historial.</p>
+                    <div className="buttonRow" style={{ justifyContent: "flex-end", gap: 8 }}>
+                      <button type="button" onClick={() => setAdminPay(null)}>Cancelar</button>
+                      <button type="button" disabled={!(neto > 0)} onClick={() => confirmarAdminPay()} style={{ background: neto > 0 ? "#047857" : "#9ca3af", color: "#fff", border: "none", borderRadius: 8, padding: "8px 18px", fontWeight: 800, cursor: neto > 0 ? "pointer" : "not-allowed" }}>💵 Confirmar pago</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </section>
           );
         })()}
