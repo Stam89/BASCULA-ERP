@@ -3869,19 +3869,40 @@ export function App() {
 
   // Rol de pago: etiqueta legible del rol.
   function roleLabelNomina(role: string): string {
-    return role === "PILADOR" ? "Pilador" : role === "ESTIBADOR" ? "Estibador" : role === "POLVILLO" ? "Polvillo" : "Secador";
+    return role === "PILADOR" ? "Pilador" : role === "ESTIBADOR" ? "Estibador" : role === "POLVILLO" ? "Polvillo" : role === "CUADRILLA" ? "Cuadrilla" : "Secador";
   }
   const fmtFechaRecibo = (f: string) => { const [y, m, d] = String(f).slice(0, 10).split("-"); return `${d}/${m}/${y}`; };
+  // Período REAL del recibo: min–max de las fechas de las filas (evita mostrar
+  // el rango sentinela 2000–2999 cuando se pide 'todo lo pendiente').
+  function reciboPeriodo(data: ReciboSemanal): string {
+    const fechas = data.rows.map((r) => String(r.fecha).slice(0, 10)).filter(Boolean).sort();
+    if (fechas.length) return `${fmtFechaRecibo(fechas[0])} — ${fmtFechaRecibo(fechas[fechas.length - 1])}`;
+    if (data.range.from <= "2001-01-01") return "—";
+    return `${reciboPeriodo(data)}`;
+  }
 
   // Abre el modal de vista previa del Recibo Semanal Desglosado (Rol de Pago).
-  async function openReciboSemanal(row: WorkerSummary, periodFrom?: string, periodTo?: string) {
+  async function openReciboSemanal(row: WorkerSummary, periodFrom?: string, periodTo?: string, status?: string) {
     const from = periodFrom ?? nominaFrom;
     const to = periodTo ?? nominaTo;
     setReciboModal({ open: true, loading: true, data: null });
     try {
       const data = await apiGet<ReciboSemanal>(
-        `/labor/worker-receipt?role=${row.worker_role}&name=${encodeURIComponent(row.worker_name)}&from=${from}&to=${to}`
+        `/labor/worker-receipt?role=${row.worker_role}&name=${encodeURIComponent(row.worker_name)}&from=${from}&to=${to}${status ? `&status=${status}` : ""}`
       );
+      setReciboModal({ open: true, loading: false, data });
+    } catch (e) {
+      setReciboModal({ open: false, loading: false, data: null });
+      addToast(e instanceof Error ? e.message : "No se pudo cargar el recibo", "error");
+    }
+  }
+
+  // Recibo de una cuadrilla (módulo aparte): trae sus registros PENDIENTES y
+  // usa el MISMO modal que la nómina. No depende del estado de la pestaña.
+  async function openReciboCuadrilla(workerName: string) {
+    setReciboModal({ open: true, loading: true, data: null });
+    try {
+      const data = await apiGet<ReciboSemanal>(`/cuadrilla/worker-receipt?worker_name=${encodeURIComponent(workerName)}&status=pending`);
       setReciboModal({ open: true, loading: false, data });
     } catch (e) {
       setReciboModal({ open: false, loading: false, data: null });
@@ -3921,7 +3942,7 @@ export function App() {
       <div class="meta">
         <div><strong>Trabajador:</strong> ${data.worker.name}</div>
         <div><strong>Rol:</strong> ${roleLabelNomina(data.worker.role)}</div>
-        <div><strong>Período:</strong> ${fmtFechaRecibo(data.range.from)} — ${fmtFechaRecibo(data.range.to)}</div>
+        <div><strong>Período:</strong> ${reciboPeriodo(data)}</div>
       </div>
       <table>
         <thead><tr><th>Fecha</th><th>Concepto / Lote</th><th class="r">Cantidad</th><th class="r">Tarifa</th><th class="r">Subtotal</th></tr></thead>
@@ -3963,7 +3984,7 @@ export function App() {
       <div class="sub">${[appSettings.ruc && `RUC: ${appSettings.ruc}`].filter(Boolean).join(" ")}</div>
       <div class="rol">Rol de Pago · ${roleLabelNomina(data.worker.role)}</div>
       <div class="meta"><b>Trabajador:</b> ${data.worker.name}</div>
-      <div class="meta"><b>Período:</b> ${fmtFechaRecibo(data.range.from)} — ${fmtFechaRecibo(data.range.to)}</div>
+      <div class="meta"><b>Período:</b> ${reciboPeriodo(data)}</div>
       <div style="margin-top:6px">${filas}</div>
       <div class="cierre">
         <div class="row"><span>(+) Ganado</span><span>$${t.earned.toFixed(2)}</span></div>
@@ -4101,6 +4122,8 @@ export function App() {
     if (!registerId) { addToast("Abre una caja para pagar", "error"); return; }
     const toPay = row.to_pay ?? (row.pending_amount ?? 0);
     try {
+      // Recibo desglosado de lo PENDIENTE (lo que se está pagando), antes de liquidar.
+      await openReciboSemanal(row, from, to, "PENDING");
       await apiPost("/labor/pay-worker", {
         worker_role: row.worker_role,
         worker_name: row.worker_name,
@@ -4109,9 +4132,6 @@ export function App() {
         cash_register_id: registerId
       });
       addToast(`Pagado a ${row.worker_name}`, "success");
-      // Abre el recibo semanal para firma (con el período que se acaba de pagar,
-      // antes de que refreshNomina reordene las filas).
-      await openReciboSemanal(row, from, to);
       await refreshNomina();
       await refreshCaja(registerId);
     } catch (e) {
@@ -15167,7 +15187,7 @@ export function App() {
                             <td className="num" style={{ fontWeight: 700, color: "#047857" }}>{money(toPay)}</td>
                             <td className="num" style={{ whiteSpace: "nowrap" }}>
                               <button type="button" className="btnGhost" title="Ver detalle del cálculo" onClick={() => loadNominaPaymentDetail(r)}>🔍</button>
-                              <button type="button" className="btnGhost" title="Recibo semanal (Rol de Pago)" style={{ marginLeft: 6 }} onClick={() => openReciboSemanal(r).catch(() => undefined)}>🧾</button>
+                              <button type="button" className="btnGhost" title="Recibo semanal (Rol de Pago)" style={{ marginLeft: 6 }} onClick={() => openReciboSemanal(r, PAGOS_FROM, PAGOS_TO, "PENDING").catch(() => undefined)}>🧾</button>
                               <button type="button" className="btnGhost" style={{ marginLeft: 6 }} onClick={() => registerAdvance(r)}>Anticipo</button>
                               <button type="button" disabled={!cajaAbierta} onClick={() => abrirPagoNomina(r)}
                                 style={{ marginLeft: 8, padding: "7px 16px", borderRadius: 8, border: "none", cursor: cajaAbierta ? "pointer" : "not-allowed", background: cajaAbierta ? "#047857" : "#9ca3af", color: "#fff", fontWeight: 800, fontSize: 13 }}>💵 Pagar</button>
@@ -15184,7 +15204,7 @@ export function App() {
                           <td className="num" style={{ color: (r.anticipos ?? 0) > 0 ? "var(--c-danger)" : "inherit" }}>{(r.anticipos ?? 0) > 0 ? `−${money(r.anticipos)}` : "—"}</td>
                           <td className="num" style={{ fontWeight: 700, color: "#047857" }}>{money(r.neto)}</td>
                           <td className="num" style={{ whiteSpace: "nowrap" }}>
-                            <button type="button" className="btnGhost" title="Recibo desglosado" onClick={() => printCuadrillaRecibo(r.worker_name)}>🧾</button>
+                            <button type="button" className="btnGhost" title="Recibo desglosado" onClick={() => openReciboCuadrilla(r.worker_name).catch(() => undefined)}>🧾</button>
                             <button type="button" className="btnGhost" style={{ marginLeft: 6 }} onClick={() => registerCuadrillaAdvance(r.worker_name).catch(() => undefined)}>Anticipo</button>
                             <button type="button" disabled={!cajaAbierta} onClick={() => abrirPagoCuadrilla(r)}
                               style={{ marginLeft: 8, padding: "7px 16px", borderRadius: 8, border: "none", cursor: cajaAbierta ? "pointer" : "not-allowed", background: cajaAbierta ? "#047857" : "#9ca3af", color: "#fff", fontWeight: 800, fontSize: 13 }}>💵 Pagar</button>
@@ -15449,7 +15469,7 @@ export function App() {
                           <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginTop: 6, fontSize: 13 }}>
                             <span><strong>Trabajador:</strong> {d.worker.name}</span>
                             <span><strong>Rol:</strong> {roleLabelNomina(d.worker.role)}</span>
-                            <span><strong>Período:</strong> {fmtFechaRecibo(d.range.from)} — {fmtFechaRecibo(d.range.to)}</span>
+                            <span><strong>Período:</strong> {reciboPeriodo(d)}</span>
                           </div>
                         </div>
 
