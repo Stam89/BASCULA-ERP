@@ -1862,7 +1862,7 @@ export function App() {
     open: false, loading: false, data: null
   });
   const [secadorSugg, setSecadorSugg] = useState<Array<{ worker_name: string; work_date: string; tunnels: number; suggested_amount: number; already_generated: boolean; dia_inicio?: string; dia_fin?: string; dias_corrida?: number }> | null>(null);
-  const [nominaView, setNominaView] = useState<NominaGrupo | "pagos" | "historial">("planta");
+  const [nominaView, setNominaView] = useState<NominaGrupo | "pagos" | "historial">("pagos");
   // Filas de la pestaña activa. El filtro es puramente de frontend sobre el
   // array que ya trae /labor/summary: no se toca la petición ni el backend.
   const nominaGrupoActivo: NominaGrupo = (nominaView === "historial" || nominaView === "pagos") ? "planta" : nominaView;
@@ -14475,11 +14475,19 @@ export function App() {
         {activeTab === "Nomina" && (
           <section className="cuentasLayout">
             <nav className="cajaSubNav">
+              {/* Pagar es la acción principal → va primero, con el conteo de
+                  pendientes para saber de un vistazo cuánta gente falta. */}
+              <button type="button" className={nominaView === "pagos" ? "active" : ""} onClick={() => setNominaView("pagos")}
+                style={{ fontWeight: 700 }}>
+                💵 Pagos
+                {nominaPendientes.length > 0 && (
+                  <span style={{ marginLeft: 6, background: "#dc2626", color: "#fff", borderRadius: 999, padding: "1px 8px", fontSize: 12, fontWeight: 800 }}>{nominaPendientes.length}</span>
+                )}
+              </button>
               <button type="button" className={nominaView === "planta" ? "active" : ""} onClick={() => setNominaView("planta")}>🏭 Planta</button>
               <button type="button" className={nominaView === "secadora" ? "active" : ""} onClick={() => setNominaView("secadora")}>🔥 Secadora</button>
               <button type="button" className={nominaView === "cuadrilla" ? "active" : ""} onClick={() => { setNominaView("cuadrilla"); refreshCuadrilla().catch(() => undefined); }}>👷‍♂️ Cuadrilla</button>
               <button type="button" className={nominaView === "administrativo" ? "active" : ""} onClick={() => setNominaView("administrativo")}>💼 Personal Administrativo</button>
-              <button type="button" className={nominaView === "pagos" ? "active" : ""} onClick={() => setNominaView("pagos")}>💵 Pagos</button>
               <button type="button" className={nominaView === "historial" ? "active" : ""} onClick={() => { setNominaView("historial"); loadNominaHistory().catch(() => undefined); }}>📜 Historial de Pagos</button>
             </nav>
 
@@ -14489,7 +14497,10 @@ export function App() {
               background: "linear-gradient(90deg,#065f46,#15803d)", color: "#fff", borderRadius: 12, padding: "14px 18px", margin: "4px 0 14px" }}>
               <div>
                 <div style={{ fontSize: 12, fontWeight: 600, opacity: 0.9, letterSpacing: ".03em" }}>💰 COSTO TOTAL DE NÓMINA · A PAGAR</div>
-                <div style={{ fontSize: 30, fontWeight: 800, lineHeight: 1.1 }}>{money(nominaResumen.total)}</div>
+                <button type="button" onClick={() => setNominaView("pagos")} title="Ir a Pagos"
+                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "#fff", fontSize: 30, fontWeight: 800, lineHeight: 1.1, textAlign: "left" }}>
+                  {money(nominaResumen.total)} <span style={{ fontSize: 13, fontWeight: 600, opacity: 0.85 }}>›</span>
+                </button>
                 <div style={{ fontSize: 11, opacity: 0.85, marginTop: 2 }}>Período {nominaFrom} → {nominaTo} · Planta / Secadora / Cuadrilla / Administrativo</div>
               </div>
               {/* Subtotales por pestaña operativa. Suman lo mismo que el total: cada fila
@@ -14502,13 +14513,12 @@ export function App() {
 
                   .map(([label, v]) => (
 
-                    <div key={label} style={{ background: "rgba(255,255,255,.18)", borderRadius: 10, padding: "7px 12px", textAlign: "right" }}>
-
+                    <button key={label} type="button" title={`Ver ${label}`}
+                      onClick={() => { const g = label.toLowerCase() as NominaGrupo; setNominaView(g); if (g === "cuadrilla") refreshCuadrilla().catch(() => undefined); }}
+                      style={{ background: "rgba(255,255,255,.18)", border: "1px solid rgba(255,255,255,.12)", borderRadius: 10, padding: "7px 12px", textAlign: "right", cursor: "pointer", color: "#fff" }}>
                       <div style={{ fontSize: 11, opacity: 0.9, whiteSpace: "nowrap" }}>{label}</div>
-
                       <strong style={{ fontWeight: 800, fontSize: 16 }}>{money(v)}</strong>
-
-                    </div>
+                    </button>
 
                   ))}
 
@@ -14998,7 +15008,8 @@ export function App() {
                                 <button type="button" className="btnGhost" title="Ver detalle del cálculo" onClick={() => loadNominaPaymentDetail(r)}>🔍</button>
                                 <button type="button" className="btnGhost" title="Recibo semanal (Rol de Pago)" style={{ marginLeft: 6 }} onClick={() => openReciboSemanal(r).catch(() => undefined)}>🧾</button>
                                 <button type="button" className="btnGhost" style={{ marginLeft: 6 }} onClick={() => registerAdvance(r)}>Anticipo</button>
-                                <button type="button" className="liqAbonoBtn" style={{ marginLeft: 6 }} onClick={() => payWorkerWeek(r)}>💵 Pagar</button>
+                                <button type="button" onClick={() => payWorkerWeek(r)}
+                                  style={{ marginLeft: 8, padding: "7px 16px", borderRadius: 8, border: "none", cursor: "pointer", background: "#047857", color: "#fff", fontWeight: 800, fontSize: 13 }}>💵 Pagar</button>
                               </td>
                             </tr>
                           );
