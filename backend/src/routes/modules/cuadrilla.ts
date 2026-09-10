@@ -563,7 +563,9 @@ cuadrillaRouter.get("/summary", asyncRoute(async (req, res) => {
             COUNT(*)::int AS entradas,
             COALESCE(SUM(subtotal), 0)::float AS total,
             COALESCE(SUM(subtotal) FILTER (WHERE paid_at IS NULL), 0)::float AS pendiente,
-            COALESCE(SUM(subtotal) FILTER (WHERE paid_at IS NOT NULL), 0)::float AS pagado
+            COALESCE(SUM(subtotal) FILTER (WHERE paid_at IS NOT NULL), 0)::float AS pagado,
+            MIN(work_date) FILTER (WHERE paid_at IS NULL) AS oldest_pending,
+            COUNT(*) FILTER (WHERE paid_at IS NULL)::int AS pending_count
      FROM cuadrilla_entries
      WHERE work_date BETWEEN $1 AND $2
      GROUP BY worker_name
@@ -588,6 +590,8 @@ cuadrillaRouter.get("/summary", asyncRoute(async (req, res) => {
       entradas: r.entradas,
       total: round2(Number(r.total)),
       pagado: round2(Number(r.pagado)),
+      oldest_pending: r.oldest_pending,
+      pending_count: r.pending_count,
       anticipos: round2(pending),
       // Neto a pagar = lo aún NO pagado, menos los anticipos pendientes.
       neto: round2(Math.max(0, pendiente - pending))
