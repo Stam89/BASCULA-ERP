@@ -1862,14 +1862,28 @@ export function App() {
     open: false, loading: false, data: null
   });
   const [secadorSugg, setSecadorSugg] = useState<Array<{ worker_name: string; work_date: string; tunnels: number; suggested_amount: number; already_generated: boolean; dia_inicio?: string; dia_fin?: string; dias_corrida?: number }> | null>(null);
-  const [nominaView, setNominaView] = useState<NominaGrupo | "historial">("planta");
+  const [nominaView, setNominaView] = useState<NominaGrupo | "pagos" | "historial">("planta");
   // Filas de la pestaña activa. El filtro es puramente de frontend sobre el
   // array que ya trae /labor/summary: no se toca la petición ni el backend.
-  const nominaGrupoActivo: NominaGrupo = nominaView === "historial" ? "planta" : nominaView;
+  const nominaGrupoActivo: NominaGrupo = (nominaView === "historial" || nominaView === "pagos") ? "planta" : nominaView;
   const nominaFiltradas = useMemo(
     () => nominaRows.filter((r) => nominaGrupoDe(r.worker_role) === nominaGrupoActivo),
     [nominaRows, nominaGrupoActivo]
   );
+  // 💵 Pagos: todos los trabajadores con saldo pendiente del período, de las
+  // cuatro áreas juntas, para poder pagarlos desde una sola pantalla sin entrar
+  // pestaña por pestaña. Es el mismo array de /labor/summary, solo filtrado y
+  // ordenado (por área y luego por monto): no hay petición ni endpoint nuevos.
+  const nominaPendientes = useMemo(() => {
+    const orden: Record<NominaGrupo, number> = { planta: 0, secadora: 1, cuadrilla: 2, administrativo: 3 };
+    return nominaRows
+      .filter((r) => (r.pending_amount ?? 0) > 0)
+      .sort((a, b) => {
+        const ga = orden[nominaGrupoDe(a.worker_role)], gb = orden[nominaGrupoDe(b.worker_role)];
+        if (ga !== gb) return ga - gb;
+        return (b.to_pay ?? 0) - (a.to_pay ?? 0);
+      });
+  }, [nominaRows]);
   const nomina60Ago = (() => { const d = new Date(); d.setDate(d.getDate() - 60); return d.toISOString().slice(0, 10); })();
   const [histFrom, setHistFrom] = useState(nomina60Ago);
   const [histTo, setHistTo] = useState(nominaToday);
@@ -14465,6 +14479,7 @@ export function App() {
               <button type="button" className={nominaView === "secadora" ? "active" : ""} onClick={() => setNominaView("secadora")}>🔥 Secadora</button>
               <button type="button" className={nominaView === "cuadrilla" ? "active" : ""} onClick={() => { setNominaView("cuadrilla"); refreshCuadrilla().catch(() => undefined); }}>👷‍♂️ Cuadrilla</button>
               <button type="button" className={nominaView === "administrativo" ? "active" : ""} onClick={() => setNominaView("administrativo")}>💼 Personal Administrativo</button>
+              <button type="button" className={nominaView === "pagos" ? "active" : ""} onClick={() => setNominaView("pagos")}>💵 Pagos</button>
               <button type="button" className={nominaView === "historial" ? "active" : ""} onClick={() => { setNominaView("historial"); loadNominaHistory().catch(() => undefined); }}>📜 Historial de Pagos</button>
             </nav>
 
@@ -14503,7 +14518,7 @@ export function App() {
             {/* Pestañas operativas (Planta / Secadora / Cuadrilla / Administrativo).
                 Las cuatro comparten la misma tabla, el mismo estado y las mismas
                 acciones; solo cambian el filtro por rol y las columnas del medio. */}
-            {nominaView !== "historial" && (() => {
+            {nominaView !== "historial" && nominaView !== "pagos" && (() => {
               const grupo = nominaGrupoActivo;
               const info = NOMINA_GRUPO_TITULO[grupo];
               const cols = nominaColumnas(grupo);
@@ -14933,6 +14948,76 @@ export function App() {
                 </>
               );
             })()}
+
+            {/* 💵 Pagos — una sola pantalla para liquidar a todos los pendientes de
+                las 4 áreas, sin entrar pestaña por pestaña. Cada pago sigue
+                siendo individual (mismo botón, misma función payWorkerWeek) y
+                abre su recibo; solo se juntan aquí las filas con saldo. */}
+            {nominaView === "pagos" && (
+              <div className="tablePanel">
+                <div className="reportToolbar" style={{ marginBottom: 10 }}>
+                  <div>
+                    <h2 style={{ marginBottom: 2 }}>💵 Pagos pendientes · todas las áreas</h2>
+                    <p className="muted" style={{ margin: 0 }}>Todos los trabajadores con saldo del período, juntos. Paga a cada uno desde aquí sin cambiar de pestaña.</p>
+                  </div>
+                  <div className="reportDates">
+                    <label><span>Desde</span><input type="date" value={nominaFrom} max={nominaTo} onChange={(e) => setNominaFrom(e.target.value)} /></label>
+                    <label><span>Hasta</span><input type="date" value={nominaTo} min={nominaFrom} onChange={(e) => setNominaTo(e.target.value)} /></label>
+                    <button type="button" className="primary" disabled={nominaBusy} onClick={() => refreshNomina().catch(() => undefined)}>{nominaBusy ? "Cargando…" : "Ver"}</button>
+                  </div>
+                </div>
+
+                {!dashboard.current_cash_register && nominaPendientes.length > 0 && (
+                  <div className="alertBox">Abre una caja para poder registrar los pagos.</div>
+                )}
+
+                {nominaPendientes.length === 0 ? (
+                  <div className="emptyState"><div className="emptyIcon">✅</div><p>No hay pagos pendientes en el período. Todo está al día.</p></div>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table className="cajaTable">
+                      <thead>
+                        <tr>
+                          <th>Área</th><th>Rol</th><th>Trabajador</th>
+                          <th className="num">Ganó</th><th className="num">Anticipos</th><th className="num">A pagar</th><th />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {nominaPendientes.map((r, i) => {
+                          const toPay = r.to_pay ?? (r.pending_amount ?? 0);
+                          const info = NOMINA_GRUPO_TITULO[nominaGrupoDe(r.worker_role)];
+                          return (
+                            <tr key={i}>
+                              <td><span className="chip">{info.icono} {info.titulo}</span></td>
+                              <td><span className={nominaRolChip(r.worker_role)}>{nominaRolLabel(r.worker_role)}</span></td>
+                              <td style={{ fontWeight: 600 }}>{r.worker_name}</td>
+                              <td className="num" style={{ fontWeight: 700 }}>{money(r.base_amount)}</td>
+                              <td className="num" style={{ color: (r.advances ?? 0) > 0 ? "var(--c-danger)" : "inherit" }}>{(r.advances ?? 0) > 0 ? `−${money(r.advances)}` : "—"}</td>
+                              <td className="num" style={{ fontWeight: 700, color: "#047857" }}>{money(toPay)}</td>
+                              <td className="num" style={{ whiteSpace: "nowrap" }}>
+                                <button type="button" className="btnGhost" title="Ver detalle del cálculo" onClick={() => loadNominaPaymentDetail(r)}>🔍</button>
+                                <button type="button" className="btnGhost" title="Recibo semanal (Rol de Pago)" style={{ marginLeft: 6 }} onClick={() => openReciboSemanal(r).catch(() => undefined)}>🧾</button>
+                                <button type="button" className="btnGhost" style={{ marginLeft: 6 }} onClick={() => registerAdvance(r)}>Anticipo</button>
+                                <button type="button" className="liqAbonoBtn" style={{ marginLeft: 6 }} onClick={() => payWorkerWeek(r)}>💵 Pagar</button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr>
+                          <td colSpan={3} style={{ fontWeight: 700 }}>TOTAL A PAGAR · {nominaPendientes.length} trabajador(es)</td>
+                          <td className="num" style={{ fontWeight: 700 }}>{money(nominaPendientes.reduce((a, r) => a + r.base_amount, 0))}</td>
+                          <td className="num" style={{ fontWeight: 700, color: "var(--c-danger)" }}>−{money(nominaPendientes.reduce((a, r) => a + (r.advances ?? 0), 0))}</td>
+                          <td className="num" style={{ fontWeight: 800, color: "#047857" }}>{money(nominaPendientes.reduce((a, r) => a + (r.to_pay ?? (r.pending_amount ?? 0)), 0))}</td>
+                          <td />
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
 
             {nominaView === "historial" && (
               <>
