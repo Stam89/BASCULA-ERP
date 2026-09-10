@@ -3103,10 +3103,17 @@ export function App() {
   async function loadNominaPaymentDetail(row: WorkerSummary) {
     setNominaPaymentDetail({ open: true, row, payments: [], loading: true });
     try {
-      const data = await apiGet<{ rows: WorkerPaymentDetail[] }>(
+      // /labor/payments responde un ARRAY plano, no { rows }: leer data.rows daba
+      // undefined y el modal reventaba en .length (pantalla en blanco). Se aceptan
+      // las dos formas por si la ruta cambia.
+      const data = await apiGet<{ rows: WorkerPaymentDetail[] } | WorkerPaymentDetail[]>(
         `/labor/payments?role=${row.worker_role}&name=${encodeURIComponent(row.worker_name)}&from=${nominaFrom}&to=${nominaTo}`
       );
-      setNominaPaymentDetail((cur) => ({ ...cur, payments: data.rows, loading: false }));
+      const todos = Array.isArray(data) ? data : (data?.rows ?? []);
+      // El backend ignora el parámetro name (su esquema solo acepta role/from/to/
+      // status), así que el filtro por trabajador se aplica aquí.
+      const payments = todos.filter((d) => d.worker_name === row.worker_name);
+      setNominaPaymentDetail((cur) => ({ ...cur, payments, loading: false }));
     } catch (e) {
       addToast(`Error al cargar detalle: ${e instanceof Error ? e.message : "desconocido"}`, "error");
       setNominaPaymentDetail((cur) => ({ ...cur, loading: false }));
