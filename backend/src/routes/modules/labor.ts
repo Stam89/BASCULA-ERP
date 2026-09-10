@@ -89,6 +89,7 @@ export type LaborRates = {
   precio_gas_bombona: number;
   precio_gas_cilindro: number;
   precio_diesel: number;
+  tendal_per_qq: number;
 };
 
 async function getRates(db: Queryable = pool): Promise<LaborRates> {
@@ -110,7 +111,8 @@ async function getRates(db: Queryable = pool): Promise<LaborRates> {
     secador_per_tunel: Number(row.secador_per_tunel),
     precio_gas_bombona: Number(row.precio_gas_bombona ?? 0),
     precio_gas_cilindro: Number(row.precio_gas_cilindro ?? 0),
-    precio_diesel: Number(row.precio_diesel ?? 0)
+    precio_diesel: Number(row.precio_diesel ?? 0),
+    tendal_per_qq: Number(row.tendal_per_qq ?? 0)
   };
 }
 
@@ -243,7 +245,8 @@ laborRouter.put("/rates", requireAdmin, asyncRoute(async (req, res) => {
     secador_per_tunel: z.number().nonnegative(),
     precio_gas_bombona: z.number().nonnegative().default(0),
     precio_gas_cilindro: z.number().nonnegative().default(0),
-    precio_diesel: z.number().nonnegative().default(0)
+    precio_diesel: z.number().nonnegative().default(0),
+    tendal_per_qq: z.number().nonnegative().default(0)
   }).parse(req.body);
 
   await pool.query(
@@ -252,11 +255,11 @@ laborRouter.put("/rates", requireAdmin, asyncRoute(async (req, res) => {
        estibador_per_qq = $3, estibador_per_saca = $4, estibador_per_arrocillo = $5,
        secador_guardiania = $6, secador_per_tunel = $7,
        precio_gas_bombona = $8, precio_gas_cilindro = $9, precio_diesel = $10,
-       estibador_por_3tulas = $11, polvillo_per_qq = $12, updated_at = now()
+       estibador_por_3tulas = $11, polvillo_per_qq = $12, tendal_per_qq = $13, updated_at = now()
      WHERE id = 1`,
     [body.pilador_per_qq, body.pilador_per_saca, body.estibador_per_qq, body.estibador_per_saca,
      body.estibador_per_arrocillo, body.secador_guardiania, body.secador_per_tunel,
-     body.precio_gas_bombona, body.precio_gas_cilindro, body.precio_diesel, body.estibador_por_3tulas, body.polvillo_per_qq]
+     body.precio_gas_bombona, body.precio_gas_cilindro, body.precio_diesel, body.estibador_por_3tulas, body.polvillo_per_qq, body.tendal_per_qq]
   );
   res.json(await getRates());
 }));

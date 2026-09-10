@@ -25,7 +25,9 @@ const dryingBodySchema = z.object({
   entry_ids: z.array(z.string().uuid()).min(1),
   // Código del lote: se propone automático, pero se puede escribir otro.
   lot_code: z.string().optional(),
-  tunnel_number: z.number().int().min(1).max(3),
+  tunnel_number: z.number().int().min(1).max(3).optional(),
+  dry_method: z.enum(["TUNEL", "TENDAL"]).default("TUNEL"),
+  moisture_after: z.number().nonnegative().optional(),
   rice_type: z.enum(["0.11", "CORRIENTE"]).default("0.11"),
   moisture_before: z.number().nonnegative().optional(),
   filled_at: z.string().optional(),
@@ -444,6 +446,43 @@ processFlowRouter.post("/drying", asyncRoute(async (req, res) => {
   res.status(201).json(result);
 }));
 
+// ☀️ Secado en Tendal (patio al sol): reusa el pipeline de secado (dry_method
+// 'TENDAL'), sin túnel ni combustible. El responsable es siempre la CUADRILLA:
+// al finalizar, el lote queda disponible en Producción y se genera el pago de
+// cuadrilla por QQ (tarifa labor_rates.tendal_per_qq).
+processFlowRouter.post("/drying-tendal", asyncRoute(async (req, res) => {
+  const body = z.object({
+    entry_ids: z.array(z.string().uuid()).min(1),
+    lot_code: z.string().optional(),
+    rice_type: z.enum(["0.11", "CORRIENTE"]).default("0.11"),
+    moisture_before: z.number().nonnegative().optional(),
+    moisture_after: z.number().nonnegative().optional(),
+    dry_start_at: z.string().optional(),
+    dry_end_at: z.string().optional(),
+    recepcion_empaque: z.enum(["TULAS", "SACOS"]).default("TULAS"),
+    recepcion_sacos: z.number().nonnegative().nullable().optional(),
+    notes: z.string().optional(),
+    created_by: z.string().uuid().optional()
+  }).parse(req.body);
+  const notas = [body.notes, body.moisture_after != null ? `Humedad final: ${body.moisture_after}%` : null].filter(Boolean).join(" · ");
+  const input = dryingBodySchema.parse({
+    entry_ids: body.entry_ids,
+    lot_code: body.lot_code,
+    rice_type: body.rice_type,
+    moisture_before: body.moisture_before,
+    dry_start_at: body.dry_start_at,
+    dry_end_at: body.dry_end_at ?? new Date().toISOString(),
+    recepcion_empaque: body.recepcion_empaque,
+    recepcion_sacos: body.recepcion_sacos ?? null,
+    notes: notas || undefined,
+    created_by: body.created_by,
+    dry_method: "TENDAL",
+    dryer_name: "TENDAL"
+  });
+  const result = await inTransaction((client) => createDryingReport(client, input));
+  res.status(201).json(result);
+}));
+
 processFlowRouter.put("/drying/:dryingId", asyncRoute(async (req, res) => {
   const dryingId = String(req.params.dryingId);
   const body = dryingUpdateSchema.parse(req.body);
@@ -744,8 +783,19 @@ processFlowRouter.post("/lots/:lotId/link", asyncRoute(async (req, res) => {
 // Aquí NACE el lote: se agrupan varios ingresos de materia prima (pesajes de
 // báscula) en un túnel, y ese grupo es el lote. De aquí en adelante el proceso
 // (pilado, inventario, liquidación) trabaja con el lote.
+// Actividad placeholder para el 'vaciado' del tendal (drying_tunnel_cuadrilla
+// exige activity_id NOT NULL). La TARIFA real del pago sale de labor_rates.tendal_per_qq.
+async function ensureTendalActivity(client: PoolClient): Promise<string> {
+  const found = await client.query("SELECT id FROM cuadrilla_activities WHERE upper(btrim(name)) = 'SECADO EN TENDAL' LIMIT 1");
+  if (found.rowCount) return found.rows[0].id as string;
+  const created = await client.query("INSERT INTO cuadrilla_activities (name, unit_rate, is_active) VALUES ('SECADO EN TENDAL', 0, true) RETURNING id");
+  return created.rows[0].id as string;
+}
+
 async function createDryingReport(client: PoolClient, input: z.infer<typeof dryingBodySchema>) {
   const entryIds = [...new Set(input.entry_ids)];
+  const esTendal = input.dry_method === "TENDAL";
+  if (!esTendal && !input.tunnel_number) throw new ApiError(400, "Falta el número de túnel");
   const entries = await client.query(
     `SELECT w.id, w.ticket_number, w.farmer_id, w.is_maquila, w.accionista_id, w.lot_id,
             COALESCE(w.net_weight, 0) AS net_weight_kg,
@@ -783,6 +833,7 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
 
   // Validación: una secadora no puede tener dos secados activos a la vez. Si un
   // túnel está en uso por CUALQUIER accionista (incluido el mismo), se bloquea.
+  if (!esTendal) {
   const ocupado = await client.query(
     `SELECT d.id, a.name AS accionista_name
      FROM drying_tunnel_reports d
@@ -797,12 +848,14 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
     const nombre = ocupado.rows[0].accionista_name ?? "servicio de pilado/maquila";
     throw new ApiError(409, `El túnel ${input.tunnel_number} ya está en uso por ${nombre}. Finaliza ese secado antes de usarlo.`);
   }
+  }
 
   // Sincronización de la CORRIDA por motor: si ya hay un túnel activo de este
   // mismo motor (misma corrida, aún sin combustible cerrado), esta secadora
   // HEREDA obligatoriamente su fecha de llenado y hora de inicio. Así toda la
   // tanda camina con la misma fecha aunque al digitar se ponga otra por error
   // (evita el túnel con 1-sep y el otro con 2-sep). Los tickets no se tocan.
+  if (!esTendal) {
   const motorNumber = motorDeSecadora(input.dryer_name);
   const corrida = await client.query(
     `SELECT filled_at, dry_start_at FROM drying_tunnel_reports
@@ -819,6 +872,7 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
     if (anchorFilled) input.filled_at = anchorFilled;
     if (anchorStart) input.dry_start_at = anchorStart;
   }
+  }
 
   const farmerIds = new Set(entries.rows.map((e) => e.farmer_id));
   // Si el lote junta arroz de varios agricultores, no tiene un dueño único.
@@ -827,7 +881,7 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
   const totalNetKg = entries.rows.reduce((sum, e) => sum + Number(e.net_weight_kg), 0);
   const totalQuintals = entries.rows.reduce((sum, e) => sum + Number(e.quintals), 0);
   const dryingHours = calculateDryingHours(input.dry_start_at, input.dry_end_at);
-  const status = input.dry_end_at ? "COMPLETED" : "IN_PROGRESS";
+  const status = (esTendal || input.dry_end_at) ? "COMPLETED" : "IN_PROGRESS";
 
   // El código del lote se propone automático, pero se puede escribir otro.
   const lotCode = (input.lot_code ?? "").trim() || nextCode("LT");
@@ -877,11 +931,11 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
     createdBy: input.created_by
   });
 
-  const tunnelStage = `TUNEL_${input.tunnel_number}` as ProcessStage;
+  const tunnelStage = (esTendal ? "SECADO" : `TUNEL_${input.tunnel_number}`) as ProcessStage;
   const tunnelReport = await createLotProcessReport(client, {
     lotId,
     stage: tunnelStage,
-    title: `Informe Tunel ${input.tunnel_number}`,
+    title: (esTendal ? "Informe Secado en Tendal" : `Informe Tunel ${input.tunnel_number}`),
     referenceType: "drying_tunnel_reports",
     data: dryingReportData(input, totalNetKg, totalQuintals, dryingHours, status, lotSnapshot),
     notes: input.notes,
@@ -890,7 +944,7 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
     linkType: "DRYING_BRANCH"
   });
 
-  const c = await calcularCombustible(client, input);
+  const c = esTendal ? { precioBombona: 0, precioCilindro: 0, precioDiesel: 0, bombonaTotal: 0, bombonaCosto: 0, cilindroCosto: 0, dieselTotal: 0, dieselCosto: 0, costoTotal: 0, gasUsado: 0 } : await calcularCombustible(client, input);
 
   const tunnel = await client.query(
     `INSERT INTO drying_tunnel_reports
@@ -900,13 +954,13 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
       gas_cilindro_cantidad, gas_cilindro_precio, gas_cilindro_costo, gas_costo_total,
       diesel_inicio, diesel_fin, diesel_precio, diesel_costo,
       dryer_name, operator_name, status, notes, created_by, motor_number,
-      recepcion_empaque, recepcion_sacos)
-     VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33)
+      recepcion_empaque, recepcion_sacos, dry_method)
+     VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34)
      RETURNING *`,
     [
       lotId,
       tunnelReport.id,
-      input.tunnel_number,
+      esTendal ? null : input.tunnel_number,
       input.rice_type,
       totalNetKg,
       totalQuintals,
@@ -934,9 +988,10 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
       status,
       input.notes ?? null,
       input.created_by ?? null,
-      motorDeSecadora(input.dryer_name),
+      esTendal ? null : motorDeSecadora(input.dryer_name),
       input.recepcion_empaque,
-      input.recepcion_empaque === "SACOS" ? (input.recepcion_sacos ?? null) : null
+      input.recepcion_empaque === "SACOS" ? (input.recepcion_sacos ?? null) : null,
+      input.dry_method
     ]
   );
 
@@ -962,6 +1017,26 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
   // ASIGNACIÓN (100% del QQ del túnel por defecto). NO se paga aquí: Nómina la
   // detecta y genera el pago ("Detectar labores de túnel"). Así se puede además
   // dividir el llenado entre dos cuadrillas antes de enviarlo a Nómina.
+  // TENDAL: marca de vaciado a bodega (para que el lote aparezca disponible en
+  // Producción) + pago automático a la CUADRILLA por QQ (tarifa de config).
+  if (esTendal) {
+    const tendalAct = await ensureTendalActivity(client);
+    await client.query(
+      `INSERT INTO drying_tunnel_cuadrilla (drying_report_id, worker_name, activity_id, quintals, momento, created_by)
+       VALUES ($1, 'CUADRILLA', $2, $3, 'VACIADO', $4)`,
+      [tunnel.rows[0].id, tendalAct, totalQuintals, input.created_by ?? null]
+    );
+    const rr = await client.query("SELECT COALESCE(tendal_per_qq, 0)::float AS r FROM labor_rates WHERE id = 1");
+    const tendalRate = Number(rr.rows[0]?.r ?? 0);
+    const tendalSubtotal = round2(totalQuintals * tendalRate);
+    const wd = toDateOnly(input.dry_end_at) ?? toDateOnly(input.dry_start_at);
+    await client.query(
+      `INSERT INTO cuadrilla_entries
+         (work_date, activity_id, activity_name, worker_name, quantity, unit_rate, subtotal, notes, origen, referencia_id, momento, created_by)
+       VALUES (COALESCE($1::date, CURRENT_DATE), $2, 'Secado en tendal', 'CUADRILLA', $3, $4, $5, $6, 'TENDAL', $7, 'VACIADO', $8)`,
+      [wd, tendalAct, totalQuintals, tendalRate, tendalSubtotal, `Secado en tendal - Lote ${lotCode} - ${totalQuintals} Quintales`, tunnel.rows[0].id, input.created_by ?? null]
+    );
+  }
   const llenadoWorker = (input.cuadrilla_worker ?? "").trim();
   if (input.cuadrilla_labor_id && llenadoWorker.length >= 2) {
     await client.query(
