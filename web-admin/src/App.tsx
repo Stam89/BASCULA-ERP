@@ -5446,11 +5446,6 @@ export function App() {
     if (activeTab === "Estados Financieros") loadFinanzas().catch((e) => addToast(e.message, "error"));
   }, [activeTab, motorActivo]);
 
-  // Los socios no tienen nómina de producción: al entrar a Nómina van directo a Sueldo Administrativo.
-  useEffect(() => {
-      if (activeTab === "Nomina" && !esCeyroActivo) setNominaView("sueldo-admin");
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [activeTab, esCeyroActivo]);
   // Al cambiar de accionista, recarga Sueldos al cambiar de accionista (personal y pagos son por accionista).
   useEffect(() => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -14645,14 +14640,15 @@ export function App() {
         {activeTab === "Nomina" && (
           <section className="cuentasLayout">
             <nav className="cajaSubNav">
-              {/* Producción (Pagos, Secadora, Cuadrilla, Historial): solo la matriz (CEYRO). */}
-              {esCeyroActivo && (<>
+              {/* Pagos: para todos (los socios solo ven aquí sus sueldos administrativos). */}
               <button type="button" className={nominaView === "pagos" ? "active" : ""} onClick={() => setNominaView("pagos")} style={{ fontWeight: 700 }}>
                 💵 Pagos
-                {(nominaPendientes.length + pagosCuadPendientes.length) > 0 && (
-                  <span style={{ marginLeft: 6, background: "#dc2626", color: "#fff", borderRadius: 999, padding: "1px 8px", fontSize: 12, fontWeight: 800 }}>{nominaPendientes.length + pagosCuadPendientes.length}</span>
+                {(nominaPendientes.length + pagosCuadPendientes.length + adminStaff.length) > 0 && (
+                  <span style={{ marginLeft: 6, background: "#dc2626", color: "#fff", borderRadius: 999, padding: "1px 8px", fontSize: 12, fontWeight: 800 }}>{nominaPendientes.length + pagosCuadPendientes.length + adminStaff.length}</span>
                 )}
               </button>
+              {/* Producción (Secadora, Cuadrilla, Historial): solo la matriz (CEYRO). */}
+              {esCeyroActivo && (<>
               <button type="button" className={nominaView === "secadora" ? "active" : ""} onClick={() => setNominaView("secadora")}>🔥 Secadora</button>
               <button type="button" className={nominaView === "cuadrilla" ? "active" : ""} onClick={() => { setNominaView("cuadrilla"); refreshCuadrilla().catch(() => undefined); }}>👷‍♂️ Cuadrilla</button>
               <button type="button" className={nominaView === "historial" ? "active" : ""} onClick={() => { setNominaView("historial"); loadNominaHistory().catch(() => undefined); }}>📜 Historial de Pagos</button>
@@ -15143,9 +15139,12 @@ export function App() {
                 const db = b.oldest_pending ? String(b.oldest_pending).slice(0, 10) : "9999-99-99";
                 return da < db ? -1 : da > db ? 1 : (b.neto ?? 0) - (a.neto ?? 0);
               });
-              const totalPendientes = nominaPendientes.length + pagosCuadPendientes.length;
-              const totalMonto = nominaPendientes.reduce((a, r) => a + (r.to_pay ?? (r.pending_amount ?? 0)), 0) + cuadPendienteTotal;
-              const nada = nominaPendientes.length === 0 && pagosCuadPendientes.length === 0;
+              const adminFiltrado = adminStaff.filter((st) => coincide(st.worker_name));
+              const adminUltimoPago = new Map();
+              for (const h of adminHistory) { if (!adminUltimoPago.has(h.worker_name)) adminUltimoPago.set(h.worker_name, h.paid_at); }
+              const totalPendientes = nominaPendientes.length + pagosCuadPendientes.length + adminStaff.length;
+              const totalMonto = nominaPendientes.reduce((a, r) => a + (r.to_pay ?? (r.pending_amount ?? 0)), 0) + cuadPendienteTotal + adminPendienteTotal;
+              const nada = nominaPendientes.length === 0 && pagosCuadPendientes.length === 0 && adminStaff.length === 0;
               return (
               <div className="tablePanel">
                 <div className="reportToolbar" style={{ marginBottom: 10 }}>
@@ -15226,7 +15225,25 @@ export function App() {
                           </td>
                         </tr>
                       ))}
-                      {nominaOrden.length === 0 && cuadOrden.length === 0 && (
+                {/* Filas de sueldo administrativo del accionista activo (se pagan aquí mismo). */}
+                {adminFiltrado.map((st) => {
+                  const ult = adminUltimoPago.get(st.worker_name);
+                  return (
+                    <tr key={"a" + st.id}>
+                      <td><span className="chip">💼 Administrativo</span></td>
+                      <td><span className="chip">{st.cargo || "Admin"}</span></td>
+                      <td style={{ fontWeight: 600 }}>{st.worker_name}<div style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>{ult ? `último pago: ${new Date(ult).toLocaleDateString("es-EC")}` : "sueldo quincenal"}</div></td>
+                      <td className="num" style={{ fontWeight: 700 }}>{money(st.base_salary)}</td>
+                      <td className="num">—</td>
+                      <td className="num" style={{ fontWeight: 700, color: "#047857" }}>{money(st.base_salary)}</td>
+                      <td className="num" style={{ whiteSpace: "nowrap" }}>
+                        <button type="button" disabled={!cajaAbierta} onClick={() => abrirAdminPay(st)}
+                          style={{ padding: "7px 16px", borderRadius: 8, border: "none", cursor: cajaAbierta ? "pointer" : "not-allowed", background: cajaAbierta ? "#047857" : "#9ca3af", color: "#fff", fontWeight: 800, fontSize: 13 }}>💵 Pagar</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+                      {nominaOrden.length === 0 && cuadOrden.length === 0 && adminFiltrado.length === 0 && (
                         <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: "14px" }}>{pagoBuscar ? "Sin resultados para la búsqueda." : "Sin pagos pendientes."}</td></tr>
                       )}
                     </tbody>
@@ -15268,6 +15285,32 @@ export function App() {
                     </div>
                   );
                 })()}
+                {adminPay && (() => {
+                  const base = adminPay.staff.base_salary ?? 0;
+                  const inc = Number(adminPay.incentivo || 0);
+                  const desc = Number(adminPay.descuentos || 0);
+                  const neto = Math.max(0, base + inc - desc);
+                  return (
+                    <div className="modalOverlay" onClick={() => setAdminPay(null)}>
+                      <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 400 }}>
+                        <h3 style={{ marginTop: 0, marginBottom: 10 }}>Pagar sueldo</h3>
+                        <p style={{ margin: "0 0 12px" }}>A <strong>{adminPay.staff.worker_name}</strong>{adminPay.staff.cargo ? ` · ${adminPay.staff.cargo}` : ""}.</p>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", rowGap: 8, columnGap: 12, alignItems: "center", fontSize: 14 }}>
+                          <span>Sueldo base (quincena)</span><strong className="num">{money(base)}</strong>
+                          <span>Incentivo</span><input type="number" step="0.01" min="0" value={adminPay.incentivo} onChange={(e) => setAdminPay({ ...adminPay, incentivo: e.target.value })} placeholder="0.00" style={{ width: 110, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }} />
+                          <span>Descuentos</span><input type="number" step="0.01" min="0" value={adminPay.descuentos} onChange={(e) => setAdminPay({ ...adminPay, descuentos: e.target.value })} placeholder="0.00" style={{ width: 110, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }} />
+                          <span style={{ borderTop: "1px solid #e5e7eb", paddingTop: 8, fontWeight: 800 }}>Neto a pagar</span>
+                          <strong className="num" style={{ borderTop: "1px solid #e5e7eb", paddingTop: 8, fontWeight: 800, color: "#047857", fontSize: 17 }}>{money(neto)}</strong>
+                        </div>
+                        <p className="muted" style={{ fontSize: 12, margin: "12px 0 16px" }}>Sale de la caja abierta del accionista activo y queda guardado en el historial.</p>
+                        <div className="buttonRow" style={{ justifyContent: "flex-end", gap: 8 }}>
+                          <button type="button" onClick={() => setAdminPay(null)}>Cancelar</button>
+                          <button type="button" disabled={!(neto > 0)} onClick={() => confirmarAdminPay()} style={{ background: neto > 0 ? "#047857" : "#9ca3af", color: "#fff", border: "none", borderRadius: 8, padding: "8px 18px", fontWeight: 800, cursor: neto > 0 ? "pointer" : "not-allowed" }}>💵 Confirmar pago</button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
               );
             })()}
@@ -15282,7 +15325,7 @@ export function App() {
                 <div className="reportToolbar" style={{ marginBottom: 12 }}>
                   <div>
                     <h2 style={{ marginBottom: 2 }}>💼 Sueldo Administrativo</h2>
-                    <p className="muted" style={{ margin: 0 }}>Personal de oficina de <strong>{accName}</strong>. Sueldo fijo quincenal (+ incentivo − descuentos). El pago sale de la caja de {accName}.</p>
+                    <p className="muted" style={{ margin: 0 }}>Aquí solo se agrega y edita el personal de oficina de <strong>{accName}</strong> (cargo y sueldo quincenal). El pago se hace en la pestaña 💵 Pagos.</p>
                   </div>
                   <button type="button" className="btnSecondary" onClick={() => { loadAdminStaff().catch(() => undefined); loadAdminHistory().catch(() => undefined); }}>↻ Actualizar</button>
                 </div>
@@ -15324,8 +15367,6 @@ export function App() {
                                   <td className="num" style={{ whiteSpace: "nowrap" }}>
                                     <button type="button" className="btnGhost" title="Editar" onClick={() => editAdminStaff(st)}>✏️</button>
                                     <button type="button" className="btnGhost" title="Dar de baja" style={{ marginLeft: 6 }} onClick={() => removeAdminStaff(st)}>🗑</button>
-                                    <button type="button" disabled={!cajaAbierta} onClick={() => abrirAdminPay(st)}
-                                      style={{ marginLeft: 8, padding: "7px 16px", borderRadius: 8, border: "none", cursor: cajaAbierta ? "pointer" : "not-allowed", background: cajaAbierta ? "#047857" : "#9ca3af", color: "#fff", fontWeight: 800, fontSize: 13 }}>💵 Pagar</button>
                                   </td>
                                 </tr>
                               );
@@ -15363,32 +15404,6 @@ export function App() {
                   </div>
                 </div>
 
-                {adminPay && (() => {
-                  const base = adminPay.staff.base_salary ?? 0;
-                  const inc = Number(adminPay.incentivo || 0);
-                  const desc = Number(adminPay.descuentos || 0);
-                  const neto = Math.max(0, base + inc - desc);
-                  return (
-                    <div className="modalOverlay" onClick={() => setAdminPay(null)}>
-                      <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 400 }}>
-                        <h3 style={{ marginTop: 0, marginBottom: 10 }}>Pagar sueldo</h3>
-                        <p style={{ margin: "0 0 12px" }}>A <strong>{adminPay.staff.worker_name}</strong>{adminPay.staff.cargo ? ` · ${adminPay.staff.cargo}` : ""}.</p>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", rowGap: 8, columnGap: 12, alignItems: "center", fontSize: 14 }}>
-                          <span>Sueldo base (quincena)</span><strong className="num">{money(base)}</strong>
-                          <span>Incentivo</span><input type="number" step="0.01" min="0" value={adminPay.incentivo} onChange={(e) => setAdminPay({ ...adminPay, incentivo: e.target.value })} placeholder="0.00" style={{ width: 110, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }} />
-                          <span>Descuentos</span><input type="number" step="0.01" min="0" value={adminPay.descuentos} onChange={(e) => setAdminPay({ ...adminPay, descuentos: e.target.value })} placeholder="0.00" style={{ width: 110, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }} />
-                          <span style={{ borderTop: "1px solid #e5e7eb", paddingTop: 8, fontWeight: 800 }}>Neto a pagar</span>
-                          <strong className="num" style={{ borderTop: "1px solid #e5e7eb", paddingTop: 8, fontWeight: 800, color: "#047857", fontSize: 17 }}>{money(neto)}</strong>
-                        </div>
-                        <p className="muted" style={{ fontSize: 12, margin: "12px 0 16px" }}>Sale de la caja abierta de {accName} y queda guardado en el historial.</p>
-                        <div className="buttonRow" style={{ justifyContent: "flex-end", gap: 8 }}>
-                          <button type="button" onClick={() => setAdminPay(null)}>Cancelar</button>
-                          <button type="button" disabled={!(neto > 0)} onClick={() => confirmarAdminPay()} style={{ background: neto > 0 ? "#047857" : "#9ca3af", color: "#fff", border: "none", borderRadius: 8, padding: "8px 18px", fontWeight: 800, cursor: neto > 0 ? "pointer" : "not-allowed" }}>💵 Confirmar pago</button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })()}
               </>
               );
             })()}
