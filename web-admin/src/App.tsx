@@ -14854,7 +14854,6 @@ export function App() {
                   <nav className="cajaSubNav">
                     <button type="button" className={cuadView === "registro" ? "active" : ""} onClick={() => setCuadView("registro")}>📝 Registro</button>
                     <button type="button" className={cuadView === "resumen" ? "active" : ""} onClick={() => setCuadView("resumen")}>👥 Resumen y anticipos</button>
-                    <button type="button" className={cuadView === "actividades" ? "active" : ""} onClick={() => setCuadView("actividades")}>🏷️ Actividades y tarifas</button>
                   </nav>
 
                   <div className="cajaSubNav" style={{ gap: 8, alignItems: "end", flexWrap: "wrap" }}>
@@ -15089,39 +15088,6 @@ export function App() {
                   </section>
                   )}
 
-                  {cuadView === "actividades" && (
-                  <section className="panelGrid">
-                    <form className="formPanel" onSubmit={(e) => createActivity(e).catch((err) => addToast(err.message, "error"))}>
-                      <h2>🏷️ Nueva actividad</h2>
-                      <p className="muted">Agrega una actividad con su valor unitario. Si ya existe, actualiza su tarifa.</p>
-                      <label><span>Nombre</span>
-                        <input type="text" value={newActivityForm.name} onChange={(e) => setNewActivityForm({ ...newActivityForm, name: e.target.value })} placeholder="Ej: ENSACADO" />
-                      </label>
-                      <label><span>Valor unitario ($)</span>
-                        <input type="number" step="0.01" min="0" value={newActivityForm.unit_rate} onChange={(e) => setNewActivityForm({ ...newActivityForm, unit_rate: e.target.value })} />
-                      </label>
-                      <button className="primary">Guardar actividad</button>
-                    </form>
-
-                    <div className="tablePanel">
-                      <h2>Actividades y tarifas ({cuadActivities.length})</h2>
-                      <table className="cajaTable" style={{ marginTop: 6 }}>
-                        <thead><tr><th>Actividad</th><th>Valor unitario</th></tr></thead>
-                        <tbody>
-                          {cuadActivities.map((a) => (
-                            <tr key={a.id}>
-                              <td>{a.name}</td>
-                              <td>
-                                <input type="number" step="0.01" min="0" key={`act-${a.id}-${a.unit_rate}`} defaultValue={Number(a.unit_rate)} style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db" }} onBlur={(e) => { const v = Number(e.target.value); if (v !== Number(a.unit_rate)) updateActivityRate(a.id, v).catch((err) => addToast(err.message, "error")); }} />
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      <p className="muted" style={{ marginTop: 10 }}>Cambia una tarifa escribiendo el nuevo valor y saliendo del casillero. Los registros ya hechos conservan la tarifa que tenían.</p>
-                    </div>
-                  </section>
-                  )}
                 </>
               );
             })()}
