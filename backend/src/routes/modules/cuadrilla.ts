@@ -561,7 +561,9 @@ cuadrillaRouter.get("/summary", asyncRoute(async (req, res) => {
   const earned = await pool.query(
     `SELECT worker_name,
             COUNT(*)::int AS entradas,
-            COALESCE(SUM(subtotal), 0)::float AS total
+            COALESCE(SUM(subtotal), 0)::float AS total,
+            COALESCE(SUM(subtotal) FILTER (WHERE paid_at IS NULL), 0)::float AS pendiente,
+            COALESCE(SUM(subtotal) FILTER (WHERE paid_at IS NOT NULL), 0)::float AS pagado
      FROM cuadrilla_entries
      WHERE work_date BETWEEN $1 AND $2
      GROUP BY worker_name
@@ -580,12 +582,15 @@ cuadrillaRouter.get("/summary", asyncRoute(async (req, res) => {
 
   const rows = earned.rows.map((r) => {
     const pending = pendingByWorker.get(r.worker_name) ?? 0;
+    const pendiente = round2(Number(r.pendiente));
     return {
       worker_name: r.worker_name,
       entradas: r.entradas,
       total: round2(Number(r.total)),
+      pagado: round2(Number(r.pagado)),
       anticipos: round2(pending),
-      neto: round2(Number(r.total) - pending)
+      // Neto a pagar = lo aún NO pagado, menos los anticipos pendientes.
+      neto: round2(Math.max(0, pendiente - pending))
     };
   });
 
@@ -645,4 +650,76 @@ cuadrillaRouter.post("/advances/:id/settle", asyncRoute(async (req, res) => {
     [req.params.id, newBalance, newStatus]
   );
   res.json(result.rows[0]);
+}));
+
+// ── Pagar a una persona de la cuadrilla (liquida su neto del período) ────────
+// Espeja a /labor/pay-worker: marca como pagados sus registros no pagados del
+// rango, aplica los anticipos pendientes (más viejos primero) y saca de la caja
+// SOLO el neto restante. Todo en una transacción. Los anticipos ya habían salido
+// de caja al entregarse, por eso no se vuelven a cobrar aquí.
+cuadrillaRouter.post("/pay-worker", asyncRoute(async (req, res) => {
+  const body = z.object({
+    worker_name: z.string().min(1),
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    cash_register_id: z.string().uuid()
+  }).parse(req.body);
+  const user = (req as AuthenticatedRequest).user;
+
+  const result = await inTransaction(async (client) => {
+    const pending = await client.query(
+      `SELECT id, subtotal FROM cuadrilla_entries
+       WHERE worker_name = $1 AND paid_at IS NULL
+         AND work_date BETWEEN $2 AND $3
+       FOR UPDATE`,
+      [body.worker_name, body.from, body.to]
+    );
+    if (!pending.rowCount) throw new ApiError(400, "No hay pagos pendientes de esta cuadrilla en el período");
+
+    const gross = round2(pending.rows.reduce((s: number, r: { subtotal: string }) => s + Number(r.subtotal), 0));
+
+    // Anticipos pendientes de la persona (no atados a fecha, igual que el resumen).
+    // Se aplican del más viejo al más nuevo hasta agotar el bruto.
+    const advResult = await client.query(
+      `SELECT id, balance FROM cuadrilla_advances
+       WHERE worker_name = $1 AND status IN ('PENDING', 'PARTIAL')
+       ORDER BY issued_at ASC
+       FOR UPDATE`,
+      [body.worker_name]
+    );
+    let remaining = gross;
+    let applied = 0;
+    for (const adv of advResult.rows as Array<{ id: string; balance: string }>) {
+      if (remaining <= 0.001) break;
+      const bal = Number(adv.balance);
+      const use = round2(Math.min(bal, remaining));
+      if (use <= 0) continue;
+      const newBal = round2(bal - use);
+      await client.query(
+        `UPDATE cuadrilla_advances SET balance = $2, status = $3 WHERE id = $1`,
+        [adv.id, newBal, newBal < 0.01 ? "PAID" : "PARTIAL"]
+      );
+      applied = round2(applied + use);
+      remaining = round2(remaining - use);
+    }
+    const net = round2(Math.max(0, gross - applied));
+
+    const ids = pending.rows.map((r: { id: string }) => r.id);
+    await client.query(
+      `UPDATE cuadrilla_entries SET paid_at = now(), cash_register_id = $2 WHERE id = ANY($1)`,
+      [ids, body.cash_register_id]
+    );
+
+    if (net > 0) {
+      await client.query(
+        `INSERT INTO cash_movements
+           (cash_register_id, movement, category, reference_type, amount, description, created_by)
+         VALUES ($1, 'EXPENSE', 'PAGO_MANO_OBRA', 'cuadrilla_entries', $2, $3, $4)`,
+        [body.cash_register_id, net, `Pago cuadrilla ${body.worker_name}`, user?.id ?? null]
+      );
+    }
+    return { gross, anticipos: applied, paid: net, count: ids.length };
+  });
+
+  res.json(result);
 }));
