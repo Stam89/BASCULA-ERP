@@ -213,6 +213,8 @@ type WorkerSummary = {
   sacas: number;
   arrocillo: number;
   tulas: number;
+  /** Túneles secados en el período (solo aplica al rol SECADOR). */
+  tunnels?: number;
   base_amount: number;
   net_amount: number;
   pending_amount: number | null;
@@ -220,6 +222,108 @@ type WorkerSummary = {
   advances: number;
   to_pay: number;
 };
+
+// ── Nómina: agrupación de roles en pestañas operativas ──────────────────────
+// La BD solo guarda 4 roles (PILADOR, ESTIBADOR, SECADOR, POLVILLO), así que el
+// reparto por pestaña se resuelve aquí, en el frontend, filtrando por
+// worker_role: no hace falta ninguna ruta nueva en el backend. "planta" es el
+// cajón por defecto, de modo que un rol que no esté listado igual se muestra y
+// ninguna fila se pierde.
+type NominaGrupo = "planta" | "secadora" | "cuadrilla" | "administrativo";
+
+const NOMINA_ROLES: Record<Exclude<NominaGrupo, "planta">, string[]> = {
+  secadora: ["SECADOR", "GUARDIANIA", "GUARDIANÍA"],
+  cuadrilla: ["ESTIBADOR", "POLVILLO", "CARGA/DESCARGA", "CARGA_DESCARGA"],
+  // Todavía no hay sueldos fijos en la BD; el filtro queda listo para cuando los haya.
+  administrativo: ["ADMINISTRATIVO", "OFICINA", "CONTADOR"]
+};
+
+function nominaGrupoDe(role: string): NominaGrupo {
+  const r = (role ?? "").toUpperCase();
+  if (NOMINA_ROLES.secadora.includes(r)) return "secadora";
+  if (NOMINA_ROLES.cuadrilla.includes(r)) return "cuadrilla";
+  if (NOMINA_ROLES.administrativo.includes(r)) return "administrativo";
+  return "planta";
+}
+
+const NOMINA_GRUPO_TITULO: Record<NominaGrupo, { icono: string; titulo: string; ayuda: string; vacio: string }> = {
+  planta: { icono: "🏭", titulo: "Planta",
+    ayuda: "Piladores y operarios de planta. Los pagos se calculan solos con lo que sale de Producción, según las tarifas.",
+    vacio: "No hay pagos de planta en el período. Se generan al cerrar cada pilada en Producción." },
+  secadora: { icono: "🔥", titulo: "Secadora",
+    ayuda: "Secadores y guardianía. Cada registro es una corrida de secado (guardianía $ + $ por túnel).",
+    vacio: "No hay pagos de secadora en el período. Usa «Detectar de Secadora» para generarlos." },
+  cuadrilla: { icono: "👷‍♂️", titulo: "Cuadrilla",
+    ayuda: "Estibadores y polvillo: se cobra por tulas y sacas movidas.",
+    vacio: "No hay pagos de cuadrilla en el período." },
+  administrativo: { icono: "💼", titulo: "Personal Administrativo",
+    ayuda: "Sueldos fijos de oficina, contabilidad y administración.",
+    vacio: "No hay personal administrativo en la nómina. Hoy el sistema solo registra pagos por producción (pilador, estibador, secador y polvillo); el sueldo fijo aún no se captura en ninguna pantalla." }
+};
+
+function nominaRolLabel(role: string): string {
+  const r = (role ?? "").toUpperCase();
+  if (r === "PILADOR") return "Pilador";
+  if (r === "ESTIBADOR") return "Estibador";
+  if (r === "POLVILLO") return "Polvillo";
+  if (r === "SECADOR") return "Secador";
+  return r ? r.charAt(0) + r.slice(1).toLowerCase() : "—";
+}
+
+function nominaRolChip(role: string): string {
+  const g = nominaGrupoDe(role);
+  return g === "secadora" ? "chip warn" : g === "cuadrilla" ? "chip ok" : g === "administrativo" ? "chip" : "chip info";
+}
+
+/** Columna intermedia de la tabla de nómina (entre TRABAJADOR y A PAGAR). */
+type NominaCol = {
+  label: string;
+  /** Valor mostrado en pantalla. */
+  cell: (r: WorkerSummary) => string;
+  /** Valor para Excel/Imprimir (sin "$"); si falta se usa `cell`. */
+  plain?: (r: WorkerSummary) => string;
+  total?: (rows: WorkerSummary[]) => string;
+  totalPlain?: (rows: WorkerSummary[]) => string;
+  danger?: boolean;
+};
+
+/** Columnas intermedias por pestaña. Las fijas (A pagar / Pagado / Acciones)
+ *  son iguales en las cuatro y se dibujan aparte. */
+function nominaColumnas(grupo: NominaGrupo): NominaCol[] {
+  const n0 = (v: unknown) => Number(v ?? 0).toFixed(0);
+  const m2 = (v: unknown) => Number(v ?? 0).toFixed(2);
+  const sum = (rows: WorkerSummary[], f: (r: WorkerSummary) => number) => rows.reduce((a, r) => a + (Number(f(r)) || 0), 0);
+  const reg: NominaCol = { label: "Reg.", cell: (r) => String(r.cnt) };
+  const gano: NominaCol = { label: "Ganó", cell: (r) => money(r.base_amount), plain: (r) => m2(r.base_amount),
+    total: (rows) => money(sum(rows, (r) => r.base_amount)), totalPlain: (rows) => m2(sum(rows, (r) => r.base_amount)) };
+  const descuento = (label: string): NominaCol => ({ label, danger: true,
+    cell: (r) => ((r.advances ?? 0) > 0 ? `−${money(r.advances)}` : "—"), plain: (r) => m2(r.advances ?? 0),
+    total: (rows) => `−${money(sum(rows, (r) => r.advances ?? 0))}`, totalPlain: (rows) => m2(sum(rows, (r) => r.advances ?? 0)) });
+
+  if (grupo === "secadora") return [
+    reg,
+    { label: "Días secado", cell: (r) => n0(r.cnt) },
+    { label: "Túneles", cell: (r) => n0(r.tunnels), total: (rows) => n0(sum(rows, (r) => r.tunnels ?? 0)) },
+    gano, descuento("Anticipos")
+  ];
+  if (grupo === "cuadrilla") return [
+    reg,
+    { label: "Tulas", cell: (r) => n0(r.tulas), total: (rows) => n0(sum(rows, (r) => r.tulas ?? 0)) },
+    { label: "Sacas", cell: (r) => n0(r.sacas), total: (rows) => n0(sum(rows, (r) => r.sacas ?? 0)) },
+    gano, descuento("Anticipos")
+  ];
+  if (grupo === "administrativo") return [
+    { label: "Sueldo base", cell: (r) => money(r.base_amount), plain: (r) => m2(r.base_amount),
+      total: (rows) => money(sum(rows, (r) => r.base_amount)), totalPlain: (rows) => m2(sum(rows, (r) => r.base_amount)) },
+    { label: "Días trabajados", cell: (r) => n0(r.cnt) },
+    descuento("Descuentos")
+  ];
+  return [
+    reg,
+    { label: "QQ", cell: (r) => Number(r.qq).toFixed(2), total: (rows) => sum(rows, (r) => r.qq).toFixed(2) },
+    gano, descuento("Anticipos")
+  ];
+}
 
 type WorkerPaymentDetail = {
   id: string;
@@ -1735,7 +1839,8 @@ export function App() {
   // "A pagar" de la tabla (pending>0 ? to_pay : 0), por rol y total. Se recalcula
   // cuando cambian nominaRows (fechas, pagos o anticipos → refreshNomina).
   const nominaResumen = useMemo(() => {
-    const acc = { total: 0, PILADOR: 0, ESTIBADOR: 0, POLVILLO: 0, SECADOR: 0, OTROS: 0 };
+    const acc = { total: 0, PILADOR: 0, ESTIBADOR: 0, POLVILLO: 0, SECADOR: 0, OTROS: 0,
+      planta: 0, secadora: 0, cuadrilla: 0, administrativo: 0 };
     for (const r of nominaRows) {
       const pay = (r.pending_amount ?? 0) > 0 ? (Number(r.to_pay) || 0) : 0;
       acc.total += pay;
@@ -1744,6 +1849,8 @@ export function App() {
       else if (r.worker_role === "POLVILLO") acc.POLVILLO += pay;
       else if (r.worker_role === "SECADOR") acc.SECADOR += pay;
       else acc.OTROS += pay;
+      // Y en paralelo por pestaña operativa (Planta / Secadora / Cuadrilla / Administrativo).
+      acc[nominaGrupoDe(r.worker_role)] += pay;
     }
     return acc;
   }, [nominaRows]);
@@ -1755,7 +1862,14 @@ export function App() {
     open: false, loading: false, data: null
   });
   const [secadorSugg, setSecadorSugg] = useState<Array<{ worker_name: string; work_date: string; tunnels: number; suggested_amount: number; already_generated: boolean; dia_inicio?: string; dia_fin?: string; dias_corrida?: number }> | null>(null);
-  const [nominaView, setNominaView] = useState<"planta" | "cuadrilla" | "historial">("planta");
+  const [nominaView, setNominaView] = useState<NominaGrupo | "historial">("planta");
+  // Filas de la pestaña activa. El filtro es puramente de frontend sobre el
+  // array que ya trae /labor/summary: no se toca la petición ni el backend.
+  const nominaGrupoActivo: NominaGrupo = nominaView === "historial" ? "planta" : nominaView;
+  const nominaFiltradas = useMemo(
+    () => nominaRows.filter((r) => nominaGrupoDe(r.worker_role) === nominaGrupoActivo),
+    [nominaRows, nominaGrupoActivo]
+  );
   const nomina60Ago = (() => { const d = new Date(); d.setDate(d.getDate() - 60); return d.toISOString().slice(0, 10); })();
   const [histFrom, setHistFrom] = useState(nomina60Ago);
   const [histTo, setHistTo] = useState(nominaToday);
@@ -3641,23 +3755,23 @@ export function App() {
     printWorkerReceipt(row, h.week_start, weekEnd.toISOString().slice(0, 10)).catch(() => undefined);
   }
 
-  function nominaExportData(): { title: string; headers: string[]; rows: (string | number)[][]; totals: (string | number)[] } {
+  // Imprimir / Excel de la pestaña activa: usa exactamente las columnas que se
+  // ven en pantalla (nominaColumnas) y solo las filas ya filtradas por rol.
+  function nominaExportData(grupo: NominaGrupo, rows: WorkerSummary[]): { title: string; headers: string[]; rows: (string | number)[][]; totals: (string | number)[] } {
     const m2 = (n: number) => Number(n || 0).toFixed(2);
-    const roleLabel = (r: string) => (r === "PILADOR" ? "Pilador" : r === "ESTIBADOR" ? "Estibador" : r === "POLVILLO" ? "Polvillo" : "Secador");
-    const rows = nominaRows.map((r) => [
-      roleLabel(r.worker_role), r.worker_name, r.cnt,
-      Number(r.qq).toFixed(2), Number(r.tulas ?? 0).toFixed(0), Number(r.sacas).toFixed(0),
-      m2(r.base_amount), m2(r.advances ?? 0), m2((r.pending_amount ?? 0) > 0 ? (r.to_pay ?? 0) : 0), m2(r.paid_amount ?? 0)
+    const cols = nominaColumnas(grupo);
+    const body = rows.map((r) => [
+      nominaRolLabel(r.worker_role), r.worker_name,
+      ...cols.map((c) => (c.plain ?? c.cell)(r)),
+      m2((r.pending_amount ?? 0) > 0 ? (r.to_pay ?? 0) : 0), m2(r.paid_amount ?? 0)
     ]);
-    const t = nominaRows.reduce((a, r) => ({
-      base: a.base + r.base_amount, adv: a.adv + (r.advances ?? 0),
-      pay: a.pay + ((r.pending_amount ?? 0) > 0 ? (r.to_pay ?? 0) : 0), paid: a.paid + (r.paid_amount ?? 0)
-    }), { base: 0, adv: 0, pay: 0, paid: 0 });
+    const totalPagar = rows.reduce((a, r) => a + ((r.pending_amount ?? 0) > 0 ? (r.to_pay ?? 0) : 0), 0);
+    const totalPagado = rows.reduce((a, r) => a + (r.paid_amount ?? 0), 0);
     return {
-      title: "Nómina de trabajadores",
-      headers: ["Rol", "Trabajador", "Reg.", "QQ", "Tulas", "Sacas", "Ganó", "Anticipos", "A pagar", "Pagado"],
-      rows,
-      totals: ["TOTALES", "", "", "", "", "", m2(t.base), m2(t.adv), m2(t.pay), m2(t.paid)]
+      title: `Nómina · ${NOMINA_GRUPO_TITULO[grupo].titulo}`,
+      headers: [grupo === "administrativo" ? "Cargo" : "Rol", "Trabajador", ...cols.map((c) => c.label), "A pagar", "Pagado"],
+      rows: body,
+      totals: ["TOTALES", "", ...cols.map((c) => (c.totalPlain ? c.totalPlain(rows) : c.total ? c.total(rows) : "")), m2(totalPagar), m2(totalPagado)]
     };
   }
 
@@ -14340,8 +14454,10 @@ export function App() {
         {activeTab === "Nomina" && (
           <section className="cuentasLayout">
             <nav className="cajaSubNav">
-              <button type="button" className={nominaView === "planta" ? "active" : ""} onClick={() => setNominaView("planta")}>🏭 Planta y Secadoras</button>
-              <button type="button" className={nominaView === "cuadrilla" ? "active" : ""} onClick={() => { setNominaView("cuadrilla"); refreshCuadrilla().catch(() => undefined); }}>👷‍♂️ Cuadrilla de Carga/Descarga</button>
+              <button type="button" className={nominaView === "planta" ? "active" : ""} onClick={() => setNominaView("planta")}>🏭 Planta</button>
+              <button type="button" className={nominaView === "secadora" ? "active" : ""} onClick={() => setNominaView("secadora")}>🔥 Secadora</button>
+              <button type="button" className={nominaView === "cuadrilla" ? "active" : ""} onClick={() => { setNominaView("cuadrilla"); refreshCuadrilla().catch(() => undefined); }}>👷‍♂️ Cuadrilla</button>
+              <button type="button" className={nominaView === "administrativo" ? "active" : ""} onClick={() => setNominaView("administrativo")}>💼 Personal Administrativo</button>
               <button type="button" className={nominaView === "historial" ? "active" : ""} onClick={() => { setNominaView("historial"); loadNominaHistory().catch(() => undefined); }}>📜 Historial de Pagos</button>
             </nav>
 
@@ -14352,158 +14468,180 @@ export function App() {
               <div>
                 <div style={{ fontSize: 12, fontWeight: 600, opacity: 0.9, letterSpacing: ".03em" }}>💰 COSTO TOTAL DE NÓMINA · A PAGAR</div>
                 <div style={{ fontSize: 30, fontWeight: 800, lineHeight: 1.1 }}>{money(nominaResumen.total)}</div>
-                <div style={{ fontSize: 11, opacity: 0.85, marginTop: 2 }}>Período {nominaFrom} → {nominaTo} · Cuadrilla / Piladores / Polvillo / Secadores</div>
+                <div style={{ fontSize: 11, opacity: 0.85, marginTop: 2 }}>Período {nominaFrom} → {nominaTo} · Planta / Secadora / Cuadrilla / Administrativo</div>
               </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
-                {([["Cuadrilla", nominaResumen.ESTIBADOR], ["Piladores", nominaResumen.PILADOR], ["Polvillo", nominaResumen.POLVILLO], ["Secadores", nominaResumen.SECADOR], ["Otros", nominaResumen.OTROS]] as [string, number][])
-                  .filter(([, v]) => v > 0)
+              {/* Subtotales por pestaña operativa. Suman lo mismo que el total: cada fila
+
+                  cae en un solo grupo y "planta" es el cajón por defecto. */}
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(112px, 1fr))", gap: 10 }}>
+
+                {([["Planta", nominaResumen.planta], ["Secadora", nominaResumen.secadora], ["Cuadrilla", nominaResumen.cuadrilla], ["Administrativo", nominaResumen.administrativo]] as [string, number][])
+
                   .map(([label, v]) => (
-                    <span key={label} style={{ display: "inline-flex", alignItems: "baseline", gap: 6, background: "rgba(255,255,255,.18)", borderRadius: 999, padding: "5px 12px", fontSize: 13, whiteSpace: "nowrap" }}>
-                      <span style={{ opacity: 0.9 }}>{label}:</span>
-                      <strong style={{ fontWeight: 800 }}>{money(v)}</strong>
-                    </span>
+
+                    <div key={label} style={{ background: "rgba(255,255,255,.18)", borderRadius: 10, padding: "7px 12px", textAlign: "right" }}>
+
+                      <div style={{ fontSize: 11, opacity: 0.9, whiteSpace: "nowrap" }}>{label}</div>
+
+                      <strong style={{ fontWeight: 800, fontSize: 16 }}>{money(v)}</strong>
+
+                    </div>
+
                   ))}
-                {nominaResumen.total === 0 && <span style={{ fontSize: 12, opacity: 0.85 }}>Sin pagos pendientes en el período.</span>}
+
               </div>
             </div>
 
-            {nominaView === "planta" && (
-            <div className="panelGrid" style={{ alignItems: "start" }}>
-            {/* Col 1: Nómina Pilador y Estibador (filtro de fechas + lista de pagos) */}
-            <div className="tablePanel">
-            <div className="reportToolbar" style={{ marginBottom: 10 }}>
-              <div>
-                <h2 style={{ marginBottom: 2 }}>👷 Nómina · Pilador y Estibador</h2>
-                <p className="muted" style={{ margin: 0 }}>Pagos calculados automáticamente de lo que sale de Producción, según las tarifas.</p>
-              </div>
-              <div className="reportDates">
-                <label><span>Desde</span><input type="date" value={nominaFrom} max={nominaTo} onChange={(e) => setNominaFrom(e.target.value)} /></label>
-                <label><span>Hasta</span><input type="date" value={nominaTo} min={nominaFrom} onChange={(e) => setNominaTo(e.target.value)} /></label>
-                <button type="button" className="primary" disabled={nominaBusy} onClick={() => refreshNomina().catch(() => undefined)}>{nominaBusy ? "Cargando…" : "Ver"}</button>
-              </div>
-              {nominaRows.length > 0 && (
-                <div className="reportExportBtns">
-                  <button type="button" className="btnSecondary" onClick={() => { const e = nominaExportData(); printReport(e.title, e.headers, e.rows, e.totals); }}>🖨 Imprimir</button>
-                  <button type="button" className="btnSecondary" onClick={() => { const e = nominaExportData(); exportReportCsv(e.headers, e.rows, `nomina_${nominaFrom}_${nominaTo}.csv`); }}>📥 Excel</button>
+            {/* Pestañas operativas (Planta / Secadora / Cuadrilla / Administrativo).
+                Las cuatro comparten la misma tabla, el mismo estado y las mismas
+                acciones; solo cambian el filtro por rol y las columnas del medio. */}
+            {nominaView !== "historial" && (() => {
+              const grupo = nominaGrupoActivo;
+              const info = NOMINA_GRUPO_TITULO[grupo];
+              const cols = nominaColumnas(grupo);
+              const rows = nominaFiltradas;
+              const totalPagar = rows.reduce((a, r) => a + ((r.pending_amount ?? 0) > 0 ? (r.to_pay ?? 0) : 0), 0);
+              const totalPagado = rows.reduce((a, r) => a + (r.paid_amount ?? 0), 0);
+              return (
+              <div className={grupo === "secadora" ? "panelGrid" : undefined} style={{ alignItems: "start" }}>
+              <div className="tablePanel">
+              <div className="reportToolbar" style={{ marginBottom: 10 }}>
+                <div>
+                  <h2 style={{ marginBottom: 2 }}>{info.icono} Nómina · {info.titulo}</h2>
+                  <p className="muted" style={{ margin: 0 }}>{info.ayuda}</p>
                 </div>
-              )}
-            </div>
-
-            {!dashboard.current_cash_register && nominaRows.some((r) => (r.pending_amount ?? 0) > 0) && (
-              <div className="alertBox">Abre una caja para poder registrar los pagos.</div>
-            )}
-
-            {nominaRows.length === 0 ? (
-              <div className="emptyState"><div className="emptyIcon">👷</div><p>No hay pagos de trabajadores en el período. Se generan al cerrar cada pilada en Producción.</p></div>
-            ) : (
-              <div style={{ overflowX: "auto" }}>
-                  <table className="cajaTable">
-                    <thead>
-                      <tr>
-                        <th>Rol</th><th>Trabajador</th>
-                        <th className="num">Reg.</th><th className="num">QQ</th><th className="num">Tulas</th><th className="num">Sacas</th>
-                        <th className="num">Ganó</th><th className="num">Anticipos</th><th className="num">A pagar</th><th className="num">Pagado</th><th />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {nominaRows.map((r, i) => {
-                        const pending = r.pending_amount ?? 0;
-                        const toPay = r.to_pay ?? pending;
-                        return (
-                          <tr key={i}>
-                            <td><span className={r.worker_role === "PILADOR" ? "chip info" : r.worker_role === "ESTIBADOR" ? "chip ok" : r.worker_role === "POLVILLO" ? "chip warn" : "chip warn"}>{r.worker_role === "PILADOR" ? "Pilador" : r.worker_role === "ESTIBADOR" ? "Estibador" : r.worker_role === "POLVILLO" ? "Polvillo" : "Secador"}</span></td>
-                            <td style={{ fontWeight: 600 }}>{r.worker_name}</td>
-                            <td className="num">{r.cnt}</td>
-                            <td className="num">{Number(r.qq).toFixed(2)}</td>
-                            <td className="num">{Number(r.tulas ?? 0).toFixed(0)}</td>
-                            <td className="num">{Number(r.sacas).toFixed(0)}</td>
-                            <td className="num" style={{ fontWeight: 700 }}>{money(r.base_amount)}</td>
-                            <td className="num" style={{ color: (r.advances ?? 0) > 0 ? "var(--c-danger)" : "inherit" }}>{(r.advances ?? 0) > 0 ? `−${money(r.advances)}` : "—"}</td>
-                            <td className="num" style={{ fontWeight: 700, color: toPay > 0 ? "var(--c-danger)" : "var(--c-success)" }}>{pending > 0 ? money(toPay) : "—"}</td>
-                            <td className="num">{money(r.paid_amount ?? 0)}</td>
-                            <td className="num" style={{ whiteSpace: "nowrap" }}>
-                              <button type="button" className="btnGhost" title="Ver detalle del cálculo" onClick={() => loadNominaPaymentDetail(r)}>🔍</button>
-                              <button type="button" className="btnGhost" title="Recibo semanal (Rol de Pago)" style={{ marginLeft: 6 }} onClick={() => openReciboSemanal(r).catch(() => undefined)}>🧾</button>
-                              {pending > 0 ? (
-                                <>
-                                  <button type="button" className="btnGhost" style={{ marginLeft: 6 }} onClick={() => registerAdvance(r)}>Anticipo</button>
-                                  <button type="button" className="liqAbonoBtn" style={{ marginLeft: 6 }} onClick={() => payWorkerWeek(r)}>💵 Pagar</button>
-                                </>
-                              ) : <span className="chip ok" style={{ marginLeft: 6 }}>Pagado</span>}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                    <tfoot>
-                      <tr>
-                        <td colSpan={6} style={{ fontWeight: 700 }}>TOTALES</td>
-                        <td className="num" style={{ fontWeight: 700 }}>{money(nominaRows.reduce((a, r) => a + r.base_amount, 0))}</td>
-                        <td className="num" style={{ fontWeight: 700, color: "var(--c-danger)" }}>−{money(nominaRows.reduce((a, r) => a + (r.advances ?? 0), 0))}</td>
-                        <td className="num" style={{ fontWeight: 700, color: "var(--c-danger)" }}>{money(nominaRows.reduce((a, r) => a + ((r.pending_amount ?? 0) > 0 ? (r.to_pay ?? 0) : 0), 0))}</td>
-                        <td className="num" style={{ fontWeight: 700 }}>{money(nominaRows.reduce((a, r) => a + (r.paid_amount ?? 0), 0))}</td>
-                        <td />
-                      </tr>
-                    </tfoot>
-                  </table>
+                <div className="reportDates">
+                  <label><span>Desde</span><input type="date" value={nominaFrom} max={nominaTo} onChange={(e) => setNominaFrom(e.target.value)} /></label>
+                  <label><span>Hasta</span><input type="date" value={nominaTo} min={nominaFrom} onChange={(e) => setNominaTo(e.target.value)} /></label>
+                  <button type="button" className="primary" disabled={nominaBusy} onClick={() => refreshNomina().catch(() => undefined)}>{nominaBusy ? "Cargando…" : "Ver"}</button>
                 </div>
-            )}
-            </div>
-
-            {/* Col 2: Secador / Guardianía (detección desde Secadora) */}
-            <div className="tablePanel">
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                  <div>
-                    <h2 style={{ marginBottom: 2 }}>🌡️ Secador · desde Secadora</h2>
-                    <p className="muted" style={{ margin: 0 }}>Detecta los días de secado (guardianía $ + $ por túnel). Los días de solo guardianía se agregan a mano.</p>
+                {rows.length > 0 && (
+                  <div className="reportExportBtns">
+                    <button type="button" className="btnSecondary" onClick={() => { const e = nominaExportData(grupo, rows); printReport(e.title, e.headers, e.rows, e.totals); }}>🖨 Imprimir</button>
+                    <button type="button" className="btnSecondary" onClick={() => { const e = nominaExportData(grupo, rows); exportReportCsv(e.headers, e.rows, `nomina_${grupo}_${nominaFrom}_${nominaTo}.csv`); }}>📥 Excel</button>
                   </div>
-                  <button type="button" className="btnSecondary" onClick={() => loadSecadorSuggestions().catch(() => undefined)}>🔍 Detectar de Secadora</button>
-                </div>
-                {secadorSugg && secadorSugg.length > 0 && (
-                  <>
-                    <p className="muted" style={{ margin: "4px 0 0", fontSize: 12 }}>
-                      Cada fila es una <strong>corrida</strong> (por fecha de llenado del motor), no un día calendario: una corrida que cruza la medianoche cuenta como una sola guardianía. Para pagar guardianías de días independientes, agrégalas a mano.
-                    </p>
-                    <table className="cajaTable" style={{ marginTop: 8 }}>
-                      <thead><tr><th>Corrida</th><th>Secador</th><th className="num">Túneles</th><th className="num">Pago</th><th className="num">Estado</th></tr></thead>
+                )}
+              </div>
+
+              {!dashboard.current_cash_register && rows.some((r) => (r.pending_amount ?? 0) > 0) && (
+                <div className="alertBox">Abre una caja para poder registrar los pagos.</div>
+              )}
+
+              {rows.length === 0 ? (
+                <div className="emptyState"><div className="emptyIcon">{info.icono}</div><p>{info.vacio}</p></div>
+              ) : (
+                <div style={{ overflowX: "auto" }}>
+                    <table className="cajaTable">
+                      <thead>
+                        <tr>
+                          <th>{grupo === "administrativo" ? "Cargo" : "Rol"}</th><th>Trabajador</th>
+                          {cols.map((c) => <th key={c.label} className="num">{c.label}</th>)}
+                          <th className="num">A pagar</th><th className="num">Pagado</th><th />
+                        </tr>
+                      </thead>
                       <tbody>
-                        {secadorSugg.map((s, i) => {
-                          const multiDia = (s.dias_corrida ?? 1) > 1 && s.dia_inicio && s.dia_fin;
+                        {rows.map((r, i) => {
+                          const pending = r.pending_amount ?? 0;
+                          const toPay = r.to_pay ?? pending;
                           return (
-                          <tr key={i}>
-                            <td>
-                              {new Date(s.work_date).toLocaleDateString("es-EC")}
-                              {multiDia && (
-                                <span className="chip info" style={{ marginLeft: 6, fontSize: 11 }} title={`Corrida continua del ${s.dia_inicio} al ${s.dia_fin}`}>
-                                  🔁 {new Date(s.dia_inicio as string).toLocaleDateString("es-EC")}–{new Date(s.dia_fin as string).toLocaleDateString("es-EC")} · {s.dias_corrida} días
-                                </span>
-                              )}
-                            </td>
-                            <td>{s.worker_name}</td>
-                            <td className="num">{s.tunnels}</td>
-                            <td className="num" style={{ fontWeight: 700 }}>{money(s.suggested_amount)}</td>
-                            <td className="num">{s.already_generated ? <span className="chip ok">Generado</span> : <span className="chip warn">Nuevo</span>}</td>
-                          </tr>
+                            <tr key={i}>
+                              <td><span className={nominaRolChip(r.worker_role)}>{nominaRolLabel(r.worker_role)}</span></td>
+                              <td style={{ fontWeight: 600 }}>{r.worker_name}</td>
+                              {cols.map((c) => (
+                                <td key={c.label} className="num"
+                                  style={{ fontWeight: c.total && !c.danger ? 700 : undefined,
+                                    color: c.danger && (r.advances ?? 0) > 0 ? "var(--c-danger)" : undefined }}>{c.cell(r)}</td>
+                              ))}
+                              <td className="num" style={{ fontWeight: 700, color: "#047857" }}>{pending > 0 ? money(toPay) : "—"}</td>
+                              <td className="num">{money(r.paid_amount ?? 0)}</td>
+                              <td className="num" style={{ whiteSpace: "nowrap" }}>
+                                <button type="button" className="btnGhost" title="Ver detalle del cálculo" onClick={() => loadNominaPaymentDetail(r)}>🔍</button>
+                                <button type="button" className="btnGhost" title="Recibo semanal (Rol de Pago)" style={{ marginLeft: 6 }} onClick={() => openReciboSemanal(r).catch(() => undefined)}>🧾</button>
+                                {pending > 0 ? (
+                                  <>
+                                    <button type="button" className="btnGhost" style={{ marginLeft: 6 }} onClick={() => registerAdvance(r)}>Anticipo</button>
+                                    <button type="button" className="liqAbonoBtn" style={{ marginLeft: 6 }} onClick={() => payWorkerWeek(r)}>💵 Pagar</button>
+                                  </>
+                                ) : <span className="chip ok" style={{ marginLeft: 6 }}>Pagado</span>}
+                              </td>
+                            </tr>
                           );
                         })}
                       </tbody>
+                      <tfoot>
+                        <tr>
+                          <td colSpan={2} style={{ fontWeight: 700 }}>TOTALES</td>
+                          {cols.map((c) => (
+                            <td key={c.label} className="num" style={{ fontWeight: 700, color: c.danger ? "var(--c-danger)" : undefined }}>{c.total ? c.total(rows) : ""}</td>
+                          ))}
+                          <td className="num" style={{ fontWeight: 700, color: "#047857" }}>{money(totalPagar)}</td>
+                          <td className="num" style={{ fontWeight: 700 }}>{money(totalPagado)}</td>
+                          <td />
+                        </tr>
+                      </tfoot>
                     </table>
-                    <button
-                      type="button"
-                      className="primary"
-                      style={{ marginTop: 10 }}
-                      onClick={() => generateSecadorDays(secadorSugg.filter((s) => !s.already_generated).map((s) => ({ worker_name: s.worker_name, work_date: s.work_date.slice(0, 10), tunnels: s.tunnels }))).catch((e) => addToast(e.message, "error"))}
-                    >
-                      Generar pagos de los días nuevos
-                    </button>
-                  </>
-                )}
-                {secadorSugg && secadorSugg.length === 0 && (
-                  <div className="emptyState" style={{ padding: "22px 20px" }}><p>No hay días de secado en el período. Registra el secado en la pestaña Secadoras (con el nombre del secador).</p></div>
-                )}
-            </div>
-            </div>
-            )}
+                  </div>
+              )}
+              </div>
+
+              {/* Detección desde Secadora: solo en su pestaña, arriba a la derecha. */}
+              {grupo === "secadora" && (
+              <div className="tablePanel">
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                    <div>
+                      <h2 style={{ marginBottom: 2 }}>🌡️ Secador · desde Secadora</h2>
+                      <p className="muted" style={{ margin: 0 }}>Detecta los días de secado (guardianía $ + $ por túnel). Los días de solo guardianía se agregan a mano.</p>
+                    </div>
+                    <button type="button" className="btnSecondary" onClick={() => loadSecadorSuggestions().catch(() => undefined)}>🔍 Detectar de Secadora</button>
+                  </div>
+                  {secadorSugg && secadorSugg.length > 0 && (
+                    <>
+                      <p className="muted" style={{ margin: "4px 0 0", fontSize: 12 }}>
+                        Cada fila es una <strong>corrida</strong> (por fecha de llenado del motor), no un día calendario: una corrida que cruza la medianoche cuenta como una sola guardianía. Para pagar guardianías de días independientes, agrégalas a mano.
+                      </p>
+                      <table className="cajaTable" style={{ marginTop: 8 }}>
+                        <thead><tr><th>Corrida</th><th>Secador</th><th className="num">Túneles</th><th className="num">Pago</th><th className="num">Estado</th></tr></thead>
+                        <tbody>
+                          {secadorSugg.map((s, i) => {
+                            const multiDia = (s.dias_corrida ?? 1) > 1 && s.dia_inicio && s.dia_fin;
+                            return (
+                            <tr key={i}>
+                              <td>
+                                {new Date(s.work_date).toLocaleDateString("es-EC")}
+                                {multiDia && (
+                                  <span className="chip info" style={{ marginLeft: 6, fontSize: 11 }} title={`Corrida continua del ${s.dia_inicio} al ${s.dia_fin}`}>
+                                    🔁 {new Date(s.dia_inicio as string).toLocaleDateString("es-EC")}–{new Date(s.dia_fin as string).toLocaleDateString("es-EC")} · {s.dias_corrida} días
+                                  </span>
+                                )}
+                              </td>
+                              <td>{s.worker_name}</td>
+                              <td className="num">{s.tunnels}</td>
+                              <td className="num" style={{ fontWeight: 700 }}>{money(s.suggested_amount)}</td>
+                              <td className="num">{s.already_generated ? <span className="chip ok">Generado</span> : <span className="chip warn">Nuevo</span>}</td>
+                            </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                      <button
+                        type="button"
+                        className="primary"
+                        style={{ marginTop: 10 }}
+                        onClick={() => generateSecadorDays(secadorSugg.filter((s) => !s.already_generated).map((s) => ({ worker_name: s.worker_name, work_date: s.work_date.slice(0, 10), tunnels: s.tunnels }))).catch((e) => addToast(e.message, "error"))}
+                      >
+                        Generar pagos de los días nuevos
+                      </button>
+                    </>
+                  )}
+                  {secadorSugg && secadorSugg.length === 0 && (
+                    <div className="emptyState" style={{ padding: "22px 20px" }}><p>No hay días de secado en el período. Registra el secado en la pestaña Secadoras (con el nombre del secador).</p></div>
+                  )}
+              </div>
+              )}
+              </div>
+              );
+            })()}
 
             {/* ── Cuadrilla de Carga/Descarga (registro rápido) ── */}
             {nominaView === "cuadrilla" && (() => {
