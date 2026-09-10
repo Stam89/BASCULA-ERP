@@ -417,6 +417,7 @@ laborRouter.get("/summary", asyncRoute(async (req, res) => {
             SUM(wp.sacas)::float sacas,
             SUM(wp.arrocillo)::float arrocillo,
             SUM(wp.tulas)::float tulas,
+            SUM(wp.tunnels)::int tunnels,
             SUM(wp.base_amount)::float base_amount,
             SUM(wp.net_amount)::float net_amount,
             SUM(wp.net_amount) FILTER (WHERE wp.status = 'PENDING')::float pending_amount,
