@@ -727,3 +727,58 @@ cuadrillaRouter.post("/pay-worker", asyncRoute(async (req, res) => {
 
   res.json(result);
 }));
+
+// ── Recibo (Rol de Pago) de una cuadrilla: lista sus registros pendientes ────
+// Devuelve la MISMA forma que /labor/worker-receipt para reusar el modal del
+// frontend. Por defecto solo lo pendiente (paid_at IS NULL).
+cuadrillaRouter.get("/worker-receipt", asyncRoute(async (req, res) => {
+  const q = z.object({
+    worker_name: z.string().min(1),
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    status: z.enum(["pending", "paid", "all"]).optional().default("pending")
+  }).parse(req.query);
+  const from = q.from ?? "2000-01-01";
+  const to = q.to ?? "2999-12-31";
+  const paidCond = q.status === "pending" ? "AND paid_at IS NULL" : q.status === "paid" ? "AND paid_at IS NOT NULL" : "";
+
+  const recs = await pool.query(
+    `SELECT id, work_date::date AS fecha, activity_name,
+            quantity::float AS qty, unit_rate::float AS rate, subtotal::float AS subtotal, paid_at
+       FROM cuadrilla_entries
+      WHERE worker_name = $1 AND work_date BETWEEN $2 AND $3 ${paidCond}
+      ORDER BY work_date ASC, created_at ASC`,
+    [q.worker_name, from, to]
+  );
+
+  const rows = recs.rows.map((r: Record<string, unknown>) => {
+    const qty = Number(r.qty) || 0;
+    const rate = Number(r.rate) || 0;
+    return {
+      fecha: r.fecha,
+      concepto: (r.activity_name as string) || "Trabajo de cuadrilla",
+      lote: null,
+      cantidad: qty ? `${qty}` : "—",
+      tarifa: rate ? `$${rate.toFixed(2)}/u` : "—",
+      subtotal: round2(Number(r.subtotal) || 0),
+      status: r.paid_at ? "PAID" : "PENDING"
+    };
+  });
+
+  const earned = round2(rows.reduce((s, r) => s + r.subtotal, 0));
+  const adv = await pool.query(
+    `SELECT COALESCE(SUM(balance), 0)::float total FROM cuadrilla_advances
+      WHERE worker_name = $1 AND status IN ('PENDING', 'PARTIAL')`,
+    [q.worker_name]
+  );
+  const advances = round2(Number(adv.rows[0].total));
+  const net = round2(Math.max(0, earned - advances));
+
+  res.json({
+    worker: { role: "CUADRILLA", name: q.worker_name },
+    range: { from, to },
+    rows,
+    totals: { earned, advances, net },
+    rates: {}
+  });
+}));

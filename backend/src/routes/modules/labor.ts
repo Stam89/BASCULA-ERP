@@ -326,7 +326,8 @@ laborRouter.get("/worker-receipt", asyncRoute(async (req, res) => {
     role: z.enum(["PILADOR", "ESTIBADOR", "SECADOR", "POLVILLO"]),
     name: z.string().min(1),
     from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    status: z.enum(["PENDING", "PAID"]).optional()
   }).parse(req.query);
 
   const rates = await getRates();
@@ -341,8 +342,9 @@ laborRouter.get("/worker-receipt", asyncRoute(async (req, res) => {
          ON wp.reference_type IN ('processing_batch', 'processing_batches') AND b.id = wp.reference_id
        LEFT JOIN lots l ON l.id = b.lot_id
       WHERE wp.worker_role = $1 AND wp.worker_name = $2 AND wp.work_date BETWEEN $3 AND $4
+        ${q.status ? "AND wp.status = $5" : ""}
       ORDER BY wp.work_date ASC, wp.created_at ASC`,
-    [q.role, q.name, q.from, q.to]
+    q.status ? [q.role, q.name, q.from, q.to, q.status] : [q.role, q.name, q.from, q.to]
   );
 
   const rows = recs.rows.map((r: Record<string, unknown>) => {
@@ -381,7 +383,7 @@ laborRouter.get("/worker-receipt", asyncRoute(async (req, res) => {
   const earned = round2(rows.reduce((s, r) => s + r.subtotal, 0));
   const adv = await pool.query(
     `SELECT COALESCE(SUM(amount), 0)::float total FROM worker_advances
-      WHERE worker_role = $1 AND worker_name = $2 AND status <> 'CANCELLED' AND advance_date BETWEEN $3 AND $4`,
+      WHERE worker_role = $1 AND worker_name = $2 AND advance_date BETWEEN $3 AND $4 AND status ${q.status === "PENDING" ? "= 'PENDING'" : "<> 'CANCELLED'"}`,
     [q.role, q.name, q.from, q.to]
   );
   const advances = round2(Number(adv.rows[0].total));
