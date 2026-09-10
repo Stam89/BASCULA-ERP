@@ -216,6 +216,52 @@ lotsRouter.get("/dry-in-storage", asyncRoute(async (req, res) => {
   res.json(result.rows);
 }));
 
+// Lotes de SERVICIO (maquila) ya secados y disponibles para cobrar SOLO el
+// secado: mismo criterio que dry-in-storage (secado COMPLETED + VACIADO, sin
+// pilar) pero acotado a is_maquila = true y excluyendo los que ya tienen un
+// cobro de secado registrado (reference_type='secado_service'). Alimenta el
+// formulario "Solo Servicio de Secado".
+lotsRouter.get("/service-dried-lots", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const result = await pool.query(
+    `SELECT l.id AS lot_id, l.lot_code, l.farmer_id, f.full_name AS farmer_name,
+            COALESCE(SUM(t.quintals), 0)::float AS quintals
+     FROM lots l
+     LEFT JOIN farmers f ON f.id = l.farmer_id
+     LEFT JOIN weighing_tickets t ON t.lot_id = l.id
+     WHERE l.accionista_id = $1
+       AND l.is_maquila = true
+       AND l.status = 'WEIGHED'
+       AND EXISTS (
+         SELECT 1
+         FROM drying_tunnel_reports d
+         JOIN drying_tunnel_cuadrilla c
+           ON c.drying_report_id = d.id AND c.momento = 'VACIADO'
+         WHERE d.lot_id = l.id
+           AND d.status = 'COMPLETED'
+           AND d.apartado_arianos = false
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM drying_tunnel_reports d
+         WHERE d.lot_id = l.id AND d.status = 'IN_PROGRESS'
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM processing_batches b
+         WHERE b.lot_id = l.id AND b.status <> 'CANCELLED'
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM accounts_receivable ar
+         WHERE ar.reference_type = 'secado_service' AND ar.reference_id = l.id
+       )
+     GROUP BY l.id, f.full_name
+     HAVING COALESCE(SUM(t.quintals), 0) > 0
+     ORDER BY l.created_at DESC
+     LIMIT 500`,
+    [accionistaId]
+  );
+  res.json(result.rows);
+}));
+
 lotsRouter.get("/:id", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const lot = await pool.query(

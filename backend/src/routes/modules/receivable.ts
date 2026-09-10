@@ -22,12 +22,20 @@ receivableRouter.get("/", asyncRoute(async (req, res) => {
             --  · cobro de matriz  -> el socio (matriz_service_charges)
             --  · cargo por sacos  -> el socio (matriz_packaging_charges)
             -- Antes estas cuentas salían sin nombre y se veían como "—".
+            -- fr: cliente de servicio (agricultor) para pilado maquila y solo-secado.
             COALESCE(c.full_name, dest.name, ps_acc.name, ps.client_name,
-                     msc_acc.name, mpc_acc.name) AS customer_name,
+                     msc_acc.name, mpc_acc.name, fr.full_name) AS customer_name,
             c.phone     AS customer_phone,
-            s.sale_number
+            s.sale_number,
+            -- Rendimiento del lote (subproductos entregados al cliente), en QQ.
+            -- Solo existe cuando el lote fue pilado (produccion). QQ = kg / 45.359237.
+            ROUND((py.white_rice_kg      / 45.359237)::numeric, 2)::float AS rinde_flor_qq,
+            ROUND((py.broken_rice_kg     / 45.359237)::numeric, 2)::float AS rinde_medio_qq,
+            ROUND((py.fine_broken_rice_kg/ 45.359237)::numeric, 2)::float AS rinde_fino_qq,
+            ROUND((py.bran_kg            / 45.359237)::numeric, 2)::float AS rinde_polvillo_qq
      FROM accounts_receivable ar
      LEFT JOIN customers c ON c.id = ar.customer_id
+     LEFT JOIN farmers fr  ON fr.id = ar.farmer_id
      LEFT JOIN sales s     ON s.id = ar.sale_id
      LEFT JOIN lot_transfers lt ON lt.receivable_id = ar.id
      LEFT JOIN accionistas dest ON dest.id = lt.to_accionista_id
@@ -37,6 +45,13 @@ receivableRouter.get("/", asyncRoute(async (req, res) => {
      LEFT JOIN accionistas msc_acc ON msc_acc.id = msc.client_accionista_id
      LEFT JOIN matriz_packaging_charges mpc ON mpc.receivable_id = ar.id
      LEFT JOIN accionistas mpc_acc ON mpc_acc.id = mpc.client_accionista_id
+     LEFT JOIN LATERAL (
+       SELECT py0.white_rice_kg, py0.broken_rice_kg, py0.fine_broken_rice_kg, py0.bran_kg
+       FROM production_yields py0
+       WHERE py0.lot_id = ps.lot_id
+       ORDER BY py0.created_at DESC
+       LIMIT 1
+     ) py ON true
      WHERE ar.status IN ('CONFIRMED','PARTIAL')
        AND ar.balance > 0
        AND ar.accionista_id = $1

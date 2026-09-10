@@ -202,7 +202,8 @@ processFlowRouter.get("/drying/reports", asyncRoute(async (req, res) => {
                   'lot_code', dl.lot_code,
                   'farmer_name', dl.farmer_name,
                   'net_weight_kg', dl.net_weight_kg,
-                  'quintals', dl.quintals
+                  'quintals', dl.quintals,
+                  'is_maquila', COALESCE(ml.is_maquila, false)
                 )
                 ORDER BY dl.created_at ASC
               ) FILTER (WHERE dl.lot_id IS NOT NULL),
@@ -211,6 +212,7 @@ processFlowRouter.get("/drying/reports", asyncRoute(async (req, res) => {
      FROM drying_tunnel_reports d
      JOIN lots l ON l.id = d.lot_id
      LEFT JOIN drying_tunnel_report_lots dl ON dl.drying_report_id = d.id
+     LEFT JOIN lots ml ON ml.id = dl.lot_id
      WHERE l.accionista_id = $1
      GROUP BY d.id
      ORDER BY d.created_at DESC

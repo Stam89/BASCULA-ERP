@@ -127,3 +127,67 @@ cobrosRouter.post("/", asyncRoute(async (req, res) => {
 
   res.status(201).json(result);
 }));
+
+// POST cobro de SOLO SECADO a un cliente de servicio (maquila): el lote se secó
+// pero NO se pila. Genera la Cuenta por Cobrar de CEYRO contra el cliente
+// (agricultor) con concepto "Servicio de Secado - Lote X". El cliente es externo
+// (agricultor), así que no lleva cuenta por pagar espejo. La tarifa por QQ sale
+// de la config global (labor_rates.secado_servicio_per_qq) pero puede
+// sobreescribirse en el cobro.
+const CEYRO_ID = "00000000-0000-0000-0000-000000000001";
+cobrosRouter.post("/secado", asyncRoute(async (req, res) => {
+  const authReq = req as AuthenticatedRequest;
+  const provider = authReq.accionistaId ?? null;
+  const body = z.object({
+    lot_id: z.string().uuid(),
+    rate_per_qq: z.number().nonnegative().optional(),
+    created_by: z.string().uuid().optional()
+  }).parse(req.body);
+
+  if (!provider) throw new ApiError(400, "Selecciona un accionista.");
+  const prov = await pool.query("SELECT tipo FROM accionistas WHERE id = $1", [provider]);
+  if (prov.rows[0]?.tipo !== "MATRIZ") throw new ApiError(403, "Solo la matriz (CEYRO) registra el cobro de secado.");
+
+  const result = await inTransaction(async (tx) => {
+    // El lote debe existir, ser de servicio (maquila) y no estar cobrado aún.
+    const lotRow = await tx.query(
+      `SELECT l.id, l.lot_code, l.is_maquila, l.farmer_id, f.full_name AS farmer_name,
+              COALESCE((SELECT SUM(t.quintals) FROM weighing_tickets t WHERE t.lot_id = l.id), 0)::float AS quintals
+       FROM lots l
+       LEFT JOIN farmers f ON f.id = l.farmer_id
+       WHERE l.id = $1 AND l.accionista_id = $2
+       FOR UPDATE OF l`,
+      [body.lot_id, provider]
+    );
+    if (!lotRow.rowCount) throw new ApiError(404, "Lote no encontrado");
+    const lot = lotRow.rows[0];
+    if (!lot.is_maquila) throw new ApiError(400, "El lote no es de servicio (maquila).");
+    const dup = await tx.query(
+      "SELECT 1 FROM accounts_receivable WHERE reference_type = 'secado_service' AND reference_id = $1 LIMIT 1",
+      [body.lot_id]
+    );
+    if (dup.rowCount) throw new ApiError(409, "Este lote ya tiene un cobro de secado registrado.");
+
+    const qq = round2(Number(lot.quintals) || 0);
+    if (qq <= 0) throw new ApiError(400, "El lote no tiene quintales para cobrar.");
+    let rate = body.rate_per_qq;
+    if (rate == null) {
+      const rr = await tx.query("SELECT COALESCE(secado_servicio_per_qq, 0)::float AS r FROM labor_rates WHERE id = 1");
+      rate = Number(rr.rows[0]?.r ?? 0);
+    }
+    const monto = round2(qq * rate);
+    if (monto <= 0) throw new ApiError(400, "Configura la tarifa de secado (mayor a 0) para cobrar.");
+    const clienteName = lot.farmer_name ?? "cliente de servicio";
+    const desc = `Servicio de Secado - Lote ${lot.lot_code} (${qq} QQ × $${rate}) - ${clienteName}`;
+
+    const ar = await tx.query(
+      `INSERT INTO accounts_receivable (accionista_id, farmer_id, reference_type, reference_id, description, amount, balance, status)
+       VALUES ($1, $2, 'secado_service', $3, $4, $5, $5, 'CONFIRMED') RETURNING id`,
+      [CEYRO_ID, lot.farmer_id ?? null, body.lot_id, desc, monto]
+    );
+
+    return { receivable_id: ar.rows[0].id, lot_code: lot.lot_code, cliente: clienteName, quintals: qq, rate_per_qq: rate, monto };
+  });
+
+  res.status(201).json(result);
+}));

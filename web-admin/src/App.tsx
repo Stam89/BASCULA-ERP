@@ -190,6 +190,8 @@ type LaborRates = {
   precio_diesel: number;
   /** Pago a la cuadrilla por QQ de secado en tendal (patio). */
   tendal_per_qq: number;
+  /** Tarifa global de SECADO como servicio al cliente (maquila): $ por QQ. */
+  secado_servicio_per_qq: number;
 };
 
 const defaultLaborRates: LaborRates = {
@@ -205,7 +207,8 @@ const defaultLaborRates: LaborRates = {
   precio_gas_bombona: 0,
   precio_gas_cilindro: 0,
   precio_diesel: 0,
-  tendal_per_qq: 0
+  tendal_per_qq: 0,
+  secado_servicio_per_qq: 0
 };
 
 type WorkerSummary = {
@@ -582,6 +585,9 @@ type ProductionResult = {
     serviceRatePerQq: number;
     serviceAmount: number;
     receivableId: string;
+    piladoAmount?: number;
+    secadoRatePerQq?: number;
+    secadoAmount?: number;
   };
   // Cobro de pilado generado al finalizar (a otro accionista o cliente externo).
   servicio_pilado: null | {
@@ -643,6 +649,8 @@ type DryingTunnelLot = {
   farmer_name: string | null;
   net_weight_kg: string | number;
   quintals: string | number;
+  /** El lote entró como SERVICIO (maquila) por Báscula. */
+  is_maquila?: boolean;
 };
 
 /** Secado activo de un motor (puede ser de cualquier accionista). */
@@ -1055,6 +1063,12 @@ type AccountsReceivable = {
   farmer_id?: string | null;
   reference_type?: string | null;
   due_date?: string | null;
+  // Rendimiento del lote (subproductos entregados al cliente), en QQ. Solo
+  // presente en cuentas de pilado de servicio (maquila); null si no fue pilado.
+  rinde_flor_qq?: number | null;
+  rinde_medio_qq?: number | null;
+  rinde_fino_qq?: number | null;
+  rinde_polvillo_qq?: number | null;
 };
 
 type Fomento = {
@@ -1319,6 +1333,33 @@ function conceptoReceivable(ar: AccountsReceivable): string {
     pilado_service: "Servicio de pilado", lot_transfer: "Traspaso de lote"
   };
   return m[ar.reference_type || ""] || "Cuenta por cobrar";
+}
+
+// Desglose de subproductos entregados al cliente (rendimiento del lote pilado),
+// para servicios de pilado/maquila. Devuelve null si el lote no tiene rinde.
+function rindeDesgloseTexto(r: { rinde_flor_qq?: number | null; rinde_medio_qq?: number | null; rinde_fino_qq?: number | null; rinde_polvillo_qq?: number | null }): string | null {
+  const parts: string[] = [];
+  const flor = Number(r.rinde_flor_qq ?? 0);
+  const medio = Number(r.rinde_medio_qq ?? 0);
+  const fino = Number(r.rinde_fino_qq ?? 0);
+  const polv = Number(r.rinde_polvillo_qq ?? 0);
+  if (flor > 0) parts.push(`${flor.toFixed(0)} QQ Flor`);
+  if (medio > 0) parts.push(`${medio.toFixed(0)} QQ 3/4`);
+  if (fino > 0) parts.push(`${fino.toFixed(0)} QQ Fino`);
+  if (polv > 0) parts.push(`${polv.toFixed(0)} QQ Polvillo`);
+  return parts.length ? `📦 Rinde: ${parts.join(" | ")}` : null;
+}
+
+// Suma el rinde de un grupo de cuentas (para la tarjeta consolidada del cliente).
+function rindeDesgloseGrupo(items: AccountsReceivable[]): string | null {
+  const acc = { rinde_flor_qq: 0, rinde_medio_qq: 0, rinde_fino_qq: 0, rinde_polvillo_qq: 0 };
+  for (const it of items) {
+    acc.rinde_flor_qq += Number(it.rinde_flor_qq ?? 0);
+    acc.rinde_medio_qq += Number(it.rinde_medio_qq ?? 0);
+    acc.rinde_fino_qq += Number(it.rinde_fino_qq ?? 0);
+    acc.rinde_polvillo_qq += Number(it.rinde_polvillo_qq ?? 0);
+  }
+  return rindeDesgloseTexto(acc);
 }
 
 // Consolida las cuentas por PAGAR por ACREEDOR/proveedor/entidad. Mismo patrón
@@ -1987,6 +2028,12 @@ export function App() {
   );
   const [cobros, setCobros] = useState<any[]>([]);
   const [cobroForm, setCobroForm] = useState({ client_accionista_id: "", servicio: "FLETE", monto: "", pagado_al_instante: false });
+  // 🛎️ Solo Servicio de Secado: lotes de servicio (maquila) ya secados y sin
+  // pilar; se cobra únicamente el secado. La tarifa arranca en la global y es
+  // editable por cobro.
+  type ServiceDriedLot = { lot_id: string; lot_code: string; farmer_id: string | null; farmer_name: string | null; quintals: number };
+  const [serviceDriedLots, setServiceDriedLots] = useState<ServiceDriedLot[]>([]);
+  const [secadoForm, setSecadoForm] = useState({ lot_id: "", rate: "" });
   const [costos, setCostos] = useState<any[]>([]);
   const [costoBatches, setCostoBatches] = useState<any[]>([]);
   const [costoForm, setCostoForm] = useState({ processing_batch_id: "", fecha: nominaToday, qq_producidos: "", luz: "", mantenimiento: "", mano_obra: "", combustible: "", desgaste: "", otros: "" });
@@ -3384,6 +3431,23 @@ export function App() {
 
   const refreshCobros = async () => {
     try { setCobros(await apiGet<any[]>("/cobros")); } catch { /* noop */ }
+  };
+  const refreshServiceDriedLots = async () => {
+    try { setServiceDriedLots(await apiGet<ServiceDriedLot[]>("/lots/service-dried-lots")); } catch { /* noop */ }
+  };
+  // Cobro de SOLO secado sobre un lote de servicio (maquila) ya secado.
+  const secadoLotSel = serviceDriedLots.find((l) => l.lot_id === secadoForm.lot_id) ?? null;
+  const secadoRate = secadoForm.rate !== "" ? Number(secadoForm.rate) : Number(laborRatesForm.secado_servicio_per_qq || 0);
+  const secadoTotal = round2((secadoLotSel ? Number(secadoLotSel.quintals) : 0) * (secadoRate || 0));
+  const submitSecado = async () => {
+    if (!secadoForm.lot_id) { addToast("Elige un lote de secadoras (servicio)", "error"); return; }
+    if (!(secadoRate > 0)) { addToast("Configura o escribe la tarifa de secado (> 0)", "error"); return; }
+    try {
+      await apiPost("/cobros/secado", { lot_id: secadoForm.lot_id, rate_per_qq: secadoRate });
+      setSecadoForm({ lot_id: "", rate: "" });
+      await Promise.all([refreshServiceDriedLots(), refreshReceivables().catch(() => {})]);
+      addToast("Cobro de secado registrado (cuenta por cobrar) ✓", "success");
+    } catch (e) { addToast(`Error: ${e instanceof Error ? e.message : "Error"}`, "error"); }
   };
   const submitCobro = async () => {
     if (!cobroForm.client_accionista_id) { addToast("Elige el socio", "error"); return; }
@@ -4970,7 +5034,7 @@ export function App() {
   }
   // Filas normalizadas para el modal/impresión de cuentas por cobrar.
   const receivableRows = (items: AccountsReceivable[]): DetalleRow[] =>
-    items.map((ar) => ({ id: ar.id, fecha: ar.created_at, concepto: conceptoReceivable(ar), monto: Number(ar.amount), saldo: Number(ar.balance) }));
+    items.map((ar) => ({ id: ar.id, fecha: ar.created_at, concepto: conceptoReceivable(ar), monto: Number(ar.amount), saldo: Number(ar.balance), desglose: rindeDesgloseTexto(ar) }));
   // Ídem para cuentas por pagar.
   const payableRows = (items: AccountPayable[]): DetalleRow[] =>
     items.map((p) => ({ id: p.id, fecha: p.created_at, concepto: conceptoPayable(p), monto: Number(p.amount), saldo: Number(p.balance) }));
@@ -5466,7 +5530,7 @@ export function App() {
     if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
     if (activeTab === "Cuadrilla") refreshCuadrilla().catch(() => undefined);
     if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
-    if (activeTab === "Servicio Pilado") { refreshPilado().catch(() => undefined); refreshCobros().catch(() => undefined); }
+    if (activeTab === "Servicio Pilado") { refreshPilado().catch(() => undefined); refreshCobros().catch(() => undefined); refreshServiceDriedLots().catch(() => undefined); loadLaborRates().catch(() => undefined); }
     if (activeTab === "Seleccion") refreshSelection().catch(() => undefined);
     if (activeTab === "Dashboard" && canSeePanel) refreshPanel().catch(() => undefined);
     if (activeTab === "Configuracion") refreshConfig().catch(() => undefined);
@@ -9248,7 +9312,7 @@ export function App() {
                     <select value={dryingEntryPick["TENDAL"] ?? ""} onChange={(ev) => setDryingEntryPick((cur) => ({ ...cur, TENDAL: ev.target.value }))}>
                       <option value="">Seleccione</option>
                       {entradasLibres.filter((entry) => (entry.rice_type ?? "0.11") === tendalForm.rice_type).map((entry) => (
-                        <option key={entry.id} value={entry.id}>{entryLabel(entry)} - {entry.farmer_name ?? "Sin agricultor"} - {Number(entry.quintals ?? 0).toFixed(2)} QQ{entry.rice_type ? ` · ${entry.rice_type}` : ""}</option>
+                        <option key={entry.id} value={entry.id}>{entryLabel(entry)} - {entry.farmer_name ?? "Sin agricultor"} - {Number(entry.quintals ?? 0).toFixed(2)} QQ{entry.rice_type ? ` · ${entry.rice_type}` : ""}{entry.is_maquila ? " · 🛎️ SERVICIO" : ""}</option>
                       ))}
                     </select>
                   </label>
@@ -9454,7 +9518,7 @@ export function App() {
                                 })
                                 .map((entry) => (
                                 <option key={entry.id} value={entry.id}>
-                                  {entryLabel(entry)} - {entry.farmer_name ?? "Sin agricultor"} - {Number(entry.quintals ?? 0).toFixed(2)} QQ{entry.rice_type ? ` · ${entry.rice_type}` : ""}
+                                  {entryLabel(entry)} - {entry.farmer_name ?? "Sin agricultor"} - {Number(entry.quintals ?? 0).toFixed(2)} QQ{entry.rice_type ? ` · ${entry.rice_type}` : ""}{entry.is_maquila ? " · 🛎️ SERVICIO" : ""}
                                 </option>
                               ))}
                             </select>
@@ -14061,6 +14125,7 @@ export function App() {
                         <div className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>
                           {g.items.length} transacci{g.items.length === 1 ? "ón" : "ones"} pendiente{g.items.length === 1 ? "" : "s"}
                         </div>
+                        {(() => { const rinde = rindeDesgloseGrupo(g.items); return rinde ? <div style={{ fontSize: 11, color: "#6b21a8", marginTop: 4, fontWeight: 600 }}>{rinde}</div> : null; })()}
                       </div>
                       <div style={{ height: 7, background: "#f1f5f9", borderRadius: 999, overflow: "hidden" }}>
                         <div style={{ width: `${pct}%`, height: "100%", background: "#16a34a", transition: "width .3s" }} />
@@ -14192,48 +14257,30 @@ export function App() {
           <section className="panelGrid">
             {accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "MATRIZ" && (
               <div className="formPanel">
-                <h2>🧾 Registrar cobro a socio (servicios)</h2>
-                <p className="muted">CEYRO cobra un servicio (Flete, Secado, Mantenimiento, etc.) a un socio: genera su cuenta por cobrar y, en espejo, la cuenta por pagar del socio. Con opción de cobro de contado.</p>
-                <label><span>Socio</span>
-                  <select value={cobroForm.client_accionista_id} onChange={(e) => setCobroForm({ ...cobroForm, client_accionista_id: e.target.value })}>
+                <h2>🛎️ Solo Servicio de Secado</h2>
+                <p className="muted">Para clientes que <strong>solo secan</strong> (sin pilar). Elige un lote de servicio ya secado; el peso en QQ se calcula solo. Genera la cuenta por cobrar de CEYRO con concepto «Servicio de Secado - Lote X».</p>
+                <label><span>Lote de Secadoras (servicio)</span>
+                  <select value={secadoForm.lot_id} onChange={(e) => setSecadoForm({ ...secadoForm, lot_id: e.target.value })}>
                     <option value="">Seleccione</option>
-                    {clientes.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    {serviceDriedLots.map((l) => (
+                      <option key={l.lot_id} value={l.lot_id}>{l.lot_code} · {l.farmer_name ?? "Sin cliente"} · {Number(l.quintals).toFixed(2)} QQ</option>
+                    ))}
                   </select>
                 </label>
-                <label><span>Servicio</span>
-                  <select value={cobroForm.servicio} onChange={(e) => setCobroForm({ ...cobroForm, servicio: e.target.value })}>
-                    <option value="PILADO">Pilado</option>
-                    <option value="SECADO">Secado</option>
-                    <option value="FLETE">Flete</option>
-                    <option value="MANTENIMIENTO">Mantenimiento</option>
-                    <option value="OTRO">Otro</option>
-                  </select>
+                <label><span>Cliente</span>
+                  <input type="text" readOnly value={secadoLotSel?.farmer_name ?? ""} placeholder="Se toma del lote seleccionado" />
                 </label>
-                <label><span>Monto $</span>
-                  <input type="number" step="0.01" min="0" value={cobroForm.monto} onChange={(e) => setCobroForm({ ...cobroForm, monto: e.target.value })} />
-                </label>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0" }}>
-                  <input type="checkbox" checked={cobroForm.pagado_al_instante} onChange={(e) => setCobroForm({ ...cobroForm, pagado_al_instante: e.target.checked })} />
-                  <span>Pagado al instante (ingresa a caja CEYRO y descuenta de la del socio)</span>
-                </label>
-                <button type="button" className="primary" onClick={submitCobro}>Registrar cobro</button>
-                {cobros.length > 0 && (
-                  <>
-                    <hr className="divider" />
-                    <h2 style={{ marginBottom: 0 }}>Cobros recientes</h2>
-                    <div className="equipList">
-                      {cobros.map((c) => (
-                        <div key={c.id} className="equipItem">
-                          <div>
-                            <strong>{c.cliente} · {c.servicio}</strong>
-                            <small>{(c.fecha || "").slice(0, 10)} · {c.estado_cxc === "PAID" ? "Pagado" : `saldo ${money(Number(c.saldo))}`}</small>
-                          </div>
-                          <strong>{money(Number(c.monto))}</strong>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                )}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <label><span>QQ Secos</span><input type="text" readOnly value={secadoLotSel ? Number(secadoLotSel.quintals).toFixed(2) : "0.00"} style={{ fontWeight: 700 }} /></label>
+                  <label><span>Tarifa de Secado $ / QQ</span><input type="number" step="0.01" min="0" value={secadoForm.rate} onChange={(e) => setSecadoForm({ ...secadoForm, rate: e.target.value })} placeholder={`Global: $${Number(laborRatesForm.secado_servicio_per_qq || 0).toFixed(2)}`} /></label>
+                </div>
+                <div className="totalBox" style={{ margin: "6px 0 10px" }}>
+                  <span>Total a cobrar</span>
+                  <strong>{money(secadoTotal)}</strong>
+                  <small>{secadoLotSel ? Number(secadoLotSel.quintals).toFixed(2) : "0.00"} QQ × ${(secadoRate || 0).toFixed(2)}</small>
+                </div>
+                <button type="button" className="primary" disabled={!secadoLotSel || !(secadoTotal > 0)} onClick={submitSecado}>Registrar cobro de secado</button>
+                {serviceDriedLots.length === 0 && <p className="muted" style={{ marginTop: 8 }}>No hay lotes de servicio secados pendientes de cobro.</p>}
               </div>
             )}
             <form className="formPanel" onSubmit={(e) => submitPilado(e).catch((err) => addToast(err.message, "error"))}>
@@ -16708,6 +16755,11 @@ export function App() {
                   <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10 }}>
                     <label><span>Secado en Tendal (Cuadrilla) $ x QQ</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.tendal_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, tendal_per_qq: Number(e.target.value) })} /></label>
                   </div>
+                  <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>🛎️ Secado como Servicio (cobro al cliente)</h2>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10 }}>
+                    <label><span>Secado (servicio) $ x QQ</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.secado_servicio_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secado_servicio_per_qq: Number(e.target.value) })} /></label>
+                    <small className="muted" style={{ marginTop: -4 }}>Se cobra al cliente de servicio (maquila): en «Solo Secado» y como parte del cobro automático Secado + Pilado.</small>
+                  </div>
                   <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>⛽ Precio del combustible <span className="muted" style={{ fontWeight: 400 }}>(se usa en Secadoras)</span></h2>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
                     <label><span>$ bombona por cada 1%</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.precio_gas_bombona} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_bombona: Number(e.target.value) })} /></label>
@@ -17996,6 +18048,15 @@ function InventarioDonut({ data }: { data: Array<{ name: string; value: number }
   );
 }
 
+// Distintivo visual «🛎️ SERVICIO» para lotes que ingresaron como maquila.
+function ServicioBadge() {
+  return (
+    <span style={{ background: "#f3e8ff", color: "#6b21a8", fontSize: 11, fontWeight: 700, padding: "1px 8px", borderRadius: 6, marginLeft: 8, whiteSpace: "nowrap" }}>
+      🛎️ SERVICIO
+    </span>
+  );
+}
+
 function DryingLotSelector({
   selectedLots,
   editing,
@@ -18012,7 +18073,7 @@ function DryingLotSelector({
       {selectedLots.map((lot) => (
         <div className="usedLotRow" key={lot.lot_id}>
           <div>
-            <strong>{lot.farmer_name ?? "Sin agricultor"}</strong>
+            <strong>{lot.farmer_name ?? "Sin agricultor"}{lot.is_maquila && <ServicioBadge />}</strong>
             <small>{lot.lot_code} - {Number(lot.quintals ?? 0).toFixed(2)} QQ</small>
           </div>
           {!editing && (
@@ -18040,7 +18101,7 @@ function DryingReportsPanel({
       {reports.map((report) => (
         <article className="dryingReportCard" key={report.id}>
           <div>
-            <strong>Tunel {report.tunnel_number} · {report.status === "COMPLETED" ? "Finalizado" : "En proceso"}</strong>
+            <strong>Tunel {report.tunnel_number} · {report.status === "COMPLETED" ? "Finalizado" : "En proceso"}{report.lots.some((l) => l.is_maquila) && <ServicioBadge />}</strong>
             <small>
               {Number(report.total_quintals ?? 0).toFixed(2)} QQ · {report.lots.length} lote(s) · {report.dryer_name ?? "Sin secadora"} · Secador: {report.operator_name || "—"}
             </small>
@@ -18108,7 +18169,15 @@ function ProductionSummary({ result }: { result: ProductionResult | null }) {
       {result.maquila && (
         <div className="maquilaBox">
           <strong>Cuenta por cobrar de maquila</strong>
-          <span>{Number(result.maquila.serviceQuantityQq).toFixed(2)} QQ x {money(result.maquila.serviceRatePerQq)} = {money(result.maquila.serviceAmount)}</span>
+          {Number(result.maquila.secadoAmount ?? 0) > 0 ? (
+            <>
+              <span>Secado: {Number(result.maquila.serviceQuantityQq).toFixed(2)} QQ × {money(Number(result.maquila.secadoRatePerQq ?? 0))} = {money(Number(result.maquila.secadoAmount ?? 0))}</span>
+              <span>Pilado: {money(Number(result.maquila.piladoAmount ?? 0))}</span>
+              <span><strong>Total (Secado + Pilado): {money(result.maquila.serviceAmount)}</strong></span>
+            </>
+          ) : (
+            <span>{Number(result.maquila.serviceQuantityQq).toFixed(2)} QQ x {money(result.maquila.serviceRatePerQq)} = {money(result.maquila.serviceAmount)}</span>
+          )}
           <small>Los productos quedaron en custodia de terceros, no en inventario propio.</small>
         </div>
       )}
@@ -18217,7 +18286,7 @@ function EstadoBadge({ status, vencido }: { status: string; vencido: boolean }) 
 }
 
 // Fila normalizada del estado de cuenta (sirve para cobrar y pagar).
-type DetalleRow = { id: string; fecha: string; concepto: string; monto: number; saldo: number };
+type DetalleRow = { id: string; fecha: string; concepto: string; monto: number; saldo: number; desglose?: string | null };
 
 // Modal "Estado de cuenta" GENÉRICO: mismo diseño y UX para Por Cobrar y Por
 // Pagar (solo cambia el color). Tabla de deudas + acciones (total / abono
@@ -18260,7 +18329,7 @@ function CuentaDetalleModal(props: {
                 return (
                   <tr key={r.id}>
                     <td>{(r.fecha || "").slice(0, 10)}</td>
-                    <td>{r.concepto}</td>
+                    <td>{r.concepto}{r.desglose && <div style={{ fontSize: 11, color: "#6b21a8", marginTop: 2 }}>{r.desglose}</div>}</td>
                     <td className="num">{money(r.monto)}</td>
                     <td className="num" style={{ color: "#0891b2" }}>{money(abonos)}</td>
                     <td className="num" style={{ fontWeight: 700, color: barColor }}>{money(r.saldo)}</td>

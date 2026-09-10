@@ -68,6 +68,8 @@ export function ensureLaborTables(): Promise<void> {
       // El estibador cobra por TULAS: $ por cada 3 tulas (proporcional). Las
       // tulas se pesan y de ahí sale el QQ que va a producto terminado.
       await pool.query(`ALTER TABLE labor_rates ADD COLUMN IF NOT EXISTS estibador_por_3tulas NUMERIC(10,4) NOT NULL DEFAULT 5`);
+      // Tarifa global de SECADO como servicio al cliente (maquila): $ por QQ.
+      await pool.query(`ALTER TABLE labor_rates ADD COLUMN IF NOT EXISTS secado_servicio_per_qq NUMERIC(10,4) NOT NULL DEFAULT 0`);
       await pool.query(`ALTER TABLE worker_payments ADD COLUMN IF NOT EXISTS tulas NUMERIC(14,3) NOT NULL DEFAULT 0`);
       // Fila única de tarifas por defecto.
       await pool.query(`INSERT INTO labor_rates (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
@@ -90,6 +92,8 @@ export type LaborRates = {
   precio_gas_cilindro: number;
   precio_diesel: number;
   tendal_per_qq: number;
+  /** Tarifa global de SECADO como servicio al cliente (maquila): $ por QQ. */
+  secado_servicio_per_qq: number;
 };
 
 async function getRates(db: Queryable = pool): Promise<LaborRates> {
@@ -112,7 +116,8 @@ async function getRates(db: Queryable = pool): Promise<LaborRates> {
     precio_gas_bombona: Number(row.precio_gas_bombona ?? 0),
     precio_gas_cilindro: Number(row.precio_gas_cilindro ?? 0),
     precio_diesel: Number(row.precio_diesel ?? 0),
-    tendal_per_qq: Number(row.tendal_per_qq ?? 0)
+    tendal_per_qq: Number(row.tendal_per_qq ?? 0),
+    secado_servicio_per_qq: Number(row.secado_servicio_per_qq ?? 0)
   };
 }
 
@@ -246,7 +251,8 @@ laborRouter.put("/rates", requireAdmin, asyncRoute(async (req, res) => {
     precio_gas_bombona: z.number().nonnegative().default(0),
     precio_gas_cilindro: z.number().nonnegative().default(0),
     precio_diesel: z.number().nonnegative().default(0),
-    tendal_per_qq: z.number().nonnegative().default(0)
+    tendal_per_qq: z.number().nonnegative().default(0),
+    secado_servicio_per_qq: z.number().nonnegative().default(0)
   }).parse(req.body);
 
   await pool.query(
@@ -255,11 +261,13 @@ laborRouter.put("/rates", requireAdmin, asyncRoute(async (req, res) => {
        estibador_per_qq = $3, estibador_per_saca = $4, estibador_per_arrocillo = $5,
        secador_guardiania = $6, secador_per_tunel = $7,
        precio_gas_bombona = $8, precio_gas_cilindro = $9, precio_diesel = $10,
-       estibador_por_3tulas = $11, polvillo_per_qq = $12, tendal_per_qq = $13, updated_at = now()
+       estibador_por_3tulas = $11, polvillo_per_qq = $12, tendal_per_qq = $13,
+       secado_servicio_per_qq = $14, updated_at = now()
      WHERE id = 1`,
     [body.pilador_per_qq, body.pilador_per_saca, body.estibador_per_qq, body.estibador_per_saca,
      body.estibador_per_arrocillo, body.secador_guardiania, body.secador_per_tunel,
-     body.precio_gas_bombona, body.precio_gas_cilindro, body.precio_diesel, body.estibador_por_3tulas, body.polvillo_per_qq, body.tendal_per_qq]
+     body.precio_gas_bombona, body.precio_gas_cilindro, body.precio_diesel, body.estibador_por_3tulas, body.polvillo_per_qq, body.tendal_per_qq,
+     body.secado_servicio_per_qq]
   );
   res.json(await getRates());
 }));
