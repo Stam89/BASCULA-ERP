@@ -225,22 +225,31 @@ lotsRouter.get("/service-dried-lots", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
     `SELECT l.id AS lot_id, l.lot_code, l.farmer_id, f.full_name AS farmer_name,
-            COALESCE(SUM(t.quintals), 0)::float AS quintals
+            -- Peso EXACTO del kárdex de secado (total_quintals del informe VACIADO);
+            -- fallback al peso de báscula solo si faltara en informes viejos.
+            COALESCE(dr.total_quintals, SUM(t.quintals), 0)::float AS quintals,
+            dr.dry_method
      FROM lots l
      LEFT JOIN farmers f ON f.id = l.farmer_id
      LEFT JOIN weighing_tickets t ON t.lot_id = l.id
+     -- Informe de secado COMPLETED + VACIADO más reciente del lote (túnel o tendal).
+     LEFT JOIN LATERAL (
+       SELECT d.total_quintals, d.dry_method
+       FROM drying_tunnel_reports d
+       WHERE d.lot_id = l.id
+         AND d.status = 'COMPLETED'
+         AND d.apartado_arianos = false
+         AND EXISTS (
+           SELECT 1 FROM drying_tunnel_cuadrilla c
+           WHERE c.drying_report_id = d.id AND c.momento = 'VACIADO'
+         )
+       ORDER BY d.created_at DESC
+       LIMIT 1
+     ) dr ON true
      WHERE l.accionista_id = $1
        AND l.is_maquila = true
        AND l.status = 'WEIGHED'
-       AND EXISTS (
-         SELECT 1
-         FROM drying_tunnel_reports d
-         JOIN drying_tunnel_cuadrilla c
-           ON c.drying_report_id = d.id AND c.momento = 'VACIADO'
-         WHERE d.lot_id = l.id
-           AND d.status = 'COMPLETED'
-           AND d.apartado_arianos = false
-       )
+       AND dr.dry_method IS NOT NULL
        AND NOT EXISTS (
          SELECT 1 FROM drying_tunnel_reports d
          WHERE d.lot_id = l.id AND d.status = 'IN_PROGRESS'
@@ -253,8 +262,8 @@ lotsRouter.get("/service-dried-lots", asyncRoute(async (req, res) => {
          SELECT 1 FROM accounts_receivable ar
          WHERE ar.reference_type = 'secado_service' AND ar.reference_id = l.id
        )
-     GROUP BY l.id, f.full_name
-     HAVING COALESCE(SUM(t.quintals), 0) > 0
+     GROUP BY l.id, f.full_name, dr.total_quintals, dr.dry_method
+     HAVING COALESCE(dr.total_quintals, SUM(t.quintals), 0) > 0
      ORDER BY l.created_at DESC
      LIMIT 500`,
     [accionistaId]

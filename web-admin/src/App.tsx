@@ -2031,7 +2031,7 @@ export function App() {
   // 🛎️ Solo Servicio de Secado: lotes de servicio (maquila) ya secados y sin
   // pilar; se cobra únicamente el secado. La tarifa arranca en la global y es
   // editable por cobro.
-  type ServiceDriedLot = { lot_id: string; lot_code: string; farmer_id: string | null; farmer_name: string | null; quintals: number };
+  type ServiceDriedLot = { lot_id: string; lot_code: string; farmer_id: string | null; farmer_name: string | null; quintals: number; dry_method?: "TUNEL" | "TENDAL" | null };
   const [serviceDriedLots, setServiceDriedLots] = useState<ServiceDriedLot[]>([]);
   const [secadoForm, setSecadoForm] = useState({ lot_id: "", rate: "" });
   const [costos, setCostos] = useState<any[]>([]);
@@ -14251,27 +14251,31 @@ export function App() {
         })()}
 
         {activeTab === "Servicio Pilado" && (() => {
-          const clientes = accionistas.filter((a) => a.id !== CEYRO_ID);
-          const previewTotal = round2(Number(piladoForm.quintals || 0) * Number(piladoForm.rate_per_qq || 0));
           return (
           <section className="panelGrid">
             {accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "MATRIZ" && (
               <div className="formPanel">
                 <h2>🛎️ Solo Servicio de Secado</h2>
-                <p className="muted">Para clientes que <strong>solo secan</strong> (sin pilar). Elige un lote de servicio ya secado; el peso en QQ se calcula solo. Genera la cuenta por cobrar de CEYRO con concepto «Servicio de Secado - Lote X».</p>
+                <p className="muted">Para clientes que <strong>solo secan</strong> (sin pilar). Elige un lote de servicio ya secado; el peso en QQ se toma exacto del kárdex. Genera la cuenta por cobrar de CEYRO con concepto «Servicio de Secado - Lote X». <em>El cobro del servicio completo (secado + pilado) se genera solo al finalizar el pilado en Producción.</em></p>
                 <label><span>Lote de Secadoras (servicio)</span>
                   <select value={secadoForm.lot_id} onChange={(e) => setSecadoForm({ ...secadoForm, lot_id: e.target.value })}>
                     <option value="">Seleccione</option>
                     {serviceDriedLots.map((l) => (
-                      <option key={l.lot_id} value={l.lot_id}>{l.lot_code} · {l.farmer_name ?? "Sin cliente"} · {Number(l.quintals).toFixed(2)} QQ</option>
+                      <option key={l.lot_id} value={l.lot_id}>{l.lot_code} · {l.farmer_name ?? "Sin cliente"} · {Number(l.quintals).toFixed(2)} QQ · {secadoMetodoLabel(l.dry_method)}</option>
                     ))}
                   </select>
                 </label>
+                {secadoLotSel && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "-2px 0 8px", flexWrap: "wrap" }}>
+                    <span className="muted" style={{ fontSize: 12 }}>Secado por:</span>
+                    <SecadoMetodoBadge metodo={secadoLotSel.dry_method} />
+                  </div>
+                )}
                 <label><span>Cliente</span>
                   <input type="text" readOnly value={secadoLotSel?.farmer_name ?? ""} placeholder="Se toma del lote seleccionado" />
                 </label>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  <label><span>QQ Secos</span><input type="text" readOnly value={secadoLotSel ? Number(secadoLotSel.quintals).toFixed(2) : "0.00"} style={{ fontWeight: 700 }} /></label>
+                  <label><span>QQ Secos <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>(kárdex, exacto)</span></span><input type="text" readOnly value={secadoLotSel ? Number(secadoLotSel.quintals).toFixed(2) : "0.00"} style={{ fontWeight: 700 }} /></label>
                   <label><span>Tarifa de Secado $ / QQ</span><input type="number" step="0.01" min="0" value={secadoForm.rate} onChange={(e) => setSecadoForm({ ...secadoForm, rate: e.target.value })} placeholder={`Global: $${Number(laborRatesForm.secado_servicio_per_qq || 0).toFixed(2)}`} /></label>
                 </div>
                 <div className="totalBox" style={{ margin: "6px 0 10px" }}>
@@ -14283,45 +14287,6 @@ export function App() {
                 {serviceDriedLots.length === 0 && <p className="muted" style={{ marginTop: 8 }}>No hay lotes de servicio secados pendientes de cobro.</p>}
               </div>
             )}
-            <form className="formPanel" onSubmit={(e) => submitPilado(e).catch((err) => addToast(err.message, "error"))}>
-              <h2>🌾 Registrar servicio de pilado</h2>
-              <p className="muted">CEYRO le presta el servicio de secado + pilado a otro accionista y le cobra por quintal. Genera el ingreso para CEYRO y la cuenta por pagar del accionista.</p>
-              <label><span>Fecha</span>
-                <input type="date" value={piladoForm.service_date} onChange={(e) => { const v = e.target.value; setPiladoForm({ ...piladoForm, service_date: v }); if (piladoForm.client_kind === "accionista" && piladoForm.client_accionista_id) autofillPiladoRate(piladoForm.client_accionista_id, v); }} />
-              </label>
-              <label><span>Tipo de cliente</span>
-                <select value={piladoForm.client_kind} onChange={(e) => setPiladoForm({ ...piladoForm, client_kind: e.target.value as "accionista" | "externo" })}>
-                  <option value="accionista">Accionista</option>
-                  <option value="externo">Cliente externo</option>
-                </select>
-              </label>
-              {piladoForm.client_kind === "accionista" ? (
-                <label><span>Accionista al que le pilaste</span>
-                  <select value={piladoForm.client_accionista_id} onChange={(e) => { const v = e.target.value; setPiladoForm({ ...piladoForm, client_accionista_id: v }); autofillPiladoRate(v, piladoForm.service_date); }}>
-                    <option value="">Seleccione</option>
-                    {clientes.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                  </select>
-                </label>
-              ) : (
-                <label><span>Nombre del cliente externo</span>
-                  <input type="text" value={piladoForm.client_name} onChange={(e) => setPiladoForm({ ...piladoForm, client_name: e.target.value })} placeholder="Ej: Juan Pérez" />
-                </label>
-              )}
-              <label><span>Quintales procesados (QQ)</span>
-                <input type="number" step="0.01" min="0" value={piladoForm.quintals} onChange={(e) => setPiladoForm({ ...piladoForm, quintals: e.target.value })} />
-              </label>
-              <label><span>Tarifa por QQ ($)</span>
-                <input type="number" step="0.01" min="0" value={piladoForm.rate_per_qq} onChange={(e) => setPiladoForm({ ...piladoForm, rate_per_qq: e.target.value })} />
-              </label>
-              {tarifaVigenteHint && <p className="muted" style={{ margin: "-4px 0 8px", fontSize: 12 }}>{tarifaVigenteHint}</p>}
-              <div className="totalBox" style={{ marginBottom: 10 }}>
-                <span>Total a cobrar</span>
-                <strong>{money(previewTotal)}</strong>
-                <small>{piladoForm.quintals || 0} QQ × ${piladoForm.rate_per_qq || 0}</small>
-              </div>
-              <button className="primary">Registrar servicio</button>
-              {clientes.length === 0 && <p className="muted">Crea los otros accionistas en Configuración → Accionistas.</p>}
-            </form>
 
             <div className="tablePanel">
               <h2>Saldos que deben a CEYRO</h2>
@@ -18045,6 +18010,21 @@ function InventarioDonut({ data }: { data: Array<{ name: string; value: number }
         ))}
       </div>
     </div>
+  );
+}
+
+// Cómo fue secado un lote: túnel mecánico vs tendal (patio). Para etiquetas/badges.
+function secadoMetodoLabel(m: string | null | undefined): string {
+  return m === "TENDAL" ? "☀️ Tendal (Patio)" : "⚙️ Túnel Mecánico";
+}
+
+// Badge del método de secado (colores distintos para túnel y tendal).
+function SecadoMetodoBadge({ metodo }: { metodo: string | null | undefined }) {
+  const esTendal = metodo === "TENDAL";
+  return (
+    <span style={{ background: esTendal ? "#fef3c7" : "#e0e7ff", color: esTendal ? "#92400e" : "#3730a3", fontSize: 11, fontWeight: 700, padding: "1px 8px", borderRadius: 6, whiteSpace: "nowrap" }}>
+      {secadoMetodoLabel(metodo)}
+    </span>
   );
 }
 
