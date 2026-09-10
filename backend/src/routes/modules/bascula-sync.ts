@@ -83,6 +83,26 @@ basculaSyncRouter.get("/restore", asyncRoute(async (req, res) => {
   });
 }));
 
+// GET /api/bascula/sync-state
+// Consulta liviana para que una tablet con datos detecte un ERP recien restaurado
+// o vacio y pueda volver a publicar su historial sin descargar todos los payloads.
+basculaSyncRouter.get("/sync-state", asyncRoute(async (req, res) => {
+  requireDeviceKey(req);
+  const result = await pool.query<{ principal_count: number; last_updated: string | null }>(
+    `SELECT count(*) FILTER (
+              WHERE lower(coalesce(raw_payload->>'modo', 'principal')) = 'principal'
+            )::int AS principal_count,
+            max(mobile_updated_at)::text AS last_updated
+       FROM mobile_synced_tickets`
+  );
+
+  res.json({
+    ok: true,
+    principalCount: result.rows[0]?.principal_count ?? 0,
+    lastUpdated: result.rows[0]?.last_updated ?? null
+  });
+}));
+
 // GET /api/bascula/discover
 // Respuesta mínima para que la tablet pueda encontrar el ERP si cambia la IP.
 // La clave evita confundir otro servicio del puerto 4000 con este servidor.
