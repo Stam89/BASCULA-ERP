@@ -1571,6 +1571,10 @@ export function App() {
   const [empaqueSel, setEmpaqueSel] = useState<Record<string, "TULAS" | "SACOS">>({});
   // Motor activo en pantalla: el 1 mueve las Secadoras 1 y 2; el 2, la 3.
   const [motorActivo, setMotorActivo] = useState<1 | 2>(1);
+  // Acordeón de Secadoras: qué bloque está desplegado. null = todos colapsados
+  // (estado por defecto). El cuerpo se OCULTA (no se desmonta) al colapsar, para
+  // no perder los valores ya escritos en los formularios.
+  const [secadoraAbierta, setSecadoraAbierta] = useState<"TENDAL" | 1 | 2 | null>(null);
   // Los inputs de combustible viven en un modal que abre "Finalizar secado".
   const [fuelModalOpen, setFuelModalOpen] = useState(false);
   // Secados sin finalizar del motor (de TODOS los accionistas: el motor es
@@ -6814,8 +6818,11 @@ export function App() {
 
   function editDryingReport(report: DryingTunnelReport) {
     setEditingDryingReport(report);
-    // El formulario del secado vive bajo su motor: cambiar a esa vista.
-    setMotorActivo(motorDeSecadora(report.dryer_name));
+    // El formulario del secado vive bajo su motor: cambiar a esa vista y ABRIR
+    // el acordeón de ese motor para que el formulario de edición sea visible.
+    const motor = motorDeSecadora(report.dryer_name);
+    setMotorActivo(motor);
+    setSecadoraAbierta(motor);
     setMessage(`Editando secado del Tunel ${report.tunnel_number} (${report.dryer_name ?? "Secadora 1"})`);
   }
 
@@ -9284,26 +9291,42 @@ export function App() {
 
         {activeTab === "Secadoras" && (
           <section className="panelGrid">
-            {/* ── Selector de motor: el 1 mueve las Secadoras 1 y 2; el 2, la 3 ── */}
-            <div className="tablePanel" style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-              <h2 style={{ margin: 0 }}>🔧 Motor</h2>
-              {([1, 2] as const).map((motor) => (
-                <button
-                  key={motor}
-                  type="button"
-                  className={motorActivo === motor ? "primary" : "btnSecondary"}
-                  style={{ padding: "8px 16px", borderRadius: 8, fontWeight: 700 }}
-                  onClick={() => { setEditingDryingReport(null); setMotorActivo(motor); }}
-                >
-                  Motor {motor} · {MOTOR_SECADORAS[motor].join(" y ")}
-                </button>
-              ))}
-              <span className="muted">El combustible se registra por motor y se reparte entre sus secadoras según los quintales.</span>
+            {/* ── Acordeón operativo: 3 tarjetas expansibles. Colapsadas por
+                  defecto (secadoraAbierta = null); el formulario correspondiente
+                  solo aparece al hacer clic. Abrir un motor lo activa
+                  (motorActivo); el cuerpo se OCULTA sin desmontarse al colapsar. ── */}
+            <div className="secAccordion">
+              {(() => {
+                const abrirMotor = (motor: 1 | 2) => {
+                  if (secadoraAbierta === motor) { setSecadoraAbierta(null); return; }
+                  if (motorActivo !== motor) { setEditingDryingReport(null); setMotorActivo(motor); }
+                  setSecadoraAbierta(motor);
+                };
+                const cards: Array<{ key: "TENDAL" | 1 | 2; icon: string; title: string; sub: string; onClick: () => void }> = [
+                  { key: "TENDAL", icon: "☀️", title: "Secado en Tendal", sub: "Patio · sin motor · cuadrilla", onClick: () => setSecadoraAbierta((v) => (v === "TENDAL" ? null : "TENDAL")) },
+                  { key: 1, icon: "⚙️", title: "Motor 1", sub: MOTOR_SECADORAS[1].join(" y "), onClick: () => abrirMotor(1) },
+                  { key: 2, icon: "⚙️", title: "Motor 2", sub: MOTOR_SECADORAS[2].join(" y "), onClick: () => abrirMotor(2) }
+                ];
+                return cards.map((c) => {
+                  const open = secadoraAbierta === c.key;
+                  return (
+                    <button key={String(c.key)} type="button" className={`secCard${open ? " open" : ""}`} onClick={c.onClick} aria-expanded={open}>
+                      <span className="secIcon">{c.icon}</span>
+                      <span className="secBody">
+                        <span className="secTitle">{c.title}</span>
+                        <span className="secSub">{c.sub}</span>
+                      </span>
+                      <span className="secChev">▸</span>
+                    </button>
+                  );
+                });
+              })()}
             </div>
+            <p className="muted" style={{ gridColumn: "1 / -1", margin: "-6px 0 0", fontSize: 12.5 }}>El combustible se registra por motor y se reparte entre sus secadoras según los quintales. Abre una tarjeta para registrar su secado.</p>
 
-            {/* ── ☀️ Secado en Tendal (patio): al mismo nivel que los motores ── */}
-            <details className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-              <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>☀️ Secado en Tendal (Patio)</summary>
+            {/* ── ☀️ Secado en Tendal (patio): cuerpo del acordeón ── */}
+            <div className="secBodyPanel tablePanel" hidden={secadoraAbierta !== "TENDAL"} style={{ gridColumn: "1 / -1" }}>
+              <h2 style={{ margin: "0 0 2px", fontSize: 15 }}>☀️ Secado en Tendal (Patio)</h2>
               <p className="muted" style={{ marginTop: 6, marginBottom: 10 }}>Secado al sol en el patio. Sin motor ni combustible; la mano de obra va a la <strong>CUADRILLA</strong>. Al registrarlo, el arroz queda disponible en Producción igual que un secado mecánico.</p>
               <form className="formPanel" onSubmit={(e) => { e.preventDefault(); submitTendal().catch((err) => addToast(err.message, "error")); }}>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 10 }}>
@@ -9333,8 +9356,11 @@ export function App() {
                   <button type="submit" className="primary" disabled={tendalLotes.length === 0}>☀️ Registrar secado en tendal</button>
                 </div>
               </form>
-            </details>
+            </div>
 
+            {/* ── Cuerpo del acordeón del Motor activo (crear o editar). Se OCULTA
+                  sin desmontarse al colapsar, para conservar lo ya escrito. ── */}
+            <div className="secBodyPanel" hidden={secadoraAbierta !== 1 && secadoraAbierta !== 2} style={{ gridColumn: "1 / -1", display: "grid", gap: 16 }}>
             {editingDryingReport ? (
               /* ── Modo edición: las secadoras EN PROCESO del motor (los lotes
                     que dejaste secando) + el combustible, para cerrarlo al final.
@@ -9580,6 +9606,7 @@ export function App() {
                 </div>
               </form>
             )}
+            </div>
 
             {/* Modal: combustible del motor + cierre (los inputs solo aquí, al final) */}
             {fuelModalOpen && (
