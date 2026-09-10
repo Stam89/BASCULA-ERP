@@ -792,6 +792,20 @@ async function ensureTendalActivity(client: PoolClient): Promise<string> {
   return created.rows[0].id as string;
 }
 
+// Código de lote AUTOMÁTICO con formato estricto [SECUENCIAL(5)]-[DD]-[MM]-[YY]
+// (ej. 00001-10-09-26). El secuencial es global: consulta el mayor secuencial
+// ya registrado (solo lotes con este formato) y lo autoincrementa. La fecha es
+// la del día de la operación (opDate, YYYY-MM-DD).
+async function nextSequentialLotCode(client: PoolClient, opDate: string): Promise<string> {
+  const r = await client.query(
+    "SELECT (substring(lot_code from '^[0-9]{5}'))::int AS n FROM lots WHERE lot_code ~ '^[0-9]{5}-[0-9]{2}-[0-9]{2}-[0-9]{2}$' ORDER BY n DESC LIMIT 1"
+  );
+  const last = r.rows[0] ? Number(r.rows[0].n) : 0;
+  const seq = String(last + 1).padStart(5, "0");
+  const [yyyy, mm, dd] = String(opDate).slice(0, 10).split("-");
+  return `${seq}-${dd}-${mm}-${yyyy.slice(-2)}`;
+}
+
 async function createDryingReport(client: PoolClient, input: z.infer<typeof dryingBodySchema>) {
   const entryIds = [...new Set(input.entry_ids)];
   const esTendal = input.dry_method === "TENDAL";
@@ -884,7 +898,8 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
   const status = (esTendal || input.dry_end_at) ? "COMPLETED" : "IN_PROGRESS";
 
   // El código del lote se propone automático, pero se puede escribir otro.
-  const lotCode = (input.lot_code ?? "").trim() || nextCode("LT");
+  const opDate = toDateOnly(input.filled_at) ?? toDateOnly(input.dry_end_at) ?? toDateOnly(input.dry_start_at) ?? new Date().toISOString().slice(0, 10);
+  const lotCode = (input.lot_code ?? "").trim() || await nextSequentialLotCode(client, opDate);
   const dup = await client.query("SELECT 1 FROM lots WHERE lot_code = $1", [lotCode]);
   if (dup.rowCount) throw new ApiError(409, `Ya existe un lote con el código "${lotCode}".`);
 

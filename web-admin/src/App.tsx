@@ -1512,8 +1512,7 @@ export function App() {
   const [availableDryingLots, setAvailableDryingLots] = useState<MateriaPrimaEntry[]>([]);
   const [dryingReports, setDryingReports] = useState<DryingTunnelReport[]>([]);
   // ☀️ Secado en Tendal (patio): formulario propio. Responsable siempre CUADRILLA.
-    const [tendalForm, setTendalForm] = useState({ ids: [] as string[], lot_code: "", rice_type: "0.11" as "0.11" | "CORRIENTE", moisture_before: "", moisture_after: "", hora_inicio: "", hora_fin: "", recepcion_empaque: "TULAS" as "TULAS" | "SACOS" });
-    const tendalPesoQQ = useMemo(() => availableDryingLots.filter((e) => tendalForm.ids.includes(e.id)).reduce((s, e) => s + Number(e.quintals ?? 0), 0), [availableDryingLots, tendalForm.ids]);
+    const [tendalForm, setTendalForm] = useState({ lot_code: "", rice_type: "0.11" as "0.11" | "CORRIENTE", moisture_before: "", moisture_after: "", hora_inicio: "", hora_fin: "", recepcion_empaque: "TULAS" as "TULAS" | "SACOS" });
   const [liquidacionesList, setLiquidacionesList] = useState<LiqRecord[]>([]);
   const [stock, setStock] = useState<StockRow[]>([]);
   const [insumos, setInsumos] = useState<Insumo[]>([]);
@@ -2465,6 +2464,9 @@ export function App() {
   };
   const qqDe = (secadora: string) => lotesDe(secadora).reduce((s, l) => s + Number(l.quintals ?? 0), 0);
   const kgDe = (secadora: string) => lotesDe(secadora).reduce((s, l) => s + Number(l.net_weight_kg ?? 0), 0);
+  // ☀️ Tendal: usa el MISMO mecanismo de selección (dryingSelections["TENDAL"]).
+    const tendalLotes: DryingTunnelLot[] = availableDryingLots.filter((e) => seleccionDe("TENDAL").includes(e.id)).map((e) => ({ lot_id: e.id, lot_code: entryLabel(e), farmer_name: e.farmer_name, net_weight_kg: e.net_weight ?? 0, quintals: e.quintals ?? 0 }));
+    const tendalQQ = tendalLotes.reduce((s, l) => s + Number(l.quintals ?? 0), 0);
 
   // ── Combustible DEL MOTOR, calculado en vivo (el backend lo recalcula al
   // guardar). Los medidores marcan lo que queda: inicio − fin es lo consumido.
@@ -6890,9 +6892,10 @@ export function App() {
   // Registra un secado en TENDAL: reusa el pipeline de secado (sin túnel ni
   // combustible), deja el arroz disponible en Producción y paga a la cuadrilla.
   async function submitTendal() {
-      if (tendalForm.ids.length === 0) { addToast("Selecciona al menos un ingreso de materia prima", "error"); return; }
+      const ids = seleccionDe("TENDAL");
+      if (ids.length === 0) { addToast("Agrega al menos un ingreso de materia prima al lote", "error"); return; }
       await apiPost("/process-flow/drying-tendal", {
-        entry_ids: tendalForm.ids,
+        entry_ids: ids,
         lot_code: tendalForm.lot_code.trim() || undefined,
         rice_type: tendalForm.rice_type,
         moisture_before: tendalForm.moisture_before ? Number(tendalForm.moisture_before) : undefined,
@@ -6903,7 +6906,9 @@ export function App() {
         created_by: authUser?.id
       });
       addToast("Secado en tendal registrado: arroz disponible para producción y pago de cuadrilla generado.", "success");
-      setTendalForm({ ids: [], lot_code: "", rice_type: "0.11", moisture_before: "", moisture_after: "", hora_inicio: "", hora_fin: "", recepcion_empaque: "TULAS" });
+      setTendalForm({ lot_code: "", rice_type: "0.11", moisture_before: "", moisture_after: "", hora_inicio: "", hora_fin: "", recepcion_empaque: "TULAS" });
+      setDryingSelections((cur) => { const n = { ...cur }; delete n["TENDAL"]; return n; });
+      setDryingEntryPick((cur) => ({ ...cur, TENDAL: "" }));
       await refresh();
     }
 
@@ -9237,21 +9242,23 @@ export function App() {
               <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>☀️ Secado en Tendal (Patio)</summary>
               <p className="muted" style={{ marginTop: 6, marginBottom: 10 }}>Secado al sol en el patio. Sin motor ni combustible; la mano de obra va a la <strong>CUADRILLA</strong>. Al registrarlo, el arroz queda disponible en Producción igual que un secado mecánico.</p>
               <form className="formPanel" onSubmit={(e) => { e.preventDefault(); submitTendal().catch((err) => addToast(err.message, "error")); }}>
-                <label><span>Ingreso de materia prima (lotes)</span>
-                  <div style={{ display: "grid", gap: 6, maxHeight: 180, overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
-                    {availableDryingLots.length === 0 ? <span className="muted">No hay materia prima disponible para secar.</span> : availableDryingLots.map((e) => (
-                      <label key={e.id} style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 400 }}>
-                        <input type="checkbox" checked={tendalForm.ids.includes(e.id)} onChange={(ev) => setTendalForm((f) => ({ ...f, ids: ev.target.checked ? [...f.ids, e.id] : f.ids.filter((x) => x !== e.id) }))} style={{ width: "auto" }} />
-                        <span>{e.numero_bascula ? `Ticket #${e.numero_bascula}` : e.ticket_number} · {e.farmer_name ?? "—"} · {Number(e.quintals ?? 0).toFixed(2)} QQ</span>
-                      </label>
-                    ))}
-                  </div>
-                </label>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  <label><span>Peso Total (QQ)</span><input type="text" readOnly value={tendalPesoQQ.toFixed(2)} style={{ fontWeight: 700 }} /></label>
-                  <label><span>Empaque de recepción</span><select value={tendalForm.recepcion_empaque} onChange={(e) => setTendalForm((f) => ({ ...f, recepcion_empaque: e.target.value as "TULAS" | "SACOS" }))}><option value="TULAS">Tulas</option><option value="SACOS">Sacos</option></select></label>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 10 }}>
                   <label><span>Tipo de arroz</span><select value={tendalForm.rice_type} onChange={(e) => setTendalForm((f) => ({ ...f, rice_type: e.target.value as "0.11" | "CORRIENTE" }))}><option value="0.11">0.11</option><option value="CORRIENTE">CORRIENTE</option></select></label>
-                  <label><span>Código de lote (opcional)</span><input value={tendalForm.lot_code} onChange={(e) => setTendalForm((f) => ({ ...f, lot_code: e.target.value }))} placeholder="Automático" /></label>
+                  <label><span>Ingreso de materia prima</span>
+                    <select value={dryingEntryPick["TENDAL"] ?? ""} onChange={(ev) => setDryingEntryPick((cur) => ({ ...cur, TENDAL: ev.target.value }))}>
+                      <option value="">Seleccione</option>
+                      {entradasLibres.filter((entry) => (entry.rice_type ?? "0.11") === tendalForm.rice_type).map((entry) => (
+                        <option key={entry.id} value={entry.id}>{entryLabel(entry)} - {entry.farmer_name ?? "Sin agricultor"} - {Number(entry.quintals ?? 0).toFixed(2)} QQ{entry.rice_type ? ` · ${entry.rice_type}` : ""}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <button type="button" className="btnSecondary" onClick={() => addDryingEntry("TENDAL")} style={{ padding: "8px 14px", borderRadius: 8, fontWeight: 700, marginTop: 4 }}>➕ Agregar al lote</button>
+                <DryingLotSelector selectedLots={tendalLotes} editing={false} onRemove={(id) => removeDryingEntry("TENDAL", id)} />
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <label><span>Peso Total (QQ)</span><input type="text" readOnly value={tendalQQ.toFixed(2)} style={{ fontWeight: 700 }} /></label>
+                  <label><span>Empaque de recepción</span><select value={tendalForm.recepcion_empaque} onChange={(e) => setTendalForm((f) => ({ ...f, recepcion_empaque: e.target.value as "TULAS" | "SACOS" }))}><option value="TULAS">Tulas</option><option value="SACOS">Sacos</option></select></label>
+                  <label><span>Código de lote (opcional)</span><input value={tendalForm.lot_code} onChange={(e) => setTendalForm((f) => ({ ...f, lot_code: e.target.value }))} placeholder="Automático (00001-DD-MM-YY)" /></label>
                   <label><span>Humedad inicial (%)</span><input type="number" step="0.1" min="0" value={tendalForm.moisture_before} onChange={(e) => setTendalForm((f) => ({ ...f, moisture_before: e.target.value }))} /></label>
                   <label><span>Humedad final (%)</span><input type="number" step="0.1" min="0" value={tendalForm.moisture_after} onChange={(e) => setTendalForm((f) => ({ ...f, moisture_after: e.target.value }))} /></label>
                   <label><span>Hora inicio</span><input type="datetime-local" value={tendalForm.hora_inicio} onChange={(e) => setTendalForm((f) => ({ ...f, hora_inicio: e.target.value }))} /></label>
@@ -9259,7 +9266,7 @@ export function App() {
                   <label><span>Responsable</span><input value="CUADRILLA" readOnly disabled title="El secado en tendal siempre lo cobra la cuadrilla" /></label>
                 </div>
                 <div className="buttonRow" style={{ marginTop: 10 }}>
-                  <button type="submit" className="primary" disabled={tendalForm.ids.length === 0}>☀️ Registrar secado en tendal</button>
+                  <button type="submit" className="primary" disabled={tendalLotes.length === 0}>☀️ Registrar secado en tendal</button>
                 </div>
               </form>
             </details>
@@ -9465,7 +9472,7 @@ export function App() {
                         </div>
                         <label>
                           <span>Número de lote <span className="muted">(automático)</span></span>
-                          <input name={`lot_code_${t}`} type="text" placeholder="Automático (LT-…)" />
+                          <input name={`lot_code_${t}`} type="text" placeholder="Automático (00001-DD-MM-YY)" />
                         </label>
                         {/* Fecha de llenado y secador se toman del MOTOR (arriba),
                             no por túnel: así toda la corrida queda sincronizada. */}
