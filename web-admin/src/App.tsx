@@ -14527,7 +14527,6 @@ export function App() {
                   <span style={{ marginLeft: 6, background: "#dc2626", color: "#fff", borderRadius: 999, padding: "1px 8px", fontSize: 12, fontWeight: 800 }}>{nominaPendientes.length + pagosCuadPendientes.length}</span>
                 )}
               </button>
-              <button type="button" className={nominaView === "planta" ? "active" : ""} onClick={() => setNominaView("planta")}>🏭 Planta</button>
               <button type="button" className={nominaView === "secadora" ? "active" : ""} onClick={() => setNominaView("secadora")}>🔥 Secadora</button>
               <button type="button" className={nominaView === "cuadrilla" ? "active" : ""} onClick={() => { setNominaView("cuadrilla"); refreshCuadrilla().catch(() => undefined); }}>👷‍♂️ Cuadrilla</button>
               <button type="button" className={nominaView === "administrativo" ? "active" : ""} onClick={() => setNominaView("administrativo")}>💼 Personal Administrativo</button>
@@ -14557,7 +14556,7 @@ export function App() {
                   .map(([label, v]) => (
 
                     <button key={label} type="button" title={`Ver ${label}`}
-                      onClick={() => { const g = label.toLowerCase() as NominaGrupo; setNominaView(g); if (g === "cuadrilla") refreshCuadrilla().catch(() => undefined); }}
+                      onClick={() => { const g = label.toLowerCase() as NominaGrupo; if (g === "planta") { setNominaView("pagos"); return; } setNominaView(g); if (g === "cuadrilla") refreshCuadrilla().catch(() => undefined); }}
                       style={{ background: "rgba(255,255,255,.18)", border: "1px solid rgba(255,255,255,.12)", borderRadius: 10, padding: "7px 12px", textAlign: "right", cursor: "pointer", color: "#fff" }}>
                       <div style={{ fontSize: 11, opacity: 0.9, whiteSpace: "nowrap" }}>{label}</div>
                       <strong style={{ fontWeight: 800, fontSize: 16 }}>{money(v)}</strong>
