@@ -188,6 +188,8 @@ type LaborRates = {
   precio_gas_cilindro: number;
   /** Precio fijo del diesel por unidad de medidor. */
   precio_diesel: number;
+  /** Pago a la cuadrilla por QQ de secado en tendal (patio). */
+  tendal_per_qq: number;
 };
 
 const defaultLaborRates: LaborRates = {
@@ -202,7 +204,8 @@ const defaultLaborRates: LaborRates = {
   secador_per_tunel: 5,
   precio_gas_bombona: 0,
   precio_gas_cilindro: 0,
-  precio_diesel: 0
+  precio_diesel: 0,
+  tendal_per_qq: 0
 };
 
 type WorkerSummary = {
@@ -1508,6 +1511,9 @@ export function App() {
   const [dryStorageLots, setDryStorageLots] = useState<Lot[]>([]);
   const [availableDryingLots, setAvailableDryingLots] = useState<MateriaPrimaEntry[]>([]);
   const [dryingReports, setDryingReports] = useState<DryingTunnelReport[]>([]);
+  // ☀️ Secado en Tendal (patio): formulario propio. Responsable siempre CUADRILLA.
+    const [tendalForm, setTendalForm] = useState({ ids: [] as string[], lot_code: "", rice_type: "0.11" as "0.11" | "CORRIENTE", moisture_before: "", moisture_after: "", hora_inicio: "", hora_fin: "", recepcion_empaque: "TULAS" as "TULAS" | "SACOS" });
+    const tendalPesoQQ = useMemo(() => availableDryingLots.filter((e) => tendalForm.ids.includes(e.id)).reduce((s, e) => s + Number(e.quintals ?? 0), 0), [availableDryingLots, tendalForm.ids]);
   const [liquidacionesList, setLiquidacionesList] = useState<LiqRecord[]>([]);
   const [stock, setStock] = useState<StockRow[]>([]);
   const [insumos, setInsumos] = useState<Insumo[]>([]);
@@ -6881,6 +6887,26 @@ export function App() {
 
   // Cierra el combustible del motor: lo reparte entre los secados de la última
   // corrida (aunque ya estén finalizados). Se usa desde la edición del motor.
+  // Registra un secado en TENDAL: reusa el pipeline de secado (sin túnel ni
+  // combustible), deja el arroz disponible en Producción y paga a la cuadrilla.
+  async function submitTendal() {
+      if (tendalForm.ids.length === 0) { addToast("Selecciona al menos un ingreso de materia prima", "error"); return; }
+      await apiPost("/process-flow/drying-tendal", {
+        entry_ids: tendalForm.ids,
+        lot_code: tendalForm.lot_code.trim() || undefined,
+        rice_type: tendalForm.rice_type,
+        moisture_before: tendalForm.moisture_before ? Number(tendalForm.moisture_before) : undefined,
+        moisture_after: tendalForm.moisture_after ? Number(tendalForm.moisture_after) : undefined,
+        dry_start_at: tendalForm.hora_inicio || undefined,
+        dry_end_at: tendalForm.hora_fin || undefined,
+        recepcion_empaque: tendalForm.recepcion_empaque,
+        created_by: authUser?.id
+      });
+      addToast("Secado en tendal registrado: arroz disponible para producción y pago de cuadrilla generado.", "success");
+      setTendalForm({ ids: [], lot_code: "", rice_type: "0.11", moisture_before: "", moisture_after: "", hora_inicio: "", hora_fin: "", recepcion_empaque: "TULAS" });
+      await refresh();
+    }
+
   async function cerrarCombustibleMotor() {
     if (!(combustibleTotal > 0)) { setMessage("Ingresa los medidores del combustible del motor"); return; }
     const activos = await apiGet<MotorActiveReport[]>(`/process-flow/drying/motor/${motorActivo}/active`).catch(() => [] as MotorActiveReport[]);
@@ -9205,6 +9231,38 @@ export function App() {
               ))}
               <span className="muted">El combustible se registra por motor y se reparte entre sus secadoras según los quintales.</span>
             </div>
+
+            {/* ── ☀️ Secado en Tendal (patio): al mismo nivel que los motores ── */}
+            <details className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+              <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>☀️ Secado en Tendal (Patio)</summary>
+              <p className="muted" style={{ marginTop: 6, marginBottom: 10 }}>Secado al sol en el patio. Sin motor ni combustible; la mano de obra va a la <strong>CUADRILLA</strong>. Al registrarlo, el arroz queda disponible en Producción igual que un secado mecánico.</p>
+              <form className="formPanel" onSubmit={(e) => { e.preventDefault(); submitTendal().catch((err) => addToast(err.message, "error")); }}>
+                <label><span>Ingreso de materia prima (lotes)</span>
+                  <div style={{ display: "grid", gap: 6, maxHeight: 180, overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
+                    {availableDryingLots.length === 0 ? <span className="muted">No hay materia prima disponible para secar.</span> : availableDryingLots.map((e) => (
+                      <label key={e.id} style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 400 }}>
+                        <input type="checkbox" checked={tendalForm.ids.includes(e.id)} onChange={(ev) => setTendalForm((f) => ({ ...f, ids: ev.target.checked ? [...f.ids, e.id] : f.ids.filter((x) => x !== e.id) }))} style={{ width: "auto" }} />
+                        <span>{e.numero_bascula ? `Ticket #${e.numero_bascula}` : e.ticket_number} · {e.farmer_name ?? "—"} · {Number(e.quintals ?? 0).toFixed(2)} QQ</span>
+                      </label>
+                    ))}
+                  </div>
+                </label>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <label><span>Peso Total (QQ)</span><input type="text" readOnly value={tendalPesoQQ.toFixed(2)} style={{ fontWeight: 700 }} /></label>
+                  <label><span>Empaque de recepción</span><select value={tendalForm.recepcion_empaque} onChange={(e) => setTendalForm((f) => ({ ...f, recepcion_empaque: e.target.value as "TULAS" | "SACOS" }))}><option value="TULAS">Tulas</option><option value="SACOS">Sacos</option></select></label>
+                  <label><span>Tipo de arroz</span><select value={tendalForm.rice_type} onChange={(e) => setTendalForm((f) => ({ ...f, rice_type: e.target.value as "0.11" | "CORRIENTE" }))}><option value="0.11">0.11</option><option value="CORRIENTE">CORRIENTE</option></select></label>
+                  <label><span>Código de lote (opcional)</span><input value={tendalForm.lot_code} onChange={(e) => setTendalForm((f) => ({ ...f, lot_code: e.target.value }))} placeholder="Automático" /></label>
+                  <label><span>Humedad inicial (%)</span><input type="number" step="0.1" min="0" value={tendalForm.moisture_before} onChange={(e) => setTendalForm((f) => ({ ...f, moisture_before: e.target.value }))} /></label>
+                  <label><span>Humedad final (%)</span><input type="number" step="0.1" min="0" value={tendalForm.moisture_after} onChange={(e) => setTendalForm((f) => ({ ...f, moisture_after: e.target.value }))} /></label>
+                  <label><span>Hora inicio</span><input type="datetime-local" value={tendalForm.hora_inicio} onChange={(e) => setTendalForm((f) => ({ ...f, hora_inicio: e.target.value }))} /></label>
+                  <label><span>Hora fin</span><input type="datetime-local" value={tendalForm.hora_fin} onChange={(e) => setTendalForm((f) => ({ ...f, hora_fin: e.target.value }))} /></label>
+                  <label><span>Responsable</span><input value="CUADRILLA" readOnly disabled title="El secado en tendal siempre lo cobra la cuadrilla" /></label>
+                </div>
+                <div className="buttonRow" style={{ marginTop: 10 }}>
+                  <button type="submit" className="primary" disabled={tendalForm.ids.length === 0}>☀️ Registrar secado en tendal</button>
+                </div>
+              </form>
+            </details>
 
             {editingDryingReport ? (
               /* ── Modo edición: las secadoras EN PROCESO del motor (los lotes
@@ -16638,6 +16696,10 @@ export function App() {
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <label><span>$ guardianía / día</span><input type="number" step="0.5" min="0" disabled={!isAdmin} value={laborRatesForm.secador_guardiania} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secador_guardiania: Number(e.target.value) })} /></label>
                     <label><span>$ por túnel secado</span><input type="number" step="0.5" min="0" disabled={!isAdmin} value={laborRatesForm.secador_per_tunel} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secador_per_tunel: Number(e.target.value) })} /></label>
+                  </div>
+                  <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>☀️ Secado en Tendal</h2>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10 }}>
+                    <label><span>Secado en Tendal (Cuadrilla) $ x QQ</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.tendal_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, tendal_per_qq: Number(e.target.value) })} /></label>
                   </div>
                   <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>⛽ Precio del combustible <span className="muted" style={{ fontWeight: 400 }}>(se usa en Secadoras)</span></h2>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
