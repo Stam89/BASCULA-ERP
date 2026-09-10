@@ -355,7 +355,7 @@ type ReciboSemanal = {
 
 type CuadrillaActivity = { id: string; name: string; unit_rate: number; is_active: boolean; categoria?: string };
 type CuadrillaEntry = { id: string; work_date: string; activity_id?: string | null; activity_name: string; worker_name: string; quantity: number; unit_rate: number; subtotal: number; origen?: string; referencia_id?: string | null; tunnel_number?: number | null; momento?: string | null };
-type CuadrillaSummaryRow = { worker_name: string; entradas: number; total: number; anticipos: number; neto: number };
+type CuadrillaSummaryRow = { worker_name: string; entradas: number; total: number; pagado?: number; anticipos: number; neto: number };
 type CuadrillaAdvance = { id: string; worker_name: string; amount: number; balance: number; concept: string | null; status: string; issued_at: string };
 
 type PiladoService = {
@@ -1884,6 +1884,18 @@ export function App() {
         return (b.to_pay ?? 0) - (a.to_pay ?? 0);
       });
   }, [nominaRows]);
+  // 💵 Pagos también liquida la cuadrilla de carga/descarga (módulo aparte).
+  // Se trae su resumen para el MISMO período que la nómina y se listan los que
+  // aún deben algo (neto > 0). El pago real descuenta de caja (POST /cuadrilla/pay-worker).
+  const [pagosCuadRows, setPagosCuadRows] = useState<CuadrillaSummaryRow[]>([]);
+  const pagosCuadPendientes = useMemo(
+    () => pagosCuadRows.filter((r) => (r.neto ?? 0) > 0).sort((a, b) => (b.neto ?? 0) - (a.neto ?? 0)),
+    [pagosCuadRows]
+  );
+  const cuadPendienteTotal = useMemo(
+    () => pagosCuadPendientes.reduce((s, r) => s + (r.neto ?? 0), 0),
+    [pagosCuadPendientes]
+  );
   const nomina60Ago = (() => { const d = new Date(); d.setDate(d.getDate() - 60); return d.toISOString().slice(0, 10); })();
   const [histFrom, setHistFrom] = useState(nomina60Ago);
   const [histTo, setHistTo] = useState(nominaToday);
@@ -3107,6 +3119,12 @@ export function App() {
     try {
       const data = await apiGet<{ rows: WorkerSummary[] }>(`/labor/summary?from=${nominaFrom}&to=${nominaTo}`);
       setNominaRows(data.rows);
+      // La cuadrilla de carga/descarga vive en otro módulo; se carga en paralelo
+      // para que Pagos muestre TODO lo pendiente del período en una sola pantalla.
+      try {
+        const cuad = await apiGet<{ rows: CuadrillaSummaryRow[] }>(`/cuadrilla/summary?from=${nominaFrom}&to=${nominaTo}`);
+        setPagosCuadRows(cuad.rows);
+      } catch { setPagosCuadRows([]); }
     } catch (e) {
       addToast(`Error al cargar nómina: ${e instanceof Error ? e.message : "desconocido"}`, "error");
     } finally {
@@ -4027,6 +4045,31 @@ export function App() {
       // Abre el recibo semanal para firma (con el período que se acaba de pagar,
       // antes de que refreshNomina reordene las filas).
       await openReciboSemanal(row, nominaFrom, nominaTo);
+      await refreshNomina();
+      await refreshCaja(registerId);
+    } catch (e) {
+      addToast(`No se pudo pagar: ${e instanceof Error ? e.message : "error"}`, "error");
+    }
+  }
+
+  // Pagar a una persona de la cuadrilla de carga/descarga (módulo aparte). Espeja
+  // a payWorkerWeek pero contra /cuadrilla/pay-worker: descuenta de la caja y
+  // marca sus registros como pagados (dejan de aparecer en Pagos).
+  async function payCuadrillaWorker(row: CuadrillaSummaryRow) {
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) { addToast("Abre una caja para pagar", "error"); return; }
+    const neto = row.neto ?? 0;
+    if (!(neto > 0)) { addToast("Esta cuadrilla no tiene saldo pendiente en el período.", "error"); return; }
+    if (!window.confirm(`Pagar ${money(neto)} a la cuadrilla ${row.worker_name}?${(row.anticipos ?? 0) > 0 ? `
+(Ganó ${money(row.total)}, menos ${money(row.anticipos)} de anticipos)` : ""}`)) return;
+    try {
+      await apiPost("/cuadrilla/pay-worker", {
+        worker_name: row.worker_name,
+        from: nominaFrom,
+        to: nominaTo,
+        cash_register_id: registerId
+      });
+      addToast(`Pagado a la cuadrilla ${row.worker_name}`, "success");
       await refreshNomina();
       await refreshCaja(registerId);
     } catch (e) {
@@ -14480,8 +14523,8 @@ export function App() {
               <button type="button" className={nominaView === "pagos" ? "active" : ""} onClick={() => setNominaView("pagos")}
                 style={{ fontWeight: 700 }}>
                 💵 Pagos
-                {nominaPendientes.length > 0 && (
-                  <span style={{ marginLeft: 6, background: "#dc2626", color: "#fff", borderRadius: 999, padding: "1px 8px", fontSize: 12, fontWeight: 800 }}>{nominaPendientes.length}</span>
+                {(nominaPendientes.length + pagosCuadPendientes.length) > 0 && (
+                  <span style={{ marginLeft: 6, background: "#dc2626", color: "#fff", borderRadius: 999, padding: "1px 8px", fontSize: 12, fontWeight: 800 }}>{nominaPendientes.length + pagosCuadPendientes.length}</span>
                 )}
               </button>
               <button type="button" className={nominaView === "planta" ? "active" : ""} onClick={() => setNominaView("planta")}>🏭 Planta</button>
@@ -14499,7 +14542,7 @@ export function App() {
                 <div style={{ fontSize: 12, fontWeight: 600, opacity: 0.9, letterSpacing: ".03em" }}>💰 COSTO TOTAL DE NÓMINA · A PAGAR</div>
                 <button type="button" onClick={() => setNominaView("pagos")} title="Ir a Pagos"
                   style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "#fff", fontSize: 30, fontWeight: 800, lineHeight: 1.1, textAlign: "left" }}>
-                  {money(nominaResumen.total)} <span style={{ fontSize: 13, fontWeight: 600, opacity: 0.85 }}>›</span>
+                  {money(nominaResumen.total + cuadPendienteTotal)} <span style={{ fontSize: 13, fontWeight: 600, opacity: 0.85 }}>›</span>
                 </button>
                 <div style={{ fontSize: 11, opacity: 0.85, marginTop: 2 }}>Período {nominaFrom} → {nominaTo} · Planta / Secadora / Cuadrilla / Administrativo</div>
               </div>
@@ -14509,7 +14552,7 @@ export function App() {
 
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(112px, 1fr))", gap: 10 }}>
 
-                {([["Planta", nominaResumen.planta], ["Secadora", nominaResumen.secadora], ["Cuadrilla", nominaResumen.cuadrilla], ["Administrativo", nominaResumen.administrativo]] as [string, number][])
+                {([["Planta", nominaResumen.planta], ["Secadora", nominaResumen.secadora], ["Cuadrilla", nominaResumen.cuadrilla + cuadPendienteTotal], ["Administrativo", nominaResumen.administrativo]] as [string, number][])
 
                   .map(([label, v]) => (
 
@@ -14590,12 +14633,11 @@ export function App() {
                               <td className="num" style={{ whiteSpace: "nowrap" }}>
                                 <button type="button" className="btnGhost" title="Ver detalle del cálculo" onClick={() => loadNominaPaymentDetail(r)}>🔍</button>
                                 <button type="button" className="btnGhost" title="Recibo semanal (Rol de Pago)" style={{ marginLeft: 6 }} onClick={() => openReciboSemanal(r).catch(() => undefined)}>🧾</button>
-                                {pending > 0 ? (
-                                  <>
-                                    <button type="button" className="btnGhost" style={{ marginLeft: 6 }} onClick={() => registerAdvance(r)}>Anticipo</button>
-                                    <button type="button" className="liqAbonoBtn" style={{ marginLeft: 6 }} onClick={() => payWorkerWeek(r)}>💵 Pagar</button>
-                                  </>
-                                ) : <span className="chip ok" style={{ marginLeft: 6 }}>Pagado</span>}
+                                {/* El pago y el anticipo se hacen desde la pestaña 💵 Pagos (aquí
+                                    solo se revisa). Así no se paga por dos lados. */}
+                                {pending > 0
+                                  ? <span className="chip warn" style={{ marginLeft: 6 }} title="Págalo en la pestaña 💵 Pagos">Pendiente</span>
+                                  : <span className="chip ok" style={{ marginLeft: 6 }}>Pagado</span>}
                               </td>
                             </tr>
                           );
@@ -14963,12 +15005,27 @@ export function App() {
                 las 4 áreas, sin entrar pestaña por pestaña. Cada pago sigue
                 siendo individual (mismo botón, misma función payWorkerWeek) y
                 abre su recibo; solo se juntan aquí las filas con saldo. */}
-            {nominaView === "pagos" && (
+            {nominaView === "pagos" && (() => {
+              // Nómina ordenada: pendientes primero (por área y monto), los ya
+              // pagados al final. Así TINTON (pagado) sigue visible pero sin estorbar.
+              const ordenArea: Record<NominaGrupo, number> = { planta: 0, secadora: 1, cuadrilla: 2, administrativo: 3 };
+              const nominaOrden = [...nominaRows].sort((a, b) => {
+                const pa = (a.pending_amount ?? 0) > 0 ? 0 : 1, pb = (b.pending_amount ?? 0) > 0 ? 0 : 1;
+                if (pa !== pb) return pa - pb;
+                const ga = ordenArea[nominaGrupoDe(a.worker_role)], gb = ordenArea[nominaGrupoDe(b.worker_role)];
+                if (ga !== gb) return ga - gb;
+                return (b.to_pay ?? 0) - (a.to_pay ?? 0);
+              });
+              const cuadConActividad = pagosCuadRows.filter((r) => (r.total ?? 0) > 0);
+              const totalPendientes = nominaPendientes.length + pagosCuadPendientes.length;
+              const totalMonto = nominaPendientes.reduce((a, r) => a + (r.to_pay ?? (r.pending_amount ?? 0)), 0) + cuadPendienteTotal;
+              const nada = nominaOrden.length === 0 && cuadConActividad.length === 0;
+              return (
               <div className="tablePanel">
                 <div className="reportToolbar" style={{ marginBottom: 10 }}>
                   <div>
-                    <h2 style={{ marginBottom: 2 }}>💵 Pagos pendientes · todas las áreas</h2>
-                    <p className="muted" style={{ margin: 0 }}>Todos los trabajadores con saldo del período, juntos. Paga a cada uno desde aquí sin cambiar de pestaña.</p>
+                    <h2 style={{ marginBottom: 2 }}>💵 Pagos · todas las áreas</h2>
+                    <p className="muted" style={{ margin: 0 }}>Todo lo del período junto: nómina y cuadrilla de carga/descarga. Paga a cada uno desde aquí sin cambiar de pestaña.</p>
                   </div>
                   <div className="reportDates">
                     <label><span>Desde</span><input type="date" value={nominaFrom} onChange={(e) => setNominaFrom(e.target.value)} /></label>
@@ -14977,58 +15034,105 @@ export function App() {
                   </div>
                 </div>
 
-                {!dashboard.current_cash_register && nominaPendientes.length > 0 && (
+                {!dashboard.current_cash_register && totalPendientes > 0 && (
                   <div className="alertBox">Abre una caja para poder registrar los pagos.</div>
                 )}
 
-                {nominaPendientes.length === 0 ? (
-                  <div className="emptyState"><div className="emptyIcon">✅</div><p>No hay pagos pendientes en el período. Todo está al día.</p></div>
+                {nada ? (
+                  <div className="emptyState"><div className="emptyIcon">✅</div><p>No hay pagos en el período. Todo está al día.</p></div>
                 ) : (
-                  <div style={{ overflowX: "auto" }}>
+                <>
+                {/* Barra resumen: cuánto y a cuántos falta pagar en total. */}
+                <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: 10,
+                  background: totalPendientes > 0 ? "#ecfdf5" : "#f3f4f6", border: "1px solid " + (totalPendientes > 0 ? "#a7f3d0" : "#e5e7eb"),
+                  borderRadius: 10, padding: "10px 14px", marginBottom: 12 }}>
+                  <span style={{ fontWeight: 600 }}>{totalPendientes > 0 ? `${totalPendientes} pago(s) pendiente(s)` : "Sin pagos pendientes"}</span>
+                  <span style={{ fontWeight: 800, fontSize: 18, color: "#047857" }}>{money(totalMonto)}</span>
+                </div>
+
+                {/* ── Bloque 1: Nómina (pilador, secador, estibador, polvillo) ── */}
+                <div style={{ overflowX: "auto" }}>
+                  <table className="cajaTable">
+                    <thead>
+                      <tr>
+                        <th>Área</th><th>Rol</th><th>Trabajador</th>
+                        <th className="num">Ganó</th><th className="num">Anticipos</th><th className="num">A pagar</th><th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {nominaOrden.map((r, i) => {
+                        const pending = (r.pending_amount ?? 0) > 0;
+                        const toPay = r.to_pay ?? (r.pending_amount ?? 0);
+                        const info = NOMINA_GRUPO_TITULO[nominaGrupoDe(r.worker_role)];
+                        return (
+                          <tr key={i} style={{ opacity: pending ? 1 : 0.6 }}>
+                            <td><span className="chip">{info.icono} {info.titulo}</span></td>
+                            <td><span className={nominaRolChip(r.worker_role)}>{nominaRolLabel(r.worker_role)}</span></td>
+                            <td style={{ fontWeight: 600 }}>{r.worker_name}</td>
+                            <td className="num" style={{ fontWeight: 700 }}>{money(r.base_amount)}</td>
+                            <td className="num" style={{ color: (r.advances ?? 0) > 0 ? "var(--c-danger)" : "inherit" }}>{(r.advances ?? 0) > 0 ? `−${money(r.advances)}` : "—"}</td>
+                            <td className="num" style={{ fontWeight: 700, color: pending ? "#047857" : "inherit" }}>{pending ? money(toPay) : "—"}</td>
+                            <td className="num" style={{ whiteSpace: "nowrap" }}>
+                              <button type="button" className="btnGhost" title="Ver detalle del cálculo" onClick={() => loadNominaPaymentDetail(r)}>🔍</button>
+                              <button type="button" className="btnGhost" title="Recibo semanal (Rol de Pago)" style={{ marginLeft: 6 }} onClick={() => openReciboSemanal(r).catch(() => undefined)}>🧾</button>
+                              {pending ? (
+                                <>
+                                  <button type="button" className="btnGhost" style={{ marginLeft: 6 }} onClick={() => registerAdvance(r)}>Anticipo</button>
+                                  <button type="button" onClick={() => payWorkerWeek(r)}
+                                    style={{ marginLeft: 8, padding: "7px 16px", borderRadius: 8, border: "none", cursor: "pointer", background: "#047857", color: "#fff", fontWeight: 800, fontSize: 13 }}>💵 Pagar</button>
+                                </>
+                              ) : <span className="chip ok" style={{ marginLeft: 6 }}>Pagado</span>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {nominaOrden.length === 0 && (
+                        <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: "14px" }}>Sin nómina en el período.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* ── Bloque 2: Cuadrilla de carga/descarga (módulo aparte) ── */}
+                {cuadConActividad.length > 0 && (
+                  <div style={{ overflowX: "auto", marginTop: 18 }}>
+                    <h3 style={{ margin: "0 0 8px", fontSize: 15 }}>👷‍♂️ Cuadrilla de carga/descarga</h3>
                     <table className="cajaTable">
                       <thead>
                         <tr>
-                          <th>Área</th><th>Rol</th><th>Trabajador</th>
-                          <th className="num">Ganó</th><th className="num">Anticipos</th><th className="num">A pagar</th><th />
+                          <th>Trabajador</th><th className="num">Registros</th><th className="num">Ganó</th>
+                          <th className="num">Anticipos</th><th className="num">A pagar</th><th />
                         </tr>
                       </thead>
                       <tbody>
-                        {nominaPendientes.map((r, i) => {
-                          const toPay = r.to_pay ?? (r.pending_amount ?? 0);
-                          const info = NOMINA_GRUPO_TITULO[nominaGrupoDe(r.worker_role)];
+                        {[...cuadConActividad].sort((a, b) => (b.neto ?? 0) - (a.neto ?? 0)).map((r, i) => {
+                          const pending = (r.neto ?? 0) > 0;
                           return (
-                            <tr key={i}>
-                              <td><span className="chip">{info.icono} {info.titulo}</span></td>
-                              <td><span className={nominaRolChip(r.worker_role)}>{nominaRolLabel(r.worker_role)}</span></td>
-                              <td style={{ fontWeight: 600 }}>{r.worker_name}</td>
-                              <td className="num" style={{ fontWeight: 700 }}>{money(r.base_amount)}</td>
-                              <td className="num" style={{ color: (r.advances ?? 0) > 0 ? "var(--c-danger)" : "inherit" }}>{(r.advances ?? 0) > 0 ? `−${money(r.advances)}` : "—"}</td>
-                              <td className="num" style={{ fontWeight: 700, color: "#047857" }}>{money(toPay)}</td>
+                            <tr key={i} style={{ opacity: pending ? 1 : 0.6 }}>
+                              <td style={{ fontWeight: 600 }}><span className="chip ok" style={{ marginRight: 6 }}>Cuadrilla</span>{r.worker_name}</td>
+                              <td className="num">{r.entradas}</td>
+                              <td className="num" style={{ fontWeight: 700 }}>{money(r.total)}</td>
+                              <td className="num" style={{ color: (r.anticipos ?? 0) > 0 ? "var(--c-danger)" : "inherit" }}>{(r.anticipos ?? 0) > 0 ? `−${money(r.anticipos)}` : "—"}</td>
+                              <td className="num" style={{ fontWeight: 700, color: pending ? "#047857" : "inherit" }}>{pending ? money(r.neto) : "—"}</td>
                               <td className="num" style={{ whiteSpace: "nowrap" }}>
-                                <button type="button" className="btnGhost" title="Ver detalle del cálculo" onClick={() => loadNominaPaymentDetail(r)}>🔍</button>
-                                <button type="button" className="btnGhost" title="Recibo semanal (Rol de Pago)" style={{ marginLeft: 6 }} onClick={() => openReciboSemanal(r).catch(() => undefined)}>🧾</button>
-                                <button type="button" className="btnGhost" style={{ marginLeft: 6 }} onClick={() => registerAdvance(r)}>Anticipo</button>
-                                <button type="button" onClick={() => payWorkerWeek(r)}
-                                  style={{ marginLeft: 8, padding: "7px 16px", borderRadius: 8, border: "none", cursor: "pointer", background: "#047857", color: "#fff", fontWeight: 800, fontSize: 13 }}>💵 Pagar</button>
+                                {pending ? (
+                                  <button type="button" onClick={() => payCuadrillaWorker(r)}
+                                    style={{ padding: "7px 16px", borderRadius: 8, border: "none", cursor: "pointer", background: "#047857", color: "#fff", fontWeight: 800, fontSize: 13 }}>💵 Pagar</button>
+                                ) : <span className="chip ok">Pagado</span>}
                               </td>
                             </tr>
                           );
                         })}
                       </tbody>
-                      <tfoot>
-                        <tr>
-                          <td colSpan={3} style={{ fontWeight: 700 }}>TOTAL A PAGAR · {nominaPendientes.length} trabajador(es)</td>
-                          <td className="num" style={{ fontWeight: 700 }}>{money(nominaPendientes.reduce((a, r) => a + r.base_amount, 0))}</td>
-                          <td className="num" style={{ fontWeight: 700, color: "var(--c-danger)" }}>−{money(nominaPendientes.reduce((a, r) => a + (r.advances ?? 0), 0))}</td>
-                          <td className="num" style={{ fontWeight: 800, color: "#047857" }}>{money(nominaPendientes.reduce((a, r) => a + (r.to_pay ?? (r.pending_amount ?? 0)), 0))}</td>
-                          <td />
-                        </tr>
-                      </tfoot>
                     </table>
+                    <p className="muted" style={{ margin: "6px 0 0", fontSize: 12 }}>El recibo desglosado de la cuadrilla se imprime desde la pestaña 👷‍♂️ Cuadrilla → Resumen.</p>
                   </div>
                 )}
+                </>
+                )}
               </div>
-            )}
+              );
+            })()}
 
             {nominaView === "historial" && (
               <>
