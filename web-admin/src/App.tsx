@@ -1142,7 +1142,7 @@ const navGroups: Array<{ label: string; tabs: string[] }> = [
   { label: "Operación", tabs: ["Bascula", "Secadoras", "Produccion", "Gana", "Inventario", "Seleccion"] },
   { label: "Comercial", tabs: ["Ventas", "Compras", "Caja"] },
   { label: "Cuentas", tabs: ["Por Cobrar", "Por Pagar"] },
-  { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores", "Nomina", "Sueldos", "Servicio Pilado"] },
+  { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores", "Nomina", "Servicio Pilado"] },
   { label: "Contabilidad", tabs: ["Costos Operativos", "Estados Financieros"] },
   { label: "Sistema", tabs: ["Reportes", "Configuracion"] }
 ];
@@ -1876,10 +1876,10 @@ export function App() {
     open: false, loading: false, data: null
   });
   const [secadorSugg, setSecadorSugg] = useState<Array<{ worker_name: string; work_date: string; tunnels: number; suggested_amount: number; already_generated: boolean; dia_inicio?: string; dia_fin?: string; dias_corrida?: number }> | null>(null);
-  const [nominaView, setNominaView] = useState<NominaGrupo | "pagos" | "historial">("pagos");
+  const [nominaView, setNominaView] = useState<NominaGrupo | "pagos" | "historial" | "sueldo-admin">("pagos");
   // Filas de la pestaña activa. El filtro es puramente de frontend sobre el
   // array que ya trae /labor/summary: no se toca la petición ni el backend.
-  const nominaGrupoActivo: NominaGrupo = (nominaView === "historial" || nominaView === "pagos") ? "planta" : nominaView;
+  const nominaGrupoActivo: NominaGrupo = (nominaView === "historial" || nominaView === "pagos" || nominaView === "sueldo-admin") ? "planta" : nominaView;
   const nominaFiltradas = useMemo(
     () => nominaRows.filter((r) => nominaGrupoDe(r.worker_role) === nominaGrupoActivo),
     [nominaRows, nominaGrupoActivo]
@@ -4081,6 +4081,20 @@ export function App() {
     }
   }
 
+  // Anticipo a una cuadrilla (módulo aparte): registra un adelanto que baja su neto.
+  async function registerCuadrillaAdvance(workerName: string) {
+    const amtStr = window.prompt(`Anticipo a la cuadrilla ${workerName}. Monto $:`, "");
+    if (amtStr === null) return;
+    const amount = Number(amtStr);
+    if (!amount || amount <= 0) { addToast("Monto inválido", "error"); return; }
+    const concept = window.prompt("Concepto (opcional):", "Anticipo") ?? undefined;
+    try {
+      await apiPost("/cuadrilla/advances", { worker_name: workerName, amount, concept });
+      addToast(`Anticipo de ${money(amount)} registrado a ${workerName}`, "success");
+      await refreshNomina();
+    } catch (e) { addToast(`No se pudo registrar: ${e instanceof Error ? e.message : "error"}`, "error"); }
+  }
+
   async function payWorkerWeek(row: WorkerSummary, fromOverride?: string, toOverride?: string) {
     const from = fromOverride ?? nominaFrom, to = toOverride ?? nominaTo;
     const registerId = dashboard.current_cash_register?.id;
@@ -5423,7 +5437,6 @@ export function App() {
     if (activeTab === "Secadoras") loadMotorActive(motorActivo).catch(() => undefined);
     if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
     if (activeTab === "Cuadrilla") refreshCuadrilla().catch(() => undefined);
-    if (activeTab === "Sueldos") { loadAdminStaff().catch(() => undefined); loadAdminHistory().catch(() => undefined); }
     if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
     if (activeTab === "Servicio Pilado") { refreshPilado().catch(() => undefined); refreshCobros().catch(() => undefined); }
     if (activeTab === "Seleccion") refreshSelection().catch(() => undefined);
@@ -5432,9 +5445,14 @@ export function App() {
     if (activeTab === "Costos Operativos") refreshCostos().catch(() => undefined);
     if (activeTab === "Estados Financieros") loadFinanzas().catch((e) => addToast(e.message, "error"));
   }, [activeTab, motorActivo]);
+
+  // Los socios no tienen nómina de producción: al entrar a Nómina van directo a Sueldo Administrativo.
+  useEffect(() => {
+      if (activeTab === "Nomina" && !esCeyroActivo) setNominaView("sueldo-admin");
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activeTab, esCeyroActivo]);
   // Al cambiar de accionista, recarga Sueldos al cambiar de accionista (personal y pagos son por accionista).
   useEffect(() => {
-    if (activeTab === "Sueldos") { loadAdminStaff().catch(() => undefined); loadAdminHistory().catch(() => undefined); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeAccionistaId]);
 
@@ -14623,115 +14641,29 @@ export function App() {
           );
         })()}
 
-        {activeTab === "Sueldos" && (() => {
-          const accName = accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "—";
-          const totalStaff = adminStaff.reduce((sum, r) => sum + (r.base_salary ?? 0), 0);
-          return (
-          <section className="cuentasLayout">
-            <div className="reportToolbar" style={{ marginBottom: 12 }}>
-              <div>
-                <h2 style={{ marginBottom: 2 }}>💼 Sueldos · Personal administrativo</h2>
-                <p className="muted" style={{ margin: 0 }}>Sueldo fijo quincenal (+ incentivo − descuentos). El pago sale de la caja de <strong>{accName}</strong>. Cada accionista tiene su propio personal.</p>
-              </div>
-              <button type="button" className="btnSecondary" onClick={() => { loadAdminStaff().catch(() => undefined); loadAdminHistory().catch(() => undefined); }}>↻ Actualizar</button>
-            </div>
-
-            {!cajaAbierta && (
-              <div className="alertBox" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                <span>No hay una caja abierta de {accName}: puedes registrar personal, pero para pagar abre una caja.</span>
-                <button type="button" className="primary" onClick={() => irATab("Caja")}>Abrir caja</button>
-              </div>
-            )}
-
-            <div className="panelGrid" style={{ alignItems: "start" }}>
-              <div className="tablePanel">
-                <form className="formPanel" onSubmit={submitAdminStaff} style={{ marginBottom: 12 }}>
-                  <h3 style={{ margin: "0 0 4px" }}>{adminEditId ? "Editar empleado" : "Agregar empleado"}</h3>
-                  <label><span>Cargo</span><input value={adminStaffForm.cargo} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, cargo: e.target.value })} placeholder="Ej. Contadora, Oficina" /></label>
-                  <label><span>Trabajador</span><input value={adminStaffForm.worker_name} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, worker_name: e.target.value })} placeholder="Nombre y apellido" /></label>
-                  <label><span>Sueldo base (quincenal)</span><input type="number" step="0.01" min="0" value={adminStaffForm.base_salary} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, base_salary: e.target.value })} placeholder="0.00" /></label>
-                  <div className="buttonRow">
-                    <button type="submit" className="primary">{adminEditId ? "Guardar" : "+ Agregar"}</button>
-                    {adminEditId && <button type="button" onClick={() => { setAdminEditId(null); setAdminStaffForm({ cargo: "", worker_name: "", base_salary: "" }); }}>Cancelar</button>}
-                  </div>
-                </form>
-
-                {adminStaff.length === 0 ? (
-                  <div className="emptyState"><div className="emptyIcon">💼</div><p>Aún no hay personal administrativo para {accName}. Agrégalo con el formulario de arriba.</p></div>
-                ) : (
-                  <div style={{ overflowX: "auto" }}>
-                    <table className="cajaTable">
-                      <thead><tr><th>Cargo</th><th>Trabajador</th><th className="num">Sueldo base</th><th /></tr></thead>
-                      <tbody>
-                        {adminStaff.map((st) => (
-                          <tr key={st.id}>
-                            <td>{st.cargo || "—"}</td>
-                            <td style={{ fontWeight: 600 }}>{st.worker_name}</td>
-                            <td className="num" style={{ fontWeight: 700 }}>{money(st.base_salary)}</td>
-                            <td className="num" style={{ whiteSpace: "nowrap" }}>
-                              <button type="button" className="btnGhost" title="Editar" onClick={() => editAdminStaff(st)}>✏️</button>
-                              <button type="button" className="btnGhost" title="Dar de baja" style={{ marginLeft: 6 }} onClick={() => removeAdminStaff(st)}>🗑</button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                      <tfoot><tr><td colSpan={2} style={{ fontWeight: 700 }}>TOTAL sueldos base (quincena)</td><td className="num" style={{ fontWeight: 700 }}>{money(totalStaff)}</td><td /></tr></tfoot>
-                    </table>
-                  </div>
-                )}
-              </div>
-
-              <div className="tablePanel">
-                <h3 style={{ margin: "0 0 8px" }}>📜 Sueldos pagados</h3>
-                {adminHistory.length === 0 ? (
-                  <div className="emptyState" style={{ padding: "22px 20px" }}><p>Aún no hay sueldos pagados para {accName}.</p></div>
-                ) : (
-                  <div style={{ overflowX: "auto" }}>
-                    <table className="cajaTable">
-                      <thead><tr><th>Fecha</th><th>Trabajador</th><th className="num">Base</th><th className="num">Incent.</th><th className="num">Desc.</th><th className="num">Pagado</th></tr></thead>
-                      <tbody>
-                        {adminHistory.map((h) => (
-                          <tr key={h.id}>
-                            <td>{new Date(h.paid_at).toLocaleDateString("es-EC")}</td>
-                            <td style={{ fontWeight: 600 }}>{h.worker_name}{h.cargo ? <span className="muted"> · {h.cargo}</span> : null}</td>
-                            <td className="num">{money(h.base_salary)}</td>
-                            <td className="num">{h.incentivo > 0 ? money(h.incentivo) : "—"}</td>
-                            <td className="num" style={{ color: h.descuentos > 0 ? "var(--c-danger)" : "inherit" }}>{h.descuentos > 0 ? `−${money(h.descuentos)}` : "—"}</td>
-                            <td className="num" style={{ fontWeight: 700, color: "#047857" }}>{money(h.net_amount)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            </div>
-
-          </section>
-          );
-        })()}
 
         {activeTab === "Nomina" && (
           <section className="cuentasLayout">
             <nav className="cajaSubNav">
-              {/* Pagar es la acción principal → va primero, con el conteo de
-                  pendientes para saber de un vistazo cuánta gente falta. */}
-              <button type="button" className={nominaView === "pagos" ? "active" : ""} onClick={() => setNominaView("pagos")}
-                style={{ fontWeight: 700 }}>
+              {/* Producción (Pagos, Secadora, Cuadrilla, Historial): solo la matriz (CEYRO). */}
+              {esCeyroActivo && (<>
+              <button type="button" className={nominaView === "pagos" ? "active" : ""} onClick={() => setNominaView("pagos")} style={{ fontWeight: 700 }}>
                 💵 Pagos
-                {(nominaPendientes.length + pagosCuadPendientes.length + adminStaff.length) > 0 && (
-                  <span style={{ marginLeft: 6, background: "#dc2626", color: "#fff", borderRadius: 999, padding: "1px 8px", fontSize: 12, fontWeight: 800 }}>{nominaPendientes.length + pagosCuadPendientes.length + adminStaff.length}</span>
+                {(nominaPendientes.length + pagosCuadPendientes.length) > 0 && (
+                  <span style={{ marginLeft: 6, background: "#dc2626", color: "#fff", borderRadius: 999, padding: "1px 8px", fontSize: 12, fontWeight: 800 }}>{nominaPendientes.length + pagosCuadPendientes.length}</span>
                 )}
               </button>
-              {esCeyroActivo && (<>
               <button type="button" className={nominaView === "secadora" ? "active" : ""} onClick={() => setNominaView("secadora")}>🔥 Secadora</button>
               <button type="button" className={nominaView === "cuadrilla" ? "active" : ""} onClick={() => { setNominaView("cuadrilla"); refreshCuadrilla().catch(() => undefined); }}>👷‍♂️ Cuadrilla</button>
               <button type="button" className={nominaView === "historial" ? "active" : ""} onClick={() => { setNominaView("historial"); loadNominaHistory().catch(() => undefined); }}>📜 Historial de Pagos</button>
               </>)}
+              {/* Sueldo administrativo: por accionista (matriz y socios). */}
+              <button type="button" className={nominaView === "sueldo-admin" ? "active" : ""} onClick={() => setNominaView("sueldo-admin")} style={{ fontWeight: 700 }}>💼 Sueldo Administrativo</button>
             </nav>
 
             {/* Banner: Costo Total de Nómina (A PAGAR) del período — piladores,
                 estibadores, polvillo y secadores. Se actualiza dinámicamente. */}
+            {nominaView !== "sueldo-admin" && (
             <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 12,
               background: "linear-gradient(90deg,#065f46,#15803d)", color: "#fff", borderRadius: 12, padding: "14px 18px", margin: "4px 0 14px" }}>
               <div>
@@ -14753,7 +14685,7 @@ export function App() {
                   .map(([label, v]) => (
 
                     <button key={label} type="button" title={`Ver ${label}`}
-                      onClick={() => { const g = label.toLowerCase() as NominaGrupo; if (g === "planta" || g === "administrativo") { setNominaView("pagos"); return; } setNominaView(g); if (g === "cuadrilla") refreshCuadrilla().catch(() => undefined); }}
+                      onClick={() => { const g = label.toLowerCase() as NominaGrupo; if (g === "administrativo") { setNominaView("sueldo-admin"); return; } if (g === "planta") { setNominaView("pagos"); return; } setNominaView(g); if (g === "cuadrilla") refreshCuadrilla().catch(() => undefined); }}
                       style={{ background: "rgba(255,255,255,.18)", border: "1px solid rgba(255,255,255,.12)", borderRadius: 10, padding: "7px 12px", textAlign: "right", cursor: "pointer", color: "#fff" }}>
                       <div style={{ fontSize: 11, opacity: 0.9, whiteSpace: "nowrap" }}>{label}</div>
                       <strong style={{ fontWeight: 800, fontSize: 16 }}>{money(v)}</strong>
@@ -14763,11 +14695,12 @@ export function App() {
 
               </div>
             </div>
+            )}
 
             {/* Pestañas operativas (Planta / Secadora / Cuadrilla / Administrativo).
                 Las cuatro comparten la misma tabla, el mismo estado y las mismas
                 acciones; solo cambian el filtro por rol y las columnas del medio. */}
-            {nominaView !== "historial" && nominaView !== "pagos" && esCeyroActivo && (() => {
+            {nominaView !== "historial" && nominaView !== "pagos" && nominaView !== "sueldo-admin" && esCeyroActivo && (() => {
               const grupo = nominaGrupoActivo;
               const info = NOMINA_GRUPO_TITULO[grupo];
               const cols = nominaColumnas(grupo);
@@ -15202,25 +15135,23 @@ export function App() {
                 siendo individual (mismo botón, misma función payWorkerWeek) y
                 abre su recibo; solo se juntan aquí las filas con saldo. */}
             {nominaView === "pagos" && (() => {
-              // Nómina ordenada: pendientes primero (por área y monto), los ya
-              // pagados al final. Así TINTON (pagado) sigue visible pero sin estorbar.
-              // Solo lo PENDIENTE (histórico completo). Lo ya pagado vive en el Historial.
               const buscar = pagoBuscar.trim().toLowerCase();
               const coincide = (nombre: string) => !buscar || String(nombre).toLowerCase().includes(buscar);
               const nominaOrden = nominaPendientes.filter((r) => coincide(r.worker_name));
-              const cuadConActividad = pagosCuadPendientes.filter((r) => coincide(r.worker_name));
-              const adminFiltrado = adminStaff.filter((st) => coincide(st.worker_name));
-              const adminUltimoPago = new Map();
-              for (const h of adminHistory) { if (!adminUltimoPago.has(h.worker_name)) adminUltimoPago.set(h.worker_name, h.paid_at); }
-              const totalPendientes = nominaPendientes.length + pagosCuadPendientes.length + adminStaff.length;
-              const totalMonto = nominaPendientes.reduce((a, r) => a + (r.to_pay ?? (r.pending_amount ?? 0)), 0) + cuadPendienteTotal + adminPendienteTotal;
-              const nada = nominaPendientes.length === 0 && pagosCuadPendientes.length === 0 && adminStaff.length === 0;
+              const cuadOrden = pagosCuadPendientes.filter((r) => coincide(r.worker_name)).sort((a, b) => {
+                const da = a.oldest_pending ? String(a.oldest_pending).slice(0, 10) : "9999-99-99";
+                const db = b.oldest_pending ? String(b.oldest_pending).slice(0, 10) : "9999-99-99";
+                return da < db ? -1 : da > db ? 1 : (b.neto ?? 0) - (a.neto ?? 0);
+              });
+              const totalPendientes = nominaPendientes.length + pagosCuadPendientes.length;
+              const totalMonto = nominaPendientes.reduce((a, r) => a + (r.to_pay ?? (r.pending_amount ?? 0)), 0) + cuadPendienteTotal;
+              const nada = nominaPendientes.length === 0 && pagosCuadPendientes.length === 0;
               return (
               <div className="tablePanel">
                 <div className="reportToolbar" style={{ marginBottom: 10 }}>
                   <div>
                     <h2 style={{ marginBottom: 2 }}>💵 Pagos · todo lo pendiente</h2>
-                    <p className="muted" style={{ margin: 0 }}>Todo lo que se le debe a cada quien (nómina, cuadrilla y sueldos administrativos), sin filtrar por fecha. Al pagar, sale de la caja y queda en el historial.</p>
+                    <p className="muted" style={{ margin: 0 }}>Nómina y cuadrilla juntas, sin filtrar por fecha: se acumula hasta liquidar. Al pagar sale de la caja y queda en el historial.</p>
                   </div>
                   <button type="button" className="btnSecondary" disabled={nominaBusy} onClick={() => refreshNomina().catch(() => undefined)}>{nominaBusy ? "Cargando…" : "↻ Actualizar"}</button>
                 </div>
@@ -15239,19 +15170,16 @@ export function App() {
                 )}
 
                 {nada ? (
-                  <div className="emptyState"><div className="emptyIcon">✅</div><p>No hay pagos en el período. Todo está al día.</p></div>
+                  <div className="emptyState"><div className="emptyIcon">✅</div><p>No hay pagos pendientes. Todo está al día.</p></div>
                 ) : (
                 <>
-                {/* Barra resumen: cuánto y a cuántos falta pagar en total. */}
                 <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: 10,
-                  background: totalPendientes > 0 ? "#ecfdf5" : "#f3f4f6", border: "1px solid " + (totalPendientes > 0 ? "#a7f3d0" : "#e5e7eb"),
-                  borderRadius: 10, padding: "10px 14px", marginBottom: 12 }}>
-                  <span style={{ fontWeight: 600 }}>{totalPendientes > 0 ? `${totalPendientes} pago(s) pendiente(s)` : "Sin pagos pendientes"}</span>
+                  background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 10, padding: "10px 14px", marginBottom: 12 }}>
+                  <span style={{ fontWeight: 600 }}>{`${totalPendientes} pago(s) pendiente(s)`}</span>
                   <span style={{ fontWeight: 800, fontSize: 18, color: "#047857" }}>{money(totalMonto)}</span>
                 </div>
 
-                {/* Bloque Nómina de producción: SOLO la matriz (CEYRO). */}
-                {esCeyroActivo && (
+                {/* Una sola tabla: nómina de producción y cuadrilla, juntas. */}
                 <div style={{ overflowX: "auto" }}>
                   <table className="cajaTable">
                     <thead>
@@ -15262,106 +15190,58 @@ export function App() {
                     </thead>
                     <tbody>
                       {nominaOrden.map((r, i) => {
-                        const pending = (r.pending_amount ?? 0) > 0;
                         const toPay = r.to_pay ?? (r.pending_amount ?? 0);
                         const info = NOMINA_GRUPO_TITULO[nominaGrupoDe(r.worker_role)];
                         return (
-                          <tr key={i} style={{ opacity: pending ? 1 : 0.6 }}>
+                          <tr key={"n" + i}>
                             <td><span className="chip">{info.icono} {info.titulo}</span></td>
                             <td><span className={nominaRolChip(r.worker_role)}>{nominaRolLabel(r.worker_role)}</span></td>
                             <td style={{ fontWeight: 600 }}>{r.worker_name}{r.oldest_pending ? <div style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>{antiguedadLabel(r.oldest_pending, r.pending_count)}</div> : null}</td>
                             <td className="num" style={{ fontWeight: 700 }}>{money(r.base_amount)}</td>
                             <td className="num" style={{ color: (r.advances ?? 0) > 0 ? "var(--c-danger)" : "inherit" }}>{(r.advances ?? 0) > 0 ? `−${money(r.advances)}` : "—"}</td>
-                            <td className="num" style={{ fontWeight: 700, color: pending ? "#047857" : "inherit" }}>{pending ? money(toPay) : "—"}</td>
+                            <td className="num" style={{ fontWeight: 700, color: "#047857" }}>{money(toPay)}</td>
                             <td className="num" style={{ whiteSpace: "nowrap" }}>
                               <button type="button" className="btnGhost" title="Ver detalle del cálculo" onClick={() => loadNominaPaymentDetail(r)}>🔍</button>
                               <button type="button" className="btnGhost" title="Recibo semanal (Rol de Pago)" style={{ marginLeft: 6 }} onClick={() => openReciboSemanal(r).catch(() => undefined)}>🧾</button>
-                              {pending ? (
-                                <>
-                                  <button type="button" className="btnGhost" style={{ marginLeft: 6 }} onClick={() => registerAdvance(r)}>Anticipo</button>
-                                  <button type="button" disabled={!cajaAbierta} onClick={() => abrirPagoNomina(r)}
-                                    style={{ marginLeft: 8, padding: "7px 16px", borderRadius: 8, border: "none", cursor: cajaAbierta ? "pointer" : "not-allowed", background: cajaAbierta ? "#047857" : "#9ca3af", color: "#fff", fontWeight: 800, fontSize: 13 }}>💵 Pagar</button>
-                                </>
-                              ) : <span className="chip ok" style={{ marginLeft: 6 }}>Pagado</span>}
+                              <button type="button" className="btnGhost" style={{ marginLeft: 6 }} onClick={() => registerAdvance(r)}>Anticipo</button>
+                              <button type="button" disabled={!cajaAbierta} onClick={() => abrirPagoNomina(r)}
+                                style={{ marginLeft: 8, padding: "7px 16px", borderRadius: 8, border: "none", cursor: cajaAbierta ? "pointer" : "not-allowed", background: cajaAbierta ? "#047857" : "#9ca3af", color: "#fff", fontWeight: 800, fontSize: 13 }}>💵 Pagar</button>
                             </td>
                           </tr>
                         );
                       })}
-                      {nominaOrden.length === 0 && (
-                        <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: "14px" }}>{pagoBuscar ? "Sin resultados para la búsqueda." : "Sin pagos de nómina pendientes."}</td></tr>
+                      {cuadOrden.map((r, i) => (
+                        <tr key={"c" + i}>
+                          <td><span className="chip">👷‍♂️ Cuadrilla</span></td>
+                          <td><span className="chip ok">Cuadrilla</span></td>
+                          <td style={{ fontWeight: 600 }}>{r.worker_name}{r.oldest_pending ? <div style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>{antiguedadLabel(r.oldest_pending, r.pending_count)}</div> : null}</td>
+                          <td className="num" style={{ fontWeight: 700 }}>{money(r.total)}</td>
+                          <td className="num" style={{ color: (r.anticipos ?? 0) > 0 ? "var(--c-danger)" : "inherit" }}>{(r.anticipos ?? 0) > 0 ? `−${money(r.anticipos)}` : "—"}</td>
+                          <td className="num" style={{ fontWeight: 700, color: "#047857" }}>{money(r.neto)}</td>
+                          <td className="num" style={{ whiteSpace: "nowrap" }}>
+                            <button type="button" className="btnGhost" title="Recibo desglosado" onClick={() => printCuadrillaRecibo(r.worker_name)}>🧾</button>
+                            <button type="button" className="btnGhost" style={{ marginLeft: 6 }} onClick={() => registerCuadrillaAdvance(r.worker_name).catch(() => undefined)}>Anticipo</button>
+                            <button type="button" disabled={!cajaAbierta} onClick={() => abrirPagoCuadrilla(r)}
+                              style={{ marginLeft: 8, padding: "7px 16px", borderRadius: 8, border: "none", cursor: cajaAbierta ? "pointer" : "not-allowed", background: cajaAbierta ? "#047857" : "#9ca3af", color: "#fff", fontWeight: 800, fontSize: 13 }}>💵 Pagar</button>
+                          </td>
+                        </tr>
+                      ))}
+                      {nominaOrden.length === 0 && cuadOrden.length === 0 && (
+                        <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: "14px" }}>{pagoBuscar ? "Sin resultados para la búsqueda." : "Sin pagos pendientes."}</td></tr>
                       )}
                     </tbody>
+                    <tfoot>
+                      <tr>
+                        <td colSpan={5} style={{ fontWeight: 700 }}>TOTAL A PAGAR · {totalPendientes} trabajador(es)</td>
+                        <td className="num" style={{ fontWeight: 800, color: "#047857" }}>{money(totalMonto)}</td>
+                        <td />
+                      </tr>
+                    </tfoot>
                   </table>
                 </div>
-
-                )}
-                {/* ── Bloque 2: Cuadrilla de carga/descarga (módulo aparte) ── */}
-                {esCeyroActivo && cuadConActividad.length > 0 && (
-                  <div style={{ overflowX: "auto", marginTop: 18 }}>
-                    <h3 style={{ margin: "0 0 8px", fontSize: 15 }}>👷‍♂️ Cuadrilla de carga/descarga</h3>
-                    <table className="cajaTable">
-                      <thead>
-                        <tr>
-                          <th>Trabajador</th><th className="num">Registros</th><th className="num">Ganó</th>
-                          <th className="num">Anticipos</th><th className="num">A pagar</th><th />
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {[...cuadConActividad].sort((a, b) => { const da = a.oldest_pending ? String(a.oldest_pending).slice(0,10) : "9999-99-99"; const db = b.oldest_pending ? String(b.oldest_pending).slice(0,10) : "9999-99-99"; return da < db ? -1 : da > db ? 1 : (b.neto ?? 0) - (a.neto ?? 0); }).map((r, i) => {
-                          const pending = (r.neto ?? 0) > 0;
-                          return (
-                            <tr key={i} style={{ opacity: pending ? 1 : 0.6 }}>
-                              <td style={{ fontWeight: 600 }}><span className="chip ok" style={{ marginRight: 6 }}>Cuadrilla</span>{r.worker_name}{r.oldest_pending ? <div style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>{antiguedadLabel(r.oldest_pending, r.pending_count)}</div> : null}</td>
-                              <td className="num">{r.entradas}</td>
-                              <td className="num" style={{ fontWeight: 700 }}>{money(r.total)}</td>
-                              <td className="num" style={{ color: (r.anticipos ?? 0) > 0 ? "var(--c-danger)" : "inherit" }}>{(r.anticipos ?? 0) > 0 ? `−${money(r.anticipos)}` : "—"}</td>
-                              <td className="num" style={{ fontWeight: 700, color: pending ? "#047857" : "inherit" }}>{pending ? money(r.neto) : "—"}</td>
-                              <td className="num" style={{ whiteSpace: "nowrap" }}>
-                                {pending ? (
-                                  <button type="button" disabled={!cajaAbierta} onClick={() => abrirPagoCuadrilla(r)}
-                                    style={{ padding: "7px 16px", borderRadius: 8, border: "none", cursor: cajaAbierta ? "pointer" : "not-allowed", background: cajaAbierta ? "#047857" : "#9ca3af", color: "#fff", fontWeight: 800, fontSize: 13 }}>💵 Pagar</button>
-                                ) : <span className="chip ok">Pagado</span>}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                    <p className="muted" style={{ margin: "6px 0 0", fontSize: 12 }}>El recibo desglosado de la cuadrilla se imprime desde la pestaña 👷‍♂️ Cuadrilla → Resumen.</p>
-                  </div>
-                )}
-                {/* Bloque Personal administrativo: del accionista activo (matriz y socios). */}
-                {adminFiltrado.length > 0 && (
-                  <div style={{ overflowX: "auto", marginTop: esCeyroActivo ? 18 : 0 }}>
-                    {esCeyroActivo && <h3 style={{ margin: "0 0 8px", fontSize: 15 }}>💼 Personal administrativo</h3>}
-                    <table className="cajaTable">
-                      <thead>
-                        <tr><th>Área</th><th>Cargo</th><th>Trabajador</th><th className="num">Sueldo base</th><th className="num">A pagar</th><th /></tr>
-                      </thead>
-                      <tbody>
-                        {adminFiltrado.map((st) => {
-                          const ult = adminUltimoPago.get(st.worker_name);
-                          return (
-                            <tr key={st.id}>
-                              <td><span className="chip">💼 Administrativo</span></td>
-                              <td>{st.cargo || "—"}</td>
-                              <td style={{ fontWeight: 600 }}>{st.worker_name}<div style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>{ult ? `último pago: ${new Date(ult).toLocaleDateString("es-EC")}` : "aún sin pagar"}</div></td>
-                              <td className="num" style={{ fontWeight: 700 }}>{money(st.base_salary)}</td>
-                              <td className="num" style={{ fontWeight: 700, color: "#047857" }}>{money(st.base_salary)}</td>
-                              <td className="num" style={{ whiteSpace: "nowrap" }}>
-                                <button type="button" disabled={!cajaAbierta} onClick={() => abrirAdminPay(st)}
-                                  style={{ padding: "7px 16px", borderRadius: 8, border: "none", cursor: cajaAbierta ? "pointer" : "not-allowed", background: cajaAbierta ? "#047857" : "#9ca3af", color: "#fff", fontWeight: 800, fontSize: 13 }}>💵 Pagar</button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                    <p className="muted" style={{ margin: "6px 0 0", fontSize: 12 }}>Sueldo fijo quincenal; al pagar puedes sumar incentivo o restar descuentos. El personal se agrega en la pestaña 💼 Sueldos.</p>
-                  </div>
-                )}
                 </>
                 )}
+
                 {pagoConfirm && (() => {
                   const isNom = pagoConfirm.kind === "nomina";
                   const nombre = isNom ? pagoConfirm.nRow?.worker_name : pagoConfirm.cRow?.worker_name;
@@ -15388,6 +15268,101 @@ export function App() {
                     </div>
                   );
                 })()}
+              </div>
+              );
+            })()}
+
+            {nominaView === "sueldo-admin" && (() => {
+              const accName = accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "—";
+              const totalStaff = adminStaff.reduce((sum, r) => sum + (r.base_salary ?? 0), 0);
+              const ultimoPago = new Map();
+              for (const h of adminHistory) { if (!ultimoPago.has(h.worker_name)) ultimoPago.set(h.worker_name, h.paid_at); }
+              return (
+              <>
+                <div className="reportToolbar" style={{ marginBottom: 12 }}>
+                  <div>
+                    <h2 style={{ marginBottom: 2 }}>💼 Sueldo Administrativo</h2>
+                    <p className="muted" style={{ margin: 0 }}>Personal de oficina de <strong>{accName}</strong>. Sueldo fijo quincenal (+ incentivo − descuentos). El pago sale de la caja de {accName}.</p>
+                  </div>
+                  <button type="button" className="btnSecondary" onClick={() => { loadAdminStaff().catch(() => undefined); loadAdminHistory().catch(() => undefined); }}>↻ Actualizar</button>
+                </div>
+
+                {!cajaAbierta && adminStaff.length > 0 && (
+                  <div className="alertBox" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                    <span>No hay una caja abierta de {accName}: puedes registrar personal, pero para pagar abre una caja.</span>
+                    <button type="button" className="primary" onClick={() => irATab("Caja")}>Abrir caja</button>
+                  </div>
+                )}
+
+                <div className="panelGrid" style={{ alignItems: "start" }}>
+                  <div className="tablePanel">
+                    <form className="formPanel" onSubmit={submitAdminStaff} style={{ marginBottom: 12 }}>
+                      <h3 style={{ margin: "0 0 4px" }}>{adminEditId ? "Editar empleado" : "Agregar empleado"}</h3>
+                      <label><span>Cargo</span><input value={adminStaffForm.cargo} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, cargo: e.target.value })} placeholder="Ej. Contadora, Oficina" /></label>
+                      <label><span>Trabajador</span><input value={adminStaffForm.worker_name} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, worker_name: e.target.value })} placeholder="Nombre y apellido" /></label>
+                      <label><span>Sueldo base (quincenal)</span><input type="number" step="0.01" min="0" value={adminStaffForm.base_salary} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, base_salary: e.target.value })} placeholder="0.00" /></label>
+                      <div className="buttonRow">
+                        <button type="submit" className="primary">{adminEditId ? "Guardar" : "+ Agregar"}</button>
+                        {adminEditId && <button type="button" onClick={() => { setAdminEditId(null); setAdminStaffForm({ cargo: "", worker_name: "", base_salary: "" }); }}>Cancelar</button>}
+                      </div>
+                    </form>
+
+                    {adminStaff.length === 0 ? (
+                      <div className="emptyState"><div className="emptyIcon">💼</div><p>Aún no hay personal administrativo para {accName}. Agrégalo con el formulario de arriba.</p></div>
+                    ) : (
+                      <div style={{ overflowX: "auto" }}>
+                        <table className="cajaTable">
+                          <thead><tr><th>Cargo</th><th>Trabajador</th><th className="num">Sueldo base</th><th /></tr></thead>
+                          <tbody>
+                            {adminStaff.map((st) => {
+                              const ult = ultimoPago.get(st.worker_name);
+                              return (
+                                <tr key={st.id}>
+                                  <td>{st.cargo || "—"}</td>
+                                  <td style={{ fontWeight: 600 }}>{st.worker_name}<div style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>{ult ? `último pago: ${new Date(ult).toLocaleDateString("es-EC")}` : "aún sin pagar"}</div></td>
+                                  <td className="num" style={{ fontWeight: 700 }}>{money(st.base_salary)}</td>
+                                  <td className="num" style={{ whiteSpace: "nowrap" }}>
+                                    <button type="button" className="btnGhost" title="Editar" onClick={() => editAdminStaff(st)}>✏️</button>
+                                    <button type="button" className="btnGhost" title="Dar de baja" style={{ marginLeft: 6 }} onClick={() => removeAdminStaff(st)}>🗑</button>
+                                    <button type="button" disabled={!cajaAbierta} onClick={() => abrirAdminPay(st)}
+                                      style={{ marginLeft: 8, padding: "7px 16px", borderRadius: 8, border: "none", cursor: cajaAbierta ? "pointer" : "not-allowed", background: cajaAbierta ? "#047857" : "#9ca3af", color: "#fff", fontWeight: 800, fontSize: 13 }}>💵 Pagar</button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                          <tfoot><tr><td colSpan={2} style={{ fontWeight: 700 }}>TOTAL sueldos base (quincena)</td><td className="num" style={{ fontWeight: 700 }}>{money(totalStaff)}</td><td /></tr></tfoot>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="tablePanel">
+                    <h3 style={{ margin: "0 0 8px" }}>📜 Sueldos pagados</h3>
+                    {adminHistory.length === 0 ? (
+                      <div className="emptyState" style={{ padding: "22px 20px" }}><p>Aún no hay sueldos pagados para {accName}.</p></div>
+                    ) : (
+                      <div style={{ overflowX: "auto" }}>
+                        <table className="cajaTable">
+                          <thead><tr><th>Fecha</th><th>Trabajador</th><th className="num">Base</th><th className="num">Incent.</th><th className="num">Desc.</th><th className="num">Pagado</th></tr></thead>
+                          <tbody>
+                            {adminHistory.map((h) => (
+                              <tr key={h.id}>
+                                <td>{new Date(h.paid_at).toLocaleDateString("es-EC")}</td>
+                                <td style={{ fontWeight: 600 }}>{h.worker_name}{h.cargo ? <span className="muted"> · {h.cargo}</span> : null}</td>
+                                <td className="num">{money(h.base_salary)}</td>
+                                <td className="num">{h.incentivo > 0 ? money(h.incentivo) : "—"}</td>
+                                <td className="num" style={{ color: h.descuentos > 0 ? "var(--c-danger)" : "inherit" }}>{h.descuentos > 0 ? `−${money(h.descuentos)}` : "—"}</td>
+                                <td className="num" style={{ fontWeight: 700, color: "#047857" }}>{money(h.net_amount)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 {adminPay && (() => {
                   const base = adminPay.staff.base_salary ?? 0;
                   const inc = Number(adminPay.incentivo || 0);
@@ -15405,7 +15380,7 @@ export function App() {
                           <span style={{ borderTop: "1px solid #e5e7eb", paddingTop: 8, fontWeight: 800 }}>Neto a pagar</span>
                           <strong className="num" style={{ borderTop: "1px solid #e5e7eb", paddingTop: 8, fontWeight: 800, color: "#047857", fontSize: 17 }}>{money(neto)}</strong>
                         </div>
-                        <p className="muted" style={{ fontSize: 12, margin: "12px 0 16px" }}>Sale de la caja abierta del accionista activo y queda guardado en el historial.</p>
+                        <p className="muted" style={{ fontSize: 12, margin: "12px 0 16px" }}>Sale de la caja abierta de {accName} y queda guardado en el historial.</p>
                         <div className="buttonRow" style={{ justifyContent: "flex-end", gap: 8 }}>
                           <button type="button" onClick={() => setAdminPay(null)}>Cancelar</button>
                           <button type="button" disabled={!(neto > 0)} onClick={() => confirmarAdminPay()} style={{ background: neto > 0 ? "#047857" : "#9ca3af", color: "#fff", border: "none", borderRadius: 8, padding: "8px 18px", fontWeight: 800, cursor: neto > 0 ? "pointer" : "not-allowed" }}>💵 Confirmar pago</button>
@@ -15414,7 +15389,7 @@ export function App() {
                     </div>
                   );
                 })()}
-              </div>
+              </>
               );
             })()}
 
