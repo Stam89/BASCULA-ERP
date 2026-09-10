@@ -1835,13 +1835,20 @@ export function App() {
   const [nominaTo, setNominaTo] = useState(nominaToday);
   const [nominaRows, setNominaRows] = useState<WorkerSummary[]>([]);
   const [nominaBusy, setNominaBusy] = useState(false);
+  // 💵 Pagos NO filtra por fecha: muestra TODO lo que se le debe a cada quien,
+  // acumulado hasta que se liquide. Se pide el resumen con un rango amplísimo
+  // (todo el histórico) y se listan solo los pendientes. Al pagar se liquida
+  // todo ese saldo (mismo rango) y pasa al Historial; empieza un rol nuevo.
+  const PAGOS_FROM = "2000-01-01";
+  const PAGOS_TO = "2999-12-31";
+  const [pagosNominaRows, setPagosNominaRows] = useState<WorkerSummary[]>([]);
   // Costo Total de Nómina (A PAGAR) del período activo: suma EXACTA de la columna
   // "A pagar" de la tabla (pending>0 ? to_pay : 0), por rol y total. Se recalcula
   // cuando cambian nominaRows (fechas, pagos o anticipos → refreshNomina).
   const nominaResumen = useMemo(() => {
     const acc = { total: 0, PILADOR: 0, ESTIBADOR: 0, POLVILLO: 0, SECADOR: 0, OTROS: 0,
       planta: 0, secadora: 0, cuadrilla: 0, administrativo: 0 };
-    for (const r of nominaRows) {
+    for (const r of pagosNominaRows) {
       const pay = (r.pending_amount ?? 0) > 0 ? (Number(r.to_pay) || 0) : 0;
       acc.total += pay;
       if (r.worker_role === "PILADOR") acc.PILADOR += pay;
@@ -1853,7 +1860,7 @@ export function App() {
       acc[nominaGrupoDe(r.worker_role)] += pay;
     }
     return acc;
-  }, [nominaRows]);
+  }, [pagosNominaRows]);
   const [nominaPaymentDetail, setNominaPaymentDetail] = useState<{ open: boolean; row: WorkerSummary | null; payments: WorkerPaymentDetail[]; loading: boolean }>({
     open: false, row: null, payments: [], loading: false
   });
@@ -1876,14 +1883,14 @@ export function App() {
   // ordenado (por área y luego por monto): no hay petición ni endpoint nuevos.
   const nominaPendientes = useMemo(() => {
     const orden: Record<NominaGrupo, number> = { planta: 0, secadora: 1, cuadrilla: 2, administrativo: 3 };
-    return nominaRows
+    return pagosNominaRows
       .filter((r) => (r.pending_amount ?? 0) > 0)
       .sort((a, b) => {
         const ga = orden[nominaGrupoDe(a.worker_role)], gb = orden[nominaGrupoDe(b.worker_role)];
         if (ga !== gb) return ga - gb;
         return (b.to_pay ?? 0) - (a.to_pay ?? 0);
       });
-  }, [nominaRows]);
+  }, [pagosNominaRows]);
   // 💵 Pagos también liquida la cuadrilla de carga/descarga (módulo aparte).
   // Se trae su resumen para el MISMO período que la nómina y se listan los que
   // aún deben algo (neto > 0). El pago real descuenta de caja (POST /cuadrilla/pay-worker).
@@ -3117,12 +3124,17 @@ export function App() {
   async function refreshNomina() {
     setNominaBusy(true);
     try {
+      // Tablas de REVISIÓN de las pestañas operativas: por período elegido.
       const data = await apiGet<{ rows: WorkerSummary[] }>(`/labor/summary?from=${nominaFrom}&to=${nominaTo}`);
       setNominaRows(data.rows);
-      // La cuadrilla de carga/descarga vive en otro módulo; se carga en paralelo
-      // para que Pagos muestre TODO lo pendiente del período en una sola pantalla.
+      // 💵 PAGOS: todo el histórico pendiente (sin filtro de fecha). Nómina y
+      // cuadrilla de carga/descarga, acumulado hasta liquidar.
       try {
-        const cuad = await apiGet<{ rows: CuadrillaSummaryRow[] }>(`/cuadrilla/summary?from=${nominaFrom}&to=${nominaTo}`);
+        const pag = await apiGet<{ rows: WorkerSummary[] }>(`/labor/summary?from=${PAGOS_FROM}&to=${PAGOS_TO}`);
+        setPagosNominaRows(pag.rows);
+      } catch { setPagosNominaRows([]); }
+      try {
+        const cuad = await apiGet<{ rows: CuadrillaSummaryRow[] }>(`/cuadrilla/summary?from=${PAGOS_FROM}&to=${PAGOS_TO}`);
         setPagosCuadRows(cuad.rows);
       } catch { setPagosCuadRows([]); }
     } catch (e) {
@@ -4028,7 +4040,8 @@ export function App() {
     }
   }
 
-  async function payWorkerWeek(row: WorkerSummary) {
+  async function payWorkerWeek(row: WorkerSummary, fromOverride?: string, toOverride?: string) {
+    const from = fromOverride ?? nominaFrom, to = toOverride ?? nominaTo;
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) { addToast("Abre una caja para pagar", "error"); return; }
     const toPay = row.to_pay ?? (row.pending_amount ?? 0);
@@ -4037,14 +4050,14 @@ export function App() {
       await apiPost("/labor/pay-worker", {
         worker_role: row.worker_role,
         worker_name: row.worker_name,
-        from: nominaFrom,
-        to: nominaTo,
+        from,
+        to,
         cash_register_id: registerId
       });
       addToast(`Pagado a ${row.worker_name}`, "success");
       // Abre el recibo semanal para firma (con el período que se acaba de pagar,
       // antes de que refreshNomina reordene las filas).
-      await openReciboSemanal(row, nominaFrom, nominaTo);
+      await openReciboSemanal(row, from, to);
       await refreshNomina();
       await refreshCaja(registerId);
     } catch (e) {
@@ -4055,18 +4068,19 @@ export function App() {
   // Pagar a una persona de la cuadrilla de carga/descarga (módulo aparte). Espeja
   // a payWorkerWeek pero contra /cuadrilla/pay-worker: descuenta de la caja y
   // marca sus registros como pagados (dejan de aparecer en Pagos).
-  async function payCuadrillaWorker(row: CuadrillaSummaryRow) {
+  async function payCuadrillaWorker(row: CuadrillaSummaryRow, fromOverride?: string, toOverride?: string) {
+    const from = fromOverride ?? nominaFrom, to = toOverride ?? nominaTo;
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) { addToast("Abre una caja para pagar", "error"); return; }
     const neto = row.neto ?? 0;
-    if (!(neto > 0)) { addToast("Esta cuadrilla no tiene saldo pendiente en el período.", "error"); return; }
+    if (!(neto > 0)) { addToast("Esta cuadrilla no tiene saldo pendiente.", "error"); return; }
     if (!window.confirm(`Pagar ${money(neto)} a la cuadrilla ${row.worker_name}?${(row.anticipos ?? 0) > 0 ? `
 (Ganó ${money(row.total)}, menos ${money(row.anticipos)} de anticipos)` : ""}`)) return;
     try {
       await apiPost("/cuadrilla/pay-worker", {
         worker_name: row.worker_name,
-        from: nominaFrom,
-        to: nominaTo,
+        from,
+        to,
         cash_register_id: registerId
       });
       addToast(`Pagado a la cuadrilla ${row.worker_name}`, "success");
@@ -14543,7 +14557,7 @@ export function App() {
                   style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "#fff", fontSize: 30, fontWeight: 800, lineHeight: 1.1, textAlign: "left" }}>
                   {money(nominaResumen.total + cuadPendienteTotal)} <span style={{ fontSize: 13, fontWeight: 600, opacity: 0.85 }}>›</span>
                 </button>
-                <div style={{ fontSize: 11, opacity: 0.85, marginTop: 2 }}>Período {nominaFrom} → {nominaTo} · Planta / Secadora / Cuadrilla / Administrativo</div>
+                <div style={{ fontSize: 11, opacity: 0.85, marginTop: 2 }}>Todo lo pendiente por pagar (nómina + cuadrilla) · se acumula hasta liquidar</div>
               </div>
               {/* Subtotales por pestaña operativa. Suman lo mismo que el total: cada fila
 
@@ -15007,15 +15021,9 @@ export function App() {
             {nominaView === "pagos" && (() => {
               // Nómina ordenada: pendientes primero (por área y monto), los ya
               // pagados al final. Así TINTON (pagado) sigue visible pero sin estorbar.
-              const ordenArea: Record<NominaGrupo, number> = { planta: 0, secadora: 1, cuadrilla: 2, administrativo: 3 };
-              const nominaOrden = [...nominaRows].sort((a, b) => {
-                const pa = (a.pending_amount ?? 0) > 0 ? 0 : 1, pb = (b.pending_amount ?? 0) > 0 ? 0 : 1;
-                if (pa !== pb) return pa - pb;
-                const ga = ordenArea[nominaGrupoDe(a.worker_role)], gb = ordenArea[nominaGrupoDe(b.worker_role)];
-                if (ga !== gb) return ga - gb;
-                return (b.to_pay ?? 0) - (a.to_pay ?? 0);
-              });
-              const cuadConActividad = pagosCuadRows.filter((r) => (r.total ?? 0) > 0);
+              // Solo lo PENDIENTE (histórico completo). Lo ya pagado vive en el Historial.
+              const nominaOrden = nominaPendientes;
+              const cuadConActividad = pagosCuadPendientes;
               const totalPendientes = nominaPendientes.length + pagosCuadPendientes.length;
               const totalMonto = nominaPendientes.reduce((a, r) => a + (r.to_pay ?? (r.pending_amount ?? 0)), 0) + cuadPendienteTotal;
               const nada = nominaOrden.length === 0 && cuadConActividad.length === 0;
@@ -15023,14 +15031,10 @@ export function App() {
               <div className="tablePanel">
                 <div className="reportToolbar" style={{ marginBottom: 10 }}>
                   <div>
-                    <h2 style={{ marginBottom: 2 }}>💵 Pagos · todas las áreas</h2>
-                    <p className="muted" style={{ margin: 0 }}>Todo lo del período junto: nómina y cuadrilla de carga/descarga. Paga a cada uno desde aquí sin cambiar de pestaña.</p>
+                    <h2 style={{ marginBottom: 2 }}>💵 Pagos · todo lo pendiente</h2>
+                    <p className="muted" style={{ margin: 0 }}>Todo lo que se le debe a cada quien (nómina y cuadrilla), sin filtrar por fecha: se acumula hasta liquidarlo. Al pagar, pasa al Historial y empieza un rol nuevo.</p>
                   </div>
-                  <div className="reportDates">
-                    <label><span>Desde</span><input type="date" value={nominaFrom} onChange={(e) => setNominaFrom(e.target.value)} /></label>
-                    <label><span>Hasta</span><input type="date" value={nominaTo} onChange={(e) => setNominaTo(e.target.value)} /></label>
-                    <button type="button" className="primary" disabled={nominaBusy} onClick={() => refreshNomina().catch(() => undefined)}>{nominaBusy ? "Cargando…" : "Ver"}</button>
-                  </div>
+                  <button type="button" className="btnSecondary" disabled={nominaBusy} onClick={() => refreshNomina().catch(() => undefined)}>{nominaBusy ? "Cargando…" : "↻ Actualizar"}</button>
                 </div>
 
                 {!dashboard.current_cash_register && totalPendientes > 0 && (
@@ -15077,7 +15081,7 @@ export function App() {
                               {pending ? (
                                 <>
                                   <button type="button" className="btnGhost" style={{ marginLeft: 6 }} onClick={() => registerAdvance(r)}>Anticipo</button>
-                                  <button type="button" onClick={() => payWorkerWeek(r)}
+                                  <button type="button" onClick={() => payWorkerWeek(r, PAGOS_FROM, PAGOS_TO)}
                                     style={{ marginLeft: 8, padding: "7px 16px", borderRadius: 8, border: "none", cursor: "pointer", background: "#047857", color: "#fff", fontWeight: 800, fontSize: 13 }}>💵 Pagar</button>
                                 </>
                               ) : <span className="chip ok" style={{ marginLeft: 6 }}>Pagado</span>}
@@ -15086,7 +15090,7 @@ export function App() {
                         );
                       })}
                       {nominaOrden.length === 0 && (
-                        <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: "14px" }}>Sin nómina en el período.</td></tr>
+                        <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: "14px" }}>Sin pagos de nómina pendientes.</td></tr>
                       )}
                     </tbody>
                   </table>
@@ -15115,7 +15119,7 @@ export function App() {
                               <td className="num" style={{ fontWeight: 700, color: pending ? "#047857" : "inherit" }}>{pending ? money(r.neto) : "—"}</td>
                               <td className="num" style={{ whiteSpace: "nowrap" }}>
                                 {pending ? (
-                                  <button type="button" onClick={() => payCuadrillaWorker(r)}
+                                  <button type="button" onClick={() => payCuadrillaWorker(r, PAGOS_FROM, PAGOS_TO)}
                                     style={{ padding: "7px 16px", borderRadius: 8, border: "none", cursor: "pointer", background: "#047857", color: "#fff", fontWeight: 800, fontSize: 13 }}>💵 Pagar</button>
                                 ) : <span className="chip ok">Pagado</span>}
                               </td>
