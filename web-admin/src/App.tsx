@@ -14544,8 +14544,8 @@ export function App() {
                   <p className="muted" style={{ margin: 0 }}>{info.ayuda}</p>
                 </div>
                 <div className="reportDates">
-                  <label><span>Desde</span><input type="date" value={nominaFrom} max={nominaTo} onChange={(e) => setNominaFrom(e.target.value)} /></label>
-                  <label><span>Hasta</span><input type="date" value={nominaTo} min={nominaFrom} onChange={(e) => setNominaTo(e.target.value)} /></label>
+                  <label><span>Desde</span><input type="date" value={nominaFrom} onChange={(e) => setNominaFrom(e.target.value)} /></label>
+                  <label><span>Hasta</span><input type="date" value={nominaTo} onChange={(e) => setNominaTo(e.target.value)} /></label>
                   <button type="button" className="primary" disabled={nominaBusy} onClick={() => refreshNomina().catch(() => undefined)}>{nominaBusy ? "Cargando…" : "Ver"}</button>
                 </div>
                 {rows.length > 0 && (
@@ -14971,8 +14971,8 @@ export function App() {
                     <p className="muted" style={{ margin: 0 }}>Todos los trabajadores con saldo del período, juntos. Paga a cada uno desde aquí sin cambiar de pestaña.</p>
                   </div>
                   <div className="reportDates">
-                    <label><span>Desde</span><input type="date" value={nominaFrom} max={nominaTo} onChange={(e) => setNominaFrom(e.target.value)} /></label>
-                    <label><span>Hasta</span><input type="date" value={nominaTo} min={nominaFrom} onChange={(e) => setNominaTo(e.target.value)} /></label>
+                    <label><span>Desde</span><input type="date" value={nominaFrom} onChange={(e) => setNominaFrom(e.target.value)} /></label>
+                    <label><span>Hasta</span><input type="date" value={nominaTo} onChange={(e) => setNominaTo(e.target.value)} /></label>
                     <button type="button" className="primary" disabled={nominaBusy} onClick={() => refreshNomina().catch(() => undefined)}>{nominaBusy ? "Cargando…" : "Ver"}</button>
                   </div>
                 </div>
