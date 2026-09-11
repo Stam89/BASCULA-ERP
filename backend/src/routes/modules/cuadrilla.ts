@@ -146,6 +146,104 @@ export async function upsertCuadrillaSecadoraEntry(
   }
 }
 
+// Cuadrilla a la que se asigna un pago autogenerado cuando el operador no eligió
+// una: respeta la ya asignada en el túnel; si no hay, usa el grupo de cuadrilla
+// por defecto (el más antiguo activo); si tampoco, el literal "CUADRILLA".
+async function resolveCuadrillaWorker(client: PoolClient, dryingReportId: string): Promise<string> {
+  const asig = await client.query(
+    "SELECT worker_name FROM drying_tunnel_cuadrilla WHERE drying_report_id = $1 AND COALESCE(btrim(worker_name), '') <> '' ORDER BY momento LIMIT 1",
+    [dryingReportId]
+  );
+  if (asig.rowCount) return String(asig.rows[0].worker_name).trim();
+  const grp = await client.query("SELECT name FROM cuadrillas WHERE is_active = true ORDER BY created_at LIMIT 1");
+  if (grp.rowCount) return String(grp.rows[0].name).trim();
+  return "CUADRILLA";
+}
+
+// AUTOMATIZACIÓN: genera de inmediato el pago de nómina de la cuadrilla para un
+// secado MECÁNICO (túnel), sin el paso manual de "Detectar". Idempotente (se
+// apoya en el upsert por referencia/momento/cuadrilla), así que puede llamarse
+// tanto al llenar como al finalizar sin duplicar. LLENADO se paga en cuanto el
+// túnel tiene quintales; VACIADO en cuanto queda finalizado (dry_end_at). El
+// tendal genera su propio pago aparte, así que aquí se omite. Nunca lanza.
+export async function autoGenerarPagosCuadrillaDeSecado(
+  client: PoolClient,
+  dryingReportId: string,
+  createdBy?: string | null
+): Promise<void> {
+  try {
+    const r = await client.query(
+      `SELECT tunnel_number, total_quintals::float AS quintals, dry_method, dry_end_at,
+              recepcion_empaque, recepcion_sacos::float AS recepcion_sacos,
+              botada_empaque, botada_sacos::float AS botada_sacos,
+              COALESCE(filled_at, dry_start_at::date, created_at::date) AS work_date
+       FROM drying_tunnel_reports WHERE id = $1`,
+      [dryingReportId]
+    );
+    if (!r.rowCount) return;
+    const rep = r.rows[0];
+    if (String(rep.dry_method ?? "TUNEL").toUpperCase() === "TENDAL") return; // el tendal ya se paga aparte
+    const tunnel = Number(rep.tunnel_number) || 0;
+    const qq = Number(rep.quintals) || 0;
+    if (!tunnel || qq <= 0) return;
+    const workDate = rep.work_date ? new Date(rep.work_date).toISOString().slice(0, 10) : null;
+
+    const eventos: Array<{ momento: "LLENADO" | "VACIADO"; empaque: string | null; sacos: number | null }> = [
+      { momento: "LLENADO", empaque: rep.recepcion_empaque, sacos: rep.recepcion_sacos ?? null }
+    ];
+    // La botada solo se paga cuando el túnel ya está finalizado (vaciado a bodega).
+    if (rep.dry_end_at) {
+      eventos.push({ momento: "VACIADO", empaque: rep.botada_empaque ?? rep.recepcion_empaque, sacos: rep.botada_sacos ?? null });
+    }
+
+    for (const ev of eventos) {
+      // Respeta una asignación ya existente (worker/labor elegidos por el operador);
+      // si no hay, crea una con la labor por tarifa y la cuadrilla por defecto.
+      const asig = await client.query(
+        "SELECT worker_name, activity_id, quintals::float AS quintals FROM drying_tunnel_cuadrilla WHERE drying_report_id = $1 AND momento = $2 ORDER BY created_at LIMIT 1",
+        [dryingReportId, ev.momento]
+      );
+      let workerName: string;
+      let activityId: string;
+      let quantity: number;
+      if (asig.rowCount) {
+        workerName = String(asig.rows[0].worker_name).trim();
+        activityId = asig.rows[0].activity_id as string;
+        quantity = Number(asig.rows[0].quintals) || 0;
+      } else {
+        const resolved = await resolveTunnelLabor(client, {
+          tunnel_number: tunnel, momento: ev.momento, empaque: ev.empaque, sacos: ev.sacos, quintals: qq
+        });
+        if ("missing" in resolved) continue; // sin tarifa configurada: no romper el secado
+        workerName = await resolveCuadrillaWorker(client, dryingReportId);
+        activityId = resolved.activity_id;
+        quantity = resolved.quantity;
+        await client.query(
+          `INSERT INTO drying_tunnel_cuadrilla (drying_report_id, worker_name, activity_id, quintals, momento, created_by)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (drying_report_id, momento, (lower(btrim(worker_name)))) DO NOTHING`,
+          [dryingReportId, workerName, activityId, quantity, ev.momento, createdBy ?? null]
+        );
+      }
+      await upsertCuadrillaSecadoraEntry(client, {
+        referencia_id: dryingReportId,
+        tunnel_number: tunnel,
+        momento: ev.momento,
+        activity_id: activityId,
+        worker_name: workerName,
+        quantity,
+        work_date: workDate,
+        created_by: createdBy ?? null
+      });
+    }
+  } catch (err) {
+    console.error("[cuadrilla] auto-pago de secado (túnel) falló", {
+      drying_report_id: dryingReportId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
 // ── Actividades (catálogo con valor unitario) ───────────────────────────────
 
 cuadrillaRouter.get("/activities", asyncRoute(async (req, res) => {

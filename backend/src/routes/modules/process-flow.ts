@@ -14,7 +14,7 @@ import {
   linkLotProcessReports,
   type ProcessStage
 } from "../../utils/process-reports.js";
-import { upsertCuadrillaSecadoraEntry } from "./cuadrilla.js";
+import { upsertCuadrillaSecadoraEntry, autoGenerarPagosCuadrillaDeSecado } from "./cuadrilla.js";
 
 export const processFlowRouter = Router();
 
@@ -391,6 +391,10 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
          WHERE id = ANY($1::uuid[])`,
         [partes.map((p) => p.id)]
       );
+      // Al finalizar, genera el pago de la BOTADA (vaciado) de cada túnel.
+      for (const p of partes) {
+        await autoGenerarPagosCuadrillaDeSecado(client, p.id, body.created_by ?? null);
+      }
     }
 
     return {
@@ -435,6 +439,11 @@ processFlowRouter.post("/drying/motor-finalize", asyncRoute(async (req, res) => 
        WHERE id = ANY($1::uuid[])`,
       [reports.rows.map((r) => r.id)]
     );
+
+    // Al finalizar el motor, genera el pago de la BOTADA de cada túnel (auto).
+    for (const rep of reports.rows) {
+      await autoGenerarPagosCuadrillaDeSecado(client, rep.id, null);
+    }
 
     return { finalized: reports.rowCount };
   });
@@ -785,13 +794,24 @@ processFlowRouter.post("/lots/:lotId/link", asyncRoute(async (req, res) => {
 // Aquí NACE el lote: se agrupan varios ingresos de materia prima (pesajes de
 // báscula) en un túnel, y ese grupo es el lote. De aquí en adelante el proceso
 // (pilado, inventario, liquidación) trabaja con el lote.
-// Actividad placeholder para el 'vaciado' del tendal (drying_tunnel_cuadrilla
-// exige activity_id NOT NULL). La TARIFA real del pago sale de labor_rates.tendal_per_qq.
-async function ensureTendalActivity(client: PoolClient): Promise<string> {
-  const found = await client.query("SELECT id FROM cuadrilla_activities WHERE upper(btrim(name)) = 'SECADO EN TENDAL' LIMIT 1");
-  if (found.rowCount) return found.rows[0].id as string;
-  const created = await client.query("INSERT INTO cuadrilla_activities (name, unit_rate, is_active) VALUES ('SECADO EN TENDAL', 0, true) RETURNING id");
-  return created.rows[0].id as string;
+// Actividad + TARIFA del pago de cuadrilla por 'secado en tendal'. Mapea a la
+// tarifa configurada por el cliente: "TENDAL POR SACO" (antes se tomaba
+// labor_rates.tendal_per_qq, que estaba en 0 → el pago caía en $0). Preferencia:
+//   1) "TENDAL POR SACO"  2) cualquier actividad activa que empiece por "TENDAL"
+//   3) placeholder "SECADO EN TENDAL" (crea si falta; tarifa 0, último recurso).
+async function resolveTendalActivity(client: PoolClient): Promise<{ id: string; name: string; unit_rate: number }> {
+  const pref = await client.query(
+    "SELECT id, name, unit_rate::float AS unit_rate FROM cuadrilla_activities WHERE upper(btrim(name)) = 'TENDAL POR SACO' AND is_active = true LIMIT 1"
+  );
+  if (pref.rowCount) return { id: pref.rows[0].id, name: pref.rows[0].name, unit_rate: Number(pref.rows[0].unit_rate) };
+  const any = await client.query(
+    "SELECT id, name, unit_rate::float AS unit_rate FROM cuadrilla_activities WHERE upper(btrim(name)) LIKE 'TENDAL%' AND is_active = true ORDER BY name LIMIT 1"
+  );
+  if (any.rowCount) return { id: any.rows[0].id, name: any.rows[0].name, unit_rate: Number(any.rows[0].unit_rate) };
+  const found = await client.query("SELECT id, name, unit_rate::float AS unit_rate FROM cuadrilla_activities WHERE upper(btrim(name)) = 'SECADO EN TENDAL' LIMIT 1");
+  if (found.rowCount) return { id: found.rows[0].id, name: found.rows[0].name, unit_rate: Number(found.rows[0].unit_rate) };
+  const created = await client.query("INSERT INTO cuadrilla_activities (name, unit_rate, is_active) VALUES ('SECADO EN TENDAL', 0, true) RETURNING id, name, unit_rate::float AS unit_rate");
+  return { id: created.rows[0].id, name: created.rows[0].name, unit_rate: Number(created.rows[0].unit_rate) };
 }
 
 // Código de lote AUTOMÁTICO con formato estricto [SECUENCIAL(5)]-[DD]-[MM]-[YY]
@@ -1037,21 +1057,24 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
   // TENDAL: marca de vaciado a bodega (para que el lote aparezca disponible en
   // Producción) + pago automático a la CUADRILLA por QQ (tarifa de config).
   if (esTendal) {
-    const tendalAct = await ensureTendalActivity(client);
+    // Tarifa configurada ("TENDAL POR SACO"). La cantidad se cobra por SACOS si el
+    // empaque de recepción fue Sacos (y se contaron), o por QQ en caso contrario.
+    const tendalAct = await resolveTendalActivity(client);
+    const esSacos = String(input.recepcion_empaque ?? "TULAS").toUpperCase() === "SACOS";
+    const sacos = Number(input.recepcion_sacos) || 0;
+    const cantidad = esSacos && sacos > 0 ? sacos : totalQuintals;
+    const tendalSubtotal = round2(cantidad * tendalAct.unit_rate);
     await client.query(
       `INSERT INTO drying_tunnel_cuadrilla (drying_report_id, worker_name, activity_id, quintals, momento, created_by)
        VALUES ($1, 'CUADRILLA', $2, $3, 'VACIADO', $4)`,
-      [tunnel.rows[0].id, tendalAct, totalQuintals, input.created_by ?? null]
+      [tunnel.rows[0].id, tendalAct.id, cantidad, input.created_by ?? null]
     );
-    const rr = await client.query("SELECT COALESCE(tendal_per_qq, 0)::float AS r FROM labor_rates WHERE id = 1");
-    const tendalRate = Number(rr.rows[0]?.r ?? 0);
-    const tendalSubtotal = round2(totalQuintals * tendalRate);
     const wd = toDateOnly(input.dry_end_at) ?? toDateOnly(input.dry_start_at);
     await client.query(
       `INSERT INTO cuadrilla_entries
          (work_date, activity_id, activity_name, worker_name, quantity, unit_rate, subtotal, notes, origen, referencia_id, momento, created_by)
-       VALUES (COALESCE($1::date, CURRENT_DATE), $2, 'Secado en tendal', 'CUADRILLA', $3, $4, $5, $6, 'TENDAL', $7, 'VACIADO', $8)`,
-      [wd, tendalAct, totalQuintals, tendalRate, tendalSubtotal, `Secado en tendal - Lote ${lotCode} - ${totalQuintals} Quintales`, tunnel.rows[0].id, input.created_by ?? null]
+       VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, 'CUADRILLA', $4, $5, $6, $7, 'TENDAL', $8, 'VACIADO', $9)`,
+      [wd, tendalAct.id, tendalAct.name, cantidad, tendalAct.unit_rate, tendalSubtotal, `Secado en tendal - Lote ${lotCode} - ${cantidad} ${esSacos && sacos > 0 ? "Sacos" : "Quintales"}`, tunnel.rows[0].id, input.created_by ?? null]
     );
   }
   const llenadoWorker = (input.cuadrilla_worker ?? "").trim();
@@ -1064,6 +1087,12 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
       [tunnel.rows[0].id, llenadoWorker, input.cuadrilla_labor_id, totalQuintals, input.created_by ?? null]
     );
   }
+
+  // AUTOMATIZACIÓN: genera de una vez el pago de cuadrilla del túnel (Recepción y,
+  // si ya quedó finalizado, Botada). Sin el paso manual de "Detectar" en Nómina.
+  // El tendal ya generó su pago arriba; el helper se auto-omite para dry_method
+  // TENDAL. Es idempotente, así que no duplica al finalizar más tarde.
+  await autoGenerarPagosCuadrillaDeSecado(client, tunnel.rows[0].id, input.created_by ?? null);
 
   return getDryingReportById(client, tunnel.rows[0].id);
 }
@@ -1199,6 +1228,10 @@ async function updateDryingReport(
       [dryingId, vaciadoWorker, input.cuadrilla_labor_id, Number(updated.rows[0].total_quintals) || 0, null]
     );
   }
+
+  // AUTOMATIZACIÓN: genera el pago de cuadrilla (Recepción y, si el túnel ya
+  // quedó finalizado en esta edición, Botada) sin el paso manual de "Detectar".
+  await autoGenerarPagosCuadrillaDeSecado(client, dryingId, null);
 
   return getDryingReportById(client, dryingId);
 }

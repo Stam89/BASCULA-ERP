@@ -14988,32 +14988,12 @@ export function App() {
 
                   {cuadView === "registro" && (
                   <>
-                  {/* Recepción y Botada a Túnel: detección + registro AUTOMÁTICO */}
-                  <section className="tablePanel" style={{ marginBottom: 12 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                      <h2 style={{ margin: 0 }}>🏗️ Recepción y Botada a Túnel · desde Secadora</h2>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        <button type="button" className="btnSecondary" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => { setCuadGroupName(""); setCuadGroupModalOpen(true); }}>+ Crear Cuadrilla</button>
-                        <button type="button" className="primary" onClick={() => detectarYRegistrar().catch((e) => addToast(e.message, "error"))}>🔍 Detectar labores de túnel</button>
-                      </div>
-                    </div>
-                    <p className="muted" style={{ margin: "6px 0 0", fontSize: 12 }}>
-                      Detecta los túneles nuevos (Recepción y Botada) y los registra automáticamente a la cuadrilla activa, con su cálculo QQ × tarifa. Caen directo abajo en «Registros del período» (🔒 🤖 Automático).
-                    </p>
-                    {cuadNeedsWorker && cuadWorkers.length > 1 && (
-                      <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                        <span style={{ fontSize: 13 }}>Hay varias cuadrillas. Registrar los túneles nuevos a:</span>
-                        <select value={cuadBatchWorker} onChange={(e) => setCuadBatchWorker(e.target.value)} style={{ padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", minWidth: 180 }}>
-                          <option value="">Cuadrilla…</option>
-                          {cuadWorkers.map((w) => <option key={w} value={w}>{w}</option>)}
-                        </select>
-                        <button type="button" className="primary" style={{ padding: "6px 12px" }} onClick={() => detectarYRegistrar().catch((e) => addToast(e.message, "error"))}>Registrar todo</button>
-                      </div>
-                    )}
-                    {cuadDetectMsg && (
-                      <div style={{ marginTop: 8, fontSize: 13, color: "#166534", fontWeight: 600 }}>{cuadDetectMsg}</div>
-                    )}
-                  </section>
+                  {/* Las labores de túnel (Recepción/Botada) y el secado en tendal ahora
+                      se registran 100% AUTOMÁTICO desde Secadoras al finalizar el lote:
+                      caen directo en «Registros del período». Sin paso manual. */}
+                  <div style={{ marginBottom: 12, padding: "10px 14px", background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 10, fontSize: 13, color: "#065f46" }}>
+                    🤖 <strong>Registro automático:</strong> las labores de Recepción y Botada a túnel y el secado en tendal se generan solas al finalizar el secado, con su cálculo Cantidad × Tarifa. Aparecen directamente abajo en «Registros del período».
+                  </div>
 
                   {/* Pop-up de creación rápida de cuadrilla (solo el nombre) */}
                   {cuadGroupModalOpen && (
