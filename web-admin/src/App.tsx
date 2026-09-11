@@ -1164,6 +1164,11 @@ const navGroups: Array<{ label: string; tabs: string[] }> = [
   { label: "Sistema", tabs: ["Reportes", "Configuracion"] }
 ];
 const tabs = navGroups.flatMap((group) => group.tabs);
+// Etiquetas visibles de las pestañas: la CLAVE interna se mantiene estable (la usa
+// toda la lógica, permisos y efectos); solo cambia el texto mostrado. Así se
+// renombra "Servicio Pilado" → "Servicio de Secado" sin romper nada.
+const TAB_LABELS: Record<string, string> = { "Servicio Pilado": "Servicio de Secado" };
+function tabLabel(tab: string): string { return TAB_LABELS[tab] ?? tab; }
 // Modulos asignables a un operador = TODAS las pestanas del Sidebar excepto
 // Configuracion (solo-admin). Fuente unica: navGroups. Si manana se agrega una
 // seccion nueva al Sidebar, aparece SOLA como permiso, sin tocar esta lista.
@@ -1187,7 +1192,7 @@ const PERM_MATRIX: Array<{ label: string; rows: Array<{ key: string; label: stri
   { label: "FINANZAS", rows: [
     { key: "Liquidaciones", label: "Liquidaciones" }, { key: "Fomentos", label: "Fomentos" },
     { key: "Agricultores", label: "Agricultores" }, { key: "Nomina", label: "Nómina" },
-    { key: "Servicio Pilado", label: "Servicio Pilado" }, { key: "Bancos", label: "Bancos" },
+    { key: "Servicio Pilado", label: "Servicio de Secado" }, { key: "Bancos", label: "Bancos" },
   ] },
   { label: "CONTABILIDAD", rows: [{ key: "Costos Operativos", label: "Costos Operativos" }, { key: "Estados Financieros", label: "Estados Financieros" }] },
   { label: "SISTEMA", rows: [{ key: "Reportes", label: "Reportes" }] },
@@ -7105,7 +7110,7 @@ export function App() {
             value={val}
             onChange={(e) => setEmpaqueSel((cur) => ({ ...cur, [opts.keyId]: e.target.value as "TULAS" | "SACOS" }))}
           >
-            <option value="TULAS">Tulas (Bulk)</option>
+            <option value="TULAS">Directo a Producción (A granel)</option>
             <option value="SACOS">Sacos</option>
           </select>
         </label>
@@ -8868,7 +8873,7 @@ export function App() {
         </div>
         <nav>
           {navGroups
-            .map((group) => ({ ...group, tabs: group.tabs.filter((tab) => visibleTabs.includes(tab) && (navSearch.trim() === "" || tab.toLowerCase().includes(navSearch.trim().toLowerCase()))) }))
+            .map((group) => ({ ...group, tabs: group.tabs.filter((tab) => visibleTabs.includes(tab) && (navSearch.trim() === "" || tab.toLowerCase().includes(navSearch.trim().toLowerCase()) || tabLabel(tab).toLowerCase().includes(navSearch.trim().toLowerCase()))) }))
             .filter((group) => group.tabs.length > 0)
             .map((group) => {
               const collapsed = navSearch.trim() !== "" ? false : collapsedGroups.has(group.label);
@@ -8883,7 +8888,7 @@ export function App() {
                   {!collapsed && group.tabs.map((tab) => (
                     <button className={activeTab === tab ? "active" : ""} key={tab} onClick={() => irATab(tab)}>
                       <NavIcon tab={tab} />
-                      {tab}
+                      {tabLabel(tab)}
                       {tab === "Ventas" && pedidosPendientesCount > 0 && (
                         <span
                           title={`${pedidosPendientesCount} pedido(s) pendiente(s) de carga`}
@@ -8920,7 +8925,7 @@ export function App() {
       <section className="workspace">
         <header className="topbar">
           <div className="topbarLeft">
-            <h1>{activeTab}</h1>
+            <h1>{tabLabel(activeTab)}</h1>
             <p>{loading ? "Actualizando datos…" : message}</p>
           </div>
           <div className="topbarRight">
@@ -9352,7 +9357,7 @@ export function App() {
                 <DryingLotSelector selectedLots={tendalLotes} editing={false} onRemove={(id) => removeDryingEntry("TENDAL", id)} />
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                   <label><span>Peso Total (QQ)</span><input type="text" readOnly value={tendalQQ.toFixed(2)} style={{ fontWeight: 700 }} /></label>
-                  <label><span>Empaque de recepción</span><select value={tendalForm.recepcion_empaque} onChange={(e) => setTendalForm((f) => ({ ...f, recepcion_empaque: e.target.value as "TULAS" | "SACOS" }))}><option value="TULAS">Tulas</option><option value="SACOS">Sacos</option></select></label>
+                  <label><span>Salida <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>(define la tarifa)</span></span><select value={tendalForm.modo} onChange={(e) => setTendalForm((f) => ({ ...f, modo: e.target.value as "GRANEL" | "ENSACADO" }))}><option value="GRANEL">Directo a Producción (A granel)</option><option value="ENSACADO">Sacos</option></select></label>
                   <label><span>Código de lote (opcional)</span><input value={tendalForm.lot_code} onChange={(e) => setTendalForm((f) => ({ ...f, lot_code: e.target.value }))} placeholder="Automático (00001-DD-MM-YY)" /></label>
                   <label><span>Humedad inicial (%)</span><input type="number" step="0.1" min="0" value={tendalForm.moisture_before} onChange={(e) => setTendalForm((f) => ({ ...f, moisture_before: e.target.value }))} /></label>
                   <label><span>Humedad final (%)</span><input type="number" step="0.1" min="0" value={tendalForm.moisture_after} onChange={(e) => setTendalForm((f) => ({ ...f, moisture_after: e.target.value }))} /></label>
@@ -9360,31 +9365,15 @@ export function App() {
                   <label><span>Hora fin</span><input type="datetime-local" value={tendalForm.hora_fin} onChange={(e) => setTendalForm((f) => ({ ...f, hora_fin: e.target.value }))} /></label>
                   <label><span>Responsable</span><input value="CUADRILLA" readOnly disabled title="El secado en tendal siempre lo cobra la cuadrilla" /></label>
                 </div>
-                {/* Destino del secado: define la tarifa de la cuadrilla. A granel se
-                    paga por QQ ("SECADO EN TENDAL"); Ensacado por saco ("TENDAL POR SACO"). */}
-                <div style={{ marginTop: 12, padding: "10px 12px", background: "var(--c-surface-2, #f6faf8)", border: "1px solid var(--c-border, #e5e7eb)", borderRadius: 10 }}>
-                  <span style={{ display: "block", fontSize: 12, fontWeight: 700, color: "var(--c-text-2, #475569)", marginBottom: 8 }}>Destino del secado (define la tarifa de la cuadrilla)</span>
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    {([["GRANEL", "🌾 A granel", "Directo a Producción · por QQ"], ["ENSACADO", "📦 Ensacado", "Retiro / Servicio · por saco"]] as const).map(([val, titulo, sub]) => {
-                      const activo = tendalForm.modo === val;
-                      return (
-                        <label key={val} style={{ flex: "1 1 200px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer", padding: "10px 12px", borderRadius: 10, border: `2px solid ${activo ? "var(--c-brand, #0f766e)" : "var(--c-border, #e5e7eb)"}`, background: activo ? "var(--c-surface, #fff)" : "transparent", fontWeight: 400 }}>
-                          <input type="radio" name="tendal_modo" value={val} checked={activo} onChange={() => setTendalForm((f) => ({ ...f, modo: val }))} style={{ width: "auto", margin: 0 }} />
-                          <span style={{ minWidth: 0 }}>
-                            <strong style={{ display: "block", fontSize: 14 }}>{titulo}</strong>
-                            <small className="muted">{sub}</small>
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                  {tendalForm.modo === "ENSACADO" && (
-                    <label style={{ display: "block", marginTop: 10, maxWidth: 240 }}>
-                      <span>Nº de sacos entregados</span>
-                      <input type="number" step="1" min="0" value={tendalForm.sacos} onChange={(e) => setTendalForm((f) => ({ ...f, sacos: e.target.value }))} placeholder="Cantidad de sacos" />
-                    </label>
-                  )}
-                </div>
+                {/* Salida = Sacos (Ensacado, tarifa "TENDAL POR SACO" por saco) o Directo
+                    a Producción (A granel, tarifa "SECADO EN TENDAL" por QQ). Cuando es
+                    Sacos se pide la cantidad, base del cobro de la cuadrilla. */}
+                {tendalForm.modo === "ENSACADO" && (
+                  <label style={{ display: "block", marginTop: 10, maxWidth: 240 }}>
+                    <span>Nº de sacos entregados</span>
+                    <input type="number" step="1" min="0" value={tendalForm.sacos} onChange={(e) => setTendalForm((f) => ({ ...f, sacos: e.target.value }))} placeholder="Cantidad de sacos" />
+                  </label>
+                )}
                 <div className="buttonRow" style={{ marginTop: 10 }}>
                   <button type="submit" className="primary" disabled={tendalLotes.length === 0 || (tendalForm.modo === "ENSACADO" && !(Number(tendalForm.sacos) > 0))}>☀️ Registrar secado en tendal</button>
                 </div>
