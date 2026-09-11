@@ -651,6 +651,8 @@ type DryingTunnelLot = {
   quintals: string | number;
   /** El lote entró como SERVICIO (maquila) por Báscula. */
   is_maquila?: boolean;
+  /** Destino/tipo de operación: COMPRA | SECADO | SECADO_PILADO | PILADO. */
+  operation_type?: string | null;
 };
 
 /** Secado activo de un motor (puede ser de cualquier accionista). */
@@ -2550,15 +2552,18 @@ export function App() {
   // Por separado (gas = bombona + cilindro; diésel = medidor).
   const gasPorQq = qqMotor > 0 ? round2(gasCostoTotal / qqMotor) : 0;
   const dieselPorQq = qqMotor > 0 ? round2(dieselCosto / qqMotor) : 0;
-  // Detecta si un informe de secado corresponde a un lote de SERVICIO (maquila):
-  // arroz de un cliente externo que vino SOLO a secado y se lo lleva. Esos lotes
-  // NO se pilan aquí, así que se excluyen del selector de Producción. Se evalúa la
-  // bandera is_maquila que el backend ya trae por lote (COALESCE(...,false)); se
-  // trata como verdadero cualquier valor "truthy" (true / "t" / 1) por robustez.
-  const esLoteDeServicio = (report: DryingTunnelReport): boolean =>
+  // Un informe se EXCLUYE de Producción solo si su lote es 'Solo Servicio de
+  // Secado' (operation_type = 'SECADO'): ese arroz se seca y se entrega, no se
+  // pila aquí. Los demás (Compra/Propia, Servicio Completo y Solo Pilada) SÍ
+  // pasan a producción. Se evalúa el operation_type que el backend trae por lote;
+  // como respaldo (datos viejos sin tipo) se usa is_maquila → 'SECADO'.
+  const esSoloSecado = (report: DryingTunnelReport): boolean =>
     (report.lots ?? []).some((lot) => {
-      const v = (lot as { is_maquila?: unknown }).is_maquila;
-      return v === true || v === 1 || v === "t" || v === "true" || v === "SERVICIO";
+      const l = lot as { operation_type?: unknown; is_maquila?: unknown };
+      const op = l.operation_type != null ? String(l.operation_type).toUpperCase() : null;
+      if (op) return op === "SECADO";
+      const m = l.is_maquila;
+      return m === true || m === 1 || m === "t" || m === "true";
     });
   const productionDryingReports = useMemo(
     () => dryingReports.filter(
@@ -2566,8 +2571,8 @@ export function App() {
         report.status === "COMPLETED" &&
         !report.is_processed &&
         !report.apartado_arianos &&
-        // Filtrado ESTRICTO: fuera los lotes que vinieron solo a secado externo.
-        !esLoteDeServicio(report)
+        // Fuera SOLO los lotes de 'Solo Servicio de Secado'.
+        !esSoloSecado(report)
     ),
     [dryingReports]
   );
@@ -6688,7 +6693,10 @@ export function App() {
     const riceType = String(form.get("rice_type")) as "0.11" | "CORRIENTE";
     const productId = riceType === "CORRIENTE" ? rawProductCorriente?.id : rawProduct011?.id;
     const warehouseId = rawWarehouse?.id ?? "";
-    const ownership = String(form.get("ownership"));
+    // Destino / Tipo de operación del lote (4 opciones). COMPRA = propio; el resto
+    // son servicio (maquila). El backend deriva is_maquila/ownership de aquí.
+    const operationType = String(form.get("operation_type") || "COMPRA");
+    const esServicio = operationType !== "COMPRA";
 
     if (!productId) {
       setMessage("Falta crear el producto de cascara para ese tipo de arroz");
@@ -6698,8 +6706,9 @@ export function App() {
     const created = await apiPost<{ ticket: { id: string } }>("/weighing-tickets", {
       farmer_id: farmerId,
       rice_type: riceType,
-      ownership,
-      is_maquila: ownership === "MAQUILA",
+      operation_type: operationType,
+      ownership: esServicio ? "MAQUILA" : "OWNED",
+      is_maquila: esServicio,
       gross_weight: gross
     });
 
@@ -9238,7 +9247,12 @@ export function App() {
                 <h3 style={{ marginTop: 0 }}>⚖️ Ingreso manual (emergencia)</h3>
                 <p className="muted" style={{ marginTop: -4 }}>Usa esto solo si la báscula automática no envió el ticket.</p>
                 <Select name="farmer_id" label="Agricultor" rows={farmers.map((f) => [f.id, f.full_name])} />
-                <Select name="ownership" label="Tipo" rows={[["OWNED", "Compra"], ["MAQUILA", "Maquila"]]} />
+                <Select name="operation_type" label="Destino / Tipo de operación" rows={[
+                  ["COMPRA", "Compra / Producción Propia"],
+                  ["SECADO", "Solo Servicio de Secado"],
+                  ["SECADO_PILADO", "Servicio Completo (Secada + Pilada)"],
+                  ["PILADO", "Solo Servicio de Pilada (ya viene seco)"]
+                ]} />
                 <label>
                   <span>Tipo de arroz</span>
                   <select name="rice_type" value={weighingRiceType} onChange={(event) => setWeighingRiceType(event.target.value as "0.11" | "CORRIENTE")}>

@@ -450,6 +450,7 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
   return inTransaction(async (client) => {
     const batchResult = await client.query(
       `SELECT b.*, l.farmer_id AS lot_farmer_id, l.is_maquila AS lot_is_maquila,
+              l.operation_type AS lot_operation_type,
               l.accionista_id AS lot_accionista_id, l.lot_code AS lot_code,
               (SELECT name FROM accionistas WHERE id = l.accionista_id) AS lot_accionista_name
        FROM processing_batches b
@@ -677,7 +678,10 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
     // el formulario "Solo Servicio de Secado". Los lotes de socios no lo llevan.
     let secadoAmount = 0;
     let secadoRate = 0;
-    if (isMaquila && piladoAmount > 0) {
+    // El secado solo se cobra en el 'Servicio Completo' (SECADO_PILADO), que sí se
+    // secó aquí. 'Solo Servicio de Pilada' (PILADO) llega ya seco: no lleva secado.
+    const esServicioCompleto = String(batch.lot_operation_type ?? "") === "SECADO_PILADO";
+    if (isMaquila && esServicioCompleto && piladoAmount > 0) {
       const yaSecado = await client.query(
         "SELECT 1 FROM accounts_receivable WHERE reference_type = 'secado_service' AND reference_id = $1 LIMIT 1",
         [body.lot_id]

@@ -114,10 +114,14 @@ weighingRouter.put("/:id/accionista", asyncRoute(async (req, res) => {
   res.json(result);
 }));
 
+// Tipo de operación del lote (Destino elegido en Báscula). is_maquila/ownership
+// se derivan de aquí (retrocompat). COMPRA = propio; el resto = servicio (maquila).
+const OPERATION_TYPES = ["COMPRA", "SECADO", "SECADO_PILADO", "PILADO"] as const;
 const createSchema = z.object({
   farmer_id: z.string().uuid(),
   vehicle_id: z.string().uuid().optional(),
   rice_type: z.enum(["0.11", "CORRIENTE"]).default("0.11"),
+  operation_type: z.enum(OPERATION_TYPES).optional(),
   ownership: z.enum(["OWNED", "MAQUILA", "SERVICE_ONLY"]).default("OWNED"),
   is_maquila: z.boolean().default(false),
   gross_weight: z.number().nonnegative().default(0),
@@ -128,18 +132,26 @@ const createSchema = z.object({
 weighingRouter.post("/", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const data = createSchema.parse(req.body);
+  // Fuente de verdad: operation_type. Si no viene (llamadas antiguas), se infiere
+  // de is_maquila/ownership para no romper el contrato existente.
+  const operationType = data.operation_type
+    ?? ((data.is_maquila || data.ownership === "MAQUILA") ? "SECADO_PILADO" : "COMPRA");
+  const esServicio = operationType !== "COMPRA";
+  const ownership = esServicio ? "MAQUILA" : "OWNED";
+
   const result = await inTransaction(async (client) => {
     const lot = await client.query(
-      `INSERT INTO lots (lot_code, print_batch_code, farmer_id, rice_type, ownership, is_maquila, status, notes, accionista_id)
-       VALUES ($1, $2, $3, $4, $5, $6, 'OPEN', $7, $8)
+      `INSERT INTO lots (lot_code, print_batch_code, farmer_id, rice_type, ownership, is_maquila, operation_type, status, notes, accionista_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'OPEN', $8, $9)
        RETURNING *`,
       [
         nextCode("LT"),
         nextCode("IMP"),
         data.farmer_id,
         data.rice_type,
-        data.is_maquila ? "MAQUILA" : data.ownership,
-        data.is_maquila,
+        ownership,
+        esServicio,
+        operationType,
         data.notes,
         accionistaId
       ]
@@ -147,15 +159,16 @@ weighingRouter.post("/", asyncRoute(async (req, res) => {
 
     const ticket = await client.query(
       `INSERT INTO weighing_tickets
-       (ticket_number, lot_id, farmer_id, vehicle_id, is_maquila, gross_weight, weighed_in_at, created_by, notes, accionista_id)
-       VALUES ($1, $2, $3, $4, $5, $6, now(), $7, $8, $9)
+       (ticket_number, lot_id, farmer_id, vehicle_id, is_maquila, operation_type, gross_weight, weighed_in_at, created_by, notes, accionista_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $8, $9, $10)
        RETURNING *`,
       [
         nextCode("BAS"),
         lot.rows[0].id,
         data.farmer_id,
         data.vehicle_id,
-        data.is_maquila,
+        esServicio,
+        operationType,
         data.gross_weight,
         data.created_by,
         data.notes,

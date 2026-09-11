@@ -190,14 +190,20 @@ lotsRouter.get("/dry-in-storage", asyncRoute(async (req, res) => {
      LEFT JOIN weighing_tickets t ON t.lot_id = l.id
      WHERE l.accionista_id = $1
        AND l.status = 'WEIGHED'
-       AND EXISTS (
-         SELECT 1
-         FROM drying_tunnel_reports d
-         JOIN drying_tunnel_cuadrilla c
-           ON c.drying_report_id = d.id AND c.momento = 'VACIADO'
-         WHERE d.lot_id = l.id
-           AND d.status = 'COMPLETED'
-           AND d.apartado_arianos = false
+       AND (
+         -- Ya secado (túnel o tendal COMPLETED + VACIADO a bodega)…
+         EXISTS (
+           SELECT 1
+           FROM drying_tunnel_reports d
+           JOIN drying_tunnel_cuadrilla c
+             ON c.drying_report_id = d.id AND c.momento = 'VACIADO'
+           WHERE d.lot_id = l.id
+             AND d.status = 'COMPLETED'
+             AND d.apartado_arianos = false
+         )
+         -- …o 'Solo Servicio de Pilada': ya viene seco, salta secadoras y va
+         -- directo a producción desde stock/bodega.
+         OR l.operation_type = 'PILADO'
        )
        AND NOT EXISTS (
          SELECT 1 FROM drying_tunnel_reports d

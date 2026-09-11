@@ -151,7 +151,7 @@ async function calcularCombustible(
 processFlowRouter.get("/drying/available-lots", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
-    `SELECT w.id, w.ticket_number, w.rice_type, w.is_maquila, w.accionista_id,
+    `SELECT w.id, w.ticket_number, w.rice_type, w.is_maquila, w.operation_type, w.accionista_id,
             w.net_weight, w.qualification, w.quintals, w.created_at,
             f.full_name AS farmer_name,
             -- Número que ve el usuario: el del ticket de la app de báscula.
@@ -162,6 +162,8 @@ processFlowRouter.get("/drying/available-lots", asyncRoute(async (req, res) => {
      WHERE w.quintals IS NOT NULL AND w.quintals > 0
        AND w.lot_id IS NULL
        AND w.accionista_id = $1
+       -- 'Solo Servicio de Pilada' ya viene seco: NO pasa por secadoras.
+       AND COALESCE(w.operation_type, 'COMPRA') <> 'PILADO'
        AND NOT EXISTS (
          SELECT 1 FROM drying_tunnel_report_lots used
          WHERE used.weighing_ticket_id = w.id
@@ -206,7 +208,8 @@ processFlowRouter.get("/drying/reports", asyncRoute(async (req, res) => {
                   'farmer_name', dl.farmer_name,
                   'net_weight_kg', dl.net_weight_kg,
                   'quintals', dl.quintals,
-                  'is_maquila', COALESCE(ml.is_maquila, false)
+                  'is_maquila', COALESCE(ml.is_maquila, false),
+                  'operation_type', COALESCE(ml.operation_type, 'COMPRA')
                 )
                 ORDER BY dl.created_at ASC
               ) FILTER (WHERE dl.lot_id IS NOT NULL),
@@ -845,7 +848,7 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
   const esTendal = input.dry_method === "TENDAL";
   if (!esTendal && !input.tunnel_number) throw new ApiError(400, "Falta el número de túnel");
   const entries = await client.query(
-    `SELECT w.id, w.ticket_number, w.farmer_id, w.is_maquila, w.accionista_id, w.lot_id,
+    `SELECT w.id, w.ticket_number, w.farmer_id, w.is_maquila, w.operation_type, w.accionista_id, w.lot_id,
             COALESCE(w.net_weight, 0) AS net_weight_kg,
             COALESCE(w.quintals, 0) AS quintals,
             f.full_name AS farmer_name,
@@ -937,13 +940,19 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
   const dup = await client.query("SELECT 1 FROM lots WHERE lot_code = $1", [lotCode]);
   if (dup.rowCount) throw new ApiError(409, `Ya existe un lote con el código "${lotCode}".`);
 
+  // Tipo de operación del lote = el de sus ingresos (comparten destino). Un lote
+  // que se está SECANDO nunca es PILADO (ese salta secadoras); si por dato viejo
+  // no hay tipo, se infiere de is_maquila.
+  const opTypeEntrada = String(entries.rows[0].operation_type ?? (isMaquila ? "SECADO_PILADO" : "COMPRA"));
+  const lotOperationType = opTypeEntrada === "PILADO" ? "SECADO_PILADO" : opTypeEntrada;
+
   const lot = await client.query(
-    `INSERT INTO lots (lot_code, print_batch_code, farmer_id, rice_type, ownership, is_maquila, status, notes, accionista_id)
-     VALUES ($1, $2, $3, $4, $5, $6, 'WEIGHED', $7, $8)
+    `INSERT INTO lots (lot_code, print_batch_code, farmer_id, rice_type, ownership, is_maquila, operation_type, status, notes, accionista_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'WEIGHED', $8, $9)
      RETURNING *`,
     [
       lotCode, nextCode("IMP"), lotFarmerId, input.rice_type,
-      isMaquila ? "MAQUILA" : "OWNED", isMaquila,
+      isMaquila ? "MAQUILA" : "OWNED", isMaquila, lotOperationType,
       `Lote formado en túnel ${input.tunnel_number} con ${entries.rowCount} ingreso(s) de materia prima`,
       lotAccionista
     ]
