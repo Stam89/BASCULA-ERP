@@ -6977,8 +6977,9 @@ export function App() {
         dry_start_at: tendalForm.hora_inicio || undefined,
         dry_end_at: tendalForm.hora_fin || undefined,
         // Destino/operativa de la cuadrilla: A granel (por QQ, tarifa "SECADO EN
-        // TENDAL") o Ensacado (por saco, tarifa "TENDAL POR SACO").
-        tendal_mode: tendalForm.modo,
+        // TENDAL") o Ensacado (por saco, tarifa "TENDAL POR SACO"). Siempre se envía
+        // un valor válido (default GRANEL) para que el backend no reciba undefined.
+        tendal_mode: tendalForm.modo === "ENSACADO" ? "ENSACADO" : "GRANEL",
         recepcion_empaque: esEnsacado ? "SACOS" : tendalForm.recepcion_empaque,
         recepcion_sacos: esEnsacado ? sacos : undefined,
         created_by: authUser?.id

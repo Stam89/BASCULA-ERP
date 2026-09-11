@@ -1072,25 +1072,52 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
     // Destino elegido por el operador → tarifa y unidad de cobro de la cuadrilla:
     //   GRANEL   → "SECADO EN TENDAL", se cobra por QQ (Quintales).
     //   ENSACADO → "TENDAL POR SACO",  se cobra por Nº de sacos (Sacos).
+    // Valor por defecto SEGURO del modo si llega vacío/indefinido/otro: GRANEL.
     const esEnsacado = String(input.tendal_mode ?? "GRANEL").toUpperCase() === "ENSACADO";
-    const tendalAct = await resolveTendalActivity(client, esEnsacado ? "ENSACADO" : "GRANEL");
-    const sacos = Number(input.recepcion_sacos) || 0;
-    const cantidad = esEnsacado ? (sacos > 0 ? sacos : totalQuintals) : totalQuintals;
-    const unidad = esEnsacado ? "Sacos" : "Quintales";
-    const modoLabel = esEnsacado ? "Ensacado" : "A granel";
-    const tendalSubtotal = round2(cantidad * tendalAct.unit_rate);
-    await client.query(
-      `INSERT INTO drying_tunnel_cuadrilla (drying_report_id, worker_name, activity_id, quintals, momento, created_by)
-       VALUES ($1, 'CUADRILLA', $2, $3, 'VACIADO', $4)`,
-      [tunnel.rows[0].id, tendalAct.id, cantidad, input.created_by ?? null]
-    );
-    const wd = toDateOnly(input.dry_end_at) ?? toDateOnly(input.dry_start_at);
-    await client.query(
-      `INSERT INTO cuadrilla_entries
-         (work_date, activity_id, activity_name, worker_name, quantity, unit_rate, subtotal, notes, origen, referencia_id, momento, created_by)
-       VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, 'CUADRILLA', $4, $5, $6, $7, 'TENDAL', $8, 'VACIADO', $9)`,
-      [wd, tendalAct.id, tendalAct.name, cantidad, tendalAct.unit_rate, tendalSubtotal, `Secado en tendal (${modoLabel}) - Lote ${lotCode} - ${cantidad} ${unidad}`, tunnel.rows[0].id, input.created_by ?? null]
-    );
+    // Fecha del pago: fin de secado, inicio, o HOY. Así el registro cae dentro del
+    // rango (semana en curso) que muestra Nómina → Cuadrilla y no queda "invisible".
+    const wd = toDateOnly(input.dry_end_at) ?? toDateOnly(input.dry_start_at) ?? new Date().toISOString().slice(0, 10);
+    // La inserción a Nómina/Cuadrilla NO debe fallar en silencio: si la búsqueda de
+    // la tarifa o el INSERT fallan, se registra el detalle y se devuelve un mensaje
+    // claro al frontend (dentro de la transacción → el secado no se guarda a medias).
+    try {
+      const tendalAct = await resolveTendalActivity(client, esEnsacado ? "ENSACADO" : "GRANEL");
+      const sacos = Number(input.recepcion_sacos) || 0;
+      const cantidad = esEnsacado ? (sacos > 0 ? sacos : totalQuintals) : totalQuintals;
+      const unidad = esEnsacado ? "Sacos" : "Quintales";
+      const modoLabel = esEnsacado ? "Ensacado" : "A granel";
+      const tendalSubtotal = round2(cantidad * tendalAct.unit_rate);
+      // Marca de vaciado a bodega (para que el lote quede disponible en Producción).
+      await client.query(
+        `INSERT INTO drying_tunnel_cuadrilla (drying_report_id, worker_name, activity_id, quintals, momento, created_by)
+         VALUES ($1, 'CUADRILLA', $2, $3, 'VACIADO', $4)`,
+        [tunnel.rows[0].id, tendalAct.id, cantidad, input.created_by ?? null]
+      );
+      // Pago en Nómina: cuadrilla EXACTA 'CUADRILLA' + fecha wd (coincide con el filtro).
+      await client.query(
+        `INSERT INTO cuadrilla_entries
+           (work_date, activity_id, activity_name, worker_name, quantity, unit_rate, subtotal, notes, origen, referencia_id, momento, created_by)
+         VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, 'CUADRILLA', $4, $5, $6, $7, 'TENDAL', $8, 'VACIADO', $9)`,
+        [wd, tendalAct.id, tendalAct.name, cantidad, tendalAct.unit_rate, tendalSubtotal, `Secado en tendal (${modoLabel}) - Lote ${lotCode} - ${cantidad} ${unidad}`, tunnel.rows[0].id, input.created_by ?? null]
+      );
+    } catch (err) {
+      const detalle = err instanceof Error ? err.message : String(err);
+      console.error("[tendal] No se pudo registrar el pago de la cuadrilla del secado en tendal", {
+        lot_code: lotCode,
+        drying_report_id: tunnel.rows[0].id,
+        tendal_mode: esEnsacado ? "ENSACADO" : "GRANEL",
+        total_quintals: totalQuintals,
+        recepcion_sacos: input.recepcion_sacos ?? null,
+        work_date: wd,
+        error: detalle
+      });
+      const tarifaEsperada = esEnsacado ? "TENDAL POR SACO" : "SECADO EN TENDAL";
+      throw new ApiError(
+        500,
+        `No se pudo registrar el pago de la cuadrilla del secado en tendal (${esEnsacado ? "Ensacado" : "A granel"}). ` +
+        `Verifica que la tarifa "${tarifaEsperada}" exista y esté activa en Cuadrilla → Actividades. Detalle: ${detalle}`
+      );
+    }
   }
   const llenadoWorker = (input.cuadrilla_worker ?? "").trim();
   if (input.cuadrilla_labor_id && llenadoWorker.length >= 2) {
