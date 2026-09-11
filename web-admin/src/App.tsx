@@ -1641,7 +1641,7 @@ export function App() {
   // nombre externo del ticket para encontrar rápido al agricultor oficial).
   const [linkFarmerFilter, setLinkFarmerFilter] = useState("");
   const [lotTicket, setLotTicket] = useState<BasculaTicket | null>(null);
-  const [lotForm, setLotForm] = useState({ rice_type: "0.11" as "0.11" | "CORRIENTE", ownership: "OWNED" as "OWNED" | "MAQUILA", accionista_id: "", product_id: "", warehouse_id: "" });
+  const [lotForm, setLotForm] = useState({ rice_type: "0.11" as "0.11" | "CORRIENTE", operation_type: "COMPRA" as "COMPRA" | "SECADO" | "SECADO_PILADO" | "PILADO", ownership: "OWNED" as "OWNED" | "MAQUILA", accionista_id: "", product_id: "", warehouse_id: "" });
   const [liqTicket, setLiqTicket] = useState<BasculaTicket | null>(null);
   const [liqPrecio, setLiqPrecio] = useState("");
   const [liqPreview, setLiqPreview] = useState<{ quintals: number; grossPayable: number; advancesDiscount: number; netPayable: number } | null>(null);
@@ -4831,13 +4831,17 @@ export function App() {
     try {
       // La compra entra sola a la bodega de materia prima; el servicio siempre
       // es de CEYRO. El backend resuelve ambas cosas.
+      const esCompra = lotForm.operation_type === "COMPRA";
       await apiPost(`/tickets/${lotTicket.id}/create-lot`, {
         rice_type: lotForm.rice_type,
-        ownership: lotForm.ownership,
-        accionista_id: lotForm.ownership === "OWNED" ? (lotForm.accionista_id || undefined) : undefined
+        operation_type: lotForm.operation_type,
+        ownership: esCompra ? "OWNED" : "MAQUILA",
+        accionista_id: esCompra ? (lotForm.accionista_id || undefined) : undefined
       });
       addToast(
-        lotForm.ownership === "OWNED"
+        lotForm.operation_type === "PILADO"
+          ? "Ingreso registrado (Solo Pilada, ya seco). Disponible en Producción · Desde Stock/Bodega."
+          : esCompra
           ? "Materia prima ingresada a Bodega Materia Prima. Ya puedes formar el lote en Secadoras."
           : "Ingreso de servicio registrado (a nombre de CEYRO). Ya puedes formar el lote en Secadoras.",
         "success"
@@ -9227,7 +9231,7 @@ export function App() {
                               <button type="button" className="btnSecondary" onClick={() => { setLinkTicket(t); setLinkFarmerId(""); setLinkFarmerFilter(t.farmer_name || ""); }}>Vincular cliente</button>
                             )}
                             {!t.en_espera && !t.weighing_ticket_id && !liquidated && linked && (
-                              <button type="button" className="btnSecondary" onClick={() => { setLotTicket(t); setLotForm({ rice_type: (t.calidad ?? "").includes("0.11") ? "0.11" : "CORRIENTE", ownership: "OWNED", accionista_id: activeAccionistaId ?? (accionistas[0]?.id ?? ""), product_id: "", warehouse_id: "" }); }}>Ingresar materia prima</button>
+                              <button type="button" className="btnSecondary" onClick={() => { setLotTicket(t); setLotForm({ rice_type: (t.calidad ?? "").includes("0.11") ? "0.11" : "CORRIENTE", operation_type: "COMPRA", ownership: "OWNED", accionista_id: activeAccionistaId ?? (accionistas[0]?.id ?? ""), product_id: "", warehouse_id: "" }); }}>Ingresar materia prima</button>
                             )}
                           </td>
                         </tr>
@@ -17451,13 +17455,15 @@ export function App() {
             </select>
           </label>
           <label>
-            <span>¿Qué es este arroz?</span>
-            <select value={lotForm.ownership} onChange={(e) => setLotForm({ ...lotForm, ownership: e.target.value as "OWNED" | "MAQUILA" })}>
-              <option value="OWNED">Compra propia (entra a mi inventario)</option>
-              <option value="MAQUILA">Servicio de pilado (no entra a mi inventario)</option>
+            <span>Destino / Tipo de operación</span>
+            <select value={lotForm.operation_type} onChange={(e) => { const op = e.target.value as "COMPRA" | "SECADO" | "SECADO_PILADO" | "PILADO"; setLotForm({ ...lotForm, operation_type: op, ownership: op === "COMPRA" ? "OWNED" : "MAQUILA" }); }}>
+              <option value="COMPRA">Compra / Producción Propia</option>
+              <option value="SECADO">Solo Servicio de Secado</option>
+              <option value="SECADO_PILADO">Servicio Completo (Secada + Pilada)</option>
+              <option value="PILADO">Solo Servicio de Pilada (ya viene seco)</option>
             </select>
           </label>
-          {lotForm.ownership === "OWNED" ? (
+          {lotForm.operation_type === "COMPRA" ? (
             <>
               {accionistas.length > 0 && (
                 <label>
@@ -17468,12 +17474,15 @@ export function App() {
                 </label>
               )}
               <p className="muted" style={{ marginTop: 4 }}>
-                📦 Entra a <strong>Bodega Materia Prima</strong> como <strong>{lotForm.rice_type === "0.11" ? "Cáscara 0.11" : "Cáscara Corriente"}</strong>.
+                📦 Entra a <strong>Bodega Materia Prima</strong> como <strong>{lotForm.rice_type === "0.11" ? "Cáscara 0.11" : "Cáscara Corriente"}</strong> y pasa por Secadoras → Producción.
               </p>
             </>
           ) : (
             <p className="muted" style={{ marginTop: 4 }}>
-              🌾 El servicio de pilado siempre queda a nombre de <strong>CEYRO</strong> y no entra a inventario (el arroz es del cliente).
+              🌾 Servicio a nombre de <strong>CEYRO</strong> (el arroz es del cliente, no entra a inventario).{" "}
+              {lotForm.operation_type === "SECADO" && <>Va a <strong>Secadoras</strong> y se entrega; <strong>no</strong> pasa a Producción.</>}
+              {lotForm.operation_type === "SECADO_PILADO" && <>Va a <strong>Secadoras</strong> y luego <strong>sí</strong> pasa a Producción.</>}
+              {lotForm.operation_type === "PILADO" && <>Ya viene <strong>seco</strong>: salta Secadoras y queda listo en Producción (Desde Stock/Bodega).</>}
             </p>
           )}
           <div className="buttonRow">

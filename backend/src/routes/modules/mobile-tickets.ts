@@ -443,12 +443,16 @@ mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, asyn
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const body = z.object({
     rice_type: z.enum(["0.11", "CORRIENTE"]).default("0.11"),
+    // Destino / Tipo de operación del lote (4 opciones de Báscula). is_maquila /
+    // ownership se derivan de aquí. Si no viene (compat), se infiere de ownership.
+    operation_type: z.enum(["COMPRA", "SECADO", "SECADO_PILADO", "PILADO"]).optional(),
     ownership: z.enum(["OWNED", "MAQUILA"]).default("OWNED"),
     accionista_id: z.string().uuid().optional(),
     product_id: z.string().uuid().optional(),
     warehouse_id: z.string().uuid().optional(),
     created_by: z.string().uuid().optional()
   }).parse(req.body);
+  const operationType = body.operation_type ?? (body.ownership === "MAQUILA" ? "SECADO_PILADO" : "COMPRA");
 
   const ticketRow = await pool.query("SELECT * FROM mobile_synced_tickets WHERE id = $1", [req.params.id]);
   if (!ticketRow.rowCount) throw new ApiError(404, "Ticket no encontrado");
@@ -456,7 +460,7 @@ mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, asyn
   if (t.weighing_ticket_id) throw new ApiError(409, "Este ticket ya ingresó como materia prima.");
   if (!t.farmer_id) throw new ApiError(400, "Primero vincula el ticket a un agricultor/cliente.");
   if (Number(t.quintals) <= 0) throw new ApiError(400, "El ticket no tiene quintales calculados.");
-  const isMaquila = body.ownership === "MAQUILA";
+  const isMaquila = operationType !== "COMPRA";
 
   // Reglas del negocio:
   // - El servicio de pilado siempre es de CEYRO (él presta el servicio).
@@ -493,17 +497,34 @@ mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, asyn
     // asignará cuando entre a un túnel de secado.
     const ticket = await client.query(
       `INSERT INTO weighing_tickets
-       (ticket_number, lot_id, farmer_id, is_maquila, rice_type, gross_weight, tare_weight, qualification, quintals,
+       (ticket_number, lot_id, farmer_id, is_maquila, operation_type, rice_type, gross_weight, tare_weight, qualification, quintals,
         weighed_in_at, status, is_locked, created_by, accionista_id, notes)
-       VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8, now(), 'CONFIRMED', true, $9, $10, $11)
+       VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8, $9, now(), 'CONFIRMED', true, $10, $11, $12)
        RETURNING *`,
       [
-        nextCode("BAS"), t.farmer_id, isMaquila, body.rice_type,
+        nextCode("BAS"), t.farmer_id, isMaquila, operationType, body.rice_type,
         t.gross_weight, t.tare_weight, t.qualification, t.quintals,
         body.created_by ?? null, ticketAccionista,
         `Desde ticket de báscula #${t.raw_payload?.numeroTicket ?? ""}`.trim()
       ]
     );
+
+    // 'Solo Servicio de Pilada' (PILADO): ya viene SECO, salta secadoras. Se le
+    // forma el lote de inmediato (status WEIGHED) para que quede disponible en
+    // Producción (Desde Stock/Bodega) sin pasar por un túnel.
+    if (operationType === "PILADO") {
+      const lot = await client.query(
+        `INSERT INTO lots (lot_code, print_batch_code, farmer_id, rice_type, ownership, is_maquila, operation_type, status, notes, accionista_id)
+         VALUES ($1, $2, $3, $4, 'MAQUILA', true, 'PILADO', 'WEIGHED', $5, $6)
+         RETURNING id`,
+        [
+          nextCode("LT"), nextCode("IMP"), t.farmer_id, body.rice_type,
+          "Solo Servicio de Pilada (arroz seco) - directo a Producción",
+          ticketAccionista
+        ]
+      );
+      await client.query("UPDATE weighing_tickets SET lot_id = $1 WHERE id = $2", [lot.rows[0].id, ticket.rows[0].id]);
+    }
 
     // Compra: el arroz entra a la bodega de materia prima del accionista (aún
     // sin lote). El servicio de pilado no entra al inventario: es del cliente.
