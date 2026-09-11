@@ -2550,8 +2550,25 @@ export function App() {
   // Por separado (gas = bombona + cilindro; diésel = medidor).
   const gasPorQq = qqMotor > 0 ? round2(gasCostoTotal / qqMotor) : 0;
   const dieselPorQq = qqMotor > 0 ? round2(dieselCosto / qqMotor) : 0;
+  // Detecta si un informe de secado corresponde a un lote de SERVICIO (maquila):
+  // arroz de un cliente externo que vino SOLO a secado y se lo lleva. Esos lotes
+  // NO se pilan aquí, así que se excluyen del selector de Producción. Se evalúa la
+  // bandera is_maquila que el backend ya trae por lote (COALESCE(...,false)); se
+  // trata como verdadero cualquier valor "truthy" (true / "t" / 1) por robustez.
+  const esLoteDeServicio = (report: DryingTunnelReport): boolean =>
+    (report.lots ?? []).some((lot) => {
+      const v = (lot as { is_maquila?: unknown }).is_maquila;
+      return v === true || v === 1 || v === "t" || v === "true" || v === "SERVICIO";
+    });
   const productionDryingReports = useMemo(
-    () => dryingReports.filter((report) => report.status === "COMPLETED" && !report.is_processed && !report.apartado_arianos),
+    () => dryingReports.filter(
+      (report) =>
+        report.status === "COMPLETED" &&
+        !report.is_processed &&
+        !report.apartado_arianos &&
+        // Filtrado ESTRICTO: fuera los lotes que vinieron solo a secado externo.
+        !esLoteDeServicio(report)
+    ),
     [dryingReports]
   );
   const selectedProductionDrying = useMemo(
