@@ -2210,6 +2210,13 @@ export function App() {
   const [arDetalleKey, setArDetalleKey] = useState<string | null>(null);
   // Ídem para Por Pagar (acreedor).
   const [apDetalleKey, setApDetalleKey] = useState<string | null>(null);
+  // Modal "Comprar producto / Cruzar CxC": compra producto a un cliente y lo
+  // cruza contra su deuda de servicio. Guarda el grupo (cliente) y el formulario.
+  const [comprarProd, setComprarProd] = useState<{ nombre: string; items: AccountsReceivable[] } | null>(null);
+  const [comprarProdForm, setComprarProdForm] = useState<{ buyer_accionista_id: string; product_id: string; quintals: string; price_per_qq: string }>(
+    { buyer_accionista_id: "", product_id: "", quintals: "", price_per_qq: "" }
+  );
+  const [comprarProdBusy, setComprarProdBusy] = useState(false);
   const [apFilter, setApFilter] = useState<"todos" | "socios" | "agricultores" | "matriz">("todos");
   const [newCustomerForm, setNewCustomerForm] = useState({ full_name: "", phone: "", identification: "", address: "", customer_type: "NATURAL" as "NATURAL"|"EMPRESA" });
   // Modal de edición de un cliente existente (para completar/corregir datos fiscales).
@@ -5021,6 +5028,59 @@ export function App() {
     await refreshReceivables();
     await refreshCaja(registerId);
     addToast(`Abono de ${money(aplicado)} aplicado a ${items.length > 1 ? "las deudas más antiguas" : "la deuda"}`, "success");
+  }
+
+  // Abre el modal de "Comprar producto / Cruzar CxC" para un cliente (grupo de
+  // cuentas por cobrar). Precarga el comprador con el accionista activo.
+  function abrirComprarProducto(grupo: { nombre: string; items: AccountsReceivable[] }) {
+    setComprarProd(grupo);
+    setComprarProdForm({
+      buyer_accionista_id: activeAccionistaId ?? (accionistas[0]?.id ?? ""),
+      product_id: "",
+      quintals: "",
+      price_per_qq: ""
+    });
+  }
+
+  // Confirma la compra de producto al cliente: cruza el monto contra sus cuentas
+  // por cobrar y suma los QQ al inventario del socio/matriz comprador.
+  async function submitComprarProducto() {
+    if (!comprarProd) return;
+    const f = comprarProdForm;
+    if (!f.buyer_accionista_id) { addToast("Elige el socio/matriz comprador", "error"); return; }
+    if (!f.product_id) { addToast("Elige el ítem a comprar", "error"); return; }
+    const qq = Number(f.quintals);
+    const precio = Number(f.price_per_qq);
+    if (!(qq > 0)) { addToast("La cantidad (QQ) debe ser mayor a 0", "error"); return; }
+    if (!(precio >= 0) || precio === 0) { addToast("El precio pactado debe ser mayor a 0", "error"); return; }
+    setComprarProdBusy(true);
+    try {
+      const res = await apiPost<{ monto: number; aplicado: number; credito_a_favor: number; cuentas_afectadas: number; comprador: string; producto: string; quintals: number }>(
+        "/receivable/comprar-producto",
+        {
+          buyer_accionista_id: f.buyer_accionista_id,
+          product_id: f.product_id,
+          quintals: qq,
+          price_per_qq: precio,
+          receivable_ids: comprarProd.items.map((it) => it.id)
+        }
+      );
+      const extra = res.credito_a_favor > 0.01
+        ? ` Excedente ${money(res.credito_a_favor)} quedó como crédito a favor del cliente.`
+        : "";
+      addToast(
+        `${res.quintals} QQ de ${res.producto} ingresaron al stock de ${res.comprador}. ` +
+        `Se cruzaron ${money(res.aplicado)} contra ${res.cuentas_afectadas} deuda(s).${extra}`,
+        "success"
+      );
+      setComprarProd(null);
+      await refreshReceivables();
+      await refresh();
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : "No se pudo registrar la compra", "error");
+    } finally {
+      setComprarProdBusy(false);
+    }
   }
 
   // Estado de cuenta imprimible (ventana limpia, sin menú lateral ni botones).
@@ -14218,10 +14278,28 @@ export function App() {
                         style={{ fontSize: 13, padding: "10px 12px", fontWeight: 700 }}>
                         📄 Ver detalle y Cobrar
                       </button>
+                      <button type="button" onClick={() => abrirComprarProducto(g)}
+                        title="Comprar producto/subproducto al cliente y cruzarlo contra esta deuda"
+                        style={{ fontSize: 12.5, padding: "9px 12px", fontWeight: 700, background: "#f5f3ff", color: "#6b21a8", border: "1px solid #ddd6fe", borderRadius: 8 }}>
+                        🛍️ Comprar Producto / Cruzar CxC
+                      </button>
                     </article>
                   );
                 })}
               </div>
+            )}
+
+            {comprarProd && (
+              <ComprarProductoModal
+                grupo={comprarProd}
+                form={comprarProdForm}
+                setForm={setComprarProdForm}
+                accionistas={accionistas}
+                products={products}
+                busy={comprarProdBusy}
+                onClose={() => setComprarProd(null)}
+                onConfirm={() => { void submitComprarProducto(); }}
+              />
             )}
 
             {detalleGrupo && (
@@ -18407,6 +18485,97 @@ function CuentaDetalleModal(props: {
             {valor > 0 && valor < saldoTotal - 0.001 && <small className="muted">Se aplica a las deudas más antiguas. Queda {money(round2(saldoTotal - valor))}.</small>}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Modal "Comprar producto / Cruzar CxC": la matriz/socio le COMPRA producto o
+// subproducto al cliente y ese monto se cruza contra su deuda de servicio (no
+// mueve caja: es pago en especie). El excedente queda como crédito a favor.
+function ComprarProductoModal(props: {
+  grupo: { nombre: string; items: AccountsReceivable[] };
+  form: { buyer_accionista_id: string; product_id: string; quintals: string; price_per_qq: string };
+  setForm: React.Dispatch<React.SetStateAction<{ buyer_accionista_id: string; product_id: string; quintals: string; price_per_qq: string }>>;
+  accionistas: Accionista[];
+  products: Product[];
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const { form, setForm } = props;
+  const saldoCliente = props.grupo.items.reduce((s, r) => s + Number(r.balance), 0);
+  // Solo se compran productos vendibles: terminados y subproductos.
+  const items = props.products.filter((p) => ["FINISHED_GOOD", "BYPRODUCT"].includes(p.product_type) && p.is_active !== false);
+  const qq = Number(form.quintals) || 0;
+  const precio = Number(form.price_per_qq) || 0;
+  const monto = round2(qq * precio);
+  const cruce = round2(Math.min(monto, saldoCliente));
+  const credito = round2(Math.max(0, monto - saldoCliente));
+  const valido = !!form.buyer_accionista_id && !!form.product_id && qq > 0 && precio > 0;
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  return (
+    <div className="modalOverlay" onClick={props.onClose}>
+      <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520, width: "100%" }}>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 20 }}>🛍️ Comprar producto a {props.grupo.nombre}</h3>
+            <p className="muted" style={{ margin: "2px 0 0" }}>Se cruza contra su deuda de servicio · saldo {money(saldoCliente)}</p>
+          </div>
+          <button type="button" onClick={props.onClose} style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 14 }}>
+          <label style={{ fontSize: 13, fontWeight: 600 }}>
+            Socio / Matriz comprador
+            <select value={form.buyer_accionista_id} onChange={set("buyer_accionista_id")} style={{ width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--c-border, #d1d5db)" }}>
+              <option value="">Selecciona…</option>
+              {props.accionistas.map((a) => <option key={a.id} value={a.id}>{a.name}{a.tipo === "MATRIZ" ? " · Planta" : ""}</option>)}
+            </select>
+          </label>
+
+          <label style={{ fontSize: 13, fontWeight: 600 }}>
+            Ítem a comprar
+            <select value={form.product_id} onChange={set("product_id")} style={{ width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--c-border, #d1d5db)" }}>
+              <option value="">Selecciona…</option>
+              {items.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </label>
+
+          <div style={{ display: "flex", gap: 10 }}>
+            <label style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>
+              Cantidad (QQ)
+              <input type="number" min="0" step="0.01" value={form.quintals} onChange={set("quintals")} placeholder="0.00"
+                style={{ width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--c-border, #d1d5db)" }} />
+            </label>
+            <label style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>
+              Precio pactado ($/QQ)
+              <input type="number" min="0" step="0.01" value={form.price_per_qq} onChange={set("price_per_qq")} placeholder="0.00"
+                style={{ width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--c-border, #d1d5db)" }} />
+            </label>
+          </div>
+
+          <div style={{ background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 10, padding: "12px 14px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontWeight: 700, color: "#6b21a8" }}>Monto total</span>
+              <b style={{ fontSize: 22, color: "#6b21a8" }}>{money(monto)}</b>
+            </div>
+            {monto > 0 && (
+              <div className="muted" style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
+                Se abonará {money(cruce)} a la deuda de servicio.
+                {credito > 0.01 && <> El excedente {money(credito)} quedará como <b>crédito a favor del cliente</b>.</>}
+                {" "}Ingresa {qq} QQ al stock del comprador.
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+          <button type="button" className="primary" disabled={!valido || props.busy} onClick={props.onConfirm} style={{ fontWeight: 700 }}>
+            {props.busy ? "Registrando…" : "✅ Confirmar compra y cruzar"}
+          </button>
+          <button type="button" onClick={props.onClose} style={{ marginLeft: "auto" }}>Cancelar</button>
+        </div>
       </div>
     </div>
   );

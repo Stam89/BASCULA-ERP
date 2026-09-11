@@ -8,6 +8,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { requireAuth, resolveAccionista, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { calculateNetWeight, calculateQuintals, round2 } from "../../utils/rice-formulas.js";
 import { nextCode } from "../../utils/codes.js";
+import { nextSequentialLotCode } from "../../utils/lot-code.js";
 import { createLotProcessReport } from "../../utils/process-reports.js";
 import { dispararFleteInternoBascula } from "../../services/campo-flete-bascula.js";
 import { env } from "../../config/env.js";
@@ -518,7 +519,8 @@ mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, asyn
          VALUES ($1, $2, $3, $4, 'MAQUILA', true, 'PILADO', 'WEIGHED', $5, $6)
          RETURNING id`,
         [
-          nextCode("LT"), nextCode("IMP"), t.farmer_id, body.rice_type,
+          await nextSequentialLotCode(client, new Date().toISOString().slice(0, 10), "PILADO"),
+          nextCode("IMP"), t.farmer_id, body.rice_type,
           "Solo Servicio de Pilada (arroz seco) - directo a Producción",
           ticketAccionista
         ]

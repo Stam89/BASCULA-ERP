@@ -5,6 +5,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
+import { nextSequentialLotCode } from "../../utils/lot-code.js";
 import { createLotProcessReport } from "../../utils/process-reports.js";
 import { calculateNetWeight, calculateQuintals } from "../../utils/rice-formulas.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
@@ -145,7 +146,7 @@ weighingRouter.post("/", asyncRoute(async (req, res) => {
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'OPEN', $8, $9)
        RETURNING *`,
       [
-        nextCode("LT"),
+        await nextSequentialLotCode(client, new Date().toISOString().slice(0, 10), operationType),
         nextCode("IMP"),
         data.farmer_id,
         data.rice_type,

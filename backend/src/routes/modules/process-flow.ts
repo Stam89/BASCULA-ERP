@@ -6,6 +6,7 @@ import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
+import { nextSequentialLotCode } from "../../utils/lot-code.js";
 import { repartirPorPeso } from "../../utils/money.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import {
@@ -829,20 +830,6 @@ async function resolveTendalActivity(
   return { id: created.rows[0].id, name: created.rows[0].name, unit_rate: Number(created.rows[0].unit_rate) };
 }
 
-// Código de lote AUTOMÁTICO con formato estricto [SECUENCIAL(5)]-[DD]-[MM]-[YY]
-// (ej. 00001-10-09-26). El secuencial es global: consulta el mayor secuencial
-// ya registrado (solo lotes con este formato) y lo autoincrementa. La fecha es
-// la del día de la operación (opDate, YYYY-MM-DD).
-async function nextSequentialLotCode(client: PoolClient, opDate: string): Promise<string> {
-  const r = await client.query(
-    "SELECT (substring(lot_code from '^[0-9]{5}'))::int AS n FROM lots WHERE lot_code ~ '^[0-9]{5}-[0-9]{2}-[0-9]{2}-[0-9]{2}$' ORDER BY n DESC LIMIT 1"
-  );
-  const last = r.rows[0] ? Number(r.rows[0].n) : 0;
-  const seq = String(last + 1).padStart(5, "0");
-  const [yyyy, mm, dd] = String(opDate).slice(0, 10).split("-");
-  return `${seq}-${dd}-${mm}-${yyyy.slice(-2)}`;
-}
-
 async function createDryingReport(client: PoolClient, input: z.infer<typeof dryingBodySchema>) {
   const entryIds = [...new Set(input.entry_ids)];
   const esTendal = input.dry_method === "TENDAL";
@@ -934,17 +921,18 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
   const dryingHours = calculateDryingHours(input.dry_start_at, input.dry_end_at);
   const status = (esTendal || input.dry_end_at) ? "COMPLETED" : "IN_PROGRESS";
 
-  // El código del lote se propone automático, pero se puede escribir otro.
-  const opDate = toDateOnly(input.filled_at) ?? toDateOnly(input.dry_end_at) ?? toDateOnly(input.dry_start_at) ?? new Date().toISOString().slice(0, 10);
-  const lotCode = (input.lot_code ?? "").trim() || await nextSequentialLotCode(client, opDate);
-  const dup = await client.query("SELECT 1 FROM lots WHERE lot_code = $1", [lotCode]);
-  if (dup.rowCount) throw new ApiError(409, `Ya existe un lote con el código "${lotCode}".`);
-
   // Tipo de operación del lote = el de sus ingresos (comparten destino). Un lote
   // que se está SECANDO nunca es PILADO (ese salta secadoras); si por dato viejo
   // no hay tipo, se infiere de is_maquila.
   const opTypeEntrada = String(entries.rows[0].operation_type ?? (isMaquila ? "SECADO_PILADO" : "COMPRA"));
   const lotOperationType = opTypeEntrada === "PILADO" ? "SECADO_PILADO" : opTypeEntrada;
+
+  // El código del lote se propone automático (con sufijo -S/-P según el servicio),
+  // pero se puede escribir otro.
+  const opDate = toDateOnly(input.filled_at) ?? toDateOnly(input.dry_end_at) ?? toDateOnly(input.dry_start_at) ?? new Date().toISOString().slice(0, 10);
+  const lotCode = (input.lot_code ?? "").trim() || await nextSequentialLotCode(client, opDate, lotOperationType);
+  const dup = await client.query("SELECT 1 FROM lots WHERE lot_code = $1", [lotCode]);
+  if (dup.rowCount) throw new ApiError(409, `Ya existe un lote con el código "${lotCode}".`);
 
   const lot = await client.query(
     `INSERT INTO lots (lot_code, print_batch_code, farmer_id, rice_type, ownership, is_maquila, operation_type, status, notes, accionista_id)

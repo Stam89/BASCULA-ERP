@@ -79,6 +79,125 @@ receivableRouter.get("/history", asyncRoute(async (req, res) => {
   res.json(result.rows);
 }));
 
+// Baja el saldo de la cuenta POR PAGAR hermana (si existe) SIN mover caja: el
+// cruce se pagó con producto, no con efectivo. Mantiene los libros sincronizados
+// cuando la deuda es entre socios (service_charge / traspaso / pilado / sacos).
+async function bajarPayableHermana(client: import("pg").PoolClient, receivableId: string, abono: number): Promise<void> {
+  if (abono <= 0) return;
+  const hermana = await client.query(
+    `SELECT ps.payable_id AS id FROM pilado_services ps WHERE ps.receivable_id = $1
+     UNION ALL SELECT lt.payable_id AS id FROM lot_transfers lt WHERE lt.receivable_id = $1
+     UNION ALL SELECT msc.payable_id AS id FROM matriz_service_charges msc WHERE msc.receivable_id = $1
+     UNION ALL SELECT mpc.payable_id AS id FROM matriz_packaging_charges mpc WHERE mpc.receivable_id = $1`,
+    [receivableId]
+  );
+  const hermanaId = hermana.rows.find((r) => r.id)?.id;
+  if (!hermanaId) return;
+  const ap = await client.query("SELECT balance FROM accounts_payable WHERE id = $1 FOR UPDATE", [hermanaId]);
+  if (!ap.rowCount) return;
+  const saldo = Number(ap.rows[0].balance);
+  const baja = Math.min(saldo, round2(abono));
+  const nuevo = round2(saldo - baja);
+  await client.query("UPDATE accounts_payable SET balance = $2, status = $3 WHERE id = $1", [hermanaId, nuevo, nuevo < 0.01 ? "PAID" : "PARTIAL"]);
+}
+
+// POST comprar producto/subproducto a un cliente y CRUZARLO contra su deuda de
+// servicio (CxC). No mueve caja: el pago es en especie. Efectos:
+//   1) Abono/nota de crédito sobre las cuentas por cobrar indicadas del cliente
+//      (más antiguas primero). Si el monto cubre todo y sobra, el excedente queda
+//      como CRÉDITO A FAVOR del cliente (cuenta por pagar de la matriz).
+//   2) Ingreso del producto al inventario del socio/matriz COMPRADOR.
+receivableRouter.post("/comprar-producto", asyncRoute(async (req, res) => {
+  const provider = (req as AuthenticatedRequest).accionistaId ?? null;
+  if (!provider) throw new ApiError(400, "Selecciona un accionista.");
+  const body = z.object({
+    buyer_accionista_id: z.string().uuid(),
+    product_id: z.string().uuid(),
+    quintals: z.number().positive(),
+    price_per_qq: z.number().nonnegative(),
+    receivable_ids: z.array(z.string().uuid()).min(1),
+    created_by: z.string().uuid().optional()
+  }).parse(req.body);
+
+  const qq = round2(body.quintals);
+  const monto = round2(qq * body.price_per_qq);
+  if (monto <= 0) throw new ApiError(400, "El monto total debe ser mayor a 0 (revisa cantidad y precio).");
+
+  const result = await inTransaction(async (client) => {
+    const buyer = await client.query("SELECT id, name FROM accionistas WHERE id = $1 AND is_active = true", [body.buyer_accionista_id]);
+    if (!buyer.rowCount) throw new ApiError(404, "Socio/Matriz comprador no encontrado o inactivo.");
+
+    const prod = await client.query("SELECT id, code, name, product_type, unit FROM products WHERE id = $1 AND is_active = true", [body.product_id]);
+    if (!prod.rowCount) throw new ApiError(404, "Producto no encontrado o inactivo.");
+    const product = prod.rows[0];
+
+    // Cuentas por cobrar del cliente a cruzar: solo las del proveedor activo con
+    // saldo, de más antigua a más nueva.
+    const cuentas = await client.query(
+      `SELECT id, farmer_id, customer_id, balance, description
+       FROM accounts_receivable
+       WHERE id = ANY($1::uuid[]) AND accionista_id = $2 AND balance > 0
+       ORDER BY created_at ASC
+       FOR UPDATE`,
+      [body.receivable_ids, provider]
+    );
+
+    let restante = monto;
+    let aplicado = 0;
+    const afectadas: string[] = [];
+    for (const c of cuentas.rows) {
+      if (restante <= 0.001) break;
+      const saldo = Number(c.balance);
+      const abono = round2(Math.min(restante, saldo));
+      if (abono <= 0.001) continue;
+      const nuevo = round2(saldo - abono);
+      await client.query(
+        "UPDATE accounts_receivable SET balance = $2, status = $3 WHERE id = $1",
+        [c.id, nuevo, nuevo < 0.01 ? "PAID" : "PARTIAL"]
+      );
+      await bajarPayableHermana(client, c.id, abono);
+      restante = round2(restante - abono);
+      aplicado = round2(aplicado + abono);
+      afectadas.push(c.id);
+    }
+
+    // Excedente = crédito a favor del cliente (cuenta por pagar de la matriz).
+    const credito = round2(monto - aplicado);
+    let creditoRegistrado = false;
+    if (credito > 0.01) {
+      const ref = cuentas.rows[0] ?? null;
+      const clienteNombre = (ref?.description as string | null) ?? "cliente";
+      await client.query(
+        `INSERT INTO accounts_payable (accionista_id, farmer_id, reference_type, reference_id, description, amount, balance, status)
+         VALUES ($1, $2, 'credito_producto', NULL, $3, $4, $4, 'CONFIRMED')`,
+        [provider, ref?.farmer_id ?? null, `Crédito a favor por compra de ${product.name} (excedente sobre deuda de servicio) - ${clienteNombre}`, credito]
+      );
+      creditoRegistrado = true;
+    }
+
+    // Ingreso del producto al inventario del comprador (según su tipo de bodega).
+    const whType = product.product_type === "RAW_MATERIAL" ? "RAW_MATERIAL" : "FINISHED_GOODS";
+    const wh = await client.query("SELECT id FROM warehouses WHERE type = $1 AND is_active = true ORDER BY name ASC LIMIT 1", [whType]);
+    if (!wh.rowCount) throw new ApiError(400, `No existe una bodega de tipo ${whType}. Créala en Inventario.`);
+    await client.query(
+      `INSERT INTO inventory_movements
+       (product_id, warehouse_id, movement, quantity, unit, reference_type, ownership, cost_unit, total_cost, notes, created_by, accionista_id)
+       VALUES ($1, $2, 'IN', $3, $4, 'compra_producto_cxc', 'OWNED', $5, $6, $7, $8, $9)`,
+      [product.id, wh.rows[0].id, qq, product.unit, round2(body.price_per_qq), monto,
+       `Compra de ${qq} QQ de ${product.name} cruzada contra CxC ($${aplicado.toFixed(2)} en abonos)`,
+       body.created_by ?? null, body.buyer_accionista_id]
+    );
+
+    return {
+      monto, aplicado, credito_a_favor: credito, credito_registrado: creditoRegistrado,
+      cuentas_afectadas: afectadas.length,
+      comprador: buyer.rows[0].name, producto: product.name, quintals: qq
+    };
+  });
+
+  res.status(201).json(result);
+}));
+
 // POST registrar pago de cuenta por cobrar
 receivableRouter.post("/:id/pay", asyncRoute(async (req, res) => {
   const body = z.object({
