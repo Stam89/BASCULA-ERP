@@ -1553,7 +1553,7 @@ export function App() {
   const [availableDryingLots, setAvailableDryingLots] = useState<MateriaPrimaEntry[]>([]);
   const [dryingReports, setDryingReports] = useState<DryingTunnelReport[]>([]);
   // ☀️ Secado en Tendal (patio): formulario propio. Responsable siempre CUADRILLA.
-    const [tendalForm, setTendalForm] = useState({ lot_code: "", rice_type: "0.11" as "0.11" | "CORRIENTE", moisture_before: "", moisture_after: "", hora_inicio: "", hora_fin: "", recepcion_empaque: "TULAS" as "TULAS" | "SACOS" });
+    const [tendalForm, setTendalForm] = useState({ lot_code: "", rice_type: "0.11" as "0.11" | "CORRIENTE", moisture_before: "", moisture_after: "", hora_inicio: "", hora_fin: "", recepcion_empaque: "TULAS" as "TULAS" | "SACOS", modo: "GRANEL" as "GRANEL" | "ENSACADO", sacos: "" });
   const [liquidacionesList, setLiquidacionesList] = useState<LiqRecord[]>([]);
   const [stock, setStock] = useState<StockRow[]>([]);
   const [insumos, setInsumos] = useState<Insumo[]>([]);
@@ -6965,6 +6965,9 @@ export function App() {
   async function submitTendal() {
       const ids = seleccionDe("TENDAL");
       if (ids.length === 0) { addToast("Agrega al menos un ingreso de materia prima al lote", "error"); return; }
+      const esEnsacado = tendalForm.modo === "ENSACADO";
+      const sacos = Number(tendalForm.sacos);
+      if (esEnsacado && !(sacos > 0)) { addToast("Ingresa el número de sacos entregados (Ensacado)", "error"); return; }
       await apiPost("/process-flow/drying-tendal", {
         entry_ids: ids,
         lot_code: tendalForm.lot_code.trim() || undefined,
@@ -6973,11 +6976,15 @@ export function App() {
         moisture_after: tendalForm.moisture_after ? Number(tendalForm.moisture_after) : undefined,
         dry_start_at: tendalForm.hora_inicio || undefined,
         dry_end_at: tendalForm.hora_fin || undefined,
-        recepcion_empaque: tendalForm.recepcion_empaque,
+        // Destino/operativa de la cuadrilla: A granel (por QQ, tarifa "SECADO EN
+        // TENDAL") o Ensacado (por saco, tarifa "TENDAL POR SACO").
+        tendal_mode: tendalForm.modo,
+        recepcion_empaque: esEnsacado ? "SACOS" : tendalForm.recepcion_empaque,
+        recepcion_sacos: esEnsacado ? sacos : undefined,
         created_by: authUser?.id
       });
       addToast("Secado en tendal registrado: arroz disponible para producción y pago de cuadrilla generado.", "success");
-      setTendalForm({ lot_code: "", rice_type: "0.11", moisture_before: "", moisture_after: "", hora_inicio: "", hora_fin: "", recepcion_empaque: "TULAS" });
+      setTendalForm({ lot_code: "", rice_type: "0.11", moisture_before: "", moisture_after: "", hora_inicio: "", hora_fin: "", recepcion_empaque: "TULAS", modo: "GRANEL", sacos: "" });
       setDryingSelections((cur) => { const n = { ...cur }; delete n["TENDAL"]; return n; });
       setDryingEntryPick((cur) => ({ ...cur, TENDAL: "" }));
       await refresh();
@@ -9352,8 +9359,33 @@ export function App() {
                   <label><span>Hora fin</span><input type="datetime-local" value={tendalForm.hora_fin} onChange={(e) => setTendalForm((f) => ({ ...f, hora_fin: e.target.value }))} /></label>
                   <label><span>Responsable</span><input value="CUADRILLA" readOnly disabled title="El secado en tendal siempre lo cobra la cuadrilla" /></label>
                 </div>
+                {/* Destino del secado: define la tarifa de la cuadrilla. A granel se
+                    paga por QQ ("SECADO EN TENDAL"); Ensacado por saco ("TENDAL POR SACO"). */}
+                <div style={{ marginTop: 12, padding: "10px 12px", background: "var(--c-surface-2, #f6faf8)", border: "1px solid var(--c-border, #e5e7eb)", borderRadius: 10 }}>
+                  <span style={{ display: "block", fontSize: 12, fontWeight: 700, color: "var(--c-text-2, #475569)", marginBottom: 8 }}>Destino del secado (define la tarifa de la cuadrilla)</span>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    {([["GRANEL", "🌾 A granel", "Directo a Producción · por QQ"], ["ENSACADO", "📦 Ensacado", "Retiro / Servicio · por saco"]] as const).map(([val, titulo, sub]) => {
+                      const activo = tendalForm.modo === val;
+                      return (
+                        <label key={val} style={{ flex: "1 1 200px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer", padding: "10px 12px", borderRadius: 10, border: `2px solid ${activo ? "var(--c-brand, #0f766e)" : "var(--c-border, #e5e7eb)"}`, background: activo ? "var(--c-surface, #fff)" : "transparent", fontWeight: 400 }}>
+                          <input type="radio" name="tendal_modo" value={val} checked={activo} onChange={() => setTendalForm((f) => ({ ...f, modo: val }))} style={{ width: "auto", margin: 0 }} />
+                          <span style={{ minWidth: 0 }}>
+                            <strong style={{ display: "block", fontSize: 14 }}>{titulo}</strong>
+                            <small className="muted">{sub}</small>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  {tendalForm.modo === "ENSACADO" && (
+                    <label style={{ display: "block", marginTop: 10, maxWidth: 240 }}>
+                      <span>Nº de sacos entregados</span>
+                      <input type="number" step="1" min="0" value={tendalForm.sacos} onChange={(e) => setTendalForm((f) => ({ ...f, sacos: e.target.value }))} placeholder="Cantidad de sacos" />
+                    </label>
+                  )}
+                </div>
                 <div className="buttonRow" style={{ marginTop: 10 }}>
-                  <button type="submit" className="primary" disabled={tendalLotes.length === 0}>☀️ Registrar secado en tendal</button>
+                  <button type="submit" className="primary" disabled={tendalLotes.length === 0 || (tendalForm.modo === "ENSACADO" && !(Number(tendalForm.sacos) > 0))}>☀️ Registrar secado en tendal</button>
                 </div>
               </form>
             </div>
