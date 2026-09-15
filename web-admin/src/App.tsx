@@ -4911,16 +4911,42 @@ export function App() {
   async function runFirebaseImport() {
     setBasculaImporting(true);
     try {
-      // El botón manual siempre hace importación COMPLETA (full): quien lo
-      // presiona quiere ver todo lo de la báscula, no solo el delta. El sync
-      // automático de cada 3 min sigue siendo incremental.
-      const res = await apiPost<{ ok: boolean; count: number }>("/tickets/refresh-firebase", { full: true });
+      // Importación normal (incremental): trae lo nuevo desde la última marca.
+      // Es rápida y suficiente para el día a día. Si la base local está vacía
+      // (p. ej. tras borrar datos), el backend detecta que no hay tickets y hace
+      // una lectura completa automáticamente. Para forzar el historial completo
+      // a mano, usar el botón "Forzar Sincronización Completa".
+      const res = await apiPost<{ ok: boolean; count: number }>("/tickets/refresh-firebase", { full: false });
       addToast(res.count > 0 ? `${res.count} tickets traídos de la báscula` : "Sin tickets nuevos en la báscula", "success");
       await refreshBasculaTickets();
     } catch (e) {
       addToast(`No se pudo importar: ${e instanceof Error ? e.message : "error"}`, "error");
     } finally {
       setBasculaImporting(false);
+    }
+  }
+
+  // Sincronización COMPLETA / histórica: ignora la marca incremental y re-lee
+  // TODAS las colecciones de Firebase (recuperación tras borrar la base local).
+  // El guardado es UPSERT idempotente (mismo numeroTicket ⇒ mismo registro), así
+  // que presionarlo por error no duplica nada. Puede tardar: por eso el botón
+  // muestra "Descargando historial…" mientras corre.
+  const [basculaFullSyncing, setBasculaFullSyncing] = useState(false);
+  async function runFirebaseFullSync() {
+    if (basculaFullSyncing || basculaImporting) return;
+    setBasculaFullSyncing(true);
+    try {
+      const res = await apiPost<{ ok: boolean; count: number; skipped?: number }>(
+        "/tickets/refresh-firebase",
+        { full: true }
+      );
+      await refreshBasculaTickets();
+      const omitidos = res.skipped && res.skipped > 0 ? ` (${res.skipped} omitidos por formato)` : "";
+      addToast(`Sincronización completa. Se recuperaron ${res.count} tickets${omitidos}`, "success");
+    } catch (e) {
+      addToast(`No se pudo completar la sincronización: ${e instanceof Error ? e.message : "error"}`, "error");
+    } finally {
+      setBasculaFullSyncing(false);
     }
   }
 
@@ -9443,8 +9469,18 @@ export function App() {
               <button type="button" className="btnSecondary" onClick={() => { setMermaForm({ gross: "", tara: "", humedad: "", impureza: "" }); setIngresoModalOpen(true); }}>
                 + Ingreso Manual (Emergencia)
               </button>
-              <button type="button" className="btnSecondary" disabled={basculaImporting} onClick={() => runFirebaseImport()}>
+              <button type="button" className="btnSecondary" disabled={basculaImporting || basculaFullSyncing} onClick={() => runFirebaseImport()}>
                 {basculaImporting ? "Importando…" : "⟳ Importar de báscula"}
+              </button>
+              <button
+                type="button"
+                className="btnSecondary"
+                disabled={basculaFullSyncing || basculaImporting}
+                title="Ignora la última sincronización y descarga TODO el historial de la báscula (recuperación tras borrar datos). No duplica: actualiza los que ya existan."
+                onClick={() => runFirebaseFullSync()}
+                style={{ borderColor: "#f59e0b", color: "#b45309" }}
+              >
+                {basculaFullSyncing ? "⏳ Descargando historial…" : "⚠️ Forzar Sincronización Completa"}
               </button>
               <div className="cajaSubNav" style={{ borderBottom: "none" }}>
                 {(["pending", "liquidated", "all"] as const).map((f) => (
