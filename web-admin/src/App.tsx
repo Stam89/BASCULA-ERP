@@ -29,8 +29,17 @@ function opTypeBadgeLabel(operationType?: string | null, isMaquila?: boolean): s
   if (op === "SECADO") return "🛎️ SOLO SECADO";
   if (op === "SECADO_PILADO") return "🔄 SERV. COMPLETO";
   if (op === "PILADO") return "🛎️ SOLO PILADA";
-  if (op === "COMPRA") return "";
-  return isMaquila ? "🔄 SERV. COMPLETO" : "";
+  if (op === "COMPRA") return "🌾 PROPIO";
+  return isMaquila ? "🔄 SERV. COMPLETO" : "🌾 PROPIO";
+}
+
+/** Colores del pill de tipo de operación (fondo, texto) — coherentes en claro/oscuro. */
+function opTypeBadgeColors(operationType?: string | null, isMaquila?: boolean): { bg: string; fg: string } {
+  const op = String(operationType ?? "").toUpperCase();
+  if (op === "SECADO") return { bg: "#fef3c7", fg: "#92400e" };            // ámbar: solo secado
+  if (op === "SECADO_PILADO" || (!op && isMaquila)) return { bg: "#ede9fe", fg: "#6b21a8" }; // morado: serv. completo
+  if (op === "PILADO") return { bg: "#fee2e2", fg: "#991b1b" };            // rojo: solo pilada
+  return { bg: "#dcfce7", fg: "#166534" };                                  // verde: propio/compra
 }
 
 type Dashboard = {
@@ -18518,13 +18527,35 @@ function SecadoMetodoBadge({ metodo }: { metodo: string | null | undefined }) {
   );
 }
 
-// Distintivo visual «🛎️ SERVICIO» para lotes que ingresaron como maquila.
-function ServicioBadge() {
+// Distintivo dinámico del tipo de operación del lote (🌾 PROPIO / 🛎️ SOLO SECADO /
+// 🔄 SERV. COMPLETO / 🛎️ SOLO PILADA), con color según el tipo.
+function OpTypeBadge({ operationType, isMaquila, style }: { operationType?: string | null; isMaquila?: boolean; style?: React.CSSProperties }) {
+  const label = opTypeBadgeLabel(operationType, isMaquila);
+  if (!label) return null;
+  const c = opTypeBadgeColors(operationType, isMaquila);
   return (
-    <span style={{ background: "#f3e8ff", color: "#6b21a8", fontSize: 11, fontWeight: 700, padding: "1px 8px", borderRadius: 6, marginLeft: 8, whiteSpace: "nowrap" }}>
-      🛎️ SERVICIO
+    <span style={{ background: c.bg, color: c.fg, fontSize: 11, fontWeight: 700, padding: "1px 8px", borderRadius: 6, whiteSpace: "nowrap", ...style }}>
+      {label}
     </span>
   );
+}
+
+// Píldora de estado del secado: verde = Finalizado, ámbar = En proceso.
+function EstadoSecadoPill({ done }: { done: boolean }) {
+  const c = done ? { bg: "#dcfce7", fg: "#166534" } : { bg: "#fef3c7", fg: "#92400e" };
+  return (
+    <span style={{ background: c.bg, color: c.fg, fontSize: 11, fontWeight: 800, padding: "2px 10px", borderRadius: 999, whiteSpace: "nowrap" }}>
+      {done ? "✅ Finalizado" : "⏳ En proceso"}
+    </span>
+  );
+}
+
+// Tipo de operación representativo de un reporte (sus lotes comparten destino).
+function reportOpType(report: DryingTunnelReport): { operation_type: string | null; is_maquila: boolean } {
+  const withOp = (report.lots ?? []).find((l) => l.operation_type);
+  if (withOp) return { operation_type: withOp.operation_type ?? null, is_maquila: !!withOp.is_maquila };
+  const anyMaquila = (report.lots ?? []).some((l) => l.is_maquila);
+  return { operation_type: null, is_maquila: anyMaquila };
 }
 
 function DryingLotSelector({
@@ -18543,7 +18574,7 @@ function DryingLotSelector({
       {selectedLots.map((lot) => (
         <div className="usedLotRow" key={lot.lot_id}>
           <div>
-            <strong>{lot.farmer_name ?? "Sin agricultor"}{lot.is_maquila && <ServicioBadge />}</strong>
+            <strong style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>{lot.farmer_name ?? "Sin agricultor"}<OpTypeBadge operationType={lot.operation_type} isMaquila={lot.is_maquila} /></strong>
             <small>{lot.lot_code} - {Number(lot.quintals ?? 0).toFixed(2)} QQ</small>
           </div>
           {!editing && (
@@ -18568,21 +18599,42 @@ function DryingReportsPanel({
     <section className="tracePanel dryingReportsPanel">
       <h2>Secados guardados</h2>
       {reports.length === 0 && <p className="muted">Aun no hay informes de secado guardados.</p>}
-      {reports.map((report) => (
-        <article className="dryingReportCard" key={report.id}>
-          <div>
-            <strong>Tunel {report.tunnel_number} · {report.status === "COMPLETED" ? "Finalizado" : "En proceso"}{report.lots.some((l) => l.is_maquila) && <ServicioBadge />}</strong>
-            <small>
-              {Number(report.total_quintals ?? 0).toFixed(2)} QQ · {report.lots.length} lote(s) · {report.dryer_name ?? "Sin secadora"} · Secador: {report.operator_name || "—"}
-            </small>
-            <small>Tipo: {report.rice_type === "CORRIENTE" ? "Corriente" : "0.11"}</small>
-            <small>{report.lots.map((lot) => `${lot.farmer_name ?? "Sin agricultor"} (${Number(lot.quintals ?? 0).toFixed(2)} QQ)`).join(" + ")}</small>
+      {reports.map((report) => {
+        const done = report.status === "COMPLETED";
+        const op = reportOpType(report);
+        return (
+        <article className="dryingReportCard" key={report.id} style={{ display: "block" }}>
+          {/* Cabecera: estado (pill de color) + tipo de operación (badge) + acción. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+            <strong style={{ fontSize: 14 }}>Túnel {report.tunnel_number}</strong>
+            <EstadoSecadoPill done={done} />
+            <OpTypeBadge operationType={op.operation_type} isMaquila={op.is_maquila} />
+            <span style={{ flex: 1 }} />
+            {!done && <button type="button" onClick={() => onEdit(report)}>Editar</button>}
           </div>
-          {report.status !== "COMPLETED" && (
-            <button type="button" onClick={() => onEdit(report)}>Editar</button>
-          )}
+          {/* Datos clave en grid: lectura rápida, sin bloque de texto plano. */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(96px, 1fr))", gap: 8, marginBottom: 8 }}>
+            {([
+              ["Peso", `${Number(report.total_quintals ?? 0).toFixed(2)} QQ`],
+              ["Lotes", String(report.lots.length)],
+              ["Túnel", String(report.tunnel_number)],
+              ["Secadora", report.dryer_name ?? "—"],
+              ["Secador", report.operator_name || "—"],
+              ["Variedad", report.rice_type === "CORRIENTE" ? "Corriente" : "0.11"]
+            ] as [string, string][]).map(([k, v]) => (
+              <div key={k} style={{ background: "var(--c-surface-2, #f8fafc)", border: "1px solid var(--c-border, #e5e7eb)", borderRadius: 8, padding: "6px 8px" }}>
+                <div style={{ fontSize: 10, color: "var(--c-muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".02em" }}>{k}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v}</div>
+              </div>
+            ))}
+          </div>
+          {/* Agricultores del lote (limpio: sin "SERVICIO", eso ya lo dice el badge). */}
+          <small style={{ color: "var(--c-muted)" }}>
+            {report.lots.map((lot) => `${lot.farmer_name ?? "Sin agricultor"} (${Number(lot.quintals ?? 0).toFixed(2)} QQ)`).join(" · ")}
+          </small>
         </article>
-      ))}
+        );
+      })}
     </section>
   );
 }

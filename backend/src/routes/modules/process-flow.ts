@@ -90,6 +90,55 @@ const dryingUpdateSchema = z.object({
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+const CEYRO_MATRIZ_ID = "00000000-0000-0000-0000-000000000001";
+
+// Enrutamiento automático post-secado del cobro de servicio. Cuando un secado
+// queda FINALIZADO (COMPLETED) y su lote es 'Solo Servicio de Secado' (SECADO),
+// el arroz se seca y se entrega — NO pasa a Producción — así que el cobro del
+// secado va DIRECTO a Cuentas por Cobrar de la Matriz (CEYRO). Idempotente: si el
+// lote ya tiene su cobro de secado, no hace nada. Los 'Servicio Completo'
+// (SECADO_PILADO) NO se cobran aquí: su secado se cobra al pilar; los 'Propios'
+// (COMPRA) no generan cobro. Se llama en cada punto donde un secado pasa a
+// COMPLETED; se auto-protege leyendo el estado real del reporte.
+async function autoCobrarSecadoServicio(client: PoolClient, dryingReportId: string): Promise<void> {
+  const r = await client.query(
+    `SELECT d.status, d.lot_id, l.lot_code, l.operation_type, l.farmer_id,
+            COALESCE((SELECT SUM(t.quintals) FROM weighing_tickets t WHERE t.lot_id = l.id), 0)::float AS qq
+     FROM drying_tunnel_reports d
+     JOIN lots l ON l.id = d.lot_id
+     WHERE d.id = $1`,
+    [dryingReportId]
+  );
+  if (!r.rowCount) return;
+  const row = r.rows[0];
+  if (String(row.status) !== "COMPLETED") return;
+  if (String(row.operation_type ?? "").toUpperCase() !== "SECADO") return;
+
+  // Idempotencia: un solo cobro de secado por lote.
+  const dup = await client.query(
+    "SELECT 1 FROM accounts_receivable WHERE reference_type = 'secado_service' AND reference_id = $1 LIMIT 1",
+    [row.lot_id]
+  );
+  if (dup.rowCount) return;
+
+  const qq = round2(Number(row.qq) || 0);
+  if (qq <= 0) return;
+  // Tarifa global de secado por QQ (SELECT simple, sin DDL → sin ensureLaborTables).
+  const rr = await client.query("SELECT COALESCE(secado_servicio_per_qq, 0)::float AS r FROM labor_rates WHERE id = 1");
+  const rate = Number(rr.rows[0]?.r ?? 0);
+  if (rate <= 0) return; // sin tarifa configurada: no se cobra automático (queda el cobro manual).
+  const monto = round2(qq * rate);
+  const farmerName = row.farmer_id
+    ? ((await client.query("SELECT full_name FROM farmers WHERE id = $1", [row.farmer_id])).rows[0]?.full_name ?? "cliente de servicio")
+    : "cliente de servicio";
+  const desc = `Servicio de Secado - Lote ${row.lot_code} (${qq} QQ × $${rate}) - ${farmerName}`;
+  await client.query(
+    `INSERT INTO accounts_receivable (accionista_id, farmer_id, reference_type, reference_id, description, amount, balance, status)
+     VALUES ($1, $2, 'secado_service', $3, $4, $5, $5, 'CONFIRMED')`,
+    [CEYRO_MATRIZ_ID, row.farmer_id ?? null, row.lot_id, desc, monto]
+  );
+}
+
 // Devuelve YYYY-MM-DD de un valor que puede venir como Date (de la BD) o string
 // (del body), o null si no hay fecha válida. Para fechar la nómina de cuadrilla.
 function toDateOnly(value: unknown): string | null {
@@ -398,9 +447,11 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
          WHERE id = ANY($1::uuid[])`,
         [partes.map((p) => p.id)]
       );
-      // Al finalizar, genera el pago de la BOTADA (vaciado) de cada túnel.
+      // Al finalizar, genera el pago de la BOTADA (vaciado) de cada túnel y
+      // enruta el cobro de 'Solo Servicio de Secado' a Cuentas por Cobrar.
       for (const p of partes) {
         await autoGenerarPagosCuadrillaDeSecado(client, p.id, body.created_by ?? null);
+        await autoCobrarSecadoServicio(client, p.id);
       }
     }
 
@@ -447,9 +498,11 @@ processFlowRouter.post("/drying/motor-finalize", asyncRoute(async (req, res) => 
       [reports.rows.map((r) => r.id)]
     );
 
-    // Al finalizar el motor, genera el pago de la BOTADA de cada túnel (auto).
+    // Al finalizar el motor, genera el pago de la BOTADA de cada túnel (auto) y
+    // enruta el cobro de 'Solo Servicio de Secado' a Cuentas por Cobrar.
     for (const rep of reports.rows) {
       await autoGenerarPagosCuadrillaDeSecado(client, rep.id, null);
+      await autoCobrarSecadoServicio(client, rep.id);
     }
 
     return { finalized: reports.rowCount };
@@ -1132,6 +1185,9 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
   // El tendal ya generó su pago arriba; el helper se auto-omite para dry_method
   // TENDAL. Es idempotente, así que no duplica al finalizar más tarde.
   await autoGenerarPagosCuadrillaDeSecado(client, tunnel.rows[0].id, input.created_by ?? null);
+  // Enrutamiento post-secado: si nació FINALIZADO (tendal / con fin de secado) y es
+  // 'Solo Servicio de Secado', el cobro va directo a CxC (se auto-omite si no).
+  await autoCobrarSecadoServicio(client, tunnel.rows[0].id);
 
   return getDryingReportById(client, tunnel.rows[0].id);
 }
@@ -1271,6 +1327,9 @@ async function updateDryingReport(
   // AUTOMATIZACIÓN: genera el pago de cuadrilla (Recepción y, si el túnel ya
   // quedó finalizado en esta edición, Botada) sin el paso manual de "Detectar".
   await autoGenerarPagosCuadrillaDeSecado(client, dryingId, null);
+  // Enrutamiento post-secado: al FINALIZAR el secado ("Finalizar secado" → este
+  // update), un 'Solo Servicio de Secado' manda su cobro directo a CxC.
+  await autoCobrarSecadoServicio(client, dryingId);
 
   return getDryingReportById(client, dryingId);
 }
