@@ -257,6 +257,8 @@ type WorkerSummary = {
   /** Túneles secados en el período (solo aplica al rol SECADOR). */
   tunnels?: number;
   base_amount: number;
+  /** Ganado SOLO de lo pendiente (excluye lo ya pagado). Para la columna "Ganó" de Pagos. */
+  pending_base_amount?: number | null;
   net_amount: number;
   pending_amount: number | null;
   paid_amount: number | null;
@@ -1988,7 +1990,6 @@ export function App() {
   const [reciboModal, setReciboModal] = useState<{ open: boolean; loading: boolean; data: ReciboSemanal | null }>({
     open: false, loading: false, data: null
   });
-  const [secadorSugg, setSecadorSugg] = useState<Array<{ worker_name: string; work_date: string; tunnels: number; suggested_amount: number; already_generated: boolean; dia_inicio?: string; dia_fin?: string; dias_corrida?: number }> | null>(null);
   const [nominaView, setNominaView] = useState<NominaGrupo | "pagos" | "historial" | "sueldo-admin">("pagos");
   // Filas de la pestaña activa. El filtro es puramente de frontend sobre el
   // array que ya trae /labor/summary: no se toca la petición ni el backend.
@@ -3413,25 +3414,9 @@ export function App() {
     }
   }
 
-  async function loadSecadorSuggestions() {
-    try {
-      const data = await apiGet<{ rows: Array<{ worker_name: string; work_date: string; tunnels: number; suggested_amount: number; already_generated: boolean }> }>(
-        `/labor/secador-suggestions?from=${nominaFrom}&to=${nominaTo}`
-      );
-      setSecadorSugg(data.rows);
-      if (data.rows.length === 0) addToast("No se encontraron días de secado en Secadora para este período", "warn");
-    } catch (e) {
-      addToast(`Error: ${e instanceof Error ? e.message : "desconocido"}`, "error");
-    }
-  }
-
-  async function generateSecadorDays(days: Array<{ worker_name: string; work_date: string; tunnels: number }>) {
-    if (days.length === 0) { addToast("No hay días nuevos para generar", "warn"); return; }
-    const res = await apiPost<{ created: number }>("/labor/secador-days", { days });
-    addToast(`${res.created} día(s) de secador generados`, "success");
-    await loadSecadorSuggestions();
-    await refreshNomina();
-  }
+  // (Eliminado) La detección/generación manual de días de secador se retiró: los
+  // pagos del secador se generan automáticamente al finalizar el secado en
+  // Secadoras (autoGenerarPagoSecador) y aparecen directo en 💵 Pagos.
 
   async function loadNominaHistory() {
     try {
@@ -15183,9 +15168,10 @@ export function App() {
                   <span style={{ marginLeft: 6, background: "#dc2626", color: "#fff", borderRadius: 999, padding: "1px 8px", fontSize: 12, fontWeight: 800 }}>{nominaPendientes.length + pagosCuadPendientes.length + adminPending.length}</span>
                 )}
               </button>
-              {/* Producción (Secadora, Cuadrilla, Historial): solo la matriz. */}
+              {/* Producción (Cuadrilla, Historial): solo la matriz. La pestaña
+                  "🔥 Secadora" se eliminó: los pagos de secador se generan y pagan
+                  automáticamente desde Secadoras y aparecen directo en 💵 Pagos. */}
               {esMatrizActiva && (<>
-              <button type="button" className={nominaView === "secadora" ? "active" : ""} onClick={() => setNominaView("secadora")}>🔥 Secadora</button>
               <button type="button" className={nominaView === "cuadrilla" ? "active" : ""} onClick={() => { setNominaView("cuadrilla"); refreshCuadrilla().catch(() => undefined); }}>👷‍♂️ Cuadrilla</button>
               <button type="button" className={nominaView === "historial" ? "active" : ""} onClick={() => { setNominaView("historial"); loadNominaHistory().catch(() => undefined); }}>📜 Historial de Pagos</button>
               </>)}
@@ -15217,7 +15203,7 @@ export function App() {
                   .map(([label, v]) => (
 
                     <button key={label} type="button" title={`Ver ${label}`}
-                      onClick={() => { const g = label.toLowerCase() as NominaGrupo; if (g === "administrativo") { setNominaView("sueldo-admin"); return; } if (g === "planta") { setNominaView("pagos"); return; } setNominaView(g); if (g === "cuadrilla") refreshCuadrilla().catch(() => undefined); }}
+                      onClick={() => { const g = label.toLowerCase() as NominaGrupo; if (g === "administrativo") { setNominaView("sueldo-admin"); return; } if (g === "planta" || g === "secadora") { setNominaView("pagos"); return; } setNominaView(g); if (g === "cuadrilla") refreshCuadrilla().catch(() => undefined); }}
                       style={{ background: "rgba(255,255,255,.18)", border: "1px solid rgba(255,255,255,.12)", borderRadius: 10, padding: "7px 12px", textAlign: "right", cursor: "pointer", color: "#fff" }}>
                       <div style={{ fontSize: 11, opacity: 0.9, whiteSpace: "nowrap" }}>{label}</div>
                       <strong style={{ fontWeight: 800, fontSize: 16 }}>{money(v)}</strong>
@@ -15320,60 +15306,6 @@ export function App() {
               )}
               </div>
 
-              {/* Detección desde Secadora: solo en su pestaña, arriba a la derecha. */}
-              {grupo === "secadora" && (
-              <div className="tablePanel">
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                    <div>
-                      <h2 style={{ marginBottom: 2 }}>🌡️ Secador · desde Secadora</h2>
-                      <p className="muted" style={{ margin: 0 }}>Detecta los días de secado (guardianía $ + $ por túnel). Los días de solo guardianía se agregan a mano.</p>
-                    </div>
-                    <button type="button" className="btnSecondary" onClick={() => loadSecadorSuggestions().catch(() => undefined)}>🔍 Detectar de Secadora</button>
-                  </div>
-                  {secadorSugg && secadorSugg.length > 0 && (
-                    <>
-                      <p className="muted" style={{ margin: "4px 0 0", fontSize: 12 }}>
-                        Cada fila es una <strong>corrida</strong> (por fecha de llenado del motor), no un día calendario: una corrida que cruza la medianoche cuenta como una sola guardianía. Para pagar guardianías de días independientes, agrégalas a mano.
-                      </p>
-                      <table className="cajaTable" style={{ marginTop: 8 }}>
-                        <thead><tr><th>Corrida</th><th>Secador</th><th className="num">Túneles</th><th className="num">Pago</th><th className="num">Estado</th></tr></thead>
-                        <tbody>
-                          {secadorSugg.map((s, i) => {
-                            const multiDia = (s.dias_corrida ?? 1) > 1 && s.dia_inicio && s.dia_fin;
-                            return (
-                            <tr key={i}>
-                              <td>
-                                {new Date(s.work_date).toLocaleDateString("es-EC")}
-                                {multiDia && (
-                                  <span className="chip info" style={{ marginLeft: 6, fontSize: 11 }} title={`Corrida continua del ${s.dia_inicio} al ${s.dia_fin}`}>
-                                    🔁 {new Date(s.dia_inicio as string).toLocaleDateString("es-EC")}–{new Date(s.dia_fin as string).toLocaleDateString("es-EC")} · {s.dias_corrida} días
-                                  </span>
-                                )}
-                              </td>
-                              <td>{s.worker_name}</td>
-                              <td className="num">{s.tunnels}</td>
-                              <td className="num" style={{ fontWeight: 700 }}>{money(s.suggested_amount)}</td>
-                              <td className="num">{s.already_generated ? <span className="chip ok">Generado</span> : <span className="chip warn">Nuevo</span>}</td>
-                            </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                      <button
-                        type="button"
-                        className="primary"
-                        style={{ marginTop: 10 }}
-                        onClick={() => generateSecadorDays(secadorSugg.filter((s) => !s.already_generated).map((s) => ({ worker_name: s.worker_name, work_date: s.work_date.slice(0, 10), tunnels: s.tunnels }))).catch((e) => addToast(e.message, "error"))}
-                      >
-                        Generar pagos de los días nuevos
-                      </button>
-                    </>
-                  )}
-                  {secadorSugg && secadorSugg.length === 0 && (
-                    <div className="emptyState" style={{ padding: "22px 20px" }}><p>No hay días de secado en el período. Registra el secado en la pestaña Secadoras (con el nombre del secador).</p></div>
-                  )}
-              </div>
-              )}
               </div>
               );
             })()}
@@ -15677,15 +15609,20 @@ export function App() {
                     </thead>
                     <tbody>
                       {nominaOrden.map((r, i) => {
-                        const toPay = r.to_pay ?? (r.pending_amount ?? 0);
+                        // "Ganó" = ganado PENDIENTE (excluye lo ya pagado), para que cuadre
+                        // con "A pagar" (Ganó − Anticipos). Antes usaba base_amount (todos
+                        // los estados) y por eso mostraba de más (ej. Secador $60 vs $20).
+                        const gano = Number(r.pending_base_amount ?? r.pending_amount ?? 0);
+                        const anticipos = Number(r.advances || 0);
+                        const toPay = Number(r.to_pay ?? Math.max(0, gano - anticipos) ?? 0);
                         const info = NOMINA_GRUPO_TITULO[nominaGrupoDe(r.worker_role)];
                         return (
                           <tr key={"n" + i}>
                             <td><span className="chip">{info.icono} {info.titulo}</span></td>
                             <td><span className={nominaRolChip(r.worker_role)}>{nominaRolLabel(r.worker_role)}</span></td>
                             <td style={{ fontWeight: 600 }}>{r.worker_name}{r.oldest_pending ? <div style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>{antiguedadLabel(r.oldest_pending, r.pending_count)}</div> : null}</td>
-                            <td className="num" style={{ fontWeight: 700 }}>{money(r.base_amount)}</td>
-                            <td className="num" style={{ color: (r.advances ?? 0) > 0 ? "var(--c-danger)" : "inherit" }}>{(r.advances ?? 0) > 0 ? `−${money(r.advances)}` : "—"}</td>
+                            <td className="num" style={{ fontWeight: 700 }}>{money(gano)}</td>
+                            <td className="num" style={{ color: anticipos > 0 ? "var(--c-danger)" : "inherit" }}>{anticipos > 0 ? `−${money(anticipos)}` : "—"}</td>
                             <td className="num" style={{ fontWeight: 700, color: "#047857" }}>{money(toPay)}</td>
                             <td className="num" style={{ whiteSpace: "nowrap" }}>
                               <button type="button" className="btnGhost" title="Ver detalle del cálculo" onClick={() => loadNominaPaymentDetail(r)}>🔍</button>
@@ -15991,10 +15928,13 @@ export function App() {
                                 <tr><td colSpan={5} className="muted" style={{ textAlign: "center" }}>Sin registros en el período</td></tr>
                               ) : d.rows.map((r, i) => (
                                 <tr key={i}>
-                                  <td>{fmtFechaRecibo(r.fecha)}</td>
+                                  <td>{fmtFechaRecibo(r.fecha)}
+                                    {/* Fórmula explícita para TODOS los roles: Cantidad × Tarifa = Total. */}
+                                    <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>{r.cantidad || "—"} × {r.tarifa || "—"} = {money(r.subtotal)}</div>
+                                  </td>
                                   <td>{r.concepto}</td>
-                                  <td className="num">{r.cantidad}</td>
-                                  <td className="num">{r.tarifa}</td>
+                                  <td className="num">{r.cantidad || "—"}</td>
+                                  <td className="num">{r.tarifa || "—"}</td>
                                   <td className="num" style={{ fontWeight: 700 }}>{money(r.subtotal)}</td>
                                 </tr>
                               ))}
