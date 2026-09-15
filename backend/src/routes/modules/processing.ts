@@ -12,6 +12,7 @@ import { descontarSacosPorPeso, descontarSacosPorTipo, tipoSacoEspecial } from "
 import { getMatrizId } from "../../services/matriz.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { createProductionWorkerPayments } from "./labor.js";
+import { loteAfectaInventarioPropio } from "../../services/patrimonial-inventory.js";
 
 export const processingRouter = Router();
 
@@ -1160,21 +1161,27 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
             linkedLot.weighing_ticket_id
           ]
         );
-        await client.query(
-          `INSERT INTO inventory_movements
-           (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
-           VALUES ($1, $2, $3, 'PROCESS_INPUT', $4, 'processing_batches', $5, $6, $7, $8)`,
-          [
-            inputProductId,
-            inputWarehouseId,
-            linkedLot.lot_id,
-            -Number(linkedLot.quintals),
-            batch.rows[0].id,
-            inputOwnership,
-            body.created_by,
-            inputAccionistaId
-          ]
-        );
+        // Solo se descuenta materia prima del inventario PROPIO si el lote es una
+        // COMPRA. En lotes de servicio el grano es del cliente: consumirlo del
+        // stock patrimonial genera saldos negativos irreales (bug de cáscara).
+        const lotMeta = await client.query("SELECT operation_type FROM lots WHERE id = $1", [linkedLot.lot_id]);
+        if (loteAfectaInventarioPropio(lotMeta.rows[0]?.operation_type)) {
+          await client.query(
+            `INSERT INTO inventory_movements
+             (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
+             VALUES ($1, $2, $3, 'PROCESS_INPUT', $4, 'processing_batches', $5, $6, $7, $8)`,
+            [
+              inputProductId,
+              inputWarehouseId,
+              linkedLot.lot_id,
+              -Number(linkedLot.quintals),
+              batch.rows[0].id,
+              inputOwnership,
+              body.created_by,
+              inputAccionistaId
+            ]
+          );
+        }
       }
 
       await client.query(
@@ -1202,12 +1209,18 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
       const inputOwnership = sourceStock.rows[0]?.ownership ?? body.ownership;
       const inputAccionistaId = sourceStock.rows[0]?.accionista_id ?? batchAccionistaId;
 
-      await client.query(
-        `INSERT INTO inventory_movements
-         (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
-         VALUES ($1, $2, $3, 'PROCESS_INPUT', $4, 'processing_batches', $5, $6, $7, $8)`,
-        [inputProductId, inputWarehouseId, lotId, -inputQuantity, batch.rows[0].id, inputOwnership, body.created_by, inputAccionistaId]
-      );
+      // Solo se descuenta materia prima del inventario PROPIO si el lote es una
+      // COMPRA. En lotes de servicio el grano es del cliente y no debe tocar el
+      // stock patrimonial.
+      const lotMeta = await client.query("SELECT operation_type FROM lots WHERE id = $1", [lotId]);
+      if (loteAfectaInventarioPropio(lotMeta.rows[0]?.operation_type)) {
+        await client.query(
+          `INSERT INTO inventory_movements
+           (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
+           VALUES ($1, $2, $3, 'PROCESS_INPUT', $4, 'processing_batches', $5, $6, $7, $8)`,
+          [inputProductId, inputWarehouseId, lotId, -inputQuantity, batch.rows[0].id, inputOwnership, body.created_by, inputAccionistaId]
+        );
+      }
       await client.query("UPDATE lots SET status = 'IN_PROCESS' WHERE id = $1", [lotId]);
     }
 

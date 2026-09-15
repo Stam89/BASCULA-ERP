@@ -8,6 +8,7 @@ import { nextCode } from "../../utils/codes.js";
 import { nextSequentialLotCode } from "../../utils/lot-code.js";
 import { createLotProcessReport } from "../../utils/process-reports.js";
 import { calculateNetWeight, calculateQuintals } from "../../utils/rice-formulas.js";
+import { loteAfectaInventarioPropio } from "../../services/patrimonial-inventory.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const weighingRouter = Router();
@@ -245,7 +246,7 @@ weighingRouter.post("/:id/close", asyncRoute(async (req, res) => {
 
   const result = await inTransaction(async (client) => {
     const ticket = await client.query(
-      `SELECT t.*, l.ownership
+      `SELECT t.*, l.ownership, l.operation_type
        FROM weighing_tickets t
        JOIN lots l ON l.id = t.lot_id
        WHERE t.id = $1
@@ -263,7 +264,10 @@ weighingRouter.post("/:id/close", asyncRoute(async (req, res) => {
     );
     await client.query("UPDATE lots SET status = 'WEIGHED' WHERE id = $1", [ticket.rows[0].lot_id]);
 
-    if (body.product_id && body.warehouse_id) {
+    // El ingreso solo entra al inventario PROPIO si el lote es una COMPRA. La
+    // materia prima de lotes de servicio (secado/pilado/completo) es del cliente
+    // y no debe engrosar el stock patrimonial de la empresa.
+    if (body.product_id && body.warehouse_id && loteAfectaInventarioPropio(ticket.rows[0].operation_type)) {
       await client.query(
         `INSERT INTO inventory_movements
          (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)

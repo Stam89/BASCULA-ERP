@@ -11188,7 +11188,10 @@ export function App() {
               {/* Texto informativo dinámico: servicio → cobro en CxC (no «Gana»);
                   lote propio → cuadro de rendimiento en «Gana». */}
               {millingEsServicio ? (
-                <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>📋 Al finalizar, se registrará el cobro del servicio en <strong>Cuentas por Cobrar</strong>.</p>
+                <>
+                  <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>📋 Al finalizar, se registrará el cobro del servicio en <strong>Cuentas por Cobrar</strong>.</p>
+                  <p className="muted" style={{ fontSize: 12, margin: "2px 0 0", color: "#6b21a8" }}>ℹ️ Lote de servicio: el grano es del cliente. <strong>No afecta el inventario patrimonial</strong> (cáscara ni producto terminado).</p>
+                </>
               ) : (
                 <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>📋 Al finalizar, el cuadro de rendimiento se guarda y se abre en el módulo <strong>«Gana»</strong>.</p>
               )}
