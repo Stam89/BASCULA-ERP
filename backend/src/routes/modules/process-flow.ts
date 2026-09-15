@@ -139,6 +139,83 @@ async function autoCobrarSecadoServicio(client: PoolClient, dryingReportId: stri
   );
 }
 
+// Formatea un instante a "DD/MM/YYYY HH:MM" (hora local del server) para el
+// detalle del pago del secador. Devuelve "" si no hay fecha.
+function fmtInicio(value: unknown): string {
+  if (!value) return "";
+  const d = value instanceof Date ? value : new Date(String(value));
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// AUTOMATIZACIÓN NÓMINA · SECADOR. Al FINALIZAR un secado (COMPLETED), genera/
+// actualiza AUTOMÁTICAMENTE el pago del operador ('Secador', ej. MARGARO) en
+// worker_payments (Nómina → Pagos pendientes), consolidando en UN SOLO registro
+// por empleado y CORRIDA (guardianía + $/túnel × túneles finalizados).
+// ANCLA TEMPORAL: la fecha/hora de INICIO (dry_start_at, o filled_at) — nunca la
+// de fin. Idempotente: si ya existe el pago del día se ACTUALIZA (no duplica); si
+// ya fue PAGADO no se toca. Corre DENTRO de la transacción del finalize: si algo
+// falla, el secado no queda finalizado y no se pierde el pago del trabajador.
+async function autoGenerarPagoSecador(client: PoolClient, dryingReportId: string): Promise<void> {
+  const r = await client.query(
+    `SELECT status, operator_name, filled_at, dry_start_at, created_at,
+            COALESCE(filled_at, dry_start_at::date, created_at::date) AS work_date
+     FROM drying_tunnel_reports WHERE id = $1`,
+    [dryingReportId]
+  );
+  if (!r.rowCount) return;
+  const rep = r.rows[0];
+  if (String(rep.status) !== "COMPLETED") return;
+  const worker = String(rep.operator_name ?? "").trim();
+  if (!worker) return; // sin secador asignado: no hay a quién pagar.
+  const workDate = toDateOnly(rep.work_date) ?? new Date().toISOString().slice(0, 10);
+
+  // Túneles distintos YA finalizados de esta CORRIDA (misma fecha de llenado) y
+  // mismo secador → una sola guardianía + $/túnel por los túneles hechos.
+  const t = await client.query(
+    `SELECT COUNT(DISTINCT tunnel_number)::int AS tunnels
+     FROM drying_tunnel_reports
+     WHERE status = 'COMPLETED'
+       AND btrim(COALESCE(operator_name, '')) = $1
+       AND COALESCE(filled_at, dry_start_at::date, created_at::date) = $2::date`,
+    [worker, workDate]
+  );
+  const tunnels = Number(t.rows[0]?.tunnels ?? 0);
+
+  const rr = await client.query(
+    "SELECT COALESCE(secador_guardiania,0)::float AS g, COALESCE(secador_per_tunel,0)::float AS pt FROM labor_rates WHERE id = 1"
+  );
+  const guardiania = Number(rr.rows[0]?.g ?? 0);
+  const perTunel = Number(rr.rows[0]?.pt ?? 0);
+  const base = round2(guardiania + perTunel * tunnels);
+
+  const inicio = fmtInicio(rep.dry_start_at ?? rep.filled_at ?? rep.created_at);
+  const notes = `Secado - Inicio: ${inicio || workDate} · Guardianía${tunnels ? ` + ${tunnels} túnel(es)` : ""}`;
+
+  // Upsert por (SECADOR, worker, work_date): un solo registro diario por empleado.
+  const existing = await client.query(
+    "SELECT id, status, discount::float AS discount FROM worker_payments WHERE worker_role = 'SECADOR' AND btrim(worker_name) = $1 AND work_date = $2::date ORDER BY created_at ASC LIMIT 1",
+    [worker, workDate]
+  );
+  if (existing.rowCount) {
+    if (String(existing.rows[0].status) === "PAID") return; // ya pagado: no se modifica.
+    const discount = Number(existing.rows[0].discount ?? 0);
+    await client.query(
+      `UPDATE worker_payments
+         SET tunnels = $2, base_amount = $3, net_amount = $4, notes = $5, reference_type = 'drying_report', reference_id = $6
+       WHERE id = $1`,
+      [existing.rows[0].id, tunnels, base, round2(base - discount), notes, dryingReportId]
+    );
+    return;
+  }
+  await client.query(
+    `INSERT INTO worker_payments (worker_role, worker_name, work_date, tunnels, base_amount, net_amount, status, notes, reference_type, reference_id)
+     VALUES ('SECADOR', $1, $2::date, $3, $4, $4, 'PENDING', $5, 'drying_report', $6)`,
+    [worker, workDate, tunnels, base, notes, dryingReportId]
+  );
+}
+
 // Devuelve YYYY-MM-DD de un valor que puede venir como Date (de la BD) o string
 // (del body), o null si no hay fecha válida. Para fechar la nómina de cuadrilla.
 function toDateOnly(value: unknown): string | null {
@@ -452,6 +529,7 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
       for (const p of partes) {
         await autoGenerarPagosCuadrillaDeSecado(client, p.id, body.created_by ?? null);
         await autoCobrarSecadoServicio(client, p.id);
+        await autoGenerarPagoSecador(client, p.id);
       }
     }
 
@@ -503,6 +581,7 @@ processFlowRouter.post("/drying/motor-finalize", asyncRoute(async (req, res) => 
     for (const rep of reports.rows) {
       await autoGenerarPagosCuadrillaDeSecado(client, rep.id, null);
       await autoCobrarSecadoServicio(client, rep.id);
+      await autoGenerarPagoSecador(client, rep.id);
     }
 
     return { finalized: reports.rowCount };
@@ -1188,6 +1267,7 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
   // Enrutamiento post-secado: si nació FINALIZADO (tendal / con fin de secado) y es
   // 'Solo Servicio de Secado', el cobro va directo a CxC (se auto-omite si no).
   await autoCobrarSecadoServicio(client, tunnel.rows[0].id);
+  await autoGenerarPagoSecador(client, tunnel.rows[0].id);
 
   return getDryingReportById(client, tunnel.rows[0].id);
 }
@@ -1330,6 +1410,7 @@ async function updateDryingReport(
   // Enrutamiento post-secado: al FINALIZAR el secado ("Finalizar secado" → este
   // update), un 'Solo Servicio de Secado' manda su cobro directo a CxC.
   await autoCobrarSecadoServicio(client, dryingId);
+  await autoGenerarPagoSecador(client, dryingId);
 
   return getDryingReportById(client, dryingId);
 }
