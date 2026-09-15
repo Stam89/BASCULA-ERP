@@ -1979,8 +1979,13 @@ export function App() {
   const [adminEditId, setAdminEditId] = useState<string | null>(null);
   const [adminHistory, setAdminHistory] = useState<AdminSalaryPayment[]>([]);
   const [adminPay, setAdminPay] = useState<null | { staff: AdminStaff; incentivo: string; descuentos: string }>(null);
-  // Sueldos administrativos por pagar del accionista activo (suma de sueldos base).
-  const adminPendienteTotal = useMemo(() => adminStaff.reduce((sum, st) => sum + (st.base_salary || 0), 0), [adminStaff]);
+  // Sueldos administrativos DISPONIBLES para cobro HOY (solo días de corte: 15 y
+  // fin de mes; excluye a quien ya cobró en el corte). Los alimenta el backend
+  // /admin-payroll/pending; el roster completo sigue en adminStaff.
+  const [adminPending, setAdminPending] = useState<AdminStaff[]>([]);
+  const [adminPayMeta, setAdminPayMeta] = useState<{ fecha_habilitada: boolean; corte: string | null; dia_del_mes: number; ultimo_dia_mes: number } | null>(null);
+  // Sueldos administrativos por pagar del accionista activo (solo los del corte).
+  const adminPendienteTotal = useMemo(() => adminPending.reduce((sum, st) => sum + (st.base_salary || 0), 0), [adminPending]);
   const fmtFechaCorta = (f?: string | null) => { if (!f) return ""; const [, m, d] = String(f).slice(0, 10).split("-"); return `${d}/${m}`; };
   const diasDesde = (f?: string | null) => { if (!f) return 0; const t = new Date(String(f).slice(0, 10) + "T00:00:00"); return Math.max(0, Math.round((Date.now() - t.getTime()) / 86400000)); };
   const antiguedadLabel = (f?: string | null, n?: number) => {
@@ -3294,6 +3299,7 @@ export function App() {
       // Personal administrativo: por accionista, se paga en Pagos (todos los accionistas).
       await loadAdminStaff();
       await loadAdminHistory();
+      await loadAdminPending();
     } catch (e) {
       addToast(`Error al cargar nómina: ${e instanceof Error ? e.message : "desconocido"}`, "error");
     } finally {
@@ -4304,6 +4310,14 @@ export function App() {
   async function loadAdminHistory() {
     try { setAdminHistory(await apiGet<AdminSalaryPayment[]>("/admin-payroll/history")); } catch { setAdminHistory([]); }
   }
+  // Sueldos administrativos habilitados para cobro HOY (solo corte 15 / fin de mes).
+  async function loadAdminPending() {
+    try {
+      const r = await apiGet<{ fecha_habilitada: boolean; corte: string | null; dia_del_mes: number; ultimo_dia_mes: number; staff: AdminStaff[] }>("/admin-payroll/pending");
+      setAdminPending(r.staff ?? []);
+      setAdminPayMeta({ fecha_habilitada: r.fecha_habilitada, corte: r.corte, dia_del_mes: r.dia_del_mes, ultimo_dia_mes: r.ultimo_dia_mes });
+    } catch { setAdminPending([]); setAdminPayMeta(null); }
+  }
   async function submitAdminStaff(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const base = Number(adminStaffForm.base_salary);
@@ -4340,6 +4354,10 @@ export function App() {
       await apiPost("/admin-payroll/pay", { staff_id: ap.staff.id, incentivo: Number(ap.incentivo || 0), descuentos: Number(ap.descuentos || 0), cash_register_id: registerId });
       addToast(`Sueldo pagado a ${ap.staff.worker_name}`, "success");
       setAdminPay(null);
+      // Quita al empleado de pendientes al instante (ya cobró en este corte) y
+      // refresca historial + caja, sin recargar la página.
+      setAdminPending((prev) => prev.filter((st) => st.id !== ap.staff.id));
+      await loadAdminPending();
       await loadAdminHistory();
       await refreshCaja(registerId);
     } catch (e) { addToast(`No se pudo pagar: ${e instanceof Error ? e.message : "error"}`, "error"); }
@@ -14936,8 +14954,8 @@ export function App() {
               {/* Pagos: para todos (los socios solo ven aquí sus sueldos administrativos). */}
               <button type="button" className={nominaView === "pagos" ? "active" : ""} onClick={() => setNominaView("pagos")} style={{ fontWeight: 700 }}>
                 💵 Pagos
-                {(nominaPendientes.length + pagosCuadPendientes.length + adminStaff.length) > 0 && (
-                  <span style={{ marginLeft: 6, background: "#dc2626", color: "#fff", borderRadius: 999, padding: "1px 8px", fontSize: 12, fontWeight: 800 }}>{nominaPendientes.length + pagosCuadPendientes.length + adminStaff.length}</span>
+                {(nominaPendientes.length + pagosCuadPendientes.length + adminPending.length) > 0 && (
+                  <span style={{ marginLeft: 6, background: "#dc2626", color: "#fff", borderRadius: 999, padding: "1px 8px", fontSize: 12, fontWeight: 800 }}>{nominaPendientes.length + pagosCuadPendientes.length + adminPending.length}</span>
                 )}
               </button>
               {/* Producción (Secadora, Cuadrilla, Historial): solo la matriz (CEYRO). */}
@@ -15378,12 +15396,12 @@ export function App() {
                 const db = b.oldest_pending ? String(b.oldest_pending).slice(0, 10) : "9999-99-99";
                 return da < db ? -1 : da > db ? 1 : (b.neto ?? 0) - (a.neto ?? 0);
               });
-              const adminFiltrado = adminStaff.filter((st) => coincide(st.worker_name));
+              const adminFiltrado = adminPending.filter((st) => coincide(st.worker_name));
               const adminUltimoPago = new Map();
               for (const h of adminHistory) { if (!adminUltimoPago.has(h.worker_name)) adminUltimoPago.set(h.worker_name, h.paid_at); }
-              const totalPendientes = nominaPendientes.length + pagosCuadPendientes.length + adminStaff.length;
+              const totalPendientes = nominaPendientes.length + pagosCuadPendientes.length + adminPending.length;
               const totalMonto = nominaPendientes.reduce((a, r) => a + (r.to_pay ?? (r.pending_amount ?? 0)), 0) + cuadPendienteTotal + adminPendienteTotal;
-              const nada = nominaPendientes.length === 0 && pagosCuadPendientes.length === 0 && adminStaff.length === 0;
+              const nada = nominaPendientes.length === 0 && pagosCuadPendientes.length === 0 && adminPending.length === 0;
               return (
               <div className="tablePanel">
                 <div className="reportToolbar" style={{ marginBottom: 10 }}>
@@ -15393,6 +15411,12 @@ export function App() {
                   </div>
                   <button type="button" className="btnSecondary" disabled={nominaBusy} onClick={() => refreshNomina().catch(() => undefined)}>{nominaBusy ? "Cargando…" : "↻ Actualizar"}</button>
                 </div>
+
+                {adminPayMeta && !adminPayMeta.fecha_habilitada && adminStaff.length > 0 && (
+                  <div className="alertBox" style={{ background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e40af" }}>
+                    💼 Los sueldos administrativos se habilitan para cobro solo el día <strong>15</strong> (quincena) y el <strong>último día del mes</strong>. Hoy es día {adminPayMeta.dia_del_mes}: no aparecen en pendientes.
+                  </div>
+                )}
 
                 {!nada && (
                   <div style={{ marginBottom: 10 }}>

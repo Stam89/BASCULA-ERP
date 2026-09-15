@@ -76,6 +76,56 @@ adminPayrollRouter.delete("/staff/:id", asyncRoute(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// ── Pendientes de cobro del período de corte ─────────────────────────────────
+// El sueldo administrativo NO se acumula a diario: solo se habilita el cobro en
+// las fechas de corte → día 15 (Quincena) o el ÚLTIMO día del mes (Fin de Mes).
+// Fuera de esas fechas devuelve lista vacía (fecha_habilitada:false). En un corte
+// válido, excluye al personal que YA cobró dentro de la ventana del corte:
+//   · Quincena  → ventana [día 1 .. día 15]
+//   · Fin de mes → ventana [día 16 .. último día]
+adminPayrollRouter.get("/pending", asyncRoute(async (req, res) => {
+  const accionista = accId(req);
+  const meta = await pool.query(
+    `SELECT EXTRACT(DAY FROM CURRENT_DATE)::int AS dom,
+            EXTRACT(DAY FROM (date_trunc('month', CURRENT_DATE) + INTERVAL '1 month - 1 day'))::int AS last_dom,
+            to_char(CURRENT_DATE, 'YYYY-MM') AS ym`
+  );
+  const dom = Number(meta.rows[0].dom);
+  const lastDom = Number(meta.rows[0].last_dom);
+  const esQuincena = dom === 15;
+  const esFinMes = dom === lastDom;
+  if (!esQuincena && !esFinMes) {
+    res.json({ fecha_habilitada: false, corte: null, periodo: null, dia_del_mes: dom, ultimo_dia_mes: lastDom, staff: [] });
+    return;
+  }
+  const corte = esQuincena ? "QUINCENA" : "FIN_DE_MES";
+  const periodo = `${meta.rows[0].ym}-${esQuincena ? "Q1" : "Q2"}`;
+  // Ventana del corte actual (calculada en SQL desde CURRENT_DATE, coherente con
+  // la decisión de arriba). El día 16 = inicio del mes + 15 días.
+  const result = await pool.query(
+    `WITH win AS (
+       SELECT date_trunc('month', CURRENT_DATE)::date AS mstart,
+              (date_trunc('month', CURRENT_DATE) + INTERVAL '1 month - 1 day')::date AS mend
+     ),
+     ventana AS (
+       SELECT
+         CASE WHEN $2 THEN mstart ELSE (mstart + INTERVAL '15 days')::date END AS win_start,
+         CASE WHEN $2 THEN (mstart + INTERVAL '15 days')::date ELSE (mend + INTERVAL '1 day')::date END AS win_end
+       FROM win
+     )
+     SELECT s.id, s.cargo, s.worker_name, s.base_salary::float AS base_salary
+     FROM admin_staff s, ventana v
+     WHERE s.accionista_id = $1 AND s.is_active = true
+       AND NOT EXISTS (
+         SELECT 1 FROM admin_salary_payments p
+         WHERE p.staff_id = s.id AND p.paid_at >= v.win_start AND p.paid_at < v.win_end
+       )
+     ORDER BY s.worker_name`,
+    [accionista, esQuincena]
+  );
+  res.json({ fecha_habilitada: true, corte, periodo, dia_del_mes: dom, ultimo_dia_mes: lastDom, staff: result.rows });
+}));
+
 // ── Pago de sueldo (sale de la caja del accionista activo) ───────────────────
 adminPayrollRouter.post("/pay", asyncRoute(async (req, res) => {
   const body = z.object({
@@ -109,6 +159,18 @@ adminPayrollRouter.post("/pay", asyncRoute(async (req, res) => {
     const net = round2(Math.max(0, base + incentivo - descuentos));
     if (net <= 0) throw new ApiError(400, "El neto a pagar debe ser mayor a 0");
 
+    // Período de corte legible (Quincena / Fin de mes del mes en curso) si no se
+    // indicó uno. paid_at (fecha_pago) lo pone la BD por defecto (now()).
+    let periodo = body.periodo ?? null;
+    if (!periodo) {
+      const m = await client.query(
+        `SELECT to_char(CURRENT_DATE, 'YYYY-MM') AS ym, EXTRACT(DAY FROM CURRENT_DATE)::int AS dom,
+                EXTRACT(DAY FROM (date_trunc('month', CURRENT_DATE) + INTERVAL '1 month - 1 day'))::int AS last_dom`
+      );
+      const dom = Number(m.rows[0].dom);
+      periodo = `${m.rows[0].ym} · ${dom < 16 ? "Quincena" : "Fin de mes"}`;
+    }
+
     await client.query(
       `INSERT INTO cash_movements
          (cash_register_id, movement, category, reference_type, amount, description, created_by)
@@ -122,7 +184,7 @@ adminPayrollRouter.post("/pay", asyncRoute(async (req, res) => {
          (accionista_id, staff_id, worker_name, cargo, base_salary, incentivo, descuentos, net_amount, periodo, cash_register_id, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING id, worker_name, cargo, net_amount::float AS net_amount, paid_at`,
-      [accionista, body.staff_id, staff.rows[0].worker_name, staff.rows[0].cargo, base, incentivo, descuentos, net, body.periodo ?? null, body.cash_register_id, user?.id ?? null]
+      [accionista, body.staff_id, staff.rows[0].worker_name, staff.rows[0].cargo, base, incentivo, descuentos, net, periodo, body.cash_register_id, user?.id ?? null]
     );
     return { base, incentivo, descuentos, paid: net, payment: pay.rows[0] };
   });
