@@ -774,6 +774,18 @@ type MillingPiladoEntry = {
   tulas?: number;
 };
 
+// Desglose del MIX de un conjunto de renglones de pilado: QQ en tula, QQ en saco
+// y conteo de tulas. Compartido por el memo y por el auto-guardado (para incluir
+// un renglón escrito pero aún no añadido con [+ Añadir]).
+function computeMillingMix(entries: MillingPiladoEntry[]): { tulaQq: number; sacoQq: number; tulasCount: number } {
+  let tulaQq = 0, sacoQq = 0, tulasCount = 0;
+  for (const e of Array.isArray(entries) ? entries : []) {
+    if (e.destino === "TULA") { tulaQq += e.quantityQq; tulasCount += Number(e.tulas) || 0; }
+    else sacoQq += e.quantityQq;
+  }
+  return { tulaQq, sacoQq, tulasCount };
+}
+
 /** Pilado guardado a medias en el servidor (proceso en curso), por túnel. */
 type MillingDraft = {
   drying_report_id: string;
@@ -2648,24 +2660,29 @@ export function App() {
     if (productionSource === "stock") return selectedStockLot ? esServicioLot(selectedStockLot) : false;
     return (selectedProductionDrying?.lots ?? []).some(esServicioLot);
   }, [productionSource, selectedStockLot, selectedProductionDrying]);
-  // Validez para habilitar el guardado/finalización: al menos un ítem de arroz
-  // pilado y subproductos NO negativos (rendimiento mayor al ingreso SÍ se permite).
+  // QQ escritos en 'Cantidad en QQ' que AÚN no se añadieron con [+ Añadir]. Cuentan
+  // para habilitar el guardado y se auto-agregan al guardar/finalizar.
+  const millingPiladoPendienteQq = useMemo(() => {
+    const q = Number(millingPiladoQq);
+    return Number.isFinite(q) && q > 0 ? q : 0;
+  }, [millingPiladoQq]);
+  // Suma de subproductos capturados (arrocillos + polvillo), solo valores válidos.
+  const millingSubproductosSum = useMemo(() =>
+    Math.max(0, Number(millingReport.broken34 || 0)) + Math.max(0, Number(millingReport.fineBroken || 0)) + Math.max(0, Number(millingReport.polvillo || 0)),
+    [millingReport.broken34, millingReport.fineBroken, millingReport.polvillo]);
+  // Validez para habilitar el guardado/finalización: subproductos NO negativos
+  // (un rendimiento mayor al ingreso SÍ se permite).
   const millingSubproductosOk = useMemo(() => {
     const b = Number(millingReport.broken34 || 0), f = Number(millingReport.fineBroken || 0), p = Number(millingReport.polvillo || 0);
     return b >= 0 && f >= 0 && p >= 0;
   }, [millingReport.broken34, millingReport.fineBroken, millingReport.polvillo]);
-  const millingPuedeGuardar = millingPiladoTotalQq > 0 && millingSubproductosOk;
+  // Se habilita en cuanto hay algo de producción: arroz pilado (ya añadido O
+  // escrito en el input) O subproductos > 0. No exige personal de turno ni que
+  // todos los campos estén llenos: es un borrador/cierre flexible.
+  const millingPuedeGuardar = millingSubproductosOk && (millingPiladoTotalQq + millingPiladoPendienteQq + millingSubproductosSum) > 0;
   // Desglose del MIX: QQ que va en tulas (→ Selección) vs en sacos (comercial) y
   // el conteo de tulas (base del estibador). Alimenta los totales y el submit.
-  const millingMix = useMemo(() => {
-    const list = Array.isArray(millingPiladoEntries) ? millingPiladoEntries : [];
-    let tulaQq = 0, sacoQq = 0, tulasCount = 0;
-    for (const e of list) {
-      if (e.destino === "TULA") { tulaQq += e.quantityQq; tulasCount += Number(e.tulas) || 0; }
-      else sacoQq += e.quantityQq;
-    }
-    return { tulaQq, sacoQq, tulasCount };
-  }, [millingPiladoEntries]);
+  const millingMix = useMemo(() => computeMillingMix(millingPiladoEntries), [millingPiladoEntries]);
   // Eficiencia del lote en vivo: % arroz blanco, % subproductos y % merma/cáscara
   // sobre los QQ de entrada. Badge según el rendimiento de arroz blanco.
   const millingEficiencia = useMemo(() => {
@@ -2704,10 +2721,6 @@ export function App() {
   const selectedDryerEntries = useMemo(
     () => dryerEntries.filter((entry) => entry.dryer === selectedDryer),
     [dryerEntries, selectedDryer]
-  );
-  const safeMillingPiladoEntries = useMemo(
-    () => (Array.isArray(millingPiladoEntries) ? millingPiladoEntries : []),
-    [millingPiladoEntries]
   );
   const selectedDryerTotalQq = useMemo(
     () => (Array.isArray(selectedDryerEntries) ? selectedDryerEntries : []).reduce((sum, entry) => sum + entry.weightQq, 0),
@@ -7431,6 +7444,47 @@ export function App() {
     loadDraftFor(value).catch(() => undefined);
   }
 
+  // Construye (sin efectos) el renglón de pilado a partir de lo escrito en el
+  // formulario, o null si no hay una cantidad válida (o falta el dato del destino:
+  // n.º de tulas / peso personalizado). Sirve para auto-capturar el QQ escrito
+  // que el operador no alcanzó a añadir con [+ Añadir] al guardar/finalizar.
+  function buildPendingPiladoEntry(): MillingPiladoEntry | null {
+    const quantityQq = Number(millingPiladoQq);
+    if (!Number.isFinite(quantityQq) || quantityQq <= 0) return null;
+    let presentation: string;
+    let tulas: number | undefined;
+    if (millingPiladoDestino === "TULA") {
+      const count = Number(millingPiladoTulas);
+      if (!Number.isFinite(count) || count <= 0) return null;
+      presentation = "🧺 Tula";
+      tulas = count;
+    } else {
+      presentation = millingPiladoPresentation;
+      if (millingPiladoPresentation === PESO_PERSONALIZADO) {
+        const lb = Number(millingCustomLb);
+        if (!Number.isFinite(lb) || lb <= 0) return null;
+        presentation = `${lb} LB`;
+      }
+    }
+    return { id: `${Date.now()}-auto`, presentation, quantityQq, destino: millingPiladoDestino, tulas };
+  }
+
+  // Auto-captura: si hay un QQ escrito sin añadir, lo incorpora a las entradas y
+  // limpia los inputs. Devuelve la lista EFECTIVA (con el renglón ya incluido)
+  // para usarla en el mismo tick, sin esperar al re-render del estado.
+  function flushPendingPiladoEntry(): MillingPiladoEntry[] {
+    const base = Array.isArray(millingPiladoEntries) ? millingPiladoEntries : [];
+    const pending = buildPendingPiladoEntry();
+    if (!pending) return base;
+    const eff = [...base, pending];
+    setMillingPiladoEntries(eff);
+    setMillingPiladoQq("");
+    setMillingPiladoTulas("");
+    setMillingCustomLb("");
+    setMillingYields(null);
+    return eff;
+  }
+
   function addMillingPiladoEntry() {
     const quantityQq = Number(millingPiladoQq);
     if (!Number.isFinite(quantityQq) || quantityQq <= 0) {
@@ -7497,9 +7551,11 @@ export function App() {
       setMessage("Seleccione la secadora antes de guardar el proceso");
       return;
     }
+    // Auto-captura del QQ escrito sin añadir, para no perderlo en el borrador.
+    const effEntries = flushPendingPiladoEntry();
     await apiPut<{ saved_at: string }>(`/processing-batches/drafts/${productionDryingId}`, {
       report: millingReport,
-      pilado_entries: safeMillingPiladoEntries
+      pilado_entries: effEntries
     });
     await loadMillingDrafts();
     // Al guardar, el formulario SE LIMPIA: el proceso queda a salvo en el
@@ -7812,7 +7868,14 @@ export function App() {
       return;
     }
 
-    if (millingPiladoTotalQq <= 0) {
+    // Auto-captura: incorpora el QQ escrito en 'Cantidad en QQ' aunque no se haya
+    // pulsado [+ Añadir]. effEntries/effTotalQq/effMix son la producción EFECTIVA
+    // (con ese renglón ya incluido), usable en este mismo tick.
+    const effEntries = flushPendingPiladoEntry();
+    const effTotalQq = effEntries.reduce((sum, e) => sum + e.quantityQq, 0);
+    const effMix = computeMillingMix(effEntries);
+
+    if (effTotalQq <= 0) {
       setMessage("Agregue al menos una línea de arroz pilado (en Tula o en Saco)");
       return;
     }
@@ -7826,7 +7889,7 @@ export function App() {
     }
 
     const totalCascara = Number(src.entrada_qq);
-    const result = calculateMillingYields(millingReport, millingPiladoTotalQq, totalCascara);
+    const result = calculateMillingYields(millingReport, effTotalQq, totalCascara);
     if (!result) {
       setMessage("El origen seleccionado no tiene total de cascara valido");
       return;
@@ -7854,8 +7917,8 @@ export function App() {
     // de producto terminado. El backend descuenta sacos SOLO de las líneas en
     // Saco; las de Tula van a Selección sin descontar. La nómina del estibador
     // usa el desglose (tulas por N.º de tulas + sacos por QQ/sacas).
-    const whiteRiceQq = millingPiladoTotalQq;
-    const piladoEntries = Array.isArray(millingPiladoEntries) ? millingPiladoEntries : [];
+    const whiteRiceQq = effTotalQq;
+    const piladoEntries = effEntries;
     const production = await apiPost<ProductionResult>(`/processing-batches/${batch.id}/finish-production`, {
       lot_id: src.lot_id,
       drying_report_id: src.drying_report_id,
@@ -7906,8 +7969,8 @@ export function App() {
       polvillo_worker_name: polvilloWorkerName || undefined,
       // Nómina: el estibador cobra la porción en tulas (N.º de tulas) + la porción
       // en sacos (QQ/sacas). El backend recalcula todo desde el desglose.
-      tulas: millingMix.tulasCount,
-      qq_de_tulas: millingMix.tulaQq
+      tulas: effMix.tulasCount,
+      qq_de_tulas: effMix.tulaQq
     });
 
     setMillingYields(result);
@@ -11030,16 +11093,27 @@ export function App() {
                 <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>📋 Al finalizar, el cuadro de rendimiento se guarda y se abre en el módulo <strong>«Gana»</strong>.</p>
               )}
 
+              {/* Diagnóstico visible: por qué está desactivado el guardado. */}
+              {!millingSource ? (
+                <div className="alertBox" style={{ background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", marginTop: 8 }}>
+                  ⚠️ Selecciona un lote de la lista para activar el guardado.
+                </div>
+              ) : !millingPuedeGuardar ? (
+                <div className="alertBox" style={{ background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", marginTop: 8 }}>
+                  ⚠️ Ingresa el arroz pilado (Cantidad en QQ) o algún subproducto para activar el guardado.
+                </div>
+              ) : null}
+
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center", marginTop: 8 }}>
                 <button type="button" className="btnSecondary" onClick={() => saveMillingProcess().catch((e) => addToast(e.message, "error"))}
                   disabled={!selectedProductionDrying || !millingPuedeGuardar}
-                  title={productionSource === "stock" ? "El origen desde stock no usa borradores: finaliza directo" : (!millingPuedeGuardar ? "Agrega al menos un arroz pilado; los subproductos no pueden ser negativos" : undefined)}
+                  title={productionSource === "stock" ? "El origen desde stock no usa borradores: finaliza directo" : (!selectedProductionDrying ? "Selecciona una secadora para guardar el borrador" : (!millingPuedeGuardar ? "Ingresa el arroz pilado (Cantidad en QQ) o un subproducto (> 0)" : "Guardar borrador"))}
                   style={{ flex: "1 1 200px", maxWidth: 300, padding: "12px 16px", fontSize: 15, fontWeight: 700, borderRadius: 10, background: "transparent", border: "1.5px solid #2563eb", color: "#2563eb" }}>
                   💾 Guardar Proceso
                 </button>
                 <button className="primary" type="button" onClick={() => finalizeMillingLot().catch((error) => { setMessage(error.message); addToast(error.message || "No se pudo finalizar el lote. Sigue disponible para reintentar.", "error"); })}
                   disabled={!millingSource || !millingPuedeGuardar}
-                  title={!millingSource ? "Selecciona un lote/secadora" : (!millingPuedeGuardar ? "Agrega al menos un arroz pilado; los subproductos no pueden ser negativos" : undefined)}
+                  title={!millingSource ? "⚠️ Selecciona un lote de la lista para activar el guardado" : (!millingPuedeGuardar ? "Ingresa el arroz pilado (Cantidad en QQ) o un subproducto (> 0)" : "Finalizar y sumar al stock")}
                   style={{ flex: "1 1 200px", maxWidth: 320, padding: "12px 16px", fontSize: 15, fontWeight: 800, borderRadius: 10, background: "var(--c-success)" }}>
                   ✅ Finalizar Lote
                 </button>
