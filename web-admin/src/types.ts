@@ -53,6 +53,8 @@ export type MateriaPrimaEntry = {
   farmer_name: string | null;
   rice_type: string | null;
   is_maquila: boolean;
+  /** Tipo de operación del ingreso (COMPRA | SECADO | SECADO_PILADO | PILADO). */
+  operation_type?: string | null;
   quintals: string | number | null;
   net_weight: string | number | null;
   qualification: string | number | null;

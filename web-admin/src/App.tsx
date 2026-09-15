@@ -18,6 +18,21 @@ function entryLabel(entry: { numero_bascula?: string | null; ticket_number: stri
   return entry.numero_bascula ? `Ticket #${entry.numero_bascula}` : entry.ticket_number;
 }
 
+/** Distintivo dinámico según el tipo de operación del lote/ticket:
+ *   COMPRA         → sin etiqueta (propio, estándar del UI)
+ *   SECADO         → 🛎️ SOLO SECADO
+ *   SECADO_PILADO  → 🔄 SERV. COMPLETO
+ *   PILADO         → 🛎️ SOLO PILADA (no debería aparecer en Secadoras)
+ * Respaldo para datos viejos sin tipo: is_maquila ⇒ Serv. Completo. */
+function opTypeBadgeLabel(operationType?: string | null, isMaquila?: boolean): string {
+  const op = String(operationType ?? "").toUpperCase();
+  if (op === "SECADO") return "🛎️ SOLO SECADO";
+  if (op === "SECADO_PILADO") return "🔄 SERV. COMPLETO";
+  if (op === "PILADO") return "🛎️ SOLO PILADA";
+  if (op === "COMPRA") return "";
+  return isMaquila ? "🔄 SERV. COMPLETO" : "";
+}
+
 type Dashboard = {
   active_farmers: number;
   tickets_today: number;
@@ -9588,7 +9603,7 @@ export function App() {
                     <select value={dryingEntryPick["TENDAL"] ?? ""} onChange={(ev) => setDryingEntryPick((cur) => ({ ...cur, TENDAL: ev.target.value }))}>
                       <option value="">Seleccione</option>
                       {entradasLibres.filter((entry) => (entry.rice_type ?? "0.11") === tendalForm.rice_type).map((entry) => (
-                        <option key={entry.id} value={entry.id}>{entryLabel(entry)} - {entry.farmer_name ?? "Sin agricultor"} - {Number(entry.quintals ?? 0).toFixed(2)} QQ{entry.rice_type ? ` · ${entry.rice_type}` : ""}{entry.is_maquila ? " · 🛎️ SERVICIO" : ""}</option>
+                        <option key={entry.id} value={entry.id}>{entryLabel(entry)} - {entry.farmer_name ?? "Sin agricultor"} - {Number(entry.quintals ?? 0).toFixed(2)} QQ{entry.rice_type ? ` · ${entry.rice_type}` : ""}{(() => { const b = opTypeBadgeLabel(entry.operation_type, entry.is_maquila); return b ? ` · ${b}` : ""; })()}</option>
                       ))}
                     </select>
                   </label>
@@ -9806,7 +9821,7 @@ export function App() {
                                 })
                                 .map((entry) => (
                                 <option key={entry.id} value={entry.id}>
-                                  {entryLabel(entry)} - {entry.farmer_name ?? "Sin agricultor"} - {Number(entry.quintals ?? 0).toFixed(2)} QQ{entry.rice_type ? ` · ${entry.rice_type}` : ""}{entry.is_maquila ? " · 🛎️ SERVICIO" : ""}
+                                  {entryLabel(entry)} - {entry.farmer_name ?? "Sin agricultor"} - {Number(entry.quintals ?? 0).toFixed(2)} QQ{entry.rice_type ? ` · ${entry.rice_type}` : ""}{(() => { const b = opTypeBadgeLabel(entry.operation_type, entry.is_maquila); return b ? ` · ${b}` : ""; })()}
                                 </option>
                               ))}
                             </select>
