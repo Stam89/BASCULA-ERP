@@ -44,7 +44,7 @@ async function getFirestore(): Promise<any | null> {
 }
 
 export type FirebaseImportResult =
-  | { ok: true; count: number }
+  | { ok: true; count: number; skipped: number }
   | { ok: false; reason: string };
 
 // ── Sincronización incremental ──────────────────────────────────────────────
@@ -141,13 +141,16 @@ export async function importFromFirebase(options: { full?: boolean } = {}): Prom
     ]);
 
     let count = 0;
+    let skipped = 0;
     if (enEspera.length > 0) {
-      count += (await importBasculaTickets(enEspera, "firebase-auto", { enEspera: true })).count;
+      const r = await importBasculaTickets(enEspera, "firebase-auto", { enEspera: true });
+      count += r.count; skipped += r.skipped;
     }
     if (tickets.length > 0) {
-      count += (await importBasculaTickets(tickets, "firebase-auto", { enEspera: false })).count;
+      const r = await importBasculaTickets(tickets, "firebase-auto", { enEspera: false });
+      count += r.count; skipped += r.skipped;
     }
-    return { ok: true, count };
+    return { ok: true, count, skipped };
   } catch (err) {
     return { ok: false, reason: (err as Error).message };
   }

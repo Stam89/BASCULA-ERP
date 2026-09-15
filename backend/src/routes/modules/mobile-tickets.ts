@@ -671,14 +671,28 @@ export async function importBasculaTickets(
   rawTickets: unknown[],
   deviceId = "bascula",
   options: { enEspera?: boolean } = {}
-): Promise<{ imported: Array<{ numeroTicket: string; id: string }>; count: number }> {
+): Promise<{ imported: Array<{ numeroTicket: string; id: string }>; count: number; skipped: number }> {
   const enEspera = options.enEspera ?? false;
   const imported: Array<{ numeroTicket: string; id: string }> = [];
+  let skipped = 0;
   for (const raw of rawTickets) {
-    const t = basculaTicketSchema.parse(raw);
+    // Tolerancia por ticket: en una sincronización COMPLETA (historial de meses)
+    // es probable toparse con algún documento viejo/malformado (sin numeroTicket,
+    // calificación no numérica, etc.). Antes `.parse` lanzaba y abortaba TODO el
+    // lote → no se bajaba el historial completo. Ahora se valida con safeParse y
+    // el documento inválido se SALTA (se cuenta), sin frenar a los demás.
+    const parsed = basculaTicketSchema.safeParse(raw);
+    if (!parsed.success) {
+      skipped++;
+      const nro = (raw as { numeroTicket?: unknown })?.numeroTicket;
+      console.warn(`[bascula-import] ticket omitido (formato inválido)${nro != null ? ` #${String(nro)}` : ""}: ${parsed.error.issues[0]?.message ?? "sin detalle"}`);
+      continue;
+    }
+    const t = parsed.data;
     // Solo se traen los pesajes del modo PRINCIPAL (los "particular" se ignoran).
     if ((t.modo || "").trim().toLowerCase() !== "principal") continue;
 
+    try {
     const id = stableUuid(`${t.modo}_${t.numeroTicket}`);
     let netWeight = t.pesoNeto ?? calculateNetWeight(t.pesoBruto, t.pesoTara);
     if (netWeight < 0) netWeight = 0; // no romper el lote por un ticket con tara mayor
@@ -721,8 +735,14 @@ export async function importBasculaTickets(
        farmer?.id ?? null, farmer?.accionista_id ?? null, enEspera]
     );
     if (saved.rowCount) imported.push({ numeroTicket: t.numeroTicket, id });
+    } catch (err) {
+      // Un ticket que falle al guardar (dato raro que pasa el esquema pero no la
+      // BD) no debe tumbar toda la sincronización completa: se salta y se sigue.
+      skipped++;
+      console.warn(`[bascula-import] ticket omitido (error al guardar) #${String(t.numeroTicket)}: ${(err as Error).message}`);
+    }
   }
-  return { imported, count: imported.length };
+  return { imported, count: imported.length, skipped };
 }
 
 // Importa tickets en el formato NATIVO de la app de báscula (por ejemplo desde
