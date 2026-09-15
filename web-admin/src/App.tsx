@@ -2126,6 +2126,7 @@ export function App() {
   }
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [newUserForm, setNewUserForm] = useState({ name: "", username: "", cedula: "", password: "", role: "OPERADOR" as "ADMINISTRADOR" | "OPERADOR", modules: [] as string[], accionistas: [] as string[] });
+  const [showNewUserPassword, setShowNewUserPassword] = useState(false);
   const [permsEditor, setPermsEditor] = useState<{ user: AdminUser; modules: string[] } | null>(null);
   const [adminAccionistas, setAdminAccionistas] = useState<AdminAccionista[]>([]);
   const [newAccionistaForm, setNewAccionistaForm] = useState({ name: "", code: "" });
@@ -4636,8 +4637,8 @@ export function App() {
 
   async function submitConfigUser(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (newUserForm.name.trim().length < 2 || newUserForm.username.trim().length < 2 || newUserForm.password.length < 4) {
-      addToast("Completa nombre, usuario y una clave de al menos 4 caracteres", "error");
+    if (newUserForm.name.trim().length < 2 || newUserForm.username.trim().length < 2 || newUserForm.password.length < 8) {
+      addToast("Completa nombre, usuario y una clave de al menos 8 caracteres", "error");
       return;
     }
     if (newUserForm.role === "OPERADOR" && newUserForm.modules.length === 0) {
@@ -4658,6 +4659,7 @@ export function App() {
       accionista_ids: newUserForm.role === "OPERADOR" ? newUserForm.accionistas : []
     });
     setNewUserForm({ name: "", username: "", cedula: "", password: "", role: "OPERADOR", modules: [], accionistas: [] });
+    setShowNewUserPassword(false);
     addToast("Usuario creado", "success");
     await refreshConfig();
   }
@@ -16430,64 +16432,106 @@ export function App() {
             {/* ── Usuarios ── */}
             {configSubTab === "usuarios" && (
               <section style={{ display: "grid", gridTemplateColumns: "minmax(0, 5fr) minmax(0, 7fr)", gap: 16, alignItems: "start" }} className="configUsersGrid">
-                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>👤 Crear usuario</summary>
-                <form onSubmit={(e) => submitConfigUser(e).catch((err) => addToast(err.message, "error"))}>
-                  <p className="muted">Los operadores pueden usar todo el sistema; solo los administradores acceden a Configuración, crean usuarios y borran datos.</p>
-                  <label>
-                    <span>Nombre completo *</span>
-                    <NameInput
-                      type="text"
-                      value={newUserForm.name}
-                      onChange={(v) => setNewUserForm({ ...newUserForm, name: v })}
-                    />
-                  </label>
-                  <label>
-                    <span>Cedula</span>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={newUserForm.cedula}
-                      onChange={(e) => setNewUserForm({ ...newUserForm, cedula: e.target.value })}
-                    />
-                  </label>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <label>
-                      <span>Usuario *</span>
-                      <input
-                        type="text"
-                        autoComplete="off"
-                        value={newUserForm.username}
-                        onChange={(e) => setNewUserForm({ ...newUserForm, username: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      <span>Clave *</span>
-                      <input
-                        type="password"
-                        autoComplete="new-password"
-                        value={newUserForm.password}
-                        onChange={(e) => setNewUserForm({ ...newUserForm, password: e.target.value })}
-                      />
-                    </label>
-                  </div>
-                  <label>
-                    <span>Rol</span>
-                    <select
-                      value={newUserForm.role}
-                      onChange={(e) => setNewUserForm({ ...newUserForm, role: e.target.value as "ADMINISTRADOR" | "OPERADOR" })}
-                    >
-                      <option value="OPERADOR">Operador</option>
-                      <option value="ADMINISTRADOR">Administrador</option>
-                    </select>
-                  </label>
-                  {newUserForm.role === "OPERADOR" && (
+                <details className="formPanel userCreatePanel" style={{ gridColumn: "1 / -1" }} open>
+                  <summary className="userPanelSummary">
+                    <span>Crear usuario</span>
+                    <small>Nuevo acceso al ERP</small>
+                  </summary>
+                <form className="userCreateForm" onSubmit={(e) => submitConfigUser(e).catch((err) => addToast(err.message, "error"))}>
+                  <div className="userFormIntro">
                     <div>
+                      <strong>Configura el acceso en tres pasos</strong>
+                      <p>Completa los datos, elige el tipo de usuario y define dónde podrá trabajar.</p>
+                    </div>
+                    <span className="userSecurityBadge">Acceso protegido</span>
+                  </div>
+
+                  <section className="userFormSection">
+                    <div className="userFormSectionTitle">
+                      <span className="userStepNumber">1</span>
+                      <div><strong>Datos de acceso</strong><small>Información para identificar e iniciar sesión.</small></div>
+                    </div>
+                    <div className="userFormGrid">
+                      <label className="userFieldWide">
+                        <span>Nombre completo *</span>
+                        <NameInput
+                          type="text"
+                          value={newUserForm.name}
+                          onChange={(v) => setNewUserForm({ ...newUserForm, name: v })}
+                        />
+                      </label>
+                      <label>
+                        <span>Cédula</span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          maxLength={10}
+                          placeholder="Opcional"
+                          value={newUserForm.cedula}
+                          onChange={(e) => setNewUserForm({ ...newUserForm, cedula: e.target.value.replace(/\D/g, "") })}
+                        />
+                      </label>
+                      <label>
+                        <span>Usuario *</span>
+                        <input
+                          type="text"
+                          autoComplete="off"
+                          spellCheck={false}
+                          placeholder="Ej. juan.perez"
+                          value={newUserForm.username}
+                          onChange={(e) => setNewUserForm({ ...newUserForm, username: e.target.value.toLowerCase().replace(/\s/g, "") })}
+                        />
+                        <small className="muted">Sin espacios; se guarda en minúsculas.</small>
+                      </label>
+                      <label>
+                        <span>Clave *</span>
+                        <div className="passwordField">
+                          <input
+                            type={showNewUserPassword ? "text" : "password"}
+                            autoComplete="new-password"
+                            minLength={8}
+                            placeholder="Mínimo 8 caracteres"
+                            value={newUserForm.password}
+                            onChange={(e) => setNewUserForm({ ...newUserForm, password: e.target.value })}
+                          />
+                          <button type="button" onClick={() => setShowNewUserPassword((visible) => !visible)} aria-label={showNewUserPassword ? "Ocultar clave" : "Mostrar clave"}>
+                            {showNewUserPassword ? "Ocultar" : "Mostrar"}
+                          </button>
+                        </div>
+                        <small className={newUserForm.password.length > 0 && newUserForm.password.length < 8 ? "userFieldError" : "muted"}>
+                          {newUserForm.password.length > 0 && newUserForm.password.length < 8 ? `Faltan ${8 - newUserForm.password.length} caracteres.` : "Mínimo 8 caracteres."}
+                        </small>
+                      </label>
+                    </div>
+                  </section>
+
+                  <section className="userFormSection">
+                    <div className="userFormSectionTitle">
+                      <span className="userStepNumber">2</span>
+                      <div><strong>Tipo de usuario</strong><small>Define el nivel general de acceso.</small></div>
+                    </div>
+                    <div className="userRoleSelector" role="group" aria-label="Tipo de usuario">
+                      <button type="button" className={newUserForm.role === "OPERADOR" ? "active" : ""} aria-pressed={newUserForm.role === "OPERADOR"} onClick={() => setNewUserForm({ ...newUserForm, role: "OPERADOR" })}>
+                        <strong>Operador</strong><small>Solo accede a lo que selecciones.</small>
+                      </button>
+                      <button type="button" className={newUserForm.role === "ADMINISTRADOR" ? "active" : ""} aria-pressed={newUserForm.role === "ADMINISTRADOR"} onClick={() => setNewUserForm({ ...newUserForm, role: "ADMINISTRADOR" })}>
+                        <strong>Administrador</strong><small>Control total del sistema.</small>
+                      </button>
+                    </div>
+                  </section>
+
+                  {newUserForm.role === "OPERADOR" && (
+                    <section className="userFormSection">
+                      <div className="userFormSectionTitle">
+                        <span className="userStepNumber">3</span>
+                        <div><strong>Acceso del operador</strong><small>Selecciona módulos y accionistas autorizados.</small></div>
+                      </div>
+                    <div className="userPermissionBlock">
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-                        <span className="permLabel">Módulos que puede modificar *</span>
+                        <span className="permLabel">Módulos <b>{newUserForm.modules.length} seleccionados</b></span>
                         <div style={{ display: "flex", gap: 8 }}>
-                          <button type="button" className="btnGhost" style={{ fontSize: 12, padding: "2px 8px" }} onClick={() => setNewUserForm({ ...newUserForm, modules: [...APP_MODULES] })}>☑️ Seleccionar todos</button>
-                          <button type="button" className="btnGhost" style={{ fontSize: 12, padding: "2px 8px" }} onClick={() => setNewUserForm({ ...newUserForm, modules: [] })}>⬜ Limpiar selección</button>
+                          <button type="button" className="btnGhost userSelectionAction" onClick={() => setNewUserForm({ ...newUserForm, modules: [...APP_MODULES] })}>Seleccionar todos</button>
+                          <button type="button" className="btnGhost userSelectionAction" onClick={() => setNewUserForm({ ...newUserForm, modules: [] })}>Limpiar</button>
                         </div>
                       </div>
                       <div className="permGrid">
@@ -16510,13 +16554,17 @@ export function App() {
                         ))}
                       </div>
                       <p className="muted" style={{ marginTop: 6 }}>
-                        El operador verá solo estas pestañas (más el Dashboard) y solo podrá registrar cambios en ellas.
+                        El operador verá estas pestañas y podrá registrar cambios en ellas para los accionistas marcados.
                       </p>
                     </div>
-                  )}
-                  {newUserForm.role === "OPERADOR" && (
-                    <div style={{ marginTop: 10 }}>
-                      <span className="permLabel">Accionistas que puede manejar *</span>
+                    <div className="userPermissionBlock">
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                        <span className="permLabel">Accionistas <b>{newUserForm.accionistas.length} seleccionados</b></span>
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button type="button" className="btnGhost userSelectionAction" onClick={() => setNewUserForm({ ...newUserForm, accionistas: adminAccionistas.filter((a) => a.is_active).map((a) => a.id) })}>Seleccionar todos</button>
+                          <button type="button" className="btnGhost userSelectionAction" onClick={() => setNewUserForm({ ...newUserForm, accionistas: [] })}>Limpiar</button>
+                        </div>
+                      </div>
                       <div className="permGrid">
                         {adminAccionistas.filter((a) => a.is_active).map((a) => (
                           <label key={a.id} className={newUserForm.accionistas.includes(a.id) ? "permChip on" : "permChip"}>
@@ -16540,11 +16588,18 @@ export function App() {
                         Solo verá y registrará las operaciones de estos accionistas. Si marcas varios, podrá cambiar entre ellos con el selector.
                       </p>
                     </div>
+                    </section>
                   )}
                   {newUserForm.role === "ADMINISTRADOR" && (
-                    <p className="muted" style={{ marginTop: 6 }}>Los administradores ven y manejan todos los accionistas.</p>
+                    <div className="userAdminNotice"><strong>Acceso completo</strong><span>Podrá usar todos los módulos, administrar usuarios, cambiar configuraciones y manejar todos los accionistas.</span></div>
                   )}
-                  <button className="primary" disabled={!isAdmin}>Crear usuario</button>
+                  <div className="userCreateFooter">
+                    <div className="userAccessSummary">
+                      <strong>Resumen del acceso</strong>
+                      <span>{newUserForm.role === "ADMINISTRADOR" ? "Administrador con acceso total" : `${newUserForm.modules.length} módulos · ${newUserForm.accionistas.length} accionistas`}</span>
+                    </div>
+                    <button className="primary" disabled={!isAdmin}>Crear usuario</button>
+                  </div>
                 </form>
                 </details>
 

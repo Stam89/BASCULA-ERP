@@ -105,6 +105,11 @@ authRouter.post("/users", requireAuth, requireAdmin, asyncRoute(async (req, res)
 
   // Los administradores no necesitan lista de módulos: pueden todo.
   const allowedModules = body.role === "ADMINISTRADOR" ? [] : body.allowed_modules;
+  // El formulario de creación asigna módulos como "puede modificar". En el
+  // modelo actual el nombre plano permite VER y EDIT:<módulo> permite ESCRIBIR.
+  const accionistaModules = body.role === "ADMINISTRADOR"
+    ? []
+    : [...new Set([...allowedModules, ...allowedModules.map((module) => `EDIT:${module}`)])];
 
   const passwordHash = await bcrypt.hash(body.password, 10);
   const user = await pool.query(
@@ -118,12 +123,19 @@ authRouter.post("/users", requireAuth, requireAdmin, asyncRoute(async (req, res)
   // los elegidos.
   for (const accionistaId of body.accionista_ids) {
     await pool.query(
-      "INSERT INTO user_accionistas (user_id, accionista_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-      [user.rows[0].id, accionistaId]
+      `INSERT INTO user_accionistas (user_id, accionista_id, allowed_modules)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_id, accionista_id) DO UPDATE SET allowed_modules = EXCLUDED.allowed_modules`,
+      [user.rows[0].id, accionistaId, accionistaModules]
     );
   }
 
-  res.status(201).json({ ...user.rows[0], role_name: body.role, accionista_ids: body.accionista_ids });
+  res.status(201).json({
+    ...user.rows[0],
+    role_name: body.role,
+    accionista_ids: body.accionista_ids,
+    accionista_modules: body.accionista_ids.map((accionista_id) => ({ accionista_id, modules: accionistaModules }))
+  });
 }));
 
 authRouter.put("/users/:id", requireAuth, requireAdmin, asyncRoute(async (req, res) => {
