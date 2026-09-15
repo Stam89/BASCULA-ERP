@@ -23,8 +23,10 @@ receivableRouter.get("/", asyncRoute(async (req, res) => {
             --  · cargo por sacos  -> el socio (matriz_packaging_charges)
             -- Antes estas cuentas salían sin nombre y se veían como "—".
             -- fr: cliente de servicio (agricultor) para pilado maquila y solo-secado.
+            -- soc_ret: socio operativo responsable de una retención de báscula →
+            -- así TODAS las retenciones de un socio se agrupan en su única tarjeta.
             COALESCE(c.full_name, dest.name, ps_acc.name, ps.client_name,
-                     msc_acc.name, mpc_acc.name, fr.full_name) AS customer_name,
+                     msc_acc.name, mpc_acc.name, soc_ret.name, fr.full_name) AS customer_name,
             c.phone     AS customer_phone,
             s.sale_number,
             -- Rendimiento del lote (subproductos entregados al cliente), en QQ.
@@ -45,6 +47,8 @@ receivableRouter.get("/", asyncRoute(async (req, res) => {
      LEFT JOIN accionistas msc_acc ON msc_acc.id = msc.client_accionista_id
      LEFT JOIN matriz_packaging_charges mpc ON mpc.receivable_id = ar.id
      LEFT JOIN accionistas mpc_acc ON mpc_acc.id = mpc.client_accionista_id
+     LEFT JOIN liquidations liq_ret ON ar.reference_type = 'retencion_matriz' AND liq_ret.id = ar.reference_id
+     LEFT JOIN accionistas soc_ret ON soc_ret.id = liq_ret.accionista_id
      LEFT JOIN LATERAL (
        SELECT py0.white_rice_kg, py0.broken_rice_kg, py0.fine_broken_rice_kg, py0.bran_kg
        FROM production_yields py0

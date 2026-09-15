@@ -307,25 +307,40 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
     const bascula = data.discount_breakdown?.bascula ?? 0;
     const cosechadora = data.discount_breakdown?.cosechadora ?? 0;
     if ((bascula > 0 || cosechadora > 0) && accionistaId && accionistaId !== CEYRO_MATRIZ_ID) {
-      const liqNum = liquidation.rows[0].liquidation_number;
       // (1) BÁSCULA → Matriz (CEYRO): el socio asume CxP a favor de la Matriz.
       if (bascula > 0) {
+        // Detalle HUMANIZADO: sin el #LIQ crudo. Especifica el peso/ticket de
+        // báscula y el agricultor de origen, para que en "Ver detalle y Cobrar"
+        // se lea a qué carga corresponde cada retención de $10.
+        const detRet = await client.query(
+          `SELECT f.full_name AS farmer_name,
+                  COALESCE(m.raw_payload->>'numeroTicket', w.ticket_number) AS ticket_nro
+           FROM liquidations liq
+           LEFT JOIN farmers f ON f.id = liq.farmer_id
+           LEFT JOIN weighing_tickets w ON w.id = liq.weighing_ticket_id
+           LEFT JOIN mobile_synced_tickets m ON m.weighing_ticket_id = w.id
+           WHERE liq.id = $1`,
+          [liquidation.rows[0].id]
+        );
+        const rFarmer = detRet.rows[0]?.farmer_name ?? "sin agricultor";
+        const rTicket = String(detRet.rows[0]?.ticket_nro ?? "").trim() || "s/n";
+        const retDesc = `Retención de báscula - Ticket/Peso #${rTicket} - Agricultor: ${rFarmer}`;
         await client.query(
           `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
            VALUES (NULL, $1, $2, $2, 'CONFIRMED', $3, 'retencion_matriz', $1, $4)`,
-          [liquidation.rows[0].id, bascula, accionistaId, `Retención de Báscula por Liquidación #${liqNum}`]
+          [liquidation.rows[0].id, bascula, accionistaId, retDesc]
         );
         await client.query(
           `INSERT INTO accounts_receivable (farmer_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
            VALUES (NULL, $1, $1, 'CONFIRMED', $2, 'retencion_matriz', $3, $4)`,
-          [bascula, CEYRO_MATRIZ_ID, liquidation.rows[0].id, `Retención de Báscula por Liquidación #${liqNum}`]
+          [bascula, CEYRO_MATRIZ_ID, liquidation.rows[0].id, retDesc]
         );
       }
       // (2) COSECHADORA → Transporte y Cosechadora (Campo): mismo cruce que los
       //     fletes (abona un campo_servicio o queda como crédito a favor).
       if (cosechadora > 0) {
         await cruzarFleteInterno(client, {
-          accionistaId, monto: cosechadora, activoId: null, referencia: liqNum,
+          accionistaId, monto: cosechadora, activoId: null, referencia: liquidation.rows[0].liquidation_number,
           conceptoPrefijo: "Cruce cosechadora", createdBy: data.created_by ?? null
         });
       }
