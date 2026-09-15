@@ -1,91 +1,133 @@
 # Instalacion inicial
 
-## 1. Base de datos
+Guia corta para levantar una instalacion nueva del ERP sin traer datos reales de
+otra empresa. La instalacion debe quedar con Matriz/Piladora y la operacion
+Campo/Transporte preparadas, pero sin maquinaria ni operadores inventados.
 
-Crear una base PostgreSQL:
+## 1. Preparar base de datos
+
+Crear una base PostgreSQL vacia:
 
 ```sql
 CREATE DATABASE bascula_erp;
 ```
 
-Luego ejecutar:
+Desde la carpeta del backend:
 
 ```powershell
-cd C:\Users\ceci2\OneDrive\Documents\GitHub\BASCULA-ERP\backend
+cd C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP\backend
 copy .env.example .env
 npm install
+```
+
+Editar `backend\.env` y configurar, como minimo:
+
+```text
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/bascula_erp
+JWT_SECRET=una-clave-larga-y-unica
+
+COMPANY_NAME="PILADORA NUEVA"
+COMPANY_CODE=PILADORA-NUEVA
+FIELD_OPERATION_NAME="Transporte y Cosechadora"
+COMPANY_PHONE=
+COMPANY_ADDRESS=
+
+SEED_ADMIN_USERNAME=admin
+SEED_ADMIN_PASSWORD=una-clave-larga-y-unica
+```
+
+Para conectar app movil/nube, cada empresa debe usar un negocio distinto:
+
+```text
+NEGOCIO_ID=identificador-unico-de-la-empresa
+FIREBASE_KEY=C:\ruta\segura\firebase-key.json
+DEVICE_SYNC_KEY=otra-clave-larga-para-la-app
+```
+
+## 2. Crear estructura y datos base
+
+Ejecutar en orden:
+
+```powershell
 npm run db:init
-```
-
-## 2. Backend
-
-```powershell
-cd C:\Users\ceci2\OneDrive\Documents\GitHub\BASCULA-ERP\backend
-npm install
+npm run db:migrate
+npm run db:company:init
 npm run db:seed
+```
+
+`db:company:init` prepara:
+
+- la Matriz principal;
+- los datos del negocio;
+- el usuario administrador inicial;
+- la operacion Campo/Transporte;
+- cuentas base de Campo: `CAJA`, `BANCO`, `OTROS`, `CRUCE PILADORA`;
+- categorias base de Campo;
+- cliente interno de Campo enlazado con la Matriz.
+
+No crea maquinaria, operadores ni tickets. Esos datos se cargan manualmente con
+informacion real de la empresa.
+
+## 3. Levantar backend y panel
+
+Backend:
+
+```powershell
+cd C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP\backend
 npm run dev
 ```
 
-La API debe abrir en:
-
-```text
-http://localhost:4000
-```
-
-Probar:
-
-```text
-http://localhost:4000/health
-```
-
-Usuario inicial:
-
-```text
-admin
-```
-
-Clave inicial:
-
-```text
-admin123
-```
-
-## 3. Panel web administrativo
+Panel web:
 
 ```powershell
-cd C:\Users\ceci2\OneDrive\Documents\GitHub\BASCULA-ERP\web-admin
+cd C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP\web-admin
 npm install
 npm run dev
 ```
 
-El panel debe abrir en:
+URLs locales:
 
 ```text
-http://localhost:5173
+Backend: http://localhost:4000/health
+Panel:   http://localhost:5173
 ```
 
-## 4. App Android
+## 4. Verificar dentro del ERP
 
-Abrir esta carpeta en Android Studio:
+Entrar al panel con el usuario configurado en `.env`.
 
-```text
-C:\Users\ceci2\OneDrive\Documents\GitHub\BASCULA-ERP\android-app
-```
+Luego revisar:
 
-Luego esperar a que Android Studio sincronice Gradle.
+1. `Configuracion -> Estado del sistema`.
+2. Bloque `Empresa lista`.
+3. Resolver todo lo que salga pendiente.
 
-Para imprimir:
+Pendientes normales en una empresa nueva:
 
-1. Emparejar la impresora Bluetooth desde Android.
-2. Copiar la direccion MAC de la impresora.
-3. Pegarla en la app.
-4. Presionar `Imprimir prueba 58mm`.
+- cargar flota/maquinaria real en Campo;
+- cargar operadores reales de Campo;
+- configurar Firebase si se usara sincronizacion movil;
+- configurar clave de dispositivo;
+- crear respaldo inicial.
 
-## Inicio rapido en esta computadora
+## 5. Configuracion operativa minima
 
-Si Node.js y PostgreSQL ya estan instalados, puedes iniciar backend y panel con:
+Antes de operar en serio:
+
+- crear usuarios reales y permisos;
+- revisar Matriz y socios;
+- revisar datos del negocio;
+- cargar flota y operadores de Campo;
+- abrir caja inicial si se va a registrar dinero;
+- probar un ticket de bascula;
+- probar sincronizacion de app movil;
+- crear respaldo.
+
+## 6. Inicio rapido en esta computadora
+
+Si Node.js y PostgreSQL ya estan instalados:
 
 ```powershell
-cd C:\Users\ceci2\OneDrive\Documents\GitHub\BASCULA-ERP
+cd C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP
 .\iniciar-sistema.ps1
 ```

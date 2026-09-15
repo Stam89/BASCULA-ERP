@@ -24,8 +24,8 @@ La primera version del sistema queda pensada como monorepo: backend, base de dat
 
 - Panel web: http://127.0.0.1:5173
 - Backend: http://127.0.0.1:4000/health
-- Usuario inicial: `admin`
-- Clave inicial: `admin123`
+- Usuario inicial: el definido en `backend/.env` como `SEED_ADMIN_USERNAME`.
+- Clave inicial: la definida en `SEED_ADMIN_PASSWORD`; si no se define, el seed genera una clave aleatoria y la muestra una sola vez.
 
 ## Abrir sistema cada dia
 
@@ -61,3 +61,4 @@ cd C:\Users\ceci2\OneDrive\Documents\GitHub\BASCULA-ERP
 - Panel web con formularios operativos basicos.
 - App Android base con soporte de impresion termica Bluetooth 58mm.
 - Seguridad anti-fraude en tickets: bloqueo permanente, PIN de administrador y control de reimpresiones.
+- Inicializacion de empresa nueva con Matriz/Piladora y Campo/Transporte preparados mediante `npm run db:company:init`.
