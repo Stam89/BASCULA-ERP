@@ -17,12 +17,14 @@ describe("company-bootstrap", () => {
     expect(companyBootstrapInputFromEnv({
       COMPANY_NAME: "Piladora Nueva",
       COMPANY_CODE: "PN-01",
+      FIELD_OPERATION_NAME: "Transporte y Cosechadora",
       COMPANY_PHONE: "0999999999",
       SEED_ADMIN_USERNAME: "superadmin",
       COMPANY_REPLACE_MATRIZ: "true"
     })).toMatchObject({
       businessName: "Piladora Nueva",
       matrixCode: "PN-01",
+      fieldOperationName: "Transporte y Cosechadora",
       phone: "0999999999",
       adminUsername: "superadmin",
       replaceExistingMatriz: true

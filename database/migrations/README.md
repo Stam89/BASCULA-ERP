@@ -25,7 +25,7 @@ Requiere la variable `DATABASE_URL` (la misma que usa el backend, en el archivo
 2. `npm run db:migrate` — aplica todas las migraciones encima.
 3. Configura en `backend/.env` los datos de la empresa:
    `COMPANY_NAME`, `COMPANY_CODE`, `COMPANY_PHONE`, `COMPANY_ADDRESS`,
-   `SEED_ADMIN_USERNAME` y `SEED_ADMIN_PASSWORD`.
+   `FIELD_OPERATION_NAME`, `SEED_ADMIN_USERNAME` y `SEED_ADMIN_PASSWORD`.
 4. `npm run db:company:init` — prepara la Matriz, datos del negocio y usuario
    administrador inicial sin borrar información existente.
 5. `npm run db:seed` — carga catálogos base (productos, bodegas, categorías).

@@ -8,6 +8,7 @@ type QueryClient = Pick<PoolClient, "query">;
 export type CompanyBootstrapInput = {
   businessName: string;
   matrixCode?: string;
+  fieldOperationName?: string;
   businessSubtitle?: string;
   ruc?: string;
   phone?: string;
@@ -40,6 +41,12 @@ export type CompanyBootstrapResult = {
     created: boolean;
     generatedPassword?: string;
   } | null;
+  campo: {
+    nombre_operacion: string;
+    cuentas_base: number;
+    categorias: number;
+    cliente_matriz: boolean;
+  };
 };
 
 type EnvLike = Record<string, string | undefined>;
@@ -71,6 +78,7 @@ export function companyBootstrapInputFromEnv(env: EnvLike = process.env): Compan
   return {
     businessName: clean(env.COMPANY_NAME, "MATRIZ"),
     matrixCode: clean(env.COMPANY_CODE, ""),
+    fieldOperationName: clean(env.FIELD_OPERATION_NAME, ""),
     businessSubtitle: clean(env.COMPANY_SUBTITLE, "Piladora de Arroz"),
     ruc: clean(env.COMPANY_RUC, ""),
     phone: clean(env.COMPANY_PHONE, ""),
@@ -80,6 +88,80 @@ export function companyBootstrapInputFromEnv(env: EnvLike = process.env): Compan
     adminUsername: clean(env.SEED_ADMIN_USERNAME, "admin"),
     adminPassword: clean(env.SEED_ADMIN_PASSWORD, ""),
     replaceExistingMatriz: clean(env.COMPANY_REPLACE_MATRIZ, "").toLowerCase() === "true"
+  };
+}
+
+async function ensureCampoBase(
+  db: QueryClient,
+  input: CompanyBootstrapInput,
+  matriz: CompanyBootstrapResult["matriz"]
+): Promise<CompanyBootstrapResult["campo"]> {
+  await db.query(`CREATE TABLE IF NOT EXISTS campo_config (
+    id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    nombre_operacion VARCHAR(60) NOT NULL DEFAULT 'Campo',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+  await db.query(`CREATE TABLE IF NOT EXISTS campo_categorias_gasto (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    nombre VARCHAR(60) NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+  await db.query(`CREATE TABLE IF NOT EXISTS campo_cuentas (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    nombre VARCHAR(60) NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+  await db.query(`CREATE TABLE IF NOT EXISTS campo_clientes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    nombre VARCHAR(160) NOT NULL,
+    tipo VARCHAR(20) NOT NULL DEFAULT 'externo',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+  await db.query("ALTER TABLE campo_clientes ADD COLUMN IF NOT EXISTS identificacion VARCHAR(40)");
+  await db.query("ALTER TABLE campo_clientes ADD COLUMN IF NOT EXISTS telefono VARCHAR(40)");
+
+  const fieldName = clean(input.fieldOperationName);
+  await db.query("INSERT INTO campo_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING");
+  if (fieldName) {
+    await db.query("UPDATE campo_config SET nombre_operacion = $1, updated_at = now() WHERE id = 1", [fieldName]);
+  }
+
+  await db.query(
+    `INSERT INTO campo_cuentas (nombre)
+     VALUES ('CAJA'), ('BANCO'), ('OTROS'), ('CRUCE PILADORA')
+     ON CONFLICT (nombre) DO NOTHING`
+  );
+  await db.query(
+    `INSERT INTO campo_categorias_gasto (nombre)
+     VALUES ('DIESEL'), ('OPERA'), ('TRASLADO'), ('REPARACION_MANT'),
+            ('OTROS'), ('GASOLINA'), ('VIATICOS'), ('MATRICULACION')
+     ON CONFLICT (nombre) DO NOTHING`
+  );
+  await db.query(
+    `INSERT INTO campo_clientes (nombre, tipo)
+     SELECT $1, 'piladora'
+     WHERE NOT EXISTS (
+       SELECT 1 FROM campo_clientes
+       WHERE tipo = 'piladora' AND lower(trim(nombre)) = lower(trim($1))
+     )`,
+    [matriz.name]
+  );
+
+  const [config, cuentas, categorias, clienteMatriz] = await Promise.all([
+    db.query<{ nombre_operacion: string }>("SELECT nombre_operacion FROM campo_config WHERE id = 1"),
+    db.query<{ count: number }>("SELECT COUNT(*)::int AS count FROM campo_cuentas WHERE nombre IN ('CAJA', 'BANCO', 'OTROS', 'CRUCE PILADORA')"),
+    db.query<{ count: number }>("SELECT COUNT(*)::int AS count FROM campo_categorias_gasto"),
+    db.query<{ count: number }>(
+      "SELECT COUNT(*)::int AS count FROM campo_clientes WHERE tipo = 'piladora' AND lower(trim(nombre)) = lower(trim($1))",
+      [matriz.name]
+    )
+  ]);
+
+  return {
+    nombre_operacion: config.rows[0]?.nombre_operacion ?? "Campo",
+    cuentas_base: Number(cuentas.rows[0]?.count ?? 0),
+    categorias: Number(categorias.rows[0]?.count ?? 0),
+    cliente_matriz: Number(clienteMatriz.rows[0]?.count ?? 0) > 0
   };
 }
 
@@ -269,5 +351,6 @@ export async function bootstrapCompany(input: CompanyBootstrapInput, db: QueryCl
   const branchId = await ensureBranch(db, input);
   const roleId = await ensureAdminRole(db);
   const admin = await ensureAdminUser(db, input, branchId, roleId, matriz.id);
-  return { settings, matriz, admin };
+  const campo = await ensureCampoBase(db, input, matriz);
+  return { settings, matriz, admin, campo };
 }

@@ -8,6 +8,7 @@ async function main() {
   console.log("Empresa preparada");
   console.log("Matriz:", `${result.matriz.name} (${result.matriz.code})`, result.matriz.changed ? "[actualizada]" : "[existente]");
   console.log("Negocio:", result.settings.business_name);
+  console.log("Campo:", `${result.campo.nombre_operacion} · cuentas ${result.campo.cuentas_base}/4 · categorias ${result.campo.categorias} · enlace matriz ${result.campo.cliente_matriz ? "OK" : "pendiente"}`);
   if (result.admin) {
     console.log("Usuario admin:", result.admin.username, result.admin.created ? "[creado]" : "[existente]");
     if (result.admin.generatedPassword && !input.adminPassword) {
