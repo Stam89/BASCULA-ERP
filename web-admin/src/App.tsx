@@ -1873,6 +1873,9 @@ export function App() {
   const [seqModal, setSeqModal] = useState<{ prefijo: string; next_number: string } | null>(null);
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
   const [laborRatesForm, setLaborRatesForm] = useState<LaborRates>(defaultLaborRates);
+  // ¿Se cargaron las tarifas desde el backend? Si el fetch aún no respondió o
+  // falló, no se debe registrar combustible (evita guardar un gasto en $0).
+  const [laborRatesLoaded, setLaborRatesLoaded] = useState(false);
   // Tarifa de SERVICIO DE PILADO del socio operativo ($/QQ) para «Gana»: la trae el
   // backend en /processing-batches/history (tarifario_servicio del socio dueño del
   // lote). NO se usa la tarifa de pago al trabajador. 0 si el socio no la tiene.
@@ -2587,6 +2590,17 @@ export function App() {
   const dieselCosto = round2(dieselTotal * Number(laborRatesForm.precio_diesel || 0));
   const gasCostoTotal = round2(gasBombonaCosto + gasCilindroCosto);
   const combustibleTotal = round2(gasCostoTotal + dieselCosto);
+  // ¿Hay consumo de combustible cargado en el formulario?
+  const combustibleConsumo = gasBombonaTotal > 0 || Number(gasForm.cilindro_cantidad || 0) > 0 || dieselTotal > 0;
+  // Falta el precio (tarifa en 0) de un combustible que SÍ se consumió → guardar
+  // dejaría el gasto en $0 por error. Se evalúa por tipo consumido.
+  const combustibleFaltaPrecio =
+    (gasBombonaTotal > 0 && Number(laborRatesForm.precio_gas_bombona || 0) <= 0) ||
+    (Number(gasForm.cilindro_cantidad || 0) > 0 && Number(laborRatesForm.precio_gas_cilindro || 0) <= 0) ||
+    (dieselTotal > 0 && Number(laborRatesForm.precio_diesel || 0) <= 0);
+  // Bloqueo de registro: solo cuando hay consumo y (las tarifas no cargaron o
+  // falta el precio de algo consumido). Finalizar SIN combustible sigue permitido.
+  const combustibleBloqueado = combustibleConsumo && (!laborRatesLoaded || combustibleFaltaPrecio);
   // QQ que están secándose con este motor (todos los accionistas juntos).
   // QQ entre los que se repartirá el combustible: las secadoras que se están
   // llenando ahora (aunque no estén guardadas todavía) MÁS los secados del
@@ -3209,7 +3223,8 @@ export function App() {
   // pantallas: Secadoras, Nómina y Configuración.
   async function loadLaborRates() {
     const rates = await apiGet<LaborRates>("/labor/rates").catch(() => null);
-    if (rates) { laborRatesPristine.current = rates; setLaborRatesForm(rates); }
+    if (rates) { laborRatesPristine.current = rates; setLaborRatesForm(rates); setLaborRatesLoaded(true); }
+    else setLaborRatesLoaded(false); // falló el fetch: los precios NO son confiables
   }
 
   type PackagingRates = { precio_saco_10lb: number; precio_saco_25lb: number; precio_saco_50lb: number };
@@ -7201,6 +7216,14 @@ export function App() {
     }
 
   async function cerrarCombustibleMotor() {
+    // Seguridad: no registrar combustible si las tarifas no cargaron o falta el
+    // precio de algo consumido (evita un gasto guardado en $0).
+    if (combustibleBloqueado) {
+      setMessage(!laborRatesLoaded
+        ? "No se pudieron cargar las tarifas. Reintenta antes de registrar el combustible."
+        : "Configura el precio del combustible en Configuración → Tarifas antes de registrar (evita un gasto en $0).");
+      return;
+    }
     if (!(combustibleTotal > 0)) { setMessage("Ingresa los medidores del combustible del motor"); return; }
     const activos = await apiGet<MotorActiveReport[]>(`/process-flow/drying/motor/${motorActivo}/active`).catch(() => [] as MotorActiveReport[]);
     if (activos.length === 0) { addToast("Este motor no tiene secados pendientes de combustible.", "error"); return; }
@@ -7232,6 +7255,14 @@ export function App() {
   // combustible y finaliza (cerrarCombustibleMotor); si no, solo finaliza. Reusa
   // los handlers existentes: no altera la lógica de prorrateo.
   async function confirmarFinalizarSecado() {
+    // Seguridad: hay consumo pero falta precio/tarifas → no finalizar (no perder
+    // el costo ni guardar $0). Finalizar sin combustible sí se permite.
+    if (combustibleBloqueado) {
+      setMessage(!laborRatesLoaded
+        ? "No se pudieron cargar las tarifas. Reintenta antes de finalizar."
+        : "Configura el precio del combustible en Configuración → Tarifas antes de finalizar (evita un gasto en $0).");
+      return;
+    }
     if (combustibleTotal > 0) await cerrarCombustibleMotor();
     else await finalizarSecadoMotor();
     setFuelModalOpen(false);
@@ -7406,6 +7437,13 @@ export function App() {
           </div>
         )}
         <p className="muted medidorNota">Los precios se configuran en Configuración → Tarifas. Deja en cero lo que no uses.</p>
+        {combustibleBloqueado && (
+          <div className="alertBox" style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b", marginTop: 8 }}>
+            ⚠️ {!laborRatesLoaded
+              ? "No se pudieron cargar las tarifas. Reintenta antes de registrar el combustible."
+              : "Hay consumo de combustible pero su precio está en $0. Configúralo en Configuración → Tarifas para no guardar un gasto en $0."}
+          </div>
+        )}
       </fieldset>
     );
   }
@@ -9749,7 +9787,9 @@ export function App() {
 
                     {renderFuelFieldset()}
                     <div className="buttonRow">
-                      <button type="button" className="primary" onClick={() => cerrarCombustibleMotor().catch((error) => setMessage(error.message))}>
+                      <button type="button" className="primary" disabled={combustibleBloqueado}
+                        title={combustibleBloqueado ? "Configura el precio del combustible en Tarifas (evita guardar un gasto en $0)" : undefined}
+                        onClick={() => cerrarCombustibleMotor().catch((error) => setMessage(error.message))}>
                         ⛽ Registrar combustible y finalizar secado
                       </button>
                       <button type="button" onClick={() => clearDryingForm()}>Volver</button>
@@ -9905,6 +9945,8 @@ export function App() {
                   {renderFuelFieldset()}
                   <div className="buttonRow" style={{ marginTop: 14 }}>
                     <button type="button" className="primary" style={{ background: "var(--c-success)", fontWeight: 800 }}
+                      disabled={combustibleBloqueado}
+                      title={combustibleBloqueado ? "Configura el precio del combustible en Tarifas (evita guardar un gasto en $0)" : undefined}
                       onClick={() => confirmarFinalizarSecado().catch((error) => setMessage(error.message))}>
                       ✅ Confirmar y Finalizar Secado
                     </button>
