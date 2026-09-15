@@ -342,7 +342,7 @@ settingsRouter.post("/reset-transactions", requireAdmin, asyncRoute(async (req, 
       } catch (err) {
         const msg = `[reset-transactions] ❌ BLOQUEADO al truncar la tabla "${t}": ${(err as Error).message}`;
         console.error(msg);
-        throw new ApiError(500, `Restauración bloqueada en la tabla "${t}". ${(err as Error).message}`);
+        throw new ApiError(500, `Borrado de datos de prueba bloqueado en la tabla "${t}". ${(err as Error).message}`);
       }
     }
     if (present.has("insumos")) await client.query(`UPDATE insumos SET stock_actual = 0`);

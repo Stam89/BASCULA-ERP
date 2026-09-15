@@ -1757,7 +1757,7 @@ export function App() {
   const [laborForm, setLaborForm] = useState({ worker_group: "", sacks_moved: "", price_per_sack: "" });
 
   // ── Configuración ─────────────────────────────────────────────────────────
-  const [configSubTab, setConfigSubTab] = useState<"operacion" | "tarifas" | "cuadrilla" | "socios" | "secuenciales" | "usuarios">("operacion");
+  const [configSubTab, setConfigSubTab] = useState<"estado" | "operacion" | "tarifas" | "cuadrilla" | "socios" | "secuenciales" | "usuarios">("estado");
   // Qué acordeones de Configuración dejó abiertos el usuario, por subpestaña.
   // Es una comodidad por equipo (no dato del negocio), por eso vive en localStorage.
   const acordeonesKey = "bascula-erp:config-acordeones";
@@ -1772,12 +1772,13 @@ export function App() {
   const abrirTarjetaRef = useRef<string | null>(null);
   type AjusteIndex = { sub: typeof configSubTab; tarjeta: string; claves: string };
   const CONFIG_INDICE: AjusteIndex[] = [
+    { sub: "estado", tarjeta: "Estado del sistema", claves: "salud api sincronizacion bascula respaldo backup usuarios accionistas diagnostico" },
     { sub: "operacion", tarjeta: "⚙️ Parámetros de planta", claves: "tarifa de pilado humedad base merma quintal" },
     { sub: "operacion", tarjeta: "🏢 Datos del negocio", claves: "nombre comercial ruc telefono direccion pie de comprobante encabezado ticket" },
     { sub: "operacion", tarjeta: "🏷️ Categorías de caja", claves: "categoria ingreso egreso movimiento caja" },
     { sub: "operacion", tarjeta: "🔧 Categorías de Mantenimiento", claves: "areas tipos secciones sistemas equipos mantenimiento" },
     { sub: "operacion", tarjeta: "✅ Puesta en marcha", claves: "checklist pasos inicio configuracion inicial" },
-    { sub: "operacion", tarjeta: "⚠️ Zona de peligro", claves: "restaurar de fabrica borrar datos reset limpiar pruebas" },
+    { sub: "operacion", tarjeta: "⚠️ Zona de peligro", claves: "borrar datos de prueba reiniciar operacion reset limpiar pruebas movimientos tickets" },
     { sub: "operacion", tarjeta: "💾 Respaldos de la base de datos", claves: "backup respaldo copia de seguridad onedrive pg_dump" },
     { sub: "tarifas", tarjeta: "💲 Tarifas de pago", claves: "pilador estibador secador saca tulas arrocillo combustible gas diesel guardiania" },
     { sub: "tarifas", tarjeta: "🧾 Tarifario de Servicios", claves: "socios clientes pilado secado flete precio por qq vigencia" },
@@ -1796,7 +1797,7 @@ export function App() {
   ];
 
   const subLabel: Record<typeof configSubTab, string> = {
-    operacion: "⚙️ Operación y Planta", tarifas: "⚙️ Tarifas y Servicios de Planta", cuadrilla: "👷 Cuadrilla",
+    estado: "Estado del sistema", operacion: "⚙️ Operación y Planta", tarifas: "⚙️ Tarifas y Servicios de Planta", cuadrilla: "👷 Cuadrilla",
     socios: "👥 Socios & Bancos", secuenciales: "📄 Secuenciales", usuarios: "🔐 Control de Usuarios"
   };
 
@@ -2135,6 +2136,7 @@ export function App() {
   const [resetForm, setResetForm] = useState({ password: "", confirm: "" });
   const [backupInfo, setBackupInfo] = useState<{ directory: string; backups: Array<{ name: string; size_kb: number; created_at: string }> } | null>(null);
   const [backupBusy, setBackupBusy] = useState(false);
+  const [systemStatusBusy, setSystemStatusBusy] = useState(false);
 
   // ── Reportes ──────────────────────────────────────────────────────────────
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -4546,6 +4548,37 @@ export function App() {
     }
   }
 
+  async function refreshSystemStatus(silent = false) {
+    setSystemStatusBusy(true);
+    try {
+      const online = await checkHealth();
+      setApiOnline(online);
+
+      const [sync, backups] = await Promise.all([
+        apiGetBasculaStatus()
+          .then((s) => {
+            setBasculaSync(s);
+            setBasculaSyncErr(false);
+            return s;
+          })
+          .catch(() => {
+            setBasculaSyncErr(true);
+            return null;
+          }),
+        isAdmin
+          ? apiGet<{ directory: string; backups: Array<{ name: string; size_kb: number; created_at: string }> }>("/settings/backups").catch(() => null)
+          : Promise.resolve(null)
+      ]);
+
+      if (backups) setBackupInfo(backups);
+      if (!silent) {
+        addToast(sync || online ? "Estado del sistema actualizado" : "No se pudo confirmar el estado completo", sync || online ? "success" : "error");
+      }
+    } finally {
+      setSystemStatusBusy(false);
+    }
+  }
+
   async function saveSettings(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const saved = await apiPut<AppSettings>("/settings", settingsForm);
@@ -5689,6 +5722,7 @@ export function App() {
     if (activeTab !== "Configuracion") return;
     const fail = (e: unknown) =>
       addToast(`No se pudo cargar la configuración: ${e instanceof Error ? e.message : "error"}`, "error");
+    if (configSubTab === "estado") refreshSystemStatus(true).catch(fail);
     if (configSubTab === "operacion") { reloadCashCategories().catch(fail); loadMaintCategoriesAll().catch(fail); }
     if (configSubTab === "socios") loadBankAccounts().catch(fail);
     if (configSubTab === "cuadrilla") refreshCuadrilla().catch(fail);
@@ -16107,6 +16141,7 @@ export function App() {
             {/* Pestañas verticales (panel lateral) para los parámetros del sistema. */}
             <aside className="configVTabs">
               {([
+                ["estado", "Estado del sistema"],
                 ["operacion", "⚙️ Operación y Planta"],
                 ["tarifas", "⚙️ Tarifas y Servicios de Planta"],
                 ["cuadrilla", "👷 Cuadrilla"],
@@ -16163,6 +16198,112 @@ export function App() {
                 ● Cambios <strong>sin guardar</strong> en: <strong>{configPendientes.join(", ")}</strong>. Usa el botón «Guardar» de cada tarjeta; si sales del módulo se descartarán.
               </div>
             )}
+
+            {configSubTab === "estado" && (() => {
+              const ultimoBackup = backupInfo?.backups[0] ?? null;
+              const backupAgeMs = ultimoBackup ? Date.now() - new Date(ultimoBackup.created_at).getTime() : Number.POSITIVE_INFINITY;
+              const backupOk = ultimoBackup != null && backupAgeMs <= 3 * 86_400_000;
+              const syncOk = !basculaSyncErr && basculaSync != null;
+              const usuariosActivos = adminUsers.filter((u) => u.is_active).length;
+              const accionistasActivos = adminAccionistas.filter((a) => a.is_active).length;
+              const alertas: string[] = [];
+              if (!apiOnline) alertas.push("El backend no respondió al chequeo de salud.");
+              if (!syncOk) alertas.push("No se pudo leer el estado de sincronización de báscula.");
+              if (!backupOk) alertas.push(ultimoBackup ? "El último respaldo tiene más de 3 días." : "No hay respaldos registrados.");
+              if (usuariosActivos === 0) alertas.push("No hay usuarios activos cargados en esta vista.");
+              if (accionistasActivos === 0) alertas.push("No hay accionistas activos configurados.");
+              return (
+                <section className="systemStatusPanel">
+                  <div className="systemStatusHeader">
+                    <div>
+                      <h2>Estado del sistema</h2>
+                      <p className="muted">Resumen rápido para confirmar que el ERP está listo para operar.</p>
+                    </div>
+                    <button type="button" className="primary" onClick={() => refreshSystemStatus()} disabled={systemStatusBusy}>
+                      {systemStatusBusy ? "Actualizando..." : "Actualizar estado"}
+                    </button>
+                  </div>
+
+                  <div className="systemStatusGrid">
+                    <div className={`systemStatusCard ${apiOnline ? "ok" : "bad"}`}>
+                      <span className="statusDot" />
+                      <div>
+                        <strong>Servidor ERP</strong>
+                        <span>{apiOnline ? "En línea" : "Sin respuesta"}</span>
+                      </div>
+                    </div>
+                    <div className={`systemStatusCard ${syncOk ? "ok" : "warn"}`}>
+                      <span className="statusDot" />
+                      <div>
+                        <strong>Sync báscula</strong>
+                        <span>
+                          {syncOk
+                            ? `${basculaSync.pendientes} pendiente(s) · ${basculaSync.ultimoEnvio ? new Date(basculaSync.ultimoEnvio).toLocaleString("es-EC", { dateStyle: "short", timeStyle: "short" }) : "sin envíos"}`
+                            : "No disponible"}
+                        </span>
+                      </div>
+                    </div>
+                    <div className={`systemStatusCard ${backupOk ? "ok" : "warn"}`}>
+                      <span className="statusDot" />
+                      <div>
+                        <strong>Respaldos</strong>
+                        <span>
+                          {ultimoBackup
+                            ? `${new Date(ultimoBackup.created_at).toLocaleString("es-EC", { dateStyle: "short", timeStyle: "short" })} · ${ultimoBackup.size_kb} KB`
+                            : "Sin respaldo registrado"}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="systemStatusCard ok">
+                      <span className="statusDot" />
+                      <div>
+                        <strong>Usuarios</strong>
+                        <span>{usuariosActivos} activo(s) · {adminUsers.length} registrado(s)</span>
+                      </div>
+                    </div>
+                    <div className="systemStatusCard ok">
+                      <span className="statusDot" />
+                      <div>
+                        <strong>Accionistas</strong>
+                        <span>{accionistasActivos} activo(s) · {adminAccionistas.length} registrado(s)</span>
+                      </div>
+                    </div>
+                    <div className={`systemStatusCard ${basculaSync?.deviceKeyRequerida ? "ok" : "warn"}`}>
+                      <span className="statusDot" />
+                      <div>
+                        <strong>Clave de dispositivo</strong>
+                        <span>{basculaSync?.deviceKeyRequerida ? "Activada" : "No configurada"}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="systemStatusActions">
+                    <button type="button" onClick={runBackupNow} disabled={!isAdmin || backupBusy}>
+                      {backupBusy ? "Respaldando..." : "Crear respaldo ahora"}
+                    </button>
+                    <button type="button" onClick={() => setConfigSubTab("operacion")}>Revisar operación</button>
+                    <button type="button" onClick={() => setConfigSubTab("usuarios")}>Revisar usuarios</button>
+                  </div>
+
+                  <div className={alertas.length > 0 ? "alertBox" : "successBox"}>
+                    {alertas.length > 0 ? (
+                      <>
+                        <strong>Revisar:</strong>
+                        <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
+                          {alertas.map((a) => <li key={a}>{a}</li>)}
+                        </ul>
+                      </>
+                    ) : (
+                      <strong>Todo lo principal se ve correcto para operar.</strong>
+                    )}
+                  </div>
+
+                  {backupInfo?.directory && (
+                    <p className="muted" style={{ margin: 0 }}>Carpeta de respaldos: <code>{backupInfo.directory}</code></p>
+                  )}
+                </section>
+              );
+            })()}
 
             {/* ── Operación y Planta: parámetros ── */}
             {configSubTab === "operacion" && (
@@ -17267,7 +17408,7 @@ export function App() {
                   <ol className="setupList">
                     <li>Completa los <strong>datos del negocio</strong> (aparecen en los comprobantes).</li>
                     <li>Crea un usuario para cada persona que use el sistema.</li>
-                    {esCeyroActivo && <li>Usa <strong>Restaurar de fábrica</strong> (Zona de peligro, a la derecha) para limpiar datos de prueba.</li>}
+                    {esCeyroActivo && <li>Usa <strong>Borrar datos de prueba</strong> (Zona de peligro) solo cuando quieras limpiar movimientos de prueba antes de operar.</li>}
                     <li>Verifica productos, bodegas e insumos en el Dashboard ("Crear datos base" si están vacíos).</li>
                     <li>Abre la caja del día y registra a tus agricultores reales.</li>
                   </ol>
@@ -17275,17 +17416,17 @@ export function App() {
 
                 {esCeyroActivo && (
                 <details className="formPanel dangerZone" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>⚠️ Zona de peligro · Restaurar de fábrica</summary>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>⚠️ Zona de peligro · Borrar datos de prueba</summary>
                 <form onSubmit={(e) => submitResetData(e).catch((err) => addToast(err.message, "error"))}>
                   <p className="muted">
-                    Limpia <strong>todos los movimientos operativos</strong> del ERP: tickets, lotes, traspasos, secado, producción,
+                    Reinicia la operación borrando <strong>todos los movimientos operativos de prueba</strong> del ERP: tickets, lotes, traspasos, secado, producción,
                     combustible, pilado, selección, pedidos, ventas, inventario (productos, insumos y sacos a 0), caja, gastos, nómina,
                     anticipos, liquidaciones, fomentos, agricultores, clientes, cuentas por cobrar/pagar, conciliación bancaria,
                     <strong> y los históricos de Transporte y Cosechadora</strong> (servicios de fletes/cosecha, partes diarios, caja de
                     transporte y CxP), historial de auditoría y sincronización. Se conservan usuarios, accionistas, configuración,
                     tarifas, productos, bodegas, equipos y catálogos de insumos/sacos <strong>y la flota/choferes de Transporte</strong>.
                   </p>
-                  <p className="dangerNote">Esta acción no se puede deshacer.</p>
+                  <p className="dangerNote">Esta acción no se puede deshacer. No recupera datos ni restaura una copia de seguridad.</p>
                   <label>
                     <span>Tu clave de administrador</span>
                     <input
@@ -17310,7 +17451,7 @@ export function App() {
                     className="dangerBtn"
                     disabled={!isAdmin || resetForm.confirm.trim().toUpperCase() !== "BORRAR" || resetForm.password.length < 4}
                   >
-                    Restaurar de fábrica definitivamente
+                    Borrar datos de prueba definitivamente
                   </button>
                 </form>
                 </details>
