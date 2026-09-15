@@ -477,6 +477,14 @@ type PanelData = {
   alertas: string[];
 };
 
+type CompanyReadiness = {
+  ok: boolean;
+  checks: Array<{ key: string; label: string; ok: boolean; detail: string }>;
+  missing: string[];
+  business: { name: string; ruc: string; phone: string; address: string };
+  matriz: { id: string; name: string; code: string; is_active: boolean } | null;
+};
+
 type ReportKind = "resumen" | "ventas" | "liquidaciones" | "gastos" | "produccion" | "combustible" | "porcobrar" | "arianos";
 
 const reportEndpoint: Record<Exclude<ReportKind, "resumen">, string> = {
@@ -2187,6 +2195,7 @@ export function App() {
   const [backupInfo, setBackupInfo] = useState<{ directory: string; backups: Array<{ name: string; size_kb: number; created_at: string }> } | null>(null);
   const [backupBusy, setBackupBusy] = useState(false);
   const [systemStatusBusy, setSystemStatusBusy] = useState(false);
+  const [companyReadiness, setCompanyReadiness] = useState<CompanyReadiness | null>(null);
 
   // ── Reportes ──────────────────────────────────────────────────────────────
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -3287,15 +3296,17 @@ export function App() {
     }
     await refreshServicioTarifas();
     if (isAdmin) {
-      const [users, accionistas, backups, audit] = await Promise.all([
+      const [users, accionistas, backups, audit, readiness] = await Promise.all([
         apiGet<AdminUser[]>("/auth/users"),
         apiGet<AdminAccionista[]>("/auth/accionistas").catch(() => [] as AdminAccionista[]),
         apiGet<{ directory: string; backups: Array<{ name: string; size_kb: number; created_at: string }> }>("/settings/backups").catch(() => null),
-        apiGet<AuditEntry[]>("/audit?limit=200").catch(() => [] as AuditEntry[])
+        apiGet<AuditEntry[]>("/audit?limit=200").catch(() => [] as AuditEntry[]),
+        apiGet<CompanyReadiness>("/settings/company-readiness").catch(() => null)
       ]);
       setAdminUsers(users);
       setAdminAccionistas(accionistas);
       if (backups) setBackupInfo(backups);
+      if (readiness) setCompanyReadiness(readiness);
       setAuditLog(audit);
     }
   }
@@ -4627,7 +4638,7 @@ export function App() {
       const online = await checkHealth();
       setApiOnline(online);
 
-      const [sync, backups] = await Promise.all([
+      const [sync, backups, readiness] = await Promise.all([
         apiGetBasculaStatus()
           .then((s) => {
             setBasculaSync(s);
@@ -4640,10 +4651,14 @@ export function App() {
           }),
         isAdmin
           ? apiGet<{ directory: string; backups: Array<{ name: string; size_kb: number; created_at: string }> }>("/settings/backups").catch(() => null)
+          : Promise.resolve(null),
+        isAdmin
+          ? apiGet<CompanyReadiness>("/settings/company-readiness").catch(() => null)
           : Promise.resolve(null)
       ]);
 
       if (backups) setBackupInfo(backups);
+      if (readiness) setCompanyReadiness(readiness);
       if (!silent) {
         addToast(sync || online ? "Estado del sistema actualizado" : "No se pudo confirmar el estado completo", sync || online ? "success" : "error");
       }
@@ -16388,6 +16403,9 @@ export function App() {
               if (!backupOk) alertas.push(ultimoBackup ? "El último respaldo tiene más de 3 días." : "No hay respaldos registrados.");
               if (usuariosActivos === 0) alertas.push("No hay usuarios activos cargados en esta vista.");
               if (accionistasActivos === 0) alertas.push("No hay accionistas activos configurados.");
+              if (companyReadiness && !companyReadiness.ok) {
+                alertas.push(`Instalación incompleta: ${companyReadiness.missing.join(", ")}.`);
+              }
               return (
                 <section className="systemStatusPanel">
                   <div className="systemStatusHeader">
@@ -16453,11 +16471,37 @@ export function App() {
                     </div>
                   </div>
 
+                  {companyReadiness && (
+                    <div className="companyReadinessPanel">
+                      <div className="systemStatusHeader" style={{ marginBottom: 10 }}>
+                        <div>
+                          <h3 style={{ margin: 0 }}>Empresa lista</h3>
+                          <p className="muted" style={{ margin: "2px 0 0" }}>Chequeo para entregar o levantar una instalación nueva.</p>
+                        </div>
+                        <span className={companyReadiness.ok ? "chip ok" : "chip warn"}>
+                          {companyReadiness.ok ? "Lista" : `${companyReadiness.missing.length} pendiente(s)`}
+                        </span>
+                      </div>
+                      <div className="systemStatusGrid">
+                        {companyReadiness.checks.map((check) => (
+                          <div key={check.key} className={`systemStatusCard ${check.ok ? "ok" : "warn"}`}>
+                            <span className="statusDot" />
+                            <div>
+                              <strong>{check.label}</strong>
+                              <span>{check.detail}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="systemStatusActions">
                     <button type="button" onClick={runBackupNow} disabled={!isAdmin || backupBusy}>
                       {backupBusy ? "Respaldando..." : "Crear respaldo ahora"}
                     </button>
                     <button type="button" onClick={() => setConfigSubTab("operacion")}>Revisar operación</button>
+                    <button type="button" onClick={() => irATab("Caja de Campo")}>Revisar Campo</button>
                     <button type="button" onClick={() => setConfigSubTab("usuarios")}>Revisar usuarios</button>
                   </div>
 

@@ -79,6 +79,153 @@ settingsRouter.get("/", asyncRoute(async (_req, res) => {
   res.json(result.rows[0]);
 }));
 
+settingsRouter.get("/company-readiness", requireAdmin, asyncRoute(async (_req, res) => {
+  await ensureTable();
+  async function tableExists(tableName: string): Promise<boolean> {
+    const result = await pool.query("SELECT to_regclass($1) AS name", [`public.${tableName}`]);
+    return Boolean(result.rows[0]?.name);
+  }
+  async function safeScalar<T>(tableName: string, sql: string, fallback: T, params: unknown[] = []): Promise<T> {
+    if (!(await tableExists(tableName))) return fallback;
+    return (await pool.query(sql, params)).rows[0]?.value ?? fallback;
+  }
+  const [settings, matrizRows, admins, users] = await Promise.all([
+    pool.query("SELECT business_name, ruc, phone, address FROM app_settings WHERE id = 1"),
+    pool.query("SELECT id, name, code, is_active FROM accionistas WHERE tipo = 'MATRIZ' ORDER BY is_active DESC, created_at, name LIMIT 1"),
+    pool.query(
+      `SELECT COUNT(*)::int AS count
+       FROM users u
+       LEFT JOIN roles r ON r.id = u.role_id
+       WHERE u.is_active = true AND r.name = 'ADMINISTRADOR'`
+    ),
+    pool.query("SELECT COUNT(*)::int AS count FROM users WHERE is_active = true")
+  ]);
+
+  const cfg = settings.rows[0] ?? {};
+  const matriz = matrizRows.rows[0] ?? null;
+  const [campoNombre, campoCuentasBase, campoCategorias, campoActivos, campoOperadores, campoClienteMatriz] = await Promise.all([
+    safeScalar<string | null>("campo_config", "SELECT nombre_operacion AS value FROM campo_config WHERE id = 1", null),
+    safeScalar<number>(
+      "campo_cuentas",
+      "SELECT COUNT(*)::int AS value FROM campo_cuentas WHERE nombre IN ('CAJA', 'BANCO', 'OTROS', 'CRUCE PILADORA')",
+      0
+    ),
+    safeScalar<number>("campo_categorias_gasto", "SELECT COUNT(*)::int AS value FROM campo_categorias_gasto", 0),
+    safeScalar<number>("campo_activos", "SELECT COUNT(*)::int AS value FROM campo_activos WHERE activo = true", 0),
+    safeScalar<number>("campo_operadores", "SELECT COUNT(*)::int AS value FROM campo_operadores WHERE activo = true", 0),
+    matriz
+      ? safeScalar<number>(
+          "campo_clientes",
+          `SELECT COUNT(*)::int AS value
+           FROM campo_clientes
+           WHERE tipo = 'piladora' AND lower(trim(nombre)) = lower(trim($1))`,
+          0,
+          [matriz.name]
+        )
+      : Promise.resolve(0)
+  ]);
+  const firebaseKey = (process.env.FIREBASE_KEY || "backend/firebase-service-account.json").trim();
+  const firebaseKeyExists = Boolean(firebaseKey) && fs.existsSync(firebaseKey);
+  const checks = [
+    {
+      key: "business_name",
+      label: "Nombre del negocio",
+      ok: Boolean(String(cfg.business_name ?? "").trim()) && cfg.business_name !== "BASCULA ERP",
+      detail: String(cfg.business_name ?? "Sin configurar")
+    },
+    {
+      key: "matriz",
+      label: "Matriz principal",
+      ok: Boolean(matriz?.id && matriz?.is_active),
+      detail: matriz ? `${matriz.name} (${matriz.code})` : "No configurada"
+    },
+    {
+      key: "admin",
+      label: "Usuario administrador",
+      ok: Number(admins.rows[0]?.count ?? 0) > 0,
+      detail: `${admins.rows[0]?.count ?? 0} administrador(es) activo(s)`
+    },
+    {
+      key: "users",
+      label: "Usuarios activos",
+      ok: Number(users.rows[0]?.count ?? 0) > 0,
+      detail: `${users.rows[0]?.count ?? 0} usuario(s) activo(s)`
+    },
+    {
+      key: "firebase",
+      label: "Firebase / negocio móvil",
+      ok: Boolean(process.env.NEGOCIO_ID) && firebaseKeyExists,
+      detail: process.env.NEGOCIO_ID
+        ? (firebaseKeyExists ? `NEGOCIO_ID: ${process.env.NEGOCIO_ID}` : "Falta archivo FIREBASE_KEY")
+        : "Falta NEGOCIO_ID"
+    },
+    {
+      key: "device_key",
+      label: "Clave de dispositivo",
+      ok: Boolean(process.env.DEVICE_SYNC_KEY),
+      detail: process.env.DEVICE_SYNC_KEY ? "Configurada" : "No configurada"
+    },
+    {
+      key: "campo_config",
+      label: "Campo / Transporte",
+      ok: Boolean(campoNombre && campoNombre !== "Campo"),
+      detail: campoNombre ? `Operación: ${campoNombre}` : "No configurado"
+    },
+    {
+      key: "campo_cuentas",
+      label: "Campo: cuentas base",
+      ok: Number(campoCuentasBase) >= 4,
+      detail: `${campoCuentasBase}/4 cuenta(s) base`
+    },
+    {
+      key: "campo_categorias",
+      label: "Campo: categorías",
+      ok: Number(campoCategorias) >= 4,
+      detail: `${campoCategorias} categoría(s) de gasto`
+    },
+    {
+      key: "campo_flota",
+      label: "Campo: flota",
+      ok: Number(campoActivos) > 0,
+      detail: `${campoActivos} máquina(s)/vehículo(s) activo(s)`
+    },
+    {
+      key: "campo_operadores",
+      label: "Campo: operadores",
+      ok: Number(campoOperadores) > 0,
+      detail: `${campoOperadores} operador(es) activo(s)`
+    },
+    {
+      key: "campo_matriz",
+      label: "Campo: enlace con Matriz",
+      ok: Number(campoClienteMatriz) > 0,
+      detail: Number(campoClienteMatriz) > 0 ? "Cliente interno creado" : "Falta cliente tipo piladora"
+    }
+  ];
+
+  const missing = checks.filter((c) => !c.ok);
+  res.json({
+    ok: missing.length === 0,
+    checks,
+    missing: missing.map((c) => c.label),
+    business: {
+      name: cfg.business_name ?? "",
+      ruc: cfg.ruc ?? "",
+      phone: cfg.phone ?? "",
+      address: cfg.address ?? ""
+    },
+    matriz,
+    campo: {
+      nombre_operacion: campoNombre,
+      cuentas_base: campoCuentasBase,
+      categorias: campoCategorias,
+      activos: campoActivos,
+      operadores: campoOperadores,
+      cliente_matriz: campoClienteMatriz
+    }
+  });
+}));
+
 settingsRouter.put("/", requireAdmin, asyncRoute(async (req, res) => {
   await ensureTable();
   const body = z.object({
