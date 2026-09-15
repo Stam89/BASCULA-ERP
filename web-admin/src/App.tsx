@@ -4951,13 +4951,17 @@ export function App() {
     if (basculaFullSyncing || basculaImporting) return;
     setBasculaFullSyncing(true);
     try {
-      const res = await apiPost<{ ok: boolean; count: number; skipped?: number }>(
+      const res = await apiPost<{ ok: boolean; count: number; skipped?: number; fetched?: number }>(
         "/tickets/refresh-firebase",
         { full: true }
       );
       await refreshBasculaTickets();
-      const omitidos = res.skipped && res.skipped > 0 ? ` (${res.skipped} omitidos por formato)` : "";
-      addToast(`Sincronización completa. Se recuperaron ${res.count} tickets${omitidos}`, "success");
+      const omitidos = res.skipped && res.skipped > 0 ? `, ${res.skipped} omitidos por formato` : "";
+      // Transparencia: `fetched` = lo que Firebase entregó (colección completa,
+      // sin filtros). Si no aparece historial viejo pese a este número, es que la
+      // fuente ya no lo tiene (la app lo purga tras exportarlo a Excel), no un filtro.
+      const entregados = typeof res.fetched === "number" ? ` — Firebase entregó ${res.fetched} en total` : "";
+      addToast(`Sincronización completa. Se recuperaron ${res.count} tickets${omitidos}${entregados}.`, "success");
     } catch (e) {
       addToast(`No se pudo completar la sincronización: ${e instanceof Error ? e.message : "error"}`, "error");
     } finally {

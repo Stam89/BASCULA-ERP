@@ -758,9 +758,19 @@ mobileTicketsRouter.post("/import-bascula", requireAuth, asyncRoute(async (req, 
 // Con { full: true } ignora la marca incremental y re-lee las colecciones
 // completas (recuperación tras borrar datos; la importación es idempotente).
 mobileTicketsRouter.post("/refresh-firebase", requireAuth, asyncRoute(async (req, res) => {
-  const body = z.object({ full: z.boolean().optional() }).parse(req.body ?? {});
+  const body = z.object({
+    full: z.boolean().optional(),
+    force: z.boolean().optional(),
+    forzar: z.boolean().optional()
+  }).parse(req.body ?? {});
+  // El flag de "sincronización completa" se acepta por CUERPO o por QUERY, y con
+  // varios nombres (full/force/forzar, true/1), para que el botón no dependa de
+  // un formato exacto. Cualquiera de ellos en true ⇒ lectura completa sin filtros.
+  const truthy = (v: unknown) => v === true || v === "true" || v === "1" || v === 1;
+  const full = truthy(body.full) || truthy(body.force) || truthy(body.forzar)
+    || truthy(req.query.full) || truthy(req.query.force) || truthy(req.query.forzar);
   const { importFromFirebase } = await import("../../integrations/bascula-firebase.js");
-  const result = await importFromFirebase({ full: body.full === true });
+  const result = await importFromFirebase({ full });
   if (!result.ok) throw new ApiError(400, result.reason);
   res.json(result);
 }));

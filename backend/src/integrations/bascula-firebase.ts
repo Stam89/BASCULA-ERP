@@ -44,7 +44,7 @@ async function getFirestore(): Promise<any | null> {
 }
 
 export type FirebaseImportResult =
-  | { ok: true; count: number; skipped: number }
+  | { ok: true; count: number; skipped: number; fetched: number }
   | { ok: false; reason: string };
 
 // ── Sincronización incremental ──────────────────────────────────────────────
@@ -94,6 +94,12 @@ async function setWatermark(collection: string, ms: number): Promise<void> {
 async function fetchCollectionDocs(negocio: any, name: string, forceFull: boolean): Promise<unknown[]> {
   const col = negocio.collection(name);
   const watermark = forceFull ? 0 : await getWatermark(name);
+  // Modo FORZADO / primera corrida (watermark 0): `get()` PURO sobre la colección
+  // completa — SIN `.where('actualizadoEn', ...)`, sin filtro de estado/sincronizado
+  // y sin `.orderBy(...).limit(...)`. Se evita adrede orderBy+limit porque en
+  // Firestore un `orderBy(campo)` DESCARTA los documentos que no tienen ese campo,
+  // lo que reduciría la cobertura justo cuando queremos traer TODO el historial.
+  // Solo el modo incremental (watermark > 0) aplica el filtro por fecha.
   const snap = watermark > 0
     ? await col.where("actualizadoEn", ">", watermark - OVERLAP_MS).get()
     : await col.get();
@@ -140,6 +146,16 @@ export async function importFromFirebase(options: { full?: boolean } = {}): Prom
       fetchCollectionDocs(negocio, COLLECTION, forceFull)
     ]);
 
+    // `fetched` = documentos CRUDOS que Firebase entregó (antes de filtrar por
+    // modo/validez). Sirve para diagnosticar: si en modo forzado Firebase
+    // devuelve pocos docs, el historial viejo ya no está en la colección de la
+    // fuente (la app lo purga tras exportarlo), y ningún cambio de consulta lo
+    // recupera. Lo exponemos para que el operador lo vea en pantalla.
+    const fetched = enEspera.length + tickets.length;
+    if (forceFull) {
+      console.log(`[bascula-firebase] sync FORZADA: Firebase entregó ${tickets.length} tickets + ${enEspera.length} en espera (colección completa, sin filtros).`);
+    }
+
     let count = 0;
     let skipped = 0;
     if (enEspera.length > 0) {
@@ -150,7 +166,7 @@ export async function importFromFirebase(options: { full?: boolean } = {}): Prom
       const r = await importBasculaTickets(tickets, "firebase-auto", { enEspera: false });
       count += r.count; skipped += r.skipped;
     }
-    return { ok: true, count, skipped };
+    return { ok: true, count, skipped, fetched };
   } catch (err) {
     return { ok: false, reason: (err as Error).message };
   }
