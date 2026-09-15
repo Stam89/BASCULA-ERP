@@ -71,6 +71,8 @@ export function ensureLaborTables(): Promise<void> {
       // Tarifa global de SECADO como servicio al cliente (maquila): $ por QQ.
       await pool.query(`ALTER TABLE labor_rates ADD COLUMN IF NOT EXISTS secado_servicio_per_qq NUMERIC(10,4) NOT NULL DEFAULT 0`);
       await pool.query(`ALTER TABLE worker_payments ADD COLUMN IF NOT EXISTS tulas NUMERIC(14,3) NOT NULL DEFAULT 0`);
+      // Detalle legible del pago (ej. secador: "Secado - Inicio: DD/MM/YYYY HH:MM · Guardianía + N túnel(es)").
+      await pool.query(`ALTER TABLE worker_payments ADD COLUMN IF NOT EXISTS notes TEXT`);
       // Fila única de tarifas por defecto.
       await pool.query(`INSERT INTO labor_rates (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
     })();
@@ -343,7 +345,7 @@ laborRouter.get("/worker-receipt", asyncRoute(async (req, res) => {
 
   const rates = await getRates();
   const recs = await pool.query(
-    `SELECT wp.id, wp.work_date::date AS fecha, wp.reference_type, wp.reference_id,
+    `SELECT wp.id, wp.work_date::date AS fecha, wp.reference_type, wp.reference_id, wp.notes,
             wp.qq::float qq, wp.sacas::float sacas, wp.arrocillo::float arrocillo,
             wp.tulas::float tulas, wp.tunnels, wp.base_amount::float base_amount,
             wp.discount::float discount, wp.net_amount::float net_amount, wp.status,
@@ -364,9 +366,10 @@ laborRouter.get("/worker-receipt", asyncRoute(async (req, res) => {
     const lote = (r.lot_code as string) ?? null;
     let concepto = "", cantidad = "", tarifa = "";
     if (q.role === "SECADOR") {
-      concepto = `Guardianía${tunnels ? ` + ${tunnels} túnel(es)` : ""}`;
+      // Detalle explícito con el ANCLA DE INICIO (ej. "Secado - Inicio: 15/09/2026 18:30 · Guardianía + 2 túnel(es)").
+      concepto = (r.notes as string | null)?.trim() || `Guardianía${tunnels ? ` + ${tunnels} túnel(es)` : ""}`;
       cantidad = `${tunnels} túnel(es)`;
-      tarifa = `$${rates.secador_per_tunel}/túnel`;
+      tarifa = `$${rates.secador_per_tunel}/túnel + $${rates.secador_guardiania} guard.`;
     } else if (q.role === "PILADOR") {
       concepto = lote ? `Pilada · Lote ${lote}` : "Pilada";
       cantidad = `${qq.toFixed(2)} QQ${sacas ? ` · ${sacas.toFixed(0)} sacas` : ""}`;
