@@ -2624,6 +2624,29 @@ export function App() {
     () => (Array.isArray(millingPiladoEntries) ? millingPiladoEntries : []).reduce((sum, entry) => sum + entry.quantityQq, 0),
     [millingPiladoEntries]
   );
+  // ¿El lote seleccionado para pilar es de SERVICIO (maquila / sufijo -P)? Se usa
+  // para: (a) el texto informativo (servicio → cobro en CxC, no «Gana»); (b) NO
+  // redirigir a «Gana» al finalizar. Señal: operation_type ≠ COMPRA, o el código
+  // termina en -P/-S, o is_maquila. (Los 'Solo Secado' -S ni llegan aquí.)
+  const millingEsServicio = useMemo(() => {
+    const esServicioLot = (l: unknown): boolean => {
+      const o = l as { operation_type?: unknown; is_maquila?: unknown; lot_code?: unknown };
+      const op = o.operation_type != null ? String(o.operation_type).toUpperCase() : "";
+      if (op) return op !== "COMPRA";
+      if (/-[SP]$/i.test(String(o.lot_code ?? ""))) return true;
+      const m = o.is_maquila;
+      return m === true || m === 1 || m === "t" || m === "true";
+    };
+    if (productionSource === "stock") return selectedStockLot ? esServicioLot(selectedStockLot) : false;
+    return (selectedProductionDrying?.lots ?? []).some(esServicioLot);
+  }, [productionSource, selectedStockLot, selectedProductionDrying]);
+  // Validez para habilitar el guardado/finalización: al menos un ítem de arroz
+  // pilado y subproductos NO negativos (rendimiento mayor al ingreso SÍ se permite).
+  const millingSubproductosOk = useMemo(() => {
+    const b = Number(millingReport.broken34 || 0), f = Number(millingReport.fineBroken || 0), p = Number(millingReport.polvillo || 0);
+    return b >= 0 && f >= 0 && p >= 0;
+  }, [millingReport.broken34, millingReport.fineBroken, millingReport.polvillo]);
+  const millingPuedeGuardar = millingPiladoTotalQq > 0 && millingSubproductosOk;
   // Desglose del MIX: QQ que va en tulas (→ Selección) vs en sacos (comercial) y
   // el conteo de tulas (base del estibador). Alimenta los totales y el submit.
   const millingMix = useMemo(() => {
@@ -7862,16 +7885,21 @@ export function App() {
     }
     await loadMillingDrafts();
     await loadProductionHistory();
-    // La liquidación de rendimiento vive en su propio módulo "Gana": el cierre no
-    // muestra cuadros en Producción; se guarda el reporte y se lleva al usuario a
-    // Gana (donde ya está disponible su cuadro), respetando el permiso del módulo.
-    if (visibleTabs.includes("Gana")) {
+    if (production.custodyMode) {
+      // Lote de SERVICIO (maquila / sufijo -P): NO se crea cuadro en «Gana» (ese
+      // módulo es solo para lotes propios) ni se redirige allí. El cobro del
+      // servicio de pilada ya quedó registrado en Cuentas por Cobrar por el backend.
+      setMessage("Lote de servicio finalizado: el cobro del servicio se registró en Cuentas por Cobrar.");
+    } else if (visibleTabs.includes("Gana")) {
+      // Lote propio: la liquidación de rendimiento vive en «Gana». Se guarda el
+      // reporte y se lleva al usuario allí, respetando el permiso del módulo.
       setActiveTab("Gana");
       addToast("📋 Cuadro de rendimiento disponible en «Gana».", "success");
+      setMessage("Lote finalizado: reporte de rendimiento disponible en «Gana»");
     } else {
       addToast("📋 Cuadro de rendimiento guardado (módulo «Gana»).", "success");
+      setMessage("Lote finalizado: reporte de rendimiento disponible en «Gana»");
     }
-    setMessage("Lote finalizado: reporte de rendimiento disponible en «Gana»");
     await refresh();
   }
 
@@ -10940,18 +10968,24 @@ export function App() {
                   registrando en Nómina (backend) con el rol Polvillo; solo no se
                   muestra el cálculo aquí. */}
 
-              {/* La liquidación de rendimiento vive en su propio módulo «Gana»:
-                  al finalizar el lote se guarda el cuadro y se abre allí. */}
-              <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>📋 Al finalizar, el cuadro de rendimiento se guarda y se abre en el módulo <strong>«Gana»</strong>.</p>
+              {/* Texto informativo dinámico: servicio → cobro en CxC (no «Gana»);
+                  lote propio → cuadro de rendimiento en «Gana». */}
+              {millingEsServicio ? (
+                <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>📋 Al finalizar, se registrará el cobro del servicio en <strong>Cuentas por Cobrar</strong>.</p>
+              ) : (
+                <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>📋 Al finalizar, el cuadro de rendimiento se guarda y se abre en el módulo <strong>«Gana»</strong>.</p>
+              )}
 
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center", marginTop: 8 }}>
                 <button type="button" className="btnSecondary" onClick={() => saveMillingProcess().catch((e) => addToast(e.message, "error"))}
-                  disabled={productionSource !== "drying" || !selectedProductionDrying}
-                  title={productionSource === "stock" ? "El origen desde stock no usa borradores: finaliza directo" : undefined}
+                  disabled={!selectedProductionDrying || !millingPuedeGuardar}
+                  title={productionSource === "stock" ? "El origen desde stock no usa borradores: finaliza directo" : (!millingPuedeGuardar ? "Agrega al menos un arroz pilado; los subproductos no pueden ser negativos" : undefined)}
                   style={{ flex: "1 1 200px", maxWidth: 300, padding: "12px 16px", fontSize: 15, fontWeight: 700, borderRadius: 10, background: "transparent", border: "1.5px solid #2563eb", color: "#2563eb" }}>
                   💾 Guardar Proceso
                 </button>
-                <button className="primary" type="button" onClick={() => finalizeMillingLot().catch((error) => setMessage(error.message))} disabled={!millingSource}
+                <button className="primary" type="button" onClick={() => finalizeMillingLot().catch((error) => { setMessage(error.message); addToast(error.message || "No se pudo finalizar el lote. Sigue disponible para reintentar.", "error"); })}
+                  disabled={!millingSource || !millingPuedeGuardar}
+                  title={!millingSource ? "Selecciona un lote/secadora" : (!millingPuedeGuardar ? "Agrega al menos un arroz pilado; los subproductos no pueden ser negativos" : undefined)}
                   style={{ flex: "1 1 200px", maxWidth: 320, padding: "12px 16px", fontSize: 15, fontWeight: 800, borderRadius: 10, background: "var(--c-success)" }}>
                   ✅ Finalizar Lote
                 </button>

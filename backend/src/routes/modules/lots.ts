@@ -209,9 +209,12 @@ lotsRouter.get("/dry-in-storage", asyncRoute(async (req, res) => {
          SELECT 1 FROM drying_tunnel_reports d
          WHERE d.lot_id = l.id AND d.status = 'IN_PROGRESS'
        )
+       -- Solo un proceso YA CERRADO (finished_at) saca al lote de la lista. Un
+       -- batch abierto por un intento fallido NO lo oculta: se puede reintentar
+       -- (el POST de producción reutiliza ese batch abierto en vez de duplicar).
        AND NOT EXISTS (
          SELECT 1 FROM processing_batches b
-         WHERE b.lot_id = l.id AND b.status <> 'CANCELLED'
+         WHERE b.lot_id = l.id AND b.finished_at IS NOT NULL
        )
      GROUP BY l.id, f.full_name
      HAVING COALESCE(SUM(t.quintals), 0) > 0

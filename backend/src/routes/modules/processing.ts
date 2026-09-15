@@ -478,10 +478,13 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
     const outputs = buildOutputRows(body);
     const totalOutputKg = round3(outputs.reduce((sum, item) => sum + item.kg, 0));
 
-    const processLossKg = round3(inputPaddyKg - totalOutputKg);
-    if (processLossKg < 0) {
-      throw new ApiError(400, "La salida total no puede superar el peso neto inicial");
-    }
+    // Merma = ingreso - salida. En el negocio arrocero un rendimiento MAYOR al
+    // peso de ingreso es un beneficio real (grano que rinde más), NO un error: NO
+    // se bloquea el guardado. Cuando la salida supera al ingreso no hay merma (se
+    // registra 0; la ganancia de rendimiento queda reflejada en yield_percent, que
+    // supera el 100%). El clamp a 0 respeta además los CHECK de la BD
+    // (processing_losses.quantity >= 0 y production_yields.process_loss_kg >= 0).
+    const processLossKg = round3(Math.max(0, inputPaddyKg - totalOutputKg));
 
     const processedQq = outputToQq(body.white_rice);
     const sacksUsed = round3(body.sacks_used ?? 0);

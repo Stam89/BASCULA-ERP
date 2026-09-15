@@ -199,7 +199,7 @@ processFlowRouter.get("/drying/reports", asyncRoute(async (req, res) => {
   const result = await pool.query(
     `SELECT d.*,
             EXISTS (
-              SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id
+              SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id AND b.finished_at IS NOT NULL
             ) AS is_processed,
             COALESCE(
               jsonb_agg(
@@ -712,7 +712,7 @@ processFlowRouter.get("/lots/:lotId", asyncRoute(async (req, res) => {
     pool.query(
       `SELECT d.*,
               EXISTS (
-                SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id
+                SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id AND b.finished_at IS NOT NULL
               ) AS is_processed,
               COALESCE(
                 jsonb_agg(
@@ -1279,7 +1279,7 @@ async function getDryingReportById(client: PoolClient, dryingId: string) {
   const result = await client.query(
     `SELECT d.*,
             EXISTS (
-              SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id
+              SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id AND b.finished_at IS NOT NULL
             ) AS is_processed,
             COALESCE(
               jsonb_agg(
