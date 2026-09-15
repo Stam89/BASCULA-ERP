@@ -235,6 +235,17 @@ const defaultLaborRates: LaborRates = {
   secado_servicio_per_qq: 0
 };
 
+// Coacciona TODO campo de tarifas a número (por si el backend/driver devolviera
+// strings desde columnas NUMERIC/DECIMAL). Un valor no numérico cae al default.
+function coerceLaborRates(src: Record<string, unknown>): LaborRates {
+  const out = { ...defaultLaborRates };
+  (Object.keys(defaultLaborRates) as (keyof LaborRates)[]).forEach((k) => {
+    const n = Number(src[k]);
+    out[k] = Number.isFinite(n) ? n : defaultLaborRates[k];
+  });
+  return out;
+}
+
 type WorkerSummary = {
   worker_role: string;
   worker_name: string;
@@ -3222,9 +3233,15 @@ export function App() {
   // Las tarifas (incluidos los precios del combustible) las usan varias
   // pantallas: Secadoras, Nómina y Configuración.
   async function loadLaborRates() {
-    const rates = await apiGet<LaborRates>("/labor/rates").catch(() => null);
-    if (rates) { laborRatesPristine.current = rates; setLaborRatesForm(rates); setLaborRatesLoaded(true); }
-    else setLaborRatesLoaded(false); // falló el fetch: los precios NO son confiables
+    const raw = await apiGet<LaborRates | LaborRates[]>("/labor/rates").catch(() => null);
+    if (!raw) { setLaborRatesLoaded(false); return; } // falló el fetch: precios NO confiables
+    // Defensa de MAPEO: si la API devolviera un array, usar el primer elemento.
+    const src = (Array.isArray(raw) ? raw[0] : raw) as Record<string, unknown> | undefined;
+    if (!src) { setLaborRatesLoaded(false); return; }
+    // Defensa de TIPOS: columnas NUMERIC/DECIMAL pueden llegar como string → se
+    // fuerza Number() en TODOS los campos (bombona/cilindro/diésel incluidos).
+    const rates = coerceLaborRates(src);
+    laborRatesPristine.current = rates; setLaborRatesForm(rates); setLaborRatesLoaded(true);
   }
 
   type PackagingRates = { precio_saco_10lb: number; precio_saco_25lb: number; precio_saco_50lb: number };
