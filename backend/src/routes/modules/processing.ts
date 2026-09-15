@@ -377,7 +377,10 @@ async function calcularServicioPilado(
 
   const total = round2(detalle.reduce((s, d) => s + d.subtotal, 0));
   const qq = round2(detalle.reduce((s, d) => s + d.quintales, 0));
-  return { detalle, total, quintales: qq, tarifa_promedio_qq: qq > 0 ? round2(total / qq) : base };
+  // adicional = recargos por sacos < 100 lb (arroba / 10 lb), sumados directo del
+  // desglose (no como total-base, para no arrastrar redondeos de $0.01).
+  const adicional_sacos = round2(detalle.reduce((s, d) => s + d.quintales * d.recargo_qq, 0));
+  return { detalle, total, quintales: qq, precio_base_qq: base, adicional_sacos, tarifa_promedio_qq: qq > 0 ? round2(total / qq) : base };
 }
 
 function buildOutputRows(body: FinishProductionInput) {
@@ -676,27 +679,15 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
     );
     const serviceRate = servicio.tarifa_promedio_qq;
     const piladoAmount = cobraServicio ? servicio.total : 0;
-    // ── Componente de SECADO (servicio completo Secado + Pilado) ──
-    // Solo para lotes de SERVICIO (maquila): al pilar, se cobra también el secado
-    // (QQ procesados × tarifa global) salvo que ya se haya cobrado por separado en
-    // el formulario "Solo Servicio de Secado". Los lotes de socios no lo llevan.
-    let secadoAmount = 0;
-    let secadoRate = 0;
-    // El secado solo se cobra en el 'Servicio Completo' (SECADO_PILADO), que sí se
-    // secó aquí. 'Solo Servicio de Pilada' (PILADO) llega ya seco: no lleva secado.
+    // ── REGLA DE NEGOCIO 'Servicio Completo' (SECADO_PILADO) ──
+    // La tarifa de PILADO ($3.75/QQ) YA INCLUYE todo el proceso de secado. NO se
+    // cobra un rubro separado de secado ($1.50/QQ): eso duplicaba el cobro. El
+    // único adicional válido es el recargo por sacos < 100 lb (arroba / 10 lb),
+    // que ya viene sumado dentro de `piladoAmount` (calcularServicioPilado).
     const esServicioCompleto = String(batch.lot_operation_type ?? "") === "SECADO_PILADO";
-    if (isMaquila && esServicioCompleto && piladoAmount > 0) {
-      const yaSecado = await client.query(
-        "SELECT 1 FROM accounts_receivable WHERE reference_type = 'secado_service' AND reference_id = $1 LIMIT 1",
-        [body.lot_id]
-      );
-      if (!yaSecado.rowCount) {
-        const rr = await client.query("SELECT COALESCE(secado_servicio_per_qq, 0)::float AS r FROM labor_rates WHERE id = 1");
-        secadoRate = Number(rr.rows[0]?.r ?? 0);
-        secadoAmount = round2(processedQq * secadoRate);
-      }
-    }
-    const serviceAmount = round2(piladoAmount + secadoAmount);
+    const secadoAmount = 0; // se elimina el rubro de secado en Servicio Completo
+    const secadoRate = 0;
+    const serviceAmount = round2(piladoAmount);
     let maquilaOrderId: string | null = null;
     let receivableId: string | null = null;
     let clienteNombre = "";
@@ -719,8 +710,12 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       const desglose = servicio.detalle
         .map((d) => `${d.quintales} QQ en ${d.presentacion} a $${d.precio_total_qq}/QQ = $${d.subtotal}`)
         .join(" · ");
-      const desc = secadoAmount > 0
-        ? `Servicio Secado + Pilado a ${clienteNombre}: ${servicio.quintales} QQ — Secado: ${processedQq} QQ × $${secadoRate}/QQ = $${secadoAmount} · Pilado: ${desglose}`
+      // 'Servicio Completo': tarifa unificada $3.75/QQ (incluye secado) + adicional
+      // por sacos < 100 lb si aplica. Otros (Solo Pilada, socio): desglose normal.
+      const montoBase = round2(servicio.quintales * servicio.precio_base_qq);
+      const adic = servicio.adicional_sacos;
+      const desc = esServicioCompleto
+        ? `Servicio Completo (Secado + Pilado) a ${clienteNombre}: ${servicio.quintales} QQ × $${servicio.precio_base_qq}/QQ = $${montoBase}${adic > 0.005 ? ` (+ Adicional Sacos <100lb: $${adic})` : ""}`
         : `Pilado a ${clienteNombre}: ${servicio.quintales} QQ — ${desglose}`;
 
       const receivable = await client.query(
