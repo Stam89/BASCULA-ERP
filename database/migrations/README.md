@@ -23,7 +23,16 @@ Requiere la variable `DATABASE_URL` (la misma que usa el backend, en el archivo
 
 1. `npm run db:init` — crea el esquema base (`database/schema.sql`).
 2. `npm run db:migrate` — aplica todas las migraciones encima.
-3. `npm run db:seed` — (opcional) datos iniciales.
+3. Configura en `backend/.env` los datos de la empresa:
+   `COMPANY_NAME`, `COMPANY_CODE`, `COMPANY_PHONE`, `COMPANY_ADDRESS`,
+   `SEED_ADMIN_USERNAME` y `SEED_ADMIN_PASSWORD`.
+4. `npm run db:company:init` — prepara la Matriz, datos del negocio y usuario
+   administrador inicial sin borrar información existente.
+5. `npm run db:seed` — carga catálogos base (productos, bodegas, categorías).
+
+`COMPANY_REPLACE_MATRIZ=true` solo debe usarse cuando se quiere renombrar una
+Matriz existente de forma intencional. Por defecto, una matriz real ya creada se
+respeta para no cambiar datos de una empresa en operación.
 
 ## Crear una migración nueva
 

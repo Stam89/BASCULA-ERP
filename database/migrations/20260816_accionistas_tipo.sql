@@ -3,6 +3,7 @@
 ALTER TABLE accionistas
   ADD COLUMN IF NOT EXISTS tipo VARCHAR(20) NOT NULL DEFAULT 'SOCIO';
 
--- CEYRO es la planta/matriz (id canonico usado en todo el sistema).
+-- El primer accionista de una instalación nueva se clasifica como Matriz. El
+-- código operativo lo resuelve por tipo; no depende de este UUID.
 UPDATE accionistas SET tipo = 'MATRIZ'
   WHERE id = '00000000-0000-0000-0000-000000000001';

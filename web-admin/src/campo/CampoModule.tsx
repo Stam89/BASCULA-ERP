@@ -153,8 +153,8 @@ type PorCobrar = { por_cliente: PorCobrarCliente[]; detalle: PorCobrarDetalle[];
 type Maquina = { activo_id: string | null; activo_nombre: string; activo_tipo: string | null; ingresos: number; gastos: number; ganancia: number; qq: number; gastos_por_categoria: Array<{ categoria: string; gasto: number }> };
 type PorMaquina = { periodo: { desde: string; hasta: string }; maquinas: Maquina[] };
 
-export default function CampoModule({ section = "caja", nombre, onNombreChange }: {
-  section?: CampoSeccion; nombre?: string; onNombreChange?: (n: string) => void;
+export default function CampoModule({ section = "caja", nombre, matrizName = "Matriz", onNombreChange }: {
+  section?: CampoSeccion; nombre?: string; matrizName?: string; onNombreChange?: (n: string) => void;
 }) {
   const [flash, setFlash] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
   const notify = (text: string, kind: "ok" | "err" = "ok") => { setFlash({ text, kind }); setTimeout(() => setFlash(null), 3500); };
@@ -209,11 +209,11 @@ export default function CampoModule({ section = "caja", nombre, onNombreChange }
   }
 
   if (section === "clientes") {
-    return <section className="panelGrid">{flashEl}<ClientesView nombreOperacion={nombre ?? "Campo"} onNotify={notify} onError={(m) => notify(m, "err")} /></section>;
+    return <section className="panelGrid">{flashEl}<ClientesView nombreOperacion={nombre ?? "Campo"} matrizName={matrizName} onNotify={notify} onError={(m) => notify(m, "err")} /></section>;
   }
 
   if (section === "cxc") {
-    return <section className="panelGrid">{flashEl}<CxCView nombreOperacion={nombre ?? "Campo"} onNotify={notify} onError={(m) => notify(m, "err")} /></section>;
+    return <section className="panelGrid">{flashEl}<CxCView nombreOperacion={nombre ?? "Campo"} matrizName={matrizName} onNotify={notify} onError={(m) => notify(m, "err")} /></section>;
   }
 
   if (section === "cxp") {
@@ -598,8 +598,8 @@ async function patchCliente(id: string, body: unknown): Promise<void> {
   const r = await apiFetch(`/campo/clientes/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error || "No se pudo actualizar el cliente");
 }
-function ClientesView({ nombreOperacion, onNotify, onError }: {
-  nombreOperacion: string; onNotify: (m: string, k?: "ok" | "err") => void; onError: (m: string) => void;
+function ClientesView({ nombreOperacion, matrizName, onNotify, onError }: {
+  nombreOperacion: string; matrizName: string; onNotify: (m: string, k?: "ok" | "err") => void; onError: (m: string) => void;
 }) {
   const [q, setQ] = useState("");
   const [estado, setEstado] = useState<"" | "al_dia" | "pendiente">("");
@@ -709,7 +709,7 @@ function ClientesView({ nombreOperacion, onNotify, onError }: {
       </div>
 
       {verCuenta && (
-        <EstadoCuentaModal cliente={verCuenta} nombreOperacion={nombreOperacion}
+        <EstadoCuentaModal cliente={verCuenta} nombreOperacion={nombreOperacion} matrizName={matrizName}
           onClose={() => setVerCuenta(null)} onError={onError} />
       )}
       {editar && (
@@ -885,8 +885,8 @@ function ConvertirAplicarModal({ credito, onClose, onDone, onError }: {
 }
 
 // Modal: ficha de Estado de Cuenta con rango de fecha, línea de tiempo y impresión.
-function EstadoCuentaModal({ cliente, nombreOperacion, onClose, onError }: {
-  cliente: ClienteCuenta; nombreOperacion: string; onClose: () => void; onError: (m: string) => void;
+function EstadoCuentaModal({ cliente, nombreOperacion, matrizName, onClose, onError }: {
+  cliente: ClienteCuenta; nombreOperacion: string; matrizName: string; onClose: () => void; onError: (m: string) => void;
 }) {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -921,7 +921,7 @@ function EstadoCuentaModal({ cliente, nombreOperacion, onClose, onError }: {
         .box{border:1px solid #ccc;border-radius:8px;padding:8px 10px;min-width:150px;text-align:right}</style></head>
       <body>
         <div class="head">
-          <div><h1>${nombreOperacion} · CEYRO</h1><div class="muted">Estado de Cuenta de Cliente</div></div>
+          <div><h1>${nombreOperacion} · ${matrizName}</h1><div class="muted">Estado de Cuenta de Cliente</div></div>
           <div class="box"><div class="muted">SALDO ACTUAL</div><div style="font-size:18px;font-weight:700">$ ${ec.saldo_final.toFixed(2)}</div></div>
         </div>
         <div><strong>${cliente.nombre}</strong> ${cliente.identificacion ? `· ${cliente.identificacion}` : ""}</div>
@@ -1546,8 +1546,8 @@ function CierreCajaModal({ onClose, onDone, onError }: {
 // ── 📥 Cuentas por Cobrar (Transporte): lee los saldos de campo_servicios ─────
 // (misma fuente única que Clientes/Reportes → cero doble contabilidad) y permite
 // registrar un abono directo del agricultor que se reparte FIFO entre sus servicios.
-function CxCView({ nombreOperacion, onNotify, onError }: {
-  nombreOperacion: string; onNotify: (m: string, k?: "ok" | "err") => void; onError: (m: string) => void;
+function CxCView({ nombreOperacion, matrizName, onNotify, onError }: {
+  nombreOperacion: string; matrizName: string; onNotify: (m: string, k?: "ok" | "err") => void; onError: (m: string) => void;
 }) {
   const [data, setData] = useState<{ clientes: ClienteCuenta[]; total_pendiente: number } | null>(null);
   const [cuentas, setCuentas] = useState<Cuenta[]>([]);
@@ -1613,7 +1613,7 @@ function CxCView({ nombreOperacion, onNotify, onError }: {
           onError={onError} />
       )}
       {verCuenta && (
-        <EstadoCuentaModal cliente={verCuenta} nombreOperacion={nombreOperacion}
+        <EstadoCuentaModal cliente={verCuenta} nombreOperacion={nombreOperacion} matrizName={matrizName}
           onClose={() => setVerCuenta(null)} onError={onError} />
       )}
     </>
@@ -2325,13 +2325,14 @@ function OperadoresCatalogo({ operadores, onChanged, onError }: {
 // ── Contexto AISLADO de Campo: layout propio (sidebar + menú Captura/Reportes) ──
 // Se renderiza en lugar del layout estándar cuando la operación activa es Campo.
 // El resto de operaciones (Planta/Matriz, socios) no se ven aquí.
-export function CampoWorkspace({ operationSelector, userName, roleName, apiOnline, onLogout, nombre, onNombreChange }: {
+export function CampoWorkspace({ operationSelector, userName, roleName, apiOnline, onLogout, nombre, matrizName, onNombreChange }: {
   operationSelector: ReactNode;
   userName: string;
   roleName: string;
   apiOnline: boolean;
   onLogout: () => void;
   nombre: string;               // nombre editable de la operación (campo_config)
+  matrizName: string;
   onNombreChange: (n: string) => void;
 }) {
   const [seccion, setSeccion] = useState<CampoSeccion>("caja");
@@ -2344,7 +2345,7 @@ export function CampoWorkspace({ operationSelector, userName, roleName, apiOnlin
           <span className="brandMark">🚜</span>
           <div>
             <strong>{nombre}</strong>
-            <small>Operación · CEYRO</small>
+            <small>Operación · {matrizName}</small>
           </div>
         </div>
         {operationSelector}
@@ -2369,7 +2370,7 @@ export function CampoWorkspace({ operationSelector, userName, roleName, apiOnlin
             <button className="logoutBtn" title="Cerrar sesión" onClick={onLogout}>⏻</button>
           </div>
           <span className={apiOnline ? "apiState on" : "apiState"}><i />API {apiOnline ? "conectada" : "sin conexión"}</span>
-          <small>{nombre} · CEYRO</small>
+          <small>{nombre} · {matrizName}</small>
         </div>
       </aside>
 
@@ -2385,7 +2386,7 @@ export function CampoWorkspace({ operationSelector, userName, roleName, apiOnlin
           </div>
         </header>
         <div className="content">
-          <CampoModule section={seccion} nombre={nombre} onNombreChange={onNombreChange} />
+          <CampoModule section={seccion} nombre={nombre} matrizName={matrizName} onNombreChange={onNombreChange} />
         </div>
       </section>
     </main>

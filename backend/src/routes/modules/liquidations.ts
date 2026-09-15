@@ -9,12 +9,9 @@ import { round2 } from "../../utils/rice-formulas.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { cruzarFleteInterno, type CruceFleteResultado } from "../../services/campo-cruce-flete.js";
 import { amortizarFomentosLIFO, generarFomentoSaldoEnContra, revertirPagosFomentoDeLiquidacion, type AmortizacionFomentoResultado } from "../../services/fomento-liquidacion.js";
+import { getMatrizId } from "../../services/matriz.js";
 
 export const liquidationsRouter = Router();
-
-// MATRIZ CEYRO (Planta). Las retenciones de Báscula se le acreditan; si el que
-// liquida ES la matriz, no se genera deuda inter-compañía consigo misma.
-const CEYRO_MATRIZ_ID = "00000000-0000-0000-0000-000000000001";
 
 // Columna de bloqueo de edición: las liquidaciones nacen BLOQUEADAS y solo un
 // ADMINISTRADOR puede desbloquearlas (set-lock) para corregir precio o
@@ -306,8 +303,9 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
     let retenciones: { bascula_matriz: number; cosechadora_campo: number } | null = null;
     const bascula = data.discount_breakdown?.bascula ?? 0;
     const cosechadora = data.discount_breakdown?.cosechadora ?? 0;
-    if ((bascula > 0 || cosechadora > 0) && accionistaId && accionistaId !== CEYRO_MATRIZ_ID) {
-      // (1) BÁSCULA → Matriz (CEYRO): el socio asume CxP a favor de la Matriz.
+    const matrizId = await getMatrizId(client);
+    if ((bascula > 0 || cosechadora > 0) && accionistaId && accionistaId !== matrizId) {
+      // (1) BÁSCULA → Matriz: el socio asume CxP a favor de la Matriz.
       if (bascula > 0) {
         // Detalle HUMANIZADO: sin el #LIQ crudo. Especifica el peso/ticket de
         // báscula y el agricultor de origen, para que en "Ver detalle y Cobrar"
@@ -333,7 +331,7 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
         await client.query(
           `INSERT INTO accounts_receivable (farmer_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
            VALUES (NULL, $1, $1, 'CONFIRMED', $2, 'retencion_matriz', $3, $4)`,
-          [bascula, CEYRO_MATRIZ_ID, liquidation.rows[0].id, retDesc]
+          [bascula, matrizId, liquidation.rows[0].id, retDesc]
         );
       }
       // (2) COSECHADORA → Transporte y Cosechadora (Campo): mismo cruce que los

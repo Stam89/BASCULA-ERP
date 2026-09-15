@@ -5,13 +5,11 @@ import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
+import { getMatriz, getMatrizId } from "../../services/matriz.js";
 
 export const piladoRouter = Router();
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
-
-// El proveedor del servicio es siempre el accionista principal (CEYRO).
-const CEYRO_ID = "00000000-0000-0000-0000-000000000001";
 
 // Lista servicios de pilado en un rango, con nombres de accionistas.
 piladoRouter.get("/services", asyncRoute(async (req, res) => {
@@ -85,7 +83,7 @@ piladoRouter.get("/services/:id", asyncRoute(async (req, res) => {
   });
 }));
 
-// Saldo pendiente que cada cliente (accionista o externo) le debe a CEYRO.
+// Saldo pendiente que cada cliente (accionista o externo) le debe a la matriz.
 piladoRouter.get("/balances", asyncRoute(async (_req, res) => {
   const result = await pool.query(
     `SELECT COALESCE(a.name, s.client_name, 'Cliente') AS name,
@@ -101,8 +99,8 @@ piladoRouter.get("/balances", asyncRoute(async (_req, res) => {
   res.json(result.rows);
 }));
 
-// Registra un servicio de pilado (secado + pilado) que CEYRO le presta a otro
-// accionista: genera cuenta por cobrar para CEYRO y por pagar para el cliente.
+// Registra un servicio de pilado (secado + pilado) que la matriz le presta a otro
+// accionista: genera cuenta por cobrar para la matriz y por pagar para el cliente.
 piladoRouter.post("/services", asyncRoute(async (req, res) => {
   const body = z.object({
     client_accionista_id: z.string().uuid().optional(),
@@ -116,10 +114,11 @@ piladoRouter.post("/services", asyncRoute(async (req, res) => {
   }).parse(req.body);
 
   // Cliente: un accionista (genera también cuenta por pagar) o uno externo por
-  // nombre (solo cuenta por cobrar para CEYRO).
+  // nombre (solo cuenta por cobrar para la matriz).
+  const matriz = await getMatriz();
   let clientName: string;
   if (body.client_accionista_id) {
-    if (body.client_accionista_id === CEYRO_ID) throw new ApiError(400, "El servicio se le cobra a otro cliente, no a CEYRO.");
+    if (body.client_accionista_id === matriz.id) throw new ApiError(400, "El servicio se le cobra a otro cliente, no a la matriz.");
     const client = await pool.query("SELECT name FROM accionistas WHERE id = $1", [body.client_accionista_id]);
     if (!client.rowCount) throw new ApiError(404, "Accionista cliente no encontrado");
     clientName = client.rows[0].name;
@@ -133,12 +132,12 @@ piladoRouter.post("/services", asyncRoute(async (req, res) => {
   const desc = `Servicio de pilado (secado + pilado) a ${clientName}: ${body.quintals} QQ`;
 
   const result = await inTransaction(async (tx) => {
-    // Ingreso / cuenta por cobrar para CEYRO (siempre).
+    // Ingreso / cuenta por cobrar para la matriz (siempre).
     const ar = await tx.query(
       `INSERT INTO accounts_receivable (accionista_id, reference_type, reference_id, description, amount, balance)
        VALUES ($1, 'pilado_service', NULL, $2, $3, $3)
        RETURNING id`,
-      [CEYRO_ID, desc, total]
+      [matriz.id, desc, total]
     );
     // Cuenta por pagar solo si el cliente es un accionista.
     let payableId: string | null = null;
@@ -156,7 +155,7 @@ piladoRouter.post("/services", asyncRoute(async (req, res) => {
          (service_date, provider_accionista_id, client_accionista_id, client_name, lot_id, quintals, rate_per_qq, total, receivable_id, payable_id, notes, created_by)
        VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING *`,
-      [body.service_date ?? null, CEYRO_ID, body.client_accionista_id ?? null, body.client_accionista_id ? null : clientName,
+      [body.service_date ?? null, matriz.id, body.client_accionista_id ?? null, body.client_accionista_id ? null : clientName,
        body.lot_id ?? null, body.quintals, body.rate_per_qq, total, ar.rows[0].id, payableId, body.notes ?? null, body.created_by ?? null]
     );
     await tx.query("UPDATE accounts_receivable SET reference_id = $2 WHERE id = $1", [ar.rows[0].id, service.rows[0].id]);
@@ -168,7 +167,7 @@ piladoRouter.post("/services", asyncRoute(async (req, res) => {
 }));
 
 // Registra el pago (total o parcial) de un servicio de pilado. CONTABLEMENTE:
-//   · Baja la cuenta por COBRAR de CEYRO e INGRESA la plata a su caja (INCOME).
+//   · Baja la cuenta por COBRAR de la matriz e INGRESA la plata a su caja (INCOME).
 //   · Si el cliente es un accionista, el espejo baja su cuenta por PAGAR y SACA
 //     la plata de su caja (EXPENSE). Si es cliente externo, solo cobra CEYRO.
 // Antes solo bajaba los saldos y NO tocaba la caja: la plata cobrada nunca
@@ -191,7 +190,7 @@ piladoRouter.post("/services/:id/settle", asyncRoute(async (req, res) => {
     if (!svc.rowCount) throw new ApiError(404, "Servicio no encontrado");
     const { receivable_id, provider_accionista_id, cliente } = svc.rows[0];
 
-    // La cuenta por cobrar de CEYRO existe siempre; es la fuente del saldo.
+    // La cuenta por cobrar de la matriz existe siempre; es la fuente del saldo.
     const ar = await tx.query("SELECT balance FROM accounts_receivable WHERE id = $1 FOR UPDATE", [receivable_id]);
     const balance = Number(ar.rows[0]?.balance ?? 0);
     if (balance <= 0) throw new ApiError(400, "Este servicio ya está pagado.");
@@ -202,7 +201,7 @@ piladoRouter.post("/services/:id/settle", asyncRoute(async (req, res) => {
 
     await tx.query("UPDATE accounts_receivable SET balance = $2, status = $3 WHERE id = $1", [receivable_id, newBalance, newStatus]);
 
-    // INGRESO en la caja de CEYRO (quien cobra): la indicada, o su caja abierta.
+    // INGRESO en la caja de la matriz (quien cobra): la indicada, o su caja abierta.
     let cajaId: string | null = body.cash_register_id ?? null;
     if (!cajaId) {
       const caja = await tx.query(
@@ -231,7 +230,7 @@ piladoRouter.post("/services/:id/settle", asyncRoute(async (req, res) => {
       desde: "receivable",
       cuentaId: String(receivable_id),
       monto: pay,
-      descripcion: "Pago de servicio de pilado a CEYRO"
+      descripcion: "Pago de servicio de pilado a la matriz"
     });
 
     return { paid: pay, remaining: newBalance, status: newStatus, caja_registrada: cajaRegistrada, espejo };
@@ -282,7 +281,7 @@ piladoRouter.get("/entidades", asyncRoute(async (_req, res) => {
 // Resuelve la entidad (socio o cliente) a columnas + nombre denormalizado.
 async function resolverEntidadTarifa(tipo: "SOCIO" | "CLIENTE", id: string) {
   if (tipo === "SOCIO") {
-    if (id === CEYRO_ID) throw new ApiError(400, "CEYRO es la matriz; no se le asigna tarifa de servicio.");
+    if (id === await getMatrizId()) throw new ApiError(400, "La matriz no recibe una tarifa de servicio como cliente.");
     const a = await pool.query("SELECT name FROM accionistas WHERE id = $1", [id]);
     if (!a.rowCount) throw new ApiError(404, "Socio no encontrado");
     return { socio_id: id, customer_id: null as string | null, cliente_nombre: a.rows[0].name as string };

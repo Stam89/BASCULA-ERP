@@ -11,12 +11,10 @@ import { nextCode } from "../../utils/codes.js";
 import { nextSequentialLotCode } from "../../utils/lot-code.js";
 import { createLotProcessReport } from "../../utils/process-reports.js";
 import { dispararFleteInternoBascula } from "../../services/campo-flete-bascula.js";
+import { getMatrizId } from "../../services/matriz.js";
 import { env } from "../../config/env.js";
 
 export const mobileTicketsRouter = Router();
-
-// CEYRO (la piladora) es el accionista principal: todo servicio de pilado es suyo.
-const CEYRO_ID = "00000000-0000-0000-0000-000000000001";
 
 // UUID determinístico (estilo v5) a partir de una clave estable, para que el
 // mismo ticket de la app (mismo número) siempre mapee al mismo registro.
@@ -464,11 +462,11 @@ mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, asyn
   const isMaquila = operationType !== "COMPRA";
 
   // Reglas del negocio:
-  // - El servicio de pilado siempre es de CEYRO (él presta el servicio).
+  // - El servicio de pilado siempre es de la matriz (ella presta el servicio).
   // - Una compra es del accionista elegido (o del activo si no se indica).
   let ticketAccionista: string;
   if (isMaquila) {
-    ticketAccionista = CEYRO_ID;
+    ticketAccionista = await getMatrizId();
   } else {
     ticketAccionista = body.accionista_id ?? t.accionista_id ?? accionistaId!;
     const acc = await pool.query("SELECT 1 FROM accionistas WHERE id = $1 AND is_active = true", [ticketAccionista]);

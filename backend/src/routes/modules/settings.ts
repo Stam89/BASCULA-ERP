@@ -9,6 +9,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
+import { getMatriz, getMatrizId } from "../../services/matriz.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const settingsRouter = Router();
@@ -86,23 +87,40 @@ settingsRouter.put("/", requireAdmin, asyncRoute(async (req, res) => {
     ruc: z.string().max(20).default(""),
     phone: z.string().max(40).default(""),
     address: z.string().max(400).default(""),
-    receipt_footer: z.string().max(400).default("")
+    receipt_footer: z.string().max(400).default(""),
+    sync_matriz: z.boolean().optional(),
+    matriz_code: z.string().trim().min(2).max(40).optional()
   }).parse(req.body);
 
-  const result = await pool.query(
-    `INSERT INTO app_settings (id, business_name, business_subtitle, ruc, phone, address, receipt_footer, updated_at)
-     VALUES (1, $1, $2, $3, $4, $5, $6, now())
-     ON CONFLICT (id) DO UPDATE SET
-       business_name = EXCLUDED.business_name,
-       business_subtitle = EXCLUDED.business_subtitle,
-       ruc = EXCLUDED.ruc,
-       phone = EXCLUDED.phone,
-       address = EXCLUDED.address,
-       receipt_footer = EXCLUDED.receipt_footer,
-       updated_at = now()
-     RETURNING *`,
-    [body.business_name, body.business_subtitle, body.ruc, body.phone, body.address, body.receipt_footer]
-  );
+  const result = await inTransaction(async (client) => {
+    if (body.sync_matriz) {
+      const matriz = await getMatriz(client);
+      await client.query(
+        `UPDATE accionistas
+         SET name = $2,
+             code = COALESCE($3, code),
+             tipo = 'MATRIZ',
+             is_active = true
+         WHERE id = $1`,
+        [matriz.id, body.business_name, body.matriz_code ?? null]
+      );
+    }
+
+    return client.query(
+      `INSERT INTO app_settings (id, business_name, business_subtitle, ruc, phone, address, receipt_footer, updated_at)
+       VALUES (1, $1, $2, $3, $4, $5, $6, now())
+       ON CONFLICT (id) DO UPDATE SET
+         business_name = EXCLUDED.business_name,
+         business_subtitle = EXCLUDED.business_subtitle,
+         ruc = EXCLUDED.ruc,
+         phone = EXCLUDED.phone,
+         address = EXCLUDED.address,
+         receipt_footer = EXCLUDED.receipt_footer,
+         updated_at = now()
+       RETURNING *`,
+      [body.business_name, body.business_subtitle, body.ruc, body.phone, body.address, body.receipt_footer]
+    );
+  });
   res.json(result.rows[0]);
 }));
 
@@ -185,16 +203,10 @@ settingsRouter.put("/sequences/guia", requireAdmin, asyncRoute(async (req, res) 
   res.json({ tipo: "GUIA", prefijo: guiaPrefix, next_number: guiaNext, ejemplo: `${guiaPrefix}${String(guiaNext).padStart(9, "0")}` });
 }));
 
-// ── Tarifas de empaque / uso de sacos de la MATRIZ (CEYRO) ──────────────────
+// ── Tarifas de empaque / uso de sacos de la MATRIZ ──────────────────────────
 // El cargo automático al despachar (services/cargo-empaque.ts) lee estos precios.
-async function matrizIdOrThrow(): Promise<string> {
-  const m = await pool.query("SELECT id FROM accionistas WHERE tipo = 'MATRIZ' ORDER BY name LIMIT 1");
-  if (!m.rowCount) throw new ApiError(404, "No hay una matriz (CEYRO) configurada.");
-  return m.rows[0].id as string;
-}
-
 settingsRouter.get("/packaging-rates", asyncRoute(async (_req, res) => {
-  const matrizId = await matrizIdOrThrow();
+  const matrizId = await getMatrizId();
   const result = await pool.query(
     `INSERT INTO matriz_packaging_rates (accionista_id) VALUES ($1)
      ON CONFLICT (accionista_id) DO UPDATE SET accionista_id = EXCLUDED.accionista_id
@@ -206,7 +218,7 @@ settingsRouter.get("/packaging-rates", asyncRoute(async (_req, res) => {
 }));
 
 settingsRouter.put("/packaging-rates", requireAdmin, asyncRoute(async (req, res) => {
-  const matrizId = await matrizIdOrThrow();
+  const matrizId = await getMatrizId();
   const body = z.object({
     precio_saco_10lb: z.number().nonnegative(),
     precio_saco_25lb: z.number().nonnegative(),

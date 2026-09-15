@@ -16,6 +16,7 @@ import {
   type ProcessStage
 } from "../../utils/process-reports.js";
 import { upsertCuadrillaSecadoraEntry, autoGenerarPagosCuadrillaDeSecado } from "./cuadrilla.js";
+import { getMatrizId } from "../../services/matriz.js";
 
 export const processFlowRouter = Router();
 
@@ -90,12 +91,10 @@ const dryingUpdateSchema = z.object({
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-const CEYRO_MATRIZ_ID = "00000000-0000-0000-0000-000000000001";
-
 // Enrutamiento automático post-secado del cobro de servicio. Cuando un secado
 // queda FINALIZADO (COMPLETED) y su lote es 'Solo Servicio de Secado' (SECADO),
 // el arroz se seca y se entrega — NO pasa a Producción — así que el cobro del
-// secado va DIRECTO a Cuentas por Cobrar de la Matriz (CEYRO). Idempotente: si el
+// secado va DIRECTO a Cuentas por Cobrar de la Matriz. Idempotente: si el
 // lote ya tiene su cobro de secado, no hace nada. Los 'Servicio Completo'
 // (SECADO_PILADO) NO se cobran aquí: su secado se cobra al pilar; los 'Propios'
 // (COMPRA) no generan cobro. Se llama en cada punto donde un secado pasa a
@@ -132,10 +131,11 @@ async function autoCobrarSecadoServicio(client: PoolClient, dryingReportId: stri
     ? ((await client.query("SELECT full_name FROM farmers WHERE id = $1", [row.farmer_id])).rows[0]?.full_name ?? "cliente de servicio")
     : "cliente de servicio";
   const desc = `Servicio de Secado - Lote ${row.lot_code} (${qq} QQ × $${rate}) - ${farmerName}`;
+  const matrizId = await getMatrizId(client);
   await client.query(
     `INSERT INTO accounts_receivable (accionista_id, farmer_id, reference_type, reference_id, description, amount, balance, status)
      VALUES ($1, $2, 'secado_service', $3, $4, $5, $5, 'CONFIRMED')`,
-    [CEYRO_MATRIZ_ID, row.farmer_id ?? null, row.lot_id, desc, monto]
+    [matrizId, row.farmer_id ?? null, row.lot_id, desc, monto]
   );
 }
 

@@ -1,44 +1,10 @@
-import bcrypt from "bcryptjs";
-import crypto from "crypto";
 import { pool } from "../db/pool.js";
+import { bootstrapCompany, companyBootstrapInputFromEnv } from "../services/company-bootstrap.js";
 
 async function main() {
-  // El admin ya no se crea con una clave conocida ("admin123"). Se toma de
-  // SEED_ADMIN_PASSWORD o, si no está, se genera una aleatoria y se imprime UNA
-  // vez. Y si el admin YA existe, NO se toca su clave (antes el reseed la
-  // reseteaba, borrando la que el usuario hubiera puesto).
-  const adminExists = await pool.query("SELECT 1 FROM users WHERE username = 'admin'");
-  const isNewAdmin = adminExists.rowCount === 0;
-  const rawPassword = process.env.SEED_ADMIN_PASSWORD || crypto.randomBytes(9).toString("base64url");
-  const passwordHash = await bcrypt.hash(rawPassword, 10);
-
-  const branch = await pool.query(
-    `INSERT INTO branches (name, address, phone)
-     SELECT 'Planta Principal', 'Direccion pendiente', '0000000000'
-     WHERE NOT EXISTS (SELECT 1 FROM branches WHERE name = 'Planta Principal')
-     RETURNING id`
-  );
-
-  const branchId = branch.rows[0]?.id ?? (await pool.query("SELECT id FROM branches ORDER BY created_at ASC LIMIT 1")).rows[0].id;
-
-  const role = await pool.query(
-    `INSERT INTO roles (name)
-     VALUES ('Administrador')
-     ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-     RETURNING id`
-  );
-
-  // Solo se fija la clave al CREAR el admin. Si ya existe, se asegura su rol y
-  // que esté activo, pero se respeta su clave actual.
-  await pool.query(
-    `INSERT INTO users (branch_id, role_id, name, username, email, password_hash)
-     VALUES ($1, $2, 'Administrador', 'admin', 'admin@bascula.local', $3)
-     ON CONFLICT (username) DO UPDATE SET
-       role_id = EXCLUDED.role_id,
-       branch_id = EXCLUDED.branch_id,
-       is_active = true`,
-    [branchId, role.rows[0].id, passwordHash]
-  );
+  // Prepara la identidad de la empresa, su matriz y el admin inicial. Si el
+  // admin ya existe, NO toca su clave: solo asegura rol, sucursal y acceso.
+  const company = await bootstrapCompany(companyBootstrapInputFromEnv());
 
   await pool.query(
     `INSERT INTO warehouses (branch_id, name, type)
@@ -49,7 +15,7 @@ async function main() {
        ('Bodega Insumos', 'SUPPLIES')
      ) AS item(name, type)
      WHERE NOT EXISTS (SELECT 1 FROM warehouses w WHERE w.name = item.name)`,
-    [branchId]
+    [(await pool.query("SELECT id FROM branches ORDER BY created_at ASC LIMIT 1")).rows[0].id]
   );
 
   await pool.query(
@@ -89,9 +55,10 @@ async function main() {
   );
 
   console.log("Seed completado");
-  if (isNewAdmin) {
-    console.log("Usuario: admin");
-    console.log("Clave (guárdala, NO se vuelve a mostrar):", rawPassword);
+  console.log("Matriz:", `${company.matriz.name} (${company.matriz.code})`);
+  if (company.admin?.created) {
+    console.log("Usuario:", company.admin.username);
+    console.log("Clave (guárdala, NO se vuelve a mostrar):", company.admin.generatedPassword);
   } else {
     console.log("El usuario admin ya existía: su clave NO se modificó.");
   }

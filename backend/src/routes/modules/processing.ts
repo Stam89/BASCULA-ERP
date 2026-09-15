@@ -9,6 +9,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
 import { createLotProcessReport } from "../../utils/process-reports.js";
 import { descontarSacosPorPeso, descontarSacosPorTipo, tipoSacoEspecial } from "../../services/cargo-empaque.js";
+import { getMatrizId } from "../../services/matriz.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { createProductionWorkerPayments } from "./labor.js";
 
@@ -661,11 +662,11 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
     );
 
     // ── Cobro del servicio de pilado ──
-    // CEYRO es la piladora. Cobra cuando pila arroz que NO es suyo: de otro
+    // La matriz es la piladora. Cobra cuando pila arroz que NO es suyo: de otro
     // accionista o de un cliente externo (maquila). Su propio arroz no se cobra
     // a sí mismo. El valor sale del reporte de pilado y de la presentación.
-    const CEYRO_ID = "00000000-0000-0000-0000-000000000001";
-    const esDeOtroAccionista = Boolean(accionistaId) && accionistaId !== CEYRO_ID;
+    const matrizId = await getMatrizId(client);
+    const esDeOtroAccionista = Boolean(accionistaId) && accionistaId !== matrizId;
     const cobraServicio = isMaquila || esDeOtroAccionista;
 
     const servicio = await calcularServicioPilado(
@@ -727,7 +728,7 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
          (accionista_id, reference_type, reference_id, description, amount, balance)
          VALUES ($1, 'pilado_service', $2, $3, $4, $4)
          RETURNING id`,
-        [CEYRO_ID, maquilaOrderId, desc, serviceAmount]
+        [matrizId, maquilaOrderId, desc, serviceAmount]
       );
       receivableId = receivable.rows[0].id;
 
@@ -748,7 +749,7 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
            (provider_accionista_id, client_accionista_id, client_name, lot_id, processing_batch_id, quintals, rate_per_qq, total, receivable_id, payable_id, detalle, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING id`,
-        [CEYRO_ID, esDeOtroAccionista ? accionistaId : null, esDeOtroAccionista ? null : clienteNombre,
+        [matrizId, esDeOtroAccionista ? accionistaId : null, esDeOtroAccionista ? null : clienteNombre,
          body.lot_id, processingBatchId, servicio.quintales, serviceRate, serviceAmount, receivableId, payableId,
          JSON.stringify(servicio.detalle), body.created_by ?? null]
       );

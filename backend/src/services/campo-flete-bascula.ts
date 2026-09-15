@@ -5,8 +5,6 @@
 import { pool } from "../db/pool.js";
 import { ApiError } from "../http/error-handler.js";
 
-const CEYRO_ID = "00000000-0000-0000-0000-000000000001";
-
 // Crea un Parte Diario originado en Báscula (origen='bascula'). El parte guarda
 // el NOMBRE del cliente (campo_partes.cliente es texto), operador NULL y la
 // referencia en observaciones. Valida cliente y máquina.
@@ -35,7 +33,7 @@ export async function dispararFleteInternoBascula(input: {
 }): Promise<void> {
   try {
     // Maquila = servicio de pilado de la matriz: no es un flete cobrable a socio.
-    if (input.isMaquila || input.accionistaId === CEYRO_ID) return;
+    if (input.isMaquila) return;
     const placa = (input.placa ?? "").trim();
     if (!placa) return;
     if (!(Number(input.quintals) > 0)) return;

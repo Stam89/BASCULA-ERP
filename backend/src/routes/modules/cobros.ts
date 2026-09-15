@@ -32,9 +32,9 @@ cobrosRouter.get("/", asyncRoute(async (req, res) => {
   res.json(result.rows);
 }));
 
-// POST cobro de la matriz (CEYRO) a un socio por un servicio.
-//  1) Cuenta por COBRAR para CEYRO.  2) Cuenta por PAGAR (espejo) para el socio.
-//  3) Si pagado_al_instante: INGRESO en caja CEYRO + EGRESO en caja socio y ambas
+// POST cobro de la matriz a un socio por un servicio.
+//  1) Cuenta por COBRAR para la matriz.  2) Cuenta por PAGAR (espejo) para el socio.
+//  3) Si pagado_al_instante: INGRESO en caja matriz + EGRESO en caja socio y ambas
 //     cuentas quedan PAID. Todo en UNA transaccion.
 cobrosRouter.post("/", asyncRoute(async (req, res) => {
   const authReq = req as AuthenticatedRequest;
@@ -53,7 +53,7 @@ cobrosRouter.post("/", asyncRoute(async (req, res) => {
   if (!provider) throw new ApiError(400, "Selecciona un accionista.");
   // El proveedor del cobro debe ser la MATRIZ.
   const prov = await pool.query("SELECT tipo FROM accionistas WHERE id = $1", [provider]);
-  if (prov.rows[0]?.tipo !== "MATRIZ") throw new ApiError(403, "Solo la matriz (CEYRO) registra cobros a socios.");
+  if (prov.rows[0]?.tipo !== "MATRIZ") throw new ApiError(403, "Solo la matriz registra cobros a socios.");
   if (body.client_accionista_id === provider) throw new ApiError(400, "El cliente debe ser un socio distinto de la matriz.");
   const cli = await pool.query("SELECT name, tipo FROM accionistas WHERE id = $1", [body.client_accionista_id]);
   if (!cli.rowCount) throw new ApiError(404, "Socio no encontrado");
@@ -61,7 +61,7 @@ cobrosRouter.post("/", asyncRoute(async (req, res) => {
   const clienteName = cli.rows[0].name;
 
   const monto = round2(body.monto);
-  const desc = `Servicio de ${SERVICIO_LABEL[body.servicio]} / Maquila - Matriz CEYRO a ${clienteName}`;
+  const desc = `Servicio de ${SERVICIO_LABEL[body.servicio]} / Maquila - Matriz a ${clienteName}`;
 
   const result = await inTransaction(async (tx) => {
     // Cuenta por cobrar (CEYRO) y por pagar (socio).
@@ -88,14 +88,14 @@ cobrosRouter.post("/", asyncRoute(async (req, res) => {
     let cobroInmediato = false;
     let cajaSocioRegistrada = false;
     if (body.pagado_al_instante) {
-      // INGRESO en la caja de CEYRO (la indicada; debe ser suya y estar abierta).
-      if (!body.cash_register_id) throw new ApiError(400, "Para cobrar de contado indica la caja de CEYRO (cash_register_id).");
+      // INGRESO en la caja de la matriz (la indicada; debe ser suya y estar abierta).
+      if (!body.cash_register_id) throw new ApiError(400, "Para cobrar de contado indica la caja de la matriz (cash_register_id).");
       const reg = await tx.query(
         "SELECT id, status FROM cash_registers WHERE id = $1 AND accionista_id = $2",
         [body.cash_register_id, provider]
       );
-      if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para CEYRO");
-      if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja de CEYRO no esta abierta");
+      if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para la matriz");
+      if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja de la matriz no está abierta");
       await tx.query(
         `INSERT INTO cash_movements (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)
          VALUES ($1, 'INCOME', 'COBRO_SERVICIO_MAQUILA', 'accounts_receivable', $2, $3, $4, $5)`,
@@ -111,7 +111,7 @@ cobrosRouter.post("/", asyncRoute(async (req, res) => {
         await tx.query(
           `INSERT INTO cash_movements (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)
            VALUES ($1, 'EXPENSE', 'PAGO_SERVICIO_MAQUILA', 'accounts_payable', $2, $3, $4, $5)`,
-          [cajaSocio.rows[0].id, ap.rows[0].id, monto, `Pago servicio de ${SERVICIO_LABEL[body.servicio]} a CEYRO`, body.created_by ?? null]
+          [cajaSocio.rows[0].id, ap.rows[0].id, monto, `Pago servicio de ${SERVICIO_LABEL[body.servicio]} a la matriz`, body.created_by ?? null]
         );
         cajaSocioRegistrada = true;
       }
@@ -129,12 +129,11 @@ cobrosRouter.post("/", asyncRoute(async (req, res) => {
 }));
 
 // POST cobro de SOLO SECADO a un cliente de servicio (maquila): el lote se secó
-// pero NO se pila. Genera la Cuenta por Cobrar de CEYRO contra el cliente
+// pero NO se pila. Genera la Cuenta por Cobrar de la matriz contra el cliente
 // (agricultor) con concepto "Servicio de Secado - Lote X". El cliente es externo
 // (agricultor), así que no lleva cuenta por pagar espejo. La tarifa por QQ sale
 // de la config global (labor_rates.secado_servicio_per_qq) pero puede
 // sobreescribirse en el cobro.
-const CEYRO_ID = "00000000-0000-0000-0000-000000000001";
 cobrosRouter.post("/secado", asyncRoute(async (req, res) => {
   const authReq = req as AuthenticatedRequest;
   const provider = authReq.accionistaId ?? null;
@@ -146,7 +145,7 @@ cobrosRouter.post("/secado", asyncRoute(async (req, res) => {
 
   if (!provider) throw new ApiError(400, "Selecciona un accionista.");
   const prov = await pool.query("SELECT tipo FROM accionistas WHERE id = $1", [provider]);
-  if (prov.rows[0]?.tipo !== "MATRIZ") throw new ApiError(403, "Solo la matriz (CEYRO) registra el cobro de secado.");
+  if (prov.rows[0]?.tipo !== "MATRIZ") throw new ApiError(403, "Solo la matriz registra el cobro de secado.");
 
   const result = await inTransaction(async (tx) => {
     // El lote debe existir, ser de servicio (maquila) y no estar cobrado aún.
@@ -183,7 +182,7 @@ cobrosRouter.post("/secado", asyncRoute(async (req, res) => {
     const ar = await tx.query(
       `INSERT INTO accounts_receivable (accionista_id, farmer_id, reference_type, reference_id, description, amount, balance, status)
        VALUES ($1, $2, 'secado_service', $3, $4, $5, $5, 'CONFIRMED') RETURNING id`,
-      [CEYRO_ID, lot.farmer_id ?? null, body.lot_id, desc, monto]
+      [provider, lot.farmer_id ?? null, body.lot_id, desc, monto]
     );
 
     return { receivable_id: ar.rows[0].id, lot_code: lot.lot_code, cliente: clienteName, quintals: qq, rate_per_qq: rate, monto };

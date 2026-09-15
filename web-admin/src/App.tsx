@@ -1307,9 +1307,6 @@ function NavIcon({ tab }: { tab: string }) {
       return null;
   }
 }
-// CEYRO es el accionista principal (la piladora, dueño del negocio). Id sembrado.
-const CEYRO_ID = "00000000-0000-0000-0000-000000000001";
-
 // Las áreas/secciones/tipos de Mantenimiento ahora son dinámicos (tabla
 // maintenance_categories, editables desde el propio formulario). Antes vivían
 // aquí como constante estática SECCIONES_POR_AREA.
@@ -2081,7 +2078,7 @@ export function App() {
   const [cuadAdvanceForm, setCuadAdvanceForm] = useState({ worker_name: "", amount: "", concept: "" });
   const [newActivityForm, setNewActivityForm] = useState({ name: "", unit_rate: "" });
 
-  // ── Servicio de pilado (CEYRO a otros accionistas) ────────────────────────
+  // ── Servicio de pilado (matriz a otros accionistas) ───────────────────────
   const [piladoServices, setPiladoServices] = useState<PiladoService[]>([]);
   const [piladoBalances, setPiladoBalances] = useState<PiladoBalance[]>([]);
   const [piladoForm, setPiladoForm] = useState({ client_kind: "accionista" as "accionista" | "externo", client_accionista_id: "", client_name: "", quintals: "", rate_per_qq: localStorage.getItem("bascula-erp:pilado-rate") ?? "", service_date: nominaToday });
@@ -2131,6 +2128,8 @@ export function App() {
 
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
   const [settingsForm, setSettingsForm] = useState<AppSettings>(defaultAppSettings);
+  const [syncMatrizWithBusiness, setSyncMatrizWithBusiness] = useState(false);
+  const [matrizCodeForm, setMatrizCodeForm] = useState("");
 
   // ── Cambios sin guardar en Configuración ──────────────────────────────────
   // Al SALIR del módulo y volver, refreshConfig() vuelve a pedir los ajustes y
@@ -3179,11 +3178,15 @@ export function App() {
   // botones de crear/editar/guardar de ese módulo (el backend también lo bloquea).
   const canEdit = (module: string) => isAdmin || activeAllowedPerms.has(`EDIT:${module}`);
 
-  // La nómina, cuadrilla y servicio de pilado son responsabilidad única del dueño
-  // de la piladora (CEYRO). Los accionistas/clientes solo pagan el servicio; nunca
-  // cargan con la nómina ni administran cobros de secado/pilado. Por eso esas
-  // pestañas solo aparecen con CEYRO activo.
-  const esCeyroActivo = activeAccionistaId === CEYRO_ID;
+  // La nómina, cuadrilla y servicio de pilado pertenecen a la matriz. Se resuelve
+  // por tipo y no por un UUID fijo, para admitir instalaciones de otras empresas.
+  const matrizAccionista = accionistas.find((a) => a.tipo === "MATRIZ") ?? null;
+  const matrizName = matrizAccionista?.name?.trim() || appSettings.business_name.trim() || "Matriz";
+  const esMatrizActiva = matrizAccionista?.id === activeAccionistaId;
+
+  useEffect(() => {
+    setMatrizCodeForm(matrizAccionista?.code ?? "");
+  }, [matrizAccionista?.code]);
 
   // Pedidos pendientes de carga (cola de despachos). Alimenta el badge de la
   // pestaña "Cola de Despachos" y del menú lateral, para que bodega sepa cuándo
@@ -3196,7 +3199,7 @@ export function App() {
   // Pestañas visibles según los módulos asignados al usuario.
   const visibleTabs = useMemo(() => {
     if (!authUser) return [] as string[];
-    const soloCeyro = new Set(["Cuadrilla", "Servicio Pilado"]);
+    const soloMatriz = new Set(["Cuadrilla", "Servicio Pilado"]);
     // Permisos POR ACCIONISTA: los módulos permitidos dependen del accionista
     // activo, no de un set global. Al cambiar de accionista cambian las pestañas.
     const activeAcc = accionistas.find((a) => a.id === activeAccionistaId);
@@ -3210,14 +3213,14 @@ export function App() {
           // secciones nuevas del Sidebar entran solas por allowed.has(tab).
           return allowed.has(tab);
         });
-    const vis = base.filter((tab) => !soloCeyro.has(tab) || esCeyroActivo);
-    // "Caja de Campo" es una OPERACIÓN de CEYRO: se entra desde el selector de
+    const vis = base.filter((tab) => !soloMatriz.has(tab) || esMatrizActiva);
+    // "Caja de Campo" es una operación de la matriz: se entra desde el selector de
     // accionista (arriba), no desde el sidebar. Se admite en el guard de
-    // activeTab solo cuando CEYRO está activo. No va en navGroups, así que NO
+    // activeTab solo cuando la matriz está activa. No va en navGroups, así que NO
     // aparece como pastilla en el menú lateral.
-    if (esCeyroActivo) vis.push("Caja de Campo");
+    if (esMatrizActiva) vis.push("Caja de Campo");
     return vis;
-  }, [authUser, isAdmin, esCeyroActivo, accionistas, activeAccionistaId]);
+  }, [authUser, isAdmin, esMatrizActiva, accionistas, activeAccionistaId]);
 
   // Puede ver el Panel Integral (vista del NEGOCIO COMPLETO: todos los
   // accionistas)? Solo admin, o un operador con el permiso "Dashboard" en el
@@ -3355,8 +3358,8 @@ export function App() {
     setNominaBusy(true);
     try {
       // Tablas de REVISIÓN de las pestañas operativas: por período elegido.
-      // La nómina de PRODUCCIÓN y la cuadrilla son de la matriz (CEYRO).
-      if (esCeyroActivo) {
+      // La nómina de PRODUCCIÓN y la cuadrilla son de la matriz.
+      if (esMatrizActiva) {
         const data = await apiGet<{ rows: WorkerSummary[] }>(`/labor/summary?from=${nominaFrom}&to=${nominaTo}`);
         setNominaRows(data.rows);
         try {
@@ -3595,7 +3598,7 @@ export function App() {
     const payload: any = { client_accionista_id: cobroForm.client_accionista_id, servicio: cobroForm.servicio, monto };
     if (cobroForm.pagado_al_instante) {
       const registerId = dashboard.current_cash_register?.id;
-      if (!registerId) { addToast("Para cobrar de contado abre la caja de CEYRO", "error"); return; }
+      if (!registerId) { addToast(`Para cobrar de contado abre la caja de ${matrizName}`, "error"); return; }
       payload.pagado_al_instante = true;
       payload.cash_register_id = registerId;
     }
@@ -3638,7 +3641,7 @@ export function App() {
     const r = await apiPost<{ paid: number; caja_registrada: boolean; espejo: null | { accionista: string; cuenta: string; caja_registrada: boolean } }>(
       `/pilado/services/${id}/settle`, { cash_register_id: registerId }
     );
-    // El cobro de CEYRO entra a su caja; el espejo saca la plata del cliente.
+    // El cobro de la matriz entra a su caja; el espejo saca la plata del cliente.
     let msg = r.caja_registrada
       ? `Cobrado ${money(r.paid)} y registrado como ingreso en caja`
       : `Servicio saldado, pero no había caja abierta para registrar el ingreso`;
@@ -4147,7 +4150,7 @@ export function App() {
       .cierre .disc{color:#b91c1c} .cierre .net{background:#0f766e;color:#fff;font-weight:800;font-size:16px}
       .sigs{display:flex;justify-content:space-between;gap:40px;margin-top:56px} .sig{flex:1;text-align:center} .sig hr{border:none;border-top:1px solid #111;margin:0 0 5px} .sig span{font-size:11.5px;color:#333}
     </style></head><body>
-      <h1>${appSettings.business_name || "PILADORA CEYRO"}</h1>
+      <h1>${appSettings.business_name || "BASCULA ERP"}</h1>
       <h2>${[appSettings.business_subtitle, appSettings.ruc && `RUC: ${appSettings.ruc}`].filter(Boolean).join(" · ")}</h2>
       <h3>Rol de Pago Semanal</h3>
       <div class="meta">
@@ -4191,7 +4194,7 @@ export function App() {
       .net{font-size:15px;font-weight:900;border-top:1px dashed #111;padding-top:4px;margin-top:4px}
       .sig{margin-top:26px;text-align:center;font-size:10.5px} .sig hr{border:none;border-top:1px solid #111;margin:0 0 3px}
     </style></head><body>
-      <h1>${appSettings.business_name || "PILADORA CEYRO"}</h1>
+      <h1>${appSettings.business_name || "BASCULA ERP"}</h1>
       <div class="sub">${[appSettings.ruc && `RUC: ${appSettings.ruc}`].filter(Boolean).join(" ")}</div>
       <div class="rol">Rol de Pago · ${roleLabelNomina(data.worker.role)}</div>
       <div class="meta"><b>Trabajador:</b> ${data.worker.name}</div>
@@ -4651,10 +4654,23 @@ export function App() {
 
   async function saveSettings(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const saved = await apiPut<AppSettings>("/settings", settingsForm);
+    const saved = await apiPut<AppSettings>("/settings", {
+      ...settingsForm,
+      sync_matriz: syncMatrizWithBusiness,
+      matriz_code: syncMatrizWithBusiness ? matrizCodeForm.trim() : undefined
+    });
     setAppSettings(saved);
     setSettingsForm(saved);
-    addToast("Datos del negocio guardados", "success");
+    if (syncMatrizWithBusiness) {
+      const result = await apiPost<{ token: string; user: AuthUser; accionistas: Accionista[] }>("/auth/refresh", {});
+      localStorage.setItem(authStorageKey, JSON.stringify(result));
+      setAccionistas(result.accionistas ?? []);
+      ensureActiveAccionista(result.accionistas);
+      setActiveAccionistaIdState(getActiveAccionistaId());
+      setAuthUser(result.user);
+      setSyncMatrizWithBusiness(false);
+    }
+    addToast(syncMatrizWithBusiness ? "Datos del negocio y Matriz guardados" : "Datos del negocio guardados", "success");
   }
 
   // Guarda los parámetros operativos de planta (tarifa de pilado y humedad base).
@@ -4982,7 +4998,7 @@ export function App() {
     if (!lotTicket) return;
     try {
       // La compra entra sola a la bodega de materia prima; el servicio siempre
-      // es de CEYRO. El backend resuelve ambas cosas.
+      // es de la matriz. El backend resuelve ambas cosas.
       const esCompra = lotForm.operation_type === "COMPRA";
       await apiPost(`/tickets/${lotTicket.id}/create-lot`, {
         rice_type: lotForm.rice_type,
@@ -4995,7 +5011,7 @@ export function App() {
           ? "Ingreso registrado (Solo Pilada, ya seco). Disponible en Producción · Desde Stock/Bodega."
           : esCompra
           ? "Materia prima ingresada a Bodega Materia Prima. Ya puedes formar el lote en Secadoras."
-          : "Ingreso de servicio registrado (a nombre de CEYRO). Ya puedes formar el lote en Secadoras.",
+          : `Ingreso de servicio registrado (a nombre de ${matrizName}). Ya puedes formar el lote en Secadoras.`,
         "success"
       );
       setLotTicket(null);
@@ -5493,7 +5509,7 @@ export function App() {
     const fecha = new Date().toLocaleString("es-EC", {
       day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit"
     });
-    const piladora = (appSettings?.business_name || "").trim() || "PILADORA CEYRO";
+    const piladora = (appSettings?.business_name || "").trim() || "BASCULA ERP";
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
       <title>Recibo Venta Detalle</title>
       <style>
@@ -8074,7 +8090,7 @@ export function App() {
     if (production.servicio_pilado) {
       const s = production.servicio_pilado;
       addToast(
-        `Cobro de pilado creado: CEYRO cobra ${money(s.total)} por ${s.quintales} QQ` +
+        `Cobro de pilado creado: ${matrizName} cobra ${money(s.total)} por ${s.quintales} QQ` +
         (s.es_accionista ? ` · queda como Por Pagar de ${s.cliente}` : ` · a ${s.cliente} (cliente externo)`),
         "success"
       );
@@ -8394,7 +8410,7 @@ export function App() {
       </style></head><body>
       <div class="tk">
         <h1>ORDEN DE CARGA</h1>
-        <div class="sub">${esc(appSettings.business_name) || "PILADORA CEYRO"} · ${fecha}</div>
+        <div class="sub">${esc(appSettings.business_name) || "BASCULA ERP"} · ${fecha}</div>
         <div class="row"><span class="k">Pedido N°:</span> <strong>${esc(order.order_number)}</strong></div>
         <div class="row"><span class="k">Cliente:</span> <strong>${esc(order.customer_name) || "—"}</strong></div>
         ${order.delivery_date ? `<div class="row"><span class="k">Entrega:</span> ${esc(order.delivery_date).slice(0, 10)}</div>` : ""}
@@ -8452,7 +8468,7 @@ export function App() {
       </style></head><body>
       <div class="tk">
         <h1>TICKET DE SALIDA · ${tipo.toUpperCase()}</h1>
-        <div class="sub">${esc(appSettings.business_name) || "PILADORA CEYRO"}</div>
+        <div class="sub">${esc(appSettings.business_name) || "BASCULA ERP"}</div>
         <div class="lote">Lote ${esc(b.batch_number)}</div>
         <div class="row"><span class="k">Fecha:</span> <strong>${fecha}</strong></div>
         <div class="row"><span class="k">Persona externa:</span> <strong>${esc(b.provider_name)}</strong></div>
@@ -8524,7 +8540,7 @@ export function App() {
       <div class="sheet">
         <div class="top">
           <div class="brand">
-            <h1>${esc(appSettings.business_name) || "PILADORA CEYRO"}</h1>
+            <h1>${esc(appSettings.business_name) || "BASCULA ERP"}</h1>
             ${appSettings.business_subtitle ? `<p>${esc(appSettings.business_subtitle)}</p>` : ""}
             ${appSettings.address ? `<p>${esc(appSettings.address)}</p>` : ""}
             ${appSettings.ruc ? `<p><strong>RUC:</strong> ${esc(appSettings.ruc)}</p>` : ""}
@@ -9100,7 +9116,7 @@ export function App() {
     return <LoginScreen onLogin={handleLogin} />;
   }
 
-  // Selector de operación (accionistas + "CEYRO · Campo"). Se usa tanto en el
+  // Selector de operación (accionistas + "Matriz · Campo"). Se usa tanto en el
   // layout estándar como en el shell aislado de Campo.
   const operationSelectorEl = (() => {
     const SUF = "::campo";
@@ -9110,7 +9126,7 @@ export function App() {
       if (a.tipo === "MATRIZ") opciones.push({ value: a.id + SUF, label: `${a.name} · ${campoNombre}` });
     }
     if (opciones.length <= 1) return null;
-    const inCampo = esCeyroActivo && activeTab === "Caja de Campo";
+    const inCampo = esMatrizActiva && activeTab === "Caja de Campo";
     const valor = inCampo ? (activeAccionistaId ?? "") + SUF : (activeAccionistaId ?? "");
     return (
       <label className="accionistaSwitcher">
@@ -9132,9 +9148,9 @@ export function App() {
     );
   })();
 
-  // CONTEXTO AISLADO: cuando la operación activa es Campo (bajo CEYRO), se
+  // CONTEXTO AISLADO: cuando la operación activa es Campo (bajo la matriz), se
   // renderiza SU PROPIO layout (menú Captura/Reportes), sin nada del resto.
-  if (esCeyroActivo && activeTab === "Caja de Campo") {
+  if (esMatrizActiva && activeTab === "Caja de Campo") {
     return (
       <React.Suspense fallback={<div className="muted" style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>Cargando Caja de Campo...</div>}>
         <CampoWorkspace
@@ -9144,6 +9160,7 @@ export function App() {
           apiOnline={apiOnline}
           onLogout={logout}
           nombre={campoNombre}
+          matrizName={matrizName}
           onNombreChange={setCampoNombre}
         />
       </React.Suspense>
@@ -9981,7 +9998,7 @@ export function App() {
         {activeTab === "Costos Operativos" && (
           <section className="panelGrid">
             <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
-              <h2 style={{ marginBottom: 4 }}>🏭 Costo operativo por corrida (Planta / CEYRO)</h2>
+              <h2 style={{ marginBottom: 4 }}>🏭 Costo operativo por corrida (Planta / {matrizName})</h2>
               <p className="muted">Registra el costo real de operar una corrida (luz, mantenimiento, mano de obra, combustible, desgaste, otros) para saber el costo por QQ producido.</p>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}>
                 <label style={{ margin: 0 }}><span>Corrida (opcional)</span>
@@ -10587,10 +10604,10 @@ export function App() {
               />
 
               {/* ── Inventario de Sacos (cuarto cuadrante, balancea el grid) ──
-                  Los sacos son propiedad EXCLUSIVA de la Matriz (CEYRO). Un socio
+                  Los sacos son propiedad exclusiva de la Matriz. Un socio
                   operativo no maneja empaques: se oculta por completo (tabla +
                   formulario de movimientos). Solo visible en contexto Matriz. */}
-              {esCeyroActivo && (
+              {esMatrizActiva && (
               <section style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
                 <h3 style={{ marginTop: 0, marginBottom: 14 }}>📦 Inventario de Sacos</h3>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 8, marginBottom: 14 }}>
@@ -12596,7 +12613,7 @@ export function App() {
                 <nav className="cajaSubNav">
                   {(["resumen", "venta_detalle", "anticipo", "movimiento", "gastos", "sacos", "mantenimiento", "fomentos"] as const)
                     .filter((t) => {
-                      // Subpestañas exclusivas de la planta/matriz (CEYRO). Los socios
+                      // Subpestañas exclusivas de la planta/matriz. Los socios
                       // (ROVINSON/STALYN) operan solo lo comercial.
                       const esSocio = accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "SOCIO";
                       const soloMatriz = ["gastos", "sacos", "mantenimiento"];
@@ -12781,7 +12798,7 @@ export function App() {
                     })()}
                     {(CASH_REUSE[movCategory] === "pilado" || CASH_REUSE[movCategory] === "fomento") && (() => {
                       const info = CASH_REUSE[movCategory] === "pilado"
-                        ? { txt: "Para que el pago abone la cuenta de CEYRO, regístralo en Por Pagar (descuenta tu caja y abona la cuenta por cobrar de CEYRO).", go: () => setCajaSubTab("cuentas"), lbl: "Ir a Por Pagar" }
+                        ? { txt: `Para que el pago abone la cuenta de ${matrizName}, regístralo en Por Pagar (descuenta tu caja y abona la cuenta por cobrar de la matriz).`, go: () => setCajaSubTab("cuentas"), lbl: "Ir a Por Pagar" }
                         : { txt: "Para enlazarlo con el agricultor, regístralo en Fomentos.", go: () => setCajaSubTab("fomentos"), lbl: "Ir a Fomentos" };
                       return (
                         <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "10px 12px", marginBottom: 16, fontSize: 12 }}>
@@ -14468,7 +14485,7 @@ export function App() {
           const grupos = groupReceivables(filtrado);
           const totalPend = filtrado.reduce((a, r) => a + Number(r.balance), 0);
           const vencidas = filtrado.filter(esVencida);
-          const tabs: Array<[typeof arFilter, string]> = [["todos", "Todos"], ["socios", "Socios"], ["agricultores", "Agricultores"], ["matriz", "Matriz (CEYRO)"]];
+          const tabs: Array<[typeof arFilter, string]> = [["todos", "Todos"], ["socios", "Socios"], ["agricultores", "Agricultores"], ["matriz", `Matriz (${matrizName})`]];
           // Ítems del deudor abierto en el modal (en vivo desde el estado).
           const detalleGrupo = arDetalleKey ? grupos.find((g) => g.key === arDetalleKey) ?? null : null;
           return (
@@ -14581,7 +14598,7 @@ export function App() {
           const totalPend = grupos.reduce((a, g) => a + g.items.reduce((s, p) => s + Number(p.balance), 0), 0);
           const totalTx = grupos.reduce((a, g) => a + g.items.length, 0);
           const vencidos = grupos.filter((g) => g.items.some((p) => !!p.due_date && p.due_date.slice(0, 10) < hoy && Number(p.balance) > 0.001));
-          const tabs: Array<[typeof apFilter, string]> = [["todos", "Todos"], ["socios", "Socios"], ["agricultores", "Agricultores"], ["matriz", "Matriz (CEYRO)"]];
+          const tabs: Array<[typeof apFilter, string]> = [["todos", "Todos"], ["socios", "Socios"], ["agricultores", "Agricultores"], ["matriz", `Matriz (${matrizName})`]];
           const detalleGrupo = apDetalleKey ? grupos.find((g) => g.key === apDetalleKey) ?? null : null;
           return (
           <section className="cuentasLayout">
@@ -14663,7 +14680,7 @@ export function App() {
             {accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "MATRIZ" && (
               <div className="formPanel">
                 <h2>🛎️ Solo Servicio de Secado</h2>
-                <p className="muted">Para clientes que <strong>solo secan</strong> (sin pilar). Elige un lote de servicio ya secado; el peso en QQ se toma exacto del kárdex. Genera la cuenta por cobrar de CEYRO con concepto «Servicio de Secado - Lote X». <em>El cobro del servicio completo (secado + pilado) se genera solo al finalizar el pilado en Producción.</em></p>
+                <p className="muted">Para clientes que <strong>solo secan</strong> (sin pilar). Elige un lote de servicio ya secado; el peso en QQ se toma exacto del kárdex. Genera la cuenta por cobrar de {matrizName} con concepto «Servicio de Secado - Lote X». <em>El cobro del servicio completo (secado + pilado) se genera solo al finalizar el pilado en Producción.</em></p>
                 <label><span>Lote de Secadoras (servicio)</span>
                   <select value={secadoForm.lot_id} onChange={(e) => setSecadoForm({ ...secadoForm, lot_id: e.target.value })}>
                     <option value="">Seleccione</option>
@@ -14696,7 +14713,7 @@ export function App() {
             )}
 
             <div className="tablePanel">
-              <h2>Saldos que deben a CEYRO</h2>
+              <h2>Saldos que deben a {matrizName}</h2>
               {piladoBalances.length === 0 ? (
                 <div className="emptyState"><div className="emptyIcon">✅</div><p>Nadie debe servicios de pilado.</p></div>
               ) : (
@@ -15151,8 +15168,8 @@ export function App() {
                   <span style={{ marginLeft: 6, background: "#dc2626", color: "#fff", borderRadius: 999, padding: "1px 8px", fontSize: 12, fontWeight: 800 }}>{nominaPendientes.length + pagosCuadPendientes.length + adminPending.length}</span>
                 )}
               </button>
-              {/* Producción (Secadora, Cuadrilla, Historial): solo la matriz (CEYRO). */}
-              {esCeyroActivo && (<>
+              {/* Producción (Secadora, Cuadrilla, Historial): solo la matriz. */}
+              {esMatrizActiva && (<>
               <button type="button" className={nominaView === "secadora" ? "active" : ""} onClick={() => setNominaView("secadora")}>🔥 Secadora</button>
               <button type="button" className={nominaView === "cuadrilla" ? "active" : ""} onClick={() => { setNominaView("cuadrilla"); refreshCuadrilla().catch(() => undefined); }}>👷‍♂️ Cuadrilla</button>
               <button type="button" className={nominaView === "historial" ? "active" : ""} onClick={() => { setNominaView("historial"); loadNominaHistory().catch(() => undefined); }}>📜 Historial de Pagos</button>
@@ -15200,7 +15217,7 @@ export function App() {
             {/* Pestañas operativas (Planta / Secadora / Cuadrilla / Administrativo).
                 Las cuatro comparten la misma tabla, el mismo estado y las mismas
                 acciones; solo cambian el filtro por rol y las columnas del medio. */}
-            {nominaView !== "historial" && nominaView !== "pagos" && nominaView !== "sueldo-admin" && esCeyroActivo && (() => {
+            {nominaView !== "historial" && nominaView !== "pagos" && nominaView !== "sueldo-admin" && esMatrizActiva && (() => {
               const grupo = nominaGrupoActivo;
               const info = NOMINA_GRUPO_TITULO[grupo];
               const cols = nominaColumnas(grupo);
@@ -15864,7 +15881,7 @@ export function App() {
               );
             })()}
 
-            {nominaView === "historial" && esCeyroActivo && (
+            {nominaView === "historial" && esMatrizActiva && (
               <>
                 <div className="reportToolbar">
                   <div>
@@ -15934,7 +15951,7 @@ export function App() {
                       <>
                         {/* Encabezado */}
                         <div style={{ border: "1px solid var(--c-border)", borderRadius: 10, padding: "10px 14px", marginBottom: 10 }}>
-                          <div style={{ fontWeight: 800, fontSize: 16, color: "#0f766e" }}>{appSettings.business_name || "PILADORA CEYRO"}</div>
+                          <div style={{ fontWeight: 800, fontSize: 16, color: "#0f766e" }}>{appSettings.business_name || "BASCULA ERP"}</div>
                           {appSettings.ruc && <div className="muted" style={{ fontSize: 12 }}>RUC: {appSettings.ruc}</div>}
                           <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginTop: 6, fontSize: 13 }}>
                             <span><strong>Trabajador:</strong> {d.worker.name}</span>
@@ -16213,7 +16230,7 @@ export function App() {
 
             {reportRows && reportRows.kind !== "resumen" && reportRows.kind !== "arianos" && (
               <React.Suspense fallback={<div className="tablePanel muted">Cargando reporte...</div>}>
-                <ReportReadOnlyViews report={reportRows as ReadOnlyReport} />
+                <ReportReadOnlyViews report={reportRows as ReadOnlyReport} matrizName={matrizName} />
               </React.Suspense>
             )}
 
@@ -16499,7 +16516,23 @@ export function App() {
                 <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
                   <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🏢 Datos del negocio y Vista previa de encabezado</summary>
                 <form onSubmit={(e) => saveSettings(e).catch((err) => addToast(err.message, "error"))}>
-                  <p className="muted">Estos datos aparecen en los comprobantes de liquidación y reportes impresos.</p>
+                  <p className="muted">Estos datos aparecen en comprobantes, reportes impresos y documentos operativos.</p>
+                  <div className="systemStatusGrid" style={{ margin: "10px 0 14px" }}>
+                    <div className="systemStatusCard ok">
+                      <span className="statusDot" />
+                      <div>
+                        <strong>Negocio</strong>
+                        <span>{appSettings.business_name || "Sin nombre configurado"}</span>
+                      </div>
+                    </div>
+                    <div className={matrizAccionista ? "systemStatusCard ok" : "systemStatusCard warn"}>
+                      <span className="statusDot" />
+                      <div>
+                        <strong>Matriz principal</strong>
+                        <span>{matrizAccionista ? `${matrizAccionista.name} · ${matrizAccionista.code}` : "No configurada"}</span>
+                      </div>
+                    </div>
+                  </div>
                   <label>
                     <span>Nombre comercial <span style={{ color: "#ef4444" }}>*</span></span>
                     <input
@@ -16563,6 +16596,33 @@ export function App() {
                       onChange={(e) => setSettingsForm({ ...settingsForm, receipt_footer: e.target.value })}
                     />
                   </label>
+                  <div className="companyIdentityActions">
+                    <label style={{ display: "flex", alignItems: "flex-start", gap: 10, margin: 0 }}>
+                      <input
+                        type="checkbox"
+                        checked={syncMatrizWithBusiness}
+                        disabled={!isAdmin || !matrizAccionista}
+                        onChange={(e) => setSyncMatrizWithBusiness(e.target.checked)}
+                        style={{ width: 18, height: 18, marginTop: 2 }}
+                      />
+                      <span>
+                        <strong>Actualizar también la Matriz principal</strong>
+                        <small className="muted" style={{ display: "block" }}>
+                          Úsalo al preparar otra empresa o al corregir el nombre oficial. No afecta tickets ni históricos.
+                        </small>
+                      </span>
+                    </label>
+                    <label style={{ minWidth: 180, margin: 0 }}>
+                      <span>Código matriz</span>
+                      <input
+                        type="text"
+                        disabled={!isAdmin || !syncMatrizWithBusiness}
+                        value={matrizCodeForm}
+                        onChange={(e) => setMatrizCodeForm(e.target.value.toUpperCase().replace(/\s+/g, "-"))}
+                        placeholder="MATRIZ"
+                      />
+                    </label>
+                  </div>
                   <button className="primary" disabled={!isAdmin}>Guardar cambios</button>
                   {!isAdmin && <p className="muted">Solo un administrador puede modificar estos datos.</p>}
                 </form>
@@ -17378,7 +17438,7 @@ export function App() {
                   <details>
                     <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>📦 Tarifas de empaque / uso de sacos (Matriz)</summary>
                   <p className="muted">
-                    Precio que la matriz (CEYRO) cobra a un socio por cada saco al despachar un pedido.
+                    Precio que {matrizName} cobra a un socio por cada saco al despachar un pedido.
                     Se genera automáticamente como cuenta por cobrar de la matriz y por pagar del socio.
                     Déjalo en $0.00 para no cobrar.
                   </p>
@@ -17483,7 +17543,7 @@ export function App() {
                     <label><span>Aplicable a</span>
                       <select value={catForm.aplicable_a} onChange={(e) => setCatForm({ ...catForm, aplicable_a: e.target.value })}>
                         <option value="AMBOS">Ambos</option>
-                        <option value="MATRIZ">Matriz (CEYRO)</option>
+                        <option value="MATRIZ">Matriz ({matrizName})</option>
                         <option value="SOCIO">Socio</option>
                       </select></label>
                   </div>
@@ -17620,13 +17680,13 @@ export function App() {
                   <ol className="setupList">
                     <li>Completa los <strong>datos del negocio</strong> (aparecen en los comprobantes).</li>
                     <li>Crea un usuario para cada persona que use el sistema.</li>
-                    {esCeyroActivo && <li>Usa <strong>Borrar datos de prueba</strong> (Zona de peligro) solo cuando quieras limpiar movimientos de prueba antes de operar.</li>}
+                    {esMatrizActiva && <li>Usa <strong>Borrar datos de prueba</strong> (Zona de peligro) solo cuando quieras limpiar movimientos de prueba antes de operar.</li>}
                     <li>Verifica productos, bodegas e insumos en el Dashboard ("Crear datos base" si están vacíos).</li>
                     <li>Abre la caja del día y registra a tus agricultores reales.</li>
                   </ol>
                 </details>
 
-                {esCeyroActivo && (
+                {esMatrizActiva && (
                 <details className="formPanel dangerZone" style={{ gridColumn: "1 / -1" }}>
                   <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>⚠️ Zona de peligro · Borrar datos de prueba</summary>
                 <form onSubmit={(e) => submitResetData(e).catch((err) => addToast(err.message, "error"))}>
@@ -17968,7 +18028,7 @@ export function App() {
             </>
           ) : (
             <p className="muted" style={{ marginTop: 4 }}>
-              🌾 Servicio a nombre de <strong>CEYRO</strong> (el arroz es del cliente, no entra a inventario).{" "}
+              🌾 Servicio a nombre de <strong>{matrizName}</strong> (el arroz es del cliente, no entra a inventario).{" "}
               {lotForm.operation_type === "SECADO" && <>Va a <strong>Secadoras</strong> y se entrega; <strong>no</strong> pasa a Producción.</>}
               {lotForm.operation_type === "SECADO_PILADO" && <>Va a <strong>Secadoras</strong> y luego <strong>sí</strong> pasa a Producción.</>}
               {lotForm.operation_type === "PILADO" && <>Ya viene <strong>seco</strong>: salta Secadoras y queda listo en Producción (Desde Stock/Bodega).</>}
@@ -18267,7 +18327,7 @@ function PanelIntegral({ data, month, onMonth, activeAccionistaId, accionistas }
     : k;
   const comprasQqView = filtrar ? accRow!.compras_qq : data.totales.compras_qq;
   const ventasQqView = filtrar ? accRow!.ventas_qq : data.totales.ventas_qq;
-  // Servicio de pilado y costo operativo son propios de la MATRIZ (CEYRO): el
+  // Servicio de pilado y costo operativo son propios de la MATRIZ: el
   // socio los ve en $0 (paga el servicio, no lo cobra; y no opera la planta).
   const serviciosView = (!filtrar || isMatriz) ? data.servicios_pilado : { facturado: 0, pendiente: 0, cobrado: 0, cnt: 0 };
   const costoView = (!filtrar || isMatriz) ? data.costo_operativo : { total: 0, qq: 0, por_qq: 0 };

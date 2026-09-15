@@ -9,7 +9,7 @@ import { type AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const sacksRouter = Router();
 
-// REGLA DE NEGOCIO: solo la MATRIZ (CEYRO / Planta) posee y maneja el stock de
+// REGLA DE NEGOCIO: solo la MATRIZ / Planta posee y maneja el stock de
 // sacos; los socios operativos no compran ni mueven empaques. Toda ESCRITURA de
 // sacos (entradas/salidas/ajustes/compras) debe hacerse bajo el contexto de la
 // matriz. Si el accionista activo no es MATRIZ, se rechaza. Las LECTURAS quedan
@@ -21,7 +21,7 @@ async function assertMatriz(req: AuthenticatedRequest): Promise<void> {
   if (r.rows[0]?.tipo !== "MATRIZ") {
     throw new ApiError(
       403,
-      "El inventario de sacos es exclusivo de la Matriz (CEYRO / Planta). Cámbiate al contexto de la Matriz para registrar movimientos de empaques."
+      "El inventario de sacos es exclusivo de la Matriz / Planta. Cámbiate al contexto de la Matriz para registrar movimientos de empaques."
     );
   }
 }

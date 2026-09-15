@@ -26,7 +26,7 @@ function formatDryingTime(value: string | null | undefined): string {
   return date.toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" });
 }
 
-export default function ReportReadOnlyViews({ report }: { report: ReadOnlyReport }) {
+export default function ReportReadOnlyViews({ report, matrizName = "Matriz" }: { report: ReadOnlyReport; matrizName?: string }) {
   const { kind, data } = report;
 
   if (kind === "ventas") {
@@ -107,7 +107,7 @@ export default function ReportReadOnlyViews({ report }: { report: ReadOnlyReport
 
   return (
     <div className="tablePanel">
-      <h2>Combustible por motor · consumo real (consolidado CEYRO)</h2>
+      <h2>Combustible por motor · consumo real (consolidado {matrizName})</h2>
       <ReportTable headers={["Fecha", "Motor", "Gas consumo", "Gas $", "Diésel consumo", "Diésel $", "Total $"]} rows={reportRows(data.motors).map((row) => [new Date(String(row.fecha)).toLocaleDateString("es-EC"), `Motor ${row.motor}`, `${Number(row.gas_consumo).toFixed(2)} + ${Number(row.gas_cilindros).toFixed(2)} cil.`, money(Number(row.gas_costo)), `${Number(row.diesel_consumo).toFixed(2)}`, money(Number(row.diesel_costo)), money(Number(row.total))])} empty="Sin combustible registrado en el período" />
       {Boolean(data.totals) && (() => { const totals = reportRecord(data.totals); return <div className="totalBox" style={{ marginTop: 10 }}><span>Totales por motor</span><strong>Gas {money(Number(totals.gas))} · Diésel {money(Number(totals.diesel))} · Total {money(Number(totals.total))}</strong></div>; })()}
       <h3 style={{ marginTop: 20, fontSize: 14 }}>Reparto por secadora</h3>

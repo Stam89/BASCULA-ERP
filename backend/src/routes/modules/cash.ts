@@ -575,7 +575,7 @@ cashRouter.post("/payables/:id/pay", asyncRoute(async (req, res) => {
     // La descripción dice a quién se paga, sin repetir "Pago a" si ya lo trae.
     const aQuien = ap.rows[0].farmer_name
       ? `Pago a ${ap.rows[0].farmer_name}`
-      : (refType === "pilado_service" ? `Pago servicio de pilado a CEYRO — ${ap.rows[0].description ?? ""}`
+      : (refType === "pilado_service" ? `Pago servicio de pilado a la matriz — ${ap.rows[0].description ?? ""}`
         : `Pago — ${ap.rows[0].description ?? "cuenta por pagar"}`);
 
     await client.query(
