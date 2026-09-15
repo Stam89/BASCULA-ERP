@@ -35,11 +35,11 @@
 Backend y panel web:
 
 ```text
-C:\Users\ceci2\OneDrive\Documents\GitHub\BASCULA-ERP
+C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP
 ```
 
 Android Studio:
 
 ```text
-C:\Users\ceci2\OneDrive\Documents\GitHub\BASCULA-ERP\android-app
+C:\Users\Usuario\AndroidStudioProjects\BASCULA
 ```

@@ -123,6 +123,8 @@ Antes de operar en serio:
 - probar sincronizacion de app movil;
 - crear respaldo.
 
+Para una entrega formal, completar tambien `docs/checklist-entrega.md`.
+
 ## 6. Inicio rapido en esta computadora
 
 Si Node.js y PostgreSQL ya estan instalados:

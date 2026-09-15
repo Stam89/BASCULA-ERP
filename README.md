@@ -48,9 +48,16 @@ Ese archivo revisa PostgreSQL, inicia backend y panel web si no estan activos, e
 Desde PowerShell:
 
 ```powershell
-cd C:\Users\ceci2\OneDrive\Documents\GitHub\BASCULA-ERP
+cd C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP
 .\iniciar-sistema.ps1
 ```
+
+## Entrega a otra empresa
+
+Para preparar una instalacion nueva, revisar:
+
+- `docs/instalacion.md`
+- `docs/checklist-entrega.md`
 
 ## Estado funcional actual
 
