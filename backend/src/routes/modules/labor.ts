@@ -437,6 +437,7 @@ laborRouter.get("/summary", asyncRoute(async (req, res) => {
             MIN(wp.work_date) FILTER (WHERE wp.status = 'PENDING') AS oldest_pending,
             COUNT(*) FILTER (WHERE wp.status = 'PENDING')::int pending_count,
             SUM(wp.base_amount)::float base_amount,
+            COALESCE(SUM(wp.base_amount) FILTER (WHERE wp.status = 'PENDING'), 0)::float pending_base_amount,
             SUM(wp.net_amount)::float net_amount,
             SUM(wp.net_amount) FILTER (WHERE wp.status = 'PENDING')::float pending_amount,
             SUM(wp.net_amount) FILTER (WHERE wp.status = 'PAID')::float paid_amount,
