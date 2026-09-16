@@ -1776,6 +1776,9 @@ export function App() {
   // Lote cuyo tipo de servicio se está corrigiendo (spinner en su selector).
   const [changingServiceLotId, setChangingServiceLotId] = useState<string | null>(null);
   const [productionDryingId, setProductionDryingId] = useState("");
+  // Identifica un proceso guardado que se esta retomando. Mientras esta activo,
+  // el origen no se puede cambiar porque ya forma parte del lote iniciado.
+  const [millingDraftEditingId, setMillingDraftEditingId] = useState<string | null>(null);
   // Origen del pilado: desde una secadora recién finalizada, o desde un lote de
   // arroz seco ya en bodega (stock). El backend acepta ambos (lote con o sin
   // drying_report). Ver finalizeMillingLot.
@@ -2816,19 +2819,26 @@ export function App() {
         !report.is_processed &&
         !report.apartado_arianos &&
         // Ya iniciado y guardado en "Procesos guardados (en curso)": se excluye
-        // para no duplicar la producción. Doble filtro: (a) flag del backend
-        // (has_draft), (b) respaldo cruzando con los borradores cargados. Al
-        // eliminar/cancelar el proceso guardado, ambos se apagan y el lote vuelve.
-        !report.has_draft &&
-        !millingDrafts.some((d) => d.drying_report_id === report.id) &&
+        // para no duplicar la producción. Excepción: el lote actualmente cargado
+        // se conserva para que el formulario pueda mostrarlo al continuar un
+        // proceso y finalizarlo. Al salir del formulario deja de ser visible.
+        (report.id === productionDryingId || (
+          !report.has_draft &&
+          !millingDrafts.some((d) => d.drying_report_id === report.id)
+        )) &&
         // Fuera SOLO los lotes de 'Solo Servicio de Secado'.
         !esSoloSecado(report)
     ),
-    [dryingReports, millingDrafts]
+    [dryingReports, millingDrafts, productionDryingId]
   );
   const selectedProductionDrying = useMemo(
     () => dryingReports.find((report) => report.id === productionDryingId) ?? null,
     [dryingReports, productionDryingId]
+  );
+  const productionDraftLocked = Boolean(
+    productionSource === "drying" &&
+    productionDryingId &&
+    millingDraftEditingId === productionDryingId
   );
   // Lotes de arroz seco disponibles en bodega para pilar directo. La fuente es el
   // endpoint /lots/dry-in-storage, que ya aplica el filtro ESTRICTO (secado
@@ -7984,6 +7994,11 @@ export function App() {
 
   function updateProductionDryingId(value: string) {
     setProductionDryingId(value);
+    const report = dryingReports.find((item) => item.id === value);
+    const isSavedProcess = Boolean(value && (
+      report?.has_draft || millingDrafts.some((draft) => draft.drying_report_id === value)
+    ));
+    setMillingDraftEditingId(isSavedProcess ? value : null);
     setMillingYields(null);
     // Trae del servidor el proceso guardado de ese túnel, si existe.
     loadDraftFor(value).catch(() => undefined);
@@ -8111,6 +8126,7 @@ export function App() {
     setMillingYields(null);
     setMillingDraftSavedAt(null);
     setProductionDryingId("");
+    setMillingDraftEditingId(null);
     addToast("Proceso guardado. El formulario quedó limpio: retómalo desde «Procesos guardados» con Continuar / Finalizar lote.", "success");
   }
 
@@ -8465,6 +8481,7 @@ export function App() {
       setMillingReport(defaultMillingReport);
       setMillingPiladoEntries([]);
       setMillingDraftSavedAt(null);
+      setMillingDraftEditingId(null);
       return;
     }
     const d = await apiGet<MillingDraft | null>(`/processing-batches/drafts/${dryingId}`).catch(() => null);
@@ -8472,18 +8489,24 @@ export function App() {
       setMillingReport({ ...defaultMillingReport, ...(d.report as Partial<MillingReportState>) });
       setMillingPiladoEntries(Array.isArray(d.pilado_entries) ? d.pilado_entries : []);
       setMillingDraftSavedAt(d.saved_at);
+      setMillingDraftEditingId(dryingId);
     } else {
       setMillingReport(defaultMillingReport);
       setMillingPiladoEntries([]);
       setMillingDraftSavedAt(null);
+      setMillingDraftEditingId(null);
     }
   }
 
   async function finalizeMillingLot() {
+    const showFinalizeValidation = (message: string) => {
+      setMessage(message);
+      addToast(message, "error");
+    };
     // Origen unificado: secadora recién finalizada o lote de arroz seco en stock.
     const src = millingSource;
     if (!src) {
-      setMessage(productionSource === "stock"
+      showFinalizeValidation(productionSource === "stock"
         ? "Elige un lote de arroz seco del stock"
         : "Seleccione la secadora que se esta produciendo");
       return;
@@ -8497,7 +8520,7 @@ export function App() {
     const effMix = computeMillingMix(effEntries);
 
     if (effTotalQq <= 0) {
-      setMessage("Agregue al menos una línea de arroz pilado (en Tula o en Saco)");
+      showFinalizeValidation("Agregue al menos una línea de arroz pilado (en Tula o en Saco)");
       return;
     }
 
@@ -8505,14 +8528,14 @@ export function App() {
     const outputProduct = src.rice_type === "CORRIENTE" ? whiteRiceCorrienteProduct : whiteRiceProduct;
 
     if (!inputProduct?.id || !rawWarehouse?.id || !finishedWarehouse?.id || !outputProduct?.id || !broken34Product?.id || !fineBrokenProduct?.id || !branProduct?.id) {
-      setMessage("Faltan productos o bodegas base. Presiona Crear datos base en Dashboard.");
+      showFinalizeValidation("Faltan productos o bodegas base. Presiona Crear datos base en Dashboard.");
       return;
     }
 
     const totalCascara = Number(src.entrada_qq);
     const result = calculateMillingYields(millingReport, effTotalQq, totalCascara);
     if (!result) {
-      setMessage("El origen seleccionado no tiene total de cascara valido");
+      showFinalizeValidation("El origen seleccionado no tiene total de cascara valido");
       return;
     }
 
@@ -8606,6 +8629,7 @@ export function App() {
     setProductionDryingId("");
     setProductionStockLotId("");
     setMillingDraftSavedAt(null);
+    setMillingDraftEditingId(null);
     // Nómina + stock quedaron registrados en la misma transacción del cierre.
     const trabajadores = [piladorName && "pilador", estibadorName && "estibador"].filter(Boolean).join(" y ");
     addToast(
@@ -11620,11 +11644,13 @@ export function App() {
               <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
                   <input type="radio" name="prodSource" checked={productionSource === "drying"} style={{ width: "auto" }}
+                    disabled={productionDraftLocked}
                     onChange={() => { setProductionSource("drying"); setProductionStockLotId(""); }} />
                   🔥 Desde Secadoras
                 </label>
                 <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
                   <input type="radio" name="prodSource" checked={productionSource === "stock"} style={{ width: "auto" }}
+                    disabled={productionDraftLocked}
                     onChange={() => { setProductionSource("stock"); setProductionDryingId(""); }} />
                   📦 Desde Stock/Bodega de Arroz Seco
                 </label>
@@ -11634,7 +11660,7 @@ export function App() {
                 <>
                   <label>
                     <span>Secadora desde Secadoras</span>
-                    <select value={productionDryingId} onChange={(event) => updateProductionDryingId(event.target.value)} required>
+                    <select value={productionDryingId} onChange={(event) => updateProductionDryingId(event.target.value)} required disabled={productionDraftLocked}>
                       <option value="">Seleccione</option>
                       {productionDryingReports.map((report) => (
                         <option key={report.id} value={report.id}>
@@ -11658,6 +11684,11 @@ export function App() {
                         aparecerá arriba en <strong>Procesos guardados</strong>; presiona <em>Continuar / Finalizar lote</em>.
                       </p>
                     </div>
+                  )}
+                  {productionDraftLocked && (
+                    <p className="muted" style={{ margin: "6px 0 0", color: "#92400e" }}>
+                      🔒 Proceso guardado en edición: el origen de la materia prima está bloqueado.
+                    </p>
                   )}
                 </>
               ) : (
