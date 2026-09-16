@@ -1088,6 +1088,27 @@ type Customer = {
   created_at: string;
 };
 
+type GuiaRemision = {
+  id: string;
+  numero: string | null;
+  fecha_emision: string | null;
+  fecha_inicio_traslado: string | null;
+  fecha_llegada: string | null;
+  punto_partida: string | null;
+  motivo_traslado: string | null;
+  customer_id: string | null;
+  customer_name?: string | null;
+  destinatario_nombre: string | null;
+  destinatario_ruc: string | null;
+  destino_direccion: string | null;
+  transportista_nombre: string | null;
+  transportista_ruc: string | null;
+  transportista_placa: string | null;
+  items: Array<{ cantidad?: string | number; unidad?: string; descripcion?: string }>;
+  observaciones: string | null;
+  created_at: string;
+};
+
 type Sale = {
   id: string;
   sale_number: string;
@@ -2362,7 +2383,27 @@ export function App() {
   const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([]);
   // Ventas se divide en dos sub-vistas: "nuevo" (POS limpio, tomar pedido) y
   // "despachos" (cola de carga/fulfillment para bodega).
-  const [ventasView, setVentasView] = useState<"nuevo" | "despachos">("nuevo");
+  const [ventasView, setVentasView] = useState<"nuevo" | "despachos" | "guias">("nuevo");
+  // ── Guías de Remisión (formato legal EC). Tabla propia guias_remision. ──
+  const emptyGuiaForm = () => ({
+    fecha_emision: new Date().toISOString().slice(0, 10),
+    fecha_inicio_traslado: new Date().toISOString().slice(0, 10),
+    fecha_llegada: "",
+    punto_partida: "",
+    motivo_traslado: "Venta",
+    customer_id: "",
+    destinatario_nombre: "",
+    destinatario_ruc: "",
+    destino_direccion: "",
+    transportista_nombre: "",
+    transportista_ruc: "",
+    transportista_placa: ""
+  });
+  const [guiaForm, setGuiaForm] = useState(emptyGuiaForm());
+  const [guiaItems, setGuiaItems] = useState<Array<{ cantidad: string; unidad: string; descripcion: string }>>([{ cantidad: "", unidad: "QQ", descripcion: "" }]);
+  const [guiaObs, setGuiaObs] = useState("");
+  const [guiasList, setGuiasList] = useState<GuiaRemision[]>([]);
+  const [guiaBusy, setGuiaBusy] = useState(false);
   // Estados financieros: se piden al servidor, que los calcula desde la operación.
   const [finanzas, setFinanzas] = useState<FinanzasData | null>(null);
   const [finanzasDesde, setFinanzasDesde] = useState(`${new Date().getFullYear()}-01-01`);
@@ -4952,6 +4993,40 @@ export function App() {
     setSales(sls);
     setAccountsReceivable(ar.filter(a => a.status !== "PAID"));
     setSalesOrders(ords);
+    loadGuias().catch(() => undefined);
+  }
+
+  async function loadGuias() {
+    try { setGuiasList(await apiGet<GuiaRemision[]>("/guias-remision")); } catch { /* tabla puede no existir aún */ }
+  }
+
+  // Guardar una Guía de Remisión (bloques 1–5). Destinatario + ≥1 ítem con
+  // descripción son obligatorios. Guarda en guias_remision (no toca pedidos).
+  async function guardarGuiaRemision() {
+    if (guiaForm.destinatario_nombre.trim().length < 2) { addToast("Ingresa el cliente / razón social del destinatario", "error"); return; }
+    const items = guiaItems
+      .map((it) => ({ cantidad: it.cantidad.trim(), unidad: it.unidad.trim(), descripcion: it.descripcion.trim() }))
+      .filter((it) => it.descripcion || it.cantidad);
+    if (items.length === 0) { addToast("Agrega al menos un bien transportado (descripción)", "error"); return; }
+    setGuiaBusy(true);
+    try {
+      const saved = await apiPost<GuiaRemision>("/guias-remision", {
+        ...guiaForm,
+        customer_id: guiaForm.customer_id || undefined,
+        items,
+        observaciones: guiaObs.trim() || undefined,
+        created_by: authUser?.id
+      });
+      addToast(`Guía de remisión ${saved.numero ?? ""} guardada`, "success");
+      setGuiaForm(emptyGuiaForm());
+      setGuiaItems([{ cantidad: "", unidad: "QQ", descripcion: "" }]);
+      setGuiaObs("");
+      await loadGuias();
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : "No se pudo guardar la guía", "error");
+    } finally {
+      setGuiaBusy(false);
+    }
   }
 
   async function refreshBasculaTickets() {
@@ -12005,7 +12080,8 @@ export function App() {
             <div style={{ gridColumn: "1 / -1", display: "flex", gap: 8, borderBottom: "2px solid var(--c-border)", marginBottom: 4 }}>
               {([
                 { key: "nuevo", label: "🛒 Nuevo Pedido" },
-                { key: "despachos", label: "🚚 Cola de Despachos" }
+                { key: "despachos", label: "🚚 Cola de Despachos" },
+                { key: "guias", label: "📄 Guías de Remisión" }
               ] as const).map((t) => {
                 const active = ventasView === t.key;
                 return (
@@ -12744,6 +12820,131 @@ export function App() {
                 </form>
               </div>
             )}
+
+            {/* ===== 📄 GUÍAS DE REMISIÓN (formato legal EC) ===== */}
+            {ventasView === "guias" && (
+            <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "minmax(0, 1.4fr) minmax(0, 1fr)", gap: 16, alignItems: "start" }}>
+              {/* Formulario por bloques (simula el documento físico) */}
+              <form className="formPanel" onSubmit={(e) => { e.preventDefault(); guardarGuiaRemision().catch((err) => addToast(err.message, "error")); }} style={{ display: "grid", gap: 14 }}>
+                <h2 style={{ margin: 0 }}>📄 Nueva Guía de Remisión</h2>
+
+                {/* BLOQUE 1: Datos de traslado */}
+                <fieldset style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, margin: 0 }}>
+                  <legend style={{ fontSize: 12, fontWeight: 800, color: "#0f766e", padding: "0 6px" }}>1 · Datos de traslado</legend>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>Fecha de emisión
+                      <input type="date" value={guiaForm.fecha_emision} onChange={(e) => setGuiaForm((f) => ({ ...f, fecha_emision: e.target.value }))} style={{ display: "block", width: "100%", marginTop: 4 }} /></label>
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>Inicio de traslado
+                      <input type="date" value={guiaForm.fecha_inicio_traslado} onChange={(e) => setGuiaForm((f) => ({ ...f, fecha_inicio_traslado: e.target.value }))} style={{ display: "block", width: "100%", marginTop: 4 }} /></label>
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>Fecha de llegada
+                      <input type="date" value={guiaForm.fecha_llegada} onChange={(e) => setGuiaForm((f) => ({ ...f, fecha_llegada: e.target.value }))} style={{ display: "block", width: "100%", marginTop: 4 }} /></label>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 10, marginTop: 10 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>Punto de partida
+                      <input type="text" value={guiaForm.punto_partida} onChange={(e) => setGuiaForm((f) => ({ ...f, punto_partida: e.target.value }))} placeholder={appSettings.address || "Dirección de la piladora"} style={{ display: "block", width: "100%", marginTop: 4 }} /></label>
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>Motivo del traslado
+                      <select value={guiaForm.motivo_traslado} onChange={(e) => setGuiaForm((f) => ({ ...f, motivo_traslado: e.target.value }))} style={{ display: "block", width: "100%", marginTop: 4 }}>
+                        <option>Venta</option>
+                        <option>Consignación</option>
+                        <option>Traslado entre bodegas</option>
+                        <option>Devolución</option>
+                        <option>Otro</option>
+                      </select></label>
+                  </div>
+                </fieldset>
+
+                {/* BLOQUE 2: Destinatario */}
+                <fieldset style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, margin: 0 }}>
+                  <legend style={{ fontSize: 12, fontWeight: 800, color: "#0f766e", padding: "0 6px" }}>2 · Destinatario</legend>
+                  <label style={{ fontSize: 12, fontWeight: 600 }}>Cliente / Razón social
+                    <input list="guiaClientesList" value={guiaForm.destinatario_nombre}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        const cli = customers.find((c) => c.full_name === v);
+                        setGuiaForm((f) => ({ ...f, destinatario_nombre: v, customer_id: cli?.id ?? "", destinatario_ruc: cli?.identification ?? f.destinatario_ruc, destino_direccion: cli?.address ?? f.destino_direccion }));
+                      }}
+                      placeholder="Escribe o elige un cliente" style={{ display: "block", width: "100%", marginTop: 4 }} />
+                    <datalist id="guiaClientesList">{customers.map((c) => <option key={c.id} value={c.full_name} />)}</datalist>
+                  </label>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1.6fr", gap: 10, marginTop: 10 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>R.U.C. / C.I.
+                      <input type="text" value={guiaForm.destinatario_ruc} onChange={(e) => setGuiaForm((f) => ({ ...f, destinatario_ruc: e.target.value }))} style={{ display: "block", width: "100%", marginTop: 4 }} /></label>
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>Destino (dirección de llegada)
+                      <input type="text" value={guiaForm.destino_direccion} onChange={(e) => setGuiaForm((f) => ({ ...f, destino_direccion: e.target.value }))} style={{ display: "block", width: "100%", marginTop: 4 }} /></label>
+                  </div>
+                </fieldset>
+
+                {/* BLOQUE 3: Transportista */}
+                <fieldset style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, margin: 0 }}>
+                  <legend style={{ fontSize: 12, fontWeight: 800, color: "#0f766e", padding: "0 6px" }}>3 · Transportista</legend>
+                  <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr", gap: 10 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>Nombre / Razón social
+                      <input type="text" value={guiaForm.transportista_nombre} onChange={(e) => setGuiaForm((f) => ({ ...f, transportista_nombre: e.target.value }))} style={{ display: "block", width: "100%", marginTop: 4 }} /></label>
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>R.U.C. / C.I.
+                      <input type="text" value={guiaForm.transportista_ruc} onChange={(e) => setGuiaForm((f) => ({ ...f, transportista_ruc: e.target.value }))} style={{ display: "block", width: "100%", marginTop: 4 }} /></label>
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>Placa N°
+                      <input type="text" value={guiaForm.transportista_placa} onChange={(e) => setGuiaForm((f) => ({ ...f, transportista_placa: e.target.value.toUpperCase() }))} style={{ display: "block", width: "100%", marginTop: 4 }} /></label>
+                  </div>
+                </fieldset>
+
+                {/* BLOQUE 4: Bienes transportados (lista dinámica) */}
+                <fieldset style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, margin: 0 }}>
+                  <legend style={{ fontSize: 12, fontWeight: 800, color: "#0f766e", padding: "0 6px" }}>4 · Bienes transportados</legend>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead><tr style={{ background: "#f9fafb" }}>
+                      <th style={{ padding: "6px 8px", textAlign: "left", width: 90 }}>Cantidad</th>
+                      <th style={{ padding: "6px 8px", textAlign: "left", width: 90 }}>Unidad</th>
+                      <th style={{ padding: "6px 8px", textAlign: "left" }}>Descripción</th>
+                      <th style={{ padding: "6px 8px", width: 36 }} />
+                    </tr></thead>
+                    <tbody>
+                      {guiaItems.map((it, i) => (
+                        <tr key={i}>
+                          <td style={{ padding: "4px 6px" }}><input type="text" value={it.cantidad} onChange={(e) => setGuiaItems((cur) => cur.map((x, idx) => idx === i ? { ...x, cantidad: e.target.value } : x))} placeholder="0" style={{ width: "100%" }} /></td>
+                          <td style={{ padding: "4px 6px" }}>
+                            <input list="guiaUnidadesList" value={it.unidad} onChange={(e) => setGuiaItems((cur) => cur.map((x, idx) => idx === i ? { ...x, unidad: e.target.value } : x))} style={{ width: "100%" }} /></td>
+                          <td style={{ padding: "4px 6px" }}><input type="text" value={it.descripcion} onChange={(e) => setGuiaItems((cur) => cur.map((x, idx) => idx === i ? { ...x, descripcion: e.target.value } : x))} placeholder="Ej: Arroz pilado 0.11 en sacos de 100 lb" style={{ width: "100%" }} /></td>
+                          <td style={{ padding: "4px 6px", textAlign: "center" }}>
+                            <button type="button" onClick={() => setGuiaItems((cur) => cur.length > 1 ? cur.filter((_, idx) => idx !== i) : cur)} disabled={guiaItems.length <= 1} title="Eliminar fila" style={{ padding: "3px 7px", borderRadius: 4, opacity: guiaItems.length <= 1 ? 0.4 : 1 }}>🗑️</button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <datalist id="guiaUnidadesList"><option value="QQ" /><option value="Lb" /><option value="Kg" /><option value="Sacos" /><option value="Unidades" /></datalist>
+                  <button type="button" className="btnSecondary" onClick={() => setGuiaItems((cur) => [...cur, { cantidad: "", unidad: "QQ", descripcion: "" }])} style={{ marginTop: 8, fontWeight: 700, padding: "6px 12px", borderRadius: 6 }}>➕ Agregar ítem</button>
+                </fieldset>
+
+                {/* BLOQUE 5: Adicionales */}
+                <fieldset style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, margin: 0 }}>
+                  <legend style={{ fontSize: 12, fontWeight: 800, color: "#0f766e", padding: "0 6px" }}>5 · Adicionales</legend>
+                  <label style={{ fontSize: 12, fontWeight: 600 }}>Observaciones
+                    <textarea value={guiaObs} onChange={(e) => setGuiaObs(e.target.value)} placeholder="Observaciones del traslado" style={{ display: "block", width: "100%", marginTop: 4, minHeight: 60 }} /></label>
+                </fieldset>
+
+                <button type="submit" className="primary" disabled={guiaBusy} style={{ padding: "12px 0", fontWeight: 800, fontSize: 15 }}>{guiaBusy ? "Guardando…" : "💾 Guardar y Generar Guía"}</button>
+              </form>
+
+              {/* Listado de guías guardadas */}
+              <div className="tablePanel">
+                <h2 style={{ marginTop: 0 }}>Guías guardadas</h2>
+                {guiasList.length === 0 ? <p className="muted">Aún no hay guías de remisión.</p> : (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {guiasList.map((g) => (
+                      <div key={g.id} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                          <strong>{g.numero ?? "—"}</strong>
+                          <span className="muted" style={{ fontSize: 12 }}>{(g.fecha_emision || g.created_at || "").slice(0, 10)}</span>
+                        </div>
+                        <div style={{ fontSize: 13 }}>{g.customer_name || g.destinatario_nombre || "—"}{g.destinatario_ruc ? ` · ${g.destinatario_ruc}` : ""}</div>
+                        <div className="muted" style={{ fontSize: 12 }}>{g.motivo_traslado ?? ""}{g.transportista_placa ? ` · 🚚 ${g.transportista_placa}` : ""} · {(g.items ?? []).length} ítem(s)</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+            )}
+
           </section>
         )}
 
