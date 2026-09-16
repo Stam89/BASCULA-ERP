@@ -1664,6 +1664,11 @@ export function App() {
   const [ganaModalId, setGanaModalId] = useState<string | null>(null);
   const ganaTablaRef = useRef<HTMLDivElement | null>(null);
   const [ganaCompartiendo, setGanaCompartiendo] = useState(false);
+  // Compartir por WhatsApp el "Recibo de Secado" de un túnel: recibo oculto que se
+  // renderiza para el túnel elegido y se captura con html2canvas.
+  const tunelTicketRef = useRef<HTMLDivElement | null>(null);
+  const [tunelTicketRep, setTunelTicketRep] = useState<DryingTunnelReport | null>(null);
+  const [tunelCompartiendoId, setTunelCompartiendoId] = useState<string | null>(null);
   const [productionPackages, setProductionPackages] = useState<ProductionPackageState>(defaultProductionPackages);
   const [orderPackage, setOrderPackage] = useState<OrderPackageState>(defaultOrderPackage);
   const [weighingRiceType, setWeighingRiceType] = useState<"0.11" | "CORRIENTE">("0.11");
@@ -7963,6 +7968,62 @@ export function App() {
     }
   }
 
+  // Genera una imagen (PNG) del "Recibo de Secado" del túnel y la comparte:
+  //  1) Web Share API con archivos (móvil / desktop moderno en contexto seguro).
+  //  2) Portapapeles (ideal para WhatsApp Web): "pega con Ctrl+V".
+  //  3) Descarga del PNG como último recurso (LAN/HTTP sin contexto seguro).
+  // El recibo vive oculto fuera de pantalla; se renderiza para ESTE túnel, se
+  // espera un frame a que pinte y se captura con html2canvas.
+  async function compartirTunelWhatsApp(rep: DryingTunnelReport) {
+    if (tunelCompartiendoId) return;
+    const descargarBlob = (b: Blob, n: string) => {
+      const url = URL.createObjectURL(b);
+      const a = document.createElement("a"); a.href = url; a.download = n; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    };
+    setTunelCompartiendoId(rep.id);
+    setTunelTicketRep(rep);
+    try {
+      // Esperar a que React pinte el recibo oculto antes de capturarlo.
+      await new Promise<void>((res) => requestAnimationFrame(() => requestAnimationFrame(() => res())));
+      const el = tunelTicketRef.current;
+      if (!el) throw new Error("No se pudo preparar el recibo");
+      const { default: html2canvas } = await import("html2canvas");
+      const canvas = await html2canvas(el, { backgroundColor: "#ffffff", scale: 2, useCORS: true });
+      const blob: Blob | null = await new Promise((res) => canvas.toBlob((b) => res(b), "image/png"));
+      if (!blob) throw new Error("No se pudo generar la imagen");
+      const nombre = `resumen-tunel-${rep.tunnel_number}.png`;
+      const file = new File([blob], nombre, { type: "image/png" });
+      const texto = `🌀 Resumen de Secado — ${rep.dryer_name ?? "Secadora"} · Túnel ${rep.tunnel_number} · ${Number(rep.total_quintals ?? 0).toFixed(2)} QQ`;
+      const nav = navigator as Navigator & { canShare?: (d: unknown) => boolean };
+      const ClipItem = (window as unknown as { ClipboardItem?: typeof ClipboardItem }).ClipboardItem;
+      if (nav.canShare && nav.canShare({ files: [file] }) && navigator.share) {
+        await navigator.share({ files: [file], title: "Resumen de Secado", text: texto });
+        addToast("Compartido ✅", "success");
+      } else if (navigator.clipboard && typeof navigator.clipboard.write === "function" && ClipItem) {
+        // Fallback principal (WhatsApp Web): copiar la imagen al portapapeles.
+        try {
+          await navigator.clipboard.write([new ClipItem({ "image/png": blob })]);
+          addToast("✅ Imagen copiada al portapapeles. Pégala en tu WhatsApp (Ctrl+V)", "success");
+        } catch {
+          // Si el navegador bloquea el portapapeles, descargar.
+          descargarBlob(blob, nombre);
+          addToast("Imagen descargada. Adjúntala en WhatsApp.", "success");
+        }
+      } else {
+        // Último recurso: descargar el PNG.
+        descargarBlob(blob, nombre);
+        addToast("Imagen descargada. Adjúntala en WhatsApp.", "success");
+      }
+    } catch (err) {
+      if ((err as Error)?.name === "AbortError") return; // el usuario canceló el share
+      addToast(err instanceof Error ? err.message : "No se pudo compartir", "error");
+    } finally {
+      setTunelCompartiendoId(null);
+      setTunelTicketRep(null);
+    }
+  }
+
   // Al elegir una secadora, trae su proceso guardado (si lo hay).
   async function loadDraftFor(dryingId: string) {
     if (!dryingId) {
@@ -9853,11 +9914,81 @@ export function App() {
                                   ✅ Finalizar este túnel
                                 </button>
                               )}
+                              <button
+                                type="button"
+                                className="btnSecondary"
+                                disabled={tunelCompartiendoId === rep.id}
+                                title="Genera una imagen del resumen del túnel para enviarla por WhatsApp"
+                                style={{ borderColor: "#25D366", color: "#128C7E" }}
+                                onClick={() => compartirTunelWhatsApp(rep)}
+                              >
+                                {tunelCompartiendoId === rep.id ? "⏳ Generando…" : "📲 Compartir por WhatsApp"}
+                              </button>
                             </div>
                           </form>
                         );
                       })}
                     </div>
+
+                    {/* Recibo de Secado oculto (fuera de pantalla): se renderiza
+                        para el túnel elegido y html2canvas lo captura como imagen
+                        para compartir por WhatsApp. No es visible para el usuario. */}
+                    {tunelTicketRep && (() => {
+                      const tk = tunelTicketRep;
+                      const secadoraNom = tk.dryer_name ?? `Secadora ${tk.tunnel_number}`;
+                      const fecha = (tk.filled_at ? new Date(tk.filled_at) : new Date())
+                        .toLocaleDateString("es-EC", { day: "2-digit", month: "2-digit", year: "numeric" });
+                      const totalQQ = Number(tk.total_quintals ?? 0).toFixed(2);
+                      return (
+                        <div style={{ position: "absolute", left: -9999, top: 0, pointerEvents: "none" }} aria-hidden="true">
+                          <div ref={tunelTicketRef} style={{
+                            width: 380, boxSizing: "border-box", background: "#ffffff", color: "#1f2937",
+                            fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
+                            borderRadius: 18, padding: 28, border: "1px solid #e5e7eb"
+                          }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                              <div>
+                                <div style={{ fontSize: 11, letterSpacing: 1.5, color: "#059669", fontWeight: 700, textTransform: "uppercase" }}>Recibo de Secado</div>
+                                <div style={{ fontSize: 19, fontWeight: 800, marginTop: 4, lineHeight: 1.2 }}>🌀 {secadoraNom}</div>
+                                <div style={{ fontSize: 15, fontWeight: 600, color: "#374151" }}>Túnel {tk.tunnel_number}</div>
+                              </div>
+                              <div style={{ fontSize: 12, color: "#6b7280", textAlign: "right", whiteSpace: "nowrap" }}>{fecha}</div>
+                            </div>
+
+                            <div style={{ marginTop: 14, fontSize: 13, color: "#374151" }}>
+                              <span style={{ color: "#6b7280" }}>Secador: </span>
+                              <strong>{(tk.operator_name || "—").toUpperCase()}</strong>
+                            </div>
+
+                            <div style={{ marginTop: 16, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 12, padding: "12px 16px", textAlign: "center" }}>
+                              <div style={{ fontSize: 11, color: "#15803d", textTransform: "uppercase", letterSpacing: 1 }}>Peso Total</div>
+                              <div style={{ fontSize: 34, fontWeight: 800, color: "#065f46", lineHeight: 1.1 }}>{totalQQ} <span style={{ fontSize: 18 }}>QQ</span></div>
+                            </div>
+
+                            <div style={{ marginTop: 18 }}>
+                              <div style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8, fontWeight: 700 }}>Detalle de lotes</div>
+                              {(tk.lots ?? []).length === 0 && <div style={{ fontSize: 13, color: "#9ca3af" }}>Sin lotes registrados.</div>}
+                              {(tk.lots ?? []).map((lot, i) => (
+                                <div key={lot.lot_id ?? i} style={{
+                                  display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10,
+                                  padding: "8px 0", borderTop: i === 0 ? "none" : "1px solid #f3f4f6"
+                                }}>
+                                  <div style={{ minWidth: 0 }}>
+                                    <div style={{ fontSize: 14, fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{lot.farmer_name ?? "Sin agricultor"}</div>
+                                    <div style={{ fontSize: 11, color: "#6b7280" }}>{opTypeBadgeLabel(lot.operation_type, lot.is_maquila)}</div>
+                                  </div>
+                                  <div style={{ fontSize: 14, fontWeight: 700, color: "#374151", whiteSpace: "nowrap" }}>{Number(lot.quintals ?? 0).toFixed(2)} QQ</div>
+                                </div>
+                              ))}
+                            </div>
+
+                            <div style={{ marginTop: 20, paddingTop: 12, borderTop: "1px dashed #e5e7eb", textAlign: "center", fontSize: 10, color: "#9ca3af", letterSpacing: 0.5 }}>
+                              Generado por Báscula ERP
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     {renderFuelFieldset()}
                     <div className="buttonRow">
