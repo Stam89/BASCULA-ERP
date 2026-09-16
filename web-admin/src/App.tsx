@@ -9939,6 +9939,7 @@ export function App() {
                       const fecha = (tk.filled_at ? new Date(tk.filled_at) : new Date())
                         .toLocaleDateString("es-EC", { day: "2-digit", month: "2-digit", year: "numeric" });
                       const totalQQ = Number(tk.total_quintals ?? 0).toFixed(2);
+                      const tipoArroz = String(tk.rice_type ?? "").toUpperCase() === "CORRIENTE" ? "Corriente" : (tk.rice_type ? `Grano ${tk.rice_type}` : "—");
                       return (
                         <div style={{ position: "absolute", left: -9999, top: 0, pointerEvents: "none" }} aria-hidden="true">
                           <div ref={tunelTicketRef} style={{
@@ -9955,9 +9956,9 @@ export function App() {
                               <div style={{ fontSize: 12, color: "#6b7280", textAlign: "right", whiteSpace: "nowrap" }}>{fecha}</div>
                             </div>
 
-                            <div style={{ marginTop: 14, fontSize: 13, color: "#374151" }}>
-                              <span style={{ color: "#6b7280" }}>Secador: </span>
-                              <strong>{(tk.operator_name || "—").toUpperCase()}</strong>
+                            <div style={{ marginTop: 14, fontSize: 13, color: "#374151", display: "flex", justifyContent: "space-between", gap: 12 }}>
+                              <span><span style={{ color: "#6b7280" }}>Secador: </span><strong>{(tk.operator_name || "—").toUpperCase()}</strong></span>
+                              <span><span style={{ color: "#6b7280" }}>Tipo de arroz: </span><strong>{tipoArroz}</strong></span>
                             </div>
 
                             <div style={{ marginTop: 16, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 12, padding: "12px 16px", textAlign: "center" }}>
