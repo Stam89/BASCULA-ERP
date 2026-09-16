@@ -4434,9 +4434,19 @@ export function App() {
     setAdminStaffForm({ cargo: st.cargo ?? "", worker_name: st.worker_name, base_salary: String(st.base_salary ?? "") });
   }
   async function removeAdminStaff(st: AdminStaff) {
-    if (!window.confirm(`¿Quitar a ${st.worker_name} de la nómina administrativa? (no borra su historial de pagos)`)) return;
-    try { const r = await apiFetch(`/admin-payroll/staff/${st.id}`, { method: "DELETE" }); if (!r.ok) throw new Error("No se pudo quitar"); addToast("Empleado dado de baja", "success"); await loadAdminStaff(); }
-    catch (e) { addToast(`${e instanceof Error ? e.message : "error"}`, "error"); }
+    if (!window.confirm(`¿Eliminar a ${st.worker_name} de la nómina administrativa? Se borrará el empleado y TODO su historial de sueldos. Esta acción no se puede deshacer.`)) return;
+    // Optimista: quítalo de la lista al instante para que desaparezca sin refrescar.
+    setAdminStaff((prev) => prev.filter((e) => e.id !== st.id));
+    try {
+      const r = await apiFetch(`/admin-payroll/staff/${st.id}`, { method: "DELETE" });
+      if (!r.ok) throw new Error("No se pudo eliminar");
+      addToast(`${st.worker_name} eliminado de la nómina administrativa`, "success");
+      await loadAdminStaff();
+      await loadAdminHistory();
+    } catch (e) {
+      addToast(`${e instanceof Error ? e.message : "error"}`, "error");
+      await loadAdminStaff(); // si falló, restaura la lista real
+    }
   }
   function abrirAdminPay(st: AdminStaff) {
     if (!cajaAbierta) { addToast("Abre una caja para pagar", "error"); return; }

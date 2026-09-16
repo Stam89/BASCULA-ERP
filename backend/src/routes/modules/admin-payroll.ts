@@ -66,14 +66,30 @@ adminPayrollRouter.put("/staff/:id", asyncRoute(async (req, res) => {
   res.json(result.rows[0]);
 }));
 
-// Baja lógica (no borra el histórico de pagos).
+// Borrado REAL del empleado y de su historial de sueldos (aunque tenga pagos).
+// El cliente pide que el trabajador desaparezca por completo del módulo. Se borra
+// en transacción y scoped por accionista. NO se tocan los cash_movements: la caja
+// es un libro contable aparte y debe permanecer cuadrada (el vínculo por
+// reference_id es suave, sin FK). Devuelve cuántos pagos se borraron.
 adminPayrollRouter.delete("/staff/:id", asyncRoute(async (req, res) => {
-  const result = await pool.query(
-    `UPDATE admin_staff SET is_active = false WHERE id = $1 AND accionista_id = $2 RETURNING id`,
-    [req.params.id, accId(req)]
-  );
-  if (!result.rows[0]) throw new ApiError(404, "Empleado no encontrado");
-  res.json({ ok: true });
+  const accionista = accId(req);
+  const out = await inTransaction(async (client) => {
+    const staff = await client.query(
+      "SELECT id FROM admin_staff WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
+      [req.params.id, accionista]
+    );
+    if (!staff.rows[0]) throw new ApiError(404, "Empleado no encontrado");
+    const pagos = await client.query(
+      "DELETE FROM admin_salary_payments WHERE staff_id = $1 AND accionista_id = $2",
+      [req.params.id, accionista]
+    );
+    await client.query(
+      "DELETE FROM admin_staff WHERE id = $1 AND accionista_id = $2",
+      [req.params.id, accionista]
+    );
+    return { pagos: pagos.rowCount ?? 0 };
+  });
+  res.json({ ok: true, pagos_borrados: out.pagos });
 }));
 
 // ── Pendientes de cobro del período de corte ─────────────────────────────────
