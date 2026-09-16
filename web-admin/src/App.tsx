@@ -710,6 +710,7 @@ type MotorActiveReport = {
   lot_code: string;
   accionista_name: string | null;
   dry_start_at: string | null;
+  filled_at: string | null;
 };
 
 /** Túnel ocupado por OTRO accionista (secado en curso): se bloquea en el formulario. */
@@ -1641,6 +1642,23 @@ export function App() {
   // Secados sin finalizar del motor (de TODOS los accionistas: el motor es
   // compartido); entre ellos se reparte el combustible según sus QQ.
   const [motorActiveReports, setMotorActiveReports] = useState<MotorActiveReport[]>([]);
+  // Fecha de llenado y hora de inicio de la corrida del MOTOR, CONTROLADAS por
+  // estado (no uncontrolled): así el admin puede corregirlas en cualquier momento
+  // mientras el motor está "en proceso" y no se pierden en un re-render. Se
+  // siembran desde la corrida activa (o HOY/vacío si es nueva) — ver el effect.
+  const [motorFilledAt, setMotorFilledAt] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [motorDryStart, setMotorDryStart] = useState<string>("");
+  // Anclas de la corrida activa (primer túnel con dato). Se usan para SEMBRAR los
+  // campos controlados: la re-siembra ocurre solo cuando cambia el motor o el
+  // valor real en servidor, así un refresco de fondo no pisa lo que el admin
+  // está escribiendo antes de guardar.
+  const motorFilledAnchor = motorActiveReports.find((r) => r.filled_at)?.filled_at ?? null;
+  const motorStartAnchor = motorActiveReports.find((r) => r.dry_start_at)?.dry_start_at ?? null;
+  useEffect(() => {
+    setMotorFilledAt((motorFilledAnchor ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10));
+    setMotorDryStart(motorStartAnchor ? dateTimeLocalValue(motorStartAnchor) : "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [motorActivo, motorFilledAnchor, motorStartAnchor]);
   // Túneles ocupados por OTROS accionistas (secado en curso): túnel → nombre del
   // accionista que lo usa. El formulario de llenado bloquea esas secciones.
   const [occupiedTunnels, setOccupiedTunnels] = useState<Record<number, string>>({});
@@ -7151,14 +7169,12 @@ export function App() {
     const conIngresos = secadoras.filter((s) => seleccionDe(s).length > 0);
     const hayCombustible = combustibleTotal > 0;
 
-    // El motor enciende una sola vez: la hora de INICIO del secado es la misma
-    // para las dos secadoras del motor; solo la hora FINAL puede variar. Si ya
-    // hay un secado activo con hora de inicio, esa manda sobre lo digitado.
-    const inicioActivo = motorActiveReports.find((r) => r.dry_start_at)?.dry_start_at ?? null;
-    const horaInicioMotor = inicioActivo ?? stringOrUndefined(form.get("dry_start_at_motor"));
-    // Fecha de llenado y secador ÚNICOS de la corrida del motor: se aplican a
-    // TODAS las secadoras para que la tanda entera quede con la misma fecha.
-    const fechaLlenadoMotor = stringOrUndefined(form.get("filled_at_motor"));
+    // Fecha de llenado y hora de inicio ÚNICAS de la corrida del motor: se toman
+    // del ESTADO CONTROLADO (editable en todo momento). Lo que el admin escribe
+    // MANDA: si corrige la fecha/hora de una corrida ya en proceso, ese valor se
+    // usa para los nuevos secados Y se sincroniza a los activos (más abajo).
+    const horaInicioMotor = motorDryStart.trim() || undefined;
+    const fechaLlenadoMotor = motorFilledAt.trim() || undefined;
     const secadorMotor = String(form.get("secador_motor") ?? "").trim();
 
     // Candado: no se puede guardar nada en un túnel que está secando a otro
@@ -7170,7 +7186,10 @@ export function App() {
       return;
     }
 
-    if (conIngresos.length === 0 && !hayCombustible) {
+    // Si el motor ya tiene una corrida en proceso, se permite guardar SOLO para
+    // corregir la fecha/hora/secador (sin ingresos ni combustible nuevos).
+    const hayCorridaActiva = motorActiveReports.length > 0;
+    if (conIngresos.length === 0 && !hayCombustible && !hayCorridaActiva) {
       setMessage("Agrega ingresos a alguna secadora o registra el combustible del motor");
       return;
     }
@@ -7215,6 +7234,23 @@ export function App() {
     const activos = await apiGet<MotorActiveReport[]>(`/process-flow/drying/motor/${motorActivo}/active`).catch(() => [] as MotorActiveReport[]);
     setMotorActiveReports(activos);
 
+    // 1b) Sincroniza la fecha de llenado, hora de inicio y secador (posiblemente
+    // CORREGIDOS por el admin) a TODOS los túneles activos de la corrida. Así una
+    // corrección se guarda aunque no se agreguen ingresos nuevos, y toda la tanda
+    // queda con la misma fecha/hora. El backend usa COALESCE (no borra con nulos).
+    let sincronizados = 0;
+    if (activos.length > 0 && (fechaLlenadoMotor || horaInicioMotor || secadorMotor)) {
+      const sync = await apiPost<{ sincronizados: number; cuadrilla_refechada: number }>(
+        `/process-flow/drying/motor/${motorActivo}/sync-run`,
+        { filled_at: fechaLlenadoMotor, dry_start_at: horaInicioMotor, operator_name: secadorMotor || undefined }
+      ).catch(() => ({ sincronizados: 0, cuadrilla_refechada: 0 }));
+      sincronizados = sync.sincronizados;
+      if (sincronizados > 0) {
+        const refreshed = await apiGet<MotorActiveReport[]>(`/process-flow/drying/motor/${motorActivo}/active`).catch(() => activos);
+        setMotorActiveReports(refreshed);
+      }
+    }
+
     // 2) El combustible del motor, repartido entre todos los secados activos.
     let msgFuel = "";
     if (hayCombustible) {
@@ -7244,10 +7280,14 @@ export function App() {
     setEditingDryingReport(null);
     await refresh();
     await loadMotorActive();
-    addToast(
-      `Informe del Motor ${motorActivo} guardado: ${creados} secadora(s)${msgFuel}`,
-      "success"
-    );
+    if (creados === 0 && !hayCombustible && sincronizados > 0) {
+      addToast(`Corrida del Motor ${motorActivo} actualizada: fecha/hora aplicada a ${sincronizados} túnel(es).`, "success");
+    } else {
+      addToast(
+        `Informe del Motor ${motorActivo} guardado: ${creados} secadora(s)${sincronizados > 0 ? ` · fecha/hora sincronizada (${sincronizados})` : ""}${msgFuel}`,
+        "success"
+      );
+    }
   }
 
   // Cierra el combustible del motor: lo reparte entre los secados de la última
@@ -10017,18 +10057,22 @@ export function App() {
                     motor. Así toda la tanda queda con la misma fecha y no se desfasa. */}
                 <div style={{ marginBottom: 12, padding: "10px 12px", background: "#eff6ff", borderRadius: 8, border: "1px solid #bfdbfe" }}>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    {/* Controladas por estado: editables SIEMPRE mientras el motor
+                        está en proceso; un re-render no las revierte. */}
                     <Input
                       name="filled_at_motor"
                       label="📅 Fecha de llenado (única para el motor)"
                       type="date"
-                      defaultValue={new Date().toISOString().slice(0, 10)}
+                      value={motorFilledAt}
+                      onChange={(e) => setMotorFilledAt(e.target.value)}
                       required={false}
                     />
                     <Input
                       name="dry_start_at_motor"
                       label="⏱️ Hora secado inicio (única para el motor)"
                       type="datetime-local"
-                      defaultValue={dateTimeLocalValue(motorActiveReports.find((r) => r.dry_start_at)?.dry_start_at)}
+                      value={motorDryStart}
+                      onChange={(e) => setMotorDryStart(e.target.value)}
                       required={false}
                     />
                   </div>
