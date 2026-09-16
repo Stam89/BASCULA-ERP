@@ -91,3 +91,16 @@ El sistema se considera listo para entregar cuando:
 - el usuario administrador real puede entrar;
 - Campo/Transporte tiene su flota y operadores reales;
 - no hay datos de prueba mezclados con produccion.
+
+## 8. Preparacion futura para nuevas empresas
+
+La entrega multiempresa con inicio de sesion Google esta documentada en
+`docs/alta-nueva-empresa-google.md`, pero queda desactivada hasta que el ERP
+este estable y probado. Antes de activarla se debe confirmar:
+
+- respaldo restaurable de la empresa actual;
+- aislamiento probado entre dos empresas;
+- codigo de union y `NEGOCIO_ID` unicos;
+- permisos verificados en ERP, Firebase y BASCULA;
+- compatibilidad con usuarios locales existentes;
+- plan de vuelta atras probado.
