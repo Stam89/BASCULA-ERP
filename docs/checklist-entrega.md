@@ -7,6 +7,7 @@ otra empresa o dejar una instalacion nueva lista para operar.
 
 - `backend/.env` configurado con `DATABASE_URL`, `JWT_SECRET` y datos de empresa.
 - `APP_MODE=production` configurado para operar con datos reales.
+- `npm run preflight` ejecutado sin errores criticos.
 - `COMPANY_NAME` y `COMPANY_CODE` corresponden a la empresa real.
 - `FIELD_OPERATION_NAME` corresponde a la operacion de Campo/Transporte.
 - `NEGOCIO_ID` es unico para esa empresa si se usa Firebase/app movil.

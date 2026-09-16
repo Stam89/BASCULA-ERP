@@ -53,11 +53,15 @@ Si se va a hacer una prueba antes de entregar, usar una base separada y revisar
 Ejecutar en orden:
 
 ```powershell
+npm run preflight
 npm run db:init
 npm run db:migrate
 npm run db:company:init
 npm run db:seed
 ```
+
+`preflight` revisa el `.env` antes de crear datos. Si marca `ERROR`, corregir
+eso primero.
 
 `db:company:init` prepara:
 

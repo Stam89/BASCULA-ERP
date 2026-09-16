@@ -12,7 +12,8 @@
     "db:init": "psql \"$DATABASE_URL\" -f ../database/schema.sql",
     "db:migrate": "tsx src/scripts/migrate.ts",
     "db:seed": "tsx src/scripts/seed.ts",
-    "db:company:init": "tsx src/scripts/init-company.ts"
+    "db:company:init": "tsx src/scripts/init-company.ts",
+    "preflight": "tsx src/scripts/preflight.ts"
   },
   "dependencies": {
     "@types/multer": "^2.1.0",
