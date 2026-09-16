@@ -677,6 +677,8 @@ type DryingTunnelReport = {
   botada_sacos?: string | number | null;
   is_processed?: boolean;
   apartado_arianos?: boolean;
+  /** Método de secado: 'TUNEL' (mecánico) o 'TENDAL' (patio al sol). */
+  dry_method?: "TUNEL" | "TENDAL" | null;
   lots: DryingTunnelLot[];
 };
 
@@ -1612,6 +1614,10 @@ export function App() {
   const [dryingReports, setDryingReports] = useState<DryingTunnelReport[]>([]);
   // ☀️ Secado en Tendal (patio): formulario propio. Responsable siempre CUADRILLA.
     const [tendalForm, setTendalForm] = useState({ lot_code: "", rice_type: "0.11" as "0.11" | "CORRIENTE", moisture_before: "", moisture_after: "", hora_inicio: "", hora_fin: "", recepcion_empaque: "TULAS" as "TULAS" | "SACOS", modo: "GRANEL" as "GRANEL" | "ENSACADO", sacos: "" });
+  // Tendal EN EDICIÓN (multi-día): id del reporte + sus lotes ya asignados. Si es
+  // null, el formulario está en modo CREAR. Permite guardar en proceso y volver a
+  // editar varios días antes de finalizar.
+  const [editingTendal, setEditingTendal] = useState<{ id: string; lots: DryingTunnelLot[]; status: string } | null>(null);
   const [liquidacionesList, setLiquidacionesList] = useState<LiqRecord[]>([]);
   const [stock, setStock] = useState<StockRow[]>([]);
   const [insumos, setInsumos] = useState<Insumo[]>([]);
@@ -7137,6 +7143,29 @@ export function App() {
   }
 
   function editDryingReport(report: DryingTunnelReport) {
+    // El TENDAL tiene su propio formulario (no vive bajo un motor). Se carga en él
+    // para poder editarlo varios días y finalizarlo cuando corresponda.
+    const esTendal = String(report.dry_method ?? "").toUpperCase() === "TENDAL"
+      || (report.tunnel_number == null && !report.dryer_name);
+    if (esTendal) {
+      setEditingDryingReport(null);
+      setEditingTendal({ id: report.id, lots: report.lots ?? [], status: report.status });
+      const esEnsacado = String(report.recepcion_empaque ?? "").toUpperCase() === "SACOS";
+      setTendalForm({
+        lot_code: report.lots?.[0]?.lot_code ?? "",
+        rice_type: (report.rice_type === "CORRIENTE" ? "CORRIENTE" : "0.11"),
+        moisture_before: report.moisture_before != null ? String(report.moisture_before) : "",
+        moisture_after: "",
+        hora_inicio: dateTimeLocalValue(report.dry_start_at),
+        hora_fin: dateTimeLocalValue(report.dry_end_at),
+        recepcion_empaque: esEnsacado ? "SACOS" : "TULAS",
+        modo: esEnsacado ? "ENSACADO" : "GRANEL",
+        sacos: report.recepcion_sacos != null ? String(report.recepcion_sacos) : ""
+      });
+      setSecadoraAbierta("TENDAL");
+      setMessage(`Editando secado en Tendal (${report.status === "COMPLETED" ? "finalizado" : "En proceso"})`);
+      return;
+    }
     setEditingDryingReport(report);
     // El formulario del secado vive bajo su motor: cambiar a esa vista y ABRIR
     // el acordeón de ese motor para que el formulario de edición sea visible.
@@ -7304,12 +7333,46 @@ export function App() {
   // corrida (aunque ya estén finalizados). Se usa desde la edición del motor.
   // Registra un secado en TENDAL: reusa el pipeline de secado (sin túnel ni
   // combustible), deja el arroz disponible en Producción y paga a la cuadrilla.
-  async function submitTendal() {
-      const ids = seleccionDe("TENDAL");
-      if (ids.length === 0) { addToast("Agrega al menos un ingreso de materia prima al lote", "error"); return; }
+  // Guarda o finaliza un secado en Tendal. `finalizar=false` (Guardar cambios) lo
+  // deja "En proceso" (multi-día); `finalizar=true` lo cierra (COMPLETED), paga a
+  // la cuadrilla y libera el arroz a Producción. Crea uno nuevo o ACTUALIZA el que
+  // se está editando (editingTendal).
+  function limpiarTendal() {
+    setTendalForm({ lot_code: "", rice_type: "0.11", moisture_before: "", moisture_after: "", hora_inicio: "", hora_fin: "", recepcion_empaque: "TULAS", modo: "GRANEL", sacos: "" });
+    setDryingSelections((cur) => { const n = { ...cur }; delete n["TENDAL"]; return n; });
+    setDryingEntryPick((cur) => ({ ...cur, TENDAL: "" }));
+    setEditingTendal(null);
+  }
+  async function submitTendal(finalizar: boolean) {
       const esEnsacado = tendalForm.modo === "ENSACADO";
       const sacos = Number(tendalForm.sacos);
       if (esEnsacado && !(sacos > 0)) { addToast("Ingresa el número de sacos entregados (Ensacado)", "error"); return; }
+      // Al finalizar, si no se puso hora fin, se usa AHORA.
+      const horaFin = finalizar ? (tendalForm.hora_fin || dateTimeLocalValue(new Date().toISOString())) : undefined;
+
+      if (editingTendal) {
+        // ── Editar un tendal existente (multi-día) → PUT. No cambia sus lotes. ──
+        await apiFetch(`/process-flow/drying/${editingTendal.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            rice_type: tendalForm.rice_type,
+            moisture_before: tendalForm.moisture_before ? Number(tendalForm.moisture_before) : undefined,
+            dry_start_at: tendalForm.hora_inicio || undefined,
+            dry_end_at: horaFin,
+            recepcion_empaque: esEnsacado ? "SACOS" : tendalForm.recepcion_empaque,
+            recepcion_sacos: esEnsacado ? sacos : undefined
+          })
+        }).then((r) => { if (!r.ok) return r.json().then((e) => { throw new Error(e?.error || "No se pudo guardar el tendal"); }); });
+        addToast(finalizar ? "Tendal finalizado: arroz disponible para producción y cuadrilla pagada." : "Cambios del tendal guardados. Sigue En proceso.", "success");
+        limpiarTendal();
+        await refresh();
+        return;
+      }
+
+      // ── Crear un tendal nuevo ──
+      const ids = seleccionDe("TENDAL");
+      if (ids.length === 0) { addToast("Agrega al menos un ingreso de materia prima al lote", "error"); return; }
       await apiPost("/process-flow/drying-tendal", {
         entry_ids: ids,
         lot_code: tendalForm.lot_code.trim() || undefined,
@@ -7317,19 +7380,18 @@ export function App() {
         moisture_before: tendalForm.moisture_before ? Number(tendalForm.moisture_before) : undefined,
         moisture_after: tendalForm.moisture_after ? Number(tendalForm.moisture_after) : undefined,
         dry_start_at: tendalForm.hora_inicio || undefined,
-        dry_end_at: tendalForm.hora_fin || undefined,
-        // Destino/operativa de la cuadrilla: A granel (por QQ, tarifa "SECADO EN
-        // TENDAL") o Ensacado (por saco, tarifa "TENDAL POR SACO"). Siempre se envía
-        // un valor válido (default GRANEL) para que el backend no reciba undefined.
+        // Solo al FINALIZAR se manda dry_end_at → el backend lo deja COMPLETED y
+        // paga a la cuadrilla; sin dry_end_at queda "En proceso" (multi-día).
+        dry_end_at: horaFin,
         tendal_mode: tendalForm.modo === "ENSACADO" ? "ENSACADO" : "GRANEL",
         recepcion_empaque: esEnsacado ? "SACOS" : tendalForm.recepcion_empaque,
         recepcion_sacos: esEnsacado ? sacos : undefined,
         created_by: authUser?.id
       });
-      addToast("Secado en tendal registrado: arroz disponible para producción y pago de cuadrilla generado.", "success");
-      setTendalForm({ lot_code: "", rice_type: "0.11", moisture_before: "", moisture_after: "", hora_inicio: "", hora_fin: "", recepcion_empaque: "TULAS", modo: "GRANEL", sacos: "" });
-      setDryingSelections((cur) => { const n = { ...cur }; delete n["TENDAL"]; return n; });
-      setDryingEntryPick((cur) => ({ ...cur, TENDAL: "" }));
+      addToast(finalizar
+        ? "Secado en tendal finalizado: arroz disponible para producción y pago de cuadrilla generado."
+        : "Secado en tendal guardado En proceso. Puedes seguir editándolo otro día.", "success");
+      limpiarTendal();
       await refresh();
     }
 
@@ -9858,28 +9920,38 @@ export function App() {
             <div className="secBodyPanel tablePanel" hidden={secadoraAbierta !== "TENDAL"} style={{ gridColumn: "1 / -1" }}>
               <h2 style={{ margin: "0 0 2px", fontSize: 15 }}>☀️ Secado en Tendal (Patio)</h2>
               <p className="muted" style={{ marginTop: 6, marginBottom: 10 }}>Secado al sol en el patio. Sin motor ni combustible; la mano de obra va a la <strong>CUADRILLA</strong>. Al registrarlo, el arroz queda disponible en Producción igual que un secado mecánico.</p>
-              <form className="formPanel" onSubmit={(e) => { e.preventDefault(); submitTendal().catch((err) => addToast(err.message, "error")); }}>
+              <form className="formPanel" onSubmit={(e) => e.preventDefault()}>
+                {editingTendal ? (
+                  <div style={{ background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "8px 12px", marginBottom: 8, fontSize: 13 }}>
+                    ✎ Editando tendal {editingTendal.status === "COMPLETED" ? <b>(finalizado)</b> : <b>⏳ En proceso</b>}. Puedes ajustar humedad/fechas y guardarlo cuantas veces necesites; finalízalo solo cuando el arroz esté seco.
+                    <button type="button" className="btnGhost" style={{ marginLeft: 8 }} onClick={() => limpiarTendal()}>✕ Salir de edición</button>
+                  </div>
+                ) : null}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 10 }}>
-                  <label><span>Tipo de arroz</span><select value={tendalForm.rice_type} onChange={(e) => setTendalForm((f) => ({ ...f, rice_type: e.target.value as "0.11" | "CORRIENTE" }))}><option value="0.11">0.11</option><option value="CORRIENTE">CORRIENTE</option></select></label>
-                  <label><span>Ingreso de materia prima</span>
-                    <select value={dryingEntryPick["TENDAL"] ?? ""} onChange={(ev) => setDryingEntryPick((cur) => ({ ...cur, TENDAL: ev.target.value }))}>
-                      <option value="">Seleccione</option>
-                      {entradasLibres.filter((entry) => (entry.rice_type ?? "0.11") === tendalForm.rice_type).map((entry) => (
-                        <option key={entry.id} value={entry.id}>{entryLabel(entry)} - {entry.farmer_name ?? "Sin agricultor"} - {Number(entry.quintals ?? 0).toFixed(2)} QQ{entry.rice_type ? ` · ${entry.rice_type}` : ""}{(() => { const b = opTypeBadgeLabel(entry.operation_type, entry.is_maquila); return b ? ` · ${b}` : ""; })()}</option>
-                      ))}
-                    </select>
-                  </label>
+                  <label><span>Tipo de arroz</span><select value={tendalForm.rice_type} disabled={!!editingTendal} onChange={(e) => setTendalForm((f) => ({ ...f, rice_type: e.target.value as "0.11" | "CORRIENTE" }))}><option value="0.11">0.11</option><option value="CORRIENTE">CORRIENTE</option></select></label>
+                  {!editingTendal && (
+                    <label><span>Ingreso de materia prima</span>
+                      <select value={dryingEntryPick["TENDAL"] ?? ""} onChange={(ev) => setDryingEntryPick((cur) => ({ ...cur, TENDAL: ev.target.value }))}>
+                        <option value="">Seleccione</option>
+                        {entradasLibres.filter((entry) => (entry.rice_type ?? "0.11") === tendalForm.rice_type).map((entry) => (
+                          <option key={entry.id} value={entry.id}>{entryLabel(entry)} - {entry.farmer_name ?? "Sin agricultor"} - {Number(entry.quintals ?? 0).toFixed(2)} QQ{entry.rice_type ? ` · ${entry.rice_type}` : ""}{(() => { const b = opTypeBadgeLabel(entry.operation_type, entry.is_maquila); return b ? ` · ${b}` : ""; })()}</option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
                 </div>
-                <button type="button" className="btnSecondary" onClick={() => addDryingEntry("TENDAL")} style={{ padding: "8px 14px", borderRadius: 8, fontWeight: 700, marginTop: 4 }}>➕ Agregar al lote</button>
-                <DryingLotSelector selectedLots={tendalLotes} editing={false} onRemove={(id) => removeDryingEntry("TENDAL", id)} />
+                {!editingTendal && (
+                  <button type="button" className="btnSecondary" onClick={() => addDryingEntry("TENDAL")} style={{ padding: "8px 14px", borderRadius: 8, fontWeight: 700, marginTop: 4 }}>➕ Agregar al lote</button>
+                )}
+                <DryingLotSelector selectedLots={editingTendal ? editingTendal.lots : tendalLotes} editing={!!editingTendal} onRemove={(id) => removeDryingEntry("TENDAL", id)} />
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  <label><span>Peso Total (QQ)</span><input type="text" readOnly value={tendalQQ.toFixed(2)} style={{ fontWeight: 700 }} /></label>
+                  {!editingTendal && <label><span>Peso Total (QQ)</span><input type="text" readOnly value={tendalQQ.toFixed(2)} style={{ fontWeight: 700 }} /></label>}
                   <label><span>Salida <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>(define la tarifa)</span></span><select value={tendalForm.modo} onChange={(e) => setTendalForm((f) => ({ ...f, modo: e.target.value as "GRANEL" | "ENSACADO" }))}><option value="GRANEL">Directo a Producción (A granel)</option><option value="ENSACADO">Sacos</option></select></label>
-                  <label><span>Código de lote (opcional)</span><input value={tendalForm.lot_code} onChange={(e) => setTendalForm((f) => ({ ...f, lot_code: e.target.value }))} placeholder="Automático (00001-DD-MM-YY)" /></label>
+                  {!editingTendal && <label><span>Código de lote (opcional)</span><input value={tendalForm.lot_code} onChange={(e) => setTendalForm((f) => ({ ...f, lot_code: e.target.value }))} placeholder="Automático (00001-DD-MM-YY)" /></label>}
                   <label><span>Humedad inicial (%)</span><input type="number" step="0.1" min="0" value={tendalForm.moisture_before} onChange={(e) => setTendalForm((f) => ({ ...f, moisture_before: e.target.value }))} /></label>
                   <label><span>Humedad final (%)</span><input type="number" step="0.1" min="0" value={tendalForm.moisture_after} onChange={(e) => setTendalForm((f) => ({ ...f, moisture_after: e.target.value }))} /></label>
                   <label><span>Hora inicio</span><input type="datetime-local" value={tendalForm.hora_inicio} onChange={(e) => setTendalForm((f) => ({ ...f, hora_inicio: e.target.value }))} /></label>
-                  <label><span>Hora fin</span><input type="datetime-local" value={tendalForm.hora_fin} onChange={(e) => setTendalForm((f) => ({ ...f, hora_fin: e.target.value }))} /></label>
+                  <label><span>Hora fin <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>(al finalizar)</span></span><input type="datetime-local" value={tendalForm.hora_fin} onChange={(e) => setTendalForm((f) => ({ ...f, hora_fin: e.target.value }))} /></label>
                   <label><span>Responsable</span><input value="CUADRILLA" readOnly disabled title="El secado en tendal siempre lo cobra la cuadrilla" /></label>
                 </div>
                 {/* Salida = Sacos (Ensacado, tarifa "TENDAL POR SACO" por saco) o Directo
@@ -9891,9 +9963,24 @@ export function App() {
                     <input type="number" step="1" min="0" value={tendalForm.sacos} onChange={(e) => setTendalForm((f) => ({ ...f, sacos: e.target.value }))} placeholder="Cantidad de sacos" />
                   </label>
                 )}
-                <div className="buttonRow" style={{ marginTop: 10 }}>
-                  <button type="submit" className="primary" disabled={tendalLotes.length === 0 || (tendalForm.modo === "ENSACADO" && !(Number(tendalForm.sacos) > 0))}>☀️ Registrar secado en tendal</button>
-                </div>
+                {/* Botonera: Guardar (queda En proceso) vs Finalizar (cierra y paga).
+                    Contenedor flexible: envuelve y crece sin desbordar el texto. */}
+                {editingTendal?.status !== "COMPLETED" && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 12 }}>
+                    <button type="button" className="btnSecondary"
+                      style={{ flex: "1 1 200px", maxWidth: 280, minHeight: 44, padding: "8px 16px", textAlign: "center", whiteSpace: "normal", fontWeight: 700, borderRadius: 10, border: "1.5px solid #2563eb", color: "#2563eb", background: "transparent" }}
+                      disabled={!editingTendal && (tendalLotes.length === 0 || (tendalForm.modo === "ENSACADO" && !(Number(tendalForm.sacos) > 0)))}
+                      onClick={() => submitTendal(false).catch((err) => addToast(err.message, "error"))}>
+                      💾 Guardar cambios
+                    </button>
+                    <button type="button" className="primary"
+                      style={{ flex: "1 1 200px", maxWidth: 320, minHeight: 44, padding: "8px 16px", textAlign: "center", whiteSpace: "normal", fontWeight: 800, borderRadius: 10, background: "var(--c-success)" }}
+                      disabled={!editingTendal && (tendalLotes.length === 0 || (tendalForm.modo === "ENSACADO" && !(Number(tendalForm.sacos) > 0)))}
+                      onClick={() => submitTendal(true).catch((err) => addToast(err.message, "error"))}>
+                      ✅ Finalizar este tendal
+                    </button>
+                  </div>
+                )}
               </form>
             </div>
 
@@ -9974,24 +10061,27 @@ export function App() {
                               defSacos: rep.botada_sacos ?? null,
                               qq: Number(rep.total_quintals ?? 0)
                             })}
-                            <div className="buttonRow">
-                              <button className="primary">Guardar cambios</button>
+                            {/* Botonera flexible: envuelve en varias líneas y cada
+                                botón crece hacia abajo sin desbordar el texto. */}
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 4 }}>
+                              <button className="primary" style={{ flex: "1 1 160px", minHeight: 44, padding: "8px 16px", textAlign: "center", whiteSpace: "normal", borderRadius: 10 }}>💾 Guardar cambios</button>
                               <button
                                 type="button"
                                 className="btnSecondary"
                                 title="Copia la fecha de llenado, hora de inicio y secador de este túnel a todos los túneles activos del mismo motor"
+                                style={{ flex: "1 1 160px", minHeight: 44, padding: "8px 16px", textAlign: "center", whiteSpace: "normal", borderRadius: 10 }}
                                 onClick={(e) => {
                                   const form = e.currentTarget.closest("form") as HTMLFormElement | null;
                                   if (form) aplicarCorridaATodos(rep, form).catch((error) => setMessage(error.message));
                                 }}
                               >
-                                📌 Aplicar fecha y secador a todo el motor
+                                📌 Aplicar al motor
                               </button>
                               {!done && (
                                 <button
                                   type="button"
                                   className="primary"
-                                  style={{ background: "var(--c-success)" }}
+                                  style={{ flex: "1 1 160px", minHeight: 44, padding: "8px 16px", textAlign: "center", whiteSpace: "normal", borderRadius: 10, background: "var(--c-success)" }}
                                   onClick={(e) => {
                                     const form = e.currentTarget.closest("form") as HTMLFormElement | null;
                                     if (form) guardarSecadoEditado(rep, form, true).catch((error) => setMessage(error.message));
@@ -10000,82 +10090,11 @@ export function App() {
                                   ✅ Finalizar este túnel
                                 </button>
                               )}
-                              <button
-                                type="button"
-                                className="btnSecondary"
-                                disabled={tunelCompartiendoId === rep.id}
-                                title="Genera una imagen del resumen del túnel para enviarla por WhatsApp"
-                                style={{ borderColor: "#25D366", color: "#128C7E" }}
-                                onClick={() => compartirTunelWhatsApp(rep)}
-                              >
-                                {tunelCompartiendoId === rep.id ? "⏳ Generando…" : "📲 Compartir por WhatsApp"}
-                              </button>
                             </div>
                           </form>
                         );
                       })}
                     </div>
-
-                    {/* Recibo de Secado oculto (fuera de pantalla): se renderiza
-                        para el túnel elegido y html2canvas lo captura como imagen
-                        para compartir por WhatsApp. No es visible para el usuario. */}
-                    {tunelTicketRep && (() => {
-                      const tk = tunelTicketRep;
-                      const secadoraNom = tk.dryer_name ?? `Secadora ${tk.tunnel_number}`;
-                      const fecha = (tk.filled_at ? new Date(tk.filled_at) : new Date())
-                        .toLocaleDateString("es-EC", { day: "2-digit", month: "2-digit", year: "numeric" });
-                      const totalQQ = Number(tk.total_quintals ?? 0).toFixed(2);
-                      const tipoArroz = String(tk.rice_type ?? "").toUpperCase() === "CORRIENTE" ? "Corriente" : (tk.rice_type ? `Grano ${tk.rice_type}` : "—");
-                      return (
-                        <div style={{ position: "absolute", left: -9999, top: 0, pointerEvents: "none" }} aria-hidden="true">
-                          <div ref={tunelTicketRef} style={{
-                            width: 380, boxSizing: "border-box", background: "#ffffff", color: "#1f2937",
-                            fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-                            borderRadius: 18, padding: 28, border: "1px solid #e5e7eb"
-                          }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-                              <div>
-                                <div style={{ fontSize: 11, letterSpacing: 1.5, color: "#059669", fontWeight: 700, textTransform: "uppercase" }}>Recibo de Secado</div>
-                                <div style={{ fontSize: 19, fontWeight: 800, marginTop: 4, lineHeight: 1.2 }}>🌀 {secadoraNom}</div>
-                                <div style={{ fontSize: 15, fontWeight: 600, color: "#374151" }}>Túnel {tk.tunnel_number}</div>
-                              </div>
-                              <div style={{ fontSize: 12, color: "#6b7280", textAlign: "right", whiteSpace: "nowrap" }}>{fecha}</div>
-                            </div>
-
-                            <div style={{ marginTop: 14, fontSize: 13, color: "#374151", display: "flex", justifyContent: "space-between", gap: 12 }}>
-                              <span><span style={{ color: "#6b7280" }}>Secador: </span><strong>{(tk.operator_name || "—").toUpperCase()}</strong></span>
-                              <span><span style={{ color: "#6b7280" }}>Tipo de arroz: </span><strong>{tipoArroz}</strong></span>
-                            </div>
-
-                            <div style={{ marginTop: 16, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 12, padding: "12px 16px", textAlign: "center" }}>
-                              <div style={{ fontSize: 11, color: "#15803d", textTransform: "uppercase", letterSpacing: 1 }}>Peso Total</div>
-                              <div style={{ fontSize: 34, fontWeight: 800, color: "#065f46", lineHeight: 1.1 }}>{totalQQ} <span style={{ fontSize: 18 }}>QQ</span></div>
-                            </div>
-
-                            <div style={{ marginTop: 18 }}>
-                              <div style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8, fontWeight: 700 }}>Detalle de lotes</div>
-                              {(tk.lots ?? []).length === 0 && <div style={{ fontSize: 13, color: "#9ca3af" }}>Sin lotes registrados.</div>}
-                              {(tk.lots ?? []).map((lot, i) => (
-                                <div key={lot.lot_id ?? i} style={{
-                                  display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10,
-                                  padding: "8px 0", borderTop: i === 0 ? "none" : "1px solid #f3f4f6"
-                                }}>
-                                  <div style={{ minWidth: 0 }}>
-                                    <div style={{ fontSize: 14, fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{lot.farmer_name ?? "Sin agricultor"}</div>
-                                    <div style={{ fontSize: 11, color: "#6b7280" }}>{opTypeBadgeLabel(lot.operation_type, lot.is_maquila)}</div>
-                                  </div>
-                                  <div style={{ fontSize: 14, fontWeight: 700, color: "#374151", whiteSpace: "nowrap" }}>{Number(lot.quintals ?? 0).toFixed(2)} QQ</div>
-                                </div>
-                              ))}
-                            </div>
-
-                            <div style={{ marginTop: 20, paddingTop: 12, borderTop: "1px dashed #e5e7eb", textAlign: "center", fontSize: 10, color: "#9ca3af", letterSpacing: 0.5 }}>
-                              Generado por Báscula ERP
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })()}
 
                     {renderFuelFieldset()}
                     <div className="buttonRow">
@@ -10252,7 +10271,71 @@ export function App() {
               </div>
             )}
 
-            <DryingReportsPanel reports={dryingReports} onEdit={editDryingReport} />
+            <DryingReportsPanel reports={dryingReports} onEdit={editDryingReport} onShare={compartirTunelWhatsApp} sharingId={tunelCompartiendoId} />
+
+            {/* Recibo de Secado OCULTO (fuera de pantalla): se renderiza para el
+                secado elegido en la lista y html2canvas lo captura como imagen para
+                compartir por WhatsApp. Vive aquí (no en el editor) para que el botón
+                "📲 Compartir" de la lista siempre lo tenga disponible. */}
+            {tunelTicketRep && (() => {
+              const tk = tunelTicketRep;
+              const esTendal = String(tk.dry_method ?? "").toUpperCase() === "TENDAL" || (tk.tunnel_number == null && !tk.dryer_name);
+              const secadoraNom = esTendal ? "Secado en Tendal" : (tk.dryer_name ?? `Secadora ${tk.tunnel_number}`);
+              const subtitulo = esTendal ? "Patio · al sol" : `Túnel ${tk.tunnel_number}`;
+              const fecha = (tk.filled_at ? new Date(tk.filled_at) : new Date())
+                .toLocaleDateString("es-EC", { day: "2-digit", month: "2-digit", year: "numeric" });
+              const totalQQ = Number(tk.total_quintals ?? 0).toFixed(2);
+              const tipoArroz = String(tk.rice_type ?? "").toUpperCase() === "CORRIENTE" ? "Corriente" : (tk.rice_type ? `Grano ${tk.rice_type}` : "—");
+              return (
+                <div style={{ position: "absolute", left: -9999, top: 0, pointerEvents: "none" }} aria-hidden="true">
+                  <div ref={tunelTicketRef} style={{
+                    width: 380, boxSizing: "border-box", background: "#ffffff", color: "#1f2937",
+                    fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
+                    borderRadius: 18, padding: 28, border: "1px solid #e5e7eb"
+                  }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                      <div>
+                        <div style={{ fontSize: 11, letterSpacing: 1.5, color: "#059669", fontWeight: 700, textTransform: "uppercase" }}>Recibo de Secado</div>
+                        <div style={{ fontSize: 19, fontWeight: 800, marginTop: 4, lineHeight: 1.2 }}>{esTendal ? "☀️" : "🌀"} {secadoraNom}</div>
+                        <div style={{ fontSize: 15, fontWeight: 600, color: "#374151" }}>{subtitulo}</div>
+                      </div>
+                      <div style={{ fontSize: 12, color: "#6b7280", textAlign: "right", whiteSpace: "nowrap" }}>{fecha}</div>
+                    </div>
+
+                    <div style={{ marginTop: 14, fontSize: 13, color: "#374151", display: "flex", justifyContent: "space-between", gap: 12 }}>
+                      <span><span style={{ color: "#6b7280" }}>{esTendal ? "Responsable: " : "Secador: "}</span><strong>{(tk.operator_name || (esTendal ? "CUADRILLA" : "—")).toUpperCase()}</strong></span>
+                      <span><span style={{ color: "#6b7280" }}>Tipo de arroz: </span><strong>{tipoArroz}</strong></span>
+                    </div>
+
+                    <div style={{ marginTop: 16, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 12, padding: "12px 16px", textAlign: "center" }}>
+                      <div style={{ fontSize: 11, color: "#15803d", textTransform: "uppercase", letterSpacing: 1 }}>Peso Total</div>
+                      <div style={{ fontSize: 34, fontWeight: 800, color: "#065f46", lineHeight: 1.1 }}>{totalQQ} <span style={{ fontSize: 18 }}>QQ</span></div>
+                    </div>
+
+                    <div style={{ marginTop: 18 }}>
+                      <div style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8, fontWeight: 700 }}>Detalle de lotes</div>
+                      {(tk.lots ?? []).length === 0 && <div style={{ fontSize: 13, color: "#9ca3af" }}>Sin lotes registrados.</div>}
+                      {(tk.lots ?? []).map((lot, i) => (
+                        <div key={lot.lot_id ?? i} style={{
+                          display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10,
+                          padding: "8px 0", borderTop: i === 0 ? "none" : "1px solid #f3f4f6"
+                        }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 14, fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{lot.farmer_name ?? "Sin agricultor"}</div>
+                            <div style={{ fontSize: 11, color: "#6b7280" }}>{opTypeBadgeLabel(lot.operation_type, lot.is_maquila)}</div>
+                          </div>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: "#374151", whiteSpace: "nowrap" }}>{Number(lot.quintals ?? 0).toFixed(2)} QQ</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div style={{ marginTop: 20, paddingTop: 12, borderTop: "1px dashed #e5e7eb", textAlign: "center", fontSize: 10, color: "#9ca3af", letterSpacing: 0.5 }}>
+                      Generado por Báscula ERP
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </section>
         )}
 
@@ -18971,10 +19054,15 @@ function DryingLotSelector({
 
 function DryingReportsPanel({
   reports,
-  onEdit
+  onEdit,
+  onShare,
+  sharingId
 }: {
   reports: DryingTunnelReport[];
   onEdit: (report: DryingTunnelReport) => void;
+  // Compartir por WhatsApp desde la lista (antes vivía dentro del editor).
+  onShare?: (report: DryingTunnelReport) => void;
+  sharingId?: string | null;
 }) {
   return (
     <section className="tracePanel dryingReportsPanel">
@@ -18983,14 +19071,26 @@ function DryingReportsPanel({
       {reports.map((report) => {
         const done = report.status === "COMPLETED";
         const op = reportOpType(report);
+        const esTendal = String(report.dry_method ?? "").toUpperCase() === "TENDAL" || (report.tunnel_number == null && !report.dryer_name);
         return (
         <article className="dryingReportCard" key={report.id} style={{ display: "block" }}>
           {/* Cabecera: estado (pill de color) + tipo de operación (badge) + acción. */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-            <strong style={{ fontSize: 14 }}>Túnel {report.tunnel_number}</strong>
+            <strong style={{ fontSize: 14 }}>{esTendal ? "☀️ Tendal" : `Túnel ${report.tunnel_number}`}</strong>
             <EstadoSecadoPill done={done} />
             <OpTypeBadge operationType={op.operation_type} isMaquila={op.is_maquila} />
             <span style={{ flex: 1 }} />
+            {onShare && (
+              <button
+                type="button"
+                title="Compartir el resumen de este secado por WhatsApp"
+                disabled={sharingId === report.id}
+                style={{ borderColor: "#25D366", color: "#128C7E" }}
+                onClick={() => onShare(report)}
+              >
+                {sharingId === report.id ? "⏳…" : "📲 Compartir"}
+              </button>
+            )}
             {!done && <button type="button" onClick={() => onEdit(report)}>Editar</button>}
           </div>
           {/* Datos clave en grid: lectura rápida, sin bloque de texto plano. */}
