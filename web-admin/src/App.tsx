@@ -7993,6 +7993,13 @@ export function App() {
   }
 
   function updateProductionDryingId(value: string) {
+    // Continuar un proceso guardado siempre vuelve al origen Secadoras. Si el
+    // operador venia de Stock, dejar ese origen activo hace que millingSource
+    // quede vacio y el boton Finalizar permanezca deshabilitado.
+    if (value) {
+      setProductionSource("drying");
+      setProductionStockLotId("");
+    }
     setProductionDryingId(value);
     const report = dryingReports.find((item) => item.id === value);
     const isSavedProcess = Boolean(value && (
