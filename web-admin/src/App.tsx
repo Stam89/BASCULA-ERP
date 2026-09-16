@@ -1900,15 +1900,10 @@ export function App() {
   const [movCategory, setMovCategory] = useState("");
   const [movType, setMovType] = useState<"EXPENSE" | "INCOME">("EXPENSE");
   const [movPayableId, setMovPayableId] = useState("");
-  // Detalle de sacos cuando el egreso es "Compra de sacos": tipo + cantidad por
-  // línea. Alimenta la ENTRADA automática al inventario (matriz) al registrar.
-  const [movSackLines, setMovSackLines] = useState<Array<{ sack_id: string; cantidad: number }>>([]);
-  const [movSackPick, setMovSackPick] = useState<{ sack_id: string; cantidad: string }>({ sack_id: "", cantidad: "" });
   // Nuevos campos del "Registrar movimiento": subcategoría (texto libre con
-  // memoria), asociación de mantenimiento (máquina/área) y fondo a rendir cuentas.
+  // memoria) y fondo a rendir cuentas. Sacos y Mantenimiento reutilizan sus
+  // propios formularios completos (sackBuyForm/sackCart, maintenanceForm).
   const [movSubcategoria, setMovSubcategoria] = useState("");
-  const [movMaqActivo, setMovMaqActivo] = useState("");
-  const [movArea, setMovArea] = useState("");
   const [movEsFondo, setMovEsFondo] = useState(false);
   const [movResponsable, setMovResponsable] = useState("");
   const [subcategoriasGastos, setSubcategoriasGastos] = useState<string[]>([]);
@@ -6917,44 +6912,49 @@ export function App() {
       setMovPayableId("");
       return;
     }
-    // Compra de sacos: el egreso arrastra el detalle de tipos/cantidades para que
-    // el backend genere la ENTRADA automática al inventario de la matriz.
-    const compraSacos = movement === "EXPENSE" && esCategoriaSacos(category);
-    if (compraSacos && movSackLines.length === 0) {
-      throw new Error("Agrega al menos un tipo de saco con su cantidad.");
+    // ── Categoría MANTENIMIENTO: usa el formulario COMPLETO embebido y su propio
+    //    flujo (/equipment/maintenance) que alimenta equipment_maintenance (hoja
+    //    de vida) Y el egreso en cash_movements. El "Monto $" del egreso = monto
+    //    del mantenimiento. Un solo asiento; mismas tablas.
+    if (category === "MANTENIMIENTO_EQUIPO") {
+      const fileInput = formElement.querySelector('input[type="file"]') as HTMLInputElement | null;
+      await submitEquipmentMaintenance(fileInput?.files?.[0]);
+      // submitEquipmentMaintenance limpia su form, refresca caja e historial.
+      setMovCategory("");
+      return;
+    }
+    // ── Categoría COMPRA DE SACOS: usa el widget COMPLETO embebido (lista con
+    //    precio unitario) y su flujo (/sacks/purchases) que genera el egreso
+    //    consolidado + la ENTRADA al inventario. El Monto = TOTAL de la lista.
+    if (movement === "EXPENSE" && esCategoriaSacos(category)) {
+      if (sackCart.length === 0) throw new Error("Agrega al menos un saco a la lista.");
+      await confirmarCompraSacos(); // limpia carrito, refresca sacos y caja
+      setMovCategory("");
+      return;
     }
     // Fondo a rendir cuentas: solo egresos, y exige el responsable.
     const esFondo = movType === "EXPENSE" && movEsFondo;
     if (esFondo && movResponsable.trim().length < 2) {
       throw new Error("Selecciona el empleado/responsable que recibe el fondo.");
     }
-    const esMantenimiento = category === "MANTENIMIENTO_EQUIPO";
     await apiPost(`/cash/${registerId}/movements`, {
       movement,
       category,
       amount,
       description: form.get("description") || undefined,
       subcategoria: movSubcategoria.trim() || undefined,
-      maq_activo: esMantenimiento ? (movMaqActivo.trim() || undefined) : undefined,
-      area: esMantenimiento ? (movArea.trim() || undefined) : undefined,
       es_fondo: esFondo || undefined,
-      responsable: esFondo ? movResponsable.trim() : undefined,
-      sacos: compraSacos ? movSackLines : undefined
+      responsable: esFondo ? movResponsable.trim() : undefined
     });
     safeResetForm(formElement);
     setMovCategory("");
     setMovPayableId("");
-    setMovSackLines([]);
-    setMovSackPick({ sack_id: "", cantidad: "" });
-    setMovSubcategoria(""); setMovMaqActivo(""); setMovArea(""); setMovEsFondo(false); setMovResponsable("");
-    if (compraSacos) await refreshSacks();
+    setMovSubcategoria(""); setMovEsFondo(false); setMovResponsable("");
     await loadSubcategorias(); // refresca la memoria del datalist
     addToast(
-      compraSacos
-        ? `Egreso registrado · ${movSackLines.reduce((s, l) => s + l.cantidad, 0)} saco(s) ingresados al inventario`
-        : esFondo
-          ? `Fondo a rendir cuentas entregado a ${movResponsable.trim()} · queda Por Liquidar`
-          : `${movement === "INCOME" ? "Ingreso" : "Egreso"} registrado`,
+      esFondo
+        ? `Fondo a rendir cuentas entregado a ${movResponsable.trim()} · queda Por Liquidar`
+        : `${movement === "INCOME" ? "Ingreso" : "Egreso"} registrado`,
       "success"
     );
     await refreshCaja(registerId);
@@ -13430,18 +13430,76 @@ export function App() {
 
                     {/* Mantenimiento: campos opcionales para asociar la máquina/activo
                         o el área y mantener el historial de mantenimientos impecable. */}
+                    {/* Formulario COMPLETO de Mantenimiento embebido. Alimenta
+                        equipment_maintenance (hoja de vida de la máquina) + el egreso
+                        de caja vía /equipment/maintenance. El Monto del egreso = este
+                        "Monto $" del mantenimiento (por eso abajo se ocultan los
+                        campos genéricos de Descripción/Monto). */}
                     {movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && (
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+                      <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "14px", marginBottom: 16, display: "grid", gap: 12 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#334155" }}>🔧 Detalle del mantenimiento (se guarda en la hoja de vida de la máquina)</div>
+                        <label style={{ fontSize: 13, fontWeight: 600 }}>Área *
+                          <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                            <select value={maintenanceForm.area} required style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
+                              onChange={(e) => setMaintenanceForm({ ...maintenanceForm, area: e.target.value, section: "" })}>
+                              <option value="">Seleccione</option>
+                              {maintAreas.map((a) => <option key={a} value={a}>{a}</option>)}
+                            </select>
+                            <button type="button" className="btnSecondary" title="Agregar nueva área" style={{ whiteSpace: "nowrap", padding: "0 10px" }}
+                              onClick={() => setMaintCatModal({ kind: "AREA", nombre: "" })}>+ Nueva</button>
+                          </div>
+                        </label>
+                        <label style={{ fontSize: 13, fontWeight: 600 }}>Sección a reparar *
+                          <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                            <select value={maintenanceForm.section} required disabled={!maintenanceForm.area} style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
+                              onChange={(e) => setMaintenanceForm({ ...maintenanceForm, section: e.target.value })}>
+                              <option value="">Seleccione</option>
+                              {maintSectionsFor(maintenanceForm.area).map((s) => <option key={s} value={s}>{s}</option>)}
+                            </select>
+                            <button type="button" className="btnSecondary" title="Agregar nueva sección" disabled={!maintenanceForm.area} style={{ whiteSpace: "nowrap", padding: "0 10px" }}
+                              onClick={() => setMaintCatModal({ kind: "SECTION", nombre: "" })}>+ Nueva</button>
+                          </div>
+                        </label>
                         <label style={{ fontSize: 13, fontWeight: 600 }}>Máquina / Activo <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span>
-                          <input value={movMaqActivo} onChange={(e) => setMovMaqActivo(e.target.value)} placeholder="Ej: Secadora 1, Piladora"
+                          <input value={maintenanceForm.maquina} placeholder="Ej: Secadora 1, Báscula, Piladora"
+                            onChange={(e) => setMaintenanceForm({ ...maintenanceForm, maquina: e.target.value })}
                             style={{ display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 }} />
                         </label>
-                        <label style={{ fontSize: 13, fontWeight: 600 }}>Área <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span>
-                          <input list="maintAreasList" value={movArea} onChange={(e) => setMovArea(e.target.value)} placeholder="Ej: BODEGA, GENERADOR"
-                            style={{ display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 }} />
-                          <datalist id="maintAreasList">
-                            {maintAreas.map((a) => <option key={a} value={a} />)}
-                          </datalist>
+                        <label style={{ fontSize: 13, fontWeight: 600 }}>Tipo de trabajo
+                          <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                            <select value={maintenanceForm.maintenance_type} style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
+                              onChange={(e) => setMaintenanceForm({ ...maintenanceForm, maintenance_type: e.target.value })}>
+                              {maintenanceForm.maintenance_type && !maintTypes.includes(maintenanceForm.maintenance_type) && (
+                                <option value={maintenanceForm.maintenance_type}>{maintTypeLabel(maintenanceForm.maintenance_type)}</option>
+                              )}
+                              {maintTypes.map((t) => <option key={t} value={t}>{maintTypeLabel(t)}</option>)}
+                            </select>
+                            <button type="button" className="btnSecondary" title="Agregar nuevo tipo" style={{ whiteSpace: "nowrap", padding: "0 10px" }}
+                              onClick={() => setMaintCatModal({ kind: "TYPE", nombre: "" })}>+ Nueva</button>
+                          </div>
+                        </label>
+                        <label style={{ fontSize: 13, fontWeight: 600 }}>Repuestos / Detalle del trabajo *
+                          <textarea placeholder={getDescriptionPlaceholder()} value={maintenanceForm.description} required
+                            onChange={(e) => setMaintenanceForm({ ...maintenanceForm, description: e.target.value })}
+                            style={{ display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13, minHeight: 60 }} />
+                        </label>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                          <label style={{ fontSize: 13, fontWeight: 600 }}>Técnico / Taller
+                            <input value={maintenanceForm.provider} onChange={(e) => setMaintenanceForm({ ...maintenanceForm, provider: e.target.value })}
+                              style={{ display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 }} />
+                          </label>
+                          <label style={{ fontSize: 13, fontWeight: 600 }}>Nº de factura
+                            <input value={maintenanceForm.invoice_number} onChange={(e) => setMaintenanceForm({ ...maintenanceForm, invoice_number: e.target.value })}
+                              style={{ display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 }} />
+                          </label>
+                        </div>
+                        <label style={{ fontSize: 13, fontWeight: 600 }}>Monto total de la reparación $ *
+                          <input type="number" step="0.01" min="0" value={maintenanceForm.amount} required
+                            onChange={(e) => setMaintenanceForm({ ...maintenanceForm, amount: e.target.value })}
+                            style={{ display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13, fontWeight: 700 }} />
+                        </label>
+                        <label style={{ fontSize: 13, fontWeight: 600 }}>📸 Foto del comprobante (opcional)
+                          <input type="file" accept="image/jpeg,image/png,image/jpg" style={{ display: "block", marginTop: 4, fontSize: 12 }} />
                         </label>
                       </div>
                     )}
@@ -13497,50 +13555,78 @@ export function App() {
                     {/* Compra de sacos: detalle de tipos/cantidades. Al registrar,
                         el backend suma estas cantidades al Inventario de Sacos de la
                         Matriz (ENTRADA en el kardex). Anular el egreso lo revierte. */}
+                    {/* Widget COMPLETO de Compra de Sacos: tipo (con stock) · cantidad
+                        · precio unitario · [➕ Agregar]. La lista calcula el Monto Total
+                        del egreso y al guardar (/sacks/purchases) suma al inventario. */}
                     {movType === "EXPENSE" && esCategoriaSacos(movCategory) && (
-                      <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "12px", marginBottom: 16 }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: "#15803d", marginBottom: 8 }}>📦 Detalle de sacos comprados (suma al inventario de la Matriz)</div>
-                        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr auto", gap: 8, alignItems: "end" }}>
-                          <label style={{ fontSize: 12, fontWeight: 600 }}>Tipo
-                            <select value={movSackPick.sack_id} onChange={(e) => setMovSackPick((p) => ({ ...p, sack_id: e.target.value }))}
-                              style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}>
-                              <option value="">— Seleccionar —</option>
-                              {sackInventory.map((s) => <option key={s.id} value={s.id}>{s.tipo} ({Number(s.stock)})</option>)}
-                            </select>
+                      <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "14px", marginBottom: 16 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#15803d", marginBottom: 10 }}>📦 Compra de sacos (suma al inventario de la Matriz)</div>
+                        <label style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Tipo de saco
+                          <select value={sackBuyForm.sack_id} required={false}
+                            onChange={(e) => { const sel = sackInventory.find((s) => s.id === e.target.value); const base = sel && Number(sel.precio_compra_default) > 0 ? Number(sel.precio_compra_default).toFixed(2) : ""; setSackBuyForm({ ...sackBuyForm, sack_id: e.target.value, precio: base }); }}
+                            style={{ display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 }}>
+                            <option value="">Seleccione un tipo</option>
+                            {sackInventory.map((s) => <option key={s.id} value={s.id}>{s.tipo} (Stock actual: {s.stock})</option>)}
+                          </select>
+                        </label>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                          <label style={{ fontSize: 13, fontWeight: 600 }}>Cantidad
+                            <input type="number" min="1" value={sackBuyForm.cantidad} onChange={(e) => setSackBuyForm({ ...sackBuyForm, cantidad: e.target.value })}
+                              style={{ display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 }} />
                           </label>
-                          <label style={{ fontSize: 12, fontWeight: 600 }}>Cantidad
-                            <input type="number" min="1" step="1" value={movSackPick.cantidad}
-                              onChange={(e) => setMovSackPick((p) => ({ ...p, cantidad: e.target.value }))}
-                              style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
+                          <label style={{ fontSize: 13, fontWeight: 600 }}>Precio unitario $
+                            <input type="number" step="0.01" min="0" value={sackBuyForm.precio} onChange={(e) => setSackBuyForm({ ...sackBuyForm, precio: e.target.value })}
+                              style={{ display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 }} />
                           </label>
-                          <button type="button" onClick={() => {
-                            const cant = parseInt(movSackPick.cantidad);
-                            if (!movSackPick.sack_id || !(cant > 0)) { addToast("Elige tipo y cantidad de saco", "error"); return; }
-                            setMovSackLines((cur) => [...cur, { sack_id: movSackPick.sack_id, cantidad: cant }]);
-                            setMovSackPick({ sack_id: "", cantidad: "" });
-                          }} style={{ padding: "7px 12px", borderRadius: 6, border: "none", cursor: "pointer", fontWeight: 700, background: "var(--c-brand)", color: "#fff", fontSize: 12 }}>+ Añadir</button>
                         </div>
-                        {movSackLines.length > 0 && (
-                          <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
-                            {movSackLines.map((l, i) => {
-                              const tipo = sackInventory.find((s) => s.id === l.sack_id)?.tipo ?? "Saco";
-                              return (
-                                <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 6, padding: "5px 10px", fontSize: 12 }}>
-                                  <span><strong>{tipo}</strong> · {l.cantidad} saco(s)</span>
-                                  <button type="button" onClick={() => setMovSackLines((cur) => cur.filter((_, idx) => idx !== i))}
-                                    style={{ fontSize: 11, padding: "3px 8px" }}>Quitar</button>
-                                </div>
-                              );
-                            })}
-                            <div style={{ fontSize: 12, fontWeight: 700, color: "#15803d" }}>Total: {movSackLines.reduce((s, l) => s + l.cantidad, 0)} saco(s)</div>
+                        {sackBuyForm.cantidad && sackBuyForm.precio && (
+                          <div style={{ background: "#dbeafe", border: "1px solid #93c5fd", borderRadius: 6, padding: "8px 12px", marginBottom: 10, fontSize: 12, color: "#1e40af" }}>
+                            Subtotal del ítem: <strong>${(parseInt(sackBuyForm.cantidad || "0") * parseFloat(sackBuyForm.precio || "0")).toFixed(2)}</strong>
+                          </div>
+                        )}
+                        <button type="button" className="btnSecondary" onClick={agregarSacoALista} style={{ width: "100%", padding: "8px 0", fontWeight: 700, borderRadius: 6 }}>➕ Agregar a la lista</button>
+                        {sackCart.length > 0 && (
+                          <div style={{ marginTop: 12 }}>
+                            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                              <thead><tr style={{ background: "#15803d", color: "#fff" }}>
+                                <th style={{ padding: "5px 8px", textAlign: "left", color: "#fff" }}>Tipo</th>
+                                <th style={{ padding: "5px 8px", textAlign: "right", color: "#fff" }}>Cant.</th>
+                                <th style={{ padding: "5px 8px", textAlign: "right", color: "#fff" }}>P.U.</th>
+                                <th style={{ padding: "5px 8px", textAlign: "right", color: "#fff" }}>Subtotal</th>
+                                <th style={{ padding: "5px 8px", color: "#fff" }} />
+                              </tr></thead>
+                              <tbody>
+                                {sackCart.map((it, i) => (
+                                  <tr key={i} style={{ background: i % 2 === 0 ? "#fff" : "#f9fafb" }}>
+                                    <td style={{ padding: "4px 8px" }}>{it.tipo}</td>
+                                    <td style={{ padding: "4px 8px", textAlign: "right" }}>{it.cantidad}</td>
+                                    <td style={{ padding: "4px 8px", textAlign: "right" }}>${it.precio.toFixed(2)}</td>
+                                    <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700 }}>${(it.cantidad * it.precio).toFixed(2)}</td>
+                                    <td style={{ padding: "4px 8px", textAlign: "center" }}>
+                                      <button type="button" onClick={() => quitarSacoDeLista(i)} style={{ padding: "2px 8px", background: "#ef4444", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 11 }}>🗑️</button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                              <tfoot><tr style={{ background: "#f0fdf4", fontWeight: 800 }}>
+                                <td colSpan={3} style={{ padding: "6px 8px" }}>MONTO TOTAL $</td>
+                                <td style={{ padding: "6px 8px", textAlign: "right", color: "#15803d", fontSize: 15 }}>${sackCart.reduce((s, it) => s + it.cantidad * it.precio, 0).toFixed(2)}</td>
+                                <td />
+                              </tr></tfoot>
+                            </table>
                           </div>
                         )}
                       </div>
                     )}
 
-                    {/* Orden pedido: … Subcategoría → Descripción → Monto. */}
-                    <Input name="description" label="Descripción (opcional)" required={false} />
-                    <Input name="amount" label="Monto $" type="number" />
+                    {/* Descripción y Monto genéricos: se OCULTAN en Sacos y Mantenimiento,
+                        que traen su propio detalle y su propio monto total. */}
+                    {movCategory !== "MANTENIMIENTO_EQUIPO" && !esCategoriaSacos(movCategory) && (
+                      <>
+                        <Input name="description" label="Descripción (opcional)" required={false} />
+                        <Input name="amount" label="Monto $" type="number" />
+                      </>
+                    )}
                     <button className="primary" disabled={CASH_REUSE[movCategory] === "pilado" || CASH_REUSE[movCategory] === "fomento"} style={{ width: "100%", padding: "10px 0", marginTop: 8 }}>💾 Registrar movimiento</button>
                   </form>
                 )}
@@ -13662,137 +13748,65 @@ export function App() {
 
                 {/* ── Compra de Sacos ── */}
                 {cajaSubTab === "sacos" && (
-                  <div style={{ maxWidth: 640 }}>
-                    <form onSubmit={(e) => { e.preventDefault(); agregarSacoALista(); }} style={{ background: "white", borderRadius: "10px", border: "1px solid #e5e7eb", padding: "24px" }}>
-                      <h2 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 700 }}>📦 Compra de Sacos</h2>
-                      <label style={{ display: "block", marginBottom: 16 }}>
-                        <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Tipo de saco</span>
-                        <select value={sackBuyForm.sack_id} onChange={(e) => {
-                            // Auto-completa el precio unitario con el precio base del
-                            // tipo elegido (editable: el usuario puede sobrescribirlo).
-                            const sel = sackInventory.find((s) => s.id === e.target.value);
-                            const base = sel && Number(sel.precio_compra_default) > 0 ? Number(sel.precio_compra_default).toFixed(2) : "";
-                            setSackBuyForm({ ...sackBuyForm, sack_id: e.target.value, precio: base });
-                          }} required
-                          style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
-                          <option value="">Seleccione un tipo</option>
+                  <div style={{ display: "grid", gap: 14 }}>
+                    {/* Solo consulta. La compra de sacos se registra desde 💳 Movimiento
+                        (categoría "Compra de sacos"). */}
+                    <div className="formPanel" style={{ background: "#eff6ff", border: "1px solid #bfdbfe" }}>
+                      <h2 style={{ margin: 0, fontSize: 15 }}>📦 Inventario de Sacos</h2>
+                      <p className="muted" style={{ margin: "6px 0 0" }}>Para <strong>comprar sacos</strong>, ve a <strong>💳 Movimiento</strong> → categoría <strong>Compra de sacos</strong>. Este panel es solo de consulta.</p>
+                    </div>
+                    {/* Stock actual por tipo */}
+                    <div className="formPanel">
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                        <h3 style={{ margin: 0 }}>Stock actual</h3>
+                        <button type="button" className="btnSecondary" onClick={() => setKardexOpen(true)}>📄 Ver Kárdex / Movimientos</button>
+                      </div>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 10 }}>
+                        <thead><tr style={{ background: "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>
+                          <th style={{ padding: "8px 12px", textAlign: "left" }}>Tipo de saco</th>
+                          <th style={{ padding: "8px 12px", textAlign: "right" }}>Stock actual</th>
+                        </tr></thead>
+                        <tbody>
+                          {sackInventory.length === 0 && <tr><td colSpan={2} className="muted" style={{ padding: "10px 12px", textAlign: "center" }}>Sin tipos de saco</td></tr>}
                           {sackInventory.map((s) => (
-                            <option key={s.id} value={s.id}>{s.tipo} (Stock actual: {s.stock})</option>
+                            <tr key={s.id} style={{ borderBottom: "1px solid #f3f4f6" }}>
+                              <td style={{ padding: "8px 12px" }}>{s.tipo}</td>
+                              <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700 }}>{Number(s.stock)}</td>
+                            </tr>
                           ))}
-                        </select>
-                      </label>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-                        <label style={{ display: "block" }}>
-                          <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Cantidad</span>
-                          <input type="number" value={sackBuyForm.cantidad} onChange={(e: any) => setSackBuyForm({ ...sackBuyForm, cantidad: e.target.value })}
-                            style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} min="1" />
-                        </label>
-                        <label style={{ display: "block" }}>
-                          <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Precio unitario $</span>
-                          <input type="number" step="0.01" value={sackBuyForm.precio} onChange={(e: any) => setSackBuyForm({ ...sackBuyForm, precio: e.target.value })}
-                            style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} min="0" />
-                          {(() => {
-                            const sel = sackInventory.find((s) => s.id === sackBuyForm.sack_id);
-                            const base = sel ? Number(sel.precio_compra_default) : 0;
-                            if (!(base > 0)) return null;
-                            return <small style={{ display: "block", marginTop: 4, color: "var(--c-muted)", fontSize: 11 }}>Sugerido ${base.toFixed(2)} (base del tipo) · editable si cambió la tarifa</small>;
-                          })()}
-                        </label>
-                      </div>
-                      {sackBuyForm.cantidad && sackBuyForm.precio && (
-                        <div style={{ background: "#dbeafe", border: "1px solid #93c5fd", borderRadius: 6, padding: "10px 14px", marginBottom: 16, fontSize: 13, color: "#1e40af" }}>
-                          Subtotal del ítem: <strong>${(parseInt(sackBuyForm.cantidad || "0") * parseFloat(sackBuyForm.precio || "0")).toFixed(2)}</strong>
-                          <span style={{ color: "#3b82f6" }}> ({sackBuyForm.cantidad} × ${parseFloat(sackBuyForm.precio || "0").toFixed(2)})</span>
-                        </div>
-                      )}
-                      <button type="submit" className="btnSecondary" style={{ width: "100%", padding: "10px 0", fontWeight: 700 }}>➕ Agregar a la lista</button>
-                    </form>
-
-                    {sackCart.length > 0 && (
-                      <div style={{ background: "white", borderRadius: "10px", border: "1px solid #e5e7eb", padding: "20px", marginTop: 16 }}>
-                        <h3 style={{ marginTop: 0, marginBottom: 12 }}>🧾 Listado de compra ({sackCart.length})</h3>
-                        <div style={{ overflowX: "auto" }}>
-                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                            <thead>
-                              <tr style={{ background: "var(--c-brand)", color: "#fff" }}>
-                                <th style={{ padding: "6px 10px", textAlign: "left", color: "#fff", fontWeight: 700 }}>Tipo de Saco</th>
-                                <th style={{ padding: "6px 10px", textAlign: "right", color: "#fff", fontWeight: 700 }}>Cantidad</th>
-                                <th style={{ padding: "6px 10px", textAlign: "right", color: "#fff", fontWeight: 700 }}>Precio U.</th>
-                                <th style={{ padding: "6px 10px", textAlign: "right", color: "#fff", fontWeight: 700 }}>Subtotal</th>
-                                <th style={{ padding: "6px 10px", textAlign: "center", color: "#fff", fontWeight: 700 }}>Acción</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {sackCart.map((it, i) => (
-                                <tr key={i} style={{ background: i % 2 === 0 ? "#fff" : "#f9fafb" }}>
-                                  <td style={{ padding: "5px 10px" }}>{it.tipo}</td>
-                                  <td style={{ padding: "5px 10px", textAlign: "right" }}>{it.cantidad}</td>
-                                  <td style={{ padding: "5px 10px", textAlign: "right" }}>${it.precio.toFixed(2)}</td>
-                                  <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700 }}>${(it.cantidad * it.precio).toFixed(2)}</td>
-                                  <td style={{ padding: "5px 10px", textAlign: "center" }}>
-                                    <button type="button" title="Eliminar" onClick={() => quitarSacoDeLista(i)}
-                                      style={{ padding: "4px 8px", background: "#ef4444", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12 }}>🗑️</button>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                            <tfoot>
-                              <tr style={{ background: "#f0fdf4", fontWeight: 800 }}>
-                                <td colSpan={3} style={{ padding: "8px 10px" }}>TOTAL GENERAL</td>
-                                <td style={{ padding: "8px 10px", textAlign: "right", color: "#15803d", fontSize: 16 }}>${sackCart.reduce((s, it) => s + it.cantidad * it.precio, 0).toFixed(2)}</td>
-                                <td />
-                              </tr>
-                            </tfoot>
-                          </table>
-                        </div>
-                        <button type="button" className="primary" onClick={confirmarCompraSacos} disabled={!dashboard.current_cash_register}
-                          style={{ width: "100%", padding: "12px 0", marginTop: 16, fontSize: 15, fontWeight: 800 }}>
-                          💾 Confirmar y Registrar Compra
-                        </button>
-                        {!dashboard.current_cash_register && <p className="muted" style={{ marginTop: 8 }}>Abre una caja para registrar la compra.</p>}
-                      </div>
-                    )}
+                        </tbody>
+                      </table>
+                    </div>
+                    {/* Kárdex / Historial de compras (movimientos recientes) */}
+                    <div className="formPanel">
+                      <h3 style={{ marginTop: 0 }}>Kárdex · Historial de movimientos</h3>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                        <thead><tr style={{ background: "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>
+                          <th style={{ padding: "8px 12px", textAlign: "left" }}>Fecha</th>
+                          <th style={{ padding: "8px 12px", textAlign: "left" }}>Tipo</th>
+                          <th style={{ padding: "8px 12px", textAlign: "left" }}>Movimiento</th>
+                          <th style={{ padding: "8px 12px", textAlign: "right" }}>Cantidad</th>
+                          <th style={{ padding: "8px 12px", textAlign: "left" }}>Concepto</th>
+                        </tr></thead>
+                        <tbody>
+                          {sackMovements.length === 0 && <tr><td colSpan={5} className="muted" style={{ padding: "10px 12px", textAlign: "center" }}>Sin movimientos</td></tr>}
+                          {sackMovements.map((m) => (
+                            <tr key={m.id} style={{ borderBottom: "1px solid #f3f4f6" }}>
+                              <td style={{ padding: "7px 12px", color: "#6b7280" }}>{new Date(m.created_at).toLocaleDateString("es-EC")}</td>
+                              <td style={{ padding: "7px 12px" }}>{m.tipo}</td>
+                              <td style={{ padding: "7px 12px" }}><span className={m.movement === "ENTRADA" ? "chip ok" : "chip bad"}>{m.movement === "ENTRADA" ? "⬆ Entrada" : "⬇ Salida"}</span></td>
+                              <td style={{ padding: "7px 12px", textAlign: "right", fontWeight: 600 }}>{Number(m.cantidad)}</td>
+                              <td style={{ padding: "7px 12px", color: "#6b7280" }}>{m.concepto ?? "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 )}
 
                 {cajaSubTab === "mantenimiento" && (
                   <div className="maintLayout">
-                    {/* Modal "Agregar rápido" para áreas / secciones / tipos */}
-                    {maintCatModal && (
-                      <div className="modalOverlay" onClick={() => setMaintCatModal(null)}>
-                        <div className="modalCard" onClick={(e) => e.stopPropagation()}>
-                          <h3>
-                            {maintCatModal.kind === "AREA" ? "Nueva área" :
-                             maintCatModal.kind === "SECTION" ? "Nueva sección / sistema" :
-                             "Nuevo tipo de mantenimiento"}
-                          </h3>
-                          {maintCatModal.kind === "SECTION" && (
-                            <p className="muted" style={{ marginTop: -4 }}>
-                              Se agregará dentro del área <strong>{maintenanceForm.area || "—"}</strong>.
-                            </p>
-                          )}
-                          <label>
-                            <span>Nombre</span>
-                            <input
-                              type="text"
-                              autoFocus
-                              value={maintCatModal.nombre}
-                              onChange={(e) => setMaintCatModal({ ...maintCatModal, nombre: e.target.value })}
-                              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); submitMaintCat(); } }}
-                              placeholder={
-                                maintCatModal.kind === "TYPE" ? "Ej: Gasolina, Diésel, Lubricante" :
-                                maintCatModal.kind === "SECTION" ? "Ej: Rodamientos, Bomba, Faja" :
-                                "Ej: BODEGA, GENERADOR"
-                              }
-                            />
-                          </label>
-                          <div className="buttonRow">
-                            <button type="button" className="primary" onClick={submitMaintCat}>Guardar</button>
-                            <button type="button" onClick={() => setMaintCatModal(null)}>Cancelar</button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
                     {/* El registro de mantenimiento se hace ahora desde 💳 Movimiento
                         (categoría "Mantenimiento", con Máquina/Activo y Área). Aquí solo
                         se CONSULTA el historial. */}
@@ -16460,6 +16474,30 @@ export function App() {
 
             {/* Modal: detalle del cálculo de nómina por pilada */}
             {/* ── Recibo Semanal Desglosado (Rol de Pago Individual) ── */}
+            {/* Modal global "Agregar rápido" de área/sección/tipo de mantenimiento
+                (se usa desde el formulario de Mantenimiento embebido en 💳 Movimiento). */}
+            {maintCatModal && (
+              <div className="modalOverlay" onClick={() => setMaintCatModal(null)}>
+                <div className="modalCard" onClick={(e) => e.stopPropagation()}>
+                  <h3>{maintCatModal.kind === "AREA" ? "Nueva área" : maintCatModal.kind === "SECTION" ? "Nueva sección / sistema" : "Nuevo tipo de mantenimiento"}</h3>
+                  {maintCatModal.kind === "SECTION" && (
+                    <p className="muted" style={{ marginTop: -4 }}>Se agregará dentro del área <strong>{maintenanceForm.area || "—"}</strong>.</p>
+                  )}
+                  <label>
+                    <span>Nombre</span>
+                    <input type="text" autoFocus value={maintCatModal.nombre}
+                      onChange={(e) => setMaintCatModal({ ...maintCatModal, nombre: e.target.value })}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); submitMaintCat(); } }}
+                      placeholder={maintCatModal.kind === "TYPE" ? "Ej: Gasolina, Diésel, Lubricante" : maintCatModal.kind === "SECTION" ? "Ej: Rodamientos, Bomba, Faja" : "Ej: BODEGA, GENERADOR"} />
+                  </label>
+                  <div className="buttonRow">
+                    <button type="button" className="primary" onClick={submitMaintCat}>Guardar</button>
+                    <button type="button" onClick={() => setMaintCatModal(null)}>Cancelar</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Modal: liquidar un "Dinero a Rendir Cuentas" (fondo provisional). */}
             {liquidarFondo && (() => {
               const entregado = Number(liquidarFondo.mov.amount);
