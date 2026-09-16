@@ -1776,9 +1776,6 @@ export function App() {
   // Lote cuyo tipo de servicio se está corrigiendo (spinner en su selector).
   const [changingServiceLotId, setChangingServiceLotId] = useState<string | null>(null);
   const [productionDryingId, setProductionDryingId] = useState("");
-  // Identifica un proceso guardado que se esta retomando. Mientras esta activo,
-  // el origen no se puede cambiar porque ya forma parte del lote iniciado.
-  const [millingDraftEditingId, setMillingDraftEditingId] = useState<string | null>(null);
   // Origen del pilado: desde una secadora recién finalizada, o desde un lote de
   // arroz seco ya en bodega (stock). El backend acepta ambos (lote con o sin
   // drying_report). Ver finalizeMillingLot.
@@ -2834,11 +2831,6 @@ export function App() {
   const selectedProductionDrying = useMemo(
     () => dryingReports.find((report) => report.id === productionDryingId) ?? null,
     [dryingReports, productionDryingId]
-  );
-  const productionDraftLocked = Boolean(
-    productionSource === "drying" &&
-    productionDryingId &&
-    millingDraftEditingId === productionDryingId
   );
   // Lotes de arroz seco disponibles en bodega para pilar directo. La fuente es el
   // endpoint /lots/dry-in-storage, que ya aplica el filtro ESTRICTO (secado
@@ -7993,22 +7985,18 @@ export function App() {
   }
 
   function updateProductionDryingId(value: string) {
-    // Continuar un proceso guardado siempre vuelve al origen Secadoras. Si el
-    // operador venia de Stock, dejar ese origen activo hace que millingSource
-    // quede vacio y el boton Finalizar permanezca deshabilitado.
-    if (value) {
-      setProductionSource("drying");
-      setProductionStockLotId("");
-    }
     setProductionDryingId(value);
-    const report = dryingReports.find((item) => item.id === value);
-    const isSavedProcess = Boolean(value && (
-      report?.has_draft || millingDrafts.some((draft) => draft.drying_report_id === value)
-    ));
-    setMillingDraftEditingId(isSavedProcess ? value : null);
     setMillingYields(null);
     // Trae del servidor el proceso guardado de ese túnel, si existe.
-    loadDraftFor(value).catch(() => undefined);
+    loadDraftFor(value).catch((error) => {
+      addToast(error instanceof Error ? error.message : "No se pudo cargar el proceso guardado", "error");
+    });
+  }
+
+  function continueMillingDraft(dryingId: string) {
+    setProductionSource("drying");
+    setProductionStockLotId("");
+    updateProductionDryingId(dryingId);
   }
 
   // Construye (sin efectos) el renglón de pilado a partir de lo escrito en el
@@ -8133,7 +8121,6 @@ export function App() {
     setMillingYields(null);
     setMillingDraftSavedAt(null);
     setProductionDryingId("");
-    setMillingDraftEditingId(null);
     addToast("Proceso guardado. El formulario quedó limpio: retómalo desde «Procesos guardados» con Continuar / Finalizar lote.", "success");
   }
 
@@ -8488,20 +8475,32 @@ export function App() {
       setMillingReport(defaultMillingReport);
       setMillingPiladoEntries([]);
       setMillingDraftSavedAt(null);
-      setMillingDraftEditingId(null);
       return;
     }
-    const d = await apiGet<MillingDraft | null>(`/processing-batches/drafts/${dryingId}`).catch(() => null);
+    const d = await apiGet<MillingDraft | null>(`/processing-batches/drafts/${dryingId}`);
     if (d) {
-      setMillingReport({ ...defaultMillingReport, ...(d.report as Partial<MillingReportState>) });
-      setMillingPiladoEntries(Array.isArray(d.pilado_entries) ? d.pilado_entries : []);
+      const savedReport = { ...defaultMillingReport, ...(d.report as Partial<MillingReportState>) };
+      let savedEntries = Array.isArray(d.pilado_entries) ? d.pilado_entries : [];
+      // Compatibilidad con borradores antiguos: antes el arroz pilado se guardaba
+      // en report.qqTulas y no existia el arreglo pilado_entries. Lo convertimos
+      // al formato actual para que el lote guardado pueda finalizarse.
+      const legacyPiladoQq = Number(savedReport.qqTulas || 0);
+      if (savedEntries.length === 0 && Number.isFinite(legacyPiladoQq) && legacyPiladoQq > 0) {
+        savedEntries = [{
+          id: `legacy-${dryingId}`,
+          presentation: "TULA",
+          quantityQq: legacyPiladoQq,
+          destino: "TULA",
+          tulas: Number(savedReport.tulas || 0) || undefined
+        }];
+      }
+      setMillingReport(savedReport);
+      setMillingPiladoEntries(savedEntries);
       setMillingDraftSavedAt(d.saved_at);
-      setMillingDraftEditingId(dryingId);
     } else {
       setMillingReport(defaultMillingReport);
       setMillingPiladoEntries([]);
       setMillingDraftSavedAt(null);
-      setMillingDraftEditingId(null);
     }
   }
 
@@ -8636,7 +8635,6 @@ export function App() {
     setProductionDryingId("");
     setProductionStockLotId("");
     setMillingDraftSavedAt(null);
-    setMillingDraftEditingId(null);
     // Nómina + stock quedaron registrados en la misma transacción del cierre.
     const trabajadores = [piladorName && "pilador", estibadorName && "estibador"].filter(Boolean).join(" y ");
     addToast(
@@ -11624,7 +11622,7 @@ export function App() {
                         <td style={{ textAlign: "right" }}>
                           <div style={{ display: "inline-flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                             <button type="button" className="btnSecondary"
-                              onClick={() => updateProductionDryingId(d.drying_report_id)}>
+                              onClick={() => continueMillingDraft(d.drying_report_id)}>
                               Continuar / Finalizar lote
                             </button>
                             {!d.has_open_batch && (
@@ -11651,13 +11649,11 @@ export function App() {
               <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
                   <input type="radio" name="prodSource" checked={productionSource === "drying"} style={{ width: "auto" }}
-                    disabled={productionDraftLocked}
                     onChange={() => { setProductionSource("drying"); setProductionStockLotId(""); }} />
                   🔥 Desde Secadoras
                 </label>
                 <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
                   <input type="radio" name="prodSource" checked={productionSource === "stock"} style={{ width: "auto" }}
-                    disabled={productionDraftLocked}
                     onChange={() => { setProductionSource("stock"); setProductionDryingId(""); }} />
                   📦 Desde Stock/Bodega de Arroz Seco
                 </label>
@@ -11667,7 +11663,7 @@ export function App() {
                 <>
                   <label>
                     <span>Secadora desde Secadoras</span>
-                    <select value={productionDryingId} onChange={(event) => updateProductionDryingId(event.target.value)} required disabled={productionDraftLocked}>
+                    <select value={productionDryingId} onChange={(event) => updateProductionDryingId(event.target.value)} required>
                       <option value="">Seleccione</option>
                       {productionDryingReports.map((report) => (
                         <option key={report.id} value={report.id}>
@@ -11691,11 +11687,6 @@ export function App() {
                         aparecerá arriba en <strong>Procesos guardados</strong>; presiona <em>Continuar / Finalizar lote</em>.
                       </p>
                     </div>
-                  )}
-                  {productionDraftLocked && (
-                    <p className="muted" style={{ margin: "6px 0 0", color: "#92400e" }}>
-                      🔒 Proceso guardado en edición: el origen de la materia prima está bloqueado.
-                    </p>
                   )}
                 </>
               ) : (
@@ -11940,7 +11931,6 @@ export function App() {
                   💾 Guardar Proceso
                 </button>
                 <button className="primary" type="button" onClick={() => finalizeMillingLot().catch((error) => { setMessage(error.message); addToast(error.message || "No se pudo finalizar el lote. Sigue disponible para reintentar.", "error"); })}
-                  disabled={!millingSource || !millingPuedeGuardar}
                   title={!millingSource ? "⚠️ Selecciona un lote de la lista para activar el guardado" : (!millingPuedeGuardar ? "Ingresa el arroz pilado (Cantidad en QQ) o un subproducto (> 0)" : "Finalizar y sumar al stock")}
                   style={{ flex: "1 1 200px", maxWidth: 320, padding: "12px 16px", fontSize: 15, fontWeight: 800, borderRadius: 10, background: "var(--c-success)" }}>
                   ✅ Finalizar Lote
