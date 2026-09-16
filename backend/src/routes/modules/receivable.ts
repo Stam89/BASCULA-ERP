@@ -114,26 +114,39 @@ async function bajarPayableHermana(client: import("pg").PoolClient, receivableId
 receivableRouter.post("/comprar-producto", asyncRoute(async (req, res) => {
   const provider = (req as AuthenticatedRequest).accionistaId ?? null;
   if (!provider) throw new ApiError(400, "Selecciona un accionista.");
-  const body = z.object({
-    buyer_accionista_id: z.string().uuid(),
+  // Nuevo contrato: `items` = varias líneas [{product_id, quintals, price_per_qq}].
+  // Retrocompat: si llegan los campos sueltos (product_id/quintals/price_per_qq),
+  // se tratan como una sola línea. Se genera UNA compra (varios ingresos de
+  // inventario) y UN SOLO cruce de CxC por el gran total.
+  const lineItemSchema = z.object({
     product_id: z.string().uuid(),
     quintals: z.number().positive(),
-    price_per_qq: z.number().nonnegative(),
+    price_per_qq: z.number().nonnegative()
+  });
+  const body = z.object({
+    buyer_accionista_id: z.string().uuid(),
+    items: z.array(lineItemSchema).optional(),
+    product_id: z.string().uuid().optional(),
+    quintals: z.number().positive().optional(),
+    price_per_qq: z.number().nonnegative().optional(),
     receivable_ids: z.array(z.string().uuid()).min(1),
     created_by: z.string().uuid().optional()
   }).parse(req.body);
 
-  const qq = round2(body.quintals);
-  const monto = round2(qq * body.price_per_qq);
-  if (monto <= 0) throw new ApiError(400, "El monto total debe ser mayor a 0 (revisa cantidad y precio).");
+  const lineas = (body.items && body.items.length > 0)
+    ? body.items
+    : (body.product_id && body.quintals != null && body.price_per_qq != null
+        ? [{ product_id: body.product_id, quintals: body.quintals, price_per_qq: body.price_per_qq }]
+        : []);
+  if (lineas.length === 0) throw new ApiError(400, "Agrega al menos un ítem a comprar.");
+
+  // Gran total = suma de subtotales (cantidad × precio) de todas las líneas.
+  const monto = round2(lineas.reduce((s, it) => s + round2(round2(it.quintals) * it.price_per_qq), 0));
+  if (monto <= 0) throw new ApiError(400, "El monto total debe ser mayor a 0 (revisa cantidades y precios).");
 
   const result = await inTransaction(async (client) => {
     const buyer = await client.query("SELECT id, name FROM accionistas WHERE id = $1 AND is_active = true", [body.buyer_accionista_id]);
     if (!buyer.rowCount) throw new ApiError(404, "Socio/Matriz comprador no encontrado o inactivo.");
-
-    const prod = await client.query("SELECT id, code, name, product_type, unit FROM products WHERE id = $1 AND is_active = true", [body.product_id]);
-    if (!prod.rowCount) throw new ApiError(404, "Producto no encontrado o inactivo.");
-    const product = prod.rows[0];
 
     // Cuentas por cobrar del cliente a cruzar: solo las del proveedor activo con
     // saldo, de más antigua a más nueva.
@@ -146,6 +159,7 @@ receivableRouter.post("/comprar-producto", asyncRoute(async (req, res) => {
       [body.receivable_ids, provider]
     );
 
+    // UN SOLO cruce por el GRAN TOTAL contra las deudas del cliente.
     let restante = monto;
     let aplicado = 0;
     const afectadas: string[] = [];
@@ -165,37 +179,52 @@ receivableRouter.post("/comprar-producto", asyncRoute(async (req, res) => {
       afectadas.push(c.id);
     }
 
+    // Ingreso al inventario del comprador: UN movimiento POR CADA ítem (Kardex).
+    const nombresProductos: string[] = [];
+    let qqTotal = 0;
+    for (const it of lineas) {
+      const prod = await client.query("SELECT id, code, name, product_type, unit FROM products WHERE id = $1 AND is_active = true", [it.product_id]);
+      if (!prod.rowCount) throw new ApiError(404, "Producto no encontrado o inactivo.");
+      const product = prod.rows[0];
+      const qq = round2(it.quintals);
+      const subtotal = round2(qq * it.price_per_qq);
+      const whType = product.product_type === "RAW_MATERIAL" ? "RAW_MATERIAL" : "FINISHED_GOODS";
+      const wh = await client.query("SELECT id FROM warehouses WHERE type = $1 AND is_active = true ORDER BY name ASC LIMIT 1", [whType]);
+      if (!wh.rowCount) throw new ApiError(400, `No existe una bodega de tipo ${whType}. Créala en Inventario.`);
+      await client.query(
+        `INSERT INTO inventory_movements
+         (product_id, warehouse_id, movement, quantity, unit, reference_type, ownership, cost_unit, total_cost, notes, created_by, accionista_id)
+         VALUES ($1, $2, 'IN', $3, $4, 'compra_producto_cxc', 'OWNED', $5, $6, $7, $8, $9)`,
+        [product.id, wh.rows[0].id, qq, product.unit, round2(it.price_per_qq), subtotal,
+         `Compra de ${qq} QQ de ${product.name} cruzada contra CxC (parte de un total de $${monto.toFixed(2)})`,
+         body.created_by ?? null, body.buyer_accionista_id]
+      );
+      nombresProductos.push(product.name);
+      qqTotal = round2(qqTotal + qq);
+    }
+
     // Excedente = crédito a favor del cliente (cuenta por pagar de la matriz).
     const credito = round2(monto - aplicado);
     let creditoRegistrado = false;
     if (credito > 0.01) {
       const ref = cuentas.rows[0] ?? null;
       const clienteNombre = (ref?.description as string | null) ?? "cliente";
+      const listaProd = nombresProductos.join(", ");
       await client.query(
         `INSERT INTO accounts_payable (accionista_id, farmer_id, reference_type, reference_id, description, amount, balance, status)
          VALUES ($1, $2, 'credito_producto', NULL, $3, $4, $4, 'CONFIRMED')`,
-        [provider, ref?.farmer_id ?? null, `Crédito a favor por compra de ${product.name} (excedente sobre deuda de servicio) - ${clienteNombre}`, credito]
+        [provider, ref?.farmer_id ?? null, `Crédito a favor por compra de ${listaProd} (excedente sobre deuda de servicio) - ${clienteNombre}`, credito]
       );
       creditoRegistrado = true;
     }
 
-    // Ingreso del producto al inventario del comprador (según su tipo de bodega).
-    const whType = product.product_type === "RAW_MATERIAL" ? "RAW_MATERIAL" : "FINISHED_GOODS";
-    const wh = await client.query("SELECT id FROM warehouses WHERE type = $1 AND is_active = true ORDER BY name ASC LIMIT 1", [whType]);
-    if (!wh.rowCount) throw new ApiError(400, `No existe una bodega de tipo ${whType}. Créala en Inventario.`);
-    await client.query(
-      `INSERT INTO inventory_movements
-       (product_id, warehouse_id, movement, quantity, unit, reference_type, ownership, cost_unit, total_cost, notes, created_by, accionista_id)
-       VALUES ($1, $2, 'IN', $3, $4, 'compra_producto_cxc', 'OWNED', $5, $6, $7, $8, $9)`,
-      [product.id, wh.rows[0].id, qq, product.unit, round2(body.price_per_qq), monto,
-       `Compra de ${qq} QQ de ${product.name} cruzada contra CxC ($${aplicado.toFixed(2)} en abonos)`,
-       body.created_by ?? null, body.buyer_accionista_id]
-    );
-
     return {
       monto, aplicado, credito_a_favor: credito, credito_registrado: creditoRegistrado,
       cuentas_afectadas: afectadas.length,
-      comprador: buyer.rows[0].name, producto: product.name, quintals: qq
+      comprador: buyer.rows[0].name,
+      producto: nombresProductos.join(", "),
+      items: lineas.length,
+      quintals: qqTotal
     };
   });
 
