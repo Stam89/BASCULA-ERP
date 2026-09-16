@@ -130,6 +130,9 @@ receivableRouter.post("/comprar-producto", asyncRoute(async (req, res) => {
     quintals: z.number().positive().optional(),
     price_per_qq: z.number().nonnegative().optional(),
     receivable_ids: z.array(z.string().uuid()).min(1),
+    // Nombre del beneficiario (cliente) tal como lo agrupa Por Cobrar: se usa para
+    // que el crédito a favor en CxP quede a nombre del agricultor, no genérico.
+    cliente_nombre: z.string().optional(),
     created_by: z.string().uuid().optional()
   }).parse(req.body);
 
@@ -208,12 +211,24 @@ receivableRouter.post("/comprar-producto", asyncRoute(async (req, res) => {
     let creditoRegistrado = false;
     if (credito > 0.01) {
       const ref = cuentas.rows[0] ?? null;
-      const clienteNombre = (ref?.description as string | null) ?? "cliente";
+      // Nombre del BENEFICIARIO (agricultor/cliente): (1) el que manda el front
+      // (grupo de Por Cobrar), (2) el farmer del CxC cruzado, (3) el customer del
+      // CxC, y como último recurso la descripción del CxC. Nunca "cliente".
+      let beneficiario = (body.cliente_nombre ?? "").trim();
+      if (!beneficiario && ref?.farmer_id) {
+        beneficiario = ((await client.query("SELECT full_name FROM farmers WHERE id = $1", [ref.farmer_id])).rows[0]?.full_name ?? "").trim();
+      }
+      if (!beneficiario && ref?.customer_id) {
+        beneficiario = ((await client.query("SELECT full_name FROM customers WHERE id = $1", [ref.customer_id])).rows[0]?.full_name ?? "").trim();
+      }
+      if (!beneficiario) beneficiario = (ref?.description as string | null)?.trim() || "Cliente";
       const listaProd = nombresProductos.join(", ");
+      // Formato explícito solicitado: "<NOMBRE> - Crédito a favor por excedente…".
+      const desc = `${beneficiario} - Crédito a favor por excedente en compra de subproductos${listaProd ? ` (${listaProd})` : ""}`;
       await client.query(
         `INSERT INTO accounts_payable (accionista_id, farmer_id, reference_type, reference_id, description, amount, balance, status)
          VALUES ($1, $2, 'credito_producto', NULL, $3, $4, $4, 'CONFIRMED')`,
-        [provider, ref?.farmer_id ?? null, `Crédito a favor por compra de ${listaProd} (excedente sobre deuda de servicio) - ${clienteNombre}`, credito]
+        [provider, ref?.farmer_id ?? null, desc, credito]
       );
       creditoRegistrado = true;
     }
