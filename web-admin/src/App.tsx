@@ -123,6 +123,52 @@ const defaultAppSettings: AppSettings = {
   humedad_base_pct: 13
 };
 
+function randomPasswordIndex(max: number) {
+  if (typeof window !== "undefined" && window.crypto?.getRandomValues) {
+    const values = new Uint32Array(1);
+    window.crypto.getRandomValues(values);
+    return values[0] % max;
+  }
+  return Math.floor(Math.random() * max);
+}
+
+function pickPasswordChar(chars: string) {
+  return chars[randomPasswordIndex(chars.length)];
+}
+
+function generateUserPassword() {
+  const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const lower = "abcdefghijkmnopqrstuvwxyz";
+  const numbers = "23456789";
+  const symbols = "@#$%";
+  const all = upper + lower + numbers + symbols;
+  const chars = [
+    pickPasswordChar(upper),
+    pickPasswordChar(lower),
+    pickPasswordChar(numbers),
+    pickPasswordChar(symbols),
+    ...Array.from({ length: 8 }, () => pickPasswordChar(all))
+  ];
+  return chars
+    .map((char) => ({ char, sort: randomPasswordIndex(1000) }))
+    .sort((a, b) => a.sort - b.sort)
+    .map((item) => item.char)
+    .join("");
+}
+
+function userPasswordHint(password: string) {
+  if (!password) return "Puedes escribir una clave o generar una segura automaticamente.";
+  if (password.length < 8) return `Faltan ${8 - password.length} caracteres.`;
+  const groups = [
+    /[A-Z]/.test(password),
+    /[a-z]/.test(password),
+    /\d/.test(password),
+    /[^A-Za-z0-9]/.test(password)
+  ].filter(Boolean).length;
+  if (password.length >= 12 && groups >= 3) return "Clave fuerte lista para entregar.";
+  return "Clave valida. Para mayor seguridad usa letras, numeros y simbolos.";
+}
+
 type AdminUser = {
   id: string;
   name: string;
@@ -2230,6 +2276,7 @@ export function App() {
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [newUserForm, setNewUserForm] = useState({ name: "", username: "", cedula: "", password: "", role: "OPERADOR" as "ADMINISTRADOR" | "OPERADOR", modules: [] as string[], accionistas: [] as string[] });
   const [showNewUserPassword, setShowNewUserPassword] = useState(false);
+  const [lastCreatedUserAccess, setLastCreatedUserAccess] = useState<{ name: string; username: string; password: string } | null>(null);
   const [permsEditor, setPermsEditor] = useState<{ user: AdminUser; modules: string[] } | null>(null);
   const [adminAccionistas, setAdminAccionistas] = useState<AdminAccionista[]>([]);
   const [newAccionistaForm, setNewAccionistaForm] = useState({ name: "", code: "" });
@@ -4789,19 +4836,40 @@ export function App() {
       addToast("Asigna al menos un accionista al operador: sin eso no podrá trabajar", "error");
       return;
     }
-    await apiPost("/auth/users", {
+    const createdAccess = {
       name: newUserForm.name.trim(),
       username: newUserForm.username.trim().toLowerCase(),
+      password: newUserForm.password
+    };
+    await apiPost("/auth/users", {
+      name: createdAccess.name,
+      username: createdAccess.username,
       cedula: newUserForm.cedula.trim() || undefined,
-      password: newUserForm.password,
+      password: createdAccess.password,
       role: newUserForm.role,
       allowed_modules: newUserForm.role === "OPERADOR" ? newUserForm.modules : [],
       accionista_ids: newUserForm.role === "OPERADOR" ? newUserForm.accionistas : []
     });
+    setLastCreatedUserAccess(createdAccess);
     setNewUserForm({ name: "", username: "", cedula: "", password: "", role: "OPERADOR", modules: [], accionistas: [] });
     setShowNewUserPassword(false);
     addToast("Usuario creado", "success");
     await refreshConfig();
+  }
+
+  async function copyLastCreatedUserAccess() {
+    if (!lastCreatedUserAccess) return;
+    const text = [
+      `Nombre: ${lastCreatedUserAccess.name}`,
+      `Usuario: ${lastCreatedUserAccess.username}`,
+      `Clave: ${lastCreatedUserAccess.password}`
+    ].join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      addToast("Acceso copiado", "success");
+    } catch {
+      addToast("No se pudo copiar automaticamente. Selecciona el texto manualmente.", "warn");
+    }
   }
 
   async function savePermissions() {
@@ -16996,6 +17064,17 @@ export function App() {
                     </div>
                     <span className="userSecurityBadge">Acceso protegido</span>
                   </div>
+                  {lastCreatedUserAccess && (
+                    <div className="userCreatedAccess">
+                      <div>
+                        <strong>Ultimo usuario creado</strong>
+                        <p>Usuario: <b>{lastCreatedUserAccess.username}</b> · Clave: <b>{lastCreatedUserAccess.password}</b></p>
+                      </div>
+                      <button type="button" className="btnGhost" onClick={() => copyLastCreatedUserAccess()}>
+                        Copiar acceso
+                      </button>
+                    </div>
+                  )}
 
                   <section className="userFormSection">
                     <div className="userFormSectionTitle">
@@ -17049,9 +17128,21 @@ export function App() {
                             {showNewUserPassword ? "Ocultar" : "Mostrar"}
                           </button>
                         </div>
-                        <small className={newUserForm.password.length > 0 && newUserForm.password.length < 8 ? "userFieldError" : "muted"}>
-                          {newUserForm.password.length > 0 && newUserForm.password.length < 8 ? `Faltan ${8 - newUserForm.password.length} caracteres.` : "Mínimo 8 caracteres."}
-                        </small>
+                        <div className="userPasswordActions">
+                          <small className={newUserForm.password.length > 0 && newUserForm.password.length < 8 ? "userFieldError" : "muted"}>
+                            {userPasswordHint(newUserForm.password)}
+                          </small>
+                          <button
+                            type="button"
+                            className="btnGhost"
+                            onClick={() => {
+                              setNewUserForm({ ...newUserForm, password: generateUserPassword() });
+                              setShowNewUserPassword(true);
+                            }}
+                          >
+                            Generar clave
+                          </button>
+                        </div>
                       </label>
                     </div>
                   </section>
