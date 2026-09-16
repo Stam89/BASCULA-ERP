@@ -28,6 +28,31 @@ async function assertCajaDelAccionista(
   if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
 }
 
+// Guarda una subcategoría escrita a mano para sugerirla luego (memoria). Es
+// idempotente (índice único por nombre normalizado) y nunca rompe el registro
+// del movimiento: si falla, se ignora.
+async function recordarSubcategoria(client: PoolClient, nombre?: string | null, categoria?: string | null): Promise<void> {
+  const n = (nombre ?? "").trim();
+  if (n.length < 2) return;
+  try {
+    await client.query(
+      `INSERT INTO subcategorias_gastos (nombre, categoria) VALUES ($1, $2)
+       ON CONFLICT (lower(btrim(nombre))) DO NOTHING`,
+      [n, categoria ?? null]
+    );
+  } catch { /* la tabla puede no existir aún (migración pendiente): no romper */ }
+}
+
+// ── Subcategorías de gasto (memoria para el datalist del form de Caja) ───────
+cashRouter.get("/subcategorias", asyncRoute(async (_req, res) => {
+  try {
+    const r = await pool.query("SELECT nombre FROM subcategorias_gastos ORDER BY lower(btrim(nombre)) ASC");
+    res.json(r.rows.map((x: { nombre: string }) => x.nombre));
+  } catch {
+    res.json([]); // sin tabla aún → lista vacía (no rompe el form)
+  }
+}));
+
 // ── Catalogo de categorias de caja (Fase 2) ─────────────────────────────────
 // Se leen dinamicamente en el form de Caja, filtradas por tipo de accionista.
 cashRouter.get("/categories", asyncRoute(async (req, res) => {
@@ -363,6 +388,13 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     description: z.string().optional(),
     reference_type: z.string().optional(),
     reference_id: z.string().optional(),
+    // Subcategoría (texto libre con memoria) + asociación de mantenimiento.
+    subcategoria: z.string().max(120).optional(),
+    maq_activo: z.string().max(120).optional(),
+    area: z.string().max(120).optional(),
+    // "Dinero a Rendir Cuentas": fondo provisional que queda POR_LIQUIDAR.
+    es_fondo: z.boolean().optional(),
+    responsable: z.string().max(120).optional(),
     // Compra de sacos: detalle de tipos/cantidades para conectar con el inventario.
     sacos: sacosCompraSchema,
     created_by: z.string().uuid().optional()
@@ -370,6 +402,9 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
 
   const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
   const conSacos = (body.sacos?.length ?? 0) > 0;
+  // Solo un EGRESO puede ser fondo a rendir cuentas.
+  const esFondo = body.es_fondo === true && body.movement === "EXPENSE";
+  const fondoEstado = esFondo ? "POR_LIQUIDAR" : null;
   const row = await inTransaction(async (client) => {
     const reg = await client.query(
       "SELECT id, status FROM cash_registers WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
@@ -378,11 +413,15 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
     if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
     const mov = await client.query(
-      `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, reference_type, reference_id, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO cash_movements
+        (cash_register_id, movement, category, amount, description, reference_type, reference_id, created_by,
+         subcategoria, maq_activo, area, es_fondo, responsable, fondo_estado)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING *`,
-      [req.params.id, body.movement, body.category, body.amount, body.description, body.reference_type, body.reference_id, body.created_by]
+      [req.params.id, body.movement, body.category, body.amount, body.description, body.reference_type, body.reference_id, body.created_by,
+       body.subcategoria?.trim() || null, body.maq_activo?.trim() || null, body.area?.trim() || null, esFondo, esFondo ? (body.responsable?.trim() || null) : null, fondoEstado]
     );
+    await recordarSubcategoria(client, body.subcategoria, body.category);
     // Egreso de compra de sacos con detalle → ENTRADA automática al inventario
     // de la matriz (kardex), enlazada a este movimiento para poder revertirla.
     if (conSacos) {
@@ -392,6 +431,72 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     return mov.rows[0];
   });
   res.status(201).json(row);
+}));
+
+// ── Liquidar un "Dinero a Rendir Cuentas" (fondo provisional) ────────────────
+// El egreso original ya restó de caja (entregado). Al liquidar, según el gasto
+// REAL comprobado se ajusta la caja con UN movimiento normal:
+//   · gasto real < entregado → INGRESO por el vuelto que regresa a caja.
+//   · gasto real > entregado → EGRESO por el faltante que se pagó de más.
+//   · gasto real = entregado → sin movimiento, solo se marca LIQUIDADO.
+// Todo queda en cash_movements (saldos/cierre/export intactos). Idempotente: un
+// fondo ya LIQUIDADO no se puede volver a liquidar.
+cashRouter.post("/movements/:id/liquidar", asyncRoute(async (req, res) => {
+  const body = z.object({
+    cash_register_id: z.string().uuid(),
+    gasto_real: z.number().nonnegative(),
+    description: z.string().optional(),
+    created_by: z.string().uuid().optional()
+  }).parse(req.body);
+  const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
+
+  const result = await inTransaction(async (client) => {
+    const origRes = await client.query("SELECT * FROM cash_movements WHERE id = $1 FOR UPDATE", [req.params.id]);
+    const orig = origRes.rows[0];
+    if (!orig) throw new ApiError(404, "Movimiento no encontrado");
+    if (!orig.es_fondo) throw new ApiError(409, "Ese movimiento no es un fondo a rendir cuentas.");
+    if (orig.fondo_estado === "LIQUIDADO") throw new ApiError(409, "Ese fondo ya fue liquidado.");
+
+    await assertCajaDelAccionista(client, body.cash_register_id, accionistaId);
+
+    const entregado = Number(orig.amount);
+    const gastoReal = round2(body.gasto_real);
+    const diff = round2(entregado - gastoReal); // + = vuelto a caja; - = faltante
+    const resp = orig.responsable ? ` · ${orig.responsable}` : "";
+    let ajuste: { movement: string; amount: number } | null = null;
+
+    if (diff > 0.005) {
+      // Vuelto: entra a caja como INGRESO.
+      await client.query(
+        `INSERT INTO cash_movements
+          (cash_register_id, movement, category, amount, description, reference_type, reference_id, created_by, subcategoria)
+         VALUES ($1, 'INCOME', $2, $3, $4, 'fondo_liquidacion', $5, $6, $7)`,
+        [body.cash_register_id, orig.category, diff,
+         `Vuelto de fondo por liquidar${resp} (entregado ${entregado.toFixed(2)}, gasto real ${gastoReal.toFixed(2)})`,
+         orig.id, body.created_by ?? null, orig.subcategoria ?? null]
+      );
+      ajuste = { movement: "INCOME", amount: diff };
+    } else if (diff < -0.005) {
+      // Faltante: se pagó más de lo entregado → EGRESO adicional.
+      await client.query(
+        `INSERT INTO cash_movements
+          (cash_register_id, movement, category, amount, description, reference_type, reference_id, created_by, subcategoria)
+         VALUES ($1, 'EXPENSE', $2, $3, $4, 'fondo_liquidacion', $5, $6, $7)`,
+        [body.cash_register_id, orig.category, Math.abs(diff),
+         `Faltante de fondo por liquidar${resp} (entregado ${entregado.toFixed(2)}, gasto real ${gastoReal.toFixed(2)})`,
+         orig.id, body.created_by ?? null, orig.subcategoria ?? null]
+      );
+      ajuste = { movement: "EXPENSE", amount: Math.abs(diff) };
+    }
+
+    const nuevaDesc = `${orig.description ?? ""}${orig.description ? " · " : ""}Liquidado: gasto real ${gastoReal.toFixed(2)}${body.description ? ` (${body.description.trim()})` : ""}`.trim();
+    await client.query(
+      "UPDATE cash_movements SET fondo_estado = 'LIQUIDADO', description = $2 WHERE id = $1",
+      [orig.id, nuevaDesc]
+    );
+    return { ok: true, entregado, gasto_real: gastoReal, diferencia: diff, ajuste };
+  });
+  res.json(result);
 }));
 
 // ── Cuentas por pagar pendientes ─────────────────────────────────────────────
