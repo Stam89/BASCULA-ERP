@@ -1175,6 +1175,10 @@ type SaleItem = {
   total: number;
 };
 
+// Línea del modal "Comprar producto / Cruzar CxC": múltiples ítems por compra.
+type ComprarProdLine = { product_id: string; quintals: string; price_per_qq: string };
+type ComprarProdForm = { buyer_accionista_id: string; items: ComprarProdLine[] };
+
 type AccountsReceivable = {
   id: string;
   customer_id: string | null;
@@ -2372,8 +2376,8 @@ export function App() {
   // Modal "Comprar producto / Cruzar CxC": compra producto a un cliente y lo
   // cruza contra su deuda de servicio. Guarda el grupo (cliente) y el formulario.
   const [comprarProd, setComprarProd] = useState<{ nombre: string; items: AccountsReceivable[] } | null>(null);
-  const [comprarProdForm, setComprarProdForm] = useState<{ buyer_accionista_id: string; product_id: string; quintals: string; price_per_qq: string }>(
-    { buyer_accionista_id: "", product_id: "", quintals: "", price_per_qq: "" }
+  const [comprarProdForm, setComprarProdForm] = useState<ComprarProdForm>(
+    { buyer_accionista_id: "", items: [{ product_id: "", quintals: "", price_per_qq: "" }] }
   );
   const [comprarProdBusy, setComprarProdBusy] = useState(false);
   const [apFilter, setApFilter] = useState<"todos" | "socios" | "agricultores" | "matriz">("todos");
@@ -5367,9 +5371,7 @@ export function App() {
     setComprarProd(grupo);
     setComprarProdForm({
       buyer_accionista_id: activeAccionistaId ?? (accionistas[0]?.id ?? ""),
-      product_id: "",
-      quintals: "",
-      price_per_qq: ""
+      items: [{ product_id: "", quintals: "", price_per_qq: "" }]
     });
   }
 
@@ -5379,20 +5381,19 @@ export function App() {
     if (!comprarProd) return;
     const f = comprarProdForm;
     if (!f.buyer_accionista_id) { addToast("Elige el socio/matriz comprador", "error"); return; }
-    if (!f.product_id) { addToast("Elige el ítem a comprar", "error"); return; }
-    const qq = Number(f.quintals);
-    const precio = Number(f.price_per_qq);
-    if (!(qq > 0)) { addToast("La cantidad (QQ) debe ser mayor a 0", "error"); return; }
-    if (!(precio >= 0) || precio === 0) { addToast("El precio pactado debe ser mayor a 0", "error"); return; }
+    // Normaliza y valida cada línea: ítem elegido, cantidad > 0 y precio > 0.
+    const items = f.items.map((it) => ({ product_id: it.product_id, quintals: Number(it.quintals), price_per_qq: Number(it.price_per_qq) }));
+    if (items.length === 0) { addToast("Agrega al menos un ítem", "error"); return; }
+    if (items.some((it) => !it.product_id)) { addToast("Hay filas sin ítem seleccionado", "error"); return; }
+    if (items.some((it) => !(it.quintals > 0))) { addToast("Hay filas con cantidad en 0", "error"); return; }
+    if (items.some((it) => !(it.price_per_qq > 0))) { addToast("Hay filas con precio en 0", "error"); return; }
     setComprarProdBusy(true);
     try {
-      const res = await apiPost<{ monto: number; aplicado: number; credito_a_favor: number; cuentas_afectadas: number; comprador: string; producto: string; quintals: number }>(
+      const res = await apiPost<{ monto: number; aplicado: number; credito_a_favor: number; cuentas_afectadas: number; comprador: string; producto: string; items: number; quintals: number }>(
         "/receivable/comprar-producto",
         {
           buyer_accionista_id: f.buyer_accionista_id,
-          product_id: f.product_id,
-          quintals: qq,
-          price_per_qq: precio,
+          items,
           receivable_ids: comprarProd.items.map((it) => it.id)
         }
       );
@@ -5400,7 +5401,7 @@ export function App() {
         ? ` Excedente ${money(res.credito_a_favor)} quedó como crédito a favor del cliente.`
         : "";
       addToast(
-        `${res.quintals} QQ de ${res.producto} ingresaron al stock de ${res.comprador}. ` +
+        `${res.items} ítem(s) (${res.quintals} QQ) ingresaron al stock de ${res.comprador}. ` +
         `Se cruzaron ${money(res.aplicado)} contra ${res.cuentas_afectadas} deuda(s).${extra}`,
         "success"
       );
@@ -19561,8 +19562,8 @@ function CuentaDetalleModal(props: {
 // mueve caja: es pago en especie). El excedente queda como crédito a favor.
 function ComprarProductoModal(props: {
   grupo: { nombre: string; items: AccountsReceivable[] };
-  form: { buyer_accionista_id: string; product_id: string; quintals: string; price_per_qq: string };
-  setForm: React.Dispatch<React.SetStateAction<{ buyer_accionista_id: string; product_id: string; quintals: string; price_per_qq: string }>>;
+  form: ComprarProdForm;
+  setForm: React.Dispatch<React.SetStateAction<ComprarProdForm>>;
   accionistas: Accionista[];
   products: Product[];
   busy: boolean;
@@ -19570,19 +19571,26 @@ function ComprarProductoModal(props: {
   onConfirm: () => void;
 }) {
   const { form, setForm } = props;
-  const saldoCliente = props.grupo.items.reduce((s, r) => s + Number(r.balance), 0);
+  const saldoCliente = round2(props.grupo.items.reduce((s, r) => s + Number(r.balance), 0));
   // Solo se compran productos vendibles: terminados y subproductos.
-  const items = props.products.filter((p) => ["FINISHED_GOOD", "BYPRODUCT"].includes(p.product_type) && p.is_active !== false);
-  const qq = Number(form.quintals) || 0;
-  const precio = Number(form.price_per_qq) || 0;
-  const monto = round2(qq * precio);
-  const cruce = round2(Math.min(monto, saldoCliente));
-  const credito = round2(Math.max(0, monto - saldoCliente));
-  const valido = !!form.buyer_accionista_id && !!form.product_id && qq > 0 && precio > 0;
-  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const productos = props.products.filter((p) => ["FINISHED_GOOD", "BYPRODUCT"].includes(p.product_type) && p.is_active !== false);
+  const subtotalDe = (l: ComprarProdLine) => round2((Number(l.quintals) || 0) * (Number(l.price_per_qq) || 0));
+  const granTotal = round2(form.items.reduce((s, l) => s + subtotalDe(l), 0));
+  const cruce = round2(Math.min(granTotal, saldoCliente));
+  const saldoRestante = round2(saldoCliente - cruce);       // 🔴 lo que aún debe
+  const credito = round2(Math.max(0, granTotal - saldoCliente)); // 🟢 a favor
+  const filasCompletas = form.items.length > 0 && form.items.every((l) => l.product_id && Number(l.quintals) > 0 && Number(l.price_per_qq) > 0);
+  const valido = !!form.buyer_accionista_id && filasCompletas && granTotal > 0;
+
+  const setLine = (i: number, k: keyof ComprarProdLine, v: string) =>
+    setForm((f) => ({ ...f, items: f.items.map((l, idx) => idx === i ? { ...l, [k]: v } : l) }));
+  const addLine = () => setForm((f) => ({ ...f, items: [...f.items, { product_id: "", quintals: "", price_per_qq: "" }] }));
+  const removeLine = (i: number) => setForm((f) => ({ ...f, items: f.items.length > 1 ? f.items.filter((_, idx) => idx !== i) : f.items }));
+
+  const inputStyle: React.CSSProperties = { width: "100%", padding: "7px 9px", borderRadius: 8, border: "1px solid var(--c-border, #d1d5db)" };
   return (
     <div className="modalOverlay" onClick={props.onClose}>
-      <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520, width: "100%" }}>
+      <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 620, width: "100%" }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
           <div>
             <h3 style={{ margin: 0, fontSize: 20 }}>🛍️ Comprar producto a {props.grupo.nombre}</h3>
@@ -19594,45 +19602,55 @@ function ComprarProductoModal(props: {
         <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 14 }}>
           <label style={{ fontSize: 13, fontWeight: 600 }}>
             Socio / Matriz comprador
-            <select value={form.buyer_accionista_id} onChange={set("buyer_accionista_id")} style={{ width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--c-border, #d1d5db)" }}>
+            <select value={form.buyer_accionista_id} onChange={(e) => setForm((f) => ({ ...f, buyer_accionista_id: e.target.value }))} style={{ ...inputStyle, marginTop: 4 }}>
               <option value="">Selecciona…</option>
               {props.accionistas.map((a) => <option key={a.id} value={a.id}>{a.name}{a.tipo === "MATRIZ" ? " · Planta" : ""}</option>)}
             </select>
           </label>
 
-          <label style={{ fontSize: 13, fontWeight: 600 }}>
-            Ítem a comprar
-            <select value={form.product_id} onChange={set("product_id")} style={{ width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--c-border, #d1d5db)" }}>
-              <option value="">Selecciona…</option>
-              {items.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-          </label>
-
-          <div style={{ display: "flex", gap: 10 }}>
-            <label style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>
-              Cantidad (QQ)
-              <input type="number" min="0" step="0.01" value={form.quintals} onChange={set("quintals")} placeholder="0.00"
-                style={{ width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--c-border, #d1d5db)" }} />
-            </label>
-            <label style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>
-              Precio pactado ($/QQ)
-              <input type="number" min="0" step="0.01" value={form.price_per_qq} onChange={set("price_per_qq")} placeholder="0.00"
-                style={{ width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--c-border, #d1d5db)" }} />
-            </label>
+          {/* Line items dinámicos: Ítem · Cantidad · Precio · Subtotal · 🗑 */}
+          <div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 90px 90px 32px", gap: 8, fontSize: 11, fontWeight: 700, color: "#6b7280", padding: "0 2px 4px" }}>
+              <span>Ítem</span><span>Cant. QQ</span><span>$/QQ</span><span style={{ textAlign: "right" }}>Subtotal</span><span />
+            </div>
+            {form.items.map((l, i) => (
+              <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 80px 90px 90px 32px", gap: 8, alignItems: "center", marginBottom: 6 }}>
+                <select value={l.product_id} onChange={(e) => setLine(i, "product_id", e.target.value)} style={inputStyle}>
+                  <option value="">Selecciona…</option>
+                  {productos.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+                <input type="number" min="0" step="0.01" value={l.quintals} onChange={(e) => setLine(i, "quintals", e.target.value)} placeholder="0.00" style={inputStyle} />
+                <input type="number" min="0" step="0.01" value={l.price_per_qq} onChange={(e) => setLine(i, "price_per_qq", e.target.value)} placeholder="0.00" style={inputStyle} />
+                <b style={{ textAlign: "right", fontSize: 13 }}>{money(subtotalDe(l))}</b>
+                <button type="button" onClick={() => removeLine(i)} disabled={form.items.length <= 1}
+                  title={form.items.length <= 1 ? "Debe quedar al menos un ítem" : "Eliminar fila"}
+                  style={{ padding: "6px 6px", borderRadius: 8, lineHeight: 1, opacity: form.items.length <= 1 ? 0.4 : 1 }}>🗑️</button>
+              </div>
+            ))}
+            <button type="button" className="btnSecondary" onClick={addLine} style={{ marginTop: 4, fontWeight: 700, fontSize: 13, padding: "7px 12px", borderRadius: 8 }}>
+              ➕ Añadir otro ítem
+            </button>
           </div>
 
+          {/* Gran Total + proyección de la deuda del cliente. */}
           <div style={{ background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 10, padding: "12px 14px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontWeight: 700, color: "#6b21a8" }}>Monto total</span>
-              <b style={{ fontSize: 22, color: "#6b21a8" }}>{money(monto)}</b>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <span style={{ fontWeight: 800, color: "#6b21a8" }}>Gran Total</span>
+              <b style={{ fontSize: 24, color: "#6b21a8" }}>{money(granTotal)}</b>
             </div>
-            {monto > 0 && (
-              <div className="muted" style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
-                Se abonará {money(cruce)} a la deuda de servicio.
-                {credito > 0.01 && <> El excedente {money(credito)} quedará como <b>crédito a favor del cliente</b>.</>}
-                {" "}Ingresa {qq} QQ al stock del comprador.
-              </div>
-            )}
+            <div style={{ fontSize: 13, display: "grid", gap: 4 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", color: "#374151" }}><span>Deuda actual</span><span>{money(saldoCliente)}</span></div>
+              <div style={{ display: "flex", justifyContent: "space-between", color: "#374151" }}><span>Total compra</span><span>{money(granTotal)}</span></div>
+              {credito > 0.01 ? (
+                <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 800, color: "#166534", borderTop: "1px dashed #ddd6fe", paddingTop: 6, marginTop: 2 }}>
+                  <span>🟢 Saldo a favor del cliente (vuelto a pagar)</span><span>{money(credito)}</span>
+                </div>
+              ) : (
+                <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 800, color: saldoRestante > 0.01 ? "#b91c1c" : "#166534", borderTop: "1px dashed #ddd6fe", paddingTop: 6, marginTop: 2 }}>
+                  <span>{saldoRestante > 0.01 ? "🔴 Saldo pendiente del cliente" : "🟢 Deuda saldada"}</span><span>{money(saldoRestante)}</span>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
