@@ -751,6 +751,9 @@ type DryingTunnelReport = {
   botada_sacos?: string | number | null;
   is_processed?: boolean;
   apartado_arianos?: boolean;
+  /** Ya tiene un "Proceso guardado (en curso)": borrador o batch abierto. Se usa
+   *  para EXCLUIRLO del selector de producción y no duplicar la pilada. */
+  has_draft?: boolean;
   /** Método de secado: 'TUNEL' (mecánico) o 'TENDAL' (patio al sol). */
   dry_method?: "TUNEL" | "TENDAL" | null;
   lots: DryingTunnelLot[];
@@ -2758,10 +2761,16 @@ export function App() {
         report.status === "COMPLETED" &&
         !report.is_processed &&
         !report.apartado_arianos &&
+        // Ya iniciado y guardado en "Procesos guardados (en curso)": se excluye
+        // para no duplicar la producción. Doble filtro: (a) flag del backend
+        // (has_draft), (b) respaldo cruzando con los borradores cargados. Al
+        // eliminar/cancelar el proceso guardado, ambos se apagan y el lote vuelve.
+        !report.has_draft &&
+        !millingDrafts.some((d) => d.drying_report_id === report.id) &&
         // Fuera SOLO los lotes de 'Solo Servicio de Secado'.
         !esSoloSecado(report)
     ),
-    [dryingReports]
+    [dryingReports, millingDrafts]
   );
   const selectedProductionDrying = useMemo(
     () => dryingReports.find((report) => report.id === productionDryingId) ?? null,
@@ -7966,6 +7975,26 @@ export function App() {
     setMillingDrafts(rows);
   }
 
+  // Descarta un "Proceso guardado (en curso)" borrado por error. Al eliminar el
+  // borrador, el lote se LIBERA y vuelve a aparecer en el selector de producción
+  // (se recargan los borradores y los reportes → has_draft se recalcula).
+  async function descartarBorradorProduccion(d: MillingDraft) {
+    if (!window.confirm(`¿Descartar el proceso guardado del lote ${d.lot_code ?? "—"} (Túnel ${d.tunnel_number})?\n\nSe borra solo el borrador; el lote vuelve a quedar disponible para pilar. Esta acción no se puede deshacer.`)) return;
+    try {
+      const r = await apiFetch(`/processing-batches/drafts/${d.drying_report_id}`, { method: "DELETE" });
+      if (!r.ok) throw new Error("No se pudo descartar el proceso guardado");
+      // Optimista: quítalo de la lista al instante.
+      setMillingDrafts((prev) => prev.filter((x) => x.drying_report_id !== d.drying_report_id));
+      if (productionDryingId === d.drying_report_id) setProductionDryingId("");
+      addToast(`Proceso del lote ${d.lot_code ?? ""} descartado. El lote vuelve a estar disponible.`, "success");
+      await loadMillingDrafts();
+      await refresh(); // recarga dryingReports → has_draft se apaga y el lote reaparece
+    } catch (e) {
+      addToast(`${e instanceof Error ? e.message : "error"}`, "error");
+      await loadMillingDrafts();
+    }
+  }
+
   async function loadFinanzas(desdeOverride?: string, hastaOverride?: string) {
     const desde = desdeOverride ?? finanzasDesde;
     const hasta = hastaOverride ?? finanzasHasta;
@@ -11418,10 +11447,20 @@ export function App() {
                           )}
                         </td>
                         <td style={{ textAlign: "right" }}>
-                          <button type="button" className="btnSecondary"
-                            onClick={() => updateProductionDryingId(d.drying_report_id)}>
-                            Continuar / Finalizar lote
-                          </button>
+                          <div style={{ display: "inline-flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                            <button type="button" className="btnSecondary"
+                              onClick={() => updateProductionDryingId(d.drying_report_id)}>
+                              Continuar / Finalizar lote
+                            </button>
+                            {!d.has_open_batch && (
+                              <button type="button" className="btnSecondary"
+                                title="Descartar este proceso guardado: el lote vuelve a quedar disponible para pilar"
+                                style={{ borderColor: "#ef4444", color: "#b91c1c" }}
+                                onClick={() => descartarBorradorProduccion(d)}>
+                                🗑️ Descartar
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}
