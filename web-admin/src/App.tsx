@@ -5394,7 +5394,8 @@ export function App() {
         {
           buyer_accionista_id: f.buyer_accionista_id,
           items,
-          receivable_ids: comprarProd.items.map((it) => it.id)
+          receivable_ids: comprarProd.items.map((it) => it.id),
+          cliente_nombre: comprarProd.nombre
         }
       );
       const extra = res.credito_a_favor > 0.01
@@ -19574,6 +19575,20 @@ function ComprarProductoModal(props: {
   const saldoCliente = round2(props.grupo.items.reduce((s, r) => s + Number(r.balance), 0));
   // Solo se compran productos vendibles: terminados y subproductos.
   const productos = props.products.filter((p) => ["FINISHED_GOOD", "BYPRODUCT"].includes(p.product_type) && p.is_active !== false);
+  // Subproductos PRINCIPALES (según el rinde del cliente): se muestran primero,
+  // limpios y estandarizados, por su `code`. El resto va en "Otros productos".
+  const CODIGOS_PRINCIPALES = ["ARROZ-PILADO-011", "ARROCILLO-34", "ARROCILLO-FINO", "POLVILLO"];
+  const etiquetaPrincipal = (code: string): string =>
+    code === "ARROZ-PILADO-011" ? "0.11 (Producto 0.11)"
+    : code === "ARROCILLO-34" ? "ARROCILLO 3/4"
+    : code === "ARROCILLO-FINO" ? "ARROCILLO FINO"
+    : code === "POLVILLO" ? "POLVILLO"
+    : "";
+  const principales = CODIGOS_PRINCIPALES
+    .map((code) => productos.find((p) => p.code === code))
+    .filter((p): p is Product => !!p);
+  const idsPrincipales = new Set(principales.map((p) => p.id));
+  const otros = productos.filter((p) => !idsPrincipales.has(p.id));
   const subtotalDe = (l: ComprarProdLine) => round2((Number(l.quintals) || 0) * (Number(l.price_per_qq) || 0));
   const granTotal = round2(form.items.reduce((s, l) => s + subtotalDe(l), 0));
   const cruce = round2(Math.min(granTotal, saldoCliente));
@@ -19617,7 +19632,14 @@ function ComprarProductoModal(props: {
               <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 80px 90px 90px 32px", gap: 8, alignItems: "center", marginBottom: 6 }}>
                 <select value={l.product_id} onChange={(e) => setLine(i, "product_id", e.target.value)} style={inputStyle}>
                   <option value="">Selecciona…</option>
-                  {productos.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  <optgroup label="Subproductos principales">
+                    {principales.map((p) => <option key={p.id} value={p.id}>{etiquetaPrincipal(p.code)}</option>)}
+                  </optgroup>
+                  {otros.length > 0 && (
+                    <optgroup label="Otros productos">
+                      {otros.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </optgroup>
+                  )}
                 </select>
                 <input type="number" min="0" step="0.01" value={l.quintals} onChange={(e) => setLine(i, "quintals", e.target.value)} placeholder="0.00" style={inputStyle} />
                 <input type="number" min="0" step="0.01" value={l.price_per_qq} onChange={(e) => setLine(i, "price_per_qq", e.target.value)} placeholder="0.00" style={inputStyle} />
