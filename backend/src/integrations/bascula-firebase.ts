@@ -51,6 +51,21 @@ export type FirebaseImportResult =
   | { ok: true; count: number; skipped: number; fetched: number }
   | { ok: false; reason: string };
 
+export type FirebaseBusinessDiagnostic = {
+  id: string;
+  primary: boolean;
+  configured: boolean;
+  codigo: string;
+  nombre: string;
+  firebaseTickets: number;
+  firebaseWaiting: number;
+  localTickets: number;
+};
+
+export type FirebaseDiagnosticResult =
+  | { ok: true; configured: true; keyPath: string; negocioId: string; extraNegocioIds: string[]; businesses: FirebaseBusinessDiagnostic[] }
+  | { ok: true; configured: false; reason: string; keyPath: string; negocioId: string; extraNegocioIds: string[]; businesses: [] };
+
 // ── Sincronización incremental ──────────────────────────────────────────────
 // Antes cada corrida leía las colecciones COMPLETAS (todos los tickets de la
 // historia, cada 3 min). Ahora se guarda en firebase_sync_state la última
@@ -126,6 +141,71 @@ async function hasLocalTickets(): Promise<boolean> {
   } catch {
     return true;
   }
+}
+
+async function countLocalTicketsByBusiness(): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  try {
+    const rows = await pool.query<{ negocio_id: string; total: number }>(
+      `SELECT COALESCE(raw_payload->>'firebaseNegocioId', $1) AS negocio_id,
+              count(*)::int AS total
+         FROM mobile_synced_tickets
+        GROUP BY 1`,
+      [NEGOCIO_ID || "principal"]
+    );
+    for (const row of rows.rows) result.set(row.negocio_id, Number(row.total ?? 0));
+  } catch {
+    // Diagnóstico: si la tabla todavía no existe, reporta cero sin romper.
+  }
+  return result;
+}
+
+export async function getFirebaseDiagnostics(): Promise<FirebaseDiagnosticResult> {
+  const base = { keyPath: KEY_PATH, negocioId: NEGOCIO_ID, extraNegocioIds: EXTRA_NEGOCIO_IDS };
+  if (!isFirebaseConfigured()) {
+    return {
+      ok: true,
+      configured: false,
+      reason: "Falta la credencial de Firebase o el ID de negocio (NEGOCIO_ID).",
+      ...base,
+      businesses: []
+    };
+  }
+  const db = await getFirestore();
+  if (!db) {
+    return {
+      ok: true,
+      configured: false,
+      reason: "No se pudo conectar con Firebase.",
+      ...base,
+      businesses: []
+    };
+  }
+
+  const configuredIds = [NEGOCIO_ID, ...EXTRA_NEGOCIO_IDS];
+  const negociosSnap = await db.collection("negocios").get();
+  const localCounts = await countLocalTicketsByBusiness();
+  const businesses: FirebaseBusinessDiagnostic[] = [];
+  for (const doc of negociosSnap.docs) {
+    const data = doc.data();
+    const [tickets, waiting] = await Promise.all([
+      doc.ref.collection(COLLECTION).count().get().then((s: any) => Number(s.data().count ?? 0)).catch(() => -1),
+      doc.ref.collection(WAITING_COLLECTION).count().get().then((s: any) => Number(s.data().count ?? 0)).catch(() => -1)
+    ]);
+    businesses.push({
+      id: doc.id,
+      primary: doc.id === NEGOCIO_ID,
+      configured: configuredIds.includes(doc.id),
+      codigo: String(data.codigo ?? ""),
+      nombre: String(data.nombre ?? data.negocio ?? data.businessName ?? ""),
+      firebaseTickets: tickets,
+      firebaseWaiting: waiting,
+      localTickets: localCounts.get(doc.id) ?? 0
+    });
+  }
+  businesses.sort((a, b) => Number(b.configured) - Number(a.configured)
+    || (b.firebaseTickets + b.firebaseWaiting) - (a.firebaseTickets + a.firebaseWaiting));
+  return { ok: true, configured: true, ...base, businesses };
 }
 
 export async function importFromFirebase(options: { full?: boolean } = {}): Promise<FirebaseImportResult> {

@@ -777,6 +777,13 @@ mobileTicketsRouter.post("/refresh-firebase", requireAuth, asyncRoute(async (req
   res.json(result);
 }));
 
+// Diagnóstico liviano para ver si el ERP está mirando el negocio Firebase
+// correcto y cuántos tickets hay en cada negocio encontrado.
+mobileTicketsRouter.get("/firebase-diagnostics", requireAuth, asyncRoute(async (_req, res) => {
+  const { getFirebaseDiagnostics } = await import("../../integrations/bascula-firebase.js");
+  res.json(await getFirebaseDiagnostics());
+}));
+
 // Nota: un pesaje de báscula no pertenece a ningún accionista (la báscula es
 // compartida); el dueño se define al crear el lote. Por eso estas rutas no
 // restringen el ticket por accionista.

@@ -489,6 +489,24 @@ type CompanyReadiness = {
   matriz: { id: string; name: string; code: string; is_active: boolean } | null;
 };
 
+type FirebaseDiagnostic = {
+  ok: boolean;
+  configured: boolean;
+  reason?: string;
+  negocioId: string;
+  extraNegocioIds: string[];
+  businesses: Array<{
+    id: string;
+    primary: boolean;
+    configured: boolean;
+    codigo: string;
+    nombre: string;
+    firebaseTickets: number;
+    firebaseWaiting: number;
+    localTickets: number;
+  }>;
+};
+
 type ReportKind = "resumen" | "ventas" | "liquidaciones" | "gastos" | "produccion" | "combustible" | "porcobrar" | "arianos";
 
 const reportEndpoint: Record<Exclude<ReportKind, "resumen">, string> = {
@@ -4958,6 +4976,21 @@ export function App() {
   // `basculaSyncErr` = true cuando no se pudo leer el estado (backend inaccesible).
   const [basculaSync, setBasculaSync] = useState<BasculaSyncStatus | null>(null);
   const [basculaSyncErr, setBasculaSyncErr] = useState(false);
+  const [firebaseDiagnostic, setFirebaseDiagnostic] = useState<FirebaseDiagnostic | null>(null);
+  const [firebaseDiagnosticBusy, setFirebaseDiagnosticBusy] = useState(false);
+
+  async function refreshFirebaseDiagnostic(showToast = true) {
+    setFirebaseDiagnosticBusy(true);
+    try {
+      const data = await apiGet<FirebaseDiagnostic>("/tickets/firebase-diagnostics");
+      setFirebaseDiagnostic(data);
+      if (showToast) addToast("Diagnóstico Firebase actualizado", "success");
+    } catch (e) {
+      addToast(`No se pudo leer Firebase: ${e instanceof Error ? e.message : "error"}`, "error");
+    } finally {
+      setFirebaseDiagnosticBusy(false);
+    }
+  }
 
   const [basculaImporting, setBasculaImporting] = useState(false);
   async function runFirebaseImport() {
@@ -4971,6 +5004,7 @@ export function App() {
       const res = await apiPost<{ ok: boolean; count: number }>("/tickets/refresh-firebase", { full: false });
       addToast(res.count > 0 ? `${res.count} tickets traídos de la báscula` : "Sin tickets nuevos en la báscula", "success");
       await refreshBasculaTickets();
+      await refreshFirebaseDiagnostic(false);
     } catch (e) {
       addToast(`No se pudo importar: ${e instanceof Error ? e.message : "error"}`, "error");
     } finally {
@@ -4993,6 +5027,7 @@ export function App() {
         { full: true }
       );
       await refreshBasculaTickets();
+      await refreshFirebaseDiagnostic(false);
       const omitidos = res.skipped && res.skipped > 0 ? `, ${res.skipped} omitidos por formato` : "";
       // Transparencia: `fetched` = lo que Firebase entregó (colección completa,
       // sin filtros). Si no aparece historial viejo pese a este número, es que la
@@ -9621,6 +9656,45 @@ export function App() {
                     : "—"}
                 </div>
               </div>
+            </div>
+            <div style={{ marginTop: 12, borderTop: "1px solid var(--c-border)", paddingTop: 10 }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
+                <p className="muted" style={{ margin: 0 }}>
+                  Diagnóstico para confirmar cuántos tickets tiene Firebase y cuántos ya están en este ERP.
+                </p>
+                <button type="button" className="btnSecondary" disabled={firebaseDiagnosticBusy} onClick={() => refreshFirebaseDiagnostic()}>
+                  {firebaseDiagnosticBusy ? "Revisando…" : "Diagnóstico Firebase"}
+                </button>
+              </div>
+              {firebaseDiagnostic && !firebaseDiagnostic.configured && (
+                <div className="alertBox" style={{ marginTop: 8 }}>
+                  {firebaseDiagnostic.reason || "Firebase no está configurado."}
+                </div>
+              )}
+              {firebaseDiagnostic?.configured && (
+                <div style={{ overflowX: "auto", marginTop: 8 }}>
+                  <table className="cajaTable">
+                    <thead>
+                      <tr><th>Negocio</th><th>Código</th><th>Firebase</th><th>En espera</th><th>ERP local</th><th>Estado</th></tr>
+                    </thead>
+                    <tbody>
+                      {firebaseDiagnostic.businesses.slice(0, 6).map((b) => (
+                        <tr key={b.id}>
+                          <td>
+                            <strong>{b.nombre || "Sin nombre"}</strong>
+                            <span className="muted" style={{ display: "block", fontSize: 11 }}>{b.id}</span>
+                          </td>
+                          <td>{b.codigo || "—"}</td>
+                          <td className="num">{b.firebaseTickets}</td>
+                          <td className="num">{b.firebaseWaiting}</td>
+                          <td className="num">{b.localTickets}</td>
+                          <td>{b.primary ? "Actual" : b.configured ? "Recuperación" : "No usado"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
 
