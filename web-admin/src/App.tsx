@@ -1658,6 +1658,8 @@ export function App() {
   // cilindros por unidad. Se registra una vez y se reparte.
   const [gasForm, setGasForm] = useState({ bombona_inicio: "", bombona_fin: "", cilindro_cantidad: "", diesel_inicio: "", diesel_fin: "" });
   const [editingDryingReport, setEditingDryingReport] = useState<DryingTunnelReport | null>(null);
+  // Lote cuyo tipo de servicio se está corrigiendo (spinner en su selector).
+  const [changingServiceLotId, setChangingServiceLotId] = useState<string | null>(null);
   const [productionDryingId, setProductionDryingId] = useState("");
   // Origen del pilado: desde una secadora recién finalizada, o desde un lote de
   // arroz seco ya en bodega (stock). El backend acepta ambos (lote con o sin
@@ -7373,6 +7375,36 @@ export function App() {
 
   // Guarda/finaliza UN secado por su id (para editar las dos secadoras en
   // proceso del motor a la vez, cada una en su propio formulario).
+  // Corrige el tipo de servicio de un lote (mal ingresado en Báscula) desde la
+  // tarjeta del túnel en proceso. Actualiza el badge al INSTANTE (optimista) y
+  // persiste en el backend; al Finalizar el túnel, el ruteo (CxC/Producción) lee
+  // este nuevo valor. Si falla, refresca para restaurar el valor real.
+  async function cambiarTipoServicioLote(reportId: string, lotId: string, operationType: "SECADO" | "SECADO_PILADO" | "COMPRA") {
+    const isMaquila = operationType !== "COMPRA";
+    const patchLot = (rep: DryingTunnelReport): DryingTunnelReport =>
+      rep.id !== reportId ? rep : {
+        ...rep,
+        lots: (rep.lots ?? []).map((l) => l.lot_id === lotId ? { ...l, operation_type: operationType, is_maquila: isMaquila } : l)
+      };
+    setChangingServiceLotId(lotId);
+    // Optimista: el badge y el selector reflejan el cambio de inmediato.
+    setDryingReports((prev) => prev.map(patchLot));
+    setEditingDryingReport((prev) => (prev ? patchLot(prev) : prev));
+    try {
+      await apiFetch(`/process-flow/lots/${lotId}/service-type`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ operation_type: operationType })
+      }).then((r) => { if (!r.ok) return r.json().then((e) => { throw new Error(e?.error || "No se pudo cambiar el tipo de servicio"); }); });
+      addToast(`Tipo de servicio actualizado a ${opTypeBadgeLabel(operationType, isMaquila)}`, "success");
+    } catch (e) {
+      addToast(`${e instanceof Error ? e.message : "error"}`, "error");
+      await refresh(); // restaura el valor real desde el backend
+    } finally {
+      setChangingServiceLotId(null);
+    }
+  }
+
   async function guardarSecadoEditado(report: DryingTunnelReport, formElement: HTMLFormElement, finalizar: boolean) {
     const form = new FormData(formElement);
     const endInput = formElement.elements.namedItem("dry_end_at") as HTMLInputElement | null;
@@ -9889,7 +9921,13 @@ export function App() {
                             onSubmit={(event) => { event.preventDefault(); guardarSecadoEditado(rep, event.currentTarget, false).catch((error) => setMessage(error.message)); }}
                           >
                             <h3 style={{ marginTop: 0 }}>🌀 {secadora} · Túnel {rep.tunnel_number} {done ? <span className="chip ok">Finalizado</span> : <span className="editBadge">✎ En secado</span>}</h3>
-                            <DryingLotSelector selectedLots={rep.lots} editing onRemove={() => undefined} />
+                            <DryingLotSelector
+                              selectedLots={rep.lots}
+                              editing
+                              onRemove={() => undefined}
+                              onChangeServiceType={done ? undefined : (lotId, op) => cambiarTipoServicioLote(rep.id, lotId, op).catch((error) => setMessage(error.message))}
+                              changingLotId={changingServiceLotId}
+                            />
                             <div className="totalBox"><span>Peso total</span><strong>{Number(rep.total_quintals ?? 0).toFixed(2)} QQ</strong></div>
                             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                               <Select name="rice_type" label="Tipo de arroz" rows={[["0.11", "0.11"], ["CORRIENTE", "Corriente"]]} defaultValue={rep.rice_type ?? "0.11"} />
@@ -18846,14 +18884,30 @@ function reportOpType(report: DryingTunnelReport): { operation_type: string | nu
   return { operation_type: null, is_maquila: anyMaquila };
 }
 
+// Normaliza el operation_type de un lote a una de las 3 opciones del negocio
+// para el selector editable (PILADO se trata como Servicio Completo).
+function normalizeServiceType(operationType?: string | null, isMaquila?: boolean): "SECADO" | "SECADO_PILADO" | "COMPRA" {
+  const op = String(operationType ?? "").toUpperCase();
+  if (op === "SECADO") return "SECADO";
+  if (op === "SECADO_PILADO" || op === "PILADO") return "SECADO_PILADO";
+  if (op === "COMPRA") return "COMPRA";
+  return isMaquila ? "SECADO_PILADO" : "COMPRA";
+}
+
 function DryingLotSelector({
   selectedLots,
   editing,
-  onRemove
+  onRemove,
+  onChangeServiceType,
+  changingLotId
 }: {
   selectedLots: DryingTunnelLot[];
   editing: boolean;
   onRemove: (lotId: string) => void;
+  // Cuando se pasa (modo edición del túnel en proceso), se muestra un selector
+  // para CORREGIR el tipo de servicio del lote mal ingresado en Báscula.
+  onChangeServiceType?: (lotId: string, operationType: "SECADO" | "SECADO_PILADO" | "COMPRA") => void;
+  changingLotId?: string | null;
 }) {
   return (
     <section className="lotSelector">
@@ -18864,6 +18918,22 @@ function DryingLotSelector({
           <div>
             <strong style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>{lot.farmer_name ?? "Sin agricultor"}<OpTypeBadge operationType={lot.operation_type} isMaquila={lot.is_maquila} /></strong>
             <small>{lot.lot_code} - {Number(lot.quintals ?? 0).toFixed(2)} QQ</small>
+            {onChangeServiceType && (
+              <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 12, color: "#6b7280" }}>
+                <span>✎ Tipo de servicio:</span>
+                <select
+                  value={normalizeServiceType(lot.operation_type, lot.is_maquila)}
+                  disabled={changingLotId === lot.lot_id}
+                  onChange={(e) => onChangeServiceType(lot.lot_id, e.target.value as "SECADO" | "SECADO_PILADO" | "COMPRA")}
+                  style={{ padding: "4px 8px", borderRadius: 8, fontSize: 12, fontWeight: 700 }}
+                >
+                  <option value="SECADO">🛎️ SOLO SECADO</option>
+                  <option value="SECADO_PILADO">🔄 SERV. COMPLETO</option>
+                  <option value="COMPRA">🌾 PROPIO</option>
+                </select>
+                {changingLotId === lot.lot_id && <span>⏳</span>}
+              </label>
+            )}
           </div>
           {!editing && (
             <button type="button" onClick={() => onRemove(lot.lot_id)}>

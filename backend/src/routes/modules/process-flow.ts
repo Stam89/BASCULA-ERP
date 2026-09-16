@@ -433,6 +433,52 @@ processFlowRouter.post("/drying/motor/:motor/sync-run", asyncRoute(async (req, r
   res.json(result);
 }));
 
+// Corrige el TIPO DE SERVICIO de un lote (operation_type) desde la Secadora,
+// cuando se ingresó mal en Báscula. Solo los 3 valores del negocio. Ajusta en
+// espejo is_maquila/ownership del lote y del ticket de báscula, para que el
+// ruteo al FINALIZAR (autoCobrarSecadoServicio + Producción) lea el valor nuevo:
+//   · SECADO         → genera CxC de secado, NO va a Producción.
+//   · SECADO_PILADO  → NO cobra secado (se cobra al pilar), habilita Producción.
+//   · COMPRA         → propio: sin CxC de servicio, va a Producción.
+// Se bloquea si el lote ya fue PROCESADO (pilado cerrado) para no descuadrar CxC.
+processFlowRouter.patch("/lots/:lotId/service-type", asyncRoute(async (req, res) => {
+  const body = z.object({
+    operation_type: z.enum(["SECADO", "SECADO_PILADO", "COMPRA"])
+  }).parse(req.body);
+  const lotId = req.params.lotId;
+  const op = body.operation_type;
+  const isMaquila = op !== "COMPRA";
+  const ownership = op === "COMPRA" ? "OWNED" : "MAQUILA";
+
+  const out = await inTransaction(async (client) => {
+    const lot = await client.query("SELECT id FROM lots WHERE id = $1 FOR UPDATE", [lotId]);
+    if (!lot.rowCount) throw new ApiError(404, "Lote no encontrado");
+
+    const procesado = await client.query(
+      "SELECT 1 FROM processing_batches WHERE lot_id = $1 AND finished_at IS NOT NULL LIMIT 1",
+      [lotId]
+    );
+    if (procesado.rowCount) {
+      throw new ApiError(409, "El lote ya fue procesado (pilado): no se puede cambiar el tipo de servicio.");
+    }
+
+    const updated = await client.query(
+      `UPDATE lots SET operation_type = $2, is_maquila = $3, ownership = $4
+       WHERE id = $1
+       RETURNING id, lot_code, operation_type, is_maquila, ownership`,
+      [lotId, op, isMaquila, ownership]
+    );
+    // Espejo en el ticket de báscula del lote (fuente del badge y de reprocesos).
+    await client.query(
+      "UPDATE weighing_tickets SET operation_type = $2, is_maquila = $3 WHERE lot_id = $1",
+      [lotId, op, isMaquila]
+    );
+    return updated.rows[0];
+  });
+
+  res.json(out);
+}));
+
 // Registra el combustible del MOTOR (los medidores son del motor) y reparte el
 // costo entre sus secados activos según los quintales de cada uno. Así cada
 // lote —y cada accionista— paga exactamente su parte.
