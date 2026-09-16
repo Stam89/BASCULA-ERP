@@ -668,7 +668,10 @@ processFlowRouter.post("/drying-tendal", asyncRoute(async (req, res) => {
     rice_type: body.rice_type,
     moisture_before: body.moisture_before,
     dry_start_at: body.dry_start_at,
-    dry_end_at: body.dry_end_at ?? new Date().toISOString(),
+    // Tendal multi-día: SIN dry_end_at queda "En proceso". Solo cuando el front
+    // envía dry_end_at (botón "Finalizar") se cierra el secado. Antes se forzaba
+    // dry_end_at = ahora → se auto-finalizaba siempre.
+    dry_end_at: body.dry_end_at,
     recepcion_empaque: body.recepcion_empaque,
     recepcion_sacos: body.recepcion_sacos ?? null,
     tendal_mode: body.tendal_mode,
