@@ -858,6 +858,10 @@ cuadrillaRouter.get("/worker-receipt", asyncRoute(async (req, res) => {
       lote: null,
       cantidad: qty ? `${qty}` : "—",
       tarifa: rate ? `$${rate.toFixed(2)}/u` : "—",
+      // Numéricos para el resguardo del frontend (unidad genérica para cuadrilla).
+      cantidad_num: qty,
+      tarifa_num: rate,
+      unidad: "",
       subtotal: round2(Number(r.subtotal) || 0),
       status: r.paid_at ? "PAID" : "PENDING"
     };
