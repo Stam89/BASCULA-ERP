@@ -259,6 +259,14 @@ const productionOutputSchema = z.object({
   sack_weight_lb: z.number().positive().optional()
 });
 
+// El arroz blanco puede ser 0 cuando el cierre real del lote solo reporta
+// subproductos. Las salidas que sí se insertan en inventario continúan siendo
+// estrictamente positivas para respetar el CHECK de processing_outputs.
+const whiteRiceOutputSchema = productionOutputSchema.extend({
+  quantity: z.number().nonnegative(),
+  unit: productionUnitSchema.default("QQ")
+});
+
 const finishProductionSchema = z.object({
   lot_id: z.string().uuid(),
   drying_report_id: z.string().uuid().optional(),
@@ -270,9 +278,7 @@ const finishProductionSchema = z.object({
   // físicos → se descuentan del inventario de la matriz. Por compatibilidad, si
   // no se envía se infiere: con presentaciones = EMPAQUE, sin ellas = SELECCION.
   destino: z.enum(["SELECCION", "EMPAQUE"]).optional(),
-  white_rice: productionOutputSchema.extend({
-    unit: productionUnitSchema.default("QQ")
-  }),
+  white_rice: whiteRiceOutputSchema,
   // Desglose del pilado por presentacion (100 LB, 25 LB...). Antes solo se
   // guardaba el total y se perdia en cuantos sacos de cada tipo salio, que es
   // justo lo que hace falta para vender y para revisar el historial.
@@ -412,14 +418,14 @@ function buildOutputRows(body: FinishProductionInput) {
         };
         return { label: "ARROZ_BLANCO", isByproduct: false, output, kg: outputToKg(output) };
       })
-    : [
+    : body.white_rice.quantity > 0 ? [
         {
           label: "ARROZ_BLANCO",
           isByproduct: false,
           output: body.white_rice,
           kg: outputToKg(body.white_rice)
         }
-      ];
+      ] : [];
 
   if (body.broken_rice) {
     rows.push({
@@ -446,6 +452,10 @@ function buildOutputRows(body: FinishProductionInput) {
       output: body.bran,
       kg: outputToKg(body.bran)
     });
+  }
+
+  if (!rows.length) {
+    throw new ApiError(400, "Debe registrar al menos una salida real de produccion");
   }
 
   return rows;

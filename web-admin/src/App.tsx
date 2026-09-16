@@ -8524,9 +8524,13 @@ export function App() {
     const effEntries = flushPendingPiladoEntry();
     const effTotalQq = effEntries.reduce((sum, e) => sum + e.quantityQq, 0);
     const effMix = computeMillingMix(effEntries);
+    const effSubproductosQq =
+      Number(millingReport.broken34 || 0) +
+      Number(millingReport.fineBroken || 0) +
+      Number(millingReport.polvillo || 0);
 
-    if (effTotalQq <= 0) {
-      showFinalizeValidation("Agregue al menos una línea de arroz pilado (en Tula o en Saco)");
+    if (effTotalQq <= 0 && effSubproductosQq <= 0) {
+      showFinalizeValidation("Registre al menos una salida real: arroz pilado, arrocillo o polvillo");
       return;
     }
 
