@@ -75,6 +75,7 @@ base final de produccion.
 - Probar que el respaldo se genera sin error.
 - Documentar quien tiene la clave admin.
 - Documentar quien puede restaurar o formatear datos.
+- Revisar `docs/respaldo-restauracion.md`.
 
 ## 7. Criterio de entrega
 

@@ -58,6 +58,7 @@ Para preparar una instalacion nueva, revisar:
 
 - `docs/instalacion.md`
 - `docs/checklist-entrega.md`
+- `docs/respaldo-restauracion.md`
 
 ## Estado funcional actual
 
