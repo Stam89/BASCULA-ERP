@@ -483,6 +483,8 @@ type CompanyReadiness = {
   ok: boolean;
   checks: Array<{ key: string; label: string; ok: boolean; detail: string }>;
   missing: string[];
+  app_mode?: "production" | "test";
+  reset_transactions_allowed?: boolean;
   business: { name: string; ruc: string; phone: string; address: string };
   matriz: { id: string; name: string; code: string; is_active: boolean } | null;
 };
@@ -16628,6 +16630,13 @@ export function App() {
                         <span>{basculaSync?.deviceKeyRequerida ? "Activada" : "No configurada"}</span>
                       </div>
                     </div>
+                    <div className={`systemStatusCard ${companyReadiness?.app_mode === "test" ? "warn" : "ok"}`}>
+                      <span className="statusDot" />
+                      <div>
+                        <strong>Modo del sistema</strong>
+                        <span>{companyReadiness?.app_mode === "test" ? "Prueba: permite limpiar ensayos" : "Producción: datos protegidos"}</span>
+                      </div>
+                    </div>
                   </div>
 
                   {companyReadiness && (
@@ -17902,6 +17911,11 @@ export function App() {
                     tarifas, productos, bodegas, equipos y catálogos de insumos/sacos <strong>y la flota/choferes de Transporte</strong>.
                   </p>
                   <p className="dangerNote">Esta acción no se puede deshacer. No recupera datos ni restaura una copia de seguridad.</p>
+                  {companyReadiness?.reset_transactions_allowed === false && (
+                    <div className="alertBox" style={{ background: "#fffbeb", borderColor: "rgba(180,83,9,.35)", color: "#92400e" }}>
+                      Borrado bloqueado porque el ERP esta en modo produccion. Para limpiar datos de ensayo use una base de prueba con <code>APP_MODE=test</code>.
+                    </div>
+                  )}
                   <label>
                     <span>Tu clave de administrador</span>
                     <input
@@ -17924,7 +17938,7 @@ export function App() {
                   </label>
                   <button
                     className="dangerBtn"
-                    disabled={!isAdmin || resetForm.confirm.trim().toUpperCase() !== "BORRAR" || resetForm.password.length < 4}
+                    disabled={!isAdmin || companyReadiness?.reset_transactions_allowed === false || resetForm.confirm.trim().toUpperCase() !== "BORRAR" || resetForm.password.length < 4}
                   >
                     Borrar datos de prueba definitivamente
                   </button>

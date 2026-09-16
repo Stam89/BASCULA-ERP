@@ -37,6 +37,12 @@ const corsOrigins = (process.env.CORS_ORIGINS ?? "")
   .map((s) => s.trim())
   .filter(Boolean);
 
+function loadAppMode(): "production" | "test" {
+  const raw = (process.env.APP_MODE ?? "production").trim().toLowerCase();
+  if (["test", "testing", "prueba", "demo", "development", "dev"].includes(raw)) return "test";
+  return "production";
+}
+
 // La URL de la base NO tiene valor por defecto en producción: antes caía en
 // "postgres://postgres:postgres@localhost" (credenciales triviales conocidas)
 // si alguien olvidaba configurar el .env. En desarrollo se mantiene el default
@@ -71,6 +77,8 @@ function loadExternalApiKey(): string {
 
 export const env = {
   port: Number(process.env.PORT ?? 4000),
+  appMode: loadAppMode(),
+  allowProductionReset: (process.env.ALLOW_PRODUCTION_RESET ?? "").trim().toLowerCase() === "true",
   databaseUrl: loadDatabaseUrl(),
   jwtSecret: loadJwtSecret(),
   externalApiKey: loadExternalApiKey(),

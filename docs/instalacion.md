@@ -24,6 +24,7 @@ Editar `backend\.env` y configurar, como minimo:
 
 ```text
 DATABASE_URL=postgres://postgres:postgres@localhost:5432/bascula_erp
+APP_MODE=production
 JWT_SECRET=una-clave-larga-y-unica
 
 COMPANY_NAME="PILADORA NUEVA"
@@ -43,6 +44,9 @@ NEGOCIO_ID=identificador-unico-de-la-empresa
 FIREBASE_KEY=C:\ruta\segura\firebase-key.json
 DEVICE_SYNC_KEY=otra-clave-larga-para-la-app
 ```
+
+Si se va a hacer una prueba antes de entregar, usar una base separada y revisar
+`docs/modo-prueba-produccion.md`.
 
 ## 2. Crear estructura y datos base
 

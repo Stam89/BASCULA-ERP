@@ -6,6 +6,7 @@ otra empresa o dejar una instalacion nueva lista para operar.
 ## 1. Base tecnica
 
 - `backend/.env` configurado con `DATABASE_URL`, `JWT_SECRET` y datos de empresa.
+- `APP_MODE=production` configurado para operar con datos reales.
 - `COMPANY_NAME` y `COMPANY_CODE` corresponden a la empresa real.
 - `FIELD_OPERATION_NAME` corresponde a la operacion de Campo/Transporte.
 - `NEGOCIO_ID` es unico para esa empresa si se usa Firebase/app movil.
@@ -76,6 +77,7 @@ base final de produccion.
 - Documentar quien tiene la clave admin.
 - Documentar quien puede restaurar o formatear datos.
 - Revisar `docs/respaldo-restauracion.md`.
+- Revisar `docs/modo-prueba-produccion.md`.
 
 ## 7. Criterio de entrega
 

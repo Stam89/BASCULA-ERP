@@ -7,6 +7,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
+import { env } from "../../config/env.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { getMatriz, getMatrizId } from "../../services/matriz.js";
@@ -128,6 +129,12 @@ settingsRouter.get("/company-readiness", requireAdmin, asyncRoute(async (_req, r
   const firebaseKeyExists = Boolean(firebaseKey) && fs.existsSync(firebaseKey);
   const checks = [
     {
+      key: "app_mode",
+      label: "Modo del sistema",
+      ok: env.appMode === "production",
+      detail: env.appMode === "production" ? "Produccion: datos reales protegidos" : "Prueba: permite limpiar datos de ensayo"
+    },
+    {
       key: "business_name",
       label: "Nombre del negocio",
       ok: Boolean(String(cfg.business_name ?? "").trim()) && cfg.business_name !== "BASCULA ERP",
@@ -208,6 +215,8 @@ settingsRouter.get("/company-readiness", requireAdmin, asyncRoute(async (_req, r
     ok: missing.length === 0,
     checks,
     missing: missing.map((c) => c.label),
+    app_mode: env.appMode,
+    reset_transactions_allowed: env.appMode !== "production" || env.allowProductionReset,
     business: {
       name: cfg.business_name ?? "",
       ruc: cfg.ruc ?? "",
@@ -463,6 +472,13 @@ const WIPE_TABLES = [
 ];
 
 settingsRouter.post("/reset-transactions", requireAdmin, asyncRoute(async (req, res) => {
+  if (env.appMode === "production" && !env.allowProductionReset) {
+    throw new ApiError(
+      403,
+      "Borrado bloqueado: el ERP esta en modo PRODUCCION. Para borrar datos de prueba, use una base de prueba con APP_MODE=test."
+    );
+  }
+
   const body = z.object({
     password: z.string().min(4),
     confirm: z.literal("BORRAR")
