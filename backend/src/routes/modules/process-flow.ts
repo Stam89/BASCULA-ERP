@@ -327,6 +327,15 @@ processFlowRouter.get("/drying/reports", asyncRoute(async (req, res) => {
             EXISTS (
               SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id AND b.finished_at IS NOT NULL
             ) AS is_processed,
+            -- Ya tiene un "Proceso guardado (en curso)": borrador en milling_drafts
+            -- o un batch abierto (sin finalizar). Se usa para SACARLO del selector de
+            -- "Secadora desde Secadoras" y evitar duplicar producción. Al borrar el
+            -- borrador (o anular el batch), vuelve a aparecer automáticamente.
+            (EXISTS (
+              SELECT 1 FROM milling_drafts md WHERE md.drying_report_id = d.id
+            ) OR EXISTS (
+              SELECT 1 FROM processing_batches b2 WHERE b2.drying_report_id = d.id AND b2.finished_at IS NULL AND b2.status <> 'CANCELLED'
+            )) AS has_draft,
             COALESCE(
               jsonb_agg(
                 jsonb_build_object(
