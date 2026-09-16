@@ -670,9 +670,10 @@ mobileTicketsRouter.post("/sync", asyncRoute(async (req, res) => {
 export async function importBasculaTickets(
   rawTickets: unknown[],
   deviceId = "bascula",
-  options: { enEspera?: boolean } = {}
+  options: { enEspera?: boolean; idScope?: string } = {}
 ): Promise<{ imported: Array<{ numeroTicket: string; id: string }>; count: number; skipped: number }> {
   const enEspera = options.enEspera ?? false;
+  const idScope = options.idScope?.trim();
   const imported: Array<{ numeroTicket: string; id: string }> = [];
   let skipped = 0;
   for (const raw of rawTickets) {
@@ -693,7 +694,8 @@ export async function importBasculaTickets(
     if ((t.modo || "").trim().toLowerCase() !== "principal") continue;
 
     try {
-    const id = stableUuid(`${t.modo}_${t.numeroTicket}`);
+    const stableKey = idScope ? `${idScope}_${t.modo}_${t.numeroTicket}` : `${t.modo}_${t.numeroTicket}`;
+    const id = stableUuid(stableKey);
     let netWeight = t.pesoNeto ?? calculateNetWeight(t.pesoBruto, t.pesoTara);
     if (netWeight < 0) netWeight = 0; // no romper el lote por un ticket con tara mayor
     const quintals = t.totalQQ ?? (t.calificacion > 0 ? calculateQuintals(netWeight, t.calificacion) : 0);
@@ -731,7 +733,7 @@ export async function importBasculaTickets(
         AND mobile_synced_tickets.weighing_ticket_id IS NULL
         AND mobile_synced_tickets.liquidated_at IS NULL
       RETURNING id`,
-      [id, deviceId, clienteName, t.pesoBruto, t.pesoTara, netWeight, t.calificacion, quintals, ts, JSON.stringify(t),
+      [id, deviceId, clienteName, t.pesoBruto, t.pesoTara, netWeight, t.calificacion, quintals, ts, JSON.stringify(idScope ? { ...t, firebaseNegocioId: idScope } : t),
        farmer?.id ?? null, farmer?.accionista_id ?? null, enEspera]
     );
     if (saved.rowCount) imported.push({ numeroTicket: t.numeroTicket, id });

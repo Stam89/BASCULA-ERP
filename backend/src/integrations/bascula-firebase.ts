@@ -12,6 +12,10 @@ const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 // backend/src(o dist)/integrations -> backend/scripts/firebase-key.json
 const KEY_PATH = process.env.FIREBASE_KEY || path.join(moduleDir, "..", "..", "scripts", "firebase-key.json");
 const NEGOCIO_ID = (process.env.NEGOCIO_ID || "").trim();
+const EXTRA_NEGOCIO_IDS = (process.env.FIREBASE_EXTRA_NEGOCIO_IDS || "")
+  .split(",")
+  .map((id) => id.trim())
+  .filter((id) => id && id !== NEGOCIO_ID);
 const COLLECTION = process.env.FIREBASE_COLLECTION || "tickets";
 // Pesajes incompletos que aún esperan el segundo pesaje.
 const WAITING_COLLECTION = process.env.FIREBASE_WAITING_COLLECTION || "ticketsEnEspera";
@@ -91,9 +95,9 @@ async function setWatermark(collection: string, ms: number): Promise<void> {
 // Trae los docs de una subcolección del negocio: incremental si ya hay marca,
 // completo la primera vez o cuando se fuerza. Devuelve los datos y actualiza
 // la marca al máximo "actualizadoEn" visto.
-async function fetchCollectionDocs(negocio: any, name: string, forceFull: boolean): Promise<unknown[]> {
+async function fetchCollectionDocs(negocio: any, name: string, forceFull: boolean, stateKey = name): Promise<unknown[]> {
   const col = negocio.collection(name);
-  const watermark = forceFull ? 0 : await getWatermark(name);
+  const watermark = forceFull ? 0 : await getWatermark(stateKey);
   // Modo FORZADO / primera corrida (watermark 0): `get()` PURO sobre la colección
   // completa — SIN `.where('actualizadoEn', ...)`, sin filtro de estado/sincronizado
   // y sin `.orderBy(...).limit(...)`. Se evita adrede orderBy+limit porque en
@@ -108,7 +112,7 @@ async function fetchCollectionDocs(negocio: any, name: string, forceFull: boolea
     const ts = Number(d?.actualizadoEn);
     return Number.isFinite(ts) && ts > max ? ts : max;
   }, 0);
-  if (maxTs > watermark) await setWatermark(name, maxTs);
+  if (maxTs > watermark) await setWatermark(stateKey, maxTs);
   return docs;
 }
 
@@ -136,36 +140,46 @@ export async function importFromFirebase(options: { full?: boolean } = {}): Prom
   const forceFull = options.full === true || !(await hasLocalTickets());
 
   try {
-    const negocio = db.collection("negocios").doc(NEGOCIO_ID);
+    const negocioIds = [NEGOCIO_ID, ...EXTRA_NEGOCIO_IDS];
+    let count = 0;
+    let skipped = 0;
+    let fetched = 0;
+
+    for (const negocioId of negocioIds) {
+      const negocio = db.collection("negocios").doc(negocioId);
+      const isPrimary = negocioId === NEGOCIO_ID;
+      const statePrefix = isPrimary ? "" : `${negocioId}:`;
+      const idScope = isPrimary ? undefined : negocioId;
     // La app guarda los pesajes incompletos (falta el 2º pesaje) en
     // "ticketsEnEspera" y los pasa a "tickets" al completarlos. Se traen los dos:
     // primero los que esperan y luego los completos, para que si uno ya se
     // completó gane el dato definitivo (mismo id, se actualiza).
-    const [enEspera, tickets] = await Promise.all([
-      fetchCollectionDocs(negocio, WAITING_COLLECTION, forceFull).catch(() => [] as unknown[]),
-      fetchCollectionDocs(negocio, COLLECTION, forceFull)
-    ]);
+      const [enEspera, tickets] = await Promise.all([
+        fetchCollectionDocs(negocio, WAITING_COLLECTION, forceFull, `${statePrefix}${WAITING_COLLECTION}`).catch(() => [] as unknown[]),
+        fetchCollectionDocs(negocio, COLLECTION, forceFull, `${statePrefix}${COLLECTION}`)
+      ]);
 
     // `fetched` = documentos CRUDOS que Firebase entregó (antes de filtrar por
     // modo/validez). Sirve para diagnosticar: si en modo forzado Firebase
     // devuelve pocos docs, el historial viejo ya no está en la colección de la
     // fuente (la app lo purga tras exportarlo), y ningún cambio de consulta lo
     // recupera. Lo exponemos para que el operador lo vea en pantalla.
-    const fetched = enEspera.length + tickets.length;
-    if (forceFull) {
-      console.log(`[bascula-firebase] sync FORZADA: Firebase entregó ${tickets.length} tickets + ${enEspera.length} en espera (colección completa, sin filtros).`);
+      fetched += enEspera.length + tickets.length;
+      if (forceFull) {
+        const label = isPrimary ? "principal" : `extra ${negocioId}`;
+        console.log(`[bascula-firebase] sync FORZADA (${label}): Firebase entregó ${tickets.length} tickets + ${enEspera.length} en espera (colección completa, sin filtros).`);
+      }
+
+      if (enEspera.length > 0) {
+        const r = await importBasculaTickets(enEspera, `firebase-auto:${negocioId}`, { enEspera: true, idScope });
+        count += r.count; skipped += r.skipped;
+      }
+      if (tickets.length > 0) {
+        const r = await importBasculaTickets(tickets, `firebase-auto:${negocioId}`, { enEspera: false, idScope });
+        count += r.count; skipped += r.skipped;
+      }
     }
 
-    let count = 0;
-    let skipped = 0;
-    if (enEspera.length > 0) {
-      const r = await importBasculaTickets(enEspera, "firebase-auto", { enEspera: true });
-      count += r.count; skipped += r.skipped;
-    }
-    if (tickets.length > 0) {
-      const r = await importBasculaTickets(tickets, "firebase-auto", { enEspera: false });
-      count += r.count; skipped += r.skipped;
-    }
     return { ok: true, count, skipped, fetched };
   } catch (err) {
     return { ok: false, reason: (err as Error).message };
