@@ -809,6 +809,13 @@ type CashMovement = {
   reversal_of?: string | null;
   reversed_at?: string | null;
   reversed_reason?: string | null;
+  // Subcategoría + asociación de mantenimiento + fondo a rendir cuentas.
+  subcategoria?: string | null;
+  maq_activo?: string | null;
+  area?: string | null;
+  es_fondo?: boolean;
+  responsable?: string | null;
+  fondo_estado?: string | null; // 'POR_LIQUIDAR' | 'LIQUIDADO'
 };
 
 type CashSummary = {
@@ -1897,6 +1904,17 @@ export function App() {
   // línea. Alimenta la ENTRADA automática al inventario (matriz) al registrar.
   const [movSackLines, setMovSackLines] = useState<Array<{ sack_id: string; cantidad: number }>>([]);
   const [movSackPick, setMovSackPick] = useState<{ sack_id: string; cantidad: string }>({ sack_id: "", cantidad: "" });
+  // Nuevos campos del "Registrar movimiento": subcategoría (texto libre con
+  // memoria), asociación de mantenimiento (máquina/área) y fondo a rendir cuentas.
+  const [movSubcategoria, setMovSubcategoria] = useState("");
+  const [movMaqActivo, setMovMaqActivo] = useState("");
+  const [movArea, setMovArea] = useState("");
+  const [movEsFondo, setMovEsFondo] = useState(false);
+  const [movResponsable, setMovResponsable] = useState("");
+  const [subcategoriasGastos, setSubcategoriasGastos] = useState<string[]>([]);
+  // Modal de liquidación de un fondo a rendir cuentas.
+  const [liquidarFondo, setLiquidarFondo] = useState<{ mov: CashMovement; gasto_real: string; description: string } | null>(null);
+  const [liquidarBusy, setLiquidarBusy] = useState(false);
   const [cashCategories, setCashCategories] = useState<CashCat[]>([]);
   const [catForm, setCatForm] = useState({ codigo: "", nombre: "", tipo: "EGRESO", aplicable_a: "AMBOS" });
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
@@ -3219,6 +3237,9 @@ export function App() {
     setCashMovements(movements);
     setCashPayables(payables);
     setExpenses(expenseRows);
+    loadSubcategorias().catch(() => undefined); // memoria del datalist de subcategorías
+    loadAdminStaff().catch(() => undefined);    // responsables para el datalist de fondos
+    loadMaintCategories().catch(() => undefined); // áreas para el datalist de mantenimiento
   }
 
   async function reverseCashMovement(m: CashMovement) {
@@ -6902,11 +6923,22 @@ export function App() {
     if (compraSacos && movSackLines.length === 0) {
       throw new Error("Agrega al menos un tipo de saco con su cantidad.");
     }
+    // Fondo a rendir cuentas: solo egresos, y exige el responsable.
+    const esFondo = movType === "EXPENSE" && movEsFondo;
+    if (esFondo && movResponsable.trim().length < 2) {
+      throw new Error("Selecciona el empleado/responsable que recibe el fondo.");
+    }
+    const esMantenimiento = category === "MANTENIMIENTO_EQUIPO";
     await apiPost(`/cash/${registerId}/movements`, {
       movement,
       category,
       amount,
       description: form.get("description") || undefined,
+      subcategoria: movSubcategoria.trim() || undefined,
+      maq_activo: esMantenimiento ? (movMaqActivo.trim() || undefined) : undefined,
+      area: esMantenimiento ? (movArea.trim() || undefined) : undefined,
+      es_fondo: esFondo || undefined,
+      responsable: esFondo ? movResponsable.trim() : undefined,
       sacos: compraSacos ? movSackLines : undefined
     });
     safeResetForm(formElement);
@@ -6914,14 +6946,51 @@ export function App() {
     setMovPayableId("");
     setMovSackLines([]);
     setMovSackPick({ sack_id: "", cantidad: "" });
+    setMovSubcategoria(""); setMovMaqActivo(""); setMovArea(""); setMovEsFondo(false); setMovResponsable("");
     if (compraSacos) await refreshSacks();
+    await loadSubcategorias(); // refresca la memoria del datalist
     addToast(
       compraSacos
         ? `Egreso registrado · ${movSackLines.reduce((s, l) => s + l.cantidad, 0)} saco(s) ingresados al inventario`
-        : `${movement === "INCOME" ? "Ingreso" : "Egreso"} registrado`,
+        : esFondo
+          ? `Fondo a rendir cuentas entregado a ${movResponsable.trim()} · queda Por Liquidar`
+          : `${movement === "INCOME" ? "Ingreso" : "Egreso"} registrado`,
       "success"
     );
     await refreshCaja(registerId);
+  }
+
+  async function loadSubcategorias() {
+    try { setSubcategoriasGastos(await apiGet<string[]>("/cash/subcategorias")); } catch { /* sin memoria aún */ }
+  }
+
+  // Liquida un fondo provisional (rendir cuentas). El backend registra el vuelto
+  // (INGRESO) o el faltante (EGRESO) y marca el fondo como LIQUIDADO.
+  async function confirmarLiquidarFondo() {
+    const lf = liquidarFondo; if (!lf) return;
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) { addToast("Abre una caja para liquidar", "error"); return; }
+    const gasto = Number(lf.gasto_real);
+    if (!(gasto >= 0)) { addToast("Ingresa el gasto real (≥ 0)", "error"); return; }
+    setLiquidarBusy(true);
+    try {
+      const r = await apiPost<{ diferencia: number; ajuste: { movement: string; amount: number } | null }>(
+        `/cash/movements/${lf.mov.id}/liquidar`,
+        { cash_register_id: registerId, gasto_real: gasto, description: lf.description.trim() || undefined }
+      );
+      const msg = !r.ajuste
+        ? "Fondo liquidado (gasto exacto)."
+        : r.ajuste.movement === "INCOME"
+          ? `Fondo liquidado · vuelto ${money(r.ajuste.amount)} devuelto a caja.`
+          : `Fondo liquidado · faltante ${money(r.ajuste.amount)} egresado.`;
+      addToast(msg, "success");
+      setLiquidarFondo(null);
+      await refreshCaja(registerId);
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : "No se pudo liquidar", "error");
+    } finally {
+      setLiquidarBusy(false);
+    }
   }
 
   async function aplicarAnticiposLiquidacion(liquidationIds: string[]) {
@@ -13157,12 +13226,14 @@ export function App() {
 
                 {/* Sub-tabs profesional */}
                 <nav className="cajaSubNav">
-                  {(["resumen", "venta_detalle", "anticipo", "movimiento", "gastos", "sacos", "mantenimiento", "fomentos"] as const)
+                  {/* Pestaña "gastos" eliminada: sus egresos se registran ahora en
+                      "movimiento" (categoría correspondiente) para no duplicar. */}
+                  {(["resumen", "venta_detalle", "anticipo", "movimiento", "sacos", "mantenimiento", "fomentos"] as const)
                     .filter((t) => {
                       // Subpestañas exclusivas de la planta/matriz. Los socios
                       // (ROVINSON/STALYN) operan solo lo comercial.
                       const esSocio = accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "SOCIO";
-                      const soloMatriz = ["gastos", "sacos", "mantenimiento"];
+                      const soloMatriz = ["sacos", "mantenimiento"];
                       return !(esSocio && soloMatriz.includes(t));
                     })
                     .map((t) => {
@@ -13242,10 +13313,26 @@ export function App() {
                                   {isReversed && <span className="chip bad" style={{ marginLeft: 6 }}>ANULADO</span>}
                                   {isReversal && <span className="chip info" style={{ marginLeft: 6 }}>Anulación</span>}
                                 </td>
-                                <td style={{ padding: "12px 16px", color: "#6b7280" }}>{categoryLabel(m.category)}</td>
+                                <td style={{ padding: "12px 16px", color: "#6b7280" }}>
+                                  {categoryLabel(m.category)}
+                                  {m.subcategoria && <div style={{ fontSize: 11, color: "#9ca3af" }}>{m.subcategoria}</div>}
+                                  {(m.maq_activo || m.area) && <div style={{ fontSize: 11, color: "#9ca3af" }}>🔧 {[m.area, m.maq_activo].filter(Boolean).join(" · ")}</div>}
+                                </td>
                                 <td style={{ padding: "12px 16px", color: "#6b7280" }}>
                                   {m.description ?? "—"}
                                   {isReversed && m.reversed_reason && <div style={{ fontSize: 11, color: "#b91c1c" }}>Motivo: {m.reversed_reason}</div>}
+                                  {m.es_fondo && (
+                                    <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                      {m.fondo_estado === "LIQUIDADO"
+                                        ? <span className="chip ok">✅ Liquidado</span>
+                                        : <span className="chip warn">⏳ Por Liquidar</span>}
+                                      {m.responsable && <span style={{ fontSize: 11, color: "#6b7280" }}>👤 {m.responsable}</span>}
+                                      {m.fondo_estado === "POR_LIQUIDAR" && !isReversed && (
+                                        <button type="button" className="btnSecondary" style={{ fontSize: 11, padding: "3px 10px" }}
+                                          onClick={() => setLiquidarFondo({ mov: m, gasto_real: "", description: "" })}>⚙️ Liquidar</button>
+                                      )}
+                                    </div>
+                                  )}
                                 </td>
                                 <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 600, color: m.movement === "EXPENSE" ? "#dc2626" : "#16a34a", textDecoration: isReversed ? "line-through" : "none" }}>
                                   {m.movement === "EXPENSE" ? "-" : "+"}{money(Number(m.amount))}
@@ -13328,6 +13415,59 @@ export function App() {
                         );
                       })()}
                     </label>
+
+                    {/* Subcategoría: texto libre con memoria (datalist). Se sugieren
+                        las escritas antes y se guarda cada término nuevo. */}
+                    <label style={{ display: "block", marginBottom: 16 }}>
+                      <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Subcategoría <span className="muted" style={{ fontWeight: 400 }}>(opcional, se recuerda)</span></span>
+                      <input list="subcatGastosList" value={movSubcategoria} onChange={(e) => setMovSubcategoria(e.target.value)}
+                        placeholder="Ej: Alimentación, Filtros, Fletes, Herramientas"
+                        style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} />
+                      <datalist id="subcatGastosList">
+                        {subcategoriasGastos.map((s) => <option key={s} value={s} />)}
+                      </datalist>
+                    </label>
+
+                    {/* Mantenimiento: campos opcionales para asociar la máquina/activo
+                        o el área y mantener el historial de mantenimientos impecable. */}
+                    {movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+                        <label style={{ fontSize: 13, fontWeight: 600 }}>Máquina / Activo <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span>
+                          <input value={movMaqActivo} onChange={(e) => setMovMaqActivo(e.target.value)} placeholder="Ej: Secadora 1, Piladora"
+                            style={{ display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 }} />
+                        </label>
+                        <label style={{ fontSize: 13, fontWeight: 600 }}>Área <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span>
+                          <input list="maintAreasList" value={movArea} onChange={(e) => setMovArea(e.target.value)} placeholder="Ej: BODEGA, GENERADOR"
+                            style={{ display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 }} />
+                          <datalist id="maintAreasList">
+                            {maintAreas.map((a) => <option key={a} value={a} />)}
+                          </datalist>
+                        </label>
+                      </div>
+                    )}
+
+                    {/* Dinero a Rendir Cuentas (fondo provisional): egreso que queda
+                        Por Liquidar a nombre de un responsable. */}
+                    {movType === "EXPENSE" && (
+                      <div style={{ background: movEsFondo ? "#fffbeb" : "transparent", border: movEsFondo ? "1px solid #fde68a" : "1px dashed #e5e7eb", borderRadius: 8, padding: "10px 12px", marginBottom: 16 }}>
+                        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                          <input type="checkbox" checked={movEsFondo} onChange={(e) => setMovEsFondo(e.target.checked)} style={{ width: "auto" }} />
+                          ☑️ Rendir cuentas (Fondo provisional)
+                        </label>
+                        {movEsFondo && (
+                          <label style={{ display: "block", marginTop: 10, fontSize: 13, fontWeight: 600 }}>
+                            <span style={{ display: "block", marginBottom: 4 }}>Empleado / Responsable que recibe</span>
+                            <input list="responsablesList" value={movResponsable} onChange={(e) => setMovResponsable(e.target.value)} required
+                              placeholder="Nombre del responsable"
+                              style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} />
+                            <datalist id="responsablesList">
+                              {adminStaff.map((s) => <option key={s.id} value={s.worker_name} />)}
+                            </datalist>
+                            <small className="muted" style={{ display: "block", marginTop: 4 }}>El egreso resta de caja y queda ⏳ Por Liquidar. Luego usa ⚙️ Liquidar para registrar el vuelto o faltante.</small>
+                          </label>
+                        )}
+                      </div>
+                    )}
                     {CASH_REUSE[movCategory] === "agricultor" && (() => {
                       const liqs = cashPayables.filter((p) => p.liquidation_number);
                       return (
@@ -13398,8 +13538,9 @@ export function App() {
                       </div>
                     )}
 
-                    <Input name="amount" label="Monto $" type="number" />
+                    {/* Orden pedido: … Subcategoría → Descripción → Monto. */}
                     <Input name="description" label="Descripción (opcional)" required={false} />
+                    <Input name="amount" label="Monto $" type="number" />
                     <button className="primary" disabled={CASH_REUSE[movCategory] === "pilado" || CASH_REUSE[movCategory] === "fomento"} style={{ width: "100%", padding: "10px 0", marginTop: 8 }}>💾 Registrar movimiento</button>
                   </form>
                 )}
@@ -13652,128 +13793,13 @@ export function App() {
                         </div>
                       </div>
                     )}
-                    {/* Formulario Registrar Mantenimiento */}
-                    <form className="formPanel cajaForm" onSubmit={(event: any) => {
-                      event.preventDefault();
-                      const fileInput = event.currentTarget.querySelector('input[type="file"]');
-                      const file = fileInput?.files?.[0];
-                      submitEquipmentMaintenance(file);
-                    }}>
-                      <h2>Registrar Mantenimiento</h2>
-                    <label>
-                      <span>Área</span>
-                      <div style={{ display: "flex", gap: 6 }}>
-                        <select
-                          value={maintenanceForm.area}
-                          onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, area: event.target.value, section: "" })}
-                          required
-                          style={{ flex: 1 }}
-                        >
-                          <option value="">Seleccione</option>
-                          {maintAreas.map((a) => (
-                            <option key={a} value={a}>{a}</option>
-                          ))}
-                        </select>
-                        <button type="button" className="btnSecondary" title="Agregar nueva área"
-                          onClick={() => setMaintCatModal({ kind: "AREA", nombre: "" })}
-                          style={{ whiteSpace: "nowrap", padding: "0 10px" }}>+ Nueva</button>
-                      </div>
-                    </label>
-                    <label>
-                      <span>Sección a reparar</span>
-                      <div style={{ display: "flex", gap: 6 }}>
-                        <select
-                          value={maintenanceForm.section}
-                          onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, section: event.target.value })}
-                          required
-                          disabled={!maintenanceForm.area}
-                          style={{ flex: 1 }}
-                        >
-                          <option value="">Seleccione</option>
-                          {maintSectionsFor(maintenanceForm.area).map((s) => (
-                            <option key={s} value={s}>{s}</option>
-                          ))}
-                        </select>
-                        <button type="button" className="btnSecondary" title="Agregar nueva sección"
-                          disabled={!maintenanceForm.area}
-                          onClick={() => setMaintCatModal({ kind: "SECTION", nombre: "" })}
-                          style={{ whiteSpace: "nowrap", padding: "0 10px" }}>+ Nueva</button>
-                      </div>
-                    </label>
-                    <label>
-                      <span>Máquina / Activo (opcional)</span>
-                      <input
-                        type="text"
-                        value={maintenanceForm.maquina}
-                        onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, maquina: event.target.value })}
-                        placeholder="Ej: Secadora 1, Báscula, Piladora"
-                      />
-                    </label>
-                    <label>
-                      <span>Tipo de mantenimiento</span>
-                      <div style={{ display: "flex", gap: 6 }}>
-                        <select
-                          value={maintenanceForm.maintenance_type}
-                          onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, maintenance_type: event.target.value })}
-                          style={{ flex: 1 }}
-                        >
-                          {/* Si el valor actual aún no está en el catálogo cargado, mostrarlo igual. */}
-                          {maintenanceForm.maintenance_type && !maintTypes.includes(maintenanceForm.maintenance_type) && (
-                            <option value={maintenanceForm.maintenance_type}>{maintTypeLabel(maintenanceForm.maintenance_type)}</option>
-                          )}
-                          {maintTypes.map((t) => (
-                            <option key={t} value={t}>{maintTypeLabel(t)}</option>
-                          ))}
-                        </select>
-                        <button type="button" className="btnSecondary" title="Agregar nuevo tipo"
-                          onClick={() => setMaintCatModal({ kind: "TYPE", nombre: "" })}
-                          style={{ whiteSpace: "nowrap", padding: "0 10px" }}>+ Nueva</button>
-                      </div>
-                    </label>
-                    <label>
-                      <span>Descripción del trabajo/repuesto</span>
-                      <textarea
-                        placeholder={getDescriptionPlaceholder()}
-                        value={maintenanceForm.description}
-                        onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, description: event.target.value })}
-                        required
-                      />
-                    </label>
-                    <label>
-                      <span>Proveedor/Técnico</span>
-                      <input
-                        type="text"
-                        value={maintenanceForm.provider}
-                        onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, provider: event.target.value })}
-                      />
-                    </label>
-                    <label>
-                      <span>Número de factura</span>
-                      <input
-                        type="text"
-                        value={maintenanceForm.invoice_number}
-                        onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, invoice_number: event.target.value })}
-                      />
-                    </label>
-                    <label>
-                      <span>Monto $</span>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={maintenanceForm.amount}
-                        onChange={(event: any) => setMaintenanceForm({ ...maintenanceForm, amount: event.target.value })}
-                        required
-                      />
-                    </label>
-                    <label>
-                      <span>📸 Foto del comprobante (JPG, PNG, máx 5MB)</span>
-                      <input
-                        type="file"
-                        accept="image/jpeg,image/png,image/jpg"
-                      />
-                    </label>
-                    <button className="primary">Registrar mantenimiento</button>
-                    </form>
+                    {/* El registro de mantenimiento se hace ahora desde 💳 Movimiento
+                        (categoría "Mantenimiento", con Máquina/Activo y Área). Aquí solo
+                        se CONSULTA el historial. */}
+                    <div className="formPanel" style={{ background: "#eff6ff", border: "1px solid #bfdbfe" }}>
+                      <h2 style={{ margin: 0, fontSize: 15 }}>🔧 Mantenimientos</h2>
+                      <p className="muted" style={{ margin: "6px 0 0" }}>Para registrar un mantenimiento (repuestos o mano de obra), ve a <strong>💳 Movimiento</strong> y elige la categoría <strong>Mantenimiento</strong>: podrás asociar la Máquina/Activo o el Área. Este panel es solo de consulta.</p>
+                    </div>
                     <div className="formPanel">
                       <h2 style={{ marginBottom: 8 }}>Historial de mantenimientos</h2>
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8, alignItems: "flex-end" }}>
@@ -16434,6 +16460,51 @@ export function App() {
 
             {/* Modal: detalle del cálculo de nómina por pilada */}
             {/* ── Recibo Semanal Desglosado (Rol de Pago Individual) ── */}
+            {/* Modal: liquidar un "Dinero a Rendir Cuentas" (fondo provisional). */}
+            {liquidarFondo && (() => {
+              const entregado = Number(liquidarFondo.mov.amount);
+              const gasto = Number(liquidarFondo.gasto_real);
+              const diff = Number.isFinite(gasto) && liquidarFondo.gasto_real !== "" ? round2(entregado - gasto) : null;
+              return (
+                <div className="modalOverlay" onClick={() => setLiquidarFondo(null)}>
+                  <div className="modalCard" style={{ maxWidth: 460, width: "100%" }} onClick={(e) => e.stopPropagation()}>
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+                      <h3 style={{ margin: 0 }}>⚙️ Liquidar fondo</h3>
+                      <button type="button" onClick={() => setLiquidarFondo(null)} style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
+                    </div>
+                    <p className="muted" style={{ marginTop: 6 }}>
+                      Entregado a <strong>{liquidarFondo.mov.responsable ?? "—"}</strong>: <strong>{money(entregado)}</strong>{liquidarFondo.mov.description ? ` · ${liquidarFondo.mov.description}` : ""}
+                    </p>
+                    <label style={{ display: "block", marginTop: 8, fontSize: 13, fontWeight: 600 }}>
+                      <span style={{ display: "block", marginBottom: 4 }}>Gasto real comprobado $</span>
+                      <input type="number" min="0" step="0.01" autoFocus value={liquidarFondo.gasto_real}
+                        onChange={(e) => setLiquidarFondo((f) => f ? { ...f, gasto_real: e.target.value } : f)}
+                        placeholder="0.00" style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} />
+                    </label>
+                    <label style={{ display: "block", marginTop: 10, fontSize: 13, fontWeight: 600 }}>
+                      <span style={{ display: "block", marginBottom: 4 }}>Nota (opcional)</span>
+                      <input value={liquidarFondo.description}
+                        onChange={(e) => setLiquidarFondo((f) => f ? { ...f, description: e.target.value } : f)}
+                        placeholder="Detalle de la rendición" style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} />
+                    </label>
+                    {diff !== null && (
+                      <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8, background: diff > 0.005 ? "#f0fdf4" : diff < -0.005 ? "#fef2f2" : "#f3f4f6", border: "1px solid #e5e7eb", fontSize: 13 }}>
+                        {diff > 0.005 && <>🟢 Vuelto a caja (ingreso): <strong>{money(diff)}</strong></>}
+                        {diff < -0.005 && <>🔴 Faltante (egreso adicional): <strong>{money(Math.abs(diff))}</strong></>}
+                        {Math.abs(diff) <= 0.005 && <>✅ Gasto exacto: sin ajuste de caja.</>}
+                      </div>
+                    )}
+                    <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+                      <button type="button" className="primary" disabled={liquidarBusy || liquidarFondo.gasto_real === ""} onClick={() => confirmarLiquidarFondo()} style={{ fontWeight: 700 }}>
+                        {liquidarBusy ? "Liquidando…" : "✅ Confirmar liquidación"}
+                      </button>
+                      <button type="button" onClick={() => setLiquidarFondo(null)} style={{ marginLeft: "auto" }}>Cancelar</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
             {reciboModal.open && (
               <div className="modalOverlay" onClick={() => setReciboModal({ open: false, loading: false, data: null })}>
                 <div className="modalCard" style={{ maxWidth: 760, width: "100%" }} onClick={(e) => e.stopPropagation()}>
