@@ -442,7 +442,7 @@ type WorkerPaymentDetail = {
 type ReciboSemanal = {
   worker: { role: string; name: string };
   range: { from: string; to: string };
-  rows: Array<{ fecha: string; concepto: string; lote: string | null; cantidad: string; tarifa: string; subtotal: number; status: string }>;
+  rows: Array<{ fecha: string; concepto: string; lote: string | null; cantidad: string; tarifa: string; cantidad_num?: number; tarifa_num?: number; unidad?: string; subtotal: number; status: string }>;
   totals: { earned: number; advances: number; net: number };
 };
 
@@ -4217,10 +4217,21 @@ export function App() {
   }
 
   // Filas de la tabla de trabajo (compartidas por ambas impresiones).
+  // CANTIDAD a mostrar en el recibo, con resguardo: si viene en 0 pero hay tarifa
+  // y subtotal, se reconstruye (subtotal / tarifa). Solo fuerza "QQ" en filas
+  // medidas en quintales (POLVILLO/PILADOR); el resto conserva su texto original.
+  function cantidadReciboTxt(r: ReciboSemanal["rows"][number]): string {
+    if (r.unidad !== "QQ") return r.cantidad || "—";
+    const cantNum = Number(r.cantidad_num) || 0;
+    const tarNum = Number(r.tarifa_num) || 0;
+    const real = cantNum > 0 ? cantNum : (tarNum > 0 ? Number(r.subtotal) / tarNum : 0);
+    return `${real.toFixed(2)} QQ`;
+  }
+
   function reciboFilasHtml(data: ReciboSemanal): string {
     if (!data.rows.length) return `<tr><td colspan="5" style="text-align:center;color:#888">Sin registros en el período</td></tr>`;
     return data.rows.map((r) =>
-      `<tr><td>${fmtFechaRecibo(r.fecha)}</td><td>${r.concepto}</td><td class="r">${r.cantidad}</td><td class="r">${r.tarifa}</td><td class="r">$${r.subtotal.toFixed(2)}</td></tr>`
+      `<tr><td>${fmtFechaRecibo(r.fecha)}</td><td>${r.concepto}</td><td class="r">${cantidadReciboTxt(r)}</td><td class="r">${r.tarifa}</td><td class="r">$${r.subtotal.toFixed(2)}</td></tr>`
     ).join("");
   }
 
@@ -4273,7 +4284,7 @@ export function App() {
     if (!w) { addToast("El navegador bloqueó la ventana de impresión", "error"); return; }
     const t = data.totals;
     const filas = (data.rows.length ? data.rows : []).map((r) =>
-      `<div class="it"><div class="l1"><span>${fmtFechaRecibo(r.fecha)}</span><span>$${r.subtotal.toFixed(2)}</span></div><div class="l2">${r.concepto} · ${r.cantidad} · ${r.tarifa}</div></div>`
+      `<div class="it"><div class="l1"><span>${fmtFechaRecibo(r.fecha)}</span><span>$${r.subtotal.toFixed(2)}</span></div><div class="l2">${r.concepto} · ${cantidadReciboTxt(r)} · ${r.tarifa}</div></div>`
     ).join("") || `<div class="l2" style="text-align:center">Sin registros</div>`;
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Recibo ${data.worker.name}</title><style>
       @page{size:80mm auto;margin:5mm} *{box-sizing:border-box}
@@ -16339,18 +16350,28 @@ export function App() {
                             <tbody>
                               {d.rows.length === 0 ? (
                                 <tr><td colSpan={5} className="muted" style={{ textAlign: "center" }}>Sin registros en el período</td></tr>
-                              ) : d.rows.map((r, i) => (
+                              ) : d.rows.map((r, i) => {
+                                // Resguardo: si la CANTIDAD viene en 0 (dato viejo) pero hay
+                                // tarifa y subtotal, se reconstruye: cantidad = subtotal / tarifa.
+                                // Solo se fuerza el formato "QQ" en filas medidas en quintales.
+                                const esQQ = r.unidad === "QQ";
+                                const cantNum = Number(r.cantidad_num) || 0;
+                                const tarNum = Number(r.tarifa_num) || 0;
+                                const cantidadReal = cantNum > 0 ? cantNum : (tarNum > 0 ? Number(r.subtotal) / tarNum : 0);
+                                const cantidadTxt = esQQ ? `${cantidadReal.toFixed(2)} QQ` : (r.cantidad || "—");
+                                return (
                                 <tr key={i}>
                                   <td>{fmtFechaRecibo(r.fecha)}
                                     {/* Fórmula explícita para TODOS los roles: Cantidad × Tarifa = Total. */}
-                                    <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>{r.cantidad || "—"} × {r.tarifa || "—"} = {money(r.subtotal)}</div>
+                                    <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>{cantidadTxt} × {r.tarifa || "—"} = {money(r.subtotal)}</div>
                                   </td>
                                   <td>{r.concepto}</td>
-                                  <td className="num">{r.cantidad || "—"}</td>
+                                  <td className="num">{cantidadTxt}</td>
                                   <td className="num">{r.tarifa || "—"}</td>
                                   <td className="num" style={{ fontWeight: 700 }}>{money(r.subtotal)}</td>
                                 </tr>
-                              ))}
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>

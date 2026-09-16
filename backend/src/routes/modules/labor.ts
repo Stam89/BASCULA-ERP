@@ -196,7 +196,9 @@ export async function createProductionWorkerPayments(
         role: "POLVILLO",
         name: opts.polvilloName.trim(),
         base: round2(polvilloQq * rates.polvillo_per_qq),
-        qq: 0, tulas: 0, tulasBonus: 0, sacasCobradas: 0, arrocilloPaga: 0
+        // Los QQ de polvillo van en la columna `qq` para que el Rol de Pago
+        // muestre la CANTIDAD (antes quedaba en 0 y salía "0.00 QQ").
+        qq: polvilloQq, tulas: 0, tulasBonus: 0, sacasCobradas: 0, arrocilloPaga: 0
       });
     }
 
@@ -209,7 +211,9 @@ export async function createProductionWorkerPayments(
          VALUES ($1, $2, 'processing_batch', $3, $4, $5, $6, $7, $8, $8, $9, $10)`,
         [r.role, r.name, opts.batchId, r.qq, r.sacasCobradas, r.arrocilloPaga, r.tulas, r.base, opts.createdBy ?? null,
          JSON.stringify({
-           qq: r.qq, qq_rate: qqRate, qq_amount: round2(r.qq * qqRate),
+           // Para POLVILLO los QQ se pagan con su propia tarifa (polvillo_*), no
+           // con la de pilada/estibaje: se dejan los campos qq del desglose en 0.
+           qq: r.role === "POLVILLO" ? 0 : r.qq, qq_rate: r.role === "POLVILLO" ? 0 : qqRate, qq_amount: r.role === "POLVILLO" ? 0 : round2(r.qq * qqRate),
            sacas: r.sacasCobradas, saca_rate: sacaRate, saca_amount: round2(r.sacasCobradas * sacaRate),
            arrocillo: r.arrocilloPaga, arrocillo_rate: r.arrocilloPaga > 0 ? rates.estibador_per_arrocillo : 0, arrocillo_amount: round2(r.arrocilloPaga * rates.estibador_per_arrocillo),
            tulas: r.tulas, tulas_rate: r.role === "PILADOR" ? 0 : rates.estibador_por_3tulas, tulas_amount: r.tulasBonus,
@@ -365,19 +369,25 @@ laborRouter.get("/worker-receipt", asyncRoute(async (req, res) => {
     const arrocillo = Number(r.arrocillo) || 0, tunnels = Number(r.tunnels) || 0;
     const lote = (r.lot_code as string) ?? null;
     let concepto = "", cantidad = "", tarifa = "";
+    // Numéricos para el resguardo/fallback del frontend (cantidad × tarifa).
+    // `unidad` = "QQ" cuando la cantidad se mide en quintales (POLVILLO/PILADOR).
+    let cantidad_num = 0, tarifa_num = 0, unidad = "";
     if (q.role === "SECADOR") {
       // Detalle explícito con el ANCLA DE INICIO (ej. "Secado - Inicio: 15/09/2026 18:30 · Guardianía + 2 túnel(es)").
       concepto = (r.notes as string | null)?.trim() || `Guardianía${tunnels ? ` + ${tunnels} túnel(es)` : ""}`;
       cantidad = `${tunnels} túnel(es)`;
       tarifa = `$${rates.secador_per_tunel}/túnel + $${rates.secador_guardiania} guard.`;
+      cantidad_num = tunnels; unidad = "túnel(es)";
     } else if (q.role === "PILADOR") {
       concepto = lote ? `Pilada · Lote ${lote}` : "Pilada";
       cantidad = `${qq.toFixed(2)} QQ${sacas ? ` · ${sacas.toFixed(0)} sacas` : ""}`;
       tarifa = `$${rates.pilador_per_qq}/QQ`;
+      cantidad_num = qq; tarifa_num = Number(rates.pilador_per_qq) || 0; unidad = "QQ";
     } else if (q.role === "POLVILLO") {
       concepto = lote ? `Polvillo · Lote ${lote}` : "Polvillo";
       cantidad = `${qq.toFixed(2)} QQ`;
       tarifa = `$${rates.polvillo_per_qq}/QQ`;
+      cantidad_num = qq; tarifa_num = Number(rates.polvillo_per_qq) || 0; unidad = "QQ";
     } else {
       const parts: string[] = [];
       if (tulas) parts.push(`${tulas.toFixed(0)} tulas`);
@@ -387,9 +397,10 @@ laborRouter.get("/worker-receipt", asyncRoute(async (req, res) => {
       concepto = lote ? `Estibaje · Lote ${lote}` : "Estibaje";
       cantidad = parts.join(" · ") || "—";
       tarifa = tulas ? `$${rates.estibador_por_3tulas}/3 tulas` : `$${rates.estibador_per_qq}/QQ`;
+      cantidad_num = qq; // referencia; el estibaje es compuesto, no se fuerza QQ
     }
     return {
-      fecha: r.fecha, concepto, lote, cantidad, tarifa,
+      fecha: r.fecha, concepto, lote, cantidad, tarifa, cantidad_num, tarifa_num, unidad,
       subtotal: round2(Number(r.net_amount) || 0), status: r.status
     };
   });
