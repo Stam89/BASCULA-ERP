@@ -8103,7 +8103,9 @@ export function App() {
   // retomarlo desde cualquier equipo.
   async function saveMillingProcess() {
     if (!selectedProductionDrying) {
-      setMessage("Seleccione la secadora antes de guardar el proceso");
+      const msg = "Seleccione la secadora antes de guardar el proceso";
+      setMessage(msg);
+      addToast(msg, "error");
       return;
     }
     // Auto-captura del QQ escrito sin añadir, para no perderlo en el borrador.
