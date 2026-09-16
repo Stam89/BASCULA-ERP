@@ -16757,6 +16757,33 @@ export function App() {
               if (companyReadiness && !companyReadiness.ok) {
                 alertas.push(`Instalación incompleta: ${companyReadiness.missing.join(", ")}.`);
               }
+              const readinessDone = companyReadiness?.checks.filter((check) => check.ok).length ?? 0;
+              const readinessTotal = companyReadiness?.checks.length ?? 0;
+              const readinessPct = readinessTotal > 0 ? Math.round((readinessDone / readinessTotal) * 100) : 0;
+              const readinessAreaLabel = (key: string) => {
+                if (["business_name", "matriz"].includes(key)) return "Empresa";
+                if (["admin", "users"].includes(key)) return "Usuarios";
+                if (["firebase", "device_key"].includes(key)) return "Bascula movil";
+                if (key.startsWith("campo_")) return "Transporte y cosechadora";
+                if (key === "app_mode") return "Seguridad";
+                return "General";
+              };
+              const readinessAction = (key: string): { label: string; run: () => void } | null => {
+                if (key === "business_name") return { label: "Abrir datos", run: () => { abrirTarjetaRef.current = "🏢 Datos del negocio"; setConfigSubTab("operacion"); } };
+                if (key === "matriz") return { label: "Abrir socios", run: () => setConfigSubTab("socios") };
+                if (key === "admin" || key === "users") return { label: "Abrir usuarios", run: () => setConfigSubTab("usuarios") };
+                if (key === "app_mode") return { label: "Ver puesta en marcha", run: () => { abrirTarjetaRef.current = "✅ Puesta en marcha"; setConfigSubTab("operacion"); } };
+                if (key.startsWith("campo_")) return { label: "Abrir Campo", run: () => irATab("Caja de Campo") };
+                return null;
+              };
+              const readinessGroups = companyReadiness
+                ? ["Empresa", "Usuarios", "Bascula movil", "Transporte y cosechadora", "Seguridad", "General"]
+                    .map((area) => ({
+                      area,
+                      checks: companyReadiness.checks.filter((check) => readinessAreaLabel(check.key) === area)
+                    }))
+                    .filter((group) => group.checks.length > 0)
+                : [];
               return (
                 <section className="systemStatusPanel">
                   <div className="systemStatusHeader">
@@ -16831,25 +16858,88 @@ export function App() {
 
                   {companyReadiness && (
                     <div className="companyReadinessPanel">
-                      <div className="systemStatusHeader" style={{ marginBottom: 10 }}>
+                      <div className="readinessHero">
                         <div>
-                          <h3 style={{ margin: 0 }}>Empresa lista</h3>
-                          <p className="muted" style={{ margin: "2px 0 0" }}>Chequeo para entregar o levantar una instalación nueva.</p>
+                          <span className="readinessEyebrow">Checklist de entrega</span>
+                          <h3>Empresa lista para operar</h3>
+                          <p>
+                            Revisa lo minimo para entregar una empresa nueva: negocio, matriz,
+                            usuarios, bascula movil, transporte/cosechadora y seguridad.
+                          </p>
                         </div>
-                        <span className={companyReadiness.ok ? "chip ok" : "chip warn"}>
-                          {companyReadiness.ok ? "Lista" : `${companyReadiness.missing.length} pendiente(s)`}
-                        </span>
+                        <div className="readinessScore">
+                          <strong>{readinessPct}%</strong>
+                          <span>{readinessDone}/{readinessTotal} listo(s)</span>
+                          <em className={companyReadiness.ok ? "ok" : "warn"}>
+                            {companyReadiness.ok ? "Lista" : `${companyReadiness.missing.length} pendiente(s)`}
+                          </em>
+                        </div>
                       </div>
-                      <div className="systemStatusGrid">
-                        {companyReadiness.checks.map((check) => (
-                          <div key={check.key} className={`systemStatusCard ${check.ok ? "ok" : "warn"}`}>
-                            <span className="statusDot" />
-                            <div>
-                              <strong>{check.label}</strong>
-                              <span>{check.detail}</span>
-                            </div>
+
+                      <div className="readinessProgress" aria-label={`Empresa lista ${readinessPct}%`}>
+                        <span style={{ width: `${readinessPct}%` }} />
+                      </div>
+
+                      <div className="readinessGroups">
+                        {readinessGroups.map((group) => {
+                          const groupDone = group.checks.filter((check) => check.ok).length;
+                          return (
+                            <section key={group.area} className="readinessGroup">
+                              <header>
+                                <strong>{group.area}</strong>
+                                <span>{groupDone}/{group.checks.length}</span>
+                              </header>
+                              <div className="readinessChecklist">
+                                {group.checks.map((check) => {
+                                  const action = readinessAction(check.key);
+                                  return (
+                                    <div key={check.key} className={`readinessItem ${check.ok ? "ok" : "warn"}`}>
+                                      <span className="statusDot" />
+                                      <div>
+                                        <strong>{check.label}</strong>
+                                        <span>{check.detail}</span>
+                                      </div>
+                                      {!check.ok && action && (
+                                        <button type="button" className="btnGhost" onClick={action.run}>
+                                          {action.label}
+                                        </button>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </section>
+                          );
+                        })}
+                      </div>
+
+                      {!companyReadiness.ok && (
+                        <div className="readinessNextSteps">
+                          <strong>Orden recomendado</strong>
+                          <div>
+                            <span>1. Datos del negocio y matriz</span>
+                            <span>2. Usuarios y permisos</span>
+                            <span>3. Bascula movil/Firebase</span>
+                            <span>4. Transporte y cosechadora</span>
+                            <span>5. Cambiar a produccion antes de datos reales</span>
                           </div>
-                        ))}
+                        </div>
+                      )}
+
+                      {companyReadiness.ok && (
+                        <div className="successBox">
+                          <strong>La empresa esta lista para operar.</strong> Ya puede trabajar con datos reales, crear respaldos y entregar usuarios.
+                        </div>
+                      )}
+
+                      <div className="readinessActions">
+                        <button type="button" onClick={() => setConfigSubTab("operacion")}>Configurar operacion</button>
+                        <button type="button" onClick={() => setConfigSubTab("socios")}>Socios y matriz</button>
+                        <button type="button" onClick={() => setConfigSubTab("usuarios")}>Usuarios</button>
+                        <button type="button" onClick={() => irATab("Caja de Campo")}>Campo</button>
+                        <button type="button" onClick={() => refreshSystemStatus()} disabled={systemStatusBusy}>
+                          {systemStatusBusy ? "Actualizando..." : "Revisar de nuevo"}
+                        </button>
                       </div>
                     </div>
                   )}
