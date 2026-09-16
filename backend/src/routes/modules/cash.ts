@@ -417,6 +417,11 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
               mpc_prov.name,
               lt_from.name,
               sp.name,
+              -- Crédito a favor por compra (formato "<NOMBRE> - Crédito a favor…"):
+              -- se expone el nombre del beneficiario LIMPIO, no la descripción larga.
+              CASE WHEN ap.reference_type = 'credito_producto'
+                        AND ap.description LIKE '% - Crédito a favor%'
+                   THEN NULLIF(split_part(ap.description, ' - Crédito a favor', 1), '') END,
               NULLIF(ap.description, ''),
               'Cuenta por pagar'
             ) AS farmer_name,
