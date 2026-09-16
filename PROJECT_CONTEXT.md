@@ -610,3 +610,9 @@ Nueva pestaña `📄 Guías de Remisión` en el módulo Ventas (junto a Nuevo Pe
 - Tabla NUEVA e independiente `guias_remision` (no toca `sales_orders`/facturas). Numeración secuencial por accionista `GR-000001`. Migración `database/migrations/20261011_guias_remision.sql`.
 - Backend: `backend/src/routes/modules/guias.ts` (GET lista + POST crear), montado en `/api/v1/guias-remision`.
 - Frontend (`web-admin/src/App.tsx`): tipo `GuiaRemision`, estado `guiaForm/guiaItems/guiasList`, `loadGuias()`, `guardarGuiaRemision()`, tercera pestaña y formulario de 5 bloques. CERO RUPTURAS.
+
+## Producción · Finalizar sin candados de rendimiento + alertas visibles — 2026-09-16
+El módulo Producción permite registrar y finalizar el lote con las cantidades EXACTAS ingresadas, aunque la suma de arroz pilado + subproductos (arrocillo 3/4, fino, polvillo) supere o no coincida con el Total Cáscara de secadoras (taras 220-225 lb, humedad, ajustes de planta). NO hay candado por margen de rendimiento.
+- Backend (`processing.ts`): `white_rice.quantity` ahora es `nonnegative` (permite cierre solo con subproductos); `buildOutputRows` omite la fila de blanco si es 0 y exige al menos UNA salida real (`400` si no hay ninguna). La merma se clampa a 0 y el yield puede superar 100% (rendimiento mayor al ingreso = beneficio, no error).
+- Frontend (`App.tsx`): `finalizeMillingLot` usa `showFinalizeValidation()` (setMessage + toast) para NO fallar en silencio; se puede finalizar solo con subproductos; los errores de backend/red se muestran vía el `catch` del onClick (toast). `saveMillingProcess` también muestra toast al faltar la secadora.
+- Al finalizar: entra al stock comercial + subproductos con los valores ingresados, se elimina el borrador de "Procesos guardados (en curso)" y el formulario queda limpio.
