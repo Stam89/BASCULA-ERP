@@ -18191,16 +18191,101 @@ export function App() {
               <section className="panelGrid">
                 <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
                   <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>✅ Puesta en marcha</summary>
-                  <p className="muted">
-                    Pasos recomendados antes de operar con datos reales:
-                  </p>
-                  <ol className="setupList">
-                    <li>Completa los <strong>datos del negocio</strong> (aparecen en los comprobantes).</li>
-                    <li>Crea un usuario para cada persona que use el sistema.</li>
-                    {esMatrizActiva && <li>Usa <strong>Borrar datos de prueba</strong> (Zona de peligro) solo cuando quieras limpiar movimientos de prueba antes de operar.</li>}
-                    <li>Verifica productos, bodegas e insumos en el Dashboard ("Crear datos base" si están vacíos).</li>
-                    <li>Abre la caja del día y registra a tus agricultores reales.</li>
-                  </ol>
+                  <div className="launchGuide">
+                    <div className="launchGuideIntro">
+                      <div>
+                        <span className="readinessEyebrow">Entrega desde cero</span>
+                        <h3>Ruta recomendada antes de datos reales</h3>
+                        <p>
+                          Usa estos pasos cuando prepares una empresa nueva o cuando termines las pruebas.
+                          La idea es configurar primero la base, luego usuarios y por ultimo operar.
+                        </p>
+                      </div>
+                      <button type="button" className="btnSecondary" onClick={() => setConfigSubTab("estado")}>
+                        Ver checklist completo
+                      </button>
+                    </div>
+
+                    <div className="launchSteps">
+                      <article className="launchStep">
+                        <span className="launchStepNumber">1</span>
+                        <div>
+                          <strong>Datos del negocio</strong>
+                          <p>Nombre, telefono, direccion, RUC y texto que saldra en comprobantes.</p>
+                        </div>
+                        <button type="button" className="btnGhost" onClick={() => { abrirTarjetaRef.current = "🏢 Datos del negocio"; setConfigSubTab("operacion"); }}>
+                          Abrir
+                        </button>
+                      </article>
+
+                      <article className="launchStep">
+                        <span className="launchStepNumber">2</span>
+                        <div>
+                          <strong>Matriz, socios y bancos</strong>
+                          <p>Define la matriz principal, socios/accionistas y sus cuentas bancarias.</p>
+                        </div>
+                        <button type="button" className="btnGhost" onClick={() => setConfigSubTab("socios")}>
+                          Abrir
+                        </button>
+                      </article>
+
+                      <article className="launchStep">
+                        <span className="launchStepNumber">3</span>
+                        <div>
+                          <strong>Usuarios y permisos</strong>
+                          <p>Crea un usuario por persona y limita operadores por modulo y accionista.</p>
+                        </div>
+                        <button type="button" className="btnGhost" onClick={() => setConfigSubTab("usuarios")}>
+                          Abrir
+                        </button>
+                      </article>
+
+                      <article className="launchStep">
+                        <span className="launchStepNumber">4</span>
+                        <div>
+                          <strong>Tarifas y secuenciales</strong>
+                          <p>Revisa precios de servicios, empaque, cuadrilla y numeracion de documentos.</p>
+                        </div>
+                        <div className="launchStepActions">
+                          <button type="button" className="btnGhost" onClick={() => setConfigSubTab("tarifas")}>Tarifas</button>
+                          <button type="button" className="btnGhost" onClick={() => setConfigSubTab("secuenciales")}>Secuenciales</button>
+                        </div>
+                      </article>
+
+                      <article className="launchStep">
+                        <span className="launchStepNumber">5</span>
+                        <div>
+                          <strong>Báscula móvil y Campo</strong>
+                          <p>Valida sincronizacion de la app Android y deja lista la operacion de transporte/cosechadora.</p>
+                        </div>
+                        <div className="launchStepActions">
+                          <button type="button" className="btnGhost" onClick={() => setConfigSubTab("estado")}>Sync</button>
+                          <button type="button" className="btnGhost" onClick={() => irATab("Caja de Campo")}>Campo</button>
+                        </div>
+                      </article>
+
+                      <article className="launchStep">
+                        <span className="launchStepNumber">6</span>
+                        <div>
+                          <strong>Limpieza final y respaldo</strong>
+                          <p>Si hubo pruebas, limpia solo en modo prueba. Luego crea respaldo antes de trabajar real.</p>
+                        </div>
+                        <div className="launchStepActions">
+                          {esMatrizActiva && <button type="button" className="btnGhost" onClick={() => { abrirTarjetaRef.current = "⚠️ Zona de peligro"; setConfigSubTab("operacion"); }}>Zona de peligro</button>}
+                          <button type="button" className="btnGhost" onClick={runBackupNow} disabled={!isAdmin || backupBusy}>
+                            {backupBusy ? "Respaldando..." : "Respaldar"}
+                          </button>
+                        </div>
+                      </article>
+                    </div>
+
+                    <div className={companyReadiness?.app_mode === "production" ? "successBox" : "alertBox"} style={{ margin: 0 }}>
+                      <strong>{companyReadiness?.app_mode === "production" ? "Modo producción activo." : "Aun esta en modo prueba."}</strong>{" "}
+                      {companyReadiness?.app_mode === "production"
+                        ? "Los datos reales quedan protegidos contra limpieza accidental."
+                        : "Antes de usar datos reales, cambia a produccion para evitar borrados de ensayo."}
+                    </div>
+                  </div>
                 </details>
 
                 {esMatrizActiva && (

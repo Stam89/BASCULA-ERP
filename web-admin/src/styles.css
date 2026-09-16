@@ -2344,6 +2344,93 @@ input[type="datetime-local"] { height: 36px; }
   line-height: 1.5;
 }
 
+.launchGuide {
+  display: grid;
+  gap: 14px;
+}
+.launchGuideIntro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  background: var(--c-surface-2);
+}
+.launchGuideIntro h3 { margin: 0; color: var(--c-text); }
+.launchGuideIntro p {
+  max-width: 760px;
+  margin: 4px 0 0;
+  color: var(--c-text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.launchSteps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 10px;
+}
+.launchStep {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  min-height: 104px;
+  padding: 12px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  background: var(--c-surface);
+}
+.launchStepNumber {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--c-brand);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 850;
+}
+.launchStep strong {
+  display: block;
+  color: var(--c-text);
+  font-size: 13.5px;
+}
+.launchStep p {
+  margin: 4px 0 0;
+  color: var(--c-text-muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.launchStep > .btnGhost,
+.launchStepActions .btnGhost {
+  height: 30px;
+  padding: 0 9px;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.launchStepActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+@media (max-width: 720px) {
+  .launchGuideIntro { flex-direction: column; }
+  .launchStep {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .launchStep > .btnGhost,
+  .launchStepActions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}
+
 .dangerZone {
   border-color: rgba(220, 38, 38, 0.35);
   background: linear-gradient(135deg, color-mix(in srgb, var(--c-danger) 4%, var(--c-surface)), var(--c-surface));
