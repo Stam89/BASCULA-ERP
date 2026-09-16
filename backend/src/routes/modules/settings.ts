@@ -283,6 +283,9 @@ const WIPE_TABLES = [
   "labor_payments",
   "worker_payments",
   "worker_advances",
+  // Nómina administrativa (personal de oficina + su historial de sueldos pagados).
+  "admin_salary_payments",
+  "admin_staff",
   "cuadrilla_entries",
   "cuadrilla_advances",
   "pilado_services",
