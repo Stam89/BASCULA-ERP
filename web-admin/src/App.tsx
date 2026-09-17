@@ -2469,7 +2469,7 @@ export function App() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [accountsReceivable, setAccountsReceivable] = useState<AccountsReceivable[]>([]);
-  const [arFilter, setArFilter] = useState<"todos" | "socios" | "agricultores" | "matriz">("todos");
+  const [arFilter, setArFilter] = useState<"todos" | "socios" | "agricultores" | "matriz" | "ventas">("ventas");
   // Modal "Estado de cuenta" por deudor: guarda la clave del grupo; los ítems se
   // recalculan en vivo desde accountsReceivable para reflejar los pagos al instante.
   const [arDetalleKey, setArDetalleKey] = useState<string | null>(null);
@@ -8933,12 +8933,14 @@ export function App() {
     await apiPatch<SalesOrder>(`/orders/${order.id}/prepare`, {
       prepared,
       picking_location: location || undefined,
-      prepared_by: authUser?.id
+      prepared_by: authUser?.id,
+      // Al preparar se descuenta el inventario de la bodega de producto terminado.
+      warehouse_id: finishedWarehouse?.id
     });
     addToast(
       prepared
-        ? `📦 Pedido ${order.order_number} preparado · Listo para cargar${location ? ` · ${location}` : ""}`
-        : `Pedido ${order.order_number} devuelto a Pendiente por cargar`,
+        ? `📦 Pedido ${order.order_number} preparado · Stock descontado · Listo para cargar${location ? ` · ${location}` : ""}`
+        : `Pedido ${order.order_number} devuelto a Pendiente por cargar · Stock restaurado`,
       "success"
     );
     await refreshCustomersAndSales();
@@ -15523,11 +15525,23 @@ export function App() {
             return "matriz";
           };
           const esVencida = (ar: AccountsReceivable) => !!ar.due_date && ar.due_date.slice(0, 10) < hoy && Number(ar.balance) > 0.001;
-          const filtrado = accountsReceivable.filter((ar) => arFilter === "todos" || clasif(ar) === arFilter);
+          // CxC por Ventas: cuentas generadas por ventas a crédito (arroz,
+          // subproductos, fundas) — pedido despachado o venta directa.
+          const esVenta = (ar: AccountsReceivable) => ["sales_order", "sales", "sale", "invoice"].includes(ar.reference_type || "");
+          const filtrado = accountsReceivable.filter((ar) =>
+            arFilter === "todos" ? true : arFilter === "ventas" ? esVenta(ar) : clasif(ar) === arFilter
+          );
           const grupos = groupReceivables(filtrado);
           const totalPend = filtrado.reduce((a, r) => a + Number(r.balance), 0);
           const vencidas = filtrado.filter(esVencida);
-          const tabs: Array<[typeof arFilter, string]> = [["todos", "Todos"], ["socios", "Socios"], ["agricultores", "Agricultores"], ["matriz", `Matriz (${matrizName})`]];
+          // Orden solicitado: CxC por Ventas · Socios · Agricultores · Matriz · Todos (al final).
+          const tabs: Array<[typeof arFilter, string]> = [
+            ["ventas", "🛒 CxC por Ventas"],
+            ["socios", "Socios"],
+            ["agricultores", "Agricultores"],
+            ["matriz", `Matriz (${matrizName})`],
+            ["todos", "Todos"]
+          ];
           // Ítems del deudor abierto en el modal (en vivo desde el estado).
           const detalleGrupo = arDetalleKey ? grupos.find((g) => g.key === arDetalleKey) ?? null : null;
           return (

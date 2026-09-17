@@ -47,6 +47,13 @@ export type OpcionesVenta = {
    * así que la venta no debe crear otra: sería cobrar dos veces lo mismo.
    */
   omitirCuentaPorCobrar?: boolean;
+  /**
+   * El descuento de inventario ya se hizo al CONFIRMAR LA PREPARACIÓN del pedido
+   * (salida por venta en bodega). En ese caso el despacho NO debe volver a mover
+   * inventario (evita el doble descuento): solo registra la venta, sus líneas y el
+   * cobro/caja. Las líneas (sale_items) sí se guardan como registro.
+   */
+  omitirInventario?: boolean;
 };
 
 export async function crearVenta(
@@ -116,21 +123,24 @@ async function crearVentaInterna(
       }
 
       // No se vende lo que no hay: sin esta guarda el inventario quedaba en
-      // negativo y el stock dejaba de cuadrar con lo físico.
-      const disponible = await client.query(
-        `SELECT COALESCE(SUM(m.quantity), 0) AS stock, MAX(p.name) AS producto
-         FROM inventory_movements m
-         JOIN products p ON p.id = m.product_id
-         WHERE m.product_id = $1 AND m.warehouse_id = $2 AND m.accionista_id = $3
-           AND m.ownership = 'OWNED'`,
-        [item.product_id, item.warehouse_id, accionistaId]
-      );
-      const stockActual = Number(disponible.rows[0].stock);
-      if (stockActual + 0.001 < quantityQQ) {
-        throw new ApiError(
-          409,
-          `Stock insuficiente de ${disponible.rows[0].producto ?? "este producto"}: hay ${stockActual.toFixed(2)} QQ y la venta pide ${quantityQQ.toFixed(2)} QQ.`
+      // negativo y el stock dejaba de cuadrar con lo físico. Se OMITE cuando el
+      // descuento ya se hizo al confirmar la preparación del pedido.
+      if (!opciones.omitirInventario) {
+        const disponible = await client.query(
+          `SELECT COALESCE(SUM(m.quantity), 0) AS stock, MAX(p.name) AS producto
+           FROM inventory_movements m
+           JOIN products p ON p.id = m.product_id
+           WHERE m.product_id = $1 AND m.warehouse_id = $2 AND m.accionista_id = $3
+             AND m.ownership = 'OWNED'`,
+          [item.product_id, item.warehouse_id, accionistaId]
         );
+        const stockActual = Number(disponible.rows[0].stock);
+        if (stockActual + 0.001 < quantityQQ) {
+          throw new ApiError(
+            409,
+            `Stock insuficiente de ${disponible.rows[0].producto ?? "este producto"}: hay ${stockActual.toFixed(2)} QQ y la venta pide ${quantityQQ.toFixed(2)} QQ.`
+          );
+        }
       }
 
       const itemTotal = round2(item.quantity * item.unit_price);
@@ -139,12 +149,15 @@ async function crearVentaInterna(
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [sale.rows[0].id, item.product_id, item.lot_id, item.warehouse_id, quantityQQ, item.unit_price, itemTotal]
       );
-      await client.query(
-        `INSERT INTO inventory_movements
-         (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
-         VALUES ($1, $2, $3, 'OUT', $4, 'sales', $5, 'OWNED', $6, $7)`,
-        [item.product_id, item.warehouse_id, item.lot_id, -quantityQQ, sale.rows[0].id, body.created_by, accionistaId]
-      );
+      // Salida de inventario. Se OMITE si ya se descontó en la preparación.
+      if (!opciones.omitirInventario) {
+        await client.query(
+          `INSERT INTO inventory_movements
+           (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
+           VALUES ($1, $2, $3, 'OUT', $4, 'sales', $5, 'OWNED', $6, $7)`,
+          [item.product_id, item.warehouse_id, item.lot_id, -quantityQQ, sale.rows[0].id, body.created_by, accionistaId]
+        );
+      }
 
       if (item.lot_id) {
         await createLotProcessReport(client, {

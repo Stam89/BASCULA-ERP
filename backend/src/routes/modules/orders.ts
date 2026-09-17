@@ -1,4 +1,5 @@
 import { Router } from "express";
+import type { PoolClient } from "pg";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
@@ -8,6 +9,7 @@ import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { crearVenta } from "./sales.js";
+import { lockInventoryStock } from "../../db/inventory-lock.js";
 import { cobrarEmpaqueAlDespachar } from "../../services/cargo-empaque.js";
 import { revertCuadrillaDespachoVentaEntry, upsertCuadrillaDespachoVentaEntry } from "./cuadrilla.js";
 
@@ -141,6 +143,63 @@ async function crearCobroDelPedido(
   return ar.rows[0].id;
 }
 
+// ── Descuento de inventario al CONFIRMAR LA PREPARACIÓN de un pedido ──────────
+// Rebaja el 'Inventario Comercial' al instante (salida por venta), para reflejar
+// el saldo real en bodega antes del despacho. La cantidad del pedido ya está en
+// QUINTALES. IDEMPOTENTE: si el pedido ya tiene su salida registrada, no vuelve a
+// descontar (evita doble descuento). El despacho posterior usa omitirInventario.
+async function descontarInventarioPreparacion(
+  client: PoolClient,
+  opts: { orderId: string; accionistaId: string | undefined; warehouseId: string; createdBy?: string | null }
+): Promise<void> {
+  const ya = await client.query(
+    "SELECT 1 FROM inventory_movements WHERE reference_type = 'sales_order' AND reference_id = $1 AND movement = 'OUT' LIMIT 1",
+    [opts.orderId]
+  );
+  if (ya.rowCount) return; // ya descontado en una preparación previa
+
+  const items = await client.query(
+    "SELECT inventory_product_id, product_id, quantity FROM sales_order_items WHERE order_id = $1",
+    [opts.orderId]
+  );
+  // Agrupa por producto de inventario para validar/descontar una vez por producto.
+  const porProducto = new Map<string, number>();
+  for (const it of items.rows) {
+    const pid = String(it.inventory_product_id ?? it.product_id);
+    porProducto.set(pid, round2((porProducto.get(pid) ?? 0) + Number(it.quantity || 0)));
+  }
+  for (const [productId, qq] of [...porProducto.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    if (!(qq > 0)) continue;
+    await lockInventoryStock(client, { productId, warehouseId: opts.warehouseId, accionistaId: opts.accionistaId, ownership: "OWNED" });
+    const disp = await client.query(
+      `SELECT COALESCE(SUM(m.quantity), 0) AS stock, MAX(p.name) AS producto
+         FROM inventory_movements m JOIN products p ON p.id = m.product_id
+        WHERE m.product_id = $1 AND m.warehouse_id = $2 AND m.accionista_id = $3 AND m.ownership = 'OWNED'`,
+      [productId, opts.warehouseId, opts.accionistaId]
+    );
+    const stock = Number(disp.rows[0].stock);
+    if (stock + 0.001 < qq) {
+      throw new ApiError(409, `Stock insuficiente de ${disp.rows[0].producto ?? "este producto"}: hay ${stock.toFixed(2)} QQ y la preparación requiere ${qq.toFixed(2)} QQ.`);
+    }
+    await client.query(
+      `INSERT INTO inventory_movements
+         (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
+       VALUES ($1, $2, NULL, 'OUT', $3, 'sales_order', $4, 'OWNED', $5, $6)`,
+      [productId, opts.warehouseId, -qq, opts.orderId, opts.createdBy ?? null, opts.accionistaId]
+    );
+  }
+}
+
+// Restaura el inventario descontado en la preparación (al revertir la preparación
+// o al anular el pedido). Elimina las salidas por venta de ese pedido.
+async function restaurarInventarioPreparacion(client: PoolClient, orderId: string): Promise<number> {
+  const r = await client.query(
+    "DELETE FROM inventory_movements WHERE reference_type = 'sales_order' AND reference_id = $1 AND movement = 'OUT'",
+    [orderId]
+  );
+  return r.rowCount ?? 0;
+}
+
 /** Detalle de un pedido, para verlo y prepararlo antes de despachar. */
 ordersRouter.get("/:id", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
@@ -232,39 +291,65 @@ ordersRouter.put("/:id", asyncRoute(async (req, res) => {
 
 // Preparación (picking): paso intermedio de la cola de despachos. El bodeguero
 // alista los sacos, confirma la ubicación/lote de donde salen y marca el pedido
-// como "Listo para cargar". NO cambia el status (sigue PENDING) ni mueve nada:
-// solo sella prepared_at + picking_location. Enviar prepared:false lo revierte a
-// "Pendiente por cargar" (mientras no se haya despachado).
+// como "Listo para cargar". Al confirmar la preparación se DESCUENTA el inventario
+// comercial al instante (salida por venta), para reflejar el saldo real en bodega
+// y sacar el pedido de la cola "por preparar". El despacho posterior ya NO vuelve a
+// mover inventario. Enviar prepared:false revierte el estado Y restaura el stock.
 ordersRouter.patch("/:id/prepare", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const body = z.object({
     prepared: z.boolean().default(true),
     picking_location: z.string().max(200).optional(),
-    prepared_by: z.string().uuid().optional()
+    prepared_by: z.string().uuid().optional(),
+    // Bodega de la que sale el producto (por defecto la de producto terminado).
+    warehouse_id: z.string().uuid().optional()
   }).parse(req.body);
 
-  const order = await pool.query(
-    "SELECT id, status FROM sales_orders WHERE id = $1 AND accionista_id = $2",
-    [req.params.id, accionistaId]
-  );
-  if (!order.rowCount) throw new ApiError(404, "Pedido no encontrado para el accionista seleccionado");
-  if (order.rows[0].status !== "PENDING") {
-    throw new ApiError(409, "Solo se puede preparar un pedido pendiente: este ya fue despachado o cancelado.");
-  }
+  const result = await inTransaction(async (client) => {
+    const order = await client.query(
+      "SELECT id, status FROM sales_orders WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
+      [req.params.id, accionistaId]
+    );
+    if (!order.rowCount) throw new ApiError(404, "Pedido no encontrado para el accionista seleccionado");
+    if (order.rows[0].status !== "PENDING") {
+      throw new ApiError(409, "Solo se puede preparar un pedido pendiente: este ya fue despachado o cancelado.");
+    }
 
-  const location = body.picking_location?.trim() || null;
-  const updated = await pool.query(
-    `UPDATE sales_orders
-        SET prepared_at = CASE WHEN $2 THEN COALESCE(prepared_at, now()) ELSE NULL END,
-            prepared_by = CASE WHEN $2 THEN $3::uuid ELSE NULL END,
-            -- La ubicación se conserva aunque se revierta la preparación, para
-            -- no obligar a re-teclearla si el bodeguero solo corrige el estado.
-            picking_location = COALESCE($4, picking_location)
-      WHERE id = $1
-      RETURNING *`,
-    [req.params.id, body.prepared, body.prepared_by ?? null, location]
-  );
-  res.json(updated.rows[0]);
+    if (body.prepared) {
+      // Descuenta el inventario ahora (idempotente). Requiere bodega: si no se
+      // envía, usa la bodega de PRODUCTO TERMINADO.
+      let warehouseId = body.warehouse_id ?? null;
+      if (!warehouseId) {
+        const wh = await client.query(
+          "SELECT id FROM warehouses WHERE upper(name) LIKE '%TERMINAD%' ORDER BY created_at ASC LIMIT 1"
+        );
+        warehouseId = wh.rows[0]?.id ?? null;
+      }
+      if (!warehouseId) throw new ApiError(400, "No se encontró la bodega de producto terminado para descontar el inventario.");
+      await descontarInventarioPreparacion(client, {
+        orderId: req.params.id as string,
+        accionistaId,
+        warehouseId,
+        createdBy: body.prepared_by ?? null
+      });
+    } else {
+      // Revertir preparación: restaura el stock descontado.
+      await restaurarInventarioPreparacion(client, req.params.id as string);
+    }
+
+    const location = body.picking_location?.trim() || null;
+    const updated = await client.query(
+      `UPDATE sales_orders
+          SET prepared_at = CASE WHEN $2 THEN COALESCE(prepared_at, now()) ELSE NULL END,
+              prepared_by = CASE WHEN $2 THEN $3::uuid ELSE NULL END,
+              picking_location = COALESCE($4, picking_location)
+        WHERE id = $1
+        RETURNING *`,
+      [req.params.id, body.prepared, body.prepared_by ?? null, location]
+    );
+    return updated.rows[0];
+  });
+  res.json(result);
 }));
 
 // Despachar y cobrar: el pedido se convierte en venta en UNA transacción.
@@ -325,7 +410,10 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
           unit_price: Number(item.unit_price)
         }))
       },
-      { omitirCuentaPorCobrar: Boolean(order.rows[0].receivable_id) }
+      // El inventario YA se descontó al confirmar la preparación (salida por venta
+      // ligada al pedido). El despacho no debe volver a mover stock: solo registra
+      // la venta, sus líneas y el cobro/caja.
+      { omitirCuentaPorCobrar: Boolean(order.rows[0].receivable_id), omitirInventario: true }
     );
 
     // Qué pasa con la cuenta del pedido al despachar:
@@ -460,6 +548,9 @@ ordersRouter.post("/:id/cancel", asyncRoute(async (req, res) => {
     }
 
     await revertCuadrillaDespachoVentaEntry(client, String(req.params.id));
+    // Si el pedido ya había descontado inventario en la preparación, se restaura
+    // (no se vende lo que no se despachó).
+    await restaurarInventarioPreparacion(client, String(req.params.id));
 
     const updated = await client.query(
       "UPDATE sales_orders SET status = 'CANCELLED' WHERE id = $1 RETURNING *",
