@@ -5129,6 +5129,10 @@ export function App() {
       // El inventario de sacos alimenta el detalle de "Compra de sacos" del
       // movimiento de caja; se carga al entrar a Caja.
       refreshSacks().catch(() => undefined);
+      // Cuentas por cobrar pendientes para el select "Ligar a un servicio" (INGRESO).
+      apiGet<AccountsReceivable[]>("/receivable")
+        .then((ar) => setAccountsReceivable(ar.filter((a) => a.status !== "PAID")))
+        .catch(() => undefined);
     }
   }, [activeTab, dashboard.current_cash_register?.id]);
 
