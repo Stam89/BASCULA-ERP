@@ -2069,9 +2069,11 @@ export function App() {
     // El Total de Arroz Blanco es la suma EXACTA de Tulas + Sacos; si no hay
     // desglose, se usa el total de producción como respaldo.
     const blanco = (tula + saco) > 0 ? tula + saco : totalProd;
-    // % Arroz Blanco = RENDIMIENTO = (QQ Arroz Blanco / QQ Cáscara de entrada)×100.
-    // Redondeado a 2 decimales, con guarda anti división por cero (NaN/Infinity).
-    const blancoRendPct = entrada > 0 ? (blanco / entrada) * 100 : 0;
+    // % Arroz Blanco = EXCEDENTE = ((QQ Arroz Blanco − QQ Cáscara)/QQ Cáscara)×100.
+    // Fórmula del cliente: mide cuánto rinde el blanco POR ENCIMA de la cáscara de
+    // entrada (ej. (80−53.39)/53.39 = 49.84%). SOLO aplica al arroz blanco; los
+    // subproductos usan % simple. 2 decimales, con guarda anti división por cero.
+    const blancoRendPct = entrada > 0 ? ((blanco - entrada) / entrada) * 100 : 0;
     const blancoRendStr = (Math.round(blancoRendPct * 100) / 100).toFixed(2);
     // % Subproductos = (QQ subproducto / Total QQ Cáscara) × 100.
     const subPct = (x: number) => (entrada > 0 ? (x / entrada) * 100 : 0);
@@ -12064,8 +12066,8 @@ export function App() {
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
                           <strong style={{ fontSize: 15 }}>{item.lot_code}{item.rice_type ? ` · ${item.rice_type}` : ""}</strong>
                           <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                            <span title="% Arroz Blanco (rendimiento): (QQ Arroz Blanco / QQ Cáscara de entrada) × 100"
-                              style={{ fontSize: 12, fontWeight: 700, color: c.blancoRendPct > 0 ? "#15803d" : "#b45309", background: c.blancoRendPct > 0 ? "#dcfce7" : "#fef3c7", borderRadius: 6, padding: "3px 10px" }}>
+                            <span title="% Arroz Blanco (excedente): ((QQ Arroz Blanco − QQ Cáscara)/QQ Cáscara) × 100"
+                              style={{ fontSize: 12, fontWeight: 700, color: c.blancoRendPct >= 0 ? "#15803d" : "#b91c1c", background: c.blancoRendPct >= 0 ? "#dcfce7" : "#fee2e2", borderRadius: 6, padding: "3px 10px" }}>
                               % Arroz Blanco: {c.blancoRendStr}%
                             </span>
                             <span className="muted">{new Date(item.finished_at).toLocaleString("es-EC")}</span>
