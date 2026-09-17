@@ -36,6 +36,10 @@ export type Lot = {
   rice_type?: string | null;
   status: string;
   accionista_id?: string | null;
+  /** Tipo de operación: COMPRA (propio) | SECADO | SECADO_PILADO | PILADO (servicio). */
+  operation_type?: string | null;
+  /** true = lote de servicio (maquila): el grano es del cliente. */
+  is_maquila?: boolean | null;
   /** Suma de los pesos de materia prima del lote (no de un pesaje suelto). */
   quintals: string | number | null;
   net_weight?: string | number | null;

@@ -142,7 +142,11 @@ processingRouter.get("/history", asyncRoute(async (req, res) => {
                  WHERE ts.socio_id = l.accionista_id AND ts.servicio = 'PILADO' AND ts.is_active = true
                    AND ts.fecha_vigencia <= CURRENT_DATE
                  ORDER BY ts.fecha_vigencia DESC, ts.created_at DESC LIMIT 1
-              )) AS pilada_rate_per_qq
+              )) AS pilada_rate_per_qq,
+              -- Propiedad del lote: OWNED (propio → Gana rendimiento) vs MAQUILA
+              -- (servicio → pestaña «Serv. Pilada»). Lo usa el frontend para separar.
+              COALESCE(y.ownership, b.ownership) AS ownership,
+              l.operation_type AS operation_type
        FROM processing_batches b
        JOIN lots l ON l.id = b.lot_id
        LEFT JOIN drying_tunnel_reports t ON t.id = b.drying_report_id

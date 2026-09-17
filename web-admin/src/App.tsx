@@ -898,6 +898,21 @@ type MillingPiladoEntry = {
   tulas?: number;
 };
 
+// Clasificación de un lote por su tipo de operación, para filtros y badges de
+// Producción. 'Solo Secada' (SECADO) termina su ciclo en la secadora y NO se pila.
+function esSoloSecadaOp(op?: string | null): boolean {
+  return String(op ?? "").toUpperCase() === "SECADO";
+}
+// 'Servicio de Pilada' (maquila): PILADO o SECADO_PILADO (Servicio Completo), o el
+// respaldo por sufijo -P / is_maquila para datos viejos sin tipo. COMPRA=propio.
+function esServicioPiladaOp(op?: string | null, isMaquila?: boolean | null, lotCode?: string | null): boolean {
+  const o = String(op ?? "").toUpperCase();
+  if (o === "PILADO" || o === "SECADO_PILADO") return true;
+  if (o === "COMPRA" || o === "SECADO") return false;
+  if (/-P$/i.test(String(lotCode ?? ""))) return true;
+  return isMaquila === true;
+}
+
 // Desglose del MIX de un conjunto de renglones de pilado: QQ en tula, QQ en saco
 // y conteo de tulas. Compartido por el memo y por el auto-guardado (para incluir
 // un renglón escrito pero aún no añadido con [+ Añadir]).
@@ -1088,6 +1103,9 @@ type ProductionHistoryItem = {
   service_rate?: string | number | null;
   service_total?: string | number | null;
   client_name?: string | null;
+  /** Propiedad del lote: OWNED (Gana rendimiento) vs MAQUILA (Serv. Pilada). */
+  ownership?: string | null;
+  operation_type?: string | null;
   /** Cuadro de rendimiento congelado al cerrar el lote (foto estilo Excel). */
   rendimiento_snapshot?: RendimientoSnapshot | null;
   /** Precios de venta manuales por producto de salida (liquidación "Gana"). */
@@ -1781,6 +1799,14 @@ export function App() {
   // drying_report). Ver finalizeMillingLot.
   const [productionSource, setProductionSource] = useState<"drying" | "stock">("drying");
   const [productionStockLotId, setProductionStockLotId] = useState("");
+  // ¿El pilado actual es un SERVICIO DE PILADA (maquila)? Se auto-marca según el
+  // tipo del lote (operation_type ≠ COMPRA / is_maquila / sufijo -P), pero el
+  // usuario puede forzarlo con el checkbox. Al finalizar con esto en true, el arroz
+  // NO entra al stock comercial: va a custodia de terceros + Cobro por Servicio.
+  const [esMaquilaProduccion, setEsMaquilaProduccion] = useState(false);
+  // Sub-pestaña del módulo Gana: rendimiento de lotes propios vs. cobros por
+  // servicio de pilada (maquila).
+  const [ganaTab, setGanaTab] = useState<"propio" | "servicio">("propio");
   // Procesos de pilado guardados en el servidor (en curso).
   const [millingDrafts, setMillingDrafts] = useState<MillingDraft[]>([]);
   const [productionHistory, setProductionHistory] = useState<ProductionHistoryItem[]>([]);
@@ -2897,6 +2923,13 @@ export function App() {
     if (productionSource === "stock") return selectedStockLot ? esServicioLot(selectedStockLot) : false;
     return (selectedProductionDrying?.lots ?? []).some(esServicioLot);
   }, [productionSource, selectedStockLot, selectedProductionDrying]);
+  // Auto-marca el checkbox de maquila según el tipo del lote seleccionado. Se
+  // re-evalúa al cambiar de origen/lote; el usuario puede desmarcarlo/marcarlo a
+  // mano después (el checkbox es la fuente de verdad al finalizar).
+  const millingLoteKey = productionSource === "stock" ? (selectedStockLot?.id ?? "") : (selectedProductionDrying?.id ?? "");
+  useEffect(() => {
+    setEsMaquilaProduccion(millingEsServicio);
+  }, [millingLoteKey, millingEsServicio]);
   // QQ escritos en 'Cantidad en QQ' que AÚN no se añadieron con [+ Añadir]. Cuentan
   // para habilitar el guardado y se auto-agregan al guardar/finalizar.
   const millingPiladoPendienteQq = useMemo(() => {
@@ -8590,7 +8623,10 @@ export function App() {
     const production = await apiPost<ProductionResult>(`/processing-batches/${batch.id}/finish-production`, {
       lot_id: src.lot_id,
       drying_report_id: src.drying_report_id,
-      is_maquila: false,
+      // Servicio de Pilada (maquila): el checkbox manda. En true, el backend envía
+      // el arroz a custodia de terceros (NO al stock comercial) y crea el Cobro por
+      // Servicio (tarifa × QQ) en Cuentas por Cobrar + pilado_services.
+      is_maquila: esMaquilaProduccion,
       input_paddy_kg: inputKg,
       white_rice: {
         product_id: outputProduct.id,
@@ -11683,11 +11719,17 @@ export function App() {
                     <span>Secadora desde Secadoras</span>
                     <select value={productionDryingId} onChange={(event) => updateProductionDryingId(event.target.value)} required>
                       <option value="">Seleccione</option>
-                      {productionDryingReports.map((report) => (
-                        <option key={report.id} value={report.id}>
-                          Secadora {report.tunnel_number} - {report.rice_type === "CORRIENTE" ? "Corriente" : "0.11"} - {Number(report.total_quintals ?? 0).toFixed(2)} QQ
-                        </option>
-                      ))}
+                      {productionDryingReports.map((report) => {
+                        const esServ = (report.lots ?? []).some((l) => {
+                          const o = l as { operation_type?: string | null; is_maquila?: boolean | null; lot_code?: string | null };
+                          return esServicioPiladaOp(o.operation_type, o.is_maquila, o.lot_code);
+                        });
+                        return (
+                          <option key={report.id} value={report.id}>
+                            Secadora {report.tunnel_number} - {report.rice_type === "CORRIENTE" ? "Corriente" : "0.11"} - {Number(report.total_quintals ?? 0).toFixed(2)} QQ{esServ ? " · 🔧 SERV. PILADA" : ""}
+                          </option>
+                        );
+                      })}
                     </select>
                   </label>
                   {selectedProductionDrying ? (
@@ -11745,13 +11787,41 @@ export function App() {
                   )}
                 </>
               )}
+
+              {/* Servicio de Pilada (Maquila): se auto-marca según el tipo del lote,
+                  pero el usuario puede forzarlo. Si queda marcado al Finalizar, el
+                  arroz NO entra al stock comercial (va a custodia + Cobro por Servicio). */}
+              <label style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, padding: "10px 12px", borderRadius: 8,
+                background: esMaquilaProduccion ? "#eff6ff" : "#f8fafc", border: `1.5px solid ${esMaquilaProduccion ? "#2563eb" : "#e2e8f0"}`, cursor: "pointer" }}>
+                <input type="checkbox" checked={esMaquilaProduccion} onChange={(e) => setEsMaquilaProduccion(e.target.checked)}
+                  style={{ width: 18, height: 18, accentColor: "#2563eb" }} />
+                <span style={{ fontWeight: 700, color: esMaquilaProduccion ? "#1d4ed8" : "#475569" }}>
+                  🔧 Es Servicio de Pilada (Maquila)
+                </span>
+                {esMaquilaProduccion && (
+                  <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 800, color: "#fff", background: "#2563eb", borderRadius: 6, padding: "3px 8px" }}>SERVICIO PILADA</span>
+                )}
+              </label>
+              {esMaquilaProduccion && (
+                <p className="muted" style={{ fontSize: 12, margin: "6px 0 0", color: "#1d4ed8" }}>
+                  ℹ️ El grano es del cliente: el arroz blanco y subproductos NO suman al Stock Comercial; se registran en custodia de terceros y se genera un <strong>Cobro por Servicio</strong> (tarifa × QQ) en «Gana · Serv. Pilada» y Cuentas por Cobrar.
+                </p>
+              )}
             </section>
 
             {/* Últimos lotes (debajo de Secadora, en la columna izquierda) */}
             <DataList
               title="Últimos lotes"
               headers={["Lote", "Agricultor", "Tipo", "QQ"]}
-              rows={lots.slice(0, 8).map((lot) => [lot.lot_code, lot.farmer_name ?? "—", riceTypeLabel(lot.rice_type), `${Number(lot.quintals ?? 0).toFixed(2)} QQ`])}
+              rows={lots
+                .filter((lot) => !esSoloSecadaOp(lot.operation_type))
+                .slice(0, 8)
+                .map((lot) => [
+                  lot.lot_code,
+                  lot.farmer_name ?? "—",
+                  riceTypeLabel(lot.rice_type) + (esServicioPiladaOp(lot.operation_type, lot.is_maquila, lot.lot_code) ? " · 🔧 SERV. PILADA" : ""),
+                  `${Number(lot.quintals ?? 0).toFixed(2)} QQ`
+                ])}
             />
             </div>
 
@@ -11984,10 +12054,68 @@ export function App() {
                 </div>
               </div>
 
+              {/* Sub-pestañas: rendimiento de lotes PROPIOS vs COBROS por servicio de
+                  pilada (maquila). Los lotes de servicio no son propiedad de la planta:
+                  se cobran por tarifa × QQ, sin costo de cáscara ni utilidad de venta. */}
               {(() => {
-                const lotes = productionHistory.filter((it) => !it.is_service);
+                const serviciosCount = productionHistory.filter((it) => it.is_service).length;
+                return (
+                  <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+                    {[
+                      { key: "propio" as const, label: "🏆 Rendimiento (Propio)" },
+                      { key: "servicio" as const, label: `🔧 Serv. Pilada${serviciosCount ? ` (${serviciosCount})` : ""}` }
+                    ].map((t) => (
+                      <button key={t.key} type="button" onClick={() => setGanaTab(t.key)}
+                        style={{ padding: "7px 14px", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer",
+                          border: `1.5px solid ${ganaTab === t.key ? "#2563eb" : "var(--c-border)"}`,
+                          background: ganaTab === t.key ? "#2563eb" : "transparent",
+                          color: ganaTab === t.key ? "#fff" : "var(--c-text)" }}>
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
+
+              {ganaTab === "servicio" ? (() => {
+                // Cobros por servicio de pilada (maquila): tarifa × QQ, sin propiedad
+                // del grano. Fuente: pilado_services (is_service=true).
+                const servicios = productionHistory.filter((it) => it.is_service);
+                if (servicios.length === 0) {
+                  return <p className="tableEmpty" style={{ marginTop: 16 }}>Aún no hay servicios de pilada (maquila). Al finalizar un lote con <strong>🔧 Es Servicio de Pilada</strong> marcado, su Cobro por Servicio aparece aquí.</p>;
+                }
+                return (
+                  <div style={{ display: "grid", gap: 12, marginTop: 14, gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
+                    {servicios.map((item) => {
+                      const qq = Number(item.white_rice_qty ?? 0);
+                      const tarifa = Number(item.service_rate ?? 0);
+                      const total = Number(item.service_total ?? qq * tarifa);
+                      return (
+                        <article key={item.id} style={{ border: "1.5px solid #bfdbfe", borderRadius: 10, padding: 14, background: "#eff6ff" }}>
+                          <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
+                            <strong style={{ fontSize: 14 }}>{item.client_name ?? item.lot_code}</strong>
+                            <span style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: "#2563eb", borderRadius: 6, padding: "2px 8px", whiteSpace: "nowrap" }}>SERVICIO PILADA</span>
+                          </header>
+                          <div style={{ fontSize: 12, color: "#1d4ed8", fontWeight: 700, marginBottom: 8 }}>🧾 Liquidación de Cobro por Servicio</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                            <div><div style={{ fontSize: 11, color: "var(--c-muted)" }}>QQ pilados</div><div style={{ fontWeight: 700 }}>{qq.toFixed(2)} QQ</div></div>
+                            <div><div style={{ fontSize: 11, color: "var(--c-muted)" }}>Tarifa</div><div style={{ fontWeight: 700 }}>${tarifa.toFixed(2)}/QQ</div></div>
+                          </div>
+                          <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid #bfdbfe", display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                            <span style={{ fontSize: 12, fontWeight: 800, color: "#1d4ed8" }}>TOTAL COBRO</span>
+                            <strong style={{ fontSize: 18, color: "#1d4ed8" }}>{money(total)}</strong>
+                          </div>
+                          <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>{new Date(item.finished_at).toLocaleString("es-EC")} · registrado en Cuentas por Cobrar</div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                );
+              })() : (() => {
+                // Lotes PROPIOS (rendimiento): excluye maquila (ownership=MAQUILA) y servicios.
+                const lotes = productionHistory.filter((it) => !it.is_service && String(it.ownership ?? "").toUpperCase() !== "MAQUILA");
                 if (lotes.length === 0) {
-                  return <p className="tableEmpty" style={{ marginTop: 16 }}>Aún no hay lotes finalizados para este accionista. Al finalizar un lote en Producción, su cuadro aparece aquí.</p>;
+                  return <p className="tableEmpty" style={{ marginTop: 16 }}>Aún no hay lotes propios finalizados para este accionista. Al finalizar un lote en Producción, su cuadro aparece aquí.</p>;
                 }
                 // Vista principal: LISTA DE TARJETAS de resumen. El detalle financiero
                 // (tabla completa) se abre en un modal con [👁️ Ver Liquidación].
