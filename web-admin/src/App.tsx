@@ -2050,19 +2050,29 @@ export function App() {
       : (snap ? Number(snap.entrada_cascara_qq ?? 0) : Number(item.input_paddy_kg ?? 0) / KG_QQ);
     const entrada = Number.isFinite(entradaRaw) ? entradaRaw : 0;
     const costoCascara = entradas.reduce((s, p) => s + (p.price_per_quintal != null ? Number(p.quintals || 0) * Number(p.price_per_quintal) : 0), 0);
-    const blanco = Number(item.white_rice_qty ?? 0);
     const broken = Number(item.broken_rice_qty ?? 0);
     const fino = Number(item.fine_broken_rice_qty ?? 0);
     const arrocillos = broken + fino;
     const polvillo = Number(item.bran_qty ?? 0);
-    // Optional-chaining COMPLETO: si el snapshot existe pero no trae arroz_blanco
-    // (dato parcial), no debe lanzar TypeError y romper el render.
+    // Arroz Blanco = QQ en Tulas + QQ en Sacos. Se lee de Producción
+    // (production_yields: white_rice_qty / qq_de_tulas) y, si ese dato viene
+    // incompleto, se cae al snapshot de rendimiento (arroz_blanco.*). Optional
+    // chaining COMPLETO para no romper el render con snapshots parciales.
     const tulaRaw = Number(item.qq_de_tulas ?? snap?.arroz_blanco?.tula_qq ?? 0);
     const tula = Number.isFinite(tulaRaw) ? tulaRaw : 0;
-    const saco = Math.max(0, blanco - tula);
-    // % Arroz Blanco (excedente): ((QQ Blanco − QQ Cáscara)/QQ Cáscara)×100, truncado 2 dec.
-    const blancoExcedentePct = entrada > 0 ? ((blanco - entrada) / entrada) * 100 : 0;
-    const blancoExcedenteStr = (Math.trunc(blancoExcedentePct * 100) / 100).toFixed(2);
+    const totalProdRaw = Number(item.white_rice_qty ?? snap?.arroz_blanco?.total_qq ?? 0);
+    const totalProd = Number.isFinite(totalProdRaw) ? totalProdRaw : 0;
+    const sacoRaw = snap?.arroz_blanco?.saco_qq != null
+      ? Number(snap.arroz_blanco.saco_qq)
+      : Math.max(0, totalProd - tula);
+    const saco = Number.isFinite(sacoRaw) ? sacoRaw : 0;
+    // El Total de Arroz Blanco es la suma EXACTA de Tulas + Sacos; si no hay
+    // desglose, se usa el total de producción como respaldo.
+    const blanco = (tula + saco) > 0 ? tula + saco : totalProd;
+    // % Arroz Blanco = RENDIMIENTO = (QQ Arroz Blanco / QQ Cáscara de entrada)×100.
+    // Redondeado a 2 decimales, con guarda anti división por cero (NaN/Infinity).
+    const blancoRendPct = entrada > 0 ? (blanco / entrada) * 100 : 0;
+    const blancoRendStr = (Math.round(blancoRendPct * 100) / 100).toFixed(2);
     // % Subproductos = (QQ subproducto / Total QQ Cáscara) × 100.
     const subPct = (x: number) => (entrada > 0 ? (x / entrada) * 100 : 0);
     // Costo Prod. (pilada) por QQ de cáscara = (QQ Blanco × Tarifa PILADO socio)/QQ Cáscara.
@@ -2081,7 +2091,7 @@ export function App() {
     const utilidad = ingresoTotal - costoCascara;
     const totalCascaraSeccion = costoCascara + costoProdTotal;
     return { entradas, entrada, costoCascara, blanco, broken, fino, arrocillos, polvillo, tula, saco,
-      blancoExcedentePct, blancoExcedenteStr, subPct, precioPilada, costoProdUnit, costoProdTotal,
+      blancoRendPct, blancoRendStr, subPct, precioPilada, costoProdUnit, costoProdTotal,
       pBlancoStr, pBrokenStr, pFineStr, pBranStr, pBlanco, pBroken, pFine, pBran,
       ingresoTotal, utilidad, totalCascaraSeccion };
   };
@@ -12022,7 +12032,7 @@ export function App() {
                 const n2 = (v: number) => Number(v).toFixed(2);
                 const p1 = (v: number) => `${Number(v).toFixed(1)}%`;
                 const dcell = { padding: "6px 10px", textAlign: "right" as const };
-                const resumen = `Total cáscara: ${money(c.totalCascaraSeccion)}\nIngreso proyectado: ${money(c.ingresoTotal)}\nUtilidad proyectada: ${money(c.utilidad)}\n% Arroz Blanco: ${c.blancoExcedenteStr}%`;
+                const resumen = `Total cáscara: ${money(c.totalCascaraSeccion)}\nIngreso proyectado: ${money(c.ingresoTotal)}\nUtilidad proyectada: ${money(c.utilidad)}\n% Arroz Blanco: ${c.blancoRendStr}%`;
                 // Celdas [Precio Unit. editable | Costo Prod. (—) | Total ($)] de un producto.
                 const precioTds = (prod: "blanco" | "broken" | "fine" | "bran", str: string, qq: number, pnum: number) => (
                   <>
@@ -12054,9 +12064,9 @@ export function App() {
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
                           <strong style={{ fontSize: 15 }}>{item.lot_code}{item.rice_type ? ` · ${item.rice_type}` : ""}</strong>
                           <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                            <span title="% Arroz Blanco (excedente): ((QQ Blanco − QQ Cáscara)/QQ Cáscara)×100"
-                              style={{ fontSize: 12, fontWeight: 700, color: c.blancoExcedentePct >= 0 ? "#15803d" : "#b91c1c", background: c.blancoExcedentePct >= 0 ? "#dcfce7" : "#fee2e2", borderRadius: 6, padding: "3px 10px" }}>
-                              % Arroz Blanco: {c.blancoExcedenteStr}%
+                            <span title="% Arroz Blanco (rendimiento): (QQ Arroz Blanco / QQ Cáscara de entrada) × 100"
+                              style={{ fontSize: 12, fontWeight: 700, color: c.blancoRendPct > 0 ? "#15803d" : "#b45309", background: c.blancoRendPct > 0 ? "#dcfce7" : "#fef3c7", borderRadius: 6, padding: "3px 10px" }}>
+                              % Arroz Blanco: {c.blancoRendStr}%
                             </span>
                             <span className="muted">{new Date(item.finished_at).toLocaleString("es-EC")}</span>
                           </span>
@@ -12116,7 +12126,7 @@ export function App() {
                                 <td colSpan={5} style={{ padding: "5px 10px", fontWeight: 700, fontSize: 12, color: "#15803d" }}>🌾 INGRESO · Productos terminados (precio de venta por QQ)</td>
                               </tr>
                               <tr style={{ background: "#f0fdf4" }}>
-                                <td style={{ padding: "6px 10px", fontWeight: 700, color: "#15803d" }}>Arroz Blanco <span className="muted" style={{ fontWeight: 400 }}>(Tulas {n2(c.tula)} + Sacos {n2(c.saco)}) · Rend. {c.blancoExcedenteStr}%</span></td>
+                                <td style={{ padding: "6px 10px", fontWeight: 700, color: "#15803d" }}>Arroz Blanco <span className="muted" style={{ fontWeight: 400 }}>(Tulas {n2(c.tula)} + Sacos {n2(c.saco)}) · Rend. {c.blancoRendStr}%</span></td>
                                 <td style={{ ...dcell, fontWeight: 700, color: "#15803d" }}>{n2(c.blanco)}</td>
                                 {precioTds("blanco", c.pBlancoStr, c.blanco, c.pBlanco)}
                               </tr>
