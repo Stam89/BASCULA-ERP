@@ -450,7 +450,7 @@ type CuadrillaActivity = { id: string; name: string; unit_rate: number; is_activ
 type CuadrillaEntry = { id: string; work_date: string; activity_id?: string | null; activity_name: string; worker_name: string; quantity: number; unit_rate: number; subtotal: number; origen?: string; referencia_id?: string | null; tunnel_number?: number | null; momento?: string | null };
 type CuadrillaSummaryRow = { worker_name: string; entradas: number; total: number; pagado?: number; anticipos: number; neto: number; oldest_pending?: string | null; pending_count?: number };
 // Personal administrativo (sueldo fijo quincenal), por accionista.
-type AdminStaff = { id: string; cargo: string; worker_name: string; base_salary: number; is_active?: boolean };
+type AdminStaff = { id: string; cargo: string; worker_name: string; base_salary: number; is_active?: boolean; periodo?: string | null; corte?: string | null };
 type AdminSalaryPayment = { id: string; worker_name: string; cargo: string; base_salary: number; incentivo: number; descuentos: number; net_amount: number; periodo: string | null; paid_at: string };
 type CuadrillaAdvance = { id: string; worker_name: string; amount: number; balance: number; concept: string | null; status: string; issued_at: string };
 
@@ -1968,6 +1968,9 @@ export function App() {
   const [movCategory, setMovCategory] = useState("");
   const [movType, setMovType] = useState<"EXPENSE" | "INCOME">("EXPENSE");
   const [movPayableId, setMovPayableId] = useState("");
+  // INGRESO "Ligar a un servicio" (Cuenta por Cobrar): al registrar el ingreso se
+  // abona a esta CxC (reduce su saldo) en una sola transacción vía /receivable/:id/pay.
+  const [movReceivableId, setMovReceivableId] = useState("");
   // Nuevos campos del "Registrar movimiento": subcategoría (texto libre con
   // memoria) y fondo a rendir cuentas. Sacos y Mantenimiento reutilizan sus
   // propios formularios completos (sackBuyForm/sackCart, maintenanceForm).
@@ -3762,6 +3765,16 @@ export function App() {
       await reloadCashCategories();
     } catch (e) { addToast(`Error: ${e instanceof Error ? e.message : "Error"}`, "error"); }
   };
+  // Editar (renombrar) una categoría/concepto de caja. Backend: PATCH nombre.
+  const editCashCategory = async (c: CashCat) => {
+    const nuevo = window.prompt(`Nuevo nombre para el concepto "${c.nombre}":`, c.nombre)?.trim();
+    if (!nuevo || nuevo === c.nombre) return;
+    try {
+      await apiFetch(`/cash/categories/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ nombre: nuevo }) });
+      await reloadCashCategories();
+      addToast("Concepto renombrado ✓", "success");
+    } catch (e) { addToast(`Error: ${e instanceof Error ? e.message : "Error"}`, "error"); }
+  };
   // Eliminación FÍSICA de una categoría de caja. El backend bloquea si ya tiene
   // movimientos asociados (integridad referencial) → usar Desactivar.
   const deleteCashCategory = async (c: CashCat) => {
@@ -4706,12 +4719,15 @@ export function App() {
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) { addToast("Abre una caja para pagar", "error"); return; }
     try {
-      await apiPost("/admin-payroll/pay", { staff_id: ap.staff.id, incentivo: Number(ap.incentivo || 0), descuentos: Number(ap.descuentos || 0), cash_register_id: registerId });
+      // Se envía el `periodo` del corte pendiente (Quincena / Fin de mes) para que
+      // el pago quede atribuido a ESE período: así un pago TARDÍO (después del día
+      // de corte) limpia el pendiente correcto en vez de quedar colgado.
+      await apiPost("/admin-payroll/pay", { staff_id: ap.staff.id, incentivo: Number(ap.incentivo || 0), descuentos: Number(ap.descuentos || 0), periodo: ap.staff.periodo ?? undefined, cash_register_id: registerId });
       addToast(`Sueldo pagado a ${ap.staff.worker_name}`, "success");
       setAdminPay(null);
-      // Quita al empleado de pendientes al instante (ya cobró en este corte) y
-      // refresca historial + caja, sin recargar la página.
-      setAdminPending((prev) => prev.filter((st) => st.id !== ap.staff.id));
+      // Quita SOLO el corte pagado (mismo id + período) al instante; si el empleado
+      // tiene otro corte pendiente (ej. Quincena y Fin de mes), ese permanece.
+      setAdminPending((prev) => prev.filter((st) => !(st.id === ap.staff.id && (st.periodo ?? null) === (ap.staff.periodo ?? null))));
       await loadAdminPending();
       await loadAdminHistory();
       await refreshCaja(registerId);
@@ -7101,6 +7117,23 @@ export function App() {
       safeResetForm(formElement);
       setMovCategory("");
       setMovPayableId("");
+      return;
+    }
+    // INGRESO ligado a un SERVICIO (Cuenta por Cobrar): el ingreso se registra como
+    // ABONO a esa CxC (reduce su saldo) en una sola transacción. El backend crea el
+    // movimiento de caja (COBRO_CREDITO) y baja el saldo (y espeja si aplica).
+    if (movement === "INCOME" && movReceivableId) {
+      if (!(amount > 0)) throw new Error("Ingresa el monto del abono");
+      await apiPost(`/receivable/${movReceivableId}/pay`, {
+        amount,
+        cash_register_id: registerId,
+        concepto: (form.get("description") as string) || undefined
+      });
+      safeResetForm(formElement);
+      setMovCategory(""); setMovReceivableId("");
+      addToast("Abono registrado: ingreso a caja y saldo de la cuenta reducido.", "success");
+      await refreshCaja(registerId);
+      await refresh();
       return;
     }
     // ── Categoría MANTENIMIENTO: usa el formulario COMPLETO embebido y su propio
@@ -14024,11 +14057,11 @@ export function App() {
                       <legend style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, display: "block" }}>Tipo de movimiento</legend>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                         <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: 6, cursor: "pointer" }}>
-                          <input type="radio" name="movement" value="EXPENSE" checked={movType === "EXPENSE"} onChange={() => { setMovType("EXPENSE"); setMovCategory(""); setMovPayableId(""); }} style={{ cursor: "pointer" }} />
+                          <input type="radio" name="movement" value="EXPENSE" checked={movType === "EXPENSE"} onChange={() => { setMovType("EXPENSE"); setMovCategory(""); setMovPayableId(""); setMovReceivableId(""); }} style={{ cursor: "pointer" }} />
                           <span style={{ fontWeight: 600 }}>⬇ Egreso</span>
                         </label>
                         <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: 6, cursor: "pointer" }}>
-                          <input type="radio" name="movement" value="INCOME" checked={movType === "INCOME"} onChange={() => { setMovType("INCOME"); setMovCategory(""); setMovPayableId(""); }} style={{ cursor: "pointer" }} />
+                          <input type="radio" name="movement" value="INCOME" checked={movType === "INCOME"} onChange={() => { setMovType("INCOME"); setMovCategory(""); setMovPayableId(""); setMovReceivableId(""); }} style={{ cursor: "pointer" }} />
                           <span style={{ fontWeight: 600 }}>⬆ Ingreso</span>
                         </label>
                       </div>
@@ -14042,13 +14075,35 @@ export function App() {
                         const esteTipo = movType === "EXPENSE" ? "EGRESO" : "INGRESO";
                         const visibles = cashCategories.filter((c) => c.activo && c.tipo === esteTipo && (esSocio ? (c.aplicable_a === "SOCIO" || c.aplicable_a === "AMBOS") : (c.aplicable_a === "MATRIZ" || c.aplicable_a === "AMBOS")));
                         return (
-                          <select name="category" required value={movCategory} onChange={(e: any) => { setMovCategory(e.target.value); setMovPayableId(""); }} style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
+                          <select name="category" required={!(movType === "INCOME" && !!movReceivableId)} value={movCategory} onChange={(e: any) => { setMovCategory(e.target.value); setMovPayableId(""); }} style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
                             <option value="">Seleccione una categoría</option>
                             {visibles.map((c) => <option key={c.id} value={c.codigo}>{c.nombre}</option>)}
                           </select>
                         );
                       })()}
                     </label>
+
+                    {/* INGRESO · Ligar a un servicio (Cuenta por Cobrar): el ingreso se
+                        registra como ABONO y reduce el saldo de esa cuenta. */}
+                    {movType === "INCOME" && (() => {
+                      const pendientes = accountsReceivable.filter((ar) => Number(ar.balance) > 0.001);
+                      if (!pendientes.length) return null;
+                      return (
+                        <label style={{ display: "block", marginBottom: 16 }}>
+                          <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>🔗 Ligar a un servicio / cuenta por cobrar <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span></span>
+                          <select value={movReceivableId} onChange={(e) => { setMovReceivableId(e.target.value); if (e.target.value) setMovCategory(""); }}
+                            style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
+                            <option value="">— Sin ligar (ingreso normal) —</option>
+                            {pendientes.map((ar) => (
+                              <option key={ar.id} value={ar.id}>
+                                {(ar.customer_name || ar.description || "Cliente")} · saldo {money(Number(ar.balance))}
+                              </option>
+                            ))}
+                          </select>
+                          {movReceivableId && <small className="muted" style={{ display: "block", marginTop: 4 }}>✔ El ingreso abonará a esta cuenta y reducirá su saldo en Por Cobrar (un solo asiento).</small>}
+                        </label>
+                      );
+                    })()}
 
                     {/* Subcategoría: texto libre con memoria (datalist). Se sugieren
                         las escritas antes y se guarda cada término nuevo. */}
@@ -16937,10 +16992,10 @@ export function App() {
                 {adminFiltrado.map((st) => {
                   const ult = adminUltimoPago.get(st.worker_name);
                   return (
-                    <tr key={"a" + st.id}>
+                    <tr key={"a" + st.id + (st.periodo ?? "")}>
                       <td><span className="chip">💼 Administrativo</span></td>
-                      <td><span className="chip">{st.cargo || "Admin"}</span></td>
-                      <td style={{ fontWeight: 600 }}>{st.worker_name}<div style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>{ult ? `último pago: ${new Date(ult).toLocaleDateString("es-EC")}` : "sueldo quincenal"}</div></td>
+                      <td><span className="chip">{st.cargo || "Admin"}</span>{st.corte && <span className="chip warn" style={{ marginLeft: 4, fontSize: 10 }}>{st.corte === "QUINCENA" ? "⏳ Quincena" : "⏳ Fin de mes"}</span>}</td>
+                      <td style={{ fontWeight: 600 }}>{st.worker_name}<div style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>{st.periodo ? `pendiente: ${st.periodo}` : (ult ? `último pago: ${new Date(ult).toLocaleDateString("es-EC")}` : "sueldo quincenal")}</div></td>
                       <td className="num" style={{ fontWeight: 700 }}>{money(st.base_salary)}</td>
                       <td className="num">—</td>
                       <td className="num" style={{ fontWeight: 700, color: "#047857" }}>{money(st.base_salary)}</td>
@@ -18986,6 +19041,7 @@ export function App() {
                           <small>{c.tipo} · {c.aplicable_a} · <code>{c.codigo}</code>{c.activo ? "" : " · inactiva"}</small>
                         </div>
                         <div style={{ display: "flex", gap: 6 }}>
+                          <button type="button" className="btnSecondary" disabled={!isAdmin} onClick={() => editCashCategory(c)}>✎ Editar</button>
                           <button type="button" className="equipDelBtn" disabled={!isAdmin} onClick={() => toggleCashCategory(c)}>{c.activo ? "Desactivar" : "Activar"}</button>
                           <button type="button" disabled={!isAdmin} title="Eliminar permanentemente (si no tiene movimientos)"
                             style={{ color: "#b91c1c", border: "1px solid #fecaca", background: "transparent", borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}

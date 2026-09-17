@@ -219,7 +219,10 @@ export async function upsertCuadrillaDespachoVentaEntry(
     [
       opts.work_date ?? null,
       activity.rows[0].id,
-      activity.rows[0].name,
+      // Trazabilidad de cliente: el concepto/actividad mostrado concatena el cliente
+      // del despacho (ej. "ESTIBADA - Cliente: COMERCIAL X"). activity_id sigue
+      // ligado a la actividad del catálogo (la tarifa no cambia).
+      `${activity.rows[0].name} - Cliente: ${cliente}`,
       worker,
       qty,
       rate,

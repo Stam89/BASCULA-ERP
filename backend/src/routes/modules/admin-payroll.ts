@@ -108,38 +108,56 @@ adminPayrollRouter.get("/pending", asyncRoute(async (req, res) => {
   );
   const dom = Number(meta.rows[0].dom);
   const lastDom = Number(meta.rows[0].last_dom);
-  const esQuincena = dom === 15;
-  const esFinMes = dom === lastDom;
-  if (!esQuincena && !esFinMes) {
+  const ym = meta.rows[0].ym as string;
+
+  // Períodos de corte YA VENCIDOS (due) del mes en curso: la Quincena vence al
+  // llegar al día 15 y el Fin de Mes el último día. PERSISTEN mientras no se
+  // paguen (antes solo se mostraban EXACTAMENTE el día del corte y desaparecían
+  // al día siguiente aunque quedaran pendientes). Se acumulan ambos si aplican.
+  const due: Array<{ corte: string; periodo: string; esQuincena: boolean }> = [];
+  if (dom >= 15) due.push({ corte: "QUINCENA", periodo: `${ym} · Quincena`, esQuincena: true });
+  if (dom >= lastDom) due.push({ corte: "FIN_DE_MES", periodo: `${ym} · Fin de mes`, esQuincena: false });
+
+  if (!due.length) {
     res.json({ fecha_habilitada: false, corte: null, periodo: null, dia_del_mes: dom, ultimo_dia_mes: lastDom, staff: [] });
     return;
   }
-  const corte = esQuincena ? "QUINCENA" : "FIN_DE_MES";
-  const periodo = `${meta.rows[0].ym}-${esQuincena ? "Q1" : "Q2"}`;
-  // Ventana del corte actual (calculada en SQL desde CURRENT_DATE, coherente con
-  // la decisión de arriba). El día 16 = inicio del mes + 15 días.
-  const result = await pool.query(
-    `WITH win AS (
-       SELECT date_trunc('month', CURRENT_DATE)::date AS mstart,
-              (date_trunc('month', CURRENT_DATE) + INTERVAL '1 month - 1 day')::date AS mend
-     ),
-     ventana AS (
-       SELECT
-         CASE WHEN $2 THEN mstart ELSE (mstart + INTERVAL '15 days')::date END AS win_start,
-         CASE WHEN $2 THEN (mstart + INTERVAL '15 days')::date ELSE (mend + INTERVAL '1 day')::date END AS win_end
-       FROM win
-     )
-     SELECT s.id, s.cargo, s.worker_name, s.base_salary::float AS base_salary
-     FROM admin_staff s, ventana v
-     WHERE s.accionista_id = $1 AND s.is_active = true
-       AND NOT EXISTS (
-         SELECT 1 FROM admin_salary_payments p
-         WHERE p.staff_id = s.id AND p.paid_at >= v.win_start AND p.paid_at < v.win_end
+
+  // Un sueldo se considera PAGADO de un período si existe un pago con ese `periodo`
+  // canónico (pago puntual o tardío) O con paid_at dentro de la ventana del corte
+  // (compatibilidad con pagos anteriores que no guardaban el período unificado).
+  const staff: Array<Record<string, unknown>> = [];
+  for (const p of due) {
+    const rows = await pool.query(
+      `WITH win AS (
+         SELECT date_trunc('month', CURRENT_DATE)::date AS mstart,
+                (date_trunc('month', CURRENT_DATE) + INTERVAL '1 month - 1 day')::date AS mend
+       ),
+       v AS (
+         SELECT CASE WHEN $2 THEN mstart ELSE (mstart + INTERVAL '15 days')::date END AS win_start,
+                CASE WHEN $2 THEN (mstart + INTERVAL '15 days')::date ELSE (mend + INTERVAL '1 day')::date END AS win_end
+         FROM win
        )
-     ORDER BY s.worker_name`,
-    [accionista, esQuincena]
-  );
-  res.json({ fecha_habilitada: true, corte, periodo, dia_del_mes: dom, ultimo_dia_mes: lastDom, staff: result.rows });
+       SELECT s.id, s.cargo, s.worker_name, s.base_salary::float AS base_salary
+       FROM admin_staff s, v
+       WHERE s.accionista_id = $1 AND s.is_active = true
+         AND NOT EXISTS (
+           SELECT 1 FROM admin_salary_payments pp
+           WHERE pp.staff_id = s.id
+             AND (pp.periodo = $3 OR (pp.paid_at >= v.win_start AND pp.paid_at < v.win_end))
+         )
+       ORDER BY s.worker_name`,
+      [accionista, p.esQuincena, p.periodo]
+    );
+    for (const r of rows.rows) staff.push({ ...r, corte: p.corte, periodo: p.periodo });
+  }
+
+  res.json({
+    fecha_habilitada: staff.length > 0,
+    corte: due[due.length - 1].corte,
+    periodo: due[due.length - 1].periodo,
+    dia_del_mes: dom, ultimo_dia_mes: lastDom, staff
+  });
 }));
 
 // ── Pago de sueldo (sale de la caja del accionista activo) ───────────────────
