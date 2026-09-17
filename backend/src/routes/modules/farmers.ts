@@ -28,6 +28,22 @@ farmersRouter.get("/", asyncRoute(async (_req, res) => {
   res.json(result.rows);
 }));
 
+// GET buscar agricultores por nombre o identificación (autocompletado universal).
+// Fuente única de verdad del directorio de báscula. Debe declararse ANTES de
+// "/:id" para que Express no interprete "search" como un id.
+farmersRouter.get("/search", asyncRoute(async (req, res) => {
+  const query = String(req.query.q ?? "").trim();
+  if (query.length < 2) { res.json([]); return; }
+  const result = await pool.query(
+    `SELECT id, full_name, identification, phone FROM farmers
+      WHERE full_name ILIKE $1 OR identification ILIKE $1
+      ORDER BY full_name ASC
+      LIMIT 10`,
+    [`%${query}%`]
+  );
+  res.json(result.rows);
+}));
+
 farmersRouter.post("/", asyncRoute(async (req, res) => {
   const data = farmerSchema.parse(req.body);
   const result = await pool.query(

@@ -15,8 +15,9 @@ customersRouter.get("/search", asyncRoute(async (req, res) => {
   }
 
   const result = await pool.query(
-    `SELECT id, full_name, phone FROM customers
-     WHERE full_name ILIKE $1 OR phone ILIKE $1
+    `SELECT id, full_name, phone, identification FROM customers
+     WHERE full_name ILIKE $1 OR phone ILIKE $1 OR identification ILIKE $1
+     ORDER BY full_name ASC
      LIMIT 10`,
     [`%${query}%`]
   );
