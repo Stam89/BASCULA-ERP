@@ -115,8 +115,8 @@ adminPayrollRouter.get("/pending", asyncRoute(async (req, res) => {
   // paguen (antes solo se mostraban EXACTAMENTE el día del corte y desaparecían
   // al día siguiente aunque quedaran pendientes). Se acumulan ambos si aplican.
   const due: Array<{ corte: string; periodo: string; esQuincena: boolean }> = [];
-  if (dom >= 15) due.push({ corte: "QUINCENA", periodo: `${ym} · Quincena`, esQuincena: true });
-  if (dom >= lastDom) due.push({ corte: "FIN_DE_MES", periodo: `${ym} · Fin de mes`, esQuincena: false });
+  if (dom >= 15) due.push({ corte: "QUINCENA", periodo: `${ym} Quincena`, esQuincena: true });
+  if (dom >= lastDom) due.push({ corte: "FIN_DE_MES", periodo: `${ym} Fin de mes`, esQuincena: false });
 
   if (!due.length) {
     res.json({ fecha_habilitada: false, corte: null, periodo: null, dia_del_mes: dom, ultimo_dia_mes: lastDom, staff: [] });
@@ -202,7 +202,7 @@ adminPayrollRouter.post("/pay", asyncRoute(async (req, res) => {
                 EXTRACT(DAY FROM (date_trunc('month', CURRENT_DATE) + INTERVAL '1 month - 1 day'))::int AS last_dom`
       );
       const dom = Number(m.rows[0].dom);
-      periodo = `${m.rows[0].ym} · ${dom < 16 ? "Quincena" : "Fin de mes"}`;
+      periodo = `${m.rows[0].ym} ${dom < 16 ? "Quincena" : "Fin de mes"}`;
     }
 
     await client.query(
