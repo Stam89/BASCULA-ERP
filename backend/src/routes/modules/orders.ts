@@ -9,6 +9,7 @@ import { round2 } from "../../utils/rice-formulas.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { crearVenta } from "./sales.js";
 import { cobrarEmpaqueAlDespachar } from "../../services/cargo-empaque.js";
+import { revertCuadrillaDespachoVentaEntry, upsertCuadrillaDespachoVentaEntry } from "./cuadrilla.js";
 
 export const ordersRouter = Router();
 
@@ -365,6 +366,18 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
     const ordRef = { id: order.rows[0].id as string, order_number: order.rows[0].order_number as string };
     const cargoEmpaque = await cobrarEmpaqueAlDespachar(client, ordRef, accionistaId as string);
 
+    const customer = await client.query("SELECT full_name FROM customers WHERE id = $1", [order.rows[0].customer_id]);
+    const totalQqDespachado = round2(items.rows.reduce((sum, item) => sum + Number(item.quantity || 0), 0));
+    await upsertCuadrillaDespachoVentaEntry(client, {
+      order_id: order.rows[0].id,
+      order_number: order.rows[0].order_number,
+      guia_number: order.rows[0].guia_number,
+      customer_name: customer.rows[0]?.full_name ?? null,
+      quantity_qq: totalQqDespachado,
+      work_date: order.rows[0].delivered_at ? new Date(order.rows[0].delivered_at).toISOString().slice(0, 10) : null,
+      created_by: body.created_by ?? null
+    });
+
     // NOTA: los sacos físicos NO se descuentan aquí. El producto que se despacha
     // ya salió empacado de Producción/Selección, donde se descontó el saco de la
     // bodega de la matriz. En la venta solo se mueve el producto terminado (en
@@ -445,6 +458,8 @@ ordersRouter.post("/:id/cancel", asyncRoute(async (req, res) => {
         [order.rows[0].receivable_id]
       );
     }
+
+    await revertCuadrillaDespachoVentaEntry(client, String(req.params.id));
 
     const updated = await client.query(
       "UPDATE sales_orders SET status = 'CANCELLED' WHERE id = $1 RETURNING *",

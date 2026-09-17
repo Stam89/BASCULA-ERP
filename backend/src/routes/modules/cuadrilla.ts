@@ -14,6 +14,7 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 // Labores por saco (cuando la corrida se maneja en Sacos porque se agotaron las
 // Tulas). Se busca la primera activa en este orden de preferencia.
 const SACOS_LABOR_CANDIDATES = ["ENSACADO", "SACADO EN SACO"];
+const DESPACHO_LABOR_CANDIDATES = ["ESTIBADA", "EMBARQUE Y DESEMBARQUE"];
 
 // Resuelve la LABOR (actividad + tarifa) y la CANTIDAD a pagar a la cuadrilla por
 // un evento de túnel, según el TIPO DE EMPAQUE registrado para ese momento:
@@ -158,6 +159,85 @@ async function resolveCuadrillaWorker(client: PoolClient, dryingReportId: string
   const grp = await client.query("SELECT name FROM cuadrillas WHERE is_active = true ORDER BY created_at LIMIT 1");
   if (grp.rowCount) return String(grp.rows[0].name).trim();
   return "CUADRILLA";
+}
+
+async function resolveDefaultCuadrillaWorker(client: PoolClient): Promise<string> {
+  const grp = await client.query("SELECT name FROM cuadrillas WHERE is_active = true ORDER BY created_at LIMIT 1");
+  if (grp.rowCount) return String(grp.rows[0].name).trim();
+  return "CUADRILLA";
+}
+
+export async function upsertCuadrillaDespachoVentaEntry(
+  client: PoolClient,
+  opts: {
+    order_id: string;
+    order_number: string;
+    guia_number?: string | null;
+    customer_name?: string | null;
+    quantity_qq: number;
+    work_date?: string | null;
+    created_by?: string | null;
+  }
+): Promise<{ id: string } | null> {
+  const qty = Number(opts.quantity_qq) || 0;
+  if (qty <= 0) return null;
+
+  const activity = await client.query(
+    `SELECT id, name, unit_rate::float AS unit_rate
+       FROM cuadrilla_activities
+      WHERE upper(btrim(name)) = ANY($1::text[]) AND is_active = true
+      ORDER BY array_position($1::text[], upper(btrim(name)))
+      LIMIT 1`,
+    [DESPACHO_LABOR_CANDIDATES]
+  );
+  if (!activity.rowCount) {
+    throw new ApiError(400, `Configura la tarifa de la labor "${DESPACHO_LABOR_CANDIDATES[0]}" en Cuadrilla -> Actividades antes de despachar.`);
+  }
+
+  const worker = await resolveDefaultCuadrillaWorker(client);
+  const rate = Number(activity.rows[0].unit_rate);
+  const subtotal = round2(qty * rate);
+  const ref = opts.guia_number || opts.order_number;
+  const cliente = opts.customer_name?.trim() || "cliente";
+  const notes = `Despacho Venta #${ref} - ${cliente}`;
+  const result = await client.query(
+    `INSERT INTO cuadrilla_entries
+       (work_date, activity_id, activity_name, worker_name, quantity, unit_rate, subtotal, notes,
+        origen, referencia_id, momento, created_by)
+     VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, 'VENTA', $9, 'DESPACHO', $10)
+     ON CONFLICT (referencia_id, momento) WHERE origen = 'VENTA'
+     DO UPDATE SET
+       work_date = COALESCE(EXCLUDED.work_date, cuadrilla_entries.work_date),
+       activity_id = EXCLUDED.activity_id,
+       activity_name = EXCLUDED.activity_name,
+       worker_name = EXCLUDED.worker_name,
+       quantity = EXCLUDED.quantity,
+       unit_rate = EXCLUDED.unit_rate,
+       subtotal = EXCLUDED.subtotal,
+       notes = EXCLUDED.notes
+     RETURNING id`,
+    [
+      opts.work_date ?? null,
+      activity.rows[0].id,
+      activity.rows[0].name,
+      worker,
+      qty,
+      rate,
+      subtotal,
+      notes,
+      opts.order_id,
+      opts.created_by ?? null
+    ]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function revertCuadrillaDespachoVentaEntry(client: PoolClient, orderId: string): Promise<number> {
+  const deleted = await client.query(
+    "DELETE FROM cuadrilla_entries WHERE origen = 'VENTA' AND referencia_id = $1 AND paid_at IS NULL",
+    [orderId]
+  );
+  return deleted.rowCount ?? 0;
 }
 
 // AUTOMATIZACIÓN: genera de inmediato el pago de nómina de la cuadrilla para un
@@ -609,19 +689,20 @@ cuadrillaRouter.post("/entries", asyncRoute(async (req, res) => {
 }));
 
 cuadrillaRouter.delete("/entries/:id", asyncRoute(async (req, res) => {
-  // Los registros autogenerados desde Secadoras NO se borran aquí: hacerlo
-  // descuadraría el movimiento del túnel. Se corrigen en el módulo de Secadoras.
+  // Los registros autogenerados NO se borran aquí: hacerlo descuadraría el
+  // movimiento de origen. Se corrigen en Secadoras/Ventas según corresponda.
   const current = await pool.query("SELECT origen, tunnel_number FROM cuadrilla_entries WHERE id = $1", [req.params.id]);
   if (!current.rowCount) throw new ApiError(404, "Registro no encontrado");
-  if (current.rows[0].origen === "SECADORA") {
-    throw new ApiError(409, `Este registro se generó automáticamente desde Secadoras (Túnel ${current.rows[0].tunnel_number ?? "?"}). Corrígelo en el módulo de Secadoras.`);
+  if (current.rows[0].origen === "SECADORA" || current.rows[0].origen === "VENTA") {
+    const origen = current.rows[0].origen === "VENTA" ? "Ventas" : `Secadoras (Túnel ${current.rows[0].tunnel_number ?? "?"})`;
+    throw new ApiError(409, `Este registro se generó automáticamente desde ${origen}. Corrígelo en el módulo de origen.`);
   }
   await pool.query("DELETE FROM cuadrilla_entries WHERE id = $1", [req.params.id]);
   res.status(204).end();
 }));
 
-// Editar un registro MANUAL de cuadrilla. Los automáticos (Secadora) son
-// inmutables: se corrigen editando el túnel en el módulo de Secadoras.
+// Editar un registro MANUAL de cuadrilla. Los automáticos son inmutables aquí:
+// se corrigen desde el movimiento que los creó.
 cuadrillaRouter.put("/entries/:id", asyncRoute(async (req, res) => {
   const body = z.object({
     work_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -632,8 +713,8 @@ cuadrillaRouter.put("/entries/:id", asyncRoute(async (req, res) => {
 
   const current = await pool.query("SELECT origen, tunnel_number FROM cuadrilla_entries WHERE id = $1", [req.params.id]);
   if (!current.rowCount) throw new ApiError(404, "Registro no encontrado");
-  if (current.rows[0].origen === "SECADORA") {
-    throw new ApiError(409, "Este registro proviene de Secadoras. Para modificar los quintales, edite el túnel directamente.");
+  if (current.rows[0].origen === "SECADORA" || current.rows[0].origen === "VENTA") {
+    throw new ApiError(409, "Este registro es automático. Para modificarlo, corrija el movimiento de origen.");
   }
   const activity = await pool.query("SELECT name, unit_rate FROM cuadrilla_activities WHERE id = $1", [body.activity_id]);
   if (!activity.rowCount) throw new ApiError(404, "Actividad no encontrada");
@@ -645,7 +726,7 @@ cuadrillaRouter.put("/entries/:id", asyncRoute(async (req, res) => {
      SET work_date = COALESCE($2::date, work_date),
          activity_id = $3, activity_name = $4, worker_name = $5,
          quantity = $6, unit_rate = $7, subtotal = $8
-     WHERE id = $1 AND origen <> 'SECADORA'
+     WHERE id = $1 AND origen NOT IN ('SECADORA', 'VENTA')
      RETURNING id, work_date, activity_name, worker_name, quantity, unit_rate, subtotal, notes, origen, referencia_id, tunnel_number, momento`,
     [req.params.id, body.work_date ?? null, body.activity_id, activity.rows[0].name, body.worker_name.trim(), body.quantity, rate, subtotal]
   );

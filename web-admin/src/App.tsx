@@ -4101,7 +4101,7 @@ export function App() {
 
   // Carga un registro MANUAL en el formulario para editarlo. Los automáticos no.
   function editCuadEntry(en: CuadrillaEntry) {
-    if (en.origen === "SECADORA") { avisoRegistroAuto(); return; }
+    if (cuadEntryEsAuto(en)) { avisoRegistroAuto(); return; }
     setEditingCuadId(en.id);
     setCuadEntryForm({
       work_date: String(en.work_date).slice(0, 10),
@@ -4115,9 +4115,18 @@ export function App() {
     setEditingCuadId(null);
     setCuadEntryForm({ ...cuadEntryForm, activity_id: "", worker_name: "", quantity: "", anticipo: "" });
   }
-  // Mensaje al intentar tocar un registro automático de Secadoras.
+  function cuadEntryEsAuto(en: CuadrillaEntry) {
+    return en.origen === "SECADORA" || en.origen === "VENTA";
+  }
+  function cuadEntryOrigenLabel(en: CuadrillaEntry) {
+    if (en.origen === "VENTA") return "Ventas";
+    if (en.origen === "SECADORA") return "Secadoras";
+    return "Manual";
+  }
+
+  // Mensaje al intentar tocar un registro automático.
   function avisoRegistroAuto() {
-    addToast("Este registro proviene de Secadoras. Para modificar los quintales, edite el túnel directamente.", "error");
+    addToast("Este registro es automático. Para corregirlo, anula o corrige el movimiento de origen.", "error");
   }
 
   async function deleteCuadEntry(id: string) {
@@ -4231,8 +4240,8 @@ export function App() {
     const anticipos = resumen ? resumen.anticipos : (cuadSummary?.total_anticipos ?? 0);
     const neto = resumen ? resumen.neto : round2(ganado - anticipos);
     const filas = entradas.map((e) => {
-      const auto = e.origen === "SECADORA";
-      const actividad = auto ? labelMomento(e.momento ?? "LLENADO", e.tunnel_number ?? 0) : e.activity_name;
+      const auto = cuadEntryEsAuto(e);
+      const actividad = e.origen === "SECADORA" ? labelMomento(e.momento ?? "LLENADO", e.tunnel_number ?? 0) : e.activity_name;
       return `<tr>
         <td>${esc(String(e.work_date).slice(0, 10))}</td>
         <td>${esc(actividad)}</td>
@@ -16445,11 +16454,10 @@ export function App() {
                             <thead><tr><th>Día</th><th>Actividad</th><th>Cuadrilla</th><th className="num">Tarifa</th><th className="num">Cantidad</th><th className="num">Subtotal</th><th /></tr></thead>
                             <tbody>
                               {cuadEntries.map((en) => {
-                                // Los registros que vienen de Secadoras son INMUTABLES aquí:
-                                // se corrigen editando el túnel para no descuadrar el inventario.
-                                const auto = en.origen === "SECADORA";
-                                // Etiqueta de actividad: para automáticos, la labor del túnel.
-                                const actividad = auto
+                                // Los registros automáticos son inmutables aquí:
+                                // se corrigen en el movimiento de origen para no descuadrar inventario/nómina.
+                                const auto = cuadEntryEsAuto(en);
+                                const actividad = en.origen === "SECADORA"
                                   ? labelMomento(en.momento ?? "LLENADO", en.tunnel_number ?? 0)
                                   : en.activity_name;
                                 return (
@@ -16458,8 +16466,8 @@ export function App() {
                                   <td>
                                     {actividad}
                                     {auto ? (
-                                      <span className="chip info" style={{ marginLeft: 6, fontSize: 11 }} title="Generado automáticamente desde Secadoras. Para modificar los quintales, edita el túnel.">
-                                        🔒 🤖 Automático
+                                      <span className="chip info" style={{ marginLeft: 6, fontSize: 11 }} title={`Generado automáticamente desde ${cuadEntryOrigenLabel(en)}. Corrige el movimiento de origen.`}>
+                                        🔒 🤖 Automático · {cuadEntryOrigenLabel(en)}
                                       </span>
                                     ) : (
                                       <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>({en.activity_name})</span>
@@ -16471,7 +16479,7 @@ export function App() {
                                   <td className="num"><strong>{money(Number(en.subtotal))}</strong></td>
                                   <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                                     {auto ? (
-                                      <button type="button" className="btnGhost" style={{ color: "#64748b" }} title="Este registro proviene de Secadoras" onClick={() => avisoRegistroAuto()}>🔒 Automático</button>
+                                      <button type="button" className="btnGhost" style={{ color: "#64748b" }} title={`Este registro proviene de ${cuadEntryOrigenLabel(en)}`} onClick={() => avisoRegistroAuto()}>🔒 Automático</button>
                                     ) : (
                                       <>
                                         <button type="button" className="btnGhost" onClick={() => editCuadEntry(en)}>Editar</button>
