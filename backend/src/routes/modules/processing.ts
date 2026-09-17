@@ -1012,6 +1012,35 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
   });
 }
 
+// Freno de stock negativo de materia prima (cáscara). Verifica, DENTRO de la
+// misma transacción del cierre, que la existencia real del lote alcance para el
+// consumo que se va a registrar. Si no alcanza, lanza 400 con un mensaje claro
+// para que el frontend lo muestre como alerta y el usuario cuadre el inventario.
+// Nota: inventory_stock es una VISTA (SUM sobre inventory_movements); aquí se
+// suma directo con FOR-UPDATE-free porque el batch ya serializa con FOR UPDATE.
+async function assertStockNoNegativo(
+  client: PoolClient,
+  productId: string,
+  warehouseId: string,
+  lotId: string,
+  consumo: number
+): Promise<void> {
+  const r = await client.query(
+    `SELECT COALESCE(SUM(quantity), 0)::numeric AS qq
+     FROM inventory_movements
+     WHERE product_id = $1 AND warehouse_id = $2 AND lot_id = $3`,
+    [productId, warehouseId, lotId]
+  );
+  const disponible = Number(r.rows[0]?.qq ?? 0);
+  // Tolerancia de 1 g (0.001 QQ) para no bloquear por redondeos.
+  if (disponible - consumo < -0.001) {
+    throw new ApiError(
+      400,
+      `⚠️ Stock insuficiente de Cáscara. El lote requiere restar ${consumo.toFixed(2)} QQ pero solo hay ${disponible.toFixed(2)} QQ. Realice un Ajuste/Cuadre Manual primero.`
+    );
+  }
+}
+
 processingRouter.post("/", asyncRoute(async (req, res) => {
   const body = z.object({
     lot_id: z.string().uuid(),
@@ -1176,6 +1205,10 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
         // stock patrimonial genera saldos negativos irreales (bug de cáscara).
         const lotMeta = await client.query("SELECT operation_type FROM lots WHERE id = $1", [linkedLot.lot_id]);
         if (loteAfectaInventarioPropio(lotMeta.rows[0]?.operation_type)) {
+          // Freno de stock negativo: la cáscara consumida no puede superar la
+          // existencia real del lote (evita saldos irreales tipo -1.90 QQ). Si no
+          // alcanza, se bloquea la transacción y el usuario debe cuadrar primero.
+          await assertStockNoNegativo(client, inputProductId, inputWarehouseId, linkedLot.lot_id, Number(linkedLot.quintals));
           await client.query(
             `INSERT INTO inventory_movements
              (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
@@ -1224,6 +1257,8 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
       // stock patrimonial.
       const lotMeta = await client.query("SELECT operation_type FROM lots WHERE id = $1", [lotId]);
       if (loteAfectaInventarioPropio(lotMeta.rows[0]?.operation_type)) {
+        // Freno de stock negativo (igual que en el flujo desde secadora).
+        await assertStockNoNegativo(client, inputProductId, inputWarehouseId, lotId, inputQuantity);
         await client.query(
           `INSERT INTO inventory_movements
            (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
