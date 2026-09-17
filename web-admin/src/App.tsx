@@ -2519,6 +2519,10 @@ export function App() {
   // Ventas se divide en dos sub-vistas: "nuevo" (POS limpio, tomar pedido) y
   // "despachos" (cola de carga/fulfillment para bodega).
   const [ventasView, setVentasView] = useState<"nuevo" | "despachos" | "guias">("nuevo");
+  // Modal de "Cantidades por Despachar y Entregar" (saldos pendientes de la cola).
+  const [pendientesModalOpen, setPendientesModalOpen] = useState(false);
+  // Pedido a enfocar/resaltar al pulsar "⚡ Ir a Despachar" desde el modal.
+  const [focusOrderId, setFocusOrderId] = useState<string | null>(null);
   // ── Guías de Remisión (formato legal EC). Tabla propia guias_remision. ──
   const emptyGuiaForm = () => ({
     fecha_emision: new Date().toISOString().slice(0, 10),
@@ -12834,11 +12838,13 @@ export function App() {
             {ventasView === "despachos" && (
             <>
               <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-                <h2 style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <h2 style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                   <span>📦 Pedidos pendientes / Cola de carga</span>
-                  <span style={{ background: pedidosPendientesCount > 0 ? "#fef3c7" : "#e5e7eb", color: pedidosPendientesCount > 0 ? "#b45309" : "#6b7280", borderRadius: 999, padding: "2px 10px", fontSize: 13, fontWeight: 800 }}>
-                    {pedidosPendientesCount}
-                  </span>
+                  <button type="button" onClick={() => setPendientesModalOpen(true)}
+                    title="Ver cantidades por despachar y entregar (saldos + stock)"
+                    style={{ display: "inline-flex", alignItems: "center", gap: 6, background: pedidosPendientesCount > 0 ? "#fef3c7" : "#e5e7eb", color: pedidosPendientesCount > 0 ? "#b45309" : "#6b7280", border: "none", borderRadius: 999, padding: "3px 12px", fontSize: 13, fontWeight: 800, cursor: "pointer" }}>
+                    {pedidosPendientesCount} <span style={{ fontSize: 11, fontWeight: 700 }}>📊 ver saldos</span>
+                  </button>
                 </h2>
                 <p className="muted" style={{ marginTop: -4 }}>
                   Lista para bodega, ordenada por fecha de entrega: alista los sacos y presiona
@@ -12876,8 +12882,11 @@ export function App() {
                     const dispUbicQq = round2([...invIdsPedido].reduce((s, id) =>
                       s + stock.filter((r) => r.product_id === id && r.ownership === "OWNED").reduce((a, r) => a + Number(r.quantity), 0)
                     , 0));
+                    const enfocado = focusOrderId === o.id;
                     return (
-                    <article key={o.id} style={{ border: "1px solid var(--c-border)", borderTop: `5px solid ${listo ? "var(--c-success, #16a34a)" : "var(--c-warning)"}`, borderRadius: 12, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+                    <article key={o.id}
+                      ref={(el) => { if (el && enfocado) { el.scrollIntoView({ behavior: "smooth", block: "center" }); setTimeout(() => setFocusOrderId((cur) => cur === o.id ? null : cur), 2500); } }}
+                      style={{ border: enfocado ? "2px solid #2563eb" : "1px solid var(--c-border)", boxShadow: enfocado ? "0 0 0 4px rgba(37,99,235,0.15)" : undefined, borderTop: `5px solid ${listo ? "var(--c-success, #16a34a)" : "var(--c-warning)"}`, borderRadius: 12, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                         {listo ? (
                           <span style={{ background: "#dcfce7", color: "#15803d", borderRadius: 999, padding: "3px 12px", fontSize: 12.5, fontWeight: 800, letterSpacing: 0.3 }}>
@@ -13065,6 +13074,120 @@ export function App() {
             )}
 
             {/* Modal: captura de datos del transportista para la Guía de Remisión */}
+            {/* ===== Modal: Cantidades por Despachar y Entregar (saldos + stock) ===== */}
+            {pendientesModalOpen && (() => {
+              const pendientes = salesOrders.filter((o) => o.status === "PENDING");
+              const stockDeNombre = (productName: string) => {
+                const invId = getInventoryProductForBrand(productName) || products.find((p) => p.name === productName)?.id || null;
+                if (!invId) return 0;
+                return round2(stock.filter((s) => s.product_id === invId && s.ownership === "OWNED").reduce((a, s) => a + Number(s.quantity), 0));
+              };
+              const consMap = new Map<string, { producto: string; presentacion: string; qq: number }>();
+              const pendPorProducto = new Map<string, number>();
+              for (const o of pendientes) for (const it of (o.items ?? [])) {
+                const pres = it.presentation_name || "—";
+                const key = `${it.product_name}||${pres}`;
+                const qq = Number(it.quantity) || 0;
+                const c = consMap.get(key) ?? { producto: it.product_name, presentacion: pres, qq: 0 };
+                c.qq = round2(c.qq + qq); consMap.set(key, c);
+                pendPorProducto.set(it.product_name, round2((pendPorProducto.get(it.product_name) ?? 0) + qq));
+              }
+              const consolidado = [...consMap.values()].sort((a, b) => a.producto.localeCompare(b.producto) || a.presentacion.localeCompare(b.presentacion));
+              const th: React.CSSProperties = { padding: "7px 10px", textAlign: "left", fontSize: 11, textTransform: "uppercase", color: "#6b7280", borderBottom: "2px solid #e5e7eb", whiteSpace: "nowrap" };
+              const td: React.CSSProperties = { padding: "7px 10px", borderBottom: "1px solid #f0f0f0", fontSize: 13 };
+              return (
+                <div onClick={() => setPendientesModalOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 1000, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "24px 12px", overflowY: "auto" }}>
+                  <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--c-surface, #fff)", borderRadius: 12, width: "min(920px, 100%)", boxShadow: "0 20px 60px rgba(0,0,0,0.3)", overflow: "hidden" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 18px", background: "#111827", color: "#fff" }}>
+                      <strong style={{ fontSize: 15 }}>📊 Cantidades por Despachar y Entregar</strong>
+                      <button type="button" onClick={() => setPendientesModalOpen(false)} style={{ background: "transparent", border: "none", color: "#fff", fontSize: 20, cursor: "pointer" }}>✕</button>
+                    </div>
+                    <div style={{ padding: 18, maxHeight: "78vh", overflowY: "auto" }}>
+                      {pendientes.length === 0 ? (
+                        <p className="muted">No hay pedidos pendientes en la cola de carga.</p>
+                      ) : (
+                        <>
+                          {/* ── Resumen consolidado ── */}
+                          <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>📦 Resumen consolidado (por producto y presentación)</h3>
+                          <div style={{ overflowX: "auto", marginBottom: 20 }}>
+                            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                              <thead><tr>
+                                <th style={th}>Producto / Marca</th>
+                                <th style={{ ...th, textAlign: "left" }}>Presentación</th>
+                                <th style={{ ...th, textAlign: "right" }}>Total Pendiente (QQ)</th>
+                                <th style={{ ...th, textAlign: "right" }}>Equiv. Bultos/Fundas</th>
+                                <th style={{ ...th, textAlign: "right" }}>Stock en Bodega</th>
+                                <th style={th}>Alerta</th>
+                              </tr></thead>
+                              <tbody>
+                                {consolidado.map((c, i) => {
+                                  const stk = stockDeNombre(c.producto);
+                                  const pendProd = pendPorProducto.get(c.producto) ?? 0;
+                                  const falta = round2(pendProd - stk);
+                                  const insuf = falta > 0.001;
+                                  const bultos = Math.round(c.qq * bultosPorQqDePresentacion(c.presentacion === "—" ? null : c.presentacion));
+                                  return (
+                                    <tr key={i} style={{ background: insuf ? "#fee2e2" : (i % 2 ? "#f9fafb" : "#fff") }}>
+                                      <td style={{ ...td, fontWeight: 700 }}>{c.producto}</td>
+                                      <td style={td}>{c.presentacion}</td>
+                                      <td style={{ ...td, textAlign: "right", fontWeight: 700 }}>{c.qq.toFixed(2)}</td>
+                                      <td style={{ ...td, textAlign: "right", color: "#2563eb" }}>{bultos} {unidadGuiaDePresentacion(c.presentacion === "—" ? null : c.presentacion).toLowerCase()}</td>
+                                      <td style={{ ...td, textAlign: "right", color: insuf ? "#b91c1c" : "#15803d", fontWeight: 700 }}>{stk.toFixed(2)} QQ</td>
+                                      <td style={td}>{insuf ? <span style={{ color: "#b91c1c", fontWeight: 800, fontSize: 12 }}>⚠️ Stock insuficiente (Faltan {falta.toFixed(2)} QQ)</span> : <span style={{ color: "#15803d", fontSize: 12 }}>✔️ OK</span>}</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+
+                          {/* ── Detalle por cliente / pedido ── */}
+                          <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>🧾 Detalle por cliente / pedido</h3>
+                          <div style={{ overflowX: "auto" }}>
+                            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                              <thead><tr>
+                                <th style={th}>N° Pedido</th>
+                                <th style={th}>Cliente</th>
+                                <th style={{ ...th, textAlign: "right" }}>Cantidad Total</th>
+                                <th style={{ ...th, textAlign: "right" }}>Despachado</th>
+                                <th style={{ ...th, textAlign: "right" }}>Pendiente por Entregar</th>
+                                <th style={th}>Estado</th>
+                                <th style={th}></th>
+                              </tr></thead>
+                              <tbody>
+                                {pendientes.map((o) => {
+                                  const totalQq = round2((o.items ?? []).reduce((s, it) => s + (Number(it.quantity) || 0), 0));
+                                  const listo = Boolean(o.prepared_at);
+                                  const despachado = listo ? totalQq : 0;
+                                  const pendienteEntregar = round2(totalQq - despachado);
+                                  return (
+                                    <tr key={o.id} style={{ background: listo ? "#f0fdf4" : "#fff" }}>
+                                      <td style={{ ...td, fontWeight: 700 }}>{o.order_number}</td>
+                                      <td style={td}>{o.customer_name}</td>
+                                      <td style={{ ...td, textAlign: "right" }}>{totalQq.toFixed(2)} QQ</td>
+                                      <td style={{ ...td, textAlign: "right" }}>{despachado.toFixed(2)} QQ</td>
+                                      <td style={{ ...td, textAlign: "right", fontWeight: 700 }}>{pendienteEntregar.toFixed(2)} QQ</td>
+                                      <td style={td}>{listo ? <span style={{ fontSize: 11, fontWeight: 800, color: "#15803d", background: "#dcfce7", borderRadius: 6, padding: "2px 8px" }}>🟢 En cola de carga</span> : <span style={{ fontSize: 11, fontWeight: 800, color: "#b45309", background: "#fef3c7", borderRadius: 6, padding: "2px 8px" }}>🟡 Pendiente preparación</span>}</td>
+                                      <td style={td}>
+                                        <button type="button" onClick={() => { setPendientesModalOpen(false); setVentasView("despachos"); setFocusOrderId(o.id); }}
+                                          style={{ fontSize: 12, fontWeight: 700, color: "#2563eb", background: "transparent", border: "1px solid #2563eb", borderRadius: 6, padding: "4px 10px", cursor: "pointer", whiteSpace: "nowrap" }}>
+                                          ⚡ Ir a Despachar
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
             {guiaModal && (
               <div className="modalOverlay" onClick={() => setGuiaModal(null)}>
                 <div className="modalCard" onClick={(e) => e.stopPropagation()}>
