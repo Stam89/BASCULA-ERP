@@ -5300,6 +5300,20 @@ export function App() {
           ? data.errors.map((e: { fila: number; error: string }) => `Fila ${e.fila}: ${e.error}`).join("\n")
           : data.error || "Error desconocido";
         setFomentoImportModal({ open: true, title: "❌ Error al importar", message: details, isError: true });
+      } else if (data.migracion) {
+        // Migración masiva del Excel maestro (mapeo posicional C..L).
+        addToast(`✅ Migración completa: ${data.created} fomentos creados`, "success");
+        const detalle = [
+          `Fomentos creados: ${data.created}`,
+          `Agricultores nuevos en el directorio: ${data.farmersCreated ?? 0}`,
+          `Saldos iniciales migrados: ${data.saldosMigrados ?? 0}`,
+          (data.omitidos ?? 0) > 0 ? `Omitidos (ya existían): ${data.omitidos}` : null,
+          Array.isArray(data.errors) && data.errors.length
+            ? `\nFilas con aviso:\n${data.errors.map((e: { fila: number; error: string }) => `Fila ${e.fila}: ${e.error}`).join("\n")}`
+            : null
+        ].filter(Boolean).join("\n");
+        setFomentoImportModal({ open: true, title: "✅ Migración completa", message: detalle, isError: false });
+        await refreshFomentos();
       } else {
         setFomentoImportModal({ open: true, title: "✓ Importado correctamente", message: `Creados: ${data.created}\nActualizados: ${data.updated}`, isError: false });
         await refreshFomentos();

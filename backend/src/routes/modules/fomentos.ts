@@ -185,6 +185,16 @@ function calcularCosecha(inicio: string): string {
   return d.toISOString().slice(0, 10);
 }
 
+// Normaliza el "Estado del Fomento" del Excel maestro (Columna C) al enum del ERP.
+function mapEstadoFomento(val: unknown): "ACTIVOS" | "NO ACTIVOS" | "APROBADOS" {
+  const s = String(val ?? "").trim().toUpperCase();
+  if (s.startsWith("APROB")) return "APROBADOS";
+  if (s.startsWith("NO ") || s === "NO" || s.includes("INACTIV") || s.includes("DESACTIV")) return "NO ACTIVOS";
+  return "ACTIVOS"; // "ACTIVO"/"ACTIVOS"/vacío → activo por defecto
+}
+
+const round2Fom = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+
 fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
   const file = (req as Request & { file?: Express.Multer.File }).file;
@@ -197,6 +207,102 @@ fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res
 
   const expected = ["ID", "Nombre Agricultor", "Cuadras", "Fecha Inicio", "Fecha Cosecha", "Renta (%)", "Estado", "Deuda Total"];
   const headers = ((sheet.getRow(1).values ?? []) as unknown[]).slice(1).map((v) => String(v ?? "").trim());
+
+  // ── Migración masiva del EXCEL MAESTRO del cliente (mapeo POSICIONAL C..L) ──
+  // Si el archivo NO trae los encabezados de la exportación del ERP, se asume que
+  // es el maestro anual del cliente y se importa por posición de columna:
+  //   C(3)=Estado · D(4)=Fecha Inicio · E(5)=Fecha Cosecha · F(6)=Cuadras ·
+  //   G(7)=Paradas(info) · H(8)=Estado operativo(info) · I(9)=Disponible ·
+  //   J(10)=Monto Límite · K(11)=N.º Libreta · L(12)=Agricultor.
+  // El flujo de re-importar la exportación del ERP (por encabezados) queda intacto.
+  const esFormatoExportacionErp = headers.includes("Nombre Agricultor") && headers.includes("Cuadras");
+  if (!esFormatoExportacionErp) {
+    const migr = await inTransaction(async (client) => {
+      let created = 0, farmersCreated = 0, saldosMigrados = 0, omitidos = 0;
+      const errores: Array<{ fila: number; error: string }> = [];
+
+      for (let i = 2; i <= sheet.rowCount; i++) {
+        const row = sheet.getRow(i);
+        const nombre = cellString(row.getCell(12).value);           // L
+        const cuadras = cellNumber(row.getCell(6).value);           // F
+        // Salta filas vacías; y cabeceras/totales colados (sin cuadras numéricas).
+        if (!nombre && cuadras === undefined) continue;
+        if (!nombre) { errores.push({ fila: i, error: "Falta el nombre del agricultor (Columna L)." }); continue; }
+        if (!(cuadras !== undefined && cuadras > 0)) {
+          if (/agricultor|nombre|total/i.test(nombre)) continue; // encabezado/total intermedio
+          errores.push({ fila: i, error: `Cuadras inválidas (Columna F) para "${nombre}".` });
+          continue;
+        }
+
+        const inicio = parseExcelDate(row.getCell(4).value);        // D
+        if (!inicio) { errores.push({ fila: i, error: `Fecha de inicio inválida (Columna D) para "${nombre}".` }); continue; }
+        const cosecha = parseExcelDate(row.getCell(5).value) ?? calcularCosecha(inicio); // E
+        const status = mapEstadoFomento(row.getCell(3).value);      // C
+        const disponible = cellNumber(row.getCell(9).value) ?? 0;   // I
+        const limite = cellNumber(row.getCell(10).value) ?? 0;      // J
+        const libretaRaw = row.getCell(11).value;                   // K
+        const folio = libretaRaw != null && String(libretaRaw).trim() !== ""
+          ? String(libretaRaw).trim().replace(/\.0+$/, "").slice(0, 50)
+          : null;
+
+        // Dedup: evita duplicar si se vuelve a subir el mismo maestro.
+        const dup = await client.query(
+          "SELECT 1 FROM fomentos WHERE accionista_id = $1 AND lower(farmer_name) = lower($2) AND inicio = $3 AND cuadras = $4 LIMIT 1",
+          [accionistaId, nombre, inicio, cuadras]
+        );
+        if (dup.rowCount) { omitidos++; continue; }
+
+        // (a) Verificación de agricultor en el Directorio (Báscula = farmers).
+        //     Si no existe, se crea para mantener integridad referencial.
+        const existente = await client.query("SELECT id FROM farmers WHERE lower(full_name) = lower($1) LIMIT 1", [nombre]);
+        let farmerId: string;
+        if (existente.rowCount) {
+          farmerId = existente.rows[0].id;
+        } else {
+          const nuevo = await client.query(
+            "INSERT INTO farmers (full_name, accionista_id) VALUES ($1, $2) RETURNING id",
+            [nombre, accionistaId]
+          );
+          farmerId = nuevo.rows[0].id;
+          farmersCreated++;
+        }
+
+        // (b) Creación del Fomento.
+        const fom = await client.query(
+          `INSERT INTO fomentos (accionista_id, farmer_name, farmer_id, cuadras, inicio, cosecha, renta, status, notes, limite_credito, folio)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+          [accionistaId, nombre, farmerId, cuadras, inicio, cosecha, 0.07, status,
+           "Migrado del Excel maestro", limite > 0 ? limite : null, folio]
+        );
+        created++;
+
+        // (c) Saldo inicial: Deuda = Monto Límite (J) − Disponible (I).
+        const deuda = round2Fom(limite - disponible);
+        if (deuda > 0.005) {
+          await client.query(
+            `INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto)
+             VALUES ($1, $2, $3, $4)`,
+            [fom.rows[0].id, inicio, deuda, "SALDO INICIAL MIGRADO"]
+          );
+          saldosMigrados++;
+        }
+      }
+      return { created, farmersCreated, saldosMigrados, omitidos, errores };
+    });
+
+    res.json({
+      success: true,
+      migracion: true,
+      created: migr.created,
+      updated: 0,
+      farmersCreated: migr.farmersCreated,
+      saldosMigrados: migr.saldosMigrados,
+      omitidos: migr.omitidos,
+      errors: migr.errores
+    });
+    return;
+  }
+
   const missing = expected.filter((h) => !headers.includes(h));
   if (missing.length) throw new ApiError(400, `Columnas incorrectas. Faltan: ${missing.join(", ")}`);
 
