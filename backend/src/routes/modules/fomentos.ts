@@ -68,9 +68,16 @@ const SELECT_FOMENTO = `
     ROUND(f.cuadras * 800, 2) AS monto_limite,
     COALESCE(e.total_pedido, 0) AS total_pedido,
     COALESCE(p.total_pagado, 0) AS total_pagado,
-    COALESCE(e.gasto_adm, 0)    AS gasto_adm,
+    -- Interés efectivo: dinámico (por días) o congelado (FIJO_1_MES / MANUAL).
+    CASE WHEN f.modo_interes = 'DINAMICO'
+         THEN COALESCE(e.gasto_adm, 0)
+         ELSE COALESCE(f.interes_fijo_monto, 0) END AS gasto_adm,
     ROUND(f.cuadras * 800 - COALESCE(e.total_pedido, 0), 2) AS falta_por_pedir,
-    ROUND(COALESCE(e.total_pedido, 0) + COALESCE(e.gasto_adm, 0) - COALESCE(p.total_pagado, 0), 2) AS deuda_total,
+    ROUND(COALESCE(e.total_pedido, 0)
+          + CASE WHEN f.modo_interes = 'DINAMICO'
+                 THEN COALESCE(e.gasto_adm, 0)
+                 ELSE COALESCE(f.interes_fijo_monto, 0) END
+          - COALESCE(p.total_pagado, 0), 2) AS deuda_total,
     CASE WHEN f.cuadras * 800 - COALESCE(e.total_pedido, 0) > 0
          THEN 'HABILITADO' ELSE 'DESABILITADO' END AS estado_credito
   FROM fomentos f
@@ -446,6 +453,56 @@ fomentosRouter.patch("/:id", asyncRoute(async (req, res) => {
   );
   if (!result.rowCount) throw new ApiError(404, "Fomento no encontrado o no pertenece al accionista activo");
   res.json(result.rows[0]);
+}));
+
+// ── Ajuste / congelamiento del interés ("Saldos en contra") ─────────────────
+// DINAMICO: interés por días (comportamiento normal).
+// FIJO_1_MES: congela 1 mes de interés sobre el saldo deudor actual
+//   (capital = total entregado − total pagado) × renta mensual.
+// MANUAL: guarda el monto exacto que escribe el administrador.
+const ajusteInteresSchema = z.object({
+  modo: z.enum(["DINAMICO", "FIJO_1_MES", "MANUAL"]),
+  interes_fijo_monto: z.number().min(0).optional()
+});
+
+fomentosRouter.patch("/:id/interes", asyncRoute(async (req, res) => {
+  const accionistaId = getAccionistaId(req);
+  const fomentoId = String(req.params.id);
+  const body = ajusteInteresSchema.parse(req.body);
+
+  await inTransaction(async (client) => {
+    const fom = await client.query<{ renta: string }>(
+      "SELECT renta FROM fomentos WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
+      [fomentoId, accionistaId]
+    );
+    if (!fom.rowCount) throw new ApiError(404, "Fomento no encontrado o no pertenece al accionista activo");
+
+    let monto: number | null = null;
+    if (body.modo === "MANUAL") {
+      if (body.interes_fijo_monto === undefined) throw new ApiError(400, "Ingresa el monto manual de interés a cobrar.");
+      monto = round2Fom(body.interes_fijo_monto);
+    } else if (body.modo === "FIJO_1_MES") {
+      // Capital pendiente = total entregado − total pagado.
+      const tot = await client.query<{ principal: string }>(
+        `SELECT COALESCE((SELECT SUM(valor) FROM fomento_entregas WHERE fomento_id = $1), 0)
+              - COALESCE((SELECT SUM(valor) FROM fomento_pagos   WHERE fomento_id = $1), 0) AS principal`,
+        [fomentoId]
+      );
+      const principal = Math.max(0, Number(tot.rows[0].principal));
+      // La renta del sistema es MENSUAL (la fórmula diaria usa renta/30·días),
+      // así que 1 mes de interés = capital × renta.
+      monto = round2Fom(principal * Number(fom.rows[0].renta));
+    }
+
+    await client.query(
+      "UPDATE fomentos SET modo_interes = $2, interes_fijo_monto = $3 WHERE id = $1",
+      [fomentoId, body.modo, monto]
+    );
+  });
+
+  // Devuelve el fomento con los derivados recalculados (gasto_adm/deuda_total).
+  const full = await pool.query(`${SELECT_FOMENTO} WHERE f.id = $1 AND f.accionista_id = $2`, [fomentoId, accionistaId]);
+  res.json(full.rows[0]);
 }));
 
 fomentosRouter.delete("/:id", asyncRoute(async (req, res) => {

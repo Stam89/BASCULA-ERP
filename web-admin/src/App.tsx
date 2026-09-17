@@ -1275,6 +1275,8 @@ type Fomento = {
   deuda_total: number;
   total_pagado: number;
   estado_credito: "HABILITADO" | "DESABILITADO";
+  modo_interes?: "DINAMICO" | "FIJO_1_MES" | "MANUAL";
+  interes_fijo_monto?: number | null;
 };
 
 type FomentoEntrega = {
@@ -2554,6 +2556,11 @@ export function App() {
   const [fomentoFilter, setFomentoFilter] = useState<"TODOS"|"ACTIVOS"|"NO ACTIVOS"|"APROBADOS"|"ARCHIVADOS">("TODOS");
   const [fomentoEditingRenta, setFomentoEditingRenta] = useState<string | null>(null);
   const [fomentoRentaInput, setFomentoRentaInput] = useState("");
+  // Ajuste / congelamiento de interés ("Saldos en contra").
+  const [ajusteInteresOpen, setAjusteInteresOpen] = useState(false);
+  const [ajusteInteresModo, setAjusteInteresModo] = useState<"DINAMICO" | "FIJO_1_MES" | "MANUAL">("DINAMICO");
+  const [ajusteInteresManual, setAjusteInteresManual] = useState("");
+  const [ajusteInteresBusy, setAjusteInteresBusy] = useState(false);
   const [fomentoPagoForm, setFomentoPagoForm] = useState({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
   const [fomentoImporting, setFomentoImporting] = useState(false);
   const [fomentoImportModal, setFomentoImportModal] = useState<{ open: boolean; title: string; message: string; isError: boolean } | null>(null);
@@ -6574,6 +6581,47 @@ export function App() {
     addToast("Tasa actualizada", "success");
     await refreshFomentos();
     if (fomentoDetalle?.id === fomentoId) await loadFomentoDetalle(fomentoId);
+  }
+
+  // Abre el modal de ajuste de inter\u00e9s precargado con el modo actual del fomento.
+  function openAjusteInteres() {
+    if (!fomentoDetalle) return;
+    const modo = fomentoDetalle.modo_interes ?? "DINAMICO";
+    setAjusteInteresModo(modo);
+    setAjusteInteresManual(
+      modo === "MANUAL" && fomentoDetalle.interes_fijo_monto != null
+        ? String(fomentoDetalle.interes_fijo_monto)
+        : ""
+    );
+    setAjusteInteresOpen(true);
+  }
+
+  // Guarda el modo de inter\u00e9s (congelar / din\u00e1mico / manual) y recarga el detalle.
+  async function guardarAjusteInteres() {
+    if (!fomentoDetalle) return;
+    const payload: { modo: string; interes_fijo_monto?: number } = { modo: ajusteInteresModo };
+    if (ajusteInteresModo === "MANUAL") {
+      const monto = Number(ajusteInteresManual);
+      if (!(monto >= 0) || ajusteInteresManual.trim() === "") { addToast("Ingresa un monto de inter\u00e9s v\u00e1lido", "error"); return; }
+      payload.interes_fijo_monto = monto;
+    }
+    setAjusteInteresBusy(true);
+    try {
+      await apiPatch(`/fomentos/${fomentoDetalle.id}/interes`, payload);
+      setAjusteInteresOpen(false);
+      addToast(
+        ajusteInteresModo === "DINAMICO" ? "Inter\u00e9s din\u00e1mico (por d\u00edas) reactivado"
+        : ajusteInteresModo === "FIJO_1_MES" ? "\ud83d\udd12 Inter\u00e9s congelado a 1 mes"
+        : "\ud83d\udd12 Inter\u00e9s fijado manualmente",
+        "success"
+      );
+      await loadFomentoDetalle(fomentoDetalle.id);
+      await refreshFomentos();
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : "No se pudo ajustar el inter\u00e9s", "error");
+    } finally {
+      setAjusteInteresBusy(false);
+    }
   }
 
   // Agrega el \u00edtem del formulario al carrito (a\u00fan no va al backend).
@@ -15618,17 +15666,95 @@ export function App() {
                         ["Total Pagado", `$${Number(fomentoDetalle.total_pagado ?? 0).toFixed(2)}`],
                         ["Deuda Total", `$${Number(fomentoDetalle.deuda_total ?? 0).toFixed(2)}`],
                         ["Estado", fomentoDetalle.estado_credito],
-                      ] as [string, string|number][]).map(([k, v]) => (
+                      ] as [string, string|number][]).map(([k, v]) => {
+                        const esInteres = k === "Interés Acum.";
+                        const modoInt = fomentoDetalle.modo_interes ?? "DINAMICO";
+                        const congelado = modoInt !== "DINAMICO";
+                        return (
                         <div key={k} style={{ background: "#f9fafb", borderRadius: 6, padding: "6px 10px" }}>
-                          <div style={{ fontSize: 10, color: "var(--c-muted)", fontWeight: 600 }}>{k}</div>
+                          <div style={{ fontSize: 10, color: "var(--c-muted)", fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                            <span>{k}</span>
+                            {esInteres && (
+                              <button type="button" onClick={openAjusteInteres} title="Ajustar o congelar el interés"
+                                style={{ background: "none", border: "1px solid #fcd34d", borderRadius: 5, padding: "1px 6px", cursor: "pointer", fontSize: 10, color: "#92400e", whiteSpace: "nowrap" }}>
+                                ⚙️ Ajustar / Congelar
+                              </button>
+                            )}
+                          </div>
                           <div style={{ fontSize: 14, fontWeight: 700,
                             color: k === "Estado" ? (v === "HABILITADO" ? "#16a34a" : "#dc2626")
                                  : k === "Deuda Total" ? (Number(v.toString().replace("$","")) > 0 ? "#dc2626" : "#16a34a")
                                  : k === "Total Pagado" ? "#16a34a"
-                                 : "inherit" }}>{v}</div>
+                                 : "inherit" }}>
+                            {v}
+                            {esInteres && congelado && (
+                              <span title={modoInt === "FIJO_1_MES" ? "Interés congelado a 1 mes" : "Interés fijado manualmente"}
+                                style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: "#92400e", background: "#fef3c7", borderRadius: 6, padding: "1px 6px", whiteSpace: "nowrap" }}>
+                                🔒 {modoInt === "FIJO_1_MES" ? "Fijo 1 mes" : "Manual"}
+                              </span>
+                            )}
+                          </div>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
+
+                    {/* Modal: Ajuste / congelamiento de interés ("Saldos en contra") */}
+                    {ajusteInteresOpen && (() => {
+                      const principal = Math.max(0, Number(fomentoDetalle.total_pedido) - Number(fomentoDetalle.total_pagado ?? 0));
+                      const interes1Mes = Math.round(principal * Number(fomentoDetalle.renta) * 100) / 100;
+                      const opt = (modo: "DINAMICO" | "FIJO_1_MES" | "MANUAL", emoji: string, titulo: string, desc: string) => (
+                        <label style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 12px", borderRadius: 8, cursor: "pointer",
+                          border: ajusteInteresModo === modo ? "2px solid var(--c-brand)" : "1px solid #e5e7eb", background: ajusteInteresModo === modo ? "#f0fdf4" : "#fff" }}>
+                          <input type="radio" name="ajusteInteres" checked={ajusteInteresModo === modo} onChange={() => setAjusteInteresModo(modo)} style={{ marginTop: 3 }} />
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontWeight: 700, fontSize: 13 }}>{emoji} {titulo}</div>
+                            <div style={{ fontSize: 12, color: "var(--c-muted)" }}>{desc}</div>
+                            {modo === "FIJO_1_MES" && ajusteInteresModo === "FIJO_1_MES" && (
+                              <div style={{ marginTop: 6, fontSize: 13, fontWeight: 700, color: "#b45309" }}>
+                                Se congelará en: ${interes1Mes.toFixed(2)} <span style={{ fontWeight: 400, color: "var(--c-muted)" }}>(saldo ${principal.toFixed(2)} × {(Number(fomentoDetalle.renta)*100).toFixed(2)}%)</span>
+                              </div>
+                            )}
+                            {modo === "MANUAL" && ajusteInteresModo === "MANUAL" && (
+                              <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
+                                <span style={{ fontWeight: 700 }}>$</span>
+                                <input type="number" step="0.01" min="0" value={ajusteInteresManual} autoFocus
+                                  onChange={(e) => setAjusteInteresManual(e.target.value)}
+                                  placeholder="0.00"
+                                  style={{ width: 140, padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} />
+                              </div>
+                            )}
+                          </div>
+                        </label>
+                      );
+                      return (
+                        <div onClick={() => !ajusteInteresBusy && setAjusteInteresOpen(false)}
+                          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100, padding: 16 }}>
+                          <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--c-surface, #fff)", borderRadius: 12, width: "min(460px, 100%)", boxShadow: "0 20px 60px rgba(0,0,0,.3)", overflow: "hidden" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 18px", background: "#111827", color: "#fff" }}>
+                              <strong style={{ fontSize: 15 }}>⚙️ Ajuste de Interés</strong>
+                              <button type="button" onClick={() => setAjusteInteresOpen(false)} style={{ background: "transparent", border: "none", color: "#fff", fontSize: 20, cursor: "pointer" }}>✕</button>
+                            </div>
+                            <div style={{ padding: 18, display: "grid", gap: 10 }}>
+                              <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+                                Interés actual: <strong>${Number(fomentoDetalle.gasto_adm).toFixed(2)}</strong>. Elige cómo debe cobrarse el interés de este saldo en contra.
+                              </p>
+                              {opt("DINAMICO", "🟢", "Dinámico (por días)", "El sistema calcula el interés diariamente según fechas de inicio/entregas. (Comportamiento actual.)")}
+                              {opt("FIJO_1_MES", "🟡", "Fijo (cobrar solo 1 mes)", "Detiene el reloj: congela exactamente 1 mes de interés sobre el saldo deudor actual.")}
+                              {opt("MANUAL", "🔴", "Monto manual", "Escribe un valor exacto de interés a cobrar.")}
+                              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+                                <button type="button" onClick={() => setAjusteInteresOpen(false)} disabled={ajusteInteresBusy}
+                                  style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", fontWeight: 600 }}>Cancelar</button>
+                                <button type="button" onClick={guardarAjusteInteres} disabled={ajusteInteresBusy}
+                                  style={{ padding: "8px 14px", borderRadius: 8, border: "none", background: "var(--c-brand)", color: "#fff", cursor: "pointer", fontWeight: 700 }}>
+                                  {ajusteInteresBusy ? "Guardando…" : "Guardar"}
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     {/* Tabla de entregas */}
                     <h4 style={{ marginBottom: 6 }}>Entregas / Créditos</h4>
