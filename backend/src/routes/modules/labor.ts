@@ -176,10 +176,13 @@ export async function createProductionWorkerPayments(
       });
     }
     if (opts.estibadorName && opts.estibadorName.trim()) {
-      // MIX: suma la parte de tulas (volumen) + la parte de sacos (destajo).
+      // AISLAMIENTO DE MAGNITUDES: la estibada por sacos se cobra ESTRICTAMENTE por
+      // los QUINTALES de arroz blanco (qqSaco × tarifa_qq) + los QQ de arrocillo
+      // (arrocillo × tarifa_arrocillo). NO se suma la cantidad física de sacas/bultos
+      // (eso duplicaba magnitudes heterogéneas e inflaba el pago). Las tulas se pagan
+      // aparte por volumen (tulasBonus). Subtotal = Blanco + Arrocillo (+ Tulas).
       const destajoSaco = round2(
         qqSaco * rates.estibador_per_qq +
-        sacas * rates.estibador_per_saca +
         arrocillo * rates.estibador_per_arrocillo
       );
       rows.push({
@@ -214,7 +217,8 @@ export async function createProductionWorkerPayments(
            // Para POLVILLO los QQ se pagan con su propia tarifa (polvillo_*), no
            // con la de pilada/estibaje: se dejan los campos qq del desglose en 0.
            qq: r.role === "POLVILLO" ? 0 : r.qq, qq_rate: r.role === "POLVILLO" ? 0 : qqRate, qq_amount: r.role === "POLVILLO" ? 0 : round2(r.qq * qqRate),
-           sacas: r.sacasCobradas, saca_rate: sacaRate, saca_amount: round2(r.sacasCobradas * sacaRate),
+           // La estibada NO cobra por saca física (solo el pilador): saca_amount=0 para ESTIBADOR.
+           sacas: r.sacasCobradas, saca_rate: r.role === "ESTIBADOR" ? 0 : sacaRate, saca_amount: r.role === "ESTIBADOR" ? 0 : round2(r.sacasCobradas * sacaRate),
            arrocillo: r.arrocilloPaga, arrocillo_rate: r.arrocilloPaga > 0 ? rates.estibador_per_arrocillo : 0, arrocillo_amount: round2(r.arrocilloPaga * rates.estibador_per_arrocillo),
            tulas: r.tulas, tulas_rate: r.role === "PILADOR" ? 0 : rates.estibador_por_3tulas, tulas_amount: r.tulasBonus,
            polvillo: r.role === "POLVILLO" ? (opts.polvillo ?? 0) : 0, polvillo_rate: r.role === "POLVILLO" ? rates.polvillo_per_qq : 0, polvillo_amount: r.role === "POLVILLO" ? r.base : 0
