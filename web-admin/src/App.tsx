@@ -7151,6 +7151,21 @@ export function App() {
     }
   }
 
+  // Req 3: convierte un egreso YA guardado (gasto directo) en "Fondo a rendir
+  // cuentas" y abre el modal de liquidación para registrar el vuelto, sin anular
+  // el registro original.
+  async function registrarVueltoEgreso(m: CashMovement) {
+    try {
+      await apiPost(`/cash/movements/${m.id}/convertir-fondo`, {});
+      const registerId = dashboard.current_cash_register?.id;
+      if (registerId) await refreshCaja(registerId);
+      setLiquidarFondo({ mov: { ...m, es_fondo: true, fondo_estado: "POR_LIQUIDAR" }, gasto_real: "", description: "" });
+      addToast("Egreso convertido a Fondo por Liquidar. Registra el gasto real y el vuelto.", "success");
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : "No se pudo convertir a fondo", "error");
+    }
+  }
+
   async function aplicarAnticiposLiquidacion(liquidationIds: string[]) {
     let totalAplicado = 0;
     for (const id of liquidationIds) {
@@ -13919,7 +13934,12 @@ export function App() {
                                   {m.movement === "EXPENSE" ? "-" : "+"}{money(Number(m.amount))}
                                 </td>
                                 {canAnular && (
-                                  <td style={{ padding: "8px 16px", textAlign: "right" }}>
+                                  <td style={{ padding: "8px 16px", textAlign: "right", whiteSpace: "nowrap" }}>
+                                    {/* Req 3: egreso activo NO-fondo → convertir a fondo y registrar el vuelto. */}
+                                    {!isReversed && !isReversal && m.movement === "EXPENSE" && !m.es_fondo && (
+                                      <button type="button" className="btnGhost" style={{ color: "#2563eb" }} title="Convertir este egreso a Fondo por Liquidar y registrar el vuelto"
+                                        onClick={() => registrarVueltoEgreso(m)}>💸 Registrar Vuelto</button>
+                                    )}
                                     {!isReversed && !isReversal && (
                                       <button type="button" className="btnGhost" onClick={() => reverseCashMovement(m)}>Anular</button>
                                     )}
@@ -14645,6 +14665,58 @@ export function App() {
             )}
           </section>
         )}
+
+        {/* ===== Modal de Liquidación de Vueltos (fondo a rendir cuentas) — GLOBAL,
+                para que se abra desde la pestaña Caja (📋 Movimientos). ===== */}
+        {liquidarFondo && (() => {
+          const entregado = Number(liquidarFondo.mov.amount);
+          const gasto = Number(liquidarFondo.gasto_real);
+          const tieneGasto = Number.isFinite(gasto) && liquidarFondo.gasto_real !== "";
+          const diff = tieneGasto ? round2(entregado - gasto) : null;
+          return (
+            <div className="modalOverlay" onClick={() => setLiquidarFondo(null)}>
+              <div className="modalCard" style={{ maxWidth: 460, width: "100%" }} onClick={(e) => e.stopPropagation()}>
+                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+                  <h3 style={{ margin: 0 }}>⚙️ Liquidar fondo (rendir cuentas)</h3>
+                  <button type="button" onClick={() => setLiquidarFondo(null)} style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
+                </div>
+                <p className="muted" style={{ marginTop: 6 }}>
+                  Entregado a <strong>{liquidarFondo.mov.responsable ?? "—"}</strong>: <strong>{money(entregado)}</strong>{liquidarFondo.mov.description ? ` · ${liquidarFondo.mov.description}` : ""}
+                </p>
+                <label style={{ display: "block", marginTop: 8, fontSize: 13, fontWeight: 600 }}>
+                  <span style={{ display: "block", marginBottom: 4 }}>Monto Gastado (según facturas) $</span>
+                  <input type="number" min="0" step="0.01" autoFocus value={liquidarFondo.gasto_real}
+                    onChange={(e) => setLiquidarFondo((f) => f ? { ...f, gasto_real: e.target.value } : f)}
+                    placeholder="0.00" style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} />
+                </label>
+                <label style={{ display: "block", marginTop: 10, fontSize: 13, fontWeight: 600 }}>
+                  <span style={{ display: "block", marginBottom: 4 }}>Vuelto Devuelto a Caja $ <span className="muted" style={{ fontWeight: 400 }}>(automático)</span></span>
+                  <input readOnly value={diff !== null ? (diff > 0 ? diff.toFixed(2) : "0.00") : ""}
+                    placeholder="—" style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13, background: "#f9fafb", fontWeight: 700, color: "#15803d" }} />
+                </label>
+                <label style={{ display: "block", marginTop: 10, fontSize: 13, fontWeight: 600 }}>
+                  <span style={{ display: "block", marginBottom: 4 }}>Comprobante / Detalle</span>
+                  <input value={liquidarFondo.description}
+                    onChange={(e) => setLiquidarFondo((f) => f ? { ...f, description: e.target.value } : f)}
+                    placeholder="N° factura o detalle de la rendición" style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} />
+                </label>
+                {diff !== null && (
+                  <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8, background: diff > 0.005 ? "#f0fdf4" : diff < -0.005 ? "#fef2f2" : "#f3f4f6", border: "1px solid #e5e7eb", fontSize: 13 }}>
+                    {diff > 0.005 && <>🟢 Se reintegra a caja (ingreso): <strong>{money(diff)}</strong></>}
+                    {diff < -0.005 && <>🔴 Faltante (egreso adicional): <strong>{money(Math.abs(diff))}</strong></>}
+                    {Math.abs(diff) <= 0.005 && <>✅ Gasto exacto: sin ajuste de caja.</>}
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+                  <button type="button" className="primary" disabled={liquidarBusy || liquidarFondo.gasto_real === ""} onClick={() => confirmarLiquidarFondo()} style={{ fontWeight: 700 }}>
+                    {liquidarBusy ? "Liquidando…" : "✅ Confirmar liquidación"}
+                  </button>
+                  <button type="button" onClick={() => setLiquidarFondo(null)} style={{ marginLeft: "auto" }}>Cancelar</button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {activeTab === "Liquidaciones" && (
           <section className="panelGrid">
@@ -17091,49 +17163,8 @@ export function App() {
             )}
 
             {/* Modal: liquidar un "Dinero a Rendir Cuentas" (fondo provisional). */}
-            {liquidarFondo && (() => {
-              const entregado = Number(liquidarFondo.mov.amount);
-              const gasto = Number(liquidarFondo.gasto_real);
-              const diff = Number.isFinite(gasto) && liquidarFondo.gasto_real !== "" ? round2(entregado - gasto) : null;
-              return (
-                <div className="modalOverlay" onClick={() => setLiquidarFondo(null)}>
-                  <div className="modalCard" style={{ maxWidth: 460, width: "100%" }} onClick={(e) => e.stopPropagation()}>
-                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
-                      <h3 style={{ margin: 0 }}>⚙️ Liquidar fondo</h3>
-                      <button type="button" onClick={() => setLiquidarFondo(null)} style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
-                    </div>
-                    <p className="muted" style={{ marginTop: 6 }}>
-                      Entregado a <strong>{liquidarFondo.mov.responsable ?? "—"}</strong>: <strong>{money(entregado)}</strong>{liquidarFondo.mov.description ? ` · ${liquidarFondo.mov.description}` : ""}
-                    </p>
-                    <label style={{ display: "block", marginTop: 8, fontSize: 13, fontWeight: 600 }}>
-                      <span style={{ display: "block", marginBottom: 4 }}>Gasto real comprobado $</span>
-                      <input type="number" min="0" step="0.01" autoFocus value={liquidarFondo.gasto_real}
-                        onChange={(e) => setLiquidarFondo((f) => f ? { ...f, gasto_real: e.target.value } : f)}
-                        placeholder="0.00" style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} />
-                    </label>
-                    <label style={{ display: "block", marginTop: 10, fontSize: 13, fontWeight: 600 }}>
-                      <span style={{ display: "block", marginBottom: 4 }}>Nota (opcional)</span>
-                      <input value={liquidarFondo.description}
-                        onChange={(e) => setLiquidarFondo((f) => f ? { ...f, description: e.target.value } : f)}
-                        placeholder="Detalle de la rendición" style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} />
-                    </label>
-                    {diff !== null && (
-                      <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8, background: diff > 0.005 ? "#f0fdf4" : diff < -0.005 ? "#fef2f2" : "#f3f4f6", border: "1px solid #e5e7eb", fontSize: 13 }}>
-                        {diff > 0.005 && <>🟢 Vuelto a caja (ingreso): <strong>{money(diff)}</strong></>}
-                        {diff < -0.005 && <>🔴 Faltante (egreso adicional): <strong>{money(Math.abs(diff))}</strong></>}
-                        {Math.abs(diff) <= 0.005 && <>✅ Gasto exacto: sin ajuste de caja.</>}
-                      </div>
-                    )}
-                    <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-                      <button type="button" className="primary" disabled={liquidarBusy || liquidarFondo.gasto_real === ""} onClick={() => confirmarLiquidarFondo()} style={{ fontWeight: 700 }}>
-                        {liquidarBusy ? "Liquidando…" : "✅ Confirmar liquidación"}
-                      </button>
-                      <button type="button" onClick={() => setLiquidarFondo(null)} style={{ marginLeft: "auto" }}>Cancelar</button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
+            {/* El modal de liquidación de fondo se renderiza a nivel global (junto a
+                los bloques activeTab), no aquí, para que funcione desde la pestaña Caja. */}
 
             {reciboModal.open && (
               <div className="modalOverlay" onClick={() => setReciboModal({ open: false, loading: false, data: null })}>

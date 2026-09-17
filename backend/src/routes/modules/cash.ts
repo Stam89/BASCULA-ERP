@@ -499,6 +499,32 @@ cashRouter.post("/movements/:id/liquidar", asyncRoute(async (req, res) => {
   res.json(result);
 }));
 
+// ── Convertir un EGRESO existente en "Fondo a Rendir Cuentas" ─────────────────
+// Permite liquidar un egreso que se guardó como gasto directo (sin marcar el
+// fondo) sin tener que anularlo: lo marca es_fondo + POR_LIQUIDAR. Luego se usa
+// /liquidar normalmente. Solo EGRESOS activos (no anulados, no ya-fondo).
+cashRouter.post("/movements/:id/convertir-fondo", asyncRoute(async (req, res) => {
+  const body = z.object({ responsable: z.string().max(120).optional() }).parse(req.body ?? {});
+  const result = await inTransaction(async (client) => {
+    const origRes = await client.query("SELECT * FROM cash_movements WHERE id = $1 FOR UPDATE", [req.params.id]);
+    const orig = origRes.rows[0];
+    if (!orig) throw new ApiError(404, "Movimiento no encontrado");
+    if (orig.movement !== "EXPENSE") throw new ApiError(409, "Solo un egreso puede convertirse en fondo a rendir cuentas.");
+    if (orig.es_fondo) throw new ApiError(409, "Ese movimiento ya es un fondo a rendir cuentas.");
+    if (orig.reversed_at || orig.reversal_of) throw new ApiError(409, "No se puede convertir un movimiento anulado.");
+    const upd = await client.query(
+      `UPDATE cash_movements
+          SET es_fondo = true, fondo_estado = 'POR_LIQUIDAR',
+              responsable = COALESCE(NULLIF(btrim($2), ''), responsable)
+        WHERE id = $1
+        RETURNING *`,
+      [orig.id, body.responsable ?? null]
+    );
+    return upd.rows[0];
+  });
+  res.json(result);
+}));
+
 // ── Cuentas por pagar pendientes ─────────────────────────────────────────────
 cashRouter.get("/payables", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
