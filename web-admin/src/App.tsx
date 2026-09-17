@@ -3762,6 +3762,20 @@ export function App() {
       await reloadCashCategories();
     } catch (e) { addToast(`Error: ${e instanceof Error ? e.message : "Error"}`, "error"); }
   };
+  // Eliminación FÍSICA de una categoría de caja. El backend bloquea si ya tiene
+  // movimientos asociados (integridad referencial) → usar Desactivar.
+  const deleteCashCategory = async (c: CashCat) => {
+    if (!window.confirm(`¿Está seguro de eliminar la categoría "${c.nombre}" permanentemente? Esta acción no se puede deshacer.`)) return;
+    try {
+      const r = await apiFetch(`/cash/categories/${c.id}`, { method: "DELETE" });
+      if (!r.ok) {
+        const msg = await r.json().then((j) => j.error || j.message).catch(() => "No se pudo eliminar");
+        throw new Error(msg);
+      }
+      await reloadCashCategories();
+      addToast(`Categoría "${c.nombre}" eliminada permanentemente ✓`, "success");
+    } catch (e) { addToast(`❌ ${e instanceof Error ? e.message : "No se pudo eliminar"}`, "error"); }
+  };
   const submitCashCategory = async () => {
     if (!catForm.codigo || !catForm.nombre) { addToast("Código y nombre requeridos", "error"); return; }
     try {
@@ -6469,6 +6483,22 @@ export function App() {
       addToast(cat.activo ? "Categoría desactivada" : "Categoría reactivada ✓", "success");
     } catch (e) { addToast(e instanceof Error ? e.message : "Error", "error"); }
   }
+  // Eliminación FÍSICA (hard delete). El backend valida integridad referencial y
+  // bloquea si la categoría ya tiene historiales (o secciones hijas, para un área).
+  async function deleteMaintCat(cat: MaintCat) {
+    if (!cat.id) return;
+    if (!window.confirm(`¿Está seguro de eliminar "${cat.nombre}" permanentemente? Esta acción no se puede deshacer.`)) return;
+    try {
+      const r = await apiFetch(`/equipment/categories/${cat.id}`, { method: "DELETE" });
+      if (!r.ok) {
+        const msg = await r.json().then((j) => j.error || j.message).catch(() => "No se pudo eliminar");
+        throw new Error(msg);
+      }
+      await loadMaintCategoriesAll();
+      await loadMaintCategories();
+      addToast(`"${cat.nombre}" eliminada permanentemente ✓`, "success");
+    } catch (e) { addToast(`❌ ${e instanceof Error ? e.message : "No se pudo eliminar"}`, "error"); }
+  }
   const renderMaintCatItem = (c: MaintCat) => {
     const editing = editingMaintCat && editingMaintCat.id === c.id ? editingMaintCat : null;
     return (
@@ -6496,6 +6526,9 @@ export function App() {
               onClick={() => setEditingMaintCat({ id: c.id!, nombre: c.nombre })}>✎ Renombrar</button>
             <button type="button" className="equipDelBtn" disabled={!isAdmin}
               onClick={() => toggleMaintCatActivo(c)}>{c.activo ? "Desactivar" : "Activar"}</button>
+            <button type="button" disabled={!isAdmin} title="Eliminar permanentemente (si no tiene historiales)"
+              style={{ color: "#b91c1c", border: "1px solid #fecaca", background: "transparent", borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}
+              onClick={() => deleteMaintCat(c)}>🗑️ Eliminar</button>
           </div>
         </>
       )}
@@ -18952,7 +18985,12 @@ export function App() {
                           <strong>{c.nombre}</strong>
                           <small>{c.tipo} · {c.aplicable_a} · <code>{c.codigo}</code>{c.activo ? "" : " · inactiva"}</small>
                         </div>
-                        <button type="button" className="equipDelBtn" disabled={!isAdmin} onClick={() => toggleCashCategory(c)}>{c.activo ? "Desactivar" : "Activar"}</button>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button type="button" className="equipDelBtn" disabled={!isAdmin} onClick={() => toggleCashCategory(c)}>{c.activo ? "Desactivar" : "Activar"}</button>
+                          <button type="button" disabled={!isAdmin} title="Eliminar permanentemente (si no tiene movimientos)"
+                            style={{ color: "#b91c1c", border: "1px solid #fecaca", background: "transparent", borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}
+                            onClick={() => deleteCashCategory(c)}>🗑️ Eliminar</button>
+                        </div>
                       </div>
                     ))}
                   </div>

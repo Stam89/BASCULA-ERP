@@ -108,6 +108,20 @@ cashRouter.patch("/categories/:id", asyncRoute(async (req, res) => {
   res.json(r.rows[0]);
 }));
 
+// DELETE físico (hard delete) de una categoría de caja. Integridad referencial:
+// se BLOQUEA si ya hay movimientos que la usan (cash_movements.category = codigo),
+// para no romper el histórico. En ese caso, usar "Desactivar".
+cashRouter.delete("/categories/:id", asyncRoute(async (req, res) => {
+  const cat = await pool.query("SELECT id, codigo FROM cash_categories WHERE id = $1", [req.params.id]);
+  if (!cat.rows[0]) throw new ApiError(404, "Categoria no encontrada");
+  const enUso = await pool.query("SELECT 1 FROM cash_movements WHERE category = $1 LIMIT 1", [cat.rows[0].codigo]);
+  if (enUso.rowCount) {
+    throw new ApiError(409, "No se puede eliminar porque ya tiene historiales asociados. Por favor, utilice la opción 'Desactivar'.");
+  }
+  await pool.query("DELETE FROM cash_categories WHERE id = $1", [req.params.id]);
+  res.json({ ok: true, id: req.params.id });
+}));
+
 // Columnas para la anulación de movimientos (contra-asiento). Migración
 // automática en instalaciones existentes.
 let cashColsReady: Promise<void> | null = null;

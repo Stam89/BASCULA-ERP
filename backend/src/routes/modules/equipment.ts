@@ -164,6 +164,44 @@ equipmentRouter.post("/categories", asyncRoute(async (req, res) => {
   res.status(200).json(existing.rows[0] ?? { kind: body.kind, nombre, area });
 }));
 
+// DELETE físico (hard delete) de una categoría de mantenimiento. Integridad
+// referencial por tipo: se BLOQUEA si ya está en uso en el histórico de
+// mantenimientos (equipment_maintenance) o, para un ÁREA, si tiene secciones
+// hijas. En ese caso, usar "Desactivar".
+equipmentRouter.delete("/categories/:id", asyncRoute(async (req, res) => {
+  const cur = await pool.query(
+    "SELECT id, kind, nombre, area FROM maintenance_categories WHERE id = $1",
+    [req.params.id]
+  );
+  if (!cur.rowCount) throw new ApiError(404, "Categoría no encontrada");
+  const cat = cur.rows[0] as { kind: "AREA" | "SECTION" | "TYPE"; nombre: string; area: string | null };
+
+  let enUso = false;
+  if (cat.kind === "AREA") {
+    const usoHist = await pool.query("SELECT 1 FROM equipment_maintenance WHERE area = $1 LIMIT 1", [cat.nombre]);
+    const hijos = await pool.query(
+      "SELECT 1 FROM maintenance_categories WHERE kind = 'SECTION' AND area = $1 LIMIT 1",
+      [cat.nombre]
+    );
+    enUso = Boolean(usoHist.rowCount || hijos.rowCount);
+  } else if (cat.kind === "SECTION") {
+    const usoHist = await pool.query(
+      "SELECT 1 FROM equipment_maintenance WHERE section = $1 AND area IS NOT DISTINCT FROM $2 LIMIT 1",
+      [cat.nombre, cat.area]
+    );
+    enUso = Boolean(usoHist.rowCount);
+  } else {
+    const usoHist = await pool.query("SELECT 1 FROM equipment_maintenance WHERE maintenance_type = $1 LIMIT 1", [cat.nombre]);
+    enUso = Boolean(usoHist.rowCount);
+  }
+
+  if (enUso) {
+    throw new ApiError(409, "No se puede eliminar porque ya tiene historiales asociados. Por favor, utilice la opción 'Desactivar'.");
+  }
+  await pool.query("DELETE FROM maintenance_categories WHERE id = $1", [req.params.id]);
+  res.json({ ok: true, id: req.params.id });
+}));
+
 // GET todos los equipos (activos o en mantenimiento)
 equipmentRouter.get("/", asyncRoute(async (_req, res) => {
   const result = await pool.query(
