@@ -1579,6 +1579,27 @@ function sackWeightLbOf(presentation: string): number | undefined {
   return Number.isFinite(lb) && lb > 0 ? lb : undefined;
 }
 
+// Factor de conversión BULTOS por QUINTAL según la presentación (1 QQ = 100 LB).
+// La 'Cantidad' de los pedidos SIEMPRE es en QQ; para la Guía de Remisión se
+// convierte a bultos físicos: bultos = QQ × factor.
+//   100 LB → 1 · 50 LB → 2 · 25 LB → 4 · 10 LB → 10 · 5 LB → 20.
+// Subproductos/arrocillos en saco estándar (o sin peso reconocible) → 1 bulto/QQ.
+function bultosPorQqDePresentacion(presentation?: string | null): number {
+  const lb = sackWeightLbOf(String(presentation ?? ""));
+  if (!lb || lb <= 0) return 1; // saco estándar / subproductos
+  return 100 / lb;
+}
+
+// Unidad física a mostrar en la Guía según la presentación: fundas (≤10 LB),
+// sacos (≥50 LB) o "Bultos" genérico en el resto.
+function unidadGuiaDePresentacion(presentation?: string | null): string {
+  const lb = sackWeightLbOf(String(presentation ?? ""));
+  if (lb == null) return "Sacos";
+  if (lb <= 10) return "Fundas";
+  if (lb >= 50) return "Sacos";
+  return "Bultos";
+}
+
 const defaultProductionPackages: ProductionPackageState = {
   whiteRice: { qq: 0, pounds: 0 },
   broken34: { qq: 0, pounds: 0 },
@@ -5995,9 +6016,12 @@ export function App() {
     return round2(filas.reduce((sum, s) => sum + Number(s.quantity), 0));
   }
 
-  /** QQ que pide una línea del carrito (sacos × libras ÷ 100). */
-  const qqDeLinea = (item: SaleLineItem): number =>
-    item.weight_lb ? round2((item.quantity * item.weight_lb) / 100) : item.quantity;
+  /** QQ que pide una línea del carrito. La 'Cantidad' del pedido YA es en QQ
+   *  (estandarización): la presentación es solo metadato para la Guía. */
+  const qqDeLinea = (item: SaleLineItem): number => round2(item.quantity);
+  /** Bultos físicos de una línea = QQ × factor de la presentación (para la Guía). */
+  const bultosDeLinea = (item: SaleLineItem): number =>
+    round2(item.quantity * bultosPorQqDePresentacion(item.presentation_name));
 
   // Stock disponible expresado en SACOS de una presentación concreta:
   // sacos = QQ_disponibles × 100 ÷ libras_por_saco. Sin peso de saco (venta a
@@ -6033,9 +6057,8 @@ export function App() {
   const lineaExcedeStock = useMemo(() => {
     const cant = Number(saleLineForm.quantity);
     if (!saleLineForm.product_id || !cant || cant <= 0) return false;
-    const pres = saleProductPresentations.find((p) => p.id === saleLineForm.presentation_id);
-    const wl = pres?.weight_lb ? Number(pres.weight_lb) : null;
-    const qqLinea = wl ? round2((cant * wl) / 100) : cant;
+    // La cantidad del pedido ya es en QQ (no se convierte por presentación).
+    const qqLinea = round2(cant);
     const invId = getInventoryProductForBrand(products.find((p) => p.id === saleLineForm.product_id)?.name || "") || saleLineForm.product_id;
     const yaCarrito = saleLineItems
       .filter((it) => (getInventoryProductForBrand(products.find((p) => p.id === it.product_id)?.name || "") || it.product_id) === invId)
@@ -8961,6 +8984,36 @@ export function App() {
     });
   }
 
+  // Pre-carga la pestaña 'Guías de Remisión' desde un pedido/despacho, convirtiendo
+  // la Cantidad (QQ) a BULTOS físicos según la presentación (1 QQ = 100 LB):
+  // bultos = QQ × factor. La Unidad y la Descripción se arman automáticamente.
+  function generarGuiaDesdePedido(order: SalesOrder) {
+    const cust = customers.find((c) =>
+      (order.customer_identification && c.identification === order.customer_identification) || c.full_name === order.customer_name
+    );
+    setGuiaForm(() => ({
+      ...emptyGuiaForm(),
+      punto_partida: appSettings.address || "",
+      customer_id: cust?.id ?? "",
+      destinatario_nombre: order.customer_name ?? cust?.full_name ?? "",
+      destinatario_ruc: order.customer_identification ?? cust?.identification ?? "",
+      destino_direccion: cust?.address ?? ""
+    }));
+    const items = (order.items ?? []).map((it) => {
+      const qq = Number(it.quantity) || 0;
+      const bultos = Math.round(qq * bultosPorQqDePresentacion(it.presentation_name));
+      return {
+        cantidad: String(bultos),
+        unidad: unidadGuiaDePresentacion(it.presentation_name),
+        descripcion: `${it.product_name}${it.presentation_name ? ` (${it.presentation_name})` : ""} - Total: ${qq.toFixed(2)} QQ`
+      };
+    });
+    setGuiaItems(items.length ? items : [{ cantidad: "", unidad: "QQ", descripcion: "" }]);
+    setGuiaObs(`Generada desde el pedido ${order.order_number}.`);
+    setVentasView("guias");
+    addToast(`📄 Guía pre-cargada desde el pedido ${order.order_number} (Cantidad → bultos). Revisa y guarda.`, "success");
+  }
+
   async function submitGuia() {
     if (!guiaModal) return;
     const { order, nombre, cedula, placa } = guiaModal;
@@ -8984,12 +9037,14 @@ export function App() {
   function printOrdenCarga(order: SalesOrder) {
     const esc = (s: string | null | undefined) => (s ?? "").replace(/</g, "&lt;");
     const fecha = new Date().toLocaleString("es-EC", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
-    const totalSacos = order.items.reduce((s, it) => s + Number(it.quantity), 0);
+    // Cantidad en BULTOS físicos (lo que se carga): QQ × factor de la presentación.
+    const bultosDe = (it: SalesOrder["items"][number]) => Math.round((Number(it.quantity) || 0) * bultosPorQqDePresentacion(it.presentation_name));
+    const totalBultos = order.items.reduce((s, it) => s + bultosDe(it), 0);
     const ubic = order.picking_location || ubicacionSugerida;
     const filas = order.items.map((it) => `
       <tr>
-        <td class="c big">${Number(it.quantity)}</td>
-        <td>${esc(it.product_name)}${it.presentation_name ? ` · ${esc(it.presentation_name)}` : ""}</td>
+        <td class="c big">${bultosDe(it)}</td>
+        <td>${esc(it.product_name)}${it.presentation_name ? ` · ${esc(it.presentation_name)}` : ""} <small>(${(Number(it.quantity) || 0).toFixed(2)} QQ)</small></td>
         <td class="c chk">☐</td>
       </tr>`).join("");
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -9028,7 +9083,7 @@ export function App() {
           <thead><tr><th class="c" style="width:44px">Cant.</th><th>Producto</th><th class="c" style="width:34px">✔</th></tr></thead>
           <tbody>${filas}</tbody>
         </table>
-        <div class="tot">Total a cargar: ${totalSacos} sacos</div>
+        <div class="tot">Total a cargar: ${totalBultos} bultos</div>
         ${order.notes ? `<div class="box"><span class="k">Nota:</span> ${esc(order.notes)}</div>` : ""}
         <div class="sig"><hr><span>Firma de Salida (Bodega / Chofer)</span></div>
       </div>
@@ -9108,12 +9163,16 @@ export function App() {
   function printGuiaRemision(order: SalesOrder) {
     const remitente = accionistas.find((a) => a.id === activeAccionistaId)?.name ?? appSettings.business_name;
     const fecha = new Date().toLocaleDateString("es-EC", { year: "numeric", month: "long", day: "numeric" });
-    const filas = order.items.map((it) => `
+    const filas = order.items.map((it) => {
+      const qq = Number(it.quantity) || 0;
+      const bultos = Math.round(qq * bultosPorQqDePresentacion(it.presentation_name));
+      return `
       <tr>
-        <td class="c">${Number(it.quantity)}</td>
-        <td>${it.presentation_name ? `Sacos de ${it.presentation_name}` : "—"}</td>
-        <td>${it.product_name}</td>
-      </tr>`).join("");
+        <td class="c">${bultos}</td>
+        <td>${unidadGuiaDePresentacion(it.presentation_name)}${it.presentation_name ? ` de ${it.presentation_name}` : ""}</td>
+        <td>${it.product_name}${it.presentation_name ? ` (${it.presentation_name})` : ""} - Total: ${qq.toFixed(2)} QQ</td>
+      </tr>`;
+    }).join("");
     const esc = (s: string | null | undefined) => (s ?? "").replace(/</g, "&lt;");
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
       <title>Guía de Remisión ${esc(order.guia_number)}</title>
@@ -12586,7 +12645,7 @@ export function App() {
               {/* FILA 2: Cantidad y Precio */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
                 <label>
-                  <span>Cantidad *</span>
+                  <span>Cantidad (QQ) *</span>
                   <input
                     type="number"
                     placeholder="0"
@@ -12596,10 +12655,17 @@ export function App() {
                     min="0"
                     step="0.01"
                   />
+                  {(() => {
+                    const q = Number(saleLineForm.quantity);
+                    const pres = saleProductPresentations.find((p) => p.id === saleLineForm.presentation_id);
+                    if (!q || q <= 0 || !pres) return null;
+                    const factor = bultosPorQqDePresentacion(pres.name);
+                    return <small style={{ color: "#2563eb", fontWeight: 600 }}>= {(q * factor).toFixed(0)} {unidadGuiaDePresentacion(pres.name).toLowerCase()} ({pres.name}) para la Guía</small>;
+                  })()}
                 </label>
 
                 <label>
-                  <span>Precio $ (sugerido, editable)</span>
+                  <span>Precio $/QQ (sugerido, editable)</span>
                   <input
                     type="number"
                     placeholder="0.00"
@@ -12650,9 +12716,9 @@ export function App() {
                       <tr style={{ background: "#6b7280", color: "#fff" }}>
                         <th style={{ padding: "8px 10px", textAlign: "left" }}>Marca</th>
                         <th style={{ padding: "8px 10px", textAlign: "left" }}>Presentación</th>
-                        <th style={{ padding: "8px 10px", textAlign: "right" }}>Sacos</th>
-                        <th style={{ padding: "8px 10px", textAlign: "right" }}>QQ</th>
-                        <th style={{ padding: "8px 10px", textAlign: "right" }}>Precio $</th>
+                        <th style={{ padding: "8px 10px", textAlign: "right" }}>Cantidad (QQ)</th>
+                        <th style={{ padding: "8px 10px", textAlign: "right" }}>Bultos</th>
+                        <th style={{ padding: "8px 10px", textAlign: "right" }}>Precio $/QQ</th>
                         <th style={{ padding: "8px 10px", textAlign: "right" }}>Subtotal $</th>
                         <th style={{ padding: "8px 10px", textAlign: "center" }}>Acción</th>
                       </tr>
@@ -12678,8 +12744,8 @@ export function App() {
                                 {excede && <small style={{ display: "block", color: "#b91c1c", fontWeight: 700 }}>⚠ Supera el stock ({(disponible ?? 0).toFixed(2)} QQ disponibles)</small>}
                               </td>
                               <td style={{ padding: "8px 10px" }}>{item.presentation_name || "—"}</td>
-                              <td style={{ padding: "8px 10px", textAlign: "right" }}>{item.quantity}</td>
-                              <td style={{ padding: "8px 10px", textAlign: "right" }}>{qq.toFixed(2)}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>{qq.toFixed(2)}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "right", color: "#2563eb" }} title="Bultos físicos = QQ × factor de la presentación (para la Guía)">{bultosDeLinea(item).toFixed(0)}</td>
                               <td style={{ padding: "8px 10px", textAlign: "right" }}>${item.unit_price.toFixed(2)}</td>
                               <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>${subtotal.toFixed(2)}</td>
                               <td style={{ padding: "8px 10px", textAlign: "center" }}>
@@ -12699,8 +12765,8 @@ export function App() {
                     <tfoot>
                       <tr style={{ background: "#f0fdf4", fontWeight: 800 }}>
                         <td colSpan={2} style={{ padding: "8px 10px" }}>TOTAL</td>
-                        <td style={{ padding: "8px 10px", textAlign: "right" }}>{saleLineItems.reduce((s, l) => s + l.quantity, 0)}</td>
                         <td style={{ padding: "8px 10px", textAlign: "right" }}>{saleLineItems.reduce((s, l) => s + qqDeLinea(l), 0).toFixed(2)}</td>
+                        <td style={{ padding: "8px 10px", textAlign: "right", color: "#2563eb" }}>{saleLineItems.reduce((s, l) => s + bultosDeLinea(l), 0).toFixed(0)}</td>
                         <td />
                         <td style={{ padding: "8px 10px", textAlign: "right", color: "#15803d" }}>${calculateSaleTotal().toFixed(2)}</td>
                         <td />
@@ -12964,9 +13030,15 @@ export function App() {
                               🖨
                             </button>
                             {order && (
-                              <button type="button" title="Guía de Remisión" onClick={() => abrirGuia(order)}
+                              <button type="button" title="Guía de Remisión (imprimir)" onClick={() => abrirGuia(order)}
                                 style={{ padding: "3px 10px", fontSize: 12, cursor: "pointer", marginLeft: 6 }}>
                                 📄 Guía
+                              </button>
+                            )}
+                            {order && (
+                              <button type="button" title="Generar Guía en la pestaña (con conversión a bultos)" onClick={() => generarGuiaDesdePedido(order)}
+                                style={{ padding: "3px 10px", fontSize: 12, cursor: "pointer", marginLeft: 6, border: "1px solid #2563eb", color: "#2563eb", borderRadius: 4, background: "transparent" }}>
+                                📄→ Bultos
                               </button>
                             )}
                           </td>

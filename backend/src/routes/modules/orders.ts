@@ -312,10 +312,14 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
         payment_method: body.payment_method,
         sack_weight_lb: 100,
         created_by: body.created_by,
+        // La 'Cantidad' del pedido YA está en QUINTALES (estandarización). NO se
+        // pasa presentation_id para que crearVenta NO la reconvierta por peso de
+        // saco (eso descontaría mal el stock). La presentación es solo metadato de
+        // la Guía de Remisión. El descuento de inventario es exactamente en QQ.
         items: items.rows.map((item) => ({
           product_id: item.inventory_product_id,
           warehouse_id: body.warehouse_id,
-          presentation_id: item.presentation_id ?? undefined,
+          presentation_id: undefined,
           quantity: Number(item.quantity),
           unit_price: Number(item.unit_price)
         }))
