@@ -1911,8 +1911,8 @@ export function App() {
   // sigue siendo flete_monto (Total) — la tarifa es solo ayuda de captura.
   // price_manual / flete_manual: la fila ya se editó a mano → deja de heredar el
   // Precio/QQ y el Flete $/QQ de la primera fila (override individual).
-  type LiqLine = { lot_id: string; quintals: string; price: string; flete_tarifa: string; flete_monto: string; flete_tipo: "propia" | "tercero"; flete_activo_id: string; price_manual: boolean; flete_manual: boolean };
-  const nuevaLiqLine = (): LiqLine => ({ lot_id: "", quintals: "", price: "", flete_tarifa: "", flete_monto: "", flete_tipo: "tercero", flete_activo_id: "", price_manual: false, flete_manual: false });
+  type LiqLine = { lot_id: string; quintals: string; price: string; flete_tarifa: string; flete_monto: string; flete_tipo: "propia" | "tercero"; flete_activo_id: string; flete_prestador: string; price_manual: boolean; flete_manual: boolean };
+  const nuevaLiqLine = (): LiqLine => ({ lot_id: "", quintals: "", price: "", flete_tarifa: "", flete_monto: "", flete_tipo: "tercero", flete_activo_id: "", flete_prestador: "", price_manual: false, flete_manual: false });
   // Nueva fila que HEREDA el precio y la tarifa de flete de la primera fila.
   const liqLineHeredada = (base: LiqLine | undefined): LiqLine => ({ ...nuevaLiqLine(), price: base?.price ?? "", flete_tarifa: base?.flete_tarifa ?? "" });
   // QQ de una fila (los que se liquidan; por defecto los del ingreso de báscula). NUNCA se replican.
@@ -1936,6 +1936,10 @@ export function App() {
   // Flete se maneja por línea (arriba); el fomento en su propia lista (abajo);
   // aquí solo los descuentos manuales a nivel lote.
   const [liqDiscounts, setLiqDiscounts] = useState({ bascula: "", cosechadora: "" });
+  // Cosechadora: QQ auto-jalados del Parte Diario + precio tecleado en la liquidación
+  // (total = QQ×precio, alimenta liqDiscounts.cosechadora). tipo propia=cruce Campo,
+  // tercero=CxP al prestador. `qq_sugerido` guarda lo reportado por el operador.
+  const [liqCosechadora, setLiqCosechadora] = useState({ qq: "", precio: "", tipo: "propia" as "propia" | "tercero", prestador: "", qq_sugerido: 0 });
   // Fomentos ACTIVOS del agricultor, de CUALQUIER socio (visibilidad global para el
   // cruce inter-socios). Cada uno con su monto a descontar en esta liquidación.
   type FomentoAgricultor = { id: string; farmer_name: string; accionista_id: string | null; accionista_nombre: string | null; es_de_otro_socio: boolean; saldo: number };
@@ -1966,6 +1970,30 @@ export function App() {
       })
       .catch(() => { setLiqFomentosList([]); setLiqFomentoMontos({}); });
   }, [liqFarmerId, farmers]);
+  // Auto-jalado de COSECHADORA: al elegir agricultor, trae los QQ reportados en los
+  // Partes Diarios de cosecha (Campo) y prellena el QQ (el precio se teclea aquí).
+  useEffect(() => {
+    if (!liqFarmerId) { setLiqCosechadora({ qq: "", precio: "", tipo: "propia", prestador: "", qq_sugerido: 0 }); return; }
+    apiGet<{ partes: unknown[]; qq_total: number; operador: string | null }>(`/liquidations/parte-cosechadora?farmer_id=${liqFarmerId}`)
+      .then((r) => {
+        setLiqCosechadora((prev) => ({
+          ...prev,
+          qq_sugerido: r.qq_total,
+          // Solo prellena si el usuario aún no escribió un QQ manual.
+          qq: prev.qq ? prev.qq : (r.qq_total > 0 ? String(r.qq_total) : ""),
+          prestador: prev.prestador || (r.operador ?? "")
+        }));
+        if (r.qq_total > 0) setDiscountsOpen(true);
+      })
+      .catch(() => { /* Campo opcional: se ignora */ });
+  }, [liqFarmerId]);
+  // El total de cosechadora (QQ × precio) alimenta el descuento usado en todos los
+  // cálculos (neto, saldo en contra), sin tocar esa matemática.
+  useEffect(() => {
+    const monto = Math.round((Number(liqCosechadora.qq || 0) * Number(liqCosechadora.precio || 0)) * 100) / 100;
+    const str = monto > 0 ? String(monto) : "";
+    setLiqDiscounts((p) => (p.cosechadora === str ? p : { ...p, cosechadora: str }));
+  }, [liqCosechadora.qq, liqCosechadora.precio]);
   const [liqResult, setLiqResult] = useState<LiqResultItem[] | null>(null);
 
   // ── Caja ──────────────────────────────────────────────────────────────────
@@ -9536,7 +9564,12 @@ export function App() {
         qq_liquidados: i === 0 ? Math.round(liqQqTotal * 100) / 100 : undefined,
         saldo_en_contra: i === 0 && saldoEnContra > 0 ? saldoEnContra : undefined,
         flete_detalle: lineFlete > 0
-          ? { monto: lineFlete, tipo: line.flete_tipo, activo_id: line.flete_activo_id || null }
+          ? { monto: lineFlete, tipo: line.flete_tipo, activo_id: line.flete_activo_id || null,
+              prestador: line.flete_tipo === "tercero" ? (line.flete_prestador.trim() || undefined) : undefined }
+          : undefined,
+        // Cosechadora: prestador (propia=cruce Campo · tercero=CxP), solo en la 1ª línea.
+        cosechadora_detalle: i === 0 && Number(liqDiscounts.cosechadora || 0) > 0
+          ? { tipo: liqCosechadora.tipo, prestador: liqCosechadora.tipo === "tercero" ? (liqCosechadora.prestador.trim() || undefined) : undefined }
           : undefined,
         batch_id: batchId
       });
@@ -9561,6 +9594,7 @@ export function App() {
     setLiqResult(resultItems);
     setLiqLines([nuevaLiqLine()]);
     setLiqDiscounts({ bascula: "", cosechadora: "" });
+    setLiqCosechadora({ qq: "", precio: "", tipo: "propia", prestador: "", qq_sugerido: 0 });
     setLiqFomentoMontos({});
     setDiscountsOpen(false);
     // Reporte del cruce de flete interno (Flota Propia), si lo hubo.
@@ -15006,7 +15040,10 @@ export function App() {
                             {fletaActivos.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}
                           </select>
                         ) : (
-                          <span className="muted liqFleteHint">{selEntry?.placa ? `Placa ${selEntry.placa}` : "particular"}</span>
+                          <input type="text" placeholder={selEntry?.placa ? `Chofer (placa ${selEntry.placa})` : "Chofer / prestador"}
+                            title="Nombre del chofer particular (para la Cuenta por Pagar)"
+                            value={line.flete_prestador}
+                            onChange={(e) => { const u = [...liqLines]; u[i] = { ...u[i], flete_prestador: e.target.value }; setLiqLines(u); }} />
                         )}
                         {selEntry?.flota_activo_id && line.flete_tipo === "propia" && (
                           <span className="liqFleteAuto" title="Detectado automáticamente por la placa del ticket">auto ✓</span>
@@ -15041,17 +15078,48 @@ export function App() {
                       <div className="liqDiscNote">
                         <strong>Anticipo</strong> — se descuenta automáticamente del balance del agricultor
                       </div>
-                      {([
-                        { key: "bascula",     label: "Báscula" },
-                        { key: "cosechadora", label: "Cosechadora" },
-                      ] as const).map(({ key, label }) => (
-                        <label key={key} className="liqDiscRow">
-                          <span>{label}</span>
-                          <input type="number" step="0.01" min="0" placeholder="0.00"
-                            value={liqDiscounts[key]}
-                            onChange={(e) => setLiqDiscounts((p) => ({ ...p, [key]: e.target.value }))} />
-                        </label>
-                      ))}
+                      <label className="liqDiscRow">
+                        <span>Báscula</span>
+                        <input type="number" step="0.01" min="0" placeholder="0.00"
+                          value={liqDiscounts.bascula}
+                          onChange={(e) => setLiqDiscounts((p) => ({ ...p, bascula: e.target.value }))} />
+                      </label>
+                      {/* ─ Cosechadora: QQ del Parte Diario × precio (aquí) ─ */}
+                      <div className="liqFleteDesglose">
+                        <div className="liqFleteDesgloseHd">🚜 Cosechadora {liqCosechadora.qq_sugerido > 0 && <span className="muted" style={{ fontWeight: 400 }}>· parte diario: {liqCosechadora.qq_sugerido.toFixed(2)} QQ</span>}</div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                          <label className="liqDiscRow" style={{ margin: 0 }}>
+                            <span>QQ cosechados</span>
+                            <input type="number" step="0.01" min="0" placeholder="0.00" value={liqCosechadora.qq}
+                              onChange={(e) => setLiqCosechadora((p) => ({ ...p, qq: e.target.value }))} />
+                          </label>
+                          <label className="liqDiscRow" style={{ margin: 0 }}>
+                            <span>Precio $/QQ</span>
+                            <input type="number" step="0.0001" min="0" placeholder="0.00" value={liqCosechadora.precio}
+                              onChange={(e) => setLiqCosechadora((p) => ({ ...p, precio: e.target.value }))} />
+                          </label>
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: liqCosechadora.tipo === "tercero" ? "1fr 1.4fr" : "1fr", gap: 6, marginTop: 6 }}>
+                          <label className="liqDiscRow" style={{ margin: 0 }}>
+                            <span>Prestador</span>
+                            <select value={liqCosechadora.tipo} onChange={(e) => setLiqCosechadora((p) => ({ ...p, tipo: e.target.value as "propia" | "tercero" }))}>
+                              <option value="propia">🏭 Flota / Matriz</option>
+                              <option value="tercero">👤 Tercero (contratada)</option>
+                            </select>
+                          </label>
+                          {liqCosechadora.tipo === "tercero" && (
+                            <label className="liqDiscRow" style={{ margin: 0 }}>
+                              <span>Nombre</span>
+                              <input type="text" placeholder="Operador / dueño" value={liqCosechadora.prestador}
+                                onChange={(e) => setLiqCosechadora((p) => ({ ...p, prestador: e.target.value }))} />
+                            </label>
+                          )}
+                        </div>
+                        <div className="liqDiscRow" style={{ marginTop: 6, fontWeight: 700 }}>
+                          <span>Total cosechadora</span>
+                          <span>${(Number(liqCosechadora.qq || 0) * Number(liqCosechadora.precio || 0)).toFixed(2)}</span>
+                        </div>
+                      </div>
                       {/* ─ Fomentos del agricultor: amortización AUTOMÁTICA LIFO ─ */}
                       {liqFomentosList.length > 0 && (
                         <div className="liqFleteDesglose">

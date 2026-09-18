@@ -76,6 +76,28 @@ liquidationsRouter.get("/pending-entries", asyncRoute(async (req, res) => {
   res.json(result.rows);
 }));
 
+// Auto-jalado de COSECHADORA: partes diarios de cosecha (Campo) del agricultor,
+// para prellenar los QQ reportados por el operador. El precio se pone en la
+// liquidación (como el flete). Se cruza por NOMBRE (campo_partes.cliente).
+liquidationsRouter.get("/parte-cosechadora", asyncRoute(async (req, res) => {
+  const q = z.object({ farmer_id: z.string().uuid() }).parse(req.query);
+  const farmer = await pool.query("SELECT full_name FROM farmers WHERE id = $1", [q.farmer_id]);
+  const nombre = farmer.rows[0]?.full_name;
+  if (!nombre) { res.json({ partes: [], qq_total: 0, operador: null }); return; }
+  const partes = (await pool.query(
+    `SELECT p.id, p.fecha, p.qq::float AS qq, p.operador, a.nombre AS activo_nombre, a.tipo AS activo_tipo
+       FROM campo_partes p
+       JOIN campo_activos a ON a.id = p.activo_id
+      WHERE a.tipo = 'cosechadora'
+        AND lower(trim(p.cliente)) = lower(trim($1))
+      ORDER BY p.fecha DESC
+      LIMIT 50`,
+    [nombre]
+  )).rows;
+  const qq_total = Math.round(partes.reduce((s: number, r: { qq: number }) => s + Number(r.qq || 0), 0) * 100) / 100;
+  res.json({ partes, qq_total, operador: partes[0]?.operador ?? null });
+}));
+
 const liquidationInput = z.object({
   farmer_id: z.string().uuid(),
   // Se liquida un ingreso de materia prima. lot_id queda como referencia
@@ -92,7 +114,15 @@ const liquidationInput = z.object({
   flete_detalle: z.object({
     monto: z.number().nonnegative(),
     tipo: z.enum(["propia", "tercero"]),
-    activo_id: z.string().uuid().nullable().optional()
+    activo_id: z.string().uuid().nullable().optional(),
+    // Nombre del chofer/prestador cuando el flete es de TERCERO (para la CxP).
+    prestador: z.string().max(200).optional()
+  }).optional(),
+  // Prestador de la cosechadora: 'propia' = Flota/Matriz (cruce interno, como hoy);
+  // 'tercero' = cosechadora contratada → genera CxP a su favor.
+  cosechadora_detalle: z.object({
+    tipo: z.enum(["propia", "tercero"]).default("propia"),
+    prestador: z.string().max(200).optional()
   }).optional(),
   // Abonos de fomento explícitos (fomento_id + monto). Si no vienen, el backend
   // reparte el descuento de fomento entre los fomentos del socio que liquida.
@@ -243,7 +273,7 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
 
     // Cruce de flete interno: si el transporte fue de la Flota Propia, el flete
     // descontado salda la deuda interna con Campo (mismo tx: revierte junto si algo
-    // falla). Tercero/particular = informativo, no genera asiento.
+    // falla). Tercero/particular = CxP a favor del chofer (ver abajo).
     let cruce: CruceFleteResultado | null = null;
     if (data.flete_detalle?.tipo === "propia" && data.flete_detalle.monto > 0) {
       cruce = await cruzarFleteInterno(client, {
@@ -253,6 +283,16 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
         referencia: liquidation.rows[0].liquidation_number,
         createdBy: data.created_by ?? null
       });
+    }
+    // Flete de TERCERO (chofer particular): CxP a su favor por el valor del servicio.
+    if (data.flete_detalle?.tipo === "tercero" && data.flete_detalle.monto > 0) {
+      const prestador = (data.flete_detalle.prestador ?? "").trim() || "chofer particular";
+      await client.query(
+        `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
+         VALUES (NULL, $1, $2, $2, 'CONFIRMED', $3, 'flete_tercero', $1, $4)`,
+        [liquidation.rows[0].id, data.flete_detalle.monto, accionistaId,
+         `Flete (tercero) - ${prestador} - ${liquidation.rows[0].liquidation_number}`]
+      );
     }
 
     // AMORTIZACIÓN LIFO CON RENOVACIÓN: el descuento de fomento (monto disponible)
@@ -303,8 +343,23 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
     let retenciones: { bascula_matriz: number; cosechadora_campo: number } | null = null;
     const bascula = data.discount_breakdown?.bascula ?? 0;
     const cosechadora = data.discount_breakdown?.cosechadora ?? 0;
+    const cosechadoraTercero = data.cosechadora_detalle?.tipo === "tercero";
     const matrizId = await getMatrizId(client);
-    if ((bascula > 0 || cosechadora > 0) && accionistaId && accionistaId !== matrizId) {
+
+    // Cosechadora de TERCERO (contratada): CxP a su favor, sea quien liquide.
+    if (cosechadora > 0 && cosechadoraTercero) {
+      const prestador = (data.cosechadora_detalle?.prestador ?? "").trim() || "cosechadora contratada";
+      await client.query(
+        `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
+         VALUES (NULL, $1, $2, $2, 'CONFIRMED', $3, 'cosechadora_tercero', $1, $4)`,
+        [liquidation.rows[0].id, cosechadora, accionistaId,
+         `Cosechadora (tercero) - ${prestador} - ${liquidation.rows[0].liquidation_number}`]
+      );
+    }
+
+    // Retenciones inter-compañías: báscula → Matriz; cosechadora PROPIA (flota) → Campo.
+    // La cosechadora de tercero NO cruza (ya generó su CxP arriba).
+    if ((bascula > 0 || (cosechadora > 0 && !cosechadoraTercero)) && accionistaId && accionistaId !== matrizId) {
       // (1) BÁSCULA → Matriz: el socio asume CxP a favor de la Matriz.
       if (bascula > 0) {
         // Detalle HUMANIZADO: sin el #LIQ crudo. Especifica el peso/ticket de
@@ -336,13 +391,13 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
       }
       // (2) COSECHADORA → Transporte y Cosechadora (Campo): mismo cruce que los
       //     fletes (abona un campo_servicio o queda como crédito a favor).
-      if (cosechadora > 0) {
+      if (cosechadora > 0 && !cosechadoraTercero) {
         await cruzarFleteInterno(client, {
           accionistaId, monto: cosechadora, activoId: null, referencia: liquidation.rows[0].liquidation_number,
           conceptoPrefijo: "Cruce cosechadora", createdBy: data.created_by ?? null
         });
       }
-      retenciones = { bascula_matriz: bascula, cosechadora_campo: cosechadora };
+      retenciones = { bascula_matriz: bascula, cosechadora_campo: cosechadoraTercero ? 0 : cosechadora };
     }
 
     return { ...liquidation.rows[0], cruce_flete: cruce, fomento_pagos: fomentoPagos, saldo_en_contra: saldoContra, retenciones };
@@ -697,6 +752,15 @@ liquidationsRouter.post("/:id/anular", requireAdmin, asyncRoute(async (req, res)
     // 4b) Revertir la retención de Báscula → Matriz (CxP del socio + CxC de CEYRO).
     await client.query("DELETE FROM accounts_payable    WHERE reference_type = 'retencion_matriz' AND liquidation_id = $1", [liqId]);
     await client.query("DELETE FROM accounts_receivable WHERE reference_type = 'retencion_matriz' AND reference_id = $1", [liqId]);
+
+    // 4c) Revertir las CxP de servicios de TERCERO (flete/cosechadora), solo si NO
+    //     se pagaron (si ya hubo un pago real al chofer, se conserva la traza).
+    await client.query(
+      `DELETE FROM accounts_payable
+        WHERE reference_type IN ('flete_tercero','cosechadora_tercero') AND liquidation_id = $1
+          AND round(balance::numeric, 2) >= round(amount::numeric, 2) - 0.005`,
+      [liqId]
+    );
 
     // 5) Revertir el estado del lote si esta liquidación lo había marcado liquidado.
     if (liq.lot_id) {
