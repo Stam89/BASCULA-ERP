@@ -48,10 +48,15 @@ const fomentoSchema = z.object({
 });
 
 const entregaSchema = z.object({
-  fecha:            z.string().regex(/^\d{4}-\d{2}-\d{2}/),
+  // Para el saldo arrastrado la fecha es irrelevante (no corre por días): se hace
+  // opcional y la BD la deja en CURRENT_DATE por defecto.
+  fecha:            z.string().regex(/^\d{4}-\d{2}-\d{2}/).optional(),
   valor:            z.number().positive(),
   concepto:         z.string().optional(),
-  cash_register_id: z.string().uuid().optional()
+  cash_register_id: z.string().uuid().optional(),
+  // "Saldos en contra": fila de saldo de cosecha pasada con interés fijo por meses.
+  es_saldo_anterior: z.boolean().optional().default(false),
+  meses_interes_fijo: z.number().int().min(1).max(60).optional()
 });
 
 const pagoSchema = z.object({
@@ -68,16 +73,11 @@ const SELECT_FOMENTO = `
     ROUND(f.cuadras * 800, 2) AS monto_limite,
     COALESCE(e.total_pedido, 0) AS total_pedido,
     COALESCE(p.total_pagado, 0) AS total_pagado,
-    -- Interés efectivo: dinámico (por días) o congelado (FIJO_1_MES / MANUAL).
-    CASE WHEN f.modo_interes = 'DINAMICO'
-         THEN COALESCE(e.gasto_adm, 0)
-         ELSE COALESCE(f.interes_fijo_monto, 0) END AS gasto_adm,
+    -- Interés HÍBRIDO: suma por fila (ver subconsulta e.gasto_adm) — filas normales
+    -- por días + filas de saldo arrastrado con N meses fijos.
+    COALESCE(e.gasto_adm, 0) AS gasto_adm,
     ROUND(f.cuadras * 800 - COALESCE(e.total_pedido, 0), 2) AS falta_por_pedir,
-    ROUND(COALESCE(e.total_pedido, 0)
-          + CASE WHEN f.modo_interes = 'DINAMICO'
-                 THEN COALESCE(e.gasto_adm, 0)
-                 ELSE COALESCE(f.interes_fijo_monto, 0) END
-          - COALESCE(p.total_pagado, 0), 2) AS deuda_total,
+    ROUND(COALESCE(e.total_pedido, 0) + COALESCE(e.gasto_adm, 0) - COALESCE(p.total_pagado, 0), 2) AS deuda_total,
     CASE WHEN f.cuadras * 800 - COALESCE(e.total_pedido, 0) > 0
          THEN 'HABILITADO' ELSE 'DESABILITADO' END AS estado_credito
   FROM fomentos f
@@ -85,7 +85,9 @@ const SELECT_FOMENTO = `
     SELECT
       fomento_id,
       SUM(valor) AS total_pedido,
-      SUM(valor * f2.renta / 30.0 * GREATEST(CURRENT_DATE - fecha, 0)) AS gasto_adm
+      SUM(CASE WHEN fe.es_saldo_anterior
+               THEN fe.valor * f2.renta * COALESCE(fe.meses_interes_fijo, 0)
+               ELSE fe.valor * f2.renta / 30.0 * GREATEST(CURRENT_DATE - fe.fecha, 0) END) AS gasto_adm
     FROM fomento_entregas fe
     JOIN fomentos f2 ON f2.id = fe.fomento_id
     GROUP BY fomento_id
@@ -400,8 +402,12 @@ fomentosRouter.get("/:id", asyncRoute(async (req, res) => {
   const [entregas, pagos] = await Promise.all([
     pool.query(
       `SELECT e.*,
-        ROUND(e.valor * f.renta / 30.0 * GREATEST(CURRENT_DATE - e.fecha, 0), 2) AS interes,
-        ROUND(e.valor + e.valor * f.renta / 30.0 * GREATEST(CURRENT_DATE - e.fecha, 0), 2) AS suman
+        ROUND(CASE WHEN e.es_saldo_anterior
+                   THEN e.valor * f.renta * COALESCE(e.meses_interes_fijo, 0)
+                   ELSE e.valor * f.renta / 30.0 * GREATEST(CURRENT_DATE - e.fecha, 0) END, 2) AS interes,
+        ROUND(e.valor + CASE WHEN e.es_saldo_anterior
+                   THEN e.valor * f.renta * COALESCE(e.meses_interes_fijo, 0)
+                   ELSE e.valor * f.renta / 30.0 * GREATEST(CURRENT_DATE - e.fecha, 0) END, 2) AS suman
        FROM fomento_entregas e
        JOIN fomentos f ON f.id = e.fomento_id
        WHERE e.fomento_id = $1
@@ -455,55 +461,9 @@ fomentosRouter.patch("/:id", asyncRoute(async (req, res) => {
   res.json(result.rows[0]);
 }));
 
-// ── Ajuste / congelamiento del interés ("Saldos en contra") ─────────────────
-// DINAMICO: interés por días (comportamiento normal).
-// FIJO_1_MES: congela 1 mes de interés sobre el saldo deudor actual
-//   (capital = total entregado − total pagado) × renta mensual.
-// MANUAL: guarda el monto exacto que escribe el administrador.
-const ajusteInteresSchema = z.object({
-  modo: z.enum(["DINAMICO", "FIJO_1_MES", "MANUAL"]),
-  interes_fijo_monto: z.number().min(0).optional()
-});
-
-fomentosRouter.patch("/:id/interes", asyncRoute(async (req, res) => {
-  const accionistaId = getAccionistaId(req);
-  const fomentoId = String(req.params.id);
-  const body = ajusteInteresSchema.parse(req.body);
-
-  await inTransaction(async (client) => {
-    const fom = await client.query<{ renta: string }>(
-      "SELECT renta FROM fomentos WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
-      [fomentoId, accionistaId]
-    );
-    if (!fom.rowCount) throw new ApiError(404, "Fomento no encontrado o no pertenece al accionista activo");
-
-    let monto: number | null = null;
-    if (body.modo === "MANUAL") {
-      if (body.interes_fijo_monto === undefined) throw new ApiError(400, "Ingresa el monto manual de interés a cobrar.");
-      monto = round2Fom(body.interes_fijo_monto);
-    } else if (body.modo === "FIJO_1_MES") {
-      // Capital pendiente = total entregado − total pagado.
-      const tot = await client.query<{ principal: string }>(
-        `SELECT COALESCE((SELECT SUM(valor) FROM fomento_entregas WHERE fomento_id = $1), 0)
-              - COALESCE((SELECT SUM(valor) FROM fomento_pagos   WHERE fomento_id = $1), 0) AS principal`,
-        [fomentoId]
-      );
-      const principal = Math.max(0, Number(tot.rows[0].principal));
-      // La renta del sistema es MENSUAL (la fórmula diaria usa renta/30·días),
-      // así que 1 mes de interés = capital × renta.
-      monto = round2Fom(principal * Number(fom.rows[0].renta));
-    }
-
-    await client.query(
-      "UPDATE fomentos SET modo_interes = $2, interes_fijo_monto = $3 WHERE id = $1",
-      [fomentoId, body.modo, monto]
-    );
-  });
-
-  // Devuelve el fomento con los derivados recalculados (gasto_adm/deuda_total).
-  const full = await pool.query(`${SELECT_FOMENTO} WHERE f.id = $1 AND f.accionista_id = $2`, [fomentoId, accionistaId]);
-  res.json(full.rows[0]);
-}));
+// Nota: el interés FIJO ahora se gestiona POR FILA (entregas de saldo arrastrado),
+// no globalmente. El antiguo PATCH /:id/interes fue retirado; las columnas
+// fomentos.modo_interes/interes_fijo_monto quedan sin uso (se dejan en BD).
 
 fomentosRouter.delete("/:id", asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
@@ -518,16 +478,25 @@ fomentosRouter.post("/:id/entregas", asyncRoute(async (req, res) => {
   const fomentoId = String(req.params.id);
   const data = entregaSchema.parse(req.body);
 
+  // Validación de la fila de saldo arrastrado: requiere N meses de interés fijo.
+  if (data.es_saldo_anterior && !(data.meses_interes_fijo && data.meses_interes_fijo >= 1)) {
+    throw new ApiError(400, "Indica cuántos meses de interés fijo cobrar al saldo de cosecha pasada.");
+  }
+
   const result = await inTransaction(async (client) => {
     await assertFomentoAccionista(client, fomentoId, accionistaId);
+    // El saldo arrastrado no depende de la fecha; se deja en CURRENT_DATE (default).
     const entrega = await client.query(
-      `INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto)
-       VALUES ($1,$2,$3,$4) RETURNING *`,
-      [fomentoId, data.fecha, data.valor, data.concepto ?? null]
+      `INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto, es_saldo_anterior, meses_interes_fijo)
+       VALUES ($1, COALESCE($2, CURRENT_DATE), $3, $4, $5, $6) RETURNING *`,
+      [fomentoId, data.fecha ?? null, data.valor,
+       data.concepto ?? (data.es_saldo_anterior ? "Saldo en contra cosecha pasada" : null),
+       data.es_saldo_anterior ?? false,
+       data.es_saldo_anterior ? (data.meses_interes_fijo ?? null) : null]
     );
 
-    // Si hay caja abierta, registrar el egreso
-    if (data.cash_register_id) {
+    // Un saldo ARRASTRADO no es un desembolso nuevo de caja: no genera egreso.
+    if (data.cash_register_id && !data.es_saldo_anterior) {
       const fomento = await client.query(
         "SELECT farmer_name FROM fomentos WHERE id = $1",
         [fomentoId]

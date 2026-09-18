@@ -1288,6 +1288,8 @@ type FomentoEntrega = {
   interes: number;
   suman: number;
   created_at: string;
+  es_saldo_anterior?: boolean;
+  meses_interes_fijo?: number | null;
 };
 
 type FomentoPago = {
@@ -2549,18 +2551,13 @@ export function App() {
   // Confirmación de borrado de un fomento completo (con su historial).
   const [confirmarEliminarFomento, setConfirmarEliminarFomento] = useState<{ id: string; nombre: string } | null>(null);
   const [borrandoFomento, setBorrandoFomento] = useState(false);
-  const [fomentoEntregaForm, setFomentoEntregaForm] = useState({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
+  const [fomentoEntregaForm, setFomentoEntregaForm] = useState({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "", es_saldo_anterior: false, meses_interes_fijo: "1" });
   // Confirmación de eliminación de una entrega (con su valor/fecha para el mensaje).
   const [confirmarEntrega, setConfirmarEntrega] = useState<{ fomentoId: string; entregaId: string; valor: number; fecha: string } | null>(null);
   const [borrandoEntrega, setBorrandoEntrega] = useState(false);
   const [fomentoFilter, setFomentoFilter] = useState<"TODOS"|"ACTIVOS"|"NO ACTIVOS"|"APROBADOS"|"ARCHIVADOS">("TODOS");
   const [fomentoEditingRenta, setFomentoEditingRenta] = useState<string | null>(null);
   const [fomentoRentaInput, setFomentoRentaInput] = useState("");
-  // Ajuste / congelamiento de interés ("Saldos en contra").
-  const [ajusteInteresOpen, setAjusteInteresOpen] = useState(false);
-  const [ajusteInteresModo, setAjusteInteresModo] = useState<"DINAMICO" | "FIJO_1_MES" | "MANUAL">("DINAMICO");
-  const [ajusteInteresManual, setAjusteInteresManual] = useState("");
-  const [ajusteInteresBusy, setAjusteInteresBusy] = useState(false);
   const [fomentoPagoForm, setFomentoPagoForm] = useState({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
   const [fomentoImporting, setFomentoImporting] = useState(false);
   const [fomentoImportModal, setFomentoImportModal] = useState<{ open: boolean; title: string; message: string; isError: boolean } | null>(null);
@@ -6526,14 +6523,21 @@ export function App() {
   async function submitFomentoEntrega(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!fomentoDetalle) return;
+    const esSaldo = fomentoEntregaForm.es_saldo_anterior;
+    const meses = Number(fomentoEntregaForm.meses_interes_fijo);
+    if (esSaldo && !(meses >= 1)) { addToast("Indica cuántos meses de interés fijo cobrar (ej. 1, 2, 3)", "error"); return; }
     await apiPost(`/fomentos/${fomentoDetalle.id}/entregas`, {
-      fecha: fomentoEntregaForm.fecha,
+      // El saldo arrastrado no depende de fecha; se omite (la BD usa CURRENT_DATE).
+      fecha: esSaldo ? undefined : fomentoEntregaForm.fecha,
       valor: Number(fomentoEntregaForm.valor),
-      concepto: fomentoEntregaForm.concepto || undefined,
-      cash_register_id: dashboard.current_cash_register?.id
+      concepto: fomentoEntregaForm.concepto || (esSaldo ? "Saldo en contra cosecha pasada" : undefined),
+      // Un saldo arrastrado NO es un desembolso: no toca caja.
+      cash_register_id: esSaldo ? undefined : dashboard.current_cash_register?.id,
+      es_saldo_anterior: esSaldo,
+      meses_interes_fijo: esSaldo ? meses : undefined
     });
-    setFomentoEntregaForm({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
-    addToast("Entrega registrada" + (dashboard.current_cash_register ? " y descontada de caja" : ""), "success");
+    setFomentoEntregaForm({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "", es_saldo_anterior: false, meses_interes_fijo: "1" });
+    addToast(esSaldo ? "Saldo en contra registrado 🔒" : ("Entrega registrada" + (dashboard.current_cash_register ? " y descontada de caja" : "")), "success");
     await loadFomentoDetalle(fomentoDetalle.id);
     await refreshFomentos();
     if (dashboard.current_cash_register?.id) await refreshCaja(dashboard.current_cash_register.id);
@@ -6581,47 +6585,6 @@ export function App() {
     addToast("Tasa actualizada", "success");
     await refreshFomentos();
     if (fomentoDetalle?.id === fomentoId) await loadFomentoDetalle(fomentoId);
-  }
-
-  // Abre el modal de ajuste de inter\u00e9s precargado con el modo actual del fomento.
-  function openAjusteInteres() {
-    if (!fomentoDetalle) return;
-    const modo = fomentoDetalle.modo_interes ?? "DINAMICO";
-    setAjusteInteresModo(modo);
-    setAjusteInteresManual(
-      modo === "MANUAL" && fomentoDetalle.interes_fijo_monto != null
-        ? String(fomentoDetalle.interes_fijo_monto)
-        : ""
-    );
-    setAjusteInteresOpen(true);
-  }
-
-  // Guarda el modo de inter\u00e9s (congelar / din\u00e1mico / manual) y recarga el detalle.
-  async function guardarAjusteInteres() {
-    if (!fomentoDetalle) return;
-    const payload: { modo: string; interes_fijo_monto?: number } = { modo: ajusteInteresModo };
-    if (ajusteInteresModo === "MANUAL") {
-      const monto = Number(ajusteInteresManual);
-      if (!(monto >= 0) || ajusteInteresManual.trim() === "") { addToast("Ingresa un monto de inter\u00e9s v\u00e1lido", "error"); return; }
-      payload.interes_fijo_monto = monto;
-    }
-    setAjusteInteresBusy(true);
-    try {
-      await apiPatch(`/fomentos/${fomentoDetalle.id}/interes`, payload);
-      setAjusteInteresOpen(false);
-      addToast(
-        ajusteInteresModo === "DINAMICO" ? "Inter\u00e9s din\u00e1mico (por d\u00edas) reactivado"
-        : ajusteInteresModo === "FIJO_1_MES" ? "\ud83d\udd12 Inter\u00e9s congelado a 1 mes"
-        : "\ud83d\udd12 Inter\u00e9s fijado manualmente",
-        "success"
-      );
-      await loadFomentoDetalle(fomentoDetalle.id);
-      await refreshFomentos();
-    } catch (e) {
-      addToast(e instanceof Error ? e.message : "No se pudo ajustar el inter\u00e9s", "error");
-    } finally {
-      setAjusteInteresBusy(false);
-    }
   }
 
   // Agrega el \u00edtem del formulario al carrito (a\u00fan no va al backend).
@@ -15666,95 +15629,17 @@ export function App() {
                         ["Total Pagado", `$${Number(fomentoDetalle.total_pagado ?? 0).toFixed(2)}`],
                         ["Deuda Total", `$${Number(fomentoDetalle.deuda_total ?? 0).toFixed(2)}`],
                         ["Estado", fomentoDetalle.estado_credito],
-                      ] as [string, string|number][]).map(([k, v]) => {
-                        const esInteres = k === "Interés Acum.";
-                        const modoInt = fomentoDetalle.modo_interes ?? "DINAMICO";
-                        const congelado = modoInt !== "DINAMICO";
-                        return (
+                      ] as [string, string|number][]).map(([k, v]) => (
                         <div key={k} style={{ background: "#f9fafb", borderRadius: 6, padding: "6px 10px" }}>
-                          <div style={{ fontSize: 10, color: "var(--c-muted)", fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
-                            <span>{k}</span>
-                            {esInteres && (
-                              <button type="button" onClick={openAjusteInteres} title="Ajustar o congelar el interés"
-                                style={{ background: "none", border: "1px solid #fcd34d", borderRadius: 5, padding: "1px 6px", cursor: "pointer", fontSize: 10, color: "#92400e", whiteSpace: "nowrap" }}>
-                                ⚙️ Ajustar / Congelar
-                              </button>
-                            )}
-                          </div>
+                          <div style={{ fontSize: 10, color: "var(--c-muted)", fontWeight: 600 }}>{k}</div>
                           <div style={{ fontSize: 14, fontWeight: 700,
                             color: k === "Estado" ? (v === "HABILITADO" ? "#16a34a" : "#dc2626")
                                  : k === "Deuda Total" ? (Number(v.toString().replace("$","")) > 0 ? "#dc2626" : "#16a34a")
                                  : k === "Total Pagado" ? "#16a34a"
-                                 : "inherit" }}>
-                            {v}
-                            {esInteres && congelado && (
-                              <span title={modoInt === "FIJO_1_MES" ? "Interés congelado a 1 mes" : "Interés fijado manualmente"}
-                                style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: "#92400e", background: "#fef3c7", borderRadius: 6, padding: "1px 6px", whiteSpace: "nowrap" }}>
-                                🔒 {modoInt === "FIJO_1_MES" ? "Fijo 1 mes" : "Manual"}
-                              </span>
-                            )}
-                          </div>
+                                 : "inherit" }}>{v}</div>
                         </div>
-                        );
-                      })}
+                      ))}
                     </div>
-
-                    {/* Modal: Ajuste / congelamiento de interés ("Saldos en contra") */}
-                    {ajusteInteresOpen && (() => {
-                      const principal = Math.max(0, Number(fomentoDetalle.total_pedido) - Number(fomentoDetalle.total_pagado ?? 0));
-                      const interes1Mes = Math.round(principal * Number(fomentoDetalle.renta) * 100) / 100;
-                      const opt = (modo: "DINAMICO" | "FIJO_1_MES" | "MANUAL", emoji: string, titulo: string, desc: string) => (
-                        <label style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 12px", borderRadius: 8, cursor: "pointer",
-                          border: ajusteInteresModo === modo ? "2px solid var(--c-brand)" : "1px solid #e5e7eb", background: ajusteInteresModo === modo ? "#f0fdf4" : "#fff" }}>
-                          <input type="radio" name="ajusteInteres" checked={ajusteInteresModo === modo} onChange={() => setAjusteInteresModo(modo)} style={{ marginTop: 3 }} />
-                          <div style={{ flex: 1 }}>
-                            <div style={{ fontWeight: 700, fontSize: 13 }}>{emoji} {titulo}</div>
-                            <div style={{ fontSize: 12, color: "var(--c-muted)" }}>{desc}</div>
-                            {modo === "FIJO_1_MES" && ajusteInteresModo === "FIJO_1_MES" && (
-                              <div style={{ marginTop: 6, fontSize: 13, fontWeight: 700, color: "#b45309" }}>
-                                Se congelará en: ${interes1Mes.toFixed(2)} <span style={{ fontWeight: 400, color: "var(--c-muted)" }}>(saldo ${principal.toFixed(2)} × {(Number(fomentoDetalle.renta)*100).toFixed(2)}%)</span>
-                              </div>
-                            )}
-                            {modo === "MANUAL" && ajusteInteresModo === "MANUAL" && (
-                              <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
-                                <span style={{ fontWeight: 700 }}>$</span>
-                                <input type="number" step="0.01" min="0" value={ajusteInteresManual} autoFocus
-                                  onChange={(e) => setAjusteInteresManual(e.target.value)}
-                                  placeholder="0.00"
-                                  style={{ width: 140, padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} />
-                              </div>
-                            )}
-                          </div>
-                        </label>
-                      );
-                      return (
-                        <div onClick={() => !ajusteInteresBusy && setAjusteInteresOpen(false)}
-                          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100, padding: 16 }}>
-                          <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--c-surface, #fff)", borderRadius: 12, width: "min(460px, 100%)", boxShadow: "0 20px 60px rgba(0,0,0,.3)", overflow: "hidden" }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 18px", background: "#111827", color: "#fff" }}>
-                              <strong style={{ fontSize: 15 }}>⚙️ Ajuste de Interés</strong>
-                              <button type="button" onClick={() => setAjusteInteresOpen(false)} style={{ background: "transparent", border: "none", color: "#fff", fontSize: 20, cursor: "pointer" }}>✕</button>
-                            </div>
-                            <div style={{ padding: 18, display: "grid", gap: 10 }}>
-                              <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-                                Interés actual: <strong>${Number(fomentoDetalle.gasto_adm).toFixed(2)}</strong>. Elige cómo debe cobrarse el interés de este saldo en contra.
-                              </p>
-                              {opt("DINAMICO", "🟢", "Dinámico (por días)", "El sistema calcula el interés diariamente según fechas de inicio/entregas. (Comportamiento actual.)")}
-                              {opt("FIJO_1_MES", "🟡", "Fijo (cobrar solo 1 mes)", "Detiene el reloj: congela exactamente 1 mes de interés sobre el saldo deudor actual.")}
-                              {opt("MANUAL", "🔴", "Monto manual", "Escribe un valor exacto de interés a cobrar.")}
-                              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
-                                <button type="button" onClick={() => setAjusteInteresOpen(false)} disabled={ajusteInteresBusy}
-                                  style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", fontWeight: 600 }}>Cancelar</button>
-                                <button type="button" onClick={guardarAjusteInteres} disabled={ajusteInteresBusy}
-                                  style={{ padding: "8px 14px", borderRadius: 8, border: "none", background: "var(--c-brand)", color: "#fff", cursor: "pointer", fontWeight: 700 }}>
-                                  {ajusteInteresBusy ? "Guardando…" : "Guardar"}
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })()}
 
                     {/* Tabla de entregas */}
                     <h4 style={{ marginBottom: 6 }}>Entregas / Créditos</h4>
@@ -15774,10 +15659,14 @@ export function App() {
                           {fomentoDetalle.entregas.map((e, i) => {
                             const dias = Math.max(0, Math.floor((Date.now() - new Date(e.fecha).getTime()) / 86400000));
                             return (
-                              <tr key={e.id} style={{ background: i % 2 === 0 ? "#fff" : "#f9fafb" }}>
-                                <td style={{ padding: "4px 8px" }}>{e.fecha?.slice(0,10)}</td>
+                              <tr key={e.id} style={{ background: e.es_saldo_anterior ? "#fffbeb" : (i % 2 === 0 ? "#fff" : "#f9fafb") }}>
+                                <td style={{ padding: "4px 8px" }}>{e.es_saldo_anterior ? "—" : e.fecha?.slice(0,10)}</td>
                                 <td style={{ padding: "4px 8px", textAlign: "right" }}>${Number(e.valor).toFixed(2)}</td>
-                                <td style={{ padding: "4px 8px", textAlign: "right" }}>{dias}</td>
+                                <td style={{ padding: "4px 8px", textAlign: e.es_saldo_anterior ? "center" : "right" }}>
+                                  {e.es_saldo_anterior
+                                    ? <span style={{ fontSize: 11, fontWeight: 800, color: "#92400e", background: "#fef3c7", borderRadius: 6, padding: "1px 6px", whiteSpace: "nowrap" }}>🔒 Fijo: {e.meses_interes_fijo ?? 0} {Number(e.meses_interes_fijo) === 1 ? "mes" : "meses"}</span>
+                                    : dias}
+                                </td>
                                 <td style={{ padding: "4px 8px", textAlign: "right", color: "#b45309" }}>${Number(e.interes).toFixed(2)}</td>
                                 <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700 }}>${Number(e.suman).toFixed(2)}</td>
                                 <td style={{ padding: "4px 8px" }}>
@@ -15844,23 +15733,47 @@ export function App() {
                     <details open style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 14px" }}>
                       <summary style={{ cursor: "pointer", fontWeight: 600, color: "var(--c-brand)" }}>+ Registrar Entrega</summary>
                       <form onSubmit={submitFomentoEntrega} style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
-                        <label style={{ fontSize: 12, fontWeight: 600 }}>Fecha
-                          <input required type="date" value={fomentoEntregaForm.fecha}
-                            onChange={e => setFomentoEntregaForm(p => ({...p, fecha: e.target.value}))}
-                            style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} />
+                        {/* Toggle: saldo arrastrado de cosecha pasada (interés fijo por meses) */}
+                        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, fontWeight: 600, background: fomentoEntregaForm.es_saldo_anterior ? "#fef3c7" : "#f9fafb", border: "1px solid #fcd34d", borderRadius: 6, padding: "8px 10px", cursor: "pointer" }}>
+                          <input type="checkbox" checked={fomentoEntregaForm.es_saldo_anterior}
+                            onChange={e => setFomentoEntregaForm(p => ({ ...p, es_saldo_anterior: e.target.checked, concepto: e.target.checked && !p.concepto ? "Saldo en contra cosecha pasada" : p.concepto }))}
+                            style={{ marginTop: 2 }} />
+                          <span>🔒 Es saldo de cosecha pasada (Interés Fijo)
+                            <br /><span style={{ fontWeight: 400, color: "var(--c-muted)" }}>No corre por días: se cobran N meses de interés fijos.</span>
+                          </span>
                         </label>
+                        {!fomentoEntregaForm.es_saldo_anterior && (
+                          <label style={{ fontSize: 12, fontWeight: 600 }}>Fecha
+                            <input required type="date" value={fomentoEntregaForm.fecha}
+                              onChange={e => setFomentoEntregaForm(p => ({...p, fecha: e.target.value}))}
+                              style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} />
+                          </label>
+                        )}
+                        {fomentoEntregaForm.es_saldo_anterior && (
+                          <label style={{ fontSize: 12, fontWeight: 600 }}>Meses a cobrar (ej. 1, 2, 3)
+                            <input required type="number" step="1" min="1" max="60" value={fomentoEntregaForm.meses_interes_fijo}
+                              onChange={e => setFomentoEntregaForm(p => ({...p, meses_interes_fijo: e.target.value}))}
+                              style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="1" />
+                          </label>
+                        )}
                         <label style={{ fontSize: 12, fontWeight: 600 }}>Valor ($)
                           <input required type="number" step="0.01" min="0.01" value={fomentoEntregaForm.valor}
                             onChange={e => setFomentoEntregaForm(p => ({...p, valor: e.target.value}))}
                             style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="0.00" />
                         </label>
-                        {fomentoEntregaForm.valor && fomentoEntregaForm.fecha && (
+                        {fomentoEntregaForm.valor && (
                           <div style={{ fontSize: 12, color: "var(--c-muted)", background: "#fffbeb", borderRadius: 6, padding: "4px 8px" }}>
                             {(() => {
-                              const dias = Math.max(0, Math.floor((Date.now() - new Date(fomentoEntregaForm.fecha).getTime()) / 86400000));
                               const renta = Number(fomentoDetalle.renta ?? 0.07);
-                              const interes = Number(fomentoEntregaForm.valor) * renta / 30 * dias;
-                              return `Días: ${dias} | Tasa: ${(renta*100).toFixed(2)}% | Interés: $${interes.toFixed(2)} | Total: $${(Number(fomentoEntregaForm.valor) + interes).toFixed(2)}`;
+                              const valor = Number(fomentoEntregaForm.valor);
+                              if (fomentoEntregaForm.es_saldo_anterior) {
+                                const meses = Number(fomentoEntregaForm.meses_interes_fijo) || 0;
+                                const interes = valor * renta * meses;
+                                return `🔒 Fijo: ${meses} mes(es) | Tasa: ${(renta*100).toFixed(2)}%/mes | Interés: $${interes.toFixed(2)} | Total: $${(valor + interes).toFixed(2)}`;
+                              }
+                              const dias = Math.max(0, Math.floor((Date.now() - new Date(fomentoEntregaForm.fecha).getTime()) / 86400000));
+                              const interes = valor * renta / 30 * dias;
+                              return `Días: ${dias} | Tasa: ${(renta*100).toFixed(2)}% | Interés: $${interes.toFixed(2)} | Total: $${(valor + interes).toFixed(2)}`;
                             })()}
                           </div>
                         )}
