@@ -1945,6 +1945,9 @@ export function App() {
   type FomentoAgricultor = { id: string; farmer_name: string; accionista_id: string | null; accionista_nombre: string | null; es_de_otro_socio: boolean; saldo: number };
   const [liqFomentosList, setLiqFomentosList] = useState<FomentoAgricultor[]>([]);
   const [liqFomentoMontos, setLiqFomentoMontos] = useState<Record<string, string>>({});
+  // Distribución MANUAL de pago entre fondeadores (≥2 fomentos): monto que el
+  // operador asigna a cada fomento. Vacío = usa el sugerido LIFO.
+  const [liqFomentoDist, setLiqFomentoDist] = useState<Record<string, string>>({});
   // Flota Propia (campo_activos) para el selector de vehículo del cruce de flete.
   const [fletaActivos, setFletaActivos] = useState<Array<{ id: string; nombre: string }>>([]);
   // Carga tolerante a fallos: si el módulo Campo no responde, el cruce de flete
@@ -1957,6 +1960,7 @@ export function App() {
   // Carga los fomentos ACTIVOS del agricultor (de todos los socios) al elegirlo, y
   // prellena el monto a descontar con el saldo de cada uno.
   useEffect(() => {
+    setLiqFomentoDist({});
     if (!liqFarmerId) { setLiqFomentosList([]); setLiqFomentoMontos({}); return; }
     // Se manda también el nombre: los fomentos antiguos no traen farmer_id.
     const nombre = farmers.find((f) => f.id === liqFarmerId)?.full_name ?? "";
@@ -3249,7 +3253,19 @@ export function App() {
     });
     return { disponible, items, total: r2(items.reduce((s, i) => s + i.abono, 0)) };
   }, [liqFomentosList, liqGrossTotal, liqDiscounts, liqFleteTotal]);
-  const liqFomentoTotal = liqFomentoLifo.total;
+  // Distribución de pago entre fondeadores: activa con ≥2 fomentos. Cada fomento usa
+  // el monto asignado por el operador; si no tecleó, hereda el sugerido LIFO.
+  const liqDistActiva = liqFomentosList.length >= 2;
+  const liqFomentoResuelto = useMemo(() => {
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    return liqFomentoLifo.items.map((it) => {
+      const raw = liqFomentoDist[it.id];
+      const monto = raw !== undefined && raw !== "" ? r2(Math.max(0, Number(raw) || 0)) : it.abono;
+      return { id: it.id, accionista_nombre: it.accionista_nombre, es_de_otro_socio: it.es_de_otro_socio, saldo: it.saldo, monto };
+    });
+  }, [liqFomentoLifo.items, liqFomentoDist]);
+  const liqFomentoManualTotal = Math.round(liqFomentoResuelto.reduce((s, r) => s + r.monto, 0) * 100) / 100;
+  const liqFomentoTotal = liqDistActiva ? liqFomentoManualTotal : liqFomentoLifo.total;
   // Descuentos a nivel lote (báscula/cosechadora) + fomento(s) + flete de todas las líneas.
   const liqDiscountsTotal = useMemo(() =>
     Object.values(liqDiscounts).reduce((sum, v) => sum + Number(v || 0), 0) + liqFleteTotal + liqFomentoTotal,
@@ -9560,6 +9576,10 @@ export function App() {
           cosechadora: i === 0 ? Number(liqDiscounts.cosechadora || 0) : 0,
           flete:       lineFlete
         },
+        // Distribución MANUAL entre fondeadores (≥2 fomentos): solo en la 1ª línea.
+        fomento_pagos: i === 0 && liqDistActiva
+          ? liqFomentoResuelto.filter((r) => r.monto > 0.005).map((r) => ({ fomento_id: r.id, monto: r.monto }))
+          : undefined,
         // QQ del lote (registro en el abono) y saldo en contra (nuevo fomento): 1ª línea.
         qq_liquidados: i === 0 ? Math.round(liqQqTotal * 100) / 100 : undefined,
         saldo_en_contra: i === 0 && saldoEnContra > 0 ? saldoEnContra : undefined,
@@ -9595,6 +9615,7 @@ export function App() {
     setLiqLines([nuevaLiqLine()]);
     setLiqDiscounts({ bascula: "", cosechadora: "" });
     setLiqCosechadora({ qq: "", precio: "", tipo: "propia", prestador: "", qq_sugerido: 0 });
+    setLiqFomentoDist({});
     setLiqFomentoMontos({});
     setDiscountsOpen(false);
     // Reporte del cruce de flete interno (Flota Propia), si lo hubo.
@@ -15120,8 +15141,8 @@ export function App() {
                           <span>${(Number(liqCosechadora.qq || 0) * Number(liqCosechadora.precio || 0)).toFixed(2)}</span>
                         </div>
                       </div>
-                      {/* ─ Fomentos del agricultor: amortización AUTOMÁTICA LIFO ─ */}
-                      {liqFomentosList.length > 0 && (
+                      {/* ─ Fomentos del agricultor ─ */}
+                      {liqFomentosList.length > 0 && !liqDistActiva && (
                         <div className="liqFleteDesglose">
                           <div className="liqFleteDesgloseHd">🌱 Fomentos · amortización LIFO (más reciente primero)</div>
                           {liqFomentoLifo.items.map((f) => (
@@ -15146,6 +15167,49 @@ export function App() {
                           <small className="muted" style={{ display: "block", marginTop: 2 }}>
                             El estimado a pagar (${liqFomentoLifo.disponible.toFixed(2)}) amortiza los fomentos del más reciente al más antiguo. Descontar un fomento de otro socio genera una deuda inter-socios.
                           </small>
+                        </div>
+                      )}
+                      {/* ─ Múltiples fondeadores: distribución de pago EDITABLE ─ */}
+                      {liqDistActiva && (
+                        <div className="liqFleteDesglose" style={{ borderColor: "#93c5fd" }}>
+                          <div className="liqFleteDesgloseHd">💵 Distribución de Pago · {liqFomentosList.length} fondeadores</div>
+                          <small className="muted" style={{ display: "block", marginBottom: 6 }}>
+                            Disponible del arroz: <strong>${liqFomentoLifo.disponible.toFixed(2)}</strong>. Asigna cuánto va a cada fomento (prellenado con el sugerido).
+                          </small>
+                          {liqFomentoResuelto.map((r) => {
+                            const it = liqFomentoLifo.items.find((x) => x.id === r.id);
+                            const remanente = Math.max(0, Math.round((r.saldo - r.monto) * 100) / 100);
+                            return (
+                              <div key={r.id} className="liqDiscRow" style={{ alignItems: "flex-start" }}>
+                                <span>
+                                  {r.es_de_otro_socio
+                                    ? <span className="chip" style={{ background: "#f0fdf4", color: "#15803d", border: "1px solid #bbf7d0", marginRight: 6 }}>Fomento de {r.accionista_nombre}</span>
+                                    : <>Fomento propio </>}
+                                  <small className="muted">saldo ${r.saldo.toFixed(2)}</small>
+                                  {r.monto > 0.005 && (
+                                    <small style={{ display: "block", color: remanente > 0.005 ? "#b45309" : "#15803d", fontSize: 11 }}>
+                                      {remanente > 0.005 ? `→ se cierra (histórico) · arrastra $${remanente.toFixed(2)}` : "→ se cierra (pagado)"}
+                                    </small>
+                                  )}
+                                </span>
+                                <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                                  <span style={{ fontWeight: 700 }}>$</span>
+                                  <input type="number" step="0.01" min="0" max={r.saldo}
+                                    style={{ width: 90, textAlign: "right" }}
+                                    placeholder={(it?.abono ?? 0).toFixed(2)}
+                                    value={liqFomentoDist[r.id] ?? String(it?.abono ?? 0)}
+                                    onChange={(e) => setLiqFomentoDist((p) => ({ ...p, [r.id]: e.target.value }))} />
+                                </span>
+                              </div>
+                            );
+                          })}
+                          <div className="liqDiscRow" style={{ fontWeight: 700, borderTop: "1px solid #e5e7eb", marginTop: 4, paddingTop: 4 }}>
+                            <span>Total asignado a fomentos</span>
+                            <strong style={{ color: liqFomentoManualTotal > liqFomentoLifo.disponible + 0.005 ? "#b91c1c" : "#15803d" }}>${liqFomentoManualTotal.toFixed(2)}</strong>
+                          </div>
+                          {liqFomentoManualTotal > liqFomentoLifo.disponible + 0.005 && (
+                            <small style={{ color: "#b91c1c", display: "block" }}>⚠️ Asignaste más que el disponible del arroz (${liqFomentoLifo.disponible.toFixed(2)}).</small>
+                          )}
                         </div>
                       )}
                       {/* ─ Desglose de fletes: hacia dónde va lo descontado ─ */}

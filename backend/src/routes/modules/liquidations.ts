@@ -313,7 +313,11 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
         farmerId: data.farmer_id,
         farmerName,
         montoDisponible: fomentoDiscount,
-        qqLiquidados: data.qq_liquidados ?? null
+        qqLiquidados: data.qq_liquidados ?? null,
+        // Distribución MANUAL entre fondeadores si el operador la envió; si no, LIFO.
+        distribucion: data.fomento_pagos && data.fomento_pagos.length
+          ? data.fomento_pagos.map((p) => ({ fomento_id: p.fomento_id, monto: p.monto }))
+          : undefined
       });
     }
 

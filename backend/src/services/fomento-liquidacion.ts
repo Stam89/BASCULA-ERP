@@ -171,6 +171,10 @@ export async function amortizarFomentosLIFO(
   input: {
     liquidationId: string; liquidationNumber: string; liquidatingAccionistaId: string | undefined;
     farmerId: string; farmerName: string; montoDisponible: number; qqLiquidados?: number | null;
+    // Distribución MANUAL entre fondeadores (opcional): {fomento_id → monto asignado
+    // por el operador}. Si viene, cada fomento se abona por su monto asignado en vez
+    // del reparto LIFO automático. Sin ella, se conserva el LIFO de siempre.
+    distribucion?: Array<{ fomento_id: string; monto: number }>;
   }
 ): Promise<AmortizacionFomentoResultado> {
   const out: AmortizacionFomentoResultado = { total_abonado: 0, cruce_inter_socios: 0, detalle: [], acreedor: null };
@@ -194,11 +198,19 @@ export async function amortizarFomentosLIFO(
   const liquidador = liqAcc ? (await client.query("SELECT name FROM accionistas WHERE id = $1", [liqAcc])).rows[0] : null;
   let mejorAbono = -1; // para elegir el acreedor "principal" (mayor abono)
 
+  // Distribución manual (si la envió el operador): monto asignado por fomento.
+  const asignado = new Map<string, number>();
+  if (input.distribucion) for (const d of input.distribucion) asignado.set(d.fomento_id, r2(Number(d.monto) || 0));
+  const manual = asignado.size > 0;
+
   for (const f of fomentos) {
     if (restante <= 0.005) break;
     const saldo = await saldoFomento(client, f.id);
     if (saldo <= 0.005) continue;
-    const abono = r2(Math.min(restante, saldo));
+    // Con distribución manual, el abono es lo asignado a ESE fomento (topado por su
+    // saldo y por lo que reste). Sin ella, LIFO: consume todo lo que pueda.
+    const tope = manual ? Math.max(0, asignado.get(f.id) ?? 0) : saldo;
+    const abono = r2(Math.min(restante, saldo, tope));
     if (abono <= 0.005) continue;
     const remanente = r2(saldo - abono);
 
@@ -223,14 +235,16 @@ export async function amortizarFomentosLIFO(
       // limite_credito = deuda arrastrada exacta y nota de arrastre referenciando
       // el fomento anterior (regla de negocio del cliente).
       const nuevo = (await client.query(
-        `INSERT INTO fomentos (farmer_name, farmer_id, cuadras, inicio, renta, variedad, status, accionista_id, notes, limite_credito, origen_liquidation_id)
-         VALUES ($1, $2, 0, CURRENT_DATE, $3, $4, 'ACTIVOS', $5, $6, $7, $8) RETURNING id`,
+        `INSERT INTO fomentos (farmer_name, farmer_id, cuadras, inicio, renta, variedad, status, accionista_id, notes, limite_credito, origen_liquidation_id, fomento_origen_id)
+         VALUES ($1, $2, 0, CURRENT_DATE, $3, $4, 'ACTIVOS', $5, $6, $7, $8, $9) RETURNING id`,
         [f.farmer_name, f.farmer_id ?? null, Number(f.renta) || 0, f.variedad ?? null, f.accionista_id ?? null,
-         `Arrastre de saldo en contra - Fomento anterior #${f.id}`, remanente, input.liquidationId]
+         `Arrastre de saldo en contra - Fomento anterior #${f.id}`, remanente, input.liquidationId, f.id]
       )).rows[0];
+      // La entrega del saldo arrastrado se marca como SALDO ANTERIOR (mejora previa):
+      // no corre por días; el interés se fija por meses desde Fomentos si aplica.
       await client.query(
-        "INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto) VALUES ($1, CURRENT_DATE, $2, $3)",
-        [nuevo.id, remanente, `Saldo trasladado del fomento anterior (renovación) · Liq #${input.liquidationNumber}`]
+        "INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto, es_saldo_anterior) VALUES ($1, CURRENT_DATE, $2, $3, true)",
+        [nuevo.id, remanente, "Saldo en contra arrastrado de la cosecha anterior"]
       );
       nuevoFomentoId = nuevo.id;
     }
@@ -293,9 +307,10 @@ export async function generarFomentoSaldoEnContra(
      VALUES ($1, $2, 0, CURRENT_DATE, 0, 'ACTIVOS', $3, $4, $5) RETURNING id`,
     [input.farmerName, input.farmerId ?? null, input.acreedorAccionistaId ?? null, nota, input.liquidationId]
   )).rows[0];
+  // Entrega del déficit marcada como SALDO ANTERIOR (arrastre a la próxima cosecha).
   await client.query(
-    "INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto) VALUES ($1, CURRENT_DATE, $2, $3)",
-    [fom.id, monto, nota]
+    "INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto, es_saldo_anterior) VALUES ($1, CURRENT_DATE, $2, $3, true)",
+    [fom.id, monto, "Saldo en contra arrastrado de la cosecha anterior"]
   );
   return { fomento_id: fom.id, monto, acreedor: input.acreedorNombre };
 }
