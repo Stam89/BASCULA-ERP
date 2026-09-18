@@ -5,6 +5,7 @@ import { money, categoryLabel, stockGroupLabel, formatPersonName } from "./forma
 import type { Farmer, Product, Warehouse, Lot, MateriaPrimaEntry, MateriaPrimaCorreccion, PendingEntry } from "./types";
 import { Metric, ReportTable, Input, Select, MedidorRow, DataList } from "./components/ui";
 import { ClienteSearchInput } from "./components/ClienteSearchInput";
+import * as XLSX from "xlsx";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
 
 const CampoWorkspace = React.lazy(async () => {
@@ -2473,6 +2474,7 @@ export function App() {
   const [fomentoRentaInput, setFomentoRentaInput] = useState("");
   const [fomentoPagoForm, setFomentoPagoForm] = useState({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
   const [fomentoImporting, setFomentoImporting] = useState(false);
+  const [fomentoMosaicoImporting, setFomentoMosaicoImporting] = useState(false);
   const [fomentoImportModal, setFomentoImportModal] = useState<{ open: boolean; title: string; message: string; isError: boolean } | null>(null);
   // ── Pilador / Estibador en Producción ────────────────────────────────────
   const [piladorName, setPiladorName] = useState(() => {
@@ -5251,6 +5253,103 @@ export function App() {
       setFomentoImportModal({ open: true, title: "❌ Error al importar", message: err instanceof Error ? err.message : "Error desconocido", isError: true });
     } finally {
       setFomentoImporting(false);
+    }
+  }
+
+  // ── Importación por "MOSAICO 2D": el Excel es un mosaico de mini-tablas (varios
+  // agricultores repartidos horizontal y verticalmente). Se parsea en el navegador
+  // con XLSX (matriz 2D), se detectan los bloques anclados en la celda "NOMBRE:" y
+  // se envía el JSON estructurado a /fomentos/bulk-import. ────────────────────────
+  function celdaTexto(v: unknown): string { return v == null ? "" : String(v).trim(); }
+  function celdaNumero(v: unknown): number | undefined {
+    if (v == null || v === "") return undefined;
+    if (typeof v === "number") return v;
+    // Quita símbolos de moneda/separadores de miles.
+    const n = parseFloat(String(v).replace(/[^0-9.,-]/g, "").replace(/\.(?=\d{3}(\D|$))/g, "").replace(",", "."));
+    return isNaN(n) ? undefined : n;
+  }
+  // Convierte una celda de fecha (Date de XLSX cellDates, serial Excel, o texto) a ISO.
+  function fechaAISO(v: unknown): string | undefined {
+    if (v == null || v === "") return undefined;
+    if (v instanceof Date && !isNaN(v.getTime())) return v.toISOString().slice(0, 10);
+    if (typeof v === "number") {
+      // Serial de Excel (base 1899-12-30).
+      const d = new Date(Date.UTC(1899, 11, 30) + v * 86400000);
+      return isNaN(d.getTime()) ? undefined : d.toISOString().slice(0, 10);
+    }
+    const s = String(v).trim();
+    let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
+    if (m) return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+    m = /^(\d{1,2})[/\-](\d{1,2})[/\-](\d{2,4})/.exec(s); // DD/MM/YYYY o DD/MM/YY
+    if (m) { const yy = m[3].length === 2 ? `20${m[3]}` : m[3]; return `${yy}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`; }
+    return undefined;
+  }
+
+  async function importFomentosMosaico(file: File) {
+    setFomentoMosaicoImporting(true);
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array", cellDates: true });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      if (!sheet) throw new Error("El archivo no tiene hojas.");
+      // Matriz 2D (Array de Arrays).
+      const data = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, blankrows: true, defval: null });
+
+      type Bloque = { cliente: string; cuadras?: number; limite?: number; entregas: Array<{ fecha?: string; valor: number }> };
+      const bloques: Bloque[] = [];
+      const at = (r: number, c: number): unknown => (data[r] ? data[r][c] : undefined);
+      const esNombre = (v: unknown) => celdaTexto(v).replace(/\s/g, "").toUpperCase() === "NOMBRE:";
+
+      // Escaneo 2D: recorre filas y columnas buscando el ancla "NOMBRE:".
+      for (let r = 0; r < data.length; r++) {
+        const row = data[r]; if (!row) continue;
+        for (let c = 0; c < row.length; c++) {
+          if (!esNombre(row[c])) continue;
+
+          // Cabecera: nombre en [r, c+1..c+4]; cuadras en [r+1, c+1|c+2]; límite en [r+2, c+1|c+2].
+          let cliente = "";
+          for (let k = 1; k <= 4 && !cliente; k++) cliente = celdaTexto(at(r, c + k));
+          if (!cliente) continue; // ancla sin nombre → se ignora
+          const cuadras = celdaNumero(at(r + 1, c + 1)) ?? celdaNumero(at(r + 1, c + 2));
+          const limite = celdaNumero(at(r + 2, c + 1)) ?? celdaNumero(at(r + 2, c + 2));
+
+          // Entregas: desde la fila r+4 hacia abajo. Fecha en [c+1], Valor en [c+5].
+          const entregas: Array<{ fecha?: string; valor: number }> = [];
+          for (let rr = r + 4; rr < data.length; rr++) {
+            const fRaw = at(rr, c + 1);
+            const vRaw = at(rr, c + 5);
+            const fTxt = celdaTexto(fRaw), vTxt = celdaTexto(vRaw);
+            // Corte: fila vacía (ambas celdas) o la palabra TOTAL en cualquiera.
+            if ((fTxt === "" && vTxt === "") || /TOTAL/i.test(fTxt) || /TOTAL/i.test(vTxt)) break;
+            const valor = celdaNumero(vRaw);
+            if (valor != null && valor > 0) entregas.push({ fecha: fechaAISO(fRaw), valor });
+          }
+
+          bloques.push({ cliente, cuadras, limite, entregas });
+        }
+      }
+
+      if (bloques.length === 0) {
+        setFomentoImportModal({ open: true, title: "❌ Sin bloques", message: "No se detectó ninguna celda 'NOMBRE:' en la hoja. Verifica el formato del mosaico.", isError: true });
+        return;
+      }
+
+      const resp = await apiPost<{ success: boolean; fomentosCreados: number; agricultoresCreados: number; entregasCreadas: number; omitidos: number; errores: Array<{ cliente: string; error: string }> }>("/fomentos/bulk-import", { bloques });
+      addToast(`✅ Mosaico importado: ${resp.fomentosCreados} fomentos`, "success");
+      const detalle = [
+        `Bloques detectados: ${bloques.length}`,
+        `Fomentos creados: ${resp.fomentosCreados}`,
+        `Agricultores nuevos: ${resp.agricultoresCreados}`,
+        `Entregas importadas: ${resp.entregasCreadas}`,
+        resp.omitidos > 0 ? `Omitidos (ya existían): ${resp.omitidos}` : null,
+        resp.errores?.length ? `\nAvisos:\n${resp.errores.map((e) => `${e.cliente}: ${e.error}`).join("\n")}` : null
+      ].filter(Boolean).join("\n");
+      setFomentoImportModal({ open: true, title: "✅ Mosaico importado", message: detalle, isError: false });
+      await refreshFomentos();
+    } catch (err) {
+      setFomentoImportModal({ open: true, title: "❌ Error al leer el mosaico", message: err instanceof Error ? err.message : "Error desconocido", isError: true });
+    } finally {
+      setFomentoMosaicoImporting(false);
     }
   }
 
@@ -15481,7 +15580,17 @@ export function App() {
                   }}
                   style={{ display: "none" }} />
               </label>
-              {fomentoImporting && <span className="muted" style={{ fontSize: 12 }}>Importando...</span>}
+              <label title="Excel en formato mosaico: varias mini-tablas por hoja, ancladas en la celda 'NOMBRE:'"
+                style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #7c3aed", background: "#f5f3ff", color: "#6d28d9", cursor: "pointer", fontWeight: 600, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
+                {fomentoMosaicoImporting ? <span className="spinner" /> : "🧩 IMPORTAR MOSAICO (2D)"}
+                <input type="file" accept=".xlsx,.xls" disabled={fomentoMosaicoImporting}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) importFomentosMosaico(file).finally(() => { e.target.value = ""; });
+                  }}
+                  style={{ display: "none" }} />
+              </label>
+              {(fomentoImporting || fomentoMosaicoImporting) && <span className="muted" style={{ fontSize: 12 }}>Importando...</span>}
             </div>
 
             {/* Filtro de estado */}

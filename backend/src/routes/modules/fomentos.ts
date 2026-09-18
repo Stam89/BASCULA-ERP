@@ -394,6 +394,92 @@ fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res
   res.json({ success: true, ...result, errors: [] });
 }));
 
+// ── Importación MASIVA por "mosaico 2D" (el frontend parsea el Excel con XLSX y
+// envía los bloques ya estructurados). Por cada cliente: busca/crea el agricultor,
+// crea el fomento (cuadras/límite) e inserta sus entregas con la fecha original.
+// El interés lo calcula el motor existente (por días desde cada entrega). ──────
+const bulkImportSchema = z.object({
+  bloques: z.array(z.object({
+    cliente: z.string().min(2).max(160),
+    cuadras: z.number().nonnegative().optional(),
+    limite:  z.number().nonnegative().optional(),
+    entregas: z.array(z.object({
+      // El front ya convierte la fecha de Excel a ISO; se acepta opcional.
+      fecha: z.string().optional(),
+      valor: z.number().positive()
+    })).default([])
+  })).min(1, "No se detectó ningún bloque (busca la celda 'NOMBRE:').")
+});
+
+// Fecha segura: ISO 'YYYY-MM-DD' directo; si no, null → la BD usa CURRENT_DATE.
+function fechaISOsegura(v: string | undefined): string | null {
+  if (!v) return null;
+  const s = String(v).trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+
+fomentosRouter.post("/bulk-import", asyncRoute(async (req, res) => {
+  const accionistaId = getAccionistaId(req);
+  const data = bulkImportSchema.parse(req.body);
+
+  const result = await inTransaction(async (client) => {
+    let fomentosCreados = 0, agricultoresCreados = 0, entregasCreadas = 0, omitidos = 0;
+    const errores: Array<{ cliente: string; error: string }> = [];
+
+    for (const b of data.bloques) {
+      const nombre = b.cliente.trim();
+      if (!nombre) { errores.push({ cliente: "(vacío)", error: "Nombre vacío" }); continue; }
+
+      // (a) Agricultor: buscar por nombre o crear (integridad referencial).
+      const existente = await client.query("SELECT id FROM farmers WHERE lower(full_name) = lower($1) LIMIT 1", [nombre]);
+      let farmerId: string;
+      if (existente.rowCount) {
+        farmerId = existente.rows[0].id;
+      } else {
+        const nuevo = await client.query("INSERT INTO farmers (full_name, accionista_id) VALUES ($1, $2) RETURNING id", [nombre, accionistaId]);
+        farmerId = nuevo.rows[0].id;
+        agricultoresCreados++;
+      }
+
+      const cuadras = b.cuadras && b.cuadras > 0 ? b.cuadras : 0;
+      const limite = b.limite && b.limite > 0 ? b.limite : null;
+      // inicio = la entrega más antigua con fecha válida, o HOY.
+      const fechas = b.entregas.map((e) => fechaISOsegura(e.fecha)).filter((f): f is string => !!f).sort();
+      const inicio = fechas[0] ?? new Date().toISOString().slice(0, 10);
+      const cosecha = calcularCosecha(inicio);
+
+      // Dedup: evita duplicar si se re-sube el mismo mosaico.
+      const dup = await client.query(
+        "SELECT 1 FROM fomentos WHERE accionista_id = $1 AND lower(farmer_name) = lower($2) AND cuadras = $3 AND COALESCE(limite_credito,0) = COALESCE($4,0) AND inicio = $5 LIMIT 1",
+        [accionistaId, nombre, cuadras, limite, inicio]
+      );
+      if (dup.rowCount) { omitidos++; continue; }
+
+      // (b) Fomento principal.
+      const fom = await client.query(
+        `INSERT INTO fomentos (accionista_id, farmer_name, farmer_id, cuadras, inicio, cosecha, renta, status, notes, limite_credito)
+         VALUES ($1,$2,$3,$4,$5,$6,0.07,'ACTIVOS',$7,$8) RETURNING id`,
+        [accionistaId, nombre, farmerId, cuadras, inicio, cosecha, "Importado (mosaico 2D)", limite]
+      );
+      fomentosCreados++;
+
+      // (c) Entregas: fecha original (o CURRENT_DATE) + valor. El interés lo calcula
+      //     el motor existente (por días desde cada fecha) — NO se marca saldo anterior.
+      for (const e of b.entregas) {
+        await client.query(
+          "INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto) VALUES ($1, COALESCE($2::date, CURRENT_DATE), $3, $4)",
+          [fom.rows[0].id, fechaISOsegura(e.fecha), e.valor, "Entrega importada (mosaico)"]
+        );
+        entregasCreadas++;
+      }
+    }
+    return { fomentosCreados, agricultoresCreados, entregasCreadas, omitidos, errores };
+  });
+
+  res.json({ success: true, ...result });
+}));
+
 fomentosRouter.get("/:id", asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
   const fomento = await pool.query(`${SELECT_FOMENTO} WHERE f.id = $1 AND f.accionista_id = $2`, [req.params.id, accionistaId]);
