@@ -13,6 +13,7 @@ async function patchMaquina(id: string, body: unknown): Promise<void> {
 }
 import { money } from "../format";
 import PartesModule from "./PartesModule";
+import NominaOperadores, { TarifasOperadorCatalogo } from "./NominaOperadores";
 
 // Menú propio de la operación Campo (contexto aislado). Para agregar secciones
 // nuevas: añade una entrada aquí y su caso en CampoModule (prop `section`).
@@ -24,6 +25,7 @@ const CAMPO_SECCIONES: Array<{ id: CampoSeccion; label: string; icon: string }> 
   { id: "clientes", label: "Clientes", icon: "👥" },
   { id: "servicios", label: "Servicios", icon: "🚜" },
   { id: "partes", label: "Partes Diarios", icon: "📝" },
+  { id: "nomina", label: "Nómina Operadores", icon: "💵" },
   { id: "cxc", label: "Cuentas por Cobrar", icon: "📥" },
   { id: "cxp", label: "Cuentas por Pagar", icon: "📤" },
   { id: "config", label: "Configuración", icon: "⚙️" }
@@ -51,7 +53,7 @@ type Servicio = {
 const hoy = () => new Date().toISOString().slice(0, 10);
 // Secciones del menú propio de Campo (contexto aislado). Se amplía agregando
 // entradas aquí y en CAMPO_SECCIONES (ver CampoWorkspace).
-export type CampoSeccion = "caja" | "servicios" | "clientes" | "cxc" | "cxp" | "vales" | "partes" | "reportes" | "config";
+export type CampoSeccion = "caja" | "servicios" | "clientes" | "cxc" | "cxp" | "vales" | "partes" | "nomina" | "reportes" | "config";
 
 // Parte Diario pendiente (para importar/liquidar desde el form de servicio).
 type PartePendiente = { id: string; fecha: string; activo_id: string; activo_nombre: string; operador: string | null; cliente: string; qq: number };
@@ -233,6 +235,9 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
         <OperadoresCatalogo operadores={operadores}
           onChanged={async (msg) => { await refreshCatalogos(); notify(msg); }}
           onError={(m) => notify(m, "err")} />
+        <TarifasOperadorCatalogo activos={activos} operadores={operadores}
+          onChanged={(msg) => notify(msg)}
+          onError={(m) => notify(m, "err")} />
       </section>
     );
   }
@@ -282,6 +287,10 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
 
   if (section === "partes") {
     return <PartesModule />;
+  }
+
+  if (section === "nomina") {
+    return <NominaOperadores />;
   }
 
   // section === "caja"

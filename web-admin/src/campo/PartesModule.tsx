@@ -25,7 +25,8 @@ type Activo = { id: string; nombre: string; operador: string | null; activo: boo
 // Operador (catálogo campo_operadores). En el parte se guarda su NOMBRE (texto).
 type Operador = { id: string; nombre: string; activo: boolean };
 type Parte = {
-  id: string; fecha: string; activo_id: string; activo_nombre: string; operador: string | null;
+  id: string; fecha: string; activo_id: string; activo_nombre: string; activo_tipo?: string; operador: string | null;
+  operador_pagado_at?: string | null;
   cliente: string; qq: number; observaciones: string | null; estado: "por_cobrar" | "cobrado"; origen: string;
   // Cobro generado (campo_servicio) enlazado, si estado='cobrado'.
   servicio_id: string | null; servicio_valor: number | null; servicio_saldo: number | null;
@@ -42,11 +43,17 @@ export default function PartesModule() {
   const [editando, setEditando] = useState<Parte | null>(null);
   const [editandoTarifa, setEditandoTarifa] = useState<Parte | null>(null);
   const [filtro, setFiltro] = useState({ from: "", to: "", activo_id: "", estado: "" });
+  // Pestañas del historial: separa por tipo de máquina (cosechadora vs flete).
+  const [histTab, setHistTab] = useState<"cosechadoras" | "fletes" | "todos">("todos");
   const [flash, setFlash] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
   const notify = (text: string, kind: "ok" | "err" = "ok") => { setFlash({ text, kind }); setTimeout(() => setFlash(null), 3000); };
 
   const activosActivos = useMemo(() => activos.filter((a) => a.activo), [activos]);
-  const totalQQ = useMemo(() => partes.reduce((s, p) => s + p.qq, 0), [partes]);
+  const esCosechadora = (p: Parte) => (p.activo_tipo ?? "").toLowerCase() === "cosechadora";
+  const partesVista = useMemo(() => partes.filter((p) =>
+    histTab === "todos" ? true : histTab === "cosechadoras" ? esCosechadora(p) : !esCosechadora(p)
+  ), [partes, histTab]);
+  const totalQQ = useMemo(() => partesVista.reduce((s, p) => s + p.qq, 0), [partesVista]);
 
   const cargarPartes = useCallback(async () => {
     const qs = new URLSearchParams();
@@ -157,11 +164,17 @@ export default function PartesModule() {
       {/* B · Historial */}
       <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <h2 style={{ margin: 0 }}>Historial de partes <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>({partes.length})</span></h2>
+          <h2 style={{ margin: 0 }}>Historial de partes <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>({partesVista.length})</span></h2>
           <div className="totalBox" style={{ minWidth: 130, margin: 0, marginLeft: "auto", background: "#eff6ff", borderColor: "#bfdbfe" }}>
             <span>TOTAL QQ</span>
             <strong>{qqFmt(totalQQ)}</strong>
           </div>
+        </div>
+        {/* Pestañas: separa cosechadoras de fletes/transporte según la máquina. */}
+        <div className="segmented" style={{ marginTop: 8 }}>
+          {([["cosechadoras", "🚜 Cosechadoras"], ["fletes", "🚚 Fletes / Transporte"], ["todos", "Todos"]] as Array<["cosechadoras" | "fletes" | "todos", string]>).map(([v, label]) => (
+            <button key={v} type="button" className={histTab === v ? "active" : ""} onClick={() => setHistTab(v)}>{label}</button>
+          ))}
         </div>
         {/* Filtros */}
         <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginTop: 8 }}>
@@ -191,12 +204,20 @@ export default function PartesModule() {
               <th className="num">QQ cosechados</th><th>Observaciones</th><th>Estado</th><th>Acciones</th>
             </tr></thead>
             <tbody>
-              {partes.length === 0 ? (
+              {partesVista.length === 0 ? (
                 <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin partes registrados.</td></tr>
-              ) : partes.map((p) => (
-                <tr key={p.id}>
+              ) : partesVista.map((p) => {
+                const faltaChofer = p.origen !== "manual" && !(p.operador && p.operador.trim());
+                return (
+                <tr key={p.id} style={faltaChofer ? { background: "#fef2f2" } : undefined}>
                   <td style={{ whiteSpace: "nowrap" }}>{String(p.fecha).slice(0, 10)}</td>
-                  <td>{p.operador || "—"}</td>
+                  <td>
+                    {p.operador
+                      ? p.operador
+                      : faltaChofer
+                        ? <span className="chip" style={{ background: "#dc2626", color: "#fff", fontWeight: 700 }} title="Este parte entró por la romana sin chofer. Usa Editar para asignarlo.">⚠️ Faltan datos de chofer</span>
+                        : "—"}
+                  </td>
                   <td>{p.activo_nombre}</td>
                   <td style={{ fontWeight: 600 }}>
                     {p.cliente}
@@ -238,7 +259,8 @@ export default function PartesModule() {
                     )}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -335,6 +357,9 @@ function EditarParteModal({ parte, activos, operadores, onClose, onDone, onError
     cliente: parte.cliente, qq: String(parte.qq), observaciones: parte.observaciones ?? ""
   });
   const [busy, setBusy] = useState(false);
+  // Tickets que entraron por la romana/API (origen != manual): solo se puede
+  // rellenar el operador; los quintales calculados por la romana NO se tocan.
+  const esRomana = parte.origen !== "manual";
   async function submit() {
     try {
       setBusy(true);
@@ -355,10 +380,15 @@ function EditarParteModal({ parte, activos, operadores, onClose, onDone, onError
       <form className="formPanel" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submit(); }}
         style={{ maxWidth: 480, width: "100%", margin: 0 }}>
         <h2 style={{ marginTop: 0 }}>✏️ Editar parte de cosecha</h2>
+        {esRomana && (
+          <p className="muted" style={{ marginTop: -4, background: "#fef2f2", color: "#b91c1c", borderRadius: 6, padding: "6px 10px", fontSize: 12, fontWeight: 600 }}>
+            ⚠️ Ticket de la romana: solo puedes asignar el <strong>operador / chofer</strong>. Los quintales y la máquina calculados por la báscula quedan bloqueados.
+          </p>
+        )}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <label><span>Fecha</span><input type="date" value={f.fecha} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
+          <label><span>Fecha</span><input type="date" value={f.fecha} disabled={esRomana} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
           <label><span>Máquina</span>
-            <select value={f.activo_id} onChange={(e) => setF({ ...f, activo_id: e.target.value })}>
+            <select value={f.activo_id} disabled={esRomana} onChange={(e) => setF({ ...f, activo_id: e.target.value })}>
               {activos.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}
             </select>
           </label>
@@ -372,10 +402,10 @@ function EditarParteModal({ parte, activos, operadores, onClose, onDone, onError
               {operadores.map((o) => <option key={o.id} value={o.nombre}>{o.nombre}</option>)}
             </select>
           </label>
-          <label><span>Quintales [QQ]</span><input type="number" step="0.01" min="0" value={f.qq} onChange={(e) => setF({ ...f, qq: e.target.value })} /></label>
+          <label><span>Quintales [QQ]{esRomana ? " (romana)" : ""}</span><input type="number" step="0.01" min="0" value={f.qq} readOnly={esRomana} disabled={esRomana} onChange={(e) => setF({ ...f, qq: e.target.value })} /></label>
         </div>
         <label><span>Cliente / Dueño del cultivo</span>
-          <ClienteSearchInput kind="farmer" value={f.cliente}
+          <ClienteSearchInput kind="farmer" value={f.cliente} disabled={esRomana}
             onChange={(name) => setF((p) => ({ ...p, cliente: name }))}
             onSelect={(hit) => setF((p) => ({ ...p, cliente: hit.full_name }))}
             onCreated={(hit) => setF((p) => ({ ...p, cliente: hit.full_name }))}
