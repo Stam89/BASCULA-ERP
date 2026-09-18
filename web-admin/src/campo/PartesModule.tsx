@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch, apiGet, apiPost } from "../api";
 import { money } from "../format";
+import { ClienteSearchInput } from "../components/ClienteSearchInput";
 
 const hoy = () => new Date().toISOString().slice(0, 10);
 const qqFmt = (n: number) => n.toLocaleString("es-EC", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
@@ -136,7 +137,13 @@ export default function PartesModule() {
           <p className="muted" style={{ marginTop: -4, fontSize: 12 }}>No hay operadores. Agrégalos en <strong>⚙️ Configuración → 👷 Operadores</strong>.</p>
         )}
         <label><span>Cliente / Dueño del cultivo</span>
-          <input type="text" value={f.cliente} onChange={(e) => setF({ ...f, cliente: e.target.value })} placeholder="Ej: Juan Piguave" />
+          <ClienteSearchInput kind="farmer" value={f.cliente}
+            onChange={(name) => setF((p) => ({ ...p, cliente: name }))}
+            onSelect={(hit) => setF((p) => ({ ...p, cliente: hit.full_name }))}
+            onCreated={(hit) => setF((p) => ({ ...p, cliente: hit.full_name }))}
+            onError={(m) => notify(m, "err")}
+            placeholder="Buscar en Báscula o crear nuevo…"
+            style={{ width: "100%" }} />
         </label>
         <label><span>Observaciones (opcional)</span>
           <input type="text" value={f.observaciones} onChange={(e) => setF({ ...f, observaciones: e.target.value })} placeholder="Ej: Terreno húmedo" />
@@ -367,7 +374,15 @@ function EditarParteModal({ parte, activos, operadores, onClose, onDone, onError
           </label>
           <label><span>Quintales [QQ]</span><input type="number" step="0.01" min="0" value={f.qq} onChange={(e) => setF({ ...f, qq: e.target.value })} /></label>
         </div>
-        <label><span>Cliente / Dueño del cultivo</span><input type="text" value={f.cliente} onChange={(e) => setF({ ...f, cliente: e.target.value })} /></label>
+        <label><span>Cliente / Dueño del cultivo</span>
+          <ClienteSearchInput kind="farmer" value={f.cliente}
+            onChange={(name) => setF((p) => ({ ...p, cliente: name }))}
+            onSelect={(hit) => setF((p) => ({ ...p, cliente: hit.full_name }))}
+            onCreated={(hit) => setF((p) => ({ ...p, cliente: hit.full_name }))}
+            onError={onError}
+            placeholder="Buscar en Báscula o crear nuevo…"
+            style={{ width: "100%" }} />
+        </label>
         <label><span>Observaciones (opcional)</span><input type="text" value={f.observaciones} onChange={(e) => setF({ ...f, observaciones: e.target.value })} /></label>
         <div className="buttonRow">
           <button type="submit" className="primary" disabled={busy}>{busy ? "Guardando…" : "Guardar cambios"}</button>
