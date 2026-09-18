@@ -1292,6 +1292,7 @@ type FomentoEntrega = {
   created_at: string;
   es_saldo_anterior?: boolean;
   meses_interes_fijo?: number | null;
+  dias_corte?: number | null;
 };
 
 type FomentoPago = {
@@ -1304,7 +1305,8 @@ type FomentoPago = {
   created_at: string;
 };
 
-type FomentoDetalle = Fomento & { entregas: FomentoEntrega[]; pagos: FomentoPago[]; deuda_total: number; total_pagado: number; };
+type FomentoLiquidacionRef = { liquidation_number: string; created_at: string; gross_amount: number; quintals: number; price_per_quintal: number; flete: number; cosechadora: number; bascula: number; abono_fomento: number };
+type FomentoDetalle = Fomento & { entregas: FomentoEntrega[]; pagos: FomentoPago[]; deuda_total: number; total_pagado: number; liquidaciones?: FomentoLiquidacionRef[]; };
 
 type Equipment = {
   id: string;
@@ -2470,6 +2472,7 @@ export function App() {
   const [confirmarEntrega, setConfirmarEntrega] = useState<{ fomentoId: string; entregaId: string; valor: number; fecha: string } | null>(null);
   const [borrandoEntrega, setBorrandoEntrega] = useState(false);
   const [fomentoFilter, setFomentoFilter] = useState<"TODOS"|"ACTIVOS"|"NO ACTIVOS"|"APROBADOS"|"ARCHIVADOS">("TODOS");
+  const [fomentoSearch, setFomentoSearch] = useState("");
   const [fomentoEditingRenta, setFomentoEditingRenta] = useState<string | null>(null);
   const [fomentoRentaInput, setFomentoRentaInput] = useState("");
   const [fomentoPagoForm, setFomentoPagoForm] = useState({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
@@ -6608,24 +6611,34 @@ export function App() {
   async function submitFomentoEntrega(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!fomentoDetalle) return;
-    const esSaldo = fomentoEntregaForm.es_saldo_anterior;
-    const meses = Number(fomentoEntregaForm.meses_interes_fijo);
-    if (esSaldo && !(meses >= 1)) { addToast("Indica cuántos meses de interés fijo cobrar (ej. 1, 2, 3)", "error"); return; }
     await apiPost(`/fomentos/${fomentoDetalle.id}/entregas`, {
-      // El saldo arrastrado no depende de fecha; se omite (la BD usa CURRENT_DATE).
-      fecha: esSaldo ? undefined : fomentoEntregaForm.fecha,
+      fecha: fomentoEntregaForm.fecha,
       valor: Number(fomentoEntregaForm.valor),
-      concepto: fomentoEntregaForm.concepto || (esSaldo ? "Saldo en contra cosecha pasada" : undefined),
-      // Un saldo arrastrado NO es un desembolso: no toca caja.
-      cash_register_id: esSaldo ? undefined : dashboard.current_cash_register?.id,
-      es_saldo_anterior: esSaldo,
-      meses_interes_fijo: esSaldo ? meses : undefined
+      concepto: fomentoEntregaForm.concepto || undefined,
+      cash_register_id: dashboard.current_cash_register?.id
     });
     setFomentoEntregaForm({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "", es_saldo_anterior: false, meses_interes_fijo: "1" });
-    addToast(esSaldo ? "Saldo en contra registrado 🔒" : ("Entrega registrada" + (dashboard.current_cash_register ? " y descontada de caja" : "")), "success");
+    addToast("Entrega registrada" + (dashboard.current_cash_register ? " y descontada de caja" : ""), "success");
     await loadFomentoDetalle(fomentoDetalle.id);
     await refreshFomentos();
     if (dashboard.current_cash_register?.id) await refreshCaja(dashboard.current_cash_register.id);
+  }
+
+  // Ajuste del INTERÉS FIJO del saldo arrastrado desde la cabecera del fomento.
+  const [fomentoInteresFijoBusy, setFomentoInteresFijoBusy] = useState(false);
+  async function ajustarInteresFijoFomento(activo: boolean, meses: number) {
+    if (!fomentoDetalle) return;
+    setFomentoInteresFijoBusy(true);
+    try {
+      await apiPatch(`/fomentos/${fomentoDetalle.id}/interes-fijo`, { activo, meses: activo ? meses : undefined });
+      addToast(activo ? `🔒 Interés fijo del saldo: ${meses} mes(es)` : "Interés dinámico (por días) reactivado", "success");
+      await loadFomentoDetalle(fomentoDetalle.id);
+      await refreshFomentos();
+    } catch (err) {
+      addToast(err instanceof Error ? err.message : "No se pudo ajustar el interés", "error");
+    } finally {
+      setFomentoInteresFijoBusy(false);
+    }
   }
 
   async function deleteFomentoEntrega(fomentoId: string, entregaId: string) {
@@ -10000,121 +10013,152 @@ export function App() {
   // entregas/créditos + intereses, total abonado por liquidación(es) y saldo
   // resultante (Saldado $0.00 o Saldo en Contra pendiente).
   function printEstadoCuentaFomento(f: FomentoDetalle) {
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const esc = (s: unknown) => String(s ?? "").replace(/</g, "&lt;");
     const cerrado = f.status === "CERRADO_LIQUIDACION";
-    const totalPedido = Number(f.total_pedido ?? 0);
-    const totalInteres = Number(f.gasto_adm ?? 0);
-    const totalPagado = Number(f.total_pagado ?? 0);
-    const saldo = Number(f.deuda_total ?? 0);
-    const saldado = saldo <= 0.005;
     const fechaDoc = new Date().toLocaleDateString("es-EC", { year: "numeric", month: "long", day: "numeric" });
     const liqFecha = f.liquidado_at ? new Date(f.liquidado_at).toLocaleDateString("es-EC", { year: "numeric", month: "long", day: "numeric" }) : null;
 
+    // ── Sección A: CARGOS (lo que el agricultor pidió) + interés hasta el arreglo ──
+    const totalPedido = Number(f.total_pedido ?? 0);
+    const totalInteres = Number(f.gasto_adm ?? 0);
+    const cargosFomento = r2(totalPedido + totalInteres);
     const entregaRows = (f.entregas ?? []).map((e) => {
-      const dias = Math.max(0, Math.floor((Date.now() - new Date(e.fecha).getTime()) / 86400000));
+      const dias = e.dias_corte != null ? Number(e.dias_corte) : Math.max(0, Math.floor((Date.now() - new Date(e.fecha).getTime()) / 86400000));
+      const diasTxt = e.es_saldo_anterior ? `🔒 ${e.meses_interes_fijo ?? 0}m` : String(dias);
       return `<tr>
-        <td>${e.fecha?.slice(0,10) ?? "—"}</td>
-        <td>${(e.concepto ?? "").replace(/</g,"&lt;") || "Crédito / insumo"}</td>
+        <td>${e.es_saldo_anterior ? "—" : (e.fecha?.slice(0,10) ?? "—")}</td>
+        <td>${esc(e.concepto) || "Crédito / insumo"}</td>
         <td style="text-align:right">$${Number(e.valor).toFixed(2)}</td>
-        <td style="text-align:right">${dias}</td>
+        <td style="text-align:right">${diasTxt}</td>
         <td style="text-align:right;color:#b45309">$${Number(e.interes ?? 0).toFixed(2)}</td>
         <td style="text-align:right;font-weight:600">$${Number(e.suman ?? (Number(e.valor)+Number(e.interes ?? 0))).toFixed(2)}</td>
       </tr>`;
     }).join("");
 
-    const pagos = f.pagos ?? [];
-    const pagoRows = pagos.length
-      ? pagos.map((p) => `<tr>
-          <td>${p.fecha?.slice(0,10) ?? "—"}</td>
-          <td>${(p.concepto ?? "Abono").replace(/</g,"&lt;")}</td>
-          <td style="text-align:right;color:#15803d;font-weight:600">$${Number(p.valor).toFixed(2)}</td>
+    // ── Secciones B y C: de la(s) liquidación(es) que saldaron este fomento ──
+    const liqs = f.liquidaciones ?? [];
+    const totalFlete = r2(liqs.reduce((s, l) => s + Number(l.flete || 0), 0));
+    const totalCosechadora = r2(liqs.reduce((s, l) => s + Number(l.cosechadora || 0), 0));
+    const totalBascula = r2(liqs.reduce((s, l) => s + Number(l.bascula || 0), 0));
+    const descuentosOp = r2(totalFlete + totalCosechadora + totalBascula);
+    const ingresosArroz = r2(liqs.reduce((s, l) => s + Number(l.gross_amount || 0), 0));
+
+    const liqRows = liqs.length
+      ? liqs.map((l) => `<tr>
+          <td>${esc(l.liquidation_number)}</td>
+          <td>${l.created_at ? new Date(l.created_at).toLocaleDateString("es-EC") : "—"}</td>
+          <td style="text-align:right">${Number(l.quintals || 0).toFixed(2)} QQ</td>
+          <td style="text-align:right">$${Number(l.price_per_quintal || 0).toFixed(2)}</td>
+          <td style="text-align:right;font-weight:700;color:#15803d">$${Number(l.gross_amount || 0).toFixed(2)}</td>
         </tr>`).join("")
-      : `<tr><td colspan="3" style="text-align:center;color:#888">Sin abonos registrados</td></tr>`;
+      : `<tr><td colspan="5" style="text-align:center;color:#888">Aún no se ha liquidado arroz para este fomento</td></tr>`;
+
+    // ── Sección D: RESULTADO = Ingresos (arroz) − Cargos (fomento+interés) − Descuentos ──
+    const resultado = r2(ingresosArroz - cargosFomento - descuentosOp);
+    const aFavor = resultado >= -0.005;
+    const abs = Math.abs(resultado);
 
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
       <title>Estado de Cuenta — Fomento</title>
       <style>
         *{box-sizing:border-box}
-        body{font-family:Arial,sans-serif;font-size:13px;color:#111;margin:24px 32px}
-        .hdr{text-align:center;border-bottom:2px solid #111;padding-bottom:10px;margin-bottom:14px}
+        body{font-family:Arial,sans-serif;font-size:13px;color:#111;margin:22px 30px}
+        .hdr{text-align:center;border-bottom:2px solid #111;padding-bottom:10px;margin-bottom:12px}
         .hdr h1{margin:0;font-size:19px;letter-spacing:1px}
-        .hdr h2{margin:2px 0;font-size:13px;font-weight:normal}
+        .hdr h2{margin:2px 0;font-size:12px;font-weight:normal}
         .hdr h3{margin:6px 0 0;font-size:15px;letter-spacing:2px;text-transform:uppercase}
-        .meta{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:8px;font-size:13px}
-        .badge{display:inline-block;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:700;letter-spacing:.05em}
-        .b-cerrado{background:#374151;color:#fff}
-        .b-activo{background:#dcfce7;color:#15803d}
-        .note{background:#f9fafb;border-left:3px solid #94a3b8;padding:6px 10px;margin:8px 0;font-size:12px;color:#475569}
-        h4{margin:14px 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:#374151}
-        table{width:100%;border-collapse:collapse;margin-bottom:6px}
-        th{background:#f0f0f0;padding:6px 8px;text-align:left;border:1px solid #bbb;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+        .meta{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:6px;font-size:12px}
+        .badge{display:inline-block;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:700}
+        .b-cerrado{background:#374151;color:#fff}.b-activo{background:#dcfce7;color:#15803d}
+        .sec{margin-top:12px}
+        .sec h4{margin:0 0 5px;font-size:12px;font-weight:700;color:#374151;background:#eef2f7;padding:5px 8px;border-radius:5px;border-left:4px solid #0f766e;text-transform:uppercase;letter-spacing:.03em}
+        table{width:100%;border-collapse:collapse;margin-bottom:4px}
+        th{background:#f0f0f0;padding:5px 8px;text-align:left;border:1px solid #bbb;font-size:10px;text-transform:uppercase}
         td{padding:5px 8px;border:1px solid #ccc;font-size:12px}
         tfoot td{font-weight:700;background:#fafafa}
-        .totals{width:340px;margin-left:auto;border-collapse:collapse;margin-top:8px}
-        .totals td{padding:5px 8px;border:none;font-size:13px}
-        .lbl{font-weight:600;text-align:right;padding-right:12px}
-        .val{text-align:right}
-        .saldo-row td{font-weight:700;font-size:16px;border-top:2px solid #111;padding-top:8px}
-        .saldado{color:#15803d}
-        .contra{color:#b91c1c}
-        .sigs{display:flex;justify-content:space-around;margin-top:52px}
-        .sig{text-align:center}
-        .sig hr{width:180px;border:none;border-top:1px solid #111;margin:0 auto 4px}
-        .sig span{font-size:12px}
+        .subt{width:320px;margin-left:auto}.subt td{border:none;padding:3px 8px}
+        .subt .lbl{text-align:right;font-weight:600;padding-right:12px}.subt .val{text-align:right}
+        .result{margin-top:16px;padding:16px 20px;border-radius:10px;text-align:center;border:3px solid}
+        .result .cap{font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-bottom:4px}
+        .result .amt{font-size:30px;font-weight:800;letter-spacing:.5px}
+        .favor{background:#f0fdf4;border-color:#16a34a;color:#15803d}
+        .contra{background:#fef2f2;border-color:#dc2626;color:#b91c1c}
+        .sigs{display:flex;justify-content:space-around;margin-top:44px}
+        .sig{text-align:center}.sig hr{width:180px;border:none;border-top:1px solid #111;margin:0 auto 4px}.sig span{font-size:12px}
         @media print{body{margin:10mm}}
       </style></head><body>
       <div class="hdr">
-        <h1>${appSettings.business_name}</h1>
-        <h2>${appSettings.business_subtitle}</h2>
-        ${appSettings.ruc ? `<h2>RUC: ${appSettings.ruc}</h2>` : ""}
-        ${appSettings.address || appSettings.phone ? `<h2>${[appSettings.address, appSettings.phone && `Telf: ${appSettings.phone}`].filter(Boolean).join(" · ")}</h2>` : ""}
-        <h3>Estado de Cuenta — Fomento</h3>
+        <h1>${esc(appSettings.business_name)}</h1>
+        <h2>${esc(appSettings.business_subtitle)}</h2>
+        ${appSettings.ruc ? `<h2>RUC: ${esc(appSettings.ruc)}</h2>` : ""}
+        ${appSettings.address || appSettings.phone ? `<h2>${[appSettings.address, appSettings.phone && `Telf: ${appSettings.phone}`].filter(Boolean).map(esc).join(" · ")}</h2>` : ""}
+        <h3>Comprobante de Liquidación — Fomento</h3>
       </div>
       <div class="meta">
-        <div><strong>Agricultor:</strong> ${f.farmer_name}</div>
+        <div><strong>Agricultor:</strong> ${esc(f.farmer_name)}</div>
         <div><strong>Fecha emisión:</strong> ${fechaDoc}</div>
       </div>
       <div class="meta">
-        <div><strong>Fomento N.º:</strong> ${f.id}</div>
-        <div><span class="badge ${cerrado ? "b-cerrado" : "b-activo"}">${cerrado ? "🗄️ CERRADO POR LIQUIDACIÓN" : "ACTIVO"}</span>${liqFecha ? ` &nbsp;<strong>Liquidado:</strong> ${liqFecha}` : ""}</div>
+        <div><strong>Fomento N.º:</strong> ${esc(f.id)}${f.folio ? ` &nbsp;<strong>Libreta:</strong> ${esc(f.folio)}` : ""}</div>
+        <div><span class="badge ${cerrado ? "b-cerrado" : "b-activo"}">${cerrado ? "🗄️ CERRADO" : "ACTIVO"}</span>${liqFecha ? ` &nbsp;<strong>Liquidado:</strong> ${liqFecha}` : ""}</div>
       </div>
-      ${f.notes ? `<div class="note">📌 ${f.notes.replace(/</g,"&lt;")}</div>` : ""}
 
-      <h4>Detalle de Entregas / Créditos e Intereses</h4>
-      <table>
-        <thead><tr><th>Fecha</th><th>Concepto</th><th style="text-align:right">Valor</th><th style="text-align:right">Días</th><th style="text-align:right">Interés</th><th style="text-align:right">Total</th></tr></thead>
-        <tbody>${entregaRows || `<tr><td colspan="6" style="text-align:center;color:#888">Sin entregas registradas</td></tr>`}</tbody>
-        <tfoot><tr>
-          <td colspan="2">TOTALES</td>
-          <td style="text-align:right">$${totalPedido.toFixed(2)}</td>
-          <td></td>
-          <td style="text-align:right;color:#b45309">$${totalInteres.toFixed(2)}</td>
-          <td style="text-align:right">$${(totalPedido + totalInteres).toFixed(2)}</td>
-        </tr></tfoot>
-      </table>
+      <div class="sec">
+        <h4>A · Cargos del agricultor (insumos, efectivo, créditos) + interés</h4>
+        <table>
+          <thead><tr><th>Fecha</th><th>Concepto</th><th style="text-align:right">Valor</th><th style="text-align:right">Días</th><th style="text-align:right">Interés</th><th style="text-align:right">Total</th></tr></thead>
+          <tbody>${entregaRows || `<tr><td colspan="6" style="text-align:center;color:#888">Sin cargos registrados</td></tr>`}</tbody>
+          <tfoot><tr>
+            <td colspan="2">SUBTOTAL CARGOS</td>
+            <td style="text-align:right">$${totalPedido.toFixed(2)}</td><td></td>
+            <td style="text-align:right;color:#b45309">$${totalInteres.toFixed(2)}</td>
+            <td style="text-align:right">$${cargosFomento.toFixed(2)}</td>
+          </tr></tfoot>
+        </table>
+      </div>
 
-      <h4>Abonos Recibidos (incl. Liquidación de Arroz)</h4>
-      <table>
-        <thead><tr><th>Fecha</th><th>Concepto</th><th style="text-align:right">Monto abonado</th></tr></thead>
-        <tbody>${pagoRows}</tbody>
-      </table>
+      <div class="sec">
+        <h4>B · Descuentos operativos de la liquidación</h4>
+        <table class="subt" style="width:360px">
+          <tr><td class="lbl">🚚 Flete:</td><td class="val">$${totalFlete.toFixed(2)}</td></tr>
+          <tr><td class="lbl">🚜 Cosechadora:</td><td class="val">$${totalCosechadora.toFixed(2)}</td></tr>
+          ${totalBascula > 0.005 ? `<tr><td class="lbl">⚖️ Retención báscula:</td><td class="val">$${totalBascula.toFixed(2)}</td></tr>` : ""}
+          <tr><td class="lbl" style="border-top:1px solid #999">Subtotal descuentos:</td><td class="val" style="border-top:1px solid #999;font-weight:700">$${descuentosOp.toFixed(2)}</td></tr>
+        </table>
+        ${descuentosOp <= 0.005 ? `<div style="font-size:12px;color:#888">Sin descuentos operativos.</div>` : ""}
+      </div>
 
-      <table class="totals">
-        <tr><td class="lbl">Total pedido:</td><td class="val">$${totalPedido.toFixed(2)}</td></tr>
-        <tr><td class="lbl">Interés acumulado:</td><td class="val" style="color:#b45309">$${totalInteres.toFixed(2)}</td></tr>
-        <tr><td class="lbl">Deuda bruta:</td><td class="val">$${(totalPedido + totalInteres).toFixed(2)}</td></tr>
-        <tr><td class="lbl">Total abonado:</td><td class="val" style="color:#15803d">-$${totalPagado.toFixed(2)}</td></tr>
-        <tr class="saldo-row"><td class="lbl">SALDO RESULTANTE:</td>
-          <td class="val ${saldado ? "saldado" : "contra"}">${saldado ? "SALDADO $0.00" : `SALDO EN CONTRA $${saldo.toFixed(2)}`}</td></tr>
-      </table>
-      ${!saldado ? `<div class="note contra" style="border-left-color:#b91c1c">⚠️ Saldo en contra pendiente de $${saldo.toFixed(2)}. ${cerrado ? "Trasladado a un nuevo fomento activo (arrastre de saldo)." : "El agricultor mantiene deuda pendiente."}</div>` : ""}
+      <div class="sec">
+        <h4>C · Ingresos — Arroz entregado según romana</h4>
+        <table>
+          <thead><tr><th>Liquidación</th><th>Fecha</th><th style="text-align:right">QQ</th><th style="text-align:right">Precio/QQ</th><th style="text-align:right">Bruto arroz</th></tr></thead>
+          <tbody>${liqRows}</tbody>
+          ${liqs.length ? `<tfoot><tr><td colspan="4">TOTAL INGRESOS (BRUTO)</td><td style="text-align:right;color:#15803d">$${ingresosArroz.toFixed(2)}</td></tr></tfoot>` : ""}
+        </table>
+      </div>
+
+      <div class="sec">
+        <table class="subt" style="width:380px">
+          <tr><td class="lbl">(+) Ingresos (arroz bruto):</td><td class="val" style="color:#15803d">$${ingresosArroz.toFixed(2)}</td></tr>
+          <tr><td class="lbl">(−) Cargos (fomento + interés):</td><td class="val">-$${cargosFomento.toFixed(2)}</td></tr>
+          <tr><td class="lbl">(−) Descuentos operativos:</td><td class="val">-$${descuentosOp.toFixed(2)}</td></tr>
+        </table>
+      </div>
+
+      <div class="result ${aFavor ? "favor" : "contra"}">
+        <div class="cap">D · ${aFavor ? "🟢 Saldo a favor del cliente" : "🔴 Saldo en contra (deuda arrastrada)"}</div>
+        <div class="amt">$ ${abs.toFixed(2)}</div>
+        <div style="font-size:11px;margin-top:4px;font-weight:600">${aFavor ? "El arroz cubrió los cargos y descuentos; este monto se le paga al agricultor." : "El arroz no alcanzó a cubrir todo; este saldo se arrastra a la próxima cosecha."}</div>
+      </div>
 
       <div class="sigs">
         <div class="sig"><hr/><span>Agricultor</span></div>
         <div class="sig"><hr/><span>Responsable</span></div>
       </div>
-      ${appSettings.receipt_footer ? `<p style="text-align:center;margin-top:28px;font-size:11px;color:#666">${appSettings.receipt_footer}</p>` : ""}
+      ${appSettings.receipt_footer ? `<p style="text-align:center;margin-top:24px;font-size:11px;color:#666">${esc(appSettings.receipt_footer)}</p>` : ""}
     </body></html>`;
-    const win = window.open("", "_blank", "width=780,height=640");
+    const win = window.open("", "_blank", "width=800,height=680");
     if (win) { win.document.write(html); win.document.close(); win.print(); }
   }
 
@@ -15689,11 +15733,23 @@ export function App() {
                     </button>
                   )}
                 </div>
+                {/* Buscador rápido: filtra por nombre, libreta (folio) o código. */}
+                <div style={{ position: "relative", marginBottom: 8 }}>
+                  <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", fontSize: 13, color: "var(--c-muted)" }}>🔍</span>
+                  <input type="text" value={fomentoSearch} onChange={(e) => setFomentoSearch(e.target.value)}
+                    placeholder="Buscar agricultor, libreta o código…"
+                    style={{ width: "100%", padding: "7px 10px 7px 30px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13 }} />
+                  {fomentoSearch && (
+                    <button type="button" onClick={() => setFomentoSearch("")} title="Limpiar"
+                      style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--c-muted)", fontSize: 14 }}>✕</button>
+                  )}
+                </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 420, overflowY: "auto" }}>
                   {fomentos
                     .filter(f => fomentoFilter === "ARCHIVADOS" ? f.status === "CERRADO_LIQUIDACION"
                                : fomentoFilter === "TODOS" ? f.status !== "CERRADO_LIQUIDACION"
                                : f.status === fomentoFilter)
+                    .filter(f => { const q = fomentoSearch.trim().toLowerCase(); return !q || [f.farmer_name, f.folio, f.id].some(x => String(x ?? "").toLowerCase().includes(q)); })
                     .map(f => {
                       const habilitado = f.estado_credito === "HABILITADO";
                       const statusColor = f.status === "ACTIVOS" ? "#16a34a" : f.status === "APROBADOS" ? "#1d4ed8" : f.status === "CERRADO_LIQUIDACION" ? "#374151" : "#6b7280";
@@ -15722,11 +15778,13 @@ export function App() {
                         </div>
                       );
                     })}
-                  {fomentos.filter(f => fomentoFilter === "ARCHIVADOS" ? f.status === "CERRADO_LIQUIDACION"
+                  {fomentos.filter(f => (fomentoFilter === "ARCHIVADOS" ? f.status === "CERRADO_LIQUIDACION"
                                       : fomentoFilter === "TODOS" ? f.status !== "CERRADO_LIQUIDACION"
-                                      : f.status === fomentoFilter).length === 0 && (
+                                      : f.status === fomentoFilter)
+                                      && (() => { const q = fomentoSearch.trim().toLowerCase(); return !q || [f.farmer_name, f.folio, f.id].some(x => String(x ?? "").toLowerCase().includes(q)); })()).length === 0 && (
                     <p style={{ color: "var(--c-muted)", textAlign: "center", padding: 20 }}>
-                      {fomentoFilter === "ARCHIVADOS" ? "No hay fomentos archivados (cerrados por liquidación)" : `No hay fomentos ${fomentoFilter !== "TODOS" ? `con estado ${fomentoFilter}` : "registrados"}`}
+                      {fomentoSearch.trim() ? `Sin resultados para “${fomentoSearch.trim()}”`
+                        : fomentoFilter === "ARCHIVADOS" ? "No hay fomentos archivados (cerrados por liquidación)" : `No hay fomentos ${fomentoFilter !== "TODOS" ? `con estado ${fomentoFilter}` : "registrados"}`}
                     </p>
                   )}
                 </div>
@@ -15829,6 +15887,41 @@ export function App() {
                       ))}
                     </div>
 
+                    {/* Interés fijo del SALDO ARRASTRADO (movido aquí desde el form de entrega):
+                        modificador directo sobre el saldo/deuda de la cuenta. */}
+                    {(() => {
+                      const ent = fomentoDetalle.entregas ?? [];
+                      const fija = ent.find(e => e.es_saldo_anterior);
+                      const activo = !!fija;
+                      const mesesActual = Number(fija?.meses_interes_fijo ?? 1) || 1;
+                      return (
+                        <div style={{ border: `1px solid ${activo ? "#f59e0b" : "#e5e7eb"}`, background: activo ? "#fffbeb" : "#f9fafb", borderRadius: 8, padding: "8px 12px", marginBottom: 14 }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontWeight: 700, cursor: canEditarPrecios ? "pointer" : "default" }}>
+                              <input type="checkbox" checked={activo} disabled={!canEditarPrecios || fomentoInteresFijoBusy}
+                                onChange={(e) => ajustarInteresFijoFomento(e.target.checked, mesesActual)} />
+                              🔒 Interés fijo del saldo arrastrado
+                            </label>
+                            {activo && (
+                              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+                                <span className="muted">Meses</span>
+                                <select value={mesesActual} disabled={!canEditarPrecios || fomentoInteresFijoBusy}
+                                  onChange={(e) => ajustarInteresFijoFomento(true, Number(e.target.value))}
+                                  style={{ padding: "3px 6px", borderRadius: 6, border: "1px solid #d1d5db" }}>
+                                  {[1,2,3,4,5,6].map(m => <option key={m} value={m}>{m}</option>)}
+                                </select>
+                              </label>
+                            )}
+                          </div>
+                          <small className="muted" style={{ display: "block", marginTop: 4 }}>
+                            {activo
+                              ? `El interés del saldo NO corre por días: se cobran ${mesesActual} mes(es) fijos (Deuda Total ya lo refleja).`
+                              : "El interés corre por días (dinámico). Actívalo para congelarlo a N meses sobre el saldo arrastrado."}
+                          </small>
+                        </div>
+                      );
+                    })()}
+
                     {/* Tabla de entregas */}
                     <h4 style={{ marginBottom: 6 }}>Entregas / Créditos</h4>
                     <div style={{ overflowX: "auto", marginBottom: 12 }}>
@@ -15845,7 +15938,9 @@ export function App() {
                         </thead>
                         <tbody>
                           {fomentoDetalle.entregas.map((e, i) => {
-                            const dias = Math.max(0, Math.floor((Date.now() - new Date(e.fecha).getTime()) / 86400000));
+                            // Días CON CORTE: si el backend ya congeló el reloj (fomento en cierre),
+                            // usa e.dias_corte; si no, calcula contra hoy.
+                            const dias = e.dias_corte != null ? Number(e.dias_corte) : Math.max(0, Math.floor((Date.now() - new Date(e.fecha).getTime()) / 86400000));
                             return (
                               <tr key={e.id} style={{ background: e.es_saldo_anterior ? "#fffbeb" : (i % 2 === 0 ? "#fff" : "#f9fafb") }}>
                                 <td style={{ padding: "4px 8px" }}>{e.es_saldo_anterior ? "—" : e.fecha?.slice(0,10)}</td>
@@ -15921,29 +16016,11 @@ export function App() {
                     <details open style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 14px" }}>
                       <summary style={{ cursor: "pointer", fontWeight: 600, color: "var(--c-brand)" }}>+ Registrar Entrega</summary>
                       <form onSubmit={submitFomentoEntrega} style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
-                        {/* Toggle: saldo arrastrado de cosecha pasada (interés fijo por meses) */}
-                        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, fontWeight: 600, background: fomentoEntregaForm.es_saldo_anterior ? "#fef3c7" : "#f9fafb", border: "1px solid #fcd34d", borderRadius: 6, padding: "8px 10px", cursor: "pointer" }}>
-                          <input type="checkbox" checked={fomentoEntregaForm.es_saldo_anterior}
-                            onChange={e => setFomentoEntregaForm(p => ({ ...p, es_saldo_anterior: e.target.checked, concepto: e.target.checked && !p.concepto ? "Saldo en contra cosecha pasada" : p.concepto }))}
-                            style={{ marginTop: 2 }} />
-                          <span>🔒 Es saldo de cosecha pasada (Interés Fijo)
-                            <br /><span style={{ fontWeight: 400, color: "var(--c-muted)" }}>No corre por días: se cobran N meses de interés fijos.</span>
-                          </span>
+                        <label style={{ fontSize: 12, fontWeight: 600 }}>Fecha
+                          <input required type="date" value={fomentoEntregaForm.fecha}
+                            onChange={e => setFomentoEntregaForm(p => ({...p, fecha: e.target.value}))}
+                            style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} />
                         </label>
-                        {!fomentoEntregaForm.es_saldo_anterior && (
-                          <label style={{ fontSize: 12, fontWeight: 600 }}>Fecha
-                            <input required type="date" value={fomentoEntregaForm.fecha}
-                              onChange={e => setFomentoEntregaForm(p => ({...p, fecha: e.target.value}))}
-                              style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} />
-                          </label>
-                        )}
-                        {fomentoEntregaForm.es_saldo_anterior && (
-                          <label style={{ fontSize: 12, fontWeight: 600 }}>Meses a cobrar (ej. 1, 2, 3)
-                            <input required type="number" step="1" min="1" max="60" value={fomentoEntregaForm.meses_interes_fijo}
-                              onChange={e => setFomentoEntregaForm(p => ({...p, meses_interes_fijo: e.target.value}))}
-                              style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="1" />
-                          </label>
-                        )}
                         <label style={{ fontSize: 12, fontWeight: 600 }}>Valor ($)
                           <input required type="number" step="0.01" min="0.01" value={fomentoEntregaForm.valor}
                             onChange={e => setFomentoEntregaForm(p => ({...p, valor: e.target.value}))}
@@ -15954,11 +16031,6 @@ export function App() {
                             {(() => {
                               const renta = Number(fomentoDetalle.renta ?? 0.07);
                               const valor = Number(fomentoEntregaForm.valor);
-                              if (fomentoEntregaForm.es_saldo_anterior) {
-                                const meses = Number(fomentoEntregaForm.meses_interes_fijo) || 0;
-                                const interes = valor * renta * meses;
-                                return `🔒 Fijo: ${meses} mes(es) | Tasa: ${(renta*100).toFixed(2)}%/mes | Interés: $${interes.toFixed(2)} | Total: $${(valor + interes).toFixed(2)}`;
-                              }
                               const dias = Math.max(0, Math.floor((Date.now() - new Date(fomentoEntregaForm.fecha).getTime()) / 86400000));
                               const interes = valor * renta / 30 * dias;
                               return `Días: ${dias} | Tasa: ${(renta*100).toFixed(2)}% | Interés: $${interes.toFixed(2)} | Total: $${(valor + interes).toFixed(2)}`;
@@ -16049,11 +16121,7 @@ export function App() {
                       <path d="M8 14V8"/><path d="M5 11l3-3 3 3"/><path d="M2 14h12"/><path d="M4 8C4 5 6 2 8 2s4 3 4 6"/>
                     </svg>
                     <h3 style={{ margin: "0 0 6px", color: "var(--c-text)" }}>Ningún fomento seleccionado</h3>
-                    <p style={{ margin: "0 0 16px", fontSize: 13 }}>Selecciona un fomento de la lista para ver su detalle y registrar entregas, o crea uno nuevo.</p>
-                    <button type="button" onClick={() => { setFomentoEditingId(null); resetFomentoForm(); setFomentoModalOpen(true); }}
-                      style={{ background: "var(--c-success)", color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", cursor: "pointer", fontWeight: 700, fontSize: 13 }}>
-                      + Nuevo Fomento
-                    </button>
+                    <p style={{ margin: 0, fontSize: 13 }}>Selecciona un fomento de la lista para ver su detalle y registrar entregas, o usa <strong>+ Nuevo Fomento</strong> arriba.</p>
                   </div>
                 )}
               </div>

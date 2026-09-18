@@ -85,9 +85,14 @@ const SELECT_FOMENTO = `
     SELECT
       fomento_id,
       SUM(valor) AS total_pedido,
+      -- REGLA DE ORO: el reloj del interés se detiene el día que el arroz entró a
+      -- la planta. Si el fomento está en cierre (CERRADO_LIQUIDACION) se usa su
+      -- liquidado_at como corte; si sigue activo, la fecha actual.
       SUM(CASE WHEN fe.es_saldo_anterior
                THEN fe.valor * f2.renta * COALESCE(fe.meses_interes_fijo, 0)
-               ELSE fe.valor * f2.renta / 30.0 * GREATEST(CURRENT_DATE - fe.fecha, 0) END) AS gasto_adm
+               ELSE fe.valor * f2.renta / 30.0 * GREATEST(
+                    (CASE WHEN f2.status = 'CERRADO_LIQUIDACION' AND f2.liquidado_at IS NOT NULL
+                          THEN f2.liquidado_at::date ELSE CURRENT_DATE END) - fe.fecha, 0) END) AS gasto_adm
     FROM fomento_entregas fe
     JOIN fomentos f2 ON f2.id = fe.fomento_id
     GROUP BY fomento_id
@@ -589,15 +594,22 @@ fomentosRouter.get("/:id", asyncRoute(async (req, res) => {
   const fomento = await pool.query(`${SELECT_FOMENTO} WHERE f.id = $1 AND f.accionista_id = $2`, [req.params.id, accionistaId]);
   if (!fomento.rows[0]) { res.status(404).json({ error: "No encontrado" }); return; }
 
-  const [entregas, pagos] = await Promise.all([
+  const [entregas, pagos, liquidaciones] = await Promise.all([
     pool.query(
       `SELECT e.*,
+        GREATEST(
+          (CASE WHEN f.status = 'CERRADO_LIQUIDACION' AND f.liquidado_at IS NOT NULL
+                THEN f.liquidado_at::date ELSE CURRENT_DATE END) - e.fecha, 0) AS dias_corte,
         ROUND(CASE WHEN e.es_saldo_anterior
                    THEN e.valor * f.renta * COALESCE(e.meses_interes_fijo, 0)
-                   ELSE e.valor * f.renta / 30.0 * GREATEST(CURRENT_DATE - e.fecha, 0) END, 2) AS interes,
+                   ELSE e.valor * f.renta / 30.0 * GREATEST(
+                        (CASE WHEN f.status = 'CERRADO_LIQUIDACION' AND f.liquidado_at IS NOT NULL
+                              THEN f.liquidado_at::date ELSE CURRENT_DATE END) - e.fecha, 0) END, 2) AS interes,
         ROUND(e.valor + CASE WHEN e.es_saldo_anterior
                    THEN e.valor * f.renta * COALESCE(e.meses_interes_fijo, 0)
-                   ELSE e.valor * f.renta / 30.0 * GREATEST(CURRENT_DATE - e.fecha, 0) END, 2) AS suman
+                   ELSE e.valor * f.renta / 30.0 * GREATEST(
+                        (CASE WHEN f.status = 'CERRADO_LIQUIDACION' AND f.liquidado_at IS NOT NULL
+                              THEN f.liquidado_at::date ELSE CURRENT_DATE END) - e.fecha, 0) END, 2) AS suman
        FROM fomento_entregas e
        JOIN fomentos f ON f.id = e.fomento_id
        WHERE e.fomento_id = $1
@@ -607,10 +619,28 @@ fomentosRouter.get("/:id", asyncRoute(async (req, res) => {
     pool.query(
       `SELECT * FROM fomento_pagos WHERE fomento_id = $1 ORDER BY fecha`,
       [req.params.id]
+    ),
+    // Liquidaciones que abonaron a ESTE fomento: para el Estado de Cuenta se
+    // exponen el bruto del arroz y los descuentos operativos (flete/cosechadora).
+    pool.query(
+      `SELECT l.liquidation_number, l.created_at,
+              l.gross_amount::float           AS gross_amount,
+              l.quintals::float               AS quintals,
+              l.price_per_quintal::float      AS price_per_quintal,
+              COALESCE((l.discount_breakdown->>'flete')::float, 0)       AS flete,
+              COALESCE((l.discount_breakdown->>'cosechadora')::float, 0) AS cosechadora,
+              COALESCE((l.discount_breakdown->>'bascula')::float, 0)     AS bascula,
+              SUM(fp.valor)::float            AS abono_fomento
+         FROM fomento_pagos fp
+         JOIN liquidations l ON l.id = fp.liquidation_id
+        WHERE fp.fomento_id = $1 AND fp.liquidation_id IS NOT NULL AND l.status <> 'CANCELLED'
+        GROUP BY l.id, l.liquidation_number, l.created_at, l.gross_amount, l.quintals, l.price_per_quintal, l.discount_breakdown
+        ORDER BY l.created_at`,
+      [req.params.id]
     )
   ]);
 
-  res.json({ ...fomento.rows[0], entregas: entregas.rows, pagos: pagos.rows });
+  res.json({ ...fomento.rows[0], entregas: entregas.rows, pagos: pagos.rows, liquidaciones: liquidaciones.rows });
 }));
 
 fomentosRouter.post("/", asyncRoute(async (req, res) => {
@@ -654,6 +684,40 @@ fomentosRouter.patch("/:id", asyncRoute(async (req, res) => {
 // Nota: el interés FIJO ahora se gestiona POR FILA (entregas de saldo arrastrado),
 // no globalmente. El antiguo PATCH /:id/interes fue retirado; las columnas
 // fomentos.modo_interes/interes_fijo_monto quedan sin uso (se dejan en BD).
+
+// Ajuste de INTERÉS FIJO del SALDO ARRASTRADO desde la cabecera del fomento:
+// marca (o desmarca) TODAS las entregas del fomento como saldo anterior con N meses
+// fijos. `activo:false` vuelve al interés dinámico por días. Modificador directo
+// sobre el saldo de la cuenta (regla de negocio del cliente).
+fomentosRouter.patch("/:id/interes-fijo", asyncRoute(async (req, res) => {
+  const accionistaId = getAccionistaId(req);
+  const body = z.object({
+    activo: z.boolean(),
+    meses: z.number().int().min(1).max(60).optional()
+  }).parse(req.body);
+  const fomentoId = String(req.params.id);
+
+  await inTransaction(async (client) => {
+    const fom = await client.query("SELECT 1 FROM fomentos WHERE id = $1 AND accionista_id = $2 FOR UPDATE", [fomentoId, accionistaId]);
+    if (!fom.rowCount) throw new ApiError(404, "Fomento no encontrado o no pertenece al accionista activo");
+    if (body.activo) {
+      const meses = body.meses ?? 1;
+      await client.query(
+        "UPDATE fomento_entregas SET es_saldo_anterior = true, meses_interes_fijo = $2 WHERE fomento_id = $1",
+        [fomentoId, meses]
+      );
+    } else {
+      await client.query(
+        "UPDATE fomento_entregas SET es_saldo_anterior = false, meses_interes_fijo = NULL WHERE fomento_id = $1",
+        [fomentoId]
+      );
+    }
+  });
+
+  // Devuelve el fomento con los derivados recalculados (gasto_adm/deuda_total).
+  const full = await pool.query(`${SELECT_FOMENTO} WHERE f.id = $1 AND f.accionista_id = $2`, [fomentoId, accionistaId]);
+  res.json(full.rows[0]);
+}));
 
 fomentosRouter.delete("/:id", asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
