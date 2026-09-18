@@ -504,7 +504,10 @@ const bulkImportSchema = z.object({
     entregas: z.array(z.object({
       // El front ya convierte la fecha de Excel a ISO; se acepta opcional.
       fecha: z.string().optional(),
-      valor: z.number().positive()
+      valor: z.number().positive(),
+      // Saldo arrastrado (interés fijo por N meses) si el cuadro lo marca.
+      es_saldo_anterior: z.boolean().optional(),
+      meses_interes_fijo: z.number().int().min(1).max(60).optional()
     })).default([])
   })).min(1, "No se detectó ningún bloque (busca la celda 'NOMBRE:').")
 });
@@ -565,9 +568,12 @@ fomentosRouter.post("/bulk-import", asyncRoute(async (req, res) => {
       // (c) Entregas: fecha original (o CURRENT_DATE) + valor. El interés lo calcula
       //     el motor existente (por días desde cada fecha) — NO se marca saldo anterior.
       for (const e of b.entregas) {
+        const esSaldo = e.es_saldo_anterior === true;
         await client.query(
-          "INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto) VALUES ($1, COALESCE($2::date, CURRENT_DATE), $3, $4)",
-          [fom.rows[0].id, fechaISOsegura(e.fecha), e.valor, "Entrega importada (mosaico)"]
+          "INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto, es_saldo_anterior, meses_interes_fijo) VALUES ($1, COALESCE($2::date, CURRENT_DATE), $3, $4, $5, $6)",
+          [fom.rows[0].id, fechaISOsegura(e.fecha), e.valor,
+           esSaldo ? "Saldo en contra cosecha pasada" : "Entrega importada (mosaico)",
+           esSaldo, esSaldo ? (e.meses_interes_fijo ?? 1) : null]
         );
         entregasCreadas++;
       }

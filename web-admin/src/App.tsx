@@ -5307,36 +5307,73 @@ export function App() {
       // Matriz 2D (Array de Arrays).
       const data = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, blankrows: true, defval: null });
 
-      type Bloque = { cliente: string; cuadras?: number; limite?: number; entregas: Array<{ fecha?: string; valor: number }> };
+      type Entrega = { fecha?: string; valor: number; es_saldo_anterior?: boolean; meses_interes_fijo?: number };
+      type Bloque = { cliente: string; cuadras?: number; limite?: number; entregas: Entrega[] };
       const bloques: Bloque[] = [];
       const at = (r: number, c: number): unknown => (data[r] ? data[r][c] : undefined);
       const esNombre = (v: unknown) => celdaTexto(v).replace(/\s/g, "").toUpperCase() === "NOMBRE:";
+      const norm = (v: unknown) => celdaTexto(v).replace(/\s+/g, " ").trim().toUpperCase();
 
-      // Escaneo 2D: recorre filas y columnas buscando el ancla "NOMBRE:".
+      // Escaneo 2D: recorre filas y columnas buscando el ancla "NOMBRE:". Cada bloque
+      // se lee de forma ROBUSTA: las columnas del detalle (Fecha inicial, Valor, Mes,
+      // Es saldo) se detectan por su ENCABEZADO, no por una posición fija — así el
+      // mismo cuadro del cliente funciona sin importar en qué columnas esté.
       for (let r = 0; r < data.length; r++) {
         const row = data[r]; if (!row) continue;
         for (let c = 0; c < row.length; c++) {
           if (!esNombre(row[c])) continue;
 
-          // Cabecera: nombre en [r, c+1..c+4]; cuadras en [r+1, c+1|c+2]; límite en [r+2, c+1|c+2].
+          // Nombre: primera celda con texto a la derecha del ancla.
           let cliente = "";
-          for (let k = 1; k <= 4 && !cliente; k++) cliente = celdaTexto(at(r, c + k));
-          if (!cliente) continue; // ancla sin nombre → se ignora
-          const cuadras = celdaNumero(at(r + 1, c + 1)) ?? celdaNumero(at(r + 1, c + 2));
-          const limite = celdaNumero(at(r + 2, c + 1)) ?? celdaNumero(at(r + 2, c + 2));
+          for (let k = 1; k <= 8 && !cliente; k++) cliente = celdaTexto(at(r, c + k));
+          if (!cliente) continue;
 
-          // Entregas: desde la fila r+4 hacia abajo. Fecha en [c+1], Valor en [c+5].
-          const entregas: Array<{ fecha?: string; valor: number }> = [];
-          for (let rr = r + 4; rr < data.length; rr++) {
-            // Corte: fila vacía en el bloque (cols c..c+5) o "TOTAL" en cualquiera de ellas.
-            let algo = false, hayTotal = false;
-            for (let cc = c; cc <= c + 5; cc++) { const t = celdaTexto(at(rr, cc)); if (t) algo = true; if (/TOTAL/i.test(t)) hayTotal = true; }
-            if (!algo || hayTotal) break;
-            const valor = celdaNumero(at(rr, c + 5));
-            if (valor != null && valor > 0) entregas.push({ fecha: fechaAISO(at(rr, c + 1)), valor });
+          // Cuadras / Límite: por ETIQUETA (busca "CUADRAS"/"LIMITE" cerca del ancla
+          // y toma el primer número a su derecha).
+          const numDerecha = (rr: number, cc: number): number | undefined => {
+            for (let k = 1; k <= 5; k++) { const n = celdaNumero(at(rr, cc + k)); if (n != null) return n; }
+            return undefined;
+          };
+          let cuadras: number | undefined, limite: number | undefined;
+          for (let rr = r; rr <= r + 6; rr++) for (let cc = Math.max(0, c - 1); cc <= c + 4; cc++) {
+            const t = norm(at(rr, cc)).replace(/\s/g, "");
+            if (cuadras == null && t.startsWith("CUADRAS")) cuadras = numDerecha(rr, cc);
+            if (limite == null && (t.startsWith("LIMITE") || t.startsWith("LÍMITE"))) limite = numDerecha(rr, cc);
           }
 
-          bloques.push({ cliente, cuadras, limite, entregas });
+          // Fila de ENCABEZADO del detalle: la primera (bajo el ancla) que tenga "VALOR".
+          let hr = -1, colValor = -1, colFecha = -1, colMes = -1, colSaldo = -1;
+          for (let rr = r + 1; rr <= Math.min(data.length - 1, r + 10) && hr < 0; rr++) {
+            let cv = -1, cf = -1, cm = -1, cs = -1;
+            for (let cc = Math.max(0, c - 2); cc <= c + 14; cc++) {
+              const t = norm(at(rr, cc));
+              if (!t) continue;
+              if (t === "VALOR") cv = cc;
+              else if (t.startsWith("FECHA INICIAL") || t.startsWith("FECHA INICIO")) cf = cc;
+              else if (t === "MES" || t === "MESES") cm = cc;
+              else if (t.includes("SALDO")) cs = cc;
+            }
+            if (cv >= 0) { hr = rr; colValor = cv; colFecha = cf >= 0 ? cf : cv - 4; colMes = cm; colSaldo = cs; }
+          }
+          if (hr < 0) { hr = r + 3; colFecha = c + 1; colValor = c + 5; } // fallback (spec anterior)
+
+          // Entregas: desde hr+1 hacia abajo, hasta un VALOR vacío o "TOTAL/SUMAN".
+          const entregas: Entrega[] = [];
+          for (let rr = hr + 1; rr < data.length; rr++) {
+            const fila = norm(at(rr, colFecha)) + " " + norm(at(rr, colValor));
+            if (/TOTAL|SUMAN/.test(fila)) break;
+            const valor = celdaNumero(at(rr, colValor));
+            if (valor == null || !(valor > 0)) break; // fin de datos (filas finales vacías)
+            let esSaldo = false, meses: number | undefined;
+            if (colSaldo >= 0) { esSaldo = norm(at(rr, colSaldo)).startsWith("SI"); if (esSaldo && colMes >= 0) meses = celdaNumero(at(rr, colMes)); }
+            entregas.push({
+              fecha: fechaAISO(colFecha >= 0 ? at(rr, colFecha) : undefined), valor,
+              es_saldo_anterior: esSaldo || undefined,
+              meses_interes_fijo: esSaldo ? Math.max(1, Math.round(meses ?? 1)) : undefined
+            });
+          }
+
+          if (entregas.length > 0 || cuadras != null || limite != null) bloques.push({ cliente, cuadras, limite, entregas });
         }
       }
 
