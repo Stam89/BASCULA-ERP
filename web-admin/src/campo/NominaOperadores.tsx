@@ -19,11 +19,14 @@ async function req(path: string, method: "PATCH" | "DELETE", body?: unknown): Pr
 
 type Activo = { id: string; nombre: string; tipo: string; operador: string | null; activo: boolean };
 type Operador = { id: string; nombre: string; activo: boolean };
-type Tarifa = { id: string; operador: string; activo_id: string; tarifa: number; unidad: "QQ" | "VIAJE"; activo: boolean; activo_nombre: string; activo_tipo: string };
+type Unidad = "QQ" | "VIAJE" | "DIA";
+const unidadLabel = (u: Unidad) => u === "QQ" ? "$ / QQ" : u === "VIAJE" ? "$ / Viaje" : "$ / Día";
+const unidadCorta = (u: Unidad) => u === "QQ" ? "QQ" : u === "VIAJE" ? "viaje" : "día";
+type Tarifa = { id: string; operador: string; activo_id: string; tarifa: number; unidad: Unidad; activo: boolean; activo_nombre: string; activo_tipo: string };
 type NominaGrupo = {
   operador: string; activo_id: string; activo_nombre: string; activo_tipo: string;
-  viajes: number; qq: number; desde: string; hasta: string;
-  unidad: "QQ" | "VIAJE"; tarifa: number | null; sin_tarifa: boolean; total: number | null; parte_ids: string[];
+  viajes: number; qq: number; dias: number; base: number; desde: string; hasta: string;
+  unidad: Unidad; tarifa: number | null; sin_tarifa: boolean; total: number | null; parte_ids: string[];
 };
 
 // ── Mantenedor de Tarifas de Operadores (usado en Configuración) ─────────────
@@ -31,7 +34,7 @@ export function TarifasOperadorCatalogo({ activos, operadores, onError, onChange
   activos: Activo[]; operadores: Operador[]; onError: (m: string) => void; onChanged?: (m: string) => void;
 }) {
   const [tarifas, setTarifas] = useState<Tarifa[]>([]);
-  const [f, setF] = useState({ operador: "", activo_id: "", tarifa: "", unidad: "QQ" as "QQ" | "VIAJE" });
+  const [f, setF] = useState({ operador: "", activo_id: "", tarifa: "", unidad: "QQ" as Unidad });
   const [busy, setBusy] = useState(false);
 
   const cargar = useCallback(async () => {
@@ -65,7 +68,7 @@ export function TarifasOperadorCatalogo({ activos, operadores, onError, onChange
   }
 
   async function editar(t: Tarifa) {
-    const val = window.prompt(`Nueva tarifa para ${t.operador} · ${t.activo_nombre} ($ por ${t.unidad === "QQ" ? "QQ" : "viaje"}):`, String(t.tarifa));
+    const val = window.prompt(`Nueva tarifa para ${t.operador} · ${t.activo_nombre} ($ por ${unidadCorta(t.unidad)}):`, String(t.tarifa));
     if (val == null) return;
     const tarifa = Number(val);
     if (!(tarifa >= 0)) { onError("Tarifa inválida"); return; }
@@ -101,9 +104,10 @@ export function TarifasOperadorCatalogo({ activos, operadores, onError, onChange
           <input type="number" step="0.0001" min="0" value={f.tarifa} onChange={(e) => setF({ ...f, tarifa: e.target.value })} placeholder="0.15" />
         </label>
         <label><span>Unidad</span>
-          <select value={f.unidad} onChange={(e) => setF({ ...f, unidad: e.target.value as "QQ" | "VIAJE" })}>
+          <select value={f.unidad} onChange={(e) => setF({ ...f, unidad: e.target.value as Unidad })}>
             <option value="QQ">$ / QQ</option>
             <option value="VIAJE">$ / Viaje</option>
+            <option value="DIA">$ / Día</option>
           </select>
         </label>
         <button type="button" className="primary" disabled={busy} onClick={guardar}>{busy ? "…" : "Guardar"}</button>
@@ -117,7 +121,7 @@ export function TarifasOperadorCatalogo({ activos, operadores, onError, onChange
               <td>{t.operador}</td>
               <td>{t.activo_nombre} <span className="muted" style={{ fontSize: 11 }}>({t.activo_tipo})</span></td>
               <td style={{ textAlign: "right" }}>{money(t.tarifa)}</td>
-              <td>{t.unidad === "QQ" ? "$ / QQ" : "$ / Viaje"}</td>
+              <td>{unidadLabel(t.unidad)}</td>
               <td style={{ whiteSpace: "nowrap" }}>
                 <button type="button" onClick={() => editar(t)} title="Editar tarifa" style={{ marginRight: 6 }}>✎</button>
                 <button type="button" onClick={() => eliminar(t)} title="Eliminar" style={{ color: "#dc2626" }}>🗑</button>
@@ -134,10 +138,23 @@ export function TarifasOperadorCatalogo({ activos, operadores, onError, onChange
 export default function NominaOperadores() {
   const [rango, setRango] = useState({ from: primeroDeMes(), to: hoy() });
   const [grupos, setGrupos] = useState<NominaGrupo[]>([]);
-  const [totalGeneral, setTotalGeneral] = useState(0);
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
   const notify = (text: string, kind: "ok" | "err" = "ok") => { setFlash({ text, kind }); setTimeout(() => setFlash(null), 3000); };
+  // Ajustes manuales por grupo (override del total sugerido + motivo obligatorio).
+  const [ajustes, setAjustes] = useState<Record<string, { monto: string; motivo: string }>>({});
+
+  const keyOf = (g: NominaGrupo) => `${g.operador}::${g.activo_id}`;
+  const montoStr = (g: NominaGrupo) => ajustes[keyOf(g)]?.monto ?? (g.total != null ? String(g.total) : "");
+  const montoNum = (g: NominaGrupo) => { const n = Number(montoStr(g)); return isFinite(n) ? n : 0; };
+  const esAjustado = (g: NominaGrupo) => g.total != null && Math.abs(montoNum(g) - g.total) > 0.005;
+  const setAjuste = (g: NominaGrupo, patch: Partial<{ monto: string; motivo: string }>) =>
+    setAjustes((prev) => {
+      const k = keyOf(g);
+      const cur = prev[k] ?? { monto: g.total != null ? String(g.total) : "", motivo: "" };
+      return { ...prev, [k]: { ...cur, ...patch } };
+    });
+  const baseTexto = (g: NominaGrupo) => g.unidad === "QQ" ? `${qqFmt(g.qq)} QQ` : g.unidad === "DIA" ? `${g.dias} día(s)` : `${g.viajes} viaje(s)`;
 
   const cargar = useCallback(async () => {
     try {
@@ -146,22 +163,32 @@ export default function NominaOperadores() {
       if (rango.from) qs.set("from", rango.from);
       if (rango.to) qs.set("to", rango.to);
       const data = await apiGet<{ grupos: NominaGrupo[]; total_general: number }>(`/campo/nomina-operadores?${qs.toString()}`);
-      setGrupos(data.grupos); setTotalGeneral(data.total_general);
+      setGrupos(data.grupos); setAjustes({});
     } catch (e) { notify((e as Error).message, "err"); } finally { setBusy(false); }
   }, [rango.from, rango.to]);
   useEffect(() => { cargar(); }, [cargar]);
 
   async function liquidar(g: NominaGrupo) {
     if (g.sin_tarifa) { notify(`Asigna una tarifa a ${g.operador} · ${g.activo_nombre} en Configuración antes de liquidar.`, "err"); return; }
-    const base = g.unidad === "QQ" ? `${qqFmt(g.qq)} QQ` : `${g.viajes} viaje(s)`;
-    if (!window.confirm(`¿Liquidar a ${g.operador} (${g.activo_nombre}) por ${base} = ${money(g.total ?? 0)}?\n\nSe marcarán ${g.parte_ids.length} parte(s) como pagados al operador.`)) return;
+    const final = montoNum(g);
+    if (!(final >= 0)) { notify("El monto a pagar no es válido.", "err"); return; }
+    const ajustado = esAjustado(g);
+    const motivo = (ajustes[keyOf(g)]?.motivo ?? "").trim();
+    if (ajustado && !motivo) { notify("Escribe el motivo del ajuste (ej. \"Trabajó medio día\").", "err"); return; }
+    if (!window.confirm(`¿Liquidar a ${g.operador} (${g.activo_nombre}) por ${baseTexto(g)} = ${money(final)}${ajustado ? ` (ajustado de ${money(g.total ?? 0)})` : ""}?\n\nSe marcarán ${g.parte_ids.length} parte(s) como pagados al operador.`)) return;
     try {
       setBusy(true);
-      await apiPost("/campo/nomina-operadores/liquidar", { parte_ids: g.parte_ids, monto: g.total ?? undefined });
-      notify(`Liquidado ${g.operador}: ${money(g.total ?? 0)} ✓`);
+      await apiPost("/campo/nomina-operadores/liquidar", {
+        parte_ids: g.parte_ids, operador: g.operador, activo_id: g.activo_id,
+        unidad: g.unidad, base: g.base, tarifa: g.tarifa ?? undefined,
+        monto_sugerido: g.total ?? undefined, monto: final, ajustado, motivo: motivo || undefined
+      });
+      notify(`Liquidado ${g.operador}: ${money(final)} ✓`);
       await cargar();
     } catch (e) { notify((e as Error).message, "err"); } finally { setBusy(false); }
   }
+
+  const totalVista = grupos.reduce((s, g) => s + (g.sin_tarifa ? 0 : montoNum(g)), 0);
 
   return (
     <section className="panelGrid">
@@ -175,39 +202,58 @@ export default function NominaOperadores() {
             <button type="button" onClick={cargar} disabled={busy}>↻ Actualizar</button>
           </div>
         </div>
-        <p className="muted" style={{ marginTop: 6 }}>Agrupa los partes NO pagados al operador en el rango. Total = (QQ o viajes) × tarifa. Liquidar los marca como pagados para que no se repitan.</p>
+        <p className="muted" style={{ marginTop: 6 }}>Agrupa los partes NO pagados al operador en el rango. Subtotal sugerido = base (QQ · viajes · días) × tarifa. Puedes <strong>ajustar</strong> el total (con motivo) antes de liquidar. Liquidar marca esos partes como pagados para que no se repitan.</p>
       </div>
 
       <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
         <table className="cajaTable">
           <thead><tr>
-            <th>Operador</th><th>Máquina</th><th style={{ textAlign: "right" }}>QQ</th><th style={{ textAlign: "right" }}>Viajes</th>
-            <th style={{ textAlign: "right" }}>Tarifa</th><th style={{ textAlign: "right" }}>Total a pagar</th><th></th>
+            <th>Operador</th><th>Máquina</th><th style={{ textAlign: "right" }}>QQ</th><th style={{ textAlign: "right" }}>Viajes</th><th style={{ textAlign: "right" }}>Días</th>
+            <th style={{ textAlign: "right" }}>Tarifa</th><th style={{ textAlign: "right" }}>Sugerido</th><th style={{ textAlign: "right" }}>Total a pagar</th><th></th>
           </tr></thead>
           <tbody>
-            {grupos.length === 0 && <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: 16 }}>Sin partes pendientes de pago en el rango.</td></tr>}
-            {grupos.map((g) => (
-              <tr key={`${g.operador}::${g.activo_id}`}>
+            {grupos.length === 0 && <tr><td colSpan={9} className="muted" style={{ textAlign: "center", padding: 16 }}>Sin partes pendientes de pago en el rango.</td></tr>}
+            {grupos.map((g) => {
+              const ajustado = esAjustado(g);
+              return (
+              <tr key={keyOf(g)}>
                 <td style={{ fontWeight: 600 }}>{g.operador}</td>
                 <td>{g.activo_nombre} <span className="muted" style={{ fontSize: 11 }}>({g.activo_tipo})</span></td>
-                <td style={{ textAlign: "right" }}>{qqFmt(g.qq)}</td>
-                <td style={{ textAlign: "right" }}>{g.viajes}</td>
+                <td style={{ textAlign: "right", fontWeight: g.unidad === "QQ" ? 700 : 400 }}>{qqFmt(g.qq)}</td>
+                <td style={{ textAlign: "right", fontWeight: g.unidad === "VIAJE" ? 700 : 400 }}>{g.viajes}</td>
+                <td style={{ textAlign: "right", fontWeight: g.unidad === "DIA" ? 700 : 400 }}>{g.dias}</td>
                 <td style={{ textAlign: "right" }}>
                   {g.sin_tarifa
                     ? <span style={{ color: "#b91c1c", fontWeight: 700, fontSize: 12 }}>⚠️ sin tarifa</span>
-                    : <>{money(g.tarifa ?? 0)} <span className="muted" style={{ fontSize: 11 }}>/ {g.unidad === "QQ" ? "QQ" : "viaje"}</span></>}
+                    : <>{money(g.tarifa ?? 0)} <span className="muted" style={{ fontSize: 11 }}>/ {unidadCorta(g.unidad)}</span></>}
                 </td>
-                <td style={{ textAlign: "right", fontWeight: 700 }}>{g.total != null ? money(g.total) : "—"}</td>
+                <td style={{ textAlign: "right", color: "var(--c-muted)" }}>{g.total != null ? money(g.total) : "—"}</td>
+                <td style={{ textAlign: "right", minWidth: 180 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
+                    <span style={{ fontWeight: 700 }}>$</span>
+                    <input type="number" step="0.01" min="0" value={montoStr(g)} disabled={g.sin_tarifa}
+                      onChange={(e) => setAjuste(g, { monto: e.target.value })}
+                      title="Puedes sobrescribir el total sugerido"
+                      style={{ width: 100, textAlign: "right", padding: "4px 6px", borderRadius: 6,
+                        border: ajustado ? "2px solid #f59e0b" : "1px solid #d1d5db", fontWeight: 700 }} />
+                  </div>
+                  {ajustado && (
+                    <input type="text" value={ajustes[keyOf(g)]?.motivo ?? ""} onChange={(e) => setAjuste(g, { motivo: e.target.value })}
+                      placeholder="Motivo del ajuste (obligatorio)"
+                      style={{ marginTop: 4, width: "100%", padding: "4px 6px", borderRadius: 6, border: "1px solid #f59e0b", fontSize: 12 }} />
+                  )}
+                </td>
                 <td>
                   <button type="button" className="primary" disabled={busy || g.sin_tarifa} onClick={() => liquidar(g)}>✅ Liquidar / Pagar</button>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
           {grupos.length > 0 && (
             <tfoot><tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border)" }}>
-              <td colSpan={5} style={{ textAlign: "right" }}>TOTAL GENERAL</td>
-              <td style={{ textAlign: "right" }}>{money(totalGeneral)}</td><td></td>
+              <td colSpan={7} style={{ textAlign: "right" }}>TOTAL GENERAL</td>
+              <td style={{ textAlign: "right" }}>{money(totalVista)}</td><td></td>
             </tr></tfoot>
           )}
         </table>

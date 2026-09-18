@@ -867,7 +867,7 @@ campoRouter.post("/tarifas-operador", asyncRoute(async (req, res) => {
     operador: z.string().min(1).max(140),
     activo_id: z.string().uuid(),
     tarifa: z.number().nonnegative(),
-    unidad: z.enum(["QQ", "VIAJE"]).default("QQ")
+    unidad: z.enum(["QQ", "VIAJE", "DIA"]).default("QQ")
   }).parse(req.body);
   const act = await pool.query("SELECT 1 FROM campo_activos WHERE id = $1", [body.activo_id]);
   if (!act.rowCount) throw new ApiError(404, "Máquina no encontrada");
@@ -886,7 +886,7 @@ campoRouter.post("/tarifas-operador", asyncRoute(async (req, res) => {
 campoRouter.patch("/tarifas-operador/:id", asyncRoute(async (req, res) => {
   const body = z.object({
     tarifa: z.number().nonnegative().optional(),
-    unidad: z.enum(["QQ", "VIAJE"]).optional(),
+    unidad: z.enum(["QQ", "VIAJE", "DIA"]).optional(),
     activo: z.boolean().optional()
   }).parse(req.body);
   const fields: string[] = [];
@@ -919,6 +919,7 @@ campoRouter.get("/nomina-operadores", asyncRoute(async (req, res) => {
   const rows = (await pool.query(
     `SELECT p.operador, p.activo_id, a.nombre AS activo_nombre, a.tipo AS activo_tipo,
             COUNT(*)::int AS viajes,
+            COUNT(DISTINCT p.fecha)::int AS dias,
             SUM(p.qq)::float AS qq,
             MIN(p.fecha) AS desde, MAX(p.fecha) AS hasta,
             t.tarifa::float AS tarifa, t.unidad AS unidad,
@@ -935,12 +936,15 @@ campoRouter.get("/nomina-operadores", asyncRoute(async (req, res) => {
   const grupos = rows.map((r) => {
     const unidad = r.unidad ?? (r.activo_tipo === "cosechadora" ? "QQ" : "VIAJE");
     const tarifa = r.tarifa;
-    const base = unidad === "QQ" ? Number(r.qq || 0) : Number(r.viajes || 0);
+    // Base según la unidad: QQ = quintales, VIAJE = nº de partes, DIA = días únicos.
+    const base = unidad === "QQ" ? Number(r.qq || 0)
+               : unidad === "DIA" ? Number(r.dias || 0)
+               : Number(r.viajes || 0);
     const total = tarifa != null ? Math.round(base * Number(tarifa) * 100) / 100 : null;
     return {
       operador: r.operador, activo_id: r.activo_id, activo_nombre: r.activo_nombre, activo_tipo: r.activo_tipo,
-      viajes: r.viajes, qq: Number(r.qq || 0), desde: r.desde, hasta: r.hasta,
-      unidad, tarifa, sin_tarifa: r.tarifa == null, total, parte_ids: r.parte_ids as string[]
+      viajes: r.viajes, qq: Number(r.qq || 0), dias: r.dias, desde: r.desde, hasta: r.hasta,
+      unidad, tarifa, base, sin_tarifa: r.tarifa == null, total, parte_ids: r.parte_ids as string[]
     };
   });
   const total_general = grupos.reduce((s, g) => s + (g.total ?? 0), 0);
@@ -952,19 +956,45 @@ campoRouter.get("/nomina-operadores", asyncRoute(async (req, res) => {
 campoRouter.post("/nomina-operadores/liquidar", asyncRoute(async (req, res) => {
   const body = z.object({
     parte_ids: z.array(z.string().uuid()).min(1),
-    monto: z.number().nonnegative().optional()
+    operador: z.string().min(1).max(140),
+    activo_id: z.string().uuid().nullable().optional(),
+    unidad: z.enum(["QQ", "VIAJE", "DIA"]).default("VIAJE"),
+    base: z.number().nonnegative().default(0),
+    tarifa: z.number().nonnegative().nullable().optional(),
+    monto_sugerido: z.number().nonnegative().nullable().optional(),
+    monto: z.number().nonnegative(),
+    ajustado: z.boolean().default(false),
+    motivo: z.string().max(300).optional()
   }).parse(req.body);
+  // Si el admin ajustó el valor sugerido, el motivo es obligatorio.
+  if (body.ajustado && !(body.motivo && body.motivo.trim())) {
+    throw new ApiError(400, "Indica el motivo del ajuste del pago.");
+  }
   const result = await inTransaction(async (client) => {
+    const pago = (await client.query(
+      `INSERT INTO campo_nomina_pagos
+         (operador, activo_id, unidad, base, tarifa, monto_sugerido, monto, ajustado, motivo, desde, hasta, partes_count, created_by)
+       SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9,
+              MIN(p.fecha), MAX(p.fecha), COUNT(*)::int, $11
+         FROM campo_partes p
+        WHERE p.id = ANY($10::uuid[]) AND p.operador_pagado_at IS NULL
+       HAVING COUNT(*) > 0
+       RETURNING id`,
+      [body.operador, body.activo_id ?? null, body.unidad, body.base, body.tarifa ?? null,
+       body.monto_sugerido ?? null, body.monto, body.ajustado, body.motivo?.trim() || null,
+       body.parte_ids, userId(req)]
+    )).rows[0];
+    if (!pago) throw new ApiError(409, "Esos partes ya fueron liquidados.");
     const upd = await client.query(
       `UPDATE campo_partes
-          SET operador_pagado_at = now(), operador_pago_monto = $2
+          SET operador_pagado_at = now(), operador_pago_monto = $2, operador_pago_id = $3
         WHERE id = ANY($1::uuid[]) AND operador_pagado_at IS NULL
         RETURNING id`,
-      [body.parte_ids, body.monto ?? null]
+      [body.parte_ids, body.monto, pago.id]
     );
-    return { pagados: upd.rowCount ?? 0 };
+    return { pago_id: pago.id, pagados: upd.rowCount ?? 0 };
   });
-  res.json({ ok: true, ...result });
+  res.status(201).json({ ok: true, ...result });
 }));
 
 // ── Conciliación / Cruce de fletes: crédito a favor → convertir parte y aplicar ─
