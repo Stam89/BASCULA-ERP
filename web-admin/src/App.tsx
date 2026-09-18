@@ -5231,6 +5231,18 @@ export function App() {
           ? data.errors.map((e: { fila: number; error: string }) => `Fila ${e.fila}: ${e.error}`).join("\n")
           : data.error || "Error desconocido";
         setFomentoImportModal({ open: true, title: "❌ Error al importar", message: details, isError: true });
+      } else if (data.plana) {
+        // Plantilla plana (agrupada por CLIENTE).
+        addToast(`✅ Plantilla importada: ${data.created} fomentos`, "success");
+        const detalle = [
+          `Fomentos creados: ${data.created}`,
+          `Agricultores nuevos: ${data.farmersCreated ?? 0}`,
+          `Entregas importadas: ${data.entregasCreadas ?? 0}`,
+          (data.saldosAnteriores ?? 0) > 0 ? `Saldos anteriores (interés fijo): ${data.saldosAnteriores}` : null,
+          (data.omitidos ?? 0) > 0 ? `Omitidos (ya existían): ${data.omitidos}` : null
+        ].filter(Boolean).join("\n");
+        setFomentoImportModal({ open: true, title: "✅ Plantilla importada", message: detalle, isError: false });
+        await refreshFomentos();
       } else if (data.migracion) {
         // Migración masiva del Excel maestro (mapeo posicional C..L).
         addToast(`✅ Migración completa: ${data.created} fomentos creados`, "success");
@@ -5316,13 +5328,12 @@ export function App() {
           // Entregas: desde la fila r+4 hacia abajo. Fecha en [c+1], Valor en [c+5].
           const entregas: Array<{ fecha?: string; valor: number }> = [];
           for (let rr = r + 4; rr < data.length; rr++) {
-            const fRaw = at(rr, c + 1);
-            const vRaw = at(rr, c + 5);
-            const fTxt = celdaTexto(fRaw), vTxt = celdaTexto(vRaw);
-            // Corte: fila vacía (ambas celdas) o la palabra TOTAL en cualquiera.
-            if ((fTxt === "" && vTxt === "") || /TOTAL/i.test(fTxt) || /TOTAL/i.test(vTxt)) break;
-            const valor = celdaNumero(vRaw);
-            if (valor != null && valor > 0) entregas.push({ fecha: fechaAISO(fRaw), valor });
+            // Corte: fila vacía en el bloque (cols c..c+5) o "TOTAL" en cualquiera de ellas.
+            let algo = false, hayTotal = false;
+            for (let cc = c; cc <= c + 5; cc++) { const t = celdaTexto(at(rr, cc)); if (t) algo = true; if (/TOTAL/i.test(t)) hayTotal = true; }
+            if (!algo || hayTotal) break;
+            const valor = celdaNumero(at(rr, c + 5));
+            if (valor != null && valor > 0) entregas.push({ fecha: fechaAISO(at(rr, c + 1)), valor });
           }
 
           bloques.push({ cliente, cuadras, limite, entregas });
@@ -5351,6 +5362,19 @@ export function App() {
     } finally {
       setFomentoMosaicoImporting(false);
     }
+  }
+
+  // Descarga la PLANTILLA PLANA (espejo de los cuadros del cliente) para copy-paste.
+  function descargarPlantillaFomentos() {
+    const headers = ["CLIENTE", "CUADRAS", "LIMITE", "No", "Fecha inicial", "Fecha final", "Dias", "Mes", "VALOR", "GASTO ADMINISTRATIVO", "ES_SALDO_ANTERIOR (SI/NO)"];
+    // Fila de ejemplo (se puede borrar): un cliente con una entrega normal y una de saldo anterior.
+    const ej1 = ["Juan Perez", 2.5, 2000, 1, "2026-01-15", "", "", "", 100, "", "NO"];
+    const ej2 = ["Juan Perez", "", "", 2, "2026-02-10", "", "", 2, 300, "", "SI"];
+    const ws = XLSX.utils.aoa_to_sheet([headers, ej1, ej2]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Fomentos");
+    XLSX.writeFile(wb, "plantilla_fomentos.xlsx");
+    addToast("Plantilla descargada — pega tus cuadros y súbela con 📤 SUBIR EXCEL", "success");
   }
 
   async function refreshSacks() {
@@ -15570,6 +15594,11 @@ export function App() {
               <button type="button" onClick={() => exportFomentos().catch(() => undefined)}
                 style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid var(--c-brand)", background: "var(--c-brand)", color: "#fff", cursor: "pointer", fontWeight: 600, fontSize: 12 }}>
                 📥 DESCARGAR EXCEL
+              </button>
+              <button type="button" onClick={descargarPlantillaFomentos}
+                title="Plantilla plana con las columnas de tus cuadros (CLIENTE, CUADRAS, LIMITE, Fecha inicial, VALOR, ES_SALDO_ANTERIOR…) para copiar y pegar"
+                style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #0891b2", background: "#ecfeff", color: "#0e7490", cursor: "pointer", fontWeight: 600, fontSize: 12 }}>
+                📥 DESCARGAR PLANTILLA
               </button>
               <label style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid var(--c-brand)", background: "transparent", color: "var(--c-brand)", cursor: "pointer", fontWeight: 600, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
                 {fomentoImporting ? <span className="spinner" /> : "📤 SUBIR EXCEL"}

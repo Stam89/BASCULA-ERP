@@ -217,6 +217,104 @@ fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res
   const expected = ["ID", "Nombre Agricultor", "Cuadras", "Fecha Inicio", "Fecha Cosecha", "Renta (%)", "Estado", "Deuda Total"];
   const headers = ((sheet.getRow(1).values ?? []) as unknown[]).slice(1).map((v) => String(v ?? "").trim());
 
+  // ── PLANTILLA PLANA (espejo de los cuadros del cliente) ─────────────────────
+  // Encabezados: CLIENTE | CUADRAS | LIMITE | No | Fecha inicial | Fecha final |
+  // Dias | Mes | VALOR | GASTO ADMINISTRATIVO | ES_SALDO_ANTERIOR (SI/NO).
+  // Se AGRUPA por CLIENTE; la 1ª fila de cada cliente da cuadras/límite; cada fila
+  // es una entrega (Fecha inicial + VALOR). Días/Mes/Fecha final se IGNORAN (el
+  // motor recalcula por días). Si ES_SALDO_ANTERIOR='SI' → interés fijo por N meses.
+  // Los encabezados se normalizan (espacios extra) para tolerar el copy-paste.
+  const hnorm = headers.map((h) => h.replace(/\s+/g, " ").trim().toUpperCase());
+  const col = (pred: (h: string) => boolean) => { const i = hnorm.findIndex(pred); return i >= 0 ? i + 1 : 0; };
+  const cCliente = col((h) => h === "CLIENTE");
+  const cValor = col((h) => h === "VALOR");
+  const esPlantillaPlana = cCliente > 0 && cValor > 0;
+
+  if (esPlantillaPlana) {
+    const cCuadras = col((h) => h === "CUADRAS");
+    const cLimite = col((h) => h === "LIMITE" || h.startsWith("LIMITE") || h.startsWith("LÍMITE"));
+    const cFechaIni = col((h) => h.startsWith("FECHA INICIAL") || h.startsWith("FECHA INICIO"));
+    const cMes = col((h) => h === "MES");
+    const cSaldo = col((h) => h.includes("SALDO ANTERIOR") || h.includes("SALDO_ANTERIOR") || h.startsWith("ES_SALDO"));
+
+    type EntradaPlana = { fecha: string | undefined; valor: number; esSaldo: boolean; meses: number | null };
+    type GrupoPlano = { cliente: string; cuadras: number; limite: number | null; entregas: EntradaPlana[] };
+    const grupos = new Map<string, GrupoPlano>();
+    let ultimoCliente = "";
+
+    for (let i = 2; i <= sheet.rowCount; i++) {
+      const row = sheet.getRow(i);
+      // El CLIENTE puede repetirse o dejarse en blanco en las filas de continuación.
+      const clienteCelda = cellString(row.getCell(cCliente).value);
+      const cliente = clienteCelda ?? ultimoCliente;
+      const valor = cellNumber(row.getCell(cValor).value);
+      if (!cliente || valor === undefined || !(valor > 0)) continue;
+      ultimoCliente = cliente;
+
+      const key = cliente.trim().toLowerCase();
+      let g = grupos.get(key);
+      if (!g) {
+        // 1ª fila del cliente: cabecera (cuadras/límite).
+        const cuadras = cCuadras ? (cellNumber(row.getCell(cCuadras).value) ?? 0) : 0;
+        const limiteRaw = cLimite ? cellNumber(row.getCell(cLimite).value) : undefined;
+        g = { cliente: cliente.trim(), cuadras: cuadras > 0 ? cuadras : 0, limite: limiteRaw && limiteRaw > 0 ? limiteRaw : null, entregas: [] };
+        grupos.set(key, g);
+      }
+      const esSaldo = cSaldo ? String(cellString(row.getCell(cSaldo).value) ?? "").trim().toUpperCase().startsWith("SI") : false;
+      const meses = esSaldo ? Math.max(1, Math.round(cMes ? (cellNumber(row.getCell(cMes).value) ?? 1) : 1)) : null;
+      g.entregas.push({ fecha: parseExcelDate(row.getCell(cFechaIni).value) ?? undefined, valor, esSaldo, meses });
+    }
+
+    const plana = await inTransaction(async (client) => {
+      let created = 0, farmersCreated = 0, entregasCreadas = 0, saldosAnteriores = 0, omitidos = 0;
+      const errores: Array<{ cliente: string; error: string }> = [];
+      for (const g of grupos.values()) {
+        const nombre = g.cliente;
+        const fechas = g.entregas.map((e) => e.fecha).filter((f): f is string => !!f).sort();
+        const inicio = fechas[0] ?? new Date().toISOString().slice(0, 10);
+        const cosecha = calcularCosecha(inicio);
+
+        // Dedup por (accionista, nombre, cuadras, límite, inicio).
+        const dup = await client.query(
+          "SELECT 1 FROM fomentos WHERE accionista_id = $1 AND lower(farmer_name) = lower($2) AND cuadras = $3 AND COALESCE(limite_credito,0) = COALESCE($4,0) AND inicio = $5 LIMIT 1",
+          [accionistaId, nombre, g.cuadras, g.limite, inicio]
+        );
+        if (dup.rowCount) { omitidos++; continue; }
+
+        // (a) Agricultor: buscar/crear.
+        const existe = await client.query("SELECT id FROM farmers WHERE lower(full_name) = lower($1) LIMIT 1", [nombre]);
+        let farmerId: string;
+        if (existe.rowCount) farmerId = existe.rows[0].id;
+        else { farmerId = (await client.query("INSERT INTO farmers (full_name, accionista_id) VALUES ($1,$2) RETURNING id", [nombre, accionistaId])).rows[0].id; farmersCreated++; }
+
+        // (b) Fomento (cabecera).
+        const fom = await client.query(
+          `INSERT INTO fomentos (accionista_id, farmer_name, farmer_id, cuadras, inicio, cosecha, renta, status, notes, limite_credito)
+           VALUES ($1,$2,$3,$4,$5,$6,0.07,'ACTIVOS',$7,$8) RETURNING id`,
+          [accionistaId, nombre, farmerId, g.cuadras, inicio, cosecha, "Importado (plantilla plana)", g.limite]
+        );
+        created++;
+
+        // (c) Entregas: fecha inicial + valor; ES_SALDO_ANTERIOR → interés fijo N meses.
+        for (const e of g.entregas) {
+          await client.query(
+            "INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto, es_saldo_anterior, meses_interes_fijo) VALUES ($1, COALESCE($2::date, CURRENT_DATE), $3, $4, $5, $6)",
+            [fom.rows[0].id, e.fecha ?? null, e.valor,
+             e.esSaldo ? "Saldo en contra cosecha pasada" : "Entrega importada (plantilla plana)",
+             e.esSaldo, e.esSaldo ? e.meses : null]
+          );
+          entregasCreadas++;
+          if (e.esSaldo) saldosAnteriores++;
+        }
+      }
+      return { created, farmersCreated, entregasCreadas, saldosAnteriores, omitidos, errores };
+    });
+
+    res.json({ success: true, plana: true, created: plana.created, farmersCreated: plana.farmersCreated,
+      entregasCreadas: plana.entregasCreadas, saldosAnteriores: plana.saldosAnteriores, omitidos: plana.omitidos, errors: plana.errores });
+    return;
+  }
+
   // ── Migración masiva del EXCEL MAESTRO del cliente (mapeo POSICIONAL C..L) ──
   // Si el archivo NO trae los encabezados de la exportación del ERP, se asume que
   // es el maestro anual del cliente y se importa por posición de columna:
