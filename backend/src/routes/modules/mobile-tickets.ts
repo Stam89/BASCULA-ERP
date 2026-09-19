@@ -13,6 +13,7 @@ import { createLotProcessReport } from "../../utils/process-reports.js";
 import { dispararFleteInternoBascula } from "../../services/campo-flete-bascula.js";
 import { getMatrizId } from "../../services/matriz.js";
 import { env } from "../../config/env.js";
+import { basculaTicketStableKey, canonicalBasculaTicketNumber } from "../../utils/bascula-ticket-identity.js";
 
 export const mobileTicketsRouter = Router();
 
@@ -694,7 +695,12 @@ export async function importBasculaTickets(
     if ((t.modo || "").trim().toLowerCase() !== "principal") continue;
 
     try {
-    const stableKey = idScope ? `${idScope}_${t.modo}_${t.numeroTicket}` : `${t.modo}_${t.numeroTicket}`;
+    const canonicalNumber = canonicalBasculaTicketNumber(t.numeroTicket);
+    if (!canonicalNumber) {
+      skipped++;
+      continue;
+    }
+    const stableKey = basculaTicketStableKey(t.numeroTicket, t.modo, idScope);
     const id = stableUuid(stableKey);
     let netWeight = t.pesoNeto ?? calculateNetWeight(t.pesoBruto, t.pesoTara);
     if (netWeight < 0) netWeight = 0; // no romper el lote por un ticket con tara mayor
