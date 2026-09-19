@@ -188,7 +188,13 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
     setServicios(await apiGet<Servicio[]>("/campo/servicios"));
   }, []);
 
-  useEffect(() => { Promise.all([refreshCatalogos(), refreshServicios(), refreshSesion()]).catch((e) => notify(e.message, "err")); }, [refreshCatalogos, refreshServicios, refreshSesion]);
+  useEffect(() => {
+    // La sesion activa repara primero cualquier saldo inicial antiguo; despues
+    // se consultan las tarjetas para que CAJA ya refleje ese movimiento.
+    refreshSesion()
+      .then(() => Promise.all([refreshCatalogos(), refreshServicios()]))
+      .catch((e) => notify(e.message, "err"));
+  }, [refreshCatalogos, refreshServicios, refreshSesion]);
 
   const activosActivos = useMemo(() => activos.filter((a) => a.activo), [activos]);
   const pendientes = useMemo(() => servicios.filter((s) => s.estado !== "pagado"), [servicios]);
@@ -358,7 +364,12 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
       {modalCaja === "abrir" && (
         <AperturaCajaModal saldoSugerido={sesion?.saldo_sugerido ?? 0}
           onClose={() => setModalCaja("")}
-          onDone={async () => { setModalCaja(""); await refreshSesion(); notify("Caja abierta"); }}
+          onDone={async () => {
+            setModalCaja("");
+            await Promise.all([refreshSesion(), refreshCatalogos()]);
+            setLibroVersion((v) => v + 1);
+            notify("Caja abierta");
+          }}
           onError={(m) => notify(m, "err")} />
       )}
       {modalCaja === "cerrar" && (

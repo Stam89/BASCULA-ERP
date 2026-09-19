@@ -39,6 +39,33 @@ async function requireCajaAbierta(cuentaIds: string[], client: Q = pool): Promis
   }
 }
 
+const CONCEPTO_APERTURA_CAJA = "Apertura de caja / Saldo inicial";
+const NATURALEZA_APERTURA_CAJA = "apertura_caja";
+
+// Inserta exactamente un movimiento de apertura por sesion. El indice parcial
+// de la migracion protege tambien frente a dos cargas simultaneas del panel.
+async function asegurarMovimientoApertura(client: Q, sesion: {
+  id: string;
+  fecha_apertura: string;
+  saldo_inicial: string | number;
+  usuario_id?: string | null;
+}) {
+  const saldoInicial = Number(sesion.saldo_inicial);
+  if (!(saldoInicial > 0)) return null;
+  const cajaId = await cajaCuentaId(client);
+  if (!cajaId) throw new ApiError(409, "No existe la cuenta CAJA para registrar el saldo inicial.");
+  return (await client.query(
+    `INSERT INTO campo_movimientos
+       (fecha, cuenta_id, signo, monto, concepto, naturaleza, caja_sesion_id, created_by, created_at)
+     VALUES (($1::timestamptz AT TIME ZONE 'America/Guayaquil')::date,
+             $2, 'entrada', $3, $4, $5, $6, $7, $1::timestamptz)
+     ON CONFLICT DO NOTHING
+     RETURNING *`,
+    [sesion.fecha_apertura, cajaId, saldoInicial, CONCEPTO_APERTURA_CAJA,
+     NATURALEZA_APERTURA_CAJA, sesion.id, sesion.usuario_id ?? null]
+  )).rows[0] ?? null;
+}
+
 type ParteClienteInput = {
   cliente: string;
   cliente_id?: string;
@@ -228,7 +255,8 @@ campoRouter.post("/categorias-gasto", asyncRoute(async (req, res) => {
 campoRouter.get("/cuentas", asyncRoute(async (_req, res) => {
   const result = await pool.query(
     `SELECT c.id, c.nombre,
-            COALESCE(SUM(CASE WHEN m.signo = 'entrada' THEN m.monto ELSE -m.monto END), 0)::float AS saldo
+            (COALESCE(SUM(m.monto) FILTER (WHERE m.signo = 'entrada'), 0)
+             - COALESCE(SUM(m.monto) FILTER (WHERE m.signo = 'salida'), 0))::float AS saldo
      FROM campo_cuentas c
      LEFT JOIN campo_movimientos m ON m.cuenta_id = c.id
      GROUP BY c.id, c.nombre
@@ -1618,18 +1646,19 @@ campoRouter.get("/caja/libro", asyncRoute(async (req, res) => {
 
 // ════════════════════════════════════════════════════════════════════════════
 // SESIÓN DE CAJA · Apertura / Arqueo / Cierre (cuenta CAJA)
-// El saldo teórico = saldo_inicial + ingresos − egresos de CAJA desde la
-// apertura (por created_at). El arqueo compara con el efectivo físico contado.
+// El saldo teorico = saldo_inicial + ingresos operativos - egresos de CAJA
+// desde la apertura. El movimiento de apertura alimenta la tarjeta de CAJA,
+// pero se excluye de ingresos aqui para no contar el saldo inicial dos veces.
 // ════════════════════════════════════════════════════════════════════════════
 
 // Resumen del arqueo de una sesión (ingresos/egresos de CAJA desde su apertura).
 async function calcularArqueo(client: Q, sesion: { fecha_apertura: string; saldo_inicial: string | number }) {
   const cajaId = await cajaCuentaId(client);
   const r = (await client.query(
-    `SELECT COALESCE(SUM(CASE WHEN signo = 'entrada' THEN monto ELSE 0 END), 0)::float AS ingresos,
+    `SELECT COALESCE(SUM(CASE WHEN signo = 'entrada' AND naturaleza <> $3 THEN monto ELSE 0 END), 0)::float AS ingresos,
             COALESCE(SUM(CASE WHEN signo = 'salida' THEN monto ELSE 0 END), 0)::float AS egresos
      FROM campo_movimientos WHERE cuenta_id = $1 AND created_at >= $2`,
-    [cajaId, sesion.fecha_apertura]
+    [cajaId, sesion.fecha_apertura, NATURALEZA_APERTURA_CAJA]
   )).rows[0];
   const saldoInicial = Number(sesion.saldo_inicial);
   const saldoTeorico = Math.round((saldoInicial + r.ingresos - r.egresos) * 100) / 100;
@@ -1649,6 +1678,7 @@ campoRouter.get("/caja/sesion-activa", asyncRoute(async (_req, res) => {
   )).rows[0]?.saldo_real;
   const resp: Record<string, unknown> = { saldo_sugerido: sugerido != null ? Number(sugerido) : 0 };
   if (activa) {
+    await asegurarMovimientoApertura(pool, activa);
     resp.activa = {
       id: activa.id, usuario_nombre: activa.usuario_nombre, fecha_apertura: activa.fecha_apertura,
       saldo_inicial: Number(activa.saldo_inicial), observaciones: activa.observaciones,
@@ -1668,11 +1698,13 @@ campoRouter.post("/caja/abrir", asyncRoute(async (req, res) => {
   }).parse(req.body);
   const row = await inTransaction(async (client) => {
     if (await sesionAbierta(client)) throw new ApiError(409, "Ya hay una caja abierta. Ciérrala antes de abrir otra.");
-    return (await client.query(
+    const sesion = (await client.query(
       `INSERT INTO campo_caja_sesiones (usuario_id, saldo_inicial, observaciones)
        VALUES ($1, $2, $3) RETURNING *`,
       [userId(req), body.saldo_inicial, body.observaciones?.trim() || null]
     )).rows[0];
+    await asegurarMovimientoApertura(client, sesion);
+    return sesion;
   });
   res.status(201).json(row);
 }));
