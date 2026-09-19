@@ -6,8 +6,8 @@ import { pool } from "../db/pool.js";
 import { ApiError } from "../http/error-handler.js";
 
 // Crea un Parte Diario originado en Báscula (origen='bascula'). El parte guarda
-// el NOMBRE del cliente (campo_partes.cliente es texto), operador NULL y la
-// referencia en observaciones. Valida cliente y máquina.
+// el cliente enlazado y su nombre historico, operador NULL y la referencia en
+// observaciones. Valida cliente y maquina.
 export async function crearParteDesdeBascula(input: {
   fecha?: string | null; cliente_id: string; maquina_id: string; qq: number; referencia: string; created_by?: string | null;
 }) {
@@ -16,10 +16,10 @@ export async function crearParteDesdeBascula(input: {
   const maq = (await pool.query("SELECT 1 FROM campo_activos WHERE id = $1", [input.maquina_id])).rows[0];
   if (!maq) throw new ApiError(404, "Máquina/vehículo no encontrado");
   const parte = (await pool.query(
-    `INSERT INTO campo_partes (fecha, activo_id, operador, cliente, qq, observaciones, estado, origen, created_by)
-     VALUES (COALESCE($1::date, CURRENT_DATE), $2, NULL, $3, $4, $5, 'por_cobrar', 'bascula', $6)
+    `INSERT INTO campo_partes (fecha, activo_id, operador, cliente, cliente_id, qq, observaciones, estado, origen, created_by)
+     VALUES (COALESCE($1::date, CURRENT_DATE), $2, NULL, $3, $4, $5, $6, 'por_cobrar', 'bascula', $7)
      RETURNING *`,
-    [input.fecha ?? null, input.maquina_id, cli.nombre, input.qq, input.referencia, input.created_by ?? null]
+    [input.fecha ?? null, input.maquina_id, cli.nombre, input.cliente_id, input.qq, input.referencia, input.created_by ?? null]
   )).rows[0];
   return parte;
 }

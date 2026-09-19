@@ -27,7 +27,8 @@ type Operador = { id: string; nombre: string; activo: boolean };
 type Parte = {
   id: string; fecha: string; activo_id: string; activo_nombre: string; activo_tipo?: string; operador: string | null;
   operador_pagado_at?: string | null;
-  cliente: string; qq: number; observaciones: string | null; estado: "por_cobrar" | "cobrado"; origen: string;
+  cliente: string; cliente_id: string | null; cliente_tipo: "piladora" | "externo" | null;
+  qq: number; observaciones: string | null; estado: "por_cobrar" | "cobrado"; origen: string;
   // Cobro generado (campo_servicio) enlazado, si estado='cobrado'.
   servicio_id: string | null; servicio_valor: number | null; servicio_saldo: number | null;
   servicio_estado: "pendiente" | "abonado" | "pagado" | null;
@@ -37,7 +38,7 @@ export default function PartesModule() {
   const [activos, setActivos] = useState<Activo[]>([]);
   const [operadores, setOperadores] = useState<Operador[]>([]);
   const [partes, setPartes] = useState<Parte[]>([]);
-  const [f, setF] = useState({ fecha: hoy(), activo_id: "", operador: "", cliente: "", qq: "", observaciones: "" });
+  const [f, setF] = useState({ fecha: hoy(), activo_id: "", operador: "", cliente: "", cliente_id: "", qq: "", observaciones: "" });
   const [busy, setBusy] = useState(false);
   const [cobrando, setCobrando] = useState<Parte | null>(null);
   const [editando, setEditando] = useState<Parte | null>(null);
@@ -95,9 +96,10 @@ export default function PartesModule() {
       if (!(qq > 0)) throw new Error("Ingresa los quintales cosechados (mayor a 0)");
       await apiPost("/campo/partes", {
         fecha: f.fecha, activo_id: f.activo_id, operador: f.operador.trim() || undefined,
-        cliente, qq, observaciones: f.observaciones.trim() || undefined
+        cliente, cliente_id: f.cliente_id || undefined, is_nuevo_externo: !f.cliente_id,
+        qq, observaciones: f.observaciones.trim() || undefined
       });
-      setF({ ...f, cliente: "", qq: "", observaciones: "" });
+      setF({ ...f, cliente: "", cliente_id: "", qq: "", observaciones: "" });
       await refrescar();
       notify("Reporte de cosecha guardado");
     } catch (e) { notify((e as Error).message, "err"); } finally { setBusy(false); }
@@ -145,12 +147,15 @@ export default function PartesModule() {
         )}
         <label><span>Cliente / Dueño del cultivo</span>
           <ClienteSearchInput kind="farmer" value={f.cliente}
-            onChange={(name) => setF((p) => ({ ...p, cliente: name }))}
-            onSelect={(hit) => setF((p) => ({ ...p, cliente: hit.full_name }))}
-            onCreated={(hit) => setF((p) => ({ ...p, cliente: hit.full_name }))}
+            allowCreate={false}
+            onChange={(name) => setF((p) => ({ ...p, cliente: name, cliente_id: "" }))}
+            onSelect={(hit) => setF((p) => ({ ...p, cliente: hit.full_name, cliente_id: hit.id }))}
             onError={(m) => notify(m, "err")}
-            placeholder="Buscar en Báscula o crear nuevo…"
+            placeholder="Buscar en Báscula o escribir cliente externo…"
             style={{ width: "100%" }} />
+          {f.cliente.trim() && !f.cliente_id && (
+            <small className="muted" style={{ display: "block", marginTop: 4 }}>Se guardará como cliente externo.</small>
+          )}
         </label>
         <label><span>Observaciones (opcional)</span>
           <input type="text" value={f.observaciones} onChange={(e) => setF({ ...f, observaciones: e.target.value })} placeholder="Ej: Terreno húmedo" />
@@ -221,7 +226,10 @@ export default function PartesModule() {
                   <td>{p.activo_nombre}</td>
                   <td style={{ fontWeight: 600 }}>
                     {p.cliente}
-                    {p.origen === "bascula" && (
+                    {p.cliente_tipo === "externo" ? (
+                      <span className="chip" style={{ marginLeft: 6, background: "#f3f4f6", color: "#92400e", border: "1px solid #d1d5db", fontWeight: 600 }}
+                        title="Cliente externo: el cobro se realiza en efectivo o transferencia">👤 Externo</span>
+                    ) : (p.cliente_tipo === "piladora" || p.origen === "bascula") && (
                       <span className="chip" style={{ marginLeft: 6, background: "#1d4ed8", color: "#fff", fontWeight: 600 }}
                         title={p.observaciones ?? "Generado desde el ingreso de báscula"}>⚖️ Báscula</span>
                     )}
@@ -354,7 +362,7 @@ function EditarParteModal({ parte, activos, operadores, onClose, onDone, onError
 }) {
   const [f, setF] = useState({
     fecha: String(parte.fecha).slice(0, 10), activo_id: parte.activo_id, operador: parte.operador ?? "",
-    cliente: parte.cliente, qq: String(parte.qq), observaciones: parte.observaciones ?? ""
+    cliente: parte.cliente, cliente_id: parte.cliente_id ?? "", qq: String(parte.qq), observaciones: parte.observaciones ?? ""
   });
   const [busy, setBusy] = useState(false);
   // Tickets que entraron por la romana/API (origen != manual): solo se puede
@@ -370,7 +378,8 @@ function EditarParteModal({ parte, activos, operadores, onClose, onDone, onError
       if (!(qq > 0)) throw new Error("Ingresa los quintales (mayor a 0)");
       await parteReq(`/campo/partes/${parte.id}`, "PATCH", {
         fecha: f.fecha, activo_id: f.activo_id, operador: f.operador.trim() || null,
-        cliente, qq, observaciones: f.observaciones.trim() || null
+        cliente, cliente_id: f.cliente_id || undefined, is_nuevo_externo: !f.cliente_id,
+        qq, observaciones: f.observaciones.trim() || null
       });
       await onDone();
     } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
@@ -406,12 +415,15 @@ function EditarParteModal({ parte, activos, operadores, onClose, onDone, onError
         </div>
         <label><span>Cliente / Dueño del cultivo</span>
           <ClienteSearchInput kind="farmer" value={f.cliente} disabled={esRomana}
-            onChange={(name) => setF((p) => ({ ...p, cliente: name }))}
-            onSelect={(hit) => setF((p) => ({ ...p, cliente: hit.full_name }))}
-            onCreated={(hit) => setF((p) => ({ ...p, cliente: hit.full_name }))}
+            allowCreate={false}
+            onChange={(name) => setF((p) => ({ ...p, cliente: name, cliente_id: "" }))}
+            onSelect={(hit) => setF((p) => ({ ...p, cliente: hit.full_name, cliente_id: hit.id }))}
             onError={onError}
-            placeholder="Buscar en Báscula o crear nuevo…"
+            placeholder="Buscar en Báscula o escribir cliente externo…"
             style={{ width: "100%" }} />
+          {!esRomana && f.cliente.trim() && !f.cliente_id && (
+            <small className="muted" style={{ display: "block", marginTop: 4 }}>Se guardará como cliente externo.</small>
+          )}
         </label>
         <label><span>Observaciones (opcional)</span><input type="text" value={f.observaciones} onChange={(e) => setF({ ...f, observaciones: e.target.value })} /></label>
         <div className="buttonRow">

@@ -39,6 +39,73 @@ async function requireCajaAbierta(cuentaIds: string[], client: Q = pool): Promis
   }
 }
 
+type ParteClienteInput = {
+  cliente: string;
+  cliente_id?: string;
+  is_nuevo_externo?: boolean;
+};
+
+// Convierte la seleccion del directorio de Bascula (farmers) o un nombre libre
+// en un cliente de Campo. El nombre historico sigue guardandose en campo_partes,
+// pero cliente_id es la fuente confiable para su categoria.
+async function resolverClienteParte(client: Q, input: ParteClienteInput): Promise<{ id: string; nombre: string; tipo: "piladora" | "externo" }> {
+  const nombreIngresado = input.cliente.trim();
+
+  if (input.cliente_id) {
+    const farmer = (await client.query(
+      "SELECT id, full_name, identification, phone FROM farmers WHERE id = $1",
+      [input.cliente_id]
+    )).rows[0];
+    if (farmer) {
+      return (await client.query(
+        `INSERT INTO campo_clientes (nombre, tipo, identificacion, telefono)
+         VALUES (trim($1), 'piladora', $2, $3)
+         ON CONFLICT (lower(trim(nombre))) DO UPDATE SET
+           tipo = 'piladora',
+           identificacion = COALESCE(campo_clientes.identificacion, EXCLUDED.identificacion),
+           telefono = COALESCE(campo_clientes.telefono, EXCLUDED.telefono)
+         RETURNING id, nombre, tipo`,
+        [farmer.full_name, farmer.identification, farmer.phone]
+      )).rows[0];
+    }
+
+    // Compatibilidad con partes ya enlazados: al editar, el id recibido puede
+    // ser directamente el de campo_clientes.
+    const clienteCampo = (await client.query(
+      "SELECT id, nombre, tipo FROM campo_clientes WHERE id = $1",
+      [input.cliente_id]
+    )).rows[0];
+    if (clienteCampo) return clienteCampo;
+    throw new ApiError(404, "El cliente seleccionado ya no existe en el directorio.");
+  }
+
+  const existente = (await client.query(
+    "SELECT id, nombre, tipo FROM campo_clientes WHERE lower(trim(nombre)) = lower(trim($1)) LIMIT 1",
+    [nombreIngresado]
+  )).rows[0];
+  if (existente) return existente;
+
+  // Peticiones antiguas no enviaban el flag. Si el nombre coincide exactamente
+  // con Bascula, se conserva como cliente regular para no romper integraciones.
+  if (!input.is_nuevo_externo) {
+    const farmer = (await client.query(
+      "SELECT id, full_name, identification, phone FROM farmers WHERE lower(trim(full_name)) = lower(trim($1)) LIMIT 1",
+      [nombreIngresado]
+    )).rows[0];
+    if (farmer) {
+      return resolverClienteParte(client, { cliente: farmer.full_name, cliente_id: farmer.id });
+    }
+  }
+
+  return (await client.query(
+    `INSERT INTO campo_clientes (nombre, tipo)
+     VALUES (trim($1), 'externo')
+     ON CONFLICT (lower(trim(nombre))) DO UPDATE SET nombre = campo_clientes.nombre
+     RETURNING id, nombre, tipo`,
+    [nombreIngresado]
+  )).rows[0];
+}
+
 // ── Catálogo: maquinaria/flota (activos: cosechadora/camión/vehículo/otro) ────
 // La FK "maquinaria_id" es campo_movimientos.activo_id → campo_activos.
 const TIPO_MAQUINARIA = ["cosechadora", "camion", "vehiculo", "transporte", "otro"] as const;
@@ -634,8 +701,9 @@ campoRouter.get("/partes", asyncRoute(async (req, res) => {
   if (q.estado) { params.push(q.estado); conds.push(`p.estado = $${params.length}`); }
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   const result = await pool.query(
-    `SELECT p.id, p.fecha, p.activo_id, p.operador, p.cliente, p.qq::float AS qq,
+    `SELECT p.id, p.fecha, p.activo_id, p.operador, p.cliente, p.cliente_id, p.qq::float AS qq,
             p.observaciones, p.estado, p.origen, p.created_at,
+            COALESCE(c.tipo, CASE WHEN p.origen = 'bascula' THEN 'piladora' END) AS cliente_tipo,
             a.nombre AS activo_nombre, a.tipo AS activo_tipo,
             p.operador_pagado_at,
             p.servicio_id,
@@ -644,6 +712,7 @@ campoRouter.get("/partes", asyncRoute(async (req, res) => {
             sv.estado AS servicio_estado
      FROM campo_partes p
      JOIN campo_activos a ON a.id = p.activo_id
+     LEFT JOIN campo_clientes c ON c.id = p.cliente_id
      LEFT JOIN campo_servicios_saldo sv ON sv.id = p.servicio_id
      ${where}
      ORDER BY p.fecha DESC, p.created_at DESC
@@ -667,16 +736,11 @@ campoRouter.post("/partes/:id/cobrar", asyncRoute(async (req, res) => {
     if (!parte) throw new ApiError(404, "Parte no encontrado");
     if (parte.estado !== "por_cobrar") throw new ApiError(409, "Este parte ya tiene un cobro generado.");
 
-    // Resolver/crear el cliente por nombre (alta rápida, tipo externo).
     const nombre = String(parte.cliente).trim();
-    let cliente = (await client.query(
-      "SELECT id FROM campo_clientes WHERE lower(trim(nombre)) = lower(trim($1)) LIMIT 1", [nombre]
-    )).rows[0];
-    if (!cliente) {
-      cliente = (await client.query(
-        "INSERT INTO campo_clientes (nombre, tipo) VALUES (trim($1), 'externo') RETURNING id", [nombre]
-      )).rows[0];
-    }
+    const cliente = parte.cliente_id
+      ? (await client.query("SELECT id, nombre, tipo FROM campo_clientes WHERE id = $1", [parte.cliente_id])).rows[0]
+      : await resolverClienteParte(client, { cliente: nombre });
+    if (!cliente) throw new ApiError(409, "El cliente enlazado al parte ya no existe.");
 
     const qq = Number(parte.qq);
     const valor = Math.round(qq * body.precio_unitario * 100) / 100;
@@ -689,8 +753,8 @@ campoRouter.post("/partes/:id/cobrar", asyncRoute(async (req, res) => {
     )).rows[0];
 
     const parteUpd = (await client.query(
-      "UPDATE campo_partes SET estado = 'cobrado', servicio_id = $2 WHERE id = $1 RETURNING *",
-      [parte.id, servicio.id]
+      "UPDATE campo_partes SET estado = 'cobrado', servicio_id = $2, cliente_id = $3 WHERE id = $1 RETURNING *",
+      [parte.id, servicio.id, cliente.id]
     )).rows[0];
 
     return { parte: parteUpd, servicio, cliente_id: cliente.id, valor };
@@ -706,6 +770,8 @@ campoRouter.patch("/partes/:id", asyncRoute(async (req, res) => {
     activo_id: z.string().uuid().optional(),
     operador: z.string().max(140).nullable().optional(),
     cliente: z.string().min(1).max(160).optional(),
+    cliente_id: z.string().uuid().optional(),
+    is_nuevo_externo: z.boolean().optional(),
     qq: z.number().positive().optional(),
     observaciones: z.string().max(400).nullable().optional()
   }).parse(req.body);
@@ -720,12 +786,25 @@ campoRouter.patch("/partes/:id", asyncRoute(async (req, res) => {
     const fields: string[] = [];
     const values: unknown[] = [];
     let i = 1;
-    for (const k of ["fecha", "activo_id", "operador", "cliente", "qq", "observaciones"] as const) {
+    if ((body.cliente_id || body.is_nuevo_externo !== undefined) && body.cliente === undefined) {
+      throw new ApiError(400, "Envia el nombre del cliente junto con su seleccion.");
+    }
+    if (body.cliente !== undefined) {
+      const nombre = body.cliente.trim();
+      if (!nombre) throw new ApiError(400, "El cliente no puede quedar vacio.");
+      const cliente = await resolverClienteParte(client, {
+        cliente: nombre,
+        cliente_id: body.cliente_id,
+        is_nuevo_externo: body.is_nuevo_externo
+      });
+      fields.push(`cliente = $${i++}`); values.push(cliente.nombre);
+      fields.push(`cliente_id = $${i++}`); values.push(cliente.id);
+    }
+    for (const k of ["fecha", "activo_id", "operador", "qq", "observaciones"] as const) {
       if (body[k] !== undefined) {
-        const v = (k === "operador" || k === "observaciones" || k === "cliente")
-          ? (typeof body[k] === "string" ? (body[k] as string).trim() || (k === "cliente" ? undefined : null) : body[k])
+        const v = (k === "operador" || k === "observaciones")
+          ? (typeof body[k] === "string" ? (body[k] as string).trim() || null : body[k])
           : body[k];
-        if (k === "cliente" && (v === undefined || v === null)) throw new ApiError(400, "El cliente no puede quedar vacío.");
         fields.push(`${k} = $${i++}`); values.push(v);
       }
     }
@@ -833,19 +912,30 @@ campoRouter.post("/partes", asyncRoute(async (req, res) => {
     activo_id: z.string().uuid(),
     operador: z.string().max(140).optional(),
     cliente: z.string().min(1).max(160),
+    cliente_id: z.string().uuid().optional(),
+    is_nuevo_externo: z.boolean().optional(),
     qq: z.number().positive(),
     observaciones: z.string().max(400).optional()
   }).parse(req.body);
-  const act = await pool.query("SELECT 1 FROM campo_activos WHERE id = $1", [body.activo_id]);
-  if (!act.rowCount) throw new ApiError(404, "Máquina no encontrada");
-  const result = await pool.query(
-    `INSERT INTO campo_partes (fecha, activo_id, operador, cliente, qq, observaciones, created_by)
-     VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7)
-     RETURNING id, fecha, activo_id, operador, cliente, qq::float AS qq, observaciones, estado, created_at`,
-    [body.fecha ?? null, body.activo_id, body.operador?.trim() || null, body.cliente.trim(),
-     body.qq, body.observaciones?.trim() || null, userId(req)]
-  );
-  res.status(201).json(result.rows[0]);
+  const result = await inTransaction(async (client) => {
+    const act = await client.query("SELECT 1 FROM campo_activos WHERE id = $1", [body.activo_id]);
+    if (!act.rowCount) throw new ApiError(404, "Maquina no encontrada");
+    const cliente = await resolverClienteParte(client, {
+      cliente: body.cliente,
+      cliente_id: body.cliente_id,
+      is_nuevo_externo: body.is_nuevo_externo
+    });
+    const parte = (await client.query(
+      `INSERT INTO campo_partes (fecha, activo_id, operador, cliente, cliente_id, qq, observaciones, created_by)
+       VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id, fecha, activo_id, operador, cliente, cliente_id, qq::float AS qq,
+                 observaciones, estado, origen, created_at`,
+      [body.fecha ?? null, body.activo_id, body.operador?.trim() || null, cliente.nombre,
+       cliente.id, body.qq, body.observaciones?.trim() || null, userId(req)]
+    )).rows[0];
+    return { parte, cliente_tipo: cliente.tipo };
+  });
+  res.status(201).json({ ...result.parte, cliente_tipo: result.cliente_tipo });
 }));
 
 // ── Tarifas de operadores (por operador + máquina) ──────────────────────────
