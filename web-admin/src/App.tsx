@@ -2355,6 +2355,7 @@ export function App() {
   const [selectionBatches, setSelectionBatches] = useState<SelectionBatch[]>([]);
   const [selectionProviders, setSelectionProviders] = useState<ExternalProvider[]>([]);
   const [selectionRates, setSelectionRates] = useState<SelectionRates>({ seleccion_rate: 1.25, envejecimiento_rate: 3.5 });
+  const [selectionView, setSelectionView] = useState<"nuevo" | "proceso" | "historial">("nuevo");
   type LineDraft = { product_id: string; quantity: string; is_reject?: boolean; sack_weight_lb?: string };
   const emptyLine: LineDraft = { product_id: "", quantity: "" };
   // Fase 1: lo que se manda a selectar (varias líneas de producto).
@@ -4016,6 +4017,7 @@ export function App() {
       inputs
     });
     setSelectionForm((f) => ({ ...f, notes: "", inputs: [{ ...emptyLine }] }));
+    setSelectionView("proceso");
     addToast("Enviado a selectar. Producto descontado del inventario y cuenta por pagar creada.", "success");
     await Promise.all([refreshSelection(), reloadStock()]);
   }
@@ -4031,9 +4033,16 @@ export function App() {
       });
     if (outputs.length === 0) { addToast("Agrega al menos un producto que regresó", "error"); return; }
     if (new Set(outputs.map((o) => o.product_id)).size !== outputs.length) { addToast("Hay un producto repetido en las salidas", "error"); return; }
+    const batch = selectionBatches.find((b) => b.id === batchId);
+    const totalRecibido = outputs.reduce((sum, o) => sum + o.quantity, 0);
+    if (batch && totalRecibido > Number(batch.input_qq) + 0.001) {
+      addToast(`Lo recibido (${totalRecibido.toFixed(2)} QQ) supera lo enviado (${Number(batch.input_qq).toFixed(2)} QQ)`, "error");
+      return;
+    }
     await apiPost(`/selection/batches/${batchId}/finish`, { outputs });
     setFinishingBatchId(null);
     setFinishOutputs([{ ...emptyLine }]);
+    setSelectionView("historial");
     addToast("Lote cerrado. Producto procesado ingresado al inventario.", "success");
     await Promise.all([refreshSelection(), reloadStock()]);
   }
@@ -4041,6 +4050,7 @@ export function App() {
   async function cancelBatch(batchId: string) {
     if (!window.confirm("¿Cancelar este lote? Se devuelve el producto a bodega y se anula la cuenta por pagar.")) return;
     await apiPost(`/selection/batches/${batchId}/cancel`, {});
+    setSelectionView("historial");
     addToast("Lote cancelado y producto devuelto a bodega", "success");
     await Promise.all([refreshSelection(), reloadStock()]);
   }
@@ -16646,12 +16656,10 @@ export function App() {
           const selectableProducts = products
             .filter((p) => ["FINISHED_GOOD", "BYPRODUCT"].includes(p.product_type) && p.is_active !== false)
             .sort((a, b) => a.name.localeCompare(b.name));
-          // Reglas del negocio: sale 0.11, corriente, arrocillo 3/4 y fino; regresa
-          // lo mismo (el 0.11 o corriente que se envió, los arrocillos) más el rechazo.
-          const INPUT_CODES = ["ARROZ-PILADO-011", "ARROZ-PILADO-CORRIENTE", "ARROCILLO-34", "ARROCILLO-FINO"];
-          const OUTPUT_CODES = [...INPUT_CODES, "POLVILLO", "RECHAZO"];
-          const inputProducts = selectableProducts.filter((p) => INPUT_CODES.includes(p.code));
-          const outputProducts = selectableProducts.filter((p) => OUTPUT_CODES.includes(p.code));
+          // Cualquier producto terminado o subproducto con stock puede salir y
+          // puede transformarse en otro producto activo al regresar.
+          const inputProducts = selectableProducts;
+          const outputProducts = selectableProducts;
           // Siempre sale de la bodega de producto terminado.
           const sourceWarehouseId = finishedWarehouse?.id ?? "";
           const availableFor = (pid: string, wid: string) =>
@@ -16680,16 +16688,46 @@ export function App() {
           const removeInputLine = (i: number) => setSelectionForm((f) => ({ ...f, inputs: f.inputs.length > 1 ? f.inputs.filter((_, idx) => idx !== i) : f.inputs }));
           const setOutLine = (i: number, patch: Partial<LineDraft>) =>
             setFinishOutputs((o) => o.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
-          const addOutLine = () => setFinishOutputs((o) => [...o, { ...emptyLine }]);
-          const removeOutLine = (i: number) => setFinishOutputs((o) => (o.length > 1 ? o.filter((_, idx) => idx !== i) : o));
-          const openFinish = (batchId: string) => { setFinishingBatchId(batchId); setFinishOutputs([{ ...emptyLine }]); };
+          const addOutLine = () => setFinishOutputs((o) => [...o, { ...emptyLine, sack_weight_lb: "100" }]);
+          const removeOutLine = (i: number) => {
+            if (i === 0) return;
+            setFinishOutputs((o) => o.filter((_, idx) => idx !== i));
+          };
+          const openFinish = (batch: SelectionBatch) => {
+            const productoEnvejecido = outputProducts.find((p) => p.code === "ARROZ-ENVEJECIDO");
+            const productoInicial = batch.service_type === "ENVEJECIMIENTO"
+              ? productoEnvejecido?.id ?? batch.inputs[0]?.product_id ?? ""
+              : batch.inputs[0]?.product_id ?? "";
+            setFinishingBatchId(batch.id);
+            setFinishOutputs([{ ...emptyLine, product_id: productoInicial, sack_weight_lb: "100" }]);
+          };
 
           const inProcess = selectionBatches.filter((b) => b.status === "IN_PROCESS");
-          const completed = selectionBatches.filter((b) => b.status === "COMPLETED");
+          const historyBatches = selectionBatches.filter((b) => b.status !== "IN_PROCESS");
 
           return (
           <section className="panelGrid">
-            <form className="formPanel" onSubmit={(e) => submitStartBatch(e).catch((err) => addToast(err.message, "error"))}>
+            <div className="tablePanel" style={{ gridColumn: "1 / -1", paddingBottom: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                <div>
+                  <h2 style={{ margin: 0 }}>Selección y Envejecimiento</h2>
+                  <p className="muted" style={{ margin: "3px 0 0" }}>Control de producto enviado, transformación, subproductos y merma.</p>
+                </div>
+                <button type="button" className="btnSecondary" onClick={() => setPersonasModalOpen(true)}>Gestionar personas externas</button>
+              </div>
+              <nav className="cajaSubNav" style={{ marginTop: 12, borderBottom: "none" }}>
+                <button type="button" className={selectionView === "nuevo" ? "active" : ""} onClick={() => setSelectionView("nuevo")}>📤 Nuevo Envío</button>
+                <button type="button" className={selectionView === "proceso" ? "active" : ""} onClick={() => setSelectionView("proceso")}>
+                  ⏳ En Proceso {inProcess.length > 0 ? `(${inProcess.length})` : ""}
+                </button>
+                <button type="button" className={selectionView === "historial" ? "active" : ""} onClick={() => setSelectionView("historial")}>
+                  ✅ Historial / Completados {historyBatches.length > 0 ? `(${historyBatches.length})` : ""}
+                </button>
+              </nav>
+            </div>
+
+            {selectionView === "nuevo" && (
+            <form className="formPanel" style={{ gridColumn: "1 / -1" }} onSubmit={(e) => submitStartBatch(e).catch((err) => addToast(err.message, "error"))}>
               <h2>📤 Mandar a selectar</h2>
               <p className="muted">Registra lo que sale de bodega a selectar/envejecer (varios productos). Sale del inventario ahora y genera la cuenta por pagar. Cuando regrese lo procesado, lo cierras en «En proceso».</p>
               <label><span>Fecha de envío</span>
@@ -16713,9 +16751,6 @@ export function App() {
                   {selectionProviders.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </label>
-              <button type="button" className="btnSecondary" style={{ marginTop: 4 }} onClick={() => setPersonasModalOpen(true)}>
-                👤 Gestionar Personas Externas
-              </button>
               <label><span>Bodega de donde sale</span>
                 <input type="text" readOnly value={finishedWarehouse?.name ?? "Bodega Producto Terminado"} style={{ background: "#f3f4f6", color: "var(--c-muted)" }} />
               </label>
@@ -16760,10 +16795,12 @@ export function App() {
                 </div>
               )}
               <button className="primary" disabled={enviarSelDeshabilitado} style={enviarSelDeshabilitado ? { opacity: 0.5, cursor: "not-allowed" } : undefined}>Enviar a selectar</button>
-              {selectionProviders.length === 0 && <p className="muted">Primero agrega la persona externa en el panel de la derecha.</p>}
+              {selectionProviders.length === 0 && <p className="muted">Primero agrega una persona externa desde la cabecera.</p>}
             </form>
+            )}
 
-            <div className="tablePanel">
+            {selectionView === "proceso" && (
+            <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
               <h2>⏳ En proceso (fuera de bodega)</h2>
               {inProcess.length === 0 ? (
                 <div className="emptyState"><div className="emptyIcon">📦</div><p>Nada en proceso ahora</p></div>
@@ -16784,7 +16821,7 @@ export function App() {
                         {finishingBatchId === b.id ? (
                           <button type="button" className="btnGhost" onClick={() => setFinishingBatchId(null)}>Cerrar formulario</button>
                         ) : (
-                          <button type="button" className="primary" style={{ padding: "6px 12px" }} onClick={() => openFinish(b.id)}>📥 Registrar lo que regresó</button>
+                          <button type="button" className="primary" style={{ padding: "6px 12px" }} onClick={() => openFinish(b)}>📥 Registrar lo que regresó</button>
                         )}
                         <button type="button" className="btnGhost" onClick={() => printTicketSalidaSeleccion(b)} title="Imprimir guía de salida de bodega">🖨️ Ticket de Salida</button>
                         <button type="button" className="btnGhost" style={{ color: "#dc2626" }} onClick={() => cancelBatch(b.id).catch((err) => addToast(err.message, "error"))}>Cancelar</button>
@@ -16792,12 +16829,23 @@ export function App() {
 
                       {finishingBatchId === b.id && (
                         <div style={{ marginTop: 10, background: "#f9fafb", borderRadius: 8, padding: 10 }}>
-                          <span style={{ fontSize: 13, fontWeight: 700 }}>📥 Recepción del lote — controla merma y subproductos</span>
-                          <p className="muted" style={{ fontSize: 11.5, margin: "2px 0 4px" }}>Registra los QQ limpios que entran a bodega y el subproducto recuperado; la merma se calcula sola.</p>
+                          <span style={{ fontSize: 13, fontWeight: 700 }}>📥 Producto resultante</span>
+                          <p className="muted" style={{ fontSize: 11.5, margin: "2px 0 4px" }}>
+                            Elige con qué nombre regresa el producto al inventario. Agrega debajo los subproductos o rechazos; la merma se calcula sola.
+                          </p>
                           {finishOutputs.map((line, i) => (
                             <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 70px 88px auto auto", gap: 6, alignItems: "center", marginTop: 6 }}>
-                              <select value={line.product_id} onChange={(e) => setOutLine(i, { product_id: e.target.value })} style={inputStyle}>
-                                <option value="">Producto…</option>
+                              <span style={{ gridColumn: "1 / -1", fontSize: 11, fontWeight: 700, color: i === 0 ? "#166534" : "#64748b" }}>
+                                {i === 0 ? "Producto principal que reingresa" : `Subproducto o rechazo ${i}`}
+                              </span>
+                              <select value={line.product_id} onChange={(e) => {
+                                const producto = outputProducts.find((p) => p.id === e.target.value);
+                                setOutLine(i, {
+                                  product_id: e.target.value,
+                                  is_reject: i > 0 && producto?.code === "RECHAZO"
+                                });
+                              }} style={inputStyle}>
+                                <option value="">Selecciona producto…</option>
                                 {outputProducts.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                               </select>
                               <input type="number" step="0.01" min="0" placeholder="QQ" value={line.quantity} onChange={(e) => setOutLine(i, { quantity: e.target.value })} style={inputStyle} />
@@ -16822,14 +16870,18 @@ export function App() {
                                   </select>
                                 );
                               })()}
-                              <label style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 3 }} title="Marca si es el rechazo">
-                                <input type="checkbox" checked={!!line.is_reject} onChange={(e) => setOutLine(i, { is_reject: e.target.checked })} /> rechazo
-                              </label>
-                              <button type="button" onClick={() => removeOutLine(i)} title="Quitar" style={{ border: "none", background: "transparent", color: "#dc2626", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
+                              {i === 0 ? (
+                                <span style={{ fontSize: 11, color: "#166534", fontWeight: 700 }}>Principal</span>
+                              ) : (
+                                <label style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 3 }} title="Marca si esta línea corresponde a rechazo">
+                                  <input type="checkbox" checked={!!line.is_reject} onChange={(e) => setOutLine(i, { is_reject: e.target.checked })} /> rechazo
+                                </label>
+                              )}
+                              {i === 0 ? <span /> : <button type="button" onClick={() => removeOutLine(i)} title="Quitar" style={{ border: "none", background: "transparent", color: "#dc2626", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>}
                             </div>
                           ))}
                           <div style={{ marginTop: 8 }}>
-                            <button type="button" onClick={addOutLine} style={{ background: "transparent", border: "1px dashed #cbd5e1", borderRadius: 6, padding: "5px 10px", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>+ Agregar</button>
+                            <button type="button" onClick={addOutLine} style={{ background: "transparent", border: "1px dashed #cbd5e1", borderRadius: 6, padding: "5px 10px", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>+ Agregar subproducto</button>
                           </div>
                           {/* Resumen de recepción: QQ Limpios / Subproducto / Merma (auto). */}
                           {(() => {
@@ -16872,23 +16924,26 @@ export function App() {
               )}
 
             </div>
+            )}
 
-            {/* ✅ Completados: a lo ancho, aprovechando el espacio liberado */}
+            {selectionView === "historial" && (
             <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-              <h2>✅ Completados</h2>
-              {completed.length === 0 ? (
-                <div className="emptyState"><div className="emptyIcon">🧹</div><p>Sin lotes completados aún</p></div>
+              <h2>✅ Historial / Completados</h2>
+              {historyBatches.length === 0 ? (
+                <div className="emptyState"><div className="emptyIcon">🧹</div><p>Sin lotes completados o cancelados</p></div>
               ) : (
                 <div style={{ overflowX: "auto" }}>
                   <table className="cajaTable" style={{ marginTop: 6 }}>
-                    <thead><tr><th>#</th><th>Fecha</th><th>Persona</th><th>Entró</th><th>Regresó</th><th>Merma</th><th>Costo</th><th>Saldo</th></tr></thead>
+                    <thead><tr><th>#</th><th>Fecha</th><th>Persona</th><th>Estado</th><th>Enviado</th><th>Productos resultantes</th><th>Regresó</th><th>Merma</th><th>Costo</th><th>Saldo</th></tr></thead>
                     <tbody>
-                      {completed.map((b) => (
+                      {historyBatches.map((b) => (
                         <tr key={b.id}>
                           <td>{b.batch_number}</td>
                           <td>{String(b.service_date).slice(0, 10)}</td>
                           <td>{b.provider_name}</td>
+                          <td>{b.status === "COMPLETED" ? <span className="chip ok">Completado</span> : <span className="chip warn">Cancelado</span>}</td>
                           <td>{Number(b.input_qq).toFixed(2)}</td>
+                          <td>{b.outputs.length > 0 ? b.outputs.map((o, i) => <span key={i} className="chip" style={{ marginRight: 4 }}>{o.product_name}: {Number(o.quantity).toFixed(2)} QQ</span>) : "—"}</td>
                           <td>{Number(b.output_qq).toFixed(2)}</td>
                           <td>{Number(b.merma_qq).toFixed(2)}</td>
                           <td><strong>{money(Number(b.total_cost))}</strong></td>
@@ -16901,6 +16956,7 @@ export function App() {
               )}
               <p className="muted" style={{ marginTop: 8 }}>El pago a la persona externa se registra en <strong>Por Pagar</strong>.</p>
             </div>
+            )}
 
             {/* Modal: Gestionar Personas Externas (mismo form + tabla) */}
             {personasModalOpen && (

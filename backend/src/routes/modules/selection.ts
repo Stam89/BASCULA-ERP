@@ -99,7 +99,11 @@ selectionRouter.get("/batches", asyncRoute(async (req, res) => {
               WHERE i.batch_id = b.id
             ), '[]'::json) AS inputs,
             COALESCE((
-              SELECT json_agg(json_build_object('product_id', o.product_id, 'product_name', p.name, 'quantity', o.quantity, 'is_reject', o.is_reject) ORDER BY o.is_reject, p.name)
+              SELECT json_agg(json_build_object(
+                'product_id', o.product_id, 'product_name', p.name,
+                'quantity', o.quantity, 'is_reject', o.is_reject,
+                'presentation', o.presentation, 'sack_weight_lb', o.sack_weight_lb
+              ) ORDER BY o.is_reject, p.name)
               FROM selection_batch_outputs o JOIN products p ON p.id = o.product_id
               WHERE o.batch_id = b.id
             ), '[]'::json) AS outputs
@@ -256,13 +260,27 @@ selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
     const defaultWarehouse = batch.rows[0].warehouse_id;
     const outputQq = round3(body.outputs.reduce((s, o) => s + o.quantity, 0));
     const mermaQq = round3(Number(batch.rows[0].input_qq) - outputQq);
+    if (outputQq > Number(batch.rows[0].input_qq) + 0.001) {
+      throw new ApiError(422, `Lo recibido (${outputQq.toFixed(3)} QQ) no puede superar lo enviado (${Number(batch.rows[0].input_qq).toFixed(3)} QQ).`);
+    }
+
+    const outputIds = body.outputs.map((o) => o.product_id);
+    if (new Set(outputIds).size !== outputIds.length) {
+      throw new ApiError(400, "Hay un producto repetido en el reingreso; registra su cantidad total en una sola linea.");
+    }
 
     // Productos de las salidas (para saber cuáles son subproductos y qué saco
     // especial les toca: Arrocillo→Saco Usado, Polvillo→Saco Negro).
-    const prodIds = [...new Set(body.outputs.map((o) => o.product_id))];
+    const prodIds = [...new Set(outputIds)];
     const prodRows = prodIds.length
-      ? await tx.query("SELECT id, code, name FROM products WHERE id = ANY($1)", [prodIds])
+      ? await tx.query(
+        "SELECT id, code, name FROM products WHERE id = ANY($1) AND is_active = true AND product_type IN ('FINISHED_GOOD', 'BYPRODUCT')",
+        [prodIds]
+      )
       : { rows: [] as Array<{ id: string; code: string; name: string }> };
+    if (prodRows.rows.length !== prodIds.length) {
+      throw new ApiError(400, "Uno de los productos resultantes no existe, esta inactivo o no pertenece al inventario de producto terminado.");
+    }
     const prodMap = new Map(prodRows.rows.map((r: { id: string; code: string; name: string }) => [r.id, r]));
 
     // Sacos a descontar de la MATRIZ, por TIPO exacto, según la presentación
