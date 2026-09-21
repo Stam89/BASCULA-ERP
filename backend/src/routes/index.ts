@@ -88,6 +88,7 @@ routes.use("/fomentos", fomentosRouter);
 routes.use("/sacks", sacksRouter);
 routes.use("/customers", customersRouter);
 routes.use("/products", productsRouter);
+routes.use("/productos", productsRouter);
 routes.use("/receivable", receivableRouter);
 routes.use("/equipment", equipmentRouter);
 routes.use("/settings", settingsRouter);

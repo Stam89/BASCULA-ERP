@@ -2695,6 +2695,13 @@ export function App() {
   const [cuadreOpen, setCuadreOpen] = useState(false);
   const [kardexOpen, setKardexOpen] = useState(false);
   const [catalogoOpen, setCatalogoOpen] = useState(false);
+  const [newProductOpen, setNewProductOpen] = useState(false);
+  const [newProductForm, setNewProductForm] = useState({
+    code: "",
+    name: "",
+    product_type: "FINISHED_GOOD",
+    unit: "QQ"
+  });
   const [purchaseForm, setPurchaseForm] = useState({
     supplier_id: "",
     payment_type: "CASH" as "CASH" | "CREDIT",
@@ -2798,7 +2805,7 @@ export function App() {
   const rawStockRows = useMemo(
     () =>
       buildDisplayStockRows(
-        visibleInventoryProducts.filter((product) => product.code.startsWith("CASCARA")),
+        visibleInventoryProducts.filter((product) => product.product_type === "RAW_MATERIAL"),
         stock,
         rawWarehouse?.name ?? "Bodega Materia Prima"
       ),
@@ -2807,7 +2814,7 @@ export function App() {
   const finishedStockRows = useMemo(
     () =>
       buildDisplayStockRows(
-        visibleInventoryProducts.filter((product) => product.code.startsWith("ARROZ-PILADO")),
+        visibleInventoryProducts.filter((product) => product.product_type === "FINISHED_GOOD"),
         stock,
         finishedWarehouse?.name ?? "Bodega Producto Terminado"
       ),
@@ -2816,7 +2823,7 @@ export function App() {
   const byproductStockRows = useMemo(
     () =>
       buildDisplayStockRows(
-        visibleInventoryProducts.filter((product) => ["ARROCILLO-34", "ARROCILLO-FINO", "POLVILLO"].includes(product.code)),
+        visibleInventoryProducts.filter((product) => product.product_type === "BYPRODUCT"),
         stock,
         finishedWarehouse?.name ?? "Bodega Producto Terminado"
       ),
@@ -7220,6 +7227,28 @@ export function App() {
     });
     setEditFarmer(null);
     addToast("Agricultor actualizado ✓", "success");
+    await refresh();
+  }
+
+  async function submitNewProduct(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const code = newProductForm.code.trim().toUpperCase();
+    const name = newProductForm.name.trim();
+    const unit = newProductForm.unit.trim().toUpperCase() || "QQ";
+    if (code.length < 2 || name.length < 2) {
+      addToast("Completa código y nombre del producto", "error");
+      return;
+    }
+
+    await apiPost<Product>("/productos", {
+      code,
+      name,
+      product_type: newProductForm.product_type,
+      unit
+    });
+    setNewProductForm({ code: "", name: "", product_type: "FINISHED_GOOD", unit: "QQ" });
+    setNewProductOpen(false);
+    addToast(`Producto ${name} creado`, "success");
     await refresh();
   }
 
@@ -11911,10 +11940,61 @@ export function App() {
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
                     <div>
                       <h3 style={{ marginTop: 0, marginBottom: 2 }}>⚙️ Catálogo de Productos</h3>
-                      <p className="muted" style={{ margin: 0 }}>Productos definidos para el accionista activo. Solo consulta.</p>
+                      <p className="muted" style={{ margin: 0 }}>Productos activos del inventario. Los nuevos aparecen con stock inicial 0.00 QQ.</p>
                     </div>
-                    <button type="button" onClick={() => setCatalogoOpen(false)} style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <button type="button" className="btnSecondary" onClick={() => setNewProductOpen((open) => !open)}>
+                        {newProductOpen ? "Ocultar formulario" : "➕ Nuevo Producto"}
+                      </button>
+                      <button type="button" onClick={() => setCatalogoOpen(false)} style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
+                    </div>
                   </div>
+                  {newProductOpen && (
+                    <form
+                      className="formPanel"
+                      onSubmit={(event) => submitNewProduct(event).catch((error) => addToast(error.message, "error"))}
+                      style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, alignItems: "end" }}
+                    >
+                      <label>
+                        <span>Código *</span>
+                        <input
+                          required
+                          value={newProductForm.code}
+                          onChange={(e) => setNewProductForm((prev) => ({ ...prev, code: e.target.value.toUpperCase() }))}
+                          placeholder="ARROZ-ENVEJECIDO"
+                        />
+                      </label>
+                      <label>
+                        <span>Nombre *</span>
+                        <input
+                          required
+                          value={newProductForm.name}
+                          onChange={(e) => setNewProductForm((prev) => ({ ...prev, name: e.target.value }))}
+                          placeholder="Arroz Envejecido"
+                        />
+                      </label>
+                      <label>
+                        <span>Tipo</span>
+                        <select
+                          value={newProductForm.product_type}
+                          onChange={(e) => setNewProductForm((prev) => ({ ...prev, product_type: e.target.value }))}
+                        >
+                          <option value="FINISHED_GOOD">Producto Terminado</option>
+                          <option value="BYPRODUCT">Subproducto</option>
+                          <option value="RAW_MATERIAL">Materia Prima</option>
+                        </select>
+                      </label>
+                      <label>
+                        <span>Unidad</span>
+                        <input
+                          value={newProductForm.unit}
+                          onChange={(e) => setNewProductForm((prev) => ({ ...prev, unit: e.target.value.toUpperCase() }))}
+                          placeholder="QQ"
+                        />
+                      </label>
+                      <button type="submit" className="primary">Guardar</button>
+                    </form>
+                  )}
                   <div style={{ marginTop: 12 }}>
                     <DataList
                       title="Productos"
@@ -21323,15 +21403,7 @@ function riceTypeLabel(value: string | null | undefined) {
 }
 
 function isCurrentStockProduct(product: Product) {
-  return [
-    "CASCARA-011",
-    "CASCARA-CORRIENTE",
-    "ARROZ-PILADO-011",
-    "ARROZ-PILADO-CORRIENTE",
-    "ARROCILLO-34",
-    "ARROCILLO-FINO",
-    "POLVILLO"
-  ].includes(product.code);
+  return product.is_active !== false && ["RAW_MATERIAL", "FINISHED_GOOD", "BYPRODUCT"].includes(product.product_type);
 }
 
 function buildDisplayStockRows(products: Product[], stock: StockRow[], fallbackWarehouse: string) {

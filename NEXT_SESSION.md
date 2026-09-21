@@ -1,13 +1,13 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-09-19
+Actualizado: 2026-09-21
 
 ## Inicio rapido
 
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: `be4dff5 Reestructurar seleccion y transformar producto`.
+- Ultimo cambio funcional: catalogo de productos editable en Inventario (commit de esta sesion).
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -65,6 +65,20 @@ Implementado en `be4dff5`:
 - Al verificar habia 1 lote real `IN_PROCESS`; no fue modificado.
 - Build backend/frontend correcto y 33/33 pruebas backend aprobadas.
 
+### Catalogo de Productos / Inventario
+
+Implementado el 2026-09-21:
+
+- Modal `Inventario -> Catalogo de Productos` permite crear productos.
+- Backend acepta `POST /api/v1/products` y alias `POST /api/v1/productos`.
+- El formulario pide codigo, nombre, tipo (`FINISHED_GOOD`, `BYPRODUCT`, `RAW_MATERIAL`) y unidad.
+- Codigos/unidades se normalizan en mayusculas.
+- Si el producto existia inactivo, se reactiva; si ya existe activo, devuelve conflicto.
+- El panel de Inventario clasifica por `product_type`, no por prefijo de codigo.
+- `ARROZ-ENVEJECIDO` aparece en `Stock producto terminado` con `0.00 QQ` aunque aun no tenga movimientos.
+- Migracion aplicada: `20261023_catalogo_productos_creacion.sql`, idempotente, asegura `ARROZ-ENVEJECIDO`.
+- Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build y `/health`.
+
 ### Cambios inmediatamente anteriores
 
 - `cb5096d`: saldo inicial de caja integrado en movimientos.
@@ -91,4 +105,3 @@ Si se reinicia desde PowerShell, usar `Start-Process` oculto. Confirmar primero 
 ## Frase recomendada para la proxima sesion
 
 `Continua BASCULA-ERP. Lee AGENTS.md y NEXT_SESSION.md, revisa git status y el ultimo commit. Luego realiza este cambio: [DESCRIBIR CAMBIO]. No leas PROJECT_CONTEXT.md completo salvo que necesites buscar un antecedente concreto.`
-
