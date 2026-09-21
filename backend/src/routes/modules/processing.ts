@@ -352,7 +352,7 @@ async function calcularServicioPilado(
     `SELECT COALESCE(pilado_precio_qq, 0) base,
             COALESCE(pilado_recargo_arroba, 0) arroba,
             COALESCE(pilado_recargo_10lb, 0) diez
-     FROM labor_rates WHERE id = 1`
+     FROM labor_rates WHERE socio_id IS NULL LIMIT 1`
   );
   const base = Number(r.rows[0]?.base ?? 0);
   const recargoArroba = Number(r.rows[0]?.arroba ?? 0);

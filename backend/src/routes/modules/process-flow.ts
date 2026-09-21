@@ -17,6 +17,7 @@ import {
 } from "../../utils/process-reports.js";
 import { upsertCuadrillaSecadoraEntry, autoGenerarPagosCuadrillaDeSecado } from "./cuadrilla.js";
 import { getMatrizId } from "../../services/matriz.js";
+import { getRates } from "./labor.js";
 
 export const processFlowRouter = Router();
 
@@ -101,7 +102,7 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 // COMPLETED; se auto-protege leyendo el estado real del reporte.
 async function autoCobrarSecadoServicio(client: PoolClient, dryingReportId: string): Promise<void> {
   const r = await client.query(
-    `SELECT d.status, d.lot_id, l.lot_code, l.operation_type, l.farmer_id,
+    `SELECT d.status, d.lot_id, l.lot_code, l.operation_type, l.farmer_id, l.accionista_id,
             COALESCE((SELECT SUM(t.quintals) FROM weighing_tickets t WHERE t.lot_id = l.id), 0)::float AS qq
      FROM drying_tunnel_reports d
      JOIN lots l ON l.id = d.lot_id
@@ -122,9 +123,8 @@ async function autoCobrarSecadoServicio(client: PoolClient, dryingReportId: stri
 
   const qq = round2(Number(row.qq) || 0);
   if (qq <= 0) return;
-  // Tarifa global de secado por QQ (SELECT simple, sin DDL → sin ensureLaborTables).
-  const rr = await client.query("SELECT COALESCE(secado_servicio_per_qq, 0)::float AS r FROM labor_rates WHERE id = 1");
-  const rate = Number(rr.rows[0]?.r ?? 0);
+  const rates = await getRates(client, row.accionista_id ?? null);
+  const rate = Number(rates.secado_servicio_per_qq ?? 0);
   if (rate <= 0) return; // sin tarifa configurada: no se cobra automático (queda el cobro manual).
   const monto = round2(qq * rate);
   const farmerName = row.farmer_id
@@ -159,9 +159,11 @@ function fmtInicio(value: unknown): string {
 // falla, el secado no queda finalizado y no se pierde el pago del trabajador.
 async function autoGenerarPagoSecador(client: PoolClient, dryingReportId: string): Promise<void> {
   const r = await client.query(
-    `SELECT status, operator_name, filled_at, dry_start_at, created_at,
+    `SELECT d.status, d.operator_name, d.filled_at, d.dry_start_at, d.created_at, l.accionista_id,
             COALESCE(filled_at, dry_start_at::date, created_at::date) AS work_date
-     FROM drying_tunnel_reports WHERE id = $1`,
+     FROM drying_tunnel_reports d
+     LEFT JOIN lots l ON l.id = d.lot_id
+     WHERE d.id = $1`,
     [dryingReportId]
   );
   if (!r.rowCount) return;
@@ -183,11 +185,9 @@ async function autoGenerarPagoSecador(client: PoolClient, dryingReportId: string
   );
   const tunnels = Number(t.rows[0]?.tunnels ?? 0);
 
-  const rr = await client.query(
-    "SELECT COALESCE(secador_guardiania,0)::float AS g, COALESCE(secador_per_tunel,0)::float AS pt FROM labor_rates WHERE id = 1"
-  );
-  const guardiania = Number(rr.rows[0]?.g ?? 0);
-  const perTunel = Number(rr.rows[0]?.pt ?? 0);
+  const rates = await getRates(client, rep.accionista_id ?? null);
+  const guardiania = Number(rates.secador_guardiania ?? 0);
+  const perTunel = Number(rates.secador_per_tunel ?? 0);
   const base = round2(guardiania + perTunel * tunnels);
 
   const inicio = fmtInicio(rep.dry_start_at ?? rep.filled_at ?? rep.created_at);
@@ -251,7 +251,7 @@ async function calcularCombustible(
   const r = await client.query(
     `SELECT COALESCE(precio_gas_bombona,0) bombona, COALESCE(precio_gas_cilindro,0) cilindro,
             COALESCE(precio_diesel,0) diesel
-     FROM labor_rates WHERE id = 1`
+     FROM labor_rates WHERE socio_id IS NULL LIMIT 1`
   );
   const precioBombona = Number(r.rows[0]?.bombona ?? 0);
   const precioCilindro = Number(r.rows[0]?.cilindro ?? 0);

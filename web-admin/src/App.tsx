@@ -6450,12 +6450,7 @@ export function App() {
     if (activeTab === "Configuracion") refreshConfig().catch(() => undefined);
     if (activeTab === "Costos Operativos") refreshCostos().catch(() => undefined);
     if (activeTab === "Estados Financieros") loadFinanzas().catch((e) => addToast(e.message, "error"));
-  }, [activeTab, motorActivo]);
-
-  // Al cambiar de accionista, recarga Sueldos al cambiar de accionista (personal y pagos son por accionista).
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeAccionistaId]);
+  }, [activeTab, motorActivo, activeAccionistaId]);
 
   // Carga de datos de cada subpestaña de Configuración. Va en un EFECTO (antes
   // estaba en el onClick de la pestaña), por dos razones: (1) al entrar a
@@ -6473,7 +6468,7 @@ export function App() {
     if (configSubTab === "cuadrilla") refreshCuadrilla().catch(fail);
     if (configSubTab === "secuenciales") loadSequences().catch(fail);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, configSubTab]);
+  }, [activeTab, configSubTab, activeAccionistaId]);
 
   // Memoria de los acordeones de Configuración. Al pasar todas las tarjetas a
   // <details>, entrar a una subpestaña mostraba solo títulos. Aquí se restaura,

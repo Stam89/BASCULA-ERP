@@ -5,6 +5,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { getRates } from "./labor.js";
 
 export const cobrosRouter = Router();
 
@@ -171,8 +172,8 @@ cobrosRouter.post("/secado", asyncRoute(async (req, res) => {
     if (qq <= 0) throw new ApiError(400, "El lote no tiene quintales para cobrar.");
     let rate = body.rate_per_qq;
     if (rate == null) {
-      const rr = await tx.query("SELECT COALESCE(secado_servicio_per_qq, 0)::float AS r FROM labor_rates WHERE id = 1");
-      rate = Number(rr.rows[0]?.r ?? 0);
+      const rates = await getRates(tx, provider);
+      rate = Number(rates.secado_servicio_per_qq ?? 0);
     }
     const monto = round2(qq * rate);
     if (monto <= 0) throw new ApiError(400, "Configura la tarifa de secado (mayor a 0) para cobrar.");

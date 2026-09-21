@@ -15,6 +15,8 @@ import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth
 
 export const settingsRouter = Router();
 
+type Queryable = { query: typeof pool.query };
+
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 // backend/src(o dist)/routes/modules -> backend
 const backupScript = path.join(moduleDir, "..", "..", "..", "scripts", "backup-db.cjs");
@@ -48,7 +50,8 @@ function ensureTable(): Promise<void> {
     tableReady = pool
       .query(
         `CREATE TABLE IF NOT EXISTS app_settings (
-           id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+           id INT NOT NULL DEFAULT 1,
+           socio_id UUID REFERENCES accionistas(id),
            business_name VARCHAR(160) NOT NULL DEFAULT 'BASCULA ERP',
            business_subtitle VARCHAR(160) NOT NULL DEFAULT 'Piladora de Arroz',
            ruc VARCHAR(20) NOT NULL DEFAULT '',
@@ -65,19 +68,65 @@ function ensureTable(): Promise<void> {
       // para la merma en báscula). Aditivo; defaults pactados.
       .then(() => pool.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS tarifa_pilado_qq NUMERIC(10,2) NOT NULL DEFAULT 3.50`))
       .then(() => pool.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS humedad_base_pct NUMERIC(5,2) NOT NULL DEFAULT 13.00`))
+      .then(() => pool.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS socio_id UUID REFERENCES accionistas(id)`))
+      .then(() => pool.query(`ALTER TABLE app_settings DROP CONSTRAINT IF EXISTS app_settings_pkey`))
+      .then(() => pool.query(`ALTER TABLE app_settings DROP CONSTRAINT IF EXISTS app_settings_id_check`))
+      .then(() => pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_app_settings_master ON app_settings ((1)) WHERE socio_id IS NULL`))
+      .then(() => pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_app_settings_socio ON app_settings (socio_id) WHERE socio_id IS NOT NULL`))
       .then(() => undefined);
   }
   return tableReady;
 }
 
-settingsRouter.get("/", asyncRoute(async (_req, res) => {
+async function ensureMasterSettings(db: Queryable = pool): Promise<void> {
   await ensureTable();
-  const result = await pool.query(
-    `INSERT INTO app_settings (id) VALUES (1)
-     ON CONFLICT (id) DO UPDATE SET id = 1
-     RETURNING *`
+  await db.query(
+    `INSERT INTO app_settings (id, socio_id)
+     SELECT 1, NULL
+     WHERE NOT EXISTS (SELECT 1 FROM app_settings WHERE socio_id IS NULL)`
   );
-  res.json(result.rows[0]);
+}
+
+async function resolveSettingsSocioId(db: Queryable, accionistaId?: string | null): Promise<string | null> {
+  if (!accionistaId) return null;
+  const result = await db.query("SELECT tipo FROM accionistas WHERE id = $1", [accionistaId]);
+  if (!result.rowCount || result.rows[0]?.tipo === "MATRIZ") return null;
+  return accionistaId;
+}
+
+async function ensureSettingsForSocio(db: Queryable, socioId: string | null): Promise<void> {
+  await ensureMasterSettings(db);
+  if (!socioId) return;
+  await db.query(
+    `INSERT INTO app_settings
+       (id, socio_id, business_name, business_subtitle, ruc, phone, address, receipt_footer,
+        guia_prefix, tarifa_pilado_qq, humedad_base_pct, updated_at)
+     SELECT 1, $1, business_name, business_subtitle, ruc, phone, address, receipt_footer,
+            guia_prefix, tarifa_pilado_qq, humedad_base_pct, now()
+     FROM app_settings
+     WHERE socio_id IS NULL
+     ON CONFLICT DO NOTHING`,
+    [socioId]
+  );
+}
+
+async function getSettingsForAccionista(db: Queryable, accionistaId?: string | null) {
+  const socioId = await resolveSettingsSocioId(db, accionistaId);
+  await ensureSettingsForSocio(db, socioId);
+  const result = await db.query(
+    `SELECT *, CASE WHEN socio_id IS NULL THEN 'MAESTRO' ELSE 'SOCIO' END AS config_source
+     FROM app_settings
+     WHERE ($1::uuid IS NOT NULL AND socio_id = $1::uuid) OR socio_id IS NULL
+     ORDER BY CASE WHEN socio_id = $1::uuid THEN 0 ELSE 1 END
+     LIMIT 1`,
+    [socioId]
+  );
+  return result.rows[0];
+}
+
+settingsRouter.get("/", asyncRoute(async (req, res) => {
+  const result = await getSettingsForAccionista(pool, (req as AuthenticatedRequest).accionistaId);
+  res.json(result);
 }));
 
 settingsRouter.get("/company-readiness", requireAdmin, asyncRoute(async (_req, res) => {
@@ -91,7 +140,7 @@ settingsRouter.get("/company-readiness", requireAdmin, asyncRoute(async (_req, r
     return (await pool.query(sql, params)).rows[0]?.value ?? fallback;
   }
   const [settings, matrizRows, admins, users] = await Promise.all([
-    pool.query("SELECT business_name, ruc, phone, address FROM app_settings WHERE id = 1"),
+    pool.query("SELECT business_name, ruc, phone, address FROM app_settings WHERE socio_id IS NULL LIMIT 1"),
     pool.query("SELECT id, name, code, is_active FROM accionistas WHERE tipo = 'MATRIZ' ORDER BY is_active DESC, created_at, name LIMIT 1"),
     pool.query(
       `SELECT COUNT(*)::int AS count
@@ -262,17 +311,17 @@ settingsRouter.put("/", requireAdmin, asyncRoute(async (req, res) => {
       );
     }
 
+    await ensureMasterSettings(client);
     return client.query(
-      `INSERT INTO app_settings (id, business_name, business_subtitle, ruc, phone, address, receipt_footer, updated_at)
-       VALUES (1, $1, $2, $3, $4, $5, $6, now())
-       ON CONFLICT (id) DO UPDATE SET
-         business_name = EXCLUDED.business_name,
-         business_subtitle = EXCLUDED.business_subtitle,
-         ruc = EXCLUDED.ruc,
-         phone = EXCLUDED.phone,
-         address = EXCLUDED.address,
-         receipt_footer = EXCLUDED.receipt_footer,
-         updated_at = now()
+      `UPDATE app_settings
+       SET business_name = $1,
+           business_subtitle = $2,
+           ruc = $3,
+           phone = $4,
+           address = $5,
+           receipt_footer = $6,
+           updated_at = now()
+       WHERE socio_id IS NULL
        RETURNING *`,
       [body.business_name, body.business_subtitle, body.ruc, body.phone, body.address, body.receipt_footer]
     );
@@ -289,16 +338,19 @@ settingsRouter.put("/plant-params", requireAdmin, asyncRoute(async (req, res) =>
     humedad_base_pct: z.number().min(0).max(100)
   }).parse(req.body);
 
-  const result = await pool.query(
-    `INSERT INTO app_settings (id, tarifa_pilado_qq, humedad_base_pct, updated_at)
-     VALUES (1, $1, $2, now())
-     ON CONFLICT (id) DO UPDATE SET
-       tarifa_pilado_qq = EXCLUDED.tarifa_pilado_qq,
-       humedad_base_pct = EXCLUDED.humedad_base_pct,
-       updated_at = now()
-     RETURNING *`,
-    [body.tarifa_pilado_qq, body.humedad_base_pct]
-  );
+  const result = await inTransaction(async (client) => {
+    const socioId = await resolveSettingsSocioId(client, (req as AuthenticatedRequest).accionistaId);
+    await ensureSettingsForSocio(client, socioId);
+    return client.query(
+      `UPDATE app_settings
+       SET tarifa_pilado_qq = $2,
+           humedad_base_pct = $3,
+           updated_at = now()
+       WHERE socio_id IS NOT DISTINCT FROM $1::uuid
+       RETURNING *`,
+      [socioId, body.tarifa_pilado_qq, body.humedad_base_pct]
+    );
+  });
   res.json(result.rows[0]);
 }));
 
@@ -310,7 +362,10 @@ settingsRouter.put("/plant-params", requireAdmin, asyncRoute(async (req, res) =>
 settingsRouter.get("/sequences", asyncRoute(async (_req, res) => {
   await ensureTable();
   const [cfg, seq, lastVen, lastLiq] = await Promise.all([
-    pool.query("INSERT INTO app_settings (id) VALUES (1) ON CONFLICT (id) DO UPDATE SET id = 1 RETURNING guia_prefix"),
+    (async () => {
+      await ensureMasterSettings(pool);
+      return pool.query("SELECT guia_prefix FROM app_settings WHERE socio_id IS NULL LIMIT 1");
+    })(),
     pool.query("SELECT last_value, is_called FROM guia_remision_seq"),
     pool.query("SELECT sale_number FROM sales ORDER BY created_at DESC LIMIT 1"),
     pool.query("SELECT liquidation_number FROM liquidations ORDER BY created_at DESC LIMIT 1")
@@ -344,13 +399,14 @@ settingsRouter.put("/sequences/guia", requireAdmin, asyncRoute(async (req, res) 
     next_number: z.number().int().min(1).optional()
   }).parse(req.body);
   if (body.prefijo !== undefined) {
-    await pool.query("UPDATE app_settings SET guia_prefix = $1, updated_at = now() WHERE id = 1", [body.prefijo]);
+    await ensureMasterSettings(pool);
+    await pool.query("UPDATE app_settings SET guia_prefix = $1, updated_at = now() WHERE socio_id IS NULL", [body.prefijo]);
   }
   if (body.next_number !== undefined) {
     await pool.query("SELECT setval('guia_remision_seq', $1, false)", [body.next_number]);
   }
   const [cfg, seq] = await Promise.all([
-    pool.query("SELECT guia_prefix FROM app_settings WHERE id = 1"),
+    pool.query("SELECT guia_prefix FROM app_settings WHERE socio_id IS NULL LIMIT 1"),
     pool.query("SELECT last_value, is_called FROM guia_remision_seq")
   ]);
   const guiaPrefix = cfg.rows[0].guia_prefix as string;

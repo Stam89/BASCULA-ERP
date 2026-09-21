@@ -633,9 +633,12 @@ FROM farmer_advances
 WHERE status IN ('CONFIRMED', 'PARTIAL')
 GROUP BY farmer_id;
 
--- Configuración general del negocio (fila única)
+-- Configuración general del negocio.
+-- socio_id NULL = Maestro/Fallback; socio_id con valor = parámetros propios
+-- de un socio operativo.
 CREATE TABLE IF NOT EXISTS app_settings (
-  id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  id INT NOT NULL DEFAULT 1,
+  socio_id UUID REFERENCES accionistas(id),
   business_name VARCHAR(160) NOT NULL DEFAULT 'BASCULA ERP',
   business_subtitle VARCHAR(160) NOT NULL DEFAULT 'Piladora de Arroz',
   ruc VARCHAR(20) NOT NULL DEFAULT '',
@@ -644,6 +647,8 @@ CREATE TABLE IF NOT EXISTS app_settings (
   receipt_footer TEXT NOT NULL DEFAULT '',
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_app_settings_master ON app_settings ((1)) WHERE socio_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_app_settings_socio ON app_settings (socio_id) WHERE socio_id IS NOT NULL;
 
 -- Permisos por módulo para operadores (los administradores no tienen límite)
 ALTER TABLE users ADD COLUMN IF NOT EXISTS allowed_modules TEXT[] NOT NULL DEFAULT '{}';
@@ -656,7 +661,8 @@ ALTER TABLE cash_movements ADD COLUMN IF NOT EXISTS reversed_reason TEXT;
 
 -- Nómina de trabajadores (pilador, estibador, secador)
 CREATE TABLE IF NOT EXISTS labor_rates (
-  id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  id INT NOT NULL DEFAULT 1,
+  socio_id UUID REFERENCES accionistas(id),
   pilador_per_qq NUMERIC(10,4) NOT NULL DEFAULT 0.15,
   pilador_per_saca NUMERIC(10,4) NOT NULL DEFAULT 0.15,
   estibador_per_qq NUMERIC(10,4) NOT NULL DEFAULT 0.10,
@@ -666,6 +672,8 @@ CREATE TABLE IF NOT EXISTS labor_rates (
   secador_per_tunel NUMERIC(10,4) NOT NULL DEFAULT 5,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_labor_rates_master ON labor_rates ((1)) WHERE socio_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_labor_rates_socio ON labor_rates (socio_id) WHERE socio_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS worker_payments (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   worker_role VARCHAR(20) NOT NULL,

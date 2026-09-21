@@ -479,7 +479,7 @@ financeRouter.get("/export/excel", asyncRoute(async (req, res) => {
   const [data, acc, empresa] = await Promise.all([
     getDashboardFinanciero(accionistaId, desde, hasta),
     pool.query("SELECT name FROM accionistas WHERE id = $1", [accionistaId]),
-    pool.query("SELECT business_name, ruc FROM app_settings WHERE id = 1")
+    pool.query("SELECT business_name, ruc FROM app_settings WHERE socio_id IS NULL LIMIT 1")
   ]);
   const nombreAcc = acc.rows[0]?.name ?? "";
   const nombreEmpresa = empresa.rows[0]?.business_name ?? "BASCULA ERP";

@@ -92,6 +92,21 @@ Implementado el 2026-09-21:
 - Inventario/Catalogo/Seleccion ocultan productos y textos de Envejecido cuando el socio activo no tiene el flag.
 - Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build y `/health`.
 
+### Configuración Multi-Tenant Ligera
+
+Implementado el 2026-09-21:
+
+- Nueva migración `20261025_config_multi_tenant_ligera.sql`.
+- `app_settings` y `labor_rates` ahora aceptan `socio_id` nullable.
+- `socio_id IS NULL` queda como registro Maestro/Fallback, conservando la configuración existente.
+- Al consultar configuración o tarifas se devuelve primero la fila del socio activo; si no existe, se usa Maestro.
+- Al guardar Parámetros de Planta o Tarifas de Nómina/Cuadrilla para un socio, se clona Maestro y luego se guarda la fila propia del socio.
+- Matriz sigue usando Maestro para evitar duplicar configuración global de empresa/secuenciales.
+- Producción usa tarifas de nómina del socio del lote al generar pagos automáticos.
+- Cobro automático/manual de secado intenta usar tarifa del socio correspondiente cuando el flujo identifica el socio.
+- Frontend recarga configuración/tarifas al cambiar el Socio Operativo activo.
+- Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build y `/health`.
+
 ### Cambios inmediatamente anteriores
 
 - `1b85b26`: catalogo de productos editable en Inventario.

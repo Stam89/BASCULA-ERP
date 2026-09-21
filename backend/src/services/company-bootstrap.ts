@@ -168,7 +168,8 @@ async function ensureCampoBase(
 async function ensureBusinessColumns(db: QueryClient): Promise<void> {
   await db.query(
     `CREATE TABLE IF NOT EXISTS app_settings (
-       id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+       id INT NOT NULL DEFAULT 1,
+       socio_id UUID REFERENCES accionistas(id),
        business_name VARCHAR(160) NOT NULL DEFAULT 'BASCULA ERP',
        business_subtitle VARCHAR(160) NOT NULL DEFAULT 'Piladora de Arroz',
        ruc VARCHAR(20) NOT NULL DEFAULT '',
@@ -181,6 +182,11 @@ async function ensureBusinessColumns(db: QueryClient): Promise<void> {
   await db.query("ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS guia_prefix VARCHAR(20) NOT NULL DEFAULT '001-001-'");
   await db.query("ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS tarifa_pilado_qq NUMERIC(10,2) NOT NULL DEFAULT 3.50");
   await db.query("ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS humedad_base_pct NUMERIC(5,2) NOT NULL DEFAULT 13.00");
+  await db.query("ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS socio_id UUID REFERENCES accionistas(id)");
+  await db.query("ALTER TABLE app_settings DROP CONSTRAINT IF EXISTS app_settings_pkey");
+  await db.query("ALTER TABLE app_settings DROP CONSTRAINT IF EXISTS app_settings_id_check");
+  await db.query("CREATE UNIQUE INDEX IF NOT EXISTS uq_app_settings_master ON app_settings ((1)) WHERE socio_id IS NULL");
+  await db.query("CREATE UNIQUE INDEX IF NOT EXISTS uq_app_settings_socio ON app_settings (socio_id) WHERE socio_id IS NOT NULL");
   await db.query("ALTER TABLE accionistas ADD COLUMN IF NOT EXISTS tipo VARCHAR(20) NOT NULL DEFAULT 'SOCIO'");
   await db.query("ALTER TABLE accionistas ADD COLUMN IF NOT EXISTS puede_envejecer BOOLEAN NOT NULL DEFAULT true");
   await db.query("ALTER TABLE user_accionistas ADD COLUMN IF NOT EXISTS allowed_modules TEXT[] NOT NULL DEFAULT '{}'");
@@ -262,17 +268,21 @@ async function ensureMatriz(db: QueryClient, input: CompanyBootstrapInput): Prom
 async function ensureSettings(db: QueryClient, input: CompanyBootstrapInput): Promise<CompanyBootstrapResult["settings"]> {
   const businessName = clean(input.businessName, "MATRIZ");
   const businessSubtitle = clean(input.businessSubtitle, "Piladora de Arroz");
+  await db.query(
+    `INSERT INTO app_settings (id, socio_id)
+     SELECT 1, NULL
+     WHERE NOT EXISTS (SELECT 1 FROM app_settings WHERE socio_id IS NULL)`
+  );
   const result = await db.query<CompanyBootstrapResult["settings"]>(
-    `INSERT INTO app_settings (id, business_name, business_subtitle, ruc, phone, address, receipt_footer, updated_at)
-     VALUES (1, $1, $2, $3, $4, $5, $6, now())
-     ON CONFLICT (id) DO UPDATE SET
-       business_name = EXCLUDED.business_name,
-       business_subtitle = EXCLUDED.business_subtitle,
-       ruc = EXCLUDED.ruc,
-       phone = EXCLUDED.phone,
-       address = EXCLUDED.address,
-       receipt_footer = EXCLUDED.receipt_footer,
-       updated_at = now()
+    `UPDATE app_settings
+     SET business_name = $1,
+         business_subtitle = $2,
+         ruc = $3,
+         phone = $4,
+         address = $5,
+         receipt_footer = $6,
+         updated_at = now()
+     WHERE socio_id IS NULL
      RETURNING business_name, business_subtitle, ruc, phone, address, receipt_footer`,
     [
       businessName,

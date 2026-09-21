@@ -18,7 +18,8 @@ export function ensureLaborTables(): Promise<void> {
   if (!ready) {
     ready = (async () => {
       await pool.query(`CREATE TABLE IF NOT EXISTS labor_rates (
-        id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+        id INT NOT NULL DEFAULT 1,
+        socio_id UUID REFERENCES accionistas(id),
         pilador_per_qq NUMERIC(10,4) NOT NULL DEFAULT 0.15,
         pilador_per_saca NUMERIC(10,4) NOT NULL DEFAULT 0.15,
         estibador_per_qq NUMERIC(10,4) NOT NULL DEFAULT 0.10,
@@ -68,13 +69,27 @@ export function ensureLaborTables(): Promise<void> {
       // El estibador cobra por TULAS: $ por cada 3 tulas (proporcional). Las
       // tulas se pesan y de ahí sale el QQ que va a producto terminado.
       await pool.query(`ALTER TABLE labor_rates ADD COLUMN IF NOT EXISTS estibador_por_3tulas NUMERIC(10,4) NOT NULL DEFAULT 5`);
+      await pool.query(`ALTER TABLE labor_rates ADD COLUMN IF NOT EXISTS polvillo_per_qq NUMERIC(10,4) NOT NULL DEFAULT 0.25`);
+      await pool.query(`ALTER TABLE labor_rates ADD COLUMN IF NOT EXISTS precio_gas_bombona NUMERIC(12,4) NOT NULL DEFAULT 0`);
+      await pool.query(`ALTER TABLE labor_rates ADD COLUMN IF NOT EXISTS precio_gas_cilindro NUMERIC(12,4) NOT NULL DEFAULT 0`);
+      await pool.query(`ALTER TABLE labor_rates ADD COLUMN IF NOT EXISTS precio_diesel NUMERIC(12,4) NOT NULL DEFAULT 0`);
+      await pool.query(`ALTER TABLE labor_rates ADD COLUMN IF NOT EXISTS tendal_per_qq NUMERIC(10,4) NOT NULL DEFAULT 0`);
       // Tarifa global de SECADO como servicio al cliente (maquila): $ por QQ.
       await pool.query(`ALTER TABLE labor_rates ADD COLUMN IF NOT EXISTS secado_servicio_per_qq NUMERIC(10,4) NOT NULL DEFAULT 0`);
+      await pool.query(`ALTER TABLE labor_rates ADD COLUMN IF NOT EXISTS socio_id UUID REFERENCES accionistas(id)`);
+      await pool.query(`ALTER TABLE labor_rates DROP CONSTRAINT IF EXISTS labor_rates_pkey`);
+      await pool.query(`ALTER TABLE labor_rates DROP CONSTRAINT IF EXISTS labor_rates_id_check`);
+      await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_labor_rates_master ON labor_rates ((1)) WHERE socio_id IS NULL`);
+      await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_labor_rates_socio ON labor_rates (socio_id) WHERE socio_id IS NOT NULL`);
       await pool.query(`ALTER TABLE worker_payments ADD COLUMN IF NOT EXISTS tulas NUMERIC(14,3) NOT NULL DEFAULT 0`);
       // Detalle legible del pago (ej. secador: "Secado - Inicio: DD/MM/YYYY HH:MM · Guardianía + N túnel(es)").
       await pool.query(`ALTER TABLE worker_payments ADD COLUMN IF NOT EXISTS notes TEXT`);
-      // Fila única de tarifas por defecto.
-      await pool.query(`INSERT INTO labor_rates (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+      // Fila maestra de tarifas por defecto.
+      await pool.query(`
+        INSERT INTO labor_rates (id, socio_id)
+        SELECT 1, NULL
+        WHERE NOT EXISTS (SELECT 1 FROM labor_rates WHERE socio_id IS NULL)
+      `);
     })();
   }
   return ready;
@@ -98,11 +113,54 @@ export type LaborRates = {
   secado_servicio_per_qq: number;
 };
 
-async function getRates(db: Queryable = pool): Promise<LaborRates> {
+async function ensureMasterRates(db: Queryable = pool): Promise<void> {
+  await ensureLaborTables();
+  await db.query(
+    `INSERT INTO labor_rates (id, socio_id)
+     SELECT 1, NULL
+     WHERE NOT EXISTS (SELECT 1 FROM labor_rates WHERE socio_id IS NULL)`
+  );
+}
+
+async function resolveRatesSocioId(db: Queryable, accionistaId?: string | null): Promise<string | null> {
+  if (!accionistaId) return null;
+  const result = await db.query("SELECT tipo FROM accionistas WHERE id = $1", [accionistaId]);
+  if (!result.rowCount || result.rows[0]?.tipo === "MATRIZ") return null;
+  return accionistaId;
+}
+
+async function ensureRatesForSocio(db: Queryable, socioId: string | null): Promise<void> {
+  await ensureMasterRates(db);
+  if (!socioId) return;
+  await db.query(
+    `INSERT INTO labor_rates
+       (id, socio_id, pilador_per_qq, pilador_per_saca, estibador_per_qq,
+        estibador_per_saca, estibador_per_arrocillo, polvillo_per_qq,
+        secador_guardiania, secador_per_tunel, precio_gas_bombona,
+        precio_gas_cilindro, precio_diesel, estibador_por_3tulas,
+        tendal_per_qq, secado_servicio_per_qq, updated_at)
+     SELECT 1, $1, pilador_per_qq, pilador_per_saca, estibador_per_qq,
+            estibador_per_saca, estibador_per_arrocillo, polvillo_per_qq,
+            secador_guardiania, secador_per_tunel, precio_gas_bombona,
+            precio_gas_cilindro, precio_diesel, estibador_por_3tulas,
+            tendal_per_qq, secado_servicio_per_qq, now()
+     FROM labor_rates
+     WHERE socio_id IS NULL
+     ON CONFLICT DO NOTHING`,
+    [socioId]
+  );
+}
+
+export async function getRates(db: Queryable = pool, accionistaId?: string | null): Promise<LaborRates> {
+  const socioId = await resolveRatesSocioId(db, accionistaId);
+  await ensureRatesForSocio(db, socioId);
   const r = await db.query(
-    `INSERT INTO labor_rates (id) VALUES (1)
-     ON CONFLICT (id) DO UPDATE SET id = 1
-     RETURNING *`
+    `SELECT *
+     FROM labor_rates
+     WHERE ($1::uuid IS NOT NULL AND socio_id = $1::uuid) OR socio_id IS NULL
+     ORDER BY CASE WHEN socio_id = $1::uuid THEN 0 ELSE 1 END
+     LIMIT 1`,
+    [socioId]
   );
   const row = r.rows[0];
   return {
@@ -150,7 +208,15 @@ export async function createProductionWorkerPayments(
 ): Promise<void> {
   try {
     await ensureLaborTables();
-    const rates = await getRates(client);
+    const batchOwner = await client.query(
+      `SELECT l.accionista_id
+       FROM processing_batches b
+       JOIN lots l ON l.id = b.lot_id
+       WHERE b.id = $1
+       LIMIT 1`,
+      [opts.batchId]
+    );
+    const rates = await getRates(client, batchOwner.rows[0]?.accionista_id ?? null);
     const qq = Number(opts.qq) || 0;
     const sacas = Number(opts.sacas) || 0;
     const arrocillo = Number(opts.arrocillo) || 0;
@@ -241,9 +307,9 @@ export async function createProductionWorkerPayments(
 }
 
 // ── Tarifas ────────────────────────────────────────────────────────────────
-laborRouter.get("/rates", asyncRoute(async (_req, res) => {
+laborRouter.get("/rates", asyncRoute(async (req, res) => {
   await ensureLaborTables();
-  res.json(await getRates());
+  res.json(await getRates(pool, (req as AuthenticatedRequest).accionistaId));
 }));
 
 laborRouter.put("/rates", requireAdmin, asyncRoute(async (req, res) => {
@@ -265,21 +331,25 @@ laborRouter.put("/rates", requireAdmin, asyncRoute(async (req, res) => {
     secado_servicio_per_qq: z.number().nonnegative().default(0)
   }).parse(req.body);
 
-  await pool.query(
-    `UPDATE labor_rates SET
-       pilador_per_qq = $1, pilador_per_saca = $2,
-       estibador_per_qq = $3, estibador_per_saca = $4, estibador_per_arrocillo = $5,
-       secador_guardiania = $6, secador_per_tunel = $7,
-       precio_gas_bombona = $8, precio_gas_cilindro = $9, precio_diesel = $10,
-       estibador_por_3tulas = $11, polvillo_per_qq = $12, tendal_per_qq = $13,
-       secado_servicio_per_qq = $14, updated_at = now()
-     WHERE id = 1`,
-    [body.pilador_per_qq, body.pilador_per_saca, body.estibador_per_qq, body.estibador_per_saca,
-     body.estibador_per_arrocillo, body.secador_guardiania, body.secador_per_tunel,
-     body.precio_gas_bombona, body.precio_gas_cilindro, body.precio_diesel, body.estibador_por_3tulas, body.polvillo_per_qq, body.tendal_per_qq,
-     body.secado_servicio_per_qq]
-  );
-  res.json(await getRates());
+  await inTransaction(async (client) => {
+    const socioId = await resolveRatesSocioId(client, (req as AuthenticatedRequest).accionistaId);
+    await ensureRatesForSocio(client, socioId);
+    await client.query(
+      `UPDATE labor_rates SET
+         pilador_per_qq = $2, pilador_per_saca = $3,
+         estibador_per_qq = $4, estibador_per_saca = $5, estibador_per_arrocillo = $6,
+         secador_guardiania = $7, secador_per_tunel = $8,
+         precio_gas_bombona = $9, precio_gas_cilindro = $10, precio_diesel = $11,
+         estibador_por_3tulas = $12, polvillo_per_qq = $13, tendal_per_qq = $14,
+         secado_servicio_per_qq = $15, updated_at = now()
+       WHERE socio_id IS NOT DISTINCT FROM $1::uuid`,
+      [socioId, body.pilador_per_qq, body.pilador_per_saca, body.estibador_per_qq, body.estibador_per_saca,
+       body.estibador_per_arrocillo, body.secador_guardiania, body.secador_per_tunel,
+       body.precio_gas_bombona, body.precio_gas_cilindro, body.precio_diesel, body.estibador_por_3tulas, body.polvillo_per_qq, body.tendal_per_qq,
+       body.secado_servicio_per_qq]
+    );
+  });
+  res.json(await getRates(pool, (req as AuthenticatedRequest).accionistaId));
 }));
 
 // ── Lista de pagos ─────────────────────────────────────────────────────────
@@ -351,7 +421,7 @@ laborRouter.get("/worker-receipt", asyncRoute(async (req, res) => {
     status: z.enum(["PENDING", "PAID"]).optional()
   }).parse(req.query);
 
-  const rates = await getRates();
+  const rates = await getRates(pool, (req as AuthenticatedRequest).accionistaId);
   const recs = await pool.query(
     `SELECT wp.id, wp.work_date::date AS fecha, wp.reference_type, wp.reference_id, wp.notes,
             wp.qq::float qq, wp.sacas::float sacas, wp.arrocillo::float arrocillo,
@@ -587,7 +657,7 @@ laborRouter.get("/secador-suggestions", asyncRoute(async (req, res) => {
   monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
   const from = q.from ?? monday.toISOString().slice(0, 10);
   const to = q.to ?? today.toISOString().slice(0, 10);
-  const rates = await getRates();
+  const rates = await getRates(pool, (req as AuthenticatedRequest).accionistaId);
 
   // La CORRIDA (no el día calendario) es la unidad de cobro del secador: los
   // túneles de un mismo motor comparten la FECHA DE LLENADO (filled_at), que es
@@ -659,7 +729,7 @@ laborRouter.post("/secador-days", asyncRoute(async (req, res) => {
     })).min(1)
   }).parse(req.body);
   const user = (req as AuthenticatedRequest).user;
-  const rates = await getRates();
+  const rates = await getRates(pool, (req as AuthenticatedRequest).accionistaId);
 
   const created = await inTransaction(async (client) => {
     let count = 0;
