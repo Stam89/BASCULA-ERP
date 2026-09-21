@@ -4285,14 +4285,14 @@ export function App() {
       addToast("Ingresa nombre y valor unitario", "error");
       return;
     }
-    await apiPost("/cuadrilla/activities", { name: newActivityForm.name.trim(), unit_rate: rate });
+    await apiPost("/cuadrilla/activities", { name: newActivityForm.name.trim(), unit_rate: rate, accionista_id: activeAccionistaId });
     setNewActivityForm({ name: "", unit_rate: "" });
     addToast("Actividad guardada", "success");
     await refreshCuadrilla();
   }
 
   async function updateActivityRate(id: string, unit_rate: number) {
-    await apiPut(`/cuadrilla/activities/${id}`, { unit_rate });
+    await apiPut(`/cuadrilla/activities/${id}`, { unit_rate, accionista_id: activeAccionistaId });
     addToast("Tarifa actualizada", "success");
     await refreshCuadrilla();
   }
@@ -4302,7 +4302,7 @@ export function App() {
   // en «Nómina → Cuadrilla».
   async function inactivarActividad(id: string, name: string) {
     if (!window.confirm(`¿Ocultar la actividad "${name}"?\n\nDejará de aparecer al registrar cuadrilla. Los registros ya hechos no cambian.`)) return;
-    await apiPut(`/cuadrilla/activities/${id}`, { is_active: false });
+    await apiPut(`/cuadrilla/activities/${id}`, { is_active: false, accionista_id: activeAccionistaId });
     addToast(`Actividad "${name}" ocultada`, "success");
     await refreshCuadrilla();
   }

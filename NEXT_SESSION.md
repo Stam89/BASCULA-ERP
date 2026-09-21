@@ -118,12 +118,26 @@ Blindaje posterior:
 Implementado el 2026-09-21:
 
 - Nueva migración `20261026_packaged_goods_inventory.sql`.
+- `PACKAGED_GOOD` separa marcas/empacados de producto terminado a granel.
 - Se agrega el tipo `PACKAGED_GOOD` para marcas/presentaciones comerciales.
 - Productos como Conejo, Flor, Lira Azul, Lira Verde, Oso y `0.11 Selectado` pasan a `PACKAGED_GOOD`.
 - `Stock producto terminado` muestra solo granel/base (`FINISHED_GOOD`).
 - Nueva tarjeta/tabla `Stock marcas / empacados` muestra `PACKAGED_GOOD`.
 - Ventas, selección/envejecimiento y compras a clientes siguen aceptando productos empacados donde corresponde.
 - Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build y `/health`.
+
+### Cuadrilla Multi-Tenant por Socio
+
+Implementado el 2026-09-21:
+
+- Nueva migración `20260921_cuadrilla_activities_multi_tenant.sql`.
+- `cuadrilla_activities.socio_id` permite tarifas propias por socio sin tocar el tarifario maestro.
+- Las actividades existentes quedan como maestro (`socio_id IS NULL`).
+- `GET /cuadrilla/activities` retorna maestro + overrides del socio activo.
+- `POST/PUT /cuadrilla/activities` crea/actualiza override si el contexto es un socio; Matriz sigue editando maestro.
+- Registros manuales de Nómina, pagos automáticos de Secadoras, Tendal y Ventas usan la tarifa efectiva del socio/lote.
+- Frontend envía `accionista_id` explícito al crear/editar/ocultar actividades de Cuadrilla.
+- Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build.
 
 ### Cambios inmediatamente anteriores
 

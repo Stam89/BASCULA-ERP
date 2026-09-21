@@ -10,11 +10,152 @@ import { type AuthenticatedRequest } from "../../auth/require-auth.js";
 export const cuadrillaRouter = Router();
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+type Queryable = { query: typeof pool.query };
+type EffectiveCuadrillaActivity = {
+  id: string;
+  name: string;
+  unit_rate: number;
+  is_active: boolean;
+  categoria: string;
+};
 
 // Labores por saco (cuando la corrida se maneja en Sacos porque se agotaron las
 // Tulas). Se busca la primera activa en este orden de preferencia.
 const SACOS_LABOR_CANDIDATES = ["ENSACADO", "SACADO EN SACO"];
 const DESPACHO_LABOR_CANDIDATES = ["ESTIBADA", "EMBARQUE Y DESEMBARQUE"];
+
+const normalizeActivityName = (name: string) => name.trim().toUpperCase();
+
+async function resolveCuadrillaSocioId(db: Queryable, accionistaId?: string | null): Promise<string | null> {
+  if (!accionistaId) return null;
+  const result = await db.query("SELECT tipo FROM accionistas WHERE id = $1", [accionistaId]);
+  if (!result.rowCount || result.rows[0]?.tipo === "MATRIZ") return null;
+  return accionistaId;
+}
+
+async function reqCuadrillaSocioId(req: unknown): Promise<string | null> {
+  return resolveCuadrillaSocioId(pool, (req as AuthenticatedRequest).accionistaId ?? null);
+}
+
+export async function getEffectiveCuadrillaActivityByName(
+  db: Queryable,
+  name: string,
+  socioId: string | null,
+  activeOnly = true
+): Promise<EffectiveCuadrillaActivity | null> {
+  const normalized = normalizeActivityName(name);
+  const activeWhere = activeOnly ? "AND is_active = true" : "";
+  const result = await db.query(
+    `SELECT id, name, unit_rate::float AS unit_rate, is_active, categoria
+     FROM cuadrilla_activities
+     WHERE upper(btrim(name)) = $2
+       AND (($1::uuid IS NOT NULL AND socio_id = $1::uuid) OR socio_id IS NULL)
+       ${activeWhere}
+     ORDER BY CASE WHEN socio_id = $1::uuid THEN 0 ELSE 1 END
+     LIMIT 1`,
+    [socioId, normalized]
+  );
+  return result.rows[0] ?? null;
+}
+
+async function getEffectiveActivityById(
+  db: Queryable,
+  activityId: string,
+  socioId: string | null,
+  activeOnly = true
+): Promise<EffectiveCuadrillaActivity | null> {
+  const source = await db.query("SELECT name FROM cuadrilla_activities WHERE id = $1", [activityId]);
+  if (!source.rowCount) return null;
+  return getEffectiveCuadrillaActivityByName(db, String(source.rows[0].name), socioId, activeOnly);
+}
+
+async function getFirstEffectiveActivityByNames(
+  db: Queryable,
+  names: string[],
+  socioId: string | null
+): Promise<EffectiveCuadrillaActivity | null> {
+  for (const name of names) {
+    const activity = await getEffectiveCuadrillaActivityByName(db, name, socioId);
+    if (activity) return activity;
+  }
+  return null;
+}
+
+async function upsertActivityOverride(
+  db: Queryable,
+  opts: { activityId?: string | null; name?: string | null; unit_rate?: number; is_active?: boolean; socioId: string | null }
+): Promise<EffectiveCuadrillaActivity> {
+  const source = opts.activityId
+    ? await db.query("SELECT id, name, unit_rate, is_active, categoria, socio_id FROM cuadrilla_activities WHERE id = $1", [opts.activityId])
+    : { rowCount: 0, rows: [] as any[] };
+  if (opts.activityId && !source.rowCount) throw new ApiError(404, "Actividad no encontrada");
+  const sourceRow = source.rows[0] ?? null;
+  const name = normalizeActivityName(String(opts.name ?? sourceRow?.name ?? ""));
+  if (name.length < 2) throw new ApiError(400, "Nombre de actividad inválido");
+  const categoria = String(sourceRow?.categoria ?? "GENERAL").trim().toUpperCase() || "GENERAL";
+  const unitRate = opts.unit_rate ?? Number(sourceRow?.unit_rate ?? 0);
+  const isActive = opts.is_active ?? Boolean(sourceRow?.is_active ?? true);
+
+  if (!opts.socioId) {
+    if (opts.activityId) {
+      const updated = await db.query(
+        `UPDATE cuadrilla_activities
+         SET unit_rate = COALESCE($2, unit_rate),
+             is_active = COALESCE($3, is_active)
+         WHERE id = $1 AND socio_id IS NULL
+         RETURNING id, name, unit_rate::float AS unit_rate, is_active, categoria`,
+        [opts.activityId, opts.unit_rate ?? null, opts.is_active ?? null]
+      );
+      if (!updated.rowCount) throw new ApiError(404, "Actividad maestra no encontrada");
+      return updated.rows[0];
+    }
+    const existing = await db.query(
+      "SELECT id FROM cuadrilla_activities WHERE socio_id IS NULL AND upper(btrim(name)) = $1 LIMIT 1",
+      [name]
+    );
+    if (existing.rowCount) {
+      const updated = await db.query(
+        `UPDATE cuadrilla_activities
+         SET unit_rate = $2, is_active = true
+         WHERE id = $1
+         RETURNING id, name, unit_rate::float AS unit_rate, is_active, categoria`,
+        [existing.rows[0].id, unitRate]
+      );
+      return updated.rows[0];
+    }
+    const inserted = await db.query(
+      `INSERT INTO cuadrilla_activities (name, unit_rate, is_active, categoria, socio_id)
+       VALUES ($1, $2, true, $3, NULL)
+       RETURNING id, name, unit_rate::float AS unit_rate, is_active, categoria`,
+      [name, unitRate, categoria]
+    );
+    return inserted.rows[0];
+  }
+
+  const existing = await db.query(
+    "SELECT id FROM cuadrilla_activities WHERE socio_id = $1 AND upper(btrim(name)) = $2 LIMIT 1",
+    [opts.socioId, name]
+  );
+  if (existing.rowCount) {
+    const updated = await db.query(
+      `UPDATE cuadrilla_activities
+       SET unit_rate = COALESCE($2, unit_rate),
+           is_active = COALESCE($3, is_active),
+           categoria = COALESCE($4, categoria)
+       WHERE id = $1
+       RETURNING id, name, unit_rate::float AS unit_rate, is_active, categoria`,
+      [existing.rows[0].id, opts.unit_rate ?? null, opts.is_active ?? null, categoria]
+    );
+    return updated.rows[0];
+  }
+  const inserted = await db.query(
+    `INSERT INTO cuadrilla_activities (name, unit_rate, is_active, categoria, socio_id)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, name, unit_rate::float AS unit_rate, is_active, categoria`,
+    [name, unitRate, isActive, categoria, opts.socioId]
+  );
+  return inserted.rows[0];
+}
 
 // Resuelve la LABOR (actividad + tarifa) y la CANTIDAD a pagar a la cuadrilla por
 // un evento de túnel, según el TIPO DE EMPAQUE registrado para ese momento:
@@ -32,6 +173,7 @@ async function resolveTunnelLabor(
     empaque: string | null;
     sacos: number | null;
     quintals: number;
+    socio_id?: string | null;
   }
 ): Promise<
   | { activity_id: string; activity_name: string; unit_rate: number; quantity: number }
@@ -39,34 +181,24 @@ async function resolveTunnelLabor(
 > {
   const esSacos = String(opts.empaque ?? "TULAS").toUpperCase() === "SACOS";
   if (esSacos) {
-    const act = await client.query(
-      `SELECT id, name, unit_rate::float AS unit_rate
-       FROM cuadrilla_activities
-       WHERE upper(btrim(name)) = ANY($1::text[]) AND is_active = true
-       ORDER BY array_position($1::text[], upper(btrim(name)))
-       LIMIT 1`,
-      [SACOS_LABOR_CANDIDATES]
-    );
-    if (!act.rowCount) return { missing: SACOS_LABOR_CANDIDATES[0] };
+    const act = await getFirstEffectiveActivityByNames(client, SACOS_LABOR_CANDIDATES, opts.socio_id ?? null);
+    if (!act) return { missing: SACOS_LABOR_CANDIDATES[0] };
     const sacos = Number(opts.sacos) || 0;
     const quantity = sacos > 0 ? sacos : Number(opts.quintals) || 0;
     return {
-      activity_id: act.rows[0].id as string,
-      activity_name: act.rows[0].name as string,
-      unit_rate: Number(act.rows[0].unit_rate),
+      activity_id: act.id,
+      activity_name: act.name,
+      unit_rate: Number(act.unit_rate),
       quantity
     };
   }
   const laborName = opts.momento === "VACIADO" ? "BOTADA DE TUNEL" : `RECEPCION A TUNEL ${opts.tunnel_number}`;
-  const act = await client.query(
-    "SELECT id, name, unit_rate::float AS unit_rate FROM cuadrilla_activities WHERE upper(btrim(name)) = $1 AND is_active = true LIMIT 1",
-    [laborName]
-  );
-  if (!act.rowCount) return { missing: laborName };
+  const act = await getEffectiveCuadrillaActivityByName(client, laborName, opts.socio_id ?? null);
+  if (!act) return { missing: laborName };
   return {
-    activity_id: act.rows[0].id as string,
-    activity_name: act.rows[0].name as string,
-    unit_rate: Number(act.rows[0].unit_rate),
+    activity_id: act.id,
+    activity_name: act.name,
+    unit_rate: Number(act.unit_rate),
     quantity: Number(opts.quintals) || 0
   };
 }
@@ -86,6 +218,7 @@ export async function upsertCuadrillaSecadoraEntry(
     quantity: number;           // sacos/QQ del túnel
     work_date?: string | null;  // YYYY-MM-DD; por defecto hoy
     created_by?: string | null;
+    accionista_id?: string | null;
   }
 ): Promise<{ id: string } | null> {
   try {
@@ -93,13 +226,11 @@ export async function upsertCuadrillaSecadoraEntry(
     // Ambos campos son opcionales: sin cuadrilla o sin labor no se autogenera nada.
     if (!opts.activity_id || worker.length < 2) return null;
 
-    const activity = await client.query(
-      "SELECT name, unit_rate FROM cuadrilla_activities WHERE id = $1 AND is_active = true",
-      [opts.activity_id]
-    );
-    if (!activity.rowCount) return null; // labor inexistente/inactiva: no romper el secado
+    const socioId = await resolveCuadrillaSocioId(client, opts.accionista_id ?? null);
+    const activity = await getEffectiveActivityById(client, opts.activity_id, socioId);
+    if (!activity) return null; // labor inexistente/inactiva: no romper el secado
 
-    const rate = Number(activity.rows[0].unit_rate);
+    const rate = Number(activity.unit_rate);
     const qty = Number(opts.quantity) || 0;
     const subtotal = round2(qty * rate);
     const notes = `Autogenerado desde Secadora · Túnel ${opts.tunnel_number} · ${opts.momento === "LLENADO" ? "Llenado" : "Vaciado"}`;
@@ -123,8 +254,8 @@ export async function upsertCuadrillaSecadoraEntry(
        RETURNING id`,
       [
         opts.work_date ?? null,
-        opts.activity_id,
-        activity.rows[0].name,
+        activity.id,
+        activity.name,
         worker,
         qty,
         rate,
@@ -177,25 +308,20 @@ export async function upsertCuadrillaDespachoVentaEntry(
     quantity_qq: number;
     work_date?: string | null;
     created_by?: string | null;
+    accionista_id?: string | null;
   }
 ): Promise<{ id: string } | null> {
   const qty = Number(opts.quantity_qq) || 0;
   if (qty <= 0) return null;
 
-  const activity = await client.query(
-    `SELECT id, name, unit_rate::float AS unit_rate
-       FROM cuadrilla_activities
-      WHERE upper(btrim(name)) = ANY($1::text[]) AND is_active = true
-      ORDER BY array_position($1::text[], upper(btrim(name)))
-      LIMIT 1`,
-    [DESPACHO_LABOR_CANDIDATES]
-  );
-  if (!activity.rowCount) {
+  const socioId = await resolveCuadrillaSocioId(client, opts.accionista_id ?? null);
+  const activity = await getFirstEffectiveActivityByNames(client, DESPACHO_LABOR_CANDIDATES, socioId);
+  if (!activity) {
     throw new ApiError(400, `Configura la tarifa de la labor "${DESPACHO_LABOR_CANDIDATES[0]}" en Cuadrilla -> Actividades antes de despachar.`);
   }
 
   const worker = await resolveDefaultCuadrillaWorker(client);
-  const rate = Number(activity.rows[0].unit_rate);
+  const rate = Number(activity.unit_rate);
   const subtotal = round2(qty * rate);
   const ref = opts.guia_number || opts.order_number;
   const cliente = opts.customer_name?.trim() || "cliente";
@@ -218,11 +344,11 @@ export async function upsertCuadrillaDespachoVentaEntry(
      RETURNING id`,
     [
       opts.work_date ?? null,
-      activity.rows[0].id,
+      activity.id,
       // Trazabilidad de cliente: el concepto/actividad mostrado concatena el cliente
       // del despacho (ej. "ESTIBADA - Cliente: COMERCIAL X"). activity_id sigue
       // ligado a la actividad del catálogo (la tarifa no cambia).
-      `${activity.rows[0].name} - Cliente: ${cliente}`,
+      `${activity.name} - Cliente: ${cliente}`,
       worker,
       qty,
       rate,
@@ -259,8 +385,11 @@ export async function autoGenerarPagosCuadrillaDeSecado(
       `SELECT tunnel_number, total_quintals::float AS quintals, dry_method, dry_end_at,
               recepcion_empaque, recepcion_sacos::float AS recepcion_sacos,
               botada_empaque, botada_sacos::float AS botada_sacos,
-              COALESCE(filled_at, dry_start_at::date, created_at::date) AS work_date
-       FROM drying_tunnel_reports WHERE id = $1`,
+              COALESCE(filled_at, dry_start_at::date, created_at::date) AS work_date,
+              l.accionista_id
+       FROM drying_tunnel_reports d
+       LEFT JOIN lots l ON l.id = d.lot_id
+       WHERE d.id = $1`,
       [dryingReportId]
     );
     if (!r.rowCount) return;
@@ -268,6 +397,8 @@ export async function autoGenerarPagosCuadrillaDeSecado(
     if (String(rep.dry_method ?? "TUNEL").toUpperCase() === "TENDAL") return; // el tendal ya se paga aparte
     const tunnel = Number(rep.tunnel_number) || 0;
     const qq = Number(rep.quintals) || 0;
+    const accionistaId = rep.accionista_id as string | null;
+    const socioId = await resolveCuadrillaSocioId(client, accionistaId);
     if (!tunnel || qq <= 0) return;
     const workDate = rep.work_date ? new Date(rep.work_date).toISOString().slice(0, 10) : null;
 
@@ -295,7 +426,7 @@ export async function autoGenerarPagosCuadrillaDeSecado(
         quantity = Number(asig.rows[0].quintals) || 0;
       } else {
         const resolved = await resolveTunnelLabor(client, {
-          tunnel_number: tunnel, momento: ev.momento, empaque: ev.empaque, sacos: ev.sacos, quintals: qq
+          tunnel_number: tunnel, momento: ev.momento, empaque: ev.empaque, sacos: ev.sacos, quintals: qq, socio_id: socioId
         });
         if ("missing" in resolved) continue; // sin tarifa configurada: no romper el secado
         workerName = await resolveCuadrillaWorker(client, dryingReportId);
@@ -316,7 +447,8 @@ export async function autoGenerarPagosCuadrillaDeSecado(
         worker_name: workerName,
         quantity,
         work_date: workDate,
-        created_by: createdBy ?? null
+        created_by: createdBy ?? null,
+        accionista_id: accionistaId
       });
     }
   } catch (err) {
@@ -332,12 +464,43 @@ export async function autoGenerarPagosCuadrillaDeSecado(
 cuadrillaRouter.get("/activities", asyncRoute(async (req, res) => {
   // ?categoria=SECADORA filtra a las labores de túnel (para el form de Secadoras).
   const { categoria } = z.object({ categoria: z.string().optional() }).parse(req.query);
-  const params: unknown[] = [];
-  let where = "WHERE is_active = true";
-  if (categoria) { params.push(categoria.trim().toUpperCase()); where += ` AND categoria = $${params.length}`; }
+  const socioId = await reqCuadrillaSocioId(req);
   const result = await pool.query(
-    `SELECT id, name, unit_rate, is_active, categoria FROM cuadrilla_activities ${where} ORDER BY name`,
-    params
+    `WITH master AS (
+       SELECT id, name, unit_rate, is_active, categoria
+       FROM cuadrilla_activities
+       WHERE socio_id IS NULL
+     ),
+     own AS (
+       SELECT id, name, unit_rate, is_active, categoria
+       FROM cuadrilla_activities
+       WHERE $1::uuid IS NOT NULL AND socio_id = $1::uuid
+     ),
+     merged_master AS (
+       SELECT COALESCE(o.id, m.id) AS id,
+              COALESCE(o.name, m.name) AS name,
+              COALESCE(o.unit_rate, m.unit_rate) AS unit_rate,
+              COALESCE(o.is_active, m.is_active) AS is_active,
+              COALESCE(o.categoria, m.categoria) AS categoria,
+              CASE WHEN o.id IS NULL THEN 'MAESTRO' ELSE 'SOCIO' END AS fuente_tarifa
+       FROM master m
+       LEFT JOIN own o ON upper(btrim(o.name)) = upper(btrim(m.name))
+     ),
+     own_extra AS (
+       SELECT o.id, o.name, o.unit_rate, o.is_active, o.categoria, 'SOCIO' AS fuente_tarifa
+       FROM own o
+       WHERE NOT EXISTS (SELECT 1 FROM master m WHERE upper(btrim(m.name)) = upper(btrim(o.name)))
+     )
+     SELECT id, name, unit_rate, is_active, categoria, fuente_tarifa
+     FROM (
+       SELECT * FROM merged_master
+       UNION ALL
+       SELECT * FROM own_extra
+     ) a
+     WHERE is_active = true
+       AND ($2::text IS NULL OR categoria = $2)
+     ORDER BY name`,
+    [socioId, categoria ? categoria.trim().toUpperCase() : null]
   );
   res.json(result.rows);
 }));
@@ -478,9 +641,10 @@ cuadrillaRouter.post("/tunnel-generate", asyncRoute(async (req, res) => {
     const asignaciones = await client.query(
       `SELECT a.drying_report_id, d.tunnel_number, a.momento,
               COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) AS work_date,
-              a.worker_name, a.activity_id, a.quintals
+              a.worker_name, a.activity_id, a.quintals, l.accionista_id
        FROM drying_tunnel_cuadrilla a
        JOIN drying_tunnel_reports d ON d.id = a.drying_report_id
+       LEFT JOIN lots l ON l.id = d.lot_id
        WHERE COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) BETWEEN $1 AND $2`,
       [from, to]
     );
@@ -494,7 +658,8 @@ cuadrillaRouter.post("/tunnel-generate", asyncRoute(async (req, res) => {
         worker_name: a.worker_name,
         quantity: Number(a.quintals) || 0,
         work_date: a.work_date ? new Date(a.work_date).toISOString().slice(0, 10) : null,
-        created_by: userId
+        created_by: userId,
+        accionista_id: a.accionista_id ?? null
       });
       if (entry) count++;
     }
@@ -523,8 +688,10 @@ cuadrillaRouter.post("/tunnel-autoprocess", asyncRoute(async (req, res) => {
       `SELECT d.id AS drying_report_id, d.tunnel_number, 'LLENADO'::text AS momento,
               COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) AS work_date,
               d.total_quintals::float AS quintals,
-              d.recepcion_empaque AS empaque, d.recepcion_sacos::float AS sacos
+              d.recepcion_empaque AS empaque, d.recepcion_sacos::float AS sacos,
+              l.accionista_id
        FROM drying_tunnel_reports d
+       LEFT JOIN lots l ON l.id = d.lot_id
        WHERE COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) BETWEEN $1 AND $2
          AND COALESCE(d.total_quintals,0) > 0
          AND NOT EXISTS (SELECT 1 FROM drying_tunnel_cuadrilla a WHERE a.drying_report_id = d.id AND a.momento='LLENADO')
@@ -532,8 +699,10 @@ cuadrillaRouter.post("/tunnel-autoprocess", asyncRoute(async (req, res) => {
        SELECT d.id, d.tunnel_number, 'VACIADO'::text,
               COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date),
               d.total_quintals::float,
-              d.botada_empaque AS empaque, d.botada_sacos::float AS sacos
+              d.botada_empaque AS empaque, d.botada_sacos::float AS sacos,
+              l.accionista_id
        FROM drying_tunnel_reports d
+       LEFT JOIN lots l ON l.id = d.lot_id
        WHERE COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) BETWEEN $1 AND $2
          AND COALESCE(d.total_quintals,0) > 0
          AND d.dry_end_at IS NOT NULL
@@ -547,6 +716,7 @@ cuadrillaRouter.post("/tunnel-autoprocess", asyncRoute(async (req, res) => {
       const tunnel = Number(e.tunnel_number);
       const momento = e.momento === "VACIADO" ? "VACIADO" : "LLENADO";
       const qq = Number(e.quintals) || 0;
+      const socioId = await resolveCuadrillaSocioId(client, e.accionista_id ?? null);
 
       // La labor y cantidad dependen del EMPAQUE del túnel (Tulas por QQ vs Sacos
       // por saco). Si falta la tarifa configurada, se omite y se reporta.
@@ -555,7 +725,8 @@ cuadrillaRouter.post("/tunnel-autoprocess", asyncRoute(async (req, res) => {
         momento,
         empaque: e.empaque,
         sacos: e.sacos == null ? null : Number(e.sacos),
-        quintals: qq
+        quintals: qq,
+        socio_id: socioId
       });
       if ("missing" in resolved) { sinTarifa.push(resolved.missing); continue; }
       const workDate = e.work_date ? new Date(e.work_date).toISOString().slice(0, 10) : null;
@@ -577,7 +748,8 @@ cuadrillaRouter.post("/tunnel-autoprocess", asyncRoute(async (req, res) => {
         worker_name: worker,
         quantity: resolved.quantity,
         work_date: workDate,
-        created_by: userId
+        created_by: userId,
+        accionista_id: e.accionista_id ?? null
       });
       if (entry) count++;
     }
@@ -589,35 +761,37 @@ cuadrillaRouter.post("/tunnel-autoprocess", asyncRoute(async (req, res) => {
 cuadrillaRouter.post("/activities", asyncRoute(async (req, res) => {
   const body = z.object({
     name: z.string().min(2),
-    unit_rate: z.number().nonnegative()
+    unit_rate: z.number().nonnegative(),
+    accionista_id: z.string().uuid().nullable().optional()
   }).parse(req.body);
 
-  const result = await pool.query(
-    `INSERT INTO cuadrilla_activities (name, unit_rate)
-     VALUES ($1, $2)
-     ON CONFLICT (name) DO UPDATE SET unit_rate = EXCLUDED.unit_rate, is_active = true
-     RETURNING id, name, unit_rate, is_active`,
-    [body.name.trim().toUpperCase(), body.unit_rate]
-  );
-  res.status(201).json(result.rows[0]);
+  const requestedAccionista = body.accionista_id ?? (req as AuthenticatedRequest).accionistaId ?? null;
+  const socioId = await resolveCuadrillaSocioId(pool, requestedAccionista);
+  const activity = await upsertActivityOverride(pool, {
+    name: body.name,
+    unit_rate: body.unit_rate,
+    is_active: true,
+    socioId
+  });
+  res.status(201).json(activity);
 }));
 
 cuadrillaRouter.put("/activities/:id", asyncRoute(async (req, res) => {
   const body = z.object({
     unit_rate: z.number().nonnegative().optional(),
-    is_active: z.boolean().optional()
+    is_active: z.boolean().optional(),
+    accionista_id: z.string().uuid().nullable().optional()
   }).parse(req.body);
 
-  const result = await pool.query(
-    `UPDATE cuadrilla_activities
-     SET unit_rate = COALESCE($2, unit_rate),
-         is_active = COALESCE($3, is_active)
-     WHERE id = $1
-     RETURNING id, name, unit_rate, is_active`,
-    [req.params.id, body.unit_rate ?? null, body.is_active ?? null]
-  );
-  if (!result.rowCount) throw new ApiError(404, "Actividad no encontrada");
-  res.json(result.rows[0]);
+  const requestedAccionista = body.accionista_id ?? (req as AuthenticatedRequest).accionistaId ?? null;
+  const socioId = await resolveCuadrillaSocioId(pool, requestedAccionista);
+  const activity = await upsertActivityOverride(pool, {
+    activityId: String(req.params.id),
+    unit_rate: body.unit_rate,
+    is_active: body.is_active,
+    socioId
+  });
+  res.json(activity);
 }));
 
 // ── Entradas (registro diario por actividad) ────────────────────────────────
@@ -662,13 +836,11 @@ cuadrillaRouter.post("/entries", asyncRoute(async (req, res) => {
     created_by: z.string().uuid().optional()
   }).parse(req.body);
 
-  const activity = await pool.query(
-    "SELECT name, unit_rate FROM cuadrilla_activities WHERE id = $1",
-    [body.activity_id]
-  );
-  if (!activity.rowCount) throw new ApiError(404, "Actividad no encontrada");
+  const socioId = await reqCuadrillaSocioId(req);
+  const activity = await getEffectiveActivityById(pool, body.activity_id, socioId, false);
+  if (!activity) throw new ApiError(404, "Actividad no encontrada");
 
-  const rate = Number(activity.rows[0].unit_rate);
+  const rate = Number(activity.unit_rate);
   const subtotal = round2(body.quantity * rate);
 
   const result = await pool.query(
@@ -678,8 +850,8 @@ cuadrillaRouter.post("/entries", asyncRoute(async (req, res) => {
      RETURNING id, work_date, activity_name, worker_name, quantity, unit_rate, subtotal, notes`,
     [
       body.work_date ?? null,
-      body.activity_id,
-      activity.rows[0].name,
+      activity.id,
+      activity.name,
       body.worker_name.trim(),
       body.quantity,
       rate,
@@ -719,9 +891,10 @@ cuadrillaRouter.put("/entries/:id", asyncRoute(async (req, res) => {
   if (current.rows[0].origen === "SECADORA" || current.rows[0].origen === "VENTA") {
     throw new ApiError(409, "Este registro es automático. Para modificarlo, corrija el movimiento de origen.");
   }
-  const activity = await pool.query("SELECT name, unit_rate FROM cuadrilla_activities WHERE id = $1", [body.activity_id]);
-  if (!activity.rowCount) throw new ApiError(404, "Actividad no encontrada");
-  const rate = Number(activity.rows[0].unit_rate);
+  const socioId = await reqCuadrillaSocioId(req);
+  const activity = await getEffectiveActivityById(pool, body.activity_id, socioId, false);
+  if (!activity) throw new ApiError(404, "Actividad no encontrada");
+  const rate = Number(activity.unit_rate);
   const subtotal = round2(body.quantity * rate);
 
   const result = await pool.query(
@@ -731,7 +904,7 @@ cuadrillaRouter.put("/entries/:id", asyncRoute(async (req, res) => {
          quantity = $6, unit_rate = $7, subtotal = $8
      WHERE id = $1 AND origen NOT IN ('SECADORA', 'VENTA')
      RETURNING id, work_date, activity_name, worker_name, quantity, unit_rate, subtotal, notes, origen, referencia_id, tunnel_number, momento`,
-    [req.params.id, body.work_date ?? null, body.activity_id, activity.rows[0].name, body.worker_name.trim(), body.quantity, rate, subtotal]
+    [req.params.id, body.work_date ?? null, activity.id, activity.name, body.worker_name.trim(), body.quantity, rate, subtotal]
   );
   res.json(result.rows[0]);
 }));

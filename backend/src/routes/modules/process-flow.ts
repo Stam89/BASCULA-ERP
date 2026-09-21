@@ -15,7 +15,7 @@ import {
   linkLotProcessReports,
   type ProcessStage
 } from "../../utils/process-reports.js";
-import { upsertCuadrillaSecadoraEntry, autoGenerarPagosCuadrillaDeSecado } from "./cuadrilla.js";
+import { upsertCuadrillaSecadoraEntry, autoGenerarPagosCuadrillaDeSecado, getEffectiveCuadrillaActivityByName } from "./cuadrilla.js";
 import { getMatrizId } from "../../services/matriz.js";
 import { getRates } from "./labor.js";
 
@@ -805,9 +805,12 @@ processFlowRouter.patch("/drying/:dryingId/cuadrilla", asyncRoute(async (req, re
 
   const result = await inTransaction(async (client) => {
     const rep = await client.query(
-      `SELECT tunnel_number, total_quintals::float AS total_quintals,
-              COALESCE(filled_at, dry_start_at::date, created_at::date) AS work_date
-       FROM drying_tunnel_reports WHERE id = $1 FOR UPDATE`,
+      `SELECT d.tunnel_number, d.total_quintals::float AS total_quintals,
+              COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) AS work_date,
+              l.accionista_id
+       FROM drying_tunnel_reports d
+       LEFT JOIN lots l ON l.id = d.lot_id
+       WHERE d.id = $1 FOR UPDATE`,
       [dryingId]
     );
     if (!rep.rowCount) throw new ApiError(404, "Secado no encontrado");
@@ -817,15 +820,12 @@ processFlowRouter.patch("/drying/:dryingId/cuadrilla", asyncRoute(async (req, re
     // La labor depende del momento: LLENADO → "RECEPCION A TUNEL N";
     // VACIADO → "BOTADA DE TUNEL". Ambas con su tarifa por QQ del catálogo.
     const laborName = momento === "VACIADO" ? "BOTADA DE TUNEL" : `RECEPCION A TUNEL ${tunnel}`;
-    const act = await client.query(
-      "SELECT id, name, unit_rate::float AS unit_rate FROM cuadrilla_activities WHERE upper(btrim(name)) = $1 AND is_active = true LIMIT 1",
-      [laborName]
-    );
-    if (!act.rowCount) {
+    const act = await getEffectiveCuadrillaActivityByName(client, laborName, rep.rows[0].accionista_id ?? null);
+    if (!act) {
       throw new ApiError(400, `Configura la tarifa de la labor "${laborName}" en Cuadrilla → Actividades antes de procesar.`);
     }
-    const activityId = act.rows[0].id as string;
-    const rate = Number(act.rows[0].unit_rate);
+    const activityId = act.id;
+    const rate = Number(act.unit_rate);
     const workDate = toDateOnly(rep.rows[0].work_date);
 
     // Asignación única al grupo (100% del QQ) para ESE momento — reemplaza la previa.
@@ -851,7 +851,8 @@ processFlowRouter.patch("/drying/:dryingId/cuadrilla", asyncRoute(async (req, re
       worker_name: worker,
       quantity: totalQQ,
       work_date: workDate,
-      created_by: userId
+      created_by: userId,
+      accionista_id: rep.rows[0].accionista_id ?? null
     });
     if (!entry) throw new ApiError(400, "No se pudo generar el pago (revisa la cuadrilla y la tarifa).");
 
@@ -862,7 +863,7 @@ processFlowRouter.patch("/drying/:dryingId/cuadrilla", asyncRoute(async (req, re
       work_date: workDate,
       worker_name: worker,
       activity_id: activityId,
-      activity_name: act.rows[0].name,
+      activity_name: act.name,
       unit_rate: rate,
       quintals: round2(totalQQ),
       subtotal: round2(totalQQ * rate),
@@ -1001,9 +1002,12 @@ processFlowRouter.post("/lots/:lotId/link", asyncRoute(async (req, res) => {
 // crea/usa el placeholder "SECADO EN TENDAL" para no dejar el secado sin labor.
 async function resolveTendalActivity(
   client: PoolClient,
-  mode: "GRANEL" | "ENSACADO"
+  mode: "GRANEL" | "ENSACADO",
+  accionistaId?: string | null
 ): Promise<{ id: string; name: string; unit_rate: number }> {
   const target = mode === "ENSACADO" ? "TENDAL POR SACO" : "SECADO EN TENDAL";
+  const effective = await getEffectiveCuadrillaActivityByName(client, target, accionistaId ?? null);
+  if (effective) return { id: effective.id, name: effective.name, unit_rate: Number(effective.unit_rate) };
   const exact = await client.query(
     "SELECT id, name, unit_rate::float AS unit_rate FROM cuadrilla_activities WHERE upper(btrim(name)) = $1 AND is_active = true LIMIT 1",
     [target]
@@ -1027,7 +1031,7 @@ async function resolveTendalActivity(
 // (GRANEL/ENSACADO) se deriva del empaque de recepción del reporte.
 async function registrarPagoCuadrillaTendal(
   client: PoolClient,
-  opts: { dryingReportId: string; lotCode: string; totalQuintals: number; recepcionEmpaque: string | null; recepcionSacos: number | null; workDate: string | null; createdBy?: string | null }
+  opts: { dryingReportId: string; lotCode: string; totalQuintals: number; recepcionEmpaque: string | null; recepcionSacos: number | null; workDate: string | null; createdBy?: string | null; accionistaId?: string | null }
 ): Promise<void> {
   const yaCobrado = await client.query(
     "SELECT 1 FROM cuadrilla_entries WHERE origen = 'TENDAL' AND referencia_id = $1 LIMIT 1",
@@ -1036,7 +1040,7 @@ async function registrarPagoCuadrillaTendal(
   if (yaCobrado.rowCount) return; // idempotente
   const esEnsacado = String(opts.recepcionEmpaque ?? "").toUpperCase() === "SACOS";
   try {
-    const tendalAct = await resolveTendalActivity(client, esEnsacado ? "ENSACADO" : "GRANEL");
+    const tendalAct = await resolveTendalActivity(client, esEnsacado ? "ENSACADO" : "GRANEL", opts.accionistaId ?? null);
     const sacos = Number(opts.recepcionSacos) || 0;
     const cantidad = esEnsacado ? (sacos > 0 ? sacos : opts.totalQuintals) : opts.totalQuintals;
     const unidad = esEnsacado ? "Sacos" : "Quintales";
@@ -1312,7 +1316,8 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
       recepcionEmpaque: input.tendal_mode === "ENSACADO" ? "SACOS" : (input.recepcion_empaque ?? null),
       recepcionSacos: input.recepcion_sacos ?? null,
       workDate: wd,
-      createdBy: input.created_by ?? null
+      createdBy: input.created_by ?? null,
+      accionistaId: lotAccionista
     });
   }
   const llenadoWorker = (input.cuadrilla_worker ?? "").trim();
@@ -1483,7 +1488,7 @@ async function updateDryingReport(
   // tendal multi-día se guarda "En proceso" y solo aquí, al quedar COMPLETED, se
   // registra el cobro y el vaciado a bodega.
   if (String(updated.rows[0].dry_method ?? "").toUpperCase() === "TENDAL" && status === "COMPLETED") {
-    const lc = await client.query("SELECT lot_code FROM lots WHERE id = $1", [updated.rows[0].lot_id]);
+    const lc = await client.query("SELECT lot_code, accionista_id FROM lots WHERE id = $1", [updated.rows[0].lot_id]);
     const wd = toDateOnly(dryEndAt) ?? toDateOnly(updated.rows[0].dry_start_at) ?? new Date().toISOString().slice(0, 10);
     await registrarPagoCuadrillaTendal(client, {
       dryingReportId: dryingId,
@@ -1492,7 +1497,8 @@ async function updateDryingReport(
       recepcionEmpaque: updated.rows[0].recepcion_empaque ?? null,
       recepcionSacos: updated.rows[0].recepcion_sacos != null ? Number(updated.rows[0].recepcion_sacos) : null,
       workDate: wd,
-      createdBy: null
+      createdBy: null,
+      accionistaId: lc.rows[0]?.accionista_id ?? null
     });
   }
 

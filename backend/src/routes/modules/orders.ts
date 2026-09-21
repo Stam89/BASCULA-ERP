@@ -463,7 +463,8 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
       customer_name: customer.rows[0]?.full_name ?? null,
       quantity_qq: totalQqDespachado,
       work_date: order.rows[0].delivered_at ? new Date(order.rows[0].delivered_at).toISOString().slice(0, 10) : null,
-      created_by: body.created_by ?? null
+      created_by: body.created_by ?? null,
+      accionista_id: accionistaId as string
     });
 
     // NOTA: los sacos físicos NO se descuentan aquí. El producto que se despacha
