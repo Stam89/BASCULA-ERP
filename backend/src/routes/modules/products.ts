@@ -7,7 +7,7 @@ import { ApiError } from "../../http/error-handler.js";
 
 export const productsRouter = Router();
 
-const PRODUCT_TYPES = ["FINISHED_GOOD", "BYPRODUCT", "RAW_MATERIAL"] as const;
+const PRODUCT_TYPES = ["FINISHED_GOOD", "PACKAGED_GOOD", "BYPRODUCT", "RAW_MATERIAL"] as const;
 
 const createProductSchema = z.object({
   code: z.string().trim().min(2).max(40),

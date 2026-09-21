@@ -79,6 +79,7 @@ export function stockGroupLabel(row: { code?: string; product_type?: string }): 
   if (code.startsWith("ARROCILLO") || code.startsWith("POLVILLO")) return "Subproducto";
   if (row.product_type === "RAW_MATERIAL") return "Cascara";
   if (row.product_type === "FINISHED_GOOD") return "Producto";
+  if (row.product_type === "PACKAGED_GOOD") return "Marca / Empacado";
   if (row.product_type === "BYPRODUCT") return "Subproducto";
   return row.product_type ?? "Stock";
 }

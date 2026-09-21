@@ -2797,7 +2797,7 @@ export function App() {
     [currentInventoryProducts, products]
   );
   const saleProducts = useMemo(
-    () => visibleInventoryProducts.filter((product) => ["FINISHED_GOOD", "BYPRODUCT"].includes(product.product_type)),
+    () => visibleInventoryProducts.filter((product) => ["FINISHED_GOOD", "PACKAGED_GOOD", "BYPRODUCT"].includes(product.product_type)),
     [visibleInventoryProducts]
   );
   const inventoryAdjustmentProducts = useMemo(
@@ -2817,6 +2817,15 @@ export function App() {
     () =>
       buildDisplayStockRows(
         visibleInventoryProducts.filter((product) => product.product_type === "FINISHED_GOOD"),
+        stock,
+        finishedWarehouse?.name ?? "Bodega Producto Terminado"
+      ),
+    [finishedWarehouse?.name, stock, visibleInventoryProducts]
+  );
+  const packagedStockRows = useMemo(
+    () =>
+      buildDisplayStockRows(
+        visibleInventoryProducts.filter((product) => product.product_type === "PACKAGED_GOOD"),
         stock,
         finishedWarehouse?.name ?? "Bodega Producto Terminado"
       ),
@@ -3674,7 +3683,7 @@ export function App() {
 
   async function saveLaborRates(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const saved = await apiPut<LaborRates>("/labor/rates", laborRatesForm);
+    const saved = await apiPut<LaborRates>("/labor/rates", { ...laborRatesForm, accionista_id: activeAccionistaId });
     laborRatesPristine.current = saved; // nueva referencia "limpia": apaga el aviso de sin guardar
     setLaborRatesForm(saved);
     addToast("Tarifas de pago guardadas", "success");
@@ -5061,6 +5070,7 @@ export function App() {
     if (!(tarifa >= 0)) throw new Error("La tarifa de pilado no es válida");
     if (!(humedad >= 0 && humedad < 100)) throw new Error("La humedad base debe estar entre 0 y 100");
     const saved = await apiPut<AppSettings>("/settings/plant-params", {
+      accionista_id: activeAccionistaId,
       tarifa_pilado_qq: tarifa,
       humedad_base_pct: humedad
     });
@@ -11829,6 +11839,7 @@ export function App() {
             <div style={{ gridColumn: "1 / -1", display: "flex", gap: 12, flexWrap: "wrap" }}>
               <KpiCard title="Total Cáscara" value={`${rawStockRows.reduce((s, r) => s + Number(r.quantity), 0).toFixed(2)} QQ`} sub={`${rawStockRows.length} ítem(s)`} color="#b45309" />
               <KpiCard title="Total Producto Terminado" value={`${finishedStockRows.reduce((s, r) => s + Number(r.quantity), 0).toFixed(2)} QQ`} sub={`${finishedStockRows.length} ítem(s)`} color="#16a34a" />
+              <KpiCard title="Total Marcas / Empacados" value={`${packagedStockRows.reduce((s, r) => s + Number(r.quantity), 0).toFixed(2)} QQ`} sub={`${packagedStockRows.length} ítem(s)`} color="#7c3aed" />
               <KpiCard title="Total Subproductos" value={`${byproductStockRows.reduce((s, r) => s + Number(r.quantity), 0).toFixed(2)} QQ`} sub={`${byproductStockRows.length} ítem(s)`} color="#2563eb" />
             </div>
 
@@ -11845,6 +11856,11 @@ export function App() {
                 title="Stock producto terminado"
                 headers={["Producto", "Cantidad"]}
                 rows={finishedStockRows.map((row) => [row.product_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
+              />
+              <DataList
+                title="Stock marcas / empacados"
+                headers={["Producto", "Cantidad"]}
+                rows={packagedStockRows.map((row) => [row.product_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
               />
               <DataList
                 title="Stock subproductos"
@@ -11984,6 +12000,7 @@ export function App() {
                           onChange={(e) => setNewProductForm((prev) => ({ ...prev, product_type: e.target.value }))}
                         >
                           <option value="FINISHED_GOOD">Producto Terminado</option>
+                          <option value="PACKAGED_GOOD">Marca / Empacado</option>
                           <option value="BYPRODUCT">Subproducto</option>
                           <option value="RAW_MATERIAL">Materia Prima</option>
                         </select>
@@ -13077,7 +13094,7 @@ export function App() {
                       const yaListados = new Set(['Flor', 'Oso', 'Lira Verde', 'Lira Azul', 'Conejo', 'Arrocillo 3/4', 'Arrocillo Fino', 'Polvillo / Afrecho']);
                       const otros = products.filter(p =>
                         !yaListados.has(p.name) &&
-                        (p.product_type === "FINISHED_GOOD" || p.product_type === "BYPRODUCT") &&
+                        (p.product_type === "FINISHED_GOOD" || p.product_type === "PACKAGED_GOOD" || p.product_type === "BYPRODUCT") &&
                         !String(p.code || "").startsWith("ARROZ-PILADO") &&
                         !String(p.code || "").startsWith("CASCARA")
                       );
@@ -16737,7 +16754,7 @@ export function App() {
           // Productos que viven en producto terminado (terminados + subproductos):
           // entran y salen del proceso. Se ordenan por nombre.
           const selectableProducts = products
-            .filter((p) => ["FINISHED_GOOD", "BYPRODUCT"].includes(p.product_type) && p.is_active !== false)
+            .filter((p) => ["FINISHED_GOOD", "PACKAGED_GOOD", "BYPRODUCT"].includes(p.product_type) && p.is_active !== false)
             .filter((p) => puedeEnvejecer || !isEnvejecidoProduct(p))
             .sort((a, b) => a.name.localeCompare(b.name));
           // Cualquier producto terminado o subproducto con stock puede salir y
@@ -21235,7 +21252,7 @@ function ComprarProductoModal(props: {
   const { form, setForm } = props;
   const saldoCliente = round2(props.grupo.items.reduce((s, r) => s + Number(r.balance), 0));
   // Solo se compran productos vendibles: terminados y subproductos.
-  const productos = props.products.filter((p) => ["FINISHED_GOOD", "BYPRODUCT"].includes(p.product_type) && p.is_active !== false);
+  const productos = props.products.filter((p) => ["FINISHED_GOOD", "PACKAGED_GOOD", "BYPRODUCT"].includes(p.product_type) && p.is_active !== false);
   // Subproductos PRINCIPALES (según el rinde del cliente): se muestran primero,
   // limpios y estandarizados, por su `code`. El resto va en "Otros productos".
   const CODIGOS_PRINCIPALES = ["ARROZ-PILADO-011", "ARROCILLO-34", "ARROCILLO-FINO", "POLVILLO"];
@@ -21421,7 +21438,7 @@ function isEnvejecidoProduct(product: Product) {
 }
 
 function isCurrentStockProduct(product: Product) {
-  return product.is_active !== false && ["RAW_MATERIAL", "FINISHED_GOOD", "BYPRODUCT"].includes(product.product_type);
+  return product.is_active !== false && ["RAW_MATERIAL", "FINISHED_GOOD", "PACKAGED_GOOD", "BYPRODUCT"].includes(product.product_type);
 }
 
 function buildDisplayStockRows(products: Product[], stock: StockRow[], fallbackWarehouse: string) {

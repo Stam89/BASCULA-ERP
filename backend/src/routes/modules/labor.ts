@@ -315,6 +315,7 @@ laborRouter.get("/rates", asyncRoute(async (req, res) => {
 laborRouter.put("/rates", requireAdmin, asyncRoute(async (req, res) => {
   await ensureLaborTables();
   const body = z.object({
+    accionista_id: z.string().uuid().nullable().optional(),
     pilador_per_qq: z.number().nonnegative(),
     pilador_per_saca: z.number().nonnegative(),
     estibador_per_qq: z.number().nonnegative(),
@@ -332,7 +333,12 @@ laborRouter.put("/rates", requireAdmin, asyncRoute(async (req, res) => {
   }).parse(req.body);
 
   await inTransaction(async (client) => {
-    const socioId = await resolveRatesSocioId(client, (req as AuthenticatedRequest).accionistaId);
+    const requestedAccionistaId = body.accionista_id ?? (req as AuthenticatedRequest).accionistaId;
+    const socioId = await resolveRatesSocioId(client, requestedAccionistaId);
+    if (requestedAccionistaId && socioId === null) {
+      const acc = await client.query("SELECT tipo FROM accionistas WHERE id = $1", [requestedAccionistaId]);
+      if (acc.rows[0]?.tipo !== "MATRIZ") throw new ApiError(400, "No se pudo resolver el socio activo para guardar tarifas.");
+    }
     await ensureRatesForSocio(client, socioId);
     await client.query(
       `UPDATE labor_rates SET

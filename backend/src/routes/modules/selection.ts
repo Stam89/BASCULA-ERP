@@ -315,7 +315,7 @@ selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
     const prodIds = [...new Set(outputIds)];
     const prodRows = prodIds.length
       ? await tx.query(
-        "SELECT id, code, name FROM products WHERE id = ANY($1) AND is_active = true AND product_type IN ('FINISHED_GOOD', 'BYPRODUCT')",
+        "SELECT id, code, name FROM products WHERE id = ANY($1) AND is_active = true AND product_type IN ('FINISHED_GOOD', 'PACKAGED_GOOD', 'BYPRODUCT')",
         [prodIds]
       )
       : { rows: [] as Array<{ id: string; code: string; name: string }> };

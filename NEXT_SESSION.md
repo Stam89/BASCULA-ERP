@@ -107,6 +107,24 @@ Implementado el 2026-09-21:
 - Frontend recarga configuración/tarifas al cambiar el Socio Operativo activo.
 - Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build y `/health`.
 
+Blindaje posterior:
+
+- Guardados de Parámetros de Planta y Tarifas de Nómina/Cuadrilla envían `accionista_id` explícito además del header.
+- Backend prioriza ese `accionista_id` y no actualiza Maestro si la petición corresponde a un socio específico.
+- Si no puede resolver el socio activo, rechaza el guardado en vez de caer al registro global.
+
+### Inventario Granel vs Marcas
+
+Implementado el 2026-09-21:
+
+- Nueva migración `20261026_packaged_goods_inventory.sql`.
+- Se agrega el tipo `PACKAGED_GOOD` para marcas/presentaciones comerciales.
+- Productos como Conejo, Flor, Lira Azul, Lira Verde, Oso y `0.11 Selectado` pasan a `PACKAGED_GOOD`.
+- `Stock producto terminado` muestra solo granel/base (`FINISHED_GOOD`).
+- Nueva tarjeta/tabla `Stock marcas / empacados` muestra `PACKAGED_GOOD`.
+- Ventas, selección/envejecimiento y compras a clientes siguen aceptando productos empacados donde corresponde.
+- Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build y `/health`.
+
 ### Cambios inmediatamente anteriores
 
 - `1b85b26`: catalogo de productos editable en Inventario.

@@ -334,12 +334,18 @@ settingsRouter.put("/", requireAdmin, asyncRoute(async (req, res) => {
 settingsRouter.put("/plant-params", requireAdmin, asyncRoute(async (req, res) => {
   await ensureTable();
   const body = z.object({
+    accionista_id: z.string().uuid().nullable().optional(),
     tarifa_pilado_qq: z.number().nonnegative().max(9999),
     humedad_base_pct: z.number().min(0).max(100)
   }).parse(req.body);
 
   const result = await inTransaction(async (client) => {
-    const socioId = await resolveSettingsSocioId(client, (req as AuthenticatedRequest).accionistaId);
+    const requestedAccionistaId = body.accionista_id ?? (req as AuthenticatedRequest).accionistaId;
+    const socioId = await resolveSettingsSocioId(client, requestedAccionistaId);
+    if (requestedAccionistaId && socioId === null) {
+      const acc = await client.query("SELECT tipo FROM accionistas WHERE id = $1", [requestedAccionistaId]);
+      if (acc.rows[0]?.tipo !== "MATRIZ") throw new ApiError(400, "No se pudo resolver el socio activo para guardar configuración.");
+    }
     await ensureSettingsForSocio(client, socioId);
     return client.query(
       `UPDATE app_settings

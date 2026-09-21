@@ -213,7 +213,7 @@ inventoryRouter.post("/adjustments", asyncRoute(async (req, res) => {
     if (product_type === "RAW_MATERIAL" && tipo_bodega !== "RAW_MATERIAL") {
       throw new ApiError(400, `"${producto}" es materia prima y no puede ir a "${bodega}". Elige una bodega de materia prima.`);
     }
-    if (product_type === "FINISHED_GOOD" && tipo_bodega === "RAW_MATERIAL") {
+    if (["FINISHED_GOOD", "PACKAGED_GOOD"].includes(product_type) && tipo_bodega === "RAW_MATERIAL") {
       throw new ApiError(400, `"${producto}" es producto terminado y no puede ir a "${bodega}".`);
     }
 
