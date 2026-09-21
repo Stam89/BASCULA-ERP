@@ -9,9 +9,9 @@ import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { crearVenta } from "./sales.js";
-import { lockInventoryStock } from "../../db/inventory-lock.js";
 import { cobrarEmpaqueAlDespachar } from "../../services/cargo-empaque.js";
 import { revertCuadrillaDespachoVentaEntry, upsertCuadrillaDespachoVentaEntry } from "./cuadrilla.js";
+import { consumeInventoryFIFO } from "../../services/inventory-consume.js";
 
 export const ordersRouter = Router();
 
@@ -170,23 +170,15 @@ async function descontarInventarioPreparacion(
   }
   for (const [productId, qq] of [...porProducto.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     if (!(qq > 0)) continue;
-    await lockInventoryStock(client, { productId, warehouseId: opts.warehouseId, accionistaId: opts.accionistaId, ownership: "OWNED" });
-    const disp = await client.query(
-      `SELECT COALESCE(SUM(m.quantity), 0) AS stock, MAX(p.name) AS producto
-         FROM inventory_movements m JOIN products p ON p.id = m.product_id
-        WHERE m.product_id = $1 AND m.warehouse_id = $2 AND m.accionista_id = $3 AND m.ownership = 'OWNED'`,
-      [productId, opts.warehouseId, opts.accionistaId]
-    );
-    const stock = Number(disp.rows[0].stock);
-    if (stock + 0.001 < qq) {
-      throw new ApiError(409, `Stock insuficiente de ${disp.rows[0].producto ?? "este producto"}: hay ${stock.toFixed(2)} QQ y la preparación requiere ${qq.toFixed(2)} QQ.`);
-    }
-    await client.query(
-      `INSERT INTO inventory_movements
-         (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
-       VALUES ($1, $2, NULL, 'OUT', $3, 'sales_order', $4, 'OWNED', $5, $6)`,
-      [productId, opts.warehouseId, -qq, opts.orderId, opts.createdBy ?? null, opts.accionistaId]
-    );
+    await consumeInventoryFIFO(client, {
+      productId,
+      warehouseId: opts.warehouseId,
+      accionistaId: opts.accionistaId,
+      quantity: qq,
+      referenceType: "sales_order",
+      referenceId: opts.orderId,
+      createdBy: opts.createdBy ?? null
+    });
   }
 }
 

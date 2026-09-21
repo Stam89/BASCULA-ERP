@@ -10,6 +10,7 @@ import { nextCode } from "../../utils/codes.js";
 import { createLotProcessReport } from "../../utils/process-reports.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { consumeInventoryFIFO } from "../../services/inventory-consume.js";
 
 export const salesRouter = Router();
 
@@ -122,27 +123,6 @@ async function crearVentaInterna(
         }
       }
 
-      // No se vende lo que no hay: sin esta guarda el inventario quedaba en
-      // negativo y el stock dejaba de cuadrar con lo físico. Se OMITE cuando el
-      // descuento ya se hizo al confirmar la preparación del pedido.
-      if (!opciones.omitirInventario) {
-        const disponible = await client.query(
-          `SELECT COALESCE(SUM(m.quantity), 0) AS stock, MAX(p.name) AS producto
-           FROM inventory_movements m
-           JOIN products p ON p.id = m.product_id
-           WHERE m.product_id = $1 AND m.warehouse_id = $2 AND m.accionista_id = $3
-             AND m.ownership = 'OWNED'`,
-          [item.product_id, item.warehouse_id, accionistaId]
-        );
-        const stockActual = Number(disponible.rows[0].stock);
-        if (stockActual + 0.001 < quantityQQ) {
-          throw new ApiError(
-            409,
-            `Stock insuficiente de ${disponible.rows[0].producto ?? "este producto"}: hay ${stockActual.toFixed(2)} QQ y la venta pide ${quantityQQ.toFixed(2)} QQ.`
-          );
-        }
-      }
-
       const itemTotal = round2(item.quantity * item.unit_price);
       await client.query(
         `INSERT INTO sale_items (sale_id, product_id, lot_id, warehouse_id, quantity, unit_price, total)
@@ -151,12 +131,16 @@ async function crearVentaInterna(
       );
       // Salida de inventario. Se OMITE si ya se descontó en la preparación.
       if (!opciones.omitirInventario) {
-        await client.query(
-          `INSERT INTO inventory_movements
-           (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
-           VALUES ($1, $2, $3, 'OUT', $4, 'sales', $5, 'OWNED', $6, $7)`,
-          [item.product_id, item.warehouse_id, item.lot_id, -quantityQQ, sale.rows[0].id, body.created_by, accionistaId]
-        );
+        await consumeInventoryFIFO(client, {
+          productId: item.product_id,
+          warehouseId: item.warehouse_id,
+          accionistaId,
+          quantity: quantityQQ,
+          referenceType: "sales",
+          referenceId: sale.rows[0].id,
+          createdBy: body.created_by,
+          preferredLotId: item.lot_id ?? null
+        });
       }
 
       if (item.lot_id) {

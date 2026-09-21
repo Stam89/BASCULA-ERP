@@ -8,6 +8,7 @@ import { descontarSacosPorTipo, tipoSacoEspecial } from "../../services/cargo-em
 import { nextCode } from "../../utils/codes.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import type { PoolClient } from "pg";
+import { consumeInventoryFIFO } from "../../services/inventory-consume.js";
 
 export const selectionRouter = Router();
 
@@ -215,20 +216,6 @@ selectionRouter.post("/batches", asyncRoute(async (req, res) => {
     const label = TYPE_LABEL[body.service_type];
     const batchNumber = nextCode("SEL");
 
-    // Cada producto que sale tiene que existir en la bodega con stock suficiente.
-    for (const line of body.inputs) {
-      const disp = await tx.query(
-        `SELECT COALESCE(SUM(m.quantity), 0) AS stock, MAX(p.name) AS producto
-         FROM inventory_movements m JOIN products p ON p.id = m.product_id
-         WHERE m.product_id = $1 AND m.warehouse_id = $2 AND m.accionista_id = $3`,
-        [line.product_id, body.warehouse_id, accionistaId]
-      );
-      const stock = Number(disp.rows[0].stock);
-      if (stock + 0.001 < line.quantity) {
-        throw new ApiError(409, `Stock insuficiente de ${disp.rows[0].producto ?? "un producto"}: hay ${stock.toFixed(2)} QQ y quieres mandar ${line.quantity.toFixed(2)} QQ.`);
-      }
-    }
-
     const desc = `${label} ${batchNumber} — ${provider.rows[0].name}: ${inputQq} QQ`;
     const ap = await tx.query(
       `INSERT INTO accounts_payable (accionista_id, farmer_id, reference_type, reference_id, description, amount, balance)
@@ -257,12 +244,16 @@ selectionRouter.post("/batches", asyncRoute(async (req, res) => {
         [batchId, line.product_id, qty]
       );
       // Sale del inventario (OUT = cantidad negativa).
-      await tx.query(
-        `INSERT INTO inventory_movements
-         (product_id, warehouse_id, movement, quantity, reference_type, reference_id, ownership, notes, created_by, accionista_id)
-         VALUES ($1, $2, 'OUT', $3, 'selection_batch', $4, 'OWNED', $5, $6, $7)`,
-        [line.product_id, body.warehouse_id, -qty, batchId, `${label}: enviado a selectar`, body.created_by ?? null, accionistaId]
-      );
+      await consumeInventoryFIFO(tx, {
+        productId: line.product_id,
+        warehouseId: body.warehouse_id,
+        accionistaId,
+        quantity: qty,
+        referenceType: "selection_batch",
+        referenceId: batchId,
+        notes: `${label}: enviado a selectar`,
+        createdBy: body.created_by ?? null
+      });
     }
 
     return { ...batch.rows[0], provider_name: provider.rows[0].name };

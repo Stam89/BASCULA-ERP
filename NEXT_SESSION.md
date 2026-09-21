@@ -139,6 +139,17 @@ Implementado el 2026-09-21:
 - Frontend envía `accionista_id` explícito al crear/editar/ocultar actividades de Cuadrilla.
 - Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build.
 
+### Inventario: consumo por lotes
+
+Implementado el 2026-09-21:
+
+- Se reforzó `backend/.env` local con una `JWT_SECRET` fuerte desde `.jwt-secret`; no se commitea por estar ignorado.
+- Nuevo helper `backend/src/services/inventory-consume.ts`.
+- Ventas directas, preparación de pedidos y envíos a Selección/Envejecimiento consumen inventario por lotes con saldo positivo antes de usar `lot_id = NULL`.
+- Esto evita crear nuevos negativos visuales en `inventory_stock` cuando el stock existe en lotes específicos.
+- Los negativos antiguos detectados en `ARROZ-PILADO-011` (`BASCULA ERP` y `STALYN`, `lot_id = NULL`) no fueron modificados; requieren limpieza/ajuste controlado si se desea.
+- Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build, `preflight` sin errores críticos y `/health`.
+
 ### Cambios inmediatamente anteriores
 
 - `1b85b26`: catalogo de productos editable en Inventario.
