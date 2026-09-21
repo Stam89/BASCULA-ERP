@@ -79,8 +79,22 @@ Implementado el 2026-09-21:
 - Migracion aplicada: `20261023_catalogo_productos_creacion.sql`, idempotente, asegura `ARROZ-ENVEJECIDO`.
 - Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build y `/health`.
 
+### Envejecido por socio y tarifario
+
+Implementado el 2026-09-21:
+
+- Nueva migracion `20261024_envejecido_por_socio_y_tarifario.sql`.
+- `accionistas.modulo_envejecido_habilitado` controla si un socio ve/usa Envejecido.
+- Se mantiene sincronizado con `puede_envejecer` para compatibilidad.
+- Stalyn queda habilitado automaticamente si el nombre o codigo contiene `stalyn`.
+- El tarifario de servicios acepta `SELECCION` y `ENVEJECIMIENTO`.
+- Seleccion usa primero tarifa personalizada del socio activo desde `tarifario_servicio`; si no existe, usa `selection_rates`.
+- Inventario/Catalogo/Seleccion ocultan productos y textos de Envejecido cuando el socio activo no tiene el flag.
+- Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build y `/health`.
+
 ### Cambios inmediatamente anteriores
 
+- `1b85b26`: catalogo de productos editable en Inventario.
 - `cb5096d`: saldo inicial de caja integrado en movimientos.
 - `3d9f167`: clientes externos en Partes Diarios.
 - `129b4ff`: proteccion contra tickets duplicados en Bascula.

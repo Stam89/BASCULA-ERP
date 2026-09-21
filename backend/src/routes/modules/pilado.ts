@@ -243,7 +243,7 @@ piladoRouter.post("/services/:id/settle", asyncRoute(async (req, res) => {
 // Precio por QQ configurable por socio, servicio y fecha de vigencia. El form de
 // Servicio Pilado autocompleta con la tarifa vigente, pero el usuario puede
 // editarla en la transaccion (retrocompat: si no hay tarifa, sigue como antes).
-const SERVICIOS = ["PILADO", "SECADO", "FLETE"] as const;
+const SERVICIOS = ["PILADO", "SECADO", "FLETE", "SELECCION", "ENVEJECIMIENTO"] as const;
 
 // GET tarifa VIGENTE para socio+servicio en una fecha (la de mayor fecha_vigencia
 // <= fecha, activa). Devuelve { precio_por_qq } o null si no hay configurada.

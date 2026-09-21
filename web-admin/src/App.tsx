@@ -71,7 +71,7 @@ type AuthUser = {
   allowed_modules?: string[] | null;
 };
 
-type Accionista = { id: string; name: string; code: string; tipo?: string; puede_envejecer?: boolean; allowed_modules?: string[] };
+type Accionista = { id: string; name: string; code: string; tipo?: string; puede_envejecer?: boolean; modulo_envejecido_habilitado?: boolean; allowed_modules?: string[] };
 
 // Selección / envejecido de producto terminado (persona externa), por lotes.
 type ExternalProvider = { id: string; name: string; identification: string | null; phone: string | null };
@@ -185,7 +185,7 @@ type AdminUser = {
   accionista_modules?: Array<{ accionista_id: string; modules: string[] }> | null;
 };
 
-type AdminAccionista = { id: string; name: string; code: string; is_active: boolean; puede_envejecer?: boolean };
+type AdminAccionista = { id: string; name: string; code: string; is_active: boolean; puede_envejecer?: boolean; modulo_envejecido_habilitado?: boolean };
 
 type AuditEntry = {
   id: string;
@@ -2786,9 +2786,11 @@ export function App() {
     () => insumos.find((item) => item.nombre.toUpperCase().includes("SACO")) ?? insumos[0],
     [insumos]
   );
+  const activeAccionista = accionistas.find((a) => a.id === activeAccionistaId) ?? null;
+  const moduloEnvejecidoHabilitado = accionistaEnvejecidoHabilitado(activeAccionista);
   const currentInventoryProducts = useMemo(
-    () => products.filter(isCurrentStockProduct),
-    [products]
+    () => products.filter((product) => isCurrentStockProduct(product) && (moduloEnvejecidoHabilitado || !isEnvejecidoProduct(product))),
+    [moduloEnvejecidoHabilitado, products]
   );
   const visibleInventoryProducts = useMemo(
     () => (currentInventoryProducts.length > 0 ? currentInventoryProducts : products.filter((product) => product.product_type !== "SUPPLY")),
@@ -3485,13 +3487,19 @@ export function App() {
   // Permisos de ACCIÓN por accionista activo (banderas PERM:* en allowed_modules).
   // El administrador siempre puede. Un operador solo si su accionista activo se lo
   // concede en Config → Control de Usuarios (tabla matriz de permisos).
-  const activeAllowedPerms = new Set(accionistas.find((a) => a.id === activeAccionistaId)?.allowed_modules ?? []);
+  const activeAllowedPerms = new Set(activeAccionista?.allowed_modules ?? []);
   const canAnular = isAdmin || activeAllowedPerms.has("PERM:ANULAR");
   const canEditarPrecios = isAdmin || activeAllowedPerms.has("PERM:EDITAR_PRECIOS");
   // Nivel VER vs EDITAR por módulo (accionista activo): el nombre plano = Ver,
   // "EDIT:<módulo>" = Editar. Un operador "Solo Ver" (sin EDIT:) NO debe ver los
   // botones de crear/editar/guardar de ese módulo (el backend también lo bloquea).
   const canEdit = (module: string) => isAdmin || activeAllowedPerms.has(`EDIT:${module}`);
+
+  useEffect(() => {
+    if (!moduloEnvejecidoHabilitado && selectionForm.service_type === "ENVEJECIMIENTO") {
+      setSelectionForm((form) => ({ ...form, service_type: "SELECCION", rate_per_qq: "" }));
+    }
+  }, [moduloEnvejecidoHabilitado, selectionForm.service_type]);
 
   // La nómina, cuadrilla y servicio de pilado pertenecen a la matriz. Se resuelve
   // por tipo y no por un UUID fijo, para admitir instalaciones de otras empresas.
@@ -3644,8 +3652,9 @@ export function App() {
 
   // Habilita/deshabilita que un accionista pueda mandar a envejecer producto.
   async function toggleEnvejecer(a: AdminAccionista) {
-    await apiPut(`/auth/accionistas/${a.id}`, { puede_envejecer: !a.puede_envejecer });
-    addToast(`${a.name}: envejecido ${!a.puede_envejecer ? "habilitado" : "deshabilitado"}`, "success");
+    const next = !accionistaEnvejecidoHabilitado(a);
+    await apiPut(`/auth/accionistas/${a.id}`, { modulo_envejecido_habilitado: next });
+    addToast(`${a.name}: envejecido ${next ? "habilitado" : "deshabilitado"}`, "success");
     await refreshConfig();
   }
 
@@ -11961,7 +11970,7 @@ export function App() {
                           required
                           value={newProductForm.code}
                           onChange={(e) => setNewProductForm((prev) => ({ ...prev, code: e.target.value.toUpperCase() }))}
-                          placeholder="ARROZ-ENVEJECIDO"
+                          placeholder={moduloEnvejecidoHabilitado ? "ARROZ-ENVEJECIDO" : "PRODUCTO-NUEVO"}
                         />
                       </label>
                       <label>
@@ -11970,7 +11979,7 @@ export function App() {
                           required
                           value={newProductForm.name}
                           onChange={(e) => setNewProductForm((prev) => ({ ...prev, name: e.target.value }))}
-                          placeholder="Arroz Envejecido"
+                          placeholder={moduloEnvejecidoHabilitado ? "Arroz Envejecido" : "Producto Nuevo"}
                         />
                       </label>
                       <label>
@@ -16719,8 +16728,7 @@ export function App() {
         })()}
 
         {activeTab === "Seleccion" && (() => {
-          const activeAcc = accionistas.find((a) => a.id === activeAccionistaId);
-          const puedeEnvejecer = !!activeAcc?.puede_envejecer;
+          const puedeEnvejecer = moduloEnvejecidoHabilitado;
           const inputStyle = { display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 } as const;
           // Subproducto → saco especial (fijo por producto). Debe coincidir con
           // `tipoSacoEspecial` del backend. Devuelve null si no aplica (rechazo/arroz).
@@ -16735,6 +16743,7 @@ export function App() {
           // entran y salen del proceso. Se ordenan por nombre.
           const selectableProducts = products
             .filter((p) => ["FINISHED_GOOD", "BYPRODUCT"].includes(p.product_type) && p.is_active !== false)
+            .filter((p) => puedeEnvejecer || !isEnvejecidoProduct(p))
             .sort((a, b) => a.name.localeCompare(b.name));
           // Cualquier producto terminado o subproducto con stock puede salir y
           // puede transformarse en otro producto activo al regresar.
@@ -16776,7 +16785,7 @@ export function App() {
           const openFinish = (batch: SelectionBatch) => {
             const productoEnvejecido = outputProducts.find((p) => p.code === "ARROZ-ENVEJECIDO");
             const productoInicial = batch.service_type === "ENVEJECIMIENTO"
-              ? productoEnvejecido?.id ?? batch.inputs[0]?.product_id ?? ""
+              ? (puedeEnvejecer ? productoEnvejecido?.id : undefined) ?? batch.inputs[0]?.product_id ?? ""
               : batch.inputs[0]?.product_id ?? "";
             setFinishingBatchId(batch.id);
             setFinishOutputs([{ ...emptyLine, product_id: productoInicial, sack_weight_lb: "100" }]);
@@ -16790,8 +16799,12 @@ export function App() {
             <div className="tablePanel" style={{ gridColumn: "1 / -1", paddingBottom: 10 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
                 <div>
-                  <h2 style={{ margin: 0 }}>Selección y Envejecimiento</h2>
-                  <p className="muted" style={{ margin: "3px 0 0" }}>Control de producto enviado, transformación, subproductos y merma.</p>
+                  <h2 style={{ margin: 0 }}>{puedeEnvejecer ? "Selección y Envejecimiento" : "Selección"}</h2>
+                  <p className="muted" style={{ margin: "3px 0 0" }}>
+                    {puedeEnvejecer
+                      ? "Control de producto enviado, transformación, subproductos y merma."
+                      : "Control de producto enviado a seleccionar, subproductos y merma."}
+                  </p>
                 </div>
                 <button type="button" className="btnSecondary" onClick={() => setPersonasModalOpen(true)}>Gestionar personas externas</button>
               </div>
@@ -16809,22 +16822,20 @@ export function App() {
             {selectionView === "nuevo" && (
             <form className="formPanel" style={{ gridColumn: "1 / -1" }} onSubmit={(e) => submitStartBatch(e).catch((err) => addToast(err.message, "error"))}>
               <h2>📤 Mandar a selectar</h2>
-              <p className="muted">Registra lo que sale de bodega a selectar/envejecer (varios productos). Sale del inventario ahora y genera la cuenta por pagar. Cuando regrese lo procesado, lo cierras en «En proceso».</p>
+              <p className="muted">
+                {puedeEnvejecer
+                  ? "Registra lo que sale de bodega a selectar/envejecer (varios productos). Sale del inventario ahora y genera la cuenta por pagar. Cuando regrese lo procesado, lo cierras en «En proceso»."
+                  : "Registra lo que sale de bodega a seleccionar. Sale del inventario ahora y genera la cuenta por pagar. Cuando regrese lo procesado, lo cierras en «En proceso»."}
+              </p>
               <label><span>Fecha de envío</span>
                 <input type="date" value={selectionForm.service_date} onChange={(e) => setSelectionForm({ ...selectionForm, service_date: e.target.value })} />
               </label>
               <label><span>Tipo de servicio</span>
                 <select value={selectionForm.service_type} onChange={(e) => setSelectionForm({ ...selectionForm, service_type: e.target.value as "SELECCION" | "ENVEJECIMIENTO", rate_per_qq: "" })}>
                   <option value="SELECCION">Selección (limpiar impureza)</option>
-                  <option value="ENVEJECIMIENTO">Envejecimiento</option>
+                  {puedeEnvejecer && <option value="ENVEJECIMIENTO">Envejecimiento</option>}
                 </select>
               </label>
-              {/* Aviso de envejecido: SOLO cuando se elige "Envejecimiento" y el accionista no está habilitado. */}
-              {envejecidoBloqueado && (
-                <div style={{ marginTop: -2, marginBottom: 6, padding: "8px 12px", background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 8, color: "#92400e", fontSize: 12.5, fontWeight: 600 }}>
-                  ⚠ Este accionista no está habilitado para envejecer. Se habilita en Configuración → Accionistas. (La selección para limpiar impureza sí está permitida.)
-                </div>
-              )}
               <label><span>Persona externa (quien lo hace)</span>
                 <select value={selectionForm.provider_id} onChange={(e) => setSelectionForm({ ...selectionForm, provider_id: e.target.value })}>
                   <option value="">Seleccione</option>
@@ -19242,7 +19253,7 @@ export function App() {
                           <th>Código</th>
                           <th style={{ whiteSpace: "nowrap" }}>Usuarios con acceso</th>
                           <th>Estado</th>
-                          <th>Envejece</th>
+                          <th>Envejecido</th>
                           <th style={{ whiteSpace: "nowrap" }}>Acciones</th>
                         </tr>
                       </thead>
@@ -19262,13 +19273,13 @@ export function App() {
                             <td>
                               <button
                                 type="button"
-                                className={a.puede_envejecer ? "chip ok" : "chip"}
+                                className={accionistaEnvejecidoHabilitado(a) ? "chip ok" : "chip"}
                                 style={{ cursor: isAdmin ? "pointer" : "default", border: "none" }}
                                 disabled={!isAdmin}
-                                title="Solo este accionista puede mandar a envejecer producto"
+                                title="Activa el módulo visual y el flujo de arroz envejecido para este socio"
                                 onClick={() => toggleEnvejecer(a).catch((err) => addToast(err.message, "error"))}
                               >
-                                {a.puede_envejecer ? "Sí" : "No"}
+                                {accionistaEnvejecidoHabilitado(a) ? "Activo" : "Oculto"}
                               </button>
                             </td>
                             <td style={{ textAlign: "right" }}>
@@ -19431,6 +19442,8 @@ export function App() {
                           <option value="PILADO">Pilado</option>
                           <option value="SECADO">Secado</option>
                           <option value="FLETE">Flete</option>
+                          <option value="SELECCION">Selección</option>
+                          <option value="ENVEJECIMIENTO">Envejecido</option>
                         </select>
                       </label>
                       <label><span>💲 Precio ($ por QQ)</span>
@@ -21400,6 +21413,16 @@ function AbonoForm({ saldo, disabled, onAbonar }: { saldo: number; disabled?: bo
 
 function riceTypeLabel(value: string | null | undefined) {
   return value === "CORRIENTE" ? "Corriente" : "0.11";
+}
+
+function accionistaEnvejecidoHabilitado(accionista?: Pick<Accionista, "puede_envejecer" | "modulo_envejecido_habilitado"> | null) {
+  return Boolean(accionista?.modulo_envejecido_habilitado ?? accionista?.puede_envejecer);
+}
+
+function isEnvejecidoProduct(product: Product) {
+  const code = (product.code ?? "").toUpperCase();
+  const name = (product.name ?? "").toUpperCase();
+  return code.includes("ENVEJEC") || name.includes("ENVEJEC");
 }
 
 function isCurrentStockProduct(product: Product) {

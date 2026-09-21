@@ -52,10 +52,34 @@ selectionRouter.post("/providers", asyncRoute(async (req, res) => {
 }));
 
 // ── Tarifas por defecto ──────────────────────────────────────────────────────
-selectionRouter.get("/rates", asyncRoute(async (_req, res) => {
+selectionRouter.get("/rates", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const q = z.object({
+    fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+  }).parse(req.query);
   const result = await pool.query("SELECT seleccion_rate, envejecimiento_rate FROM selection_rates WHERE singleton = true");
   const row = result.rows[0] ?? { seleccion_rate: 1.25, envejecimiento_rate: 3.5 };
-  res.json({ seleccion_rate: Number(row.seleccion_rate), envejecimiento_rate: Number(row.envejecimiento_rate) });
+  let seleccionRate = Number(row.seleccion_rate);
+  let envejecimientoRate = Number(row.envejecimiento_rate);
+
+  if (accionistaId) {
+    const custom = await pool.query(
+      `SELECT DISTINCT ON (servicio) servicio, precio_por_qq::float AS precio_por_qq
+       FROM tarifario_servicio
+       WHERE socio_id = $1
+         AND servicio IN ('SELECCION', 'ENVEJECIMIENTO')
+         AND is_active = true
+         AND fecha_vigencia <= COALESCE($2::date, CURRENT_DATE)
+       ORDER BY servicio, fecha_vigencia DESC, created_at DESC`,
+      [accionistaId, q.fecha ?? null]
+    );
+    for (const tarifa of custom.rows) {
+      if (tarifa.servicio === "SELECCION") seleccionRate = Number(tarifa.precio_por_qq);
+      if (tarifa.servicio === "ENVEJECIMIENTO") envejecimientoRate = Number(tarifa.precio_por_qq);
+    }
+  }
+
+  res.json({ seleccion_rate: seleccionRate, envejecimiento_rate: envejecimientoRate });
 }));
 
 selectionRouter.put("/rates", asyncRoute(async (req, res) => {
@@ -126,8 +150,22 @@ const lineSchema = z.object({
   quantity: z.number().positive()
 });
 
-async function resolveRate(client: PoolClient, serviceType: string, override?: number): Promise<number> {
+async function resolveRate(client: PoolClient, serviceType: string, accionistaId: string, serviceDate?: string, override?: number): Promise<number> {
   if (override !== undefined) return override;
+  const servicio = serviceType === "ENVEJECIMIENTO" ? "ENVEJECIMIENTO" : "SELECCION";
+  const custom = await client.query(
+    `SELECT precio_por_qq::float AS precio_por_qq
+     FROM tarifario_servicio
+     WHERE socio_id = $1
+       AND servicio = $2
+       AND is_active = true
+       AND fecha_vigencia <= COALESCE($3::date, CURRENT_DATE)
+     ORDER BY fecha_vigencia DESC, created_at DESC
+     LIMIT 1`,
+    [accionistaId, servicio, serviceDate ?? null]
+  );
+  if (custom.rowCount) return Number(custom.rows[0].precio_por_qq);
+
   const r = await client.query("SELECT seleccion_rate, envejecimiento_rate FROM selection_rates WHERE singleton = true");
   const row = r.rows[0] ?? { seleccion_rate: 1.25, envejecimiento_rate: 3.5 };
   return Number(serviceType === "ENVEJECIMIENTO" ? row.envejecimiento_rate : row.seleccion_rate);
@@ -151,9 +189,12 @@ selectionRouter.post("/batches", asyncRoute(async (req, res) => {
   }).parse(req.body);
 
   // El envejecido solo lo hace el accionista habilitado (regla del negocio).
-  const acc = await pool.query("SELECT name, puede_envejecer FROM accionistas WHERE id = $1", [accionistaId]);
+  const acc = await pool.query(
+    "SELECT name, puede_envejecer, COALESCE(modulo_envejecido_habilitado, puede_envejecer) AS modulo_envejecido_habilitado FROM accionistas WHERE id = $1",
+    [accionistaId]
+  );
   if (!acc.rowCount) throw new ApiError(404, "Accionista no encontrado.");
-  if (body.service_type === "ENVEJECIMIENTO" && !acc.rows[0].puede_envejecer) {
+  if (body.service_type === "ENVEJECIMIENTO" && !acc.rows[0].modulo_envejecido_habilitado) {
     throw new ApiError(403, `El accionista ${acc.rows[0].name} no está habilitado para envejecer producto.`);
   }
 
@@ -168,7 +209,7 @@ selectionRouter.post("/batches", asyncRoute(async (req, res) => {
   }
 
   const result = await inTransaction(async (tx) => {
-    const rate = await resolveRate(tx, body.service_type, body.rate_per_qq);
+    const rate = await resolveRate(tx, body.service_type, accionistaId, body.service_date, body.rate_per_qq);
     const inputQq = round3(body.inputs.reduce((s, l) => s + l.quantity, 0));
     const totalCost = round2(inputQq * rate);
     const label = TYPE_LABEL[body.service_type];

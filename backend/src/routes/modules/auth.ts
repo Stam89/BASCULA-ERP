@@ -9,7 +9,15 @@ import { APP_MODULES, requireAdmin, requireAuth, type AuthenticatedRequest } fro
 
 export const authRouter = Router();
 
-type Accionista = { id: string; name: string; code: string; tipo: string; puede_envejecer: boolean; allowed_modules: string[] };
+type Accionista = {
+  id: string;
+  name: string;
+  code: string;
+  tipo: string;
+  puede_envejecer: boolean;
+  modulo_envejecido_habilitado: boolean;
+  allowed_modules: string[];
+};
 
 // Accionistas a los que puede acceder el usuario, CON los módulos permitidos en
 // cada uno (permisos por accionista). El administrador accede a todos con todos
@@ -17,12 +25,17 @@ type Accionista = { id: string; name: string; code: string; tipo: string; puede_
 async function accionistasForUser(userId: string, roleName: string | null): Promise<Accionista[]> {
   if (roleName === "ADMINISTRADOR") {
     const r = await pool.query<Omit<Accionista, "allowed_modules">>(
-      "SELECT id, name, code, tipo, puede_envejecer FROM accionistas WHERE is_active = true ORDER BY name"
+      `SELECT id, name, code, tipo, puede_envejecer,
+              COALESCE(modulo_envejecido_habilitado, puede_envejecer) AS modulo_envejecido_habilitado
+       FROM accionistas
+       WHERE is_active = true
+       ORDER BY name`
     );
     return r.rows.map((a) => ({ ...a, allowed_modules: [...APP_MODULES] }));
   }
   const r = await pool.query<Accionista>(
     `SELECT a.id, a.name, a.code, a.tipo, a.puede_envejecer,
+            COALESCE(a.modulo_envejecido_habilitado, a.puede_envejecer) AS modulo_envejecido_habilitado,
             COALESCE(ua.allowed_modules, '{}') AS allowed_modules
      FROM accionistas a
      JOIN user_accionistas ua ON ua.accionista_id = a.id
@@ -213,7 +226,12 @@ authRouter.put("/users/:id", requireAuth, requireAdmin, asyncRoute(async (req, r
 // ── Accionistas (solo administradores) ──────────────────────────────────────
 
 authRouter.get("/accionistas", requireAuth, requireAdmin, asyncRoute(async (_req, res) => {
-  const result = await pool.query("SELECT id, name, code, tipo, is_active, puede_envejecer FROM accionistas ORDER BY name");
+  const result = await pool.query(
+    `SELECT id, name, code, tipo, is_active, puede_envejecer,
+            COALESCE(modulo_envejecido_habilitado, puede_envejecer) AS modulo_envejecido_habilitado
+     FROM accionistas
+     ORDER BY name`
+  );
   res.json(result.rows);
 }));
 
@@ -241,10 +259,17 @@ authRouter.put("/accionistas/:id", requireAuth, requireAdmin, asyncRoute(async (
     name: z.string().min(2).optional(),
     code: z.string().min(2).optional(),
     is_active: z.boolean().optional(),
-    puede_envejecer: z.boolean().optional()
+    puede_envejecer: z.boolean().optional(),
+    modulo_envejecido_habilitado: z.boolean().optional()
   }).parse(req.body);
 
-  if (body.name === undefined && body.code === undefined && body.is_active === undefined && body.puede_envejecer === undefined) {
+  if (
+    body.name === undefined
+    && body.code === undefined
+    && body.is_active === undefined
+    && body.puede_envejecer === undefined
+    && body.modulo_envejecido_habilitado === undefined
+  ) {
     throw new ApiError(400, "Nada que actualizar.");
   }
 
@@ -253,15 +278,17 @@ authRouter.put("/accionistas/:id", requireAuth, requireAdmin, asyncRoute(async (
     if (dup.rowCount) throw new ApiError(409, `Ya existe otro accionista con el código "${body.code}".`);
   }
 
+  const envejecido = body.modulo_envejecido_habilitado ?? body.puede_envejecer ?? null;
   const result = await pool.query(
     `UPDATE accionistas
      SET name = COALESCE($2, name),
          code = COALESCE($3, code),
          is_active = COALESCE($4, is_active),
-         puede_envejecer = COALESCE($5, puede_envejecer)
+         puede_envejecer = COALESCE($5, puede_envejecer),
+         modulo_envejecido_habilitado = COALESCE($5, modulo_envejecido_habilitado)
      WHERE id = $1
-     RETURNING id, name, code, is_active, puede_envejecer`,
-    [req.params.id, body.name ?? null, body.code ?? null, body.is_active ?? null, body.puede_envejecer ?? null]
+     RETURNING id, name, code, is_active, puede_envejecer, modulo_envejecido_habilitado`,
+    [req.params.id, body.name ?? null, body.code ?? null, body.is_active ?? null, envejecido]
   );
   if (!result.rowCount) throw new ApiError(404, "Accionista no encontrado");
   res.json(result.rows[0]);
