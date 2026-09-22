@@ -2350,6 +2350,70 @@ export function App() {
   const [costos, setCostos] = useState<any[]>([]);
   const [costoBatches, setCostoBatches] = useState<any[]>([]);
   const [costoForm, setCostoForm] = useState({ processing_batch_id: "", fecha: nominaToday, qq_producidos: "", luz: "", mantenimiento: "", mano_obra: "", combustible: "", desgaste: "", otros: "" });
+  // Consolidado mensual (aditivo; no toca el registro por corrida).
+  const [costosView, setCostosView] = useState<"diario" | "mensual">("diario");
+  const [consolMes, setConsolMes] = useState<{ year: string; month: string; qq: string; financiero: string }>(
+    { year: String(new Date().getFullYear()), month: String(new Date().getMonth() + 1), qq: "", financiero: "" });
+  const [consolData, setConsolData] = useState<any | null>(null);
+  const [consolBusy, setConsolBusy] = useState(false);
+  const [drillRubro, setDrillRubro] = useState<any | null>(null);
+  async function loadConsolidadoMensual() {
+    setConsolBusy(true);
+    try {
+      const qs = new URLSearchParams({ year: consolMes.year, month: consolMes.month });
+      if (consolMes.qq && Number(consolMes.qq) > 0) qs.set("qq", consolMes.qq);
+      if (consolMes.financiero && Number(consolMes.financiero) > 0) qs.set("financiero", consolMes.financiero);
+      setConsolData(await apiGet<any>(`/costos/consolidado-mensual?${qs.toString()}`));
+    } catch (e) { addToast(e instanceof Error ? e.message : "Error", "error"); } finally { setConsolBusy(false); }
+  }
+  function exportConsolidadoCSV() {
+    const d = consolData; if (!d) return;
+    const esc = (v: any) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const L: string[] = [];
+    L.push(esc(`COSTO OPERATIVO MENSUAL CONSOLIDADO · ${d.periodo} · ${matrizName}`));
+    L.push([esc("QQ producidos"), esc(Number(d.qq_usados).toFixed(2))].join(","));
+    L.push([esc("RUBRO"), esc("MONTO $"), esc("$/QQ"), esc("% del costo")].join(","));
+    for (const r of d.rubros) {
+      const pct = d.total_costo > 0 ? (r.monto / d.total_costo) * 100 : 0;
+      L.push([esc(r.rubro), esc(Number(r.monto).toFixed(2)), esc(Number(r.costo_qq).toFixed(4)), esc(pct.toFixed(1) + "%")].join(","));
+    }
+    L.push([esc("TOTAL COSTO"), esc(Number(d.total_costo).toFixed(2)), esc(Number(d.costo_real_qq).toFixed(4)), esc("100%")].join(","));
+    L.push("");
+    L.push([esc("INGRESO · Servicio Pilada"), esc(Number(d.ingresos.servicio_pilada).toFixed(2))].join(","));
+    L.push([esc("INGRESO · Ventas"), esc(Number(d.ingresos.ventas).toFixed(2))].join(","));
+    L.push([esc("TOTAL INGRESOS"), esc(Number(d.total_ingresos).toFixed(2))].join(","));
+    L.push([esc("(-) Financiero / Préstamos"), esc(Number(d.financiero).toFixed(2))].join(","));
+    L.push([esc("(=) GANANCIA NETA DEL MES"), esc(Number(d.ganancia_neta).toFixed(2))].join(","));
+    const blob = new Blob(["﻿" + L.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = `Costo_Mensual_${d.periodo}.csv`; a.click(); URL.revokeObjectURL(a.href);
+  }
+  function printConsolidado() {
+    const d = consolData; if (!d) return;
+    const filas = d.rubros.map((r: any) => {
+      const pct = d.total_costo > 0 ? (r.monto / d.total_costo) * 100 : 0;
+      return `<tr><td>${(r.rubro || "").replace(/</g, "&lt;")}</td><td class="r">$${Number(r.monto).toFixed(2)}</td><td class="r">$${Number(r.costo_qq).toFixed(4)}</td><td class="r">${pct.toFixed(1)}%</td></tr>`;
+    }).join("");
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Costo Mensual ${d.periodo}</title>
+      <style>body{font-family:Arial;font-size:12px;margin:24px}h1{font-size:17px;text-align:center;margin:0}h2{font-size:12px;text-align:center;font-weight:normal;margin:2px 0 12px}
+      table{width:100%;border-collapse:collapse;margin-bottom:10px}th,td{border:1px solid #bbb;padding:5px 8px}th{background:#1F4E78;color:#fff;font-size:11px}
+      .r{text-align:right}.tot td{font-weight:700;background:#f0f0f0}.net{font-size:16px;font-weight:800;text-align:center;padding:12px;border-radius:8px;margin-top:8px}
+      .favor{background:#dcfce7;color:#15803d}.contra{background:#fee2e2;color:#b91c1c}@media print{body{margin:10mm}}</style></head><body>
+      <h1>COSTO OPERATIVO MENSUAL CONSOLIDADO</h1>
+      <h2>${matrizName} · Período ${d.periodo} · QQ producidos: ${Number(d.qq_usados).toFixed(2)}</h2>
+      <table><thead><tr><th>Rubro</th><th class="r">Monto $</th><th class="r">$/QQ</th><th class="r">% del costo</th></tr></thead>
+      <tbody>${filas}</tbody>
+      <tfoot><tr class="tot"><td>TOTAL COSTO</td><td class="r">$${Number(d.total_costo).toFixed(2)}</td><td class="r">$${Number(d.costo_real_qq).toFixed(4)}</td><td class="r">100%</td></tr></tfoot></table>
+      <table><tbody>
+        <tr><td>Ingreso · Servicio de Pilada</td><td class="r">$${Number(d.ingresos.servicio_pilada).toFixed(2)}</td></tr>
+        <tr><td>Ingreso · Ventas</td><td class="r">$${Number(d.ingresos.ventas).toFixed(2)}</td></tr>
+        <tr class="tot"><td>TOTAL INGRESOS</td><td class="r">$${Number(d.total_ingresos).toFixed(2)}</td></tr>
+        <tr><td>(-) Financiero / Préstamos e Hipotecas</td><td class="r">$${Number(d.financiero).toFixed(2)}</td></tr>
+      </tbody></table>
+      <div class="net ${d.ganancia_neta >= 0 ? "favor" : "contra"}">${d.ganancia_neta >= 0 ? "🟢 GANANCIA NETA DEL MES" : "🔴 PÉRDIDA DEL MES"}: $${Math.abs(Number(d.ganancia_neta)).toFixed(2)}</div>
+      </body></html>`;
+    const w = window.open("", "_blank", "width=820,height=680"); if (w) { w.document.write(html); w.document.close(); w.print(); }
+  }
 
   // ── Selección / envejecido por lotes (persona externa) ─────────────────────
   const [selectionBatches, setSelectionBatches] = useState<SelectionBatch[]>([]);
@@ -11256,6 +11320,13 @@ export function App() {
         {/* ===== CONTABILIDAD · Costos Operativos (movido desde Producción) ===== */}
         {activeTab === "Costos Operativos" && (
           <section className="panelGrid">
+            <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+              <div className="segmented">
+                <button type="button" className={costosView === "diario" ? "active" : ""} onClick={() => setCostosView("diario")}>🏭 Registro por corrida</button>
+                <button type="button" className={costosView === "mensual" ? "active" : ""} onClick={() => { setCostosView("mensual"); if (!consolData) loadConsolidadoMensual(); }}>📅 Consolidado Mensual</button>
+              </div>
+            </div>
+            {costosView === "diario" && (
             <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
               <h2 style={{ marginBottom: 4 }}>🏭 Costo operativo por corrida (Planta / {matrizName})</h2>
               <p className="muted">Registra el costo real de operar una corrida (luz, mantenimiento, mano de obra, combustible, desgaste, otros) para saber el costo por QQ producido.</p>
@@ -11309,6 +11380,104 @@ export function App() {
                 ))}
               </div>
             </div>
+            )}
+
+            {costosView === "mensual" && (
+            <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+              <h2 style={{ marginBottom: 4 }}>📅 Costo Operativo Mensual Consolidado (Planta / {matrizName})</h2>
+              <p className="muted" style={{ marginTop: -2 }}>Consolida los egresos de Caja del mes por rubro (las etiquetas/subcategorías que registras se vuelven filas) + el registro por corrida, ÷ QQ producidos. Toca un rubro para ver su detalle.</p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end", marginBottom: 10 }}>
+                <label style={{ margin: 0 }}><span>Año</span>
+                  <input type="number" min="2000" max="2100" value={consolMes.year} onChange={(e) => setConsolMes({ ...consolMes, year: e.target.value })} style={{ width: 80 }} /></label>
+                <label style={{ margin: 0 }}><span>Mes</span>
+                  <select value={consolMes.month} onChange={(e) => setConsolMes({ ...consolMes, month: e.target.value })}>
+                    {["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"].map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+                  </select></label>
+                <label style={{ margin: 0 }}><span>QQ del mes {consolData && !consolData.qq_manual ? "(auto)" : ""}</span>
+                  <input type="number" step="0.01" min="0" placeholder={consolData ? Number(consolData.qq_producidos).toFixed(2) : "auto"} value={consolMes.qq} onChange={(e) => setConsolMes({ ...consolMes, qq: e.target.value })} style={{ width: 110 }} /></label>
+                <label style={{ margin: 0 }}><span>(-) Financiero/Préstamos</span>
+                  <input type="number" step="0.01" min="0" placeholder="0.00" value={consolMes.financiero} onChange={(e) => setConsolMes({ ...consolMes, financiero: e.target.value })} style={{ width: 120 }} /></label>
+                <button type="button" className="primary" disabled={consolBusy} onClick={loadConsolidadoMensual}>{consolBusy ? "…" : "↻ Generar"}</button>
+                {consolData && <>
+                  <button type="button" onClick={printConsolidado}>🖨️ PDF</button>
+                  <button type="button" onClick={exportConsolidadoCSV}>📥 Excel (CSV)</button>
+                </>}
+              </div>
+              {!consolData ? <p className="muted">Elige mes y pulsa Generar.</p> : (
+                <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16 }}>
+                  {/* Matriz de costos */}
+                  <div style={{ overflowX: "auto" }}>
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>Costos · {consolData.periodo} · {Number(consolData.qq_usados).toFixed(2)} QQ</div>
+                    <table className="cajaTable">
+                      <thead><tr><th>Rubro</th><th style={{ textAlign: "right" }}>Monto</th><th style={{ textAlign: "right" }}>$/QQ</th><th style={{ textAlign: "right" }}>%</th></tr></thead>
+                      <tbody>
+                        {consolData.rubros.length === 0 && <tr><td colSpan={4} className="muted" style={{ textAlign: "center", padding: 12 }}>Sin egresos en el mes.</td></tr>}
+                        {consolData.rubros.map((r: any, i: number) => {
+                          const pct = consolData.total_costo > 0 ? (r.monto / consolData.total_costo) * 100 : 0;
+                          return (
+                            <tr key={i} style={{ cursor: r.origen === "caja" ? "pointer" : "default" }}
+                              onClick={() => r.origen === "caja" && setDrillRubro(r)} title={r.origen === "caja" ? "Ver detalle (facturas/recibos)" : "Registro por corrida"}>
+                              <td>{r.rubro} {r.origen === "caja" && <span className="muted" style={{ fontSize: 10 }}>🔎</span>}{r.origen === "costo" && <span className="muted" style={{ fontSize: 10 }}>· corrida</span>}</td>
+                              <td style={{ textAlign: "right" }}>{money(r.monto)}</td>
+                              <td style={{ textAlign: "right" }}>${Number(r.costo_qq).toFixed(4)}</td>
+                              <td style={{ textAlign: "right" }}>{pct.toFixed(1)}%</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot><tr style={{ fontWeight: 800, borderTop: "2px solid #cbd5e1" }}>
+                        <td>TOTAL COSTO</td><td style={{ textAlign: "right" }}>{money(consolData.total_costo)}</td>
+                        <td style={{ textAlign: "right" }}>${Number(consolData.costo_real_qq).toFixed(4)}</td><td style={{ textAlign: "right" }}>100%</td>
+                      </tr></tfoot>
+                    </table>
+                  </div>
+                  {/* Ingresos y utilidad */}
+                  <div>
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>Ingresos y Utilidad</div>
+                    <table className="cajaTable">
+                      <tbody>
+                        <tr><td>Servicio de Pilada</td><td style={{ textAlign: "right" }}>{money(consolData.ingresos.servicio_pilada)}</td></tr>
+                        <tr><td>Ventas de Arroz</td><td style={{ textAlign: "right" }}>{money(consolData.ingresos.ventas)}</td></tr>
+                        <tr style={{ fontWeight: 700, background: "#f0fdf4" }}><td>TOTAL INGRESOS</td><td style={{ textAlign: "right" }}>{money(consolData.total_ingresos)}</td></tr>
+                        <tr><td>(-) Total Costo Operativo</td><td style={{ textAlign: "right", color: "#b91c1c" }}>-{money(consolData.total_costo)}</td></tr>
+                        <tr><td>(-) Financiero / Préstamos</td><td style={{ textAlign: "right", color: "#b91c1c" }}>-{money(consolData.financiero)}</td></tr>
+                      </tbody>
+                      <tfoot><tr style={{ fontWeight: 800, fontSize: 15, borderTop: "2px solid #cbd5e1",
+                        color: consolData.ganancia_neta >= 0 ? "#15803d" : "#b91c1c" }}>
+                        <td>{consolData.ganancia_neta >= 0 ? "🟢 GANANCIA NETA" : "🔴 PÉRDIDA"}</td>
+                        <td style={{ textAlign: "right" }}>{money(Math.abs(consolData.ganancia_neta))}</td>
+                      </tr></tfoot>
+                    </table>
+                    <p className="muted" style={{ fontSize: 11, marginTop: 8 }}>Los ingresos consolidan lo que el ERP ya registra (servicio de pilada y ventas del mes). Ajusta el rubro "Financiero" a mano si aplica.</p>
+                  </div>
+                </div>
+              )}
+            </div>
+            )}
+
+            {/* Drill-down: detalle de un rubro (facturas/recibos/fechas) */}
+            {drillRubro && (
+              <div onClick={() => setDrillRubro(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 16px", zIndex: 1100, overflowY: "auto" }}>
+                <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--c-surface,#fff)", borderRadius: 12, width: "min(640px,100%)", boxShadow: "0 20px 60px rgba(0,0,0,.3)", overflow: "hidden" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", background: "#111827", color: "#fff" }}>
+                    <strong>🔎 Detalle — {drillRubro.rubro} · {money(drillRubro.monto)}</strong>
+                    <button type="button" onClick={() => setDrillRubro(null)} style={{ background: "transparent", border: "none", color: "#fff", fontSize: 20, cursor: "pointer" }}>✕</button>
+                  </div>
+                  <div style={{ padding: 14, maxHeight: "70vh", overflowY: "auto" }}>
+                    <table className="cajaTable">
+                      <thead><tr><th>Fecha</th><th>Descripción</th><th style={{ textAlign: "right" }}>Monto</th></tr></thead>
+                      <tbody>
+                        {(drillRubro.detalle || []).length === 0 && <tr><td colSpan={3} className="muted" style={{ textAlign: "center", padding: 12 }}>Sin movimientos.</td></tr>}
+                        {(drillRubro.detalle || []).map((m: any, i: number) => (
+                          <tr key={i}><td style={{ whiteSpace: "nowrap" }}>{m.fecha}</td><td>{m.descripcion}</td><td style={{ textAlign: "right" }}>{money(m.monto)}</td></tr>
+                        ))}
+                      </tbody>
+                      <tfoot><tr style={{ fontWeight: 700 }}><td colSpan={2}>Total</td><td style={{ textAlign: "right" }}>{money(drillRubro.monto)}</td></tr></tfoot>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
           </section>
         )}
 
