@@ -5331,7 +5331,7 @@ export function App() {
     const s = String(v).trim();
     let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
     if (m) return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
-    m = /^(\d{1,2})[/\-](\d{1,2})[/\-](\d{2,4})/.exec(s); // DD/MM/YYYY o DD/MM/YY
+    m = /^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/.exec(s); // DD/MM/YYYY o DD/MM/YY
     if (m) { const yy = m[3].length === 2 ? `20${m[3]}` : m[3]; return `${yy}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`; }
     return undefined;
   }

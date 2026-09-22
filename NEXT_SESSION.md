@@ -39,7 +39,7 @@ cd ..\web-admin
 npm run build
 ```
 
-`npm run lint` del frontend conserva 2 errores historicos `no-useless-escape` en `App.tsx` alrededor de la linea 5308 y numerosos warnings anteriores. El ultimo cambio no agrego errores de compilacion.
+`npm run lint` del frontend ya no tiene errores; conserva numerosos warnings historicos (`any`, variables/componentes no usados). El ultimo cambio no agrego errores de compilacion.
 
 Salud del servidor:
 
@@ -149,6 +149,14 @@ Implementado el 2026-09-21:
 - Esto evita crear nuevos negativos visuales en `inventory_stock` cuando el stock existe en lotes específicos.
 - Los negativos antiguos detectados en `ARROZ-PILADO-011` (`BASCULA ERP` y `STALYN`, `lot_id = NULL`) no fueron modificados; requieren limpieza/ajuste controlado si se desea.
 - Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build, `preflight` sin errores críticos y `/health`.
+
+### Limpieza de lint frontend
+
+Implementado el 2026-09-21:
+
+- Corregidos los 2 errores `no-useless-escape` en `web-admin/src/App.tsx`.
+- `npm run lint` pasa con 0 errores y 157 warnings historicos.
+- `web-admin npm run build` pasa correctamente.
 
 ### Cambios inmediatamente anteriores
 
