@@ -157,6 +157,7 @@ Implementado el 2026-09-21:
 
 - `backend/src/scripts/preflight.ts` ahora revisa también la base de datos real, sin modificar información.
 - Valida conexión PostgreSQL, existencia única de configuración maestra, existencia única de tarifario maestro, duplicados de actividades de Cuadrilla por socio, saldos negativos en `inventory_stock` y clasificación principal de marcas como `PACKAGED_GOOD`.
+- También valida duplicados lógicos de tickets móviles de Báscula por negocio/modo/número y que ningún ingreso ERP quede enlazado a más de un ticket móvil.
 - Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build y `preflight` sin errores críticos.
 
 ### Limpieza de lint frontend

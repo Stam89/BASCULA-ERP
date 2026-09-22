@@ -162,6 +162,47 @@ async function runDatabaseChecks(): Promise<void> {
         ? "Marcas principales clasificadas como PACKAGED_GOOD"
         : `${missingPackagedType} marca(s) principales no estan como PACKAGED_GOOD`
     );
+
+    const duplicatedMobileTickets = await scalarNumber(`
+      SELECT COUNT(*)::int AS value
+      FROM (
+        SELECT
+          COALESCE(NULLIF(raw_payload->>'firebaseNegocioId', ''), device_id, 'sin-negocio') AS scope_key,
+          lower(COALESCE(NULLIF(raw_payload->>'modo', ''), 'principal')) AS mode_key,
+          NULLIF(regexp_replace(COALESCE(raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '')::bigint AS ticket_key
+        FROM mobile_synced_tickets
+        WHERE NULLIF(regexp_replace(COALESCE(raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '') IS NOT NULL
+        GROUP BY scope_key, mode_key, ticket_key
+        HAVING COUNT(*) > 1
+      ) duplicated
+    `);
+    addCheck(
+      "Tickets Bascula duplicados",
+      duplicatedMobileTickets === 0,
+      "error",
+      duplicatedMobileTickets === 0
+        ? "Sin duplicados logicos por negocio/modo/numero"
+        : `Hay ${duplicatedMobileTickets} grupo(s) de tickets moviles duplicados`
+    );
+
+    const duplicatedTicketLinks = await scalarNumber(`
+      SELECT COUNT(*)::int AS value
+      FROM (
+        SELECT weighing_ticket_id
+        FROM mobile_synced_tickets
+        WHERE weighing_ticket_id IS NOT NULL
+        GROUP BY weighing_ticket_id
+        HAVING COUNT(*) > 1
+      ) duplicated
+    `);
+    addCheck(
+      "Ingreso Bascula vinculado",
+      duplicatedTicketLinks === 0,
+      "error",
+      duplicatedTicketLinks === 0
+        ? "Cada ticket movil apunta a un unico ingreso ERP"
+        : `Hay ${duplicatedTicketLinks} ingreso(s) ERP enlazados a mas de un ticket movil`
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     addCheck("Chequeos de datos", false, "error", `No se pudieron ejecutar: ${message}`);
