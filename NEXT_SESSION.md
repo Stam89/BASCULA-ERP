@@ -160,6 +160,16 @@ Implementado el 2026-09-21:
 - También valida duplicados lógicos de tickets móviles de Báscula por negocio/modo/número y que ningún ingreso ERP quede enlazado a más de un ticket móvil.
 - Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build y `preflight` sin errores críticos.
 
+### Blindaje de tickets Báscula
+
+Implementado el 2026-09-21:
+
+- Nueva migración `20261027_blindar_tickets_bascula_unicos.sql`.
+- Agrega índice único parcial para impedir duplicados lógicos en `mobile_synced_tickets` por negocio Firebase/dispositivo, modo y número de ticket normalizado.
+- Agrega índice único parcial para impedir que dos tickets móviles apunten al mismo `weighing_ticket_id`.
+- `preflight` usa la misma normalización de número que el índice.
+- Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build y `preflight` sin errores críticos.
+
 ### Limpieza de lint frontend
 
 Implementado el 2026-09-21:

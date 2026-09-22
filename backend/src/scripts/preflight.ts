@@ -169,7 +169,7 @@ async function runDatabaseChecks(): Promise<void> {
         SELECT
           COALESCE(NULLIF(raw_payload->>'firebaseNegocioId', ''), device_id, 'sin-negocio') AS scope_key,
           lower(COALESCE(NULLIF(raw_payload->>'modo', ''), 'principal')) AS mode_key,
-          NULLIF(regexp_replace(COALESCE(raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '')::bigint AS ticket_key
+          COALESCE(NULLIF(ltrim(regexp_replace(COALESCE(raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '0'), ''), '0') AS ticket_key
         FROM mobile_synced_tickets
         WHERE NULLIF(regexp_replace(COALESCE(raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '') IS NOT NULL
         GROUP BY scope_key, mode_key, ticket_key
