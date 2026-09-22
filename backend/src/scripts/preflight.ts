@@ -105,6 +105,12 @@ async function countPendingMigrations(): Promise<number> {
     .readdirSync(migrationsDir)
     .filter((file) => file.endsWith(".sql"))
     .sort();
+  const migrationsTable = await pool.query<{ exists: boolean }>(
+    "SELECT to_regclass('public.schema_migrations') IS NOT NULL AS exists"
+  );
+  if (!migrationsTable.rows[0]?.exists) {
+    return files.length;
+  }
   const applied = await pool.query<{ filename: string }>(
     "SELECT filename FROM schema_migrations"
   );
