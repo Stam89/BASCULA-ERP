@@ -42,6 +42,7 @@ ABRIR_BASCULA_ERP.bat
 ```
 
 Ese archivo revisa PostgreSQL, inicia backend y panel web si no estan activos, espera a que respondan y abre el navegador.
+Antes de abrir el sistema ejecuta una verificacion interna; si encuentra errores criticos, no inicia la app y deja el detalle en `logs/preflight.log`.
 
 ## Verificar antes de trabajar
 

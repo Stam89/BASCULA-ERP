@@ -63,6 +63,17 @@ function Test-PostgresConnection {
   }
 }
 
+function Invoke-ErpPreflight {
+  Push-Location $backendDir
+  try {
+    $env:DATABASE_URL = $databaseUrl
+    & $npmCmd run preflight *> (Join-Path $logs "preflight.log")
+    return $LASTEXITCODE -eq 0
+  } finally {
+    Pop-Location
+  }
+}
+
 function Try-StartPostgresService {
   $services = @(Get-Service -ErrorAction SilentlyContinue | Where-Object {
     $_.Name -like "postgres*" -or $_.DisplayName -like "PostgreSQL*"
@@ -115,6 +126,15 @@ if (!(Test-PostgresConnection)) {
   exit 1
 }
 Write-Host "Base de datos conectada." -ForegroundColor Green
+
+Write-Step "Verificando ERP"
+if (!(Invoke-ErpPreflight)) {
+  Write-Host "La verificacion previa encontro errores criticos." -ForegroundColor Red
+  Write-Host "No se abrira el sistema hasta corregirlos." -ForegroundColor Red
+  Write-Host "Revisa el detalle en: $logs\preflight.log" -ForegroundColor Yellow
+  exit 1
+}
+Write-Host "Verificacion ERP OK." -ForegroundColor Green
 
 Write-Step "Iniciando backend"
 if (Test-BackendOk) {

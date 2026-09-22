@@ -164,6 +164,7 @@ Implementado el 2026-09-21:
 - Si hay migraciones pendientes, muestra los primeros nombres y detiene los chequeos profundos para evitar errores secundarios por tablas/índices aún no creados.
 - Nuevo acceso `VERIFICAR-ERP.bat` en la raíz del repo para ejecutar `npm run preflight` con doble clic, sin modificar datos.
 - `VERIFICAR-ERP.bat` conserva el código de salida de `preflight`: si hay errores críticos muestra `ATENCION: NO OPERAR TODAVIA`.
+- `iniciar-sistema.ps1` ejecuta `preflight` después de conectar PostgreSQL y antes de levantar backend/panel; si falla, no abre la app y guarda el detalle en `logs/preflight.log`.
 - Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build y `preflight` sin errores críticos.
 
 ### Blindaje de tickets Báscula
