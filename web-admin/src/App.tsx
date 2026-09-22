@@ -15,6 +15,40 @@ const CampoWorkspace = React.lazy(async () => {
 const ReportReadOnlyViews = React.lazy(() => import("./reports/ReportReadOnlyViews"));
 const FinancialOverview = React.lazy(() => import("./finance/FinancialOverview"));
 
+/** Rubros de gasto operativo sugeridos para el datalist de Subcategoría en Caja.
+ *  Estandarizan las etiquetas que luego se vuelven filas del Consolidado Mensual
+ *  de Costos. Son solo sugerencias: el campo sigue siendo texto libre y se fusionan
+ *  con lo que el usuario haya escrito antes (memoria de /cash/subcategorias). */
+const SUBCATEGORIAS_GASTO_SUGERIDAS: string[] = [
+  "Gas",
+  "Diésel",
+  "Gasolina",
+  "Combustible Montacarga",
+  "Cuadrilla",
+  "Cuadrilla Guayaquil",
+  "Bajada de camión",
+  "Pilador",
+  "Estibador",
+  "Saquillo Pilado",
+  "Saquillo Arrocillo",
+  "Saquillo Polvillo",
+  "Mantenimiento Piladora",
+  "Mantenimiento Selector",
+  "Mantenimiento Vehículo",
+  "Repuestos",
+  "Sueldos",
+  "Guardianía",
+  "Cocinera",
+  "Alimentación",
+  "Servicios Básicos",
+  "Vehículo Gerencia",
+  "Gastos Administrativos",
+  "Gastos Financieros",
+  "Fletes",
+  "Insumos de Limpieza",
+  "Obra Civil",
+];
+
 /** Etiqueta corta de un ingreso: el número de la báscula si se conoce. */
 function entryLabel(entry: { numero_bascula?: string | null; ticket_number: string }): string {
   return entry.numero_bascula ? `Ticket #${entry.numero_bascula}` : entry.ticket_number;
@@ -14684,7 +14718,22 @@ export function App() {
                         placeholder="Ej: Alimentación, Filtros, Fletes, Herramientas"
                         style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} />
                       <datalist id="subcatGastosList">
-                        {subcategoriasGastos.map((s) => <option key={s} value={s} />)}
+                        {(() => {
+                          // Sugerencias estándar + lo escrito antes (memoria), sin duplicar
+                          // (comparación insensible a mayúsculas/acentos por su forma base).
+                          const norm = (x: string) => x.trim().toLowerCase();
+                          const vistos = new Set<string>();
+                          const lista: string[] = [];
+                          for (const s of [...SUBCATEGORIAS_GASTO_SUGERIDAS, ...subcategoriasGastos]) {
+                            const t = s.trim();
+                            if (!t) continue;
+                            const k = norm(t);
+                            if (vistos.has(k)) continue;
+                            vistos.add(k);
+                            lista.push(t);
+                          }
+                          return lista.map((s) => <option key={s} value={s} />);
+                        })()}
                       </datalist>
                     </label>
 
