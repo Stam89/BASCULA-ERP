@@ -11,10 +11,17 @@ echo.
 
 cd /d "%~dp0backend"
 call npm run preflight
+set CHECK_EXIT=%ERRORLEVEL%
 
 echo.
 echo ============================================
-echo   Verificacion terminada.
+if "%CHECK_EXIT%"=="0" (
+  echo   Verificacion OK. Puedes trabajar.
+) else (
+  echo   ATENCION: NO OPERAR TODAVIA.
+  echo   Corrige los errores mostrados arriba.
+)
 echo ============================================
 echo.
 pause
+exit /b %CHECK_EXIT%
