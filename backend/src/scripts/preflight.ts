@@ -1,5 +1,7 @@
 import "dotenv/config";
 import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import { pool } from "../db/pool.js";
 
 type Check = {
@@ -24,6 +26,8 @@ function appMode(): "production" | "test" {
 }
 
 const firebaseKey = env("FIREBASE_KEY") || "backend/firebase-service-account.json";
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const migrationsDir = path.resolve(__dirname, "../../../database/migrations");
 const checks: Check[] = [
   {
     name: "DATABASE_URL",
@@ -96,6 +100,18 @@ async function countExistingIndexes(names: string[]): Promise<number> {
   return Number(result.rows[0]?.value ?? 0);
 }
 
+async function countPendingMigrations(): Promise<number> {
+  const files = fs
+    .readdirSync(migrationsDir)
+    .filter((file) => file.endsWith(".sql"))
+    .sort();
+  const applied = await pool.query<{ filename: string }>(
+    "SELECT filename FROM schema_migrations"
+  );
+  const appliedSet = new Set(applied.rows.map((row) => row.filename));
+  return files.filter((file) => !appliedSet.has(file)).length;
+}
+
 async function runDatabaseChecks(): Promise<void> {
   if (!hasValue("DATABASE_URL")) {
     addCheck("Base de datos", false, "warn", "Sin DATABASE_URL; se omiten chequeos de datos");
@@ -105,6 +121,16 @@ async function runDatabaseChecks(): Promise<void> {
   try {
     await pool.query("SELECT 1");
     addCheck("Conexion PostgreSQL", true, "ok", "Base accesible");
+
+    const pendingMigrations = await countPendingMigrations();
+    addCheck(
+      "Migraciones",
+      pendingMigrations === 0,
+      "error",
+      pendingMigrations === 0
+        ? "Base de datos al dia"
+        : `Hay ${pendingMigrations} migracion(es) pendiente(s); ejecuta npm run db:migrate`
+    );
 
     const criticalIndexes = [
       "uq_app_settings_master",

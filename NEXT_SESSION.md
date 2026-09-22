@@ -159,6 +159,7 @@ Implementado el 2026-09-21:
 - Valida conexión PostgreSQL, existencia única de configuración maestra, existencia única de tarifario maestro, duplicados de actividades de Cuadrilla por socio, saldos negativos en `inventory_stock` y clasificación principal de marcas como `PACKAGED_GOOD`.
 - También valida duplicados lógicos de tickets móviles de Báscula por negocio/modo/número y que ningún ingreso ERP quede enlazado a más de un ticket móvil.
 - Valida que existan los índices críticos de blindaje para configuración multi-tenant, Cuadrilla por socio y tickets de Báscula; si faltan, indica ejecutar `npm run db:migrate`.
+- Valida que no existan migraciones pendientes comparando `database/migrations/*.sql` contra `schema_migrations`.
 - Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build y `preflight` sin errores críticos.
 
 ### Blindaje de tickets Báscula
