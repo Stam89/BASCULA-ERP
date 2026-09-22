@@ -109,7 +109,7 @@ costosRouter.get("/consolidado-mensual", asyncRoute(async (req, res) => {
          WHERE b.accionista_id = $1 AND b.created_at >= $2 AND b.created_at < $3) AS servicio_pilada,
        (SELECT COALESCE(SUM(s.total_amount),0)::float FROM sales s
          WHERE s.accionista_id = $1 AND s.created_at >= $2 AND s.created_at < $3
-           AND COALESCE(s.sale_status,'') <> 'CANCELLED') AS ventas`,
+           AND COALESCE(s.sale_status::text,'') <> 'CANCELLED') AS ventas`,
     [accionistaId, ini, finExcl]
   )).rows[0];
   const ingresos = {
