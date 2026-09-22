@@ -147,7 +147,8 @@ Implementado el 2026-09-21:
 - Nuevo helper `backend/src/services/inventory-consume.ts`.
 - Ventas directas, preparación de pedidos y envíos a Selección/Envejecimiento consumen inventario por lotes con saldo positivo antes de usar `lot_id = NULL`.
 - Esto evita crear nuevos negativos visuales en `inventory_stock` cuando el stock existe en lotes específicos.
-- Los negativos antiguos detectados en `ARROZ-PILADO-011` (`BASCULA ERP` y `STALYN`, `lot_id = NULL`) no fueron modificados; requieren limpieza/ajuste controlado si se desea.
+- Los negativos antiguos detectados en `ARROZ-PILADO-011` (`BASCULA ERP` y `STALYN`, `lot_id = NULL`) fueron limpiados con la migración `20260921_rebalance_inventory_null_lots.sql`.
+- La reparación histórica insertó 4 movimientos con `reference_type='repair_lot_negative_20260921'`, neto total `0`, dejando `inventory_stock` sin saldos negativos.
 - Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build, `preflight` sin errores críticos y `/health`.
 
 ### Limpieza de lint frontend
