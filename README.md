@@ -43,6 +43,16 @@ ABRIR_BASCULA_ERP.bat
 
 Ese archivo revisa PostgreSQL, inicia backend y panel web si no estan activos, espera a que respondan y abre el navegador.
 
+## Verificar antes de trabajar
+
+Para revisar que la base, migraciones, indices criticos, inventario y tickets esten correctos, usa doble clic:
+
+```text
+VERIFICAR-ERP.bat
+```
+
+Este chequeo no modifica datos; solo muestra errores o avisos antes de operar.
+
 ## Iniciar sistema manualmente
 
 Desde PowerShell:

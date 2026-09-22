@@ -162,6 +162,7 @@ Implementado el 2026-09-21:
 - Valida que no existan migraciones pendientes comparando `database/migrations/*.sql` contra `schema_migrations`.
 - Si `schema_migrations` no existe todavía, `preflight` lo reporta como migraciones pendientes en vez de fallar con un error técnico.
 - Si hay migraciones pendientes, muestra los primeros nombres y detiene los chequeos profundos para evitar errores secundarios por tablas/índices aún no creados.
+- Nuevo acceso `VERIFICAR-ERP.bat` en la raíz del repo para ejecutar `npm run preflight` con doble clic, sin modificar datos.
 - Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build y `preflight` sin errores críticos.
 
 ### Blindaje de tickets Báscula
