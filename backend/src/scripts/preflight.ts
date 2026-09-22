@@ -88,6 +88,14 @@ async function scalarNumber(sql: string): Promise<number> {
   return Number(result.rows[0]?.value ?? 0);
 }
 
+async function countExistingIndexes(names: string[]): Promise<number> {
+  const result = await pool.query(
+    "SELECT COUNT(*)::int AS value FROM pg_class WHERE relkind = 'i' AND relname = ANY($1::text[])",
+    [names]
+  );
+  return Number(result.rows[0]?.value ?? 0);
+}
+
 async function runDatabaseChecks(): Promise<void> {
   if (!hasValue("DATABASE_URL")) {
     addCheck("Base de datos", false, "warn", "Sin DATABASE_URL; se omiten chequeos de datos");
@@ -97,6 +105,26 @@ async function runDatabaseChecks(): Promise<void> {
   try {
     await pool.query("SELECT 1");
     addCheck("Conexion PostgreSQL", true, "ok", "Base accesible");
+
+    const criticalIndexes = [
+      "uq_app_settings_master",
+      "uq_app_settings_socio",
+      "uq_labor_rates_master",
+      "uq_labor_rates_socio",
+      "uq_cuadrilla_activities_master_name",
+      "uq_cuadrilla_activities_socio_name",
+      "uq_mobile_synced_tickets_identity_v2",
+      "uq_mobile_synced_tickets_weighing_ticket_id"
+    ];
+    const existingCriticalIndexes = await countExistingIndexes(criticalIndexes);
+    addCheck(
+      "Indices criticos",
+      existingCriticalIndexes === criticalIndexes.length,
+      "error",
+      existingCriticalIndexes === criticalIndexes.length
+        ? "Blindajes de configuracion, cuadrilla y tickets instalados"
+        : `Faltan ${criticalIndexes.length - existingCriticalIndexes} indice(s) critico(s); ejecuta npm run db:migrate`
+    );
 
     const appSettingsMasters = await scalarNumber("SELECT COUNT(*)::int AS value FROM app_settings WHERE socio_id IS NULL");
     addCheck(
