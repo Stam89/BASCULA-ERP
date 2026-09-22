@@ -3357,3 +3357,214 @@ body {
 .svcForm .svcGrid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
 .svcForm .svcValor input { font-weight: 700; }
 @media (max-width: 560px) { .svcForm .svcGrid2, .svcForm .svcGrid3 { grid-template-columns: 1fr; } }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   PULIDO OPERATIVO — minimalista, escaneable e intuitivo
+   Solo CSS: no cambia calculos, datos ni flujo de negocio.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+.content {
+  gap: 18px;
+}
+
+.topbar {
+  padding-block: 12px;
+}
+
+.topbarLeft {
+  min-width: 260px;
+}
+
+.topbarLeft p {
+  max-width: 860px;
+}
+
+.topbarRight {
+  justify-content: flex-end;
+}
+
+.formPanel,
+.tablePanel,
+.tracePanel,
+.workPanel,
+.setupPanel {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.99)),
+    var(--c-surface);
+}
+
+.formPanel > h2,
+.tablePanel > h2,
+.tracePanel > h2,
+.workPanel > h2,
+.setupPanel > h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid rgba(216, 228, 223, 0.72);
+  color: var(--c-text);
+  font-size: 13.5px;
+}
+
+.formPanel > h2::before,
+.tablePanel > h2::before,
+.tracePanel > h2::before,
+.workPanel > h2::before,
+.setupPanel > h2::before {
+  content: "";
+  width: 7px;
+  height: 18px;
+  border-radius: 99px;
+  background: linear-gradient(180deg, var(--c-brand-light), var(--c-brand));
+  box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.08);
+  flex-shrink: 0;
+}
+
+details.formPanel,
+details.tablePanel {
+  display: block;
+}
+
+details.formPanel > summary,
+details.tablePanel > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+  cursor: pointer;
+  min-height: 34px;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid rgba(216, 228, 223, 0.72);
+  color: var(--c-text);
+  font-size: 13.5px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+details.formPanel > summary::-webkit-details-marker,
+details.tablePanel > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.formPanel > summary::before,
+details.tablePanel > summary::before {
+  content: "›";
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(13, 148, 136, 0.09);
+  color: var(--c-brand-dark);
+  font-size: 16px;
+  line-height: 1;
+  transition: transform var(--t), background var(--t);
+}
+
+details[open].formPanel > summary::before,
+details[open].tablePanel > summary::before {
+  transform: rotate(90deg);
+  background: rgba(13, 148, 136, 0.16);
+}
+
+.buttonRow {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.buttonRow > button,
+.btnSecondary,
+.btnOutline,
+.btnGhost,
+.primary {
+  min-width: 104px;
+  white-space: nowrap;
+}
+
+.buttonRow > button:not(.primary):hover,
+.btnSecondary:hover:not(:disabled),
+.btnOutline:hover:not(:disabled),
+.btnGhost:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled,
+input[readonly],
+textarea[readonly] {
+  background:
+    repeating-linear-gradient(135deg, rgba(148, 163, 184, 0.06) 0 8px, transparent 8px 16px),
+    var(--c-surface-2);
+  color: var(--c-text-muted);
+  border-color: var(--c-border);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: color-mix(in srgb, var(--c-text-muted) 72%, transparent);
+}
+
+.tableHead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: color-mix(in srgb, var(--c-surface-2) 82%, #fff);
+  border-radius: var(--r-sm);
+}
+
+.tableRow:nth-child(even) {
+  background: rgba(246, 250, 248, 0.7);
+}
+
+.tableRow:hover {
+  box-shadow: inset 3px 0 0 var(--c-brand);
+}
+
+.cajaTable tbody tr:nth-child(even) {
+  background: rgba(246, 250, 248, 0.7);
+}
+
+.cajaTable tbody tr:hover {
+  box-shadow: inset 3px 0 0 var(--c-brand);
+}
+
+.emptyState,
+.tableEmpty {
+  color: var(--c-text-muted);
+}
+
+.emptyState {
+  min-height: 76px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  .topbarLeft {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .topbarRight {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .formPanel,
+  .tablePanel {
+    padding: 14px;
+  }
+
+  .buttonRow > button,
+  .btnSecondary,
+  .btnOutline,
+  .btnGhost,
+  .primary {
+    min-width: 0;
+  }
+}

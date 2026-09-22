@@ -185,6 +185,18 @@ Implementado el 2026-09-21:
 - `npm run lint` pasa con 0 errores y 157 warnings historicos.
 - `web-admin npm run build` pasa correctamente.
 
+### Pulido visual operativo
+
+Implementado el 2026-09-21:
+
+- Cambio CSS-only en `web-admin/src/styles.css`; no modifica logica, endpoints ni datos.
+- Se mejoro la lectura de paneles, formularios, tablas, acordeones y botones.
+- Los encabezados de panel tienen acento visual discreto y separacion mas clara.
+- Las filas de tablas tienen zebra sutil y hover para facilitar revision operativa.
+- Los controles deshabilitados/solo lectura quedan visualmente diferenciados.
+- En pantallas pequenas se ajustan topbar, paneles y botones para mantener la interfaz limpia.
+- Verificaciones pasadas: frontend build, backend build, backend tests 33/33, `db:migrate`, `preflight` sin errores criticos y revision visual local en `http://localhost:4000/`.
+
 ### Cambios inmediatamente anteriores
 
 - `1b85b26`: catalogo de productos editable en Inventario.
