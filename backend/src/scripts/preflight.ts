@@ -100,7 +100,7 @@ async function countExistingIndexes(names: string[]): Promise<number> {
   return Number(result.rows[0]?.value ?? 0);
 }
 
-async function countPendingMigrations(): Promise<number> {
+async function pendingMigrations(): Promise<string[]> {
   const files = fs
     .readdirSync(migrationsDir)
     .filter((file) => file.endsWith(".sql"))
@@ -109,13 +109,13 @@ async function countPendingMigrations(): Promise<number> {
     "SELECT to_regclass('public.schema_migrations') IS NOT NULL AS exists"
   );
   if (!migrationsTable.rows[0]?.exists) {
-    return files.length;
+    return files;
   }
   const applied = await pool.query<{ filename: string }>(
     "SELECT filename FROM schema_migrations"
   );
   const appliedSet = new Set(applied.rows.map((row) => row.filename));
-  return files.filter((file) => !appliedSet.has(file)).length;
+  return files.filter((file) => !appliedSet.has(file));
 }
 
 async function runDatabaseChecks(): Promise<void> {
@@ -128,15 +128,19 @@ async function runDatabaseChecks(): Promise<void> {
     await pool.query("SELECT 1");
     addCheck("Conexion PostgreSQL", true, "ok", "Base accesible");
 
-    const pendingMigrations = await countPendingMigrations();
+    const pending = await pendingMigrations();
+    const pendingPreview = pending.slice(0, 3).join(", ");
     addCheck(
       "Migraciones",
-      pendingMigrations === 0,
+      pending.length === 0,
       "error",
-      pendingMigrations === 0
+      pending.length === 0
         ? "Base de datos al dia"
-        : `Hay ${pendingMigrations} migracion(es) pendiente(s); ejecuta npm run db:migrate`
+        : `Hay ${pending.length} migracion(es) pendiente(s); ejecuta npm run db:migrate${pendingPreview ? ` (${pendingPreview}${pending.length > 3 ? ", ..." : ""})` : ""}`
     );
+    if (pending.length > 0) {
+      return;
+    }
 
     const criticalIndexes = [
       "uq_app_settings_master",

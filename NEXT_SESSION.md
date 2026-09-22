@@ -161,6 +161,7 @@ Implementado el 2026-09-21:
 - Valida que existan los índices críticos de blindaje para configuración multi-tenant, Cuadrilla por socio y tickets de Báscula; si faltan, indica ejecutar `npm run db:migrate`.
 - Valida que no existan migraciones pendientes comparando `database/migrations/*.sql` contra `schema_migrations`.
 - Si `schema_migrations` no existe todavía, `preflight` lo reporta como migraciones pendientes en vez de fallar con un error técnico.
+- Si hay migraciones pendientes, muestra los primeros nombres y detiene los chequeos profundos para evitar errores secundarios por tablas/índices aún no creados.
 - Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build y `preflight` sin errores críticos.
 
 ### Blindaje de tickets Báscula
