@@ -1,5 +1,6 @@
 import "dotenv/config";
 import fs from "fs";
+import { pool } from "../db/pool.js";
 
 type Check = {
   name: string;
@@ -77,6 +78,99 @@ const checks: Check[] = [
       : "Sin NEGOCIO_ID; omitir si esta instalacion no usara nube movil"
   }
 ];
+
+function addCheck(name: string, ok: boolean, level: "error" | "warn" | "ok", detail: string): void {
+  checks.push({ name, ok, level: ok ? "ok" : level, detail });
+}
+
+async function scalarNumber(sql: string): Promise<number> {
+  const result = await pool.query(sql);
+  return Number(result.rows[0]?.value ?? 0);
+}
+
+async function runDatabaseChecks(): Promise<void> {
+  if (!hasValue("DATABASE_URL")) {
+    addCheck("Base de datos", false, "warn", "Sin DATABASE_URL; se omiten chequeos de datos");
+    return;
+  }
+
+  try {
+    await pool.query("SELECT 1");
+    addCheck("Conexion PostgreSQL", true, "ok", "Base accesible");
+
+    const appSettingsMasters = await scalarNumber("SELECT COUNT(*)::int AS value FROM app_settings WHERE socio_id IS NULL");
+    addCheck(
+      "Config maestro",
+      appSettingsMasters === 1,
+      "error",
+      appSettingsMasters === 1
+        ? "Existe un unico registro maestro"
+        : `Se esperaban 1 registro maestro en app_settings y hay ${appSettingsMasters}`
+    );
+
+    const laborRateMasters = await scalarNumber("SELECT COUNT(*)::int AS value FROM labor_rates WHERE socio_id IS NULL");
+    addCheck(
+      "Tarifas maestro",
+      laborRateMasters === 1,
+      "error",
+      laborRateMasters === 1
+        ? "Existe un unico tarifario maestro"
+        : `Se esperaban 1 registro maestro en labor_rates y hay ${laborRateMasters}`
+    );
+
+    const duplicatedCuadrillaOverrides = await scalarNumber(`
+      SELECT COUNT(*)::int AS value
+      FROM (
+        SELECT socio_id, upper(btrim(name)) AS name_key
+        FROM cuadrilla_activities
+        WHERE socio_id IS NOT NULL
+        GROUP BY socio_id, upper(btrim(name))
+        HAVING COUNT(*) > 1
+      ) duplicated
+    `);
+    addCheck(
+      "Cuadrilla por socio",
+      duplicatedCuadrillaOverrides === 0,
+      "error",
+      duplicatedCuadrillaOverrides === 0
+        ? "Sin actividades duplicadas por socio"
+        : `Hay ${duplicatedCuadrillaOverrides} actividad(es) duplicadas por socio`
+    );
+
+    const negativeStock = await scalarNumber("SELECT COUNT(*)::int AS value FROM inventory_stock WHERE quantity < -0.001");
+    addCheck(
+      "Inventario negativo",
+      negativeStock === 0,
+      "error",
+      negativeStock === 0
+        ? "Sin saldos negativos"
+        : `Hay ${negativeStock} saldo(s) negativos en inventory_stock`
+    );
+
+    const missingPackagedType = await scalarNumber(`
+      SELECT COUNT(*)::int AS value
+      FROM products
+      WHERE is_active = true
+        AND product_type <> 'PACKAGED_GOOD'
+        AND upper(name) IN ('CONEJO', 'FLOR', 'LIRA AZUL', 'LIRA VERDE', 'OSO', '0.11 SELECTADO')
+    `);
+    addCheck(
+      "Marcas empacadas",
+      missingPackagedType === 0,
+      "warn",
+      missingPackagedType === 0
+        ? "Marcas principales clasificadas como PACKAGED_GOOD"
+        : `${missingPackagedType} marca(s) principales no estan como PACKAGED_GOOD`
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    addCheck("Chequeos de datos", false, "error", `No se pudieron ejecutar: ${message}`);
+  } finally {
+    await pool.end().catch(() => undefined);
+  }
+}
+
+await runDatabaseChecks();
 
 console.log("Chequeo previo BASCULA ERP");
 for (const check of checks) {

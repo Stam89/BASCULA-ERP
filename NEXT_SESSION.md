@@ -151,6 +151,14 @@ Implementado el 2026-09-21:
 - La reparación histórica insertó 4 movimientos con `reference_type='repair_lot_negative_20260921'`, neto total `0`, dejando `inventory_stock` sin saldos negativos.
 - Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build, `preflight` sin errores críticos y `/health`.
 
+### Preflight con diagnóstico de datos
+
+Implementado el 2026-09-21:
+
+- `backend/src/scripts/preflight.ts` ahora revisa también la base de datos real, sin modificar información.
+- Valida conexión PostgreSQL, existencia única de configuración maestra, existencia única de tarifario maestro, duplicados de actividades de Cuadrilla por socio, saldos negativos en `inventory_stock` y clasificación principal de marcas como `PACKAGED_GOOD`.
+- Verificaciones pasadas: backend build, backend tests 33/33, `db:migrate`, frontend build y `preflight` sin errores críticos.
+
 ### Limpieza de lint frontend
 
 Implementado el 2026-09-21:
