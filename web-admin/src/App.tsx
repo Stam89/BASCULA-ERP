@@ -10449,8 +10449,9 @@ export function App() {
     const SUF = "::campo";
     const opciones: Array<{ value: string; label: string }> = [];
     for (const a of accionistas) {
-      opciones.push({ value: a.id, label: `${a.name}${a.tipo === "MATRIZ" ? " · Planta / Matriz" : " · Socio Operativo"}` });
-      if (a.tipo === "MATRIZ") opciones.push({ value: a.id + SUF, label: `${a.name} · ${campoNombre}` });
+      // Cada unidad muestra ÚNICAMENTE su nombre (sin concatenar matriz ni rol).
+      opciones.push({ value: a.id, label: a.name });
+      if (a.tipo === "MATRIZ") opciones.push({ value: a.id + SUF, label: campoNombre });
     }
     if (opciones.length <= 1) return null;
     const inCampo = esMatrizActiva && activeTab === "Caja de Campo";
