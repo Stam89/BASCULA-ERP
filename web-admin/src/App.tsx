@@ -19232,37 +19232,103 @@ export function App() {
                                 <button type="button" className="btnGhost userSelectionAction" style={{ color: "#b91c1c" }} onClick={() => { toggleAcc(expanded); setNewUserAccExpanded(null); }}>Quitar acceso</button>
                               </div>
                             </div>
-                            <div className="permGrid">
-                              {APP_MODULES.map((m) => {
-                                const on = modsOf(expanded).includes(m);
-                                const subs = SUB_TABS[m] ?? [];
-                                return (
-                                  <div key={m} style={subs.length ? { gridColumn: "1 / -1" } : undefined}>
-                                    <label className={on ? "permChip on" : "permChip"}>
-                                      <input type="checkbox" checked={on} onChange={() => toggleModulo(expanded, m)} />
-                                      {m}
-                                    </label>
-                                    {/* Sub-pestañas SIEMPRE visibles si el módulo las tiene:
-                                        marcar una activa el módulo en cascada. Sin ninguna
-                                        marcada, el operador verá todas las de ese módulo. */}
-                                    {subs.length > 0 && (
-                                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "6px 0 4px 22px", opacity: on ? 1 : 0.85 }}>
-                                        {subs.map((st) => {
-                                          const sk = subTabKey(m, st.key);
-                                          const son = modsOf(expanded).includes(sk);
-                                          return (
-                                            <label key={sk} className={son ? "permChip on" : "permChip"} style={{ fontSize: 12 }}>
-                                              <input type="checkbox" checked={son} onChange={() => toggleSubNuevo(expanded, m, st.key)} />
-                                              ↳ {st.label}
-                                            </label>
-                                          );
-                                        })}
+                            {/* Grid de permisos como "botones de app": pills para
+                                módulos simples, tarjetas para los que tienen sub-pestañas.
+                                Todo el área es clickeable (sin checkbox nativo visible).
+                                Solo cambia el RENDER; el estado/guardado no se toca. */}
+                            {(() => {
+                              // Pill de sub-pestaña (pequeño): activo = marca de verificación + brand.
+                              const subPill = (son: boolean): React.CSSProperties => ({
+                                display: "inline-flex", alignItems: "center", gap: 5,
+                                padding: "5px 11px", borderRadius: 8, cursor: "pointer",
+                                fontSize: 12, fontWeight: 600, userSelect: "none",
+                                border: son ? "1px solid var(--c-brand)" : "1px solid var(--c-border)",
+                                background: son ? "var(--c-brand)" : "var(--c-surface)",
+                                color: son ? "#fff" : "var(--c-text-2)",
+                                boxShadow: "0 1px 2px rgba(0,0,0,.05)", transition: "all .12s ease",
+                              });
+                              return (
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-start", marginTop: 4 }}>
+                                {APP_MODULES.map((m) => {
+                                  const on = modsOf(expanded).includes(m);
+                                  const subs = SUB_TABS[m] ?? [];
+                                  if (subs.length === 0) {
+                                    // ── Módulo simple: PILL moderna ──
+                                    return (
+                                      <button
+                                        key={m}
+                                        type="button"
+                                        onClick={() => toggleModulo(expanded, m)}
+                                        aria-pressed={on}
+                                        style={{
+                                          display: "inline-flex", alignItems: "center", gap: 6,
+                                          padding: "9px 15px", borderRadius: 10, cursor: "pointer",
+                                          fontSize: 13, fontWeight: 600, userSelect: "none",
+                                          border: on ? "1px solid var(--c-brand)" : "1px solid var(--c-border)",
+                                          background: on ? "var(--c-brand)" : "var(--c-surface)",
+                                          color: on ? "#fff" : "var(--c-text)",
+                                          boxShadow: on ? "0 2px 6px var(--c-brand-glow)" : "0 1px 2px rgba(0,0,0,.05)",
+                                          transition: "all .12s ease",
+                                        }}
+                                      >
+                                        <span style={{ fontSize: 12, opacity: on ? 1 : 0.35 }}>{on ? "✓" : "○"}</span>
+                                        {m}
+                                      </button>
+                                    );
+                                  }
+                                  // ── Módulo con sub-pestañas: TARJETA ──
+                                  return (
+                                    <div
+                                      key={m}
+                                      style={{
+                                        flex: "1 1 100%", borderRadius: 12, overflow: "hidden",
+                                        border: on ? "1px solid var(--c-brand)" : "1px solid var(--c-border)",
+                                        boxShadow: on ? "0 2px 8px var(--c-brand-glow)" : "0 1px 3px rgba(0,0,0,.06)",
+                                        background: "var(--c-surface)", transition: "all .12s ease",
+                                      }}
+                                    >
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleModulo(expanded, m)}
+                                        aria-pressed={on}
+                                        style={{
+                                          width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                                          gap: 8, padding: "11px 15px", cursor: "pointer", border: "none",
+                                          background: on ? "var(--c-brand)" : "var(--c-surface-2)",
+                                          color: on ? "#fff" : "var(--c-text)", fontWeight: 700, fontSize: 13.5,
+                                          transition: "all .12s ease",
+                                        }}
+                                      >
+                                        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                                          <span style={{ fontSize: 12, opacity: on ? 1 : 0.35 }}>{on ? "✓" : "○"}</span>
+                                          {m}
+                                        </span>
+                                        <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".04em", opacity: 0.85 }}>
+                                          {on ? "ACTIVO" : "INACTIVO"}
+                                        </span>
+                                      </button>
+                                      <div style={{ padding: "9px 13px 11px", background: on ? "var(--c-brand-glow)" : "var(--c-surface-3)" }}>
+                                        <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".04em", color: "var(--c-muted)", marginBottom: 7, textTransform: "uppercase" }}>
+                                          Sub-pestañas <span style={{ fontWeight: 400, textTransform: "none" }}>(sin marcar = ve todas)</span>
+                                        </div>
+                                        <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+                                          {subs.map((st) => {
+                                            const sk = subTabKey(m, st.key);
+                                            const son = modsOf(expanded).includes(sk);
+                                            return (
+                                              <button key={sk} type="button" onClick={() => toggleSubNuevo(expanded, m, st.key)} aria-pressed={son} style={subPill(son)}>
+                                                <span style={{ opacity: son ? 1 : 0.5 }}>↳</span>{st.label}
+                                              </button>
+                                            );
+                                          })}
+                                        </div>
                                       </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              );
+                            })()}
                             <p className="muted" style={{ marginTop: 6 }}>
                               Marcar un módulo otorga ver y editar. Las sub-pestañas (↳) se limitan solo si marcas alguna; sin marcar ninguna, ve todas las de ese módulo.
                             </p>
