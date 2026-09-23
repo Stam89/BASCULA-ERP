@@ -2628,6 +2628,96 @@ input[type="datetime-local"] { height: 36px; }
   color: var(--c-brand-dark);
 }
 
+/* ── Grid de permisos ultra-minimalista (Paso 3 · alta de usuario) ──
+   Módulos simples = pill redonda; módulos con sub-pestañas = tarjeta. */
+.permPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: var(--c-surface-2);
+  color: var(--c-text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.2s ease;
+}
+.permPill:hover { background: var(--c-surface-3); color: var(--c-text); }
+.permPill.on {
+  background: var(--c-brand);
+  color: #fff;
+  box-shadow: 0 4px 12px var(--c-brand-glow);
+}
+.permPill.on:hover { background: var(--c-brand-dark); }
+.permPill .permDot { font-size: 12px; opacity: 0.4; }
+.permPill.on .permDot { opacity: 1; }
+
+.permCard {
+  flex: 1 1 100%;
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: all 0.2s ease;
+}
+.permCard.on {
+  border-color: color-mix(in srgb, var(--c-brand) 45%, var(--c-border));
+  box-shadow: 0 4px 16px var(--c-brand-glow);
+}
+.permCardHead {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 17px;
+  border: none;
+  background: transparent;
+  color: var(--c-text);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.permCardHead:hover { background: var(--c-surface-2); }
+.permCard.on .permCardHead { background: var(--c-brand); color: #fff; }
+.permCardHead .permDot { font-size: 12px; opacity: 0.4; }
+.permCard.on .permCardHead .permDot { opacity: 1; }
+.permCardTag { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; opacity: 0.7; }
+.permCardBody {
+  padding: 10px 15px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.permCard.on .permCardBody { background: color-mix(in srgb, var(--c-brand) 5%, var(--c-surface)); }
+
+.permSubPill {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 14px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: var(--c-surface-2);
+  color: var(--c-text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.2s ease;
+}
+.permSubPill:hover { background: var(--c-surface-3); color: var(--c-text); }
+.permSubPill.on {
+  background: var(--c-brand-light);
+  color: #fff;
+  box-shadow: 0 2px 8px var(--c-brand-glow);
+}
+.permHint { font-size: 11px; color: var(--c-text-muted); margin-top: 10px; opacity: 0.8; }
+
 /* ── Creación de usuarios ────────────────────────────────────── */
 .userCreatePanel { overflow: hidden; }
 .userPanelSummary {

@@ -1454,6 +1454,16 @@ const SUB_TABS: Record<string, Array<{ key: string; label: string }>> = {
     { key: "diario", label: "Registro por corrida" },
     { key: "mensual", label: "Consolidado Mensual" },
   ],
+  Reportes: [
+    { key: "resumen", label: "Resumen" },
+    { key: "ventas", label: "Ventas" },
+    { key: "liquidaciones", label: "Liquidaciones" },
+    { key: "gastos", label: "Gastos" },
+    { key: "produccion", label: "Producción" },
+    { key: "combustible", label: "Combustible" },
+    { key: "porcobrar", label: "Por cobrar" },
+    { key: "arianos", label: "Lotes guardados" },
+  ],
 };
 function subTabKey(moduleKey: string, sub: string): string { return `SUB:${moduleKey}:${sub}`; }
 
@@ -3745,6 +3755,14 @@ export function App() {
       if (first && first.key !== costosView) setCostosView(first.key as typeof costosView);
     }
   }, [authUser, isAdmin, puedeVerSubTab, costosView]);
+
+  useEffect(() => {
+    if (!authUser || isAdmin) return;
+    if (!puedeVerSubTab("Reportes", reportKind)) {
+      const first = SUB_TABS.Reportes.find((s) => puedeVerSubTab("Reportes", s.key));
+      if (first && first.key !== reportKind) { setReportKind(first.key as ReportKind); loadReport(first.key as ReportKind).catch(() => undefined); }
+    }
+  }, [authUser, isAdmin, puedeVerSubTab, reportKind]);
 
   // Las tarifas (incluidos los precios del combustible) las usan varias
   // pantallas: Secadoras, Nómina y Configuración.
@@ -18344,7 +18362,7 @@ export function App() {
           <>
             <div className="reportToolbar">
               <div className="reportKinds">
-                {(["resumen", "ventas", "liquidaciones", "gastos", "produccion", "combustible", "porcobrar", "arianos"] as const).map((k) => (
+                {(["resumen", "ventas", "liquidaciones", "gastos", "produccion", "combustible", "porcobrar", "arianos"] as const).filter((k) => puedeVerSubTab("Reportes", k)).map((k) => (
                   <button
                     key={k}
                     type="button"
@@ -19236,102 +19254,43 @@ export function App() {
                                 módulos simples, tarjetas para los que tienen sub-pestañas.
                                 Todo el área es clickeable (sin checkbox nativo visible).
                                 Solo cambia el RENDER; el estado/guardado no se toca. */}
-                            {(() => {
-                              // Pill de sub-pestaña (pequeño): activo = marca de verificación + brand.
-                              const subPill = (son: boolean): React.CSSProperties => ({
-                                display: "inline-flex", alignItems: "center", gap: 5,
-                                padding: "5px 11px", borderRadius: 8, cursor: "pointer",
-                                fontSize: 12, fontWeight: 600, userSelect: "none",
-                                border: son ? "1px solid var(--c-brand)" : "1px solid var(--c-border)",
-                                background: son ? "var(--c-brand)" : "var(--c-surface)",
-                                color: son ? "#fff" : "var(--c-text-2)",
-                                boxShadow: "0 1px 2px rgba(0,0,0,.05)", transition: "all .12s ease",
-                              });
-                              return (
-                              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-start", marginTop: 4 }}>
-                                {APP_MODULES.map((m) => {
-                                  const on = modsOf(expanded).includes(m);
-                                  const subs = SUB_TABS[m] ?? [];
-                                  if (subs.length === 0) {
-                                    // ── Módulo simple: PILL moderna ──
-                                    return (
-                                      <button
-                                        key={m}
-                                        type="button"
-                                        onClick={() => toggleModulo(expanded, m)}
-                                        aria-pressed={on}
-                                        style={{
-                                          display: "inline-flex", alignItems: "center", gap: 6,
-                                          padding: "9px 15px", borderRadius: 10, cursor: "pointer",
-                                          fontSize: 13, fontWeight: 600, userSelect: "none",
-                                          border: on ? "1px solid var(--c-brand)" : "1px solid var(--c-border)",
-                                          background: on ? "var(--c-brand)" : "var(--c-surface)",
-                                          color: on ? "#fff" : "var(--c-text)",
-                                          boxShadow: on ? "0 2px 6px var(--c-brand-glow)" : "0 1px 2px rgba(0,0,0,.05)",
-                                          transition: "all .12s ease",
-                                        }}
-                                      >
-                                        <span style={{ fontSize: 12, opacity: on ? 1 : 0.35 }}>{on ? "✓" : "○"}</span>
-                                        {m}
-                                      </button>
-                                    );
-                                  }
-                                  // ── Módulo con sub-pestañas: TARJETA ──
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-start", marginTop: 4 }}>
+                              {APP_MODULES.map((m) => {
+                                const on = modsOf(expanded).includes(m);
+                                const subs = SUB_TABS[m] ?? [];
+                                if (subs.length === 0) {
+                                  // ── Módulo simple: pill ──
                                   return (
-                                    <div
-                                      key={m}
-                                      style={{
-                                        flex: "1 1 100%", borderRadius: 12, overflow: "hidden",
-                                        border: on ? "1px solid var(--c-brand)" : "1px solid var(--c-border)",
-                                        boxShadow: on ? "0 2px 8px var(--c-brand-glow)" : "0 1px 3px rgba(0,0,0,.06)",
-                                        background: "var(--c-surface)", transition: "all .12s ease",
-                                      }}
-                                    >
-                                      <button
-                                        type="button"
-                                        onClick={() => toggleModulo(expanded, m)}
-                                        aria-pressed={on}
-                                        style={{
-                                          width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
-                                          gap: 8, padding: "11px 15px", cursor: "pointer", border: "none",
-                                          background: on ? "var(--c-brand)" : "var(--c-surface-2)",
-                                          color: on ? "#fff" : "var(--c-text)", fontWeight: 700, fontSize: 13.5,
-                                          transition: "all .12s ease",
-                                        }}
-                                      >
-                                        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                                          <span style={{ fontSize: 12, opacity: on ? 1 : 0.35 }}>{on ? "✓" : "○"}</span>
-                                          {m}
-                                        </span>
-                                        <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".04em", opacity: 0.85 }}>
-                                          {on ? "ACTIVO" : "INACTIVO"}
-                                        </span>
-                                      </button>
-                                      <div style={{ padding: "9px 13px 11px", background: on ? "var(--c-brand-glow)" : "var(--c-surface-3)" }}>
-                                        <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".04em", color: "var(--c-muted)", marginBottom: 7, textTransform: "uppercase" }}>
-                                          Sub-pestañas <span style={{ fontWeight: 400, textTransform: "none" }}>(sin marcar = ve todas)</span>
-                                        </div>
-                                        <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
-                                          {subs.map((st) => {
-                                            const sk = subTabKey(m, st.key);
-                                            const son = modsOf(expanded).includes(sk);
-                                            return (
-                                              <button key={sk} type="button" onClick={() => toggleSubNuevo(expanded, m, st.key)} aria-pressed={son} style={subPill(son)}>
-                                                <span style={{ opacity: son ? 1 : 0.5 }}>↳</span>{st.label}
-                                              </button>
-                                            );
-                                          })}
-                                        </div>
-                                      </div>
-                                    </div>
+                                    <button key={m} type="button" className={on ? "permPill on" : "permPill"} aria-pressed={on} onClick={() => toggleModulo(expanded, m)}>
+                                      <span className="permDot">{on ? "✓" : "○"}</span>{m}
+                                    </button>
                                   );
-                                })}
-                              </div>
-                              );
-                            })()}
-                            <p className="muted" style={{ marginTop: 6 }}>
-                              Marcar un módulo otorga ver y editar. Las sub-pestañas (↳) se limitan solo si marcas alguna; sin marcar ninguna, ve todas las de ese módulo.
-                            </p>
+                                }
+                                // ── Módulo con sub-pestañas: tarjeta ──
+                                return (
+                                  <div key={m} className={on ? "permCard on" : "permCard"}>
+                                    <button type="button" className="permCardHead" aria-pressed={on} onClick={() => toggleModulo(expanded, m)}>
+                                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                                        <span className="permDot">{on ? "✓" : "○"}</span>{m}
+                                      </span>
+                                      <span className="permCardTag">{on ? "ACTIVO" : "INACTIVO"}</span>
+                                    </button>
+                                    <div className="permCardBody">
+                                      {subs.map((st) => {
+                                        const sk = subTabKey(m, st.key);
+                                        const son = modsOf(expanded).includes(sk);
+                                        return (
+                                          <button key={sk} type="button" className={son ? "permSubPill on" : "permSubPill"} aria-pressed={son} onClick={() => toggleSubNuevo(expanded, m, st.key)}>
+                                            {st.label}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            <p className="permHint">ℹ️ Marcar un módulo otorga ver y editar. Sin marcar sub-pestañas, el operador verá todas las de ese módulo.</p>
                           </div>
                         )}
                       </>);
