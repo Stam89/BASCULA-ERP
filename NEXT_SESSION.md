@@ -1,6 +1,6 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-09-21
+Actualizado: 2026-09-22
 
 ## Inicio rapido
 
@@ -48,6 +48,15 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Permisos: sub-pestañas granulares por accionista (2026-09-22)
+
+- El sistema YA era multi-tenant por accionista (`user_accionistas.allowed_modules[]`, guard `visibleTabs` por accionista activo + redirect a Dashboard). NO se rehízo el esquema.
+- NUEVO (aditivo, sin migración): control de sub-pestañas. Se guardan como claves `SUB:<Módulo>:<sub>` en el MISMO `allowed_modules[]` (junto a `EDIT:`/`PERM:`), vía el `PUT /auth/users/:id/accionistas` existente.
+- Frontend `App.tsx`: const `SUB_TABS` (Seleccion: nuevo/proceso/historial; Nomina: pagos/cuadrilla/historial/sueldo-admin), helper `subTabKey`, guard `puedeVerSubTab(mod,sub)`.
+- REGLA DE COMPATIBILIDAD: si el usuario no tiene ninguna `SUB:<mod>:*` marcada, ve TODAS (histórico); admin ve todo. Solo se limita cuando el admin marca al menos una.
+- Editor "🔐 Accionistas y permisos": sub-filas anidadas (↳) con checkbox por accionista (`toggleSub`).
+- Build tsc+vite limpio. NO verificado con login E2E (faltan credenciales locales en el navegador de prueba).
 
 ### Seleccion y Envejecimiento
 

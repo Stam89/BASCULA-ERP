@@ -1426,6 +1426,28 @@ const PERM_MATRIX: Array<{ label: string; rows: Array<{ key: string; label: stri
 ];
 const PERM_ALL_KEYS: string[] = PERM_MATRIX.flatMap((g) => g.rows.map((r) => r.key));
 
+// Sub-pestañas gobernables por accionista. Se guardan como claves
+// "SUB:<Módulo>:<sub>" dentro de allowed_modules (mismo mecanismo que EDIT:/PERM:,
+// sin cambios de esquema). La clave del módulo padre coincide con la de PERM_MATRIX.
+// REGLA DE COMPATIBILIDAD (CERO RUPTURAS): si un usuario NO tiene marcada ninguna
+// clave SUB:<Módulo>:* , ve TODAS las sub-pestañas de ese módulo (comportamiento
+// histórico). Solo cuando el admin marca al menos una, se restringe a las marcadas.
+// Los administradores siempre ven todas.
+const SUB_TABS: Record<string, Array<{ key: string; label: string }>> = {
+  Seleccion: [
+    { key: "nuevo", label: "Nuevo Envío" },
+    { key: "proceso", label: "En Proceso" },
+    { key: "historial", label: "Historial / Completados" },
+  ],
+  Nomina: [
+    { key: "pagos", label: "Pagos" },
+    { key: "cuadrilla", label: "Cuadrilla" },
+    { key: "historial", label: "Historial de Pagos" },
+    { key: "sueldo-admin", label: "Sueldo Administrativo" },
+  ],
+};
+function subTabKey(moduleKey: string, sub: string): string { return `SUB:${moduleKey}:${sub}`; }
+
 function NavIcon({ tab }: { tab: string }) {
   switch (tab) {
     case "Dashboard":
@@ -3657,11 +3679,42 @@ export function App() {
   // accionista activo (se concede a proposito por ser vista global).
   const canSeePanel = isAdmin || (accionistas.find((a) => a.id === activeAccionistaId)?.allowed_modules ?? []).includes("Dashboard");
 
+  // ¿Puede el usuario ver esta SUB-PESTAÑA en el accionista activo?
+  // Admin ve todo. Si no hay ninguna clave SUB:<mod>:* marcada → ve todas
+  // (histórico). Si hay alguna → solo las marcadas. Ver SUB_TABS.
+  const puedeVerSubTab = useCallback((moduleKey: string, sub: string): boolean => {
+    if (isAdmin) return true;
+    const activeAcc = accionistas.find((a) => a.id === activeAccionistaId);
+    const allowed = new Set(activeAcc?.allowed_modules ?? []);
+    const defs = SUB_TABS[moduleKey] ?? [];
+    const restringido = defs.some((d) => allowed.has(subTabKey(moduleKey, d.key)));
+    if (!restringido) return true;
+    return allowed.has(subTabKey(moduleKey, sub));
+  }, [isAdmin, accionistas, activeAccionistaId]);
+
   useEffect(() => {
     if (authUser && !visibleTabs.includes(activeTab)) {
       setActiveTab("Dashboard");
     }
   }, [authUser, visibleTabs, activeTab]);
+
+  // Si la sub-pestaña activa quedó fuera de permiso (p.ej. al cambiar de
+  // accionista), saltar a la primera permitida. No corre para admin (ve todo).
+  useEffect(() => {
+    if (!authUser || isAdmin) return;
+    if (!puedeVerSubTab("Seleccion", selectionView)) {
+      const first = SUB_TABS.Seleccion.find((s) => puedeVerSubTab("Seleccion", s.key));
+      if (first && first.key !== selectionView) setSelectionView(first.key as typeof selectionView);
+    }
+  }, [authUser, isAdmin, puedeVerSubTab, selectionView]);
+
+  useEffect(() => {
+    if (!authUser || isAdmin) return;
+    if (!puedeVerSubTab("Nomina", nominaView)) {
+      const first = SUB_TABS.Nomina.find((s) => puedeVerSubTab("Nomina", s.key));
+      if (first && first.key !== nominaView) setNominaView(first.key as typeof nominaView);
+    }
+  }, [authUser, isAdmin, puedeVerSubTab, nominaView]);
 
   // Las tarifas (incluidos los precios del combustible) las usan varias
   // pantallas: Secadoras, Nómina y Configuración.
@@ -17039,13 +17092,19 @@ export function App() {
                 <button type="button" className="btnSecondary" onClick={() => setPersonasModalOpen(true)}>Gestionar personas externas</button>
               </div>
               <nav className="cajaSubNav" style={{ marginTop: 12, borderBottom: "none" }}>
-                <button type="button" className={selectionView === "nuevo" ? "active" : ""} onClick={() => setSelectionView("nuevo")}>📤 Nuevo Envío</button>
-                <button type="button" className={selectionView === "proceso" ? "active" : ""} onClick={() => setSelectionView("proceso")}>
-                  ⏳ En Proceso {inProcess.length > 0 ? `(${inProcess.length})` : ""}
-                </button>
-                <button type="button" className={selectionView === "historial" ? "active" : ""} onClick={() => setSelectionView("historial")}>
-                  ✅ Historial / Completados {historyBatches.length > 0 ? `(${historyBatches.length})` : ""}
-                </button>
+                {puedeVerSubTab("Seleccion", "nuevo") && (
+                  <button type="button" className={selectionView === "nuevo" ? "active" : ""} onClick={() => setSelectionView("nuevo")}>📤 Nuevo Envío</button>
+                )}
+                {puedeVerSubTab("Seleccion", "proceso") && (
+                  <button type="button" className={selectionView === "proceso" ? "active" : ""} onClick={() => setSelectionView("proceso")}>
+                    ⏳ En Proceso {inProcess.length > 0 ? `(${inProcess.length})` : ""}
+                  </button>
+                )}
+                {puedeVerSubTab("Seleccion", "historial") && (
+                  <button type="button" className={selectionView === "historial" ? "active" : ""} onClick={() => setSelectionView("historial")}>
+                    ✅ Historial / Completados {historyBatches.length > 0 ? `(${historyBatches.length})` : ""}
+                  </button>
+                )}
               </nav>
             </div>
 
@@ -17324,21 +17383,29 @@ export function App() {
           <section className="cuentasLayout">
             <nav className="cajaSubNav">
               {/* Pagos: para todos (los socios solo ven aquí sus sueldos administrativos). */}
+              {puedeVerSubTab("Nomina", "pagos") && (
               <button type="button" className={nominaView === "pagos" ? "active" : ""} onClick={() => setNominaView("pagos")} style={{ fontWeight: 700 }}>
                 💵 Pagos
                 {(nominaPendientes.length + pagosCuadPendientes.length + adminPending.length) > 0 && (
                   <span style={{ marginLeft: 6, background: "#dc2626", color: "#fff", borderRadius: 999, padding: "1px 8px", fontSize: 12, fontWeight: 800 }}>{nominaPendientes.length + pagosCuadPendientes.length + adminPending.length}</span>
                 )}
               </button>
+              )}
               {/* Producción (Cuadrilla, Historial): solo la matriz. La pestaña
                   "🔥 Secadora" se eliminó: los pagos de secador se generan y pagan
                   automáticamente desde Secadoras y aparecen directo en 💵 Pagos. */}
               {esMatrizActiva && (<>
+              {puedeVerSubTab("Nomina", "cuadrilla") && (
               <button type="button" className={nominaView === "cuadrilla" ? "active" : ""} onClick={() => { setNominaView("cuadrilla"); refreshCuadrilla().catch(() => undefined); }}>👷‍♂️ Cuadrilla</button>
+              )}
+              {puedeVerSubTab("Nomina", "historial") && (
               <button type="button" className={nominaView === "historial" ? "active" : ""} onClick={() => { setNominaView("historial"); loadNominaHistory().catch(() => undefined); }}>📜 Historial de Pagos</button>
+              )}
               </>)}
               {/* Sueldo administrativo: por accionista (matriz y socios). */}
+              {puedeVerSubTab("Nomina", "sueldo-admin") && (
               <button type="button" className={nominaView === "sueldo-admin" ? "active" : ""} onClick={() => setNominaView("sueldo-admin")} style={{ fontWeight: 700 }}>💼 Sueldo Administrativo</button>
+              )}
             </nav>
 
             {/* Banner: Costo Total de Nómina (A PAGAR) del período — piladores,
@@ -19332,6 +19399,18 @@ export function App() {
                       : [...new Set([...it.modules, key, editKey])]; // cascada: marca VER
                     setItem(idx, { modules, access: it.access || (!has) });
                   };
+                  // Sub-pestaña: alterna la clave SUB:<mod>:<sub>. Marcarla implica
+                  // VER el módulo padre y activa el acceso. (Sin ninguna marcada, el
+                  // usuario ve TODAS las sub-pestañas — ver SUB_TABS.)
+                  const toggleSub = (idx: number, moduleKey: string, sub: string) => {
+                    const it = items[idx];
+                    const k = subTabKey(moduleKey, sub);
+                    const has = it.modules.includes(k);
+                    const modules = has
+                      ? it.modules.filter((x) => x !== k)
+                      : [...new Set([...it.modules, k, moduleKey])]; // cascada: marca VER del módulo
+                    setItem(idx, { modules, access: it.access || (!has) });
+                  };
                   // Marcar todo = VER + EDITAR de cada módulo + permisos especiales.
                   const allKeysConEdit = [...PERM_ALL_KEYS, ...PERM_ALL_KEYS.filter((k) => !k.startsWith("PERM:")).map((k) => `EDIT:${k}`)];
                   const colMarcarTodo = (idx: number) => setItem(idx, { access: true, modules: [...new Set(allKeysConEdit)] });
@@ -19351,7 +19430,7 @@ export function App() {
                       <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--c-border)", flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
                         <div>
                           <h3 style={{ margin: 0 }}>🔐 Accionistas y permisos · {accionistaEditor.user.name}</h3>
-                          <p className="muted" style={{ margin: "2px 0 0", fontSize: 12 }}>Marca por accionista qué módulos y acciones puede usar. Los permisos son independientes por accionista.</p>
+                          <p className="muted" style={{ margin: "2px 0 0", fontSize: 12 }}>Marca por accionista qué módulos y acciones puede usar. Los permisos son independientes por accionista. Las sub-pestañas (↳) se limitan solo si marcas alguna; sin marcar ninguna, ve todas.</p>
                         </div>
                         {items.length > 1 && (
                           <button type="button" className="btnSecondary" title={`Copia los permisos de ${nombreAcc(items[0].accionista_id)} (1ª columna) a todos`} onClick={duplicarATodos}>
@@ -19393,8 +19472,10 @@ export function App() {
                                   </tr>
                                   {group.rows.map((row) => {
                                     const esPerm = row.key.startsWith("PERM:");
+                                    const subTabs = SUB_TABS[row.key] ?? [];
                                     return (
-                                    <tr key={row.key}>
+                                    <React.Fragment key={row.key}>
+                                    <tr>
                                       <td style={{ position: "sticky", left: 0, background: "var(--c-surface)", padding: "5px 10px 5px 18px", borderBottom: "1px solid var(--c-border)", whiteSpace: "nowrap" }}>{row.label}</td>
                                       {items.map((it, idx) => (
                                         <td key={it.accionista_id} style={{ ...cellStyle, background: it.access ? undefined : "rgba(0,0,0,.02)" }}>
@@ -19415,6 +19496,26 @@ export function App() {
                                         </td>
                                       ))}
                                     </tr>
+                                    {/* Sub-pestañas del módulo: si ninguna está marcada, el usuario
+                                        ve TODAS (histórico). Marca solo las que quieras limitar. */}
+                                    {subTabs.map((st) => {
+                                      const skey = subTabKey(row.key, st.key);
+                                      return (
+                                      <tr key={skey}>
+                                        <td style={{ position: "sticky", left: 0, background: "var(--c-surface)", padding: "3px 10px 3px 38px", borderBottom: "1px solid var(--c-border)", whiteSpace: "nowrap", fontSize: 12, color: "var(--c-muted)" }}>
+                                          <span style={{ opacity: 0.6, marginRight: 4 }}>↳</span>{st.label}
+                                        </td>
+                                        {items.map((it, idx) => (
+                                          <td key={it.accionista_id} style={{ ...cellStyle, background: it.access ? undefined : "rgba(0,0,0,.02)" }}>
+                                            <label title={`Ver sub-pestaña «${st.label}»`} style={{ display: "inline-flex", alignItems: "center", gap: 2, cursor: "pointer" }}>
+                                              <input type="checkbox" checked={it.modules.includes(skey)} onChange={() => toggleSub(idx, row.key, st.key)} />
+                                            </label>
+                                          </td>
+                                        ))}
+                                      </tr>
+                                      );
+                                    })}
+                                    </React.Fragment>
                                     );
                                   })}
                                 </React.Fragment>
