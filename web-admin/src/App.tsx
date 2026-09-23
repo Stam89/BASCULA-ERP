@@ -2544,7 +2544,12 @@ export function App() {
     setActiveTab(tab);
   }
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
-  const [newUserForm, setNewUserForm] = useState({ name: "", username: "", cedula: "", password: "", role: "OPERADOR" as "ADMINISTRADOR" | "OPERADOR", modules: [] as string[], accionistas: [] as string[] });
+  // Paso 3 del alta = permisos POR ACCIONISTA (mismo modelo que el modal de
+  // edición): accPerms[accionista_id] = claves de allowed_modules (VER, EDIT:,
+  // SUB:, PERM:). La presencia de la clave del accionista = tiene acceso.
+  const [newUserForm, setNewUserForm] = useState({ name: "", username: "", cedula: "", password: "", role: "OPERADOR" as "ADMINISTRADOR" | "OPERADOR", accPerms: {} as Record<string, string[]> });
+  // Qué accionista está expandido en el acordeón del Paso 3.
+  const [newUserAccExpanded, setNewUserAccExpanded] = useState<string | null>(null);
   const [showNewUserPassword, setShowNewUserPassword] = useState(false);
   const [lastCreatedUserAccess, setLastCreatedUserAccess] = useState<{ name: string; username: string; password: string } | null>(null);
   const [permsEditor, setPermsEditor] = useState<{ user: AdminUser; modules: string[] } | null>(null);
@@ -5267,12 +5272,13 @@ export function App() {
       addToast("Completa nombre, usuario y una clave de al menos 8 caracteres", "error");
       return;
     }
-    if (newUserForm.role === "OPERADOR" && newUserForm.modules.length === 0) {
-      addToast("Asigna al menos un módulo al operador", "error");
+    const accIds = Object.keys(newUserForm.accPerms);
+    if (newUserForm.role === "OPERADOR" && accIds.length === 0) {
+      addToast("Asigna al menos un accionista al operador: sin eso no podrá trabajar", "error");
       return;
     }
-    if (newUserForm.role === "OPERADOR" && newUserForm.accionistas.length === 0) {
-      addToast("Asigna al menos un accionista al operador: sin eso no podrá trabajar", "error");
+    if (newUserForm.role === "OPERADOR" && accIds.every((id) => (newUserForm.accPerms[id] ?? []).length === 0)) {
+      addToast("Marca al menos un módulo en algún accionista", "error");
       return;
     }
     const createdAccess = {
@@ -5280,17 +5286,26 @@ export function App() {
       username: newUserForm.username.trim().toLowerCase(),
       password: newUserForm.password
     };
-    await apiPost("/auth/users", {
+    // 1) Crear el usuario (con los accionistas). 2) Fijar los permisos POR
+    // accionista con el MISMO endpoint que usa el modal de edición (evita
+    // duplicar lógica en el backend y respeta el modelo per-accionista).
+    const created = await apiPost<{ id: string }>("/auth/users", {
       name: createdAccess.name,
       username: createdAccess.username,
       cedula: newUserForm.cedula.trim() || undefined,
       password: createdAccess.password,
       role: newUserForm.role,
-      allowed_modules: newUserForm.role === "OPERADOR" ? newUserForm.modules : [],
-      accionista_ids: newUserForm.role === "OPERADOR" ? newUserForm.accionistas : []
+      allowed_modules: [],
+      accionista_ids: newUserForm.role === "OPERADOR" ? accIds : []
     });
+    if (newUserForm.role === "OPERADOR" && created?.id) {
+      await apiPut(`/auth/users/${created.id}/accionistas`, {
+        accionistas: accIds.map((id) => ({ accionista_id: id, modules: newUserForm.accPerms[id] ?? [] }))
+      });
+    }
     setLastCreatedUserAccess(createdAccess);
-    setNewUserForm({ name: "", username: "", cedula: "", password: "", role: "OPERADOR", modules: [], accionistas: [] });
+    setNewUserForm({ name: "", username: "", cedula: "", password: "", role: "OPERADOR", accPerms: {} });
+    setNewUserAccExpanded(null);
     setShowNewUserPassword(false);
     addToast("Usuario creado", "success");
     await refreshConfig();
@@ -19113,68 +19128,116 @@ export function App() {
                         <span className="userStepNumber">3</span>
                         <div><strong>Acceso del operador</strong><small>Selecciona módulos y accionistas autorizados.</small></div>
                       </div>
-                    <div className="userPermissionBlock">
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-                        <span className="permLabel">Módulos <b>{newUserForm.modules.length} seleccionados</b></span>
-                        <div style={{ display: "flex", gap: 8 }}>
-                          <button type="button" className="btnGhost userSelectionAction" onClick={() => setNewUserForm({ ...newUserForm, modules: [...APP_MODULES] })}>Seleccionar todos</button>
-                          <button type="button" className="btnGhost userSelectionAction" onClick={() => setNewUserForm({ ...newUserForm, modules: [] })}>Limpiar</button>
+                    {(() => {
+                      const activeAccs = adminAccionistas.filter((a) => a.is_active);
+                      const perms = newUserForm.accPerms;
+                      const isSel = (id: string) => Object.prototype.hasOwnProperty.call(perms, id);
+                      const modsOf = (id: string) => perms[id] ?? [];
+                      const nombreAcc = (id: string) => activeAccs.find((a) => a.id === id)?.name ?? id;
+                      const setPerms = (id: string, mods: string[]) => setNewUserForm((f) => ({ ...f, accPerms: { ...f.accPerms, [id]: mods } }));
+                      const toggleAcc = (id: string) => setNewUserForm((f) => {
+                        const next = { ...f.accPerms };
+                        if (Object.prototype.hasOwnProperty.call(next, id)) delete next[id]; else next[id] = [];
+                        return { ...f, accPerms: next };
+                      });
+                      // Marcar un módulo otorga VER + EDITAR (como el alta histórica);
+                      // desmarcarlo quita también EDIT: y las SUB: de ese módulo.
+                      const toggleModulo = (id: string, m: string) => {
+                        const mods = modsOf(id);
+                        const has = mods.includes(m);
+                        setPerms(id, has
+                          ? mods.filter((x) => x !== m && x !== `EDIT:${m}` && !x.startsWith(`SUB:${m}:`))
+                          : [...new Set([...mods, m, `EDIT:${m}`])]);
+                      };
+                      const toggleSubNuevo = (id: string, m: string, sub: string) => {
+                        const k = subTabKey(m, sub);
+                        const mods = modsOf(id);
+                        const has = mods.includes(k);
+                        setPerms(id, has
+                          ? mods.filter((x) => x !== k)
+                          : [...new Set([...mods, k, m, `EDIT:${m}`])]); // cascada: marca el módulo
+                      };
+                      const marcarTodos = (id: string) => setPerms(id, [...new Set([...APP_MODULES, ...APP_MODULES.map((m) => `EDIT:${m}`)])]);
+                      const limpiar = (id: string) => setPerms(id, []);
+                      const nMods = (id: string) => modsOf(id).filter((x) => !x.startsWith("EDIT:") && !x.startsWith("SUB:") && !x.startsWith("PERM:")).length;
+                      const expanded = newUserAccExpanded && isSel(newUserAccExpanded) ? newUserAccExpanded : null;
+                      return (<>
+                        <div className="userPermissionBlock">
+                          <span className="permLabel">Accionistas y permisos <b>{Object.keys(perms).length} con acceso</b></span>
+                          <p className="muted" style={{ marginTop: 4 }}>Elige a qué accionistas accede y, dentro de cada uno, qué módulos y sub-pestañas. Los permisos son independientes por accionista.</p>
+                          {activeAccs.length === 0 ? (
+                            <p className="muted" style={{ marginTop: 8 }}>No hay accionistas activos. Créalos en la pestaña «Accionistas».</p>
+                          ) : (
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                              {activeAccs.map((a) => {
+                                const sel = isSel(a.id);
+                                const open = expanded === a.id;
+                                const esMat = a.id === matrizAccionista?.id;
+                                return (
+                                  <button
+                                    type="button"
+                                    key={a.id}
+                                    className={sel ? "permChip on" : "permChip"}
+                                    onClick={() => {
+                                      if (!sel) { toggleAcc(a.id); setNewUserAccExpanded(a.id); }
+                                      else setNewUserAccExpanded(open ? null : a.id);
+                                    }}
+                                    style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}
+                                  >
+                                    <span>{sel ? "✓" : ""} {esMat ? "🏢" : "👤"} {a.name}</span>
+                                    {sel && <span className="muted" style={{ fontSize: 11 }}>{nMods(a.id)} mód</span>}
+                                    {sel && <span style={{ opacity: 0.6 }}>{open ? "▾" : "▸"}</span>}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
-                      </div>
-                      <div className="permGrid">
-                        {APP_MODULES.map((m) => (
-                          <label key={m} className={newUserForm.modules.includes(m) ? "permChip on" : "permChip"}>
-                            <input
-                              type="checkbox"
-                              checked={newUserForm.modules.includes(m)}
-                              onChange={() =>
-                                setNewUserForm({
-                                  ...newUserForm,
-                                  modules: newUserForm.modules.includes(m)
-                                    ? newUserForm.modules.filter((x) => x !== m)
-                                    : [...newUserForm.modules, m]
-                                })
-                              }
-                            />
-                            {m}
-                          </label>
-                        ))}
-                      </div>
-                      <p className="muted" style={{ marginTop: 6 }}>
-                        El operador verá estas pestañas y podrá registrar cambios en ellas para los accionistas marcados.
-                      </p>
-                    </div>
-                    <div className="userPermissionBlock">
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-                        <span className="permLabel">Accionistas <b>{newUserForm.accionistas.length} seleccionados</b></span>
-                        <div style={{ display: "flex", gap: 8 }}>
-                          <button type="button" className="btnGhost userSelectionAction" onClick={() => setNewUserForm({ ...newUserForm, accionistas: adminAccionistas.filter((a) => a.is_active).map((a) => a.id) })}>Seleccionar todos</button>
-                          <button type="button" className="btnGhost userSelectionAction" onClick={() => setNewUserForm({ ...newUserForm, accionistas: [] })}>Limpiar</button>
-                        </div>
-                      </div>
-                      <div className="permGrid">
-                        {adminAccionistas.filter((a) => a.is_active).map((a) => (
-                          <label key={a.id} className={newUserForm.accionistas.includes(a.id) ? "permChip on" : "permChip"}>
-                            <input
-                              type="checkbox"
-                              checked={newUserForm.accionistas.includes(a.id)}
-                              onChange={() =>
-                                setNewUserForm({
-                                  ...newUserForm,
-                                  accionistas: newUserForm.accionistas.includes(a.id)
-                                    ? newUserForm.accionistas.filter((x) => x !== a.id)
-                                    : [...newUserForm.accionistas, a.id]
-                                })
-                              }
-                            />
-                            {a.name}
-                          </label>
-                        ))}
-                      </div>
-                      <p className="muted" style={{ marginTop: 6 }}>
-                        Solo verá y registrará las operaciones de estos accionistas. Si marcas varios, podrá cambiar entre ellos con el selector.
-                      </p>
-                    </div>
+                        {expanded && (
+                          <div className="userPermissionBlock">
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                              <span className="permLabel">Módulos de <b>{nombreAcc(expanded)}</b></span>
+                              <div style={{ display: "flex", gap: 8 }}>
+                                <button type="button" className="btnGhost userSelectionAction" onClick={() => marcarTodos(expanded)}>Seleccionar todos</button>
+                                <button type="button" className="btnGhost userSelectionAction" onClick={() => limpiar(expanded)}>Limpiar</button>
+                                <button type="button" className="btnGhost userSelectionAction" style={{ color: "#b91c1c" }} onClick={() => { toggleAcc(expanded); setNewUserAccExpanded(null); }}>Quitar acceso</button>
+                              </div>
+                            </div>
+                            <div className="permGrid">
+                              {APP_MODULES.map((m) => {
+                                const on = modsOf(expanded).includes(m);
+                                const subs = SUB_TABS[m] ?? [];
+                                return (
+                                  <div key={m} style={subs.length ? { gridColumn: "1 / -1" } : undefined}>
+                                    <label className={on ? "permChip on" : "permChip"}>
+                                      <input type="checkbox" checked={on} onChange={() => toggleModulo(expanded, m)} />
+                                      {m}
+                                    </label>
+                                    {on && subs.length > 0 && (
+                                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "6px 0 4px 20px" }}>
+                                        {subs.map((st) => {
+                                          const sk = subTabKey(m, st.key);
+                                          const son = modsOf(expanded).includes(sk);
+                                          return (
+                                            <label key={sk} className={son ? "permChip on" : "permChip"} style={{ fontSize: 12 }}>
+                                              <input type="checkbox" checked={son} onChange={() => toggleSubNuevo(expanded, m, st.key)} />
+                                              ↳ {st.label}
+                                            </label>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            <p className="muted" style={{ marginTop: 6 }}>
+                              Marcar un módulo otorga ver y editar. Las sub-pestañas (↳) se limitan solo si marcas alguna; sin marcar ninguna, ve todas las de ese módulo.
+                            </p>
+                          </div>
+                        )}
+                      </>);
+                    })()}
                     </section>
                   )}
                   {newUserForm.role === "ADMINISTRADOR" && (
@@ -19183,7 +19246,7 @@ export function App() {
                   <div className="userCreateFooter">
                     <div className="userAccessSummary">
                       <strong>Resumen del acceso</strong>
-                      <span>{newUserForm.role === "ADMINISTRADOR" ? "Administrador con acceso total" : `${newUserForm.modules.length} módulos · ${newUserForm.accionistas.length} accionistas`}</span>
+                      <span>{newUserForm.role === "ADMINISTRADOR" ? "Administrador con acceso total" : `${Object.keys(newUserForm.accPerms).length} accionista(s) con acceso`}</span>
                     </div>
                     <button className="primary" disabled={!isAdmin}>Crear usuario</button>
                   </div>

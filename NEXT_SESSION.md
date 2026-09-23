@@ -49,6 +49,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Permisos: alta de usuario por accionista (2026-09-22)
+
+- El Paso 3 "Acceso del operador" del formulario Crear usuario se rehízo: de dos listas globales (Módulos + Accionistas) a un ACORDEÓN de pills por accionista.
+- Al seleccionar/expandir un accionista (🏢 Matriz / 👤 Socio) aparecen los checkboxes de Módulos (VER+EDITAR) y Sub-pestañas (↳) SOLO de ese accionista.
+- Estado: `newUserForm.accPerms: Record<accionista_id, string[]>` + `newUserAccExpanded`.
+- Guardado: `POST /auth/users` (allowed_modules:[], accionista_ids) y luego `PUT /auth/users/:id/accionistas` con `{accionistas:[{accionista_id,modules}]}` (mismo endpoint del modal de edición). Solo frontend, sin migración.
+
 ### Permisos: sub-pestañas granulares por accionista (2026-09-22)
 
 - El sistema YA era multi-tenant por accionista (`user_accionistas.allowed_modules[]`, guard `visibleTabs` por accionista activo + redirect a Dashboard). NO se rehízo el esquema.
