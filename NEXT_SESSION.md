@@ -1,6 +1,6 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-09-22
+Actualizado: 2026-09-23
 
 ## Inicio rapido
 
@@ -48,6 +48,17 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Eliminacion administrativa y renumeracion de tickets (2026-09-23)
+
+- Android Bascula v11.38 agrega `Administracion -> Eliminar ticket duplicado`.
+- La accion exige clave administrativa; no permite continuar sin configurarla.
+- Antes de confirmar muestra el ticket, cliente, cantidad afectada y el cambio del ultimo numero.
+- Room elimina y renumera dentro de una transaccion, actualiza el contador siguiente, reconstruye Excel y sincroniza ERP/Firebase.
+- Firebase elimina solamente los documentos antiguos que realmente quedaron sobrando, distinguiendo historial y espera.
+- Nuevo endpoint protegido `POST /api/bascula/delete-and-renumber`: elimina y renumera en una transaccion PostgreSQL.
+- El ERP bloquea la eliminacion si el ticket ya esta convertido, liquidado o tiene anticipos aplicados; los tickets posteriores conservan sus UUID y enlaces internos.
+- Verificaciones: Android `testDebugUnitTest assembleDebug`, backend build, 33/33 tests, `db:migrate` y `preflight` sin errores criticos.
 
 ### Blindaje cruzado contra tickets duplicados (2026-09-23)
 
