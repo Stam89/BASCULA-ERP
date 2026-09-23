@@ -3880,6 +3880,16 @@ export function App() {
     await refreshConfig();
   }
 
+  // Renombra la unidad "Transporte y Cosechadora" (operación Campo). El nombre es
+  // 100% dinámico (backend /campo/config); no se vincula nada por este string.
+  async function saveCampoNombre() {
+    const n = campoNombre.trim();
+    if (n.length < 2) { addToast("Escribe un nombre (mínimo 2 caracteres)", "error"); return; }
+    const r = await apiPut<{ nombre_operacion: string }>("/campo/config", { nombre_operacion: n });
+    setCampoNombre(r.nombre_operacion);
+    addToast("Nombre de Transporte y Cosechadora actualizado", "success");
+  }
+
   async function saveLaborRates(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const saved = await apiPut<LaborRates>("/labor/rates", { ...laborRatesForm, accionista_id: activeAccionistaId });
@@ -10489,10 +10499,10 @@ export function App() {
     <main className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <span className="brandMark">B</span>
+          <span className="brandMark">{(appSettings.business_name || "B").trim().charAt(0).toUpperCase() || "B"}</span>
           <div>
-            <strong>Bascula ERP</strong>
-            <small>Piladora de arroz</small>
+            <strong>{appSettings.business_name || "Báscula ERP"}</strong>
+            <small>{appSettings.business_subtitle || "Piladora de arroz"}</small>
           </div>
         </div>
         {operationSelectorEl}
@@ -18936,12 +18946,38 @@ export function App() {
                     </div>
                     <div className={matrizAccionista ? "systemStatusCard ok" : "systemStatusCard warn"}>
                       <span className="statusDot" />
-                      <div>
+                      <div style={{ flex: 1 }}>
                         <strong>Matriz principal</strong>
                         <span>{matrizAccionista ? `${matrizAccionista.name} · ${matrizAccionista.code}` : "No configurada"}</span>
+                        {matrizAccionista && isAdmin && (
+                          <button type="button" className="btnGhost" style={{ marginTop: 4, padding: "2px 8px", fontSize: 12 }}
+                            onClick={() => setRenameAccionista({ id: matrizAccionista.id, name: matrizAccionista.name, code: matrizAccionista.code })}>
+                            ✎ Renombrar
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
+                  {/* Nombre de la unidad "Transporte y Cosechadora" (operación Campo),
+                      editable por el administrador. 100% dinámico (backend /campo/config). */}
+                  <label>
+                    <span>Nombre de «Transporte y Cosechadora»</span>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <input
+                        type="text"
+                        placeholder="Ej: Transporte y Cosechadora"
+                        disabled={!isAdmin}
+                        value={campoNombre}
+                        onChange={(e) => setCampoNombre(e.target.value)}
+                        style={{ flex: 1 }}
+                      />
+                      <button type="button" className="btnSecondary" disabled={!isAdmin}
+                        onClick={() => saveCampoNombre().catch((err) => addToast(err.message, "error"))}>
+                        Guardar nombre
+                      </button>
+                    </div>
+                    <small className="muted">Aparece en el selector de unidades del encabezado. Renombrarlo no afecta históricos ni caja: todo se vincula por ID.</small>
+                  </label>
                   <label>
                     <span>Nombre comercial <span style={{ color: "#ef4444" }}>*</span></span>
                     <input
