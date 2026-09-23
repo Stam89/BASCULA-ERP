@@ -49,6 +49,17 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Blindaje cruzado contra tickets duplicados (2026-09-23)
+
+- Android Bascula v11.37 migra Room a version 5.
+- La identidad local de un ticket ahora es unica por `modo + numero canonico`, sin permitir una copia simultanea en `espera` y otra en `historial`.
+- Al migrar, si existian ambas versiones se conserva primero `historial` y luego la version mas reciente.
+- El ERP ya no usa el dispositivo/canal como parte de la identidad del ticket principal: WiFi directo, Firebase y reintentos convergen en el mismo registro.
+- Nueva migracion `20261028_ticket_identity_cross_channel.sql`, aplicada y verificada en la base local.
+- `importBasculaTickets` hace UPSERT por identidad de negocio/modo/numero, preservando el registro existente y sus enlaces contables.
+- Verificaciones: Android `testDebugUnitTest assembleDebug`, backend build, 33/33 tests, `db:migrate` y `preflight` sin errores criticos.
+- APK actualizado: `C:\Users\Usuario\OneDrive\Documentos\BASCULA\Bascula-actualizada.apk`.
+
 ### Permisos: alta de usuario por accionista (2026-09-22)
 
 - El Paso 3 "Acceso del operador" del formulario Crear usuario se rehízo: de dos listas globales (Módulos + Accionistas) a un ACORDEÓN de pills por accionista.

@@ -721,7 +721,13 @@ export async function importBasculaTickets(
         print_count, is_locked, price_per_quintal, gross_payable, advances_discount, net_payable,
         liquidated_at, mobile_created_at, mobile_updated_at, synced_at, raw_payload, en_espera
       ) VALUES ($1, $2, $11, $3, $12, $4, $5, $6, $7, $8, 0, false, 0, 0, 0, 0, NULL, $9, $9, now(), $10, $13)
-      ON CONFLICT (id) DO UPDATE SET
+      ON CONFLICT (
+        (COALESCE(NULLIF(raw_payload->>'firebaseNegocioId', ''), 'principal')),
+        (lower(COALESCE(NULLIF(raw_payload->>'modo', ''), 'principal'))),
+        (COALESCE(NULLIF(ltrim(regexp_replace(COALESCE(raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '0'), ''), '0'))
+      )
+      WHERE NULLIF(regexp_replace(COALESCE(raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '') IS NOT NULL
+      DO UPDATE SET
         device_id = EXCLUDED.device_id,
         farmer_name = EXCLUDED.farmer_name,
         farmer_id = COALESCE(mobile_synced_tickets.farmer_id, EXCLUDED.farmer_id),
@@ -742,7 +748,9 @@ export async function importBasculaTickets(
       [id, deviceId, clienteName, t.pesoBruto, t.pesoTara, netWeight, t.calificacion, quintals, ts, JSON.stringify(idScope ? { ...t, firebaseNegocioId: idScope } : t),
        farmer?.id ?? null, farmer?.accionista_id ?? null, enEspera]
     );
-    if (saved.rowCount) imported.push({ numeroTicket: t.numeroTicket, id });
+    if (saved.rowCount) {
+      imported.push({ numeroTicket: t.numeroTicket, id: String(saved.rows[0].id) });
+    }
     } catch (err) {
       // Un ticket que falle al guardar (dato raro que pasa el esquema pero no la
       // BD) no debe tumbar toda la sincronización completa: se salta y se sigue.

@@ -231,7 +231,7 @@ async function runDatabaseChecks(): Promise<void> {
       SELECT COUNT(*)::int AS value
       FROM (
         SELECT
-          COALESCE(NULLIF(raw_payload->>'firebaseNegocioId', ''), device_id, 'sin-negocio') AS scope_key,
+          COALESCE(NULLIF(raw_payload->>'firebaseNegocioId', ''), 'principal') AS scope_key,
           lower(COALESCE(NULLIF(raw_payload->>'modo', ''), 'principal')) AS mode_key,
           COALESCE(NULLIF(ltrim(regexp_replace(COALESCE(raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '0'), ''), '0') AS ticket_key
         FROM mobile_synced_tickets
