@@ -1434,6 +1434,11 @@ const PERM_ALL_KEYS: string[] = PERM_MATRIX.flatMap((g) => g.rows.map((r) => r.k
 // histórico). Solo cuando el admin marca al menos una, se restringe a las marcadas.
 // Los administradores siempre ven todas.
 const SUB_TABS: Record<string, Array<{ key: string; label: string }>> = {
+  Ventas: [
+    { key: "nuevo", label: "Nuevo Pedido" },
+    { key: "despachos", label: "Cola de Despachos" },
+    { key: "guias", label: "Guías de Remisión" },
+  ],
   Seleccion: [
     { key: "nuevo", label: "Nuevo Envío" },
     { key: "proceso", label: "En Proceso" },
@@ -1444,6 +1449,10 @@ const SUB_TABS: Record<string, Array<{ key: string; label: string }>> = {
     { key: "cuadrilla", label: "Cuadrilla" },
     { key: "historial", label: "Historial de Pagos" },
     { key: "sueldo-admin", label: "Sueldo Administrativo" },
+  ],
+  "Costos Operativos": [
+    { key: "diario", label: "Registro por corrida" },
+    { key: "mensual", label: "Consolidado Mensual" },
   ],
 };
 function subTabKey(moduleKey: string, sub: string): string { return `SUB:${moduleKey}:${sub}`; }
@@ -3720,6 +3729,22 @@ export function App() {
       if (first && first.key !== nominaView) setNominaView(first.key as typeof nominaView);
     }
   }, [authUser, isAdmin, puedeVerSubTab, nominaView]);
+
+  useEffect(() => {
+    if (!authUser || isAdmin) return;
+    if (!puedeVerSubTab("Ventas", ventasView)) {
+      const first = SUB_TABS.Ventas.find((s) => puedeVerSubTab("Ventas", s.key));
+      if (first && first.key !== ventasView) setVentasView(first.key as typeof ventasView);
+    }
+  }, [authUser, isAdmin, puedeVerSubTab, ventasView]);
+
+  useEffect(() => {
+    if (!authUser || isAdmin) return;
+    if (!puedeVerSubTab("Costos Operativos", costosView)) {
+      const first = SUB_TABS["Costos Operativos"].find((s) => puedeVerSubTab("Costos Operativos", s.key));
+      if (first && first.key !== costosView) setCostosView(first.key as typeof costosView);
+    }
+  }, [authUser, isAdmin, puedeVerSubTab, costosView]);
 
   // Las tarifas (incluidos los precios del combustible) las usan varias
   // pantallas: Secadoras, Nómina y Configuración.
@@ -11424,8 +11449,12 @@ export function App() {
           <section className="panelGrid">
             <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
               <div className="segmented">
-                <button type="button" className={costosView === "diario" ? "active" : ""} onClick={() => setCostosView("diario")}>🏭 Registro por corrida</button>
-                <button type="button" className={costosView === "mensual" ? "active" : ""} onClick={() => { setCostosView("mensual"); if (!consolData) loadConsolidadoMensual(); }}>📅 Consolidado Mensual</button>
+                {puedeVerSubTab("Costos Operativos", "diario") && (
+                  <button type="button" className={costosView === "diario" ? "active" : ""} onClick={() => setCostosView("diario")}>🏭 Registro por corrida</button>
+                )}
+                {puedeVerSubTab("Costos Operativos", "mensual") && (
+                  <button type="button" className={costosView === "mensual" ? "active" : ""} onClick={() => { setCostosView("mensual"); if (!consolData) loadConsolidadoMensual(); }}>📅 Consolidado Mensual</button>
+                )}
               </div>
             </div>
             {costosView === "diario" && (
@@ -13243,7 +13272,7 @@ export function App() {
                 { key: "nuevo", label: "🛒 Nuevo Pedido" },
                 { key: "despachos", label: "🚚 Cola de Despachos" },
                 { key: "guias", label: "📄 Guías de Remisión" }
-              ] as const).map((t) => {
+              ] as const).filter((t) => puedeVerSubTab("Ventas", t.key)).map((t) => {
                 const active = ventasView === t.key;
                 return (
                   <button
@@ -19213,8 +19242,11 @@ export function App() {
                                       <input type="checkbox" checked={on} onChange={() => toggleModulo(expanded, m)} />
                                       {m}
                                     </label>
-                                    {on && subs.length > 0 && (
-                                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "6px 0 4px 20px" }}>
+                                    {/* Sub-pestañas SIEMPRE visibles si el módulo las tiene:
+                                        marcar una activa el módulo en cascada. Sin ninguna
+                                        marcada, el operador verá todas las de ese módulo. */}
+                                    {subs.length > 0 && (
+                                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "6px 0 4px 22px", opacity: on ? 1 : 0.85 }}>
                                         {subs.map((st) => {
                                           const sk = subTabKey(m, st.key);
                                           const son = modsOf(expanded).includes(sk);
