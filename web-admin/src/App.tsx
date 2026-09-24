@@ -1344,6 +1344,54 @@ type FomentoPago = {
 type FomentoLiquidacionRef = { liquidation_number: string; created_at: string; gross_amount: number; quintals: number; price_per_quintal: number; flete: number; cosechadora: number; bascula: number; abono_fomento: number };
 type FomentoDetalle = Fomento & { entregas: FomentoEntrega[]; pagos: FomentoPago[]; deuda_total: number; total_pagado: number; liquidaciones?: FomentoLiquidacionRef[]; };
 
+type ResumenCuentaFomento = {
+  totalCargos: number;
+  totalPagado: number;
+  deudaPendiente: number;
+  saldoFavor: number;
+  saldado: boolean;
+};
+
+const redondearDinero = (valor: number) => Math.round((valor + Number.EPSILON) * 100) / 100;
+
+function obtenerResumenCuentaFomento(
+  fomento: Pick<Fomento, "total_pedido" | "gasto_adm" | "total_pagado">,
+): ResumenCuentaFomento {
+  const totalCargos = redondearDinero(Math.max(0, Number(fomento.total_pedido ?? 0)) + Math.max(0, Number(fomento.gasto_adm ?? 0)));
+  const totalPagado = redondearDinero(Math.max(0, Number(fomento.total_pagado ?? 0)));
+  const saldo = redondearDinero(totalCargos - totalPagado);
+  const deudaPendiente = saldo > 0.005 ? saldo : 0;
+  const saldoFavor = saldo < -0.005 ? Math.abs(saldo) : 0;
+  return { totalCargos, totalPagado, deudaPendiente, saldoFavor, saldado: deudaPendiente === 0 };
+}
+
+function fechaLocalIso(fecha = new Date()): string {
+  const pad = (valor: number) => String(valor).padStart(2, "0");
+  return `${fecha.getFullYear()}-${pad(fecha.getMonth() + 1)}-${pad(fecha.getDate())}`;
+}
+
+function obtenerFechaFinalFomento(fomento: Pick<Fomento, "status" | "liquidado_at">): string {
+  if (fomento.status === "CERRADO_LIQUIDACION" && fomento.liquidado_at) return fomento.liquidado_at.slice(0, 10);
+  return fechaLocalIso();
+}
+
+function diasCalendarioEntre(fechaInicial: string, fechaFinal: string): number {
+  const a = fechaInicial.slice(0, 10).split("-").map(Number);
+  const b = fechaFinal.slice(0, 10).split("-").map(Number);
+  if (a.length !== 3 || b.length !== 3 || a.some(Number.isNaN) || b.some(Number.isNaN)) return 0;
+  return Math.max(0, Math.floor((Date.UTC(b[0], b[1] - 1, b[2]) - Date.UTC(a[0], a[1] - 1, a[2])) / 86400000));
+}
+
+function obtenerDiasEntregaFomento(fomento: Pick<Fomento, "status" | "liquidado_at">, entrega: FomentoEntrega): number {
+  if (entrega.dias_corte != null) return Math.max(0, Number(entrega.dias_corte));
+  return diasCalendarioEntre(entrega.fecha, obtenerFechaFinalFomento(fomento));
+}
+
+function obtenerMesesEntregaFomento(entrega: FomentoEntrega, dias: number): number {
+  if (entrega.es_saldo_anterior && entrega.meses_interes_fijo != null) return Math.max(0, Number(entrega.meses_interes_fijo));
+  return redondearDinero(dias / 30);
+}
+
 type Equipment = {
   id: string;
   name: string;
@@ -10515,6 +10563,8 @@ export function App() {
     const r2 = (n: number) => Math.round(n * 100) / 100;
     const esc = (s: unknown) => String(s ?? "").replace(/</g, "&lt;");
     const cerrado = f.status === "CERRADO_LIQUIDACION";
+    const cuenta = obtenerResumenCuentaFomento(f);
+    const fechaFinal = obtenerFechaFinalFomento(f);
     const fechaDoc = new Date().toLocaleDateString("es-EC", { year: "numeric", month: "long", day: "numeric" });
     const liqFecha = f.liquidado_at ? new Date(f.liquidado_at).toLocaleDateString("es-EC", { year: "numeric", month: "long", day: "numeric" }) : null;
 
@@ -10522,14 +10572,16 @@ export function App() {
     const totalPedido = Number(f.total_pedido ?? 0);
     const totalInteres = Number(f.gasto_adm ?? 0);
     const cargosFomento = r2(totalPedido + totalInteres);
-    const entregaRows = (f.entregas ?? []).map((e) => {
-      const dias = e.dias_corte != null ? Number(e.dias_corte) : Math.max(0, Math.floor((Date.now() - new Date(e.fecha).getTime()) / 86400000));
-      const diasTxt = e.es_saldo_anterior ? `🔒 ${e.meses_interes_fijo ?? 0}m` : String(dias);
+    const entregaRows = (f.entregas ?? []).map((e, index) => {
+      const dias = obtenerDiasEntregaFomento(f, e);
+      const meses = obtenerMesesEntregaFomento(e, dias);
       return `<tr>
-        <td>${e.es_saldo_anterior ? "—" : (e.fecha?.slice(0,10) ?? "—")}</td>
-        <td>${esc(e.concepto) || "Crédito / insumo"}</td>
+        <td style="text-align:center">${index + 1}</td>
+        <td>${e.fecha?.slice(0,10) ?? "—"}<small>${esc(e.concepto) || "Crédito / insumo"}</small></td>
+        <td>${fechaFinal}</td>
+        <td style="text-align:right">${dias}</td>
+        <td style="text-align:right">${meses.toFixed(2)}${e.es_saldo_anterior ? " fijo" : ""}</td>
         <td style="text-align:right">$${Number(e.valor).toFixed(2)}</td>
-        <td style="text-align:right">${diasTxt}</td>
         <td style="text-align:right;color:#b45309">$${Number(e.interes ?? 0).toFixed(2)}</td>
         <td style="text-align:right;font-weight:600">$${Number(e.suman ?? (Number(e.valor)+Number(e.interes ?? 0))).toFixed(2)}</td>
       </tr>`;
@@ -10553,11 +10605,6 @@ export function App() {
         </tr>`).join("")
       : `<tr><td colspan="5" style="text-align:center;color:#888">Aún no se ha liquidado arroz para este fomento</td></tr>`;
 
-    // ── Sección D: RESULTADO = Ingresos (arroz) − Cargos (fomento+interés) − Descuentos ──
-    const resultado = r2(ingresosArroz - cargosFomento - descuentosOp);
-    const aFavor = resultado >= -0.005;
-    const abs = Math.abs(resultado);
-
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
       <title>Estado de Cuenta — Fomento</title>
       <style>
@@ -10574,7 +10621,8 @@ export function App() {
         .sec h4{margin:0 0 5px;font-size:12px;font-weight:700;color:#374151;background:#eef2f7;padding:5px 8px;border-radius:5px;border-left:4px solid #0f766e;text-transform:uppercase;letter-spacing:.03em}
         table{width:100%;border-collapse:collapse;margin-bottom:4px}
         th{background:#f0f0f0;padding:5px 8px;text-align:left;border:1px solid #bbb;font-size:10px;text-transform:uppercase}
-        td{padding:5px 8px;border:1px solid #ccc;font-size:12px}
+        td{padding:5px 8px;border:1px solid #ccc;font-size:11px}
+        td small{display:block;margin-top:2px;color:#6b7280;font-size:9px}
         tfoot td{font-weight:700;background:#fafafa}
         .subt{width:320px;margin-left:auto}.subt td{border:none;padding:3px 8px}
         .subt .lbl{text-align:right;font-weight:600;padding-right:12px}.subt .val{text-align:right}
@@ -10585,7 +10633,7 @@ export function App() {
         .contra{background:#fef2f2;border-color:#dc2626;color:#b91c1c}
         .sigs{display:flex;justify-content:space-around;margin-top:44px}
         .sig{text-align:center}.sig hr{width:180px;border:none;border-top:1px solid #111;margin:0 auto 4px}.sig span{font-size:12px}
-        @media print{body{margin:10mm}}
+        @media print{@page{size:landscape;margin:10mm}body{margin:0}}
       </style></head><body>
       <div class="hdr">
         <h1>${esc(appSettings.business_name)}</h1>
@@ -10606,11 +10654,11 @@ export function App() {
       <div class="sec">
         <h4>A · Cargos del agricultor (insumos, efectivo, créditos) + interés</h4>
         <table>
-          <thead><tr><th>Fecha</th><th>Concepto</th><th style="text-align:right">Valor</th><th style="text-align:right">Días</th><th style="text-align:right">Interés</th><th style="text-align:right">Total</th></tr></thead>
-          <tbody>${entregaRows || `<tr><td colspan="6" style="text-align:center;color:#888">Sin cargos registrados</td></tr>`}</tbody>
+          <thead><tr><th style="text-align:center">N.º</th><th>Fecha Inicial</th><th>Fecha Final</th><th style="text-align:right">Días</th><th style="text-align:right">Meses</th><th style="text-align:right">Valor</th><th style="text-align:right">Interés</th><th style="text-align:right">Suman</th></tr></thead>
+          <tbody>${entregaRows || `<tr><td colspan="8" style="text-align:center;color:#888">Sin cargos registrados</td></tr>`}</tbody>
           <tfoot><tr>
-            <td colspan="2">SUBTOTAL CARGOS</td>
-            <td style="text-align:right">$${totalPedido.toFixed(2)}</td><td></td>
+            <td colspan="3">TOTALES</td><td></td><td></td>
+            <td style="text-align:right">$${totalPedido.toFixed(2)}</td>
             <td style="text-align:right;color:#b45309">$${totalInteres.toFixed(2)}</td>
             <td style="text-align:right">$${cargosFomento.toFixed(2)}</td>
           </tr></tfoot>
@@ -10618,7 +10666,7 @@ export function App() {
       </div>
 
       <div class="sec">
-        <h4>B · Descuentos operativos de la liquidación</h4>
+        <h4>B · Referencia de descuentos operativos de la liquidación</h4>
         <table class="subt" style="width:360px">
           <tr><td class="lbl">🚚 Flete:</td><td class="val">$${totalFlete.toFixed(2)}</td></tr>
           <tr><td class="lbl">🚜 Cosechadora:</td><td class="val">$${totalCosechadora.toFixed(2)}</td></tr>
@@ -10629,7 +10677,7 @@ export function App() {
       </div>
 
       <div class="sec">
-        <h4>C · Ingresos — Arroz entregado según romana</h4>
+        <h4>C · Referencia de arroz entregado según romana</h4>
         <table>
           <thead><tr><th>Liquidación</th><th>Fecha</th><th style="text-align:right">QQ</th><th style="text-align:right">Precio/QQ</th><th style="text-align:right">Bruto arroz</th></tr></thead>
           <tbody>${liqRows}</tbody>
@@ -10639,16 +10687,18 @@ export function App() {
 
       <div class="sec">
         <table class="subt" style="width:380px">
-          <tr><td class="lbl">(+) Ingresos (arroz bruto):</td><td class="val" style="color:#15803d">$${ingresosArroz.toFixed(2)}</td></tr>
-          <tr><td class="lbl">(−) Cargos (fomento + interés):</td><td class="val">-$${cargosFomento.toFixed(2)}</td></tr>
-          <tr><td class="lbl">(−) Descuentos operativos:</td><td class="val">-$${descuentosOp.toFixed(2)}</td></tr>
+          <tr><td class="lbl">(+) Total pedido:</td><td class="val">$${totalPedido.toFixed(2)}</td></tr>
+          <tr><td class="lbl">(+) Interés acumulado:</td><td class="val">$${totalInteres.toFixed(2)}</td></tr>
+          <tr><td class="lbl">Total deuda generada:</td><td class="val">$${cuenta.totalCargos.toFixed(2)}</td></tr>
+          <tr><td class="lbl">(−) Total pagado:</td><td class="val" style="color:#15803d">-$${cuenta.totalPagado.toFixed(2)}</td></tr>
+          <tr><td class="lbl" style="border-top:1px solid #999">Deuda total:</td><td class="val" style="border-top:1px solid #999;font-weight:800">$${cuenta.deudaPendiente.toFixed(2)}</td></tr>
         </table>
       </div>
 
-      <div class="result ${aFavor ? "favor" : "contra"}">
-        <div class="cap">D · ${aFavor ? "🟢 Saldo a favor del cliente" : "🔴 Saldo en contra (deuda arrastrada)"}</div>
-        <div class="amt">$ ${abs.toFixed(2)}</div>
-        <div style="font-size:11px;margin-top:4px;font-weight:600">${aFavor ? "El arroz cubrió los cargos y descuentos; este monto se le paga al agricultor." : "El arroz no alcanzó a cubrir todo; este saldo se arrastra a la próxima cosecha."}</div>
+      <div class="result ${cuenta.saldado ? "favor" : "contra"}">
+        <div class="cap">D · ${cuenta.saldado ? "SALDADO" : "DEUDA PENDIENTE"}</div>
+        <div class="amt">$ ${cuenta.deudaPendiente.toFixed(2)}</div>
+        <div style="font-size:12px;margin-top:4px;font-weight:700">${cuenta.saldoFavor > 0 ? `Saldo a favor del agricultor: $${cuenta.saldoFavor.toFixed(2)}` : cuenta.saldado ? "Cuenta cubierta por completo." : "Monto pendiente de pago del agricultor."}</div>
       </div>
 
       <div class="sigs">
@@ -15718,11 +15768,14 @@ export function App() {
                         <select required value={cajaFomentoId} onChange={e => setCajaFomentoId(e.target.value)}
                           style={{ display: "block", width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 13 }}>
                           <option value="">— Seleccionar —</option>
-                          {fomentos.filter(f => f.status === "ACTIVOS").map(f => (
-                            <option key={f.id} value={f.id}>
-                              {f.farmer_name} | Deuda: ${Number(f.deuda_total ?? 0).toFixed(2)} | Disp: ${Number(f.falta_por_pedir).toFixed(2)}
-                            </option>
-                          ))}
+                          {fomentos.filter(f => f.status === "ACTIVOS").map(f => {
+                            const cuenta = obtenerResumenCuentaFomento(f);
+                            return (
+                              <option key={f.id} value={f.id}>
+                                {f.farmer_name} | Deuda: ${cuenta.deudaPendiente.toFixed(2)} | Disp: ${Number(f.falta_por_pedir).toFixed(2)}
+                              </option>
+                            );
+                          })}
                         </select>
                       </label>
 
@@ -15730,11 +15783,12 @@ export function App() {
                       {cajaFomentoId && (() => {
                         const f = fomentos.find(x => x.id === cajaFomentoId);
                         if (!f) return null;
+                        const cuenta = obtenerResumenCuentaFomento(f);
                         return (
                           <div style={{ background: "#f0fdf4", borderRadius: 6, padding: "8px 12px", marginBottom: 10, fontSize: 12, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
                             <div><span style={{ color: "var(--c-muted)" }}>Pedido</span><br/><strong>${Number(f.total_pedido).toFixed(2)}</strong></div>
                             <div><span style={{ color: "var(--c-muted)" }}>Interés</span><br/><strong style={{ color: "#b45309" }}>${Number(f.gasto_adm).toFixed(2)}</strong></div>
-                            <div><span style={{ color: "var(--c-muted)" }}>Deuda total</span><br/><strong style={{ color: "#dc2626" }}>${Number(f.deuda_total ?? 0).toFixed(2)}</strong></div>
+                            <div><span style={{ color: "var(--c-muted)" }}>Deuda total</span><br/><strong style={{ color: cuenta.deudaPendiente > 0 ? "#dc2626" : "#16a34a" }}>${cuenta.deudaPendiente.toFixed(2)}</strong></div>
                           </div>
                         );
                       })()}
@@ -15767,8 +15821,7 @@ export function App() {
                       <p style={{ color: "var(--c-muted)", textAlign: "center" }}>No hay fomentos activos</p>
                     )}
                     {fomentos.filter(f => f.status === "ACTIVOS").map(f => {
-                      const deuda = Number(f.deuda_total ?? 0);
-                      const pagado = Number(f.total_pagado ?? 0);
+                      const cuenta = obtenerResumenCuentaFomento(f);
                       return (
                         <article key={f.id} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "12px 16px", marginBottom: 8, background: "var(--c-surface)" }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
@@ -15790,11 +15843,11 @@ export function App() {
                             </div>
                             <div style={{ textAlign: "center" }}>
                               <div style={{ color: "var(--c-muted)", fontSize: 10 }}>PAGADO</div>
-                              <strong style={{ color: "#16a34a" }}>${pagado.toFixed(2)}</strong>
+                              <strong style={{ color: "#16a34a" }}>${cuenta.totalPagado.toFixed(2)}</strong>
                             </div>
                             <div style={{ textAlign: "center" }}>
                               <div style={{ color: "var(--c-muted)", fontSize: 10 }}>DEUDA</div>
-                              <strong style={{ color: deuda > 0 ? "#dc2626" : "#16a34a" }}>${deuda.toFixed(2)}</strong>
+                              <strong style={{ color: cuenta.deudaPendiente > 0 ? "#dc2626" : "#16a34a" }}>${cuenta.deudaPendiente.toFixed(2)}</strong>
                             </div>
                           </div>
                           <button type="button"
@@ -16549,6 +16602,7 @@ export function App() {
                     .map(f => {
                       const habilitado = f.estado_credito === "HABILITADO";
                       const statusColor = f.status === "ACTIVOS" ? "#16a34a" : f.status === "APROBADOS" ? "#1d4ed8" : f.status === "CERRADO_LIQUIDACION" ? "#374151" : "#6b7280";
+                      const cuenta = obtenerResumenCuentaFomento(f);
                       return (
                         <div key={f.id} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 14px", cursor: "pointer",
                           background: fomentoDetalle?.id === f.id ? "#f0fdf4" : "var(--c-surface)" }}
@@ -16568,7 +16622,7 @@ export function App() {
                           </div>
                           <div style={{ fontSize: 11, color: "var(--c-muted)", marginTop: 2 }}>
                             {f.status === "CERRADO_LIQUIDACION"
-                              ? <>Liquidado: {f.liquidado_at?.slice(0,10) ?? "—"} | Saldo final: <strong style={{ color: Number(f.deuda_total ?? 0) > 0.005 ? "#dc2626" : "#16a34a" }}>${Number(f.deuda_total ?? 0).toFixed(2)}</strong></>
+                              ? <>Liquidado: {f.liquidado_at?.slice(0,10) ?? "—"} | <strong style={{ color: cuenta.deudaPendiente > 0 ? "#dc2626" : "#16a34a" }}>{cuenta.deudaPendiente > 0 ? `Deuda $${cuenta.deudaPendiente.toFixed(2)}` : "SALDADO"}{cuenta.saldoFavor > 0 ? ` · A favor $${cuenta.saldoFavor.toFixed(2)}` : ""}</strong></>
                               : <>Inicio: {f.inicio?.slice(0,10)} | Cosecha: {f.cosecha?.slice(0,10) ?? "—"} | Interés: ${Number(f.gasto_adm).toFixed(2)}</>}
                           </div>
                         </div>
@@ -16616,15 +16670,17 @@ export function App() {
                         </button>
                       )}
                     </div>
-                    {fomentoDetalle.status === "CERRADO_LIQUIDACION" && (
-                      <div style={{ background: "#f3f4f6", border: "1px solid #d1d5db", borderRadius: 8, padding: "8px 12px", marginBottom: 12, fontSize: 12, color: "#374151" }}>
-                        🗄️ <strong>Fomento archivado</strong> — cerrado por liquidación
-                        {fomentoDetalle.liquidado_at ? ` el ${fomentoDetalle.liquidado_at.slice(0,10)}` : ""}.
-                        Saldo final: <strong style={{ color: Number(fomentoDetalle.deuda_total ?? 0) > 0.005 ? "#dc2626" : "#16a34a" }}>
-                          {Number(fomentoDetalle.deuda_total ?? 0) > 0.005 ? `Saldo en contra $${Number(fomentoDetalle.deuda_total).toFixed(2)} (arrastrado a nuevo fomento)` : "Saldado $0.00"}
-                        </strong>.
-                      </div>
-                    )}
+                    {(() => {
+                      const cuenta = obtenerResumenCuentaFomento(fomentoDetalle);
+                      const saldado = cuenta.saldado;
+                      return (
+                        <div style={{ background: saldado ? "#f0fdf4" : "#fef2f2", border: `1px solid ${saldado ? "#86efac" : "#fecaca"}`, borderRadius: 8, padding: "9px 12px", marginBottom: 12, fontSize: 12, color: saldado ? "#166534" : "#991b1b" }}>
+                          {fomentoDetalle.status === "CERRADO_LIQUIDACION" && <><strong>Fomento archivado</strong>{fomentoDetalle.liquidado_at ? ` el ${fomentoDetalle.liquidado_at.slice(0,10)}` : ""}. </>}
+                          <strong>{saldado ? "SALDADO" : `Deuda pendiente: $${cuenta.deudaPendiente.toFixed(2)}`}</strong>
+                          {cuenta.saldoFavor > 0 && <span style={{ display: "block", marginTop: 3, fontWeight: 800 }}>Saldo a favor del agricultor: ${cuenta.saldoFavor.toFixed(2)}</span>}
+                        </div>
+                      );
+                    })()}
 
                     {/* Tasa de interés editable */}
                     <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 12px", marginBottom: 12, display: "flex", alignItems: "center", gap: 10 }}>
@@ -16660,28 +16716,35 @@ export function App() {
                     </div>
 
                     {/* Resumen */}
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
-                      {([
+                    {(() => {
+                      const cuenta = obtenerResumenCuentaFomento(fomentoDetalle);
+                      const resumen: [string, string | number][] = [
                         ["Cuadras", fomentoDetalle.cuadras],
                         ["Paradas", Number(fomentoDetalle.paradas).toFixed(0)],
                         ["Monto Límite", `$${Number(fomentoDetalle.monto_limite).toFixed(2)}`],
                         ["Total Pedido", `$${Number(fomentoDetalle.total_pedido).toFixed(2)}`],
                         ["Disponible", `$${Number(fomentoDetalle.falta_por_pedir).toFixed(2)}`],
                         ["Interés Acum.", `$${Number(fomentoDetalle.gasto_adm).toFixed(2)}`],
-                        ["Total Pagado", `$${Number(fomentoDetalle.total_pagado ?? 0).toFixed(2)}`],
-                        ["Deuda Total", `$${Number(fomentoDetalle.deuda_total ?? 0).toFixed(2)}`],
+                        ["Total Pagado", `$${cuenta.totalPagado.toFixed(2)}`],
+                        ["Deuda Total", `$${cuenta.deudaPendiente.toFixed(2)}`],
+                        ...(cuenta.saldoFavor > 0 ? [["Saldo a favor", `$${cuenta.saldoFavor.toFixed(2)}`] as [string, string]] : []),
                         ["Estado", fomentoDetalle.estado_credito],
-                      ] as [string, string|number][]).map(([k, v]) => (
-                        <div key={k} style={{ background: "#f9fafb", borderRadius: 6, padding: "6px 10px" }}>
-                          <div style={{ fontSize: 10, color: "var(--c-muted)", fontWeight: 600 }}>{k}</div>
-                          <div style={{ fontSize: 14, fontWeight: 700,
-                            color: k === "Estado" ? (v === "HABILITADO" ? "#16a34a" : "#dc2626")
-                                 : k === "Deuda Total" ? (Number(v.toString().replace("$","")) > 0 ? "#dc2626" : "#16a34a")
-                                 : k === "Total Pagado" ? "#16a34a"
-                                 : "inherit" }}>{v}</div>
+                      ];
+                      return (
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+                          {resumen.map(([k, v]) => (
+                            <div key={k} style={{ background: "#f9fafb", borderRadius: 6, padding: "6px 10px" }}>
+                              <div style={{ fontSize: 10, color: "var(--c-muted)", fontWeight: 600 }}>{k}</div>
+                              <div style={{ fontSize: 14, fontWeight: 700,
+                                color: k === "Estado" ? (v === "HABILITADO" ? "#16a34a" : "#dc2626")
+                                     : k === "Deuda Total" ? (cuenta.deudaPendiente > 0 ? "#dc2626" : "#16a34a")
+                                     : k === "Total Pagado" || k === "Saldo a favor" ? "#16a34a"
+                                     : "inherit" }}>{v}</div>
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
+                      );
+                    })()}
 
                     {/* Interés fijo del SALDO ARRASTRADO (movido aquí desde el form de entrega):
                         modificador directo sobre el saldo/deuda de la cuenta. */}
@@ -16719,33 +16782,39 @@ export function App() {
                     })()}
 
                     {/* Tabla de entregas */}
-                    <h4 style={{ marginBottom: 6 }}>Entregas / Créditos</h4>
+                    <h4 style={{ marginBottom: 6 }}>Estado de Cuenta</h4>
                     <div style={{ overflowX: "auto", marginBottom: 12 }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <table style={{ width: "100%", minWidth: 820, borderCollapse: "collapse", fontSize: 12 }}>
                         <thead>
                           <tr style={{ background: "var(--c-brand)", color: "#fff" }}>
-                            <th style={{ padding: "4px 8px", textAlign: "left" }}>Fecha</th>
-                            <th style={{ padding: "4px 8px", textAlign: "right" }}>Valor</th>
+                            <th style={{ padding: "4px 8px", textAlign: "center" }}>N.º</th>
+                            <th style={{ padding: "4px 8px", textAlign: "left" }}>Fecha Inicial</th>
+                            <th style={{ padding: "4px 8px", textAlign: "left" }}>Fecha Final</th>
                             <th style={{ padding: "4px 8px", textAlign: "right" }}>Días</th>
+                            <th style={{ padding: "4px 8px", textAlign: "right" }}>Meses</th>
+                            <th style={{ padding: "4px 8px", textAlign: "right" }}>Valor</th>
                             <th style={{ padding: "4px 8px", textAlign: "right" }}>Interés</th>
-                            <th style={{ padding: "4px 8px", textAlign: "right" }}>Total</th>
+                            <th style={{ padding: "4px 8px", textAlign: "right" }}>Suman</th>
                             <th style={{ padding: "4px 8px" }}></th>
                           </tr>
                         </thead>
                         <tbody>
                           {fomentoDetalle.entregas.map((e, i) => {
-                            // Días CON CORTE: si el backend ya congeló el reloj (fomento en cierre),
-                            // usa e.dias_corte; si no, calcula contra hoy.
-                            const dias = e.dias_corte != null ? Number(e.dias_corte) : Math.max(0, Math.floor((Date.now() - new Date(e.fecha).getTime()) / 86400000));
+                            const dias = obtenerDiasEntregaFomento(fomentoDetalle, e);
+                            const meses = obtenerMesesEntregaFomento(e, dias);
                             return (
                               <tr key={e.id} style={{ background: e.es_saldo_anterior ? "#fffbeb" : (i % 2 === 0 ? "#fff" : "#f9fafb") }}>
-                                <td style={{ padding: "4px 8px" }}>{e.es_saldo_anterior ? "—" : e.fecha?.slice(0,10)}</td>
-                                <td style={{ padding: "4px 8px", textAlign: "right" }}>${Number(e.valor).toFixed(2)}</td>
-                                <td style={{ padding: "4px 8px", textAlign: e.es_saldo_anterior ? "center" : "right" }}>
-                                  {e.es_saldo_anterior
-                                    ? <span style={{ fontSize: 11, fontWeight: 800, color: "#92400e", background: "#fef3c7", borderRadius: 6, padding: "1px 6px", whiteSpace: "nowrap" }}>🔒 Fijo: {e.meses_interes_fijo ?? 0} {Number(e.meses_interes_fijo) === 1 ? "mes" : "meses"}</span>
-                                    : dias}
+                                <td style={{ padding: "4px 8px", textAlign: "center" }}>{i + 1}</td>
+                                <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>
+                                  {e.fecha?.slice(0,10) ?? "—"}
+                                  <small style={{ display: "block", color: "var(--c-muted)", maxWidth: 170, whiteSpace: "normal" }}>{e.concepto || "Crédito / insumo"}</small>
                                 </td>
+                                <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>{obtenerFechaFinalFomento(fomentoDetalle)}</td>
+                                <td style={{ padding: "4px 8px", textAlign: "right" }}>{dias}</td>
+                                <td style={{ padding: "4px 8px", textAlign: "right", whiteSpace: "nowrap" }}>
+                                  {meses.toFixed(2)}{e.es_saldo_anterior && <span style={{ marginLeft: 4, fontSize: 10, fontWeight: 800, color: "#92400e" }}>FIJO</span>}
+                                </td>
+                                <td style={{ padding: "4px 8px", textAlign: "right" }}>${Number(e.valor).toFixed(2)}</td>
                                 <td style={{ padding: "4px 8px", textAlign: "right", color: "#b45309" }}>${Number(e.interes).toFixed(2)}</td>
                                 <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700 }}>${Number(e.suman).toFixed(2)}</td>
                                 <td style={{ padding: "4px 8px" }}>
@@ -16759,15 +16828,15 @@ export function App() {
                             );
                           })}
                           {fomentoDetalle.entregas.length === 0 && (
-                            <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--c-muted)", padding: 12 }}>Sin entregas registradas</td></tr>
+                            <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--c-muted)", padding: 12 }}>Sin entregas registradas</td></tr>
                           )}
                         </tbody>
                         {fomentoDetalle.entregas.length > 0 && (
                           <tfoot>
                             <tr style={{ fontWeight: 700, borderTop: "2px solid #e5e7eb" }}>
-                              <td style={{ padding: "4px 8px" }}>TOTAL</td>
+                              <td colSpan={3} style={{ padding: "4px 8px" }}>TOTALES</td>
+                              <td></td><td></td>
                               <td style={{ padding: "4px 8px", textAlign: "right" }}>${Number(fomentoDetalle.total_pedido).toFixed(2)}</td>
-                              <td></td>
                               <td style={{ padding: "4px 8px", textAlign: "right", color: "#b45309" }}>${Number(fomentoDetalle.gasto_adm).toFixed(2)}</td>
                               <td style={{ padding: "4px 8px", textAlign: "right" }}>${(Number(fomentoDetalle.total_pedido)+Number(fomentoDetalle.gasto_adm)).toFixed(2)}</td>
                               <td></td>

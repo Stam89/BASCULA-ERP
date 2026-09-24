@@ -351,6 +351,17 @@ rg -n "PALABRA_CLAVE" PROJECT_CONTEXT.md
 git show <commit>
 ```
 
+### Estado de cuenta de Fomentos
+
+Implementado el 2026-09-24:
+
+- La vista web y el comprobante imprimible muestran N.º, Fecha Inicial, Fecha Final, Días, Meses, Valor, Interés y Suman.
+- La fecha final usa la fecha de liquidación en fomentos cerrados y la fecha actual en cuentas abiertas.
+- La presentación del saldo usa una sola fórmula: pedido + interés - pagos.
+- La deuda visible nunca baja de $0.00; los pagos excedentes se muestran como `Saldo a favor del agricultor` y el estado queda `SALDADO`.
+- No hubo cambios de base de datos ni de registros existentes.
+- Verificaciones: frontend build, lint sin errores (advertencias históricas), backend tests 41/41 y revisión visual local en Fomentos.
+
 ## Servidor local
 
 El backend compilado se inicia desde `backend/` con:
