@@ -7,7 +7,7 @@ Actualizado: 2026-09-24
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: nomina del Secador al iniciar (con reubicacion) y multiseleccion en Tendal.
+- Ultimo cambio funcional: edicion aislada por tunel y formulario de Caja condicional (Efectivo/Banco/Mixto).
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,18 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Secadoras aisladas al editar + Caja condicional (2026-09-24)
+
+- Al editar un secado mecanico, la UI muestra solo el motor y el tunel fisico elegido; no renderiza Tendal ni otros motores/tuneles.
+- Si el tunel contiene partidas internas PROPIO/SOLO SECADO, ambas permanecen juntas porque corresponden a la misma carga fisica.
+- Al entrar a un tunel se limpia cualquier estado de edicion residual del Tendal.
+- Apertura de Caja incorpora `MIXTO`: Efectivo muestra solo saldo en efectivo, Banco solo saldo bancario y Mixto ambos.
+- Frontend y backend fuerzan a cero cualquier saldo oculto para impedir que se guarde un valor residual.
+- El resumen financiero reconoce cajas mixtas sin duplicar el saldo inicial; movimientos historicos sin medio de pago se conservan en efectivo por compatibilidad.
+- Subcategoria solo aparece para las categorias `Gastos Generales` y `Servicios Basicos`; cambiar de categoria limpia el valor oculto.
+- Verificacion visual sin escrituras en una pestaña separada: Caja cambio correctamente entre los tres tipos y la edicion del Tunel 3 mostro solo Motor 2/Tunel 3.
+- Verificaciones: backend build, 38/38 tests, frontend build y lint con 0 errores (warnings historicos).
 
 ### Nomina Secador al iniciar + multiseleccion en Tendal (2026-09-24)
 

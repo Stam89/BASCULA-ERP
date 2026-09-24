@@ -127,21 +127,29 @@ export async function getInventarioValorizado(client: PoolClient | typeof pool, 
 async function getCajaBancos(client: PoolClient | typeof pool, accionistaId: string) {
   const r = await client.query(
     `SELECT c.tipo,
-            COALESCE(SUM(
-              c.opening_balance
-              + COALESCE((SELECT SUM(CASE WHEN m.movement = 'INCOME' THEN m.amount ELSE -m.amount END)
-                          FROM cash_movements m WHERE m.cash_register_id = c.id), 0)
-            ), 0) AS saldo
+            COALESCE(c.opening_balance_cash, 0) AS opening_cash,
+            COALESCE(c.opening_balance_bank, 0) AS opening_bank,
+            COALESCE((SELECT SUM(CASE WHEN m.movement = 'INCOME' THEN m.amount ELSE -m.amount END)
+                      FROM cash_movements m WHERE m.cash_register_id = c.id), 0) AS movimientos
      FROM cash_registers c
      WHERE c.accionista_id = $1 AND c.status = 'OPEN'
-     GROUP BY c.tipo`,
+     ORDER BY c.opened_at ASC`,
     [accionistaId]
   );
   let efectivo = 0;
   let bancos = 0;
   for (const row of r.rows) {
-    if (row.tipo === "BANCO") bancos = round2(Number(row.saldo));
-    else efectivo = round2(Number(row.saldo));
+    const movimientos = Number(row.movimientos ?? 0);
+    if (row.tipo === "BANCO") {
+      bancos = round2(bancos + Number(row.opening_bank ?? 0) + movimientos);
+    } else if (row.tipo === "MIXTO") {
+      // Los movimientos antiguos no distinguen medio de pago; por compatibilidad
+      // se conservan como efectivo y el saldo bancario inicial queda separado.
+      efectivo = round2(efectivo + Number(row.opening_cash ?? 0) + movimientos);
+      bancos = round2(bancos + Number(row.opening_bank ?? 0));
+    } else {
+      efectivo = round2(efectivo + Number(row.opening_cash ?? 0) + movimientos);
+    }
   }
   return { efectivo, bancos, total: round2(efectivo + bancos) };
 }

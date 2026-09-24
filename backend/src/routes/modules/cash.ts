@@ -142,20 +142,23 @@ cashRouter.post("/registers/open", asyncRoute(async (req, res) => {
   const body = z.object({
     branch_id: z.string().uuid().optional(),
     name: z.string().default("Caja Principal"),
-    // Una caja maneja efectivo o es una cuenta de banco.
-    tipo: z.enum(["EFECTIVO", "BANCO"]).default("EFECTIVO"),
+    // Una caja puede manejar efectivo, banco o ambos saldos en una sola apertura.
+    tipo: z.enum(["EFECTIVO", "BANCO", "MIXTO"]).default("EFECTIVO"),
     opening_balance_cash: z.number().nonnegative().default(0),
     opening_balance_bank: z.number().nonnegative().default(0),
     opened_by: z.string().uuid().optional()
   }).parse(req.body);
 
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
-  const openingTotal = round2(body.opening_balance_cash + body.opening_balance_bank);
+  // Ignora cualquier valor residual de un campo que la UI tenga oculto.
+  const openingCash = body.tipo === "BANCO" ? 0 : body.opening_balance_cash;
+  const openingBank = body.tipo === "EFECTIVO" ? 0 : body.opening_balance_bank;
+  const openingTotal = round2(openingCash + openingBank);
   const result = await pool.query(
     `INSERT INTO cash_registers (branch_id, name, tipo, opening_balance, opening_balance_cash, opening_balance_bank, opened_by, accionista_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING *`,
-    [body.branch_id, body.name, body.tipo, openingTotal, body.opening_balance_cash, body.opening_balance_bank, body.opened_by, accionistaId]
+    [body.branch_id, body.name, body.tipo, openingTotal, openingCash, openingBank, body.opened_by, accionistaId]
   );
   res.status(201).json(result.rows[0]);
 }));

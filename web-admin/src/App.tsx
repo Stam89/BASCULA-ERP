@@ -1530,6 +1530,18 @@ function NavIcon({ tab }: { tab: string }) {
 
 // Categoría de caja (catálogo dinámico desde BD: cash_categories).
 type CashCat = { id: string; codigo: string; nombre: string; tipo: "INGRESO" | "EGRESO"; aplicable_a: "MATRIZ" | "SOCIO" | "AMBOS"; activo: boolean };
+type CashRegisterType = "EFECTIVO" | "BANCO" | "MIXTO";
+
+function cashCategoryAllowsSubcategory(categoryCode: string, categories: CashCat[]): boolean {
+  const category = categories.find((item) => item.codigo === categoryCode);
+  const normalized = `${categoryCode} ${category?.nombre ?? ""}`
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .toUpperCase();
+  return normalized.includes("GASTOS GENERALES") || normalized.includes("SERVICIOS BASICOS");
+}
 // Categorías que NO se registran como movimiento crudo: van por su flujo dedicado.
 // 'agricultor' se resuelve enlazando una liquidación (Por Pagar) dentro del form.
 const CASH_REUSE: Record<string, "pilado" | "fomento" | "agricultor"> = {
@@ -2106,7 +2118,7 @@ export function App() {
   const [cashSummary, setCashSummary] = useState<CashSummary | null>(null);
   const [cashPayables, setCashPayables] = useState<AccountPayable[]>([]);
   const [anticipoFarmerId, setAnticipoFarmerId] = useState("");
-  const [newCajaTipo, setNewCajaTipo] = useState<"EFECTIVO" | "BANCO">("EFECTIVO");
+  const [newCajaTipo, setNewCajaTipo] = useState<CashRegisterType>("EFECTIVO");
   const [newCajaName, setNewCajaName] = useState("Caja Principal");
   const [newCajaCash, setNewCajaCash] = useState("0");
   const [newCajaBank, setNewCajaBank] = useState("0");
@@ -7540,11 +7552,13 @@ export function App() {
 
   async function submitCash(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const openingCash = newCajaTipo === "BANCO" ? 0 : Number(newCajaCash);
+    const openingBank = newCajaTipo === "EFECTIVO" ? 0 : Number(newCajaBank);
     await apiPost("/cash/registers/open", {
       name: newCajaName,
       tipo: newCajaTipo,
-      opening_balance_cash: Number(newCajaCash),
-      opening_balance_bank: Number(newCajaBank)
+      opening_balance_cash: openingCash,
+      opening_balance_bank: openingBank
     });
     addToast("Caja abierta", "success");
     setNewCajaCash("0");
@@ -7552,8 +7566,17 @@ export function App() {
     await refresh();
   }
 
-  async function loadPreviousBalance(tipo: "EFECTIVO" | "BANCO") {
+  async function loadPreviousBalance(tipo: CashRegisterType) {
     try {
+      if (tipo === "MIXTO") {
+        const [cash, bank] = await Promise.all([
+          apiGet<{ final_balance: number }>("/cash/registers/previous-balance?tipo=EFECTIVO"),
+          apiGet<{ final_balance: number }>("/cash/registers/previous-balance?tipo=BANCO")
+        ]);
+        setNewCajaCash(Math.max(0, cash.final_balance).toFixed(2));
+        setNewCajaBank(Math.max(0, bank.final_balance).toFixed(2));
+        return;
+      }
       const data = await apiGet<{ final_balance: number }>(`/cash/registers/previous-balance?tipo=${tipo}`);
       const total = data.final_balance;
       if (total <= 0) return;
@@ -8160,6 +8183,8 @@ export function App() {
       setMessage(`Editando secado en Tendal (${report.status === "COMPLETED" ? "finalizado" : "En proceso"})`);
       return;
     }
+    // Evita que una edición anterior del Tendal quede viva detrás del túnel.
+    setEditingTendal(null);
     setEditingDryingReport(report);
     // El formulario del secado vive bajo su motor: cambiar a esa vista y ABRIR
     // el acordeón de ese motor para que el formulario de edición sea visible.
@@ -11119,7 +11144,14 @@ export function App() {
                   { key: 1, icon: "⚙️", title: "Motor 1", sub: MOTOR_SECADORAS[1].join(" y "), onClick: () => abrirMotor(1) },
                   { key: 2, icon: "⚙️", title: "Motor 2", sub: MOTOR_SECADORAS[2].join(" y "), onClick: () => abrirMotor(2) }
                 ];
-                return cards.map((c) => {
+                // En edición se muestra únicamente el origen elegido. Así un túnel
+                // nunca abre visualmente el Tendal ni otro motor por estado residual.
+                const visibleCards = editingDryingReport
+                  ? cards.filter((card) => card.key === motorActivo)
+                  : editingTendal
+                    ? cards.filter((card) => card.key === "TENDAL")
+                    : cards;
+                return visibleCards.map((c) => {
                   const open = secadoraAbierta === c.key;
                   return (
                     <button key={String(c.key)} type="button" className={`secCard${open ? " open" : ""}`} onClick={c.onClick} aria-expanded={open}>
@@ -11246,23 +11278,25 @@ export function App() {
                     que dejaste secando) + el combustible, para cerrarlo al final.
                     No se mezclan los secados ya finalizados. ── */
               (() => {
+                const selectedTunnel = editingDryingReport.tunnel_number;
                 const enProceso = dryingReports.filter(
-                  (r) => motorDeSecadora(r.dryer_name) === motorActivo && r.status !== "COMPLETED"
+                  (r) => motorDeSecadora(r.dryer_name) === motorActivo
+                    && r.tunnel_number === selectedTunnel
+                    && r.status !== "COMPLETED"
                 );
-                // Incluye el que se abrió solo si aún está en proceso. Si ya fue
-                // finalizado (por ejemplo, al cerrar el combustible del motor), se
-                // quita de la edición para evitar que el formulario siga lleno.
-                const lista = editingDryingReport && editingDryingReport.status !== "COMPLETED"
-                  ? (enProceso.some((r) => r.id === editingDryingReport!.id)
+                // Un túnel físico puede tener dos partidas internas (PROPIO y SOLO
+                // SECADO). Se conservan juntas, pero jamás se arrastran otros túneles.
+                const lista = editingDryingReport.status !== "COMPLETED"
+                  ? (enProceso.some((r) => r.id === editingDryingReport.id)
                     ? enProceso
                     : [editingDryingReport, ...enProceso])
-                  : enProceso;
+                  : [editingDryingReport];
                 lista.sort((a, b) => a.tunnel_number - b.tunnel_number);
                 return (
                   <div style={{ gridColumn: "1 / -1", display: "grid", gap: 16 }}>
                     <div className="tablePanel" style={{ padding: "8px 12px" }}>
-                      <strong>✎ Editando el Motor {motorActivo}</strong>
-                      <span className="muted"> · {lista.length} reporte(s) en proceso. Finaliza cada túnel; el combustible se solicitará únicamente al cerrar el último.</span>
+                      <strong>✎ Editando el Túnel {selectedTunnel}</strong>
+                      <span className="muted"> · {lista.length} partida(s) del mismo túnel. El combustible se solicitará únicamente si es el último túnel activo del motor.</span>
                     </div>
                     <div className="panelGrid" style={{ gap: 16 }}>
                       {lista.map((rep) => {
@@ -14656,20 +14690,22 @@ export function App() {
                   <Select
                     name="tipo"
                     label="Tipo"
-                    rows={[["EFECTIVO", "💵 Efectivo"], ["BANCO", "🏦 Banco"]]}
+                    rows={[["EFECTIVO", "💵 Efectivo"], ["BANCO", "🏦 Banco"], ["MIXTO", "⚖️ Mixto"]]}
                     value={newCajaTipo}
                     onChange={(e) => {
-                      const tipo = e.target.value as "EFECTIVO" | "BANCO";
+                      const tipo = e.target.value as CashRegisterType;
                       setNewCajaTipo(tipo);
+                      if (tipo === "EFECTIVO") setNewCajaBank("0");
+                      if (tipo === "BANCO") setNewCajaCash("0");
                       loadPreviousBalance(tipo).catch(() => undefined);
                     }}
                   />
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <Input name="opening_balance_cash" label="Saldo inicial efectivo $" type="number" value={newCajaCash} onChange={(e) => setNewCajaCash(e.target.value)} />
-                    <Input name="opening_balance_bank" label="Saldo inicial banco $" type="number" value={newCajaBank} onChange={(e) => setNewCajaBank(e.target.value)} />
+                  <div style={{ display: "grid", gridTemplateColumns: newCajaTipo === "MIXTO" ? "1fr 1fr" : "1fr", gap: 10 }}>
+                    {newCajaTipo !== "BANCO" && <Input name="opening_balance_cash" label="Saldo inicial ($)" type="number" value={newCajaCash} onChange={(e) => setNewCajaCash(e.target.value)} />}
+                    {newCajaTipo !== "EFECTIVO" && <Input name="opening_balance_bank" label="Saldo inicial en Banco ($)" type="number" value={newCajaBank} onChange={(e) => setNewCajaBank(e.target.value)} />}
                   </div>
                   <button type="button" className="btnSecondary" onClick={() => loadPreviousBalance(newCajaTipo).catch(() => undefined)}>
-                    🔄 Traer saldo anterior ({newCajaTipo === "EFECTIVO" ? "efectivo" : "banco"})
+                    🔄 Traer saldo anterior ({newCajaTipo === "MIXTO" ? "efectivo y banco" : newCajaTipo === "EFECTIVO" ? "efectivo" : "banco"})
                   </button>
                   <button className="primary" style={{ width: "100%", padding: "10px 0", fontSize: 14, fontWeight: 700 }}>💰 Abrir caja</button>
                 </form>
@@ -14926,11 +14962,11 @@ export function App() {
                       <legend style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, display: "block" }}>Tipo de movimiento</legend>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                         <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: 6, cursor: "pointer" }}>
-                          <input type="radio" name="movement" value="EXPENSE" checked={movType === "EXPENSE"} onChange={() => { setMovType("EXPENSE"); setMovCategory(""); setMovPayableId(""); setMovReceivableId(""); }} style={{ cursor: "pointer" }} />
+                          <input type="radio" name="movement" value="EXPENSE" checked={movType === "EXPENSE"} onChange={() => { setMovType("EXPENSE"); setMovCategory(""); setMovSubcategoria(""); setMovPayableId(""); setMovReceivableId(""); }} style={{ cursor: "pointer" }} />
                           <span style={{ fontWeight: 600 }}>⬇ Egreso</span>
                         </label>
                         <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: 6, cursor: "pointer" }}>
-                          <input type="radio" name="movement" value="INCOME" checked={movType === "INCOME"} onChange={() => { setMovType("INCOME"); setMovCategory(""); setMovPayableId(""); setMovReceivableId(""); }} style={{ cursor: "pointer" }} />
+                          <input type="radio" name="movement" value="INCOME" checked={movType === "INCOME"} onChange={() => { setMovType("INCOME"); setMovCategory(""); setMovSubcategoria(""); setMovPayableId(""); setMovReceivableId(""); }} style={{ cursor: "pointer" }} />
                           <span style={{ fontWeight: 600 }}>⬆ Ingreso</span>
                         </label>
                       </div>
@@ -14944,7 +14980,12 @@ export function App() {
                         const esteTipo = movType === "EXPENSE" ? "EGRESO" : "INGRESO";
                         const visibles = cashCategories.filter((c) => c.activo && c.tipo === esteTipo && (esSocio ? (c.aplicable_a === "SOCIO" || c.aplicable_a === "AMBOS") : (c.aplicable_a === "MATRIZ" || c.aplicable_a === "AMBOS")));
                         return (
-                          <select name="category" required={!(movType === "INCOME" && !!movReceivableId)} value={movCategory} onChange={(e: any) => { setMovCategory(e.target.value); setMovPayableId(""); }} style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
+                          <select name="category" required={!(movType === "INCOME" && !!movReceivableId)} value={movCategory} onChange={(e: any) => {
+                            const nextCategory = e.target.value;
+                            setMovCategory(nextCategory);
+                            if (!cashCategoryAllowsSubcategory(nextCategory, cashCategories)) setMovSubcategoria("");
+                            setMovPayableId("");
+                          }} style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
                             <option value="">Seleccione una categoría</option>
                             {visibles.map((c) => <option key={c.id} value={c.codigo}>{c.nombre}</option>)}
                           </select>
@@ -14960,7 +15001,7 @@ export function App() {
                       return (
                         <label style={{ display: "block", marginBottom: 16 }}>
                           <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>🔗 Ligar a un servicio / cuenta por cobrar <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span></span>
-                          <select value={movReceivableId} onChange={(e) => { setMovReceivableId(e.target.value); if (e.target.value) setMovCategory(""); }}
+                          <select value={movReceivableId} onChange={(e) => { setMovReceivableId(e.target.value); if (e.target.value) { setMovCategory(""); setMovSubcategoria(""); } }}
                             style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
                             <option value="">— Sin ligar (ingreso normal) —</option>
                             {pendientes.map((ar) => (
@@ -14976,7 +15017,7 @@ export function App() {
 
                     {/* Subcategoría: texto libre con memoria (datalist). Se sugieren
                         las escritas antes y se guarda cada término nuevo. */}
-                    <label style={{ display: "block", marginBottom: 16 }}>
+                    {cashCategoryAllowsSubcategory(movCategory, cashCategories) && <label style={{ display: "block", marginBottom: 16 }}>
                       <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Subcategoría <span className="muted" style={{ fontWeight: 400 }}>(opcional, se recuerda)</span></span>
                       <input list="subcatGastosList" value={movSubcategoria} onChange={(e) => setMovSubcategoria(e.target.value)}
                         placeholder="Ej: Alimentación, Filtros, Fletes, Herramientas"
@@ -14999,7 +15040,7 @@ export function App() {
                           return lista.map((s) => <option key={s} value={s} />);
                         })()}
                       </datalist>
-                    </label>
+                    </label>}
 
                     {/* Mantenimiento: campos opcionales para asociar la máquina/activo
                         o el área y mantener el historial de mantenimientos impecable. */}
