@@ -49,6 +49,18 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Secadoras: cierre por tunel y combustible solo al apagar motor (2026-09-23)
+
+- El formulario de combustible permanece oculto durante el llenado y la edicion normal.
+- `Finalizar este tunel` usa `POST /process-flow/drying/tunnel-finalize` y evalua todos los socios del motor, no solo el socio visible.
+- Si queda otro tunel fisico activo, cierra el actual sin pedir combustible.
+- Si es el ultimo tunel, conserva sus sublotes en proceso, abre el modal y exige combustible antes de apagar el motor.
+- Los sublotes PROPIO/SOLO SECADO del mismo tunel comparten horas y se cierran juntos; el reparto de combustible sigue siendo proporcional.
+- Cierres simultaneos del mismo motor usan bloqueo transaccional para evitar combustible duplicado.
+- El selector multiple de tickets queda colapsado por defecto y mantiene badges PROPIO/SOLO SECADO.
+- Verificacion visual sin escrituras: Motor 1 tenia Tunel 1 (CEYRO) y Tunel 2 (ROVINSON); ambos fueron detectados globalmente.
+- Verificaciones: backend build, 38/38 tests, frontend build, lint sin errores y preflight sin errores criticos.
+
 ### Secadoras: guardado parcial, multiseleccion y carga mixta (2026-09-23)
 
 - Se corrigio la causa real del "error inesperado": consultas de automatizacion de Cuadrilla/Secador usaban `created_at` ambiguo y abortaban la transaccion al guardar.

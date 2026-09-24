@@ -19,3 +19,16 @@ export function groupDryingEntries(entries: DryingGroupEntry[]): string[][] {
   }
   return [...groups.values()];
 }
+
+/**
+ * Un túnel físico puede tener varios reportes cuando mezcla arroz propio y
+ * servicio. El combustible se pide únicamente cuando no queda OTRO número de
+ * túnel activo en el mismo motor.
+ */
+export function isLastActiveDryingTunnel(activeTunnelNumbers: Array<number | null>, currentTunnel: number): boolean {
+  const activePhysicalTunnels = new Set(
+    activeTunnelNumbers.filter((value): value is number => typeof value === "number")
+  );
+  return activePhysicalTunnels.has(currentTunnel)
+    && [...activePhysicalTunnels].every((tunnel) => tunnel === currentTunnel);
+}

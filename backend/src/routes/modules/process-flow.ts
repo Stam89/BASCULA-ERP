@@ -8,7 +8,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
 import { nextSequentialLotCode } from "../../utils/lot-code.js";
 import { repartirPorPeso } from "../../utils/money.js";
-import { groupDryingEntries, normalizeDryingOperationType } from "../../utils/drying-groups.js";
+import { groupDryingEntries, isLastActiveDryingTunnel, normalizeDryingOperationType } from "../../utils/drying-groups.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import {
   createLotProcessReport,
@@ -517,6 +517,9 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
   }).parse(req.body);
 
   const result = await inTransaction(async (client) => {
+    // Evita que dos dispositivos registren combustible simultaneamente para la
+    // misma corrida del motor.
+    await client.query("SELECT pg_advisory_xact_lock($1, $2)", [71002, body.motor_number]);
     const reports = await client.query(
       `SELECT d.id, d.tunnel_number, d.total_quintals, d.dry_start_at, d.dry_end_at
        FROM drying_tunnel_reports d
@@ -589,6 +592,14 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
          WHERE id = ANY($1::uuid[])`,
         [partes.map((p) => p.id)]
       );
+      await client.query(
+        `UPDATE lot_process_reports p
+         SET report_data = p.report_data || jsonb_build_object('status', 'COMPLETED')
+         FROM drying_tunnel_report_lots dl
+         WHERE dl.process_report_id = p.id
+           AND dl.drying_report_id = ANY($1::uuid[])`,
+        [partes.map((p) => p.id)]
+      );
       // Al finalizar, genera el pago de la BOTADA (vaciado) de cada túnel y
       // enruta el cobro de 'Solo Servicio de Secado' a Cuentas por Cobrar.
       for (const p of partes) {
@@ -613,6 +624,135 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
   });
 
   res.status(201).json(result);
+}));
+
+// Finaliza un TUNEL FISICO, no un sublote aislado. Una carga mixta puede tener
+// varios reportes con el mismo motor/tunel; todos comparten las mismas horas y
+// deben cerrar juntos. Si es el ultimo tunel activo, queda preparado y el
+// frontend solicita el combustible antes de apagar el motor.
+processFlowRouter.post("/drying/tunnel-finalize", asyncRoute(async (req, res) => {
+  const body = z.object({
+    drying_report_id: z.string().uuid(),
+    dry_start_at: z.string().trim().min(1),
+    dry_end_at: z.string().trim().min(1),
+    created_by: z.string().uuid().optional()
+  }).parse(req.body);
+
+  const startAt = new Date(body.dry_start_at);
+  const endAt = new Date(body.dry_end_at);
+  if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime())) {
+    throw new ApiError(400, "Las horas de inicio y fin no son validas.");
+  }
+  if (endAt.getTime() < startAt.getTime()) {
+    throw new ApiError(400, "La hora final no puede ser anterior a la hora de inicio.");
+  }
+
+  const result = await inTransaction(async (client) => {
+    const target = await client.query(
+      `SELECT id, motor_number, tunnel_number
+       FROM drying_tunnel_reports
+       WHERE id = $1`,
+      [body.drying_report_id]
+    );
+    if (!target.rowCount) throw new ApiError(404, "Informe de secado no encontrado.");
+
+    const motorNumber = Number(target.rows[0].motor_number);
+    const tunnelNumber = Number(target.rows[0].tunnel_number);
+    if (![1, 2].includes(motorNumber) || ![1, 2, 3].includes(tunnelNumber)) {
+      throw new ApiError(409, "El informe no corresponde a un tunel mecanico activo.");
+    }
+
+    // Serializa cierres simultaneos del mismo motor para que solo uno pueda ser
+    // considerado el ultimo y solicitar combustible.
+    await client.query("SELECT pg_advisory_xact_lock($1, $2)", [71002, motorNumber]);
+
+    const active = await client.query(
+      `SELECT id, tunnel_number
+       FROM drying_tunnel_reports
+       WHERE motor_number = $1
+         AND motor_fuel_id IS NULL
+         AND status = 'IN_PROGRESS'
+       ORDER BY tunnel_number, created_at
+       FOR UPDATE`,
+      [motorNumber]
+    );
+    const siblingIds = active.rows
+      .filter((report) => Number(report.tunnel_number) === tunnelNumber)
+      .map((report) => String(report.id));
+    if (siblingIds.length === 0) {
+      throw new ApiError(409, "Este tunel ya fue finalizado o no esta activo.");
+    }
+
+    await client.query(
+      `UPDATE drying_tunnel_reports
+       SET dry_start_at = $2::timestamptz,
+           dry_end_at = $3::timestamptz,
+           drying_hours = GREATEST(0, EXTRACT(EPOCH FROM ($3::timestamptz - $2::timestamptz)) / 3600.0)
+       WHERE id = ANY($1::uuid[])`,
+      [siblingIds, body.dry_start_at, body.dry_end_at]
+    );
+    await client.query(
+      `UPDATE lot_process_reports p
+       SET report_data = p.report_data || jsonb_build_object(
+         'dry_start_at', $2::timestamptz,
+         'dry_end_at', $3::timestamptz
+       )
+       FROM drying_tunnel_report_lots dl
+       WHERE dl.process_report_id = p.id
+         AND dl.drying_report_id = ANY($1::uuid[])`,
+      [siblingIds, body.dry_start_at, body.dry_end_at]
+    );
+
+    const requiresFuel = isLastActiveDryingTunnel(
+      active.rows.map((report) => Number(report.tunnel_number)),
+      tunnelNumber
+    );
+    if (requiresFuel) {
+      return {
+        requires_fuel: true,
+        finalized: 0,
+        prepared: siblingIds.length,
+        remaining_tunnels: 0,
+        motor_number: motorNumber,
+        tunnel_number: tunnelNumber
+      };
+    }
+
+    await client.query(
+      `UPDATE drying_tunnel_reports SET status = 'COMPLETED'
+       WHERE id = ANY($1::uuid[])`,
+      [siblingIds]
+    );
+    await client.query(
+      `UPDATE lot_process_reports p
+       SET report_data = p.report_data || jsonb_build_object('status', 'COMPLETED')
+       FROM drying_tunnel_report_lots dl
+       WHERE dl.process_report_id = p.id
+         AND dl.drying_report_id = ANY($1::uuid[])`,
+      [siblingIds]
+    );
+    for (const reportId of siblingIds) {
+      await autoGenerarPagosCuadrillaDeSecado(client, reportId, body.created_by ?? null);
+      await autoCobrarSecadoServicio(client, reportId);
+      await autoGenerarPagoSecador(client, reportId);
+    }
+
+    const remainingTunnels = new Set(
+      active.rows
+        .map((report) => Number(report.tunnel_number))
+        .filter((number) => number !== tunnelNumber)
+    ).size;
+    return {
+      requires_fuel: false,
+      finalized: siblingIds.length,
+      prepared: 0,
+      remaining_tunnels: remainingTunnels,
+      motor_number: motorNumber,
+      tunnel_number: tunnelNumber
+    };
+  });
+
+  res.json(result);
 }));
 
 processFlowRouter.post("/drying/motor-finalize", asyncRoute(async (req, res) => {

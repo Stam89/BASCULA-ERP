@@ -819,6 +819,7 @@ type MotorActiveReport = {
   dry_start_at: string | null;
   dry_end_at: string | null;
   filled_at: string | null;
+  status: string;
 };
 
 /** Túnel ocupado por OTRO accionista (secado en curso): se bloquea en el formulario. */
@@ -1856,6 +1857,7 @@ export function App() {
   const [dryingSelections, setDryingSelections] = useState<Record<string, string[]>>({});
   const [dryingEntryPick, setDryingEntryPick] = useState<Record<string, string>>({});
   const [dryingEntryMultiPick, setDryingEntryMultiPick] = useState<Record<string, string[]>>({});
+  const [dryingPickerOpen, setDryingPickerOpen] = useState<Record<string, boolean>>({});
   // Tipo de arroz seleccionado por túnel (para filtrar ingresos de materia prima).
   const [dryingRiceType, setDryingRiceType] = useState<Record<string, "0.11" | "CORRIENTE">>({});
   // Tipo de empaque elegido por control (Tulas vs Sacos). Clave: identificador del
@@ -8126,6 +8128,7 @@ export function App() {
         key === secadora ? [] : ids.filter((id) => !selected.includes(id))
       ])
     ));
+    setDryingPickerOpen((current) => ({ ...current, [secadora]: false }));
   }
 
   function removeDryingEntry(secadora: string, lotId: string) {
@@ -8394,18 +8397,18 @@ export function App() {
       await refresh();
     }
 
-  async function cerrarCombustibleMotor() {
+  async function cerrarCombustibleMotor(): Promise<boolean> {
     // Seguridad: no registrar combustible si las tarifas no cargaron o falta el
     // precio de algo consumido (evita un gasto guardado en $0).
     if (combustibleBloqueado) {
       setMessage(!laborRatesLoaded
         ? "No se pudieron cargar las tarifas. Reintenta antes de registrar el combustible."
         : "Configura el precio del combustible en Configuración → Tarifas antes de registrar (evita un gasto en $0).");
-      return;
+      return false;
     }
-    if (!(combustibleTotal > 0)) { setMessage("Ingresa los medidores del combustible del motor"); return; }
+    if (!(combustibleTotal > 0)) { setMessage("Ingresa los medidores del combustible del motor"); return false; }
     const activos = await apiGet<MotorActiveReport[]>(`/process-flow/drying/motor/${motorActivo}/active`).catch(() => [] as MotorActiveReport[]);
-    if (activos.length === 0) { addToast("Este motor no tiene secados pendientes de combustible.", "error"); return; }
+    if (activos.length === 0) { addToast("Este motor no tiene secados pendientes de combustible.", "error"); return false; }
     const fuel = await apiPost<{ costo_por_qq: number; finalized?: number }>("/process-flow/drying/motor-fuel", {
       motor_number: motorActivo,
       gas_bombona_inicio: Number(gasForm.bombona_inicio || 0),
@@ -8421,18 +8424,11 @@ export function App() {
     addToast(`Combustible del Motor ${motorActivo} repartido (${money(fuel.costo_por_qq)}/QQ) y ${fuel.finalized ?? 0} secado(s) finalizado(s)`, "success");
     await refresh();
     await loadMotorActive();
+    return true;
   }
 
-  async function finalizarSecadoMotor() {
-    const result = await apiPost<{ finalized: number }>("/process-flow/drying/motor-finalize", { motor_number: motorActivo });
-    addToast(`Motor ${motorActivo} finalizado: ${result.finalized} secado(s) completado(s).`, "success");
-    await refresh();
-    await loadMotorActive();
-  }
-
-  // Confirmación del modal de combustible: si se cargaron medidores, reparte el
-  // combustible y finaliza (cerrarCombustibleMotor); si no, solo finaliza. Reusa
-  // los handlers existentes: no altera la lógica de prorrateo.
+  // El modal solo se abre cuando el backend confirma que este es el último túnel
+  // físico activo. En ese caso el combustible es obligatorio para apagar el motor.
   async function confirmarFinalizarSecado() {
     if (motorActiveReports.length === 0) {
       addToast("Primero guarda el informe del motor antes de finalizar el secado.", "error");
@@ -8440,21 +8436,22 @@ export function App() {
     }
     const sinHoras = motorActiveReports.filter((report) => !report.dry_start_at || !report.dry_end_at);
     if (sinHoras.length > 0) {
-      const tuneles = sinHoras.map((report) => report.tunnel_number).join(", ");
+      const tuneles = [...new Set(sinHoras.map((report) => report.tunnel_number))].join(", ");
       addToast(`Completa la hora de inicio y la hora final del/los túnel(es) ${tuneles} antes de finalizar.`, "error");
       return;
     }
-    // Seguridad: hay consumo pero falta precio/tarifas → no finalizar (no perder
-    // el costo ni guardar $0). Finalizar sin combustible sí se permite.
+    if (!combustibleConsumo || !(combustibleTotal > 0)) {
+      addToast("Registra el combustible utilizado antes de apagar el motor.", "error");
+      return;
+    }
     if (combustibleBloqueado) {
       setMessage(!laborRatesLoaded
         ? "No se pudieron cargar las tarifas. Reintenta antes de finalizar."
         : "Configura el precio del combustible en Configuración → Tarifas antes de finalizar (evita un gasto en $0).");
       return;
     }
-    if (combustibleTotal > 0) await cerrarCombustibleMotor();
-    else await finalizarSecadoMotor();
-    setFuelModalOpen(false);
+    const cerrado = await cerrarCombustibleMotor();
+    if (cerrado) setFuelModalOpen(false);
   }
 
   // Guarda/finaliza UN secado por su id (para editar las dos secadoras en
@@ -8503,7 +8500,9 @@ export function App() {
       filled_at: stringOrUndefined(form.get("filled_at")),
       dry_start_at: stringOrUndefined(form.get("dry_start_at")),
       dry_end_at: stringOrUndefined(endInput?.value ?? null),
-      finalize: finalizar,
+      // La edición siempre se guarda como progreso. El cierre físico se decide
+      // después en un endpoint transaccional que conoce los demás túneles.
+      finalize: false,
       dryer_name: report.dryer_name,
       operator_name: String(form.get("operator_name") ?? "").trim(),
       notes: form.get("notes") || undefined,
@@ -8513,7 +8512,32 @@ export function App() {
       botada_sacos: numberOrUndefined(form.get("botada_sacos"))
     };
     const updated = await apiPut<DryingTunnelReport>(`/process-flow/drying/${report.id}`, payload);
-    setMessage(updated.status === "COMPLETED" ? `Secado del Túnel ${updated.tunnel_number} finalizado` : `Secado del Túnel ${updated.tunnel_number} actualizado`);
+    if (finalizar) {
+      const result = await apiPost<{
+        requires_fuel: boolean;
+        finalized: number;
+        prepared: number;
+        remaining_tunnels: number;
+        motor_number: 1 | 2;
+        tunnel_number: number;
+      }>("/process-flow/drying/tunnel-finalize", {
+        drying_report_id: report.id,
+        dry_start_at: startInput!.value,
+        dry_end_at: endInput!.value,
+        created_by: authUser?.id
+      });
+      if (result.requires_fuel) {
+        setMotorActivo(result.motor_number);
+        setFuelModalOpen(true);
+        addToast("Este es el último túnel. Registra el combustible para apagar el motor.", "warn");
+        setMessage("Este es el último túnel. Por favor, registre el combustible para apagar el motor.");
+      } else {
+        addToast(`Túnel ${result.tunnel_number} finalizado. Quedan ${result.remaining_tunnels} túnel(es) activos en el motor.`, "success");
+        setMessage(`Secado del Túnel ${result.tunnel_number} finalizado sin cerrar el motor.`);
+      }
+    } else {
+      setMessage(`Secado del Túnel ${updated.tunnel_number} actualizado`);
+    }
     await refresh();
     await loadMotorActive();
     // Al guardar (con o sin finalizar) se sale del modo edición y se vuelve a
@@ -11199,7 +11223,7 @@ export function App() {
                   <div style={{ gridColumn: "1 / -1", display: "grid", gap: 16 }}>
                     <div className="tablePanel" style={{ padding: "8px 12px" }}>
                       <strong>✎ Editando el Motor {motorActivo}</strong>
-                      <span className="muted"> · {lista.length} secadora(s) en proceso. Al registrar el combustible abajo se finaliza la corrida.</span>
+                      <span className="muted"> · {lista.length} reporte(s) en proceso. Finaliza cada túnel; el combustible se solicitará únicamente al cerrar el último.</span>
                     </div>
                     <div className="panelGrid" style={{ gap: 16 }}>
                       {lista.map((rep) => {
@@ -11287,13 +11311,7 @@ export function App() {
                       })}
                     </div>
 
-                    {renderFuelFieldset()}
                     <div className="buttonRow">
-                      <button type="button" className="primary" disabled={combustibleBloqueado}
-                        title={combustibleBloqueado ? "Configura el precio del combustible en Tarifas (evita guardar un gasto en $0)" : undefined}
-                        onClick={() => cerrarCombustibleMotor().catch((error) => setMessage(error.message))}>
-                        ⛽ Registrar combustible y finalizar secado
-                      </button>
                       <button type="button" onClick={() => clearDryingForm()}>Volver</button>
                     </div>
                   </div>
@@ -11368,8 +11386,21 @@ export function App() {
                             setDryingEntryMultiPick((cur) => ({ ...cur, [secadora]: [] }));
                           }} />
                           <div>
-                            <span style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>Ingresos de materia prima <span className="muted">(puedes marcar varios)</span></span>
-                            <div style={{ maxHeight: 210, overflowY: "auto", border: "1px solid var(--c-border)", borderRadius: 8, background: "var(--c-surface)" }}>
+                            <span style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>Ingresos de materia prima</span>
+                            <button
+                              type="button"
+                              className="btnSecondary"
+                              aria-expanded={Boolean(dryingPickerOpen[secadora])}
+                              onClick={() => setDryingPickerOpen((current) => ({ ...current, [secadora]: !current[secadora] }))}
+                              style={{ width: "100%", minHeight: 42, padding: "8px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", textAlign: "left" }}
+                            >
+                              <span>{(dryingEntryMultiPick[secadora] ?? []).length > 0
+                                ? `${(dryingEntryMultiPick[secadora] ?? []).length} ticket(s) marcado(s)`
+                                : "Seleccionar uno o varios tickets"}</span>
+                              <span aria-hidden="true">{dryingPickerOpen[secadora] ? "▲" : "▼"}</span>
+                            </button>
+                            {dryingPickerOpen[secadora] && (
+                            <div style={{ maxHeight: 210, overflowY: "auto", border: "1px solid var(--c-border)", borderRadius: 8, background: "var(--c-surface)", marginTop: 6 }}>
                               {entradasLibres
                                 .filter((entry) => {
                                   const tipoSeleccionado = dryingRiceType[secadora];
@@ -11392,6 +11423,7 @@ export function App() {
                                 <div className="muted" style={{ padding: 10, fontSize: 13 }}>No hay ingresos disponibles de este tipo.</div>
                               )}
                             </div>
+                            )}
                           </div>
                         </div>
                         <button type="button" className="btnSecondary" onClick={() => addDryingEntries(secadora)}
@@ -11430,8 +11462,8 @@ export function App() {
                 {/* El combustible ya no va aquí: se registra al final, en el modal
                     que abre «Finalizar secado» (menos ruido durante el proceso). */}
 
-                {/* Botonera final: jerarquía clara. En fila si hay espacio; el
-                    principal (Finalizar) destaca, el secundario (Guardar) va outline. */}
+                {/* El alta crea informes en proceso. El cierre se hace por túnel
+                    desde su ficha; así el combustible aparece solo en el último. */}
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center", marginTop: 18 }}>
                   <button
                     className="btnSecondary"
@@ -11439,14 +11471,9 @@ export function App() {
                   >
                     💾 Guardar informe completo
                   </button>
-                  <button
-                    type="button"
-                    className="primary"
-                    style={{ flex: "1 1 240px", maxWidth: 340, padding: "12px 16px", fontSize: 15, fontWeight: 800, borderRadius: 10, background: "var(--c-success)" }}
-                    onClick={() => setFuelModalOpen(true)}
-                  >
-                    ✅ Finalizar secado del Motor {motorActivo}
-                  </button>
+                  <span className="muted" style={{ flex: "1 1 240px", alignSelf: "center", textAlign: "center" }}>
+                    Después de guardar, abre el túnel en proceso para finalizarlo.
+                  </span>
                 </div>
               </form>
             )}
@@ -11459,6 +11486,9 @@ export function App() {
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
                     <h3 style={{ marginTop: 0 }}>⛽ Combustible y cierre — Motor {motorActivo}</h3>
                     <button type="button" onClick={() => setFuelModalOpen(false)} style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
+                  </div>
+                  <div className="alertBox" style={{ background: "#fff7ed", border: "1px solid #fed7aa", color: "#9a3412", marginBottom: 10 }}>
+                    <strong>Este es el último túnel.</strong> Por favor, registre el combustible para apagar el motor.
                   </div>
                   {renderFuelFieldset()}
                   <div className="buttonRow" style={{ marginTop: 14 }}>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupDryingEntries, normalizeDryingOperationType } from "./drying-groups.js";
+import { groupDryingEntries, isLastActiveDryingTunnel, normalizeDryingOperationType } from "./drying-groups.js";
 
 describe("drying groups", () => {
   it("separa propio y solo secado aunque compartan socio y secadora", () => {
@@ -24,5 +24,14 @@ describe("drying groups", () => {
   it("normaliza el tipo historico PILADO como servicio completo", () => {
     expect(normalizeDryingOperationType("PILADO", true)).toBe("SECADO_PILADO");
     expect(normalizeDryingOperationType(null, false)).toBe("COMPRA");
+  });
+
+  it("pide combustible cuando solo queda un tunel fisico aunque tenga varios sublotes", () => {
+    expect(isLastActiveDryingTunnel([1, 1], 1)).toBe(true);
+    expect(isLastActiveDryingTunnel([1, 1, 2], 1)).toBe(false);
+  });
+
+  it("no considera ultimo un tunel que ya no esta activo", () => {
+    expect(isLastActiveDryingTunnel([2], 1)).toBe(false);
   });
 });
