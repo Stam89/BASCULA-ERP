@@ -8,6 +8,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
 import { nextSequentialLotCode } from "../../utils/lot-code.js";
 import { repartirPorPeso } from "../../utils/money.js";
+import { groupDryingEntries, normalizeDryingOperationType } from "../../utils/drying-groups.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import {
   createLotProcessReport,
@@ -46,6 +47,7 @@ const dryingBodySchema = z.object({
   filled_at: optionalDateTime,
   dry_start_at: optionalDateTime,
   dry_end_at: optionalDateTime,
+  finalize: z.boolean().default(false),
   // Gas: se puede usar bombona (por medidor), cilindro (por unidades) o ambos.
   gas_bombona_inicio: z.number().nonnegative().default(0),
   gas_bombona_fin: z.number().nonnegative().default(0),
@@ -76,6 +78,7 @@ const dryingUpdateSchema = z.object({
   filled_at: optionalDateTime,
   dry_start_at: optionalDateTime,
   dry_end_at: optionalDateTime,
+  finalize: z.boolean().default(false),
   gas_bombona_inicio: z.number().nonnegative().default(0),
   gas_bombona_fin: z.number().nonnegative().default(0),
   gas_cilindro_cantidad: z.number().nonnegative().default(0),
@@ -167,7 +170,7 @@ function fmtInicio(value: unknown): string {
 async function autoGenerarPagoSecador(client: PoolClient, dryingReportId: string): Promise<void> {
   const r = await client.query(
     `SELECT d.status, d.operator_name, d.filled_at, d.dry_start_at, d.created_at, l.accionista_id,
-            COALESCE(filled_at, dry_start_at::date, created_at::date) AS work_date
+            COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) AS work_date
      FROM drying_tunnel_reports d
      LEFT JOIN lots l ON l.id = d.lot_id
      WHERE d.id = $1`,
@@ -652,6 +655,15 @@ processFlowRouter.post("/drying/motor-finalize", asyncRoute(async (req, res) => 
   res.json(result);
 }));
 
+// Guarda una carga física de secadora. Si contiene arroz propio y servicios,
+// crea sublotes independientes en una sola transacción para que cada QQ conserve
+// su destino contable, aunque compartan túnel, tiempos y combustible.
+processFlowRouter.post("/drying/batch", asyncRoute(async (req, res) => {
+  const body = dryingBodySchema.parse(req.body);
+  const result = await inTransaction((client) => createDryingBatch(client, body));
+  res.status(201).json(result);
+}));
+
 processFlowRouter.post("/drying", asyncRoute(async (req, res) => {
   const body = dryingBodySchema.parse(req.body);
   const result = await inTransaction((client) => createDryingReport(client, body));
@@ -688,6 +700,7 @@ processFlowRouter.post("/drying-tendal", asyncRoute(async (req, res) => {
     // envía dry_end_at (botón "Finalizar") se cierra el secado. Antes se forzaba
     // dry_end_at = ahora → se auto-finalizaba siempre.
     dry_end_at: body.dry_end_at,
+    finalize: Boolean(body.dry_end_at),
     recepcion_empaque: body.recepcion_empaque,
     recepcion_sacos: body.recepcion_sacos ?? null,
     tendal_mode: body.tendal_mode,
@@ -1074,9 +1087,48 @@ async function registrarPagoCuadrillaTendal(
   }
 }
 
-async function createDryingReport(client: PoolClient, input: z.infer<typeof dryingBodySchema>) {
-  if (input.dry_end_at && !input.dry_start_at) {
-    throw new ApiError(400, "Para registrar la hora final también debes indicar la hora de inicio del secado.");
+export async function createDryingBatch(client: PoolClient, body: z.infer<typeof dryingBodySchema>) {
+  if (body.dry_method !== "TENDAL" && body.tunnel_number) {
+    await client.query("SELECT pg_advisory_xact_lock($1, $2)", [71_001, body.tunnel_number]);
+    await assertTunnelAvailable(client, body.tunnel_number);
+  }
+
+  const uniqueIds = [...new Set(body.entry_ids)];
+  const entries = await client.query<{
+    id: string;
+    accionista_id: string | null;
+    operation_type: string | null;
+    is_maquila: boolean;
+  }>(
+    `SELECT id, accionista_id, operation_type, is_maquila
+     FROM weighing_tickets
+     WHERE id = ANY($1::uuid[])`,
+    [uniqueIds]
+  );
+  if (entries.rowCount !== uniqueIds.length) {
+    throw new ApiError(404, "Uno o más ingresos de materia prima no existen");
+  }
+
+  const groups = groupDryingEntries(entries.rows);
+  const reports = [];
+  const separated = groups.length > 1;
+  for (const entryIds of groups) {
+    reports.push(await createDryingReport(
+      client,
+      { ...body, entry_ids: entryIds, lot_code: separated ? undefined : body.lot_code },
+      { skipTunnelOccupancyCheck: body.dry_method !== "TENDAL" }
+    ));
+  }
+  return { reports, separated };
+}
+
+async function createDryingReport(
+  client: PoolClient,
+  input: z.infer<typeof dryingBodySchema>,
+  options: { skipTunnelOccupancyCheck?: boolean } = {}
+) {
+  if (input.finalize && (!input.dry_start_at || !input.dry_end_at)) {
+    throw new ApiError(400, "Para finalizar el secado debes indicar la hora de inicio y la hora final.");
   }
   const entryIds = [...new Set(input.entry_ids)];
   const esTendal = input.dry_method === "TENDAL";
@@ -1118,21 +1170,8 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
 
   // Validación: una secadora no puede tener dos secados activos a la vez. Si un
   // túnel está en uso por CUALQUIER accionista (incluido el mismo), se bloquea.
-  if (!esTendal) {
-  const ocupado = await client.query(
-    `SELECT d.id, a.name AS accionista_name
-     FROM drying_tunnel_reports d
-     JOIN lots l ON l.id = d.lot_id
-     LEFT JOIN accionistas a ON a.id = l.accionista_id
-     WHERE d.tunnel_number = $1
-       AND d.status = 'IN_PROGRESS'
-     LIMIT 1`,
-    [input.tunnel_number]
-  );
-  if (ocupado.rowCount) {
-    const nombre = ocupado.rows[0].accionista_name ?? "servicio de pilado/maquila";
-    throw new ApiError(409, `El túnel ${input.tunnel_number} ya está en uso por ${nombre}. Finaliza ese secado antes de usarlo.`);
-  }
+  if (!esTendal && !options.skipTunnelOccupancyCheck) {
+    await assertTunnelAvailable(client, input.tunnel_number!);
   }
 
   // Sincronización de la CORRIDA por motor: si ya hay un túnel activo de este
@@ -1168,13 +1207,12 @@ async function createDryingReport(client: PoolClient, input: z.infer<typeof dryi
   const dryingHours = calculateDryingHours(input.dry_start_at, input.dry_end_at);
   // El Tendal puede tomar varios días: queda "En proceso" hasta que se FINALICE
   // explícitamente (llega con dry_end_at). Antes se forzaba COMPLETED siempre.
-  const status = input.dry_end_at ? "COMPLETED" : "IN_PROGRESS";
+  const status = input.finalize ? "COMPLETED" : "IN_PROGRESS";
 
   // Tipo de operación del lote = el de sus ingresos (comparten destino). Un lote
   // que se está SECANDO nunca es PILADO (ese salta secadoras); si por dato viejo
   // no hay tipo, se infiere de is_maquila.
-  const opTypeEntrada = String(entries.rows[0].operation_type ?? (isMaquila ? "SECADO_PILADO" : "COMPRA"));
-  const lotOperationType = opTypeEntrada === "PILADO" ? "SECADO_PILADO" : opTypeEntrada;
+  const lotOperationType = normalizeDryingOperationType(entries.rows[0].operation_type, isMaquila);
 
   // El código del lote se propone automático (con sufijo -S/-P según el servicio),
   // pero se puede escribir otro.
@@ -1367,11 +1405,11 @@ async function updateDryingReport(
 
   const dryStartAt = input.dry_start_at ?? current.rows[0].dry_start_at;
   const dryEndAt = input.dry_end_at ?? current.rows[0].dry_end_at;
-  if (dryEndAt && !dryStartAt) {
-    throw new ApiError(400, "Para finalizar el secado debes indicar la hora de inicio.");
+  if (input.finalize && (!dryStartAt || !dryEndAt)) {
+    throw new ApiError(400, "Para finalizar el secado debes indicar la hora de inicio y la hora final.");
   }
   const dryingHours = calculateDryingHours(dryStartAt, dryEndAt);
-  const status = dryEndAt ? "COMPLETED" : "IN_PROGRESS";
+  const status = input.finalize ? "COMPLETED" : current.rows[0].status;
 
   const c = await calcularCombustible(client, input);
 
@@ -1581,6 +1619,22 @@ function calculateDryingHours(start?: string | Date | null, end?: string | Date 
   const endTime = new Date(end).getTime();
   if (Number.isNaN(startTime) || Number.isNaN(endTime) || endTime < startTime) return null;
   return Number(((endTime - startTime) / 3_600_000).toFixed(2));
+}
+
+async function assertTunnelAvailable(client: PoolClient, tunnelNumber: number) {
+  const occupied = await client.query(
+    `SELECT d.id, a.name AS accionista_name
+     FROM drying_tunnel_reports d
+     JOIN lots l ON l.id = d.lot_id
+     LEFT JOIN accionistas a ON a.id = l.accionista_id
+     WHERE d.tunnel_number = $1
+       AND d.status = 'IN_PROGRESS'
+     LIMIT 1`,
+    [tunnelNumber]
+  );
+  if (!occupied.rowCount) return;
+  const name = occupied.rows[0].accionista_name ?? "servicio de pilado/maquila";
+  throw new ApiError(409, `El túnel ${tunnelNumber} ya está en uso por ${name}. Finaliza ese secado antes de usarlo.`);
 }
 
 function assertDryingHoursForCompletion(

@@ -1855,6 +1855,7 @@ export function App() {
   // Cada secadora arma su propio lote: selección de ingresos POR secadora.
   const [dryingSelections, setDryingSelections] = useState<Record<string, string[]>>({});
   const [dryingEntryPick, setDryingEntryPick] = useState<Record<string, string>>({});
+  const [dryingEntryMultiPick, setDryingEntryMultiPick] = useState<Record<string, string[]>>({});
   // Tipo de arroz seleccionado por túnel (para filtrar ingresos de materia prima).
   const [dryingRiceType, setDryingRiceType] = useState<Record<string, "0.11" | "CORRIENTE">>({});
   // Tipo de empaque elegido por control (Tulas vs Sacos). Clave: identificador del
@@ -8096,6 +8097,37 @@ export function App() {
     setDryingEntryPick((cur) => ({ ...cur, [secadora]: "" }));
   }
 
+  function toggleDryingEntryPick(secadora: string, entryId: string) {
+    setDryingEntryMultiPick((current) => {
+      const selected = current[secadora] ?? [];
+      return {
+        ...current,
+        [secadora]: selected.includes(entryId)
+          ? selected.filter((id) => id !== entryId)
+          : [...selected, entryId]
+      };
+    });
+  }
+
+  function addDryingEntries(secadora: string) {
+    const availableIds = new Set(entradasLibres.map((entry) => entry.id));
+    const selected = (dryingEntryMultiPick[secadora] ?? []).filter((id) => availableIds.has(id));
+    if (selected.length === 0) {
+      setMessage("Marca uno o más ingresos de materia prima");
+      return;
+    }
+    setDryingSelections((current) => ({
+      ...current,
+      [secadora]: [...new Set([...(current[secadora] ?? []), ...selected])]
+    }));
+    setDryingEntryMultiPick((current) => Object.fromEntries(
+      Object.entries(current).map(([key, ids]) => [
+        key,
+        key === secadora ? [] : ids.filter((id) => !selected.includes(id))
+      ])
+    ));
+  }
+
   function removeDryingEntry(secadora: string, lotId: string) {
     if (editandoEnSecadora(secadora)) return;
     setDryingSelections((cur) => ({ ...cur, [secadora]: (cur[secadora] ?? []).filter((id) => id !== lotId) }));
@@ -8194,12 +8226,13 @@ export function App() {
 
     // 1) El lote de cada secadora llena.
     let creados = 0;
+    let sublotesCreados = 0;
     for (const secadora of conIngresos) {
       const t = tunelDeSecadora(secadora);
       // El secador es de la corrida (motor), igual para todas las secadoras.
       const operatorName = secadorMotor;
       if (operatorName) saveSecadorName(t, operatorName);
-      await apiPost<DryingTunnelReport>("/process-flow/drying", {
+      const saved = await apiPost<{ reports: DryingTunnelReport[]; separated: boolean }>("/process-flow/drying/batch", {
         entry_ids: seleccionDe(secadora),
         lot_code: String(form.get(`lot_code_${t}`) ?? "").trim() || undefined,
         tunnel_number: t,
@@ -8207,9 +8240,8 @@ export function App() {
         moisture_before: numberOrUndefined(form.get(`moisture_before_${t}`)),
         filled_at: fechaLlenadoMotor,
         dry_start_at: horaInicioMotor,
-        // Guardar informe es un borrador operativo: la hora final solo se
-        // persiste desde la acción explícita de Finalizar.
-        dry_end_at: undefined,
+        dry_end_at: stringOrUndefined(form.get(`dry_end_at_${t}`)),
+        finalize: false,
         dryer_name: secadora,
         operator_name: operatorName || undefined,
         notes: form.get(`notes_${t}`) || undefined,
@@ -8217,6 +8249,7 @@ export function App() {
         recepcion_sacos: numberOrUndefined(form.get(`recepcion_sacos_${t}`))
       });
       creados++;
+      sublotesCreados += saved.reports.length;
     }
     if (conIngresos.length > 0) {
       setDryingSelections((cur) => {
@@ -8227,6 +8260,11 @@ export function App() {
       setDryingEntryPick((cur) => {
         const next = { ...cur };
         conIngresos.forEach((s) => { next[s] = ""; });
+        return next;
+      });
+      setDryingEntryMultiPick((cur) => {
+        const next = { ...cur };
+        conIngresos.forEach((s) => { next[s] = []; });
         return next;
       });
     }
@@ -8284,7 +8322,7 @@ export function App() {
       addToast(`Corrida del Motor ${motorActivo} actualizada: fecha/hora aplicada a ${sincronizados} túnel(es).`, "success");
     } else {
       addToast(
-        `Informe del Motor ${motorActivo} guardado: ${creados} secadora(s)${sincronizados > 0 ? ` · fecha/hora sincronizada (${sincronizados})` : ""}${msgFuel}`,
+        `Informe del Motor ${motorActivo} guardado: ${creados} secadora(s)${sublotesCreados > creados ? ` · ${sublotesCreados} sublotes separados por destino` : ""}${sincronizados > 0 ? ` · fecha/hora sincronizada (${sincronizados})` : ""}${msgFuel}`,
         "success"
       );
     }
@@ -8464,7 +8502,8 @@ export function App() {
       moisture_before: numberOrUndefined(form.get("moisture_before")),
       filled_at: stringOrUndefined(form.get("filled_at")),
       dry_start_at: stringOrUndefined(form.get("dry_start_at")),
-      dry_end_at: finalizar ? stringOrUndefined(endInput?.value ?? null) : undefined,
+      dry_end_at: stringOrUndefined(endInput?.value ?? null),
+      finalize: finalizar,
       dryer_name: report.dryer_name,
       operator_name: String(form.get("operator_name") ?? "").trim(),
       notes: form.get("notes") || undefined,
@@ -9385,12 +9424,12 @@ export function App() {
     if (endInput && !endInput.value) {
       endInput.value = dateTimeLocalValue(new Date().toISOString());
     }
-    await submitDryingForm(formElement, secadora);
+    await submitDryingForm(formElement, secadora, true);
   }
 
   // El combustible ya no viaja aquí: se registra por MOTOR en su propio panel
   // y el backend lo reparte entre los secados activos.
-  async function submitDryingForm(formElement: HTMLFormElement, secadora: string) {
+  async function submitDryingForm(formElement: HTMLFormElement, secadora: string, finalize = false) {
     const form = new FormData(formElement);
     const payload = {
       rice_type: form.get("rice_type") || "0.11",
@@ -9398,6 +9437,7 @@ export function App() {
       filled_at: stringOrUndefined(form.get("filled_at")),
       dry_start_at: stringOrUndefined(form.get("dry_start_at")),
       dry_end_at: stringOrUndefined(form.get("dry_end_at")),
+      finalize,
       dryer_name: secadora,
       notes: form.get("notes") || undefined
     };
@@ -11323,28 +11363,40 @@ export function App() {
                       <div key={secadora} className="dryingForm" style={{ border: "1px solid #e2e8f0", borderRadius: 16, padding: 20, background: "#f8fafc", boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
                         <h3 style={{ marginTop: 0, paddingBottom: 8, borderBottom: "2px solid #e2e8f0" }}>🌀 {secadora} · Túnel {t}</h3>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 10 }}>
-                          <Select name={`rice_type_${t}`} label="Tipo de arroz" rows={[["0.11", "0.11"], ["CORRIENTE", "Corriente"]]} defaultValue="0.11" onChange={(e) => setDryingRiceType((cur) => ({ ...cur, [secadora]: e.target.value as "0.11" | "CORRIENTE" }))} />
-                          <label>
-                            <span>Ingreso de materia prima</span>
-                            <select value={dryingEntryPick[secadora] ?? ""} onChange={(event) => setDryingEntryPick((cur) => ({ ...cur, [secadora]: event.target.value }))}>
-                              <option value="">Seleccione</option>
+                          <Select name={`rice_type_${t}`} label="Tipo de arroz" rows={[["0.11", "0.11"], ["CORRIENTE", "Corriente"]]} defaultValue="0.11" onChange={(e) => {
+                            setDryingRiceType((cur) => ({ ...cur, [secadora]: e.target.value as "0.11" | "CORRIENTE" }));
+                            setDryingEntryMultiPick((cur) => ({ ...cur, [secadora]: [] }));
+                          }} />
+                          <div>
+                            <span style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>Ingresos de materia prima <span className="muted">(puedes marcar varios)</span></span>
+                            <div style={{ maxHeight: 210, overflowY: "auto", border: "1px solid var(--c-border)", borderRadius: 8, background: "var(--c-surface)" }}>
                               {entradasLibres
                                 .filter((entry) => {
                                   const tipoSeleccionado = dryingRiceType[secadora];
-                                  if (!tipoSeleccionado) return true;
-                                  return (entry.rice_type ?? "0.11") === tipoSeleccionado;
+                                  return !tipoSeleccionado || (entry.rice_type ?? "0.11") === tipoSeleccionado;
                                 })
-                                .map((entry) => (
-                                <option key={entry.id} value={entry.id}>
-                                  {entryLabel(entry)} - {entry.farmer_name ?? "Sin agricultor"} - {Number(entry.quintals ?? 0).toFixed(2)} QQ{entry.rice_type ? ` · ${entry.rice_type}` : ""}{(() => { const b = opTypeBadgeLabel(entry.operation_type, entry.is_maquila); return b ? ` · ${b}` : ""; })()}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
+                                .map((entry) => {
+                                  const checked = (dryingEntryMultiPick[secadora] ?? []).includes(entry.id);
+                                  const badge = opTypeBadgeLabel(entry.operation_type, entry.is_maquila);
+                                  return (
+                                    <label key={entry.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", margin: 0, borderBottom: "1px solid var(--c-border)", cursor: "pointer" }}>
+                                      <input type="checkbox" checked={checked} onChange={() => toggleDryingEntryPick(secadora, entry.id)} style={{ width: 18, height: 18, marginTop: 1, flex: "0 0 auto" }} />
+                                      <span style={{ fontSize: 13, lineHeight: 1.35 }}>
+                                        <strong>{entryLabel(entry)}</strong> · {entry.farmer_name ?? "Sin agricultor"} · {Number(entry.quintals ?? 0).toFixed(2)} QQ
+                                        {badge ? <small style={{ display: "block", color: "var(--c-muted)" }}>{badge}</small> : null}
+                                      </span>
+                                    </label>
+                                  );
+                                })}
+                              {entradasLibres.filter((entry) => !dryingRiceType[secadora] || (entry.rice_type ?? "0.11") === dryingRiceType[secadora]).length === 0 && (
+                                <div className="muted" style={{ padding: 10, fontSize: 13 }}>No hay ingresos disponibles de este tipo.</div>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                        <button type="button" className="btnSecondary" onClick={() => addDryingEntry(secadora)}
+                        <button type="button" className="btnSecondary" onClick={() => addDryingEntries(secadora)}
                           style={{ padding: "8px 14px", borderRadius: 8, fontWeight: 700, marginTop: 4 }}>
-                          ➕ Agregar al lote
+                          ➕ Agregar al lote ({(dryingEntryMultiPick[secadora] ?? []).length})
                         </button>
                         <DryingLotSelector selectedLots={lotes} editing={false} onRemove={(id) => removeDryingEntry(secadora, id)} />
                         <div className="totalBox">

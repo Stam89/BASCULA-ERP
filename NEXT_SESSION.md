@@ -49,6 +49,18 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Secadoras: guardado parcial, multiseleccion y carga mixta (2026-09-23)
+
+- Se corrigio la causa real del "error inesperado": consultas de automatizacion de Cuadrilla/Secador usaban `created_at` ambiguo y abortaban la transaccion al guardar.
+- El auto-pago de Cuadrilla usa savepoint; un fallo complementario ya no deja inutilizable la transaccion principal.
+- Guardar y finalizar son intenciones separadas mediante `finalize`: el borrador acepta horas nulas/vacias; finalizar exige inicio y fin.
+- El selector de ingresos de Secadoras permite marcar varios tickets con checkboxes y agregarlos en un clic.
+- Nuevo `POST /process-flow/drying/batch`: una carga mixta se divide atomicamente por socio y tipo de operacion.
+- `COMPRA` conserva su sublote propio y puede pasar a Produccion; `SECADO` conserva un sublote de servicio, queda fuera de inventario/Produccion y genera su cobro de secado al completar.
+- El combustible sigue repartiendose proporcionalmente por los QQ de cada sublote.
+- Prueba transaccional con datos reales y `ROLLBACK`: 4.62 QQ propios + 75.40 QQ solo secado crearon dos sublotes en el mismo tunel; despues del rollback quedaron 0 tickets vinculados.
+- Verificaciones: backend build, 36/36 tests, frontend build y lint sin errores, preflight sin errores criticos.
+
 ### Secado parcial y agricultores globales (2026-09-23)
 
 - Guardar el informe de secadora admite horas de inicio/fin vacias y nunca finaliza el secado accidentalmente.

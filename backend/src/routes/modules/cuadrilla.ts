@@ -380,26 +380,33 @@ export async function autoGenerarPagosCuadrillaDeSecado(
   dryingReportId: string,
   createdBy?: string | null
 ): Promise<void> {
+  const savepoint = "auto_cuadrilla_secado";
   try {
+    // La automatización es complementaria. El SAVEPOINT permite recuperarse de
+    // un fallo SQL sin dejar abortada la transacción principal del secado.
+    await client.query(`SAVEPOINT ${savepoint}`);
     const r = await client.query(
-      `SELECT tunnel_number, total_quintals::float AS quintals, dry_method, dry_end_at,
-              recepcion_empaque, recepcion_sacos::float AS recepcion_sacos,
-              botada_empaque, botada_sacos::float AS botada_sacos,
-              COALESCE(filled_at, dry_start_at::date, created_at::date) AS work_date,
+      `SELECT d.tunnel_number, d.total_quintals::float AS quintals, d.dry_method, d.dry_end_at,
+              d.recepcion_empaque, d.recepcion_sacos::float AS recepcion_sacos,
+              d.botada_empaque, d.botada_sacos::float AS botada_sacos,
+              COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) AS work_date,
               l.accionista_id
        FROM drying_tunnel_reports d
        LEFT JOIN lots l ON l.id = d.lot_id
        WHERE d.id = $1`,
       [dryingReportId]
     );
-    if (!r.rowCount) return;
+    if (!r.rowCount) { await client.query(`RELEASE SAVEPOINT ${savepoint}`); return; }
     const rep = r.rows[0];
-    if (String(rep.dry_method ?? "TUNEL").toUpperCase() === "TENDAL") return; // el tendal ya se paga aparte
+    if (String(rep.dry_method ?? "TUNEL").toUpperCase() === "TENDAL") {
+      await client.query(`RELEASE SAVEPOINT ${savepoint}`);
+      return; // el tendal ya se paga aparte
+    }
     const tunnel = Number(rep.tunnel_number) || 0;
     const qq = Number(rep.quintals) || 0;
     const accionistaId = rep.accionista_id as string | null;
     const socioId = await resolveCuadrillaSocioId(client, accionistaId);
-    if (!tunnel || qq <= 0) return;
+    if (!tunnel || qq <= 0) { await client.query(`RELEASE SAVEPOINT ${savepoint}`); return; }
     const workDate = rep.work_date ? new Date(rep.work_date).toISOString().slice(0, 10) : null;
 
     const eventos: Array<{ momento: "LLENADO" | "VACIADO"; empaque: string | null; sacos: number | null }> = [
@@ -451,7 +458,10 @@ export async function autoGenerarPagosCuadrillaDeSecado(
         accionista_id: accionistaId
       });
     }
+    await client.query(`RELEASE SAVEPOINT ${savepoint}`);
   } catch (err) {
+    await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`).catch(() => undefined);
+    await client.query(`RELEASE SAVEPOINT ${savepoint}`).catch(() => undefined);
     console.error("[cuadrilla] auto-pago de secado (túnel) falló", {
       drying_report_id: dryingReportId,
       error: err instanceof Error ? err.message : String(err)
