@@ -7,7 +7,7 @@ Actualizado: 2026-09-24
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: edicion aislada por tunel y formulario de Caja condicional (Efectivo/Banco/Mixto).
+- Ultimo cambio funcional: empaque unico de botada en tuneles y confirmacion previa al cierre del secado.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,16 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Empaque unico de botada + confirmacion de cierre (2026-09-24)
+
+- Los tuneles mecanicos ya no muestran ni envian `Empaque de recepcion`; usan unicamente `Empaque de botada (vaciado)` al crear y editar.
+- El alta de informes guarda `botada_empaque` y `botada_sacos` desde el primer guardado, con TULAS/a granel como valor por defecto.
+- Las columnas historicas de recepcion se conservan en base de datos y API por compatibilidad con Nomina y con el modelo interno del Tendal; no se hizo una migracion destructiva.
+- `Finalizar este tunel` abre primero una confirmacion bloqueante que explica el efecto sobre inventario/facturacion; Cancelar no escribe datos.
+- Tras confirmar se mantiene intacto el flujo existente: validacion de horas, cierre individual y solicitud de combustible solo si es el ultimo tunel activo del motor.
+- Revision visual sin escrituras en una pestana separada: Motor 1 y Motor 2 muestran solo el empaque de botada y mantienen la multiseleccion de tickets.
+- Verificaciones: backend build, 38/38 tests, frontend build y lint con 0 errores (warnings historicos).
 
 ### Secadoras aisladas al editar + Caja condicional (2026-09-24)
 

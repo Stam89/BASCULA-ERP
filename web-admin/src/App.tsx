@@ -1884,6 +1884,13 @@ export function App() {
   const [secadoraAbierta, setSecadoraAbierta] = useState<"TENDAL" | 1 | 2 | null>(null);
   // Los inputs de combustible viven en un modal que abre "Finalizar secado".
   const [fuelModalOpen, setFuelModalOpen] = useState(false);
+  // Confirmación previa al cierre: conserva exactamente el formulario/túnel que
+  // originó la acción y no ejecuta ninguna escritura hasta aceptar el modal.
+  const [dryingFinalizeConfirm, setDryingFinalizeConfirm] = useState<{
+    report: DryingTunnelReport;
+    formElement: HTMLFormElement;
+  } | null>(null);
+  const [dryingFinalizeBusy, setDryingFinalizeBusy] = useState(false);
   // Secados sin finalizar del motor (de TODOS los accionistas: el motor es
   // compartido); entre ellos se reparte el combustible según sus QQ.
   const [motorActiveReports, setMotorActiveReports] = useState<MotorActiveReport[]>([]);
@@ -8273,8 +8280,8 @@ export function App() {
         dryer_name: secadora,
         operator_name: operatorName || undefined,
         notes: form.get(`notes_${t}`) || undefined,
-        recepcion_empaque: (form.get(`recepcion_empaque_${t}`) as string) || "TULAS",
-        recepcion_sacos: numberOrUndefined(form.get(`recepcion_sacos_${t}`))
+        botada_empaque: (form.get(`botada_empaque_${t}`) as string) || "TULAS",
+        botada_sacos: numberOrUndefined(form.get(`botada_sacos_${t}`))
       });
       creados++;
       sublotesCreados += saved.reports.length;
@@ -8533,8 +8540,6 @@ export function App() {
       dryer_name: report.dryer_name,
       operator_name: String(form.get("operator_name") ?? "").trim(),
       notes: form.get("notes") || undefined,
-      recepcion_empaque: (form.get("recepcion_empaque") as string) || undefined,
-      recepcion_sacos: numberOrUndefined(form.get("recepcion_sacos")),
       botada_empaque: (form.get("botada_empaque") as string) || undefined,
       botada_sacos: numberOrUndefined(form.get("botada_sacos"))
     };
@@ -8576,6 +8581,18 @@ export function App() {
     setEditingDryingReport(null);
   }
 
+  async function confirmDryingFinalize() {
+    const pending = dryingFinalizeConfirm;
+    if (!pending || dryingFinalizeBusy) return;
+    setDryingFinalizeBusy(true);
+    try {
+      await guardarSecadoEditado(pending.report, pending.formElement, true);
+      setDryingFinalizeConfirm(null);
+    } finally {
+      setDryingFinalizeBusy(false);
+    }
+  }
+
   // Aplica la fecha de llenado, hora de inicio y secador de ESTE túnel a TODOS
   // los túneles activos de su motor (la corrida en curso), en un solo paso.
   async function aplicarCorridaATodos(report: DryingTunnelReport, formElement: HTMLFormElement) {
@@ -8599,10 +8616,9 @@ export function App() {
     setEditingDryingReport(null);
   }
 
-  // Control "Tipo de Empaque" (Tulas vs Sacos) para un momento del túnel. Cuando
+  // Control "Tipo de Empaque" (Tulas vs Sacos) para la botada del túnel. Cuando
   // se elige Sacos, aparece el Nº de sacos (con un botón para aproximarlo desde
-  // los QQ). Se usa en el llenado (Recepción) y en el vaciado (Botada). No es un
-  // component anidado a propósito: se invoca como función para no remontar el
+  // los QQ). No es un component anidado a propósito: se invoca como función para no remontar el
   // input no controlado en cada render del formulario.
   function renderEmpaqueField(opts: {
     keyId: string;
@@ -11328,18 +11344,8 @@ export function App() {
                               <Input name="dry_end_at" label="Hora secado final" type="datetime-local" defaultValue={dateTimeLocalValue(rep.dry_end_at)} required={false} />
                             </div>
                             <Input name="notes" label="Observacion" defaultValue={rep.notes ?? "Secado registrado"} required={false} />
-                            {/* Empaque por momento. Recepción = cómo entró al túnel;
-                                Botada = cómo salió. Sacos paga por saco (ENSACADO);
-                                Tulas paga por QQ. Solo cambia el pago de cuadrilla. */}
-                            {renderEmpaqueField({
-                              keyId: `${rep.id}-rec`,
-                              empaqueName: "recepcion_empaque",
-                              sacosName: "recepcion_sacos",
-                              label: "📦 Empaque de recepción (llenado)",
-                              defEmpaque: rep.recepcion_empaque,
-                              defSacos: rep.recepcion_sacos ?? null,
-                              qq: Number(rep.total_quintals ?? 0)
-                            })}
+                            {/* Único empaque operativo: cómo sale el arroz al vaciar
+                                el túnel. Sacos paga por saco; a granel paga por QQ. */}
                             {renderEmpaqueField({
                               keyId: `${rep.id}-bot`,
                               empaqueName: "botada_empaque",
@@ -11372,7 +11378,7 @@ export function App() {
                                   style={{ flex: "1 1 160px", minHeight: 44, padding: "8px 16px", textAlign: "center", whiteSpace: "normal", borderRadius: 10, background: "var(--c-success)" }}
                                   onClick={(e) => {
                                     const form = e.currentTarget.closest("form") as HTMLFormElement | null;
-                                    if (form) guardarSecadoEditado(rep, form, true).catch((error) => setMessage(error.message));
+                                    if (form) setDryingFinalizeConfirm({ report: rep, formElement: form });
                                   }}
                                 >
                                   ✅ Finalizar este túnel
@@ -11518,13 +11524,13 @@ export function App() {
                         <Input name={`moisture_before_${t}`} label="Humedad inicial %" type="number" defaultValue="0" required={false} />
                         <Input name={`dry_end_at_${t}`} label="Hora secado final" type="datetime-local" required={false} />
                         <Input name={`notes_${t}`} label="Observacion" defaultValue="Secado registrado" required={false} />
-                        {/* Empaque de la Recepción: Tulas (por QQ) o Sacos (por saco)
-                            cuando se agotan las Tulas. Solo afecta el pago de cuadrilla. */}
+                        {/* Empaque de botada universal: se captura desde que se arma
+                            el túnel y puede corregirse después antes de finalizar. */}
                         {renderEmpaqueField({
-                          keyId: `new-${t}-rec`,
-                          empaqueName: `recepcion_empaque_${t}`,
-                          sacosName: `recepcion_sacos_${t}`,
-                          label: "📦 Empaque de recepción",
+                          keyId: `new-${t}-bot`,
+                          empaqueName: `botada_empaque_${t}`,
+                          sacosName: `botada_sacos_${t}`,
+                          label: "📦 Empaque de botada (vaciado)",
                           qq: qqDe(secadora)
                         })}
                       </div>
@@ -11551,6 +11557,34 @@ export function App() {
               </form>
             )}
             </div>
+
+            {/* Confirmación independiente del combustible. Recién al aceptar se
+                valida y guarda el túnel; cancelar no modifica datos. */}
+            {dryingFinalizeConfirm && (
+              <div className="modalOverlay" onClick={() => { if (!dryingFinalizeBusy) setDryingFinalizeConfirm(null); }}>
+                <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520, width: "100%" }} role="dialog" aria-modal="true" aria-labelledby="drying-finalize-title">
+                  <h3 id="drying-finalize-title" style={{ marginTop: 0 }}>⚠️ Confirmar finalización</h3>
+                  <p style={{ lineHeight: 1.55 }}>
+                    ¿Estás seguro de finalizar este secado? Una vez cerrado el lote, los quintales pasarán a inventario o facturación y no podrás modificar los datos.
+                  </p>
+                  <div className="buttonRow" style={{ marginTop: 16 }}>
+                    <button type="button" onClick={() => setDryingFinalizeConfirm(null)} disabled={dryingFinalizeBusy}>Cancelar</button>
+                    <button
+                      type="button"
+                      className="primary"
+                      style={{ background: "var(--c-success)", fontWeight: 800 }}
+                      disabled={dryingFinalizeBusy}
+                      onClick={() => confirmDryingFinalize().catch((error) => {
+                        setDryingFinalizeConfirm(null);
+                        setMessage(error.message);
+                      })}
+                    >
+                      {dryingFinalizeBusy ? "Finalizando…" : "Sí, finalizar"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Modal: combustible del motor + cierre (los inputs solo aquí, al final) */}
             {fuelModalOpen && (

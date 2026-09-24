@@ -60,11 +60,12 @@ const dryingBodySchema = z.object({
   // la guardianía + túneles de la semana. dryer_name es la MÁQUINA (Secadora N).
   operator_name: z.string().optional(),
   notes: z.string().optional(),
-  // Tipo de empaque de la RECEPCIÓN (llenado): Tulas por defecto, o Sacos si se
-  // agotaron las Tulas. En Sacos, recepcion_sacos = Nº de sacos (para el pago por
-  // saco de la cuadrilla). No altera pesos ni tickets.
+  // Recepción queda como compatibilidad histórica y para el flujo interno del
+  // Tendal. En túneles mecánicos la UI solo captura la botada.
   recepcion_empaque: z.enum(["TULAS", "SACOS"]).default("TULAS"),
   recepcion_sacos: z.number().nonnegative().nullable().optional(),
+  botada_empaque: z.enum(["TULAS", "SACOS"]).default("TULAS"),
+  botada_sacos: z.number().nonnegative().nullable().optional(),
   // Pago automático de cuadrilla (opcional): quién y qué labor de secadora se
   // paga por este llenado. Si ambos vienen, se genera la entrada en Nómina.
   cuadrilla_worker: z.string().optional(),
@@ -1480,8 +1481,8 @@ async function createDryingReport(
       gas_cilindro_cantidad, gas_cilindro_precio, gas_cilindro_costo, gas_costo_total,
       diesel_inicio, diesel_fin, diesel_precio, diesel_costo,
       dryer_name, operator_name, status, notes, created_by, motor_number,
-      recepcion_empaque, recepcion_sacos, dry_method)
-     VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34)
+       recepcion_empaque, recepcion_sacos, botada_empaque, botada_sacos, dry_method)
+     VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36)
      RETURNING *`,
     [
       lotId,
@@ -1517,6 +1518,8 @@ async function createDryingReport(
       esTendal ? null : motorDeSecadora(input.dryer_name),
       input.recepcion_empaque,
       input.recepcion_empaque === "SACOS" ? (input.recepcion_sacos ?? null) : null,
+      input.botada_empaque,
+      input.botada_empaque === "SACOS" ? (input.botada_sacos ?? null) : null,
       input.dry_method
     ]
   );
