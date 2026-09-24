@@ -61,6 +61,14 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - Verificacion visual sin escrituras: Motor 1 tenia Tunel 1 (CEYRO) y Tunel 2 (ROVINSON); ambos fueron detectados globalmente.
 - Verificaciones: backend build, 38/38 tests, frontend build, lint sin errores y preflight sin errores criticos.
 
+### Secadoras: hora de inicio compartida por motor (2026-09-23)
+
+- Crear un tunel nuevo ya heredaba la hora inicial de la corrida activa.
+- Ahora, al guardar o corregir `Hora secado inicio` en cualquier tunel mecanico, el backend la propaga automaticamente a todos los reportes pendientes del mismo motor, incluso si pertenecen a socios distintos.
+- La operacion usa bloqueo transaccional por motor para evitar correcciones simultaneas inconsistentes.
+- Cada `Hora secado final` permanece independiente; solo se recalcula la duracion de cada tunel contra su propia hora final.
+- La trazabilidad JSON de los reportes enlazados conserva la hora inicial y duracion sincronizadas.
+
 ### Secadoras: guardado parcial, multiseleccion y carga mixta (2026-09-23)
 
 - Se corrigio la causa real del "error inesperado": consultas de automatizacion de Cuadrilla/Secador usaban `created_at` ambiguo y abortaban la transaccion al guardar.

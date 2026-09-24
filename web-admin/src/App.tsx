@@ -8511,7 +8511,7 @@ export function App() {
       botada_empaque: (form.get("botada_empaque") as string) || undefined,
       botada_sacos: numberOrUndefined(form.get("botada_sacos"))
     };
-    const updated = await apiPut<DryingTunnelReport>(`/process-flow/drying/${report.id}`, payload);
+    const updated = await apiPut<DryingTunnelReport & { motor_start_synced?: number }>(`/process-flow/drying/${report.id}`, payload);
     if (finalizar) {
       const result = await apiPost<{
         requires_fuel: boolean;
@@ -8536,7 +8536,10 @@ export function App() {
         setMessage(`Secado del Túnel ${result.tunnel_number} finalizado sin cerrar el motor.`);
       }
     } else {
-      setMessage(`Secado del Túnel ${updated.tunnel_number} actualizado`);
+      const syncMessage = payload.dry_start_at && Number(updated.motor_start_synced ?? 0) > 1
+        ? ` · hora de inicio aplicada a ${updated.motor_start_synced} reportes del Motor ${motorDeSecadora(report.dryer_name)}`
+        : "";
+      setMessage(`Secado del Túnel ${updated.tunnel_number} actualizado${syncMessage}`);
     }
     await refresh();
     await loadMotorActive();

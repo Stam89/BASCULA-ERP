@@ -1532,6 +1532,40 @@ async function createDryingReport(
   return getDryingReportById(client, tunnel.rows[0].id);
 }
 
+export async function syncDryingMotorStart(client: PoolClient, motorNumber: number, dryStartAt: string | Date): Promise<number> {
+  await client.query("SELECT pg_advisory_xact_lock($1, $2)", [71003, motorNumber]);
+  const synced = await client.query(
+    `UPDATE drying_tunnel_reports d
+     SET dry_start_at = $2::timestamptz,
+         drying_hours = CASE
+           WHEN d.dry_end_at IS NOT NULL
+           THEN GREATEST(0, EXTRACT(EPOCH FROM (d.dry_end_at - $2::timestamptz)) / 3600.0)
+           ELSE d.drying_hours
+         END
+     WHERE d.motor_number = $1
+       AND d.motor_fuel_id IS NULL
+     RETURNING d.id`,
+    [motorNumber, dryStartAt]
+  );
+
+  const syncedIds = synced.rows.map((row) => row.id);
+  if (syncedIds.length > 0) {
+    await client.query(
+      `UPDATE lot_process_reports p
+       SET report_data = p.report_data || jsonb_build_object(
+         'dry_start_at', d.dry_start_at,
+         'drying_hours', d.drying_hours
+       )
+       FROM drying_tunnel_report_lots dl
+       JOIN drying_tunnel_reports d ON d.id = dl.drying_report_id
+       WHERE dl.process_report_id = p.id
+         AND d.id = ANY($1::uuid[])`,
+      [syncedIds]
+    );
+  }
+  return synced.rowCount ?? 0;
+}
+
 async function updateDryingReport(
   client: PoolClient,
   dryingId: string,
@@ -1550,6 +1584,16 @@ async function updateDryingReport(
   }
   const dryingHours = calculateDryingHours(dryStartAt, dryEndAt);
   const status = input.finalize ? "COMPLETED" : current.rows[0].status;
+  const targetMotor = Number(current.rows[0].motor_number ?? motorDeSecadora(input.dryer_name ?? current.rows[0].dryer_name));
+  const syncMotorStart = input.dry_start_at !== undefined
+    && String(current.rows[0].dry_method ?? "TUNEL").toUpperCase() !== "TENDAL"
+    && [1, 2].includes(targetMotor);
+
+  // La hora de encendido pertenece al motor. Sincroniza antes de guardar el
+  // reporte actual; su hora final sigue siendo independiente.
+  const motorStartSynced = syncMotorStart
+    ? await syncDryingMotorStart(client, targetMotor, dryStartAt!)
+    : 0;
 
   const c = await calcularCombustible(client, input);
 
@@ -1693,7 +1737,8 @@ async function updateDryingReport(
     });
   }
 
-  return getDryingReportById(client, dryingId);
+  const report = await getDryingReportById(client, dryingId);
+  return { ...report, motor_start_synced: motorStartSynced };
 }
 
 async function getDryingReportById(client: PoolClient, dryingId: string) {
