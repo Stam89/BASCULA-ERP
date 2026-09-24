@@ -30,6 +30,32 @@ async function assertFomentoAccionista(client: PoolClient, fomentoId: string, ac
   }
 }
 
+async function resolveGlobalFarmer(client: PoolClient, farmerId: string | undefined, farmerName: string) {
+  if (farmerId) {
+    const selected = await client.query<{ id: string; full_name: string }>(
+      "SELECT id, full_name FROM farmers WHERE id = $1",
+      [farmerId]
+    );
+    if (!selected.rowCount) throw new ApiError(404, "El agricultor seleccionado ya no existe");
+    return selected.rows[0];
+  }
+
+  const name = farmerName.trim();
+  const existing = await client.query<{ id: string; full_name: string }>(
+    "SELECT id, full_name FROM farmers WHERE lower(trim(full_name)) = lower(trim($1)) ORDER BY created_at ASC LIMIT 1",
+    [name]
+  );
+  if (existing.rowCount) return existing.rows[0];
+
+  // El directorio de personas es global: el vínculo con el socio vive en
+  // fomentos. Un agricultor nuevo no queda apropiado por el socio activo.
+  const created = await client.query<{ id: string; full_name: string }>(
+    "INSERT INTO farmers (full_name, accionista_id) VALUES ($1, NULL) RETURNING id, full_name",
+    [name]
+  );
+  return created.rows[0];
+}
+
 const fomentoSchema = z.object({
   farmer_name:  z.string().min(2),
   farmer_id:    z.string().uuid().optional(),
@@ -290,7 +316,7 @@ fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res
         const existe = await client.query("SELECT id FROM farmers WHERE lower(full_name) = lower($1) LIMIT 1", [nombre]);
         let farmerId: string;
         if (existe.rowCount) farmerId = existe.rows[0].id;
-        else { farmerId = (await client.query("INSERT INTO farmers (full_name, accionista_id) VALUES ($1,$2) RETURNING id", [nombre, accionistaId])).rows[0].id; farmersCreated++; }
+        else { farmerId = (await client.query("INSERT INTO farmers (full_name, accionista_id) VALUES ($1, NULL) RETURNING id", [nombre])).rows[0].id; farmersCreated++; }
 
         // (b) Fomento (cabecera).
         const fom = await client.query(
@@ -372,8 +398,8 @@ fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res
           farmerId = existente.rows[0].id;
         } else {
           const nuevo = await client.query(
-            "INSERT INTO farmers (full_name, accionista_id) VALUES ($1, $2) RETURNING id",
-            [nombre, accionistaId]
+            "INSERT INTO farmers (full_name, accionista_id) VALUES ($1, NULL) RETURNING id",
+            [nombre]
           );
           farmerId = nuevo.rows[0].id;
           farmersCreated++;
@@ -543,7 +569,7 @@ fomentosRouter.post("/bulk-import", asyncRoute(async (req, res) => {
       if (existente.rowCount) {
         farmerId = existente.rows[0].id;
       } else {
-        const nuevo = await client.query("INSERT INTO farmers (full_name, accionista_id) VALUES ($1, $2) RETURNING id", [nombre, accionistaId]);
+        const nuevo = await client.query("INSERT INTO farmers (full_name, accionista_id) VALUES ($1, NULL) RETURNING id", [nombre]);
         farmerId = nuevo.rows[0].id;
         agricultoresCreados++;
       }
@@ -652,31 +678,46 @@ fomentosRouter.post("/", asyncRoute(async (req, res) => {
     return d.toISOString().slice(0, 10);
   })();
 
-  const result = await pool.query(
-    `INSERT INTO fomentos (accionista_id, farmer_name, farmer_id, cuadras, inicio, cosecha, renta, status, notes, variedad, limite_credito, folio)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
-    [accionistaId, data.farmer_name, data.farmer_id ?? null, data.cuadras, data.inicio, cosecha,
-     data.renta, data.status, data.notes ?? null, data.variedad ?? null, data.limite_credito ?? null,
-     data.folio && data.folio.trim() !== "" ? data.folio.trim() : null]
-  );
+  const result = await inTransaction(async (client) => {
+    const farmer = await resolveGlobalFarmer(client, data.farmer_id, data.farmer_name);
+    return client.query(
+      `INSERT INTO fomentos (accionista_id, farmer_name, farmer_id, cuadras, inicio, cosecha, renta, status, notes, variedad, limite_credito, folio)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      [accionistaId, farmer.full_name, farmer.id, data.cuadras, data.inicio, cosecha,
+       data.renta, data.status, data.notes ?? null, data.variedad ?? null, data.limite_credito ?? null,
+       data.folio && data.folio.trim() !== "" ? data.folio.trim() : null]
+    );
+  });
   res.status(201).json(result.rows[0]);
 }));
 
 fomentosRouter.patch("/:id", asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
-  const data = fomentoSchema.partial().parse(req.body);
-  const fields: string[] = [];
-  const vals: unknown[] = [];
-  let i = 1;
-  for (const [k, v] of Object.entries(data)) {
-    if (v !== undefined) { fields.push(`${k} = $${i++}`); vals.push(v); }
-  }
-  if (!fields.length) { res.json({ message: "nada que actualizar" }); return; }
-  vals.push(req.params.id, accionistaId);
-  const result = await pool.query(
-    `UPDATE fomentos SET ${fields.join(", ")} WHERE id = $${i} AND accionista_id = $${i + 1} RETURNING *`,
-    vals
-  );
+  const fomentoId = String(req.params.id);
+  const parsed = fomentoSchema.partial().parse(req.body);
+  const result = await inTransaction(async (client) => {
+    await assertFomentoAccionista(client, fomentoId, accionistaId);
+    const data: Record<string, unknown> = { ...parsed };
+    if (parsed.farmer_id !== undefined || parsed.farmer_name !== undefined) {
+      const current = await client.query<{ farmer_name: string }>("SELECT farmer_name FROM fomentos WHERE id = $1", [fomentoId]);
+      const farmer = await resolveGlobalFarmer(client, parsed.farmer_id, parsed.farmer_name ?? current.rows[0].farmer_name);
+      data.farmer_id = farmer.id;
+      data.farmer_name = farmer.full_name;
+    }
+    const fields: string[] = [];
+    const vals: unknown[] = [];
+    let i = 1;
+    for (const [key, value] of Object.entries(data)) {
+      if (value !== undefined) { fields.push(`${key} = $${i++}`); vals.push(value); }
+    }
+    if (!fields.length) return null;
+    vals.push(fomentoId, accionistaId);
+    return client.query(
+      `UPDATE fomentos SET ${fields.join(", ")} WHERE id = $${i} AND accionista_id = $${i + 1} RETURNING *`,
+      vals
+    );
+  });
+  if (!result) { res.json({ message: "nada que actualizar" }); return; }
   if (!result.rowCount) throw new ApiError(404, "Fomento no encontrado o no pertenece al accionista activo");
   res.json(result.rows[0]);
 }));

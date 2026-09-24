@@ -7,7 +7,7 @@ Actualizado: 2026-09-23
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: catalogo de productos editable en Inventario (commit de esta sesion).
+- Ultimo cambio funcional: secado parcial seguro y directorio global de agricultores.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,16 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Secado parcial y agricultores globales (2026-09-23)
+
+- Guardar el informe de secadora admite horas de inicio/fin vacias y nunca finaliza el secado accidentalmente.
+- Las cadenas vacias de fechas/horas se normalizan a `NULL`; la base confirma que `dry_start_at` y `dry_end_at` son anulables.
+- Finalizar un tunel o motor exige hora de inicio y hora final tanto en frontend como en backend; ya no se autocompleta la hora final.
+- `/farmers` y `/farmers/search` siguen siendo un catalogo global, sin filtro por socio.
+- Al crear o editar un Fomento se reutiliza el agricultor global existente; si no existe, se crea una sola persona global y el socio queda asociado en `fomentos`.
+- Vincular Ticket conserva el socio del ticket y solo vincula el `farmer_id` global; ya no hereda el socio historico del agricultor.
+- Verificaciones: backend build, 33/33 tests, frontend build y lint sin errores, preflight sin errores criticos.
 
 ### Eliminacion administrativa y renumeracion de tickets (2026-09-23)
 

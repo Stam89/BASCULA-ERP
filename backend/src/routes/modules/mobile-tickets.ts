@@ -322,12 +322,9 @@ mobileTicketsRouter.get("/", requireAuth, resolveAccionista, asyncRoute(async (r
   res.json(result.rows);
 }));
 
-// Vincula un ticket a un agricultor (existente por id, o crea uno por nombre).
-// El accionista del ticket solo se hereda del agricultor (si lo tiene); nunca
-// del accionista activo, porque el pesaje todavía no es de nadie: el dueño se
-// elige al crear el lote.
+// Vincula un ticket a un agricultor del directorio global. El vínculo no cambia
+// el socio del ticket: el dueño operativo se elige al crear el lote.
 mobileTicketsRouter.post("/:id/link-farmer", requireAuth, resolveAccionista, asyncRoute(async (req, res) => {
-  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const userId = (req as AuthenticatedRequest).user?.id ?? null;
   const body = z.object({
     farmer_id: z.string().uuid().optional(),
@@ -338,34 +335,28 @@ mobileTicketsRouter.post("/:id/link-farmer", requireAuth, resolveAccionista, asy
   }).parse(req.body);
 
   let farmerId = body.farmer_id;
-  let farmerAccionistaId: string | null = null;
   if (!farmerId) {
     const name = (body.full_name ?? "").trim();
     if (name.length < 2) throw new ApiError(400, "Elige un agricultor o escribe un nombre para crearlo");
     // Evita duplicados: si ya existe un agricultor con ese nombre, se reutiliza.
     const existing = await pool.query(
-      "SELECT id, accionista_id FROM farmers WHERE lower(trim(full_name)) = lower($1) ORDER BY created_at ASC LIMIT 1",
+      "SELECT id FROM farmers WHERE lower(trim(full_name)) = lower($1) ORDER BY created_at ASC LIMIT 1",
       [name]
     );
     if (existing.rowCount) {
       farmerId = existing.rows[0].id;
-      farmerAccionistaId = existing.rows[0].accionista_id;
     } else {
-      // Agricultor nuevo: se pre-asigna al accionista activo del usuario.
+      // Agricultor nuevo: queda en el directorio global, sin dueño operativo.
       const created = await pool.query(
-        "INSERT INTO farmers (full_name, accionista_id) VALUES ($1, $2) RETURNING id, accionista_id",
-        [name, accionistaId]
+        "INSERT INTO farmers (full_name, accionista_id) VALUES ($1, NULL) RETURNING id",
+        [name]
       );
       farmerId = created.rows[0].id;
-      farmerAccionistaId = created.rows[0].accionista_id;
     }
   } else {
-    const farmer = await pool.query("SELECT accionista_id FROM farmers WHERE id = $1", [farmerId]);
+    const farmer = await pool.query("SELECT id FROM farmers WHERE id = $1", [farmerId]);
     if (!farmer.rowCount) throw new ApiError(404, "Agricultor no encontrado");
-    farmerAccionistaId = farmer.rows[0].accionista_id;
   }
-
-  const targetAccionista = farmerAccionistaId;
 
   const existing = await pool.query(
     "SELECT liquidated_at FROM mobile_synced_tickets WHERE id = $1",
@@ -378,10 +369,10 @@ mobileTicketsRouter.post("/:id/link-farmer", requireAuth, resolveAccionista, asy
 
   const updated = await pool.query(
     `UPDATE mobile_synced_tickets
-     SET farmer_id = $2, accionista_id = $3
+     SET farmer_id = $2
      WHERE id = $1
      RETURNING id, farmer_id, farmer_name, accionista_id`,
-    [req.params.id, farmerId, targetAccionista]
+    [req.params.id, farmerId]
   );
 
   const externalName = (updated.rows[0]?.farmer_name ?? "").trim();
@@ -396,15 +387,15 @@ mobileTicketsRouter.post("/:id/link-farmer", requireAuth, resolveAccionista, asy
   if (externalName.length >= 2) {
     const bulk = await pool.query(
       `UPDATE mobile_synced_tickets
-          SET farmer_id = $2, accionista_id = $3
+          SET farmer_id = $2
         WHERE id <> $1
           AND farmer_id IS NULL
           AND liquidated_at IS NULL
           AND weighing_ticket_id IS NULL
           AND lower(coalesce(raw_payload->>'modo', 'principal')) = 'principal'
-          AND lower(trim(farmer_name)) = lower(trim($4))
+          AND lower(trim(farmer_name)) = lower(trim($3))
         RETURNING id`,
-      [req.params.id, farmerId, targetAccionista, externalName]
+      [req.params.id, farmerId, externalName]
     );
     cascada = bulk.rows.map((r) => String(r.id));
   }

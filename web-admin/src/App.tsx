@@ -817,6 +817,7 @@ type MotorActiveReport = {
   lot_code: string;
   accionista_name: string | null;
   dry_start_at: string | null;
+  dry_end_at: string | null;
   filled_at: string | null;
 };
 
@@ -8206,7 +8207,9 @@ export function App() {
         moisture_before: numberOrUndefined(form.get(`moisture_before_${t}`)),
         filled_at: fechaLlenadoMotor,
         dry_start_at: horaInicioMotor,
-        dry_end_at: stringOrUndefined(form.get(`dry_end_at_${t}`)),
+        // Guardar informe es un borrador operativo: la hora final solo se
+        // persiste desde la acción explícita de Finalizar.
+        dry_end_at: undefined,
         dryer_name: secadora,
         operator_name: operatorName || undefined,
         notes: form.get(`notes_${t}`) || undefined,
@@ -8393,6 +8396,16 @@ export function App() {
   // combustible y finaliza (cerrarCombustibleMotor); si no, solo finaliza. Reusa
   // los handlers existentes: no altera la lógica de prorrateo.
   async function confirmarFinalizarSecado() {
+    if (motorActiveReports.length === 0) {
+      addToast("Primero guarda el informe del motor antes de finalizar el secado.", "error");
+      return;
+    }
+    const sinHoras = motorActiveReports.filter((report) => !report.dry_start_at || !report.dry_end_at);
+    if (sinHoras.length > 0) {
+      const tuneles = sinHoras.map((report) => report.tunnel_number).join(", ");
+      addToast(`Completa la hora de inicio y la hora final del/los túnel(es) ${tuneles} antes de finalizar.`, "error");
+      return;
+    }
     // Seguridad: hay consumo pero falta precio/tarifas → no finalizar (no perder
     // el costo ni guardar $0). Finalizar sin combustible sí se permite.
     if (combustibleBloqueado) {
@@ -8440,14 +8453,18 @@ export function App() {
 
   async function guardarSecadoEditado(report: DryingTunnelReport, formElement: HTMLFormElement, finalizar: boolean) {
     const form = new FormData(formElement);
+    const startInput = formElement.elements.namedItem("dry_start_at") as HTMLInputElement | null;
     const endInput = formElement.elements.namedItem("dry_end_at") as HTMLInputElement | null;
-    if (finalizar && endInput && !endInput.value) endInput.value = dateTimeLocalValue(new Date().toISOString());
+    if (finalizar && (!startInput?.value || !endInput?.value)) {
+      addToast("Completa la hora de inicio y la hora final antes de finalizar este secado.", "error");
+      return;
+    }
     const payload = {
       rice_type: form.get("rice_type") || "0.11",
       moisture_before: numberOrUndefined(form.get("moisture_before")),
       filled_at: stringOrUndefined(form.get("filled_at")),
       dry_start_at: stringOrUndefined(form.get("dry_start_at")),
-      dry_end_at: stringOrUndefined(endInput?.value ?? null),
+      dry_end_at: finalizar ? stringOrUndefined(endInput?.value ?? null) : undefined,
       dryer_name: report.dryer_name,
       operator_name: String(form.get("operator_name") ?? "").trim(),
       notes: form.get("notes") || undefined,

@@ -23,6 +23,13 @@ export const processFlowRouter = Router();
 
 const stageSchema = z.enum(["BASCULA", "SECADO", "TUNEL_1", "TUNEL_2", "TUNEL_3", "PILADO", "RENDIMIENTO", "VENTA"]);
 
+// Los informes parciales pueden guardarse antes de encender el motor. Normaliza
+// null/cadena vacía a campo omitido para que PostgreSQL reciba NULL, no "".
+const optionalDateTime = z.preprocess(
+  (value) => value == null || (typeof value === "string" && value.trim() === "") ? undefined : value,
+  z.string().trim().optional()
+);
+
 const dryingBodySchema = z.object({
   // Ingresos de materia prima (pesajes de báscula) que forman el lote.
   entry_ids: z.array(z.string().uuid()).min(1),
@@ -36,9 +43,9 @@ const dryingBodySchema = z.object({
   moisture_after: z.number().nonnegative().optional(),
   rice_type: z.enum(["0.11", "CORRIENTE"]).default("0.11"),
   moisture_before: z.number().nonnegative().optional(),
-  filled_at: z.string().optional(),
-  dry_start_at: z.string().optional(),
-  dry_end_at: z.string().optional(),
+  filled_at: optionalDateTime,
+  dry_start_at: optionalDateTime,
+  dry_end_at: optionalDateTime,
   // Gas: se puede usar bombona (por medidor), cilindro (por unidades) o ambos.
   gas_bombona_inicio: z.number().nonnegative().default(0),
   gas_bombona_fin: z.number().nonnegative().default(0),
@@ -66,9 +73,9 @@ const dryingBodySchema = z.object({
 const dryingUpdateSchema = z.object({
   rice_type: z.enum(["0.11", "CORRIENTE"]).default("0.11"),
   moisture_before: z.number().nonnegative().optional(),
-  filled_at: z.string().optional(),
-  dry_start_at: z.string().optional(),
-  dry_end_at: z.string().optional(),
+  filled_at: optionalDateTime,
+  dry_start_at: optionalDateTime,
+  dry_end_at: optionalDateTime,
   gas_bombona_inicio: z.number().nonnegative().default(0),
   gas_bombona_fin: z.number().nonnegative().default(0),
   gas_cilindro_cantidad: z.number().nonnegative().default(0),
@@ -379,7 +386,7 @@ processFlowRouter.get("/drying/motor/:motor/active", asyncRoute(async (req, res)
   if (motor !== 1 && motor !== 2) throw new ApiError(400, "Motor inválido");
   const result = await pool.query(
     `SELECT d.id, d.tunnel_number, d.dryer_name, d.total_quintals, d.rice_type, d.status,
-            d.dry_start_at, d.filled_at,
+            d.dry_start_at, d.dry_end_at, d.filled_at,
             l.lot_code, a.name AS accionista_name
      FROM drying_tunnel_reports d
      JOIN lots l ON l.id = d.lot_id
@@ -508,7 +515,7 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
 
   const result = await inTransaction(async (client) => {
     const reports = await client.query(
-      `SELECT d.id, d.total_quintals
+      `SELECT d.id, d.tunnel_number, d.total_quintals, d.dry_start_at, d.dry_end_at
        FROM drying_tunnel_reports d
        WHERE ${SECADOS_PENDIENTES_COMBUSTIBLE}
        ORDER BY d.created_at
@@ -518,6 +525,7 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
     if (!reports.rowCount) {
       throw new ApiError(409, "El motor no tiene secados pendientes de combustible: llena y registra primero las secadoras.");
     }
+    if (body.finalize) assertDryingHoursForCompletion(reports.rows);
 
     const totalQq = reports.rows.reduce((s, r) => s + Number(r.total_quintals), 0);
     if (totalQq <= 0) throw new ApiError(409, "Los secados del motor no tienen quintales registrados.");
@@ -574,8 +582,7 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
     if (body.finalize) {
       await client.query(
         `UPDATE drying_tunnel_reports
-         SET status = 'COMPLETED',
-             dry_end_at = COALESCE(dry_end_at, now())
+         SET status = 'COMPLETED'
          WHERE id = ANY($1::uuid[])`,
         [partes.map((p) => p.id)]
       );
@@ -612,7 +619,7 @@ processFlowRouter.post("/drying/motor-finalize", asyncRoute(async (req, res) => 
 
   const result = await inTransaction(async (client) => {
     const reports = await client.query(
-      `SELECT id
+      `SELECT id, tunnel_number, dry_start_at, dry_end_at
        FROM drying_tunnel_reports
        WHERE motor_number = $1
          AND status = 'IN_PROGRESS'
@@ -622,11 +629,11 @@ processFlowRouter.post("/drying/motor-finalize", asyncRoute(async (req, res) => 
     if (!reports.rowCount) {
       throw new ApiError(409, "El motor no tiene secados activos para finalizar.");
     }
+    assertDryingHoursForCompletion(reports.rows);
 
     await client.query(
       `UPDATE drying_tunnel_reports
-       SET status = 'COMPLETED',
-           dry_end_at = COALESCE(dry_end_at, now())
+       SET status = 'COMPLETED'
        WHERE id = ANY($1::uuid[])`,
       [reports.rows.map((r) => r.id)]
     );
@@ -1068,6 +1075,9 @@ async function registrarPagoCuadrillaTendal(
 }
 
 async function createDryingReport(client: PoolClient, input: z.infer<typeof dryingBodySchema>) {
+  if (input.dry_end_at && !input.dry_start_at) {
+    throw new ApiError(400, "Para registrar la hora final también debes indicar la hora de inicio del secado.");
+  }
   const entryIds = [...new Set(input.entry_ids)];
   const esTendal = input.dry_method === "TENDAL";
   if (!esTendal && !input.tunnel_number) throw new ApiError(400, "Falta el número de túnel");
@@ -1357,6 +1367,9 @@ async function updateDryingReport(
 
   const dryStartAt = input.dry_start_at ?? current.rows[0].dry_start_at;
   const dryEndAt = input.dry_end_at ?? current.rows[0].dry_end_at;
+  if (dryEndAt && !dryStartAt) {
+    throw new ApiError(400, "Para finalizar el secado debes indicar la hora de inicio.");
+  }
   const dryingHours = calculateDryingHours(dryStartAt, dryEndAt);
   const status = dryEndAt ? "COMPLETED" : "IN_PROGRESS";
 
@@ -1568,6 +1581,22 @@ function calculateDryingHours(start?: string | Date | null, end?: string | Date 
   const endTime = new Date(end).getTime();
   if (Number.isNaN(startTime) || Number.isNaN(endTime) || endTime < startTime) return null;
   return Number(((endTime - startTime) / 3_600_000).toFixed(2));
+}
+
+function assertDryingHoursForCompletion(
+  reports: Array<{ tunnel_number?: number | null; dry_start_at?: unknown; dry_end_at?: unknown }>
+) {
+  const incomplete = reports.filter((report) => !report.dry_start_at || !report.dry_end_at);
+  if (!incomplete.length) return;
+
+  const tunnels = incomplete
+    .map((report) => report.tunnel_number)
+    .filter((value): value is number => typeof value === "number")
+    .join(", ");
+  throw new ApiError(
+    400,
+    `Completa la hora de inicio y la hora final antes de finalizar${tunnels ? ` el/los túnel(es) ${tunnels}` : " el secado"}.`
+  );
 }
 
 async function assertLotExists(client: PoolClient, lotId: string) {
