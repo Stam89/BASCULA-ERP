@@ -159,15 +159,20 @@ function fmtInicio(value: unknown): string {
   return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-// AUTOMATIZACIÓN NÓMINA · SECADOR. Al FINALIZAR un secado (COMPLETED), genera/
-// actualiza AUTOMÁTICAMENTE el pago del operador ('Secador', ej. MARGARO) en
-// worker_payments (Nómina → Pagos pendientes), consolidando en UN SOLO registro
-// por empleado y CORRIDA (guardianía + $/túnel × túneles finalizados).
-// ANCLA TEMPORAL: la fecha/hora de INICIO (dry_start_at, o filled_at) — nunca la
-// de fin. Idempotente: si ya existe el pago del día se ACTUALIZA (no duplica); si
-// ya fue PAGADO no se toca. Corre DENTRO de la transacción del finalize: si algo
-// falla, el secado no queda finalizado y no se pierde el pago del trabajador.
-async function autoGenerarPagoSecador(client: PoolClient, dryingReportId: string): Promise<void> {
+// AUTOMATIZACIÓN NÓMINA · SECADOR. Genera/actualiza AUTOMÁTICAMENTE el pago del
+// operador ('Secador', ej. MARGARO) en worker_payments (Nómina → Pagos
+// pendientes), consolidando en UN SOLO registro por empleado y DÍA (guardianía +
+// $/túnel × túneles finalizados).
+// REGLA #1 (pilotaje): la jornada se registra desde que el secado INICIA (se
+// guarda la hora de inicio), no solo al finalizar. Al iniciar queda la guardianía
+// del día; cada túnel que se finaliza suma su $/túnel al MISMO registro. Encender
+// otra máquina el mismo día no duplica la guardianía.
+// REUBICAR: si se corrige la fecha (o el secador) de una corrida ya iniciada, la
+// fila PENDIENTE que quedó huérfana se MUEVE al nuevo día/secador (conserva sus
+// descuentos) en vez de crear otra → nunca un jornal duplicado.
+// ANCLA TEMPORAL: la fecha de llenado/INICIO — nunca la de fin. Si ya fue PAGADO
+// no se toca. Corre DENTRO de la transacción del guardado/finalize.
+export async function autoGenerarPagoSecador(client: PoolClient, dryingReportId: string): Promise<void> {
   const r = await client.query(
     `SELECT d.status, d.operator_name, d.filled_at, d.dry_start_at, d.created_at, l.accionista_id,
             COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) AS work_date
@@ -178,7 +183,8 @@ async function autoGenerarPagoSecador(client: PoolClient, dryingReportId: string
   );
   if (!r.rowCount) return;
   const rep = r.rows[0];
-  if (String(rep.status) !== "COMPLETED") return;
+  // Regla #1: basta con que el secado haya INICIADO (hora de inicio guardada).
+  if (String(rep.status) !== "COMPLETED" && rep.dry_start_at == null) return;
   const worker = String(rep.operator_name ?? "").trim();
   if (!worker) return; // sin secador asignado: no hay a quién pagar.
   const workDate = toDateOnly(rep.work_date) ?? new Date().toISOString().slice(0, 10);
@@ -203,6 +209,32 @@ async function autoGenerarPagoSecador(client: PoolClient, dryingReportId: string
   const inicio = fmtInicio(rep.dry_start_at ?? rep.filled_at ?? rep.created_at);
   const notes = `Secado - Inicio: ${inicio || workDate} · Guardianía${tunnels ? ` + ${tunnels} túnel(es)` : ""}`;
 
+  // Filas HUÉRFANAS que pertenecen a este secador+día: PENDIENTES, cuyo propio
+  // (secador, día) ya no tiene ningún túnel iniciado/finalizado, y cuyo reporte
+  // de referencia AHORA vive en este secador+día. Aparecen al corregir la fecha
+  // o el secador de una corrida ya iniciada. Nunca se toca una fila con respaldo.
+  const orphans = await client.query(
+    `SELECT wp.id, wp.discount::float AS discount
+       FROM worker_payments wp
+       JOIN drying_tunnel_reports ref ON ref.id = wp.reference_id
+      WHERE wp.worker_role = 'SECADOR'
+        AND wp.status = 'PENDING'
+        AND wp.reference_type = 'drying_report'
+        AND btrim(COALESCE(ref.operator_name, '')) = $1
+        AND COALESCE(ref.filled_at, ref.dry_start_at::date, ref.created_at::date) = $2::date
+        AND NOT (btrim(wp.worker_name) = $1 AND wp.work_date = $2::date)
+        AND NOT EXISTS (
+          SELECT 1 FROM drying_tunnel_reports b
+           WHERE btrim(COALESCE(b.operator_name, '')) = btrim(wp.worker_name)
+             AND COALESCE(b.filled_at, b.dry_start_at::date, b.created_at::date) = wp.work_date
+             AND (b.status = 'COMPLETED' OR b.dry_start_at IS NOT NULL)
+        )
+      ORDER BY wp.created_at ASC`,
+    [worker, workDate]
+  );
+  const orphanIds = orphans.rows.map((o: { id: string }) => o.id);
+  const orphanDiscount = orphans.rows.reduce((s: number, o: { discount: number }) => s + Number(o.discount ?? 0), 0);
+
   // Upsert por (SECADOR, worker, work_date): un solo registro diario por empleado.
   const existing = await client.query(
     "SELECT id, status, discount::float AS discount FROM worker_payments WHERE worker_role = 'SECADOR' AND btrim(worker_name) = $1 AND work_date = $2::date ORDER BY created_at ASC LIMIT 1",
@@ -210,12 +242,29 @@ async function autoGenerarPagoSecador(client: PoolClient, dryingReportId: string
   );
   if (existing.rowCount) {
     if (String(existing.rows[0].status) === "PAID") return; // ya pagado: no se modifica.
-    const discount = Number(existing.rows[0].discount ?? 0);
+    // Fusiona las huérfanas en la fila del día (sus descuentos se conservan).
+    const discount = round2(Number(existing.rows[0].discount ?? 0) + orphanDiscount);
+    if (orphanIds.length) await client.query("DELETE FROM worker_payments WHERE id = ANY($1::uuid[])", [orphanIds]);
     await client.query(
       `UPDATE worker_payments
-         SET tunnels = $2, base_amount = $3, net_amount = $4, notes = $5, reference_type = 'drying_report', reference_id = $6
+         SET tunnels = $2, base_amount = $3, discount = $4, net_amount = $5, notes = $6, reference_type = 'drying_report', reference_id = $7
        WHERE id = $1`,
-      [existing.rows[0].id, tunnels, base, round2(base - discount), notes, dryingReportId]
+      [existing.rows[0].id, tunnels, base, discount, round2(base - discount), notes, dryingReportId]
+    );
+    return;
+  }
+  if (orphanIds.length) {
+    // REUBICAR: la primera huérfana se mueve a este secador+día; el resto se
+    // fusiona en ella. Así se conserva el registro (y sus descuentos) sin duplicar.
+    const [keepId, ...restIds] = orphanIds;
+    if (restIds.length) await client.query("DELETE FROM worker_payments WHERE id = ANY($1::uuid[])", [restIds]);
+    const discount = round2(orphanDiscount);
+    await client.query(
+      `UPDATE worker_payments
+         SET worker_name = $2, work_date = $3::date, tunnels = $4, base_amount = $5, discount = $6, net_amount = $7,
+             notes = $8, reference_type = 'drying_report', reference_id = $9
+       WHERE id = $1`,
+      [keepId, worker, workDate, tunnels, base, discount, round2(base - discount), notes, dryingReportId]
     );
     return;
   }
@@ -446,6 +495,10 @@ processFlowRouter.post("/drying/motor/:motor/sync-run", asyncRoute(async (req, r
       );
       refechados = cuad.rowCount ?? 0;
     }
+    // Regla #1: la jornada del Secador sigue a la corrida. Registra la jornada si
+    // aquí se fijó la hora de inicio, y REUBICA la fila pendiente si se corrigió la
+    // fecha o el secador (idempotente: un solo registro por secador y día).
+    for (const row of updated.rows) await autoGenerarPagoSecador(client, row.id);
     return { sincronizados: updated.rowCount, cuadrilla_refechada: refechados };
   });
 
