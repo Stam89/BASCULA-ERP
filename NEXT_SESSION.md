@@ -1,13 +1,13 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-09-23
+Actualizado: 2026-09-24
 
 ## Inicio rapido
 
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: secado parcial seguro y directorio global de agricultores.
+- Ultimo cambio funcional: nomina del Secador al iniciar (con reubicacion) y multiseleccion en Tendal.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,18 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Nomina Secador al iniciar + multiseleccion en Tendal (2026-09-24)
+
+- Regla #1: `autoGenerarPagoSecador` (process-flow.ts) registra la jornada del Secador desde que el secado INICIA (hay `dry_start_at`), no solo al finalizar.
+- Un registro por secador y dia: al iniciar queda la guardiania; cada tunel finalizado suma su $/tunel; otra maquina el mismo dia no duplica.
+- Reubicar: si se corrige la fecha o el secador de una corrida iniciada, la fila PENDING huerfana (sin tuneles que la respalden en su dia) se mueve al nuevo dia/secador conservando descuentos, o se fusiona. Nunca toca filas con respaldo ni PAID.
+- `POST /drying/motor/:motor/sync-run` tambien llama al auto-pago para reubicar al corregir la corrida por motor.
+- La funcion ahora se exporta (para verificacion transaccional).
+- Verificado contra el esquema real en BEGIN...ROLLBACK: iniciar, 2a maquina, finalizar, corregir fecha, corregir secador, sin inicio; 0 filas residuales.
+- Regla #5 completada: Secado en Tendal usa la misma multiseleccion que los tuneles (`dryingEntryMultiPick`/`dryingPickerOpen` con clave `TENDAL`).
+- Con esto las 8 reglas del pilotaje de Secadoras quedan cubiertas (las demas ya estaban en las entradas del 2026-09-23).
+- Verificaciones: backend build, 38/38 tests, frontend build.
 
 ### Secadoras: cierre por tunel y combustible solo al apagar motor (2026-09-23)
 
