@@ -8343,6 +8343,8 @@ export function App() {
     setTendalForm({ lot_code: "", rice_type: "0.11", moisture_before: "", moisture_after: "", hora_inicio: "", hora_fin: "", recepcion_empaque: "TULAS", modo: "GRANEL", sacos: "" });
     setDryingSelections((cur) => { const n = { ...cur }; delete n["TENDAL"]; return n; });
     setDryingEntryPick((cur) => ({ ...cur, TENDAL: "" }));
+    setDryingEntryMultiPick((cur) => ({ ...cur, TENDAL: [] }));
+    setDryingPickerOpen((cur) => ({ ...cur, TENDAL: false }));
     setEditingTendal(null);
   }
   async function submitTendal(finalizar: boolean) {
@@ -11146,20 +11148,54 @@ export function App() {
                   </div>
                 ) : null}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 10 }}>
-                  <label><span>Tipo de arroz</span><select value={tendalForm.rice_type} disabled={!!editingTendal} onChange={(e) => setTendalForm((f) => ({ ...f, rice_type: e.target.value as "0.11" | "CORRIENTE" }))}><option value="0.11">0.11</option><option value="CORRIENTE">CORRIENTE</option></select></label>
-                  {!editingTendal && (
-                    <label><span>Ingreso de materia prima</span>
-                      <select value={dryingEntryPick["TENDAL"] ?? ""} onChange={(ev) => setDryingEntryPick((cur) => ({ ...cur, TENDAL: ev.target.value }))}>
-                        <option value="">Seleccione</option>
-                        {entradasLibres.filter((entry) => (entry.rice_type ?? "0.11") === tendalForm.rice_type).map((entry) => (
-                          <option key={entry.id} value={entry.id}>{entryLabel(entry)} - {entry.farmer_name ?? "Sin agricultor"} - {Number(entry.quintals ?? 0).toFixed(2)} QQ{entry.rice_type ? ` · ${entry.rice_type}` : ""}{(() => { const b = opTypeBadgeLabel(entry.operation_type, entry.is_maquila); return b ? ` · ${b}` : ""; })()}</option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
+                  <label><span>Tipo de arroz</span><select value={tendalForm.rice_type} disabled={!!editingTendal} onChange={(e) => {
+                    setTendalForm((f) => ({ ...f, rice_type: e.target.value as "0.11" | "CORRIENTE" }));
+                    setDryingEntryMultiPick((cur) => ({ ...cur, TENDAL: [] }));
+                  }}><option value="0.11">0.11</option><option value="CORRIENTE">CORRIENTE</option></select></label>
+                  {!editingTendal && (() => {
+                    // Multi-selección (regla #5): MISMO mecanismo que los túneles con
+                    // motor (dryingEntryMultiPick/dryingPickerOpen con clave "TENDAL").
+                    const tendalOpciones = entradasLibres.filter((entry) => (entry.rice_type ?? "0.11") === tendalForm.rice_type);
+                    const marcados = dryingEntryMultiPick["TENDAL"] ?? [];
+                    return (
+                      <div>
+                        <span style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>Ingresos de materia prima</span>
+                        <button
+                          type="button"
+                          className="btnSecondary"
+                          aria-expanded={Boolean(dryingPickerOpen["TENDAL"])}
+                          onClick={() => setDryingPickerOpen((current) => ({ ...current, TENDAL: !current["TENDAL"] }))}
+                          style={{ width: "100%", minHeight: 42, padding: "8px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", textAlign: "left" }}
+                        >
+                          <span>{marcados.length > 0 ? `${marcados.length} ticket(s) marcado(s)` : "Seleccionar uno o varios tickets"}</span>
+                          <span aria-hidden="true">{dryingPickerOpen["TENDAL"] ? "▲" : "▼"}</span>
+                        </button>
+                        {dryingPickerOpen["TENDAL"] && (
+                          <div style={{ maxHeight: 210, overflowY: "auto", border: "1px solid var(--c-border)", borderRadius: 8, background: "var(--c-surface)", marginTop: 6 }}>
+                            {tendalOpciones.map((entry) => {
+                              const checked = marcados.includes(entry.id);
+                              const badge = opTypeBadgeLabel(entry.operation_type, entry.is_maquila);
+                              return (
+                                <label key={entry.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", margin: 0, borderBottom: "1px solid var(--c-border)", cursor: "pointer" }}>
+                                  <input type="checkbox" checked={checked} onChange={() => toggleDryingEntryPick("TENDAL", entry.id)} style={{ width: 18, height: 18, marginTop: 1, flex: "0 0 auto" }} />
+                                  <span style={{ fontSize: 13, lineHeight: 1.35 }}>
+                                    <strong>{entryLabel(entry)}</strong> · {entry.farmer_name ?? "Sin agricultor"} · {Number(entry.quintals ?? 0).toFixed(2)} QQ
+                                    {badge ? <small style={{ display: "block", color: "var(--c-muted)" }}>{badge}</small> : null}
+                                  </span>
+                                </label>
+                              );
+                            })}
+                            {tendalOpciones.length === 0 && (
+                              <div className="muted" style={{ padding: 10, fontSize: 13 }}>No hay ingresos disponibles de este tipo.</div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
                 {!editingTendal && (
-                  <button type="button" className="btnSecondary" onClick={() => addDryingEntry("TENDAL")} style={{ padding: "8px 14px", borderRadius: 8, fontWeight: 700, marginTop: 4 }}>➕ Agregar al lote</button>
+                  <button type="button" className="btnSecondary" onClick={() => addDryingEntries("TENDAL")} style={{ padding: "8px 14px", borderRadius: 8, fontWeight: 700, marginTop: 4 }}>➕ Agregar al lote ({(dryingEntryMultiPick["TENDAL"] ?? []).length})</button>
                 )}
                 <DryingLotSelector selectedLots={editingTendal ? editingTendal.lots : tendalLotes} editing={!!editingTendal} onRemove={(id) => removeDryingEntry("TENDAL", id)} />
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
