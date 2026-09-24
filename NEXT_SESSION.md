@@ -7,7 +7,7 @@ Actualizado: 2026-09-24
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: Liquidaciones con multiseleccion y varias cosechadoras enlazadas a Partes Diarios.
+- Ultimo cambio funcional: neto de Liquidaciones corregido por lote y comprobante con descuentos desglosados.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,17 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Neto financiero y comprobante de Liquidaciones (2026-09-24)
+
+- Corregida la causa del neto inflado: los descuentos generales ya no se pierden al superar el bruto del primer ticket; se reparten entre todas las filas del mismo lote.
+- El backend aplica primero flete/cosechadora/fomento/otros y solo descuenta anticipos sobre el saldo restante, evitando doble consumo del bruto.
+- Pruebas monetarias cubren el caso real `$2747.52 - $2163.22 = $584.30`, descuentos superiores al bruto y anticipos concurrentes.
+- La agrupacion visual suma el `discount_breakdown` de todas las filas, por lo que el comprobante muestra el flete completo.
+- El comprobante incluye filas claras `Descuento de Cosechadora`, `Total de Descuento de Flete`, `TOTAL DESCUENTOS` y `NETO A PAGAR`.
+- Migracion `20261031_reparar_neto_liquidaciones_por_lote.sql`: solo repara lotes confirmados, sin anticipos ni pagos reales; no toca CxP auxiliares de flete/cosechadora.
+- Caso real JUNIOR JIMENEZ reparado: bruto `$2747.52`, descuentos `$2163.22`, neto y pendiente `$584.30`.
+- Verificaciones: backend/frontend build, 41/41 tests, lint con 0 errores, migraciones al dia, preflight sin errores y revision visual en `http://localhost:4000/`.
 
 ### Liquidaciones agiles + cosechadoras multiples (2026-09-24)
 

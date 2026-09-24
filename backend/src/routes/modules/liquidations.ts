@@ -6,6 +6,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
+import { calcularNetoLiquidacion } from "../../utils/money.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { cruzarFleteInterno, type CruceFleteResultado } from "../../services/campo-cruce-flete.js";
 import { amortizarFomentosLIFO, generarFomentoSaldoEnContra, revertirPagosFomentoDeLiquidacion, type AmortizacionFomentoResultado } from "../../services/fomento-liquidacion.js";
@@ -190,15 +191,14 @@ async function previewLiquidation(data: z.infer<typeof liquidationInput>, accion
     [data.farmer_id, accionistaId]
   );
   const pendingAdvances = Number(advances.rows[0].pending);
-  const advancesDiscount = Math.min(pendingAdvances, gross);
-  const net = Math.max(0, round2(gross - advancesDiscount - data.other_discounts));
+  const calculo = calcularNetoLiquidacion(gross, data.other_discounts, pendingAdvances);
 
   return {
     gross_amount: gross,
     pending_advances: pendingAdvances,
-    advances_discount: round2(advancesDiscount),
+    advances_discount: calculo.descuentoAnticipos,
     other_discounts: data.other_discounts,
-    net_amount: net
+    net_amount: calculo.neto
   };
 }
 

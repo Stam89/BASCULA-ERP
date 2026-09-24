@@ -3385,6 +3385,7 @@ export function App() {
       if (r.batch_id) {
         const existing = batches.find((b) => b.batch_id === r.batch_id);
         if (existing) {
+          const bd = r.discount_breakdown ?? { fomento: 0, bascula: 0, flete: 0, cosechadora: 0 };
           existing.liquidation_ids.push(r.id);
           existing.lots.push({ lot_code: r.lot_code, rice_type: r.rice_type, quintals: Number(r.quintals), price_per_quintal: Number(r.price_per_quintal) });
           existing.gross_total    += Number(r.gross_amount);
@@ -3392,6 +3393,10 @@ export function App() {
           existing.other_disc_total += Number(r.other_discounts);
           existing.net_total      += Number(r.net_amount);
           existing.pending_total  += Number(r.pending_balance);
+          existing.discount_breakdown.fomento += Number(bd.fomento);
+          existing.discount_breakdown.bascula += Number(bd.bascula);
+          existing.discount_breakdown.flete += Number(bd.flete);
+          existing.discount_breakdown.cosechadora += Number(bd.cosechadora);
           existing.unlocked = existing.unlocked && (r.edit_unlocked ?? false);
           existing.anulada = existing.anulada && (r.status === "CANCELLED");
           continue;
@@ -3405,6 +3410,7 @@ export function App() {
             Math.abs(new Date(b.created_at).getTime() - rTime) <= 15000
         );
         if (existing) {
+          const bd = r.discount_breakdown ?? { fomento: 0, bascula: 0, flete: 0, cosechadora: 0 };
           existing.liquidation_ids.push(r.id);
           existing.lots.push({ lot_code: r.lot_code, rice_type: r.rice_type, quintals: Number(r.quintals), price_per_quintal: Number(r.price_per_quintal) });
           existing.gross_total    += Number(r.gross_amount);
@@ -3412,6 +3418,10 @@ export function App() {
           existing.other_disc_total += Number(r.other_discounts);
           existing.net_total      += Number(r.net_amount);
           existing.pending_total  += Number(r.pending_balance);
+          existing.discount_breakdown.fomento += Number(bd.fomento);
+          existing.discount_breakdown.bascula += Number(bd.bascula);
+          existing.discount_breakdown.flete += Number(bd.flete);
+          existing.discount_breakdown.cosechadora += Number(bd.cosechadora);
           existing.unlocked = existing.unlocked && (r.edit_unlocked ?? false);
           existing.anulada = existing.anulada && (r.status === "CANCELLED");
           continue;
@@ -10178,9 +10188,9 @@ export function App() {
       fomento_pagos?: { total_abonado: number; cruce_inter_socios: number } | null;
       saldo_en_contra?: { fomento_id: string; monto: number; acreedor: string | null } | null;
     };
-    // El descuento de fomento se amortiza LIFO en el backend (cierra+renueva); se
-    // manda solo el TOTAL (liqFomentoTotal = suma de la amortización LIFO). Va en i===0.
-    // Descuentos a nivel lote (sin flete: el flete es por línea). Van solo en i===0.
+    // El desglose contable se conserva en la primera fila, pero el importe se
+    // reparte entre todas las filas para que ningun descuento se pierda cuando
+    // supera el bruto del primer ticket del comprobante.
     const batchDiscountsTotal = liqFomentoTotal + Number(liqDiscounts.bascula || 0) + Number(liqDiscounts.cosechadora || 0);
     // Saldo EN CONTRA del lote: los Descuentos superan al Bruto (el agricultor queda
     // debiendo). Se manda en la 1ª línea → el backend genera el nuevo fomento.
@@ -10193,20 +10203,27 @@ export function App() {
       quintals: number; price_per_quintal: number;
       gross_amount: number; advances_discount: number; other_discounts: number; net_amount: number;
     }> = [];
-    for (let i = 0; i < validLines.length; i++) {
-      const line = validLines[i];
-      // line.lot_id guarda el id del INGRESO de materia prima elegido.
-      const entry = farmerLots.find((l) => l.id === line.lot_id);
-      if (!entry) continue;
+    let batchDiscountRemaining = Math.round(batchDiscountsTotal * 100) / 100;
+    const preparedLines = validLines.flatMap((line) => {
+      const entry = farmerLots.find((candidate) => candidate.id === line.lot_id);
+      if (!entry) return [];
       const qq = Number(line.quintals) || Number(entry.quintals ?? 0);
-      // El flete es de ESTA línea (su propio transporte); los demás descuentos van en i===0.
+      const price = Number(line.price);
+      const gross = Math.round(qq * price * 100) / 100;
       const lineFlete = Math.round(Number(line.flete_monto || 0) * 100) / 100;
+      const availableForBatch = Math.max(0, Math.round((gross - lineFlete) * 100) / 100);
+      const batchDiscount = Math.round(Math.min(batchDiscountRemaining, availableForBatch) * 100) / 100;
+      batchDiscountRemaining = Math.max(0, Math.round((batchDiscountRemaining - batchDiscount) * 100) / 100);
+      return [{ line, entry, qq, price, lineFlete, batchDiscount }];
+    });
+    for (let i = 0; i < preparedLines.length; i++) {
+      const { line, entry, qq, price, lineFlete, batchDiscount } = preparedLines[i];
       const result = await apiPost<LiqApiResult>("/liquidations", {
         farmer_id: liqFarmerId,
         weighing_ticket_id: line.lot_id,
         quintals: qq,
-        price_per_quintal: Number(line.price),
-        other_discounts: (i === 0 ? batchDiscountsTotal : 0) + lineFlete,
+        price_per_quintal: price,
+        other_discounts: Math.round((batchDiscount + lineFlete) * 100) / 100,
         discount_breakdown: {
           fomento:     i === 0 ? liqFomentoTotal : 0,
           bascula:     i === 0 ? Number(liqDiscounts.bascula     || 0) : 0,
@@ -10393,6 +10410,12 @@ export function App() {
       ? appliedAdvances.reduce((s, a) => s + Number(a.amount_applied), 0)
       : b.advances_total;
     const netoReal = Math.max(0, b.gross_total - advancesSum - b.other_disc_total);
+    const totalDescuentos = advancesSum + b.other_disc_total;
+    const otrosAdicionales = Math.max(0, b.other_disc_total
+      - b.discount_breakdown.fomento
+      - b.discount_breakdown.bascula
+      - b.discount_breakdown.flete
+      - b.discount_breakdown.cosechadora);
     const fecha = new Date(b.created_at).toLocaleDateString("es-EC", {
       year: "numeric", month: "long", day: "numeric",
     });
@@ -10462,15 +10485,16 @@ export function App() {
         <tr><td class="lbl">Bruto:</td><td class="val">$${b.gross_total.toFixed(2)}</td></tr>
         ${advanceRows.length > 0 ? `<tr class="disc-header"><td colspan="2">Anticipos descontados</td></tr>${advanceRows}` : ""}
         ${b.other_disc_total > 0 ? `
-          <tr class="disc-header"><td colspan="2">Otros descuentos</td></tr>
+          <tr class="disc-header"><td colspan="2">Desglose de descuentos operativos</td></tr>
           ${b.discount_breakdown.fomento     > 0 ? `<tr><td class="lbl disc">Fomento:</td><td class="val disc">-$${b.discount_breakdown.fomento.toFixed(2)}</td></tr>` : ""}
           ${b.discount_breakdown.bascula     > 0 ? `<tr><td class="lbl disc">Báscula:</td><td class="val disc">-$${b.discount_breakdown.bascula.toFixed(2)}</td></tr>` : ""}
-          ${b.discount_breakdown.flete       > 0 ? `<tr><td class="lbl disc">Flete:</td><td class="val disc">-$${b.discount_breakdown.flete.toFixed(2)}</td></tr>` : ""}
-          ${b.discount_breakdown.cosechadora > 0 ? `<tr><td class="lbl disc">Cosechadora:</td><td class="val disc">-$${b.discount_breakdown.cosechadora.toFixed(2)}</td></tr>` : ""}
-          ${(b.other_disc_total - b.discount_breakdown.fomento - b.discount_breakdown.bascula - b.discount_breakdown.flete - b.discount_breakdown.cosechadora) > 0.01
-            ? `<tr><td class="lbl disc">Otros:</td><td class="val disc">-$${(b.other_disc_total - b.discount_breakdown.fomento - b.discount_breakdown.bascula - b.discount_breakdown.flete - b.discount_breakdown.cosechadora).toFixed(2)}</td></tr>`
+          <tr><td class="lbl disc">Descuento de Cosechadora:</td><td class="val disc">-$${b.discount_breakdown.cosechadora.toFixed(2)}</td></tr>
+          <tr><td class="lbl disc">Total de Descuento de Flete:</td><td class="val disc">-$${b.discount_breakdown.flete.toFixed(2)}</td></tr>
+          ${otrosAdicionales > 0.01
+            ? `<tr><td class="lbl disc">Otros descuentos:</td><td class="val disc">-$${otrosAdicionales.toFixed(2)}</td></tr>`
             : ""}
         ` : ""}
+        <tr><td class="lbl disc">TOTAL DESCUENTOS:</td><td class="val disc">-$${totalDescuentos.toFixed(2)}</td></tr>
         <tr class="total-row"><td class="lbl">NETO A PAGAR:</td><td class="val">$${netoReal.toFixed(2)}</td></tr>
         ${fomentoRows}
       </table>

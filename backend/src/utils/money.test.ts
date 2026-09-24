@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { estibadorBaseFromTulas, repartirPorPeso } from "./money.js";
+import { calcularNetoLiquidacion, estibadorBaseFromTulas, repartirPorPeso } from "./money.js";
 
 describe("estibadorBaseFromTulas (proporcional, $ por cada 3 tulas)", () => {
   it("3 tulas = 1 grupo", () => expect(estibadorBaseFromTulas(3, 5)).toBe(5));
@@ -39,3 +39,26 @@ describe("repartirPorPeso (reparto proporcional exacto)", () => {
 });
 
 const round2sum = (xs: number[]) => Math.round(xs.reduce((a, x) => a + x, 0) * 100) / 100;
+
+describe("calcularNetoLiquidacion", () => {
+  it("resta exactamente todos los descuentos del caso real", () => {
+    expect(calcularNetoLiquidacion(2747.52, 2163.22, 0)).toEqual({
+      descuentoAnticipos: 0,
+      neto: 584.3
+    });
+  });
+
+  it("aplica anticipos solo despues de los otros descuentos", () => {
+    expect(calcularNetoLiquidacion(100, 30, 80)).toEqual({
+      descuentoAnticipos: 70,
+      neto: 0
+    });
+  });
+
+  it("no consume anticipos si los otros descuentos ya agotaron el bruto", () => {
+    expect(calcularNetoLiquidacion(100, 120, 50)).toEqual({
+      descuentoAnticipos: 0,
+      neto: 0
+    });
+  });
+});

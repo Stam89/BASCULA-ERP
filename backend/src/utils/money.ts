@@ -31,3 +31,23 @@ export function repartirPorPeso(total: number, pesos: number[]): number[] {
   });
   return partes;
 }
+
+/**
+ * Calcula el neto de una liquidacion sin permitir que los anticipos consuman
+ * dinero que ya fue descontado por flete, cosechadora, fomento u otros rubros.
+ */
+export function calcularNetoLiquidacion(
+  bruto: number,
+  otrosDescuentos: number,
+  anticiposPendientes: number
+): { descuentoAnticipos: number; neto: number } {
+  const gross = Math.max(0, round2(Number(bruto) || 0));
+  const other = Math.max(0, round2(Number(otrosDescuentos) || 0));
+  const pending = Math.max(0, round2(Number(anticiposPendientes) || 0));
+  const disponibleTrasOtros = Math.max(0, round2(gross - other));
+  const descuentoAnticipos = round2(Math.min(pending, disponibleTrasOtros));
+  return {
+    descuentoAnticipos,
+    neto: Math.max(0, round2(gross - other - descuentoAnticipos))
+  };
+}
