@@ -2030,17 +2030,25 @@ export function App() {
     gross_amount: number; advances_discount: number; other_discounts: number; net_amount: number;
   };
   const [liqFarmerId, setLiqFarmerId] = useState("");
-  const [liqLines, setLiqLines] = useState<LiqLine[]>([nuevaLiqLine()]);
+  const [liqLines, setLiqLines] = useState<LiqLine[]>([]);
+  const [liqEntryMultiPick, setLiqEntryMultiPick] = useState<string[]>([]);
+  const [liqEntryPickerOpen, setLiqEntryPickerOpen] = useState(false);
   // Ingresos de materia prima que aún no se le han pagado al agricultor.
   const [pendingEntries, setPendingEntries] = useState<PendingEntry[]>([]);
   const [discountsOpen, setDiscountsOpen] = useState(false);
   // Flete se maneja por línea (arriba); el fomento en su propia lista (abajo);
   // aquí solo los descuentos manuales a nivel lote.
   const [liqDiscounts, setLiqDiscounts] = useState({ bascula: "", cosechadora: "" });
-  // Cosechadora: QQ auto-jalados del Parte Diario + precio tecleado en la liquidación
-  // (total = QQ×precio, alimenta liqDiscounts.cosechadora). tipo propia=cruce Campo,
-  // tercero=CxP al prestador. `qq_sugerido` guarda lo reportado por el operador.
-  const [liqCosechadora, setLiqCosechadora] = useState({ qq: "", precio: "", tipo: "propia" as "propia" | "tercero", prestador: "", qq_sugerido: 0 });
+  type LiqCosechadoraLine = {
+    key: string; parte_id?: string; activo_id?: string; maquina: string;
+    qq: string; precio: string; tipo: "propia" | "tercero"; prestador: string;
+    qq_sugerido: number; automatica: boolean;
+  };
+  const nuevaLiqCosechadora = (): LiqCosechadoraLine => ({
+    key: safeUUID(), maquina: "Cosechadora externa", qq: "", precio: "",
+    tipo: "tercero", prestador: "", qq_sugerido: 0, automatica: false
+  });
+  const [liqCosechadoras, setLiqCosechadoras] = useState<LiqCosechadoraLine[]>([]);
   // Fomentos ACTIVOS del agricultor, de CUALQUIER socio (visibilidad global para el
   // cruce inter-socios). Cada uno con su monto a descontar en esta liquidación.
   type FomentoAgricultor = { id: string; farmer_name: string; accionista_id: string | null; accionista_nombre: string | null; es_de_otro_socio: boolean; saldo: number };
@@ -2075,30 +2083,52 @@ export function App() {
       })
       .catch(() => { setLiqFomentosList([]); setLiqFomentoMontos({}); });
   }, [liqFarmerId, farmers]);
-  // Auto-jalado de COSECHADORA: al elegir agricultor, trae los QQ reportados en los
-  // Partes Diarios de cosecha (Campo) y prellena el QQ (el precio se teclea aquí).
+  const liqEntryIdsKey = liqLines.map((line) => line.lot_id).filter(Boolean).sort().join(",");
+  // Auto-jalado de COSECHADORA por los ingresos elegidos. Cada Parte Diario se
+  // conserva como una maquina independiente; las filas manuales no se pierden.
   useEffect(() => {
-    if (!liqFarmerId) { setLiqCosechadora({ qq: "", precio: "", tipo: "propia", prestador: "", qq_sugerido: 0 }); return; }
-    apiGet<{ partes: unknown[]; qq_total: number; operador: string | null }>(`/liquidations/parte-cosechadora?farmer_id=${liqFarmerId}`)
+    if (!liqFarmerId || !liqEntryIdsKey) {
+      setLiqCosechadoras((prev) => prev.filter((row) => !row.automatica));
+      return;
+    }
+    const qs = new URLSearchParams({ farmer_id: liqFarmerId, weighing_ticket_ids: liqEntryIdsKey });
+    apiGet<{ partes: Array<{ id: string; qq: number; operador: string | null; activo_id: string; activo_nombre: string }>; qq_total: number }>(`/liquidations/parte-cosechadora?${qs.toString()}`)
       .then((r) => {
-        setLiqCosechadora((prev) => ({
-          ...prev,
-          qq_sugerido: r.qq_total,
-          // Solo prellena si el usuario aún no escribió un QQ manual.
-          qq: prev.qq ? prev.qq : (r.qq_total > 0 ? String(r.qq_total) : ""),
-          prestador: prev.prestador || (r.operador ?? "")
-        }));
+        setLiqCosechadoras((prev) => {
+          const manuales = prev.filter((row) => !row.automatica);
+          const automaticas = r.partes.map((parte) => {
+            const anterior = prev.find((row) => row.parte_id === parte.id);
+            return {
+              key: anterior?.key ?? parte.id,
+              parte_id: parte.id,
+              activo_id: parte.activo_id,
+              maquina: parte.activo_nombre,
+              qq: anterior?.qq || String(parte.qq),
+              precio: anterior?.precio ?? "",
+              tipo: anterior?.tipo ?? "propia" as "propia" | "tercero",
+              prestador: anterior?.prestador || parte.operador || parte.activo_nombre,
+              qq_sugerido: Number(parte.qq),
+              automatica: true
+            };
+          });
+          return [...automaticas, ...manuales];
+        });
         if (r.qq_total > 0) setDiscountsOpen(true);
       })
       .catch(() => { /* Campo opcional: se ignora */ });
-  }, [liqFarmerId]);
-  // El total de cosechadora (QQ × precio) alimenta el descuento usado en todos los
-  // cálculos (neto, saldo en contra), sin tocar esa matemática.
+  }, [liqFarmerId, liqEntryIdsKey]);
+  const liqCosechadoraTotal = useMemo(() => Math.round(liqCosechadoras.reduce(
+    (sum, row) => sum + Number(row.qq || 0) * Number(row.precio || 0), 0
+  ) * 100) / 100, [liqCosechadoras]);
+  const liqCosechadoraQq = useMemo(() => liqCosechadoras.reduce(
+    (sum, row) => sum + Number(row.qq || 0), 0
+  ), [liqCosechadoras]);
+  // Mantiene la matematica historica: el detalle dinamico alimenta el mismo
+  // descuento agregado usado por neto, fomentos y saldo en contra.
   useEffect(() => {
-    const monto = Math.round((Number(liqCosechadora.qq || 0) * Number(liqCosechadora.precio || 0)) * 100) / 100;
-    const str = monto > 0 ? String(monto) : "";
+    const str = liqCosechadoraTotal > 0 ? String(liqCosechadoraTotal) : "";
     setLiqDiscounts((p) => (p.cosechadora === str ? p : { ...p, cosechadora: str }));
-  }, [liqCosechadora.qq, liqCosechadora.precio]);
+  }, [liqCosechadoraTotal]);
   const [liqResult, setLiqResult] = useState<LiqResultItem[] | null>(null);
 
   // ── Caja ──────────────────────────────────────────────────────────────────
@@ -10100,6 +10130,41 @@ export function App() {
     setNegativeStockOpen(true);
   }
 
+  function toggleLiqEntryPick(entryId: string) {
+    setLiqEntryMultiPick((current) => current.includes(entryId)
+      ? current.filter((id) => id !== entryId)
+      : [...current, entryId]);
+  }
+
+  function addSelectedLiqEntries() {
+    const alreadyAdded = new Set(liqLines.map((line) => line.lot_id));
+    const entries = liqEntryMultiPick
+      .filter((id) => !alreadyAdded.has(id))
+      .map((id) => farmerLots.find((entry) => entry.id === id))
+      .filter((entry): entry is PendingEntry => Boolean(entry));
+    if (entries.length === 0) {
+      addToast("Marca uno o mas ingresos de materia prima", "error");
+      return;
+    }
+    setLiqLines((current) => {
+      const base = current[0];
+      return [...current, ...entries.map((entry) => {
+        const esPropia = Boolean(entry.flota_activo_id);
+        let line: LiqLine = {
+          ...liqLineHeredada(base),
+          lot_id: entry.id,
+          quintals: Number(entry.quintals ?? 0).toFixed(2),
+          flete_tipo: esPropia ? "propia" : "tercero",
+          flete_activo_id: esPropia ? String(entry.flota_activo_id) : ""
+        };
+        if (line.flete_tarifa.trim()) line = aplicarTarifaFleteLiq(line, line.flete_tarifa);
+        return line;
+      })];
+    });
+    setLiqEntryMultiPick([]);
+    setLiqEntryPickerOpen(false);
+  }
+
   async function submitLiquidations() {
     const validLines = liqLines.filter((l) => l.lot_id && l.price);
     if (!liqFarmerId || validLines.length === 0) {
@@ -10159,9 +10224,19 @@ export function App() {
           ? { monto: lineFlete, tipo: line.flete_tipo, activo_id: line.flete_activo_id || null,
               prestador: line.flete_tipo === "tercero" ? (line.flete_prestador.trim() || undefined) : undefined }
           : undefined,
-        // Cosechadora: prestador (propia=cruce Campo · tercero=CxP), solo en la 1ª línea.
-        cosechadora_detalle: i === 0 && Number(liqDiscounts.cosechadora || 0) > 0
-          ? { tipo: liqCosechadora.tipo, prestador: liqCosechadora.tipo === "tercero" ? (liqCosechadora.prestador.trim() || undefined) : undefined }
+        // Una fila por maquina/prestador. El total ya viaja en discount_breakdown
+        // para conservar el calculo historico del neto.
+        cosechadora_detalles: i === 0 && liqCosechadoraTotal > 0
+          ? liqCosechadoras
+              .filter((row) => Number(row.qq) > 0 && Number(row.precio) > 0)
+              .map((row) => ({
+                campo_parte_id: row.parte_id,
+                activo_id: row.activo_id || null,
+                qq: Number(row.qq),
+                precio_por_qq: Number(row.precio),
+                tipo: row.tipo,
+                prestador: row.prestador.trim() || undefined
+              }))
           : undefined,
         batch_id: batchId
       });
@@ -10184,9 +10259,10 @@ export function App() {
       });
     }
     setLiqResult(resultItems);
-    setLiqLines([nuevaLiqLine()]);
+    setLiqLines([]);
+    setLiqEntryMultiPick([]);
     setLiqDiscounts({ bascula: "", cosechadora: "" });
-    setLiqCosechadora({ qq: "", precio: "", tipo: "propia", prestador: "", qq_sugerido: 0 });
+    setLiqCosechadoras([]);
     setLiqFomentoDist({});
     setLiqFomentoMontos({});
     setDiscountsOpen(false);
@@ -15818,7 +15894,10 @@ export function App() {
                     <select value={liqFarmerId}
                       onChange={(e) => {
                         setLiqFarmerId(e.target.value);
-                        setLiqLines([nuevaLiqLine()]);
+                        setLiqLines([]);
+                        setLiqEntryMultiPick([]);
+                        setLiqEntryPickerOpen(false);
+                        setLiqCosechadoras([]);
                         // Los fomentos del agricultor (de todos los socios) los carga el
                         // efecto por `liqFarmerId` y prellena su monto con el saldo.
                       }}
@@ -15828,44 +15907,57 @@ export function App() {
                     </select>
                   </label>
 
+                  <div style={{ marginTop: 8 }}>
+                    <span style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>Ingresos de materia prima</span>
+                    <button
+                      type="button"
+                      className="btnSecondary"
+                      aria-expanded={liqEntryPickerOpen}
+                      disabled={!liqFarmerId}
+                      onClick={() => setLiqEntryPickerOpen((open) => !open)}
+                      style={{ width: "100%", minHeight: 42, padding: "8px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", textAlign: "left" }}
+                    >
+                      <span>{liqEntryMultiPick.length > 0 ? `${liqEntryMultiPick.length} ticket(s) marcado(s)` : "Seleccionar uno o varios tickets"}</span>
+                      <span aria-hidden="true">{liqEntryPickerOpen ? "▲" : "▼"}</span>
+                    </button>
+                    {liqEntryPickerOpen && (
+                      <div style={{ maxHeight: 230, overflowY: "auto", border: "1px solid var(--c-border)", borderRadius: 8, background: "var(--c-surface)", marginTop: 6 }}>
+                        {farmerLots.filter((entry) => !liqLines.some((line) => line.lot_id === entry.id)).map((entry) => {
+                          const checked = liqEntryMultiPick.includes(entry.id);
+                          return (
+                            <label key={entry.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", margin: 0, borderBottom: "1px solid var(--c-border)", cursor: "pointer" }}>
+                              <input type="checkbox" checked={checked} onChange={() => toggleLiqEntryPick(entry.id)} style={{ width: 18, height: 18, marginTop: 1, flex: "0 0 auto" }} />
+                              <span style={{ fontSize: 13, lineHeight: 1.35 }}>
+                                <strong>{entryLabel(entry)}</strong> · {entry.placa?.trim() || "S/P"} · {entry.rice_type ?? "—"} · {Number(entry.quintals ?? 0).toFixed(2)} QQ
+                              </span>
+                            </label>
+                          );
+                        })}
+                        {farmerLots.filter((entry) => !liqLines.some((line) => line.lot_id === entry.id)).length === 0 && (
+                          <div className="muted" style={{ padding: 10, fontSize: 13 }}>No hay mas ingresos pendientes de este agricultor.</div>
+                        )}
+                      </div>
+                    )}
+                    <button type="button" className="liqAddBtn" disabled={liqEntryMultiPick.length === 0} onClick={addSelectedLiqEntries}>
+                      + Agregar seleccionados ({liqEntryMultiPick.length})
+                    </button>
+                  </div>
+
                   <div className="liqLinesHeader">
                     <span>Ingreso de materia prima</span><span>QQ</span><span>Precio / QQ</span><span aria-hidden="true" />
                   </div>
 
                   {liqLines.map((line, i) => {
-                    const takenIds = new Set(liqLines.filter((_, j) => j !== i).map((l) => l.lot_id).filter(Boolean));
                     const selEntry = farmerLots.find((l) => l.id === line.lot_id);
                     // QQ base del flete (los que se liquidan; por defecto los del ingreso).
                     const fleteQq = Number(line.quintals) || Number(selEntry?.quintals ?? 0);
                     return (
                       <React.Fragment key={i}>
                       <div className="liqLine">
-                        <select value={line.lot_id} onChange={(e) => {
-                          const sel = farmerLots.find((l) => l.id === e.target.value);
-                          const updated = [...liqLines];
-                          // Auto-detección del transporte: si la placa del ingreso es de la
-                          // Flota Propia, prellena 'propia' + vehículo; si no, 'tercero'.
-                          const esPropia = !!sel?.flota_activo_id;
-                          let ln: LiqLine = {
-                            ...updated[i],
-                            lot_id: e.target.value,
-                            quintals: sel ? String(Number(sel.quintals ?? 0).toFixed(2)) : "",
-                            flete_tipo: esPropia ? "propia" : "tercero",
-                            flete_activo_id: esPropia ? String(sel!.flota_activo_id) : ""
-                          };
-                          // Con el QQ ya conocido, recalcula el Total del flete desde la tarifa
-                          // (heredada o propia). Los QQ NO se replican: son los del ticket.
-                          if (ln.flete_tarifa.trim() !== "") ln = aplicarTarifaFleteLiq(ln, ln.flete_tarifa);
-                          updated[i] = ln;
-                          setLiqLines(updated);
-                        }} required>
-                          <option value="">— seleccionar ingreso —</option>
-                          {farmerLots.filter((l) => !takenIds.has(l.id)).map((l) => (
-                            <option key={l.id} value={l.id}>
-                              {entryLabel(l)} · {l.placa?.trim() || "S/P"} · {l.rice_type ?? "—"} · {Number(l.quintals ?? 0).toFixed(2)} QQ{l.lot_code ? ` · ${l.lot_code}` : ""}
-                            </option>
-                          ))}
-                        </select>
+                        <div className="liqEntryLabel" title={selEntry ? `${entryLabel(selEntry)} · ${selEntry.placa?.trim() || "S/P"}` : "Ingreso"}>
+                          <strong>{selEntry ? entryLabel(selEntry) : "Ingreso"}</strong>
+                          <small>{selEntry?.placa?.trim() || "S/P"} · {selEntry?.rice_type ?? "—"}</small>
+                        </div>
                         <input type="number" step="0.01" min="0"
                           placeholder={farmerLots.find((l) => l.id === line.lot_id) ? String(Number(farmerLots.find((l) => l.id === line.lot_id)!.quintals ?? 0).toFixed(2)) : "QQ"}
                           value={line.quintals}
@@ -15946,11 +16038,6 @@ export function App() {
                     );
                   })}
 
-                  <button type="button" className="liqAddBtn"
-                    onClick={() => setLiqLines((prev) => [...prev, liqLineHeredada(prev[0])])}>
-                    + Agregar lote
-                  </button>
-
                   {/* ─ Descuentos ─ */}
                   <button type="button"
                     className={`liqDiscountToggle${discountsOpen ? " open" : ""}`}
@@ -15977,40 +16064,57 @@ export function App() {
                           value={liqDiscounts.bascula}
                           onChange={(e) => setLiqDiscounts((p) => ({ ...p, bascula: e.target.value }))} />
                       </label>
-                      {/* ─ Cosechadora: QQ del Parte Diario × precio (aquí) ─ */}
+                      {/* ─ Cosechadoras: una fila por maquina/Parte Diario ─ */}
                       <div className="liqFleteDesglose">
-                        <div className="liqFleteDesgloseHd">🚜 Cosechadora {liqCosechadora.qq_sugerido > 0 && <span className="muted" style={{ fontWeight: 400 }}>· parte diario: {liqCosechadora.qq_sugerido.toFixed(2)} QQ</span>}</div>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                          <label className="liqDiscRow" style={{ margin: 0 }}>
-                            <span>QQ cosechados</span>
-                            <input type="number" step="0.01" min="0" placeholder="0.00" value={liqCosechadora.qq}
-                              onChange={(e) => setLiqCosechadora((p) => ({ ...p, qq: e.target.value }))} />
-                          </label>
-                          <label className="liqDiscRow" style={{ margin: 0 }}>
-                            <span>Precio $/QQ</span>
-                            <input type="number" step="0.0001" min="0" placeholder="0.00" value={liqCosechadora.precio}
-                              onChange={(e) => setLiqCosechadora((p) => ({ ...p, precio: e.target.value }))} />
-                          </label>
+                        <div className="liqFleteDesgloseHd">
+                          🚜 Cosechadora
+                          {liqCosechadoraQq > 0 && <span className="muted" style={{ fontWeight: 400 }}> · partes diarios: {liqCosechadoraQq.toFixed(2)} QQ</span>}
                         </div>
-                        <div style={{ display: "grid", gridTemplateColumns: liqCosechadora.tipo === "tercero" ? "1fr 1.4fr" : "1fr", gap: 6, marginTop: 6 }}>
-                          <label className="liqDiscRow" style={{ margin: 0 }}>
-                            <span>Prestador</span>
-                            <select value={liqCosechadora.tipo} onChange={(e) => setLiqCosechadora((p) => ({ ...p, tipo: e.target.value as "propia" | "tercero" }))}>
-                              <option value="propia">🏭 Flota / Matriz</option>
-                              <option value="tercero">👤 Tercero (contratada)</option>
-                            </select>
-                          </label>
-                          {liqCosechadora.tipo === "tercero" && (
-                            <label className="liqDiscRow" style={{ margin: 0 }}>
-                              <span>Nombre</span>
-                              <input type="text" placeholder="Operador / dueño" value={liqCosechadora.prestador}
-                                onChange={(e) => setLiqCosechadora((p) => ({ ...p, prestador: e.target.value }))} />
-                            </label>
-                          )}
-                        </div>
-                        <div className="liqDiscRow" style={{ marginTop: 6, fontWeight: 700 }}>
+                        {liqCosechadoras.length === 0 && (
+                          <p className="muted" style={{ margin: "4px 0 8px", fontSize: 12 }}>
+                            Al agregar los tickets se cargarán aquí los Partes Diarios relacionados.
+                          </p>
+                        )}
+                        {liqCosechadoras.map((row, index) => (
+                          <div key={row.key} className="liqHarvesterRow">
+                            <div className="liqHarvesterTitle">
+                              <strong>{row.maquina || `Máquina ${index + 1}`}</strong>
+                              {row.automatica && <span className="chip">Parte diario · {row.qq_sugerido.toFixed(2)} QQ</span>}
+                              <button type="button" className="liqRemoveBtn" title="Quitar máquina"
+                                onClick={() => setLiqCosechadoras((current) => current.filter((item) => item.key !== row.key))}>×</button>
+                            </div>
+                            <div className="liqHarvesterFields">
+                              <label><span>QQ cosechados</span>
+                                <input type="number" step="0.01" min="0" placeholder="0.00" value={row.qq}
+                                  onChange={(e) => setLiqCosechadoras((current) => current.map((item) => item.key === row.key ? { ...item, qq: e.target.value } : item))} />
+                              </label>
+                              <label><span>Precio $/QQ</span>
+                                <input type="number" step="0.0001" min="0" placeholder="0.00" value={row.precio}
+                                  onChange={(e) => setLiqCosechadoras((current) => current.map((item) => item.key === row.key ? { ...item, precio: e.target.value } : item))} />
+                              </label>
+                              <label><span>Prestador</span>
+                                <select value={row.tipo} onChange={(e) => setLiqCosechadoras((current) => current.map((item) => item.key === row.key ? { ...item, tipo: e.target.value as "propia" | "tercero" } : item))}>
+                                  <option value="propia">🏭 Flota / Matriz</option>
+                                  <option value="tercero">👤 Tercero</option>
+                                </select>
+                              </label>
+                              <label><span>Nombre / máquina</span>
+                                <input type="text" placeholder="Prestador o máquina" value={row.prestador}
+                                  onChange={(e) => setLiqCosechadoras((current) => current.map((item) => item.key === row.key ? { ...item, prestador: e.target.value } : item))} />
+                              </label>
+                            </div>
+                            <div className="liqHarvesterSubtotal">
+                              <span>Subtotal</span>
+                              <strong>${(Number(row.qq || 0) * Number(row.precio || 0)).toFixed(2)}</strong>
+                            </div>
+                          </div>
+                        ))}
+                        <button type="button" className="liqAddBtn" onClick={() => setLiqCosechadoras((current) => [...current, nuevaLiqCosechadora()])}>
+                          + Agregar otra máquina / prestador externo
+                        </button>
+                        <div className="liqDiscRow liqHarvesterTotal">
                           <span>Total cosechadora</span>
-                          <span>${(Number(liqCosechadora.qq || 0) * Number(liqCosechadora.precio || 0)).toFixed(2)}</span>
+                          <strong>${liqCosechadoraTotal.toFixed(2)}</strong>
                         </div>
                       </div>
                       {/* ─ Fomentos del agricultor ─ */}

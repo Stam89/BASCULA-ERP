@@ -7,7 +7,7 @@ Actualizado: 2026-09-24
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: empaque unico de botada en tuneles y confirmacion previa al cierre del secado.
+- Ultimo cambio funcional: Liquidaciones con multiseleccion y varias cosechadoras enlazadas a Partes Diarios.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,21 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Liquidaciones agiles + cosechadoras multiples (2026-09-24)
+
+- `Nueva liquidacion` usa un desplegable compacto con casillas para marcar varios ingresos y agregarlos en bloque.
+- Cada ingreso conserva su fila, QQ, precio y flete independiente; precio y tarifa de la primera fila siguen heredandose sin copiar los QQ.
+- Nueva migracion `20261029_liquidacion_cosechadoras_multiples.sql` agrega `campo_partes.farmer_id` y `liquidation_harvest_details` sin alterar liquidaciones historicas.
+- `20261030_backfill_partes_liquidacion_cosechadora.sql` concilia solo coincidencias historicas unicas; vinculo el Parte COS.10 (76 QQ, $2.25/QQ) con su descuento existente de $171, evitando que vuelva a sugerirse.
+- Los Partes Diarios de cosecha se sugieren por agricultor y ventana operativa de los tickets seleccionados; un parte ya aplicado no puede repetirse.
+- La seccion Cosechadora admite varias maquinas, cada una con QQ, precio/QQ, prestador y subtotal; tambien permite agregar un prestador externo manual.
+- El total combinado alimenta el mismo `discount_breakdown.cosechadora`, por lo que se conserva la matematica de bruto, descuentos, fomentos y neto.
+- Backend crea un cruce Campo por cada maquina propia o una CxP separada por cada tercero. El formato singular anterior sigue aceptado.
+- Al anular se liberan los partes si no existe un pago real a un tercero; con pago real se conserva la traza para evitar doble cobro.
+- Partes nuevos/editados guardan el `farmer_id` global y los tickets se validan contra el socio operativo activo.
+- Revision visual sin escrituras: selector, contador, alta en bloque y fila de maquina externa verificados en una pestana separada.
+- Verificaciones: migracion aplicada, backend/frontend build, 38/38 tests, lint con 0 errores y preflight sin errores criticos.
 
 ### Empaque unico de botada + confirmacion de cierre (2026-09-24)
 

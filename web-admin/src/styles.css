@@ -274,6 +274,18 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 .liqLine select:focus,
 .liqLine input:focus { outline: none; border-color: var(--c-brand); }
 
+.liqEntryLabel {
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  background: var(--c-surface-2);
+  line-height: 1.25;
+}
+.liqEntryLabel strong,
+.liqEntryLabel small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.liqEntryLabel small { margin-top: 2px; color: var(--c-muted); font-size: 11px; }
+
 /* Flete por ingreso (quién lo transportó): fila secundaria bajo cada .liqLine. */
 .liqFleteRow {
   display: flex;
@@ -295,6 +307,26 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 /* Desglose de fletes dentro del panel de descuentos. */
 .liqFleteDesglose { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--c-border); }
 .liqFleteDesgloseHd { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--c-muted); margin-bottom: 4px; }
+
+.liqHarvesterRow {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  background: var(--c-surface-2);
+}
+.liqHarvesterTitle { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
+.liqHarvesterTitle .liqRemoveBtn { margin-left: auto; }
+.liqHarvesterFields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
+.liqHarvesterFields label { margin: 0; min-width: 0; }
+.liqHarvesterFields input,
+.liqHarvesterFields select { width: 100%; min-width: 0; padding: 6px 8px; }
+.liqHarvesterSubtotal { display: flex; justify-content: flex-end; gap: 10px; margin-top: 7px; font-size: 12px; }
+.liqHarvesterTotal { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--c-border); font-weight: 800; }
+
+@media (max-width: 760px) {
+  .liqHarvesterFields { grid-template-columns: 1fr 1fr; }
+}
 
 .liqRemoveBtn {
   width: 28px; height: 28px;

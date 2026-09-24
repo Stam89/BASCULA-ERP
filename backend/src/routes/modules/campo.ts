@@ -133,6 +133,20 @@ async function resolverClienteParte(client: Q, input: ParteClienteInput): Promis
   )).rows[0];
 }
 
+// Resuelve el agricultor global sin asumir que cliente_id pertenece a farmers:
+// en ediciones antiguas puede ser el id de campo_clientes.
+async function resolverFarmerIdParte(client: Q, clienteId: string | undefined, nombre: string): Promise<string | null> {
+  if (clienteId) {
+    const directo = await client.query("SELECT id FROM farmers WHERE id = $1", [clienteId]);
+    if (directo.rowCount) return directo.rows[0].id;
+  }
+  const porNombre = await client.query(
+    "SELECT id FROM farmers WHERE lower(trim(full_name)) = lower(trim($1)) LIMIT 2",
+    [nombre]
+  );
+  return porNombre.rowCount === 1 ? porNombre.rows[0].id : null;
+}
+
 // ── Catálogo: maquinaria/flota (activos: cosechadora/camión/vehículo/otro) ────
 // La FK "maquinaria_id" es campo_movimientos.activo_id → campo_activos.
 const TIPO_MAQUINARIA = ["cosechadora", "camion", "vehiculo", "transporte", "otro"] as const;
@@ -825,8 +839,10 @@ campoRouter.patch("/partes/:id", asyncRoute(async (req, res) => {
         cliente_id: body.cliente_id,
         is_nuevo_externo: body.is_nuevo_externo
       });
+      const farmerId = await resolverFarmerIdParte(client, body.cliente_id, cliente.nombre);
       fields.push(`cliente = $${i++}`); values.push(cliente.nombre);
       fields.push(`cliente_id = $${i++}`); values.push(cliente.id);
+      fields.push(`farmer_id = $${i++}`); values.push(farmerId);
     }
     for (const k of ["fecha", "activo_id", "operador", "qq", "observaciones"] as const) {
       if (body[k] !== undefined) {
@@ -953,13 +969,14 @@ campoRouter.post("/partes", asyncRoute(async (req, res) => {
       cliente_id: body.cliente_id,
       is_nuevo_externo: body.is_nuevo_externo
     });
+    const farmerId = await resolverFarmerIdParte(client, body.cliente_id, cliente.nombre);
     const parte = (await client.query(
-      `INSERT INTO campo_partes (fecha, activo_id, operador, cliente, cliente_id, qq, observaciones, created_by)
-       VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8)
-       RETURNING id, fecha, activo_id, operador, cliente, cliente_id, qq::float AS qq,
+      `INSERT INTO campo_partes (fecha, activo_id, operador, cliente, cliente_id, farmer_id, qq, observaciones, created_by)
+       VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id, fecha, activo_id, operador, cliente, cliente_id, farmer_id, qq::float AS qq,
                  observaciones, estado, origen, created_at`,
       [body.fecha ?? null, body.activo_id, body.operador?.trim() || null, cliente.nombre,
-       cliente.id, body.qq, body.observaciones?.trim() || null, userId(req)]
+       cliente.id, farmerId, body.qq, body.observaciones?.trim() || null, userId(req)]
     )).rows[0];
     return { parte, cliente_tipo: cliente.tipo };
   });

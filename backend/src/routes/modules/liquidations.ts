@@ -76,23 +76,55 @@ liquidationsRouter.get("/pending-entries", asyncRoute(async (req, res) => {
   res.json(result.rows);
 }));
 
-// Auto-jalado de COSECHADORA: partes diarios de cosecha (Campo) del agricultor,
-// para prellenar los QQ reportados por el operador. El precio se pone en la
-// liquidación (como el flete). Se cruza por NOMBRE (campo_partes.cliente).
+// Auto-jalado de COSECHADORA: devuelve cada maquina/Parte Diario por separado.
+// Si llegan ingresos seleccionados, acota la busqueda a su ventana operativa
+// (7 dias antes/despues) y valida que todos pertenezcan al agricultor. Los partes
+// ya aplicados a otra liquidacion no vuelven a sugerirse.
 liquidationsRouter.get("/parte-cosechadora", asyncRoute(async (req, res) => {
-  const q = z.object({ farmer_id: z.string().uuid() }).parse(req.query);
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const q = z.object({
+    farmer_id: z.string().uuid(),
+    weighing_ticket_ids: z.string().optional()
+  }).parse(req.query);
+  const entryIds = (q.weighing_ticket_ids ?? "").split(",").map((id) => id.trim()).filter(Boolean);
+  if (entryIds.some((id) => !z.string().uuid().safeParse(id).success)) {
+    throw new ApiError(400, "Hay un ingreso de materia prima invalido.");
+  }
   const farmer = await pool.query("SELECT full_name FROM farmers WHERE id = $1", [q.farmer_id]);
   const nombre = farmer.rows[0]?.full_name;
   if (!nombre) { res.json({ partes: [], qq_total: 0, operador: null }); return; }
+
+  let desde: string | null = null;
+  let hasta: string | null = null;
+  if (entryIds.length > 0) {
+    const entries = await pool.query(
+      `SELECT MIN(created_at)::date - 7 AS desde, MAX(created_at)::date + 7 AS hasta,
+              COUNT(*)::int AS encontrados
+         FROM weighing_tickets
+        WHERE id = ANY($1::uuid[]) AND farmer_id = $2 AND accionista_id = $3`,
+      [entryIds, q.farmer_id, accionistaId]
+    );
+    if (Number(entries.rows[0]?.encontrados ?? 0) !== entryIds.length) {
+      throw new ApiError(400, "Uno de los ingresos seleccionados no pertenece al agricultor.");
+    }
+    desde = entries.rows[0]?.desde ?? null;
+    hasta = entries.rows[0]?.hasta ?? null;
+  }
+
   const partes = (await pool.query(
-    `SELECT p.id, p.fecha, p.qq::float AS qq, p.operador, a.nombre AS activo_nombre, a.tipo AS activo_tipo
+    `SELECT p.id, p.fecha, p.qq::float AS qq, p.operador,
+            a.id AS activo_id, a.nombre AS activo_nombre, a.tipo AS activo_tipo
        FROM campo_partes p
        JOIN campo_activos a ON a.id = p.activo_id
       WHERE a.tipo = 'cosechadora'
-        AND lower(trim(p.cliente)) = lower(trim($1))
+        AND (p.farmer_id = $1 OR (p.farmer_id IS NULL AND lower(trim(p.cliente)) = lower(trim($2))))
+        AND ($3::date IS NULL OR p.fecha BETWEEN $3::date AND $4::date)
+        AND NOT EXISTS (
+          SELECT 1 FROM liquidation_harvest_details d WHERE d.campo_parte_id = p.id
+        )
       ORDER BY p.fecha DESC
       LIMIT 50`,
-    [nombre]
+    [q.farmer_id, nombre, desde, hasta]
   )).rows;
   const qq_total = Math.round(partes.reduce((s: number, r: { qq: number }) => s + Number(r.qq || 0), 0) * 100) / 100;
   res.json({ partes, qq_total, operador: partes[0]?.operador ?? null });
@@ -124,6 +156,16 @@ const liquidationInput = z.object({
     tipo: z.enum(["propia", "tercero"]).default("propia"),
     prestador: z.string().max(200).optional()
   }).optional(),
+  // Formato nuevo: una fila por maquina. El formato singular anterior se
+  // mantiene arriba para clientes/API antiguos.
+  cosechadora_detalles: z.array(z.object({
+    campo_parte_id: z.string().uuid().optional(),
+    activo_id: z.string().uuid().nullable().optional(),
+    qq: z.number().positive(),
+    precio_por_qq: z.number().positive(),
+    tipo: z.enum(["propia", "tercero"]),
+    prestador: z.string().max(200).optional()
+  })).max(20).optional(),
   // Abonos de fomento explícitos (fomento_id + monto). Si no vienen, el backend
   // reparte el descuento de fomento entre los fomentos del socio que liquida.
   fomento_pagos: z.array(z.object({
@@ -176,10 +218,13 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
     let lotId = data.lot_id ?? null;
     if (data.weighing_ticket_id) {
       const entry = await client.query(
-        "SELECT farmer_id, lot_id FROM weighing_tickets WHERE id = $1 FOR UPDATE",
+        "SELECT farmer_id, lot_id, accionista_id FROM weighing_tickets WHERE id = $1 FOR UPDATE",
         [data.weighing_ticket_id]
       );
       if (!entry.rowCount) throw new ApiError(404, "Ingreso de materia prima no encontrado");
+      if (entry.rows[0].accionista_id !== accionistaId) {
+        throw new ApiError(403, "Ese ingreso pertenece a otro socio operativo.");
+      }
       if (entry.rows[0].farmer_id !== data.farmer_id) {
         throw new ApiError(400, "Ese ingreso es de otro agricultor.");
       }
@@ -191,6 +236,39 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
         throw new ApiError(409, `Ese ingreso ya fue liquidado (${yaLiquidado.rows[0].liquidation_number}).`);
       }
       lotId = lotId ?? entry.rows[0].lot_id;
+    }
+
+    const cosechadoraDetalles = data.cosechadora_detalles ?? [];
+    if (cosechadoraDetalles.length > 0) {
+      const totalDetalle = round2(cosechadoraDetalles.reduce(
+        (sum, item) => sum + round2(item.qq * item.precio_por_qq), 0
+      ));
+      const totalDeclarado = round2(data.discount_breakdown?.cosechadora ?? 0);
+      if (Math.abs(totalDetalle - totalDeclarado) > 0.01) {
+        throw new ApiError(400, "El total de cosechadora no coincide con el detalle de maquinas.");
+      }
+
+      const parteIds = cosechadoraDetalles.flatMap((item) => item.campo_parte_id ? [item.campo_parte_id] : []);
+      if (new Set(parteIds).size !== parteIds.length) {
+        throw new ApiError(400, "Un Parte Diario no puede repetirse en la misma liquidacion.");
+      }
+      if (parteIds.length > 0) {
+        const partes = await client.query(
+          `SELECT p.id
+             FROM campo_partes p
+             JOIN campo_activos a ON a.id = p.activo_id
+             JOIN farmers f ON f.id = $2
+            WHERE p.id = ANY($1::uuid[])
+              AND a.tipo = 'cosechadora'
+              AND (p.farmer_id = $2 OR (p.farmer_id IS NULL AND lower(trim(p.cliente)) = lower(trim(f.full_name))))
+              AND NOT EXISTS (SELECT 1 FROM liquidation_harvest_details d WHERE d.campo_parte_id = p.id)
+            FOR UPDATE OF p`,
+          [parteIds, data.farmer_id]
+        );
+        if (partes.rowCount !== parteIds.length) {
+          throw new ApiError(409, "Un Parte Diario ya fue liquidado o no pertenece al agricultor.");
+        }
+      }
     }
 
     const liquidation = await client.query(
@@ -347,11 +425,44 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
     let retenciones: { bascula_matriz: number; cosechadora_campo: number } | null = null;
     const bascula = data.discount_breakdown?.bascula ?? 0;
     const cosechadora = data.discount_breakdown?.cosechadora ?? 0;
-    const cosechadoraTercero = data.cosechadora_detalle?.tipo === "tercero";
     const matrizId = await getMatrizId(client);
+    const detallesCosechadora = data.cosechadora_detalles ?? [];
+    const usaDetalleMultiple = detallesCosechadora.length > 0;
+    const cosechadoraTerceroLegacy = data.cosechadora_detalle?.tipo === "tercero";
+    const cosechadoraPropia = usaDetalleMultiple
+      ? round2(detallesCosechadora
+          .filter((item) => item.tipo === "propia")
+          .reduce((sum, item) => sum + round2(item.qq * item.precio_por_qq), 0))
+      : (cosechadoraTerceroLegacy ? 0 : cosechadora);
 
-    // Cosechadora de TERCERO (contratada): CxP a su favor, sea quien liquide.
-    if (cosechadora > 0 && cosechadoraTercero) {
+    // Persiste el desglose antes de generar asientos. La transaccion completa
+    // revierte si un Parte Diario ya fue tomado concurrentemente.
+    for (const item of detallesCosechadora) {
+      const monto = round2(item.qq * item.precio_por_qq);
+      await client.query(
+        `INSERT INTO liquidation_harvest_details
+           (liquidation_id, campo_parte_id, activo_id, provider_type, provider_name,
+            quintals, price_per_quintal, amount)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [liquidation.rows[0].id, item.campo_parte_id ?? null, item.activo_id ?? null,
+         item.tipo, item.prestador?.trim() || null, item.qq, item.precio_por_qq, monto]
+      );
+    }
+
+    // Cosechadoras de TERCEROS: una CxP independiente por prestador/maquina.
+    for (const item of detallesCosechadora.filter((row) => row.tipo === "tercero")) {
+      const monto = round2(item.qq * item.precio_por_qq);
+      const prestador = (item.prestador ?? "").trim() || "cosechadora contratada";
+      await client.query(
+        `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
+         VALUES (NULL, $1, $2, $2, 'CONFIRMED', $3, 'cosechadora_tercero', $1, $4)`,
+        [liquidation.rows[0].id, monto, accionistaId,
+         `Cosechadora (tercero) - ${prestador} - ${liquidation.rows[0].liquidation_number}`]
+      );
+    }
+
+    // Compatibilidad con clientes anteriores: formato singular agregado.
+    if (!usaDetalleMultiple && cosechadora > 0 && cosechadoraTerceroLegacy) {
       const prestador = (data.cosechadora_detalle?.prestador ?? "").trim() || "cosechadora contratada";
       await client.query(
         `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
@@ -361,9 +472,9 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
       );
     }
 
-    // Retenciones inter-compañías: báscula → Matriz; cosechadora PROPIA (flota) → Campo.
-    // La cosechadora de tercero NO cruza (ya generó su CxP arriba).
-    if ((bascula > 0 || (cosechadora > 0 && !cosechadoraTercero)) && accionistaId && accionistaId !== matrizId) {
+    // Retenciones inter-compañías: báscula → Matriz; cada cosechadora PROPIA
+    // cruza con Campo de forma independiente. Las de terceros ya generaron CxP.
+    if ((bascula > 0 || cosechadoraPropia > 0) && accionistaId && accionistaId !== matrizId) {
       // (1) BÁSCULA → Matriz: el socio asume CxP a favor de la Matriz.
       if (bascula > 0) {
         // Detalle HUMANIZADO: sin el #LIQ crudo. Especifica el peso/ticket de
@@ -395,13 +506,24 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
       }
       // (2) COSECHADORA → Transporte y Cosechadora (Campo): mismo cruce que los
       //     fletes (abona un campo_servicio o queda como crédito a favor).
-      if (cosechadora > 0 && !cosechadoraTercero) {
+      if (usaDetalleMultiple) {
+        for (const item of detallesCosechadora.filter((row) => row.tipo === "propia")) {
+          await cruzarFleteInterno(client, {
+            accionistaId,
+            monto: round2(item.qq * item.precio_por_qq),
+            activoId: item.activo_id ?? null,
+            referencia: liquidation.rows[0].liquidation_number,
+            conceptoPrefijo: "Cruce cosechadora",
+            createdBy: data.created_by ?? null
+          });
+        }
+      } else if (cosechadoraPropia > 0) {
         await cruzarFleteInterno(client, {
-          accionistaId, monto: cosechadora, activoId: null, referencia: liquidation.rows[0].liquidation_number,
+          accionistaId, monto: cosechadoraPropia, activoId: null, referencia: liquidation.rows[0].liquidation_number,
           conceptoPrefijo: "Cruce cosechadora", createdBy: data.created_by ?? null
         });
       }
-      retenciones = { bascula_matriz: bascula, cosechadora_campo: cosechadoraTercero ? 0 : cosechadora };
+      retenciones = { bascula_matriz: bascula, cosechadora_campo: cosechadoraPropia };
     }
 
     return { ...liquidation.rows[0], cruce_flete: cruce, fomento_pagos: fomentoPagos, saldo_en_contra: saldoContra, retenciones };
@@ -763,6 +885,21 @@ liquidationsRouter.post("/:id/anular", requireAdmin, asyncRoute(async (req, res)
       `DELETE FROM accounts_payable
         WHERE reference_type IN ('flete_tercero','cosechadora_tercero') AND liquidation_id = $1
           AND round(balance::numeric, 2) >= round(amount::numeric, 2) - 0.005`,
+      [liqId]
+    );
+
+    // Libera los Partes Diarios solo si no queda una CxP de cosechadora externa
+    // ya pagada. Si hubo dinero real, se conserva el vinculo y la traza para
+    // impedir que el mismo trabajo vuelva a descontarse en otra liquidacion.
+    await client.query(
+      `DELETE FROM liquidation_harvest_details d
+        WHERE d.liquidation_id = $1
+          AND NOT EXISTS (
+            SELECT 1 FROM accounts_payable ap
+             WHERE ap.liquidation_id = $1
+               AND ap.reference_type = 'cosechadora_tercero'
+               AND round(ap.balance::numeric, 2) < round(ap.amount::numeric, 2) - 0.005
+          )`,
       [liqId]
     );
 
