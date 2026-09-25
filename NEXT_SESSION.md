@@ -7,7 +7,7 @@ Actualizado: 2026-09-25
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: rediseno compacto y responsive de Secados guardados, conservando su detalle completo.
+- Ultimo cambio funcional: secador semanal unico para los tres tuneles, con reemplazo permitido durante la semana.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,16 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Secador de turno semanal compartido por toda la planta (2026-09-25)
+
+- La semana operativa y el periodo sugerido de Nomina empiezan el lunes.
+- El nombre dejo de guardarse por separado para Motor 1 y Motor 2: ahora existe un unico secador de turno semanal compartido por los tres tuneles.
+- Al guardar una corrida, todos sus tuneles reciben el mismo responsable. Al abrir el otro motor se reutiliza ese responsable, evitando nombres distintos por motor.
+- El responsable se puede cambiar cualquier dia por enfermedad o reemplazo; las corridas siguientes usan el nuevo nombre y los secados ya finalizados conservan su responsable historico.
+- Si la aplicacion permanece abierta del domingo al lunes, detecta la nueva semana en menos de un minuto y limpia el responsable anterior.
+- Compatibilidad: si esta semana ya tenia un nombre almacenado por motor, se migra automaticamente al nuevo turno unico de planta.
+- Verificacion: frontend build correcto y semana visible desde el lunes 2026-09-21.
 
 ### Secados guardados compactos (2026-09-25)
 

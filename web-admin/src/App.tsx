@@ -1636,12 +1636,22 @@ function semanaOperativaKey(fecha = new Date()): string {
   inicio.setDate(inicio.getDate() - offset);
   return fechaLocalIso(inicio);
 }
-const secadorStorageKey = (motor: 1 | 2) => `bascula-erp:secador-name:${semanaOperativaKey()}:motor-${motor}`;
-function getSavedSecadorName(motor: 1 | 2): string | undefined {
-  try { return localStorage.getItem(secadorStorageKey(motor)) || undefined; } catch { return undefined; }
+const secadorStorageKey = () => `bascula-erp:secador-name:${semanaOperativaKey()}:planta`;
+function getSavedSecadorName(): string | undefined {
+  try {
+    const current = localStorage.getItem(secadorStorageKey());
+    if (current) return current;
+    // Compatibilidad con la versión anterior, que guardaba un nombre por motor.
+    // Migra una sola vez el responsable de esta semana al turno único de planta.
+    const week = semanaOperativaKey();
+    const legacy = localStorage.getItem(`bascula-erp:secador-name:${week}:motor-1`)
+      || localStorage.getItem(`bascula-erp:secador-name:${week}:motor-2`);
+    if (legacy) localStorage.setItem(secadorStorageKey(), legacy);
+    return legacy || undefined;
+  } catch { return undefined; }
 }
-function saveSecadorName(motor: 1 | 2, name: string) {
-  try { if (name.trim()) localStorage.setItem(secadorStorageKey(motor), name.trim().toUpperCase()); } catch { /* ignore */ }
+function saveSecadorName(name: string) {
+  try { if (name.trim()) localStorage.setItem(secadorStorageKey(), name.trim().toUpperCase()); } catch { /* ignore */ }
 }
 const piladoPresentations = ["10 LB", "25 LB", "50 LB", "98 LB", "100 LB"];
 const PESO_PERSONALIZADO = "⚙️ Peso Personalizado / Pico";
@@ -1941,6 +1951,22 @@ export function App() {
   const [empaqueSel, setEmpaqueSel] = useState<Record<string, "TULAS" | "SACOS">>({});
   // Motor activo en pantalla: el 1 mueve las Secadoras 1 y 2; el 2, la 3.
   const [motorActivo, setMotorActivo] = useState<1 | 2>(1);
+  // Un único secador de turno para toda la planta. La semana operativa inicia el
+  // lunes; puede cambiarse cualquier día si hay un reemplazo. Los reportes ya
+  // guardados conservan el nombre con el que fueron registrados.
+  const [secadorSemana, setSecadorSemana] = useState(() => getSavedSecadorName() ?? "");
+  const [secadorSemanaId, setSecadorSemanaId] = useState(() => semanaOperativaKey());
+  useEffect(() => {
+    // Si la aplicación queda abierta del domingo al lunes, inicia la nueva
+    // semana sin conservar en pantalla al responsable de la semana anterior.
+    const timer = window.setInterval(() => {
+      const currentWeek = semanaOperativaKey();
+      if (currentWeek === secadorSemanaId) return;
+      setSecadorSemanaId(currentWeek);
+      setSecadorSemana(getSavedSecadorName() ?? "");
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [secadorSemanaId]);
   // Acordeón de Secadoras: qué bloque está desplegado. null = todos colapsados
   // (estado por defecto). El cuerpo se OCULTA (no se desmonta) al colapsar, para
   // no perder los valores ya escritos en los formularios.
@@ -8389,7 +8415,10 @@ export function App() {
     // 1) El lote de cada secadora llena.
     let creados = 0;
     let sublotesCreados = 0;
-    if (secadorMotor) saveSecadorName(motorActivo, secadorMotor);
+    if (secadorMotor) {
+      saveSecadorName(secadorMotor);
+      setSecadorSemana(secadorMotor.toUpperCase());
+    }
     for (const secadora of conIngresos) {
       const t = tunelDeSecadora(secadora);
       // El secador es de la corrida (motor), igual para todas las secadoras.
@@ -11611,13 +11640,15 @@ export function App() {
                   </div>
                   <Input
                     name="secador_motor"
-                    label="👷 Secador (se aplica a todas las secadoras del motor)"
+                    label="👷 Secador de turno (se aplica a todos los túneles)"
                     placeholder="Confirma el secador responsable de esta semana"
-                    defaultValue={motorActiveReports.find((report) => report.operator_name?.trim())?.operator_name ?? getSavedSecadorName(motorActivo)}
+                    value={secadorSemana || motorActiveReports.find((report) => report.operator_name?.trim())?.operator_name || ""}
+                    onChange={(event) => setSecadorSemana(event.target.value.toUpperCase())}
+                    onBlur={(event) => saveSecadorName(event.target.value)}
                     required
                   />
                   <p className="muted" style={{ fontSize: 12, margin: "6px 0 0" }}>
-                    Semana del {semanaOperativaKey()}: confirma el responsable antes de iniciar la primera corrida. El nombre no se arrastra desde semanas anteriores. Solo la hora final se registra por separado en cada túnel.
+                    Semana del lunes {semanaOperativaKey()}: este nombre se comparte entre los tres túneles. Si cambia el secador por enfermedad o reemplazo, escribe aquí el nuevo responsable antes de guardar la siguiente corrida. Los secados ya finalizados conservan su responsable.
                   </p>
                 </div>
                 <div className="panelGrid" style={{ gap: 16 }}>
