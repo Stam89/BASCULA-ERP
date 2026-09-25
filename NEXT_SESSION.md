@@ -7,7 +7,7 @@ Actualizado: 2026-09-24
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: herencia visual y operativa correcta de Servicio Completo desde Bascula hacia Secadoras y Produccion.
+- Ultimo cambio funcional: control semanal del secador, vista de nomina de Secadora y detalle completo en Secados guardados.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,16 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Secador semanal, nomina visible y detalle de secados (2026-09-25)
+
+- Diagnostico de solo lectura: el Tunel 3 real si genero pago pendiente para `MARGARO` por $15.00 (guardiania + 1 tunel); estaba oculto conceptualmente porque la subpestana `Secadora` habia sido retirada y solo aparecia mezclado en `Pagos`.
+- Se restauro `Nomina > Secadora` como vista de revision por periodo. El pago sigue siendo automatico y se liquida unicamente desde `Pagos`.
+- El responsable ya no se recuerda indefinidamente por tunel: se guarda por semana operativa y por motor. Una semana nueva inicia sin heredar el nombre anterior y exige confirmar el secador antes de crear la corrida.
+- Los motores activos devuelven `operator_name`, para conservar el responsable correcto durante una corrida ya iniciada.
+- `Secados guardados` muestra responsable, fecha de llenado, inicio, fin y duracion. Los finalizados incluyen `Corregir datos`; cambiar el responsable conserva el cierre y hace que la automatizacion reubique el pago pendiente.
+- Verificacion visual sin escrituras: Tunel 3 mostro MARGARO, 24/09 20:11 a 25/09 07:12, 11.0 h; Nomina > Secadora mostro su pago pendiente de $15.00.
+- Verificaciones: backend build + 48/48 tests y frontend build correctos.
 
 ### Servicio completo: herencia correcta al agregar a Secadoras (2026-09-25)
 

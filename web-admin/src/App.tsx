@@ -383,8 +383,8 @@ const NOMINA_GRUPO_TITULO: Record<NominaGrupo, { icono: string; titulo: string; 
     ayuda: "Piladores y operarios de planta. Los pagos se calculan solos con lo que sale de Producción, según las tarifas.",
     vacio: "No hay pagos de planta en el período. Se generan al cerrar cada pilada en Producción." },
   secadora: { icono: "🔥", titulo: "Secadora",
-    ayuda: "Secadores y guardianía. Cada registro es una corrida de secado (guardianía $ + $ por túnel).",
-    vacio: "No hay pagos de secadora en el período. Usa «Detectar de Secadora» para generarlos." },
+    ayuda: "Secadores y guardianía. Los pagos se generan automáticamente al iniciar/finalizar cada corrida (guardianía $ + $ por túnel).",
+    vacio: "No hay pagos de secadora en el período seleccionado." },
   cuadrilla: { icono: "👷‍♂️", titulo: "Cuadrilla",
     ayuda: "Estibadores y polvillo: se cobra por tulas y sacas movidas.",
     vacio: "No hay pagos de cuadrilla en el período." },
@@ -823,6 +823,7 @@ type MotorActiveReport = {
   rice_type: string | null;
   lot_code: string;
   accionista_name: string | null;
+  operator_name: string | null;
   dry_start_at: string | null;
   dry_end_at: string | null;
   filled_at: string | null;
@@ -1503,6 +1504,7 @@ const SUB_TABS: Record<string, Array<{ key: string; label: string }>> = {
   ],
   Nomina: [
     { key: "pagos", label: "Pagos" },
+    { key: "secadora", label: "Secadora" },
     { key: "cuadrilla", label: "Cuadrilla" },
     { key: "historial", label: "Historial de Pagos" },
     { key: "sueldo-admin", label: "Sueldo Administrativo" },
@@ -1628,12 +1630,18 @@ const motorDeSecadora = (name?: string | null): 1 | 2 => (String(name ?? "").inc
 const dryerOptions = MOTOR_SECADORAS[1].concat(MOTOR_SECADORAS[2]);
 // La secadora N seca en el túnel N (mismo número).
 const tunelDeSecadora = (name: string) => Number(String(name).replace(/[^\d]/g, "")) || 1;
-const secadorStorageKey = (tunnel: number) => `bascula-erp:secador-name:${tunnel}`;
-function getSavedSecadorName(tunnel: number): string | undefined {
-  try { return localStorage.getItem(secadorStorageKey(tunnel)) || undefined; } catch { return undefined; }
+function semanaOperativaKey(fecha = new Date()): string {
+  const inicio = new Date(fecha);
+  const offset = (inicio.getDay() + 6) % 7;
+  inicio.setDate(inicio.getDate() - offset);
+  return fechaLocalIso(inicio);
 }
-function saveSecadorName(tunnel: number, name: string) {
-  try { if (name.trim()) localStorage.setItem(secadorStorageKey(tunnel), name.trim()); } catch { /* ignore */ }
+const secadorStorageKey = (motor: 1 | 2) => `bascula-erp:secador-name:${semanaOperativaKey()}:motor-${motor}`;
+function getSavedSecadorName(motor: 1 | 2): string | undefined {
+  try { return localStorage.getItem(secadorStorageKey(motor)) || undefined; } catch { return undefined; }
+}
+function saveSecadorName(motor: 1 | 2, name: string) {
+  try { if (name.trim()) localStorage.setItem(secadorStorageKey(motor), name.trim().toUpperCase()); } catch { /* ignore */ }
 }
 const piladoPresentations = ["10 LB", "25 LB", "50 LB", "98 LB", "100 LB"];
 const PESO_PERSONALIZADO = "⚙️ Peso Personalizado / Pico";
@@ -8354,6 +8362,13 @@ export function App() {
     const fechaLlenadoMotor = motorFilledAt.trim() || undefined;
     const secadorMotor = String(form.get("secador_motor") ?? "").trim();
 
+    // Cada semana puede trabajar una persona distinta. Una corrida nueva nunca
+    // debe heredar silenciosamente el nombre de semanas anteriores.
+    if (conIngresos.length > 0 && secadorMotor.length < 2) {
+      addToast("Selecciona o escribe el secador responsable de esta semana antes de guardar.", "error");
+      return;
+    }
+
     // Candado: no se puede guardar nada en un túnel que está secando a otro
     // accionista (además del bloqueo visual del formulario).
     const bloqueada = conIngresos.find((s) => occupiedTunnels[tunelDeSecadora(s)]);
@@ -8374,11 +8389,11 @@ export function App() {
     // 1) El lote de cada secadora llena.
     let creados = 0;
     let sublotesCreados = 0;
+    if (secadorMotor) saveSecadorName(motorActivo, secadorMotor);
     for (const secadora of conIngresos) {
       const t = tunelDeSecadora(secadora);
       // El secador es de la corrida (motor), igual para todas las secadoras.
       const operatorName = secadorMotor;
-      if (operatorName) saveSecadorName(t, operatorName);
       const saved = await apiPost<{ reports: DryingTunnelReport[]; separated: boolean }>("/process-flow/drying/batch", {
         entry_ids: seleccionDe(secadora),
         lot_code: String(form.get(`lot_code_${t}`) ?? "").trim() || undefined,
@@ -8658,6 +8673,11 @@ export function App() {
     const form = new FormData(formElement);
     const startInput = formElement.elements.namedItem("dry_start_at") as HTMLInputElement | null;
     const endInput = formElement.elements.namedItem("dry_end_at") as HTMLInputElement | null;
+    const operatorName = String(form.get("operator_name") ?? "").trim();
+    if (operatorName.length < 2) {
+      addToast("Indica quién fue el secador responsable para registrar correctamente la nómina.", "error");
+      return;
+    }
     if (finalizar && (!startInput?.value || !endInput?.value)) {
       addToast("Completa la hora de inicio y la hora final antes de finalizar este secado.", "error");
       return;
@@ -8672,7 +8692,7 @@ export function App() {
       // después en un endpoint transaccional que conoce los demás túneles.
       finalize: false,
       dryer_name: report.dryer_name,
-      operator_name: String(form.get("operator_name") ?? "").trim(),
+      operator_name: operatorName,
       notes: form.get("notes") || undefined,
       botada_empaque: (form.get("botada_empaque") as string) || undefined,
       botada_sacos: numberOrUndefined(form.get("botada_sacos"))
@@ -11498,7 +11518,7 @@ export function App() {
                               <Input name="filled_at" label="Fecha de llenado" type="date" defaultValue={(rep.filled_at ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10)} required={false} />
                             </div>
                             <Input name="moisture_before" label="Humedad inicial %" type="number" defaultValue={String(rep.moisture_before ?? 0)} required={false} />
-                            <Input name="operator_name" label="Nombre del secador" placeholder="Quien seca este túnel (para la nómina)" defaultValue={rep.operator_name ?? ""} required={false} />
+                            <Input name="operator_name" label="Nombre del secador" placeholder="Quien seca este túnel (para la nómina)" defaultValue={rep.operator_name ?? ""} required />
                             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                               <Input name="dry_start_at" label="Hora secado inicio" type="datetime-local" defaultValue={dateTimeLocalValue(rep.dry_start_at)} required={false} />
                               <Input name="dry_end_at" label="Hora secado final" type="datetime-local" defaultValue={dateTimeLocalValue(rep.dry_end_at)} required={false} />
@@ -11592,12 +11612,12 @@ export function App() {
                   <Input
                     name="secador_motor"
                     label="👷 Secador (se aplica a todas las secadoras del motor)"
-                    placeholder="Quien seca esta corrida (para la nómina)"
-                    defaultValue={getSavedSecadorName(MOTOR_SECADORAS[motorActivo][0] ? tunelDeSecadora(MOTOR_SECADORAS[motorActivo][0]) : 1)}
-                    required={false}
+                    placeholder="Confirma el secador responsable de esta semana"
+                    defaultValue={motorActiveReports.find((report) => report.operator_name?.trim())?.operator_name ?? getSavedSecadorName(motorActivo)}
+                    required
                   />
                   <p className="muted" style={{ fontSize: 12, margin: "6px 0 0" }}>
-                    Estos tres datos son de la corrida completa: se aplican a todas las secadoras del motor. Solo la hora final se registra por separado en cada una.
+                    Semana del {semanaOperativaKey()}: confirma el responsable antes de iniciar la primera corrida. El nombre no se arrastra desde semanas anteriores. Solo la hora final se registra por separado en cada túnel.
                   </p>
                 </div>
                 <div className="panelGrid" style={{ gap: 16 }}>
@@ -17953,10 +17973,13 @@ export function App() {
                 )}
               </button>
               )}
-              {/* Producción (Cuadrilla, Historial): solo la matriz. La pestaña
-                  "🔥 Secadora" se eliminó: los pagos de secador se generan y pagan
-                  automáticamente desde Secadoras y aparecen directo en 💵 Pagos. */}
+              {/* Producción (Secadora, Cuadrilla, Historial): solo la matriz.
+                  Secadora es una vista de revisión; el pago sigue generándose
+                  automáticamente y se liquida desde Pagos. */}
               {esMatrizActiva && (<>
+              {puedeVerSubTab("Nomina", "secadora") && (
+              <button type="button" className={nominaView === "secadora" ? "active" : ""} onClick={() => setNominaView("secadora")}>🔥 Secadora</button>
+              )}
               {puedeVerSubTab("Nomina", "cuadrilla") && (
               <button type="button" className={nominaView === "cuadrilla" ? "active" : ""} onClick={() => { setNominaView("cuadrilla"); refreshCuadrilla().catch(() => undefined); }}>👷‍♂️ Cuadrilla</button>
               )}
@@ -17994,7 +18017,7 @@ export function App() {
                   .map(([label, v]) => (
 
                     <button key={label} type="button" title={`Ver ${label}`}
-                      onClick={() => { const g = label.toLowerCase() as NominaGrupo; if (g === "administrativo") { setNominaView("sueldo-admin"); return; } if (g === "planta" || g === "secadora") { setNominaView("pagos"); return; } setNominaView(g); if (g === "cuadrilla") refreshCuadrilla().catch(() => undefined); }}
+                      onClick={() => { const g = label.toLowerCase() as NominaGrupo; if (g === "administrativo") { setNominaView("sueldo-admin"); return; } if (g === "planta") { setNominaView("pagos"); return; } setNominaView(g); if (g === "cuadrilla") refreshCuadrilla().catch(() => undefined); }}
                       style={{ background: "rgba(255,255,255,.18)", border: "1px solid rgba(255,255,255,.12)", borderRadius: 10, padding: "7px 12px", textAlign: "right", cursor: "pointer", color: "#fff" }}>
                       <div style={{ fontSize: 11, opacity: 0.9, whiteSpace: "nowrap" }}>{label}</div>
                       <strong style={{ fontWeight: 800, fontSize: 16 }}>{money(v)}</strong>
@@ -21954,6 +21977,8 @@ function DryingReportsPanel({
         const done = report.status === "COMPLETED";
         const op = reportOpType(report);
         const esTendal = String(report.dry_method ?? "").toUpperCase() === "TENDAL" || (report.tunnel_number == null && !report.dryer_name);
+        const horas = Number(report.drying_hours);
+        const duracion = Number.isFinite(horas) && horas > 0 ? `${horas.toFixed(1)} h` : "Pendiente";
         return (
         <article className="dryingReportCard" key={report.id} style={{ display: "block" }}>
           {/* Cabecera: estado (pill de color) + tipo de operación (badge) + acción. */}
@@ -21973,16 +21998,20 @@ function DryingReportsPanel({
                 {sharingId === report.id ? "⏳…" : "📲 Compartir"}
               </button>
             )}
-            {!done && <button type="button" onClick={() => onEdit(report)}>Editar</button>}
+            <button type="button" onClick={() => onEdit(report)}>{done ? "Corregir datos" : "Editar"}</button>
           </div>
           {/* Datos clave en grid: lectura rápida, sin bloque de texto plano. */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(96px, 1fr))", gap: 8, marginBottom: 8 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))", gap: 8, marginBottom: 8 }}>
             {([
               ["Peso", `${Number(report.total_quintals ?? 0).toFixed(2)} QQ`],
               ["Lotes", String(report.lots.length)],
-              ["Túnel", String(report.tunnel_number)],
+              ["Túnel", esTendal ? "Patio" : String(report.tunnel_number)],
               ["Secadora", report.dryer_name ?? "—"],
-              ["Secador", report.operator_name || "—"],
+              ["Secador responsable", report.operator_name || "No asignado"],
+              ["Fecha de llenado", fmtFechaHoraSecado(report.filled_at, "No registrada")],
+              ["Inicio del secado", fmtFechaHoraSecado(report.dry_start_at)],
+              ["Fin del secado", fmtFechaHoraSecado(report.dry_end_at, done ? "No registrado" : "En proceso")],
+              ["Duración", duracion],
               ["Variedad", report.rice_type === "CORRIENTE" ? "Corriente" : "0.11"]
             ] as [string, string][]).map(([k, v]) => (
               <div key={k} style={{ background: "var(--c-surface-2, #f8fafc)", border: "1px solid var(--c-border, #e5e7eb)", borderRadius: 8, padding: "6px 8px" }}>
@@ -22485,6 +22514,19 @@ function dateTimeLocalValue(value: string | null | undefined) {
   if (Number.isNaN(date.getTime())) return "";
   const offsetDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
   return offsetDate.toISOString().slice(0, 16);
+}
+
+function fmtFechaHoraSecado(value: string | null | undefined, pendiente = "Pendiente") {
+  if (!value) return pendiente;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return pendiente;
+  return date.toLocaleString("es-EC", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 }
 
 /** Hora corta HH:MM para reportes (ej. hora de secado). "—" si no hay dato. */

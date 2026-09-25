@@ -472,7 +472,7 @@ processFlowRouter.get("/drying/motor/:motor/active", asyncRoute(async (req, res)
   const motor = Number(req.params.motor);
   if (motor !== 1 && motor !== 2) throw new ApiError(400, "Motor inválido");
   const result = await pool.query(
-    `SELECT d.id, d.tunnel_number, d.dryer_name, d.total_quintals, d.rice_type, d.status,
+    `SELECT d.id, d.tunnel_number, d.dryer_name, d.total_quintals, d.rice_type, d.status, d.operator_name,
             d.dry_start_at, d.dry_end_at, d.filled_at,
             l.lot_code, a.name AS accionista_name
      FROM drying_tunnel_reports d
