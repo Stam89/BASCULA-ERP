@@ -5,6 +5,7 @@
  * Recalcula cada cierre con las MISMAS funciones que usa el cierre real
  * (calcularPagoCuadrillaTendal / calcularCobroTendal en process-flow.ts):
  *   · Nómina: A granel → actividad "SECADO EN TENDAL"; Ensacado → "TENDAL POR SACO".
+ *     SIEMPRE × QUINTALES. Detecta los pagos viejos calculados × número de sacos.
  *   · CxC:    A granel → "Secado A Granel"; En saco → "Secado En Saco".
  *
  * Seguridad:
@@ -80,12 +81,14 @@ async function main() {
           [e.id, pago.activity.id, pago.activity.name, pago.cantidad, pago.unitRate, pago.subtotal,
            `Secado en tendal (${pago.modoLabel}) - Lote ${t.lot_code} - ${pago.cantidad} ${pago.unidad}`]
         );
+        const sacos = t.recepcion_sacos != null ? Number(t.recepcion_sacos) : 0;
+        const eraPorSacos = pago.esEnsacado && sacos > 0 && e.q === sacos && sacos !== pago.cantidad;
         await client.query(
           `UPDATE drying_tunnel_cuadrilla SET activity_id = $2, quintals = $3
            WHERE drying_report_id = $1 AND momento = 'VACIADO' AND upper(btrim(worker_name)) = 'CUADRILLA'`,
           [t.id, pago.activity.id, pago.cantidad]
         );
-        hallazgos.push({ lote: t.lot_code, tipo: "NOMINA", accion: "CORREGIDO", antes, despues });
+        hallazgos.push({ lote: t.lot_code, tipo: "NOMINA", accion: eraPorSacos ? "CORREGIDO (se había calculado × sacos, no × QQ)" : "CORREGIDO", antes, despues });
       }
 
       // ── CxC al cliente ─────────────────────────────────────────────────

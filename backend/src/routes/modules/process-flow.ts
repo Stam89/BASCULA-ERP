@@ -1260,7 +1260,8 @@ export async function resolveTendalActivity(
 // ── Reglas de NÓMINA y COBRO del TENDAL (fuente única: cierre + auditoría) ──
 // Solo aplican al Tendal; los túneles NO pasan por aquí.
 //   · Nómina (cuadrilla): A GRANEL → actividad "SECADO EN TENDAL" × QQ;
-//     ENSACADO → actividad "TENDAL POR SACO" × sacos (o QQ si no hay sacos).
+//     ENSACADO → actividad "TENDAL POR SACO" × QQ. SIEMPRE por PESO (quintales),
+//     NUNCA por número de sacos/bultos (los sacos solo se anotan como dato).
 //     La tarifa sale SIEMPRE de la tabla de actividades de Cuadrilla (efectiva
 //     por socio). El viejo campo labor_rates.tendal_per_qq ya no se usa.
 //   · Cobro (CxC): A GRANEL → "Secado A Granel / Directo a Producción";
@@ -1273,7 +1274,9 @@ export async function calcularPagoCuadrillaTendal(
   const esEnsacado = String(opts.recepcionEmpaque ?? "").toUpperCase() === "SACOS";
   const activity = await resolveTendalActivity(client, esEnsacado ? "ENSACADO" : "GRANEL", opts.accionistaId ?? null);
   const sacos = Number(opts.recepcionSacos) || 0;
-  const cantidad = esEnsacado ? (sacos > 0 ? sacos : opts.totalQuintals) : opts.totalQuintals;
+  // Regla de negocio: el pago es por PESO. Antes, ensacado multiplicaba por el
+  // número de sacos entregados (ej. 15 sacos × $2) → bug corregido.
+  const cantidad = round2(Number(opts.totalQuintals) || 0);
   const unitRate = Number(activity.unit_rate);
   return {
     esEnsacado,
@@ -1281,7 +1284,7 @@ export async function calcularPagoCuadrillaTendal(
     cantidad,
     unitRate,
     subtotal: round2(cantidad * unitRate),
-    unidad: esEnsacado ? "Sacos" : "Quintales",
+    unidad: esEnsacado && sacos > 0 ? `Quintales (${sacos} sacos)` : "Quintales",
     modoLabel: esEnsacado ? "Ensacado" : "A granel"
   };
 }

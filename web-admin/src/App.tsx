@@ -20338,8 +20338,8 @@ export function App() {
                     return (
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                         <div className="muted" style={{ fontSize: 13 }}>A granel → <strong>SECADO EN TENDAL</strong>: {tarifa("SECADO EN TENDAL")} x QQ</div>
-                        <div className="muted" style={{ fontSize: 13 }}>Ensacado → <strong>TENDAL POR SACO</strong>: {tarifa("TENDAL POR SACO")} x saco</div>
-                        <small className="muted" style={{ gridColumn: "1 / -1" }}>Estas tarifas (y las demás maniobras) se editan en «Actividades y tarifas» de cuadrilla, más abajo en esta misma pestaña.</small>
+                        <div className="muted" style={{ fontSize: 13 }}>Ensacado → <strong>TENDAL POR SACO</strong>: {tarifa("TENDAL POR SACO")} x QQ</div>
+                        <small className="muted" style={{ gridColumn: "1 / -1" }}>Ambas se pagan por PESO (quintales secados), nunca por número de sacos. Estas tarifas (y las demás maniobras) se editan en «Actividades y tarifas» de cuadrilla, más abajo en esta misma pestaña.</small>
                       </div>
                     );
                   })()}

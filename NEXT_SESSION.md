@@ -49,6 +49,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Fix: nomina de Tendal ensacado SIEMPRE por QQ (2026-09-24)
+
+- Bug: `calcularPagoCuadrillaTendal` en ensacado multiplicaba la tarifa "TENDAL POR SACO" por el numero de sacos entregados (ej. 15 sacos x $2 = $30). Regla correcta: nomina SIEMPRE por peso: granel -> "SECADO EN TENDAL" x QQ; ensacado -> "TENDAL POR SACO" x QQ. Los sacos quedan solo en la nota ("21.6 Quintales (15 sacos)"); `drying_tunnel_cuadrilla.quintals` ahora recibe QQ.
+- CxC del Tendal ya era por QQ (sin cambios). Tuneles sin cambios.
+- `audit:tendales` marca estos casos como "se habia calculado x sacos, no x QQ".
+- Verificado en BEGIN...ROLLBACK con los 2 tendales reales: 00002 ensacado (15 sacos, 21.6 QQ) nomina $43.20 + CxC $48.60; 00001 granel $113.10 + $131.95; auditoria = cierre.
+
 ### Tendal: nomina por actividades de cuadrilla + auditoria (2026-09-24)
 
 - REVIERTE parte de la entrada "Fix: tarifas del cierre de Tendal": el usuario pidio que la nomina del Tendal salga SIEMPRE de la tabla de actividades de Cuadrilla: A granel -> `SECADO EN TENDAL`; Ensacado -> `TENDAL POR SACO`. `labor_rates.tendal_per_qq` ya no se usa (columna y clave API intactas; se quito su input de la UI y se muestra un resumen de solo lectura de ambas actividades).
