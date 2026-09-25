@@ -1233,7 +1233,7 @@ processFlowRouter.post("/lots/:lotId/link", asyncRoute(async (req, res) => {
 //   · ENSACADO → tarifa "TENDAL POR SACO"  (se paga por saco).
 // Búsqueda por string EXACTO y, si no aparece, por LIKE. Como último recurso se
 // crea/usa el placeholder "SECADO EN TENDAL" para no dejar el secado sin labor.
-async function resolveTendalActivity(
+export async function resolveTendalActivity(
   client: PoolClient,
   mode: "GRANEL" | "ENSACADO",
   accionistaId?: string | null
@@ -1257,6 +1257,72 @@ async function resolveTendalActivity(
   return { id: created.rows[0].id, name: created.rows[0].name, unit_rate: Number(created.rows[0].unit_rate) };
 }
 
+// ── Reglas de NÓMINA y COBRO del TENDAL (fuente única: cierre + auditoría) ──
+// Solo aplican al Tendal; los túneles NO pasan por aquí.
+//   · Nómina (cuadrilla): A GRANEL → actividad "SECADO EN TENDAL" × QQ;
+//     ENSACADO → actividad "TENDAL POR SACO" × sacos (o QQ si no hay sacos).
+//     La tarifa sale SIEMPRE de la tabla de actividades de Cuadrilla (efectiva
+//     por socio). El viejo campo labor_rates.tendal_per_qq ya no se usa.
+//   · Cobro (CxC): A GRANEL → "Secado A Granel / Directo a Producción";
+//     EN SACO → "Secado En Saco" (si está en 0, la de granel). Ambas de
+//     Configuración → Tarifas de Servicios. Las dos reglas son independientes.
+export async function calcularPagoCuadrillaTendal(
+  client: PoolClient,
+  opts: { recepcionEmpaque: string | null; recepcionSacos: number | null; totalQuintals: number; accionistaId?: string | null }
+) {
+  const esEnsacado = String(opts.recepcionEmpaque ?? "").toUpperCase() === "SACOS";
+  const activity = await resolveTendalActivity(client, esEnsacado ? "ENSACADO" : "GRANEL", opts.accionistaId ?? null);
+  const sacos = Number(opts.recepcionSacos) || 0;
+  const cantidad = esEnsacado ? (sacos > 0 ? sacos : opts.totalQuintals) : opts.totalQuintals;
+  const unitRate = Number(activity.unit_rate);
+  return {
+    esEnsacado,
+    activity,
+    cantidad,
+    unitRate,
+    subtotal: round2(cantidad * unitRate),
+    unidad: esEnsacado ? "Sacos" : "Quintales",
+    modoLabel: esEnsacado ? "Ensacado" : "A granel"
+  };
+}
+
+// Espejo EXACTO de la rama Tendal de autoCobrarSecadoServicio, para AUDITAR
+// cobros ya emitidos (esa función la comparten los túneles y no se toca).
+// Devuelve null si el tendal no genera cobro (no es Solo Secado o sin QQ).
+export async function calcularCobroTendal(client: PoolClient, dryingReportId: string) {
+  const r = await client.query(
+    `SELECT d.lot_id, d.recepcion_empaque, l.lot_code, l.operation_type, l.farmer_id, l.accionista_id,
+            COALESCE((SELECT SUM(t.quintals) FROM weighing_tickets t WHERE t.lot_id = l.id), 0)::float AS qq
+     FROM drying_tunnel_reports d
+     JOIN lots l ON l.id = d.lot_id
+     WHERE d.id = $1 AND upper(COALESCE(d.dry_method, '')) = 'TENDAL'`,
+    [dryingReportId]
+  );
+  if (!r.rowCount) return null;
+  const row = r.rows[0];
+  if (String(row.operation_type ?? "").toUpperCase() !== "SECADO") return null;
+  const qq = round2(Number(row.qq) || 0);
+  if (qq <= 0) return null;
+  const rates = await getRates(client, row.accionista_id ?? null);
+  const enSaco = String(row.recepcion_empaque ?? "").toUpperCase() === "SACOS";
+  const rateGranel = Number(rates.secado_servicio_per_qq ?? 0);
+  const rateSaco = Number(rates.secado_servicio_saco_per_qq ?? 0);
+  const rate = enSaco && rateSaco > 0 ? rateSaco : rateGranel;
+  const farmerName = row.farmer_id
+    ? ((await client.query("SELECT full_name FROM farmers WHERE id = $1", [row.farmer_id])).rows[0]?.full_name ?? "cliente de servicio")
+    : "cliente de servicio";
+  return {
+    lotId: String(row.lot_id),
+    lotCode: String(row.lot_code),
+    farmerId: row.farmer_id as string | null,
+    qq,
+    enSaco,
+    rate,
+    monto: round2(qq * rate),
+    description: `Servicio de Secado en Tendal (${enSaco ? "en saco" : "a granel"}) - Lote ${row.lot_code} (${qq} QQ × $${rate}) - ${farmerName}`
+  };
+}
+
 // Pago a la CUADRILLA por un secado en TENDAL. Se ejecuta SOLO al FINALIZAR el
 // tendal (no al guardarlo en proceso), para soportar el secado multi-día. Es
 // IDEMPOTENTE: si el tendal ya tiene su cobro registrado, no duplica. Lanza un
@@ -1273,22 +1339,7 @@ async function registrarPagoCuadrillaTendal(
   if (yaCobrado.rowCount) return; // idempotente
   const esEnsacado = String(opts.recepcionEmpaque ?? "").toUpperCase() === "SACOS";
   try {
-    const tendalAct = await resolveTendalActivity(client, esEnsacado ? "ENSACADO" : "GRANEL", opts.accionistaId ?? null);
-    // Tarifa de CUADRILLA (nunca la de servicio al cliente). A granel manda el campo
-    // "Secado en Tendal (Cuadrilla) $ x QQ" de Configuración (labor_rates.tendal_per_qq,
-    // efectivo por socio); antes se guardaba pero se ignoraba y se usaba la actividad
-    // del catálogo. Si ese campo está en 0 se conserva la tarifa del catálogo
-    // (compatibilidad). Ensacado se sigue pagando por saco con "TENDAL POR SACO".
-    let unitRate = tendalAct.unit_rate;
-    if (!esEnsacado) {
-      const rates = await getRates(client, opts.accionistaId ?? null);
-      if (Number(rates.tendal_per_qq) > 0) unitRate = Number(rates.tendal_per_qq);
-    }
-    const sacos = Number(opts.recepcionSacos) || 0;
-    const cantidad = esEnsacado ? (sacos > 0 ? sacos : opts.totalQuintals) : opts.totalQuintals;
-    const unidad = esEnsacado ? "Sacos" : "Quintales";
-    const modoLabel = esEnsacado ? "Ensacado" : "A granel";
-    const subtotal = round2(cantidad * unitRate);
+    const { activity: tendalAct, cantidad, unitRate, subtotal, unidad, modoLabel } = await calcularPagoCuadrillaTendal(client, opts);
     await client.query(
       `INSERT INTO drying_tunnel_cuadrilla (drying_report_id, worker_name, activity_id, quintals, momento, created_by)
        VALUES ($1, 'CUADRILLA', $2, $3, 'VACIADO', $4)`,

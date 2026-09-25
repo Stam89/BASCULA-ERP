@@ -20326,10 +20326,23 @@ export function App() {
                     <label><span>$ por túnel secado</span><input type="number" step="0.5" min="0" disabled={!isAdmin} value={laborRatesForm.secador_per_tunel} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secador_per_tunel: Number(e.target.value) })} /></label>
                   </div>
                   <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>☀️ Cuadrilla / Secado en Tendal</h2>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10 }}>
-                    <label><span>Secado en Tendal (Cuadrilla) $ x QQ</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.tendal_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, tendal_per_qq: Number(e.target.value) })} /></label>
-                    <small className="muted" style={{ marginTop: -4 }}>Pago a la cuadrilla por el tendal a granel. El tendal ensacado y las demás maniobras se pagan con las actividades de cuadrilla de abajo (ej. «TENDAL POR SACO»).</small>
-                  </div>
+                  {/* El pago del TENDAL sale de la tabla de actividades de cuadrilla (abajo):
+                      A granel → "SECADO EN TENDAL"; Ensacado → "TENDAL POR SACO". El viejo
+                      campo tendal_per_qq ya no se usa: se retiró de la vista (la clave sigue
+                      en la BD y en el API, intacta) para no editar algo que no aplica. */}
+                  {(() => {
+                    const tarifa = (nombre: string) => {
+                      const a = cuadActivities.find((x) => x.name.trim().toUpperCase() === nombre);
+                      return a ? `$${Number(a.unit_rate).toFixed(2)}` : "sin configurar";
+                    };
+                    return (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                        <div className="muted" style={{ fontSize: 13 }}>A granel → <strong>SECADO EN TENDAL</strong>: {tarifa("SECADO EN TENDAL")} x QQ</div>
+                        <div className="muted" style={{ fontSize: 13 }}>Ensacado → <strong>TENDAL POR SACO</strong>: {tarifa("TENDAL POR SACO")} x saco</div>
+                        <small className="muted" style={{ gridColumn: "1 / -1" }}>Estas tarifas (y las demás maniobras) se editan en «Actividades y tarifas» de cuadrilla, más abajo en esta misma pestaña.</small>
+                      </div>
+                    );
+                  })()}
                   <button className="primary" disabled={!isAdmin}>Guardar tarifas</button>
                   {!isAdmin && <p className="muted">Solo un administrador puede cambiar las tarifas.</p>}
                   </details>

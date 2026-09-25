@@ -49,6 +49,15 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Tendal: nomina por actividades de cuadrilla + auditoria (2026-09-24)
+
+- REVIERTE parte de la entrada "Fix: tarifas del cierre de Tendal": el usuario pidio que la nomina del Tendal salga SIEMPRE de la tabla de actividades de Cuadrilla: A granel -> `SECADO EN TENDAL`; Ensacado -> `TENDAL POR SACO`. `labor_rates.tendal_per_qq` ya no se usa (columna y clave API intactas; se quito su input de la UI y se muestra un resumen de solo lectura de ambas actividades).
+- Fuente unica: `calcularPagoCuadrillaTendal` (exportada) la usan el cierre (`registrarPagoCuadrillaTendal`) y la auditoria. CxC del Tendal sin cambios (granel/saco por Servicios); `calcularCobroTendal` es un espejo de la rama Tendal de `autoCobrarSecadoServicio` solo para auditar. `autoCobrarSecadoServicio` y todo lo de tuneles NO se toco (los tuneles siguen decidiendo por `botada_empaque`, como se pidio en b0f8019).
+- Script `npm run audit:tendales` (backend/src/scripts/auditar-tendales.ts): SIMULACION por defecto (ROLLBACK); `-- --aplicar` hace COMMIT en una transaccion. No toca pagos con `paid_at` ni CxC cobradas; en cobro parcial conserva lo cobrado. Precarga `ensureLaborTables()` antes del BEGIN.
+- Verificado en BEGIN...ROLLBACK: granel nomina $113.10 (1.50) + CxC $131.95 (1.75); ensacado $100 (2.00x50) + CxC $169.65 (2.25); la auditoria coincide con el cierre (0 diferencias).
+- Simulacion sobre datos reales: nomina del tendal 00001-23-09-26-S correcta; su CxC $113.10 se emitio a $1.50 y la tarifa actual es $1.75 -> NO se aplico (re-cobrar con tarifa posterior es decision del usuario).
+- Verificaciones: backend build, 44/44 tests, frontend build y lint 0 errores.
+
 ### Configuracion: Nomina (egresos) separada de Servicios (ingresos) (2026-09-24)
 
 - Solo UI (App.tsx); sin cambios de backend ni de claves de BD. Los 14 campos de `labor_rates` siguen existiendo una sola vez y todos guardan con el mismo `saveLaborRates` (estado compartido `laborRatesForm`).

@@ -13,7 +13,8 @@
     "db:migrate": "tsx src/scripts/migrate.ts",
     "db:seed": "tsx src/scripts/seed.ts",
     "db:company:init": "tsx src/scripts/init-company.ts",
-    "preflight": "tsx src/scripts/preflight.ts"
+    "preflight": "tsx src/scripts/preflight.ts",
+    "audit:tendales": "tsx src/scripts/auditar-tendales.ts"
   },
   "dependencies": {
     "@types/multer": "^2.1.0",
