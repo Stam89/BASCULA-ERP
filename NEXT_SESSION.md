@@ -7,7 +7,7 @@ Actualizado: 2026-09-25
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: secador semanal unico para los tres tuneles, con reemplazo permitido durante la semana.
+- Ultimo cambio funcional: pagos de Secador solo de lunes a viernes; fines de semana opera el dueno sin nomina.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,14 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Nomina de Secador solo de lunes a viernes (2026-09-25)
+
+- Sabado y domingo se guardan y finalizan normalmente los secados, pero no generan guardiania ni pago por tunel para el rol `SECADOR`.
+- La restriccion vive en backend y cubre los tres caminos: automatizacion de Secadoras, sugerencias detectadas y alta manual de dias del secador.
+- Si una version anterior hubiera dejado un pago automatico pendiente de fin de semana, al reprocesar esa corrida se elimina; los pagos ya liquidados nunca se tocan.
+- Revision de datos reales en solo lectura: no existen pagos historicos de Secador en sabado o domingo.
+- Pruebas de calendario lunes-domingo agregadas; backend build correcto y 56/56 tests aprobados.
 
 ### Secador de turno semanal compartido por toda la planta (2026-09-25)
 

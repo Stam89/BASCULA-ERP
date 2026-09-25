@@ -7,6 +7,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { estibadorBaseFromTulas } from "../../utils/money.js";
+import { esDiaPagableSecador } from "../../utils/secador-workday.js";
 
 export const laborRouter = Router();
 
@@ -714,6 +715,7 @@ laborRouter.get("/secador-suggestions", asyncRoute(async (req, res) => {
        ) AS already_generated
      FROM corrida_workers cw
      JOIN corrida_tunnels ct ON cw.work_date = ct.work_date
+     WHERE EXTRACT(ISODOW FROM cw.work_date) BETWEEN 1 AND 5
      ORDER BY cw.work_date DESC`,
     [from, to]
   ).catch(() => ({ rows: [] as Array<{ worker_name: string; work_date: string; tunnels: number; dia_inicio: string; dia_fin: string; dias_corrida: number; already_generated: boolean }> }));
@@ -744,6 +746,11 @@ laborRouter.post("/secador-days", asyncRoute(async (req, res) => {
   }).parse(req.body);
   const user = (req as AuthenticatedRequest).user;
   const rates = await getRates(pool, (req as AuthenticatedRequest).accionistaId);
+
+  const weekend = body.days.find((day) => !esDiaPagableSecador(day.work_date));
+  if (weekend) {
+    throw new ApiError(400, `No se generan pagos de secador sábado ni domingo (${weekend.work_date}).`);
+  }
 
   const created = await inTransaction(async (client) => {
     let count = 0;

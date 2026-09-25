@@ -20,6 +20,7 @@ import { upsertCuadrillaSecadoraEntry, autoGenerarPagosCuadrillaDeSecado, getEff
 import { getMatrizId } from "../../services/matriz.js";
 import { getRates } from "./labor.js";
 import { loteEsMaquila } from "../../utils/maquila.js";
+import { esDiaPagableSecador } from "../../utils/secador-workday.js";
 
 export const processFlowRouter = Router();
 
@@ -209,6 +210,22 @@ export async function autoGenerarPagoSecador(client: PoolClient, dryingReportId:
   const worker = String(rep.operator_name ?? "").trim();
   if (!worker) return; // sin secador asignado: no hay a quién pagar.
   const workDate = toDateOnly(rep.work_date) ?? new Date().toISOString().slice(0, 10);
+
+  // El dueño cubre guardianía y secado los sábados y domingos. El reporte y el
+  // proceso industrial se conservan intactos; únicamente se impide la nómina.
+  // Si una corrección vuelve a ejecutar la automatización, limpia cualquier fila
+  // automática PENDIENTE que una versión anterior hubiera creado ese fin de semana.
+  if (!esDiaPagableSecador(workDate)) {
+    await client.query(
+      `DELETE FROM worker_payments
+        WHERE worker_role = 'SECADOR'
+          AND work_date = $1::date
+          AND status = 'PENDING'
+          AND reference_type = 'drying_report'`,
+      [workDate]
+    );
+    return;
+  }
 
   // Túneles distintos YA finalizados de esta CORRIDA (misma fecha de llenado) y
   // mismo secador → una sola guardianía + $/túnel por los túneles hechos.
