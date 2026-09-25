@@ -19,6 +19,7 @@ import {
 import { upsertCuadrillaSecadoraEntry, autoGenerarPagosCuadrillaDeSecado, getEffectiveCuadrillaActivityByName } from "./cuadrilla.js";
 import { getMatrizId } from "../../services/matriz.js";
 import { getRates } from "./labor.js";
+import { loteEsMaquila } from "../../utils/maquila.js";
 
 export const processFlowRouter = Router();
 
@@ -415,6 +416,10 @@ processFlowRouter.get("/drying/reports", asyncRoute(async (req, res) => {
             ) OR EXISTS (
               SELECT 1 FROM processing_batches b2 WHERE b2.drying_report_id = d.id AND b2.finished_at IS NULL AND b2.status <> 'CANCELLED'
             )) AS has_draft,
+            -- Tipo del LOTE PRINCIPAL del secado (el que se pila): fuente de la
+            -- herencia "¿es Servicio de Pilada (maquila)?" en Producción.
+            (SELECT lp.operation_type FROM lots lp WHERE lp.id = d.lot_id) AS lot_operation_type,
+            (SELECT lp.is_maquila FROM lots lp WHERE lp.id = d.lot_id) AS lot_is_maquila,
             COALESCE(
               jsonb_agg(
                 jsonb_build_object(
@@ -440,7 +445,17 @@ processFlowRouter.get("/drying/reports", asyncRoute(async (req, res) => {
      LIMIT 100`,
     [accionistaId]
   );
-  res.json(result.rows);
+  // Herencia desde Báscula: Producción ya NO pregunta si es maquila; lo recibe.
+  // es_maquila_mixto avisa si la secadora mezcla lotes propios y de servicio.
+  res.json(result.rows.map((row) => {
+    const lots = Array.isArray(row.lots) ? (row.lots as Array<{ operation_type?: string; is_maquila?: boolean }>) : [];
+    const tipos = new Set(lots.map((lot) => loteEsMaquila(lot)));
+    return {
+      ...row,
+      es_maquila: loteEsMaquila({ operation_type: row.lot_operation_type, is_maquila: row.lot_is_maquila }),
+      es_maquila_mixto: tipos.size > 1
+    };
+  }));
 }));
 
 // Secados activos (sin finalizar) de un motor, de TODOS los accionistas: el

@@ -30,6 +30,8 @@ export type Warehouse = {
 
 export type Lot = {
   id: string;
+  /** Herencia de Báscula (API /lots/dry-in-storage): ¿es Servicio de Pilada (maquila)? */
+  es_maquila?: boolean;
   farmer_id: string;
   lot_code: string;
   farmer_name: string | null;

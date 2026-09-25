@@ -5,6 +5,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { loteEsMaquila } from "../../utils/maquila.js";
 
 export const lotsRouter = Router();
 
@@ -222,7 +223,8 @@ lotsRouter.get("/dry-in-storage", asyncRoute(async (req, res) => {
      LIMIT 500`,
     [accionistaId]
   );
-  res.json(result.rows);
+  // Herencia desde Báscula: Producción recibe si el lote es maquila (no lo pregunta).
+  res.json(result.rows.map((row) => ({ ...row, es_maquila: loteEsMaquila(row) })));
 }));
 
 // Lotes de SERVICIO (maquila) ya secados y disponibles para cobrar SOLO el

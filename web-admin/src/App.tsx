@@ -763,6 +763,10 @@ type ProcessReport = {
 type DryingTunnelReport = {
   id: string;
   lot_id: string;
+  /** Herencia de Báscula (API): el lote que se pila es Servicio de Pilada (maquila). */
+  es_maquila?: boolean;
+  /** La secadora mezcla lotes propios y de servicio (dato antiguo): solo aviso. */
+  es_maquila_mixto?: boolean;
   tunnel_number: number;
   rice_type: string;
   input_weight_kg: string | number;
@@ -3260,12 +3264,20 @@ export function App() {
       const m = o.is_maquila;
       return m === true || m === 1 || m === "t" || m === "true";
     };
-    if (productionSource === "stock") return selectedStockLot ? esServicioLot(selectedStockLot) : false;
-    return (selectedProductionDrying?.lots ?? []).some(esServicioLot);
+    // HERENCIA DESDE BÁSCULA: la API ya dice si el lote es maquila (es_maquila).
+    // La deducción local solo cubre respuestas antiguas sin ese campo.
+    if (productionSource === "stock") {
+      if (!selectedStockLot) return false;
+      return typeof selectedStockLot.es_maquila === "boolean" ? selectedStockLot.es_maquila : esServicioLot(selectedStockLot);
+    }
+    if (!selectedProductionDrying) return false;
+    return typeof selectedProductionDrying.es_maquila === "boolean"
+      ? selectedProductionDrying.es_maquila
+      : (selectedProductionDrying.lots ?? []).some(esServicioLot);
   }, [productionSource, selectedStockLot, selectedProductionDrying]);
-  // Auto-marca el checkbox de maquila según el tipo del lote seleccionado. Se
-  // re-evalúa al cambiar de origen/lote; el usuario puede desmarcarlo/marcarlo a
-  // mano después (el checkbox es la fuente de verdad al finalizar).
+  // El checkbox de maquila REFLEJA lo heredado de Báscula (no se edita a mano).
+  // Se re-evalúa al cambiar de origen/lote. El backend, al finalizar, vuelve a
+  // derivarlo del tipo del lote, así que el valor de pantalla no puede alterarlo.
   const millingLoteKey = productionSource === "stock" ? (selectedStockLot?.id ?? "") : (selectedProductionDrying?.id ?? "");
   useEffect(() => {
     setEsMaquilaProduccion(millingEsServicio);
@@ -13027,20 +13039,32 @@ export function App() {
                 </>
               )}
 
-              {/* Servicio de Pilada (Maquila): se auto-marca según el tipo del lote,
-                  pero el usuario puede forzarlo. Si queda marcado al Finalizar, el
+              {/* Servicio de Pilada (Maquila): HEREDADO de Báscula. Se marca solo según
+                  el tipo con que ingresó el lote y está BLOQUEADO (no se puede alterar la
+                  naturaleza fiscal/operativa del lote). Si es maquila, al Finalizar el
                   arroz NO entra al stock comercial (va a custodia + Cobro por Servicio). */}
-              <label style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, padding: "10px 12px", borderRadius: 8,
-                background: esMaquilaProduccion ? "#eff6ff" : "#f8fafc", border: `1.5px solid ${esMaquilaProduccion ? "#2563eb" : "#e2e8f0"}`, cursor: "pointer" }}>
-                <input type="checkbox" checked={esMaquilaProduccion} onChange={(e) => setEsMaquilaProduccion(e.target.checked)}
+              <label title="Se hereda del tipo de operación con que el lote ingresó en Báscula; no se puede cambiar aquí."
+                style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, padding: "10px 12px", borderRadius: 8,
+                background: esMaquilaProduccion ? "#eff6ff" : "#f8fafc", border: `1.5px solid ${esMaquilaProduccion ? "#2563eb" : "#e2e8f0"}`, cursor: "not-allowed" }}>
+                <input type="checkbox" checked={esMaquilaProduccion} disabled readOnly
                   style={{ width: 18, height: 18, accentColor: "#2563eb" }} />
                 <span style={{ fontWeight: 700, color: esMaquilaProduccion ? "#1d4ed8" : "#475569" }}>
                   🔧 Es Servicio de Pilada (Maquila)
                 </span>
-                {esMaquilaProduccion && (
-                  <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 800, color: "#fff", background: "#2563eb", borderRadius: 6, padding: "3px 8px" }}>SERVICIO PILADA</span>
-                )}
+                <span style={{ marginLeft: "auto", display: "inline-flex", gap: 6, alignItems: "center" }}>
+                  {millingSource && (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#475569", background: "#e2e8f0", borderRadius: 6, padding: "3px 8px" }}>🔒 Heredado de Báscula</span>
+                  )}
+                  {esMaquilaProduccion && (
+                    <span style={{ fontSize: 11, fontWeight: 800, color: "#fff", background: "#2563eb", borderRadius: 6, padding: "3px 8px" }}>SERVICIO PILADA</span>
+                  )}
+                </span>
               </label>
+              {productionSource !== "stock" && selectedProductionDrying?.es_maquila_mixto && (
+                <p className="muted" style={{ fontSize: 12, margin: "6px 0 0", color: "#b45309" }}>
+                  ⚠️ Esta secadora mezcla lotes propios y de servicio (registro antiguo). Se aplica el tipo del lote principal; si no corresponde, corrige el tipo de servicio en Secadoras.
+                </p>
+              )}
               {esMaquilaProduccion && (
                 <p className="muted" style={{ fontSize: 12, margin: "6px 0 0", color: "#1d4ed8" }}>
                   ℹ️ El grano es del cliente: el arroz blanco y subproductos NO suman al Stock Comercial; se registran en custodia de terceros y se genera un <strong>Cobro por Servicio</strong> (tarifa × QQ) en «Gana · Serv. Pilada» y Cuentas por Cobrar.

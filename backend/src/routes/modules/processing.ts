@@ -13,6 +13,7 @@ import { getMatrizId } from "../../services/matriz.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { createProductionWorkerPayments } from "./labor.js";
 import { loteAfectaInventarioPropio } from "../../services/patrimonial-inventory.js";
+import { loteEsMaquila, tipoOperacionFijado } from "../../utils/maquila.js";
 
 export const processingRouter = Router();
 
@@ -487,7 +488,13 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
     // qué accionista tenga seleccionado el usuario que cierra la pilada.
     const accionistaId = batch.lot_accionista_id;
 
-    const isMaquila = body.is_maquila || batch.ownership === "MAQUILA" || batch.lot_is_maquila;
+    // HERENCIA DESDE BÁSCULA: si el lote tiene tipo de operación, ÉL decide si es
+    // Servicio de Pilada (maquila) — el operador ya no puede cambiarlo a mano (ni
+    // marcar como maquila arroz PROPIO, ni al revés). Solo los lotes antiguos sin
+    // tipo conservan la regla anterior (checkbox / ownership / bandera del lote).
+    const isMaquila = tipoOperacionFijado({ operation_type: batch.lot_operation_type })
+      ? loteEsMaquila({ operation_type: batch.lot_operation_type, is_maquila: batch.lot_is_maquila })
+      : Boolean(body.is_maquila || batch.ownership === "MAQUILA" || batch.lot_is_maquila);
     const farmerId = body.farmer_id ?? batch.lot_farmer_id;
     if (isMaquila && !farmerId) {
       throw new ApiError(400, "La maquila requiere agricultor/cliente tercero");

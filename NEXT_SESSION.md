@@ -49,6 +49,15 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Produccion: "Es Servicio de Pilada (Maquila)" heredado de Bascula (2026-09-25)
+
+- Regla unica `loteEsMaquila` (backend/src/utils/maquila.ts, con tests): `operation_type` != COMPRA -> maquila (SECADO_PILADO/PILADO/SECADO); sin tipo (legado) -> `is_maquila`.
+- API: `GET /process-flow/drying/reports` devuelve `es_maquila` (del LOTE PRINCIPAL `d.lot_id`, el que se pila) y `es_maquila_mixto` (lotes del secado con tipos mezclados, solo aviso). `GET /lots/dry-in-storage` devuelve `es_maquila`.
+- Cierre `cerrarProcesoProduccion`: si el lote tiene `operation_type`, `isMaquila` se DERIVA de el e ignora `body.is_maquila`/`ownership` (el operador ya no puede cambiar la naturaleza del lote). Lotes sin tipo conservan la regla anterior.
+- Frontend Produccion: el checkbox se marca solo con `es_maquila` de la API, esta `disabled` y muestra "🔒 Heredado de Bascula"; aviso si `es_maquila_mixto`.
+- Datos reales (solo lectura): COMPRA -> false, SECADO -> true; 0 lotes sin operation_type.
+- Verificaciones: backend build, 48/48 tests, frontend build y lint 0 errores.
+
 ### Fix: nomina de Tendal ensacado SIEMPRE por QQ (2026-09-24)
 
 - Bug: `calcularPagoCuadrillaTendal` en ensacado multiplicaba la tarifa "TENDAL POR SACO" por el numero de sacos entregados (ej. 15 sacos x $2 = $30). Regla correcta: nomina SIEMPRE por peso: granel -> "SECADO EN TENDAL" x QQ; ensacado -> "TENDAL POR SACO" x QQ. Los sacos quedan solo en la nota ("21.6 Quintales (15 sacos)"); `drying_tunnel_cuadrilla.quintals` ahora recibe QQ.
