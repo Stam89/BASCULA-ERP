@@ -12900,7 +12900,7 @@ export function App() {
         )}
 
         {activeTab === "Produccion" && (
-          <section className="productionModuleGrid" style={{ alignItems: "start" }}>
+          <section className="productionModuleGrid productionWorkflowGrid">
             {/* El "Costo operativo por corrida" se movió a Contabilidad → «Costos
                 Operativos». Producción arranca directo en Secadora/Reporte de pilado. */}
             {millingDrafts.length > 0 && (
@@ -12947,20 +12947,26 @@ export function App() {
               </div>
             )}
             {/* ── Columna IZQUIERDA: Materia prima (Secadora + Últimos lotes) ── */}
-            <div style={{ display: "grid", gap: 14, alignContent: "start" }}>
-            <section className="formPanel productionQuickCard">
-              <h2>Secadora en produccion</h2>
+            <div className="productionSourceColumn">
+            <section className="formPanel productionQuickCard productionStepCard productionSourceCard">
+              <div className="productionStepHeader">
+                <span className="productionStepNumber">1</span>
+                <div>
+                  <h2>Origen de materia prima</h2>
+                  <p>Selecciona el lote seco que ingresará al proceso de pilado.</p>
+                </div>
+              </div>
               {/* Origen de la materia prima a pilar */}
-              <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+              <div className="productionSourceToggle" role="radiogroup" aria-label="Origen de la materia prima">
+                <label className={productionSource === "drying" ? "isActive" : ""}>
                   <input type="radio" name="prodSource" checked={productionSource === "drying"} style={{ width: "auto" }}
                     onChange={() => { setProductionSource("drying"); setProductionStockLotId(""); }} />
-                  🔥 Desde Secadoras
+                  <span><strong>Desde Secadoras</strong><small>Túneles finalizados</small></span>
                 </label>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+                <label className={productionSource === "stock" ? "isActive" : ""}>
                   <input type="radio" name="prodSource" checked={productionSource === "stock"} style={{ width: "auto" }}
                     onChange={() => { setProductionSource("stock"); setProductionDryingId(""); }} />
-                  📦 Desde Stock/Bodega de Arroz Seco
+                  <span><strong>Desde Stock</strong><small>Bodega de arroz seco</small></span>
                 </label>
               </div>
 
@@ -13044,8 +13050,7 @@ export function App() {
                   naturaleza fiscal/operativa del lote). Si es maquila, al Finalizar el
                   arroz NO entra al stock comercial (va a custodia + Cobro por Servicio). */}
               <label title="Se hereda del tipo de operación con que el lote ingresó en Báscula; no se puede cambiar aquí."
-                style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, padding: "10px 12px", borderRadius: 8,
-                background: esMaquilaProduccion ? "#eff6ff" : "#f8fafc", border: `1.5px solid ${esMaquilaProduccion ? "#2563eb" : "#e2e8f0"}`, cursor: "not-allowed" }}>
+                className={`productionMaquilaBadge ${esMaquilaProduccion ? "isService" : ""}`}>
                 <input type="checkbox" checked={esMaquilaProduccion} disabled readOnly
                   style={{ width: 18, height: 18, accentColor: "#2563eb" }} />
                 <span style={{ fontWeight: 700, color: esMaquilaProduccion ? "#1d4ed8" : "#475569" }}>
@@ -13073,28 +13078,40 @@ export function App() {
             </section>
 
             {/* Últimos lotes (debajo de Secadora, en la columna izquierda) */}
-            <DataList
-              title="Últimos lotes"
-              headers={["Lote", "Agricultor", "Tipo", "QQ"]}
-              rows={lots
-                .filter((lot) => !esSoloSecadaOp(lot.operation_type))
-                .slice(0, 8)
-                .map((lot) => [
-                  lot.lot_code,
-                  lot.farmer_name ?? "—",
-                  riceTypeLabel(lot.rice_type) + (esServicioPiladaOp(lot.operation_type, lot.is_maquila, lot.lot_code) ? " · 🔧 SERV. PILADA" : ""),
-                  `${Number(lot.quintals ?? 0).toFixed(2)} QQ`
-                ])}
-            />
+            <aside className="productionRecentLots">
+              <DataList
+                title="Últimos lotes"
+                headers={["Lote", "Agricultor", "Tipo", "QQ"]}
+                rows={lots
+                  .filter((lot) => !esSoloSecadaOp(lot.operation_type))
+                  .slice(0, 8)
+                  .map((lot) => [
+                    lot.lot_code,
+                    lot.farmer_name ?? "—",
+                    riceTypeLabel(lot.rice_type) + (esServicioPiladaOp(lot.operation_type, lot.is_maquila, lot.lot_code) ? " · 🔧 SERV. PILADA" : ""),
+                    `${Number(lot.quintals ?? 0).toFixed(2)} QQ`
+                  ])}
+              />
+            </aside>
             </div>
 
             {/* ── Columna DERECHA: Procesamiento (Reporte de pilado) ── */}
-            <section className="formPanel productionQuickCard">
-              <h2>Reporte de pilado</h2>
+            <section className="formPanel productionQuickCard productionReportCard">
+              <div className="productionReportTitle">
+                <div>
+                  <span className="productionEyebrow">Producción</span>
+                  <h2>Reporte de pilado</h2>
+                </div>
+                <span className={`chip ${millingSource ? "ok" : "warn"}`}>{millingSource ? "Origen seleccionado" : "Pendiente de origen"}</span>
+              </div>
 
               {/* 👥 Personal de Turno — fondo tenue */}
-              <div style={{ fontSize: 12, fontWeight: 800, color: "#475569", margin: "2px 0 6px" }}>👥 Personal de Turno</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16, padding: "12px", background: "#f8fafc", borderRadius: 10, border: "1px solid #e2e8f0" }}>
+              <section className="productionStepSection">
+                <div className="productionStepHeader compact">
+                  <span className="productionStepNumber">2</span>
+                  <div><h3>Personal de turno</h3><p>Responsables asignados a esta corrida.</p></div>
+                </div>
+              <div className="productionPersonnelGrid">
                 <label style={{ fontSize: 12 }}>
                   <span style={{ fontWeight: 700, display: "block", marginBottom: 3 }}>👷 Pilador</span>
                   <input value={piladorName} onChange={e => setPiladorName(e.target.value)}
@@ -13107,21 +13124,29 @@ export function App() {
                     style={{ width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
                     placeholder="Nombre del estibador" />
                 </label>
-                <label style={{ fontSize: 12, gridColumn: "1 / -1" }}>
+                <label style={{ fontSize: 12 }}>
                   <span style={{ fontWeight: 700, display: "block", marginBottom: 3 }}>🟤 Encargado de llenar polvillo</span>
                   <input value={polvilloWorkerName} onChange={e => setPolvilloWorkerName(e.target.value)}
                     style={{ width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
                     placeholder="Nombre del encargado" />
                 </label>
               </div>
+              </section>
 
               {/* ⚖️ Rendimiento de Pilado */}
-              <div style={{ fontSize: 12, fontWeight: 800, color: "#475569", margin: "2px 0 6px" }}>⚖️ Rendimiento de Pilado</div>
+              <section className="productionStepSection">
+              <div className="productionStepHeader compact">
+                <span className="productionStepNumber">3</span>
+                <div><h3>Rendimiento y subproductos</h3><p>Registra el arroz pilado y los resultados secundarios.</p></div>
+              </div>
 
               {/* MIX por línea: cada renglón de arroz pilado tiene su Destino/Empaque
                   (🧺 Tula → Selección · 📦 Saco Comercial). Se pueden mezclar en el
                   mismo lote (las tulas suelen agotarse a mitad del proceso). */}
               <>
+                  <div className="productionOutputGrid">
+                  <div className="productionOutputPanel">
+                    <div className="productionSubsectionTitle"><span>Arroz pilado</span><small>QQ resultantes por empaque</small></div>
                   <div className="millingPiladoBuilder">
                     <label>
                       <span>Destino / Empaque</span>
@@ -13215,13 +13240,9 @@ export function App() {
                       </div>
                     ))}
                   </section>
-
-                  <div className="totalBox">
-                    <span>🌾 TOTAL ARROZ PILADO</span>
-                    <strong>{millingPiladoTotalQq.toFixed(2)} QQ</strong>
-                    <small>🧺 Tula (Selección): {millingMix.tulaQq.toFixed(2)} QQ · 📦 Sacos (Comercial): {millingMix.sacoQq.toFixed(2)} QQ</small>
                   </div>
-
+                  <div className="productionOutputPanel productionByproductPanel">
+                  <div className="productionSubsectionTitle"><span>Subproductos</span><small>QQ obtenidos y libras por saco</small></div>
                   <div className="productionSackGrid">
                     <ControlledNumberInput label="Arrocillo 3/4" value={millingReport.broken34} onChange={(value) => updateMillingField("broken34", value)} />
                     <ControlledNumberInput label="Arrocillo Fino" value={millingReport.fineBroken} onChange={(value) => updateMillingField("fineBroken", value)} />
@@ -13247,10 +13268,29 @@ export function App() {
                         style={{ display: "block", width: "100%", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
                     </label>
                   </div>
+                  </div>
+                  </div>
               </>
+              </section>
               {/* Pago por llenado de polvillo: OCULTO a petición. El pago se sigue
                   registrando en Nómina (backend) con el rol Polvillo; solo no se
                   muestra el cálculo aquí. */}
+
+              <section className="productionFinalCard">
+              <div className="productionStepHeader compact">
+                <span className="productionStepNumber">4</span>
+                <div><h3>Resumen y acciones</h3><p>Revisa el rendimiento antes de guardar o finalizar.</p></div>
+              </div>
+              <div className="productionTotalHero">
+                <div>
+                  <span>Total arroz pilado</span>
+                  <strong>{millingPiladoTotalQq.toFixed(2)} <small>QQ</small></strong>
+                </div>
+                <div className="productionTotalBreakdown">
+                  <span><b>{millingMix.tulaQq.toFixed(2)} QQ</b> Tula / Selección</span>
+                  <span><b>{millingMix.sacoQq.toFixed(2)} QQ</b> Saco / Comercial</span>
+                </div>
+              </div>
 
               {/* Texto informativo dinámico: servicio → cobro en CxC (no «Gana»);
                   lote propio → cuadro de rendimiento en «Gana». */}
@@ -13274,7 +13314,7 @@ export function App() {
                 </div>
               ) : null}
 
-              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center", marginTop: 8 }}>
+              <div className="productionActionBar">
                 <button type="button" className="btnSecondary" onClick={() => saveMillingProcess().catch((e) => addToast(e.message, "error"))}
                   disabled={!selectedProductionDrying || !millingPuedeGuardar}
                   title={productionSource === "stock" ? "El origen desde stock no usa borradores: finaliza directo" : (!selectedProductionDrying ? "Selecciona una secadora para guardar el borrador" : (!millingPuedeGuardar ? "Ingresa el arroz pilado (Cantidad en QQ) o un subproducto (> 0)" : "Guardar borrador"))}
@@ -13291,6 +13331,7 @@ export function App() {
                 Guardar Proceso deja el pilado a medias en «Procesos guardados» y limpia el formulario; para seguir editándolo presiona «Continuar / Finalizar lote». Finalizar Lote agrega la produccion al stock.
               </p>
               {millingDraftSavedAt && <p className="muted">💾 Guardado en el servidor: {new Date(millingDraftSavedAt).toLocaleString("es-EC")}</p>}
+              </section>
             </section>
 
 

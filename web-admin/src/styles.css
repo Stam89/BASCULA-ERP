@@ -1689,6 +1689,249 @@ input[type="datetime-local"] { height: 36px; }
 /* ── Production ───────────────────────────────────────────────── */
 .productionQuickCard { box-shadow: var(--shadow-xs); }
 
+.productionWorkflowGrid {
+  align-items: start;
+  grid-template-columns: minmax(260px, 0.78fr) minmax(0, 1.72fr);
+  gap: 18px;
+}
+
+.productionSourceColumn {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.productionStepCard,
+.productionReportCard {
+  border: 1px solid #dbe4e1;
+  box-shadow: 0 3px 14px rgba(15, 71, 67, 0.06);
+}
+
+.productionStepHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.productionStepHeader.compact {
+  padding-bottom: 10px;
+}
+
+.productionStepHeader h2,
+.productionStepHeader h3 {
+  margin: 0;
+  color: var(--c-text);
+  letter-spacing: 0;
+}
+
+.productionStepHeader h2 { font-size: 18px; }
+.productionStepHeader h3 { font-size: 15px; }
+
+.productionStepHeader p {
+  margin: 3px 0 0;
+  color: var(--c-text-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.productionStepNumber {
+  display: inline-grid;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 7px;
+  color: #fff;
+  background: var(--c-brand-dark);
+  box-shadow: 0 3px 8px rgba(15, 118, 110, 0.18);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.productionSourceToggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.productionSourceToggle > label {
+  display: flex;
+  min-height: 62px;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 11px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-surface-2);
+  cursor: pointer;
+  transition: border-color var(--t), background var(--t), box-shadow var(--t);
+}
+
+.productionSourceToggle > label:hover {
+  border-color: rgba(13, 148, 136, 0.45);
+}
+
+.productionSourceToggle > label.isActive {
+  border-color: var(--c-brand);
+  background: rgba(13, 148, 136, 0.08);
+  box-shadow: 0 0 0 1px rgba(13, 148, 136, 0.08);
+}
+
+.productionSourceToggle input { flex: 0 0 auto; accent-color: var(--c-brand); }
+.productionSourceToggle span { display: grid; gap: 2px; }
+.productionSourceToggle strong { color: var(--c-text); font-size: 12.5px; }
+.productionSourceToggle small { color: var(--c-text-muted); font-size: 10.5px; }
+
+.productionMaquilaBadge {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 2px;
+  padding: 9px 11px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-surface-2);
+  cursor: not-allowed;
+}
+
+.productionMaquilaBadge.isService {
+  border-color: rgba(37, 99, 235, 0.35);
+  background: #eff6ff;
+}
+
+.productionRecentLots { min-width: 0; }
+
+.productionReportCard {
+  gap: 16px;
+  padding: 20px;
+}
+
+.productionReportTitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 4px;
+}
+
+.productionReportTitle h2 { margin: 2px 0 0; font-size: 21px; }
+
+.productionEyebrow {
+  color: var(--c-brand-dark);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.productionStepSection {
+  display: grid;
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid var(--c-border);
+  border-radius: 9px;
+  background: #fff;
+}
+
+.productionPersonnelGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.productionOutputGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.productionOutputPanel {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.productionByproductPanel { background: #fffdf8; }
+
+.productionSubsectionTitle {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.productionSubsectionTitle span { color: var(--c-text); font-size: 13px; font-weight: 800; }
+.productionSubsectionTitle small { color: var(--c-text-muted); font-size: 10.5px; text-align: right; }
+
+.productionOutputPanel .millingPiladoBuilder { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.productionOutputPanel .productionSackGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+.productionFinalCard {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(13, 148, 136, 0.28);
+  border-radius: 9px;
+  background: linear-gradient(145deg, #f6fffc, #fff 55%);
+  box-shadow: 0 4px 14px rgba(13, 148, 136, 0.07);
+}
+
+.productionTotalHero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: #083c37;
+  color: #fff;
+}
+
+.productionTotalHero > div:first-child { display: grid; gap: 2px; }
+.productionTotalHero > div:first-child > span { color: #a7f3d0; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.07em; }
+.productionTotalHero strong { font-size: 26px; line-height: 1.1; }
+.productionTotalHero strong small { color: #a7f3d0; font-size: 12px; }
+
+.productionTotalBreakdown {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.productionTotalBreakdown span {
+  display: grid;
+  gap: 2px;
+  min-width: 130px;
+  padding: 7px 10px;
+  border: 1px solid rgba(255,255,255,0.16);
+  border-radius: 7px;
+  background: rgba(255,255,255,0.08);
+  color: #d1fae5;
+  font-size: 10.5px;
+}
+
+.productionTotalBreakdown b { color: #fff; font-size: 13px; }
+
+.productionActionBar {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(220px, 1.2fr);
+  gap: 10px;
+}
+
+.productionActionBar button {
+  width: 100%;
+  max-width: none !important;
+  min-height: 44px;
+  margin: 0;
+}
+
 .millingPiladoBuilder {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2941,6 +3184,20 @@ input[type="datetime-local"] { height: 36px; }
   .millingPiladoBuilder { grid-template-columns: 1fr; }
   .yieldResults { grid-template-columns: 1fr; }
   .content { padding: 14px 16px; }
+
+  .productionPersonnelGrid,
+  .productionOutputGrid,
+  .productionActionBar { grid-template-columns: 1fr; }
+
+  .productionTotalHero { align-items: stretch; flex-direction: column; }
+  .productionTotalBreakdown { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 520px) {
+  .productionSourceToggle,
+  .productionTotalBreakdown,
+  .productionOutputPanel .productionSackGrid { grid-template-columns: 1fr; }
+  .productionReportTitle { align-items: flex-start; flex-direction: column; }
 }
 
 /* ── Combustible del secado: filas de medidor (inicio − fin = total × precio) ── */

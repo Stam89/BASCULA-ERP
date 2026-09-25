@@ -7,7 +7,7 @@ Actualizado: 2026-09-24
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: edicion segura de Fomentos, recalculo por Fecha Inicio e interes fijo en modal.
+- Ultimo cambio funcional: rediseno UX/UI del Reporte de Pilado en cuatro pasos, sin cambios de logica.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,16 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Rediseno UX/UI de Produccion / Reporte de Pilado (2026-09-25)
+
+- Cambio exclusivamente visual en `web-admin/src/App.tsx` y `styles.css`; no se modificaron estados, handlers, llamadas API ni funciones de guardado/finalizacion.
+- Flujo dividido en cuatro pasos: origen de materia prima, personal de turno, rendimiento/subproductos y resumen/acciones.
+- Origen usa control segmentado y conserva el indicador de maquila heredado/bloqueado; el reporte muestra `Pendiente de origen` u `Origen seleccionado`.
+- Personal quedo en tres columnas; arroz pilado y subproductos estan separados en paneles; el total y su desglose se trasladaron a una tarjeta final con `Guardar Proceso` secundario y `Finalizar Lote` principal.
+- CSS responsive nativo del proyecto (sin agregar Tailwind ni dependencias): escritorio a dos columnas y apilado en movil, sin desbordamiento horizontal.
+- Revision visual solo de lectura con y sin origen seleccionado; no se guardo ni finalizo ningun lote real.
+- Verificaciones: frontend build correcto, lint con 0 errores (166 warnings historicos), escritorio 1082 px y movil 433 px sin overflow horizontal.
 
 ### Produccion: "Es Servicio de Pilada (Maquila)" heredado de Bascula (2026-09-25)
 
