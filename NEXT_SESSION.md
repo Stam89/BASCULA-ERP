@@ -49,6 +49,16 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Fix: tarifas del cierre de Tendal (cuadrilla vs CxC) (2026-09-24)
+
+- Causa: el campo de Configuracion "Secado en Tendal (Cuadrilla) $ x QQ" (`labor_rates.tendal_per_qq`, $2.00) se guardaba pero el backend lo IGNORABA; a granel pagaba con la actividad del catalogo "SECADO EN TENDAL" ($1.50), que coincidia con la tarifa de servicio y parecia un cruce.
+- `registrarPagoCuadrillaTendal`: a granel usa `getRates(...).tendal_per_qq` (efectivo por socio) si es > 0; si esta en 0 conserva la tarifa del catalogo (compatibilidad). Ensacado sigue por saco con "TENDAL POR SACO".
+- CxC (`autoCobrarSecadoServicio`) sigue con `secado_servicio_per_qq`. NO se cambio `reference_type='secado_service'` (lo usan la dedup del cobro manual en cobros.ts y el listado de lotes por cobrar en lots.ts); el origen se indica en la descripcion: "Servicio de Secado en Tendal - Lote ...".
+- Invariante: un lote SOLO SECADO con tarifa de servicio en $0 ya no se finaliza (400) y todo se revierte; antes se pagaba al personal y se saltaba la CxC en silencio. Aplica a tuneles y tendal.
+- Atomicidad: alta (`/drying-tendal`) y edicion (`PUT /drying/:id`) corren en `inTransaction`; CxC y nomina usan el mismo client.
+- Verificado en BEGIN...ROLLBACK sobre el tendal real: granel cuadrilla $150.80 (2.00) + CxC $113.10 (1.50); ensacado $100 (2.00 x 50 sacos); sin tarifa de servicio rechaza y no deja pago. El pago YA registrado de ese tendal quedo en $1.50 ($113.10) por el bug.
+- Verificaciones: backend build, 44/44 tests.
+
 ### Edicion segura e interes fijo de Fomentos (2026-09-24)
 
 - La caja permanente de `Interes fijo del saldo arrastrado` salio de la vista principal; ahora se abre desde `Ajustar interes fijo` en un modal compacto, conservando el mismo endpoint y calculo.

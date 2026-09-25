@@ -113,7 +113,7 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 // COMPLETED; se auto-protege leyendo el estado real del reporte.
 async function autoCobrarSecadoServicio(client: PoolClient, dryingReportId: string): Promise<void> {
   const r = await client.query(
-    `SELECT d.status, d.lot_id, l.lot_code, l.operation_type, l.farmer_id, l.accionista_id,
+    `SELECT d.status, d.lot_id, d.dry_method, l.lot_code, l.operation_type, l.farmer_id, l.accionista_id,
             COALESCE((SELECT SUM(t.quintals) FROM weighing_tickets t WHERE t.lot_id = l.id), 0)::float AS qq
      FROM drying_tunnel_reports d
      JOIN lots l ON l.id = d.lot_id
@@ -136,12 +136,20 @@ async function autoCobrarSecadoServicio(client: PoolClient, dryingReportId: stri
   if (qq <= 0) return;
   const rates = await getRates(client, row.accionista_id ?? null);
   const rate = Number(rates.secado_servicio_per_qq ?? 0);
-  if (rate <= 0) return; // sin tarifa configurada: no se cobra automático (queda el cobro manual).
+  // Nunca un pago (secador/cuadrilla) sin su cobro al cliente: un 'Solo Secado'
+  // sin tarifa de servicio NO se finaliza. El error revierte TODA la transacción
+  // del cierre (pagos incluidos), así no queda nada a medias.
+  if (rate <= 0) {
+    throw new ApiError(400, `No se puede finalizar el lote ${row.lot_code}: es "Solo Servicio de Secado" y la tarifa "Secado (servicio) $ x QQ" está en $0. Configúrala en Configuración → Tarifas y Servicios de Planta.`);
+  }
   const monto = round2(qq * rate);
   const farmerName = row.farmer_id
     ? ((await client.query("SELECT full_name FROM farmers WHERE id = $1", [row.farmer_id])).rows[0]?.full_name ?? "cliente de servicio")
     : "cliente de servicio";
-  const desc = `Servicio de Secado - Lote ${row.lot_code} (${qq} QQ × $${rate}) - ${farmerName}`;
+  // Mismo reference_type 'secado_service' (lo usan la deduplicación del cobro manual
+  // y el listado de lotes por cobrar); el ORIGEN Tendal se indica en la descripción.
+  const origen = String(row.dry_method ?? "").toUpperCase() === "TENDAL" ? "Servicio de Secado en Tendal" : "Servicio de Secado";
+  const desc = `${origen} - Lote ${row.lot_code} (${qq} QQ × $${rate}) - ${farmerName}`;
   const matrizId = await getMatrizId(client);
   await client.query(
     `INSERT INTO accounts_receivable (accionista_id, farmer_id, reference_type, reference_id, description, amount, balance, status)
@@ -1255,11 +1263,21 @@ async function registrarPagoCuadrillaTendal(
   const esEnsacado = String(opts.recepcionEmpaque ?? "").toUpperCase() === "SACOS";
   try {
     const tendalAct = await resolveTendalActivity(client, esEnsacado ? "ENSACADO" : "GRANEL", opts.accionistaId ?? null);
+    // Tarifa de CUADRILLA (nunca la de servicio al cliente). A granel manda el campo
+    // "Secado en Tendal (Cuadrilla) $ x QQ" de Configuración (labor_rates.tendal_per_qq,
+    // efectivo por socio); antes se guardaba pero se ignoraba y se usaba la actividad
+    // del catálogo. Si ese campo está en 0 se conserva la tarifa del catálogo
+    // (compatibilidad). Ensacado se sigue pagando por saco con "TENDAL POR SACO".
+    let unitRate = tendalAct.unit_rate;
+    if (!esEnsacado) {
+      const rates = await getRates(client, opts.accionistaId ?? null);
+      if (Number(rates.tendal_per_qq) > 0) unitRate = Number(rates.tendal_per_qq);
+    }
     const sacos = Number(opts.recepcionSacos) || 0;
     const cantidad = esEnsacado ? (sacos > 0 ? sacos : opts.totalQuintals) : opts.totalQuintals;
     const unidad = esEnsacado ? "Sacos" : "Quintales";
     const modoLabel = esEnsacado ? "Ensacado" : "A granel";
-    const subtotal = round2(cantidad * tendalAct.unit_rate);
+    const subtotal = round2(cantidad * unitRate);
     await client.query(
       `INSERT INTO drying_tunnel_cuadrilla (drying_report_id, worker_name, activity_id, quintals, momento, created_by)
        VALUES ($1, 'CUADRILLA', $2, $3, 'VACIADO', $4)`,
@@ -1269,7 +1287,7 @@ async function registrarPagoCuadrillaTendal(
       `INSERT INTO cuadrilla_entries
          (work_date, activity_id, activity_name, worker_name, quantity, unit_rate, subtotal, notes, origen, referencia_id, momento, created_by)
        VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, 'CUADRILLA', $4, $5, $6, $7, 'TENDAL', $8, 'VACIADO', $9)`,
-      [opts.workDate, tendalAct.id, tendalAct.name, cantidad, tendalAct.unit_rate, subtotal, `Secado en tendal (${modoLabel}) - Lote ${opts.lotCode} - ${cantidad} ${unidad}`, opts.dryingReportId, opts.createdBy ?? null]
+      [opts.workDate, tendalAct.id, tendalAct.name, cantidad, unitRate, subtotal, `Secado en tendal (${modoLabel}) - Lote ${opts.lotCode} - ${cantidad} ${unidad}`, opts.dryingReportId, opts.createdBy ?? null]
     );
   } catch (err) {
     const detalle = err instanceof Error ? err.message : String(err);
