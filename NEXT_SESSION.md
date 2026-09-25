@@ -49,6 +49,16 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Tarifa de secado como servicio: A granel vs En saco (2026-09-24)
+
+- Nueva columna `labor_rates.secado_servicio_saco_per_qq` (migracion `20261032_secado_servicio_saco.sql`, aditiva e idempotente; tambien en `ensureLaborTables`). Arranca con el MISMO valor de granel en cada fila (maestro y socios), asi ningun cobro cambia hasta editarla.
+- Configuracion -> Tarifas y Servicios de Planta -> Secado como Servicio: `Secado A Granel / Directo a Produccion ($ x QQ)` (= `secado_servicio_per_qq`, renombrado solo en UI) y nuevo `Secado En Saco ($ x QQ)`.
+- `PUT /labor/rates`: el campo nuevo es OPCIONAL y se guarda con `COALESCE` (un cliente que no lo mande no lo borra). Se clona a los overrides por socio y `getRates` lo expone.
+- `autoCobrarSecadoServicio`: tuneles deciden por `botada_empaque` (Empaque de botada/vaciado); Tendal por `recepcion_empaque` (su modo Granel/Ensacado; su botada siempre trae TULAS por defecto). SACOS -> tarifa saco (si es 0 usa granel); resto -> granel. La descripcion de la CxC dice `(a granel)` / `(en saco)`.
+- El cobro automatico Secado+Pilado ya NO usa esta tarifa (`secadoRate = 0` en processing.ts); se corrigio la nota de la UI que decia lo contrario. El cobro manual de Solo Secado (cobros.ts) sigue sugiriendo la de granel.
+- Verificado en BEGIN...ROLLBACK con el tendal real: backfill 1.5 en 3 filas; tendal granel $113.10, tendal saco $169.65 (2.25), tunel botada saco $169.65, tunel botada granel $113.10, saco en 0 usa granel.
+- Verificaciones: backend build, 44/44 tests, frontend build.
+
 ### Fix: tarifas del cierre de Tendal (cuadrilla vs CxC) (2026-09-24)
 
 - Causa: el campo de Configuracion "Secado en Tendal (Cuadrilla) $ x QQ" (`labor_rates.tendal_per_qq`, $2.00) se guardaba pero el backend lo IGNORABA; a granel pagaba con la actividad del catalogo "SECADO EN TENDAL" ($1.50), que coincidia con la tarifa de servicio y parecia un cruce.

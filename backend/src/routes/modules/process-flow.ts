@@ -113,7 +113,8 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 // COMPLETED; se auto-protege leyendo el estado real del reporte.
 async function autoCobrarSecadoServicio(client: PoolClient, dryingReportId: string): Promise<void> {
   const r = await client.query(
-    `SELECT d.status, d.lot_id, d.dry_method, l.lot_code, l.operation_type, l.farmer_id, l.accionista_id,
+    `SELECT d.status, d.lot_id, d.dry_method, d.botada_empaque, d.recepcion_empaque,
+            l.lot_code, l.operation_type, l.farmer_id, l.accionista_id,
             COALESCE((SELECT SUM(t.quintals) FROM weighing_tickets t WHERE t.lot_id = l.id), 0)::float AS qq
      FROM drying_tunnel_reports d
      JOIN lots l ON l.id = d.lot_id
@@ -135,12 +136,21 @@ async function autoCobrarSecadoServicio(client: PoolClient, dryingReportId: stri
   const qq = round2(Number(row.qq) || 0);
   if (qq <= 0) return;
   const rates = await getRates(client, row.accionista_id ?? null);
-  const rate = Number(rates.secado_servicio_per_qq ?? 0);
+  // Tarifa según el EMPAQUE DE SALIDA del secado: túneles → "Empaque de botada
+  // (vaciado)"; Tendal → su modo Granel/Ensacado (vive en recepcion_empaque).
+  // SACOS → "Secado En Saco"; TULAS/granel/sin dato → "Secado A Granel".
+  // Si la de saco está en 0 se usa la de granel (compatibilidad).
+  const esTendal = String(row.dry_method ?? "").toUpperCase() === "TENDAL";
+  const empaqueSalida = String((esTendal ? row.recepcion_empaque : row.botada_empaque) ?? "").toUpperCase();
+  const enSaco = empaqueSalida === "SACOS";
+  const rateGranel = Number(rates.secado_servicio_per_qq ?? 0);
+  const rateSaco = Number(rates.secado_servicio_saco_per_qq ?? 0);
+  const rate = enSaco && rateSaco > 0 ? rateSaco : rateGranel;
   // Nunca un pago (secador/cuadrilla) sin su cobro al cliente: un 'Solo Secado'
   // sin tarifa de servicio NO se finaliza. El error revierte TODA la transacción
   // del cierre (pagos incluidos), así no queda nada a medias.
   if (rate <= 0) {
-    throw new ApiError(400, `No se puede finalizar el lote ${row.lot_code}: es "Solo Servicio de Secado" y la tarifa "Secado (servicio) $ x QQ" está en $0. Configúrala en Configuración → Tarifas y Servicios de Planta.`);
+    throw new ApiError(400, `No se puede finalizar el lote ${row.lot_code}: es "Solo Servicio de Secado" y la tarifa "${enSaco ? "Secado En Saco" : "Secado A Granel / Directo a Producción"} ($ x QQ)" está en $0. Configúrala en Configuración → Tarifas y Servicios de Planta.`);
   }
   const monto = round2(qq * rate);
   const farmerName = row.farmer_id
@@ -148,8 +158,9 @@ async function autoCobrarSecadoServicio(client: PoolClient, dryingReportId: stri
     : "cliente de servicio";
   // Mismo reference_type 'secado_service' (lo usan la deduplicación del cobro manual
   // y el listado de lotes por cobrar); el ORIGEN Tendal se indica en la descripción.
-  const origen = String(row.dry_method ?? "").toUpperCase() === "TENDAL" ? "Servicio de Secado en Tendal" : "Servicio de Secado";
-  const desc = `${origen} - Lote ${row.lot_code} (${qq} QQ × $${rate}) - ${farmerName}`;
+  const origen = esTendal ? "Servicio de Secado en Tendal" : "Servicio de Secado";
+  const modalidad = enSaco ? "en saco" : "a granel";
+  const desc = `${origen} (${modalidad}) - Lote ${row.lot_code} (${qq} QQ × $${rate}) - ${farmerName}`;
   const matrizId = await getMatrizId(client);
   await client.query(
     `INSERT INTO accounts_receivable (accionista_id, farmer_id, reference_type, reference_id, description, amount, balance, status)

@@ -298,6 +298,8 @@ type LaborRates = {
   tendal_per_qq: number;
   /** Tarifa global de SECADO como servicio al cliente (maquila): $ por QQ. */
   secado_servicio_per_qq: number;
+  /** Secado como servicio EN SACO ($ x QQ). El de arriba es A granel / Directo a Producción. */
+  secado_servicio_saco_per_qq: number;
 };
 
 const defaultLaborRates: LaborRates = {
@@ -314,7 +316,8 @@ const defaultLaborRates: LaborRates = {
   precio_gas_cilindro: 0,
   precio_diesel: 0,
   tendal_per_qq: 0,
-  secado_servicio_per_qq: 0
+  secado_servicio_per_qq: 0,
+  secado_servicio_saco_per_qq: 0
 };
 
 // Coacciona TODO campo de tarifas a número (por si el backend/driver devolviera
@@ -20326,8 +20329,9 @@ export function App() {
                   </div>
                   <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>🛎️ Secado como Servicio (cobro al cliente)</h2>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10 }}>
-                    <label><span>Secado (servicio) $ x QQ</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.secado_servicio_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secado_servicio_per_qq: Number(e.target.value) })} /></label>
-                    <small className="muted" style={{ marginTop: -4 }}>Se cobra al cliente de servicio (maquila): en «Solo Secado» y como parte del cobro automático Secado + Pilado.</small>
+                    <label><span>Secado A Granel / Directo a Producción ($ x QQ)</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.secado_servicio_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secado_servicio_per_qq: Number(e.target.value) })} /></label>
+                    <label><span>Secado En Saco ($ x QQ)</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.secado_servicio_saco_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secado_servicio_saco_per_qq: Number(e.target.value) })} /></label>
+                    <small className="muted" style={{ marginTop: -4 }}>Se cobra al cliente de servicio (maquila) al finalizar el secado, según el «Empaque de botada (vaciado)» del túnel o el modo del Tendal: A granel → primera tarifa; En saco → segunda. La tarifa A granel también es la sugerida en el cobro manual de «Solo Servicio de Secado».</small>
                   </div>
                   <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>⛽ Precio del combustible <span className="muted" style={{ fontWeight: 400 }}>(se usa en Secadoras)</span></h2>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
