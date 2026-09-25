@@ -52,7 +52,8 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ### Configuracion: Nomina (egresos) separada de Servicios (ingresos) (2026-09-24)
 
 - Solo UI (App.tsx); sin cambios de backend ni de claves de BD. Los 14 campos de `labor_rates` siguen existiendo una sola vez y todos guardan con el mismo `saveLaborRates` (estado compartido `laborRatesForm`).
-- Nueva subpestana `nomina` = "👷 Tarifas de Nomina y Mano de Obra": Pilador, Estibador, Secador y Secado en Tendal (Cuadrilla).
+- Nueva subpestana `nomina` = "👷 Tarifas de Nomina y Mano de Obra": Pilador, Estibador, Secador, "☀️ Cuadrilla / Secado en Tendal" y las actividades de cuadrilla (alta + tabla de tarifas).
+- La subpestana independiente "👷 Cuadrilla" de Configuracion YA NO EXISTE (se quito del tipo `configSubTab`); su contenido se renderiza con `configSubTab === "nomina"` y `refreshCuadrilla()` corre al entrar a Nomina. El modulo Nomina -> Cuadrilla -> Actividades sigue intacto.
 - La clave `tarifas` se conserva (buscador y accesos la usan) y se muestra como "🧾 Tarifas de Servicios y Clientes": Secado como Servicio (granel/saco), Tarifario de Servicios, Empaque/sacos, Procesos (Seleccion/Envejecido) y Tarifas por libra.
 - "⛽ Precio del combustible" paso a "⚙️ Operacion y Planta" como tarjeta propia.
 - Buscador de ajustes actualizado (Tarifas de pago -> nomina; nuevas entradas Secado como Servicio y Combustible). Puesta en marcha tiene botones Nomina y Servicios.

@@ -2218,7 +2218,7 @@ export function App() {
   const [laborForm, setLaborForm] = useState({ worker_group: "", sacks_moved: "", price_per_sack: "" });
 
   // ── Configuración ─────────────────────────────────────────────────────────
-  const [configSubTab, setConfigSubTab] = useState<"estado" | "operacion" | "nomina" | "tarifas" | "cuadrilla" | "socios" | "secuenciales" | "usuarios">("estado");
+  const [configSubTab, setConfigSubTab] = useState<"estado" | "operacion" | "nomina" | "tarifas" | "socios" | "secuenciales" | "usuarios">("estado");
   // Qué acordeones de Configuración dejó abiertos el usuario, por subpestaña.
   // Es una comodidad por equipo (no dato del negocio), por eso vive en localStorage.
   const acordeonesKey = "bascula-erp:config-acordeones";
@@ -2248,8 +2248,8 @@ export function App() {
     { sub: "tarifas", tarjeta: "📦 Tarifas de empaque", claves: "sacos 10 25 50 libras empaque matriz" },
     { sub: "tarifas", tarjeta: "🧹 Tarifas de Procesos", claves: "seleccion envejecido envejecimiento por qq" },
     { sub: "tarifas", tarjeta: "🛒 Tarifas por libra", claves: "venta al detalle mostrador precio por libra 0.11 corriente arrocillo polvillo" },
-    { sub: "cuadrilla", tarjeta: "🏷️ Nueva actividad de cuadrilla", claves: "crear actividad tarifa por saco" },
-    { sub: "cuadrilla", tarjeta: "Actividades y tarifas", claves: "cuadrilla actividades tarifas listado" },
+    { sub: "nomina", tarjeta: "🏷️ Nueva actividad de cuadrilla", claves: "crear actividad tarifa por saco" },
+    { sub: "nomina", tarjeta: "Actividades y tarifas", claves: "cuadrilla actividades tarifas listado" },
     { sub: "socios", tarjeta: "🧑‍🤝‍🧑 Nuevo accionista", claves: "crear socio accionista codigo" },
     { sub: "socios", tarjeta: "Accionistas registrados", claves: "socios accionistas lista renombrar" },
     { sub: "socios", tarjeta: "🏦 Cuentas Bancarias de Socios", claves: "banco numero de cuenta datos bancarios" },
@@ -2260,7 +2260,7 @@ export function App() {
   ];
 
   const subLabel: Record<typeof configSubTab, string> = {
-    estado: "Estado del sistema", operacion: "⚙️ Operación y Planta", nomina: "👷 Tarifas de Nómina y Mano de Obra", tarifas: "🧾 Tarifas de Servicios y Clientes", cuadrilla: "👷 Cuadrilla",
+    estado: "Estado del sistema", operacion: "⚙️ Operación y Planta", nomina: "👷 Tarifas de Nómina y Mano de Obra", tarifas: "🧾 Tarifas de Servicios y Clientes",
     socios: "👥 Socios & Bancos", secuenciales: "📄 Secuenciales", usuarios: "🔐 Control de Usuarios"
   };
 
@@ -2489,7 +2489,7 @@ export function App() {
   const [cuadFrom, setCuadFrom] = useState(nominaMonday);
   const [cuadTo, setCuadTo] = useState(nominaToday);
   const [cuadActivities, setCuadActivities] = useState<CuadrillaActivity[]>([]);
-  // Filtro en vivo de la lista de actividades (Configuración → Cuadrilla).
+  // Filtro en vivo de la lista de actividades (Configuración → Tarifas de Nómina).
   const [cuadActivitySearch, setCuadActivitySearch] = useState("");
   const [cuadEntries, setCuadEntries] = useState<CuadrillaEntry[]>([]);
   const [cuadEntriesTotal, setCuadEntriesTotal] = useState(0);
@@ -6813,7 +6813,7 @@ export function App() {
     if (configSubTab === "estado") refreshSystemStatus(true).catch(fail);
     if (configSubTab === "operacion") { reloadCashCategories().catch(fail); loadMaintCategoriesAll().catch(fail); }
     if (configSubTab === "socios") loadBankAccounts().catch(fail);
-    if (configSubTab === "cuadrilla") refreshCuadrilla().catch(fail);
+    if (configSubTab === "nomina") refreshCuadrilla().catch(fail); // actividades de cuadrilla viven en Nómina
     if (configSubTab === "secuenciales") loadSequences().catch(fail);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, configSubTab, activeAccionistaId]);
@@ -19050,7 +19050,6 @@ export function App() {
                 ["operacion", "⚙️ Operación y Planta"],
                 ["nomina", "👷 Tarifas de Nómina y Mano de Obra"],
                 ["tarifas", "🧾 Tarifas de Servicios y Clientes"],
-                ["cuadrilla", "👷 Cuadrilla"],
                 ["socios", "👥 Socios & Bancos"],
                 ["secuenciales", "📄 Secuenciales"],
                 ["usuarios", "🔐 Control de Usuarios"]
@@ -20326,10 +20325,10 @@ export function App() {
                     <label><span>$ guardianía / día</span><input type="number" step="0.5" min="0" disabled={!isAdmin} value={laborRatesForm.secador_guardiania} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secador_guardiania: Number(e.target.value) })} /></label>
                     <label><span>$ por túnel secado</span><input type="number" step="0.5" min="0" disabled={!isAdmin} value={laborRatesForm.secador_per_tunel} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secador_per_tunel: Number(e.target.value) })} /></label>
                   </div>
-                  <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>☀️ Secado en Tendal (Cuadrilla)</h2>
+                  <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>☀️ Cuadrilla / Secado en Tendal</h2>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10 }}>
                     <label><span>Secado en Tendal (Cuadrilla) $ x QQ</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.tendal_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, tendal_per_qq: Number(e.target.value) })} /></label>
-                    <small className="muted" style={{ marginTop: -4 }}>Pago a la cuadrilla por el tendal a granel. El tendal ensacado se paga por saco con la actividad «TENDAL POR SACO» de Cuadrilla.</small>
+                    <small className="muted" style={{ marginTop: -4 }}>Pago a la cuadrilla por el tendal a granel. El tendal ensacado y las demás maniobras se pagan con las actividades de cuadrilla de abajo (ej. «TENDAL POR SACO»).</small>
                   </div>
                   <button className="primary" disabled={!isAdmin}>Guardar tarifas</button>
                   {!isAdmin && <p className="muted">Solo un administrador puede cambiar las tarifas.</p>}
@@ -20919,8 +20918,10 @@ export function App() {
               </section>
             )}
 
-            {/* ── Tarifario de Cuadrilla: CRUD de actividades (tarifa por saco) ── */}
-            {configSubTab === "cuadrilla" && (() => {
+            {/* ── ☀️ Cuadrilla / Secado en Tendal: CRUD de actividades (tarifa por saco).
+                Antes era la subpestaña independiente "👷 Cuadrilla"; ahora vive dentro
+                de "👷 Tarifas de Nómina y Mano de Obra" (egresos). Mismo contenido. ── */}
+            {configSubTab === "nomina" && (() => {
               const q = cuadActivitySearch.trim().toLowerCase();
               const actividadesFiltradas = q
                 ? cuadActivities.filter((a) => a.name.toLowerCase().includes(q))
