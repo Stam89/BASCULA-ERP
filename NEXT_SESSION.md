@@ -1,13 +1,13 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-09-24
+Actualizado: 2026-09-25
 
 ## Inicio rapido
 
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: control semanal del secador, vista de nomina de Secadora y detalle completo en Secados guardados.
+- Ultimo cambio funcional: rediseno compacto y responsive de Secados guardados, conservando su detalle completo.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,14 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Secados guardados compactos (2026-09-25)
+
+- Se reemplazo la cuadricula de diez minitarjetas por registro por una ficha operativa compacta de tres franjas: identidad/estado, datos principales y linea de tiempo.
+- Conserva peso, responsable, secadora, variedad, lotes, agricultor, llenado, inicio, fin y duracion; las acciones Compartir/Corregir siguen intactas.
+- Las fechas usan formato corto de 24 horas (`dd/mm/aaaa · HH:mm`) para reducir ruido visual.
+- Responsive verificado: escritorio con tarjetas de baja altura y movil a dos columnas, sin overflow horizontal.
+- Verificaciones: frontend build correcto; lint con 0 errores y 166 warnings historicos.
 
 ### Secador semanal, nomina visible y detalle de secados (2026-09-25)
 

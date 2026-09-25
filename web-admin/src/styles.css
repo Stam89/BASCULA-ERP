@@ -1651,40 +1651,189 @@ input[type="datetime-local"] { height: 36px; }
 .usedLotRow button:hover { color: var(--c-danger); border-color: var(--c-danger); background: var(--c-danger-bg); }
 
 /* ── Drying reports ───────────────────────────────────────────── */
-.dryingReportsPanel { grid-column: 1 / -1; }
-
-.dryingReportCard {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 12px;
-  align-items: center;
-  padding: 11px 14px;
-  border: 1px solid var(--c-border);
-  border-radius: var(--r);
-  background: var(--c-surface-2);
-  transition: box-shadow var(--t);
-  margin-bottom: 4px;
+.dryingReportsPanel {
+  grid-column: 1 / -1;
+  padding: 16px;
 }
 
-.dryingReportCard:hover { box-shadow: var(--shadow-xs); background: var(--c-surface); }
+.dryingReportsPanel > h2 { margin-bottom: 10px; }
 
-.dryingReportCard div { display: grid; gap: 3px; }
-.dryingReportCard strong { font-size: 13.5px; color: var(--c-text); }
+.dryingReportsPanel .dryingReportCard {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-surface-2);
+  transition: background var(--t), border-color var(--t), box-shadow var(--t);
+  margin-bottom: 6px;
+}
 
-.dryingReportCard button {
-  height: 32px;
-  padding: 0 11px;
+.dryingReportsPanel .dryingReportCard:hover {
+  transform: none;
+  box-shadow: var(--shadow-xs);
+  background: var(--c-surface);
+  border-color: var(--c-border-strong);
+}
+
+.dryingReportTop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dryingReportIdentity {
+  display: grid;
+  flex: 1;
+  gap: 3px;
+  min-width: 0;
+}
+
+.dryingReportBadges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dryingReportBadges > strong {
+  color: var(--c-text);
+  font-size: 13.5px;
+}
+
+.dryingReportIdentity > span {
+  overflow: hidden;
+  color: var(--c-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dryingReportActions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.dryingReportActions button {
+  height: 29px;
+  padding: 0 9px;
   border: 1.5px solid var(--c-brand);
   border-radius: var(--r-sm);
   color: var(--c-brand);
   background: transparent;
-  font-size: 12.5px;
+  font-size: 11.5px;
   font-weight: 600;
   transition: all var(--t);
   white-space: nowrap;
 }
 
-.dryingReportCard button:hover { background: var(--c-brand); color: #fff; }
+.dryingReportActions button:hover { background: var(--c-brand); color: #fff; }
+
+.dryingReportFacts {
+  display: grid;
+  grid-template-columns: minmax(92px, .7fr) minmax(130px, 1.15fr) minmax(110px, 1fr) minmax(76px, .65fr) 54px;
+  border-block: 1px solid var(--c-border);
+}
+
+.dryingReportFacts > span {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  padding: 5px 10px;
+  border-right: 1px solid var(--c-border);
+}
+
+.dryingReportFacts > span:first-child { padding-left: 0; }
+.dryingReportFacts > span:last-child { border-right: 0; }
+
+.dryingReportFacts small,
+.dryingReportTimeline small {
+  color: var(--c-muted);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.dryingReportFacts strong,
+.dryingReportTimeline strong {
+  overflow: hidden;
+  color: var(--c-text);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dryingReportTimeline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dryingReportTimeline > span {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.dryingReportTimeline > b {
+  color: var(--c-muted);
+  font-size: 12px;
+}
+
+.dryingReportTimeline > em {
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--c-brand);
+  background: color-mix(in srgb, var(--c-brand) 9%, transparent);
+  font-size: 10.5px;
+  font-style: normal;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.dryingReportTimeline .dryingFilledAt { margin-left: auto; }
+
+@media (max-width: 720px) {
+  .dryingReportTop { align-items: flex-start; }
+
+  .dryingReportFacts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dryingReportFacts > span,
+  .dryingReportFacts > span:first-child {
+    padding: 5px 8px;
+    border-right: 1px solid var(--c-border);
+  }
+
+  .dryingReportFacts > span:nth-child(even) { border-right: 0; }
+  .dryingReportFacts > span:last-child { border-right: 1px solid var(--c-border); }
+
+  .dryingReportTimeline {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  }
+
+  .dryingReportTimeline .dryingFilledAt {
+    grid-column: 1 / -1;
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 520px) {
+  .dryingReportsPanel { padding: 12px; }
+
+  .dryingReportTop { display: grid; }
+
+  .dryingReportActions {
+    justify-content: flex-end;
+  }
+}
 
 /* ── Production ───────────────────────────────────────────────── */
 .productionQuickCard { box-shadow: var(--shadow-xs); }

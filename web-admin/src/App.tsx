@@ -21979,51 +21979,46 @@ function DryingReportsPanel({
         const esTendal = String(report.dry_method ?? "").toUpperCase() === "TENDAL" || (report.tunnel_number == null && !report.dryer_name);
         const horas = Number(report.drying_hours);
         const duracion = Number.isFinite(horas) && horas > 0 ? `${horas.toFixed(1)} h` : "Pendiente";
+        const lotesResumen = report.lots.length > 0
+          ? report.lots.map((lot) => `${lot.farmer_name ?? "Sin agricultor"} · ${Number(lot.quintals ?? 0).toFixed(2)} QQ`).join("  |  ")
+          : "Sin lotes registrados";
         return (
-        <article className="dryingReportCard" key={report.id} style={{ display: "block" }}>
-          {/* Cabecera: estado (pill de color) + tipo de operación (badge) + acción. */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-            <strong style={{ fontSize: 14 }}>{esTendal ? "☀️ Tendal" : `Túnel ${report.tunnel_number}`}</strong>
-            <EstadoSecadoPill done={done} />
-            <OpTypeBadge operationType={op.operation_type} isMaquila={op.is_maquila} />
-            <span style={{ flex: 1 }} />
-            {onShare && (
-              <button
-                type="button"
-                title="Compartir el resumen de este secado por WhatsApp"
-                disabled={sharingId === report.id}
-                style={{ borderColor: "#25D366", color: "#128C7E" }}
-                onClick={() => onShare(report)}
-              >
-                {sharingId === report.id ? "⏳…" : "📲 Compartir"}
-              </button>
-            )}
-            <button type="button" onClick={() => onEdit(report)}>{done ? "Corregir datos" : "Editar"}</button>
-          </div>
-          {/* Datos clave en grid: lectura rápida, sin bloque de texto plano. */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))", gap: 8, marginBottom: 8 }}>
-            {([
-              ["Peso", `${Number(report.total_quintals ?? 0).toFixed(2)} QQ`],
-              ["Lotes", String(report.lots.length)],
-              ["Túnel", esTendal ? "Patio" : String(report.tunnel_number)],
-              ["Secadora", report.dryer_name ?? "—"],
-              ["Secador responsable", report.operator_name || "No asignado"],
-              ["Fecha de llenado", fmtFechaHoraSecado(report.filled_at, "No registrada")],
-              ["Inicio del secado", fmtFechaHoraSecado(report.dry_start_at)],
-              ["Fin del secado", fmtFechaHoraSecado(report.dry_end_at, done ? "No registrado" : "En proceso")],
-              ["Duración", duracion],
-              ["Variedad", report.rice_type === "CORRIENTE" ? "Corriente" : "0.11"]
-            ] as [string, string][]).map(([k, v]) => (
-              <div key={k} style={{ background: "var(--c-surface-2, #f8fafc)", border: "1px solid var(--c-border, #e5e7eb)", borderRadius: 8, padding: "6px 8px" }}>
-                <div style={{ fontSize: 10, color: "var(--c-muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".02em" }}>{k}</div>
-                <div style={{ fontSize: 13, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v}</div>
+        <article className="dryingReportCard" key={report.id}>
+          <div className="dryingReportTop">
+            <div className="dryingReportIdentity">
+              <div className="dryingReportBadges">
+                <strong>{esTendal ? "☀️ Tendal" : `🌀 Túnel ${report.tunnel_number}`}</strong>
+                <EstadoSecadoPill done={done} />
+                <OpTypeBadge operationType={op.operation_type} isMaquila={op.is_maquila} />
               </div>
-            ))}
+              <span title={lotesResumen}>{lotesResumen}</span>
+            </div>
+            <div className="dryingReportActions">
+              {onShare && (
+                <button type="button" title="Compartir el resumen de este secado por WhatsApp"
+                  disabled={sharingId === report.id} onClick={() => onShare(report)}>
+                  {sharingId === report.id ? "⏳…" : "📲 Compartir"}
+                </button>
+              )}
+              <button type="button" onClick={() => onEdit(report)}>{done ? "Corregir" : "Editar"}</button>
+            </div>
           </div>
-          {/* Agricultores del lote (limpio: sin "SERVICIO", eso ya lo dice el badge). */}
-          <small style={{ color: "var(--c-muted)" }}>
-            {report.lots.map((lot) => `${lot.farmer_name ?? "Sin agricultor"} (${Number(lot.quintals ?? 0).toFixed(2)} QQ)`).join(" · ")}
-          </small>
+
+          <div className="dryingReportFacts">
+            <span><small>Peso</small><strong>{Number(report.total_quintals ?? 0).toFixed(2)} QQ</strong></span>
+            <span><small>Secador</small><strong>{report.operator_name || "No asignado"}</strong></span>
+            <span><small>Secadora</small><strong>{esTendal ? "Patio" : (report.dryer_name ?? `Túnel ${report.tunnel_number}`)}</strong></span>
+            <span><small>Variedad</small><strong>{report.rice_type === "CORRIENTE" ? "Corriente" : "0.11"}</strong></span>
+            <span><small>Lotes</small><strong>{report.lots.length}</strong></span>
+          </div>
+
+          <div className="dryingReportTimeline">
+            <span><small>Inicio</small><strong>{fmtFechaHoraSecado(report.dry_start_at)}</strong></span>
+            <b aria-hidden="true">→</b>
+            <span><small>Fin</small><strong>{fmtFechaHoraSecado(report.dry_end_at, done ? "No registrado" : "En proceso")}</strong></span>
+            <em>{duracion}</em>
+            <span className="dryingFilledAt"><small>Llenado</small><strong>{fmtFechaHoraSecado(report.filled_at, "No registrado")}</strong></span>
+          </div>
         </article>
         );
       })}
@@ -22520,13 +22515,17 @@ function fmtFechaHoraSecado(value: string | null | undefined, pendiente = "Pendi
   if (!value) return pendiente;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return pendiente;
-  return date.toLocaleString("es-EC", {
+  const fecha = date.toLocaleDateString("es-EC", {
     day: "2-digit",
     month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit"
+    year: "numeric"
   });
+  const hora = date.toLocaleTimeString("es-EC", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+  return `${fecha} · ${hora}`;
 }
 
 /** Hora corta HH:MM para reportes (ej. hora de secado). "—" si no hay dato. */
