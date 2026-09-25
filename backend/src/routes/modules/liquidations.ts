@@ -6,7 +6,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
-import { calcularNetoLiquidacion } from "../../utils/money.js";
+import { calcularNetoLiquidacion, conciliarDescuentoFomento } from "../../utils/money.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { cruzarFleteInterno, type CruceFleteResultado } from "../../services/campo-cruce-flete.js";
 import { amortizarFomentosLIFO, generarFomentoSaldoEnContra, revertirPagosFomentoDeLiquidacion, type AmortizacionFomentoResultado } from "../../services/fomento-liquidacion.js";
@@ -294,41 +294,7 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
         accionistaId
       ]
     );
-
-    let remainingDiscount = preview.advances_discount;
-    const advances = await client.query(
-      `SELECT * FROM farmer_advances
-       WHERE farmer_id = $1 AND accionista_id = $2 AND status IN ('CONFIRMED', 'PARTIAL') AND balance > 0
-       ORDER BY issued_at ASC
-       FOR UPDATE`,
-      [data.farmer_id, accionistaId]
-    );
-
-    for (const advance of advances.rows) {
-      if (remainingDiscount <= 0) break;
-      const applied = Math.min(Number(advance.balance), remainingDiscount);
-      const newBalance = round2(Number(advance.balance) - applied);
-      const newStatus = newBalance === 0 ? "PAID" : "PARTIAL";
-
-      await client.query(
-        "UPDATE farmer_advances SET balance = $2, status = $3 WHERE id = $1",
-        [advance.id, newBalance, newStatus]
-      );
-      await client.query(
-        `INSERT INTO advance_applications (advance_id, liquidation_id, amount_applied)
-         VALUES ($1, $2, $3)`,
-        [advance.id, liquidation.rows[0].id, applied]
-      );
-      remainingDiscount = round2(remainingDiscount - applied);
-    }
-
-    if (preview.net_amount > 0) {
-      await client.query(
-        `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, accionista_id)
-         VALUES ($1, $2, $3, $3, $4)`,
-        [data.farmer_id, liquidation.rows[0].id, preview.net_amount, accionistaId]
-      );
-    }
+    let liquidacionFinal = liquidation.rows[0];
 
     // El lote solo se marca como liquidado cuando TODOS sus ingresos ya se
     // pagaron: un lote puede juntar arroz de varios agricultores.
@@ -399,12 +365,66 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
       });
     }
 
+    // El descuento solicitado puede ser mayor que la deuda real (por datos
+    // desactualizados o una distribución manual). Solo el abono efectivamente
+    // aplicado pertenece a Fomentos; el resto vuelve al neto de la liquidación.
+    const conciliacionFomento = conciliarDescuentoFomento(fomentoDiscount, fomentoPagos?.total_abonado ?? 0);
+    const otrosDescuentosFinales = round2(Math.max(0, preview.other_discounts - conciliacionFomento.noAplicado));
+    const advances = await client.query(
+      `SELECT * FROM farmer_advances
+       WHERE farmer_id = $1 AND accionista_id = $2 AND status IN ('CONFIRMED', 'PARTIAL') AND balance > 0
+       ORDER BY issued_at ASC
+       FOR UPDATE`,
+      [data.farmer_id, accionistaId]
+    );
+    const anticiposPendientes = round2(advances.rows.reduce((sum, advance) => sum + Number(advance.balance || 0), 0));
+    const calculoFinal = calcularNetoLiquidacion(preview.gross_amount, otrosDescuentosFinales, anticiposPendientes);
+    const desgloseFinal = data.discount_breakdown
+      ? { ...data.discount_breakdown, fomento: conciliacionFomento.aplicado }
+      : null;
+
+    liquidacionFinal = (await client.query(
+      `UPDATE liquidations
+       SET advances_discount = $2, other_discounts = $3, discount_breakdown = $4::jsonb, net_amount = $5
+       WHERE id = $1
+       RETURNING *`,
+      [liquidation.rows[0].id, calculoFinal.descuentoAnticipos, otrosDescuentosFinales,
+       desgloseFinal ? JSON.stringify(desgloseFinal) : null, calculoFinal.neto]
+    )).rows[0];
+
+    let remainingDiscount = calculoFinal.descuentoAnticipos;
+    for (const advance of advances.rows) {
+      if (remainingDiscount <= 0) break;
+      const applied = Math.min(Number(advance.balance), remainingDiscount);
+      const newBalance = round2(Number(advance.balance) - applied);
+      const newStatus = newBalance === 0 ? "PAID" : "PARTIAL";
+      await client.query(
+        "UPDATE farmer_advances SET balance = $2, status = $3 WHERE id = $1",
+        [advance.id, newBalance, newStatus]
+      );
+      await client.query(
+        `INSERT INTO advance_applications (advance_id, liquidation_id, amount_applied)
+         VALUES ($1, $2, $3)`,
+        [advance.id, liquidation.rows[0].id, applied]
+      );
+      remainingDiscount = round2(remainingDiscount - applied);
+    }
+
+    if (calculoFinal.neto > 0) {
+      await client.query(
+        `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, accionista_id)
+         VALUES ($1, $2, $3, $3, $4)`,
+        [data.farmer_id, liquidation.rows[0].id, calculoFinal.neto, accionistaId]
+      );
+    }
+
     // Saldo EN CONTRA (Descuentos > Bruto): el remanente se registra como un NUEVO
     // fomento a nombre del SOCIO ACREEDOR ORIGINAL (dueño del fomento financiado),
     // nunca del socio que liquida. Si no hubo fomento (déficit por otros descuentos),
     // no hay acreedor de fomento → se atribuye al socio que liquida (único posible).
     let saldoContra: { fomento_id: string; monto: number; acreedor: string | null } | null = null;
-    if ((data.saldo_en_contra ?? 0) > 0) {
+    const saldoEnContraReal = round2(Math.max(0, (data.saldo_en_contra ?? 0) - conciliacionFomento.noAplicado));
+    if (saldoEnContraReal > 0) {
       const acreedorId = fomentoPagos?.acreedor?.accionista_id ?? accionistaId ?? null;
       const acreedorNombre = fomentoPagos?.acreedor?.nombre ?? null;
       saldoContra = await generarFomentoSaldoEnContra(client, {
@@ -414,7 +434,7 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
         acreedorNombre,
         farmerId: data.farmer_id,
         farmerName,
-        deficit: data.saldo_en_contra ?? 0,
+        deficit: saldoEnContraReal,
         createdBy: data.created_by ?? null
       });
     }
@@ -526,7 +546,7 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
       retenciones = { bascula_matriz: bascula, cosechadora_campo: cosechadoraPropia };
     }
 
-    return { ...liquidation.rows[0], cruce_flete: cruce, fomento_pagos: fomentoPagos, saldo_en_contra: saldoContra, retenciones };
+    return { ...liquidacionFinal, cruce_flete: cruce, fomento_pagos: fomentoPagos, saldo_en_contra: saldoContra, retenciones };
   });
 
   res.status(201).json(result);
@@ -761,11 +781,18 @@ liquidationsRouter.get("/fomentos-agricultor", asyncRoute(async (req, res) => {
   const rows = (await pool.query(
     `SELECT f.id, f.farmer_name, f.accionista_id, a.name AS accionista_nombre, f.created_at,
             (f.accionista_id IS DISTINCT FROM $3) AS es_de_otro_socio,
-            ROUND(
+            GREATEST(ROUND(
               COALESCE((SELECT SUM(fe.valor) FROM fomento_entregas fe WHERE fe.fomento_id = f.id), 0)
-              + COALESCE((SELECT SUM(fe.valor * f.renta / 30.0 * GREATEST(CURRENT_DATE - fe.fecha, 0)) FROM fomento_entregas fe WHERE fe.fomento_id = f.id), 0)
+              + COALESCE((SELECT SUM(
+                  CASE WHEN fe.es_saldo_anterior
+                       THEN fe.valor * f.renta * COALESCE(fe.meses_interes_fijo, 0)
+                       ELSE fe.valor * f.renta / 30.0 * GREATEST(
+                         (CASE WHEN f.status = 'CERRADO_LIQUIDACION' AND f.liquidado_at IS NOT NULL
+                               THEN f.liquidado_at::date ELSE CURRENT_DATE END) - fe.fecha, 0)
+                  END)
+                FROM fomento_entregas fe WHERE fe.fomento_id = f.id), 0)
               - COALESCE((SELECT SUM(fp.valor) FROM fomento_pagos fp WHERE fp.fomento_id = f.id), 0)
-            , 2)::float AS saldo
+            , 2), 0)::float AS saldo
      FROM fomentos f
      LEFT JOIN accionistas a ON a.id = f.accionista_id
      WHERE f.status = 'ACTIVOS'

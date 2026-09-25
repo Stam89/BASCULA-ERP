@@ -51,3 +51,17 @@ export function calcularNetoLiquidacion(
     neto: Math.max(0, round2(gross - other - descuentoAnticipos))
   };
 }
+
+/**
+ * Limita el descuento de fomento al pago que realmente pudo aplicarse. El
+ * sobrante nunca pertenece al fomento: vuelve al dinero disponible de la
+ * liquidacion para anticipos o para pagar al agricultor.
+ */
+export function conciliarDescuentoFomento(
+  descuentoSolicitado: number,
+  totalAbonado: number
+): { aplicado: number; noAplicado: number } {
+  const solicitado = Math.max(0, round2(Number(descuentoSolicitado) || 0));
+  const aplicado = Math.min(solicitado, Math.max(0, round2(Number(totalAbonado) || 0)));
+  return { aplicado: round2(aplicado), noAplicado: round2(solicitado - aplicado) };
+}

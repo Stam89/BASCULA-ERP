@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { calcularNetoLiquidacion, estibadorBaseFromTulas, repartirPorPeso } from "./money.js";
+import { calcularNetoLiquidacion, conciliarDescuentoFomento, estibadorBaseFromTulas, repartirPorPeso } from "./money.js";
 
 describe("estibadorBaseFromTulas (proporcional, $ por cada 3 tulas)", () => {
   it("3 tulas = 1 grupo", () => expect(estibadorBaseFromTulas(3, 5)).toBe(5));
@@ -60,5 +60,19 @@ describe("calcularNetoLiquidacion", () => {
       descuentoAnticipos: 0,
       neto: 0
     });
+  });
+});
+
+describe("conciliarDescuentoFomento", () => {
+  it("aplica solo la deuda real y libera el excedente", () => {
+    expect(conciliarDescuentoFomento(500, 350)).toEqual({ aplicado: 350, noAplicado: 150 });
+  });
+
+  it("no inventa excedente cuando todo el descuento fue aplicado", () => {
+    expect(conciliarDescuentoFomento(350, 350)).toEqual({ aplicado: 350, noAplicado: 0 });
+  });
+
+  it("normaliza valores negativos a cero", () => {
+    expect(conciliarDescuentoFomento(-20, -10)).toEqual({ aplicado: 0, noAplicado: 0 });
   });
 });

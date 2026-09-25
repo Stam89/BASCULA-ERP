@@ -3539,12 +3539,14 @@ export function App() {
     const r2 = (n: number) => Math.round(n * 100) / 100;
     return liqFomentoLifo.items.map((it) => {
       const raw = liqFomentoDist[it.id];
-      const monto = raw !== undefined && raw !== "" ? r2(Math.max(0, Number(raw) || 0)) : it.abono;
+      const solicitado = raw !== undefined && raw !== "" ? r2(Math.max(0, Number(raw) || 0)) : it.abono;
+      const monto = r2(Math.min(solicitado, it.saldo));
       return { id: it.id, accionista_nombre: it.accionista_nombre, es_de_otro_socio: it.es_de_otro_socio, saldo: it.saldo, monto };
     });
   }, [liqFomentoLifo.items, liqFomentoDist]);
   const liqFomentoManualTotal = Math.round(liqFomentoResuelto.reduce((s, r) => s + r.monto, 0) * 100) / 100;
   const liqFomentoTotal = liqDistActiva ? liqFomentoManualTotal : liqFomentoLifo.total;
+  const liqSaldoLibreFomento = Math.max(0, Math.round((liqFomentoLifo.disponible - liqFomentoTotal) * 100) / 100);
   // Descuentos a nivel lote (báscula/cosechadora) + fomento(s) + flete de todas las líneas.
   const liqDiscountsTotal = useMemo(() =>
     Object.values(liqDiscounts).reduce((sum, v) => sum + Number(v || 0), 0) + liqFleteTotal + liqFomentoTotal,
@@ -10229,6 +10231,10 @@ export function App() {
       setMessage("Seleccione agricultor y al menos un lote con precio");
       return;
     }
+    if (liqFomentoTotal > liqFomentoLifo.disponible + 0.005) {
+      addToast(`La asignacion a fomentos ($${liqFomentoTotal.toFixed(2)}) supera el disponible de la liquidacion ($${liqFomentoLifo.disponible.toFixed(2)}).`, "error");
+      return;
+    }
     type LiqApiResult = {
       quintals: number; price_per_quintal: number;
       gross_amount: number; advances_discount: number; other_discounts: number; net_amount: number;
@@ -10560,7 +10566,6 @@ export function App() {
   // entregas/créditos + intereses, total abonado por liquidación(es) y saldo
   // resultante (Saldado $0.00 o Saldo en Contra pendiente).
   function printEstadoCuentaFomento(f: FomentoDetalle) {
-    const r2 = (n: number) => Math.round(n * 100) / 100;
     const esc = (s: unknown) => String(s ?? "").replace(/</g, "&lt;");
     const cerrado = f.status === "CERRADO_LIQUIDACION";
     const cuenta = obtenerResumenCuentaFomento(f);
@@ -10571,7 +10576,7 @@ export function App() {
     // ── Sección A: CARGOS (lo que el agricultor pidió) + interés hasta el arreglo ──
     const totalPedido = Number(f.total_pedido ?? 0);
     const totalInteres = Number(f.gasto_adm ?? 0);
-    const cargosFomento = r2(totalPedido + totalInteres);
+    const cargosFomento = cuenta.totalCargos;
     const entregaRows = (f.entregas ?? []).map((e, index) => {
       const dias = obtenerDiasEntregaFomento(f, e);
       const meses = obtenerMesesEntregaFomento(e, dias);
@@ -10586,24 +10591,6 @@ export function App() {
         <td style="text-align:right;font-weight:600">$${Number(e.suman ?? (Number(e.valor)+Number(e.interes ?? 0))).toFixed(2)}</td>
       </tr>`;
     }).join("");
-
-    // ── Secciones B y C: de la(s) liquidación(es) que saldaron este fomento ──
-    const liqs = f.liquidaciones ?? [];
-    const totalFlete = r2(liqs.reduce((s, l) => s + Number(l.flete || 0), 0));
-    const totalCosechadora = r2(liqs.reduce((s, l) => s + Number(l.cosechadora || 0), 0));
-    const totalBascula = r2(liqs.reduce((s, l) => s + Number(l.bascula || 0), 0));
-    const descuentosOp = r2(totalFlete + totalCosechadora + totalBascula);
-    const ingresosArroz = r2(liqs.reduce((s, l) => s + Number(l.gross_amount || 0), 0));
-
-    const liqRows = liqs.length
-      ? liqs.map((l) => `<tr>
-          <td>${esc(l.liquidation_number)}</td>
-          <td>${l.created_at ? new Date(l.created_at).toLocaleDateString("es-EC") : "—"}</td>
-          <td style="text-align:right">${Number(l.quintals || 0).toFixed(2)} QQ</td>
-          <td style="text-align:right">$${Number(l.price_per_quintal || 0).toFixed(2)}</td>
-          <td style="text-align:right;font-weight:700;color:#15803d">$${Number(l.gross_amount || 0).toFixed(2)}</td>
-        </tr>`).join("")
-      : `<tr><td colspan="5" style="text-align:center;color:#888">Aún no se ha liquidado arroz para este fomento</td></tr>`;
 
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
       <title>Estado de Cuenta — Fomento</title>
@@ -10640,7 +10627,7 @@ export function App() {
         <h2>${esc(appSettings.business_subtitle)}</h2>
         ${appSettings.ruc ? `<h2>RUC: ${esc(appSettings.ruc)}</h2>` : ""}
         ${appSettings.address || appSettings.phone ? `<h2>${[appSettings.address, appSettings.phone && `Telf: ${appSettings.phone}`].filter(Boolean).map(esc).join(" · ")}</h2>` : ""}
-        <h3>Comprobante de Liquidación — Fomento</h3>
+        <h3>Estado de Cuenta — Fomento</h3>
       </div>
       <div class="meta">
         <div><strong>Agricultor:</strong> ${esc(f.farmer_name)}</div>
@@ -10652,7 +10639,7 @@ export function App() {
       </div>
 
       <div class="sec">
-        <h4>A · Cargos del agricultor (insumos, efectivo, créditos) + interés</h4>
+        <h4>Detalle de entregas, créditos e interés</h4>
         <table>
           <thead><tr><th style="text-align:center">N.º</th><th>Fecha Inicial</th><th>Fecha Final</th><th style="text-align:right">Días</th><th style="text-align:right">Meses</th><th style="text-align:right">Valor</th><th style="text-align:right">Interés</th><th style="text-align:right">Suman</th></tr></thead>
           <tbody>${entregaRows || `<tr><td colspan="8" style="text-align:center;color:#888">Sin cargos registrados</td></tr>`}</tbody>
@@ -10662,26 +10649,6 @@ export function App() {
             <td style="text-align:right;color:#b45309">$${totalInteres.toFixed(2)}</td>
             <td style="text-align:right">$${cargosFomento.toFixed(2)}</td>
           </tr></tfoot>
-        </table>
-      </div>
-
-      <div class="sec">
-        <h4>B · Referencia de descuentos operativos de la liquidación</h4>
-        <table class="subt" style="width:360px">
-          <tr><td class="lbl">🚚 Flete:</td><td class="val">$${totalFlete.toFixed(2)}</td></tr>
-          <tr><td class="lbl">🚜 Cosechadora:</td><td class="val">$${totalCosechadora.toFixed(2)}</td></tr>
-          ${totalBascula > 0.005 ? `<tr><td class="lbl">⚖️ Retención báscula:</td><td class="val">$${totalBascula.toFixed(2)}</td></tr>` : ""}
-          <tr><td class="lbl" style="border-top:1px solid #999">Subtotal descuentos:</td><td class="val" style="border-top:1px solid #999;font-weight:700">$${descuentosOp.toFixed(2)}</td></tr>
-        </table>
-        ${descuentosOp <= 0.005 ? `<div style="font-size:12px;color:#888">Sin descuentos operativos.</div>` : ""}
-      </div>
-
-      <div class="sec">
-        <h4>C · Referencia de arroz entregado según romana</h4>
-        <table>
-          <thead><tr><th>Liquidación</th><th>Fecha</th><th style="text-align:right">QQ</th><th style="text-align:right">Precio/QQ</th><th style="text-align:right">Bruto arroz</th></tr></thead>
-          <tbody>${liqRows}</tbody>
-          ${liqs.length ? `<tfoot><tr><td colspan="4">TOTAL INGRESOS (BRUTO)</td><td style="text-align:right;color:#15803d">$${ingresosArroz.toFixed(2)}</td></tr></tfoot>` : ""}
         </table>
       </div>
 
@@ -10696,7 +10663,7 @@ export function App() {
       </div>
 
       <div class="result ${cuenta.saldado ? "favor" : "contra"}">
-        <div class="cap">D · ${cuenta.saldado ? "SALDADO" : "DEUDA PENDIENTE"}</div>
+        <div class="cap">${cuenta.saldado ? "SALDADO" : "DEUDA PENDIENTE"}</div>
         <div class="amt">$ ${cuenta.deudaPendiente.toFixed(2)}</div>
         <div style="font-size:12px;margin-top:4px;font-weight:700">${cuenta.saldoFavor > 0 ? `Saldo a favor del agricultor: $${cuenta.saldoFavor.toFixed(2)}` : cuenta.saldado ? "Cuenta cubierta por completo." : "Monto pendiente de pago del agricultor."}</div>
       </div>
@@ -16263,6 +16230,14 @@ export function App() {
                           {liqFomentoManualTotal > liqFomentoLifo.disponible + 0.005 && (
                             <small style={{ color: "#b91c1c", display: "block" }}>⚠️ Asignaste más que el disponible del arroz (${liqFomentoLifo.disponible.toFixed(2)}).</small>
                           )}
+                        </div>
+                      )}
+                      {liqFomentosList.length > 0 && liqSaldoLibreFomento > 0.005 && (
+                        <div style={{ marginTop: 6, padding: "7px 10px", borderRadius: 7, background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", fontSize: 12 }}>
+                          <strong>Saldo libre después de Fomentos: ${liqSaldoLibreFomento.toFixed(2)}</strong>
+                          <span style={{ display: "block", marginTop: 2 }}>
+                            Permanece disponible en la liquidación para pagar al agricultor o para asignarlo arriba a otro fomento del mismo agricultor.
+                          </span>
                         </div>
                       )}
                       {/* ─ Desglose de fletes: hacia dónde va lo descontado ─ */}

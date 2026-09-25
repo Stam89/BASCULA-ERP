@@ -362,6 +362,15 @@ Implementado el 2026-09-24:
 - No hubo cambios de base de datos ni de registros existentes.
 - Verificaciones: frontend build, lint sin errores (advertencias históricas), backend tests 41/41 y revisión visual local en Fomentos.
 
+Ampliado el 2026-09-24:
+
+- Liquidaciones y Fomentos usan la misma fórmula híbrida de interés (días normales y meses fijos para saldos arrastrados).
+- El descuento de Fomento se limita al abono que realmente pudo aplicarse; cualquier excedente vuelve al neto de la liquidación.
+- Después de reconciliar el fomento se recalculan anticipos, neto y cuenta por pagar al agricultor dentro de la misma transacción.
+- La distribución manual permite repartir entre otros fomentos del agricultor, pero se bloquea si supera el disponible del arroz.
+- El comprobante de Fomento quedó simplificado: solo Estado de Cuenta y saldo; fletes, cosechadora y arroz permanecen en el comprobante de Liquidación.
+- Sin migraciones ni cambios de esquema. Verificaciones: backend build, 44/44 tests, frontend build, lint sin errores y preflight sin errores críticos.
+
 ## Servidor local
 
 El backend compilado se inicia desde `backend/` con:

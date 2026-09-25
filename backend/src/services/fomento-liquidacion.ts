@@ -9,12 +9,18 @@ import { ApiError } from "../http/error-handler.js";
 // deuda_total de UN fomento (misma fórmula que el reporte SELECT_FOMENTO):
 //   entregas + gasto_adm (interés por renta) − pagos.
 const SALDO_FOMENTO_SQL = `
-  SELECT ROUND(
+  SELECT GREATEST(ROUND(
     COALESCE((SELECT SUM(fe.valor) FROM fomento_entregas fe WHERE fe.fomento_id = f.id), 0)
-    + COALESCE((SELECT SUM(fe.valor * f.renta / 30.0 * GREATEST(CURRENT_DATE - fe.fecha, 0))
+    + COALESCE((SELECT SUM(
+        CASE WHEN fe.es_saldo_anterior
+             THEN fe.valor * f.renta * COALESCE(fe.meses_interes_fijo, 0)
+             ELSE fe.valor * f.renta / 30.0 * GREATEST(
+               (CASE WHEN f.status = 'CERRADO_LIQUIDACION' AND f.liquidado_at IS NOT NULL
+                     THEN f.liquidado_at::date ELSE CURRENT_DATE END) - fe.fecha, 0)
+        END)
                 FROM fomento_entregas fe WHERE fe.fomento_id = f.id), 0)
     - COALESCE((SELECT SUM(fp.valor) FROM fomento_pagos fp WHERE fp.fomento_id = f.id), 0)
-  , 2)::float AS saldo
+  , 2), 0)::float AS saldo
   FROM fomentos f WHERE f.id = $1`;
 
 async function saldoFomento(client: PoolClient, fomentoId: string): Promise<number> {
