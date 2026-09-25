@@ -2218,7 +2218,7 @@ export function App() {
   const [laborForm, setLaborForm] = useState({ worker_group: "", sacks_moved: "", price_per_sack: "" });
 
   // ── Configuración ─────────────────────────────────────────────────────────
-  const [configSubTab, setConfigSubTab] = useState<"estado" | "operacion" | "tarifas" | "cuadrilla" | "socios" | "secuenciales" | "usuarios">("estado");
+  const [configSubTab, setConfigSubTab] = useState<"estado" | "operacion" | "nomina" | "tarifas" | "cuadrilla" | "socios" | "secuenciales" | "usuarios">("estado");
   // Qué acordeones de Configuración dejó abiertos el usuario, por subpestaña.
   // Es una comodidad por equipo (no dato del negocio), por eso vive en localStorage.
   const acordeonesKey = "bascula-erp:config-acordeones";
@@ -2241,7 +2241,9 @@ export function App() {
     { sub: "operacion", tarjeta: "✅ Puesta en marcha", claves: "checklist pasos inicio configuracion inicial" },
     { sub: "operacion", tarjeta: "⚠️ Zona de peligro", claves: "borrar datos de prueba reiniciar operacion reset limpiar pruebas movimientos tickets" },
     { sub: "operacion", tarjeta: "💾 Respaldos de la base de datos", claves: "backup respaldo copia de seguridad onedrive pg_dump" },
-    { sub: "tarifas", tarjeta: "💲 Tarifas de pago", claves: "pilador estibador secador saca tulas arrocillo combustible gas diesel guardiania" },
+    { sub: "nomina", tarjeta: "💲 Tarifas de pago", claves: "pilador estibador secador saca tulas arrocillo guardiania tunel tendal cuadrilla nomina mano de obra" },
+    { sub: "tarifas", tarjeta: "🛎️ Secado como Servicio", claves: "secado servicio cliente cobro granel saco maquila cxc" },
+    { sub: "operacion", tarjeta: "⛽ Precio del combustible", claves: "combustible gas diesel bombona cilindro medidor secadoras" },
     { sub: "tarifas", tarjeta: "🧾 Tarifario de Servicios", claves: "socios clientes pilado secado flete precio por qq vigencia" },
     { sub: "tarifas", tarjeta: "📦 Tarifas de empaque", claves: "sacos 10 25 50 libras empaque matriz" },
     { sub: "tarifas", tarjeta: "🧹 Tarifas de Procesos", claves: "seleccion envejecido envejecimiento por qq" },
@@ -2258,7 +2260,7 @@ export function App() {
   ];
 
   const subLabel: Record<typeof configSubTab, string> = {
-    estado: "Estado del sistema", operacion: "⚙️ Operación y Planta", tarifas: "⚙️ Tarifas y Servicios de Planta", cuadrilla: "👷 Cuadrilla",
+    estado: "Estado del sistema", operacion: "⚙️ Operación y Planta", nomina: "👷 Tarifas de Nómina y Mano de Obra", tarifas: "🧾 Tarifas de Servicios y Clientes", cuadrilla: "👷 Cuadrilla",
     socios: "👥 Socios & Bancos", secuenciales: "📄 Secuenciales", usuarios: "🔐 Control de Usuarios"
   };
 
@@ -2645,7 +2647,7 @@ export function App() {
     if (dif(settingsForm.tarifa_pilado_qq, appSettings.tarifa_pilado_qq) || dif(settingsForm.humedad_base_pct, appSettings.humedad_base_pct)) {
       list.push("Parámetros de planta");
     }
-    if (JSON.stringify(laborRatesForm) !== JSON.stringify(laborRatesPristine.current)) list.push("Tarifas de pago");
+    if (JSON.stringify(laborRatesForm) !== JSON.stringify(laborRatesPristine.current)) list.push("Tarifas (nómina, secado como servicio o combustible)");
     if (JSON.stringify(packagingRatesForm) !== JSON.stringify(packagingRatesPristine.current)) list.push("Tarifas de empaque");
     if (dif(selectionRatesForm.seleccion_rate, selectionRates.seleccion_rate) || dif(selectionRatesForm.envejecimiento_rate, selectionRates.envejecimiento_rate)) {
       list.push("Tarifas de Procesos");
@@ -19046,7 +19048,8 @@ export function App() {
               {([
                 ["estado", "Estado del sistema"],
                 ["operacion", "⚙️ Operación y Planta"],
-                ["tarifas", "⚙️ Tarifas y Servicios de Planta"],
+                ["nomina", "👷 Tarifas de Nómina y Mano de Obra"],
+                ["tarifas", "🧾 Tarifas de Servicios y Clientes"],
                 ["cuadrilla", "👷 Cuadrilla"],
                 ["socios", "👥 Socios & Bancos"],
                 ["secuenciales", "📄 Secuenciales"],
@@ -20297,15 +20300,15 @@ export function App() {
             )}
 
             {/* ── Tarifas y Servicios de Planta (2 columnas) ── */}
-            {configSubTab === "tarifas" && (
+            {/* ── 👷 Tarifas de Nómina y Mano de Obra (EGRESOS: pagos a personal) ──
+                Solo reorganización visual: mismos campos de labor_rates y mismo
+                guardado que antes (saveLaborRates). */}
+            {configSubTab === "nomina" && (
               <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {/* Todas las tarjetas son acordeones (<details>) apilados a lo ancho.
-                    Cambio 100% visual: inputs, estado, onChange, botones y API intactos. */}
-                {/* 1) Tarifas de pago (Pilador y Estibador) */}
                 <form className="formPanel" onSubmit={(e) => saveLaborRates(e).catch((err) => addToast(err.message, "error"))}>
-                  <details>
-                    <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>💲 Tarifas de pago (Pilador y Estibador)</summary>
-                  <p className="muted">Con estas tarifas se calcula automáticamente el pago al cerrar cada pilada en Producción.</p>
+                  <details open>
+                    <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>💲 Tarifas de pago (Pilador, Estibador, Secador y Tendal)</summary>
+                  <p className="muted">Egresos: con estas tarifas se calcula automáticamente el pago al personal (Producción, Secadoras y Cuadrilla).</p>
                   <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>Pilador</h2>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <label><span>$ por QQ de arroz</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.pilador_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, pilador_per_qq: Number(e.target.value) })} /></label>
@@ -20318,27 +20321,57 @@ export function App() {
                     <label><span>$ por arrocillo</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.estibador_per_arrocillo} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_arrocillo: Number(e.target.value) })} /></label>
                     <label><span>$ por cada 3 tulas ⭐</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.estibador_por_3tulas} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_por_3tulas: Number(e.target.value) })} /></label>
                   </div>
-                  <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>Secador <span className="muted" style={{ fontWeight: 400 }}>(próxima fase)</span></h2>
+                  <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>Secador</h2>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <label><span>$ guardianía / día</span><input type="number" step="0.5" min="0" disabled={!isAdmin} value={laborRatesForm.secador_guardiania} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secador_guardiania: Number(e.target.value) })} /></label>
                     <label><span>$ por túnel secado</span><input type="number" step="0.5" min="0" disabled={!isAdmin} value={laborRatesForm.secador_per_tunel} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secador_per_tunel: Number(e.target.value) })} /></label>
                   </div>
-                  <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>☀️ Secado en Tendal</h2>
+                  <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>☀️ Secado en Tendal (Cuadrilla)</h2>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10 }}>
                     <label><span>Secado en Tendal (Cuadrilla) $ x QQ</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.tendal_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, tendal_per_qq: Number(e.target.value) })} /></label>
+                    <small className="muted" style={{ marginTop: -4 }}>Pago a la cuadrilla por el tendal a granel. El tendal ensacado se paga por saco con la actividad «TENDAL POR SACO» de Cuadrilla.</small>
                   </div>
-                  <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>🛎️ Secado como Servicio (cobro al cliente)</h2>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10 }}>
-                    <label><span>Secado A Granel / Directo a Producción ($ x QQ)</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.secado_servicio_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secado_servicio_per_qq: Number(e.target.value) })} /></label>
-                    <label><span>Secado En Saco ($ x QQ)</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.secado_servicio_saco_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secado_servicio_saco_per_qq: Number(e.target.value) })} /></label>
-                    <small className="muted" style={{ marginTop: -4 }}>Se cobra al cliente de servicio (maquila) al finalizar el secado, según el «Empaque de botada (vaciado)» del túnel o el modo del Tendal: A granel → primera tarifa; En saco → segunda. La tarifa A granel también es la sugerida en el cobro manual de «Solo Servicio de Secado».</small>
-                  </div>
-                  <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>⛽ Precio del combustible <span className="muted" style={{ fontWeight: 400 }}>(se usa en Secadoras)</span></h2>
+                  <button className="primary" disabled={!isAdmin}>Guardar tarifas</button>
+                  {!isAdmin && <p className="muted">Solo un administrador puede cambiar las tarifas.</p>}
+                  </details>
+                </form>
+              </section>
+            )}
+
+            {/* ── ⛽ Precio del combustible (bloque operativo, en Operación y Planta).
+                Mismos campos/guardado de labor_rates que antes. */}
+            {configSubTab === "operacion" && (
+              <section style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 12 }}>
+                <form className="formPanel" onSubmit={(e) => saveLaborRates(e).catch((err) => addToast(err.message, "error"))}>
+                  <details>
+                    <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>⛽ Precio del combustible <span className="muted" style={{ fontWeight: 400 }}>(se usa en Secadoras)</span></summary>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
                     <label><span>$ bombona por cada 1%</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.precio_gas_bombona} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_bombona: Number(e.target.value) })} /></label>
                     <label><span>$ por cilindro</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.precio_gas_cilindro} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_cilindro: Number(e.target.value) })} /></label>
                     <label><span>$ diesel por unidad de medidor</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.precio_diesel} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_diesel: Number(e.target.value) })} /></label>
                   </div>
+                  <button className="primary" disabled={!isAdmin}>Guardar tarifas</button>
+                  {!isAdmin && <p className="muted">Solo un administrador puede cambiar las tarifas.</p>}
+                  </details>
+                </form>
+              </section>
+            )}
+
+            {configSubTab === "tarifas" && (
+              <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {/* Todas las tarjetas son acordeones (<details>) apilados a lo ancho.
+                    Cambio 100% visual: inputs, estado, onChange, botones y API intactos. */}
+                {/* 1) Secado como Servicio (INGRESO: cobro al cliente). Mismo estado y
+                    mismo guardado (saveLaborRates → /labor/rates) que Nómina y
+                    Combustible: se reorganizó solo la vista, no las claves. */}
+                <form className="formPanel" onSubmit={(e) => saveLaborRates(e).catch((err) => addToast(err.message, "error"))}>
+                  <details>
+                    <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🛎️ Secado como Servicio (cobro al cliente)</summary>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <label><span>Secado A Granel / Directo a Producción ($ x QQ)</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.secado_servicio_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secado_servicio_per_qq: Number(e.target.value) })} /></label>
+                    <label><span>Secado En Saco ($ x QQ)</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.secado_servicio_saco_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secado_servicio_saco_per_qq: Number(e.target.value) })} /></label>
+                  </div>
+                  <small className="muted">Se cobra al cliente de servicio (maquila) al finalizar el secado, según el «Empaque de botada (vaciado)» del túnel o el modo del Tendal: A granel → primera tarifa; En saco → segunda. La tarifa A granel también es la sugerida en el cobro manual de «Solo Servicio de Secado».</small>
                   <button className="primary" disabled={!isAdmin}>Guardar tarifas</button>
                   {!isAdmin && <p className="muted">Solo un administrador puede cambiar las tarifas.</p>}
                   </details>
@@ -20733,7 +20766,8 @@ export function App() {
                           <p>Revisa precios de servicios, empaque, cuadrilla y numeracion de documentos.</p>
                         </div>
                         <div className="launchStepActions">
-                          <button type="button" className="btnGhost" onClick={() => setConfigSubTab("tarifas")}>Tarifas</button>
+                          <button type="button" className="btnGhost" onClick={() => setConfigSubTab("nomina")}>Nómina</button>
+                          <button type="button" className="btnGhost" onClick={() => setConfigSubTab("tarifas")}>Servicios</button>
                           <button type="button" className="btnGhost" onClick={() => setConfigSubTab("secuenciales")}>Secuenciales</button>
                         </div>
                       </article>

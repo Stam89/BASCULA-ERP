@@ -49,6 +49,16 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Configuracion: Nomina (egresos) separada de Servicios (ingresos) (2026-09-24)
+
+- Solo UI (App.tsx); sin cambios de backend ni de claves de BD. Los 14 campos de `labor_rates` siguen existiendo una sola vez y todos guardan con el mismo `saveLaborRates` (estado compartido `laborRatesForm`).
+- Nueva subpestana `nomina` = "👷 Tarifas de Nomina y Mano de Obra": Pilador, Estibador, Secador y Secado en Tendal (Cuadrilla).
+- La clave `tarifas` se conserva (buscador y accesos la usan) y se muestra como "🧾 Tarifas de Servicios y Clientes": Secado como Servicio (granel/saco), Tarifario de Servicios, Empaque/sacos, Procesos (Seleccion/Envejecido) y Tarifas por libra.
+- "⛽ Precio del combustible" paso a "⚙️ Operacion y Planta" como tarjeta propia.
+- Buscador de ajustes actualizado (Tarifas de pago -> nomina; nuevas entradas Secado como Servicio y Combustible). Puesta en marcha tiene botones Nomina y Servicios.
+- El cobro dinamico por empaque de botada ya estaba hecho en la entrada anterior (tarifa granel vs saco); la CxC sigue con `reference_type='secado_service'`.
+- Verificaciones: frontend build y lint con 0 errores.
+
 ### Tarifa de secado como servicio: A granel vs En saco (2026-09-24)
 
 - Nueva columna `labor_rates.secado_servicio_saco_per_qq` (migracion `20261032_secado_servicio_saco.sql`, aditiva e idempotente; tambien en `ensureLaborTables`). Arranca con el MISMO valor de granel en cada fila (maestro y socios), asi ningun cobro cambia hasta editarla.
