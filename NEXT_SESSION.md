@@ -7,7 +7,7 @@ Actualizado: 2026-09-24
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: rediseno UX/UI del Reporte de Pilado en cuatro pasos, sin cambios de logica.
+- Ultimo cambio funcional: herencia visual y operativa correcta de Servicio Completo desde Bascula hacia Secadoras y Produccion.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,14 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Servicio completo: herencia correcta al agregar a Secadoras (2026-09-25)
+
+- Corregido el falso badge `PROPIO` que aparecia al pulsar `Agregar al lote`: el mapeo temporal de tickets ahora conserva `operation_type` e `is_maquila` tanto en tuneles como en Tendal.
+- Produccion ya no muestra el checkbox deshabilitado `Es Servicio de Pilada (Maquila)`. En su lugar muestra un estado compacto de solo lectura (`Servicio completo` o `Lote propio`) detectado automaticamente desde Bascula.
+- Al finalizar Produccion se envia directamente `millingEsServicio`, derivado del origen seleccionado, sin un estado React intermedio que pueda quedar atrasado.
+- Dato real revisado solo en lectura: CUCHO tiene `operation_type = SECADO_PILADO` e `is_maquila = true`.
+- Verificacion visual sin guardar datos: CUCHO se mostro `SERV. COMPLETO` antes y despues de agregarlo al lote. Frontend build correcto; lint 0 errores y 166 warnings historicos.
 
 ### Rediseno UX/UI de Produccion / Reporte de Pilado (2026-09-25)
 

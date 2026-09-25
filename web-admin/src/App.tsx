@@ -1981,11 +1981,6 @@ export function App() {
   // drying_report). Ver finalizeMillingLot.
   const [productionSource, setProductionSource] = useState<"drying" | "stock">("drying");
   const [productionStockLotId, setProductionStockLotId] = useState("");
-  // ¿El pilado actual es un SERVICIO DE PILADA (maquila)? Se auto-marca según el
-  // tipo del lote (operation_type ≠ COMPRA / is_maquila / sufijo -P), pero el
-  // usuario puede forzarlo con el checkbox. Al finalizar con esto en true, el arroz
-  // NO entra al stock comercial: va a custodia de terceros + Cobro por Servicio.
-  const [esMaquilaProduccion, setEsMaquilaProduccion] = useState(false);
   // Sub-pestaña del módulo Gana: rendimiento de lotes propios vs. cobros por
   // servicio de pilada (maquila).
   const [ganaTab, setGanaTab] = useState<"propio" | "servicio">("propio");
@@ -3132,14 +3127,28 @@ export function App() {
         lot_code: entryLabel(entry),
         farmer_name: entry.farmer_name,
         net_weight_kg: entry.net_weight ?? 0,
-        quintals: entry.quintals ?? 0
+        quintals: entry.quintals ?? 0,
+        // Conserva el destino definido en Bascula mientras el lote solo existe
+        // en memoria. Sin estos campos el badge caia por defecto en PROPIO.
+        operation_type: entry.operation_type ?? null,
+        is_maquila: Boolean(entry.is_maquila)
       }));
   };
   const qqDe = (secadora: string) => lotesDe(secadora).reduce((s, l) => s + Number(l.quintals ?? 0), 0);
   const kgDe = (secadora: string) => lotesDe(secadora).reduce((s, l) => s + Number(l.net_weight_kg ?? 0), 0);
   // ☀️ Tendal: usa el MISMO mecanismo de selección (dryingSelections["TENDAL"]).
-    const tendalLotes: DryingTunnelLot[] = availableDryingLots.filter((e) => seleccionDe("TENDAL").includes(e.id)).map((e) => ({ lot_id: e.id, lot_code: entryLabel(e), farmer_name: e.farmer_name, net_weight_kg: e.net_weight ?? 0, quintals: e.quintals ?? 0 }));
-    const tendalQQ = tendalLotes.reduce((s, l) => s + Number(l.quintals ?? 0), 0);
+  const tendalLotes: DryingTunnelLot[] = availableDryingLots
+    .filter((entry) => seleccionDe("TENDAL").includes(entry.id))
+    .map((entry) => ({
+      lot_id: entry.id,
+      lot_code: entryLabel(entry),
+      farmer_name: entry.farmer_name,
+      net_weight_kg: entry.net_weight ?? 0,
+      quintals: entry.quintals ?? 0,
+      operation_type: entry.operation_type ?? null,
+      is_maquila: Boolean(entry.is_maquila)
+    }));
+  const tendalQQ = tendalLotes.reduce((s, l) => s + Number(l.quintals ?? 0), 0);
 
   // ── Combustible DEL MOTOR, calculado en vivo (el backend lo recalcula al
   // guardar). Los medidores marcan lo que queda: inicio − fin es lo consumido.
@@ -3275,13 +3284,6 @@ export function App() {
       ? selectedProductionDrying.es_maquila
       : (selectedProductionDrying.lots ?? []).some(esServicioLot);
   }, [productionSource, selectedStockLot, selectedProductionDrying]);
-  // El checkbox de maquila REFLEJA lo heredado de Báscula (no se edita a mano).
-  // Se re-evalúa al cambiar de origen/lote. El backend, al finalizar, vuelve a
-  // derivarlo del tipo del lote, así que el valor de pantalla no puede alterarlo.
-  const millingLoteKey = productionSource === "stock" ? (selectedStockLot?.id ?? "") : (selectedProductionDrying?.id ?? "");
-  useEffect(() => {
-    setEsMaquilaProduccion(millingEsServicio);
-  }, [millingLoteKey, millingEsServicio]);
   // QQ escritos en 'Cantidad en QQ' que AÚN no se añadieron con [+ Añadir]. Cuentan
   // para habilitar el guardado y se auto-agregan al guardar/finalizar.
   const millingPiladoPendienteQq = useMemo(() => {
@@ -9519,10 +9521,9 @@ export function App() {
     const production = await apiPost<ProductionResult>(`/processing-batches/${batch.id}/finish-production`, {
       lot_id: src.lot_id,
       drying_report_id: src.drying_report_id,
-      // Servicio de Pilada (maquila): el checkbox manda. En true, el backend envía
-      // el arroz a custodia de terceros (NO al stock comercial) y crea el Cobro por
-      // Servicio (tarifa × QQ) en Cuentas por Cobrar + pilado_services.
-      is_maquila: esMaquilaProduccion,
+      // Servicio de Pilada (maquila): se deriva siempre del origen heredado de
+      // Bascula. El usuario no puede cambiar accidentalmente este destino.
+      is_maquila: millingEsServicio,
       input_paddy_kg: inputKg,
       white_rice: {
         product_id: outputProduct.id,
@@ -13045,32 +13046,20 @@ export function App() {
                 </>
               )}
 
-              {/* Servicio de Pilada (Maquila): HEREDADO de Báscula. Se marca solo según
-                  el tipo con que ingresó el lote y está BLOQUEADO (no se puede alterar la
-                  naturaleza fiscal/operativa del lote). Si es maquila, al Finalizar el
-                  arroz NO entra al stock comercial (va a custodia + Cobro por Servicio). */}
-              <label title="Se hereda del tipo de operación con que el lote ingresó en Báscula; no se puede cambiar aquí."
-                className={`productionMaquilaBadge ${esMaquilaProduccion ? "isService" : ""}`}>
-                <input type="checkbox" checked={esMaquilaProduccion} disabled readOnly
-                  style={{ width: 18, height: 18, accentColor: "#2563eb" }} />
-                <span style={{ fontWeight: 700, color: esMaquilaProduccion ? "#1d4ed8" : "#475569" }}>
-                  🔧 Es Servicio de Pilada (Maquila)
-                </span>
-                <span style={{ marginLeft: "auto", display: "inline-flex", gap: 6, alignItems: "center" }}>
-                  {millingSource && (
-                    <span style={{ fontSize: 11, fontWeight: 700, color: "#475569", background: "#e2e8f0", borderRadius: 6, padding: "3px 8px" }}>🔒 Heredado de Báscula</span>
-                  )}
-                  {esMaquilaProduccion && (
-                    <span style={{ fontSize: 11, fontWeight: 800, color: "#fff", background: "#2563eb", borderRadius: 6, padding: "3px 8px" }}>SERVICIO PILADA</span>
-                  )}
-                </span>
-              </label>
+              {/* El destino es informativo y automático: proviene del ticket de
+                  Báscula y nunca se modifica manualmente desde Producción. */}
+              {millingSource && (
+                <div className={`productionOriginStatus ${millingEsServicio ? "isService" : "isOwned"}`}>
+                  <span>{millingEsServicio ? "Servicio completo" : "Lote propio"}</span>
+                  <small>Detectado automáticamente desde Báscula</small>
+                </div>
+              )}
               {productionSource !== "stock" && selectedProductionDrying?.es_maquila_mixto && (
                 <p className="muted" style={{ fontSize: 12, margin: "6px 0 0", color: "#b45309" }}>
                   ⚠️ Esta secadora mezcla lotes propios y de servicio (registro antiguo). Se aplica el tipo del lote principal; si no corresponde, corrige el tipo de servicio en Secadoras.
                 </p>
               )}
-              {esMaquilaProduccion && (
+              {millingEsServicio && (
                 <p className="muted" style={{ fontSize: 12, margin: "6px 0 0", color: "#1d4ed8" }}>
                   ℹ️ El grano es del cliente: el arroz blanco y subproductos NO suman al Stock Comercial; se registran en custodia de terceros y se genera un <strong>Cobro por Servicio</strong> (tarifa × QQ) en «Gana · Serv. Pilada» y Cuentas por Cobrar.
                 </p>

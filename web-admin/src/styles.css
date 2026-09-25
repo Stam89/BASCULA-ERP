@@ -1784,22 +1784,40 @@ input[type="datetime-local"] { height: 36px; }
 .productionSourceToggle strong { color: var(--c-text); font-size: 12.5px; }
 .productionSourceToggle small { color: var(--c-text-muted); font-size: 10.5px; }
 
-.productionMaquilaBadge {
-  display: flex;
-  align-items: center;
-  gap: 9px;
+.productionOriginStatus {
+  display: grid;
+  gap: 2px;
   margin-top: 2px;
   padding: 9px 11px;
   border: 1px solid var(--c-border);
   border-radius: 8px;
   background: var(--c-surface-2);
-  cursor: not-allowed;
 }
 
-.productionMaquilaBadge.isService {
+.productionOriginStatus span {
+  color: var(--c-text);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.productionOriginStatus small {
+  color: var(--c-text-muted);
+  font-size: 10.5px;
+}
+
+.productionOriginStatus.isService {
   border-color: rgba(37, 99, 235, 0.35);
   background: #eff6ff;
 }
+
+.productionOriginStatus.isService span { color: #1d4ed8; }
+
+.productionOriginStatus.isOwned {
+  border-color: rgba(22, 101, 52, 0.28);
+  background: #f0fdf4;
+}
+
+.productionOriginStatus.isOwned span { color: #166534; }
 
 .productionRecentLots { min-width: 0; }
 
