@@ -2705,11 +2705,12 @@ export function App() {
   // ── Fomentos ──────────────────────────────────────────────────────────────
   const [fomentos, setFomentos] = useState<Fomento[]>([]);
   const [fomentoDetalle, setFomentoDetalle] = useState<FomentoDetalle | null>(null);
-  const [fomentoForm, setFomentoForm] = useState({ farmer_name: "", farmer_id: "", cuadras: "", inicio: new Date().toISOString().slice(0,10), status: "ACTIVOS" as "ACTIVOS"|"NO ACTIVOS"|"APROBADOS", notes: "", variedad: "", limite_credito: "", folio: "" });
+  const [fomentoForm, setFomentoForm] = useState({ farmer_name: "", farmer_id: "", cuadras: "", inicio: new Date().toISOString().slice(0,10), status: "ACTIVOS" as Fomento["status"], notes: "", variedad: "", limite_credito: "", folio: "" });
   // Modal del formulario "Nuevo Fomento" (antes era un <details> al pie de la lista).
   const [fomentoModalOpen, setFomentoModalOpen] = useState(false);
   // Si tiene id → el modal edita ese fomento; si es null → crea uno nuevo.
   const [fomentoEditingId, setFomentoEditingId] = useState<string | null>(null);
+  const [fomentoInteresFijoModalOpen, setFomentoInteresFijoModalOpen] = useState(false);
   // Confirmación de borrado de un fomento completo (con su historial).
   const [confirmarEliminarFomento, setConfirmarEliminarFomento] = useState<{ id: string; nombre: string } | null>(null);
   const [borrandoFomento, setBorrandoFomento] = useState(false);
@@ -6915,7 +6916,7 @@ export function App() {
       farmer_id: f.farmer_id ?? "",
       cuadras: String(f.cuadras ?? ""),
       inicio: f.inicio?.slice(0,10) ?? new Date().toISOString().slice(0,10),
-      status: (f.status === "CERRADO_LIQUIDACION" ? "NO ACTIVOS" : f.status) as "ACTIVOS"|"NO ACTIVOS"|"APROBADOS",
+      status: f.status,
       notes: f.notes ?? "",
       variedad: f.variedad ?? "",
       limite_credito: f.limite_credito != null ? String(f.limite_credito) : "",
@@ -6932,7 +6933,9 @@ export function App() {
       farmer_id: fomentoForm.farmer_id || undefined,
       cuadras: Number(fomentoForm.cuadras),
       inicio: fomentoForm.inicio,
-      status: fomentoForm.status,
+      // Un cierre por liquidación es definitivo: el backend también lo protege,
+      // pero no enviarlo evita que una edición descriptiva intente reabrirlo.
+      status: fomentoForm.status === "CERRADO_LIQUIDACION" ? undefined : fomentoForm.status,
       notes: fomentoForm.notes || undefined,
       variedad: fomentoForm.variedad || undefined,
       limite_credito: fomentoForm.limite_credito !== "" ? Number(fomentoForm.limite_credito) : undefined,
@@ -16660,6 +16663,12 @@ export function App() {
                           ✏️ Editar
                         </button>
                       )}
+                      {canEditarPrecios && (
+                        <button type="button" onClick={() => setFomentoInteresFijoModalOpen(true)}
+                          style={{ background: "#fff", color: "#92400e", border: "1px solid #f59e0b", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
+                          ⚙️ Ajustar interés fijo
+                        </button>
+                      )}
                       {canAnular && (
                         <button type="button" onClick={() => setConfirmarEliminarFomento({ id: fomentoDetalle.id, nombre: fomentoDetalle.farmer_name })}
                           style={{ background: "#fff", color: "#dc2626", border: "1px solid #dc2626", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
@@ -16739,41 +16748,6 @@ export function App() {
                                      : "inherit" }}>{v}</div>
                             </div>
                           ))}
-                        </div>
-                      );
-                    })()}
-
-                    {/* Interés fijo del SALDO ARRASTRADO (movido aquí desde el form de entrega):
-                        modificador directo sobre el saldo/deuda de la cuenta. */}
-                    {(() => {
-                      const ent = fomentoDetalle.entregas ?? [];
-                      const fija = ent.find(e => e.es_saldo_anterior);
-                      const activo = !!fija;
-                      const mesesActual = Number(fija?.meses_interes_fijo ?? 1) || 1;
-                      return (
-                        <div style={{ border: `1px solid ${activo ? "#f59e0b" : "#e5e7eb"}`, background: activo ? "#fffbeb" : "#f9fafb", borderRadius: 8, padding: "8px 12px", marginBottom: 14 }}>
-                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-                            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontWeight: 700, cursor: canEditarPrecios ? "pointer" : "default" }}>
-                              <input type="checkbox" checked={activo} disabled={!canEditarPrecios || fomentoInteresFijoBusy}
-                                onChange={(e) => ajustarInteresFijoFomento(e.target.checked, mesesActual)} />
-                              🔒 Interés fijo del saldo arrastrado
-                            </label>
-                            {activo && (
-                              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
-                                <span className="muted">Meses</span>
-                                <select value={mesesActual} disabled={!canEditarPrecios || fomentoInteresFijoBusy}
-                                  onChange={(e) => ajustarInteresFijoFomento(true, Number(e.target.value))}
-                                  style={{ padding: "3px 6px", borderRadius: 6, border: "1px solid #d1d5db" }}>
-                                  {[1,2,3,4,5,6].map(m => <option key={m} value={m}>{m}</option>)}
-                                </select>
-                              </label>
-                            )}
-                          </div>
-                          <small className="muted" style={{ display: "block", marginTop: 4 }}>
-                            {activo
-                              ? `El interés del saldo NO corre por días: se cobran ${mesesActual} mes(es) fijos (Deuda Total ya lo refleja).`
-                              : "El interés corre por días (dinámico). Actívalo para congelarlo a N meses sobre el saldo arrastrado."}
-                          </small>
                         </div>
                       );
                     })()}
@@ -17039,14 +17013,18 @@ export function App() {
                   <label style={{ fontSize: 12, fontWeight: 600 }}>Fecha Inicio
                     <input required type="date" value={fomentoForm.inicio} onChange={e => setFomentoForm(p => ({...p, inicio: e.target.value}))}
                       style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} />
+                    {fomentoEditingId && <small className="muted" style={{ fontSize: 11 }}>Al guardar una fecha distinta se recalcularán automáticamente los días e intereses dinámicos.</small>}
                   </label>
                   <label style={{ fontSize: 12, fontWeight: 600 }}>Estado
-                    <select value={fomentoForm.status} onChange={e => setFomentoForm(p => ({...p, status: e.target.value as "ACTIVOS"|"NO ACTIVOS"|"APROBADOS"}))}
+                    <select value={fomentoForm.status} disabled={fomentoForm.status === "CERRADO_LIQUIDACION"}
+                      onChange={e => setFomentoForm(p => ({...p, status: e.target.value as Fomento["status"]}))}
                       style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }}>
                       <option>ACTIVOS</option>
                       <option>NO ACTIVOS</option>
                       <option>APROBADOS</option>
+                      {fomentoForm.status === "CERRADO_LIQUIDACION" && <option value="CERRADO_LIQUIDACION">ARCHIVADO (estado protegido)</option>}
                     </select>
+                    {fomentoForm.status === "CERRADO_LIQUIDACION" && <small style={{ display: "block", color: "#92400e", fontSize: 11 }}>Editar la fecha o los datos no reabrirá este fomento.</small>}
                   </label>
                   <label style={{ fontSize: 12, fontWeight: 600 }}>Notas
                     <input value={fomentoForm.notes} onChange={e => setFomentoForm(p => ({...p, notes: e.target.value}))}
@@ -17061,6 +17039,51 @@ export function App() {
                 </form>
               </div>
             )}
+
+            {/* El ajuste poco frecuente de interés fijo vive en un modal para
+                mantener limpia la vista operativa del estado de cuenta. */}
+            {fomentoInteresFijoModalOpen && fomentoDetalle && (() => {
+              const fija = (fomentoDetalle.entregas ?? []).find(e => e.es_saldo_anterior);
+              const activo = !!fija;
+              const mesesActual = Number(fija?.meses_interes_fijo ?? 1) || 1;
+              return (
+                <div className="modalOverlay" onClick={() => !fomentoInteresFijoBusy && setFomentoInteresFijoModalOpen(false)}>
+                  <div className="modalCard formPanel" onClick={(e) => e.stopPropagation()}
+                    style={{ maxWidth: 460, width: "100%" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                      <div>
+                        <h3 style={{ margin: 0 }}>Ajustar interés fijo</h3>
+                        <p className="muted" style={{ margin: "4px 0 16px", fontSize: 12 }}>{fomentoDetalle.farmer_name}</p>
+                      </div>
+                      <button type="button" disabled={fomentoInteresFijoBusy} onClick={() => setFomentoInteresFijoModalOpen(false)}
+                        style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--c-muted)" }}>✕</button>
+                    </div>
+                    <label style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 13, fontWeight: 700, cursor: fomentoInteresFijoBusy ? "wait" : "pointer" }}>
+                      <input type="checkbox" checked={activo} disabled={fomentoInteresFijoBusy}
+                        onChange={(e) => ajustarInteresFijoFomento(e.target.checked, mesesActual)} />
+                      Interés fijo del saldo arrastrado
+                    </label>
+                    {activo && (
+                      <label style={{ display: "block", marginTop: 16, fontSize: 12, fontWeight: 600 }}>Meses fijos
+                        <select value={mesesActual} disabled={fomentoInteresFijoBusy}
+                          onChange={(e) => ajustarInteresFijoFomento(true, Number(e.target.value))}
+                          style={{ display: "block", width: "100%", marginTop: 4, padding: "7px 8px", borderRadius: 6, border: "1px solid #d1d5db" }}>
+                          {[1,2,3,4,5,6].map(m => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                      </label>
+                    )}
+                    <p className="muted" style={{ fontSize: 12, lineHeight: 1.45, margin: "14px 0" }}>
+                      {activo
+                        ? `El saldo arrastrado cobra ${mesesActual} mes(es) fijos; no aumenta por días.`
+                        : "Al activarlo, el saldo arrastrado dejará de calcular interés diario y usará la cantidad fija de meses."}
+                    </p>
+                    <div className="buttonRow">
+                      <button type="button" disabled={fomentoInteresFijoBusy} onClick={() => setFomentoInteresFijoModalOpen(false)}>Cerrar</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Confirmación de eliminación de fomento COMPLETO (con su historial) */}
             {confirmarEliminarFomento && (

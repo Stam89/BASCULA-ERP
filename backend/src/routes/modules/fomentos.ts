@@ -697,9 +697,18 @@ fomentosRouter.patch("/:id", asyncRoute(async (req, res) => {
   const parsed = fomentoSchema.partial().parse(req.body);
   const result = await inTransaction(async (client) => {
     await assertFomentoAccionista(client, fomentoId, accionistaId);
+    const current = await client.query<{ farmer_name: string; inicio: string; status: string }>(
+      "SELECT farmer_name, inicio::text, status FROM fomentos WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
+      [fomentoId, accionistaId]
+    );
+    if (!current.rowCount) throw new ApiError(404, "Fomento no encontrado o no pertenece al accionista activo");
     const data: Record<string, unknown> = { ...parsed };
+
+    // Un fomento archivado por liquidación nunca puede reabrirse como efecto
+    // lateral de editar su fecha o sus datos descriptivos.
+    if (current.rows[0].status === "CERRADO_LIQUIDACION") delete data.status;
+
     if (parsed.farmer_id !== undefined || parsed.farmer_name !== undefined) {
-      const current = await client.query<{ farmer_name: string }>("SELECT farmer_name FROM fomentos WHERE id = $1", [fomentoId]);
       const farmer = await resolveGlobalFarmer(client, parsed.farmer_id, parsed.farmer_name ?? current.rows[0].farmer_name);
       data.farmer_id = farmer.id;
       data.farmer_name = farmer.full_name;
@@ -710,14 +719,31 @@ fomentosRouter.patch("/:id", asyncRoute(async (req, res) => {
     for (const [key, value] of Object.entries(data)) {
       if (value !== undefined) { fields.push(`${key} = $${i++}`); vals.push(value); }
     }
-    if (!fields.length) return null;
-    vals.push(fomentoId, accionistaId);
-    return client.query(
-      `UPDATE fomentos SET ${fields.join(", ")} WHERE id = $${i} AND accionista_id = $${i + 1} RETURNING *`,
-      vals
-    );
+    if (fields.length) {
+      vals.push(fomentoId, accionistaId);
+      await client.query(
+        `UPDATE fomentos SET ${fields.join(", ")} WHERE id = $${i} AND accionista_id = $${i + 1}`,
+        vals
+      );
+    }
+
+    // La fecha inicial es la base de las entregas que nacieron con el fomento.
+    // Al corregirla se mueven solo las filas ligadas a la fecha anterior; las
+    // entregas posteriores conservan su fecha real. Los saldos con interés fijo
+    // tampoco cambian porque su cálculo depende de meses, no de días.
+    if (parsed.inicio !== undefined && parsed.inicio.slice(0, 10) !== current.rows[0].inicio.slice(0, 10)) {
+      await client.query(
+        `UPDATE fomento_entregas
+         SET fecha = $2::date
+         WHERE fomento_id = $1
+           AND NOT es_saldo_anterior
+           AND fecha = $3::date`,
+        [fomentoId, parsed.inicio, current.rows[0].inicio]
+      );
+    }
+
+    return client.query(`${SELECT_FOMENTO} WHERE f.id = $1 AND f.accionista_id = $2`, [fomentoId, accionistaId]);
   });
-  if (!result) { res.json({ message: "nada que actualizar" }); return; }
   if (!result.rowCount) throw new ApiError(404, "Fomento no encontrado o no pertenece al accionista activo");
   res.json(result.rows[0]);
 }));

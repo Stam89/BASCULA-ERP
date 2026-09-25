@@ -7,7 +7,7 @@ Actualizado: 2026-09-24
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: neto de Liquidaciones corregido por lote y comprobante con descuentos desglosados.
+- Ultimo cambio funcional: edicion segura de Fomentos, recalculo por Fecha Inicio e interes fijo en modal.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,15 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Edicion segura e interes fijo de Fomentos (2026-09-24)
+
+- La caja permanente de `Interes fijo del saldo arrastrado` salio de la vista principal; ahora se abre desde `Ajustar interes fijo` en un modal compacto, conservando el mismo endpoint y calculo.
+- Editar `Fecha Inicio` actualiza dentro de la misma transaccion las entregas dinamicas vinculadas a la fecha inicial anterior; las entregas posteriores con fecha propia y los saldos de meses fijos no se alteran.
+- El detalle devuelto por el PATCH vuelve a calcular inmediatamente dias, meses, interes y deuda mediante `SELECT_FOMENTO`.
+- Un fomento `CERRADO_LIQUIDACION` conserva su estado al editar: el frontend lo muestra bloqueado y no envia un cambio de estado; el backend tambien descarta cualquier intento de reabrirlo.
+- Revision visual sin escrituras sobre el fomento archivado de Junior Jimenez: boton/modal visibles y estado `ARCHIVADO (estado protegido)` deshabilitado.
+- Verificaciones: backend/frontend build, 44/44 tests, lint con 0 errores y preflight sin errores criticos.
 
 ### Fix: finalizar Tendal atascado + CxC de servicio (2026-09-24)
 
