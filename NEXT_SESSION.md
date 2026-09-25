@@ -49,6 +49,18 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Fix: finalizar Tendal atascado + CxC de servicio (2026-09-24)
+
+- Causa: desde que Guardar/Finalizar se separaron con el flag `finalize`, el PUT de edicion del Tendal enviaba solo `dry_end_at` sin `finalize` -> el backend guardaba la hora pero dejaba el tendal `IN_PROGRESS`; por eso no corrian `autoCobrarSecadoServicio` (CxC) ni el pago de cuadrilla. El alta (`/drying-tendal`) si estaba adaptada.
+- `submitTendal` (App.tsx) ahora envia `finalize`, exige hora de inicio, rechaza hora final anterior al inicio y verifica que la respuesta venga `COMPLETED` (si no, error y conserva la edicion).
+- El cartel pegado era el mensaje GLOBAL de cabecera (`setMessage("Editando secado en Tendal ...")` en `editDryingReport`); `limpiarTendal` ahora lo devuelve a "Listo".
+- Backend `updateDryingReport`: al finalizar rechaza hora final anterior a la de inicio (400).
+- Rollback: el PUT corre en `inTransaction` y la CxC NO usa savepoint -> si falla, nada queda finalizado.
+- `updateDryingReport` se exporta para verificacion transaccional.
+- Verificado en BEGIN...ROLLBACK sobre el tendal real atascado `00001-23-09-26-S` (SOLO SECADO, CEYRO, 75.40 QQ): sin finalize reproduce el bug; con finalize queda COMPLETED y crea CxC $113.10; re-finalizar no duplica. Ese tendal sigue En proceso con hora fin 16/09 < inicio 23/09: el usuario debe corregir la hora y finalizarlo.
+- Nota para pruebas con DB: precargar `ensureLaborTables()` antes de BEGIN (como server.ts) o el DDL perezoso se traba con los locks de la transaccion.
+- Verificaciones: backend build, 44/44 tests, frontend build.
+
 ### Neto financiero y comprobante de Liquidaciones (2026-09-24)
 
 - Corregida la causa del neto inflado: los descuentos generales ya no se pierden al superar el bruto del primer ticket; se reparten entre todas las filas del mismo lote.

@@ -1622,7 +1622,7 @@ export async function syncDryingMotorStart(client: PoolClient, motorNumber: numb
   return synced.rowCount ?? 0;
 }
 
-async function updateDryingReport(
+export async function updateDryingReport(
   client: PoolClient,
   dryingId: string,
   input: z.infer<typeof dryingUpdateSchema>
@@ -1637,6 +1637,9 @@ async function updateDryingReport(
   const dryEndAt = input.dry_end_at ?? current.rows[0].dry_end_at;
   if (input.finalize && (!dryStartAt || !dryEndAt)) {
     throw new ApiError(400, "Para finalizar el secado debes indicar la hora de inicio y la hora final.");
+  }
+  if (input.finalize && new Date(dryEndAt).getTime() < new Date(dryStartAt).getTime()) {
+    throw new ApiError(400, "La hora final no puede ser anterior a la hora de inicio. Corrígela antes de finalizar.");
   }
   const dryingHours = calculateDryingHours(dryStartAt, dryEndAt);
   const status = input.finalize ? "COMPLETED" : current.rows[0].status;

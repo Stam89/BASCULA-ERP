@@ -8468,6 +8468,9 @@ export function App() {
     setDryingEntryMultiPick((cur) => ({ ...cur, TENDAL: [] }));
     setDryingPickerOpen((cur) => ({ ...cur, TENDAL: false }));
     setEditingTendal(null);
+    // El aviso "Editando secado en Tendal (...)" vive en el mensaje GLOBAL de la
+    // cabecera: al salir/finalizar hay que borrarlo o queda pegado.
+    setMessage("Listo");
   }
   async function submitTendal(finalizar: boolean) {
       const esEnsacado = tendalForm.modo === "ENSACADO";
@@ -8475,10 +8478,21 @@ export function App() {
       if (esEnsacado && !(sacos > 0)) { addToast("Ingresa el número de sacos entregados (Ensacado)", "error"); return; }
       // Al finalizar, si no se puso hora fin, se usa AHORA.
       const horaFin = finalizar ? (tendalForm.hora_fin || dateTimeLocalValue(new Date().toISOString())) : undefined;
+      // Finalizar exige hora de inicio (regla del backend) y una hora final que no
+      // sea anterior al inicio.
+      if (finalizar) {
+        if (!tendalForm.hora_inicio) { addToast("Para finalizar el tendal registra la «Hora de inicio».", "error"); return; }
+        if (horaFin && new Date(horaFin).getTime() < new Date(tendalForm.hora_inicio).getTime()) {
+          addToast("La hora de fin no puede ser anterior a la hora de inicio. Corrígela antes de finalizar.", "error");
+          return;
+        }
+      }
 
       if (editingTendal) {
         // ── Editar un tendal existente (multi-día) → PUT. No cambia sus lotes. ──
-        await apiFetch(`/process-flow/drying/${editingTendal.id}`, {
+        // `finalize` es OBLIGATORIO para cerrar: el backend separa "guardar" de
+        // "finalizar" y sin este flag deja el tendal En proceso (sin CxC ni pago).
+        const updated = await apiFetch(`/process-flow/drying/${editingTendal.id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -8486,11 +8500,19 @@ export function App() {
             moisture_before: tendalForm.moisture_before ? Number(tendalForm.moisture_before) : undefined,
             dry_start_at: tendalForm.hora_inicio || undefined,
             dry_end_at: horaFin,
+            finalize: finalizar,
             recepcion_empaque: esEnsacado ? "SACOS" : tendalForm.recepcion_empaque,
             recepcion_sacos: esEnsacado ? sacos : undefined
           })
-        }).then((r) => { if (!r.ok) return r.json().then((e) => { throw new Error(e?.error || "No se pudo guardar el tendal"); }); });
-        addToast(finalizar ? "Tendal finalizado: arroz disponible para producción y cuadrilla pagada." : "Cambios del tendal guardados. Sigue En proceso.", "success");
+        }).then(async (r) => {
+          const body = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(body?.error || "No se pudo guardar el tendal");
+          return body as { status?: string };
+        });
+        if (finalizar && updated?.status !== "COMPLETED") {
+          throw new Error("El tendal no quedó finalizado. Revisa las horas e inténtalo de nuevo.");
+        }
+        addToast(finalizar ? "Tendal finalizado: arroz liberado, cuadrilla pagada y cobro de servicio generado." : "Cambios del tendal guardados. Sigue En proceso.", "success");
         limpiarTendal();
         await refresh();
         return;
