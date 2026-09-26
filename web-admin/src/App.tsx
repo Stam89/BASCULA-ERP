@@ -1099,7 +1099,7 @@ type SalesOrder = {
   // qué bodega/lote se extrae el producto en picking_location.
   prepared_at?: string | null;
   picking_location?: string | null;
-  items: Array<{ product_name: string; presentation_name: string | null; quantity: string | number; unit_price: string | number; total: string | number }>;
+  items: Array<{ product_name: string; inventory_product_id?: string | null; presentation_name: string | null; quantity: string | number; unit_price: string | number; total: string | number }>;
   // Guía de remisión (se completan al emitirla).
   transportista_nombre?: string | null;
   transportista_cedula?: string | null;
@@ -6668,6 +6668,10 @@ export function App() {
       addToast("Completa producto, presentación, cantidad y precio", "error");
       return;
     }
+    if (lineaExcedeStock) {
+      addToast("El socio no tiene suficiente producto terminado ni cáscara libre para respaldar esta cantidad", "error");
+      return;
+    }
     const presentation = saleProductPresentations.find(p => p.id === saleLineForm.presentation_id);
     const newItem: SaleLineItem = {
       id: `temp-${Date.now()}`,
@@ -6711,6 +6715,42 @@ export function App() {
     return round2(filas.reduce((sum, s) => sum + Number(s.quantity), 0));
   }
 
+  function rawBackingProductId(inventoryProductId: string): string | null {
+    const code = products.find((p) => p.id === inventoryProductId)?.code;
+    if (code === "ARROZ-PILADO-011") return products.find((p) => p.code === "CASCARA-011")?.id ?? null;
+    if (code === "ARROZ-PILADO-CORRIENTE") return products.find((p) => p.code === "CASCARA-CORRIENTE")?.id ?? null;
+    return null;
+  }
+
+  function stockPropioPorProducto(productId: string | null): number {
+    if (!productId) return 0;
+    return round2(stock
+      .filter((s) => s.product_id === productId && s.ownership === "OWNED")
+      .reduce((sum, s) => sum + Number(s.quantity), 0));
+  }
+
+  function respaldoDeMarca(brandProductId: string) {
+    const marca = products.find((p) => p.id === brandProductId);
+    const inventoryProductId = getInventoryProductForBrand(marca?.name || "") || brandProductId;
+    const rawProductId = rawBackingProductId(inventoryProductId);
+    const terminadoQq = stockPropioPorProducto(inventoryProductId);
+    const cascaraQq = stockPropioPorProducto(rawProductId);
+    const comprometidoQq = round2(salesOrders
+      .filter((order) => order.status === "PENDING" && !order.prepared_at && order.id !== pedidoEditando)
+      .flatMap((order) => order.items)
+      .filter((item) => (item.inventory_product_id || getInventoryProductForBrand(item.product_name)) === inventoryProductId)
+      .reduce((sum, item) => sum + Number(item.quantity), 0));
+    return {
+      inventoryProductId,
+      rawProductId,
+      rawProductName: rawProductId ? products.find((p) => p.id === rawProductId)?.name ?? "Cascara" : null,
+      terminadoQq,
+      cascaraQq,
+      comprometidoQq,
+      coberturaLibreQq: Math.max(0, round2(terminadoQq + cascaraQq - comprometidoQq))
+    };
+  }
+
   /** QQ que pide una línea del carrito. La 'Cantidad' del pedido YA es en QQ
    *  (estandarización): la presentación es solo metadato para la Guía. */
   const qqDeLinea = (item: SaleLineItem): number => round2(item.quantity);
@@ -6745,10 +6785,9 @@ export function App() {
     return { saldo, enMora, cuentas: lineas.length };
   }, [selectedCustomerId, accountsReceivable]);
 
-  // ¿La línea que se está por agregar supera el stock disponible? Compara los QQ
-  // de la línea MÁS lo ya puesto en el carrito para el mismo producto de
-  // inventario contra el disponible. Bloquea el botón Agregar para no vender lo
-  // que no existe.
+  // El pedido puede respaldarse con producto terminado o con cascara del mismo
+  // tipo. Los otros pedidos pendientes se descuentan de esta cobertura para no
+  // comprometer dos veces el mismo saldo.
   const lineaExcedeStock = useMemo(() => {
     const cant = Number(saleLineForm.quantity);
     if (!saleLineForm.product_id || !cant || cant <= 0) return false;
@@ -6758,9 +6797,9 @@ export function App() {
     const yaCarrito = saleLineItems
       .filter((it) => (getInventoryProductForBrand(products.find((p) => p.id === it.product_id)?.name || "") || it.product_id) === invId)
       .reduce((s, it) => s + qqDeLinea(it), 0);
-    const disp = stockDisponibleDeMarca(saleLineForm.product_id) ?? 0;
-    return qqLinea + yaCarrito > disp + 0.001;
-  }, [saleLineForm, saleProductPresentations, saleLineItems, products, stock]);
+    const respaldo = respaldoDeMarca(saleLineForm.product_id);
+    return qqLinea + yaCarrito > respaldo.coberturaLibreQq + 0.001;
+  }, [saleLineForm, saleLineItems, products, stock, salesOrders, pedidoEditando]);
 
   // Precio sugerido: último precio al que se pidió esa marca+presentación. Solo
   // rellena si el campo está vacío/0 (no pisa un precio que el vendedor ya tecleó).
@@ -13894,19 +13933,32 @@ export function App() {
                     })()}
                   </select>
                   {saleLineForm.product_id && (() => {
-                    const qq = stockDisponibleDeMarca(saleLineForm.product_id);
+                    const respaldo = respaldoDeMarca(saleLineForm.product_id);
+                    const qq = respaldo.terminadoQq;
                     const pres = saleProductPresentations.find((p) => p.id === saleLineForm.presentation_id);
                     const wl = pres?.weight_lb ? Number(pres.weight_lb) : null;
                     const sacos = sacosDisponiblesDeMarca(saleLineForm.product_id, wl);
-                    const hay = qq !== null && qq > 0;
+                    const hayTerminado = qq > 0;
+                    const hayRespaldo = respaldo.coberturaLibreQq > 0;
                     return (
-                      <small style={{ marginTop: 4, fontWeight: 700, color: hay ? "#15803d" : "#b91c1c" }}>
-                        {hay
-                          ? (wl
-                              ? `📦 Disponibles en bodega: ${sacos} sacos (${qq.toFixed(2)} QQ)`
-                              : `📦 Disponibles en bodega: ${qq.toFixed(2)} QQ`)
-                          : "⚠ Sin stock de este producto"}
-                      </small>
+                      <div style={{ marginTop: 4, display: "grid", gap: 2 }}>
+                        <small style={{ fontWeight: 700, color: hayTerminado ? "#15803d" : "#b45309" }}>
+                          {hayTerminado
+                            ? (wl
+                                ? `📦 Producto terminado: ${sacos} sacos (${qq.toFixed(2)} QQ)`
+                                : `📦 Producto terminado: ${qq.toFixed(2)} QQ`)
+                            : "Producto terminado: 0.00 QQ"}
+                        </small>
+                        {respaldo.rawProductId && (
+                          <small style={{ fontWeight: 700, color: respaldo.cascaraQq > 0 ? "#1d4ed8" : "#6b7280" }}>
+                            🌾 Respaldo {respaldo.rawProductName}: {respaldo.cascaraQq.toFixed(2)} QQ
+                            {respaldo.comprometidoQq > 0 ? ` · comprometido: ${respaldo.comprometidoQq.toFixed(2)} QQ` : ""}
+                          </small>
+                        )}
+                        <small style={{ fontWeight: 800, color: hayRespaldo ? "#0f766e" : "#b91c1c" }}>
+                          {hayRespaldo ? `Disponible para nuevos pedidos: ${respaldo.coberturaLibreQq.toFixed(2)} QQ` : "Sin producto ni cáscara libre para vender"}
+                        </small>
+                      </div>
                     );
                   })()}
                 </label>
@@ -13966,17 +14018,17 @@ export function App() {
                   type="button"
                   onClick={addSaleLineItem}
                   disabled={lineaExcedeStock}
-                  title={lineaExcedeStock ? "La cantidad supera el stock disponible" : "Agregar al pedido"}
+                  title={lineaExcedeStock ? "La cantidad supera el producto y la cáscara disponibles" : "Agregar al pedido"}
                   style={{ padding: "8px 12px", background: lineaExcedeStock ? "#d1d5db" : "#f59e0b", color: lineaExcedeStock ? "#6b7280" : "white", border: "none", borderRadius: 4, fontWeight: 700, cursor: lineaExcedeStock ? "not-allowed" : "pointer", alignSelf: "flex-end", fontSize: 13 }}
                 >
                   ➕ Agregar
                 </button>
               </div>
 
-              {/* Alerta de sobreventa: la cantidad digitada supera el stock disponible. */}
+              {/* Alerta de sobreventa: no hay producto terminado ni cascara suficiente. */}
               {lineaExcedeStock && (
                 <div style={{ padding: "8px 12px", background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 6, color: "#92400e", fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>
-                  ⚠ La cantidad supera el stock disponible en bodega. Reduce la cantidad para poder agregar la línea.
+                  ⚠ La cantidad supera el producto terminado y la cáscara equivalente que este socio tiene libres. Reduce la cantidad para agregar la línea.
                 </div>
               )}
             </div>
@@ -14019,14 +14071,16 @@ export function App() {
                           const qq = qqDeLinea(item);
                           const acumulado = (pedidoPorProducto.get(inventoryId) ?? 0) + qq;
                           pedidoPorProducto.set(inventoryId, acumulado);
-                          const disponible = stockDisponibleDeMarca(item.product_id);
-                          const excede = disponible !== null && acumulado > disponible + 0.001;
+                          const respaldo = respaldoDeMarca(item.product_id);
+                          const excede = acumulado > respaldo.coberturaLibreQq + 0.001;
+                          const requiereProduccion = acumulado > respaldo.terminadoQq + 0.001 && !excede && Boolean(respaldo.rawProductId);
                           const subtotal = item.quantity * item.unit_price;
                           return (
-                            <tr key={item.id} style={{ background: excede ? "#fee2e2" : i % 2 === 0 ? "#fff" : "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>
+                            <tr key={item.id} style={{ background: excede ? "#fee2e2" : requiereProduccion ? "#fffbeb" : i % 2 === 0 ? "#fff" : "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>
                               <td style={{ padding: "8px 10px" }}>
                                 <strong>{product?.name}</strong>
-                                {excede && <small style={{ display: "block", color: "#b91c1c", fontWeight: 700 }}>⚠ Supera el stock ({(disponible ?? 0).toFixed(2)} QQ disponibles)</small>}
+                                {excede && <small style={{ display: "block", color: "#b91c1c", fontWeight: 700 }}>⚠ Supera la cobertura libre ({respaldo.coberturaLibreQq.toFixed(2)} QQ)</small>}
+                                {requiereProduccion && <small style={{ display: "block", color: "#b45309", fontWeight: 700 }}>🌾 Respaldado por cáscara · pendiente de producir</small>}
                               </td>
                               <td style={{ padding: "8px 10px" }}>{item.presentation_name || "—"}</td>
                               <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>{qq.toFixed(2)}</td>
@@ -14146,12 +14200,19 @@ export function App() {
                     const esCredito = metodoPago === "CREDIT";
                     // Stock disponible (QQ) en bodega de los productos del pedido: pista de
                     // picking junto a la ubicación. Sin modelo por fila, es a nivel bodega.
-                    const invIdsPedido = new Set(
-                      o.items.map((it) => getInventoryProductForBrand(it.product_name)).filter((x): x is string => Boolean(x))
-                    );
+                    const demandaPorProducto = new Map<string, number>();
+                    o.items.forEach((it) => {
+                      const id = it.inventory_product_id || getInventoryProductForBrand(it.product_name);
+                      if (id) demandaPorProducto.set(id, round2((demandaPorProducto.get(id) ?? 0) + Number(it.quantity)));
+                    });
+                    const invIdsPedido = new Set(demandaPorProducto.keys());
                     const dispUbicQq = round2([...invIdsPedido].reduce((s, id) =>
                       s + stock.filter((r) => r.product_id === id && r.ownership === "OWNED").reduce((a, r) => a + Number(r.quantity), 0)
                     , 0));
+                    const faltanteTerminadoQq = round2([...demandaPorProducto.entries()].reduce((total, [id, requerido]) =>
+                      total + Math.max(0, requerido - stockPropioPorProducto(id))
+                    , 0));
+                    const listoParaPreparar = faltanteTerminadoQq <= 0.001;
                     const enfocado = focusOrderId === o.id;
                     return (
                     <article key={o.id}
@@ -14228,14 +14289,20 @@ export function App() {
                         )}
                       </div>
 
+                      {!listo && !listoParaPreparar && (
+                        <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: "8px 12px", color: "#92400e", fontSize: 12.5, fontWeight: 700 }}>
+                          🌾 Pedido aceptado con respaldo de cáscara. Faltan producir {faltanteTerminadoQq.toFixed(2)} QQ antes de preparar y despachar.
+                        </div>
+                      )}
+
                       <div className="muted" style={{ fontSize: 11 }}>
                         Ya figura en Por Cobrar; el cobro y la salida de inventario se concretan al despachar.
                       </div>
 
                       {!listo ? (
                         // PASO 1: confirmar preparación. Aún NO se puede despachar.
-                        <button type="button" className="primary" style={{ padding: "10px 12px", fontWeight: 800, marginTop: "auto" }} onClick={() => prepararPedido(o, true).catch((e) => addToast(e.message, "error"))}>
-                          📦 Confirmar Preparación
+                        <button type="button" className="primary" disabled={!listoParaPreparar} title={!listoParaPreparar ? "Primero produzca el arroz respaldado por cáscara" : "Confirmar preparación"} style={{ padding: "10px 12px", fontWeight: 800, marginTop: "auto", opacity: listoParaPreparar ? 1 : 0.55, cursor: listoParaPreparar ? "pointer" : "not-allowed" }} onClick={() => prepararPedido(o, true).catch((e) => addToast(e.message, "error"))}>
+                          {listoParaPreparar ? "📦 Confirmar Preparación" : "⏳ Pendiente de producción"}
                         </button>
                       ) : (
                         // PASO 2: ya está listo → elegir método de pago y despachar.

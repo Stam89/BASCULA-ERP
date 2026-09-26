@@ -12,6 +12,7 @@ import { crearVenta } from "./sales.js";
 import { cobrarEmpaqueAlDespachar } from "../../services/cargo-empaque.js";
 import { revertCuadrillaDespachoVentaEntry, upsertCuadrillaDespachoVentaEntry } from "./cuadrilla.js";
 import { consumeInventoryFIFO } from "../../services/inventory-consume.js";
+import { calculateOrderStockCoverage, rawBackingCode } from "../../utils/order-stock-coverage.js";
 
 export const ordersRouter = Router();
 
@@ -38,6 +39,7 @@ ordersRouter.get("/", asyncRoute(async (req, res) => {
             COALESCE((
               SELECT json_agg(json_build_object(
                        'product_id', i.product_id,
+                       'inventory_product_id', i.inventory_product_id,
                        'presentation_name', i.presentation_name,
                        'quantity', i.quantity,
                        'unit_price', i.unit_price,
@@ -94,6 +96,7 @@ ordersRouter.post("/", asyncRoute(async (req, res) => {
   }).parse(req.body);
 
   const result = await inTransaction(async (client) => {
+    await validarRespaldoDelPedido(client, accionistaId, body.items);
     const total = round2(body.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0));
     const order = await client.query(
       `INSERT INTO sales_orders (order_number, customer_id, accionista_id, delivery_date, notes, total_amount, created_by)
@@ -118,6 +121,84 @@ ordersRouter.post("/", asyncRoute(async (req, res) => {
 
   res.status(201).json(result);
 }));
+
+/**
+ * Permite tomar pedidos sin producto terminado solamente cuando el mismo socio
+ * dispone de cascara del tipo correspondiente. Los pedidos pendientes tambien
+ * consumen cobertura comercial, aunque el inventario fisico solo se descuenta
+ * al confirmar la preparacion.
+ */
+async function validarRespaldoDelPedido(
+  client: PoolClient,
+  accionistaId: string | undefined,
+  items: Array<z.infer<typeof orderItemSchema>>,
+  excluirPedidoId?: string
+): Promise<void> {
+  if (!accionistaId) throw new ApiError(400, "Selecciona el socio que realiza la venta.");
+
+  // Serializa los pedidos del socio para impedir que dos solicitudes reserven
+  // simultaneamente el mismo producto o la misma cascara.
+  const socio = await client.query("SELECT id FROM accionistas WHERE id = $1 FOR UPDATE", [accionistaId]);
+  if (!socio.rowCount) throw new ApiError(404, "El socio seleccionado no existe.");
+
+  const solicitadoPorProducto = new Map<string, number>();
+  for (const item of items) {
+    solicitadoPorProducto.set(
+      item.inventory_product_id,
+      round2((solicitadoPorProducto.get(item.inventory_product_id) ?? 0) + Number(item.quantity))
+    );
+  }
+
+  for (const [productId, solicitadoQq] of [...solicitadoPorProducto.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const producto = await client.query(
+      "SELECT id, code, name FROM products WHERE id = $1 AND is_active = true",
+      [productId]
+    );
+    if (!producto.rowCount) throw new ApiError(400, "Uno de los productos del pedido no existe o esta inactivo.");
+
+    const rawCode = rawBackingCode(String(producto.rows[0].code));
+    const rawProduct = rawCode
+      ? await client.query("SELECT id, name FROM products WHERE code = $1 AND is_active = true", [rawCode])
+      : null;
+
+    const stockIds = [productId, rawProduct?.rows[0]?.id].filter(Boolean) as string[];
+    const saldos = await client.query(
+      `SELECT product_id, COALESCE(SUM(quantity), 0)::float AS quantity
+         FROM inventory_movements
+        WHERE accionista_id = $1
+          AND ownership = 'OWNED'
+          AND product_id = ANY($2::uuid[])
+        GROUP BY product_id`,
+      [accionistaId, stockIds]
+    );
+    const saldoPorProducto = new Map(saldos.rows.map((row) => [String(row.product_id), Number(row.quantity)]));
+    const terminadoQq = Math.max(0, saldoPorProducto.get(productId) ?? 0);
+    const cascaraQq = rawProduct?.rowCount ? Math.max(0, saldoPorProducto.get(String(rawProduct.rows[0].id)) ?? 0) : 0;
+
+    const pendientes = await client.query(
+      `SELECT COALESCE(SUM(i.quantity), 0)::float AS quantity
+         FROM sales_order_items i
+         JOIN sales_orders o ON o.id = i.order_id
+        WHERE o.accionista_id = $1
+          AND o.status = 'PENDING'
+          AND o.prepared_at IS NULL
+          AND i.inventory_product_id = $2
+          AND ($3::uuid IS NULL OR o.id <> $3::uuid)`,
+      [accionistaId, productId, excluirPedidoId ?? null]
+    );
+    const pendienteQq = Number(pendientes.rows[0]?.quantity || 0);
+    const cobertura = calculateOrderStockCoverage(solicitadoQq, pendienteQq, terminadoQq, cascaraQq);
+    if (!cobertura.covered) {
+      const detalleCascara = rawCode
+        ? ` y ${round2(cascaraQq).toFixed(2)} QQ de ${rawProduct?.rows[0]?.name ?? rawCode}`
+        : "";
+      throw new ApiError(
+        409,
+        `Respaldo insuficiente para ${producto.rows[0].name}: los pedidos pendientes mas este pedido requieren ${cobertura.requiredQq.toFixed(2)} QQ. El socio tiene ${round2(terminadoQq).toFixed(2)} QQ terminados${detalleCascara}. Faltan ${cobertura.shortageQq.toFixed(2)} QQ.`
+      );
+    }
+  }
+}
 
 /**
  * El pedido genera su cuenta por cobrar apenas se toma, sin esperar al
@@ -235,6 +316,12 @@ ordersRouter.put("/:id", asyncRoute(async (req, res) => {
     if (order.rows[0].status !== "PENDING") {
       throw new ApiError(409, "Solo se puede editar un pedido pendiente: este ya fue despachado o cancelado.");
     }
+
+    if (order.rows[0].prepared_at) {
+      throw new ApiError(409, "No se puede editar un pedido ya preparado. Primero revierte su preparacion.");
+    }
+
+    await validarRespaldoDelPedido(client, accionistaId, body.items, req.params.id as string);
 
     const total = round2(body.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0));
     await client.query("DELETE FROM sales_order_items WHERE order_id = $1", [req.params.id]);
