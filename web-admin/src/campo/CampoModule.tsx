@@ -25,6 +25,7 @@ const CAMPO_SECCIONES: Array<{ id: CampoSeccion; label: string; icon: string }> 
   { id: "clientes", label: "Clientes", icon: "👥" },
   { id: "servicios", label: "Servicios", icon: "🚜" },
   { id: "partes", label: "Partes Diarios", icon: "📝" },
+  { id: "mantenimiento", label: "Mantenimiento", icon: "🔧" },
   { id: "nomina", label: "Nómina Operadores", icon: "💵" },
   { id: "cxc", label: "Cuentas por Cobrar", icon: "📥" },
   { id: "cxp", label: "Cuentas por Pagar", icon: "📤" },
@@ -55,7 +56,7 @@ type Servicio = {
 const hoy = () => new Date().toISOString().slice(0, 10);
 // Secciones del menú propio de Campo (contexto aislado). Se amplía agregando
 // entradas aquí y en CAMPO_SECCIONES (ver CampoWorkspace).
-export type CampoSeccion = "caja" | "servicios" | "clientes" | "cxc" | "cxp" | "vales" | "partes" | "nomina" | "reportes" | "config";
+export type CampoSeccion = "caja" | "servicios" | "clientes" | "cxc" | "cxp" | "vales" | "partes" | "mantenimiento" | "nomina" | "reportes" | "config";
 
 // Parte Diario pendiente (para importar/liquidar desde el form de servicio).
 type PartePendiente = { id: string; fecha: string; activo_id: string; activo_nombre: string; operador: string | null; cliente: string; qq: number };
@@ -149,8 +150,19 @@ type Vale = {
   cuenta_nombre: string; categoria_nombre: string | null; activo_nombre: string | null;
 };
 
+type MantenimientoTipo = "CAMBIO_ACEITE" | "PREVENTIVO" | "CORRECTIVO" | "REPUESTO" | "LLANTAS" | "INSPECCION" | "OTRO";
+type Mantenimiento = {
+  id: string; fecha: string; activo_id: string; activo_nombre: string; activo_tipo: string;
+  placa_codigo: string | null; tipo: MantenimientoTipo; componente: string | null;
+  detalle: string; lectura: number | null; unidad_lectura: "KM" | "HORAS" | null;
+  proxima_fecha: string | null; proxima_lectura: number | null; proveedor: string | null;
+  factura: string | null; costo: number; cuenta_nombre: string | null;
+  observaciones: string | null; creado_por: string | null;
+  estado_proximo: "SIN_PROGRAMAR" | "VENCIDO" | "PROXIMO" | "PROGRAMADO";
+};
+
 // ── Tipos de los reportes (V2) ───────────────────────────────────────────────
-type SaldoCaja = { corte: string; cuentas: Array<{ id: string; nombre: string; saldo: number }>; total: number };
+type SaldoCaja = { corte: string; cuentas: Array<{ id: string; nombre: string; saldo: number }>; total: number; total_disponible: number };
 type PorCobrarCliente = { cliente_id: string; cliente_nombre: string; servicios: number; saldo: number; antiguedad_max_dias: number; tramo: string };
 type PorCobrarDetalle = { servicio_id: string; fecha: string; cliente_id: string; cliente_nombre: string; activo_nombre: string; tipo: string; valor: number; cobrado: number; saldo: number; antiguedad_dias: number; tramo: string };
 type PorCobrar = { por_cliente: PorCobrarCliente[]; detalle: PorCobrarDetalle[]; por_tramo: Array<{ tramo: string; saldo: number; servicios: number }>; total_general: number };
@@ -200,7 +212,12 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
 
   const activosActivos = useMemo(() => activos.filter((a) => a.activo), [activos]);
   const pendientes = useMemo(() => servicios.filter((s) => s.estado !== "pagado"), [servicios]);
-  const totalCuentas = useMemo(() => cuentas.reduce((s, c) => s + c.saldo, 0), [cuentas]);
+  // CRUCE PILADORA es una cuenta puente contable, no dinero disponible para
+  // pagar gastos. Se muestra por transparencia, pero no infla el disponible.
+  const totalDisponible = useMemo(
+    () => cuentas.filter((c) => c.nombre !== "CRUCE PILADORA").reduce((s, c) => s + c.saldo, 0),
+    [cuentas]
+  );
 
   const flashEl = flash && (
     <p style={{ margin: "0 0 10px", padding: "8px 12px", borderRadius: 8, fontWeight: 600,
@@ -301,6 +318,17 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
     return <NominaOperadores />;
   }
 
+  if (section === "mantenimiento") {
+    return (
+      <section className="panelGrid">
+        {flashEl}
+        <MantenimientoFlota activos={activos} cuentas={cuentas.filter((c) => c.nombre !== "CRUCE PILADORA")}
+          onSaved={() => onCajaSaved("Mantenimiento registrado en la hoja de vida")}
+          onError={(m) => notify(m, "err")} />
+      </section>
+    );
+  }
+
   // section === "caja"
   const cajaAbierta = !!sesion?.activa;
   return (
@@ -334,9 +362,10 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
               <small>saldo</small>
             </div>
           ))}
-          <div className="totalBox" style={{ minWidth: 130, margin: 0, background: "#eff6ff", borderColor: "#bfdbfe" }}>
-            <span>TOTAL</span>
-            <strong style={{ color: totalCuentas >= 0 ? "#15803d" : "#b91c1c" }}>{money(totalCuentas)}</strong>
+          <div className="totalBox" style={{ minWidth: 150, margin: 0, background: "#eff6ff", borderColor: "#bfdbfe" }}>
+            <span>DISPONIBLE</span>
+            <strong style={{ color: totalDisponible >= 0 ? "#15803d" : "#b91c1c" }}>{money(totalDisponible)}</strong>
+            <small>sin cruce interno</small>
           </div>
         </div>
         <nav className="cajaSubNav" style={{ borderBottom: "none" }}>
@@ -410,6 +439,139 @@ function ServiciosList({ servicios }: { servicios: Servicio[] }) {
         </table>
       </div>
     </div>
+  );
+}
+
+// ── Hoja de vida de maquinaria ───────────────────────────────────────────────
+const MANT_TIPOS: Array<{ id: MantenimientoTipo; label: string }> = [
+  { id: "CAMBIO_ACEITE", label: "Cambio de aceite / filtros" },
+  { id: "PREVENTIVO", label: "Mantenimiento preventivo" },
+  { id: "CORRECTIVO", label: "Reparacion correctiva" },
+  { id: "REPUESTO", label: "Cambio de pieza / repuesto" },
+  { id: "LLANTAS", label: "Llantas / tren de rodaje" },
+  { id: "INSPECCION", label: "Inspeccion / revision" },
+  { id: "OTRO", label: "Otro" }
+];
+const mantTipoLabel = (tipo: MantenimientoTipo) => MANT_TIPOS.find((x) => x.id === tipo)?.label ?? tipo;
+
+function MantenimientoFlota({ activos, cuentas, onSaved, onError }: {
+  activos: Activo[]; cuentas: Cuenta[]; onSaved: OnSaved; onError: (m: string) => void;
+}) {
+  const vacio = {
+    fecha: hoy(), activo_id: "", tipo: "CAMBIO_ACEITE" as MantenimientoTipo,
+    componente: "", detalle: "", lectura: "", unidad_lectura: "HORAS" as "KM" | "HORAS",
+    proxima_fecha: "", proxima_lectura: "", proveedor: "", factura: "",
+    costo: "", cuenta_id: "", observaciones: ""
+  };
+  const [f, setF] = useState(vacio);
+  const [rows, setRows] = useState<Mantenimiento[]>([]);
+  const [filtroActivo, setFiltroActivo] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const cargar = useCallback(async () => {
+    try {
+      const qs = filtroActivo ? `?activo_id=${encodeURIComponent(filtroActivo)}` : "";
+      setRows(await apiGet<Mantenimiento[]>(`/campo/mantenimientos${qs}`));
+    } catch (e) { onError((e as Error).message); }
+  }, [filtroActivo, onError]);
+  useEffect(() => { cargar(); }, [cargar]);
+
+  const vencidos = rows.filter((r) => r.estado_proximo === "VENCIDO").length;
+  const proximos = rows.filter((r) => r.estado_proximo === "PROXIMO").length;
+  const ultimoPorActivo = useMemo(() => {
+    const m = new Map<string, Mantenimiento>();
+    for (const r of rows) if (!m.has(r.activo_id)) m.set(r.activo_id, r);
+    return m;
+  }, [rows]);
+
+  async function submit() {
+    try {
+      setBusy(true);
+      if (!f.activo_id) throw new Error("Selecciona la maquina o vehiculo");
+      if (f.detalle.trim().length < 2) throw new Error("Describe el trabajo realizado");
+      const costo = Number(f.costo || 0);
+      if (costo > 0 && !f.cuenta_id) throw new Error("Elige la cuenta de donde se pago");
+      await apiPost("/campo/mantenimientos", {
+        fecha: f.fecha, activo_id: f.activo_id, tipo: f.tipo,
+        componente: f.componente || undefined, detalle: f.detalle.trim(),
+        lectura: f.lectura ? Number(f.lectura) : undefined,
+        unidad_lectura: (f.lectura || f.proxima_lectura) ? f.unidad_lectura : undefined,
+        proxima_fecha: f.proxima_fecha || undefined,
+        proxima_lectura: f.proxima_lectura ? Number(f.proxima_lectura) : undefined,
+        proveedor: f.proveedor.trim() || undefined, factura: f.factura.trim() || undefined,
+        costo, cuenta_id: costo > 0 ? f.cuenta_id : undefined,
+        observaciones: f.observaciones.trim() || undefined
+      });
+      setF({ ...vacio, activo_id: f.activo_id, fecha: hoy() });
+      await cargar();
+      await onSaved();
+    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+
+  const estadoChip = (r: Mantenimiento) => {
+    if (r.estado_proximo === "VENCIDO") return <span className="chip bad">Vencido</span>;
+    if (r.estado_proximo === "PROXIMO") return <span className="chip warn">Proximo</span>;
+    if (r.estado_proximo === "PROGRAMADO") return <span className="chip ok">Programado</span>;
+    return <span className="chip info">Sin programar</span>;
+  };
+
+  return (
+    <>
+      <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div><h2 style={{ margin: 0 }}>🔧 Mantenimiento de flota</h2><p className="muted" style={{ margin: "3px 0 0" }}>Hoja de vida de cosechadoras, camiones y vehiculos.</p></div>
+          <div className="totalBox" style={{ minWidth: 130, margin: "0 0 0 auto" }}><span>REGISTROS</span><strong>{rows.length}</strong></div>
+          <div className="totalBox" style={{ minWidth: 130, margin: 0, background: vencidos ? "#fef2f2" : undefined, borderColor: vencidos ? "#fecaca" : undefined }}><span>VENCIDOS</span><strong style={{ color: vencidos ? "#b91c1c" : "#15803d" }}>{vencidos}</strong></div>
+          <div className="totalBox" style={{ minWidth: 130, margin: 0, background: proximos ? "#fffbeb" : undefined, borderColor: proximos ? "#fde68a" : undefined }}><span>PROXIMOS 30 DIAS</span><strong style={{ color: proximos ? "#b45309" : "#15803d" }}>{proximos}</strong></div>
+        </div>
+      </div>
+
+      <form className="formPanel" onSubmit={(e) => { e.preventDefault(); submit(); }} style={{ alignSelf: "start" }}>
+        <h2>＋ Registrar trabajo</h2>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <label><span>Fecha</span><input type="date" value={f.fecha} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
+          <label><span>Maquina / Vehiculo *</span><select value={f.activo_id} onChange={(e) => setF({ ...f, activo_id: e.target.value })}><option value="">Seleccione</option>{activos.map((a) => <option key={a.id} value={a.id}>{a.nombre}{a.placa_codigo ? ` · ${a.placa_codigo}` : ""}</option>)}</select></label>
+        </div>
+        <label><span>Tipo de trabajo</span><select value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value as MantenimientoTipo })}>{MANT_TIPOS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}</select></label>
+        <label><span>Pieza / Sistema</span><select value={f.componente} onChange={(e) => setF({ ...f, componente: e.target.value })}><option value="">Seleccione (opcional)</option>{PIEZAS_MANT.map((g) => <optgroup key={g.grupo} label={g.grupo}>{g.items.map((it) => <option key={it}>{it}</option>)}</optgroup>)}</select></label>
+        <label><span>Trabajo realizado *</span><textarea value={f.detalle} onChange={(e) => setF({ ...f, detalle: e.target.value })} placeholder="Ej: Cambio de aceite 15W-40 y filtros" rows={2} /></label>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 120px", gap: 10 }}>
+          <label><span>Lectura actual</span><input type="number" min="0" step="0.01" value={f.lectura} onChange={(e) => setF({ ...f, lectura: e.target.value })} placeholder="Horometro o kilometraje" /></label>
+          <label><span>Unidad</span><select value={f.unidad_lectura} onChange={(e) => setF({ ...f, unidad_lectura: e.target.value as "KM" | "HORAS" })}><option>HORAS</option><option>KM</option></select></label>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <label><span>Proximo por fecha</span><input type="date" value={f.proxima_fecha} onChange={(e) => setF({ ...f, proxima_fecha: e.target.value })} /></label>
+          <label><span>Proxima lectura</span><input type="number" min="0" step="0.01" value={f.proxima_lectura} onChange={(e) => setF({ ...f, proxima_lectura: e.target.value })} placeholder={f.unidad_lectura} /></label>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <label><span>Taller / Proveedor</span><input value={f.proveedor} onChange={(e) => setF({ ...f, proveedor: e.target.value })} /></label>
+          <label><span>Factura / Comprobante</span><input value={f.factura} onChange={(e) => setF({ ...f, factura: e.target.value })} /></label>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <label><span>Costo $</span><input type="number" min="0" step="0.01" value={f.costo} onChange={(e) => setF({ ...f, costo: e.target.value, cuenta_id: Number(e.target.value || 0) > 0 ? f.cuenta_id : "" })} placeholder="0.00" /></label>
+          <label><span>Cuenta de pago</span><select disabled={!(Number(f.costo) > 0)} value={f.cuenta_id} onChange={(e) => setF({ ...f, cuenta_id: e.target.value })}><option value="">{Number(f.costo) > 0 ? "Seleccione" : "Sin costo"}</option>{cuentas.map((c) => <option key={c.id} value={c.id}>{c.nombre} · {money(c.saldo)}</option>)}</select></label>
+        </div>
+        <label><span>Observaciones</span><textarea value={f.observaciones} onChange={(e) => setF({ ...f, observaciones: e.target.value })} rows={2} /></label>
+        <button className="primary" disabled={busy}>{busy ? "Guardando…" : "Guardar en hoja de vida"}</button>
+      </form>
+
+      <div className="tablePanel" style={{ alignSelf: "start" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <div><h2 style={{ margin: 0 }}>Ultimo trabajo por equipo</h2><small className="muted">Que se cambio, cuando y cual es el siguiente control.</small></div>
+          <label style={{ margin: "0 0 0 auto", minWidth: 220 }}><span>Filtrar equipo</span><select value={filtroActivo} onChange={(e) => setFiltroActivo(e.target.value)}><option value="">Toda la flota</option>{activos.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}</select></label>
+        </div>
+        <div style={{ overflowX: "auto" }}><table className="cajaTable" style={{ marginTop: 8 }}><thead><tr><th>Equipo</th><th>Ultimo trabajo</th><th>Fecha</th><th>Lectura</th><th>Proximo</th></tr></thead><tbody>
+          {(filtroActivo ? activos.filter((a) => a.id === filtroActivo) : activos).map((a) => { const r = ultimoPorActivo.get(a.id); return <tr key={a.id}><td><strong>{a.nombre}</strong><small className="muted" style={{ display: "block" }}>{tipoLabel(a.tipo)}</small></td><td>{r ? r.detalle : <span className="muted">Sin historial</span>}</td><td>{r ? String(r.fecha).slice(0, 10) : "—"}</td><td>{r?.lectura != null ? `${r.lectura} ${r.unidad_lectura}` : "—"}</td><td>{r ? <>{r.proxima_fecha ? String(r.proxima_fecha).slice(0, 10) : r.proxima_lectura != null ? `${r.proxima_lectura} ${r.unidad_lectura}` : "—"} <span style={{ marginLeft: 4 }}>{estadoChip(r)}</span></> : "—"}</td></tr>; })}
+        </tbody></table></div>
+      </div>
+
+      <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+        <h2>Historial tecnico</h2>
+        <div style={{ overflowX: "auto" }}><table className="cajaTable"><thead><tr><th>Fecha</th><th>Equipo</th><th>Tipo / Trabajo</th><th>Lectura</th><th>Proximo</th><th>Taller / Factura</th><th className="num">Costo</th><th>Cuenta</th></tr></thead><tbody>
+          {rows.length === 0 ? <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 14 }}>Todavia no hay mantenimientos registrados.</td></tr> : rows.map((r) => <tr key={r.id}><td style={{ whiteSpace: "nowrap" }}>{String(r.fecha).slice(0, 10)}</td><td><strong>{r.activo_nombre}</strong>{r.placa_codigo && <small className="muted" style={{ display: "block" }}>{r.placa_codigo}</small>}</td><td><span className="chip info">{mantTipoLabel(r.tipo)}</span><div style={{ marginTop: 4 }}>{r.detalle}</div>{r.componente && <small className="muted">{r.componente}</small>}</td><td>{r.lectura != null ? `${r.lectura} ${r.unidad_lectura}` : "—"}</td><td>{r.proxima_fecha ? String(r.proxima_fecha).slice(0, 10) : r.proxima_lectura != null ? `${r.proxima_lectura} ${r.unidad_lectura}` : "—"}<div style={{ marginTop: 4 }}>{estadoChip(r)}</div></td><td>{r.proveedor ?? "—"}{r.factura && <small className="muted" style={{ display: "block" }}>Doc. {r.factura}</small>}</td><td className="num">{money(r.costo)}</td><td>{r.cuenta_nombre ?? "—"}</td></tr>)}
+        </tbody></table></div>
+      </div>
+    </>
   );
 }
 
@@ -496,8 +658,9 @@ function ReportesView({ onError }: { onError: (m: string) => void }) {
             </div>
           ))}
           <div className="totalBox" style={{ minWidth: 120, margin: 0, background: "#eff6ff", borderColor: "#bfdbfe" }}>
-            <span>TOTAL</span>
-            <strong style={{ color: (saldo?.total ?? 0) >= 0 ? "#15803d" : "#b91c1c" }}>{num(saldo?.total ?? 0)}</strong>
+            <span>DISPONIBLE</span>
+            <strong style={{ color: (saldo?.total_disponible ?? 0) >= 0 ? "#15803d" : "#b91c1c" }}>{num(saldo?.total_disponible ?? 0)}</strong>
+            <small>sin cruce interno</small>
           </div>
         </div>
       </div>
@@ -1146,12 +1309,29 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
       if (!f.cuenta_id) throw new Error("Elige la cuenta");
       const monto = Number(f.monto);
       if (!(monto > 0)) throw new Error("Ingresa un monto válido");
-      await apiPost("/campo/movimientos", {
-        fecha: f.fecha, cuenta_id: f.cuenta_id, signo: "salida", monto,
-        concepto: f.concepto.trim() || undefined, categoria_id: f.categoria_id,
-        activo_id: f.activo_sel === ACTIVO_GENERAL ? undefined : f.activo_sel,
-        es_anticipo: f.es_anticipo || undefined
-      });
+      if (esReparacion) {
+        if (f.activo_sel === ACTIVO_GENERAL) throw new Error("Selecciona la maquina o vehiculo que recibio el mantenimiento");
+        if (f.es_anticipo) throw new Error("Registra el anticipo primero y el mantenimiento cuando se rinda el gasto real");
+        if (!f.concepto.trim()) throw new Error("Indica la pieza y el trabajo realizado");
+        const texto = `${f.pieza} ${f.accion}`.toLowerCase();
+        const tipo: MantenimientoTipo = texto.includes("aceite") || texto.includes("filtro")
+          ? "CAMBIO_ACEITE"
+          : f.accion === "Cambio / Reemplazo" ? "REPUESTO"
+          : f.accion === "Mantenimiento / Engrase" ? "PREVENTIVO"
+          : "CORRECTIVO";
+        await apiPost("/campo/mantenimientos", {
+          fecha: f.fecha, activo_id: f.activo_sel, tipo,
+          componente: f.pieza || undefined, detalle: f.concepto.trim(),
+          costo: monto, cuenta_id: f.cuenta_id
+        });
+      } else {
+        await apiPost("/campo/movimientos", {
+          fecha: f.fecha, cuenta_id: f.cuenta_id, signo: "salida", monto,
+          concepto: f.concepto.trim() || undefined, categoria_id: f.categoria_id,
+          activo_id: f.activo_sel === ACTIVO_GENERAL ? undefined : f.activo_sel,
+          es_anticipo: f.es_anticipo || undefined
+        });
+      }
       setF({ ...f, concepto: "", monto: "", categoria_id: "", es_anticipo: false, pieza: "", accion: "" });
       await onSaved();
     } catch (e) { onError((e as Error).message); } finally { setBusy(false); }

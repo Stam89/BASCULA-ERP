@@ -7,7 +7,7 @@ Actualizado: 2026-09-26
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: auditoria y blindaje de Transporte y Cosechadora (partes, nomina, Caja e integracion Bascula).
+- Ultimo cambio funcional: hoja de vida de mantenimiento y saldo disponible real en Transporte y Cosechadora.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,15 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Hoja de vida y Caja de Transporte/Cosechadora (2026-09-26)
+
+- Nueva seccion `Mantenimiento`: registra por maquina la fecha, tipo de trabajo, pieza/sistema, detalle, horometro o kilometraje, proxima fecha/lectura, taller, factura, costo y observaciones.
+- Los mantenimientos con costo crean atomicamente el egreso de Caja y la ficha tecnica; los controles sin costo tambien pueden registrarse. `CRUCE PILADORA` no se acepta como cuenta de pago.
+- Los egresos existentes con categoria `REPARACION_MANT` y maquina asignada se recuperan automaticamente como historial basico, sin duplicarlos.
+- En el formulario de Egreso, la categoria `REPARACION_MANT` exige una maquina y alimenta la hoja de vida; no se puede confundir con un anticipo por rendir.
+- Caja y Reportes muestran `DISPONIBLE` excluyendo `CRUCE PILADORA`, que sigue visible como cuenta interna pero ya no infla el efectivo utilizable.
+- Migracion aplicada: `20261034_campo_mantenimiento_flota.sql`. Verificacion: backend 64/64 tests, builds backend/frontend, preflight y health correctos; UI revisada sin insertar datos de prueba.
 
 ### Transporte y Cosechadora: integridad operativa y contable (2026-09-26)
 

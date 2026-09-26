@@ -647,6 +647,132 @@ campoRouter.post("/movimientos", asyncRoute(async (req, res) => {
   res.status(201).json(row);
 }));
 
+// ── Hoja de vida de flota ──────────────────────────────────────────────────
+// Un mantenimiento con costo crea su egreso y su ficha tecnica en la misma
+// transaccion. Si una de las dos inserciones falla, no queda informacion a
+// medias. Los mantenimientos sin costo sirven para inspecciones y controles.
+campoRouter.get("/mantenimientos", asyncRoute(async (req, res) => {
+  const q = z.object({
+    activo_id: z.string().uuid().optional(),
+    from: fechaSchema.optional(),
+    to: fechaSchema.optional()
+  }).parse(req.query);
+  const conds: string[] = [];
+  const params: unknown[] = [];
+  if (q.activo_id) { params.push(q.activo_id); conds.push(`mt.activo_id = $${params.length}`); }
+  if (q.from) { params.push(q.from); conds.push(`mt.fecha >= $${params.length}`); }
+  if (q.to) { params.push(q.to); conds.push(`mt.fecha <= $${params.length}`); }
+  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+  const rows = (await pool.query(
+    `SELECT mt.id, mt.fecha, mt.activo_id, a.nombre AS activo_nombre,
+            a.tipo AS activo_tipo, a.placa_codigo, mt.tipo, mt.componente,
+            mt.detalle, mt.lectura::float AS lectura, mt.unidad_lectura,
+            mt.proxima_fecha, mt.proxima_lectura::float AS proxima_lectura,
+            mt.proveedor, mt.factura, mt.costo::float AS costo,
+            mt.cuenta_id, c.nombre AS cuenta_nombre, mt.movimiento_id,
+            mt.observaciones, mt.created_at, u.name AS creado_por,
+            CASE
+              WHEN mt.proxima_fecha IS NULL THEN 'SIN_PROGRAMAR'
+              WHEN mt.proxima_fecha < CURRENT_DATE THEN 'VENCIDO'
+              WHEN mt.proxima_fecha <= CURRENT_DATE + 30 THEN 'PROXIMO'
+              ELSE 'PROGRAMADO'
+            END AS estado_proximo
+       FROM campo_mantenimientos mt
+       JOIN campo_activos a ON a.id = mt.activo_id
+       LEFT JOIN campo_cuentas c ON c.id = mt.cuenta_id
+       LEFT JOIN users u ON u.id = mt.created_by
+       ${where}
+      ORDER BY mt.fecha DESC, mt.created_at DESC
+      LIMIT 1000`,
+    params
+  )).rows;
+  res.json(rows);
+}));
+
+campoRouter.post("/mantenimientos", asyncRoute(async (req, res) => {
+  const body = z.object({
+    fecha: fechaSchema.optional(),
+    activo_id: z.string().uuid(),
+    tipo: z.enum(["CAMBIO_ACEITE", "PREVENTIVO", "CORRECTIVO", "REPUESTO", "LLANTAS", "INSPECCION", "OTRO"]),
+    componente: z.string().trim().max(180).nullable().optional(),
+    detalle: z.string().trim().min(2).max(1000),
+    lectura: z.number().nonnegative().nullable().optional(),
+    unidad_lectura: z.enum(["KM", "HORAS"]).nullable().optional(),
+    proxima_fecha: fechaSchema.nullable().optional(),
+    proxima_lectura: z.number().nonnegative().nullable().optional(),
+    proveedor: z.string().trim().max(180).nullable().optional(),
+    factura: z.string().trim().max(80).nullable().optional(),
+    costo: z.number().nonnegative().default(0),
+    cuenta_id: z.string().uuid().nullable().optional(),
+    observaciones: z.string().trim().max(1000).nullable().optional()
+  }).superRefine((v, ctx) => {
+    if (v.lectura != null && !v.unidad_lectura) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["unidad_lectura"], message: "Indica si la lectura esta en KM u HORAS" });
+    }
+    if (v.proxima_lectura != null && !v.unidad_lectura) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["unidad_lectura"], message: "Indica la unidad de la proxima lectura" });
+    }
+    if (v.costo > 0 && !v.cuenta_id) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["cuenta_id"], message: "Elige la cuenta de donde se pago el mantenimiento" });
+    }
+    if (v.costo === 0 && v.cuenta_id) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["cuenta_id"], message: "No elijas cuenta cuando el mantenimiento no tiene costo" });
+    }
+  }).parse(req.body);
+
+  const row = await inTransaction(async (client) => {
+    const activo = (await client.query(
+      "SELECT id, nombre FROM campo_activos WHERE id = $1",
+      [body.activo_id]
+    )).rows[0];
+    if (!activo) throw new ApiError(404, "Maquina o vehiculo no encontrado");
+
+    let movimientoId: string | null = null;
+    if (body.costo > 0) {
+      const cuenta = (await client.query(
+        "SELECT id, nombre FROM campo_cuentas WHERE id = $1",
+        [body.cuenta_id]
+      )).rows[0];
+      if (!cuenta) throw new ApiError(404, "Cuenta no encontrada");
+      if (cuenta.nombre === "CRUCE PILADORA") {
+        throw new ApiError(400, "CRUCE PILADORA no es una cuenta de pago de mantenimiento");
+      }
+      await requireCajaAbierta([body.cuenta_id!], client);
+      const categoria = (await client.query(
+        `INSERT INTO campo_categorias_gasto (nombre) VALUES ('REPARACION_MANT')
+         ON CONFLICT (nombre) DO UPDATE SET nombre = EXCLUDED.nombre
+         RETURNING id`
+      )).rows[0];
+      const movimiento = (await client.query(
+        `INSERT INTO campo_movimientos
+           (fecha, cuenta_id, signo, monto, concepto, categoria_id, activo_id, naturaleza, created_by)
+         VALUES (COALESCE($1::date, CURRENT_DATE), $2, 'salida', $3, $4, $5, $6, 'mantenimiento_flota', $7)
+         RETURNING id`,
+        [body.fecha ?? null, body.cuenta_id, body.costo, body.detalle,
+         categoria.id, body.activo_id, userId(req)]
+      )).rows[0];
+      movimientoId = movimiento.id;
+    }
+
+    return (await client.query(
+      `INSERT INTO campo_mantenimientos
+         (fecha, activo_id, tipo, componente, detalle, lectura, unidad_lectura,
+          proxima_fecha, proxima_lectura, proveedor, factura, costo, cuenta_id,
+          movimiento_id, observaciones, created_by)
+       VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7,
+               $8, $9, $10, $11, $12, $13, $14, $15, $16)
+       RETURNING *`,
+      [body.fecha ?? null, body.activo_id, body.tipo, body.componente || null,
+       body.detalle, body.lectura ?? null, body.unidad_lectura ?? null,
+       body.proxima_fecha || null, body.proxima_lectura ?? null,
+       body.proveedor || null, body.factura || null, body.costo,
+       body.costo > 0 ? body.cuenta_id : null, movimientoId,
+       body.observaciones || null, userId(req)]
+    )).rows[0];
+  });
+  res.status(201).json(row);
+}));
+
 // ── Fondos por rendir / Vales de anticipo ────────────────────────────────────
 // Un vale es un egreso con estado 'PENDIENTE_RENDICION'. Al liquidarlo se compara
 // lo entregado (monto del vale) con lo realmente gastado y se genera un ajuste.
@@ -1455,7 +1581,10 @@ campoRouter.get("/reportes/saldo-caja", asyncRoute(async (req, res) => {
      FROM campo_movimientos WHERE fecha <= $1`,
     [hasta]
   )).rows[0].total;
-  res.json({ corte: hasta, cuentas, total });
+  const total_disponible = cuentas
+    .filter((c) => c.nombre !== "CRUCE PILADORA")
+    .reduce((sum, c) => sum + Number(c.saldo || 0), 0);
+  res.json({ corte: hasta, cuentas, total, total_disponible: Math.round(total_disponible * 100) / 100 });
 }));
 
 // 2) CUENTAS POR COBRAR (a HOY): servicios con saldo > 0, agrupados por cliente
