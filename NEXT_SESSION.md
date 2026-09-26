@@ -1,13 +1,13 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-09-25
+Actualizado: 2026-09-26
 
 ## Inicio rapido
 
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: pagos de Secador solo de lunes a viernes; fines de semana opera el dueno sin nomina.
+- Ultimo cambio funcional: auditoria integral, blindaje multi-tenant de Caja/Liquidaciones y permisos backend completos.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,16 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Auditoria integral y mapa de la aplicacion (2026-09-26)
+
+- Nuevo mapa tecnico/funcional en `docs/MAPA_APLICACION.md`: arquitectura, modulos, flujos interconectados, seguridad, controles, estado verificado y deuda tecnica priorizada.
+- Caja: consultas, cierre, exportacion y operaciones sobre movimientos ahora comprueban que la caja pertenezca al accionista activo. La apertura usa un candado transaccional por socio y rechaza cajas abiertas duplicadas, incluso con doble clic o dos equipos.
+- Liquidaciones: editar/desbloquear/aplicar anticipos/anular/eliminar quedaron estrictamente filtrados por accionista activo. `apply-advances` bloquea liquidacion y CxP por separado para evitar locks invalidos sobre un `LEFT JOIN`.
+- Permisos: se cubrieron prefijos que no estaban en el mapa de escrituras (`guias-remision`, `admin-payroll`, `productos` y `catalogs`).
+- Frontend: se elimino la segunda llamada identica a `refreshNomina()` al entrar en Nomina.
+- Preflight: nuevo control que falla si un socio tiene mas de una caja abierta.
+- Verificacion: backend build y 61/61 tests; preflight y migraciones correctos; frontend build; lint 0 errores/166 warnings historicos; base real sin tickets duplicados ni stock negativo; health HTTP 200.
 
 ### Nomina de Secador solo de lunes a viernes (2026-09-25)
 

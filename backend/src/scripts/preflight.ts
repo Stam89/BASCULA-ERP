@@ -211,6 +211,25 @@ async function runDatabaseChecks(): Promise<void> {
         : `Hay ${negativeStock} saldo(s) negativos en inventory_stock`
     );
 
+    const shareholdersWithMultipleOpenRegisters = await scalarNumber(`
+      SELECT COUNT(*)::int AS value
+      FROM (
+        SELECT accionista_id
+        FROM cash_registers
+        WHERE status = 'OPEN'
+        GROUP BY accionista_id
+        HAVING COUNT(*) > 1
+      ) duplicated
+    `);
+    addCheck(
+      "Caja abierta por socio",
+      shareholdersWithMultipleOpenRegisters === 0,
+      "error",
+      shareholdersWithMultipleOpenRegisters === 0
+        ? "Como maximo una caja abierta por socio"
+        : `Hay ${shareholdersWithMultipleOpenRegisters} socio(s) con mas de una caja abierta`
+    );
+
     const missingPackagedType = await scalarNumber(`
       SELECT COUNT(*)::int AS value
       FROM products

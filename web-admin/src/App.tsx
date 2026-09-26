@@ -6878,7 +6878,6 @@ export function App() {
     if (activeTab === "Secadoras") loadMotorActive(motorActivo).catch(() => undefined);
     if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
     if (activeTab === "Cuadrilla") refreshCuadrilla().catch(() => undefined);
-    if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
     if (activeTab === "Servicio Pilado") { refreshPilado().catch(() => undefined); refreshCobros().catch(() => undefined); refreshServiceDriedLots().catch(() => undefined); loadLaborRates().catch(() => undefined); }
     if (activeTab === "Seleccion") refreshSelection().catch(() => undefined);
     if (activeTab === "Dashboard" && canSeePanel) refreshPanel().catch(() => undefined);

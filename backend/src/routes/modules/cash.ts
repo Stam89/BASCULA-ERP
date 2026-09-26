@@ -28,6 +28,23 @@ async function assertCajaDelAccionista(
   if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
 }
 
+async function getMovimientoDelAccionistaForUpdate(
+  client: PoolClient,
+  movementId: string,
+  accionistaId: string | null | undefined
+) {
+  const result = await client.query(
+    `SELECT cm.*
+       FROM cash_movements cm
+       JOIN cash_registers cr ON cr.id = cm.cash_register_id
+      WHERE cm.id = $1 AND cr.accionista_id = $2
+      FOR UPDATE OF cm`,
+    [movementId, accionistaId ?? null]
+  );
+  if (!result.rows[0]) throw new ApiError(404, "Movimiento no disponible para el accionista activo");
+  return result.rows[0];
+}
+
 // Guarda una subcategoría escrita a mano para sugerirla luego (memoria). Es
 // idempotente (índice único por nombre normalizado) y nunca rompe el registro
 // del movimiento: si falla, se ignora.
@@ -154,13 +171,24 @@ cashRouter.post("/registers/open", asyncRoute(async (req, res) => {
   const openingCash = body.tipo === "BANCO" ? 0 : body.opening_balance_cash;
   const openingBank = body.tipo === "EFECTIVO" ? 0 : body.opening_balance_bank;
   const openingTotal = round2(openingCash + openingBank);
-  const result = await pool.query(
-    `INSERT INTO cash_registers (branch_id, name, tipo, opening_balance, opening_balance_cash, opening_balance_bank, opened_by, accionista_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-     RETURNING *`,
-    [body.branch_id, body.name, body.tipo, openingTotal, openingCash, openingBank, body.opened_by, accionistaId]
-  );
-  res.status(201).json(result.rows[0]);
+  const row = await inTransaction(async (client) => {
+    // Un candado por socio hace atomico el "comprobar + abrir" incluso si dos
+    // equipos o un doble clic envian la solicitud al mismo tiempo.
+    await client.query("SELECT id FROM accionistas WHERE id = $1 FOR UPDATE", [accionistaId]);
+    const existing = await client.query(
+      "SELECT id FROM cash_registers WHERE accionista_id = $1 AND status = 'OPEN' LIMIT 1",
+      [accionistaId]
+    );
+    if (existing.rowCount) throw new ApiError(409, "Este socio ya tiene una caja abierta. Cierrala antes de abrir otra.");
+    const result = await client.query(
+      `INSERT INTO cash_registers (branch_id, name, tipo, opening_balance, opening_balance_cash, opening_balance_bank, opened_by, accionista_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [body.branch_id, body.name, body.tipo, openingTotal, openingCash, openingBank, body.opened_by, accionistaId]
+    );
+    return result.rows[0];
+  });
+  res.status(201).json(row);
 }));
 
 // ── Caja actual abierta ──────────────────────────────────────────────────────
@@ -194,7 +222,11 @@ cashRouter.get("/registers/previous-balance", asyncRoute(async (req, res) => {
 
 // ── Resumen de caja (balance) ────────────────────────────────────────────────
 cashRouter.get("/registers/:id/summary", asyncRoute(async (req, res) => {
-  const reg = await pool.query("SELECT * FROM cash_registers WHERE id = $1", [req.params.id]);
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const reg = await pool.query(
+    "SELECT * FROM cash_registers WHERE id = $1 AND accionista_id = $2",
+    [req.params.id, accionistaId]
+  );
   if (!reg.rows[0]) { res.status(404).json({ error: "Caja no encontrada" }); return; }
 
   const totals = await pool.query(
@@ -224,11 +256,12 @@ cashRouter.get("/registers/:id/summary", asyncRoute(async (req, res) => {
 
 // ── Cerrar caja ──────────────────────────────────────────────────────────────
 cashRouter.post("/registers/:id/close", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
     `UPDATE cash_registers SET status = 'CLOSED', closed_at = NOW()
-     WHERE id = $1 AND status = 'OPEN'
+     WHERE id = $1 AND accionista_id = $2 AND status = 'OPEN'
      RETURNING *`,
-    [req.params.id]
+    [req.params.id, accionistaId]
   );
   if (!result.rows[0]) { res.status(400).json({ error: "Caja no está abierta o no existe" }); return; }
   res.json(result.rows[0]);
@@ -242,14 +275,15 @@ cashRouter.put("/registers/:id/opening-balance", requireAdmin, asyncRoute(async 
   }).parse(req.body);
 
   const openingTotal = round2(body.opening_balance_cash + body.opening_balance_bank);
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
     `UPDATE cash_registers
      SET opening_balance = $2,
          opening_balance_cash = $3,
          opening_balance_bank = $4
-     WHERE id = $1 AND status = 'OPEN'
+     WHERE id = $1 AND accionista_id = $5 AND status = 'OPEN'
      RETURNING *`,
-    [req.params.id, openingTotal, body.opening_balance_cash, body.opening_balance_bank]
+    [req.params.id, openingTotal, body.opening_balance_cash, body.opening_balance_bank, accionistaId]
   );
   if (!result.rows[0]) throw new ApiError(400, "Caja no encontrada o ya está cerrada");
   res.json(result.rows[0]);
@@ -257,6 +291,12 @@ cashRouter.put("/registers/:id/opening-balance", requireAdmin, asyncRoute(async 
 
 // ── Movimientos de una caja ──────────────────────────────────────────────────
 cashRouter.get("/registers/:id/movements", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const reg = await pool.query(
+    "SELECT id FROM cash_registers WHERE id = $1 AND accionista_id = $2",
+    [req.params.id, accionistaId]
+  );
+  if (!reg.rowCount) throw new ApiError(404, "Caja no disponible para el accionista activo");
   const result = await pool.query(
     "SELECT * FROM cash_movements WHERE cash_register_id = $1 ORDER BY created_at DESC",
     [req.params.id]
@@ -333,11 +373,10 @@ cashRouter.post("/movements/:id/reverse", requireAdmin, asyncRoute(async (req, r
   await ensureCashColumns();
   const body = z.object({ reason: z.string().min(3) }).parse(req.body);
   const user = (req as AuthenticatedRequest).user;
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
 
   const result = await inTransaction(async (client) => {
-    const orig = await client.query("SELECT * FROM cash_movements WHERE id = $1 FOR UPDATE", [req.params.id]);
-    if (!orig.rows[0]) throw new ApiError(404, "Movimiento no encontrado");
-    const m = orig.rows[0];
+    const m = await getMovimientoDelAccionistaForUpdate(client, req.params.id as string, accionistaId);
     if (m.reversal_of) throw new ApiError(400, "No se puede anular un contra-asiento.");
     if (m.reversed_at) throw new ApiError(400, "Este movimiento ya fue anulado.");
 
@@ -468,9 +507,7 @@ cashRouter.post("/movements/:id/liquidar", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
 
   const result = await inTransaction(async (client) => {
-    const origRes = await client.query("SELECT * FROM cash_movements WHERE id = $1 FOR UPDATE", [req.params.id]);
-    const orig = origRes.rows[0];
-    if (!orig) throw new ApiError(404, "Movimiento no encontrado");
+    const orig = await getMovimientoDelAccionistaForUpdate(client, req.params.id as string, accionistaId);
     if (!orig.es_fondo) throw new ApiError(409, "Ese movimiento no es un fondo a rendir cuentas.");
     if (orig.fondo_estado === "LIQUIDADO") throw new ApiError(409, "Ese fondo ya fue liquidado.");
 
@@ -522,10 +559,9 @@ cashRouter.post("/movements/:id/liquidar", asyncRoute(async (req, res) => {
 // /liquidar normalmente. Solo EGRESOS activos (no anulados, no ya-fondo).
 cashRouter.post("/movements/:id/convertir-fondo", asyncRoute(async (req, res) => {
   const body = z.object({ responsable: z.string().max(120).optional() }).parse(req.body ?? {});
+  const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
   const result = await inTransaction(async (client) => {
-    const origRes = await client.query("SELECT * FROM cash_movements WHERE id = $1 FOR UPDATE", [req.params.id]);
-    const orig = origRes.rows[0];
-    if (!orig) throw new ApiError(404, "Movimiento no encontrado");
+    const orig = await getMovimientoDelAccionistaForUpdate(client, req.params.id as string, accionistaId);
     if (orig.movement !== "EXPENSE") throw new ApiError(409, "Solo un egreso puede convertirse en fondo a rendir cuentas.");
     if (orig.es_fondo) throw new ApiError(409, "Ese movimiento ya es un fondo a rendir cuentas.");
     if (orig.reversed_at || orig.reversal_of) throw new ApiError(409, "No se puede convertir un movimiento anulado.");
@@ -596,7 +632,11 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
 
 // ── Exportar movimientos del día en Excel ────────────────────────────────────
 cashRouter.get("/registers/:id/export-excel", asyncRoute(async (req, res) => {
-  const reg = await pool.query("SELECT * FROM cash_registers WHERE id = $1", [req.params.id]);
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const reg = await pool.query(
+    "SELECT * FROM cash_registers WHERE id = $1 AND accionista_id = $2",
+    [req.params.id, accionistaId]
+  );
   if (!reg.rows[0]) { res.status(404).json({ error: "No encontrada" }); return; }
 
   const movs = await pool.query(

@@ -44,8 +44,14 @@ const WRITE_MODULES_BY_PREFIX: Record<string, AppModule[]> = {
   "selection": ["Inventario", "Produccion", "Caja", "Seleccion"],
   "sales": ["Ventas"],
   "orders": ["Ventas"],
+  "guias-remision": ["Ventas"],
   "customers": ["Ventas"],
   "products": ["Ventas"],
+  // Alias en espanol usado por el catalogo de productos del frontend.
+  "productos": ["Ventas"],
+  // Catalogos compartidos: bodegas (inventario), vehiculos (bascula) y
+  // clientes (ventas). Cualquiera de esos modulos puede mantener su catalogo.
+  "catalogs": ["Inventario", "Bascula", "Ventas"],
   "suppliers": ["Compras", "Inventario"],
   "purchases": ["Compras", "Inventario", "Caja"],
   "costos": ["Caja", "Produccion"],
@@ -64,6 +70,7 @@ const WRITE_MODULES_BY_PREFIX: Record<string, AppModule[]> = {
   // Nómina, cuadrilla y servicio de pilado: la interfaz se los muestra a quien
   // tiene Nómina, Caja o Producción; el backend aplica la misma regla.
   "labor": ["Caja", "Produccion", "Nomina"],
+  "admin-payroll": ["Caja", "Nomina"],
   "cuadrilla": ["Caja", "Produccion", "Cuadrilla"],
   "pilado": ["Caja", "Produccion", "Servicio Pilado"],
   "tunnel-reservations": ["Secadoras"],

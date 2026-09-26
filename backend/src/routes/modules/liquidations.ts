@@ -577,10 +577,11 @@ liquidationsRouter.post("/set-lock", requireAdmin, asyncRoute(async (req, res) =
     ids: z.array(z.string().uuid()).min(1),
     unlocked: z.boolean()
   }).parse(req.body);
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   await ensureLiquidationEditColumn();
   const result = await pool.query(
-    "UPDATE liquidations SET edit_unlocked = $2 WHERE id = ANY($1::uuid[]) RETURNING id",
-    [body.ids, body.unlocked]
+    "UPDATE liquidations SET edit_unlocked = $2 WHERE id = ANY($1::uuid[]) AND accionista_id = $3 RETURNING id",
+    [body.ids, body.unlocked, accionistaId]
   );
   res.json({ ok: true, updated: result.rowCount, unlocked: body.unlocked });
 }));
@@ -599,12 +600,13 @@ liquidationsRouter.put("/:id", asyncRoute(async (req, res) => {
   if (Object.values(body).every((v) => v === undefined)) {
     throw new ApiError(400, "Nada que actualizar.");
   }
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   await ensureLiquidationEditColumn();
 
   const result = await inTransaction(async (client) => {
     const current = await client.query(
-      "SELECT * FROM liquidations WHERE id = $1 FOR UPDATE",
-      [req.params.id]
+      "SELECT * FROM liquidations WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
+      [req.params.id, accionistaId]
     );
     if (!current.rowCount) throw new ApiError(404, "Liquidación no encontrada");
     const liq = current.rows[0];
@@ -673,17 +675,25 @@ liquidationsRouter.put("/:id", asyncRoute(async (req, res) => {
 
 // Aplicar anticipos pendientes del agricultor contra una liquidación ya realizada
 liquidationsRouter.post("/:id/apply-advances", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await inTransaction(async (client) => {
     // Traer la liquidación y su cuenta por pagar
     const liq = await client.query(
-      `SELECT l.*, ap.id AS ap_id, ap.balance AS ap_balance
-       FROM liquidations l
-       LEFT JOIN accounts_payable ap ON ap.liquidation_id = l.id AND ap.reference_type IS NULL
-       WHERE l.id = $1`,
-      [req.params.id]
+      `SELECT l.*
+         FROM liquidations l
+        WHERE l.id = $1 AND l.accionista_id = $2
+        FOR UPDATE`,
+      [req.params.id, accionistaId]
     );
     if (!liq.rows[0]) throw new ApiError(404, "Liquidación no encontrada");
-    const row = liq.rows[0];
+    const payable = await client.query(
+      `SELECT id, balance
+         FROM accounts_payable
+        WHERE liquidation_id = $1 AND reference_type IS NULL
+        FOR UPDATE`,
+      [req.params.id]
+    );
+    const row = { ...liq.rows[0], ap_id: payable.rows[0]?.id, ap_balance: payable.rows[0]?.balance };
     const apBalance = Number(row.ap_balance ?? 0);
     if (apBalance <= 0) throw new ApiError(409, "Esta liquidación ya está pagada");
 
@@ -746,12 +756,13 @@ liquidationsRouter.post("/:id/apply-advances", asyncRoute(async (req, res) => {
 // Anticipos aplicados a un lote de liquidaciones (para impresión detallada)
 liquidationsRouter.get("/applied-advances", asyncRoute(async (req, res) => {
   const { batch_id, liquidation_ids } = req.query;
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
 
   let ids: string[] = [];
   if (batch_id) {
     const liq = await pool.query(
-      "SELECT id FROM liquidations WHERE batch_id = $1",
-      [batch_id]
+      "SELECT id FROM liquidations WHERE batch_id = $1 AND accionista_id = $2",
+      [batch_id, accionistaId]
     );
     ids = liq.rows.map((r: { id: string }) => r.id);
   } else if (liquidation_ids) {
@@ -764,9 +775,10 @@ liquidationsRouter.get("/applied-advances", asyncRoute(async (req, res) => {
     `SELECT aa.amount_applied, fa.concept, fa.advance_number, fa.issued_at
      FROM advance_applications aa
      JOIN farmer_advances fa ON fa.id = aa.advance_id
-     WHERE aa.liquidation_id = ANY($1::uuid[])
+     JOIN liquidations l ON l.id = aa.liquidation_id
+     WHERE aa.liquidation_id = ANY($1::uuid[]) AND l.accionista_id = $2
      ORDER BY fa.issued_at ASC`,
-    [ids]
+    [ids, accionistaId]
   );
   res.json(result.rows);
 }));
@@ -856,10 +868,14 @@ liquidationsRouter.get("/:batchId/fomento-recibo", asyncRoute(async (req, res) =
 liquidationsRouter.post("/:id/anular", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({ motivo: z.string().trim().min(3, "Indica el motivo de la anulación.") }).parse(req.body);
   const liqId = String(req.params.id);
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   await ensureLiquidationEditColumn();
 
   const result = await inTransaction(async (client) => {
-    const liq = (await client.query("SELECT * FROM liquidations WHERE id = $1 FOR UPDATE", [liqId])).rows[0];
+    const liq = (await client.query(
+      "SELECT * FROM liquidations WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
+      [liqId, accionistaId]
+    )).rows[0];
     if (!liq) throw new ApiError(404, "Liquidación no encontrada");
     if (liq.status === "CANCELLED") throw new ApiError(409, "Esta liquidación ya está anulada.");
 
@@ -953,8 +969,12 @@ liquidationsRouter.post("/:id/anular", requireAdmin, asyncRoute(async (req, res)
 // existentes; solo se borran la fila y sus referencias ya neutralizadas.
 liquidationsRouter.delete("/:id", requireAdmin, asyncRoute(async (req, res) => {
   const liqId = String(req.params.id);
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await inTransaction(async (client) => {
-    const liq = (await client.query("SELECT id, liquidation_number, status FROM liquidations WHERE id = $1 FOR UPDATE", [liqId])).rows[0];
+    const liq = (await client.query(
+      "SELECT id, liquidation_number, status FROM liquidations WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
+      [liqId, accionistaId]
+    )).rows[0];
     if (!liq) throw new ApiError(404, "Liquidación no encontrada");
     if (liq.status !== "CANCELLED") {
       throw new ApiError(400, "Solo se pueden eliminar liquidaciones ANULADAS. Anúlala primero.");
