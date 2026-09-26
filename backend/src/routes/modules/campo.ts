@@ -40,6 +40,26 @@ async function requireCajaAbierta(cuentaIds: string[], client: Q = pool): Promis
   }
 }
 
+// Serializa las salidas de CAJA bloqueando la cuenta antes de leer su saldo.
+// Solo se aplica al efectivo fisico; BANCO/OTROS pueden conciliarse con fuentes
+// externas que aun no esten cargadas en el ERP.
+async function requireSaldoCajaDisponible(client: Q, cuentaId: string, monto: number): Promise<void> {
+  const cuenta = (await client.query(
+    "SELECT id, nombre FROM campo_cuentas WHERE id = $1 FOR UPDATE",
+    [cuentaId]
+  )).rows[0];
+  if (!cuenta) throw new ApiError(404, "Cuenta no encontrada");
+  if (cuenta.nombre !== "CAJA") return;
+  const saldo = Number((await client.query(
+    `SELECT COALESCE(SUM(CASE WHEN signo = 'entrada' THEN monto ELSE -monto END), 0)::float AS saldo
+       FROM campo_movimientos WHERE cuenta_id = $1`,
+    [cuentaId]
+  )).rows[0].saldo);
+  if (monto > saldo + 0.005) {
+    throw new ApiError(422, `Saldo insuficiente en CAJA. Disponible: ${saldo.toFixed(2)}; salida solicitada: ${monto.toFixed(2)}.`);
+  }
+}
+
 const CONCEPTO_APERTURA_CAJA = "Apertura de caja / Saldo inicial";
 const NATURALEZA_APERTURA_CAJA = "apertura_caja";
 const NATURALEZA_CIERRE_CAJA = "cierre_caja";
@@ -626,7 +646,11 @@ campoRouter.post("/movimientos", asyncRoute(async (req, res) => {
   )).rows[0];
 
   if (!body.servicio_id) {
-    res.status(201).json(await insert(pool));
+    const row = await inTransaction(async (client) => {
+      if (body.signo === "salida") await requireSaldoCajaDisponible(client, body.cuenta_id, body.monto);
+      return insert(client);
+    });
+    res.status(201).json(row);
     return;
   }
 
@@ -670,8 +694,9 @@ campoRouter.get("/mantenimientos", asyncRoute(async (req, res) => {
             mt.proxima_fecha, mt.proxima_lectura::float AS proxima_lectura,
             mt.proveedor, mt.factura, mt.costo::float AS costo,
             mt.cuenta_id, c.nombre AS cuenta_nombre, mt.movimiento_id,
-            mt.observaciones, mt.created_at, u.name AS creado_por,
+            mt.observaciones, mt.anulado_at, mt.created_at, u.name AS creado_por,
             CASE
+              WHEN mt.anulado_at IS NOT NULL THEN 'ANULADO'
               WHEN mt.proxima_fecha IS NULL THEN 'SIN_PROGRAMAR'
               WHEN mt.proxima_fecha < CURRENT_DATE THEN 'VENCIDO'
               WHEN mt.proxima_fecha <= CURRENT_DATE + 30 THEN 'PROXIMO'
@@ -738,6 +763,7 @@ campoRouter.post("/mantenimientos", asyncRoute(async (req, res) => {
         throw new ApiError(400, "CRUCE PILADORA no es una cuenta de pago de mantenimiento");
       }
       await requireCajaAbierta([body.cuenta_id!], client);
+      await requireSaldoCajaDisponible(client, body.cuenta_id!, body.costo);
       const categoria = (await client.query(
         `INSERT INTO campo_categorias_gasto (nombre) VALUES ('REPARACION_MANT')
          ON CONFLICT (nombre) DO UPDATE SET nombre = EXCLUDED.nombre
@@ -771,6 +797,60 @@ campoRouter.post("/mantenimientos", asyncRoute(async (req, res) => {
     )).rows[0];
   });
   res.status(201).json(row);
+}));
+
+// Reversion contable: conserva el original y crea un movimiento opuesto. Solo
+// aplica a movimientos manuales y mantenimientos. Los registros ligados a
+// servicios, nomina, CxP, vales, transferencias o cierres tienen flujos propios
+// y se bloquean para no desajustar sus modulos de origen.
+campoRouter.post("/movimientos/:id/reversar", asyncRoute(async (req, res) => {
+  const body = z.object({ motivo: z.string().trim().min(5).max(400) }).parse(req.body);
+  const result = await inTransaction(async (client) => {
+    const mov = (await client.query(
+      `SELECT m.*, c.nombre AS cuenta_nombre
+         FROM campo_movimientos m
+         JOIN campo_cuentas c ON c.id = m.cuenta_id
+        WHERE m.id = $1
+        FOR UPDATE OF m`,
+      [req.params.id]
+    )).rows[0];
+    if (!mov) throw new ApiError(404, "Movimiento no encontrado");
+    if (mov.reversado_at) throw new ApiError(409, "Este movimiento ya fue reversado");
+    if (mov.movimiento_origen_id) throw new ApiError(409, "Una reversion no puede volver a reversarse");
+
+    const naturalezaPermitida = mov.naturaleza === "operativo" || mov.naturaleza === "mantenimiento_flota";
+    const tieneVinculos = mov.servicio_id || mov.cxp_id || mov.vale_id || mov.par_id || mov.caja_sesion_id || mov.estado;
+    if (!naturalezaPermitida || tieneVinculos || mov.cuenta_nombre === "CRUCE PILADORA") {
+      throw new ApiError(409, "Este movimiento pertenece a otro proceso y debe corregirse desde su modulo de origen");
+    }
+
+    await requireCajaAbierta([mov.cuenta_id], client);
+    const signo = mov.signo === "entrada" ? "salida" : "entrada";
+    const naturalezaReversion = mov.signo === "salida" ? "reversion_gasto" : "reversion_ingreso";
+    if (signo === "salida") await requireSaldoCajaDisponible(client, mov.cuenta_id, Number(mov.monto));
+    const uid = userId(req);
+    const reversion = (await client.query(
+      `INSERT INTO campo_movimientos
+         (fecha, cuenta_id, signo, monto, concepto, categoria_id, activo_id,
+          naturaleza, movimiento_origen_id, motivo_reversion, created_by)
+       VALUES (CURRENT_DATE, $1, $2, $3, $4, $5, $6,
+               $7, $8, $9, $10)
+       RETURNING *`,
+      [mov.cuenta_id, signo, mov.monto,
+       `Reversion: ${mov.concepto || "movimiento sin concepto"}`,
+       mov.categoria_id, mov.activo_id, naturalezaReversion, mov.id, body.motivo, uid]
+    )).rows[0];
+    await client.query(
+      "UPDATE campo_movimientos SET reversado_at = now(), reversado_por = $2 WHERE id = $1",
+      [mov.id, uid]
+    );
+    await client.query(
+      "UPDATE campo_mantenimientos SET anulado_at = now(), anulado_por = $2 WHERE movimiento_id = $1 AND anulado_at IS NULL",
+      [mov.id, uid]
+    );
+    return { original_id: mov.id, reversion };
+  });
+  res.status(201).json(result);
 }));
 
 // ── Fondos por rendir / Vales de anticipo ────────────────────────────────────
@@ -825,6 +905,7 @@ campoRouter.post("/movimientos/:id/liquidar", asyncRoute(async (req, res) => {
       const esDevolucion = diff > 0;                    // gastó menos → entra dinero
       const signo = esDevolucion ? "entrada" : "salida";
       const monto = Math.abs(diff);
+      if (signo === "salida") await requireSaldoCajaDisponible(client, vale.cuenta_id, monto);
       const concepto = esDevolucion
         ? `Devolución de saldo de vale${vale.concepto ? ` · ${vale.concepto}` : ""}`
         : `Reembolso adicional de vale${vale.concepto ? ` · ${vale.concepto}` : ""}`;
@@ -1264,6 +1345,7 @@ campoRouter.post("/nomina-operadores/liquidar", asyncRoute(async (req, res) => {
     if (!cuenta) throw new ApiError(404, "Cuenta de pago no encontrada.");
     if (cuenta.nombre === "CRUCE PILADORA") throw new ApiError(400, "La cuenta CRUCE PILADORA no puede usarse para pagar nomina.");
     if (body.monto > 0) await requireCajaAbierta([body.cuenta_id], client);
+    if (body.monto > 0) await requireSaldoCajaDisponible(client, body.cuenta_id, body.monto);
 
     const pago = (await client.query(
       `INSERT INTO campo_nomina_pagos
@@ -1515,6 +1597,7 @@ campoRouter.post("/cxp/:id/abono", asyncRoute(async (req, res) => {
     const cxp = (await client.query("SELECT id, acreedor, monto FROM campo_cxp WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
     if (!cxp) throw new ApiError(404, "Cuenta por pagar no encontrada");
     await requireCajaAbierta([body.cuenta_id], client);
+    await requireSaldoCajaDisponible(client, body.cuenta_id, body.monto);
     const pagado = Number((await client.query(
       "SELECT COALESCE(SUM(monto),0)::float AS p FROM campo_movimientos WHERE cxp_id = $1 AND signo = 'salida'", [req.params.id]
     )).rows[0].p);
@@ -1667,7 +1750,8 @@ campoRouter.get("/reportes/por-maquina", asyncRoute(async (req, res) => {
        SELECT activo_id, SUM(CASE WHEN signo = 'salida' THEN monto ELSE -monto END) AS g
        FROM campo_movimientos
        WHERE fecha BETWEEN $1 AND $2
-         AND ((naturaleza = 'operativo' AND signo = 'salida') OR naturaleza = 'ajuste_vale')
+         AND ((naturaleza IN ('operativo', 'mantenimiento_flota') AND signo = 'salida')
+              OR naturaleza IN ('ajuste_vale', 'reversion_gasto'))
        GROUP BY activo_id
      ), prod AS (
        -- QQ trabajados por máquina (de los Partes Diarios) en el rango.
@@ -1695,7 +1779,8 @@ campoRouter.get("/reportes/por-maquina", asyncRoute(async (req, res) => {
      FROM campo_movimientos m
      LEFT JOIN campo_categorias_gasto cat ON cat.id = m.categoria_id
      WHERE m.fecha BETWEEN $1 AND $2
-       AND ((m.naturaleza = 'operativo' AND m.signo = 'salida') OR m.naturaleza = 'ajuste_vale')
+       AND ((m.naturaleza IN ('operativo', 'mantenimiento_flota') AND m.signo = 'salida')
+            OR m.naturaleza IN ('ajuste_vale', 'reversion_gasto'))
      GROUP BY m.activo_id, cat.nombre`,
     [desde, hasta]
   )).rows;
@@ -1777,6 +1862,7 @@ campoRouter.post("/transferencias", asyncRoute(async (req, res) => {
     `Transferencia ${nombre(body.cuenta_origen_id)} → ${nombre(body.cuenta_destino_id)}`;
 
   const result = await inTransaction(async (client) => {
+    await requireSaldoCajaDisponible(client, body.cuenta_origen_id, body.monto);
     const par = (await client.query("SELECT gen_random_uuid() AS id")).rows[0].id;
     const insert = (cuentaId: string, signo: "salida" | "entrada") => client.query(
       `INSERT INTO campo_movimientos
@@ -1809,6 +1895,8 @@ campoRouter.get("/caja/libro", asyncRoute(async (req, res) => {
     `WITH libro AS (
        SELECT m.id, m.fecha, m.created_at, m.cuenta_id, m.signo, m.monto, m.concepto,
               m.categoria_id, m.naturaleza, m.par_id, m.estado,
+              m.servicio_id, m.cxp_id, m.vale_id, m.caja_sesion_id,
+              m.movimiento_origen_id, m.motivo_reversion, m.reversado_at,
               c.nombre AS cuenta_nombre, cat.nombre AS categoria_nombre, a.nombre AS activo_nombre,
               SUM(CASE WHEN m.signo = 'entrada' THEN m.monto ELSE -m.monto END)
                 OVER (PARTITION BY m.cuenta_id ORDER BY m.fecha, m.created_at ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS saldo_corrido
@@ -1820,10 +1908,17 @@ campoRouter.get("/caja/libro", asyncRoute(async (req, res) => {
      )
      SELECT l.id, l.fecha, l.cuenta_id, l.signo, l.monto::float AS monto, l.concepto,
             l.categoria_id, l.naturaleza, l.par_id, l.estado,
+            l.movimiento_origen_id, l.motivo_reversion, l.reversado_at,
             l.cuenta_nombre, l.categoria_nombre, l.activo_nombre,
             l.saldo_corrido::float AS saldo_corrido,
             (CASE WHEN l.signo = 'entrada' THEN l.monto ELSE 0 END)::float AS entrada,
-            (CASE WHEN l.signo = 'salida' THEN l.monto ELSE 0 END)::float AS salida
+            (CASE WHEN l.signo = 'salida' THEN l.monto ELSE 0 END)::float AS salida,
+            (l.reversado_at IS NULL
+             AND l.movimiento_origen_id IS NULL
+             AND l.naturaleza IN ('operativo', 'mantenimiento_flota')
+             AND l.servicio_id IS NULL AND l.cxp_id IS NULL AND l.vale_id IS NULL
+             AND l.par_id IS NULL AND l.caja_sesion_id IS NULL AND l.estado IS NULL
+             AND l.cuenta_nombre <> 'CRUCE PILADORA') AS reversible
      FROM libro l
      WHERE 1 = 1 ${fromCond} ${toCond}
      ORDER BY l.fecha DESC, l.created_at DESC

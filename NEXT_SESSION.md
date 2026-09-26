@@ -49,6 +49,15 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Caja sin sobregiro y reversion auditada (2026-09-26)
+
+- CAJA fisica ya no permite egresos superiores al saldo disponible. El control se ejecuta dentro de transacciones y cubre egresos manuales, mantenimiento, nomina, CxP, reembolsos de vales y transferencias.
+- BANCO y OTROS no se bloquearon para evitar romper conciliaciones externas que aun no hayan sido cargadas en el ERP.
+- El Libro permite reversar movimientos manuales y mantenimientos con motivo obligatorio. Nunca borra el original: crea el asiento opuesto, marca el original como reversado y conserva usuario/fecha para auditoria.
+- Movimientos ligados a servicios, nomina, CxP, vales, transferencias, apertura/cierre y `CRUCE PILADORA` no se reversan desde el Libro; deben corregirse desde su modulo de origen.
+- Reversar un mantenimiento tambien lo marca anulado en la hoja de vida. Los reportes por maquina incluyen mantenimiento y netean sus reversiones.
+- Migracion aplicada: `20261035_campo_reversiones_y_saldo_caja.sql`. Verificacion: backend 64/64 tests, builds backend/frontend, preflight y health correctos; UI comprobada sin modificar datos reales.
+
 ### Hoja de vida y Caja de Transporte/Cosechadora (2026-09-26)
 
 - Nueva seccion `Mantenimiento`: registra por maquina la fecha, tipo de trabajo, pieza/sistema, detalle, horometro o kilometraje, proxima fecha/lectura, taller, factura, costo y observaciones.

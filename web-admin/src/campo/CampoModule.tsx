@@ -158,7 +158,8 @@ type Mantenimiento = {
   proxima_fecha: string | null; proxima_lectura: number | null; proveedor: string | null;
   factura: string | null; costo: number; cuenta_nombre: string | null;
   observaciones: string | null; creado_por: string | null;
-  estado_proximo: "SIN_PROGRAMAR" | "VENCIDO" | "PROXIMO" | "PROGRAMADO";
+  anulado_at: string | null;
+  estado_proximo: "SIN_PROGRAMAR" | "VENCIDO" | "PROXIMO" | "PROGRAMADO" | "ANULADO";
 };
 
 // ── Tipos de los reportes (V2) ───────────────────────────────────────────────
@@ -390,7 +391,9 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
       )}
       {cajaTab === "cierres" && <CierresCajaView />}
 
-      {cajaTab !== "cierres" && <LibroView cuentas={cuentas} version={libroVersion} onError={(m) => notify(m, "err")} />}
+      {cajaTab !== "cierres" && <LibroView cuentas={cuentas} version={libroVersion}
+        onReversed={() => onCajaSaved("Movimiento reversado y registrado en el libro")}
+        onError={(m) => notify(m, "err")} />}
 
       {modalCaja === "abrir" && (
         <AperturaCajaModal saldoSugerido={sesion?.saldo_sugerido ?? 0}
@@ -480,7 +483,7 @@ function MantenimientoFlota({ activos, cuentas, onSaved, onError }: {
   const proximos = rows.filter((r) => r.estado_proximo === "PROXIMO").length;
   const ultimoPorActivo = useMemo(() => {
     const m = new Map<string, Mantenimiento>();
-    for (const r of rows) if (!m.has(r.activo_id)) m.set(r.activo_id, r);
+    for (const r of rows) if (!r.anulado_at && !m.has(r.activo_id)) m.set(r.activo_id, r);
     return m;
   }, [rows]);
 
@@ -509,6 +512,7 @@ function MantenimientoFlota({ activos, cuentas, onSaved, onError }: {
   }
 
   const estadoChip = (r: Mantenimiento) => {
+    if (r.estado_proximo === "ANULADO") return <span className="chip bad">Anulado</span>;
     if (r.estado_proximo === "VENCIDO") return <span className="chip bad">Vencido</span>;
     if (r.estado_proximo === "PROXIMO") return <span className="chip warn">Proximo</span>;
     if (r.estado_proximo === "PROGRAMADO") return <span className="chip ok">Programado</span>;
@@ -1586,10 +1590,19 @@ function TransferenciaForm({ cuentas, onSaved, onError }: {
 }
 
 // LIBRO DE MOVIMIENTOS con SALDO CORRIDO. Filtros por cuenta y rango de fecha.
-type LibroRow = { id: string; fecha: string; concepto: string | null; cuenta_nombre: string; categoria_nombre: string | null; activo_nombre: string | null; naturaleza: string; estado: string | null; entrada: number; salida: number; saldo_corrido: number };
-function LibroView({ cuentas, version, onError }: { cuentas: Cuenta[]; version: number; onError: (m: string) => void }) {
+type LibroRow = {
+  id: string; fecha: string; concepto: string | null; cuenta_nombre: string;
+  categoria_nombre: string | null; activo_nombre: string | null; naturaleza: string;
+  estado: string | null; entrada: number; salida: number; saldo_corrido: number;
+  movimiento_origen_id: string | null; motivo_reversion: string | null;
+  reversado_at: string | null; reversible: boolean;
+};
+function LibroView({ cuentas, version, onReversed, onError }: {
+  cuentas: Cuenta[]; version: number; onReversed: OnSaved; onError: (m: string) => void;
+}) {
   const [filtro, setFiltro] = useState({ cuenta_id: "", from: "", to: "" });
   const [rows, setRows] = useState<LibroRow[]>([]);
+  const [reversando, setReversando] = useState<string | null>(null);
   const cargar = useCallback(async () => {
     try {
       const qs = new URLSearchParams();
@@ -1600,6 +1613,19 @@ function LibroView({ cuentas, version, onError }: { cuentas: Cuenta[]; version: 
     } catch (e) { onError((e as Error).message); }
   }, [filtro.cuenta_id, filtro.from, filtro.to, onError]);
   useEffect(() => { cargar(); }, [cargar, version]);
+
+  async function reversar(row: LibroRow) {
+    const motivo = window.prompt(`Motivo de la reversion\n\n${row.concepto || "Movimiento sin concepto"}`)?.trim();
+    if (!motivo) return;
+    if (motivo.length < 5) { onError("Escribe un motivo de al menos 5 caracteres"); return; }
+    if (!window.confirm("Se creara un movimiento contrario. El original no se borrara. ¿Continuar?")) return;
+    try {
+      setReversando(row.id);
+      await apiPost(`/campo/movimientos/${row.id}/reversar`, { motivo });
+      await onReversed();
+      await cargar();
+    } catch (e) { onError((e as Error).message); } finally { setReversando(null); }
+  }
 
   return (
     <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
@@ -1618,10 +1644,10 @@ function LibroView({ cuentas, version, onError }: { cuentas: Cuenta[]; version: 
         <table className="cajaTable" style={{ marginTop: 8 }}>
           <thead><tr>
             <th>Fecha</th><th>Concepto</th><th>Categoría</th><th>Cuenta</th>
-            <th className="num">Entrada</th><th className="num">Salida</th><th className="num">Saldo</th>
+            <th className="num">Entrada</th><th className="num">Salida</th><th className="num">Saldo</th><th>Accion</th>
           </tr></thead>
           <tbody>
-            {rows.length === 0 ? <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin movimientos.</td></tr>
+            {rows.length === 0 ? <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin movimientos.</td></tr>
               : rows.map((r) => (
               <tr key={r.id}>
                 <td style={{ whiteSpace: "nowrap" }}>{String(r.fecha).slice(0, 10)}</td>
@@ -1630,20 +1656,24 @@ function LibroView({ cuentas, version, onError }: { cuentas: Cuenta[]; version: 
                   {r.activo_nombre ? <span className="chip" style={{ marginLeft: 6, background: "#065f46", color: "#fff" }}>🚜 {r.activo_nombre}</span> : null}
                   {r.naturaleza === "transferencia" ? <span className="chip info" style={{ marginLeft: 6 }}>transfer.</span> : null}
                   {r.naturaleza === "ajuste_vale" ? <span className="chip info" style={{ marginLeft: 6 }}>ajuste vale</span> : null}
+                  {r.naturaleza.startsWith("reversion_") ? <span className="chip warn" style={{ marginLeft: 6 }}>reversion</span> : null}
+                  {r.reversado_at ? <span className="chip bad" style={{ marginLeft: 6 }}>reversado</span> : null}
                   {r.estado === "PENDIENTE_RENDICION" ? <span className="chip warn" style={{ marginLeft: 6 }}>📋 por rendir</span> : null}
                   {r.estado === "LIQUIDADO" ? <span className="chip ok" style={{ marginLeft: 6 }}>vale liquidado</span> : null}
+                  {r.motivo_reversion ? <small className="muted" style={{ display: "block", marginTop: 3 }}>Motivo: {r.motivo_reversion}</small> : null}
                 </td>
                 <td>{r.categoria_nombre || "—"}</td>
                 <td>{r.cuenta_nombre}</td>
                 <td className="num" style={{ color: r.entrada > 0 ? "#15803d" : undefined }}>{r.entrada > 0 ? money(r.entrada) : "—"}</td>
                 <td className="num" style={{ color: r.salida > 0 ? "#b91c1c" : undefined }}>{r.salida > 0 ? money(r.salida) : "—"}</td>
                 <td className="num" style={{ fontWeight: 700, color: r.saldo_corrido < 0 ? "#b91c1c" : undefined }}>{money(r.saldo_corrido)}</td>
+                <td>{r.reversible ? <button type="button" className="btnSecondary" disabled={reversando === r.id} onClick={() => reversar(r)}>{reversando === r.id ? "Reversando…" : "↩ Reversar"}</button> : <span className="muted">—</span>}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>Cada fila muestra el saldo corrido de su propia cuenta, incluso al consultar todas las cuentas.</p>
+      <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>Cada fila muestra el saldo corrido de su propia cuenta. Reversar crea un asiento contrario y conserva el original para auditoria.</p>
     </div>
   );
 }
