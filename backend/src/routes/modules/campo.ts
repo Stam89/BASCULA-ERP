@@ -6,6 +6,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { crearParteDesdeBascula } from "../../services/campo-flete-bascula.js";
+import { calcularNominaCampo, tipoServicioPorActivo, type CampoUnidadNomina } from "../../utils/campo.js";
 
 // MÓDULO INDEPENDIENTE: Caja de Campo (cosechadora + transporte/fletes).
 // V1 = solo captura (CRUD). Sin relación con túneles, piladora, ventas ni
@@ -41,6 +42,7 @@ async function requireCajaAbierta(cuentaIds: string[], client: Q = pool): Promis
 
 const CONCEPTO_APERTURA_CAJA = "Apertura de caja / Saldo inicial";
 const NATURALEZA_APERTURA_CAJA = "apertura_caja";
+const NATURALEZA_CIERRE_CAJA = "cierre_caja";
 
 // Inserta exactamente un movimiento de apertura por sesion. El indice parcial
 // de la migracion protege tambien frente a dos cargas simultaneas del panel.
@@ -764,7 +766,7 @@ campoRouter.get("/partes", asyncRoute(async (req, res) => {
   res.json(result.rows);
 }));
 
-// Generar el COBRO de un parte: crea un campo_servicio (tipo cosecha) desde el
+// Generar el COBRO de un parte: crea un campo_servicio de cosecha o flete segun
 // parte (qq × precio) y marca el parte 'cobrado' enlazándolo. El cliente (texto
 // libre del parte) se resuelve/crea en campo_clientes (alta rápida). El cobro
 // real (abonos/saldo) sigue con la maquinaria de servicios. Todo en 1 transacción
@@ -773,7 +775,9 @@ campoRouter.post("/partes/:id/cobrar", asyncRoute(async (req, res) => {
   const body = z.object({ precio_unitario: z.number().positive() }).parse(req.body);
   const result = await inTransaction(async (client) => {
     const parte = (await client.query(
-      "SELECT * FROM campo_partes WHERE id = $1 FOR UPDATE", [req.params.id]
+      `SELECT p.*, a.tipo AS activo_tipo
+       FROM campo_partes p JOIN campo_activos a ON a.id = p.activo_id
+       WHERE p.id = $1 FOR UPDATE OF p`, [req.params.id]
     )).rows[0];
     if (!parte) throw new ApiError(404, "Parte no encontrado");
     if (parte.estado !== "por_cobrar") throw new ApiError(409, "Este parte ya tiene un cobro generado.");
@@ -786,12 +790,14 @@ campoRouter.post("/partes/:id/cobrar", asyncRoute(async (req, res) => {
 
     const qq = Number(parte.qq);
     const valor = Math.round(qq * body.precio_unitario * 100) / 100;
+    const tipoServicio = tipoServicioPorActivo(parte.activo_tipo);
+    const tipoDetalle = tipoServicio === "cosecha" ? "cosecha" : "flete";
     const servicio = (await client.query(
       `INSERT INTO campo_servicios (fecha, cliente_id, activo_id, tipo, qq, precio_unitario, valor, notas, created_by)
-       VALUES ($1, $2, $3, 'cosecha', $4, $5, $6, $7, $8)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
-      [parte.fecha, cliente.id, parte.activo_id, qq, body.precio_unitario, valor,
-       `Cobro de parte de cosecha (${nombre})`, userId(req)]
+      [parte.fecha, cliente.id, parte.activo_id, tipoServicio, qq, body.precio_unitario, valor,
+       `Cobro de parte de ${tipoDetalle} (${nombre})`, userId(req)]
     )).rows[0];
 
     const parteUpd = (await client.query(
@@ -1091,35 +1097,71 @@ campoRouter.get("/nomina-operadores", asyncRoute(async (req, res) => {
 campoRouter.post("/nomina-operadores/liquidar", asyncRoute(async (req, res) => {
   const body = z.object({
     parte_ids: z.array(z.string().uuid()).min(1),
-    operador: z.string().min(1).max(140),
-    activo_id: z.string().uuid().nullable().optional(),
-    unidad: z.enum(["QQ", "VIAJE", "DIA"]).default("VIAJE"),
-    base: z.number().nonnegative().default(0),
-    tarifa: z.number().nonnegative().nullable().optional(),
-    monto_sugerido: z.number().nonnegative().nullable().optional(),
+    cuenta_id: z.string().uuid(),
     monto: z.number().nonnegative(),
-    ajustado: z.boolean().default(false),
     motivo: z.string().max(300).optional()
   }).parse(req.body);
-  // Si el admin ajustó el valor sugerido, el motivo es obligatorio.
-  if (body.ajustado && !(body.motivo && body.motivo.trim())) {
-    throw new ApiError(400, "Indica el motivo del ajuste del pago.");
-  }
+  if (new Set(body.parte_ids).size !== body.parte_ids.length) throw new ApiError(400, "La seleccion contiene partes repetidos.");
   const result = await inTransaction(async (client) => {
+    const partes = (await client.query(
+      `SELECT p.id, p.fecha, p.operador, p.activo_id, p.qq::float AS qq,
+              a.nombre AS activo_nombre, a.tipo AS activo_tipo,
+              t.tarifa::float AS tarifa, t.unidad
+       FROM campo_partes p
+       JOIN campo_activos a ON a.id = p.activo_id
+       LEFT JOIN campo_tarifas_operador t
+         ON lower(t.operador) = lower(p.operador) AND t.activo_id = p.activo_id AND t.activo = true
+       WHERE p.id = ANY($1::uuid[]) AND p.operador_pagado_at IS NULL
+       ORDER BY p.fecha, p.id
+       FOR UPDATE OF p`,
+      [body.parte_ids]
+    )).rows;
+    if (partes.length !== body.parte_ids.length) throw new ApiError(409, "Uno o mas partes ya fueron liquidados o ya no existen.");
+
+    const operador = String(partes[0].operador ?? "").trim();
+    const activoId = String(partes[0].activo_id);
+    if (!operador) throw new ApiError(409, "Los partes seleccionados no tienen operador asignado.");
+    if (partes.some((p) => String(p.operador ?? "").trim().toLowerCase() !== operador.toLowerCase() || String(p.activo_id) !== activoId)) {
+      throw new ApiError(409, "Solo se pueden liquidar juntos partes del mismo operador y maquina.");
+    }
+    const tarifa = partes[0].tarifa == null ? null : Number(partes[0].tarifa);
+    if (tarifa == null) throw new ApiError(409, "Configura la tarifa del operador y la maquina antes de liquidar.");
+    const unidad = (partes[0].unidad ?? (partes[0].activo_tipo === "cosechadora" ? "QQ" : "VIAJE")) as CampoUnidadNomina;
+    const qq = partes.reduce((sum, p) => sum + Number(p.qq || 0), 0);
+    const dias = new Set(partes.map((p) => String(p.fecha).slice(0, 10))).size;
+    const calculo = calcularNominaCampo({ unidad, qq, viajes: partes.length, dias, tarifa });
+    const ajustado = Math.abs(body.monto - calculo.total) > 0.005;
+    const motivo = body.motivo?.trim() || null;
+    if (ajustado && !motivo) throw new ApiError(400, "Indica el motivo del ajuste del pago.");
+
+    const cuenta = (await client.query("SELECT id, nombre FROM campo_cuentas WHERE id = $1", [body.cuenta_id])).rows[0];
+    if (!cuenta) throw new ApiError(404, "Cuenta de pago no encontrada.");
+    if (cuenta.nombre === "CRUCE PILADORA") throw new ApiError(400, "La cuenta CRUCE PILADORA no puede usarse para pagar nomina.");
+    if (body.monto > 0) await requireCajaAbierta([body.cuenta_id], client);
+
     const pago = (await client.query(
       `INSERT INTO campo_nomina_pagos
-         (operador, activo_id, unidad, base, tarifa, monto_sugerido, monto, ajustado, motivo, desde, hasta, partes_count, created_by)
-       SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9,
-              MIN(p.fecha), MAX(p.fecha), COUNT(*)::int, $11
-         FROM campo_partes p
-        WHERE p.id = ANY($10::uuid[]) AND p.operador_pagado_at IS NULL
-       HAVING COUNT(*) > 0
+         (operador, activo_id, unidad, base, tarifa, monto_sugerido, monto, ajustado, motivo,
+          desde, hasta, partes_count, cuenta_id, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+               $10::date, $11::date, $12, $13, $14)
        RETURNING id`,
-      [body.operador, body.activo_id ?? null, body.unidad, body.base, body.tarifa ?? null,
-       body.monto_sugerido ?? null, body.monto, body.ajustado, body.motivo?.trim() || null,
-       body.parte_ids, userId(req)]
+      [operador, activoId, unidad, calculo.base, tarifa, calculo.total,
+       body.monto, ajustado, motivo, partes[0].fecha, partes[partes.length - 1].fecha,
+       partes.length, body.cuenta_id, userId(req)]
     )).rows[0];
-    if (!pago) throw new ApiError(409, "Esos partes ya fueron liquidados.");
+
+    let movimiento = null;
+    if (body.monto > 0) {
+      movimiento = (await client.query(
+        `INSERT INTO campo_movimientos
+           (fecha, cuenta_id, signo, monto, concepto, activo_id, naturaleza, created_by)
+         VALUES (CURRENT_DATE, $1, 'salida', $2, $3, $4, 'pago_nomina_operador', $5)
+         RETURNING id`,
+        [body.cuenta_id, body.monto, `Pago nomina: ${operador} - ${partes[0].activo_nombre}`, activoId, userId(req)]
+      )).rows[0];
+      await client.query("UPDATE campo_nomina_pagos SET movimiento_id = $2 WHERE id = $1", [pago.id, movimiento.id]);
+    }
     const upd = await client.query(
       `UPDATE campo_partes
           SET operador_pagado_at = now(), operador_pago_monto = $2, operador_pago_id = $3
@@ -1127,7 +1169,8 @@ campoRouter.post("/nomina-operadores/liquidar", asyncRoute(async (req, res) => {
         RETURNING id`,
       [body.parte_ids, body.monto, pago.id]
     );
-    return { pago_id: pago.id, pagados: upd.rowCount ?? 0 };
+    if (upd.rowCount !== partes.length) throw new ApiError(409, "No se pudo completar la liquidacion de todos los partes.");
+    return { pago_id: pago.id, movimiento_id: movimiento?.id ?? null, pagados: upd.rowCount ?? 0, monto_sugerido: calculo.total };
   });
   res.status(201).json({ ok: true, ...result });
 }));
@@ -1639,7 +1682,7 @@ campoRouter.get("/caja/libro", asyncRoute(async (req, res) => {
               m.categoria_id, m.naturaleza, m.par_id, m.estado,
               c.nombre AS cuenta_nombre, cat.nombre AS categoria_nombre, a.nombre AS activo_nombre,
               SUM(CASE WHEN m.signo = 'entrada' THEN m.monto ELSE -m.monto END)
-                OVER (ORDER BY m.fecha, m.created_at ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS saldo_corrido
+                OVER (PARTITION BY m.cuenta_id ORDER BY m.fecha, m.created_at ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS saldo_corrido
        FROM campo_movimientos m
        JOIN campo_cuentas c ON c.id = m.cuenta_id
        LEFT JOIN campo_categorias_gasto cat ON cat.id = m.categoria_id
@@ -1768,7 +1811,24 @@ campoRouter.post("/caja/cerrar", asyncRoute(async (req, res) => {
         [cajaId, signo, Math.abs(diferencia), concepto, userId(req)]
       )).rows[0];
     }
-    return { sesion: cerrada, arqueo: arq, diferencia, ajuste };
+
+    // La apertura inyecta el efectivo inicial en el libro. Al cerrar retiramos
+    // el saldo contable de esta jornada para que la siguiente apertura no lo
+    // vuelva a sumar. Es un movimiento tecnico, no un gasto operativo.
+    const saldoLibroAlCerrar = body.generar_ajuste ? body.saldo_real : arq.saldo_teorico;
+    let movimientoCierre = null;
+    if (Math.abs(saldoLibroAlCerrar) > 0.005) {
+      const cajaId = await cajaCuentaId(client);
+      movimientoCierre = (await client.query(
+        `INSERT INTO campo_movimientos
+           (fecha, cuenta_id, signo, monto, concepto, naturaleza, caja_sesion_id, created_by)
+         VALUES (CURRENT_DATE, $1, $2, $3, 'Cierre de caja / traslado de saldo', $4, $5, $6)
+         RETURNING *`,
+        [cajaId, saldoLibroAlCerrar > 0 ? "salida" : "entrada", Math.abs(saldoLibroAlCerrar),
+         NATURALEZA_CIERRE_CAJA, s.id, userId(req)]
+      )).rows[0];
+    }
+    return { sesion: cerrada, arqueo: arq, diferencia, ajuste, movimiento_cierre: movimientoCierre };
   });
   res.status(201).json(result);
 }));

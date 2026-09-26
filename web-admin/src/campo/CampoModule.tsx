@@ -28,6 +28,8 @@ const CAMPO_SECCIONES: Array<{ id: CampoSeccion; label: string; icon: string }> 
   { id: "nomina", label: "Nómina Operadores", icon: "💵" },
   { id: "cxc", label: "Cuentas por Cobrar", icon: "📥" },
   { id: "cxp", label: "Cuentas por Pagar", icon: "📤" },
+  { id: "vales", label: "Vales por Rendir", icon: "🧾" },
+  { id: "reportes", label: "Reportes", icon: "📊" },
   { id: "config", label: "Configuración", icon: "⚙️" }
 ];
 
@@ -1461,7 +1463,7 @@ function LibroView({ cuentas, version, onError }: { cuentas: Cuenta[]; version: 
           </tbody>
         </table>
       </div>
-      <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>Saldo corrido acumulado por orden de fecha. Con una cuenta filtrada es el saldo de esa cuenta.</p>
+      <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>Cada fila muestra el saldo corrido de su propia cuenta, incluso al consultar todas las cuentas.</p>
     </div>
   );
 }

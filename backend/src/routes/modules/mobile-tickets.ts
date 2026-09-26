@@ -542,6 +542,7 @@ mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, asyn
     isMaquila,
     quintals: Number(t.quintals),
     ticketNumber: t.raw_payload?.numeroTicket ?? null,
+    sourceId: String(result.ingreso.id),
     createdBy: body.created_by ?? null
   });
 

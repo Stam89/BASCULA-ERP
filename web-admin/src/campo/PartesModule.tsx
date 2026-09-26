@@ -1,4 +1,4 @@
-// Partes Diarios de Cosecha (Reporte de Operadores). Sección del workspace de
+// Partes Diarios de Campo (cosecha y transporte). Sección del workspace de
 // Campo. Persiste en el backend (tabla campo_partes vía /campo/partes). La
 // máquina sale de la flota real (campo_activos); el operador se copia del activo
 // pero queda editable. Mantiene los estilos de CajaModule.
@@ -21,7 +21,7 @@ async function parteReq(path: string, method: "PATCH" | "DELETE", body?: unknown
 }
 
 // Máquina = flota (campo_activos). Solo se usan nombre/operador/estado aquí.
-type Activo = { id: string; nombre: string; operador: string | null; activo: boolean };
+type Activo = { id: string; nombre: string; tipo: string; operador: string | null; activo: boolean };
 // Operador (catálogo campo_operadores). En el parte se guarda su NOMBRE (texto).
 type Operador = { id: string; nombre: string; activo: boolean };
 type Parte = {
@@ -50,6 +50,8 @@ export default function PartesModule() {
   const notify = (text: string, kind: "ok" | "err" = "ok") => { setFlash({ text, kind }); setTimeout(() => setFlash(null), 3000); };
 
   const activosActivos = useMemo(() => activos.filter((a) => a.activo), [activos]);
+  const activoSeleccionado = activosActivos.find((a) => a.id === f.activo_id);
+  const nuevoEsCosecha = activoSeleccionado?.tipo?.toLowerCase() === "cosechadora";
   const esCosechadora = (p: Parte) => (p.activo_tipo ?? "").toLowerCase() === "cosechadora";
   const partesVista = useMemo(() => partes.filter((p) =>
     histTab === "todos" ? true : histTab === "cosechadoras" ? esCosechadora(p) : !esCosechadora(p)
@@ -93,7 +95,7 @@ export default function PartesModule() {
       const cliente = f.cliente.trim();
       if (!cliente) throw new Error("Ingresa el cliente / dueño del cultivo");
       const qq = Number(f.qq);
-      if (!(qq > 0)) throw new Error("Ingresa los quintales cosechados (mayor a 0)");
+      if (!(qq > 0)) throw new Error("Ingresa los quintales trabajados (mayor a 0)");
       await apiPost("/campo/partes", {
         fecha: f.fecha, activo_id: f.activo_id, operador: f.operador.trim() || undefined,
         cliente, cliente_id: f.cliente_id || undefined, is_nuevo_externo: !f.cliente_id,
@@ -101,7 +103,7 @@ export default function PartesModule() {
       });
       setF({ ...f, cliente: "", cliente_id: "", qq: "", observaciones: "" });
       await refrescar();
-      notify("Reporte de cosecha guardado");
+      notify(nuevoEsCosecha ? "Parte de cosecha guardado" : "Parte de transporte guardado");
     } catch (e) { notify((e as Error).message, "err"); } finally { setBusy(false); }
   }
 
@@ -114,18 +116,24 @@ export default function PartesModule() {
   return (
     <section className="panelGrid">
       <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-        <h2 style={{ marginBottom: 2 }}>📝 Partes Diarios de Cosecha <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· reporte de operadores</span></h2>
-        <p className="muted" style={{ margin: "2px 0 0" }}>Registro diario del trabajo de cada cosechadora para cobrar a clientes y controlar operadores.</p>
+        <h2 style={{ marginBottom: 2 }}>📝 Partes Diarios de Campo <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· cosecha y transporte</span></h2>
+        <p className="muted" style={{ margin: "2px 0 0" }}>Registro diario del trabajo de cosechadoras y vehículos para cobrar servicios y controlar operadores.</p>
         {flashEl}
       </div>
 
       {/* A · Formulario de nuevo reporte */}
       <form className="formPanel" onSubmit={(e) => { e.preventDefault(); guardar(); }}>
-        <h2>＋ Nuevo reporte de cosecha</h2>
+        <h2>＋ Nuevo parte de trabajo</h2>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <label><span>Fecha</span><input type="date" value={f.fecha} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
           <label><span>Máquina</span>
-            <select value={f.activo_id} onChange={(e) => setF({ ...f, activo_id: e.target.value })}>
+            <select value={f.activo_id} onChange={(e) => {
+              const activo = activosActivos.find((a) => a.id === e.target.value);
+              const operadorSugerido = activo?.operador && operadores.some((o) => o.nombre.toLowerCase() === activo.operador?.toLowerCase())
+                ? activo.operador
+                : f.operador;
+              setF({ ...f, activo_id: e.target.value, operador: operadorSugerido ?? "" });
+            }}>
               <option value="">Seleccione</option>
               {activosActivos.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}
             </select>
@@ -138,7 +146,7 @@ export default function PartesModule() {
               {operadores.map((o) => <option key={o.id} value={o.nombre}>{o.nombre}</option>)}
             </select>
           </label>
-          <label><span>Quintales cosechados [QQ]</span>
+          <label><span>{activoSeleccionado ? (nuevoEsCosecha ? "Quintales cosechados" : "Quintales transportados") : "Quintales trabajados"} [QQ]</span>
             <input type="number" step="0.01" min="0" value={f.qq} onChange={(e) => setF({ ...f, qq: e.target.value })} placeholder="Ej: 120" />
           </label>
         </div>
@@ -206,7 +214,7 @@ export default function PartesModule() {
           <table className="cajaTable" style={{ marginTop: 8 }}>
             <thead><tr>
               <th>Fecha</th><th>Operador</th><th>Máquina</th><th>Cliente</th>
-              <th className="num">QQ cosechados</th><th>Observaciones</th><th>Estado</th><th>Acciones</th>
+              <th className="num">QQ trabajados</th><th>Observaciones</th><th>Estado</th><th>Acciones</th>
             </tr></thead>
             <tbody>
               {partesVista.length === 0 ? (
@@ -277,7 +285,7 @@ export default function PartesModule() {
       {cobrando && (
         <GenerarCobroModal parte={cobrando}
           onClose={() => setCobrando(null)}
-          onDone={async () => { setCobrando(null); await refrescar(); notify("Cobro generado (servicio de cosecha)"); }}
+          onDone={async () => { const tipo = esCosechadora(cobrando) ? "cosecha" : "flete"; setCobrando(null); await refrescar(); notify(`Cobro generado (servicio de ${tipo})`); }}
           onError={(m) => notify(m, "err")} />
       )}
       {editando && (
@@ -345,7 +353,7 @@ function EditarTarifaModal({ parte, onClose, onDone, onError }: {
             <strong>{money(valorPrev)}</strong>
           </div>
         )}
-        <p className="muted" style={{ fontSize: 12, marginTop: 2 }}>Actualiza el servicio de cosecha vinculado. Si ya tiene abonos, el sistema bloquea el cambio.</p>
+        <p className="muted" style={{ fontSize: 12, marginTop: 2 }}>Actualiza el servicio vinculado. Si ya tiene abonos, el sistema bloquea el cambio.</p>
         <div className="buttonRow">
           <button type="submit" className="primary" disabled={busy || !valido}>{busy ? "Guardando…" : "Guardar tarifa"}</button>
           <button type="button" onClick={onClose} disabled={busy}>Cancelar</button>
@@ -388,7 +396,7 @@ function EditarParteModal({ parte, activos, operadores, onClose, onDone, onError
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
       <form className="formPanel" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submit(); }}
         style={{ maxWidth: 480, width: "100%", margin: 0 }}>
-        <h2 style={{ marginTop: 0 }}>✏️ Editar parte de cosecha</h2>
+        <h2 style={{ marginTop: 0 }}>✏️ Editar parte de trabajo</h2>
         {esRomana && (
           <p className="muted" style={{ marginTop: -4, background: "#fef2f2", color: "#b91c1c", borderRadius: 6, padding: "6px 10px", fontSize: 12, fontWeight: 600 }}>
             ⚠️ Ticket de la romana: solo puedes asignar el <strong>operador / chofer</strong>. Los quintales y la máquina calculados por la báscula quedan bloqueados.
@@ -445,6 +453,7 @@ function GenerarCobroModal({ parte, onClose, onDone, onError }: {
   const pu = Number(precio);
   const valido = precio !== "" && pu > 0;
   const valor = valido ? Math.round(parte.qq * pu * 100) / 100 : 0;
+  const tipoServicio = (parte.activo_tipo ?? "").toLowerCase() === "cosechadora" ? "cosecha" : "flete";
 
   async function submit() {
     try {
@@ -474,7 +483,7 @@ function GenerarCobroModal({ parte, onClose, onDone, onError }: {
             <strong>{money(valor)}</strong>
           </div>
         )}
-        <p className="muted" style={{ fontSize: 12, marginTop: 2 }}>Crea un servicio de cosecha (cliente + máquina del parte) que aparece en Servicios y en el reporte de Por Cobrar. Los abonos se registran ahí.</p>
+        <p className="muted" style={{ fontSize: 12, marginTop: 2 }}>Crea un servicio de {tipoServicio} (cliente + máquina del parte) que aparece en Servicios y en el reporte de Por Cobrar. Los abonos se registran ahí.</p>
         <div className="buttonRow">
           <button type="submit" className="primary" disabled={busy || !valido}>{busy ? "Generando…" : "Generar cobro"}</button>
           <button type="button" onClick={onClose} disabled={busy}>Cancelar</button>

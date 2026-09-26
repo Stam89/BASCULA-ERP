@@ -7,7 +7,7 @@ Actualizado: 2026-09-26
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: auditoria integral, blindaje multi-tenant de Caja/Liquidaciones y permisos backend completos.
+- Ultimo cambio funcional: auditoria y blindaje de Transporte y Cosechadora (partes, nomina, Caja e integracion Bascula).
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,16 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Transporte y Cosechadora: integridad operativa y contable (2026-09-26)
+
+- Los Partes Diarios ahora derivan el servicio desde la maquina: una cosechadora genera `cosecha`; camion, vehiculo, transporte u otro generan `flete`. La UI usa textos dinamicos y sugiere el operador habitual de la maquina.
+- La liquidacion de Nomina ya no confia en totales enviados por el navegador: bloquea los partes, valida operador/maquina, recalcula base y tarifa en backend y evita pagos simultaneos duplicados.
+- Pagar Nomina registra tambien el egreso en CAJA/BANCO/OTROS; `CRUCE PILADORA` no se ofrece ni se acepta como cuenta de pago. CAJA exige una sesion abierta.
+- Integracion Bascula→Campo protegida con `origen_uid` unico basado en el UUID del ingreso ERP; los reintentos concurrentes ya no pueden crear dos partes del mismo ingreso.
+- El Libro muestra saldo corrido por cuenta aun al consultar `Todas`. El cierre de Caja genera un movimiento tecnico que reinicia el saldo contable de la jornada y evita duplicar el efectivo al abrir la siguiente.
+- Se hicieron visibles las secciones existentes `Vales por Rendir` y `Reportes` en el menu de la operacion.
+- Migracion aplicada: `20261033_campo_integridad_operativa.sql`. Verificacion: backend 64/64 tests, builds backend/frontend y preflight correctos.
 
 ### Auditoria integral y mapa de la aplicacion (2026-09-26)
 

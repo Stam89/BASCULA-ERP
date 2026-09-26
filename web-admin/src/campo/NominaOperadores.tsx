@@ -19,6 +19,7 @@ async function req(path: string, method: "PATCH" | "DELETE", body?: unknown): Pr
 
 type Activo = { id: string; nombre: string; tipo: string; operador: string | null; activo: boolean };
 type Operador = { id: string; nombre: string; activo: boolean };
+type Cuenta = { id: string; nombre: string; saldo: number };
 type Unidad = "QQ" | "VIAJE" | "DIA";
 const unidadLabel = (u: Unidad) => u === "QQ" ? "$ / QQ" : u === "VIAJE" ? "$ / Viaje" : "$ / Día";
 const unidadCorta = (u: Unidad) => u === "QQ" ? "QQ" : u === "VIAJE" ? "viaje" : "día";
@@ -138,6 +139,8 @@ export function TarifasOperadorCatalogo({ activos, operadores, onError, onChange
 export default function NominaOperadores() {
   const [rango, setRango] = useState({ from: primeroDeMes(), to: hoy() });
   const [grupos, setGrupos] = useState<NominaGrupo[]>([]);
+  const [cuentas, setCuentas] = useState<Cuenta[]>([]);
+  const [cuentaId, setCuentaId] = useState("");
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
   const notify = (text: string, kind: "ok" | "err" = "ok") => { setFlash({ text, kind }); setTimeout(() => setFlash(null), 3000); };
@@ -162,26 +165,31 @@ export default function NominaOperadores() {
       const qs = new URLSearchParams();
       if (rango.from) qs.set("from", rango.from);
       if (rango.to) qs.set("to", rango.to);
-      const data = await apiGet<{ grupos: NominaGrupo[]; total_general: number }>(`/campo/nomina-operadores?${qs.toString()}`);
-      setGrupos(data.grupos); setAjustes({});
+      const [data, cuentasData] = await Promise.all([
+        apiGet<{ grupos: NominaGrupo[]; total_general: number }>(`/campo/nomina-operadores?${qs.toString()}`),
+        apiGet<Cuenta[]>("/campo/cuentas")
+      ]);
+      const cuentasPago = cuentasData.filter((c) => c.nombre !== "CRUCE PILADORA");
+      setGrupos(data.grupos); setCuentas(cuentasPago); setAjustes({});
+      setCuentaId((actual) => actual || cuentasPago.find((c) => c.nombre === "CAJA")?.id || cuentasPago[0]?.id || "");
     } catch (e) { notify((e as Error).message, "err"); } finally { setBusy(false); }
   }, [rango.from, rango.to]);
   useEffect(() => { cargar(); }, [cargar]);
 
   async function liquidar(g: NominaGrupo) {
     if (g.sin_tarifa) { notify(`Asigna una tarifa a ${g.operador} · ${g.activo_nombre} en Configuración antes de liquidar.`, "err"); return; }
+    if (!cuentaId) { notify("Selecciona la cuenta desde la que se pagará la nómina.", "err"); return; }
     const final = montoNum(g);
     if (!(final >= 0)) { notify("El monto a pagar no es válido.", "err"); return; }
     const ajustado = esAjustado(g);
     const motivo = (ajustes[keyOf(g)]?.motivo ?? "").trim();
     if (ajustado && !motivo) { notify("Escribe el motivo del ajuste (ej. \"Trabajó medio día\").", "err"); return; }
-    if (!window.confirm(`¿Liquidar a ${g.operador} (${g.activo_nombre}) por ${baseTexto(g)} = ${money(final)}${ajustado ? ` (ajustado de ${money(g.total ?? 0)})` : ""}?\n\nSe marcarán ${g.parte_ids.length} parte(s) como pagados al operador.`)) return;
+    const cuenta = cuentas.find((c) => c.id === cuentaId)?.nombre ?? "cuenta seleccionada";
+    if (!window.confirm(`¿Liquidar a ${g.operador} (${g.activo_nombre}) por ${baseTexto(g)} = ${money(final)}${ajustado ? ` (ajustado de ${money(g.total ?? 0)})` : ""}?\n\nSe registrará el egreso en ${cuenta} y se marcarán ${g.parte_ids.length} parte(s) como pagados.`)) return;
     try {
       setBusy(true);
       await apiPost("/campo/nomina-operadores/liquidar", {
-        parte_ids: g.parte_ids, operador: g.operador, activo_id: g.activo_id,
-        unidad: g.unidad, base: g.base, tarifa: g.tarifa ?? undefined,
-        monto_sugerido: g.total ?? undefined, monto: final, ajustado, motivo: motivo || undefined
+        parte_ids: g.parte_ids, cuenta_id: cuentaId, monto: final, motivo: motivo || undefined
       });
       notify(`Liquidado ${g.operador}: ${money(final)} ✓`);
       await cargar();
@@ -199,10 +207,16 @@ export default function NominaOperadores() {
           <div style={{ display: "flex", gap: 8, alignItems: "end", flexWrap: "wrap" }}>
             <label style={{ fontSize: 12 }}>Desde<br /><input type="date" value={rango.from} onChange={(e) => setRango({ ...rango, from: e.target.value })} /></label>
             <label style={{ fontSize: 12 }}>Hasta<br /><input type="date" value={rango.to} onChange={(e) => setRango({ ...rango, to: e.target.value })} /></label>
+            <label style={{ fontSize: 12 }}>Pagar desde<br />
+              <select value={cuentaId} onChange={(e) => setCuentaId(e.target.value)}>
+                <option value="">Seleccione cuenta</option>
+                {cuentas.map((c) => <option key={c.id} value={c.id}>{c.nombre} ({money(c.saldo)})</option>)}
+              </select>
+            </label>
             <button type="button" onClick={cargar} disabled={busy}>↻ Actualizar</button>
           </div>
         </div>
-        <p className="muted" style={{ marginTop: 6 }}>Agrupa los partes NO pagados al operador en el rango. Subtotal sugerido = base (QQ · viajes · días) × tarifa. Puedes <strong>ajustar</strong> el total (con motivo) antes de liquidar. Liquidar marca esos partes como pagados para que no se repitan.</p>
+        <p className="muted" style={{ marginTop: 6 }}>Agrupa los partes NO pagados al operador en el rango. Subtotal sugerido = base (QQ · viajes · días) × tarifa. Puedes <strong>ajustar</strong> el total (con motivo). Al liquidar se registra el egreso en la cuenta seleccionada y los partes no vuelven a repetirse.</p>
       </div>
 
       <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>

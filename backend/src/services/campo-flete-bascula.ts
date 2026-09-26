@@ -9,19 +9,21 @@ import { ApiError } from "../http/error-handler.js";
 // el cliente enlazado y su nombre historico, operador NULL y la referencia en
 // observaciones. Valida cliente y maquina.
 export async function crearParteDesdeBascula(input: {
-  fecha?: string | null; cliente_id: string; maquina_id: string; qq: number; referencia: string; created_by?: string | null;
+  fecha?: string | null; cliente_id: string; maquina_id: string; qq: number; referencia: string; origen_uid?: string; created_by?: string | null;
 }) {
   const cli = (await pool.query("SELECT nombre FROM campo_clientes WHERE id = $1", [input.cliente_id])).rows[0];
   if (!cli) throw new ApiError(404, "Cliente de Campo no encontrado");
   const maq = (await pool.query("SELECT 1 FROM campo_activos WHERE id = $1", [input.maquina_id])).rows[0];
   if (!maq) throw new ApiError(404, "Máquina/vehículo no encontrado");
   const parte = (await pool.query(
-    `INSERT INTO campo_partes (fecha, activo_id, operador, cliente, cliente_id, qq, observaciones, estado, origen, created_by)
-     VALUES (COALESCE($1::date, CURRENT_DATE), $2, NULL, $3, $4, $5, $6, 'por_cobrar', 'bascula', $7)
+    `INSERT INTO campo_partes (fecha, activo_id, operador, cliente, cliente_id, qq, observaciones, estado, origen, origen_uid, created_by)
+     VALUES (COALESCE($1::date, CURRENT_DATE), $2, NULL, $3, $4, $5, $6, 'por_cobrar', 'bascula', $8, $7)
+     ON CONFLICT DO NOTHING
      RETURNING *`,
-    [input.fecha ?? null, input.maquina_id, cli.nombre, input.cliente_id, input.qq, input.referencia, input.created_by ?? null]
+    [input.fecha ?? null, input.maquina_id, cli.nombre, input.cliente_id, input.qq, input.referencia, input.created_by ?? null, input.origen_uid ?? input.referencia]
   )).rows[0];
-  return parte;
+  if (parte) return parte;
+  return (await pool.query("SELECT * FROM campo_partes WHERE origen_uid = $1 LIMIT 1", [input.origen_uid ?? input.referencia])).rows[0];
 }
 
 // Disparador NO BLOQUEANTE desde el ingreso de materia prima (create-lot). Si el
@@ -29,7 +31,7 @@ export async function crearParteDesdeBascula(input: {
 // flete interno. Nunca lanza: cualquier problema se registra y se ignora (la
 // romana no se debe frenar por esto).
 export async function dispararFleteInternoBascula(input: {
-  placa?: string | null; accionistaId: string; isMaquila: boolean; quintals: number; ticketNumber?: string | null; createdBy?: string | null;
+  placa?: string | null; accionistaId: string; isMaquila: boolean; quintals: number; ticketNumber?: string | null; sourceId: string; createdBy?: string | null;
 }): Promise<void> {
   try {
     // Maquila = servicio de pilado de la matriz: no es un flete cobrable a socio.
@@ -60,11 +62,12 @@ export async function dispararFleteInternoBascula(input: {
     }
 
     const referencia = `Ticket #${input.ticketNumber ?? ""} - Romana`.trim();
+    const origenUid = `weighing_ticket:${input.sourceId}`;
     // Idempotencia: no duplicar si ya se creó el flete de este ticket.
-    const dup = await pool.query("SELECT 1 FROM campo_partes WHERE origen = 'bascula' AND observaciones = $1 LIMIT 1", [referencia]);
+    const dup = await pool.query("SELECT 1 FROM campo_partes WHERE origen_uid = $1 LIMIT 1", [origenUid]);
     if (dup.rowCount) return;
 
-    await crearParteDesdeBascula({ cliente_id: cli.id, maquina_id: veh.id, qq: Number(input.quintals), referencia, created_by: input.createdBy ?? null });
+    await crearParteDesdeBascula({ cliente_id: cli.id, maquina_id: veh.id, qq: Number(input.quintals), referencia, origen_uid: origenUid, created_by: input.createdBy ?? null });
   } catch (err) {
     console.warn("[campo/bascula] no se pudo crear el flete interno:", (err as Error).message);
   }
