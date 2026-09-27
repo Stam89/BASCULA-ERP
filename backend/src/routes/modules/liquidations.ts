@@ -118,6 +118,8 @@ liquidationsRouter.get("/parte-cosechadora", asyncRoute(async (req, res) => {
        FROM campo_partes p
        JOIN campo_activos a ON a.id = p.activo_id
       WHERE a.tipo = 'cosechadora'
+        AND p.estado = 'por_cobrar'
+        AND p.servicio_id IS NULL
         AND (p.farmer_id = $1 OR (p.farmer_id IS NULL AND lower(trim(p.cliente)) = lower(trim($2))))
         AND ($3::date IS NULL OR p.fecha BETWEEN $3::date AND $4::date)
         AND NOT EXISTS (
@@ -260,6 +262,8 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
              JOIN farmers f ON f.id = $2
             WHERE p.id = ANY($1::uuid[])
               AND a.tipo = 'cosechadora'
+              AND p.estado = 'por_cobrar'
+              AND p.servicio_id IS NULL
               AND (p.farmer_id = $2 OR (p.farmer_id IS NULL AND lower(trim(p.cliente)) = lower(trim(f.full_name))))
               AND NOT EXISTS (SELECT 1 FROM liquidation_harvest_details d WHERE d.campo_parte_id = p.id)
             FOR UPDATE OF p`,

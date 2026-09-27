@@ -32,6 +32,9 @@ type Parte = {
   // Cobro generado (campo_servicio) enlazado, si estado='cobrado'.
   servicio_id: string | null; servicio_valor: number | null; servicio_saldo: number | null;
   servicio_estado: "pendiente" | "abonado" | "pagado" | null;
+  cobro_automatico: boolean;
+  liquidacion_id: string | null; liquidacion_numero: string | null;
+  liquidacion_socio: string | null; liquidacion_tipo: "cosechadora" | "flete" | null;
 };
 
 export default function PartesModule() {
@@ -117,7 +120,7 @@ export default function PartesModule() {
     <section className="panelGrid">
       <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
         <h2 style={{ marginBottom: 2 }}>📝 Partes Diarios de Campo <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· cosecha y transporte</span></h2>
-        <p className="muted" style={{ margin: "2px 0 0" }}>Registro diario del trabajo de cosechadoras y vehículos para cobrar servicios y controlar operadores.</p>
+        <p className="muted" style={{ margin: "2px 0 0" }}>Registro diario del trabajo de cosechadoras y vehículos. Los cobros tomados por una liquidación se identifican automáticamente.</p>
         {flashEl}
       </div>
 
@@ -203,7 +206,7 @@ export default function PartesModule() {
             <select value={filtro.estado} onChange={(e) => setFiltro({ ...filtro, estado: e.target.value })}>
               <option value="">Todos</option>
               <option value="por_cobrar">Por cobrar</option>
-              <option value="cobrado">Cobro generado</option>
+              <option value="cobrado">Cobrados / liquidados</option>
             </select>
           </label>
           {(filtro.from || filtro.to || filtro.activo_id || filtro.estado) && (
@@ -245,7 +248,15 @@ export default function PartesModule() {
                   <td className="num" style={{ fontWeight: 700 }}>{qqFmt(p.qq)}</td>
                   <td>{p.observaciones || "—"}</td>
                   <td>
-                    {p.estado === "cobrado" ? (
+                    {p.cobro_automatico ? (
+                      <>
+                        <span className="chip ok">Cobrada en liquidación</span>
+                        <small className="muted" style={{ display: "block", marginTop: 2 }}>
+                          {p.liquidacion_numero ?? "Liquidación"}
+                          {p.liquidacion_socio ? ` · ${p.liquidacion_socio}` : ""}
+                        </small>
+                      </>
+                    ) : p.estado === "cobrado" ? (
                       <>
                         <span className="chip ok">Cobro generado</span>
                         {p.servicio_estado && (
@@ -257,7 +268,9 @@ export default function PartesModule() {
                     ) : <span className="chip warn">Por cobrar</span>}
                   </td>
                   <td style={{ whiteSpace: "nowrap" }}>
-                    {p.estado === "por_cobrar" ? (
+                    {p.cobro_automatico ? (
+                      <span className="chip" title="El cobro fue generado automáticamente desde la liquidación y no debe registrarse otra vez.">🔒 Automático</span>
+                    ) : p.estado === "por_cobrar" ? (
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <button type="button" className="btnSecondary" onClick={() => setCobrando(p)}>💵 Cobrar</button>
                         <button type="button" className="btnSecondary" onClick={() => setEditando(p)}>✏️ Editar</button>

@@ -23,7 +23,6 @@ import NominaOperadores, { TarifasOperadorCatalogo } from "./NominaOperadores";
 const CAMPO_SECCIONES: Array<{ id: CampoSeccion; label: string; icon: string }> = [
   { id: "caja", label: "Caja", icon: "💰" },
   { id: "clientes", label: "Clientes", icon: "👥" },
-  { id: "servicios", label: "Servicios", icon: "🚜" },
   { id: "partes", label: "Partes Diarios", icon: "📝" },
   { id: "nomina", label: "Nómina Operadores", icon: "💵" },
   { id: "cxc", label: "Cuentas por Cobrar", icon: "📥" },

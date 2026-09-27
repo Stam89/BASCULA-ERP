@@ -964,6 +964,29 @@ campoRouter.post("/movimientos/:id/liquidar", asyncRoute(async (req, res) => {
 // ── Partes Diarios de Cosecha (reporte de operadores) ───────────────────────
 // Registro diario por máquina (campo_activos). El estado del cobro es
 // 'por_cobrar' por defecto.
+async function liquidacionActivaDeParte(client: Q, parteId: string): Promise<{ liquidation_number: string } | null> {
+  return (await client.query(
+    `SELECT l.liquidation_number
+       FROM liquidations l
+      WHERE l.status <> 'CANCELLED'
+        AND (
+          EXISTS (
+            SELECT 1 FROM liquidation_harvest_details d
+             WHERE d.liquidation_id = l.id AND d.campo_parte_id = $1
+          )
+          OR EXISTS (
+            SELECT 1 FROM campo_partes p
+             WHERE p.id = $1
+               AND p.origen_uid = 'weighing_ticket:' || l.weighing_ticket_id::text
+               AND COALESCE((l.discount_breakdown->>'flete')::numeric, 0) > 0
+          )
+        )
+      ORDER BY l.created_at DESC
+      LIMIT 1`,
+    [parteId]
+  )).rows[0] ?? null;
+}
+
 campoRouter.get("/partes", asyncRoute(async (req, res) => {
   const q = z.object({
     from: fechaSchema.optional(), to: fechaSchema.optional(),
@@ -975,22 +998,54 @@ campoRouter.get("/partes", asyncRoute(async (req, res) => {
   if (q.from) { params.push(q.from); conds.push(`p.fecha >= $${params.length}`); }
   if (q.to) { params.push(q.to); conds.push(`p.fecha <= $${params.length}`); }
   if (q.activo_id) { params.push(q.activo_id); conds.push(`p.activo_id = $${params.length}`); }
-  if (q.estado) { params.push(q.estado); conds.push(`p.estado = $${params.length}`); }
+  if (q.estado) {
+    params.push(q.estado);
+    conds.push(`CASE WHEN liq.id IS NOT NULL THEN 'cobrado' ELSE p.estado END = $${params.length}`);
+  }
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   const result = await pool.query(
     `SELECT p.id, p.fecha, p.activo_id, p.operador, p.cliente, p.cliente_id, p.qq::float AS qq,
-            p.observaciones, p.estado, p.origen, p.created_at,
+            p.observaciones,
+            CASE WHEN liq.id IS NOT NULL THEN 'cobrado' ELSE p.estado END AS estado,
+            p.origen, p.created_at,
             COALESCE(c.tipo, CASE WHEN p.origen = 'bascula' THEN 'piladora' END) AS cliente_tipo,
             a.nombre AS activo_nombre, a.tipo AS activo_tipo,
             p.operador_pagado_at,
             p.servicio_id,
             sv.valor::float AS servicio_valor,
             sv.saldo_pendiente::float AS servicio_saldo,
-            sv.estado AS servicio_estado
+            sv.estado AS servicio_estado,
+            (liq.id IS NOT NULL) AS cobro_automatico,
+            liq.id AS liquidacion_id,
+            liq.liquidation_number AS liquidacion_numero,
+            liq.accionista_nombre AS liquidacion_socio,
+            liq.tipo_cobro AS liquidacion_tipo
      FROM campo_partes p
      JOIN campo_activos a ON a.id = p.activo_id
      LEFT JOIN campo_clientes c ON c.id = p.cliente_id
      LEFT JOIN campo_servicios_saldo sv ON sv.id = p.servicio_id
+     LEFT JOIN LATERAL (
+       SELECT l.id, l.liquidation_number, ac.name AS accionista_nombre,
+              CASE WHEN EXISTS (
+                SELECT 1 FROM liquidation_harvest_details d
+                 WHERE d.liquidation_id = l.id AND d.campo_parte_id = p.id
+              ) THEN 'cosechadora' ELSE 'flete' END AS tipo_cobro
+         FROM liquidations l
+         LEFT JOIN accionistas ac ON ac.id = l.accionista_id
+        WHERE l.status <> 'CANCELLED'
+          AND (
+            EXISTS (
+              SELECT 1 FROM liquidation_harvest_details d
+               WHERE d.liquidation_id = l.id AND d.campo_parte_id = p.id
+            )
+            OR (
+              p.origen_uid = 'weighing_ticket:' || l.weighing_ticket_id::text
+              AND COALESCE((l.discount_breakdown->>'flete')::numeric, 0) > 0
+            )
+          )
+        ORDER BY l.created_at DESC
+        LIMIT 1
+     ) liq ON true
      ${where}
      ORDER BY p.fecha DESC, p.created_at DESC
      LIMIT 500`,
@@ -1013,6 +1068,10 @@ campoRouter.post("/partes/:id/cobrar", asyncRoute(async (req, res) => {
        WHERE p.id = $1 FOR UPDATE OF p`, [req.params.id]
     )).rows[0];
     if (!parte) throw new ApiError(404, "Parte no encontrado");
+    const liquidacion = await liquidacionActivaDeParte(client, parte.id);
+    if (liquidacion) {
+      throw new ApiError(409, `Este parte ya fue cobrado en la liquidacion ${liquidacion.liquidation_number}.`);
+    }
     if (parte.estado !== "por_cobrar") throw new ApiError(409, "Este parte ya tiene un cobro generado.");
 
     const nombre = String(parte.cliente).trim();
@@ -1063,6 +1122,10 @@ campoRouter.patch("/partes/:id", asyncRoute(async (req, res) => {
   const row = await inTransaction(async (client) => {
     const parte = (await client.query("SELECT estado FROM campo_partes WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
     if (!parte) throw new ApiError(404, "Parte no encontrado");
+    const liquidacion = await liquidacionActivaDeParte(client, String(req.params.id));
+    if (liquidacion) {
+      throw new ApiError(409, `El parte pertenece a la liquidacion ${liquidacion.liquidation_number}; anula esa liquidacion antes de editarlo.`);
+    }
     if (parte.estado !== "por_cobrar") throw new ApiError(409, "El parte ya tiene un cobro generado; anula el cobro (des-cobrar) antes de editarlo.");
     const fields: string[] = [];
     const values: unknown[] = [];
@@ -1103,6 +1166,10 @@ campoRouter.delete("/partes/:id", asyncRoute(async (req, res) => {
   const row = await inTransaction(async (client) => {
     const parte = (await client.query("SELECT estado FROM campo_partes WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
     if (!parte) throw new ApiError(404, "Parte no encontrado");
+    const liquidacion = await liquidacionActivaDeParte(client, String(req.params.id));
+    if (liquidacion) {
+      throw new ApiError(409, `El parte pertenece a la liquidacion ${liquidacion.liquidation_number}; anula esa liquidacion antes de borrarlo.`);
+    }
     if (parte.estado !== "por_cobrar") throw new ApiError(409, "El parte ya tiene un cobro generado; anula el cobro (des-cobrar) antes de borrarlo.");
     await client.query("DELETE FROM campo_partes WHERE id = $1", [req.params.id]);
     return { id: req.params.id };

@@ -7,7 +7,7 @@ Actualizado: 2026-09-27
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: inventario de sacos por marca y peso (descuento en ventas, catalogo en Configuracion, alerta de minimo, sacos en servicios de pilada).
+- Ultimo cambio funcional: Partes Diarios reconoce automaticamente los cobros hechos desde Liquidaciones y se retiro Servicios del menu de Campo.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,16 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Partes Diarios: cobro automatico visible y Servicios simplificado (2026-09-27)
+
+- Se retiro `Servicios` del menu de Transporte y Cosechadora; el backend y los registros historicos se conservan para compatibilidad y para Cuentas por Cobrar.
+- `Historial de partes` calcula el estado desde la liquidacion real: un parte de cosechadora enlazado en `liquidation_harvest_details`, o un flete de Bascula descontado en su liquidacion, aparece como `Cobrada en liquidacion`.
+- El historial muestra el numero de liquidacion y el socio operativo que tomo el cobro; el filtro `Cobro generado` incluye estos casos automaticos.
+- Un parte tomado por una liquidacion activa ya no puede cobrarse manualmente, editarse ni anularse; primero se debe anular la liquidacion. Esto evita dobles cobros.
+- Los partes que ya tienen un servicio manual tampoco vuelven a sugerirse como cosechadora en una liquidacion.
+- Validacion sobre datos reales, solo lectura: el parte de JUNIOR JIMENEZ / COS.10 queda reconocido como cobrado por `LIQ-20260924192804-UHWQ` de CEYRO.
+- Sin migracion. Builds backend/frontend y 67/67 pruebas correctos.
 
 ### Inventario de sacos por marca y peso (2026-09-27)
 
