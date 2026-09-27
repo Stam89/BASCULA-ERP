@@ -27,6 +27,27 @@ export type Saco = {
 
 type Estado = "NEGATIVO" | "BAJO" | "SIN_STOCK" | "OK";
 
+/**
+ * Plan de empaque (MISMA regla que el backend, services/sacos.ts): cada bulto va
+ * en el saco más pequeño registrado donde cabe y el sobrante en el más pequeño
+ * que lo contiene. 10 QQ en 50 LB → 20 × 100 LB; 100 QQ en 98 LB → 102 × 100 LB + 1 × 10 LB.
+ */
+export function planDeSacos(qq: number, pesoPresentacion: number, tamanos: number[]): Array<{ peso: number; sacos: number }> {
+  const tam = [...new Set(tamanos.filter((t) => t > 0))].sort((a, b) => a - b);
+  if (!(qq > 0) || !(pesoPresentacion > 0) || !tam.length) return [];
+  const cabe = (lb: number) => tam.find((t) => t >= lb - 1e-6) ?? tam[tam.length - 1];
+  const totalLb = Math.round(qq * 100 * 1000) / 1000;
+  const llenos = Math.floor(totalLb / pesoPresentacion + 1e-6);
+  const sobrante = Math.round((totalLb - llenos * pesoPresentacion) * 1000) / 1000;
+  const plan = new Map<number, number>();
+  if (llenos > 0) plan.set(cabe(pesoPresentacion), llenos);
+  if (sobrante > 0.01) {
+    const t = cabe(sobrante);
+    plan.set(t, (plan.get(t) ?? 0) + 1);
+  }
+  return [...plan.entries()].map(([peso, sacos]) => ({ peso, sacos })).sort((a, b) => b.peso - a.peso);
+}
+
 const num = (v: unknown) => Number(v ?? 0) || 0;
 const fmt = (n: number) => n.toLocaleString("es-EC");
 
@@ -232,7 +253,9 @@ export function SacosAlertaDashboard({ sacos, onIr }: { sacos: Saco[]; onIr?: ()
 // ─────────────────────────────────────────────────────────────────────────────
 // Catálogo en Configuración
 // ─────────────────────────────────────────────────────────────────────────────
-const PESOS_BASE = [100, 50, 25, 10];
+// La planta no maneja sacos de 50 LB: esos pedidos van en saco de 100 LB
+// (regla automática de planDeSacos). "Otro peso" permite registrar cualquier otro.
+const PESOS_BASE = [100, 25, 10];
 
 export function SacosCatalogoConfig({
   sacos, puedeEditar, onCambio, avisar
@@ -242,7 +265,7 @@ export function SacosCatalogoConfig({
   onCambio: () => Promise<void>;
   avisar: (msg: string, tipo: "success" | "error" | "warn") => void;
 }) {
-  const [form, setForm] = useState({ categoria: "MARCA" as "MARCA" | "GENERICO", marca: "", calidad: "0.11" as "0.11" | "CORRIENTE", pesos: [100, 50, 25, 10] as number[], otroPeso: "", minimo: "", compra: "", cliente: "" });
+  const [form, setForm] = useState({ categoria: "MARCA" as "MARCA" | "GENERICO", marca: "", calidad: "0.11" as "0.11" | "CORRIENTE", pesos: [100, 25, 10] as number[], otroPeso: "", minimo: "", compra: "", cliente: "" });
   const [verInactivos, setVerInactivos] = useState(false);
   const [guardando, setGuardando] = useState(false);
   const marcasExistentes = useMemo(() => [...new Set(sacos.filter((s) => s.marca).map((s) => String(s.marca)))].sort(), [sacos]);
@@ -319,6 +342,8 @@ export function SacosCatalogoConfig({
         Los sacos se descuentan al <strong>confirmar la preparación</strong> de un pedido (marca + presentación vendida) y en los
         <strong> servicios de pilada</strong> cuando el cliente pide sacos de la planta (se le cobran al <em>precio al cliente</em>).
         El <strong>stock mínimo</strong> activa la alerta del Dashboard. El stock se carga con la compra de sacos en Caja.
+        Empaque automático: cada bulto va en el saco más pequeño de la marca donde cabe (pedido de 50 LB → saco de 100 LB)
+        y el sobrante en el más pequeño que lo contiene (100 QQ en 98 LB → 102 sacos de 100 LB + 1 de 10 LB).
       </p>
 
       {puedeEditar && (

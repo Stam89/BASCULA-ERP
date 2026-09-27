@@ -53,39 +53,56 @@ export async function pesoDePresentacion(
 }
 
 /**
- * Qué saco corresponde a un producto vendido en un peso dado:
- *  1) el saco de su MARCA en ese peso (Flor 50 LB…);
- *  2) subproductos: su saco especial (Arrocillo → Saco Usado, Polvillo → Saco Negro);
- *  3) arroz SIN marca (producto terminado a granel): un saco genérico "Saco N LB".
- * Una MARCA (producto empacado) sin saco propio NO cae al genérico: se avisa para
- * que se registre su saco en Configuración.
- * Devuelve null si no hay ninguno registrado (no se descuenta; se avisa).
+ * PLAN DE EMPAQUE (regla física de la planta): cada BULTO de la presentación va en
+ * el saco MÁS PEQUEÑO registrado donde cabe; si el total no es múltiplo exacto,
+ * el SOBRANTE va en el saco más pequeño que lo contiene.
+ *   · 10 QQ en 50 LB sin saco de 50 → 20 bultos × saco 100 LB.
+ *   · 100 QQ en 98 LB → 10.000 lb = 102 bultos (9.996 lb) en saco 100 LB
+ *                        + sobrante 4 lb en 1 saco de 10 LB.
+ * `tamanos` = pesos de saco disponibles (activos) para ese producto.
  */
-export async function resolverSaco(
-  client: PoolClient,
-  producto: { id: string; code?: string | null; name?: string | null; product_type?: string | null },
-  pesoLb: number
-): Promise<SacoRow | null> {
-  const cols = `id, tipo, stock::float AS stock, categoria, marca, peso_lb::float AS peso_lb, product_id,
+export function planDeSacos(qq: number, pesoPresentacion: number, tamanos: number[]): Array<{ peso: number; sacos: number }> {
+  const tam = [...new Set(tamanos.filter((t) => t > 0))].sort((a, b) => a - b);
+  if (!(qq > 0) || !(pesoPresentacion > 0) || !tam.length) return [];
+  const cabe = (lb: number) => tam.find((t) => t >= lb - 1e-6) ?? tam[tam.length - 1];
+  const totalLb = Math.round(qq * 100 * 1000) / 1000;
+  const llenos = Math.floor(totalLb / pesoPresentacion + 1e-6);
+  const sobrante = Math.round((totalLb - llenos * pesoPresentacion) * 1000) / 1000;
+  const plan = new Map<number, number>();
+  if (llenos > 0) plan.set(cabe(pesoPresentacion), llenos);
+  if (sobrante > 0.01) {
+    const t = cabe(sobrante);
+    plan.set(t, (plan.get(t) ?? 0) + 1);
+  }
+  return [...plan.entries()].map(([peso, sacos]) => ({ peso, sacos })).sort((a, b) => b.peso - a.peso);
+}
+
+const COLS_SACO = `id, tipo, stock::float AS stock, categoria, marca, peso_lb::float AS peso_lb, product_id,
                 precio_venta_cliente::float AS precio_venta_cliente, COALESCE(precio_compra_default, 0)::float AS precio_compra_default`;
-  const marca = await client.query(
-    `SELECT ${cols} FROM sack_inventory WHERE activo AND product_id = $1 AND peso_lb = $2 LIMIT 1`,
-    [producto.id, pesoLb]
-  );
-  if (marca.rowCount) return marca.rows[0];
+
+/**
+ * Sacos candidatos (activos) para empacar un producto vendido:
+ *  1) MARCA: los sacos de esa marca (Flor 100/25/10 LB…);
+ *  2) subproductos: su saco especial (Arrocillo → Saco Usado, Polvillo → Saco Negro);
+ *  3) arroz SIN marca (producto terminado a granel): los genéricos "Saco N LB".
+ * Una MARCA sin sacos propios NO cae al genérico (se avisa para registrarlos).
+ */
+export async function sacosCandidatos(
+  client: PoolClient,
+  producto: { id: string; code?: string | null; name?: string | null; product_type?: string | null }
+): Promise<{ modo: "MARCA" | "ESPECIAL" | "GENERICO"; sacos: SacoRow[] } | null> {
+  const marca = await client.query(`SELECT ${COLS_SACO} FROM sack_inventory WHERE activo AND product_id = $1`, [producto.id]);
+  if (marca.rowCount) return { modo: "MARCA", sacos: marca.rows };
   const especial = tipoSacoEspecial(producto.code, producto.name);
   if (especial) {
-    const r = await client.query(`SELECT ${cols} FROM sack_inventory WHERE activo AND tipo = $1 LIMIT 1`, [especial]);
-    if (r.rowCount) return r.rows[0];
+    const r = await client.query(`SELECT ${COLS_SACO} FROM sack_inventory WHERE activo AND tipo = $1 LIMIT 1`, [especial]);
+    if (r.rowCount) return { modo: "ESPECIAL", sacos: r.rows };
   }
   const tipoProducto = producto.product_type
     ?? (await client.query("SELECT product_type FROM products WHERE id = $1", [producto.id])).rows[0]?.product_type;
-  if (tipoProducto === "PACKAGED_GOOD") return null; // marca sin saco propio
-  const generico = await client.query(
-    `SELECT ${cols} FROM sack_inventory WHERE activo AND categoria = 'GENERICO' AND peso_lb = $1 LIMIT 1`,
-    [pesoLb]
-  );
-  return generico.rowCount ? generico.rows[0] : null;
+  if (tipoProducto === "PACKAGED_GOOD") return null; // marca sin sacos propios
+  const generico = await client.query(`SELECT ${COLS_SACO} FROM sack_inventory WHERE activo AND categoria = 'GENERICO' AND peso_lb > 0`);
+  return generico.rowCount ? { modo: "GENERICO", sacos: generico.rows } : null;
 }
 
 type MovRef = { refOrder?: string | null; refBatch?: string | null };
@@ -132,18 +149,29 @@ export async function descontarSacosPedido(client: PoolClient, orderId: string):
   );
   // Agrupa por saco para registrar un solo movimiento por tipo.
   const porSaco = new Map<string, { saco: SacoRow; sacos: number }>();
-  for (const it of items.rows) {
-    const peso = await pesoDePresentacion(client, it.presentation_id, it.presentation_name);
-    const sacos = sacosParaQq(Number(it.quantity), peso);
-    if (!sacos) continue;
-    const saco = await resolverSaco(client, { id: it.product_id, code: it.code, name: it.name, product_type: it.product_type }, peso);
-    if (!saco) {
-      out.sin_saco.push({ producto: it.name, peso_lb: peso, sacos });
-      continue;
-    }
+  const sumar = (saco: SacoRow, sacos: number) => {
     const acc = porSaco.get(saco.id) ?? { saco, sacos: 0 };
     acc.sacos += sacos;
     porSaco.set(saco.id, acc);
+  };
+  for (const it of items.rows) {
+    const qq = Number(it.quantity);
+    const peso = await pesoDePresentacion(client, it.presentation_id, it.presentation_name);
+    if (!sacosParaQq(qq, peso)) continue;
+    const cand = await sacosCandidatos(client, { id: it.product_id, code: it.code, name: it.name, product_type: it.product_type });
+    if (!cand) {
+      out.sin_saco.push({ producto: it.name, peso_lb: peso, sacos: sacosParaQq(qq, peso) });
+      continue;
+    }
+    if (cand.modo === "ESPECIAL") { // saco de subproducto: uno por bulto
+      sumar(cand.sacos[0], sacosParaQq(qq, peso));
+      continue;
+    }
+    // Marca o genérico: plan de empaque con los tamaños registrados.
+    const porPeso = new Map(cand.sacos.map((sk) => [Number(sk.peso_lb), sk]));
+    for (const { peso: pesoSaco, sacos } of planDeSacos(qq, peso, [...porPeso.keys()])) {
+      sumar(porPeso.get(pesoSaco)!, sacos);
+    }
   }
   for (const [sackId, { saco, sacos }] of porSaco) {
     const nuevo = await registrarSalida(client, sackId, sacos, `Venta · Pedido ${numero}`, { refOrder: orderId });

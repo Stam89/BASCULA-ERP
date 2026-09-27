@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sacosParaQq } from "./sacos.js";
+import { planDeSacos, sacosParaQq } from "./sacos.js";
 
 describe("sacosParaQq (sacos que ocupa una venta en QQ)", () => {
   it("100 LB = 1 saco por QQ; 50 LB = 2; 25 LB (@) = 4; 10 LB = 10", () => {
@@ -15,5 +15,34 @@ describe("sacosParaQq (sacos que ocupa una venta en QQ)", () => {
   it("sin cantidad o sin peso no ocupa sacos", () => {
     expect(sacosParaQq(0, 100)).toBe(0);
     expect(sacosParaQq(5, 0)).toBe(0);
+  });
+});
+
+describe("planDeSacos (empaque automático con los sacos registrados)", () => {
+  const MARCA = [100, 25, 10]; // sin saco de 50 LB
+  it("10 QQ en 50 LB sin saco de 50 → 20 sacos de 100 LB", () => {
+    expect(planDeSacos(10, 50, MARCA)).toEqual([{ peso: 100, sacos: 20 }]);
+  });
+  it("100 QQ en 98 LB → 102 sacos de 100 LB + 1 de 10 LB (sobrante 4 lb)", () => {
+    expect(planDeSacos(100, 98, MARCA)).toEqual([{ peso: 100, sacos: 102 }, { peso: 10, sacos: 1 }]);
+  });
+  it("presentaciones exactas usan su propio saco", () => {
+    expect(planDeSacos(10, 100, MARCA)).toEqual([{ peso: 100, sacos: 10 }]);
+    expect(planDeSacos(10, 25, MARCA)).toEqual([{ peso: 25, sacos: 40 }]);
+    expect(planDeSacos(10, 10, MARCA)).toEqual([{ peso: 10, sacos: 100 }]);
+  });
+  it("si existiera saco de 50 LB, se usaría ese", () => {
+    expect(planDeSacos(10, 50, [100, 50, 25, 10])).toEqual([{ peso: 50, sacos: 20 }]);
+  });
+  it("sobrante grande va en el saco más pequeño que lo contiene", () => {
+    expect(planDeSacos(2.5, 100, MARCA)).toEqual([{ peso: 100, sacos: 3 }]); // sobrante 50 lb → saco de 100
+    expect(planDeSacos(2.2, 100, MARCA)).toEqual([{ peso: 100, sacos: 2 }, { peso: 25, sacos: 1 }]);
+  });
+  it("marca con un solo tamaño: todo en ese saco", () => {
+    expect(planDeSacos(100, 98, [100])).toEqual([{ peso: 100, sacos: 103 }]);
+  });
+  it("sin tamaños o sin cantidad: nada", () => {
+    expect(planDeSacos(10, 50, [])).toEqual([]);
+    expect(planDeSacos(0, 50, MARCA)).toEqual([]);
   });
 });

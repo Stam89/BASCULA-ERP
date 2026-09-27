@@ -5,7 +5,7 @@ import { money, categoryLabel, stockGroupLabel, formatPersonName } from "./forma
 import type { Farmer, Product, Warehouse, Lot, MateriaPrimaEntry, MateriaPrimaCorreccion, PendingEntry } from "./types";
 import { Metric, ReportTable, Input, Select, MedidorRow, DataList } from "./components/ui";
 import { ClienteSearchInput } from "./components/ClienteSearchInput";
-import { SacosAlertaDashboard, SacosCatalogoConfig, SacosTablero } from "./components/SacosModule";
+import { planDeSacos, SacosAlertaDashboard, SacosCatalogoConfig, SacosTablero } from "./components/SacosModule";
 import * as XLSX from "xlsx";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
 
@@ -1761,6 +1761,9 @@ function conceptoPayable(p: AccountPayable): string {
 }
 
 // "100 LB" -> 100. Sirve para guardar el peso del saco como número.
+// Valor del <select> de presentación para un peso personalizado (p. ej. 98 LB).
+const PRES_OTRO_PESO = "__otro_peso__";
+
 function sackWeightLbOf(presentation: string): number | undefined {
   const lb = Number(String(presentation).replace(/[^\d.]/g, ""));
   return Number.isFinite(lb) && lb > 0 ? lb : undefined;
@@ -2928,6 +2931,10 @@ export function App() {
     quantity: "",
     unit_price: ""
   });
+  // Presentación con PESO PERSONALIZADO (p. ej. bultos de 98 LB que pide el
+  // cliente). Se guarda en el pedido solo con su nombre ("98 LB"); los sacos se
+  // calculan con la regla automática de empaque (planDeSacos).
+  const [saleLineOtroPesoLb, setSaleLineOtroPesoLb] = useState("");
 
   // Sub-tab Fomentos en Caja
   const [cajaFomentoId, setCajaFomentoId] = useState("");
@@ -6683,17 +6690,23 @@ export function App() {
       addToast("El socio no tiene suficiente producto terminado ni cáscara libre para respaldar esta cantidad", "error");
       return;
     }
-    const presentation = saleProductPresentations.find(p => p.id === saleLineForm.presentation_id);
+    const presentation = presentacionLineaActual;
+    if (!presentation) {
+      addToast("Escribe el peso del bulto en libras (Otro peso)", "error");
+      return;
+    }
     const newItem: SaleLineItem = {
       id: `temp-${Date.now()}`,
       product_id: saleLineForm.product_id,
-      presentation_id: saleLineForm.presentation_id,
+      // Peso personalizado: sin id de catálogo, solo el nombre ("98 LB").
+      presentation_id: saleLineForm.presentation_id === PRES_OTRO_PESO ? "" : saleLineForm.presentation_id,
       presentation_name: presentation ? `${presentation.name}` : "",
       weight_lb: presentation && presentation.weight_lb ? Number(presentation.weight_lb) : null,
       quantity: Number(saleLineForm.quantity),
       unit_price: Number(saleLineForm.unit_price)
     };
     setSaleLineItems(prev => [...prev, newItem]);
+    setSaleLineOtroPesoLb("");
     setSaleLineForm({ product_id: "", presentation_id: "", quantity: "", unit_price: "" });
     setSaleProductPresentations([]);
     setSelectedPresentationId("");
@@ -6841,8 +6854,20 @@ export function App() {
   // Cambio de presentación: actualiza la línea y auto-sugiere su precio base.
   function handleSalePresentationChange(presentationId: string) {
     setSaleLineForm((prev) => ({ ...prev, presentation_id: presentationId }));
-    if (saleLineForm.product_id) sugerirPrecioLinea(saleLineForm.product_id, presentationId).catch(() => undefined);
+    if (presentationId !== PRES_OTRO_PESO) setSaleLineOtroPesoLb("");
+    const idSugerencia = presentationId === PRES_OTRO_PESO ? "" : presentationId;
+    if (saleLineForm.product_id) sugerirPrecioLinea(saleLineForm.product_id, idSugerencia).catch(() => undefined);
   }
+
+  // Presentación efectiva de la línea en edición: una del catálogo o el peso
+  // personalizado ("Otro peso").
+  const presentacionLineaActual: { id: string; name: string; weight_lb?: number | string | null } | null = (() => {
+    if (saleLineForm.presentation_id === PRES_OTRO_PESO) {
+      const lb = Number(saleLineOtroPesoLb);
+      return lb > 0 ? { id: "", name: `${lb} LB`, weight_lb: lb } : null;
+    }
+    return saleProductPresentations.find((p) => p.id === saleLineForm.presentation_id) ?? null;
+  })();
 
   // ── Eliminar línea de pedido ──
   function removeSaleLineItem(id: string) {
@@ -14020,7 +14045,7 @@ export function App() {
                   {saleLineForm.product_id && (() => {
                     const respaldo = respaldoDeMarca(saleLineForm.product_id);
                     const qq = respaldo.terminadoQq;
-                    const pres = saleProductPresentations.find((p) => p.id === saleLineForm.presentation_id);
+                    const pres = presentacionLineaActual;
                     const wl = pres?.weight_lb ? Number(pres.weight_lb) : null;
                     const sacos = sacosDisponiblesDeMarca(saleLineForm.product_id, wl);
                     const hayTerminado = qq > 0;
@@ -14060,25 +14085,42 @@ export function App() {
                     {saleProductPresentations.map((p) => (
                       <option key={p.id} value={p.id}>{p.name}</option>
                     ))}
+                    <option value={PRES_OTRO_PESO}>✏️ Otro peso (lb)…</option>
                   </select>
+                  {saleLineForm.presentation_id === PRES_OTRO_PESO && (
+                    <input type="number" min="1" step="0.5" value={saleLineOtroPesoLb} autoFocus
+                      onChange={(e) => setSaleLineOtroPesoLb(e.target.value)}
+                      placeholder="Libras por bulto (ej: 98)"
+                      style={{ width: "100%", marginTop: 6, padding: 8, border: "1px solid #d1d5db", borderRadius: 4, fontSize: 13 }} />
+                  )}
                   {/* Sacos de ESTA marca y peso en la bodega de la matriz: se
                       descuentan al Confirmar Preparación del pedido. Informativo:
                       si faltan, el pedido sigue y el Dashboard alerta la compra. */}
                   {saleLineForm.product_id && saleLineForm.presentation_id && (() => {
-                    const pres = saleProductPresentations.find((p) => p.id === saleLineForm.presentation_id);
+                    const pres = presentacionLineaActual;
                     const wl = Number(pres?.weight_lb) || 0;
                     if (!wl) return null;
-                    const saco = sackInventory.find((sk) => sk.activo !== false && sk.product_id === saleLineForm.product_id && Number(sk.peso_lb) === wl);
-                    const q = Number(saleLineForm.quantity) || 0;
-                    const necesita = q > 0 ? Math.max(1, Math.round((q * 100) / wl)) : 0;
-                    if (!saco) {
-                      return <small style={{ display: "block", marginTop: 4, color: "#6b7280" }}>🧺 Sin saco de marca registrado para {pres?.name} (no se descuenta).</small>;
+                    // Sacos de ESTA marca (los que existen: 100/25/10 LB…). Regla
+                    // automática: 50 LB → saco de 100; 98 LB → 100 LB + sobrante en 10 LB.
+                    const sacosMarca = sackInventory.filter((sk) => sk.activo !== false && sk.product_id === saleLineForm.product_id && Number(sk.peso_lb) > 0);
+                    if (!sacosMarca.length) {
+                      const marca = products.find((p) => p.id === saleLineForm.product_id);
+                      return marca?.product_type === "PACKAGED_GOOD"
+                        ? <small style={{ display: "block", marginTop: 4, color: "#6b7280" }}>🧺 Esta marca no tiene sacos registrados (no se descuentan).</small>
+                        : null;
                     }
-                    const stock = Number(saco.stock);
-                    const falta = necesita > 0 && necesita > stock;
+                    const q = Number(saleLineForm.quantity) || 0;
+                    const plan = planDeSacos(q, wl, sacosMarca.map((sk) => Number(sk.peso_lb)));
+                    const filas = plan.map((pl) => {
+                      const sk = sacosMarca.find((x) => Number(x.peso_lb) === pl.peso);
+                      return { tipo: sk?.tipo ?? `${pl.peso} LB`, sacos: pl.sacos, stock: Number(sk?.stock ?? 0) };
+                    });
+                    const falta = filas.some((f) => f.sacos > f.stock);
                     return (
-                      <small style={{ display: "block", marginTop: 4, fontWeight: 700, color: falta || stock <= 0 ? "#b91c1c" : "#15803d" }}>
-                        🧺 Sacos {saco.tipo}: {stock.toLocaleString("es-EC")} en bodega{necesita ? ` · este pedido usa ${necesita}` : ""}{falta ? " · ⚠️ no alcanzan (quedará en negativo)" : ""}
+                      <small style={{ display: "block", marginTop: 4, fontWeight: 700, color: falta ? "#b91c1c" : "#15803d" }}>
+                        🧺 {filas.length
+                          ? `Sacos a usar: ${filas.map((f) => `${f.sacos} × ${f.tipo} (hay ${f.stock.toLocaleString("es-EC")})`).join(" + ")}${falta ? " · ⚠️ no alcanzan (quedará en negativo)" : ""}`
+                          : `Sacos en bodega: ${sacosMarca.map((sk) => `${sk.tipo}: ${Number(sk.stock).toLocaleString("es-EC")}`).join(" · ")}`}
                       </small>
                     );
                   })()}
@@ -14100,7 +14142,7 @@ export function App() {
                   />
                   {(() => {
                     const q = Number(saleLineForm.quantity);
-                    const pres = saleProductPresentations.find((p) => p.id === saleLineForm.presentation_id);
+                    const pres = presentacionLineaActual;
                     if (!q || q <= 0 || !pres) return null;
                     const factor = bultosPorQqDePresentacion(pres.name);
                     return <small style={{ color: "#2563eb", fontWeight: 600 }}>= {(q * factor).toFixed(0)} {unidadGuiaDePresentacion(pres.name).toLowerCase()} ({pres.name}) para la Guía</small>;

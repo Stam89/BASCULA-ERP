@@ -49,6 +49,14 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Sacos: empaque automatico (sin saco de 50 LB, pesos personalizados) (2026-09-27)
+
+- La planta NO tiene sacos de 50 LB. Migracion `20261038_sacos_sin_50lb.sql` borra los sacos de marca de 50 LB sin stock ni movimientos (o los desactiva si tuvieran historial). La presentacion de venta `50lb` se conserva.
+- Regla `planDeSacos(qq, pesoPresentacion, tamanos)` (backend `services/sacos.ts` y espejo en `web-admin/src/components/SacosModule.tsx`): cada bulto va en el saco MAS PEQUENO registrado de la marca donde cabe; el sobrante, en el mas pequeno que lo contiene. 10 QQ en 50 LB -> 20 x 100 LB; 100 QQ en 98 LB -> 102 x 100 LB + 1 x 10 LB. Sin reglas fijas por peso: si algun dia se registra un saco de 50 LB, se usa solo.
+- `descontarSacosPedido` usa `sacosCandidatos` (marca -> todos sus sacos; subproducto -> saco especial 1 por bulto; arroz sin marca -> genericos). `resolverSaco` se elimino.
+- Ventas: opcion "Otro peso (lb)" en Presentacion; la linea se guarda sin `presentation_id` y con nombre `"98 LB"` (Guia: bultos = QQ x 100 / 98). El aviso de la linea muestra "Sacos a usar: 102 x Flor 100 LB + 1 x Flor 10 LB". El cargo de empaque al socio (10/25/50 por presentation_id) no aplica a pesos personalizados.
+- Verificado en BEGIN...ROLLBACK con la base real + 10 tests de `planDeSacos`/`sacosParaQq` (74 tests backend OK).
+
 ### Partes Diarios: cobro automatico visible y Servicios simplificado (2026-09-27)
 
 - Se retiro `Servicios` del menu de Transporte y Cosechadora; el backend y los registros historicos se conservan para compatibilidad y para Cuentas por Cobrar.
