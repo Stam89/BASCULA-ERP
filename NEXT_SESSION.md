@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Configuracion por accionista: el socio solo ve lo que usa (2026-09-27)
+
+- Con un SOCIO activo, Configuracion muestra solo: "🏢 Mi negocio" (Datos del negocio, ya independiente por socio en app_settings.socio_id), "🛒 Tarifas por libra", "🏦 Mis cuentas bancarias" (filtradas a su accionista_id) y "Mis sacos" si envejece. Ocultos para socios: Estado del sistema, Nomina/mano de obra y cuadrilla (los socios solo tienen sueldo administrativo), Parametros de planta, combustible, categorias de caja y mantenimiento, puesta en marcha, zona de peligro, respaldos, tarifas de planta/servicios/empaque/procesos, accionistas, secuenciales y usuarios. Se administran desde CEYRO.
+- Implementacion solo visual en App.tsx: `esSocioActivoCfg`, `SUBTABS_SOCIO`, `tarjetaVisibleSocio` (tambien filtra el buscador de ajustes) y efecto que regresa a "operacion" si el socio estaba en otra subpestana. Sin cambios de API ni de datos.
+
 ### Sacos propios por socio (STALYN / envejecido) + Seleccion con Tula y productos por proceso (2026-09-27)
 
 - `sack_inventory.accionista_id` (migracion `20261042_sacos_propios_socio.sql`): NULL = catalogo de la MATRIZ (todo lo existente; lo usan ventas y produccion, ahora filtrado con `accionista_id IS NULL` en `services/sacos.ts`). Filas con accionista = catalogo PROPIO del socio (categoria `PROPIO`, `marca` = nombre del saco).

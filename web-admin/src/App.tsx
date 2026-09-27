@@ -2297,6 +2297,16 @@ export function App() {
   const [configBuscar, setConfigBuscar] = useState("");
   const abrirTarjetaRef = useRef<string | null>(null);
   type AjusteIndex = { sub: typeof configSubTab; tarjeta: string; claves: string };
+  // CONFIGURACIÓN POR ACCIONISTA: un SOCIO solo ve lo que usa (su negocio,
+  // tarifas por libra, sus cuentas bancarias y, si envejece, sus sacos). La
+  // nómina/mano de obra, tarifas de planta, categorías, usuarios, etc. son de la
+  // Matriz: los socios no pagan a esos trabajadores (solo sueldo administrativo).
+  const esSocioActivoCfg = accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "SOCIO";
+  const SUBTABS_SOCIO = ["operacion", "tarifas", "socios"] as const;
+  const tarjetaVisibleSocio = (tarjeta: string) =>
+    tarjeta.startsWith("🏢 Datos del negocio") || tarjeta.startsWith("🛒 Tarifas por libra") ||
+    tarjeta.startsWith("🏦 Cuentas Bancarias") ||
+    (tarjeta.startsWith("📦 Catálogo de sacos") && accionistaEnvejecidoHabilitado(accionistas.find((a) => a.id === activeAccionistaId)));
   const CONFIG_INDICE: AjusteIndex[] = [
     { sub: "estado", tarjeta: "Estado del sistema", claves: "salud api sincronizacion bascula respaldo backup usuarios accionistas diagnostico" },
     { sub: "operacion", tarjeta: "⚙️ Parámetros de planta", claves: "tarifa de pilado humedad base merma quintal" },
@@ -2336,9 +2346,17 @@ export function App() {
   const configResultados = useMemo(() => {
     const q = normaliza(configBuscar.trim());
     if (q.length < 2) return [] as AjusteIndex[];
-    return CONFIG_INDICE.filter((a) => normaliza(`${a.tarjeta} ${a.claves} ${subLabel[a.sub]}`).includes(q)).slice(0, 8);
+    return CONFIG_INDICE
+      .filter((a) => !esSocioActivoCfg || tarjetaVisibleSocio(a.tarjeta))
+      .filter((a) => normaliza(`${a.tarjeta} ${a.claves} ${subLabel[a.sub]}`).includes(q)).slice(0, 8);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [configBuscar]);
+  }, [configBuscar, esSocioActivoCfg, activeAccionistaId]);
+
+  // Si el socio estaba en una subpestaña que no usa, volver a «Operación».
+  React.useEffect(() => {
+    if (esSocioActivoCfg && !(SUBTABS_SOCIO as readonly string[]).includes(configSubTab)) setConfigSubTab("operacion");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [esSocioActivoCfg, configSubTab]);
 
   // Abre (y desplaza a) la tarjeta cuyo <summary> contiene el texto dado.
   function abrirTarjetaEnDom(tarjeta: string) {
@@ -19507,10 +19525,15 @@ export function App() {
                 ["socios", "👥 Socios & Bancos"],
                 ["secuenciales", "📄 Secuenciales"],
                 ["usuarios", "🔐 Control de Usuarios"]
-              ] as const).map(([t, label]) => (
+              ] as const)
+                // Socio: solo sus pestañas, con nombres de lo que realmente usa.
+                .filter(([t]) => !esSocioActivoCfg || (SUBTABS_SOCIO as readonly string[]).includes(t))
+                .map(([t, label]) => (
                 <button key={t} type="button" className={configSubTab === t ? "active" : ""}
                   onClick={() => setConfigSubTab(t)}>
-                  {label}
+                  {esSocioActivoCfg
+                    ? ({ operacion: "🏢 Mi negocio", tarifas: "🛒 Tarifas por libra", socios: "🏦 Mis cuentas bancarias" } as Record<string, string>)[t] ?? label
+                    : label}
                 </button>
               ))}
             </aside>
@@ -19791,7 +19814,7 @@ export function App() {
             })()}
 
             {/* ── Operación y Planta: parámetros ── */}
-            {configSubTab === "operacion" && (
+            {configSubTab === "operacion" && !esSocioActivoCfg && (
               <section className="panelGrid">
                 <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
                   <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>⚙️ Parámetros de planta</summary>
@@ -20587,6 +20610,8 @@ export function App() {
             {/* ── Accionistas ── */}
             {configSubTab === "socios" && (
               <section style={{ display: "grid", gridTemplateColumns: "minmax(0, 5fr) minmax(0, 7fr)", gap: 14, alignItems: "start" }} className="configSociosGrid">
+                {/* Crear/listar accionistas: solo desde la Matriz. */}
+                {!esSocioActivoCfg && (<>
                 <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
                   <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🧑‍🤝‍🧑 Nuevo accionista</summary>
                 <form onSubmit={(e) => createAccionista(e).catch((err) => addToast(err.message, "error"))}>
@@ -20679,6 +20704,7 @@ export function App() {
                   </p>
                 </details>
 
+                </>)}
                 {/* ── Cuentas bancarias oficiales de cada socio ── */}
                 <details className="tablePanel" style={{ gridColumn: "1 / -1" }}>
                   <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🏦 Cuentas Bancarias de Socios</summary>
@@ -20690,7 +20716,7 @@ export function App() {
                       <table className="cajaTable" style={{ minWidth: 620 }}>
                         <thead><tr><th style={{ whiteSpace: "nowrap" }}>Socio</th><th>Cuenta (caja)</th><th>Banco / Tipo de cuenta</th><th>N.º de cuenta</th></tr></thead>
                         <tbody>
-                          {bankAccounts.map((b) => (
+                          {bankAccounts.filter((b) => !esSocioActivoCfg || b.accionista_id === activeAccionistaId).map((b) => (
                             <tr key={b.id}>
                               <td style={{ fontWeight: 600, whiteSpace: "nowrap" }}>{b.socio}{b.socio_tipo === "MATRIZ" ? " · Matriz" : ""}</td>
                               <td className="muted">{b.name}</td>
@@ -20806,7 +20832,7 @@ export function App() {
 
             {/* ── ⛽ Precio del combustible (bloque operativo, en Operación y Planta).
                 Mismos campos/guardado de labor_rates que antes. */}
-            {configSubTab === "operacion" && (
+            {configSubTab === "operacion" && !esSocioActivoCfg && (
               <section style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 12 }}>
                 <form className="formPanel" onSubmit={(e) => saveLaborRates(e).catch((err) => addToast(err.message, "error"))}>
                   <details>
@@ -20825,6 +20851,8 @@ export function App() {
 
             {configSubTab === "tarifas" && (
               <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {/* Tarifas de planta/servicios: solo la Matriz. El socio ve Tarifas por libra. */}
+                {!esSocioActivoCfg && (<>
                 {/* Todas las tarjetas son acordeones (<details>) apilados a lo ancho.
                     Cambio 100% visual: inputs, estado, onChange, botones y API intactos. */}
                 {/* 1) Secado como Servicio (INGRESO: cobro al cliente). Mismo estado y
@@ -20980,6 +21008,7 @@ export function App() {
                   </details>
                 </div>
 
+                </>)}
                 {/* 5) Tarifas por libra (Venta al Detalle) — ya era acordeón */}
                 <div className="formPanel">
                   <details>
@@ -21042,7 +21071,7 @@ export function App() {
               </section>
             )}
 
-            {configSubTab === "operacion" && (
+            {configSubTab === "operacion" && !esSocioActivoCfg && (
               <section className="panelGrid">
                 <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
                   <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🏷️ Categorías de caja</summary>
@@ -21096,7 +21125,7 @@ export function App() {
 
             {/* ── Categorías de Mantenimiento (áreas / secciones / tipos) ── */}
             {/* Categorías de mantenimiento (Operación y Planta) */}
-            {configSubTab === "operacion" && (
+            {configSubTab === "operacion" && !esSocioActivoCfg && (
               <section className="panelGrid">
                 <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
                   <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🔧 Categorías de Mantenimiento</summary>
@@ -21195,7 +21224,7 @@ export function App() {
 
             {/* ── Puesta en marcha / datos ── */}
             {/* Puesta en marcha + datos (Operación y Planta) */}
-            {configSubTab === "operacion" && (
+            {configSubTab === "operacion" && !esSocioActivoCfg && (
               <section className="panelGrid">
                 <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
                   <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>✅ Puesta en marcha</summary>
