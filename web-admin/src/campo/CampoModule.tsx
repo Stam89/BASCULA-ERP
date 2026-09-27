@@ -4,6 +4,7 @@
 // con una entrada de sidebar y un único render.
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { apiFetch, apiGet, apiPost, apiPut } from "../api";
 
 // PATCH a la maquinaria (campo_activos): el endpoint es PATCH (no PUT).
@@ -1072,12 +1073,21 @@ function ConvertirAplicarModal({ credito, onClose, onDone, onError }: {
 }
 
 // Modal: ficha de Estado de Cuenta con rango de fecha, línea de tiempo y impresión.
-function EstadoCuentaModal({ cliente, nombreOperacion, matrizName, onCobrar, onClose, onError }: {
-  cliente: ClienteCuenta; nombreOperacion: string; matrizName: string; onCobrar?: () => void; onClose: () => void; onError: (m: string) => void;
+function EstadoCuentaModal({ cliente, nombreOperacion, matrizName, cajaCuenta, onAbonoRegistrado, onClose, onError }: {
+  cliente: ClienteCuenta;
+  nombreOperacion: string;
+  matrizName: string;
+  cajaCuenta?: Cuenta;
+  onAbonoRegistrado?: (mensaje: string) => void | Promise<void>;
+  onClose: () => void;
+  onError: (m: string) => void;
 }) {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [ec, setEc] = useState<EstadoCuenta | null>(null);
+  const [montoAbono, setMontoAbono] = useState("");
+  const [fechaAbono, setFechaAbono] = useState(hoy());
+  const [cobrando, setCobrando] = useState(false);
   const cargar = useCallback(async () => {
     try {
       const qs = new URLSearchParams();
@@ -1087,6 +1097,31 @@ function EstadoCuentaModal({ cliente, nombreOperacion, matrizName, onCobrar, onC
     } catch (e) { onError((e as Error).message); }
   }, [cliente.id, from, to, onError]);
   useEffect(() => { cargar(); }, [cargar]);
+
+  async function registrarAbono(montoSolicitado?: number) {
+    try {
+      setCobrando(true);
+      if (!cajaCuenta) throw new Error("No existe la cuenta CAJA en Configuración.");
+      const saldo = Number(ec?.saldo_final ?? cliente.saldo);
+      const monto = montoSolicitado ?? Number(montoAbono);
+      if (!(monto > 0)) throw new Error("Indica el valor del abono.");
+      if (monto > saldo + 0.005) throw new Error(`El abono no puede superar el saldo de ${money(saldo)}.`);
+      const r = await apiPost<{ aplicado: number; servicios_afectados: number }>("/campo/cxc/abono", {
+        cliente_id: cliente.id,
+        monto,
+        cuenta_id: cajaCuenta.id,
+        fecha: fechaAbono,
+        concepto: `Cobro CxC de ${cliente.nombre}`
+      });
+      setMontoAbono("");
+      await cargar();
+      await onAbonoRegistrado?.(`Ingresaron ${money(r.aplicado)} a CAJA y se aplicaron a ${r.servicios_afectados} cargo(s).`);
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setCobrando(false);
+    }
+  }
 
   function imprimir() {
     if (!ec) return;
@@ -1126,25 +1161,51 @@ function EstadoCuentaModal({ cliente, nombreOperacion, matrizName, onCobrar, onC
     w.document.close(); w.focus(); w.print();
   }
 
-  return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: 16, overflowY: "auto" }}>
-      <div className="tablePanel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 900, width: "100%", margin: "16px 0" }}>
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <h2 style={{ margin: 0 }}>📄 Estado de Cuenta</h2>
-          <span className="muted">· {cliente.nombre}{cliente.identificacion ? ` · ${cliente.identificacion}` : ""}</span>
-          {onCobrar && <button type="button" className="primary" style={{ marginLeft: "auto" }} onClick={onCobrar}>💵 Registrar abono</button>}
-          <button type="button" className="btnSecondary" style={{ marginLeft: onCobrar ? 0 : "auto" }} onClick={imprimir}>🖨️ Imprimir / PDF</button>
-          <button type="button" onClick={onClose}>Cerrar</button>
-        </div>
-        <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginTop: 8 }}>
-          <label style={{ margin: 0 }}><span>Desde</span><input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
-          <label style={{ margin: 0 }}><span>Hasta</span><input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
-          <div className="totalBox" style={{ minWidth: 140, margin: 0, marginLeft: "auto", background: "#eff6ff", borderColor: "#bfdbfe" }}>
-            <span>SALDO FINAL</span>
-            <strong style={{ color: (ec?.saldo_final ?? 0) > 0.005 ? "#b45309" : "#15803d" }}>{money(ec?.saldo_final ?? 0)}</strong>
+  return createPortal(
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.62)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <div className="tablePanel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 1120, width: "100%", height: "calc(100vh - 32px)", maxHeight: 860, margin: 0, padding: 0, overflow: "hidden", borderRadius: 12 }}>
+        <div style={{ padding: "18px 20px 14px", borderBottom: "1px solid var(--c-border)", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", background: "#fff" }}>
+          <div style={{ minWidth: 0 }}>
+            <h2 style={{ margin: 0, fontSize: 20 }}>Estado de cuenta</h2>
+            <div style={{ fontWeight: 750, marginTop: 3 }}>{cliente.nombre}</div>
+            <small className="muted">{cliente.identificacion || "Sin identificación"} · {nombreOperacion} · {matrizName}</small>
           </div>
+          <button type="button" className="btnSecondary" style={{ marginLeft: "auto" }} onClick={imprimir}>🖨️ Imprimir / PDF</button>
+          <button type="button" onClick={onClose} aria-label="Cerrar estado de cuenta" style={{ minWidth: 40, fontSize: 18 }}>×</button>
         </div>
-        <div style={{ overflowX: "auto" }}>
+
+        <div style={{ padding: "16px 20px 20px", overflowY: "auto", minHeight: 0, flex: "1 1 auto" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginBottom: 14 }}>
+            <div style={{ border: "1px solid #dbeafe", background: "#eff6ff", borderRadius: 8, padding: "10px 12px" }}><small className="muted">CARGOS</small><strong style={{ display: "block", fontSize: 20 }}>{money(ec?.total_debe ?? 0)}</strong></div>
+            <div style={{ border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 8, padding: "10px 12px" }}><small className="muted">ABONADO</small><strong style={{ display: "block", fontSize: 20, color: "#15803d" }}>{money(ec?.total_haber ?? 0)}</strong></div>
+            <div style={{ border: "1px solid #fde68a", background: "#fffbeb", borderRadius: 8, padding: "10px 12px" }}><small className="muted">SALDO PENDIENTE</small><strong style={{ display: "block", fontSize: 22, color: "#b45309" }}>{money(ec?.saldo_final ?? 0)}</strong></div>
+          </div>
+
+          {cajaCuenta && onAbonoRegistrado && (ec?.saldo_final ?? cliente.saldo) > 0.005 && (
+            <div style={{ border: "1px solid #bfdbfe", background: "#f8fbff", borderRadius: 8, padding: 14, marginBottom: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+                <div><strong>Registrar cobro</strong><small className="muted" style={{ display: "block" }}>El dinero ingresará directamente a <b>CAJA</b>.</small></div>
+                <span className="chip ok">CAJA · {money(cajaCuenta.saldo)}</span>
+              </div>
+              <div className="cxcCobroGrid">
+                <label style={{ margin: 0 }}><span>Monto del abono</span><input type="number" min="0.01" step="0.01" value={montoAbono} onChange={(e) => setMontoAbono(e.target.value)} placeholder="0.00" /></label>
+                <label style={{ margin: 0 }}><span>Fecha</span><input type="date" value={fechaAbono} onChange={(e) => setFechaAbono(e.target.value)} /></label>
+                <button type="button" className="primary" disabled={cobrando || !(Number(montoAbono) > 0)} onClick={() => { void registrarAbono(); }}>{cobrando ? "Registrando…" : "Registrar abono"}</button>
+                <button type="button" disabled={cobrando} onClick={() => { void registrarAbono(Number(ec?.saldo_final ?? cliente.saldo)); }}>Cobrar saldo completo</button>
+              </div>
+            </div>
+          )}
+
+          {cajaCuenta && onAbonoRegistrado && (ec?.saldo_final ?? 0) <= 0.005 && (
+            <div style={{ padding: 12, marginBottom: 14, border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 8, color: "#15803d", fontWeight: 700 }}>Cuenta pagada completamente.</div>
+          )}
+
+          <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 10 }}>
+            <strong style={{ marginRight: "auto" }}>Movimientos</strong>
+            <label style={{ margin: 0 }}><span>Desde</span><input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
+            <label style={{ margin: 0 }}><span>Hasta</span><input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
+          </div>
+          <div style={{ overflowX: "auto", border: "1px solid var(--c-border)", borderRadius: 8 }}>
           <table className="cajaTable" style={{ marginTop: 8 }}>
             <thead><tr><th>Fecha</th><th>Detalle</th><th>Máquina</th><th className="num">QQ</th><th className="num">Debe</th><th className="num">Haber</th><th className="num">Saldo</th></tr></thead>
             <tbody>
@@ -1152,7 +1213,7 @@ function EstadoCuentaModal({ cliente, nombreOperacion, matrizName, onCobrar, onC
               {(ec?.lineas ?? []).map((l, i) => (
                 <tr key={i}>
                   <td style={{ whiteSpace: "nowrap" }}>{String(l.fecha).slice(0, 10)}</td>
-                  <td>{l.detalle}{l.cuenta ? <small className="muted"> · {l.cuenta}</small> : null}{l.clase === "abono" ? <span className="chip ok" style={{ marginLeft: 6 }}>abono</span> : null}</td>
+                  <td style={{ minWidth: 320, whiteSpace: "normal", lineHeight: 1.35 }}>{l.detalle}{l.cuenta ? <small className="muted"> · {l.cuenta}</small> : null}{l.clase === "abono" ? <span className="chip ok" style={{ marginLeft: 6 }}>abono</span> : null}</td>
                   <td>{l.maquina ?? "—"}</td>
                   <td className="num">{l.qq != null ? l.qq : "—"}</td>
                   <td className="num">{l.debe ? money(l.debe) : "—"}</td>
@@ -1171,9 +1232,11 @@ function EstadoCuentaModal({ cliente, nombreOperacion, matrizName, onCobrar, onC
               </tr>
             </tfoot>
           </table>
+          </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -1785,7 +1848,6 @@ function CxCView({ nombreOperacion, matrizName, onNotify, onError }: {
 }) {
   const [data, setData] = useState<{ clientes: ClienteCuenta[]; total_pendiente: number } | null>(null);
   const [cuentas, setCuentas] = useState<Cuenta[]>([]);
-  const [abonar, setAbonar] = useState<ClienteCuenta | null>(null);
   const [verCuenta, setVerCuenta] = useState<ClienteCuenta | null>(null);
 
   const cargar = useCallback(async () => {
@@ -1800,6 +1862,7 @@ function CxCView({ nombreOperacion, matrizName, onNotify, onError }: {
   useEffect(() => { cargar(); }, [cargar]);
 
   const clientes = data?.clientes ?? [];
+  const cajaCuenta = cuentas.find((cuenta) => cuenta.nombre.trim().toUpperCase() === "CAJA");
   return (
     <>
       <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
@@ -1837,64 +1900,13 @@ function CxCView({ nombreOperacion, matrizName, onNotify, onError }: {
         <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>Saldo = cargos de cosechadora/flete descontados en liquidaciones − abonos registrados por el socio.</p>
       </div>
 
-      {abonar && (
-        <AbonoCxCModal cliente={abonar} cuentas={cuentas}
-          onClose={() => setAbonar(null)}
-          onDone={async (m) => { setAbonar(null); await cargar(); onNotify(m); }}
-          onError={onError} />
-      )}
       {verCuenta && (
         <EstadoCuentaModal cliente={verCuenta} nombreOperacion={nombreOperacion} matrizName={matrizName}
-          onCobrar={() => { setVerCuenta(null); setAbonar(verCuenta); }}
+          cajaCuenta={cajaCuenta}
+          onAbonoRegistrado={async (mensaje) => { await cargar(); onNotify(mensaje); }}
           onClose={() => setVerCuenta(null)} onError={onError} />
       )}
     </>
-  );
-}
-
-// Modal: abono directo del agricultor (FIFO entre sus servicios pendientes).
-function AbonoCxCModal({ cliente, cuentas, onClose, onDone, onError }: {
-  cliente: ClienteCuenta; cuentas: Cuenta[];
-  onClose: () => void; onDone: (m: string) => void | Promise<void>; onError: (m: string) => void;
-}) {
-  const [monto, setMonto] = useState(cliente.saldo > 0 ? cliente.saldo.toFixed(2) : "");
-  const [cuentaId, setCuentaId] = useState(cuentas[0]?.id ?? "");
-  const [fecha, setFecha] = useState(hoy());
-  const [busy, setBusy] = useState(false);
-  async function submit() {
-    try {
-      setBusy(true);
-      const m = Number(monto);
-      if (!(m > 0)) throw new Error("Indica el monto del abono");
-      if (!cuentaId) throw new Error("Elige la cuenta donde entra el efectivo");
-      const r = await apiPost<{ aplicado: number; servicios_afectados: number }>("/campo/cxc/abono", {
-        cliente_id: cliente.id, monto: m, cuenta_id: cuentaId, fecha, concepto: "Abono directo de flete/cosecha"
-      });
-      await onDone(`Abono de ${money(r.aplicado)} aplicado a ${r.servicios_afectados} servicio(s)`);
-    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
-  }
-  return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
-      <form className="formPanel" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submit(); }} style={{ maxWidth: 440, width: "100%", margin: 0 }}>
-        <h2 style={{ marginTop: 0 }}>💵 Abono directo · {cliente.nombre}</h2>
-        <p className="muted" style={{ marginTop: 0 }}>Saldo pendiente: <strong>{money(cliente.saldo)}</strong>. Se reparte entre los servicios más antiguos.</p>
-        <label><span>Monto del abono</span>
-          <input type="number" step="0.01" min="0" autoFocus value={monto} onChange={(e) => setMonto(e.target.value)} placeholder="0.00" />
-        </label>
-        <label><span>Cuenta (entra el efectivo)</span>
-          <select value={cuentaId} onChange={(e) => setCuentaId(e.target.value)}>
-            {cuentas.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-          </select>
-        </label>
-        <label><span>Fecha</span>
-          <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} />
-        </label>
-        <div className="buttonRow">
-          <button type="submit" className="primary" disabled={busy}>{busy ? "Registrando…" : "Registrar abono"}</button>
-          <button type="button" onClick={onClose} disabled={busy}>Cancelar</button>
-        </div>
-      </form>
-    </div>
   );
 }
 

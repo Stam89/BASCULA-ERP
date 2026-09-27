@@ -3017,6 +3017,18 @@ input[type="datetime-local"] { height: 36px; }
 .cajaTable td.num,
 .cajaTable th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
+.cxcCobroGrid {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) auto auto;
+  gap: 8px;
+  align-items: end;
+}
+
+@media (max-width: 760px) {
+  .cxcCobroGrid { grid-template-columns: 1fr; }
+  .cxcCobroGrid button { width: 100%; }
+}
+
 @media (max-width: 860px) {
   .reportGrid { grid-template-columns: 1fr; }
   .reportDates { flex-wrap: wrap; }
