@@ -1,13 +1,13 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-09-26
+Actualizado: 2026-09-27
 
 ## Inicio rapido
 
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: hoja de vida de mantenimiento y saldo disponible real en Transporte y Cosechadora.
+- Ultimo cambio funcional: mantenimiento de Transporte unificado con el historial oficial existente.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -49,6 +49,15 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Mantenimiento unificado, sin doble digitacion (2026-09-27)
+
+- Se retiro del menu de Transporte/Cosechadora la nueva opcion duplicada de Mantenimiento.
+- El usuario registra una sola vez desde `Transporte y Cosechadora > Caja > Egreso`, categoria `REPARACION_MANT`.
+- Ese mismo guardado crea el egreso en Caja de Campo y alimenta automaticamente el historial oficial existente en `Caja principal > Mantenimiento`, sin crear un segundo movimiento contable.
+- Los registros de Campo ya existentes se migran al historial oficial con el area `TRANSPORTE Y COSECHADORA`; el enlace unico impide duplicarlos.
+- Reversar el egreso tambien marca como anulado el registro del historial oficial.
+- Migracion aplicada: `20261036_unificar_mantenimiento_campo.sql`. Builds, 64/64 tests, migraciones y preflight correctos.
+
 ### Caja sin sobregiro y reversion auditada (2026-09-26)
 
 - CAJA fisica ya no permite egresos superiores al saldo disponible. El control se ejecuta dentro de transacciones y cubre egresos manuales, mantenimiento, nomina, CxP, reembolsos de vales y transferencias.
@@ -58,9 +67,9 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - Reversar un mantenimiento tambien lo marca anulado en la hoja de vida. Los reportes por maquina incluyen mantenimiento y netean sus reversiones.
 - Migracion aplicada: `20261035_campo_reversiones_y_saldo_caja.sql`. Verificacion: backend 64/64 tests, builds backend/frontend, preflight y health correctos; UI comprobada sin modificar datos reales.
 
-### Hoja de vida y Caja de Transporte/Cosechadora (2026-09-26)
+### Hoja de vida y Caja de Transporte/Cosechadora (2026-09-26, unificada el 2026-09-27)
 
-- Nueva seccion `Mantenimiento`: registra por maquina la fecha, tipo de trabajo, pieza/sistema, detalle, horometro o kilometraje, proxima fecha/lectura, taller, factura, costo y observaciones.
+- La tabla tecnica interna conserva por maquina fecha, tipo de trabajo, pieza/sistema, detalle, horometro o kilometraje, proxima fecha/lectura, taller, factura, costo y observaciones; ya no se presenta como una seccion separada.
 - Los mantenimientos con costo crean atomicamente el egreso de Caja y la ficha tecnica; los controles sin costo tambien pueden registrarse. `CRUCE PILADORA` no se acepta como cuenta de pago.
 - Los egresos existentes con categoria `REPARACION_MANT` y maquina asignada se recuperan automaticamente como historial basico, sin duplicarlos.
 - En el formulario de Egreso, la categoria `REPARACION_MANT` exige una maquina y alimenta la hoja de vida; no se puede confundir con un anticipo por rendir.

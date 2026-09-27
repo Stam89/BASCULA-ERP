@@ -25,7 +25,6 @@ const CAMPO_SECCIONES: Array<{ id: CampoSeccion; label: string; icon: string }> 
   { id: "clientes", label: "Clientes", icon: "👥" },
   { id: "servicios", label: "Servicios", icon: "🚜" },
   { id: "partes", label: "Partes Diarios", icon: "📝" },
-  { id: "mantenimiento", label: "Mantenimiento", icon: "🔧" },
   { id: "nomina", label: "Nómina Operadores", icon: "💵" },
   { id: "cxc", label: "Cuentas por Cobrar", icon: "📥" },
   { id: "cxp", label: "Cuentas por Pagar", icon: "📤" },
@@ -1363,24 +1362,27 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
       {/* 4 · Concepto. Para REPARACION_MANT se arma con Pieza + Acción; el input
           queda editable para agregar un detalle extra. Otras categorías: texto libre. */}
       {esReparacion && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <label><span>Pieza Afectada</span>
-            <select value={f.pieza} onChange={(e) => setMant(e.target.value, f.accion)}>
-              <option value="">Seleccione…</option>
-              {PIEZAS_MANT.map((g) => (
-                <optgroup key={g.grupo} label={g.grupo}>
-                  {g.items.map((it) => <option key={it} value={it}>{it}</option>)}
-                </optgroup>
-              ))}
-            </select>
-          </label>
-          <label><span>Acción Realizada</span>
-            <select value={f.accion} onChange={(e) => setMant(f.pieza, e.target.value)}>
-              <option value="">Seleccione…</option>
-              {ACCIONES_MANT.map((a) => <option key={a} value={a}>{a}</option>)}
-            </select>
-          </label>
-        </div>
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <label><span>Pieza Afectada</span>
+              <select value={f.pieza} onChange={(e) => setMant(e.target.value, f.accion)}>
+                <option value="">Seleccione…</option>
+                {PIEZAS_MANT.map((g) => (
+                  <optgroup key={g.grupo} label={g.grupo}>
+                    {g.items.map((it) => <option key={it} value={it}>{it}</option>)}
+                  </optgroup>
+                ))}
+              </select>
+            </label>
+            <label><span>Acción Realizada</span>
+              <select value={f.accion} onChange={(e) => setMant(f.pieza, e.target.value)}>
+                <option value="">Seleccione…</option>
+                {ACCIONES_MANT.map((a) => <option key={a} value={a}>{a}</option>)}
+              </select>
+            </label>
+          </div>
+          <p className="muted" style={{ margin: "-2px 0 6px", fontSize: 12 }}>Se registra una sola vez aquí y aparecerá automáticamente en <strong>Caja principal → Mantenimiento</strong>.</p>
+        </>
       )}
       <label><span>Concepto{esReparacion ? " · autollenado (editable para detalle extra)" : ""}</span>
         <input type="text" value={f.concepto} onChange={(e) => setF({ ...f, concepto: e.target.value })}

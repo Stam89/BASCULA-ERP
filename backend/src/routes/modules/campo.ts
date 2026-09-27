@@ -747,7 +747,7 @@ campoRouter.post("/mantenimientos", asyncRoute(async (req, res) => {
 
   const row = await inTransaction(async (client) => {
     const activo = (await client.query(
-      "SELECT id, nombre FROM campo_activos WHERE id = $1",
+      "SELECT id, nombre, tipo FROM campo_activos WHERE id = $1",
       [body.activo_id]
     )).rows[0];
     if (!activo) throw new ApiError(404, "Maquina o vehiculo no encontrado");
@@ -780,7 +780,7 @@ campoRouter.post("/mantenimientos", asyncRoute(async (req, res) => {
       movimientoId = movimiento.id;
     }
 
-    return (await client.query(
+    const mantenimiento = (await client.query(
       `INSERT INTO campo_mantenimientos
          (fecha, activo_id, tipo, componente, detalle, lectura, unidad_lectura,
           proxima_fecha, proxima_lectura, proveedor, factura, costo, cuenta_id,
@@ -795,6 +795,24 @@ campoRouter.post("/mantenimientos", asyncRoute(async (req, res) => {
        body.costo > 0 ? body.cuenta_id : null, movimientoId,
        body.observaciones || null, userId(req)]
     )).rows[0];
+    // Reutiliza el historial oficial que ya existe en Caja principal. No crea
+    // otro movimiento de caja: el egreso de Campo ya se registro arriba.
+    await client.query(
+      `INSERT INTO equipment_maintenance
+         (equipment_id, area, section, maquina, maintenance_type, description,
+          provider, invoice_number, amount, created_by, created_at,
+          work_done, next_maintenance_date, status, campo_mantenimiento_id)
+       VALUES (NULL, 'TRANSPORTE Y COSECHADORA', $1, $2, $3, $4,
+               $5, $6, $7, $8,
+               ((COALESCE($9::date, CURRENT_DATE) + TIME '12:00') AT TIME ZONE 'America/Guayaquil'),
+               $4, $10, 'COMPLETADO', $11)
+       ON CONFLICT (campo_mantenimiento_id)
+       WHERE campo_mantenimiento_id IS NOT NULL DO NOTHING`,
+      [activo.tipo, activo.nombre, body.tipo, body.detalle,
+       body.proveedor || null, body.factura || null, body.costo, userId(req),
+       body.fecha ?? null, body.proxima_fecha || null, mantenimiento.id]
+    );
+    return mantenimiento;
   });
   res.status(201).json(row);
 }));
@@ -847,6 +865,14 @@ campoRouter.post("/movimientos/:id/reversar", asyncRoute(async (req, res) => {
     await client.query(
       "UPDATE campo_mantenimientos SET anulado_at = now(), anulado_por = $2 WHERE movimiento_id = $1 AND anulado_at IS NULL",
       [mov.id, uid]
+    );
+    await client.query(
+      `UPDATE equipment_maintenance em
+          SET status = 'ANULADO'
+         FROM campo_mantenimientos mt
+        WHERE mt.movimiento_id = $1
+          AND em.campo_mantenimiento_id = mt.id`,
+      [mov.id]
     );
     return { original_id: mov.id, reversion };
   });
