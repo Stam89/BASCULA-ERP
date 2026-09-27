@@ -49,6 +49,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Sacos: el cliente elige el saco del sobrante (2026-09-27)
+
+- Nueva columna `sales_order_items.sobrante_saco_lb` (migracion `20261040_sobrante_saco_pedido.sql`; NULL = automatico). `orderItemSchema` la acepta en POST/PUT de pedidos y el listado la devuelve.
+- `planDeSacos(qq, peso, tamanos, sobranteSacoLb?)`: si el cliente eligio un saco de la marca para el sobrante, se usan `ceil(sobrante / ese peso)` sacos; si ese saco ya no existe, vuelve a automatico. 6 QQ en 98 LB: auto 6x100 + 1x25; elige 10 LB -> 6x100 + 2x10; elige 100 -> 7x100.
+- Ventas: al armar la linea, si hay sobrante aparece "Saco para el sobrante (N lb)" con Automatico o cada saco de la marca; el carrito muestra "Sobrante en saco de X LB". Editar pedido conserva la eleccion.
+- Verificado en BEGIN...ROLLBACK con la base real + tests (sacos.test.ts 14).
+
 ### Sacos: empaque automatico (sin saco de 50 LB, pesos personalizados) (2026-09-27)
 
 - La planta NO tiene sacos de 50 LB. Migracion `20261038_sacos_sin_50lb.sql` borra los sacos de marca de 50 LB sin stock ni movimientos (o los desactiva si tuvieran historial). La presentacion de venta `50lb` se conserva.

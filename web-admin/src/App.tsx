@@ -5,7 +5,7 @@ import { money, categoryLabel, stockGroupLabel, formatPersonName } from "./forma
 import type { Farmer, Product, Warehouse, Lot, MateriaPrimaEntry, MateriaPrimaCorreccion, PendingEntry } from "./types";
 import { Metric, ReportTable, Input, Select, MedidorRow, DataList } from "./components/ui";
 import { ClienteSearchInput } from "./components/ClienteSearchInput";
-import { planDeSacos, SacosAlertaDashboard, SacosCatalogoConfig, SacosTablero } from "./components/SacosModule";
+import { planDeSacos, sobranteLb, SacosAlertaDashboard, SacosCatalogoConfig, SacosTablero } from "./components/SacosModule";
 import * as XLSX from "xlsx";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
 
@@ -2867,6 +2867,8 @@ export function App() {
     weight_lb: number | null;
     quantity: number;
     unit_price: number;
+    /** Saco (lb) que pidió el cliente para el SOBRANTE; null = automático. */
+    sobrante_saco_lb?: number | null;
   };
   const [saleLineItems, setSaleLineItems] = useState<SaleLineItem[]>([]);
   // Pedidos de venta (preventa) y forma de pago elegida al despachar cada uno.
@@ -2935,6 +2937,8 @@ export function App() {
   // cliente). Se guarda en el pedido solo con su nombre ("98 LB"); los sacos se
   // calculan con la regla automática de empaque (planDeSacos).
   const [saleLineOtroPesoLb, setSaleLineOtroPesoLb] = useState("");
+  // Saco elegido por el cliente para el SOBRANTE de la línea ("" = automático).
+  const [saleLineSobranteLb, setSaleLineSobranteLb] = useState("");
 
   // Sub-tab Fomentos en Caja
   const [cajaFomentoId, setCajaFomentoId] = useState("");
@@ -6703,10 +6707,12 @@ export function App() {
       presentation_name: presentation ? `${presentation.name}` : "",
       weight_lb: presentation && presentation.weight_lb ? Number(presentation.weight_lb) : null,
       quantity: Number(saleLineForm.quantity),
-      unit_price: Number(saleLineForm.unit_price)
+      unit_price: Number(saleLineForm.unit_price),
+      sobrante_saco_lb: Number(saleLineSobranteLb) > 0 ? Number(saleLineSobranteLb) : null
     };
     setSaleLineItems(prev => [...prev, newItem]);
     setSaleLineOtroPesoLb("");
+    setSaleLineSobranteLb("");
     setSaleLineForm({ product_id: "", presentation_id: "", quantity: "", unit_price: "" });
     setSaleProductPresentations([]);
     setSelectedPresentationId("");
@@ -6855,6 +6861,7 @@ export function App() {
   function handleSalePresentationChange(presentationId: string) {
     setSaleLineForm((prev) => ({ ...prev, presentation_id: presentationId }));
     if (presentationId !== PRES_OTRO_PESO) setSaleLineOtroPesoLb("");
+    setSaleLineSobranteLb("");
     const idSugerencia = presentationId === PRES_OTRO_PESO ? "" : presentationId;
     if (saleLineForm.product_id) sugerirPrecioLinea(saleLineForm.product_id, idSugerencia).catch(() => undefined);
   }
@@ -9913,7 +9920,8 @@ export function App() {
         presentation_name: line.presentation_name || undefined,
         inventory_product_id: inventoryProductId || line.product_id,
         quantity: line.quantity,
-        unit_price: line.unit_price
+        unit_price: line.unit_price,
+        sobrante_saco_lb: line.sobrante_saco_lb ?? null
       };
     });
 
@@ -10309,7 +10317,7 @@ export function App() {
    * y al guardar se reemplazan; la cuenta por cobrar se ajusta sola.
    */
   async function editarPedido(order: SalesOrder) {
-    const detalle = await apiGet<{ items: Array<{ product_id: string; presentation_id: string | null; presentation_name: string | null; quantity: string | number; unit_price: string | number }>; delivery_date: string | null; notes: string | null; customer_id: string }>(`/orders/${order.id}`);
+    const detalle = await apiGet<{ items: Array<{ product_id: string; presentation_id: string | null; presentation_name: string | null; quantity: string | number; unit_price: string | number; sobrante_saco_lb?: string | number | null }>; delivery_date: string | null; notes: string | null; customer_id: string }>(`/orders/${order.id}`);
     setSaleLineItems(detalle.items.map((it, i) => ({
       id: `edit-${i}`,
       product_id: it.product_id,
@@ -10317,7 +10325,8 @@ export function App() {
       presentation_name: it.presentation_name ?? "",
       weight_lb: null,
       quantity: Number(it.quantity),
-      unit_price: Number(it.unit_price)
+      unit_price: Number(it.unit_price),
+      sobrante_saco_lb: Number(it.sobrante_saco_lb) > 0 ? Number(it.sobrante_saco_lb) : null
     })));
     setSelectedCustomerId(detalle.customer_id);
     setCustomerSearch(order.customer_name);
@@ -10340,7 +10349,8 @@ export function App() {
         presentation_name: line.presentation_name || undefined,
         inventory_product_id: inventoryProductId || line.product_id,
         quantity: line.quantity,
-        unit_price: line.unit_price
+        unit_price: line.unit_price,
+        sobrante_saco_lb: line.sobrante_saco_lb ?? null
       };
     });
     const r = await apiPut<{ order_number: string; total_amount: string | number }>(`/orders/${pedidoEditando}`, { items });
@@ -14104,18 +14114,36 @@ export function App() {
                         : null;
                     }
                     const q = Number(saleLineForm.quantity) || 0;
-                    const plan = planDeSacos(q, wl, sacosMarca.map((sk) => Number(sk.peso_lb)));
+                    const tamanos = [...new Set(sacosMarca.map((sk) => Number(sk.peso_lb)))].sort((a, b) => b - a);
+                    const sobra = sobranteLb(q, wl);
+                    const elegidoLb = Number(saleLineSobranteLb) > 0 && tamanos.includes(Number(saleLineSobranteLb)) ? Number(saleLineSobranteLb) : null;
+                    const plan = planDeSacos(q, wl, tamanos, elegidoLb);
                     const filas = plan.map((pl) => {
                       const sk = sacosMarca.find((x) => Number(x.peso_lb) === pl.peso);
                       return { tipo: sk?.tipo ?? `${pl.peso} LB`, sacos: pl.sacos, stock: Number(sk?.stock ?? 0) };
                     });
                     const falta = filas.some((f) => f.sacos > f.stock);
                     return (
+                      <>
+                      {/* El CLIENTE puede pedir el sobrante en otro saco de la marca. */}
+                      {sobra > 0 && (
+                        <label style={{ display: "block", marginTop: 6, fontSize: 12 }}>
+                          <span>Saco para el sobrante ({sobra.toLocaleString("es-EC")} lb)</span>
+                          <select value={elegidoLb ? String(elegidoLb) : ""} onChange={(e) => setSaleLineSobranteLb(e.target.value)}
+                            style={{ width: "100%", padding: 6, border: "1px solid #d1d5db", borderRadius: 4, fontSize: 12.5 }}>
+                            <option value="">Automático (el saco más pequeño donde cabe)</option>
+                            {tamanos.map((t) => (
+                              <option key={t} value={t}>Saco de {t} LB → {Math.ceil(sobra / t - 1e-9)} saco{Math.ceil(sobra / t - 1e-9) === 1 ? "" : "s"}</option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
                       <small style={{ display: "block", marginTop: 4, fontWeight: 700, color: falta ? "#b91c1c" : "#15803d" }}>
                         🧺 {filas.length
                           ? `Sacos a usar: ${filas.map((f) => `${f.sacos} × ${f.tipo} (hay ${f.stock.toLocaleString("es-EC")})`).join(" + ")}${falta ? " · ⚠️ no alcanzan (quedará en negativo)" : ""}`
                           : `Sacos en bodega: ${sacosMarca.map((sk) => `${sk.tipo}: ${Number(sk.stock).toLocaleString("es-EC")}`).join(" · ")}`}
                       </small>
+                      </>
                     );
                   })()}
                 </label>
@@ -14224,7 +14252,10 @@ export function App() {
                                 {excede && <small style={{ display: "block", color: "#b91c1c", fontWeight: 700 }}>⚠ Supera la cobertura libre ({respaldo.coberturaLibreQq.toFixed(2)} QQ)</small>}
                                 {requiereProduccion && <small style={{ display: "block", color: "#b45309", fontWeight: 700 }}>🌾 Respaldado por cáscara · pendiente de producir</small>}
                               </td>
-                              <td style={{ padding: "8px 10px" }}>{item.presentation_name || "—"}</td>
+                              <td style={{ padding: "8px 10px" }}>
+                                {item.presentation_name || "—"}
+                                {item.sobrante_saco_lb ? <small style={{ display: "block", color: "#0f766e", fontWeight: 700 }}>Sobrante en saco de {item.sobrante_saco_lb} LB</small> : null}
+                              </td>
                               <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>{qq.toFixed(2)}</td>
                               <td style={{ padding: "8px 10px", textAlign: "right", color: "#2563eb" }} title="Bultos físicos = QQ × factor de la presentación (para la Guía)">{bultosDeLinea(item).toFixed(0)}</td>
                               <td style={{ padding: "8px 10px", textAlign: "right" }}>${item.unit_price.toFixed(2)}</td>

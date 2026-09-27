@@ -32,7 +32,12 @@ type Estado = "NEGATIVO" | "BAJO" | "SIN_STOCK" | "OK";
  * en el saco más pequeño registrado donde cabe y el sobrante en el más pequeño
  * que lo contiene. 10 QQ en 50 LB → 20 × 100 LB; 100 QQ en 98 LB → 102 × 100 LB + 1 × 10 LB.
  */
-export function planDeSacos(qq: number, pesoPresentacion: number, tamanos: number[]): Array<{ peso: number; sacos: number }> {
+export function planDeSacos(
+  qq: number,
+  pesoPresentacion: number,
+  tamanos: number[],
+  sobranteSacoLb?: number | null
+): Array<{ peso: number; sacos: number }> {
   const tam = [...new Set(tamanos.filter((t) => t > 0))].sort((a, b) => a - b);
   if (!(qq > 0) || !(pesoPresentacion > 0) || !tam.length) return [];
   const cabe = (lb: number) => tam.find((t) => t >= lb - 1e-6) ?? tam[tam.length - 1];
@@ -42,8 +47,11 @@ export function planDeSacos(qq: number, pesoPresentacion: number, tamanos: numbe
   const plan = new Map<number, number>();
   if (llenos > 0) plan.set(cabe(pesoPresentacion), llenos);
   if (sobrante > 0.01) {
-    const t = cabe(sobrante);
-    plan.set(t, (plan.get(t) ?? 0) + 1);
+    // Saco elegido por el cliente para el sobrante (los que hagan falta).
+    const elegido = sobranteSacoLb && tam.includes(Number(sobranteSacoLb)) ? Number(sobranteSacoLb) : null;
+    const t = elegido ?? cabe(sobrante);
+    const n = elegido ? Math.ceil(sobrante / elegido - 1e-9) : 1;
+    plan.set(t, (plan.get(t) ?? 0) + n);
   }
   return [...plan.entries()].map(([peso, sacos]) => ({ peso, sacos })).sort((a, b) => b.peso - a.peso);
 }
@@ -83,6 +91,15 @@ function filaDe(s: Saco): string {
   if (s.categoria === "MARCA" && s.marca) return s.marca;
   if (s.categoria === "GENERICO") return "Sin marca (genérico)";
   return s.tipo;
+}
+
+/** Libras que sobran tras llenar los bultos completos de la presentación (0 si es exacto). */
+export function sobranteLb(qq: number, pesoPresentacion: number): number {
+  if (!(qq > 0) || !(pesoPresentacion > 0)) return 0;
+  const totalLb = Math.round(qq * 100 * 1000) / 1000;
+  const llenos = Math.floor(totalLb / pesoPresentacion + 1e-6);
+  const s = Math.round((totalLb - llenos * pesoPresentacion) * 1000) / 1000;
+  return s > 0.01 ? s : 0;
 }
 
 const ORDEN_GRUPO = ["Arroz 0.11", "Arroz Corriente", "Otras marcas", "Subproductos", "Genéricos"];

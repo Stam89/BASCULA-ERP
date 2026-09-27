@@ -46,3 +46,21 @@ describe("planDeSacos (empaque automático con los sacos registrados)", () => {
     expect(planDeSacos(0, 50, MARCA)).toEqual([]);
   });
 });
+
+describe("planDeSacos con saco del sobrante elegido por el cliente", () => {
+  const MARCA = [100, 25, 10];
+  it("6 QQ en 98 LB (sobran 12 lb)", () => {
+    expect(planDeSacos(6, 98, MARCA)).toEqual([{ peso: 100, sacos: 6 }, { peso: 25, sacos: 1 }]); // automático
+    expect(planDeSacos(6, 98, MARCA, 10)).toEqual([{ peso: 100, sacos: 6 }, { peso: 10, sacos: 2 }]);
+    expect(planDeSacos(6, 98, MARCA, 100)).toEqual([{ peso: 100, sacos: 7 }]);
+  });
+  it("100 QQ en 24 LB (sobran 16 lb) en sacos de 10 LB", () => {
+    expect(planDeSacos(100, 24, MARCA, 10)).toEqual([{ peso: 25, sacos: 416 }, { peso: 10, sacos: 2 }]);
+  });
+  it("sin sobrante, la elección no cambia nada", () => {
+    expect(planDeSacos(10, 50, MARCA, 10)).toEqual([{ peso: 100, sacos: 20 }]);
+  });
+  it("si el saco elegido ya no existe, vuelve a automático", () => {
+    expect(planDeSacos(6, 98, MARCA, 50)).toEqual([{ peso: 100, sacos: 6 }, { peso: 25, sacos: 1 }]);
+  });
+});

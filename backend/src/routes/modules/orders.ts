@@ -28,7 +28,9 @@ const orderItemSchema = z.object({
   presentation_name: z.string().optional(),
   inventory_product_id: z.string().uuid(),
   quantity: z.number().positive(),
-  unit_price: z.number().nonnegative()
+  unit_price: z.number().nonnegative(),
+  // Saco que pidió el cliente para el SOBRANTE (lb). Vacío = automático.
+  sobrante_saco_lb: z.number().positive().nullable().optional()
 });
 
 ordersRouter.get("/", asyncRoute(async (req, res) => {
@@ -42,6 +44,7 @@ ordersRouter.get("/", asyncRoute(async (req, res) => {
                        'product_id', i.product_id,
                        'inventory_product_id', i.inventory_product_id,
                        'presentation_name', i.presentation_name,
+                       'sobrante_saco_lb', i.sobrante_saco_lb,
                        'quantity', i.quantity,
                        'unit_price', i.unit_price,
                        'total', i.total,
@@ -108,11 +111,12 @@ ordersRouter.post("/", asyncRoute(async (req, res) => {
     for (const item of body.items) {
       await client.query(
         `INSERT INTO sales_order_items
-         (order_id, product_id, presentation_id, presentation_name, inventory_product_id, quantity, unit_price, total)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+         (order_id, product_id, presentation_id, presentation_name, inventory_product_id, quantity, unit_price, total, sobrante_saco_lb)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
           order.rows[0].id, item.product_id, item.presentation_id ?? null, item.presentation_name ?? null,
-          item.inventory_product_id, item.quantity, item.unit_price, round2(item.quantity * item.unit_price)
+          item.inventory_product_id, item.quantity, item.unit_price, round2(item.quantity * item.unit_price),
+          item.sobrante_saco_lb ?? null
         ]
       );
     }
@@ -331,11 +335,12 @@ ordersRouter.put("/:id", asyncRoute(async (req, res) => {
     for (const item of body.items) {
       await client.query(
         `INSERT INTO sales_order_items
-         (order_id, product_id, presentation_id, presentation_name, inventory_product_id, quantity, unit_price, total)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+         (order_id, product_id, presentation_id, presentation_name, inventory_product_id, quantity, unit_price, total, sobrante_saco_lb)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
           req.params.id, item.product_id, item.presentation_id ?? null, item.presentation_name ?? null,
-          item.inventory_product_id, item.quantity, item.unit_price, round2(item.quantity * item.unit_price)
+          item.inventory_product_id, item.quantity, item.unit_price, round2(item.quantity * item.unit_price),
+          item.sobrante_saco_lb ?? null
         ]
       );
     }

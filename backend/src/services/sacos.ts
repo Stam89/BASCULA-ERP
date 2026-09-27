@@ -61,7 +61,12 @@ export async function pesoDePresentacion(
  *                        + sobrante 4 lb en 1 saco de 10 LB.
  * `tamanos` = pesos de saco disponibles (activos) para ese producto.
  */
-export function planDeSacos(qq: number, pesoPresentacion: number, tamanos: number[]): Array<{ peso: number; sacos: number }> {
+export function planDeSacos(
+  qq: number,
+  pesoPresentacion: number,
+  tamanos: number[],
+  sobranteSacoLb?: number | null
+): Array<{ peso: number; sacos: number }> {
   const tam = [...new Set(tamanos.filter((t) => t > 0))].sort((a, b) => a - b);
   if (!(qq > 0) || !(pesoPresentacion > 0) || !tam.length) return [];
   const cabe = (lb: number) => tam.find((t) => t >= lb - 1e-6) ?? tam[tam.length - 1];
@@ -71,8 +76,13 @@ export function planDeSacos(qq: number, pesoPresentacion: number, tamanos: numbe
   const plan = new Map<number, number>();
   if (llenos > 0) plan.set(cabe(pesoPresentacion), llenos);
   if (sobrante > 0.01) {
-    const t = cabe(sobrante);
-    plan.set(t, (plan.get(t) ?? 0) + 1);
+    // El CLIENTE puede pedir el sobrante en otro saco de la marca: se usan los
+    // que hagan falta (12 lb en sacos de 10 LB → 2). Si ese saco ya no existe,
+    // se vuelve a la regla automática.
+    const elegido = sobranteSacoLb && tam.includes(Number(sobranteSacoLb)) ? Number(sobranteSacoLb) : null;
+    const t = elegido ?? cabe(sobrante);
+    const n = elegido ? Math.ceil(sobrante / elegido - 1e-9) : 1;
+    plan.set(t, (plan.get(t) ?? 0) + n);
   }
   return [...plan.entries()].map(([peso, sacos]) => ({ peso, sacos })).sort((a, b) => b.peso - a.peso);
 }
@@ -142,7 +152,8 @@ export async function descontarSacosPedido(client: PoolClient, orderId: string):
   const order = await client.query("SELECT order_number FROM sales_orders WHERE id = $1", [orderId]);
   const numero = order.rows[0]?.order_number ?? orderId;
   const items = await client.query(
-    `SELECT i.product_id, i.presentation_id, i.presentation_name, i.quantity::float AS quantity, p.code, p.name, p.product_type
+    `SELECT i.product_id, i.presentation_id, i.presentation_name, i.quantity::float AS quantity,
+            i.sobrante_saco_lb::float AS sobrante_saco_lb, p.code, p.name, p.product_type
      FROM sales_order_items i JOIN products p ON p.id = i.product_id
      WHERE i.order_id = $1`,
     [orderId]
@@ -169,7 +180,7 @@ export async function descontarSacosPedido(client: PoolClient, orderId: string):
     }
     // Marca o genérico: plan de empaque con los tamaños registrados.
     const porPeso = new Map(cand.sacos.map((sk) => [Number(sk.peso_lb), sk]));
-    for (const { peso: pesoSaco, sacos } of planDeSacos(qq, peso, [...porPeso.keys()])) {
+    for (const { peso: pesoSaco, sacos } of planDeSacos(qq, peso, [...porPeso.keys()], it.sobrante_saco_lb)) {
       sumar(porPeso.get(pesoSaco)!, sacos);
     }
   }
