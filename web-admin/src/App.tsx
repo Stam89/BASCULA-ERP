@@ -2305,13 +2305,14 @@ export function App() {
   const SUBTABS_SOCIO = ["operacion", "tarifas", "socios"] as const;
   const tarjetaVisibleSocio = (tarjeta: string) =>
     tarjeta.startsWith("🏢 Datos del negocio") || tarjeta.startsWith("🛒 Tarifas por libra") ||
-    tarjeta.startsWith("🏦 Cuentas Bancarias") ||
+    tarjeta.startsWith("🏦 Cuentas Bancarias") || tarjeta.startsWith("💼 Personal administrativo") ||
     (tarjeta.startsWith("📦 Catálogo de sacos") && accionistaEnvejecidoHabilitado(accionistas.find((a) => a.id === activeAccionistaId)));
   const CONFIG_INDICE: AjusteIndex[] = [
     { sub: "estado", tarjeta: "Estado del sistema", claves: "salud api sincronizacion bascula respaldo backup usuarios accionistas diagnostico" },
     { sub: "operacion", tarjeta: "⚙️ Parámetros de planta", claves: "tarifa de pilado humedad base merma quintal" },
     { sub: "operacion", tarjeta: "🏢 Datos del negocio", claves: "nombre comercial ruc telefono direccion pie de comprobante encabezado ticket" },
     { sub: "operacion", tarjeta: "📦 Catálogo de sacos", claves: "mis sacos envejecido propios sacos marcas flor oso extra lira azul conejo 100 50 25 10 libras arroba stock minimo alerta precio eliminar agregar" },
+    { sub: "operacion", tarjeta: "💼 Personal administrativo", claves: "empleado empleados agregar trabajador oficina contadora sueldo administrativo quincenal cargo nomina" },
     { sub: "operacion", tarjeta: "🏷️ Categorías de caja", claves: "categoria ingreso egreso movimiento caja" },
     { sub: "operacion", tarjeta: "🔧 Categorías de Mantenimiento", claves: "areas tipos secciones sistemas equipos mantenimiento" },
     { sub: "operacion", tarjeta: "✅ Puesta en marcha", claves: "checklist pasos inicio configuracion inicial" },
@@ -7032,7 +7033,7 @@ export function App() {
     if (activeTab === "Servicio Pilado") { refreshPilado().catch(() => undefined); refreshCobros().catch(() => undefined); refreshServiceDriedLots().catch(() => undefined); loadLaborRates().catch(() => undefined); }
     if (activeTab === "Seleccion") { refreshSelection().catch(() => undefined); refreshSacks().catch(() => undefined); }
     if (activeTab === "Dashboard" && canSeePanel) refreshPanel().catch(() => undefined);
-    if (activeTab === "Configuracion") refreshConfig().catch(() => undefined);
+    if (activeTab === "Configuracion") { refreshConfig().catch(() => undefined); loadAdminStaff().catch(() => undefined); }
     if (activeTab === "Costos Operativos") refreshCostos().catch(() => undefined);
     if (activeTab === "Estados Financieros") loadFinanzas().catch((e) => addToast(e.message, "error"));
   }, [activeTab, motorActivo, activeAccionistaId]);
@@ -18992,7 +18993,7 @@ export function App() {
                 <div className="reportToolbar" style={{ marginBottom: 12 }}>
                   <div>
                     <h2 style={{ marginBottom: 2 }}>💼 Sueldo Administrativo</h2>
-                    <p className="muted" style={{ margin: 0 }}>Aquí solo se agrega y edita el personal de oficina de <strong>{accName}</strong> (cargo y sueldo quincenal). El pago se hace en la pestaña 💵 Pagos.</p>
+                    <p className="muted" style={{ margin: 0 }}>Personal de oficina de <strong>{accName}</strong>. Para agregar, editar o dar de baja empleados ve a <strong>Configuración → 💼 Personal administrativo</strong>. El pago se hace en la pestaña 💵 Pagos.</p>
                   </div>
                   <button type="button" className="btnSecondary" onClick={() => { loadAdminStaff().catch(() => undefined); loadAdminHistory().catch(() => undefined); }}>↻ Actualizar</button>
                 </div>
@@ -19006,19 +19007,12 @@ export function App() {
 
                 <div className="panelGrid" style={{ alignItems: "start" }}>
                   <div className="tablePanel">
-                    <form className="formPanel" onSubmit={submitAdminStaff} style={{ marginBottom: 12 }}>
-                      <h3 style={{ margin: "0 0 4px" }}>{adminEditId ? "Editar empleado" : "Agregar empleado"}</h3>
-                      <label><span>Cargo</span><input value={adminStaffForm.cargo} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, cargo: e.target.value })} placeholder="Ej. Contadora, Oficina" /></label>
-                      <label><span>Trabajador</span><input value={adminStaffForm.worker_name} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, worker_name: e.target.value })} placeholder="Nombre y apellido" /></label>
-                      <label><span>Sueldo base (quincenal)</span><input type="number" step="0.01" min="0" value={adminStaffForm.base_salary} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, base_salary: e.target.value })} placeholder="0.00" /></label>
-                      <div className="buttonRow">
-                        <button type="submit" className="primary">{adminEditId ? "Guardar" : "+ Agregar"}</button>
-                        {adminEditId && <button type="button" onClick={() => { setAdminEditId(null); setAdminStaffForm({ cargo: "", worker_name: "", base_salary: "" }); }}>Cancelar</button>}
-                      </div>
-                    </form>
+                    <div className="buttonRow" style={{ marginBottom: 12 }}>
+                      <button type="button" className="primary" onClick={() => { setConfigSubTab("operacion"); irATab("Configuracion"); }}>➕ Agregar / editar empleados en Configuración</button>
+                    </div>
 
                     {adminStaff.length === 0 ? (
-                      <div className="emptyState"><div className="emptyIcon">💼</div><p>Aún no hay personal administrativo para {accName}. Agrégalo con el formulario de arriba.</p></div>
+                      <div className="emptyState"><div className="emptyIcon">💼</div><p>Aún no hay personal administrativo para {accName}. Agrégalo en Configuración → 💼 Personal administrativo.</p></div>
                     ) : (
                       <div style={{ overflowX: "auto" }}>
                         <table className="cajaTable">
@@ -19031,10 +19025,7 @@ export function App() {
                                   <td>{st.cargo || "—"}</td>
                                   <td style={{ fontWeight: 600 }}>{st.worker_name}<div style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>{ult ? `último pago: ${new Date(ult).toLocaleDateString("es-EC")}` : "aún sin pagar"}</div></td>
                                   <td className="num" style={{ fontWeight: 700 }}>{money(st.base_salary)}</td>
-                                  <td className="num" style={{ whiteSpace: "nowrap" }}>
-                                    <button type="button" className="btnGhost" title="Editar" onClick={() => editAdminStaff(st)}>✏️</button>
-                                    <button type="button" className="btnGhost" title="Dar de baja" style={{ marginLeft: 6 }} onClick={() => removeAdminStaff(st)}>🗑</button>
-                                  </td>
+                                  <td />
                                 </tr>
                               );
                             })}
@@ -21102,6 +21093,58 @@ export function App() {
                 </div>
               </section>
             )}
+
+            {/* ── Personal administrativo (sueldos) del accionista ACTIVO ──
+                Aquí se agregan/editan/dan de baja los empleados de oficina de la
+                Matriz o de cada socio. El PAGO sigue en Nómina → 💵 Pagos. Mismas
+                funciones que antes estaban en Nómina (submitAdminStaff, etc.). */}
+            {configSubTab === "operacion" && (() => {
+              const accName = accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "—";
+              const totalStaff = adminStaff.reduce((sum, r) => sum + (r.base_salary ?? 0), 0);
+              return (
+              <section className="panelGrid">
+                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>💼 Personal administrativo <span className="muted" style={{ fontWeight: 400 }}>(empleados de oficina de {accName} · sueldo quincenal)</span></summary>
+                  <p className="muted" style={{ margin: "6px 0 10px" }}>Agrega aquí al personal de oficina (cargo y sueldo base quincenal). El pago se hace en <strong>Nómina → 💵 Pagos</strong> en las fechas de corte.</p>
+                  <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.4fr)", gap: 14, alignItems: "start" }} className="configPersonalGrid">
+                    <form onSubmit={submitAdminStaff} style={{ display: "grid", gap: 8, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: 12 }}>
+                      <strong style={{ fontSize: 13.5 }}>{adminEditId ? "✏️ Editar empleado" : "➕ Agregar empleado"}</strong>
+                      <label><span>Cargo</span><input value={adminStaffForm.cargo} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, cargo: e.target.value })} placeholder="Ej. Contadora, Oficina" /></label>
+                      <label><span>Trabajador</span><input value={adminStaffForm.worker_name} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, worker_name: e.target.value })} placeholder="Nombre y apellido" /></label>
+                      <label><span>Sueldo base (quincenal)</span><input type="number" step="0.01" min="0" value={adminStaffForm.base_salary} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, base_salary: e.target.value })} placeholder="0.00" /></label>
+                      <div className="buttonRow">
+                        <button type="submit" className="primary">{adminEditId ? "Guardar" : "+ Agregar"}</button>
+                        {adminEditId && <button type="button" onClick={() => { setAdminEditId(null); setAdminStaffForm({ cargo: "", worker_name: "", base_salary: "" }); }}>Cancelar</button>}
+                      </div>
+                    </form>
+                    {adminStaff.length === 0 ? (
+                      <div className="emptyState" style={{ padding: "22px 20px" }}><div className="emptyIcon">💼</div><p>Aún no hay personal administrativo para {accName}.</p></div>
+                    ) : (
+                      <div style={{ overflowX: "auto" }}>
+                        <table className="cajaTable">
+                          <thead><tr><th>Cargo</th><th>Trabajador</th><th className="num">Sueldo base</th><th /></tr></thead>
+                          <tbody>
+                            {adminStaff.map((st) => (
+                              <tr key={st.id}>
+                                <td>{st.cargo || "—"}</td>
+                                <td style={{ fontWeight: 600 }}>{st.worker_name}</td>
+                                <td className="num" style={{ fontWeight: 700 }}>{money(st.base_salary)}</td>
+                                <td className="num" style={{ whiteSpace: "nowrap" }}>
+                                  <button type="button" className="btnGhost" title="Editar" onClick={() => editAdminStaff(st)}>✏️</button>
+                                  <button type="button" className="btnGhost" title="Dar de baja" style={{ marginLeft: 6 }} onClick={() => removeAdminStaff(st)}>🗑</button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot><tr><td colSpan={2} style={{ fontWeight: 700 }}>TOTAL sueldos base (quincena)</td><td className="num" style={{ fontWeight: 700 }}>{money(totalStaff)}</td><td /></tr></tfoot>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </details>
+              </section>
+              );
+            })()}
 
             {/* ── Categorías de caja ── */}
             {/* Categorías de caja (Operación y Planta) */}

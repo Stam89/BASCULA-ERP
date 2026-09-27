@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Personal administrativo se gestiona en Configuracion (2026-09-27)
+
+- Configuracion -> Operacion y Planta / "🏢 Mi negocio" (socios) -> "💼 Personal administrativo": agregar, editar y dar de baja empleados de oficina del accionista ACTIVO (Matriz o socio). Reutiliza `submitAdminStaff`, `editAdminStaff`, `removeAdminStaff` y `/admin-payroll/staff` (sin cambios de API). Visible tambien para socios (`tarjetaVisibleSocio`).
+- Nomina -> Sueldo Administrativo queda como consulta (lista + historial) con boton "Agregar / editar empleados en Configuracion"; el pago sigue en Nomina -> 💵 Pagos.
+
 ### Mis cuentas bancarias: alta directa por socio (2026-09-27)
 
 - Configuracion ya no exige crear una apertura tipo BANCO desde Caja: el administrador puede usar `+ Agregar cuenta bancaria` dentro de `Mis cuentas bancarias`, indicando nombre, banco/tipo y numero.
