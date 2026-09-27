@@ -10,6 +10,7 @@ import { round2 } from "../../utils/rice-formulas.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { crearVenta } from "./sales.js";
 import { cobrarEmpaqueAlDespachar } from "../../services/cargo-empaque.js";
+import { descontarSacosPedido, restaurarSacosPedido, type ResultadoSacos } from "../../services/sacos.js";
 import { revertCuadrillaDespachoVentaEntry, upsertCuadrillaDespachoVentaEntry } from "./cuadrilla.js";
 import { consumeInventoryFIFO } from "../../services/inventory-consume.js";
 import { calculateOrderStockCoverage, rawBackingCode } from "../../utils/order-stock-coverage.js";
@@ -270,6 +271,8 @@ async function restaurarInventarioPreparacion(client: PoolClient, orderId: strin
     "DELETE FROM inventory_movements WHERE reference_type = 'sales_order' AND reference_id = $1 AND movement = 'OUT'",
     [orderId]
   );
+  // Los sacos descontados al preparar vuelven a la bodega (ENTRADA en el kárdex).
+  await restaurarSacosPedido(client, orderId);
   return r.rowCount ?? 0;
 }
 
@@ -384,6 +387,7 @@ ordersRouter.patch("/:id/prepare", asyncRoute(async (req, res) => {
     warehouse_id: z.string().uuid().optional()
   }).parse(req.body);
 
+  let sacos: ResultadoSacos | null = null;
   const result = await inTransaction(async (client) => {
     const order = await client.query(
       "SELECT id, status FROM sales_orders WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
@@ -411,8 +415,11 @@ ordersRouter.patch("/:id/prepare", asyncRoute(async (req, res) => {
         warehouseId,
         createdBy: body.prepared_by ?? null
       });
+      // Los SACOS (marca + peso vendidos) salen de la bodega de la matriz en este
+      // mismo momento. Idempotente; si falta stock no bloquea (queda negativo).
+      sacos = await descontarSacosPedido(client, req.params.id as string);
     } else {
-      // Revertir preparación: restaura el stock descontado.
+      // Revertir preparación: restaura el stock descontado (arroz y sacos).
       await restaurarInventarioPreparacion(client, req.params.id as string);
     }
 
@@ -428,7 +435,7 @@ ordersRouter.patch("/:id/prepare", asyncRoute(async (req, res) => {
     );
     return updated.rows[0];
   });
-  res.json(result);
+  res.json(sacos ? { ...result, sacos } : result);
 }));
 
 // Despachar y cobrar: el pedido se convierte en venta en UNA transacción.
@@ -546,10 +553,9 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
       accionista_id: accionistaId as string
     });
 
-    // NOTA: los sacos físicos NO se descuentan aquí. El producto que se despacha
-    // ya salió empacado de Producción/Selección, donde se descontó el saco de la
-    // bodega de la matriz. En la venta solo se mueve el producto terminado (en
-    // crearVenta) y, si aplica, el CARGO financiero por empaque (arriba).
+    // NOTA: los sacos físicos NO se descuentan aquí: ya salieron de la bodega de
+    // la matriz al CONFIRMAR LA PREPARACIÓN (descontarSacosPedido). En el despacho
+    // solo se registra la venta y, si aplica, el CARGO financiero por empaque.
 
     return { order_number: order.rows[0].order_number, sale, cargo_empaque: cargoEmpaque };
   });

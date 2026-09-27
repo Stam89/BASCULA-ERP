@@ -4,7 +4,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { descontarSacosPorTipo, tipoSacoEspecial } from "../../services/cargo-empaque.js";
+import { tipoSacoEspecial } from "../../services/cargo-empaque.js";
 import { nextCode } from "../../utils/codes.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import type { PoolClient } from "pg";
@@ -341,10 +341,10 @@ selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
       );
     }
 
-    // Descuento FÍSICO de sacos de la MATRIZ por el reempaque de lo que regresó,
-    // por presentación exacta (Saco 10/25/50/100 LB). El saco sale SIEMPRE de la
-    // bodega de la matriz (sack_inventory es única), sin importar el accionista.
-    const sacosMatriz = await descontarSacosPorTipo(tx, sacosPorTipo, `Empaque en selección (${label})`);
+    // SACOS: desde 2026-09 se descuentan al VENDER (Confirmar Preparación del
+    // pedido, por marca y peso). Selección ya no mueve el inventario de sacos; el
+    // conteo por presentación (`sacosPorTipo`) queda solo como dato informativo.
+    const sacosMatriz = [...sacosPorTipo.entries()].map(([tipo, sacos]) => ({ tipo, sacos, nuevo_stock: null as number | null }));
 
     const updated = await tx.query(
       `UPDATE selection_batches

@@ -28,10 +28,148 @@ async function assertMatriz(req: AuthenticatedRequest): Promise<void> {
 
 // GET todos los tipos de sacos con stock actual
 sacksRouter.get("/", asyncRoute(async (_req, res) => {
+  // Orden de catálogo: marcas (por nombre y peso de mayor a menor), luego
+  // subproductos y genéricos. `bajo_minimo` alimenta las alertas del Dashboard.
   const result = await pool.query(
-    "SELECT * FROM sack_inventory ORDER BY tipo"
+    `SELECT *, (stock_minimo > 0 AND stock <= stock_minimo) AS bajo_minimo
+     FROM sack_inventory
+     ORDER BY CASE categoria WHEN 'MARCA' THEN 0 WHEN 'SUBPRODUCTO' THEN 1 ELSE 2 END,
+              COALESCE(marca, tipo), peso_lb DESC NULLS LAST, tipo`
   );
   res.json(result.rows);
+}));
+
+// ── CATÁLOGO DE SACOS (Configuración) ──────────────────────────────────────
+// Alta de sacos de una MARCA en uno o varios pesos (100/50/25/10 LB) o de un
+// saco GENÉRICO "Saco N LB". Una marca nueva se crea también como producto
+// empacado (con sus presentaciones) para poder venderla y descontar su saco.
+const PESOS_VALIDOS = z.number().positive().max(1000);
+sacksRouter.post("/", asyncRoute(async (req, res) => {
+  await assertMatriz(req as AuthenticatedRequest);
+  const body = z.object({
+    categoria: z.enum(["MARCA", "GENERICO"]).default("MARCA"),
+    marca: z.string().trim().max(60).optional(),
+    calidad: z.enum(["0.11", "CORRIENTE"]).nullable().optional(),
+    pesos: z.array(PESOS_VALIDOS).min(1),
+    stock_minimo: z.number().int().nonnegative().default(0),
+    precio_compra_default: z.number().nonnegative().default(0),
+    precio_venta_cliente: z.number().nonnegative().default(0)
+  }).parse(req.body);
+  if (body.categoria === "MARCA" && !body.marca) throw new ApiError(400, "Escribe el nombre de la marca.");
+
+  const result = await inTransaction(async (client) => {
+    let productId: string | null = null;
+    let marca: string | null = null;
+    if (body.categoria === "MARCA") {
+      marca = body.marca!.replace(/\s+/g, " ").trim();
+      const prod = await client.query(
+        "SELECT id, name FROM products WHERE upper(name) = upper($1) ORDER BY is_active DESC LIMIT 1",
+        [marca]
+      );
+      if (prod.rowCount) {
+        productId = prod.rows[0].id;
+        marca = prod.rows[0].name;
+        await client.query("UPDATE products SET is_active = true WHERE id = $1", [productId]);
+      } else {
+        const code = `ARROZ-${marca.toUpperCase().normalize("NFD").replace(/\p{M}/gu, "").replace(/[^A-Z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
+        const choca = await client.query("SELECT 1 FROM products WHERE upper(code) = $1", [code]);
+        const created = await client.query(
+          `INSERT INTO products (code, name, product_type, unit, is_active)
+           VALUES ($1, $2, 'PACKAGED_GOOD', 'QQ', true) RETURNING id`,
+          [choca.rowCount ? `${code}-${Date.now().toString(36).slice(-4).toUpperCase()}` : code, marca]
+        );
+        productId = created.rows[0].id;
+      }
+    }
+
+    const creados: string[] = [];
+    const existentes: string[] = [];
+    for (const peso of [...new Set(body.pesos)]) {
+      const pesoTxt = String(peso);
+      const tipo = body.categoria === "MARCA" ? `${marca} ${pesoTxt} LB` : `Saco ${pesoTxt} LB`;
+      if (productId) {
+        const pres = await client.query(
+          "SELECT 1 FROM product_presentations WHERE product_id = $1 AND weight_lb = $2",
+          [productId, peso]
+        );
+        if (!pres.rowCount) {
+          await client.query(
+            "INSERT INTO product_presentations (product_id, name, weight_lb) VALUES ($1, $2, $3)",
+            [productId, `${pesoTxt}lb`, peso]
+          );
+        }
+      }
+      const prev = productId
+        ? await client.query("SELECT id, activo FROM sack_inventory WHERE product_id = $1 AND peso_lb = $2", [productId, peso])
+        : await client.query("SELECT id, activo FROM sack_inventory WHERE categoria = 'GENERICO' AND peso_lb = $1", [peso]);
+      if (prev.rowCount) {
+        if (prev.rows[0].activo) { existentes.push(tipo); continue; }
+        await client.query(
+          `UPDATE sack_inventory SET activo = true, calidad = COALESCE($2, calidad), stock_minimo = $3,
+                  precio_compra_default = $4, precio_venta_cliente = $5, updated_at = now() WHERE id = $1`,
+          [prev.rows[0].id, body.calidad ?? null, body.stock_minimo, body.precio_compra_default, body.precio_venta_cliente]
+        );
+        creados.push(`${tipo} (reactivado)`);
+        continue;
+      }
+      await client.query(
+        `INSERT INTO sack_inventory
+           (tipo, stock, categoria, marca, calidad, peso_lb, product_id, stock_minimo, precio_compra_default, precio_venta_cliente)
+         VALUES ($1, 0, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [tipo, body.categoria, marca, body.calidad ?? null, peso, productId, body.stock_minimo,
+         body.precio_compra_default, body.precio_venta_cliente]
+      );
+      creados.push(tipo);
+    }
+    return { creados, existentes };
+  });
+  res.status(201).json(result);
+}));
+
+// Edita los datos de control de un saco (no su stock: el stock solo cambia con
+// compras, ventas y movimientos, para que el kárdex siempre cuadre).
+sacksRouter.patch("/:id", asyncRoute(async (req, res) => {
+  await assertMatriz(req as AuthenticatedRequest);
+  const body = z.object({
+    stock_minimo: z.number().int().nonnegative().optional(),
+    precio_compra_default: z.number().nonnegative().optional(),
+    precio_venta_cliente: z.number().nonnegative().optional(),
+    calidad: z.enum(["0.11", "CORRIENTE"]).nullable().optional(),
+    activo: z.boolean().optional()
+  }).parse(req.body);
+  const result = await pool.query(
+    `UPDATE sack_inventory
+        SET stock_minimo = COALESCE($2, stock_minimo),
+            precio_compra_default = COALESCE($3, precio_compra_default),
+            precio_venta_cliente = COALESCE($4, precio_venta_cliente),
+            calidad = CASE WHEN $5::boolean THEN $6 ELSE calidad END,
+            activo = COALESCE($7, activo),
+            updated_at = now()
+      WHERE id = $1
+      RETURNING *`,
+    [req.params.id, body.stock_minimo ?? null, body.precio_compra_default ?? null, body.precio_venta_cliente ?? null,
+     body.calidad !== undefined, body.calidad ?? null, body.activo ?? null]
+  );
+  if (!result.rowCount) throw new ApiError(404, "Saco no encontrado");
+  res.json(result.rows[0]);
+}));
+
+// Eliminar: si el saco nunca tuvo movimientos se borra; si tiene historial se
+// DESACTIVA (conserva su kárdex y deja de aparecer en compras/ventas).
+sacksRouter.delete("/:id", asyncRoute(async (req, res) => {
+  await assertMatriz(req as AuthenticatedRequest);
+  const result = await inTransaction(async (client) => {
+    const s = await client.query("SELECT id, tipo, stock FROM sack_inventory WHERE id = $1 FOR UPDATE", [req.params.id]);
+    if (!s.rowCount) throw new ApiError(404, "Saco no encontrado");
+    const movs = await client.query("SELECT 1 FROM sack_movements WHERE sack_id = $1 LIMIT 1", [req.params.id]);
+    if (!movs.rowCount && Number(s.rows[0].stock) === 0) {
+      await client.query("DELETE FROM sack_inventory WHERE id = $1", [req.params.id]);
+      return { tipo: s.rows[0].tipo, resultado: "ELIMINADO" };
+    }
+    await client.query("UPDATE sack_inventory SET activo = false, updated_at = now() WHERE id = $1", [req.params.id]);
+    return { tipo: s.rows[0].tipo, resultado: "DESACTIVADO" };
+  });
+  res.json(result);
 }));
 
 // GET movimientos de un tipo de saco

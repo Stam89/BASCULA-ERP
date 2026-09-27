@@ -8,7 +8,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
 import { createLotProcessReport } from "../../utils/process-reports.js";
-import { descontarSacosPorPeso, descontarSacosPorTipo, tipoSacoEspecial } from "../../services/cargo-empaque.js";
+import { descontarSacosServicio } from "../../services/sacos.js";
 import { getMatrizId } from "../../services/matriz.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { createProductionWorkerPayments } from "./labor.js";
@@ -315,6 +315,12 @@ const finishProductionSchema = z.object({
   tulas: z.number().nonnegative().optional(),
   // QQ totales de las tulas: base INDEPENDIENTE del arroz pilado para pagar al pilador.
   qq_de_tulas: z.number().nonnegative().optional(),
+  // SERVICIO DE PILADA: el cliente pide su arroz en sacos de la planta (marca +
+  // peso). Se descuentan del inventario de sacos y se le cobran aparte.
+  sacos_servicio: z.array(z.object({
+    sack_id: z.string().uuid(),
+    cantidad: z.number().int().positive()
+  })).optional(),
   created_by: z.string().uuid().optional()
 });
 
@@ -596,47 +602,22 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       ? presLines.filter((p) => p.destino === "TULA").reduce((s, p) => s + (Number(p.tulas) || 0), 0)
       : Number(body.tulas ?? 0);
 
-    // TRAZABILIDAD: el egreso de sacos se registra SIEMPRE en el kardex de la
-    // MATRIZ (sack_inventory es tabla única; los socios no manejan stock de sacos),
-    // con la nota "…Lote [código] - Socio: [nombre]" y enlazado al proceso.
+    // SACOS: desde 2026-09 los sacos se descuentan al VENDER (Confirmar
+    // Preparación del pedido, por marca y peso), NO al pilar. Aquí solo se CUENTAN
+    // las sacas de arroz blanco en saco: son la base del pago del estibador.
+    // Excepción: Servicio de Pilada con sacos de la planta (más abajo).
     const lotCode = (batch.lot_code as string | null) ?? body.lot_id;
     const socioNombre = (batch.lot_accionista_name as string | null) ?? "Matriz";
-    const conceptoSacos = `Consumo de empaque por pilado de Lote ${lotCode} - Socio: ${socioNombre}`;
 
-    let sacosMatriz: Awaited<ReturnType<typeof descontarSacosPorPeso>> = [];
-    // Sacos comerciales de arroz blanco consumidos (para el pago por saca del
-    // pilador/estibador). SOLO las líneas en SACO; las de TULA se saltan.
+    let sacosMatriz: Array<{ tipo: string; sacos: number; nuevo_stock: number }> = [];
     const sacosPorPeso = new Map<number, number>();
     for (const p of presLines) {
-      if (p.destino === "TULA") continue; // tula reutilizable: no descuenta saco
+      if (p.destino === "TULA") continue; // tula reutilizable: no es saca
       if (!p.sack_weight_lb || p.sack_weight_lb <= 0) continue;
       const nSacos = Math.round((Number(p.quantity) * 100) / p.sack_weight_lb);
       if (nSacos > 0) sacosPorPeso.set(p.sack_weight_lb, (sacosPorPeso.get(p.sack_weight_lb) ?? 0) + nSacos);
     }
     const sacasArrozBlanco = [...sacosPorPeso.values()].reduce((a, b) => a + b, 0);
-    if (sacosPorPeso.size) {
-      sacosMatriz = await descontarSacosPorPeso(client, sacosPorPeso, conceptoSacos, processingBatchId);
-    }
-
-    // Subproductos (arrocillo/polvillo) empacados en sacos ESPECIALES sin peso
-    // fijo. El tipo lo fija el producto (Arrocillo→Saco Usado, Polvillo→Saco
-    // Negro); el nº de sacos usa el peso por saco indicado en la salida (variable
-    // según cliente: 95, 96, 100 lb…). sacos = QQ*100/peso_por_saco. Es
-    // independiente del destino del arroz blanco.
-    const sacosEspeciales = new Map<string, number>();
-    for (const item of outputs) {
-      if (!item.isByproduct) continue;
-      const peso = Number(item.output.sack_weight_lb);
-      if (!peso || peso <= 0) continue;
-      const tipo = tipoSacoEspecial(item.label);
-      if (!tipo) continue; // Rechazo u otros: sin saco especial
-      const nSacos = Math.round((Number(item.output.quantity) * 100) / peso);
-      if (nSacos > 0) sacosEspeciales.set(tipo, (sacosEspeciales.get(tipo) ?? 0) + nSacos);
-    }
-    if (sacosEspeciales.size) {
-      const esp = await descontarSacosPorTipo(client, sacosEspeciales, `${conceptoSacos} (subproductos)`, processingBatchId);
-      sacosMatriz.push(...esp);
-    }
 
     if (body.packaging_supply_id && sacksUsed > 0) {
       const supply = await client.query(
@@ -772,6 +753,36 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       );
       await client.query("UPDATE accounts_receivable SET reference_id = $2 WHERE id = $1", [receivableId, svc.rows[0].id]);
       if (payableId) await client.query("UPDATE accounts_payable SET reference_id = $2 WHERE id = $1", [payableId, svc.rows[0].id]);
+    }
+
+    // ── Sacos de la planta en un SERVICIO DE PILADA ──
+    // Solo cuando el grano es del cliente (maquila) y pidió sacos de la planta:
+    // se descuentan de la bodega de la matriz y nace una Cuenta por Cobrar aparte
+    // (cantidad × precio al cliente del saco), enlazada a este proceso.
+    let sacosServicio: { detalle: Array<{ tipo: string; sacos: number; precio: number; subtotal: number }>; total: number; receivable_id: string | null } | null = null;
+    if (isMaquila && body.sacos_servicio?.length) {
+      const cliente = clienteNombre
+        || (farmerId ? (await client.query("SELECT full_name FROM farmers WHERE id = $1", [farmerId])).rows[0]?.full_name : null)
+        || "cliente";
+      const r = await descontarSacosServicio(client, body.sacos_servicio, {
+        concepto: `Servicio de pilada · Lote ${lotCode} · Cliente: ${cliente}`,
+        processingBatchId
+      });
+      sacosMatriz = r.detalle.map((d) => ({ tipo: d.tipo, sacos: d.sacos, nuevo_stock: d.nuevo_stock }));
+      let sacosReceivableId: string | null = null;
+      if (r.total > 0) {
+        const desc = `Sacos para servicio de pilada a ${cliente} · Lote ${lotCode}: `
+          + r.detalle.map((d) => `${d.sacos} × ${d.tipo} a $${d.precio.toFixed(2)} = $${d.subtotal.toFixed(2)}`).join(" · ");
+        const ar = await client.query(
+          `INSERT INTO accounts_receivable
+           (accionista_id, farmer_id, reference_type, reference_id, description, amount, balance)
+           VALUES ($1, $2, 'sacos_servicio', $3, $4, $5, $5)
+           RETURNING id`,
+          [matrizId, farmerId ?? null, processingBatchId, desc, r.total]
+        );
+        sacosReceivableId = ar.rows[0].id;
+      }
+      sacosServicio = { detalle: r.detalle, total: r.total, receivable_id: sacosReceivableId };
     }
 
     const yieldPercent = round3((totalOutputKg / inputPaddyKg) * 100);
@@ -1004,6 +1015,7 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       yield: yieldResult.rows[0],
       packagingAlert,
       sacos_matriz: sacosMatriz,
+      sacos_servicio: sacosServicio,
       servicio_pilado: servicioPilado,
       maquila: isMaquila
         ? {

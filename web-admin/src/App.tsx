@@ -5,6 +5,7 @@ import { money, categoryLabel, stockGroupLabel, formatPersonName } from "./forma
 import type { Farmer, Product, Warehouse, Lot, MateriaPrimaEntry, MateriaPrimaCorreccion, PendingEntry } from "./types";
 import { Metric, ReportTable, Input, Select, MedidorRow, DataList } from "./components/ui";
 import { ClienteSearchInput } from "./components/ClienteSearchInput";
+import { SacosAlertaDashboard, SacosCatalogoConfig, SacosTablero } from "./components/SacosModule";
 import * as XLSX from "xlsx";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
 
@@ -747,6 +748,12 @@ type ProductionResult = {
     total: number;
     detalle: Array<{ presentacion: string; quintales: number; precio_total_qq: number; subtotal: number }>;
   };
+  // Servicio de Pilada con sacos de la planta: sacos descontados + CxC al cliente.
+  sacos_servicio?: null | {
+    detalle: Array<{ tipo: string; sacos: number; precio: number; subtotal: number }>;
+    total: number;
+    receivable_id: string | null;
+  };
   custodyMode: boolean;
 };
 
@@ -1204,6 +1211,16 @@ type SackInventory = {
   /** Precio de compra por defecto (autocompleta el "Precio unitario" en Caja). */
   precio_compra_default?: string | number;
   updated_at: string;
+  // Catálogo por marca y peso (Configuración → Catálogo de sacos).
+  categoria?: "MARCA" | "SUBPRODUCTO" | "GENERICO" | string;
+  marca?: string | null;
+  calidad?: string | null;
+  peso_lb?: number | string | null;
+  product_id?: string | null;
+  stock_minimo?: number | string;
+  precio_venta_cliente?: number | string;
+  activo?: boolean;
+  bajo_minimo?: boolean;
 };
 
 type SackMovement = {
@@ -2074,6 +2091,10 @@ export function App() {
   const [dryerEntries, setDryerEntries] = useState<DryerControlEntry[]>([]);
   const [millingReport, setMillingReport] = useState<MillingReportState>(defaultMillingReport);
   const [millingPiladoEntries, setMillingPiladoEntries] = useState<MillingPiladoEntry[]>([]);
+  // SERVICIO DE PILADA: sacos de la planta que pidió el cliente (se descuentan
+  // del inventario de sacos y se le cobran aparte al finalizar).
+  const [millingSacosServicio, setMillingSacosServicio] = useState<Array<{ sack_id: string; cantidad: number }>>([]);
+  const [millingSacoServicioForm, setMillingSacoServicioForm] = useState({ sack_id: "", cantidad: "" });
   const [millingPiladoPresentation, setMillingPiladoPresentation] = useState(piladoPresentations[4]);
   const [millingPiladoQq, setMillingPiladoQq] = useState("");
   // Destino/Empaque de la LÍNEA que se está agregando: TULA (→ Selección) o SACO
@@ -2269,6 +2290,7 @@ export function App() {
     { sub: "estado", tarjeta: "Estado del sistema", claves: "salud api sincronizacion bascula respaldo backup usuarios accionistas diagnostico" },
     { sub: "operacion", tarjeta: "⚙️ Parámetros de planta", claves: "tarifa de pilado humedad base merma quintal" },
     { sub: "operacion", tarjeta: "🏢 Datos del negocio", claves: "nombre comercial ruc telefono direccion pie de comprobante encabezado ticket" },
+    { sub: "operacion", tarjeta: "📦 Catálogo de sacos", claves: "sacos marcas flor oso extra lira azul conejo 100 50 25 10 libras arroba stock minimo alerta precio eliminar agregar" },
     { sub: "operacion", tarjeta: "🏷️ Categorías de caja", claves: "categoria ingreso egreso movimiento caja" },
     { sub: "operacion", tarjeta: "🔧 Categorías de Mantenimiento", claves: "areas tipos secciones sistemas equipos mantenimiento" },
     { sub: "operacion", tarjeta: "✅ Puesta en marcha", claves: "checklist pasos inicio configuracion inicial" },
@@ -3318,6 +3340,13 @@ export function App() {
       ? selectedProductionDrying.es_maquila
       : (selectedProductionDrying.lots ?? []).some(esServicioLot);
   }, [productionSource, selectedStockLot, selectedProductionDrying]);
+  // Los sacos de la planta elegidos para un servicio son de ESE lote: al cambiar
+  // de origen se descartan para no cobrarlos a otro cliente.
+  const millingSourceLotId = productionSource === "stock" ? selectedStockLot?.id : selectedProductionDrying?.lot_id;
+  useEffect(() => {
+    setMillingSacosServicio([]);
+    setMillingSacoServicioForm({ sack_id: "", cantidad: "" });
+  }, [millingSourceLotId]);
   // QQ escritos en 'Cantidad en QQ' que AÚN no se añadieron con [+ Añadir]. Cuentan
   // para habilitar el guardado y se auto-agregan al guardar/finalizar.
   const millingPiladoPendienteQq = useMemo(() => {
@@ -6377,24 +6406,6 @@ export function App() {
     await refreshSacks();
   }
 
-  // Guarda el precio de compra por defecto de un tipo de saco (tarifa de
-  // referencia editable). Solo si cambió, para no llamar por cada foco.
-  async function saveSackPrice(sack: SackInventory, nuevo: number) {
-    if (!Number.isFinite(nuevo) || nuevo < 0) return;
-    if (Number(sack.precio_compra_default ?? 0) === nuevo) return;
-    try {
-      await apiFetch(`/sacks/${sack.id}/precio`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ precio_compra_default: nuevo })
-      }).then((r) => { if (!r.ok) throw new Error("No se pudo guardar el precio"); });
-      await refreshSacks();
-      addToast(`Precio base de ${sack.tipo}: $${nuevo.toFixed(2)}`, "success");
-    } catch (err) {
-      addToast(err instanceof Error ? err.message : "Error al guardar el precio", "error");
-    }
-  }
-
   async function loadFomentoDetalle(id: string) {
     const data = await apiGet<FomentoDetalle>(`/fomentos/${id}`);
     setFomentoDetalle(data);
@@ -6691,14 +6702,19 @@ export function App() {
 
   // ── Mapeo de marcas a productos de inventario ──
   function getInventoryProductForBrand(brandName: string): string | null {
-    // Flor, Oso, Lira Verde, Lira Azul → Producto 0.11
-    if (['Flor', 'Oso', 'Lira Verde', 'Lira Azul'].includes(brandName)) {
+    // Flor, Oso, Extra, Lira Verde, Lira Azul → Producto 0.11
+    if (['Flor', 'Oso', 'Extra', 'Lira Verde', 'Lira Azul'].includes(brandName)) {
       return products.find(p => p.code === 'ARROZ-PILADO-011')?.id || null;
     }
     // Conejo → Producto Corriente
     if (brandName === 'Conejo') {
       return products.find(p => p.code === 'ARROZ-PILADO-CORRIENTE')?.id || null;
     }
+    // Marca nueva creada en Configuración → Catálogo de sacos: su calidad dice
+    // qué arroz base la respalda (0.11 o Corriente).
+    const calidadMarca = sackInventory.find((sk) => sk.categoria === "MARCA" && sk.marca?.toUpperCase() === brandName.toUpperCase())?.calidad;
+    if (calidadMarca === "0.11") return products.find(p => p.code === 'ARROZ-PILADO-011')?.id || null;
+    if (calidadMarca === "CORRIENTE") return products.find(p => p.code === 'ARROZ-PILADO-CORRIENTE')?.id || null;
     // Arrocillos y Polvillo → productos propios
     const prod = products.find(p => p.name === brandName);
     return prod?.id || null;
@@ -6869,7 +6885,13 @@ export function App() {
     // Gana: liquidación de rendimiento (lee el historial de producción del accionista)
     // + tarifas (fallback de la Tarifa de Pilada global si aún no hay lotes cargados).
     if (activeTab === "Gana") { loadProductionHistory().catch(() => undefined); loadLaborRates().catch(() => undefined); }
-    if (activeTab === "Ventas") refreshCustomersAndSales().catch(() => undefined);
+    if (activeTab === "Ventas") {
+      refreshCustomersAndSales().catch(() => undefined);
+      // Sacos por marca: stock visible al armar el pedido y marcas nuevas del catálogo.
+      refreshSacks().catch(() => undefined);
+    }
+    // Alerta de sacos bajo su mínimo (Dashboard) y Catálogo de sacos (Configuración).
+    if (activeTab === "Dashboard" || activeTab === "Configuracion") refreshSacks().catch(() => undefined);
     if (activeTab === "Compras") { refreshSuppliers().catch(() => undefined); refreshPurchases().catch(() => undefined); }
     if (activeTab === "Por Cobrar") refreshReceivables().catch(() => undefined);
     if (activeTab === "Por Pagar") refreshPayables().catch(() => undefined);
@@ -9658,10 +9680,14 @@ export function App() {
       // Nómina: el estibador cobra la porción en tulas (N.º de tulas) + la porción
       // en sacos (QQ/sacas). El backend recalcula todo desde el desglose.
       tulas: effMix.tulasCount,
-      qq_de_tulas: effMix.tulaQq
+      qq_de_tulas: effMix.tulaQq,
+      // Sacos de la planta para el cliente del servicio (solo maquila).
+      sacos_servicio: millingEsServicio && millingSacosServicio.length ? millingSacosServicio : undefined
     });
 
     setMillingYields(result);
+    setMillingSacosServicio([]);
+    setMillingSacoServicioForm({ sack_id: "", cantidad: "" });
     setProductionResult(production);
     setMillingPiladoEntries([]);
     setMillingReport(defaultMillingReport);
@@ -9687,6 +9713,15 @@ export function App() {
         (s.es_accionista ? ` · queda como Por Pagar de ${s.cliente}` : ` · a ${s.cliente} (cliente externo)`),
         "success"
       );
+    }
+    if (production.sacos_servicio && production.sacos_servicio.detalle.length) {
+      const ss = production.sacos_servicio;
+      addToast(
+        `Sacos para el servicio: ${ss.detalle.map((d) => `${d.sacos} × ${d.tipo}`).join(", ")}` +
+        (ss.total > 0 ? ` · Cuenta por Cobrar al cliente ${money(ss.total)}` : " · sin cobro (precio al cliente en $0)"),
+        "success"
+      );
+      refreshSacks().catch(() => undefined);
     }
     await loadMillingDrafts();
     await loadProductionHistory();
@@ -9883,20 +9918,34 @@ export function App() {
   // inventario ni plata; solo habilita el despacho. `prepared:false` lo revierte.
   async function prepararPedido(order: SalesOrder, prepared: boolean) {
     const location = (orderPickLocation[order.id] ?? order.picking_location ?? "").trim() || ubicacionSugerida;
-    await apiPatch<SalesOrder>(`/orders/${order.id}/prepare`, {
+    const prep = await apiPatch<SalesOrder & {
+      sacos?: { descontados: Array<{ tipo: string; sacos: number; nuevo_stock: number }>; sin_saco: Array<{ producto: string; peso_lb: number; sacos: number }> };
+    }>(`/orders/${order.id}/prepare`, {
       prepared,
       picking_location: location || undefined,
       prepared_by: authUser?.id,
-      // Al preparar se descuenta el inventario de la bodega de producto terminado.
+      // Al preparar se descuenta el inventario de la bodega de producto terminado
+      // y los SACOS de la marca + peso vendidos (bodega de la matriz).
       warehouse_id: finishedWarehouse?.id
     });
+    const sacosTxt = prep.sacos?.descontados.length
+      ? ` · Sacos: ${prep.sacos.descontados.map((d) => `${d.sacos} ${d.tipo}`).join(", ")}`
+      : "";
     addToast(
       prepared
-        ? `📦 Pedido ${order.order_number} preparado · Stock descontado · Listo para cargar${location ? ` · ${location}` : ""}`
-        : `Pedido ${order.order_number} devuelto a Pendiente por cargar · Stock restaurado`,
+        ? `📦 Pedido ${order.order_number} preparado · Stock descontado${sacosTxt} · Listo para cargar${location ? ` · ${location}` : ""}`
+        : `Pedido ${order.order_number} devuelto a Pendiente por cargar · Stock y sacos restaurados`,
       "success"
     );
+    const negativos = prep.sacos?.descontados.filter((d) => d.nuevo_stock < 0) ?? [];
+    if (negativos.length) {
+      addToast(`⚠️ Faltan sacos: ${negativos.map((d) => `${d.tipo} quedó en ${d.nuevo_stock}`).join(", ")}. Registra la compra en Caja.`, "warn");
+    }
+    if (prep.sacos?.sin_saco.length) {
+      addToast(`Sin saco registrado (no se descontó): ${prep.sacos.sin_saco.map((x) => `${x.producto} ${x.peso_lb} LB`).join(", ")}. Agrégalo en Configuración → Catálogo de sacos.`, "warn");
+    }
     await refreshCustomersAndSales();
+    refreshSacks().catch(() => undefined);
   }
 
   // Despachar y cobrar: el pedido se convierte en venta real (inventario +
@@ -10981,6 +11030,8 @@ export function App() {
 
         {activeTab === "Dashboard" && (
           <>
+            {/* Alerta de sacos en/bajo su stock mínimo (los sacos son de la Matriz). */}
+            {esMatrizActiva && <SacosAlertaDashboard sacos={sackInventory} onIr={() => setActiveTab("Inventario")} />}
             {canSeePanel && (
               <nav className="cajaSubNav">
                 <button type="button" className={dashView === "panel" ? "active" : ""} onClick={() => { setDashView("panel"); if (!panelData) refreshPanel().catch(() => undefined); }}>📊 Panel integral</button>
@@ -12657,41 +12708,19 @@ export function App() {
                   operativo no maneja empaques: se oculta por completo (tabla +
                   formulario de movimientos). Solo visible en contexto Matriz. */}
               {esMatrizActiva && (
-              <section style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
-                <h3 style={{ marginTop: 0, marginBottom: 14 }}>📦 Inventario de Sacos</h3>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 8, marginBottom: 14 }}>
-                  {sackInventory.map(s => (
-                    <div key={s.id} style={{
-                      background: Number(s.stock) <= 10 ? "#fef2f2" : "#f0fdf4",
-                      border: `1px solid ${Number(s.stock) <= 10 ? "#fecaca" : "#bbf7d0"}`,
-                      borderRadius: 8, padding: "10px", textAlign: "center"
-                    }}>
-                      <div style={{ fontSize: 11, color: "var(--c-muted)", fontWeight: 600, marginBottom: 4 }}>{s.tipo}</div>
-                      <div style={{ fontSize: 22, fontWeight: 800, color: Number(s.stock) <= 10 ? "#dc2626" : "#16a34a" }}>
-                        {Number(s.stock)}
-                      </div>
-                      {/* Precio base editable (autocompleta la compra en Caja). Guarda al salir del campo. */}
-                      <label style={{ display: "block", marginTop: 6, fontSize: 10, fontWeight: 600, color: "var(--c-muted)" }}>
-                        Precio base $
-                        <input
-                          type="number" min="0" step="0.01"
-                          defaultValue={Number(s.precio_compra_default ?? 0).toFixed(2)}
-                          key={`${s.id}-${s.precio_compra_default}`}
-                          onBlur={(e) => saveSackPrice(s, Number(e.target.value)).catch(() => undefined)}
-                          onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-                          title="Precio de compra por defecto; autocompleta el Precio unitario en Caja → Compra de Sacos"
-                          style={{ display: "block", width: "100%", marginTop: 3, padding: "4px 6px", borderRadius: 5, border: "1px solid #d1d5db", fontSize: 12, textAlign: "center" }}
-                        />
-                      </label>
-                    </div>
-                  ))}
+              <section style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, background: "#fbfdfc" }}>
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+                  <h3 style={{ margin: 0 }}>📦 Inventario de Sacos</h3>
+                  <span className="muted" style={{ fontSize: 12 }}>Marcas, pesos, mínimos y precios: Configuración → Operación y Planta → Catálogo de sacos</span>
                 </div>
+                <SacosTablero sacos={sackInventory} />
+                <div style={{ fontWeight: 700, fontSize: 13, margin: "14px 0 6px" }}>Movimiento manual (ajuste de bodega)</div>
                 <form onSubmit={submitSackMovement} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10, alignItems: "end", background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
                   <label style={{ fontSize: 12, fontWeight: 600 }}>Tipo
                     <select required value={sackMovForm.sack_id} onChange={e => setSackMovForm(p => ({ ...p, sack_id: e.target.value }))}
                       style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}>
                       <option value="">— Seleccionar —</option>
-                      {sackInventory.map(s => (<option key={s.id} value={s.id}>{s.tipo} ({Number(s.stock)})</option>))}
+                      {sackInventory.filter(s => s.activo !== false).map(s => (<option key={s.id} value={s.id}>{s.tipo} ({Number(s.stock)})</option>))}
                     </select>
                   </label>
                   <label style={{ fontSize: 12, fontWeight: 600 }}>Movimiento
@@ -13153,6 +13182,84 @@ export function App() {
                   ℹ️ El grano es del cliente: el arroz blanco y subproductos NO suman al Stock Comercial; se registran en custodia de terceros y se genera un <strong>Cobro por Servicio</strong> (tarifa × QQ) en «Gana · Serv. Pilada» y Cuentas por Cobrar.
                 </p>
               )}
+              {/* SERVICIO: el cliente pide su arroz en sacos de la PLANTA (marca +
+                  peso). Al finalizar se descuentan del inventario de sacos y se le
+                  cobran aparte (sacos × precio al cliente del Catálogo de sacos).
+                  Si el cliente trae sus propios sacos, no se agrega nada aquí. */}
+              {millingEsServicio && millingSource && (() => {
+                const disponibles = sackInventory.filter((sk) => sk.activo !== false && sk.categoria !== "SUBPRODUCTO");
+                const porId = new Map(sackInventory.map((sk) => [sk.id, sk]));
+                const elegido = porId.get(millingSacoServicioForm.sack_id);
+                // Sugerencia: sacos que ocupan las líneas EN SACO del mismo peso.
+                const pesoElegido = Number(elegido?.peso_lb) || 0;
+                const sugeridos = pesoElegido > 0
+                  ? millingPiladoEntries
+                    .filter((en) => en.destino !== "TULA" && sackWeightLbOf(en.presentation) === pesoElegido)
+                    .reduce((a, en) => a + Math.round((Number(en.quantityQq) * 100) / pesoElegido), 0)
+                  : 0;
+                const total = millingSacosServicio.reduce((a, l) => a + l.cantidad * Number(porId.get(l.sack_id)?.precio_venta_cliente ?? 0), 0);
+                const agregar = () => {
+                  const cantidad = Math.round(Number(millingSacoServicioForm.cantidad || sugeridos));
+                  if (!millingSacoServicioForm.sack_id || !(cantidad > 0)) { addToast("Elige el saco y la cantidad", "error"); return; }
+                  setMillingSacosServicio((cur) => {
+                    const i = cur.findIndex((l) => l.sack_id === millingSacoServicioForm.sack_id);
+                    if (i >= 0) return cur.map((l, k) => (k === i ? { ...l, cantidad: l.cantidad + cantidad } : l));
+                    return [...cur, { sack_id: millingSacoServicioForm.sack_id, cantidad }];
+                  });
+                  setMillingSacoServicioForm({ sack_id: "", cantidad: "" });
+                };
+                return (
+                  <div style={{ marginTop: 10, border: "1px solid #bfdbfe", background: "#f8fbff", borderRadius: 10, padding: "10px 12px" }}>
+                    <div style={{ fontWeight: 800, fontSize: 13, color: "#1e3a8a" }}>🧺 Sacos de la planta para el cliente <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span></div>
+                    <small className="muted" style={{ display: "block", margin: "2px 0 8px" }}>Si el cliente pide su arroz en sacos de la planta, agrégalos: se descuentan del inventario y se le cobran aparte. Si trae sus sacos, déjalo vacío.</small>
+                    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 2fr) minmax(0, 1fr) auto", gap: 8, alignItems: "end" }}>
+                      <label style={{ fontSize: 12 }}><span>Saco (marca + peso)</span>
+                        <select value={millingSacoServicioForm.sack_id} onChange={(e) => setMillingSacoServicioForm({ sack_id: e.target.value, cantidad: "" })}>
+                          <option value="">— Elegir saco —</option>
+                          {disponibles.map((sk) => (
+                            <option key={sk.id} value={sk.id}>{sk.tipo} · stock {Number(sk.stock)} · ${Number(sk.precio_venta_cliente ?? 0).toFixed(2)} c/u</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label style={{ fontSize: 12 }}><span>Cantidad</span>
+                        <input type="number" min="1" step="1" value={millingSacoServicioForm.cantidad}
+                          onChange={(e) => setMillingSacoServicioForm({ ...millingSacoServicioForm, cantidad: e.target.value })}
+                          placeholder={sugeridos > 0 ? `Sugerido ${sugeridos}` : "N.º sacos"} />
+                      </label>
+                      <button type="button" className="btnSecondary" onClick={agregar}>➕ Agregar</button>
+                    </div>
+                    {elegido && Number(elegido.stock) <= 0 && (
+                      <small style={{ display: "block", marginTop: 6, color: "#b91c1c", fontWeight: 700 }}>⚠️ {elegido.tipo} no tiene stock: se registrará igual y quedará en negativo (alerta de compra).</small>
+                    )}
+                    {millingSacosServicio.length > 0 && (
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 8 }}>
+                        <tbody>
+                          {millingSacosServicio.map((l) => {
+                            const sk = porId.get(l.sack_id);
+                            const precio = Number(sk?.precio_venta_cliente ?? 0);
+                            return (
+                              <tr key={l.sack_id} style={{ borderTop: "1px solid #e0e7ff" }}>
+                                <td style={{ padding: "5px 4px", fontWeight: 700 }}>{sk?.tipo ?? "Saco"}</td>
+                                <td style={{ padding: "5px 4px", textAlign: "right" }}>{l.cantidad} × ${precio.toFixed(2)}</td>
+                                <td style={{ padding: "5px 4px", textAlign: "right", fontWeight: 700 }}>{money(l.cantidad * precio)}</td>
+                                <td style={{ padding: "5px 4px", textAlign: "right" }}>
+                                  <button type="button" className="btnSecondary" style={{ fontSize: 11, padding: "2px 8px" }}
+                                    onClick={() => setMillingSacosServicio((cur) => cur.filter((x) => x.sack_id !== l.sack_id))}>✕</button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          <tr style={{ borderTop: "1px solid #bfdbfe" }}>
+                            <td colSpan={2} style={{ padding: "6px 4px", fontWeight: 800 }}>Cobro de sacos al cliente</td>
+                            <td style={{ padding: "6px 4px", textAlign: "right", fontWeight: 800, color: "#1d4ed8" }}>{money(total)}</td>
+                            <td />
+                          </tr>
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                );
+              })()}
             </section>
 
             {/* Últimos lotes (debajo de Secadora, en la columna izquierda) */}
@@ -13253,33 +13360,12 @@ export function App() {
                               onChange={(event) => setMillingCustomLb(event.target.value)} placeholder="Ej: 96" />
                           </label>
                         )}
-                        {/* Stock real de sacos de la MATRIZ para la presentación
-                            elegida (solo la matriz maneja sacos). Informativo. */}
-                        {(() => {
-                          const lb = millingPiladoPresentation === PESO_PERSONALIZADO
-                            ? Number(millingCustomLb)
-                            : sackWeightLbOf(millingPiladoPresentation);
-                          if (!lb || lb <= 0) return null;
-                          const tipo = `Saco ${lb} LB`;
-                          const row = sackInventory.find((s) => s.tipo === tipo);
-                          const stock = row ? Number(row.stock) : null;
-                          const sinTipo = stock == null;
-                          const bajo = stock != null && stock <= 0;
-                          return (
-                            <div style={{
-                              gridColumn: "1 / -1",
-                              fontSize: 12, fontWeight: 700,
-                              color: sinTipo ? "#b45309" : bajo ? "#b91c1c" : "#15803d",
-                              background: sinTipo ? "#fffbeb" : bajo ? "#fef2f2" : "#f0fdf4",
-                              border: `1px solid ${sinTipo ? "#fde68a" : bajo ? "#fecaca" : "#bbf7d0"}`,
-                              borderRadius: 8, padding: "5px 10px", marginTop: 2
-                            }}>
-                              {sinTipo
-                                ? `📦 Stock Matriz: sin registrar el tipo "${tipo}"`
-                                : `📦 Stock Matriz: ${stock.toLocaleString("es-EC")} saco${stock === 1 ? "" : "s"} disp${bajo ? " · ⚠️ sin stock, la matriz debe comprar" : "s."}`}
-                            </div>
-                          );
-                        })()}
+                        {/* Los sacos ya NO se descuentan al pilar: salen del inventario al
+                            VENDER (Confirmar Preparación del pedido). Aquí solo cuentan
+                            para el pago del estibador. */}
+                        <div style={{ gridColumn: "1 / -1", fontSize: 11.5, color: "#475569", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "5px 10px", marginTop: 2 }}>
+                          📦 Los sacos se descuentan al vender (marca + peso), no al pilar. Aquí cuentan para el pago del estibador.
+                        </div>
                       </>
                     ) : (
                       <label>
@@ -13975,6 +14061,27 @@ export function App() {
                       <option key={p.id} value={p.id}>{p.name}</option>
                     ))}
                   </select>
+                  {/* Sacos de ESTA marca y peso en la bodega de la matriz: se
+                      descuentan al Confirmar Preparación del pedido. Informativo:
+                      si faltan, el pedido sigue y el Dashboard alerta la compra. */}
+                  {saleLineForm.product_id && saleLineForm.presentation_id && (() => {
+                    const pres = saleProductPresentations.find((p) => p.id === saleLineForm.presentation_id);
+                    const wl = Number(pres?.weight_lb) || 0;
+                    if (!wl) return null;
+                    const saco = sackInventory.find((sk) => sk.activo !== false && sk.product_id === saleLineForm.product_id && Number(sk.peso_lb) === wl);
+                    const q = Number(saleLineForm.quantity) || 0;
+                    const necesita = q > 0 ? Math.max(1, Math.round((q * 100) / wl)) : 0;
+                    if (!saco) {
+                      return <small style={{ display: "block", marginTop: 4, color: "#6b7280" }}>🧺 Sin saco de marca registrado para {pres?.name} (no se descuenta).</small>;
+                    }
+                    const stock = Number(saco.stock);
+                    const falta = necesita > 0 && necesita > stock;
+                    return (
+                      <small style={{ display: "block", marginTop: 4, fontWeight: 700, color: falta || stock <= 0 ? "#b91c1c" : "#15803d" }}>
+                        🧺 Sacos {saco.tipo}: {stock.toLocaleString("es-EC")} en bodega{necesita ? ` · este pedido usa ${necesita}` : ""}{falta ? " · ⚠️ no alcanzan (quedará en negativo)" : ""}
+                      </small>
+                    );
+                  })()}
                 </label>
               </div>
 
@@ -15532,7 +15639,20 @@ export function App() {
                             onChange={(e) => { const sel = sackInventory.find((s) => s.id === e.target.value); const base = sel && Number(sel.precio_compra_default) > 0 ? Number(sel.precio_compra_default).toFixed(2) : ""; setSackBuyForm({ ...sackBuyForm, sack_id: e.target.value, precio: base }); }}
                             style={{ display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 }}>
                             <option value="">Seleccione un tipo</option>
-                            {sackInventory.map((s) => <option key={s.id} value={s.id}>{s.tipo} (Stock actual: {s.stock})</option>)}
+                            {/* Agrupado por marca (0.11 / Corriente), luego subproductos y genéricos. */}
+                            {(() => {
+                              const grupos = new Map<string, SackInventory[]>();
+                              for (const sk of sackInventory.filter((x) => x.activo !== false)) {
+                                const g = sk.categoria === "SUBPRODUCTO" ? "Subproductos" : sk.categoria === "GENERICO" ? "Genéricos (sin marca)"
+                                  : `${sk.marca ?? "Marca"}${sk.calidad === "0.11" ? " · 0.11" : sk.calidad === "CORRIENTE" ? " · Corriente" : ""}`;
+                                grupos.set(g, [...(grupos.get(g) ?? []), sk]);
+                              }
+                              return [...grupos.entries()].map(([g, items]) => (
+                                <optgroup key={g} label={g}>
+                                  {items.map((sk) => <option key={sk.id} value={sk.id}>{sk.tipo} (Stock actual: {Number(sk.stock)})</option>)}
+                                </optgroup>
+                              ));
+                            })()}
                           </select>
                         </label>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
@@ -15721,27 +15841,9 @@ export function App() {
                       <h2 style={{ margin: 0, fontSize: 15 }}>📦 Inventario de Sacos</h2>
                       <p className="muted" style={{ margin: "6px 0 0" }}>Para <strong>comprar sacos</strong>, ve a <strong>💳 Movimiento</strong> → categoría <strong>Compra de sacos</strong>. Este panel es solo de consulta.</p>
                     </div>
-                    {/* Stock actual por tipo */}
+                    {/* Stock actual por marca y peso */}
                     <div className="formPanel">
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                        <h3 style={{ margin: 0 }}>Stock actual</h3>
-                        <button type="button" className="btnSecondary" onClick={() => setKardexOpen(true)}>📄 Ver Kárdex / Movimientos</button>
-                      </div>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 10 }}>
-                        <thead><tr style={{ background: "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>
-                          <th style={{ padding: "8px 12px", textAlign: "left" }}>Tipo de saco</th>
-                          <th style={{ padding: "8px 12px", textAlign: "right" }}>Stock actual</th>
-                        </tr></thead>
-                        <tbody>
-                          {sackInventory.length === 0 && <tr><td colSpan={2} className="muted" style={{ padding: "10px 12px", textAlign: "center" }}>Sin tipos de saco</td></tr>}
-                          {sackInventory.map((s) => (
-                            <tr key={s.id} style={{ borderBottom: "1px solid #f3f4f6" }}>
-                              <td style={{ padding: "8px 12px" }}>{s.tipo}</td>
-                              <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700 }}>{Number(s.stock)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                      <SacosTablero sacos={sackInventory} onVerKardex={() => setKardexOpen(true)} />
                     </div>
                     {/* Kárdex / Historial de compras (movimientos recientes) */}
                     <div className="formPanel">
@@ -20739,6 +20841,23 @@ export function App() {
 
             {/* ── Categorías de caja ── */}
             {/* Categorías de caja (Operación y Planta) */}
+            {configSubTab === "operacion" && (
+              <section className="panelGrid">
+                {/* Catálogo de sacos por marca y peso: alta, mínimos (alerta del
+                    Dashboard), precios y eliminación. Escribir exige contexto Matriz. */}
+                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>📦 Catálogo de sacos <span className="muted" style={{ fontWeight: 400 }}>(marcas, pesos, stock mínimo y precios)</span></summary>
+                  {!esMatrizActiva && <p className="muted" style={{ color: "#b45309" }}>Los sacos son de la Matriz: cámbiate al contexto de la Matriz para editarlos.</p>}
+                  <SacosCatalogoConfig
+                    sacos={sackInventory}
+                    puedeEditar={isAdmin && esMatrizActiva}
+                    onCambio={refreshSacks}
+                    avisar={(msg, tipo) => addToast(msg, tipo)}
+                  />
+                </details>
+              </section>
+            )}
+
             {configSubTab === "operacion" && (
               <section className="panelGrid">
                 <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
