@@ -49,6 +49,16 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Sacos propios por socio (STALYN / envejecido) + Seleccion con Tula y productos por proceso (2026-09-27)
+
+- `sack_inventory.accionista_id` (migracion `20261042_sacos_propios_socio.sql`): NULL = catalogo de la MATRIZ (todo lo existente; lo usan ventas y produccion, ahora filtrado con `accionista_id IS NULL` en `services/sacos.ts`). Filas con accionista = catalogo PROPIO del socio (categoria `PROPIO`, `marca` = nombre del saco).
+- Quien maneja sacos: Matriz y el socio con `modulo_envejecido_habilitado` (STALYN). ROVINSON no (no ve la seccion; la API responde 403 al escribir).
+- API `/sacks`: GET por defecto = Matriz (sin cambios para ventas/produccion); `?propio=1` = catalogo del accionista activo (tambien `/sacks/movements/recent?propio=1`). Escrituras (POST/PATCH/DELETE, movimientos, ajuste, precio, compras) validan que los sacos sean del accionista activo (`ambitoSacos` + `assertSacosDelAmbito`). La compra desde el movimiento de Caja (`registrarEntradaSacosDesdeCaja`) valida lo mismo.
+- UI: `manejaSacosPropios` / `sacosDelActivo` en App.tsx. STALYN ve: Configuracion -> Operacion y Planta -> "Catalogo de sacos · Mis sacos (envejecido)" (`SacosCatalogoConfig modo="PROPIO"`), Caja -> subpestana Sacos + categoria Compra de sacos, Inventario y alerta de Dashboard con SUS sacos.
+- Seleccion: productos por proceso (SELECCION: 0.11, Corriente, Arrocillo 3/4, Arrocillo fino; ENVEJECIDO: entra solo 0.11, regresa Arroz Envejecido + arrocillos/rechazo; lotes antiguos conservan sus productos). Empaque por salida: Tula por defecto; Saco 100/25/10 (informativo, el saco de la Matriz se descuenta al VENDER); en ENVEJECIDO de STALYN, sus sacos propios -> se descuentan al recibir (`selection_batch_outputs.empaque/sack_id`, `sack_movements.ref_selection`).
+- Ventas: el Arroz Envejecido (ARROZ-ENVEJECIDO) NO descuenta sacos de la Matriz (ya va empacado en los sacos propios). Arrocillo y demas: saco de la Matriz al vender (sin cambios).
+- Verificado en BEGIN...ROLLBACK con la base real (catalogos separados, ventas no toman sacos del socio, envejecido no descuenta doble, ROVINSON sin acceso).
+
 ### Recarga automatica tras un despliegue (2026-09-27)
 
 - Problema: con la pestana abierta de una version anterior, abrir un modulo bajo demanda (Transporte y Cosechadora, Reportes de solo lectura, Finanzas) pedia un archivo `assets/*.js` que ya no existe y la pantalla quedaba en blanco.

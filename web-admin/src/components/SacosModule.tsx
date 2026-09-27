@@ -12,7 +12,7 @@ export type Saco = {
   id: string;
   tipo: string;
   stock: number | string;
-  categoria?: "MARCA" | "SUBPRODUCTO" | "GENERICO" | string;
+  categoria?: "MARCA" | "SUBPRODUCTO" | "GENERICO" | "PROPIO" | string;
   marca?: string | null;
   calidad?: string | null;
   peso_lb?: number | string | null;
@@ -88,7 +88,7 @@ function etiquetaCalidad(c?: string | null) {
 
 /** Nombre de la fila en la matriz: la marca, o el tipo para genéricos/subproductos. */
 function filaDe(s: Saco): string {
-  if (s.categoria === "MARCA" && s.marca) return s.marca;
+  if ((s.categoria === "MARCA" || s.categoria === "PROPIO") && s.marca) return s.marca;
   if (s.categoria === "GENERICO") return "Sin marca (genérico)";
   return s.tipo;
 }
@@ -102,8 +102,9 @@ export function sobranteLb(qq: number, pesoPresentacion: number): number {
   return s > 0.01 ? s : 0;
 }
 
-const ORDEN_GRUPO = ["Arroz 0.11", "Arroz Corriente", "Otras marcas", "Subproductos", "Genéricos"];
+const ORDEN_GRUPO = ["Mis sacos", "Arroz 0.11", "Arroz Corriente", "Otras marcas", "Subproductos", "Genéricos"];
 function grupoDe(s: Saco): string {
+  if (s.categoria === "PROPIO") return "Mis sacos";
   if (s.categoria === "SUBPRODUCTO") return "Subproductos";
   if (s.categoria === "GENERICO") return "Genéricos";
   return etiquetaCalidad(s.calidad) ?? "Otras marcas";
@@ -138,7 +139,7 @@ export function SacosTablero({ sacos, onVerKardex }: { sacos: Saco[]; onVerKarde
 
   const totalSacos = activos.reduce((a, s) => a + Math.max(0, num(s.stock)), 0);
   const valor = activos.reduce((a, s) => a + Math.max(0, num(s.stock)) * num(s.precio_compra_default), 0);
-  const marcas = new Set(activos.filter((s) => s.categoria === "MARCA").map((s) => s.marca)).size;
+  const marcas = new Set(activos.filter((s) => s.categoria === "MARCA" || s.categoria === "PROPIO").map((s) => s.marca)).size;
 
   const kpi = (titulo: string, valorTxt: string, sub: string, color = "#0f172a") => (
     <div style={{ flex: "1 1 150px", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "12px 14px" }}>
@@ -275,15 +276,18 @@ export function SacosAlertaDashboard({ sacos, onIr }: { sacos: Saco[]; onIr?: ()
 const PESOS_BASE = [100, 25, 10];
 
 export function SacosCatalogoConfig({
-  sacos, puedeEditar, onCambio, avisar
+  sacos, puedeEditar, onCambio, avisar, modo = "MATRIZ"
 }: {
   sacos: Saco[];
+  /** MATRIZ: marcas/genéricos de la planta. PROPIO: sacos del socio (envejecido). */
+  modo?: "MATRIZ" | "PROPIO";
   puedeEditar: boolean;
   onCambio: () => Promise<void>;
   avisar: (msg: string, tipo: "success" | "error" | "warn") => void;
 }) {
   const [form, setForm] = useState({ categoria: "MARCA" as "MARCA" | "GENERICO", marca: "", calidad: "0.11" as "0.11" | "CORRIENTE", pesos: [100, 25, 10] as number[], otroPeso: "", minimo: "", compra: "", cliente: "" });
   const [verInactivos, setVerInactivos] = useState(false);
+  const esPropio = modo === "PROPIO";
   const [guardando, setGuardando] = useState(false);
   const marcasExistentes = useMemo(() => [...new Set(sacos.filter((s) => s.marca).map((s) => String(s.marca)))].sort(), [sacos]);
   const lista = sacos.filter((s) => verInactivos || s.activo !== false);
@@ -292,13 +296,13 @@ export function SacosCatalogoConfig({
     e.preventDefault();
     const pesos = [...form.pesos, ...(Number(form.otroPeso) > 0 ? [Number(form.otroPeso)] : [])];
     if (!pesos.length) { avisar("Elige al menos un peso", "error"); return; }
-    if (form.categoria === "MARCA" && !form.marca.trim()) { avisar("Escribe el nombre de la marca", "error"); return; }
+    if ((form.categoria === "MARCA" || esPropio) && !form.marca.trim()) { avisar(esPropio ? "Escribe el nombre del saco" : "Escribe el nombre de la marca", "error"); return; }
     setGuardando(true);
     try {
       const r = await apiPost<{ creados: string[]; existentes: string[] }>("/sacks", {
-        categoria: form.categoria,
-        marca: form.categoria === "MARCA" ? form.marca.trim() : undefined,
-        calidad: form.categoria === "MARCA" ? form.calidad : null,
+        categoria: esPropio ? "PROPIO" : form.categoria,
+        marca: esPropio || form.categoria === "MARCA" ? form.marca.trim() : undefined,
+        calidad: !esPropio && form.categoria === "MARCA" ? form.calidad : null,
         pesos,
         stock_minimo: Math.max(0, Math.round(Number(form.minimo) || 0)),
         precio_compra_default: Math.max(0, Number(form.compra) || 0),
@@ -355,6 +359,13 @@ export function SacosCatalogoConfig({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {esPropio ? (
+      <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
+        Estos son <strong>tus sacos propios</strong> para el arroz envejecido. Se cargan con la <strong>Compra de sacos</strong> en tu Caja
+        y se descuentan al <strong>recibir el envejecido</strong> en Selección cuando lo empacas en saco. Son independientes de los sacos de la Matriz.
+        El <strong>stock mínimo</strong> activa la alerta de tu Dashboard.
+      </p>
+      ) : (
       <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
         Los sacos se descuentan al <strong>confirmar la preparación</strong> de un pedido (marca + presentación vendida) y en los
         <strong> servicios de pilada</strong> cuando el cliente pide sacos de la planta (se le cobran al <em>precio al cliente</em>).
@@ -362,18 +373,26 @@ export function SacosCatalogoConfig({
         Empaque automático: cada bulto va en el saco más pequeño de la marca donde cabe (pedido de 50 LB → saco de 100 LB)
         y el sobrante en el más pequeño que lo contiene (100 QQ en 98 LB → 102 sacos de 100 LB + 1 de 10 LB).
       </p>
+      )}
 
       {puedeEditar && (
         <form onSubmit={crear} style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: 12, display: "grid", gap: 10 }}>
           <div style={{ fontWeight: 800, fontSize: 13.5 }}>➕ Agregar sacos</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
+            {esPropio ? (
+              <label><span>Nombre del saco</span>
+                <input list="sacos-marcas" value={form.marca} onChange={(e) => setForm({ ...form, marca: e.target.value })} placeholder="Ej: Saco envejecido" />
+                <datalist id="sacos-marcas">{marcasExistentes.map((m) => <option key={m} value={m} />)}</datalist>
+              </label>
+            ) : (
             <label><span>Tipo</span>
               <select value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value as "MARCA" | "GENERICO" })}>
                 <option value="MARCA">Saco de marca</option>
                 <option value="GENERICO">Saco genérico (sin marca)</option>
               </select>
             </label>
-            {form.categoria === "MARCA" && <>
+            )}
+            {!esPropio && form.categoria === "MARCA" && <>
               <label><span>Marca</span>
                 <input list="sacos-marcas" value={form.marca} onChange={(e) => setForm({ ...form, marca: e.target.value })} placeholder="Ej: Flor" />
                 <datalist id="sacos-marcas">{marcasExistentes.map((m) => <option key={m} value={m} />)}</datalist>
@@ -404,7 +423,7 @@ export function SacosCatalogoConfig({
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
             <label><span>Stock mínimo (alerta)</span><input type="number" min="0" step="1" value={form.minimo} onChange={(e) => setForm({ ...form, minimo: e.target.value })} placeholder="0 = sin alerta" /></label>
             <label><span>Precio de compra ($)</span><input type="number" min="0" step="0.01" value={form.compra} onChange={(e) => setForm({ ...form, compra: e.target.value })} placeholder="0.00" /></label>
-            <label><span>Precio al cliente de servicio ($)</span><input type="number" min="0" step="0.01" value={form.cliente} onChange={(e) => setForm({ ...form, cliente: e.target.value })} placeholder="0.00" /></label>
+            {!esPropio && <label><span>Precio al cliente de servicio ($)</span><input type="number" min="0" step="0.01" value={form.cliente} onChange={(e) => setForm({ ...form, cliente: e.target.value })} placeholder="0.00" /></label>}
           </div>
           <div><button className="primary" disabled={guardando}>{guardando ? "Guardando…" : "Agregar sacos"}</button></div>
         </form>
@@ -421,16 +440,16 @@ export function SacosCatalogoConfig({
           <thead>
             <tr style={{ background: "#f8fafc", color: "#475569" }}>
               <th style={{ textAlign: "left", padding: "8px 10px" }}>Saco</th>
-              <th style={{ textAlign: "left", padding: "8px 10px" }}>Calidad</th>
+              {!esPropio && <th style={{ textAlign: "left", padding: "8px 10px" }}>Calidad</th>}
               <th style={{ textAlign: "right", padding: "8px 10px" }}>Stock</th>
               <th style={{ textAlign: "right", padding: "8px 10px" }}>Mínimo</th>
               <th style={{ textAlign: "right", padding: "8px 10px" }}>P. compra $</th>
-              <th style={{ textAlign: "right", padding: "8px 10px" }}>P. cliente $</th>
+              {!esPropio && <th style={{ textAlign: "right", padding: "8px 10px" }}>P. cliente $</th>}
               <th style={{ textAlign: "center", padding: "8px 10px" }}>Acciones</th>
             </tr>
           </thead>
           <tbody>
-            {lista.length === 0 && <tr><td colSpan={7} style={{ padding: 14, textAlign: "center", color: "#64748b" }}>Sin sacos registrados</td></tr>}
+            {lista.length === 0 && <tr><td colSpan={esPropio ? 5 : 7} style={{ padding: 14, textAlign: "center", color: "#64748b" }}>Sin sacos registrados</td></tr>}
             {lista.map((s) => {
               const e = ESTILO[estadoSaco(s)];
               const inactivo = s.activo === false;
@@ -438,12 +457,12 @@ export function SacosCatalogoConfig({
                 <tr key={s.id} style={{ borderTop: "1px solid #f1f5f9", opacity: inactivo ? 0.55 : 1 }}>
                   <td style={{ padding: "7px 10px", fontWeight: 700 }}>
                     {s.tipo}
-                    {s.categoria !== "MARCA" && <span style={{ marginLeft: 6, fontSize: 10.5, color: "#64748b", fontWeight: 600 }}>{s.categoria === "SUBPRODUCTO" ? "subproducto" : "genérico"}</span>}
+                    {s.categoria !== "MARCA" && s.categoria !== "PROPIO" && <span style={{ marginLeft: 6, fontSize: 10.5, color: "#64748b", fontWeight: 600 }}>{s.categoria === "SUBPRODUCTO" ? "subproducto" : "genérico"}</span>}
                     {inactivo && <span style={{ marginLeft: 6, fontSize: 10.5, color: "#b91c1c" }}>desactivado</span>}
                   </td>
-                  <td style={{ padding: "7px 10px", color: "#475569" }}>{etiquetaCalidad(s.calidad) ?? "—"}</td>
+                  {!esPropio && <td style={{ padding: "7px 10px", color: "#475569" }}>{etiquetaCalidad(s.calidad) ?? "—"}</td>}
                   <td style={{ padding: "7px 10px", textAlign: "right", fontWeight: 800, color: e.fg }}>{fmt(num(s.stock))}</td>
-                  {(["stock_minimo", "precio_compra_default", "precio_venta_cliente"] as const).map((campo) => (
+                  {(esPropio ? (["stock_minimo", "precio_compra_default"] as const) : (["stock_minimo", "precio_compra_default", "precio_venta_cliente"] as const)).map((campo) => (
                     <td key={campo} style={{ padding: "5px 10px", textAlign: "right" }}>
                       <input type="number" min="0" step={campo === "stock_minimo" ? "1" : "0.01"} disabled={!puedeEditar || inactivo}
                         key={`${s.id}-${campo}-${String(s[campo] ?? 0)}`}

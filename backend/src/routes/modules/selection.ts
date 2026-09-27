@@ -276,7 +276,11 @@ selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
       is_reject: z.boolean().optional(),
       // Presentación/tamaño de saco en que regresó (para descontar el saco exacto).
       presentation: z.string().optional(),
-      sack_weight_lb: z.number().positive().optional()
+      sack_weight_lb: z.number().positive().optional(),
+      // Empaque: TULA (por defecto, reutilizable) o SACO. `sack_id` = saco del
+      // catálogo PROPIO del socio (envejecido): se descuenta de su inventario.
+      empaque: z.enum(["TULA", "SACO"]).optional(),
+      sack_id: z.string().uuid().optional()
     })).min(1)
   }).parse(req.body);
 
@@ -319,13 +323,36 @@ selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
     // elegida por línea (solo producto NO rechazo). Subproductos → saco especial
     // (por producto); resto → "Saco N LB". sacos = QQ*100/peso_por_saco.
     const sacosPorTipo = new Map<string, number>();
+    const sacosPropios: Array<{ tipo: string; sacos: number; nuevo_stock: number }> = [];
     for (const o of body.outputs) {
       const qty = round3(o.quantity);
       const wid = o.warehouse_id ?? defaultWarehouse;
       await tx.query(
-        "INSERT INTO selection_batch_outputs (batch_id, product_id, warehouse_id, quantity, is_reject, presentation, sack_weight_lb) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        [req.params.id, o.product_id, wid, qty, o.is_reject ?? false, o.presentation ?? null, o.sack_weight_lb ?? null]
+        "INSERT INTO selection_batch_outputs (batch_id, product_id, warehouse_id, quantity, is_reject, presentation, sack_weight_lb, empaque, sack_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        [req.params.id, o.product_id, wid, qty, o.is_reject ?? false, o.presentation ?? null, o.sack_weight_lb ?? null,
+         o.empaque ?? null, o.sack_id ?? null]
       );
+      // SACOS PROPIOS del socio (envejecido): se descuentan de SU catálogo al
+      // recibir. Los de la Matriz no se tocan aquí (se descuentan al vender).
+      if (o.sack_id && !o.is_reject) {
+        const saco = await tx.query(
+          "SELECT id, tipo, peso_lb::float AS peso FROM sack_inventory WHERE id = $1 AND accionista_id = $2 AND activo FOR UPDATE",
+          [o.sack_id, accionistaId]
+        );
+        if (!saco.rowCount) throw new ApiError(403, "Ese saco no pertenece a tu catálogo propio de sacos.");
+        const peso = Number(saco.rows[0].peso) || 100;
+        const nSacos = Math.max(1, Math.round((qty * 100) / peso));
+        const upd = await tx.query(
+          "UPDATE sack_inventory SET stock = stock - $2, updated_at = now() WHERE id = $1 RETURNING stock::float AS stock",
+          [o.sack_id, nSacos]
+        );
+        await tx.query(
+          `INSERT INTO sack_movements (sack_id, movement, cantidad, concepto, ref_selection)
+           VALUES ($1, 'SALIDA', $2, $3, $4)`,
+          [o.sack_id, nSacos, `${label} ${batch.rows[0].batch_number}: ${qty} QQ empacados`, req.params.id]
+        );
+        sacosPropios.push({ tipo: saco.rows[0].tipo, sacos: nSacos, nuevo_stock: Number(upd.rows[0].stock) });
+      }
       if (!o.is_reject && o.sack_weight_lb && o.sack_weight_lb > 0) {
         const p = prodMap.get(o.product_id);
         const tipo = tipoSacoEspecial(p?.code, p?.name) ?? `Saco ${o.sack_weight_lb} LB`;
@@ -354,7 +381,7 @@ selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
        RETURNING *`,
       [req.params.id, outputQq, mermaQq, body.finished_date ?? null]
     );
-    return { ...updated.rows[0], sacos_matriz: sacosMatriz };
+    return { ...updated.rows[0], sacos_matriz: sacosMatriz, sacos_propios: sacosPropios };
   });
 
   res.json(result);

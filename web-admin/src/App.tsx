@@ -2301,7 +2301,7 @@ export function App() {
     { sub: "estado", tarjeta: "Estado del sistema", claves: "salud api sincronizacion bascula respaldo backup usuarios accionistas diagnostico" },
     { sub: "operacion", tarjeta: "⚙️ Parámetros de planta", claves: "tarifa de pilado humedad base merma quintal" },
     { sub: "operacion", tarjeta: "🏢 Datos del negocio", claves: "nombre comercial ruc telefono direccion pie de comprobante encabezado ticket" },
-    { sub: "operacion", tarjeta: "📦 Catálogo de sacos", claves: "sacos marcas flor oso extra lira azul conejo 100 50 25 10 libras arroba stock minimo alerta precio eliminar agregar" },
+    { sub: "operacion", tarjeta: "📦 Catálogo de sacos", claves: "mis sacos envejecido propios sacos marcas flor oso extra lira azul conejo 100 50 25 10 libras arroba stock minimo alerta precio eliminar agregar" },
     { sub: "operacion", tarjeta: "🏷️ Categorías de caja", claves: "categoria ingreso egreso movimiento caja" },
     { sub: "operacion", tarjeta: "🔧 Categorías de Mantenimiento", claves: "areas tipos secciones sistemas equipos mantenimiento" },
     { sub: "operacion", tarjeta: "✅ Puesta en marcha", claves: "checklist pasos inicio configuracion inicial" },
@@ -2667,7 +2667,8 @@ export function App() {
   const [selectionProviders, setSelectionProviders] = useState<ExternalProvider[]>([]);
   const [selectionRates, setSelectionRates] = useState<SelectionRates>({ seleccion_rate: 1.25, envejecimiento_rate: 3.5 });
   const [selectionView, setSelectionView] = useState<"nuevo" | "proceso" | "historial">("nuevo");
-  type LineDraft = { product_id: string; quantity: string; is_reject?: boolean; sack_weight_lb?: string };
+  // empaque (salidas de Selección): "TULA" (por defecto) · "SACO:<lb>" · "PROPIO:<sack_id>" (saco propio del socio).
+  type LineDraft = { product_id: string; quantity: string; is_reject?: boolean; sack_weight_lb?: string; empaque?: string };
   const emptyLine: LineDraft = { product_id: "", quantity: "" };
   // Fase 1: lo que se manda a selectar (varias líneas de producto).
   const [selectionForm, setSelectionForm] = useState({
@@ -2822,6 +2823,9 @@ export function App() {
 
   // ── Inventario de Sacos ───────────────────────────────────────────────────
   const [sackInventory, setSackInventory] = useState<SackInventory[]>([]);
+  // Catálogo PROPIO del socio activo (p. ej. STALYN: sacos de su envejecido). La
+  // Matriz usa `sackInventory`; ventas y producción siempre usan el de la Matriz.
+  const [sacosPropios, setSacosPropios] = useState<SackInventory[]>([]);
   const [sackMovements, setSackMovements] = useState<SackMovement[]>([]);
   const [sackMovForm, setSackMovForm] = useState({ sack_id: "", movement: "ENTRADA" as "ENTRADA"|"SALIDA", cantidad: "", concepto: "" });
   // ── Diagnóstico de stocks negativos ────────────────────────────────────────
@@ -3760,7 +3764,10 @@ export function App() {
   // de la matriz (Gastos/Sacos/Mantenimiento/Equipos), volver a "Movimientos".
   React.useEffect(() => {
     const esSocio = accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "SOCIO";
-    if (esSocio && ["gastos", "sacos", "mantenimiento"].includes(cajaSubTab)) {
+    // Sacos: el socio con catálogo propio (envejecido) sí tiene su subpestaña.
+    const exclusivas = accionistaEnvejecidoHabilitado(accionistas.find((a) => a.id === activeAccionistaId))
+      ? ["gastos", "mantenimiento"] : ["gastos", "sacos", "mantenimiento"];
+    if (esSocio && exclusivas.includes(cajaSubTab)) {
       setCajaSubTab("resumen");
     }
   }, [activeAccionistaId, accionistas, cajaSubTab]);
@@ -3874,6 +3881,10 @@ export function App() {
   const matrizAccionista = accionistas.find((a) => a.tipo === "MATRIZ") ?? null;
   const matrizName = matrizAccionista?.name?.trim() || appSettings.business_name.trim() || "Matriz";
   const esMatrizActiva = matrizAccionista?.id === activeAccionistaId;
+  // ¿El accionista activo maneja un catálogo de sacos? La Matriz (sus marcas) y
+  // el socio con proceso propio de envejecido (STALYN). ROVINSON no.
+  const manejaSacosPropios = esMatrizActiva || moduloEnvejecidoHabilitado;
+  const sacosDelActivo = esMatrizActiva ? sackInventory : sacosPropios;
 
   useEffect(() => {
     setMatrizCodeForm(matrizAccionista?.code ?? "");
@@ -4476,9 +4487,26 @@ export function App() {
     const outputs = finishOutputs
       .filter((l) => l.product_id && Number(l.quantity) > 0)
       .map((l) => {
-        const peso = Number(l.sack_weight_lb ?? "100") || 100;
-        return { product_id: l.product_id, quantity: Number(l.quantity), is_reject: !!l.is_reject,
-          sack_weight_lb: l.is_reject ? undefined : peso, presentation: l.is_reject ? undefined : `${peso} LB` };
+        const base = { product_id: l.product_id, quantity: Number(l.quantity), is_reject: !!l.is_reject };
+        if (l.is_reject) return base;
+        // Arrocillo/polvillo: su saco especial con lb/saco (como antes; informativo).
+        const prod = products.find((p) => p.id === l.product_id);
+        const esSub = /^(ARROCILLO|POLVILLO)/i.test(prod?.code ?? "") || /ARROCILLO|POLVILLO|AFRECHO/i.test(prod?.name ?? "");
+        const emp = l.empaque ?? "TULA";
+        if (esSub) {
+          const peso = Number(l.sack_weight_lb ?? "100") || 100;
+          return { ...base, sack_weight_lb: peso, presentation: `${peso} LB`, empaque: "SACO" as const };
+        }
+        if (emp.startsWith("PROPIO:")) {
+          const sk = sacosPropios.find((x) => x.id === emp.slice(7));
+          const peso = Number(sk?.peso_lb) || 100;
+          return { ...base, sack_id: sk?.id, sack_weight_lb: peso, presentation: sk?.tipo ?? `${peso} LB`, empaque: "SACO" as const };
+        }
+        if (emp.startsWith("SACO:")) {
+          const peso = Number(emp.slice(5)) || 100;
+          return { ...base, sack_weight_lb: peso, presentation: `${peso} LB`, empaque: "SACO" as const };
+        }
+        return { ...base, presentation: "TULA", empaque: "TULA" as const };
       });
     if (outputs.length === 0) { addToast("Agrega al menos un producto que regresó", "error"); return; }
     if (new Set(outputs.map((o) => o.product_id)).size !== outputs.length) { addToast("Hay un producto repetido en las salidas", "error"); return; }
@@ -4488,12 +4516,17 @@ export function App() {
       addToast(`Lo recibido (${totalRecibido.toFixed(2)} QQ) supera lo enviado (${Number(batch.input_qq).toFixed(2)} QQ)`, "error");
       return;
     }
-    await apiPost(`/selection/batches/${batchId}/finish`, { outputs });
+    const cierre = await apiPost<{ sacos_propios?: Array<{ tipo: string; sacos: number; nuevo_stock: number }> }>(`/selection/batches/${batchId}/finish`, { outputs });
     setFinishingBatchId(null);
     setFinishOutputs([{ ...emptyLine }]);
     setSelectionView("historial");
-    addToast("Lote cerrado. Producto procesado ingresado al inventario.", "success");
-    await Promise.all([refreshSelection(), reloadStock()]);
+    const sp = cierre.sacos_propios ?? [];
+    addToast(
+      "Lote cerrado. Producto procesado ingresado al inventario." +
+      (sp.length ? ` Sacos descontados de tu inventario: ${sp.map((x) => `${x.sacos} × ${x.tipo} (quedan ${x.nuevo_stock})`).join(", ")}.` : ""),
+      "success"
+    );
+    await Promise.all([refreshSelection(), reloadStock(), sp.length ? refreshSacks() : Promise.resolve()]);
   }
 
   async function cancelBatch(batchId: string) {
@@ -5888,12 +5921,16 @@ export function App() {
   }
 
   async function refreshSacks() {
-    const [inv, movs] = await Promise.all([
+    const esSocioActivo = accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "SOCIO";
+    const [inv, movs, propios] = await Promise.all([
       apiGet<SackInventory[]>("/sacks"),
-      apiGet<SackMovement[]>("/sacks/movements/recent")
+      // Kárdex del catálogo que se está viendo: el del socio o el de la Matriz.
+      apiGet<SackMovement[]>(esSocioActivo ? "/sacks/movements/recent?propio=1" : "/sacks/movements/recent"),
+      esSocioActivo ? apiGet<SackInventory[]>("/sacks?propio=1") : Promise.resolve([] as SackInventory[])
     ]);
     setSackInventory(inv);
     setSackMovements(movs);
+    setSacosPropios(propios);
   }
 
   async function refreshCustomersAndSales() {
@@ -6941,7 +6978,7 @@ export function App() {
     if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
     if (activeTab === "Cuadrilla") refreshCuadrilla().catch(() => undefined);
     if (activeTab === "Servicio Pilado") { refreshPilado().catch(() => undefined); refreshCobros().catch(() => undefined); refreshServiceDriedLots().catch(() => undefined); loadLaborRates().catch(() => undefined); }
-    if (activeTab === "Seleccion") refreshSelection().catch(() => undefined);
+    if (activeTab === "Seleccion") { refreshSelection().catch(() => undefined); refreshSacks().catch(() => undefined); }
     if (activeTab === "Dashboard" && canSeePanel) refreshPanel().catch(() => undefined);
     if (activeTab === "Configuracion") refreshConfig().catch(() => undefined);
     if (activeTab === "Costos Operativos") refreshCostos().catch(() => undefined);
@@ -7212,7 +7249,7 @@ export function App() {
       addToast("Completa tipo, cantidad y precio", "error");
       return;
     }
-    const tipo = sackInventory.find((s) => s.id === sackBuyForm.sack_id)?.tipo ?? "Saco";
+    const tipo = sacosDelActivo.find((s) => s.id === sackBuyForm.sack_id)?.tipo ?? "Saco";
     setSackCart((cur) => [...cur, { sack_id: sackBuyForm.sack_id, tipo, cantidad, precio }]);
     setSackBuyForm({ sack_id: "", cantidad: "", precio: "" });
   };
@@ -11070,7 +11107,7 @@ export function App() {
         {activeTab === "Dashboard" && (
           <>
             {/* Alerta de sacos en/bajo su stock mínimo (los sacos son de la Matriz). */}
-            {esMatrizActiva && <SacosAlertaDashboard sacos={sackInventory} onIr={() => setActiveTab("Inventario")} />}
+            {manejaSacosPropios && <SacosAlertaDashboard sacos={sacosDelActivo} onIr={() => setActiveTab("Inventario")} />}
             {canSeePanel && (
               <nav className="cajaSubNav">
                 <button type="button" className={dashView === "panel" ? "active" : ""} onClick={() => { setDashView("panel"); if (!panelData) refreshPanel().catch(() => undefined); }}>📊 Panel integral</button>
@@ -12746,20 +12783,20 @@ export function App() {
                   Los sacos son propiedad exclusiva de la Matriz. Un socio
                   operativo no maneja empaques: se oculta por completo (tabla +
                   formulario de movimientos). Solo visible en contexto Matriz. */}
-              {esMatrizActiva && (
+              {manejaSacosPropios && (
               <section style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, background: "#fbfdfc" }}>
                 <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
                   <h3 style={{ margin: 0 }}>📦 Inventario de Sacos</h3>
                   <span className="muted" style={{ fontSize: 12 }}>Marcas, pesos, mínimos y precios: Configuración → Operación y Planta → Catálogo de sacos</span>
                 </div>
-                <SacosTablero sacos={sackInventory} />
+                <SacosTablero sacos={sacosDelActivo} />
                 <div style={{ fontWeight: 700, fontSize: 13, margin: "14px 0 6px" }}>Movimiento manual (ajuste de bodega)</div>
                 <form onSubmit={submitSackMovement} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10, alignItems: "end", background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
                   <label style={{ fontSize: 12, fontWeight: 600 }}>Tipo
                     <select required value={sackMovForm.sack_id} onChange={e => setSackMovForm(p => ({ ...p, sack_id: e.target.value }))}
                       style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}>
                       <option value="">— Seleccionar —</option>
-                      {sackInventory.filter(s => s.activo !== false).map(s => (<option key={s.id} value={s.id}>{s.tipo} ({Number(s.stock)})</option>))}
+                      {sacosDelActivo.filter(s => s.activo !== false).map(s => (<option key={s.id} value={s.id}>{s.tipo} ({Number(s.stock)})</option>))}
                     </select>
                   </label>
                   <label style={{ fontSize: 12, fontWeight: 600 }}>Movimiento
@@ -15336,7 +15373,8 @@ export function App() {
                       // Subpestañas exclusivas de la planta/matriz. Los socios
                       // (ROVINSON/STALYN) operan solo lo comercial.
                       const esSocio = accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "SOCIO";
-                      const soloMatriz = ["sacos", "mantenimiento"];
+                      // «Sacos» también para el socio con catálogo propio (envejecido).
+                      const soloMatriz = manejaSacosPropios ? ["mantenimiento"] : ["sacos", "mantenimiento"];
                       return !(esSocio && soloMatriz.includes(t));
                     })
                     .map((t) => {
@@ -15514,7 +15552,10 @@ export function App() {
                         const activeTipo = accionistas.find((a) => a.id === activeAccionistaId)?.tipo;
                         const esSocio = activeTipo === "SOCIO";
                         const esteTipo = movType === "EXPENSE" ? "EGRESO" : "INGRESO";
-                        const visibles = cashCategories.filter((c) => c.activo && c.tipo === esteTipo && (esSocio ? (c.aplicable_a === "SOCIO" || c.aplicable_a === "AMBOS") : (c.aplicable_a === "MATRIZ" || c.aplicable_a === "AMBOS")));
+                        // «Compra de sacos» también para el socio con catálogo propio (envejecido).
+                        const visibles = cashCategories.filter((c) => c.activo && c.tipo === esteTipo && (esSocio
+                          ? (c.aplicable_a === "SOCIO" || c.aplicable_a === "AMBOS" || (c.codigo === "COMPRA_SACOS" && manejaSacosPropios))
+                          : (c.aplicable_a === "MATRIZ" || c.aplicable_a === "AMBOS")));
                         return (
                           <select name="category" required={!(movType === "INCOME" && !!movReceivableId)} value={movCategory} onChange={(e: any) => {
                             const nextCategory = e.target.value;
@@ -15713,14 +15754,14 @@ export function App() {
                         <div style={{ fontSize: 12, fontWeight: 700, color: "#15803d", marginBottom: 10 }}>📦 Compra de sacos (suma al inventario de la Matriz)</div>
                         <label style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Tipo de saco
                           <select value={sackBuyForm.sack_id} required={false}
-                            onChange={(e) => { const sel = sackInventory.find((s) => s.id === e.target.value); const base = sel && Number(sel.precio_compra_default) > 0 ? Number(sel.precio_compra_default).toFixed(2) : ""; setSackBuyForm({ ...sackBuyForm, sack_id: e.target.value, precio: base }); }}
+                            onChange={(e) => { const sel = sacosDelActivo.find((s) => s.id === e.target.value); const base = sel && Number(sel.precio_compra_default) > 0 ? Number(sel.precio_compra_default).toFixed(2) : ""; setSackBuyForm({ ...sackBuyForm, sack_id: e.target.value, precio: base }); }}
                             style={{ display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 }}>
                             <option value="">Seleccione un tipo</option>
                             {/* Agrupado por marca (0.11 / Corriente), luego subproductos y genéricos. */}
                             {(() => {
                               const grupos = new Map<string, SackInventory[]>();
-                              for (const sk of sackInventory.filter((x) => x.activo !== false)) {
-                                const g = sk.categoria === "SUBPRODUCTO" ? "Subproductos" : sk.categoria === "GENERICO" ? "Genéricos (sin marca)"
+                              for (const sk of sacosDelActivo.filter((x) => x.activo !== false)) {
+                                const g = sk.categoria === "SUBPRODUCTO" ? "Subproductos" : sk.categoria === "GENERICO" ? "Genéricos (sin marca)" : sk.categoria === "PROPIO" ? "Mis sacos"
                                   : `${sk.marca ?? "Marca"}${sk.calidad === "0.11" ? " · 0.11" : sk.calidad === "CORRIENTE" ? " · Corriente" : ""}`;
                                 grupos.set(g, [...(grupos.get(g) ?? []), sk]);
                               }
@@ -15920,7 +15961,7 @@ export function App() {
                     </div>
                     {/* Stock actual por marca y peso */}
                     <div className="formPanel">
-                      <SacosTablero sacos={sackInventory} onVerKardex={() => setKardexOpen(true)} />
+                      <SacosTablero sacos={sacosDelActivo} onVerKardex={() => setKardexOpen(true)} />
                     </div>
                     {/* Kárdex / Historial de compras (movimientos recientes) */}
                     <div className="formPanel">
@@ -17918,8 +17959,32 @@ export function App() {
             .sort((a, b) => a.name.localeCompare(b.name));
           // Cualquier producto terminado o subproducto con stock puede salir y
           // puede transformarse en otro producto activo al regresar.
-          const inputProducts = selectableProducts;
+          // Productos por proceso (regla del negocio):
+          //  · SELECCIÓN: 0.11, Corriente, Arrocillo 3/4 y Arrocillo fino.
+          //  · ENVEJECIDO: entra solo 0.11 y regresa como Arroz Envejecido.
+          // Rechazo solo en las líneas de subproducto. Si faltara algún código se
+          // usa la lista completa anterior (no se bloquea la operación).
+          const CODIGOS_SELECCION = ["ARROZ-PILADO-011", "ARROZ-PILADO-CORRIENTE", "ARROCILLO-34", "ARROCILLO-FINO"];
+          const porCodigos = (codes: string[]) => codes
+            .map((c) => selectableProducts.find((p) => (p.code ?? "").toUpperCase() === c))
+            .filter((p): p is (typeof selectableProducts)[number] => Boolean(p));
+          const entradasSel = porCodigos(CODIGOS_SELECCION);
+          const entradasEnv = porCodigos(["ARROZ-PILADO-011"]);
+          const inputProducts = (selectionForm.service_type === "ENVEJECIMIENTO" ? entradasEnv : entradasSel);
+          const salidasDe = (b: SelectionBatch) => {
+            const base = porCodigos(b.service_type === "ENVEJECIMIENTO"
+              ? ["ARROZ-ENVEJECIDO", "ARROCILLO-34", "ARROCILLO-FINO", "RECHAZO"]
+              : [...CODIGOS_SELECCION, "RECHAZO"]);
+            // Lotes antiguos que enviaron otro producto: se conserva para no bloquearlos.
+            const extra = b.inputs.map((i) => selectableProducts.find((p) => p.id === i.product_id))
+              .filter((p): p is (typeof selectableProducts)[number] => Boolean(p) && !base.some((x) => x.id === p!.id));
+            const lista = [...base, ...extra];
+            return lista.length ? lista : selectableProducts;
+          };
+          // Búsquedas (nombre/código de cualquier producto de producto terminado).
           const outputProducts = selectableProducts;
+          // Sacos PROPIOS del socio para empacar el envejecido (STALYN).
+          const sacosPropiosActivos = sacosPropios.filter((sk) => sk.activo !== false);
           // Siempre sale de la bodega de producto terminado.
           const sourceWarehouseId = finishedWarehouse?.id ?? "";
           const availableFor = (pid: string, wid: string) =>
@@ -17948,7 +18013,7 @@ export function App() {
           const removeInputLine = (i: number) => setSelectionForm((f) => ({ ...f, inputs: f.inputs.length > 1 ? f.inputs.filter((_, idx) => idx !== i) : f.inputs }));
           const setOutLine = (i: number, patch: Partial<LineDraft>) =>
             setFinishOutputs((o) => o.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
-          const addOutLine = () => setFinishOutputs((o) => [...o, { ...emptyLine, sack_weight_lb: "100" }]);
+          const addOutLine = () => setFinishOutputs((o) => [...o, { ...emptyLine, sack_weight_lb: "100", empaque: "TULA" }]);
           const removeOutLine = (i: number) => {
             if (i === 0) return;
             setFinishOutputs((o) => o.filter((_, idx) => idx !== i));
@@ -17959,7 +18024,7 @@ export function App() {
               ? (puedeEnvejecer ? productoEnvejecido?.id : undefined) ?? batch.inputs[0]?.product_id ?? ""
               : batch.inputs[0]?.product_id ?? "";
             setFinishingBatchId(batch.id);
-            setFinishOutputs([{ ...emptyLine, product_id: productoInicial, sack_weight_lb: "100" }]);
+            setFinishOutputs([{ ...emptyLine, product_id: productoInicial, sack_weight_lb: "100", empaque: "TULA" }]);
           };
 
           const inProcess = selectionBatches.filter((b) => b.status === "IN_PROCESS");
@@ -18031,7 +18096,7 @@ export function App() {
                     <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 90px auto", gap: 6, alignItems: "center", marginTop: 6 }}>
                       <select value={line.product_id} onChange={(e) => setInputLine(i, { product_id: e.target.value })} style={inputStyle}>
                         <option value="">Producto…</option>
-                        {inputProducts.map((p) => (
+                        {(inputProducts.length ? inputProducts : selectableProducts).map((p) => (
                           <option key={p.id} value={p.id}>
                             {p.name} [Disp: {(sourceWarehouseId ? availableFor(p.id, sourceWarehouseId) : 0).toFixed(2)} QQ]
                           </option>
@@ -18102,7 +18167,7 @@ export function App() {
                             Elige con qué nombre regresa el producto al inventario. Agrega debajo los subproductos o rechazos; la merma se calcula sola.
                           </p>
                           {finishOutputs.map((line, i) => (
-                            <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 70px 88px auto auto", gap: 6, alignItems: "center", marginTop: 6 }}>
+                            <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 70px minmax(96px, 150px) auto auto", gap: 6, alignItems: "center", marginTop: 6 }}>
                               <span style={{ gridColumn: "1 / -1", fontSize: 11, fontWeight: 700, color: i === 0 ? "#166534" : "#64748b" }}>
                                 {i === 0 ? "Producto principal que reingresa" : `Subproducto o rechazo ${i}`}
                               </span>
@@ -18114,7 +18179,7 @@ export function App() {
                                 });
                               }} style={inputStyle}>
                                 <option value="">Selecciona producto…</option>
-                                {outputProducts.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                {salidasDe(b).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                               </select>
                               <input type="number" step="0.01" min="0" placeholder="QQ" value={line.quantity} onChange={(e) => setOutLine(i, { quantity: e.target.value })} style={inputStyle} />
                               {(() => {
@@ -18128,13 +18193,19 @@ export function App() {
                                       onChange={(e) => setOutLine(i, { sack_weight_lb: e.target.value })} style={inputStyle} />
                                   );
                                 }
+                                // Empaque: TULA por defecto (casi siempre). En el ENVEJECIDO
+                                // del socio se elige su saco propio (se descuenta de su
+                                // inventario al recibir); en Selección el saco es informativo
+                                // (el saco de la Matriz se descuenta al vender).
+                                const usaPropios = b.service_type === "ENVEJECIMIENTO" && sacosPropiosActivos.length > 0;
                                 return (
-                                  <select value={line.sack_weight_lb ?? "100"} disabled={!!line.is_reject} title="Tamaño de saco usado (descuenta de la matriz)"
-                                    onChange={(e) => setOutLine(i, { sack_weight_lb: e.target.value })} style={{ ...inputStyle, opacity: line.is_reject ? 0.5 : 1 }}>
-                                    <option value="100">100 LB</option>
-                                    <option value="50">50 LB</option>
-                                    <option value="25">25 LB</option>
-                                    <option value="10">10 LB</option>
+                                  <select value={line.empaque ?? "TULA"} disabled={!!line.is_reject}
+                                    title={usaPropios ? "Empaque: tula o tu saco propio (se descuenta de tus sacos)" : "Empaque: tula o saco (informativo)"}
+                                    onChange={(e) => setOutLine(i, { empaque: e.target.value })} style={{ ...inputStyle, opacity: line.is_reject ? 0.5 : 1 }}>
+                                    <option value="TULA">Tula</option>
+                                    {usaPropios
+                                      ? sacosPropiosActivos.map((sk) => <option key={sk.id} value={`PROPIO:${sk.id}`}>{sk.tipo} ({Number(sk.stock)})</option>)
+                                      : (["100", "25", "10"] as const).map((lb) => <option key={lb} value={`SACO:${lb}`}>Saco {lb} LB</option>)}
                                   </select>
                                 );
                               })()}
@@ -20950,18 +21021,24 @@ export function App() {
             {/* Categorías de caja (Operación y Planta) */}
             {configSubTab === "operacion" && (
               <section className="panelGrid">
-                {/* Catálogo de sacos por marca y peso: alta, mínimos (alerta del
-                    Dashboard), precios y eliminación. Escribir exige contexto Matriz. */}
+                {/* Catálogo de sacos del accionista ACTIVO: la Matriz ve sus marcas
+                    (ventas/producción); el socio con envejecido (STALYN), solo SUS
+                    sacos; quien no maneja sacos (ROVINSON) no ve esta sección. */}
+                {manejaSacosPropios && (
                 <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>📦 Catálogo de sacos <span className="muted" style={{ fontWeight: 400 }}>(marcas, pesos, stock mínimo y precios)</span></summary>
-                  {!esMatrizActiva && <p className="muted" style={{ color: "#b45309" }}>Los sacos son de la Matriz: cámbiate al contexto de la Matriz para editarlos.</p>}
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>
+                    📦 Catálogo de sacos{esMatrizActiva ? "" : " · Mis sacos (envejecido)"}{" "}
+                    <span className="muted" style={{ fontWeight: 400 }}>{esMatrizActiva ? "(marcas, pesos, stock mínimo y precios)" : "(tus sacos propios: se compran en tu Caja y se descuentan al recibir el envejecido)"}</span>
+                  </summary>
                   <SacosCatalogoConfig
-                    sacos={sackInventory}
-                    puedeEditar={isAdmin && esMatrizActiva}
+                    sacos={sacosDelActivo}
+                    modo={esMatrizActiva ? "MATRIZ" : "PROPIO"}
+                    puedeEditar={isAdmin}
                     onCambio={refreshSacks}
                     avisar={(msg, tipo) => addToast(msg, tipo)}
                   />
                 </details>
+                )}
               </section>
             )}
 

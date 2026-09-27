@@ -317,13 +317,20 @@ const sacosCompraSchema = z
 async function registrarEntradaSacosDesdeCaja(
   client: PoolClient,
   cashMovementId: string,
-  sacos: Array<{ sack_id: string; cantidad: number }>
+  sacos: Array<{ sack_id: string; cantidad: number }>,
+  accionistaId: string | null
 ): Promise<number> {
+  // El saco debe ser del catálogo de quien paga: la Matriz (accionista_id NULL)
+  // o el socio con catálogo propio (envejecido).
+  const esMatriz = (await client.query("SELECT tipo FROM accionistas WHERE id = $1", [accionistaId])).rows[0]?.tipo === "MATRIZ";
   let total = 0;
   for (const s of sacos) {
     if (!(s.cantidad > 0)) continue;
-    const sack = await client.query("SELECT id FROM sack_inventory WHERE id = $1 FOR UPDATE", [s.sack_id]);
-    if (!sack.rowCount) throw new ApiError(404, "Tipo de saco no encontrado");
+    const sack = await client.query(
+      `SELECT id FROM sack_inventory WHERE id = $1 AND ${esMatriz ? "accionista_id IS NULL" : "accionista_id = $2"} FOR UPDATE`,
+      esMatriz ? [s.sack_id] : [s.sack_id, accionistaId]
+    );
+    if (!sack.rowCount) throw new ApiError(404, "Ese saco no pertenece al catálogo de sacos de esta caja.");
     await client.query(
       `INSERT INTO sack_movements (sack_id, movement, cantidad, concepto, ref_cash_movement)
        VALUES ($1, 'ENTRADA', $2, $3, $4)`,
@@ -481,7 +488,7 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     // Egreso de compra de sacos con detalle → ENTRADA automática al inventario
     // de la matriz (kardex), enlazada a este movimiento para poder revertirla.
     if (conSacos) {
-      const sacos = await registrarEntradaSacosDesdeCaja(client, mov.rows[0].id, body.sacos!);
+      const sacos = await registrarEntradaSacosDesdeCaja(client, mov.rows[0].id, body.sacos!, accionistaId);
       return { ...mov.rows[0], sacos_ingresados: sacos };
     }
     return mov.rows[0];

@@ -101,17 +101,19 @@ export async function sacosCandidatos(
   client: PoolClient,
   producto: { id: string; code?: string | null; name?: string | null; product_type?: string | null }
 ): Promise<{ modo: "MARCA" | "ESPECIAL" | "GENERICO"; sacos: SacoRow[] } | null> {
-  const marca = await client.query(`SELECT ${COLS_SACO} FROM sack_inventory WHERE activo AND product_id = $1`, [producto.id]);
+  // Ventas y producción usan SOLO el catálogo de la Matriz (accionista_id NULL);
+  // los sacos propios de un socio (envejecido) nunca se tocan desde aquí.
+  const marca = await client.query(`SELECT ${COLS_SACO} FROM sack_inventory WHERE activo AND accionista_id IS NULL AND product_id = $1`, [producto.id]);
   if (marca.rowCount) return { modo: "MARCA", sacos: marca.rows };
   const especial = tipoSacoEspecial(producto.code, producto.name);
   if (especial) {
-    const r = await client.query(`SELECT ${COLS_SACO} FROM sack_inventory WHERE activo AND tipo = $1 LIMIT 1`, [especial]);
+    const r = await client.query(`SELECT ${COLS_SACO} FROM sack_inventory WHERE activo AND accionista_id IS NULL AND tipo = $1 LIMIT 1`, [especial]);
     if (r.rowCount) return { modo: "ESPECIAL", sacos: r.rows };
   }
   const tipoProducto = producto.product_type
     ?? (await client.query("SELECT product_type FROM products WHERE id = $1", [producto.id])).rows[0]?.product_type;
   if (tipoProducto === "PACKAGED_GOOD") return null; // marca sin sacos propios
-  const generico = await client.query(`SELECT ${COLS_SACO} FROM sack_inventory WHERE activo AND categoria = 'GENERICO' AND peso_lb > 0`);
+  const generico = await client.query(`SELECT ${COLS_SACO} FROM sack_inventory WHERE activo AND accionista_id IS NULL AND categoria = 'GENERICO' AND peso_lb > 0`);
   return generico.rowCount ? { modo: "GENERICO", sacos: generico.rows } : null;
 }
 
@@ -166,6 +168,9 @@ export async function descontarSacosPedido(client: PoolClient, orderId: string):
     porSaco.set(saco.id, acc);
   };
   for (const it of items.rows) {
+    // El ARROZ ENVEJECIDO se empaca en los sacos PROPIOS del socio al recibir el
+    // envejecido (Selección): al venderlo no se descuenta otro saco de la Matriz.
+    if (String(it.code ?? "").toUpperCase() === "ARROZ-ENVEJECIDO") continue;
     const qq = Number(it.quantity);
     const peso = await pesoDePresentacion(client, it.presentation_id, it.presentation_name);
     if (!sacosParaQq(qq, peso)) continue;
@@ -229,7 +234,7 @@ export async function descontarSacosServicio(
     const cantidad = Math.round(Number(l.cantidad));
     if (!(cantidad > 0)) continue;
     const s = await client.query(
-      "SELECT id, tipo, precio_venta_cliente::float AS precio FROM sack_inventory WHERE id = $1 AND activo FOR UPDATE",
+      "SELECT id, tipo, precio_venta_cliente::float AS precio FROM sack_inventory WHERE id = $1 AND activo AND accionista_id IS NULL FOR UPDATE",
       [l.sack_id]
     );
     if (!s.rowCount) throw new ApiError(404, "El saco elegido para el servicio no existe o está desactivado.");

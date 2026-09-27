@@ -9,32 +9,68 @@ import { type AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const sacksRouter = Router();
 
-// REGLA DE NEGOCIO: solo la MATRIZ / Planta posee y maneja el stock de
-// sacos; los socios operativos no compran ni mueven empaques. Toda ESCRITURA de
-// sacos (entradas/salidas/ajustes/compras) debe hacerse bajo el contexto de la
-// matriz. Si el accionista activo no es MATRIZ, se rechaza. Las LECTURAS quedan
-// abiertas (p. ej. el indicador de stock de la matriz en el reporte de pilado).
-async function assertMatriz(req: AuthenticatedRequest): Promise<void> {
+// REGLA DE NEGOCIO: cada catálogo de sacos tiene DUEÑO.
+//  · MATRIZ / Planta: su catálogo (accionista_id NULL: marcas, genéricos y
+//    subproductos). Es el que usan ventas y producción.
+//  · Un SOCIO con proceso propio (envejecido: STALYN) tiene SU catálogo
+//    (accionista_id = el socio): lo compra en su Caja y lo consume en su
+//    Envejecido. Un socio sin proceso propio (ROVINSON) no maneja sacos.
+// Toda ESCRITURA exige que los sacos sean del accionista ACTIVO.
+type AmbitoSacos = { accionistaId: string; esMatriz: boolean };
+
+async function ambitoSacos(req: AuthenticatedRequest, opts: { exigirManejo?: boolean } = {}): Promise<AmbitoSacos> {
   const accionistaId = req.accionistaId ?? null;
   if (!accionistaId) throw new ApiError(400, "Selecciona un accionista antes de continuar.");
-  const r = await pool.query("SELECT tipo FROM accionistas WHERE id = $1", [accionistaId]);
-  if (r.rows[0]?.tipo !== "MATRIZ") {
-    throw new ApiError(
-      403,
-      "El inventario de sacos es exclusivo de la Matriz / Planta. Cámbiate al contexto de la Matriz para registrar movimientos de empaques."
-    );
+  const r = await pool.query(
+    "SELECT tipo, COALESCE(modulo_envejecido_habilitado, puede_envejecer, false) AS envejece FROM accionistas WHERE id = $1",
+    [accionistaId]
+  );
+  const esMatriz = r.rows[0]?.tipo === "MATRIZ";
+  if (opts.exigirManejo !== false && !esMatriz && !r.rows[0]?.envejece) {
+    throw new ApiError(403, "Este socio no maneja sacos propios. Los sacos de la planta se registran desde la Matriz.");
+  }
+  return { accionistaId, esMatriz };
+}
+
+/** Condición SQL del catálogo del ámbito (parámetro $n = accionista del socio). */
+function condAmbito(a: AmbitoSacos, n: number): { sql: string; params: unknown[] } {
+  return a.esMatriz ? { sql: "accionista_id IS NULL", params: [] } : { sql: `accionista_id = $${n}`, params: [a.accionistaId] };
+}
+
+/** Rechaza si algún saco no pertenece al catálogo del accionista activo. */
+async function assertSacosDelAmbito(client: { query: typeof pool.query }, a: AmbitoSacos, ids: string[]): Promise<void> {
+  const unicos = [...new Set(ids)];
+  if (!unicos.length) return;
+  const c = condAmbito(a, 2);
+  const r = await client.query(`SELECT count(*)::int AS n FROM sack_inventory WHERE id = ANY($1::uuid[]) AND ${c.sql}`, [unicos, ...c.params]);
+  if (Number(r.rows[0].n) !== unicos.length) {
+    throw new ApiError(403, a.esMatriz
+      ? "Ese saco no pertenece al inventario de la Matriz."
+      : "Ese saco no pertenece a tu catálogo propio de sacos.");
   }
 }
 
-// GET todos los tipos de sacos con stock actual
-sacksRouter.get("/", asyncRoute(async (_req, res) => {
+// GET tipos de saco con stock. Por defecto: catálogo de la MATRIZ (lo usan
+// ventas, producción y el indicador de stock). Con ?propio=1: el catálogo del
+// accionista ACTIVO (la Matriz ve el suyo; un socio, solo sus sacos propios).
+sacksRouter.get("/", asyncRoute(async (req, res) => {
+  const propio = req.query.propio === "1";
+  let cond = "accionista_id IS NULL";
+  const params: unknown[] = [];
+  if (propio) {
+    const a = await ambitoSacos(req as AuthenticatedRequest, { exigirManejo: false });
+    const c = condAmbito(a, 1);
+    cond = c.sql; params.push(...c.params);
+  }
   // Orden de catálogo: marcas (por nombre y peso de mayor a menor), luego
   // subproductos y genéricos. `bajo_minimo` alimenta las alertas del Dashboard.
   const result = await pool.query(
     `SELECT *, (stock_minimo > 0 AND stock <= stock_minimo) AS bajo_minimo
      FROM sack_inventory
+     WHERE ${cond}
      ORDER BY CASE categoria WHEN 'MARCA' THEN 0 WHEN 'SUBPRODUCTO' THEN 1 ELSE 2 END,
-              COALESCE(marca, tipo), peso_lb DESC NULLS LAST, tipo`
+              COALESCE(marca, tipo), peso_lb DESC NULLS LAST, tipo`,
+    params
   );
   res.json(result.rows);
 }));
@@ -45,9 +81,9 @@ sacksRouter.get("/", asyncRoute(async (_req, res) => {
 // empacado (con sus presentaciones) para poder venderla y descontar su saco.
 const PESOS_VALIDOS = z.number().positive().max(1000);
 sacksRouter.post("/", asyncRoute(async (req, res) => {
-  await assertMatriz(req as AuthenticatedRequest);
+  const ambito = await ambitoSacos(req as AuthenticatedRequest);
   const body = z.object({
-    categoria: z.enum(["MARCA", "GENERICO"]).default("MARCA"),
+    categoria: z.enum(["MARCA", "GENERICO", "PROPIO"]).default("MARCA"),
     marca: z.string().trim().max(60).optional(),
     calidad: z.enum(["0.11", "CORRIENTE"]).nullable().optional(),
     pesos: z.array(PESOS_VALIDOS).min(1),
@@ -56,6 +92,43 @@ sacksRouter.post("/", asyncRoute(async (req, res) => {
     precio_venta_cliente: z.number().nonnegative().default(0)
   }).parse(req.body);
   if (body.categoria === "MARCA" && !body.marca) throw new ApiError(400, "Escribe el nombre de la marca.");
+
+  // SOCIO con proceso propio (envejecido): sus sacos NO son marcas de venta ni
+  // genéricos de la planta; quedan en SU catálogo con el nombre que les ponga.
+  if (!ambito.esMatriz) {
+    const nombre = (body.marca ?? "").replace(/\s+/g, " ").trim();
+    if (!nombre) throw new ApiError(400, "Escribe el nombre del saco (ej: Saco envejecido).");
+    const out = await inTransaction(async (client) => {
+      const creados: string[] = [];
+      const existentes: string[] = [];
+      for (const peso of [...new Set(body.pesos)]) {
+        const tipo = `${nombre} ${peso} LB`;
+        const prev = await client.query(
+          "SELECT id, activo FROM sack_inventory WHERE accionista_id = $1 AND upper(marca) = upper($2) AND peso_lb = $3",
+          [ambito.accionistaId, nombre, peso]
+        );
+        if (prev.rowCount) {
+          if (prev.rows[0].activo) { existentes.push(tipo); continue; }
+          await client.query(
+            `UPDATE sack_inventory SET activo = true, stock_minimo = $2, precio_compra_default = $3, updated_at = now() WHERE id = $1`,
+            [prev.rows[0].id, body.stock_minimo, body.precio_compra_default]
+          );
+          creados.push(`${tipo} (reactivado)`);
+          continue;
+        }
+        await client.query(
+          `INSERT INTO sack_inventory (tipo, stock, categoria, marca, peso_lb, stock_minimo, precio_compra_default, accionista_id)
+           VALUES ($1, 0, 'PROPIO', $2, $3, $4, $5, $6)`,
+          [tipo, nombre, peso, body.stock_minimo, body.precio_compra_default, ambito.accionistaId]
+        );
+        creados.push(tipo);
+      }
+      return { creados, existentes };
+    });
+    res.status(201).json(out);
+    return;
+  }
+  if (body.categoria === "PROPIO") throw new ApiError(400, "La Matriz registra sacos de marca o genéricos.");
 
   const result = await inTransaction(async (client) => {
     let productId: string | null = null;
@@ -101,7 +174,7 @@ sacksRouter.post("/", asyncRoute(async (req, res) => {
       }
       const prev = productId
         ? await client.query("SELECT id, activo FROM sack_inventory WHERE product_id = $1 AND peso_lb = $2", [productId, peso])
-        : await client.query("SELECT id, activo FROM sack_inventory WHERE categoria = 'GENERICO' AND peso_lb = $1", [peso]);
+        : await client.query("SELECT id, activo FROM sack_inventory WHERE categoria = 'GENERICO' AND peso_lb = $1 AND accionista_id IS NULL", [peso]);
       if (prev.rowCount) {
         if (prev.rows[0].activo) { existentes.push(tipo); continue; }
         await client.query(
@@ -129,7 +202,8 @@ sacksRouter.post("/", asyncRoute(async (req, res) => {
 // Edita los datos de control de un saco (no su stock: el stock solo cambia con
 // compras, ventas y movimientos, para que el kárdex siempre cuadre).
 sacksRouter.patch("/:id", asyncRoute(async (req, res) => {
-  await assertMatriz(req as AuthenticatedRequest);
+  const ambito = await ambitoSacos(req as AuthenticatedRequest);
+  await assertSacosDelAmbito(pool, ambito, [String(req.params.id)]);
   const body = z.object({
     stock_minimo: z.number().int().nonnegative().optional(),
     precio_compra_default: z.number().nonnegative().optional(),
@@ -157,7 +231,8 @@ sacksRouter.patch("/:id", asyncRoute(async (req, res) => {
 // Eliminar: si el saco nunca tuvo movimientos se borra; si tiene historial se
 // DESACTIVA (conserva su kárdex y deja de aparecer en compras/ventas).
 sacksRouter.delete("/:id", asyncRoute(async (req, res) => {
-  await assertMatriz(req as AuthenticatedRequest);
+  const ambito = await ambitoSacos(req as AuthenticatedRequest);
+  await assertSacosDelAmbito(pool, ambito, [String(req.params.id)]);
   const result = await inTransaction(async (client) => {
     const s = await client.query("SELECT id, tipo, stock FROM sack_inventory WHERE id = $1 FOR UPDATE", [req.params.id]);
     if (!s.rowCount) throw new ApiError(404, "Saco no encontrado");
@@ -187,20 +262,29 @@ sacksRouter.get("/:id/movements", asyncRoute(async (req, res) => {
 }));
 
 // GET todos los movimientos recientes
-sacksRouter.get("/movements/recent", asyncRoute(async (_req, res) => {
+sacksRouter.get("/movements/recent", asyncRoute(async (req, res) => {
+  // Por defecto el kárdex de la Matriz; con ?propio=1 el del accionista activo.
+  let cond = "si.accionista_id IS NULL";
+  const params: unknown[] = [];
+  if (req.query.propio === "1") {
+    const a = await ambitoSacos(req as AuthenticatedRequest, { exigirManejo: false });
+    if (!a.esMatriz) { cond = "si.accionista_id = $1"; params.push(a.accionistaId); }
+  }
   const result = await pool.query(
     `SELECT sm.*, si.tipo
      FROM sack_movements sm
      JOIN sack_inventory si ON si.id = sm.sack_id
+     WHERE ${cond}
      ORDER BY sm.created_at DESC
-     LIMIT 100`
+     LIMIT 100`,
+    params
   );
   res.json(result.rows);
 }));
 
 // POST registrar movimiento (entrada o salida)
 sacksRouter.post("/movements", asyncRoute(async (req, res) => {
-  await assertMatriz(req as AuthenticatedRequest);
+  const ambito = await ambitoSacos(req as AuthenticatedRequest);
   const body = z.object({
     sack_id:  z.string().uuid(),
     movement: z.enum(["ENTRADA", "SALIDA"]),
@@ -210,6 +294,7 @@ sacksRouter.post("/movements", asyncRoute(async (req, res) => {
   }).parse(req.body);
 
   const result = await inTransaction(async (client) => {
+    await assertSacosDelAmbito(client, ambito, [body.sack_id]);
     // Verificar stock suficiente para salidas
     if (body.movement === "SALIDA") {
       const stock = await client.query(
@@ -244,7 +329,8 @@ sacksRouter.post("/movements", asyncRoute(async (req, res) => {
 
 // PATCH ajuste manual de stock
 sacksRouter.patch("/:id/adjust", asyncRoute(async (req, res) => {
-  await assertMatriz(req as AuthenticatedRequest);
+  const ambito = await ambitoSacos(req as AuthenticatedRequest);
+  await assertSacosDelAmbito(pool, ambito, [String(req.params.id)]);
   const body = z.object({ stock: z.number().int().nonnegative() }).parse(req.body);
   const result = await pool.query(
     "UPDATE sack_inventory SET stock = $2, updated_at = NOW() WHERE id = $1 RETURNING *",
@@ -257,7 +343,8 @@ sacksRouter.patch("/:id/adjust", asyncRoute(async (req, res) => {
 // la matriz (los sacos son inventario de la planta). Solo autocompleta la compra;
 // el valor sigue siendo editable línea por línea al comprar.
 sacksRouter.patch("/:id/precio", asyncRoute(async (req, res) => {
-  await assertMatriz(req as AuthenticatedRequest);
+  const ambito = await ambitoSacos(req as AuthenticatedRequest);
+  await assertSacosDelAmbito(pool, ambito, [String(req.params.id)]);
   const body = z.object({ precio_compra_default: z.number().nonnegative() }).parse(req.body);
   const result = await pool.query(
     "UPDATE sack_inventory SET precio_compra_default = $2, updated_at = NOW() WHERE id = $1 RETURNING *",
@@ -292,7 +379,7 @@ sacksRouter.post("/purchases", asyncRoute(async (req, res) => {
   // Permisos: la compra mueve inventario Y genera egreso de dinero, por eso
   // exige Caja ADEMAS de Inventario/Produccion. El administrador no tiene limite.
   const authReq = req as AuthenticatedRequest;
-  await assertMatriz(authReq);
+  const ambito = await ambitoSacos(authReq);
   const user = authReq.user;
   if (!user) throw new ApiError(401, "Sesion requerida");
   const perm = await pool.query(
@@ -324,6 +411,8 @@ sacksRouter.post("/purchases", asyncRoute(async (req, res) => {
     if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
     if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
 
+    // Solo se compran sacos del catálogo del accionista activo (Matriz o socio).
+    await assertSacosDelAmbito(client, ambito, body.items.map((i) => i.sack_id));
     // Paso 1: validar + bloquear cada tipo de saco y calcular el total.
     let total = 0;
     const detalle: string[] = [];
