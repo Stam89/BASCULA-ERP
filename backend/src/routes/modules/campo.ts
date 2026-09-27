@@ -429,7 +429,8 @@ campoRouter.get("/clientes/:id/estado-cuenta", asyncRoute(async (req, res) => {
   const movs = (await pool.query(
     `SELECT * FROM (
        SELECT s.fecha, s.created_at, 'servicio' AS clase,
-              CASE WHEN s.tipo = 'cosecha' THEN 'Servicio de cosecha' ELSE 'Servicio de flete' END AS detalle,
+              COALESCE(NULLIF(trim(s.notas), ''),
+                       CASE WHEN s.tipo = 'cosecha' THEN 'Servicio de cosechadora' ELSE 'Servicio de flete' END) AS detalle,
               a.nombre AS maquina, s.qq::float AS qq, s.precio_unitario::float AS precio_unitario,
               s.valor::float AS debe, 0::float AS haber, NULL::text AS cuenta
        FROM campo_servicios s JOIN campo_activos a ON a.id = s.activo_id

@@ -10442,7 +10442,7 @@ export function App() {
     type LiqApiResult = {
       quintals: number; price_per_quintal: number;
       gross_amount: number; advances_discount: number; other_discounts: number; net_amount: number;
-      cruce_flete?: { cruzado: number; abonado_servicios: number; credito_a_favor: number; cliente_piladora: string | null } | null;
+      cargos_campo?: Array<{ servicio_id: string; cliente: string; tipo: "flete" | "cosecha"; monto: number }>;
       fomento_pagos?: { total_abonado: number; cruce_inter_socios: number } | null;
       saldo_en_contra?: { fomento_id: string; monto: number; acreedor: string | null } | null;
     };
@@ -10453,7 +10453,7 @@ export function App() {
     // Saldo EN CONTRA del lote: los Descuentos superan al Bruto (el agricultor queda
     // debiendo). Se manda en la 1ª línea → el backend genera el nuevo fomento.
     const saldoEnContra = Math.max(0, Math.round((liqDiscountsTotal - liqGrossTotal) * 100) / 100);
-    let cruceInterno = 0; let cruceAbonado = 0; let cruceCredito = 0;
+    let cargosCampoTotal = 0; let cargosCampoCantidad = 0;
     let fomentoCruceSocios = 0; let saldoContraMonto = 0; let saldoContraAcreedor: string | null = null;
     const batchId = safeUUID();
     const resultItems: Array<{
@@ -10516,10 +10516,9 @@ export function App() {
         batch_id: batchId
       });
       if (result.saldo_en_contra) { saldoContraMonto += result.saldo_en_contra.monto; saldoContraAcreedor = result.saldo_en_contra.acreedor; }
-      if (result.cruce_flete) {
-        cruceInterno += result.cruce_flete.cruzado;
-        cruceAbonado += result.cruce_flete.abonado_servicios;
-        cruceCredito += result.cruce_flete.credito_a_favor;
+      if (result.cargos_campo?.length) {
+        cargosCampoTotal += result.cargos_campo.reduce((sum, cargo) => sum + Number(cargo.monto), 0);
+        cargosCampoCantidad += result.cargos_campo.length;
       }
       if (result.fomento_pagos) fomentoCruceSocios += result.fomento_pagos.cruce_inter_socios;
       resultItems.push({
@@ -10541,14 +10540,9 @@ export function App() {
     setLiqFomentoDist({});
     setLiqFomentoMontos({});
     setDiscountsOpen(false);
-    // Reporte del cruce de flete interno (Flota Propia), si lo hubo.
+    // Confirma que los servicios propios quedaron pendientes en CxC de Campo.
     let cruceMsg = "";
-    if (cruceInterno > 0.005) {
-      cruceMsg = ` · Cruce Flota Propia: $${cruceInterno.toFixed(2)}`;
-      if (cruceAbonado > 0.005) cruceMsg += ` (saldó $${cruceAbonado.toFixed(2)} de servicios`;
-      if (cruceCredito > 0.005) cruceMsg += `${cruceAbonado > 0.005 ? ", " : " ("}crédito a favor $${cruceCredito.toFixed(2)}`;
-      if (cruceAbonado > 0.005 || cruceCredito > 0.005) cruceMsg += ")";
-    }
+    if (cargosCampoTotal > 0.005) cruceMsg = ` · CxC Transporte: $${cargosCampoTotal.toFixed(2)} (${cargosCampoCantidad} cargo${cargosCampoCantidad === 1 ? "" : "s"})`;
     if (fomentoCruceSocios > 0.005) cruceMsg += ` · Cruce inter-socios (fomento): $${fomentoCruceSocios.toFixed(2)}`;
     if (saldoContraMonto > 0.005) cruceMsg += ` · ⚠️ Saldo en contra: nuevo fomento por $${saldoContraMonto.toFixed(2)}${saldoContraAcreedor ? ` (a favor de ${saldoContraAcreedor})` : ""}`;
     setMessage(`${resultItems.length} lote(s) liquidado(s)${cruceMsg}`);

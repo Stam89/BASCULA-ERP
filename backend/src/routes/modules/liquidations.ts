@@ -8,7 +8,7 @@ import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { calcularNetoLiquidacion, conciliarDescuentoFomento } from "../../utils/money.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
-import { cruzarFleteInterno, type CruceFleteResultado } from "../../services/campo-cruce-flete.js";
+import { registrarCargoCampoLiquidacion, type CargoCampoLiquidacion } from "../../services/campo-cxc-liquidacion.js";
 import { amortizarFomentosLIFO, generarFomentoSaldoEnContra, revertirPagosFomentoDeLiquidacion, type AmortizacionFomentoResultado } from "../../services/fomento-liquidacion.js";
 import { getMatrizId } from "../../services/matriz.js";
 
@@ -319,18 +319,24 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
       }
     }
 
-    // Cruce de flete interno: si el transporte fue de la Flota Propia, el flete
-    // descontado salda la deuda interna con Campo (mismo tx: revierte junto si algo
-    // falla). Tercero/particular = CxP a favor del chofer (ver abajo).
-    let cruce: CruceFleteResultado | null = null;
+    // Flota Propia: el valor descontado al agricultor queda como CxC de Campo
+    // contra el socio que realiza la liquidacion. No se marca como pagado hasta
+    // que el socio registre un abono real desde Cuentas por Cobrar de Campo.
+    const cargosCampo: CargoCampoLiquidacion[] = [];
     if (data.flete_detalle?.tipo === "propia" && data.flete_detalle.monto > 0) {
-      cruce = await cruzarFleteInterno(client, {
-        accionistaId,
+      const cargo = await registrarCargoCampoLiquidacion(client, {
+        liquidationId: liquidation.rows[0].id,
+        origenTipo: "liquidacion_flete",
+        origenId: liquidation.rows[0].id,
+        tipo: "flete",
         monto: data.flete_detalle.monto,
-        activoId: data.flete_detalle.activo_id ?? null,
-        referencia: liquidation.rows[0].liquidation_number,
+        qq: data.quintals,
+        precioUnitario: data.quintals > 0 ? data.flete_detalle.monto / data.quintals : null,
+        activoId: data.flete_detalle.activo_id,
+        prestador: data.flete_detalle.prestador,
         createdBy: data.created_by ?? null
       });
+      if (cargo) cargosCampo.push(cargo);
     }
     // Flete de TERCERO (chofer particular): CxP a su favor por el valor del servicio.
     if (data.flete_detalle?.tipo === "tercero" && data.flete_detalle.monto > 0) {
@@ -463,14 +469,48 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
     // revierte si un Parte Diario ya fue tomado concurrentemente.
     for (const item of detallesCosechadora) {
       const monto = round2(item.qq * item.precio_por_qq);
-      await client.query(
+      const detail = await client.query(
         `INSERT INTO liquidation_harvest_details
            (liquidation_id, campo_parte_id, activo_id, provider_type, provider_name,
             quintals, price_per_quintal, amount)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id`,
         [liquidation.rows[0].id, item.campo_parte_id ?? null, item.activo_id ?? null,
          item.tipo, item.prestador?.trim() || null, item.qq, item.precio_por_qq, monto]
       );
+      if (item.tipo === "propia") {
+        const cargo = await registrarCargoCampoLiquidacion(client, {
+          liquidationId: liquidation.rows[0].id,
+          origenTipo: "liquidacion_cosechadora",
+          origenId: detail.rows[0].id,
+          tipo: "cosecha",
+          monto,
+          qq: item.qq,
+          precioUnitario: item.precio_por_qq,
+          activoId: item.activo_id,
+          prestador: item.prestador,
+          createdBy: data.created_by ?? null
+        });
+        if (cargo) cargosCampo.push(cargo);
+      }
+    }
+
+    // Compatibilidad con clientes antiguos que enviaban una sola cosechadora
+    // agregada, sin cosechadora_detalles.
+    if (!usaDetalleMultiple && cosechadoraPropia > 0) {
+      const cargo = await registrarCargoCampoLiquidacion(client, {
+        liquidationId: liquidation.rows[0].id,
+        origenTipo: "liquidacion_cosechadora",
+        origenId: liquidation.rows[0].id,
+        tipo: "cosecha",
+        monto: cosechadoraPropia,
+        qq: data.quintals,
+        precioUnitario: data.quintals > 0 ? cosechadoraPropia / data.quintals : null,
+        activoId: null,
+        prestador: data.cosechadora_detalle?.prestador,
+        createdBy: data.created_by ?? null
+      });
+      if (cargo) cargosCampo.push(cargo);
     }
 
     // Cosechadoras de TERCEROS: una CxP independiente por prestador/maquina.
@@ -528,29 +568,12 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
           [bascula, matrizId, liquidation.rows[0].id, retDesc]
         );
       }
-      // (2) COSECHADORA → Transporte y Cosechadora (Campo): mismo cruce que los
-      //     fletes (abona un campo_servicio o queda como crédito a favor).
-      if (usaDetalleMultiple) {
-        for (const item of detallesCosechadora.filter((row) => row.tipo === "propia")) {
-          await cruzarFleteInterno(client, {
-            accionistaId,
-            monto: round2(item.qq * item.precio_por_qq),
-            activoId: item.activo_id ?? null,
-            referencia: liquidation.rows[0].liquidation_number,
-            conceptoPrefijo: "Cruce cosechadora",
-            createdBy: data.created_by ?? null
-          });
-        }
-      } else if (cosechadoraPropia > 0) {
-        await cruzarFleteInterno(client, {
-          accionistaId, monto: cosechadoraPropia, activoId: null, referencia: liquidation.rows[0].liquidation_number,
-          conceptoPrefijo: "Cruce cosechadora", createdBy: data.created_by ?? null
-        });
-      }
+      // (2) COSECHADORA → Campo se registra arriba, junto con cada detalle de
+      //     maquina, para conservar agricultor/QQ/tarifa y agruparlo por socio.
       retenciones = { bascula_matriz: bascula, cosechadora_campo: cosechadoraPropia };
     }
 
-    return { ...liquidacionFinal, cruce_flete: cruce, fomento_pagos: fomentoPagos, saldo_en_contra: saldoContra, retenciones };
+    return { ...liquidacionFinal, cargos_campo: cargosCampo, fomento_pagos: fomentoPagos, saldo_en_contra: saldoContra, retenciones };
   });
 
   res.status(201).json(result);
@@ -911,8 +934,33 @@ liquidationsRouter.post("/:id/anular", requireAdmin, asyncRoute(async (req, res)
     // 3) Revertir pagos de fomento + deuda inter-socios (servicio compartido).
     const fom = await revertirPagosFomentoDeLiquidacion(client, liqId);
 
-    // 4) Revertir el cruce de Campo (flete y cosechadora): los movimientos llevan
-    //    el número de la liquidación en el concepto. No bloquea si Campo no aplica.
+    // 4) Revertir las CxC de Campo creadas por esta liquidacion. Si ya hubo un
+    //    abono real, se protege la trazabilidad y se exige revertirlo primero.
+    const cargosCampo = await client.query(
+      `SELECT s.id
+         FROM campo_servicios s
+        WHERE (s.origen_tipo = 'liquidacion_flete' AND s.origen_id = $1)
+           OR (s.origen_tipo = 'liquidacion_cosechadora' AND (
+                 s.origen_id = $1 OR s.origen_id IN (
+                   SELECT id FROM liquidation_harvest_details WHERE liquidation_id = $1
+                 )
+              ))`,
+      [liqId]
+    );
+    if (cargosCampo.rowCount) {
+      const ids = cargosCampo.rows.map((r: { id: string }) => r.id);
+      const abonos = Number((await client.query(
+        "SELECT COUNT(*)::int AS n FROM campo_movimientos WHERE servicio_id = ANY($1::uuid[])",
+        [ids]
+      )).rows[0].n);
+      if (abonos > 0) {
+        throw new ApiError(409, "La liquidacion tiene cobros aplicados en CxC de Transporte. Reversa esos abonos antes de anularla.");
+      }
+      await client.query("DELETE FROM campo_servicios WHERE id = ANY($1::uuid[])", [ids]);
+    }
+
+    // Compatibilidad: revertir cruces internos creados por versiones anteriores.
+    // Los movimientos llevan el numero de la liquidacion en el concepto.
     let fleteRevertido = 0;
     try {
       const del = await client.query(

@@ -1072,8 +1072,8 @@ function ConvertirAplicarModal({ credito, onClose, onDone, onError }: {
 }
 
 // Modal: ficha de Estado de Cuenta con rango de fecha, línea de tiempo y impresión.
-function EstadoCuentaModal({ cliente, nombreOperacion, matrizName, onClose, onError }: {
-  cliente: ClienteCuenta; nombreOperacion: string; matrizName: string; onClose: () => void; onError: (m: string) => void;
+function EstadoCuentaModal({ cliente, nombreOperacion, matrizName, onCobrar, onClose, onError }: {
+  cliente: ClienteCuenta; nombreOperacion: string; matrizName: string; onCobrar?: () => void; onClose: () => void; onError: (m: string) => void;
 }) {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -1132,7 +1132,8 @@ function EstadoCuentaModal({ cliente, nombreOperacion, matrizName, onClose, onEr
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <h2 style={{ margin: 0 }}>📄 Estado de Cuenta</h2>
           <span className="muted">· {cliente.nombre}{cliente.identificacion ? ` · ${cliente.identificacion}` : ""}</span>
-          <button type="button" className="btnSecondary" style={{ marginLeft: "auto" }} onClick={imprimir}>🖨️ Imprimir / PDF</button>
+          {onCobrar && <button type="button" className="primary" style={{ marginLeft: "auto" }} onClick={onCobrar}>💵 Registrar abono</button>}
+          <button type="button" className="btnSecondary" style={{ marginLeft: onCobrar ? 0 : "auto" }} onClick={imprimir}>🖨️ Imprimir / PDF</button>
           <button type="button" onClick={onClose}>Cerrar</button>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginTop: 8 }}>
@@ -1826,17 +1827,14 @@ function CxCView({ nombreOperacion, matrizName, onNotify, onError }: {
                   <td className="num" style={{ color: "#15803d" }}>{money(c.haber)}</td>
                   <td className="num" style={{ fontWeight: 700, color: c.saldo > 0.005 ? "#b45309" : "#15803d" }}>{money(c.saldo)}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <button type="button" className="primary" onClick={() => setAbonar(c)}>💵 Abonar</button>
-                      <button type="button" className="btnSecondary" onClick={() => setVerCuenta(c)}>📄 Detalle</button>
-                    </div>
+                    <button type="button" className="primary" onClick={() => setVerCuenta(c)}>📄 Ver detalle y cobrar</button>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>Saldo = servicios (cosecha/flete) − abonos, en vivo. Si un servicio se cruza desde la Liquidación, su saldo baja aquí automáticamente.</p>
+        <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>Saldo = cargos de cosechadora/flete descontados en liquidaciones − abonos registrados por el socio.</p>
       </div>
 
       {abonar && (
@@ -1847,6 +1845,7 @@ function CxCView({ nombreOperacion, matrizName, onNotify, onError }: {
       )}
       {verCuenta && (
         <EstadoCuentaModal cliente={verCuenta} nombreOperacion={nombreOperacion} matrizName={matrizName}
+          onCobrar={() => { setVerCuenta(null); setAbonar(verCuenta); }}
           onClose={() => setVerCuenta(null)} onError={onError} />
       )}
     </>
