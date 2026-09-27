@@ -7,7 +7,7 @@ Actualizado: 2026-09-27
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: mantenimiento de Transporte unificado con el historial oficial existente.
+- Ultimo cambio funcional: inventario de sacos por marca y peso (descuento en ventas, catalogo en Configuracion, alerta de minimo, sacos en servicios de pilada).
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,17 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Inventario de sacos por marca y peso (2026-09-27)
+
+- REGLA NUEVA: los sacos se descuentan al VENDER, en `PATCH /orders/:id/prepare` (Confirmar Preparacion), por marca (`sales_order_items.product_id`) + peso de la presentacion; `sacos = round(QQ x 100 / peso)`, minimo 1. Revertir preparacion o anular el pedido los devuelve (`restaurarInventarioPreparacion` -> `restaurarSacosPedido`). Idempotente por neto de `sack_movements.ref_order`.
+- Si falta stock NO bloquea: queda negativo y el toast/Dashboard avisan. Marca sin saco propio (p. ej. Lira Verde) NO cae al generico: se avisa `sin_saco`. Arroz sin marca (FINISHED_GOOD) usa el generico `Saco N LB`; subproductos usan Saco Negro/Usado (`tipoSacoEspecial`).
+- Produccion y Seleccion YA NO descuentan sacos. Produccion conserva `sacasArrozBlanco` solo para el pago del estibador. Excepcion: Servicio de Pilada (maquila) con `sacos_servicio[]` -> descuenta y crea CxC `reference_type='sacos_servicio'` (reference_id = processing_batch) por sacos x `precio_venta_cliente`.
+- Servicio central: `backend/src/services/sacos.ts` (+ test). Migracion `20261037_sacos_por_marca.sql`: columnas `categoria/marca/calidad/peso_lb/product_id/stock_minimo/precio_venta_cliente/activo` en `sack_inventory`, `ref_order` en `sack_movements`, producto Extra con presentaciones y catalogo Flor/Oso/Extra/Lira Azul (0.11) + Conejo (Corriente) x 100/50/25/10 LB en stock 0. Los tipos antiguos quedan como GENERICO/SUBPRODUCTO con su stock.
+- API catalogo (solo contexto Matriz): `POST /sacks` (marca + pesos; crea producto/presentaciones si la marca es nueva), `PATCH /sacks/:id` (minimo, precios, calidad, activo; el stock NO se edita aqui), `DELETE /sacks/:id` (borra si no tiene movimientos y stock 0; si no, desactiva).
+- UI: `web-admin/src/components/SacosModule.tsx` (tablero marca x peso en Inventario y Caja, catalogo en Configuracion -> Operacion y Planta -> Catalogo de sacos, alerta en Dashboard si stock <= minimo). Ventas muestra los sacos de la marca/peso al armar la linea; Produccion de servicio tiene "Sacos de la planta para el cliente". `getInventoryProductForBrand` incluye Extra y marcas nuevas por su `calidad`.
+- Verificado en BEGIN...ROLLBACK con la base real (15 comprobaciones): migracion idempotente, descuento/restauracion/idempotencia, negativo sin bloqueo, genérico solo para arroz sin marca, servicio $ correcto, kardex = stock.
+- Pendiente del usuario: cargar stock real de sacos (compra en Caja), fijar minimos y precios al cliente en el Catalogo.
 
 ### Mantenimiento unificado, sin doble digitacion (2026-09-27)
 
