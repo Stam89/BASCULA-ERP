@@ -8,14 +8,17 @@ import { ClienteSearchInput } from "./components/ClienteSearchInput";
 import { CampanitaNotificaciones } from "./components/Notificaciones";
 import { planDeSacos, sobranteLb, SacosAlertaDashboard, SacosCatalogoConfig, SacosTablero } from "./components/SacosModule";
 import * as XLSX from "xlsx";
+import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
 
-const CampoWorkspace = React.lazy(async () => {
+// Módulos bajo demanda: si la pestaña quedó con una versión anterior y el
+// archivo ya no existe, se recarga sola en vez de quedar en blanco.
+const CampoWorkspace = React.lazy(importarConRecarga(async () => {
   const module = await import("./campo/CampoModule");
   return { default: module.CampoWorkspace };
-});
-const ReportReadOnlyViews = React.lazy(() => import("./reports/ReportReadOnlyViews"));
-const FinancialOverview = React.lazy(() => import("./finance/FinancialOverview"));
+}));
+const ReportReadOnlyViews = React.lazy(importarConRecarga(() => import("./reports/ReportReadOnlyViews")));
+const FinancialOverview = React.lazy(importarConRecarga(() => import("./finance/FinancialOverview")));
 
 /** Rubros de gasto operativo sugeridos para el datalist de Subcategoría en Caja.
  *  Estandarizan las etiquetas que luego se vuelven filas del Consolidado Mensual

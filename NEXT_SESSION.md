@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Recarga automatica tras un despliegue (2026-09-27)
+
+- Problema: con la pestana abierta de una version anterior, abrir un modulo bajo demanda (Transporte y Cosechadora, Reportes de solo lectura, Finanzas) pedia un archivo `assets/*.js` que ya no existe y la pantalla quedaba en blanco.
+- `web-admin/src/recargaVersion.ts`: `importarConRecarga` envuelve los `React.lazy` de `App.tsx`; si el import falla por version vieja recarga UNA vez (marca en sessionStorage, ventana 30 s, sin bucles). `main.tsx` escucha `vite:preloadError` con la misma regla.
+
 ### Cuentas espejo completas + notificaciones + diseno tabla en CxC/CxP (2026-09-27)
 
 - `services/cuentas-vinculadas.ts`: `buscarCuentaHermana` unico (puentes pilado/traspaso/maquila/sacos + pares por `reference_type`+`reference_id` para `fomento_cruce` y `retencion_matriz`, que antes NO se espejaban). `espejarAbonoEnContraparte` ademas crea notificacion al otro accionista ("X registro tu pago" / "X te pago"). `bajarPayableHermanaSinCaja` (cruce con producto) usa el mismo buscador y avisa.
