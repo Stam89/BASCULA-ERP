@@ -49,6 +49,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Mis cuentas bancarias: alta directa por socio (2026-09-27)
+
+- Configuracion ya no exige crear una apertura tipo BANCO desde Caja: el administrador puede usar `+ Agregar cuenta bancaria` dentro de `Mis cuentas bancarias`, indicando nombre, banco/tipo y numero.
+- La ficha se registra cerrada y con saldo cero, por lo que NO abre una jornada, NO altera saldos y NO bloquea la caja operativa abierta del socio.
+- La lista vacia ahora se calcula para el socio activo (antes podia quedar una tabla vacia si otro socio tenia cuentas). Los usuarios no administradores cargan sus cuentas desde el endpoint filtrado, en vez de fallar silenciosamente contra la ruta global de administracion.
+- Se bloquean numeros de cuenta duplicados dentro del mismo socio. Verificado: builds backend/frontend, 83/83 pruebas y alta transaccional con ROLLBACK (la cantidad de cajas abiertas no cambio).
+
 ### Configuracion por accionista: el socio solo ve lo que usa (2026-09-27)
 
 - Con un SOCIO activo, Configuracion muestra solo: "🏢 Mi negocio" (Datos del negocio, ya independiente por socio en app_settings.socio_id), "🛒 Tarifas por libra", "🏦 Mis cuentas bancarias" (filtradas a su accionista_id) y "Mis sacos" si envejece. Ocultos para socios: Estado del sistema, Nomina/mano de obra y cuadrilla (los socios solo tienen sueldo administrativo), Parametros de planta, combustible, categorias de caja y mantenimiento, puesta en marcha, zona de peligro, respaldos, tarifas de planta/servicios/empaque/procesos, accionistas, secuenciales y usuarios. Se administran desde CEYRO.

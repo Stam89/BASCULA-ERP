@@ -2377,7 +2377,10 @@ export function App() {
     setConfigSubTab(a.sub);
   }
   // Cuentas bancarias por socio (cash_registers tipo BANCO) para Configuración → Socios & Bancos.
-  const [bankAccounts, setBankAccounts] = useState<Array<{ id: string; name: string; banco: string | null; numero_cuenta: string | null; socio: string; socio_tipo: string; accionista_id: string }>>([]);
+  type BankAccountAdmin = { id: string; name: string; banco: string | null; numero_cuenta: string | null; socio: string; socio_tipo: string; accionista_id: string };
+  const [bankAccounts, setBankAccounts] = useState<BankAccountAdmin[]>([]);
+  const [showNewBankAccount, setShowNewBankAccount] = useState(false);
+  const [newBankAccount, setNewBankAccount] = useState({ name: "", banco: "", numero_cuenta: "" });
   // Secuenciales de documentos (Configuración → Secuenciales). Solo la Guía es editable.
   type SeqRow = { tipo: string; label: string; prefijo: string; next_number: number | null; ejemplo: string; activo: boolean; editable: boolean; modo: string };
   const [sequences, setSequences] = useState<SeqRow[]>([]);
@@ -5556,8 +5559,39 @@ export function App() {
 
   // Cuentas bancarias de los socios (Configuración → Socios & Bancos).
   async function loadBankAccounts() {
-    try { setBankAccounts(await apiGet("/finance/bank/accounts/all")); }
-    catch { /* sin permiso o sin cuentas: se deja vacío */ }
+    try {
+      if (isAdmin) {
+        setBankAccounts(await apiGet<BankAccountAdmin[]>("/finance/bank/accounts/all"));
+        return;
+      }
+      const propias = await apiGet<Array<Pick<BankAccountAdmin, "id" | "name" | "banco" | "numero_cuenta">>>("/finance/bank/accounts");
+      const socio = accionistas.find((a) => a.id === activeAccionistaId);
+      setBankAccounts(propias.map((b) => ({
+        ...b,
+        accionista_id: activeAccionistaId ?? "",
+        socio: socio?.name ?? "Mi negocio",
+        socio_tipo: socio?.tipo ?? "SOCIO"
+      })));
+    } catch {
+      setBankAccounts([]);
+    }
+  }
+  async function createBankAccount() {
+    if (!activeAccionistaId) throw new Error("Selecciona el socio al que pertenece la cuenta");
+    const name = newBankAccount.name.trim();
+    const banco = newBankAccount.banco.trim();
+    const numero = newBankAccount.numero_cuenta.trim();
+    if (!name || !banco || !numero) throw new Error("Completa el nombre, banco y numero de cuenta");
+    await apiPost("/finance/bank/accounts", {
+      accionista_id: activeAccionistaId,
+      name,
+      banco,
+      numero_cuenta: numero
+    });
+    setNewBankAccount({ name: "", banco: "", numero_cuenta: "" });
+    setShowNewBankAccount(false);
+    addToast("Cuenta bancaria agregada", "success");
+    await loadBankAccounts();
   }
   async function saveBankAccounts() {
     for (const b of bankAccounts) {
@@ -20707,16 +20741,38 @@ export function App() {
                 </>)}
                 {/* ── Cuentas bancarias oficiales de cada socio ── */}
                 <details className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🏦 Cuentas Bancarias de Socios</summary>
-                  <p className="muted" style={{ marginTop: -4 }}>Datos bancarios oficiales de cada accionista. Edita y guárdalos con «💾 Guardar Configuración» al pie.</p>
-                  {bankAccounts.length === 0 ? (
-                    <div className="emptyState" style={{ padding: "22px 20px" }}><p>No hay cuentas de banco registradas. Crea una caja tipo <strong>BANCO</strong> en «Caja» para el socio y vuelve aquí a completar Banco y N.º de cuenta.</p></div>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>{esSocioActivoCfg ? "🏦 Mis cuentas bancarias" : "🏦 Cuentas bancarias de socios"}</summary>
+                  <p className="muted" style={{ marginTop: -4 }}>Registra las cuentas oficiales del socio seleccionado. Agregar una cuenta aquí no abre una jornada ni modifica el saldo de Caja.</p>
+                  {isAdmin && (
+                    <div className="buttonRow" style={{ marginBottom: 12 }}>
+                      <button type="button" className="primary" onClick={() => setShowNewBankAccount((v) => !v)}>
+                        {showNewBankAccount ? "Cancelar" : "+ Agregar cuenta bancaria"}
+                      </button>
+                    </div>
+                  )}
+                  {isAdmin && showNewBankAccount && (
+                    <div className="formPanel" style={{ marginBottom: 14, padding: 14 }}>
+                      <strong>Nueva cuenta de {accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "socio seleccionado"}</strong>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10, marginTop: 10 }}>
+                        <label><span>Nombre para identificarla *</span><input type="text" placeholder="Ej: Cuenta corriente principal" value={newBankAccount.name} onChange={(e) => setNewBankAccount((v) => ({ ...v, name: e.target.value }))} /></label>
+                        <label><span>Banco / Tipo de cuenta *</span><input type="text" placeholder="Ej: Banco Pichincha · Corriente" value={newBankAccount.banco} onChange={(e) => setNewBankAccount((v) => ({ ...v, banco: e.target.value }))} /></label>
+                        <label><span>Numero de cuenta *</span><input type="text" placeholder="Ej: 2200XXXXXX" value={newBankAccount.numero_cuenta} onChange={(e) => setNewBankAccount((v) => ({ ...v, numero_cuenta: e.target.value }))} /></label>
+                      </div>
+                      <div className="buttonRow" style={{ marginTop: 10 }}>
+                        <button type="button" className="primary" onClick={() => createBankAccount().catch((err) => addToast(err.message, "error"))}>Guardar cuenta</button>
+                      </div>
+                    </div>
+                  )}
+                  {(() => {
+                    const visibles = bankAccounts.filter((b) => !esSocioActivoCfg || b.accionista_id === activeAccionistaId);
+                    return visibles.length === 0 ? (
+                    <div className="emptyState" style={{ padding: "22px 20px" }}><p>Este socio aun no tiene cuentas bancarias registradas.</p></div>
                   ) : (
                     <div style={{ overflowX: "auto" }}>
                       <table className="cajaTable" style={{ minWidth: 620 }}>
                         <thead><tr><th style={{ whiteSpace: "nowrap" }}>Socio</th><th>Cuenta (caja)</th><th>Banco / Tipo de cuenta</th><th>N.º de cuenta</th></tr></thead>
                         <tbody>
-                          {bankAccounts.filter((b) => !esSocioActivoCfg || b.accionista_id === activeAccionistaId).map((b) => (
+                          {visibles.map((b) => (
                             <tr key={b.id}>
                               <td style={{ fontWeight: 600, whiteSpace: "nowrap" }}>{b.socio}{b.socio_tipo === "MATRIZ" ? " · Matriz" : ""}</td>
                               <td className="muted">{b.name}</td>
@@ -20737,8 +20793,9 @@ export function App() {
                         </tbody>
                       </table>
                     </div>
-                  )}
-                  {isAdmin && bankAccounts.length > 0 && (
+                  );
+                  })()}
+                  {isAdmin && bankAccounts.some((b) => !esSocioActivoCfg || b.accionista_id === activeAccionistaId) && (
                     <div className="buttonRow" style={{ marginTop: 12 }}>
                       <button type="button" className="primary" onClick={() => saveBankAccounts().catch((err) => addToast(err.message, "error"))}>💾 Guardar datos bancarios</button>
                     </div>

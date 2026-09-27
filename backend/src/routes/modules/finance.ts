@@ -244,6 +244,50 @@ financeRouter.get("/bank/accounts/all", requireAdmin, asyncRoute(async (_req, re
   res.json(r.rows);
 }));
 
+/** Registra la ficha permanente de una cuenta bancaria oficial del socio.
+ *
+ * No abre una jornada de Caja: se crea cerrada y con saldo cero para que la
+ * cuenta pueda configurarse y usarse en conciliacion sin interferir con la
+ * unica caja operativa que el socio puede tener abierta.
+ */
+financeRouter.post("/bank/accounts", requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({
+    accionista_id: z.string().uuid(),
+    name: z.string().trim().min(2).max(100),
+    banco: z.string().trim().min(2).max(80),
+    numero_cuenta: z.string().trim().min(3).max(40)
+  }).parse(req.body);
+
+  const dueno = await pool.query(
+    "SELECT id, name FROM accionistas WHERE id = $1 AND is_active = true",
+    [body.accionista_id]
+  );
+  if (!dueno.rowCount) throw new ApiError(404, "El socio seleccionado no existe o esta inactivo");
+
+  const duplicada = await pool.query(
+    `SELECT id FROM cash_registers
+     WHERE accionista_id = $1 AND tipo = 'BANCO'
+       AND regexp_replace(upper(COALESCE(numero_cuenta, '')), '[^A-Z0-9]', '', 'g') =
+           regexp_replace(upper($2), '[^A-Z0-9]', '', 'g')
+     LIMIT 1`,
+    [body.accionista_id, body.numero_cuenta]
+  );
+  if (duplicada.rowCount) throw new ApiError(409, "Esta cuenta bancaria ya esta registrada para el socio");
+
+  const r = await pool.query(
+    `INSERT INTO cash_registers
+       (name, tipo, status, opening_balance, opening_balance_cash,
+        opening_balance_bank, accionista_id, banco, numero_cuenta, closed_at)
+     VALUES ($1, 'BANCO', 'CLOSED', 0, 0, 0, $2, $3, $4, NOW())
+     RETURNING id, name, banco, numero_cuenta, accionista_id`,
+    [body.name, body.accionista_id, body.banco, body.numero_cuenta]
+  );
+  res.status(201).json({
+    ...r.rows[0],
+    socio: dueno.rows[0].name
+  });
+}));
+
 /** Datos del banco sobre una caja existente (nombre del banco y N.º de cuenta).
  *  Solo admin: puede editar la cuenta de cualquier accionista (por eso NO se
  *  filtra por accionista activo; se identifica por el id de la caja). */
