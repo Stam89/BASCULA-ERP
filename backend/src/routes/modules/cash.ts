@@ -595,6 +595,9 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
             --  · selección     -> el proveedor externo
             -- Antes las de socio caían al texto de la descripción y no agrupaban.
             COALESCE(
+              -- Deudas entre socios/Matriz/Transporte: el nombre del OTRO lado.
+              CASE WHEN ap.reference_type = 'campo_servicio' THEN 'Transporte y Cosechadora' END,
+              par.name,
               f.full_name,
               ps_prov.name,
               msc_prov.name,
@@ -609,6 +612,9 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
               NULLIF(ap.description, ''),
               'Cuenta por pagar'
             ) AS farmer_name,
+            -- Deuda entre socios / Matriz / Transporte (se espeja con la otra cara).
+            (ap.reference_type IN ('campo_servicio', 'fomento_cruce', 'retencion_matriz', 'packaging_charge', 'pilado_service', 'lot_transfer', 'service_charge')
+              OR ps.id IS NOT NULL OR msc.id IS NOT NULL OR mpc.id IS NOT NULL OR lt.id IS NOT NULL) AS entre_socios,
             l.liquidation_number, l.batch_id
      FROM accounts_payable ap
      LEFT JOIN farmers f ON f.id = ap.farmer_id
@@ -623,6 +629,13 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
      LEFT JOIN accionistas mpc_prov ON mpc_prov.id = mpc.provider_accionista_id
      LEFT JOIN lot_transfers lt ON lt.payable_id = ap.id
      LEFT JOIN accionistas lt_from ON lt_from.id = lt.from_accionista_id
+     LEFT JOIN LATERAL (
+       SELECT a.name FROM accounts_receivable h JOIN accionistas a ON a.id = h.accionista_id
+        WHERE ap.reference_type IN ('fomento_cruce', 'retencion_matriz')
+          AND h.reference_type = ap.reference_type AND h.reference_id = ap.reference_id
+          AND h.accionista_id IS DISTINCT FROM ap.accionista_id
+        LIMIT 1
+     ) par ON true
      WHERE ap.status IN ('CONFIRMED', 'PARTIAL') AND ap.accionista_id = $1
      ORDER BY ap.created_at DESC`,
     [accionistaId]
@@ -761,7 +774,7 @@ cashRouter.post("/payables/:id/pay", asyncRoute(async (req, res) => {
     const refType = ap.rows[0].reference_type;
     const categoria =
       refType === "pilado_service" ? "PAGO_SERVICIO_PILADO" :
-      refType === "lot_transfer" ? "PAGO_ENTRE_SOCIOS" :
+      refType === "lot_transfer" || refType === "campo_servicio" || refType === "fomento_cruce" || refType === "retencion_matriz" || refType === "packaging_charge" ? "PAGO_ENTRE_SOCIOS" :
       refType === "selection_batch" ? "PAGO_SELECCION" :
       refType === "purchase" ? "PAGO_PROVEEDOR" :
       "PAGO_AGRICULTOR";
@@ -827,14 +840,25 @@ cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
     }
 
     let restante = body.amount;
+    const espejos: Array<Awaited<ReturnType<typeof espejarAbonoEnContraparte>>> = [];
     for (const ap of cuentas.rows) {
       if (restante <= 0) break;
-      const abono = Math.min(restante, Number(ap.balance));
+      const abono = round2(Math.min(restante, Number(ap.balance)));
       const nuevoSaldo = round2(Number(ap.balance) - abono);
       await client.query(
         "UPDATE accounts_payable SET balance = $2, status = $3 WHERE id = $1",
         [ap.id, nuevoSaldo, nuevoSaldo < 0.01 ? "PAID" : "PARTIAL"]
       );
+      // Deuda entre socios/Matriz/Transporte: el abono baja también la POR COBRAR
+      // del que cobra, entra a su caja y le avisa (antes el pago en grupo no espejaba).
+      if (abono > 0) {
+        espejos.push(await espejarAbonoEnContraparte(client, {
+          desde: "payable",
+          cuentaId: String(ap.id),
+          monto: abono,
+          descripcion: `Abono recibido — ${ap.description ?? "cuenta entre accionistas"}`
+        }));
+      }
       restante = round2(restante - abono);
     }
 
@@ -842,7 +866,7 @@ cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
     const refType = primera.reference_type;
     const categoria =
       refType === "pilado_service" ? "PAGO_SERVICIO_PILADO" :
-      refType === "lot_transfer" ? "PAGO_ENTRE_SOCIOS" :
+      refType === "lot_transfer" || refType === "campo_servicio" || refType === "fomento_cruce" || refType === "retencion_matriz" || refType === "packaging_charge" ? "PAGO_ENTRE_SOCIOS" :
       refType === "selection_batch" ? "PAGO_SELECCION" :
       refType === "purchase" ? "PAGO_PROVEEDOR" :
       "PAGO_AGRICULTOR";
@@ -854,7 +878,7 @@ cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
        `Pago a ${primera.farmer_name ?? primera.description ?? "proveedor"}`]
     );
 
-    return { paid: body.amount, remaining: round2(pendiente - body.amount) };
+    return { paid: body.amount, remaining: round2(pendiente - body.amount), espejos: espejos.filter(Boolean) };
   });
 
   res.json(result);

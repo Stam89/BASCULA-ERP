@@ -6,6 +6,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { getRates } from "./labor.js";
+import { dinero, notificar } from "../../services/notificaciones.js";
 
 export const cobrosRouter = Router();
 
@@ -119,6 +120,13 @@ cobrosRouter.post("/", asyncRoute(async (req, res) => {
       // Ambas cuentas quedan pagadas.
       await tx.query("UPDATE accounts_receivable SET balance = 0, status = 'PAID' WHERE id = $1", [ar.rows[0].id]);
       await tx.query("UPDATE accounts_payable SET balance = 0, status = 'PAID' WHERE id = $1", [ap.rows[0].id]);
+      const cobrador = (await tx.query("SELECT name FROM accionistas WHERE id = $1", [provider])).rows[0]?.name ?? "La Matriz";
+      await notificar(tx, {
+        accionistaId: body.client_accionista_id,
+        titulo: `${cobrador} registró tu pago`,
+        mensaje: `${cobrador} cobró de contado ${dinero(monto)} por servicio de ${SERVICIO_LABEL[body.servicio]}. Tu Por Pagar quedó en $0.00${cajaSocioRegistrada ? " y se descontó de tu caja abierta" : " (no tenías caja abierta: registra el egreso)"}.`,
+        monto, referenciaTipo: "accounts_payable", referenciaId: ap.rows[0].id
+      });
       await tx.query("UPDATE matriz_service_charges SET status = 'PAID' WHERE id = $1", [charge.rows[0].id]);
       cobroInmediato = true;
     }

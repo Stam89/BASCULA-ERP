@@ -33,7 +33,7 @@ export async function registrarCargoCampoLiquidacion(
   if (!(monto > 0.005)) return null;
 
   const origen = (await client.query(
-    `SELECT l.liquidation_number, l.created_at::date AS fecha,
+    `SELECT l.liquidation_number, l.created_at::date AS fecha, l.accionista_id,
             a.name AS socio, f.full_name AS agricultor
        FROM liquidations l
        JOIN accionistas a ON a.id = l.accionista_id
@@ -92,5 +92,16 @@ export async function registrarCargoCampoLiquidacion(
     [input.origenTipo, input.origenId]
   )).rows[0]?.id;
   if (!servicioId) return null;
+
+  // ESPEJO: el socio que liquidó debe este flete/cosecha a Transporte y
+  // Cosechadora → su POR PAGAR. El saldo lo mantiene sincronizado el trigger de
+  // campo_movimientos (migración 20261041); si el servicio se anula, se borra.
+  await client.query(
+    `INSERT INTO accounts_payable (accionista_id, reference_type, reference_id, description, amount, balance, status)
+     SELECT $1, 'campo_servicio', $2, $3, $4, $4, 'CONFIRMED'
+     WHERE NOT EXISTS (SELECT 1 FROM accounts_payable WHERE reference_type = 'campo_servicio' AND reference_id = $2)`,
+    [origen.accionista_id, servicioId,
+     `Transporte y Cosechadora · ${etiqueta} · ${origen.liquidation_number}`, monto]
+  );
   return { servicio_id: servicioId, cliente: cliente.nombre, tipo: input.tipo, monto };
 }

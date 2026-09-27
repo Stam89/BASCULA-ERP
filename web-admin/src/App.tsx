@@ -5,6 +5,7 @@ import { money, categoryLabel, stockGroupLabel, formatPersonName } from "./forma
 import type { Farmer, Product, Warehouse, Lot, MateriaPrimaEntry, MateriaPrimaCorreccion, PendingEntry } from "./types";
 import { Metric, ReportTable, Input, Select, MedidorRow, DataList } from "./components/ui";
 import { ClienteSearchInput } from "./components/ClienteSearchInput";
+import { CampanitaNotificaciones } from "./components/Notificaciones";
 import { planDeSacos, sobranteLb, SacosAlertaDashboard, SacosCatalogoConfig, SacosTablero } from "./components/SacosModule";
 import * as XLSX from "xlsx";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
@@ -897,6 +898,8 @@ type AccountPayable = {
   reference_type?: string | null;
   due_date?: string | null;
   description?: string | null;
+  /** Deuda entre socios / Matriz / Transporte (se espeja con la otra cara). */
+  entre_socios?: boolean | null;
 };
 
 type ProductionPackageKey = "whiteRice" | "broken34" | "fineBroken" | "bran";
@@ -1307,6 +1310,8 @@ type AccountsReceivable = {
   farmer_id?: string | null;
   reference_type?: string | null;
   due_date?: string | null;
+  /** Deuda entre socios / Matriz (se espeja con la Por Pagar del otro). */
+  entre_socios?: boolean | null;
   // Rendimiento del lote (subproductos entregados al cliente), en QQ. Solo
   // presente en cuentas de pilado de servicio (maquila); null si no fue pilado.
   rinde_flor_qq?: number | null;
@@ -11050,6 +11055,8 @@ export function App() {
             >
               {loading ? "⟳" : "↻"} Actualizar
             </button>
+            {/* 🔔 Avisos de cobros/pagos entre socios, Matriz y Transporte. */}
+            <CampanitaNotificaciones accionistaKey={authUser ? activeAccionistaId : null} />
             <span className={apiOnline ? "pill online" : "pill offline"}>
               API {apiOnline ? "conectada" : "sin conexión"}
             </span>
@@ -17476,6 +17483,7 @@ export function App() {
           const hoy = new Date().toISOString().slice(0, 10);
           const socioNames = accionistas.filter((a) => a.tipo === "SOCIO").map((a) => (a.name || "").toUpperCase());
           const clasif = (ar: AccountsReceivable) => {
+            if (ar.entre_socios) return "socios";
             if (ar.farmer_id) return "agricultores";
             const rt = ar.reference_type || "";
             if (["service_charge", "pilado_service", "lot_transfer"].includes(rt)) return "socios";
@@ -17505,66 +17513,83 @@ export function App() {
           const detalleGrupo = arDetalleKey ? grupos.find((g) => g.key === arDetalleKey) ?? null : null;
           return (
           <section className="cuentasLayout">
-            <div>
-              <h2 style={{ marginBottom: 2 }}>💵 Cuentas por cobrar</h2>
-              <p className="muted" style={{ margin: "0 0 12px" }}>Quienes deben dinero, agrupado por persona o entidad. Toca una tarjeta para ver el detalle y cobrar.</p>
-            </div>
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
-              <KpiCard title="Total pendiente" value={money(totalPend)} sub={`${grupos.length} deudor(es)`} color="#16a34a" />
-              <KpiCard title="Vencido / por vencer" value={money(vencidas.reduce((a, r) => a + Number(r.balance), 0))} sub={`${vencidas.length} vencida(s)`} color="#dc2626" />
-              <KpiCard title="Transacciones activas" value={String(filtrado.length)} sub="facturas / servicios" color="#2563eb" />
-            </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
-              {tabs.map(([k, lbl]) => (
-                <button key={k} type="button" onClick={() => setArFilter(k)} className={arFilter === k ? "primary" : ""} style={{ fontSize: 12, padding: "6px 14px", borderRadius: 999 }}>{lbl}</button>
-              ))}
-            </div>
-            {!dashboard.current_cash_register && (
-              <div className="alertBox">Abre una caja para poder registrar cobros.</div>
-            )}
-            {filtrado.length === 0 ? (
-              <div className="emptyState"><div className="emptyIcon">✅</div><p>No hay cuentas por cobrar en esta vista</p></div>
-            ) : (
-              <div className="cuentasGrid">
-                {grupos.map((g) => {
-                  const saldo = g.items.reduce((a, r) => a + Number(r.balance), 0);
-                  const total = g.items.reduce((a, r) => a + Number(r.amount), 0);
-                  const abonos = Math.max(0, total - saldo);
-                  const pct = total > 0 ? Math.min(100, (abonos / total) * 100) : 0;
-                  const hayVencida = g.items.some(esVencida);
-                  const inicial = (g.nombre || "?").trim().charAt(0).toUpperCase() || "?";
-                  return (
-                    <article key={g.key} style={{ background: "var(--c-surface, #fff)", border: "1px solid var(--c-border, #e5e7eb)", borderRadius: 14, padding: 18, boxShadow: "0 1px 3px rgba(0,0,0,0.06)", display: "flex", flexDirection: "column", gap: 12 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                        <div style={{ width: 44, height: 44, borderRadius: "50%", background: "#16a34a", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 18, flexShrink: 0 }}>{inicial}</div>
-                        <strong style={{ flex: 1, minWidth: 0, fontSize: 18, fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.nombre}</strong>
-                        {hayVencida && <EstadoBadge status="PARTIAL" vencido={true} />}
-                      </div>
-                      <div>
-                        <span className="muted" style={{ display: "block", fontSize: 12 }}>Saldo total consolidado</span>
-                        <b style={{ fontSize: 26, color: "#16a34a" }}>{money(saldo)}</b>
-                        <div className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>
-                          {g.items.length} transacci{g.items.length === 1 ? "ón" : "ones"} pendiente{g.items.length === 1 ? "" : "s"}
-                        </div>
-                        {(() => { const rinde = rindeDesgloseGrupo(g.items); return rinde ? <div style={{ fontSize: 11, color: "#6b21a8", marginTop: 4, fontWeight: 600 }}>{rinde}</div> : null; })()}
-                      </div>
-                      <div style={{ height: 7, background: "#f1f5f9", borderRadius: 999, overflow: "hidden" }}>
-                        <div style={{ width: `${pct}%`, height: "100%", background: "#16a34a", transition: "width .3s" }} />
-                      </div>
-                      <button type="button" className="primary" onClick={() => setArDetalleKey(g.key)}
-                        style={{ fontSize: 13, padding: "10px 12px", fontWeight: 700 }}>
-                        📄 Ver detalle y Cobrar
-                      </button>
-                      <button type="button" onClick={() => abrirComprarProducto(g)}
-                        title="Comprar producto/subproducto al cliente y cruzarlo contra esta deuda"
-                        style={{ fontSize: 12.5, padding: "9px 12px", fontWeight: 700, background: "#f5f3ff", color: "#6b21a8", border: "1px solid #ddd6fe", borderRadius: 8 }}>
-                        🛍️ Comprar Producto / Cruzar CxC
-                      </button>
-                    </article>
-                  );
-                })}
+            {/* Diseño estilo «Transporte y Cosechadora»: una fila por deudor con
+                Debe · Haber · Saldo y el total arriba. Cambio visual: el detalle,
+                cobrar/abonar, imprimir y Cruzar CxC usan las mismas funciones. */}
+            <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <h2 style={{ margin: 0 }}>📥 Cuentas por Cobrar <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· quién te debe, agrupado por persona o entidad</span></h2>
+                <div style={{ display: "flex", gap: 10, marginLeft: "auto", flexWrap: "wrap" }}>
+                  {vencidas.length > 0 && (
+                    <div className="totalBox" style={{ minWidth: 150, margin: 0, background: "#fee2e2", borderColor: "#fecaca" }}>
+                      <span>VENCIDO</span>
+                      <strong style={{ color: "#b91c1c" }}>{money(vencidas.reduce((a, r) => a + Number(r.balance), 0))}</strong>
+                    </div>
+                  )}
+                  <div className="totalBox" style={{ minWidth: 170, margin: 0, background: "#fef3c7", borderColor: "#fde68a" }}>
+                    <span>TOTAL POR COBRAR</span>
+                    <strong style={{ color: "#b45309" }}>{money(totalPend)}</strong>
+                  </div>
+                </div>
               </div>
-            )}
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "12px 0 4px" }}>
+                {tabs.map(([k, lbl]) => (
+                  <button key={k} type="button" onClick={() => setArFilter(k)} className={arFilter === k ? "primary" : ""} style={{ fontSize: 12, padding: "6px 14px", borderRadius: 999 }}>{lbl}</button>
+                ))}
+              </div>
+              {!dashboard.current_cash_register && (
+                <div className="alertBox" style={{ marginTop: 8 }}>Abre una caja para poder registrar cobros.</div>
+              )}
+              <div style={{ overflowX: "auto" }}>
+                <table className="cajaTable" style={{ marginTop: 8 }}>
+                  <thead><tr>
+                    <th>Cliente / Deudor</th><th className="num">Movimientos</th><th className="num">Debe</th>
+                    <th className="num">Haber</th><th className="num">Saldo</th><th>Acciones</th>
+                  </tr></thead>
+                  <tbody>
+                    {grupos.length === 0 ? (
+                      <tr><td colSpan={6} className="muted" style={{ textAlign: "center", padding: 14 }}>✅ No hay cuentas por cobrar en esta vista.</td></tr>
+                    ) : grupos.map((g) => {
+                      const saldo = g.items.reduce((a, r) => a + Number(r.balance), 0);
+                      const total = g.items.reduce((a, r) => a + Number(r.amount), 0);
+                      const haber = Math.max(0, total - saldo);
+                      const hayVencida = g.items.some(esVencida);
+                      const clase = clasif(g.items[0]);
+                      const etiqueta = g.items.some(esVenta) ? "Cliente de ventas" : clase === "socios" ? "Socio / Matriz · se espeja en su Por Pagar" : clase === "agricultores" ? "Agricultor / cliente de servicio" : `Cuenta de ${matrizName}`;
+                      const rinde = rindeDesgloseGrupo(g.items);
+                      return (
+                        <tr key={g.key}>
+                          <td style={{ fontWeight: 600 }}>
+                            {g.nombre}
+                            {hayVencida && <span style={{ marginLeft: 6 }}><EstadoBadge status="PARTIAL" vencido={true} /></span>}
+                            <small className="muted" style={{ display: "block", fontWeight: 400 }}>{etiqueta}</small>
+                            {rinde && <small style={{ display: "block", color: "#6b21a8", fontWeight: 600 }}>{rinde}</small>}
+                          </td>
+                          <td className="num">{g.items.length}</td>
+                          <td className="num">{money(total)}</td>
+                          <td className="num" style={{ color: "#15803d" }}>{money(haber)}</td>
+                          <td className="num" style={{ fontWeight: 700, color: saldo > 0.005 ? "#b45309" : "#15803d" }}>{money(saldo)}</td>
+                          <td style={{ whiteSpace: "nowrap" }}>
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                              <button type="button" className="primary" onClick={() => setArDetalleKey(g.key)}>📄 Ver detalle y cobrar</button>
+                              <button type="button" onClick={() => abrirComprarProducto(g)}
+                                title="Comprar producto/subproducto al cliente y cruzarlo contra esta deuda"
+                                style={{ background: "#f5f3ff", color: "#6b21a8", border: "1px solid #ddd6fe", borderRadius: 8 }}>
+                                🛍️ Cruzar
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+                Debe = total de las cuentas pendientes · Haber = lo ya abonado · Saldo = lo que falta cobrar.
+                Las deudas entre socios, {matrizName} y Transporte y Cosechadora se espejan: al cobrar aquí baja la Por Pagar del otro y le llega un aviso 🔔.
+              </p>
+            </div>
 
             {comprarProd && (
               <ComprarProductoModal
@@ -17600,6 +17625,7 @@ export function App() {
           const hoy = new Date().toISOString().slice(0, 10);
           const socioNames = accionistas.filter((a) => a.tipo === "SOCIO").map((a) => (a.name || "").toUpperCase());
           const clasif = (p: AccountPayable) => {
+            if (p.entre_socios) return "socios";
             if (p.liquidation_number || p.farmer_id) return "agricultores";
             const rt = p.reference_type || "";
             if (["service_charge", "pilado_service", "lot_transfer"].includes(rt)) return "socios";
@@ -17617,60 +17643,71 @@ export function App() {
           const detalleGrupo = apDetalleKey ? grupos.find((g) => g.key === apDetalleKey) ?? null : null;
           return (
           <section className="cuentasLayout">
-            <div>
-              <h2 style={{ marginBottom: 2 }}>📑 Cuentas por pagar</h2>
-              <p className="muted" style={{ margin: "0 0 12px" }}>Dinero que se debe, agrupado por acreedor o proveedor. Toca una tarjeta para ver el detalle y pagar.</p>
-            </div>
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
-              <KpiCard title="Total pendiente" value={money(totalPend)} sub={`${grupos.length} acreedor(es)`} color="#dc2626" />
-              <KpiCard title="Vencido / por vencer" value={money(vencidos.reduce((a, g) => a + g.items.reduce((s, p) => s + Number(p.balance), 0), 0))} sub={`${vencidos.length} vencida(s)`} color="#b45309" />
-              <KpiCard title="Transacciones activas" value={String(totalTx)} sub="liquidaciones / servicios" color="#2563eb" />
-            </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
-              {tabs.map(([k, lbl]) => (
-                <button key={k} type="button" onClick={() => setApFilter(k)} className={apFilter === k ? "primary" : ""} style={{ fontSize: 12, padding: "6px 14px", borderRadius: 999 }}>{lbl}</button>
-              ))}
-            </div>
-            {!dashboard.current_cash_register && (
-              <div className="alertBox">Abre una caja para poder registrar pagos.</div>
-            )}
-            {grupos.length === 0 ? (
-              <div className="emptyState"><div className="emptyIcon">✅</div><p>No hay cuentas por pagar en esta vista</p></div>
-            ) : (
-              <div className="cuentasGrid">
-                {grupos.map((g) => {
-                  const saldo = g.items.reduce((a, p) => a + Number(p.balance), 0);
-                  const total = g.items.reduce((a, p) => a + Number(p.amount), 0);
-                  const abonos = Math.max(0, total - saldo);
-                  const pct = total > 0 ? Math.min(100, (abonos / total) * 100) : 0;
-                  const hayVencida = g.items.some((p) => !!p.due_date && p.due_date.slice(0, 10) < hoy && Number(p.balance) > 0.001);
-                  const inicial = (g.nombre || "?").trim().charAt(0).toUpperCase() || "?";
-                  return (
-                    <article key={g.key} style={{ background: "var(--c-surface, #fff)", border: "1px solid var(--c-border, #e5e7eb)", borderRadius: 14, padding: 18, boxShadow: "0 1px 3px rgba(0,0,0,0.06)", display: "flex", flexDirection: "column", gap: 12 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                        <div style={{ width: 44, height: 44, borderRadius: "50%", background: "#dc2626", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 18, flexShrink: 0 }}>{inicial}</div>
-                        <strong style={{ flex: 1, minWidth: 0, fontSize: 18, fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.nombre}</strong>
-                        {hayVencida && <EstadoBadge status="PARTIAL" vencido={true} />}
-                      </div>
-                      <div>
-                        <span className="muted" style={{ display: "block", fontSize: 12 }}>Saldo total adeudado</span>
-                        <b style={{ fontSize: 26, color: "#dc2626" }}>{money(saldo)}</b>
-                        <div className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>
-                          {g.items.length} transacci{g.items.length === 1 ? "ón" : "ones"} pendiente{g.items.length === 1 ? "" : "s"}
-                        </div>
-                      </div>
-                      <div style={{ height: 7, background: "#f1f5f9", borderRadius: 999, overflow: "hidden" }}>
-                        <div style={{ width: `${pct}%`, height: "100%", background: "#dc2626", transition: "width .3s" }} />
-                      </div>
-                      <button type="button" className="primary" onClick={() => setApDetalleKey(g.key)}
-                        style={{ fontSize: 13, padding: "10px 12px", fontWeight: 700 }}>
-                        📄 Ver detalle y Pagar
-                      </button>
-                    </article>
-                  );
-                })}
+            {/* Diseño estilo «Transporte y Cosechadora» (ver Por Cobrar). */}
+            <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <h2 style={{ margin: 0 }}>📤 Cuentas por Pagar <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· a quién le debes, agrupado por acreedor</span></h2>
+                <div style={{ display: "flex", gap: 10, marginLeft: "auto", flexWrap: "wrap" }}>
+                  {vencidos.length > 0 && (
+                    <div className="totalBox" style={{ minWidth: 150, margin: 0, background: "#fef3c7", borderColor: "#fde68a" }}>
+                      <span>VENCIDO</span>
+                      <strong style={{ color: "#b45309" }}>{money(vencidos.reduce((a, g) => a + g.items.reduce((s2, p) => s2 + Number(p.balance), 0), 0))}</strong>
+                    </div>
+                  )}
+                  <div className="totalBox" style={{ minWidth: 170, margin: 0, background: "#fee2e2", borderColor: "#fecaca" }}>
+                    <span>TOTAL POR PAGAR</span>
+                    <strong style={{ color: "#b91c1c" }}>{money(totalPend)}</strong>
+                  </div>
+                </div>
               </div>
-            )}
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "12px 0 4px" }}>
+                {tabs.map(([k, lbl]) => (
+                  <button key={k} type="button" onClick={() => setApFilter(k)} className={apFilter === k ? "primary" : ""} style={{ fontSize: 12, padding: "6px 14px", borderRadius: 999 }}>{lbl}</button>
+                ))}
+              </div>
+              {!dashboard.current_cash_register && (
+                <div className="alertBox" style={{ marginTop: 8 }}>Abre una caja para poder registrar pagos.</div>
+              )}
+              <div style={{ overflowX: "auto" }}>
+                <table className="cajaTable" style={{ marginTop: 8 }}>
+                  <thead><tr>
+                    <th>Acreedor</th><th className="num">Movimientos</th><th className="num">Debe</th>
+                    <th className="num">Pagado</th><th className="num">Saldo</th><th>Acciones</th>
+                  </tr></thead>
+                  <tbody>
+                    {grupos.length === 0 ? (
+                      <tr><td colSpan={6} className="muted" style={{ textAlign: "center", padding: 14 }}>✅ No hay cuentas por pagar en esta vista.</td></tr>
+                    ) : grupos.map((g) => {
+                      const saldo = g.items.reduce((a, p) => a + Number(p.balance), 0);
+                      const total = g.items.reduce((a, p) => a + Number(p.amount), 0);
+                      const pagado = Math.max(0, total - saldo);
+                      const hayVencida = g.items.some((p) => !!p.due_date && p.due_date.slice(0, 10) < hoy && Number(p.balance) > 0.001);
+                      const etiqueta = g.clase === "socios" ? "Socio / Matriz / Transporte · se espeja en su Por Cobrar" : g.clase === "agricultores" ? "Agricultor / liquidación" : "Proveedor / otros";
+                      return (
+                        <tr key={g.key}>
+                          <td style={{ fontWeight: 600 }}>
+                            {g.nombre}
+                            {hayVencida && <span style={{ marginLeft: 6 }}><EstadoBadge status="PARTIAL" vencido={true} /></span>}
+                            <small className="muted" style={{ display: "block", fontWeight: 400 }}>{etiqueta}</small>
+                          </td>
+                          <td className="num">{g.items.length}</td>
+                          <td className="num">{money(total)}</td>
+                          <td className="num" style={{ color: "#15803d" }}>{money(pagado)}</td>
+                          <td className="num" style={{ fontWeight: 700, color: saldo > 0.005 ? "#b91c1c" : "#15803d" }}>{money(saldo)}</td>
+                          <td style={{ whiteSpace: "nowrap" }}>
+                            <button type="button" className="primary" onClick={() => setApDetalleKey(g.key)}>📄 Ver detalle y pagar</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+                {totalTx} transacci{totalTx === 1 ? "ón" : "ones"} pendiente{totalTx === 1 ? "" : "s"}. Las deudas con socios, {matrizName} y Transporte y Cosechadora se espejan:
+                al pagar aquí baja la Por Cobrar del otro, entra a su caja y le llega un aviso 🔔.
+              </p>
+            </div>
 
             {detalleGrupo && (
               <CuentaDetalleModal

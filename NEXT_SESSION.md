@@ -49,6 +49,16 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Cuentas espejo completas + notificaciones + diseno tabla en CxC/CxP (2026-09-27)
+
+- `services/cuentas-vinculadas.ts`: `buscarCuentaHermana` unico (puentes pilado/traspaso/maquila/sacos + pares por `reference_type`+`reference_id` para `fomento_cruce` y `retencion_matriz`, que antes NO se espejaban). `espejarAbonoEnContraparte` ademas crea notificacion al otro accionista ("X registro tu pago" / "X te pago"). `bajarPayableHermanaSinCaja` (cruce con producto) usa el mismo buscador y avisa.
+- Bug corregido: `POST /cash/payables/pay-group` no espejaba; ahora espeja cada cuenta abonada.
+- Transporte y Cosechadora: cada cargo de flete/cosecha propia de una liquidacion crea la Por Pagar espejo del socio (`accounts_payable.reference_type='campo_servicio'`, reference_id = campo_servicios.id, SIN liquidation_id). Migracion `20261041_notificaciones_espejo_cuentas.sql`: tabla `notificaciones`, trigger `trg_campo_movimientos_espejo_cxp` (saldo Por Pagar = saldo pendiente del servicio; cobro nuevo en Transporte -> EGRESO en caja abierta del socio salvo cuenta CRUCE PILADORA + aviso), trigger `trg_campo_servicios_borrar_cxp` (anular servicio borra la Por Pagar) y backfill de las 4 existentes. Pagar esa Por Pagar desde el ERP registra el cobro en la CAJA de Transporte (`espejarPagoATransporte`, exige caja de Transporte abierta; marca `bascula.origen_pago='erp'` para no duplicar el egreso). Transporte no toca `cash_movements` en ningun otro lado.
+- Listas: `/receivable` y `/cash/payables` devuelven `entre_socios` y el nombre de la contraparte (Transporte y Cosechadora / socio del fomento).
+- API `GET /notificaciones`, `POST /notificaciones/:id/leer`, `POST /notificaciones/leer-todas` (accionista activo). UI: `web-admin/src/components/Notificaciones.tsx` (campanita en la barra superior, sondeo cada 60 s).
+- UI Por Cobrar / Por Pagar: tabla estilo Transporte (Deudor/Acreedor, Movimientos, Debe, Haber/Pagado, Saldo, Acciones) + recuadros TOTAL/VENCIDO; filtros, detalle, abonar, imprimir y Cruzar sin cambios de logica.
+- Verificado en BEGIN...ROLLBACK con la base real (backfill, cobro en Transporte baja la Por Pagar + egreso + aviso, pago desde ERP sin egreso doble, fomento y retencion espejados con aviso, anular servicio borra la Por Pagar).
+
 ### Cargo por empaque al socio: por bulto, no por QQ (2026-09-27)
 
 - Bug corregido en `services/cargo-empaque.ts`: multiplicaba la tarifa por los QQ del pedido. Ahora `calcularCargoEmpaque` usa bultos = round(QQ x 100 / peso) por linea (igual que la Guia), agrupados por tramo: <=10 LB -> tarifa 10, <=25 -> 25, <=50 -> 50; >50 LB no se cobra. Pesos personalizados ("24 LB", sin presentation_id) usan su tramo (`pesoLineaEmpaque`, `tramoEmpaque`).

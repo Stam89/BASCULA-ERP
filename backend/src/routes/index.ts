@@ -41,6 +41,7 @@ import { purchasesRouter } from "./modules/purchases.js";
 import { costosRouter } from "./modules/costos.js";
 import { cobrosRouter } from "./modules/cobros.js";
 import { campoRouter } from "./modules/campo.js";
+import { notificacionesRouter } from "./modules/notificaciones.js";
 import { externalRouter } from "./modules/external.js";
 import { sriRouter } from "./modules/sri.js";
 
@@ -107,3 +108,5 @@ routes.use("/costos", costosRouter);
 routes.use("/cobros", cobrosRouter);
 // Módulo INDEPENDIENTE de campo (cosechadora, transporte, caja de campo).
 routes.use("/campo", campoRouter);
+// Campanita: avisos de cobros/pagos entre socios, Matriz y Transporte.
+routes.use("/notificaciones", notificacionesRouter);

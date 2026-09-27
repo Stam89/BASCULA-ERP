@@ -5,7 +5,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { round2 } from "../../utils/rice-formulas.js";
-import { espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
+import { bajarPayableHermanaSinCaja, espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const receivableRouter = Router();
@@ -25,8 +25,11 @@ receivableRouter.get("/", asyncRoute(async (req, res) => {
             -- fr: cliente de servicio (agricultor) para pilado maquila y solo-secado.
             -- soc_ret: socio operativo responsable de una retención de báscula →
             -- así TODAS las retenciones de un socio se agrupan en su única tarjeta.
-            COALESCE(c.full_name, dest.name, ps_acc.name, ps.client_name,
+            COALESCE(par.name, c.full_name, dest.name, ps_acc.name, ps.client_name,
                      msc_acc.name, mpc_acc.name, soc_ret.name, fr.full_name) AS customer_name,
+            -- Deuda entre socios / Matriz (se espeja con la Por Pagar del otro).
+            (ar.reference_type IN ('fomento_cruce', 'retencion_matriz', 'packaging_charge', 'pilado_service', 'lot_transfer', 'service_charge')
+              OR lt.id IS NOT NULL OR ps.client_accionista_id IS NOT NULL OR msc.id IS NOT NULL OR mpc.id IS NOT NULL) AS entre_socios,
             c.phone     AS customer_phone,
             s.sale_number,
             -- Rendimiento del lote (subproductos entregados al cliente), en QQ.
@@ -49,6 +52,13 @@ receivableRouter.get("/", asyncRoute(async (req, res) => {
      LEFT JOIN accionistas mpc_acc ON mpc_acc.id = mpc.client_accionista_id
      LEFT JOIN liquidations liq_ret ON ar.reference_type = 'retencion_matriz' AND liq_ret.id = ar.reference_id
      LEFT JOIN accionistas soc_ret ON soc_ret.id = liq_ret.accionista_id
+     LEFT JOIN LATERAL (
+       SELECT a.name FROM accounts_payable h JOIN accionistas a ON a.id = h.accionista_id
+        WHERE ar.reference_type = 'fomento_cruce'
+          AND h.reference_type = ar.reference_type AND h.reference_id = ar.reference_id
+          AND h.accionista_id IS DISTINCT FROM ar.accionista_id
+        LIMIT 1
+     ) par ON true
      LEFT JOIN LATERAL (
        SELECT py0.white_rice_kg, py0.broken_rice_kg, py0.fine_broken_rice_kg, py0.bran_kg
        FROM production_yields py0
@@ -85,24 +95,9 @@ receivableRouter.get("/history", asyncRoute(async (req, res) => {
 
 // Baja el saldo de la cuenta POR PAGAR hermana (si existe) SIN mover caja: el
 // cruce se pagó con producto, no con efectivo. Mantiene los libros sincronizados
-// cuando la deuda es entre socios (service_charge / traspaso / pilado / sacos).
+// cuando la deuda es entre socios y avisa al que debía (ver cuentas-vinculadas).
 async function bajarPayableHermana(client: import("pg").PoolClient, receivableId: string, abono: number): Promise<void> {
-  if (abono <= 0) return;
-  const hermana = await client.query(
-    `SELECT ps.payable_id AS id FROM pilado_services ps WHERE ps.receivable_id = $1
-     UNION ALL SELECT lt.payable_id AS id FROM lot_transfers lt WHERE lt.receivable_id = $1
-     UNION ALL SELECT msc.payable_id AS id FROM matriz_service_charges msc WHERE msc.receivable_id = $1
-     UNION ALL SELECT mpc.payable_id AS id FROM matriz_packaging_charges mpc WHERE mpc.receivable_id = $1`,
-    [receivableId]
-  );
-  const hermanaId = hermana.rows.find((r) => r.id)?.id;
-  if (!hermanaId) return;
-  const ap = await client.query("SELECT balance FROM accounts_payable WHERE id = $1 FOR UPDATE", [hermanaId]);
-  if (!ap.rowCount) return;
-  const saldo = Number(ap.rows[0].balance);
-  const baja = Math.min(saldo, round2(abono));
-  const nuevo = round2(saldo - baja);
-  await client.query("UPDATE accounts_payable SET balance = $2, status = $3 WHERE id = $1", [hermanaId, nuevo, nuevo < 0.01 ? "PAID" : "PARTIAL"]);
+  await bajarPayableHermanaSinCaja(client, receivableId, abono, "compra de producto cruzada con tu deuda");
 }
 
 // POST comprar producto/subproducto a un cliente y CRUZARLO contra su deuda de
