@@ -37,6 +37,52 @@ export type CargoEmpaqueResultado = {
   payable_id: string;
 };
 
+/** Libras por bulto de una línea: de su presentación o del número en su nombre ("98 LB"). */
+export function pesoLineaEmpaque(pesoPresentacion: unknown, nombre: unknown): number | null {
+  const w = Number(pesoPresentacion);
+  if (w > 0) return w;
+  const m = String(nombre ?? "").match(/(\d+(?:[.,]\d+)?)/);
+  const n = m ? Number(m[1].replace(",", ".")) : NaN;
+  return n > 0 ? n : null;
+}
+
+/** Tramo de tarifa de un bulto: ≤10 LB → 10, ≤25 LB → 25, ≤50 LB → 50; más grande no se cobra. */
+export function tramoEmpaque(pesoLb: number): 10 | 25 | 50 | null {
+  if (!(pesoLb > 0)) return null;
+  if (pesoLb <= 10) return 10;
+  if (pesoLb <= 25) return 25;
+  if (pesoLb <= 50) return 50;
+  return null;
+}
+
+/**
+ * Cargo por empaque de un pedido: por cada línea, bultos = round(QQ × 100 ÷ peso)
+ * (igual que la Guía de Remisión) × tarifa del tramo. Antes se multiplicaba la
+ * tarifa por los QQ, lo que cobraba de menos (10 QQ en 10 LB = 100 fundas, no 10).
+ */
+export function calcularCargoEmpaque(
+  lineas: Array<{ qq: number; pesoLb: number | null }>,
+  tarifas: Record<number, number>
+): { detalle: Record<string, { sacos: number; tarifa: number; subtotal: number }>; monto: number } {
+  const bultosPorTramo = new Map<number, number>();
+  for (const l of lineas) {
+    const tramo = l.pesoLb ? tramoEmpaque(l.pesoLb) : null;
+    if (!tramo || !(l.qq > 0)) continue;
+    const bultos = Math.round((l.qq * 100) / (l.pesoLb as number));
+    if (bultos > 0) bultosPorTramo.set(tramo, (bultosPorTramo.get(tramo) ?? 0) + bultos);
+  }
+  const detalle: Record<string, { sacos: number; tarifa: number; subtotal: number }> = {};
+  let monto = 0;
+  for (const [tramo, sacos] of [...bultosPorTramo.entries()].sort((a, b) => a[0] - b[0])) {
+    const tarifa = Number(tarifas[tramo] ?? 0);
+    if (tarifa <= 0) continue;
+    const subtotal = round2(sacos * tarifa);
+    detalle[`${tramo}lb`] = { sacos, tarifa, subtotal };
+    monto = round2(monto + subtotal);
+  }
+  return { detalle, monto };
+}
+
 export async function cobrarEmpaqueAlDespachar(
   client: PoolClient,
   order: { id: string; order_number: string },
@@ -63,27 +109,21 @@ export async function cobrarEmpaqueAlDespachar(
     50: Number(matriz.rows[0].precio_saco_50lb ?? 0)
   };
 
-  // 3) Sacos del pedido agrupados por peso (10/25/50 lb).
-  const grupos = await client.query(
-    `SELECT pp.weight_lb::int AS peso, SUM(i.quantity)::float AS sacos
+  // 3) BULTOS del pedido por tramo de tarifa. La cantidad del pedido está en QQ:
+  //    bultos = QQ × 100 ÷ libras de la presentación (10 QQ en 10 LB = 100 bultos).
+  //    Pesos personalizados usan la tarifa del tramo que les corresponde
+  //    (24 LB → tarifa de 25 LB); más de 50 LB (saco estándar) no se cobra.
+  const lineas = await client.query(
+    `SELECT i.quantity::float AS qq, pp.weight_lb::float AS peso_pres, i.presentation_name
      FROM sales_order_items i
-     JOIN product_presentations pp ON pp.id = i.presentation_id
-     WHERE i.order_id = $1 AND pp.weight_lb IN (10, 25, 50)
-     GROUP BY pp.weight_lb`,
+     LEFT JOIN product_presentations pp ON pp.id = i.presentation_id
+     WHERE i.order_id = $1`,
     [order.id]
   );
-
-  const detalle: Record<string, { sacos: number; tarifa: number; subtotal: number }> = {};
-  let monto = 0;
-  for (const row of grupos.rows) {
-    const peso = Number(row.peso);
-    const sacos = Number(row.sacos);
-    const tarifa = tarifas[peso] ?? 0;
-    if (sacos <= 0 || tarifa <= 0) continue;
-    const subtotal = round2(sacos * tarifa);
-    detalle[`${peso}lb`] = { sacos, tarifa, subtotal };
-    monto = round2(monto + subtotal);
-  }
+  const { detalle, monto } = calcularCargoEmpaque(
+    lineas.rows.map((r) => ({ qq: Number(r.qq), pesoLb: pesoLineaEmpaque(r.peso_pres, r.presentation_name) })),
+    tarifas
+  );
 
   // 4) Si no hay nada que cobrar (tarifas en $0 o sin sacos elegibles), salir.
   if (monto <= 0) return null;

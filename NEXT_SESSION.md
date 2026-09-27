@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Cargo por empaque al socio: por bulto, no por QQ (2026-09-27)
+
+- Bug corregido en `services/cargo-empaque.ts`: multiplicaba la tarifa por los QQ del pedido. Ahora `calcularCargoEmpaque` usa bultos = round(QQ x 100 / peso) por linea (igual que la Guia), agrupados por tramo: <=10 LB -> tarifa 10, <=25 -> 25, <=50 -> 50; >50 LB no se cobra. Pesos personalizados ("24 LB", sin presentation_id) usan su tramo (`pesoLineaEmpaque`, `tramoEmpaque`).
+- No habia cargos historicos (`matriz_packaging_charges` vacia): nada que recalcular.
+- Verificado: tests `cargo-empaque.test.ts` + BEGIN...ROLLBACK (ROVINSON 10 QQ en 10 LB + 22 QQ en 24 LB = 100 x $0.20 + 92 x $0.22 = $40.24, CxC/CxP en espejo; la Matriz no se cobra).
+
 ### Sacos: el cliente elige el saco del sobrante (2026-09-27)
 
 - Nueva columna `sales_order_items.sobrante_saco_lb` (migracion `20261040_sobrante_saco_pedido.sql`; NULL = automatico). `orderItemSchema` la acepta en POST/PUT de pedidos y el listado la devuelve.
