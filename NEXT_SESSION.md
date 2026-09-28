@@ -49,6 +49,15 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Resultado mensual: rubros enlazados a categorias de Caja y nomina por tipo (2026-09-28)
+
+- Problemas reportados: "Pago semana polvillo" caia en Sueldos (la clave "sueldos" atrapaba el nombre de la categoria "Nómina planta / Sueldos"); editar rubros/claves no cambiaba Caja; "claves" confuso.
+- Migracion `20261046_rubros_categoria_nomina.sql`: `costo_rubros.categorias` (codigos de Caja) y `costo_rubros.nomina` (SUELDO_ADMIN, CUADRILLA, PILADOR, ESTIBADOR, SECADOR, POLVILLO). Enlaces por defecto; POLVILLO va con Cuadrilla (pedido del usuario). Quita "sueldos" de las claves de Sueldos. Ajuste de datos: el usuario habia desactivado "Cocinera" y creado "Cocinera / Limpieza" -> se le enlaza COCINERA, se renombra la categoria en Caja y hereda el estimado 0.07 si tenia 0.
+- `clasificarMovimiento` (services/resultado-mensual.ts): nomina (PAGO_MANO_OBRA) por `tipoNomina` (reference_type o rol en la descripcion; sueldo cuyo cargo nombra otro rubro va a ese rubro) -> categoria enlazada -> respaldo por claves. Tests con casos reales de septiembre.
+- API: `GET /resultado-mensual/categorias-caja`, `POST /rubros` (crea su categoria EGRESO/MATRIZ con el mismo nombre si no se elige una; sin duplicar), `PATCH /rubros/:id` (categorias/nomina exclusivas por rubro; renombrar sincroniza la categoria si es solo suya y no protegida), `POST /rubros/:id/asignar` (categoria o tipo de nomina o clave).
+- UI: "⚙️ Configurar rubros" con chips "Categoría de Caja" y "Pagos de nómina" (listas), nuevo rubro con "crear su categoria en Caja"; cada rubro muestra su enlace. Caja recarga categorias (`onCategoriasCaja`). `cashCategoryAllowsSubcategory` ahora muestra Subcategoria en todo EGRESO salvo los de flujo propio.
+- Verificado en BEGIN...ROLLBACK con los egresos reales de septiembre: todo clasificado (Sueldos 200, Cuadrilla 240.58, Pilador/Estibador 21.60, Secada 50, Cocinera/Limpieza 70...).
+
 ### Categorias de Caja = rubros del Resultado mensual (2026-09-28)
 
 - Migracion `20261045_categorias_caja_costos.sql`: renombra (solo `nombre`, el `codigo` no cambia y solo si seguia el nombre original) PAGO_MANO_OBRA -> "Nómina planta / Sueldos", GASTO_OPERATIVO -> "Obra civil / Gastos generales" (conserva "Gastos generales": `cashCategoryAllowsSubcategory` lo busca por nombre), MANTENIMIENTO_EQUIPO -> "Mantenimiento piladora / selector", SERVICIOS_BASICOS -> "Servicios básicos", COMPRA_SACOS -> "Compra de sacos / saquillos" (conserva "saco" para `esCategoriaSacos`). Crea 11 EGRESO/MATRIZ sin duplicar por codigo ni nombre: GAS, DIESEL, CUADRILLA_BAJADA, REPUESTOS, GUARDIANIA, COCINERA, GASTOS_ADMINISTRATIVOS, ALIMENTACION, VEHICULO_GERENCIA, GASOLINA_MONTACARGA, CUADRILLA_GUAYAQUIL. Agrega claves a costo_rubros (codigos + "guardia").

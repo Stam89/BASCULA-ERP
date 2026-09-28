@@ -56,6 +56,57 @@ export function clasificarEgreso(
   return null;
 }
 
+/** Tipos de pago de nómina (todos salen de Caja con la categoría PAGO_MANO_OBRA). */
+export const TIPOS_NOMINA = ["SUELDO_ADMIN", "CUADRILLA", "PILADOR", "ESTIBADOR", "SECADOR", "POLVILLO"] as const;
+export type TipoNomina = (typeof TIPOS_NOMINA)[number];
+
+/** Tipo de pago de nómina de un egreso (null si no es nómina o no se reconoce). */
+export function tipoNomina(e: { category?: string | null; reference_type?: string | null; description?: string | null }): TipoNomina | null {
+  if (String(e.category ?? "").toUpperCase() !== "PAGO_MANO_OBRA") return null;
+  const ref = String(e.reference_type ?? "");
+  if (ref === "admin_salary_payments") return "SUELDO_ADMIN";
+  if (ref === "cuadrilla_entries") return "CUADRILLA";
+  const rol = normalizar(e.description).match(/\b(pilador|estibador|secador|polvillo)\b/);
+  return rol ? (rol[1].toUpperCase() as TipoNomina) : null;
+}
+
+export type RubroRegla = { id: string; claves: string[]; categorias?: string[]; nomina?: string[] };
+export type EgresoClasificable = {
+  category: string; categoria_nombre?: string | null; subcategoria?: string | null; description?: string | null;
+  reference_type?: string | null; maq_activo?: string | null; area?: string | null;
+};
+
+/**
+ * Rubro de un egreso de Caja (regla del usuario: "el gasto entra al rubro de la
+ * categoría que elegí en Caja"):
+ *  · NÓMINA (PAGO_MANO_OBRA): por tipo de pago → el rubro que tenga ese tipo.
+ *    Un sueldo administrativo cuyo cargo nombra otro rubro ("Sueldo Cocinera
+ *    María") va a ese rubro.
+ *  · Resto: el rubro enlazado a su CATEGORÍA de Caja.
+ *  · Respaldo (egresos antiguos sin categoría propia): claves en subcategoría,
+ *    descripción, origen y nombre de la categoría.
+ */
+export function clasificarMovimiento(e: EgresoClasificable, rubros: RubroRegla[]): string | null {
+  const tipo = tipoNomina(e);
+  if (String(e.category ?? "").toUpperCase() === "PAGO_MANO_OBRA") {
+    if (tipo === "SUELDO_ADMIN") {
+      const porCargo = clasificarEgreso([[e.description]], rubros.filter((r) => !(r.nomina ?? []).includes("SUELDO_ADMIN")));
+      if (porCargo) return porCargo;
+    }
+    if (tipo) {
+      const r = rubros.find((x) => (x.nomina ?? []).includes(tipo));
+      if (r) return r.id;
+    }
+    return clasificarEgreso([[e.subcategoria], [e.description]], rubros);
+  }
+  const codigo = String(e.category ?? "").toUpperCase();
+  const porCategoria = rubros.find((x) => (x.categorias ?? []).some((c) => c.toUpperCase() === codigo));
+  if (porCategoria) return porCategoria.id;
+  return clasificarEgreso(
+    [[e.subcategoria], [e.description, e.maq_activo, e.area], [e.reference_type], [e.categoria_nombre, e.category]], rubros
+  );
+}
+
 /** Categorías de Caja que NO son costo operativo (compra de cáscara, fomentos,
  *  pagos entre socios, activos fijos, servicios que se pagan a otros…). */
 export const CATEGORIAS_NO_OPERATIVAS = [
@@ -67,7 +118,11 @@ export const CATEGORIAS_NO_OPERATIVAS = [
 
 const r2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 
-export type Movimiento = { fecha: string; descripcion: string; monto: number; categoria: string; subcategoria: string | null };
+export type Movimiento = {
+  fecha: string; descripcion: string; monto: number; categoria: string; subcategoria: string | null;
+  /** Para clasificar desde el reporte: código de la categoría de Caja y tipo de nómina. */
+  categoria_codigo: string; tipo_nomina: TipoNomina | null;
+};
 
 export async function calcularResultadoMensual(db: Db, opts: { year: number; month: number; matrizId: string; qqManual?: number | null }) {
   const periodo = `${opts.year}-${String(opts.month).padStart(2, "0")}`;
@@ -91,8 +146,8 @@ export async function calcularResultadoMensual(db: Db, opts: { year: number; mon
 
   // 2) Egresos de la Matriz del mes.
   const rubros = (await db.query(
-    "SELECT id, nombre, costo_estimado_qq::float AS estimado, claves, orden FROM costo_rubros WHERE activo ORDER BY orden, nombre"
-  )).rows as Array<{ id: string; nombre: string; estimado: number; claves: string[]; orden: number }>;
+    "SELECT id, nombre, costo_estimado_qq::float AS estimado, claves, categorias, nomina, orden FROM costo_rubros WHERE activo ORDER BY orden, nombre"
+  )).rows as Array<{ id: string; nombre: string; estimado: number; claves: string[]; categorias: string[]; nomina: string[]; orden: number }>;
   const egresos = (await db.query(
     `SELECT m.id, to_char(m.created_at AT TIME ZONE 'America/Guayaquil', 'YYYY-MM-DD') AS fecha, m.amount::float AS monto,
             m.category, cc.nombre AS categoria_nombre, m.subcategoria, m.description, m.reference_type, m.maq_activo, m.area
@@ -112,16 +167,15 @@ export async function calcularResultadoMensual(db: Db, opts: { year: number; mon
   for (const e of egresos) {
     const mov: Movimiento = {
       fecha: e.fecha, monto: r2(e.monto), categoria: e.categoria_nombre ?? e.category, subcategoria: e.subcategoria,
-      descripcion: e.description || e.subcategoria || e.categoria_nombre || e.category
+      descripcion: e.description || e.subcategoria || e.categoria_nombre || e.category,
+      categoria_codigo: e.category, tipo_nomina: tipoNomina(e)
     };
     if (CATEGORIAS_NO_OPERATIVAS.includes(String(e.category).toUpperCase())) {
       const k = e.categoria_nombre ?? e.category;
       excluidos.set(k, r2((excluidos.get(k) ?? 0) + mov.monto));
       continue;
     }
-    const rubroId = clasificarEgreso(
-      [[e.subcategoria], [e.description, e.maq_activo, e.area], [e.reference_type], [e.categoria_nombre, e.category]], rubros
-    );
+    const rubroId = clasificarMovimiento(e, rubros);
     if (!rubroId) { sinClasificar.push(mov); continue; }
     const acc = porRubro.get(rubroId) ?? { monto: 0, detalle: [] };
     acc.monto = r2(acc.monto + mov.monto);
@@ -133,7 +187,7 @@ export async function calcularResultadoMensual(db: Db, opts: { year: number; mon
     const gasto = g?.monto ?? 0;
     const real = qq > 0 ? gasto / qq : 0;
     return {
-      id: r.id, nombre: r.nombre, claves: r.claves, costo_estimado_qq: Number(r.estimado) || 0,
+      id: r.id, nombre: r.nombre, claves: r.claves, categorias: r.categorias, nomina: r.nomina, costo_estimado_qq: Number(r.estimado) || 0,
       gasto_total: gasto, costo_real_qq: Math.round(real * 10000) / 10000,
       alerta: Number(r.estimado) > 0 ? real > Number(r.estimado) + 1e-9 : gasto > 0,
       detalle: g?.detalle ?? []

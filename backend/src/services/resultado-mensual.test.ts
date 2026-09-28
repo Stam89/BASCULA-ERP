@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clasificarEgreso, normalizar } from "./resultado-mensual.js";
+import { clasificarEgreso, clasificarMovimiento, normalizar } from "./resultado-mensual.js";
 
 const RUBROS = [
   { id: "gas", claves: ["gas", "bombona"] },
@@ -42,5 +42,39 @@ describe("clasificarEgreso (rubro por claves)", () => {
   });
   it("sin coincidencia queda sin clasificar", () => {
     expect(clasificarEgreso(["Varios", "Compra de escoba"], RUBROS)).toBeNull();
+  });
+});
+
+describe("clasificarMovimiento (categoría de Caja + nómina por tipo)", () => {
+  const R = [
+    { id: "gas", claves: ["gas"], categorias: ["GAS"] },
+    { id: "cocinera", claves: ["cocinera"], categorias: ["COCINERA"] },
+    { id: "sueldos", claves: ["sueldo"], nomina: ["SUELDO_ADMIN"] },
+    { id: "cuadrilla", claves: ["cuadrilla"], categorias: ["CUADRILLA_BAJADA"], nomina: ["CUADRILLA", "POLVILLO"] },
+    { id: "pilador", claves: ["pilador"], nomina: ["PILADOR", "ESTIBADOR"] },
+    { id: "secada", claves: ["secador"], categorias: ["GUARDIANIA"], nomina: ["SECADOR"] },
+    { id: "operativo", claves: ["gastos generales"], categorias: ["GASTO_OPERATIVO"] }
+  ];
+  const nomina = (reference_type: string, description: string) =>
+    ({ category: "PAGO_MANO_OBRA", categoria_nombre: "Nómina planta / Sueldos", reference_type, description });
+  it("casos reales de septiembre", () => {
+    expect(clasificarMovimiento({ category: "GAS", subcategoria: "Gas", description: "KIN GAS" }, R)).toBe("gas");
+    expect(clasificarMovimiento({ category: "COCINERA", subcategoria: "DANIELA", description: "6 DIAS" }, R)).toBe("cocinera");
+    expect(clasificarMovimiento(nomina("worker_payments", "Pago semana polvillo ROBERTO"), R)).toBe("cuadrilla");
+    expect(clasificarMovimiento(nomina("cuadrilla_entries", "Pago cuadrilla CUADRILLA"), R)).toBe("cuadrilla");
+    expect(clasificarMovimiento(nomina("worker_payments", "Pago semana pilador CUCA"), R)).toBe("pilador");
+    expect(clasificarMovimiento(nomina("worker_payments", "Pago semana estibador TINTON"), R)).toBe("pilador");
+    expect(clasificarMovimiento(nomina("worker_payments", "Pago semana secador HUGO"), R)).toBe("secada");
+    expect(clasificarMovimiento(nomina("admin_salary_payments", "Sueldo ASISTENTE CONTABLE ANGIE RUIZ"), R)).toBe("sueldos");
+  });
+  it("sueldo administrativo cuyo cargo nombra otro rubro", () => {
+    expect(clasificarMovimiento(nomina("admin_salary_payments", "Sueldo Cocinera MARIA"), R)).toBe("cocinera");
+  });
+  it("la categoría manda aunque la subcategoría diga otra cosa", () => {
+    expect(clasificarMovimiento({ category: "GASTO_OPERATIVO", subcategoria: "Gas", description: "Bloques" }, R)).toBe("operativo");
+  });
+  it("categoría sin rubro: respaldo por claves, o sin clasificar", () => {
+    expect(clasificarMovimiento({ category: "OTRA", subcategoria: "Gas", description: "x" }, R)).toBe("gas");
+    expect(clasificarMovimiento({ category: "OTRA", subcategoria: "Escoba", description: "x" }, R)).toBeNull();
   });
 });

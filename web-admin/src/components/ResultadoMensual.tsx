@@ -9,8 +9,13 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch, apiGet, apiPatch, apiPost } from "../api";
 
-type Mov = { fecha: string; descripcion: string; monto: number; categoria: string; subcategoria: string | null };
-type Rubro = { id: string; nombre: string; claves: string[]; costo_estimado_qq: number; gasto_total: number; costo_real_qq: number; alerta: boolean; detalle: Mov[] };
+type Mov = { fecha: string; descripcion: string; monto: number; categoria: string; subcategoria: string | null; categoria_codigo: string; tipo_nomina: string | null };
+type Rubro = { id: string; nombre: string; claves: string[]; categorias: string[]; nomina: string[]; costo_estimado_qq: number; gasto_total: number; costo_real_qq: number; alerta: boolean; detalle: Mov[] };
+type CategoriaCaja = { codigo: string; nombre: string };
+const NOMINA_LABEL: Record<string, string> = {
+  SUELDO_ADMIN: "Sueldo administrativo", CUADRILLA: "Cuadrilla", PILADOR: "Pilador",
+  ESTIBADOR: "Estibador", SECADOR: "Secador", POLVILLO: "Polvillo"
+};
 type Ingreso = { concepto: string; monto: number; origen: "auto" | "manual"; id?: string; nota?: string | null };
 type Reporte = {
   periodo: string;
@@ -30,9 +35,11 @@ const mesActual = () => new Date().toISOString().slice(0, 7);
 const ROJO = { background: "#FFCCCC", color: "#991b1b" };
 const VERDE = { background: "#dcfce7", color: "#166534" };
 
-export function ResultadoMensual({ puedeEditar, avisar, calcularGana }: {
+export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategoriasCaja }: {
   puedeEditar: boolean;
   avisar: (msg: string, tipo: "success" | "error" | "warn") => void;
+  /** Avisa a Caja que cambió su lista de categorías (rubro creado/renombrado). */
+  onCategoriasCaja?: () => void;
   /** Ganancia «Gana» (lotes propios pilados) de cada operación en el mes, con el mismo cálculo del módulo Gana. */
   calcularGana: (periodo: string) => Promise<GanaOperacion[]>;
 }) {
@@ -44,7 +51,13 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana }: {
   const [abierto, setAbierto] = useState<string | null>(null);
   const [nuevo, setNuevo] = useState({ seccion: "INGRESO" as "INGRESO" | "FINANCIERO", concepto: "", monto: "" });
   const [verRubros, setVerRubros] = useState(false);
-  const [nuevoRubro, setNuevoRubro] = useState({ nombre: "", estimado: "", claves: "" });
+  const [nuevoRubro, setNuevoRubro] = useState({ nombre: "", estimado: "", categoria: "" });
+  const [categoriasCaja, setCategoriasCaja] = useState<CategoriaCaja[]>([]);
+  const cargarCategorias = useCallback(() => {
+    apiGet<CategoriaCaja[]>("/resultado-mensual/categorias-caja").then(setCategoriasCaja).catch(() => setCategoriasCaja([]));
+  }, []);
+  useEffect(() => { cargarCategorias(); }, [cargarCategorias]);
+  const nombreCategoria = (codigo: string) => categoriasCaja.find((c) => c.codigo === codigo)?.nombre ?? codigo;
 
   const cargar = useCallback(async () => {
     const [y, m] = periodo.split("-").map(Number);
@@ -73,18 +86,29 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana }: {
     try { await apiPatch(`/resultado-mensual/rubros/${r.id}`, { costo_estimado_qq: valor }); await cargar(); }
     catch (e) { avisar(e instanceof Error ? e.message : "No se pudo guardar", "error"); }
   }
-  async function guardarClaves(r: Rubro, texto: string) {
-    const claves = texto.split(",").map((c) => c.trim()).filter((c) => c.length >= 2);
-    if (claves.join("|") === r.claves.join("|")) return;
-    try { await apiPatch(`/resultado-mensual/rubros/${r.id}`, { claves }); await cargar(); avisar(`Claves de «${r.nombre}» actualizadas`, "success"); }
+  async function renombrar(r: Rubro, nombre: string) {
+    const n = nombre.trim();
+    if (n.length < 2 || n === r.nombre) return;
+    try {
+      const out = await apiPatch<{ categoria_renombrada: string | null }>(`/resultado-mensual/rubros/${r.id}`, { nombre: n });
+      avisar(out.categoria_renombrada ? `Rubro y categoría de Caja renombrados a «${out.categoria_renombrada}»` : `Rubro renombrado a «${n}»`, "success");
+      cargarCategorias(); onCategoriasCaja?.();
+      await cargar();
+    } catch (e) { avisar(e instanceof Error ? e.message : "No se pudo renombrar", "error"); }
+  }
+  async function cambiarEnlaces(r: Rubro, cambios: { categorias?: string[]; nomina?: string[] }) {
+    try { await apiPatch(`/resultado-mensual/rubros/${r.id}`, cambios); await cargar(); }
     catch (e) { avisar(e instanceof Error ? e.message : "No se pudo guardar", "error"); }
   }
   async function asignar(m: Mov, rubroId: string) {
-    const clave = (m.subcategoria || m.descripcion || "").trim().slice(0, 60);
-    if (!rubroId || clave.length < 2) return;
+    if (!rubroId) return;
+    const cuerpo = m.tipo_nomina ? { tipo_nomina: m.tipo_nomina }
+      : m.categoria_codigo && m.categoria_codigo !== "PAGO_MANO_OBRA" ? { categoria_codigo: m.categoria_codigo }
+        : { clave: (m.subcategoria || m.descripcion || "").trim().slice(0, 60) };
     try {
-      await apiPost(`/resultado-mensual/rubros/${rubroId}/claves`, { clave });
-      avisar(`Desde ahora «${clave}» cuenta en ese rubro`, "success");
+      await apiPost(`/resultado-mensual/rubros/${rubroId}/asignar`, cuerpo);
+      const que = m.tipo_nomina ? `los pagos de ${NOMINA_LABEL[m.tipo_nomina] ?? m.tipo_nomina}` : `la categoría «${m.categoria}»`;
+      avisar(`Listo: desde ahora ${que} cuentan en ese rubro`, "success");
       await cargar();
     } catch (e) { avisar(e instanceof Error ? e.message : "No se pudo asignar", "error"); }
   }
@@ -106,16 +130,18 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana }: {
     const est = Number(nuevoRubro.estimado) || 0;
     if (nuevoRubro.nombre.trim().length < 2) { avisar("Escribe el nombre del rubro", "error"); return; }
     try {
-      await apiPost("/resultado-mensual/rubros", {
+      const out = await apiPost<{ categoria_creada: string | null }>("/resultado-mensual/rubros", {
         nombre: nuevoRubro.nombre.trim(), costo_estimado_qq: est,
-        claves: nuevoRubro.claves.split(",").map((c) => c.trim()).filter((c) => c.length >= 2)
+        categorias: nuevoRubro.categoria ? [nuevoRubro.categoria] : [], crear_categoria: !nuevoRubro.categoria
       });
-      setNuevoRubro({ nombre: "", estimado: "", claves: "" });
+      avisar(out.categoria_creada ? `Rubro creado · categoría «${out.categoria_creada}» agregada a Caja` : "Rubro creado", "success");
+      setNuevoRubro({ nombre: "", estimado: "", categoria: "" });
+      cargarCategorias(); onCategoriasCaja?.();
       await cargar();
     } catch (e) { avisar(e instanceof Error ? e.message : "No se pudo crear", "error"); }
   }
   async function desactivarRubro(r: Rubro) {
-    if (!window.confirm(`¿Quitar el rubro «${r.nombre}» del reporte? Sus egresos pasarán a «Sin clasificar».`)) return;
+    if (!window.confirm(`¿Quitar el rubro «${r.nombre}» del reporte? Sus egresos pasarán a «Sin clasificar». La categoría de Caja se conserva (tiene historial).`)) return;
     try { await apiPatch(`/resultado-mensual/rubros/${r.id}`, { activo: false }); await cargar(); }
     catch (e) { avisar(e instanceof Error ? e.message : "No se pudo quitar", "error"); }
   }
@@ -155,7 +181,12 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana }: {
                 {rep.rubros.map((r) => (
                   <Fragment key={r.id}>
                     <tr style={{ cursor: r.detalle.length ? "pointer" : "default" }} onClick={() => r.detalle.length && setAbierto(abierto === r.id ? null : r.id)}>
-                      <td style={{ ...celda, fontWeight: 600 }}>{r.detalle.length ? (abierto === r.id ? "▾ " : "▸ ") : ""}{r.nombre}</td>
+                      <td style={{ ...celda, fontWeight: 600 }}>
+                        {r.detalle.length ? (abierto === r.id ? "▾ " : "▸ ") : ""}{r.nombre}
+                        <small className="muted" style={{ display: "block", fontWeight: 400, fontSize: 11 }}>
+                          {[...r.categorias.map((c) => `Caja: ${nombreCategoria(c)}`), ...r.nomina.map((t) => `Nómina: ${NOMINA_LABEL[t] ?? t}`)].join(" · ") || "Sin categoría enlazada"}
+                        </small>
+                      </td>
                       <td style={num} onClick={(e) => e.stopPropagation()}>
                         {puedeEditar ? (
                           <input type="number" min="0" step="0.01" defaultValue={r.costo_estimado_qq.toFixed(2)} key={`${r.id}-${r.costo_estimado_qq}`}
@@ -215,25 +246,73 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana }: {
               </p>
             )}
             <p className="muted" style={{ fontSize: 11.5, margin: "6px 0 0" }}>
-              Cada egreso de la Caja de CEYRO entra al rubro según su <strong>subcategoría</strong> (o descripción). Toca un rubro para ver sus egresos; los «Sin clasificar» se asignan una vez y el sistema lo recuerda.
+              Cada egreso de la Caja de CEYRO entra al rubro de la <strong>categoría</strong> con que se registró; los pagos de <strong>Nómina</strong> se reparten por tipo (sueldo, cuadrilla, pilador…). Toca un rubro para ver sus egresos; un «Sin clasificar» se asigna una vez y el sistema lo recuerda.
             </p>
             {puedeEditar && (
               <div style={{ marginTop: 10 }}>
-                <button type="button" className="btnSecondary" style={{ fontSize: 12 }} onClick={() => setVerRubros((v) => !v)}>{verRubros ? "Ocultar" : "⚙️ Rubros y claves"}</button>
+                <button type="button" className="btnSecondary" style={{ fontSize: 12 }} onClick={() => setVerRubros((v) => !v)}>{verRubros ? "Ocultar configuración" : "⚙️ Configurar rubros"}</button>
                 {verRubros && (
-                  <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
-                    {rep.rubros.map((r) => (
-                      <div key={r.id} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 2fr) auto", gap: 6, alignItems: "center", fontSize: 12 }}>
-                        <strong>{r.nombre}</strong>
-                        <input defaultValue={r.claves.join(", ")} key={`${r.id}-${r.claves.join(",")}`} onBlur={(e) => guardarClaves(r, e.target.value)}
-                          title="Palabras separadas por coma: si aparecen en la subcategoría o descripción del egreso, cuenta en este rubro" style={{ fontSize: 12, padding: "4px 6px" }} />
-                        <button type="button" className="btnSecondary" style={{ fontSize: 11, color: "#b91c1c" }} onClick={() => desactivarRubro(r)}>Quitar</button>
-                      </div>
-                    ))}
-                    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 90px minmax(0, 2fr) auto", gap: 6, marginTop: 6 }}>
-                      <input value={nuevoRubro.nombre} onChange={(e) => setNuevoRubro({ ...nuevoRubro, nombre: e.target.value })} placeholder="Nuevo rubro" style={{ fontSize: 12 }} />
+                  <div style={{ marginTop: 10, border: "1px solid #e2e8f0", borderRadius: 10, padding: 12, background: "#fbfdff" }}>
+                    <p className="muted" style={{ margin: "0 0 10px", fontSize: 12 }}>
+                      Cada rubro se llena con los egresos de su <strong>categoría de Caja</strong> (la que eliges al registrar el gasto en Caja → ➕ Nuevo movimiento).
+                      Los pagos de <strong>Nómina</strong> usan una sola categoría, por eso se asignan por tipo de pago. Cambiar el nombre de un rubro cambia también el de su categoría en Caja.
+                    </p>
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                        <thead><tr style={{ color: "#475569", background: "#f1f5f9" }}>
+                          <th style={{ ...celda, textAlign: "left" }}>Rubro</th>
+                          <th style={{ ...celda, textAlign: "left" }}>Categoría de Caja</th>
+                          <th style={{ ...celda, textAlign: "left" }}>Pagos de nómina</th>
+                          <th style={celda} />
+                        </tr></thead>
+                        <tbody>
+                          {rep.rubros.map((r) => {
+                            const chip = (texto: string, quitar: () => void) => (
+                              <span key={texto} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "#e0f2fe", color: "#075985", borderRadius: 999, padding: "2px 8px", margin: "0 4px 4px 0", fontWeight: 600 }}>
+                                {texto}<button type="button" onClick={quitar} title="Quitar" style={{ border: "none", background: "transparent", color: "#0369a1", cursor: "pointer", padding: 0, fontSize: 13, lineHeight: 1 }}>×</button>
+                              </span>
+                            );
+                            return (
+                              <tr key={r.id} style={{ verticalAlign: "top" }}>
+                                <td style={celda}>
+                                  <input defaultValue={r.nombre} key={`${r.id}-${r.nombre}`} onBlur={(e) => renombrar(r, e.target.value)}
+                                    onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} style={{ fontSize: 12.5, padding: "4px 6px", width: "100%", minWidth: 160 }} />
+                                </td>
+                                <td style={celda}>
+                                  {r.categorias.map((c) => chip(nombreCategoria(c), () => cambiarEnlaces(r, { categorias: r.categorias.filter((x) => x !== c) })))}
+                                  <select value="" onChange={(e) => e.target.value && cambiarEnlaces(r, { categorias: [...r.categorias, e.target.value] })} style={{ fontSize: 12, padding: "2px 4px", maxWidth: 200 }}>
+                                    <option value="">＋ Enlazar categoría…</option>
+                                    {categoriasCaja.filter((c) => !r.categorias.includes(c.codigo)).map((c) => {
+                                      const otro = rep.rubros.find((x) => x.id !== r.id && x.categorias.includes(c.codigo));
+                                      return <option key={c.codigo} value={c.codigo}>{c.nombre}{otro ? ` (hoy en ${otro.nombre})` : ""}</option>;
+                                    })}
+                                  </select>
+                                </td>
+                                <td style={celda}>
+                                  {r.nomina.map((t) => chip(NOMINA_LABEL[t] ?? t, () => cambiarEnlaces(r, { nomina: r.nomina.filter((x) => x !== t) })))}
+                                  <select value="" onChange={(e) => e.target.value && cambiarEnlaces(r, { nomina: [...r.nomina, e.target.value] })} style={{ fontSize: 12, padding: "2px 4px", maxWidth: 170 }}>
+                                    <option value="">＋ Pago de nómina…</option>
+                                    {Object.entries(NOMINA_LABEL).filter(([t]) => !r.nomina.includes(t)).map(([t, l]) => {
+                                      const otro = rep.rubros.find((x) => x.id !== r.id && x.nomina.includes(t));
+                                      return <option key={t} value={t}>{l}{otro ? ` (hoy en ${otro.nombre})` : ""}</option>;
+                                    })}
+                                  </select>
+                                </td>
+                                <td style={celda}><button type="button" className="btnSecondary" style={{ fontSize: 11, color: "#b91c1c" }} onClick={() => desactivarRubro(r)}>Quitar</button></td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div style={{ marginTop: 12, fontWeight: 700, fontSize: 12.5 }}>➕ Nuevo rubro</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.2fr) 90px minmax(0, 1.4fr) auto", gap: 6, marginTop: 6 }}>
+                      <input value={nuevoRubro.nombre} onChange={(e) => setNuevoRubro({ ...nuevoRubro, nombre: e.target.value })} placeholder="Nombre (ej: Fumigación)" style={{ fontSize: 12 }} />
                       <input type="number" min="0" step="0.01" value={nuevoRubro.estimado} onChange={(e) => setNuevoRubro({ ...nuevoRubro, estimado: e.target.value })} placeholder="$/QQ" style={{ fontSize: 12 }} />
-                      <input value={nuevoRubro.claves} onChange={(e) => setNuevoRubro({ ...nuevoRubro, claves: e.target.value })} placeholder="claves, separadas, por coma" style={{ fontSize: 12 }} />
+                      <select value={nuevoRubro.categoria} onChange={(e) => setNuevoRubro({ ...nuevoRubro, categoria: e.target.value })} style={{ fontSize: 12 }}>
+                        <option value="">Crear su categoría en Caja con el mismo nombre</option>
+                        {categoriasCaja.map((c) => <option key={c.codigo} value={c.codigo}>Usar la categoría existente: {c.nombre}</option>)}
+                      </select>
                       <button type="button" className="primary" style={{ fontSize: 12 }} onClick={crearRubro}>Agregar</button>
                     </div>
                   </div>
