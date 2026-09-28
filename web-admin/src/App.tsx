@@ -607,8 +607,16 @@ type FirebaseDiagnostic = {
   }>;
 };
 
-type ReportKind = "resumen" | "ventas" | "liquidaciones" | "gastos" | "produccion" | "combustible" | "porcobrar" | "arianos";
+type ReportKind = "resumen" | "ventas" | "liquidaciones" | "gastos" | "produccion" | "combustible" | "porcobrar" | "arianos" | "servicios";
 
+// Reporte "Servicios" (solo Matriz): cáscara recibida por tipo de servicio.
+type ServicioTipo = "SECADO_PILADO" | "SECADO" | "PILADO";
+const SERVICIO_TABS: Array<{ key: ServicioTipo; label: string }> = [
+  { key: "SECADO_PILADO", label: "Servicio completo (secado + pilado)" },
+  { key: "SECADO", label: "Solo secado" },
+  { key: "PILADO", label: "Solo pilado" }
+];
+type ServicioRow = { id: string; tipo: ServicioTipo; fecha: string; ticket: string; cliente: string | null; placa: string | null; rice_type: string | null; kg: number; qq: number; lot_code: string | null; lot_status: string | null };
 const reportEndpoint: Record<Exclude<ReportKind, "resumen">, string> = {
   ventas: "sales",
   liquidaciones: "liquidations",
@@ -616,7 +624,8 @@ const reportEndpoint: Record<Exclude<ReportKind, "resumen">, string> = {
   produccion: "production",
   combustible: "fuel",
   porcobrar: "receivable-aging",
-  arianos: "arianos"
+  arianos: "arianos",
+  servicios: "servicios"
 };
 
 const authStorageKey = "bascula-erp:auth";
@@ -1558,6 +1567,7 @@ const SUB_TABS: Record<string, Array<{ key: string; label: string }>> = {
     { key: "combustible", label: "Combustible" },
     { key: "porcobrar", label: "Por cobrar" },
     { key: "arianos", label: "Lotes guardados" },
+    { key: "servicios", label: "Servicios (solo Matriz)" },
   ],
 };
 function subTabKey(moduleKey: string, sub: string): string { return `SUB:${moduleKey}:${sub}`; }
@@ -2842,6 +2852,7 @@ export function App() {
   const [arianosUbic, setArianosUbic] = useState<Record<string, string>>({});
   const [navSearch, setNavSearch] = useState("");
   const [reportBusy, setReportBusy] = useState(false);
+  const [servicioTab, setServicioTab] = useState<ServicioTipo>("SECADO_PILADO");
 
   // ── Fomentos ──────────────────────────────────────────────────────────────
   const [fomentos, setFomentos] = useState<Fomento[]>([]);
@@ -3969,6 +3980,10 @@ export function App() {
   const matrizAccionista = accionistas.find((a) => a.tipo === "MATRIZ") ?? null;
   const matrizName = matrizAccionista?.name?.trim() || appSettings.business_name.trim() || "Matriz";
   const esMatrizActiva = matrizAccionista?.id === activeAccionistaId;
+  // El reporte de Servicios es solo de la Matriz: con otro socio vuelve al Resumen.
+  useEffect(() => {
+    if (reportKind === "servicios" && matrizAccionista && !esMatrizActiva) { setReportKind("resumen"); setReportRows(null); }
+  }, [reportKind, esMatrizActiva, matrizAccionista]);
   // ¿El accionista activo maneja un catálogo de sacos? La Matriz (sus marcas) y
   // el socio con proceso propio de envejecido (STALYN). ROVINSON no.
   const manejaSacosPropios = esMatrizActiva || moduloEnvejecidoHabilitado;
@@ -5512,6 +5527,17 @@ export function App() {
         headers: ["Cliente", "Teléfono", "0-30 días", "31-60", "61-90", "+90 días", "Total", "Antigüedad (días)"],
         rows,
         totals: ["TOTAL", "", m2(t.b0), m2(t.b30), m2(t.b60), m2(t.b90), m2(t.total), ""]
+      };
+    }
+    if (kind === "servicios") {
+      const st = SERVICIO_TABS.find((x) => x.key === servicioTab) ?? SERVICIO_TABS[0];
+      const filas = (data.rows || []).filter((r: ServicioRow) => r.tipo === st.key);
+      const t = data.totales?.[st.key] ?? { tickets: 0, kg: 0, qq: 0 };
+      return {
+        title: `Servicios de la Matriz · ${st.label}`,
+        headers: ["Fecha", "Ticket", "Cliente", "Placa", "Arroz", "Kg neto", "QQ", "Lote"],
+        rows: filas.map((r: ServicioRow) => [new Date(r.fecha).toLocaleDateString("es-EC"), `#${r.ticket}`, r.cliente ?? "—", r.placa || "—", r.rice_type ?? "—", Number(r.kg).toFixed(0), m2(r.qq), r.lot_code ?? "—"]),
+        totals: [`TOTAL · ${t.tickets} tickets`, "", "", "", "", Number(t.kg).toFixed(0), m2(t.qq), ""]
       };
     }
     if (kind === "combustible") {
@@ -19444,14 +19470,14 @@ export function App() {
           <>
             <div className="reportToolbar">
               <div className="reportKinds">
-                {(["resumen", "ventas", "liquidaciones", "gastos", "produccion", "combustible", "porcobrar", "arianos"] as const).filter((k) => puedeVerSubTab("Reportes", k)).map((k) => (
+                {(["resumen", "ventas", "liquidaciones", "gastos", "produccion", "combustible", "porcobrar", "arianos", "servicios"] as const).filter((k) => puedeVerSubTab("Reportes", k) && (k !== "servicios" || esMatrizActiva)).map((k) => (
                   <button
                     key={k}
                     type="button"
                     className={reportKind === k ? "active" : ""}
                     onClick={() => { setReportKind(k); loadReport(k).catch(() => undefined); }}
                   >
-                    {k === "resumen" ? "📊 Resumen" : k === "ventas" ? "🛒 Ventas" : k === "liquidaciones" ? "🌾 Liquidaciones" : k === "gastos" ? "🧾 Gastos" : k === "produccion" ? "⚙️ Producción" : k === "combustible" ? "⛽ Combustible" : k === "porcobrar" ? "📈 Por cobrar" : "📦 Lotes guardados"}
+                    {k === "resumen" ? "📊 Resumen" : k === "ventas" ? "🛒 Ventas" : k === "liquidaciones" ? "🌾 Liquidaciones" : k === "gastos" ? "🧾 Gastos" : k === "produccion" ? "⚙️ Producción" : k === "combustible" ? "⛽ Combustible" : k === "porcobrar" ? "📈 Por cobrar" : k === "servicios" ? "🚜 Servicios" : "📦 Lotes guardados"}
                   </button>
                 ))}
               </div>
@@ -19593,7 +19619,55 @@ export function App() {
               </>
             )}
 
-            {reportRows && reportRows.kind !== "resumen" && reportRows.kind !== "arianos" && (
+            {/* ── Servicios de la Matriz: completo / solo secado / solo pilado ── */}
+            {reportKind === "servicios" && reportRows?.kind === "servicios" && (() => {
+              const d = reportRows.data as { rows: ServicioRow[]; totales: Record<string, { tickets: number; kg: number; qq: number }> };
+              const filas = d.rows.filter((r) => r.tipo === servicioTab);
+              const t = d.totales[servicioTab] ?? { tickets: 0, kg: 0, qq: 0 };
+              const estado = (r: ServicioRow) => !r.lot_code ? (r.tipo === "PILADO" ? "Por pilar" : "Por secar")
+                : ["PROCESSED", "LIQUIDATED", "CLOSED"].includes(r.lot_status ?? "") ? "Pilado"
+                : r.lot_status === "IN_PROCESS" ? "En pilado"
+                : r.tipo === "PILADO" ? "Por pilar" : "Secado";
+              return (
+                <div className="tablePanel">
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10, marginBottom: 12 }}>
+                    {SERVICIO_TABS.map((st) => {
+                      const tt = d.totales[st.key] ?? { tickets: 0, kg: 0, qq: 0 };
+                      return (
+                        <button key={st.key} type="button" onClick={() => setServicioTab(st.key)}
+                          style={{ textAlign: "left", padding: "10px 12px", borderRadius: 10, cursor: "pointer",
+                            border: servicioTab === st.key ? "2px solid #0f766e" : "1px solid #e2e8f0",
+                            background: servicioTab === st.key ? "#f0fdfa" : "#fff" }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 700, color: "#334155" }}>{st.label}</div>
+                          <div style={{ fontSize: 22, fontWeight: 800, color: "#0f172a" }}>{tt.qq.toFixed(2)} QQ</div>
+                          <div className="muted" style={{ fontSize: 12 }}>{tt.tickets} ticket{tt.tickets === 1 ? "" : "s"} · {tt.kg.toLocaleString("es-EC")} kg</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <table>
+                    <thead><tr><th>Fecha</th><th>Ticket</th><th>Cliente</th><th>Placa</th><th>Arroz</th><th className="num">Kg neto</th><th className="num">QQ</th><th>Lote</th><th>Estado</th></tr></thead>
+                    <tbody>
+                      {filas.length === 0 && <tr><td colSpan={9} className="muted">Sin ingresos de este servicio en el rango.</td></tr>}
+                      {filas.map((r) => (
+                        <tr key={r.id}>
+                          <td>{new Date(r.fecha).toLocaleDateString("es-EC")}</td>
+                          <td>#{r.ticket}</td><td>{r.cliente ?? "—"}</td><td>{r.placa || "—"}</td><td>{r.rice_type ?? "—"}</td>
+                          <td className="num">{Number(r.kg).toLocaleString("es-EC")}</td>
+                          <td className="num" style={{ fontWeight: 700 }}>{Number(r.qq).toFixed(2)}</td>
+                          <td>{r.lot_code ?? "—"}</td><td>{estado(r)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    {filas.length > 0 && (
+                      <tfoot><tr><td colSpan={5} style={{ fontWeight: 700 }}>TOTAL · {t.tickets} ticket{t.tickets === 1 ? "" : "s"}</td><td className="num" style={{ fontWeight: 700 }}>{t.kg.toLocaleString("es-EC")}</td><td className="num" style={{ fontWeight: 700 }}>{t.qq.toFixed(2)}</td><td colSpan={2} /></tr></tfoot>
+                    )}
+                  </table>
+                </div>
+              );
+            })()}
+
+            {reportRows && reportRows.kind !== "resumen" && reportRows.kind !== "arianos" && reportRows.kind !== "servicios" && (
               <React.Suspense fallback={<div className="tablePanel muted">Cargando reporte...</div>}>
                 <ReportReadOnlyViews report={reportRows as ReadOnlyReport} matrizName={matrizName} />
               </React.Suspense>

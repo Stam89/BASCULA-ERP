@@ -390,6 +390,47 @@ reportsRouter.get("/production", asyncRoute(async (req, res) => {
 // Combustible de secado: se muestra a nivel MOTOR (consumo real) y a nivel
 // secadora (reparto proporcional). Todo es propiedad de CEYRO, así que no se
 // filtra por accionista: se consolida el consumo de todos los socios.
+// ── Servicios de la Matriz: cáscara recibida por tipo de servicio ───────────
+// Ingresos de báscula (no anulados) del rango, separados en Servicio completo
+// (secado + pilado), Solo secado y Solo pilado. Es información de la Matriz
+// (ella presta los servicios): con otro socio activo se rechaza.
+reportsRouter.get("/servicios", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
+  const acc = accionistaId ? await pool.query("SELECT tipo FROM accionistas WHERE id = $1", [accionistaId]) : null;
+  if (acc?.rows[0]?.tipo !== "MATRIZ") {
+    res.status(403).json({ error: "El reporte de servicios es solo de la Matriz. Cambia a la Matriz para verlo." });
+    return;
+  }
+  const { from, to } = parseRange(req.query);
+  const r = await pool.query(
+    `SELECT w.id, w.operation_type AS tipo,
+            (w.created_at AT TIME ZONE 'America/Guayaquil') AS fecha,
+            COALESCE(m.raw_payload->>'numeroTicket', w.ticket_number) AS ticket,
+            f.full_name AS cliente,
+            m.raw_payload->>'placa' AS placa,
+            w.rice_type,
+            COALESCE(w.net_weight, 0)::float AS kg,
+            COALESCE(w.quintals, 0)::float AS qq,
+            l.lot_code, l.status::text AS lot_status
+       FROM weighing_tickets w
+       LEFT JOIN farmers f ON f.id = w.farmer_id
+       LEFT JOIN mobile_synced_tickets m ON m.weighing_ticket_id = w.id
+       LEFT JOIN lots l ON l.id = w.lot_id
+      WHERE w.operation_type IN ('SECADO_PILADO', 'SECADO', 'PILADO')
+        AND w.status::text <> 'CANCELLED'
+        AND (w.created_at AT TIME ZONE 'America/Guayaquil')::date BETWEEN $1::date AND $2::date
+      ORDER BY w.created_at ASC`,
+    [from, to]
+  );
+  const tipos = ["SECADO_PILADO", "SECADO", "PILADO"] as const;
+  const r3 = (n: number) => Math.round(n * 1000) / 1000;
+  const totales = Object.fromEntries(tipos.map((t) => {
+    const filas = r.rows.filter((x) => x.tipo === t);
+    return [t, { tickets: filas.length, kg: r3(filas.reduce((a, x) => a + Number(x.kg), 0)), qq: r3(filas.reduce((a, x) => a + Number(x.qq), 0)) }];
+  }));
+  res.json({ from, to, rows: r.rows, totales });
+}));
+
 reportsRouter.get("/fuel", asyncRoute(async (req, res) => {
   const { from, to } = parseRange(req.query);
   if (!(await hasTable("drying_tunnel_reports"))) {

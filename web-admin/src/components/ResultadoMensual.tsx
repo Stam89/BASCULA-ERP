@@ -163,36 +163,118 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
     return () => document.removeEventListener("mousedown", cerrar);
   }, [menu]);
 
-  // 🖨️ Imprimir: abre el reporte (tal como se ve, sin botones ni formularios)
-  // en una ventana aparte con los mismos estilos, lista para imprimir o PDF.
+  // 🖨️ Imprimir: arma una HOJA LIMPIA A4 con los datos del reporte (no copia la
+  // pantalla, que en papel se desarmaba): encabezado, costos por rubro, resultado
+  // del mes y cuadros de cáscara, ingresos y gastos financieros.
   const reporteRef = useRef<HTMLDivElement | null>(null);
   const imprimir = () => {
-    if (vista !== "reporte") { setVista("reporte"); avisar("Se abrió el reporte: pulsa 🖨️ Imprimir de nuevo.", "warn"); return; }
-    const nodo = reporteRef.current;
-    if (!nodo) return;
-    const w = window.open("", "_blank", "width=1000,height=800");
+    if (!rep) return;
+    const w = window.open("", "_blank", "width=900,height=800");
     if (!w) { avisar("El navegador bloqueó la ventana de impresión. Permite ventanas emergentes.", "warn"); return; }
-    const estilos = Array.from(document.querySelectorAll("style, link[rel='stylesheet']")).map((el) => el.outerHTML).join("");
-    const [y, m] = (rep?.periodo ?? periodo).split("-");
-    const mesNombre = new Date(Number(y), Number(m) - 1, 1).toLocaleDateString("es-EC", { month: "long", year: "numeric" });
-    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Resultado mensual ${rep?.periodo ?? periodo}</title>${estilos}
-      <style>
-        body { background: #fff !important; padding: 18px; }
-        button, input, select, textarea, form, .rm-noprint { display: none !important; }
-        .rm-grid { display: block !important; }
-        .rm-card { break-inside: avoid; box-shadow: none !important; margin-bottom: 12px; }
-        @page { size: A4; margin: 12mm; }
-      </style></head><body>
-      <div class="rm-wrap">
-        <div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #0f172a;padding-bottom:6px;margin-bottom:12px">
-          <h2 style="margin:0;font-size:18px">📊 Resultado mensual · ${mesNombre.toUpperCase()}</h2>
-          <span style="font-size:12px;color:#64748b">Impreso ${new Date().toLocaleString("es-EC")}</span>
+    const esc = (t: unknown) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
+    const [y, m] = rep.periodo.split("-");
+    const mesNombre = new Date(Number(y), Number(m) - 1, 1).toLocaleDateString("es-EC", { month: "long", year: "numeric" }).toUpperCase();
+    const qq = rep.cascara.total;
+
+    const filasRubros = rep.rubros.map((r) => {
+      const conGasto = r.gasto_total > 0;
+      const cls = conGasto ? (r.alerta ? "alerta" : "ok") : "";
+      return `<tr><td>${esc(r.nombre)}</td><td class="num">${porQq(r.costo_estimado_qq)}</td>` +
+        `<td class="num">${conGasto ? dinero(r.gasto_total) : "—"}</td>` +
+        `<td class="num ${cls}">${conGasto ? porQq(r.costo_real_qq) : "—"}</td></tr>`;
+    }).join("") + (rep.sin_clasificar.monto > 0
+      ? `<tr><td><b>Sin clasificar</b></td><td class="num">—</td><td class="num">${dinero(rep.sin_clasificar.monto)}</td><td class="num">${porQq(qq > 0 ? rep.sin_clasificar.monto / qq : 0)}</td></tr>`
+      : "");
+
+    const filasIngresos = [
+      ...rep.ingresos.map((i) => `<tr><td>${esc(i.concepto)}</td><td class="num">${dinero(i.monto)}</td></tr>`),
+      ...gana.map((g) => `<tr><td>Gana · ${esc(g.operacion)}</td><td class="num">${dinero(g.utilidad)}</td></tr>`)
+    ].join("") || `<tr><td colspan="2" class="muted">Sin ingresos adicionales.</td></tr>`;
+
+    const filasFin = rep.financieros.map((f) => `<tr><td>${esc(f.concepto)}</td><td class="num">${dinero(f.monto)}</td></tr>`).join("")
+      || `<tr><td colspan="2" class="muted">Sin gastos financieros.</td></tr>`;
+
+    const filasCascara = rep.cascara.operaciones.map((o) => `<tr><td>${esc(o.operacion)} <span class="muted">· ${o.liquidaciones} liq.</span></td><td class="num">${o.qq.toFixed(2)} QQ</td></tr>`).join("");
+
+    const recepcion = rep.recepcion
+      ? `<h3>Cáscara recibida por servicio</h3><table><thead><tr><th>Tipo</th><th class="num">Tickets</th><th class="num">QQ</th></tr></thead><tbody>` +
+        rep.recepcion.tipos.map((t) => `<tr><td>${esc(t.nombre)}</td><td class="num">${t.tickets}</td><td class="num">${t.qq.toFixed(2)}</td></tr>`).join("") +
+        `</tbody><tfoot><tr><td>Total servicios</td><td class="num">${rep.recepcion.tipos.filter((t) => t.tipo !== "COMPRA").reduce((s2, t) => s2 + t.tickets, 0)}</td><td class="num">${rep.recepcion.total_servicios_qq.toFixed(2)}</td></tr>` +
+        `<tr><td>Total recibido</td><td class="num">${rep.recepcion.total_tickets}</td><td class="num">${rep.recepcion.total_qq.toFixed(2)}</td></tr></tfoot></table>`
+      : "";
+
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Resultado mensual ${esc(rep.periodo)}</title><style>
+      *{box-sizing:border-box}
+      body{font-family:Arial,Helvetica,sans-serif;font-size:11.5px;color:#111;margin:0;padding:14mm}
+      .head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #0f766e;padding-bottom:6px;margin-bottom:10px}
+      .head h1{font-size:17px;margin:0}
+      .head .sub{color:#555;font-size:11px}
+      h3{font-size:12.5px;margin:14px 0 4px;text-transform:uppercase;letter-spacing:.5px;color:#0f766e}
+      table{width:100%;border-collapse:collapse;margin-bottom:4px}
+      th{background:#0f766e;color:#fff;padding:5px 7px;text-align:left;font-size:10.5px;text-transform:uppercase}
+      td{padding:4px 7px;border-bottom:1px solid #ddd;vertical-align:top}
+      .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+      tfoot td{font-weight:bold;border-top:2px solid #111;background:#f3f4f6}
+      td.alerta{background:#fee2e2;color:#b91c1c;font-weight:bold}
+      td.ok{color:#15803d;font-weight:bold}
+      .muted{color:#777}
+      .cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+      .neto{margin-top:10px;padding:10px 12px;border:2px solid;border-radius:6px;text-align:center}
+      .neto .v{font-size:22px;font-weight:bold}
+      .perdida{border-color:#cc0000;color:#cc0000;background:#fff5f5}
+      .ganancia{border-color:#15803d;color:#15803d;background:#f0fdf4}
+      .nota{font-size:10px;color:#666;margin-top:8px}
+      section{break-inside:avoid}
+      @page{size:A4;margin:10mm}
+      @media print{body{padding:0}}
+    </style></head><body>
+      <div class="head">
+        <div><h1>RESULTADO MENSUAL · ${esc(mesNombre)}</h1>
+          <div class="sub">Costo real = gasto del rubro ÷ ${qq.toFixed(2)} QQ de cáscara${rep.cascara.manual ? " (ingresado a mano)" : " comprada en el mes"}</div></div>
+        <div class="sub">Impreso: ${esc(new Date().toLocaleString("es-EC"))}</div>
+      </div>
+
+      <section>
+        <h3>Costos operativos por rubro</h3>
+        <table><thead><tr><th>Rubro</th><th class="num">Costo estimado</th><th class="num">Gasto</th><th class="num">Costo real</th></tr></thead>
+          <tbody>${filasRubros}</tbody>
+          <tfoot><tr><td>TOTAL COSTOS OPERATIVOS</td><td class="num">${porQq(rep.costo_estimado_qq)}</td><td class="num">${dinero(rep.total_costos)}</td><td class="num">${porQq(rep.costo_real_qq)}</td></tr></tfoot>
+        </table>
+        <div class="nota">En rojo: el costo real por QQ supera el estimado.</div>
+      </section>
+
+      <section>
+        <h3>Resultado del mes</h3>
+        <table><tbody>
+          <tr><td>+ Ingresos adicionales${gana.length ? " (incluye Gana)" : ""}</td><td class="num">${dinero(totalIngresos)}</td></tr>
+          <tr><td>− Costos operativos</td><td class="num">${dinero(rep.total_costos)}</td></tr>
+          <tr><td>− Gastos financieros</td><td class="num">${dinero(rep.total_financieros)}</td></tr>
+        </tbody></table>
+        <div class="neto ${neto < 0 ? "perdida" : "ganancia"}">
+          <div style="font-size:11px;font-weight:bold;letter-spacing:.5px">TOTAL NETO DE GANANCIAS</div>
+          <div class="v">${dinero(neto)}</div>
+          <div style="font-size:11px">${neto < 0 ? "PÉRDIDA: los ingresos no cubren los costos operativos y financieros del mes." : "Se cubrieron todos los costos operativos y financieros del mes."}</div>
         </div>
-        ${nodo.outerHTML}
-      </div></body></html>`);
+      </section>
+
+      <div class="cols">
+        <section>
+          <h3>Ingresos adicionales</h3>
+          <table><tbody>${filasIngresos}</tbody><tfoot><tr><td>Total</td><td class="num">${dinero(totalIngresos)}</td></tr></tfoot></table>
+          <h3>Gastos financieros</h3>
+          <table><tbody>${filasFin}</tbody><tfoot><tr><td>Total</td><td class="num">${dinero(rep.total_financieros)}</td></tr></tfoot></table>
+        </section>
+        <section>
+          <h3>Cáscara comprada</h3>
+          <table><tbody>${filasCascara}</tbody><tfoot><tr><td>Total${rep.cascara.manual ? " (manual)" : ""}</td><td class="num">${qq.toFixed(2)} QQ</td></tr></tfoot></table>
+          ${recepcion}
+        </section>
+      </div>
+    </body></html>`;
+    w.document.write(html);
     w.document.close();
     w.focus();
-    setTimeout(() => { w.print(); }, 400);
+    setTimeout(() => { w.print(); }, 300);
   };
 
   const tarjetaNeto = (

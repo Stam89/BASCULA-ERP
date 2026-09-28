@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Reportes > Servicios (solo Matriz) + impresion limpia del Resultado mensual (2026-09-28)
+- `GET /reports/servicios?from&to` (403 si el socio activo no es MATRIZ): ingresos de bascula SECADO_PILADO / SECADO / PILADO no anulados, con fecha, ticket, cliente, placa, arroz, kg, QQ, lote y estado; `totales` por tipo.
+- App.tsx: ReportKind `servicios` (boton "🚜 Servicios" visible solo con la Matriz activa; con otro socio vuelve a Resumen), tarjetas-pestana Servicio completo / Solo secado / Solo pilado, tabla con totales; Imprimir/Excel via `getReportExport` de la pestana elegida. SUB_TABS Reportes incluye `servicios` (permisos).
+- ResultadoMensual `imprimir`: ya no clona la pantalla; arma HTML A4 propio (rubros con alerta roja, total, resultado y neto, ingresos, financieros, cascara comprada y por servicio).
+
 ### Configuracion: tarifas con hasta 3 decimales (2026-09-28)
 - Casillas de tarifas (Configuracion, tarifa de secado y de seleccion) pasan a `step="0.001"`; helper `fmtTarifa` (App.tsx) muestra minimo 2 y hasta 3 decimales (actividades de cuadrilla, tarifario de servicio).
 - Migracion 20261049: `app_settings.tarifa_pilado_qq` y `matriz_packaging_rates.precio_saco_*` a NUMERIC(x,4) (las demas tarifas ya eran de 4 decimales). Sueldo base sigue con 2.
