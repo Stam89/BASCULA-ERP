@@ -1192,7 +1192,25 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
 
     if (body.drying_report_id) {
       for (const linkedLot of dryingLots) {
-        const sourceStock = await client.query(
+        // Un grupo de secado puede mezclar ingresos de 0.11 y CORRIENTE en el
+        // MISMO lote: cada ingreso descuenta la cáscara con la que entró a bodega
+        // (su propio movimiento IN), no la del primer ingreso del lote.
+        const porIngreso = linkedLot.weighing_ticket_id
+          ? await client.query(
+            `SELECT m.product_id, m.warehouse_id, m.ownership, m.accionista_id
+             FROM inventory_movements m
+             JOIN products p ON p.id = m.product_id
+             WHERE m.reference_type = 'weighing_tickets'
+               AND m.reference_id = $1
+               AND m.lot_id = $2
+               AND m.movement = 'IN'
+               AND p.product_type = 'RAW_MATERIAL'
+             ORDER BY m.created_at ASC
+             LIMIT 1`,
+            [linkedLot.weighing_ticket_id, linkedLot.lot_id]
+          )
+          : null;
+        const sourceStock = porIngreso?.rowCount ? porIngreso : await client.query(
           `SELECT m.product_id, m.warehouse_id, m.ownership, m.accionista_id
            FROM inventory_movements m
            JOIN products p ON p.id = m.product_id

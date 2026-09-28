@@ -49,6 +49,10 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Produccion: Finalizar Lote con grupo de secado mixto 0.11 + CORRIENTE (2026-09-28)
+- Bug: al abrir el proceso desde secadora, cada ingreso del grupo tomaba el producto del PRIMER movimiento IN del lote (todos comparten lot_id), asi que un ingreso CORRIENTE se descontaba como CASCARA-011 y el freno `assertStockNoNegativo` bloqueaba ("requiere 29.82, hay 6.29").
+- Arreglo (`processing.ts` POST /): el producto/bodega se busca por el movimiento IN del propio ingreso (`reference_type='weighing_tickets' AND reference_id = weighing_ticket_id`); si no existe, cae a la busqueda anterior por lote. No habia lotes ya procesados con saldo residual.
+
 ### Bascula: ticket editado conserva el agricultor viejo (2026-09-28)
 - Causa: `importBasculaTickets` hacia `farmer_id = COALESCE(viejo, nuevo)`; si en la app de bascula cambiaban el CLIENTE de un ticket ya sincronizado (edicion o renumeracion), se actualizaba `farmer_name` pero quedaba el agricultor anterior -> el ingreso/Secado salia con otro nombre (ej. #295 CUCHO como DON FORTA).
 - Arreglo: si cambia el nombre (trim/lower), se re-homologa `farmer_id`/`accionista_id` con el nombre nuevo (o queda Sin vincular); si no cambia, se respeta el vinculo manual.
