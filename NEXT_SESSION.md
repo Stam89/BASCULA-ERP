@@ -49,6 +49,10 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Revision completa + sync de bascula con tickets renumerados (2026-09-28)
+- Barrido: tsc/tests OK; 142 GET x 3 socios sin errores; 21 modulos en navegador (CEYRO/ROVINSON/STALYN) sin errores de consola; ~35 chequeos de integridad de datos OK (stock, cascara por lote, CxC/CxP y espejos, caja, ventas/pedidos, secado, cuadrilla, sacos).
+- Bug: al borrar un ticket en la app y renumerar, el registro que nacio como #280 queda como #279 con el id estable de "#280"; el ticket NUEVO #280 chocaba en la PK y `importBasculaTickets` lo omitia en cada sync (#280 y #296). Arreglo: si el id estable esta ocupado por otro ticket (otra llave negocio/modo/numero), se usa `stableUuid(key#n)`. La identidad sigue siendo (negocio, modo, numero).
+
 ### Reportes > Servicios (solo Matriz) + impresion limpia del Resultado mensual (2026-09-28)
 - `GET /reports/servicios?mes=YYYY-MM` (403 si el socio activo no es MATRIZ): servicios FINALIZADOS por lote, fechados al finalizar (SECADO: todos sus secados COMPLETED -> max dry_end_at; SECADO_PILADO/PILADO: processing_batches.finished_at). Socio = lote de otro accionista (COMPRA: completo si tuvo secado, si no solo pilado); externo = maquila. Arroz propio de la Matriz excluido. `totales[tipo] = {total, socios, externos}` con lotes/tickets/kg/qq/qq_pilado (pilado_services).
 - App.tsx: ReportKind `servicios` (boton "🚜 Servicios" visible solo con la Matriz activa; con otro socio vuelve a Resumen), filtro solo por Mes (sin Socio ni Desde/Hasta), tarjetas-pestana Servicio completo / Solo secado / Solo pilado con split socios/externos y dos tablas (socios / clientes externos); Imprimir/Excel via `getReportExport` de la pestana elegida. SUB_TABS Reportes incluye `servicios` (permisos).

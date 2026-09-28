@@ -695,7 +695,24 @@ export async function importBasculaTickets(
       continue;
     }
     const stableKey = basculaTicketStableKey(t.numeroTicket, t.modo, idScope);
-    const id = stableUuid(stableKey);
+    let id = stableUuid(stableKey);
+    // Si en la báscula se borró un ticket y se RENUMERARON los siguientes, el
+    // registro que nació como #280 ahora es #279 pero conserva el id de "#280".
+    // Un ticket NUEVO #280 chocaría con ese id (llave primaria) y la sincronización
+    // lo omitiría siempre. En ese caso se usa un id alterno; el registro se sigue
+    // identificando por (negocio, modo, número).
+    // Libre = no existe, o ya es este mismo ticket (mismo negocio/modo/número).
+    const idLibre = async (candidato: string) => {
+      const o = (await pool.query(
+        `SELECT raw_payload->>'numeroTicket' AS numero, raw_payload->>'modo' AS modo, raw_payload->>'firebaseNegocioId' AS negocio
+           FROM mobile_synced_tickets WHERE id = $1`,
+        [candidato]
+      )).rows[0];
+      return !o || basculaTicketStableKey(o.numero, o.modo, (o.negocio ?? "") || undefined) === stableKey;
+    };
+    for (let n = 1; !(await idLibre(id)) && n <= 50; n++) {
+      id = stableUuid(`${stableKey}#${n}`);
+    }
     let netWeight = t.pesoNeto ?? calculateNetWeight(t.pesoBruto, t.pesoTara);
     if (netWeight < 0) netWeight = 0; // no romper el lote por un ticket con tara mayor
     const quintals = t.totalQQ ?? (t.calificacion > 0 ? calculateQuintals(netWeight, t.calificacion) : 0);
