@@ -50,8 +50,8 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ## Estado funcional reciente
 
 ### Reportes > Servicios (solo Matriz) + impresion limpia del Resultado mensual (2026-09-28)
-- `GET /reports/servicios?from&to` (403 si el socio activo no es MATRIZ): ingresos de bascula SECADO_PILADO / SECADO / PILADO no anulados, con fecha, ticket, cliente, placa, arroz, kg, QQ, lote y estado; `totales` por tipo.
-- App.tsx: ReportKind `servicios` (boton "🚜 Servicios" visible solo con la Matriz activa; con otro socio vuelve a Resumen), tarjetas-pestana Servicio completo / Solo secado / Solo pilado, tabla con totales; Imprimir/Excel via `getReportExport` de la pestana elegida. SUB_TABS Reportes incluye `servicios` (permisos).
+- `GET /reports/servicios?mes=YYYY-MM` (403 si el socio activo no es MATRIZ): servicios FINALIZADOS por lote, fechados al finalizar (SECADO: todos sus secados COMPLETED -> max dry_end_at; SECADO_PILADO/PILADO: processing_batches.finished_at). Socio = lote de otro accionista (COMPRA: completo si tuvo secado, si no solo pilado); externo = maquila. Arroz propio de la Matriz excluido. `totales[tipo] = {total, socios, externos}` con lotes/tickets/kg/qq/qq_pilado (pilado_services).
+- App.tsx: ReportKind `servicios` (boton "🚜 Servicios" visible solo con la Matriz activa; con otro socio vuelve a Resumen), filtro solo por Mes (sin Socio ni Desde/Hasta), tarjetas-pestana Servicio completo / Solo secado / Solo pilado con split socios/externos y dos tablas (socios / clientes externos); Imprimir/Excel via `getReportExport` de la pestana elegida. SUB_TABS Reportes incluye `servicios` (permisos).
 - ResultadoMensual `imprimir`: ya no clona la pantalla; arma HTML A4 propio (rubros con alerta roja, total, resultado y neto, ingresos, financieros, cascara comprada y por servicio).
 
 ### Configuracion: tarifas con hasta 3 decimales (2026-09-28)

@@ -616,7 +616,9 @@ const SERVICIO_TABS: Array<{ key: ServicioTipo; label: string }> = [
   { key: "SECADO", label: "Solo secado" },
   { key: "PILADO", label: "Solo pilado" }
 ];
-type ServicioRow = { id: string; tipo: ServicioTipo; fecha: string; ticket: string; cliente: string | null; placa: string | null; rice_type: string | null; kg: number; qq: number; lot_code: string | null; lot_status: string | null };
+type ServicioRow = { id: string; tipo: ServicioTipo; fecha: string; lot_code: string; es_socio: boolean; socio: string | null; clientes: string | null; tickets: string | null; n_tickets: number; rice_type: string | null; kg: number; qq: number; qq_pilado: number };
+type ServicioSuma = { lotes: number; tickets: number; kg: number; qq: number; qq_pilado: number };
+type ServicioTotales = Record<string, { total: ServicioSuma; socios: ServicioSuma; externos: ServicioSuma }>;
 const reportEndpoint: Record<Exclude<ReportKind, "resumen">, string> = {
   ventas: "sales",
   liquidaciones: "liquidations",
@@ -2853,6 +2855,7 @@ export function App() {
   const [navSearch, setNavSearch] = useState("");
   const [reportBusy, setReportBusy] = useState(false);
   const [servicioTab, setServicioTab] = useState<ServicioTipo>("SECADO_PILADO");
+  const [servicioMes, setServicioMes] = useState(() => new Date().toISOString().slice(0, 7));
 
   // ── Fomentos ──────────────────────────────────────────────────────────────
   const [fomentos, setFomentos] = useState<Fomento[]>([]);
@@ -5391,6 +5394,10 @@ export function App() {
         const data = await apiGet<ReportSummary>(`/reports/summary${qs}&accionista=${encodeURIComponent(reportAccionista)}&scope=${reportScope}`);
         setReportSummary(data);
         setReportRows({ kind, data });
+      } else if (kind === "servicios") {
+        // Servicios: por MES (fecha en que se finalizó cada servicio).
+        const data = await apiGet<any>(`/reports/servicios?mes=${servicioMes}`);
+        setReportRows({ kind, data });
       } else {
         const data = await apiGet<any>(`/reports/${reportEndpoint[kind]}${qs}`);
         setReportRows({ kind, data });
@@ -5448,7 +5455,7 @@ export function App() {
     URL.revokeObjectURL(url);
   }
 
-  function printReport(title: string, headers: string[], rows: (string | number)[][], totalsRow?: (string | number)[]) {
+  function printReport(title: string, headers: string[], rows: (string | number)[][], totalsRow?: (string | number)[], rango?: string) {
     const thead = headers.map((h) => `<th>${h}</th>`).join("");
     const tbody = rows
       .map((r) => `<tr>${r.map((c, i) => `<td class="${i === 0 ? "" : "num"}">${c}</td>`).join("")}</tr>`)
@@ -5473,14 +5480,14 @@ export function App() {
       <h1>${appSettings.business_name}</h1>
       <h2>${[appSettings.business_subtitle, appSettings.ruc && `RUC: ${appSettings.ruc}`].filter(Boolean).join(" · ")}</h2>
       <h3>${title}</h3>
-      <div class="range">Del ${reportFrom} al ${reportTo}</div>
+      <div class="range">${rango ?? `Del ${reportFrom} al ${reportTo}`}</div>
       <table><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody>${tfoot}</table>
     </body></html>`;
     const w = window.open("", "_blank", "width=820,height=640");
     if (w) { w.document.write(html); w.document.close(); w.print(); }
   }
 
-  function getReportExport(): { title: string; headers: string[]; rows: (string | number)[][]; totals?: (string | number)[] } | null {
+  function getReportExport(): { title: string; headers: string[]; rows: (string | number)[][]; totals?: (string | number)[]; rango?: string } | null {
     if (!reportRows) return null;
     const m2 = (n: number) => Number(n || 0).toFixed(2);
     const { kind, data } = reportRows;
@@ -5531,13 +5538,27 @@ export function App() {
     }
     if (kind === "servicios") {
       const st = SERVICIO_TABS.find((x) => x.key === servicioTab) ?? SERVICIO_TABS[0];
-      const filas = (data.rows || []).filter((r: ServicioRow) => r.tipo === st.key);
-      const t = data.totales?.[st.key] ?? { tickets: 0, kg: 0, qq: 0 };
+      const filas = (data.rows || []).filter((r: ServicioRow) => r.tipo === st.key) as ServicioRow[];
+      const t = (data.totales?.[st.key]?.total ?? { tickets: 0, kg: 0, qq: 0, qq_pilado: 0 }) as ServicioSuma;
+      const conPilado = st.key !== "SECADO";
+      const fila = (r: ServicioRow) => {
+        const base: (string | number)[] = [
+          r.es_socio ? "Socio" : "Cliente externo",
+          new Date(r.fecha).toLocaleDateString("es-EC"), r.lot_code,
+          r.es_socio ? (r.socio ?? "—") : (r.clientes ?? "—"),
+          r.tickets ?? "—", Number(r.kg).toFixed(0), m2(r.qq)
+        ];
+        if (conPilado) base.push(Number(r.qq_pilado) > 0 ? m2(r.qq_pilado) : "—");
+        return base;
+      };
+      const [yy, mm] = String(data.mes ?? servicioMes).split("-");
+      const mesTxt = new Date(Number(yy), Number(mm) - 1, 1).toLocaleDateString("es-EC", { month: "long", year: "numeric" });
       return {
         title: `Servicios de la Matriz · ${st.label}`,
-        headers: ["Fecha", "Ticket", "Cliente", "Placa", "Arroz", "Kg neto", "QQ", "Lote"],
-        rows: filas.map((r: ServicioRow) => [new Date(r.fecha).toLocaleDateString("es-EC"), `#${r.ticket}`, r.cliente ?? "—", r.placa || "—", r.rice_type ?? "—", Number(r.kg).toFixed(0), m2(r.qq), r.lot_code ?? "—"]),
-        totals: [`TOTAL · ${t.tickets} tickets`, "", "", "", "", Number(t.kg).toFixed(0), m2(t.qq), ""]
+        rango: `Servicios finalizados en ${mesTxt}`,
+        headers: ["Tipo de cliente", "Finalizado", "Lote", "Socio / Cliente", "Tickets", "Kg neto", "QQ cáscara", ...(conPilado ? ["QQ pilado"] : [])],
+        rows: [...filas.filter((r) => r.es_socio), ...filas.filter((r) => !r.es_socio)].map(fila),
+        totals: [`TOTAL · ${filas.length} lotes`, "", "", "", String(t.tickets), Number(t.kg).toFixed(0), m2(t.qq), ...(conPilado ? [m2(t.qq_pilado)] : [])]
       };
     }
     if (kind === "combustible") {
@@ -19482,7 +19503,7 @@ export function App() {
                 ))}
               </div>
               <div className="reportDates">
-                {accionistas.length > 1 && (
+                {accionistas.length > 1 && reportKind !== "servicios" && (
                   <label>
                     <span>👥 Socio</span>
                     <select value={reportAccionista} onChange={(e) => setReportAccionista(e.target.value)}>
@@ -19500,7 +19521,12 @@ export function App() {
                     </select>
                   </label>
                 )}
-                {reportKind === "porcobrar" || reportKind === "arianos" ? (
+                {reportKind === "servicios" ? (
+                  <label>
+                    <span>📅 Mes</span>
+                    <input type="month" value={servicioMes} onChange={(e) => e.target.value && setServicioMes(e.target.value)} />
+                  </label>
+                ) : reportKind === "porcobrar" || reportKind === "arianos" ? (
                   <span className="muted" style={{ alignSelf: "center" }}>{reportKind === "arianos" ? "Estado actual (no depende de fechas)" : "Saldos al día de hoy"}</span>
                 ) : (
                   <>
@@ -19536,8 +19562,8 @@ export function App() {
               </div>
               {reportRows && reportKind !== "resumen" && reportKind !== "arianos" && (
                 <div className="reportExportBtns">
-                  <button type="button" className="btnSecondary" onClick={() => { const e = getReportExport(); if (e) printReport(e.title, e.headers, e.rows, e.totals); }}>🖨 Imprimir</button>
-                  <button type="button" className="btnSecondary" onClick={() => { const e = getReportExport(); if (e) exportReportCsv(e.headers, e.rows, `${reportKind}_${reportFrom}_${reportTo}.csv`); }}>📥 Excel</button>
+                  <button type="button" className="btnSecondary" onClick={() => { const e = getReportExport(); if (e) printReport(e.title, e.headers, e.rows, e.totals, e.rango); }}>🖨 Imprimir</button>
+                  <button type="button" className="btnSecondary" onClick={() => { const e = getReportExport(); if (e) exportReportCsv(e.headers, e.rows, reportKind === "servicios" ? `servicios_${servicioMes}.csv` : `${reportKind}_${reportFrom}_${reportTo}.csv`); }}>📥 Excel</button>
                 </div>
               )}
             </div>
@@ -19619,50 +19645,69 @@ export function App() {
               </>
             )}
 
-            {/* ── Servicios de la Matriz: completo / solo secado / solo pilado ── */}
+            {/* ── Servicios de la Matriz (solo FINALIZADOS, por mes): completo / solo secado / solo pilado,
+                   separados en socios y clientes externos ── */}
             {reportKind === "servicios" && reportRows?.kind === "servicios" && (() => {
-              const d = reportRows.data as { rows: ServicioRow[]; totales: Record<string, { tickets: number; kg: number; qq: number }> };
+              const d = reportRows.data as { mes: string; rows: ServicioRow[]; totales: ServicioTotales };
+              const vacio: ServicioSuma = { lotes: 0, tickets: 0, kg: 0, qq: 0, qq_pilado: 0 };
+              const tot = (k: string) => d.totales[k] ?? { total: vacio, socios: vacio, externos: vacio };
+              const conPilado = servicioTab !== "SECADO";
+              const tabla = (titulo: string, filas: ServicioRow[], suma: ServicioSuma, socio: boolean) => (
+                <div style={{ marginTop: 14 }}>
+                  <h4 style={{ margin: "0 0 6px", fontSize: 14 }}>{titulo} <span className="muted" style={{ fontWeight: 400, fontSize: 12.5 }}>· {suma.lotes} lote{suma.lotes === 1 ? "" : "s"} · {suma.qq.toFixed(2)} QQ</span></h4>
+                  <table>
+                    <thead><tr>
+                      <th>Finalizado</th><th>Lote</th><th>{socio ? "Socio" : "Cliente"}</th><th>Tickets</th><th>Arroz</th>
+                      <th className="num">Kg neto</th><th className="num">QQ cáscara</th>{conPilado && <th className="num">QQ pilado</th>}
+                    </tr></thead>
+                    <tbody>
+                      {filas.length === 0 && <tr><td colSpan={conPilado ? 8 : 7} className="muted">Sin servicios finalizados en el mes.</td></tr>}
+                      {filas.map((r) => (
+                        <tr key={r.id}>
+                          <td>{new Date(r.fecha).toLocaleDateString("es-EC")}</td>
+                          <td>{r.lot_code}</td>
+                          <td>{socio ? (r.socio ?? "—") : (r.clientes ?? "—")}{socio && r.clientes ? <span className="muted" style={{ display: "block", fontSize: 11.5 }}>Agricultor: {r.clientes}</span> : null}</td>
+                          <td>{r.tickets ? `#${r.tickets.split(", ").join(", #")}` : "—"}</td>
+                          <td>{r.rice_type ?? "—"}</td>
+                          <td className="num">{Number(r.kg).toLocaleString("es-EC")}</td>
+                          <td className="num" style={{ fontWeight: 700 }}>{Number(r.qq).toFixed(2)}</td>
+                          {conPilado && <td className="num">{Number(r.qq_pilado) > 0 ? Number(r.qq_pilado).toFixed(2) : "—"}</td>}
+                        </tr>
+                      ))}
+                    </tbody>
+                    {filas.length > 0 && (
+                      <tfoot><tr>
+                        <td colSpan={3} style={{ fontWeight: 700 }}>TOTAL</td><td style={{ fontWeight: 700 }}>{suma.tickets}</td><td />
+                        <td className="num" style={{ fontWeight: 700 }}>{suma.kg.toLocaleString("es-EC")}</td>
+                        <td className="num" style={{ fontWeight: 700 }}>{suma.qq.toFixed(2)}</td>
+                        {conPilado && <td className="num" style={{ fontWeight: 700 }}>{suma.qq_pilado.toFixed(2)}</td>}
+                      </tr></tfoot>
+                    )}
+                  </table>
+                </div>
+              );
               const filas = d.rows.filter((r) => r.tipo === servicioTab);
-              const t = d.totales[servicioTab] ?? { tickets: 0, kg: 0, qq: 0 };
-              const estado = (r: ServicioRow) => !r.lot_code ? (r.tipo === "PILADO" ? "Por pilar" : "Por secar")
-                : ["PROCESSED", "LIQUIDATED", "CLOSED"].includes(r.lot_status ?? "") ? "Pilado"
-                : r.lot_status === "IN_PROCESS" ? "En pilado"
-                : r.tipo === "PILADO" ? "Por pilar" : "Secado";
+              const t = tot(servicioTab);
               return (
                 <div className="tablePanel">
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10, marginBottom: 12 }}>
+                  <p className="muted" style={{ margin: "0 0 10px" }}>Solo servicios <b>finalizados</b> en el mes, con la fecha en que se finalizaron (secado completado o pilado finalizado). No incluye el arroz propio de la Matriz.</p>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 10, marginBottom: 4 }}>
                     {SERVICIO_TABS.map((st) => {
-                      const tt = d.totales[st.key] ?? { tickets: 0, kg: 0, qq: 0 };
+                      const tt = tot(st.key);
                       return (
                         <button key={st.key} type="button" onClick={() => setServicioTab(st.key)}
                           style={{ textAlign: "left", padding: "10px 12px", borderRadius: 10, cursor: "pointer",
                             border: servicioTab === st.key ? "2px solid #0f766e" : "1px solid #e2e8f0",
                             background: servicioTab === st.key ? "#f0fdfa" : "#fff" }}>
                           <div style={{ fontSize: 12.5, fontWeight: 700, color: "#334155" }}>{st.label}</div>
-                          <div style={{ fontSize: 22, fontWeight: 800, color: "#0f172a" }}>{tt.qq.toFixed(2)} QQ</div>
-                          <div className="muted" style={{ fontSize: 12 }}>{tt.tickets} ticket{tt.tickets === 1 ? "" : "s"} · {tt.kg.toLocaleString("es-EC")} kg</div>
+                          <div style={{ fontSize: 22, fontWeight: 800, color: "#0f172a" }}>{tt.total.qq.toFixed(2)} QQ</div>
+                          <div className="muted" style={{ fontSize: 12 }}>👥 Socios {tt.socios.qq.toFixed(2)} · 🧑‍🌾 Externos {tt.externos.qq.toFixed(2)}</div>
                         </button>
                       );
                     })}
                   </div>
-                  <table>
-                    <thead><tr><th>Fecha</th><th>Ticket</th><th>Cliente</th><th>Placa</th><th>Arroz</th><th className="num">Kg neto</th><th className="num">QQ</th><th>Lote</th><th>Estado</th></tr></thead>
-                    <tbody>
-                      {filas.length === 0 && <tr><td colSpan={9} className="muted">Sin ingresos de este servicio en el rango.</td></tr>}
-                      {filas.map((r) => (
-                        <tr key={r.id}>
-                          <td>{new Date(r.fecha).toLocaleDateString("es-EC")}</td>
-                          <td>#{r.ticket}</td><td>{r.cliente ?? "—"}</td><td>{r.placa || "—"}</td><td>{r.rice_type ?? "—"}</td>
-                          <td className="num">{Number(r.kg).toLocaleString("es-EC")}</td>
-                          <td className="num" style={{ fontWeight: 700 }}>{Number(r.qq).toFixed(2)}</td>
-                          <td>{r.lot_code ?? "—"}</td><td>{estado(r)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    {filas.length > 0 && (
-                      <tfoot><tr><td colSpan={5} style={{ fontWeight: 700 }}>TOTAL · {t.tickets} ticket{t.tickets === 1 ? "" : "s"}</td><td className="num" style={{ fontWeight: 700 }}>{t.kg.toLocaleString("es-EC")}</td><td className="num" style={{ fontWeight: 700 }}>{t.qq.toFixed(2)}</td><td colSpan={2} /></tr></tfoot>
-                    )}
-                  </table>
+                  {tabla("👥 Servicios a socios", filas.filter((r) => r.es_socio), t.socios, true)}
+                  {tabla("🧑‍🌾 Servicios a clientes externos", filas.filter((r) => !r.es_socio), t.externos, false)}
                 </div>
               );
             })()}

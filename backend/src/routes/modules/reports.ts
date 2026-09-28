@@ -390,10 +390,14 @@ reportsRouter.get("/production", asyncRoute(async (req, res) => {
 // Combustible de secado: se muestra a nivel MOTOR (consumo real) y a nivel
 // secadora (reparto proporcional). Todo es propiedad de CEYRO, así que no se
 // filtra por accionista: se consolida el consumo de todos los socios.
-// ── Servicios de la Matriz: cáscara recibida por tipo de servicio ───────────
-// Ingresos de báscula (no anulados) del rango, separados en Servicio completo
-// (secado + pilado), Solo secado y Solo pilado. Es información de la Matriz
-// (ella presta los servicios): con otro socio activo se rechaza.
+// ── Servicios de la Matriz, por MES y solo los FINALIZADOS ──────────────────
+// Un servicio cuenta el mes en que se FINALIZÓ (no cuando entró a báscula):
+//   · Solo secado ........ al completar el secado (todos sus túneles/tendal).
+//   · Servicio completo .. al finalizar el pilado (Producción).
+//   · Solo pilado ........ al finalizar el pilado.
+// Se separa en SOCIOS (lote de otro accionista que la Matriz seca y pila) y
+// CLIENTES EXTERNOS (maquila). El arroz propio de la Matriz no es servicio.
+// Es información de la Matriz: con otro socio activo se rechaza.
 reportsRouter.get("/servicios", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
   const acc = accionistaId ? await pool.query("SELECT tipo FROM accionistas WHERE id = $1", [accionistaId]) : null;
@@ -401,34 +405,84 @@ reportsRouter.get("/servicios", asyncRoute(async (req, res) => {
     res.status(403).json({ error: "El reporte de servicios es solo de la Matriz. Cambia a la Matriz para verlo." });
     return;
   }
-  const { from, to } = parseRange(req.query);
+  const q = z.object({ mes: z.string().regex(/^\d{4}-\d{2}$/).optional() }).parse(req.query);
+  const mes = q.mes ?? new Date().toISOString().slice(0, 7);
+  const [y, m] = mes.split("-").map(Number);
+  const ini = `${mes}-01`;
+  const fin = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, "0")}-01`;
+
   const r = await pool.query(
-    `SELECT w.id, w.operation_type AS tipo,
-            (w.created_at AT TIME ZONE 'America/Guayaquil') AS fecha,
-            COALESCE(m.raw_payload->>'numeroTicket', w.ticket_number) AS ticket,
-            f.full_name AS cliente,
-            m.raw_payload->>'placa' AS placa,
-            w.rice_type,
-            COALESCE(w.net_weight, 0)::float AS kg,
-            COALESCE(w.quintals, 0)::float AS qq,
-            l.lot_code, l.status::text AS lot_status
-       FROM weighing_tickets w
-       LEFT JOIN farmers f ON f.id = w.farmer_id
-       LEFT JOIN mobile_synced_tickets m ON m.weighing_ticket_id = w.id
-       LEFT JOIN lots l ON l.id = w.lot_id
-      WHERE w.operation_type IN ('SECADO_PILADO', 'SECADO', 'PILADO')
-        AND w.status::text <> 'CANCELLED'
-        AND (w.created_at AT TIME ZONE 'America/Guayaquil')::date BETWEEN $1::date AND $2::date
-      ORDER BY w.created_at ASC`,
-    [from, to]
+    `WITH base AS (
+       SELECT l.id, l.lot_code, l.operation_type,
+              (l.accionista_id IS NOT NULL AND l.accionista_id <> $1) AS es_socio,
+              a.name AS socio,
+              pil.fin AS pilado_fin,
+              sec.fin AS secado_fin, COALESCE(sec.total, 0) AS secados, COALESCE(sec.pendientes, 0) AS secados_pendientes,
+              (SELECT COALESCE(SUM(ps.quintals), 0) FROM pilado_services ps WHERE ps.lot_id = l.id)::float AS qq_pilado
+         FROM lots l
+         LEFT JOIN accionistas a ON a.id = l.accionista_id
+         LEFT JOIN LATERAL (
+           SELECT max(pb.finished_at) AS fin
+             FROM processing_batches pb
+            WHERE pb.status <> 'CANCELLED' AND pb.finished_at IS NOT NULL
+              AND (pb.lot_id = l.id OR EXISTS (SELECT 1 FROM processing_batch_drying_lots x
+                                                WHERE x.processing_batch_id = pb.id AND x.lot_id = l.id))
+         ) pil ON true
+         LEFT JOIN LATERAL (
+           SELECT max(d.dry_end_at) AS fin, count(*) AS total,
+                  count(*) FILTER (WHERE d.status::text <> 'COMPLETED') AS pendientes
+             FROM drying_tunnel_reports d WHERE d.lot_id = l.id
+         ) sec ON true
+        WHERE l.status::text <> 'CANCELLED'
+     ),
+     tipado AS (
+       SELECT b.*,
+              CASE
+                WHEN b.operation_type = 'SECADO' THEN 'SECADO'
+                WHEN b.operation_type = 'PILADO' THEN 'PILADO'
+                WHEN b.operation_type = 'SECADO_PILADO' THEN 'SECADO_PILADO'
+                WHEN b.es_socio THEN CASE WHEN b.secados > 0 THEN 'SECADO_PILADO' ELSE 'PILADO' END
+              END AS tipo
+         FROM base b
+     ),
+     finalizado AS (
+       SELECT t.*,
+              CASE WHEN t.tipo = 'SECADO'
+                   THEN CASE WHEN t.secados > 0 AND t.secados_pendientes = 0 THEN t.secado_fin END
+                   ELSE t.pilado_fin END AS fecha_fin
+         FROM tipado t
+        WHERE t.tipo IS NOT NULL
+     )
+     SELECT f.id, f.lot_code, f.tipo, f.es_socio, f.socio, f.qq_pilado,
+            (f.fecha_fin AT TIME ZONE 'America/Guayaquil') AS fecha,
+            (SELECT string_agg(DISTINCT fa.full_name, ', ') FROM weighing_tickets w JOIN farmers fa ON fa.id = w.farmer_id WHERE w.lot_id = f.id) AS clientes,
+            (SELECT string_agg(COALESCE(ms.raw_payload->>'numeroTicket', w.ticket_number), ', ' ORDER BY w.created_at)
+               FROM weighing_tickets w LEFT JOIN mobile_synced_tickets ms ON ms.weighing_ticket_id = w.id WHERE w.lot_id = f.id) AS tickets,
+            (SELECT string_agg(DISTINCT w.rice_type, ', ') FROM weighing_tickets w WHERE w.lot_id = f.id) AS rice_type,
+            (SELECT COUNT(*) FROM weighing_tickets w WHERE w.lot_id = f.id)::int AS n_tickets,
+            (SELECT COALESCE(SUM(w.net_weight), 0) FROM weighing_tickets w WHERE w.lot_id = f.id)::float AS kg,
+            (SELECT COALESCE(SUM(w.quintals), 0) FROM weighing_tickets w WHERE w.lot_id = f.id)::float AS qq
+       FROM finalizado f
+      WHERE f.fecha_fin IS NOT NULL
+        AND (f.fecha_fin AT TIME ZONE 'America/Guayaquil')::date >= $2::date
+        AND (f.fecha_fin AT TIME ZONE 'America/Guayaquil')::date < $3::date
+      ORDER BY f.fecha_fin ASC`,
+    [accionistaId, ini, fin]
   );
   const tipos = ["SECADO_PILADO", "SECADO", "PILADO"] as const;
   const r3 = (n: number) => Math.round(n * 1000) / 1000;
+  const sumar = (filas: typeof r.rows) => ({
+    lotes: filas.length,
+    tickets: filas.reduce((a2, x) => a2 + Number(x.n_tickets), 0),
+    kg: r3(filas.reduce((a2, x) => a2 + Number(x.kg), 0)),
+    qq: r3(filas.reduce((a2, x) => a2 + Number(x.qq), 0)),
+    qq_pilado: r3(filas.reduce((a2, x) => a2 + Number(x.qq_pilado), 0))
+  });
   const totales = Object.fromEntries(tipos.map((t) => {
     const filas = r.rows.filter((x) => x.tipo === t);
-    return [t, { tickets: filas.length, kg: r3(filas.reduce((a, x) => a + Number(x.kg), 0)), qq: r3(filas.reduce((a, x) => a + Number(x.qq), 0)) }];
+    return [t, { total: sumar(filas), socios: sumar(filas.filter((x) => x.es_socio)), externos: sumar(filas.filter((x) => !x.es_socio)) }];
   }));
-  res.json({ from, to, rows: r.rows, totales });
+  res.json({ mes, rows: r.rows, totales });
 }));
 
 reportsRouter.get("/fuel", asyncRoute(async (req, res) => {
