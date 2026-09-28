@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Bascula: ticket editado conserva el agricultor viejo (2026-09-28)
+- Causa: `importBasculaTickets` hacia `farmer_id = COALESCE(viejo, nuevo)`; si en la app de bascula cambiaban el CLIENTE de un ticket ya sincronizado (edicion o renumeracion), se actualizaba `farmer_name` pero quedaba el agricultor anterior -> el ingreso/Secado salia con otro nombre (ej. #295 CUCHO como DON FORTA).
+- Arreglo: si cambia el nombre (trim/lower), se re-homologa `farmer_id`/`accionista_id` con el nombre nuevo (o queda Sin vincular); si no cambia, se respeta el vinculo manual.
+- Lista de tickets (Recepcion) devuelve `farmer_vinculado` y muestra "→ agricultor ERP" cuando no coincide con el nombre de bascula.
+- Migracion 20261047 re-vincula los ya afectados no liquidados (tambien ingreso y `drying_tunnel_report_lots.farmer_name`): #281, #293, #295, #299. #294 "DON FORTA-SERVICIO P" (vinculo manual) no se toca.
+
 ### Resultado mensual: rediseno ejecutivo (2026-09-28)
 
 - Solo maquetacion/UX en `web-admin/src/components/ResultadoMensual.tsx` + clases `rm-*` al final de `styles.css` (el proyecto NO usa Tailwind; se replicaron sus colores slate/blue/purple/red, rounded-xl, shadow-sm). Estado, endpoints y funciones de guardado/edicion/enlaces sin cambios de logica.

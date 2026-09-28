@@ -312,8 +312,10 @@ mobileTicketsRouter.get("/", requireAuth, resolveAccionista, asyncRoute(async (r
             t.raw_payload->>'modo' AS modo,
             t.raw_payload->>'fecha' AS fecha_app,
             t.raw_payload->>'placa' AS placa,
-            t.raw_payload->>'calidad' AS calidad
+            t.raw_payload->>'calidad' AS calidad,
+            fv.full_name AS farmer_vinculado
      FROM mobile_synced_tickets t
+     LEFT JOIN farmers fv ON fv.id = t.farmer_id
      WHERE ${conditions.join(" AND ")}
      ORDER BY NULLIF(regexp_replace(coalesce(t.raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '')::bigint DESC NULLS LAST,
               t.mobile_updated_at DESC NULLS LAST
@@ -722,8 +724,18 @@ export async function importBasculaTickets(
       DO UPDATE SET
         device_id = EXCLUDED.device_id,
         farmer_name = EXCLUDED.farmer_name,
-        farmer_id = COALESCE(mobile_synced_tickets.farmer_id, EXCLUDED.farmer_id),
-        accionista_id = COALESCE(mobile_synced_tickets.accionista_id, EXCLUDED.accionista_id),
+        -- Si en la báscula cambiaron el CLIENTE del ticket (edición o renumeración),
+        -- el vínculo anterior ya no vale: se vuelve a homologar con el nombre nuevo
+        -- (o queda "Pendiente de Vincular"). Si el nombre no cambió, se respeta el
+        -- vínculo manual que ya tenía.
+        farmer_id = CASE
+          WHEN lower(trim(mobile_synced_tickets.farmer_name)) IS DISTINCT FROM lower(trim(EXCLUDED.farmer_name))
+            THEN EXCLUDED.farmer_id
+          ELSE COALESCE(mobile_synced_tickets.farmer_id, EXCLUDED.farmer_id) END,
+        accionista_id = CASE
+          WHEN lower(trim(mobile_synced_tickets.farmer_name)) IS DISTINCT FROM lower(trim(EXCLUDED.farmer_name))
+            THEN EXCLUDED.accionista_id
+          ELSE COALESCE(mobile_synced_tickets.accionista_id, EXCLUDED.accionista_id) END,
         gross_weight = EXCLUDED.gross_weight,
         tare_weight = EXCLUDED.tare_weight,
         net_weight = EXCLUDED.net_weight,

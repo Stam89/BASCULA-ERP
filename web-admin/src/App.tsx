@@ -243,6 +243,7 @@ type BasculaTicket = {
   id: string;
   farmer_id: string | null;
   farmer_name: string | null;
+  farmer_vinculado?: string | null;
   gross_weight: string | number;
   tare_weight: string | number;
   net_weight: string | number;
@@ -11486,7 +11487,14 @@ export function App() {
                           <td style={{ fontWeight: 600 }}>#{t.numero ?? "—"}</td>
                           <td style={{ whiteSpace: "nowrap" }}>{t.fecha_app || "—"}</td>
                           <td>
-                            {linked ? (t.farmer_name || "—")
+                            {linked ? (
+                              <>
+                                {t.farmer_name || "—"}
+                                {t.farmer_vinculado && (t.farmer_vinculado ?? "").trim().toLowerCase() !== (t.farmer_name ?? "").trim().toLowerCase() && (
+                                  <span style={{ display: "block", fontSize: 12, color: "#6b7280" }} title="Agricultor del ERP con el que se ingresará">→ {t.farmer_vinculado}</span>
+                                )}
+                              </>
+                            )
                               : (
                                 <span style={{ color: "#b91c1c", fontWeight: 600 }} title={`La báscula lo registró como: ${t.farmer_name || "(sin nombre)"}`}>
                                   ⚠️ Cliente Desconocido
