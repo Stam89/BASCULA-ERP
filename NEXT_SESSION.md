@@ -49,6 +49,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Categorias de Caja = rubros del Resultado mensual (2026-09-28)
+
+- Migracion `20261045_categorias_caja_costos.sql`: renombra (solo `nombre`, el `codigo` no cambia y solo si seguia el nombre original) PAGO_MANO_OBRA -> "Nómina planta / Sueldos", GASTO_OPERATIVO -> "Obra civil / Gastos generales" (conserva "Gastos generales": `cashCategoryAllowsSubcategory` lo busca por nombre), MANTENIMIENTO_EQUIPO -> "Mantenimiento piladora / selector", SERVICIOS_BASICOS -> "Servicios básicos", COMPRA_SACOS -> "Compra de sacos / saquillos" (conserva "saco" para `esCategoriaSacos`). Crea 11 EGRESO/MATRIZ sin duplicar por codigo ni nombre: GAS, DIESEL, CUADRILLA_BAJADA, REPUESTOS, GUARDIANIA, COCINERA, GASTOS_ADMINISTRATIVOS, ALIMENTACION, VEHICULO_GERENCIA, GASOLINA_MONTACARGA, CUADRILLA_GUAYAQUIL. Agrega claves a costo_rubros (codigos + "guardia").
+- Sueldos, Pilador/Estibador y Secada NO tienen categoria nueva: se pagan por Nomina (PAGO_MANO_OBRA) y el reporte los separa por origen/descripcion ("Sueldo Cocinera X" -> Cocinera por la clave mas especifica).
+- Frontend: `CATEGORIAS_RUBRO_COSTO` habilita Subcategoria en las 11 nuevas.
+- Verificado en BEGIN...ROLLBACK: idempotente, sin nombres repetidos, 15/15 categorias caen en su rubro.
+
 ### Resultado mensual de CEYRO (hoja "COSTO <MES>") (2026-09-28)
 
 - Nueva vista Costos Operativos -> "📊 Resultado mensual" (solo Matriz; subpestana `resultado` en SUB_TABS). No cambia el Consolidado Mensual existente.

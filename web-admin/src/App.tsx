@@ -1625,8 +1625,15 @@ function cashCategoryAllowsSubcategory(categoryCode: string, categories: CashCat
     .replace(/[_-]+/g, " ")
     .trim()
     .toUpperCase();
-  return normalized.includes("GASTOS GENERALES") || normalized.includes("SERVICIOS BASICOS");
+  // Rubros de costo con categoría propia (Resultado mensual): también llevan
+  // Subcategoría para el detalle (ej. Repuestos → "Rodamiento motor secadora").
+  return normalized.includes("GASTOS GENERALES") || normalized.includes("SERVICIOS BASICOS")
+    || CATEGORIAS_RUBRO_COSTO.has(categoryCode);
 }
+const CATEGORIAS_RUBRO_COSTO = new Set([
+  "GAS", "DIESEL", "CUADRILLA_BAJADA", "REPUESTOS", "GUARDIANIA", "COCINERA",
+  "GASTOS_ADMINISTRATIVOS", "ALIMENTACION", "VEHICULO_GERENCIA", "GASOLINA_MONTACARGA", "CUADRILLA_GUAYAQUIL"
+]);
 // Categorías que NO se registran como movimiento crudo: van por su flujo dedicado.
 // 'agricultor' se resuelve enlazando una liquidación (Por Pagar) dentro del form.
 const CASH_REUSE: Record<string, "pilado" | "fomento" | "agricultor"> = {
