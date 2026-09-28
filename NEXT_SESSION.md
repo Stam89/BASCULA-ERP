@@ -49,6 +49,10 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Resultado mensual: cascara recibida por servicio + Imprimir (2026-09-28)
+- `calcularResultadoMensual` devuelve `recepcion` (aditivo): ingresos de bascula del mes (`weighing_tickets` no anulados, fecha Ecuador) por `operation_type`: Servicio completo (SECADO_PILADO), Solo secado (SECADO), Solo pilado (PILADO) y Compra; tickets, QQ, kg y totales. Informativo: la base del costo real sigue siendo la cascara liquidada.
+- `ResultadoMensual.tsx`: tarjeta "🚜 Cascara recibida por servicio" en la columna lateral y boton "🖨️ Imprimir" (abre ventana con los estilos de la app y solo el reporte; oculta botones/formularios; A4).
+
 ### Secado: aviso al mezclar 0.11 y CORRIENTE + correccion ticket #298 (2026-09-28)
 - Error humano en la app de bascula: #298 (CUCHO) salio CORRIENTE/cal. 230 siendo 0.11/225. El ERP copia el tipo y la calificacion del ticket.
 - `confirmarMezclaTipos` (App.tsx, junto a `seleccionDe`): al guardar secadoras (batch), tunel individual o tendal, si el grupo junta 0.11 y CORRIENTE pide confirmar listando los tickets del tipo minoritario. Solo frontend; el backend sigue permitiendo la mezcla.

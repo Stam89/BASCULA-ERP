@@ -6,7 +6,7 @@
 //  · Gastos financieros (hipoteca, préstamos, diferidos) y TOTAL NETO DE GANANCIAS.
 // Los datos salen de lo ya registrado (Caja, liquidaciones, servicios, fomentos);
 // solo los montos que el sistema no conoce se ingresan a mano por mes.
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, apiGet, apiPatch, apiPost } from "../api";
 
 type Mov = { fecha: string; descripcion: string; monto: number; categoria: string; subcategoria: string | null; categoria_codigo: string; tipo_nomina: string | null };
@@ -20,6 +20,8 @@ type Ingreso = { concepto: string; monto: number; origen: "auto" | "manual"; id?
 type Reporte = {
   periodo: string;
   cascara: { operaciones: Array<{ operacion: string; tipo: string; qq: number; liquidaciones: number }>; total_auto: number; total: number; manual: boolean };
+  /** Cáscara recibida en báscula por tipo de servicio (informativo). */
+  recepcion?: { tipos: Array<{ tipo: string; nombre: string; tickets: number; qq: number; kg: number }>; total_qq: number; total_servicios_qq: number; total_tickets: number };
   rubros: Rubro[];
   sin_clasificar: { monto: number; detalle: Mov[] };
   excluidos: Array<{ categoria: string; monto: number }>;
@@ -161,6 +163,38 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
     return () => document.removeEventListener("mousedown", cerrar);
   }, [menu]);
 
+  // 🖨️ Imprimir: abre el reporte (tal como se ve, sin botones ni formularios)
+  // en una ventana aparte con los mismos estilos, lista para imprimir o PDF.
+  const reporteRef = useRef<HTMLDivElement | null>(null);
+  const imprimir = () => {
+    if (vista !== "reporte") { setVista("reporte"); avisar("Se abrió el reporte: pulsa 🖨️ Imprimir de nuevo.", "warn"); return; }
+    const nodo = reporteRef.current;
+    if (!nodo) return;
+    const w = window.open("", "_blank", "width=1000,height=800");
+    if (!w) { avisar("El navegador bloqueó la ventana de impresión. Permite ventanas emergentes.", "warn"); return; }
+    const estilos = Array.from(document.querySelectorAll("style, link[rel='stylesheet']")).map((el) => el.outerHTML).join("");
+    const [y, m] = (rep?.periodo ?? periodo).split("-");
+    const mesNombre = new Date(Number(y), Number(m) - 1, 1).toLocaleDateString("es-EC", { month: "long", year: "numeric" });
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Resultado mensual ${rep?.periodo ?? periodo}</title>${estilos}
+      <style>
+        body { background: #fff !important; padding: 18px; }
+        button, input, select, textarea, form, .rm-noprint { display: none !important; }
+        .rm-grid { display: block !important; }
+        .rm-card { break-inside: avoid; box-shadow: none !important; margin-bottom: 12px; }
+        @page { size: A4; margin: 12mm; }
+      </style></head><body>
+      <div class="rm-wrap">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #0f172a;padding-bottom:6px;margin-bottom:12px">
+          <h2 style="margin:0;font-size:18px">📊 Resultado mensual · ${mesNombre.toUpperCase()}</h2>
+          <span style="font-size:12px;color:#64748b">Impreso ${new Date().toLocaleString("es-EC")}</span>
+        </div>
+        ${nodo.outerHTML}
+      </div></body></html>`);
+    w.document.close();
+    w.focus();
+    setTimeout(() => { w.print(); }, 400);
+  };
+
   const tarjetaNeto = (
     <div className={`rm-neto ${neto < 0 ? "is-perdida" : "is-ganancia"}`}>
       <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: ".06em" }}>TOTAL NETO DE GANANCIAS</div>
@@ -190,11 +224,12 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
           <input type="number" min="0" step="0.01" value={qqManual} onChange={(e) => setQqManual(e.target.value)} placeholder={rep ? String(rep.cascara.total_auto) : "auto"} style={{ width: 130 }} />
         </label>
         <button type="button" className="btnSecondary" onClick={() => cargar()} disabled={cargando}>{cargando ? "⟳ Calculando…" : "↻ Actualizar"}</button>
+        <button type="button" className="btnPrimary" onClick={imprimir} disabled={!rep || cargando}>🖨️ Imprimir</button>
       </div>
 
       {/* ════════════════════ PESTAÑA: REPORTE ════════════════════ */}
       {rep && vista === "reporte" && (
-        <div className="rm-grid">
+        <div className="rm-grid" ref={reporteRef}>
           <div className="rm-main">
             <div className="rm-card" style={{ overflowX: "auto" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
@@ -281,6 +316,26 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
           </div>
 
           <div className="rm-side">
+            {rep.recepcion && (
+              <div className="rm-card">
+                <h3 className="rm-title" style={{ marginBottom: 2 }}>🚜 Cáscara recibida por servicio</h3>
+                <p className="rm-sub" style={{ margin: "0 0 8px" }}>Ingresos de báscula del mes según su tipo de operación.</p>
+                <table className="rm-table">
+                  <thead><tr><th>Tipo</th><th className="num">Tickets</th><th className="num">QQ</th></tr></thead>
+                  <tbody>
+                    {rep.recepcion.tipos.map((t) => (
+                      <tr key={t.tipo} style={t.tipo === "COMPRA" ? { color: "#64748b" } : undefined}>
+                        <td>{t.nombre}</td><td className="num">{t.tickets}</td><td className="num">{t.qq.toFixed(2)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr><td>Total servicios</td><td className="num">{rep.recepcion.tipos.filter((t) => t.tipo !== "COMPRA").reduce((s, t) => s + t.tickets, 0)}</td><td className="num">{rep.recepcion.total_servicios_qq.toFixed(2)}</td></tr>
+                    <tr><td>Total recibido</td><td className="num">{rep.recepcion.total_tickets}</td><td className="num">{rep.recepcion.total_qq.toFixed(2)}</td></tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
             <div className="rm-card">
               <h3 className="rm-title" style={{ marginBottom: 8 }}>🌾 Cáscara comprada</h3>
               <table className="rm-table">

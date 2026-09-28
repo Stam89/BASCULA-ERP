@@ -142,6 +142,34 @@ export async function calcularResultadoMensual(db: Db, opts: { year: number; mon
     [ini, fin]
   )).rows as Array<{ operacion: string; tipo: string; qq: number; liquidaciones: number }>;
   const qqAuto = r2(cascara.reduce((s, c) => s + Number(c.qq), 0));
+
+  // 1b) Cáscara RECIBIDA en báscula en el mes, por tipo de operación: servicio
+  //     completo (secado + pilado), solo secado, solo pilado y compra propia.
+  //     Sale de los ingresos de materia prima (no anulados). Solo informativo:
+  //     no cambia la base del costo real.
+  const recepcionRows = (await db.query(
+    `SELECT COALESCE(w.operation_type, CASE WHEN w.is_maquila THEN 'SECADO_PILADO' ELSE 'COMPRA' END) AS tipo,
+            COUNT(*)::int AS tickets,
+            COALESCE(SUM(w.quintals), 0)::float AS qq,
+            COALESCE(SUM(w.net_weight), 0)::float AS kg
+       FROM weighing_tickets w
+      WHERE w.status::text <> 'CANCELLED' AND ${enMes("w.created_at")}
+      GROUP BY 1`,
+    [ini, fin]
+  )).rows as Array<{ tipo: string; tickets: number; qq: number; kg: number }>;
+  const TIPOS_RECEPCION: Array<{ tipo: string; nombre: string }> = [
+    { tipo: "SECADO_PILADO", nombre: "Servicio completo (secado + pilado)" },
+    { tipo: "SECADO", nombre: "Solo secado" },
+    { tipo: "PILADO", nombre: "Solo pilado" },
+    { tipo: "COMPRA", nombre: "Compra (cáscara propia)" }
+  ];
+  const recepcion = TIPOS_RECEPCION.map((t) => {
+    const r = recepcionRows.find((x) => x.tipo === t.tipo);
+    return { ...t, tickets: r?.tickets ?? 0, qq: r2(r?.qq ?? 0), kg: r2(r?.kg ?? 0) };
+  });
+  for (const r of recepcionRows) {
+    if (!TIPOS_RECEPCION.some((t) => t.tipo === r.tipo)) recepcion.push({ tipo: r.tipo, nombre: r.tipo, tickets: r.tickets, qq: r2(r.qq), kg: r2(r.kg) });
+  }
   const qq = opts.qqManual && opts.qqManual > 0 ? opts.qqManual : qqAuto;
 
   // 2) Egresos de la Matriz del mes.
@@ -282,6 +310,12 @@ export async function calcularResultadoMensual(db: Db, opts: { year: number; mon
   return {
     periodo,
     cascara: { operaciones: cascara, total_auto: qqAuto, total: qq, manual: Boolean(opts.qqManual && opts.qqManual > 0) },
+    recepcion: {
+      tipos: recepcion,
+      total_qq: r2(recepcion.reduce((s, r) => s + r.qq, 0)),
+      total_servicios_qq: r2(recepcion.filter((r) => r.tipo !== "COMPRA").reduce((s, r) => s + r.qq, 0)),
+      total_tickets: recepcion.reduce((s, r) => s + r.tickets, 0)
+    },
     rubros: filasRubros,
     sin_clasificar: { monto: montoSinClasificar, detalle: sinClasificar },
     excluidos: [...excluidos.entries()].map(([categoria, monto]) => ({ categoria, monto })),
