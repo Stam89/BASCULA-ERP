@@ -407,7 +407,25 @@ cashRouter.post("/movements/:id/reverse", requireAdmin, asyncRoute(async (req, r
     // que había ingresado (reverso automático para mantener el cuadre).
     const sacosRevertidos = await reversarEntradaSacosDeCaja(client, m.id);
 
-    return { ...reversal.rows[0], sacos_revertidos: sacosRevertidos };
+    // Si el egreso anulado registró un ACTIVO FIJO, se retira de Activos fijos:
+    // se borra si no tiene historial; con mantenimientos, sale del balance
+    // (costo 0, no depreciable) y queda FUERA DE SERVICIO para no perder su historia.
+    const activos = await client.query("SELECT id, name FROM equipment WHERE cash_movement_id = $1", [m.id]);
+    const activosRetirados: string[] = [];
+    for (const a of activos.rows) {
+      const conHistorial = await client.query("SELECT 1 FROM equipment_maintenance WHERE equipment_id = $1 LIMIT 1", [a.id]);
+      if (conHistorial.rowCount) {
+        await client.query(
+          "UPDATE equipment SET acquisition_cost = 0, is_depreciable = false, status = 'FUERA_SERVICIO' WHERE id = $1",
+          [a.id]
+        );
+      } else {
+        await client.query("DELETE FROM equipment WHERE id = $1", [a.id]);
+      }
+      activosRetirados.push(a.name);
+    }
+
+    return { ...reversal.rows[0], sacos_revertidos: sacosRevertidos, activos_retirados: activosRetirados };
   });
 
   res.status(201).json(result);
@@ -460,8 +478,19 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     responsable: z.string().max(120).optional(),
     // Compra de sacos: detalle de tipos/cantidades para conectar con el inventario.
     sacos: sacosCompraSchema,
+    // Compra de un ACTIVO FIJO: se registra en Activos fijos en el mismo paso
+    // (costo = monto del egreso, fecha = hoy) y queda enlazado a este egreso.
+    activo_fijo: z.object({
+      nombre: z.string().trim().min(2).max(160),
+      tipo: z.string().trim().min(2).max(60).default("OTRO"),
+      vida_util_anios: z.number().int().positive().max(50).default(10),
+      valor_residual: z.number().nonnegative().default(0)
+    }).optional(),
     created_by: z.string().uuid().optional()
   }).parse(req.body);
+  if (body.activo_fijo && body.movement !== "EXPENSE") {
+    throw new ApiError(400, "Solo un EGRESO (compra) puede registrar un activo fijo.");
+  }
 
   const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
   const conSacos = (body.sacos?.length ?? 0) > 0;
@@ -485,13 +514,29 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
        body.subcategoria?.trim() || null, body.maq_activo?.trim() || null, body.area?.trim() || null, esFondo, esFondo ? (body.responsable?.trim() || null) : null, fondoEstado]
     );
     await recordarSubcategoria(client, body.subcategoria, body.category);
+    // Compra de ACTIVO FIJO → alta en Activos fijos (balance y depreciación) del
+    // accionista de esta caja, con el costo y la fecha de este egreso.
+    let activoFijo: { id: string; name: string } | null = null;
+    if (body.activo_fijo) {
+      const af = body.activo_fijo;
+      const eq = await client.query(
+        `INSERT INTO equipment
+           (name, type, status, accionista_id, acquisition_cost, acquisition_date, useful_life_years,
+            salvage_value, is_depreciable, cash_movement_id)
+         VALUES ($1, $2, 'ACTIVA', $3, $4, (now() AT TIME ZONE 'America/Guayaquil')::date, $5, $6, true, $7)
+         RETURNING id, name`,
+        [af.nombre.toUpperCase(), af.tipo.toUpperCase(), accionistaId, body.amount,
+         af.vida_util_anios, Math.min(af.valor_residual, body.amount), mov.rows[0].id]
+      );
+      activoFijo = eq.rows[0];
+    }
     // Egreso de compra de sacos con detalle → ENTRADA automática al inventario
     // de la matriz (kardex), enlazada a este movimiento para poder revertirla.
     if (conSacos) {
       const sacos = await registrarEntradaSacosDesdeCaja(client, mov.rows[0].id, body.sacos!, accionistaId);
-      return { ...mov.rows[0], sacos_ingresados: sacos };
+      return { ...mov.rows[0], sacos_ingresados: sacos, activo_fijo: activoFijo };
     }
-    return mov.rows[0];
+    return { ...mov.rows[0], activo_fijo: activoFijo };
   });
   res.status(201).json(row);
 }));

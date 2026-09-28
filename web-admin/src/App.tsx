@@ -2261,6 +2261,8 @@ export function App() {
   // propios formularios completos (sackBuyForm/sackCart, maintenanceForm).
   const [movSubcategoria, setMovSubcategoria] = useState("");
   const [movEsFondo, setMovEsFondo] = useState(false);
+  // Compra de ACTIVO FIJO desde Caja: se registra en Activos fijos al guardar el egreso.
+  const [movActivo, setMovActivo] = useState({ es: false, nombre: "", tipo: "MAQUINARIA", vida: "" });
   const [movResponsable, setMovResponsable] = useState("");
   const [subcategoriasGastos, setSubcategoriasGastos] = useState<string[]>([]);
   // Modal de liquidación de un fondo a rendir cuentas.
@@ -8053,24 +8055,34 @@ export function App() {
     if (esFondo && movResponsable.trim().length < 2) {
       throw new Error("Selecciona el empleado/responsable que recibe el fondo.");
     }
-    await apiPost(`/cash/${registerId}/movements`, {
+    // Compra de ACTIVO FIJO: el activo nace con el costo de este egreso.
+    const esActivo = movement === "EXPENSE" && (movActivo.es || category === "COMPRA_ACTIVO_FIJO") && !esFondo;
+    const nombreActivo = (movActivo.nombre.trim() || String(form.get("description") ?? "").trim());
+    if (esActivo && nombreActivo.length < 2) throw new Error("Escribe el nombre del activo fijo (ej: Balanza electrónica 500 kg).");
+    const creado = await apiPost<{ activo_fijo?: { id: string; name: string } | null }>(`/cash/${registerId}/movements`, {
       movement,
       category,
       amount,
       description: form.get("description") || undefined,
       subcategoria: movSubcategoria.trim() || undefined,
       es_fondo: esFondo || undefined,
-      responsable: esFondo ? movResponsable.trim() : undefined
+      responsable: esFondo ? movResponsable.trim() : undefined,
+      activo_fijo: esActivo
+        ? { nombre: nombreActivo, tipo: movActivo.tipo, vida_util_anios: Number(movActivo.vida) || vidaUtilSugerida(movActivo.tipo) }
+        : undefined
     });
     safeResetForm(formElement);
     setMovCategory("");
     setMovPayableId("");
     setMovSubcategoria(""); setMovEsFondo(false); setMovResponsable("");
+    setMovActivo({ es: false, nombre: "", tipo: "MAQUINARIA", vida: "" });
     await loadSubcategorias(); // refresca la memoria del datalist
     addToast(
       esFondo
         ? `Fondo a rendir cuentas entregado a ${movResponsable.trim()} · queda Por Liquidar`
-        : `${movement === "INCOME" ? "Ingreso" : "Egreso"} registrado`,
+        : creado.activo_fijo
+          ? `Egreso registrado · 🏭 Activo fijo «${creado.activo_fijo.name}» agregado a Activos fijos (${money(amount)})`
+          : `${movement === "INCOME" ? "Ingreso" : "Egreso"} registrado`,
       "success"
     );
     await refreshCaja(registerId);
@@ -15436,7 +15448,7 @@ export function App() {
                     const icons = {
                       resumen: "📋",
                       anticipo: "💸",
-                      movimiento: "💳",
+                      movimiento: "➕",
                       gastos: "🧾",
                       sacos: "📦",
                       mantenimiento: "🔧",
@@ -15448,7 +15460,7 @@ export function App() {
                     const labels = {
                       resumen: "Movimientos",
                       anticipo: "Anticipo",
-                      movimiento: "Movimiento",
+                      movimiento: "Nuevo movimiento",
                       gastos: "Gastos",
                       sacos: "Sacos",
                       mantenimiento: "Mantenimiento",
@@ -15752,6 +15764,47 @@ export function App() {
                       </div>
                     )}
 
+                    {/* 🏭 Compra de ACTIVO FIJO: al guardar el egreso, el activo entra a
+                        Activos fijos (Estados Financieros) con este costo y la fecha de
+                        hoy, para su depreciación. Si se anula el egreso, se retira. */}
+                    {movType === "EXPENSE" && !esCategoriaSacos(movCategory) && movCategory !== "MANTENIMIENTO_EQUIPO" && (() => {
+                      const activa = movActivo.es || movCategory === "COMPRA_ACTIVO_FIJO";
+                      return (
+                        <div style={{ background: activa ? "#eff6ff" : "transparent", border: activa ? "1px solid #bfdbfe" : "1px dashed #e5e7eb", borderRadius: 8, padding: "10px 12px", marginBottom: 16 }}>
+                          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                            <input type="checkbox" checked={activa} disabled={movCategory === "COMPRA_ACTIVO_FIJO"}
+                              onChange={(e) => setMovActivo({ ...movActivo, es: e.target.checked })} style={{ width: "auto" }} />
+                            🏭 Es un activo fijo (máquina, equipo, vehículo, mueble…)
+                          </label>
+                          {activa && (
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginTop: 10 }}>
+                              <label style={{ fontSize: 13, fontWeight: 600 }}><span style={{ display: "block", marginBottom: 4 }}>Nombre del activo</span>
+                                <input value={movActivo.nombre} onChange={(e) => setMovActivo({ ...movActivo, nombre: e.target.value })}
+                                  placeholder="Ej: Balanza electrónica 500 kg" style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} />
+                              </label>
+                              <label style={{ fontSize: 13, fontWeight: 600 }}><span style={{ display: "block", marginBottom: 4 }}>Tipo</span>
+                                <select value={movActivo.tipo} onChange={(e) => setMovActivo({ ...movActivo, tipo: e.target.value, vida: "" })}
+                                  style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
+                                  <option value="MAQUINARIA">Maquinaria</option>
+                                  <option value="VEHICULO">Vehículo</option>
+                                  <option value="MUEBLES Y ENSERES">Muebles y enseres</option>
+                                  <option value="EQUIPO DE OFICINA">Equipo de oficina</option>
+                                  <option value="EQUIPO DE COMPUTO">Equipo de cómputo</option>
+                                  <option value="EDIFICIO">Edificio / inmueble</option>
+                                  <option value="OTRO">Otro</option>
+                                </select>
+                              </label>
+                              <label style={{ fontSize: 13, fontWeight: 600 }}><span style={{ display: "block", marginBottom: 4 }}>Vida útil (años)</span>
+                                <input type="number" min="1" max="50" step="1" value={movActivo.vida} onChange={(e) => setMovActivo({ ...movActivo, vida: e.target.value })}
+                                  placeholder={String(vidaUtilSugerida(movActivo.tipo))} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} />
+                              </label>
+                              <small className="muted" style={{ gridColumn: "1 / -1" }}>Se agrega a <strong>Estados Financieros → Activos fijos</strong> con el monto de este egreso como costo y la fecha de hoy. Si el nombre queda vacío se usa la descripción.</small>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
                     {/* Dinero a Rendir Cuentas (fondo provisional): egreso que queda
                         Por Liquidar a nombre de un responsable. */}
                     {movType === "EXPENSE" && (
@@ -16010,11 +16063,11 @@ export function App() {
                 {/* ── Compra de Sacos ── */}
                 {cajaSubTab === "sacos" && (
                   <div style={{ display: "grid", gap: 14 }}>
-                    {/* Solo consulta. La compra de sacos se registra desde 💳 Movimiento
+                    {/* Solo consulta. La compra de sacos se registra desde ➕ Nuevo movimiento
                         (categoría "Compra de sacos"). */}
                     <div className="formPanel" style={{ background: "#eff6ff", border: "1px solid #bfdbfe" }}>
                       <h2 style={{ margin: 0, fontSize: 15 }}>📦 Inventario de Sacos</h2>
-                      <p className="muted" style={{ margin: "6px 0 0" }}>Para <strong>comprar sacos</strong>, ve a <strong>💳 Movimiento</strong> → categoría <strong>Compra de sacos</strong>. Este panel es solo de consulta.</p>
+                      <p className="muted" style={{ margin: "6px 0 0" }}>Para <strong>comprar sacos</strong>, ve a <strong>➕ Nuevo movimiento</strong> → categoría <strong>Compra de sacos</strong>. Este panel es solo de consulta.</p>
                     </div>
                     {/* Stock actual por marca y peso */}
                     <div className="formPanel">
@@ -16055,12 +16108,12 @@ export function App() {
 
                 {cajaSubTab === "mantenimiento" && (
                   <div className="maintLayout">
-                    {/* El registro de mantenimiento se hace ahora desde 💳 Movimiento
+                    {/* El registro de mantenimiento se hace ahora desde ➕ Nuevo movimiento
                         (categoría "Mantenimiento", con Máquina/Activo y Área). Aquí solo
                         se CONSULTA el historial. */}
                     <div className="formPanel" style={{ background: "#eff6ff", border: "1px solid #bfdbfe" }}>
                       <h2 style={{ margin: 0, fontSize: 15 }}>🔧 Mantenimientos</h2>
-                      <p className="muted" style={{ margin: "6px 0 0" }}>Para registrar un mantenimiento (repuestos o mano de obra), ve a <strong>💳 Movimiento</strong> y elige la categoría <strong>Mantenimiento</strong>: podrás asociar la Máquina/Activo o el Área. Este panel es solo de consulta.</p>
+                      <p className="muted" style={{ margin: "6px 0 0" }}>Para registrar un mantenimiento (repuestos o mano de obra), ve a <strong>➕ Nuevo movimiento</strong> y elige la categoría <strong>Mantenimiento</strong>: podrás asociar la Máquina/Activo o el Área. Este panel es solo de consulta.</p>
                     </div>
                     <div className="formPanel">
                       <h2 style={{ marginBottom: 8 }}>Historial de mantenimientos</h2>
@@ -19131,7 +19184,7 @@ export function App() {
             {/* Modal: detalle del cálculo de nómina por pilada */}
             {/* ── Recibo Semanal Desglosado (Rol de Pago Individual) ── */}
             {/* Modal global "Agregar rápido" de área/sección/tipo de mantenimiento
-                (se usa desde el formulario de Mantenimiento embebido en 💳 Movimiento). */}
+                (se usa desde el formulario de Mantenimiento embebido en ➕ Nuevo movimiento). */}
             {maintCatModal && (
               <div className="modalOverlay" onClick={() => setMaintCatModal(null)}>
                 <div className="modalCard" onClick={(e) => e.stopPropagation()}>

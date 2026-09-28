@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Caja: activo fijo desde la compra + pestana renombrada (2026-09-28)
+
+- Caja: la pestana "💳 Movimiento" (formulario) se llama ahora "➕ Nuevo movimiento" para no confundirse con "📋 Movimientos" (lista). Se actualizaron los textos que la mencionaban.
+- Activo fijo desde Caja: en un EGRESO (salvo compra de sacos y mantenimiento) aparece "🏭 Es un activo fijo" con nombre, tipo y vida util (sugerida por tipo). Nueva categoria `COMPRA_ACTIVO_FIJO` (AMBOS) que la activa sola. `POST /cash/:id/movements` acepta `activo_fijo` y crea `equipment` (accionista de la caja, costo = monto, fecha = hoy Guayaquil, depreciable) enlazado por `equipment.cash_movement_id` (migracion `20261043_activo_fijo_desde_caja.sql`). Anular ese egreso retira el activo (lo borra; si tiene mantenimientos queda FUERA_SERVICIO, costo 0, no depreciable).
+- Verificado en BEGIN...ROLLBACK (alta, aparece en Activos fijos, retiro al anular) y el buscador «¿Cuando se hizo?» probado en el navegador con sesion.
+
 ### Buscador «¿Cuando se hizo?» (Matriz y Transporte, independientes) (2026-09-28)
 
 - Pedido del usuario: responder rapido "¿que dia se arreglo/cambio/compro X?". Todo eso se registra en Caja (egresos con subcategoria, maquina y area) y en mantenimientos.
