@@ -7,6 +7,7 @@ import { Metric, ReportTable, Input, Select, MedidorRow, DataList } from "./comp
 import { ClienteSearchInput } from "./components/ClienteSearchInput";
 import { CampanitaNotificaciones } from "./components/Notificaciones";
 import { BuscadorHistorial } from "./components/BuscadorHistorial";
+import { ResultadoMensual, type GanaOperacion } from "./components/ResultadoMensual";
 import { planDeSacos, sobranteLb, SacosAlertaDashboard, SacosCatalogoConfig, SacosTablero } from "./components/SacosModule";
 import * as XLSX from "xlsx";
 import { importarConRecarga } from "./recargaVersion";
@@ -1538,6 +1539,7 @@ const SUB_TABS: Record<string, Array<{ key: string; label: string }>> = {
   "Costos Operativos": [
     { key: "diario", label: "Registro por corrida" },
     { key: "mensual", label: "Consolidado Mensual" },
+    { key: "resultado", label: "Resultado mensual (costo real vs estimado)" },
   ],
   Reportes: [
     { key: "resumen", label: "Resumen" },
@@ -2459,6 +2461,33 @@ export function App() {
       pBlancoStr, pBrokenStr, pFineStr, pBranStr, pBlanco, pBroken, pFine, pBran,
       ingresoTotal, utilidad, totalCascaraSeccion };
   };
+  // Resultado mensual: ganancia «Gana» de cada operación (CEYRO, ROVINSON,
+  // STALYN) en el mes, con EL MISMO cálculo del módulo Gana (ganaCalc) sobre el
+  // historial de producción de cada accionista. Solo lotes propios con precio
+  // de venta cargado (ingreso > 0); los servicios no cuentan.
+  const ganaCalcRef = useRef(ganaCalc);
+  ganaCalcRef.current = ganaCalc;
+  const calcularGanaMes = useCallback(async (periodo: string): Promise<GanaOperacion[]> => {
+    const ops = accionistas.filter((a) => a.tipo === "MATRIZ" || a.tipo === "SOCIO");
+    const out: GanaOperacion[] = [];
+    for (const a of ops) {
+      const r = await apiFetch("/processing-batches/history", { headers: { "X-Accionista-Id": a.id } });
+      if (!r.ok) continue;
+      const rows = (await r.json()) as ProductionHistoryItem[];
+      let utilidad = 0; let lotes = 0;
+      for (const it of rows) {
+        if (it.is_service || String(it.ownership ?? "").toUpperCase() === "MAQUILA" || !it.finished_at) continue;
+        const d = new Date(it.finished_at);
+        const mes = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+        if (mes !== periodo) continue;
+        const c = ganaCalcRef.current(it);
+        if (!(c.ingresoTotal > 0)) continue; // sin precio de venta aún: no se cuenta
+        utilidad += c.utilidad; lotes += 1;
+      }
+      if (lotes > 0) out.push({ operacion: a.name, utilidad: Math.round(utilidad * 100) / 100, lotes });
+    }
+    return out;
+  }, [accionistas]);
   // Tarifas de empaque / uso de sacos que la MATRIZ cobra a los socios al despachar.
   const [packagingRatesForm, setPackagingRatesForm] = useState({ precio_saco_10lb: 0, precio_saco_25lb: 0, precio_saco_50lb: 0 });
 
@@ -2623,7 +2652,7 @@ export function App() {
   const [costoBatches, setCostoBatches] = useState<any[]>([]);
   const [costoForm, setCostoForm] = useState({ processing_batch_id: "", fecha: nominaToday, qq_producidos: "", luz: "", mantenimiento: "", mano_obra: "", combustible: "", desgaste: "", otros: "" });
   // Consolidado mensual (aditivo; no toca el registro por corrida).
-  const [costosView, setCostosView] = useState<"diario" | "mensual">("diario");
+  const [costosView, setCostosView] = useState<"diario" | "mensual" | "resultado">("diario");
   const [consolMes, setConsolMes] = useState<{ year: string; month: string; qq: string; financiero: string }>(
     { year: String(new Date().getFullYear()), month: String(new Date().getMonth() + 1), qq: "", financiero: "" });
   const [consolData, setConsolData] = useState<any | null>(null);
@@ -12132,8 +12161,16 @@ export function App() {
                 {puedeVerSubTab("Costos Operativos", "mensual") && (
                   <button type="button" className={costosView === "mensual" ? "active" : ""} onClick={() => { setCostosView("mensual"); if (!consolData) loadConsolidadoMensual(); }}>📅 Consolidado Mensual</button>
                 )}
+                {esMatrizActiva && puedeVerSubTab("Costos Operativos", "resultado") && (
+                  <button type="button" className={costosView === "resultado" ? "active" : ""} onClick={() => setCostosView("resultado")}>📊 Resultado mensual</button>
+                )}
               </div>
             </div>
+            {/* 📊 Resultado mensual de CEYRO: costo real vs estimado por rubro,
+                ingresos adicionales, gastos financieros y total neto. */}
+            {costosView === "resultado" && esMatrizActiva && (
+              <ResultadoMensual puedeEditar={isAdmin} avisar={(msg, tipo) => addToast(msg, tipo)} calcularGana={calcularGanaMes} />
+            )}
             {costosView === "diario" && (
             <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
               <h2 style={{ marginBottom: 4 }}>🏭 Costo operativo por corrida (Planta / {matrizName})</h2>

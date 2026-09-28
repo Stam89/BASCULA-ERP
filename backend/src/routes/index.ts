@@ -43,6 +43,7 @@ import { cobrosRouter } from "./modules/cobros.js";
 import { campoRouter } from "./modules/campo.js";
 import { notificacionesRouter } from "./modules/notificaciones.js";
 import { historialRouter } from "./modules/historial.js";
+import { resultadoMensualRouter } from "./modules/resultado-mensual.js";
 import { externalRouter } from "./modules/external.js";
 import { sriRouter } from "./modules/sri.js";
 
@@ -113,3 +114,5 @@ routes.use("/campo", campoRouter);
 routes.use("/notificaciones", notificacionesRouter);
 // 🔎 «¿Cuándo se hizo?»: reparaciones/cambios/compras (Matriz y Transporte, por separado).
 routes.use("/historial", historialRouter);
+// 📊 Resultado mensual de CEYRO: costos por QQ vs estimado, ingresos adicionales y neto.
+routes.use("/resultado-mensual", resultadoMensualRouter);

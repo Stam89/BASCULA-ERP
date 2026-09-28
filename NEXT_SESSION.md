@@ -49,6 +49,17 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Resultado mensual de CEYRO (hoja "COSTO <MES>") (2026-09-28)
+
+- Nueva vista Costos Operativos -> "📊 Resultado mensual" (solo Matriz; subpestana `resultado` en SUB_TABS). No cambia el Consolidado Mensual existente.
+- Backend: `services/resultado-mensual.ts` (`calcularResultadoMensual`, `clasificarEgreso`, `normalizar`, tests) y `routes/modules/resultado-mensual.ts` montado en `/resultado-mensual` (GET reporte ?year&month&qq; CRUD `/rubros`; `POST /rubros/:id/claves`; `POST/DELETE /manual`). Migracion `20261044_resultado_mensual.sql`: `costo_rubros` (17 rubros de la hoja con costo estimado, total $4.27/QQ, y claves) y `resultado_mensual_manual` (INGRESO / FINANCIERO por periodo YYYY-MM).
+  - Base = QQ de liquidaciones no anuladas del mes de TODAS las operaciones (CEYRO+ROVINSON+STALYN); override manual `qq`.
+  - Costos = egresos de las cajas de la Matriz del mes (sin anulados), clasificados por NIVELES: subcategoria > descripcion/maquina/area > reference_type (admin_salary_payments, cuadrilla_entries, worker_payments) > categoria; en cada nivel gana la clave mas larga como palabra completa. Excluidos (no operativos): `CATEGORIAS_NO_OPERATIVAS` (pago agricultor, fomentos, activo fijo, pagos entre socios/servicios, etc.). Sin clasificar se asigna desde el reporte (agrega la subcategoria como clave).
+  - Costo real = gasto / QQ; alerta (rojo #FFCCCC) si > estimado.
+  - Ingresos adicionales auto: bascula (CxC retencion_matriz + ingresos Caja "bascula"), tamo (ingresos Caja "tamo"), pilado_services por cliente (terceros y cada socio), matriz_service_charges por socio, CxC secado_service y sacos_servicio, interes de fomentos cerrados en el mes por operacion (misma formula de Fomentos) + manuales. La ganancia Gana por operacion la calcula el frontend con `ganaCalc` sobre `/processing-batches/history` de cada accionista (header X-Accionista-Id), solo lotes propios con precio de venta.
+  - Neto = ingresos adicionales (+Gana) - costos - gastos financieros; tarjeta roja #CC0000 si < 0.
+- Verificado en BEGIN...ROLLBACK con la base real (cascara 217.13 QQ, clasificacion, alerta, excluidos, ingresos, neto).
+
 ### Caja: activo fijo desde la compra + pestana renombrada (2026-09-28)
 
 - Caja: la pestana "💳 Movimiento" (formulario) se llama ahora "➕ Nuevo movimiento" para no confundirse con "📋 Movimientos" (lista). Se actualizaron los textos que la mencionaban.
