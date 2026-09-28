@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Resultado mensual: rediseno ejecutivo (2026-09-28)
+
+- Solo maquetacion/UX en `web-admin/src/components/ResultadoMensual.tsx` + clases `rm-*` al final de `styles.css` (el proyecto NO usa Tailwind; se replicaron sus colores slate/blue/purple/red, rounded-xl, shadow-sm). Estado, endpoints y funciones de guardado/edicion/enlaces sin cambios de logica.
+- Pestanas: "📊 Reporte de costos vs estimado" (grid 12 col: principal 8 = costos + resultado; lateral 4 = cascara, ingresos, gastos financieros; 1 columna < 1024px) y "⚙️ Mapeo y configuracion de rubros" (solo admin): tarjeta por rubro con badges azules (Caja) y morados (Nomina), boton "+ Asignar" con menu desplegable, Editar/Quitar y "＋ Nuevo rubro" colapsable. Costo real en rojo suave (#fef2f2/#dc2626) solo si supera el estimado.
+- El costo estimado se edita con "✏️ Editar" (se quito el input suelto de la tabla del reporte).
+
 ### Resultado mensual: rubros enlazados a categorias de Caja y nomina por tipo (2026-09-28)
 
 - Problemas reportados: "Pago semana polvillo" caia en Sueldos (la clave "sueldos" atrapaba el nombre de la categoria "Nómina planta / Sueldos"); editar rubros/claves no cambiaba Caja; "claves" confuso.

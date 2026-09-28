@@ -32,8 +32,6 @@ export type GanaOperacion = { operacion: string; utilidad: number; lotes: number
 const dinero = (n: number) => `$${(Number(n) || 0).toLocaleString("es-EC", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const porQq = (n: number) => `$${(Number(n) || 0).toFixed(2)}`;
 const mesActual = () => new Date().toISOString().slice(0, 7);
-const ROJO = { background: "#FFCCCC", color: "#991b1b" };
-const VERDE = { background: "#dcfce7", color: "#166534" };
 
 export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategoriasCaja }: {
   puedeEditar: boolean;
@@ -50,7 +48,10 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
   const [cargando, setCargando] = useState(false);
   const [abierto, setAbierto] = useState<string | null>(null);
   const [nuevo, setNuevo] = useState({ seccion: "INGRESO" as "INGRESO" | "FINANCIERO", concepto: "", monto: "" });
-  const [verRubros, setVerRubros] = useState(false);
+  // Pestañas del módulo y menú «+ Asignar» (rubro + tipo de enlace).
+  const [vista, setVista] = useState<"reporte" | "mapeo">("reporte");
+  const [menu, setMenu] = useState<{ id: string; tipo: "caja" | "nomina" } | null>(null);
+  const [nuevoAbierto, setNuevoAbierto] = useState(false);
   // Fila del panel «Configurar rubros» en edición (botón ✏️ Editar).
   const [editando, setEditando] = useState<{ id: string; nombre: string; estimado: string } | null>(null);
   const [nuevoRubro, setNuevoRubro] = useState({ nombre: "", estimado: "", categoria: "" });
@@ -83,11 +84,6 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
   const neto = totalIngresos - (rep?.total_costos ?? 0) - (rep?.total_financieros ?? 0);
   const costoAlto = rep ? rep.costo_real_qq > rep.costo_estimado_qq + 1e-9 : false;
 
-  async function guardarEstimado(r: Rubro, valor: number) {
-    if (!Number.isFinite(valor) || valor < 0 || valor === r.costo_estimado_qq) return;
-    try { await apiPatch(`/resultado-mensual/rubros/${r.id}`, { costo_estimado_qq: valor }); await cargar(); }
-    catch (e) { avisar(e instanceof Error ? e.message : "No se pudo guardar", "error"); }
-  }
   async function guardarEdicion(r: Rubro) {
     if (!editando) return;
     const nombre = editando.nombre.trim();
@@ -156,295 +152,335 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
     catch (e) { avisar(e instanceof Error ? e.message : "No se pudo quitar", "error"); }
   }
 
-  const celda = { padding: "6px 10px", borderBottom: "1px solid #eef2f7" } as const;
-  const num = { ...celda, textAlign: "right" as const, fontVariantNumeric: "tabular-nums" as const };
+  // Menú «+ Asignar» abierto: rubro y tipo de enlace (categoría de Caja o nómina).
+  const cerrarMenu = () => setMenu(null);
+  useEffect(() => {
+    if (!menu) return;
+    const cerrar = (e: MouseEvent) => { if (!(e.target as HTMLElement).closest?.(".rm-pop, .rm-link")) setMenu(null); };
+    document.addEventListener("mousedown", cerrar);
+    return () => document.removeEventListener("mousedown", cerrar);
+  }, [menu]);
+
+  const tarjetaNeto = (
+    <div className={`rm-neto ${neto < 0 ? "is-perdida" : "is-ganancia"}`}>
+      <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: ".06em" }}>TOTAL NETO DE GANANCIAS</div>
+      <div style={{ fontSize: 30, fontWeight: 900, lineHeight: 1.15 }}>{dinero(neto)}</div>
+      <div style={{ fontSize: 12.5, fontWeight: 700 }}>
+        {neto < 0 ? "⚠️ PÉRDIDA REAL: los ingresos no cubren los costos operativos y financieros del mes." : "✅ Se cubrieron todos los costos operativos y financieros del mes."}
+      </div>
+    </div>
+  );
 
   return (
-    <div style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 14 }}>
-      <div className="tablePanel">
-        <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
-          <div style={{ flex: "1 1 260px" }}>
-            <h2 style={{ margin: 0 }}>📊 Resultado mensual · Costos vs estimado</h2>
-            <p className="muted" style={{ margin: "4px 0 0", fontSize: 12.5 }}>Costo real = gasto del rubro ÷ QQ de cáscara comprada en el mes (CEYRO + ROVINSON + STALYN). En <span style={{ ...ROJO, padding: "0 6px", borderRadius: 4 }}>rojo</span> los rubros que superan su costo estimado.</p>
+    <div className="rm-wrap">
+      {/* ── Encabezado: título, pestañas y filtros ── */}
+      <div className="rm-card" style={{ display: "flex", gap: 16, alignItems: "flex-end", flexWrap: "wrap" }}>
+        <div style={{ flex: "1 1 280px" }}>
+          <h2 className="rm-title" style={{ fontSize: 18 }}>📊 Resultado mensual</h2>
+          <p className="rm-sub">Costo real = gasto del rubro ÷ QQ de cáscara comprada en el mes (CEYRO + ROVINSON + STALYN).</p>
+          <div className="rm-tabs" style={{ marginTop: 12 }} role="tablist">
+            <button type="button" role="tab" className={`rm-tab ${vista === "reporte" ? "is-active" : ""}`} onClick={() => setVista("reporte")}>📊 Reporte de costos vs estimado</button>
+            {puedeEditar && (
+              <button type="button" role="tab" className={`rm-tab ${vista === "mapeo" ? "is-active" : ""}`} onClick={() => setVista("mapeo")}>⚙️ Mapeo y configuración de rubros</button>
+            )}
           </div>
-          <label style={{ margin: 0 }}><span>Mes</span><input type="month" value={periodo} onChange={(e) => setPeriodo(e.target.value)} /></label>
-          <label style={{ margin: 0 }}><span>QQ cáscara (opcional)</span>
-            <input type="number" min="0" step="0.01" value={qqManual} onChange={(e) => setQqManual(e.target.value)} placeholder={rep ? String(rep.cascara.total_auto) : "auto"} style={{ width: 130 }} />
-          </label>
-          <button type="button" className="btnSecondary" onClick={() => cargar()} disabled={cargando}>{cargando ? "⟳ Calculando…" : "↻ Actualizar"}</button>
         </div>
+        <label style={{ margin: 0 }}><span>Mes</span><input type="month" value={periodo} onChange={(e) => setPeriodo(e.target.value)} /></label>
+        <label style={{ margin: 0 }}><span>QQ cáscara (opcional)</span>
+          <input type="number" min="0" step="0.01" value={qqManual} onChange={(e) => setQqManual(e.target.value)} placeholder={rep ? String(rep.cascara.total_auto) : "auto"} style={{ width: 130 }} />
+        </label>
+        <button type="button" className="btnSecondary" onClick={() => cargar()} disabled={cargando}>{cargando ? "⟳ Calculando…" : "↻ Actualizar"}</button>
       </div>
 
-      {rep && (
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.35fr) minmax(0, 1fr)", gap: 14, alignItems: "start" }} className="resultadoMensualGrid">
-          {/* ── Costos operativos ── */}
-          <div className="tablePanel" style={{ overflowX: "auto" }}>
-            <h3 style={{ margin: "0 0 8px" }}>💸 Costos operativos · {rep.periodo}</h3>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead><tr style={{ background: "#f8fafc", color: "#475569" }}>
-                <th style={{ ...celda, textAlign: "left" }}>Rubro</th>
-                <th style={{ ...num }}>Costo estimado</th>
-                <th style={{ ...num }}>Gasto</th>
-                <th style={{ ...num }}>Costo real</th>
-              </tr></thead>
-              <tbody>
-                {rep.rubros.map((r) => (
-                  <Fragment key={r.id}>
-                    <tr style={{ cursor: r.detalle.length ? "pointer" : "default" }} onClick={() => r.detalle.length && setAbierto(abierto === r.id ? null : r.id)}>
-                      <td style={{ ...celda, fontWeight: 600 }}>
-                        {r.detalle.length ? (abierto === r.id ? "▾ " : "▸ ") : ""}{r.nombre}
-                        <small className="muted" style={{ display: "block", fontWeight: 400, fontSize: 11 }}>
-                          {[...r.categorias.map((c) => `Caja: ${nombreCategoria(c)}`), ...r.nomina.map((t) => `Nómina: ${NOMINA_LABEL[t] ?? t}`)].join(" · ") || "Sin categoría enlazada"}
-                        </small>
-                      </td>
-                      <td style={num} onClick={(e) => e.stopPropagation()}>
-                        {puedeEditar ? (
-                          <input type="number" min="0" step="0.01" defaultValue={r.costo_estimado_qq.toFixed(2)} key={`${r.id}-${r.costo_estimado_qq}`}
-                            onBlur={(e) => guardarEstimado(r, Number(e.target.value))} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-                            style={{ width: 72, textAlign: "right", padding: "3px 6px", borderRadius: 5, border: "1px solid #d1d5db" }} />
-                        ) : porQq(r.costo_estimado_qq)}
-                      </td>
-                      <td style={num}>{r.gasto_total > 0 ? dinero(r.gasto_total) : "—"}</td>
-                      <td style={{ ...num, fontWeight: 800, ...(r.gasto_total > 0 ? (r.alerta ? ROJO : VERDE) : {}) }} title={r.alerta ? "Supera el costo estimado" : ""}>
-                        {r.gasto_total > 0 ? porQq(r.costo_real_qq) : "—"}
-                      </td>
-                    </tr>
-                    {abierto === r.id && r.detalle.map((m, i) => (
-                      <tr key={`${r.id}-${i}`} style={{ background: "#fbfdff", fontSize: 12 }}>
-                        <td style={{ ...celda, paddingLeft: 26 }} colSpan={2}>{m.fecha} · {m.descripcion}{m.subcategoria ? <span className="muted"> · {m.subcategoria}</span> : null}</td>
-                        <td style={num}>{dinero(m.monto)}</td><td style={celda} />
-                      </tr>
-                    ))}
-                  </Fragment>
-                ))}
-                {rep.sin_clasificar.monto > 0 && (
-                  <>
-                    <tr style={{ background: "#fff7ed", cursor: "pointer" }} onClick={() => setAbierto(abierto === "sin" ? null : "sin")}>
-                      <td style={{ ...celda, fontWeight: 700, color: "#9a3412" }}>{abierto === "sin" ? "▾ " : "▸ "}Sin clasificar ({rep.sin_clasificar.detalle.length})</td>
-                      <td style={num}>—</td><td style={num}>{dinero(rep.sin_clasificar.monto)}</td>
-                      <td style={num}>{porQq(rep.cascara.total > 0 ? rep.sin_clasificar.monto / rep.cascara.total : 0)}</td>
-                    </tr>
-                    {abierto === "sin" && rep.sin_clasificar.detalle.map((m, i) => (
-                      <tr key={`sin-${i}`} style={{ background: "#fffbf5", fontSize: 12 }}>
-                        <td style={{ ...celda, paddingLeft: 26 }}>{m.fecha} · {m.descripcion}<span className="muted"> · {m.subcategoria || m.categoria}</span></td>
-                        <td style={celda} colSpan={2}>
-                          {puedeEditar && (
-                            <select defaultValue="" onChange={(e) => asignar(m, e.target.value)} style={{ fontSize: 12, padding: "3px 6px", width: "100%" }}>
-                              <option value="">Asignar a rubro…</option>
-                              {rep.rubros.map((r) => <option key={r.id} value={r.id}>{r.nombre}</option>)}
-                            </select>
-                          )}
-                        </td>
-                        <td style={num}>{dinero(m.monto)}</td>
-                      </tr>
-                    ))}
-                  </>
-                )}
-              </tbody>
-              <tfoot>
-                <tr style={{ background: "#0f766e", color: "#fff" }}>
-                  <td style={{ ...celda, fontWeight: 800, color: "#fff" }}>TOTAL COSTO</td>
-                  <td style={{ ...num, fontWeight: 800, color: "#fff" }}>{porQq(rep.costo_estimado_qq)}</td>
-                  <td style={{ ...num, fontWeight: 800, color: "#fff" }}>{dinero(rep.total_costos)}</td>
-                  <td style={{ ...num, fontWeight: 800, ...(costoAlto ? { background: "#CC0000", color: "#fff" } : { color: "#fff" }) }}>{porQq(rep.costo_real_qq)}</td>
-                </tr>
-              </tfoot>
-            </table>
-            {rep.excluidos.length > 0 && (
-              <p className="muted" style={{ fontSize: 11.5, margin: "8px 0 0" }}>
-                No son costo operativo (no se suman): {rep.excluidos.map((e) => `${e.categoria} ${dinero(e.monto)}`).join(" · ")}.
-              </p>
-            )}
-            <p className="muted" style={{ fontSize: 11.5, margin: "6px 0 0" }}>
-              Cada egreso de la Caja de CEYRO entra al rubro de la <strong>categoría</strong> con que se registró; los pagos de <strong>Nómina</strong> se reparten por tipo (sueldo, cuadrilla, pilador…). Toca un rubro para ver sus egresos; un «Sin clasificar» se asigna una vez y el sistema lo recuerda.
-            </p>
-            {puedeEditar && (
-              <div style={{ marginTop: 10 }}>
-                <button type="button" className="btnSecondary" style={{ fontSize: 12 }} onClick={() => setVerRubros((v) => !v)}>{verRubros ? "Ocultar configuración" : "⚙️ Configurar rubros"}</button>
-                {verRubros && (
-                  <div style={{ marginTop: 10, border: "1px solid #e2e8f0", borderRadius: 10, padding: 12, background: "#fbfdff" }}>
-                    <p className="muted" style={{ margin: "0 0 10px", fontSize: 12 }}>
-                      Cada rubro se llena con los egresos de su <strong>categoría de Caja</strong> (la que eliges al registrar el gasto en Caja → ➕ Nuevo movimiento).
-                      Los pagos de <strong>Nómina</strong> usan una sola categoría, por eso se asignan por tipo de pago. Cambiar el nombre de un rubro cambia también el de su categoría en Caja.
-                    </p>
-                    <div style={{ overflowX: "auto" }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
-                        <thead><tr style={{ color: "#475569", background: "#f1f5f9" }}>
-                          <th style={{ ...celda, textAlign: "left" }}>Rubro</th>
-                          <th style={{ ...celda, textAlign: "left" }}>Categoría de Caja</th>
-                          <th style={{ ...celda, textAlign: "left" }}>Pagos de nómina</th>
-                          <th style={celda} />
-                        </tr></thead>
-                        <tbody>
-                          {rep.rubros.map((r) => {
-                            const chip = (texto: string, quitar: () => void) => (
-                              <span key={texto} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "#e0f2fe", color: "#075985", borderRadius: 999, padding: "2px 8px", margin: "0 4px 4px 0", fontWeight: 600 }}>
-                                {texto}<button type="button" onClick={quitar} title="Quitar" style={{ border: "none", background: "transparent", color: "#0369a1", cursor: "pointer", padding: 0, fontSize: 13, lineHeight: 1 }}>×</button>
-                              </span>
-                            );
-                            return (
-                              <tr key={r.id} style={{ verticalAlign: "top" }}>
-                                <td style={celda}>
-                                  {editando?.id === r.id ? (
-                                    <div style={{ display: "grid", gap: 4, minWidth: 180 }}>
-                                      <input autoFocus value={editando.nombre} onChange={(e) => setEditando({ ...editando, nombre: e.target.value })}
-                                        onKeyDown={(e) => { if (e.key === "Enter") guardarEdicion(r); if (e.key === "Escape") setEditando(null); }}
-                                        placeholder="Nombre del rubro" style={{ fontSize: 12.5, padding: "4px 6px" }} />
-                                      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, margin: 0 }}>
-                                        Costo estimado $/QQ
-                                        <input type="number" min="0" step="0.01" value={editando.estimado} onChange={(e) => setEditando({ ...editando, estimado: e.target.value })}
-                                          onKeyDown={(e) => { if (e.key === "Enter") guardarEdicion(r); if (e.key === "Escape") setEditando(null); }}
-                                          style={{ width: 80, fontSize: 12, padding: "3px 6px", textAlign: "right" }} />
-                                      </label>
-                                    </div>
-                                  ) : (
-                                    <>
-                                      <strong>{r.nombre}</strong>
-                                      <small className="muted" style={{ display: "block" }}>Estimado {porQq(r.costo_estimado_qq)}/QQ</small>
-                                    </>
-                                  )}
-                                </td>
-                                <td style={celda}>
-                                  {r.categorias.map((c) => chip(nombreCategoria(c), () => cambiarEnlaces(r, { categorias: r.categorias.filter((x) => x !== c) })))}
-                                  <select value="" onChange={(e) => e.target.value && cambiarEnlaces(r, { categorias: [...r.categorias, e.target.value] })} style={{ fontSize: 12, padding: "2px 4px", maxWidth: 200 }}>
-                                    <option value="">＋ Enlazar categoría…</option>
-                                    {categoriasCaja.filter((c) => !r.categorias.includes(c.codigo)).map((c) => {
-                                      const otro = rep.rubros.find((x) => x.id !== r.id && x.categorias.includes(c.codigo));
-                                      return <option key={c.codigo} value={c.codigo}>{c.nombre}{otro ? ` (hoy en ${otro.nombre})` : ""}</option>;
-                                    })}
-                                  </select>
-                                </td>
-                                <td style={celda}>
-                                  {r.nomina.map((t) => chip(NOMINA_LABEL[t] ?? t, () => cambiarEnlaces(r, { nomina: r.nomina.filter((x) => x !== t) })))}
-                                  <select value="" onChange={(e) => e.target.value && cambiarEnlaces(r, { nomina: [...r.nomina, e.target.value] })} style={{ fontSize: 12, padding: "2px 4px", maxWidth: 170 }}>
-                                    <option value="">＋ Pago de nómina…</option>
-                                    {Object.entries(NOMINA_LABEL).filter(([t]) => !r.nomina.includes(t)).map(([t, l]) => {
-                                      const otro = rep.rubros.find((x) => x.id !== r.id && x.nomina.includes(t));
-                                      return <option key={t} value={t}>{l}{otro ? ` (hoy en ${otro.nombre})` : ""}</option>;
-                                    })}
-                                  </select>
-                                </td>
-                                <td style={{ ...celda, whiteSpace: "nowrap" }}>
-                                  {editando?.id === r.id ? (
-                                    <>
-                                      <button type="button" className="primary" style={{ fontSize: 11 }} onClick={() => guardarEdicion(r)}>💾 Guardar</button>{" "}
-                                      <button type="button" className="btnSecondary" style={{ fontSize: 11 }} onClick={() => setEditando(null)}>Cancelar</button>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <button type="button" className="btnSecondary" style={{ fontSize: 11 }}
-                                        onClick={() => setEditando({ id: r.id, nombre: r.nombre, estimado: String(r.costo_estimado_qq) })}>✏️ Editar</button>{" "}
-                                      <button type="button" className="btnSecondary" style={{ fontSize: 11, color: "#b91c1c" }} onClick={() => desactivarRubro(r)}>Quitar</button>
-                                    </>
-                                  )}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                    <div style={{ marginTop: 12, fontWeight: 700, fontSize: 12.5 }}>➕ Nuevo rubro</div>
-                    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.2fr) 90px minmax(0, 1.4fr) auto", gap: 6, marginTop: 6 }}>
-                      <input value={nuevoRubro.nombre} onChange={(e) => setNuevoRubro({ ...nuevoRubro, nombre: e.target.value })} placeholder="Nombre (ej: Fumigación)" style={{ fontSize: 12 }} />
-                      <input type="number" min="0" step="0.01" value={nuevoRubro.estimado} onChange={(e) => setNuevoRubro({ ...nuevoRubro, estimado: e.target.value })} placeholder="$/QQ" style={{ fontSize: 12 }} />
-                      <select value={nuevoRubro.categoria} onChange={(e) => setNuevoRubro({ ...nuevoRubro, categoria: e.target.value })} style={{ fontSize: 12 }}>
-                        <option value="">Crear su categoría en Caja con el mismo nombre</option>
-                        {categoriasCaja.map((c) => <option key={c.codigo} value={c.codigo}>Usar la categoría existente: {c.nombre}</option>)}
-                      </select>
-                      <button type="button" className="primary" style={{ fontSize: 12 }} onClick={crearRubro}>Agregar</button>
-                    </div>
-                  </div>
-                )}
+      {/* ════════════════════ PESTAÑA: REPORTE ════════════════════ */}
+      {rep && vista === "reporte" && (
+        <div className="rm-grid">
+          <div className="rm-main">
+            <div className="rm-card" style={{ overflowX: "auto" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+                <h3 className="rm-title">💸 Costos operativos · {rep.periodo}</h3>
+                <span className="rm-sub" style={{ margin: 0 }}>Toca un rubro para ver sus egresos</span>
               </div>
-            )}
+              <table className="rm-table">
+                <thead><tr>
+                  <th>Rubro</th><th className="num">Costo estimado</th><th className="num">Gasto</th><th className="num">Costo real</th>
+                </tr></thead>
+                <tbody>
+                  {rep.rubros.map((r) => (
+                    <Fragment key={r.id}>
+                      <tr className={r.detalle.length ? "rm-click" : ""} onClick={() => r.detalle.length && setAbierto(abierto === r.id ? null : r.id)}>
+                        <td>
+                          <span style={{ fontWeight: 600 }}>{r.detalle.length ? (abierto === r.id ? "▾ " : "▸ ") : ""}{r.nombre}</span>
+                          {r.detalle.length > 0 && <span className="rm-muted" style={{ fontSize: 11.5 }}> · {r.detalle.length} egreso{r.detalle.length === 1 ? "" : "s"}</span>}
+                        </td>
+                        <td className="num">{porQq(r.costo_estimado_qq)}</td>
+                        <td className="num">{r.gasto_total > 0 ? dinero(r.gasto_total) : <span className="rm-muted">—</span>}</td>
+                        <td className={`num ${r.gasto_total > 0 ? (r.alerta ? "rm-alerta" : "rm-ok") : ""}`} title={r.alerta ? "Supera el costo estimado" : ""}>
+                          {r.gasto_total > 0 ? porQq(r.costo_real_qq) : <span className="rm-muted">—</span>}
+                        </td>
+                      </tr>
+                      {abierto === r.id && r.detalle.map((m, i) => (
+                        <tr key={`${r.id}-${i}`} className="rm-det">
+                          <td colSpan={2} style={{ paddingLeft: 26 }}>{m.fecha} · {m.descripcion}{m.subcategoria ? <span className="rm-muted"> · {m.subcategoria}</span> : null}</td>
+                          <td className="num">{dinero(m.monto)}</td><td />
+                        </tr>
+                      ))}
+                    </Fragment>
+                  ))}
+                  {rep.sin_clasificar.monto > 0 && (
+                    <>
+                      <tr className="rm-click" onClick={() => setAbierto(abierto === "sin" ? null : "sin")} style={{ background: "#fff7ed" }}>
+                        <td style={{ fontWeight: 700, color: "#9a3412" }}>{abierto === "sin" ? "▾ " : "▸ "}Sin clasificar ({rep.sin_clasificar.detalle.length})</td>
+                        <td className="num rm-muted">—</td><td className="num">{dinero(rep.sin_clasificar.monto)}</td>
+                        <td className="num">{porQq(rep.cascara.total > 0 ? rep.sin_clasificar.monto / rep.cascara.total : 0)}</td>
+                      </tr>
+                      {abierto === "sin" && rep.sin_clasificar.detalle.map((m, i) => (
+                        <tr key={`sin-${i}`} className="rm-det">
+                          <td style={{ paddingLeft: 26 }}>{m.fecha} · {m.descripcion}<span className="rm-muted"> · {m.subcategoria || m.categoria}</span></td>
+                          <td colSpan={2}>
+                            {puedeEditar && (
+                              <select defaultValue="" onChange={(e) => asignar(m, e.target.value)} style={{ fontSize: 12, padding: "4px 6px", width: "100%" }}>
+                                <option value="">Asignar a rubro…</option>
+                                {rep.rubros.map((r) => <option key={r.id} value={r.id}>{r.nombre}</option>)}
+                              </select>
+                            )}
+                          </td>
+                          <td className="num">{dinero(m.monto)}</td>
+                        </tr>
+                      ))}
+                    </>
+                  )}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td>TOTAL COSTO</td>
+                    <td className="num">{porQq(rep.costo_estimado_qq)}</td>
+                    <td className="num">{dinero(rep.total_costos)}</td>
+                    <td className={`num ${costoAlto ? "rm-alerta" : "rm-ok"}`}>{porQq(rep.costo_real_qq)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+              {rep.excluidos.length > 0 && (
+                <p className="rm-sub" style={{ fontSize: 11.5 }}>No son costo operativo (no se suman): {rep.excluidos.map((e) => `${e.categoria} ${dinero(e.monto)}`).join(" · ")}.</p>
+              )}
+            </div>
+
+            <div className="rm-card">
+              <h3 className="rm-title" style={{ marginBottom: 10 }}>🧮 Resultado del mes</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.2fr)", gap: 16, alignItems: "center" }}>
+                <table className="rm-table" style={{ fontSize: 13.5 }}>
+                  <tbody>
+                    <tr><td>Ingresos adicionales</td><td className="num">{dinero(totalIngresos)}</td></tr>
+                    <tr><td>− Costos operativos</td><td className="num">{dinero(rep.total_costos)}</td></tr>
+                    <tr><td>− Gastos financieros</td><td className="num">{dinero(rep.total_financieros)}</td></tr>
+                  </tbody>
+                </table>
+                {tarjetaNeto}
+              </div>
+            </div>
           </div>
 
-          {/* ── Base + ingresos adicionales ── */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <div className="tablePanel">
-              <h3 style={{ margin: "0 0 8px" }}>🌾 Cáscara comprada en el mes</h3>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <div className="rm-side">
+            <div className="rm-card">
+              <h3 className="rm-title" style={{ marginBottom: 8 }}>🌾 Cáscara comprada</h3>
+              <table className="rm-table">
                 <tbody>
                   {rep.cascara.operaciones.map((o) => (
-                    <tr key={o.operacion}><td style={celda}>{o.operacion}</td><td style={{ ...num, color: "#64748b" }}>{o.liquidaciones} liq.</td><td style={num}>{o.qq.toFixed(2)} QQ</td></tr>
+                    <tr key={o.operacion}><td>{o.operacion}<span className="rm-muted" style={{ fontSize: 11.5 }}> · {o.liquidaciones} liq.</span></td><td className="num">{o.qq.toFixed(2)} QQ</td></tr>
                   ))}
-                  <tr><td style={{ ...celda, fontWeight: 800 }}>Total {rep.cascara.manual ? "(manual)" : ""}</td><td style={celda} /><td style={{ ...num, fontWeight: 800 }}>{rep.cascara.total.toFixed(2)} QQ</td></tr>
                 </tbody>
+                <tfoot><tr><td>Total {rep.cascara.manual ? "(manual)" : ""}</td><td className="num">{rep.cascara.total.toFixed(2)} QQ</td></tr></tfoot>
               </table>
             </div>
 
-            <div className="tablePanel">
-              <h3 style={{ margin: "0 0 8px" }}>💰 Ingresos adicionales</h3>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <div className="rm-card">
+              <h3 className="rm-title" style={{ marginBottom: 8 }}>💰 Ingresos adicionales</h3>
+              <table className="rm-table">
                 <tbody>
-                  {rep.ingresos.length === 0 && gana.length === 0 && <tr><td className="muted" style={celda}>Sin ingresos adicionales en el mes.</td></tr>}
+                  {rep.ingresos.length === 0 && gana.length === 0 && <tr><td className="rm-muted">Sin ingresos adicionales en el mes.</td></tr>}
                   {rep.ingresos.map((i, k) => (
                     <tr key={`${i.concepto}-${k}`}>
-                      <td style={celda}>{i.concepto}{i.origen === "manual" && <span className="muted" style={{ fontSize: 11 }}> · manual</span>}</td>
-                      <td style={num}>{dinero(i.monto)}</td>
-                      <td style={{ ...celda, width: 28 }}>{i.origen === "manual" && i.id && puedeEditar && <button type="button" className="btnGhost" title="Quitar" onClick={() => borrarManual(i.id!)}>🗑</button>}</td>
+                      <td>{i.concepto}{i.origen === "manual" && <span className="rm-muted" style={{ fontSize: 11 }}> · manual</span>}</td>
+                      <td className="num">{dinero(i.monto)}</td>
+                      <td style={{ width: 28 }}>{i.origen === "manual" && i.id && puedeEditar && <button type="button" className="btnGhost" title="Quitar" onClick={() => borrarManual(i.id!)}>🗑</button>}</td>
                     </tr>
                   ))}
                   {gana.map((g) => (
                     <tr key={`gana-${g.operacion}`}>
-                      <td style={celda}>Gana (arroz pilado propio) · {g.operacion} <span className="muted" style={{ fontSize: 11 }}>· {g.lotes} lote{g.lotes === 1 ? "" : "s"}</span></td>
-                      <td style={{ ...num, color: g.utilidad < 0 ? "#b91c1c" : undefined }}>{dinero(g.utilidad)}</td><td style={celda} />
+                      <td>Gana · {g.operacion}<span className="rm-muted" style={{ fontSize: 11 }}> · {g.lotes} lote{g.lotes === 1 ? "" : "s"}</span></td>
+                      <td className="num" style={{ color: g.utilidad < 0 ? "#dc2626" : undefined }}>{dinero(g.utilidad)}</td><td />
                     </tr>
                   ))}
-                  <tr style={{ background: "#ecfdf5" }}><td style={{ ...celda, fontWeight: 800 }}>TOTAL INGRESOS ADICIONALES</td><td style={{ ...num, fontWeight: 800 }}>{dinero(totalIngresos)}</td><td style={celda} /></tr>
                 </tbody>
+                <tfoot><tr><td>Total</td><td className="num">{dinero(totalIngresos)}</td><td /></tr></tfoot>
               </table>
-              <p className="muted" style={{ fontSize: 11.5, margin: "6px 0 0" }}>Automáticos: báscula, tamo (Caja), servicios de pilada/secado, cobros a socios, interés de fomentos cerrados en el mes y Gana de lotes con precio de venta. Agrega abajo lo que falte (envejecido, selectado…).</p>
+            </div>
+
+            <div className="rm-card">
+              <h3 className="rm-title" style={{ marginBottom: 8 }}>🏦 Gastos financieros</h3>
+              <table className="rm-table">
+                <tbody>
+                  {rep.financieros.length === 0 && <tr><td className="rm-muted">Hipoteca, préstamos o diferidos del mes.</td></tr>}
+                  {rep.financieros.map((f) => (
+                    <tr key={f.id}><td>{f.concepto}</td><td className="num">{dinero(f.monto)}</td>
+                      <td style={{ width: 28 }}>{puedeEditar && <button type="button" className="btnGhost" title="Quitar" onClick={() => borrarManual(f.id)}>🗑</button>}</td></tr>
+                  ))}
+                </tbody>
+                <tfoot><tr><td>Total</td><td className="num">{dinero(rep.total_financieros)}</td><td /></tr></tfoot>
+              </table>
+              {puedeEditar && (
+                <div style={{ display: "grid", gap: 6, marginTop: 12 }}>
+                  <select value={nuevo.seccion} onChange={(e) => setNuevo({ ...nuevo, seccion: e.target.value as "INGRESO" | "FINANCIERO" })} style={{ fontSize: 12.5 }}>
+                    <option value="FINANCIERO">➕ Gasto financiero</option>
+                    <option value="INGRESO">➕ Ingreso adicional</option>
+                  </select>
+                  <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 100px auto", gap: 6 }}>
+                    <input value={nuevo.concepto} onChange={(e) => setNuevo({ ...nuevo, concepto: e.target.value })} placeholder={nuevo.seccion === "FINANCIERO" ? "Hipoteca, préstamo…" : "Ganancia envejecido…"} style={{ fontSize: 12.5 }} />
+                    <input type="number" min="0" step="0.01" value={nuevo.monto} onChange={(e) => setNuevo({ ...nuevo, monto: e.target.value })} placeholder="0.00" style={{ fontSize: 12.5 }} />
+                    <button type="button" className="primary" style={{ fontSize: 12.5 }} onClick={agregarManual}>Agregar</button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
       )}
 
-      {rep && (
-        <div className="tablePanel">
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 14, alignItems: "start" }} className="resultadoMensualGrid">
-            <div>
-              <h3 style={{ margin: "0 0 8px" }}>🏦 Gastos financieros</h3>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                <tbody>
-                  {rep.financieros.length === 0 && <tr><td className="muted" style={celda}>Agrega hipoteca, préstamos o diferidos por avances del mes.</td></tr>}
-                  {rep.financieros.map((f) => (
-                    <tr key={f.id}><td style={celda}>{f.concepto}</td><td style={num}>{dinero(f.monto)}</td>
-                      <td style={{ ...celda, width: 28 }}>{puedeEditar && <button type="button" className="btnGhost" title="Quitar" onClick={() => borrarManual(f.id)}>🗑</button>}</td></tr>
-                  ))}
-                  <tr><td style={{ ...celda, fontWeight: 800 }}>TOTAL GASTOS FINANCIEROS</td><td style={{ ...num, fontWeight: 800 }}>{dinero(rep.total_financieros)}</td><td style={celda} /></tr>
-                </tbody>
-              </table>
-              {puedeEditar && (
-                <div style={{ display: "grid", gridTemplateColumns: "130px minmax(0, 1fr) 110px auto", gap: 6, marginTop: 10 }}>
-                  <select value={nuevo.seccion} onChange={(e) => setNuevo({ ...nuevo, seccion: e.target.value as "INGRESO" | "FINANCIERO" })} style={{ fontSize: 12 }}>
-                    <option value="FINANCIERO">Gasto financiero</option>
-                    <option value="INGRESO">Ingreso adicional</option>
-                  </select>
-                  <input value={nuevo.concepto} onChange={(e) => setNuevo({ ...nuevo, concepto: e.target.value })} placeholder={nuevo.seccion === "FINANCIERO" ? "Ej: Hipoteca, préstamo, diferido" : "Ej: Ganancia envejecido"} style={{ fontSize: 12 }} />
-                  <input type="number" min="0" step="0.01" value={nuevo.monto} onChange={(e) => setNuevo({ ...nuevo, monto: e.target.value })} placeholder="0.00" style={{ fontSize: 12 }} />
-                  <button type="button" className="primary" style={{ fontSize: 12 }} onClick={agregarManual}>Agregar</button>
-                </div>
-              )}
+      {/* ════════════════════ PESTAÑA: MAPEO DE RUBROS ════════════════════ */}
+      {rep && vista === "mapeo" && puedeEditar && (
+        <div className="rm-card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div>
+            <h3 className="rm-title">⚙️ Mapeo y configuración de rubros</h3>
+            <p className="rm-sub">
+              Cada rubro se llena con los egresos de su <strong>categoría de Caja</strong> (la que eliges en Caja → ➕ Nuevo movimiento). Los pagos de <strong>Nómina</strong> comparten una sola categoría, por eso se asignan por tipo de pago.
+              Cambiar el nombre de un rubro cambia también el de su categoría en Caja.
+            </p>
+            <div style={{ marginTop: 8 }}>
+              <span className="rm-badge rm-badge-caja">Categoría de Caja</span>
+              <span className="rm-badge rm-badge-nom">Pago de nómina</span>
             </div>
-            <div>
-              <h3 style={{ margin: "0 0 8px" }}>🧮 Resultado del mes</h3>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
-                <tbody>
-                  <tr><td style={celda}>Ingresos adicionales</td><td style={num}>{dinero(totalIngresos)}</td></tr>
-                  <tr><td style={celda}>− Costos operativos</td><td style={num}>{dinero(rep.total_costos)}</td></tr>
-                  <tr><td style={celda}>− Gastos financieros</td><td style={num}>{dinero(rep.total_financieros)}</td></tr>
-                </tbody>
-              </table>
-              <div style={{ marginTop: 10, borderRadius: 12, padding: "14px 16px", ...(neto < 0 ? { background: "#CC0000", color: "#fff" } : { background: "#dcfce7", color: "#14532d", border: "1px solid #86efac" }) }}>
-                <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: ".05em" }}>TOTAL NETO DE GANANCIAS</div>
-                <div style={{ fontSize: 30, fontWeight: 900 }}>{dinero(neto)}</div>
-                <div style={{ fontSize: 12.5, fontWeight: 700 }}>
-                  {neto < 0 ? "⚠️ PÉRDIDA REAL: los ingresos no cubren los costos operativos y financieros del mes." : "✅ Se cubrieron todos los costos operativos y financieros del mes."}
+          </div>
+
+          {rep.rubros.map((r) => {
+            const enEdicion = editando?.id === r.id;
+            const libresCaja = categoriasCaja.filter((c) => !r.categorias.includes(c.codigo));
+            const libresNom = Object.entries(NOMINA_LABEL).filter(([t]) => !r.nomina.includes(t));
+            return (
+              <div key={r.id} className="rm-rubro">
+                <div>
+                  {enEdicion ? (
+                    <div style={{ display: "grid", gap: 6 }}>
+                      <input autoFocus value={editando.nombre} onChange={(e) => setEditando({ ...editando, nombre: e.target.value })}
+                        onKeyDown={(e) => { if (e.key === "Enter") guardarEdicion(r); if (e.key === "Escape") setEditando(null); }}
+                        placeholder="Nombre del rubro" style={{ fontSize: 13, padding: "6px 8px" }} />
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, margin: 0, color: "#475569" }}>
+                        Costo estimado $/QQ
+                        <input type="number" min="0" step="0.01" value={editando.estimado} onChange={(e) => setEditando({ ...editando, estimado: e.target.value })}
+                          onKeyDown={(e) => { if (e.key === "Enter") guardarEdicion(r); if (e.key === "Escape") setEditando(null); }}
+                          style={{ width: 90, fontSize: 12.5, padding: "4px 6px", textAlign: "right" }} />
+                      </label>
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ fontWeight: 600, color: "#1e293b" }}>{r.nombre}</div>
+                      <div className="rm-sub" style={{ marginTop: 2 }}>Estimado {porQq(r.costo_estimado_qq)}/QQ</div>
+                    </>
+                  )}
+                </div>
+
+                <div style={{ display: "grid", gap: 10 }}>
+                  <div>
+                    <span className="rm-label">Categorías de Caja</span>
+                    <div style={{ position: "relative", display: "flex", flexWrap: "wrap", alignItems: "center" }}>
+                      {r.categorias.map((c) => (
+                        <span key={c} className="rm-badge rm-badge-caja">
+                          {nombreCategoria(c)}
+                          <button type="button" title="Quitar enlace" onClick={() => cambiarEnlaces(r, { categorias: r.categorias.filter((x) => x !== c) })}>×</button>
+                        </span>
+                      ))}
+                      <button type="button" className="rm-link" onClick={() => setMenu(menu?.id === r.id && menu.tipo === "caja" ? null : { id: r.id, tipo: "caja" })}>+ Asignar</button>
+                      {menu?.id === r.id && menu.tipo === "caja" && (
+                        <div className="rm-pop" role="menu">
+                          {libresCaja.length === 0 && <small style={{ display: "block", padding: 8 }}>No hay más categorías.</small>}
+                          {libresCaja.map((c) => {
+                            const otro = rep.rubros.find((x) => x.id !== r.id && x.categorias.includes(c.codigo));
+                            return (
+                              <button key={c.codigo} type="button" onClick={() => { cerrarMenu(); cambiarEnlaces(r, { categorias: [...r.categorias, c.codigo] }); }}>
+                                {c.nombre}{otro && <small> · hoy en {otro.nombre}</small>}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="rm-label">Pagos de nómina</span>
+                    <div style={{ position: "relative", display: "flex", flexWrap: "wrap", alignItems: "center" }}>
+                      {r.nomina.map((t) => (
+                        <span key={t} className="rm-badge rm-badge-nom">
+                          {NOMINA_LABEL[t] ?? t}
+                          <button type="button" title="Quitar enlace" onClick={() => cambiarEnlaces(r, { nomina: r.nomina.filter((x) => x !== t) })}>×</button>
+                        </span>
+                      ))}
+                      <button type="button" className="rm-link" onClick={() => setMenu(menu?.id === r.id && menu.tipo === "nomina" ? null : { id: r.id, tipo: "nomina" })}>+ Asignar</button>
+                      {menu?.id === r.id && menu.tipo === "nomina" && (
+                        <div className="rm-pop" role="menu">
+                          {libresNom.length === 0 && <small style={{ display: "block", padding: 8 }}>Ya tiene todos los tipos.</small>}
+                          {libresNom.map(([t, l]) => {
+                            const otro = rep.rubros.find((x) => x.id !== r.id && x.nomina.includes(t));
+                            return (
+                              <button key={t} type="button" onClick={() => { cerrarMenu(); cambiarEnlaces(r, { nomina: [...r.nomina, t] }); }}>
+                                {l}{otro && <small> · hoy en {otro.nombre}</small>}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  {enEdicion ? (
+                    <>
+                      <button type="button" className="primary" style={{ fontSize: 12 }} onClick={() => guardarEdicion(r)}>💾 Guardar</button>
+                      <button type="button" className="btnSecondary" style={{ fontSize: 12 }} onClick={() => setEditando(null)}>Cancelar</button>
+                    </>
+                  ) : (
+                    <>
+                      <button type="button" className="btnSecondary" style={{ fontSize: 12 }} onClick={() => setEditando({ id: r.id, nombre: r.nombre, estimado: String(r.costo_estimado_qq) })}>✏️ Editar</button>
+                      <button type="button" className="btnSecondary" style={{ fontSize: 12, color: "#dc2626" }} onClick={() => desactivarRubro(r)}>Quitar</button>
+                    </>
+                  )}
                 </div>
               </div>
-            </div>
+            );
+          })}
+
+          {/* ── Nuevo rubro (colapsable) ── */}
+          <div style={{ border: "1px dashed #cbd5e1", borderRadius: 12, padding: nuevoAbierto ? 16 : 0 }}>
+            {!nuevoAbierto ? (
+              <button type="button" className="rm-link" style={{ width: "100%", margin: 0, padding: "12px", borderRadius: 12, border: "none", fontSize: 13 }} onClick={() => setNuevoAbierto(true)}>＋ Nuevo rubro</button>
+            ) : (
+              <div style={{ display: "grid", gap: 10 }}>
+                <strong style={{ color: "#1e293b" }}>＋ Nuevo rubro</strong>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+                  <label style={{ margin: 0 }}><span>Nombre</span><input value={nuevoRubro.nombre} onChange={(e) => setNuevoRubro({ ...nuevoRubro, nombre: e.target.value })} placeholder="Ej: Fumigación" /></label>
+                  <label style={{ margin: 0 }}><span>Costo estimado $/QQ</span><input type="number" min="0" step="0.01" value={nuevoRubro.estimado} onChange={(e) => setNuevoRubro({ ...nuevoRubro, estimado: e.target.value })} placeholder="0.00" /></label>
+                  <label style={{ margin: 0 }}><span>Categoría de Caja</span>
+                    <select value={nuevoRubro.categoria} onChange={(e) => setNuevoRubro({ ...nuevoRubro, categoria: e.target.value })}>
+                      <option value="">Crear una nueva con el mismo nombre</option>
+                      {categoriasCaja.map((c) => <option key={c.codigo} value={c.codigo}>Usar existente: {c.nombre}</option>)}
+                    </select>
+                  </label>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button type="button" className="primary" onClick={async () => { await crearRubro(); setNuevoAbierto(false); }}>Crear rubro</button>
+                  <button type="button" className="btnSecondary" onClick={() => setNuevoAbierto(false)}>Cancelar</button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
