@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Secado: aviso al mezclar 0.11 y CORRIENTE + correccion ticket #298 (2026-09-28)
+- Error humano en la app de bascula: #298 (CUCHO) salio CORRIENTE/cal. 230 siendo 0.11/225. El ERP copia el tipo y la calificacion del ticket.
+- `confirmarMezclaTipos` (App.tsx, junto a `seleccionDe`): al guardar secadoras (batch), tunel individual o tendal, si el grupo junta 0.11 y CORRIENTE pide confirmar listando los tickets del tipo minoritario. Solo frontend; el backend sigue permitiendo la mezcla.
+- Migracion 20261048 (puntual, con guardas e idempotente): #298 a 0.11 cal. 225 -> 24.053 QQ en ingreso, ticket, cascara (IN -> CASCARA-011), grupo de secado, total del tunel, labores de cuadrilla NO pagadas y foto del informe TUNEL (tambien refresca nombres de agricultor corregidos por 20261047). Lote 00004-28-09-26 queda 124.273 QQ todo 0.11.
+
 ### Produccion: Finalizar Lote con grupo de secado mixto 0.11 + CORRIENTE (2026-09-28)
 - Bug: al abrir el proceso desde secadora, cada ingreso del grupo tomaba el producto del PRIMER movimiento IN del lote (todos comparten lot_id), asi que un ingreso CORRIENTE se descontaba como CASCARA-011 y el freno `assertStockNoNegativo` bloqueaba ("requiere 29.82, hay 6.29").
 - Arreglo (`processing.ts` POST /): el producto/bodega se busca por el movimiento IN del propio ingreso (`reference_type='weighing_tickets' AND reference_id = weighing_ticket_id`); si no existe, cae a la busqueda anterior por lote. No habia lotes ya procesados con saldo residual.

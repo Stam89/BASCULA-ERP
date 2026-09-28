@@ -3250,6 +3250,25 @@ export function App() {
   }, [materiaPrimaEntries, materiaPrimaSearch]);
   // ── Selección de ingresos POR SECADORA (cada una arma su propio lote) ──────
   const seleccionDe = (secadora: string) => dryingSelections[secadora] ?? [];
+  // Candado contra error humano de la báscula: si un mismo secado junta ingresos
+  // 0.11 y CORRIENTE se pide confirmar, mostrando los tickets del tipo minoritario
+  // (lo normal es que todo el túnel sea de un solo tipo).
+  const confirmarMezclaTipos = (ids: string[], donde: string): boolean => {
+    const tipoDe = (e: MateriaPrimaEntry) => {
+      const t = (e.rice_type ?? "").toUpperCase();
+      return t.includes("0.11") ? "0.11" : t ? "CORRIENTE" : null;
+    };
+    const sel = availableDryingLots.filter((e) => ids.includes(e.id) && tipoDe(e));
+    const grupos = new Map<string, MateriaPrimaEntry[]>();
+    for (const e of sel) grupos.set(tipoDe(e)!, [...(grupos.get(tipoDe(e)!) ?? []), e]);
+    if (grupos.size < 2) return true;
+    const [mayor, menor] = [...grupos.entries()].sort((a, b) => b[1].length - a[1].length);
+    const lista = menor[1].map((e) => `  • ${entryLabel(e)} · ${e.farmer_name ?? "—"} · ${Number(e.quintals ?? 0).toFixed(2)} QQ`).join("\n");
+    return window.confirm(
+      `⚠️ ${donde}: estás mezclando arroz ${mayor[0]} (${mayor[1].length} ingreso/s) con ${menor[0]} (${menor[1].length}):\n\n${lista}\n\n` +
+      `¿Es correcto? Si en la báscula se eligió mal el tipo, pulsa Cancelar, quita ese ingreso y corrígelo antes de secar.`
+    );
+  };
   // Un ingreso agregado en una secadora no debe aparecer en la otra.
   const idsUsados = new Set(Object.values(dryingSelections).flat());
   const entradasLibres = availableDryingLots.filter((lot) => !idsUsados.has(lot.id));
@@ -8660,6 +8679,9 @@ export function App() {
       setSecadorSemana(secadorMotor.toUpperCase());
     }
     for (const secadora of conIngresos) {
+      if (!confirmarMezclaTipos(seleccionDe(secadora), secadora)) return;
+    }
+    for (const secadora of conIngresos) {
       const t = tunelDeSecadora(secadora);
       // El secador es de la corrida (motor), igual para todas las secadoras.
       const operatorName = secadorMotor;
@@ -8827,6 +8849,7 @@ export function App() {
       // ── Crear un tendal nuevo ──
       const ids = seleccionDe("TENDAL");
       if (ids.length === 0) { addToast("Agrega al menos un ingreso de materia prima al lote", "error"); return; }
+      if (!confirmarMezclaTipos(ids, "Tendal")) return;
       await apiPost("/process-flow/drying-tendal", {
         entry_ids: ids,
         lot_code: tendalForm.lot_code.trim() || undefined,
@@ -9964,6 +9987,7 @@ export function App() {
       setMessage(`Agrega ingresos de materia prima a la ${secadora} para formar el lote`);
       return;
     }
+    if (!confirmarMezclaTipos(entryIds, secadora)) return;
 
     // Aquí nace el lote: el grupo de ingresos que entra al túnel.
     const created = await apiPost<DryingTunnelReport>("/process-flow/drying", {
