@@ -51,6 +51,8 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
   const [abierto, setAbierto] = useState<string | null>(null);
   const [nuevo, setNuevo] = useState({ seccion: "INGRESO" as "INGRESO" | "FINANCIERO", concepto: "", monto: "" });
   const [verRubros, setVerRubros] = useState(false);
+  // Fila del panel «Configurar rubros» en edición (botón ✏️ Editar).
+  const [editando, setEditando] = useState<{ id: string; nombre: string; estimado: string } | null>(null);
   const [nuevoRubro, setNuevoRubro] = useState({ nombre: "", estimado: "", categoria: "" });
   const [categoriasCaja, setCategoriasCaja] = useState<CategoriaCaja[]>([]);
   const cargarCategorias = useCallback(() => {
@@ -86,15 +88,23 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
     try { await apiPatch(`/resultado-mensual/rubros/${r.id}`, { costo_estimado_qq: valor }); await cargar(); }
     catch (e) { avisar(e instanceof Error ? e.message : "No se pudo guardar", "error"); }
   }
-  async function renombrar(r: Rubro, nombre: string) {
-    const n = nombre.trim();
-    if (n.length < 2 || n === r.nombre) return;
+  async function guardarEdicion(r: Rubro) {
+    if (!editando) return;
+    const nombre = editando.nombre.trim();
+    const estimado = Number(editando.estimado);
+    if (nombre.length < 2) { avisar("El nombre del rubro debe tener al menos 2 letras", "error"); return; }
+    if (!Number.isFinite(estimado) || estimado < 0) { avisar("Costo estimado inválido", "error"); return; }
+    const cambios: { nombre?: string; costo_estimado_qq?: number } = {};
+    if (nombre !== r.nombre) cambios.nombre = nombre;
+    if (estimado !== r.costo_estimado_qq) cambios.costo_estimado_qq = estimado;
+    if (!Object.keys(cambios).length) { setEditando(null); return; }
     try {
-      const out = await apiPatch<{ categoria_renombrada: string | null }>(`/resultado-mensual/rubros/${r.id}`, { nombre: n });
-      avisar(out.categoria_renombrada ? `Rubro y categoría de Caja renombrados a «${out.categoria_renombrada}»` : `Rubro renombrado a «${n}»`, "success");
-      cargarCategorias(); onCategoriasCaja?.();
+      const out = await apiPatch<{ categoria_renombrada: string | null }>(`/resultado-mensual/rubros/${r.id}`, cambios);
+      avisar(out.categoria_renombrada ? `Rubro guardado · categoría de Caja renombrada a «${out.categoria_renombrada}»` : "Rubro guardado", "success");
+      setEditando(null);
+      if (cambios.nombre) { cargarCategorias(); onCategoriasCaja?.(); }
       await cargar();
-    } catch (e) { avisar(e instanceof Error ? e.message : "No se pudo renombrar", "error"); }
+    } catch (e) { avisar(e instanceof Error ? e.message : "No se pudo guardar", "error"); }
   }
   async function cambiarEnlaces(r: Rubro, cambios: { categorias?: string[]; nomina?: string[] }) {
     try { await apiPatch(`/resultado-mensual/rubros/${r.id}`, cambios); await cargar(); }
@@ -275,8 +285,24 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
                             return (
                               <tr key={r.id} style={{ verticalAlign: "top" }}>
                                 <td style={celda}>
-                                  <input defaultValue={r.nombre} key={`${r.id}-${r.nombre}`} onBlur={(e) => renombrar(r, e.target.value)}
-                                    onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} style={{ fontSize: 12.5, padding: "4px 6px", width: "100%", minWidth: 160 }} />
+                                  {editando?.id === r.id ? (
+                                    <div style={{ display: "grid", gap: 4, minWidth: 180 }}>
+                                      <input autoFocus value={editando.nombre} onChange={(e) => setEditando({ ...editando, nombre: e.target.value })}
+                                        onKeyDown={(e) => { if (e.key === "Enter") guardarEdicion(r); if (e.key === "Escape") setEditando(null); }}
+                                        placeholder="Nombre del rubro" style={{ fontSize: 12.5, padding: "4px 6px" }} />
+                                      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, margin: 0 }}>
+                                        Costo estimado $/QQ
+                                        <input type="number" min="0" step="0.01" value={editando.estimado} onChange={(e) => setEditando({ ...editando, estimado: e.target.value })}
+                                          onKeyDown={(e) => { if (e.key === "Enter") guardarEdicion(r); if (e.key === "Escape") setEditando(null); }}
+                                          style={{ width: 80, fontSize: 12, padding: "3px 6px", textAlign: "right" }} />
+                                      </label>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <strong>{r.nombre}</strong>
+                                      <small className="muted" style={{ display: "block" }}>Estimado {porQq(r.costo_estimado_qq)}/QQ</small>
+                                    </>
+                                  )}
                                 </td>
                                 <td style={celda}>
                                   {r.categorias.map((c) => chip(nombreCategoria(c), () => cambiarEnlaces(r, { categorias: r.categorias.filter((x) => x !== c) })))}
@@ -298,7 +324,20 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
                                     })}
                                   </select>
                                 </td>
-                                <td style={celda}><button type="button" className="btnSecondary" style={{ fontSize: 11, color: "#b91c1c" }} onClick={() => desactivarRubro(r)}>Quitar</button></td>
+                                <td style={{ ...celda, whiteSpace: "nowrap" }}>
+                                  {editando?.id === r.id ? (
+                                    <>
+                                      <button type="button" className="primary" style={{ fontSize: 11 }} onClick={() => guardarEdicion(r)}>💾 Guardar</button>{" "}
+                                      <button type="button" className="btnSecondary" style={{ fontSize: 11 }} onClick={() => setEditando(null)}>Cancelar</button>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <button type="button" className="btnSecondary" style={{ fontSize: 11 }}
+                                        onClick={() => setEditando({ id: r.id, nombre: r.nombre, estimado: String(r.costo_estimado_qq) })}>✏️ Editar</button>{" "}
+                                      <button type="button" className="btnSecondary" style={{ fontSize: 11, color: "#b91c1c" }} onClick={() => desactivarRubro(r)}>Quitar</button>
+                                    </>
+                                  )}
+                                </td>
                               </tr>
                             );
                           })}
