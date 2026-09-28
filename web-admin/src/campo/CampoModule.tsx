@@ -15,6 +15,7 @@ async function patchMaquina(id: string, body: unknown): Promise<void> {
 import { money } from "../format";
 import PartesModule from "./PartesModule";
 import NominaOperadores, { TarifasOperadorCatalogo } from "./NominaOperadores";
+import { BuscadorHistorial } from "../components/BuscadorHistorial";
 
 // Menú propio de la operación Campo (contexto aislado). Para agregar secciones
 // nuevas: añade una entrada aquí y su caso en CampoModule (prop `section`).
@@ -29,6 +30,7 @@ const CAMPO_SECCIONES: Array<{ id: CampoSeccion; label: string; icon: string }> 
   { id: "cxc", label: "Cuentas por Cobrar", icon: "📥" },
   { id: "cxp", label: "Cuentas por Pagar", icon: "📤" },
   { id: "vales", label: "Vales por Rendir", icon: "🧾" },
+  { id: "historial", label: "¿Cuándo se hizo?", icon: "🔎" },
   { id: "reportes", label: "Reportes", icon: "📊" },
   { id: "config", label: "Configuración", icon: "⚙️" }
 ];
@@ -55,7 +57,7 @@ type Servicio = {
 const hoy = () => new Date().toISOString().slice(0, 10);
 // Secciones del menú propio de Campo (contexto aislado). Se amplía agregando
 // entradas aquí y en CAMPO_SECCIONES (ver CampoWorkspace).
-export type CampoSeccion = "caja" | "servicios" | "clientes" | "cxc" | "cxp" | "vales" | "partes" | "mantenimiento" | "nomina" | "reportes" | "config";
+export type CampoSeccion = "caja" | "servicios" | "clientes" | "cxc" | "cxp" | "vales" | "partes" | "mantenimiento" | "nomina" | "historial" | "reportes" | "config";
 
 // Parte Diario pendiente (para importar/liquidar desde el form de servicio).
 type PartePendiente = { id: string; fecha: string; activo_id: string; activo_nombre: string; operador: string | null; cliente: string; qq: number };
@@ -233,6 +235,12 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
 
   if (section === "reportes") {
     return <section className="panelGrid">{flashEl}<ReportesView onError={(m) => notify(m, "err")} /></section>;
+  }
+
+  // 🔎 ¿Cuándo se hizo?: reparaciones/cambios/compras de SU flota y SU caja
+  // (independiente del buscador de la Matriz).
+  if (section === "historial") {
+    return <section className="panelGrid">{flashEl}<BuscadorHistorial ambito="transporte" titulo={nombre ?? "Transporte y Cosechadora"} /></section>;
   }
 
   if (section === "clientes") {

@@ -42,6 +42,7 @@ import { costosRouter } from "./modules/costos.js";
 import { cobrosRouter } from "./modules/cobros.js";
 import { campoRouter } from "./modules/campo.js";
 import { notificacionesRouter } from "./modules/notificaciones.js";
+import { historialRouter } from "./modules/historial.js";
 import { externalRouter } from "./modules/external.js";
 import { sriRouter } from "./modules/sri.js";
 
@@ -110,3 +111,5 @@ routes.use("/cobros", cobrosRouter);
 routes.use("/campo", campoRouter);
 // Campanita: avisos de cobros/pagos entre socios, Matriz y Transporte.
 routes.use("/notificaciones", notificacionesRouter);
+// 🔎 «¿Cuándo se hizo?»: reparaciones/cambios/compras (Matriz y Transporte, por separado).
+routes.use("/historial", historialRouter);

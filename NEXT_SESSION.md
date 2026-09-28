@@ -49,6 +49,16 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Buscador «¿Cuando se hizo?» (Matriz y Transporte, independientes) (2026-09-28)
+
+- Pedido del usuario: responder rapido "¿que dia se arreglo/cambio/compro X?". Todo eso se registra en Caja (egresos con subcategoria, maquina y area) y en mantenimientos.
+- API solo lectura `backend/src/routes/modules/historial.ts` (montada en `/historial`, exige contexto MATRIZ): `GET /historial/buscar?ambito=matriz|transporte&q=&desde=&hasta=` y `GET /historial/sugerencias?ambito=`. `buscarHistorial` exportada para pruebas.
+  - matriz: egresos de las cajas de la Matriz (sin anulados/contra-asientos; sin los que nacieron de `equipment_maintenance`, que salen como MANTENIMIENTO) + `equipment_maintenance` no anulados.
+  - transporte: `campo_mantenimientos` no anulados + egresos de `campo_movimientos` (sin transferencias par_id, reversiones, apertura de caja ni los ya ligados a un mantenimiento).
+  - Busqueda por palabras (todas deben aparecer), sin distinguir mayusculas ni tildes, en descripcion/subcategoria/maquina/area/proveedor/factura/categoria.
+- UI `web-admin/src/components/BuscadorHistorial.tsx`: tarjeta "Ultima vez" (fecha, hace N dias, que, maquina, proveedor, monto, veces registradas) + boton "Copiar respuesta" (para WhatsApp) + historial + chips de maquinas/rubros frecuentes. Matriz: Caja -> "🔎 ¿Cuando se hizo?" (solo Matriz). Transporte: menu propio -> "🔎 ¿Cuando se hizo?".
+- Verificado en BEGIN...ROLLBACK con la base real (Matriz no ve Transporte y viceversa, sin duplicar mantenimiento y su egreso, filtros de fecha, sin tildes).
+
 ### Personal administrativo se gestiona en Configuracion (2026-09-27)
 
 - Configuracion -> Operacion y Planta / "🏢 Mi negocio" (socios) -> "💼 Personal administrativo": agregar, editar y dar de baja empleados de oficina del accionista ACTIVO (Matriz o socio). Reutiliza `submitAdminStaff`, `editAdminStaff`, `removeAdminStaff` y `/admin-payroll/staff` (sin cambios de API). Visible tambien para socios (`tarjetaVisibleSocio`).

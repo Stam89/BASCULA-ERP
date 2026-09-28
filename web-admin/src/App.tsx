@@ -6,6 +6,7 @@ import type { Farmer, Product, Warehouse, Lot, MateriaPrimaEntry, MateriaPrimaCo
 import { Metric, ReportTable, Input, Select, MedidorRow, DataList } from "./components/ui";
 import { ClienteSearchInput } from "./components/ClienteSearchInput";
 import { CampanitaNotificaciones } from "./components/Notificaciones";
+import { BuscadorHistorial } from "./components/BuscadorHistorial";
 import { planDeSacos, sobranteLb, SacosAlertaDashboard, SacosCatalogoConfig, SacosTablero } from "./components/SacosModule";
 import * as XLSX from "xlsx";
 import { importarConRecarga } from "./recargaVersion";
@@ -2248,7 +2249,7 @@ export function App() {
   const [liqResult, setLiqResult] = useState<LiqResultItem[] | null>(null);
 
   // ── Caja ──────────────────────────────────────────────────────────────────
-  const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "movimiento" | "gastos" | "sacos" | "mantenimiento" | "venta_detalle" | "cuentas" | "fomentos">("resumen");
+  const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "movimiento" | "gastos" | "sacos" | "mantenimiento" | "historial" | "venta_detalle" | "cuentas" | "fomentos">("resumen");
   const [movCategory, setMovCategory] = useState("");
   const [movType, setMovType] = useState<"EXPENSE" | "INCOME">("EXPENSE");
   const [movPayableId, setMovPayableId] = useState("");
@@ -3788,7 +3789,7 @@ export function App() {
     const esSocio = accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "SOCIO";
     // Sacos: el socio con catálogo propio (envejecido) sí tiene su subpestaña.
     const exclusivas = accionistaEnvejecidoHabilitado(accionistas.find((a) => a.id === activeAccionistaId))
-      ? ["gastos", "mantenimiento"] : ["gastos", "sacos", "mantenimiento"];
+      ? ["gastos", "mantenimiento", "historial"] : ["gastos", "sacos", "mantenimiento", "historial"];
     if (esSocio && exclusivas.includes(cajaSubTab)) {
       setCajaSubTab("resumen");
     }
@@ -15421,13 +15422,14 @@ export function App() {
                 <nav className="cajaSubNav">
                   {/* Pestaña "gastos" eliminada: sus egresos se registran ahora en
                       "movimiento" (categoría correspondiente) para no duplicar. */}
-                  {(["resumen", "venta_detalle", "anticipo", "movimiento", "sacos", "mantenimiento", "fomentos"] as const)
+                  {(["resumen", "venta_detalle", "anticipo", "movimiento", "sacos", "mantenimiento", "historial", "fomentos"] as const)
                     .filter((t) => {
                       // Subpestañas exclusivas de la planta/matriz. Los socios
                       // (ROVINSON/STALYN) operan solo lo comercial.
                       const esSocio = accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "SOCIO";
                       // «Sacos» también para el socio con catálogo propio (envejecido).
-                      const soloMatriz = manejaSacosPropios ? ["mantenimiento"] : ["sacos", "mantenimiento"];
+                      // «¿Cuándo se hizo?» es de la Matriz (Transporte tiene el suyo).
+                      const soloMatriz = manejaSacosPropios ? ["mantenimiento", "historial"] : ["sacos", "mantenimiento", "historial"];
                       return !(esSocio && soloMatriz.includes(t));
                     })
                     .map((t) => {
@@ -15438,6 +15440,7 @@ export function App() {
                       gastos: "🧾",
                       sacos: "📦",
                       mantenimiento: "🔧",
+                      historial: "🔎",
                       venta_detalle: "🛒",
                       cuentas: "📊",
                       fomentos: "🌾"
@@ -15449,6 +15452,7 @@ export function App() {
                       gastos: "Gastos",
                       sacos: "Sacos",
                       mantenimiento: "Mantenimiento",
+                      historial: "¿Cuándo se hizo?",
                       venta_detalle: "Venta Detalle",
                       cuentas: `Por pagar${cashPayables.length > 0 ? ` (${cashPayables.length})` : ""}`,
                       fomentos: `Fomentos${fomentos.filter(f=>f.status==="ACTIVOS").length > 0 ? ` (${fomentos.filter(f=>f.status==="ACTIVOS").length})` : ""}`
@@ -16042,6 +16046,11 @@ export function App() {
                       </table>
                     </div>
                   </div>
+                )}
+
+                {/* 🔎 ¿Cuándo se hizo?: reparaciones/cambios/compras de la Matriz. */}
+                {cajaSubTab === "historial" && esMatrizActiva && (
+                  <BuscadorHistorial ambito="matriz" titulo={matrizName} />
                 )}
 
                 {cajaSubTab === "mantenimiento" && (
