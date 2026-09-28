@@ -49,6 +49,10 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Configuracion: tarifas con hasta 3 decimales (2026-09-28)
+- Casillas de tarifas (Configuracion, tarifa de secado y de seleccion) pasan a `step="0.001"`; helper `fmtTarifa` (App.tsx) muestra minimo 2 y hasta 3 decimales (actividades de cuadrilla, tarifario de servicio).
+- Migracion 20261049: `app_settings.tarifa_pilado_qq` y `matriz_packaging_rates.precio_saco_*` a NUMERIC(x,4) (las demas tarifas ya eran de 4 decimales). Sueldo base sigue con 2.
+
 ### Resultado mensual: cascara recibida por servicio + Imprimir (2026-09-28)
 - `calcularResultadoMensual` devuelve `recepcion` (aditivo): ingresos de bascula del mes (`weighing_tickets` no anulados, fecha Ecuador) por `operation_type`: Servicio completo (SECADO_PILADO), Solo secado (SECADO), Solo pilado (PILADO) y Compra; tickets, QQ, kg y totales. Informativo: la base del costo real sigue siendo la cascara liquidada.
 - `ResultadoMensual.tsx`: tarjeta "🚜 Cascara recibida por servicio" en la columna lateral y boton "🖨️ Imprimir" (abre ventana con los estilos de la app y solo el reporte; oculta botones/formularios; A4).

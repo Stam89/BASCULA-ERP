@@ -66,7 +66,7 @@ function ensureTable(): Promise<void> {
       .then(() => pool.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS guia_prefix VARCHAR(20) NOT NULL DEFAULT '001-001-'`))
       // Parámetros operativos de planta (tarifa de pilado por QQ y humedad base
       // para la merma en báscula). Aditivo; defaults pactados.
-      .then(() => pool.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS tarifa_pilado_qq NUMERIC(10,2) NOT NULL DEFAULT 3.50`))
+      .then(() => pool.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS tarifa_pilado_qq NUMERIC(12,4) NOT NULL DEFAULT 3.50`))
       .then(() => pool.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS humedad_base_pct NUMERIC(5,2) NOT NULL DEFAULT 13.00`))
       .then(() => pool.query(`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS socio_id UUID REFERENCES accionistas(id)`))
       .then(() => pool.query(`ALTER TABLE app_settings DROP CONSTRAINT IF EXISTS app_settings_pkey`))

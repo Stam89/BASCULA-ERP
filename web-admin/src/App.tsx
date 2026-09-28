@@ -57,6 +57,13 @@ const SUBCATEGORIAS_GASTO_SUGERIDAS: string[] = [
 ];
 
 /** Etiqueta corta de un ingreso: el número de la báscula si se conoce. */
+// Tarifas: al menos 2 decimales y hasta 3 cuando se usan (0.334 → "0.334", 3.5 → "3.50").
+function fmtTarifa(n: number | string | null | undefined): string {
+  const v = Math.round((Number(n) || 0) * 1000) / 1000;
+  const s = v.toFixed(3);
+  return s.endsWith("0") ? s.slice(0, -1) : s;
+}
+
 function entryLabel(entry: { numero_bascula?: string | null; ticket_number: string }): string {
   return entry.numero_bascula ? `Ticket #${entry.numero_bascula}` : entry.ticket_number;
 }
@@ -17981,7 +17988,7 @@ export function App() {
                 </label>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                   <label><span>QQ Secos <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>(kárdex, exacto)</span></span><input type="text" readOnly value={secadoLotSel ? Number(secadoLotSel.quintals).toFixed(2) : "0.00"} style={{ fontWeight: 700 }} /></label>
-                  <label><span>Tarifa de Secado $ / QQ</span><input type="number" step="0.01" min="0" value={secadoForm.rate} onChange={(e) => setSecadoForm({ ...secadoForm, rate: e.target.value })} placeholder={`Global: $${Number(laborRatesForm.secado_servicio_per_qq || 0).toFixed(2)}`} /></label>
+                  <label><span>Tarifa de Secado $ / QQ</span><input type="number" step="0.001" min="0" value={secadoForm.rate} onChange={(e) => setSecadoForm({ ...secadoForm, rate: e.target.value })} placeholder={`Global: $${Number(laborRatesForm.secado_servicio_per_qq || 0).toFixed(2)}`} /></label>
                 </div>
                 <div className="totalBox" style={{ margin: "6px 0 10px" }}>
                   <span>Total a cobrar</span>
@@ -18297,7 +18304,7 @@ export function App() {
               </div>
 
               <label style={{ marginTop: 10 }}><span>Tarifa por QQ ($)</span>
-                <input type="number" step="0.01" min="0" value={selectionForm.rate_per_qq} placeholder={`Por defecto ${defaultRate}`} onChange={(e) => setSelectionForm({ ...selectionForm, rate_per_qq: e.target.value })} />
+                <input type="number" step="0.001" min="0" value={selectionForm.rate_per_qq} placeholder={`Por defecto ${defaultRate}`} onChange={(e) => setSelectionForm({ ...selectionForm, rate_per_qq: e.target.value })} />
               </label>
               <label><span>Notas (opcional)</span>
                 <input type="text" value={selectionForm.notes} onChange={(e) => setSelectionForm({ ...selectionForm, notes: e.target.value })} placeholder="Ej: observación" />
@@ -19979,7 +19986,7 @@ export function App() {
                   <p className="muted">Parámetros operativos de la piladora. La humedad base se usa para calcular la merma al pesar en báscula.</p>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <label><span>Tarifa de pilado ($/QQ)</span>
-                      <input type="number" step="0.01" min="0" required disabled={!isAdmin}
+                      <input type="number" step="0.001" min="0" required disabled={!isAdmin}
                         value={String(settingsForm.tarifa_pilado_qq ?? "")}
                         onChange={(e) => setSettingsForm({ ...settingsForm, tarifa_pilado_qq: e.target.value })} />
                     </label>
@@ -20970,15 +20977,15 @@ export function App() {
                   <p className="muted">Egresos: con estas tarifas se calcula automáticamente el pago al personal (Producción, Secadoras y Cuadrilla).</p>
                   <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>Pilador</h2>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <label><span>$ por QQ de arroz</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.pilador_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, pilador_per_qq: Number(e.target.value) })} /></label>
-                    <label><span>$ por saca (@)</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.pilador_per_saca} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, pilador_per_saca: Number(e.target.value) })} /></label>
+                    <label><span>$ por QQ de arroz</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.pilador_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, pilador_per_qq: Number(e.target.value) })} /></label>
+                    <label><span>$ por saca (@)</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.pilador_per_saca} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, pilador_per_saca: Number(e.target.value) })} /></label>
                   </div>
                   <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>Estibador</h2>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                    <label><span>$ por QQ</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.estibador_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_qq: Number(e.target.value) })} /></label>
-                    <label><span>$ por saca (@)</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.estibador_per_saca} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_saca: Number(e.target.value) })} /></label>
-                    <label><span>$ por arrocillo</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.estibador_per_arrocillo} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_arrocillo: Number(e.target.value) })} /></label>
-                    <label><span>$ por cada 3 tulas ⭐</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.estibador_por_3tulas} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_por_3tulas: Number(e.target.value) })} /></label>
+                    <label><span>$ por QQ</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.estibador_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_qq: Number(e.target.value) })} /></label>
+                    <label><span>$ por saca (@)</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.estibador_per_saca} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_saca: Number(e.target.value) })} /></label>
+                    <label><span>$ por arrocillo</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.estibador_per_arrocillo} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_arrocillo: Number(e.target.value) })} /></label>
+                    <label><span>$ por cada 3 tulas ⭐</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.estibador_por_3tulas} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_por_3tulas: Number(e.target.value) })} /></label>
                   </div>
                   <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>Secador</h2>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -20993,7 +21000,7 @@ export function App() {
                   {(() => {
                     const tarifa = (nombre: string) => {
                       const a = cuadActivities.find((x) => x.name.trim().toUpperCase() === nombre);
-                      return a ? `$${Number(a.unit_rate).toFixed(2)}` : "sin configurar";
+                      return a ? `$${fmtTarifa(a.unit_rate)}` : "sin configurar";
                     };
                     return (
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -21018,9 +21025,9 @@ export function App() {
                   <details>
                     <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>⛽ Precio del combustible <span className="muted" style={{ fontWeight: 400 }}>(se usa en Secadoras)</span></summary>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                    <label><span>$ bombona por cada 1%</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.precio_gas_bombona} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_bombona: Number(e.target.value) })} /></label>
-                    <label><span>$ por cilindro</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.precio_gas_cilindro} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_cilindro: Number(e.target.value) })} /></label>
-                    <label><span>$ diesel por unidad de medidor</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.precio_diesel} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_diesel: Number(e.target.value) })} /></label>
+                    <label><span>$ bombona por cada 1%</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.precio_gas_bombona} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_bombona: Number(e.target.value) })} /></label>
+                    <label><span>$ por cilindro</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.precio_gas_cilindro} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_cilindro: Number(e.target.value) })} /></label>
+                    <label><span>$ diesel por unidad de medidor</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.precio_diesel} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_diesel: Number(e.target.value) })} /></label>
                   </div>
                   <button className="primary" disabled={!isAdmin}>Guardar tarifas</button>
                   {!isAdmin && <p className="muted">Solo un administrador puede cambiar las tarifas.</p>}
@@ -21042,8 +21049,8 @@ export function App() {
                   <details>
                     <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🛎️ Secado como Servicio (cobro al cliente)</summary>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <label><span>Secado A Granel / Directo a Producción ($ x QQ)</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.secado_servicio_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secado_servicio_per_qq: Number(e.target.value) })} /></label>
-                    <label><span>Secado En Saco ($ x QQ)</span><input type="number" step="0.01" min="0" disabled={!isAdmin} value={laborRatesForm.secado_servicio_saco_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secado_servicio_saco_per_qq: Number(e.target.value) })} /></label>
+                    <label><span>Secado A Granel / Directo a Producción ($ x QQ)</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.secado_servicio_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secado_servicio_per_qq: Number(e.target.value) })} /></label>
+                    <label><span>Secado En Saco ($ x QQ)</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.secado_servicio_saco_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secado_servicio_saco_per_qq: Number(e.target.value) })} /></label>
                   </div>
                   <small className="muted">Se cobra al cliente de servicio (maquila) al finalizar el secado, según el «Empaque de botada (vaciado)» del túnel o el modo del Tendal: A granel → primera tarifa; En saco → segunda. La tarifa A granel también es la sugerida en el cobro manual de «Solo Servicio de Secado».</small>
                   <button className="primary" disabled={!isAdmin}>Guardar tarifas</button>
@@ -21076,7 +21083,7 @@ export function App() {
                         </select>
                       </label>
                       <label><span>💲 Precio ($ por QQ)</span>
-                        <input type="number" step="0.01" min="0" placeholder="0.00" value={tarifaForm.precio_por_qq} onChange={(e) => setTarifaForm({ ...tarifaForm, precio_por_qq: e.target.value })} />
+                        <input type="number" step="0.001" min="0" placeholder="0.00" value={tarifaForm.precio_por_qq} onChange={(e) => setTarifaForm({ ...tarifaForm, precio_por_qq: e.target.value })} />
                       </label>
                       <label style={{ gridColumn: "1 / -1" }}><span>📅 Vigente desde</span>
                         <input type="date" value={tarifaForm.fecha_vigencia} onChange={(e) => setTarifaForm({ ...tarifaForm, fecha_vigencia: e.target.value })} />
@@ -21121,7 +21128,7 @@ export function App() {
                                 <td style={{ padding: "6px 8px" }}>
                                   <span style={{ fontSize: 11, fontWeight: 600, borderRadius: 4, padding: "2px 8px", background: "#ecfdf5", color: "#15803d" }}>{t.servicio}</span>
                                 </td>
-                                <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700 }}>${Number(t.precio_por_qq).toFixed(2)}</td>
+                                <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700 }}>${fmtTarifa(t.precio_por_qq)}</td>
                                 <td style={{ padding: "6px 8px", color: "var(--c-muted)" }}>{(t.fecha_vigencia || "").slice(0, 10)}</td>
                                 <td style={{ padding: "6px 8px", textAlign: "right", whiteSpace: "nowrap" }}>
                                   <button type="button" disabled={!isAdmin} onClick={() => startEditTarifa(t)}
@@ -21148,13 +21155,13 @@ export function App() {
                   </p>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
                     <label><span>$ por saco de 10 lb</span>
-                      <input type="number" step="0.01" min="0" disabled={!isAdmin} value={packagingRatesForm.precio_saco_10lb}
+                      <input type="number" step="0.001" min="0" disabled={!isAdmin} value={packagingRatesForm.precio_saco_10lb}
                         onChange={(e) => setPackagingRatesForm({ ...packagingRatesForm, precio_saco_10lb: Number(e.target.value) })} /></label>
                     <label><span>$ por saco de 25 lb</span>
-                      <input type="number" step="0.01" min="0" disabled={!isAdmin} value={packagingRatesForm.precio_saco_25lb}
+                      <input type="number" step="0.001" min="0" disabled={!isAdmin} value={packagingRatesForm.precio_saco_25lb}
                         onChange={(e) => setPackagingRatesForm({ ...packagingRatesForm, precio_saco_25lb: Number(e.target.value) })} /></label>
                     <label><span>$ por saco de 50 lb</span>
-                      <input type="number" step="0.01" min="0" disabled={!isAdmin} value={packagingRatesForm.precio_saco_50lb}
+                      <input type="number" step="0.001" min="0" disabled={!isAdmin} value={packagingRatesForm.precio_saco_50lb}
                         onChange={(e) => setPackagingRatesForm({ ...packagingRatesForm, precio_saco_50lb: Number(e.target.value) })} /></label>
                   </div>
                   <button type="button" className="primary" style={{ marginTop: 10 }}
@@ -21176,10 +21183,10 @@ export function App() {
                   <form onSubmit={(e) => saveSelectionRates(e).catch((err) => addToast(err.message, "error"))}>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                       <label><span>Selección ($/QQ)</span>
-                        <input type="number" step="0.01" min="0" disabled={!isAdmin} value={selectionRatesForm.seleccion_rate}
+                        <input type="number" step="0.001" min="0" disabled={!isAdmin} value={selectionRatesForm.seleccion_rate}
                           onChange={(e) => setSelectionRatesForm({ ...selectionRatesForm, seleccion_rate: e.target.value })} /></label>
                       <label><span>Envejecido ($/QQ)</span>
-                        <input type="number" step="0.01" min="0" disabled={!isAdmin} value={selectionRatesForm.envejecimiento_rate}
+                        <input type="number" step="0.001" min="0" disabled={!isAdmin} value={selectionRatesForm.envejecimiento_rate}
                           onChange={(e) => setSelectionRatesForm({ ...selectionRatesForm, envejecimiento_rate: e.target.value })} /></label>
                     </div>
                     <button className="primary" style={{ marginTop: 10 }} disabled={!isAdmin}>Guardar tarifas de procesos</button>
@@ -21207,7 +21214,7 @@ export function App() {
                           <tr key={p.id}>
                             <td>{dp.label}</td>
                             <td className="num">
-                              <input type="number" step="0.01" min="0"
+                              <input type="number" step="0.001" min="0"
                                 key={`lb-${p.id}-${p.price_per_pound ?? 0}`}
                                 defaultValue={Number(p.price_per_pound ?? 0) || ""}
                                 placeholder="0.00" disabled={!isAdmin}
@@ -21688,7 +21695,7 @@ export function App() {
                     <input type="text" value={newActivityForm.name} onChange={(e) => setNewActivityForm({ ...newActivityForm, name: e.target.value })} placeholder="Ej: ENSACADO" />
                   </label>
                   <label><span>Tarifa por saco ($)</span>
-                    <input type="number" step="0.01" min="0" value={newActivityForm.unit_rate} onChange={(e) => setNewActivityForm({ ...newActivityForm, unit_rate: e.target.value })} />
+                    <input type="number" step="0.001" min="0" value={newActivityForm.unit_rate} onChange={(e) => setNewActivityForm({ ...newActivityForm, unit_rate: e.target.value })} />
                   </label>
                   <button className="primary">Guardar actividad</button>
                 </form>
@@ -21716,11 +21723,11 @@ export function App() {
                           <tr key={a.id}>
                             <td>{a.name}</td>
                             <td className="num">
-                              <input type="number" step="0.01" min="0" key={`cuad-${a.id}-${a.unit_rate}`} defaultValue={Number(a.unit_rate).toFixed(2)} style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }}
+                              <input type="number" step="0.001" min="0" key={`cuad-${a.id}-${a.unit_rate}`} defaultValue={fmtTarifa(a.unit_rate)} style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }}
                                 onBlur={(e) => {
                                   const v = Number(e.target.value);
-                                  // Siempre muestra 2 decimales al salir del casillero.
-                                  e.target.value = (v >= 0 ? v : 0).toFixed(2);
+                                  // Muestra al menos 2 decimales (hasta 3) al salir del casillero.
+                                  e.target.value = fmtTarifa(v >= 0 ? v : 0);
                                   if (v >= 0 && v !== Number(a.unit_rate)) updateActivityRate(a.id, v).catch((err) => addToast(err.message, "error"));
                                 }} />
                             </td>
