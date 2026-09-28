@@ -7,6 +7,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
+import { vidaUtilPorTipo } from "../../services/activos.js";
 import ExcelJS from "exceljs";
 import type { PoolClient } from "pg";
 
@@ -480,16 +481,16 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     sacos: sacosCompraSchema,
     // Compra de un ACTIVO FIJO: se registra en Activos fijos en el mismo paso
     // (costo = monto del egreso, fecha = hoy) y queda enlazado a este egreso.
+    // La vida útil NO la escribe el usuario: la asigna el sistema por tipo (SRI).
     activo_fijo: z.object({
       nombre: z.string().trim().min(2).max(160),
       tipo: z.string().trim().min(2).max(60).default("OTRO"),
-      vida_util_anios: z.number().int().positive().max(50).default(10),
       valor_residual: z.number().nonnegative().default(0)
     }).optional(),
     created_by: z.string().uuid().optional()
   }).parse(req.body);
-  if (body.activo_fijo && body.movement !== "EXPENSE") {
-    throw new ApiError(400, "Solo un EGRESO (compra) puede registrar un activo fijo.");
+  if (body.activo_fijo && (body.movement !== "EXPENSE" || body.category !== "COMPRA_ACTIVO_FIJO")) {
+    throw new ApiError(400, "El activo fijo se registra con un EGRESO de categoría «Compra de activo fijo».");
   }
 
   const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
@@ -526,7 +527,7 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
          VALUES ($1, $2, 'ACTIVA', $3, $4, (now() AT TIME ZONE 'America/Guayaquil')::date, $5, $6, true, $7)
          RETURNING id, name`,
         [af.nombre.toUpperCase(), af.tipo.toUpperCase(), accionistaId, body.amount,
-         af.vida_util_anios, Math.min(af.valor_residual, body.amount), mov.rows[0].id]
+         vidaUtilPorTipo(af.tipo), Math.min(af.valor_residual, body.amount), mov.rows[0].id]
       );
       activoFijo = eq.rows[0];
     }
