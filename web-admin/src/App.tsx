@@ -5600,7 +5600,8 @@ export function App() {
         const data = await apiGet<any>(`/reports/servicios?mes=${servicioMes}`);
         setReportRows({ kind, data });
       } else {
-        const data = await apiGet<any>(`/reports/${reportEndpoint[kind]}${qs}`);
+        // El selector «Socio» aplica a todos los informes (Todos = consolidado).
+        const data = await apiGet<any>(`/reports/${reportEndpoint[kind]}${qs}&accionista=${encodeURIComponent(reportAccionista)}`);
         setReportRows({ kind, data });
       }
     } catch (e) {
@@ -5702,7 +5703,7 @@ export function App() {
           ["N.º de ventas", s.sales.cnt],
           ["Liquidaciones (neto)", m2(s.liquidations.net)],
           ["Liquidaciones (bruto)", m2(s.liquidations.gross)],
-          ["Gastos", m2(s.expenses.total)],
+          ["Gastos operativos", m2(s.expenses.total)],
           ["Caja · ingresos", m2(s.cash.income)],
           ["Caja · egresos", m2(s.cash.expense)],
           ["Caja · neto", m2(s.cash.net)],
@@ -5723,9 +5724,12 @@ export function App() {
       return { title: "Liquidaciones por agricultor", headers: ["Agricultor", "N.º", "Quintales", "Bruto", "Descuentos", "Neto"], rows, totals: ["TOTAL", "", m2(t.qq), m2(t.gross), m2(t.disc), m2(t.net)] };
     }
     if (kind === "gastos") {
-      const rows = (data.rows || []).map((r: any) => [new Date(r.created_at).toLocaleDateString("es-EC"), r.description, r.paid_to || "", m2(r.amount)]);
-      const total = (data.rows || []).reduce((a: number, r: any) => a + r.amount, 0);
-      return { title: "Gastos del período", headers: ["Fecha", "Descripción", "Pagado a", "Monto"], rows, totals: ["TOTAL", "", "", m2(total)] };
+      const rows = (data.rows || []).map((r: any) => [new Date(r.created_at).toLocaleDateString("es-EC"), `${r.categoria ?? ""}${r.no_operativo ? " (no operativo)" : ""}`, r.subcategoria || "", r.description || "", r.socio || "", m2(r.amount)]);
+      const t = data.totals || { total: 0, operativo: 0, no_operativo: 0 };
+      return {
+        title: `Egresos del período · operativos ${m2(t.operativo)} · no operativos ${m2(t.no_operativo)}`,
+        headers: ["Fecha", "Categoría", "Detalle", "Descripción", "Socio", "Monto"], rows, totals: ["TOTAL", "", "", "", "", m2(t.total)]
+      };
     }
     if (kind === "porcobrar") {
       const rows = (data.rows || []).map((r: any) => [r.customer_name, r.phone || "", m2(r.b0), m2(r.b30), m2(r.b60), m2(r.b90), m2(r.total), r.oldest_days]);
@@ -5781,9 +5785,14 @@ export function App() {
         totals: ["TOTAL", "", "", m2(t.gas), m2(t.diesel), "", "", m2(t.total)]
       };
     }
-    // produccion
-    const rows = (data.rows || []).map((r: any) => [new Date(r.created_at).toLocaleDateString("es-EC"), r.batch_number, r.lot_code || "—", m2(r.input_qty), m2(r.output_qty), r.status]);
-    return { title: "Producción del período", headers: ["Fecha", "Lote/Proceso", "Lote", "Entrada", "Salida", "Estado"], rows };
+    // produccion (unidades explícitas: kg y QQ de cáscara → QQ pilados)
+    const prod = data.rows || [];
+    const rows = prod.map((r: any) => [new Date(r.created_at).toLocaleDateString("es-EC"), r.batch_number, r.lot_code || "—", r.socio || "—",
+      String(r.operation_type ?? "").toUpperCase() === "COMPRA" ? "Propio" : "Servicio", Number(r.input_kg).toFixed(0), m2(r.qq_cascara), m2(r.output_qty), m2(r.byproduct_qty),
+      r.yield_percent != null ? `${Number(r.yield_percent).toFixed(1)} %` : "—", String(r.status).toUpperCase() === "CANCELLED" ? "Anulado" : r.finished_at ? "Finalizado" : "En proceso"]);
+    const sum = (k: string) => prod.reduce((a: number, r: any) => a + (Number(r[k]) || 0), 0);
+    return { title: "Producción del período", headers: ["Fecha", "Proceso", "Lote", "Socio", "Tipo", "Cáscara (kg)", "Cáscara (QQ)", "Pilado (QQ)", "Subprod. (QQ)", "Rend.", "Estado"], rows,
+      totals: ["TOTAL", `${prod.length} procesos`, "", "", "", sum("input_kg").toFixed(0), m2(sum("qq_cascara")), m2(sum("output_qty")), m2(sum("byproduct_qty")), "", ""] };
   }
 
   async function runBackupNow() {
@@ -20284,7 +20293,7 @@ export function App() {
                 ))}
               </div>
               <div className="reportDates">
-                {accionistas.length > 1 && reportKind !== "servicios" && (
+                {accionistas.length > 1 && !["servicios", "combustible", "arianos"].includes(reportKind) && (
                   <label>
                     <span>👥 Socio</span>
                     <select value={reportAccionista} onChange={(e) => setReportAccionista(e.target.value)}>
@@ -20343,7 +20352,12 @@ export function App() {
               </div>
               {reportRows && reportKind !== "resumen" && reportKind !== "arianos" && (
                 <div className="reportExportBtns">
-                  <button type="button" className="btnSecondary" onClick={() => { const e = getReportExport(); if (e) printReport(e.title, e.headers, e.rows, e.totals, e.rango); }}>🖨 Imprimir</button>
+                  <button type="button" className="btnSecondary" onClick={() => {
+                    const e = getReportExport(); if (!e) return;
+                    const conSocio = !["servicios", "combustible", "arianos"].includes(reportKind);
+                    const socioTxt = !conSocio ? "" : reportAccionista === "all" ? " · Todos los socios" : ` · Socio: ${accionistas.find((a) => a.id === reportAccionista)?.name ?? ""}`;
+                    printReport(e.title + socioTxt, e.headers, e.rows, e.totals, e.rango);
+                  }}>🖨 Imprimir</button>
                   <button type="button" className="btnSecondary" onClick={() => { const e = getReportExport(); if (e) exportReportCsv(e.headers, e.rows, reportKind === "servicios" ? `servicios_${servicioMes}.csv` : `${reportKind}_${reportFrom}_${reportTo}.csv`); }}>📥 Excel</button>
                 </div>
               )}
@@ -20356,7 +20370,7 @@ export function App() {
               <section className="reportKpiGrid">
                 <Metric title="Ventas del período" value={money(reportSummary.sales.total)} icon="🛒" accent="accGreen" />
                 <Metric title="Liquidaciones (neto)" value={money(reportSummary.liquidations.net)} icon="🌾" accent="accBlue" />
-                <Metric title="Gastos" value={money(reportSummary.expenses.total)} icon="🧾" accent="accAmber" />
+                <Metric title="Gastos operativos" value={money(reportSummary.expenses.total)} icon="🧾" accent="accAmber" />
                 <Metric title="Caja · neto" value={money(reportSummary.cash.net)} icon="💰" accent={reportSummary.cash.net >= 0 ? "accGreen" : "accRed"} />
                 <Metric title="Ventas realizadas" value={reportSummary.sales.cnt} icon="📋" />
                 <Metric title="Procesos producción" value={reportSummary.production.cnt} icon="⚙️" accent="accBlue" />

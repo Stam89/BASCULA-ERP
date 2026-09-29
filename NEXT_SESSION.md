@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Reportes: revision y correcciones (2026-09-29)
+- «Gastos» (informe y KPI del Resumen) leia la tabla `expenses` (vacia, ya no se usa): ahora sale de `cash_movements` EXPENSE vigentes, con categoria de Caja, detalle, socio y separacion operativos / no operativos (`CATEGORIAS_NO_OPERATIVAS` de resultado-mensual). KPI renombrado «Gastos operativos».
+- Resumen: sumas de caja y desglose excluyen anulados y contra-asientos (`MOV_VIGENTE`), antes una anulacion inflaba ingresos y egresos; CxC/CxP excluyen CANCELLED.
+- Selector «Socio» aplica a todos los informes (`accionistaDelInforme`: all / id / header); se oculta en Combustible, Lotes guardados y Servicios (globales). El titulo impreso lleva el socio.
+- Produccion: columnas con unidades (cascara kg y QQ, pilado QQ, subproductos QQ, rendimiento %, tipo propio/servicio, socio, estado Finalizado/En proceso/Anulado) + totales. Antes «Entrada» (kg) vs «Salida» (QQ) sin decirlo.
+
 ### Nomina > 🚚 Bajada de carro (2026-09-29)
 - Cada ticket de bascula (modo principal, sin espera, QQ>0, fecha >= `bajada_carro_config.desde`) paga QQ x tarifa de la actividad de cuadrilla «BAJADA DE CARRO» ($0.10, editable en Configuracion > Actividades y tarifas) a quien bajo el carro: `raw_payload.bajadaX` o `mobile_synced_tickets.bajada_manual` ('__NO__' = no se paga).
 - Se guarda como `cuadrilla_entries` origen 'BASCULA' (uq por referencia_id = ticket). `sincronizarBajadas` (cuadrilla.ts) crea/actualiza/borra SOLO lo no pagado; se llama en GET /cuadrilla/bajadas, POST /bajadas/sync (refreshNomina) y al asignar. En Nomina > Pagos sale como UNA sola fila «🚚 Bajada de carro» (GET /cuadrilla/bajadas/pendiente) y se paga todo junto con POST /cuadrilla/bajadas/pagar (un egreso PAGO_MANO_OBRA ref 'cuadrilla_entries' → rubro Cuadrilla); recibo desglosado por trabajador (`imprimirReciboBajada`, se abre al pagar; reimpresion GET /bajadas/recibo?paid_at). Las entradas BASCULA se EXCLUYEN de /cuadrilla/summary, /pay-worker y /worker-receipt (no se mezclan con la cuadrilla por persona). Lo no pagado se arrastra solo.

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { CATEGORIAS_NO_OPERATIVAS } from "../../services/resultado-mensual.js";
 
 export const reportsRouter = Router();
 
@@ -20,6 +21,21 @@ function parseRange(query: unknown): { from: string; to: string } {
     to: to ?? today.toISOString().slice(0, 10)
   };
 }
+
+// Socio del informe: ?accionista=all → todos (consolidado, null); ?accionista=<id>
+// → ese socio; sin parámetro → el accionista activo (header). Así el selector
+// «Socio» de Reportes aplica a TODOS los informes, no solo al Resumen.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function accionistaDelInforme(req: unknown): string | null {
+  const r = req as AuthenticatedRequest & { query: Record<string, unknown> };
+  const p = typeof r.query?.accionista === "string" ? r.query.accionista.trim() : "";
+  if (p === "all") return null;
+  if (UUID_RE.test(p)) return p;
+  return r.accionistaId ?? null;
+}
+// Movimientos de caja REALES: sin los anulados ni sus contra-asientos (si no,
+// una anulación inflaría a la vez ingresos y egresos).
+const MOV_VIGENTE = "cm.reversed_at IS NULL AND cm.reversal_of IS NULL";
 
 // Algunas tablas provienen de migraciones que pueden no estar aplicadas en
 // todas las instalaciones. Consultamos su existencia (con caché) para que los
@@ -123,12 +139,9 @@ reportsRouter.post("/arianos/ubicacion", asyncRoute(async (req, res) => {
 // ── Resumen consolidado del período ────────────────────────────────────────
 reportsRouter.get("/summary", asyncRoute(async (req, res) => {
   const { from, to } = parseRange(req.query);
-  const headerAcc = (req as AuthenticatedRequest).accionistaId;
-  // Segmentación por socio: ?accionista=<id> filtra por ese socio; ?accionista=all
-  // consolida TODOS; ausente = usa el accionista activo (header, compat). Cuando
-  // `acc` es null, el patrón `$N::uuid IS NULL` desactiva el filtro (consolidado).
-  const accParam = typeof req.query.accionista === "string" ? req.query.accionista.trim() : "";
-  const acc: string | null = accParam === "all" ? null : (accParam || headerAcc || null);
+  // Segmentación por socio (ver accionistaDelInforme). Cuando `acc` es null, el
+  // patrón `$N::uuid IS NULL` desactiva el filtro (consolidado).
+  const acc = accionistaDelInforme(req);
   // Alcance: 'cash' = solo liquidez real (movimientos de caja, comportamiento
   // actual, fuente de verdad intacta); 'accrued' = además suma lo DEVENGADO que
   // aún no pasó por caja (ventas a crédito por cobrar + liquidaciones por pagar).
@@ -146,17 +159,25 @@ reportsRouter.get("/summary", asyncRoute(async (req, res) => {
        FROM liquidations WHERE status <> 'CANCELLED' AND created_at::date BETWEEN $1 AND $2 AND ($3::uuid IS NULL OR accionista_id = $3)`,
       [from, to, acc]
     ),
+    // «Gastos» = egresos de caja OPERATIVOS (sin compra de cáscara/pagos a
+    // agricultores, fomentos, activos fijos ni pagos entre socios). Antes leía la
+    // tabla `expenses`, que ya no se usa (los gastos se registran en Caja).
     pool.query(
-      `SELECT COALESCE(SUM(amount),0)::float total, COUNT(*)::int cnt
-       FROM expenses WHERE created_at::date BETWEEN $1 AND $2 AND ($3::uuid IS NULL OR accionista_id = $3)`,
-      [from, to, acc]
+      `SELECT COALESCE(SUM(cm.amount),0)::float total, COUNT(*)::int cnt
+       FROM cash_movements cm
+       JOIN cash_registers cr ON cr.id = cm.cash_register_id
+       WHERE cm.movement = 'EXPENSE' AND ${MOV_VIGENTE}
+         AND cm.created_at::date BETWEEN $1 AND $2
+         AND ($3::uuid IS NULL OR cr.accionista_id = $3)
+         AND NOT (upper(cm.category) = ANY ($4::text[]))`,
+      [from, to, acc, CATEGORIAS_NO_OPERATIVAS]
     ),
     pool.query(
-      `SELECT movement, COALESCE(SUM(amount),0)::float total
-       FROM cash_movements
-       WHERE created_at::date BETWEEN $1 AND $2
-         AND cash_register_id IN (SELECT id FROM cash_registers WHERE ($3::uuid IS NULL OR accionista_id = $3))
-       GROUP BY movement`,
+      `SELECT cm.movement, COALESCE(SUM(cm.amount),0)::float total
+       FROM cash_movements cm
+       WHERE cm.created_at::date BETWEEN $1 AND $2 AND ${MOV_VIGENTE}
+         AND cm.cash_register_id IN (SELECT id FROM cash_registers WHERE ($3::uuid IS NULL OR accionista_id = $3))
+       GROUP BY cm.movement`,
       [from, to, acc]
     ),
     hasProduction
@@ -166,8 +187,8 @@ reportsRouter.get("/summary", asyncRoute(async (req, res) => {
           [from, to, acc]
         )
       : Promise.resolve({ rows: [{ input: 0, cnt: 0 }] }),
-    pool.query(`SELECT COALESCE(SUM(balance),0)::float total FROM accounts_receivable WHERE status <> 'PAID' AND ($1::uuid IS NULL OR accionista_id = $1)`, [acc]),
-    pool.query(`SELECT COALESCE(SUM(balance),0)::float total FROM accounts_payable WHERE status <> 'PAID' AND ($1::uuid IS NULL OR accionista_id = $1)`, [acc]),
+    pool.query(`SELECT COALESCE(SUM(balance),0)::float total FROM accounts_receivable WHERE status NOT IN ('PAID', 'CANCELLED') AND ($1::uuid IS NULL OR accionista_id = $1)`, [acc]),
+    pool.query(`SELECT COALESCE(SUM(balance),0)::float total FROM accounts_payable WHERE status NOT IN ('PAID', 'CANCELLED') AND ($1::uuid IS NULL OR accionista_id = $1)`, [acc]),
     // Desglose del período: movimientos de caja (fecha, concepto, socio, tipo, monto).
     pool.query(
       `SELECT cm.created_at::date AS fecha,
@@ -178,7 +199,7 @@ reportsRouter.get("/summary", asyncRoute(async (req, res) => {
        FROM cash_movements cm
        JOIN cash_registers cr ON cr.id = cm.cash_register_id
        JOIN accionistas a ON a.id = cr.accionista_id
-       WHERE cm.created_at::date BETWEEN $1 AND $2
+       WHERE cm.created_at::date BETWEEN $1 AND $2 AND ${MOV_VIGENTE}
          AND ($3::uuid IS NULL OR cr.accionista_id = $3)
        ORDER BY cm.created_at DESC
        LIMIT 300`,
@@ -208,7 +229,7 @@ reportsRouter.get("/summary", asyncRoute(async (req, res) => {
          FROM accounts_receivable ar
          JOIN accionistas a ON a.id = ar.accionista_id
          WHERE ar.created_at::date BETWEEN $1 AND $2
-           AND ar.sale_id IS NOT NULL AND ar.status <> 'PAID' AND ar.balance > 0
+           AND ar.sale_id IS NOT NULL AND ar.status NOT IN ('PAID', 'CANCELLED') AND ar.balance > 0
            AND ($3::uuid IS NULL OR ar.accionista_id = $3)
          ORDER BY ar.created_at DESC LIMIT 300`,
         [from, to, acc]
@@ -221,7 +242,7 @@ reportsRouter.get("/summary", asyncRoute(async (req, res) => {
          JOIN accionistas a ON a.id = ap.accionista_id
          LEFT JOIN farmers f ON f.id = ap.farmer_id
          WHERE ap.created_at::date BETWEEN $1 AND $2
-           AND ap.liquidation_id IS NOT NULL AND ap.status <> 'PAID' AND ap.balance > 0
+           AND ap.liquidation_id IS NOT NULL AND ap.status NOT IN ('PAID', 'CANCELLED') AND ap.balance > 0
            AND ($3::uuid IS NULL OR ap.accionista_id = $3)
          ORDER BY ap.created_at DESC LIMIT 300`,
         [from, to, acc]
@@ -255,14 +276,14 @@ reportsRouter.get("/summary", asyncRoute(async (req, res) => {
 // ── Ventas: por producto, por cliente y por día ────────────────────────────
 reportsRouter.get("/sales", asyncRoute(async (req, res) => {
   const { from, to } = parseRange(req.query);
-  const acc = (req as AuthenticatedRequest).accionistaId;
+  const acc = accionistaDelInforme(req);
   const [byProduct, byCustomer, daily] = await Promise.all([
     pool.query(
       `SELECT p.name, SUM(si.quantity)::float qty, SUM(si.total)::float total
        FROM sale_items si
        JOIN sales s ON s.id = si.sale_id
        JOIN products p ON p.id = si.product_id
-       WHERE s.sale_status <> 'CANCELLED' AND s.created_at::date BETWEEN $1 AND $2 AND s.accionista_id = $3
+       WHERE s.sale_status <> 'CANCELLED' AND s.created_at::date BETWEEN $1 AND $2 AND ($3::uuid IS NULL OR s.accionista_id = $3)
        GROUP BY p.name ORDER BY total DESC`,
       [from, to, acc]
     ),
@@ -270,14 +291,14 @@ reportsRouter.get("/sales", asyncRoute(async (req, res) => {
       `SELECT COALESCE(c.full_name, 'Consumidor final') name, COUNT(*)::int cnt, SUM(s.total_amount)::float total
        FROM sales s
        LEFT JOIN customers c ON c.id = s.customer_id
-       WHERE s.sale_status <> 'CANCELLED' AND s.created_at::date BETWEEN $1 AND $2 AND s.accionista_id = $3
+       WHERE s.sale_status <> 'CANCELLED' AND s.created_at::date BETWEEN $1 AND $2 AND ($3::uuid IS NULL OR s.accionista_id = $3)
        GROUP BY 1 ORDER BY total DESC`,
       [from, to, acc]
     ),
     pool.query(
       `SELECT s.created_at::date d, COUNT(*)::int cnt, SUM(s.total_amount)::float total
        FROM sales s
-       WHERE s.sale_status <> 'CANCELLED' AND s.created_at::date BETWEEN $1 AND $2 AND s.accionista_id = $3
+       WHERE s.sale_status <> 'CANCELLED' AND s.created_at::date BETWEEN $1 AND $2 AND ($3::uuid IS NULL OR s.accionista_id = $3)
        GROUP BY 1 ORDER BY 1`,
       [from, to, acc]
     )
@@ -288,7 +309,7 @@ reportsRouter.get("/sales", asyncRoute(async (req, res) => {
 // ── Liquidaciones por agricultor ───────────────────────────────────────────
 reportsRouter.get("/liquidations", asyncRoute(async (req, res) => {
   const { from, to } = parseRange(req.query);
-  const acc = (req as AuthenticatedRequest).accionistaId;
+  const acc = accionistaDelInforme(req);
   const result = await pool.query(
     `SELECT f.full_name,
             COUNT(*)::int cnt,
@@ -298,40 +319,54 @@ reportsRouter.get("/liquidations", asyncRoute(async (req, res) => {
             SUM(l.net_amount)::float net
      FROM liquidations l
      JOIN farmers f ON f.id = l.farmer_id
-     WHERE l.status <> 'CANCELLED' AND l.created_at::date BETWEEN $1 AND $2 AND l.accionista_id = $3
+     WHERE l.status <> 'CANCELLED' AND l.created_at::date BETWEEN $1 AND $2 AND ($3::uuid IS NULL OR l.accionista_id = $3)
      GROUP BY f.full_name ORDER BY net DESC`,
     [from, to, acc]
   );
   res.json({ range: { from, to }, rows: result.rows });
 }));
 
-// ── Gastos del período ─────────────────────────────────────────────────────
+// ── Gastos del período: egresos REALES de Caja (sin anulados) ───────────────
+// Antes leía la tabla `expenses`, que ya no se usa. Cada egreso trae su
+// categoría de Caja; los «no operativos» (compra de cáscara, fomentos, activos
+// fijos, pagos entre socios…) se marcan aparte para no confundirlos con gasto.
 reportsRouter.get("/expenses", asyncRoute(async (req, res) => {
   const { from, to } = parseRange(req.query);
-  const acc = (req as AuthenticatedRequest).accionistaId;
-  const hasLabor = await hasTable("labor_payments");
-  const [list, labor] = await Promise.all([
-    pool.query(
-      `SELECT created_at, description, paid_to, amount::float amount
-       FROM expenses WHERE created_at::date BETWEEN $1 AND $2 AND accionista_id = $3 ORDER BY created_at DESC`,
-      [from, to, acc]
-    ),
-    hasLabor
-      ? pool.query(
-          `SELECT COALESCE(SUM(total_amount),0)::float total, COUNT(*)::int cnt
-           FROM labor_payments
-           WHERE paid_at::date BETWEEN $1 AND $2
-             AND cash_register_id IN (SELECT id FROM cash_registers WHERE accionista_id = $3)`,
-          [from, to, acc]
-        )
-      : Promise.resolve({ rows: [{ total: 0, cnt: 0 }] })
-  ]);
-  res.json({ range: { from, to }, rows: list.rows, labor: labor.rows[0] });
+  const acc = accionistaDelInforme(req);
+  const rows = (await pool.query(
+    `SELECT cm.created_at, cm.category AS categoria_codigo, COALESCE(cc.nombre, cm.category) AS categoria,
+            cm.subcategoria, NULLIF(cm.description, '') AS description, cm.amount::float AS amount,
+            a.name AS socio, (upper(cm.category) = ANY ($4::text[])) AS no_operativo
+       FROM cash_movements cm
+       JOIN cash_registers cr ON cr.id = cm.cash_register_id
+       JOIN accionistas a ON a.id = cr.accionista_id
+       LEFT JOIN cash_categories cc ON cc.codigo = cm.category
+      WHERE cm.movement = 'EXPENSE' AND ${MOV_VIGENTE}
+        AND cm.created_at::date BETWEEN $1 AND $2
+        AND ($3::uuid IS NULL OR cr.accionista_id = $3)
+      ORDER BY cm.created_at DESC`,
+    [from, to, acc, CATEGORIAS_NO_OPERATIVAS]
+  )).rows as Array<{ categoria: string; amount: number; no_operativo: boolean }>;
+  const porCat = new Map<string, { categoria: string; cnt: number; total: number; no_operativo: boolean }>();
+  for (const r of rows) {
+    const c = porCat.get(r.categoria) ?? { categoria: r.categoria, cnt: 0, total: 0, no_operativo: r.no_operativo };
+    c.cnt += 1; c.total = Math.round((c.total + Number(r.amount)) * 100) / 100;
+    porCat.set(r.categoria, c);
+  }
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const operativo = r2(rows.filter((r) => !r.no_operativo).reduce((a2, r) => a2 + Number(r.amount), 0));
+  const noOperativo = r2(rows.filter((r) => r.no_operativo).reduce((a2, r) => a2 + Number(r.amount), 0));
+  res.json({
+    range: { from, to },
+    rows,
+    por_categoria: [...porCat.values()].sort((x, y) => y.total - x.total),
+    totals: { total: r2(operativo + noOperativo), operativo, no_operativo: noOperativo, cnt: rows.length }
+  });
 }));
 
 // ── Cuentas por cobrar con antigüedad (foto al día de hoy) ─────────────────
 reportsRouter.get("/receivable-aging", asyncRoute(async (req, res) => {
-  const acc = (req as AuthenticatedRequest).accionistaId;
+  const acc = accionistaDelInforme(req);
   const result = await pool.query(
     `SELECT COALESCE(c.full_name, ar.description, 'Sin cliente') AS customer_name,
             c.phone AS phone,
@@ -343,7 +378,7 @@ reportsRouter.get("/receivable-aging", asyncRoute(async (req, res) => {
             SUM(CASE WHEN CURRENT_DATE - ar.created_at::date > 90 THEN ar.balance ELSE 0 END)::float b90
      FROM accounts_receivable ar
      LEFT JOIN customers c ON c.id = ar.customer_id
-     WHERE ar.status IN ('CONFIRMED','PARTIAL') AND ar.balance > 0 AND ar.accionista_id = $1
+     WHERE ar.status IN ('CONFIRMED','PARTIAL') AND ar.balance > 0 AND ($1::uuid IS NULL OR ar.accionista_id = $1)
      GROUP BY 1, 2
      ORDER BY total DESC`,
     [acc]
@@ -362,34 +397,41 @@ reportsRouter.get("/receivable-aging", asyncRoute(async (req, res) => {
 }));
 
 // ── Producción del período ─────────────────────────────────────────────────
+// Por proceso: cáscara que entró (kg y QQ), arroz pilado y subproductos (QQ),
+// rendimiento y tipo del lote (propio / servicio). Antes mezclaba «Entrada» en
+// kg con «Salida» en QQ sin decirlo.
 reportsRouter.get("/production", asyncRoute(async (req, res) => {
   const { from, to } = parseRange(req.query);
-  const acc = (req as AuthenticatedRequest).accionistaId;
+  const acc = accionistaDelInforme(req);
   if (!(await hasTable("processing_batches"))) {
     res.json({ range: { from, to }, rows: [] });
     return;
   }
   const hasOutputs = await hasTable("processing_outputs");
-  const outputExpr = hasOutputs
-    ? `(SELECT COALESCE(SUM(o.quantity),0)::float FROM processing_outputs o WHERE o.processing_batch_id = b.id AND COALESCE(o.is_byproduct,false) = false)`
+  const salida = (sub: boolean) => hasOutputs
+    ? `(SELECT COALESCE(SUM(o.quantity),0)::float FROM processing_outputs o WHERE o.processing_batch_id = b.id AND COALESCE(o.is_byproduct,false) = ${sub})`
     : `0::float`;
   const result = await pool.query(
-    `SELECT b.created_at, b.batch_number, l.lot_code,
-            b.input_quantity::float input_qty,
-            b.status,
-            ${outputExpr} AS output_qty
+    `SELECT b.created_at, b.finished_at, b.batch_number, l.lot_code, l.operation_type, a.name AS socio,
+            b.input_quantity::float AS input_kg,
+            COALESCE(
+              (SELECT SUM(x.quintals) FROM processing_batch_drying_lots x WHERE x.processing_batch_id = b.id),
+              (SELECT SUM(w.quintals) FROM weighing_tickets w WHERE w.lot_id = b.lot_id)
+            )::float AS qq_cascara,
+            ${salida(false)} AS output_qty,
+            ${salida(true)} AS byproduct_qty,
+            (SELECT py.yield_percent::float FROM production_yields py WHERE py.processing_batch_id = b.id ORDER BY py.created_at DESC LIMIT 1) AS yield_percent,
+            b.status
      FROM processing_batches b
      LEFT JOIN lots l ON l.id = b.lot_id
-     WHERE b.created_at::date BETWEEN $1 AND $2 AND b.accionista_id = $3
+     LEFT JOIN accionistas a ON a.id = b.accionista_id
+     WHERE b.created_at::date BETWEEN $1 AND $2 AND ($3::uuid IS NULL OR b.accionista_id = $3)
      ORDER BY b.created_at DESC`,
     [from, to, acc]
   );
   res.json({ range: { from, to }, rows: result.rows });
 }));
 
-// Combustible de secado: se muestra a nivel MOTOR (consumo real) y a nivel
-// secadora (reparto proporcional). Todo es propiedad de CEYRO, así que no se
-// filtra por accionista: se consolida el consumo de todos los socios.
 // ── Servicios de la Matriz, por MES y solo los FINALIZADOS ──────────────────
 // Un servicio cuenta el mes en que se FINALIZÓ (no cuando entró a báscula):
 //   · Solo secado ........ al completar el secado (todos sus túneles/tendal).
@@ -485,6 +527,9 @@ reportsRouter.get("/servicios", asyncRoute(async (req, res) => {
   res.json({ mes, rows: r.rows, totales });
 }));
 
+// Combustible de secado: se muestra a nivel MOTOR (consumo real) y a nivel
+// secadora (reparto proporcional). Todo es propiedad de CEYRO, así que no se
+// filtra por accionista: se consolida el consumo de todos los socios.
 reportsRouter.get("/fuel", asyncRoute(async (req, res) => {
   const { from, to } = parseRange(req.query);
   if (!(await hasTable("drying_tunnel_reports"))) {

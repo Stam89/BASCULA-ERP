@@ -58,12 +58,32 @@ export default function ReportReadOnlyViews({ report, matrizName = "Matriz" }: {
   }
 
   if (kind === "gastos") {
-    const labor = reportRecord(data.labor);
+    // Egresos reales de Caja (sin anulados). Los «no operativos» (compra de
+    // cáscara/pagos a agricultores, fomentos, activos fijos, pagos entre socios)
+    // se separan para no confundirlos con gasto.
+    const totals = reportRecord(data.totals);
+    const cats = reportRows(data.por_categoria);
+    const total = Number(totals.total) || 0;
+    const rows = reportRows(data.rows);
     return (
-      <div className="tablePanel">
-        <h2>Gastos del período</h2>
-        {Number(labor.total) > 0 && <div className="alertBox" style={{ marginBottom: 10 }}>Pagos de cuadrilla en el período: {money(Number(labor.total))} ({labor.cnt})</div>}
-        <ReportTable headers={["Fecha", "Descripción", "Pagado a", "Monto"]} rows={reportRows(data.rows).map((row) => [new Date(String(row.created_at)).toLocaleDateString("es-EC"), row.description ?? "—", row.paid_to || "—", money(Number(row.amount))])} empty="Sin gastos en el período" />
+      <div className="reportGrid">
+        <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+          <h2>Egresos del período</h2>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, margin: "4px 0 12px" }}>
+            <div className="totalBox" style={{ margin: 0 }}><span>Total egresos</span><strong>{money(total)}</strong><small>{Number(totals.cnt) || 0} movimiento(s)</small></div>
+            <div className="totalBox" style={{ margin: 0 }}><span>Gastos operativos</span><strong>{money(Number(totals.operativo))}</strong><small>costos de operar la planta</small></div>
+            <div className="totalBox" style={{ margin: 0 }}><span>No operativos</span><strong>{money(Number(totals.no_operativo))}</strong><small>cáscara, fomentos, activos, socios</small></div>
+          </div>
+          <ReportTable headers={["Categoría", "N.º", "Total", "% del total"]}
+            rows={cats.map((c) => [`${c.categoria ?? "—"}${c.no_operativo ? " (no operativo)" : ""}`, c.cnt ?? 0, money(Number(c.total)), total > 0 ? `${((Number(c.total) / total) * 100).toFixed(1)} %` : "—"])}
+            empty="Sin egresos en el período" />
+        </div>
+        <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+          <h2>Detalle de egresos</h2>
+          <ReportTable headers={["Fecha", "Categoría", "Detalle", "Descripción", "Socio", "Monto"]}
+            rows={rows.map((r) => [new Date(String(r.created_at)).toLocaleDateString("es-EC"), `${r.categoria ?? "—"}${r.no_operativo ? " ·" : ""}`, r.subcategoria || "—", r.description ?? "—", r.socio ?? "—", money(Number(r.amount))])}
+            empty="Sin egresos en el período" />
+        </div>
       </div>
     );
   }
@@ -97,10 +117,22 @@ export default function ReportReadOnlyViews({ report, matrizName = "Matriz" }: {
   }
 
   if (kind === "produccion") {
+    // Unidades explícitas: cáscara que entró (kg y QQ) → arroz pilado y
+    // subproductos (QQ) · rendimiento en peso.
+    const rows = reportRows(data.rows);
+    const suma = (k: string) => rows.reduce((a, r) => a + (Number(r[k]) || 0), 0);
+    const tipo = (op: ReportCell) => String(op ?? "").toUpperCase() === "COMPRA" ? "Propio" : op ? "Servicio" : "—";
+    const estado = (r: ReportRow) => String(r.status ?? "").toUpperCase() === "CANCELLED" ? "Anulado" : r.finished_at ? "Finalizado" : "En proceso";
     return (
       <div className="tablePanel">
         <h2>Producción del período</h2>
-        <ReportTable headers={["Fecha", "Lote/Proceso", "Lote", "Entrada", "Salida", "Estado"]} rows={reportRows(data.rows).map((row) => [new Date(String(row.created_at)).toLocaleDateString("es-EC"), row.batch_number ?? "—", row.lot_code || "—", Number(row.input_qty).toFixed(2), Number(row.output_qty).toFixed(2), row.status ?? "—"])} empty="Sin producción registrada en el período" />
+        <p className="muted" style={{ marginTop: -4 }}>Cáscara que entró a pilar → arroz pilado y subproductos. El rendimiento es en peso (kg de salida ÷ kg de cáscara).</p>
+        <ReportTable headers={["Fecha", "Proceso", "Lote", "Socio", "Tipo", "Cáscara (kg)", "Cáscara (QQ)", "Pilado (QQ)", "Subprod. (QQ)", "Rend. %", "Estado"]}
+          rows={[
+            ...rows.map((r) => [new Date(String(r.created_at)).toLocaleDateString("es-EC"), r.batch_number ?? "—", r.lot_code || "—", r.socio ?? "—", tipo(r.operation_type), Number(r.input_kg).toLocaleString("es-EC"), r.qq_cascara != null ? Number(r.qq_cascara).toFixed(2) : "—", Number(r.output_qty).toFixed(2), Number(r.byproduct_qty).toFixed(2), r.yield_percent != null ? `${Number(r.yield_percent).toFixed(1)} %` : "—", estado(r)]),
+            ...(rows.length > 1 ? [["TOTAL", `${rows.length} procesos`, "", "", "", suma("input_kg").toLocaleString("es-EC"), suma("qq_cascara").toFixed(2), suma("output_qty").toFixed(2), suma("byproduct_qty").toFixed(2), "", ""]] : [])
+          ]}
+          empty="Sin producción registrada en el período" />
       </div>
     );
   }
