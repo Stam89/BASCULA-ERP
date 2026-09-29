@@ -1351,6 +1351,7 @@ type ComprarProdForm = { buyer_accionista_id: string; items: ComprarProdLine[] }
 
 type AccountsReceivable = {
   id: string;
+  reference_id?: string | null;
   customer_id: string | null;
   customer_name: string | null;
   sale_id: string | null;
@@ -1515,7 +1516,10 @@ const navGroups: Array<{ label: string; tabs: string[] }> = [
   { label: "Operación", tabs: ["Bascula", "Secadoras", "Produccion", "Gana", "Inventario", "Seleccion"] },
   { label: "Comercial", tabs: ["Ventas", "Compras", "Caja"] },
   { label: "Cuentas", tabs: ["Por Cobrar", "Por Pagar"] },
-  { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores", "Nomina", "Servicio Pilado"] },
+  // «Servicio de Secado» (clave "Servicio Pilado") se retiró del menú: el cobro del
+  // Solo secado (al finalizar el secado) y del servicio completo (al finalizar el
+  // pilado) ya se generan solos en Cuentas por Cobrar; su informe se ve allí.
+  { label: "Finanzas", tabs: ["Liquidaciones", "Fomentos", "Agricultores", "Nomina"] },
   { label: "Contabilidad", tabs: ["Costos Operativos", "Estados Financieros"] },
   { label: "Sistema", tabs: ["Reportes", "Configuracion"] }
 ];
@@ -1548,7 +1552,7 @@ const PERM_MATRIX: Array<{ label: string; rows: Array<{ key: string; label: stri
   { label: "FINANZAS", rows: [
     { key: "Liquidaciones", label: "Liquidaciones" }, { key: "Fomentos", label: "Fomentos" },
     { key: "Agricultores", label: "Agricultores" }, { key: "Nomina", label: "Nómina" },
-    { key: "Servicio Pilado", label: "Servicio de Secado" }, { key: "Bancos", label: "Bancos" },
+    { key: "Bancos", label: "Bancos" },
   ] },
   { label: "CONTABILIDAD", rows: [{ key: "Costos Operativos", label: "Costos Operativos" }, { key: "Estados Financieros", label: "Estados Financieros" }] },
   { label: "SISTEMA", rows: [{ key: "Reportes", label: "Reportes" }] },
@@ -6869,7 +6873,8 @@ export function App() {
   }
   // Filas normalizadas para el modal/impresión de cuentas por cobrar.
   const receivableRows = (items: AccountsReceivable[]): DetalleRow[] =>
-    items.map((ar) => ({ id: ar.id, fecha: ar.created_at, concepto: conceptoReceivable(ar), monto: Number(ar.amount), saldo: Number(ar.balance), desglose: rindeDesgloseTexto(ar) }));
+    items.map((ar) => ({ id: ar.id, fecha: ar.created_at, concepto: conceptoReceivable(ar), monto: Number(ar.amount), saldo: Number(ar.balance), desglose: rindeDesgloseTexto(ar),
+      informeId: ar.reference_type === "pilado_service" && ar.reference_id ? ar.reference_id : null }));
   // Ídem para cuentas por pagar.
   const payableRows = (items: AccountPayable[]): DetalleRow[] =>
     items.map((p) => ({ id: p.id, fecha: p.created_at, concepto: conceptoPayable(p), monto: Number(p.amount), saldo: Number(p.balance) }));
@@ -11558,6 +11563,95 @@ export function App() {
   if (!authUser) {
     return <LoginScreen onLogin={handleLogin} />;
   }
+
+  // Informe de un servicio de pilado (QQ, tarifa, desglose por presentación y
+  // producto entregado). Se abre desde el detalle del deudor en Por Cobrar.
+  const piladoReportModal = piladoReport ? (
+                <div className="modalOverlay" onClick={() => setPiladoReport(null)}>
+                  <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 640 }}>
+                    <h3>Informe de servicio de pilado</h3>
+                    <p className="muted">{new Date(piladoReport.service_date).toLocaleDateString("es-EC")} · {piladoReport.cliente}</p>
+                    <table className="cajaTable" style={{ marginTop: 10 }}>
+                      <tbody>
+                        <tr><td>Total QQ procesados</td><td className="num">{Number(piladoReport.quintals).toFixed(2)} QQ</td></tr>
+                        <tr><td>Tarifa por QQ</td><td className="num">${Number(piladoReport.rate_per_qq).toFixed(2)}</td></tr>
+                        <tr><td>Total a cobrar</td><td className="num"><strong>{money(Number(piladoReport.total))}</strong></td></tr>
+                        <tr><td>Saldo pendiente</td><td className="num">{Number(piladoReport.saldo) > 0 ? money(Number(piladoReport.saldo)) : "Pagado"}</td></tr>
+                      </tbody>
+                    </table>
+
+                    {Array.isArray(piladoReport.detalle) && piladoReport.detalle.length > 0 && (
+                      <>
+                        <h4 style={{ margin: "16px 0 6px" }}>Desglose por presentación</h4>
+                        <table className="cajaTable">
+                          <thead><tr><th>Presentación</th><th className="num">QQ</th><th className="num">Precio/QQ</th><th className="num">Subtotal</th></tr></thead>
+                          <tbody>
+                            {piladoReport.detalle.map((d, i) => (
+                              <tr key={i}>
+                                <td>{d.presentacion}</td>
+                                <td className="num">{Number(d.quintales).toFixed(2)}</td>
+                                <td className="num">${Number(d.precio_total_qq).toFixed(2)}</td>
+                                <td className="num">{money(Number(d.subtotal))}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </>
+                    )}
+
+                    {Array.isArray(piladoReport.outputs) && piladoReport.outputs.filter((o) => !o.is_byproduct).length > 0 && (
+                      <>
+                        <h4 style={{ margin: "16px 0 6px" }}>Producto entregado al cliente</h4>
+                        <table className="cajaTable">
+                          <thead>
+                            <tr>
+                              <th>Producto</th>
+                              <th className="num">Cantidad</th>
+                              <th className="num">Unidad</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {piladoReport.outputs.filter((o) => !o.is_byproduct).map((o, i) => (
+                              <tr key={i}>
+                                <td>{o.product_name}{o.presentation ? ` (${o.presentation})` : ""}</td>
+                                <td className="num">{Number(o.quantity).toFixed(2)}</td>
+                                <td className="num">{o.unit}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                          Arrocillo, polvillo y merma son retención de la piladora; no forman parte de la entrega al cliente.
+                        </p>
+                      </>
+                    )}
+
+                    {piladoReport.yield && (
+                      <>
+                        <h4 style={{ margin: "16px 0 6px" }}>Resumen técnico del proceso</h4>
+                        <table className="cajaTable">
+                          <tbody>
+                            {/* Solo la entrega al cliente: se quitaron a petición
+                                Cascarilla ingresada, Total de salida, Merma,
+                                Rendimiento y QQ de tulas. */}
+                            <tr><td>Arroz blanco entregado</td><td className="num">{Number(piladoReport.yield.white_rice_qty).toFixed(2)} {piladoReport.yield.white_rice_unit}</td></tr>
+                            <tr><td>Arrocillo 3/4</td><td className="num">{Number(piladoReport.yield.broken_rice_qty).toFixed(2)} QQ</td></tr>
+                            <tr><td>Arrocillo fino</td><td className="num">{Number(piladoReport.yield.fine_broken_rice_qty).toFixed(2)} QQ</td></tr>
+                            <tr><td>Polvillo / afrecho</td><td className="num">{Number(piladoReport.yield.bran_qty).toFixed(2)} QQ</td></tr>
+                          </tbody>
+                        </table>
+                      </>
+                    )}
+
+                    {piladoReport.notes && <p className="muted" style={{ marginTop: 12 }}>Notas: {piladoReport.notes}</p>}
+
+                    <div className="buttonRow" style={{ marginTop: 16 }}>
+                      <button type="button" className="primary" onClick={() => window.print()}>Imprimir</button>
+                      <button type="button" onClick={() => setPiladoReport(null)}>Cerrar</button>
+                    </div>
+                  </div>
+                </div>
+  ) : null;
 
   // Selector de operación (accionistas + "Matriz · Campo"). Se usa tanto en el
   // layout estándar como en el shell aislado de Campo. Botones directos (un
@@ -18542,8 +18636,10 @@ export function App() {
                 onPagarTotal={() => pagarTotalReceivableGrupo(detalleGrupo.items).catch((e) => addToast(e.message, "error"))}
                 onAbonar={(m) => abonarReceivableGrupo(detalleGrupo.items, m).catch((e) => addToast(e.message, "error"))}
                 onImprimir={() => printCuentaStatement(detalleGrupo.nombre, receivableRows(detalleGrupo.items), "Estado de cuenta por cobrar")}
+                onVerInforme={(id) => loadPiladoReport(id).catch((err) => addToast(err.message, "error"))}
               />
             )}
+            {piladoReportModal}
           </section>
           );
         })()}
@@ -18731,92 +18827,7 @@ export function App() {
                 </table>
               )}
 
-              {piladoReport && (
-                <div className="modalOverlay" onClick={() => setPiladoReport(null)}>
-                  <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 640 }}>
-                    <h3>Informe de servicio de pilado</h3>
-                    <p className="muted">{new Date(piladoReport.service_date).toLocaleDateString("es-EC")} · {piladoReport.cliente}</p>
-                    <table className="cajaTable" style={{ marginTop: 10 }}>
-                      <tbody>
-                        <tr><td>Total QQ procesados</td><td className="num">{Number(piladoReport.quintals).toFixed(2)} QQ</td></tr>
-                        <tr><td>Tarifa por QQ</td><td className="num">${Number(piladoReport.rate_per_qq).toFixed(2)}</td></tr>
-                        <tr><td>Total a cobrar</td><td className="num"><strong>{money(Number(piladoReport.total))}</strong></td></tr>
-                        <tr><td>Saldo pendiente</td><td className="num">{Number(piladoReport.saldo) > 0 ? money(Number(piladoReport.saldo)) : "Pagado"}</td></tr>
-                      </tbody>
-                    </table>
-
-                    {Array.isArray(piladoReport.detalle) && piladoReport.detalle.length > 0 && (
-                      <>
-                        <h4 style={{ margin: "16px 0 6px" }}>Desglose por presentación</h4>
-                        <table className="cajaTable">
-                          <thead><tr><th>Presentación</th><th className="num">QQ</th><th className="num">Precio/QQ</th><th className="num">Subtotal</th></tr></thead>
-                          <tbody>
-                            {piladoReport.detalle.map((d, i) => (
-                              <tr key={i}>
-                                <td>{d.presentacion}</td>
-                                <td className="num">{Number(d.quintales).toFixed(2)}</td>
-                                <td className="num">${Number(d.precio_total_qq).toFixed(2)}</td>
-                                <td className="num">{money(Number(d.subtotal))}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </>
-                    )}
-
-                    {Array.isArray(piladoReport.outputs) && piladoReport.outputs.filter((o) => !o.is_byproduct).length > 0 && (
-                      <>
-                        <h4 style={{ margin: "16px 0 6px" }}>Producto entregado al cliente</h4>
-                        <table className="cajaTable">
-                          <thead>
-                            <tr>
-                              <th>Producto</th>
-                              <th className="num">Cantidad</th>
-                              <th className="num">Unidad</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {piladoReport.outputs.filter((o) => !o.is_byproduct).map((o, i) => (
-                              <tr key={i}>
-                                <td>{o.product_name}{o.presentation ? ` (${o.presentation})` : ""}</td>
-                                <td className="num">{Number(o.quantity).toFixed(2)}</td>
-                                <td className="num">{o.unit}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                        <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>
-                          Arrocillo, polvillo y merma son retención de la piladora; no forman parte de la entrega al cliente.
-                        </p>
-                      </>
-                    )}
-
-                    {piladoReport.yield && (
-                      <>
-                        <h4 style={{ margin: "16px 0 6px" }}>Resumen técnico del proceso</h4>
-                        <table className="cajaTable">
-                          <tbody>
-                            {/* Solo la entrega al cliente: se quitaron a petición
-                                Cascarilla ingresada, Total de salida, Merma,
-                                Rendimiento y QQ de tulas. */}
-                            <tr><td>Arroz blanco entregado</td><td className="num">{Number(piladoReport.yield.white_rice_qty).toFixed(2)} {piladoReport.yield.white_rice_unit}</td></tr>
-                            <tr><td>Arrocillo 3/4</td><td className="num">{Number(piladoReport.yield.broken_rice_qty).toFixed(2)} QQ</td></tr>
-                            <tr><td>Arrocillo fino</td><td className="num">{Number(piladoReport.yield.fine_broken_rice_qty).toFixed(2)} QQ</td></tr>
-                            <tr><td>Polvillo / afrecho</td><td className="num">{Number(piladoReport.yield.bran_qty).toFixed(2)} QQ</td></tr>
-                          </tbody>
-                        </table>
-                      </>
-                    )}
-
-                    {piladoReport.notes && <p className="muted" style={{ marginTop: 12 }}>Notas: {piladoReport.notes}</p>}
-
-                    <div className="buttonRow" style={{ marginTop: 16 }}>
-                      <button type="button" className="primary" onClick={() => window.print()}>Imprimir</button>
-                      <button type="button" onClick={() => setPiladoReport(null)}>Cerrar</button>
-                    </div>
-                  </div>
-                </div>
-              )}
+              {piladoReportModal}
             </div>
           </section>
           );
@@ -23833,7 +23844,7 @@ function EstadoBadge({ status, vencido }: { status: string; vencido: boolean }) 
 }
 
 // Fila normalizada del estado de cuenta (sirve para cobrar y pagar).
-type DetalleRow = { id: string; fecha: string; concepto: string; monto: number; saldo: number; desglose?: string | null };
+type DetalleRow = { id: string; fecha: string; concepto: string; monto: number; saldo: number; desglose?: string | null; informeId?: string | null };
 
 // Modal "Estado de cuenta" GENÉRICO: mismo diseño y UX para Por Cobrar y Por
 // Pagar (solo cambia el color). Tabla de deudas + acciones (total / abono
@@ -23848,6 +23859,8 @@ function CuentaDetalleModal(props: {
   onPagarTotal: () => void;
   onAbonar: (monto: number) => void;
   onImprimir: () => void;
+  /** Abre el informe del servicio (p. ej. pilado) de una fila que lo tenga. */
+  onVerInforme?: (informeId: string) => void;
 }) {
   const saldoTotal = props.rows.reduce((s, r) => s + Number(r.saldo), 0);
   const barColor = props.color === "cobrar" ? "#16a34a" : "#dc2626";
@@ -23876,7 +23889,8 @@ function CuentaDetalleModal(props: {
                 return (
                   <tr key={r.id}>
                     <td>{(r.fecha || "").slice(0, 10)}</td>
-                    <td>{r.concepto}{r.desglose && <div style={{ fontSize: 11, color: "#6b21a8", marginTop: 2 }}>{r.desglose}</div>}</td>
+                    <td>{r.concepto}{r.desglose && <div style={{ fontSize: 11, color: "#6b21a8", marginTop: 2 }}>{r.desglose}</div>}
+                      {r.informeId && props.onVerInforme && <div><button type="button" className="vdTarifaLink" onClick={() => props.onVerInforme!(r.informeId!)}>📄 Ver informe del servicio</button></div>}</td>
                     <td className="num">{money(r.monto)}</td>
                     <td className="num" style={{ color: "#0891b2" }}>{money(abonos)}</td>
                     <td className="num" style={{ fontWeight: 700, color: barColor }}>{money(r.saldo)}</td>

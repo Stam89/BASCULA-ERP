@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Se retiro el modulo «Servicio de Secado» del menu (2026-09-29)
+- Pedido del usuario: innecesario porque el cobro del Solo secado (autoCobrarSecadoServicio al finalizar el secado) y del servicio completo/pilado (al finalizar en Produccion) ya van solos a Cuentas por Cobrar (verificado: los 2 lotes SECADO tienen su CxC).
+- Quitado de navGroups (Finanzas) y de la lista de permisos. El codigo de la pestana (clave "Servicio Pilado") queda sin enlazar; si se vuelve a necesitar basta con devolverlo a navGroups.
+- Lo unico propio del modulo, el informe del servicio de pilado (QQ, tarifa, desglose por presentacion, producto entregado), ahora se abre desde Por Cobrar → detalle del deudor → «📄 Ver informe del servicio» (`piladoReportModal`, `CuentaDetalleModal.onVerInforme`, `DetalleRow.informeId`).
+
 ### Cambio rapido de accionista / Transporte (2026-09-29)
 - Menu lateral: el select de operacion paso a botones directos (🏭 Matriz, 🚜 Transporte y Cosechadora, 🤝 socios), activo resaltado; tambien dentro de CampoWorkspace (prop operationSelector). Logica unica `opcionesOperacion` / `valorOperacionActual` / `irAOperacion` (junto a switchAccionista).
 - Atajos Alt+1…Alt+9 en el orden de los botones (se ignora Ctrl+Alt = AltGr).
