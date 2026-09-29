@@ -4259,3 +4259,6 @@ textarea::placeholder {
   .cj-toolbar-group { justify-content: space-between; }
   .cj-menu, .cj-menu--right { left: 0; right: auto; min-width: min(280px, calc(100vw - 48px)); }
 }
+/* Movimientos junto al formulario: la tabla se desplaza en horizontal en vez de cortarse. */
+.cj-col-list > div:not(.cj-panel-head) { overflow-x: auto; }
+.cj-form input[type="radio"], .cj-form input[type="checkbox"] { width: 18px !important; height: 18px !important; min-width: 18px; flex: 0 0 18px; margin: 0; padding: 0; accent-color: #2563eb; box-shadow: none; }
