@@ -1976,17 +1976,20 @@ export function App() {
     return inCampo ? (activeAccionistaId ?? "") + OPERACION_CAMPO : (activeAccionistaId ?? "");
   }
   function irAOperacion(v: string) {
+    // Módulo en el que se estaba antes de entrar a Transporte (para volver a él).
+    const antesDeCampo = () => { try { return localStorage.getItem("bascula-erp:tab-antes-campo") || "Dashboard"; } catch { return "Dashboard"; } };
     if (v.endsWith(OPERACION_CAMPO)) {
       const id = v.slice(0, -OPERACION_CAMPO.length);
+      if (activeTab !== "Caja de Campo") { try { localStorage.setItem("bascula-erp:tab-antes-campo", activeTab); } catch { /* ignore */ } }
       if (id === activeAccionistaId) setActiveTab("Caja de Campo");
       else { try { localStorage.setItem("bascula-erp:campo-pending", "1"); } catch { /* ignore */ } switchAccionista(id); }
       return;
     }
     if (v !== activeAccionistaId) {
       // Recordar el módulo para volver a él tras recargar con el nuevo accionista.
-      try { localStorage.setItem("bascula-erp:tab-pending", activeTab === "Caja de Campo" ? "Dashboard" : activeTab); } catch { /* ignore */ }
+      try { localStorage.setItem("bascula-erp:tab-pending", activeTab === "Caja de Campo" ? antesDeCampo() : activeTab); } catch { /* ignore */ }
       switchAccionista(v);
-    } else if (activeTab === "Caja de Campo") setActiveTab("Dashboard");
+    } else if (activeTab === "Caja de Campo") setActiveTab(antesDeCampo());
   }
 
   // Tras iniciar sesión, poblar la lista de accionistas y el activo desde el
