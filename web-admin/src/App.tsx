@@ -847,6 +847,17 @@ type DryingTunnelLot = {
 };
 
 /** Secado activo de un motor (puede ser de cualquier accionista). */
+// Resumen del combustible de una corrida ya cerrada (para compartir el costo).
+type CostoSecadoFinal = {
+  motor: number;
+  fecha: string;
+  qq: number;
+  gas: number;
+  diesel: number;
+  consumo: { bombona: number; cilindros: number; diesel: number };
+  partidas: Array<{ tunel: number; lote: string; socio: string | null; qq: number; gas: number; diesel: number }>;
+};
+
 type MotorActiveReport = {
   id: string;
   tunnel_number: number;
@@ -2036,8 +2047,17 @@ export function App() {
   const [dryingFinalizeConfirm, setDryingFinalizeConfirm] = useState<{
     report: DryingTunnelReport;
     formElement: HTMLFormElement;
+    /** Túnel con varias partidas (propio + servicio) en un solo formulario. */
+    reports?: DryingTunnelReport[];
   } | null>(null);
   const [dryingFinalizeBusy, setDryingFinalizeBusy] = useState(false);
+  // «Confirmar y Finalizar Secado» (combustible): pide confirmación antes de cerrar.
+  const [fuelConfirmOpen, setFuelConfirmOpen] = useState(false);
+  const [fuelConfirmBusy, setFuelConfirmBusy] = useState(false);
+  // Al cerrar el motor se ofrece compartir el costo del combustible por QQ.
+  const [costoSecadoFinal, setCostoSecadoFinal] = useState<CostoSecadoFinal | null>(null);
+  const costoSecadoRef = useRef<HTMLDivElement | null>(null);
+  const [costoCompartiendo, setCostoCompartiendo] = useState(false);
   // Secados sin finalizar del motor (de TODOS los accionistas: el motor es
   // compartido); entre ellos se reparte el combustible según sus QQ.
   const [motorActiveReports, setMotorActiveReports] = useState<MotorActiveReport[]>([]);
@@ -8926,19 +8946,20 @@ export function App() {
       await refresh();
     }
 
-  async function cerrarCombustibleMotor(): Promise<boolean> {
+  type RepartoCombustible = { costo_por_qq: number; finalized?: number; reparto?: Array<{ drying_report_id: string; quintales: number; gas: number; diesel: number; total: number }> };
+  async function cerrarCombustibleMotor(): Promise<RepartoCombustible | null> {
     // Seguridad: no registrar combustible si las tarifas no cargaron o falta el
     // precio de algo consumido (evita un gasto guardado en $0).
     if (combustibleBloqueado) {
       setMessage(!laborRatesLoaded
         ? "No se pudieron cargar las tarifas. Reintenta antes de registrar el combustible."
         : "Configura el precio del combustible en Configuración → Tarifas antes de registrar (evita un gasto en $0).");
-      return false;
+      return null;
     }
-    if (!(combustibleTotal > 0)) { setMessage("Ingresa los medidores del combustible del motor"); return false; }
+    if (!(combustibleTotal > 0)) { setMessage("Ingresa los medidores del combustible del motor"); return null; }
     const activos = await apiGet<MotorActiveReport[]>(`/process-flow/drying/motor/${motorActivo}/active`).catch(() => [] as MotorActiveReport[]);
-    if (activos.length === 0) { addToast("Este motor no tiene secados pendientes de combustible.", "error"); return false; }
-    const fuel = await apiPost<{ costo_por_qq: number; finalized?: number }>("/process-flow/drying/motor-fuel", {
+    if (activos.length === 0) { addToast("Este motor no tiene secados pendientes de combustible.", "error"); return null; }
+    const fuel = await apiPost<RepartoCombustible>("/process-flow/drying/motor-fuel", {
       motor_number: motorActivo,
       gas_bombona_inicio: Number(gasForm.bombona_inicio || 0),
       gas_bombona_fin: Number(gasForm.bombona_fin || 0),
@@ -8953,11 +8974,36 @@ export function App() {
     addToast(`Combustible del Motor ${motorActivo} repartido (${money(fuel.costo_por_qq)}/QQ) y ${fuel.finalized ?? 0} secado(s) finalizado(s)`, "success");
     await refresh();
     await loadMotorActive();
-    return true;
+    return fuel;
   }
 
   // El modal solo se abre cuando el backend confirma que este es el último túnel
   // físico activo. En ese caso el combustible es obligatorio para apagar el motor.
+  // Valida el cierre del motor (horas, combustible y precios) sin escribir nada.
+  function validarFinalizarSecado(): boolean {
+    if (motorActiveReports.length === 0) {
+      addToast("Primero guarda el informe del motor antes de finalizar el secado.", "error");
+      return false;
+    }
+    const sinHoras = motorActiveReports.filter((report) => !report.dry_start_at || !report.dry_end_at);
+    if (sinHoras.length > 0) {
+      const tuneles = [...new Set(sinHoras.map((report) => report.tunnel_number))].join(", ");
+      addToast(`Completa la hora de inicio y la hora final del/los túnel(es) ${tuneles} antes de finalizar.`, "error");
+      return false;
+    }
+    if (!combustibleConsumo || !(combustibleTotal > 0)) {
+      addToast("Registra el combustible utilizado antes de apagar el motor.", "error");
+      return false;
+    }
+    if (combustibleBloqueado) {
+      setMessage(!laborRatesLoaded
+        ? "No se pudieron cargar las tarifas. Reintenta antes de finalizar."
+        : "Configura el precio del combustible en Configuración → Tarifas antes de finalizar (evita un gasto en $0).");
+      return false;
+    }
+    return true;
+  }
+
   async function confirmarFinalizarSecado() {
     if (motorActiveReports.length === 0) {
       addToast("Primero guarda el informe del motor antes de finalizar el secado.", "error");
@@ -8979,8 +9025,76 @@ export function App() {
         : "Configura el precio del combustible en Configuración → Tarifas antes de finalizar (evita un gasto en $0).");
       return;
     }
+    // Foto de la corrida ANTES de cerrarla (lote y socio de cada partida).
+    const partidasAntes = motorActiveReports.map((r) => ({ id: r.id, tunel: r.tunnel_number, lote: r.lot_code, socio: r.accionista_name }));
+    const consumo = { bombona: gasBombonaTotal, cilindros: Number(gasForm.cilindro_cantidad || 0), diesel: dieselTotal };
+    const motor = motorActivo;
     const cerrado = await cerrarCombustibleMotor();
-    if (cerrado) setFuelModalOpen(false);
+    if (cerrado) {
+      setFuelModalOpen(false);
+      // Ofrece compartir el costo del combustible por QQ (valores guardados).
+      const reparto = cerrado.reparto ?? [];
+      const partidas = reparto.map((p) => {
+        const info = partidasAntes.find((x) => x.id === p.drying_report_id);
+        return { tunel: info?.tunel ?? 0, lote: info?.lote ?? "—", socio: info?.socio ?? null, qq: Number(p.quintales) || 0, gas: Number(p.gas) || 0, diesel: Number(p.diesel) || 0 };
+      }).sort((a, b) => a.tunel - b.tunel);
+      setCostoSecadoFinal({
+        motor,
+        fecha: new Date().toISOString(),
+        qq: round2(partidas.reduce((a, p) => a + p.qq, 0)),
+        gas: round2(partidas.reduce((a, p) => a + p.gas, 0)),
+        diesel: round2(partidas.reduce((a, p) => a + p.diesel, 0)),
+        consumo,
+        partidas
+      });
+    }
+  }
+
+  // Comparte la tarjeta del costo del combustible (misma mecánica que el recibo
+  // del túnel): Web Share → portapapeles (WhatsApp Web) → descarga del PNG.
+  async function compartirCostoSecado() {
+    const el = costoSecadoRef.current;
+    const c = costoSecadoFinal;
+    if (!el || !c || costoCompartiendo) return;
+    setCostoCompartiendo(true);
+    try {
+      const { default: html2canvas } = await import("html2canvas");
+      const canvas = await html2canvas(el, { backgroundColor: "#ffffff", scale: 2, useCORS: true });
+      const blob: Blob | null = await new Promise((res) => canvas.toBlob((b) => res(b), "image/png"));
+      if (!blob) throw new Error("No se pudo generar la imagen");
+      const nombre = `costo-combustible-motor-${c.motor}.png`;
+      const file = new File([blob], nombre, { type: "image/png" });
+      const gq = c.qq > 0 ? c.gas / c.qq : 0;
+      const dq = c.qq > 0 ? c.diesel / c.qq : 0;
+      const texto = `⛽ Combustible Motor ${c.motor}: ${money(gq)} gas + ${money(dq)} diésel por QQ (${money(c.gas)} gas + ${money(c.diesel)} diésel ÷ ${c.qq.toFixed(2)} QQ)`;
+      const nav = navigator as Navigator & { canShare?: (d: unknown) => boolean };
+      const ClipItem = (window as unknown as { ClipboardItem?: typeof ClipboardItem }).ClipboardItem;
+      const descargar = () => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a"); a.href = url; a.download = nombre; document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+      };
+      if (nav.canShare && nav.canShare({ files: [file] }) && navigator.share) {
+        await navigator.share({ files: [file], title: "Costo de combustible", text: texto });
+        addToast("Compartido ✅", "success");
+      } else if (navigator.clipboard && typeof navigator.clipboard.write === "function" && ClipItem) {
+        try {
+          await navigator.clipboard.write([new ClipItem({ "image/png": blob })]);
+          addToast("✅ Imagen copiada al portapapeles. Pégala en tu WhatsApp (Ctrl+V)", "success");
+        } catch {
+          descargar();
+          addToast("Imagen descargada. Adjúntala en WhatsApp.", "success");
+        }
+      } else {
+        descargar();
+        addToast("Imagen descargada. Adjúntala en WhatsApp.", "success");
+      }
+    } catch (err) {
+      if ((err as Error)?.name === "AbortError") return;
+      addToast(err instanceof Error ? err.message : "No se pudo compartir", "error");
+    } finally {
+      setCostoCompartiendo(false);
+    }
   }
 
   // Guarda/finaliza UN secado por su id (para editar las dos secadoras en
@@ -9081,12 +9195,79 @@ export function App() {
     setEditingDryingReport(null);
   }
 
+  // Túnel con varias partidas (p. ej. arroz propio + servicio): salen juntas del
+  // túnel, así que se editan en UN formulario. Los datos comunes (fecha, humedad,
+  // secador, horas, observación) se aplican a todas; cada partida conserva su
+  // lote, tipo de arroz y empaque de botada. Al finalizar, el backend cierra
+  // todas las partidas del túnel a la vez y cada lote sigue su camino.
+  async function guardarTunelAgrupado(reps: DryingTunnelReport[], formElement: HTMLFormElement, finalizar: boolean) {
+    if (reps.length === 0) return;
+    const form = new FormData(formElement);
+    const startInput = formElement.elements.namedItem("dry_start_at") as HTMLInputElement | null;
+    const endInput = formElement.elements.namedItem("dry_end_at") as HTMLInputElement | null;
+    const operatorName = String(form.get("operator_name") ?? "").trim();
+    if (operatorName.length < 2) {
+      addToast("Indica quién fue el secador responsable para registrar correctamente la nómina.", "error");
+      return;
+    }
+    if (finalizar && (!startInput?.value || !endInput?.value)) {
+      addToast("Completa la hora de inicio y la hora final antes de finalizar este secado.", "error");
+      return;
+    }
+    for (const rep of reps) {
+      await apiPut<DryingTunnelReport>(`/process-flow/drying/${rep.id}`, {
+        rice_type: form.get(`rice_type__${rep.id}`) || rep.rice_type || "0.11",
+        moisture_before: numberOrUndefined(form.get("moisture_before")),
+        filled_at: stringOrUndefined(form.get("filled_at")),
+        dry_start_at: stringOrUndefined(form.get("dry_start_at")),
+        dry_end_at: stringOrUndefined(endInput?.value ?? null),
+        finalize: false,
+        dryer_name: rep.dryer_name,
+        operator_name: operatorName,
+        notes: form.get("notes") || undefined,
+        botada_empaque: (form.get(`botada_empaque__${rep.id}`) as string) || undefined,
+        botada_sacos: numberOrUndefined(form.get(`botada_sacos__${rep.id}`))
+      });
+    }
+    const tunel = reps[0].tunnel_number;
+    if (finalizar) {
+      const result = await apiPost<{
+        requires_fuel: boolean;
+        finalized: number;
+        remaining_tunnels: number;
+        motor_number: 1 | 2;
+        tunnel_number: number;
+      }>("/process-flow/drying/tunnel-finalize", {
+        drying_report_id: reps[0].id,
+        dry_start_at: startInput!.value,
+        dry_end_at: endInput!.value,
+        created_by: authUser?.id
+      });
+      if (result.requires_fuel) {
+        setMotorActivo(result.motor_number);
+        setFuelModalOpen(true);
+        addToast("Este es el último túnel. Registra el combustible para apagar el motor.", "warn");
+        setMessage("Este es el último túnel. Por favor, registre el combustible para apagar el motor.");
+      } else {
+        addToast(`Túnel ${result.tunnel_number} finalizado (${result.finalized} partidas). Quedan ${result.remaining_tunnels} túnel(es) activos en el motor.`, "success");
+        setMessage(`Secado del Túnel ${result.tunnel_number} finalizado sin cerrar el motor.`);
+      }
+    } else {
+      setMessage(`Secado del Túnel ${tunel} actualizado (${reps.length} partidas).`);
+    }
+    await refresh();
+    await loadMotorActive();
+    safeResetForm(formElement);
+    setEditingDryingReport(null);
+  }
+
   async function confirmDryingFinalize() {
     const pending = dryingFinalizeConfirm;
     if (!pending || dryingFinalizeBusy) return;
     setDryingFinalizeBusy(true);
     try {
-      await guardarSecadoEditado(pending.report, pending.formElement, true);
+      if (pending.reports && pending.reports.length > 1) await guardarTunelAgrupado(pending.reports, pending.formElement, true);
+      else await guardarSecadoEditado(pending.report, pending.formElement, true);
       setDryingFinalizeConfirm(null);
     } finally {
       setDryingFinalizeBusy(false);
@@ -11877,7 +12058,93 @@ export function App() {
                       <span className="muted"> · {lista.length} partida(s) del mismo túnel. El combustible se solicitará únicamente si es el último túnel activo del motor.</span>
                     </div>
                     <div className="panelGrid" style={{ gap: 16 }}>
-                      {lista.map((rep) => {
+                      {lista.length > 1 && lista.every((r) => r.status !== "COMPLETED") ? (() => {
+                        const base = lista[0];
+                        const secadora = base.dryer_name ?? `Secadora ${base.tunnel_number}`;
+                        const qqTunel = lista.reduce((acc, r) => acc + Number(r.total_quintals ?? 0), 0);
+                        return (
+                          <form
+                            key={`grupo-${base.id}`}
+                            className="formPanel dryingForm"
+                            style={{ gridColumn: "1 / -1" }}
+                            onSubmit={(event) => { event.preventDefault(); guardarTunelAgrupado(lista, event.currentTarget, false).catch((error) => setMessage(error.message)); }}
+                          >
+                            <h3 style={{ marginTop: 0 }}>🌀 {secadora} · Túnel {base.tunnel_number} <span className="editBadge">✎ En secado</span></h3>
+                            <p className="muted" style={{ marginTop: -4 }}>
+                              {lista.length} partidas en el mismo túnel: salen juntas y se finalizan juntas. Cada partida conserva su lote
+                              (el arroz propio pasa a inventario/Producción y el servicio a su cobro).
+                            </p>
+                            {lista.map((rep) => {
+                              const l0 = rep.lots?.[0];
+                              const col = opTypeBadgeColors(l0?.operation_type, l0?.is_maquila);
+                              return (
+                                <div key={rep.id} style={{ border: "1px solid var(--c-border)", borderRadius: 10, padding: 12, marginBottom: 10 }}>
+                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+                                    <span style={{ background: col.bg, color: col.fg, borderRadius: 999, padding: "3px 10px", fontSize: 12.5, fontWeight: 800 }}>
+                                      {opTypeBadgeLabel(l0?.operation_type, l0?.is_maquila)}
+                                    </span>
+                                    <strong>{Number(rep.total_quintals ?? 0).toFixed(2)} QQ</strong>
+                                  </div>
+                                  <DryingLotSelector
+                                    selectedLots={rep.lots}
+                                    editing
+                                    onRemove={() => undefined}
+                                    onChangeServiceType={(lotId, op) => cambiarTipoServicioLote(rep.id, lotId, op).catch((error) => setMessage(error.message))}
+                                    changingLotId={changingServiceLotId}
+                                  />
+                                  <Select name={`rice_type__${rep.id}`} label="Tipo de arroz" rows={[["0.11", "0.11"], ["CORRIENTE", "Corriente"]]} defaultValue={rep.rice_type ?? "0.11"} />
+                                  {renderEmpaqueField({
+                                    keyId: `${rep.id}-bot`,
+                                    empaqueName: `botada_empaque__${rep.id}`,
+                                    sacosName: `botada_sacos__${rep.id}`,
+                                    label: "📦 Empaque de botada (vaciado)",
+                                    defEmpaque: rep.botada_empaque,
+                                    defSacos: rep.botada_sacos ?? null,
+                                    qq: Number(rep.total_quintals ?? 0)
+                                  })}
+                                </div>
+                              );
+                            })}
+                            <div className="totalBox"><span>Peso total del túnel</span><strong>{qqTunel.toFixed(2)} QQ</strong></div>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                              <Input name="filled_at" label="Fecha de llenado" type="date" defaultValue={(base.filled_at ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10)} required={false} />
+                              <Input name="moisture_before" label="Humedad inicial %" type="number" defaultValue={String(base.moisture_before ?? 0)} required={false} />
+                            </div>
+                            <Input name="operator_name" label="Nombre del secador" placeholder="Quien seca este túnel (para la nómina)" defaultValue={base.operator_name ?? ""} required />
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                              <Input name="dry_start_at" label="Hora secado inicio" type="datetime-local" defaultValue={dateTimeLocalValue(base.dry_start_at)} required={false} />
+                              <Input name="dry_end_at" label="Hora secado final" type="datetime-local" defaultValue={dateTimeLocalValue(base.dry_end_at)} required={false} />
+                            </div>
+                            <Input name="notes" label="Observacion" defaultValue={base.notes ?? "Secado registrado"} required={false} />
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 4 }}>
+                              <button className="primary" style={{ flex: "1 1 160px", minHeight: 44, padding: "8px 16px", textAlign: "center", whiteSpace: "normal", borderRadius: 10 }}>💾 Guardar cambios</button>
+                              <button
+                                type="button"
+                                className="btnSecondary"
+                                title="Copia la fecha de llenado, hora de inicio y secador de este túnel a todos los túneles activos del mismo motor"
+                                style={{ flex: "1 1 160px", minHeight: 44, padding: "8px 16px", textAlign: "center", whiteSpace: "normal", borderRadius: 10 }}
+                                onClick={(e) => {
+                                  const form = e.currentTarget.closest("form") as HTMLFormElement | null;
+                                  if (form) aplicarCorridaATodos(base, form).catch((error) => setMessage(error.message));
+                                }}
+                              >
+                                📌 Aplicar al motor
+                              </button>
+                              <button
+                                type="button"
+                                className="primary"
+                                style={{ flex: "1 1 160px", minHeight: 44, padding: "8px 16px", textAlign: "center", whiteSpace: "normal", borderRadius: 10, background: "var(--c-success)" }}
+                                onClick={(e) => {
+                                  const form = e.currentTarget.closest("form") as HTMLFormElement | null;
+                                  if (form) setDryingFinalizeConfirm({ report: base, formElement: form, reports: lista });
+                                }}
+                              >
+                                ✅ Finalizar túnel ({lista.length} partidas)
+                              </button>
+                            </div>
+                          </form>
+                        );
+                      })() : lista.map((rep) => {
                         const secadora = rep.dryer_name ?? `Secadora ${rep.tunnel_number}`;
                         const done = rep.status === "COMPLETED";
                         return (
@@ -12129,7 +12396,9 @@ export function App() {
                 <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520, width: "100%" }} role="dialog" aria-modal="true" aria-labelledby="drying-finalize-title">
                   <h3 id="drying-finalize-title" style={{ marginTop: 0 }}>⚠️ Confirmar finalización</h3>
                   <p style={{ lineHeight: 1.55 }}>
-                    ¿Estás seguro de finalizar este secado? Una vez cerrado el lote, los quintales pasarán a inventario o facturación y no podrás modificar los datos.
+                    {dryingFinalizeConfirm.reports && dryingFinalizeConfirm.reports.length > 1
+                      ? `¿Estás seguro de finalizar este túnel? Se cerrarán sus ${dryingFinalizeConfirm.reports.length} partidas al mismo tiempo: el arroz propio pasará a inventario/Producción y el servicio a su cobro. No podrás modificar los datos.`
+                      : "¿Estás seguro de finalizar este secado? Una vez cerrado el lote, los quintales pasarán a inventario o facturación y no podrás modificar los datos."}
                   </p>
                   <div className="buttonRow" style={{ marginTop: 16 }}>
                     <button type="button" onClick={() => setDryingFinalizeConfirm(null)} disabled={dryingFinalizeBusy}>Cancelar</button>
@@ -12166,7 +12435,7 @@ export function App() {
                     <button type="button" className="primary" style={{ background: "var(--c-success)", fontWeight: 800 }}
                       disabled={combustibleBloqueado}
                       title={combustibleBloqueado ? "Configura el precio del combustible en Tarifas (evita guardar un gasto en $0)" : undefined}
-                      onClick={() => confirmarFinalizarSecado().catch((error) => setMessage(error.message))}>
+                      onClick={() => { if (validarFinalizarSecado()) setFuelConfirmOpen(true); }}>
                       ✅ Confirmar y Finalizar Secado
                     </button>
                     <button type="button" onClick={() => setFuelModalOpen(false)}>Cancelar</button>
@@ -12174,6 +12443,94 @@ export function App() {
                 </div>
               </div>
             )}
+
+            {/* Confirmación antes de cerrar el motor con su combustible. */}
+            {fuelConfirmOpen && (
+              <div className="modalOverlay" style={{ zIndex: 1100 }} onClick={() => { if (!fuelConfirmBusy) setFuelConfirmOpen(false); }}>
+                <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 500, width: "100%" }} role="dialog" aria-modal="true">
+                  <h3 style={{ marginTop: 0 }}>⚠️ ¿Seguro que quieres finalizar el secado?</h3>
+                  <p style={{ lineHeight: 1.55 }}>
+                    Se registrará el combustible del Motor {motorActivo} (<strong>{money(gasCostoTotal)} gas + {money(dieselCosto)} diésel</strong>),
+                    se repartirá entre los secados de la corrida y se cerrarán. Después no podrás modificar los datos.
+                  </p>
+                  <div className="buttonRow" style={{ marginTop: 16 }}>
+                    <button type="button" onClick={() => setFuelConfirmOpen(false)} disabled={fuelConfirmBusy}>Cancelar</button>
+                    <button
+                      type="button"
+                      className="primary"
+                      style={{ background: "var(--c-success)", fontWeight: 800 }}
+                      disabled={fuelConfirmBusy}
+                      onClick={() => {
+                        setFuelConfirmBusy(true);
+                        confirmarFinalizarSecado()
+                          .catch((error) => setMessage(error.message))
+                          .finally(() => { setFuelConfirmBusy(false); setFuelConfirmOpen(false); });
+                      }}
+                    >
+                      {fuelConfirmBusy ? "Finalizando…" : "Sí, finalizar"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Secado cerrado: tarjeta del costo del combustible por QQ, lista para
+                compartir por WhatsApp (se abre sola al confirmar). */}
+            {costoSecadoFinal && (() => {
+              const c = costoSecadoFinal;
+              const gq = c.qq > 0 ? c.gas / c.qq : 0;
+              const dq = c.qq > 0 ? c.diesel / c.qq : 0;
+              const fecha = new Date(c.fecha).toLocaleDateString("es-EC", { day: "2-digit", month: "2-digit", year: "numeric" });
+              return (
+                <div className="modalOverlay" onClick={() => { if (!costoCompartiendo) setCostoSecadoFinal(null); }}>
+                  <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480, width: "100%" }} role="dialog" aria-modal="true">
+                    <h3 style={{ marginTop: 0 }}>✅ Secado finalizado</h3>
+                    <p className="muted" style={{ marginTop: -4 }}>¿Quieres compartir el costo del combustible?</p>
+                    <div ref={costoSecadoRef} style={{ background: "#ffffff", color: "#1f2937", borderRadius: 14, padding: 18, border: "1px solid #e5e7eb", fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+                        <strong style={{ fontSize: 15 }}>⛽ Combustible · Motor {c.motor}</strong>
+                        <span style={{ fontSize: 12, color: "#6b7280" }}>{fecha}</span>
+                      </div>
+                      {appSettings.business_name ? <div style={{ fontSize: 12, color: "#6b7280" }}>{appSettings.business_name}</div> : null}
+                      <div style={{ marginTop: 12, padding: "12px 14px", borderRadius: 12, border: "1px solid #bbf7d0", background: "#f0fdf4" }}>
+                        <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: ".05em", color: "#6b7280" }}>COMBUSTIBLE POR QQ</div>
+                        <div style={{ fontSize: 24, fontWeight: 900, color: "#15803d", lineHeight: 1.2 }}>{money(gq)} gas + {money(dq)} diésel</div>
+                        <div style={{ fontSize: 12.5, color: "#6b7280" }}>{money(c.gas)} gas + {money(c.diesel)} diésel ÷ {c.qq.toFixed(2)} QQ</div>
+                      </div>
+                      <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 12, fontSize: 12.5 }}>
+                        <thead>
+                          <tr style={{ color: "#6b7280", textAlign: "left" }}>
+                            <th style={{ padding: "4px 2px" }}>Túnel</th><th style={{ padding: "4px 2px" }}>Lote</th>
+                            <th style={{ padding: "4px 2px", textAlign: "right" }}>QQ</th><th style={{ padding: "4px 2px", textAlign: "right" }}>Gas</th><th style={{ padding: "4px 2px", textAlign: "right" }}>Diésel</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {c.partidas.map((p, i) => (
+                            <tr key={i} style={{ borderTop: "1px solid #f1f5f9" }}>
+                              <td style={{ padding: "4px 2px" }}>{p.tunel || "—"}</td>
+                              <td style={{ padding: "4px 2px" }}>{p.lote}{p.socio ? <span style={{ color: "#6b7280" }}> · {p.socio}</span> : null}</td>
+                              <td style={{ padding: "4px 2px", textAlign: "right" }}>{p.qq.toFixed(2)}</td>
+                              <td style={{ padding: "4px 2px", textAlign: "right" }}>{money(p.gas)}</td>
+                              <td style={{ padding: "4px 2px", textAlign: "right" }}>{money(p.diesel)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <div style={{ marginTop: 10, fontSize: 12, color: "#6b7280" }}>
+                        Consumo: bombona {c.consumo.bombona.toFixed(2)}% · cilindros {c.consumo.cilindros} · diésel {c.consumo.diesel.toFixed(2)} · Total {money(c.gas + c.diesel)}
+                      </div>
+                    </div>
+                    <div className="buttonRow" style={{ marginTop: 14 }}>
+                      <button type="button" className="primary" style={{ background: "#16a34a", fontWeight: 800 }} disabled={costoCompartiendo}
+                        onClick={() => compartirCostoSecado().catch(() => undefined)}>
+                        {costoCompartiendo ? "Generando imagen…" : "📲 Compartir por WhatsApp"}
+                      </button>
+                      <button type="button" onClick={() => setCostoSecadoFinal(null)} disabled={costoCompartiendo}>Cerrar</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
             <DryingReportsPanel reports={dryingReports} onEdit={editDryingReport} onShare={compartirTunelWhatsApp} sharingId={tunelCompartiendoId} />
 

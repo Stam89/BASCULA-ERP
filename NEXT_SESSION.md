@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Secadoras: tunel con varias partidas en UN formulario + confirmacion y compartir costo (2026-09-29)
+- Editor del motor: si el tunel tiene >1 partida en proceso (p. ej. propio COMPRA + servicio SECADO_PILADO, que `groupDryingEntries` separa en reportes distintos), se muestra UN formulario: cada partida con su badge, lotes, tipo de arroz (`rice_type__<id>`) y empaque de botada (`botada_empaque__<id>`/`botada_sacos__<id>`); datos comunes una vez. `guardarTunelAgrupado` hace PUT por partida y un solo `/drying/tunnel-finalize` (el backend ya cierra todos los reportes hermanos del tunel). Con 1 partida no cambia nada.
+- Modal de combustible: «Confirmar y Finalizar Secado» valida (`validarFinalizarSecado`) y pide confirmacion (`fuelConfirmOpen`) antes de `confirmarFinalizarSecado`.
+- Al cerrar el motor, `cerrarCombustibleMotor` devuelve el reparto del backend y se abre la tarjeta «Combustible por QQ» (gas/diesel por QQ, detalle por tunel/lote) con «📲 Compartir por WhatsApp» (`compartirCostoSecado`: share → portapapeles → descarga).
+
 ### Revision completa + sync de bascula con tickets renumerados (2026-09-28)
 - Barrido: tsc/tests OK; 142 GET x 3 socios sin errores; 21 modulos en navegador (CEYRO/ROVINSON/STALYN) sin errores de consola; ~35 chequeos de integridad de datos OK (stock, cascara por lote, CxC/CxP y espejos, caja, ventas/pedidos, secado, cuadrilla, sacos).
 - Bug: al borrar un ticket en la app y renumerar, el registro que nacio como #280 queda como #279 con el id estable de "#280"; el ticket NUEVO #280 chocaba en la PK y `importBasculaTickets` lo omitia en cada sync (#280 y #296). Arreglo: si el id estable esta ocupado por otro ticket (otra llave negocio/modo/numero), se usa `stableUuid(key#n)`. La identidad sigue siendo (negocio, modo, numero).
