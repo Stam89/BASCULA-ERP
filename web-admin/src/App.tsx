@@ -8,7 +8,8 @@ import { ClienteSearchInput } from "./components/ClienteSearchInput";
 import { CampanitaNotificaciones } from "./components/Notificaciones";
 import { BuscadorHistorial } from "./components/BuscadorHistorial";
 import { ResultadoMensual, type GanaOperacion } from "./components/ResultadoMensual";
-import { planDeSacos, sobranteLb, SacosAlertaDashboard, SacosCatalogoConfig, SacosTablero } from "./components/SacosModule";
+import { planDeSacos, sobranteLb, SacosAlertaDashboard, SacosCatalogoConfig, SacosPorComprarAlerta, SacosTablero, type SacoPorComprar } from "./components/SacosModule";
+import { PedidoCompartirModal, type PedidoCompartirData } from "./components/PedidoCompartir";
 import * as XLSX from "xlsx";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
@@ -3063,6 +3064,7 @@ export function App() {
   // Matriz usa `sackInventory`; ventas y producción siempre usan el de la Matriz.
   const [sacosPropios, setSacosPropios] = useState<SackInventory[]>([]);
   const [sackMovements, setSackMovements] = useState<SackMovement[]>([]);
+  const [sacosPorComprar, setSacosPorComprar] = useState<SacoPorComprar[]>([]);
   const [sackMovForm, setSackMovForm] = useState({ sack_id: "", movement: "ENTRADA" as "ENTRADA"|"SALIDA", cantidad: "", concepto: "" });
   // ── Diagnóstico de stocks negativos ────────────────────────────────────────
   const [negativeStock, setNegativeStock] = useState<NegativeStockRow[]>([]);
@@ -3097,6 +3099,11 @@ export function App() {
   const [filteredCustomers, setFilteredCustomers] = useState<Customer[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [showQuickNewCustomer, setShowQuickNewCustomer] = useState(false);
+  // Pedido a compartir con el cliente (al tomarlo o desde la Cola de Despachos).
+  const [pedidoCompartir, setPedidoCompartir] = useState<{ data: PedidoCompartirData; titulo?: string } | null>(null);
+  // Evita un pedido duplicado por doble toque en «Tomar pedido».
+  const [pedidoGuardando, setPedidoGuardando] = useState(false);
+  const pedidoGuardandoRef = useRef(false);
   const [quickNewCustomerForm, setQuickNewCustomerForm] = useState({ full_name: "", phone: "", identification: "", address: "" });
   // Spinner compartido de "Buscando en SRI…" mientras se consulta el SRI.
   const [sriLoading, setSriLoading] = useState(false);
@@ -6385,6 +6392,8 @@ export function App() {
     setSackInventory(inv);
     setSackMovements(movs);
     setSacosPropios(propios);
+    // Sacos que faltan para los pedidos pendientes (alerta del Dashboard).
+    apiGet<SacoPorComprar[]>("/sacks/por-comprar").then(setSacosPorComprar).catch(() => undefined);
   }
 
   async function refreshCustomersAndSales() {
@@ -10613,12 +10622,45 @@ export function App() {
       };
     });
 
-    const pedido = await apiPost<{ order_number: string; total_amount: string | number }>("/orders", {
-      customer_id: selectedCustomerId,
-      delivery_date: (form.get("delivery_date") as string) || undefined,
-      notes: (form.get("order_notes") as string) || undefined,
-      created_by: authUser?.id,
-      items
+    if (pedidoGuardandoRef.current) return;
+    pedidoGuardandoRef.current = true;
+    setPedidoGuardando(true);
+    let pedido: { order_number: string; total_amount: string | number; created_at?: string };
+    try {
+      pedido = await apiPost<{ order_number: string; total_amount: string | number; created_at?: string }>("/orders", {
+        customer_id: selectedCustomerId,
+        delivery_date: (form.get("delivery_date") as string) || undefined,
+        notes: (form.get("order_notes") as string) || undefined,
+        created_by: authUser?.id,
+        items
+      });
+    } finally {
+      pedidoGuardandoRef.current = false;
+      setPedidoGuardando(false);
+    }
+
+    // Ofrecer compartir el pedido con el cliente (antes de limpiar el formulario).
+    const cliente = customers.find((c) => c.id === selectedCustomerId);
+    setPedidoCompartir({
+      titulo: `✓ Pedido ${pedido.order_number} tomado`,
+      data: {
+        numero: pedido.order_number,
+        fecha: pedido.created_at ?? new Date().toISOString(),
+        cliente: cliente?.full_name ?? customerSearch,
+        telefono: cliente?.phone ?? null,
+        entrega: (form.get("delivery_date") as string) || null,
+        nota: (form.get("order_notes") as string) || null,
+        lineas: saleLineItems.map((l) => ({
+          producto: products.find((p) => p.id === l.product_id)?.name ?? "",
+          presentacion: l.presentation_name || null,
+          qq: qqDeLinea(l),
+          bultos: bultosDeLinea(l),
+          unidad: unidadGuiaDePresentacion(l.presentation_name).toLowerCase(),
+          precio: l.unit_price,
+          subtotal: round2(l.quantity * l.unit_price)
+        })),
+        total: Number(pedido.total_amount)
+      }
     });
 
     safeResetForm(formElement);
@@ -10631,7 +10673,33 @@ export function App() {
     setSaleProductPresentations([]);
     setMessage(`✓ Pedido ${pedido.order_number} tomado: ${money(pedido.total_amount)}`);
     addToast(`🚚 Pedido enviado a bodega · ${pedido.order_number} · ${money(pedido.total_amount)}`, "success");
+    refreshSacks().catch(() => undefined);
     await refreshCustomersAndSales();
+  }
+
+  // Datos para compartir un pedido ya guardado (Cola de Despachos).
+  function pedidoCompartirDeOrden(o: SalesOrder): PedidoCompartirData {
+    return {
+      numero: o.order_number,
+      fecha: o.created_at,
+      cliente: o.customer_name,
+      telefono: o.customer_phone,
+      entrega: o.delivery_date ? String(o.delivery_date).slice(0, 10) : null,
+      nota: o.notes,
+      lineas: o.items.map((it) => {
+        const qq = Number(it.quantity);
+        return {
+          producto: it.product_name,
+          presentacion: it.presentation_name,
+          qq,
+          bultos: round2(qq * bultosPorQqDePresentacion(it.presentation_name)),
+          unidad: unidadGuiaDePresentacion(it.presentation_name).toLowerCase(),
+          precio: Number(it.unit_price),
+          subtotal: Number(it.total)
+        };
+      }),
+      total: Number(o.total_amount)
+    };
   }
 
   // Confirmar preparación (picking): el bodeguero alista los sacos y marca el
@@ -11835,7 +11903,9 @@ export function App() {
         {activeTab === "Dashboard" && (
           <>
             {/* Alerta de sacos en/bajo su stock mínimo (los sacos son de la Matriz). */}
-            {manejaSacosPropios && <SacosAlertaDashboard sacos={sacosDelActivo} onIr={() => setActiveTab("Inventario")} onConfig={puedeIrAConfig("📦 Catálogo de sacos") ? () => irAConfig("📦 Catálogo de sacos") : undefined} />}
+            {/* Sacos por comprar para los pedidos ya tomados (los sacos son de la Matriz). */}
+            {esMatrizActiva && <SacosPorComprarAlerta sacos={sacosPorComprar} onIr={visibleTabs.includes("Inventario") ? () => setActiveTab("Inventario") : undefined} />}
+            {manejaSacosPropios && <SacosAlertaDashboard sacos={esMatrizActiva ? sacosDelActivo.filter((s) => !sacosPorComprar.some((p) => p.id === s.id)) : sacosDelActivo} onIr={() => setActiveTab("Inventario")} onConfig={puedeIrAConfig("📦 Catálogo de sacos") ? () => irAConfig("📦 Catálogo de sacos") : undefined} />}
             {canSeePanel && (
               <nav className="cajaSubNav">
                 <button type="button" className={dashView === "panel" ? "active" : ""} onClick={() => { setDashView("panel"); if (!panelData) refreshPanel().catch(() => undefined); }}>📊 Panel integral</button>
@@ -14820,6 +14890,11 @@ export function App() {
 
         {activeTab === "Ventas" && (
           <section className="panelGrid">
+            {pedidoCompartir && (
+              <PedidoCompartirModal pedido={pedidoCompartir.data} titulo={pedidoCompartir.titulo}
+                negocio={appSettings.business_name || "Piladora"}
+                onClose={() => setPedidoCompartir(null)} avisar={(m, t) => addToast(m, t)} />
+            )}
             {/* Formulario de venta */}
             {showQuickNewCustomer && (
               <div className="modalOverlay" onClick={() => { setShowQuickNewCustomer(false); setQuickNewCustomerForm({ full_name: "", phone: "", identification: "", address: "" }); }}>
@@ -15131,9 +15206,9 @@ export function App() {
                           </select>
                         </label>
                       )}
-                      <small style={{ display: "block", marginTop: 4, fontWeight: 700, color: falta ? "#b91c1c" : "#15803d" }}>
+                      <small style={{ display: "block", marginTop: 4, fontWeight: 700, color: falta ? "#b45309" : "#15803d" }}>
                         🧺 {filas.length
-                          ? `Sacos a usar: ${filas.map((f) => `${f.sacos} × ${f.tipo} (hay ${f.stock.toLocaleString("es-EC")})`).join(" + ")}${falta ? " · ⚠️ no alcanzan (quedará en negativo)" : ""}`
+                          ? `Sacos a usar: ${filas.map((f) => `${f.sacos} × ${f.tipo} (hay ${f.stock.toLocaleString("es-EC")})`).join(" + ")}${falta ? " · faltan sacos: igual puedes tomar el pedido, el Dashboard avisa para comprarlos" : ""}`
                           : `Sacos en bodega: ${sacosMarca.map((sk) => `${sk.tipo}: ${Number(sk.stock).toLocaleString("es-EC")}`).join(" · ")}`}
                       </small>
                       </>
@@ -15310,8 +15385,8 @@ export function App() {
                   <button type="button" onClick={cancelarEdicionPedido}>Cancelar edición</button>
                 </div>
               ) : (
-                <button className="primary" style={{ width: "100%", padding: 12, fontSize: 16 }}>
-                  📋 TOMAR PEDIDO
+                <button className="primary" style={{ width: "100%", padding: 12, fontSize: 16 }} disabled={pedidoGuardando}>
+                  {pedidoGuardando ? "⏳ Guardando pedido…" : "📋 TOMAR PEDIDO"}
                 </button>
               )}
             </form>
@@ -15501,6 +15576,8 @@ export function App() {
                         <button type="button" style={{ flex: 1 }} onClick={() => editarPedido(o).catch((e) => addToast(e.message, "error"))}>✎ Editar</button>
                         <button type="button" style={{ flex: 1 }} onClick={() => cancelarPedido(o).catch((e) => addToast(e.message, "error"))}>✕ Cancelar</button>
                       </div>
+                      <button type="button" className="btnSecondary" onClick={() => setPedidoCompartir({ data: pedidoCompartirDeOrden(o) })}
+                        title="Enviar al cliente su pedido con el total a pagar">📤 Compartir con el cliente</button>
                     </article>
                     );
                   })}

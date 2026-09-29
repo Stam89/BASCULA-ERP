@@ -270,6 +270,44 @@ export function SacosAlertaDashboard({ sacos, onIr, onConfig }: { sacos: Saco[];
   );
 }
 
+/** Saco que falta para los pedidos pendientes (GET /sacks/por-comprar). */
+export type SacoPorComprar = { id: string; tipo: string; stock: number; necesarios: number; faltan: number; pedidos: string[] };
+
+/**
+ * Dashboard: SACOS POR COMPRAR. Los pedidos se toman aunque falten sacos (el
+ * vendedor nunca queda bloqueado); aquí se avisa cuántos hay que comprar para
+ * poder alistar los pedidos pendientes, más los que ya quedaron en negativo.
+ */
+export function SacosPorComprarAlerta({ sacos, onIr }: { sacos: SacoPorComprar[]; onIr?: () => void }) {
+  if (!sacos.length) return null;
+  const pedidos = new Set(sacos.flatMap((s) => s.pedidos));
+  return (
+    <div role="alert" style={{ display: "flex", gap: 14, alignItems: "flex-start", flexWrap: "wrap", background: "#fef2f2", border: "1px solid #fca5a5", borderLeft: "5px solid #dc2626", borderRadius: 12, padding: "12px 16px", margin: "0 0 14px" }}>
+      <div style={{ fontSize: 26, lineHeight: 1 }}>🧺</div>
+      <div style={{ flex: "1 1 260px" }}>
+        <div style={{ fontWeight: 800, color: "#991b1b" }}>
+          Sacos por comprar: {sacos.length} tipo{sacos.length === 1 ? "" : "s"}
+          {pedidos.size ? ` · para ${pedidos.size} pedido${pedidos.size === 1 ? "" : "s"} pendiente${pedidos.size === 1 ? "" : "s"}` : ""}
+        </div>
+        <div style={{ fontSize: 12, color: "#7f1d1d", marginTop: 2 }}>
+          Los vendedores ya tomaron estos pedidos: compra los sacos (Caja → Sacos) antes de alistarlos.
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+          {sacos.slice(0, 12).map((s) => (
+            <span key={s.id} title={s.pedidos.length ? `Pedidos: ${s.pedidos.join(", ")}` : "Stock en negativo"}
+              style={{ background: "#fff", border: "1px solid #fca5a5", color: "#991b1b", borderRadius: 999, padding: "3px 10px", fontSize: 12, fontWeight: 700 }}>
+              {s.tipo}: faltan {fmt(s.faltan)}
+              <span style={{ fontWeight: 500, color: "#b91c1c" }}> (hay {fmt(s.stock)}{s.necesarios > 0 ? `, piden ${fmt(s.necesarios)}` : ""})</span>
+            </span>
+          ))}
+          {sacos.length > 12 && <span style={{ fontSize: 12, color: "#991b1b" }}>+{sacos.length - 12} más</span>}
+        </div>
+      </div>
+      {onIr && <button type="button" className="btnSecondary" onClick={onIr} style={{ fontSize: 12, alignSelf: "center" }}>Ver inventario de sacos</button>}
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Catálogo en Configuración
 // ─────────────────────────────────────────────────────────────────────────────

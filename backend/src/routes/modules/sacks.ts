@@ -6,6 +6,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { inTransaction } from "../../db/transaction.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { sacosPorComprar } from "../../services/sacos.js";
 
 export const sacksRouter = Router();
 
@@ -259,6 +260,18 @@ sacksRouter.get("/:id/movements", asyncRoute(async (req, res) => {
     [req.params.id]
   );
   res.json(result.rows);
+}));
+
+// GET sacos por comprar: los que piden los pedidos pendientes (aún sin preparar)
+// contra el stock de la Matriz, más los que ya están en negativo. Alerta del
+// Dashboard: el vendedor nunca queda bloqueado por falta de sacos.
+sacksRouter.get("/por-comprar", asyncRoute(async (_req, res) => {
+  const client = await pool.connect();
+  try {
+    res.json(await sacosPorComprar(client));
+  } finally {
+    client.release();
+  }
 }));
 
 // GET todos los movimientos recientes

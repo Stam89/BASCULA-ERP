@@ -153,6 +153,24 @@ export async function descontarSacosPedido(client: PoolClient, orderId: string):
 
   const order = await client.query("SELECT order_number FROM sales_orders WHERE id = $1", [orderId]);
   const numero = order.rows[0]?.order_number ?? orderId;
+  const plan = await planSacosPedido(client, orderId);
+  out.sin_saco.push(...plan.sin_saco);
+  for (const [sackId, { saco, sacos }] of plan.porSaco) {
+    const nuevo = await registrarSalida(client, sackId, sacos, `Venta · Pedido ${numero}`, { refOrder: orderId });
+    out.descontados.push({ tipo: saco.tipo, sacos, nuevo_stock: nuevo });
+  }
+  return out;
+}
+
+/**
+ * Sacos que ocupará un pedido (por tipo de saco), con la misma regla que se
+ * descuenta al Confirmar Preparación. Solo calcula: no mueve inventario.
+ */
+export async function planSacosPedido(client: PoolClient, orderId: string): Promise<{
+  porSaco: Map<string, { saco: SacoRow; sacos: number }>;
+  sin_saco: Array<{ producto: string; peso_lb: number; sacos: number }>;
+}> {
+  const sin_saco: Array<{ producto: string; peso_lb: number; sacos: number }> = [];
   const items = await client.query(
     `SELECT i.product_id, i.presentation_id, i.presentation_name, i.quantity::float AS quantity,
             i.sobrante_saco_lb::float AS sobrante_saco_lb, p.code, p.name, p.product_type
@@ -176,7 +194,7 @@ export async function descontarSacosPedido(client: PoolClient, orderId: string):
     if (!sacosParaQq(qq, peso)) continue;
     const cand = await sacosCandidatos(client, { id: it.product_id, code: it.code, name: it.name, product_type: it.product_type });
     if (!cand) {
-      out.sin_saco.push({ producto: it.name, peso_lb: peso, sacos: sacosParaQq(qq, peso) });
+      sin_saco.push({ producto: it.name, peso_lb: peso, sacos: sacosParaQq(qq, peso) });
       continue;
     }
     if (cand.modo === "ESPECIAL") { // saco de subproducto: uno por bulto
@@ -189,11 +207,44 @@ export async function descontarSacosPedido(client: PoolClient, orderId: string):
       sumar(porPeso.get(pesoSaco)!, sacos);
     }
   }
-  for (const [sackId, { saco, sacos }] of porSaco) {
-    const nuevo = await registrarSalida(client, sackId, sacos, `Venta · Pedido ${numero}`, { refOrder: orderId });
-    out.descontados.push({ tipo: saco.tipo, sacos, nuevo_stock: nuevo });
+  return { porSaco, sin_saco };
+}
+
+export type SacoPorComprar = { id: string; tipo: string; stock: number; necesarios: number; faltan: number; pedidos: string[] };
+
+/**
+ * SACOS POR COMPRAR (alerta del Dashboard): los que piden los pedidos pendientes
+ * que aún no se preparan, contra el stock de la bodega de la Matriz. Incluye los
+ * que ya están en negativo. Nunca bloquea al vendedor: solo avisa la compra.
+ */
+export async function sacosPorComprar(client: PoolClient): Promise<SacoPorComprar[]> {
+  const pendientes = await client.query(
+    `SELECT id, order_number FROM sales_orders
+      WHERE status = 'PENDING' AND prepared_at IS NULL ORDER BY created_at`
+  );
+  const necesidad = new Map<string, { necesarios: number; pedidos: string[] }>();
+  for (const o of pendientes.rows) {
+    const plan = await planSacosPedido(client, o.id);
+    for (const [sackId, { sacos }] of plan.porSaco) {
+      const acc = necesidad.get(sackId) ?? { necesarios: 0, pedidos: [] };
+      acc.necesarios += sacos;
+      if (!acc.pedidos.includes(o.order_number)) acc.pedidos.push(o.order_number);
+      necesidad.set(sackId, acc);
+    }
   }
-  return out;
+  const sacos = await client.query(
+    `SELECT id, tipo, stock::float AS stock FROM sack_inventory
+      WHERE activo AND accionista_id IS NULL AND (stock < 0 OR id = ANY($1::uuid[]))`,
+    [[...necesidad.keys()]]
+  );
+  return sacos.rows
+    .map((s: { id: string; tipo: string; stock: number }) => {
+      const n = necesidad.get(s.id);
+      const necesarios = n?.necesarios ?? 0;
+      return { id: s.id, tipo: s.tipo, stock: Number(s.stock), necesarios, faltan: Math.max(0, necesarios - Number(s.stock)), pedidos: n?.pedidos ?? [] };
+    })
+    .filter((s: SacoPorComprar) => s.faltan > 0)
+    .sort((a: SacoPorComprar, b: SacoPorComprar) => b.faltan - a.faltan);
 }
 
 /**
