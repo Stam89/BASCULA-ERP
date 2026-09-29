@@ -50,6 +50,26 @@ async function getMovimientoDelAccionistaForUpdate(
 // Guarda una subcategoría escrita a mano para sugerirla luego (memoria). Es
 // idempotente (índice único por nombre normalizado) y nunca rompe el registro
 // del movimiento: si falla, se ignora.
+// Proveedor de un egreso: por id (debe existir) o por nombre escrito (se reutiliza
+// uno con el mismo nombre o se crea rápido en el catálogo de Proveedores).
+async function resolverProveedor(
+  client: PoolClient,
+  supplierId?: string | null,
+  nombre?: string | null
+): Promise<{ id: string; name: string } | null> {
+  if (supplierId) {
+    const r = await client.query("SELECT id, name FROM suppliers WHERE id = $1", [supplierId]);
+    if (!r.rows[0]) throw new ApiError(404, "Proveedor no encontrado");
+    return r.rows[0];
+  }
+  const n = (nombre ?? "").trim().replace(/\s+/g, " ");
+  if (n.length < 2) return null;
+  const ya = await client.query("SELECT id, name FROM suppliers WHERE lower(btrim(name)) = lower($1) ORDER BY is_active DESC LIMIT 1", [n]);
+  if (ya.rows[0]) return ya.rows[0];
+  const nuevo = await client.query("INSERT INTO suppliers (name) VALUES ($1) RETURNING id, name", [n.toUpperCase()]);
+  return nuevo.rows[0];
+}
+
 async function recordarSubcategoria(client: PoolClient, nombre?: string | null, categoria?: string | null): Promise<void> {
   const n = (nombre ?? "").trim();
   if (n.length < 2) return;
@@ -300,10 +320,54 @@ cashRouter.get("/registers/:id/movements", asyncRoute(async (req, res) => {
   );
   if (!reg.rowCount) throw new ApiError(404, "Caja no disponible para el accionista activo");
   const result = await pool.query(
-    "SELECT * FROM cash_movements WHERE cash_register_id = $1 ORDER BY created_at DESC",
+    `SELECT cm.*, sup.name AS proveedor_nombre
+       FROM cash_movements cm
+       LEFT JOIN suppliers sup ON sup.id = cm.supplier_id
+      WHERE cm.cash_register_id = $1 ORDER BY cm.created_at DESC`,
     [req.params.id]
   );
   res.json(result.rows);
+}));
+
+// Egresos A CRÉDITO registrados en esta sesión de caja (son Cuentas por Pagar:
+// no restan del saldo). Se muestran en el historial con la etiqueta «A crédito».
+cashRouter.get("/registers/:id/creditos", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const r = await pool.query(
+    `SELECT ap.id, ap.amount::float AS amount, ap.balance::float AS balance, ap.status, ap.due_date, ap.created_at,
+            ap.description, ap.categoria, ap.subcategoria, ap.supplier_id, sup.name AS proveedor_nombre
+       FROM accounts_payable ap
+       LEFT JOIN suppliers sup ON sup.id = ap.supplier_id
+      WHERE ap.origen_cash_register_id = $1 AND ap.accionista_id = $2 AND ap.reference_type = 'gasto_credito'
+      ORDER BY ap.created_at DESC`,
+    [req.params.id, accionistaId]
+  );
+  res.json(r.rows);
+}));
+
+// Anular un egreso A CRÉDITO (solo admin): se cancela su Cuenta por Pagar. Si ya
+// tiene abonos, primero hay que anular esos pagos en Caja.
+cashRouter.post("/creditos/:id/anular", requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({ reason: z.string().trim().min(3) }).parse(req.body);
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const out = await inTransaction(async (client) => {
+    const ap = await client.query(
+      `SELECT * FROM accounts_payable WHERE id = $1 AND accionista_id = $2 AND reference_type = 'gasto_credito' FOR UPDATE`,
+      [req.params.id, accionistaId]
+    );
+    if (!ap.rows[0]) throw new ApiError(404, "Egreso a crédito no encontrado para el accionista activo");
+    const a = ap.rows[0];
+    if (a.status === "CANCELLED") throw new ApiError(409, "Ese egreso a crédito ya está anulado.");
+    if (Number(a.balance) < Number(a.amount) - 0.005) {
+      throw new ApiError(409, `Ya tiene abonos por $${(Number(a.amount) - Number(a.balance)).toFixed(2)}: anula primero esos pagos en Caja.`);
+    }
+    const upd = await client.query(
+      `UPDATE accounts_payable SET status = 'CANCELLED', balance = 0, description = description || $2 WHERE id = $1 RETURNING *`,
+      [a.id, ` · ANULADO: ${body.reason}`]
+    );
+    return upd.rows[0];
+  });
+  res.json(out);
 }));
 
 // ── Anular un movimiento (contra-asiento, solo administradores) ──────────────
@@ -535,6 +599,13 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
       tipo: z.string().trim().min(2).max(60).default("OTRO"),
       valor_residual: z.number().nonnegative().default(0)
     }).optional(),
+    // Proveedor del egreso (del catálogo, o escrito → se crea rápido) y la
+    // modalidad: CONTADO (descuenta caja, lo de siempre) o CREDITO (Cuenta por
+    // Pagar al proveedor; no toca la caja). Sin dato = CONTADO sin proveedor.
+    supplier_id: z.string().uuid().optional(),
+    proveedor_nombre: z.string().trim().max(160).optional(),
+    modalidad_pago: z.enum(["CONTADO", "CREDITO"]).optional().default("CONTADO"),
+    due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     created_by: z.string().uuid().optional()
   }).parse(req.body);
   if (body.activo_fijo && (body.movement !== "EXPENSE" || body.category !== "COMPRA_ACTIVO_FIJO")) {
@@ -546,6 +617,44 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
   // Solo un EGRESO puede ser fondo a rendir cuentas.
   const esFondo = body.es_fondo === true && body.movement === "EXPENSE";
   const fondoEstado = esFondo ? "POR_LIQUIDAR" : null;
+  const aCredito = body.modalidad_pago === "CREDITO";
+  if (aCredito) {
+    if (body.movement !== "EXPENSE") throw new ApiError(400, "Solo un EGRESO puede registrarse a crédito.");
+    if (esFondo) throw new ApiError(400, "Un fondo a rendir cuentas sale de la caja: no puede ser a crédito.");
+    if (conSacos || body.activo_fijo) throw new ApiError(400, "La compra de sacos o de un activo fijo se registra de contado.");
+  }
+
+  // ── A CRÉDITO: Cuenta por Pagar al proveedor. No es un movimiento de caja
+  //    (el dinero no sale de esta sesión), pero queda enlazada a ella para
+  //    verla en su historial con la etiqueta «A crédito / CxP».
+  if (aCredito) {
+    const cxp = await inTransaction(async (client) => {
+      const reg = await client.query(
+        "SELECT id, status FROM cash_registers WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
+        [req.params.id, accionistaId]
+      );
+      if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
+      if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+      const proveedor = await resolverProveedor(client, body.supplier_id, body.proveedor_nombre);
+      if (!proveedor) throw new ApiError(400, "Para registrar un egreso a crédito elige o escribe el proveedor.");
+      const cat = await client.query("SELECT nombre FROM cash_categories WHERE codigo = $1", [body.category]);
+      const concepto = [cat.rows[0]?.nombre ?? body.category, body.subcategoria?.trim(), body.description?.trim()].filter(Boolean).join(" · ");
+      const ap = await client.query(
+        `INSERT INTO accounts_payable
+           (farmer_id, accionista_id, amount, balance, status, due_date, reference_type, reference_id, description,
+            supplier_id, categoria, subcategoria, origen_cash_register_id, created_by)
+         VALUES (NULL, $1, $2, $2, 'CONFIRMED', $3, 'gasto_credito', NULL, $4, $5, $6, $7, $8, $9)
+         RETURNING *`,
+        [accionistaId, body.amount, body.due_date ?? null, `${proveedor.name} — ${concepto}`, proveedor.id,
+         body.category, body.subcategoria?.trim() || null, req.params.id, body.created_by ?? (req as AuthenticatedRequest).user?.id ?? null]
+      );
+      await recordarSubcategoria(client, body.subcategoria, body.category);
+      return { ...ap.rows[0], proveedor: proveedor.name };
+    });
+    res.status(201).json({ credito: true, cuenta_por_pagar: cxp });
+    return;
+  }
+
   const row = await inTransaction(async (client) => {
     const reg = await client.query(
       "SELECT id, status FROM cash_registers WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
@@ -553,14 +662,17 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     );
     if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
     if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+    // Proveedor (opcional) del egreso de contado.
+    const proveedor = body.movement === "EXPENSE" ? await resolverProveedor(client, body.supplier_id, body.proveedor_nombre) : null;
     const mov = await client.query(
       `INSERT INTO cash_movements
         (cash_register_id, movement, category, amount, description, reference_type, reference_id, created_by,
-         subcategoria, maq_activo, area, es_fondo, responsable, fondo_estado)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+         subcategoria, maq_activo, area, es_fondo, responsable, fondo_estado, supplier_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
        RETURNING *`,
       [req.params.id, body.movement, body.category, body.amount, body.description, body.reference_type, body.reference_id, body.created_by,
-       body.subcategoria?.trim() || null, body.maq_activo?.trim() || null, body.area?.trim() || null, esFondo, esFondo ? (body.responsable?.trim() || null) : null, fondoEstado]
+       body.subcategoria?.trim() || null, body.maq_activo?.trim() || null, body.area?.trim() || null, esFondo, esFondo ? (body.responsable?.trim() || null) : null, fondoEstado,
+       proveedor?.id ?? null]
     );
     await recordarSubcategoria(client, body.subcategoria, body.category);
     // Compra de ACTIVO FIJO → alta en Activos fijos (balance y depreciación) del
@@ -721,6 +833,7 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
             COALESCE(
               -- Deudas entre socios/Matriz/Transporte: el nombre del OTRO lado.
               CASE WHEN ap.reference_type = 'campo_servicio' THEN 'Transporte y Cosechadora' END,
+              ap_sup.name,
               par.name,
               f.full_name,
               ps_prov.name,
@@ -742,6 +855,7 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
             l.liquidation_number, l.batch_id
      FROM accounts_payable ap
      LEFT JOIN farmers f ON f.id = ap.farmer_id
+     LEFT JOIN suppliers ap_sup ON ap_sup.id = ap.supplier_id
      LEFT JOIN liquidations l ON l.id = ap.liquidation_id
      LEFT JOIN selection_batches sb ON sb.id = ap.reference_id AND ap.reference_type = 'selection_batch'
      LEFT JOIN external_providers sp ON sp.id = sb.provider_id
@@ -777,12 +891,21 @@ cashRouter.get("/registers/:id/export-excel", asyncRoute(async (req, res) => {
   if (!reg.rows[0]) { res.status(404).json({ error: "No encontrada" }); return; }
 
   const movs = await pool.query(
-    `SELECT cm.*,
+    `SELECT cm.*, sup.name AS proveedor_nombre,
             CASE WHEN cm.movement = 'INCOME' THEN cm.amount ELSE 0 END AS ingreso,
             CASE WHEN cm.movement = 'EXPENSE' THEN cm.amount ELSE 0 END AS egreso
      FROM cash_movements cm
+     LEFT JOIN suppliers sup ON sup.id = cm.supplier_id
      WHERE cm.cash_register_id = $1
      ORDER BY cm.created_at ASC`,
+    [req.params.id]
+  );
+  // Egresos A CRÉDITO de la sesión: van aparte (son Cuentas por Pagar, no caja).
+  const creditos = await pool.query(
+    `SELECT ap.created_at, ap.categoria, ap.description, ap.amount, ap.balance, ap.status, sup.name AS proveedor_nombre
+       FROM accounts_payable ap LEFT JOIN suppliers sup ON sup.id = ap.supplier_id
+      WHERE ap.origen_cash_register_id = $1 AND ap.reference_type = 'gasto_credito'
+      ORDER BY ap.created_at ASC`,
     [req.params.id]
   );
 
@@ -798,7 +921,7 @@ cashRouter.get("/registers/:id/export-excel", asyncRoute(async (req, res) => {
   const ws = wb.addWorksheet("Movimientos");
 
   // Title
-  ws.mergeCells("A1:F1");
+  ws.mergeCells("A1:H1");
   ws.getCell("A1").value = `CIERRE DE CAJA — ${reg.rows[0].name}`;
   ws.getCell("A1").font = { bold: true, size: 14 };
   ws.getCell("A1").alignment = { horizontal: "center" };
@@ -807,14 +930,14 @@ cashRouter.get("/registers/:id/export-excel", asyncRoute(async (req, res) => {
   const saldoLinea = openingCash > 0 && openingBank > 0
     ? `Efectivo: $${openingCash.toFixed(2)} · Banco: $${openingBank.toFixed(2)} · Total: $${opening.toFixed(2)}`
     : `Saldo inicial: $${opening.toFixed(2)}`;
-  ws.mergeCells("A2:F2");
+  ws.mergeCells("A2:H2");
   ws.getCell("A2").value = `Fecha: ${openedDate}   ${saldoLinea}`;
   ws.getCell("A2").alignment = { horizontal: "center" };
 
   ws.addRow([]);
 
   // Headers
-  const headers = ["#", "Fecha/Hora", "Categoría", "Descripción", "Ingreso", "Egreso"];
+  const headers = ["#", "Fecha/Hora", "Categoría", "Descripción", "Proveedor", "Pago", "Ingreso", "Egreso"];
   const headerRow = ws.addRow(headers);
   headerRow.font = { bold: true };
   headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF16A34A" } };
@@ -824,35 +947,60 @@ cashRouter.get("/registers/:id/export-excel", asyncRoute(async (req, res) => {
     cell.border = { bottom: { style: "thin" } };
   });
 
-  movs.rows.forEach((m: { created_at: string; category: string; description: string; ingreso: string; egreso: string }, i: number) => {
+  movs.rows.forEach((m: { created_at: string; category: string; description: string; ingreso: string; egreso: string; proveedor_nombre: string | null; movement: string }, i: number) => {
     const row = ws.addRow([
       i + 1,
       new Date(m.created_at).toLocaleString("es-EC"),
       m.category,
       m.description ?? "",
+      m.proveedor_nombre ?? "",
+      m.movement === "EXPENSE" ? "Contado" : "",
       Number(m.ingreso) || null,
       Number(m.egreso) || null
     ]);
-    row.getCell(5).numFmt = '"$"#,##0.00';
-    row.getCell(6).numFmt = '"$"#,##0.00';
+    row.getCell(7).numFmt = '"$"#,##0.00';
+    row.getCell(8).numFmt = '"$"#,##0.00';
     if (i % 2 === 1) {
       row.eachCell(c => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF0FDF4" } }; });
     }
   });
 
   ws.addRow([]);
-  const totRow = ws.addRow(["", "", "", "TOTALES", totalIncome, totalExpense]);
+  const totRow = ws.addRow(["", "", "", "", "", "TOTALES", totalIncome, totalExpense]);
   totRow.font = { bold: true };
-  totRow.getCell(5).numFmt = '"$"#,##0.00';
-  totRow.getCell(6).numFmt = '"$"#,##0.00';
+  totRow.getCell(7).numFmt = '"$"#,##0.00';
+  totRow.getCell(8).numFmt = '"$"#,##0.00';
 
-  const balRow = ws.addRow(["", "", "", "SALDO FINAL", balance, ""]);
+  const balRow = ws.addRow(["", "", "", "", "", "SALDO FINAL", balance, ""]);
   balRow.font = { bold: true };
-  balRow.getCell(5).numFmt = '"$"#,##0.00';
-  balRow.getCell(5).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEF08A" } };
+  balRow.getCell(7).numFmt = '"$"#,##0.00';
+  balRow.getCell(7).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEF08A" } };
+
+  // Egresos A CRÉDITO: informativos (Cuentas por Pagar), NO suman ni restan al saldo.
+  if (creditos.rows.length) {
+    ws.addRow([]);
+    const t = ws.addRow(["", "EGRESOS A CRÉDITO (Cuentas por Pagar · no afectan el saldo de caja)"]);
+    t.font = { bold: true, color: { argb: "FF7C3AED" } };
+    const h = ws.addRow(["#", "Fecha/Hora", "Categoría", "Concepto", "Proveedor", "Pago", "Monto", "Saldo por pagar"]);
+    h.font = { bold: true };
+    let totalCredito = 0;
+    creditos.rows.forEach((c: { created_at: string; categoria: string | null; description: string | null; amount: string; balance: string; status: string; proveedor_nombre: string | null }, i: number) => {
+      const anulado = c.status === "CANCELLED";
+      if (!anulado) totalCredito += Number(c.amount);
+      const r = ws.addRow([
+        i + 1, new Date(c.created_at).toLocaleString("es-EC"), c.categoria ?? "", c.description ?? "",
+        c.proveedor_nombre ?? "", anulado ? "A crédito (ANULADO)" : "A crédito", Number(c.amount), anulado ? 0 : Number(c.balance)
+      ]);
+      r.getCell(7).numFmt = '"$"#,##0.00';
+      r.getCell(8).numFmt = '"$"#,##0.00';
+    });
+    const tc = ws.addRow(["", "", "", "", "", "TOTAL A CRÉDITO", totalCredito, ""]);
+    tc.font = { bold: true };
+    tc.getCell(7).numFmt = '"$"#,##0.00';
+  }
 
   ws.columns = [
-    { width: 5 }, { width: 22 }, { width: 22 }, { width: 35 }, { width: 14 }, { width: 14 }
+    { width: 5 }, { width: 22 }, { width: 22 }, { width: 35 }, { width: 22 }, { width: 12 }, { width: 14 }, { width: 14 }
   ];
 
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -901,6 +1049,9 @@ cashRouter.post("/payables/:id/pay", asyncRoute(async (req, res) => {
       refType === "lot_transfer" || refType === "campo_servicio" || refType === "fomento_cruce" || refType === "retencion_matriz" || refType === "packaging_charge" ? "PAGO_ENTRE_SOCIOS" :
       refType === "selection_batch" ? "PAGO_SELECCION" :
       refType === "purchase" ? "PAGO_PROVEEDOR" :
+      // Gasto a crédito: al pagarlo, el egreso lleva la categoría del gasto
+      // original (así el Resultado mensual lo cuenta en su rubro).
+      refType === "gasto_credito" ? (ap.rows[0].categoria || "PAGO_PROVEEDOR") :
       "PAGO_AGRICULTOR";
     // La descripción dice a quién se paga, sin repetir "Pago a" si ya lo trae.
     const aQuien = ap.rows[0].farmer_name
@@ -910,9 +1061,11 @@ cashRouter.post("/payables/:id/pay", asyncRoute(async (req, res) => {
 
     await client.query(
       `INSERT INTO cash_movements
-       (cash_register_id, movement, category, reference_type, reference_id, amount, description)
-       VALUES ($1, 'EXPENSE', $2, 'accounts_payable', $3, $4, $5)`,
-      [body.cash_register_id, categoria, req.params.id, body.amount, aQuien.trim()]
+       (cash_register_id, movement, category, reference_type, reference_id, amount, description, subcategoria, supplier_id)
+       VALUES ($1, 'EXPENSE', $2, 'accounts_payable', $3, $4, $5, $6, $7)`,
+      [body.cash_register_id, categoria, req.params.id, body.amount,
+       (refType === "gasto_credito" ? `Pago a crédito — ${ap.rows[0].description ?? ""}` : aQuien).trim(),
+       refType === "gasto_credito" ? ap.rows[0].subcategoria ?? null : null, ap.rows[0].supplier_id ?? null]
     );
 
     // Si es una deuda entre socios (pilado/traspaso), el abono baja también la
@@ -993,6 +1146,9 @@ cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
       refType === "lot_transfer" || refType === "campo_servicio" || refType === "fomento_cruce" || refType === "retencion_matriz" || refType === "packaging_charge" ? "PAGO_ENTRE_SOCIOS" :
       refType === "selection_batch" ? "PAGO_SELECCION" :
       refType === "purchase" ? "PAGO_PROVEEDOR" :
+      // Gasto a crédito: al pagarlo, el egreso lleva la categoría del gasto
+      // original (así el Resultado mensual lo cuenta en su rubro).
+      refType === "gasto_credito" ? (primera.categoria || "PAGO_PROVEEDOR") :
       "PAGO_AGRICULTOR";
     await client.query(
       `INSERT INTO cash_movements

@@ -927,6 +927,15 @@ type CashMovement = {
   es_fondo?: boolean;
   responsable?: string | null;
   fondo_estado?: string | null; // 'POR_LIQUIDAR' | 'LIQUIDADO'
+  // Proveedor del egreso (opcional). Todo movimiento de caja es de CONTADO.
+  supplier_id?: string | null;
+  proveedor_nombre?: string | null;
+};
+
+/** Egreso A CRÉDITO registrado en la sesión: es una Cuenta por Pagar, no toca la caja. */
+type CajaCredito = {
+  id: string; amount: number; balance: number; status: string; due_date: string | null; created_at: string;
+  description: string | null; categoria: string | null; subcategoria: string | null; supplier_id: string | null; proveedor_nombre: string | null;
 };
 
 type CashSummary = {
@@ -2393,6 +2402,12 @@ export function App() {
   // Compra de ACTIVO FIJO desde Caja: se registra en Activos fijos al guardar el egreso.
   const [movActivo, setMovActivo] = useState({ nombre: "", tipo: "MAQUINARIA" });
   const [movResponsable, setMovResponsable] = useState("");
+  // Proveedor y modalidad de pago del egreso (Contado por defecto / A crédito → CxP).
+  const [movProveedor, setMovProveedor] = useState("");
+  const [movModalidad, setMovModalidad] = useState<"CONTADO" | "CREDITO">("CONTADO");
+  const [movVence, setMovVence] = useState("");
+  const [proveedoresCaja, setProveedoresCaja] = useState<Array<{ id: string; name: string }>>([]);
+  const [cajaCreditos, setCajaCreditos] = useState<CajaCredito[]>([]);
   const [subcategoriasGastos, setSubcategoriasGastos] = useState<string[]>([]);
   // Modal de liquidación de un fondo a rendir cuentas.
   const [liquidarFondo, setLiquidarFondo] = useState<{ mov: CashMovement; gasto_real: string; description: string } | null>(null);
@@ -4042,13 +4057,17 @@ export function App() {
   async function refreshCaja(registerId?: string) {
     const id = registerId ?? dashboard.current_cash_register?.id;
     if (!id) return;
-    const [summary, movements, payables, expenseRows, categories] = await Promise.all([
+    const [summary, movements, payables, expenseRows, categories, creditos, proveedores] = await Promise.all([
       apiGet<CashSummary>(`/cash/registers/${id}/summary`),
       apiGet<CashMovement[]>(`/cash/registers/${id}/movements`),
       apiGet<AccountPayable[]>("/cash/payables"),
       apiGet<Expense[]>("/expenses").catch(() => [] as Expense[]),
-      apiGet<CashCat[]>("/cash/categories").catch(() => [] as CashCat[])
+      apiGet<CashCat[]>("/cash/categories").catch(() => [] as CashCat[]),
+      apiGet<CajaCredito[]>(`/cash/registers/${id}/creditos`).catch(() => [] as CajaCredito[]),
+      apiGet<Array<{ id: string; name: string }>>("/suppliers").catch(() => [] as Array<{ id: string; name: string }>)
     ]);
+    setCajaCreditos(creditos);
+    setProveedoresCaja(proveedores);
     setCashSummary(summary);
     setCashCategories(categories);
     setCashMovements(movements);
@@ -8196,10 +8215,18 @@ export function App() {
         <td>${new Date(m.created_at).toLocaleString("es-EC")}</td>
         <td>${m.category}</td>
         <td>${m.description ?? ""}</td>
+        <td>${m.proveedor_nombre ?? ""}</td>
+        <td>${isIncome ? "" : "Contado"}</td>
         <td style="color:green">${isIncome ? "$"+Number(m.amount).toFixed(2) : ""}</td>
         <td style="color:#c00">${!isIncome ? "$"+Number(m.amount).toFixed(2) : ""}</td>
       </tr>`;
     }).join("");
+    // Egresos A CRÉDITO: informativos, no suman ni restan al saldo.
+    const creditosVig = cajaCreditos.filter((c) => c.status !== "CANCELLED");
+    const creditosHtml = cajaCreditos.length ? `<h4 style="margin:16px 0 4px;color:#6d28d9">Egresos a crédito (Cuentas por Pagar · no afectan el saldo de caja)</h4>
+    <table><thead><tr><th>#</th><th>Fecha/Hora</th><th>Categoría</th><th>Concepto</th><th>Proveedor</th><th>Estado</th><th>Monto</th></tr></thead><tbody>${
+      cajaCreditos.map((c, i) => `<tr><td>${i + 1}</td><td>${new Date(c.created_at).toLocaleString("es-EC")}</td><td>${c.categoria ?? ""}</td><td>${c.description ?? ""}</td><td>${c.proveedor_nombre ?? ""}</td><td>${c.status === "CANCELLED" ? "ANULADO" : Number(c.balance) < 0.005 ? "Pagada" : "Por pagar"}</td><td>$${Number(c.amount).toFixed(2)}</td></tr>`).join("")
+    }</tbody><tfoot><tr class="tot"><td colspan="6">TOTAL A CRÉDITO</td><td>$${creditosVig.reduce((s, c) => s + Number(c.amount), 0).toFixed(2)}</td></tr></tfoot></table>` : "";
     const balance = (opening + cashSummary.total_income - cashSummary.total_expense).toFixed(2);
     const saldoLinea = openingCash > 0 || openingBank > 0
       ? `Efectivo: $${openingCash.toFixed(2)} · Banco: $${openingBank.toFixed(2)} · Total: $${opening.toFixed(2)}`
@@ -8211,12 +8238,13 @@ export function App() {
     <p style="text-align:center;margin:0 0 12px;color:#555">${[appSettings.business_subtitle, appSettings.ruc && `RUC: ${appSettings.ruc}`].filter(Boolean).join(" · ")}</p>
     <h3 style="text-align:center">${cashSummary.name} — Cierre de Caja</h3>
     <p>Fecha apertura: ${new Date(cashSummary.opened_at).toLocaleString("es-EC")} | ${saldoLinea}</p>
-    <table><thead><tr><th>#</th><th>Fecha/Hora</th><th>Categoría</th><th>Descripción</th><th>Ingreso</th><th>Egreso</th></tr></thead>
+    <table><thead><tr><th>#</th><th>Fecha/Hora</th><th>Categoría</th><th>Descripción</th><th>Proveedor</th><th>Pago</th><th>Ingreso</th><th>Egreso</th></tr></thead>
     <tbody>${rows}</tbody>
     <tfoot>
-      <tr class="tot"><td colspan="4">TOTALES</td><td style="color:green">$${cashSummary.total_income.toFixed(2)}</td><td style="color:#c00">$${cashSummary.total_expense.toFixed(2)}</td></tr>
-      <tr class="tot"><td colspan="4">SALDO FINAL</td><td colspan="2">$${balance}</td></tr>
+      <tr class="tot"><td colspan="6">TOTALES</td><td style="color:green">$${cashSummary.total_income.toFixed(2)}</td><td style="color:#c00">$${cashSummary.total_expense.toFixed(2)}</td></tr>
+      <tr class="tot"><td colspan="6">SALDO FINAL</td><td colspan="2">$${balance}</td></tr>
     </tfoot></table>
+    ${creditosHtml}
     </body></html>`;
     const w = window.open("", "_blank");
     if (!w) return;
@@ -8489,7 +8517,13 @@ export function App() {
     const esActivo = movement === "EXPENSE" && category === "COMPRA_ACTIVO_FIJO" && !esFondo;
     const nombreActivo = (movActivo.nombre.trim() || String(form.get("description") ?? "").trim());
     if (esActivo && nombreActivo.length < 2) throw new Error("Escribe el nombre del activo fijo (ej: Balanza electrónica 500 kg).");
-    const creado = await apiPost<{ activo_fijo?: { id: string; name: string } | null }>(`/cash/${registerId}/movements`, {
+    // Proveedor: si coincide con uno del catálogo se envía su id; si es nuevo, el
+    // nombre (el servidor lo crea). A crédito exige proveedor y no toca la caja.
+    const provTxt = movement === "EXPENSE" ? movProveedor.trim() : "";
+    const provSel = provTxt ? proveedoresCaja.find((p) => p.name.trim().toLowerCase() === provTxt.toLowerCase()) : undefined;
+    const aCredito = movement === "EXPENSE" && movModalidad === "CREDITO" && !esFondo && !esActivo;
+    if (aCredito && provTxt.length < 2) throw new Error("Para un egreso a crédito elige o escribe el proveedor.");
+    const creado = await apiPost<{ activo_fijo?: { id: string; name: string } | null; credito?: boolean; cuenta_por_pagar?: { proveedor: string } }>(`/cash/${registerId}/movements`, {
       movement,
       category,
       amount,
@@ -8499,16 +8533,23 @@ export function App() {
       responsable: esFondo ? movResponsable.trim() : undefined,
       activo_fijo: esActivo
         ? { nombre: nombreActivo, tipo: movActivo.tipo } // la vida útil la asigna el sistema por tipo
-        : undefined
+        : undefined,
+      supplier_id: provSel?.id,
+      proveedor_nombre: provTxt && !provSel ? provTxt : undefined,
+      modalidad_pago: aCredito ? "CREDITO" : "CONTADO",
+      due_date: aCredito && movVence ? movVence : undefined
     });
     safeResetForm(formElement);
     setMovCategory("");
     setMovPayableId("");
     setMovSubcategoria(""); setMovEsFondo(false); setMovResponsable("");
     setMovActivo({ nombre: "", tipo: "MAQUINARIA" });
+    setMovProveedor(""); setMovModalidad("CONTADO"); setMovVence("");
     await loadSubcategorias(); // refresca la memoria del datalist
     addToast(
-      esFondo
+      creado.credito
+        ? `💳 Egreso a crédito: Cuenta por Pagar a ${creado.cuenta_por_pagar?.proveedor ?? provTxt} por ${money(amount)} · la caja no cambia`
+        : esFondo
         ? `Fondo a rendir cuentas entregado a ${movResponsable.trim()} · queda Por Liquidar`
         : creado.activo_fijo
           ? `Egreso registrado · 🏭 Activo fijo «${creado.activo_fijo.name}» agregado a Activos fijos (${money(amount)})`
@@ -8516,6 +8557,15 @@ export function App() {
       "success"
     );
     await refreshCaja(registerId);
+  }
+
+  // Anula un egreso A CRÉDITO (cancela su Cuenta por Pagar; no toca la caja).
+  async function anularEgresoCredito(c: CajaCredito) {
+    const reason = window.prompt(`Anular el egreso a crédito de ${money(Number(c.amount))} a ${c.proveedor_nombre ?? "proveedor"}.\nMotivo:`);
+    if (!reason || reason.trim().length < 3) return;
+    await apiPost(`/cash/creditos/${c.id}/anular`, { reason: reason.trim() });
+    addToast("Egreso a crédito anulado: su Cuenta por Pagar quedó cancelada", "success");
+    await refreshCaja();
   }
 
   async function loadSubcategorias() {
@@ -16490,9 +16540,14 @@ export function App() {
                   <div className="cajaMovimientosPanel cj-card cj-col-list" style={{ padding: 0, overflow: "hidden" }}>
                     <div className="cj-panel-head">
                       <span>📋 Movimientos de la sesión</span>
-                      <span className="cj-count">{cashMovements.length}</span>
+                      <span className="cj-count">{cashMovements.length + cajaCreditos.length}</span>
                     </div>
-                    {cashMovements.length === 0 ? (
+                    {cajaCreditos.some((c) => c.status !== "CANCELLED") && (
+                      <div style={{ padding: "8px 16px", background: "#f5f3ff", borderBottom: "1px solid #ede9fe", fontSize: 12.5, color: "#5b21b6" }}>
+                        💳 A crédito en esta sesión: <strong>{money(cajaCreditos.filter((c) => c.status !== "CANCELLED").reduce((s, c) => s + Number(c.amount), 0))}</strong> en Cuentas por Pagar · no afecta el saldo de la caja
+                      </div>
+                    )}
+                    {cashMovements.length + cajaCreditos.length === 0 ? (
                       <div className="emptyState">
                         <div className="emptyIcon">📭</div>
                         <p>Sin movimientos registrados aún</p>
@@ -16511,7 +16566,48 @@ export function App() {
                             </tr>
                           </thead>
                           <tbody>
-                            {cashMovements.map((m, idx) => {
+                            {[
+                              ...cashMovements.map((m) => ({ k: "mov" as const, t: m.created_at, m })),
+                              ...cajaCreditos.map((c) => ({ k: "cred" as const, t: c.created_at, c }))
+                            ].sort((a, b) => (a.t < b.t ? 1 : a.t > b.t ? -1 : 0)).map((fila, idx) => {
+                              if (fila.k === "cred") {
+                                // Egreso A CRÉDITO: Cuenta por Pagar al proveedor, $0 de impacto en la caja.
+                                const c = fila.c;
+                                const anulado = c.status === "CANCELLED";
+                                const abonado = Number(c.amount) - Number(c.balance);
+                                return (
+                                  <tr key={`cred-${c.id}`} style={{ borderBottom: "1px solid #e5e7eb", background: anulado ? "#fef2f2" : "#faf5ff", opacity: anulado ? 0.7 : 1 }}>
+                                    <td style={{ padding: "12px 16px", color: "#6b7280" }}>{new Date(c.created_at).toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" })}</td>
+                                    <td style={{ padding: "12px 16px" }}>
+                                      <span style={{ display: "inline-block", padding: "3px 8px", borderRadius: "4px", background: "#ede9fe", color: "#6d28d9", fontWeight: 700, fontSize: 11 }}>💳 A Crédito / CxP</span>
+                                      {anulado && <span className="chip bad" style={{ marginLeft: 6 }}>ANULADO</span>}
+                                    </td>
+                                    <td style={{ padding: "12px 16px", color: "#6b7280" }}>
+                                      {categoryLabel(c.categoria ?? "")}
+                                      {c.subcategoria && <div style={{ fontSize: 11, color: "#9ca3af" }}>{c.subcategoria}</div>}
+                                    </td>
+                                    <td style={{ padding: "12px 16px", color: "#6b7280" }}>
+                                      {c.description ?? "—"}
+                                      <div style={{ fontSize: 11, color: "#6d28d9", marginTop: 3 }}>
+                                        🏪 {c.proveedor_nombre ?? "—"}{c.due_date ? ` · vence ${String(c.due_date).slice(0, 10).split("-").reverse().join("/")}` : ""}
+                                        {!anulado && (Number(c.balance) < 0.005 ? " · ✅ pagada" : abonado > 0.005 ? ` · abonado ${money(abonado)}, saldo ${money(Number(c.balance))}` : " · pendiente en Por Pagar")}
+                                      </div>
+                                    </td>
+                                    <td style={{ padding: "12px 16px", textAlign: "right", whiteSpace: "nowrap" }}>
+                                      <div style={{ fontWeight: 700, color: "#6d28d9", textDecoration: anulado ? "line-through" : "none" }}>{money(Number(c.amount))}</div>
+                                      <div style={{ fontSize: 11, color: "#6b7280" }}>$0.00 en caja</div>
+                                    </td>
+                                    {canAnular && (
+                                      <td style={{ padding: "8px 16px", textAlign: "right", whiteSpace: "nowrap" }}>
+                                        {!anulado && abonado < 0.005 && (
+                                          <button type="button" className="btnGhost" onClick={() => anularEgresoCredito(c).catch((e) => addToast(e.message, "error"))}>Anular</button>
+                                        )}
+                                      </td>
+                                    )}
+                                  </tr>
+                                );
+                              }
+                              const m = fila.m;
                               const isReversed = !!m.reversed_at;
                               const isReversal = !!m.reversal_of;
                               return (
@@ -16533,6 +16629,7 @@ export function App() {
                                 </td>
                                 <td style={{ padding: "12px 16px", color: "#6b7280" }}>
                                   {m.description ?? "—"}
+                                  {m.proveedor_nombre && <div style={{ fontSize: 11, color: "#475569", marginTop: 2 }}>🏪 {m.proveedor_nombre} · 💵 Contado</div>}
                                   {isReversed && m.reversed_reason && <div style={{ fontSize: 11, color: "#b91c1c" }}>Motivo: {m.reversed_reason}</div>}
                                   {m.es_fondo && (
                                     <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -16806,7 +16903,7 @@ export function App() {
                     {movType === "EXPENSE" && (
                       <div style={{ background: movEsFondo ? "#fffbeb" : "transparent", border: movEsFondo ? "1px solid #fde68a" : "1px dashed #e5e7eb", borderRadius: 8, padding: "10px 12px", marginBottom: 16 }}>
                         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-                          <input type="checkbox" checked={movEsFondo} onChange={(e) => setMovEsFondo(e.target.checked)} style={{ width: "auto" }} />
+                          <input type="checkbox" checked={movEsFondo} onChange={(e) => { setMovEsFondo(e.target.checked); if (e.target.checked) setMovModalidad("CONTADO"); }} style={{ width: "auto" }} />
                           ☑️ Rendir cuentas (Fondo provisional)
                         </label>
                         {movEsFondo && (
@@ -16823,6 +16920,52 @@ export function App() {
                         )}
                       </div>
                     )}
+                    {/* 🏪 PROVEEDOR y modalidad de pago del egreso. A CRÉDITO no sale plata
+                        de la caja: se crea una Cuenta por Pagar al proveedor (Por Pagar). Los
+                        egresos con flujo propio (mantenimiento, sacos, pagos enlazados) siguen igual. */}
+                    {movType === "EXPENSE" && movCategory && movCategory !== "MANTENIMIENTO_EQUIPO" && !esCategoriaSacos(movCategory) && !CASH_REUSE[movCategory] && (() => {
+                      const creditoPosible = !movEsFondo && movCategory !== "COMPRA_ACTIVO_FIJO";
+                      const credito = creditoPosible && movModalidad === "CREDITO";
+                      const opt = (valor: "CONTADO" | "CREDITO", titulo: string, sub: string) => (
+                        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", borderRadius: 8, cursor: valor === "CREDITO" && !creditoPosible ? "not-allowed" : "pointer",
+                          border: `1.5px solid ${movModalidad === valor ? (valor === "CREDITO" ? "#7c3aed" : "#16a34a") : "#e5e7eb"}`, background: movModalidad === valor ? (valor === "CREDITO" ? "#f5f3ff" : "#f0fdf4") : "#fff", opacity: valor === "CREDITO" && !creditoPosible ? 0.5 : 1 }}>
+                          <input type="radio" name="modalidad_pago" checked={movModalidad === valor} disabled={valor === "CREDITO" && !creditoPosible}
+                            onChange={() => setMovModalidad(valor)} style={{ width: "auto", marginTop: 2 }} />
+                          <span><strong style={{ fontSize: 13 }}>{titulo}</strong><small className="muted" style={{ display: "block", fontSize: 11 }}>{sub}</small></span>
+                        </label>
+                      );
+                      return (
+                        <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", marginBottom: 16, display: "grid", gap: 10, background: credito ? "#faf5ff" : "transparent" }}>
+                          <label style={{ fontSize: 13, fontWeight: 600 }}>
+                            <span style={{ display: "block", marginBottom: 4 }}>🏪 Proveedor {credito ? "*" : <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span>}</span>
+                            <input list="proveedoresCajaList" value={movProveedor} onChange={(e) => setMovProveedor(e.target.value)}
+                              placeholder="Busca o escribe el proveedor (si es nuevo se crea)" required={credito}
+                              style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} />
+                            <datalist id="proveedoresCajaList">{proveedoresCaja.map((p) => <option key={p.id} value={p.name} />)}</datalist>
+                            {movProveedor.trim().length >= 2 && !proveedoresCaja.some((p) => p.name.trim().toLowerCase() === movProveedor.trim().toLowerCase()) && (
+                              <small style={{ display: "block", marginTop: 4, color: "#2563eb" }}>➕ «{movProveedor.trim().toUpperCase()}» se agregará a Proveedores al guardar.</small>
+                            )}
+                          </label>
+                          <div>
+                            <span style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Modalidad de pago</span>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                              {opt("CONTADO", "💵 Contado", "Sale de la caja ahora")}
+                              {opt("CREDITO", "💳 A crédito", creditoPosible ? "Queda en Por Pagar al proveedor" : movEsFondo ? "No aplica a un fondo" : "No aplica a esta categoría")}
+                            </div>
+                          </div>
+                          {credito && (
+                            <>
+                              <label style={{ fontSize: 13, fontWeight: 600 }}>
+                                <span style={{ display: "block", marginBottom: 4 }}>Vence el <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span></span>
+                                <input type="date" value={movVence} onChange={(e) => setMovVence(e.target.value)}
+                                  style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} />
+                              </label>
+                              <small style={{ color: "#6d28d9" }}>💳 No descuenta de la caja: se crea una Cuenta por Pagar al proveedor. Cuando la pagues en «Por Pagar», el egreso entra a la caja con esta categoría.</small>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })()}
                     {CASH_REUSE[movCategory] === "agricultor" && (() => {
                       const liqs = cashPayables.filter((p) => p.liquidation_number);
                       return (
