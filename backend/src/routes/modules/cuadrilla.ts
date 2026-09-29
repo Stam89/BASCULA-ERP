@@ -933,6 +933,7 @@ cuadrillaRouter.get("/summary", asyncRoute(async (req, res) => {
             COUNT(*) FILTER (WHERE paid_at IS NULL)::int AS pending_count
      FROM cuadrilla_entries
      WHERE work_date BETWEEN $1 AND $2
+       AND origen <> 'BASCULA' -- la bajada de carro se paga aparte, en un solo pago
      GROUP BY worker_name
      ORDER BY total DESC`,
     [from, to]
@@ -1040,6 +1041,7 @@ cuadrillaRouter.post("/pay-worker", asyncRoute(async (req, res) => {
       `SELECT id, subtotal FROM cuadrilla_entries
        WHERE worker_name = $1 AND paid_at IS NULL
          AND work_date BETWEEN $2 AND $3
+         AND origen <> 'BASCULA' -- la bajada de carro se paga aparte
        FOR UPDATE`,
       [body.worker_name, body.from, body.to]
     );
@@ -1111,7 +1113,7 @@ cuadrillaRouter.get("/worker-receipt", asyncRoute(async (req, res) => {
     `SELECT id, work_date::date AS fecha, activity_name,
             quantity::float AS qty, unit_rate::float AS rate, subtotal::float AS subtotal, paid_at
        FROM cuadrilla_entries
-      WHERE worker_name = $1 AND work_date BETWEEN $2 AND $3 ${paidCond}
+      WHERE worker_name = $1 AND work_date BETWEEN $2 AND $3 ${paidCond} AND origen <> 'BASCULA'
       ORDER BY work_date ASC, created_at ASC`,
     [q.worker_name, from, to]
   );
@@ -1338,4 +1340,81 @@ cuadrillaRouter.put("/bajadas/desde", requireAdmin, asyncRoute(async (req, res) 
     return sincronizarBajadas(client);
   });
   res.json({ ok: true, desde: body.desde, ...out });
+}));
+
+// ── Bajada de carro: se paga como UN SOLO pago (todas las personas juntas) ──
+// El recibo sale desglosado: cuánto le toca a cada quien y sus tickets.
+type DetalleBajada = { entry_id: string; fecha: string; trabajador: string; qq: number; tarifa: number; monto: number; numero: string | null; cliente: string | null; placa: string | null };
+function resumirBajadas(det: DetalleBajada[]) {
+  const porTrab = new Map<string, { trabajador: string; tickets: number; qq: number; monto: number }>();
+  for (const d of det) {
+    const t = porTrab.get(d.trabajador) ?? { trabajador: d.trabajador, tickets: 0, qq: 0, monto: 0 };
+    t.tickets += 1; t.qq = round2(t.qq + d.qq); t.monto = round2(t.monto + d.monto);
+    porTrab.set(d.trabajador, t);
+  }
+  const fechas = det.map((d) => d.fecha).sort();
+  return {
+    total: round2(det.reduce((a, d) => a + d.monto, 0)),
+    tickets: det.length,
+    desde: fechas[0] ?? null,
+    hasta: fechas[fechas.length - 1] ?? null,
+    por_trabajador: [...porTrab.values()].sort((a, b) => b.monto - a.monto),
+    detalle: det
+  };
+}
+async function detalleBajadas(db: Queryable, where: string, params: unknown[]) {
+  return (await db.query(
+    `SELECT e.id AS entry_id, e.work_date::text AS fecha, e.worker_name AS trabajador, e.quantity::float AS qq,
+            e.unit_rate::float AS tarifa, e.subtotal::float AS monto,
+            t.raw_payload->>'numeroTicket' AS numero, t.farmer_name AS cliente, t.raw_payload->>'placa' AS placa
+       FROM cuadrilla_entries e
+       LEFT JOIN mobile_synced_tickets t ON t.id = e.referencia_id
+      WHERE e.origen = 'BASCULA' AND ${where}
+      ORDER BY e.worker_name, e.work_date, e.created_at`,
+    params
+  )).rows as DetalleBajada[];
+}
+
+// Todo lo pendiente de bajada (cualquier semana: lo no pagado se arrastra).
+cuadrillaRouter.get("/bajadas/pendiente", asyncRoute(async (_req, res) => {
+  await inTransaction((client) => sincronizarBajadas(client));
+  res.json(resumirBajadas(await detalleBajadas(pool, "e.paid_at IS NULL", [])));
+}));
+
+// Recibo de un pago ya hecho (por la fecha/hora exacta del pago).
+cuadrillaRouter.get("/bajadas/recibo", asyncRoute(async (req, res) => {
+  const q = z.object({ paid_at: z.string().min(10) }).parse(req.query);
+  res.json({ paid_at: q.paid_at, ...resumirBajadas(await detalleBajadas(pool, "date_trunc('milliseconds', e.paid_at) = date_trunc('milliseconds', $1::timestamptz)", [q.paid_at])) });
+}));
+
+// Paga TODA la bajada pendiente en un solo egreso de Caja (mano de obra).
+cuadrillaRouter.post("/bajadas/pagar", asyncRoute(async (req, res) => {
+  const body = z.object({ cash_register_id: z.string().uuid() }).parse(req.body);
+  const user = (req as AuthenticatedRequest).user;
+  const out = await inTransaction(async (client) => {
+    await sincronizarBajadas(client);
+    const caja = await client.query("SELECT status FROM cash_registers WHERE id = $1", [body.cash_register_id]);
+    if (caja.rows[0]?.status !== "OPEN") throw new ApiError(409, "La caja no está abierta.");
+    const pendientes = await client.query(
+      "SELECT id FROM cuadrilla_entries WHERE origen = 'BASCULA' AND paid_at IS NULL FOR UPDATE"
+    );
+    if (!pendientes.rowCount) throw new ApiError(400, "No hay bajadas de carro pendientes de pago.");
+    const ids = pendientes.rows.map((r: { id: string }) => r.id);
+    const pagado = (await client.query(
+      "UPDATE cuadrilla_entries SET paid_at = now(), cash_register_id = $2 WHERE id = ANY($1) RETURNING paid_at",
+      [ids, body.cash_register_id]
+    )).rows[0].paid_at as Date;
+    const resumen = resumirBajadas(await detalleBajadas(client, "e.id = ANY($1)", [ids]));
+    if (resumen.total > 0) {
+      const reparto = resumen.por_trabajador.map((t) => `${t.trabajador} $${t.monto.toFixed(2)}`).join(", ");
+      await client.query(
+        `INSERT INTO cash_movements
+           (cash_register_id, movement, category, reference_type, amount, description, created_by)
+         VALUES ($1, 'EXPENSE', 'PAGO_MANO_OBRA', 'cuadrilla_entries', $2, $3, $4)`,
+        [body.cash_register_id, resumen.total, `Pago bajada de carro · ${resumen.tickets} ticket(s): ${reparto}`.slice(0, 500), user?.id ?? null]
+      );
+    }
+    return { paid_at: pagado instanceof Date ? pagado.toISOString() : String(pagado), ...resumen };
+  });
+  res.json(out);
 }));

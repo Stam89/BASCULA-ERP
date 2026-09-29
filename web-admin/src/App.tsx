@@ -384,6 +384,11 @@ type BajadaFila = {
   bajada_bascula: string | null; bajada_manual: string | null;
   entry_id: string | null; trabajador: string | null; monto: number | null; tarifa: number | null; paid_at: string | null;
 };
+type BajadaResumen = {
+  total: number; tickets: number; desde: string | null; hasta: string | null; paid_at?: string;
+  por_trabajador: Array<{ trabajador: string; tickets: number; qq: number; monto: number }>;
+  detalle: Array<{ entry_id: string; fecha: string; trabajador: string; qq: number; tarifa: number; monto: number; numero: string | null; cliente: string | null; placa: string | null }>;
+};
 type BajadaData = {
   semana: { inicio: string; fin: string; actual: boolean };
   desde: string | null; tarifa: number | null; actividad: string | null;
@@ -2685,9 +2690,13 @@ export function App() {
     () => pagosCuadPendientes.reduce((s, r) => s + (r.neto ?? 0), 0),
     [pagosCuadPendientes]
   );
+  // 🚚 Bajada de carro pendiente: se paga como UN SOLO pago (recibo desglosado).
+  const [bajadaPend, setBajadaPend] = useState<BajadaResumen | null>(null);
+  const bajadaPendTotal = round2(bajadaPend?.total ?? 0);
+  const bajadaPendFila = bajadaPendTotal > 0 ? 1 : 0;
   // ── UX de Pagos: buscador, confirmación con desglose y aviso de caja ──
   const [pagoBuscar, setPagoBuscar] = useState("");
-  const [pagoConfirm, setPagoConfirm] = useState<null | { kind: "nomina" | "cuadrilla"; nRow: WorkerSummary | null; cRow: CuadrillaSummaryRow | null }>(null);
+  const [pagoConfirm, setPagoConfirm] = useState<null | { kind: "nomina" | "cuadrilla" | "bajada"; nRow: WorkerSummary | null; cRow: CuadrillaSummaryRow | null }>(null);
   const cajaAbierta = Boolean(dashboard.current_cash_register?.id);
   // Personal administrativo (por accionista activo): staff, formulario, historial y modal de pago.
   const [adminStaff, setAdminStaff] = useState<AdminStaff[]>([]);
@@ -2712,11 +2721,13 @@ export function App() {
   };
   function abrirPagoNomina(row: WorkerSummary) { if (!cajaAbierta) { addToast("Abre una caja para pagar", "error"); return; } setPagoConfirm({ kind: "nomina", nRow: row, cRow: null }); }
   function abrirPagoCuadrilla(row: CuadrillaSummaryRow) { if (!cajaAbierta) { addToast("Abre una caja para pagar", "error"); return; } setPagoConfirm({ kind: "cuadrilla", nRow: null, cRow: row }); }
+  function abrirPagoBajada() { if (!cajaAbierta) { addToast("Abre una caja para pagar", "error"); return; } setPagoConfirm({ kind: "bajada", nRow: null, cRow: null }); }
   async function confirmarPago() {
     const pc = pagoConfirm; if (!pc) return;
     setPagoConfirm(null);
     if (pc.kind === "nomina" && pc.nRow) await payWorkerWeek(pc.nRow, PAGOS_FROM, PAGOS_TO);
     else if (pc.kind === "cuadrilla" && pc.cRow) await payCuadrillaWorker(pc.cRow, PAGOS_FROM, PAGOS_TO);
+    else if (pc.kind === "bajada") await pagarBajadas();
   }
   const nomina60Ago = (() => { const d = new Date(); d.setDate(d.getDate() - 60); return d.toISOString().slice(0, 10); })();
   const [histFrom, setHistFrom] = useState(nomina60Ago);
@@ -4328,6 +4339,7 @@ export function App() {
       const data = await apiGet<BajadaData>(`/cuadrilla/bajadas${semana ? `?semana=${semana}` : ""}`);
       setBajadaData(data);
       setBajadaSemana(data.semana.inicio);
+      apiGet<BajadaResumen>("/cuadrilla/bajadas/pendiente").then(setBajadaPend).catch(() => undefined);
       setBajadaDesde(data.desde ?? "");
     } catch (e) {
       addToast(`No se pudo cargar la bajada de carro: ${e instanceof Error ? e.message : "error"}`, "error");
@@ -4346,6 +4358,64 @@ export function App() {
       addToast(e instanceof Error ? e.message : "No se pudo guardar", "error");
     }
   }
+  // Paga TODA la bajada pendiente en un solo egreso y abre el recibo desglosado.
+  async function pagarBajadas() {
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) { addToast("Abre una caja para pagar", "error"); return; }
+    try {
+      const r = await apiPost<BajadaResumen>("/cuadrilla/bajadas/pagar", { cash_register_id: registerId });
+      addToast(`Bajada de carro pagada: ${money(r.total)} (${r.tickets} ticket(s))`, "success");
+      imprimirReciboBajada(r, true);
+      await refreshNomina();
+      await refreshCaja(registerId);
+      if (nominaView === "bajada") loadBajadas().catch(() => undefined);
+    } catch (e) {
+      addToast(`No se pudo pagar: ${e instanceof Error ? e.message : "error"}`, "error");
+    }
+  }
+  // Recibo de la bajada de carro: resumen por trabajador (con firma) y el detalle
+  // de sus tickets. Sirve para lo pendiente (antes de pagar) y para lo pagado.
+  function imprimirReciboBajada(r: BajadaResumen, pagado: boolean) {
+    const esc = (t: unknown) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
+    const f = (iso: string | null | undefined) => iso ? new Date(`${String(iso).slice(0, 10)}T12:00:00`).toLocaleDateString("es-EC") : "—";
+    const resumen = r.por_trabajador.map((t) => `<tr><td><b>${esc(t.trabajador)}</b></td><td class="n">${t.tickets}</td><td class="n">${t.qq.toFixed(2)}</td><td class="n"><b>${money(t.monto)}</b></td><td class="firma"></td></tr>`).join("");
+    const detalle = r.por_trabajador.map((t) => {
+      const filas = r.detalle.filter((d) => d.trabajador === t.trabajador).map((d) =>
+        `<tr><td>${f(d.fecha)}</td><td>#${esc(d.numero ?? "—")}</td><td>${esc(d.cliente ?? "—")}</td><td>${esc(d.placa ?? "—")}</td><td class="n">${d.qq.toFixed(2)}</td><td class="n">${money(d.tarifa)}</td><td class="n">${money(d.monto)}</td></tr>`).join("");
+      return `<h3>${esc(t.trabajador)} · ${money(t.monto)}</h3><table><thead><tr><th>Fecha</th><th>Ticket</th><th>Cliente</th><th>Placa</th><th class="n">QQ</th><th class="n">Tarifa</th><th class="n">Monto</th></tr></thead><tbody>${filas}</tbody></table>`;
+    }).join("");
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Recibo bajada de carro</title><style>
+      body{font-family:Arial,sans-serif;font-size:12px;margin:14mm;color:#111}
+      h1{font-size:17px;margin:0;text-align:center} h2{font-size:12px;font-weight:normal;margin:2px 0 0;text-align:center;color:#555}
+      .t{font-size:15px;font-weight:bold;text-align:center;margin:14px 0 2px;letter-spacing:1px}
+      .p{text-align:center;color:#555;margin-bottom:10px}
+      .est{display:inline-block;padding:3px 10px;border-radius:999px;font-weight:bold;font-size:11px;background:${pagado ? "#dcfce7;color:#166534" : "#fef3c7;color:#92400e"}}
+      table{width:100%;border-collapse:collapse;margin-top:6px}
+      th{background:#0f766e;color:#fff;padding:5px 7px;text-align:left;font-size:10.5px;text-transform:uppercase}
+      td{padding:5px 7px;border-bottom:1px solid #ddd}
+      .n{text-align:right;font-variant-numeric:tabular-nums}
+      .firma{width:34%;border-bottom:1px solid #999}
+      tfoot td{font-weight:bold;border-top:2px solid #111;background:#f3f4f6}
+      h3{font-size:12.5px;margin:14px 0 2px;color:#0f766e}
+      @media print{body{margin:9mm}}
+    </style></head><body>
+      <h1>${esc(appSettings.business_name)}</h1>
+      <h2>${esc([appSettings.business_subtitle, appSettings.ruc && `RUC: ${appSettings.ruc}`].filter(Boolean).join(" · "))}</h2>
+      <div class="t">RECIBO · BAJADA DE CARRO</div>
+      <div class="p">Tickets del ${f(r.desde)} al ${f(r.hasta)} · <span class="est">${pagado ? `PAGADO ${r.paid_at ? new Date(r.paid_at).toLocaleString("es-EC") : ""}` : "PENDIENTE DE PAGO"}</span></div>
+      <table><thead><tr><th>Trabajador</th><th class="n">Tickets</th><th class="n">QQ</th><th class="n">Le toca</th><th>Firma (recibí conforme)</th></tr></thead>
+        <tbody>${resumen}</tbody>
+        <tfoot><tr><td>TOTAL · ${r.por_trabajador.length} persona(s)</td><td class="n">${r.tickets}</td><td class="n">${r.por_trabajador.reduce((a, t) => a + t.qq, 0).toFixed(2)}</td><td class="n">${money(r.total)}</td><td></td></tr></tfoot>
+      </table>
+      <div class="t" style="font-size:12px;margin-top:18px">DETALLE POR TRABAJADOR</div>
+      ${detalle}
+    </body></html>`;
+    const w = window.open("", "_blank", "width=820,height=700");
+    if (!w) { addToast("El navegador bloqueó la ventana del recibo. Permite ventanas emergentes.", "warn"); return; }
+    w.document.write(html); w.document.close(); w.focus();
+    setTimeout(() => w.print(), 300);
+  }
+
   async function guardarBajadaDesde() {
     if (!bajadaDesde) return;
     if (!window.confirm(`¿Contar la bajada de carro desde el ${new Date(`${bajadaDesde}T12:00:00`).toLocaleDateString("es-EC")}?\n\nLos tickets anteriores a esa fecha no se pagan por aquí (se asumen pagados por fuera). Lo ya pagado no cambia.`)) return;
@@ -4365,8 +4435,8 @@ export function App() {
       // Tablas de REVISIÓN de las pestañas operativas: por período elegido.
       // La nómina de PRODUCCIÓN y la cuadrilla son de la matriz.
       if (esMatrizActiva) {
-        // Bajadas de carro de los tickets nuevos → cuadrilla (así salen en Pagos).
-        await apiPost("/cuadrilla/bajadas/sync", {}).catch(() => undefined);
+        // Bajada de carro pendiente (sincroniza los tickets nuevos): un solo pago.
+        try { setBajadaPend(await apiGet<BajadaResumen>("/cuadrilla/bajadas/pendiente")); } catch { setBajadaPend(null); }
         const data = await apiGet<{ rows: WorkerSummary[] }>(`/labor/summary?from=${nominaFrom}&to=${nominaTo}`);
         setNominaRows(data.rows);
         try {
@@ -4377,7 +4447,7 @@ export function App() {
           const cuad = await apiGet<{ rows: CuadrillaSummaryRow[] }>(`/cuadrilla/summary?from=${PAGOS_FROM}&to=${PAGOS_TO}`);
           setPagosCuadRows(cuad.rows);
         } catch { setPagosCuadRows([]); }
-      } else { setNominaRows([]); setPagosNominaRows([]); setPagosCuadRows([]); }
+      } else { setNominaRows([]); setPagosNominaRows([]); setPagosCuadRows([]); setBajadaPend(null); }
       // Personal administrativo: por accionista, se paga en Pagos (todos los accionistas).
       await loadAdminStaff();
       await loadAdminHistory();
@@ -19090,8 +19160,8 @@ export function App() {
               {puedeVerSubTab("Nomina", "pagos") && (
               <button type="button" className={nominaView === "pagos" ? "active" : ""} onClick={() => setNominaView("pagos")} style={{ fontWeight: 700 }}>
                 💵 Pagos
-                {(nominaPendientes.length + pagosCuadPendientes.length + adminPending.length) > 0 && (
-                  <span style={{ marginLeft: 6, background: "#dc2626", color: "#fff", borderRadius: 999, padding: "1px 8px", fontSize: 12, fontWeight: 800 }}>{nominaPendientes.length + pagosCuadPendientes.length + adminPending.length}</span>
+                {(nominaPendientes.length + pagosCuadPendientes.length + adminPending.length + bajadaPendFila) > 0 && (
+                  <span style={{ marginLeft: 6, background: "#dc2626", color: "#fff", borderRadius: 999, padding: "1px 8px", fontSize: 12, fontWeight: 800 }}>{nominaPendientes.length + pagosCuadPendientes.length + adminPending.length + bajadaPendFila}</span>
                 )}
               </button>
               )}
@@ -19130,7 +19200,7 @@ export function App() {
                 <div style={{ fontSize: 12, fontWeight: 600, opacity: 0.9, letterSpacing: ".03em" }}>💰 COSTO TOTAL DE NÓMINA · A PAGAR</div>
                 <button type="button" onClick={() => setNominaView("pagos")} title="Ir a Pagos"
                   style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "#fff", fontSize: 30, fontWeight: 800, lineHeight: 1.1, textAlign: "left" }}>
-                  {money(nominaResumen.total + cuadPendienteTotal + adminPendienteTotal)} <span style={{ fontSize: 13, fontWeight: 600, opacity: 0.85 }}>›</span>
+                  {money(nominaResumen.total + cuadPendienteTotal + adminPendienteTotal + bajadaPendTotal)} <span style={{ fontSize: 13, fontWeight: 600, opacity: 0.85 }}>›</span>
                 </button>
                 <div style={{ fontSize: 11, opacity: 0.85, marginTop: 2 }}>Todo lo pendiente por pagar (nómina + cuadrilla) · se acumula hasta liquidar</div>
               </div>
@@ -19140,7 +19210,7 @@ export function App() {
 
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(112px, 1fr))", gap: 10 }}>
 
-                {([["Planta", nominaResumen.planta], ["Secadora", nominaResumen.secadora], ["Cuadrilla", nominaResumen.cuadrilla + cuadPendienteTotal], ["Administrativo", adminPendienteTotal]] as [string, number][])
+                {([["Planta", nominaResumen.planta], ["Secadora", nominaResumen.secadora], ["Cuadrilla", nominaResumen.cuadrilla + cuadPendienteTotal + bajadaPendTotal], ["Administrativo", adminPendienteTotal]] as [string, number][])
 
                   .map(([label, v]) => (
 
@@ -19514,7 +19584,7 @@ export function App() {
                   <div>
                     <h2 style={{ marginBottom: 2 }}>🚚 Bajada de carro</h2>
                     <p className="muted" style={{ margin: 0 }}>
-                      QQ de cada ticket de báscula × <strong>{d?.tarifa != null ? money(d.tarifa) : "—"}</strong> a quien bajó el carro. Se paga de <strong>sábado a viernes</strong> en 💵 Pagos (junto con su cuadrilla); lo que no se pague pasa solo a la semana siguiente.{" "}
+                      QQ de cada ticket de báscula × <strong>{d?.tarifa != null ? money(d.tarifa) : "—"}</strong> a quien bajó el carro. Se paga de <strong>sábado a viernes</strong> en 💵 Pagos como <strong>un solo pago</strong> (el recibo sale desglosado por persona); lo que no se pague pasa solo a la semana siguiente.{" "}
                       {cfgLink("Actividades y tarifas", "Cambiar tarifa")}
                     </p>
                   </div>
@@ -19630,7 +19700,12 @@ export function App() {
                 </div>
 
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 12, flexWrap: "wrap", marginTop: 14, borderTop: "1px solid var(--c-border)", paddingTop: 12 }}>
-                  <button type="button" className="primary" onClick={() => setNominaView("pagos")}>💵 Ir a Pagos</button>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <button type="button" className="primary" onClick={() => setNominaView("pagos")}>💵 Ir a Pagos</button>
+                    {bajadaPend && bajadaPend.total > 0 && (
+                      <button type="button" className="btnSecondary" onClick={() => imprimirReciboBajada(bajadaPend, false)}>🧾 Recibo de lo pendiente ({money(bajadaPend.total)})</button>
+                    )}
+                  </div>
                   {isAdmin && (
                     <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
                       <label style={{ margin: 0 }}><span style={{ fontSize: 12 }}>Contar tickets desde</span>
@@ -19657,9 +19732,10 @@ export function App() {
               const adminFiltrado = adminPending.filter((st) => coincide(st.worker_name));
               const adminUltimoPago = new Map();
               for (const h of adminHistory) { if (!adminUltimoPago.has(h.worker_name)) adminUltimoPago.set(h.worker_name, h.paid_at); }
-              const totalPendientes = nominaPendientes.length + pagosCuadPendientes.length + adminPending.length;
-              const totalMonto = nominaPendientes.reduce((a, r) => a + (r.to_pay ?? (r.pending_amount ?? 0)), 0) + cuadPendienteTotal + adminPendienteTotal;
-              const nada = nominaPendientes.length === 0 && pagosCuadPendientes.length === 0 && adminPending.length === 0;
+              const bajadaVisible = bajadaPendFila > 0 && (!buscar || "bajada de carro".includes(buscar) || (bajadaPend?.por_trabajador ?? []).some((t) => coincide(t.trabajador)));
+              const totalPendientes = nominaPendientes.length + pagosCuadPendientes.length + adminPending.length + bajadaPendFila;
+              const totalMonto = nominaPendientes.reduce((a, r) => a + (r.to_pay ?? (r.pending_amount ?? 0)), 0) + cuadPendienteTotal + adminPendienteTotal + bajadaPendTotal;
+              const nada = nominaPendientes.length === 0 && pagosCuadPendientes.length === 0 && adminPending.length === 0 && bajadaPendFila === 0;
               return (
               <div className="tablePanel">
                 <div className="reportToolbar" style={{ marginBottom: 10 }}>
@@ -19752,6 +19828,28 @@ export function App() {
                           </td>
                         </tr>
                       ))}
+                {/* 🚚 Bajada de carro: UN solo pago para todos; el recibo va desglosado. */}
+                {bajadaVisible && bajadaPend && (
+                  <tr key="bajada">
+                    <td><span className="chip">🚚 Bajada de carro</span></td>
+                    <td><span className="chip ok">Cuadrilla</span></td>
+                    <td style={{ fontWeight: 600 }}>
+                      Bajada de carro · {bajadaPend.por_trabajador.length} persona(s)
+                      <div style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>
+                        {antiguedadLabel(bajadaPend.desde, bajadaPend.tickets)} · {bajadaPend.por_trabajador.map((t) => `${t.trabajador} ${money(t.monto)}`).join(" · ")}
+                      </div>
+                    </td>
+                    <td className="num" style={{ fontWeight: 700 }}>{money(bajadaPendTotal)}</td>
+                    <td className="num">—</td>
+                    <td className="num" style={{ fontWeight: 700, color: "#047857" }}>{money(bajadaPendTotal)}</td>
+                    <td className="num" style={{ whiteSpace: "nowrap" }}>
+                      <button type="button" className="btnGhost" title="Recibo desglosado por trabajador" onClick={() => imprimirReciboBajada(bajadaPend, false)}>🧾</button>
+                      <button type="button" className="btnGhost" style={{ marginLeft: 6 }} title="Ver tickets" onClick={() => { setNominaView("bajada"); loadBajadas().catch(() => undefined); }}>🚚</button>
+                      <button type="button" disabled={!cajaAbierta} onClick={() => abrirPagoBajada()}
+                        style={{ marginLeft: 8, padding: "7px 16px", borderRadius: 8, border: "none", cursor: cajaAbierta ? "pointer" : "not-allowed", background: cajaAbierta ? "#047857" : "#9ca3af", color: "#fff", fontWeight: 800, fontSize: 13 }}>💵 Pagar</button>
+                    </td>
+                  </tr>
+                )}
                 {/* Filas de sueldo administrativo del accionista activo (se pagan aquí mismo). */}
                 {adminFiltrado.map((st) => {
                   const ult = adminUltimoPago.get(st.worker_name);
@@ -19770,7 +19868,7 @@ export function App() {
                     </tr>
                   );
                 })}
-                      {nominaOrden.length === 0 && cuadOrden.length === 0 && adminFiltrado.length === 0 && (
+                      {nominaOrden.length === 0 && cuadOrden.length === 0 && adminFiltrado.length === 0 && !bajadaVisible && (
                         <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: "14px" }}>{pagoBuscar ? "Sin resultados para la búsqueda." : "Sin pagos pendientes."}</td></tr>
                       )}
                     </tbody>
@@ -19788,22 +19886,32 @@ export function App() {
 
                 {pagoConfirm && (() => {
                   const isNom = pagoConfirm.kind === "nomina";
-                  const nombre = isNom ? pagoConfirm.nRow?.worker_name : pagoConfirm.cRow?.worker_name;
-                  const gano = isNom ? (pagoConfirm.nRow?.pending_amount ?? 0) : round2((pagoConfirm.cRow?.total ?? 0) - (pagoConfirm.cRow?.pagado ?? 0));
-                  const anticipos = isNom ? (pagoConfirm.nRow?.advances ?? 0) : (pagoConfirm.cRow?.anticipos ?? 0);
-                  const neto = isNom ? (pagoConfirm.nRow?.to_pay ?? 0) : (pagoConfirm.cRow?.neto ?? 0);
+                  const isBaj = pagoConfirm.kind === "bajada";
+                  const nombre = isBaj ? "la bajada de carro" : isNom ? pagoConfirm.nRow?.worker_name : pagoConfirm.cRow?.worker_name;
+                  const gano = isBaj ? bajadaPendTotal : isNom ? (pagoConfirm.nRow?.pending_amount ?? 0) : round2((pagoConfirm.cRow?.total ?? 0) - (pagoConfirm.cRow?.pagado ?? 0));
+                  const anticipos = isBaj ? 0 : isNom ? (pagoConfirm.nRow?.advances ?? 0) : (pagoConfirm.cRow?.anticipos ?? 0);
+                  const neto = isBaj ? bajadaPendTotal : isNom ? (pagoConfirm.nRow?.to_pay ?? 0) : (pagoConfirm.cRow?.neto ?? 0);
                   return (
                     <div className="modalOverlay" onClick={() => setPagoConfirm(null)}>
                       <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 380 }}>
                         <h3 style={{ marginTop: 0, marginBottom: 10 }}>Confirmar pago</h3>
-                        <p style={{ margin: "0 0 12px" }}>Vas a pagar a <strong>{nombre}</strong>{isNom ? "" : " (cuadrilla)"}.</p>
+                        <p style={{ margin: "0 0 12px" }}>Vas a pagar {isBaj ? "" : "a "}<strong>{nombre}</strong>{isNom || isBaj ? "" : " (cuadrilla)"}{isBaj ? ` en un solo pago (${bajadaPend?.tickets ?? 0} ticket(s))` : ""}.</p>
+                        {isBaj && bajadaPend && (
+                          <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "6px 10px", marginBottom: 10, fontSize: 13 }}>
+                            {bajadaPend.por_trabajador.map((t) => (
+                              <div key={t.trabajador} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
+                                <span>{t.trabajador} <span className="muted">· {t.tickets} ticket(s)</span></span><strong className="num">{money(t.monto)}</strong>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         <div style={{ display: "grid", gridTemplateColumns: "1fr auto", rowGap: 7, columnGap: 12, fontSize: 14, alignItems: "baseline" }}>
                           <span>Ganó</span><strong className="num">{money(gano)}</strong>
                           <span>Anticipos</span><strong className="num" style={{ color: anticipos > 0 ? "var(--c-danger)" : "inherit" }}>{anticipos > 0 ? `−${money(anticipos)}` : "—"}</strong>
                           <span style={{ borderTop: "1px solid #e5e7eb", paddingTop: 7, fontWeight: 800 }}>Neto a pagar</span>
                           <strong className="num" style={{ borderTop: "1px solid #e5e7eb", paddingTop: 7, fontWeight: 800, color: "#047857", fontSize: 17 }}>{money(neto)}</strong>
                         </div>
-                        <p className="muted" style={{ fontSize: 12, margin: "12px 0 16px" }}>Sale de la caja abierta y queda guardado en el Historial.</p>
+                        <p className="muted" style={{ fontSize: 12, margin: "12px 0 16px" }}>{isBaj ? "Sale de la caja abierta en un solo egreso y se abre el recibo desglosado para que firme cada uno." : "Sale de la caja abierta y queda guardado en el Historial."}</p>
                         <div className="buttonRow" style={{ justifyContent: "flex-end", gap: 8 }}>
                           <button type="button" onClick={() => setPagoConfirm(null)}>Cancelar</button>
                           <button type="button" onClick={() => confirmarPago()} style={{ background: "#047857", color: "#fff", border: "none", borderRadius: 8, padding: "8px 18px", fontWeight: 800, cursor: "pointer" }}>💵 Confirmar pago</button>
