@@ -49,6 +49,16 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Toda la app adaptable a celular / tablet / PC (2026-09-29)
+- Bloque final de `styles.css` («TODA LA APP SE ADAPTA AL EQUIPO»): reglas por tamano sobre las grillas y filas con estilo en linea (`[style*="grid-template-columns"]`, `[style*="display: flex"]`) dentro de `.content` y `.modalOverlay`. Celular ≤600: grillas explicitas a 1 columna (menos auto-fit/fill y `.tableHead/.tableRow`), filas que bajan de linea, campos 16px/40px (sin zoom), botones ≥38px, modales casi a pantalla completa, subtabs deslizables. Tablet ≤1024: grillas de 4+ columnas a 2, hijos de grilla con min-width 0. ≤860: tablas fuera de un contenedor con scroll se deslizan de lado. `.rm-main/.rm-side` apilados ≤1180. `.cajaSubNav` con max-width 100% (Nomina se salia 6px incluso en PC).
+- Verificado con barrido de todos los modulos + subpestanas (Matriz y Transporte) a 390, 768, 1024 y 1280 px: sin desborde horizontal. En PC >1024 no cambia nada mas.
+- Si una pantalla nueva usa una grilla en linea que NO debe colapsar en celular, darle clase `tableRow` o usar auto-fit.
+
+### Ventas: sacos no traban, compartir pedido, sin duplicados (2026-09-29)
+- Faltar sacos nunca bloqueo (la regla ya lo permitia), pero el aviso rojo parecia un error: ahora es ambar y dice que se puede tomar igual. Dashboard (Matriz): `SacosPorComprarAlerta` con GET `/sacks/por-comprar` (`sacosPorComprar` en services/sacos.ts: plan de sacos de pedidos PENDING sin preparar vs stock + los negativos; `planSacosPedido` extraido de `descontarSacosPedido`, mismo calculo). La alerta vieja de minimos excluye los que ya salen ahi.
+- Compartir pedido con el cliente: `components/PedidoCompartir.tsx` (WhatsApp con el telefono del cliente 09.. → 593.., imagen con html2canvas, copiar texto; TOTAL A PAGAR). Se abre solo al tomar el pedido y con «📤 Compartir con el cliente» en cada pedido de la Cola de Despachos.
+- «Tomar pedido» bloqueado mientras guarda (ref + estado): hubo 2 pedidos identicos PED-...IPKO / RH3W creados a 0,1 s (doble toque). No se tocaron; decidir si anular uno.
+
 ### Bascula: «Contar tickets desde» (2026-09-29)
 - Hay ~280 tickets de la app de bascula (junio-agosto, antes del ERP) que salian como «Pendientes». Fecha de corte en Bascula → Tickets (solo ADMINISTRADOR): los anteriores dejan de contar como pendientes (lista Pendientes y contador «Pendientes» del panel de sincronizacion); en «Todos» siguen visibles, atenuados, con chip «Anterior al corte». Es solo un filtro de vista: no toca tickets.
 - Tabla `bascula_config` (id=1, desde DATE; migracion 20261051, default NULL = se cuentan todos, sin cambio). Helper `services/bascula-corte.ts` (`fechaTicketSql`, `leerCorteBascula`; misma fecha del ticket que la bajada de carro). Endpoints GET/PUT `/tickets/corte` (PUT requireAdmin; `desde:null` quita el corte). `/tickets` devuelve `antes_del_corte`; `/api/bascula/status` respeta el corte.
