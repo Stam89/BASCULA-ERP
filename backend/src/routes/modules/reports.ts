@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
+import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { CATEGORIAS_NO_OPERATIVAS } from "../../services/resultado-mensual.js";
 
@@ -22,16 +23,13 @@ function parseRange(query: unknown): { from: string; to: string } {
   };
 }
 
-// Socio del informe: ?accionista=all → todos (consolidado, null); ?accionista=<id>
-// → ese socio; sin parámetro → el accionista activo (header). Así el selector
-// «Socio» de Reportes aplica a TODOS los informes, no solo al Resumen.
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-function accionistaDelInforme(req: unknown): string | null {
-  const r = req as AuthenticatedRequest & { query: Record<string, unknown> };
-  const p = typeof r.query?.accionista === "string" ? r.query.accionista.trim() : "";
-  if (p === "all") return null;
-  if (UUID_RE.test(p)) return p;
-  return r.accionistaId ?? null;
+// Cada informe es INDIVIDUAL del accionista activo (el del menú lateral, que
+// valida resolveAccionista). No se acepta pedir otro socio ni el consolidado
+// «Todos» por parámetro: un accionista solo ve sus propios números.
+function accionistaDelInforme(req: unknown): string {
+  const id = (req as AuthenticatedRequest).accionistaId;
+  if (!id) throw new ApiError(400, "Selecciona un accionista para ver sus informes.");
+  return id;
 }
 // Movimientos de caja REALES: sin los anulados ni sus contra-asientos (si no,
 // una anulación inflaría a la vez ingresos y egresos).
@@ -531,6 +529,12 @@ reportsRouter.get("/servicios", asyncRoute(async (req, res) => {
 // secadora (reparto proporcional). Todo es propiedad de CEYRO, así que no se
 // filtra por accionista: se consolida el consumo de todos los socios.
 reportsRouter.get("/fuel", asyncRoute(async (req, res) => {
+  const accFuel = (req as AuthenticatedRequest).accionistaId ?? null;
+  const tipoFuel = accFuel ? (await pool.query("SELECT tipo FROM accionistas WHERE id = $1", [accFuel])).rows[0]?.tipo : null;
+  if (tipoFuel !== "MATRIZ") {
+    res.status(403).json({ error: "El informe de combustible es de la planta (Matriz). Cambia a la Matriz para verlo." });
+    return;
+  }
   const { from, to } = parseRange(req.query);
   if (!(await hasTable("drying_tunnel_reports"))) {
     res.json({ range: { from, to }, motors: [], rows: [], totals: { gas: 0, diesel: 0, total: 0 } });

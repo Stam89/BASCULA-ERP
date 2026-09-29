@@ -52,7 +52,7 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ### Reportes: revision y correcciones (2026-09-29)
 - «Gastos» (informe y KPI del Resumen) leia la tabla `expenses` (vacia, ya no se usa): ahora sale de `cash_movements` EXPENSE vigentes, con categoria de Caja, detalle, socio y separacion operativos / no operativos (`CATEGORIAS_NO_OPERATIVAS` de resultado-mensual). KPI renombrado «Gastos operativos».
 - Resumen: sumas de caja y desglose excluyen anulados y contra-asientos (`MOV_VIGENTE`), antes una anulacion inflaba ingresos y egresos; CxC/CxP excluyen CANCELLED.
-- Selector «Socio» aplica a todos los informes (`accionistaDelInforme`: all / id / header); se oculta en Combustible, Lotes guardados y Servicios (globales). El titulo impreso lleva el socio.
+- Informes INDIVIDUALES por accionista (pedido del usuario): `accionistaDelInforme` usa SOLO el accionista activo (header validado por resolveAccionista); ignora ?accionista=all/otro id; 400 si no hay. Sin selector «Socio»: la barra muestra «👤 Accionista» y al cambiarlo en el menu lateral se recarga el informe. Combustible y Servicios solo con la Matriz activa (403 en backend). El titulo impreso lleva el accionista.
 - Produccion: columnas con unidades (cascara kg y QQ, pilado QQ, subproductos QQ, rendimiento %, tipo propio/servicio, socio, estado Finalizado/En proceso/Anulado) + totales. Antes «Entrada» (kg) vs «Salida» (QQ) sin decirlo.
 
 ### Nomina > 🚚 Bajada de carro (2026-09-29)

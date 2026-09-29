@@ -2947,7 +2947,6 @@ export function App() {
   const [reportFrom, setReportFrom] = useState(firstOfMonthIso);
   const [reportTo, setReportTo] = useState(todayIso);
   // Segmentación del reporte por accionista ("all" = consolidado) y pestaña inferior.
-  const [reportAccionista, setReportAccionista] = useState("all");
   const [reportBottomTab, setReportBottomTab] = useState<"tabla" | "grafico">("tabla");
   // Alcance del reporte: solo caja (liquidez) o incluir créditos/pendientes (devengado).
   const [reportScope, setReportScope] = useState<"cash" | "accrued">("cash");
@@ -4087,8 +4086,16 @@ export function App() {
   const esMatrizActiva = matrizAccionista?.id === activeAccionistaId;
   // El reporte de Servicios es solo de la Matriz: con otro socio vuelve al Resumen.
   useEffect(() => {
-    if (reportKind === "servicios" && matrizAccionista && !esMatrizActiva) { setReportKind("resumen"); setReportRows(null); }
+    if ((reportKind === "servicios" || reportKind === "combustible") && matrizAccionista && !esMatrizActiva) { setReportKind("resumen"); setReportRows(null); }
   }, [reportKind, esMatrizActiva, matrizAccionista]);
+  // Informes individuales: al cambiar de accionista en el menú lateral se
+  // recarga el informe abierto con los datos del nuevo accionista.
+  useEffect(() => {
+    if (activeTab !== "Reportes" || !activeAccionistaId) return;
+    const k: ReportKind = !esMatrizActiva && (reportKind === "servicios" || reportKind === "combustible") ? "resumen" : reportKind;
+    loadReport(k).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeAccionistaId]);
   // ¿El accionista activo maneja un catálogo de sacos? La Matriz (sus marcas) y
   // el socio con proceso propio de envejecido (STALYN). ROVINSON no.
   const manejaSacosPropios = esMatrizActiva || moduloEnvejecidoHabilitado;
@@ -5592,7 +5599,8 @@ export function App() {
     try {
       const qs = `?from=${reportFrom}&to=${reportTo}`;
       if (kind === "resumen") {
-        const data = await apiGet<ReportSummary>(`/reports/summary${qs}&accionista=${encodeURIComponent(reportAccionista)}&scope=${reportScope}`);
+        // Informe individual del accionista activo (el del menú lateral).
+        const data = await apiGet<ReportSummary>(`/reports/summary${qs}&scope=${reportScope}`);
         setReportSummary(data);
         setReportRows({ kind, data });
       } else if (kind === "servicios") {
@@ -5600,8 +5608,8 @@ export function App() {
         const data = await apiGet<any>(`/reports/servicios?mes=${servicioMes}`);
         setReportRows({ kind, data });
       } else {
-        // El selector «Socio» aplica a todos los informes (Todos = consolidado).
-        const data = await apiGet<any>(`/reports/${reportEndpoint[kind]}${qs}&accionista=${encodeURIComponent(reportAccionista)}`);
+        // Informe individual del accionista activo (el del menú lateral).
+        const data = await apiGet<any>(`/reports/${reportEndpoint[kind]}${qs}`);
         setReportRows({ kind, data });
       }
     } catch (e) {
@@ -20281,7 +20289,7 @@ export function App() {
           <>
             <div className="reportToolbar">
               <div className="reportKinds">
-                {(["resumen", "ventas", "liquidaciones", "gastos", "produccion", "combustible", "porcobrar", "arianos", "servicios"] as const).filter((k) => puedeVerSubTab("Reportes", k) && (k !== "servicios" || esMatrizActiva)).map((k) => (
+                {(["resumen", "ventas", "liquidaciones", "gastos", "produccion", "combustible", "porcobrar", "arianos", "servicios"] as const).filter((k) => puedeVerSubTab("Reportes", k) && ((k !== "servicios" && k !== "combustible") || esMatrizActiva)).map((k) => (
                   <button
                     key={k}
                     type="button"
@@ -20293,15 +20301,13 @@ export function App() {
                 ))}
               </div>
               <div className="reportDates">
-                {accionistas.length > 1 && !["servicios", "combustible", "arianos"].includes(reportKind) && (
-                  <label>
-                    <span>👥 Socio</span>
-                    <select value={reportAccionista} onChange={(e) => setReportAccionista(e.target.value)}>
-                      <option value="all">Todos</option>
-                      {accionistas.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                    </select>
-                  </label>
-                )}
+                {/* Cada informe es del accionista activo (se cambia en el menú lateral). */}
+                <label title="Los informes son individuales: se cambia de accionista en el menú lateral">
+                  <span>👤 Accionista</span>
+                  <strong style={{ display: "inline-flex", alignItems: "center", height: 38, padding: "0 12px", borderRadius: 8, background: "var(--c-surface-2)", border: "1px solid var(--c-border)", whiteSpace: "nowrap" }}>
+                    {accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "—"}
+                  </strong>
+                </label>
                 {reportKind === "resumen" && (
                   <label>
                     <span>🔎 Alcance</span>
@@ -20335,13 +20341,13 @@ export function App() {
                 </button>
                 {reportKind === "resumen" && reportSummary && (() => {
                   // Exporta el DESGLOSE con los filtros actuales (rango, socio, alcance).
-                  const socioTxt = reportAccionista === "all" ? "Todos" : (accionistas.find((a) => a.id === reportAccionista)?.name ?? "");
+                  const socioTxt = accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "";
                   const alcanceTxt = reportScope === "accrued" ? "Devengado (incluye créditos)" : "Solo caja (liquidez)";
                   const headers = ["Fecha", "Concepto", "Socio", "Tipo", "Monto"];
                   const rows = (reportSummary.breakdown ?? []).map((m) => [
                     new Date(m.fecha).toLocaleDateString("es-EC"), m.concepto, m.socio, reportTipoLabel(m.tipo), money(m.monto)
                   ]) as Array<Array<string | number>>;
-                  const title = `Reporte ${reportFrom} a ${reportTo} · Socio: ${socioTxt} · ${alcanceTxt}`;
+                  const title = `Reporte ${reportFrom} a ${reportTo} · Accionista: ${socioTxt} · ${alcanceTxt}`;
                   return (
                     <>
                       <button type="button" className="btnSecondary" onClick={() => printReport(title, headers, rows, [])}>📥 Exportar PDF</button>
@@ -20354,8 +20360,7 @@ export function App() {
                 <div className="reportExportBtns">
                   <button type="button" className="btnSecondary" onClick={() => {
                     const e = getReportExport(); if (!e) return;
-                    const conSocio = !["servicios", "combustible", "arianos"].includes(reportKind);
-                    const socioTxt = !conSocio ? "" : reportAccionista === "all" ? " · Todos los socios" : ` · Socio: ${accionistas.find((a) => a.id === reportAccionista)?.name ?? ""}`;
+                    const socioTxt = ` · ${accionistas.find((a) => a.id === activeAccionistaId)?.name ?? ""}`;
                     printReport(e.title + socioTxt, e.headers, e.rows, e.totals, e.rango);
                   }}>🖨 Imprimir</button>
                   <button type="button" className="btnSecondary" onClick={() => { const e = getReportExport(); if (e) exportReportCsv(e.headers, e.rows, reportKind === "servicios" ? `servicios_${servicioMes}.csv` : `${reportKind}_${reportFrom}_${reportTo}.csv`); }}>📥 Excel</button>
