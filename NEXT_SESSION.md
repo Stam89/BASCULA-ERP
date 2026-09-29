@@ -1,6 +1,6 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-09-27
+Actualizado: 2026-09-29
 
 ## Inicio rapido
 
@@ -48,6 +48,15 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Bascula: «Contar tickets desde» (2026-09-29)
+- Hay ~280 tickets de la app de bascula (junio-agosto, antes del ERP) que salian como «Pendientes». Fecha de corte en Bascula → Tickets (solo ADMINISTRADOR): los anteriores dejan de contar como pendientes (lista Pendientes y contador «Pendientes» del panel de sincronizacion); en «Todos» siguen visibles, atenuados, con chip «Anterior al corte». Es solo un filtro de vista: no toca tickets.
+- Tabla `bascula_config` (id=1, desde DATE; migracion 20261051, default NULL = se cuentan todos, sin cambio). Helper `services/bascula-corte.ts` (`fechaTicketSql`, `leerCorteBascula`; misma fecha del ticket que la bajada de carro). Endpoints GET/PUT `/tickets/corte` (PUT requireAdmin; `desde:null` quita el corte). `/tickets` devuelve `antes_del_corte`; `/api/bascula/status` respeta el corte.
+- Independiente del «Contar tickets desde» de la Bajada de carro (`bajada_carro_config`).
+
+### Vista de celular (vendedora en el telefono) (2026-09-29)
+- ≤860px: el menu lateral es un cajon (☰ en la barra superior, ✕ / fondo para cerrar, se cierra solo al elegir modulo); tambien en el shell de Transporte (CampoModule). Barra superior compacta (sin fecha ni pastilla API). Ventas → Nuevo pedido en una columna (`pedidoSplit`, `pedidoGrid`, `pedidoBuscaCliente`), pestanas de Ventas con scroll horizontal, tablas con scroll dentro de su tarjeta. En PC no cambia nada (botones ocultos por CSS).
+- `index.html`: `translate="no"` + `meta google notranslate`: Chrome del celular traducia la app al ingles (y la traduccion automatica puede romper React).
 
 ### Se retiro el modulo «Servicio de Secado» del menu (2026-09-29)
 - Pedido del usuario: innecesario porque el cobro del Solo secado (autoCobrarSecadoServicio al finalizar el secado) y del servicio completo/pilado (al finalizar en Produccion) ya van solos a Cuentas por Cobrar (verificado: los 2 lotes SECADO tienen su CxC).
