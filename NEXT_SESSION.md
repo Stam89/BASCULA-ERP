@@ -49,6 +49,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Caja: vuelto de fondos en una sola linea + anulaciones limpias + redondeo (2026-09-29)
+- «💸 Registrar Vuelto» SOLO en fondos a rendir cuentas (es_fondo, POR_LIQUIDAR, no anulado ni contra-asiento); reemplaza el «⚙️ Liquidar». Se quito el boton que convertia cualquier egreso en fondo (el endpoint `/convertir-fondo` sigue, sin uso en la UI).
+- POST `/cash/movements/:id/liquidar`: si el fondo es de la MISMA caja abierta y gasto real > 0 → UPDATE en linea: amount = gasto real, `monto_entregado` = entregado (columna nueva, migracion 20261052), LIQUIDADO, descripcion «X · Gasto real: $219.00 (Entregado: $220.00 | Vuelto devuelto a caja: $1.00)». Fondo de una sesion anterior (caja cerrada) o gasto real 0 (CHECK amount > 0) → ajuste aparte como antes (reference_type 'fondo_liquidacion'). Rechaza fondos anulados.
+- `/reverse`: anular un fondo anula tambien sus ajustes vigentes (contra-asientos); anular solo el ajuste devuelve el fondo a POR_LIQUIDAR (limpia la descripcion). La migracion 20261052 reparo el fondo DIESEL 219.99 que quedo LIQUIDADO con su vuelto anulado.
+- Montos: zod `.transform(round2)` al crear movimientos; frontend round2 al enviar; `main.tsx` suelta (blur) un input number al girar la rueda del mouse (causa del 220 → 219.99).
+- Probado con BEGIN…ROLLBACK (10 casos: vuelto, faltante, gasto 0, doble liquidacion, anular fondo/ajuste, redondeo).
+
 ### Toda la app adaptable a celular / tablet / PC (2026-09-29)
 - Bloque final de `styles.css` («TODA LA APP SE ADAPTA AL EQUIPO»): reglas por tamano sobre las grillas y filas con estilo en linea (`[style*="grid-template-columns"]`, `[style*="display: flex"]`) dentro de `.content` y `.modalOverlay`. Celular ≤600: grillas explicitas a 1 columna (menos auto-fit/fill y `.tableHead/.tableRow`), filas que bajan de linea, campos 16px/40px (sin zoom), botones ≥38px, modales casi a pantalla completa, subtabs deslizables. Tablet ≤1024: grillas de 4+ columnas a 2, hijos de grilla con min-width 0. ≤860: tablas fuera de un contenedor con scroll se deslizan de lado. `.rm-main/.rm-side` apilados ≤1180. `.cajaSubNav` con max-width 100% (Nomina se salia 6px incluso en PC).
 - Verificado con barrido de todos los modulos + subpestanas (Matriz y Transporte) a 390, 768, 1024 y 1280 px: sin desborde horizontal. En PC >1024 no cambia nada mas.
