@@ -49,6 +49,10 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Accesos directos «⚙️ … en Configuracion» en toda la app (2026-09-29)
+- Helpers en App.tsx (junto a `irAAjuste`): `irAConfig(tarjeta)` (subpestana de CONFIG_INDICE + abre y desplaza a la tarjeta), `puedeIrAConfig(tarjeta)` (Configuracion visible y `tarjetaVisibleSocio` si el activo es socio), `cfgLink(tarjeta, texto)` (boton-texto discreto `.vdTarifaLink`). `buscarTarjeta` compara titulos sin mayusculas/acentos y cae al emoji inicial (arregla el salto a «🏦 Cuentas bancarias», que antes no abria).
+- Lugares: Secadoras (precio combustible x2, tarifas del tendal), Bascula (humedad base de la merma), Inventario y Caja>Sacos (catalogo de sacos; SacosTablero/SacosAlertaDashboard con prop opcional `onConfig`), Dashboard (ajustar minimos), Gana (tarifario de pilado), Venta Detalle (tarifa por libra x2), Servicio de Secado (tarifa global), Seleccion (tarifas de procesos), Nomina (tarifas de pago en la barra, actividades de cuadrilla, personal administrativo), Caja (categorias de caja, categorias de mantenimiento), Ventas (numeracion de guias). Textos que decian «Configuracion → Tarifas» para el combustible corregidos (esta en Operacion y Planta).
+
 ### Caja Principal: rediseno "dashboard financiero" (2026-09-29)
 - Solo JSX/CSS (clases `cj-*` al final de styles.css; el proyecto NO usa Tailwind). Sin cambios de estado/handlers/endpoints; unico estado nuevo de UI: `cajaMenu` (menu abierto) con cierre al clic fuera.
 - Encabezado oscuro -> 4 tarjetas KPI (Saldo actual destacado, Ingresos, Egresos, Saldos iniciales con efectivo/banco). Fila de 8 pestanas -> toolbar: «➕ Nuevo movimiento», «⚡ Acciones rapidas» (Venta Detalle, Fomentos, Anticipos, Sacos, Mantenimiento, mismo filtro socio/matriz), «📋 Ver movimientos» y «⚙️ Opciones» (Editar saldo inicial, ¿Cuando se hizo?, Excel, PDF, Cerrar caja). Migas «← Movimientos / seccion».

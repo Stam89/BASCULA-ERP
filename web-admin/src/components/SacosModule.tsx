@@ -113,7 +113,7 @@ function grupoDe(s: Saco): string {
 // ─────────────────────────────────────────────────────────────────────────────
 // Tablero de inventario
 // ─────────────────────────────────────────────────────────────────────────────
-export function SacosTablero({ sacos, onVerKardex }: { sacos: Saco[]; onVerKardex?: () => void }) {
+export function SacosTablero({ sacos, onVerKardex, onConfig }: { sacos: Saco[]; onVerKardex?: () => void; onConfig?: () => void }) {
   const [soloAlertas, setSoloAlertas] = useState(false);
   const activos = useMemo(() => sacos.filter((s) => s.activo !== false), [sacos]);
   const alertas = useMemo(() => sacosConAlerta(activos), [activos]);
@@ -198,6 +198,7 @@ export function SacosTablero({ sacos, onVerKardex }: { sacos: Saco[]; onVerKarde
               {grupos.length === 0 && (
                 <tr><td colSpan={pesos.length + 3} style={{ padding: 18, textAlign: "center", color: "#64748b" }}>
                   {soloAlertas ? "Ningún saco está por debajo de su mínimo." : "No hay sacos registrados. Agrégalos en Configuración → Operación y Planta → Catálogo de sacos."}
+                  {!soloAlertas && onConfig && <> <button type="button" className="vdTarifaLink" onClick={onConfig}>⚙️ Abrir catálogo</button></>}
                 </td></tr>
               )}
               {grupos.map(({ grupo, filas }) => [
@@ -240,7 +241,7 @@ export function SacosTablero({ sacos, onVerKardex }: { sacos: Saco[]; onVerKarde
 // ─────────────────────────────────────────────────────────────────────────────
 // Alerta del Dashboard
 // ─────────────────────────────────────────────────────────────────────────────
-export function SacosAlertaDashboard({ sacos, onIr }: { sacos: Saco[]; onIr?: () => void }) {
+export function SacosAlertaDashboard({ sacos, onIr, onConfig }: { sacos: Saco[]; onIr?: () => void; onConfig?: () => void }) {
   const alertas = sacosConAlerta(sacos);
   if (!alertas.length) return null;
   const faltantes = alertas.filter((s) => estadoSaco(s) === "NEGATIVO").length;
@@ -264,6 +265,7 @@ export function SacosAlertaDashboard({ sacos, onIr }: { sacos: Saco[]; onIr?: ()
         </div>
       </div>
       {onIr && <button type="button" className="btnSecondary" onClick={onIr} style={{ fontSize: 12, alignSelf: "center" }}>Ver inventario de sacos</button>}
+      {onConfig && <button type="button" className="vdTarifaLink" onClick={onConfig} style={{ alignSelf: "center" }} title="Ajustar el stock mínimo de cada saco">⚙️ Ajustar mínimos</button>}
     </div>
   );
 }

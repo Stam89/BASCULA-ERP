@@ -2421,11 +2421,22 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [esSocioActivoCfg, configSubTab]);
 
+  // Busca la tarjeta por su título sin distinguir mayúsculas ni acentos
+  // ("Cuentas Bancarias" = "Cuentas bancarias"); si no aparece (p. ej. el socio
+  // ve «🏦 Mis cuentas bancarias»), cae al emoji inicial, único por subpestaña.
+  function buscarTarjeta(items: HTMLDetailsElement[], tarjeta: string): HTMLDetailsElement | undefined {
+    const txt = (d: HTMLDetailsElement) => (d.querySelector("summary")?.textContent ?? "").trim();
+    const t = normaliza(tarjeta);
+    const exacta = items.find((d) => normaliza(txt(d)).includes(t));
+    if (exacta) return exacta;
+    const emoji = (tarjeta.match(/^[^\p{L}\p{N}]+/u)?.[0] ?? "").trim();
+    return emoji ? items.find((d) => txt(d).startsWith(emoji)) : undefined;
+  }
+
   // Abre (y desplaza a) la tarjeta cuyo <summary> contiene el texto dado.
   function abrirTarjetaEnDom(tarjeta: string) {
     const cont = document.querySelector<HTMLElement>(".configVContent");
-    const d = Array.from(cont?.querySelectorAll("details") ?? [])
-      .find((x) => (x.querySelector("summary")?.textContent ?? "").includes(tarjeta));
+    const d = buscarTarjeta(Array.from(cont?.querySelectorAll("details") ?? []), tarjeta);
     if (!d) return;
     d.open = true;
     d.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -2439,6 +2450,37 @@ export function App() {
     abrirTarjetaRef.current = a.tarjeta;
     setConfigSubTab(a.sub);
   }
+  // ── Accesos directos a Configuración desde cualquier módulo ──────────────
+  // Lleva a la subpestaña de la tarjeta (por su título en CONFIG_INDICE), la
+  // despliega y desplaza hasta ella. El efecto de acordeones la abre al montar
+  // Configuración; el temporizador cubre el caso de que ya estuviera montada.
+  function irAConfig(tarjeta: string) {
+    const a = CONFIG_INDICE.find((x) => x.tarjeta.startsWith(tarjeta));
+    if (!a) return;
+    abrirTarjetaRef.current = a.tarjeta;
+    setConfigSubTab(a.sub);
+    irATab("Configuracion");
+    window.setTimeout(() => abrirTarjetaEnDom(a.tarjeta), 350);
+  }
+  // Solo si el usuario puede entrar a Configuración y la tarjeta existe para el
+  // accionista activo (un socio no ve las tarifas de planta de la Matriz).
+  function puedeIrAConfig(tarjeta: string): boolean {
+    if (!visibleTabs.includes("Configuracion")) return false;
+    if (esSocioActivoCfg && !tarjetaVisibleSocio(tarjeta)) return false;
+    return CONFIG_INDICE.some((x) => x.tarjeta.startsWith(tarjeta));
+  }
+  // Enlace discreto «⚙️ …» (texto azul tenue, sin fondo): no compite con la
+  // acción principal de la pantalla.
+  function cfgLink(tarjeta: string, texto = "Editar en Configuración") {
+    if (!puedeIrAConfig(tarjeta)) return null;
+    return (
+      <button type="button" className="vdTarifaLink" title={`Abrir Configuración → ${tarjeta.replace(/^[^\p{L}\p{N}]+/u, "")}`}
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); irAConfig(tarjeta); }}>
+        ⚙️ {texto}
+      </button>
+    );
+  }
+
   // Cuentas bancarias por socio (cash_registers tipo BANCO) para Configuración → Socios & Bancos.
   type BankAccountAdmin = { id: string; name: string; banco: string | null; numero_cuenta: string | null; socio: string; socio_tipo: string; accionista_id: string };
   const [bankAccounts, setBankAccounts] = useState<BankAccountAdmin[]>([]);
@@ -7238,7 +7280,7 @@ export function App() {
     if (abrirTarjetaRef.current) {
       const objetivo = abrirTarjetaRef.current;
       abrirTarjetaRef.current = null;
-      const d = items.find((x) => (x.querySelector("summary")?.textContent ?? "").includes(objetivo));
+      const d = buscarTarjeta(items, objetivo);
       if (d) { d.open = true; d.scrollIntoView({ behavior: "smooth", block: "start" }); }
     }
     return () => items.forEach((d) => d.removeEventListener("toggle", onToggle));
@@ -8963,7 +9005,7 @@ export function App() {
     if (combustibleBloqueado) {
       setMessage(!laborRatesLoaded
         ? "No se pudieron cargar las tarifas. Reintenta antes de registrar el combustible."
-        : "Configura el precio del combustible en Configuración → Tarifas antes de registrar (evita un gasto en $0).");
+        : "Configura el precio del combustible en Configuración → Precio del combustible antes de registrar (evita un gasto en $0).");
       return null;
     }
     if (!(combustibleTotal > 0)) { setMessage("Ingresa los medidores del combustible del motor"); return null; }
@@ -9008,7 +9050,7 @@ export function App() {
     if (combustibleBloqueado) {
       setMessage(!laborRatesLoaded
         ? "No se pudieron cargar las tarifas. Reintenta antes de finalizar."
-        : "Configura el precio del combustible en Configuración → Tarifas antes de finalizar (evita un gasto en $0).");
+        : "Configura el precio del combustible en Configuración → Precio del combustible antes de finalizar (evita un gasto en $0).");
       return false;
     }
     return true;
@@ -9032,7 +9074,7 @@ export function App() {
     if (combustibleBloqueado) {
       setMessage(!laborRatesLoaded
         ? "No se pudieron cargar las tarifas. Reintenta antes de finalizar."
-        : "Configura el precio del combustible en Configuración → Tarifas antes de finalizar (evita un gasto en $0).");
+        : "Configura el precio del combustible en Configuración → Precio del combustible antes de finalizar (evita un gasto en $0).");
       return;
     }
     // Foto de la corrida ANTES de cerrarla (lote y socio de cada partida).
@@ -9421,12 +9463,13 @@ export function App() {
             </div>
           </div>
         )}
-        <p className="muted medidorNota">Los precios se configuran en Configuración → Tarifas. Deja en cero lo que no uses.</p>
+        <p className="muted medidorNota">Los precios del combustible se configuran en Configuración. Deja en cero lo que no uses. {cfgLink("⛽ Precio del combustible", "Editar precios del combustible")}</p>
         {combustibleBloqueado && (
           <div className="alertBox" style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b", marginTop: 8 }}>
             ⚠️ {!laborRatesLoaded
               ? "No se pudieron cargar las tarifas. Reintenta antes de registrar el combustible."
-              : "Hay consumo de combustible pero su precio está en $0. Configúralo en Configuración → Tarifas para no guardar un gasto en $0."}
+              : "Hay consumo de combustible pero su precio está en $0. Configúralo en Configuración → Precio del combustible para no guardar un gasto en $0."}
+            {laborRatesLoaded && <> {cfgLink("⛽ Precio del combustible", "Configurar precio")}</>}
           </div>
         )}
       </fieldset>
@@ -11479,7 +11522,7 @@ export function App() {
         {activeTab === "Dashboard" && (
           <>
             {/* Alerta de sacos en/bajo su stock mínimo (los sacos son de la Matriz). */}
-            {manejaSacosPropios && <SacosAlertaDashboard sacos={sacosDelActivo} onIr={() => setActiveTab("Inventario")} />}
+            {manejaSacosPropios && <SacosAlertaDashboard sacos={sacosDelActivo} onIr={() => setActiveTab("Inventario")} onConfig={puedeIrAConfig("📦 Catálogo de sacos") ? () => irAConfig("📦 Catálogo de sacos") : undefined} />}
             {canSeePanel && (
               <nav className="cajaSubNav">
                 <button type="button" className={dashView === "panel" ? "active" : ""} onClick={() => { setDashView("panel"); if (!panelData) refreshPanel().catch(() => undefined); }}>📊 Panel integral</button>
@@ -11875,7 +11918,7 @@ export function App() {
                   if (netoKg <= 0) return null;
                   return (
                     <div style={{ background: "var(--c-surface-2)", borderRadius: 8, padding: "10px 12px", marginTop: 4, fontSize: 13 }}>
-                      <strong style={{ display: "block", marginBottom: 6 }}>🌾 Cálculo de merma <span className="muted" style={{ fontWeight: 400 }}>(humedad base {n(base, 1)}%)</span></strong>
+                      <strong style={{ display: "block", marginBottom: 6 }}>🌾 Cálculo de merma <span className="muted" style={{ fontWeight: 400 }}>(humedad base {n(base, 1)}%)</span> {cfgLink("⚙️ Parámetros de planta", "Cambiar humedad base")}</strong>
                       <div style={{ display: "flex", justifyContent: "space-between" }}><span>Peso Neto Verde</span><span>{n(netoLb)} lb · {n(netoQq)} QQ</span></div>
                       <div style={{ display: "flex", justifyContent: "space-between", color: "var(--c-danger-text)" }}><span>Descuento por Humedad ({n(descHumPct * 100)}%)</span><span>− {n(descHumLb)} lb</span></div>
                       <div style={{ display: "flex", justifyContent: "space-between", color: "var(--c-danger-text)" }}><span>Descuento por Impureza ({n(imp, 1)}%)</span><span>− {n(descImpLb)} lb</span></div>
@@ -12001,7 +12044,7 @@ export function App() {
                 <DryingLotSelector selectedLots={editingTendal ? editingTendal.lots : tendalLotes} editing={!!editingTendal} onRemove={(id) => removeDryingEntry("TENDAL", id)} />
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                   {!editingTendal && <label><span>Peso Total (QQ)</span><input type="text" readOnly value={tendalQQ.toFixed(2)} style={{ fontWeight: 700 }} /></label>}
-                  <label><span>Salida <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>(define la tarifa)</span></span><select value={tendalForm.modo} onChange={(e) => setTendalForm((f) => ({ ...f, modo: e.target.value as "GRANEL" | "ENSACADO" }))}><option value="GRANEL">Directo a Producción (A granel)</option><option value="ENSACADO">Sacos</option></select></label>
+                  <label><span>Salida <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>(define la tarifa)</span> {cfgLink("💲 Tarifas de pago", "Tarifas")}</span><select value={tendalForm.modo} onChange={(e) => setTendalForm((f) => ({ ...f, modo: e.target.value as "GRANEL" | "ENSACADO" }))}><option value="GRANEL">Directo a Producción (A granel)</option><option value="ENSACADO">Sacos</option></select></label>
                   {!editingTendal && <label><span>Código de lote (opcional)</span><input value={tendalForm.lot_code} onChange={(e) => setTendalForm((f) => ({ ...f, lot_code: e.target.value }))} placeholder="Automático (00001-DD-MM-YY)" /></label>}
                   <label><span>Humedad inicial (%)</span><input type="number" step="0.1" min="0" value={tendalForm.moisture_before} onChange={(e) => setTendalForm((f) => ({ ...f, moisture_before: e.target.value }))} /></label>
                   <label><span>Humedad final (%)</span><input type="number" step="0.1" min="0" value={tendalForm.moisture_after} onChange={(e) => setTendalForm((f) => ({ ...f, moisture_after: e.target.value }))} /></label>
@@ -12444,7 +12487,7 @@ export function App() {
                   <div className="buttonRow" style={{ marginTop: 14 }}>
                     <button type="button" className="primary" style={{ background: "var(--c-success)", fontWeight: 800 }}
                       disabled={combustibleBloqueado}
-                      title={combustibleBloqueado ? "Configura el precio del combustible en Tarifas (evita guardar un gasto en $0)" : undefined}
+                      title={combustibleBloqueado ? "Configura el precio del combustible en Configuración → Precio del combustible (evita guardar un gasto en $0)" : undefined}
                       onClick={() => { if (validarFinalizarSecado()) setFuelConfirmOpen(true); }}>
                       ✅ Confirmar y Finalizar Secado
                     </button>
@@ -13350,9 +13393,9 @@ export function App() {
               <section style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, background: "#fbfdfc" }}>
                 <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
                   <h3 style={{ margin: 0 }}>📦 Inventario de Sacos</h3>
-                  <span className="muted" style={{ fontSize: 12 }}>Marcas, pesos, mínimos y precios: Configuración → Operación y Planta → Catálogo de sacos</span>
+                  <span className="muted" style={{ fontSize: 12 }}>Marcas, pesos, mínimos y precios: {cfgLink("📦 Catálogo de sacos", "Catálogo de sacos en Configuración") ?? "Configuración → Operación y Planta → Catálogo de sacos"}</span>
                 </div>
-                <SacosTablero sacos={sacosDelActivo} />
+                <SacosTablero sacos={sacosDelActivo} onConfig={puedeIrAConfig("📦 Catálogo de sacos") ? () => irAConfig("📦 Catálogo de sacos") : undefined} />
                 <div style={{ fontWeight: 700, fontSize: 13, margin: "14px 0 6px" }}>Movimiento manual (ajuste de bodega)</div>
                 <form onSubmit={submitSackMovement} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10, alignItems: "end", background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
                   <label style={{ fontSize: 12, fontWeight: 600 }}>Tipo
@@ -14157,6 +14200,7 @@ export function App() {
                     style={{ fontSize: 11, color: "var(--c-muted)" }}>
                     🔒 Tarifa de pilado congelada por lote (histórica)
                   </span>
+                  {cfgLink("🧾 Tarifario de Servicios", "Tarifas de pilado")}
                   <button type="button" className="btnSecondary" onClick={() => loadProductionHistory().catch(() => undefined)}>↻ Actualizar</button>
                 </div>
               </div>
@@ -15485,7 +15529,10 @@ export function App() {
             <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "minmax(0, 1.4fr) minmax(0, 1fr)", gap: 16, alignItems: "start" }}>
               {/* Formulario por bloques (simula el documento físico) */}
               <form className="formPanel" onSubmit={(e) => { e.preventDefault(); guardarGuiaRemision().catch((err) => addToast(err.message, "error")); }} style={{ display: "grid", gap: 14 }}>
-                <h2 style={{ margin: 0 }}>📄 Nueva Guía de Remisión</h2>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                  <h2 style={{ margin: 0 }}>📄 Nueva Guía de Remisión</h2>
+                  {cfgLink("📄 Secuenciales de documentos", "Numeración de guías")}
+                </div>
 
                 {/* BLOQUE 1: Datos de traslado */}
                 <fieldset style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, margin: 0 }}>
@@ -16144,7 +16191,7 @@ export function App() {
                     </fieldset>
 
                     <label style={{ display: "block", marginBottom: 16 }}>
-                      <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Categoría</span>
+                      <span style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Categoría {cfgLink("🏷️ Categorías de caja", "Categorías")}</span>
                       {(() => {
                         const activeTipo = accionistas.find((a) => a.id === activeAccionistaId)?.tipo;
                         const esSocio = activeTipo === "SOCIO";
@@ -16588,12 +16635,12 @@ export function App() {
                     {/* Solo consulta. La compra de sacos se registra desde ➕ Nuevo movimiento
                         (categoría "Compra de sacos"). */}
                     <div className="formPanel" style={{ background: "#eff6ff", border: "1px solid #bfdbfe" }}>
-                      <h2 style={{ margin: 0, fontSize: 15 }}>📦 Inventario de Sacos</h2>
+                      <h2 style={{ margin: 0, fontSize: 15, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>📦 Inventario de Sacos {cfgLink("📦 Catálogo de sacos", "Catálogo de sacos")}</h2>
                       <p className="muted" style={{ margin: "6px 0 0" }}>Para <strong>comprar sacos</strong>, ve a <strong>➕ Nuevo movimiento</strong> → categoría <strong>Compra de sacos</strong>. Este panel es solo de consulta.</p>
                     </div>
                     {/* Stock actual por marca y peso */}
                     <div className="formPanel">
-                      <SacosTablero sacos={sacosDelActivo} onVerKardex={() => setKardexOpen(true)} />
+                      <SacosTablero sacos={sacosDelActivo} onVerKardex={() => setKardexOpen(true)} onConfig={puedeIrAConfig("📦 Catálogo de sacos") ? () => irAConfig("📦 Catálogo de sacos") : undefined} />
                     </div>
                     {/* Kárdex / Historial de compras (movimientos recientes) */}
                     <div className="formPanel">
@@ -16634,7 +16681,7 @@ export function App() {
                         (categoría "Mantenimiento", con Máquina/Activo y Área). Aquí solo
                         se CONSULTA el historial. */}
                     <div className="formPanel" style={{ background: "#eff6ff", border: "1px solid #bfdbfe" }}>
-                      <h2 style={{ margin: 0, fontSize: 15 }}>🔧 Mantenimientos</h2>
+                      <h2 style={{ margin: 0, fontSize: 15, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>🔧 Mantenimientos {cfgLink("🔧 Categorías de Mantenimiento", "Áreas y tipos")}</h2>
                       <p className="muted" style={{ margin: "6px 0 0" }}>Para registrar un mantenimiento (repuestos o mano de obra), ve a <strong>➕ Nuevo movimiento</strong> y elige la categoría <strong>Mantenimiento</strong>: podrás asociar la Máquina/Activo o el Área. Este panel es solo de consulta.</p>
                     </div>
                     <div className="formPanel">
@@ -16720,30 +16767,12 @@ export function App() {
                     {ventaDetalleForm.product_id && Number(ventaDetalleForm.precio_por_libra) > 0 && (
                       <p style={{ margin: "0 0 12px", color: "#166534", fontSize: 12 }}>
                         Precio aplicado: <strong>{money(ventaDetalleForm.precio_por_libra)}/lb</strong> ·{" "}
-                        {visibleTabs.includes("Configuracion") ? (
-                          // Acceso discreto a la tarifa (no compite con «Registrar venta detalle»):
-                          // abre Configuración → Tarifas y despliega «Tarifas por libra».
-                          <button
-                            type="button"
-                            className="vdTarifaLink"
-                            title="Abrir Configuración → Tarifas por libra"
-                            onClick={() => {
-                              setConfigSubTab("tarifas");
-                              irATab("Configuracion");
-                              setTimeout(() => {
-                                const d = document.getElementById("cfg-tarifas-libra") as HTMLDetailsElement | null;
-                                if (d) { d.open = true; d.scrollIntoView({ behavior: "smooth", block: "start" }); }
-                              }, 300);
-                            }}
-                          >
-                            ⚙️ Editar tarifa en Configuración
-                          </button>
-                        ) : "tarifa configurada en Administración."}
+                        {cfgLink("🛒 Tarifas por libra", "Editar tarifa en Configuración") ?? "tarifa configurada en Administración."}
                       </p>
                     )}
                     {ventaDetalleForm.product_id && !(Number(ventaDetalleForm.precio_por_libra) > 0) && (
                       <p style={{ margin: "0 0 12px", color: "#b45309", fontSize: 12 }}>
-                        Este producto no tiene tarifa por libra configurada. Un administrador puede definirla en Configuración → Tarifas y servicios de planta.
+                        Este producto no tiene tarifa por libra configurada. Un administrador puede definirla en Configuración → Tarifas por libra. {cfgLink("🛒 Tarifas por libra", "Definir tarifa")}
                       </p>
                     )}
 
@@ -18453,7 +18482,7 @@ export function App() {
                 </label>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                   <label><span>QQ Secos <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>(kárdex, exacto)</span></span><input type="text" readOnly value={secadoLotSel ? Number(secadoLotSel.quintals).toFixed(2) : "0.00"} style={{ fontWeight: 700 }} /></label>
-                  <label><span>Tarifa de Secado $ / QQ</span><input type="number" step="0.001" min="0" value={secadoForm.rate} onChange={(e) => setSecadoForm({ ...secadoForm, rate: e.target.value })} placeholder={`Global: $${Number(laborRatesForm.secado_servicio_per_qq || 0).toFixed(2)}`} /></label>
+                  <label><span>Tarifa de Secado $ / QQ {cfgLink("🛎️ Secado como Servicio", "Tarifa global")}</span><input type="number" step="0.001" min="0" value={secadoForm.rate} onChange={(e) => setSecadoForm({ ...secadoForm, rate: e.target.value })} placeholder={`Global: $${Number(laborRatesForm.secado_servicio_per_qq || 0).toFixed(2)}`} /></label>
                 </div>
                 <div className="totalBox" style={{ margin: "6px 0 10px" }}>
                   <span>Total a cobrar</span>
@@ -18768,7 +18797,7 @@ export function App() {
                 <button type="button" onClick={addInputLine} style={{ marginTop: 8, background: "transparent", border: "1px dashed #cbd5e1", borderRadius: 6, padding: "6px 10px", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>+ Agregar producto</button>
               </div>
 
-              <label style={{ marginTop: 10 }}><span>Tarifa por QQ ($)</span>
+              <label style={{ marginTop: 10 }}><span>Tarifa por QQ ($) {cfgLink("🧹 Tarifas de Procesos", "Tarifas por defecto")}</span>
                 <input type="number" step="0.001" min="0" value={selectionForm.rate_per_qq} placeholder={`Por defecto ${defaultRate}`} onChange={(e) => setSelectionForm({ ...selectionForm, rate_per_qq: e.target.value })} />
               </label>
               <label><span>Notas (opcional)</span>
@@ -19025,6 +19054,9 @@ export function App() {
               {puedeVerSubTab("Nomina", "sueldo-admin") && (
               <button type="button" className={nominaView === "sueldo-admin" ? "active" : ""} onClick={() => setNominaView("sueldo-admin")} style={{ fontWeight: 700 }}>💼 Sueldo Administrativo</button>
               )}
+              {puedeIrAConfig("💲 Tarifas de pago") && (
+                <span style={{ marginLeft: "auto", alignSelf: "center", whiteSpace: "nowrap", paddingRight: 6 }}>{cfgLink("💲 Tarifas de pago", "Tarifas de pago")}</span>
+              )}
             </nav>
 
             {/* Banner: Costo Total de Nómina (A PAGAR) del período — piladores,
@@ -19214,7 +19246,7 @@ export function App() {
                       <label><span>Fecha</span>
                         <input type="date" value={cuadEntryForm.work_date} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, work_date: e.target.value })} />
                       </label>
-                      <label><span>Actividad (tarifa por saco/unidad)</span>
+                      <label><span>Actividad (tarifa por saco/unidad) {cfgLink("Actividades y tarifas", "Actividades y tarifas")}</span>
                         <select value={cuadEntryForm.activity_id} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, activity_id: e.target.value })}>
                           <option value="">Seleccione</option>
                           {cuadActivities.map((a) => (<option key={a.id} value={a.id}>{a.name} — ${Number(a.unit_rate)}</option>))}
@@ -19612,7 +19644,7 @@ export function App() {
                 <div className="panelGrid" style={{ alignItems: "start" }}>
                   <div className="tablePanel">
                     <div className="buttonRow" style={{ marginBottom: 12 }}>
-                      <button type="button" className="primary" onClick={() => { setConfigSubTab("operacion"); irATab("Configuracion"); }}>➕ Agregar / editar empleados en Configuración</button>
+                      <button type="button" className="primary" onClick={() => irAConfig("💼 Personal administrativo")}>➕ Agregar / editar empleados en Configuración</button>
                     </div>
 
                     {adminStaff.length === 0 ? (
