@@ -4333,7 +4333,7 @@ textarea::placeholder {
   .pedidoBuscaCliente { flex-wrap: wrap; }
   .pedidoBuscaCliente > input { flex: 1 1 100% !important; min-width: 0; min-height: 42px; }
   .pedidoBuscaCliente > button { flex: 1 1 0; min-height: 40px; }
-  .ventasTabs { overflow-x: auto; scrollbar-width: none; }
+  .ventasTabs { overflow-x: auto; scrollbar-width: none; min-width: 0; max-width: 100%; }
   .ventasTabs::-webkit-scrollbar { display: none; }
   .ventasTabs > button { flex: 0 0 auto; white-space: nowrap; padding: 10px 12px !important; font-size: 13px !important; }
 }
@@ -4353,6 +4353,16 @@ textarea::placeholder {
   :is(.content, .modalOverlay) :is(img, svg, canvas, video) { max-width: 100%; }
   :is(.content, .modalOverlay) img { height: auto; }
   :is(.content, .modalOverlay) :is(input, select, textarea) { max-width: 100%; }
+  /* Filas de botones, filtros y encabezados: bajan de línea si no caben. */
+  :is(.content, .modalOverlay) [style*="display: flex"]:not([style*="nowrap"], [style*="column"]) { flex-wrap: wrap; }
+  .buttonRow, .reportDates, .reportToolbar { flex-wrap: wrap; }
+  /* Pestañas internas: nunca más anchas que la pantalla. */
+  .cajaSubNav { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+}
+
+/* Resultado mensual (Costos Operativos): en tablet, principal y lateral apilados. */
+@media (max-width: 1180px) {
+  .rm-main, .rm-side { grid-column: 1 / -1; }
 }
 
 /* Tablet (≤ 1024 px): grillas de 4 o más columnas pasan a 2. */
@@ -4386,9 +4396,6 @@ textarea::placeholder {
   :is(.content, .modalOverlay) [style*="auto-fit"], :is(.content, .modalOverlay) [style*="auto-fill"] {
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)) !important;
   }
-  /* Filas de botones, filtros y encabezados: bajan de línea si no caben. */
-  :is(.content, .modalOverlay) [style*="display: flex"]:not([style*="nowrap"], [style*="column"]) { flex-wrap: wrap; }
-  .buttonRow, .reportDates { flex-wrap: wrap; }
   /* Buscadores y selectores con ancho mínimo fijo: ocupan la fila. */
   :is(.content, .modalOverlay) :is(input, select)[style*="min-width"] { min-width: 0 !important; flex: 1 1 100%; }
   :is(.content, .modalOverlay) :is(input, select, textarea)[style*="width:"]:not([type="checkbox"], [type="radio"]) { max-width: 100%; }
@@ -4397,7 +4404,7 @@ textarea::placeholder {
   /* Botones cómodos para el dedo (fuera de las tablas). */
   :is(.content, .modalOverlay) button:not(:is(td, th) button, .vdTarifaLink, .liqRemoveBtn) { min-height: 38px; }
   /* Pestañas internas (subtabs): se deslizan de lado. */
-  .cajaSubNav { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
+  .cajaSubNav { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; min-width: 0; max-width: 100%; }
   .cajaSubNav::-webkit-scrollbar { display: none; }
   .cajaSubNav > button { flex: 0 0 auto; white-space: nowrap; }
   /* Modales a pantalla casi completa. */
