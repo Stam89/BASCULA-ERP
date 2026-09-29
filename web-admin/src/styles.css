@@ -4337,3 +4337,71 @@ textarea::placeholder {
   .ventasTabs::-webkit-scrollbar { display: none; }
   .ventasTabs > button { flex: 0 0 auto; white-space: nowrap; padding: 10px 12px !important; font-size: 13px !important; }
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   TODA LA APP SE ADAPTA AL EQUIPO (PC · tablet · celular)
+   Muchas pantallas usan grillas y filas con estilo en línea (style={{…}}); estas
+   reglas las acomodan por tamaño sin tocar la lógica de cada módulo. En PC
+   (> 1024 px) no aplica nada de esto.
+   Zona: el contenido de los módulos y los modales.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* Tablet y celular (≤ 1024 px): las columnas pueden encogerse sin empujar la
+   pantalla hacia un lado; imágenes y gráficos no se salen. */
+@media (max-width: 1024px) {
+  :is(.content, .modalOverlay) [style*="grid-template-columns"] > * { min-width: 0; }
+  :is(.content, .modalOverlay) :is(img, svg, canvas, video) { max-width: 100%; }
+  :is(.content, .modalOverlay) img { height: auto; }
+  :is(.content, .modalOverlay) :is(input, select, textarea) { max-width: 100%; }
+}
+
+/* Tablet (≤ 1024 px): grillas de 4 o más columnas pasan a 2. */
+@media (max-width: 1024px) and (min-width: 601px) {
+  :is(.content, .modalOverlay) :is([style*="repeat(4"], [style*="repeat(5"], [style*="repeat(6"], [style*="1fr 1fr 1fr 1fr"]):not(.tableHead, .tableRow) {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+/* Tablet vertical y celular (≤ 860 px): las tablas que no están dentro de un
+   contenedor con desplazamiento se deslizan de lado en vez de apretarse. */
+@media (max-width: 860px) {
+  .content :not([style*="overflow"], .tablePanel, .liqHistTable) > table:not(.rm-table),
+  .modalOverlay :not([style*="overflow"]) > table {
+    display: block; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* Celular (≤ 600 px): una sola columna, filas que bajan de línea y controles
+   cómodos para el dedo. */
+@media (max-width: 600px) {
+  /* Grillas escritas en la pantalla: una columna (las «auto-fit» ya se acomodan
+     solas; las filas de tabla hechas con grilla se respetan). */
+  :is(.content, .modalOverlay) [style*="grid-template-columns"]:not([style*="auto-fit"], [style*="auto-fill"], .tableHead, .tableRow) {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  :is(.content, .modalOverlay) [style*="grid-template-columns"]:not([style*="auto-fit"], [style*="auto-fill"], .tableHead, .tableRow) > [style*="grid-column"] {
+    grid-column: auto !important;
+  }
+  /* KPIs de «auto-fit» con mínimos grandes: que no se salgan del celular. */
+  :is(.content, .modalOverlay) [style*="auto-fit"], :is(.content, .modalOverlay) [style*="auto-fill"] {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)) !important;
+  }
+  /* Filas de botones, filtros y encabezados: bajan de línea si no caben. */
+  :is(.content, .modalOverlay) [style*="display: flex"]:not([style*="nowrap"], [style*="column"]) { flex-wrap: wrap; }
+  .buttonRow, .reportDates { flex-wrap: wrap; }
+  /* Buscadores y selectores con ancho mínimo fijo: ocupan la fila. */
+  :is(.content, .modalOverlay) :is(input, select)[style*="min-width"] { min-width: 0 !important; flex: 1 1 100%; }
+  :is(.content, .modalOverlay) :is(input, select, textarea)[style*="width:"]:not([type="checkbox"], [type="radio"]) { max-width: 100%; }
+  /* Tamaño de letra de 16 px en los campos: el teléfono no hace zoom al tocar. */
+  :is(.content, .modalOverlay) :is(input:not([type="checkbox"], [type="radio"]), select, textarea):not(:is(td, th) *) { font-size: 16px; min-height: 40px; }
+  /* Botones cómodos para el dedo (fuera de las tablas). */
+  :is(.content, .modalOverlay) button:not(:is(td, th) button, .vdTarifaLink, .liqRemoveBtn) { min-height: 38px; }
+  /* Pestañas internas (subtabs): se deslizan de lado. */
+  .cajaSubNav { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
+  .cajaSubNav::-webkit-scrollbar { display: none; }
+  .cajaSubNav > button { flex: 0 0 auto; white-space: nowrap; }
+  /* Modales a pantalla casi completa. */
+  .modalCard { max-width: 100% !important; max-height: calc(100dvh - 20px); padding: 16px; }
+  /* Títulos de panel un poco más compactos. */
+  .content :is(.formPanel, .tablePanel) > h2 { font-size: 16px; }
+}
