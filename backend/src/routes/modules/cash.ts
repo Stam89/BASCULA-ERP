@@ -6,6 +6,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { round2 } from "../../utils/rice-formulas.js";
+import { reversarEntradaRepuestosDeCaja } from "./repuestos.js";
 import { espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
 import { vidaUtilPorTipo } from "../../services/activos.js";
 import ExcelJS from "exceljs";
@@ -452,6 +453,8 @@ cashRouter.post("/movements/:id/reverse", requireAdmin, asyncRoute(async (req, r
     // Si el egreso anulado fue una compra de sacos, descuenta del inventario lo
     // que había ingresado (reverso automático para mantener el cuadre).
     const sacosRevertidos = await reversarEntradaSacosDeCaja(client, m.id);
+    // Si pagó una compra de REPUESTOS, se retira del stock lo que entró.
+    const repuestosRevertidos = await reversarEntradaRepuestosDeCaja(client, m.id);
 
     // Si el egreso anulado registró un ACTIVO FIJO, se retira de Activos fijos:
     // se borra si no tiene historial; con mantenimientos, sale del balance
@@ -471,7 +474,7 @@ cashRouter.post("/movements/:id/reverse", requireAdmin, asyncRoute(async (req, r
       activosRetirados.push(a.name);
     }
 
-    return { ...reversal.rows[0], sacos_revertidos: sacosRevertidos, activos_retirados: activosRetirados, ajustes_anulados: ajustesAnulados };
+    return { ...reversal.rows[0], sacos_revertidos: sacosRevertidos, activos_retirados: activosRetirados, ajustes_anulados: ajustesAnulados, repuestos_revertidos: repuestosRevertidos };
   });
 
   res.status(201).json(result);

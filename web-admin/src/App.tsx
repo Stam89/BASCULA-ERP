@@ -10,6 +10,7 @@ import { BuscadorHistorial } from "./components/BuscadorHistorial";
 import { ResultadoMensual, type GanaOperacion } from "./components/ResultadoMensual";
 import { planDeSacos, sobranteLb, SacosAlertaDashboard, SacosCatalogoConfig, SacosPorComprarAlerta, SacosTablero, type SacoPorComprar } from "./components/SacosModule";
 import { PedidoCompartirModal, type PedidoCompartirData } from "./components/PedidoCompartir";
+import { RepuestosAlertaDashboard, RepuestosModule, type Repuesto } from "./components/RepuestosModule";
 import * as XLSX from "xlsx";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
@@ -3065,6 +3066,10 @@ export function App() {
   const [sacosPropios, setSacosPropios] = useState<SackInventory[]>([]);
   const [sackMovements, setSackMovements] = useState<SackMovement[]>([]);
   const [sacosPorComprar, setSacosPorComprar] = useState<SacoPorComprar[]>([]);
+  // Inventario: existencias (arroz, sacos…) o repuestos de la planta (Matriz).
+  const [invVista, setInvVista] = useState<"existencias" | "repuestos">("existencias");
+  // Repuestos para la alerta «por terminarse» del Dashboard (Matriz).
+  const [repuestosAlerta, setRepuestosAlerta] = useState<Repuesto[]>([]);
   const [sackMovForm, setSackMovForm] = useState({ sack_id: "", movement: "ENTRADA" as "ENTRADA"|"SALIDA", cantidad: "", concepto: "" });
   // ── Diagnóstico de stocks negativos ────────────────────────────────────────
   const [negativeStock, setNegativeStock] = useState<NegativeStockRow[]>([]);
@@ -4158,6 +4163,12 @@ export function App() {
   // ¿El accionista activo maneja un catálogo de sacos? La Matriz (sus marcas) y
   // el socio con proceso propio de envejecido (STALYN). ROVINSON no.
   const manejaSacosPropios = esMatrizActiva || moduloEnvejecidoHabilitado;
+  // Alerta de repuestos por terminarse: se lee al entrar al Dashboard (Matriz).
+  useEffect(() => {
+    if (!authUser || activeTab !== "Dashboard" || !esMatrizActiva) return;
+    apiGet<Repuesto[]>("/repuestos").then(setRepuestosAlerta).catch(() => undefined);
+  }, [authUser, activeTab, esMatrizActiva]);
+  function irARepuestos() { setInvVista("repuestos"); setActiveTab("Inventario"); }
   const sacosDelActivo = esMatrizActiva ? sackInventory : sacosPropios;
 
   useEffect(() => {
@@ -11890,6 +11901,8 @@ export function App() {
             {/* Alerta de sacos en/bajo su stock mínimo (los sacos son de la Matriz). */}
             {/* Sacos por comprar para los pedidos ya tomados (los sacos son de la Matriz). */}
             {esMatrizActiva && <SacosPorComprarAlerta sacos={sacosPorComprar} onIr={visibleTabs.includes("Inventario") ? () => setActiveTab("Inventario") : undefined} />}
+            {/* Repuestos de la planta en o bajo su mínimo. */}
+            {esMatrizActiva && <RepuestosAlertaDashboard repuestos={repuestosAlerta} onIr={visibleTabs.includes("Inventario") ? irARepuestos : undefined} />}
             {manejaSacosPropios && <SacosAlertaDashboard sacos={esMatrizActiva ? sacosDelActivo.filter((s) => !sacosPorComprar.some((p) => p.id === s.id)) : sacosDelActivo} onIr={() => setActiveTab("Inventario")} onConfig={puedeIrAConfig("📦 Catálogo de sacos") ? () => irAConfig("📦 Catálogo de sacos") : undefined} />}
             {canSeePanel && (
               <nav className="cajaSubNav">
@@ -13730,6 +13743,19 @@ export function App() {
 
         {activeTab === "Inventario" && (
           <section className="panelGrid">
+            {/* Pestañas: existencias del accionista · repuestos de la planta (solo Matriz). */}
+            {esMatrizActiva && (
+              <nav className="cajaSubNav" style={{ gridColumn: "1 / -1", marginBottom: 0 }}>
+                <button type="button" className={invVista === "existencias" ? "active" : ""} onClick={() => setInvVista("existencias")}>📦 Existencias</button>
+                <button type="button" className={invVista === "repuestos" ? "active" : ""} onClick={() => setInvVista("repuestos")}>🔧 Repuestos de planta</button>
+              </nav>
+            )}
+            {esMatrizActiva && invVista === "repuestos" ? (
+              <RepuestosModule cajaAbiertaId={dashboard.current_cash_register?.id ?? null}
+                puedeEditar={canEdit("Inventario")}
+                avisar={(m, t) => addToast(m, t)}
+                onCambio={() => apiGet<Repuesto[]>("/repuestos").then(setRepuestosAlerta).catch(() => undefined)} />
+            ) : (<>
             {/* Cabecera del panel de existencias + acciones */}
             <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 12 }}>
               <div>
@@ -14091,6 +14117,7 @@ export function App() {
                 </div>
               </div>
             )}
+            </>)}
           </section>
         )}
 
