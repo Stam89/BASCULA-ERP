@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Egresos con proveedor y Contado / A credito (todas las cajas) (2026-09-29)
+- Caja principal (Matriz y cada socio): egresos normales llevan «🏪 Proveedor» (datalist del catalogo `suppliers`; si se escribe uno nuevo el servidor lo crea, `resolverProveedor`) y modalidad «💵 Contado» (default) / «💳 A credito». Mantenimiento, sacos, pagos enlazados (agricultor/pilado/fomento) siguen con su flujo; activo fijo y fondos solo contado.
+- A CREDITO NO es cash_movement (ningun saldo/cierre/reporte cambia): crea `accounts_payable` reference_type 'gasto_credito' con supplier_id, categoria, subcategoria, origen_cash_register_id (migracion 20261054). GET `/cash/registers/:id/creditos` los lista en la tabla de la sesion (badge «💳 A Credito / CxP», «$0.00 en caja»); POST `/cash/creditos/:id/anular` (admin, sin abonos). Al pagar en Por Pagar el egreso entra con la CATEGORIA original + proveedor (pay y pay-group). Por Pagar muestra al proveedor como acreedor.
+- `cash_movements.supplier_id` (contado); historicos sin proveedor = contado. Excel de cierre: columnas Proveedor/Pago + seccion «Egresos a credito»; la impresion del cierre igual.
+- Transporte y Cosechadora (migracion 20261055): `campo_movimientos.proveedor`; a credito crea `campo_cxp` (origen 'EGRESO_CREDITO', categoria_id, activo_id, vence) sin movimiento; el abono hereda categoria/maquina/proveedor. Reparacion (mantenimiento de flota) y anticipos solo contado.
+
 ### Repuestos de la planta (2026-09-29)
 - Inventario → pestanas «📦 Existencias» / «🔧 Repuestos de planta» (solo con la Matriz activa). `components/RepuestosModule.tsx` + `RepuestosAlertaDashboard` en el Dashboard (en o bajo el minimo; agotados).
 - Tablas `repuestos` (stock, stock_minimo, costo_unitario ultimo, equipment_id, activo) y `repuesto_movimientos` (ENTRADA/SALIDA/AJUSTE con signo, stock_resultante, cash_movement_id, maintenance_id). Migracion 20261053. Router `/repuestos` (solo Matriz, 403 a socios; permiso de escritura Inventario o Caja).

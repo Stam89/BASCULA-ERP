@@ -1365,9 +1365,25 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
   const [f, setF] = useState({
     fecha: hoy(), activo_sel: ACTIVO_GENERAL, categoria_id: "", concepto: "", monto: "", cuenta_id: "", es_anticipo: false,
     // Solo para REPARACION_MANT: la pieza y la acción arman el concepto "Pieza - Acción".
-    pieza: "", accion: ""
+    pieza: "", accion: "",
+    // Proveedor y modalidad: Contado (sale de la cuenta) / A crédito (CxP de Transporte).
+    proveedor: "", modalidad: "CONTADO" as "CONTADO" | "CREDITO", vence: ""
   });
   const [busy, setBusy] = useState(false);
+  // Sugerencias de proveedor: catálogo de Proveedores + acreedores ya usados en CxP.
+  const [proveedores, setProveedores] = useState<string[]>([]);
+  useEffect(() => {
+    Promise.all([
+      apiGet<Array<{ name: string }>>("/suppliers").catch(() => [] as Array<{ name: string }>),
+      apiGet<{ cuentas: Array<{ acreedor: string }> }>("/campo/cxp").catch(() => ({ cuentas: [] as Array<{ acreedor: string }> }))
+    ]).then(([sup, cxp]) => {
+      const set = new Map<string, string>();
+      for (const n of [...sup.map((x) => x.name), ...cxp.cuentas.map((x) => x.acreedor)]) {
+        const t = (n ?? "").trim(); if (t) set.set(t.toUpperCase(), t);
+      }
+      setProveedores([...set.values()].sort((a, b) => a.localeCompare(b)));
+    });
+  }, []);
   const catNombre = categorias.find((c) => c.id === f.categoria_id)?.nombre ?? "";
   const esReparacion = catNombre === REPARACION_MANT;
 
@@ -1380,7 +1396,9 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
       setBusy(true);
       if (!f.activo_sel) throw new Error("Elige la máquina/vehículo o Gastos Generales");
       if (!f.categoria_id) throw new Error("La categoría del gasto es obligatoria");
-      if (!f.cuenta_id) throw new Error("Elige la cuenta");
+      const aCredito = f.modalidad === "CREDITO" && !f.es_anticipo && !esReparacion;
+      if (aCredito && f.proveedor.trim().length < 2) throw new Error("Para un egreso a crédito indica el proveedor");
+      if (!aCredito && !f.cuenta_id) throw new Error("Elige la cuenta");
       const monto = Number(f.monto);
       if (!(monto > 0)) throw new Error("Ingresa un monto válido");
       if (esReparacion) {
@@ -1400,13 +1418,16 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
         });
       } else {
         await apiPost("/campo/movimientos", {
-          fecha: f.fecha, cuenta_id: f.cuenta_id, signo: "salida", monto,
+          fecha: f.fecha, cuenta_id: aCredito ? undefined : f.cuenta_id, signo: "salida", monto,
           concepto: f.concepto.trim() || undefined, categoria_id: f.categoria_id,
           activo_id: f.activo_sel === ACTIVO_GENERAL ? undefined : f.activo_sel,
-          es_anticipo: f.es_anticipo || undefined
+          es_anticipo: f.es_anticipo || undefined,
+          proveedor: f.proveedor.trim() || undefined,
+          modalidad_pago: aCredito ? "CREDITO" : "CONTADO",
+          vence: aCredito && f.vence ? f.vence : undefined
         });
       }
-      setF({ ...f, concepto: "", monto: "", categoria_id: "", es_anticipo: false, pieza: "", accion: "" });
+      setF({ ...f, concepto: "", monto: "", categoria_id: "", es_anticipo: false, pieza: "", accion: "", proveedor: "", modalidad: "CONTADO", vence: "" });
       await onSaved();
     } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
   }
@@ -1461,20 +1482,59 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
       </label>
       {/* 5 · Monto */}
       <label><span>Monto $</span><input type="number" step="0.01" min="0" value={f.monto} onChange={(e) => setF({ ...f, monto: e.target.value })} placeholder="0.00" /></label>
-      {/* 6 · Cuenta */}
+      {/* 🏪 Proveedor + modalidad de pago. A crédito no sale de ninguna cuenta:
+          queda como Cuenta por Pagar de Transporte al proveedor. */}
+      {(() => {
+        const creditoPosible = !f.es_anticipo && !esReparacion;
+        const credito = creditoPosible && f.modalidad === "CREDITO";
+        const opt = (valor: "CONTADO" | "CREDITO", titulo: string, sub: string) => (
+          <label style={{ display: "flex", flexDirection: "row", alignItems: "flex-start", gap: 8, padding: "8px 10px", borderRadius: 8, margin: 0,
+            cursor: valor === "CREDITO" && !creditoPosible ? "not-allowed" : "pointer", opacity: valor === "CREDITO" && !creditoPosible ? 0.5 : 1,
+            border: `1.5px solid ${f.modalidad === valor ? (valor === "CREDITO" ? "#7c3aed" : "#16a34a") : "#e5e7eb"}`,
+            background: f.modalidad === valor ? (valor === "CREDITO" ? "#f5f3ff" : "#f0fdf4") : "#fff" }}>
+            <input type="radio" checked={f.modalidad === valor} disabled={valor === "CREDITO" && !creditoPosible}
+              onChange={() => setF({ ...f, modalidad: valor })} style={{ width: "auto", marginTop: 2 }} />
+            <span><strong style={{ fontSize: 13 }}>{titulo}</strong><small className="muted" style={{ display: "block", fontSize: 11 }}>{sub}</small></span>
+          </label>
+        );
+        return (
+          <div style={{ display: "grid", gap: 10, border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", background: credito ? "#faf5ff" : "transparent" }}>
+            <label style={{ margin: 0 }}><span>🏪 Proveedor {credito ? req : <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span>}</span>
+              <input list="campoProveedoresList" value={f.proveedor} onChange={(e) => setF({ ...f, proveedor: e.target.value })}
+                placeholder="Taller, gasolinera, repuestera…" />
+              <datalist id="campoProveedoresList">{proveedores.map((n) => <option key={n} value={n} />)}</datalist>
+            </label>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              {opt("CONTADO", "💵 Contado", "Sale de la cuenta ahora")}
+              {opt("CREDITO", "💳 A crédito", creditoPosible ? "Queda en Cuentas por Pagar" : f.es_anticipo ? "No aplica a un anticipo" : "No aplica a reparación")}
+            </div>
+            {credito && (
+              <>
+                <label style={{ margin: 0 }}><span>Vence el <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span></span>
+                  <input type="date" value={f.vence} onChange={(e) => setF({ ...f, vence: e.target.value })} />
+                </label>
+                <small style={{ color: "#6d28d9" }}>💳 No sale de ninguna cuenta: se crea una Cuenta por Pagar al proveedor (📤 Cuentas por Pagar). Al pagarla, el egreso lleva esta categoría y máquina.</small>
+              </>
+            )}
+          </div>
+        );
+      })()}
+      {/* 6 · Cuenta (no aplica a crédito) */}
+      {!(f.modalidad === "CREDITO" && !f.es_anticipo && !esReparacion) && (
       <label><span>Cuenta (sale de) {req}</span>
         <select value={f.cuenta_id} onChange={(e) => setF({ ...f, cuenta_id: e.target.value })}>
           <option value="">Seleccione</option>
           {cuentas.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
         </select>
       </label>
+      )}
       {/* Fondos por rendir (vale de anticipo) */}
       <label style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 8, cursor: "pointer" }}>
-        <input type="checkbox" checked={f.es_anticipo} onChange={(e) => setF({ ...f, es_anticipo: e.target.checked })} style={{ width: "auto" }} />
+        <input type="checkbox" checked={f.es_anticipo} onChange={(e) => setF({ ...f, es_anticipo: e.target.checked, modalidad: e.target.checked ? "CONTADO" : f.modalidad })} style={{ width: "auto" }} />
         <span style={{ margin: 0 }}>Marca si es dinero entregado por rendir (Anticipo)</span>
       </label>
       {f.es_anticipo && <p className="muted" style={{ marginTop: -4, fontSize: 12 }}>Se guardará como <strong>vale pendiente</strong>. Podrás liquidarlo en 📋 Vales / Anticipos.</p>}
-      <button className="primary" disabled={busy}>{busy ? "Guardando…" : f.es_anticipo ? "Registrar anticipo" : "Registrar egreso"}</button>
+      <button className="primary" disabled={busy}>{busy ? "Guardando…" : f.es_anticipo ? "Registrar anticipo" : f.modalidad === "CREDITO" && !esReparacion ? "Registrar egreso a crédito" : "Registrar egreso"}</button>
     </form>
   );
 }
@@ -1665,6 +1725,7 @@ function TransferenciaForm({ cuentas, onSaved, onError }: {
 // LIBRO DE MOVIMIENTOS con SALDO CORRIDO. Filtros por cuenta y rango de fecha.
 type LibroRow = {
   id: string; fecha: string; concepto: string | null; cuenta_nombre: string;
+  proveedor?: string | null;
   categoria_nombre: string | null; activo_nombre: string | null; naturaleza: string;
   estado: string | null; entrada: number; salida: number; saldo_corrido: number;
   movimiento_origen_id: string | null; motivo_reversion: string | null;
@@ -1727,6 +1788,7 @@ function LibroView({ cuentas, version, onReversed, onError }: {
                 <td>
                   {r.concepto || "—"}
                   {r.activo_nombre ? <span className="chip" style={{ marginLeft: 6, background: "#065f46", color: "#fff" }}>🚜 {r.activo_nombre}</span> : null}
+                  {r.proveedor ? <div style={{ fontSize: 11, color: "#475569", marginTop: 2 }}>🏪 {r.proveedor} · 💵 Contado</div> : null}
                   {r.naturaleza === "transferencia" ? <span className="chip info" style={{ marginLeft: 6 }}>transfer.</span> : null}
                   {r.naturaleza === "ajuste_vale" ? <span className="chip info" style={{ marginLeft: 6 }}>ajuste vale</span> : null}
                   {r.naturaleza.startsWith("reversion_") ? <span className="chip warn" style={{ marginLeft: 6 }}>reversion</span> : null}

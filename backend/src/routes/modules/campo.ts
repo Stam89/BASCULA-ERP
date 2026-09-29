@@ -590,7 +590,7 @@ campoRouter.get("/movimientos", asyncRoute(async (req, res) => {
   if (q.signo) { params.push(q.signo); conds.push(`m.signo = $${params.length}`); }
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   const result = await pool.query(
-    `SELECT m.id, m.fecha, m.cuenta_id, m.signo, m.monto, m.concepto,
+    `SELECT m.id, m.fecha, m.cuenta_id, m.signo, m.monto, m.concepto, m.proveedor,
             m.categoria_id, m.activo_id, m.servicio_id, m.created_at,
             c.nombre AS cuenta_nombre, cat.nombre AS categoria_nombre, a.nombre AS activo_nombre
      FROM campo_movimientos m
@@ -606,18 +606,50 @@ campoRouter.get("/movimientos", asyncRoute(async (req, res) => {
 }));
 
 campoRouter.post("/movimientos", asyncRoute(async (req, res) => {
-  const body = z.object({
+  const parsed = z.object({
     fecha: fechaSchema.optional(),
-    cuenta_id: z.string().uuid(),
+    // Obligatoria salvo en un egreso A CRÉDITO (no sale de ninguna cuenta).
+    cuenta_id: z.string().uuid().optional(),
     signo: z.enum(["entrada", "salida"]),
-    monto: z.number().positive(),
+    monto: z.number().positive().transform((n) => Math.round(n * 100) / 100),
     concepto: z.string().max(400).optional(),
     categoria_id: z.string().uuid().nullable().optional(),
     activo_id: z.string().uuid().nullable().optional(),
     servicio_id: z.string().uuid().nullable().optional(),
     // Fondos por rendir: marca el egreso como anticipo pendiente de rendición.
-    es_anticipo: z.boolean().optional()
+    es_anticipo: z.boolean().optional(),
+    // Proveedor del egreso y modalidad: CONTADO (sale de la cuenta, lo de
+    // siempre) o CREDITO (CxP de Transporte al proveedor; no toca las cuentas).
+    proveedor: z.string().trim().max(160).optional(),
+    modalidad_pago: z.enum(["CONTADO", "CREDITO"]).optional().default("CONTADO"),
+    vence: fechaSchema.optional()
   }).parse(req.body);
+
+  // ── A CRÉDITO: nace una Cuenta por Pagar de Transporte al proveedor.
+  if (parsed.modalidad_pago === "CREDITO") {
+    if (parsed.signo !== "salida" || parsed.servicio_id) throw new ApiError(400, "Solo un egreso (gasto) puede registrarse a crédito.");
+    if (parsed.es_anticipo) throw new ApiError(400, "Un anticipo por rendir sale de caja: no puede ser a crédito.");
+    const proveedor = (parsed.proveedor ?? "").trim();
+    if (proveedor.length < 2) throw new ApiError(400, "Para un egreso a crédito indica el proveedor.");
+    let catNombre: string | null = null;
+    if (parsed.categoria_id) {
+      const cat = await pool.query("SELECT nombre FROM campo_categorias_gasto WHERE id = $1", [parsed.categoria_id]);
+      if (!cat.rowCount) throw new ApiError(404, "Categoría de gasto no encontrada");
+      catNombre = cat.rows[0].nombre;
+    }
+    const concepto = [catNombre, parsed.concepto?.trim()].filter(Boolean).join(" · ") || null;
+    const nuevo = (await pool.query(
+      `INSERT INTO campo_cxp (fecha, acreedor, concepto, monto, created_by, categoria_id, activo_id, vence, origen)
+       VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, 'EGRESO_CREDITO') RETURNING id`,
+      [parsed.fecha ?? null, proveedor.toUpperCase(), concepto, parsed.monto, userId(req),
+       parsed.categoria_id ?? null, parsed.activo_id ?? null, parsed.vence ?? null]
+    )).rows[0];
+    const cxp = (await pool.query(`${CXP_SELECT} WHERE c.id = $1`, [nuevo.id])).rows[0];
+    res.status(201).json({ credito: true, cxp });
+    return;
+  }
+  if (!parsed.cuenta_id) throw new ApiError(400, "Elige la cuenta de la que sale o entra el dinero.");
+  const body = { ...parsed, cuenta_id: parsed.cuenta_id };
 
   // Un anticipo (vale por rendir) es SIEMPRE un egreso suelto (no un abono).
   if (body.es_anticipo && (body.signo !== "salida" || body.servicio_id)) {
@@ -639,11 +671,12 @@ campoRouter.post("/movimientos", asyncRoute(async (req, res) => {
   // (422). El FOR UPDATE evita la carrera de dos abonos simultáneos que juntos
   // superarían el saldo. Un movimiento suelto (sin servicio) no necesita lock.
   const insert = async (client: { query: typeof pool.query }) => (await client.query(
-    `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, categoria_id, activo_id, servicio_id, estado, created_by)
-     VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, categoria_id, activo_id, servicio_id, estado, created_by, proveedor)
+     VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      RETURNING *`,
     [body.fecha ?? null, body.cuenta_id, body.signo, body.monto, body.concepto?.trim() || null,
-     body.categoria_id ?? null, body.activo_id ?? null, body.servicio_id ?? null, estado, userId(req)]
+     body.categoria_id ?? null, body.activo_id ?? null, body.servicio_id ?? null, estado, userId(req),
+     body.signo === "salida" ? (body.proveedor?.trim().toUpperCase() || null) : null]
   )).rows[0];
 
   if (!body.servicio_id) {
@@ -1648,6 +1681,7 @@ campoRouter.post("/cxc/abono", asyncRoute(async (req, res) => {
 // y el estado se DERIVAN de los abonos (campo_movimientos 'salida' con cxp_id).
 const CXP_SELECT = `
   SELECT c.id, c.fecha, c.acreedor, c.concepto, c.monto::float AS monto, c.created_at,
+    c.categoria_id, c.activo_id, c.vence, c.origen,
     COALESCE((SELECT SUM(m.monto) FROM campo_movimientos m WHERE m.cxp_id = c.id AND m.signo = 'salida'), 0)::float AS pagado,
     (c.monto - COALESCE((SELECT SUM(m.monto) FROM campo_movimientos m WHERE m.cxp_id = c.id AND m.signo = 'salida'), 0))::float AS saldo,
     CASE WHEN c.monto - COALESCE((SELECT SUM(m.monto) FROM campo_movimientos m WHERE m.cxp_id = c.id AND m.signo = 'salida'), 0) <= 0.005
@@ -1688,7 +1722,7 @@ campoRouter.post("/cxp/:id/abono", asyncRoute(async (req, res) => {
   const cta = await pool.query("SELECT 1 FROM campo_cuentas WHERE id = $1", [body.cuenta_id]);
   if (!cta.rowCount) throw new ApiError(404, "Cuenta no encontrada");
   const row = await inTransaction(async (client) => {
-    const cxp = (await client.query("SELECT id, acreedor, monto FROM campo_cxp WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
+    const cxp = (await client.query("SELECT id, acreedor, monto, categoria_id, activo_id FROM campo_cxp WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
     if (!cxp) throw new ApiError(404, "Cuenta por pagar no encontrada");
     await requireCajaAbierta([body.cuenta_id], client);
     await requireSaldoCajaDisponible(client, body.cuenta_id, body.monto);
@@ -1700,9 +1734,10 @@ campoRouter.post("/cxp/:id/abono", asyncRoute(async (req, res) => {
       throw new ApiError(422, `El pago (${body.monto.toFixed(2)}) supera el saldo pendiente (${saldo.toFixed(2)}).`);
     }
     await client.query(
-      `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, cxp_id, created_by)
-       VALUES (COALESCE($1::date, CURRENT_DATE), $2, 'salida', $3, $4, $5, $6)`,
-      [body.fecha ?? null, body.cuenta_id, body.monto, body.concepto?.trim() || `Pago CxP · ${cxp.acreedor}`, req.params.id, userId(req)]
+      `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, cxp_id, created_by, categoria_id, activo_id, proveedor)
+       VALUES (COALESCE($1::date, CURRENT_DATE), $2, 'salida', $3, $4, $5, $6, $7, $8, $9)`,
+      [body.fecha ?? null, body.cuenta_id, body.monto, body.concepto?.trim() || `Pago CxP · ${cxp.acreedor}`, req.params.id, userId(req),
+       cxp.categoria_id ?? null, cxp.activo_id ?? null, cxp.acreedor]
     );
     return (await client.query(`${CXP_SELECT} WHERE c.id = $1`, [req.params.id])).rows[0];
   });
@@ -1987,7 +2022,7 @@ campoRouter.get("/caja/libro", asyncRoute(async (req, res) => {
   const toCond = q.to ? `AND l.fecha <= $${(params.push(q.to), params.length)}` : "";
   const rows = (await pool.query(
     `WITH libro AS (
-       SELECT m.id, m.fecha, m.created_at, m.cuenta_id, m.signo, m.monto, m.concepto,
+       SELECT m.id, m.fecha, m.created_at, m.cuenta_id, m.signo, m.monto, m.concepto, m.proveedor,
               m.categoria_id, m.naturaleza, m.par_id, m.estado,
               m.servicio_id, m.cxp_id, m.vale_id, m.caja_sesion_id,
               m.movimiento_origen_id, m.motivo_reversion, m.reversado_at,
@@ -2000,7 +2035,7 @@ campoRouter.get("/caja/libro", asyncRoute(async (req, res) => {
        LEFT JOIN campo_activos a ON a.id = m.activo_id
        ${cuentaCond}
      )
-     SELECT l.id, l.fecha, l.cuenta_id, l.signo, l.monto::float AS monto, l.concepto,
+     SELECT l.id, l.fecha, l.cuenta_id, l.signo, l.monto::float AS monto, l.concepto, l.proveedor,
             l.categoria_id, l.naturaleza, l.par_id, l.estado,
             l.movimiento_origen_id, l.motivo_reversion, l.reversado_at,
             l.cuenta_nombre, l.categoria_nombre, l.activo_nombre,
