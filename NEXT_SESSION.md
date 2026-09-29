@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Repuestos de la planta (2026-09-29)
+- Inventario → pestanas «📦 Existencias» / «🔧 Repuestos de planta» (solo con la Matriz activa). `components/RepuestosModule.tsx` + `RepuestosAlertaDashboard` en el Dashboard (en o bajo el minimo; agotados).
+- Tablas `repuestos` (stock, stock_minimo, costo_unitario ultimo, equipment_id, activo) y `repuesto_movimientos` (ENTRADA/SALIDA/AJUSTE con signo, stock_resultante, cash_movement_id, maintenance_id). Migracion 20261053. Router `/repuestos` (solo Matriz, 403 a socios; permiso de escritura Inventario o Caja).
+- Compra: opcional pagada con la caja abierta → egreso categoria REPUESTOS (reference_type 'repuesto_compra'); al ANULAR ese egreso en Caja, `reversarEntradaRepuestosDeCaja` retira lo que entro. Uso: no deja salir mas que el stock; con maquina crea `equipment_maintenance` tipo REPUESTO (costo = cantidad × costo) en su hoja de vida. Ajuste = conteo fisico.
+- Insumos (tabla `insumos`) NO se toco: es de fomentos/agricultores.
+
 ### Caja: vuelto de fondos en una sola linea + anulaciones limpias + redondeo (2026-09-29)
 - «💸 Registrar Vuelto» SOLO en fondos a rendir cuentas (es_fondo, POR_LIQUIDAR, no anulado ni contra-asiento); reemplaza el «⚙️ Liquidar». Se quito el boton que convertia cualquier egreso en fondo (el endpoint `/convertir-fondo` sigue, sin uso en la UI).
 - POST `/cash/movements/:id/liquidar`: si el fondo es de la MISMA caja abierta y gasto real > 0 → UPDATE en linea: amount = gasto real, `monto_entregado` = entregado (columna nueva, migracion 20261052), LIQUIDADO, descripcion «X · Gasto real: $219.00 (Entregado: $220.00 | Vuelto devuelto a caja: $1.00)». Fondo de una sesion anterior (caja cerrada) o gasto real 0 (CHECK amount > 0) → ajuste aparte como antes (reference_type 'fondo_liquidacion'). Rechaza fondos anulados.
