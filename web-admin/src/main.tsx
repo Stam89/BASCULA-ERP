@@ -10,6 +10,14 @@ window.addEventListener("vite:preloadError", (event) => {
   if (recargarPorVersionNueva()) event.preventDefault();
 });
 
+// Montos: la rueda del mouse sobre un campo numérico con el cursor adentro le
+// sumaba/restaba un paso (0.01) sin que nadie lo notara ($220.00 → $219.99).
+// Al girar la rueda se suelta el campo: el valor no cambia y la página se desplaza.
+document.addEventListener("wheel", (event) => {
+  const el = event.target;
+  if (el instanceof HTMLInputElement && el.type === "number" && el === document.activeElement) el.blur();
+}, { passive: true });
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <App />

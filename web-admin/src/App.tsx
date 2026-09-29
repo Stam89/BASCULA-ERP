@@ -8421,7 +8421,7 @@ export function App() {
     if (!registerId) throw new Error("No hay caja abierta");
     const movement = form.get("movement") as "INCOME" | "EXPENSE";
     const category = form.get("category") as string;
-    const amount = Number(form.get("amount"));
+    const amount = round2(Number(form.get("amount"))); // 2 decimales exactos
     // Enlace directo: "Pago a Agricultor" con una liquidación vinculada usa el
     // flujo de pago de cuentas (descuenta caja + abona la liquidación, un solo
     // asiento; la relación queda cash_movement -> accounts_payable -> liquidation).
@@ -8517,19 +8517,19 @@ export function App() {
     const lf = liquidarFondo; if (!lf) return;
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) { addToast("Abre una caja para liquidar", "error"); return; }
-    const gasto = Number(lf.gasto_real);
+    const gasto = round2(Number(lf.gasto_real));
     if (!(gasto >= 0)) { addToast("Ingresa el gasto real (≥ 0)", "error"); return; }
     setLiquidarBusy(true);
     try {
-      const r = await apiPost<{ diferencia: number; ajuste: { movement: string; amount: number } | null }>(
+      const r = await apiPost<{ diferencia: number; ajuste: { movement: string; amount: number } | null; en_linea?: boolean }>(
         `/cash/movements/${lf.mov.id}/liquidar`,
         { cash_register_id: registerId, gasto_real: gasto, description: lf.description.trim() || undefined }
       );
       const msg = !r.ajuste
         ? "Fondo liquidado (gasto exacto)."
         : r.ajuste.movement === "INCOME"
-          ? `Fondo liquidado · vuelto ${money(r.ajuste.amount)} devuelto a caja.`
-          : `Fondo liquidado · faltante ${money(r.ajuste.amount)} egresado.`;
+          ? `Fondo liquidado · gasto real ${money(gasto)} · vuelto ${money(r.ajuste.amount)} devuelto a caja.`
+          : `Fondo liquidado · gasto real ${money(gasto)} · faltante ${money(r.ajuste.amount)} pagado de caja.`;
       addToast(msg, "success");
       setLiquidarFondo(null);
       await refreshCaja(registerId);
@@ -8537,21 +8537,6 @@ export function App() {
       addToast(e instanceof Error ? e.message : "No se pudo liquidar", "error");
     } finally {
       setLiquidarBusy(false);
-    }
-  }
-
-  // Req 3: convierte un egreso YA guardado (gasto directo) en "Fondo a rendir
-  // cuentas" y abre el modal de liquidación para registrar el vuelto, sin anular
-  // el registro original.
-  async function registrarVueltoEgreso(m: CashMovement) {
-    try {
-      await apiPost(`/cash/movements/${m.id}/convertir-fondo`, {});
-      const registerId = dashboard.current_cash_register?.id;
-      if (registerId) await refreshCaja(registerId);
-      setLiquidarFondo({ mov: { ...m, es_fondo: true, fondo_estado: "POR_LIQUIDAR" }, gasto_real: "", description: "" });
-      addToast("Egreso convertido a Fondo por Liquidar. Registra el gasto real y el vuelto.", "success");
-    } catch (e) {
-      addToast(e instanceof Error ? e.message : "No se pudo convertir a fondo", "error");
     }
   }
 
@@ -16528,9 +16513,11 @@ export function App() {
                                         ? <span className="chip ok">✅ Liquidado</span>
                                         : <span className="chip warn">⏳ Por Liquidar</span>}
                                       {m.responsable && <span style={{ fontSize: 11, color: "#6b7280" }}>👤 {m.responsable}</span>}
-                                      {m.fondo_estado === "POR_LIQUIDAR" && !isReversed && (
-                                        <button type="button" className="btnSecondary" style={{ fontSize: 11, padding: "3px 10px" }}
-                                          onClick={() => setLiquidarFondo({ mov: m, gasto_real: "", description: "" })}>⚙️ Liquidar</button>
+                                      {/* «Registrar Vuelto» SOLO en un fondo a rendir cuentas vigente y sin liquidar. */}
+                                      {m.fondo_estado === "POR_LIQUIDAR" && !isReversed && !isReversal && (
+                                        <button type="button" className="btnSecondary" style={{ fontSize: 11, padding: "3px 10px", color: "#2563eb" }}
+                                          title="Registrar el gasto real y el vuelto que regresa a caja"
+                                          onClick={() => setLiquidarFondo({ mov: m, gasto_real: "", description: "" })}>💸 Registrar Vuelto</button>
                                       )}
                                     </div>
                                   )}
@@ -16540,11 +16527,8 @@ export function App() {
                                 </td>
                                 {canAnular && (
                                   <td style={{ padding: "8px 16px", textAlign: "right", whiteSpace: "nowrap" }}>
-                                    {/* Req 3: egreso activo NO-fondo → convertir a fondo y registrar el vuelto. */}
-                                    {!isReversed && !isReversal && m.movement === "EXPENSE" && !m.es_fondo && (
-                                      <button type="button" className="btnGhost" style={{ color: "#2563eb" }} title="Convertir este egreso a Fondo por Liquidar y registrar el vuelto"
-                                        onClick={() => registrarVueltoEgreso(m)}>💸 Registrar Vuelto</button>
-                                    )}
+                                    {/* Los gastos directos (facturas, sueldos, compras) NO llevan
+                                        «Registrar Vuelto»: solo los fondos a rendir cuentas (columna Descripción). */}
                                     {!isReversed && !isReversal && (
                                       <button type="button" className="btnGhost" onClick={() => reverseCashMovement(m)}>Anular</button>
                                     )}
@@ -16807,7 +16791,7 @@ export function App() {
                             <datalist id="responsablesList">
                               {adminStaff.map((s) => <option key={s.id} value={s.worker_name} />)}
                             </datalist>
-                            <small className="muted" style={{ display: "block", marginTop: 4 }}>El egreso resta de caja y queda ⏳ Por Liquidar. Luego usa ⚙️ Liquidar para registrar el vuelto o faltante.</small>
+                            <small className="muted" style={{ display: "block", marginTop: 4 }}>El egreso resta de caja y queda ⏳ Por Liquidar. Luego usa 💸 Registrar Vuelto para dejar el gasto real y devolver el vuelto a caja.</small>
                           </label>
                         )}
                       </div>
@@ -17367,7 +17351,7 @@ export function App() {
             <div className="modalOverlay" onClick={() => setLiquidarFondo(null)}>
               <div className="modalCard" style={{ maxWidth: 460, width: "100%" }} onClick={(e) => e.stopPropagation()}>
                 <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
-                  <h3 style={{ margin: 0 }}>⚙️ Liquidar fondo (rendir cuentas)</h3>
+                  <h3 style={{ margin: 0 }}>💸 Registrar vuelto (rendir cuentas)</h3>
                   <button type="button" onClick={() => setLiquidarFondo(null)} style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
                 </div>
                 <p className="muted" style={{ marginTop: 6 }}>
@@ -17392,9 +17376,10 @@ export function App() {
                 </label>
                 {diff !== null && (
                   <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8, background: diff > 0.005 ? "#f0fdf4" : diff < -0.005 ? "#fef2f2" : "#f3f4f6", border: "1px solid #e5e7eb", fontSize: 13 }}>
-                    {diff > 0.005 && <>🟢 Se reintegra a caja (ingreso): <strong>{money(diff)}</strong></>}
-                    {diff < -0.005 && <>🔴 Faltante (egreso adicional): <strong>{money(Math.abs(diff))}</strong></>}
-                    {Math.abs(diff) <= 0.005 && <>✅ Gasto exacto: sin ajuste de caja.</>}
+                    {diff > 0.005 && <>🟢 El egreso queda en <strong>{money(round2(gasto))}</strong> y el vuelto <strong>{money(diff)}</strong> vuelve al saldo de caja.</>}
+                    {diff < -0.005 && <>🔴 El egreso sube a <strong>{money(round2(gasto))}</strong>: faltante <strong>{money(Math.abs(diff))}</strong> pagado de caja.</>}
+                    {Math.abs(diff) <= 0.005 && <>✅ Gasto exacto: sin vuelto.</>}
+                    <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>Queda en una sola línea del movimiento, con el entregado y el vuelto en la descripción.</div>
                   </div>
                 )}
                 <div style={{ display: "flex", gap: 8, marginTop: 16 }}>

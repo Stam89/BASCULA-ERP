@@ -404,6 +404,51 @@ cashRouter.post("/movements/:id/reverse", requireAdmin, asyncRoute(async (req, r
       [m.id, user?.id ?? null, body.reason]
     );
 
+    // Fondos a rendir cuentas: sin estados colgados.
+    //  · Anular el FONDO anula también su vuelto/faltante registrado aparte (si
+    //    lo hubo): la caja vuelve exactamente a como estaba antes de entregarlo.
+    //    (Si el vuelto se registró en la misma línea, el contra-asiento ya es
+    //    por el gasto real y no hay nada más que revertir.)
+    //  · Anular SOLO el vuelto/faltante devuelve el fondo a «Por Liquidar».
+    const ajustesAnulados: string[] = [];
+    if (m.es_fondo) {
+      const ajustes = await client.query(
+        `SELECT * FROM cash_movements
+          WHERE reference_type = 'fondo_liquidacion' AND reference_id = $1 AND reversed_at IS NULL
+          FOR UPDATE`,
+        [m.id]
+      );
+      for (const a of ajustes.rows) {
+        await client.query(
+          `INSERT INTO cash_movements
+             (cash_register_id, movement, category, amount, description, reference_type, reference_id, reversal_of, created_by)
+           VALUES ($1, $2, $3, $4, $5, 'reversal', $6, $6, $7)`,
+          [a.cash_register_id, a.movement === "INCOME" ? "EXPENSE" : "INCOME", a.category, a.amount,
+           `Anulación: ${body.reason} (ajuste del fondo ${String(m.id).slice(0, 8)})`, a.id, user?.id ?? null]
+        );
+        await client.query(
+          `UPDATE cash_movements SET reversed_at = now(), reversed_by = $2, reversed_reason = $3 WHERE id = $1`,
+          [a.id, user?.id ?? null, `Fondo anulado: ${body.reason}`]
+        );
+        ajustesAnulados.push(a.id);
+      }
+    } else if (m.reference_type === "fondo_liquidacion" && m.reference_id) {
+      const quedan = await client.query(
+        `SELECT 1 FROM cash_movements
+          WHERE reference_type = 'fondo_liquidacion' AND reference_id = $1 AND reversed_at IS NULL LIMIT 1`,
+        [m.reference_id]
+      );
+      if (!quedan.rowCount) {
+        await client.query(
+          `UPDATE cash_movements
+              SET fondo_estado = 'POR_LIQUIDAR',
+                  description = NULLIF(btrim(regexp_replace(COALESCE(description, ''), '\\s*·\\s*(Liquidado: gasto real|Gasto real: \\$).*$', '')), '')
+            WHERE id = $1 AND es_fondo AND reversed_at IS NULL AND monto_entregado IS NULL`,
+          [m.reference_id]
+        );
+      }
+    }
+
     // Si el egreso anulado fue una compra de sacos, descuenta del inventario lo
     // que había ingresado (reverso automático para mantener el cuadre).
     const sacosRevertidos = await reversarEntradaSacosDeCaja(client, m.id);
@@ -426,7 +471,7 @@ cashRouter.post("/movements/:id/reverse", requireAdmin, asyncRoute(async (req, r
       activosRetirados.push(a.name);
     }
 
-    return { ...reversal.rows[0], sacos_revertidos: sacosRevertidos, activos_retirados: activosRetirados };
+    return { ...reversal.rows[0], sacos_revertidos: sacosRevertidos, activos_retirados: activosRetirados, ajustes_anulados: ajustesAnulados };
   });
 
   res.status(201).json(result);
@@ -438,7 +483,7 @@ cashRouter.post("/movements", asyncRoute(async (req, res) => {
     cash_register_id: z.string().uuid(),
     movement: z.enum(["INCOME", "EXPENSE"]),
     category: z.string().min(1).max(80),
-    amount: z.number().positive(),
+    amount: z.number().positive().transform(round2), // 2 decimales exactos (evita 219.999…)
     description: z.string().optional(),
     created_by: z.string().uuid().optional()
   }).parse(req.body);
@@ -466,7 +511,7 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
   const body = z.object({
     movement: z.enum(["INCOME", "EXPENSE"]),
     category: z.string().min(1).max(80),
-    amount: z.number().positive(),
+    amount: z.number().positive().transform(round2), // 2 decimales exactos (evita 219.999…)
     description: z.string().optional(),
     reference_type: z.string().optional(),
     reference_id: z.string().optional(),
@@ -562,14 +607,38 @@ cashRouter.post("/movements/:id/liquidar", asyncRoute(async (req, res) => {
   const result = await inTransaction(async (client) => {
     const orig = await getMovimientoDelAccionistaForUpdate(client, req.params.id as string, accionistaId);
     if (!orig.es_fondo) throw new ApiError(409, "Ese movimiento no es un fondo a rendir cuentas.");
+    if (orig.reversed_at || orig.reversal_of) throw new ApiError(409, "Ese movimiento está anulado: no se puede registrar su vuelto.");
     if (orig.fondo_estado === "LIQUIDADO") throw new ApiError(409, "Ese fondo ya fue liquidado.");
 
     await assertCajaDelAccionista(client, body.cash_register_id, accionistaId);
 
-    const entregado = Number(orig.amount);
+    const entregado = round2(Number(orig.amount));
     const gastoReal = round2(body.gasto_real);
     const diff = round2(entregado - gastoReal); // + = vuelto a caja; - = faltante
     const resp = orig.responsable ? ` · ${orig.responsable}` : "";
+    const usd = (n: number) => `$${n.toFixed(2)}`;
+    const base = String(orig.description ?? "").trim() || String(orig.category ?? "Fondo");
+    const detalle = diff > 0.005 ? `Vuelto devuelto a caja: ${usd(diff)}`
+      : diff < -0.005 ? `Faltante pagado de caja: ${usd(Math.abs(diff))}` : "Sin vuelto";
+    const comprobante = body.description?.trim() ? ` · ${body.description.trim()}` : "";
+    const descLiquidada = `${base} · Gasto real: ${usd(gastoReal)} (Entregado: ${usd(entregado)} | ${detalle})${comprobante}`;
+
+    // UNA SOLA LÍNEA: si el fondo es de la sesión abierta, el egreso pasa al
+    // gasto real (el vuelto vuelve al saldo al bajar el egreso) y el entregado
+    // queda en monto_entregado. Un fondo de una sesión anterior (ya cerrada) no
+    // se puede cambiar: su vuelto/faltante entra como ajuste en la caja abierta.
+    // Gasto real 0 (devolvió todo) tampoco cabe en la línea (monto > 0).
+    if (orig.cash_register_id === body.cash_register_id && gastoReal > 0) {
+      await client.query(
+        `UPDATE cash_movements
+            SET amount = $2, monto_entregado = $3, fondo_estado = 'LIQUIDADO', description = $4
+          WHERE id = $1`,
+        [orig.id, gastoReal, entregado, descLiquidada]
+      );
+      const ajusteLinea = Math.abs(diff) > 0.005 ? { movement: diff > 0 ? "INCOME" : "EXPENSE", amount: Math.abs(diff) } : null;
+      return { ok: true, entregado, gasto_real: gastoReal, diferencia: diff, ajuste: ajusteLinea, en_linea: true };
+    }
+
     let ajuste: { movement: string; amount: number } | null = null;
 
     if (diff > 0.005) {
@@ -579,7 +648,7 @@ cashRouter.post("/movements/:id/liquidar", asyncRoute(async (req, res) => {
           (cash_register_id, movement, category, amount, description, reference_type, reference_id, created_by, subcategoria)
          VALUES ($1, 'INCOME', $2, $3, $4, 'fondo_liquidacion', $5, $6, $7)`,
         [body.cash_register_id, orig.category, diff,
-         `Vuelto de fondo por liquidar${resp} (entregado ${entregado.toFixed(2)}, gasto real ${gastoReal.toFixed(2)})`,
+         `Vuelto de fondo · ${base}${resp} (Entregado: ${usd(entregado)} | Gasto real: ${usd(gastoReal)})`,
          orig.id, body.created_by ?? null, orig.subcategoria ?? null]
       );
       ajuste = { movement: "INCOME", amount: diff };
@@ -590,18 +659,17 @@ cashRouter.post("/movements/:id/liquidar", asyncRoute(async (req, res) => {
           (cash_register_id, movement, category, amount, description, reference_type, reference_id, created_by, subcategoria)
          VALUES ($1, 'EXPENSE', $2, $3, $4, 'fondo_liquidacion', $5, $6, $7)`,
         [body.cash_register_id, orig.category, Math.abs(diff),
-         `Faltante de fondo por liquidar${resp} (entregado ${entregado.toFixed(2)}, gasto real ${gastoReal.toFixed(2)})`,
+         `Faltante de fondo · ${base}${resp} (Entregado: ${usd(entregado)} | Gasto real: ${usd(gastoReal)})`,
          orig.id, body.created_by ?? null, orig.subcategoria ?? null]
       );
       ajuste = { movement: "EXPENSE", amount: Math.abs(diff) };
     }
 
-    const nuevaDesc = `${orig.description ?? ""}${orig.description ? " · " : ""}Liquidado: gasto real ${gastoReal.toFixed(2)}${body.description ? ` (${body.description.trim()})` : ""}`.trim();
     await client.query(
       "UPDATE cash_movements SET fondo_estado = 'LIQUIDADO', description = $2 WHERE id = $1",
-      [orig.id, nuevaDesc]
+      [orig.id, descLiquidada]
     );
-    return { ok: true, entregado, gasto_real: gastoReal, diferencia: diff, ajuste };
+    return { ok: true, entregado, gasto_real: gastoReal, diferencia: diff, ajuste, en_linea: false };
   });
   res.json(result);
 }));
