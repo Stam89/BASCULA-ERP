@@ -16365,7 +16365,7 @@ export function App() {
                     })()}
                     {(CASH_REUSE[movCategory] === "pilado" || CASH_REUSE[movCategory] === "fomento") && (() => {
                       const info = CASH_REUSE[movCategory] === "pilado"
-                        ? { txt: `Para que el pago abone la cuenta de ${matrizName}, regístralo en Por Pagar (descuenta tu caja y abona la cuenta por cobrar de la matriz).`, go: () => setCajaSubTab("cuentas"), lbl: "Ir a Por Pagar" }
+                        ? { txt: `Para que el pago abone la cuenta de ${matrizName}, regístralo en Por Pagar (descuenta tu caja y abona la cuenta por cobrar de la matriz).`, go: () => irATab("Por Pagar"), lbl: "Ir a Por Pagar" }
                         : { txt: "Para enlazarlo con el agricultor, regístralo en Fomentos.", go: () => setCajaSubTab("fomentos"), lbl: "Ir a Fomentos" };
                       return (
                         <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "10px 12px", marginBottom: 16, fontSize: 12 }}>
