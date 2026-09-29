@@ -4262,3 +4262,8 @@ textarea::placeholder {
 /* Movimientos junto al formulario: la tabla se desplaza en horizontal en vez de cortarse. */
 .cj-col-list > div:not(.cj-panel-head) { overflow-x: auto; }
 .cj-form input[type="radio"], .cj-form input[type="checkbox"] { width: 18px !important; height: 18px !important; min-width: 18px; flex: 0 0 18px; margin: 0; padding: 0; accent-color: #2563eb; box-shadow: none; }
+
+/* Venta Detalle: acceso discreto a la tarifa por libra (texto-enlace, sin fondo). */
+.vdTarifaLink { display: inline-flex; align-items: center; gap: 4px; padding: 0; margin: 0; border: none; background: none; box-shadow: none; min-height: 0; height: auto; width: auto; font: inherit; font-size: 12px; font-weight: 500; color: #3b82f6; cursor: pointer; text-underline-offset: 2px; transition: color .15s; }
+.vdTarifaLink:hover { color: #1d4ed8; text-decoration: underline; background: none; }
+.vdTarifaLink:focus-visible { outline: 2px solid rgba(59, 130, 246, .4); outline-offset: 2px; border-radius: 3px; }

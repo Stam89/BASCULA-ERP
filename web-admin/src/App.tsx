@@ -16719,7 +16719,26 @@ export function App() {
                     </div>
                     {ventaDetalleForm.product_id && Number(ventaDetalleForm.precio_por_libra) > 0 && (
                       <p style={{ margin: "0 0 12px", color: "#166534", fontSize: 12 }}>
-                        Precio aplicado: <strong>{money(ventaDetalleForm.precio_por_libra)}/lb</strong> · tarifa configurada en Administración.
+                        Precio aplicado: <strong>{money(ventaDetalleForm.precio_por_libra)}/lb</strong> ·{" "}
+                        {visibleTabs.includes("Configuracion") ? (
+                          // Acceso discreto a la tarifa (no compite con «Registrar venta detalle»):
+                          // abre Configuración → Tarifas y despliega «Tarifas por libra».
+                          <button
+                            type="button"
+                            className="vdTarifaLink"
+                            title="Abrir Configuración → Tarifas por libra"
+                            onClick={() => {
+                              setConfigSubTab("tarifas");
+                              irATab("Configuracion");
+                              setTimeout(() => {
+                                const d = document.getElementById("cfg-tarifas-libra") as HTMLDetailsElement | null;
+                                if (d) { d.open = true; d.scrollIntoView({ behavior: "smooth", block: "start" }); }
+                              }, 300);
+                            }}
+                          >
+                            ⚙️ Editar tarifa en Configuración
+                          </button>
+                        ) : "tarifa configurada en Administración."}
                       </p>
                     )}
                     {ventaDetalleForm.product_id && !(Number(ventaDetalleForm.precio_por_libra) > 0) && (
@@ -21716,7 +21735,7 @@ export function App() {
                 </>)}
                 {/* 5) Tarifas por libra (Venta al Detalle) — ya era acordeón */}
                 <div className="formPanel">
-                  <details>
+                  <details id="cfg-tarifas-libra">
                     <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🛒 Tarifas por libra (Venta al Detalle)</summary>
                     <p className="muted" style={{ marginTop: 8 }}>
                       Precio por libra de cada producto de mostrador. El cotizador de «Venta Detalle» (Caja) lo
