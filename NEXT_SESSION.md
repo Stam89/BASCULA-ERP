@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Cambio rapido de accionista / Transporte (2026-09-29)
+- Menu lateral: el select de operacion paso a botones directos (🏭 Matriz, 🚜 Transporte y Cosechadora, 🤝 socios), activo resaltado; tambien dentro de CampoWorkspace (prop operationSelector). Logica unica `opcionesOperacion` / `valorOperacionActual` / `irAOperacion` (junto a switchAccionista).
+- Atajos Alt+1…Alt+9 en el orden de los botones (se ignora Ctrl+Alt = AltGr).
+- Al cambiar de accionista se vuelve al mismo modulo (`bascula-erp:tab-pending`); si no es visible para el nuevo, el guardia de visibleTabs manda al Dashboard.
+
 ### Reportes: revision y correcciones (2026-09-29)
 - «Gastos» (informe y KPI del Resumen) leia la tabla `expenses` (vacia, ya no se usa): ahora sale de `cash_movements` EXPENSE vigentes, con categoria de Caja, detalle, socio y separacion operativos / no operativos (`CATEGORIAS_NO_OPERATIVAS` de resultado-mensual). KPI renombrado «Gastos operativos».
 - Resumen: sumas de caja y desglose excluyen anulados y contra-asientos (`MOV_VIGENTE`), antes una anulacion inflaba ingresos y egresos; CxC/CxP excluyen CANCELLED.

@@ -1959,6 +1959,36 @@ export function App() {
     window.location.reload();
   }
 
+  // ── Cambio rápido de operación (accionistas + Transporte y Cosechadora) ──
+  const OPERACION_CAMPO = "::campo";
+  function opcionesOperacion(): Array<{ value: string; label: string; icono: string }> {
+    const out: Array<{ value: string; label: string; icono: string }> = [];
+    for (const a of accionistas) {
+      // Cada unidad muestra ÚNICAMENTE su nombre (sin concatenar matriz ni rol).
+      out.push({ value: a.id, label: a.name, icono: a.tipo === "MATRIZ" ? "🏭" : "🤝" });
+      if (a.tipo === "MATRIZ") out.push({ value: a.id + OPERACION_CAMPO, label: campoNombre, icono: "🚜" });
+    }
+    return out;
+  }
+  function valorOperacionActual(): string {
+    const act = accionistas.find((a) => a.id === activeAccionistaId);
+    const inCampo = act?.tipo === "MATRIZ" && activeTab === "Caja de Campo";
+    return inCampo ? (activeAccionistaId ?? "") + OPERACION_CAMPO : (activeAccionistaId ?? "");
+  }
+  function irAOperacion(v: string) {
+    if (v.endsWith(OPERACION_CAMPO)) {
+      const id = v.slice(0, -OPERACION_CAMPO.length);
+      if (id === activeAccionistaId) setActiveTab("Caja de Campo");
+      else { try { localStorage.setItem("bascula-erp:campo-pending", "1"); } catch { /* ignore */ } switchAccionista(id); }
+      return;
+    }
+    if (v !== activeAccionistaId) {
+      // Recordar el módulo para volver a él tras recargar con el nuevo accionista.
+      try { localStorage.setItem("bascula-erp:tab-pending", activeTab === "Caja de Campo" ? "Dashboard" : activeTab); } catch { /* ignore */ }
+      switchAccionista(v);
+    } else if (activeTab === "Caja de Campo") setActiveTab("Dashboard");
+  }
+
   // Tras iniciar sesión, poblar la lista de accionistas y el activo desde el
   // login recién guardado (evita que queden vacíos hasta recargar la página).
   function handleLogin(user: AuthUser) {
@@ -1975,6 +2005,13 @@ export function App() {
       if (localStorage.getItem("bascula-erp:campo-pending") === "1") {
         localStorage.removeItem("bascula-erp:campo-pending");
         return "Caja de Campo";
+      }
+      // Cambio rápido de accionista: se vuelve al mismo módulo (si el nuevo
+      // accionista no lo ve, el guardia de visibleTabs lo manda al Dashboard).
+      const pendiente = localStorage.getItem("bascula-erp:tab-pending");
+      if (pendiente) {
+        localStorage.removeItem("bascula-erp:tab-pending");
+        return pendiente;
       }
     } catch { /* ignore */ }
     return "Dashboard";
@@ -4162,6 +4199,24 @@ export function App() {
       setActiveTab("Dashboard");
     }
   }, [authUser, visibleTabs, activeTab]);
+
+  // Atajos Alt+1…Alt+9: cambiar de accionista / Transporte sin abrir el menú.
+  // (Ctrl+Alt = AltGr en teclados en español: se ignora para no robar @, #…)
+  useEffect(() => {
+    if (!authUser) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      const n = Number(e.key);
+      if (!Number.isInteger(n) || n < 1 || n > 9) return;
+      const op = opcionesOperacion()[n - 1];
+      if (!op) return;
+      e.preventDefault();
+      if (op.value !== valorOperacionActual()) irAOperacion(op.value);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUser, accionistas, activeAccionistaId, activeTab, campoNombre]);
 
   // Si la sub-pestaña activa quedó fuera de permiso (p.ej. al cambiar de
   // accionista), saltar a la primera permitida. No corre para admin (ve todo).
@@ -11502,35 +11557,28 @@ export function App() {
   }
 
   // Selector de operación (accionistas + "Matriz · Campo"). Se usa tanto en el
-  // layout estándar como en el shell aislado de Campo.
+  // layout estándar como en el shell aislado de Campo. Botones directos (un
+  // clic) y atajos Alt+1…Alt+N en el mismo orden.
   const operationSelectorEl = (() => {
-    const SUF = "::campo";
-    const opciones: Array<{ value: string; label: string }> = [];
-    for (const a of accionistas) {
-      // Cada unidad muestra ÚNICAMENTE su nombre (sin concatenar matriz ni rol).
-      opciones.push({ value: a.id, label: a.name });
-      if (a.tipo === "MATRIZ") opciones.push({ value: a.id + SUF, label: campoNombre });
-    }
+    const opciones = opcionesOperacion();
     if (opciones.length <= 1) return null;
-    const inCampo = esMatrizActiva && activeTab === "Caja de Campo";
-    const valor = inCampo ? (activeAccionistaId ?? "") + SUF : (activeAccionistaId ?? "");
+    const valor = valorOperacionActual();
     return (
-      <label className="accionistaSwitcher">
-        <span>Accionista</span>
-        <select value={valor} onChange={(e) => {
-          const v = e.target.value;
-          if (v.endsWith(SUF)) {
-            const id = v.slice(0, -SUF.length);
-            if (id === activeAccionistaId) setActiveTab("Caja de Campo");
-            else { try { localStorage.setItem("bascula-erp:campo-pending", "1"); } catch { /* ignore */ } switchAccionista(id); }
-          } else {
-            if (v !== activeAccionistaId) switchAccionista(v);
-            else if (activeTab === "Caja de Campo") setActiveTab("Dashboard");
-          }
-        }}>
-          {opciones.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
-      </label>
+      <div className="accionistaSwitcher">
+        <span>Cambiar a <small className="opKbdHint">Alt+1…{Math.min(opciones.length, 9)}</small></span>
+        <div className="opSwitch" role="radiogroup" aria-label="Cambiar de accionista u operación">
+          {opciones.map((o, i) => (
+            <button key={o.value} type="button" role="radio" aria-checked={o.value === valor}
+              className={`opSwitchBtn${o.value === valor ? " is-active" : ""}`}
+              title={`${o.label}${i < 9 ? ` · Alt+${i + 1}` : ""}`}
+              onClick={() => irAOperacion(o.value)}>
+              <span className="opIco" aria-hidden="true">{o.icono}</span>
+              <span className="opName">{o.label}</span>
+              {i < 9 && <kbd className="opKey">{i + 1}</kbd>}
+            </button>
+          ))}
+        </div>
+      </div>
     );
   })();
 
