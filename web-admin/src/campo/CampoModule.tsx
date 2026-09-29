@@ -2588,11 +2588,16 @@ export function CampoWorkspace({ operationSelector, userName, roleName, apiOnlin
   onNombreChange: (n: string) => void;
 }) {
   const [seccion, setSeccion] = useState<CampoSeccion>("caja");
+  // Celular: el menú lateral es un cajón que se abre con ☰ (en PC no cambia nada).
+  const [menuMovilAbierto, setMenuMovilAbierto] = useState(false);
+  useEffect(() => { setMenuMovilAbierto(false); }, [seccion]);
   const activa = CAMPO_SECCIONES.find((s) => s.id === seccion) ?? CAMPO_SECCIONES[0];
   const iniciales = userName.split(/\s+/).slice(0, 2).map((p) => p[0]?.toUpperCase() ?? "").join("");
   return (
     <main className="shell">
-      <aside className="sidebar">
+      {menuMovilAbierto && <div className="mobileNavBackdrop" onClick={() => setMenuMovilAbierto(false)} aria-hidden="true" />}
+      <aside className={menuMovilAbierto ? "sidebar is-open" : "sidebar"}>
+        <button type="button" className="mobileNavClose" onClick={() => setMenuMovilAbierto(false)} aria-label="Cerrar menú">✕</button>
         <div className="brand">
           <span className="brandMark">🚜</span>
           <div>
@@ -2628,6 +2633,7 @@ export function CampoWorkspace({ operationSelector, userName, roleName, apiOnlin
 
       <section className="workspace">
         <header className="topbar">
+          <button type="button" className="mobileMenuBtn" onClick={() => setMenuMovilAbierto(true)} aria-label="Abrir menú">☰</button>
           <div className="topbarLeft">
             <h1>{nombre} · {activa.label}</h1>
             <p>Operación de campo (cosechadora, transporte, fletes)</p>

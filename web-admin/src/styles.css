@@ -4282,3 +4282,58 @@ textarea::placeholder {
 .opKey { flex: 0 0 auto; font: 600 10px/1 system-ui, sans-serif; padding: 2px 5px; border-radius: 4px; border: 1px solid currentColor; opacity: 0.55; }
 .opSwitchBtn.is-active .opKey { opacity: 0.85; }
 .opKbdHint { font-weight: 600; letter-spacing: 0; text-transform: none; opacity: 0.7; margin-left: 4px; }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   CELULAR (≤ 860 px): el menú lateral pasa a un cajón que se abre con ☰, la
+   barra superior queda compacta y los formularios en una sola columna.
+   En PC no cambia nada (los botones ☰/✕ y el fondo no se muestran).
+   ════════════════════════════════════════════════════════════════════════════ */
+.mobileMenuBtn, .mobileNavClose, .mobileNavBackdrop { display: none; }
+
+@media (max-width: 860px) {
+  /* Menú lateral como cajón deslizable. */
+  .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; z-index: 80;
+    width: min(86vw, 300px); height: 100vh; height: 100dvh;
+    transform: translateX(-105%); transition: transform .22s ease; box-shadow: none;
+  }
+  .sidebar.is-open { transform: none; box-shadow: 8px 0 30px rgba(0, 0, 0, 0.35); }
+  .mobileNavBackdrop { display: block; position: fixed; inset: 0; z-index: 79; background: rgba(8, 20, 17, 0.45); }
+  .mobileNavClose {
+    display: flex; align-items: center; justify-content: center; position: absolute; top: 14px; right: 10px; z-index: 1;
+    width: 34px; height: 34px; padding: 0; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.06); color: var(--c-sidebar-text); font-size: 15px; cursor: pointer;
+  }
+  .sidebar .brand { padding-right: 52px; }
+  .sidebar nav button { min-height: 42px; }
+  .opSwitchBtn { min-height: 40px; font-size: 13px; }
+  .opKbdHint, .opKey { display: none; }
+
+  /* Barra superior compacta: ☰ · título · actualizar · avisos. */
+  .mobileMenuBtn {
+    display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+    width: 40px; height: 40px; padding: 0; border-radius: 10px; border: 1px solid var(--c-border);
+    background: var(--c-surface); color: var(--c-text); font-size: 20px; line-height: 1; cursor: pointer;
+  }
+  .topbar { flex-direction: row; flex-wrap: nowrap; align-items: center; gap: 8px; padding: 8px 12px; }
+  .topbarLeft { min-width: 0; flex: 1 1 auto; }
+  .topbarLeft h1 { font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .topbarLeft p { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .topbarRight { flex-wrap: nowrap; gap: 6px; flex: 0 0 auto; }
+  .topbarDate, .topbarRight > .pill { display: none; }
+
+  /* Contenido con más espacio útil. */
+  .content { padding: 12px; gap: 12px; }
+  .formPanel, .tablePanel { padding: 14px; }
+  .tablePanel { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .modalOverlay { padding: 10px; }
+
+  /* Ventas · Nuevo pedido en una sola columna. */
+  .pedidoSplit, .pedidoGrid { grid-template-columns: minmax(0, 1fr) !important; }
+  .pedidoBuscaCliente { flex-wrap: wrap; }
+  .pedidoBuscaCliente > input { flex: 1 1 100% !important; min-width: 0; min-height: 42px; }
+  .pedidoBuscaCliente > button { flex: 1 1 0; min-height: 40px; }
+  .ventasTabs { overflow-x: auto; scrollbar-width: none; }
+  .ventasTabs::-webkit-scrollbar { display: none; }
+  .ventasTabs > button { flex: 0 0 auto; white-space: nowrap; padding: 10px 12px !important; font-size: 13px !important; }
+}

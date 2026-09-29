@@ -7,6 +7,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { requireAuth } from "../../auth/require-auth.js";
 import { env } from "../../config/env.js";
 import { importBasculaTickets } from "./mobile-tickets.js";
+import { fechaTicketSql, leerCorteBascula } from "../../services/bascula-corte.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SINCRONIZACIÓN DIRECTA POR WiFi (tablet de báscula → ERP en la red local).
@@ -212,15 +213,19 @@ basculaSyncRouter.get("/discover", asyncRoute(async (req, res) => {
 // Último envío). Requiere sesión (lo consume el admin autenticado). Solo lectura
 // y agregados; no toca ni bloquea la tabla.
 basculaSyncRouter.get("/status", requireAuth, asyncRoute(async (_req, res) => {
+  const corte = await leerCorteBascula();
   const [pend, last] = await Promise.all([
     // "Pendiente" = pesaje del modo principal que aún no se ingresó como materia
-    // prima ni se liquidó (mismo criterio que la lista de la vista Báscula).
+    // prima ni se liquidó (mismo criterio que la lista de la vista Báscula,
+    // incluido el corte «Contar tickets desde»).
     pool.query<{ n: number }>(
       `SELECT count(*)::int AS n
-         FROM mobile_synced_tickets
-        WHERE liquidated_at IS NULL
-          AND weighing_ticket_id IS NULL
-          AND lower(coalesce(raw_payload->>'modo', 'principal')) = 'principal'`
+         FROM mobile_synced_tickets t
+        WHERE t.liquidated_at IS NULL
+          AND t.weighing_ticket_id IS NULL
+          AND lower(coalesce(t.raw_payload->>'modo', 'principal')) = 'principal'
+          AND ($1::date IS NULL OR ${fechaTicketSql("t")} >= $1::date)`,
+      [corte]
     ),
     pool.query<{ t: string | null }>(
       "SELECT max(synced_at) AS t FROM mobile_synced_tickets"

@@ -260,6 +260,8 @@ type BasculaTicket = {
   lot_id: string | null;
   weighing_ticket_id?: string | null;
   en_espera?: boolean;
+  /** Anterior a «Contar tickets desde»: no cuenta como pendiente. */
+  antes_del_corte?: boolean;
   numero: string | null;
   modo: string | null;
   fecha_app: string | null;
@@ -2199,6 +2201,9 @@ export function App() {
   const [serialWeight, setSerialWeight] = useState<string>(""); // última lectura estable (kg)
   const [transferLoteOpen, setTransferLoteOpen] = useState(false);
   const [ticketSearch, setTicketSearch] = useState("");
+  // «Contar tickets desde» de la báscula: lo anterior no cuenta como pendiente.
+  const [basculaCorte, setBasculaCorte] = useState<{ desde: string | null; ocultos: number } | null>(null);
+  const [basculaCorteInput, setBasculaCorteInput] = useState("");
   const [linkTicket, setLinkTicket] = useState<BasculaTicket | null>(null);
   const [linkFarmerId, setLinkFarmerId] = useState("");
   // Filtro de autocompletado en el modal de vinculación (se precarga con el
@@ -2998,6 +3003,9 @@ export function App() {
   const [reportRows, setReportRows] = useState<{ kind: ReportKind; data: any } | null>(null);
   const [arianosUbic, setArianosUbic] = useState<Record<string, string>>({});
   const [navSearch, setNavSearch] = useState("");
+  // Celular: el menú lateral es un cajón que se abre con ☰ (en PC no cambia nada).
+  const [menuMovilAbierto, setMenuMovilAbierto] = useState(false);
+  useEffect(() => { setMenuMovilAbierto(false); }, [activeTab]);
   const [reportBusy, setReportBusy] = useState(false);
   const [servicioTab, setServicioTab] = useState<ServicioTipo>("SECADO_PILADO");
   const [servicioMes, setServicioMes] = useState(() => new Date().toISOString().slice(0, 7));
@@ -6428,12 +6436,23 @@ export function App() {
 
   async function refreshBasculaTickets() {
     const qs = ticketFilter === "all" ? "" : `?status=${ticketFilter}`;
-    const [data, materia] = await Promise.all([
+    const [data, materia, corte] = await Promise.all([
       apiGet<BasculaTicket[]>(`/tickets${qs}`),
-      apiGet<MateriaPrimaCorreccion[]>("/weighing-tickets/materia-prima").catch(() => [] as MateriaPrimaCorreccion[])
+      apiGet<MateriaPrimaCorreccion[]>("/weighing-tickets/materia-prima").catch(() => [] as MateriaPrimaCorreccion[]),
+      apiGet<{ desde: string | null; ocultos: number }>("/tickets/corte").catch(() => null)
     ]);
     setBasculaTickets(data);
     setMateriaPrimaEntries(materia);
+    if (corte) { setBasculaCorte(corte); setBasculaCorteInput(corte.desde ?? ""); }
+  }
+
+  // Guarda (o quita, con null) la fecha «Contar tickets desde». Solo es un
+  // filtro de la vista: no cambia ni borra tickets.
+  async function guardarBasculaCorte(desde: string | null) {
+    await apiPut("/tickets/corte", { desde });
+    addToast(desde ? `Báscula: se cuentan los tickets desde el ${desde.split("-").reverse().join("/")}` : "Báscula: se cuentan todos los tickets", "success");
+    await refreshBasculaTickets();
+    apiGetBasculaStatus().then((s) => setBasculaSync(s)).catch(() => undefined);
   }
 
   // Corrige el accionista de un ingreso mal registrado. Pide confirmación
@@ -11701,7 +11720,9 @@ export function App() {
   return (
     <>
     <main className="shell">
-      <aside className="sidebar">
+      {menuMovilAbierto && <div className="mobileNavBackdrop" onClick={() => setMenuMovilAbierto(false)} aria-hidden="true" />}
+      <aside className={menuMovilAbierto ? "sidebar is-open" : "sidebar"}>
+        <button type="button" className="mobileNavClose" onClick={() => setMenuMovilAbierto(false)} aria-label="Cerrar menú">✕</button>
         <div className="brand">
           <span className="brandMark">{(appSettings.business_name || "B").trim().charAt(0).toUpperCase() || "B"}</span>
           <div>
@@ -11786,6 +11807,7 @@ export function App() {
 
       <section className="workspace">
         <header className="topbar">
+          <button type="button" className="mobileMenuBtn" onClick={() => setMenuMovilAbierto(true)} aria-label="Abrir menú">☰</button>
           <div className="topbarLeft">
             <h1>{tabLabel(activeTab)}</h1>
             <p>{loading ? "Actualizando datos…" : message}</p>
@@ -12060,6 +12082,29 @@ export function App() {
                 style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", minWidth: 220, fontSize: 13 }}
               />
             </div>
+            {/* «Contar tickets desde»: el historial viejo de la báscula no cuenta como pendiente. */}
+            {(isAdmin || basculaCorte?.desde) && (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 12, flexWrap: "wrap", marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--c-border)" }}>
+                <p className="muted" style={{ margin: 0, fontSize: 12.5, maxWidth: 560 }}>
+                  {basculaCorte?.desde
+                    ? <>Se cuentan los tickets desde el <strong>{basculaCorte.desde.split("-").reverse().join("/")}</strong>.{basculaCorte.ocultos > 0 && <> {basculaCorte.ocultos} ticket(s) anteriores sin ingresar no salen en Pendientes (siguen en «Todos»).</>}</>
+                    : "Se cuentan todos los tickets de la báscula. Pon una fecha para que el historial anterior no salga como pendiente."}
+                </p>
+                {isAdmin && (
+                  <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
+                    <label style={{ margin: 0 }}><span style={{ fontSize: 12 }}>Contar tickets desde</span>
+                      <input type="date" value={basculaCorteInput} onChange={(e) => setBasculaCorteInput(e.target.value)} />
+                    </label>
+                    <button type="button" className="btnSecondary" disabled={!basculaCorteInput || basculaCorteInput === (basculaCorte?.desde ?? "")}
+                      onClick={() => guardarBasculaCorte(basculaCorteInput).catch((err) => addToast(err.message, "error"))}>Guardar</button>
+                    {basculaCorte?.desde && (
+                      <button type="button" className="btnSecondary" title="Volver a contar todos los tickets"
+                        onClick={() => guardarBasculaCorte(null).catch((err) => addToast(err.message, "error"))}>Quitar</button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             {basculaTickets.length === 0 ? (
               <div className="emptyState"><div className="emptyIcon">📲</div><p>No hay tickets. Importa desde tu app con IMPORTAR-BASCULA.bat.</p></div>
             ) : (
@@ -12085,8 +12130,10 @@ export function App() {
                       // coincide con ningún agricultor ni alias. Se resalta para que
                       // un operador lo vincule antes de poder ingresarlo.
                       const desconocido = !linked && !liquidated;
+                      // Anterior al corte y sin procesar: historial que no cuenta como pendiente.
+                      const antesCorte = !!t.antes_del_corte && !t.weighing_ticket_id && !liquidated;
                       return (
-                        <tr key={t.id} style={desconocido ? { background: "rgba(220,38,38,0.06)" } : undefined}>
+                        <tr key={t.id} style={antesCorte ? { opacity: 0.6 } : desconocido ? { background: "rgba(220,38,38,0.06)" } : undefined}>
                           <td style={{ fontWeight: 600 }}>#{t.numero ?? "—"}</td>
                           <td style={{ whiteSpace: "nowrap" }}>{t.fecha_app || "—"}</td>
                           <td>
@@ -12115,6 +12162,7 @@ export function App() {
                             {t.en_espera ? <span className="chip warn" title="La báscula aún espera el segundo pesaje">En espera 2º pesaje</span>
                               : t.weighing_ticket_id ? <span className="chip ok">Ingresado</span>
                               : liquidated ? <span className="chip ok">Liquidado</span>
+                              : antesCorte ? <span className="chip" title="Anterior a «Contar tickets desde»: no cuenta como pendiente">Anterior al corte</span>
                               : !linked ? <span className="chip danger" title="Falta vincular el cliente">Sin vincular</span>
                               : <span className="chip info">Pendiente</span>}
                           </td>
@@ -14852,7 +14900,7 @@ export function App() {
             )}
 
             {/* ===== Pestañas del módulo: Nuevo Pedido (POS) vs Cola de Despachos (bodega) ===== */}
-            <div style={{ gridColumn: "1 / -1", display: "flex", gap: 8, borderBottom: "2px solid var(--c-border)", marginBottom: 4 }}>
+            <div className="ventasTabs" style={{ gridColumn: "1 / -1", display: "flex", gap: 8, borderBottom: "2px solid var(--c-border)", marginBottom: 4 }}>
               {([
                 { key: "nuevo", label: "🛒 Nuevo Pedido" },
                 { key: "despachos", label: "🚚 Cola de Despachos" },
@@ -14887,7 +14935,7 @@ export function App() {
             {ventasView === "nuevo" && (
             <>
             {/* ===== TOMA DE PEDIDO · Vista dividida en 2 columnas ===== */}
-            <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 16, alignItems: "start" }}>
+            <div className="pedidoSplit" style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 16, alignItems: "start" }}>
             {/* Columna IZQUIERDA: buscar cliente + elegir producto/presentación con stock visible */}
             <div style={{ display: "grid", gap: 16, alignItems: "start" }}>
 
@@ -14896,7 +14944,7 @@ export function App() {
               <h2 style={{ marginTop: 0 }}><span className="stepBadge">1</span>Cliente</h2>
               <label>
                 <span>Busca cliente o crea uno nuevo</span>
-                <div style={{ position: "relative", display: "flex", gap: 6 }}>
+                <div className="pedidoBuscaCliente" style={{ position: "relative", display: "flex", gap: 6 }}>
                   <input
                     type="text"
                     placeholder="Busca por nombre o teléfono..."
@@ -14955,7 +15003,7 @@ export function App() {
               <h2 style={{ marginTop: 0 }}><span className="stepBadge">2</span>Agregar productos al pedido</h2>
 
               {/* FILA 1: Marca y Presentación lado a lado */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+              <div className="pedidoGrid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
                 <label>
                   <span>Marca / Producto *</span>
                   <select
@@ -15095,7 +15143,7 @@ export function App() {
               </div>
 
               {/* FILA 2: Cantidad y Precio */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+              <div className="pedidoGrid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
                 <label>
                   <span>Cantidad (QQ) *</span>
                   <input
@@ -15248,7 +15296,7 @@ export function App() {
                 <small style={{ color: "#6b7280" }}>Suma de todos los subtotales</small>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12 }}>
+              <div className="pedidoGrid" style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12 }}>
                 <Input name="delivery_date" label="Fecha de entrega" type="date" required={false} />
                 <Input name="order_notes" label="Nota (opcional)" required={false} />
               </div>
