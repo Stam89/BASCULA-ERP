@@ -2299,6 +2299,16 @@ export function App() {
 
   // ── Caja ──────────────────────────────────────────────────────────────────
   const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "movimiento" | "gastos" | "sacos" | "mantenimiento" | "historial" | "venta_detalle" | "cuentas" | "fomentos">("resumen");
+  // Caja: menú desplegable abierto de la barra de herramientas (solo UI).
+  const [cajaMenu, setCajaMenu] = useState<null | "acciones" | "opciones">(null);
+  useEffect(() => {
+    if (!cajaMenu) return;
+    const cerrar = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement | null)?.closest?.(".cj-dd")) setCajaMenu(null);
+    };
+    document.addEventListener("mousedown", cerrar);
+    return () => document.removeEventListener("mousedown", cerrar);
+  }, [cajaMenu]);
   const [movCategory, setMovCategory] = useState("");
   const [movType, setMovType] = useState<"EXPENSE" | "INCOME">("EXPENSE");
   const [movPayableId, setMovPayableId] = useState("");
@@ -15841,141 +15851,172 @@ export function App() {
             {/* ── Con caja abierta ── */}
             {dashboard.current_cash_register && (
               <>
-                {/* Header profesional */}
-                <div style={{ background: "linear-gradient(135deg, #1f2937 0%, #111827 100%)", color: "white", padding: "24px", borderRadius: "10px", marginBottom: 24, boxShadow: "0 4px 12px rgba(0,0,0,0.1)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
-                    <div>
-                      <h2 style={{ margin: "0 0 4px", fontSize: 24, fontWeight: 700 }}>💰 {dashboard.current_cash_register.name}</h2>
-                      <p style={{ margin: 0, color: "#d1d5db", fontSize: 12 }}>Sesión activa | {new Date().toLocaleDateString("es-EC")}</p>
-                    </div>
-                    <button type="button" style={{ padding: "8px 16px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 600, fontSize: 13 }} onClick={() => closeCaja().catch((e) => addToast(e.message, "error"))}>
-                      ✕ Cerrar caja
-                    </button>
-                  </div>
-
-                  {/* Métricas principales */}
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 16 }}>
-                    <div style={{ background: "rgba(255,255,255,0.1)", padding: "14px 16px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.2)" }}>
-                      <div style={{ color: "#9ca3af", fontSize: 11, fontWeight: 600, marginBottom: 4 }}>SALDO ACTUAL</div>
-                      <div style={{ fontSize: 20, fontWeight: 700 }}>{money(cashSummary?.current_balance ?? Number(dashboard.current_cash_register.opening_balance))}</div>
-                    </div>
-                    <div style={{ background: "rgba(16, 185, 129, 0.15)", padding: "14px 16px", borderRadius: 8, border: "1px solid #10b98130" }}>
-                      <div style={{ color: "#10b981", fontSize: 11, fontWeight: 600, marginBottom: 4 }}>INGRESOS</div>
-                      <div style={{ fontSize: 20, fontWeight: 700, color: "#10b981" }}>+{money(cashSummary?.total_income ?? 0)}</div>
-                    </div>
-                    <div style={{ background: "rgba(239, 68, 68, 0.15)", padding: "14px 16px", borderRadius: 8, border: "1px solid #ef444430" }}>
-                      <div style={{ color: "#ef4444", fontSize: 11, fontWeight: 600, marginBottom: 4 }}>EGRESOS</div>
-                      <div style={{ fontSize: 20, fontWeight: 700, color: "#ef4444" }}>-{money(cashSummary?.total_expense ?? 0)}</div>
-                    </div>
-                    <div style={{ background: "rgba(59, 130, 246, 0.15)", padding: "14px 16px", borderRadius: 8, border: "1px solid #3b82f630" }}>
-                      <div style={{ color: "#3b82f6", fontSize: 11, fontWeight: 600, marginBottom: 4 }}>SALDO INICIAL EFECTIVO</div>
-                      <div style={{ fontSize: 20, fontWeight: 700, color: "#3b82f6" }}>{money(Number(dashboard.current_cash_register.opening_balance_cash ?? 0))}</div>
-                    </div>
-                    <div style={{ background: "rgba(59, 130, 246, 0.15)", padding: "14px 16px", borderRadius: 8, border: "1px solid #3b82f630" }}>
-                      <div style={{ color: "#3b82f6", fontSize: 11, fontWeight: 600, marginBottom: 4 }}>SALDO INICIAL BANCO</div>
-                      <div style={{ fontSize: 20, fontWeight: 700, color: "#3b82f6" }}>{money(Number(dashboard.current_cash_register.opening_balance_bank ?? 0))}</div>
-                    </div>
-                    <div style={{ background: "rgba(59, 130, 246, 0.15)", padding: "14px 16px", borderRadius: 8, border: "1px solid #3b82f630" }}>
-                      <div style={{ color: "#3b82f6", fontSize: 11, fontWeight: 600, marginBottom: 4 }}>SALDO INICIAL TOTAL</div>
-                      <div style={{ fontSize: 20, fontWeight: 700, color: "#3b82f6" }}>{money(Number(dashboard.current_cash_register.opening_balance))}</div>
-                    </div>
-                  </div>
-
-                  {/* Acciones rápidas */}
-                  <div style={{ marginTop: 16, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <button type="button" onClick={downloadCajaExcel} style={{ padding: "6px 12px", background: "rgba(255,255,255,0.2)", border: "1px solid rgba(255,255,255,0.3)", color: "#fff", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600 }} title="Descargar Excel">
-                      📥 Descargar Excel
-                    </button>
-                    <button type="button" onClick={printCajaMovimientos} style={{ padding: "6px 12px", background: "rgba(255,255,255,0.2)", border: "1px solid rgba(255,255,255,0.3)", color: "#fff", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600 }} title="Imprimir PDF">
-                      🖨 Imprimir PDF
-                    </button>
-                    {isAdmin && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setNewCajaCash(String(Number(dashboard.current_cash_register?.opening_balance_cash ?? 0).toFixed(2)));
-                          setNewCajaBank(String(Number(dashboard.current_cash_register?.opening_balance_bank ?? 0).toFixed(2)));
-                          setEditOpeningBalance(true);
-                        }}
-                        style={{ padding: "6px 12px", background: "rgba(59,130,246,0.25)", border: "1px solid rgba(59,130,246,0.4)", color: "#fff", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600 }}
-                      >
-                        ✏️ Editar saldo inicial
-                      </button>
-                    )}
-                  </div>
-                  {editOpeningBalance && (
-                    <div style={{ marginTop: 12, padding: 12, background: "rgba(0,0,0,0.2)", borderRadius: 8, maxWidth: 420 }}>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
-                        <Input name="edit_cash" label="Efectivo $" type="number" value={newCajaCash} onChange={(e) => setNewCajaCash(e.target.value)} />
-                        <Input name="edit_bank" label="Banco $" type="number" value={newCajaBank} onChange={(e) => setNewCajaBank(e.target.value)} />
+                {(() => {
+                  const caja = dashboard.current_cash_register!;
+                  const saldoActual = cashSummary?.current_balance ?? Number(caja.opening_balance);
+                  // Mismas pestañas y mismo filtro de antes (socios sin las de planta).
+                  const esSocio = accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "SOCIO";
+                  const soloMatriz = manejaSacosPropios ? ["mantenimiento", "historial"] : ["sacos", "mantenimiento", "historial"];
+                  const visibles = (["resumen", "venta_detalle", "anticipo", "movimiento", "sacos", "mantenimiento", "historial", "fomentos"] as const)
+                    .filter((t) => !(esSocio && soloMatriz.includes(t)));
+                  const fomentosActivos = fomentos.filter((f) => f.status === "ACTIVOS").length;
+                  const acciones: Array<{ key: typeof visibles[number]; icon: string; label: string; hint: string }> = [
+                    { key: "venta_detalle", icon: "🛒", label: "Venta Detalle", hint: "Venta por libra en mostrador" },
+                    { key: "fomentos", icon: "🌾", label: `Fomentos${fomentosActivos > 0 ? ` (${fomentosActivos})` : ""}`, hint: "Créditos a agricultores" },
+                    { key: "anticipo", icon: "💸", label: "Anticipos", hint: "Anticipo a agricultor" },
+                    { key: "sacos", icon: "📦", label: "Sacos", hint: "Compra y stock de sacos" },
+                    { key: "mantenimiento", icon: "🔧", label: "Mantenimiento", hint: "Reparaciones y repuestos" }
+                  ];
+                  // Mismo efecto que las pestañas anteriores al abrir cada sección.
+                  const abrir = (t: typeof visibles[number]) => {
+                    setCajaMenu(null);
+                    setCajaSubTab(t);
+                    if (t === "mantenimiento") { refreshMaintenanceHistory(); loadMaintCategories(); loadMaintCategoriesAll(); }
+                    if (t === "sacos") { refreshSacks().catch(() => undefined); }
+                  };
+                  return (
+                    <>
+                      {/* Encabezado */}
+                      <div className="cj-head">
+                        <div>
+                          <h2 className="cj-title">💰 {caja.name}</h2>
+                          <p className="cj-sub"><span className="cj-live" /> Sesión activa · {new Date().toLocaleDateString("es-EC", { weekday: "long", day: "2-digit", month: "long", year: "numeric" })}</p>
+                        </div>
                       </div>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <button type="button" className="primary" onClick={() => updateOpeningBalance().catch((e) => addToast(e.message, "error"))}>Guardar</button>
-                        <button type="button" onClick={() => setEditOpeningBalance(false)}>Cancelar</button>
-                      </div>
-                    </div>
-                  )}
-                </div>
 
-                {/* Sub-tabs profesional */}
-                <nav className="cajaSubNav">
-                  {/* Pestaña "gastos" eliminada: sus egresos se registran ahora en
-                      "movimiento" (categoría correspondiente) para no duplicar. */}
-                  {(["resumen", "venta_detalle", "anticipo", "movimiento", "sacos", "mantenimiento", "historial", "fomentos"] as const)
-                    .filter((t) => {
-                      // Subpestañas exclusivas de la planta/matriz. Los socios
-                      // (ROVINSON/STALYN) operan solo lo comercial.
-                      const esSocio = accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "SOCIO";
-                      // «Sacos» también para el socio con catálogo propio (envejecido).
-                      // «¿Cuándo se hizo?» es de la Matriz (Transporte tiene el suyo).
-                      const soloMatriz = manejaSacosPropios ? ["mantenimiento", "historial"] : ["sacos", "mantenimiento", "historial"];
-                      return !(esSocio && soloMatriz.includes(t));
-                    })
-                    .map((t) => {
-                    const icons = {
-                      resumen: "📋",
-                      anticipo: "💸",
-                      movimiento: "➕",
-                      gastos: "🧾",
-                      sacos: "📦",
-                      mantenimiento: "🔧",
-                      historial: "🔎",
-                      venta_detalle: "🛒",
-                      cuentas: "📊",
-                      fomentos: "🌾"
-                    };
-                    const labels = {
-                      resumen: "Movimientos",
-                      anticipo: "Anticipo",
-                      movimiento: "Nuevo movimiento",
-                      gastos: "Gastos",
-                      sacos: "Sacos",
-                      mantenimiento: "Mantenimiento",
-                      historial: "¿Cuándo se hizo?",
-                      venta_detalle: "Venta Detalle",
-                      cuentas: `Por pagar${cashPayables.length > 0 ? ` (${cashPayables.length})` : ""}`,
-                      fomentos: `Fomentos${fomentos.filter(f=>f.status==="ACTIVOS").length > 0 ? ` (${fomentos.filter(f=>f.status==="ACTIVOS").length})` : ""}`
-                    };
-                    return (
-                      <button
-                        key={t}
-                        type="button"
-                        className={cajaSubTab === t ? "active" : ""}
-                        onClick={() => {
-                          setCajaSubTab(t);
-                          if (t === "mantenimiento") { refreshMaintenanceHistory(); loadMaintCategories(); loadMaintCategoriesAll(); }
-                          if (t === "sacos") { refreshSacks().catch(() => undefined); }
-                        }}
-                      >
-                        <span style={{ marginRight: 4 }}>{icons[t]}</span>{labels[t]}
-                      </button>
-                    );
-                  })}
-                </nav>
+                      {/* Tarjetas KPI */}
+                      <div className="cj-kpis">
+                        <div className="cj-kpi cj-kpi--hero">
+                          <div className="cj-kpi-label">Saldo actual</div>
+                          <div className="cj-kpi-value">{money(saldoActual)}</div>
+                          <div className="cj-kpi-hint">Inicial + ingresos − egresos de la sesión</div>
+                        </div>
+                        <div className="cj-kpi">
+                          <div className="cj-kpi-label"><span className="cj-ico cj-ico--in">⬆</span>Ingresos</div>
+                          <div className="cj-kpi-value cj-pos">+{money(cashSummary?.total_income ?? 0)}</div>
+                          <div className="cj-kpi-hint">Entradas de la sesión</div>
+                        </div>
+                        <div className="cj-kpi">
+                          <div className="cj-kpi-label"><span className="cj-ico cj-ico--out">⬇</span>Egresos</div>
+                          <div className="cj-kpi-value cj-neg">-{money(cashSummary?.total_expense ?? 0)}</div>
+                          <div className="cj-kpi-hint">Salidas de la sesión</div>
+                        </div>
+                        <div className="cj-kpi">
+                          <div className="cj-kpi-label"><span className="cj-ico cj-ico--base">◎</span>Saldos iniciales</div>
+                          <div className="cj-kpi-value">{money(Number(caja.opening_balance))}</div>
+                          <div className="cj-kpi-split">
+                            <span>💵 Efectivo <b>{money(Number(caja.opening_balance_cash ?? 0))}</b></span>
+                            <span>🏦 Banco <b>{money(Number(caja.opening_balance_bank ?? 0))}</b></span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {editOpeningBalance && (
+                        <div className="cj-card cj-edit-saldo">
+                          <div className="cj-card-title">✏️ Editar saldo inicial</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                            <Input name="edit_cash" label="Efectivo $" type="number" value={newCajaCash} onChange={(e) => setNewCajaCash(e.target.value)} />
+                            <Input name="edit_bank" label="Banco $" type="number" value={newCajaBank} onChange={(e) => setNewCajaBank(e.target.value)} />
+                          </div>
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <button type="button" className="primary" onClick={() => updateOpeningBalance().catch((e) => addToast(e.message, "error"))}>Guardar</button>
+                            <button type="button" onClick={() => setEditOpeningBalance(false)}>Cancelar</button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Barra de herramientas */}
+                      <div className="cj-toolbar">
+                        <div className="cj-toolbar-group">
+                          <button type="button" className={`cj-btn cj-btn--primary ${cajaSubTab === "movimiento" ? "is-on" : ""}`} onClick={() => abrir("movimiento")}>
+                            ➕ Nuevo movimiento
+                          </button>
+                          <div className="cj-dd">
+                            <button type="button" className={`cj-btn ${cajaMenu === "acciones" ? "is-open" : ""}`} aria-haspopup="menu" aria-expanded={cajaMenu === "acciones"}
+                              onClick={() => setCajaMenu(cajaMenu === "acciones" ? null : "acciones")}>
+                              ⚡ Acciones rápidas <span className="cj-caret">▾</span>
+                            </button>
+                            {cajaMenu === "acciones" && (
+                              <div className="cj-menu" role="menu">
+                                {acciones.filter((x) => visibles.includes(x.key)).map((x) => (
+                                  <button key={x.key} type="button" role="menuitem" className={`cj-menu-item ${cajaSubTab === x.key ? "is-current" : ""}`} onClick={() => abrir(x.key)}>
+                                    <span className="cj-menu-ico">{x.icon}</span>
+                                    <span><span className="cj-menu-label">{x.label}</span><span className="cj-menu-hint">{x.hint}</span></span>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          {cajaSubTab !== "resumen" && (
+                            <button type="button" className="cj-btn cj-btn--ghost" onClick={() => abrir("resumen")}>📋 Ver movimientos</button>
+                          )}
+                        </div>
+                        <div className="cj-toolbar-group">
+                          <div className="cj-dd">
+                            <button type="button" className={`cj-btn ${cajaMenu === "opciones" ? "is-open" : ""}`} aria-haspopup="menu" aria-expanded={cajaMenu === "opciones"}
+                              onClick={() => setCajaMenu(cajaMenu === "opciones" ? null : "opciones")}>
+                              ⚙️ Opciones <span className="cj-caret">▾</span>
+                            </button>
+                            {cajaMenu === "opciones" && (
+                              <div className="cj-menu cj-menu--right" role="menu">
+                                {isAdmin && (
+                                  <button type="button" role="menuitem" className="cj-menu-item" onClick={() => {
+                                    setCajaMenu(null);
+                                    setNewCajaCash(String(Number(dashboard.current_cash_register?.opening_balance_cash ?? 0).toFixed(2)));
+                                    setNewCajaBank(String(Number(dashboard.current_cash_register?.opening_balance_bank ?? 0).toFixed(2)));
+                                    setEditOpeningBalance(true);
+                                  }}>
+                                    <span className="cj-menu-ico">✏️</span><span className="cj-menu-label">Editar saldo inicial</span>
+                                  </button>
+                                )}
+                                {visibles.includes("historial") && esMatrizActiva && (
+                                  <button type="button" role="menuitem" className={`cj-menu-item ${cajaSubTab === "historial" ? "is-current" : ""}`} onClick={() => abrir("historial")}>
+                                    <span className="cj-menu-ico">🔎</span><span className="cj-menu-label">¿Cuándo se hizo?</span>
+                                  </button>
+                                )}
+                                <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setCajaMenu(null); downloadCajaExcel(); }}>
+                                  <span className="cj-menu-ico">📥</span><span className="cj-menu-label">Descargar Excel</span>
+                                </button>
+                                <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setCajaMenu(null); printCajaMovimientos(); }}>
+                                  <span className="cj-menu-ico">🖨</span><span className="cj-menu-label">Imprimir PDF</span>
+                                </button>
+                                <div className="cj-menu-sep" />
+                                <button type="button" role="menuitem" className="cj-menu-item cj-menu-item--danger" onClick={() => { setCajaMenu(null); closeCaja().catch((e) => addToast(e.message, "error")); }}>
+                                  <span className="cj-menu-ico">✕</span><span className="cj-menu-label">Cerrar caja</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Título de la sección abierta (fuera de Movimientos / Nuevo movimiento) */}
+                      {cajaSubTab !== "resumen" && cajaSubTab !== "movimiento" && (() => {
+                        const x = acciones.find((a) => a.key === cajaSubTab);
+                        const titulo = x ? `${x.icon} ${x.label}` : cajaSubTab === "historial" ? "🔎 ¿Cuándo se hizo?" : "";
+                        return titulo ? (
+                          <div className="cj-crumb">
+                            <button type="button" className="cj-crumb-back" onClick={() => abrir("resumen")}>← Movimientos</button>
+                            <span className="cj-crumb-sep">/</span>
+                            <strong>{titulo}</strong>
+                          </div>
+                        ) : null;
+                      })()}
+                    </>
+                  );
+                })()}
+
+                {/* Área de trabajo: con «Nuevo movimiento» el formulario va a la
+                    izquierda y los movimientos de la sesión a la derecha. */}
+                <div className={`cj-work ${cajaSubTab === "movimiento" ? "cj-work--split" : ""}`}>
 
                 {/* ── Movimientos ── */}
-                {cajaSubTab === "resumen" && (
-                  <div className="cajaMovimientosPanel" style={{ padding: 0, overflow: "hidden" }}>
+                {(cajaSubTab === "resumen" || cajaSubTab === "movimiento") && (
+                  <div className="cajaMovimientosPanel cj-card cj-col-list" style={{ padding: 0, overflow: "hidden" }}>
+                    <div className="cj-panel-head">
+                      <span>📋 Movimientos de la sesión</span>
+                      <span className="cj-count">{cashMovements.length}</span>
+                    </div>
                     {cashMovements.length === 0 ? (
                       <div className="emptyState">
                         <div className="emptyIcon">📭</div>
@@ -16085,7 +16126,7 @@ export function App() {
 
                 {/* ── Registrar movimiento (consolidado) ── */}
                 {cajaSubTab === "movimiento" && (
-                  <form onSubmit={(event) => submitCajaMovimiento(event).catch((e) => addToast(e.message, "error"))} style={{ background: "white", borderRadius: "10px", border: "1px solid #e5e7eb", padding: "24px", maxWidth: 500 }}>
+                  <form className="cj-card cj-form cj-col-form" onSubmit={(event) => submitCajaMovimiento(event).catch((e) => addToast(e.message, "error"))}>
                     <h2 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 700 }}>💳 Registrar movimiento</h2>
 
                     <fieldset style={{ border: "none", padding: 0, margin: 0, marginBottom: 16 }}>
@@ -16845,6 +16886,7 @@ export function App() {
                     })}
                   </div>
                 )}
+                </div>
               </>
             )}
           </section>

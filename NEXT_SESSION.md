@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Caja Principal: rediseno "dashboard financiero" (2026-09-29)
+- Solo JSX/CSS (clases `cj-*` al final de styles.css; el proyecto NO usa Tailwind). Sin cambios de estado/handlers/endpoints; unico estado nuevo de UI: `cajaMenu` (menu abierto) con cierre al clic fuera.
+- Encabezado oscuro -> 4 tarjetas KPI (Saldo actual destacado, Ingresos, Egresos, Saldos iniciales con efectivo/banco). Fila de 8 pestanas -> toolbar: «➕ Nuevo movimiento», «⚡ Acciones rapidas» (Venta Detalle, Fomentos, Anticipos, Sacos, Mantenimiento, mismo filtro socio/matriz), «📋 Ver movimientos» y «⚙️ Opciones» (Editar saldo inicial, ¿Cuando se hizo?, Excel, PDF, Cerrar caja). Migas «← Movimientos / seccion».
+- Con «Nuevo movimiento»: grid 12 col (formulario 5 · movimientos de la sesion 7, sticky); <1100px una columna. Inputs con focus ring azul.
+
 ### Secadoras: tunel con varias partidas en UN formulario + confirmacion y compartir costo (2026-09-29)
 - Editor del motor: si el tunel tiene >1 partida en proceso (p. ej. propio COMPRA + servicio SECADO_PILADO, que `groupDryingEntries` separa en reportes distintos), se muestra UN formulario: cada partida con su badge, lotes, tipo de arroz (`rice_type__<id>`) y empaque de botada (`botada_empaque__<id>`/`botada_sacos__<id>`); datos comunes una vez. `guardarTunelAgrupado` hace PUT por partida y un solo `/drying/tunnel-finalize` (el backend ya cierra todos los reportes hermanos del tunel). Con 1 partida no cambia nada.
 - Modal de combustible: «Confirmar y Finalizar Secado» valida (`validarFinalizarSecado`) y pide confirmacion (`fuelConfirmOpen`) antes de `confirmarFinalizarSecado`.
