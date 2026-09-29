@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Nomina > 🚚 Bajada de carro (2026-09-29)
+- Cada ticket de bascula (modo principal, sin espera, QQ>0, fecha >= `bajada_carro_config.desde`) paga QQ x tarifa de la actividad de cuadrilla «BAJADA DE CARRO» ($0.10, editable en Configuracion > Actividades y tarifas) a quien bajo el carro: `raw_payload.bajadaX` o `mobile_synced_tickets.bajada_manual` ('__NO__' = no se paga).
+- Se guarda como `cuadrilla_entries` origen 'BASCULA' (uq por referencia_id = ticket). `sincronizarBajadas` (cuadrilla.ts) crea/actualiza/borra SOLO lo no pagado; se llama en GET /cuadrilla/bajadas, POST /bajadas/sync (refreshNomina) y al asignar. Asi sale en Nomina > Pagos (fila de cuadrilla de la persona) y lo no pagado se arrastra solo; el pago usa /cuadrilla/pay-worker (PAGO_MANO_OBRA → rubro Cuadrilla del Resultado mensual).
+- Semana de pago sabado→viernes (`inicioSemana`). Pestana: navegacion por semana, KPIs, tickets con input de trabajador (datalist), 🚫 no se paga, totales por trabajador y arrastre. `desde` inicial 2026-09-26 (admin lo cambia en la pestana). Migracion 20261050.
+
 ### Accesos directos «⚙️ … en Configuracion» en toda la app (2026-09-29)
 - Helpers en App.tsx (junto a `irAAjuste`): `irAConfig(tarjeta)` (subpestana de CONFIG_INDICE + abre y desplaza a la tarjeta), `puedeIrAConfig(tarjeta)` (Configuracion visible y `tarjetaVisibleSocio` si el activo es socio), `cfgLink(tarjeta, texto)` (boton-texto discreto `.vdTarifaLink`). `buscarTarjeta` compara titulos sin mayusculas/acentos y cae al emoji inicial (arregla el salto a «🏦 Cuentas bancarias», que antes no abria).
 - Lugares: Secadoras (precio combustible x2, tarifas del tendal), Bascula (humedad base de la merma), Inventario y Caja>Sacos (catalogo de sacos; SacosTablero/SacosAlertaDashboard con prop opcional `onConfig`), Dashboard (ajustar minimos), Gana (tarifario de pilado), Venta Detalle (tarifa por libra x2), Servicio de Secado (tarifa global), Seleccion (tarifas de procesos), Nomina (tarifas de pago en la barra, actividades de cuadrilla, personal administrativo), Caja (categorias de caja, categorias de mantenimiento), Ventas (numeracion de guias). Textos que decian «Configuracion → Tarifas» para el combustible corregidos (esta en Operacion y Planta).

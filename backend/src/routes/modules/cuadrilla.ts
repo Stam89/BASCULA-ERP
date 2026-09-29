@@ -5,7 +5,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const cuadrillaRouter = Router();
 
@@ -1150,4 +1150,192 @@ cuadrillaRouter.get("/worker-receipt", asyncRoute(async (req, res) => {
     totals: { earned, advances, net },
     rates: {}
   });
+}));
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🚚 BAJADA DE CARRO (descarga del camión en báscula)
+// Cada ticket de báscula (modo principal, ya con 2º pesaje) paga QQ × tarifa de
+// la actividad «BAJADA DE CARRO» a quien bajó el carro: el nombre llega de la
+// app de báscula (`bajadaX`) o se pone a mano (`bajada_manual`; '__NO__' = no se
+// paga). Se guarda como labor de CUADRILLA (origen 'BASCULA', una por ticket):
+// así aparece en Nómina → Pagos con lo demás de esa persona, se paga por Caja
+// y lo no pagado se acumula solo a la semana siguiente (sábado a viernes).
+// Solo se tocan registros NO pagados; lo ya pagado nunca cambia.
+// ════════════════════════════════════════════════════════════════════════════
+const BAJADA_NO = "__NO__";
+// Fecha del ticket: la que escribió la báscula (DD/MM/AAAA HH:MM) o, si falta,
+// la de creación en la app (hora de Ecuador).
+const FECHA_TICKET = `COALESCE(
+  CASE WHEN t.raw_payload->>'fecha' ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}'
+       THEN to_date(split_part(t.raw_payload->>'fecha', ' ', 1), 'DD/MM/YYYY') END,
+  (to_timestamp(t.mobile_created_at / 1000.0) AT TIME ZONE 'America/Guayaquil')::date)`;
+const TICKET_ELEGIBLE = `lower(coalesce(t.raw_payload->>'modo', 'principal')) = 'principal'
+  AND NOT coalesce(t.en_espera, false) AND coalesce(t.quintals, 0) > 0`;
+// Sábado que abre la semana de pago de una fecha (getUTCDay: dom=0 … sáb=6).
+const inicioSemana = (iso: string) => {
+  const d = new Date(`${iso}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 1) % 7));
+  return d.toISOString().slice(0, 10);
+};
+const sumarDias = (iso: string, n: number) => {
+  const d = new Date(`${iso}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+const normalizarTrabajador = (s: string | null | undefined) => String(s ?? "").trim().replace(/\s+/g, " ").toUpperCase();
+const fechaIso = (v: Date | string) => (typeof v === "string" ? v.slice(0, 10) : new Date(v).toISOString().slice(0, 10));
+
+async function actividadBajada(db: Queryable) {
+  const r = await db.query(
+    `SELECT id, name, unit_rate::float AS unit_rate FROM cuadrilla_activities
+      WHERE upper(btrim(name)) = 'BAJADA DE CARRO' ORDER BY is_active DESC, created_at ASC LIMIT 1`
+  );
+  return r.rows[0] as { id: string; name: string; unit_rate: number } | undefined;
+}
+
+export async function sincronizarBajadas(client: PoolClient): Promise<{ creados: number; actualizados: number; eliminados: number }> {
+  const out = { creados: 0, actualizados: 0, eliminados: 0 };
+  // Serializa sincronizaciones simultáneas (dos pantallas abiertas).
+  await client.query("SELECT pg_advisory_xact_lock($1)", [71010]);
+  const cfg = (await client.query("SELECT desde::text AS desde FROM bajada_carro_config WHERE id = 1")).rows[0];
+  const act = await actividadBajada(client);
+  if (!cfg?.desde || !act) return out;
+  const tarifa = Number(act.unit_rate) || 0;
+
+  const tickets = (await client.query(
+    `SELECT t.id, t.quintals::float AS qq, t.farmer_name, t.raw_payload->>'numeroTicket' AS numero,
+            t.raw_payload->>'placa' AS placa,
+            COALESCE(NULLIF(btrim(t.bajada_manual), ''), NULLIF(btrim(t.raw_payload->>'bajadaX'), '')) AS trabajador,
+            (${FECHA_TICKET})::text AS fecha
+       FROM mobile_synced_tickets t
+      WHERE ${TICKET_ELEGIBLE} AND ${FECHA_TICKET} >= $1::date`,
+    [cfg.desde]
+  )).rows as Array<{ id: string; qq: number; farmer_name: string | null; numero: string | null; placa: string | null; trabajador: string | null; fecha: string }>;
+
+  const existentes = new Map<string, { id: string; paid_at: Date | null; worker_name: string; quantity: number; unit_rate: number; work_date: string }>();
+  for (const e of (await client.query(
+    `SELECT id, referencia_id, paid_at, worker_name, quantity::float AS quantity, unit_rate::float AS unit_rate, work_date::text AS work_date
+       FROM cuadrilla_entries WHERE origen = 'BASCULA'`
+  )).rows) existentes.set(String(e.referencia_id), e);
+
+  const vistos = new Set<string>();
+  for (const t of tickets) {
+    vistos.add(t.id);
+    const e = existentes.get(t.id);
+    if (e?.paid_at) continue; // pagado: intocable
+    const trabajador = t.trabajador === BAJADA_NO ? "" : normalizarTrabajador(t.trabajador);
+    if (!trabajador) {
+      if (e) { await client.query("DELETE FROM cuadrilla_entries WHERE id = $1 AND paid_at IS NULL", [e.id]); out.eliminados++; }
+      continue;
+    }
+    const qq = Number(t.qq) || 0;
+    const subtotal = round2(qq * tarifa);
+    const fecha = fechaIso(t.fecha);
+    const notas = `Bajada de carro · Ticket #${t.numero ?? "—"} · ${t.farmer_name ?? "—"}${t.placa ? ` · ${t.placa}` : ""}`;
+    if (!e) {
+      await client.query(
+        `INSERT INTO cuadrilla_entries (work_date, activity_id, activity_name, worker_name, quantity, unit_rate, subtotal, notes, origen, referencia_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'BASCULA', $9)
+         ON CONFLICT (referencia_id) WHERE origen = 'BASCULA' DO NOTHING`,
+        [fecha, act.id, act.name, trabajador, qq, tarifa, subtotal, notas, t.id]
+      );
+      out.creados++;
+    } else if (e.worker_name !== trabajador || Math.abs(e.quantity - qq) > 0.0005 || Math.abs(e.unit_rate - tarifa) > 0.00005 || e.work_date !== fecha) {
+      await client.query(
+        `UPDATE cuadrilla_entries SET worker_name = $2, quantity = $3, unit_rate = $4, subtotal = $5, work_date = $6, notes = $7
+          WHERE id = $1 AND paid_at IS NULL`,
+        [e.id, trabajador, qq, tarifa, subtotal, fecha, notas]
+      );
+      out.actualizados++;
+    }
+  }
+  // Pendientes cuyo ticket ya no aplica (borrado en la báscula, volvió a espera
+  // o quedó antes de la fecha de inicio): no se deben.
+  for (const [ref, e] of existentes) {
+    if (!vistos.has(ref) && !e.paid_at) {
+      await client.query("DELETE FROM cuadrilla_entries WHERE id = $1 AND paid_at IS NULL", [e.id]);
+      out.eliminados++;
+    }
+  }
+  return out;
+}
+
+cuadrillaRouter.post("/bajadas/sync", asyncRoute(async (_req, res) => {
+  res.json(await inTransaction((client) => sincronizarBajadas(client)));
+}));
+
+// Semana de pago (sábado→viernes) que contiene `semana` (hoy por defecto): tickets
+// con su monto y estado, y lo pendiente de semanas previas (se arrastra).
+cuadrillaRouter.get("/bajadas", asyncRoute(async (req, res) => {
+  const q = z.object({ semana: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).parse(req.query);
+  const hoy = (await pool.query("SELECT (now() AT TIME ZONE 'America/Guayaquil')::date::text AS d")).rows[0].d as string;
+  const ini = inicioSemana(q.semana ?? hoy);
+  const fin = sumarDias(ini, 6);
+  await inTransaction((client) => sincronizarBajadas(client));
+
+  const cfg = (await pool.query("SELECT desde::text AS desde FROM bajada_carro_config WHERE id = 1")).rows[0] ?? { desde: null };
+  const act = await actividadBajada(pool);
+  const filas = (await pool.query(
+    `SELECT t.id AS ticket_id, t.raw_payload->>'numeroTicket' AS numero, (${FECHA_TICKET})::text AS fecha,
+            t.raw_payload->>'fecha' AS fecha_hora, t.farmer_name AS cliente, t.raw_payload->>'placa' AS placa,
+            t.quintals::float AS qq, NULLIF(btrim(t.raw_payload->>'bajadaX'), '') AS bajada_bascula,
+            NULLIF(btrim(t.bajada_manual), '') AS bajada_manual,
+            e.id AS entry_id, e.worker_name AS trabajador, e.subtotal::float AS monto, e.unit_rate::float AS tarifa,
+            e.paid_at
+       FROM mobile_synced_tickets t
+       LEFT JOIN cuadrilla_entries e ON e.origen = 'BASCULA' AND e.referencia_id = t.id
+      WHERE ${TICKET_ELEGIBLE} AND ${FECHA_TICKET} BETWEEN $1::date AND $2::date
+      ORDER BY ${FECHA_TICKET}, NULLIF(regexp_replace(coalesce(t.raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '')::bigint NULLS LAST`,
+    [ini, fin]
+  )).rows;
+  const arrastre = (await pool.query(
+    `SELECT worker_name AS trabajador, COUNT(*)::int AS tickets, COALESCE(SUM(subtotal), 0)::float AS monto
+       FROM cuadrilla_entries WHERE origen = 'BASCULA' AND paid_at IS NULL AND work_date < $1::date
+      GROUP BY worker_name ORDER BY worker_name`,
+    [ini]
+  )).rows;
+  res.json({
+    semana: { inicio: ini, fin, actual: inicioSemana(hoy) === ini },
+    desde: cfg.desde,
+    tarifa: act ? Number(act.unit_rate) : null,
+    actividad: act?.name ?? null,
+    filas,
+    arrastre
+  });
+}));
+
+// Poner / corregir a mano quién bajó el carro (o marcar que no se paga).
+cuadrillaRouter.post("/bajadas/asignar", asyncRoute(async (req, res) => {
+  const body = z.object({
+    ticket_id: z.string().uuid(),
+    trabajador: z.string().trim().max(60).nullable().optional(),
+    no_se_paga: z.boolean().optional()
+  }).parse(req.body);
+  const valor = body.no_se_paga ? BAJADA_NO : (normalizarTrabajador(body.trabajador) || null);
+  const out = await inTransaction(async (client) => {
+    const pagado = await client.query(
+      "SELECT 1 FROM cuadrilla_entries WHERE origen = 'BASCULA' AND referencia_id = $1 AND paid_at IS NOT NULL",
+      [body.ticket_id]
+    );
+    if (pagado.rowCount) throw new ApiError(409, "Esta bajada ya se pagó; no se puede cambiar.");
+    const r = await client.query("UPDATE mobile_synced_tickets SET bajada_manual = $2 WHERE id = $1 RETURNING id", [body.ticket_id, valor]);
+    if (!r.rowCount) throw new ApiError(404, "Ticket no encontrado");
+    return sincronizarBajadas(client);
+  });
+  res.json({ ok: true, ...out });
+}));
+
+// Desde qué fecha se cuentan las bajadas (lo anterior ya se pagó por fuera).
+cuadrillaRouter.put("/bajadas/desde", requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({ desde: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).parse(req.body);
+  const user = (req as AuthenticatedRequest).user;
+  const out = await inTransaction(async (client) => {
+    await client.query(
+      `INSERT INTO bajada_carro_config (id, desde, updated_at, updated_by) VALUES (1, $1, now(), $2)
+       ON CONFLICT (id) DO UPDATE SET desde = EXCLUDED.desde, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+      [body.desde, user?.id ?? null]
+    );
+    return sincronizarBajadas(client);
+  });
+  res.json({ ok: true, desde: body.desde, ...out });
 }));

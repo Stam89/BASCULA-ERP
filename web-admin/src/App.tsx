@@ -377,6 +377,19 @@ type WorkerSummary = {
 // cajón por defecto, de modo que un rol que no esté listado igual se muestra y
 // ninguna fila se pierde.
 type NominaGrupo = "planta" | "secadora" | "cuadrilla" | "administrativo";
+// 🚚 Bajada de carro (Nómina): un ticket de báscula = QQ × tarifa a quien bajó.
+type BajadaFila = {
+  ticket_id: string; numero: string | null; fecha: string; fecha_hora: string | null;
+  cliente: string | null; placa: string | null; qq: number;
+  bajada_bascula: string | null; bajada_manual: string | null;
+  entry_id: string | null; trabajador: string | null; monto: number | null; tarifa: number | null; paid_at: string | null;
+};
+type BajadaData = {
+  semana: { inicio: string; fin: string; actual: boolean };
+  desde: string | null; tarifa: number | null; actividad: string | null;
+  filas: BajadaFila[];
+  arrastre: Array<{ trabajador: string; tickets: number; monto: number }>;
+};
 
 const NOMINA_ROLES: Record<Exclude<NominaGrupo, "planta">, string[]> = {
   secadora: ["SECADOR", "GUARDIANIA", "GUARDIANÍA"],
@@ -1563,6 +1576,7 @@ const SUB_TABS: Record<string, Array<{ key: string; label: string }>> = {
     { key: "pagos", label: "Pagos" },
     { key: "secadora", label: "Secadora" },
     { key: "cuadrilla", label: "Cuadrilla" },
+    { key: "bajada", label: "Bajada de carro" },
     { key: "historial", label: "Historial de Pagos" },
     { key: "sueldo-admin", label: "Sueldo Administrativo" },
   ],
@@ -2630,10 +2644,15 @@ export function App() {
   const [reciboModal, setReciboModal] = useState<{ open: boolean; loading: boolean; data: ReciboSemanal | null }>({
     open: false, loading: false, data: null
   });
-  const [nominaView, setNominaView] = useState<NominaGrupo | "pagos" | "historial" | "sueldo-admin">("pagos");
+  const [nominaView, setNominaView] = useState<NominaGrupo | "pagos" | "historial" | "sueldo-admin" | "bajada">("pagos");
   // Filas de la pestaña activa. El filtro es puramente de frontend sobre el
   // array que ya trae /labor/summary: no se toca la petición ni el backend.
-  const nominaGrupoActivo: NominaGrupo = (nominaView === "historial" || nominaView === "pagos" || nominaView === "sueldo-admin") ? "planta" : nominaView;
+  const nominaGrupoActivo: NominaGrupo = (nominaView === "historial" || nominaView === "pagos" || nominaView === "sueldo-admin" || nominaView === "bajada") ? "planta" : nominaView;
+  // 🚚 Bajada de carro: semana (sábado→viernes) mostrada y datos.
+  const [bajadaSemana, setBajadaSemana] = useState<string | null>(null);
+  const [bajadaData, setBajadaData] = useState<BajadaData | null>(null);
+  const [bajadaBusy, setBajadaBusy] = useState(false);
+  const [bajadaDesde, setBajadaDesde] = useState("");
   const nominaFiltradas = useMemo(
     () => nominaRows.filter((r) => nominaGrupoDe(r.worker_role) === nominaGrupoActivo),
     [nominaRows, nominaGrupoActivo]
@@ -4302,12 +4321,52 @@ export function App() {
     addToast("Tarifas de pago guardadas", "success");
   }
 
+  // 🚚 Bajada de carro: trae la semana (el backend primero sincroniza los tickets).
+  async function loadBajadas(semana: string | null = bajadaSemana) {
+    setBajadaBusy(true);
+    try {
+      const data = await apiGet<BajadaData>(`/cuadrilla/bajadas${semana ? `?semana=${semana}` : ""}`);
+      setBajadaData(data);
+      setBajadaSemana(data.semana.inicio);
+      setBajadaDesde(data.desde ?? "");
+    } catch (e) {
+      addToast(`No se pudo cargar la bajada de carro: ${e instanceof Error ? e.message : "error"}`, "error");
+    } finally {
+      setBajadaBusy(false);
+    }
+  }
+  // Poner/corregir quién bajó el carro, o marcar que ese ticket no se paga.
+  async function asignarBajada(fila: BajadaFila, trabajador: string | null, noSePaga = false) {
+    try {
+      await apiPost("/cuadrilla/bajadas/asignar", { ticket_id: fila.ticket_id, trabajador, no_se_paga: noSePaga });
+      addToast(noSePaga ? `Ticket #${fila.numero ?? ""}: no se paga bajada.` : trabajador ? `Ticket #${fila.numero ?? ""}: bajada a ${trabajador.toUpperCase()}.` : `Ticket #${fila.numero ?? ""}: se usa el nombre de la báscula.`, "success");
+      await loadBajadas();
+      refreshNomina().catch(() => undefined);
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : "No se pudo guardar", "error");
+    }
+  }
+  async function guardarBajadaDesde() {
+    if (!bajadaDesde) return;
+    if (!window.confirm(`¿Contar la bajada de carro desde el ${new Date(`${bajadaDesde}T12:00:00`).toLocaleDateString("es-EC")}?\n\nLos tickets anteriores a esa fecha no se pagan por aquí (se asumen pagados por fuera). Lo ya pagado no cambia.`)) return;
+    try {
+      await apiPut("/cuadrilla/bajadas/desde", { desde: bajadaDesde });
+      addToast("Fecha de inicio actualizada", "success");
+      await loadBajadas();
+      refreshNomina().catch(() => undefined);
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : "No se pudo guardar", "error");
+    }
+  }
+
   async function refreshNomina() {
     setNominaBusy(true);
     try {
       // Tablas de REVISIÓN de las pestañas operativas: por período elegido.
       // La nómina de PRODUCCIÓN y la cuadrilla son de la matriz.
       if (esMatrizActiva) {
+        // Bajadas de carro de los tickets nuevos → cuadrilla (así salen en Pagos).
+        await apiPost("/cuadrilla/bajadas/sync", {}).catch(() => undefined);
         const data = await apiGet<{ rows: WorkerSummary[] }>(`/labor/summary?from=${nominaFrom}&to=${nominaTo}`);
         setNominaRows(data.rows);
         try {
@@ -19046,6 +19105,9 @@ export function App() {
               {puedeVerSubTab("Nomina", "cuadrilla") && (
               <button type="button" className={nominaView === "cuadrilla" ? "active" : ""} onClick={() => { setNominaView("cuadrilla"); refreshCuadrilla().catch(() => undefined); }}>👷‍♂️ Cuadrilla</button>
               )}
+              {puedeVerSubTab("Nomina", "bajada") && (
+              <button type="button" className={nominaView === "bajada" ? "active" : ""} onClick={() => { setNominaView("bajada"); loadBajadas().catch(() => undefined); }}>🚚 Bajada de carro</button>
+              )}
               {puedeVerSubTab("Nomina", "historial") && (
               <button type="button" className={nominaView === "historial" ? "active" : ""} onClick={() => { setNominaView("historial"); loadNominaHistory().catch(() => undefined); }}>📜 Historial de Pagos</button>
               )}
@@ -19098,7 +19160,7 @@ export function App() {
             {/* Pestañas operativas (Planta / Secadora / Cuadrilla / Administrativo).
                 Las cuatro comparten la misma tabla, el mismo estado y las mismas
                 acciones; solo cambian el filtro por rol y las columnas del medio. */}
-            {nominaView !== "historial" && nominaView !== "pagos" && nominaView !== "sueldo-admin" && esMatrizActiva && (() => {
+            {nominaView !== "historial" && nominaView !== "pagos" && nominaView !== "sueldo-admin" && nominaView !== "bajada" && esMatrizActiva && (() => {
               const grupo = nominaGrupoActivo;
               const info = NOMINA_GRUPO_TITULO[grupo];
               const cols = nominaColumnas(grupo);
@@ -19423,6 +19485,166 @@ export function App() {
                 las 4 áreas, sin entrar pestaña por pestaña. Cada pago sigue
                 siendo individual (mismo botón, misma función payWorkerWeek) y
                 abre su recibo; solo se juntan aquí las filas con saldo. */}
+            {nominaView === "bajada" && esMatrizActiva && (() => {
+              const d = bajadaData;
+              const fmtDia = (iso: string) => new Date(`${iso}T12:00:00`).toLocaleDateString("es-EC", { weekday: "short", day: "2-digit", month: "2-digit" });
+              const moverSemana = (dias: number) => {
+                if (!d) return;
+                const x = new Date(`${d.semana.inicio}T12:00:00`);
+                x.setDate(x.getDate() + dias);
+                loadBajadas(x.toISOString().slice(0, 10)).catch(() => undefined);
+              };
+              const filas = d?.filas ?? [];
+              const conMonto = filas.filter((f) => f.entry_id);
+              const totalSemana = round2(conMonto.reduce((a, f) => a + Number(f.monto ?? 0), 0));
+              const pendienteSemana = round2(conMonto.filter((f) => !f.paid_at).reduce((a, f) => a + Number(f.monto ?? 0), 0));
+              const sinNombre = filas.filter((f) => !f.entry_id && f.bajada_manual !== "__NO__" && !(d?.desde && f.fecha < d.desde));
+              const arrastreTotal = round2((d?.arrastre ?? []).reduce((a, r) => a + Number(r.monto), 0));
+              const porTrabajador = new Map<string, { tickets: number; qq: number; monto: number; pendiente: number }>();
+              for (const f of conMonto) {
+                const k = f.trabajador ?? "—";
+                const t = porTrabajador.get(k) ?? { tickets: 0, qq: 0, monto: 0, pendiente: 0 };
+                t.tickets += 1; t.qq += Number(f.qq); t.monto += Number(f.monto ?? 0); if (!f.paid_at) t.pendiente += Number(f.monto ?? 0);
+                porTrabajador.set(k, t);
+              }
+              const nombres = [...new Set([...cuadWorkers, ...filas.map((f) => f.trabajador ?? ""), ...(d?.arrastre ?? []).map((r) => r.trabajador)].filter(Boolean))].sort();
+              return (
+              <div className="tablePanel">
+                <div className="reportToolbar" style={{ marginBottom: 10, alignItems: "flex-end" }}>
+                  <div>
+                    <h2 style={{ marginBottom: 2 }}>🚚 Bajada de carro</h2>
+                    <p className="muted" style={{ margin: 0 }}>
+                      QQ de cada ticket de báscula × <strong>{d?.tarifa != null ? money(d.tarifa) : "—"}</strong> a quien bajó el carro. Se paga de <strong>sábado a viernes</strong> en 💵 Pagos (junto con su cuadrilla); lo que no se pague pasa solo a la semana siguiente.{" "}
+                      {cfgLink("Actividades y tarifas", "Cambiar tarifa")}
+                    </p>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                    <button type="button" className="btnSecondary" disabled={bajadaBusy || !d} onClick={() => moverSemana(-7)}>◀ Anterior</button>
+                    <strong style={{ minWidth: 190, textAlign: "center" }}>{d ? `${fmtDia(d.semana.inicio)} → ${fmtDia(d.semana.fin)}` : "…"}</strong>
+                    <button type="button" className="btnSecondary" disabled={bajadaBusy || !d} onClick={() => moverSemana(7)}>Siguiente ▶</button>
+                    {d && !d.semana.actual && <button type="button" className="btnGhost" onClick={() => loadBajadas(null).catch(() => undefined)}>Esta semana</button>}
+                    <button type="button" className="btnSecondary" disabled={bajadaBusy} onClick={() => loadBajadas().catch(() => undefined)}>{bajadaBusy ? "Cargando…" : "↻"}</button>
+                  </div>
+                </div>
+
+                {!d ? <div className="emptyState"><p>{bajadaBusy ? "Cargando…" : "Sin datos."}</p></div> : (<>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginBottom: 12 }}>
+                  <div className="cj-kpi"><div className="cj-kpi-label">Total de la semana</div><div className="cj-kpi-value">{money(totalSemana)}</div><div className="cj-kpi-hint">{conMonto.length} ticket(s) con bajada</div></div>
+                  <div className="cj-kpi"><div className="cj-kpi-label">Por pagar de la semana</div><div className="cj-kpi-value cj-pos">{money(pendienteSemana)}</div><div className="cj-kpi-hint">Se paga en 💵 Pagos</div></div>
+                  <div className="cj-kpi"><div className="cj-kpi-label">Sin nombre</div><div className="cj-kpi-value" style={{ color: sinNombre.length ? "#b45309" : "#0f172a" }}>{sinNombre.length}</div><div className="cj-kpi-hint">{sinNombre.length ? "Ponle quién bajó el carro" : "Todos tienen nombre"}</div></div>
+                  <div className="cj-kpi"><div className="cj-kpi-label">Pendiente de semanas anteriores</div><div className="cj-kpi-value" style={{ color: arrastreTotal > 0 ? "#b45309" : "#0f172a" }}>{money(arrastreTotal)}</div><div className="cj-kpi-hint">Pasa a esta semana en Pagos</div></div>
+                </div>
+
+                <datalist id="bajada-trabajadores">{nombres.map((n) => <option key={n} value={n} />)}</datalist>
+                <div style={{ overflowX: "auto" }}>
+                  <table className="cajaTable">
+                    <thead><tr><th>Fecha</th><th>Ticket</th><th>Cliente</th><th>Placa</th><th className="num">QQ</th><th>Bajó el carro</th><th className="num">Monto</th><th>Estado</th></tr></thead>
+                    <tbody>
+                      {filas.length === 0 && <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 14 }}>No hay tickets de báscula en esta semana.</td></tr>}
+                      {filas.map((f) => {
+                        const antesDeInicio = !!(d.desde && f.fecha < d.desde);
+                        const noSePaga = f.bajada_manual === "__NO__";
+                        const actual = noSePaga ? "" : (f.bajada_manual ?? f.bajada_bascula ?? "");
+                        const pagado = !!f.paid_at;
+                        return (
+                          <tr key={f.ticket_id} style={!f.entry_id && !noSePaga && !antesDeInicio ? { background: "#fffbeb" } : undefined}>
+                            <td style={{ whiteSpace: "nowrap" }}>{fmtDia(f.fecha)}</td>
+                            <td style={{ fontWeight: 600 }}>#{f.numero ?? "—"}</td>
+                            <td>{f.cliente ?? "—"}</td>
+                            <td>{f.placa || "—"}</td>
+                            <td className="num">{Number(f.qq).toFixed(2)}</td>
+                            <td style={{ minWidth: 190 }}>
+                              {pagado || antesDeInicio ? (
+                                <span style={{ fontWeight: 600 }}>{f.trabajador ?? (actual || "—")}</span>
+                              ) : noSePaga ? (
+                                <span className="muted">No se paga <button type="button" className="vdTarifaLink" onClick={() => asignarBajada(f, null).catch(() => undefined)}>↺ deshacer</button></span>
+                              ) : (
+                                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                                  <input
+                                    key={`${f.ticket_id}-${actual}`}
+                                    list="bajada-trabajadores"
+                                    defaultValue={actual}
+                                    placeholder="¿Quién bajó el carro?"
+                                    style={{ width: 150, padding: "5px 8px", borderRadius: 6, border: `1px solid ${actual ? "#cbd5e1" : "#f59e0b"}`, textTransform: "uppercase" }}
+                                    onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                                    onBlur={(e) => {
+                                      const v = e.target.value.trim().toUpperCase();
+                                      if (v === actual.toUpperCase()) return;
+                                      // Vacío = volver al nombre de la báscula (si lo trae).
+                                      asignarBajada(f, v || null).catch(() => undefined);
+                                    }}
+                                  />
+                                  {f.bajada_manual && <span className="chip info" title={f.bajada_bascula ? `La báscula decía: ${f.bajada_bascula}` : "La báscula no traía nombre"}>manual</span>}
+                                  <button type="button" className="btnGhost" title="Este ticket no paga bajada" onClick={() => asignarBajada(f, null, true).catch(() => undefined)}>🚫</button>
+                                </div>
+                              )}
+                            </td>
+                            <td className="num" style={{ fontWeight: 700 }}>{f.entry_id ? money(Number(f.monto ?? 0)) : "—"}</td>
+                            <td>
+                              {antesDeInicio ? <span className="chip">Antes del inicio</span>
+                                : pagado ? <span className="chip ok" title={new Date(f.paid_at!).toLocaleString("es-EC")}>Pagado</span>
+                                : noSePaga ? <span className="chip">No se paga</span>
+                                : f.entry_id ? <span className="chip warn">Por pagar</span>
+                                : <span className="chip bad">Sin nombre</span>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    {conMonto.length > 0 && (
+                      <tfoot><tr>
+                        <td colSpan={4} style={{ fontWeight: 700 }}>TOTAL DE LA SEMANA</td>
+                        <td className="num" style={{ fontWeight: 700 }}>{conMonto.reduce((a, f) => a + Number(f.qq), 0).toFixed(2)}</td>
+                        <td />
+                        <td className="num" style={{ fontWeight: 800 }}>{money(totalSemana)}</td>
+                        <td />
+                      </tr></tfoot>
+                    )}
+                  </table>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 14, marginTop: 14 }}>
+                  <div>
+                    <h3 style={{ margin: "0 0 6px", fontSize: 14 }}>👷 Por trabajador · esta semana</h3>
+                    <table className="cajaTable">
+                      <thead><tr><th>Trabajador</th><th className="num">Tickets</th><th className="num">QQ</th><th className="num">Total</th><th className="num">Por pagar</th></tr></thead>
+                      <tbody>
+                        {[...porTrabajador.entries()].sort((a, b) => b[1].monto - a[1].monto).map(([n, t]) => (
+                          <tr key={n}><td style={{ fontWeight: 600 }}>{n}</td><td className="num">{t.tickets}</td><td className="num">{t.qq.toFixed(2)}</td><td className="num">{money(round2(t.monto))}</td><td className="num" style={{ color: "#047857", fontWeight: 700 }}>{money(round2(t.pendiente))}</td></tr>
+                        ))}
+                        {porTrabajador.size === 0 && <tr><td colSpan={5} className="muted">Sin bajadas en la semana.</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div>
+                    <h3 style={{ margin: "0 0 6px", fontSize: 14 }}>⏳ Pendiente de semanas anteriores</h3>
+                    <table className="cajaTable">
+                      <thead><tr><th>Trabajador</th><th className="num">Tickets</th><th className="num">Monto</th></tr></thead>
+                      <tbody>
+                        {d.arrastre.map((r) => <tr key={r.trabajador}><td style={{ fontWeight: 600 }}>{r.trabajador}</td><td className="num">{r.tickets}</td><td className="num" style={{ color: "#b45309", fontWeight: 700 }}>{money(r.monto)}</td></tr>)}
+                        {d.arrastre.length === 0 && <tr><td colSpan={3} className="muted">Nada pendiente de semanas anteriores.</td></tr>}
+                      </tbody>
+                    </table>
+                    <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>Se suma solo a lo que se paga en 💵 Pagos.</p>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 12, flexWrap: "wrap", marginTop: 14, borderTop: "1px solid var(--c-border)", paddingTop: 12 }}>
+                  <button type="button" className="primary" onClick={() => setNominaView("pagos")}>💵 Ir a Pagos</button>
+                  {isAdmin && (
+                    <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
+                      <label style={{ margin: 0 }}><span style={{ fontSize: 12 }}>Contar tickets desde</span>
+                        <input type="date" value={bajadaDesde} onChange={(e) => setBajadaDesde(e.target.value)} />
+                      </label>
+                      <button type="button" className="btnSecondary" disabled={!bajadaDesde || bajadaDesde === (d.desde ?? "")} onClick={() => guardarBajadaDesde().catch(() => undefined)}>Guardar</button>
+                    </div>
+                  )}
+                </div>
+                </>)}
+              </div>
+              );
+            })()}
+
             {nominaView === "pagos" && (() => {
               const buscar = pagoBuscar.trim().toLowerCase();
               const coincide = (nombre: string) => !buscar || String(nombre).toLowerCase().includes(buscar);
