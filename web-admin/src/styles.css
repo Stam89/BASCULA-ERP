@@ -4346,6 +4346,10 @@ textarea::placeholder {
    Zona: el contenido de los módulos y los modales.
    ════════════════════════════════════════════════════════════════════════════ */
 
+/* Pestañas internas de un módulo: nunca más anchas que la pantalla (si no
+   caben, se deslizan de lado como ya estaba previsto). */
+.cajaSubNav { min-width: 0; max-width: 100%; }
+
 /* Tablet y celular (≤ 1024 px): las columnas pueden encogerse sin empujar la
    pantalla hacia un lado; imágenes y gráficos no se salen. */
 @media (max-width: 1024px) {
@@ -4356,8 +4360,6 @@ textarea::placeholder {
   /* Filas de botones, filtros y encabezados: bajan de línea si no caben. */
   :is(.content, .modalOverlay) [style*="display: flex"]:not([style*="nowrap"], [style*="column"]) { flex-wrap: wrap; }
   .buttonRow, .reportDates, .reportToolbar { flex-wrap: wrap; }
-  /* Pestañas internas: nunca más anchas que la pantalla. */
-  .cajaSubNav { min-width: 0; max-width: 100%; flex-wrap: wrap; }
 }
 
 /* Resultado mensual (Costos Operativos): en tablet, principal y lateral apilados. */
