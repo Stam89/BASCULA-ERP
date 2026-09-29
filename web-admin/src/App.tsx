@@ -19740,7 +19740,8 @@ export function App() {
                           <td><span className="chip">👷‍♂️ Cuadrilla</span></td>
                           <td><span className="chip ok">Cuadrilla</span></td>
                           <td style={{ fontWeight: 600 }}>{r.worker_name}{r.oldest_pending ? <div style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>{antiguedadLabel(r.oldest_pending, r.pending_count)}</div> : null}</td>
-                          <td className="num" style={{ fontWeight: 700 }}>{money(r.total)}</td>
+                          {/* «Ganó» = lo PENDIENTE (sin lo ya pagado), igual que la nómina de planta. */}
+                          <td className="num" style={{ fontWeight: 700 }}>{money(round2((r.total ?? 0) - (r.pagado ?? 0)))}</td>
                           <td className="num" style={{ color: (r.anticipos ?? 0) > 0 ? "var(--c-danger)" : "inherit" }}>{(r.anticipos ?? 0) > 0 ? `−${money(r.anticipos)}` : "—"}</td>
                           <td className="num" style={{ fontWeight: 700, color: "#047857" }}>{money(r.neto)}</td>
                           <td className="num" style={{ whiteSpace: "nowrap" }}>
@@ -19788,7 +19789,7 @@ export function App() {
                 {pagoConfirm && (() => {
                   const isNom = pagoConfirm.kind === "nomina";
                   const nombre = isNom ? pagoConfirm.nRow?.worker_name : pagoConfirm.cRow?.worker_name;
-                  const gano = isNom ? (pagoConfirm.nRow?.pending_amount ?? 0) : (pagoConfirm.cRow?.total ?? 0);
+                  const gano = isNom ? (pagoConfirm.nRow?.pending_amount ?? 0) : round2((pagoConfirm.cRow?.total ?? 0) - (pagoConfirm.cRow?.pagado ?? 0));
                   const anticipos = isNom ? (pagoConfirm.nRow?.advances ?? 0) : (pagoConfirm.cRow?.anticipos ?? 0);
                   const neto = isNom ? (pagoConfirm.nRow?.to_pay ?? 0) : (pagoConfirm.cRow?.neto ?? 0);
                   return (
