@@ -428,8 +428,15 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
     created_by: z.string().uuid().optional(),
     maquina: z.string().optional(),
     // Repuestos tomados del inventario de repuestos de planta (Matriz).
-    repuestos_usados: z.array(z.object({ repuesto_id: z.string().uuid(), cantidad: z.number().positive() })).optional()
+    repuestos_usados: z.array(z.object({ repuesto_id: z.string().uuid(), cantidad: z.number().positive() })).optional(),
+    // Dinero entregado para rendir cuentas (fondo provisional): el egreso queda
+    // «Por Liquidar» y luego se registra el vuelto (💸 Registrar Vuelto).
+    es_fondo: z.boolean().optional(),
+    responsable: z.string().trim().max(120).optional()
   }).parse(req.body);
+  const esFondo = body.es_fondo === true;
+  if (esFondo && !(body.amount > 0)) throw new ApiError(400, "Un fondo a rendir cuentas necesita el monto entregado.");
+  if (esFondo && (body.responsable ?? "").trim().length < 2) throw new ApiError(400, "Indica quién recibe el dinero a rendir cuentas.");
   const conRepuestos = (body.repuestos_usados?.length ?? 0) > 0;
   if (!(body.amount > 0) && !conRepuestos) throw new ApiError(400, "Ingresa el monto pagado o los repuestos usados del inventario.");
   if (conRepuestos) await exigirMatriz(req);
@@ -483,9 +490,10 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
     if (body.cash_register_id && body.amount > 0) {
       await client.query(
         `INSERT INTO cash_movements
-         (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)
-         VALUES ($1, 'EXPENSE', 'MANTENIMIENTO_EQUIPO', 'equipment_maintenance', $2, $3, $4, $5)`,
-        [body.cash_register_id, maintenance.rows[0].id, round2(body.amount), `Mantenimiento ${body.area}/${body.section}: ${body.description}`, body.created_by || null]
+         (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by, es_fondo, fondo_estado, responsable)
+         VALUES ($1, 'EXPENSE', 'MANTENIMIENTO_EQUIPO', 'equipment_maintenance', $2, $3, $4, $5, $6, $7, $8)`,
+        [body.cash_register_id, maintenance.rows[0].id, round2(body.amount), `Mantenimiento ${body.area}/${body.section}: ${body.description}`, body.created_by || null,
+         esFondo, esFondo ? "POR_LIQUIDAR" : null, esFondo ? body.responsable!.trim() : null]
       );
     }
     return maintenance.rows[0];

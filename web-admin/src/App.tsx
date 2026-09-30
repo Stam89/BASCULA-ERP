@@ -3094,7 +3094,7 @@ export function App() {
   }>>([]);
   const [repLinea, setRepLinea] = useState({ sel: "", nombre: "", referencia: "", unidad: "UNIDAD", minimo: "", cantidad: "", costo: "" });
   const [mantRepUsados, setMantRepUsados] = useState<Array<{ repuesto_id: string; etiqueta: string; unidad: string; cantidad: number; costo: number }>>([]);
-  const [mantRepSel, setMantRepSel] = useState({ id: "", cantidad: "1" });
+  const [mantRepSel, setMantRepSel] = useState({ id: "", cantidad: "1", buscar: "" });
   const [sackMovForm, setSackMovForm] = useState({ sack_id: "", movement: "ENTRADA" as "ENTRADA"|"SALIDA", cantidad: "", concepto: "" });
   // ── Diagnóstico de stocks negativos ────────────────────────────────────────
   const [negativeStock, setNegativeStock] = useState<NegativeStockRow[]>([]);
@@ -4225,15 +4225,24 @@ export function App() {
     }
     setRepLinea({ sel: "", nombre: "", referencia: "", unidad: "UNIDAD", minimo: "", cantidad: "", costo: "" });
   }
+  // Stock que queda en bodega de un repuesto descontando lo ya puesto en la lista.
+  const disponibleMant = (repuestoId: string) => {
+    const r = repCatalogo.find((x) => x.id === repuestoId);
+    if (!r) return 0;
+    return round2(r.stock - mantRepUsados.filter((x) => x.repuesto_id === repuestoId).reduce((s2, x) => s2 + x.cantidad, 0));
+  };
   function agregarRepuestoMantenimiento() {
     const r = repCatalogo.find((x) => x.id === mantRepSel.id);
     const cantidad = Number(mantRepSel.cantidad);
     if (!r) { addToast("Elige el repuesto del inventario", "error"); return; }
     if (!(cantidad > 0)) { addToast("Ingresa la cantidad", "error"); return; }
-    const ya = mantRepUsados.filter((x) => x.repuesto_id === r.id).reduce((s2, x) => s2 + x.cantidad, 0);
-    if (ya + cantidad > r.stock + 1e-9) { addToast(`Solo hay ${r.stock} ${r.unidad.toLowerCase()} de ${r.nombre} en el inventario`, "error"); return; }
-    setMantRepUsados((l) => [...l, { repuesto_id: r.id, etiqueta: `${r.nombre}${r.referencia ? ` (${r.referencia})` : ""}`, unidad: r.unidad, cantidad, costo: r.costo_unitario }]);
-    setMantRepSel({ id: "", cantidad: "1" });
+    if (cantidad > disponibleMant(r.id) + 1e-9) { addToast(`Cantidad supera el stock disponible (Máx: ${disponibleMant(r.id)})`, "error"); return; }
+    // Si el repuesto ya está en la lista, se suma a su fila (una fila por repuesto).
+    setMantRepUsados((l) => l.some((x) => x.repuesto_id === r.id)
+      ? l.map((x) => x.repuesto_id === r.id ? { ...x, cantidad: round2(x.cantidad + cantidad) } : x)
+      : [...l, { repuesto_id: r.id, etiqueta: `${r.nombre}${r.referencia ? ` (${r.referencia})` : ""}`, unidad: r.unidad, cantidad, costo: r.costo_unitario }]);
+    // Listo para el siguiente: cantidad en 1, sin repuesto elegido.
+    setMantRepSel({ id: "", cantidad: "1", buscar: "" });
   }
   const sacosDelActivo = esMatrizActiva ? sackInventory : sacosPropios;
 
@@ -8165,6 +8174,10 @@ export function App() {
     }
     // Con repuestos del inventario, lo pagado de caja puede ser 0.
     const amount = round2(parseFloat(maintenanceForm.amount || "0") || 0);
+    // Dinero a rendir cuentas (fondo provisional) sobre este mantenimiento.
+    const esFondoMant = movEsFondo;
+    if (esFondoMant && !(amount > 0)) { addToast("Para rendir cuentas ingresa el monto entregado", "error"); return; }
+    if (esFondoMant && movResponsable.trim().length < 2) { addToast("Indica quién recibe el dinero a rendir cuentas", "error"); return; }
     const registerId = dashboard.current_cash_register.id;
 
     try {
@@ -8193,11 +8206,15 @@ export function App() {
           receipt_photo_base64: photoBase64,
           amount,
           cash_register_id: registerId,
-          repuestos_usados: conRepuestos ? mantRepUsados.map((l) => ({ repuesto_id: l.repuesto_id, cantidad: l.cantidad })) : undefined
+          repuestos_usados: conRepuestos ? mantRepUsados.map((l) => ({ repuesto_id: l.repuesto_id, cantidad: l.cantidad })) : undefined,
+          es_fondo: esFondoMant || undefined,
+          responsable: esFondoMant ? movResponsable.trim() : undefined
         })
       });
       if (!res.ok) throw new Error(await res.text());
       if (conRepuestos) { setMantRepUsados([]); cargarRepCatalogo(); }
+      setMantRepSel({ id: "", cantidad: "1", buscar: "" });
+      if (esFondoMant) { setMovEsFondo(false); setMovResponsable(""); }
 
       setMaintenanceForm({
         area: "",
@@ -16874,110 +16891,168 @@ export function App() {
                         de caja vía /equipment/maintenance. El Monto del egreso = este
                         "Monto $" del mantenimiento (por eso abajo se ocultan los
                         campos genéricos de Descripción/Monto). */}
-                    {movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && (
-                      <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "14px", marginBottom: 16, display: "grid", gap: 12 }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: "#334155" }}>🔧 Detalle del mantenimiento (se guarda en la hoja de vida de la máquina)</div>
-                        <label style={{ fontSize: 13, fontWeight: 600 }}>Área *
-                          <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-                            <select value={maintenanceForm.area} required style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
-                              onChange={(e) => setMaintenanceForm({ ...maintenanceForm, area: e.target.value, section: "" })}>
-                              <option value="">Seleccione</option>
-                              {maintAreas.map((a) => <option key={a} value={a}>{a}</option>)}
-                            </select>
-                            <button type="button" className="btnSecondary" title="Agregar nueva área" style={{ whiteSpace: "nowrap", padding: "0 10px" }}
-                              onClick={() => setMaintCatModal({ kind: "AREA", nombre: "" })}>+ Nueva</button>
-                          </div>
-                        </label>
-                        <label style={{ fontSize: 13, fontWeight: 600 }}>Sección a reparar *
-                          <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-                            <select value={maintenanceForm.section} required disabled={!maintenanceForm.area} style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
-                              onChange={(e) => setMaintenanceForm({ ...maintenanceForm, section: e.target.value })}>
-                              <option value="">Seleccione</option>
-                              {maintSectionsFor(maintenanceForm.area).map((s) => <option key={s} value={s}>{s}</option>)}
-                            </select>
-                            <button type="button" className="btnSecondary" title="Agregar nueva sección" disabled={!maintenanceForm.area} style={{ whiteSpace: "nowrap", padding: "0 10px" }}
-                              onClick={() => setMaintCatModal({ kind: "SECTION", nombre: "" })}>+ Nueva</button>
-                          </div>
-                        </label>
-                        <label style={{ fontSize: 13, fontWeight: 600 }}>Máquina / Activo <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span>
-                          <input value={maintenanceForm.maquina} placeholder="Ej: Secadora 1, Báscula, Piladora"
-                            onChange={(e) => setMaintenanceForm({ ...maintenanceForm, maquina: e.target.value })}
-                            style={{ display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 }} />
-                        </label>
-                        <label style={{ fontSize: 13, fontWeight: 600 }}>Tipo de trabajo
-                          <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-                            <select value={maintenanceForm.maintenance_type} style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
-                              onChange={(e) => setMaintenanceForm({ ...maintenanceForm, maintenance_type: e.target.value })}>
-                              {maintenanceForm.maintenance_type && !maintTypes.includes(maintenanceForm.maintenance_type) && (
-                                <option value={maintenanceForm.maintenance_type}>{maintTypeLabel(maintenanceForm.maintenance_type)}</option>
-                              )}
-                              {maintTypes.map((t) => <option key={t} value={t}>{maintTypeLabel(t)}</option>)}
-                            </select>
-                            <button type="button" className="btnSecondary" title="Agregar nuevo tipo" style={{ whiteSpace: "nowrap", padding: "0 10px" }}
-                              onClick={() => setMaintCatModal({ kind: "TYPE", nombre: "" })}>+ Nueva</button>
-                          </div>
-                        </label>
-                        <label style={{ fontSize: 13, fontWeight: 600 }}>Repuestos / Detalle del trabajo *
-                          <textarea placeholder={getDescriptionPlaceholder()} value={maintenanceForm.description} required
-                            onChange={(e) => setMaintenanceForm({ ...maintenanceForm, description: e.target.value })}
-                            style={{ display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13, minHeight: 60 }} />
-                        </label>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                          <label style={{ fontSize: 13, fontWeight: 600 }}>Técnico / Taller
-                            <input value={maintenanceForm.provider} onChange={(e) => setMaintenanceForm({ ...maintenanceForm, provider: e.target.value })}
-                              style={{ display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 }} />
-                          </label>
-                          <label style={{ fontSize: 13, fontWeight: 600 }}>Nº de factura
-                            <input value={maintenanceForm.invoice_number} onChange={(e) => setMaintenanceForm({ ...maintenanceForm, invoice_number: e.target.value })}
-                              style={{ display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 }} />
-                          </label>
-                        </div>
-                        {/* 🔩 Repuestos del INVENTARIO usados en este trabajo: salen del stock y su
-                            valor queda en la hoja de vida. No se cobran otra vez en caja (ya se
-                            pagaron al comprarlos). Solo Matriz. */}
-                        {esMatrizActiva && (() => {
-                          const conStock = repCatalogo.filter((r) => r.activo && r.stock > 0);
-                          const valorStock = mantRepUsados.reduce((s2, l) => s2 + l.cantidad * l.costo, 0);
-                          const inp = { padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13, width: "100%" } as const;
-                          return (
-                            <div style={{ background: "#f0fdfa", border: "1px solid #99f6e4", borderRadius: 8, padding: 12, display: "grid", gap: 8 }}>
-                              <div style={{ fontSize: 12, fontWeight: 700, color: "#0f766e" }}>🔩 Repuestos usados del inventario <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span></div>
-                              {conStock.length === 0 && mantRepUsados.length === 0 ? (
-                                <small className="muted">No hay repuestos con stock. Regístralos en Inventario → 🔧 Repuestos o cómpralos con la categoría Repuestos.</small>
-                              ) : (
-                                <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr auto", gap: 8, alignItems: "end" }}>
-                                  <select value={mantRepSel.id} style={inp} onChange={(e) => setMantRepSel({ ...mantRepSel, id: e.target.value })}>
-                                    <option value="">Seleccione el repuesto…</option>
-                                    {conStock.map((r) => <option key={r.id} value={r.id}>{r.nombre}{r.referencia ? ` (${r.referencia})` : ""} · hay {r.stock}</option>)}
+                    {movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && (() => {
+                      const inp = { display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 } as const;
+                      // Bloque 2: selector con buscador y validación de stock en tiempo real.
+                      const q = mantRepSel.buscar.trim().toLowerCase();
+                      const conStock = repCatalogo.filter((r) => r.activo && r.stock > 0 &&
+                        (!q || `${r.nombre} ${r.referencia ?? ""} ${r.equipo ?? ""}`.toLowerCase().includes(q)));
+                      const sel = repCatalogo.find((x) => x.id === mantRepSel.id);
+                      const cant = Number(mantRepSel.cantidad);
+                      const maxSel = sel ? disponibleMant(sel.id) : 0;
+                      const excede = !!sel && cant > maxSel + 1e-9;
+                      const puedeUsar = !!sel && cant > 0 && !excede;
+                      const valorStock = mantRepUsados.reduce((s2, l) => s2 + l.cantidad * l.costo, 0);
+                      const hayCatalogo = repCatalogo.some((r) => r.activo && r.stock > 0) || mantRepUsados.length > 0;
+                      return (
+                        <div className="mantForm">
+                          <div className="mantForm__titulo">🔧 Mantenimiento · se guarda en la hoja de vida de la máquina</div>
+
+                          {/* ── Bloque 1 · Datos de la reparación ── */}
+                          <section className="mantBloque">
+                            <div className="mantBloque__head"><span className="mantBloque__num">1</span> Datos de la reparación</div>
+                            <div className="mantBloque__grid2">
+                              <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>Área *
+                                <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                                  <select value={maintenanceForm.area} required style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
+                                    onChange={(e) => setMaintenanceForm({ ...maintenanceForm, area: e.target.value, section: "" })}>
+                                    <option value="">Seleccione</option>
+                                    {maintAreas.map((a) => <option key={a} value={a}>{a}</option>)}
                                   </select>
-                                  <input type="number" min="0" step="1" value={mantRepSel.cantidad} style={inp} onChange={(e) => setMantRepSel({ ...mantRepSel, cantidad: e.target.value })} />
-                                  <button type="button" className="btnSecondary" onClick={agregarRepuestoMantenimiento}>➕ Usar</button>
+                                  <button type="button" className="btnSecondary" title="Agregar nueva área" style={{ whiteSpace: "nowrap", padding: "0 10px" }}
+                                    onClick={() => setMaintCatModal({ kind: "AREA", nombre: "" })}>+ Nueva</button>
                                 </div>
+                              </label>
+                              <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>Sección a reparar *
+                                <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                                  <select value={maintenanceForm.section} required disabled={!maintenanceForm.area} style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
+                                    onChange={(e) => setMaintenanceForm({ ...maintenanceForm, section: e.target.value })}>
+                                    <option value="">Seleccione</option>
+                                    {maintSectionsFor(maintenanceForm.area).map((s2) => <option key={s2} value={s2}>{s2}</option>)}
+                                  </select>
+                                  <button type="button" className="btnSecondary" title="Agregar nueva sección" disabled={!maintenanceForm.area} style={{ whiteSpace: "nowrap", padding: "0 10px" }}
+                                    onClick={() => setMaintCatModal({ kind: "SECTION", nombre: "" })}>+ Nueva</button>
+                                </div>
+                              </label>
+                              <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>Máquina / Activo <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span>
+                                <input value={maintenanceForm.maquina} placeholder="Ej: Secadora 1, Báscula, Piladora"
+                                  onChange={(e) => setMaintenanceForm({ ...maintenanceForm, maquina: e.target.value })} style={inp} />
+                              </label>
+                              <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>Tipo de trabajo
+                                <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                                  <select value={maintenanceForm.maintenance_type} style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
+                                    onChange={(e) => setMaintenanceForm({ ...maintenanceForm, maintenance_type: e.target.value })}>
+                                    {maintenanceForm.maintenance_type && !maintTypes.includes(maintenanceForm.maintenance_type) && (
+                                      <option value={maintenanceForm.maintenance_type}>{maintTypeLabel(maintenanceForm.maintenance_type)}</option>
+                                    )}
+                                    {maintTypes.map((t) => <option key={t} value={t}>{maintTypeLabel(t)}</option>)}
+                                  </select>
+                                  <button type="button" className="btnSecondary" title="Agregar nuevo tipo" style={{ whiteSpace: "nowrap", padding: "0 10px" }}
+                                    onClick={() => setMaintCatModal({ kind: "TYPE", nombre: "" })}>+ Nueva</button>
+                                </div>
+                              </label>
+                              <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>Técnico / Taller
+                                <input value={maintenanceForm.provider} placeholder="Quién hizo el trabajo" onChange={(e) => setMaintenanceForm({ ...maintenanceForm, provider: e.target.value })} style={inp} />
+                              </label>
+                              <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>Nº de factura
+                                <input value={maintenanceForm.invoice_number} placeholder="Opcional" onChange={(e) => setMaintenanceForm({ ...maintenanceForm, invoice_number: e.target.value })} style={inp} />
+                              </label>
+                            </div>
+                            <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>Detalle del trabajo *
+                              <textarea placeholder={getDescriptionPlaceholder()} value={maintenanceForm.description} required
+                                onChange={(e) => setMaintenanceForm({ ...maintenanceForm, description: e.target.value })}
+                                style={{ ...inp, minHeight: 60 }} />
+                            </label>
+                          </section>
+
+                          {/* ── Bloque 2 · Repuestos del inventario (Matriz) ── */}
+                          {esMatrizActiva && (
+                            <section className="mantBloque mantBloque--rep">
+                              <div className="mantBloque__head"><span className="mantBloque__num">2</span> Repuestos del inventario <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>(opcional · salen de bodega)</span></div>
+                              {!hayCatalogo ? (
+                                <small className="muted">No hay repuestos con stock. Regístralos en Inventario → 🔧 Repuestos o cómpralos con la categoría «Repuestos».</small>
+                              ) : (
+                                <>
+                                  <input type="search" value={mantRepSel.buscar} placeholder="🔎 Buscar repuesto por nombre, medida o máquina…"
+                                    onChange={(e) => {
+                                      const buscar = e.target.value;
+                                      const qq = buscar.trim().toLowerCase();
+                                      const coinc = repCatalogo.filter((r) => r.activo && r.stock > 0 && `${r.nombre} ${r.referencia ?? ""} ${r.equipo ?? ""}`.toLowerCase().includes(qq));
+                                      // Si la búsqueda deja un solo repuesto, se elige solo.
+                                      setMantRepSel({ ...mantRepSel, buscar, id: qq && coinc.length === 1 ? coinc[0].id : (coinc.some((r) => r.id === mantRepSel.id) ? mantRepSel.id : "") });
+                                    }}
+                                    style={{ ...inp, marginTop: 0 }} />
+                                  <div className="mantRepFila">
+                                    <select value={mantRepSel.id} style={{ ...inp, marginTop: 0 }} onChange={(e) => setMantRepSel({ ...mantRepSel, id: e.target.value })}>
+                                      <option value="">{conStock.length ? "Seleccione el repuesto…" : "Ningún repuesto coincide"}</option>
+                                      {conStock.map((r) => <option key={r.id} value={r.id}>{r.nombre}{r.referencia ? ` (${r.referencia})` : ""} · hay {disponibleMant(r.id)}</option>)}
+                                    </select>
+                                    <input type="number" min="1" step="1" value={mantRepSel.cantidad} aria-label="Cantidad"
+                                      onChange={(e) => setMantRepSel({ ...mantRepSel, cantidad: e.target.value })}
+                                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); if (puedeUsar) agregarRepuestoMantenimiento(); } }}
+                                      style={{ ...inp, marginTop: 0, borderColor: excede ? "#dc2626" : "#d1d5db" }} />
+                                    <button type="button" className="primary" disabled={!puedeUsar} onClick={agregarRepuestoMantenimiento}
+                                      title={!sel ? "Elige un repuesto" : excede ? "La cantidad supera el stock" : "Agregar a la lista"}>➕ Usar</button>
+                                  </div>
+                                  {excede && <small style={{ color: "#dc2626", fontWeight: 700 }}>Cantidad supera el stock disponible (Máx: {maxSel})</small>}
+                                  {sel && !excede && <small className="muted">Disponible en bodega: {maxSel} {sel.unidad.toLowerCase()}{sel.equipo ? ` · máquina: ${sel.equipo}` : ""}</small>}
+                                </>
                               )}
                               {mantRepUsados.length > 0 && (
-                                <div style={{ display: "grid", gap: 4 }}>
-                                  {mantRepUsados.map((l, i) => (
-                                    <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, fontSize: 12.5, background: "#fff", border: "1px solid #ccfbf1", borderRadius: 6, padding: "4px 8px" }}>
-                                      <span>{l.cantidad} {l.unidad.toLowerCase()} · {l.etiqueta} <span className="muted">({money(l.cantidad * l.costo)})</span></span>
-                                      <button type="button" onClick={() => setMantRepUsados((x) => x.filter((_, j) => j !== i))} style={{ padding: "1px 7px", background: "#ef4444", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 11 }}>✕</button>
-                                    </div>
-                                  ))}
-                                  <small style={{ color: "#0f766e" }}>Salen del stock · valor {money(valorStock)} en la hoja de vida (no se cobra de nuevo en caja).</small>
+                                <div className="mantCarrito">
+                                  <div className="mantCarrito__head"><span>Repuesto</span><span>Cantidad</span><span>Queda en bodega</span><span /></div>
+                                  {mantRepUsados.map((l) => {
+                                    const queda = disponibleMant(l.repuesto_id);
+                                    const r = repCatalogo.find((x) => x.id === l.repuesto_id);
+                                    const bajo = !!r && r.stock_minimo > 0 && queda <= r.stock_minimo;
+                                    return (
+                                      <div key={l.repuesto_id} className="mantCarrito__fila">
+                                        <span><strong>{l.etiqueta}</strong><small className="muted" style={{ display: "block" }}>{money(l.costo)} c/u · {money(l.cantidad * l.costo)}</small></span>
+                                        <span className="mantCarrito__cant">{l.cantidad} {l.unidad.toLowerCase()}</span>
+                                        <span style={{ color: bajo ? "#c2410c" : "#15803d", fontWeight: 700 }}>{queda}{bajo ? " ⚠️" : ""}</span>
+                                        <button type="button" className="mantCarrito__quitar" onClick={() => setMantRepUsados((x) => x.filter((y) => y.repuesto_id !== l.repuesto_id))}>🗑️ Eliminar</button>
+                                      </div>
+                                    );
+                                  })}
+                                  <div className="mantCarrito__pie">Salen del inventario · valor {money(valorStock)} en la hoja de vida (no se cobra otra vez en caja).</div>
                                 </div>
                               )}
+                            </section>
+                          )}
+
+                          {/* ── Bloque 3 · Monto y comprobante ── */}
+                          <section className="mantBloque">
+                            <div className="mantBloque__head"><span className="mantBloque__num">{esMatrizActiva ? 3 : 2}</span> Monto y comprobante</div>
+                            <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>Monto total de la reparación ${mantRepUsados.length === 0 ? " *" : " (puede ser 0 si solo usaste repuestos)"}
+                              <input type="number" step="0.01" min="0" value={maintenanceForm.amount} required={mantRepUsados.length === 0}
+                                onChange={(e) => setMaintenanceForm({ ...maintenanceForm, amount: e.target.value })}
+                                style={{ ...inp, fontWeight: 700, fontSize: 15 }} />
+                            </label>
+                            <small className="mantAyuda">💡 Ingresa únicamente el dinero en efectivo que sale de Caja (mano de obra, servicio técnico, etc.). Los repuestos seleccionados se descuentan del inventario de bodega.</small>
+                            <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>📸 Foto del comprobante (opcional)
+                              <input type="file" accept="image/jpeg,image/png,image/jpg" style={{ display: "block", marginTop: 4, fontSize: 12 }} />
+                            </label>
+                            <div style={{ background: movEsFondo ? "#fffbeb" : "transparent", border: movEsFondo ? "1px solid #fde68a" : "1px dashed #e5e7eb", borderRadius: 8, padding: "10px 12px" }}>
+                              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", margin: 0 }}>
+                                <input type="checkbox" checked={movEsFondo} onChange={(e) => setMovEsFondo(e.target.checked)} style={{ width: "auto" }} />
+                                ☑️ Rendir cuentas (Fondo provisional)
+                              </label>
+                              {movEsFondo && (
+                                <label style={{ display: "block", marginTop: 10, fontSize: 13, fontWeight: 600 }}>
+                                  <span style={{ display: "block", marginBottom: 4 }}>Empleado / Responsable que recibe</span>
+                                  <input list="responsablesList" value={movResponsable} onChange={(e) => setMovResponsable(e.target.value)} required
+                                    placeholder="Nombre del responsable" style={{ ...inp, marginTop: 0 }} />
+                                  <datalist id="responsablesList">
+                                    {adminStaff.map((s2) => <option key={s2.id} value={s2.worker_name} />)}
+                                  </datalist>
+                                  <small className="muted" style={{ display: "block", marginTop: 4 }}>El monto sale de caja y queda ⏳ Por Liquidar. Luego usa 💸 Registrar Vuelto: el mantenimiento queda con el gasto real.</small>
+                                </label>
+                              )}
                             </div>
-                          );
-                        })()}
-                        <label style={{ fontSize: 13, fontWeight: 600 }}>{mantRepUsados.length > 0 ? "Monto pagado ahora de caja $ (mano de obra, otros · puede ser 0)" : "Monto total de la reparación $ *"}
-                          <input type="number" step="0.01" min="0" value={maintenanceForm.amount} required={mantRepUsados.length === 0}
-                            onChange={(e) => setMaintenanceForm({ ...maintenanceForm, amount: e.target.value })}
-                            style={{ display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13, fontWeight: 700 }} />
-                        </label>
-                        <label style={{ fontSize: 13, fontWeight: 600 }}>📸 Foto del comprobante (opcional)
-                          <input type="file" accept="image/jpeg,image/png,image/jpg" style={{ display: "block", marginTop: 4, fontSize: 12 }} />
-                        </label>
-                      </div>
-                    )}
+                          </section>
+                        </div>
+                      );
+                    })()}
 
                     {/* 🏭 COMPRA DE ACTIVO FIJO: solo con la categoría «Compra de activo
                         fijo». Al guardar, el activo entra a Activos fijos con el monto de
@@ -17015,8 +17090,9 @@ export function App() {
                     })()}
 
                     {/* Dinero a Rendir Cuentas (fondo provisional): egreso que queda
-                        Por Liquidar a nombre de un responsable. */}
-                    {movType === "EXPENSE" && (
+                        Por Liquidar a nombre de un responsable. (En Mantenimiento va dentro
+                        de su bloque «Monto y comprobante».) */}
+                    {movType === "EXPENSE" && movCategory !== "MANTENIMIENTO_EQUIPO" && (
                       <div style={{ background: movEsFondo ? "#fffbeb" : "transparent", border: movEsFondo ? "1px solid #fde68a" : "1px dashed #e5e7eb", borderRadius: 8, padding: "10px 12px", marginBottom: 16 }}>
                         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
                           <input type="checkbox" checked={movEsFondo} onChange={(e) => { setMovEsFondo(e.target.checked); if (e.target.checked) setMovModalidad("CONTADO"); }} style={{ width: "auto" }} />

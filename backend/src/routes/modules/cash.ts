@@ -730,6 +730,10 @@ cashRouter.post("/movements/:id/liquidar", asyncRoute(async (req, res) => {
     // queda en monto_entregado. Un fondo de una sesión anterior (ya cerrada) no
     // se puede cambiar: su vuelto/faltante entra como ajuste en la caja abierta.
     // Gasto real 0 (devolvió todo) tampoco cabe en la línea (monto > 0).
+    // Si el fondo pagó un MANTENIMIENTO, su hoja de vida queda con el gasto real.
+    if (orig.reference_type === "equipment_maintenance" && orig.reference_id) {
+      await client.query("UPDATE equipment_maintenance SET amount = $2 WHERE id = $1", [orig.reference_id, gastoReal]);
+    }
     if (orig.cash_register_id === body.cash_register_id && gastoReal > 0) {
       await client.query(
         `UPDATE cash_movements

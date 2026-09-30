@@ -4414,3 +4414,31 @@ textarea::placeholder {
   /* Títulos de panel un poco más compactos. */
   .content :is(.formPanel, .tablePanel) > h2 { font-size: 16px; }
 }
+
+
+/* ── Caja · Egreso por Mantenimiento en 3 bloques (datos · repuestos · monto) ── */
+.mantForm { display: grid; gap: 12px; margin-bottom: 16px; }
+.mantForm__titulo { font-size: 12px; font-weight: 700; color: #334155; }
+.mantBloque { display: grid; gap: 10px; padding: 14px; border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc; }
+.mantBloque--rep { background: #f0fdfa; border-color: #99f6e4; }
+.mantBloque__head { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 800; color: #0f172a; }
+.mantBloque__num { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 999px; background: #0f766e; color: #fff; font-size: 12px; font-weight: 800; flex: 0 0 auto; }
+.mantBloque__grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.mantRepFila { display: grid; grid-template-columns: minmax(0, 1fr) 90px auto; gap: 8px; align-items: center; }
+.mantRepFila button { white-space: nowrap; }
+.mantCarrito { display: grid; gap: 6px; }
+.mantCarrito__head, .mantCarrito__fila { display: grid; grid-template-columns: minmax(0, 1.6fr) 0.8fr 0.9fr auto; gap: 8px; align-items: center; }
+.mantCarrito__head { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #64748b; padding: 0 10px; }
+.mantCarrito__fila { background: #fff; border: 1px solid #ccfbf1; border-radius: 10px; padding: 8px 10px; font-size: 13px; box-shadow: 0 1px 2px rgba(15, 23, 42, .05); }
+.mantCarrito__cant { font-weight: 800; color: #0f766e; }
+.mantCarrito__quitar { padding: 5px 10px; border-radius: 8px; border: 1px solid #fecaca; background: #fef2f2; color: #b91c1c; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.mantCarrito__quitar:hover { background: #fee2e2; }
+.mantCarrito__pie { font-size: 12px; color: #0f766e; padding: 0 2px; }
+.mantAyuda { display: block; margin-top: -4px; font-size: 12px; color: #1d4ed8; background: #eff6ff; border-radius: 8px; padding: 6px 10px; }
+@media (max-width: 600px) {
+  .mantBloque__grid2 { grid-template-columns: minmax(0, 1fr); }
+  .mantRepFila { grid-template-columns: minmax(0, 1fr) 80px; }
+  .mantRepFila button { grid-column: 1 / -1; }
+  .mantCarrito__head { display: none; }
+  .mantCarrito__fila { grid-template-columns: minmax(0, 1fr) auto; }
+}
