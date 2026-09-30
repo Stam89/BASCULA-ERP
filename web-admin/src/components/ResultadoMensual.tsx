@@ -11,7 +11,11 @@ import { apiFetch, apiGet, apiPatch, apiPost } from "../api";
 
 type Mov = { fecha: string; descripcion: string; monto: number; categoria: string; subcategoria: string | null; categoria_codigo: string; tipo_nomina: string | null };
 type Rubro = { id: string; nombre: string; claves: string[]; categorias: string[]; nomina: string[]; costo_estimado_qq: number; gasto_total: number; costo_real_qq: number; alerta: boolean; detalle: Mov[] };
-type CategoriaCaja = { codigo: string; nombre: string };
+type CategoriaCaja = { codigo: string; nombre: string; activo?: boolean; aplicable_a?: string };
+// Misma comparación de nombres que el backend (minúsculas, sin tildes en vocales).
+const sinTilde = (t: string) => t.toLowerCase().replace(/[áéíóú]/g, (c) => "aeiou"["áéíóú".indexOf(c)]);
+/** Valor del selector «Categoría de Caja» de un rubro nuevo que no debe salir en Caja. */
+const SIN_CATEGORIA = "__SIN_CATEGORIA__";
 const NOMINA_LABEL: Record<string, string> = {
   SUELDO_ADMIN: "Sueldo administrativo", CUADRILLA: "Cuadrilla", PILADOR: "Pilador",
   ESTIBADOR: "Estibador", SECADOR: "Secador", POLVILLO: "Polvillo"
@@ -140,13 +144,30 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
     try {
       const out = await apiPost<{ categoria_creada: string | null }>("/resultado-mensual/rubros", {
         nombre: nuevoRubro.nombre.trim(), costo_estimado_qq: est,
-        categorias: nuevoRubro.categoria ? [nuevoRubro.categoria] : [], crear_categoria: !nuevoRubro.categoria
+        categorias: nuevoRubro.categoria && nuevoRubro.categoria !== SIN_CATEGORIA ? [nuevoRubro.categoria] : [], crear_categoria: !nuevoRubro.categoria
       });
       avisar(out.categoria_creada ? `Rubro creado · categoría «${out.categoria_creada}» agregada a Caja` : "Rubro creado", "success");
       setNuevoRubro({ nombre: "", estimado: "", categoria: "" });
       cargarCategorias(); onCategoriasCaja?.();
       await cargar();
     } catch (e) { avisar(e instanceof Error ? e.message : "No se pudo crear", "error"); }
+  }
+  // Categorías de Caja propias del rubro: las enlazadas y la de su mismo nombre
+  // (la que se creó con el rubro) si no la usa otro rubro. Igual que el backend.
+  const propiasCaja = (r: Rubro) => categoriasCaja.filter((c) => r.categorias.includes(c.codigo)
+    || (sinTilde(c.nombre) === sinTilde(r.nombre) && !(rep?.rubros ?? []).some((o) => o.id !== r.id && o.categorias.includes(c.codigo))));
+  async function mostrarEnCaja(r: Rubro, mostrar: boolean) {
+    const propias = propiasCaja(r);
+    if (!mostrar) {
+      const nombres = propias.map((c) => `«${c.nombre}»`).join(", ");
+      const socios = propias.some((c) => c.aplicable_a === "AMBOS") ? " (tampoco en las cajas de los socios)" : "";
+      if (!window.confirm(`¿Ocultar «${r.nombre}» en Caja?\n\nLa categoría ${nombres} ya no aparecerá en Caja → ➕ Nuevo movimiento${socios}.\nLo ya registrado se conserva y sigue contando en este reporte. Puedes volver a mostrarla cuando quieras.`)) return;
+    }
+    try {
+      await apiPatch(`/resultado-mensual/rubros/${r.id}/caja`, { mostrar });
+      avisar(mostrar ? `«${r.nombre}» vuelve a aparecer en Caja` : `«${r.nombre}» ya no aparece en Caja`, "success");
+      cargarCategorias(); onCategoriasCaja?.();
+    } catch (e) { avisar(e instanceof Error ? e.message : "No se pudo cambiar", "error"); }
   }
   async function desactivarRubro(r: Rubro) {
     if (!window.confirm(`¿Quitar el rubro «${r.nombre}» del reporte? Sus egresos pasarán a «Sin clasificar». La categoría de Caja se conserva (tiene historial).`)) return;
@@ -502,6 +523,8 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
             const enEdicion = editando?.id === r.id;
             const libresCaja = categoriasCaja.filter((c) => !r.categorias.includes(c.codigo));
             const libresNom = Object.entries(NOMINA_LABEL).filter(([t]) => !r.nomina.includes(t));
+            const propias = propiasCaja(r);
+            const enCaja = propias.some((c) => c.activo !== false);
             return (
               <div key={r.id} className="rm-rubro">
                 <div>
@@ -530,7 +553,8 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
                     <span className="rm-label">Categorías de Caja</span>
                     <div style={{ position: "relative", display: "flex", flexWrap: "wrap", alignItems: "center" }}>
                       {r.categorias.map((c) => (
-                        <span key={c} className="rm-badge rm-badge-caja">
+                        <span key={c} className={`rm-badge rm-badge-caja ${categoriasCaja.find((x) => x.codigo === c)?.activo === false ? "is-oculta" : ""}`}
+                          title={categoriasCaja.find((x) => x.codigo === c)?.activo === false ? "Oculta en Caja → ➕ Nuevo movimiento" : undefined}>
                           {nombreCategoria(c)}
                           <button type="button" title="Quitar enlace" onClick={() => cambiarEnlaces(r, { categorias: r.categorias.filter((x) => x !== c) })}>×</button>
                         </span>
@@ -543,7 +567,7 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
                             const otro = rep.rubros.find((x) => x.id !== r.id && x.categorias.includes(c.codigo));
                             return (
                               <button key={c.codigo} type="button" onClick={() => { cerrarMenu(); cambiarEnlaces(r, { categorias: [...r.categorias, c.codigo] }); }}>
-                                {c.nombre}{otro && <small> · hoy en {otro.nombre}</small>}
+                                {c.nombre}{otro && <small> · hoy en {otro.nombre}</small>}{c.activo === false && <small> · oculta en Caja</small>}
                               </button>
                             );
                           })}
@@ -578,6 +602,7 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
                   </div>
                 </div>
 
+                <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
                   {enEdicion ? (
                     <>
@@ -590,6 +615,18 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
                       <button type="button" className="btnSecondary" style={{ fontSize: 12, color: "#dc2626" }} onClick={() => desactivarRubro(r)}>Quitar</button>
                     </>
                   )}
+                </div>
+                {/* ¿Sale en Caja → ➕ Nuevo movimiento? Apagar cuando el rubro se llena desde otro módulo. */}
+                {propias.length > 0 ? (
+                  <label className={`rm-switch ${enCaja ? "is-on" : ""}`}
+                    title={enCaja ? "Su categoría sale en Caja → ➕ Nuevo movimiento" : "Oculto en Caja: se llena desde otro módulo. Lo registrado sigue contando aquí."}>
+                    <input type="checkbox" checked={enCaja} onChange={(e) => mostrarEnCaja(r, e.target.checked)} />
+                    <span className="rm-switch-track" aria-hidden="true"><span className="rm-switch-thumb" /></span>
+                    <span className="rm-switch-text">{enCaja ? "Aparece en Caja" : "Oculto en Caja"}</span>
+                  </label>
+                ) : (
+                  <span className="rm-switch-nota">{r.nomina.length ? "Sale de Nómina · no aparece en Caja" : "No aparece en Caja"}</span>
+                )}
                 </div>
               </div>
             );
@@ -608,6 +645,7 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
                   <label style={{ margin: 0 }}><span>Categoría de Caja</span>
                     <select value={nuevoRubro.categoria} onChange={(e) => setNuevoRubro({ ...nuevoRubro, categoria: e.target.value })}>
                       <option value="">Crear una nueva con el mismo nombre</option>
+                      <option value={SIN_CATEGORIA}>Ninguna · no aparece en Caja (sale de Nómina u otro módulo)</option>
                       {categoriasCaja.map((c) => <option key={c.codigo} value={c.codigo}>Usar existente: {c.nombre}</option>)}
                     </select>
                   </label>

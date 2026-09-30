@@ -1,6 +1,6 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-09-29
+Actualizado: 2026-09-30
 
 ## Inicio rapido
 
@@ -48,6 +48,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Caja sin panel lateral + rubros «Aparece en Caja» (2026-09-30)
+- Caja → «➕ Nuevo movimiento» ya no muestra «Movimientos de la sesión» al lado (el formulario usa todo el ancho); la tabla queda solo en «📋 Ver movimientos» (`cajaSubTab === "resumen"`).
+- Costos Operativos → Mapeo de rubros: interruptor por rubro «Aparece en Caja / Oculto en Caja». PATCH `/resultado-mensual/rubros/:id/caja` `{ mostrar }` pone `cash_categories.activo` de las categorias PROPIAS del rubro (enlazadas + la de su mismo nombre si no es de otro rubro; nunca PAGO_MANO_OBRA ni no-operativas). Oculta = no sale en el select de Caja (filtra `c.activo`); lo registrado sigue contando en el reporte (el calculo no mira `activo`). Rubros solo de nomina muestran «Sale de Nómina · no aparece en Caja». `/categorias-caja` ahora devuelve tambien las ocultas (`activo`, `aplicable_a`); badge tachado «oculta en Caja».
+- «Nuevo rubro» → Categoría de Caja: opcion «Ninguna · no aparece en Caja» (crear_categoria false). ResultadoMensual ahora recibe `onCategoriasCaja` (recarga las categorias de Caja).
 
 ### Repuestos de planta conectados con Caja y Mantenimiento (2026-09-30)
 - Caja → Nuevo movimiento → categoria «Repuestos» (Matriz): lista opcional de repuestos (del catalogo o «➕ Nuevo repuesto…») con cantidad y costo; el Monto = total de la lista. Guarda via POST `/repuestos/compra` (lote): CONTADO = un egreso REPUESTOS (reference_type 'repuesto_compra', supplier_id) + ENTRADAS con cash_movement_id; CREDITO = `accounts_payable` gasto_credito (categoria REPUESTOS) + ENTRADAS con `payable_id` (migracion 20261056). Anular el egreso o el credito retira del stock (`reversarEntradaRepuestosDeCaja` / `...DeCredito`). Sin lista = egreso normal como antes.

@@ -50,16 +50,44 @@ resultadoMensualRouter.get("/rubros", asyncRoute(async (req, res) => {
 }));
 
 // Categorías de EGRESO de la Matriz que pueden ser costo operativo (para enlazar).
+// Incluye las ocultas en Caja (activo = false): siguen siendo del rubro.
 resultadoMensualRouter.get("/categorias-caja", asyncRoute(async (req, res) => {
   await exigirMatriz(req as AuthenticatedRequest);
   const r = await pool.query(
-    `SELECT codigo, nombre FROM cash_categories
-      WHERE activo AND tipo = 'EGRESO' AND aplicable_a IN ('MATRIZ', 'AMBOS')
+    `SELECT codigo, nombre, activo, aplicable_a FROM cash_categories
+      WHERE tipo = 'EGRESO' AND aplicable_a IN ('MATRIZ', 'AMBOS')
         AND NOT (codigo = ANY ($1::text[]))
       ORDER BY nombre`,
     [[...CATEGORIAS_NO_OPERATIVAS, ...CATEGORIAS_PROTEGIDAS]]
   );
   res.json(r.rows);
+}));
+
+// Mostrar u ocultar un rubro en Caja → ➕ Nuevo movimiento. Para rubros que se
+// llenan desde otro módulo (Nómina, etc.): su categoría propia se desactiva y deja
+// de salir en el formulario de Caja. No borra nada: lo registrado se conserva y
+// sigue contando en el reporte. Categorías propias = las enlazadas al rubro y la
+// que tiene su mismo nombre (la que se crea con el rubro) si no es de otro rubro.
+resultadoMensualRouter.patch("/rubros/:id/caja", asyncRoute(async (req, res) => {
+  await exigirMatriz(req as AuthenticatedRequest);
+  const body = z.object({ mostrar: z.boolean() }).parse(req.body);
+  const out = await inTransaction(async (client) => {
+    const rubro = await client.query("SELECT id, nombre, categorias FROM costo_rubros WHERE id = $1", [req.params.id]);
+    if (!rubro.rowCount) throw new ApiError(404, "Rubro no encontrado");
+    const cats = await client.query(
+      `UPDATE cash_categories SET activo = $3
+        WHERE tipo = 'EGRESO' AND aplicable_a IN ('MATRIZ', 'AMBOS')
+          AND NOT (codigo = ANY ($4::text[]))
+          AND (codigo = ANY ($1::text[])
+               OR (translate(lower(nombre), 'áéíóú', 'aeiou') = translate(lower($2), 'áéíóú', 'aeiou')
+                   AND NOT EXISTS (SELECT 1 FROM costo_rubros o WHERE o.id <> $5 AND o.activo AND cash_categories.codigo = ANY (o.categorias))))
+        RETURNING codigo, nombre`,
+      [rubro.rows[0].categorias ?? [], rubro.rows[0].nombre, body.mostrar, [...CATEGORIAS_NO_OPERATIVAS, ...CATEGORIAS_PROTEGIDAS], rubro.rows[0].id]
+    );
+    if (!cats.rowCount) throw new ApiError(400, "Este rubro no tiene una categoría propia en Caja (se llena desde Nómina u otro módulo).");
+    return { ok: true, mostrar: body.mostrar, categorias: cats.rows.map((c) => c.nombre as string) };
+  });
+  res.json(out);
 }));
 
 resultadoMensualRouter.post("/rubros", asyncRoute(async (req, res) => {

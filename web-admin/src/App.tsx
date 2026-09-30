@@ -13226,7 +13226,7 @@ export function App() {
             {/* 📊 Resultado mensual de CEYRO: costo real vs estimado por rubro,
                 ingresos adicionales, gastos financieros y total neto. */}
             {costosView === "resultado" && esMatrizActiva && (
-              <ResultadoMensual puedeEditar={isAdmin} avisar={(msg, tipo) => addToast(msg, tipo)} calcularGana={calcularGanaMes} />
+              <ResultadoMensual puedeEditar={isAdmin} avisar={(msg, tipo) => addToast(msg, tipo)} calcularGana={calcularGanaMes} onCategoriasCaja={() => { reloadCashCategories(); }} />
             )}
             {costosView === "diario" && (
             <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
@@ -16628,12 +16628,12 @@ export function App() {
                   );
                 })()}
 
-                {/* Área de trabajo: con «Nuevo movimiento» el formulario va a la
-                    izquierda y los movimientos de la sesión a la derecha. */}
-                <div className={`cj-work ${cajaSubTab === "movimiento" ? "cj-work--split" : ""}`}>
+                {/* Área de trabajo: «Nuevo movimiento» usa todo el ancho; los
+                    movimientos de la sesión se ven en «📋 Ver movimientos». */}
+                <div className="cj-work">
 
                 {/* ── Movimientos ── */}
-                {(cajaSubTab === "resumen" || cajaSubTab === "movimiento") && (
+                {cajaSubTab === "resumen" && (
                   <div className="cajaMovimientosPanel cj-card cj-col-list" style={{ padding: 0, overflow: "hidden" }}>
                     <div className="cj-panel-head">
                       <span>📋 Movimientos de la sesión</span>
