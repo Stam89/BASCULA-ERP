@@ -4447,6 +4447,21 @@ textarea::placeholder {
 .mantCarrito__quitar { padding: 5px 10px; border-radius: 8px; border: 1px solid #fecaca; background: #fef2f2; color: #b91c1c; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
 .mantCarrito__quitar:hover { background: #fee2e2; }
 .mantCarrito__pie { font-size: 12px; color: #0f766e; padding: 0 2px; }
+/* Compra de repuestos dentro del mantenimiento (🔧 se usa ya / 📦 al inventario). */
+.mantCompra { grid-column: 1 / -1; display: grid; gap: 8px; padding: 12px; border: 1px solid #fed7aa; border-radius: 10px; background: #fff7ed; }
+.mantCompra__destino { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.mantCompra__destino button { padding: 9px 10px; border-radius: 10px; border: 1.5px solid #e2e8f0; background: #fff; color: #334155; font-size: 12.5px; font-weight: 700; cursor: pointer; text-align: center; }
+.mantCompra__destino button.is-on { border-color: #ea580c; background: #ffedd5; color: #9a3412; }
+.mantCompra__destino button.is-on.is-inv { border-color: #0f766e; background: #ccfbf1; color: #115e59; }
+.mantCompra__fila { display: grid; grid-template-columns: minmax(0, 1fr) 80px 110px auto; gap: 8px; align-items: center; }
+.mantCompra__fila button { white-space: nowrap; }
+.mantDestino { font-size: 12px; font-weight: 700; border-radius: 999px; padding: 2px 8px; justify-self: start; }
+.mantDestino--uso { background: #ffedd5; color: #9a3412; }
+.mantDestino--inv { background: #ccfbf1; color: #115e59; }
+.mantResumen { display: grid; gap: 4px; background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+.mantResumen > div { display: flex; justify-content: space-between; gap: 10px; }
+.mantResumen__sub { border-top: 1px dashed #cbd5e1; padding-top: 4px; font-weight: 700; }
+.mantResumen__total { border-top: 1px solid #94a3b8; padding-top: 6px; font-size: 14px; font-weight: 800; color: #0f172a; }
 .mantAyuda { display: block; margin-top: -4px; font-size: 12px; color: #1d4ed8; background: #eff6ff; border-radius: 8px; padding: 6px 10px; }
 @media (max-width: 600px) {
   .mantBloque__grid2 { grid-template-columns: minmax(0, 1fr); }
@@ -4454,4 +4469,7 @@ textarea::placeholder {
   .mantRepFila button { grid-column: 1 / -1; }
   .mantCarrito__head { display: none; }
   .mantCarrito__fila { grid-template-columns: minmax(0, 1fr) auto; }
+  .mantCompra__destino { grid-template-columns: minmax(0, 1fr); }
+  .mantCompra__fila { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .mantCompra__fila > input:first-child, .mantCompra__fila button { grid-column: 1 / -1; }
 }

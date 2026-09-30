@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Mantenimiento de Caja: «🛒 Compra de repuestos» (usar ya / al inventario) (2026-09-30)
+- En el formulario de Mantenimiento (Caja → categoria MANTENIMIENTO_EQUIPO) el campo «Máquina / Activo» se reemplazo por «🛒 Compra de repuestos» (No / Sí). Con Sí se abre una lista: cada repuesto es «🔧 Se usa ya en esta reparación» o «📦 Se guarda de repuesto (inventario)» (este ultimo solo Matriz; datalist del catalogo, nuevo si no existe).
+- Se QUITO del formulario el bloque «Repuestos del inventario» (usar stock desde Caja). Usar stock = Inventario → 🔧 Repuestos → «Usar». El backend aun acepta `repuestos_usados` (compatibilidad).
+- Bloque 2 «Monto y comprobante»: el input es la mano de obra; resumen mano de obra + usados ya = costo de la reparacion; + al inventario = total que sale de Caja. Payload: `amount` = mano de obra + usados ya (igual que antes: lo pagado por la reparacion) + nuevo `repuestos_comprados[{repuesto_id?, nombre, cantidad, costo_unitario, destino USO|INVENTARIO}]`.
+- Backend `/equipment/maintenance`: USO → `parts_cost` (y `labor_cost` = amount − parts_cost), detalle en `equipment_maintenance.repuestos_comprados` (migracion 20261059), NO entran a bodega. INVENTARIO → `registrarCompraRepuestos` (extraida de `/repuestos/compra`, misma logica): egreso REPUESTOS aparte 'repuesto_compra' + ENTRADAS; anularlo en Caja revierte el stock. Solo inventario sin reparacion → 400 «usa la categoria Repuestos». `/liquidar` recalcula labor_cost. Historial/CSV muestran «🛒 Comprados».
+
 ### Anular en Caja un pago de Nomina lo reabre en Nomina (2026-09-30)
 - `services/nomina-reabrir.ts` → `reabrirPagoNomina(client, m)`, llamado en POST `/cash/movements/:id/reverse` (devuelve `nomina_reabierta`, texto que sale en el aviso). Los pagos de nomina no guardan el id del egreso: se enlazan porque se marcan pagados en la MISMA transaccion (paid_at/applied_at = created_at del egreso, al microsegundo, misma caja). Comparar SIEMPRE en SQL (un Date de JS pierde microsegundos).
 - worker_payments → PENDING (+ worker_advances aplicados en ese pago → PENDING). cuadrilla_entries (cuadrilla por persona y bajada de carro) → no pagadas; lo descontado de cuadrilla_advances (bruto − neto) vuelve a su saldo. admin_salary_payments → `anulado_at` (migracion 20261058; el sueldo vuelve a «por pagar» y sale del historial). worker_advances (anticipo) → CANCELLED; si ya estaba APPLIED se bloquea con 409 («anula primero ese pago»).

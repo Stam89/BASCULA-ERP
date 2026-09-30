@@ -735,7 +735,10 @@ cashRouter.post("/movements/:id/liquidar", asyncRoute(async (req, res) => {
     // Gasto real 0 (devolvió todo) tampoco cabe en la línea (monto > 0).
     // Si el fondo pagó un MANTENIMIENTO, su hoja de vida queda con el gasto real.
     if (orig.reference_type === "equipment_maintenance" && orig.reference_id) {
-      await client.query("UPDATE equipment_maintenance SET amount = $2 WHERE id = $1", [orig.reference_id, gastoReal]);
+      await client.query(
+        "UPDATE equipment_maintenance SET amount = $2, labor_cost = CASE WHEN COALESCE(parts_cost, 0) > 0 THEN GREATEST($2 - parts_cost, 0) ELSE labor_cost END WHERE id = $1",
+        [orig.reference_id, gastoReal]
+      );
     }
     if (orig.cash_register_id === body.cash_register_id && gastoReal > 0) {
       await client.query(

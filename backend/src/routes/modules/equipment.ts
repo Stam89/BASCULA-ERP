@@ -9,7 +9,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { signUploadUrl } from "../../auth/upload-sign.js";
-import { consumirRepuestosEnMantenimiento, exigirMatriz } from "./repuestos.js";
+import { consumirRepuestosEnMantenimiento, exigirMatriz, registrarCompraRepuestos } from "./repuestos.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 // Agrega la URL firmada (válida 1 hora) para ver la foto del recibo en un
@@ -432,13 +432,39 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
     // Dinero entregado para rendir cuentas (fondo provisional): el egreso queda
     // «Por Liquidar» y luego se registra el vuelto (💸 Registrar Vuelto).
     es_fondo: z.boolean().optional(),
-    responsable: z.string().trim().max(120).optional()
+    responsable: z.string().trim().max(120).optional(),
+    // Repuestos COMPRADOS para esta reparación:
+    //  · USO: se instalan ya → son costo de la reparación (van dentro de amount),
+    //    quedan detallados en la hoja de vida y NO entran a bodega.
+    //  · INVENTARIO: se guardan de repuesto → entran al stock como compra de
+    //    repuestos (egreso aparte, categoría REPUESTOS). Solo la Matriz.
+    repuestos_comprados: z.array(z.object({
+      repuesto_id: z.string().uuid().optional(),
+      nombre: z.string().trim().min(2).max(120),
+      cantidad: z.number().positive(),
+      costo_unitario: z.number().nonnegative(),
+      destino: z.enum(["USO", "INVENTARIO"])
+    })).max(40).optional()
   }).parse(req.body);
   const esFondo = body.es_fondo === true;
+  const comprados = body.repuestos_comprados ?? [];
+  const compradosUso = comprados.filter((l) => l.destino === "USO");
+  const compradosInv = comprados.filter((l) => l.destino === "INVENTARIO");
+  const totalUso = round2(compradosUso.reduce((s, l) => s + l.cantidad * l.costo_unitario, 0));
+  if (totalUso > round2(body.amount) + 0.01) throw new ApiError(400, "El monto pagado no cubre los repuestos que se usaron.");
+  if (compradosInv.length) {
+    await exigirMatriz(req);
+    if (!body.cash_register_id) throw new ApiError(400, "Los repuestos para el inventario se pagan con la caja abierta.");
+    if (compradosInv.some((l) => !(l.costo_unitario > 0))) throw new ApiError(400, "Indica el costo de los repuestos que van al inventario.");
+  }
   if (esFondo && !(body.amount > 0)) throw new ApiError(400, "Un fondo a rendir cuentas necesita el monto entregado.");
   if (esFondo && (body.responsable ?? "").trim().length < 2) throw new ApiError(400, "Indica quién recibe el dinero a rendir cuentas.");
   const conRepuestos = (body.repuestos_usados?.length ?? 0) > 0;
-  if (!(body.amount > 0) && !conRepuestos) throw new ApiError(400, "Ingresa el monto pagado o los repuestos usados del inventario.");
+  if (!(body.amount > 0) && !conRepuestos) {
+    throw new ApiError(400, compradosInv.length
+      ? "Si solo compraste repuestos para guardar (sin reparación), regístralos con la categoría «Repuestos»."
+      : "Ingresa el monto pagado o los repuestos usados del inventario.");
+  }
   if (conRepuestos) await exigirMatriz(req);
 
   // Aislamiento de caja (igual que /:id/maintenance): la caja debe ser del
@@ -487,16 +513,41 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
       );
       maintenance.rows[0] = upd.rows[0];
     }
+    // Repuestos comprados: detalle en la hoja de vida y costo separado
+    // (parts_cost = los usados ya; labor_cost = el resto de lo pagado).
+    const detalle = (ls: typeof comprados) => ls
+      .map((l) => `${Number.isInteger(l.cantidad) ? l.cantidad : l.cantidad.toFixed(2)} ${l.nombre.toUpperCase()} $${round2(l.cantidad * l.costo_unitario).toFixed(2)}`).join(", ");
+    if (comprados.length) {
+      const texto = [compradosUso.length ? `Usados ya: ${detalle(compradosUso)}` : "", compradosInv.length ? `A bodega: ${detalle(compradosInv)}` : ""]
+        .filter(Boolean).join(" · ");
+      const upd = await client.query(
+        "UPDATE equipment_maintenance SET repuestos_comprados = $2, parts_cost = $3, labor_cost = $4 WHERE id = $1 RETURNING *",
+        [maintenance.rows[0].id, texto, totalUso, round2(Math.max(0, body.amount - totalUso))]
+      );
+      maintenance.rows[0] = upd.rows[0];
+    }
+    // Repuestos para el inventario: compra de repuestos aparte (entran al stock).
+    let compraInventario: { total: number; cash_movement_id: string | null } | null = null;
+    if (compradosInv.length) {
+      compraInventario = await registrarCompraRepuestos(client, {
+        items: compradosInv.map((l) => (l.repuesto_id
+          ? { repuesto_id: l.repuesto_id, cantidad: l.cantidad, costo_unitario: l.costo_unitario }
+          : { nuevo: { nombre: l.nombre, referencia: null, unidad: "UNIDAD", stock_minimo: 0 }, cantidad: l.cantidad, costo_unitario: l.costo_unitario })),
+        cashRegisterId: body.cash_register_id!, accionistaId, userId: (req as AuthenticatedRequest).user?.id ?? body.created_by ?? null,
+        proveedor: null, aCredito: false, descripcion: `para bodega · mant. ${body.area}/${body.section}`
+      });
+    }
     if (body.cash_register_id && body.amount > 0) {
       await client.query(
         `INSERT INTO cash_movements
          (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by, es_fondo, fondo_estado, responsable)
          VALUES ($1, 'EXPENSE', 'MANTENIMIENTO_EQUIPO', 'equipment_maintenance', $2, $3, $4, $5, $6, $7, $8)`,
-        [body.cash_register_id, maintenance.rows[0].id, round2(body.amount), `Mantenimiento ${body.area}/${body.section}: ${body.description}`, body.created_by || null,
+        [body.cash_register_id, maintenance.rows[0].id, round2(body.amount),
+         `Mantenimiento ${body.area}/${body.section}: ${body.description}${compradosUso.length ? ` · repuestos: ${detalle(compradosUso)}` : ""}`.slice(0, 500), body.created_by || null,
          esFondo, esFondo ? "POR_LIQUIDAR" : null, esFondo ? body.responsable!.trim() : null]
       );
     }
-    return maintenance.rows[0];
+    return { ...maintenance.rows[0], compra_inventario: compraInventario };
   });
 
   res.status(201).json(withSignedPhoto(result));

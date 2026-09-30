@@ -250,7 +250,7 @@ repuestosRouter.post("/:id/ajuste", asyncRoute(async (req, res) => {
 // Cuenta por Pagar al proveedor (no toca la caja). En ambos casos cada pieza
 // entra al stock enlazada al egreso / a la CxP (si se anula, se revierte).
 // ════════════════════════════════════════════════════════════════════════════
-const itemCompraSchema = z.object({
+export const itemCompraSchema = z.object({
   repuesto_id: z.string().uuid().optional(),
   // Repuesto nuevo creado en la misma compra (si no existe en el catálogo).
   nuevo: z.object({
@@ -287,7 +287,31 @@ repuestosRouter.post("/compra", asyncRoute(async (req, res) => {
     const proveedor = await resolverProveedor(client, body.supplier_id, body.proveedor_nombre);
     const aCredito = body.modalidad_pago === "CREDITO";
     if (aCredito && !proveedor) throw new ApiError(400, "Para comprar a crédito elige o escribe el proveedor.");
+    return registrarCompraRepuestos(client, {
+      items: body.items, cashRegisterId: body.cash_register_id, accionistaId, userId, proveedor, aCredito,
+      dueDate: body.due_date ?? null, descripcion: body.descripcion ?? null
+    });
+  });
+  res.status(201).json(out);
+}));
 
+/**
+ * Compra de repuestos que ENTRAN al inventario (lote). Contado = un egreso de
+ * caja categoría REPUESTOS; crédito = Cuenta por Pagar al proveedor. Cada pieza
+ * entra al stock enlazada al egreso / CxP (si se anula, se revierte). La caja y
+ * el proveedor ya vienen validados. La usan «Compra» y el mantenimiento de Caja
+ * (repuestos comprados «para el inventario»).
+ */
+export async function registrarCompraRepuestos(
+  client: PoolClient,
+  o: {
+    items: Array<z.infer<typeof itemCompraSchema>>; cashRegisterId: string; accionistaId: string | null; userId: string | null;
+    proveedor: { id: string; name: string } | null; aCredito: boolean; dueDate?: string | null; descripcion?: string | null;
+  }
+) {
+  const { proveedor, aCredito, userId, accionistaId } = o;
+  const body = { items: o.items, cash_register_id: o.cashRegisterId, due_date: o.dueDate ?? undefined, descripcion: o.descripcion ?? undefined };
+  {
     // Resolver cada línea (crear los repuestos nuevos) y el total.
     const lineas: Array<{ id: string; nombre: string; unidad: string; referencia: string | null; cantidad: number; costo: number }> = [];
     for (const it of body.items) {
@@ -343,9 +367,8 @@ repuestosRouter.post("/compra", asyncRoute(async (req, res) => {
       stocks.push({ nombre: l.nombre, stock });
     }
     return { total, credito: aCredito, cash_movement_id: cashMovementId, payable_id: payableId, proveedor: proveedor?.name ?? null, stocks };
-  });
-  res.status(201).json(out);
-}));
+  }
+}
 
 const n2 = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2));
 
