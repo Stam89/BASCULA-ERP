@@ -79,7 +79,9 @@ export function RepuestosAlertaDashboard({ repuestos, onIr }: { repuestos: Repue
 }
 
 type Accion =
-  | { tipo: "compra"; r: Repuesto; cantidad: string; costo: string; pagarCaja: boolean; proveedor: string; nota: string }
+  // Pago: CAJA (egreso «Repuestos» en la caja abierta) · CREDITO (Cuenta por
+  // Pagar al proveedor, no toca la caja) · ENTRADA (solo suma al stock: ya pagado).
+  | { tipo: "compra"; r: Repuesto; cantidad: string; costo: string; pago: "CAJA" | "CREDITO" | "ENTRADA"; proveedor: string; nota: string; vence: string }
   | { tipo: "uso"; r: Repuesto; cantidad: string; equipo: string; motivo: string }
   | { tipo: "conteo"; r: Repuesto; real: string; motivo: string };
 
@@ -156,12 +158,24 @@ export function RepuestosModule({ cajaAbiertaId, puedeEditar, avisar, onCambio }
       if (a.tipo === "compra") {
         const cantidad = Number(a.cantidad), costo = Number(a.costo);
         if (!(cantidad > 0)) throw new Error("Ingresa la cantidad comprada");
-        if (a.pagarCaja && !cajaAbiertaId) throw new Error("No hay caja abierta: desmarca «Pagar con la caja» o abre la caja.");
-        const r = await apiPost<{ stock: number; total: number }>(`/repuestos/${a.r.id}/entrada`, {
-          cantidad, costo_unitario: costo || 0, cash_register_id: a.pagarCaja ? cajaAbiertaId ?? undefined : undefined,
-          proveedor: a.proveedor.trim() || undefined, nota: a.nota.trim() || undefined
-        });
-        avisar(`Compra registrada · ahora hay ${n2(r.stock)} ${a.r.unidad}${a.pagarCaja ? ` · egreso ${money(r.total)} en Caja` : ""}`, "success");
+        if (a.pago !== "ENTRADA") {
+          // Caja o crédito: una compra registrada en la sesión de caja abierta.
+          if (!cajaAbiertaId) throw new Error("No hay caja abierta: abre la caja o elige «Solo entrada al stock».");
+          if (!(costo > 0)) throw new Error("Ingresa el costo unitario");
+          if (a.pago === "CREDITO" && a.proveedor.trim().length < 2) throw new Error("Para comprar a crédito escribe el proveedor");
+          const r = await apiPost<{ total: number; stocks: Array<{ stock: number }> }>("/repuestos/compra", {
+            cash_register_id: cajaAbiertaId, modalidad_pago: a.pago === "CREDITO" ? "CREDITO" : "CONTADO",
+            proveedor_nombre: a.proveedor.trim() || undefined, due_date: a.pago === "CREDITO" && a.vence ? a.vence : undefined,
+            descripcion: a.nota.trim() || undefined,
+            items: [{ repuesto_id: a.r.id, cantidad, costo_unitario: costo }]
+          });
+          avisar(`Compra registrada · ahora hay ${n2(r.stocks[0]?.stock ?? 0)} ${a.r.unidad} · ${a.pago === "CREDITO" ? `Cuenta por Pagar ${money(r.total)} (la caja no cambia)` : `egreso ${money(r.total)} en Caja`}`, "success");
+        } else {
+          const r = await apiPost<{ stock: number; total: number }>(`/repuestos/${a.r.id}/entrada`, {
+            cantidad, costo_unitario: costo || 0, proveedor: a.proveedor.trim() || undefined, nota: a.nota.trim() || undefined
+          });
+          avisar(`Entrada registrada · ahora hay ${n2(r.stock)} ${a.r.unidad}`, "success");
+        }
       } else if (a.tipo === "uso") {
         const cantidad = Number(a.cantidad);
         if (!(cantidad > 0)) throw new Error("Ingresa cuántos se usaron");
@@ -199,7 +213,8 @@ export function RepuestosModule({ cajaAbiertaId, puedeEditar, avisar, onCambio }
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 12 }}>
         <div>
           <h2 style={{ marginBottom: 2 }}>🔧 Repuestos de la planta</h2>
-          <p className="muted" style={{ margin: 0 }}>Piezas que se desgastan: registra lo que compras y lo que cambias. Avisa cuando algo esté por terminarse.</p>
+          <p className="muted" style={{ margin: 0 }}>Piezas que se desgastan: registra lo que compras y lo que cambias. Avisa cuando algo esté por terminarse.
+            También entran solas al comprarlas en <strong>Caja → Nuevo movimiento → Repuestos</strong> y salen al usarlas en un <strong>Mantenimiento</strong>.</p>
         </div>
         {puedeEditar && <button type="button" className="primary" onClick={abrirNuevo}>➕ Nuevo repuesto</button>}
       </div>
@@ -239,7 +254,7 @@ export function RepuestosModule({ cajaAbiertaId, puedeEditar, avisar, onCambio }
                     <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
                       {puedeEditar && <>
                         <button type="button" className="btnSecondary" style={{ fontSize: 12, padding: "4px 9px" }} title="Registrar compra (entrada)"
-                          onClick={() => setAccion({ tipo: "compra", r, cantidad: "", costo: r.costo_unitario ? String(r.costo_unitario) : "", pagarCaja: !!cajaAbiertaId, proveedor: "", nota: "" })}>➕ Compra</button>{" "}
+                          onClick={() => setAccion({ tipo: "compra", r, cantidad: "", costo: r.costo_unitario ? String(r.costo_unitario) : "", pago: cajaAbiertaId ? "CAJA" : "ENTRADA", proveedor: "", nota: "", vence: "" })}>➕ Compra</button>{" "}
                         <button type="button" className="btnSecondary" style={{ fontSize: 12, padding: "4px 9px" }} title="Registrar uso / cambio en una máquina" disabled={r.stock <= 0}
                           onClick={() => setAccion({ tipo: "uso", r, cantidad: "1", equipo: r.equipment_id ?? "", motivo: "" })}>➖ Usar</button>{" "}
                         <button type="button" className="btnGhost" style={{ fontSize: 12, padding: "4px 7px" }} title="Conteo físico" onClick={() => setAccion({ tipo: "conteo", r, real: String(r.stock), motivo: "" })}>📋</button>
@@ -305,11 +320,27 @@ export function RepuestosModule({ cajaAbiertaId, puedeEditar, avisar, onCambio }
                   <label><span>Costo unitario $</span><input style={campo} type="number" min="0" step="0.01" value={accion.costo} onChange={(e) => setAccion({ ...accion, costo: e.target.value })} /></label>
                   <label style={{ gridColumn: "1 / -1" }}><span>Proveedor</span><input style={campo} value={accion.proveedor} placeholder="Opcional" onChange={(e) => setAccion({ ...accion, proveedor: e.target.value })} /></label>
                 </div>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, margin: 0, fontSize: 13 }}>
-                  <input type="checkbox" checked={accion.pagarCaja} disabled={!cajaAbiertaId} onChange={(e) => setAccion({ ...accion, pagarCaja: e.target.checked })} />
-                  Pagar con la caja abierta (egreso «Repuestos» por {money(total)})
-                </label>
-                {!cajaAbiertaId && <small className="muted">No hay caja abierta: se registra solo la entrada al stock (ya pagada o a crédito).</small>}
+                <div style={{ display: "grid", gap: 6 }}>
+                  {([
+                    ["CAJA", "💵 Pagar con la caja abierta", `Egreso «Repuestos» por ${money(total)} en Caja`],
+                    ["CREDITO", "💳 A crédito", "Cuenta por Pagar al proveedor · la caja no cambia"],
+                    ["ENTRADA", "📥 Solo entrada al stock", "Ya estaba pagado (no toca Caja ni Por Pagar)"]
+                  ] as const).map(([valor, titulo, sub]) => {
+                    const bloqueado = valor !== "ENTRADA" && !cajaAbiertaId;
+                    return (
+                      <label key={valor} style={{ display: "flex", alignItems: "flex-start", gap: 8, margin: 0, padding: "7px 10px", borderRadius: 8, fontSize: 13,
+                        border: `1.5px solid ${accion.pago === valor ? "#0f766e" : "#e5e7eb"}`, background: accion.pago === valor ? "#f0fdfa" : "#fff",
+                        opacity: bloqueado ? 0.5 : 1, cursor: bloqueado ? "not-allowed" : "pointer" }}>
+                        <input type="radio" checked={accion.pago === valor} disabled={bloqueado} onChange={() => setAccion({ ...accion, pago: valor })} style={{ width: "auto", marginTop: 2 }} />
+                        <span><strong>{titulo}</strong><small className="muted" style={{ display: "block", fontSize: 11 }}>{sub}</small></span>
+                      </label>
+                    );
+                  })}
+                </div>
+                {accion.pago === "CREDITO" && (
+                  <label><span>Vence el (opcional)</span><input style={campo} type="date" value={accion.vence} onChange={(e) => setAccion({ ...accion, vence: e.target.value })} /></label>
+                )}
+                {!cajaAbiertaId && <small className="muted">No hay caja abierta: solo se puede registrar la entrada al stock.</small>}
               </>);
             })()}
             {accion.tipo === "uso" && (

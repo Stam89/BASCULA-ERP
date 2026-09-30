@@ -9,6 +9,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { signUploadUrl } from "../../auth/upload-sign.js";
+import { consumirRepuestosEnMantenimiento, exigirMatriz } from "./repuestos.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 // Agrega la URL firmada (válida 1 hora) para ver la foto del recibo en un
@@ -420,11 +421,18 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
     provider: z.string().optional(),
     invoice_number: z.string().optional(),
     receipt_photo_base64: z.string().optional(),
-    amount: z.number().positive(),
+    // Lo PAGADO ahora de caja (mano de obra, compras del momento). Puede ser 0
+    // si solo se usaron repuestos del inventario (ya pagados al comprarlos).
+    amount: z.number().nonnegative(),
     cash_register_id: z.string().uuid().optional(),
     created_by: z.string().uuid().optional(),
-    maquina: z.string().optional()
+    maquina: z.string().optional(),
+    // Repuestos tomados del inventario de repuestos de planta (Matriz).
+    repuestos_usados: z.array(z.object({ repuesto_id: z.string().uuid(), cantidad: z.number().positive() })).optional()
   }).parse(req.body);
+  const conRepuestos = (body.repuestos_usados?.length ?? 0) > 0;
+  if (!(body.amount > 0) && !conRepuestos) throw new ApiError(400, "Ingresa el monto pagado o los repuestos usados del inventario.");
+  if (conRepuestos) await exigirMatriz(req);
 
   // Aislamiento de caja (igual que /:id/maintenance): la caja debe ser del
   // accionista activo y estar abierta. Se valida antes de guardar la foto.
@@ -458,7 +466,21 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
        RETURNING *`,
       [body.area, body.section, body.maquina || null, body.maintenance_type, body.description, body.provider || null, body.invoice_number || null, photoUrl, round2(body.amount), body.created_by || null]
     );
-    if (body.cash_register_id) {
+    // Repuestos del inventario: salen del stock y su valor queda en la hoja de
+    // vida (repuestos_stock_valor), sin tocar la caja.
+    if (conRepuestos) {
+      const uso = await consumirRepuestosEnMantenimiento(client, body.repuestos_usados!, {
+        maintenanceId: maintenance.rows[0].id,
+        motivo: `Mantenimiento ${body.area}/${body.section}${body.maquina ? ` · ${body.maquina}` : ""}`,
+        userId: (req as AuthenticatedRequest).user?.id ?? body.created_by ?? null
+      });
+      const upd = await client.query(
+        "UPDATE equipment_maintenance SET repuestos_stock_valor = $2, repuestos_detalle = $3 WHERE id = $1 RETURNING *",
+        [maintenance.rows[0].id, uso.valor, uso.detalle]
+      );
+      maintenance.rows[0] = upd.rows[0];
+    }
+    if (body.cash_register_id && body.amount > 0) {
       await client.query(
         `INSERT INTO cash_movements
          (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)

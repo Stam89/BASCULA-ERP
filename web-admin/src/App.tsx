@@ -3085,6 +3085,16 @@ export function App() {
   const [invVista, setInvVista] = useState<"existencias" | "repuestos">("existencias");
   // Repuestos para la alerta «por terminarse» del Dashboard (Matriz).
   const [repuestosAlerta, setRepuestosAlerta] = useState<Repuesto[]>([]);
+  // Caja ↔ Repuestos de planta: catálogo para comprar (categoría Repuestos) o
+  // para usar piezas del stock en un Mantenimiento.
+  const [repCatalogo, setRepCatalogo] = useState<Repuesto[]>([]);
+  const [repCart, setRepCart] = useState<Array<{
+    repuesto_id?: string; nuevo?: { nombre: string; referencia: string | null; unidad: string; stock_minimo: number };
+    etiqueta: string; unidad: string; cantidad: number; costo: number;
+  }>>([]);
+  const [repLinea, setRepLinea] = useState({ sel: "", nombre: "", referencia: "", unidad: "UNIDAD", minimo: "", cantidad: "", costo: "" });
+  const [mantRepUsados, setMantRepUsados] = useState<Array<{ repuesto_id: string; etiqueta: string; unidad: string; cantidad: number; costo: number }>>([]);
+  const [mantRepSel, setMantRepSel] = useState({ id: "", cantidad: "1" });
   const [sackMovForm, setSackMovForm] = useState({ sack_id: "", movement: "ENTRADA" as "ENTRADA"|"SALIDA", cantidad: "", concepto: "" });
   // ── Diagnóstico de stocks negativos ────────────────────────────────────────
   const [negativeStock, setNegativeStock] = useState<NegativeStockRow[]>([]);
@@ -4188,6 +4198,43 @@ export function App() {
     apiGet<Repuesto[]>("/repuestos").then(setRepuestosAlerta).catch(() => undefined);
   }, [authUser, activeTab, esMatrizActiva]);
   function irARepuestos() { setInvVista("repuestos"); setActiveTab("Inventario"); }
+  // Catálogo de repuestos al elegir en Caja la categoría Repuestos o Mantenimiento (Matriz).
+  function cargarRepCatalogo() {
+    apiGet<Repuesto[]>("/repuestos").then((r) => { setRepCatalogo(r); setRepuestosAlerta(r); }).catch(() => undefined);
+  }
+  useEffect(() => {
+    if (activeTab === "Caja" && esMatrizActiva && (movCategory === "REPUESTOS" || movCategory === "MANTENIMIENTO_EQUIPO")) cargarRepCatalogo();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, esMatrizActiva, movCategory]);
+  function agregarRepuestoCarrito() {
+    const cantidad = Number(repLinea.cantidad), costo = Number(repLinea.costo);
+    if (!repLinea.sel) { addToast("Elige el repuesto o «Nuevo repuesto»", "error"); return; }
+    if (!(cantidad > 0)) { addToast("Ingresa la cantidad", "error"); return; }
+    if (!(costo > 0)) { addToast("Ingresa el costo unitario", "error"); return; }
+    if (repLinea.sel === "__nuevo__") {
+      if (repLinea.nombre.trim().length < 2) { addToast("Escribe el nombre del repuesto nuevo", "error"); return; }
+      const nombre = repLinea.nombre.trim().toUpperCase();
+      setRepCart((c) => [...c, {
+        nuevo: { nombre, referencia: repLinea.referencia.trim() || null, unidad: repLinea.unidad, stock_minimo: Number(repLinea.minimo) || 0 },
+        etiqueta: `${nombre}${repLinea.referencia.trim() ? ` (${repLinea.referencia.trim()})` : ""} · nuevo`, unidad: repLinea.unidad, cantidad, costo
+      }]);
+    } else {
+      const r = repCatalogo.find((x) => x.id === repLinea.sel);
+      if (!r) return;
+      setRepCart((c) => [...c, { repuesto_id: r.id, etiqueta: `${r.nombre}${r.referencia ? ` (${r.referencia})` : ""}`, unidad: r.unidad, cantidad, costo }]);
+    }
+    setRepLinea({ sel: "", nombre: "", referencia: "", unidad: "UNIDAD", minimo: "", cantidad: "", costo: "" });
+  }
+  function agregarRepuestoMantenimiento() {
+    const r = repCatalogo.find((x) => x.id === mantRepSel.id);
+    const cantidad = Number(mantRepSel.cantidad);
+    if (!r) { addToast("Elige el repuesto del inventario", "error"); return; }
+    if (!(cantidad > 0)) { addToast("Ingresa la cantidad", "error"); return; }
+    const ya = mantRepUsados.filter((x) => x.repuesto_id === r.id).reduce((s2, x) => s2 + x.cantidad, 0);
+    if (ya + cantidad > r.stock + 1e-9) { addToast(`Solo hay ${r.stock} ${r.unidad.toLowerCase()} de ${r.nombre} en el inventario`, "error"); return; }
+    setMantRepUsados((l) => [...l, { repuesto_id: r.id, etiqueta: `${r.nombre}${r.referencia ? ` (${r.referencia})` : ""}`, unidad: r.unidad, cantidad, costo: r.costo_unitario }]);
+    setMantRepSel({ id: "", cantidad: "1" });
+  }
   const sacosDelActivo = esMatrizActiva ? sackInventory : sacosPropios;
 
   useEffect(() => {
@@ -7922,9 +7969,11 @@ export function App() {
         m.maintenance_type,
         m.description || "",
         m.provider || "",
-        Number(m.amount || 0).toFixed(2)
+        Number(m.amount || 0).toFixed(2),
+        Number(m.repuestos_stock_valor || 0).toFixed(2),
+        m.repuestos_detalle || ""
       ]);
-  const MAINT_HEADERS = ["Fecha", "Área", "Sección", "Tipo", "Descripción", "Proveedor", "Monto"];
+  const MAINT_HEADERS = ["Fecha", "Área", "Sección", "Tipo", "Descripción", "Proveedor", "Pagado en caja", "Repuestos del stock", "Detalle repuestos"];
   const exportMaintCsv = () => exportReportCsv(MAINT_HEADERS, maintReportRows(), "mantenimiento.csv");
   const printMaintReport = () => printReport("Reporte de Mantenimiento", MAINT_HEADERS, maintReportRows());
 
@@ -8109,11 +8158,13 @@ export function App() {
   };
 
   const submitEquipmentMaintenance = async (photoFile?: File) => {
-    if (!dashboard.current_cash_register?.id || !maintenanceForm.area || !maintenanceForm.section || !maintenanceForm.description || !maintenanceForm.amount) {
+    const conRepuestos = mantRepUsados.length > 0;
+    if (!dashboard.current_cash_register?.id || !maintenanceForm.area || !maintenanceForm.section || !maintenanceForm.description || (!maintenanceForm.amount && !conRepuestos)) {
       addToast("Completa los campos requeridos", "error");
       return;
     }
-    const amount = parseFloat(maintenanceForm.amount);
+    // Con repuestos del inventario, lo pagado de caja puede ser 0.
+    const amount = round2(parseFloat(maintenanceForm.amount || "0") || 0);
     const registerId = dashboard.current_cash_register.id;
 
     try {
@@ -8141,10 +8192,12 @@ export function App() {
           invoice_number: maintenanceForm.invoice_number || undefined,
           receipt_photo_base64: photoBase64,
           amount,
-          cash_register_id: registerId
+          cash_register_id: registerId,
+          repuestos_usados: conRepuestos ? mantRepUsados.map((l) => ({ repuesto_id: l.repuesto_id, cantidad: l.cantidad })) : undefined
         })
       });
       if (!res.ok) throw new Error(await res.text());
+      if (conRepuestos) { setMantRepUsados([]); cargarRepCatalogo(); }
 
       setMaintenanceForm({
         area: "",
@@ -8506,6 +8559,33 @@ export function App() {
       if (sackCart.length === 0) throw new Error("Agrega al menos un saco a la lista.");
       await confirmarCompraSacos(); // limpia carrito, refresca sacos y caja
       setMovCategory("");
+      return;
+    }
+    // ── Categoría REPUESTOS con lista: la compra entra al INVENTARIO DE REPUESTOS
+    //    de planta (una sola operación: egreso de contado o Cuenta por Pagar a crédito).
+    if (movement === "EXPENSE" && category === "REPUESTOS" && repCart.length > 0) {
+      if (movEsFondo) throw new Error("Un fondo a rendir cuentas no lleva lista de repuestos: registra la compra cuando se rinda.");
+      const provTxtR = movProveedor.trim();
+      const provSelR = provTxtR ? proveedoresCaja.find((p) => p.name.trim().toLowerCase() === provTxtR.toLowerCase()) : undefined;
+      const creditoR = movModalidad === "CREDITO";
+      if (creditoR && provTxtR.length < 2) throw new Error("Para comprar a crédito elige o escribe el proveedor.");
+      const r = await apiPost<{ total: number; credito: boolean; proveedor: string | null }>("/repuestos/compra", {
+        cash_register_id: registerId,
+        modalidad_pago: creditoR ? "CREDITO" : "CONTADO",
+        supplier_id: provSelR?.id,
+        proveedor_nombre: provTxtR && !provSelR ? provTxtR : undefined,
+        due_date: creditoR && movVence ? movVence : undefined,
+        descripcion: String(form.get("description") ?? "").trim() || undefined,
+        items: repCart.map((l) => ({ repuesto_id: l.repuesto_id, nuevo: l.nuevo, cantidad: l.cantidad, costo_unitario: l.costo }))
+      });
+      safeResetForm(formElement);
+      setRepCart([]); setMovCategory(""); setMovSubcategoria("");
+      setMovProveedor(""); setMovModalidad("CONTADO"); setMovVence("");
+      addToast(r.credito
+        ? `💳 Repuestos a crédito: Cuenta por Pagar a ${r.proveedor} por ${money(r.total)} · entraron al inventario`
+        : `🔧 Compra de repuestos ${money(r.total)} · entraron al inventario de repuestos`, "success");
+      cargarRepCatalogo();
+      await refreshCaja(registerId);
       return;
     }
     // Fondo a rendir cuentas: solo egresos, y exige el responsable.
@@ -16396,7 +16476,7 @@ export function App() {
                   const abrir = (t: typeof visibles[number]) => {
                     setCajaMenu(null);
                     setCajaSubTab(t);
-                    if (t === "mantenimiento") { refreshMaintenanceHistory(); loadMaintCategories(); loadMaintCategoriesAll(); }
+                    if (t === "mantenimiento") { refreshMaintenanceHistory(); loadMaintCategories(); loadMaintCategoriesAll(); if (esMatrizActiva) cargarRepCatalogo(); }
                     if (t === "sacos") { refreshSacks().catch(() => undefined); }
                   };
                   return (
@@ -16852,8 +16932,44 @@ export function App() {
                               style={{ display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 }} />
                           </label>
                         </div>
-                        <label style={{ fontSize: 13, fontWeight: 600 }}>Monto total de la reparación $ *
-                          <input type="number" step="0.01" min="0" value={maintenanceForm.amount} required
+                        {/* 🔩 Repuestos del INVENTARIO usados en este trabajo: salen del stock y su
+                            valor queda en la hoja de vida. No se cobran otra vez en caja (ya se
+                            pagaron al comprarlos). Solo Matriz. */}
+                        {esMatrizActiva && (() => {
+                          const conStock = repCatalogo.filter((r) => r.activo && r.stock > 0);
+                          const valorStock = mantRepUsados.reduce((s2, l) => s2 + l.cantidad * l.costo, 0);
+                          const inp = { padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13, width: "100%" } as const;
+                          return (
+                            <div style={{ background: "#f0fdfa", border: "1px solid #99f6e4", borderRadius: 8, padding: 12, display: "grid", gap: 8 }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: "#0f766e" }}>🔩 Repuestos usados del inventario <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span></div>
+                              {conStock.length === 0 && mantRepUsados.length === 0 ? (
+                                <small className="muted">No hay repuestos con stock. Regístralos en Inventario → 🔧 Repuestos o cómpralos con la categoría Repuestos.</small>
+                              ) : (
+                                <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr auto", gap: 8, alignItems: "end" }}>
+                                  <select value={mantRepSel.id} style={inp} onChange={(e) => setMantRepSel({ ...mantRepSel, id: e.target.value })}>
+                                    <option value="">Seleccione el repuesto…</option>
+                                    {conStock.map((r) => <option key={r.id} value={r.id}>{r.nombre}{r.referencia ? ` (${r.referencia})` : ""} · hay {r.stock}</option>)}
+                                  </select>
+                                  <input type="number" min="0" step="1" value={mantRepSel.cantidad} style={inp} onChange={(e) => setMantRepSel({ ...mantRepSel, cantidad: e.target.value })} />
+                                  <button type="button" className="btnSecondary" onClick={agregarRepuestoMantenimiento}>➕ Usar</button>
+                                </div>
+                              )}
+                              {mantRepUsados.length > 0 && (
+                                <div style={{ display: "grid", gap: 4 }}>
+                                  {mantRepUsados.map((l, i) => (
+                                    <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, fontSize: 12.5, background: "#fff", border: "1px solid #ccfbf1", borderRadius: 6, padding: "4px 8px" }}>
+                                      <span>{l.cantidad} {l.unidad.toLowerCase()} · {l.etiqueta} <span className="muted">({money(l.cantidad * l.costo)})</span></span>
+                                      <button type="button" onClick={() => setMantRepUsados((x) => x.filter((_, j) => j !== i))} style={{ padding: "1px 7px", background: "#ef4444", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 11 }}>✕</button>
+                                    </div>
+                                  ))}
+                                  <small style={{ color: "#0f766e" }}>Salen del stock · valor {money(valorStock)} en la hoja de vida (no se cobra de nuevo en caja).</small>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+                        <label style={{ fontSize: 13, fontWeight: 600 }}>{mantRepUsados.length > 0 ? "Monto pagado ahora de caja $ (mano de obra, otros · puede ser 0)" : "Monto total de la reparación $ *"}
+                          <input type="number" step="0.01" min="0" value={maintenanceForm.amount} required={mantRepUsados.length === 0}
                             onChange={(e) => setMaintenanceForm({ ...maintenanceForm, amount: e.target.value })}
                             style={{ display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13, fontWeight: 700 }} />
                         </label>
@@ -16920,6 +17036,81 @@ export function App() {
                         )}
                       </div>
                     )}
+                    {/* 🔧 REPUESTOS DE PLANTA: con la categoría «Repuestos», la compra puede
+                        entrar al inventario de repuestos (lista con cantidad y costo). Sin
+                        lista es un egreso normal, como siempre. Solo Matriz. */}
+                    {movType === "EXPENSE" && movCategory === "REPUESTOS" && esMatrizActiva && (() => {
+                      const totalRep = repCart.reduce((s2, l) => s2 + l.cantidad * l.costo, 0);
+                      const selRep = repCatalogo.find((x) => x.id === repLinea.sel);
+                      const inp = { padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13, width: "100%" } as const;
+                      return (
+                        <div style={{ background: "#f0fdfa", border: "1px solid #99f6e4", borderRadius: 8, padding: 14, marginBottom: 16, display: "grid", gap: 10 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: "#0f766e" }}>🔧 ¿Entran al inventario de repuestos de planta? Agrégalos a la lista (opcional)</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 8, alignItems: "end" }}>
+                            <label style={{ fontSize: 12, fontWeight: 600, margin: 0 }}>Repuesto
+                              <select value={repLinea.sel} style={inp} onChange={(e) => {
+                                const r = repCatalogo.find((x) => x.id === e.target.value);
+                                setRepLinea({ ...repLinea, sel: e.target.value, costo: r && r.costo_unitario > 0 ? String(r.costo_unitario) : repLinea.costo });
+                              }}>
+                                <option value="">Seleccione…</option>
+                                {repCatalogo.map((r) => <option key={r.id} value={r.id}>{r.nombre}{r.referencia ? ` (${r.referencia})` : ""} · hay {r.stock}</option>)}
+                                <option value="__nuevo__">➕ Nuevo repuesto…</option>
+                              </select>
+                            </label>
+                            <label style={{ fontSize: 12, fontWeight: 600, margin: 0 }}>Cantidad
+                              <input type="number" min="0" step="1" value={repLinea.cantidad} style={inp} onChange={(e) => setRepLinea({ ...repLinea, cantidad: e.target.value })} />
+                            </label>
+                            <label style={{ fontSize: 12, fontWeight: 600, margin: 0 }}>Costo unit. $
+                              <input type="number" min="0" step="0.01" value={repLinea.costo} style={inp} onChange={(e) => setRepLinea({ ...repLinea, costo: e.target.value })} />
+                            </label>
+                          </div>
+                          {repLinea.sel === "__nuevo__" && (
+                            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", gap: 8 }}>
+                              <input placeholder="Nombre (ej: BANDA A-52)" value={repLinea.nombre} style={inp} onChange={(e) => setRepLinea({ ...repLinea, nombre: e.target.value })} />
+                              <input placeholder="Referencia / medida" value={repLinea.referencia} style={inp} onChange={(e) => setRepLinea({ ...repLinea, referencia: e.target.value })} />
+                              <select value={repLinea.unidad} style={inp} onChange={(e) => setRepLinea({ ...repLinea, unidad: e.target.value })}>
+                                {["UNIDAD", "JUEGO", "PAR", "METRO", "LITRO", "GALON", "KG", "ROLLO"].map((u) => <option key={u} value={u}>{u}</option>)}
+                              </select>
+                              <input type="number" min="0" step="1" placeholder="Mínimo (alerta)" value={repLinea.minimo} style={inp} onChange={(e) => setRepLinea({ ...repLinea, minimo: e.target.value })} />
+                            </div>
+                          )}
+                          {selRep && selRep.equipo && <small className="muted">Máquina: {selRep.equipo}</small>}
+                          <button type="button" className="btnSecondary" onClick={agregarRepuestoCarrito} style={{ justifySelf: "start" }}>➕ Agregar a la lista</button>
+                          {repCart.length > 0 && (
+                            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, background: "#fff" }}>
+                              <thead><tr style={{ background: "#0f766e", color: "#fff" }}>
+                                <th style={{ padding: "5px 8px", textAlign: "left" }}>Repuesto</th>
+                                <th style={{ padding: "5px 8px", textAlign: "right" }}>Cant.</th>
+                                <th style={{ padding: "5px 8px", textAlign: "right" }}>Costo</th>
+                                <th style={{ padding: "5px 8px", textAlign: "right" }}>Subtotal</th><th />
+                              </tr></thead>
+                              <tbody>
+                                {repCart.map((l, i) => (
+                                  <tr key={i} style={{ borderBottom: "1px solid #e5e7eb" }}>
+                                    <td style={{ padding: "4px 8px" }}>{l.etiqueta}</td>
+                                    <td style={{ padding: "4px 8px", textAlign: "right" }}>{l.cantidad} {l.unidad.toLowerCase()}</td>
+                                    <td style={{ padding: "4px 8px", textAlign: "right" }}>{money(l.costo)}</td>
+                                    <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700 }}>{money(l.cantidad * l.costo)}</td>
+                                    <td style={{ padding: "4px 8px", textAlign: "center" }}>
+                                      <button type="button" onClick={() => setRepCart((c) => c.filter((_, j) => j !== i))} style={{ padding: "2px 8px", background: "#ef4444", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 11 }}>🗑️</button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                              <tfoot><tr style={{ background: "#f0fdfa", fontWeight: 800 }}>
+                                <td colSpan={3} style={{ padding: "6px 8px" }}>MONTO TOTAL $</td>
+                                <td style={{ padding: "6px 8px", textAlign: "right", color: "#0f766e", fontSize: 15 }}>{money(totalRep)}</td><td />
+                              </tr></tfoot>
+                            </table>
+                          )}
+                          <small className="muted">
+                            {repCart.length > 0
+                              ? "El monto es el total de la lista. Al guardar, los repuestos suben al inventario (Inventario → 🔧 Repuestos) y el egreso queda en Caja (o en Por Pagar si es a crédito)."
+                              : "Sin lista es un egreso normal de repuestos (no suma al inventario)."}
+                          </small>
+                        </div>
+                      );
+                    })()}
                     {/* 🏪 PROVEEDOR y modalidad de pago del egreso. A CRÉDITO no sale plata
                         de la caja: se crea una Cuenta por Pagar al proveedor (Por Pagar). Los
                         egresos con flujo propio (mantenimiento, sacos, pagos enlazados) siguen igual. */}
@@ -17077,7 +17268,8 @@ export function App() {
                     {movCategory !== "MANTENIMIENTO_EQUIPO" && !esCategoriaSacos(movCategory) && (
                       <>
                         <Input name="description" label="Descripción (opcional)" required={false} />
-                        <Input name="amount" label="Monto $" type="number" />
+                        {/* Con lista de repuestos, el monto es el total de la lista. */}
+                        {!(movCategory === "REPUESTOS" && repCart.length > 0) && <Input name="amount" label="Monto $" type="number" />}
                       </>
                     )}
                     <button className="primary" disabled={CASH_REUSE[movCategory] === "pilado" || CASH_REUSE[movCategory] === "fomento"} style={{ width: "100%", padding: "10px 0", marginTop: 8 }}>💾 Registrar movimiento</button>
@@ -17252,8 +17444,25 @@ export function App() {
                         se CONSULTA el historial. */}
                     <div className="formPanel" style={{ background: "#eff6ff", border: "1px solid #bfdbfe" }}>
                       <h2 style={{ margin: 0, fontSize: 15, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>🔧 Mantenimientos {cfgLink("🔧 Categorías de Mantenimiento", "Áreas y tipos")}</h2>
-                      <p className="muted" style={{ margin: "6px 0 0" }}>Para registrar un mantenimiento (repuestos o mano de obra), ve a <strong>➕ Nuevo movimiento</strong> y elige la categoría <strong>Mantenimiento</strong>: podrás asociar la Máquina/Activo o el Área. Este panel es solo de consulta.</p>
+                      <p className="muted" style={{ margin: "6px 0 0" }}>Para registrar un mantenimiento (repuestos o mano de obra), ve a <strong>➕ Nuevo movimiento</strong> y elige la categoría <strong>Mantenimiento</strong>: podrás asociar la Máquina/Activo o el Área y usar repuestos del inventario. Este panel es solo de consulta.</p>
                     </div>
+                    {/* Enlace con el inventario de repuestos de planta (Matriz). */}
+                    {esMatrizActiva && (() => {
+                      const porTerminarse = repuestosAlerta.filter((r) => r.activo && r.stock_minimo > 0 && r.stock <= r.stock_minimo);
+                      return (
+                        <div className="formPanel" style={{ background: porTerminarse.length ? "#fff7ed" : "#f0fdfa", border: `1px solid ${porTerminarse.length ? "#fdba74" : "#99f6e4"}`, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                          <div style={{ flex: "1 1 240px" }}>
+                            <strong style={{ fontSize: 14 }}>🔧 Repuestos de planta</strong>
+                            <div className="muted" style={{ fontSize: 12.5 }}>
+                              {repuestosAlerta.length === 0 ? "Aún no hay repuestos registrados."
+                                : porTerminarse.length ? `${porTerminarse.length} por terminarse: ${porTerminarse.slice(0, 4).map((r) => `${r.nombre} (${r.stock})`).join(", ")}${porTerminarse.length > 4 ? "…" : ""}`
+                                : `${repuestosAlerta.length} repuesto(s) con stock en orden.`}
+                            </div>
+                          </div>
+                          {visibleTabs.includes("Inventario") && <button type="button" className="btnSecondary" onClick={irARepuestos}>Ver inventario de repuestos</button>}
+                        </div>
+                      );
+                    })()}
                     <div className="formPanel">
                       <h2 style={{ marginBottom: 8 }}>Historial de mantenimientos</h2>
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8, alignItems: "flex-end" }}>
@@ -17282,9 +17491,13 @@ export function App() {
                       {(() => {
                         const vis = maintenanceHistory.filter((m: any) => !maintFilter.type || m.maintenance_type === maintFilter.type);
                         const total = vis.reduce((s: number, m: any) => s + Number(m.amount || 0), 0);
+                        const totalStock = vis.reduce((s: number, m: any) => s + Number(m.repuestos_stock_valor || 0), 0);
                         return (
                           <>
-                            <p style={{ fontWeight: 600, margin: "4px 0" }}>{vis.length} registros · Total: ${total.toFixed(2)}</p>
+                            <p style={{ fontWeight: 600, margin: "4px 0" }}>
+                              {vis.length} registros · Pagado en caja: ${total.toFixed(2)}
+                              {totalStock > 0 && <span style={{ color: "#0f766e" }}> · Repuestos del stock: ${totalStock.toFixed(2)} · Costo total: ${(total + totalStock).toFixed(2)}</span>}
+                            </p>
                             {vis.length === 0 && <p className="muted">Sin mantenimientos</p>}
                             <div className="equipList">
                               {vis.map((m: any) => (
@@ -17292,9 +17505,13 @@ export function App() {
                                   <div>
                                     <strong>{m.area_label}{m.section_label ? " / " + m.section_label : ""}{m.maquina ? " · " + m.maquina : ""}</strong>
                                     <small>{(m.created_at || "").slice(0, 10)} · {m.maintenance_type} · {m.description}{m.provider ? " · " + m.provider : ""}</small>
+                                    {Number(m.repuestos_stock_valor || 0) > 0 && (
+                                      <small style={{ display: "block", color: "#0f766e" }}>🔩 Del inventario: {m.repuestos_detalle ?? "repuestos"} · ${Number(m.repuestos_stock_valor).toFixed(2)}</small>
+                                    )}
                                   </div>
                                   <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
                                     <strong>${Number(m.amount).toFixed(2)}</strong>
+                                    {Number(m.repuestos_stock_valor || 0) > 0 && <small style={{ color: "#0f766e" }}>+ ${Number(m.repuestos_stock_valor).toFixed(2)} stock</small>}
                                     {m.receipt_photo_signed_url && <a href={m.receipt_photo_signed_url} target="_blank" rel="noreferrer">foto</a>}
                                   </div>
                                 </div>

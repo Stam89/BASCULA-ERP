@@ -6,7 +6,8 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { round2 } from "../../utils/rice-formulas.js";
-import { reversarEntradaRepuestosDeCaja } from "./repuestos.js";
+import { reversarEntradaRepuestosDeCaja, reversarEntradaRepuestosDeCredito, devolverRepuestosDeMantenimiento } from "./repuestos.js";
+import { resolverProveedor } from "../../services/proveedores.js";
 import { espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
 import { vidaUtilPorTipo } from "../../services/activos.js";
 import ExcelJS from "exceljs";
@@ -50,26 +51,6 @@ async function getMovimientoDelAccionistaForUpdate(
 // Guarda una subcategoría escrita a mano para sugerirla luego (memoria). Es
 // idempotente (índice único por nombre normalizado) y nunca rompe el registro
 // del movimiento: si falla, se ignora.
-// Proveedor de un egreso: por id (debe existir) o por nombre escrito (se reutiliza
-// uno con el mismo nombre o se crea rápido en el catálogo de Proveedores).
-async function resolverProveedor(
-  client: PoolClient,
-  supplierId?: string | null,
-  nombre?: string | null
-): Promise<{ id: string; name: string } | null> {
-  if (supplierId) {
-    const r = await client.query("SELECT id, name FROM suppliers WHERE id = $1", [supplierId]);
-    if (!r.rows[0]) throw new ApiError(404, "Proveedor no encontrado");
-    return r.rows[0];
-  }
-  const n = (nombre ?? "").trim().replace(/\s+/g, " ");
-  if (n.length < 2) return null;
-  const ya = await client.query("SELECT id, name FROM suppliers WHERE lower(btrim(name)) = lower($1) ORDER BY is_active DESC LIMIT 1", [n]);
-  if (ya.rows[0]) return ya.rows[0];
-  const nuevo = await client.query("INSERT INTO suppliers (name) VALUES ($1) RETURNING id, name", [n.toUpperCase()]);
-  return nuevo.rows[0];
-}
-
 async function recordarSubcategoria(client: PoolClient, nombre?: string | null, categoria?: string | null): Promise<void> {
   const n = (nombre ?? "").trim();
   if (n.length < 2) return;
@@ -365,7 +346,9 @@ cashRouter.post("/creditos/:id/anular", requireAdmin, asyncRoute(async (req, res
       `UPDATE accounts_payable SET status = 'CANCELLED', balance = 0, description = description || $2 WHERE id = $1 RETURNING *`,
       [a.id, ` · ANULADO: ${body.reason}`]
     );
-    return upd.rows[0];
+    // Si era una compra de repuestos a crédito, lo que entró al stock se retira.
+    const repuestosRevertidos = await reversarEntradaRepuestosDeCredito(client, a.id);
+    return { ...upd.rows[0], repuestos_revertidos: repuestosRevertidos };
   });
   res.json(out);
 }));
@@ -519,6 +502,10 @@ cashRouter.post("/movements/:id/reverse", requireAdmin, asyncRoute(async (req, r
     const sacosRevertidos = await reversarEntradaSacosDeCaja(client, m.id);
     // Si pagó una compra de REPUESTOS, se retira del stock lo que entró.
     const repuestosRevertidos = await reversarEntradaRepuestosDeCaja(client, m.id);
+    // Si pagó un MANTENIMIENTO que usó repuestos del inventario, vuelven al stock.
+    if (m.reference_type === "equipment_maintenance" && m.reference_id) {
+      await devolverRepuestosDeMantenimiento(client, String(m.reference_id));
+    }
 
     // Si el egreso anulado registró un ACTIVO FIJO, se retira de Activos fijos:
     // se borra si no tiene historial; con mantenimientos, sale del balance
