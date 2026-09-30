@@ -17,7 +17,7 @@ const sinTilde = (t: string) => t.toLowerCase().replace(/[áéíóú]/g, (c) => 
 /** Valor del selector «Categoría de Caja» de un rubro nuevo que no debe salir en Caja. */
 const SIN_CATEGORIA = "__SIN_CATEGORIA__";
 const NOMINA_LABEL: Record<string, string> = {
-  SUELDO_ADMIN: "Sueldo administrativo", CUADRILLA: "Cuadrilla", PILADOR: "Pilador",
+  SUELDO_ADMIN: "Sueldo administrativo", CUADRILLA: "Cuadrilla (por persona)", BAJADA_CARRO: "🚚 Bajada de carro", PILADOR: "Pilador",
   ESTIBADOR: "Estibador", SECADOR: "Secador", POLVILLO: "Polvillo"
 };
 type Ingreso = { concepto: string; monto: number; origen: "auto" | "manual"; id?: string; nota?: string | null };
@@ -552,13 +552,17 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
                   <div>
                     <span className="rm-label">Categorías de Caja</span>
                     <div style={{ position: "relative", display: "flex", flexWrap: "wrap", alignItems: "center" }}>
-                      {r.categorias.map((c) => (
-                        <span key={c} className={`rm-badge rm-badge-caja ${categoriasCaja.find((x) => x.codigo === c)?.activo === false ? "is-oculta" : ""}`}
-                          title={categoriasCaja.find((x) => x.codigo === c)?.activo === false ? "Oculta en Caja → ➕ Nuevo movimiento" : undefined}>
-                          {nombreCategoria(c)}
+                      {r.categorias.map((c) => {
+                        const cc = categoriasCaja.find((x) => x.codigo === c);
+                        const noExiste = categoriasCaja.length > 0 && !cc;
+                        return (
+                        <span key={c} className={`rm-badge rm-badge-caja ${cc?.activo === false || noExiste ? "is-oculta" : ""}`}
+                          title={noExiste ? "Esta categoría no existe en Caja: no suma nada. Quítala con ×." : cc?.activo === false ? "Oculta en Caja → ➕ Nuevo movimiento" : undefined}>
+                          {nombreCategoria(c)}{noExiste && " · no existe en Caja"}
                           <button type="button" title="Quitar enlace" onClick={() => cambiarEnlaces(r, { categorias: r.categorias.filter((x) => x !== c) })}>×</button>
                         </span>
-                      ))}
+                        );
+                      })}
                       <button type="button" className="rm-link" onClick={() => setMenu(menu?.id === r.id && menu.tipo === "caja" ? null : { id: r.id, tipo: "caja" })}>+ Asignar</button>
                       {menu?.id === r.id && menu.tipo === "caja" && (
                         <div className="rm-pop" role="menu">

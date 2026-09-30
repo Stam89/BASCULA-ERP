@@ -57,7 +57,7 @@ export function clasificarEgreso(
 }
 
 /** Tipos de pago de nómina (todos salen de Caja con la categoría PAGO_MANO_OBRA). */
-export const TIPOS_NOMINA = ["SUELDO_ADMIN", "CUADRILLA", "PILADOR", "ESTIBADOR", "SECADOR", "POLVILLO"] as const;
+export const TIPOS_NOMINA = ["SUELDO_ADMIN", "CUADRILLA", "BAJADA_CARRO", "PILADOR", "ESTIBADOR", "SECADOR", "POLVILLO"] as const;
 export type TipoNomina = (typeof TIPOS_NOMINA)[number];
 
 /** Tipo de pago de nómina de un egreso (null si no es nómina o no se reconoce). */
@@ -65,7 +65,9 @@ export function tipoNomina(e: { category?: string | null; reference_type?: strin
   if (String(e.category ?? "").toUpperCase() !== "PAGO_MANO_OBRA") return null;
   const ref = String(e.reference_type ?? "");
   if (ref === "admin_salary_payments") return "SUELDO_ADMIN";
-  if (ref === "cuadrilla_entries") return "CUADRILLA";
+  // Nómina → 🚚 Bajada de carro paga con la misma referencia que la cuadrilla,
+  // pero su descripción empieza «Pago bajada de carro».
+  if (ref === "cuadrilla_entries") return normalizar(e.description).startsWith("pago bajada de carro") ? "BAJADA_CARRO" : "CUADRILLA";
   const rol = normalizar(e.description).match(/\b(pilador|estibador|secador|polvillo)\b/);
   return rol ? (rol[1].toUpperCase() as TipoNomina) : null;
 }
@@ -94,7 +96,9 @@ export function clasificarMovimiento(e: EgresoClasificable, rubros: RubroRegla[]
       if (porCargo) return porCargo;
     }
     if (tipo) {
-      const r = rubros.find((x) => (x.nomina ?? []).includes(tipo));
+      const r = rubros.find((x) => (x.nomina ?? []).includes(tipo))
+        // Antes la bajada de carro contaba como cuadrilla: si ningún rubro la tiene, sigue ahí.
+        ?? (tipo === "BAJADA_CARRO" ? rubros.find((x) => (x.nomina ?? []).includes("CUADRILLA")) : undefined);
       if (r) return r.id;
     }
     return clasificarEgreso([[e.subcategoria], [e.description]], rubros);

@@ -34,7 +34,7 @@ resultadoMensualRouter.get("/", asyncRoute(async (req, res) => {
 // Regla: el egreso entra al rubro de la categoría con que se registró en Caja;
 // la nómina (una sola categoría) se reparte por tipo de pago. Crear o renombrar
 // un rubro crea/renombra su categoría de Caja (sin duplicar).
-const TIPOS_NOMINA_VALIDOS = ["SUELDO_ADMIN", "CUADRILLA", "PILADOR", "ESTIBADOR", "SECADOR", "POLVILLO"] as const;
+const TIPOS_NOMINA_VALIDOS = ["SUELDO_ADMIN", "CUADRILLA", "BAJADA_CARRO", "PILADOR", "ESTIBADOR", "SECADOR", "POLVILLO"] as const;
 // Categorías que no se renombran desde un rubro (las usan varios flujos).
 const CATEGORIAS_PROTEGIDAS = ["PAGO_MANO_OBRA"];
 

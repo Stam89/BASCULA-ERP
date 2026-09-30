@@ -67,6 +67,13 @@ describe("clasificarMovimiento (categoría de Caja + nómina por tipo)", () => {
     expect(clasificarMovimiento(nomina("worker_payments", "Pago semana secador HUGO"), R)).toBe("secada");
     expect(clasificarMovimiento(nomina("admin_salary_payments", "Sueldo ASISTENTE CONTABLE ANGIE RUIZ"), R)).toBe("sueldos");
   });
+  it("bajada de carro: su propio tipo; sin rubro propio sigue en el de cuadrilla", () => {
+    const pago = nomina("cuadrilla_entries", "Pago bajada de carro · 3 ticket(s): JUAN $1.20");
+    expect(clasificarMovimiento(pago, R)).toBe("cuadrilla");
+    const conBajada = [...R, { id: "bajada", claves: [], nomina: ["BAJADA_CARRO"] }];
+    expect(clasificarMovimiento(pago, conBajada)).toBe("bajada");
+    expect(clasificarMovimiento(nomina("cuadrilla_entries", "Pago cuadrilla CUADRILLA"), conBajada)).toBe("cuadrilla");
+  });
   it("sueldo administrativo cuyo cargo nombra otro rubro", () => {
     expect(clasificarMovimiento(nomina("admin_salary_payments", "Sueldo Cocinera MARIA"), R)).toBe("cocinera");
   });
