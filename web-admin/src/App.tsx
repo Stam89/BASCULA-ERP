@@ -4096,8 +4096,8 @@ export function App() {
     if (reason.trim().length < 3) { addToast("El motivo debe tener al menos 3 caracteres", "error"); return; }
     const registerId = dashboard.current_cash_register?.id;
     try {
-      await apiPost(`/cash/movements/${m.id}/reverse`, { reason: reason.trim() });
-      addToast("Movimiento anulado (contra-asiento registrado)", "success");
+      const out = await apiPost<{ nomina_reabierta?: string | null }>(`/cash/movements/${m.id}/reverse`, { reason: reason.trim() });
+      addToast(out?.nomina_reabierta ? `Movimiento anulado · ${out.nomina_reabierta}` : "Movimiento anulado (contra-asiento registrado)", "success");
       if (registerId) await refreshCaja(registerId);
     } catch (err) {
       addToast(`No se pudo anular: ${err instanceof Error ? err.message : "error"}`, "error");

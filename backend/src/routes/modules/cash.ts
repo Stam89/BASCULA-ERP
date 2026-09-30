@@ -8,6 +8,7 @@ import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth
 import { round2 } from "../../utils/rice-formulas.js";
 import { reversarEntradaRepuestosDeCaja, reversarEntradaRepuestosDeCredito, devolverRepuestosDeMantenimiento } from "./repuestos.js";
 import { resolverProveedor } from "../../services/proveedores.js";
+import { reabrirPagoNomina } from "../../services/nomina-reabrir.js";
 import { espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
 import { vidaUtilPorTipo } from "../../services/activos.js";
 import ExcelJS from "exceljs";
@@ -506,6 +507,8 @@ cashRouter.post("/movements/:id/reverse", requireAdmin, asyncRoute(async (req, r
     if (m.reference_type === "equipment_maintenance" && m.reference_id) {
       await devolverRepuestosDeMantenimiento(client, String(m.reference_id));
     }
+    // Si fue un pago de NÓMINA, vuelve a quedar pendiente en Nómina.
+    const nominaReabierta = await reabrirPagoNomina(client, m);
 
     // Si el egreso anulado registró un ACTIVO FIJO, se retira de Activos fijos:
     // se borra si no tiene historial; con mantenimientos, sale del balance
@@ -525,7 +528,7 @@ cashRouter.post("/movements/:id/reverse", requireAdmin, asyncRoute(async (req, r
       activosRetirados.push(a.name);
     }
 
-    return { ...reversal.rows[0], sacos_revertidos: sacosRevertidos, activos_retirados: activosRetirados, ajustes_anulados: ajustesAnulados, repuestos_revertidos: repuestosRevertidos };
+    return { ...reversal.rows[0], sacos_revertidos: sacosRevertidos, activos_retirados: activosRetirados, ajustes_anulados: ajustesAnulados, repuestos_revertidos: repuestosRevertidos, nomina_reabierta: nominaReabierta };
   });
 
   res.status(201).json(result);

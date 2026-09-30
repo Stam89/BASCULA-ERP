@@ -49,6 +49,10 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Anular en Caja un pago de Nomina lo reabre en Nomina (2026-09-30)
+- `services/nomina-reabrir.ts` → `reabrirPagoNomina(client, m)`, llamado en POST `/cash/movements/:id/reverse` (devuelve `nomina_reabierta`, texto que sale en el aviso). Los pagos de nomina no guardan el id del egreso: se enlazan porque se marcan pagados en la MISMA transaccion (paid_at/applied_at = created_at del egreso, al microsegundo, misma caja). Comparar SIEMPRE en SQL (un Date de JS pierde microsegundos).
+- worker_payments → PENDING (+ worker_advances aplicados en ese pago → PENDING). cuadrilla_entries (cuadrilla por persona y bajada de carro) → no pagadas; lo descontado de cuadrilla_advances (bruto − neto) vuelve a su saldo. admin_salary_payments → `anulado_at` (migracion 20261058; el sueldo vuelve a «por pagar» y sale del historial). worker_advances (anticipo) → CANCELLED; si ya estaba APPLIED se bloquea con 409 («anula primero ese pago»).
+
 ### Caja sin panel lateral + rubros «Aparece en Caja» (2026-09-30)
 - Caja → «➕ Nuevo movimiento» ya no muestra «Movimientos de la sesión» al lado (el formulario usa todo el ancho); la tabla queda solo en «📋 Ver movimientos» (`cajaSubTab === "resumen"`).
 - Costos Operativos → Mapeo de rubros: interruptor por rubro «Aparece en Caja / Oculto en Caja». PATCH `/resultado-mensual/rubros/:id/caja` `{ mostrar }` pone `cash_categories.activo` de las categorias PROPIAS del rubro (enlazadas + la de su mismo nombre si no es de otro rubro; nunca PAGO_MANO_OBRA ni no-operativas). Oculta = no sale en el select de Caja (filtra `c.activo`); lo registrado sigue contando en el reporte (el calculo no mira `activo`). Rubros solo de nomina muestran «Sale de Nómina · no aparece en Caja». `/categorias-caja` ahora devuelve tambien las ocultas (`activo`, `aplicable_a`); badge tachado «oculta en Caja».

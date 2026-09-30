@@ -143,7 +143,7 @@ adminPayrollRouter.get("/pending", asyncRoute(async (req, res) => {
        WHERE s.accionista_id = $1 AND s.is_active = true
          AND NOT EXISTS (
            SELECT 1 FROM admin_salary_payments pp
-           WHERE pp.staff_id = s.id
+           WHERE pp.staff_id = s.id AND pp.anulado_at IS NULL
              AND (pp.periodo = $3 OR (pp.paid_at >= v.win_start AND pp.paid_at < v.win_end))
          )
        ORDER BY s.worker_name`,
@@ -232,7 +232,7 @@ adminPayrollRouter.get("/history", asyncRoute(async (req, res) => {
     from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
   }).parse(req.query);
-  const conds = ["accionista_id = $1"];
+  const conds = ["accionista_id = $1", "anulado_at IS NULL"];   // anulado en Caja = no pagado
   const params: unknown[] = [accId(req)];
   if (q.from) { params.push(q.from); conds.push(`paid_at >= $${params.length}`); }
   if (q.to) { params.push(q.to); conds.push(`paid_at < ($${params.length}::date + 1)`); }
