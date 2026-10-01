@@ -49,6 +49,10 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Liquidaciones: pestañas y flujo vertical (2026-09-30)
+- `liqVista` ("nueva" | "realizadas"). `.liqLayout` (flex columna) con `nav.cajaSubNav.liqTabs`; cada pestaña es `.liqVista` con `hidden` (NO se desmonta: lo escrito se conserva al cambiar de pestaña). Nueva: formulario y «Materia prima por liquidar» uno debajo del otro a todo el ancho; Realizadas: solo el historial.
+- CSS acotado a `.liqLayout`: lineas Ingreso/QQ/Precio con QQ y Precio de 110–170px; historial con la columna de acciones `minmax(200px, 1fr)` y botones que bajan de linea (antes se cortaban). Calculos y guardado sin cambios.
+
 ### Fondos a rendir cuentas con repuestos + ajustes de Caja (2026-09-30)
 - MOMENTO 1 (entrega): con «Rendir cuentas» la categoria Repuestos oculta la lista (solo responsable, detalle y monto) y Mantenimiento oculta «Sacar repuesto de bodega» (monto = entregado). Estado sigue siendo `fondo_estado = 'POR_LIQUIDAR'` (no se renombro).
 - MOMENTO 2: boton «💸 Liquidar / Registrar vuelto» abre modal (`liquidarFondo` con `repuestos[]`, `repAbierto`): repuestos comprados opcionales (BuscadorCombo; fondo de Mantenimiento → maquina por linea «Esta reparación» u otra; fondo de Repuestos → compatibilidad), gasto real (boton «= repuestos»), Nº factura; resumen: entregado / repuestos / gasto real / vuelto o faltante.
