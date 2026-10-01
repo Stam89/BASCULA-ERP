@@ -458,6 +458,11 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 .liqTabs { margin-bottom: -4px; }
 /* Con todo el ancho, QQ y Precio no se estiran de más: el ingreso toma el resto. */
 .liqLayout .liqLinesHeader, .liqLayout .liqLine { grid-template-columns: minmax(0, 1fr) minmax(110px, 170px) minmax(110px, 170px) 28px; gap: 12px; }
+/* Historial a pantalla completa: la columna de acciones toma el espacio libre y
+   sus botones bajan de línea si no caben (antes se cortaban). */
+.liqLayout .liqHistHead, .liqLayout .liqHistRow { grid-template-columns: 180px 90px 90px 90px 90px 90px 110px minmax(200px, 1fr); }
+.liqLayout .liqHistRow span:last-child { white-space: normal; overflow: visible; }
+.liqLayout .liqActions { flex-wrap: wrap; row-gap: 4px; }
 
 .liqHistTable { overflow-x: auto; }
 
