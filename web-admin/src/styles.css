@@ -4499,6 +4499,14 @@ textarea::placeholder {
 .mantSubRep output { font-weight: 800; color: #0f172a; font-variant-numeric: tabular-nums; }
 .mantFondo { border: 1px dashed #e5e7eb; border-radius: 10px; padding: 10px 12px; }
 .mantFondo.is-on { background: #fffbeb; border: 1px solid #fde68a; }
+/* Nómina → Pagos: «👁️ Ver desglose» de un pago grupal (bajada de carro). */
+.desgloseBtn { border: none; background: none; padding: 0; color: #2563eb; font-size: 11.5px; font-weight: 600; cursor: pointer; }
+.desgloseBtn:hover { text-decoration: underline; }
+.desglosePop { width: min(380px, 92vw); max-height: 80vh; overflow-y: auto; padding: 14px 16px !important; font-weight: 400; color: #0f172a; text-align: left; }
+.desglosePop__head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-bottom: 6px; margin-bottom: 4px; border-bottom: 1px solid #f1f5f9; font-size: 12.5px; }
+.desglosePop__head button { border: none; background: none; color: #94a3b8; cursor: pointer; font-size: 13px; padding: 2px 4px; }
+.desglosePop__fila { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; font-size: 12.5px; }
+.desglosePop__total { border-top: 1px solid #e2e8f0; margin-top: 4px; padding-top: 6px; font-weight: 700; }
 /* Aviso de sub-pestaña en «Solo ver». */
 .soloLecturaAviso { margin: 8px 0 4px; padding: 8px 12px; border: 1px solid #e2e8f0; border-left: 3px solid #64748b; border-radius: 8px; background: #f8fafc; color: #334155; font-size: 13px; }
 /* Buscador con sugerencias (BuscadorCombo y buscador de equipo). */

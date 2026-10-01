@@ -2800,6 +2800,14 @@ export function App() {
   );
   // 🚚 Bajada de carro pendiente: se paga como UN SOLO pago (recibo desglosado).
   const [bajadaPend, setBajadaPend] = useState<BajadaResumen | null>(null);
+  // Nómina → Pagos: desglose por persona de la bajada de carro (oculto hasta pedirlo).
+  const [bajadaDesgloseAbierto, setBajadaDesgloseAbierto] = useState(false);
+  useEffect(() => {
+    if (!bajadaDesgloseAbierto) return;
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setBajadaDesgloseAbierto(false); };
+    document.addEventListener("keydown", esc);
+    return () => document.removeEventListener("keydown", esc);
+  }, [bajadaDesgloseAbierto]);
   const bajadaPendTotal = round2(bajadaPend?.total ?? 0);
   const bajadaPendFila = bajadaPendTotal > 0 ? 1 : 0;
   // ── UX de Pagos: buscador, confirmación con desglose y aviso de caja ──
@@ -20722,8 +20730,36 @@ export function App() {
                     <td style={{ fontWeight: 600 }}>
                       Bajada de carro · {bajadaPend.por_trabajador.length} persona(s)
                       <div style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>
-                        {antiguedadLabel(bajadaPend.desde, bajadaPend.tickets)} · {bajadaPend.por_trabajador.map((t) => `${t.trabajador} ${money(t.monto)}`).join(" · ")}
+                        {antiguedadLabel(bajadaPend.desde, bajadaPend.tickets)}
+                        {bajadaPend.por_trabajador.length > 0 && (
+                          <>
+                            {" · "}
+                            <button type="button" className="desgloseBtn" aria-expanded={bajadaDesgloseAbierto}
+                              title={bajadaPend.por_trabajador.map((t) => `${t.trabajador}: ${money(t.monto)}`).join("\n")}
+                              onClick={() => setBajadaDesgloseAbierto((v) => !v)}>👁️ Ver desglose</button>
+                          </>
+                        )}
                       </div>
+                      {bajadaDesgloseAbierto && (
+                        <div className="modalOverlay" onClick={() => setBajadaDesgloseAbierto(false)}>
+                          <div className="modalCard desglosePop" role="dialog" aria-label="Desglose de la bajada de carro" onClick={(e) => e.stopPropagation()}>
+                            <div className="desglosePop__head">
+                              <strong>🚚 Bajada de carro · por persona</strong>
+                              <button type="button" aria-label="Cerrar" onClick={() => setBajadaDesgloseAbierto(false)}>✕</button>
+                            </div>
+                            <div className="muted" style={{ fontSize: 11.5, marginBottom: 6 }}>{antiguedadLabel(bajadaPend.desde, bajadaPend.tickets)}</div>
+                            {bajadaPend.por_trabajador.map((t) => (
+                              <div key={t.trabajador} className="desglosePop__fila">
+                                <span>{t.trabajador} <span className="muted">· {t.tickets} ticket(s) · {Number(t.qq).toFixed(2)} QQ</span></span>
+                                <strong className="num">{money(t.monto)}</strong>
+                              </div>
+                            ))}
+                            <div className="desglosePop__fila desglosePop__total">
+                              <span>Total a pagar</span><strong className="num">{money(bajadaPendTotal)}</strong>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </td>
                     <td className="num" style={{ fontWeight: 700 }}>{money(bajadaPendTotal)}</td>
                     <td className="num">—</td>
