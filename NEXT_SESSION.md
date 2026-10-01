@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Caja: flujos separados Mantenimiento / Repuestos (2026-09-30)
+- MANTENIMIENTO_EQUIPO: tarjeta unica (equipo con buscador, detalle, tecnico, tipo) + «➕ Añadir repuesto de bodega» (BuscadorCombo SOLO con repuestos activos con stock, primero los compatibles con el area elegida) → `repuestos_usados` (estado `mantRepUsados`, cantidad editable, bloquea si supera el stock). «Monto total $» = lo que cobra el tecnico = `amount`. Resumen a la derecha (`.resumenBox`): mano de obra · repuestos de bodega · costo de la reparacion · «Sale de caja». Boton bloqueado si no hay monto ni repuestos (`mantPuedeGuardar`). Ya NO se envia `repuestos_comprados` (el backend lo sigue aceptando).
+- REPUESTOS (compra para bodega): BuscadorCombo del catalogo + «➕ Crear «X» como repuesto nuevo»; lista limpia editable (cant, costo c/u, subtotal, ✕) con «Compatibilidad / etiqueta» por linea (Uso general / Para <area>). Monto = suma; resumen a la derecha. `repCart` ahora `{key, repuesto_id?, nuevo?, etiqueta, unidad, cant, cost, compat}`; se elimino `repLinea`.
+- `repuestos.compatibilidad` (migracion 20261061): en COLS, POST/PATCH `/repuestos` y en cada item de `/repuestos/compra` (`compatibilidad`, opcional). Modulo Repuestos muestra la etiqueta y la edita. `components/BuscadorCombo.tsx` (combobox reutilizable) y `etiquetaCompat` (RepuestosModule).
+
 ### Mantenimiento de Caja minimalista (2026-09-30)
 - TARJETA UNICA (`.mantCard` / `.mantSec` con separadores tenues; ya no se usan `.mantBloque`). Bloques: Equipo y trabajo · Repuestos y materiales (oculto: boton punteado «➕ Añadir repuestos o materiales…», `mantCompraSi` = desplegado, «Ocultar» si la lista esta vacia) · Costos (subtotal repuestos solo si hay lista, mano de obra, TOTAL, factura + foto, rendir cuentas).
 - Buscador unico (`mantBuscar*`, `mantBuscarRef`): combobox propio sobre Área · Sección del catalogo de mantenimiento (sin tildes, todas las palabras; «Recientes» del historial). Elegir rellena `maintenanceForm.area/section` y pone tipo CORRECTIVO; se muestra como ficha con «Cambiar». «＋ Nueva área / sección» abre el modal de siempre. No hay `maquina_id`: la maquina es la seccion.

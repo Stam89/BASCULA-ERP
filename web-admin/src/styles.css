@@ -4448,7 +4448,7 @@ textarea::placeholder {
 .mantCarrito__quitar:hover { background: #fee2e2; }
 .mantCarrito__pie { font-size: 12px; color: #0f766e; padding: 0 2px; }
 /* Mantenimiento de Caja: TARJETA ÚNICA continua (fondo blanco, separadores tenues). */
-.mantCard { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; margin-bottom: 16px; }
+.mantCard { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(15, 23, 42, .03); }
 .mantSec { display: grid; gap: 12px; padding: 16px; }
 .mantSec + .mantSec { border-top: 1px solid #f1f5f9; }
 .mantSec__head { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: #94a3b8; }
@@ -4459,7 +4459,7 @@ textarea::placeholder {
 .mantMini { width: 36px; flex: 0 0 36px; border-radius: 8px; border: 1px solid #d1d5db; background: #fff; color: #334155; font-size: 16px; font-weight: 700; cursor: pointer; }
 /* Buscador único de equipo */
 .mantBuscador { position: relative; display: grid; gap: 6px; }
-.mantBuscador input[type="search"] { width: 100%; padding: 13px 14px !important; font-size: 15px !important; border-radius: 12px !important; border: 1.5px solid #cbd5e1 !important; background: #f8fafc !important; }
+.mantBuscador input[type="search"] { width: 100%; padding: 12px 14px !important; font-size: 15px !important; border-radius: 10px !important; border: 1px solid #cbd5e1 !important; background: #fff !important; }
 .mantBuscador input[type="search"]:focus { background: #fff !important; border-color: #0f766e !important; box-shadow: 0 0 0 3px rgba(15, 118, 110, .15); }
 .mantBuscador__extra { font-size: 12px; color: #64748b; }
 .mantSugerencias { position: absolute; z-index: 30; top: 52px; left: 0; right: 0; margin: 0; padding: 6px; list-style: none; background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 14px 30px rgba(15, 23, 42, .14); max-height: 300px; overflow-y: auto; }
@@ -4469,7 +4469,7 @@ textarea::placeholder {
 .mantSugerencias__sec { font-weight: 700; color: #0f172a; }
 .mantSugerencias li.mantSugerencias__grupo { cursor: default; padding: 4px 10px; font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; color: #94a3b8; }
 .mantSugerencias li.mantSugerencias__vacio { cursor: default; color: #64748b; font-size: 12.5px; }
-.mantEquipoSel { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 12px; background: #f0fdfa; border: 1px solid #ccfbf1; }
+.mantEquipoSel { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 10px; background: #fff; border: 1px solid #e2e8f0; }
 .mantEquipoSel__ico { font-size: 20px; }
 .mantEquipoSel__txt { display: grid; flex: 1; min-width: 0; }
 .mantEquipoSel__txt strong { font-size: 15px; color: #0f172a; }
@@ -4487,6 +4487,53 @@ textarea::placeholder {
 .mantSubRep output { font-weight: 800; color: #0f172a; font-variant-numeric: tabular-nums; }
 .mantFondo { border: 1px dashed #e5e7eb; border-radius: 10px; padding: 10px 12px; }
 .mantFondo.is-on { background: #fffbeb; border: 1px solid #fde68a; }
+/* Buscador con sugerencias (BuscadorCombo y buscador de equipo). */
+.combo { position: relative; }
+.combo input[type="search"] { width: 100%; padding: 10px 12px !important; font-size: 14px !important; border-radius: 10px !important; border: 1px solid #cbd5e1 !important; background: #fff !important; }
+.combo input[type="search"]:focus { border-color: #64748b !important; box-shadow: 0 0 0 3px rgba(100, 116, 139, .15); }
+.combo__lista { position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; right: 0; margin: 0; padding: 4px; list-style: none; background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; box-shadow: 0 10px 24px rgba(15, 23, 42, .10); max-height: 300px; overflow-y: auto; }
+.mantBuscador .combo__lista { top: 50px; }
+.combo__lista li { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px; border-radius: 7px; cursor: pointer; font-size: 13.5px; }
+.combo__lista li.is-activa { background: #f1f5f9; }
+.combo__titulo { font-weight: 600; color: #0f172a; }
+.combo__detalle { font-size: 12px; color: #64748b; }
+.combo__tag { margin-left: auto; font-size: 11px; font-weight: 600; color: #475569; background: #f1f5f9; border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+.combo__lista li.combo__crear { color: #0f766e; font-weight: 600; }
+.combo__lista li.combo__grupo { cursor: default; padding: 4px 10px 2px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: #94a3b8; }
+.combo__lista li.combo__vacio { cursor: default; color: #64748b; font-size: 12.5px; }
+/* Listas limpias (repuestos de bodega / compra para bodega). */
+.cleanList { list-style: none; margin: 0; padding: 0; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; }
+.cleanList__fila, .cleanList__head { display: grid; gap: 10px; align-items: center; padding: 9px 12px; }
+.cleanList--compra .cleanList__fila, .cleanList--compra .cleanList__head { grid-template-columns: minmax(0, 1fr) 72px 92px 86px 24px; }
+.cleanList--bodega .cleanList__fila { grid-template-columns: minmax(0, 1fr) 72px 86px 24px; }
+.cleanList__fila + .cleanList__fila, .cleanList__head + .cleanList__fila { border-top: 1px solid #f1f5f9; }
+.cleanList__head { padding-top: 7px; padding-bottom: 5px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #94a3b8; }
+.cleanList__head span:nth-child(n+2) { text-align: right; }
+.cleanList__main { display: grid; gap: 2px; min-width: 0; font-size: 13px; }
+.cleanList__main strong { color: #0f172a; font-weight: 600; overflow-wrap: anywhere; }
+.cleanList__main small { font-size: 11.5px; }
+.cleanList__nuevo { margin-left: 6px; font-style: normal; font-size: 10.5px; font-weight: 700; color: #0f766e; background: #f0fdfa; border-radius: 999px; padding: 0 6px; }
+.cleanList__error { color: #dc2626; font-weight: 600; }
+input.cleanList__num { height: 32px !important; padding: 4px 8px !important; text-align: right; font-size: 13px !important; border-radius: 7px !important; border: 1px solid #e2e8f0 !important; }
+input.cleanList__num.is-error { border-color: #dc2626 !important; color: #dc2626; }
+.cleanList__monto { text-align: right; font-weight: 600; color: #0f172a; font-variant-numeric: tabular-nums; font-size: 13px; }
+.cleanList__quitar { border: none; background: none; color: #94a3b8; font-size: 14px; cursor: pointer; padding: 2px; border-radius: 6px; }
+.cleanList__quitar:hover { color: #dc2626; background: #fef2f2; }
+select.cleanList__tag { width: auto !important; height: auto !important; max-width: 100%; padding: 0 !important; border: none !important; background: transparent !important; color: #64748b; font-size: 11.5px !important; cursor: pointer; justify-self: start; box-shadow: none !important; }
+select.cleanList__tag:focus { color: #0f172a; outline: 1px dotted #94a3b8; }
+/* Resumen de totales (a la derecha, estilo contable). */
+.costosGrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(230px, 280px); gap: 16px; align-items: start; }
+.costosGrid__campos { display: grid; gap: 12px; }
+.resumenBox { margin: 0; display: grid; gap: 6px; padding: 12px 14px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; }
+.resumenBox--derecha { justify-self: end; min-width: 260px; }
+.resumenBox > div { display: flex; justify-content: space-between; gap: 16px; font-size: 13px; color: #64748b; }
+.resumenBox dt, .resumenBox dd { margin: 0; }
+.resumenBox dd { color: #0f172a; font-weight: 600; font-variant-numeric: tabular-nums; }
+.resumenBox__sub { border-top: 1px dashed #e2e8f0; padding-top: 6px; }
+.resumenBox__total { border-top: 1px solid #cbd5e1; padding-top: 8px; }
+.resumenBox__total dt { color: #0f172a; font-weight: 700; }
+.resumenBox__total dd { font-size: 17px; font-weight: 800; }
+.mantCampo__nota { font-weight: 400; font-size: 11.5px; color: #94a3b8; margin-left: 4px; }
 /* Compra de repuestos dentro del mantenimiento (🔧 se usa ya / 📦 al inventario). */
 .mantCompra { grid-column: 1 / -1; display: grid; gap: 8px; }
 .mantCompra__destino { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
@@ -4525,5 +4572,13 @@ textarea::placeholder {
   .mantMontos { grid-template-columns: minmax(0, 1fr); }
   .mantFila2 { grid-template-columns: minmax(0, 1fr); }
   .mantSec { padding: 14px 12px; }
+  .costosGrid { grid-template-columns: minmax(0, 1fr); }
+  .resumenBox--derecha { justify-self: stretch; min-width: 0; }
+  .cleanList__head { display: none; }
+  .cleanList--compra .cleanList__fila { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 24px; }
+  .cleanList--compra .cleanList__main { grid-column: 1 / -1; }
+  .cleanList--compra .cleanList__monto { grid-column: 1 / 3; }
+  .cleanList--bodega .cleanList__fila { grid-template-columns: minmax(0, 1fr) 64px 24px; }
+  .cleanList--bodega .cleanList__monto { display: none; }
   .mantTotal strong { font-size: 20px; }
 }

@@ -28,7 +28,7 @@ export async function exigirMatriz(req: unknown): Promise<void> {
 }
 
 const COLS = `r.id, r.nombre, r.referencia, r.unidad, r.stock::float AS stock, r.stock_minimo::float AS stock_minimo,
-  r.costo_unitario::float AS costo_unitario, r.equipment_id, e.name AS equipo, r.notas, r.activo, r.updated_at,
+  r.costo_unitario::float AS costo_unitario, r.equipment_id, e.name AS equipo, r.notas, r.activo, r.updated_at, r.compatibilidad,
   (SELECT max(m.created_at) FROM repuesto_movimientos m WHERE m.repuesto_id = r.id AND m.tipo = 'SALIDA') AS ultimo_uso`;
 
 async function movimiento(
@@ -92,7 +92,9 @@ const datosRepuesto = z.object({
   stock_minimo: z.number().nonnegative().default(0),
   costo_unitario: z.number().nonnegative().default(0),
   equipment_id: z.string().uuid().optional().nullable(),
-  notas: z.string().trim().max(500).optional().nullable()
+  notas: z.string().trim().max(500).optional().nullable(),
+  // Familia de equipos a la que sirve (GENERAL o un área: PILADORA, SECADORA…).
+  compatibilidad: z.string().trim().max(40).optional().nullable()
 });
 
 // POST alta (con stock inicial opcional, sin tocar caja)
@@ -107,10 +109,10 @@ repuestosRouter.post("/", asyncRoute(async (req, res) => {
     );
     if (dup.rowCount) throw new ApiError(409, "Ya existe un repuesto con ese nombre y referencia.");
     const ins = await client.query(
-      `INSERT INTO repuestos (nombre, referencia, unidad, stock_minimo, costo_unitario, equipment_id, notas)
-       VALUES ($1, $2, upper($3), $4, $5, $6, $7) RETURNING id`,
+      `INSERT INTO repuestos (nombre, referencia, unidad, stock_minimo, costo_unitario, equipment_id, notas, compatibilidad)
+       VALUES ($1, $2, upper($3), $4, $5, $6, $7, upper($8)) RETURNING id`,
       [body.nombre.toUpperCase(), body.referencia || null, body.unidad, round2(body.stock_minimo), round2(body.costo_unitario),
-       body.equipment_id || null, body.notas || null]
+       body.equipment_id || null, body.notas || null, body.compatibilidad || null]
     );
     const id = ins.rows[0].id;
     if (body.stock_inicial > 0) {
@@ -135,6 +137,7 @@ repuestosRouter.patch("/:id", asyncRoute(async (req, res) => {
   if (body.costo_unitario !== undefined) set("costo_unitario", round2(body.costo_unitario));
   if (body.equipment_id !== undefined) set("equipment_id", body.equipment_id || null);
   if (body.notas !== undefined) set("notas", body.notas || null);
+  if (body.compatibilidad !== undefined) set("compatibilidad", body.compatibilidad ? body.compatibilidad.toUpperCase() : null);
   if (body.activo !== undefined) set("activo", body.activo);
   if (!campos.length) throw new ApiError(400, "Nada que actualizar");
   const upd = await pool.query(`UPDATE repuestos SET ${campos.join(", ")}, updated_at = now() WHERE id = $1 RETURNING id`, vals);
@@ -260,7 +263,9 @@ export const itemCompraSchema = z.object({
     stock_minimo: z.number().nonnegative().default(0)
   }).optional(),
   cantidad: z.number().positive(),
-  costo_unitario: z.number().nonnegative()
+  costo_unitario: z.number().nonnegative(),
+  // Compatibilidad / etiqueta del repuesto (opcional): queda guardada en el repuesto.
+  compatibilidad: z.string().trim().max(40).optional().nullable()
 }).refine((i) => !!i.repuesto_id || !!i.nuevo, { message: "Cada línea debe indicar el repuesto" });
 
 repuestosRouter.post("/compra", asyncRoute(async (req, res) => {
@@ -333,6 +338,7 @@ export async function registrarCompraRepuestos(
           [n.nombre.toUpperCase(), n.referencia || null, n.unidad, round2(n.stock_minimo)]
         )).rows[0];
       }
+      if (it.compatibilidad) await client.query("UPDATE repuestos SET compatibilidad = upper($2) WHERE id = $1", [rep.id, it.compatibilidad]);
       lineas.push({ ...rep, cantidad: round2(it.cantidad), costo: round2(it.costo_unitario) });
     }
     const total = round2(lineas.reduce((s, l) => s + l.cantidad * l.costo, 0));

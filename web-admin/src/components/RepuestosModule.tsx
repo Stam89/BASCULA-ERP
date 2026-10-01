@@ -22,6 +22,14 @@ export type Repuesto = {
   notas: string | null;
   activo: boolean;
   ultimo_uso: string | null;
+  /** Familia de equipos a la que sirve: GENERAL o un área (PILADORA, SECADORA…). */
+  compatibilidad?: string | null;
+};
+
+/** «Uso general» / «Para Piladora» a partir de la etiqueta guardada. */
+export const etiquetaCompat = (v: string) => {
+  const t = v.trim().toUpperCase();
+  return t === "GENERAL" ? "Uso general" : `Para ${t.charAt(0)}${t.slice(1).toLowerCase()}`;
 };
 
 type Movimiento = {
@@ -85,7 +93,7 @@ type Accion =
   | { tipo: "uso"; r: Repuesto; cantidad: string; equipo: string; motivo: string }
   | { tipo: "conteo"; r: Repuesto; real: string; motivo: string };
 
-const vacio = { nombre: "", referencia: "", unidad: "UNIDAD", stock_inicial: "", stock_minimo: "", costo_unitario: "", equipment_id: "", notas: "" };
+const vacio = { nombre: "", referencia: "", unidad: "UNIDAD", stock_inicial: "", stock_minimo: "", costo_unitario: "", equipment_id: "", notas: "", compatibilidad: "" };
 
 export function RepuestosModule({ cajaAbiertaId, puedeEditar, avisar, onCambio }: {
   cajaAbiertaId: string | null;
@@ -129,7 +137,7 @@ export function RepuestosModule({ cajaAbiertaId, puedeEditar, avisar, onCambio }
   function abrirNuevo() { setForm(vacio); setEditId(null); setFormAbierto(true); }
   function abrirEditar(r: Repuesto) {
     setForm({ nombre: r.nombre, referencia: r.referencia ?? "", unidad: r.unidad, stock_inicial: "", stock_minimo: String(r.stock_minimo),
-      costo_unitario: String(r.costo_unitario), equipment_id: r.equipment_id ?? "", notas: r.notas ?? "" });
+      costo_unitario: String(r.costo_unitario), equipment_id: r.equipment_id ?? "", notas: r.notas ?? "", compatibilidad: r.compatibilidad ?? "" });
     setEditId(r.id); setFormAbierto(true);
   }
 
@@ -140,7 +148,8 @@ export function RepuestosModule({ cajaAbiertaId, puedeEditar, avisar, onCambio }
       const datos = {
         nombre: form.nombre.trim(), referencia: form.referencia.trim() || null, unidad: form.unidad,
         stock_minimo: Number(form.stock_minimo) || 0, costo_unitario: Number(form.costo_unitario) || 0,
-        equipment_id: form.equipment_id || null, notas: form.notas.trim() || null
+        equipment_id: form.equipment_id || null, notas: form.notas.trim() || null,
+        compatibilidad: form.compatibilidad.trim() || null
       };
       if (editId) await apiPatch(`/repuestos/${editId}`, datos);
       else await apiPost("/repuestos", { ...datos, stock_inicial: Number(form.stock_inicial) || 0 });
@@ -245,7 +254,8 @@ export function RepuestosModule({ cajaAbiertaId, puedeEditar, avisar, onCambio }
                 const e = ESTILO[estadoRepuesto(r)];
                 return (
                   <tr key={r.id}>
-                    <td><strong>{r.nombre}</strong>{r.referencia && <div style={{ fontSize: 11.5, color: "#64748b" }}>{r.referencia}</div>}</td>
+                    <td><strong>{r.nombre}</strong>{r.referencia && <div style={{ fontSize: 11.5, color: "#64748b" }}>{r.referencia}</div>}
+                      {r.compatibilidad && <span className="combo__tag" style={{ display: "inline-block", marginTop: 3 }}>{etiquetaCompat(r.compatibilidad)}</span>}</td>
                     <td>{r.equipo ?? "—"}</td>
                     <td className="num" style={{ fontWeight: 800, color: e.fg }}>{n2(r.stock)} <span style={{ fontWeight: 500, fontSize: 11 }}>{r.unidad.toLowerCase()}</span></td>
                     <td className="num">{n2(r.stock_minimo)}</td>
@@ -291,6 +301,12 @@ export function RepuestosModule({ cajaAbiertaId, puedeEditar, avisar, onCambio }
                   <option value="">— Varias / sin asignar —</option>
                   {equipos.map((q) => <option key={q.id} value={q.id}>{q.name}</option>)}
                 </select></label>
+              <label><span>Compatibilidad / etiqueta</span>
+                <input style={campo} list="repCompatLista" value={form.compatibilidad} placeholder="GENERAL, PILADORA, SECADORA…"
+                  onChange={(e) => setForm({ ...form, compatibilidad: e.target.value.toUpperCase() })} />
+                <datalist id="repCompatLista">
+                  {[...new Set(["GENERAL", "PILADORA", "SECADORA", ...lista.map((x) => (x.compatibilidad ?? "").toUpperCase()).filter(Boolean)])].map((v) => <option key={v} value={v}>{etiquetaCompat(v)}</option>)}
+                </datalist></label>
               <label style={{ gridColumn: "1 / -1" }}><span>Notas</span><input style={campo} value={form.notas} placeholder="Proveedor habitual, duración aproximada…" onChange={(e) => setForm({ ...form, notas: e.target.value })} /></label>
             </div>
             <p className="muted" style={{ margin: 0, fontSize: 12 }}>Cuando el stock llegue al mínimo, el Dashboard avisa para comprarlo.</p>

@@ -10,7 +10,8 @@ import { BuscadorHistorial } from "./components/BuscadorHistorial";
 import { ResultadoMensual, type GanaOperacion } from "./components/ResultadoMensual";
 import { planDeSacos, sobranteLb, SacosAlertaDashboard, SacosCatalogoConfig, SacosPorComprarAlerta, SacosTablero, type SacoPorComprar } from "./components/SacosModule";
 import { PedidoCompartirModal, type PedidoCompartirData } from "./components/PedidoCompartir";
-import { RepuestosAlertaDashboard, RepuestosModule, type Repuesto } from "./components/RepuestosModule";
+import { RepuestosAlertaDashboard, RepuestosModule, etiquetaCompat, type Repuesto } from "./components/RepuestosModule";
+import { BuscadorCombo } from "./components/BuscadorCombo";
 import * as XLSX from "xlsx";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
@@ -3088,22 +3089,19 @@ export function App() {
   // Caja ↔ Repuestos de planta: catálogo para comprar (categoría Repuestos) o
   // para usar piezas del stock en un Mantenimiento.
   const [repCatalogo, setRepCatalogo] = useState<Repuesto[]>([]);
+  // Caja → categoría Repuestos (compra para bodega): líneas editables en la lista.
   const [repCart, setRepCart] = useState<Array<{
-    repuesto_id?: string; nuevo?: { nombre: string; referencia: string | null; unidad: string; stock_minimo: number };
-    etiqueta: string; unidad: string; cantidad: number; costo: number;
+    key: string; repuesto_id?: string; nuevo?: { nombre: string; referencia: string | null; unidad: string; stock_minimo: number };
+    etiqueta: string; unidad: string; cant: string; cost: string; compat: string;
   }>>([]);
-  const [repLinea, setRepLinea] = useState({ sel: "", nombre: "", referencia: "", unidad: "UNIDAD", minimo: "", cantidad: "", costo: "" });
-  // Mantenimiento de Caja · repuestos COMPRADOS en la reparación: 🔧 se usan ya
-  // (costo de la reparación, no entran a bodega) o 📦 se guardan en el inventario.
-  const [mantCompraSi, setMantCompraSi] = useState(false);   // bloque de repuestos desplegado
+  // Mantenimiento de Caja · repuestos que SALEN DE BODEGA (ya existen en el stock).
+  const [mantBodegaAbierto, setMantBodegaAbierto] = useState(false);
+  const [mantRepUsados, setMantRepUsados] = useState<Array<{ repuesto_id: string; etiqueta: string; unidad: string; cantidad: string; costo: number }>>([]);
   // Buscador único «equipo / área / máquina»: rellena area y section de fondo.
   const [mantBuscar, setMantBuscar] = useState("");
   const [mantBuscarAbierto, setMantBuscarAbierto] = useState(false);
   const [mantBuscarIdx, setMantBuscarIdx] = useState(0);
   const mantBuscarRef = useRef<HTMLInputElement | null>(null);
-  // area/section = máquina a la que aplica (vacío = la de esta reparación, general).
-  const [mantCompra, setMantCompra] = useState<Array<{ key: string; nombre: string; repuesto_id: string | null; cantidad: number; costo: number; destino: "USO" | "INVENTARIO"; area: string; section: string }>>([]);
-  const [mantCompraLinea, setMantCompraLinea] = useState({ nombre: "", cantidad: "1", costo: "", destino: "USO" as "USO" | "INVENTARIO", maquina: "" });
   const [sackMovForm, setSackMovForm] = useState({ sack_id: "", movement: "ENTRADA" as "ENTRADA"|"SALIDA", cantidad: "", concepto: "" });
   // ── Diagnóstico de stocks negativos ────────────────────────────────────────
   const [negativeStock, setNegativeStock] = useState<NegativeStockRow[]>([]);
@@ -4220,25 +4218,6 @@ export function App() {
     if (activeTab === "Caja" && movCategory === "MANTENIMIENTO_EQUIPO" && maintenanceHistory.length === 0) refreshMaintenanceHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, movCategory]);
-  function agregarRepuestoCarrito() {
-    const cantidad = Number(repLinea.cantidad), costo = Number(repLinea.costo);
-    if (!repLinea.sel) { addToast("Elige el repuesto o «Nuevo repuesto»", "error"); return; }
-    if (!(cantidad > 0)) { addToast("Ingresa la cantidad", "error"); return; }
-    if (!(costo > 0)) { addToast("Ingresa el costo unitario", "error"); return; }
-    if (repLinea.sel === "__nuevo__") {
-      if (repLinea.nombre.trim().length < 2) { addToast("Escribe el nombre del repuesto nuevo", "error"); return; }
-      const nombre = repLinea.nombre.trim().toUpperCase();
-      setRepCart((c) => [...c, {
-        nuevo: { nombre, referencia: repLinea.referencia.trim() || null, unidad: repLinea.unidad, stock_minimo: Number(repLinea.minimo) || 0 },
-        etiqueta: `${nombre}${repLinea.referencia.trim() ? ` (${repLinea.referencia.trim()})` : ""} · nuevo`, unidad: repLinea.unidad, cantidad, costo
-      }]);
-    } else {
-      const r = repCatalogo.find((x) => x.id === repLinea.sel);
-      if (!r) return;
-      setRepCart((c) => [...c, { repuesto_id: r.id, etiqueta: `${r.nombre}${r.referencia ? ` (${r.referencia})` : ""}`, unidad: r.unidad, cantidad, costo }]);
-    }
-    setRepLinea({ sel: "", nombre: "", referencia: "", unidad: "UNIDAD", minimo: "", cantidad: "", costo: "" });
-  }
   // Repuesto del catálogo que coincide con lo escrito (etiqueta «NOMBRE (REF)» o nombre único).
   const etiquetaRepuesto = (r: { nombre: string; referencia?: string | null }) => `${r.nombre}${r.referencia ? ` (${r.referencia})` : ""}`;
   const repuestoPorNombre = (texto: string) => {
@@ -4250,29 +4229,15 @@ export function App() {
     const porNombre = activos.filter((r) => r.nombre.toLowerCase() === t);
     return porNombre.length === 1 ? porNombre[0] : null;
   };
-  function agregarCompraMantenimiento() {
-    const nombre = mantCompraLinea.nombre.trim();
-    const cantidad = Number(mantCompraLinea.cantidad);
-    const costo = round2(Number(mantCompraLinea.costo) || 0);
-    if (nombre.length < 2) { addToast("Escribe qué repuesto compraste", "error"); return; }
-    if (!(cantidad > 0)) { addToast("La cantidad debe ser mayor a 0", "error"); return; }
-    if (!(costo > 0)) { addToast("Ingresa el costo por unidad", "error"); return; }
-    const destino = esMatrizActiva ? mantCompraLinea.destino : "USO";
-    const r = repuestoPorNombre(nombre);
-    // Máquina a la que aplica (solo si se usa ya): "ÁREA||SECCIÓN"; vacío = general.
-    const [area, section] = destino === "USO" && mantCompraLinea.maquina ? mantCompraLinea.maquina.split("||") : ["", ""];
-    setMantCompra((l) => [...l, { key: `${Date.now()}-${l.length}`, nombre: r ? etiquetaRepuesto(r) : nombre.toUpperCase(), repuesto_id: r?.id ?? null, cantidad, costo, destino, area, section }]);
-    // Listo para el siguiente: mismo destino y máquina, cantidad en 1.
-    setMantCompraLinea({ ...mantCompraLinea, nombre: "", cantidad: "1", costo: "" });
-  }
-  // Totales del mantenimiento (derivados del estado: se recalculan solos al
-  // agregar/quitar repuestos o cambiar la mano de obra).
-  //   a) subtotal de repuestos comprados  b) mano de obra / servicios
-  //   c) TOTAL A DESCONTAR DE CAJA = a + b  (lo que se envía como amount)
-  const mantSubtotalRep = round2(mantCompra.reduce((s2, l) => s2 + l.cantidad * l.costo, 0));
-  const mantInvTotal = round2(mantCompra.filter((l) => l.destino === "INVENTARIO").reduce((s2, l) => s2 + l.cantidad * l.costo, 0));
+  // Mantenimiento: «Monto total» = lo que cobra el técnico (lo único que sale de
+  // caja); los repuestos de bodega se descuentan del stock y su costo va aparte.
   const mantManoObra = round2(parseFloat(maintenanceForm.amount || "0") || 0);
-  const mantTotalCaja = round2(mantSubtotalRep + mantManoObra);
+  const mantRepExcede = mantRepUsados.some((u) => {
+    const r = repCatalogo.find((x) => x.id === u.repuesto_id);
+    const c = Number(u.cantidad);
+    return !r || !(c > 0) || c > r.stock + 1e-9;
+  });
+  const mantPuedeGuardar = (mantManoObra > 0 || mantRepUsados.length > 0) && !mantRepExcede;
   const sacosDelActivo = esMatrizActiva ? sackInventory : sacosPropios;
 
   useEffect(() => {
@@ -8206,16 +8171,12 @@ export function App() {
       addToast("Completa los campos requeridos", "error");
       return;
     }
-    if (mantCompraSi && mantCompraLinea.nombre.trim()) { addToast("Toca «➕ Agregar» para sumar el repuesto a la lista (o borra lo escrito)", "error"); return; }
-    // amount = TOTAL A DESCONTAR DE CAJA (repuestos comprados + mano de obra).
-    // El backend separa lo que va a bodega (compra de repuestos aparte).
-    const invTotal = mantInvTotal;
-    const amount = mantTotalCaja;
-    if (!(amount > 0)) { addToast("El total a descontar de caja no puede ser $0.00", "error"); return; }
-    if (!(round2(amount - invTotal) > 0)) {
-      addToast("Si solo compraste repuestos para guardar (sin reparación), usa la categoría «Repuestos».", "error");
-      return;
-    }
+    if (mantRepExcede) { addToast("Revisa las cantidades: algún repuesto supera lo que hay en bodega", "error"); return; }
+    // amount = lo que cobra el técnico (sale de caja). Puede ser 0 si solo se
+    // usaron repuestos de bodega (no hay egreso; el costo queda en la hoja de vida).
+    const amount = mantManoObra;
+    if (!mantPuedeGuardar) { addToast("Ingresa el monto del técnico o añade un repuesto de bodega", "error"); return; }
+    const usados = mantRepUsados.map((u) => ({ repuesto_id: u.repuesto_id, cantidad: round2(Number(u.cantidad)) }));
     // Dinero a rendir cuentas (fondo provisional) sobre este mantenimiento.
     const esFondoMant = movEsFondo;
     if (esFondoMant && !(amount > 0)) { addToast("Para rendir cuentas ingresa el monto entregado", "error"); return; }
@@ -8248,18 +8209,14 @@ export function App() {
           receipt_photo_base64: photoBase64,
           amount,
           cash_register_id: registerId,
-          repuestos_comprados: mantCompra.length
-            ? mantCompra.map((l) => ({ repuesto_id: l.repuesto_id ?? undefined, nombre: l.nombre, cantidad: l.cantidad, costo_unitario: l.costo, destino: l.destino,
-                area: l.area || undefined, section: l.section || undefined }))
-            : undefined,
+          repuestos_usados: usados.length ? usados : undefined,
           es_fondo: esFondoMant || undefined,
           responsable: esFondoMant ? movResponsable.trim() : undefined
         })
       });
       if (!res.ok) throw new Error(await res.text());
-      if (invTotal > 0) cargarRepCatalogo();
-      setMantCompra([]); setMantCompraSi(false);
-      setMantCompraLinea({ nombre: "", cantidad: "1", costo: "", destino: "USO", maquina: "" });
+      if (usados.length) cargarRepCatalogo();
+      setMantRepUsados([]); setMantBodegaAbierto(false);
       if (esFondoMant) { setMovEsFondo(false); setMovResponsable(""); }
 
       setMaintenanceForm({
@@ -8275,7 +8232,7 @@ export function App() {
       });
       await refreshCaja(registerId);
       await refreshMaintenanceHistory();
-      addToast(invTotal > 0 ? `Mantenimiento registrado ✓ · ${money(invTotal)} en repuestos entraron al inventario` : "Mantenimiento registrado ✓", "success");
+      addToast(usados.length ? "Mantenimiento registrado ✓ · repuestos descontados de bodega" : "Mantenimiento registrado ✓", "success");
     } catch (e) {
       addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error");
     }
@@ -8628,6 +8585,7 @@ export function App() {
     //    de planta (una sola operación: egreso de contado o Cuenta por Pagar a crédito).
     if (movement === "EXPENSE" && category === "REPUESTOS" && repCart.length > 0) {
       if (movEsFondo) throw new Error("Un fondo a rendir cuentas no lleva lista de repuestos: registra la compra cuando se rinda.");
+      if (repCart.some((l) => !(Number(l.cant) > 0) || !(Number(l.cost) > 0))) throw new Error("Cada repuesto necesita cantidad y costo mayores a 0.");
       const provTxtR = movProveedor.trim();
       const provSelR = provTxtR ? proveedoresCaja.find((p) => p.name.trim().toLowerCase() === provTxtR.toLowerCase()) : undefined;
       const creditoR = movModalidad === "CREDITO";
@@ -8639,7 +8597,7 @@ export function App() {
         proveedor_nombre: provTxtR && !provSelR ? provTxtR : undefined,
         due_date: creditoR && movVence ? movVence : undefined,
         descripcion: String(form.get("description") ?? "").trim() || undefined,
-        items: repCart.map((l) => ({ repuesto_id: l.repuesto_id, nuevo: l.nuevo, cantidad: l.cantidad, costo_unitario: l.costo }))
+        items: repCart.map((l) => ({ repuesto_id: l.repuesto_id, nuevo: l.nuevo, cantidad: round2(Number(l.cant)), costo_unitario: round2(Number(l.cost)), compatibilidad: l.compat || undefined }))
       });
       safeResetForm(formElement);
       setRepCart([]); setMovCategory(""); setMovSubcategoria("");
@@ -16939,19 +16897,7 @@ export function App() {
                         campos genéricos de Descripción/Monto). */}
                     {movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && (() => {
                       const inp = { display: "block", width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 } as const;
-                      // Repuestos COMPRADOS: 🔧 se usan ya (costo de esta reparación) o
-                      // 📦 se guardan en el inventario (compra de repuestos aparte, solo Matriz).
-                      const destino = esMatrizActiva ? mantCompraLinea.destino : "USO";
-                      const coincide = repuestoPorNombre(mantCompraLinea.nombre);
-                      const previa = round2((Number(mantCompraLinea.cantidad) || 0) * (Number(mantCompraLinea.costo) || 0));
-                      const general = maintenanceForm.area && maintenanceForm.section ? `${maintenanceForm.area} · ${maintenanceForm.section}` : "";
                       const n2 = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2));
-                      // Reparto por máquina de lo usado ya (para el aviso de hojas de vida).
-                      const reparto = new Map<string, number>();
-                      for (const l of mantCompra.filter((x) => x.destino === "USO" && x.area && x.section && !(x.area === maintenanceForm.area && x.section === maintenanceForm.section))) {
-                        const k = `${l.area} · ${l.section}`;
-                        reparto.set(k, round2((reparto.get(k) ?? 0) + l.cantidad * l.costo));
-                      }
                       // ── Buscador único: equipos = Área · Sección del catálogo de mantenimiento ──
                       const sinTildes = (t: string) => t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
                       const equipos = maintAreas.flatMap((a) => maintSectionsFor(a).map((sec) => ({ area: a, section: sec })));
@@ -16974,20 +16920,35 @@ export function App() {
                       const conRecientes = !tokens.length && sugerencias.some((e) => recientes.includes(`${e.area}||${e.section}`));
                       const idx = Math.min(mantBuscarIdx, Math.max(sugerencias.length - 1, 0));
                       const elegirEquipo = (e: { area: string; section: string }) => {
-                        // Smart default: al elegir el equipo, el trabajo pasa a «Correctivo» (se puede cambiar).
+                        // Al elegir el equipo, el trabajo pasa a «Correctivo» (se puede cambiar).
                         setMaintenanceForm({ ...maintenanceForm, area: e.area, section: e.section, maintenance_type: "CORRECTIVO" });
                         setMantBuscar(""); setMantBuscarAbierto(false); setMantBuscarIdx(0);
                       };
-                      // Técnicos usados antes (más recientes primero) para autocompletar.
+                      // Técnicos usados antes (más recientes primero).
                       const tecnicos = [...new Set(maintenanceHistory.map((m) => String(m.provider ?? "").trim()).filter(Boolean))].slice(0, 30);
                       const tecnicoTxt = sinTildes(maintenanceForm.provider.trim());
                       const tecnicosChips = tecnicos.filter((t) => sinTildes(t) !== tecnicoTxt && (!tecnicoTxt || sinTildes(t).startsWith(tecnicoTxt))).slice(0, 3);
+                      // ── Repuestos de bodega: solo los que existen con stock; primero los compatibles con el área ──
+                      const areaSel = maintenanceForm.area.toUpperCase();
+                      const prioridad = (r: Repuesto) => {
+                        const c = (r.compatibilidad ?? "").toUpperCase();
+                        return areaSel && c === areaSel ? 0 : !c || c === "GENERAL" ? 1 : 2;
+                      };
+                      const opcionesBodega = repCatalogo
+                        .filter((r) => r.activo && r.stock > 0 && !mantRepUsados.some((u) => u.repuesto_id === r.id))
+                        .sort((a, b) => prioridad(a) - prioridad(b) || a.nombre.localeCompare(b.nombre))
+                        .map((r) => ({ key: r.id, titulo: etiquetaRepuesto(r), detalle: `hay ${n2(r.stock)} ${r.unidad.toLowerCase()}`, etiqueta: r.compatibilidad ? etiquetaCompat(r.compatibilidad) : undefined }));
+                      const agregarDeBodega = (id: string) => {
+                        const r = repCatalogo.find((x) => x.id === id);
+                        if (r) setMantRepUsados((l) => [...l, { repuesto_id: r.id, etiqueta: etiquetaRepuesto(r), unidad: r.unidad, cantidad: "1", costo: r.costo_unitario }]);
+                      };
+                      const valorBodega = round2(mantRepUsados.reduce((s2, u) => s2 + (Number(u.cantidad) || 0) * u.costo, 0));
                       return (
                         <div className="mantCard">
-                          {/* ── Bloque 1 · Equipo y trabajo ── */}
+                          {/* ── Equipo y trabajo ── */}
                           <section className="mantSec">
                             <div className="mantSec__head">Equipo y trabajo</div>
-                            {general ? (
+                            {maintenanceForm.area && maintenanceForm.section ? (
                               <div className="mantEquipoSel">
                                 <span className="mantEquipoSel__ico" aria-hidden="true">🔧</span>
                                 <span className="mantEquipoSel__txt"><strong>{maintenanceForm.section}</strong><small>{maintenanceForm.area}</small></span>
@@ -17013,18 +16974,18 @@ export function App() {
                                     else if (e.key === "Escape") setMantBuscarAbierto(false);
                                   }} />
                                 {mantBuscarAbierto && (
-                                  <ul id="mantSugerencias" role="listbox" className="mantSugerencias">
-                                    {conRecientes && <li className="mantSugerencias__grupo" role="presentation">Recientes</li>}
+                                  <ul id="mantSugerencias" role="listbox" className="combo__lista">
+                                    {conRecientes && <li className="combo__grupo" role="presentation">Recientes</li>}
                                     {sugerencias.map((e, i) => (
                                       <li key={`${e.area}||${e.section}`} id={`mantSug-${i}`} role="option" aria-selected={i === idx}
                                         className={i === idx ? "is-activa" : ""}
                                         onMouseEnter={() => setMantBuscarIdx(i)}
                                         onMouseDown={(ev) => { ev.preventDefault(); elegirEquipo(e); }}>
-                                        <span className="mantSugerencias__area">{e.area}</span>
-                                        <span className="mantSugerencias__sec">{e.section}</span>
+                                        <span className="combo__titulo">{e.section}</span>
+                                        <span className="combo__detalle">{e.area}</span>
                                       </li>
                                     ))}
-                                    {sugerencias.length === 0 && <li className="mantSugerencias__vacio" role="presentation">Sin coincidencias. Créalo abajo con «＋ Nueva sección».</li>}
+                                    {sugerencias.length === 0 && <li className="combo__vacio" role="presentation">Sin coincidencias</li>}
                                   </ul>
                                 )}
                                 <div className="mantBuscador__extra">
@@ -17070,123 +17031,78 @@ export function App() {
                             </div>
                           </section>
 
-                          {/* ── Bloque 2 · Repuestos y materiales (oculto hasta pedirlo) ── */}
-                          <section className="mantSec">
-                            {!mantCompraSi ? (
-                              <button type="button" className="mantAgregarRep" onClick={() => setMantCompraSi(true)}>➕ Añadir repuestos o materiales a esta reparación</button>
-                            ) : (
-                              <div className="mantRepPanel">
-                                <div className="mantSec__head">
-                                  Repuestos y materiales
-                                  {mantCompra.length === 0 && (
-                                    <button type="button" className="mantLink" style={{ marginLeft: "auto", textTransform: "none", letterSpacing: 0 }}
-                                      onClick={() => { setMantCompraSi(false); setMantCompraLinea({ ...mantCompraLinea, nombre: "", cantidad: "1", costo: "" }); }}>Ocultar</button>
-                                  )}
-                                </div>
-                                <div className="mantCompra">
-                                  {esMatrizActiva && (
-                                    <div className="mantCompra__destino" role="radiogroup" aria-label="¿Para qué es el repuesto?">
-                                      <button type="button" role="radio" aria-checked={destino === "USO"} className={destino === "USO" ? "is-on" : ""}
-                                        onClick={() => setMantCompraLinea({ ...mantCompraLinea, destino: "USO" })}>🔧 Se usa ya en esta reparación</button>
-                                      <button type="button" role="radio" aria-checked={destino === "INVENTARIO"} className={destino === "INVENTARIO" ? "is-on is-inv" : ""}
-                                        onClick={() => setMantCompraLinea({ ...mantCompraLinea, destino: "INVENTARIO" })}>📦 Se guarda de repuesto (inventario)</button>
-                                    </div>
-                                  )}
-                                  <div className="mantCompra__fila">
-                                    <input list="mantCompraCatalogo" value={mantCompraLinea.nombre} aria-label="Repuesto"
-                                      placeholder={destino === "INVENTARIO" ? "Repuesto (elige del inventario o escribe uno nuevo)" : "Repuesto que compraste (ej: FAJA B-52)"}
-                                      onChange={(e) => {
-                                        const nombre = e.target.value;
-                                        const r = repuestoPorNombre(nombre);
-                                        setMantCompraLinea({ ...mantCompraLinea, nombre, costo: mantCompraLinea.costo || (r && r.costo_unitario > 0 ? String(r.costo_unitario) : "") });
-                                      }}
-                                      style={{ ...inp, marginTop: 0 }} />
-                                    <datalist id="mantCompraCatalogo">
-                                      {repCatalogo.filter((r) => r.activo).map((r) => <option key={r.id} value={etiquetaRepuesto(r)} />)}
-                                    </datalist>
-                                    <input type="number" min="0" step="any" value={mantCompraLinea.cantidad} aria-label="Cantidad" placeholder="Cant."
-                                      onChange={(e) => setMantCompraLinea({ ...mantCompraLinea, cantidad: e.target.value })} style={{ ...inp, marginTop: 0 }} />
-                                    <input type="number" min="0" step="0.01" value={mantCompraLinea.costo} aria-label="Costo por unidad" placeholder="Costo c/u $"
-                                      onChange={(e) => setMantCompraLinea({ ...mantCompraLinea, costo: e.target.value })}
-                                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); agregarCompraMantenimiento(); } }}
-                                      style={{ ...inp, marginTop: 0 }} />
+                          {/* ── Repuestos de bodega (solo los que ya existen; oculto hasta pedirlo) ── */}
+                          {esMatrizActiva && (
+                            <section className="mantSec">
+                              {!mantBodegaAbierto ? (
+                                <button type="button" className="mantAgregarRep" onClick={() => setMantBodegaAbierto(true)}>➕ Añadir repuesto de bodega</button>
+                              ) : (
+                                <div className="mantRepPanel">
+                                  <div className="mantSec__head">
+                                    Repuestos de bodega
+                                    {mantRepUsados.length === 0 && (
+                                      <button type="button" className="mantLink" style={{ marginLeft: "auto", textTransform: "none", letterSpacing: 0 }} onClick={() => setMantBodegaAbierto(false)}>Ocultar</button>
+                                    )}
                                   </div>
-                                  <div className="mantCompra__fila2">
-                                    {destino === "USO" ? (
-                                      <select value={mantCompraLinea.maquina} aria-label="Máquina a la que aplica" style={{ ...inp, marginTop: 0 }}
-                                        onChange={(e) => setMantCompraLinea({ ...mantCompraLinea, maquina: e.target.value })}>
-                                        <option value="">Máquina: {general ? `esta reparación (${general})` : "Mantenimiento general / Planta"}</option>
-                                        {maintAreas.map((a) => (
-                                          <optgroup key={a} label={a}>
-                                            {maintSectionsFor(a).map((sec) => <option key={`${a}||${sec}`} value={`${a}||${sec}`}>{a} · {sec}</option>)}
-                                          </optgroup>
-                                        ))}
-                                      </select>
-                                    ) : <span className="muted" style={{ fontSize: 12 }}>📦 Va a bodega: se asigna a una máquina cuando se use (Repuestos → «Usar»).</span>}
-                                    <span className="mantCompra__previa">{previa > 0 ? `= ${money(previa)}` : ""}</span>
-                                    <button type="button" className="primary" onClick={agregarCompraMantenimiento}>➕ Agregar</button>
-                                  </div>
-                                  <small className="muted">
-                                    {destino === "USO"
-                                      ? "Se paga con esta reparación y su costo va a la hoja de vida de la máquina elegida (si no eliges, a la de esta reparación). No entra a bodega."
-                                      : coincide
-                                        ? `Entra al inventario: ${etiquetaRepuesto(coincide)} (hoy hay ${coincide.stock} ${coincide.unidad.toLowerCase()}). Se registra como compra de repuestos, aparte de esta reparación.`
-                                        : "Entra al inventario de Repuestos (si no existe, se crea). Se registra como compra de repuestos, aparte de esta reparación."}
-                                  </small>
-                                  {mantCompra.length > 0 && (
-                                    <div className="mantCarrito">
-                                      <div className="mantCarrito__head"><span>Repuesto</span><span>Para</span><span>Subtotal</span><span /></div>
-                                      {mantCompra.map((l) => (
-                                        <div key={l.key} className="mantCarrito__fila">
-                                          <span>
-                                            <strong>{l.nombre}</strong>
-                                            <small className="muted" style={{ display: "block" }}>{n2(l.cantidad)} × {money(l.costo)} c/u = {money(l.cantidad * l.costo)}</small>
-                                          </span>
-                                          <span style={{ display: "grid", gap: 2, justifyItems: "start" }}>
-                                            <span className={`mantDestino ${l.destino === "USO" ? "mantDestino--uso" : "mantDestino--inv"}`}>
-                                              {l.destino === "USO" ? "🔧 Se usa ya" : `📦 Inventario${l.repuesto_id ? "" : " · nuevo"}`}
+                                  {opcionesBodega.length > 0 || mantRepUsados.length > 0 ? (
+                                    <BuscadorCombo id="mantBodega" placeholder="Buscar repuesto en bodega…" opciones={opcionesBodega}
+                                      onElegir={agregarDeBodega} vacio="Ningún repuesto con stock coincide" autoFocus={mantRepUsados.length === 0} />
+                                  ) : (
+                                    <small className="muted">No hay repuestos con stock en bodega.</small>
+                                  )}
+                                  {mantRepUsados.length > 0 && (
+                                    <ul className="cleanList cleanList--bodega">
+                                      {mantRepUsados.map((u) => {
+                                        const r = repCatalogo.find((x) => x.id === u.repuesto_id);
+                                        const max = r?.stock ?? 0;
+                                        const cant = Number(u.cantidad) || 0;
+                                        const excede = cant > max + 1e-9;
+                                        return (
+                                          <li key={u.repuesto_id} className="cleanList__fila">
+                                            <span className="cleanList__main">
+                                              <strong>{u.etiqueta}</strong>
+                                              <small className={excede ? "cleanList__error" : "muted"}>{excede ? `Supera lo que hay en bodega (máx. ${n2(max)})` : `${money(u.costo)} c/u · quedan ${n2(round2(max - cant))}`}</small>
                                             </span>
-                                            {l.destino === "USO" && <small className="muted">{l.area ? `${l.area} · ${l.section}` : (general || "General / Planta")}</small>}
-                                          </span>
-                                          <span className="mantCarrito__cant">{money(l.cantidad * l.costo)}</span>
-                                          <button type="button" className="mantCarrito__quitar" onClick={() => setMantCompra((x) => x.filter((y) => y.key !== l.key))}>🗑️ Eliminar</button>
-                                        </div>
-                                      ))}
-                                    </div>
+                                            <input type="number" min="1" step="any" value={u.cantidad} aria-label={`Cantidad de ${u.etiqueta}`} className={`cleanList__num ${excede ? "is-error" : ""}`}
+                                              onChange={(e) => setMantRepUsados((l) => l.map((x) => x.repuesto_id === u.repuesto_id ? { ...x, cantidad: e.target.value } : x))} />
+                                            <span className="cleanList__monto">{money(cant * u.costo)}</span>
+                                            <button type="button" className="cleanList__quitar" aria-label={`Quitar ${u.etiqueta}`}
+                                              onClick={() => setMantRepUsados((l) => l.filter((x) => x.repuesto_id !== u.repuesto_id))}>✕</button>
+                                          </li>
+                                        );
+                                      })}
+                                    </ul>
                                   )}
                                 </div>
-                              </div>
-                            )}
-                          </section>
+                              )}
+                            </section>
+                          )}
 
-                          {/* ── Bloque 3 · Costos y comprobante ── */}
+                          {/* ── Costos ── */}
                           <section className="mantSec">
                             <div className="mantSec__head">Costos</div>
-                            {mantCompra.length > 0 && (
-                              <div className="mantSubRep"><span>Subtotal repuestos comprados</span><output>{money(mantSubtotalRep)}</output></div>
-                            )}
-                            <label className="mantCampo">Costo de mano de obra / servicios $
-                              <input type="number" step="0.01" min="0" value={maintenanceForm.amount} placeholder="0.00"
-                                onChange={(e) => setMaintenanceForm({ ...maintenanceForm, amount: e.target.value })}
-                                style={{ ...inp, fontWeight: 700, fontSize: 15 }} />
-                            </label>
-                            <div className={`mantTotal ${mantTotalCaja > 0 ? "" : "is-cero"}`} aria-live="polite">
-                              <span>TOTAL A DESCONTAR DE CAJA</span>
-                              <strong>{money(mantTotalCaja)}</strong>
-                            </div>
-                            {(mantInvTotal > 0 || reparto.size > 0) && (
-                              <small className="muted" style={{ display: "block" }}>
-                                {mantInvTotal > 0 && <>Incluye {money(mantInvTotal)} de repuestos que entran al inventario (se registran como compra de repuestos). </>}
-                                {reparto.size > 0 && <>Hoja de vida: {general || "esta reparación"} {money(round2(mantTotalCaja - mantInvTotal - [...reparto.values()].reduce((a2, b2) => a2 + b2, 0)))}{[...reparto.entries()].map(([k, v]) => ` · ${k} ${money(v)}`).join("")}.</>}
-                              </small>
-                            )}
-                            <div className="mantFila2">
-                              <label className="mantCampo">Nº de factura
-                                <input value={maintenanceForm.invoice_number} placeholder="Opcional" onChange={(e) => setMaintenanceForm({ ...maintenanceForm, invoice_number: e.target.value })} style={inp} />
-                              </label>
-                              <label className="mantCampo">📸 Foto del comprobante
-                                <input type="file" accept="image/jpeg,image/png,image/jpg" style={{ display: "block", marginTop: 6, fontSize: 12 }} />
-                              </label>
+                            <div className="costosGrid">
+                              <div className="costosGrid__campos">
+                                <label className="mantCampo">Monto total $ <span className="mantCampo__nota">lo que cobra el técnico</span>
+                                  <input type="number" step="0.01" min="0" value={maintenanceForm.amount} placeholder="0.00"
+                                    onChange={(e) => setMaintenanceForm({ ...maintenanceForm, amount: e.target.value })}
+                                    style={{ ...inp, fontWeight: 700, fontSize: 15 }} />
+                                </label>
+                                <div className="mantFila2">
+                                  <label className="mantCampo">Nº de factura
+                                    <input value={maintenanceForm.invoice_number} placeholder="Opcional" onChange={(e) => setMaintenanceForm({ ...maintenanceForm, invoice_number: e.target.value })} style={inp} />
+                                  </label>
+                                  <label className="mantCampo">Comprobante
+                                    <input type="file" accept="image/jpeg,image/png,image/jpg" style={{ display: "block", marginTop: 6, fontSize: 12 }} />
+                                  </label>
+                                </div>
+                              </div>
+                              <dl className="resumenBox" aria-live="polite">
+                                <div><dt>Mano de obra / servicios</dt><dd>{money(mantManoObra)}</dd></div>
+                                {valorBodega > 0 && <div><dt>Repuestos de bodega</dt><dd>{money(valorBodega)}</dd></div>}
+                                {valorBodega > 0 && <div className="resumenBox__sub"><dt>Costo de la reparación</dt><dd>{money(round2(mantManoObra + valorBodega))}</dd></div>}
+                                <div className="resumenBox__total"><dt>Sale de caja</dt><dd>{money(mantManoObra)}</dd></div>
+                              </dl>
                             </div>
                             <div className={`mantFondo ${movEsFondo ? "is-on" : ""}`}>
                               <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", margin: 0 }}>
@@ -17201,7 +17117,7 @@ export function App() {
                                   <datalist id="responsablesList">
                                     {adminStaff.map((s2) => <option key={s2.id} value={s2.worker_name} />)}
                                   </datalist>
-                                  <small className="muted" style={{ display: "block", marginTop: 4 }}>El monto sale de caja y queda ⏳ Por Liquidar. Luego usa 💸 Registrar Vuelto: el mantenimiento queda con el gasto real.</small>
+                                  <small className="muted" style={{ display: "block", marginTop: 4 }}>Queda ⏳ Por Liquidar; luego 💸 Registrar Vuelto.</small>
                                 </label>
                               )}
                             </div>
@@ -17268,78 +17184,71 @@ export function App() {
                         )}
                       </div>
                     )}
-                    {/* 🔧 REPUESTOS DE PLANTA: con la categoría «Repuestos», la compra puede
-                        entrar al inventario de repuestos (lista con cantidad y costo). Sin
-                        lista es un egreso normal, como siempre. Solo Matriz. */}
+                    {/* 🔧 REPUESTOS DE PLANTA (compra para bodega): lista limpia; cada línea
+                        entra al stock con su «Compatibilidad / etiqueta». El monto del egreso
+                        es la suma de la lista. Sin lista es un egreso común. Solo Matriz. */}
                     {movType === "EXPENSE" && movCategory === "REPUESTOS" && esMatrizActiva && (() => {
-                      const totalRep = repCart.reduce((s2, l) => s2 + l.cantidad * l.costo, 0);
-                      const selRep = repCatalogo.find((x) => x.id === repLinea.sel);
-                      const inp = { padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13, width: "100%" } as const;
+                      const n2 = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2));
+                      const totalRep = round2(repCart.reduce((s2, l) => s2 + (Number(l.cant) || 0) * (Number(l.cost) || 0), 0));
+                      const enLista = new Set(repCart.map((l) => l.repuesto_id).filter(Boolean));
+                      const opciones = repCatalogo
+                        .filter((r) => r.activo && !enLista.has(r.id))
+                        .map((r) => ({ key: r.id, titulo: etiquetaRepuesto(r), detalle: `hay ${n2(r.stock)} ${r.unidad.toLowerCase()}`, etiqueta: r.compatibilidad ? etiquetaCompat(r.compatibilidad) : undefined }));
+                      const clave = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+                      const agregarExistente = (id: string) => {
+                        const r = repCatalogo.find((x) => x.id === id);
+                        if (r) setRepCart((c) => [...c, { key: clave(), repuesto_id: r.id, etiqueta: etiquetaRepuesto(r), unidad: r.unidad, cant: "1",
+                          cost: r.costo_unitario > 0 ? String(r.costo_unitario) : "", compat: (r.compatibilidad ?? "").toUpperCase() }]);
+                      };
+                      const agregarNuevo = (texto: string) => {
+                        const nombre = texto.trim().toUpperCase();
+                        setRepCart((c) => [...c, { key: clave(), nuevo: { nombre, referencia: null, unidad: "UNIDAD", stock_minimo: 0 }, etiqueta: nombre, unidad: "UNIDAD", cant: "1", cost: "", compat: "" }]);
+                      };
+                      const cambiar = (key: string, cambios: Partial<{ cant: string; cost: string; compat: string }>) =>
+                        setRepCart((c) => c.map((l) => (l.key === key ? { ...l, ...cambios } : l)));
                       return (
-                        <div style={{ background: "#f0fdfa", border: "1px solid #99f6e4", borderRadius: 8, padding: 14, marginBottom: 16, display: "grid", gap: 10 }}>
-                          <div style={{ fontSize: 12, fontWeight: 700, color: "#0f766e" }}>🔧 ¿Entran al inventario de repuestos de planta? Agrégalos a la lista (opcional)</div>
-                          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 8, alignItems: "end" }}>
-                            <label style={{ fontSize: 12, fontWeight: 600, margin: 0 }}>Repuesto
-                              <select value={repLinea.sel} style={inp} onChange={(e) => {
-                                const r = repCatalogo.find((x) => x.id === e.target.value);
-                                setRepLinea({ ...repLinea, sel: e.target.value, costo: r && r.costo_unitario > 0 ? String(r.costo_unitario) : repLinea.costo });
-                              }}>
-                                <option value="">Seleccione…</option>
-                                {repCatalogo.map((r) => <option key={r.id} value={r.id}>{r.nombre}{r.referencia ? ` (${r.referencia})` : ""} · hay {r.stock}</option>)}
-                                <option value="__nuevo__">➕ Nuevo repuesto…</option>
-                              </select>
-                            </label>
-                            <label style={{ fontSize: 12, fontWeight: 600, margin: 0 }}>Cantidad
-                              <input type="number" min="0" step="1" value={repLinea.cantidad} style={inp} onChange={(e) => setRepLinea({ ...repLinea, cantidad: e.target.value })} />
-                            </label>
-                            <label style={{ fontSize: 12, fontWeight: 600, margin: 0 }}>Costo unit. $
-                              <input type="number" min="0" step="0.01" value={repLinea.costo} style={inp} onChange={(e) => setRepLinea({ ...repLinea, costo: e.target.value })} />
-                            </label>
-                          </div>
-                          {repLinea.sel === "__nuevo__" && (
-                            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", gap: 8 }}>
-                              <input placeholder="Nombre (ej: BANDA A-52)" value={repLinea.nombre} style={inp} onChange={(e) => setRepLinea({ ...repLinea, nombre: e.target.value })} />
-                              <input placeholder="Referencia / medida" value={repLinea.referencia} style={inp} onChange={(e) => setRepLinea({ ...repLinea, referencia: e.target.value })} />
-                              <select value={repLinea.unidad} style={inp} onChange={(e) => setRepLinea({ ...repLinea, unidad: e.target.value })}>
-                                {["UNIDAD", "JUEGO", "PAR", "METRO", "LITRO", "GALON", "KG", "ROLLO"].map((u) => <option key={u} value={u}>{u}</option>)}
-                              </select>
-                              <input type="number" min="0" step="1" placeholder="Mínimo (alerta)" value={repLinea.minimo} style={inp} onChange={(e) => setRepLinea({ ...repLinea, minimo: e.target.value })} />
-                            </div>
-                          )}
-                          {selRep && selRep.equipo && <small className="muted">Máquina: {selRep.equipo}</small>}
-                          <button type="button" className="btnSecondary" onClick={agregarRepuestoCarrito} style={{ justifySelf: "start" }}>➕ Agregar a la lista</button>
-                          {repCart.length > 0 && (
-                            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, background: "#fff" }}>
-                              <thead><tr style={{ background: "#0f766e", color: "#fff" }}>
-                                <th style={{ padding: "5px 8px", textAlign: "left" }}>Repuesto</th>
-                                <th style={{ padding: "5px 8px", textAlign: "right" }}>Cant.</th>
-                                <th style={{ padding: "5px 8px", textAlign: "right" }}>Costo</th>
-                                <th style={{ padding: "5px 8px", textAlign: "right" }}>Subtotal</th><th />
-                              </tr></thead>
-                              <tbody>
-                                {repCart.map((l, i) => (
-                                  <tr key={i} style={{ borderBottom: "1px solid #e5e7eb" }}>
-                                    <td style={{ padding: "4px 8px" }}>{l.etiqueta}</td>
-                                    <td style={{ padding: "4px 8px", textAlign: "right" }}>{l.cantidad} {l.unidad.toLowerCase()}</td>
-                                    <td style={{ padding: "4px 8px", textAlign: "right" }}>{money(l.costo)}</td>
-                                    <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700 }}>{money(l.cantidad * l.costo)}</td>
-                                    <td style={{ padding: "4px 8px", textAlign: "center" }}>
-                                      <button type="button" onClick={() => setRepCart((c) => c.filter((_, j) => j !== i))} style={{ padding: "2px 8px", background: "#ef4444", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 11 }}>🗑️</button>
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                              <tfoot><tr style={{ background: "#f0fdfa", fontWeight: 800 }}>
-                                <td colSpan={3} style={{ padding: "6px 8px" }}>MONTO TOTAL $</td>
-                                <td style={{ padding: "6px 8px", textAlign: "right", color: "#0f766e", fontSize: 15 }}>{money(totalRep)}</td><td />
-                              </tr></tfoot>
-                            </table>
-                          )}
-                          <small className="muted">
-                            {repCart.length > 0
-                              ? "El monto es el total de la lista. Al guardar, los repuestos suben al inventario (Inventario → 🔧 Repuestos) y el egreso queda en Caja (o en Por Pagar si es a crédito)."
-                              : "Sin lista es un egreso normal de repuestos (no suma al inventario)."}
-                          </small>
+                        <div className="mantCard">
+                          <section className="mantSec">
+                            <div className="mantSec__head">Compra para bodega</div>
+                            <BuscadorCombo id="repCompra" placeholder="🔍 Buscar repuesto o escribir uno nuevo…" opciones={opciones} onElegir={agregarExistente}
+                              crear={(t) => (repuestoPorNombre(t) ? null : `Crear «${t.toUpperCase()}» como repuesto nuevo`)} onCrear={agregarNuevo} />
+                            {repCart.length > 0 && (
+                              <ul className="cleanList cleanList--compra">
+                                <li className="cleanList__head" aria-hidden="true"><span>Repuesto</span><span>Cant.</span><span>Costo c/u</span><span>Subtotal</span><span /></li>
+                                {repCart.map((l) => {
+                                  const sub = (Number(l.cant) || 0) * (Number(l.cost) || 0);
+                                  return (
+                                    <li key={l.key} className="cleanList__fila">
+                                      <span className="cleanList__main">
+                                        <strong>{l.etiqueta}{l.nuevo && <em className="cleanList__nuevo">nuevo</em>}</strong>
+                                        <select className="cleanList__tag" value={l.compat} aria-label="Compatibilidad / etiqueta"
+                                          onChange={(e) => cambiar(l.key, { compat: e.target.value })}>
+                                          <option value="">Compatibilidad / etiqueta</option>
+                                          <option value="GENERAL">Uso general</option>
+                                          {[...new Set([...maintAreas.map((a) => a.toUpperCase()), ...(l.compat && l.compat !== "GENERAL" ? [l.compat] : [])])].map((a) => <option key={a} value={a}>{etiquetaCompat(a)}</option>)}
+                                        </select>
+                                      </span>
+                                      <input type="number" min="0" step="any" value={l.cant} aria-label={`Cantidad de ${l.etiqueta}`} className="cleanList__num"
+                                        onChange={(e) => cambiar(l.key, { cant: e.target.value })} />
+                                      <input type="number" min="0" step="0.01" value={l.cost} placeholder="0.00" aria-label={`Costo por unidad de ${l.etiqueta}`} className="cleanList__num"
+                                        onChange={(e) => cambiar(l.key, { cost: e.target.value })} />
+                                      <span className="cleanList__monto">{money(sub)}</span>
+                                      <button type="button" className="cleanList__quitar" aria-label={`Quitar ${l.etiqueta}`}
+                                        onClick={() => setRepCart((c) => c.filter((x) => x.key !== l.key))}>✕</button>
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            )}
+                            {repCart.length > 0 ? (
+                              <dl className="resumenBox resumenBox--derecha" aria-live="polite">
+                                <div><dt>Subtotal · {repCart.length} ítem{repCart.length === 1 ? "" : "s"}</dt><dd>{money(totalRep)}</dd></div>
+                                <div className="resumenBox__total"><dt>Total del egreso</dt><dd>{money(totalRep)}</dd></div>
+                              </dl>
+                            ) : (
+                              <small className="muted">Lo que agregues entra a bodega. Sin lista, es un egreso común.</small>
+                            )}
+                          </section>
                         </div>
                       );
                     })()}
@@ -17505,8 +17414,8 @@ export function App() {
                       </>
                     )}
                     <button className="primary"
-                      disabled={CASH_REUSE[movCategory] === "pilado" || CASH_REUSE[movCategory] === "fomento" || (movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !(mantTotalCaja > 0))}
-                      title={movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !(mantTotalCaja > 0) ? "El total a descontar de caja es $0.00" : undefined}
+                      disabled={CASH_REUSE[movCategory] === "pilado" || CASH_REUSE[movCategory] === "fomento" || (movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !mantPuedeGuardar)}
+                      title={movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !mantPuedeGuardar ? "Ingresa el monto del técnico o añade un repuesto de bodega" : undefined}
                       style={{ width: "100%", padding: "10px 0", marginTop: 8 }}>💾 Registrar movimiento</button>
                   </form>
                 )}
