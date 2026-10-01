@@ -3138,6 +3138,8 @@ export function App() {
   // Mantenimiento de Caja · repuestos que SALEN DE BODEGA (ya existen en el stock).
   const [mantBodegaAbierto, setMantBodegaAbierto] = useState(false);
   const [repFactura, setRepFactura] = useState("");   // Nº de factura de la compra para bodega
+  // Repuesto elegido en el buscador de «Compra para bodega», antes de «➕ Agregar a la lista».
+  const [repSel, setRepSel] = useState<{ repuesto_id?: string; nombre: string; unidad: string; stock?: number; cant: string; cost: string; compat: string } | null>(null);
   const [mantRepUsados, setMantRepUsados] = useState<Array<{ repuesto_id: string; etiqueta: string; unidad: string; cantidad: string; costo: number }>>([]);
   // Buscador único «equipo / área / máquina»: rellena area y section de fondo.
   const [mantBuscar, setMantBuscar] = useState("");
@@ -4279,6 +4281,8 @@ export function App() {
     const porNombre = activos.filter((r) => r.nombre.toLowerCase() === t);
     return porNombre.length === 1 ? porNombre[0] : null;
   };
+  // Total de la lista de compra para bodega (= «Monto $» del egreso).
+  const repCartTotal = round2(repCart.reduce((s2, l) => s2 + (Number(l.cant) || 0) * (Number(l.cost) || 0), 0));
   // Mantenimiento: «Monto total» = lo que cobra el técnico (lo único que sale de
   // caja); los repuestos de bodega se descuentan del stock y su costo va aparte.
   const mantManoObra = round2(parseFloat(maintenanceForm.amount || "0") || 0);
@@ -8633,6 +8637,9 @@ export function App() {
     }
     // ── Categoría REPUESTOS con lista: la compra entra al INVENTARIO DE REPUESTOS
     //    de planta (una sola operación: egreso de contado o Cuenta por Pagar a crédito).
+    if (movement === "EXPENSE" && category === "REPUESTOS" && repSel && !movEsFondo) {
+      throw new Error("Toca «➕ Agregar a la lista» para sumar el repuesto elegido (o quítalo con «Cambiar»).");
+    }
     if (movement === "EXPENSE" && category === "REPUESTOS" && repCart.length > 0) {
       if (movEsFondo) throw new Error("Un fondo a rendir cuentas no lleva lista de repuestos: registra la compra cuando se rinda.");
       if (repCart.some((l) => !(Number(l.cant) > 0) || !(Number(l.cost) > 0))) throw new Error("Cada repuesto necesita cantidad y costo mayores a 0.");
@@ -8650,7 +8657,7 @@ export function App() {
         items: repCart.map((l) => ({ repuesto_id: l.repuesto_id, nuevo: l.nuevo, cantidad: round2(Number(l.cant)), costo_unitario: round2(Number(l.cost)), compatibilidad: l.compat || undefined }))
       });
       safeResetForm(formElement);
-      setRepCart([]); setRepFactura(""); setMovCategory(""); setMovSubcategoria("");
+      setRepCart([]); setRepSel(null); setRepFactura(""); setMovCategory(""); setMovSubcategoria("");
       setMovProveedor(""); setMovModalidad("CONTADO"); setMovVence("");
       addToast(r.credito
         ? `💳 Repuestos a crédito: Cuenta por Pagar a ${r.proveedor} por ${money(r.total)} · entraron al inventario`
@@ -17256,57 +17263,89 @@ export function App() {
                         es la suma de la lista. Sin lista es un egreso común. Solo Matriz. */}
                     {movType === "EXPENSE" && movCategory === "REPUESTOS" && esMatrizActiva && !movEsFondo && (() => {
                       const n2 = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2));
-                      const totalRep = round2(repCart.reduce((s2, l) => s2 + (Number(l.cant) || 0) * (Number(l.cost) || 0), 0));
                       const enLista = new Set(repCart.map((l) => l.repuesto_id).filter(Boolean));
                       const opciones = repCatalogo
                         .filter((r) => r.activo && !enLista.has(r.id))
                         .map((r) => ({ key: r.id, titulo: etiquetaRepuesto(r), detalle: `hay ${n2(r.stock)} ${r.unidad.toLowerCase()}`, etiqueta: r.compatibilidad ? etiquetaCompat(r.compatibilidad) : undefined }));
                       const clave = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-                      const agregarExistente = (id: string) => {
-                        const r = repCatalogo.find((x) => x.id === id);
+                      const cantSel = Number(repSel?.cant);
+                      const costSel = Number(repSel?.cost);
+                      const subSel = repSel ? round2((cantSel || 0) * (costSel || 0)) : 0;
+                      const puedeAgregar = !!repSel && cantSel >= 1 && costSel > 0;
+                      const agregarALista = () => {
+                        if (!repSel) return;
+                        if (!(cantSel >= 1)) { addToast("La cantidad mínima es 1", "error"); return; }
+                        if (!(costSel > 0)) { addToast("Ingresa el precio unitario", "error"); return; }
                         setMovEsFondo(false);
-                        if (r) setRepCart((c) => [...c, { key: clave(), repuesto_id: r.id, etiqueta: etiquetaRepuesto(r), unidad: r.unidad, cant: "1",
-                          cost: r.costo_unitario > 0 ? String(r.costo_unitario) : "", compat: (r.compatibilidad ?? "").toUpperCase() }]);
+                        setRepCart((c) => [...c, {
+                          key: clave(), repuesto_id: repSel.repuesto_id,
+                          nuevo: repSel.repuesto_id ? undefined : { nombre: repSel.nombre, referencia: null, unidad: repSel.unidad, stock_minimo: 0 },
+                          etiqueta: repSel.nombre, unidad: repSel.unidad, cant: repSel.cant, cost: repSel.cost, compat: repSel.compat
+                        }]);
+                        setRepSel(null);
                       };
-                      const agregarNuevo = (texto: string) => {
-                        const nombre = texto.trim().toUpperCase();
-                        setMovEsFondo(false);
-                        setRepCart((c) => [...c, { key: clave(), nuevo: { nombre, referencia: null, unidad: "UNIDAD", stock_minimo: 0 }, etiqueta: nombre, unidad: "UNIDAD", cant: "1", cost: "", compat: "" }]);
-                      };
-                      const cambiar = (key: string, cambios: Partial<{ cant: string; cost: string; compat: string }>) =>
-                        setRepCart((c) => c.map((l) => (l.key === key ? { ...l, ...cambios } : l)));
                       return (
                         <div className="mantCard">
                           <section className="mantSec">
                             <div className="mantSec__head">Compra para bodega</div>
-                            <BuscadorCombo id="repCompra" placeholder="🔍 Buscar repuesto o escribir uno nuevo…" opciones={opciones} onElegir={agregarExistente}
-                              crear={(t) => (repuestoPorNombre(t) ? null : `Crear «${t.toUpperCase()}» como repuesto nuevo`)} onCrear={agregarNuevo} />
+                            {!repSel ? (
+                              <BuscadorCombo id="repCompra" placeholder="🔍 Buscar repuesto o escribir uno nuevo…" opciones={opciones}
+                                onElegir={(id) => {
+                                  const r = repCatalogo.find((x) => x.id === id);
+                                  if (r) setRepSel({ repuesto_id: r.id, nombre: etiquetaRepuesto(r), unidad: r.unidad, stock: r.stock, cant: "1",
+                                    cost: r.costo_unitario > 0 ? String(r.costo_unitario) : "", compat: (r.compatibilidad ?? "").toUpperCase() });
+                                }}
+                                crear={(t) => (repuestoPorNombre(t) ? null : `Crear «${t.toUpperCase()}» como repuesto nuevo`)}
+                                onCrear={(t) => setRepSel({ nombre: t.trim().toUpperCase(), unidad: "UNIDAD", cant: "1", cost: "", compat: "" })} />
+                            ) : (
+                              <div className="repEntrada">
+                                <div className="repEntrada__sel">
+                                  <span><strong>{repSel.nombre}</strong>{!repSel.repuesto_id && <em className="cleanList__nuevo">nuevo</em>}
+                                    {repSel.stock !== undefined && <small className="muted"> · hay {n2(repSel.stock)} {repSel.unidad.toLowerCase()} en bodega</small>}</span>
+                                  <button type="button" className="mantLink" onClick={() => setRepSel(null)}>Cambiar</button>
+                                </div>
+                                <div className="repEntrada__campos">
+                                  <label className="mantCampo">Cantidad
+                                    <input type="number" min="1" step="any" autoFocus value={repSel.cant} className="repEntrada__num"
+                                      onChange={(e) => setRepSel({ ...repSel, cant: e.target.value })} />
+                                  </label>
+                                  <label className="mantCampo">Precio Unitario $
+                                    <input type="number" min="0" step="0.01" value={repSel.cost} placeholder="0.00" className="repEntrada__num"
+                                      onChange={(e) => setRepSel({ ...repSel, cost: e.target.value })}
+                                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); agregarALista(); } }} />
+                                  </label>
+                                  <label className="mantCampo">Subtotal $
+                                    <input readOnly tabIndex={-1} value={subSel.toFixed(2)} className="repEntrada__num mantMontos__solo" aria-readonly="true" />
+                                  </label>
+                                  <label className="mantCampo">Compatibilidad
+                                    <select value={repSel.compat} className="repEntrada__num" onChange={(e) => setRepSel({ ...repSel, compat: e.target.value })}>
+                                      <option value="">— Etiqueta (opcional) —</option>
+                                      <option value="GENERAL">Uso general</option>
+                                      {[...new Set([...maintAreas.map((a) => a.toUpperCase()), ...(repSel.compat && repSel.compat !== "GENERAL" ? [repSel.compat] : [])])].map((a) => <option key={a} value={a}>{etiquetaCompat(a)}</option>)}
+                                    </select>
+                                  </label>
+                                  <button type="button" className="primary repEntrada__btn" disabled={!puedeAgregar} onClick={agregarALista}
+                                    title={puedeAgregar ? "Agregar a la lista" : "Cantidad mínima 1 y precio mayor a 0"}>➕ Agregar a la lista</button>
+                                </div>
+                                {repSel.cant !== "" && !(cantSel >= 1) && <small style={{ color: "#dc2626", fontWeight: 600 }}>La cantidad mínima es 1.</small>}
+                              </div>
+                            )}
                             {repCart.length > 0 && (
-                              <ul className="cleanList cleanList--compra">
-                                <li className="cleanList__head" aria-hidden="true"><span>Repuesto</span><span>Cant.</span><span>Costo c/u</span><span>Subtotal</span><span /></li>
-                                {repCart.map((l) => {
-                                  const sub = (Number(l.cant) || 0) * (Number(l.cost) || 0);
-                                  return (
-                                    <li key={l.key} className="cleanList__fila">
-                                      <span className="cleanList__main">
-                                        <strong>{l.etiqueta}{l.nuevo && <em className="cleanList__nuevo">nuevo</em>}</strong>
-                                        <select className="cleanList__tag" value={l.compat} aria-label="Compatibilidad / etiqueta"
-                                          onChange={(e) => cambiar(l.key, { compat: e.target.value })}>
-                                          <option value="">Compatibilidad / etiqueta</option>
-                                          <option value="GENERAL">Uso general</option>
-                                          {[...new Set([...maintAreas.map((a) => a.toUpperCase()), ...(l.compat && l.compat !== "GENERAL" ? [l.compat] : [])])].map((a) => <option key={a} value={a}>{etiquetaCompat(a)}</option>)}
-                                        </select>
-                                      </span>
-                                      <input type="number" min="0" step="any" value={l.cant} aria-label={`Cantidad de ${l.etiqueta}`} className="cleanList__num"
-                                        onChange={(e) => cambiar(l.key, { cant: e.target.value })} />
-                                      <input type="number" min="0" step="0.01" value={l.cost} placeholder="0.00" aria-label={`Costo por unidad de ${l.etiqueta}`} className="cleanList__num"
-                                        onChange={(e) => cambiar(l.key, { cost: e.target.value })} />
-                                      <span className="cleanList__monto">{money(sub)}</span>
-                                      <button type="button" className="cleanList__quitar" aria-label={`Quitar ${l.etiqueta}`}
-                                        onClick={() => setRepCart((c) => c.filter((x) => x.key !== l.key))}>✕</button>
-                                    </li>
-                                  );
-                                })}
+                              <ul className="cleanList cleanList--lista">
+                                <li className="cleanList__head" aria-hidden="true"><span>Repuesto</span><span>Cantidad</span><span>Precio unitario</span><span>Subtotal</span><span /></li>
+                                {repCart.map((l) => (
+                                  <li key={l.key} className="cleanList__fila">
+                                    <span className="cleanList__main">
+                                      <strong>{l.etiqueta}{l.nuevo && <em className="cleanList__nuevo">nuevo</em>}</strong>
+                                      {l.compat && <small className="muted">{etiquetaCompat(l.compat)}</small>}
+                                    </span>
+                                    <span className="cleanList__dato">{n2(Number(l.cant))} {l.unidad.toLowerCase()}</span>
+                                    <span className="cleanList__dato">{money(Number(l.cost))}</span>
+                                    <span className="cleanList__monto">{money((Number(l.cant) || 0) * (Number(l.cost) || 0))}</span>
+                                    <button type="button" className="mantCarrito__quitar" aria-label={`Eliminar ${l.etiqueta}`}
+                                      onClick={() => setRepCart((c) => c.filter((x) => x.key !== l.key))}>🗑️ Eliminar</button>
+                                  </li>
+                                ))}
                               </ul>
                             )}
                             {repCart.length > 0 ? (
@@ -17316,12 +17355,12 @@ export function App() {
                                     style={{ display: "block", width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13 }} />
                                 </label>
                                 <dl className="resumenBox" aria-live="polite">
-                                  <div><dt>Subtotal · {repCart.length} ítem{repCart.length === 1 ? "" : "s"}</dt><dd>{money(totalRep)}</dd></div>
-                                  <div className="resumenBox__total"><dt>Total del egreso</dt><dd>{money(totalRep)}</dd></div>
+                                  <div><dt>Subtotal · {repCart.length} ítem{repCart.length === 1 ? "" : "s"}</dt><dd>{money(repCartTotal)}</dd></div>
+                                  <div className="resumenBox__total"><dt>Total del egreso</dt><dd>{money(repCartTotal)}</dd></div>
                                 </dl>
                               </div>
-                            ) : (
-                              <small className="muted">Lo que agregues entra a bodega. Sin lista, es un egreso común.</small>
+                            ) : !repSel && (
+                              <small className="muted">Elige o escribe el repuesto, luego su cantidad y precio. Lo que agregues entra a bodega. Sin lista, es un egreso común.</small>
                             )}
                           </section>
                         </div>
@@ -17484,8 +17523,13 @@ export function App() {
                     {movCategory !== "MANTENIMIENTO_EQUIPO" && !esCategoriaSacos(movCategory) && (
                       <>
                         <Input name="description" label="Descripción (opcional)" required={false} />
-                        {/* Con lista de repuestos, el monto es el total de la lista. */}
-                        {!(movCategory === "REPUESTOS" && repCart.length > 0) && <Input name="amount" label="Monto $" type="number" />}
+                        {/* Con lista de repuestos, el monto es el total de la lista (automático). */}
+                        {movCategory === "REPUESTOS" && repCart.length > 0 ? (
+                          <label>
+                            <span>Monto $ <span className="muted" style={{ fontWeight: 400 }}>(suma de la lista, automático)</span></span>
+                            <input readOnly tabIndex={-1} value={repCartTotal.toFixed(2)} aria-readonly="true" className="montoAuto" />
+                          </label>
+                        ) : <Input name="amount" label="Monto $" type="number" />}
                       </>
                     )}
                     <button className="primary"
