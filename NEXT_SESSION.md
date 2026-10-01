@@ -49,6 +49,10 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Mantenimiento Planta: mano de obra + materiales (2026-10-01)
+- Costos con dos campos: «Mano de Obra / Servicios $» (`maintenanceForm.amount`) y «Materiales / Consumibles $» (`mantMateriales`) + recuadro «TOTAL A DESCONTAR DE CAJA» (`mantTotalCaja`). Con «Rendir cuentas» hay un solo «Monto entregado» (al marcarlo los materiales se suman a el).
+- Payload: `amount` = total (como siempre) + opcionales `labor_cost` / `parts_cost`. `/equipment/maintenance` los guarda en `equipment_maintenance.labor_cost/parts_cost` (400 si no suman `amount`) y la descripcion del egreso de Caja agrega «mano de obra $X + materiales $Y». Historial y CSV muestran el desglose. Sin desglose o con fondo todo queda como antes.
+
 ### Revision de alertas de sacos del Dashboard (2026-10-01)
 - Calculo verificado con los pedidos reales (J0PA 10 QQ/25lb → 40 Flor 25 LB; 21Z0 15 QQ/10lb → 150 Flor 10 LB; RH3W pendiente 10 QQ/50lb → 20 Flor 100 LB; IPKO anulado sin movimientos). `/sacks/por-comprar` correcto.
 - Arreglos: «↻ Actualizar» del Dashboard ahora recarga sacos y repuestos; la alerta de repuestos se carga al abrir el Dashboard (antes solo tras pasar por Caja); «Ver inventario de sacos» va a Inventario → Existencias y baja a `#inv-sacos` (`irASacos`), respetando permiso de Inventario; chips «saldo -N, vendidos sin stock» en vez de «hay -N»; texto «Caja → ➕ Nuevo movimiento → Compra de sacos»; `SacosSinMinimosAviso` cuando ningun saco activo tiene stock minimo.

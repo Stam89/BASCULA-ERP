@@ -448,8 +448,18 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
       destino: z.enum(["USO", "INVENTARIO"]),
       area: z.string().trim().max(80).optional(),
       section: z.string().trim().max(80).optional()
-    })).max(40).optional()
+    })).max(40).optional(),
+    // Desglose opcional de lo pagado: amount = mano de obra + materiales /
+    // consumibles comprados para este trabajo. Queda en la hoja de vida.
+    labor_cost: z.number().nonnegative().optional(),
+    parts_cost: z.number().nonnegative().optional()
   }).parse(req.body);
+  const conDesglose = body.labor_cost !== undefined || body.parts_cost !== undefined;
+  const manoObra = round2(body.labor_cost ?? 0);
+  const materiales = round2(body.parts_cost ?? 0);
+  if (conDesglose && Math.abs(round2(manoObra + materiales) - round2(body.amount)) > 0.01) {
+    throw new ApiError(400, "La mano de obra más los materiales debe ser igual al monto total.");
+  }
   const esFondo = body.es_fondo === true;
   const comprados = body.repuestos_comprados ?? [];
   const compradosUso = comprados.filter((l) => l.destino === "USO");
@@ -508,11 +518,11 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
   const result = await inTransaction(async (client) => {
     const maintenance = await client.query(
       `INSERT INTO equipment_maintenance
-       (equipment_id, area, section, maquina, maintenance_type, description, provider, invoice_number, receipt_photo_url, amount, created_by)
-       VALUES (NULL, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       (equipment_id, area, section, maquina, maintenance_type, description, provider, invoice_number, receipt_photo_url, amount, created_by, labor_cost, parts_cost)
+       VALUES (NULL, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING *`,
       [body.area, body.section, body.maquina || null, body.maintenance_type, body.description, body.provider || null, body.invoice_number || null, photoUrl,
-       round2(Math.max(0, montoMant - totalUsoOtras)), body.created_by || null]
+       round2(Math.max(0, montoMant - totalUsoOtras)), body.created_by || null, manoObra, materiales]
     );
     // Repuestos del inventario: salen del stock y su valor queda en la hoja de
     // vida (repuestos_stock_valor), sin tocar la caja.
@@ -585,7 +595,7 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
          (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by, es_fondo, fondo_estado, responsable)
          VALUES ($1, 'EXPENSE', 'MANTENIMIENTO_EQUIPO', 'equipment_maintenance', $2, $3, $4, $5, $6, $7, $8)`,
         [body.cash_register_id, maintenance.rows[0].id, montoMant,
-         `Mantenimiento ${body.area}/${body.section}: ${body.description}${compradosUso.length ? ` · repuestos: ${detalle(compradosUso)}` : ""}`.slice(0, 500), body.created_by || null,
+         `Mantenimiento ${body.area}/${body.section}: ${body.description}${compradosUso.length ? ` · repuestos: ${detalle(compradosUso)}` : ""}${materiales > 0 ? ` · mano de obra $${manoObra.toFixed(2)} + materiales $${materiales.toFixed(2)}` : ""}`.slice(0, 500), body.created_by || null,
          esFondo, esFondo ? "POR_LIQUIDAR" : null, esFondo ? body.responsable!.trim() : null]
       );
     }

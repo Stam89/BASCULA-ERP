@@ -3324,6 +3324,9 @@ export function App() {
     receipt_photo_url: "",
     amount: ""
   });
+  // Materiales / consumibles comprados para el trabajo (pernos, soldadura…):
+  // se suman a la mano de obra (maintenanceForm.amount) en el total de caja.
+  const [mantMateriales, setMantMateriales] = useState("");
   const [maintenanceHistory, setMaintenanceHistory] = useState<any[]>([]);
   const [maintFilter, setMaintFilter] = useState({ from: "", to: "", area: "", type: "" });
   // Mantenedores dinámicos (áreas / secciones / tipos) del form de Mantenimiento.
@@ -4290,7 +4293,10 @@ export function App() {
   // taller). Repuestos comprados → categoría «Repuestos»; bajas de bodega →
   // Inventario → 🔧 Repuestos → «Usar».
   const mantManoObra = round2(parseFloat(maintenanceForm.amount || "0") || 0);
-  const mantPuedeGuardar = mantManoObra > 0;
+  const mantMaterialesN = round2(parseFloat(mantMateriales || "0") || 0);
+  // TOTAL A DESCONTAR DE CAJA = mano de obra + materiales (con fondo: lo entregado).
+  const mantTotalCaja = movEsFondo ? mantManoObra : round2(mantManoObra + mantMaterialesN);
+  const mantPuedeGuardar = mantTotalCaja > 0;
   const sacosDelActivo = esMatrizActiva ? sackInventory : sacosPropios;
 
   useEffect(() => {
@@ -8027,11 +8033,13 @@ export function App() {
         m.description || "",
         m.provider || "",
         Number(m.amount || 0).toFixed(2),
+        Number(m.labor_cost || 0).toFixed(2),
+        Number(m.parts_cost || 0).toFixed(2),
         Number(m.repuestos_stock_valor || 0).toFixed(2),
         m.repuestos_detalle || "",
         m.repuestos_comprados || ""
       ]);
-  const MAINT_HEADERS = ["Fecha", "Área", "Sección", "Tipo", "Descripción", "Proveedor", "Pagado en caja", "Repuestos del stock", "Detalle repuestos", "Repuestos comprados"];
+  const MAINT_HEADERS = ["Fecha", "Área", "Sección", "Tipo", "Descripción", "Proveedor", "Pagado en caja", "Mano de obra", "Materiales", "Repuestos del stock", "Detalle repuestos", "Repuestos comprados"];
   const exportMaintCsv = () => exportReportCsv(MAINT_HEADERS, maintReportRows(), "mantenimiento.csv");
   const printMaintReport = () => printReport("Reporte de Mantenimiento", MAINT_HEADERS, maintReportRows());
 
@@ -8225,9 +8233,9 @@ export function App() {
       addToast("Completa los campos requeridos", "error");
       return;
     }
-    // amount = lo que cobra el técnico / taller (sale de caja).
-    const amount = mantManoObra;
-    if (!mantPuedeGuardar) { addToast("Ingresa el monto total (lo que se paga al técnico o taller)", "error"); return; }
+    // amount = mano de obra + materiales (lo que sale de caja); el desglose va aparte.
+    const amount = mantTotalCaja;
+    if (!mantPuedeGuardar) { addToast("Ingresa la mano de obra o los materiales (el total no puede ser $0.00)", "error"); return; }
     // Dinero a rendir cuentas (fondo provisional) sobre este mantenimiento.
     const esFondoMant = movEsFondo;
     if (esFondoMant && !(amount > 0)) { addToast("Para rendir cuentas ingresa el monto entregado", "error"); return; }
@@ -8261,11 +8269,15 @@ export function App() {
           amount,
           cash_register_id: registerId,
           es_fondo: esFondoMant || undefined,
-          responsable: esFondoMant ? movResponsable.trim() : undefined
+          responsable: esFondoMant ? movResponsable.trim() : undefined,
+          // Desglose para la hoja de vida (un fondo aún no lo sabe: se rinde después).
+          labor_cost: esFondoMant ? undefined : mantManoObra,
+          parts_cost: esFondoMant ? undefined : mantMaterialesN
         })
       });
       if (!res.ok) throw new Error(await res.text());
       if (esFondoMant) { setMovEsFondo(false); setMovResponsable(""); }
+      setMantMateriales("");
 
       setMaintenanceForm({
         area: "",
@@ -17088,11 +17100,30 @@ export function App() {
                           {/* ── Costos ── */}
                           <section className="mantSec">
                             <div className="mantSec__head">Costos</div>
-                            <label className="mantCampo">{movEsFondo ? "Monto entregado $" : "Monto total $"} * <span className="mantCampo__nota">{movEsFondo ? "dinero que lleva el responsable" : "pago al técnico o taller (sale de caja)"}</span>
-                              <input type="number" step="0.01" min="0" value={maintenanceForm.amount} placeholder="0.00" required
-                                onChange={(e) => setMaintenanceForm({ ...maintenanceForm, amount: e.target.value })}
-                                style={{ ...inp, fontWeight: 700, fontSize: 15 }} />
-                            </label>
+                            {movEsFondo ? (
+                              <label className="mantCampo">Monto entregado $ * <span className="mantCampo__nota">dinero que lleva el responsable</span>
+                                <input type="number" step="0.01" min="0" value={maintenanceForm.amount} placeholder="0.00"
+                                  onChange={(e) => setMaintenanceForm({ ...maintenanceForm, amount: e.target.value })}
+                                  style={{ ...inp, fontWeight: 700, fontSize: 15 }} />
+                              </label>
+                            ) : (
+                              <div className="mantFila2">
+                                <label className="mantCampo">Mano de Obra / Servicios $ <span className="mantCampo__nota">lo que cobra el técnico o taller</span>
+                                  <input type="number" step="0.01" min="0" value={maintenanceForm.amount} placeholder="0.00"
+                                    onChange={(e) => setMaintenanceForm({ ...maintenanceForm, amount: e.target.value })}
+                                    style={{ ...inp, fontWeight: 700, fontSize: 15 }} />
+                                </label>
+                                <label className="mantCampo">Materiales / Consumibles $ <span className="mantCampo__nota">pernos, soldadura, silicón…</span>
+                                  <input type="number" step="0.01" min="0" value={mantMateriales} placeholder="0.00"
+                                    onChange={(e) => setMantMateriales(e.target.value)}
+                                    style={{ ...inp, fontWeight: 700, fontSize: 15 }} />
+                                </label>
+                              </div>
+                            )}
+                            <div className={`mantTotal ${mantTotalCaja > 0 ? "" : "is-cero"}`} aria-live="polite">
+                              <span>TOTAL A DESCONTAR DE CAJA</span>
+                              <strong>{money(mantTotalCaja)}</strong>
+                            </div>
                             <div className="mantFila2">
                               <label className="mantCampo">Nº de factura
                                 <input value={maintenanceForm.invoice_number} placeholder="Opcional" onChange={(e) => setMaintenanceForm({ ...maintenanceForm, invoice_number: e.target.value })} style={inp} />
@@ -17103,7 +17134,14 @@ export function App() {
                             </div>
                             <div className={`mantFondo ${movEsFondo ? "is-on" : ""}`}>
                               <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", margin: 0 }}>
-                                <input type="checkbox" checked={movEsFondo} onChange={(e) => setMovEsFondo(e.target.checked)} style={{ width: "auto" }} />
+                                <input type="checkbox" checked={movEsFondo} onChange={(e) => {
+                                  setMovEsFondo(e.target.checked);
+                                  // Con fondo hay un solo monto (lo entregado): los materiales se suman a él.
+                                  if (e.target.checked && mantMaterialesN > 0) {
+                                    setMaintenanceForm({ ...maintenanceForm, amount: String(round2(mantManoObra + mantMaterialesN)) });
+                                    setMantMateriales("");
+                                  }
+                                }} style={{ width: "auto" }} />
                                 Rendir cuentas (fondo provisional)
                               </label>
                               {movEsFondo && (
@@ -17457,7 +17495,7 @@ export function App() {
                     )}
                     <button className="primary"
                       disabled={CASH_REUSE[movCategory] === "pilado" || CASH_REUSE[movCategory] === "fomento" || (movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !mantPuedeGuardar)}
-                      title={movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !mantPuedeGuardar ? "Ingresa el monto total" : undefined}
+                      title={movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !mantPuedeGuardar ? "El total a descontar de caja es $0.00" : undefined}
                       style={{ width: "100%", padding: "10px 0", marginTop: 8 }}>💾 Registrar movimiento</button>
                   </form>
                 )}
@@ -17695,6 +17733,9 @@ export function App() {
                                       <small style={{ display: "block", color: "#0f766e" }}>🔩 Del inventario: {m.repuestos_detalle ?? "repuestos"} · ${Number(m.repuestos_stock_valor).toFixed(2)}</small>
                                     )}
                                     {m.repuestos_comprados && <small style={{ display: "block", color: "#9a3412" }}>🛒 Comprados: {m.repuestos_comprados}</small>}
+                                    {Number(m.parts_cost || 0) > 0 && !m.repuestos_comprados && (
+                                      <small style={{ display: "block", color: "#475569" }}>Mano de obra ${Number(m.labor_cost || 0).toFixed(2)} · Materiales ${Number(m.parts_cost).toFixed(2)}</small>
+                                    )}
                                   </div>
                                   <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
                                     <strong>${Number(m.amount).toFixed(2)}</strong>
