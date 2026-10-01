@@ -24,6 +24,8 @@ export type Repuesto = {
   ultimo_uso: string | null;
   /** Familia de equipos a la que sirve: GENERAL o un área (PILADORA, SECADORA…). */
   compatibilidad?: string | null;
+  /** Dónde se guarda en bodega (Ej: ESTANTE 3, CAJÓN A). */
+  ubicacion?: string | null;
 };
 
 /** «Uso general» / «Para Piladora» a partir de la etiqueta guardada. */
@@ -93,7 +95,7 @@ type Accion =
   | { tipo: "uso"; r: Repuesto; cantidad: string; equipo: string; motivo: string }
   | { tipo: "conteo"; r: Repuesto; real: string; motivo: string };
 
-const vacio = { nombre: "", referencia: "", unidad: "UNIDAD", stock_inicial: "", stock_minimo: "", costo_unitario: "", equipment_id: "", notas: "", compatibilidad: "" };
+const vacio = { nombre: "", referencia: "", unidad: "UNIDAD", stock_inicial: "", stock_minimo: "", costo_unitario: "", equipment_id: "", notas: "", compatibilidad: "", ubicacion: "" };
 
 export function RepuestosModule({ cajaAbiertaId, puedeEditar, avisar, onCambio }: {
   cajaAbiertaId: string | null;
@@ -137,7 +139,7 @@ export function RepuestosModule({ cajaAbiertaId, puedeEditar, avisar, onCambio }
   function abrirNuevo() { setForm(vacio); setEditId(null); setFormAbierto(true); }
   function abrirEditar(r: Repuesto) {
     setForm({ nombre: r.nombre, referencia: r.referencia ?? "", unidad: r.unidad, stock_inicial: "", stock_minimo: String(r.stock_minimo),
-      costo_unitario: String(r.costo_unitario), equipment_id: r.equipment_id ?? "", notas: r.notas ?? "", compatibilidad: r.compatibilidad ?? "" });
+      costo_unitario: String(r.costo_unitario), equipment_id: r.equipment_id ?? "", notas: r.notas ?? "", compatibilidad: r.compatibilidad ?? "", ubicacion: r.ubicacion ?? "" });
     setEditId(r.id); setFormAbierto(true);
   }
 
@@ -149,7 +151,8 @@ export function RepuestosModule({ cajaAbiertaId, puedeEditar, avisar, onCambio }
         nombre: form.nombre.trim(), referencia: form.referencia.trim() || null, unidad: form.unidad,
         stock_minimo: Number(form.stock_minimo) || 0, costo_unitario: Number(form.costo_unitario) || 0,
         equipment_id: form.equipment_id || null, notas: form.notas.trim() || null,
-        compatibilidad: form.compatibilidad.trim() || null
+        compatibilidad: form.compatibilidad.trim() || null,
+        ubicacion: form.ubicacion.trim() || null
       };
       if (editId) await apiPatch(`/repuestos/${editId}`, datos);
       else await apiPost("/repuestos", { ...datos, stock_inicial: Number(form.stock_inicial) || 0 });
@@ -255,7 +258,8 @@ export function RepuestosModule({ cajaAbiertaId, puedeEditar, avisar, onCambio }
                 return (
                   <tr key={r.id}>
                     <td><strong>{r.nombre}</strong>{r.referencia && <div style={{ fontSize: 11.5, color: "#64748b" }}>{r.referencia}</div>}
-                      {r.compatibilidad && <span className="combo__tag" style={{ display: "inline-block", marginTop: 3 }}>{etiquetaCompat(r.compatibilidad)}</span>}</td>
+                      {r.compatibilidad && <span className="combo__tag" style={{ display: "inline-block", marginTop: 3 }}>{etiquetaCompat(r.compatibilidad)}</span>}
+                      {r.ubicacion && <div style={{ fontSize: 11.5, color: "#475569", marginTop: 3 }}>📍 {r.ubicacion}</div>}</td>
                     <td>{r.equipo ?? "—"}</td>
                     <td className="num" style={{ fontWeight: 800, color: e.fg }}>{n2(r.stock)} <span style={{ fontWeight: 500, fontSize: 11 }}>{r.unidad.toLowerCase()}</span></td>
                     <td className="num">{n2(r.stock_minimo)}</td>
@@ -307,6 +311,7 @@ export function RepuestosModule({ cajaAbiertaId, puedeEditar, avisar, onCambio }
                 <datalist id="repCompatLista">
                   {[...new Set(["GENERAL", "PILADORA", "SECADORA", ...lista.map((x) => (x.compatibilidad ?? "").toUpperCase()).filter(Boolean)])].map((v) => <option key={v} value={v}>{etiquetaCompat(v)}</option>)}
                 </datalist></label>
+              <label style={{ gridColumn: "1 / -1" }}><span>Ubicación en bodega</span><input style={campo} value={form.ubicacion} maxLength={80} placeholder="Ej: Estante 3, Cajón A" onChange={(e) => setForm({ ...form, ubicacion: e.target.value })} /></label>
               <label style={{ gridColumn: "1 / -1" }}><span>Notas</span><input style={campo} value={form.notas} placeholder="Proveedor habitual, duración aproximada…" onChange={(e) => setForm({ ...form, notas: e.target.value })} /></label>
             </div>
             <p className="muted" style={{ margin: 0, fontSize: 12 }}>Cuando el stock llegue al mínimo, el Dashboard avisa para comprarlo.</p>

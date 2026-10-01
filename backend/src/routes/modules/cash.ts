@@ -7,6 +7,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { reversarEntradaRepuestosDeCaja, reversarEntradaRepuestosDeCredito, devolverRepuestosDeMantenimiento, exigirMatriz, registrarCompraRepuestos } from "./repuestos.js";
+import { etiquetaMaquina, resolverMaquina, type Maquina } from "../../services/maquinas.js";
 import { resolverProveedor } from "../../services/proveedores.js";
 import { reabrirPagoNomina } from "../../services/nomina-reabrir.js";
 import { espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
@@ -349,6 +350,8 @@ cashRouter.post("/creditos/:id/anular", requireAdmin, asyncRoute(async (req, res
     );
     // Si era una compra de repuestos a crédito, lo que entró al stock se retira.
     const repuestosRevertidos = await reversarEntradaRepuestosDeCredito(client, a.id);
+    // Y lo cargado a la hoja de vida de una máquina (uso inmediato, materiales) sale.
+    await client.query("UPDATE equipment_maintenance SET status = 'ANULADO' WHERE payable_id = $1", [a.id]);
     return { ...upd.rows[0], repuestos_revertidos: repuestosRevertidos };
   });
   res.json(out);
@@ -509,6 +512,8 @@ cashRouter.post("/movements/:id/reverse", requireAdmin, asyncRoute(async (req, r
       // Sale de la hoja de vida: la reparación y lo repartido a otras máquinas.
       await client.query("UPDATE equipment_maintenance SET status = 'ANULADO' WHERE id = $1 OR parent_id = $1", [m.reference_id]);
     }
+    // Hojas de vida nacidas de este egreso (repuestos de uso inmediato, materiales).
+    await client.query("UPDATE equipment_maintenance SET status = 'ANULADO' WHERE cash_movement_id = $1", [m.id]);
     // Si fue un pago de NÓMINA, vuelve a quedar pendiente en Nómina.
     const nominaReabierta = await reabrirPagoNomina(client, m);
 
@@ -566,6 +571,34 @@ cashRouter.post("/movements", asyncRoute(async (req, res) => {
 }));
 
 // ── Registrar movimiento en una caja específica ─────────────────────────────────
+// «Materiales consumibles» (pernos, soldadura…): compra directa que se aplica ya
+// a una máquina, sin pasar por bodega. Exige el equipo / máquina.
+const CATEGORIA_MATERIALES = "MATERIALES_CONSUMIBLES";
+
+/**
+ * Hoja de vida de la máquina para un egreso cargado a ella: todo es material,
+ * sin mano de obra (tipo MATERIALES; REPUESTO si es una compra de repuestos de
+ * uso inmediato sin lista). Enlazada al egreso o a su Cuenta por Pagar para
+ * anularse con ellos.
+ */
+async function hojaDeVidaDelEgreso(
+  client: PoolClient,
+  maquina: Maquina,
+  o: { monto: number; descripcion?: string; codigo: string; categoria: string; proveedor: string | null; userId: string | null; cashMovementId?: string; payableId?: string }
+): Promise<{ id: string; maquina: string }> {
+  const detalle = o.descripcion?.trim() || o.categoria;
+  const tipo = o.codigo === "REPUESTOS" ? "REPUESTO" : "MATERIALES";
+  const r = await client.query(
+    `INSERT INTO equipment_maintenance
+       (equipment_id, area, section, maintenance_type, description, provider, amount, parts_cost, labor_cost,
+        created_by, cash_movement_id, payable_id)
+     VALUES (NULL, $1, $2, $9, $3, $4, $5, $5, 0, $6, $7, $8) RETURNING id`,
+    [maquina.area, maquina.section, `${o.categoria}: ${detalle}`.slice(0, 1000), o.proveedor, round2(o.monto),
+     o.userId, o.cashMovementId ?? null, o.payableId ?? null, tipo]
+  );
+  return { id: r.rows[0].id, maquina: etiquetaMaquina(maquina) };
+}
+
 cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
   const body = z.object({
     movement: z.enum(["INCOME", "EXPENSE"]),
@@ -598,10 +631,17 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     proveedor_nombre: z.string().trim().max(160).optional(),
     modalidad_pago: z.enum(["CONTADO", "CREDITO"]).optional().default("CONTADO"),
     due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    created_by: z.string().uuid().optional()
+    created_by: z.string().uuid().optional(),
+    // Equipo / máquina en que se gastó (sección del catálogo de mantenimiento):
+    // el egreso queda en su hoja de vida. Obligatorio en «Materiales consumibles».
+    maquina_id: z.string().uuid().optional()
   }).parse(req.body);
   if (body.activo_fijo && (body.movement !== "EXPENSE" || body.category !== "COMPRA_ACTIVO_FIJO")) {
     throw new ApiError(400, "El activo fijo se registra con un EGRESO de categoría «Compra de activo fijo».");
+  }
+  if (body.maquina_id && body.movement !== "EXPENSE") throw new ApiError(400, "Solo un EGRESO se carga a un equipo / máquina.");
+  if (body.category === CATEGORIA_MATERIALES && body.movement === "EXPENSE" && !body.maquina_id) {
+    throw new ApiError(400, "Elige el equipo / máquina en que se usaron los materiales.");
   }
 
   const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
@@ -641,7 +681,13 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
          body.category, body.subcategoria?.trim() || null, req.params.id, body.created_by ?? (req as AuthenticatedRequest).user?.id ?? null]
       );
       await recordarSubcategoria(client, body.subcategoria, body.category);
-      return { ...ap.rows[0], proveedor: proveedor.name };
+      const hoja = body.maquina_id
+        ? await hojaDeVidaDelEgreso(client, await resolverMaquina(client, body.maquina_id), {
+          monto: body.amount, descripcion: body.description, codigo: body.category, categoria: cat.rows[0]?.nombre ?? body.category, proveedor: proveedor.name,
+          userId: body.created_by ?? (req as AuthenticatedRequest).user?.id ?? null, payableId: ap.rows[0].id
+        })
+        : null;
+      return { ...ap.rows[0], proveedor: proveedor.name, maquina: hoja?.maquina ?? null };
     });
     res.status(201).json({ credito: true, cuenta_por_pagar: cxp });
     return;
@@ -667,6 +713,24 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
        proveedor?.id ?? null]
     );
     await recordarSubcategoria(client, body.subcategoria, body.category);
+    // Equipo / máquina: el egreso entra a su hoja de vida (Materiales consumibles…).
+    // Queda enlazado como un mantenimiento: si se anula, sale de la hoja de vida;
+    // si es un fondo, al liquidarlo la hoja de vida toma el gasto real.
+    if (body.maquina_id) {
+      const maquina = await resolverMaquina(client, body.maquina_id);
+      const cat = await client.query("SELECT nombre FROM cash_categories WHERE codigo = $1", [body.category]);
+      const hoja = await hojaDeVidaDelEgreso(client, maquina, {
+        monto: body.amount, descripcion: body.description, codigo: body.category, categoria: cat.rows[0]?.nombre ?? body.category, proveedor: proveedor?.name ?? null,
+        userId: body.created_by ?? (req as AuthenticatedRequest).user?.id ?? null, cashMovementId: mov.rows[0].id
+      });
+      const upd = await client.query(
+        `UPDATE cash_movements SET reference_type = 'equipment_maintenance', reference_id = $2,
+                area = COALESCE(area, $3), maq_activo = COALESCE(maq_activo, $4)
+          WHERE id = $1 RETURNING *`,
+        [mov.rows[0].id, hoja.id, maquina.area, maquina.section]
+      );
+      mov.rows[0] = upd.rows[0];
+    }
     // Compra de ACTIVO FIJO → alta en Activos fijos (balance y depreciación) del
     // accionista de esta caja, con el costo y la fecha de este egreso.
     let activoFijo: { id: string; name: string } | null = null;
@@ -776,7 +840,13 @@ cashRouter.post("/movements/:id/liquidar", asyncRoute(async (req, res) => {
       )).rows[0].s);
       const propio = round2(Math.max(0, gastoReal - otras));
       await client.query(
-        "UPDATE equipment_maintenance SET amount = $2, labor_cost = CASE WHEN COALESCE(parts_cost, 0) > 0 OR $3 > 0 THEN GREATEST($2 - COALESCE(parts_cost, 0), 0) ELSE labor_cost END WHERE id = $1",
+        `UPDATE equipment_maintenance
+            SET amount = $2,
+                parts_cost = CASE WHEN maintenance_type = 'MATERIALES' THEN $2 ELSE parts_cost END,
+                labor_cost = CASE WHEN maintenance_type = 'MATERIALES' THEN 0
+                                  WHEN COALESCE(parts_cost, 0) > 0 OR $3 > 0 THEN GREATEST($2 - COALESCE(parts_cost, 0), 0)
+                                  ELSE labor_cost END
+          WHERE id = $1`,
         [orig.reference_id, propio, otras]
       );
     }

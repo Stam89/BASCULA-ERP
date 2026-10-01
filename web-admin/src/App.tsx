@@ -13,6 +13,7 @@ import { PedidoCompartirModal, type PedidoCompartirData } from "./components/Ped
 import { RepuestosAlertaDashboard, RepuestosModule, etiquetaCompat, type Repuesto } from "./components/RepuestosModule";
 import { BuscadorCombo } from "./components/BuscadorCombo";
 import { SaldosIniciales } from "./components/SaldosIniciales";
+import { MaquinaBuscador, etiquetaMaquina } from "./components/MaquinaBuscador";
 import * as XLSX from "xlsx";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
@@ -1738,6 +1739,12 @@ const CATEGORIAS_RUBRO_COSTO = new Set([
   "GAS", "DIESEL", "CUADRILLA_BAJADA", "REPUESTOS", "GUARDIANIA", "COCINERA",
   "GASTOS_ADMINISTRATIVOS", "ALIMENTACION", "VEHICULO_GERENCIA", "GASOLINA_MONTACARGA", "CUADRILLA_GUAYAQUIL"
 ]);
+// Compra de repuestos y Materiales consumibles: sin Subcategoría (su detalle es
+// la lista de repuestos / la máquina y la descripción).
+const CATEGORIAS_SIN_SUBCATEGORIA = new Set(["REPUESTOS", "MATERIALES_CONSUMIBLES"]);
+// Compra directa de insumos menores (pernos, soldadura…) que se aplican ya a una
+// máquina, sin pasar por bodega: exige el equipo / máquina.
+const CATEGORIA_MATERIALES = "MATERIALES_CONSUMIBLES";
 // Categorías que NO se registran como movimiento crudo: van por su flujo dedicado.
 // 'agricultor' se resuelve enlazando una liquidación (Por Pagar) dentro del form.
 const CASH_REUSE: Record<string, "pilado" | "fomento" | "agricultor"> = {
@@ -3147,7 +3154,16 @@ export function App() {
   const [repCart, setRepCart] = useState<Array<{
     key: string; repuesto_id?: string; nuevo?: { nombre: string; referencia: string | null; unidad: string; stock_minimo: number };
     etiqueta: string; unidad: string; cant: string; cost: string; compat: string;
+    // Destino al agregarla: uso inmediato (máquina obligatoria) o bodega (ubicación).
+    uso?: boolean; maquina_id?: string; ubicacion?: string;
   }>>([]);
+  // Compra de repuestos: destino de lo que se agrega (📦 bodega por defecto / 🔧 uso
+  // inmediato) y la ubicación física en bodega. La máquina es movMaquinaId.
+  const [repDestino, setRepDestino] = useState<"INVENTARIO" | "USO">("INVENTARIO");
+  const [repUbicacion, setRepUbicacion] = useState("");
+  // Equipo / máquina (sección del catálogo de mantenimiento) del egreso de Caja:
+  // Materiales consumibles (obligatorio) y Compra de repuestos.
+  const [movMaquinaId, setMovMaquinaId] = useState("");
   const [repFactura, setRepFactura] = useState("");   // Nº de factura de la compra para bodega
   // Repuesto elegido en el buscador de «Compra para bodega», antes de «➕ Agregar a la lista».
   const [repSel, setRepSel] = useState<{ repuesto_id?: string; nombre: string; unidad: string; stock?: number; cant: string; cost: string; compat: string } | null>(null);
@@ -7985,6 +8001,10 @@ export function App() {
     );
   };
   const maintAreas = maintCats.filter((c) => c.kind === "AREA").map((c) => c.nombre);
+  // Equipos / máquinas para los buscadores de Caja (maquina_id = id de la sección).
+  const maquinasPlanta = maintCats
+    .filter((c) => c.kind === "SECTION" && c.id && c.area && maintAreas.includes(c.area))
+    .map((c) => ({ id: c.id!, area: c.area!, section: c.nombre }));
   const maintTypes = maintCats.filter((c) => c.kind === "TYPE").map((c) => c.nombre);
   const maintSectionsFor = (area: string) =>
     maintCats.filter((c) => c.kind === "SECTION" && c.area === area).map((c) => c.nombre);
@@ -7996,7 +8016,7 @@ export function App() {
   const maintTypeLabel = (t: string) => {
     const known: Record<string, string> = {
       CORRECTIVO: "Correctivo (reparación)", PREVENTIVO: "Preventivo",
-      REPUESTO: "Repuesto", MANO_OBRA: "Mano de obra"
+      REPUESTO: "Repuesto", MANO_OBRA: "Mano de obra", MATERIALES: "Materiales consumibles"
     };
     return known[t] ?? t;
   };
@@ -8666,21 +8686,33 @@ export function App() {
       const provSelR = provTxtR ? proveedoresCaja.find((p) => p.name.trim().toLowerCase() === provTxtR.toLowerCase()) : undefined;
       const creditoR = movModalidad === "CREDITO";
       if (creditoR && provTxtR.length < 2) throw new Error("Para comprar a crédito elige o escribe el proveedor.");
-      const r = await apiPost<{ total: number; credito: boolean; proveedor: string | null }>("/repuestos/compra", {
+      const r = await apiPost<{ total: number; credito: boolean; proveedor: string | null; total_bodega: number; total_uso_inmediato: number; hojas_de_vida: Array<{ maquina: string; monto: number }> }>("/repuestos/compra", {
         cash_register_id: registerId,
         modalidad_pago: creditoR ? "CREDITO" : "CONTADO",
         supplier_id: provSelR?.id,
         proveedor_nombre: provTxtR && !provSelR ? provTxtR : undefined,
         due_date: creditoR && movVence ? movVence : undefined,
         descripcion: [String(form.get("description") ?? "").trim(), repFactura.trim() ? `Factura ${repFactura.trim()}` : ""].filter(Boolean).join(" · ") || undefined,
-        items: repCart.map((l) => ({ repuesto_id: l.repuesto_id, nuevo: l.nuevo, cantidad: round2(Number(l.cant)), costo_unitario: round2(Number(l.cost)), compatibilidad: l.compat || undefined }))
+        // Valores del formulario (cada línea lleva los que tenía al agregarla).
+        uso_inmediato: repDestino === "USO",
+        maquina_id: movMaquinaId || undefined,
+        ubicacion_bodega: repDestino === "INVENTARIO" ? repUbicacion.trim() || undefined : undefined,
+        items: repCart.map((l) => ({
+          repuesto_id: l.repuesto_id, nuevo: l.nuevo, cantidad: round2(Number(l.cant)), costo_unitario: round2(Number(l.cost)), compatibilidad: l.compat || undefined,
+          uso_inmediato: !!l.uso, maquina_id: l.maquina_id || undefined, ubicacion_bodega: l.uso ? undefined : l.ubicacion || undefined
+        }))
       });
       safeResetForm(formElement);
       setRepCart([]); setRepSel(null); setRepFactura(""); setMovCategory(""); setMovSubcategoria("");
       setMovProveedor(""); setMovModalidad("CONTADO"); setMovVence("");
+      setRepDestino("INVENTARIO"); setRepUbicacion(""); setMovMaquinaId("");
+      const destinos = [
+        r.total_bodega > 0 ? `${money(r.total_bodega)} a bodega` : "",
+        r.total_uso_inmediato > 0 ? `${money(r.total_uso_inmediato)} instalado en ${r.hojas_de_vida.map((h) => h.maquina).join(", ")}` : ""
+      ].filter(Boolean).join(" · ");
       addToast(r.credito
-        ? `💳 Repuestos a crédito: Cuenta por Pagar a ${r.proveedor} por ${money(r.total)} · entraron al inventario`
-        : `🔧 Compra de repuestos ${money(r.total)} · entraron al inventario de repuestos`, "success");
+        ? `💳 Repuestos a crédito: Cuenta por Pagar a ${r.proveedor} por ${money(r.total)} · ${destinos}`
+        : `🔧 Compra de repuestos ${money(r.total)} · ${destinos}`, "success");
       cargarRepCatalogo();
       await refreshCaja(registerId);
       return;
@@ -8700,6 +8732,13 @@ export function App() {
     const provSel = provTxt ? proveedoresCaja.find((p) => p.name.trim().toLowerCase() === provTxt.toLowerCase()) : undefined;
     const aCredito = movement === "EXPENSE" && movModalidad === "CREDITO" && !esFondo && !esActivo;
     if (aCredito && provTxt.length < 2) throw new Error("Para un egreso a crédito elige o escribe el proveedor.");
+    // Equipo / máquina: obligatorio en Materiales consumibles y en un repuesto de
+    // uso inmediato registrado sin lista; el egreso va a su hoja de vida.
+    const repUsoSinLista = movement === "EXPENSE" && category === "REPUESTOS" && esMatrizActiva && !esFondo && repDestino === "USO";
+    if (movement === "EXPENSE" && category === CATEGORIA_MATERIALES && !movMaquinaId) throw new Error("Elige el equipo / máquina en que se usaron los materiales.");
+    if (repUsoSinLista && !movMaquinaId) throw new Error("Uso inmediato: elige el equipo / máquina donde se instala.");
+    const maquinaId = movement === "EXPENSE" && (category === CATEGORIA_MATERIALES || repUsoSinLista) ? movMaquinaId || undefined : undefined;
+    const maquinaTxt = maquinaId ? etiquetaMaquina(maquinasPlanta.find((m) => m.id === maquinaId)) : "";
     const creado = await apiPost<{ activo_fijo?: { id: string; name: string } | null; credito?: boolean; cuenta_por_pagar?: { proveedor: string } }>(`/cash/${registerId}/movements`, {
       movement,
       category,
@@ -8714,11 +8753,13 @@ export function App() {
       supplier_id: provSel?.id,
       proveedor_nombre: provTxt && !provSel ? provTxt : undefined,
       modalidad_pago: aCredito ? "CREDITO" : "CONTADO",
-      due_date: aCredito && movVence ? movVence : undefined
+      due_date: aCredito && movVence ? movVence : undefined,
+      maquina_id: maquinaId
     });
     safeResetForm(formElement);
     setMovCategory("");
     setMovPayableId("");
+    setMovMaquinaId(""); setRepDestino("INVENTARIO"); setRepUbicacion("");
     setMovSubcategoria(""); setMovEsFondo(false); setMovResponsable("");
     setMovActivo({ nombre: "", tipo: "MAQUINARIA" });
     setMovProveedor(""); setMovModalidad("CONTADO"); setMovVence("");
@@ -8730,7 +8771,9 @@ export function App() {
         ? `Fondo a rendir cuentas entregado a ${movResponsable.trim()} · queda Por Liquidar`
         : creado.activo_fijo
           ? `Egreso registrado · 🏭 Activo fijo «${creado.activo_fijo.name}» agregado a Activos fijos (${money(amount)})`
-          : `${movement === "INCOME" ? "Ingreso" : "Egreso"} registrado`,
+          : maquinaTxt
+            ? `Egreso registrado · 🔧 cargado a la hoja de vida de ${maquinaTxt}`
+            : `${movement === "INCOME" ? "Ingreso" : "Egreso"} registrado`,
       "success"
     );
     await refreshCaja(registerId);
@@ -16900,11 +16943,11 @@ export function App() {
                       <legend style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, display: "block" }}>Tipo de movimiento</legend>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                         <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: 6, cursor: "pointer" }}>
-                          <input type="radio" name="movement" value="EXPENSE" checked={movType === "EXPENSE"} onChange={() => { setMovType("EXPENSE"); setMovCategory(""); setMovSubcategoria(""); setMovPayableId(""); setMovReceivableId(""); }} style={{ cursor: "pointer" }} />
+                          <input type="radio" name="movement" value="EXPENSE" checked={movType === "EXPENSE"} onChange={() => { setMovType("EXPENSE"); setMovCategory(""); setMovSubcategoria(""); setMovPayableId(""); setMovReceivableId(""); setMovMaquinaId(""); }} style={{ cursor: "pointer" }} />
                           <span style={{ fontWeight: 600 }}>⬇ Egreso</span>
                         </label>
                         <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: 6, cursor: "pointer" }}>
-                          <input type="radio" name="movement" value="INCOME" checked={movType === "INCOME"} onChange={() => { setMovType("INCOME"); setMovCategory(""); setMovSubcategoria(""); setMovPayableId(""); setMovReceivableId(""); }} style={{ cursor: "pointer" }} />
+                          <input type="radio" name="movement" value="INCOME" checked={movType === "INCOME"} onChange={() => { setMovType("INCOME"); setMovCategory(""); setMovSubcategoria(""); setMovPayableId(""); setMovReceivableId(""); setMovMaquinaId(""); }} style={{ cursor: "pointer" }} />
                           <span style={{ fontWeight: 600 }}>⬆ Ingreso</span>
                         </label>
                       </div>
@@ -16924,8 +16967,9 @@ export function App() {
                           <select name="category" required={!(movType === "INCOME" && !!movReceivableId)} value={movCategory} onChange={(e: any) => {
                             const nextCategory = e.target.value;
                             setMovCategory(nextCategory);
-                            if (!cashCategoryAllowsSubcategory(nextCategory, cashCategories)) setMovSubcategoria("");
+                            if (!cashCategoryAllowsSubcategory(nextCategory, cashCategories) || CATEGORIAS_SIN_SUBCATEGORIA.has(nextCategory)) setMovSubcategoria("");
                             setMovPayableId("");
+                            setMovMaquinaId("");
                           }} style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
                             <option value="">Seleccione una categoría</option>
                             {visibles.map((c) => <option key={c.id} value={c.codigo}>{c.nombre}</option>)}
@@ -16958,7 +17002,7 @@ export function App() {
 
                     {/* Subcategoría: texto libre con memoria (datalist). Se sugieren
                         las escritas antes y se guarda cada término nuevo. */}
-                    {cashCategoryAllowsSubcategory(movCategory, cashCategories) && <label style={{ display: "block", marginBottom: 16 }}>
+                    {cashCategoryAllowsSubcategory(movCategory, cashCategories) && !CATEGORIAS_SIN_SUBCATEGORIA.has(movCategory) && <label style={{ display: "block", marginBottom: 16 }}>
                       <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Subcategoría <span className="muted" style={{ fontWeight: 400 }}>(opcional, se recuerda)</span></span>
                       <input list="subcatGastosList" value={movSubcategoria} onChange={(e) => setMovSubcategoria(e.target.value)}
                         placeholder="Ej: Alimentación, Filtros, Fletes, Herramientas"
@@ -17232,6 +17276,20 @@ export function App() {
                         )}
                       </div>
                     )}
+                    {/* 🧰 MATERIALES CONSUMIBLES (pernos, soldadura, silicón…): compra directa
+                        que se aplica ya a una máquina, sin bodega. Equipo / Máquina OBLIGATORIO
+                        (el gasto va a su hoja de vida). Sin técnico, tipo de trabajo ni mano de
+                        obra: Proveedor, Descripción y un solo Monto. */}
+                    {movType === "EXPENSE" && movCategory === CATEGORIA_MATERIALES && (
+                      <div className="mantCard" style={{ marginBottom: 16 }}>
+                        <section className="mantSec">
+                          <div className="mantSec__head">Equipo / Máquina *</div>
+                          <MaquinaBuscador id="matMaquina" maquinas={maquinasPlanta} valor={movMaquinaId} onCambio={setMovMaquinaId}
+                            placeholder="🔍 ¿En qué equipo o máquina se usó el material?" />
+                          <small className="muted">El material va directo a la hoja de vida de esta máquina (no pasa por bodega).</small>
+                        </section>
+                      </div>
+                    )}
                     {/* 🔧 REPUESTOS DE PLANTA (compra para bodega): lista limpia; cada línea
                         entra al stock con su «Compatibilidad / etiqueta». El monto del egreso
                         es la suma de la lista. Sin lista es un egreso común. Solo Matriz. */}
@@ -17246,22 +17304,54 @@ export function App() {
                       const costSel = Number(repSel?.cost);
                       const subSel = repSel ? round2((cantSel || 0) * (costSel || 0)) : 0;
                       const puedeAgregar = !!repSel && cantSel >= 1 && costSel > 0;
+                      const usoInmediato = repDestino === "USO";
                       const agregarALista = () => {
                         if (!repSel) return;
                         if (!(cantSel >= 1)) { addToast("La cantidad mínima es 1", "error"); return; }
                         if (!(costSel > 0)) { addToast("Ingresa el precio unitario", "error"); return; }
+                        if (usoInmediato && !movMaquinaId) { addToast("Uso inmediato: elige el equipo / máquina donde se instala", "error"); return; }
                         setMovEsFondo(false);
                         setRepCart((c) => [...c, {
                           key: clave(), repuesto_id: repSel.repuesto_id,
                           nuevo: repSel.repuesto_id ? undefined : { nombre: repSel.nombre, referencia: null, unidad: repSel.unidad, stock_minimo: 0 },
-                          etiqueta: repSel.nombre, unidad: repSel.unidad, cant: repSel.cant, cost: repSel.cost, compat: repSel.compat
+                          etiqueta: repSel.nombre, unidad: repSel.unidad, cant: repSel.cant, cost: repSel.cost, compat: "",
+                          uso: usoInmediato, maquina_id: movMaquinaId || undefined,
+                          ubicacion: usoInmediato ? undefined : repUbicacion.trim() || undefined
                         }]);
                         setRepSel(null);
                       };
+                      const totUso = round2(repCart.filter((l) => l.uso).reduce((s2, l) => s2 + (Number(l.cant) || 0) * (Number(l.cost) || 0), 0));
+                      const destinoBtn = (valor: "INVENTARIO" | "USO", titulo: string, sub: string) => (
+                        <button type="button" role="radio" aria-checked={repDestino === valor}
+                          className={`destinoOpcion ${repDestino === valor ? "is-activa" : ""} ${valor === "USO" ? "destinoOpcion--uso" : ""}`}
+                          onClick={() => setRepDestino(valor)}>
+                          <strong>{titulo}</strong><small>{sub}</small>
+                        </button>
+                      );
                       return (
                         <div className="mantCard">
+                          {/* Destino, equipo y ubicación: se aplican a lo que se agrega desde aquí. */}
                           <section className="mantSec">
-                            <div className="mantSec__head">Compra para bodega</div>
+                            <div className="mantSec__head">Destino del repuesto</div>
+                            <div className="destinoToggle" role="radiogroup" aria-label="Destino del repuesto">
+                              {destinoBtn("INVENTARIO", "📦 Guardar en Inventario (Bodega)", "Suma al stock de repuestos")}
+                              {destinoBtn("USO", "🔧 Uso Inmediato (Instalar ahora)", "No entra a bodega: su costo va a la máquina")}
+                            </div>
+                            <label className="mantCampo">Equipo / Máquina {usoInmediato ? "*" : <span className="mantCampo__nota">opcional · etiqueta de compatibilidad</span>}
+                              <span style={{ display: "block", marginTop: 4 }}>
+                                <MaquinaBuscador id="repMaquina" maquinas={maquinasPlanta} valor={movMaquinaId} onCambio={setMovMaquinaId}
+                                  placeholder={usoInmediato ? "🔍 ¿En qué equipo o máquina se instala?" : "🔍 ¿Para qué equipo o máquina es? (opcional)"} />
+                              </span>
+                            </label>
+                            {!usoInmediato && (
+                              <label className="mantCampo">Ubicación en Bodega <span className="mantCampo__nota">(Ej: Estante 3, Cajón A)</span>
+                                <input value={repUbicacion} maxLength={80} placeholder="Opcional" onChange={(e) => setRepUbicacion(e.target.value)}
+                                  style={{ display: "block", width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13 }} />
+                              </label>
+                            )}
+                          </section>
+                          <section className="mantSec">
+                            <div className="mantSec__head">Repuestos de la compra</div>
                             {!repSel ? (
                               <BuscadorCombo id="repCompra" placeholder="🔍 Buscar repuesto o escribir uno nuevo…" opciones={opciones}
                                 onElegir={(id) => {
@@ -17291,13 +17381,6 @@ export function App() {
                                   <label className="mantCampo">Subtotal $
                                     <input readOnly tabIndex={-1} value={subSel.toFixed(2)} className="repEntrada__num mantMontos__solo" aria-readonly="true" />
                                   </label>
-                                  <label className="mantCampo">Compatibilidad
-                                    <select value={repSel.compat} className="repEntrada__num" onChange={(e) => setRepSel({ ...repSel, compat: e.target.value })}>
-                                      <option value="">— Etiqueta (opcional) —</option>
-                                      <option value="GENERAL">Uso general</option>
-                                      {[...new Set([...maintAreas.map((a) => a.toUpperCase()), ...(repSel.compat && repSel.compat !== "GENERAL" ? [repSel.compat] : [])])].map((a) => <option key={a} value={a}>{etiquetaCompat(a)}</option>)}
-                                    </select>
-                                  </label>
                                   <button type="button" className="primary repEntrada__btn" disabled={!puedeAgregar} onClick={agregarALista}
                                     title={puedeAgregar ? "Agregar a la lista" : "Cantidad mínima 1 y precio mayor a 0"}>➕ Agregar a la lista</button>
                                 </div>
@@ -17310,8 +17393,12 @@ export function App() {
                                 {repCart.map((l) => (
                                   <li key={l.key} className="cleanList__fila">
                                     <span className="cleanList__main">
-                                      <strong>{l.etiqueta}{l.nuevo && <em className="cleanList__nuevo">nuevo</em>}</strong>
-                                      {l.compat && <small className="muted">{etiquetaCompat(l.compat)}</small>}
+                                      <strong>{l.etiqueta}{l.nuevo && !l.uso && <em className="cleanList__nuevo">nuevo</em>}</strong>
+                                      <small className={l.uso ? "destinoTag destinoTag--uso" : "destinoTag"}>
+                                        {l.uso
+                                          ? `🔧 Uso inmediato · ${etiquetaMaquina(maquinasPlanta.find((m) => m.id === l.maquina_id))}`
+                                          : ["📦 Bodega", l.ubicacion, l.maquina_id ? `para ${etiquetaMaquina(maquinasPlanta.find((m) => m.id === l.maquina_id))}` : ""].filter(Boolean).join(" · ")}
+                                      </small>
                                     </span>
                                     <span className="cleanList__dato">{n2(Number(l.cant))} {l.unidad.toLowerCase()}</span>
                                     <span className="cleanList__dato">{money(Number(l.cost))}</span>
@@ -17329,12 +17416,13 @@ export function App() {
                                     style={{ display: "block", width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13 }} />
                                 </label>
                                 <dl className="resumenBox" aria-live="polite">
-                                  <div><dt>Subtotal · {repCart.length} ítem{repCart.length === 1 ? "" : "s"}</dt><dd>{money(repCartTotal)}</dd></div>
-                                  <div className="resumenBox__total"><dt>Total del egreso</dt><dd>{money(repCartTotal)}</dd></div>
+                                  <div><dt>📦 A bodega</dt><dd>{money(round2(repCartTotal - totUso))}</dd></div>
+                                  <div><dt>🔧 Uso inmediato</dt><dd>{money(totUso)}</dd></div>
+                                  <div className="resumenBox__total"><dt>Total del egreso · {repCart.length} ítem{repCart.length === 1 ? "" : "s"}</dt><dd>{money(repCartTotal)}</dd></div>
                                 </dl>
                               </div>
                             ) : !repSel && (
-                              <small className="muted">Elige o escribe el repuesto, luego su cantidad y precio. Lo que agregues entra a bodega. Sin lista, es un egreso común.</small>
+                              <small className="muted">Elige o escribe el repuesto, luego su cantidad y precio. 📦 Bodega suma al stock; 🔧 Uso inmediato carga su costo a la máquina. Sin lista, es un egreso común.</small>
                             )}
                           </section>
                         </div>
@@ -17496,7 +17584,9 @@ export function App() {
                         que traen su propio detalle y su propio monto total. */}
                     {movCategory !== "MANTENIMIENTO_EQUIPO" && !esCategoriaSacos(movCategory) && (
                       <>
-                        <Input name="description" label="Descripción (opcional)" required={false} />
+                        <Input name="description" required={false}
+                          label={movCategory === CATEGORIA_MATERIALES ? "Descripción / Detalle del trabajo (opcional)" : "Descripción (opcional)"}
+                          placeholder={movCategory === CATEGORIA_MATERIALES ? "Ej: Compra de soldadura y pernos" : undefined} />
                         {/* Con lista de repuestos, el monto es el total de la lista (automático). */}
                         {movCategory === "REPUESTOS" && repCart.length > 0 ? (
                           <label>
@@ -17507,8 +17597,10 @@ export function App() {
                       </>
                     )}
                     <button className="primary"
-                      disabled={CASH_REUSE[movCategory] === "pilado" || CASH_REUSE[movCategory] === "fomento" || (movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !mantPuedeGuardar)}
-                      title={movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !mantPuedeGuardar ? "El total a descontar de caja es $0.00" : undefined}
+                      disabled={CASH_REUSE[movCategory] === "pilado" || CASH_REUSE[movCategory] === "fomento" || (movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !mantPuedeGuardar)
+                        || (movType === "EXPENSE" && movCategory === CATEGORIA_MATERIALES && !movMaquinaId)}
+                      title={movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !mantPuedeGuardar ? "El total a descontar de caja es $0.00"
+                        : movType === "EXPENSE" && movCategory === CATEGORIA_MATERIALES && !movMaquinaId ? "Elige el equipo / máquina" : undefined}
                       style={{ width: "100%", padding: "10px 0", marginTop: 8 }}>💾 Registrar movimiento</button>
                   </form>
                 )}

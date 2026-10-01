@@ -8,6 +8,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { resolverProveedor } from "../../services/proveedores.js";
+import { etiquetaMaquina, resolverMaquina, type Maquina } from "../../services/maquinas.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // REPUESTOS DE LA PLANTA (Matriz): piezas que se desgastan en la piladora,
@@ -28,7 +29,7 @@ export async function exigirMatriz(req: unknown): Promise<void> {
 }
 
 const COLS = `r.id, r.nombre, r.referencia, r.unidad, r.stock::float AS stock, r.stock_minimo::float AS stock_minimo,
-  r.costo_unitario::float AS costo_unitario, r.equipment_id, e.name AS equipo, r.notas, r.activo, r.updated_at, r.compatibilidad,
+  r.costo_unitario::float AS costo_unitario, r.equipment_id, e.name AS equipo, r.notas, r.activo, r.updated_at, r.compatibilidad, r.ubicacion,
   (SELECT max(m.created_at) FROM repuesto_movimientos m WHERE m.repuesto_id = r.id AND m.tipo = 'SALIDA') AS ultimo_uso`;
 
 async function movimiento(
@@ -94,7 +95,9 @@ const datosRepuesto = z.object({
   equipment_id: z.string().uuid().optional().nullable(),
   notas: z.string().trim().max(500).optional().nullable(),
   // Familia de equipos a la que sirve (GENERAL o un área: PILADORA, SECADORA…).
-  compatibilidad: z.string().trim().max(40).optional().nullable()
+  compatibilidad: z.string().trim().max(40).optional().nullable(),
+  // Dónde se guarda en bodega (Ej: Estante 3, Cajón A).
+  ubicacion: z.string().trim().max(80).optional().nullable()
 });
 
 // POST alta (con stock inicial opcional, sin tocar caja)
@@ -109,10 +112,10 @@ repuestosRouter.post("/", asyncRoute(async (req, res) => {
     );
     if (dup.rowCount) throw new ApiError(409, "Ya existe un repuesto con ese nombre y referencia.");
     const ins = await client.query(
-      `INSERT INTO repuestos (nombre, referencia, unidad, stock_minimo, costo_unitario, equipment_id, notas, compatibilidad)
-       VALUES ($1, $2, upper($3), $4, $5, $6, $7, upper($8)) RETURNING id`,
+      `INSERT INTO repuestos (nombre, referencia, unidad, stock_minimo, costo_unitario, equipment_id, notas, compatibilidad, ubicacion)
+       VALUES ($1, $2, upper($3), $4, $5, $6, $7, upper($8), upper($9)) RETURNING id`,
       [body.nombre.toUpperCase(), body.referencia || null, body.unidad, round2(body.stock_minimo), round2(body.costo_unitario),
-       body.equipment_id || null, body.notas || null, body.compatibilidad || null]
+       body.equipment_id || null, body.notas || null, body.compatibilidad || null, body.ubicacion || null]
     );
     const id = ins.rows[0].id;
     if (body.stock_inicial > 0) {
@@ -138,6 +141,7 @@ repuestosRouter.patch("/:id", asyncRoute(async (req, res) => {
   if (body.equipment_id !== undefined) set("equipment_id", body.equipment_id || null);
   if (body.notas !== undefined) set("notas", body.notas || null);
   if (body.compatibilidad !== undefined) set("compatibilidad", body.compatibilidad ? body.compatibilidad.toUpperCase() : null);
+  if (body.ubicacion !== undefined) set("ubicacion", body.ubicacion ? body.ubicacion.toUpperCase() : null);
   if (body.activo !== undefined) set("activo", body.activo);
   if (!campos.length) throw new ApiError(400, "Nada que actualizar");
   const upd = await pool.query(`UPDATE repuestos SET ${campos.join(", ")}, updated_at = now() WHERE id = $1 RETURNING id`, vals);
@@ -265,7 +269,15 @@ export const itemCompraSchema = z.object({
   cantidad: z.number().positive(),
   costo_unitario: z.number().nonnegative(),
   // Compatibilidad / etiqueta del repuesto (opcional): queda guardada en el repuesto.
-  compatibilidad: z.string().trim().max(40).optional().nullable()
+  compatibilidad: z.string().trim().max(40).optional().nullable(),
+  // DESTINO: omitido/false = entra a BODEGA (stock); true = USO INMEDIATO: se
+  // instala ya → NO entra al stock y su costo va a la hoja de vida de la máquina.
+  uso_inmediato: z.boolean().optional(),
+  // Equipo / máquina (sección del catálogo de mantenimiento). Obligatorio con uso
+  // inmediato; con bodega es opcional y deja la compatibilidad = su área.
+  maquina_id: z.string().uuid().optional().nullable(),
+  // Dónde se guarda en bodega (solo destino bodega).
+  ubicacion_bodega: z.string().trim().max(80).optional().nullable()
 }).refine((i) => !!i.repuesto_id || !!i.nuevo, { message: "Cada línea debe indicar el repuesto" });
 
 repuestosRouter.post("/compra", asyncRoute(async (req, res) => {
@@ -277,10 +289,21 @@ repuestosRouter.post("/compra", asyncRoute(async (req, res) => {
     supplier_id: z.string().uuid().optional(),
     proveedor_nombre: z.string().trim().max(160).optional(),
     due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    descripcion: z.string().trim().max(300).optional()
+    descripcion: z.string().trim().max(300).optional(),
+    // Destino / máquina / ubicación del formulario: valen para las líneas que no
+    // traen los suyos (cada línea del carrito guarda los que tenía al agregarla).
+    uso_inmediato: z.boolean().optional(),
+    maquina_id: z.string().uuid().optional().nullable(),
+    ubicacion_bodega: z.string().trim().max(80).optional().nullable()
   }).parse(req.body);
   const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
   const userId = (req as AuthenticatedRequest).user?.id ?? null;
+  const items = body.items.map((it) => ({
+    ...it,
+    uso_inmediato: it.uso_inmediato ?? body.uso_inmediato,
+    maquina_id: it.maquina_id ?? body.maquina_id,
+    ubicacion_bodega: it.ubicacion_bodega ?? body.ubicacion_bodega
+  }));
 
   const out = await inTransaction(async (client) => {
     const reg = await client.query(
@@ -293,7 +316,7 @@ repuestosRouter.post("/compra", asyncRoute(async (req, res) => {
     const aCredito = body.modalidad_pago === "CREDITO";
     if (aCredito && !proveedor) throw new ApiError(400, "Para comprar a crédito elige o escribe el proveedor.");
     return registrarCompraRepuestos(client, {
-      items: body.items, cashRegisterId: body.cash_register_id, accionistaId, userId, proveedor, aCredito,
+      items, cashRegisterId: body.cash_register_id, accionistaId, userId, proveedor, aCredito,
       dueDate: body.due_date ?? null, descripcion: body.descripcion ?? null
     });
   });
@@ -301,11 +324,16 @@ repuestosRouter.post("/compra", asyncRoute(async (req, res) => {
 }));
 
 /**
- * Compra de repuestos que ENTRAN al inventario (lote). Contado = un egreso de
- * caja categoría REPUESTOS; crédito = Cuenta por Pagar al proveedor. Cada pieza
- * entra al stock enlazada al egreso / CxP (si se anula, se revierte). La caja y
- * el proveedor ya vienen validados. La usan «Compra» y el mantenimiento de Caja
- * (repuestos comprados «para el inventario»).
+ * Compra de repuestos (lote). Contado = un egreso de caja categoría REPUESTOS;
+ * crédito = Cuenta por Pagar al proveedor. Cada línea va a su DESTINO:
+ *  · BODEGA (por defecto): entra al stock enlazada al egreso / CxP (si se anula,
+ *    se revierte), con su ubicación y la compatibilidad de la máquina elegida.
+ *  · USO INMEDIATO: se instala ya en una máquina → NO entra al stock (ni crea
+ *    repuestos nuevos en el catálogo); su costo va a la hoja de vida de ESA
+ *    máquina (equipment_maintenance tipo REPUESTO, una por máquina) enlazada al
+ *    egreso / CxP: si se anulan, sale de la hoja de vida.
+ * La caja y el proveedor ya vienen validados. La usan «Compra», el mantenimiento
+ * de Caja (repuestos «para el inventario») y la liquidación de fondos.
  */
 export async function registrarCompraRepuestos(
   client: PoolClient,
@@ -319,14 +347,27 @@ export async function registrarCompraRepuestos(
   const { proveedor, aCredito, userId, accionistaId } = o;
   const body = { items: o.items, cash_register_id: o.cashRegisterId, due_date: o.dueDate ?? undefined, descripcion: o.descripcion ?? undefined };
   {
-    // Resolver cada línea (crear los repuestos nuevos) y el total.
-    const lineas: Array<{ id: string; nombre: string; unidad: string; referencia: string | null; cantidad: number; costo: number }> = [];
+    // Resolver cada línea (crear los repuestos nuevos que van a bodega) y el total.
+    type Linea = { id: string | null; nombre: string; unidad: string; referencia: string | null; cantidad: number; costo: number;
+      uso: boolean; maquina: Maquina | null; ubicacion: string | null };
+    const lineas: Linea[] = [];
+    const maquinas = new Map<string, Maquina>();
     for (const it of body.items) {
-      let rep: { id: string; nombre: string; unidad: string; referencia: string | null };
+      let maquina: Maquina | null = null;
+      if (it.maquina_id) {
+        maquina = maquinas.get(it.maquina_id) ?? await resolverMaquina(client, it.maquina_id);
+        maquinas.set(it.maquina_id, maquina);
+      }
+      const uso = it.uso_inmediato === true;
+      let rep: { id: string | null; nombre: string; unidad: string; referencia: string | null };
       if (it.repuesto_id) {
         const r = await client.query("SELECT id, nombre, unidad, referencia FROM repuestos WHERE id = $1 FOR UPDATE", [it.repuesto_id]);
         if (!r.rows[0]) throw new ApiError(404, "Repuesto no encontrado");
         rep = r.rows[0];
+      } else if (uso) {
+        // Uso inmediato de una pieza que no está en el catálogo: no se crea.
+        const n = it.nuevo!;
+        rep = { id: null, nombre: n.nombre.trim().toUpperCase(), unidad: (n.unidad || "UNIDAD").toUpperCase(), referencia: n.referencia || null };
       } else {
         const n = it.nuevo!;
         const ya = await client.query(
@@ -340,12 +381,19 @@ export async function registrarCompraRepuestos(
           [n.nombre.toUpperCase(), n.referencia || null, n.unidad, round2(n.stock_minimo)]
         )).rows[0];
       }
-      if (it.compatibilidad) await client.query("UPDATE repuestos SET compatibilidad = upper($2) WHERE id = $1", [rep.id, it.compatibilidad]);
-      lineas.push({ ...rep, cantidad: round2(it.cantidad), costo: round2(it.costo_unitario) });
+      if (uso && !maquina) throw new ApiError(400, `Elige el equipo / máquina donde se instala ${rep.nombre} (uso inmediato).`);
+      if (!uso && rep.id) {
+        // Bodega: compatibilidad (la indicada o el área de la máquina elegida) y ubicación.
+        const compat = it.compatibilidad || maquina?.area || null;
+        if (compat) await client.query("UPDATE repuestos SET compatibilidad = upper($2) WHERE id = $1", [rep.id, compat]);
+        if (it.ubicacion_bodega) await client.query("UPDATE repuestos SET ubicacion = upper($2) WHERE id = $1", [rep.id, it.ubicacion_bodega]);
+      }
+      lineas.push({ ...rep, cantidad: round2(it.cantidad), costo: round2(it.costo_unitario), uso, maquina, ubicacion: uso ? null : it.ubicacion_bodega || null });
     }
     const total = round2(lineas.reduce((s, l) => s + l.cantidad * l.costo, 0));
     if (!(total > 0)) throw new ApiError(400, "El total de la compra debe ser mayor a 0 (revisa los costos).");
-    const resumen = lineas.map((l) => `${n2(l.cantidad)} ${l.nombre}${l.referencia ? ` (${l.referencia})` : ""}`).join(", ");
+    const textoLinea = (l: Linea) => `${n2(l.cantidad)} ${l.nombre}${l.referencia ? ` (${l.referencia})` : ""}`;
+    const resumen = lineas.map((l) => `${textoLinea(l)}${l.uso && l.maquina ? ` [uso: ${etiquetaMaquina(l.maquina)}]` : ""}`).join(", ");
     const concepto = `Compra repuestos: ${resumen}${body.descripcion ? ` · ${body.descripcion}` : ""}`;
 
     let cashMovementId: string | null = null;
@@ -367,16 +415,43 @@ export async function registrarCompraRepuestos(
         [body.cash_register_id, total, concepto, userId, proveedor?.id ?? null]
       )).rows[0].id;
     }
-    const stocks: Array<{ nombre: string; stock: number }> = [];
+    const stocks: Array<{ nombre: string; stock: number; ubicacion: string | null }> = [];
     for (const l of lineas) {
-      if (l.costo > 0) await client.query("UPDATE repuestos SET costo_unitario = $2 WHERE id = $1", [l.id, l.costo]);
+      if (l.id && l.costo > 0) await client.query("UPDATE repuestos SET costo_unitario = $2 WHERE id = $1", [l.id, l.costo]);
+      if (l.uso || !l.id) continue;
       const stock = await movimiento(client, l.id, {
         tipo: "ENTRADA", cantidad: l.cantidad, costo: l.costo, userId, cashMovementId, payableId,
-        motivo: o.cashMovementIdExistente ? "Compra con fondo a rendir cuentas" : `${aCredito ? "Compra a crédito" : "Compra"}${proveedor ? ` a ${proveedor.name}` : ""}`
+        motivo: `${o.cashMovementIdExistente ? "Compra con fondo a rendir cuentas" : `${aCredito ? "Compra a crédito" : "Compra"}${proveedor ? ` a ${proveedor.name}` : ""}`}${l.ubicacion ? ` · ${l.ubicacion.toUpperCase()}` : ""}`
       });
-      stocks.push({ nombre: l.nombre, stock });
+      stocks.push({ nombre: l.nombre, stock, ubicacion: l.ubicacion ? l.ubicacion.toUpperCase() : null });
     }
-    return { total, credito: aCredito, cash_movement_id: cashMovementId, payable_id: payableId, proveedor: proveedor?.name ?? null, stocks };
+    // Uso inmediato: una hoja de vida por máquina con lo que se le instaló.
+    const porMaquina = new Map<string, { maquina: Maquina; lineas: Linea[] }>();
+    for (const l of lineas.filter((x) => x.uso && x.maquina)) {
+      const g = porMaquina.get(l.maquina!.id) ?? { maquina: l.maquina!, lineas: [] };
+      g.lineas.push(l);
+      porMaquina.set(l.maquina!.id, g);
+    }
+    const hojasDeVida: Array<{ maquina: string; monto: number }> = [];
+    for (const g of porMaquina.values()) {
+      const monto = round2(g.lineas.reduce((s, l) => s + l.cantidad * l.costo, 0));
+      const detalle = g.lineas.map((l) => `${textoLinea(l)} $${round2(l.cantidad * l.costo).toFixed(2)}`).join(", ");
+      await client.query(
+        `INSERT INTO equipment_maintenance
+           (equipment_id, area, section, maintenance_type, description, provider, amount, parts_cost, labor_cost,
+            repuestos_comprados, created_by, cash_movement_id, payable_id)
+         VALUES (NULL, $1, $2, 'REPUESTO', $3, $4, $5, $5, 0, $6, $7, $8, $9)`,
+        [g.maquina.area, g.maquina.section,
+         `Repuestos instalados (compra de uso inmediato): ${detalle}${body.descripcion ? ` · ${body.descripcion}` : ""}`.slice(0, 1000),
+         proveedor?.name ?? null, monto, `Usados ya: ${detalle}`, userId, cashMovementId, payableId]
+      );
+      hojasDeVida.push({ maquina: etiquetaMaquina(g.maquina), monto });
+    }
+    const totalUso = round2(lineas.filter((l) => l.uso).reduce((s, l) => s + l.cantidad * l.costo, 0));
+    return {
+      total, credito: aCredito, cash_movement_id: cashMovementId, payable_id: payableId, proveedor: proveedor?.name ?? null, stocks,
+      total_bodega: round2(total - totalUso), total_uso_inmediato: totalUso, hojas_de_vida: hojasDeVida
+    };
   }
 }
 
