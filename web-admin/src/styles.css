@@ -451,6 +451,13 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 
 /* Historial de liquidaciones */
 .liqHistPanel { grid-column: 1 / -1; }
+/* Liquidaciones: pestañas y flujo vertical a todo el ancho (sin columnas). */
+.liqLayout { display: flex; flex-direction: column; gap: 16px; grid-column: 1 / -1; min-width: 0; }
+.liqVista { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.liqVista[hidden] { display: none; }
+.liqTabs { margin-bottom: -4px; }
+/* Con todo el ancho, QQ y Precio no se estiran de más: el ingreso toma el resto. */
+.liqLayout .liqLinesHeader, .liqLayout .liqLine { grid-template-columns: minmax(0, 1fr) minmax(110px, 170px) minmax(110px, 170px) 28px; gap: 12px; }
 
 .liqHistTable { overflow-x: auto; }
 

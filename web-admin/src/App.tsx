@@ -2411,6 +2411,9 @@ export function App() {
     setLiqDiscounts((p) => (p.cosechadora === str ? p : { ...p, cosechadora: str }));
   }, [liqCosechadoraTotal]);
   const [liqResult, setLiqResult] = useState<LiqResultItem[] | null>(null);
+  // Pestañas de Liquidaciones. Se ocultan con `hidden` (no se desmontan): lo que
+  // se estaba llenando sigue ahí al volver de «Liquidaciones Realizadas».
+  const [liqVista, setLiqVista] = useState<"nueva" | "realizadas">("nueva");
 
   // ── Caja ──────────────────────────────────────────────────────────────────
   const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "movimiento" | "gastos" | "sacos" | "mantenimiento" | "historial" | "venta_detalle" | "cuentas" | "fomentos">("resumen");
@@ -18073,7 +18076,16 @@ export function App() {
         })()}
 
         {activeTab === "Liquidaciones" && (
-          <section className="panelGrid">
+          <section className="liqLayout">
+            <nav className="cajaSubNav liqTabs" role="tablist" aria-label="Liquidaciones">
+              <button type="button" role="tab" aria-selected={liqVista === "nueva"} className={liqVista === "nueva" ? "active" : ""} onClick={() => setLiqVista("nueva")}>🧾 Nueva Liquidación</button>
+              <button type="button" role="tab" aria-selected={liqVista === "realizadas"} className={liqVista === "realizadas" ? "active" : ""} onClick={() => setLiqVista("realizadas")}>
+                📚 Liquidaciones Realizadas{liqBatches.length > 0 ? ` (${liqBatches.length})` : ""}
+              </button>
+            </nav>
+
+            {/* ── Pestaña 1 · Nueva Liquidación: flujo vertical a todo el ancho ── */}
+            <div className="liqVista" role="tabpanel" hidden={liqVista !== "nueva"}>
             <div className="formPanel">
               {liqResult ? (
                 <>
@@ -18529,7 +18541,10 @@ export function App() {
                 </div>
               );
             })()}
+            </div>
 
+            {/* ── Pestaña 2 · Liquidaciones Realizadas: solo el historial ── */}
+            <div className="liqVista" role="tabpanel" hidden={liqVista !== "realizadas"}>
             <div className="tablePanel liqHistPanel">
               <h2>Liquidaciones realizadas</h2>
               {liqBatches.length === 0
@@ -18644,6 +18659,7 @@ export function App() {
                     })}
                   </div>
               }
+            </div>
             </div>
           </section>
         )}
