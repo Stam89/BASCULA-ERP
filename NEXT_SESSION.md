@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Nomina → Pagos: desglose de la bajada + preparacion para datos reales (2026-10-01)
+- Fila «Bajada de carro» solo con resumen (personas, desde/antiguedad/reg.) y «👁️ Ver desglose» (title con la lista; clic → modal `bajadaDesgloseAbierto` con persona, tickets, QQ, monto y total).
+- «Borrar datos de prueba» (`/settings/reset-transactions`): ahora incluye `repuesto_movimientos` y pone `repuestos.stock = 0` (antes quedaba stock sin kardex). Revisado: el resto de transaccionales cae por TRUNCATE CASCADE; `resultado_mensual_manual` (sin FK) NO se borra (tiene cifras de sept que parecen reales: preguntar).
+- Para arrancar con datos reales FALTA herramienta de saldos iniciales de CxC y CxP (solo nacen de flujos). Cascara = lotes de bascula. Pendiente definir con el usuario: fecha de corte, formato de sus datos, borrar prueba y pasar APP_MODE=production al final.
+
 ### Mantenimiento Planta: mano de obra + materiales (2026-10-01)
 - Costos con dos campos: «Mano de Obra / Servicios $» (`maintenanceForm.amount`) y «Materiales / Consumibles $» (`mantMateriales`) + recuadro «TOTAL A DESCONTAR DE CAJA» (`mantTotalCaja`). Con «Rendir cuentas» hay un solo «Monto entregado» (al marcarlo los materiales se suman a el).
 - Payload: `amount` = total (como siempre) + opcionales `labor_cost` / `parts_cost`. `/equipment/maintenance` los guarda en `equipment_maintenance.labor_cost/parts_cost` (400 si no suman `amount`) y la descripcion del egreso de Caja agrega «mano de obra $X + materiales $Y». Historial y CSV muestran el desglose. Sin desglose o con fondo todo queda como antes.

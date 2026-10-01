@@ -526,6 +526,8 @@ const WIPE_TABLES = [
   "fomento_pagos",
   "sack_movements",
   "equipment_maintenance",
+  // Repuestos de planta: el kárdex se borra y su stock vuelve a 0 (el catálogo queda).
+  "repuesto_movimientos",
   // Transporte y Cosechadora (Campo): SOLO históricos operativos. Se preservan los
   // catálogos maestros (campo_activos flota, campo_operadores choferes,
   // campo_clientes, campo_cuentas, campo_categorias_gasto, campo_config).
@@ -563,7 +565,7 @@ settingsRouter.post("/reset-transactions", requireAdmin, asyncRoute(async (req, 
     // FUERTE (log en terminal) para detectar un nombre mal escrito — nunca en silencio.
     const existing = await client.query(
       `SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = ANY($1)`,
-      [[...WIPE_TABLES, "insumos", "sack_inventory"]]
+      [[...WIPE_TABLES, "insumos", "sack_inventory", "repuestos"]]
     );
     const present = new Set<string>(existing.rows.map((r: { tablename: string }) => r.tablename));
     const tables = WIPE_TABLES.filter((t) => present.has(t));
@@ -587,6 +589,7 @@ settingsRouter.post("/reset-transactions", requireAdmin, asyncRoute(async (req, 
     }
     if (present.has("insumos")) await client.query(`UPDATE insumos SET stock_actual = 0`);
     if (present.has("sack_inventory")) await client.query(`UPDATE sack_inventory SET stock = 0, updated_at = now()`);
+    if (present.has("repuestos")) await client.query(`UPDATE repuestos SET stock = 0, updated_at = now()`);
 
     console.log(`[reset-transactions] ✅ Truncadas ${tables.length} tabla(s): ${tables.join(", ")}`);
     return { wiped: tables, notFound };
