@@ -12,6 +12,7 @@ import { planDeSacos, sobranteLb, SacosAlertaDashboard, SacosCatalogoConfig, Sac
 import { PedidoCompartirModal, type PedidoCompartirData } from "./components/PedidoCompartir";
 import { RepuestosAlertaDashboard, RepuestosModule, etiquetaCompat, type Repuesto } from "./components/RepuestosModule";
 import { BuscadorCombo } from "./components/BuscadorCombo";
+import { SaldosIniciales } from "./components/SaldosIniciales";
 import * as XLSX from "xlsx";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
@@ -2484,6 +2485,8 @@ export function App() {
   // del <summary> (así se localiza en el DOM al saltar); `claves` son sinónimos
   // que la gente teclea. Si se renombra una tarjeta, actualizar aquí también.
   const [configBuscar, setConfigBuscar] = useState("");
+  // 📥 Saldos iniciales: el componente (y sus consultas) solo se monta con la tarjeta abierta.
+  const [saldosInicialesAbierto, setSaldosInicialesAbierto] = useState(false);
   const abrirTarjetaRef = useRef<string | null>(null);
   type AjusteIndex = { sub: typeof configSubTab; tarjeta: string; claves: string };
   // CONFIGURACIÓN POR ACCIONISTA: un SOCIO solo ve lo que usa (su negocio,
@@ -2495,6 +2498,7 @@ export function App() {
   const tarjetaVisibleSocio = (tarjeta: string) =>
     tarjeta.startsWith("🏢 Datos del negocio") || tarjeta.startsWith("🛒 Tarifas por libra") ||
     tarjeta.startsWith("🏦 Cuentas Bancarias") || tarjeta.startsWith("💼 Personal administrativo") ||
+    tarjeta.startsWith("📥 Saldos iniciales") ||
     (tarjeta.startsWith("📦 Catálogo de sacos") && accionistaEnvejecidoHabilitado(accionistas.find((a) => a.id === activeAccionistaId)));
   const CONFIG_INDICE: AjusteIndex[] = [
     { sub: "estado", tarjeta: "Estado del sistema", claves: "salud api sincronizacion bascula respaldo backup usuarios accionistas diagnostico" },
@@ -2505,6 +2509,7 @@ export function App() {
     { sub: "operacion", tarjeta: "🏷️ Categorías de caja", claves: "categoria ingreso egreso movimiento caja" },
     { sub: "operacion", tarjeta: "🔧 Categorías de Mantenimiento", claves: "areas tipos secciones sistemas equipos mantenimiento" },
     { sub: "operacion", tarjeta: "✅ Puesta en marcha", claves: "checklist pasos inicio configuracion inicial" },
+    { sub: "operacion", tarjeta: "📥 Saldos iniciales", claves: "arranque datos reales mes anterior corte fin de mes cuentas por cobrar pagar cxc cxp inventario cascara anticipos saldo anterior deudas" },
     { sub: "operacion", tarjeta: "⚠️ Zona de peligro", claves: "borrar datos de prueba reiniciar operacion reset limpiar pruebas movimientos tickets" },
     { sub: "operacion", tarjeta: "💾 Respaldos de la base de datos", claves: "backup respaldo copia de seguridad onedrive pg_dump" },
     { sub: "nomina", tarjeta: "💲 Tarifas de pago", claves: "pilador estibador secador saca tulas arrocillo guardiania tunel tendal cuadrilla nomina mano de obra" },
@@ -19328,7 +19333,9 @@ export function App() {
           const esVencida = (ar: AccountsReceivable) => !!ar.due_date && ar.due_date.slice(0, 10) < hoy && Number(ar.balance) > 0.001;
           // CxC por Ventas: cuentas generadas por ventas a crédito (arroz,
           // subproductos, fundas) — pedido despachado o venta directa.
-          const esVenta = (ar: AccountsReceivable) => ["sales_order", "sales", "sale", "invoice"].includes(ar.reference_type || "");
+          const esVenta = (ar: AccountsReceivable) => ["sales_order", "sales", "sale", "invoice"].includes(ar.reference_type || "")
+            // Saldo inicial de un cliente (ventas de antes del arranque).
+            || (ar.reference_type === "saldo_inicial" && !!ar.customer_id);
           const filtrado = accountsReceivable.filter((ar) =>
             arFilter === "todos" ? true : arFilter === "ventas" ? esVenta(ar) : clasif(ar) === arFilter
           );
@@ -23306,6 +23313,34 @@ export function App() {
               </details>
             )}
 
+            {/* ── 📥 Saldos iniciales: arranque con datos reales al corte de fin de mes ── */}
+            {configSubTab === "operacion" && isAdmin && (
+              <section className="panelGrid">
+                <details className="formPanel" style={{ gridColumn: "1 / -1" }}
+                  onToggle={(e) => setSaldosInicialesAbierto((e.currentTarget as HTMLDetailsElement).open)}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>
+                    📥 Saldos iniciales <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· lo que tenías al cierre del mes (CxC, CxP, inventario, cáscara, anticipos)</span>
+                  </summary>
+                  {saldosInicialesAbierto && (
+                    <SaldosIniciales
+                      key={activeAccionistaId ?? "sin-accionista"}
+                      accionistaNombre={accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "el accionista activo"}
+                      avisar={addToast}
+                      onCambio={() => { refresh().catch(() => undefined); }}
+                      ir={{
+                        caja: visibleTabs.includes("Caja") ? () => irATab("Caja") : undefined,
+                        sacos: visibleTabs.includes("Inventario") ? irASacos : undefined,
+                        repuestos: esMatrizActiva && visibleTabs.includes("Inventario") ? irARepuestos : undefined,
+                        fomentos: visibleTabs.includes("Fomentos") ? () => irATab("Fomentos") : undefined,
+                        campo: visibleTabs.includes("Caja de Campo") ? () => irATab("Caja de Campo") : undefined,
+                        bascula: visibleTabs.includes("Bascula") ? () => irATab("Bascula") : undefined
+                      }}
+                    />
+                  )}
+                </details>
+              </section>
+            )}
+
             {/* ── Puesta en marcha / datos ── */}
             {/* Puesta en marcha + datos (Operación y Planta) */}
             {configSubTab === "operacion" && !esSocioActivoCfg && (
@@ -23398,6 +23433,17 @@ export function App() {
                             {backupBusy ? "Respaldando..." : "Respaldar"}
                           </button>
                         </div>
+                      </article>
+
+                      <article className="launchStep">
+                        <span className="launchStepNumber">7</span>
+                        <div>
+                          <strong>Saldos iniciales (cierre de mes)</strong>
+                          <p>Carga lo que tenias al ultimo dia del mes: cuentas por cobrar y por pagar, inventario, cascara y anticipos.</p>
+                        </div>
+                        <button type="button" className="btnGhost" onClick={() => irAAjuste({ sub: "operacion", tarjeta: "📥 Saldos iniciales", claves: "" })}>
+                          Abrir
+                        </button>
                       </article>
                     </div>
 

@@ -13,7 +13,7 @@ import { dinero, notificar } from "./notificaciones.js";
  * Enlaces conocidos (buscarCuentaHermana):
  *  · pilado_services / lot_transfers / matriz_service_charges /
  *    matriz_packaging_charges → tabla puente con receivable_id + payable_id.
- *  · fomento_cruce / retencion_matriz → la CxC y la CxP comparten
+ *  · fomento_cruce / retencion_matriz / saldo_inicial_socio → la CxC y la CxP comparten
  *    reference_type + reference_id (una en cada accionista).
  *  · campo_servicio → la Por Pagar del socio espeja un servicio de Transporte
  *    (su saldo lo mantiene un trigger; ver espejarPagoATransporte).
@@ -22,7 +22,7 @@ import { dinero, notificar } from "./notificaciones.js";
 const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 
 /** Tipos cuya CxC y CxP hermanas comparten reference_type + reference_id. */
-const PARES_POR_REFERENCIA = ["fomento_cruce", "retencion_matriz"];
+const PARES_POR_REFERENCIA = ["fomento_cruce", "retencion_matriz", "saldo_inicial_socio"];
 
 /** Id de la cuenta contraparte (la otra cara de la misma deuda), o null. */
 export async function buscarCuentaHermana(

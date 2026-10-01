@@ -28,7 +28,7 @@ receivableRouter.get("/", asyncRoute(async (req, res) => {
             COALESCE(par.name, c.full_name, dest.name, ps_acc.name, ps.client_name,
                      msc_acc.name, mpc_acc.name, soc_ret.name, fr.full_name) AS customer_name,
             -- Deuda entre socios / Matriz (se espeja con la Por Pagar del otro).
-            (ar.reference_type IN ('fomento_cruce', 'retencion_matriz', 'packaging_charge', 'pilado_service', 'lot_transfer', 'service_charge')
+            (ar.reference_type IN ('fomento_cruce', 'retencion_matriz', 'packaging_charge', 'pilado_service', 'lot_transfer', 'service_charge', 'saldo_inicial_socio')
               OR lt.id IS NOT NULL OR ps.client_accionista_id IS NOT NULL OR msc.id IS NOT NULL OR mpc.id IS NOT NULL) AS entre_socios,
             c.phone     AS customer_phone,
             s.sale_number,
@@ -54,7 +54,7 @@ receivableRouter.get("/", asyncRoute(async (req, res) => {
      LEFT JOIN accionistas soc_ret ON soc_ret.id = liq_ret.accionista_id
      LEFT JOIN LATERAL (
        SELECT a.name FROM accounts_payable h JOIN accionistas a ON a.id = h.accionista_id
-        WHERE ar.reference_type = 'fomento_cruce'
+        WHERE ar.reference_type IN ('fomento_cruce', 'saldo_inicial_socio')
           AND h.reference_type = ar.reference_type AND h.reference_id = ar.reference_id
           AND h.accionista_id IS DISTINCT FROM ar.accionista_id
         LIMIT 1
@@ -274,9 +274,10 @@ receivableRouter.post("/:id/pay", asyncRoute(async (req, res) => {
     // Registrar ingreso en caja si hay una abierta
     if (body.cash_register_id) {
       const cust = await client.query(
-        `SELECT c.full_name, s.sale_number
+        `SELECT COALESCE(c.full_name, f.full_name) AS full_name, s.sale_number
          FROM accounts_receivable ar
          LEFT JOIN customers c ON c.id = ar.customer_id
+         LEFT JOIN farmers f ON f.id = ar.farmer_id
          LEFT JOIN sales s ON s.id = ar.sale_id
          WHERE ar.id = $1`,
         [req.params.id]

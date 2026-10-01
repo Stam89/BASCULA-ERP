@@ -887,7 +887,7 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
               'Cuenta por pagar'
             ) AS farmer_name,
             -- Deuda entre socios / Matriz / Transporte (se espeja con la otra cara).
-            (ap.reference_type IN ('campo_servicio', 'fomento_cruce', 'retencion_matriz', 'packaging_charge', 'pilado_service', 'lot_transfer', 'service_charge')
+            (ap.reference_type IN ('campo_servicio', 'fomento_cruce', 'retencion_matriz', 'packaging_charge', 'pilado_service', 'lot_transfer', 'service_charge', 'saldo_inicial_socio')
               OR ps.id IS NOT NULL OR msc.id IS NOT NULL OR mpc.id IS NOT NULL OR lt.id IS NOT NULL) AS entre_socios,
             l.liquidation_number, l.batch_id
      FROM accounts_payable ap
@@ -906,7 +906,7 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
      LEFT JOIN accionistas lt_from ON lt_from.id = lt.from_accionista_id
      LEFT JOIN LATERAL (
        SELECT a.name FROM accounts_receivable h JOIN accionistas a ON a.id = h.accionista_id
-        WHERE ap.reference_type IN ('fomento_cruce', 'retencion_matriz')
+        WHERE ap.reference_type IN ('fomento_cruce', 'retencion_matriz', 'saldo_inicial_socio')
           AND h.reference_type = ap.reference_type AND h.reference_id = ap.reference_id
           AND h.accionista_id IS DISTINCT FROM ap.accionista_id
         LIMIT 1
@@ -1089,6 +1089,9 @@ cashRouter.post("/payables/:id/pay", asyncRoute(async (req, res) => {
       // Gasto a crédito: al pagarlo, el egreso lleva la categoría del gasto
       // original (así el Resultado mensual lo cuenta en su rubro).
       refType === "gasto_credito" ? (ap.rows[0].categoria || "PAGO_PROVEEDOR") :
+      // Deuda del saldo inicial (anterior al arranque): no es costo del mes en que se paga.
+      refType === "saldo_inicial_socio" ? "PAGO_ENTRE_SOCIOS" :
+      refType === "saldo_inicial" && !ap.rows[0].farmer_id ? "PAGO_SALDO_INICIAL" :
       "PAGO_AGRICULTOR";
     // La descripción dice a quién se paga, sin repetir "Pago a" si ya lo trae.
     const aQuien = ap.rows[0].farmer_name
@@ -1186,6 +1189,9 @@ cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
       // Gasto a crédito: al pagarlo, el egreso lleva la categoría del gasto
       // original (así el Resultado mensual lo cuenta en su rubro).
       refType === "gasto_credito" ? (primera.categoria || "PAGO_PROVEEDOR") :
+      // Deuda del saldo inicial (anterior al arranque): no es costo del mes en que se paga.
+      refType === "saldo_inicial_socio" ? "PAGO_ENTRE_SOCIOS" :
+      refType === "saldo_inicial" && !primera.farmer_id ? "PAGO_SALDO_INICIAL" :
       "PAGO_AGRICULTOR";
     await client.query(
       `INSERT INTO cash_movements

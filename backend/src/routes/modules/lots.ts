@@ -146,15 +146,20 @@ lotsRouter.get("/", asyncRoute(async (req, res) => {
     // Un lote agrupa varios pesos de materia prima. El join los multiplicaba:
     // el mismo lote salia repetido, una vez por peso. Aqui va sumado, una fila
     // por lote. El detalle peso por peso se ve en la liquidacion y en /lots/:id.
-    `SELECT l.*, f.full_name AS farmer_name,
+    `SELECT l.*, COALESCE(f.full_name, CASE WHEN l.saldo_inicial THEN 'Saldo inicial' END) AS farmer_name,
             COUNT(t.id)::int AS entries_count,
             COALESCE(SUM(t.net_weight), 0) AS net_weight,
-            COALESCE(SUM(t.quintals), 0) AS quintals
+            -- Lote de saldo inicial: no tiene tickets, sus QQ son los de su ingreso.
+            COALESCE(SUM(t.quintals), 0) + COALESCE(si.qq, 0) AS quintals
      FROM lots l
      LEFT JOIN farmers f ON f.id = l.farmer_id
      LEFT JOIN weighing_tickets t ON t.lot_id = l.id
+     LEFT JOIN LATERAL (
+       SELECT SUM(m.quantity) AS qq FROM inventory_movements m
+        WHERE l.saldo_inicial AND m.lot_id = l.id AND m.reference_type = 'saldo_inicial'
+     ) si ON true
      WHERE l.accionista_id = $2 AND ($1::text IS NULL OR l.status = $1::lot_status)
-     GROUP BY l.id, f.full_name
+     GROUP BY l.id, f.full_name, si.qq
      ORDER BY l.created_at DESC
      LIMIT 500`,
     [req.query.status ?? null, accionistaId]
@@ -182,13 +187,19 @@ lotsRouter.get("/", asyncRoute(async (req, res) => {
 lotsRouter.get("/dry-in-storage", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
-    `SELECT l.*, f.full_name AS farmer_name,
+    `SELECT l.*, COALESCE(f.full_name, CASE WHEN l.saldo_inicial THEN 'Saldo inicial' END) AS farmer_name,
             COUNT(t.id)::int AS entries_count,
             COALESCE(SUM(t.net_weight), 0) AS net_weight,
-            COALESCE(SUM(t.quintals), 0) AS quintals
+            COALESCE(SUM(t.quintals), 0) + COALESCE(si.qq, 0) AS quintals
      FROM lots l
      LEFT JOIN farmers f ON f.id = l.farmer_id
      LEFT JOIN weighing_tickets t ON t.lot_id = l.id
+     -- Cáscara del SALDO INICIAL (Configuración → Saldos iniciales): entra seca a
+     -- bodega como lote propio, sin tickets ni secadora; sus QQ son los de su ingreso.
+     LEFT JOIN LATERAL (
+       SELECT SUM(m.quantity) AS qq FROM inventory_movements m
+        WHERE l.saldo_inicial AND m.lot_id = l.id AND m.reference_type = 'saldo_inicial'
+     ) si ON true
      WHERE l.accionista_id = $1
        AND l.status = 'WEIGHED'
        AND (
@@ -205,6 +216,8 @@ lotsRouter.get("/dry-in-storage", asyncRoute(async (req, res) => {
          -- …o 'Solo Servicio de Pilada': ya viene seco, salta secadoras y va
          -- directo a producción desde stock/bodega.
          OR l.operation_type = 'PILADO'
+         -- …o cáscara seca cargada como saldo inicial.
+         OR l.saldo_inicial
        )
        AND NOT EXISTS (
          SELECT 1 FROM drying_tunnel_reports d
@@ -217,8 +230,8 @@ lotsRouter.get("/dry-in-storage", asyncRoute(async (req, res) => {
          SELECT 1 FROM processing_batches b
          WHERE b.lot_id = l.id AND b.finished_at IS NOT NULL
        )
-     GROUP BY l.id, f.full_name
-     HAVING COALESCE(SUM(t.quintals), 0) > 0
+     GROUP BY l.id, f.full_name, si.qq
+     HAVING COALESCE(SUM(t.quintals), 0) + COALESCE(si.qq, 0) > 0
      ORDER BY l.created_at DESC
      LIMIT 500`,
     [accionistaId]

@@ -1,6 +1,6 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-09-30
+Actualizado: 2026-10-01
 
 ## Inicio rapido
 
@@ -48,6 +48,17 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Configuracion → 📥 Saldos iniciales: arranque con datos reales al corte de fin de mes (2026-10-01)
+- El usuario confirmo: los cortes son a FIN DE MES y quiere cargar a mano lo del mes anterior. Tarjeta en Configuracion → Operacion y Planta (solo admin, tambien para socios: carga al accionista ACTIVO) + paso 7 de «Puesta en marcha». Componente `web-admin/src/components/SaldosIniciales.tsx` (se monta solo con la tarjeta abierta, `saldosInicialesAbierto`).
+- Backend `/saldos-iniciales` (`routes/modules/saldos-iniciales.ts`, `requireAdmin`). Corte = ultimo dia del mes y no futuro (`utils/corte-mes.ts`, 400 si no); filas fechadas al mediodia de Ecuador del corte (o de la «fecha de la deuda»). NO mueven caja. Registro/auditoria en `saldos_iniciales` (mig 20261063, + `lots.saldo_inicial`).
+  - CxC (cliente/agricultor/socio) y CxP (proveedor/agricultor/socio): `reference_type 'saldo_inicial'`, `reference_id` = id del registro. Con SOCIO se crea la cara espejo en el otro accionista con `'saldo_inicial_socio'` (agregado a `PARES_POR_REFERENCIA`, a los `par`/`entre_socios` de /receivable y /cash/payables). Contraparte por id o nombre (se reutiliza si existe sin importar mayusculas; si no, se crea; proveedores via `resolverProveedor`).
+  - Pago de CxP inicial: categoria `PAGO_SALDO_INICIAL` (no operativa en Resultado mensual) salvo agricultor (`PAGO_AGRICULTOR`) y socio (`PAGO_ENTRE_SOCIOS`). CxC inicial de cliente cuenta en «CxC por Ventas».
+  - Inventario: producto/subproducto → `ADJUSTMENT` en su bodega. Cascara (seca) → LOTE propio `SI-ddmmaa-NNN` (COMPRA, WEIGHED, sin tickets) + ingreso `IN` con lot_id: `/lots/dry-in-storage` lo incluye (QQ del ingreso, «Saldo inicial») y Produccion lo pila (probado). Cascara humeda o sin liquidar → ticket manual de Bascula.
+  - Anticipos: `farmer_advances` sin egreso de caja.
+  - Anular (`POST /:id/anular {motivo}`): CxC/CxP (ambas caras) solo sin abonos; anticipo solo sin aplicar; inventario con contra-asiento `saldo_inicial_anulado` si el stock alcanza; cascara bloqueada si el lote ya entro a Produccion (lote → CANCELLED).
+  - «Borrar datos de prueba» incluye `saldos_iniciales`. Pestaña «Lo demas» enlaza lo que ya existia: caja (Editar saldo inicial), sacos, repuestos, fomentos (saldo anterior), Transporte (servicios/CxP con fecha) y Bascula.
+- Prueba ROLLBACK `saldos_test.mjs` (scratchpad): 49 verificaciones OK, datos reales intactos.
 
 ### Nomina → Pagos: desglose de la bajada + preparacion para datos reales (2026-10-01)
 - Fila «Bajada de carro» solo con resumen (personas, desde/antiguedad/reg.) y «👁️ Ver desglose» (title con la lista; clic → modal `bajadaDesgloseAbierto` con persona, tickets, QQ, monto y total).

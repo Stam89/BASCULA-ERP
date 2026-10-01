@@ -465,6 +465,8 @@ settingsRouter.put("/packaging-rates", requireAdmin, asyncRoute(async (req, res)
 // Se conservan: users/roles, app_settings, products, warehouses, equipment,
 // y los catálogos de insumos y sacos (con stock en 0).
 const WIPE_TABLES = [
+  // Saldos iniciales (registro de lo cargado al arranque; sus filas reales caen abajo).
+  "saldos_iniciales",
   "farmers",
   "customers",
   "vehicles",

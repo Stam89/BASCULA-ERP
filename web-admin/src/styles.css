@@ -4499,6 +4499,55 @@ textarea::placeholder {
 .mantSubRep output { font-weight: 800; color: #0f172a; font-variant-numeric: tabular-nums; }
 .mantFondo { border: 1px dashed #e5e7eb; border-radius: 10px; padding: 10px 12px; }
 .mantFondo.is-on { background: #fffbeb; border: 1px solid #fde68a; }
+/* ── Configuración → 📥 Saldos iniciales (arranque al corte de fin de mes) ── */
+.si { display: grid; gap: 14px; margin-top: 12px; }
+.si-head { display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: flex-end; padding: 12px 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; }
+.si-mes { display: grid; gap: 4px; margin: 0; font-size: 12px; font-weight: 700; color: #475569; }
+.si-mes input { width: auto; min-width: 170px; }
+.si-corte { font-size: 14px; color: #334155; padding-bottom: 8px; }
+.si-nota { flex: 1 1 280px; margin: 0; font-size: 12.5px; color: #64748b; }
+.si-resumen { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
+.si-kpi { display: grid; gap: 2px; text-align: left; border: 1px solid #e2e8f0; border-radius: 10px; padding: 9px 12px; background: #fff; cursor: pointer; font: inherit; color: inherit; }
+.si-kpi:hover { border-color: #94a3b8; }
+.si-kpi.is-activo { border-color: #0f766e; box-shadow: 0 0 0 2px rgba(15, 118, 110, .12); }
+.si-kpi span { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #94a3b8; }
+.si-kpi strong { font-size: 17px; color: #0f172a; font-variant-numeric: tabular-nums; }
+.si-kpi small { font-size: 11.5px; color: #64748b; }
+.si-tabs { flex-wrap: wrap; max-width: 100%; }
+.si-form { display: grid; gap: 12px; padding: 14px; border: 1px solid #e2e8f0; border-radius: 12px; background: #fff; }
+.si-form > .segmented { justify-self: start; }
+.si-form label { display: grid; gap: 4px; margin: 0; font-size: 12.5px; font-weight: 600; color: #334155; }
+.si-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; align-items: end; }
+.si-valor { display: grid; gap: 4px; font-size: 12.5px; font-weight: 600; color: #334155; }
+.si-valor strong { padding: 9px 12px; border-radius: 10px; background: #f8fafc; border: 1px dashed #cbd5e1; font-size: 15px; color: #0f172a; font-variant-numeric: tabular-nums; }
+.si-elegido { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 12px; border: 1px solid #99f6e4; background: #f0fdfa; border-radius: 10px; font-size: 14px; font-weight: 400; }
+.si-elegido button { border: none; background: none; cursor: pointer; color: #64748b; font-size: 14px; padding: 2px 6px; }
+.si-nuevo { margin-left: 8px; font-size: 11px; font-style: normal; font-weight: 700; color: #0f766e; background: #ccfbf1; border-radius: 999px; padding: 1px 8px; }
+.si-aviso { margin: 0; font-size: 12.5px; color: #475569; background: #f8fafc; border-left: 3px solid #94a3b8; padding: 8px 10px; border-radius: 6px; }
+.si-aviso--cascara { border-left-color: #ca8a04; background: #fefce8; color: #713f12; }
+.si-acciones { display: flex; justify-content: flex-end; align-items: center; gap: 10px; flex-wrap: wrap; }
+.si-acciones small { margin-right: auto; }
+.si-lista { list-style: none; margin: 0; padding: 0; border: 1px solid #e2e8f0; border-radius: 12px; background: #fff; }
+.si-fila { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px 14px; align-items: center; padding: 10px 14px; }
+.si-fila + .si-fila { border-top: 1px solid #f1f5f9; }
+.si-fila__main { display: grid; gap: 2px; min-width: 0; font-size: 13.5px; }
+.si-fila__main small { color: #64748b; font-size: 12px; overflow-wrap: anywhere; }
+.si-fila__monto { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.si-fila__monto small { display: block; font-weight: 500; color: #64748b; font-size: 11.5px; }
+.si-fila.is-anulado .si-fila__main strong, .si-fila.is-anulado .si-fila__monto { text-decoration: line-through; color: #94a3b8; }
+.si-tag { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 2px 9px; background: #f1f5f9; color: #64748b; white-space: nowrap; }
+.si-tag--ok { background: #dcfce7; color: #166534; }
+.si-anular { grid-column: 1 / -1; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.si-anular input { flex: 1 1 200px; }
+.si-vacio { margin: 0; padding: 14px; text-align: center; color: #64748b; font-size: 13px; border: 1px dashed #e2e8f0; border-radius: 12px; }
+.si-otros { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.si-otro { display: grid; gap: 6px; align-content: start; justify-items: start; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px 14px; background: #fff; }
+.si-otro strong { font-size: 14px; }
+.si-otro p { margin: 0; font-size: 12.5px; color: #475569; }
+@media (max-width: 640px) {
+  .si-fila { grid-template-columns: minmax(0, 1fr) auto; }
+  .si-fila__accion { grid-column: 1 / -1; justify-self: end; }
+}
 /* Nómina → Pagos: «👁️ Ver desglose» de un pago grupal (bajada de carro). */
 .desgloseBtn { border: none; background: none; padding: 0; color: #2563eb; font-size: 11.5px; font-weight: 600; cursor: pointer; }
 .desgloseBtn:hover { text-decoration: underline; }
