@@ -708,9 +708,8 @@ cashRouter.post("/movements/:id/liquidar", asyncRoute(async (req, res) => {
     gasto_real: z.number().nonnegative(),
     description: z.string().optional(),
     created_by: z.string().uuid().optional(),
-    // Repuestos comprados con el fondo (opcional). Fondo de MANTENIMIENTO → van a
-    // la hoja de vida (de esa reparación o, con area/section, de otra máquina).
-    // Otro fondo → entran a BODEGA enlazados a este egreso (si se anula, salen).
+    // Repuestos comprados con el fondo (opcional): entran a BODEGA enlazados a
+    // este egreso (si se anula, salen). No aplica a Mantenimiento Planta.
     repuestos: z.array(z.object({
       repuesto_id: z.string().uuid().optional(),
       nombre: z.string().trim().min(2).max(120),
@@ -740,36 +739,12 @@ cashRouter.post("/movements/:id/liquidar", asyncRoute(async (req, res) => {
     if (totalRepFondo > gastoReal + 0.01) throw new ApiError(400, "Los repuestos comprados suman más que el gasto real.");
     const textoRep = (ls: typeof repuestosFondo) => ls
       .map((l) => `${Number.isInteger(l.cantidad) ? l.cantidad : l.cantidad.toFixed(2)} ${l.nombre.toUpperCase()} $${round2(l.cantidad * l.costo_unitario).toFixed(2)}`).join(", ");
-    if (repuestosFondo.length && orig.reference_type === "equipment_maintenance" && orig.reference_id) {
-      // Hoja de vida: los de esta máquina suman a la reparación; los de otra
-      // máquina quedan como registro hijo (parent_id) de esa máquina.
-      const main = (await client.query("SELECT area, section FROM equipment_maintenance WHERE id = $1 FOR UPDATE", [orig.reference_id])).rows[0];
-      const deOtra = (l: (typeof repuestosFondo)[number]) => !!(l.area && l.section) && !(main && l.area === main.area && l.section === main.section);
-      const propios = repuestosFondo.filter((l) => !deOtra(l));
-      const grupos = new Map<string, typeof repuestosFondo>();
-      for (const l of repuestosFondo.filter(deOtra)) {
-        const k = `${l.area}\u0000${l.section}`;
-        grupos.set(k, [...(grupos.get(k) ?? []), l]);
-      }
-      for (const ls of grupos.values()) {
-        const monto = round2(ls.reduce((s, l) => s + l.cantidad * l.costo_unitario, 0));
-        await client.query(
-          `INSERT INTO equipment_maintenance
-             (equipment_id, area, section, maintenance_type, description, amount, parts_cost, labor_cost, repuestos_comprados, parent_id, created_by)
-           VALUES (NULL, $1, $2, 'REPUESTO', $3, $4, $4, 0, $5, $6, $7)`,
-          [ls[0].area, ls[0].section, `Repuestos comprados con fondo: ${textoRep(ls)}`.slice(0, 1000), monto, `Usados ya: ${textoRep(ls)}`, orig.reference_id, userIdFondo]
-        );
-      }
-      const otrasMaq = [...grupos.values()].map((ls) => `Para ${ls[0].area}/${ls[0].section}: ${textoRep(ls)}`);
-      const texto = [propios.length ? `Usados ya: ${textoRep(propios)}` : "", ...otrasMaq].filter(Boolean).join(" · ");
-      await client.query(
-        `UPDATE equipment_maintenance
-            SET parts_cost = COALESCE(parts_cost, 0) + $2,
-                repuestos_comprados = NULLIF(concat_ws(' · ', NULLIF(repuestos_comprados, ''), $3::text), '')
-          WHERE id = $1`,
-        [orig.reference_id, round2(propios.reduce((s, l) => s + l.cantidad * l.costo_unitario, 0)), texto]
-      );
-    } else if (repuestosFondo.length) {
+    // Mantenimiento Planta solo registra dinero: sus repuestos se compran con
+    // la categoría «Repuestos» y las bajas de bodega se hacen en Inventario.
+    if (repuestosFondo.length && orig.reference_type === "equipment_maintenance") {
+      throw new ApiError(400, "Un fondo de Mantenimiento Planta no registra repuestos: cómpralos con la categoría «Repuestos».");
+    }
+    if (repuestosFondo.length) {
       // Bodega: las piezas entran al stock enlazadas a ESTE egreso (sin crear otro).
       await exigirMatriz(req);
       await registrarCompraRepuestos(client, {

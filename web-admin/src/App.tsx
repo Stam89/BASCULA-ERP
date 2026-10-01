@@ -2449,9 +2449,9 @@ export function App() {
   const [cajaCreditos, setCajaCreditos] = useState<CajaCredito[]>([]);
   const [subcategoriasGastos, setSubcategoriasGastos] = useState<string[]>([]);
   // Modal de liquidación de un fondo a rendir cuentas.
-  // Liquidar un fondo: gasto real + (opcional) repuestos comprados con ese dinero.
-  // maquina = "ÁREA||SECCIÓN" (fondo de mantenimiento; vacío = la de esa reparación).
-  type RepFondo = { key: string; repuesto_id?: string; nombre: string; cant: string; cost: string; compat: string; maquina: string };
+  // Liquidar un fondo: gasto real + (solo fondos de «Repuestos») las piezas que se
+  // compraron con ese dinero, que entran a bodega.
+  type RepFondo = { key: string; repuesto_id?: string; nombre: string; cant: string; cost: string; compat: string };
   const [liquidarFondo, setLiquidarFondo] = useState<{ mov: CashMovement; gasto_real: string; description: string; repuestos: RepFondo[]; repAbierto: boolean } | null>(null);
   const [liquidarBusy, setLiquidarBusy] = useState(false);
   const [cashCategories, setCashCategories] = useState<CashCat[]>([]);
@@ -8734,10 +8734,9 @@ export function App() {
         `/cash/movements/${lf.mov.id}/liquidar`,
         {
           cash_register_id: registerId, gasto_real: gasto, description: lf.description.trim() || undefined,
-          repuestos: lf.repuestos.length ? lf.repuestos.map((l) => {
-            const [area, section] = l.maquina ? l.maquina.split("||") : [undefined, undefined];
-            return { repuesto_id: l.repuesto_id, nombre: l.nombre, cantidad: round2(Number(l.cant)), costo_unitario: round2(Number(l.cost)), compatibilidad: l.compat || undefined, area, section };
-          }) : undefined
+          repuestos: lf.repuestos.length ? lf.repuestos.map((l) => ({
+            repuesto_id: l.repuesto_id, nombre: l.nombre, cantidad: round2(Number(l.cant)), costo_unitario: round2(Number(l.cost)), compatibilidad: l.compat || undefined
+          })) : undefined
         }
       );
       if (lf.repuestos.length) cargarRepCatalogo();
@@ -17100,7 +17099,7 @@ export function App() {
                                   <datalist id="responsablesList">
                                     {adminStaff.map((s2) => <option key={s2.id} value={s2.worker_name} />)}
                                   </datalist>
-                                  <small className="muted" style={{ display: "block", marginTop: 4 }}>Queda ⏳ Por Liquidar. Al volver, usa 💸 Liquidar: gasto real, vuelto y repuestos comprados.</small>
+                                  <small className="muted" style={{ display: "block", marginTop: 4 }}>Queda ⏳ Por Liquidar. Al volver, usa 💸 Liquidar para el gasto real y el vuelto.</small>
                                 </label>
                               )}
                             </div>
@@ -17909,9 +17908,9 @@ export function App() {
           const tieneGasto = Number.isFinite(gasto) && lf.gasto_real !== "";
           const diff = tieneGasto ? round2(entregado - gasto) : null;
           const n2 = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2));
-          // ¿A dónde van los repuestos? Fondo de mantenimiento → hoja de vida; de Repuestos → bodega.
-          const modo: "MAQUINA" | "BODEGA" | null = lf.mov.reference_type === "equipment_maintenance" ? "MAQUINA"
-            : lf.mov.category === "REPUESTOS" && esMatrizActiva ? "BODEGA" : null;
+          // Solo un fondo de «Repuestos» registra las piezas compradas (entran a bodega).
+          // Mantenimiento Planta y demás: solo gasto real y vuelto.
+          const conBodega = lf.mov.category === "REPUESTOS" && esMatrizActiva;
           const totalRep = round2(lf.repuestos.reduce((s2, l) => s2 + (Number(l.cant) || 0) * (Number(l.cost) || 0), 0));
           const setLf = (cambios: Partial<NonNullable<typeof liquidarFondo>>) => setLiquidarFondo((f) => (f ? { ...f, ...cambios } : f));
           const setLinea = (key: string, cambios: Partial<RepFondo>) => setLf({ repuestos: lf.repuestos.map((l) => (l.key === key ? { ...l, ...cambios } : l)) });
@@ -17920,7 +17919,6 @@ export function App() {
           const opciones = repCatalogo.filter((r) => r.activo && !enLista.has(r.id))
             .map((r) => ({ key: r.id, titulo: etiquetaRepuesto(r), detalle: `hay ${n2(r.stock)} ${r.unidad.toLowerCase()}`, etiqueta: r.compatibilidad ? etiquetaCompat(r.compatibilidad) : undefined }));
           const agregar = (l: Omit<RepFondo, "key">) => setLf({ repuestos: [...lf.repuestos, { key: clave(), ...l }] });
-          const maquinas = maintAreas.flatMap((a) => maintSectionsFor(a).map((sec) => ({ v: `${a}||${sec}`, t: `${a} · ${sec}` })));
           return (
             <div className="modalOverlay" onClick={() => setLiquidarFondo(null)}>
               <div className="modalCard liquidarModal" onClick={(e) => e.stopPropagation()}>
@@ -17933,45 +17931,38 @@ export function App() {
                 </p>
 
                 {/* 1 · Repuestos comprados con el fondo (opcional, oculto hasta pedirlo) */}
-                {modo && (
+                {conBodega && (
                   !lf.repAbierto ? (
                     <button type="button" className="mantAgregarRep" style={{ marginTop: 12 }} onClick={() => setLf({ repAbierto: true })}>
-                      ➕ Registrar repuestos comprados {modo === "BODEGA" ? "(entran a bodega)" : "(van a la hoja de vida)"}
+                      ➕ Registrar repuestos comprados (entran a bodega)
                     </button>
                   ) : (
                     <div className="mantRepPanel" style={{ marginTop: 12 }}>
                       <div className="mantSec__head">
-                        Repuestos comprados · {modo === "BODEGA" ? "entran a bodega" : "hoja de vida"}
+                        Repuestos comprados · entran a bodega
                         {lf.repuestos.length === 0 && (
                           <button type="button" className="mantLink" style={{ marginLeft: "auto", textTransform: "none", letterSpacing: 0 }} onClick={() => setLf({ repAbierto: false })}>Ocultar</button>
                         )}
                       </div>
-                      <BuscadorCombo id="liqRep" placeholder={modo === "BODEGA" ? "🔍 Buscar repuesto o escribir uno nuevo…" : "🔍 ¿Qué repuesto compró?"} opciones={opciones}
+                      <BuscadorCombo id="liqRep" placeholder="🔍 Buscar repuesto o escribir uno nuevo…" opciones={opciones}
                         onElegir={(id) => {
                           const r = repCatalogo.find((x) => x.id === id);
-                          if (r) agregar({ repuesto_id: r.id, nombre: etiquetaRepuesto(r), cant: "1", cost: r.costo_unitario > 0 ? String(r.costo_unitario) : "", compat: (r.compatibilidad ?? "").toUpperCase(), maquina: "" });
+                          if (r) agregar({ repuesto_id: r.id, nombre: etiquetaRepuesto(r), cant: "1", cost: r.costo_unitario > 0 ? String(r.costo_unitario) : "", compat: (r.compatibilidad ?? "").toUpperCase() });
                         }}
-                        crear={(t) => (repuestoPorNombre(t) ? null : modo === "BODEGA" ? `Crear «${t.toUpperCase()}» como repuesto nuevo` : `Agregar «${t.toUpperCase()}»`)}
-                        onCrear={(t) => agregar({ nombre: t.trim().toUpperCase(), cant: "1", cost: "", compat: "", maquina: "" })} />
+                        crear={(t) => (repuestoPorNombre(t) ? null : `Crear «${t.toUpperCase()}» como repuesto nuevo`)}
+                        onCrear={(t) => agregar({ nombre: t.trim().toUpperCase(), cant: "1", cost: "", compat: "" })} />
                       {lf.repuestos.length > 0 && (
                         <ul className="cleanList cleanList--compra">
                           <li className="cleanList__head" aria-hidden="true"><span>Repuesto</span><span>Cant.</span><span>Costo c/u</span><span>Subtotal</span><span /></li>
                           {lf.repuestos.map((l) => (
                             <li key={l.key} className="cleanList__fila">
                               <span className="cleanList__main">
-                                <strong>{l.nombre}{!l.repuesto_id && modo === "BODEGA" && <em className="cleanList__nuevo">nuevo</em>}</strong>
-                                {modo === "BODEGA" ? (
-                                  <select className="cleanList__tag" value={l.compat} aria-label="Compatibilidad / etiqueta" onChange={(e) => setLinea(l.key, { compat: e.target.value })}>
-                                    <option value="">Compatibilidad / etiqueta</option>
-                                    <option value="GENERAL">Uso general</option>
-                                    {[...new Set([...maintAreas.map((a) => a.toUpperCase()), ...(l.compat && l.compat !== "GENERAL" ? [l.compat] : [])])].map((a) => <option key={a} value={a}>{etiquetaCompat(a)}</option>)}
-                                  </select>
-                                ) : (
-                                  <select className="cleanList__tag" value={l.maquina} aria-label="Máquina" onChange={(e) => setLinea(l.key, { maquina: e.target.value })}>
-                                    <option value="">Esta reparación</option>
-                                    {maquinas.map((m) => <option key={m.v} value={m.v}>{m.t}</option>)}
-                                  </select>
-                                )}
+                                <strong>{l.nombre}{!l.repuesto_id && <em className="cleanList__nuevo">nuevo</em>}</strong>
+                                <select className="cleanList__tag" value={l.compat} aria-label="Compatibilidad / etiqueta" onChange={(e) => setLinea(l.key, { compat: e.target.value })}>
+                                  <option value="">Compatibilidad / etiqueta</option>
+                                  <option value="GENERAL">Uso general</option>
+                                  {[...new Set([...maintAreas.map((a) => a.toUpperCase()), ...(l.compat && l.compat !== "GENERAL" ? [l.compat] : [])])].map((a) => <option key={a} value={a}>{etiquetaCompat(a)}</option>)}
+                                </select>
                               </span>
                               <input type="number" min="0" step="any" value={l.cant} aria-label={`Cantidad de ${l.nombre}`} className="cleanList__num" onChange={(e) => setLinea(l.key, { cant: e.target.value })} />
                               <input type="number" min="0" step="0.01" value={l.cost} placeholder="0.00" aria-label={`Costo por unidad de ${l.nombre}`} className="cleanList__num" onChange={(e) => setLinea(l.key, { cost: e.target.value })} />
@@ -17990,7 +17981,7 @@ export function App() {
                   <div style={{ display: "grid", gap: 10 }}>
                     <label className="mantCampo">Gasto real final $ <span className="mantCampo__nota">según la factura</span>
                       <span style={{ display: "flex", gap: 6, marginTop: 4 }}>
-                        <input type="number" min="0" step="0.01" autoFocus={!modo} value={lf.gasto_real} placeholder={totalRep > 0 ? totalRep.toFixed(2) : "0.00"}
+                        <input type="number" min="0" step="0.01" autoFocus={!conBodega} value={lf.gasto_real} placeholder={totalRep > 0 ? totalRep.toFixed(2) : "0.00"}
                           onChange={(e) => setLf({ gasto_real: e.target.value })}
                           style={{ flex: 1, padding: "10px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 14, fontWeight: 700 }} />
                         {totalRep > 0 && lf.gasto_real === "" && (
@@ -18016,7 +18007,7 @@ export function App() {
                 {tieneGasto && totalRep > gasto + 0.01 && (
                   <small style={{ color: "#dc2626", fontWeight: 600 }}>Los repuestos suman {money(totalRep)}: el gasto real no puede ser menor.</small>
                 )}
-                <small className="muted" style={{ display: "block" }}>Al confirmar, el egreso queda en el gasto real y el vuelto vuelve a la caja{modo && lf.repuestos.length ? (modo === "BODEGA" ? "; los repuestos entran a bodega con su costo" : "; los repuestos quedan en la hoja de vida") : ""}.</small>
+                <small className="muted" style={{ display: "block" }}>Al confirmar, el egreso queda en el gasto real y el vuelto vuelve a la caja{conBodega && lf.repuestos.length ? "; los repuestos entran a bodega con su costo" : ""}.</small>
                 <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
                   <button type="button" className="primary" disabled={liquidarBusy || lf.gasto_real === "" || (tieneGasto && totalRep > gasto + 0.01)} onClick={() => confirmarLiquidarFondo()} style={{ fontWeight: 700 }}>
                     {liquidarBusy ? "Liquidando…" : "✅ Confirmar liquidación"}
