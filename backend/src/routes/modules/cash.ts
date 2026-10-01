@@ -6,7 +6,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { round2 } from "../../utils/rice-formulas.js";
-import { reversarEntradaRepuestosDeCaja, reversarEntradaRepuestosDeCredito, devolverRepuestosDeMantenimiento } from "./repuestos.js";
+import { reversarEntradaRepuestosDeCaja, reversarEntradaRepuestosDeCredito, devolverRepuestosDeMantenimiento, exigirMatriz, registrarCompraRepuestos } from "./repuestos.js";
 import { resolverProveedor } from "../../services/proveedores.js";
 import { reabrirPagoNomina } from "../../services/nomina-reabrir.js";
 import { espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
@@ -707,9 +707,23 @@ cashRouter.post("/movements/:id/liquidar", asyncRoute(async (req, res) => {
     cash_register_id: z.string().uuid(),
     gasto_real: z.number().nonnegative(),
     description: z.string().optional(),
-    created_by: z.string().uuid().optional()
+    created_by: z.string().uuid().optional(),
+    // Repuestos comprados con el fondo (opcional). Fondo de MANTENIMIENTO → van a
+    // la hoja de vida (de esa reparación o, con area/section, de otra máquina).
+    // Otro fondo → entran a BODEGA enlazados a este egreso (si se anula, salen).
+    repuestos: z.array(z.object({
+      repuesto_id: z.string().uuid().optional(),
+      nombre: z.string().trim().min(2).max(120),
+      cantidad: z.number().positive(),
+      costo_unitario: z.number().positive(),
+      compatibilidad: z.string().trim().max(40).optional().nullable(),
+      area: z.string().trim().max(80).optional(),
+      section: z.string().trim().max(80).optional()
+    })).max(40).optional()
   }).parse(req.body);
   const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
+  const repuestosFondo = body.repuestos ?? [];
+  const userIdFondo = (req as AuthenticatedRequest).user?.id ?? body.created_by ?? null;
 
   const result = await inTransaction(async (client) => {
     const orig = await getMovimientoDelAccionistaForUpdate(client, req.params.id as string, accionistaId);
@@ -721,13 +735,58 @@ cashRouter.post("/movements/:id/liquidar", asyncRoute(async (req, res) => {
 
     const entregado = round2(Number(orig.amount));
     const gastoReal = round2(body.gasto_real);
+    // Repuestos comprados con el fondo: no pueden sumar más que el gasto real.
+    const totalRepFondo = round2(repuestosFondo.reduce((s, l) => s + l.cantidad * l.costo_unitario, 0));
+    if (totalRepFondo > gastoReal + 0.01) throw new ApiError(400, "Los repuestos comprados suman más que el gasto real.");
+    const textoRep = (ls: typeof repuestosFondo) => ls
+      .map((l) => `${Number.isInteger(l.cantidad) ? l.cantidad : l.cantidad.toFixed(2)} ${l.nombre.toUpperCase()} $${round2(l.cantidad * l.costo_unitario).toFixed(2)}`).join(", ");
+    if (repuestosFondo.length && orig.reference_type === "equipment_maintenance" && orig.reference_id) {
+      // Hoja de vida: los de esta máquina suman a la reparación; los de otra
+      // máquina quedan como registro hijo (parent_id) de esa máquina.
+      const main = (await client.query("SELECT area, section FROM equipment_maintenance WHERE id = $1 FOR UPDATE", [orig.reference_id])).rows[0];
+      const deOtra = (l: (typeof repuestosFondo)[number]) => !!(l.area && l.section) && !(main && l.area === main.area && l.section === main.section);
+      const propios = repuestosFondo.filter((l) => !deOtra(l));
+      const grupos = new Map<string, typeof repuestosFondo>();
+      for (const l of repuestosFondo.filter(deOtra)) {
+        const k = `${l.area}\u0000${l.section}`;
+        grupos.set(k, [...(grupos.get(k) ?? []), l]);
+      }
+      for (const ls of grupos.values()) {
+        const monto = round2(ls.reduce((s, l) => s + l.cantidad * l.costo_unitario, 0));
+        await client.query(
+          `INSERT INTO equipment_maintenance
+             (equipment_id, area, section, maintenance_type, description, amount, parts_cost, labor_cost, repuestos_comprados, parent_id, created_by)
+           VALUES (NULL, $1, $2, 'REPUESTO', $3, $4, $4, 0, $5, $6, $7)`,
+          [ls[0].area, ls[0].section, `Repuestos comprados con fondo: ${textoRep(ls)}`.slice(0, 1000), monto, `Usados ya: ${textoRep(ls)}`, orig.reference_id, userIdFondo]
+        );
+      }
+      const otrasMaq = [...grupos.values()].map((ls) => `Para ${ls[0].area}/${ls[0].section}: ${textoRep(ls)}`);
+      const texto = [propios.length ? `Usados ya: ${textoRep(propios)}` : "", ...otrasMaq].filter(Boolean).join(" · ");
+      await client.query(
+        `UPDATE equipment_maintenance
+            SET parts_cost = COALESCE(parts_cost, 0) + $2,
+                repuestos_comprados = NULLIF(concat_ws(' · ', NULLIF(repuestos_comprados, ''), $3::text), '')
+          WHERE id = $1`,
+        [orig.reference_id, round2(propios.reduce((s, l) => s + l.cantidad * l.costo_unitario, 0)), texto]
+      );
+    } else if (repuestosFondo.length) {
+      // Bodega: las piezas entran al stock enlazadas a ESTE egreso (sin crear otro).
+      await exigirMatriz(req);
+      await registrarCompraRepuestos(client, {
+        items: repuestosFondo.map((l) => (l.repuesto_id
+          ? { repuesto_id: l.repuesto_id, cantidad: l.cantidad, costo_unitario: l.costo_unitario, compatibilidad: l.compatibilidad ?? undefined }
+          : { nuevo: { nombre: l.nombre, referencia: null, unidad: "UNIDAD", stock_minimo: 0 }, cantidad: l.cantidad, costo_unitario: l.costo_unitario, compatibilidad: l.compatibilidad ?? undefined })),
+        cashRegisterId: orig.cash_register_id, accionistaId, userId: userIdFondo, proveedor: null, aCredito: false,
+        cashMovementIdExistente: orig.id
+      });
+    }
     const diff = round2(entregado - gastoReal); // + = vuelto a caja; - = faltante
     const resp = orig.responsable ? ` · ${orig.responsable}` : "";
     const usd = (n: number) => `$${n.toFixed(2)}`;
     const base = String(orig.description ?? "").trim() || String(orig.category ?? "Fondo");
     const detalle = diff > 0.005 ? `Vuelto devuelto a caja: ${usd(diff)}`
       : diff < -0.005 ? `Faltante pagado de caja: ${usd(Math.abs(diff))}` : "Sin vuelto";
-    const comprobante = body.description?.trim() ? ` · ${body.description.trim()}` : "";
+    const comprobante = (body.description?.trim() ? ` · ${body.description.trim()}` : "") + (repuestosFondo.length ? ` · Repuestos: ${textoRep(repuestosFondo)}` : "");
     const descLiquidada = `${base} · Gasto real: ${usd(gastoReal)} (Entregado: ${usd(entregado)} | ${detalle})${comprobante}`;
 
     // UNA SOLA LÍNEA: si el fondo es de la sesión abierta, el egreso pasa al

@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Fondos a rendir cuentas con repuestos + ajustes de Caja (2026-09-30)
+- MOMENTO 1 (entrega): con «Rendir cuentas» la categoria Repuestos oculta la lista (solo responsable, detalle y monto) y Mantenimiento oculta «Sacar repuesto de bodega» (monto = entregado). Estado sigue siendo `fondo_estado = 'POR_LIQUIDAR'` (no se renombro).
+- MOMENTO 2: boton «💸 Liquidar / Registrar vuelto» abre modal (`liquidarFondo` con `repuestos[]`, `repAbierto`): repuestos comprados opcionales (BuscadorCombo; fondo de Mantenimiento → maquina por linea «Esta reparación» u otra; fondo de Repuestos → compatibilidad), gasto real (boton «= repuestos»), Nº factura; resumen: entregado / repuestos / gasto real / vuelto o faltante.
+- Backend `/cash/movements/:id/liquidar` acepta `repuestos[]` opcional: fondo con reference equipment_maintenance → parts_cost/repuestos_comprados del principal + hijos (parent_id) por otra maquina (antes del ajuste de amount); otro fondo → `registrarCompraRepuestos(..., cashMovementIdExistente: orig.id)` (ENTRADAS enlazadas al fondo, sin nuevo egreso; anular el fondo las revierte). Valida repuestos ≤ gasto real.
+- Caja → Repuestos: campo «Nº de factura» (`repFactura`, va en la descripcion «Factura …»). Mantenimiento: boton renombrado «➕ Sacar repuesto de bodega».
+
 ### Permisos Ver / Editar por sub-pestaña (2026-09-30)
 - Sin cambio de esquema: nueva clave `RO:SUB:<Módulo>:<sub>` en `allowed_modules[]` = «Solo ver» esa sub-pestaña aunque haya `EDIT:<Módulo>`. Sin claves RO:SUB: todo queda como antes (datos viejos intactos).
 - web-admin: `permisoSub(mods, mod, sub)` → `{can_view, can_edit}` y `aplicarPermisoSub(...)` (re-serializa el modulo: editar implica ver; ninguna visible → quita el modulo; ninguna editable → modulo solo Ver; todas visibles → sin claves SUB:). Matriz «Accionistas y permisos»: cada fila ↳ tiene 👁️ y ✏️ por accionista, deshabilitados si el modulo no tiene Ver; el ✏️ del modulo queda indeterminado si hay sub-pestañas en solo ver. Aviso «👁️ Solo lectura» bajo las sub-pestañas (Ventas, Seleccion, Nomina, Costos) con `avisoSoloLectura`.

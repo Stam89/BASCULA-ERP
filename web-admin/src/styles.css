@@ -4536,6 +4536,11 @@ select.cleanList__tag:focus { color: #0f172a; outline: 1px dotted #94a3b8; }
 .resumenBox__total dt { color: #0f172a; font-weight: 700; }
 .resumenBox__total dd { font-size: 17px; font-weight: 800; }
 .mantCampo__nota { font-weight: 400; font-size: 11.5px; color: #94a3b8; margin-left: 4px; }
+/* Modal de liquidación de fondos (rendición). */
+.liquidarModal { max-width: 640px; width: 100%; display: grid; gap: 10px; max-height: 92vh; overflow-y: auto; }
+.liquidarGrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(210px, 240px); gap: 14px; align-items: start; margin-top: 4px; }
+.resumenBox__total.is-faltante dt, .resumenBox__total.is-faltante dd { color: #b91c1c; }
+@media (max-width: 600px) { .liquidarGrid { grid-template-columns: minmax(0, 1fr); } }
 /* Compra de repuestos dentro del mantenimiento (🔧 se usa ya / 📦 al inventario). */
 .mantCompra { grid-column: 1 / -1; display: grid; gap: 8px; }
 .mantCompra__destino { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }

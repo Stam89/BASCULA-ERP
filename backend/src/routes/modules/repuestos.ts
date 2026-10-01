@@ -312,6 +312,8 @@ export async function registrarCompraRepuestos(
   o: {
     items: Array<z.infer<typeof itemCompraSchema>>; cashRegisterId: string; accionistaId: string | null; userId: string | null;
     proveedor: { id: string; name: string } | null; aCredito: boolean; dueDate?: string | null; descripcion?: string | null;
+    /** Egreso ya registrado (fondo a rendir cuentas): las piezas entran enlazadas a él, sin crear otro egreso. */
+    cashMovementIdExistente?: string | null;
   }
 ) {
   const { proveedor, aCredito, userId, accionistaId } = o;
@@ -348,7 +350,9 @@ export async function registrarCompraRepuestos(
 
     let cashMovementId: string | null = null;
     let payableId: string | null = null;
-    if (aCredito) {
+    if (o.cashMovementIdExistente) {
+      cashMovementId = o.cashMovementIdExistente;
+    } else if (aCredito) {
       payableId = (await client.query(
         `INSERT INTO accounts_payable
            (farmer_id, accionista_id, amount, balance, status, due_date, reference_type, reference_id, description,
@@ -368,7 +372,7 @@ export async function registrarCompraRepuestos(
       if (l.costo > 0) await client.query("UPDATE repuestos SET costo_unitario = $2 WHERE id = $1", [l.id, l.costo]);
       const stock = await movimiento(client, l.id, {
         tipo: "ENTRADA", cantidad: l.cantidad, costo: l.costo, userId, cashMovementId, payableId,
-        motivo: `${aCredito ? "Compra a crédito" : "Compra"}${proveedor ? ` a ${proveedor.name}` : ""}`
+        motivo: o.cashMovementIdExistente ? "Compra con fondo a rendir cuentas" : `${aCredito ? "Compra a crédito" : "Compra"}${proveedor ? ` a ${proveedor.name}` : ""}`
       });
       stocks.push({ nombre: l.nombre, stock });
     }
