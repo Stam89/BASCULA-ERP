@@ -8,7 +8,7 @@ import { ClienteSearchInput } from "./components/ClienteSearchInput";
 import { CampanitaNotificaciones } from "./components/Notificaciones";
 import { BuscadorHistorial } from "./components/BuscadorHistorial";
 import { ResultadoMensual, type GanaOperacion } from "./components/ResultadoMensual";
-import { planDeSacos, sobranteLb, SacosAlertaDashboard, SacosCatalogoConfig, SacosPorComprarAlerta, SacosTablero, type SacoPorComprar } from "./components/SacosModule";
+import { planDeSacos, sobranteLb, SacosAlertaDashboard, SacosCatalogoConfig, SacosPorComprarAlerta, SacosSinMinimosAviso, SacosTablero, type SacoPorComprar } from "./components/SacosModule";
 import { PedidoCompartirModal, type PedidoCompartirData } from "./components/PedidoCompartir";
 import { RepuestosAlertaDashboard, RepuestosModule, etiquetaCompat, type Repuesto } from "./components/RepuestosModule";
 import { BuscadorCombo } from "./components/BuscadorCombo";
@@ -4254,6 +4254,12 @@ export function App() {
     apiGet<Repuesto[]>("/repuestos").then(setRepuestosAlerta).catch(() => undefined);
   }, [authUser, activeTab, esMatrizActiva]);
   function irARepuestos() { setInvVista("repuestos"); setActiveTab("Inventario"); }
+  // Desde las alertas del Dashboard: Inventario → Existencias, directo a la sección de sacos.
+  function irASacos() {
+    setInvVista("existencias");
+    setActiveTab("Inventario");
+    setTimeout(() => document.getElementById("inv-sacos")?.scrollIntoView({ behavior: "smooth", block: "start" }), 350);
+  }
   // Catálogo de repuestos al elegir en Caja la categoría Repuestos o Mantenimiento (Matriz).
   function cargarRepCatalogo() {
     apiGet<Repuesto[]>("/repuestos").then((r) => { setRepCatalogo(r); setRepuestosAlerta(r); }).catch(() => undefined);
@@ -7571,6 +7577,7 @@ export function App() {
     }
     // Alerta de sacos bajo su mínimo (Dashboard) y Catálogo de sacos (Configuración).
     if (activeTab === "Dashboard" || activeTab === "Configuracion") refreshSacks().catch(() => undefined);
+    if (activeTab === "Dashboard" && esMatrizActiva) cargarRepCatalogo();
     if (activeTab === "Compras") { refreshSuppliers().catch(() => undefined); refreshPurchases().catch(() => undefined); }
     if (activeTab === "Por Cobrar") refreshReceivables().catch(() => undefined);
     if (activeTab === "Por Pagar") refreshPayables().catch(() => undefined);
@@ -12086,7 +12093,14 @@ export function App() {
             </span>
             <button
               className="btnSecondary"
-              onClick={() => refresh().catch((e) => setMessage(e.message))}
+              onClick={() => {
+                refresh().catch((e) => setMessage(e.message));
+                // Alertas del Dashboard (sacos por comprar / por terminarse, repuestos).
+                if (activeTab === "Dashboard") {
+                  refreshSacks().catch(() => undefined);
+                  if (esMatrizActiva) cargarRepCatalogo();
+                }
+              }}
               disabled={loading}
             >
               {loading ? "⟳" : "↻"} Actualizar
@@ -12104,10 +12118,11 @@ export function App() {
           <>
             {/* Alerta de sacos en/bajo su stock mínimo (los sacos son de la Matriz). */}
             {/* Sacos por comprar para los pedidos ya tomados (los sacos son de la Matriz). */}
-            {esMatrizActiva && <SacosPorComprarAlerta sacos={sacosPorComprar} onIr={visibleTabs.includes("Inventario") ? () => setActiveTab("Inventario") : undefined} />}
+            {esMatrizActiva && <SacosPorComprarAlerta sacos={sacosPorComprar} onIr={visibleTabs.includes("Inventario") ? irASacos : undefined} />}
             {/* Repuestos de la planta en o bajo su mínimo. */}
             {esMatrizActiva && <RepuestosAlertaDashboard repuestos={repuestosAlerta} onIr={visibleTabs.includes("Inventario") ? irARepuestos : undefined} />}
-            {manejaSacosPropios && <SacosAlertaDashboard sacos={esMatrizActiva ? sacosDelActivo.filter((s) => !sacosPorComprar.some((p) => p.id === s.id)) : sacosDelActivo} onIr={() => setActiveTab("Inventario")} onConfig={puedeIrAConfig("📦 Catálogo de sacos") ? () => irAConfig("📦 Catálogo de sacos") : undefined} />}
+            {manejaSacosPropios && <SacosAlertaDashboard sacos={esMatrizActiva ? sacosDelActivo.filter((s) => !sacosPorComprar.some((p) => p.id === s.id)) : sacosDelActivo} onIr={visibleTabs.includes("Inventario") ? irASacos : undefined} onConfig={puedeIrAConfig("📦 Catálogo de sacos") ? () => irAConfig("📦 Catálogo de sacos") : undefined} />}
+            {manejaSacosPropios && <SacosSinMinimosAviso sacos={sacosDelActivo} onConfig={puedeIrAConfig("📦 Catálogo de sacos") ? () => irAConfig("📦 Catálogo de sacos") : undefined} />}
             {canSeePanel && (
               <nav className="cajaSubNav">
                 <button type="button" className={dashView === "panel" ? "active" : ""} onClick={() => { setDashView("panel"); if (!panelData) refreshPanel().catch(() => undefined); }}>📊 Panel integral</button>
@@ -14015,7 +14030,7 @@ export function App() {
                   operativo no maneja empaques: se oculta por completo (tabla +
                   formulario de movimientos). Solo visible en contexto Matriz. */}
               {manejaSacosPropios && (
-              <section style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, background: "#fbfdfc" }}>
+              <section id="inv-sacos" style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, background: "#fbfdfc", scrollMarginTop: 80 }}>
                 <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
                   <h3 style={{ margin: 0 }}>📦 Inventario de Sacos</h3>
                   <span className="muted" style={{ fontSize: 12 }}>Marcas, pesos, mínimos y precios: {cfgLink("📦 Catálogo de sacos", "Catálogo de sacos en Configuración") ?? "Configuración → Operación y Planta → Catálogo de sacos"}</span>

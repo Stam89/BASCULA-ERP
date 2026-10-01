@@ -270,6 +270,24 @@ export function SacosAlertaDashboard({ sacos, onIr, onConfig }: { sacos: Saco[];
   );
 }
 
+/**
+ * Sin ningún stock mínimo fijado, el aviso «Quedan pocos sacos» nunca puede
+ * saltar: se recuerda (discreto) para que se fijen en el Catálogo de sacos.
+ */
+export function SacosSinMinimosAviso({ sacos, onConfig }: { sacos: Saco[]; onConfig?: () => void }) {
+  const activos = sacos.filter((s) => s.activo !== false);
+  if (!activos.length || activos.some((s) => num(s.stock_minimo) > 0)) return null;
+  return (
+    <div role="note" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 12, padding: "10px 14px", margin: "0 0 14px", fontSize: 13, color: "#334155" }}>
+      <span style={{ fontSize: 18 }}>📦</span>
+      <span style={{ flex: "1 1 260px" }}>
+        Ningún saco tiene <strong>stock mínimo</strong>: el Dashboard no puede avisarte cuando estén por terminarse.
+      </span>
+      {onConfig && <button type="button" className="vdTarifaLink" onClick={onConfig}>⚙️ Fijar mínimos</button>}
+    </div>
+  );
+}
+
 /** Saco que falta para los pedidos pendientes (GET /sacks/por-comprar). */
 export type SacoPorComprar = { id: string; tipo: string; stock: number; necesarios: number; faltan: number; pedidos: string[] };
 
@@ -290,14 +308,18 @@ export function SacosPorComprarAlerta({ sacos, onIr }: { sacos: SacoPorComprar[]
           {pedidos.size ? ` · para ${pedidos.size} pedido${pedidos.size === 1 ? "" : "s"} pendiente${pedidos.size === 1 ? "" : "s"}` : ""}
         </div>
         <div style={{ fontSize: 12, color: "#7f1d1d", marginTop: 2 }}>
-          Los vendedores ya tomaron estos pedidos: compra los sacos (Caja → Sacos) antes de alistarlos.
+          Faltan para alistar los pedidos ya tomados o se vendieron sin stock (saldo negativo).
+          Cómpralos en Caja → ➕ Nuevo movimiento → «Compra de sacos».
         </div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
           {sacos.slice(0, 12).map((s) => (
             <span key={s.id} title={s.pedidos.length ? `Pedidos: ${s.pedidos.join(", ")}` : "Stock en negativo"}
               style={{ background: "#fff", border: "1px solid #fca5a5", color: "#991b1b", borderRadius: 999, padding: "3px 10px", fontSize: 12, fontWeight: 700 }}>
               {s.tipo}: faltan {fmt(s.faltan)}
-              <span style={{ fontWeight: 500, color: "#b91c1c" }}> (hay {fmt(s.stock)}{s.necesarios > 0 ? `, piden ${fmt(s.necesarios)}` : ""})</span>
+              <span style={{ fontWeight: 500, color: "#b91c1c" }}>
+                {" "}({s.stock < 0 ? `saldo ${fmt(s.stock)}` : `hay ${fmt(s.stock)}`}
+                {s.necesarios > 0 ? `, piden ${fmt(s.necesarios)}` : s.stock < 0 ? ", vendidos sin stock" : ""})
+              </span>
             </span>
           ))}
           {sacos.length > 12 && <span style={{ fontSize: 12, color: "#991b1b" }}>+{sacos.length - 12} más</span>}

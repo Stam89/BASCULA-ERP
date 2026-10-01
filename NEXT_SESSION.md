@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Revision de alertas de sacos del Dashboard (2026-10-01)
+- Calculo verificado con los pedidos reales (J0PA 10 QQ/25lb → 40 Flor 25 LB; 21Z0 15 QQ/10lb → 150 Flor 10 LB; RH3W pendiente 10 QQ/50lb → 20 Flor 100 LB; IPKO anulado sin movimientos). `/sacks/por-comprar` correcto.
+- Arreglos: «↻ Actualizar» del Dashboard ahora recarga sacos y repuestos; la alerta de repuestos se carga al abrir el Dashboard (antes solo tras pasar por Caja); «Ver inventario de sacos» va a Inventario → Existencias y baja a `#inv-sacos` (`irASacos`), respetando permiso de Inventario; chips «saldo -N, vendidos sin stock» en vez de «hay -N»; texto «Caja → ➕ Nuevo movimiento → Compra de sacos»; `SacosSinMinimosAviso` cuando ningun saco activo tiene stock minimo.
+- DATO PENDIENTE DEL USUARIO: la compra del 24-09 (3.100 sacos: 2.000 × 100 LB, 1.000 × 25 LB, 100 × 10 LB, $970) entro a sacos GENERICOS que el usuario desactivo el 29-09; las marcas (Flor…) estan en 0/-40/-150. No se toco: preguntar si esos sacos son de alguna marca para trasladar el stock.
+
 ### Transporte y Cosechadora · Caja: ingreso sin «Ligar a un servicio» (2026-10-01)
 - `IngresoForm` (campo/CampoModule.tsx) ya no recibe `pendientes` ni muestra el selector; envia siempre `servicio_id: null` (ingreso suelto; el backend ya lo aceptaba). Los servicios se cobran desde Cuentas por Cobrar (AbonoForm sigue usando `pendientes`, que salen de `servicios` cargados para todo el modulo: no habia fetch propio del ingreso).
 - Conceptos: nuevo grupo Transporte primero con «Flete externo / Fuera de báscula» (`CONCEPTO_INGRESO_PRINCIPAL`), preseleccionado y al que vuelve el formulario tras guardar.
