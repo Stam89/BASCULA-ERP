@@ -17163,8 +17163,8 @@ export function App() {
 
                     {/* Dinero a Rendir Cuentas (fondo provisional): egreso que queda
                         Por Liquidar a nombre de un responsable. (En Mantenimiento va dentro
-                        de su bloque «Monto y comprobante».) */}
-                    {movType === "EXPENSE" && movCategory !== "MANTENIMIENTO_EQUIPO" && (
+                        de su bloque «Monto y comprobante»; no aplica a una lista de repuestos.) */}
+                    {movType === "EXPENSE" && movCategory !== "MANTENIMIENTO_EQUIPO" && !(movCategory === "REPUESTOS" && repCart.length > 0) && (
                       <div style={{ background: movEsFondo ? "#fffbeb" : "transparent", border: movEsFondo ? "1px solid #fde68a" : "1px dashed #e5e7eb", borderRadius: 8, padding: "10px 12px", marginBottom: 16 }}>
                         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
                           <input type="checkbox" checked={movEsFondo} onChange={(e) => { setMovEsFondo(e.target.checked); if (e.target.checked) setMovModalidad("CONTADO"); }} style={{ width: "auto" }} />
@@ -17197,11 +17197,13 @@ export function App() {
                       const clave = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
                       const agregarExistente = (id: string) => {
                         const r = repCatalogo.find((x) => x.id === id);
+                        setMovEsFondo(false);
                         if (r) setRepCart((c) => [...c, { key: clave(), repuesto_id: r.id, etiqueta: etiquetaRepuesto(r), unidad: r.unidad, cant: "1",
                           cost: r.costo_unitario > 0 ? String(r.costo_unitario) : "", compat: (r.compatibilidad ?? "").toUpperCase() }]);
                       };
                       const agregarNuevo = (texto: string) => {
                         const nombre = texto.trim().toUpperCase();
+                        setMovEsFondo(false);
                         setRepCart((c) => [...c, { key: clave(), nuevo: { nombre, referencia: null, unidad: "UNIDAD", stock_minimo: 0 }, etiqueta: nombre, unidad: "UNIDAD", cant: "1", cost: "", compat: "" }]);
                       };
                       const cambiar = (key: string, cambios: Partial<{ cant: string; cost: string; compat: string }>) =>
