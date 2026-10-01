@@ -421,8 +421,9 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
     provider: z.string().optional(),
     invoice_number: z.string().optional(),
     receipt_photo_base64: z.string().optional(),
-    // Lo PAGADO ahora de caja (mano de obra, compras del momento). Puede ser 0
-    // si solo se usaron repuestos del inventario (ya pagados al comprarlos).
+    // TOTAL que sale de caja: mano de obra + repuestos comprados (los «usados ya»
+    // y los «para el inventario»). Sin repuestos comprados = lo pagado por la
+    // reparación, como siempre. Puede ser 0 solo con repuestos del stock.
     amount: z.number().nonnegative(),
     cash_register_id: z.string().uuid().optional(),
     created_by: z.string().uuid().optional(),
@@ -433,9 +434,10 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
     // «Por Liquidar» y luego se registra el vuelto (💸 Registrar Vuelto).
     es_fondo: z.boolean().optional(),
     responsable: z.string().trim().max(120).optional(),
-    // Repuestos COMPRADOS para esta reparación:
-    //  · USO: se instalan ya → son costo de la reparación (van dentro de amount),
-    //    quedan detallados en la hoja de vida y NO entran a bodega.
+    // Repuestos COMPRADOS (una factura puede traer piezas para varias máquinas):
+    //  · USO: se instalan ya → costo de la reparación, NO entran a bodega. Con
+    //    area/section (máquina a la que aplica) su costo va a la hoja de vida de
+    //    ESA máquina; sin máquina, a la de esta reparación (general).
     //  · INVENTARIO: se guardan de repuesto → entran al stock como compra de
     //    repuestos (egreso aparte, categoría REPUESTOS). Solo la Matriz.
     repuestos_comprados: z.array(z.object({
@@ -443,27 +445,39 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
       nombre: z.string().trim().min(2).max(120),
       cantidad: z.number().positive(),
       costo_unitario: z.number().nonnegative(),
-      destino: z.enum(["USO", "INVENTARIO"])
+      destino: z.enum(["USO", "INVENTARIO"]),
+      area: z.string().trim().max(80).optional(),
+      section: z.string().trim().max(80).optional()
     })).max(40).optional()
   }).parse(req.body);
   const esFondo = body.es_fondo === true;
   const comprados = body.repuestos_comprados ?? [];
   const compradosUso = comprados.filter((l) => l.destino === "USO");
   const compradosInv = comprados.filter((l) => l.destino === "INVENTARIO");
-  const totalUso = round2(compradosUso.reduce((s, l) => s + l.cantidad * l.costo_unitario, 0));
-  if (totalUso > round2(body.amount) + 0.01) throw new ApiError(400, "El monto pagado no cubre los repuestos que se usaron.");
+  const subtotal = (ls: typeof comprados) => round2(ls.reduce((s, l) => s + l.cantidad * l.costo_unitario, 0));
+  const totalUso = subtotal(compradosUso);
+  const totalInv = subtotal(compradosInv);
+  // Lo de la reparación (mano de obra + usados ya) = total − lo que va a bodega.
+  const montoMant = round2(body.amount - totalInv);
+  if (totalUso > montoMant + 0.01) throw new ApiError(400, "El total a descontar de caja no cubre los repuestos comprados.");
+  // Usados ya en OTRA máquina (no la de esta reparación): su costo va a la hoja de vida de esa máquina.
+  const esDeOtraMaquina = (l: (typeof comprados)[number]) =>
+    !!(l.area && l.section) && !(l.area === body.area && l.section === body.section);
+  const usoOtras = compradosUso.filter(esDeOtraMaquina);
+  const usoGeneral = compradosUso.filter((l) => !esDeOtraMaquina(l));
+  const totalUsoOtras = subtotal(usoOtras);
   if (compradosInv.length) {
     await exigirMatriz(req);
     if (!body.cash_register_id) throw new ApiError(400, "Los repuestos para el inventario se pagan con la caja abierta.");
     if (compradosInv.some((l) => !(l.costo_unitario > 0))) throw new ApiError(400, "Indica el costo de los repuestos que van al inventario.");
   }
-  if (esFondo && !(body.amount > 0)) throw new ApiError(400, "Un fondo a rendir cuentas necesita el monto entregado.");
+  if (esFondo && !(montoMant > 0)) throw new ApiError(400, "Un fondo a rendir cuentas necesita el monto entregado.");
   if (esFondo && (body.responsable ?? "").trim().length < 2) throw new ApiError(400, "Indica quién recibe el dinero a rendir cuentas.");
   const conRepuestos = (body.repuestos_usados?.length ?? 0) > 0;
-  if (!(body.amount > 0) && !conRepuestos) {
+  if (!(montoMant > 0) && !conRepuestos) {
     throw new ApiError(400, compradosInv.length
       ? "Si solo compraste repuestos para guardar (sin reparación), regístralos con la categoría «Repuestos»."
-      : "Ingresa el monto pagado o los repuestos usados del inventario.");
+      : "El total a descontar de caja no puede ser $0.00.");
   }
   if (conRepuestos) await exigirMatriz(req);
 
@@ -497,7 +511,8 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
        (equipment_id, area, section, maquina, maintenance_type, description, provider, invoice_number, receipt_photo_url, amount, created_by)
        VALUES (NULL, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
-      [body.area, body.section, body.maquina || null, body.maintenance_type, body.description, body.provider || null, body.invoice_number || null, photoUrl, round2(body.amount), body.created_by || null]
+      [body.area, body.section, body.maquina || null, body.maintenance_type, body.description, body.provider || null, body.invoice_number || null, photoUrl,
+       round2(Math.max(0, montoMant - totalUsoOtras)), body.created_by || null]
     );
     // Repuestos del inventario: salen del stock y su valor queda en la hoja de
     // vida (repuestos_stock_valor), sin tocar la caja.
@@ -514,17 +529,44 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
       maintenance.rows[0] = upd.rows[0];
     }
     // Repuestos comprados: detalle en la hoja de vida y costo separado
-    // (parts_cost = los usados ya; labor_cost = el resto de lo pagado).
+    // (parts_cost = los usados ya en ESTA máquina; labor_cost = mano de obra).
     const detalle = (ls: typeof comprados) => ls
       .map((l) => `${Number.isInteger(l.cantidad) ? l.cantidad : l.cantidad.toFixed(2)} ${l.nombre.toUpperCase()} $${round2(l.cantidad * l.costo_unitario).toFixed(2)}`).join(", ");
+    // Usados ya en otras máquinas, agrupados por máquina (área/sección).
+    const porMaquina = new Map<string, { area: string; section: string; lineas: typeof comprados }>();
+    for (const l of usoOtras) {
+      const k = `${l.area}\u0000${l.section}`;
+      const g = porMaquina.get(k) ?? { area: l.area!, section: l.section!, lineas: [] };
+      g.lineas.push(l);
+      porMaquina.set(k, g);
+    }
     if (comprados.length) {
-      const texto = [compradosUso.length ? `Usados ya: ${detalle(compradosUso)}` : "", compradosInv.length ? `A bodega: ${detalle(compradosInv)}` : ""]
-        .filter(Boolean).join(" · ");
+      const texto = [
+        usoGeneral.length ? `Usados ya: ${detalle(usoGeneral)}` : "",
+        ...[...porMaquina.values()].map((g) => `Para ${g.area}/${g.section}: ${detalle(g.lineas)}`),
+        compradosInv.length ? `A bodega: ${detalle(compradosInv)}` : ""
+      ].filter(Boolean).join(" · ");
       const upd = await client.query(
         "UPDATE equipment_maintenance SET repuestos_comprados = $2, parts_cost = $3, labor_cost = $4 WHERE id = $1 RETURNING *",
-        [maintenance.rows[0].id, texto, totalUso, round2(Math.max(0, body.amount - totalUso))]
+        [maintenance.rows[0].id, texto, subtotal(usoGeneral), round2(Math.max(0, montoMant - totalUso))]
       );
       maintenance.rows[0] = upd.rows[0];
+    }
+    // Hoja de vida de cada máquina con repuestos de esta misma factura: un
+    // registro hijo (parent_id) con su parte. Un solo egreso de caja; la suma
+    // de los registros = lo pagado. Si se anula el egreso, se anulan todos.
+    const hojasDeVida: Array<{ area: string; section: string; monto: number }> = [];
+    for (const g of porMaquina.values()) {
+      const monto = subtotal(g.lineas);
+      await client.query(
+        `INSERT INTO equipment_maintenance
+           (equipment_id, area, section, maintenance_type, description, provider, invoice_number, receipt_photo_url,
+            amount, parts_cost, labor_cost, repuestos_comprados, parent_id, created_by)
+         VALUES (NULL, $1, $2, 'REPUESTO', $3, $4, $5, $6, $7, $7, 0, $8, $9, $10)`,
+        [g.area, g.section, `Repuestos comprados: ${detalle(g.lineas)} (con mant. ${body.area}/${body.section}: ${body.description})`.slice(0, 1000),
+         body.provider || null, body.invoice_number || null, photoUrl, monto, `Usados ya: ${detalle(g.lineas)}`, maintenance.rows[0].id, body.created_by || null]
+      );
+      hojasDeVida.push({ area: g.area, section: g.section, monto });
     }
     // Repuestos para el inventario: compra de repuestos aparte (entran al stock).
     let compraInventario: { total: number; cash_movement_id: string | null } | null = null;
@@ -537,17 +579,17 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
         proveedor: null, aCredito: false, descripcion: `para bodega · mant. ${body.area}/${body.section}`
       });
     }
-    if (body.cash_register_id && body.amount > 0) {
+    if (body.cash_register_id && montoMant > 0) {
       await client.query(
         `INSERT INTO cash_movements
          (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by, es_fondo, fondo_estado, responsable)
          VALUES ($1, 'EXPENSE', 'MANTENIMIENTO_EQUIPO', 'equipment_maintenance', $2, $3, $4, $5, $6, $7, $8)`,
-        [body.cash_register_id, maintenance.rows[0].id, round2(body.amount),
+        [body.cash_register_id, maintenance.rows[0].id, montoMant,
          `Mantenimiento ${body.area}/${body.section}: ${body.description}${compradosUso.length ? ` · repuestos: ${detalle(compradosUso)}` : ""}`.slice(0, 500), body.created_by || null,
          esFondo, esFondo ? "POR_LIQUIDAR" : null, esFondo ? body.responsable!.trim() : null]
       );
     }
-    return { ...maintenance.rows[0], compra_inventario: compraInventario };
+    return { ...maintenance.rows[0], compra_inventario: compraInventario, hojas_de_vida: hojasDeVida };
   });
 
   res.status(201).json(withSignedPhoto(result));
@@ -559,7 +601,7 @@ equipmentRouter.get("/:id/maintenance", asyncRoute(async (req, res) => {
     `SELECT em.*, e.name as equipment_name
      FROM equipment_maintenance em
      JOIN equipment e ON e.id = em.equipment_id
-     WHERE em.equipment_id = $1
+     WHERE em.equipment_id = $1 AND em.status <> 'ANULADO'
      ORDER BY em.created_at DESC
      LIMIT 100`,
     [req.params.id]
@@ -576,7 +618,7 @@ equipmentRouter.get("/:id/maintenance/summary", asyncRoute(async (req, res) => {
        COUNT(*) AS count,
        SUM(amount) AS total_amount
      FROM equipment_maintenance
-     WHERE equipment_id = $1
+     WHERE equipment_id = $1 AND status <> 'ANULADO'
      GROUP BY DATE_TRUNC('month', created_at), maintenance_type
      ORDER BY month DESC, maintenance_type`,
     [req.params.id]
@@ -586,7 +628,7 @@ equipmentRouter.get("/:id/maintenance/summary", asyncRoute(async (req, res) => {
   const totalResult = await pool.query(
     `SELECT COUNT(*) as total_count, SUM(amount) as total_spent
      FROM equipment_maintenance
-     WHERE equipment_id = $1`,
+     WHERE equipment_id = $1 AND status <> 'ANULADO'`,
     [req.params.id]
   );
 
@@ -604,7 +646,7 @@ equipmentRouter.get("/maintenance/all", asyncRoute(async (req, res) => {
   const area = typeof req.query.area === "string" ? req.query.area : undefined;
   const from = typeof req.query.from === "string" ? req.query.from : undefined;
   const to = typeof req.query.to === "string" ? req.query.to : undefined;
-  const conds: string[] = [];
+  const conds: string[] = ["em.status <> 'ANULADO'"];   // egreso anulado en Caja = fuera de la hoja de vida
   const params: any[] = [];
   if (area) { params.push(area); conds.push(`em.area = $${params.length}`); }
   if (from) { params.push(from); conds.push(`em.created_at >= $${params.length}`); }

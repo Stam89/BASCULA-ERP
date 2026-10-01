@@ -3096,8 +3096,9 @@ export function App() {
   // Mantenimiento de Caja · repuestos COMPRADOS en la reparación: 🔧 se usan ya
   // (costo de la reparación, no entran a bodega) o 📦 se guardan en el inventario.
   const [mantCompraSi, setMantCompraSi] = useState(false);
-  const [mantCompra, setMantCompra] = useState<Array<{ key: string; nombre: string; repuesto_id: string | null; cantidad: number; costo: number; destino: "USO" | "INVENTARIO" }>>([]);
-  const [mantCompraLinea, setMantCompraLinea] = useState({ nombre: "", cantidad: "1", costo: "", destino: "USO" as "USO" | "INVENTARIO" });
+  // area/section = máquina a la que aplica (vacío = la de esta reparación, general).
+  const [mantCompra, setMantCompra] = useState<Array<{ key: string; nombre: string; repuesto_id: string | null; cantidad: number; costo: number; destino: "USO" | "INVENTARIO"; area: string; section: string }>>([]);
+  const [mantCompraLinea, setMantCompraLinea] = useState({ nombre: "", cantidad: "1", costo: "", destino: "USO" as "USO" | "INVENTARIO", maquina: "" });
   const [sackMovForm, setSackMovForm] = useState({ sack_id: "", movement: "ENTRADA" as "ENTRADA"|"SALIDA", cantidad: "", concepto: "" });
   // ── Diagnóstico de stocks negativos ────────────────────────────────────────
   const [negativeStock, setNegativeStock] = useState<NegativeStockRow[]>([]);
@@ -4248,10 +4249,20 @@ export function App() {
     if (!(costo > 0)) { addToast("Ingresa el costo por unidad", "error"); return; }
     const destino = esMatrizActiva ? mantCompraLinea.destino : "USO";
     const r = repuestoPorNombre(nombre);
-    setMantCompra((l) => [...l, { key: `${Date.now()}-${l.length}`, nombre: r ? etiquetaRepuesto(r) : nombre.toUpperCase(), repuesto_id: r?.id ?? null, cantidad, costo, destino }]);
-    // Listo para el siguiente: mismo destino, cantidad en 1.
+    // Máquina a la que aplica (solo si se usa ya): "ÁREA||SECCIÓN"; vacío = general.
+    const [area, section] = destino === "USO" && mantCompraLinea.maquina ? mantCompraLinea.maquina.split("||") : ["", ""];
+    setMantCompra((l) => [...l, { key: `${Date.now()}-${l.length}`, nombre: r ? etiquetaRepuesto(r) : nombre.toUpperCase(), repuesto_id: r?.id ?? null, cantidad, costo, destino, area, section }]);
+    // Listo para el siguiente: mismo destino y máquina, cantidad en 1.
     setMantCompraLinea({ ...mantCompraLinea, nombre: "", cantidad: "1", costo: "" });
   }
+  // Totales del mantenimiento (derivados del estado: se recalculan solos al
+  // agregar/quitar repuestos o cambiar la mano de obra).
+  //   a) subtotal de repuestos comprados  b) mano de obra / servicios
+  //   c) TOTAL A DESCONTAR DE CAJA = a + b  (lo que se envía como amount)
+  const mantSubtotalRep = round2(mantCompra.reduce((s2, l) => s2 + l.cantidad * l.costo, 0));
+  const mantInvTotal = round2(mantCompra.filter((l) => l.destino === "INVENTARIO").reduce((s2, l) => s2 + l.cantidad * l.costo, 0));
+  const mantManoObra = round2(parseFloat(maintenanceForm.amount || "0") || 0);
+  const mantTotalCaja = round2(mantSubtotalRep + mantManoObra);
   const sacosDelActivo = esMatrizActiva ? sackInventory : sacosPropios;
 
   useEffect(() => {
@@ -8181,13 +8192,13 @@ export function App() {
       return;
     }
     if (mantCompraSi && mantCompraLinea.nombre.trim()) { addToast("Toca «➕ Agregar» para sumar el repuesto a la lista (o borra lo escrito)", "error"); return; }
-    // Lo que sale de caja por la reparación = mano de obra + repuestos comprados
-    // que se usan ya. Los comprados para el inventario van como compra aparte.
-    const usoTotal = round2(mantCompra.filter((l) => l.destino === "USO").reduce((s2, l) => s2 + l.cantidad * l.costo, 0));
-    const invTotal = round2(mantCompra.filter((l) => l.destino === "INVENTARIO").reduce((s2, l) => s2 + l.cantidad * l.costo, 0));
-    const amount = round2((parseFloat(maintenanceForm.amount || "0") || 0) + usoTotal);
-    if (!(amount > 0)) {
-      addToast(invTotal > 0 ? "Si solo compraste repuestos para guardar (sin reparación), usa la categoría «Repuestos»." : "Ingresa la mano de obra o los repuestos comprados", "error");
+    // amount = TOTAL A DESCONTAR DE CAJA (repuestos comprados + mano de obra).
+    // El backend separa lo que va a bodega (compra de repuestos aparte).
+    const invTotal = mantInvTotal;
+    const amount = mantTotalCaja;
+    if (!(amount > 0)) { addToast("El total a descontar de caja no puede ser $0.00", "error"); return; }
+    if (!(round2(amount - invTotal) > 0)) {
+      addToast("Si solo compraste repuestos para guardar (sin reparación), usa la categoría «Repuestos».", "error");
       return;
     }
     // Dinero a rendir cuentas (fondo provisional) sobre este mantenimiento.
@@ -8223,7 +8234,8 @@ export function App() {
           amount,
           cash_register_id: registerId,
           repuestos_comprados: mantCompra.length
-            ? mantCompra.map((l) => ({ repuesto_id: l.repuesto_id ?? undefined, nombre: l.nombre, cantidad: l.cantidad, costo_unitario: l.costo, destino: l.destino }))
+            ? mantCompra.map((l) => ({ repuesto_id: l.repuesto_id ?? undefined, nombre: l.nombre, cantidad: l.cantidad, costo_unitario: l.costo, destino: l.destino,
+                area: l.area || undefined, section: l.section || undefined }))
             : undefined,
           es_fondo: esFondoMant || undefined,
           responsable: esFondoMant ? movResponsable.trim() : undefined
@@ -8232,7 +8244,7 @@ export function App() {
       if (!res.ok) throw new Error(await res.text());
       if (invTotal > 0) cargarRepCatalogo();
       setMantCompra([]); setMantCompraSi(false);
-      setMantCompraLinea({ nombre: "", cantidad: "1", costo: "", destino: "USO" });
+      setMantCompraLinea({ nombre: "", cantidad: "1", costo: "", destino: "USO", maquina: "" });
       if (esFondoMant) { setMovEsFondo(false); setMovResponsable(""); }
 
       setMaintenanceForm({
@@ -16915,10 +16927,16 @@ export function App() {
                       // Repuestos COMPRADOS: 🔧 se usan ya (costo de esta reparación) o
                       // 📦 se guardan en el inventario (compra de repuestos aparte, solo Matriz).
                       const destino = esMatrizActiva ? mantCompraLinea.destino : "USO";
-                      const usoTotal = round2(mantCompra.filter((l) => l.destino === "USO").reduce((s2, l) => s2 + l.cantidad * l.costo, 0));
-                      const invTotal = round2(mantCompra.filter((l) => l.destino === "INVENTARIO").reduce((s2, l) => s2 + l.cantidad * l.costo, 0));
-                      const manoObra = round2(parseFloat(maintenanceForm.amount || "0") || 0);
                       const coincide = repuestoPorNombre(mantCompraLinea.nombre);
+                      const previa = round2((Number(mantCompraLinea.cantidad) || 0) * (Number(mantCompraLinea.costo) || 0));
+                      const general = maintenanceForm.area && maintenanceForm.section ? `${maintenanceForm.area} · ${maintenanceForm.section}` : "";
+                      const n2 = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2));
+                      // Reparto por máquina de lo usado ya (para el aviso de hojas de vida).
+                      const reparto = new Map<string, number>();
+                      for (const l of mantCompra.filter((x) => x.destino === "USO" && x.area && x.section && !(x.area === maintenanceForm.area && x.section === maintenanceForm.section))) {
+                        const k = `${l.area} · ${l.section}`;
+                        reparto.set(k, round2((reparto.get(k) ?? 0) + l.cantidad * l.costo));
+                      }
                       return (
                         <div className="mantForm">
                           <div className="mantForm__titulo">🔧 Mantenimiento · se guarda en la hoja de vida de la máquina</div>
@@ -17002,33 +17020,48 @@ export function App() {
                                       onChange={(e) => setMantCompraLinea({ ...mantCompraLinea, costo: e.target.value })}
                                       onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); agregarCompraMantenimiento(); } }}
                                       style={{ ...inp, marginTop: 0 }} />
+                                  </div>
+                                  <div className="mantCompra__fila2">
+                                    {destino === "USO" ? (
+                                      <select value={mantCompraLinea.maquina} aria-label="Máquina a la que aplica" style={{ ...inp, marginTop: 0 }}
+                                        onChange={(e) => setMantCompraLinea({ ...mantCompraLinea, maquina: e.target.value })}>
+                                        <option value="">Máquina: {general ? `esta reparación (${general})` : "Mantenimiento general / Planta"}</option>
+                                        {maintAreas.map((a) => (
+                                          <optgroup key={a} label={a}>
+                                            {maintSectionsFor(a).map((sec) => <option key={`${a}||${sec}`} value={`${a}||${sec}`}>{a} · {sec}</option>)}
+                                          </optgroup>
+                                        ))}
+                                      </select>
+                                    ) : <span className="muted" style={{ fontSize: 12 }}>📦 Va a bodega: se asigna a una máquina cuando se use (Repuestos → «Usar»).</span>}
+                                    <span className="mantCompra__previa">{previa > 0 ? `= ${money(previa)}` : ""}</span>
                                     <button type="button" className="primary" onClick={agregarCompraMantenimiento}>➕ Agregar</button>
                                   </div>
                                   <small className="muted">
                                     {destino === "USO"
-                                      ? "Se paga con esta reparación y queda en la hoja de vida de la máquina. No entra a bodega."
+                                      ? "Se paga con esta reparación y su costo va a la hoja de vida de la máquina elegida (si no eliges, a la de esta reparación). No entra a bodega."
                                       : coincide
                                         ? `Entra al inventario: ${etiquetaRepuesto(coincide)} (hoy hay ${coincide.stock} ${coincide.unidad.toLowerCase()}). Se registra como compra de repuestos, aparte de esta reparación.`
                                         : "Entra al inventario de Repuestos (si no existe, se crea). Se registra como compra de repuestos, aparte de esta reparación."}
                                   </small>
                                   {mantCompra.length > 0 && (
                                     <div className="mantCarrito">
-                                      <div className="mantCarrito__head"><span>Repuesto</span><span>Cantidad</span><span>Para</span><span /></div>
+                                      <div className="mantCarrito__head"><span>Repuesto</span><span>Para</span><span>Subtotal</span><span /></div>
                                       {mantCompra.map((l) => (
                                         <div key={l.key} className="mantCarrito__fila">
-                                          <span><strong>{l.nombre}</strong><small className="muted" style={{ display: "block" }}>{money(l.costo)} c/u · {money(l.cantidad * l.costo)}</small></span>
-                                          <span className="mantCarrito__cant">{l.cantidad}</span>
-                                          <span className={`mantDestino ${l.destino === "USO" ? "mantDestino--uso" : "mantDestino--inv"}`}>
-                                            {l.destino === "USO" ? "🔧 Se usa ya" : `📦 Inventario${l.repuesto_id ? "" : " · nuevo"}`}
+                                          <span>
+                                            <strong>{l.nombre}</strong>
+                                            <small className="muted" style={{ display: "block" }}>{n2(l.cantidad)} × {money(l.costo)} c/u = {money(l.cantidad * l.costo)}</small>
                                           </span>
+                                          <span style={{ display: "grid", gap: 2, justifyItems: "start" }}>
+                                            <span className={`mantDestino ${l.destino === "USO" ? "mantDestino--uso" : "mantDestino--inv"}`}>
+                                              {l.destino === "USO" ? "🔧 Se usa ya" : `📦 Inventario${l.repuesto_id ? "" : " · nuevo"}`}
+                                            </span>
+                                            {l.destino === "USO" && <small className="muted">{l.area ? `${l.area} · ${l.section}` : (general || "General / Planta")}</small>}
+                                          </span>
+                                          <span className="mantCarrito__cant">{money(l.cantidad * l.costo)}</span>
                                           <button type="button" className="mantCarrito__quitar" onClick={() => setMantCompra((x) => x.filter((y) => y.key !== l.key))}>🗑️ Eliminar</button>
                                         </div>
                                       ))}
-                                      <div className="mantCarrito__pie">
-                                        {usoTotal > 0 && <>🔧 Usados ya: <strong>{money(usoTotal)}</strong> (costo de esta reparación)</>}
-                                        {usoTotal > 0 && invTotal > 0 && " · "}
-                                        {invTotal > 0 && <>📦 Al inventario: <strong>{money(invTotal)}</strong> (entran a bodega)</>}
-                                      </div>
                                     </div>
                                   )}
                                 </div>
@@ -17050,23 +17083,27 @@ export function App() {
                           {/* ── Bloque 2 · Monto y comprobante ── */}
                           <section className="mantBloque">
                             <div className="mantBloque__head"><span className="mantBloque__num">2</span> Monto y comprobante</div>
-                            <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>{mantCompra.length ? "Mano de obra / servicio técnico $" : "Monto de la reparación $"}{usoTotal > 0 ? " (puede ser 0)" : " *"}
-                              <input type="number" step="0.01" min="0" value={maintenanceForm.amount} required={!(usoTotal > 0)}
-                                onChange={(e) => setMaintenanceForm({ ...maintenanceForm, amount: e.target.value })}
-                                style={{ ...inp, fontWeight: 700, fontSize: 15 }} />
-                            </label>
-                            {mantCompra.length > 0 && (
-                              <div className="mantResumen">
-                                <div><span>Mano de obra / servicio</span><strong>{money(manoObra)}</strong></div>
-                                {usoTotal > 0 && <div><span>🔧 Repuestos usados ya</span><strong>{money(usoTotal)}</strong></div>}
-                                <div className="mantResumen__sub"><span>Costo de esta reparación</span><strong>{money(manoObra + usoTotal)}</strong></div>
-                                {invTotal > 0 && <div><span>📦 Repuestos para el inventario (compra aparte)</span><strong>{money(invTotal)}</strong></div>}
-                                <div className="mantResumen__total"><span>Total que sale de Caja</span><strong>{money(manoObra + usoTotal + invTotal)}</strong></div>
-                              </div>
+                            <div className="mantMontos">
+                              <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>Subtotal repuestos comprados
+                                <input readOnly tabIndex={-1} value={money(mantSubtotalRep)} aria-readonly="true" className="mantMontos__solo" style={inp} />
+                              </label>
+                              <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>Costo de mano de obra / servicios $
+                                <input type="number" step="0.01" min="0" value={maintenanceForm.amount} placeholder="0.00"
+                                  onChange={(e) => setMaintenanceForm({ ...maintenanceForm, amount: e.target.value })}
+                                  style={{ ...inp, fontWeight: 700 }} />
+                              </label>
+                            </div>
+                            <div className={`mantTotal ${mantTotalCaja > 0 ? "" : "is-cero"}`} aria-live="polite">
+                              <span>TOTAL A DESCONTAR DE CAJA</span>
+                              <strong>{money(mantTotalCaja)}</strong>
+                            </div>
+                            {(mantInvTotal > 0 || reparto.size > 0) && (
+                              <small className="muted" style={{ display: "block" }}>
+                                {mantInvTotal > 0 && <>Incluye {money(mantInvTotal)} de repuestos que entran al inventario (se registran como compra de repuestos). </>}
+                                {reparto.size > 0 && <>Hoja de vida: {general || "esta reparación"} {money(round2(mantTotalCaja - mantInvTotal - [...reparto.values()].reduce((a2, b2) => a2 + b2, 0)))}{[...reparto.entries()].map(([k, v]) => ` · ${k} ${money(v)}`).join("")}.</>}
+                              </small>
                             )}
-                            <small className="mantAyuda">💡 {mantCompra.length
-                              ? "Ingresa solo la mano de obra o el servicio técnico. Los repuestos comprados ya se suman solos según para qué son."
-                              : "Ingresa el dinero que sale de Caja por la reparación (mano de obra, servicio técnico, repuestos). Si compraste repuestos, márcalo arriba en «🛒 Compra de repuestos»."}</small>
+                            <small className="mantAyuda">💡 El total se calcula solo: repuestos de la lista + mano de obra. {mantTotalCaja > 0 ? "" : "Con $0.00 no se puede registrar."}</small>
                             <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>📸 Foto del comprobante (opcional)
                               <input type="file" accept="image/jpeg,image/png,image/jpg" style={{ display: "block", marginTop: 4, fontSize: 12 }} />
                             </label>
@@ -17386,7 +17423,10 @@ export function App() {
                         {!(movCategory === "REPUESTOS" && repCart.length > 0) && <Input name="amount" label="Monto $" type="number" />}
                       </>
                     )}
-                    <button className="primary" disabled={CASH_REUSE[movCategory] === "pilado" || CASH_REUSE[movCategory] === "fomento"} style={{ width: "100%", padding: "10px 0", marginTop: 8 }}>💾 Registrar movimiento</button>
+                    <button className="primary"
+                      disabled={CASH_REUSE[movCategory] === "pilado" || CASH_REUSE[movCategory] === "fomento" || (movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !(mantTotalCaja > 0))}
+                      title={movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !(mantTotalCaja > 0) ? "El total a descontar de caja es $0.00" : undefined}
+                      style={{ width: "100%", padding: "10px 0", marginTop: 8 }}>💾 Registrar movimiento</button>
                   </form>
                 )}
 

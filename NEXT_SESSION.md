@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Mantenimiento de Caja: total automatico + repuestos por maquina (2026-09-30)
+- Montos: a) «Subtotal repuestos comprados» (solo lectura, suma de la lista) · b) «Costo de mano de obra / servicios $» (`maintenanceForm.amount`, por defecto 0) · c) «TOTAL A DESCONTAR DE CAJA» = a + b (derivados `mantSubtotalRep/mantManoObra/mantTotalCaja` en el cuerpo del componente). El boton «💾 Registrar movimiento» se bloquea si el total es $0.00. Cada linea muestra «2 × $15 c/u = $30».
+- Payload: `amount` = TOTAL de caja (incluye lo que va a bodega). Backend: monto del mantenimiento = amount − repuestos INVENTARIO (esos van como compra REPUESTOS aparte). Cada linea «🔧 se usa ya» puede llevar `area`/`section` («Máquina a la que aplica», select agrupado por area; vacio = la de esta reparacion).
+- Lineas de OTRA maquina → registro hijo en `equipment_maintenance` (`parent_id`, migracion 20261060; tipo REPUESTO, amount = su parte). El principal queda con mano de obra + repuestos generales; la suma principal+hijos = egreso MANTENIMIENTO_EQUIPO (un solo egreso). `/liquidar` ajusta solo el principal (amount = gasto real − hijos).
+- Anular el egreso del mantenimiento marca `status = 'ANULADO'` el principal y sus hijos; `/maintenance/all`, `/:id/maintenance` y su resumen excluyen ANULADO (historial.ts ya lo hacia). La migracion marca ANULADO los ya anulados en Caja.
+
 ### Mantenimiento de Caja: «🛒 Compra de repuestos» (usar ya / al inventario) (2026-09-30)
 - En el formulario de Mantenimiento (Caja → categoria MANTENIMIENTO_EQUIPO) el campo «Máquina / Activo» se reemplazo por «🛒 Compra de repuestos» (No / Sí). Con Sí se abre una lista: cada repuesto es «🔧 Se usa ya en esta reparación» o «📦 Se guarda de repuesto (inventario)» (este ultimo solo Matriz; datalist del catalogo, nuevo si no existe).
 - Se QUITO del formulario el bloque «Repuestos del inventario» (usar stock desde Caja). Usar stock = Inventario → 🔧 Repuestos → «Usar». El backend aun acepta `repuestos_usados` (compatibilidad).

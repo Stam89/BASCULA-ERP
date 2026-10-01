@@ -4453,8 +4453,16 @@ textarea::placeholder {
 .mantCompra__destino button { padding: 9px 10px; border-radius: 10px; border: 1.5px solid #e2e8f0; background: #fff; color: #334155; font-size: 12.5px; font-weight: 700; cursor: pointer; text-align: center; }
 .mantCompra__destino button.is-on { border-color: #ea580c; background: #ffedd5; color: #9a3412; }
 .mantCompra__destino button.is-on.is-inv { border-color: #0f766e; background: #ccfbf1; color: #115e59; }
-.mantCompra__fila { display: grid; grid-template-columns: minmax(0, 1fr) 80px 110px auto; gap: 8px; align-items: center; }
-.mantCompra__fila button { white-space: nowrap; }
+.mantCompra__fila { display: grid; grid-template-columns: minmax(0, 1fr) 80px 110px; gap: 8px; align-items: center; }
+.mantCompra__fila2 { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; }
+.mantCompra__fila2 button { white-space: nowrap; }
+.mantCompra__previa { font-weight: 800; color: #9a3412; font-variant-numeric: tabular-nums; min-width: 70px; text-align: right; }
+.mantMontos { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.mantMontos__solo { background: #f1f5f9 !important; color: #334155; font-weight: 700; cursor: default; }
+.mantTotal { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 12px; background: #0f766e; color: #fff; }
+.mantTotal span { font-size: 12px; font-weight: 800; letter-spacing: .06em; }
+.mantTotal strong { font-size: 24px; font-weight: 900; font-variant-numeric: tabular-nums; }
+.mantTotal.is-cero { background: #e2e8f0; color: #64748b; }
 .mantDestino { font-size: 12px; font-weight: 700; border-radius: 999px; padding: 2px 8px; justify-self: start; }
 .mantDestino--uso { background: #ffedd5; color: #9a3412; }
 .mantDestino--inv { background: #ccfbf1; color: #115e59; }
@@ -4471,5 +4479,9 @@ textarea::placeholder {
   .mantCarrito__fila { grid-template-columns: minmax(0, 1fr) auto; }
   .mantCompra__destino { grid-template-columns: minmax(0, 1fr); }
   .mantCompra__fila { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  .mantCompra__fila > input:first-child, .mantCompra__fila button { grid-column: 1 / -1; }
+  .mantCompra__fila > input:first-child { grid-column: 1 / -1; }
+  .mantCompra__fila2 { grid-template-columns: minmax(0, 1fr) auto; }
+  .mantCompra__fila2 > :first-child { grid-column: 1 / -1; }
+  .mantMontos { grid-template-columns: minmax(0, 1fr); }
+  .mantTotal strong { font-size: 20px; }
 }
