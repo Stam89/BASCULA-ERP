@@ -49,6 +49,10 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Transporte y Cosechadora · Caja: ingreso sin «Ligar a un servicio» (2026-10-01)
+- `IngresoForm` (campo/CampoModule.tsx) ya no recibe `pendientes` ni muestra el selector; envia siempre `servicio_id: null` (ingreso suelto; el backend ya lo aceptaba). Los servicios se cobran desde Cuentas por Cobrar (AbonoForm sigue usando `pendientes`, que salen de `servicios` cargados para todo el modulo: no habia fetch propio del ingreso).
+- Conceptos: nuevo grupo Transporte primero con «Flete externo / Fuera de báscula» (`CONCEPTO_INGRESO_PRINCIPAL`), preseleccionado y al que vuelve el formulario tras guardar.
+
 ### Caja · «Mantenimiento Planta» solo registra dinero (2026-10-01)
 - Categoria MANTENIMIENTO_EQUIPO renombrada «Mantenimiento Planta» (migracion 20261062, solo `nombre`; `format.ts` igual). El formulario ya NO tiene «Sacar repuesto de bodega» (se quitaron `mantRepUsados`, `mantBodegaAbierto` y el resumen de bodega): Equipo y trabajo (buscador, detalle, tecnico, tipo) + Costos («Monto total $» obligatorio = pago al tecnico/taller, Nº factura, comprobante, rendir cuentas). Repuestos comprados → categoria Repuestos; bajas de bodega → Inventario → 🔧 Repuestos → «Usar». El backend sigue aceptando `repuestos_usados` (no se envia).
 - Liquidar un fondo de Mantenimiento Planta ya no registra repuestos (modal solo gasto real/vuelto; `/liquidar` responde 400 si llegan). Solo los fondos de categoria Repuestos registran piezas al liquidar (entran a bodega).

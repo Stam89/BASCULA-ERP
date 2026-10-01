@@ -125,12 +125,15 @@ const PIEZAS_MANT: Array<{ grupo: string; items: string[] }> = [
 
 // Conceptos predefinidos para el INGRESO (select con optgroups). El usuario puede
 // elegir uno y agregarle un detalle extra, o escribir el concepto a mano.
+// Ingreso principal de esta caja: el flete externo (fuera de báscula). Va primero
+// y viene preseleccionado en «＋ Nuevo ingreso».
+const CONCEPTO_INGRESO_PRINCIPAL = "Flete externo / Fuera de báscula";
 const CONCEPTOS_INGRESO: Array<{ grupo: string; items: string[] }> = [
+  { grupo: "Transporte", items: [
+    CONCEPTO_INGRESO_PRINCIPAL, "Pago por flete / transporte", "Abono por flete"
+  ] },
   { grupo: "Servicios Agrícolas", items: [
     "Pago por servicio de cosecha", "Abono por servicio de cosecha"
-  ] },
-  { grupo: "Transporte", items: [
-    "Pago por flete / transporte", "Abono por flete"
   ] },
   { grupo: "Otros Ingresos", items: [
     "Venta de chatarra/repuestos", "Devolución de proveedor", "Aporte de socio"
@@ -385,7 +388,7 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
       </div>
 
       {cajaTab === "ingreso" && (
-        <IngresoForm cuentas={cuentas} pendientes={pendientes}
+        <IngresoForm cuentas={cuentas}
           onSaved={() => onCajaSaved("Ingreso registrado")} onError={(m) => notify(m, "err")} />
       )}
       {cajaTab === "egreso" && (
@@ -1284,16 +1287,16 @@ function EditarClienteModal({ cliente, onClose, onDone, onError }: {
   );
 }
 
-// ＋ INGRESO: entrada a una cuenta. Opcional: ligarlo a un servicio como abono
-// (respeta el bloqueo de sobrepago 422 del backend).
-function IngresoForm({ cuentas, pendientes, onSaved, onError }: {
-  cuentas: Cuenta[]; pendientes: Servicio[]; onSaved: OnSaved; onError: (m: string) => void;
+// ＋ INGRESO: entrada manual o de contado a una cuenta (p. ej. flete externo fuera
+// de báscula). Los servicios operativos se cobran desde Cuentas por Cobrar, así
+// que aquí el ingreso es siempre suelto (servicio_id: null).
+function IngresoForm({ cuentas, onSaved, onError }: {
+  cuentas: Cuenta[]; onSaved: OnSaved; onError: (m: string) => void;
 }) {
   // Concepto = base (predefinido, opcional) + detalle extra. Si no hay base, el
   // detalle ES el concepto escrito a mano ("Escribir concepto manualmente…").
-  const [f, setF] = useState({ fecha: hoy(), cuenta_id: "", monto: "", concepto_base: "", concepto_extra: "", servicio_id: "" });
+  const [f, setF] = useState({ fecha: hoy(), cuenta_id: "", monto: "", concepto_base: CONCEPTO_INGRESO_PRINCIPAL, concepto_extra: "" });
   const [busy, setBusy] = useState(false);
-  const svc = pendientes.find((s) => s.id === f.servicio_id);
   const conceptoFinal = f.concepto_base
     ? (f.concepto_extra.trim() ? `${f.concepto_base} - ${f.concepto_extra.trim()}` : f.concepto_base)
     : f.concepto_extra.trim();
@@ -1305,10 +1308,10 @@ function IngresoForm({ cuentas, pendientes, onSaved, onError }: {
       if (!(monto > 0)) throw new Error("Ingresa un monto válido");
       await apiPost("/campo/movimientos", {
         fecha: f.fecha, cuenta_id: f.cuenta_id, signo: "entrada", monto,
-        concepto: conceptoFinal || (f.servicio_id ? "Abono de servicio" : undefined),
-        servicio_id: f.servicio_id || undefined
+        concepto: conceptoFinal || undefined,
+        servicio_id: null   // ingreso suelto: los servicios se cobran en Cuentas por Cobrar
       });
-      setF({ ...f, monto: "", concepto_base: "", concepto_extra: "", servicio_id: "" });
+      setF({ ...f, monto: "", concepto_base: CONCEPTO_INGRESO_PRINCIPAL, concepto_extra: "" });
       await onSaved();
     } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
   }
@@ -1325,13 +1328,6 @@ function IngresoForm({ cuentas, pendientes, onSaved, onError }: {
         </label>
       </div>
       <label><span>Monto $</span><input type="number" step="0.01" min="0" value={f.monto} onChange={(e) => setF({ ...f, monto: e.target.value })} placeholder="0.00" /></label>
-      <label><span>Ligar a un servicio (opcional — cuenta como abono)</span>
-        <select value={f.servicio_id} onChange={(e) => setF({ ...f, servicio_id: e.target.value })}>
-          <option value="">(ingreso suelto, sin servicio)</option>
-          {pendientes.map((s) => <option key={s.id} value={s.id}>{String(s.fecha).slice(0, 10)} · {s.cliente_nombre} · saldo {money(s.saldo_pendiente)}</option>)}
-        </select>
-      </label>
-      {svc && <p className="muted" style={{ marginTop: -4, fontSize: 12 }}>Saldo del servicio: <strong>{money(svc.saldo_pendiente)}</strong>. Un abono mayor al saldo se rechaza.</p>}
       {/* Concepto: select de opciones predefinidas (o manual) + detalle extra. */}
       <label><span>Concepto</span>
         <select value={f.concepto_base} onChange={(e) => setF({ ...f, concepto_base: e.target.value })}>
@@ -1345,7 +1341,7 @@ function IngresoForm({ cuentas, pendientes, onSaved, onError }: {
       </label>
       <label><span>{f.concepto_base ? "Detalle adicional (opcional)" : "Concepto (texto libre)"}</span>
         <input type="text" value={f.concepto_extra} onChange={(e) => setF({ ...f, concepto_extra: e.target.value })}
-          placeholder={f.concepto_base ? "Ej: Finca El Tesoro" : "Ej: Pago cosecha"} />
+          placeholder={f.concepto_base ? "Ej: cliente o ruta del flete" : "Ej: Venta de chatarra"} />
       </label>
       {conceptoFinal && <p className="muted" style={{ marginTop: -4, fontSize: 12 }}>Concepto: <strong>{conceptoFinal}</strong></p>}
       <button className="primary" disabled={busy}>{busy ? "Guardando…" : "Registrar ingreso"}</button>
