@@ -3095,7 +3095,12 @@ export function App() {
   const [repLinea, setRepLinea] = useState({ sel: "", nombre: "", referencia: "", unidad: "UNIDAD", minimo: "", cantidad: "", costo: "" });
   // Mantenimiento de Caja · repuestos COMPRADOS en la reparación: 🔧 se usan ya
   // (costo de la reparación, no entran a bodega) o 📦 se guardan en el inventario.
-  const [mantCompraSi, setMantCompraSi] = useState(false);
+  const [mantCompraSi, setMantCompraSi] = useState(false);   // bloque de repuestos desplegado
+  // Buscador único «equipo / área / máquina»: rellena area y section de fondo.
+  const [mantBuscar, setMantBuscar] = useState("");
+  const [mantBuscarAbierto, setMantBuscarAbierto] = useState(false);
+  const [mantBuscarIdx, setMantBuscarIdx] = useState(0);
+  const mantBuscarRef = useRef<HTMLInputElement | null>(null);
   // area/section = máquina a la que aplica (vacío = la de esta reparación, general).
   const [mantCompra, setMantCompra] = useState<Array<{ key: string; nombre: string; repuesto_id: string | null; cantidad: number; costo: number; destino: "USO" | "INVENTARIO"; area: string; section: string }>>([]);
   const [mantCompraLinea, setMantCompraLinea] = useState({ nombre: "", cantidad: "1", costo: "", destino: "USO" as "USO" | "INVENTARIO", maquina: "" });
@@ -4210,6 +4215,11 @@ export function App() {
     if (activeTab === "Caja" && esMatrizActiva && (movCategory === "REPUESTOS" || movCategory === "MANTENIMIENTO_EQUIPO")) cargarRepCatalogo();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, esMatrizActiva, movCategory]);
+  // Mantenimiento: el historial alimenta las sugerencias (técnicos y equipos recientes).
+  useEffect(() => {
+    if (activeTab === "Caja" && movCategory === "MANTENIMIENTO_EQUIPO" && maintenanceHistory.length === 0) refreshMaintenanceHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, movCategory]);
   function agregarRepuestoCarrito() {
     const cantidad = Number(repLinea.cantidad), costo = Number(repLinea.costo);
     if (!repLinea.sel) { addToast("Elige el repuesto o «Nuevo repuesto»", "error"); return; }
@@ -8187,6 +8197,11 @@ export function App() {
   };
 
   const submitEquipmentMaintenance = async (photoFile?: File) => {
+    if (!maintenanceForm.area || !maintenanceForm.section) {
+      addToast("Busca y elige el equipo o la sección que se reparó", "error");
+      mantBuscarRef.current?.focus();
+      return;
+    }
     if (!dashboard.current_cash_register?.id || !maintenanceForm.area || !maintenanceForm.section || !maintenanceForm.description) {
       addToast("Completa los campos requeridos", "error");
       return;
@@ -16923,7 +16938,7 @@ export function App() {
                         "Monto $" del mantenimiento (por eso abajo se ocultan los
                         campos genéricos de Descripción/Monto). */}
                     {movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && (() => {
-                      const inp = { display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 } as const;
+                      const inp = { display: "block", width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 } as const;
                       // Repuestos COMPRADOS: 🔧 se usan ya (costo de esta reparación) o
                       // 📦 se guardan en el inventario (compra de repuestos aparte, solo Matriz).
                       const destino = esMatrizActiva ? mantCompraLinea.destino : "USO";
@@ -16937,62 +16952,137 @@ export function App() {
                         const k = `${l.area} · ${l.section}`;
                         reparto.set(k, round2((reparto.get(k) ?? 0) + l.cantidad * l.costo));
                       }
+                      // ── Buscador único: equipos = Área · Sección del catálogo de mantenimiento ──
+                      const sinTildes = (t: string) => t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+                      const equipos = maintAreas.flatMap((a) => maintSectionsFor(a).map((sec) => ({ area: a, section: sec })));
+                      const soloArea = maintenanceForm.area && !maintenanceForm.section ? maintenanceForm.area : "";
+                      const recientes: string[] = [];
+                      for (const m of maintenanceHistory) {
+                        const k = `${m.area}||${m.section}`;
+                        if (m.area && m.section && !m.parent_id && !recientes.includes(k)) recientes.push(k);
+                        if (recientes.length >= 5) break;
+                      }
+                      const tokens = sinTildes(mantBuscar.trim()).split(/\s+/).filter(Boolean);
+                      const candidatos = equipos.filter((e) => !soloArea || e.area === soloArea);
+                      const sugerencias = tokens.length
+                        ? candidatos
+                          .filter((e) => { const t = sinTildes(`${e.area} ${e.section}`); return tokens.every((tk) => t.includes(tk)); })
+                          .sort((x, y) => Number(!sinTildes(y.section).startsWith(tokens[0])) - Number(!sinTildes(x.section).startsWith(tokens[0])))
+                          .slice(0, 8)
+                        : [...recientes.map((k) => candidatos.find((e) => `${e.area}||${e.section}` === k)).filter((e): e is { area: string; section: string } => !!e),
+                           ...candidatos.filter((e) => !recientes.includes(`${e.area}||${e.section}`))].slice(0, 8);
+                      const conRecientes = !tokens.length && sugerencias.some((e) => recientes.includes(`${e.area}||${e.section}`));
+                      const idx = Math.min(mantBuscarIdx, Math.max(sugerencias.length - 1, 0));
+                      const elegirEquipo = (e: { area: string; section: string }) => {
+                        // Smart default: al elegir el equipo, el trabajo pasa a «Correctivo» (se puede cambiar).
+                        setMaintenanceForm({ ...maintenanceForm, area: e.area, section: e.section, maintenance_type: "CORRECTIVO" });
+                        setMantBuscar(""); setMantBuscarAbierto(false); setMantBuscarIdx(0);
+                      };
+                      // Técnicos usados antes (más recientes primero) para autocompletar.
+                      const tecnicos = [...new Set(maintenanceHistory.map((m) => String(m.provider ?? "").trim()).filter(Boolean))].slice(0, 30);
+                      const tecnicoTxt = sinTildes(maintenanceForm.provider.trim());
+                      const tecnicosChips = tecnicos.filter((t) => sinTildes(t) !== tecnicoTxt && (!tecnicoTxt || sinTildes(t).startsWith(tecnicoTxt))).slice(0, 3);
                       return (
-                        <div className="mantForm">
-                          <div className="mantForm__titulo">🔧 Mantenimiento · se guarda en la hoja de vida de la máquina</div>
-
-                          {/* ── Bloque 1 · Datos de la reparación ── */}
-                          <section className="mantBloque">
-                            <div className="mantBloque__head"><span className="mantBloque__num">1</span> Datos de la reparación</div>
-                            <div className="mantBloque__grid2">
-                              <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>Área *
-                                <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-                                  <select value={maintenanceForm.area} required style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
-                                    onChange={(e) => setMaintenanceForm({ ...maintenanceForm, area: e.target.value, section: "" })}>
-                                    <option value="">Seleccione</option>
-                                    {maintAreas.map((a) => <option key={a} value={a}>{a}</option>)}
-                                  </select>
-                                  <button type="button" className="btnSecondary" title="Agregar nueva área" style={{ whiteSpace: "nowrap", padding: "0 10px" }}
-                                    onClick={() => setMaintCatModal({ kind: "AREA", nombre: "" })}>+ Nueva</button>
+                        <div className="mantCard">
+                          {/* ── Bloque 1 · Equipo y trabajo ── */}
+                          <section className="mantSec">
+                            <div className="mantSec__head">Equipo y trabajo</div>
+                            {general ? (
+                              <div className="mantEquipoSel">
+                                <span className="mantEquipoSel__ico" aria-hidden="true">🔧</span>
+                                <span className="mantEquipoSel__txt"><strong>{maintenanceForm.section}</strong><small>{maintenanceForm.area}</small></span>
+                                <button type="button" className="mantLink" onClick={() => {
+                                  setMaintenanceForm({ ...maintenanceForm, area: "", section: "" });
+                                  setMantBuscarAbierto(true);
+                                  setTimeout(() => mantBuscarRef.current?.focus(), 0);
+                                }}>Cambiar</button>
+                              </div>
+                            ) : (
+                              <div className="mantBuscador">
+                                <input ref={mantBuscarRef} type="search" value={mantBuscar} autoComplete="off"
+                                  placeholder={soloArea ? `🔍 Buscar la sección de ${soloArea}...` : "🔍 Buscar equipo, área o máquina a reparar..."}
+                                  role="combobox" aria-expanded={mantBuscarAbierto} aria-controls="mantSugerencias" aria-autocomplete="list"
+                                  aria-activedescendant={mantBuscarAbierto && sugerencias[idx] ? `mantSug-${idx}` : undefined}
+                                  onFocus={() => setMantBuscarAbierto(true)}
+                                  onBlur={() => setTimeout(() => setMantBuscarAbierto(false), 120)}
+                                  onChange={(e) => { setMantBuscar(e.target.value); setMantBuscarAbierto(true); setMantBuscarIdx(0); }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "ArrowDown") { e.preventDefault(); setMantBuscarAbierto(true); setMantBuscarIdx(Math.min(idx + 1, sugerencias.length - 1)); }
+                                    else if (e.key === "ArrowUp") { e.preventDefault(); setMantBuscarIdx(Math.max(idx - 1, 0)); }
+                                    else if (e.key === "Enter") { e.preventDefault(); if (sugerencias[idx]) elegirEquipo(sugerencias[idx]); }
+                                    else if (e.key === "Escape") setMantBuscarAbierto(false);
+                                  }} />
+                                {mantBuscarAbierto && (
+                                  <ul id="mantSugerencias" role="listbox" className="mantSugerencias">
+                                    {conRecientes && <li className="mantSugerencias__grupo" role="presentation">Recientes</li>}
+                                    {sugerencias.map((e, i) => (
+                                      <li key={`${e.area}||${e.section}`} id={`mantSug-${i}`} role="option" aria-selected={i === idx}
+                                        className={i === idx ? "is-activa" : ""}
+                                        onMouseEnter={() => setMantBuscarIdx(i)}
+                                        onMouseDown={(ev) => { ev.preventDefault(); elegirEquipo(e); }}>
+                                        <span className="mantSugerencias__area">{e.area}</span>
+                                        <span className="mantSugerencias__sec">{e.section}</span>
+                                      </li>
+                                    ))}
+                                    {sugerencias.length === 0 && <li className="mantSugerencias__vacio" role="presentation">Sin coincidencias. Créalo abajo con «＋ Nueva sección».</li>}
+                                  </ul>
+                                )}
+                                <div className="mantBuscador__extra">
+                                  {soloArea ? (
+                                    <>Área: <strong>{soloArea}</strong> · <button type="button" className="mantLink" onClick={() => setMaintCatModal({ kind: "SECTION", nombre: "" })}>＋ Nueva sección</button>
+                                      {" · "}<button type="button" className="mantLink" onClick={() => setMaintenanceForm({ ...maintenanceForm, area: "" })}>Quitar área</button></>
+                                  ) : (
+                                    <>¿No está? <button type="button" className="mantLink" onClick={() => setMaintCatModal({ kind: "AREA", nombre: "" })}>＋ Nueva área</button></>
+                                  )}
                                 </div>
+                              </div>
+                            )}
+                            <label className="mantCampo">Detalle del trabajo *
+                              <textarea placeholder={getDescriptionPlaceholder()} value={maintenanceForm.description} required rows={2}
+                                onChange={(e) => setMaintenanceForm({ ...maintenanceForm, description: e.target.value })}
+                                style={{ ...inp, minHeight: 52 }} />
+                            </label>
+                            <div className="mantFila2">
+                              <label className="mantCampo">Técnico / Taller
+                                <input list="mantTecnicos" value={maintenanceForm.provider} placeholder="Quién hizo el trabajo" autoComplete="off"
+                                  onChange={(e) => setMaintenanceForm({ ...maintenanceForm, provider: e.target.value })} style={inp} />
+                                <datalist id="mantTecnicos">{tecnicos.map((t) => <option key={t} value={t} />)}</datalist>
+                                {tecnicosChips.length > 0 && (
+                                  <span className="mantChips">
+                                    {tecnicosChips.map((t) => (
+                                      <button key={t} type="button" className="mantChip" onClick={() => setMaintenanceForm({ ...maintenanceForm, provider: t })}>{t}</button>
+                                    ))}
+                                  </span>
+                                )}
                               </label>
-                              <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>Sección a reparar *
-                                <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-                                  <select value={maintenanceForm.section} required disabled={!maintenanceForm.area} style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
-                                    onChange={(e) => setMaintenanceForm({ ...maintenanceForm, section: e.target.value })}>
-                                    <option value="">Seleccione</option>
-                                    {maintSectionsFor(maintenanceForm.area).map((s2) => <option key={s2} value={s2}>{s2}</option>)}
-                                  </select>
-                                  <button type="button" className="btnSecondary" title="Agregar nueva sección" disabled={!maintenanceForm.area} style={{ whiteSpace: "nowrap", padding: "0 10px" }}
-                                    onClick={() => setMaintCatModal({ kind: "SECTION", nombre: "" })}>+ Nueva</button>
-                                </div>
-                              </label>
-                              <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>🛒 Compra de repuestos
-                                <select value={mantCompraSi ? "SI" : "NO"} style={inp}
-                                  onChange={(e) => {
-                                    const si = e.target.value === "SI";
-                                    if (!si && mantCompra.length && !window.confirm("¿Quitar de la lista los repuestos comprados?")) return;
-                                    setMantCompraSi(si);
-                                    if (!si) setMantCompra([]);
-                                  }}>
-                                  <option value="NO">No se compró repuesto</option>
-                                  <option value="SI">Sí, se compró repuesto</option>
-                                </select>
-                              </label>
-                              <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>Tipo de trabajo
-                                <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-                                  <select value={maintenanceForm.maintenance_type} style={{ flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}
+                              <label className="mantCampo">Tipo de trabajo
+                                <span style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                                  <select value={maintenanceForm.maintenance_type} style={{ ...inp, marginTop: 0, flex: 1 }}
                                     onChange={(e) => setMaintenanceForm({ ...maintenanceForm, maintenance_type: e.target.value })}>
                                     {maintenanceForm.maintenance_type && !maintTypes.includes(maintenanceForm.maintenance_type) && (
                                       <option value={maintenanceForm.maintenance_type}>{maintTypeLabel(maintenanceForm.maintenance_type)}</option>
                                     )}
                                     {maintTypes.map((t) => <option key={t} value={t}>{maintTypeLabel(t)}</option>)}
                                   </select>
-                                  <button type="button" className="btnSecondary" title="Agregar nuevo tipo" style={{ whiteSpace: "nowrap", padding: "0 10px" }}
-                                    onClick={() => setMaintCatModal({ kind: "TYPE", nombre: "" })}>+ Nueva</button>
-                                </div>
+                                  <button type="button" className="mantMini" title="Agregar nuevo tipo" onClick={() => setMaintCatModal({ kind: "TYPE", nombre: "" })}>＋</button>
+                                </span>
                               </label>
-                              {mantCompraSi && (
+                            </div>
+                          </section>
+
+                          {/* ── Bloque 2 · Repuestos y materiales (oculto hasta pedirlo) ── */}
+                          <section className="mantSec">
+                            {!mantCompraSi ? (
+                              <button type="button" className="mantAgregarRep" onClick={() => setMantCompraSi(true)}>➕ Añadir repuestos o materiales a esta reparación</button>
+                            ) : (
+                              <div className="mantRepPanel">
+                                <div className="mantSec__head">
+                                  Repuestos y materiales
+                                  {mantCompra.length === 0 && (
+                                    <button type="button" className="mantLink" style={{ marginLeft: "auto", textTransform: "none", letterSpacing: 0 }}
+                                      onClick={() => { setMantCompraSi(false); setMantCompraLinea({ ...mantCompraLinea, nombre: "", cantidad: "1", costo: "" }); }}>Ocultar</button>
+                                  )}
+                                </div>
                                 <div className="mantCompra">
                                   {esMatrizActiva && (
                                     <div className="mantCompra__destino" role="radiogroup" aria-label="¿Para qué es el repuesto?">
@@ -17065,34 +17155,21 @@ export function App() {
                                     </div>
                                   )}
                                 </div>
-                              )}
-                              <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>Técnico / Taller
-                                <input value={maintenanceForm.provider} placeholder="Quién hizo el trabajo" onChange={(e) => setMaintenanceForm({ ...maintenanceForm, provider: e.target.value })} style={inp} />
-                              </label>
-                              <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>Nº de factura
-                                <input value={maintenanceForm.invoice_number} placeholder="Opcional" onChange={(e) => setMaintenanceForm({ ...maintenanceForm, invoice_number: e.target.value })} style={inp} />
-                              </label>
-                            </div>
-                            <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>Detalle del trabajo *
-                              <textarea placeholder={getDescriptionPlaceholder()} value={maintenanceForm.description} required
-                                onChange={(e) => setMaintenanceForm({ ...maintenanceForm, description: e.target.value })}
-                                style={{ ...inp, minHeight: 60 }} />
-                            </label>
+                              </div>
+                            )}
                           </section>
 
-                          {/* ── Bloque 2 · Monto y comprobante ── */}
-                          <section className="mantBloque">
-                            <div className="mantBloque__head"><span className="mantBloque__num">2</span> Monto y comprobante</div>
-                            <div className="mantMontos">
-                              <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>Subtotal repuestos comprados
-                                <input readOnly tabIndex={-1} value={money(mantSubtotalRep)} aria-readonly="true" className="mantMontos__solo" style={inp} />
-                              </label>
-                              <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>Costo de mano de obra / servicios $
-                                <input type="number" step="0.01" min="0" value={maintenanceForm.amount} placeholder="0.00"
-                                  onChange={(e) => setMaintenanceForm({ ...maintenanceForm, amount: e.target.value })}
-                                  style={{ ...inp, fontWeight: 700 }} />
-                              </label>
-                            </div>
+                          {/* ── Bloque 3 · Costos y comprobante ── */}
+                          <section className="mantSec">
+                            <div className="mantSec__head">Costos</div>
+                            {mantCompra.length > 0 && (
+                              <div className="mantSubRep"><span>Subtotal repuestos comprados</span><output>{money(mantSubtotalRep)}</output></div>
+                            )}
+                            <label className="mantCampo">Costo de mano de obra / servicios $
+                              <input type="number" step="0.01" min="0" value={maintenanceForm.amount} placeholder="0.00"
+                                onChange={(e) => setMaintenanceForm({ ...maintenanceForm, amount: e.target.value })}
+                                style={{ ...inp, fontWeight: 700, fontSize: 15 }} />
+                            </label>
                             <div className={`mantTotal ${mantTotalCaja > 0 ? "" : "is-cero"}`} aria-live="polite">
                               <span>TOTAL A DESCONTAR DE CAJA</span>
                               <strong>{money(mantTotalCaja)}</strong>
@@ -17103,14 +17180,18 @@ export function App() {
                                 {reparto.size > 0 && <>Hoja de vida: {general || "esta reparación"} {money(round2(mantTotalCaja - mantInvTotal - [...reparto.values()].reduce((a2, b2) => a2 + b2, 0)))}{[...reparto.entries()].map(([k, v]) => ` · ${k} ${money(v)}`).join("")}.</>}
                               </small>
                             )}
-                            <small className="mantAyuda">💡 El total se calcula solo: repuestos de la lista + mano de obra. {mantTotalCaja > 0 ? "" : "Con $0.00 no se puede registrar."}</small>
-                            <label style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>📸 Foto del comprobante (opcional)
-                              <input type="file" accept="image/jpeg,image/png,image/jpg" style={{ display: "block", marginTop: 4, fontSize: 12 }} />
-                            </label>
-                            <div style={{ background: movEsFondo ? "#fffbeb" : "transparent", border: movEsFondo ? "1px solid #fde68a" : "1px dashed #e5e7eb", borderRadius: 8, padding: "10px 12px" }}>
+                            <div className="mantFila2">
+                              <label className="mantCampo">Nº de factura
+                                <input value={maintenanceForm.invoice_number} placeholder="Opcional" onChange={(e) => setMaintenanceForm({ ...maintenanceForm, invoice_number: e.target.value })} style={inp} />
+                              </label>
+                              <label className="mantCampo">📸 Foto del comprobante
+                                <input type="file" accept="image/jpeg,image/png,image/jpg" style={{ display: "block", marginTop: 6, fontSize: 12 }} />
+                              </label>
+                            </div>
+                            <div className={`mantFondo ${movEsFondo ? "is-on" : ""}`}>
                               <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", margin: 0 }}>
                                 <input type="checkbox" checked={movEsFondo} onChange={(e) => setMovEsFondo(e.target.checked)} style={{ width: "auto" }} />
-                                ☑️ Rendir cuentas (Fondo provisional)
+                                Rendir cuentas (fondo provisional)
                               </label>
                               {movEsFondo && (
                                 <label style={{ display: "block", marginTop: 10, fontSize: 13, fontWeight: 600 }}>

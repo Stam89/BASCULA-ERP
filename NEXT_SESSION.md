@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Mantenimiento de Caja minimalista (2026-09-30)
+- TARJETA UNICA (`.mantCard` / `.mantSec` con separadores tenues; ya no se usan `.mantBloque`). Bloques: Equipo y trabajo · Repuestos y materiales (oculto: boton punteado «➕ Añadir repuestos o materiales…», `mantCompraSi` = desplegado, «Ocultar» si la lista esta vacia) · Costos (subtotal repuestos solo si hay lista, mano de obra, TOTAL, factura + foto, rendir cuentas).
+- Buscador unico (`mantBuscar*`, `mantBuscarRef`): combobox propio sobre Área · Sección del catalogo de mantenimiento (sin tildes, todas las palabras; «Recientes» del historial). Elegir rellena `maintenanceForm.area/section` y pone tipo CORRECTIVO; se muestra como ficha con «Cambiar». «＋ Nueva área / sección» abre el modal de siempre. No hay `maquina_id`: la maquina es la seccion.
+- Técnico/Taller: datalist + 3 chips con los ultimos usados (de `maintenanceHistory`, que se carga al elegir la categoria). Payload sin cambios.
+
 ### Mantenimiento de Caja: total automatico + repuestos por maquina (2026-09-30)
 - Montos: a) «Subtotal repuestos comprados» (solo lectura, suma de la lista) · b) «Costo de mano de obra / servicios $» (`maintenanceForm.amount`, por defecto 0) · c) «TOTAL A DESCONTAR DE CAJA» = a + b (derivados `mantSubtotalRep/mantManoObra/mantTotalCaja` en el cuerpo del componente). El boton «💾 Registrar movimiento» se bloquea si el total es $0.00. Cada linea muestra «2 × $15 c/u = $30».
 - Payload: `amount` = TOTAL de caja (incluye lo que va a bodega). Backend: monto del mantenimiento = amount − repuestos INVENTARIO (esos van como compra REPUESTOS aparte). Cada linea «🔧 se usa ya» puede llevar `area`/`section` («Máquina a la que aplica», select agrupado por area; vacio = la de esta reparacion).
