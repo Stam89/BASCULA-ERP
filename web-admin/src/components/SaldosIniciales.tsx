@@ -421,7 +421,7 @@ export function SaldosIniciales({ accionistaNombre, avisar, onCambio, ir }: {
       </div>
       {otrosCortes > 0 && <p className="muted" style={{ margin: 0, fontSize: 12 }}>Hay cargas de {otrosCortes} corte(s) más: aparecen en las listas con su fecha.</p>}
 
-      <nav className="segmented si-tabs" aria-label="Qué cargar">
+      <nav className="cajaSubNav si-tabs" aria-label="Qué cargar">
         {tabs.map(([k, t]) => <button key={k} type="button" className={vista === k ? "active" : ""} onClick={() => setVista(k)}>{t}</button>)}
       </nav>
 
