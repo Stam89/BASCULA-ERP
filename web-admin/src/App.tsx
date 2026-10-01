@@ -1621,6 +1621,41 @@ const SUB_TABS: Record<string, Array<{ key: string; label: string }>> = {
   ],
 };
 function subTabKey(moduleKey: string, sub: string): string { return `SUB:${moduleKey}:${sub}`; }
+// «Solo ver» de UNA sub-pestaña: quita la edición de esa sub-pestaña aunque el
+// usuario tenga EDIT:<Módulo>. Sin ninguna clave RO:SUB: todo queda como antes
+// (cada sub-pestaña visible se edita si el módulo se edita). El backend la respeta
+// (require-auth.ts → moduloPermiteEscritura).
+function subSoloVerKey(moduleKey: string, sub: string): string { return `RO:SUB:${moduleKey}:${sub}`; }
+type PermisoSub = { can_view: boolean; can_edit: boolean };
+/** Permiso efectivo {can_view, can_edit} de una sub-pestaña a partir de las claves guardadas. */
+function permisoSub(mods: string[], moduleKey: string, sub: string): PermisoSub {
+  if (!mods.includes(moduleKey)) return { can_view: false, can_edit: false };
+  const defs = SUB_TABS[moduleKey] ?? [];
+  const restringido = defs.some((d) => mods.includes(subTabKey(moduleKey, d.key)));
+  const can_view = !restringido || mods.includes(subTabKey(moduleKey, sub));
+  return { can_view, can_edit: can_view && mods.includes(`EDIT:${moduleKey}`) && !mods.includes(subSoloVerKey(moduleKey, sub)) };
+}
+/**
+ * Cambia {can_view, can_edit} de UNA sub-pestaña sin alterar las demás y devuelve
+ * las claves resultantes. Reglas: editar implica ver; si ninguna sub-pestaña queda
+ * visible, se quita el módulo; si ninguna queda editable, el módulo queda «solo ver».
+ */
+function aplicarPermisoSub(mods: string[], moduleKey: string, sub: string, nuevo: PermisoSub): string[] {
+  const defs = (SUB_TABS[moduleKey] ?? []).map((d) => d.key);
+  const objetivo: Record<string, PermisoSub> = Object.fromEntries(defs.map((d) => [d, permisoSub(mods, moduleKey, d)]));
+  objetivo[sub] = nuevo.can_edit ? { can_view: true, can_edit: true } : { can_view: nuevo.can_view, can_edit: false };
+  const visibles = defs.filter((d) => objetivo[d].can_view);
+  const editables = defs.filter((d) => objetivo[d].can_edit);
+  let out = mods.filter((k) => !k.startsWith(`SUB:${moduleKey}:`) && !k.startsWith(`RO:SUB:${moduleKey}:`));
+  if (visibles.length === 0) return out.filter((k) => k !== moduleKey && k !== `EDIT:${moduleKey}`);
+  out = [...new Set([...out, moduleKey])];
+  // Todas visibles = sin claves SUB: (forma histórica «ve todas»).
+  if (visibles.length < defs.length) out.push(...visibles.map((d) => subTabKey(moduleKey, d)));
+  if (editables.length === 0) return out.filter((k) => k !== `EDIT:${moduleKey}`);
+  if (!out.includes(`EDIT:${moduleKey}`)) out.push(`EDIT:${moduleKey}`);
+  out.push(...visibles.filter((d) => !editables.includes(d)).map((d) => subSoloVerKey(moduleKey, d)));
+  return out;
+}
 
 function NavIcon({ tab }: { tab: string }) {
   switch (tab) {
@@ -4172,6 +4207,14 @@ export function App() {
   // "EDIT:<módulo>" = Editar. Un operador "Solo Ver" (sin EDIT:) NO debe ver los
   // botones de crear/editar/guardar de ese módulo (el backend también lo bloquea).
   const canEdit = (module: string) => isAdmin || activeAllowedPerms.has(`EDIT:${module}`);
+  // Sub-pestaña en «Solo ver» (módulo sin EDIT: o RO:SUB: marcada): aviso visible.
+  // Solo si el usuario tiene el módulo mismo (si llega por otro módulo no se juzga aquí).
+  const avisoSoloLectura = (moduleKey: string, sub: string) => {
+    if (isAdmin) return null;
+    const mods = activeAccionista?.allowed_modules ?? [];
+    if (!mods.includes(moduleKey) || permisoSub(mods, moduleKey, sub).can_edit) return null;
+    return <div className="soloLecturaAviso" role="status" style={{ gridColumn: "1 / -1" }}>👁️ <strong>Solo lectura</strong> · puedes ver esta sección, pero no registrar cambios.</div>;
+  };
 
   useEffect(() => {
     if (!moduloEnvejecidoHabilitado && selectionForm.service_type === "ENVEJECIMIENTO") {
@@ -13226,6 +13269,7 @@ export function App() {
                   <button type="button" className={costosView === "resultado" ? "active" : ""} onClick={() => setCostosView("resultado")}>📊 Resultado mensual</button>
                 )}
               </div>
+              {avisoSoloLectura("Costos Operativos", costosView)}
             </div>
             {/* 📊 Resultado mensual de CEYRO: costo real vs estimado por rubro,
                 ingresos adicionales, gastos financieros y total neto. */}
@@ -15169,6 +15213,7 @@ export function App() {
                 );
               })}
             </div>
+            {avisoSoloLectura("Ventas", ventasView)}
 
             {ventasView === "nuevo" && (
             <>
@@ -19597,6 +19642,7 @@ export function App() {
                   </button>
                 )}
               </nav>
+              {avisoSoloLectura("Seleccion", selectionView)}
             </div>
 
             {selectionView === "nuevo" && (
@@ -19913,6 +19959,7 @@ export function App() {
                 <span style={{ marginLeft: "auto", alignSelf: "center", whiteSpace: "nowrap", paddingRight: 6 }}>{cfgLink("💲 Tarifas de pago", "Tarifas de pago")}</span>
               )}
             </nav>
+            {avisoSoloLectura("Nomina", nominaView)}
 
             {/* Banner: Costo Total de Nómina (A PAGAR) del período — piladores,
                 estibadores, polvillo y secadores. Se actualiza dinámicamente. */}
@@ -21931,7 +21978,7 @@ export function App() {
                         const mods = modsOf(id);
                         const has = mods.includes(m);
                         setPerms(id, has
-                          ? mods.filter((x) => x !== m && x !== `EDIT:${m}` && !x.startsWith(`SUB:${m}:`))
+                          ? mods.filter((x) => x !== m && x !== `EDIT:${m}` && !x.startsWith(`SUB:${m}:`) && !x.startsWith(`RO:SUB:${m}:`))
                           : [...new Set([...mods, m, `EDIT:${m}`])]);
                       };
                       const toggleSubNuevo = (id: string, m: string, sub: string) => {
@@ -21944,7 +21991,7 @@ export function App() {
                       };
                       const marcarTodos = (id: string) => setPerms(id, [...new Set([...APP_MODULES, ...APP_MODULES.map((m) => `EDIT:${m}`)])]);
                       const limpiar = (id: string) => setPerms(id, []);
-                      const nMods = (id: string) => modsOf(id).filter((x) => !x.startsWith("EDIT:") && !x.startsWith("SUB:") && !x.startsWith("PERM:")).length;
+                      const nMods = (id: string) => modsOf(id).filter((x) => !x.startsWith("EDIT:") && !x.startsWith("SUB:") && !x.startsWith("PERM:") && !x.startsWith("RO:")).length;
                       const expanded = newUserAccExpanded && isSel(newUserAccExpanded) ? newUserAccExpanded : null;
                       return (<>
                         <div className="userPermissionBlock">
@@ -22240,34 +22287,36 @@ export function App() {
                   };
                   // VER (nombre plano) y EDITAR (EDIT:<key>). Cascada: EDITAR implica VER;
                   // quitar VER quita también EDITAR (no se puede editar sin ver).
+                  // Quitar VER del módulo quita también su EDITAR y lo de sus sub-pestañas.
                   const toggleVer = (idx: number, key: string) => {
                     const it = items[idx];
                     const has = it.modules.includes(key);
                     const modules = has
-                      ? it.modules.filter((x) => x !== key && x !== `EDIT:${key}`)
+                      ? it.modules.filter((x) => x !== key && x !== `EDIT:${key}` && !x.startsWith(`SUB:${key}:`) && !x.startsWith(`RO:SUB:${key}:`))
                       : [...it.modules, key];
                     setItem(idx, { modules, access: it.access || (!has) });
                   };
+                  // EDITAR del módulo = editar todas sus sub-pestañas visibles (quita los «solo ver»).
                   const toggleEditar = (idx: number, key: string) => {
                     const it = items[idx];
                     const editKey = `EDIT:${key}`;
-                    const has = it.modules.includes(editKey);
+                    const has = it.modules.includes(editKey) && !it.modules.some((x) => x.startsWith(`RO:SUB:${key}:`));
+                    const sinSoloVer = it.modules.filter((x) => !x.startsWith(`RO:SUB:${key}:`));
                     const modules = has
-                      ? it.modules.filter((x) => x !== editKey)
-                      : [...new Set([...it.modules, key, editKey])]; // cascada: marca VER
+                      ? sinSoloVer.filter((x) => x !== editKey)
+                      : [...new Set([...sinSoloVer, key, editKey])]; // cascada: marca VER
                     setItem(idx, { modules, access: it.access || (!has) });
                   };
-                  // Sub-pestaña: alterna la clave SUB:<mod>:<sub>. Marcarla implica
-                  // VER el módulo padre y activa el acceso. (Sin ninguna marcada, el
-                  // usuario ve TODAS las sub-pestañas — ver SUB_TABS.)
-                  const toggleSub = (idx: number, moduleKey: string, sub: string) => {
+                  // Sub-pestaña: 👁️ / ✏️ propios ({can_view, can_edit}). Editar marca Ver;
+                  // quitar Ver quita Editar. Requiere VER del módulo padre.
+                  const toggleSubPerm = (idx: number, moduleKey: string, sub: string, campo: "ver" | "editar") => {
                     const it = items[idx];
-                    const k = subTabKey(moduleKey, sub);
-                    const has = it.modules.includes(k);
-                    const modules = has
-                      ? it.modules.filter((x) => x !== k)
-                      : [...new Set([...it.modules, k, moduleKey])]; // cascada: marca VER del módulo
-                    setItem(idx, { modules, access: it.access || (!has) });
+                    if (!it.modules.includes(moduleKey)) return;
+                    const p = permisoSub(it.modules, moduleKey, sub);
+                    const nuevo: PermisoSub = campo === "editar"
+                      ? (p.can_edit ? { can_view: true, can_edit: false } : { can_view: true, can_edit: true })
+                      : (p.can_view ? { can_view: false, can_edit: false } : { can_view: true, can_edit: false });
+                    setItem(idx, { modules: aplicarPermisoSub(it.modules, moduleKey, sub, nuevo), access: true });
                   };
                   // Marcar todo = VER + EDITAR de cada módulo + permisos especiales.
                   const allKeysConEdit = [...PERM_ALL_KEYS, ...PERM_ALL_KEYS.filter((k) => !k.startsWith("PERM:")).map((k) => `EDIT:${k}`)];
@@ -22288,7 +22337,7 @@ export function App() {
                       <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--c-border)", flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
                         <div>
                           <h3 style={{ margin: 0 }}>🔐 Accionistas y permisos · {accionistaEditor.user.name}</h3>
-                          <p className="muted" style={{ margin: "2px 0 0", fontSize: 12 }}>Marca por accionista qué módulos y acciones puede usar. Los permisos son independientes por accionista. Las sub-pestañas (↳) se limitan solo si marcas alguna; sin marcar ninguna, ve todas.</p>
+                          <p className="muted" style={{ margin: "2px 0 0", fontSize: 12 }}>Marca por accionista qué módulos y acciones puede usar (👁️ Ver · ✏️ Editar). Cada sub-pestaña (↳) tiene su propio Ver y Editar; se habilitan cuando el módulo tiene Ver.</p>
                         </div>
                         {items.length > 1 && (
                           <button type="button" className="btnSecondary" title={`Copia los permisos de ${nombreAcc(items[0].accionista_id)} (1ª columna) a todos`} onClick={duplicarATodos}>
@@ -22345,17 +22394,24 @@ export function App() {
                                                 <input type="checkbox" checked={it.modules.includes(row.key)} onChange={() => toggleVer(idx, row.key)} />
                                                 <span style={{ fontSize: 11 }}>👁️</span>
                                               </label>
-                                              <label title="Editar (crear/guardar/eliminar)" style={{ display: "inline-flex", alignItems: "center", gap: 2, cursor: "pointer" }}>
-                                                <input type="checkbox" checked={it.modules.includes(`EDIT:${row.key}`)} onChange={() => toggleEditar(idx, row.key)} />
-                                                <span style={{ fontSize: 11 }}>✏️</span>
-                                              </label>
+                                              {(() => {
+                                                // Con sub-pestañas en «solo ver», el ✏️ del módulo queda a medias (indeterminado).
+                                                const editMod = it.modules.includes(`EDIT:${row.key}`);
+                                                const parcial = editMod && subTabs.some((st) => it.modules.includes(subSoloVerKey(row.key, st.key)));
+                                                return (
+                                                  <label title={parcial ? "Editar: solo en algunas sub-pestañas" : "Editar (crear/guardar/eliminar)"} style={{ display: "inline-flex", alignItems: "center", gap: 2, cursor: "pointer" }}>
+                                                    <input type="checkbox" checked={editMod && !parcial} ref={(el) => { if (el) el.indeterminate = parcial; }} onChange={() => toggleEditar(idx, row.key)} />
+                                                    <span style={{ fontSize: 11 }}>✏️</span>
+                                                  </label>
+                                                );
+                                              })()}
                                             </span>
                                           )}
                                         </td>
                                       ))}
                                     </tr>
-                                    {/* Sub-pestañas del módulo: si ninguna está marcada, el usuario
-                                        ve TODAS (histórico). Marca solo las que quieras limitar. */}
+                                    {/* Sub-pestañas: 👁️ Ver y ✏️ Editar propios por accionista. Se
+                                        bloquean mientras el módulo padre no tenga Ver. */}
                                     {subTabs.map((st) => {
                                       const skey = subTabKey(row.key, st.key);
                                       return (
@@ -22363,13 +22419,25 @@ export function App() {
                                         <td style={{ position: "sticky", left: 0, background: "var(--c-surface)", padding: "3px 10px 3px 38px", borderBottom: "1px solid var(--c-border)", whiteSpace: "nowrap", fontSize: 12, color: "var(--c-muted)" }}>
                                           <span style={{ opacity: 0.6, marginRight: 4 }}>↳</span>{st.label}
                                         </td>
-                                        {items.map((it, idx) => (
-                                          <td key={it.accionista_id} style={{ ...cellStyle, background: it.access ? undefined : "rgba(0,0,0,.02)" }}>
-                                            <label title={`Ver sub-pestaña «${st.label}»`} style={{ display: "inline-flex", alignItems: "center", gap: 2, cursor: "pointer" }}>
-                                              <input type="checkbox" checked={it.modules.includes(skey)} onChange={() => toggleSub(idx, row.key, st.key)} />
-                                            </label>
+                                        {items.map((it, idx) => {
+                                          const padre = it.modules.includes(row.key);
+                                          const p = permisoSub(it.modules, row.key, st.key);
+                                          const bloq = padre ? undefined : "Marca primero 👁️ Ver del módulo";
+                                          return (
+                                          <td key={it.accionista_id} style={{ ...cellStyle, background: it.access ? undefined : "rgba(0,0,0,.02)", opacity: padre ? 1 : 0.4 }}>
+                                            <span style={{ display: "inline-flex", gap: 10, justifyContent: "center" }}>
+                                              <label title={bloq ?? `Ver «${st.label}»`} style={{ display: "inline-flex", alignItems: "center", gap: 2, cursor: padre ? "pointer" : "not-allowed" }}>
+                                                <input type="checkbox" disabled={!padre} checked={p.can_view} onChange={() => toggleSubPerm(idx, row.key, st.key, "ver")} />
+                                                <span style={{ fontSize: 11 }}>👁️</span>
+                                              </label>
+                                              <label title={bloq ?? `Editar «${st.label}» (marca también Ver)`} style={{ display: "inline-flex", alignItems: "center", gap: 2, cursor: padre ? "pointer" : "not-allowed" }}>
+                                                <input type="checkbox" disabled={!padre} checked={p.can_edit} onChange={() => toggleSubPerm(idx, row.key, st.key, "editar")} />
+                                                <span style={{ fontSize: 11 }}>✏️</span>
+                                              </label>
+                                            </span>
                                           </td>
-                                        ))}
+                                          );
+                                        })}
                                       </tr>
                                       );
                                     })}

@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Permisos Ver / Editar por sub-pestaña (2026-09-30)
+- Sin cambio de esquema: nueva clave `RO:SUB:<Módulo>:<sub>` en `allowed_modules[]` = «Solo ver» esa sub-pestaña aunque haya `EDIT:<Módulo>`. Sin claves RO:SUB: todo queda como antes (datos viejos intactos).
+- web-admin: `permisoSub(mods, mod, sub)` → `{can_view, can_edit}` y `aplicarPermisoSub(...)` (re-serializa el modulo: editar implica ver; ninguna visible → quita el modulo; ninguna editable → modulo solo Ver; todas visibles → sin claves SUB:). Matriz «Accionistas y permisos»: cada fila ↳ tiene 👁️ y ✏️ por accionista, deshabilitados si el modulo no tiene Ver; el ✏️ del modulo queda indeterminado si hay sub-pestañas en solo ver. Aviso «👁️ Solo lectura» bajo las sub-pestañas (Ventas, Seleccion, Nomina, Costos) con `avisoSoloLectura`.
+- Backend `require-auth.ts`: `SUB_DE_ESCRITURA` (orders → nuevo/despachos/guias, guias-remision → guias, selection batches → nuevo/proceso, labor → secadora/pagos, admin-payroll → sueldo-admin) y `moduloPermiteEscritura` (test `auth/permisos-sub.test.ts`). 403 «Tu acceso a Ventas › despachos … SOLO LECTURA».
+
 ### Caja: flujos separados Mantenimiento / Repuestos (2026-09-30)
 - MANTENIMIENTO_EQUIPO: tarjeta unica (equipo con buscador, detalle, tecnico, tipo) + «➕ Añadir repuesto de bodega» (BuscadorCombo SOLO con repuestos activos con stock, primero los compatibles con el area elegida) → `repuestos_usados` (estado `mantRepUsados`, cantidad editable, bloquea si supera el stock). «Monto total $» = lo que cobra el tecnico = `amount`. Resumen a la derecha (`.resumenBox`): mano de obra · repuestos de bodega · costo de la reparacion · «Sale de caja». Boton bloqueado si no hay monto ni repuestos (`mantPuedeGuardar`). Ya NO se envia `repuestos_comprados` (el backend lo sigue aceptando).
 - REPUESTOS (compra para bodega): BuscadorCombo del catalogo + «➕ Crear «X» como repuesto nuevo»; lista limpia editable (cant, costo c/u, subtotal, ✕) con «Compatibilidad / etiqueta» por linea (Uso general / Para <area>). Monto = suma; resumen a la derecha. `repCart` ahora `{key, repuesto_id?, nuevo?, etiqueta, unidad, cant, cost, compat}`; se elimino `repLinea`.

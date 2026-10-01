@@ -83,6 +83,45 @@ const WRITE_MODULES_BY_PREFIX: Record<string, AppModule[]> = {
   "finance": ["Caja", "Estados Financieros"]
 };
 
+// Escrituras que pertenecen a una SUB-PESTAÑA concreta del módulo (mismas claves
+// que SUB_TABS del web-admin). Sirve para el permiso «Solo ver» por sub-pestaña:
+// la clave RO:SUB:<módulo>:<sub> quita la edición de esa sub-pestaña aunque el
+// usuario tenga EDIT:<módulo>. Sin claves RO:SUB: todo queda como antes.
+// Se evalúa en orden: la primera regla que coincide decide la sub-pestaña; una
+// escritura que no coincide con ninguna (catálogos, configuración) es del módulo.
+const SUB_DE_ESCRITURA: Array<{ module: AppModule; prefix: string; sub: string; test: (method: string, rest: string) => boolean }> = [
+  { module: "Ventas", prefix: "orders", sub: "guias", test: (_m, r) => /^\/[^/]+\/guia\/?$/.test(r) },
+  { module: "Ventas", prefix: "orders", sub: "despachos", test: (_m, r) => /^\/[^/]+\/(prepare|deliver)\/?$/.test(r) },
+  { module: "Ventas", prefix: "orders", sub: "nuevo", test: () => true },
+  { module: "Ventas", prefix: "guias-remision", sub: "guias", test: () => true },
+  { module: "Seleccion", prefix: "selection", sub: "nuevo", test: (m, r) => m === "POST" && /^\/batches\/?$/.test(r) },
+  { module: "Seleccion", prefix: "selection", sub: "proceso", test: (_m, r) => /^\/batches\/[^/]+\/(finish|cancel)\/?$/.test(r) },
+  { module: "Nomina", prefix: "labor", sub: "secadora", test: (_m, r) => r.startsWith("/secador-days") },
+  { module: "Nomina", prefix: "labor", sub: "pagos", test: () => true },
+  { module: "Nomina", prefix: "admin-payroll", sub: "sueldo-admin", test: () => true }
+];
+
+/**
+ * ¿El módulo `module` autoriza esta escritura? Necesita EDIT:<módulo> y que la
+ * sub-pestaña de la escritura (si la hay) no esté marcada «Solo ver» (RO:SUB:).
+ * `rest` = la ruta después del prefijo (p.ej. "/123/deliver").
+ */
+export function moduloPermiteEscritura(allowed: string[], module: AppModule, prefix: string, method: string, rest: string): boolean {
+  if (!allowed.includes(`EDIT:${module}`)) return false;
+  const regla = SUB_DE_ESCRITURA.find((r) => r.module === module && r.prefix === prefix && r.test(method, rest));
+  return !regla || !allowed.includes(`RO:SUB:${module}:${regla.sub}`);
+}
+
+/** Sub-pestaña «Solo ver» que bloquea esta escritura (para el mensaje), o null. */
+function subSoloVer(allowed: string[], modules: AppModule[], prefix: string, method: string, rest: string): string | null {
+  for (const module of modules) {
+    if (!allowed.includes(`EDIT:${module}`)) continue;
+    const regla = SUB_DE_ESCRITURA.find((r) => r.module === module && r.prefix === prefix && r.test(method, rest));
+    if (regla && allowed.includes(`RO:SUB:${module}:${regla.sub}`)) return `${module} › ${regla.sub}`;
+  }
+  return null;
+}
+
 // Las lecturas son compartidas por todo el equipo; las escrituras se limitan
 // a los módulos asignados al usuario. Los administradores no tienen límite.
 //
@@ -133,9 +172,16 @@ export async function enforceModulePermissions(req: Request, _res: Response, nex
     // activo). resolveAccionista ya corrió y dejó req.accionistaId.
     // Nivel VER vs EDITAR: el nombre plano da lectura (GET, ya permitido arriba);
     // ESCRIBIR exige la clave 'EDIT:<módulo>'. Un operador "Solo Ver" recibe 403.
+    // Sub-pestañas: RO:SUB:<módulo>:<sub> = «Solo ver» en esa sub-pestaña.
     const allowed: string[] = fresh.rows[0].allowed_modules ?? [];
-    if (requiredModules.some((module) => allowed.includes(`EDIT:${module}`))) {
+    const rest = req.path.slice(prefix.length + 1);
+    if (requiredModules.some((module) => moduloPermiteEscritura(allowed, module, prefix, req.method, rest))) {
       next();
+      return;
+    }
+    const sub = subSoloVer(allowed, requiredModules, prefix, req.method, rest);
+    if (sub) {
+      next(new ApiError(403, `Tu acceso a ${sub} en este accionista es de SOLO LECTURA. Pide permiso de edición a un administrador.`));
       return;
     }
     // Mensaje según el motivo: tiene el módulo (solo Ver) vs no lo tiene.
