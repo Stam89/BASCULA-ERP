@@ -49,6 +49,9 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Caja · Compra para bodega con entrada de cantidad/precio (2026-09-30)
+- Elegir o escribir un repuesto en el BuscadorCombo llena `repSel` y muestra en fila: Cantidad (min 1), Precio Unitario $, Subtotal $ (solo lectura), Compatibilidad y «➕ Agregar a la lista» (Enter en el precio tambien agrega). La lista (`repCart`) muestra Repuesto | Cantidad | Precio unitario | Subtotal | 🗑️ Eliminar (sin edicion en linea). `repCartTotal` alimenta el resumen y el campo «Monto $» del formulario (solo lectura con lista). Si hay un repuesto elegido sin agregar, «Registrar movimiento» avisa. Envio igual a `/repuestos/compra`.
+
 ### Liquidaciones: pestañas y flujo vertical (2026-09-30)
 - `liqVista` ("nueva" | "realizadas"). `.liqLayout` (flex columna) con `nav.cajaSubNav.liqTabs`; cada pestaña es `.liqVista` con `hidden` (NO se desmonta: lo escrito se conserva al cambiar de pestaña). Nueva: formulario y «Materia prima por liquidar» uno debajo del otro a todo el ancho; Realizadas: solo el historial.
 - CSS acotado a `.liqLayout`: lineas Ingreso/QQ/Precio con QQ y Precio de 110–170px; historial con la columna de acciones `minmax(200px, 1fr)` y botones que bajan de linea (antes se cortaban). Calculos y guardado sin cambios.
