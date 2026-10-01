@@ -3135,12 +3135,9 @@ export function App() {
     key: string; repuesto_id?: string; nuevo?: { nombre: string; referencia: string | null; unidad: string; stock_minimo: number };
     etiqueta: string; unidad: string; cant: string; cost: string; compat: string;
   }>>([]);
-  // Mantenimiento de Caja · repuestos que SALEN DE BODEGA (ya existen en el stock).
-  const [mantBodegaAbierto, setMantBodegaAbierto] = useState(false);
   const [repFactura, setRepFactura] = useState("");   // Nº de factura de la compra para bodega
   // Repuesto elegido en el buscador de «Compra para bodega», antes de «➕ Agregar a la lista».
   const [repSel, setRepSel] = useState<{ repuesto_id?: string; nombre: string; unidad: string; stock?: number; cant: string; cost: string; compat: string } | null>(null);
-  const [mantRepUsados, setMantRepUsados] = useState<Array<{ repuesto_id: string; etiqueta: string; unidad: string; cantidad: string; costo: number }>>([]);
   // Buscador único «equipo / área / máquina»: rellena area y section de fondo.
   const [mantBuscar, setMantBuscar] = useState("");
   const [mantBuscarAbierto, setMantBuscarAbierto] = useState(false);
@@ -4283,15 +4280,11 @@ export function App() {
   };
   // Total de la lista de compra para bodega (= «Monto $» del egreso).
   const repCartTotal = round2(repCart.reduce((s2, l) => s2 + (Number(l.cant) || 0) * (Number(l.cost) || 0), 0));
-  // Mantenimiento: «Monto total» = lo que cobra el técnico (lo único que sale de
-  // caja); los repuestos de bodega se descuentan del stock y su costo va aparte.
+  // Mantenimiento Planta: en Caja solo sale el dinero (mano de obra / servicio /
+  // taller). Repuestos comprados → categoría «Repuestos»; bajas de bodega →
+  // Inventario → 🔧 Repuestos → «Usar».
   const mantManoObra = round2(parseFloat(maintenanceForm.amount || "0") || 0);
-  const mantRepExcede = mantRepUsados.some((u) => {
-    const r = repCatalogo.find((x) => x.id === u.repuesto_id);
-    const c = Number(u.cantidad);
-    return !r || !(c > 0) || c > r.stock + 1e-9;
-  });
-  const mantPuedeGuardar = (mantManoObra > 0 || mantRepUsados.length > 0) && !mantRepExcede;
+  const mantPuedeGuardar = mantManoObra > 0;
   const sacosDelActivo = esMatrizActiva ? sackInventory : sacosPropios;
 
   useEffect(() => {
@@ -8225,12 +8218,9 @@ export function App() {
       addToast("Completa los campos requeridos", "error");
       return;
     }
-    if (mantRepExcede) { addToast("Revisa las cantidades: algún repuesto supera lo que hay en bodega", "error"); return; }
-    // amount = lo que cobra el técnico (sale de caja). Puede ser 0 si solo se
-    // usaron repuestos de bodega (no hay egreso; el costo queda en la hoja de vida).
+    // amount = lo que cobra el técnico / taller (sale de caja).
     const amount = mantManoObra;
-    if (!mantPuedeGuardar) { addToast("Ingresa el monto del técnico o añade un repuesto de bodega", "error"); return; }
-    const usados = mantRepUsados.map((u) => ({ repuesto_id: u.repuesto_id, cantidad: round2(Number(u.cantidad)) }));
+    if (!mantPuedeGuardar) { addToast("Ingresa el monto total (lo que se paga al técnico o taller)", "error"); return; }
     // Dinero a rendir cuentas (fondo provisional) sobre este mantenimiento.
     const esFondoMant = movEsFondo;
     if (esFondoMant && !(amount > 0)) { addToast("Para rendir cuentas ingresa el monto entregado", "error"); return; }
@@ -8263,14 +8253,11 @@ export function App() {
           receipt_photo_base64: photoBase64,
           amount,
           cash_register_id: registerId,
-          repuestos_usados: usados.length ? usados : undefined,
           es_fondo: esFondoMant || undefined,
           responsable: esFondoMant ? movResponsable.trim() : undefined
         })
       });
       if (!res.ok) throw new Error(await res.text());
-      if (usados.length) cargarRepCatalogo();
-      setMantRepUsados([]); setMantBodegaAbierto(false);
       if (esFondoMant) { setMovEsFondo(false); setMovResponsable(""); }
 
       setMaintenanceForm({
@@ -8286,7 +8273,7 @@ export function App() {
       });
       await refreshCaja(registerId);
       await refreshMaintenanceHistory();
-      addToast(usados.length ? "Mantenimiento registrado ✓ · repuestos descontados de bodega" : "Mantenimiento registrado ✓", "success");
+      addToast("Mantenimiento registrado ✓", "success");
     } catch (e) {
       addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error");
     }
@@ -16966,7 +16953,6 @@ export function App() {
                         campos genéricos de Descripción/Monto). */}
                     {movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && (() => {
                       const inp = { display: "block", width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 } as const;
-                      const n2 = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2));
                       // ── Buscador único: equipos = Área · Sección del catálogo de mantenimiento ──
                       const sinTildes = (t: string) => t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
                       const equipos = maintAreas.flatMap((a) => maintSectionsFor(a).map((sec) => ({ area: a, section: sec })));
@@ -16997,21 +16983,6 @@ export function App() {
                       const tecnicos = [...new Set(maintenanceHistory.map((m) => String(m.provider ?? "").trim()).filter(Boolean))].slice(0, 30);
                       const tecnicoTxt = sinTildes(maintenanceForm.provider.trim());
                       const tecnicosChips = tecnicos.filter((t) => sinTildes(t) !== tecnicoTxt && (!tecnicoTxt || sinTildes(t).startsWith(tecnicoTxt))).slice(0, 3);
-                      // ── Repuestos de bodega: solo los que existen con stock; primero los compatibles con el área ──
-                      const areaSel = maintenanceForm.area.toUpperCase();
-                      const prioridad = (r: Repuesto) => {
-                        const c = (r.compatibilidad ?? "").toUpperCase();
-                        return areaSel && c === areaSel ? 0 : !c || c === "GENERAL" ? 1 : 2;
-                      };
-                      const opcionesBodega = repCatalogo
-                        .filter((r) => r.activo && r.stock > 0 && !mantRepUsados.some((u) => u.repuesto_id === r.id))
-                        .sort((a, b) => prioridad(a) - prioridad(b) || a.nombre.localeCompare(b.nombre))
-                        .map((r) => ({ key: r.id, titulo: etiquetaRepuesto(r), detalle: `hay ${n2(r.stock)} ${r.unidad.toLowerCase()}`, etiqueta: r.compatibilidad ? etiquetaCompat(r.compatibilidad) : undefined }));
-                      const agregarDeBodega = (id: string) => {
-                        const r = repCatalogo.find((x) => x.id === id);
-                        if (r) setMantRepUsados((l) => [...l, { repuesto_id: r.id, etiqueta: etiquetaRepuesto(r), unidad: r.unidad, cantidad: "1", costo: r.costo_unitario }]);
-                      };
-                      const valorBodega = round2(mantRepUsados.reduce((s2, u) => s2 + (Number(u.cantidad) || 0) * u.costo, 0));
                       return (
                         <div className="mantCard">
                           {/* ── Equipo y trabajo ── */}
@@ -17100,87 +17071,25 @@ export function App() {
                             </div>
                           </section>
 
-                          {/* ── Repuestos de bodega (solo los que ya existen; oculto hasta pedirlo).
-                              Con «Rendir cuentas» no aplica: lo comprado se registra al liquidar. ── */}
-                          {esMatrizActiva && !movEsFondo && (
-                            <section className="mantSec">
-                              {!mantBodegaAbierto ? (
-                                <button type="button" className="mantAgregarRep" onClick={() => setMantBodegaAbierto(true)}>➕ Sacar repuesto de bodega</button>
-                              ) : (
-                                <div className="mantRepPanel">
-                                  <div className="mantSec__head">
-                                    Repuestos de bodega
-                                    {mantRepUsados.length === 0 && (
-                                      <button type="button" className="mantLink" style={{ marginLeft: "auto", textTransform: "none", letterSpacing: 0 }} onClick={() => setMantBodegaAbierto(false)}>Ocultar</button>
-                                    )}
-                                  </div>
-                                  {opcionesBodega.length > 0 || mantRepUsados.length > 0 ? (
-                                    <BuscadorCombo id="mantBodega" placeholder="Buscar repuesto en bodega…" opciones={opcionesBodega}
-                                      onElegir={agregarDeBodega} vacio="Ningún repuesto con stock coincide" autoFocus={mantRepUsados.length === 0} />
-                                  ) : (
-                                    <small className="muted">No hay repuestos con stock en bodega.</small>
-                                  )}
-                                  {mantRepUsados.length > 0 && (
-                                    <ul className="cleanList cleanList--bodega">
-                                      {mantRepUsados.map((u) => {
-                                        const r = repCatalogo.find((x) => x.id === u.repuesto_id);
-                                        const max = r?.stock ?? 0;
-                                        const cant = Number(u.cantidad) || 0;
-                                        const excede = cant > max + 1e-9;
-                                        return (
-                                          <li key={u.repuesto_id} className="cleanList__fila">
-                                            <span className="cleanList__main">
-                                              <strong>{u.etiqueta}</strong>
-                                              <small className={excede ? "cleanList__error" : "muted"}>{excede ? `Supera lo que hay en bodega (máx. ${n2(max)})` : `${money(u.costo)} c/u · quedan ${n2(round2(max - cant))}`}</small>
-                                            </span>
-                                            <input type="number" min="1" step="any" value={u.cantidad} aria-label={`Cantidad de ${u.etiqueta}`} className={`cleanList__num ${excede ? "is-error" : ""}`}
-                                              onChange={(e) => setMantRepUsados((l) => l.map((x) => x.repuesto_id === u.repuesto_id ? { ...x, cantidad: e.target.value } : x))} />
-                                            <span className="cleanList__monto">{money(cant * u.costo)}</span>
-                                            <button type="button" className="cleanList__quitar" aria-label={`Quitar ${u.etiqueta}`}
-                                              onClick={() => setMantRepUsados((l) => l.filter((x) => x.repuesto_id !== u.repuesto_id))}>✕</button>
-                                          </li>
-                                        );
-                                      })}
-                                    </ul>
-                                  )}
-                                </div>
-                              )}
-                            </section>
-                          )}
-
                           {/* ── Costos ── */}
                           <section className="mantSec">
                             <div className="mantSec__head">Costos</div>
-                            <div className="costosGrid">
-                              <div className="costosGrid__campos">
-                                <label className="mantCampo">{movEsFondo ? "Monto entregado $" : "Monto total $"} <span className="mantCampo__nota">{movEsFondo ? "dinero que lleva el responsable" : "lo que cobra el técnico"}</span>
-                                  <input type="number" step="0.01" min="0" value={maintenanceForm.amount} placeholder="0.00"
-                                    onChange={(e) => setMaintenanceForm({ ...maintenanceForm, amount: e.target.value })}
-                                    style={{ ...inp, fontWeight: 700, fontSize: 15 }} />
-                                </label>
-                                <div className="mantFila2">
-                                  <label className="mantCampo">Nº de factura
-                                    <input value={maintenanceForm.invoice_number} placeholder="Opcional" onChange={(e) => setMaintenanceForm({ ...maintenanceForm, invoice_number: e.target.value })} style={inp} />
-                                  </label>
-                                  <label className="mantCampo">Comprobante
-                                    <input type="file" accept="image/jpeg,image/png,image/jpg" style={{ display: "block", marginTop: 6, fontSize: 12 }} />
-                                  </label>
-                                </div>
-                              </div>
-                              <dl className="resumenBox" aria-live="polite">
-                                <div><dt>{movEsFondo ? "Entregado a rendir" : "Mano de obra / servicios"}</dt><dd>{money(mantManoObra)}</dd></div>
-                                {valorBodega > 0 && <div><dt>Repuestos de bodega</dt><dd>{money(valorBodega)}</dd></div>}
-                                {valorBodega > 0 && <div className="resumenBox__sub"><dt>Costo de la reparación</dt><dd>{money(round2(mantManoObra + valorBodega))}</dd></div>}
-                                <div className="resumenBox__total"><dt>Sale de caja</dt><dd>{money(mantManoObra)}</dd></div>
-                              </dl>
+                            <label className="mantCampo">{movEsFondo ? "Monto entregado $" : "Monto total $"} * <span className="mantCampo__nota">{movEsFondo ? "dinero que lleva el responsable" : "pago al técnico o taller (sale de caja)"}</span>
+                              <input type="number" step="0.01" min="0" value={maintenanceForm.amount} placeholder="0.00" required
+                                onChange={(e) => setMaintenanceForm({ ...maintenanceForm, amount: e.target.value })}
+                                style={{ ...inp, fontWeight: 700, fontSize: 15 }} />
+                            </label>
+                            <div className="mantFila2">
+                              <label className="mantCampo">Nº de factura
+                                <input value={maintenanceForm.invoice_number} placeholder="Opcional" onChange={(e) => setMaintenanceForm({ ...maintenanceForm, invoice_number: e.target.value })} style={inp} />
+                              </label>
+                              <label className="mantCampo">Comprobante
+                                <input type="file" accept="image/jpeg,image/png,image/jpg" style={{ display: "block", marginTop: 6, fontSize: 12 }} />
+                              </label>
                             </div>
                             <div className={`mantFondo ${movEsFondo ? "is-on" : ""}`}>
                               <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", margin: 0 }}>
-                                <input type="checkbox" checked={movEsFondo} onChange={(e) => {
-                                  setMovEsFondo(e.target.checked);
-                                  // El fondo no saca repuestos de bodega: lo comprado se registra al liquidar.
-                                  if (e.target.checked) { setMantRepUsados([]); setMantBodegaAbierto(false); }
-                                }} style={{ width: "auto" }} />
+                                <input type="checkbox" checked={movEsFondo} onChange={(e) => setMovEsFondo(e.target.checked)} style={{ width: "auto" }} />
                                 Rendir cuentas (fondo provisional)
                               </label>
                               {movEsFondo && (
@@ -17534,7 +17443,7 @@ export function App() {
                     )}
                     <button className="primary"
                       disabled={CASH_REUSE[movCategory] === "pilado" || CASH_REUSE[movCategory] === "fomento" || (movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !mantPuedeGuardar)}
-                      title={movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !mantPuedeGuardar ? "Ingresa el monto del técnico o añade un repuesto de bodega" : undefined}
+                      title={movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !mantPuedeGuardar ? "Ingresa el monto total" : undefined}
                       style={{ width: "100%", padding: "10px 0", marginTop: 8 }}>💾 Registrar movimiento</button>
                   </form>
                 )}

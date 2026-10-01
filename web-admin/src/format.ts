@@ -54,7 +54,7 @@ export function categoryLabel(cat: string): string {
     COBRO_MAQUILA: "Cobro maquila",
     OTRO_INGRESO: "Otro ingreso",
     COMPRA_SACOS: "Compra de sacos",
-    MANTENIMIENTO_EQUIPO: "Mantenimiento de equipo",
+    MANTENIMIENTO_EQUIPO: "Mantenimiento Planta",
     CUENTAS_PAGAR: "Cuentas por pagar",
     FOMENTOS: "Fomentos",
     // Categorías comerciales de SOCIOS (F: caja por tipo de entidad)
