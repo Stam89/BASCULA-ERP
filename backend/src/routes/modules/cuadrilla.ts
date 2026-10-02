@@ -6,6 +6,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { registrarSacosRecuperados, revertirSacosRecuperados } from "../../services/sacos.js";
 
 export const cuadrillaRouter = Router();
 
@@ -822,11 +823,55 @@ function parseRange(query: unknown): { from: string; to: string } {
   };
 }
 
+// ── CAMBIO DE SACO: el saco recuperado y su destino ─────────────────────────
+// Solo en la actividad «CAMBIO DE SACO». La cantidad es la del registro (N.º de
+// sacos). Destino BODEGA → los sacos entran al inventario como «<tipo> (Usado)»
+// (aparte de los nuevos); DESCARTE → solo queda anotado. Todo opcional.
+const esCambioDeSaco = (activityName: string) =>
+  activityName.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().includes("CAMBIO DE SACO");
+const sacoRecuperadoSchema = {
+  // Tipo de saco recuperado: id del catálogo de sacos (Flor 100 LB…).
+  marca_saco_recuperado: z.string().uuid().optional().nullable(),
+  destino_saco: z.enum(["BODEGA", "DESCARTE"]).optional().nullable()
+};
+
+async function guardarSacoRecuperado(
+  client: PoolClient,
+  e: { id: string; activityName: string; cantidad: number; worker: string; marcaId: string | null | undefined; destino: string | null | undefined }
+) {
+  if (!esCambioDeSaco(e.activityName) || (!e.marcaId && !e.destino)) {
+    await client.query(
+      "UPDATE cuadrilla_entries SET saco_recuperado_id = NULL, marca_saco_recuperado = NULL, destino_saco = NULL WHERE id = $1",
+      [e.id]
+    );
+    return null;
+  }
+  if (e.destino === "BODEGA" && !e.marcaId) throw new ApiError(400, "Elige la marca del saco recuperado para guardarlo en bodega.");
+  let etiqueta: string | null = null;
+  if (e.marcaId) {
+    const saco = await client.query("SELECT tipo FROM sack_inventory WHERE id = $1 AND accionista_id IS NULL", [e.marcaId]);
+    if (!saco.rows[0]) throw new ApiError(404, "Ese saco no está en el catálogo de sacos de la planta.");
+    etiqueta = saco.rows[0].tipo;
+  }
+  await client.query(
+    "UPDATE cuadrilla_entries SET saco_recuperado_id = $2, marca_saco_recuperado = $3, destino_saco = $4 WHERE id = $1",
+    [e.id, e.marcaId ?? null, etiqueta, e.destino ?? null]
+  );
+  const ingreso = e.destino === "BODEGA"
+    ? await registrarSacosRecuperados(client, {
+      sackId: e.marcaId!, cantidad: e.cantidad, entryId: e.id,
+      concepto: `Recuperado en cambio de saco${e.worker ? ` · ${e.worker}` : ""}`
+    })
+    : null;
+  return { marca_saco_recuperado: etiqueta, destino_saco: e.destino ?? null, ingreso_bodega: ingreso };
+}
+
 cuadrillaRouter.get("/entries", asyncRoute(async (req, res) => {
   const { from, to } = parseRange(req.query);
   const result = await pool.query(
     `SELECT id, work_date, activity_id, activity_name, worker_name, quantity, unit_rate, subtotal, notes,
-            origen, referencia_id, tunnel_number, momento
+            origen, referencia_id, tunnel_number, momento,
+            saco_recuperado_id, marca_saco_recuperado, destino_saco
      FROM cuadrilla_entries
      WHERE work_date BETWEEN $1 AND $2
      ORDER BY work_date DESC, created_at DESC`,
@@ -843,7 +888,8 @@ cuadrillaRouter.post("/entries", asyncRoute(async (req, res) => {
     worker_name: z.string().optional().default(""),
     quantity: z.number().positive(),
     notes: z.string().optional(),
-    created_by: z.string().uuid().optional()
+    created_by: z.string().uuid().optional(),
+    ...sacoRecuperadoSchema
   }).parse(req.body);
 
   const socioId = await reqCuadrillaSocioId(req);
@@ -853,24 +899,31 @@ cuadrillaRouter.post("/entries", asyncRoute(async (req, res) => {
   const rate = Number(activity.unit_rate);
   const subtotal = round2(body.quantity * rate);
 
-  const result = await pool.query(
-    `INSERT INTO cuadrilla_entries
-       (work_date, activity_id, activity_name, worker_name, quantity, unit_rate, subtotal, notes, created_by)
-     VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, $9)
-     RETURNING id, work_date, activity_name, worker_name, quantity, unit_rate, subtotal, notes`,
-    [
-      body.work_date ?? null,
-      activity.id,
-      activity.name,
-      body.worker_name.trim(),
-      body.quantity,
-      rate,
-      subtotal,
-      body.notes ?? null,
-      body.created_by ?? null
-    ]
-  );
-  res.status(201).json(result.rows[0]);
+  const out = await inTransaction(async (client) => {
+    const result = await client.query(
+      `INSERT INTO cuadrilla_entries
+         (work_date, activity_id, activity_name, worker_name, quantity, unit_rate, subtotal, notes, created_by)
+       VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id, work_date, activity_name, worker_name, quantity, unit_rate, subtotal, notes`,
+      [
+        body.work_date ?? null,
+        activity.id,
+        activity.name,
+        body.worker_name.trim(),
+        body.quantity,
+        rate,
+        subtotal,
+        body.notes ?? null,
+        body.created_by ?? null
+      ]
+    );
+    const saco = await guardarSacoRecuperado(client, {
+      id: result.rows[0].id, activityName: activity.name, cantidad: body.quantity, worker: body.worker_name.trim(),
+      marcaId: body.marca_saco_recuperado, destino: body.destino_saco
+    });
+    return { ...result.rows[0], ...(saco ?? {}) };
+  });
+  res.status(201).json(out);
 }));
 
 cuadrillaRouter.delete("/entries/:id", asyncRoute(async (req, res) => {
@@ -882,7 +935,10 @@ cuadrillaRouter.delete("/entries/:id", asyncRoute(async (req, res) => {
     const origen = current.rows[0].origen === "VENTA" ? "Ventas" : `Secadoras (Túnel ${current.rows[0].tunnel_number ?? "?"})`;
     throw new ApiError(409, `Este registro se generó automáticamente desde ${origen}. Corrígelo en el módulo de origen.`);
   }
-  await pool.query("DELETE FROM cuadrilla_entries WHERE id = $1", [req.params.id]);
+  await inTransaction(async (client) => {
+    await revertirSacosRecuperados(client, String(req.params.id), "Reverso: se eliminó el registro de cambio de saco");
+    await client.query("DELETE FROM cuadrilla_entries WHERE id = $1", [req.params.id]);
+  });
   res.status(204).end();
 }));
 
@@ -893,10 +949,12 @@ cuadrillaRouter.put("/entries/:id", asyncRoute(async (req, res) => {
     work_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     activity_id: z.string().uuid(),
     worker_name: z.string().optional().default(""),
-    quantity: z.number().positive()
+    quantity: z.number().positive(),
+    // Sin enviar = se conservan los del registro (clientes que no los conocen).
+    ...sacoRecuperadoSchema
   }).parse(req.body);
 
-  const current = await pool.query("SELECT origen, tunnel_number FROM cuadrilla_entries WHERE id = $1", [req.params.id]);
+  const current = await pool.query("SELECT origen, tunnel_number, saco_recuperado_id, destino_saco FROM cuadrilla_entries WHERE id = $1", [req.params.id]);
   if (!current.rowCount) throw new ApiError(404, "Registro no encontrado");
   if (current.rows[0].origen === "SECADORA" || current.rows[0].origen === "VENTA") {
     throw new ApiError(409, "Este registro es automático. Para modificarlo, corrija el movimiento de origen.");
@@ -907,16 +965,28 @@ cuadrillaRouter.put("/entries/:id", asyncRoute(async (req, res) => {
   const rate = Number(activity.unit_rate);
   const subtotal = round2(body.quantity * rate);
 
-  const result = await pool.query(
-    `UPDATE cuadrilla_entries
-     SET work_date = COALESCE($2::date, work_date),
-         activity_id = $3, activity_name = $4, worker_name = $5,
-         quantity = $6, unit_rate = $7, subtotal = $8
-     WHERE id = $1 AND origen NOT IN ('SECADORA', 'VENTA')
-     RETURNING id, work_date, activity_name, worker_name, quantity, unit_rate, subtotal, notes, origen, referencia_id, tunnel_number, momento`,
-    [req.params.id, body.work_date ?? null, activity.id, activity.name, body.worker_name.trim(), body.quantity, rate, subtotal]
-  );
-  res.json(result.rows[0]);
+  const out = await inTransaction(async (client) => {
+    const result = await client.query(
+      `UPDATE cuadrilla_entries
+       SET work_date = COALESCE($2::date, work_date),
+           activity_id = $3, activity_name = $4, worker_name = $5,
+           quantity = $6, unit_rate = $7, subtotal = $8
+       WHERE id = $1 AND origen NOT IN ('SECADORA', 'VENTA')
+       RETURNING id, work_date, activity_name, worker_name, quantity, unit_rate, subtotal, notes, origen, referencia_id, tunnel_number, momento`,
+      [req.params.id, body.work_date ?? null, activity.id, activity.name, body.worker_name.trim(), body.quantity, rate, subtotal]
+    );
+    if (!result.rows[0]) return result.rows[0];
+    // Sacos recuperados: se revierte lo que entró y se vuelve a registrar con la
+    // cantidad / marca / destino actuales (o se quita si ya no es cambio de saco).
+    await revertirSacosRecuperados(client, result.rows[0].id, "Reverso: se editó el registro de cambio de saco");
+    const saco = await guardarSacoRecuperado(client, {
+      id: result.rows[0].id, activityName: activity.name, cantidad: body.quantity, worker: body.worker_name.trim(),
+      marcaId: body.marca_saco_recuperado !== undefined ? body.marca_saco_recuperado : current.rows[0].saco_recuperado_id,
+      destino: body.destino_saco !== undefined ? body.destino_saco : current.rows[0].destino_saco
+    });
+    return { ...result.rows[0], ...(saco ?? {}) };
+  });
+  res.json(out);
 }));
 
 // ── Resumen por persona (total ganado, anticipos pendientes, neto) ──────────

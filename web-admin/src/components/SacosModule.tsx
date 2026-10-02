@@ -12,7 +12,8 @@ export type Saco = {
   id: string;
   tipo: string;
   stock: number | string;
-  categoria?: "MARCA" | "SUBPRODUCTO" | "GENERICO" | "PROPIO" | string;
+  // USADO = recuperados en un «cambio de saco» (Nómina → Cuadrilla), aparte de los nuevos.
+  categoria?: "MARCA" | "SUBPRODUCTO" | "GENERICO" | "PROPIO" | "USADO" | string;
   marca?: string | null;
   calidad?: string | null;
   peso_lb?: number | string | null;
@@ -90,6 +91,7 @@ function etiquetaCalidad(c?: string | null) {
 function filaDe(s: Saco): string {
   if ((s.categoria === "MARCA" || s.categoria === "PROPIO") && s.marca) return s.marca;
   if (s.categoria === "GENERICO") return "Sin marca (genérico)";
+  if (s.categoria === "USADO") return `${s.marca ?? "Sin marca"} (usado)`;
   return s.tipo;
 }
 
@@ -102,9 +104,10 @@ export function sobranteLb(qq: number, pesoPresentacion: number): number {
   return s > 0.01 ? s : 0;
 }
 
-const ORDEN_GRUPO = ["Mis sacos", "Arroz 0.11", "Arroz Corriente", "Otras marcas", "Subproductos", "Genéricos"];
+const ORDEN_GRUPO = ["Mis sacos", "Arroz 0.11", "Arroz Corriente", "Otras marcas", "Subproductos", "Genéricos", "Usados (segunda)"];
 function grupoDe(s: Saco): string {
   if (s.categoria === "PROPIO") return "Mis sacos";
+  if (s.categoria === "USADO") return "Usados (segunda)";
   if (s.categoria === "SUBPRODUCTO") return "Subproductos";
   if (s.categoria === "GENERICO") return "Genéricos";
   return etiquetaCalidad(s.calidad) ?? "Otras marcas";
@@ -519,7 +522,7 @@ export function SacosCatalogoConfig({
                 <tr key={s.id} style={{ borderTop: "1px solid #f1f5f9", opacity: inactivo ? 0.55 : 1 }}>
                   <td style={{ padding: "7px 10px", fontWeight: 700 }}>
                     {s.tipo}
-                    {s.categoria !== "MARCA" && s.categoria !== "PROPIO" && <span style={{ marginLeft: 6, fontSize: 10.5, color: "#64748b", fontWeight: 600 }}>{s.categoria === "SUBPRODUCTO" ? "subproducto" : "genérico"}</span>}
+                    {s.categoria !== "MARCA" && s.categoria !== "PROPIO" && <span style={{ marginLeft: 6, fontSize: 10.5, color: "#64748b", fontWeight: 600 }}>{s.categoria === "SUBPRODUCTO" ? "subproducto" : s.categoria === "USADO" ? "usado (segunda)" : "genérico"}</span>}
                     {inactivo && <span style={{ marginLeft: 6, fontSize: 10.5, color: "#b91c1c" }}>desactivado</span>}
                   </td>
                   {!esPropio && <td style={{ padding: "7px 10px", color: "#475569" }}>{etiquetaCalidad(s.calidad) ?? "—"}</td>}

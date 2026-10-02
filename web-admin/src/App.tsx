@@ -526,7 +526,12 @@ type ReciboSemanal = {
 };
 
 type CuadrillaActivity = { id: string; name: string; unit_rate: number; is_active: boolean; categoria?: string };
-type CuadrillaEntry = { id: string; work_date: string; activity_id?: string | null; activity_name: string; worker_name: string; quantity: number; unit_rate: number; subtotal: number; origen?: string; referencia_id?: string | null; tunnel_number?: number | null; momento?: string | null };
+type CuadrillaEntry = { id: string; work_date: string; activity_id?: string | null; activity_name: string; worker_name: string; quantity: number; unit_rate: number; subtotal: number; origen?: string; referencia_id?: string | null; tunnel_number?: number | null; momento?: string | null;
+  /** CAMBIO DE SACO: tipo de saco recuperado (catálogo), su nombre y su destino (BODEGA = usados / DESCARTE). */
+  saco_recuperado_id?: string | null; marca_saco_recuperado?: string | null; destino_saco?: "BODEGA" | "DESCARTE" | null };
+/** ¿La actividad de cuadrilla es un «CAMBIO DE SACO»? (habilita el saco recuperado). */
+const esActividadCambioSaco = (nombre?: string | null) =>
+  !!nombre && nombre.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().includes("CAMBIO DE SACO");
 type CuadrillaSummaryRow = { worker_name: string; entradas: number; total: number; pagado?: number; anticipos: number; neto: number; oldest_pending?: string | null; pending_count?: number };
 // Personal administrativo (sueldo fijo quincenal), por accionista.
 type AdminStaff = { id: string; cargo: string; worker_name: string; base_salary: number; is_active?: boolean; periodo?: string | null; corte?: string | null };
@@ -2880,7 +2885,8 @@ export function App() {
   const [cuadNeedsWorker, setCuadNeedsWorker] = useState(false);          // mostrar selector cuando hay varias
   const [cuadGroupModalOpen, setCuadGroupModalOpen] = useState(false);    // pop-up de creación rápida de cuadrilla
   const [cuadGroupName, setCuadGroupName] = useState("");
-  const [cuadEntryForm, setCuadEntryForm] = useState({ work_date: nominaToday, activity_id: "", worker_name: "", quantity: "", anticipo: "" });
+  // saco_recuperado_id / destino_saco: solo con la actividad «CAMBIO DE SACO» (si no, vacíos).
+  const [cuadEntryForm, setCuadEntryForm] = useState({ work_date: nominaToday, activity_id: "", worker_name: "", quantity: "", anticipo: "", saco_recuperado_id: "", destino_saco: "" as "" | "BODEGA" | "DESCARTE" });
   const [editingCuadId, setEditingCuadId] = useState<string | null>(null); // id del registro manual en edición
   const [cuadAdvanceForm, setCuadAdvanceForm] = useState({ worker_name: "", amount: "", concept: "" });
   const [newActivityForm, setNewActivityForm] = useState({ name: "", unit_rate: "" });
@@ -5200,15 +5206,26 @@ export function App() {
     // endpoint que "Resumen y anticipos"), así el neto a pagar ya lo descuenta.
     // Requiere nombre del trabajador para poder asociarlo.
     // Edición de un registro MANUAL existente: solo actualiza (sin anticipo).
+    // CAMBIO DE SACO: saco recuperado (la cantidad es el N.º de sacos) y su destino.
+    const esCambio = esActividadCambioSaco(cuadActivities.find((a) => a.id === cuadEntryForm.activity_id)?.name);
+    if (esCambio && cuadEntryForm.destino_saco === "BODEGA" && !cuadEntryForm.saco_recuperado_id) {
+      addToast("Elige la marca del saco recuperado para guardarlo en bodega", "error"); return;
+    }
+    const sacoRecuperado = {
+      marca_saco_recuperado: esCambio ? cuadEntryForm.saco_recuperado_id || null : null,
+      destino_saco: esCambio ? cuadEntryForm.destino_saco || null : null
+    };
     if (editingCuadId) {
       await apiPut(`/cuadrilla/entries/${editingCuadId}`, {
         work_date: cuadEntryForm.work_date,
         activity_id: cuadEntryForm.activity_id,
         worker_name: cuadEntryForm.worker_name.trim(),
-        quantity: qty
+        quantity: qty,
+        ...sacoRecuperado
       });
       setEditingCuadId(null);
-      setCuadEntryForm({ ...cuadEntryForm, activity_id: "", worker_name: "", quantity: "", anticipo: "" });
+      setCuadEntryForm({ ...cuadEntryForm, activity_id: "", worker_name: "", quantity: "", anticipo: "", saco_recuperado_id: "", destino_saco: "" });
+      if (esCambio) refreshSacks().catch(() => undefined);
       addToast("Registro actualizado", "success");
       await refreshCuadrilla();
       return;
@@ -5217,11 +5234,12 @@ export function App() {
       addToast("Para registrar un anticipo, indica la cuadrilla/trabajador", "error");
       return;
     }
-    await apiPost("/cuadrilla/entries", {
+    const creado = await apiPost<{ ingreso_bodega?: { tipo: string; cantidad: number } | null }>("/cuadrilla/entries", {
       work_date: cuadEntryForm.work_date,
       activity_id: cuadEntryForm.activity_id,
       worker_name: cuadEntryForm.worker_name.trim(),
-      quantity: qty
+      quantity: qty,
+      ...sacoRecuperado
     });
     if (anticipo > 0) {
       await apiPost("/cuadrilla/advances", {
@@ -5231,7 +5249,9 @@ export function App() {
       });
     }
     setCuadEntryForm({ ...cuadEntryForm, worker_name: "", quantity: "", anticipo: "" });
-    addToast(anticipo > 0 ? "Registro + anticipo agregados" : "Registro agregado", "success");
+    const ingresoSacos = creado.ingreso_bodega ? ` · ♻️ ${creado.ingreso_bodega.cantidad} ${creado.ingreso_bodega.tipo} a bodega` : "";
+    if (ingresoSacos) refreshSacks().catch(() => undefined);
+    addToast(`${anticipo > 0 ? "Registro + anticipo agregados" : "Registro agregado"}${ingresoSacos}`, "success");
     await refreshCuadrilla();
   }
 
@@ -5244,12 +5264,14 @@ export function App() {
       activity_id: en.activity_id ?? "",
       worker_name: en.worker_name ?? "",
       quantity: String(en.quantity ?? ""),
-      anticipo: ""
+      anticipo: "",
+      saco_recuperado_id: en.saco_recuperado_id ?? "",
+      destino_saco: en.destino_saco ?? ""
     });
   }
   function cancelEditCuad() {
     setEditingCuadId(null);
-    setCuadEntryForm({ ...cuadEntryForm, activity_id: "", worker_name: "", quantity: "", anticipo: "" });
+    setCuadEntryForm({ ...cuadEntryForm, activity_id: "", worker_name: "", quantity: "", anticipo: "", saco_recuperado_id: "", destino_saco: "" });
   }
   function cuadEntryEsAuto(en: CuadrillaEntry) {
     return en.origen === "SECADORA" || en.origen === "VENTA";
@@ -5265,10 +5287,12 @@ export function App() {
     addToast("Este registro es automático. Para corregirlo, anula o corrige el movimiento de origen.", "error");
   }
 
-  async function deleteCuadEntry(id: string) {
-    await apiFetch(`/cuadrilla/entries/${id}`, { method: "DELETE" });
-    addToast("Registro eliminado", "success");
+  async function deleteCuadEntry(id: string, conSacosEnBodega = false) {
+    const r = await apiFetch(`/cuadrilla/entries/${id}`, { method: "DELETE" });
+    if (!r.ok) throw new Error(await r.json().then((j) => j.error || j.message).catch(() => "No se pudo eliminar el registro"));
+    addToast(conSacosEnBodega ? "Registro eliminado · los sacos usados que había sumado salieron de bodega" : "Registro eliminado", "success");
     await refreshCuadrilla();
+    if (conSacosEnBodega) refreshSacks().catch(() => undefined);
   }
 
   async function submitCuadAdvance(e: FormEvent<HTMLFormElement>) {
@@ -17518,7 +17542,7 @@ export function App() {
                             {(() => {
                               const grupos = new Map<string, SackInventory[]>();
                               for (const sk of sacosDelActivo.filter((x) => x.activo !== false)) {
-                                const g = sk.categoria === "SUBPRODUCTO" ? "Subproductos" : sk.categoria === "GENERICO" ? "Genéricos (sin marca)" : sk.categoria === "PROPIO" ? "Mis sacos"
+                                const g = sk.categoria === "SUBPRODUCTO" ? "Subproductos" : sk.categoria === "GENERICO" ? "Genéricos (sin marca)" : sk.categoria === "PROPIO" ? "Mis sacos" : sk.categoria === "USADO" ? "Usados (segunda)"
                                   : `${sk.marca ?? "Marca"}${sk.calidad === "0.11" ? " · 0.11" : sk.calidad === "CORRIENTE" ? " · Corriente" : ""}`;
                                 grupos.set(g, [...(grupos.get(g) ?? []), sk]);
                               }
@@ -20372,7 +20396,11 @@ export function App() {
                         <input type="date" value={cuadEntryForm.work_date} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, work_date: e.target.value })} />
                       </label>
                       <label><span>Actividad (tarifa por saco/unidad) {cfgLink("Actividades y tarifas", "Actividades y tarifas")}</span>
-                        <select value={cuadEntryForm.activity_id} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, activity_id: e.target.value })}>
+                        <select value={cuadEntryForm.activity_id} onChange={(e) => {
+                          const sigue = esActividadCambioSaco(cuadActivities.find((a) => a.id === e.target.value)?.name);
+                          setCuadEntryForm({ ...cuadEntryForm, activity_id: e.target.value, ...(sigue ? {} : { saco_recuperado_id: "", destino_saco: "" }) });
+                          if (sigue && !sackInventory.length) refreshSacks().catch(() => undefined);
+                        }}>
                           <option value="">Seleccione</option>
                           {cuadActivities.map((a) => (<option key={a.id} value={a.id}>{a.name} — ${Number(a.unit_rate)}</option>))}
                         </select>
@@ -20383,6 +20411,45 @@ export function App() {
                       <label><span>N.º de sacos (cantidad)</span>
                         <input type="number" step="0.01" min="0" value={cuadEntryForm.quantity} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, quantity: e.target.value })} />
                       </label>
+                      {/* CAMBIO DE SACO: qué saco se recupera y a dónde va (no se pierde el
+                          rastro del activo). La cantidad es el N.º de sacos de arriba. */}
+                      {esActividadCambioSaco(selAct?.name) && (() => {
+                        const grupos = new Map<string, SackInventory[]>();
+                        for (const sk of sackInventory.filter((x) => x.activo !== false && (x.categoria === "MARCA" || x.categoria === "GENERICO"))) {
+                          const g = sk.categoria === "GENERICO" ? "Genéricos (sin marca)" : sk.marca ?? "Marca";
+                          grupos.set(g, [...(grupos.get(g) ?? []), sk]);
+                        }
+                        const elegido = sackInventory.find((sk) => sk.id === cuadEntryForm.saco_recuperado_id);
+                        const n = Number(cuadEntryForm.quantity) || 0;
+                        return (
+                          <div className="sacoRecuperado">
+                            <div className="sacoRecuperado__head">♻️ Sacos recuperados <span>{n > 0 ? `${n} saco(s) · el N.º de sacos` : "la cantidad es el N.º de sacos"}</span></div>
+                            <label><span>Marca del Saco Recuperado</span>
+                              <select value={cuadEntryForm.saco_recuperado_id} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, saco_recuperado_id: e.target.value })}>
+                                <option value="">— Elige la marca —</option>
+                                {[...grupos.entries()].map(([g, items]) => (
+                                  <optgroup key={g} label={g}>
+                                    {items.map((sk) => <option key={sk.id} value={sk.id}>{sk.tipo}</option>)}
+                                  </optgroup>
+                                ))}
+                              </select>
+                            </label>
+                            <label><span>Destino / Estado</span>
+                              <select value={cuadEntryForm.destino_saco} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, destino_saco: e.target.value as "" | "BODEGA" | "DESCARTE" })}>
+                                <option value="">— Sin registrar —</option>
+                                <option value="BODEGA">Guardar en Bodega (Segunda/Usados)</option>
+                                <option value="DESCARTE">Descarte / Basura</option>
+                              </select>
+                            </label>
+                            {cuadEntryForm.destino_saco === "BODEGA" && (
+                              <small className="sacoRecuperado__nota">
+                                {elegido ? `Suma ${n > 0 ? n : "los"} saco(s) a «${elegido.tipo} (Usado)» en el inventario de sacos, aparte de los nuevos.` : "Elige la marca para sumarlos al inventario de sacos usados."}
+                              </small>
+                            )}
+                            {cuadEntryForm.destino_saco === "DESCARTE" && <small className="sacoRecuperado__nota">Queda anotado; no entra al inventario.</small>}
+                          </div>
+                        );
+                      })()}
                       {!editingCuadId && (
                         <label><span>Anticipo / Adelanto ($) <small className="muted">— opcional</small></span>
                           <input type="number" step="0.01" min="0" value={cuadEntryForm.anticipo} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, anticipo: e.target.value })} placeholder="0.00" />
@@ -20435,6 +20502,11 @@ export function App() {
                                     ) : (
                                       <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>({en.activity_name})</span>
                                     )}
+                                    {en.destino_saco && (
+                                      <small className={`sacoRecuperado__tag ${en.destino_saco === "BODEGA" ? "is-bodega" : ""}`}>
+                                        ♻️ {en.marca_saco_recuperado ?? "Saco"} → {en.destino_saco === "BODEGA" ? "bodega (usados)" : "descarte"}
+                                      </small>
+                                    )}
                                   </td>
                                   <td>{en.worker_name || "—"}</td>
                                   <td className="num">${Number(en.unit_rate)}</td>
@@ -20446,7 +20518,7 @@ export function App() {
                                     ) : (
                                       <>
                                         <button type="button" className="btnGhost" onClick={() => editCuadEntry(en)}>Editar</button>
-                                        <button type="button" className="btnGhost" onClick={() => deleteCuadEntry(en.id).catch((err) => addToast(err.message, "error"))}>Eliminar</button>
+                                        <button type="button" className="btnGhost" onClick={() => deleteCuadEntry(en.id, en.destino_saco === "BODEGA").catch((err) => addToast(err.message, "error"))}>Eliminar</button>
                                       </>
                                     )}
                                   </td>

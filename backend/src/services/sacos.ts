@@ -117,6 +117,74 @@ export async function sacosCandidatos(
   return generico.rowCount ? { modo: "GENERICO", sacos: generico.rows } : null;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SACOS RECUPERADOS (Nómina → Cuadrilla, actividad «CAMBIO DE SACO»): los sacos
+// que se sacan al cambiarle el saco al arroz. Si se guardan en bodega (segunda /
+// usados) entran a un tipo APARTE «<tipo> (Usado)», categoría USADO, con la misma
+// marca/calidad/peso pero SIN product_id: así nunca se mezclan con los nuevos ni
+// los toma el empaque de una venta (sacosCandidatos busca por product_id).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** El tipo «(Usado)» de un saco del catálogo de la planta (lo crea si no existe). */
+export async function sacoUsadoDe(client: PoolClient, sackId: string): Promise<{ id: string; tipo: string }> {
+  const o = (await client.query(
+    "SELECT id, tipo, marca, calidad, peso_lb, categoria FROM sack_inventory WHERE id = $1 AND accionista_id IS NULL",
+    [sackId]
+  )).rows[0];
+  if (!o) throw new ApiError(404, "Ese saco no está en el catálogo de sacos de la planta.");
+  if (o.categoria === "USADO") return { id: o.id, tipo: o.tipo };
+  const tipo = `${String(o.tipo).trim()} (Usado)`;
+  const ya = (await client.query(
+    "SELECT id, tipo, activo FROM sack_inventory WHERE categoria = 'USADO' AND accionista_id IS NULL AND lower(tipo) = lower($1) LIMIT 1",
+    [tipo]
+  )).rows[0];
+  if (ya) {
+    if (!ya.activo) await client.query("UPDATE sack_inventory SET activo = true, updated_at = now() WHERE id = $1", [ya.id]);
+    return { id: ya.id, tipo: ya.tipo };
+  }
+  return (await client.query(
+    `INSERT INTO sack_inventory (tipo, stock, categoria, marca, calidad, peso_lb, product_id, stock_minimo, precio_compra_default, precio_venta_cliente, accionista_id)
+     VALUES ($1, 0, 'USADO', $2, $3, $4, NULL, 0, 0, 0, NULL) RETURNING id, tipo`,
+    [tipo, o.marca, o.calidad, o.peso_lb]
+  )).rows[0];
+}
+
+/** ENTRADA de sacos recuperados a su tipo «(Usado)», enlazada al registro de cuadrilla. */
+export async function registrarSacosRecuperados(
+  client: PoolClient,
+  o: { sackId: string; cantidad: number; entryId: string; concepto: string }
+): Promise<{ saco_usado_id: string; tipo: string; cantidad: number; stock: number }> {
+  const usado = await sacoUsadoDe(client, o.sackId);
+  const cantidad = round2(o.cantidad);
+  const upd = await client.query(
+    "UPDATE sack_inventory SET stock = stock + $2, updated_at = now() WHERE id = $1 RETURNING stock::float AS stock",
+    [usado.id, cantidad]
+  );
+  await client.query(
+    "INSERT INTO sack_movements (sack_id, movement, cantidad, concepto, ref_cuadrilla) VALUES ($1, 'ENTRADA', $2, $3, $4)",
+    [usado.id, cantidad, o.concepto, o.entryId]
+  );
+  return { saco_usado_id: usado.id, tipo: usado.tipo, cantidad, stock: Number(upd.rows[0]?.stock ?? 0) };
+}
+
+/** Revierte (SALIDA) los sacos usados que entraron por un registro de cuadrilla. Idempotente. */
+export async function revertirSacosRecuperados(client: PoolClient, entryId: string, motivo: string): Promise<number> {
+  const netos = await client.query(
+    `SELECT sack_id, SUM(CASE WHEN movement = 'ENTRADA' THEN cantidad ELSE -cantidad END)::float AS neto
+       FROM sack_movements WHERE ref_cuadrilla = $1
+      GROUP BY sack_id HAVING SUM(CASE WHEN movement = 'ENTRADA' THEN cantidad ELSE -cantidad END) > 0`,
+    [entryId]
+  );
+  for (const r of netos.rows) {
+    await client.query("UPDATE sack_inventory SET stock = stock - $2, updated_at = now() WHERE id = $1", [r.sack_id, r.neto]);
+    await client.query(
+      "INSERT INTO sack_movements (sack_id, movement, cantidad, concepto, ref_cuadrilla) VALUES ($1, 'SALIDA', $2, $3, $4)",
+      [r.sack_id, r.neto, motivo, entryId]
+    );
+  }
+  return netos.rowCount ?? 0;
+}
+
 type MovRef = { refOrder?: string | null; refBatch?: string | null };
 
 /** Descuenta `cantidad` sacos (SALIDA en el kárdex). Permite saldo negativo. */
