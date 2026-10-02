@@ -1,11 +1,9 @@
-// Nómina de Operadores de Campo (cosechadoras y transporte/fletes) y el
-// mantenedor de Tarifas por operador+máquina que la alimenta.
-import { useCallback, useEffect, useState } from "react";
+// Nómina de Operadores de Campo (cosechadoras y transporte/fletes) — MATRIZ de
+// entrada masiva estilo Excel — y el mantenedor de Tarifas por operador+máquina.
+import { memo, useCallback, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { apiFetch, apiGet, apiPost } from "../api";
 import { money } from "../format";
 
-const hoy = () => new Date().toISOString().slice(0, 10);
-const primeroDeMes = () => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().slice(0, 10); };
 const qqFmt = (n: number) => n.toLocaleString("es-EC", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 
 async function req(path: string, method: "PATCH" | "DELETE", body?: unknown): Promise<unknown> {
@@ -24,11 +22,21 @@ type Unidad = "QQ" | "VIAJE" | "DIA";
 const unidadLabel = (u: Unidad) => u === "QQ" ? "$ / QQ" : u === "VIAJE" ? "$ / Viaje" : "$ / Día";
 const unidadCorta = (u: Unidad) => u === "QQ" ? "QQ" : u === "VIAJE" ? "viaje" : "día";
 type Tarifa = { id: string; operador: string; activo_id: string; tarifa: number; unidad: Unidad; activo: boolean; activo_nombre: string; activo_tipo: string };
-type NominaGrupo = {
-  operador: string; activo_id: string; activo_nombre: string; activo_tipo: string;
-  viajes: number; qq: number; dias: number; base: number; desde: string; hasta: string;
-  unidad: Unidad; tarifa: number | null; sin_tarifa: boolean; total: number | null; parte_ids: string[];
+// Fila de la matriz (GET /campo/nomina-operadores/matriz): operador + máquina con
+// sus partes pendientes del periodo (o sin partes, para bonos) y sus vales por rendir.
+type Area = "cosechadora" | "transporte" | "otro";
+type FilaMatriz = {
+  clave: string; operador: string; activo_id: string | null; activo_nombre: string | null; activo_tipo: string | null; area: Area;
+  unidad: Unidad; tarifa: number | null; qq: number; viajes: number; dias: number; sugerido: number | null;
+  sin_tarifa: boolean; parte_ids: string[]; desde: string | null; hasta: string | null;
+  vales: Array<{ id: string; fecha: string; concepto: string | null; monto: number }>;
 };
+// Lo que el usuario escribió en la fila (vacío = valor sugerido).
+type Edicion = { base?: string; extras?: string; descuentos?: string; nota?: string; excluir?: boolean };
+type Columna = "base" | "extras" | "descuentos" | "nota";
+const AREA_LABEL: Record<Area, string> = { cosechadora: "🌾 Cosechadora", transporte: "🚛 Transporte", otro: "Sin máquina" };
+const r2 = (n: number) => Math.round(n * 100) / 100;
+const numDe = (v: string | undefined) => { const n = Number(v); return v !== undefined && v.trim() !== "" && Number.isFinite(n) ? n : 0; };
 
 // ── Mantenedor de Tarifas de Operadores (usado en Configuración) ─────────────
 export function TarifasOperadorCatalogo({ activos, operadores, onError, onChanged }: {
@@ -135,29 +143,113 @@ export function TarifasOperadorCatalogo({ activos, operadores, onError, onChange
   );
 }
 
-// ── Vista principal: Nómina de Operadores ────────────────────────────────────
+// ── Vista principal: MATRIZ de Nómina de Operadores (entrada masiva) ─────────
+// Periodo de pago: semana / quincena (actual o anterior), mes o personalizado.
+type Periodo = "quincena" | "quincena_ant" | "semana" | "semana_ant" | "mes" | "personalizado";
+const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+function rangoDe(p: Periodo): { from: string; to: string } {
+  const h = new Date();
+  const y = h.getFullYear(), m = h.getMonth(), d = h.getDate();
+  const finMes = (yy: number, mm: number) => new Date(yy, mm + 1, 0);
+  if (p === "quincena") return d <= 15 ? { from: iso(new Date(y, m, 1)), to: iso(new Date(y, m, 15)) } : { from: iso(new Date(y, m, 16)), to: iso(finMes(y, m)) };
+  if (p === "quincena_ant") return d <= 15 ? { from: iso(new Date(y, m - 1, 16)), to: iso(finMes(y, m - 1)) } : { from: iso(new Date(y, m, 1)), to: iso(new Date(y, m, 15)) };
+  const lunes = new Date(y, m, d - ((h.getDay() + 6) % 7));
+  if (p === "semana") return { from: iso(lunes), to: iso(new Date(lunes.getFullYear(), lunes.getMonth(), lunes.getDate() + 6)) };
+  if (p === "semana_ant") return { from: iso(new Date(lunes.getFullYear(), lunes.getMonth(), lunes.getDate() - 7)), to: iso(new Date(lunes.getFullYear(), lunes.getMonth(), lunes.getDate() - 1)) };
+  return { from: iso(new Date(y, m, 1)), to: iso(finMes(y, m)) };
+}
+
+// Valores efectivos de una fila (lo escrito o el sugerido) y su total.
+function calcularFila(f: FilaMatriz, e: Edicion | undefined) {
+  const valesTotal = r2(f.vales.reduce((s, v) => s + v.monto, 0));
+  const baseTxt = e?.base ?? (f.sugerido != null ? String(f.sugerido) : "");
+  const extrasTxt = e?.extras ?? "";
+  const descTxt = e?.descuentos ?? (valesTotal > 0 ? String(valesTotal) : "");
+  const nota = e?.nota ?? "";
+  const base = numDe(baseTxt), extras = numDe(extrasTxt), descuentos = numDe(descTxt);
+  const total = r2(base + extras - descuentos);
+  const modificada = !!e && (e.base !== undefined || e.extras !== undefined || e.descuentos !== undefined || !!e.nota);
+  // Nota obligatoria: base distinta de la sugerida, o partes sin tarifa.
+  const pideNota = (f.sugerido != null && Math.abs(base - f.sugerido) > 0.005) || (f.sin_tarifa && f.parte_ids.length > 0);
+  const valesCubiertos = valesTotal > 0 && descuentos + 0.005 >= valesTotal;
+  const sugeridaIncluir = total > 0 || (f.parte_ids.length > 0 && modificada);
+  const incluida = e?.excluir ? false : sugeridaIncluir;
+  const error = total < 0 ? "Descuentos mayores que base + extras" : incluida && pideNota && !nota.trim() ? "Escribe la nota del ajuste" : "";
+  return { baseTxt, extrasTxt, descTxt, nota, base, extras, descuentos, total, valesTotal, valesCubiertos, pideNota, incluida, sugeridaIncluir, error };
+}
+
+// Mover el foco como en Excel: Enter / ↓ baja, ↑ sube (misma columna).
+function moverFoco(e: KeyboardEvent<HTMLInputElement>, idx: number, col: Columna) {
+  const destino = e.key === "Enter" || e.key === "ArrowDown" ? idx + 1 : e.key === "ArrowUp" ? idx - 1 : null;
+  if (destino == null) return;
+  const el = document.querySelector<HTMLInputElement>(`[data-celda="${destino}:${col}"]`);
+  if (el) { e.preventDefault(); el.focus(); el.select(); }
+  else if (e.key === "Enter") e.preventDefault();
+}
+
+// Una fila de la matriz. memo: escribir en una celda solo vuelve a pintar SU fila.
+const FilaNomina = memo(function FilaNomina({ fila: f, idx, edit, onEdit }: {
+  fila: FilaMatriz; idx: number; edit: Edicion | undefined; onEdit: (clave: string, cambio: Partial<Edicion>) => void;
+}) {
+  const c = calcularFila(f, edit);
+  const prod = f.parte_ids.length === 0 ? null
+    : f.unidad === "QQ" ? `${qqFmt(f.qq)} QQ` : f.unidad === "DIA" ? `${f.dias} día(s)` : `${f.viajes} viaje(s)`;
+  const celda = (col: Columna, valor: string, extra?: { placeholder?: string; title?: string; alerta?: boolean }) => (
+    <input data-celda={`${idx}:${col}`} type={col === "nota" ? "text" : "number"} min={col === "nota" ? undefined : 0} step={col === "nota" ? undefined : "0.01"}
+      className={`nomMatriz__celda ${col === "nota" ? "nomMatriz__celda--nota" : ""} ${extra?.alerta ? "is-alerta" : ""}`}
+      value={valor} placeholder={extra?.placeholder ?? (col === "nota" ? "" : "0.00")} title={extra?.title}
+      onChange={(e) => onEdit(f.clave, { [col]: e.target.value })}
+      onFocus={(e) => e.target.select()}
+      onKeyDown={(e) => moverFoco(e, idx, col)} />
+  );
+  return (
+    <tr className={`${c.incluida ? "" : "is-fuera"} ${c.error ? "is-error" : ""}`}>
+      <td className="nomMatriz__check">
+        <input type="checkbox" checked={c.incluida} aria-label={`Incluir a ${f.operador}`} disabled={!c.sugeridaIncluir}
+          title={c.sugeridaIncluir ? "Incluir en el lote" : "Escribe un monto para incluirla"}
+          onChange={(e) => onEdit(f.clave, { excluir: !e.target.checked })} />
+      </td>
+      <td>
+        <strong>{f.operador}</strong>
+        <small className="nomMatriz__sub">{f.activo_nombre ?? "Sin máquina"}{f.activo_nombre ? ` · ${AREA_LABEL[f.area].split(" ").slice(1).join(" ")}` : ""}</small>
+      </td>
+      <td className="nomMatriz__prod">
+        {prod ? <>{prod}{f.sin_tarifa
+          ? <small className="nomMatriz__alerta">⚠️ sin tarifa</small>
+          : <small className="nomMatriz__sub">× {money(f.tarifa ?? 0)} / {unidadCorta(f.unidad)}</small>}</>
+          : <span className="muted">—</span>}
+      </td>
+      <td className="num">{celda("base", c.baseTxt, { alerta: c.pideNota, title: f.sugerido != null ? `Sugerido: ${money(f.sugerido)}` : undefined, placeholder: f.parte_ids.length ? "0.00" : "—" })}</td>
+      <td className="num">{celda("extras", c.extrasTxt)}</td>
+      <td className="num">
+        {celda("descuentos", c.descTxt, { title: f.vales.length ? f.vales.map((v) => `${v.fecha} · ${v.concepto ?? "Vale"} · ${money(v.monto)}`).join("\n") : undefined })}
+        {f.vales.length > 0 && (
+          <small className={c.valesCubiertos ? "nomMatriz__sub" : "nomMatriz__alerta"} title={f.vales.map((v) => `${v.fecha} · ${v.concepto ?? "Vale"} · ${money(v.monto)}`).join("\n")}>
+            🧾 {f.vales.length} vale(s) {money(c.valesTotal)}{c.valesCubiertos ? " · se rinden" : " · quedan pendientes"}
+          </small>
+        )}
+      </td>
+      <td className={`num nomMatriz__total ${c.total < 0 ? "is-negativo" : ""}`}>{money(c.total)}</td>
+      <td>{celda("nota", c.nota, { alerta: c.pideNota && !c.nota.trim(), placeholder: c.pideNota ? "Motivo del ajuste *" : "Opcional" })}
+        {c.error && <small className="nomMatriz__alerta">{c.error}</small>}
+      </td>
+    </tr>
+  );
+});
+
 export default function NominaOperadores() {
-  const [rango, setRango] = useState({ from: primeroDeMes(), to: hoy() });
-  const [grupos, setGrupos] = useState<NominaGrupo[]>([]);
+  const [periodo, setPeriodo] = useState<Periodo>("quincena");
+  const [rango, setRango] = useState(() => rangoDe("quincena"));
+  const [area, setArea] = useState<"todas" | Area>("todas");
+  const [filas, setFilas] = useState<FilaMatriz[]>([]);
+  const [edits, setEdits] = useState<Record<string, Edicion>>({});
   const [cuentas, setCuentas] = useState<Cuenta[]>([]);
   const [cuentaId, setCuentaId] = useState("");
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
-  const notify = (text: string, kind: "ok" | "err" = "ok") => { setFlash({ text, kind }); setTimeout(() => setFlash(null), 3000); };
-  // Ajustes manuales por grupo (override del total sugerido + motivo obligatorio).
-  const [ajustes, setAjustes] = useState<Record<string, { monto: string; motivo: string }>>({});
+  const notify = (text: string, kind: "ok" | "err" = "ok") => { setFlash({ text, kind }); setTimeout(() => setFlash(null), 4000); };
 
-  const keyOf = (g: NominaGrupo) => `${g.operador}::${g.activo_id}`;
-  const montoStr = (g: NominaGrupo) => ajustes[keyOf(g)]?.monto ?? (g.total != null ? String(g.total) : "");
-  const montoNum = (g: NominaGrupo) => { const n = Number(montoStr(g)); return isFinite(n) ? n : 0; };
-  const esAjustado = (g: NominaGrupo) => g.total != null && Math.abs(montoNum(g) - g.total) > 0.005;
-  const setAjuste = (g: NominaGrupo, patch: Partial<{ monto: string; motivo: string }>) =>
-    setAjustes((prev) => {
-      const k = keyOf(g);
-      const cur = prev[k] ?? { monto: g.total != null ? String(g.total) : "", motivo: "" };
-      return { ...prev, [k]: { ...cur, ...patch } };
-    });
-  const baseTexto = (g: NominaGrupo) => g.unidad === "QQ" ? `${qqFmt(g.qq)} QQ` : g.unidad === "DIA" ? `${g.dias} día(s)` : `${g.viajes} viaje(s)`;
+  const cambiarPeriodo = (p: Periodo) => { setPeriodo(p); if (p !== "personalizado") setRango(rangoDe(p)); };
 
   const cargar = useCallback(async () => {
     try {
@@ -166,48 +258,89 @@ export default function NominaOperadores() {
       if (rango.from) qs.set("from", rango.from);
       if (rango.to) qs.set("to", rango.to);
       const [data, cuentasData] = await Promise.all([
-        apiGet<{ grupos: NominaGrupo[]; total_general: number }>(`/campo/nomina-operadores?${qs.toString()}`),
+        apiGet<{ filas: FilaMatriz[] }>(`/campo/nomina-operadores/matriz?${qs.toString()}`),
         apiGet<Cuenta[]>("/campo/cuentas")
       ]);
       const cuentasPago = cuentasData.filter((c) => c.nombre !== "CRUCE PILADORA");
-      setGrupos(data.grupos); setCuentas(cuentasPago); setAjustes({});
+      setFilas(data.filas); setCuentas(cuentasPago); setEdits({});
       setCuentaId((actual) => actual || cuentasPago.find((c) => c.nombre === "CAJA")?.id || cuentasPago[0]?.id || "");
     } catch (e) { notify((e as Error).message, "err"); } finally { setBusy(false); }
   }, [rango.from, rango.to]);
   useEffect(() => { cargar(); }, [cargar]);
 
-  async function liquidar(g: NominaGrupo) {
-    if (g.sin_tarifa) { notify(`Asigna una tarifa a ${g.operador} · ${g.activo_nombre} en Configuración antes de liquidar.`, "err"); return; }
+  // Edición estable (no cambia entre renders): solo se repinta la fila tocada.
+  const onEdit = useCallback((clave: string, cambio: Partial<Edicion>) => {
+    setEdits((prev) => ({ ...prev, [clave]: { ...prev[clave], ...cambio } }));
+  }, []);
+
+  const visibles = useMemo(() => filas.filter((f) => area === "todas" || f.area === area), [filas, area]);
+  const resumen = useMemo(() => {
+    const t = { base: 0, extras: 0, descuentos: 0, total: 0, incluidas: 0, errores: 0 };
+    for (const f of visibles) {
+      const c = calcularFila(f, edits[f.clave]);
+      if (!c.incluida) continue;
+      t.base += c.base; t.extras += c.extras; t.descuentos += c.descuentos; t.total += c.total; t.incluidas += 1;
+      if (c.error) t.errores += 1;
+    }
+    return { ...t, base: r2(t.base), extras: r2(t.extras), descuentos: r2(t.descuentos), total: r2(t.total) };
+  }, [visibles, edits]);
+
+  async function procesar() {
     if (!cuentaId) { notify("Selecciona la cuenta desde la que se pagará la nómina.", "err"); return; }
-    const final = montoNum(g);
-    if (!(final >= 0)) { notify("El monto a pagar no es válido.", "err"); return; }
-    const ajustado = esAjustado(g);
-    const motivo = (ajustes[keyOf(g)]?.motivo ?? "").trim();
-    if (ajustado && !motivo) { notify("Escribe el motivo del ajuste (ej. \"Trabajó medio día\").", "err"); return; }
-    const cuenta = cuentas.find((c) => c.id === cuentaId)?.nombre ?? "cuenta seleccionada";
-    if (!window.confirm(`¿Liquidar a ${g.operador} (${g.activo_nombre}) por ${baseTexto(g)} = ${money(final)}${ajustado ? ` (ajustado de ${money(g.total ?? 0)})` : ""}?\n\nSe registrará el egreso en ${cuenta} y se marcarán ${g.parte_ids.length} parte(s) como pagados.`)) return;
+    const lote = visibles.map((f) => ({ f, c: calcularFila(f, edits[f.clave]) })).filter(({ c }) => c.incluida);
+    if (!lote.length) { notify("No hay filas para pagar: escribe montos o marca las filas a incluir.", "err"); return; }
+    const conError = lote.find(({ c }) => c.error);
+    if (conError) { notify(`${conError.f.operador}: ${conError.c.error}.`, "err"); return; }
+    const cuenta = cuentas.find((c) => c.id === cuentaId)?.nombre ?? "la cuenta seleccionada";
+    if (!window.confirm(`¿Procesar la nómina de ${lote.length} operador(es) por ${money(resumen.total)} desde ${cuenta}?\n\n`
+      + lote.map(({ f, c }) => `• ${f.operador}${f.activo_nombre ? ` (${f.activo_nombre})` : ""}: ${money(c.total)}`).join("\n")
+      + "\n\nSe registra un egreso por operador; sus partes quedan pagados y los vales descontados, rendidos. Todo o nada.")) return;
     try {
       setBusy(true);
-      await apiPost("/campo/nomina-operadores/liquidar", {
-        parte_ids: g.parte_ids, cuenta_id: cuentaId, monto: final, motivo: motivo || undefined
+      const r = await apiPost<{ total: number; pagos: unknown[] }>("/campo/nomina-operadores/lote", {
+        cuenta_id: cuentaId, desde: rango.from || undefined, hasta: rango.to || undefined,
+        filas: lote.map(({ f, c }) => ({
+          operador: f.operador, activo_id: f.activo_id, parte_ids: f.parte_ids,
+          base: c.base, extras: c.extras, descuentos: c.descuentos,
+          // Los vales se rinden solo si el descuento los cubre; si no, quedan pendientes.
+          vale_ids: c.valesCubiertos ? f.vales.map((v) => v.id) : [],
+          nota: c.nota.trim() || undefined
+        }))
       });
-      notify(`Liquidado ${g.operador}: ${money(final)} ✓`);
+      notify(`Nómina procesada: ${r.pagos.length} pago(s) por ${money(r.total)} ✓`);
       await cargar();
     } catch (e) { notify((e as Error).message, "err"); } finally { setBusy(false); }
   }
 
-  const totalVista = grupos.reduce((s, g) => s + (g.sin_tarifa ? 0 : montoNum(g)), 0);
-
+  const PERIODOS: Array<[Periodo, string]> = [["quincena", "Quincena actual"], ["quincena_ant", "Quincena anterior"], ["semana", "Semana actual"],
+    ["semana_ant", "Semana anterior"], ["mes", "Mes actual"], ["personalizado", "Personalizado"]];
   return (
     <section className="panelGrid">
       {flash && <div className={`tablePanel`} style={{ gridColumn: "1 / -1", background: flash.kind === "ok" ? "#dcfce7" : "#fee2e2", color: flash.kind === "ok" ? "#15803d" : "#b91c1c", fontWeight: 600 }}>{flash.text}</div>}
       <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div className="nomMatriz__barra">
           <h2 style={{ margin: 0 }}>💵 Nómina de Operadores</h2>
-          <div style={{ display: "flex", gap: 8, alignItems: "end", flexWrap: "wrap" }}>
-            <label style={{ fontSize: 12 }}>Desde<br /><input type="date" value={rango.from} onChange={(e) => setRango({ ...rango, from: e.target.value })} /></label>
-            <label style={{ fontSize: 12 }}>Hasta<br /><input type="date" value={rango.to} onChange={(e) => setRango({ ...rango, to: e.target.value })} /></label>
-            <label style={{ fontSize: 12 }}>Pagar desde<br />
+          <div className="nomMatriz__filtros">
+            <label>Periodo de pago
+              <select value={periodo} onChange={(e) => cambiarPeriodo(e.target.value as Periodo)}>
+                {PERIODOS.map(([k, t]) => <option key={k} value={k}>{t}</option>)}
+              </select>
+            </label>
+            {periodo === "personalizado" ? (
+              <>
+                <label>Desde<input type="date" value={rango.from} onChange={(e) => setRango({ ...rango, from: e.target.value })} /></label>
+                <label>Hasta<input type="date" value={rango.to} onChange={(e) => setRango({ ...rango, to: e.target.value })} /></label>
+              </>
+            ) : <span className="nomMatriz__rango">{rango.from.split("-").reverse().join("/")} → {rango.to.split("-").reverse().join("/")}</span>}
+            <label>Departamento / Área
+              <select value={area} onChange={(e) => setArea(e.target.value as "todas" | Area)}>
+                <option value="todas">Todas</option>
+                <option value="cosechadora">🌾 Cosechadora</option>
+                <option value="transporte">🚛 Transporte</option>
+                <option value="otro">Sin máquina</option>
+              </select>
+            </label>
+            <label>Pagar desde
               <select value={cuentaId} onChange={(e) => setCuentaId(e.target.value)}>
                 <option value="">Seleccione cuenta</option>
                 {cuentas.map((c) => <option key={c.id} value={c.id}>{c.nombre} ({money(c.saldo)})</option>)}
@@ -216,61 +349,41 @@ export default function NominaOperadores() {
             <button type="button" onClick={cargar} disabled={busy}>↻ Actualizar</button>
           </div>
         </div>
-        <p className="muted" style={{ marginTop: 6 }}>Agrupa los partes NO pagados al operador en el rango. Subtotal sugerido = base (QQ · viajes · días) × tarifa. Puedes <strong>ajustar</strong> el total (con motivo). Al liquidar se registra el egreso en la cuenta seleccionada y los partes no vuelven a repetirse.</p>
+        <p className="muted" style={{ margin: "8px 0 0", fontSize: 12.5 }}>
+          Escribe directo en las celdas (Enter o ↓ baja a la siguiente fila). <strong>Base</strong> = producción × tarifa (editable con nota);
+          <strong> Vales / Descuentos</strong> trae los vales por rendir del operador. <strong>Total</strong> = Base + Extras − Descuentos.
+          Se pagan las filas marcadas con total mayor a 0 o modificadas.
+        </p>
       </div>
 
-      <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-        <table className="cajaTable">
-          <thead><tr>
-            <th>Operador</th><th>Máquina</th><th style={{ textAlign: "right" }}>QQ</th><th style={{ textAlign: "right" }}>Viajes</th><th style={{ textAlign: "right" }}>Días</th>
-            <th style={{ textAlign: "right" }}>Tarifa</th><th style={{ textAlign: "right" }}>Sugerido</th><th style={{ textAlign: "right" }}>Total a pagar</th><th></th>
-          </tr></thead>
-          <tbody>
-            {grupos.length === 0 && <tr><td colSpan={9} className="muted" style={{ textAlign: "center", padding: 16 }}>Sin partes pendientes de pago en el rango.</td></tr>}
-            {grupos.map((g) => {
-              const ajustado = esAjustado(g);
-              return (
-              <tr key={keyOf(g)}>
-                <td style={{ fontWeight: 600 }}>{g.operador}</td>
-                <td>{g.activo_nombre} <span className="muted" style={{ fontSize: 11 }}>({g.activo_tipo})</span></td>
-                <td style={{ textAlign: "right", fontWeight: g.unidad === "QQ" ? 700 : 400 }}>{qqFmt(g.qq)}</td>
-                <td style={{ textAlign: "right", fontWeight: g.unidad === "VIAJE" ? 700 : 400 }}>{g.viajes}</td>
-                <td style={{ textAlign: "right", fontWeight: g.unidad === "DIA" ? 700 : 400 }}>{g.dias}</td>
-                <td style={{ textAlign: "right" }}>
-                  {g.sin_tarifa
-                    ? <span style={{ color: "#b91c1c", fontWeight: 700, fontSize: 12 }}>⚠️ sin tarifa</span>
-                    : <>{money(g.tarifa ?? 0)} <span className="muted" style={{ fontSize: 11 }}>/ {unidadCorta(g.unidad)}</span></>}
-                </td>
-                <td style={{ textAlign: "right", color: "var(--c-muted)" }}>{g.total != null ? money(g.total) : "—"}</td>
-                <td style={{ textAlign: "right", minWidth: 180 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
-                    <span style={{ fontWeight: 700 }}>$</span>
-                    <input type="number" step="0.01" min="0" value={montoStr(g)} disabled={g.sin_tarifa}
-                      onChange={(e) => setAjuste(g, { monto: e.target.value })}
-                      title="Puedes sobrescribir el total sugerido"
-                      style={{ width: 100, textAlign: "right", padding: "4px 6px", borderRadius: 6,
-                        border: ajustado ? "2px solid #f59e0b" : "1px solid #d1d5db", fontWeight: 700 }} />
-                  </div>
-                  {ajustado && (
-                    <input type="text" value={ajustes[keyOf(g)]?.motivo ?? ""} onChange={(e) => setAjuste(g, { motivo: e.target.value })}
-                      placeholder="Motivo del ajuste (obligatorio)"
-                      style={{ marginTop: 4, width: "100%", padding: "4px 6px", borderRadius: 6, border: "1px solid #f59e0b", fontSize: 12 }} />
-                  )}
-                </td>
-                <td>
-                  <button type="button" className="primary" disabled={busy || g.sin_tarifa} onClick={() => liquidar(g)}>✅ Liquidar / Pagar</button>
-                </td>
-              </tr>
-              );
-            })}
-          </tbody>
-          {grupos.length > 0 && (
-            <tfoot><tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border)" }}>
-              <td colSpan={7} style={{ textAlign: "right" }}>TOTAL GENERAL</td>
-              <td style={{ textAlign: "right" }}>{money(totalVista)}</td><td></td>
-            </tr></tfoot>
-          )}
-        </table>
+      <div className="tablePanel nomMatriz" style={{ gridColumn: "1 / -1" }}>
+        <div className="nomMatriz__scroll">
+          <table className="nomMatriz__tabla">
+            <thead><tr>
+              <th className="nomMatriz__check" title="Incluir en el lote">✓</th>
+              <th>Operador</th><th>Producción</th>
+              <th className="num">Sueldo Base / Días</th><th className="num">Horas Extras / Bonos</th>
+              <th className="num">Vales / Descuentos</th><th className="num">Total a Pagar</th><th>Nota</th>
+            </tr></thead>
+            <tbody>
+              {visibles.length === 0 && <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 16 }}>{busy ? "Cargando…" : "No hay operadores activos ni partes pendientes en este periodo."}</td></tr>}
+              {visibles.map((f, i) => <FilaNomina key={f.clave} fila={f} idx={i} edit={edits[f.clave]} onEdit={onEdit} />)}
+            </tbody>
+            {visibles.length > 0 && (
+              <tfoot><tr>
+                <td></td><td colSpan={2}>{resumen.incluidas} a pagar{resumen.errores ? <span className="nomMatriz__alerta"> · {resumen.errores} con error</span> : ""}</td>
+                <td className="num">{money(resumen.base)}</td><td className="num">{money(resumen.extras)}</td>
+                <td className="num">{money(resumen.descuentos)}</td><td className="num nomMatriz__total">{money(resumen.total)}</td><td></td>
+              </tr></tfoot>
+            )}
+          </table>
+        </div>
+        <div className="nomMatriz__acciones">
+          <small className="muted">Un egreso por operador desde la cuenta elegida; los partes quedan pagados y los vales descontados, rendidos. Si una fila falla, no se paga ninguna.</small>
+          <button type="button" className="primary" disabled={busy || resumen.incluidas === 0 || resumen.errores > 0} onClick={procesar}>
+            {busy ? "Procesando…" : `💾 Procesar Nómina en Lote · ${resumen.incluidas} · ${money(resumen.total)}`}
+          </button>
+        </div>
       </div>
     </section>
   );

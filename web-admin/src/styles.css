@@ -4499,6 +4499,34 @@ textarea::placeholder {
 .mantSubRep output { font-weight: 800; color: #0f172a; font-variant-numeric: tabular-nums; }
 .mantFondo { border: 1px dashed #e5e7eb; border-radius: 10px; padding: 10px 12px; }
 .mantFondo.is-on { background: #fffbeb; border: 1px solid #fde68a; }
+/* Transporte y Cosechadora · Nómina de Operadores: matriz de entrada masiva. */
+.nomMatriz__barra { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.nomMatriz__filtros { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.nomMatriz__filtros label { display: grid; gap: 3px; margin: 0; font-size: 12px; font-weight: 600; color: #475569; }
+.nomMatriz__rango { font-size: 12.5px; font-weight: 700; color: #0f766e; padding-bottom: 9px; }
+.nomMatriz__scroll { overflow-x: auto; }
+.nomMatriz__tabla { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 860px; }
+.nomMatriz__tabla th { position: sticky; top: 0; background: #f8fafc; color: #475569; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; text-align: left; padding: 8px; border-bottom: 1px solid #e2e8f0; white-space: nowrap; }
+.nomMatriz__tabla td { padding: 5px 8px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+.nomMatriz__tabla .num { text-align: right; }
+.nomMatriz__tabla tbody tr:hover { background: #fafcff; }
+.nomMatriz__tabla tr.is-fuera td { opacity: .55; }
+.nomMatriz__tabla tr.is-error { background: #fff7f7; }
+.nomMatriz__check { width: 28px; text-align: center !important; }
+.nomMatriz__check input { width: auto; margin: 6px 0 0; }
+.nomMatriz__sub { display: block; font-size: 11.5px; color: #64748b; font-weight: 500; }
+.nomMatriz__alerta { display: block; font-size: 11.5px; color: #b45309; font-weight: 700; }
+.nomMatriz__prod { white-space: nowrap; font-weight: 600; }
+.nomMatriz__celda { width: 100%; min-width: 92px; padding: 6px 8px !important; border: 1px solid transparent !important; border-radius: 6px !important; background: #f8fafc !important; text-align: right; font-variant-numeric: tabular-nums; font-size: 13px !important; }
+.nomMatriz__celda:hover { border-color: #cbd5e1 !important; }
+.nomMatriz__celda:focus { outline: none; border-color: #0f766e !important; background: #fff !important; box-shadow: 0 0 0 2px rgba(15, 118, 110, .15); }
+.nomMatriz__celda--nota { text-align: left; min-width: 150px; }
+.nomMatriz__celda.is-alerta { border-color: #f59e0b !important; background: #fffbeb !important; }
+.nomMatriz__total { font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; padding-top: 11px !important; }
+.nomMatriz__total.is-negativo { color: #b91c1c; }
+.nomMatriz__tabla tfoot td { border-top: 2px solid #e2e8f0; font-weight: 800; padding-top: 10px; font-variant-numeric: tabular-nums; }
+.nomMatriz__acciones { display: flex; justify-content: flex-end; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+.nomMatriz__acciones small { margin-right: auto; max-width: 520px; }
 /* Transporte y Cosechadora · Nuevo egreso (máquina primero, desgaste, intervención, pago). */
 .egresoCampo__familia { display: block; margin-top: 4px; font-size: 12px; font-weight: 600; color: #0f766e; }
 .egresoCampo__fila { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }

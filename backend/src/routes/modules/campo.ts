@@ -6,7 +6,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { crearParteDesdeBascula } from "../../services/campo-flete-bascula.js";
-import { calcularNominaCampo, tipoServicioPorActivo, type CampoUnidadNomina } from "../../utils/campo.js";
+import { calcularNominaCampo, tipoServicioPorActivo, totalFilaNomina, valeEsDeOperador, type CampoUnidadNomina } from "../../utils/campo.js";
 
 // MÓDULO INDEPENDIENTE: Caja de Campo (cosechadora + transporte/fletes).
 // V1 = solo captura (CRUD). Sin relación con túneles, piladora, ventas ni
@@ -1422,13 +1422,12 @@ campoRouter.delete("/tarifas-operador/:id", asyncRoute(async (req, res) => {
 
 // ── Nómina de operadores: agrupa partes NO pagados al operador por operador+máquina
 // en un rango de fechas, y calcula el total con la tarifa asignada. ──────────
-campoRouter.get("/nomina-operadores", asyncRoute(async (req, res) => {
-  const q = z.object({ from: fechaSchema.optional(), to: fechaSchema.optional() }).parse(req.query);
+async function gruposNominaPendiente(db: Q, q: { from?: string; to?: string }) {
   const conds = ["p.operador IS NOT NULL", "trim(p.operador) <> ''", "p.operador_pagado_at IS NULL"];
   const params: unknown[] = [];
   if (q.from) { params.push(q.from); conds.push(`p.fecha >= $${params.length}`); }
   if (q.to) { params.push(q.to); conds.push(`p.fecha <= $${params.length}`); }
-  const rows = (await pool.query(
+  const rows = (await db.query(
     `SELECT p.operador, p.activo_id, a.nombre AS activo_nombre, a.tipo AS activo_tipo,
             COUNT(*)::int AS viajes,
             COUNT(DISTINCT p.fecha)::int AS dias,
@@ -1459,8 +1458,223 @@ campoRouter.get("/nomina-operadores", asyncRoute(async (req, res) => {
       unidad, tarifa, base, sin_tarifa: r.tarifa == null, total, parte_ids: r.parte_ids as string[]
     };
   });
+  return grupos;
+}
+
+campoRouter.get("/nomina-operadores", asyncRoute(async (req, res) => {
+  const q = z.object({ from: fechaSchema.optional(), to: fechaSchema.optional() }).parse(req.query);
+  const grupos = await gruposNominaPendiente(pool, q);
   const total_general = grupos.reduce((s, g) => s + (g.total ?? 0), 0);
   res.json({ grupos, total_general: Math.round(total_general * 100) / 100 });
+}));
+
+// ── MATRIZ de nómina (entrada masiva estilo Excel) ──────────────────────────
+// Una fila por operador + máquina con partes pendientes en el periodo (base
+// sugerida = producción × tarifa) y una por cada operador ACTIVO sin partes (para
+// bonos o pagos fijos), con su máquina habitual. Los vales por rendir que nombran
+// al operador en su concepto se proponen como descuento (en su primera fila).
+const areaDeTipo = (tipo: string | null | undefined) =>
+  tipo === "cosechadora" ? "cosechadora" : tipo ? "transporte" : "otro";
+
+campoRouter.get("/nomina-operadores/matriz", asyncRoute(async (req, res) => {
+  const q = z.object({ from: fechaSchema.optional(), to: fechaSchema.optional() }).parse(req.query);
+  const [grupos, operadores, habituales, vales] = await Promise.all([
+    gruposNominaPendiente(pool, q),
+    pool.query("SELECT nombre FROM campo_operadores WHERE activo ORDER BY nombre"),
+    // Máquina habitual de cada operador: la que tiene asignada o la de su tarifa.
+    pool.query(
+      `SELECT DISTINCT ON (lower(operador)) operador, activo_id, nombre, tipo FROM (
+         SELECT a.operador, a.id AS activo_id, a.nombre, a.tipo, 0 AS prioridad FROM campo_activos a
+          WHERE a.activo AND a.operador IS NOT NULL AND trim(a.operador) <> ''
+         UNION ALL
+         SELECT t.operador, a.id, a.nombre, a.tipo, 1 FROM campo_tarifas_operador t
+           JOIN campo_activos a ON a.id = t.activo_id
+          WHERE t.activo AND a.activo
+       ) x ORDER BY lower(operador), prioridad`
+    ),
+    pool.query(
+      `SELECT id, to_char(fecha, 'YYYY-MM-DD') AS fecha, concepto, monto::float AS monto FROM campo_movimientos
+        WHERE signo = 'salida' AND estado = 'PENDIENTE_RENDICION' AND reversado_at IS NULL
+        ORDER BY fecha, created_at`
+    )
+  ]);
+  type Fila = {
+    clave: string; operador: string; activo_id: string | null; activo_nombre: string | null; activo_tipo: string | null; area: string;
+    unidad: CampoUnidadNomina; tarifa: number | null; qq: number; viajes: number; dias: number; sugerido: number | null;
+    sin_tarifa: boolean; parte_ids: string[]; desde: string | null; hasta: string | null;
+    vales: Array<{ id: string; fecha: string; concepto: string | null; monto: number }>;
+  };
+  const filas: Fila[] = grupos.map((g) => ({
+    clave: `${g.operador.toLowerCase()}::${g.activo_id}`, operador: g.operador, activo_id: g.activo_id, activo_nombre: g.activo_nombre,
+    activo_tipo: g.activo_tipo, area: areaDeTipo(g.activo_tipo), unidad: g.unidad as CampoUnidadNomina, tarifa: g.tarifa,
+    qq: g.qq, viajes: g.viajes, dias: g.dias, sugerido: g.total, sin_tarifa: g.sin_tarifa, parte_ids: g.parte_ids,
+    desde: g.desde, hasta: g.hasta, vales: []
+  }));
+  const conFilas = new Set(filas.map((f) => f.operador.trim().toLowerCase()));
+  const habitual = new Map(habituales.rows.map((h) => [String(h.operador).trim().toLowerCase(), h]));
+  for (const o of operadores.rows) {
+    const k = String(o.nombre).trim().toLowerCase();
+    if (conFilas.has(k)) continue;
+    const h = habitual.get(k);
+    filas.push({
+      clave: `${k}::${h?.activo_id ?? ""}`, operador: o.nombre, activo_id: h?.activo_id ?? null, activo_nombre: h?.nombre ?? null,
+      activo_tipo: h?.tipo ?? null, area: areaDeTipo(h?.tipo), unidad: h?.tipo === "cosechadora" ? "QQ" : h ? "VIAJE" : "DIA",
+      tarifa: null, qq: 0, viajes: 0, dias: 0, sugerido: null, sin_tarifa: false, parte_ids: [], desde: null, hasta: null, vales: []
+    });
+    conFilas.add(k);
+  }
+  // Vales por rendir del operador → su primera fila (para proponerlos como descuento).
+  for (const v of vales.rows) {
+    const fila = filas.find((f) => valeEsDeOperador(v.concepto, f.operador));
+    if (fila) fila.vales.push({ id: v.id, fecha: v.fecha, concepto: v.concepto, monto: Number(v.monto) });
+  }
+  filas.sort((a, b) => a.area.localeCompare(b.area) || a.operador.localeCompare(b.operador) || (a.activo_nombre ?? "").localeCompare(b.activo_nombre ?? ""));
+  res.json({ filas });
+}));
+
+// Procesar la nómina EN LOTE: todas las filas en UNA transacción (si una falla,
+// no se paga ninguna). Por fila: total = base + extras − descuentos; se registra
+// en campo_nomina_pagos (con el desglose en el motivo), su egreso de caja, los
+// partes quedan pagados y los vales descontados quedan rendidos.
+campoRouter.post("/nomina-operadores/lote", asyncRoute(async (req, res) => {
+  const body = z.object({
+    cuenta_id: z.string().uuid(),
+    desde: fechaSchema.optional(),
+    hasta: fechaSchema.optional(),
+    filas: z.array(z.object({
+      operador: z.string().trim().min(1).max(120),
+      activo_id: z.string().uuid().nullable().optional(),
+      parte_ids: z.array(z.string().uuid()).default([]),
+      base: z.number().nonnegative().max(1_000_000),
+      extras: z.number().nonnegative().max(1_000_000).default(0),
+      descuentos: z.number().nonnegative().max(1_000_000).default(0),
+      vale_ids: z.array(z.string().uuid()).default([]),
+      nota: z.string().trim().max(300).optional()
+    })).min(1).max(300)
+  }).parse(req.body);
+  const todosPartes = body.filas.flatMap((f) => f.parte_ids);
+  const todosVales = body.filas.flatMap((f) => f.vale_ids);
+  if (new Set(todosPartes).size !== todosPartes.length) throw new ApiError(400, "Un parte aparece en dos filas.");
+  if (new Set(todosVales).size !== todosVales.length) throw new ApiError(400, "Un vale aparece en dos filas.");
+  const usd = (n: number) => `$${n.toFixed(2)}`;
+
+  const result = await inTransaction(async (client) => {
+    const cuenta = (await client.query("SELECT id, nombre FROM campo_cuentas WHERE id = $1", [body.cuenta_id])).rows[0];
+    if (!cuenta) throw new ApiError(404, "Cuenta de pago no encontrada.");
+    if (cuenta.nombre === "CRUCE PILADORA") throw new ApiError(400, "La cuenta CRUCE PILADORA no puede usarse para pagar nomina.");
+    const montos = body.filas.map((f) => totalFilaNomina(f));
+    const negativa = body.filas.find((_, i) => montos[i] < 0);
+    if (negativa) throw new ApiError(400, `${negativa.operador}: los descuentos superan la base más los extras.`);
+    const totalLote = Math.round(montos.reduce((s, m) => s + m, 0) * 100) / 100;
+    if (totalLote > 0) {
+      await requireCajaAbierta([body.cuenta_id], client);
+      await requireSaldoCajaDisponible(client, body.cuenta_id, totalLote);
+    }
+
+    const pagos: Array<{ operador: string; activo_nombre: string | null; monto: number; pago_id: string; partes: number; vales: number }> = [];
+    for (const [i, f] of body.filas.entries()) {
+      const monto = montos[i];
+      const operador = f.operador.trim();
+      // Partes del operador en esta fila (mismo operador y máquina, aún no pagados).
+      const partes = f.parte_ids.length ? (await client.query(
+        `SELECT p.id, p.fecha, p.operador, p.activo_id, p.qq::float AS qq, a.nombre AS activo_nombre, a.tipo AS activo_tipo,
+                t.tarifa::float AS tarifa, t.unidad
+           FROM campo_partes p
+           JOIN campo_activos a ON a.id = p.activo_id
+           LEFT JOIN campo_tarifas_operador t
+             ON lower(t.operador) = lower(p.operador) AND t.activo_id = p.activo_id AND t.activo = true
+          WHERE p.id = ANY($1::uuid[]) AND p.operador_pagado_at IS NULL
+          ORDER BY p.fecha, p.id
+          FOR UPDATE OF p`,
+        [f.parte_ids]
+      )).rows : [];
+      if (partes.length !== f.parte_ids.length) throw new ApiError(409, `${operador}: uno o más partes ya fueron pagados o ya no existen. Actualiza la matriz.`);
+      if (partes.some((p) => String(p.operador ?? "").trim().toLowerCase() !== operador.toLowerCase() || (f.activo_id && String(p.activo_id) !== f.activo_id))) {
+        throw new ApiError(409, `${operador}: los partes no son de este operador y máquina.`);
+      }
+      const activoId = partes[0]?.activo_id ?? f.activo_id ?? null;
+      const activo = activoId
+        ? (await client.query("SELECT nombre, tipo FROM campo_activos WHERE id = $1", [activoId])).rows[0] ?? null
+        : null;
+      const tarifa = partes[0]?.tarifa == null ? null : Number(partes[0].tarifa);
+      const unidad = (partes[0]?.unidad ?? (activo?.tipo === "cosechadora" ? "QQ" : activo ? "VIAJE" : "DIA")) as CampoUnidadNomina;
+      const calculo = partes.length && tarifa != null
+        ? calcularNominaCampo({ unidad, qq: partes.reduce((s, p) => s + Number(p.qq || 0), 0), viajes: partes.length,
+          dias: new Set(partes.map((p) => String(p.fecha).slice(0, 10))).size, tarifa })
+        : null;
+      const nota = f.nota?.trim() || "";
+      const baseAjustada = calculo ? Math.abs(f.base - calculo.total) > 0.005 : partes.length > 0;
+      if (baseAjustada && !nota) {
+        throw new ApiError(400, calculo
+          ? `${operador}: la base cambió de ${usd(calculo.total)} a ${usd(f.base)}; escribe la nota del ajuste.`
+          : `${operador} no tiene tarifa para esa máquina: escribe una nota con cómo se calculó la base.`);
+      }
+      // Vales descontados: deben estar pendientes y quedar cubiertos por el descuento.
+      const vales = f.vale_ids.length ? (await client.query(
+        `SELECT id, monto::float AS monto, concepto FROM campo_movimientos
+          WHERE id = ANY($1::uuid[]) AND signo = 'salida' AND estado = 'PENDIENTE_RENDICION' AND reversado_at IS NULL
+          FOR UPDATE`,
+        [f.vale_ids]
+      )).rows : [];
+      if (vales.length !== f.vale_ids.length) throw new ApiError(409, `${operador}: un vale ya fue rendido o anulado. Actualiza la matriz.`);
+      const totalVales = Math.round(vales.reduce((s, v) => s + Number(v.monto), 0) * 100) / 100;
+      if (f.descuentos + 0.005 < totalVales) {
+        throw new ApiError(400, `${operador}: el descuento (${usd(f.descuentos)}) no cubre sus vales (${usd(totalVales)}). Sube el descuento o quita los vales.`);
+      }
+      if (!partes.length && !vales.length && !(monto > 0)) continue; // fila sin nada que pagar
+
+      const motivo = [
+        nota,
+        baseAjustada && calculo ? `Base ajustada de ${usd(calculo.total)} a ${usd(f.base)}` : "",
+        `Base ${usd(f.base)}`,
+        f.extras > 0 ? `Extras/bonos ${usd(f.extras)}` : "",
+        f.descuentos > 0 ? `Descuentos ${usd(f.descuentos)}${vales.length ? ` (${vales.length} vale(s) ${usd(totalVales)})` : ""}` : ""
+      ].filter(Boolean).join(" · ");
+      const pago = (await client.query(
+        `INSERT INTO campo_nomina_pagos
+           (operador, activo_id, unidad, base, tarifa, monto_sugerido, monto, ajustado, motivo,
+            desde, hasta, partes_count, cuenta_id, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11::date, $12, $13, $14)
+         RETURNING id`,
+        [operador, activoId, unidad, calculo?.base ?? 0, tarifa, calculo?.total ?? null, monto,
+         calculo ? Math.abs(monto - calculo.total) > 0.005 : true, motivo,
+         partes[0]?.fecha ?? body.desde ?? null, partes[partes.length - 1]?.fecha ?? body.hasta ?? null,
+         partes.length, body.cuenta_id, userId(req)]
+      )).rows[0];
+      if (monto > 0) {
+        const extra = [f.extras > 0 ? `+ extras ${usd(f.extras)}` : "", f.descuentos > 0 ? `- desc. ${usd(f.descuentos)}` : ""].filter(Boolean).join(" ");
+        const mov = (await client.query(
+          `INSERT INTO campo_movimientos
+             (fecha, cuenta_id, signo, monto, concepto, activo_id, naturaleza, created_by)
+           VALUES (CURRENT_DATE, $1, 'salida', $2, $3, $4, 'pago_nomina_operador', $5)
+           RETURNING id`,
+          [body.cuenta_id, monto, `Pago nomina: ${operador}${activo ? ` - ${activo.nombre}` : ""}${extra ? ` (${extra})` : ""}`.slice(0, 400), activoId, userId(req)]
+        )).rows[0];
+        await client.query("UPDATE campo_nomina_pagos SET movimiento_id = $2 WHERE id = $1", [pago.id, mov.id]);
+      }
+      if (partes.length) {
+        await client.query(
+          `UPDATE campo_partes SET operador_pagado_at = now(), operador_pago_monto = $2, operador_pago_id = $3
+            WHERE id = ANY($1::uuid[]) AND operador_pagado_at IS NULL`,
+          [f.parte_ids, monto, pago.id]
+        );
+      }
+      // Vales descontados en la nómina: quedan rendidos por su monto (sin ajuste de caja).
+      for (const v of vales) {
+        await client.query(
+          `UPDATE campo_movimientos
+              SET estado = 'LIQUIDADO', monto_rendido = monto,
+                  concepto = left(COALESCE(concepto, '') || ' · Descontado en nómina de ' || $2, 400)
+            WHERE id = $1`,
+          [v.id, operador]
+        );
+      }
+      pagos.push({ operador, activo_nombre: activo?.nombre ?? null, monto, pago_id: pago.id, partes: partes.length, vales: vales.length });
+    }
+    if (!pagos.length) throw new ApiError(400, "No hay filas con algo que pagar.");
+    return { pagos, total: Math.round(pagos.reduce((s, p) => s + p.monto, 0) * 100) / 100 };
+  });
+  res.status(201).json({ ok: true, ...result });
 }));
 
 // Liquidar (pagar al operador): marca los partes indicados como pagados para que
