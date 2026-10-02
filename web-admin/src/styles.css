@@ -4499,6 +4499,21 @@ textarea::placeholder {
 .mantSubRep output { font-weight: 800; color: #0f172a; font-variant-numeric: tabular-nums; }
 .mantFondo { border: 1px dashed #e5e7eb; border-radius: 10px; padding: 10px 12px; }
 .mantFondo.is-on { background: #fffbeb; border: 1px solid #fde68a; }
+/* Transporte y Cosechadora · Nuevo egreso (máquina primero, desgaste, intervención, pago). */
+.egresoCampo__familia { display: block; margin-top: 4px; font-size: 12px; font-weight: 600; color: #0f766e; }
+.egresoCampo__fila { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.egresoCampo__lectura { display: grid; gap: 4px; margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; border: 1px solid #bae6fd; background: #f0f9ff; }
+.egresoCampo__lectura label { margin: 0; }
+.egresoCampo__lecturaFila { display: grid; grid-template-columns: minmax(0, 1fr) 96px; gap: 6px; }
+.egresoCampo__aviso { color: #b45309; font-weight: 600; }
+.egresoCampo__intervencion { display: grid; gap: 10px; margin: 0 0 12px; padding: 12px; border: 1px solid #fed7aa; border-radius: 10px; background: #fffaf5; }
+.egresoCampo__intervencion legend { padding: 0 6px; font-size: 13px; font-weight: 800; color: #9a3412; }
+.egresoCampo__intervencion label { margin: 0; }
+.egresoCampo__elegido { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 9px 12px; border: 1px solid #fdba74; border-radius: 10px; background: #fff; }
+.egresoCampo__pago { display: grid; gap: 10px; margin: 4px 0 12px; padding: 12px; border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc; }
+.egresoCampo__pago > label { margin: 0; }
+.egresoCampo__pagoTitulo { font-size: 11.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #64748b; }
+@media (max-width: 560px) { .egresoCampo__fila { grid-template-columns: minmax(0, 1fr); } }
 /* Nómina → Cuadrilla · CAMBIO DE SACO: saco recuperado y su destino. */
 .sacoRecuperado { display: grid; gap: 8px; margin: 2px 0 12px; padding: 10px 12px; border: 1px dashed #99f6e4; border-radius: 10px; background: #f0fdfa; animation: mantDesplegar .18s ease-out; }
 .sacoRecuperado label { margin: 0; }

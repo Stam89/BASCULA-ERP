@@ -1,6 +1,6 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-10-01
+Actualizado: 2026-10-02
 
 ## Inicio rapido
 
@@ -48,6 +48,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Transporte y Cosechadora · «Nuevo egreso» inteligente por tipo de maquina (2026-10-02)
+- `EgresoForm` (campo/CampoModule.tsx) reordenado: 1) Asignar a Maquina/Vehiculo (con icono y familia), 2) Fecha + Categoria, 3) «Horometro / Kilometraje actual (Opcional)» con DIESEL, GASOLINA o REPARACION_MANT y una maquina elegida (unidad por familia: cosechadora HORAS, vehiculos KM; editable), muestra la ultima lectura y avisa si la nueva es menor, 4) REPARACION_MANT → fieldset «Detalle de Intervencion» (Tipo Preventivo/Correctivo, «Repuesto / Trabajo Realizado» con BuscadorCombo priorizado por familia y «Usar…» texto libre, Descripcion adicional) en vez del Concepto, 5) «💳 Detalles de Pago» (monto, proveedor, contado/credito, cuenta, rendir cuentas).
+- Familia (`familiaDe`): por `tipo` y palabras clave del nombre → cosechadora / pesado / liviano / general. Catalogo local: `REPUESTOS_AFINES` (⭐ primero) + grupos de `PIEZAS_MANT` de la familia (`FAMILIAS_GRUPO`) + trabajos generales + el resto. Se quito `ACCIONES_MANT` (sin uso).
+- Payload: `/campo/movimientos` acepta `lectura` + `unidad_lectura` (KM|HORAS; exige maquina y egreso) y los guarda en `campo_movimientos` o, a credito, en `campo_cxp` (mig 20261066, columnas NULL). Reparacion → `/campo/mantenimientos` con tipo (PREVENTIVO+aceite/filtro → CAMBIO_ACEITE), componente, detalle, lectura, proveedor, observaciones. Nuevo `GET /campo/lecturas/ultima?activo_id=` (egresos no revertidos, creditos y mantenimientos no anulados). Prueba ROLLBACK `lectura_test.mjs` (scratchpad de la sesion): todo OK.
 
 ### Costos Operativos ↔ Caja: categorias sincronizadas sin recargar (2026-10-01)
 - `ResultadoMensual` recibe `categoriasVersion` (= `cashCategories` de App): cada vez que App recarga las categorias (creadas/renombradas/ocultadas en Configuracion o Caja) el mapeo vuelve a pedir `/resultado-mensual/categorias-caja`. Tambien al abrir «+ Asignar» (Caja) y al volver a la ventana (focus/visibilitychange).

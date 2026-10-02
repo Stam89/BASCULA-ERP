@@ -622,8 +622,19 @@ campoRouter.post("/movimientos", asyncRoute(async (req, res) => {
     // siempre) o CREDITO (CxP de Transporte al proveedor; no toca las cuentas).
     proveedor: z.string().trim().max(160).optional(),
     modalidad_pago: z.enum(["CONTADO", "CREDITO"]).optional().default("CONTADO"),
-    vence: fechaSchema.optional()
+    vence: fechaSchema.optional(),
+    // Desgaste de la máquina al momento del gasto (DIESEL, GASOLINA…): horómetro
+    // (HORAS) o kilometraje (KM). Opcional; base de cálculos de rendimiento.
+    lectura: z.number().nonnegative().max(100_000_000).nullable().optional(),
+    unidad_lectura: z.enum(["KM", "HORAS"]).nullable().optional()
+  }).superRefine((v, ctx) => {
+    if (v.lectura == null) return;
+    if (!v.unidad_lectura) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["unidad_lectura"], message: "Indica si la lectura está en KM u HORAS" });
+    if (!v.activo_id) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["lectura"], message: "El horómetro / kilometraje necesita la máquina o vehículo" });
+    if (v.signo !== "salida") ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["lectura"], message: "Solo un egreso lleva horómetro / kilometraje" });
   }).parse(req.body);
+  const lectura = parsed.lectura ?? null;
+  const unidadLectura = lectura != null ? parsed.unidad_lectura ?? null : null;
 
   // ── A CRÉDITO: nace una Cuenta por Pagar de Transporte al proveedor.
   if (parsed.modalidad_pago === "CREDITO") {
@@ -639,10 +650,10 @@ campoRouter.post("/movimientos", asyncRoute(async (req, res) => {
     }
     const concepto = [catNombre, parsed.concepto?.trim()].filter(Boolean).join(" · ") || null;
     const nuevo = (await pool.query(
-      `INSERT INTO campo_cxp (fecha, acreedor, concepto, monto, created_by, categoria_id, activo_id, vence, origen)
-       VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, 'EGRESO_CREDITO') RETURNING id`,
+      `INSERT INTO campo_cxp (fecha, acreedor, concepto, monto, created_by, categoria_id, activo_id, vence, origen, lectura, unidad_lectura)
+       VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, 'EGRESO_CREDITO', $9, $10) RETURNING id`,
       [parsed.fecha ?? null, proveedor.toUpperCase(), concepto, parsed.monto, userId(req),
-       parsed.categoria_id ?? null, parsed.activo_id ?? null, parsed.vence ?? null]
+       parsed.categoria_id ?? null, parsed.activo_id ?? null, parsed.vence ?? null, lectura, unidadLectura]
     )).rows[0];
     const cxp = (await pool.query(`${CXP_SELECT} WHERE c.id = $1`, [nuevo.id])).rows[0];
     res.status(201).json({ credito: true, cxp });
@@ -671,12 +682,12 @@ campoRouter.post("/movimientos", asyncRoute(async (req, res) => {
   // (422). El FOR UPDATE evita la carrera de dos abonos simultáneos que juntos
   // superarían el saldo. Un movimiento suelto (sin servicio) no necesita lock.
   const insert = async (client: { query: typeof pool.query }) => (await client.query(
-    `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, categoria_id, activo_id, servicio_id, estado, created_by, proveedor)
-     VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, categoria_id, activo_id, servicio_id, estado, created_by, proveedor, lectura, unidad_lectura)
+     VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
      RETURNING *`,
     [body.fecha ?? null, body.cuenta_id, body.signo, body.monto, body.concepto?.trim() || null,
      body.categoria_id ?? null, body.activo_id ?? null, body.servicio_id ?? null, estado, userId(req),
-     body.signo === "salida" ? (body.proveedor?.trim().toUpperCase() || null) : null]
+     body.signo === "salida" ? (body.proveedor?.trim().toUpperCase() || null) : null, lectura, unidadLectura]
   )).rows[0];
 
   if (!body.servicio_id) {
@@ -703,6 +714,32 @@ campoRouter.post("/movimientos", asyncRoute(async (req, res) => {
     return insert(client);
   });
   res.status(201).json(row);
+}));
+
+// Última lectura (horómetro / kilometraje) registrada de una máquina: la del
+// egreso, crédito o mantenimiento más reciente que la trajo. El formulario de
+// egreso la muestra como referencia y avisa si la nueva es menor.
+campoRouter.get("/lecturas/ultima", asyncRoute(async (req, res) => {
+  const q = z.object({ activo_id: z.string().uuid() }).parse(req.query);
+  const r = await pool.query(
+    `SELECT lectura::float AS lectura, unidad_lectura, to_char(fecha, 'YYYY-MM-DD') AS fecha, origen FROM (
+       SELECT m.lectura, m.unidad_lectura, m.fecha, m.created_at, 'egreso' AS origen
+         FROM campo_movimientos m
+        WHERE m.activo_id = $1 AND m.lectura IS NOT NULL AND m.reversado_at IS NULL
+       UNION ALL
+       SELECT c.lectura, c.unidad_lectura, c.fecha, c.created_at, 'credito'
+         FROM campo_cxp c
+        WHERE c.activo_id = $1 AND c.lectura IS NOT NULL
+       UNION ALL
+       SELECT mt.lectura, mt.unidad_lectura, mt.fecha, mt.created_at, 'mantenimiento'
+         FROM campo_mantenimientos mt
+        WHERE mt.activo_id = $1 AND mt.lectura IS NOT NULL AND mt.anulado_at IS NULL
+     ) x
+     ORDER BY fecha DESC, created_at DESC
+     LIMIT 1`,
+    [q.activo_id]
+  );
+  res.json(r.rows[0] ?? null);
 }));
 
 // ── Hoja de vida de flota ──────────────────────────────────────────────────

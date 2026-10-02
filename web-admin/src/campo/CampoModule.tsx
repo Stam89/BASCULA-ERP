@@ -16,6 +16,7 @@ import { money } from "../format";
 import PartesModule from "./PartesModule";
 import NominaOperadores, { TarifasOperadorCatalogo } from "./NominaOperadores";
 import { BuscadorHistorial } from "../components/BuscadorHistorial";
+import { BuscadorCombo, type OpcionCombo } from "../components/BuscadorCombo";
 
 // Menú propio de la operación Campo (contexto aislado). Para agregar secciones
 // nuevas: añade una entrada aquí y su caso en CampoModule (prop `section`).
@@ -77,15 +78,10 @@ type ParteConcil = { id: string; fecha: string; activo_nombre: string; cliente: 
 type EstadoLinea = { fecha: string; clase: "servicio" | "abono"; detalle: string; maquina: string | null; qq: number | null; precio_unitario: number | null; debe: number; haber: number; cuenta: string | null; saldo: number };
 type EstadoCuenta = { cliente: { id: string; nombre: string; identificacion: string | null; tipo: string }; periodo: { from: string; to: string }; saldo_apertura: number; lineas: EstadoLinea[]; total_debe: number; total_haber: number; saldo_final: number };
 
-// Estandarización de mantenimientos: para egresos de REPARACION_MANT el Concepto
-// se arma con dos selects (Pieza + Acción) que se concatenan "Pieza - Acción".
+// Estandarización de mantenimientos: un egreso de REPARACION_MANT se registra con
+// el «Detalle de Intervención» (tipo, repuesto/trabajo y descripción) y queda como
+// mantenimiento de la máquina. PIEZAS_MANT es el catálogo de piezas por sistema.
 const REPARACION_MANT = "REPARACION_MANT"; // nombre de la categoría gatillo (semilla)
-const ACCIONES_MANT: string[] = [
-  "Cambio / Reemplazo",
-  "Reparación / Soldadura / Relleno",
-  "Ajuste / Tensionado",
-  "Mantenimiento / Engrase"
-];
 const PIEZAS_MANT: Array<{ grupo: string; items: string[] }> = [
   { grupo: "Cabezal y Acarreador", items: [
     "Cuchillas de corte", "Puntones / Mandíbulas", "Púas / Dedos del molinete",
@@ -122,6 +118,62 @@ const PIEZAS_MANT: Array<{ grupo: string; items: string[] }> = [
     "Parabrisas y plumas", "Cerraduras y elevavidrios", "Soldadura de chasis o cajón"
   ] }
 ];
+
+// ── Nuevo egreso · sensible al tipo de máquina ───────────────────────────────
+// Familia de la máquina (por su tipo y, si no alcanza, palabras clave del nombre):
+// decide la unidad de desgaste (horómetro / km) y qué repuestos se sugieren primero.
+type FamiliaMaquina = "cosechadora" | "pesado" | "liviano" | "general";
+function familiaDe(a?: Activo): FamiliaMaquina {
+  if (!a) return "general";
+  const n = `${a.tipo} ${a.nombre}`.toLowerCase();
+  if (a.tipo === "cosechadora" || /cosech|combinada|trilladora/.test(n)) return "cosechadora";
+  if (a.tipo === "camion" || /cami[oó]n|volqueta|plataforma|tr[aá]iler|cabezal|mula|hino|isuzu|tolva/.test(n)) return "pesado";
+  if (a.tipo === "vehiculo" || /camioneta|toyota|hilux|auto|moto|pick ?up|jeep|vitara/.test(n)) return "liviano";
+  return "general";
+}
+const FAMILIA_INFO: Record<FamiliaMaquina, { icono: string; label: string; unidad: "KM" | "HORAS" }> = {
+  cosechadora: { icono: "🌾", label: "Cosechadora · se mide en horas (horómetro)", unidad: "HORAS" },
+  pesado: { icono: "🚛", label: "Vehículo pesado · se mide en km", unidad: "KM" },
+  liviano: { icono: "🚙", label: "Vehículo liviano · se mide en km", unidad: "KM" },
+  general: { icono: "🛠️", label: "Otro equipo", unidad: "HORAS" }
+};
+// Categorías que piden horómetro / kilometraje (por su nombre en Configuración).
+const CATEGORIAS_CON_LECTURA = ["DIESEL", "GASOLINA", REPARACION_MANT];
+// Repuestos / trabajos más frecuentes de cada familia: salen PRIMERO en el buscador.
+const REPUESTOS_AFINES: Record<FamiliaMaquina, string[]> = {
+  cosechadora: ["Bandas / correas", "Rodamientos", "Aceite hidráulico", "Aceite de motor y filtros", "Cuchillas de corte",
+    "Cadenas del acarreador", "Orugas de goma (bandas)", "Mangueras hidráulicas", "Zarandas / cribas", "Engrase general"],
+  pesado: ["Aceite de motor y filtros", "Llantas / neumáticos", "Frenos de aire (zapatas, válvulas)", "Rodamientos de bocín",
+    "Kit de embrague", "Ballestas y amortiguadores", "Baterías", "Aceite de caja y diferencial"],
+  liviano: ["Aceite de motor y filtro", "Bujías", "Pastillas de freno", "Batería", "Banda de distribución / accesorios",
+    "Llantas", "Filtro de aire", "Amortiguadores", "Alineación y balanceo"],
+  general: []
+};
+// Grupos del catálogo general (PIEZAS_MANT) que son de cada familia; los demás valen para todas.
+const FAMILIAS_GRUPO: Record<string, FamiliaMaquina[]> = {
+  "Cabezal y Acarreador": ["cosechadora"], "Sistema de Trilla y Limpieza": ["cosechadora"],
+  "Tren de Rodaje (Orugas)": ["cosechadora"], "Motor, Hidráulico y Descarga": ["cosechadora"],
+  "Motor y Combustible (Vehículos)": ["pesado", "liviano"], "Frenos (Vehículos)": ["pesado", "liviano"],
+  "Suspensión y Dirección": ["pesado", "liviano"], "Transmisión (Vehículos)": ["pesado", "liviano"]
+};
+const TRABAJOS_GENERALES = ["Mano de obra mecánica", "Soldadura", "Revisión / diagnóstico", "Lavado y engrase"];
+/** Opciones del buscador «Repuesto / Trabajo Realizado», priorizadas por la familia de la máquina. */
+function opcionesRepuesto(familia: FamiliaMaquina): OpcionCombo[] {
+  const vistos = new Set<string>();
+  const out: OpcionCombo[] = [];
+  const add = (titulo: string, etiqueta: string) => {
+    const k = titulo.toLowerCase();
+    if (vistos.has(k)) return;
+    vistos.add(k);
+    out.push({ key: titulo, titulo, etiqueta });
+  };
+  REPUESTOS_AFINES[familia].forEach((t) => add(t, "⭐ Afín"));
+  const esDeFamilia = (g: string) => !FAMILIAS_GRUPO[g] || familia === "general" || FAMILIAS_GRUPO[g].includes(familia);
+  PIEZAS_MANT.filter((g) => esDeFamilia(g.grupo)).forEach((g) => g.items.forEach((t) => add(t, g.grupo)));
+  TRABAJOS_GENERALES.forEach((t) => add(t, "Trabajo"));
+  PIEZAS_MANT.filter((g) => !esDeFamilia(g.grupo)).forEach((g) => g.items.forEach((t) => add(t, `${g.grupo} · otro equipo`)));
+  return out;
+}
 
 // Conceptos predefinidos para el INGRESO (select con optgroups). El usuario puede
 // elegir uno y agregarle un detalle extra, o escribir el concepto a mano.
@@ -1349,19 +1401,22 @@ function IngresoForm({ cuentas, onSaved, onError }: {
   );
 }
 
-// － EGRESO: salida de una cuenta. Orden estricto de campos (ver requisito):
-// Fecha · Máquina/Vehículo* · Categoría* · Concepto · Monto · Cuenta. La máquina
-// es OBLIGATORIA (por defecto "🏢 Gastos Generales / Administración" = sin activo).
-// Si la categoría es REPARACION_MANT, el Concepto se arma con dos selects
-// (Pieza + Acción → "Pieza - Acción"), quedando editable para un detalle extra.
-// Un checkbox lo marca como anticipo (fondo por rendir) → pendiente de rendición.
+// － EGRESO (sistema de registro de mantenimiento y consumo, sensible a la máquina):
+//  1 · Máquina / Vehículo (primero: define la familia → unidad de desgaste y repuestos afines).
+//  2 · Fecha + Categoría.
+//  3 · Horómetro / Kilometraje (opcional) con DIESEL, GASOLINA o REPARACION_MANT.
+//  4 · REPARACION_MANT → «Detalle de Intervención» (tipo, repuesto/trabajo, descripción)
+//      en vez del Concepto; se guarda como mantenimiento (hoja de vida + egreso).
+//  5 · «Detalles de Pago»: monto, proveedor, contado/crédito, cuenta y rendir cuentas.
 function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
   cuentas: Cuenta[]; categorias: Categoria[]; activos: Activo[]; onSaved: OnSaved; onError: (m: string) => void;
 }) {
   const [f, setF] = useState({
     fecha: hoy(), activo_sel: ACTIVO_GENERAL, categoria_id: "", concepto: "", monto: "", cuenta_id: "", es_anticipo: false,
-    // Solo para REPARACION_MANT: la pieza y la acción arman el concepto "Pieza - Acción".
-    pieza: "", accion: "",
+    // Desgaste de la máquina (opcional): lectura y su unidad ("" = la de la familia).
+    lectura: "", unidad: "" as "" | "KM" | "HORAS",
+    // Solo REPARACION_MANT: tipo de mantenimiento, repuesto/trabajo y descripción.
+    tipo_mant: "CORRECTIVO" as "PREVENTIVO" | "CORRECTIVO", repuesto: "", descripcion: "",
     // Proveedor y modalidad: Contado (sale de la cuenta) / A crédito (CxP de Transporte).
     proveedor: "", modalidad: "CONTADO" as "CONTADO" | "CREDITO", vence: ""
   });
@@ -1380,157 +1435,208 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
       setProveedores([...set.values()].sort((a, b) => a.localeCompare(b)));
     });
   }, []);
-  const catNombre = categorias.find((c) => c.id === f.categoria_id)?.nombre ?? "";
+  const catNombre = (categorias.find((c) => c.id === f.categoria_id)?.nombre ?? "").trim().toUpperCase();
   const esReparacion = catNombre === REPARACION_MANT;
+  const activoSel = f.activo_sel === ACTIVO_GENERAL ? undefined : activos.find((a) => a.id === f.activo_sel);
+  const familia = familiaDe(activoSel);
+  const info = FAMILIA_INFO[familia];
+  const pideLectura = CATEGORIAS_CON_LECTURA.includes(catNombre);
+  const mostrarLectura = pideLectura && !!activoSel;
+  const unidad: "KM" | "HORAS" = f.unidad || info.unidad;
+  const opcionesRep = useMemo(() => opcionesRepuesto(familia), [familia]);
+  const aCredito = f.modalidad === "CREDITO" && !f.es_anticipo && !esReparacion;
 
-  // Al elegir pieza/acción, se reescribe el concepto (queda editable después).
-  const setMant = (pieza: string, accion: string) =>
-    setF((prev) => ({ ...prev, pieza, accion, concepto: [pieza, accion].filter(Boolean).join(" - ") }));
+  // Última lectura conocida de la máquina (referencia y aviso si la nueva es menor).
+  const [ultima, setUltima] = useState<{ lectura: number; unidad_lectura: "KM" | "HORAS"; fecha: string } | null>(null);
+  useEffect(() => {
+    setUltima(null);
+    if (!mostrarLectura || !activoSel) return;
+    let vivo = true;
+    apiGet<{ lectura: number; unidad_lectura: "KM" | "HORAS"; fecha: string } | null>(`/campo/lecturas/ultima?activo_id=${activoSel.id}`)
+      .then((r) => { if (vivo) setUltima(r); }).catch(() => undefined);
+    return () => { vivo = false; };
+  }, [mostrarLectura, activoSel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const lecturaN = f.lectura.trim() === "" ? null : Number(f.lectura);
+  const lecturaMenor = lecturaN != null && ultima != null && ultima.unidad_lectura === unidad && lecturaN < ultima.lectura;
 
   async function submit() {
     try {
       setBusy(true);
       if (!f.activo_sel) throw new Error("Elige la máquina/vehículo o Gastos Generales");
       if (!f.categoria_id) throw new Error("La categoría del gasto es obligatoria");
-      const aCredito = f.modalidad === "CREDITO" && !f.es_anticipo && !esReparacion;
       if (aCredito && f.proveedor.trim().length < 2) throw new Error("Para un egreso a crédito indica el proveedor");
       if (!aCredito && !f.cuenta_id) throw new Error("Elige la cuenta");
       const monto = Number(f.monto);
       if (!(monto > 0)) throw new Error("Ingresa un monto válido");
+      // Lectura: solo con las categorías que la piden y una máquina elegida.
+      const lectura = mostrarLectura && lecturaN != null ? lecturaN : null;
+      if (lectura != null && !(lectura >= 0)) throw new Error("El horómetro / kilometraje debe ser un número positivo");
       if (esReparacion) {
-        if (f.activo_sel === ACTIVO_GENERAL) throw new Error("Selecciona la maquina o vehiculo que recibio el mantenimiento");
+        if (!activoSel) throw new Error("Selecciona la maquina o vehiculo que recibio el mantenimiento");
         if (f.es_anticipo) throw new Error("Registra el anticipo primero y el mantenimiento cuando se rinda el gasto real");
-        if (!f.concepto.trim()) throw new Error("Indica la pieza y el trabajo realizado");
-        const texto = `${f.pieza} ${f.accion}`.toLowerCase();
-        const tipo: MantenimientoTipo = texto.includes("aceite") || texto.includes("filtro")
-          ? "CAMBIO_ACEITE"
-          : f.accion === "Cambio / Reemplazo" ? "REPUESTO"
-          : f.accion === "Mantenimiento / Engrase" ? "PREVENTIVO"
-          : "CORRECTIVO";
+        const repuesto = f.repuesto.trim();
+        if (repuesto.length < 2) throw new Error("Elige o escribe el repuesto / trabajo realizado");
+        // Un preventivo de aceite o filtros queda como «Cambio de aceite / filtros».
+        const tipo: MantenimientoTipo = f.tipo_mant === "PREVENTIVO" && /aceite|filtro/i.test(repuesto) ? "CAMBIO_ACEITE" : f.tipo_mant;
         await apiPost("/campo/mantenimientos", {
-          fecha: f.fecha, activo_id: f.activo_sel, tipo,
-          componente: f.pieza || undefined, detalle: f.concepto.trim(),
-          costo: monto, cuenta_id: f.cuenta_id
+          fecha: f.fecha, activo_id: activoSel.id, tipo,
+          componente: repuesto, detalle: [repuesto, f.descripcion.trim()].filter(Boolean).join(" - ").slice(0, 1000),
+          lectura: lectura ?? undefined, unidad_lectura: lectura != null ? unidad : undefined,
+          proveedor: f.proveedor.trim() || undefined,
+          costo: monto, cuenta_id: f.cuenta_id,
+          observaciones: f.descripcion.trim() || undefined
         });
       } else {
         await apiPost("/campo/movimientos", {
           fecha: f.fecha, cuenta_id: aCredito ? undefined : f.cuenta_id, signo: "salida", monto,
           concepto: f.concepto.trim() || undefined, categoria_id: f.categoria_id,
-          activo_id: f.activo_sel === ACTIVO_GENERAL ? undefined : f.activo_sel,
+          activo_id: activoSel?.id,
           es_anticipo: f.es_anticipo || undefined,
           proveedor: f.proveedor.trim() || undefined,
           modalidad_pago: aCredito ? "CREDITO" : "CONTADO",
-          vence: aCredito && f.vence ? f.vence : undefined
+          vence: aCredito && f.vence ? f.vence : undefined,
+          lectura: lectura ?? undefined, unidad_lectura: lectura != null ? unidad : undefined
         });
       }
-      setF({ ...f, concepto: "", monto: "", categoria_id: "", es_anticipo: false, pieza: "", accion: "", proveedor: "", modalidad: "CONTADO", vence: "" });
+      setF({ ...f, concepto: "", monto: "", categoria_id: "", es_anticipo: false, lectura: "", unidad: "",
+        tipo_mant: "CORRECTIVO", repuesto: "", descripcion: "", proveedor: "", modalidad: "CONTADO", vence: "" });
       await onSaved();
     } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
   }
   const req = <span style={{ color: "#ef4444" }}>*</span>;
+  const iconoTipo = (a: Activo) => FAMILIA_INFO[familiaDe(a)].icono;
+  const num = (n: number) => n.toLocaleString("es-EC", { maximumFractionDigits: 2 });
   return (
-    <form className="formPanel" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+    <form className="formPanel egresoCampo" onSubmit={(e) => { e.preventDefault(); submit(); }}>
       <h2>－ Nuevo egreso (gasto)</h2>
-      {/* 1 · Fecha */}
-      <label><span>Fecha</span><input type="date" value={f.fecha} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
-      {/* 2 · Máquina / Vehículo (obligatorio, default = Gastos Generales) */}
+      {/* 1 · Máquina / Vehículo (primera fila; default = Gastos Generales) */}
       <label><span>Asignar a Máquina / Vehículo {req}</span>
-        <select value={f.activo_sel} onChange={(e) => setF({ ...f, activo_sel: e.target.value })}>
+        <select value={f.activo_sel} onChange={(e) => setF({ ...f, activo_sel: e.target.value, lectura: "", unidad: "" })}>
           <option value={ACTIVO_GENERAL}>🏢 Gastos Generales / Administración</option>
-          {activos.map((a) => <option key={a.id} value={a.id}>{a.nombre} · {tipoLabel(a.tipo)}{a.placa_codigo ? ` · ${a.placa_codigo}` : ""}</option>)}
+          {activos.map((a) => <option key={a.id} value={a.id}>{iconoTipo(a)} {a.nombre} · {tipoLabel(a.tipo)}{a.placa_codigo ? ` · ${a.placa_codigo}` : ""}</option>)}
         </select>
+        {activoSel && <small className="egresoCampo__familia">{info.icono} {info.label}</small>}
       </label>
-      {/* 3 · Categoría (obligatoria) */}
-      <label><span>Categoría {req}</span>
-        <select value={f.categoria_id} onChange={(e) => setF({ ...f, categoria_id: e.target.value })}>
-          <option value="">Seleccione</option>
-          {categorias.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-        </select>
-      </label>
-      {/* 4 · Concepto. Para REPARACION_MANT se arma con Pieza + Acción; el input
-          queda editable para agregar un detalle extra. Otras categorías: texto libre. */}
-      {esReparacion && (
-        <>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <label><span>Pieza Afectada</span>
-              <select value={f.pieza} onChange={(e) => setMant(e.target.value, f.accion)}>
-                <option value="">Seleccione…</option>
-                {PIEZAS_MANT.map((g) => (
-                  <optgroup key={g.grupo} label={g.grupo}>
-                    {g.items.map((it) => <option key={it} value={it}>{it}</option>)}
-                  </optgroup>
-                ))}
+      {/* 2 · Fecha + Categoría */}
+      <div className="egresoCampo__fila">
+        <label><span>Fecha</span><input type="date" value={f.fecha} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
+        <label><span>Categoría {req}</span>
+          <select value={f.categoria_id} onChange={(e) => setF({ ...f, categoria_id: e.target.value })}>
+            <option value="">Seleccione</option>
+            {categorias.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+          </select>
+        </label>
+      </div>
+      {/* 3 · Control de desgaste: horómetro / kilometraje (DIESEL, GASOLINA, REPARACION_MANT) */}
+      {pideLectura && (mostrarLectura ? (
+        <div className="egresoCampo__lectura">
+          <label><span>Horómetro / Kilometraje actual <span className="muted" style={{ fontWeight: 400 }}>(Opcional)</span></span>
+            <span className="egresoCampo__lecturaFila">
+              <input type="number" min="0" step="0.1" value={f.lectura} onChange={(e) => setF({ ...f, lectura: e.target.value })}
+                placeholder={unidad === "HORAS" ? "Ej: 1250 (horas)" : "Ej: 85400 (km)"} />
+              <select value={unidad} aria-label="Unidad" onChange={(e) => setF({ ...f, unidad: e.target.value as "KM" | "HORAS" })}>
+                <option value="HORAS">Horas</option>
+                <option value="KM">Km</option>
               </select>
-            </label>
-            <label><span>Acción Realizada</span>
-              <select value={f.accion} onChange={(e) => setMant(f.pieza, e.target.value)}>
-                <option value="">Seleccione…</option>
-                {ACCIONES_MANT.map((a) => <option key={a} value={a}>{a}</option>)}
-              </select>
-            </label>
-          </div>
-          <p className="muted" style={{ margin: "-2px 0 6px", fontSize: 12 }}>Se registra una sola vez aquí y aparecerá automáticamente en <strong>Caja principal → Mantenimiento</strong>.</p>
-        </>
-      )}
-      <label><span>Concepto{esReparacion ? " · autollenado (editable para detalle extra)" : ""}</span>
-        <input type="text" value={f.concepto} onChange={(e) => setF({ ...f, concepto: e.target.value })}
-          placeholder={esReparacion ? "Ej: Orugas de goma (bandas) - Cambio / Reemplazo" : "Ej: Diésel cosechadora"} />
-      </label>
-      {/* 5 · Monto */}
-      <label><span>Monto $</span><input type="number" step="0.01" min="0" value={f.monto} onChange={(e) => setF({ ...f, monto: e.target.value })} placeholder="0.00" /></label>
-      {/* 🏪 Proveedor + modalidad de pago. A crédito no sale de ninguna cuenta:
-          queda como Cuenta por Pagar de Transporte al proveedor. */}
-      {(() => {
-        const creditoPosible = !f.es_anticipo && !esReparacion;
-        const credito = creditoPosible && f.modalidad === "CREDITO";
-        const opt = (valor: "CONTADO" | "CREDITO", titulo: string, sub: string) => (
-          <label style={{ display: "flex", flexDirection: "row", alignItems: "flex-start", gap: 8, padding: "8px 10px", borderRadius: 8, margin: 0,
-            cursor: valor === "CREDITO" && !creditoPosible ? "not-allowed" : "pointer", opacity: valor === "CREDITO" && !creditoPosible ? 0.5 : 1,
-            border: `1.5px solid ${f.modalidad === valor ? (valor === "CREDITO" ? "#7c3aed" : "#16a34a") : "#e5e7eb"}`,
-            background: f.modalidad === valor ? (valor === "CREDITO" ? "#f5f3ff" : "#f0fdf4") : "#fff" }}>
-            <input type="radio" checked={f.modalidad === valor} disabled={valor === "CREDITO" && !creditoPosible}
-              onChange={() => setF({ ...f, modalidad: valor })} style={{ width: "auto", marginTop: 2 }} />
-            <span><strong style={{ fontSize: 13 }}>{titulo}</strong><small className="muted" style={{ display: "block", fontSize: 11 }}>{sub}</small></span>
+            </span>
           </label>
-        );
-        return (
-          <div style={{ display: "grid", gap: 10, border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", background: credito ? "#faf5ff" : "transparent" }}>
-            <label style={{ margin: 0 }}><span>🏪 Proveedor {credito ? req : <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span>}</span>
-              <input list="campoProveedoresList" value={f.proveedor} onChange={(e) => setF({ ...f, proveedor: e.target.value })}
-                placeholder="Taller, gasolinera, repuestera…" />
-              <datalist id="campoProveedoresList">{proveedores.map((n) => <option key={n} value={n} />)}</datalist>
-            </label>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              {opt("CONTADO", "💵 Contado", "Sale de la cuenta ahora")}
-              {opt("CREDITO", "💳 A crédito", creditoPosible ? "Queda en Cuentas por Pagar" : f.es_anticipo ? "No aplica a un anticipo" : "No aplica a reparación")}
-            </div>
-            {credito && (
-              <>
-                <label style={{ margin: 0 }}><span>Vence el <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span></span>
-                  <input type="date" value={f.vence} onChange={(e) => setF({ ...f, vence: e.target.value })} />
-                </label>
-                <small style={{ color: "#6d28d9" }}>💳 No sale de ninguna cuenta: se crea una Cuenta por Pagar al proveedor (📤 Cuentas por Pagar). Al pagarla, el egreso lleva esta categoría y máquina.</small>
-              </>
+          {ultima && <small className="muted">Última registrada: <strong>{num(ultima.lectura)} {ultima.unidad_lectura === "HORAS" ? "h" : "km"}</strong> el {String(ultima.fecha).slice(0, 10).split("-").reverse().join("/")}</small>}
+          {lecturaMenor && <small className="egresoCampo__aviso">⚠️ Es menor que la última lectura registrada: revisa el número.</small>}
+        </div>
+      ) : (
+        <p className="muted" style={{ margin: "-4px 0 8px", fontSize: 12 }}>Elige la máquina o vehículo para anotar su horómetro / kilometraje.</p>
+      ))}
+      {/* 4 · REPARACION_MANT: Detalle de Intervención (reemplaza al Concepto). Otras: Concepto. */}
+      {esReparacion ? (
+        <fieldset className="egresoCampo__intervencion">
+          <legend>🔧 Detalle de Intervención</legend>
+          <label><span>Tipo de Mantenimiento</span>
+            <select value={f.tipo_mant} onChange={(e) => setF({ ...f, tipo_mant: e.target.value as "PREVENTIVO" | "CORRECTIVO" })}>
+              <option value="PREVENTIVO">Preventivo</option>
+              <option value="CORRECTIVO">Correctivo</option>
+            </select>
+          </label>
+          <label><span>Repuesto / Trabajo Realizado {req}{activoSel && familia !== "general" && <span className="muted" style={{ fontWeight: 400 }}> · primero los afines a {familia === "cosechadora" ? "cosechadora" : `vehículo ${familia}`}</span>}</span>
+            {f.repuesto ? (
+              <span className="egresoCampo__elegido">
+                <strong>🔩 {f.repuesto}</strong>
+                <button type="button" className="mantLink" onClick={() => setF({ ...f, repuesto: "" })}>Cambiar</button>
+              </span>
+            ) : (
+              <BuscadorCombo id="campoRepuesto" placeholder="🔍 Buscar repuesto o trabajo (bandas, rodamientos, aceite…)"
+                opciones={opcionesRep} max={12}
+                onElegir={(k) => setF({ ...f, repuesto: k })}
+                crear={(t) => (opcionesRep.some((o) => o.titulo.toLowerCase() === t.toLowerCase()) ? null : `Usar «${t}»`)}
+                onCrear={(t) => setF({ ...f, repuesto: t.replace(/\s+/g, " ").trim() })}
+                vacio="Sin coincidencias: escríbelo y elige «Usar…»" />
             )}
-          </div>
-        );
-      })()}
-      {/* 6 · Cuenta (no aplica a crédito) */}
-      {!(f.modalidad === "CREDITO" && !f.es_anticipo && !esReparacion) && (
-      <label><span>Cuenta (sale de) {req}</span>
-        <select value={f.cuenta_id} onChange={(e) => setF({ ...f, cuenta_id: e.target.value })}>
-          <option value="">Seleccione</option>
-          {cuentas.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-        </select>
-      </label>
+          </label>
+          <label><span>Descripción adicional <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span></span>
+            <textarea rows={2} value={f.descripcion} maxLength={600} onChange={(e) => setF({ ...f, descripcion: e.target.value })}
+              placeholder="Ej: se cambiaron 2 bandas del ventilador, venían cuarteadas" />
+          </label>
+          <p className="muted" style={{ margin: 0, fontSize: 12 }}>Se registra una sola vez aquí: queda en la hoja de vida de la máquina y en <strong>Caja principal → Mantenimiento</strong>.</p>
+        </fieldset>
+      ) : (
+        <label><span>Concepto</span>
+          <input type="text" value={f.concepto} onChange={(e) => setF({ ...f, concepto: e.target.value })} placeholder="Ej: Diésel cosechadora" />
+        </label>
       )}
-      {/* Fondos por rendir (vale de anticipo) */}
-      <label style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 8, cursor: "pointer" }}>
-        <input type="checkbox" checked={f.es_anticipo} onChange={(e) => setF({ ...f, es_anticipo: e.target.checked, modalidad: e.target.checked ? "CONTADO" : f.modalidad })} style={{ width: "auto" }} />
-        <span style={{ margin: 0 }}>Marca si es dinero entregado por rendir (Anticipo)</span>
-      </label>
-      {f.es_anticipo && <p className="muted" style={{ marginTop: -4, fontSize: 12 }}>Se guardará como <strong>vale pendiente</strong>. Podrás liquidarlo en 📋 Vales / Anticipos.</p>}
-      <button className="primary" disabled={busy}>{busy ? "Guardando…" : f.es_anticipo ? "Registrar anticipo" : f.modalidad === "CREDITO" && !esReparacion ? "Registrar egreso a crédito" : "Registrar egreso"}</button>
+      {/* 5 · Detalles de Pago (monto, proveedor, contado/crédito, cuenta y rendir cuentas) */}
+      <section className="egresoCampo__pago" aria-label="Detalles de Pago">
+        <div className="egresoCampo__pagoTitulo">💳 Detalles de Pago</div>
+        <label><span>Monto $ {req}</span><input type="number" step="0.01" min="0" value={f.monto} onChange={(e) => setF({ ...f, monto: e.target.value })} placeholder="0.00" /></label>
+        {(() => {
+          const creditoPosible = !f.es_anticipo && !esReparacion;
+          const opt = (valor: "CONTADO" | "CREDITO", titulo: string, sub: string) => (
+            <label style={{ display: "flex", flexDirection: "row", alignItems: "flex-start", gap: 8, padding: "8px 10px", borderRadius: 8, margin: 0,
+              cursor: valor === "CREDITO" && !creditoPosible ? "not-allowed" : "pointer", opacity: valor === "CREDITO" && !creditoPosible ? 0.5 : 1,
+              border: `1.5px solid ${f.modalidad === valor ? (valor === "CREDITO" ? "#7c3aed" : "#16a34a") : "#e5e7eb"}`,
+              background: f.modalidad === valor ? (valor === "CREDITO" ? "#f5f3ff" : "#f0fdf4") : "#fff" }}>
+              <input type="radio" checked={f.modalidad === valor} disabled={valor === "CREDITO" && !creditoPosible}
+                onChange={() => setF({ ...f, modalidad: valor })} style={{ width: "auto", marginTop: 2 }} />
+              <span><strong style={{ fontSize: 13 }}>{titulo}</strong><small className="muted" style={{ display: "block", fontSize: 11 }}>{sub}</small></span>
+            </label>
+          );
+          return (
+            <>
+              <label style={{ margin: 0 }}><span>🏪 Proveedor {aCredito ? req : <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span>}</span>
+                <input list="campoProveedoresList" value={f.proveedor} onChange={(e) => setF({ ...f, proveedor: e.target.value })}
+                  placeholder="Taller, gasolinera, repuestera…" />
+                <datalist id="campoProveedoresList">{proveedores.map((n) => <option key={n} value={n} />)}</datalist>
+              </label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                {opt("CONTADO", "💵 Contado", "Sale de la cuenta ahora")}
+                {opt("CREDITO", "💳 A crédito", creditoPosible ? "Queda en Cuentas por Pagar" : f.es_anticipo ? "No aplica a un anticipo" : "No aplica a reparación")}
+              </div>
+              {aCredito && (
+                <>
+                  <label style={{ margin: 0 }}><span>Vence el <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span></span>
+                    <input type="date" value={f.vence} onChange={(e) => setF({ ...f, vence: e.target.value })} />
+                  </label>
+                  <small style={{ color: "#6d28d9" }}>💳 No sale de ninguna cuenta: se crea una Cuenta por Pagar al proveedor (📤 Cuentas por Pagar). Al pagarla, el egreso lleva esta categoría y máquina.</small>
+                </>
+              )}
+            </>
+          );
+        })()}
+        {/* Cuenta (no aplica a crédito) */}
+        {!aCredito && (
+          <label style={{ margin: 0 }}><span>Cuenta (sale de) {req}</span>
+            <select value={f.cuenta_id} onChange={(e) => setF({ ...f, cuenta_id: e.target.value })}>
+              <option value="">Seleccione</option>
+              {cuentas.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+            </select>
+          </label>
+        )}
+        {/* Rendir cuentas: dinero entregado por rendir (vale de anticipo) */}
+        <label style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 8, cursor: "pointer", margin: 0 }}>
+          <input type="checkbox" checked={f.es_anticipo} onChange={(e) => setF({ ...f, es_anticipo: e.target.checked, modalidad: e.target.checked ? "CONTADO" : f.modalidad })} style={{ width: "auto" }} />
+          <span style={{ margin: 0 }}>Rendir cuentas · dinero entregado por rendir (Anticipo)</span>
+        </label>
+        {f.es_anticipo && <p className="muted" style={{ margin: 0, fontSize: 12 }}>Se guardará como <strong>vale pendiente</strong>. Podrás liquidarlo en 📋 Vales / Anticipos.</p>}
+      </section>
+      <button className="primary" disabled={busy}>{busy ? "Guardando…" : f.es_anticipo ? "Registrar anticipo" : aCredito ? "Registrar egreso a crédito" : "Registrar egreso"}</button>
     </form>
   );
 }
