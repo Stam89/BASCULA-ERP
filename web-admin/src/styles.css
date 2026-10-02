@@ -4785,8 +4785,8 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 /* ── Venta Detalle (Caja): selector Libra/QQ, total de solo lectura ── */
 .vdCard { max-width: 600px; }
 .vdCard__titulo { margin: 0 0 10px; font-size: 18px; font-weight: 700; }
-.vdModo { display: inline-flex; gap: 4px; padding: 4px; margin-bottom: 8px; border-radius: 999px; background: var(--c-surface-3); border: 1px solid var(--c-border); }
-.vdModo__pill { border: none; background: transparent; color: var(--c-text-2); border-radius: 999px; padding: 7px 18px; font-weight: 700; font-size: 13.5px; cursor: pointer; line-height: 1.2; box-shadow: none; transition: background .15s, color .15s; }
+.vdModo { display: flex; width: 100%; box-sizing: border-box; gap: 4px; padding: 4px; margin-bottom: 8px; border-radius: 999px; background: var(--c-surface-3); border: 1px solid var(--c-border); }
+.vdModo__pill { flex: 1; text-align: center; border: none; background: transparent; color: var(--c-text-2); border-radius: 999px; padding: 7px 18px; font-weight: 700; font-size: 13.5px; cursor: pointer; line-height: 1.2; box-shadow: none; transition: background .15s, color .15s; }
 .content .vdModo__pill { min-height: 0; }
 .vdModo__pill:hover:not(.is-activo) { color: var(--c-brand); background: var(--c-surface); }
 .vdModo__pill.is-activo { background: var(--c-brand); color: #fff; box-shadow: 0 1px 3px rgba(15, 118, 110, .35); }
