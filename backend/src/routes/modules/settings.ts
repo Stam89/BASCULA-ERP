@@ -14,6 +14,8 @@ import { getMatriz, getMatrizId } from "../../services/matriz.js";
 import { vaciarDatosDePrueba } from "../../services/datos-prueba.js";
 import { correoConfigurado } from "../../services/correo.js";
 import { lanAddresses } from "../../utils/red.js";
+import { LimitadorVentana } from "../../services/recuperacion-clave.js";
+import crypto from "crypto";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const settingsRouter = Router();
@@ -198,7 +200,7 @@ settingsRouter.get("/company-readiness", requireAdmin, asyncRoute(async (_req, r
       key: "app_mode",
       label: "Modo del sistema",
       ok: env.appMode === "production",
-      detail: env.appMode === "production" ? "Produccion: datos reales protegidos" : "Prueba: permite limpiar datos de ensayo"
+      detail: env.appMode === "production" ? "Produccion: datos reales protegidos" : (env.llaveMaestra ? "Prueba: borrar datos exige la llave maestra" : "Prueba: borrado bloqueado (falta LLAVE_MAESTRA)")
     },
     {
       key: "correo_recuperacion",
@@ -298,7 +300,9 @@ settingsRouter.get("/company-readiness", requireAdmin, asyncRoute(async (_req, r
     checks,
     missing: missing.map((c) => c.label),
     app_mode: env.appMode,
-    reset_transactions_allowed: env.appMode !== "production" || env.allowProductionReset,
+    // El borrado exige la LLAVE MAESTRA de backend/.env (en prueba y en producción).
+    reset_transactions_allowed: Boolean(env.llaveMaestra),
+    llave_maestra_configurada: Boolean(env.llaveMaestra),
     business: {
       name: cfg.business_name ?? "",
       ruc: cfg.ruc ?? "",
@@ -540,18 +544,36 @@ settingsRouter.put("/packaging-rates", requireAdmin, asyncRoute(async (req, res)
 // Qué se vacía y qué se conserva: services/datos-prueba.ts (WIPE_TABLES y
 // CATALOGOS_PRESERVADOS).
 
+// Freno de intentos con llave maestra equivocada (por IP).
+const fallosLlaveMaestra = new LimitadorVentana(5, 15 * 60 * 1000);
+
+function llaveCoincide(escrita: string, real: string): boolean {
+  const a = crypto.createHash("sha256").update(escrita).digest();
+  const b = crypto.createHash("sha256").update(real).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
 settingsRouter.post("/reset-transactions", requireAdmin, asyncRoute(async (req, res) => {
-  if (env.appMode === "production" && !env.allowProductionReset) {
+  // Sin LLAVE_MAESTRA en backend/.env no se borra nada (ni en prueba ni en producción).
+  if (!env.llaveMaestra) {
     throw new ApiError(
       403,
-      "Borrado bloqueado: el ERP esta en modo PRODUCCION. Para borrar datos de prueba, use una base de prueba con APP_MODE=test."
+      "Borrado bloqueado: falta la LLAVE MAESTRA. Agrégala en backend/.env (LLAVE_MAESTRA=…, mínimo 8 caracteres) y reinicia el ERP."
     );
   }
+  const ip = req.ip ?? "desconocida";
+  const freno = fallosLlaveMaestra.bloqueado(ip);
+  if (freno.bloqueado) throw new ApiError(429, `Demasiados intentos con la llave maestra. Espera ${freno.minutos} minuto(s).`);
 
   const body = z.object({
     password: z.string().min(4),
+    llave_maestra: z.string().default(""),
     confirm: z.literal("BORRAR")
   }).parse(req.body);
+  if (!llaveCoincide(body.llave_maestra, env.llaveMaestra)) {
+    fallosLlaveMaestra.registrar(ip);
+    throw new ApiError(401, "Llave maestra incorrecta");
+  }
 
   const requester = (req as AuthenticatedRequest).user;
   if (!requester) throw new ApiError(401, "Sesión requerida");

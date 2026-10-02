@@ -626,6 +626,8 @@ type CompanyReadiness = {
   missing: string[];
   app_mode?: "production" | "test";
   reset_transactions_allowed?: boolean;
+  /** LLAVE_MAESTRA configurada en backend/.env (sin ella no se puede borrar). */
+  llave_maestra_configurada?: boolean;
   business: { name: string; ruc: string; phone: string; address: string };
   matriz: { id: string; name: string; code: string; is_active: boolean } | null;
 };
@@ -3110,7 +3112,7 @@ export function App() {
   // Edición de datos de un usuario registrado (nombre, usuario, clave, rol).
   const [userEditor, setUserEditor] = useState<{ user: AdminUser; name: string; username: string; cedula: string; email: string; password: string; role: "ADMINISTRADOR" | "OPERADOR" } | null>(null);
   const [renameAccionista, setRenameAccionista] = useState<{ id: string; name: string; code: string } | null>(null);
-  const [resetForm, setResetForm] = useState({ password: "", confirm: "" });
+  const [resetForm, setResetForm] = useState({ password: "", llave: "", confirm: "" });
   const [backupInfo, setBackupInfo] = useState<{ directory: string; backups: Array<{ name: string; size_kb: number; created_at: string }> } | null>(null);
   const [backupBusy, setBackupBusy] = useState(false);
   const [systemStatusBusy, setSystemStatusBusy] = useState(false);
@@ -6393,9 +6395,10 @@ export function App() {
     }
     const result = await apiPost<{ ok: boolean; wiped_tables: number }>("/settings/reset-transactions", {
       password: resetForm.password,
+      llave_maestra: resetForm.llave,
       confirm: "BORRAR"
     });
-    setResetForm({ password: "", confirm: "" });
+    setResetForm({ password: "", llave: "", confirm: "" });
     addToast(`Datos de prueba eliminados (${result.wiped_tables} tablas). El sistema quedó listo para operar.`, "success");
     setCashSummary(null);
     setCashMovements([]);
@@ -21970,7 +21973,7 @@ export function App() {
                       <span className="statusDot" />
                       <div>
                         <strong>Modo del sistema</strong>
-                        <span>{companyReadiness?.app_mode === "test" ? "Prueba: permite limpiar ensayos" : "Producción: datos protegidos"}</span>
+                        <span>{companyReadiness?.app_mode === "test" ? "Prueba: borrado solo con llave maestra" : "Producción: datos protegidos"}</span>
                       </div>
                     </div>
                   </div>
@@ -23882,7 +23885,7 @@ export function App() {
                         <span className="launchStepNumber">7</span>
                         <div>
                           <strong>Limpieza final</strong>
-                          <p>Si hubo pruebas, borralas (solo en modo prueba): se conservan la configuracion y los catalogos.</p>
+                          <p>Si hubo pruebas, borralas (pide la llave maestra del archivo de configuracion): se conservan la configuracion y los catalogos.</p>
                         </div>
                         <div className="launchStepActions">
                           {esMatrizActiva && <button type="button" className="btnGhost" onClick={() => { abrirTarjetaRef.current = "⚠️ Zona de peligro"; setConfigSubTab("operacion"); }}>Zona de peligro</button>}
@@ -23951,7 +23954,8 @@ export function App() {
                   <p className="dangerNote">Esta acción no se puede deshacer. No recupera datos ni restaura una copia de seguridad.</p>
                   {companyReadiness?.reset_transactions_allowed === false && (
                     <div className="alertBox" style={{ background: "#fffbeb", borderColor: "rgba(180,83,9,.35)", color: "#92400e" }}>
-                      Borrado bloqueado porque el ERP esta en modo produccion. Para limpiar datos de ensayo use una base de prueba con <code>APP_MODE=test</code>.
+                      Borrado bloqueado: falta la <strong>llave maestra</strong>. Se configura solo en el archivo <code>backend/.env</code> de la PC del
+                      ERP (<code>LLAVE_MAESTRA=…</code>, mínimo 8 caracteres) y luego se reinicia el ERP.
                     </div>
                   )}
                   <label>
@@ -23965,6 +23969,18 @@ export function App() {
                     />
                   </label>
                   <label>
+                    <span>Llave maestra</span>
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      value={resetForm.llave}
+                      onChange={(e) => setResetForm({ ...resetForm, llave: e.target.value })}
+                      disabled={companyReadiness?.reset_transactions_allowed === false}
+                      required
+                    />
+                    <small className="muted">La que está en el archivo de configuración de la PC del ERP (no es la clave del administrador).</small>
+                  </label>
+                  <label>
                     <span>Escribe BORRAR para confirmar</span>
                     <input
                       type="text"
@@ -23976,7 +23992,7 @@ export function App() {
                   </label>
                   <button
                     className="dangerBtn"
-                    disabled={!isAdmin || companyReadiness?.reset_transactions_allowed === false || resetForm.confirm.trim().toUpperCase() !== "BORRAR" || resetForm.password.length < 4}
+                    disabled={!isAdmin || companyReadiness?.reset_transactions_allowed === false || resetForm.confirm.trim().toUpperCase() !== "BORRAR" || resetForm.password.length < 4 || resetForm.llave.length < 8}
                   >
                     Borrar datos de prueba definitivamente
                   </button>

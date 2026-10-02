@@ -49,6 +49,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### «Borrar datos de prueba» exige LLAVE MAESTRA (2026-10-02)
+- Decision del usuario: trabajan con DATOS REALES pero SIGUEN en APP_MODE=test hasta confirmar que no hay fallas; NO pasar a production todavia. En vez de bloquear por modo, el borrado exige una llave maestra.
+- `LLAVE_MAESTRA` (backend/.env, minimo 8; mas corta se ignora) → `env.llaveMaestra`. `POST /settings/reset-transactions` (admin): sin llave configurada → 403 SIEMPRE (prueba o produccion; `ALLOW_PRODUCTION_RESET` ya no tiene efecto); pide `llave_maestra` (comparacion en tiempo constante) + clave del admin + BORRAR; 5 llaves malas por IP en 15 min → 429. `company-readiness.reset_transactions_allowed` = llave configurada; nuevo `llave_maestra_configurada`. Zona de peligro con campo «Llave maestra».
+- HOY la base real NO tiene LLAVE_MAESTRA → el borrado esta bloqueado (estado seguro). El usuario la pone el mismo en backend/.env si algun dia necesita borrar.
+- Prueba HTTP sobre copias de la base (`llave_test.mjs con|sin`): 11 OK; datos reales intactos.
+- Correo (SMTP): guiado al usuario (contraseña de aplicacion de Gmail; SMTP_USER/SMTP_PASS los escribe el en backend/.env). Ningun usuario tiene aun correo de recuperacion.
+
 ### Entrar desde el celular con datos moviles (internet) — ACTIVO en https://erp.ceyroerp.com (2026-10-02)
 - HECHO con el usuario: dominio `ceyroerp.com` (Cloudflare Registrar), Zero Trust plan Free (team `ceyro`), tunel cloudflared `bascula-erp` (Healthy), ruta publicada `erp.ceyroerp.com` → HTTP `localhost:4000`. cloudflared 2026.9.3 instalado con winget en `C:\Program Files (x86)\cloudflared\`, servicio de Windows «cloudflared» Automatic/Running (el token lo puso el usuario; no esta en el repo). `PUBLIC_URL=https://erp.ceyroerp.com` agregado a `backend/.env` del checkout base (copia previa: `backend/.env.bak-antes-public-url`). Verificado: /health y manifest por https, login carga.
 - Decision del usuario: enlace web https con TUNEL DE CLOUDFLARE (no Tailscale, no abrir puertos). El ERP sigue en esta PC (0.0.0.0:4000, LAN `http://192.168.88.58:4000`, regla de firewall «BASCULA-ERP», autoinicio por tarea «BASCULA-ERP Autoinicio» al iniciar sesion de Windows): la PC debe quedar encendida y con sesion iniciada. El usuario pregunto por funcionar con la PC apagada (nube o mini PC): quedo sin decidir, eligio seguir con el tunel.

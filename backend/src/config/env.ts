@@ -44,6 +44,19 @@ function loadAppMode(): "production" | "test" {
   return "production";
 }
 
+// LLAVE MAESTRA para «Borrar datos de prueba». Vive SOLO en backend/.env (no en la
+// base de datos ni en ningún usuario): sin ella no se puede borrar nada, ni en
+// modo prueba ni en producción. Así, aunque alguien tenga la clave del
+// administrador (el ERP está abierto a internet), no puede vaciar datos reales.
+function loadLlaveMaestra(): string {
+  const v = (process.env.LLAVE_MAESTRA ?? "").trim();
+  if (v && v.length < 8) {
+    console.warn("[seguridad] LLAVE_MAESTRA tiene menos de 8 caracteres: se ignora (el borrado queda bloqueado).");
+    return "";
+  }
+  return v;
+}
+
 // La URL de la base NO tiene valor por defecto en producción: antes caía en
 // "postgres://postgres:postgres@localhost" (credenciales triviales conocidas)
 // si alguien olvidaba configurar el .env. En desarrollo se mantiene el default
@@ -80,6 +93,7 @@ export const env = {
   port: Number(process.env.PORT ?? 4000),
   appMode: loadAppMode(),
   allowProductionReset: (process.env.ALLOW_PRODUCTION_RESET ?? "").trim().toLowerCase() === "true",
+  llaveMaestra: loadLlaveMaestra(),
   databaseUrl: loadDatabaseUrl(),
   jwtSecret: loadJwtSecret(),
   externalApiKey: loadExternalApiKey(),
