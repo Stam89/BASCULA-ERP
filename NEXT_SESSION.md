@@ -7,7 +7,7 @@ Actualizado: 2026-10-02
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: Configuracion → 🧺 Catalogo de productos (crear marcas/productos ya enlazados con presentaciones, sacos, arroz base y mostrador). Antes: recuperar clave por correo (requiere SMTP_USER/SMTP_PASS en backend/.env).
+- Ultimo cambio funcional: entrar desde el celular con datos moviles — ERP preparado (IP real tras tunel, freno por usuario, cambiar mi clave, app instalable); FALTA que el usuario cree el tunel de Cloudflare y ponga PUBLIC_URL. Antes: catalogo de productos y recuperar clave por correo (SMTP pendiente).
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,15 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Entrar desde el celular con datos moviles (internet) — preparado, falta el tunel (2026-10-02)
+- Decision del usuario: enlace web https con TUNEL DE CLOUDFLARE (no Tailscale, no abrir puertos). El ERP sigue en esta PC (0.0.0.0:4000, LAN `http://192.168.88.58:4000`, regla de firewall «BASCULA-ERP», autoinicio por tarea «BASCULA-ERP Autoinicio» al iniciar sesion de Windows). cloudflared NO esta instalado.
+- PENDIENTE DEL USUARIO (no se puede hacer sin su cuenta/token): cuenta Cloudflare + dominio → Zero Trust → Tunnels → crear «bascula-erp» (Windows) → en esta PC `winget install --id Cloudflare.cloudflared` + `cloudflared.exe service install <TOKEN>` (admin) → Public Hostname `erp.<dominio>` → HTTP `localhost:4000` → `PUBLIC_URL=https://erp.<dominio>` en backend/.env y reiniciar. Pasos tambien en `.env.example` y en la tarjeta de Configuracion.
+- Seguridad para internet: `app.set("trust proxy", "loopback")` (IP real del celular por X-Forwarded-For SOLO si la conexion viene de localhost = cloudflared; una PC de la red no puede falsearla; probado que un XFF falseado no engaña). Freno por USUARIO en /login (10 fallos/15 min por nombre escrito, exista o no; ademas del de IP). `password_weak` en la respuesta de /login (clave < 8) → el panel abre «🔑 Cambia tu clave» (`CambiarClaveModal`, marca en sessionStorage). Nuevo `PUT /auth/me/password` (clave actual + nueva ≥ 8, distinta; anula codigos de recuperacion). Rutas de maquinas ya protegidas (sync/discover exigen DEVICE_SYNC_KEY, external exige API key). JWT 12 h.
+- `GET /settings/acceso-remoto` (public_url, lan_urls, via_internet por CF-Ray/CF-Connecting-IP, tu_ip) y `POST /settings/acceso-remoto/probar` (admin; GET `${PUBLIC_URL}/health` con timeout 12 s). `env.publicUrl` = PUBLIC_URL normalizado (solo https, sin credenciales; `utils/red.ts` + test). `lanAddresses` movido a `utils/red.ts`.
+- Configuracion → Usuarios → «🌐 Acceso desde el celular (internet)» (`components/AccesoRemoto.tsx`): estado, enlace publico (Copiar / Compartir por WhatsApp / Probar), pasos de Cloudflare si falta, enlaces LAN, recordatorios. Boton 🔑 junto al nombre. Buscador actualizado.
+- App instalable en el celular: `web-admin/public/manifest.webmanifest` + iconos (`icon-192/512`, `icon-maskable-512`, `apple-touch-icon`, `favicon`; generados con Pillow) y metas en index.html. Sin service worker (a proposito: evita versiones viejas en cache).
+- Prueba HTTP real (`remoto_test.mjs`, servidor levantado sobre una COPIA de la base, borrada al final): 21 OK.
 
 ### Configuracion → 🧺 Catalogo de productos: crear productos ya enlazados (2026-10-02)
 - OJO: antes se dijo que no habia pantalla de productos; SI existia el modal «⚙️ Catalogo de Productos» de Inventario, pero solo creaba el producto basico (codigo/nombre/tipo/unidad) sin presentaciones, sacos ni tarifa. Se deja intacto y ahora enlaza a la tarjeta nueva.

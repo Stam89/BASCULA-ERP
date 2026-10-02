@@ -16,6 +16,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const app = express();
 
+// IP REAL del visitante cuando entra por el túnel de Cloudflare (desde el celular
+// con datos móviles). cloudflared corre en ESTE equipo y llega desde localhost con
+// la IP del cliente en X-Forwarded-For. Solo se confía en ese encabezado si la
+// conexión viene de localhost ("loopback"): una PC de la red no puede falsearlo.
+// Sin esto todo internet se vería como 127.0.0.1 y el freno de intentos de
+// inicio de sesión bloquearía a todos a la vez (o no frenaría a nadie).
+app.set("trust proxy", "loopback");
+
 // Cabeceras de seguridad (nosniff, anti-clickjacking, oculta X-Powered-By…).
 // CSP y CORP se desactivan a propósito: el panel usa estilos en línea de React
 // y una CSP estricta lo rompería; y CORP bloquearía a la app Android/otros PCs.

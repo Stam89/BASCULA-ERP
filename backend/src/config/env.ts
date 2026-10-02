@@ -3,6 +3,7 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { normalizarUrlPublica } from "../utils/red.js";
 
 // La firma de las sesiones venía con un valor por defecto ("dev-secret")
 // conocido por cualquiera que lea el código: con él se puede fabricar una
@@ -83,6 +84,10 @@ export const env = {
   jwtSecret: loadJwtSecret(),
   externalApiKey: loadExternalApiKey(),
   deviceSyncKey: (process.env.DEVICE_SYNC_KEY ?? "").trim(),
+  // Enlace https para entrar desde el celular con datos móviles (túnel de
+  // Cloudflare → http://localhost:PORT). Solo informativo: lo muestra
+  // Configuración para copiarlo/compartirlo y probarlo.
+  publicUrl: normalizarUrlPublica(process.env.PUBLIC_URL),
   // Correo saliente (código de recuperación de clave). Con Gmail: smtp.gmail.com:465
   // y una «contraseña de aplicación» (Google la muestra con espacios: se quitan).
   smtp: {

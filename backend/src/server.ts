@@ -1,21 +1,9 @@
-import os from "os";
 import { app } from "./app.js";
 import { env } from "./config/env.js";
 import { startFirebaseAutoImport } from "./integrations/bascula-firebase.js";
 import { ensureLaborTables } from "./routes/modules/labor.js";
+import { lanAddresses } from "./utils/red.js";
 
-function lanAddresses(): string[] {
-  const nets = os.networkInterfaces();
-  const addresses: string[] = [];
-  for (const name of Object.keys(nets)) {
-    for (const net of nets[name] ?? []) {
-      if (net.family === "IPv4" && !net.internal) {
-        addresses.push(net.address);
-      }
-    }
-  }
-  return addresses;
-}
 
 // Escucha en 0.0.0.0 para aceptar conexiones de otras PCs de la red local.
 app.listen(env.port, "0.0.0.0", () => {
@@ -24,6 +12,7 @@ app.listen(env.port, "0.0.0.0", () => {
   for (const ip of lanAddresses()) {
     console.log(`  Otras PCs/tablets: http://${ip}:${env.port}`);
   }
+  if (env.publicUrl) console.log(`  Desde internet:   ${env.publicUrl}`);
   console.log("");
   // Prepara el esquema de nómina UNA sola vez al arranque. Antes se creaba de
   // forma perezosa DENTRO de la transacción de finish-production (createPiladoPayments),

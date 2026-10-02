@@ -462,6 +462,13 @@ function recordLoginFailure(ip: string): void {
   if (loginFailures.size > 5000) loginFailures.clear();
 }
 
+// Freno POR USUARIO (además del de la IP): con el ERP abierto a internet alguien
+// podría probar claves de un mismo usuario desde muchas IP. Cuenta fallos por el
+// nombre escrito, exista o no (así no revela qué usuarios existen).
+const LOGIN_MAX_FALLOS_USUARIO = 10;
+const fallosPorUsuario = new LimitadorVentana(LOGIN_MAX_FALLOS_USUARIO, LOGIN_WINDOW_MS);
+const claveUsuario = (u: string) => u.trim().toLowerCase();
+
 authRouter.post("/login", asyncRoute(async (req, res) => {
   await ensureUserColumns();
   const ip = req.ip ?? "desconocida";
@@ -474,6 +481,10 @@ authRouter.post("/login", asyncRoute(async (req, res) => {
     username: z.string().min(2),
     password: z.string().min(4)
   }).parse(req.body);
+  const porUsuario = fallosPorUsuario.bloqueado(claveUsuario(body.username));
+  if (porUsuario.bloqueado) {
+    throw new ApiError(429, `Demasiados intentos fallidos con este usuario. Espera ${porUsuario.minutos} minuto(s) o recupera tu clave por correo.`);
+  }
 
   const result = await pool.query(
     `SELECT u.*, r.name AS role_name
@@ -485,6 +496,7 @@ authRouter.post("/login", asyncRoute(async (req, res) => {
 
   if (!result.rowCount) {
     recordLoginFailure(ip);
+    fallosPorUsuario.registrar(claveUsuario(body.username));
     throw new ApiError(401, "Usuario o clave incorrectos");
   }
 
@@ -492,9 +504,11 @@ authRouter.post("/login", asyncRoute(async (req, res) => {
   const valid = await bcrypt.compare(body.password, user.password_hash);
   if (!valid) {
     recordLoginFailure(ip);
+    fallosPorUsuario.registrar(claveUsuario(body.username));
     throw new ApiError(401, "Usuario o clave incorrectos");
   }
   loginFailures.delete(ip);
+  fallosPorUsuario.limpiar(claveUsuario(body.username));
 
   const publicUser = {
     id: user.id,
@@ -509,8 +523,40 @@ authRouter.post("/login", asyncRoute(async (req, res) => {
   res.json({
     token: signToken(publicUser),
     user: publicUser,
-    accionistas
+    accionistas,
+    // Claves de menos de 8 (creadas antes de la regla): el panel pide cambiarla.
+    password_weak: body.password.length < 8
   });
+}));
+
+// Cambiar MI clave (cualquier usuario con sesión): exige la clave actual. Anula
+// los códigos de recuperación pendientes.
+authRouter.put("/me/password", requireAuth, asyncRoute(async (req, res) => {
+  await ensureUserColumns();
+  const ip = req.ip ?? "desconocida";
+  const limite = loginLimiter(ip);
+  if (limite.blocked) {
+    throw new ApiError(429, `Demasiados intentos fallidos. Espera ${limite.minutes} minuto(s) y vuelve a intentar.`);
+  }
+  const user = (req as AuthenticatedRequest).user!;
+  const body = z.object({
+    current_password: z.string().min(1),
+    password: z.string().min(8, "La clave nueva debe tener al menos 8 caracteres.").max(200)
+  }).parse(req.body);
+  if (body.password === body.current_password) throw new ApiError(400, "La clave nueva debe ser distinta de la actual.");
+
+  const actual = await pool.query("SELECT password_hash FROM users WHERE id = $1 AND is_active = true", [user.id]);
+  if (!actual.rowCount || !(await bcrypt.compare(body.current_password, actual.rows[0].password_hash))) {
+    recordLoginFailure(ip);
+    throw new ApiError(401, "La clave actual no es correcta.");
+  }
+  loginFailures.delete(ip);
+  const passwordHash = await bcrypt.hash(body.password, 10);
+  await inTransaction(async (client) => {
+    await client.query("UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1", [user.id, passwordHash]);
+    await client.query("UPDATE password_reset_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL", [user.id]);
+  });
+  res.json({ ok: true, message: "Clave cambiada." });
 }));
 
 // ── Recuperación de clave por correo ────────────────────────────────────────
@@ -641,6 +687,7 @@ authRouter.post("/reset-password", asyncRoute(async (req, res) => {
   });
   limiteFallosCodigo.limpiar(ip);
   loginFailures.delete(ip);
+  fallosPorUsuario.limpiar(claveUsuario(body.username));
   res.json({ ok: true, message: "Clave cambiada. Ya puedes iniciar sesión con la clave nueva." });
 }));
 

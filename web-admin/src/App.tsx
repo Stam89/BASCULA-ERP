@@ -21,6 +21,8 @@ import { ParametrosContables } from "./components/ParametrosContables";
 import { CorreoRecuperacionModal } from "./components/CorreoRecuperacion";
 import { ConfigCorreoClaves } from "./components/ConfigCorreoClaves";
 import { CatalogoProductos } from "./components/CatalogoProductos";
+import { AccesoRemoto } from "./components/AccesoRemoto";
+import { CambiarClaveModal } from "./components/CambiarClave";
 import * as XLSX from "xlsx";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
@@ -2568,6 +2570,7 @@ export function App() {
     { sub: "socios", tarjeta: "Accionistas registrados", claves: "socios accionistas lista renombrar" },
     { sub: "socios", tarjeta: "🏦 Cuentas Bancarias de Socios", claves: "banco numero de cuenta datos bancarios" },
     { sub: "secuenciales", tarjeta: "📄 Secuenciales de documentos", claves: "numeracion guia de remision prefijo punto de emision factura" },
+    { sub: "usuarios", tarjeta: "🌐 Acceso desde el celular", claves: "internet datos moviles celular telefono remoto fuera del local enlace link cloudflare tunel dominio wifi ip red compartir whatsapp app pantalla de inicio" },
     { sub: "usuarios", tarjeta: "✉️ Correo para recuperar claves", claves: "correo gmail email recuperar clave contrasena olvide olvidaste perdio restablecer codigo smtp" },
     { sub: "usuarios", tarjeta: "👤 Crear usuario", claves: "usuario clave contrasena rol operador administrador cedula correo recuperacion" },
     { sub: "usuarios", tarjeta: "Usuarios registrados", claves: "usuarios permisos modulos accionistas editar sub pestanas solo ver" },
@@ -12063,6 +12066,19 @@ export function App() {
     return () => { vivo = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUser?.id]);
+  // 🔑 Cambiar mi clave: a mano (botón) o sola tras entrar con una clave corta
+  // (LoginScreen deja la marca en sessionStorage: dura solo esta pestaña).
+  const [claveModal, setClaveModal] = useState<null | "manual" | "corta">(null);
+  const authUserId = authUser?.id ?? null;
+  useEffect(() => {
+    if (!authUserId) { setClaveModal(null); return; }
+    try {
+      if (sessionStorage.getItem("bascula-erp:clave-corta") === "1") {
+        sessionStorage.removeItem("bascula-erp:clave-corta");
+        setClaveModal("corta");
+      }
+    } catch { /* almacenamiento no disponible */ }
+  }, [authUserId]);
   function descartarCorreoAviso() {
     setCorreoAviso(false);
     try { localStorage.setItem(correoAvisoKey, "1"); } catch { /* almacenamiento no disponible */ }
@@ -12289,6 +12305,7 @@ export function App() {
               <strong>{authUser.name}</strong>
               <small>{(authUser.role_name ?? "usuario").toLowerCase()}</small>
             </div>
+            <button className="logoutBtn mailBtn" title="Cambiar mi clave" aria-label="Cambiar mi clave" onClick={() => setClaveModal("manual")}>🔑</button>
             <button className="logoutBtn mailBtn" title="Mi correo de recuperación de clave" aria-label="Mi correo de recuperación de clave" onClick={() => setCorreoModalAbierto(true)}>✉️</button>
             <button className="logoutBtn" title="Cerrar sesión" onClick={logout}>⏻</button>
           </div>
@@ -12342,6 +12359,9 @@ export function App() {
               <button type="button" className="btnGhost" onClick={descartarCorreoAviso}>Ahora no</button>
             </span>
           </div>
+        )}
+        {claveModal && (
+          <CambiarClaveModal claveCorta={claveModal === "corta"} onCerrar={() => setClaveModal(null)} avisar={addToast} />
         )}
         {correoModalAbierto && (
           <CorreoRecuperacionModal
@@ -22282,6 +22302,12 @@ export function App() {
               <section style={{ display: "grid", gridTemplateColumns: "minmax(0, 5fr) minmax(0, 7fr)", gap: 16, alignItems: "start" }} className="configUsersGrid">
                 <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
                   <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>
+                    🌐 Acceso desde el celular (internet) <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· entrar con datos móviles, con su usuario y clave</span>
+                  </summary>
+                  <AccesoRemoto esAdmin={isAdmin} negocio={(appSettings.business_name || "la piladora").trim()} avisar={addToast} />
+                </details>
+                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>
                     ✉️ Correo para recuperar claves <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· «¿Olvidaste tu clave?» envía un código al correo del usuario</span>
                   </summary>
                   <ConfigCorreoClaves
@@ -23805,7 +23831,7 @@ export function App() {
                         <span className="launchStepNumber">3</span>
                         <div>
                           <strong>Usuarios y permisos</strong>
-                          <p>Crea un usuario por persona (con su correo para recuperar la clave) y limita operadores por modulo y accionista.</p>
+                          <p>Crea un usuario por persona (con su correo para recuperar la clave), limita operadores por modulo y accionista y, si van a entrar desde el celular, activa el acceso por internet.</p>
                         </div>
                         <button type="button" className="btnGhost" onClick={() => setConfigSubTab("usuarios")}>
                           Abrir
@@ -24364,7 +24390,11 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
       }
       const result = mode === "bootstrap"
         ? await apiPost<{ token: string; user: AuthUser; accionistas: Accionista[] }>("/auth/bootstrap", { name: fullName, username, password, recovery_email: email.trim() || undefined })
-        : await apiPost<{ token: string; user: AuthUser; accionistas: Accionista[] }>("/auth/login", { username, password });
+        : await apiPost<{ token: string; user: AuthUser; accionistas: Accionista[]; password_weak?: boolean }>("/auth/login", { username, password });
+      // Clave de menos de 8: al entrar se pide cambiarla (ver claveModal en App).
+      if ("password_weak" in result && result.password_weak) {
+        try { sessionStorage.setItem("bascula-erp:clave-corta", "1"); } catch { /* almacenamiento no disponible */ }
+      }
       localStorage.setItem(authStorageKey, JSON.stringify(result));
       ensureActiveAccionista(result.accionistas);
       onLogin(result.user);

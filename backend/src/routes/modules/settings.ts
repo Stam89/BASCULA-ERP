@@ -13,6 +13,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { getMatriz, getMatrizId } from "../../services/matriz.js";
 import { vaciarDatosDePrueba } from "../../services/datos-prueba.js";
 import { correoConfigurado } from "../../services/correo.js";
+import { lanAddresses } from "../../utils/red.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const settingsRouter = Router();
@@ -394,6 +395,45 @@ settingsRouter.put("/plant-params", requireAdmin, asyncRoute(async (req, res) =>
     );
   });
   res.json(result.rows[0]);
+}));
+
+// ── Acceso desde el celular (internet) ──────────────────────────────────────
+// Enlaces para entrar: el de la red del local (IP:puerto) y el público https del
+// túnel de Cloudflare (PUBLIC_URL en backend/.env). `via_internet` dice si ESTA
+// petición llegó por el túnel (Cloudflare agrega CF-Ray / CF-Connecting-IP).
+settingsRouter.get("/acceso-remoto", asyncRoute(async (req, res) => {
+  const h = req.headers;
+  res.json({
+    public_url: env.publicUrl || null,
+    lan_urls: lanAddresses().map((ip) => `http://${ip}:${env.port}`),
+    via_internet: Boolean(h["cf-ray"] || h["cf-connecting-ip"]),
+    tu_ip: req.ip ?? null
+  });
+}));
+
+// Prueba el enlace público desde el propio servidor: si responde /health por
+// https, el túnel y el dominio están bien. Solo admin.
+settingsRouter.post("/acceso-remoto/probar", requireAdmin, asyncRoute(async (_req, res) => {
+  if (!env.publicUrl) throw new ApiError(400, "Aún no hay enlace público: agrega PUBLIC_URL=https://… en backend/.env y reinicia el ERP.");
+  const inicio = Date.now();
+  try {
+    const r = await fetch(`${env.publicUrl}/health`, { signal: AbortSignal.timeout(12_000), redirect: "manual" });
+    const cuerpo = await r.text();
+    const ok = r.ok && cuerpo.includes("bascula-erp-backend");
+    res.json({
+      ok,
+      ms: Date.now() - inicio,
+      detalle: ok
+        ? "El enlace responde: se puede entrar desde el celular con datos."
+        : `El enlace respondió ${r.status} pero no es este ERP (revisa el túnel en Cloudflare: debe apuntar a http://localhost:${env.port}).`
+    });
+  } catch (err) {
+    res.json({
+      ok: false,
+      ms: Date.now() - inicio,
+      detalle: `No se pudo abrir ${env.publicUrl}: ${(err as Error).message}. Revisa que el servicio cloudflared esté corriendo y el dominio activo.`
+    });
+  }
 }));
 
 // ── Secuenciales de documentos ──────────────────────────────────────────────
