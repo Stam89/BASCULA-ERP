@@ -4,6 +4,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
+import { requireAdmin } from "../../auth/require-auth.js";
 
 export const productsRouter = Router();
 
@@ -83,8 +84,9 @@ productsRouter.post("/", asyncRoute(async (req, res) => {
 
 // PATCH tarifa por libra (venta al detalle). Solo actualiza el precio por libra;
 // no toca nada más del producto ni de Ventas mayoristas. price_per_pound = 0
-// significa "sin tarifa" (el cotizador cae al último precio usado).
-productsRouter.patch("/:id/tarifa-libra", asyncRoute(async (req, res) => {
+// significa "sin tarifa" (el cotizador cae al último precio usado). Solo admin,
+// igual que la tarjeta de Configuración que la edita.
+productsRouter.patch("/:id/tarifa-libra", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({ price_per_pound: z.coerce.number().min(0) }).parse(req.body);
   const result = await pool.query(
     `UPDATE products SET price_per_pound = $2 WHERE id = $1

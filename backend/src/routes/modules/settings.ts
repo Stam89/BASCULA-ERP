@@ -11,6 +11,7 @@ import { env } from "../../config/env.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { getMatriz, getMatrizId } from "../../services/matriz.js";
+import { vaciarDatosDePrueba } from "../../services/datos-prueba.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const settingsRouter = Router();
@@ -174,6 +175,15 @@ settingsRouter.get("/company-readiness", requireAdmin, asyncRoute(async (_req, r
         )
       : Promise.resolve(0)
   ]);
+  // Parámetros contables de la Matriz (Configuración → 📊 Parámetros contables).
+  const inicioContable = matriz
+    ? await safeScalar<string | null>(
+        "financial_settings",
+        "SELECT to_char(fecha_inicio_contable, 'YYYY-MM-DD') AS value FROM financial_settings WHERE accionista_id = $1",
+        null,
+        [matriz.id]
+      )
+    : null;
   const firebaseKey = (process.env.FIREBASE_KEY || "backend/firebase-service-account.json").trim();
   const firebaseKeyExists = Boolean(firebaseKey) && fs.existsSync(firebaseKey);
   const checks = [
@@ -252,6 +262,14 @@ settingsRouter.get("/company-readiness", requireAdmin, asyncRoute(async (_req, r
       detail: `${campoOperadores} operador(es) activo(s)`
     },
     {
+      key: "contabilidad",
+      label: "Inicio contable",
+      ok: Boolean(inicioContable),
+      detail: inicioContable
+        ? `Estados financieros desde ${inicioContable.split("-").reverse().join("/")}`
+        : "Falta la fecha de inicio contable (Parámetros contables)"
+    },
+    {
       key: "campo_matriz",
       label: "Campo: enlace con Matriz",
       ok: Number(campoClienteMatriz) > 0,
@@ -297,8 +315,12 @@ settingsRouter.put("/", requireAdmin, asyncRoute(async (req, res) => {
     matriz_code: z.string().trim().min(2).max(40).optional()
   }).parse(req.body);
 
+  // Se guarda en la fila del accionista ACTIVO: la Matriz edita la maestra; un
+  // socio («🏢 Mi negocio») su propia copia (la que GET /settings le devuelve).
+  // Antes un socio sobrescribía sin querer el encabezado de la Matriz.
   const result = await inTransaction(async (client) => {
-    if (body.sync_matriz) {
+    const socioId = await resolveSettingsSocioId(client, (req as AuthenticatedRequest).accionistaId);
+    if (body.sync_matriz && socioId === null) {
       const matriz = await getMatriz(client);
       await client.query(
         `UPDATE accionistas
@@ -311,7 +333,7 @@ settingsRouter.put("/", requireAdmin, asyncRoute(async (req, res) => {
       );
     }
 
-    await ensureMasterSettings(client);
+    await ensureSettingsForSocio(client, socioId);
     return client.query(
       `UPDATE app_settings
        SET business_name = $1,
@@ -321,9 +343,9 @@ settingsRouter.put("/", requireAdmin, asyncRoute(async (req, res) => {
            address = $5,
            receipt_footer = $6,
            updated_at = now()
-       WHERE socio_id IS NULL
-       RETURNING *`,
-      [body.business_name, body.business_subtitle, body.ruc, body.phone, body.address, body.receipt_footer]
+       WHERE socio_id IS NOT DISTINCT FROM $7::uuid
+       RETURNING *, CASE WHEN socio_id IS NULL THEN 'MAESTRO' ELSE 'SOCIO' END AS config_source`,
+      [body.business_name, body.business_subtitle, body.ruc, body.phone, body.address, body.receipt_footer, socioId]
     );
   });
   res.json(result.rows[0]);
@@ -461,84 +483,8 @@ settingsRouter.put("/packaging-rates", requireAdmin, asyncRoute(async (req, res)
   res.json(result.rows[0]);
 }));
 
-// Tablas transaccionales que se vacían al poner en marcha el negocio.
-// Se conservan: users/roles, app_settings, products, warehouses, equipment,
-// y los catálogos de insumos y sacos (con stock en 0).
-const WIPE_TABLES = [
-  // Saldos iniciales (registro de lo cargado al arranque; sus filas reales caen abajo).
-  "saldos_iniciales",
-  "farmers",
-  "customers",
-  "vehicles",
-  "lots",
-  "lot_process_reports",
-  "lot_process_report_links",
-  "drying_tunnel_reports",
-  "drying_tunnel_report_lots",
-  "weighing_tickets",
-  "mobile_synced_tickets",
-  "mobile_advance_applications",
-  "insumo_movements",
-  "production_yields",
-  "third_party_custody",
-  "inventory_movements",
-  "farmer_advances",
-  "processing_batches",
-  "processing_batch_drying_lots",
-  "processing_outputs",
-  "processing_losses",
-  "maquila_orders",
-  "liquidations",
-  "liquidation_details",
-  "advance_applications",
-  "accounts_payable",
-  "cash_registers",
-  "cash_movements",
-  "payments_made",
-  "sales",
-  "sale_items",
-  "accounts_receivable",
-  "payments_received",
-  "expenses",
-  "labor_payments",
-  "worker_payments",
-  "worker_advances",
-  // Nómina administrativa (personal de oficina + su historial de sueldos pagados).
-  "admin_salary_payments",
-  "admin_staff",
-  "cuadrilla_entries",
-  "cuadrilla_advances",
-  "pilado_services",
-  "milling_drafts",
-  "motor_fuel_records",
-  "lot_transfers",
-  "sales_orders",
-  "sales_order_items",
-  "selection_services",
-  "selection_batches",
-  "selection_batch_inputs",
-  "selection_batch_outputs",
-  "bank_statements",
-  "bank_statement_lines",
-  "firebase_sync_state",
-  "print_jobs",
-  "audit_logs",
-  "fomentos",
-  "fomento_entregas",
-  "fomento_pagos",
-  "sack_movements",
-  "equipment_maintenance",
-  // Repuestos de planta: el kárdex se borra y su stock vuelve a 0 (el catálogo queda).
-  "repuesto_movimientos",
-  // Transporte y Cosechadora (Campo): SOLO históricos operativos. Se preservan los
-  // catálogos maestros (campo_activos flota, campo_operadores choferes,
-  // campo_clientes, campo_cuentas, campo_categorias_gasto, campo_config).
-  "campo_movimientos",
-  "campo_servicios",
-  "campo_partes",
-  "campo_cxp",
-  "campo_caja_sesiones"
-];
+// Qué se vacía y qué se conserva: services/datos-prueba.ts (WIPE_TABLES y
+// CATALOGOS_PRESERVADOS).
 
 settingsRouter.post("/reset-transactions", requireAdmin, asyncRoute(async (req, res) => {
   if (env.appMode === "production" && !env.allowProductionReset) {
@@ -562,42 +508,9 @@ settingsRouter.post("/reset-transactions", requireAdmin, asyncRoute(async (req, 
   const valid = await bcrypt.compare(body.password, userRow.rows[0].password_hash);
   if (!valid) throw new ApiError(401, "Clave incorrecta");
 
-  const result = await inTransaction(async (client) => {
-    // Nombres REALES presentes en el esquema (Postgres). Lo que NO exista se reporta
-    // FUERTE (log en terminal) para detectar un nombre mal escrito — nunca en silencio.
-    const existing = await client.query(
-      `SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = ANY($1)`,
-      [[...WIPE_TABLES, "insumos", "sack_inventory", "repuestos"]]
-    );
-    const present = new Set<string>(existing.rows.map((r: { tablename: string }) => r.tablename));
-    const tables = WIPE_TABLES.filter((t) => present.has(t));
-    const notFound = WIPE_TABLES.filter((t) => !present.has(t));
-    if (notFound.length > 0) {
-      console.error(`[reset-transactions] ⚠️ Tablas de la lista NO encontradas en el esquema (posible nombre incorrecto): ${notFound.join(", ")}`);
-    }
+  const result = await inTransaction((client) => vaciarDatosDePrueba(client));
 
-    // Truncado agresivo, tabla POR tabla, con CASCADE (Postgres: equivale a
-    // desactivar las FKs — no existe SET FOREIGN_KEY_CHECKS aquí). Si UNA falla, se
-    // lanza un error VISIBLE nombrando exactamente la tabla que bloqueó, y toda la
-    // transacción hace rollback (nada de fallar en silencio).
-    for (const t of tables) {
-      try {
-        await client.query(`TRUNCATE TABLE "${t}" RESTART IDENTITY CASCADE`);
-      } catch (err) {
-        const msg = `[reset-transactions] ❌ BLOQUEADO al truncar la tabla "${t}": ${(err as Error).message}`;
-        console.error(msg);
-        throw new ApiError(500, `Borrado de datos de prueba bloqueado en la tabla "${t}". ${(err as Error).message}`);
-      }
-    }
-    if (present.has("insumos")) await client.query(`UPDATE insumos SET stock_actual = 0`);
-    if (present.has("sack_inventory")) await client.query(`UPDATE sack_inventory SET stock = 0, updated_at = now()`);
-    if (present.has("repuestos")) await client.query(`UPDATE repuestos SET stock = 0, updated_at = now()`);
-
-    console.log(`[reset-transactions] ✅ Truncadas ${tables.length} tabla(s): ${tables.join(", ")}`);
-    return { wiped: tables, notFound };
-  });
-
-  res.json({ ok: true, wiped_tables: result.wiped.length, wiped: result.wiped, not_found: result.notFound });
+  res.json({ ok: true, wiped_tables: result.wiped.length, wiped: result.wiped, not_found: result.notFound, preservados: result.preservados });
 }));
 
 // ── Respaldos de base de datos ─────────────────────────────────────────────

@@ -2751,7 +2751,18 @@ export function CampoWorkspace({ operationSelector, userName, roleName, apiOnlin
   matrizName: string;
   onNombreChange: (n: string) => void;
 }) {
-  const [seccion, setSeccion] = useState<CampoSeccion>("caja");
+  // Entrada directa a una sección (p. ej. desde Configuración → «⚙️ Configuración»
+  // de la operación): App deja la marca y aquí se consume una sola vez.
+  const [seccion, setSeccion] = useState<CampoSeccion>(() => {
+    try {
+      const pedida = localStorage.getItem("bascula-erp:campo-seccion");
+      if (pedida) {
+        localStorage.removeItem("bascula-erp:campo-seccion");
+        if (CAMPO_SECCIONES.some((x) => x.id === pedida)) return pedida as CampoSeccion;
+      }
+    } catch { /* almacenamiento no disponible */ }
+    return "caja";
+  });
   // Celular: el menú lateral es un cajón que se abre con ☰ (en PC no cambia nada).
   const [menuMovilAbierto, setMenuMovilAbierto] = useState(false);
   useEffect(() => { setMenuMovilAbierto(false); }, [seccion]);

@@ -16,7 +16,8 @@ import { SaldosIniciales } from "./components/SaldosIniciales";
 import { MaquinaBuscador, etiquetaMaquina } from "./components/MaquinaBuscador";
 import { SalesSessionSwitcher } from "./components/SalesSessionSwitcher";
 import { VentaDetalleCard, type ProductoDetalle, type VentaDetalleRegistro } from "./components/VentaDetalleCard";
-import { formatoCantidad, formatoPrecio } from "./ventaDetalle";
+import { formatoCantidad, formatoPrecio, precioAplicadoDetalle, DESCUENTO_QQ, LIBRAS_POR_QQ } from "./ventaDetalle";
+import { ParametrosContables } from "./components/ParametrosContables";
 import * as XLSX from "xlsx";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
@@ -2508,6 +2509,9 @@ export function App() {
   const [configBuscar, setConfigBuscar] = useState("");
   // 📥 Saldos iniciales: el componente (y sus consultas) solo se monta con la tarjeta abierta.
   const [saldosInicialesAbierto, setSaldosInicialesAbierto] = useState(false);
+  // 📊 Parámetros contables: también se monta solo con la tarjeta abierta; avisa si hay cambios sin guardar.
+  const [paramContablesAbierto, setParamContablesAbierto] = useState(false);
+  const [paramContablesSucio, setParamContablesSucio] = useState(false);
   const abrirTarjetaRef = useRef<string | null>(null);
   type AjusteIndex = { sub: typeof configSubTab; tarjeta: string; claves: string };
   // CONFIGURACIÓN POR ACCIONISTA: un SOCIO solo ve lo que usa (su negocio,
@@ -2519,35 +2523,37 @@ export function App() {
   const tarjetaVisibleSocio = (tarjeta: string) =>
     tarjeta.startsWith("🏢 Datos del negocio") || tarjeta.startsWith("🛒 Tarifas por libra") ||
     tarjeta.startsWith("🏦 Cuentas Bancarias") || tarjeta.startsWith("💼 Personal administrativo") ||
-    tarjeta.startsWith("📥 Saldos iniciales") ||
+    tarjeta.startsWith("📥 Saldos iniciales") || tarjeta.startsWith("📊 Parámetros contables") ||
     (tarjeta.startsWith("📦 Catálogo de sacos") && accionistaEnvejecidoHabilitado(accionistas.find((a) => a.id === activeAccionistaId)));
   const CONFIG_INDICE: AjusteIndex[] = [
-    { sub: "estado", tarjeta: "Estado del sistema", claves: "salud api sincronizacion bascula respaldo backup usuarios accionistas diagnostico" },
+    { sub: "estado", tarjeta: "Estado del sistema", claves: "salud api sincronizacion bascula respaldo backup usuarios accionistas diagnostico checklist empresa lista" },
     { sub: "operacion", tarjeta: "⚙️ Parámetros de planta", claves: "tarifa de pilado humedad base merma quintal" },
-    { sub: "operacion", tarjeta: "🏢 Datos del negocio", claves: "nombre comercial ruc telefono direccion pie de comprobante encabezado ticket" },
-    { sub: "operacion", tarjeta: "📦 Catálogo de sacos", claves: "mis sacos envejecido propios sacos marcas flor oso extra lira azul conejo 100 50 25 10 libras arroba stock minimo alerta precio eliminar agregar" },
+    { sub: "operacion", tarjeta: "🏢 Datos del negocio", claves: "nombre comercial ruc telefono direccion pie de comprobante encabezado ticket recibo mi negocio nombre transporte cosechadora matriz principal" },
+    { sub: "operacion", tarjeta: "📦 Catálogo de sacos", claves: "mis sacos envejecido propios sacos marcas flor oso extra lira azul conejo 100 50 25 10 libras arroba stock minimo alerta precio eliminar agregar usados segunda cambio de saco recuperado" },
     { sub: "operacion", tarjeta: "💼 Personal administrativo", claves: "empleado empleados agregar trabajador oficina contadora sueldo administrativo quincenal cargo nomina" },
-    { sub: "operacion", tarjeta: "🏷️ Categorías de caja", claves: "categoria ingreso egreso movimiento caja" },
-    { sub: "operacion", tarjeta: "🔧 Categorías de Mantenimiento", claves: "areas tipos secciones sistemas equipos mantenimiento" },
-    { sub: "operacion", tarjeta: "✅ Puesta en marcha", claves: "checklist pasos inicio configuracion inicial" },
+    { sub: "operacion", tarjeta: "🏷️ Categorías de caja", claves: "categoria ingreso egreso movimiento caja materiales consumibles repuestos rubro costos operativos" },
+    { sub: "operacion", tarjeta: "🔧 Categorías de Mantenimiento", claves: "areas tipos secciones sistemas equipos mantenimiento maquinas maquina equipo compra de repuestos uso inmediato materiales consumibles hoja de vida" },
+    { sub: "operacion", tarjeta: "✅ Puesta en marcha", claves: "checklist pasos inicio configuracion inicial arranque datos reales produccion" },
     { sub: "operacion", tarjeta: "📥 Saldos iniciales", claves: "arranque datos reales mes anterior corte fin de mes cuentas por cobrar pagar cxc cxp inventario cascara anticipos saldo anterior deudas" },
+    { sub: "operacion", tarjeta: "📊 Parámetros contables", claves: "capital social resultados acumulados fecha de inicio contable apertura balance general estado de resultados estados financieros patrimonio precio de referencia quintal valorizar inventario" },
+    { sub: "operacion", tarjeta: "🧭 Ajustes dentro de otros módulos", claves: "flota maquinaria operadores choferes tarifa operador transporte cosechadora campo cuentas categorias de gasto contar tickets desde bascula bajada de carro rubros aparece en caja repuestos ubicacion bodega activos fijos vida util depreciacion" },
     { sub: "operacion", tarjeta: "⚠️ Zona de peligro", claves: "borrar datos de prueba reiniciar operacion reset limpiar pruebas movimientos tickets" },
     { sub: "operacion", tarjeta: "💾 Respaldos de la base de datos", claves: "backup respaldo copia de seguridad onedrive pg_dump" },
-    { sub: "nomina", tarjeta: "💲 Tarifas de pago", claves: "pilador estibador secador saca tulas arrocillo guardiania tunel tendal cuadrilla nomina mano de obra" },
+    { sub: "nomina", tarjeta: "💲 Tarifas de pago", claves: "pilador estibador secador saca tulas 3 tulas arrocillo guardiania tunel costo de secado tendal cuadrilla nomina mano de obra" },
     { sub: "tarifas", tarjeta: "🛎️ Secado como Servicio", claves: "secado servicio cliente cobro granel saco maquila cxc" },
     { sub: "operacion", tarjeta: "⛽ Precio del combustible", claves: "combustible gas diesel bombona cilindro medidor secadoras" },
-    { sub: "tarifas", tarjeta: "🧾 Tarifario de Servicios", claves: "socios clientes pilado secado flete precio por qq vigencia" },
-    { sub: "tarifas", tarjeta: "📦 Tarifas de empaque", claves: "sacos 10 25 50 libras empaque matriz" },
+    { sub: "tarifas", tarjeta: "🧾 Tarifario de Servicios", claves: "socios clientes pilado secado flete seleccion envejecido precio por qq vigencia" },
+    { sub: "tarifas", tarjeta: "📦 Tarifas de empaque", claves: "sacos 10 25 50 libras empaque matriz cargo por bulto socio despacho" },
     { sub: "tarifas", tarjeta: "🧹 Tarifas de Procesos", claves: "seleccion envejecido envejecimiento por qq" },
-    { sub: "tarifas", tarjeta: "🛒 Tarifas por libra", claves: "venta al detalle mostrador precio por libra 0.11 corriente arrocillo polvillo" },
-    { sub: "nomina", tarjeta: "🏷️ Nueva actividad de cuadrilla", claves: "crear actividad tarifa por saco" },
-    { sub: "nomina", tarjeta: "Actividades y tarifas", claves: "cuadrilla actividades tarifas listado" },
+    { sub: "tarifas", tarjeta: "🛒 Tarifas por libra", claves: "venta al detalle mostrador precio por libra 0.11 corriente arrocillo polvillo venta por qq quintal descuento centavo" },
+    { sub: "nomina", tarjeta: "🏷️ Nueva actividad de cuadrilla", claves: "crear actividad tarifa por saco cambio de saco" },
+    { sub: "nomina", tarjeta: "Actividades y tarifas", claves: "cuadrilla actividades tarifas listado secado en tendal tendal por saco cambio de saco" },
     { sub: "socios", tarjeta: "🧑‍🤝‍🧑 Nuevo accionista", claves: "crear socio accionista codigo" },
     { sub: "socios", tarjeta: "Accionistas registrados", claves: "socios accionistas lista renombrar" },
     { sub: "socios", tarjeta: "🏦 Cuentas Bancarias de Socios", claves: "banco numero de cuenta datos bancarios" },
     { sub: "secuenciales", tarjeta: "📄 Secuenciales de documentos", claves: "numeracion guia de remision prefijo punto de emision factura" },
     { sub: "usuarios", tarjeta: "👤 Crear usuario", claves: "usuario clave contrasena rol operador administrador cedula" },
-    { sub: "usuarios", tarjeta: "Usuarios registrados", claves: "usuarios permisos modulos accionistas editar" },
+    { sub: "usuarios", tarjeta: "Usuarios registrados", claves: "usuarios permisos modulos accionistas editar sub pestanas solo ver" },
     { sub: "usuarios", tarjeta: "🕓 Actividad del sistema", claves: "auditoria log historial quien creo modifico elimino" }
   ];
 
@@ -3045,12 +3051,19 @@ export function App() {
     if (dif(selectionRatesForm.seleccion_rate, selectionRates.seleccion_rate) || dif(selectionRatesForm.envejecimiento_rate, selectionRates.envejecimiento_rate)) {
       list.push("Tarifas de Procesos");
     }
+    if (paramContablesSucio) list.push("Parámetros contables");
     return list;
-  }, [settingsForm, appSettings, laborRatesForm, packagingRatesForm, selectionRatesForm, selectionRates]);
+  }, [settingsForm, appSettings, laborRatesForm, packagingRatesForm, selectionRatesForm, selectionRates, paramContablesSucio]);
 
   // Navegación entre módulos (único punto de salida del menú lateral). Solo
   // intercepta el caso "salir de Configuración con cambios pendientes"; cualquier
   // otra navegación pasa igual que antes.
+  // Entra a Transporte y Cosechadora directo en una sección («config» = su ⚙️
+  // Configuración). CampoWorkspace lee la marca al montarse y la borra.
+  function abrirCampo(seccion?: string) {
+    if (seccion) { try { localStorage.setItem("bascula-erp:campo-seccion", seccion); } catch { /* almacenamiento no disponible */ } }
+    irATab("Caja de Campo");
+  }
   function irATab(tab: typeof activeTab) {
     if (tab !== activeTab && activeTab === "Configuracion" && configPendientes.length > 0) {
       const ok = window.confirm(
@@ -7294,6 +7307,11 @@ export function App() {
       day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit"
     });
     const piladora = (appSettings?.business_name || "").trim() || "BASCULA ERP";
+    // Encabezado desde Configuración → 🏢 Datos del negocio (como los demás comprobantes).
+    const encabezado = [
+      [appSettings?.business_subtitle, appSettings?.ruc && `RUC: ${appSettings.ruc}`].filter(Boolean).join(" · "),
+      [appSettings?.address, appSettings?.phone && `Telf: ${appSettings.phone}`].filter(Boolean).join(" · ")
+    ].filter(Boolean);
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
       <title>Recibo Venta Detalle</title>
       <style>
@@ -7303,6 +7321,7 @@ export function App() {
         .tk{width:72mm;margin:0 auto}
         h1{font-size:16px;margin:0;text-align:center;letter-spacing:.5px}
         .sub{text-align:center;font-weight:700;font-size:12px;margin:2px 0 6px}
+        .info{text-align:center;font-size:11px;color:#333;margin:1px 0}
         .row{display:flex;justify-content:space-between;margin:2px 0}
         .k{color:#555}
         hr{border:none;border-top:1px dashed #333;margin:6px 0}
@@ -7316,6 +7335,7 @@ export function App() {
       </style></head><body>
       <div class="tk">
         <h1>${esc(piladora)}</h1>
+        ${encabezado.map((l) => `<div class="info">${esc(l)}</div>`).join("")}
         <div class="sub">Recibo de Venta al Detalle</div>
         <div class="row"><span class="k">Fecha:</span> <span>${esc(fecha)}</span></div>
         <div class="row"><span class="k">Cliente:</span> <strong>${esc(t.cliente)}</strong></div>
@@ -7333,7 +7353,7 @@ export function App() {
         </table>
         ${enQQ ? `<div class="row"><span class="k">Equivale a:</span> <span>${esc(t.libras)} lb</span></div>` : ""}
         <div class="tot"><span>TOTAL</span><span>${money(t.total)}</span></div>
-        <div class="foot">¡Gracias por su compra!<br>Vuelva pronto 🌾</div>
+        <div class="foot">${appSettings?.receipt_footer?.trim() ? esc(appSettings.receipt_footer.trim()) : "¡Gracias por su compra!<br>Vuelva pronto 🌾"}</div>
       </div>
     </body></html>`;
     const win = window.open("", "_blank", "width=420,height=720");
@@ -21774,6 +21794,7 @@ export function App() {
                 if (["admin", "users"].includes(key)) return "Usuarios";
                 if (["firebase", "device_key"].includes(key)) return "Bascula movil";
                 if (key.startsWith("campo_")) return "Transporte y cosechadora";
+                if (key === "contabilidad") return "Contabilidad";
                 if (key === "app_mode") return "Seguridad";
                 return "General";
               };
@@ -21782,11 +21803,12 @@ export function App() {
                 if (key === "matriz") return { label: "Abrir socios", run: () => setConfigSubTab("socios") };
                 if (key === "admin" || key === "users") return { label: "Abrir usuarios", run: () => setConfigSubTab("usuarios") };
                 if (key === "app_mode") return { label: "Ver puesta en marcha", run: () => { abrirTarjetaRef.current = "✅ Puesta en marcha"; setConfigSubTab("operacion"); } };
-                if (key.startsWith("campo_")) return { label: "Abrir Campo", run: () => irATab("Caja de Campo") };
+                if (key === "contabilidad") return { label: "Abrir parámetros", run: () => irAAjuste({ sub: "operacion", tarjeta: "📊 Parámetros contables", claves: "" }) };
+                if (key.startsWith("campo_")) return { label: "Abrir configuración de Campo", run: () => abrirCampo("config") };
                 return null;
               };
               const readinessGroups = companyReadiness
-                ? ["Empresa", "Usuarios", "Bascula movil", "Transporte y cosechadora", "Seguridad", "General"]
+                ? ["Empresa", "Usuarios", "Bascula movil", "Transporte y cosechadora", "Contabilidad", "Seguridad", "General"]
                     .map((area) => ({
                       area,
                       checks: companyReadiness.checks.filter((check) => readinessAreaLabel(check.key) === area)
@@ -21930,7 +21952,8 @@ export function App() {
                             <span>2. Usuarios y permisos</span>
                             <span>3. Bascula movil/Firebase</span>
                             <span>4. Transporte y cosechadora</span>
-                            <span>5. Cambiar a produccion antes de datos reales</span>
+                            <span>5. Saldos iniciales y parametros contables</span>
+                            <span>6. Cambiar a produccion antes de datos reales</span>
                           </div>
                         </div>
                       )}
@@ -22005,7 +22028,10 @@ export function App() {
                     <button className="primary" disabled={!isAdmin}>Guardar parámetros</button>
                   </div>
                   {!isAdmin && <p className="muted">Solo un administrador puede cambiar estos parámetros.</p>}
-                  <p className="muted" style={{ fontSize: 12 }}>El <strong>costo de secado</strong> (guardianía + por túnel) se edita en «👷 Tarifario de Cuadrilla».</p>
+                  <p className="muted" style={{ fontSize: 12 }}>
+                    El <strong>costo de secado</strong> (guardianía + por túnel) se edita en{" "}
+                    <button type="button" className="vdTarifaLink" onClick={() => irAAjuste({ sub: "nomina", tarjeta: "💲 Tarifas de pago", claves: "" })}>💲 Tarifas de pago (Nómina)</button>.
+                  </p>
                 </form>
                 </details>
               </section>
@@ -22018,6 +22044,13 @@ export function App() {
                   <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🏢 Datos del negocio y Vista previa de encabezado</summary>
                 <form onSubmit={(e) => saveSettings(e).catch((err) => addToast(err.message, "error"))}>
                   <p className="muted">Estos datos aparecen en comprobantes, reportes impresos y documentos operativos.</p>
+                  {esSocioActivoCfg && (
+                    <p className="muted" style={{ marginTop: -4 }}>
+                      Son los datos de <strong>{accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "este socio"}</strong> para
+                      sus propios comprobantes; no cambian los de la Matriz.
+                    </p>
+                  )}
+                  {!esSocioActivoCfg && (<>
                   <div className="systemStatusGrid" style={{ margin: "10px 0 14px" }}>
                     <div className="systemStatusCard ok">
                       <span className="statusDot" />
@@ -22060,6 +22093,7 @@ export function App() {
                     </div>
                     <small className="muted">Aparece en el selector de unidades del encabezado. Renombrarlo no afecta históricos ni caja: todo se vincula por ID.</small>
                   </label>
+                  </>)}
                   <label>
                     <span>Nombre comercial <span style={{ color: "#ef4444" }}>*</span></span>
                     <input
@@ -22123,6 +22157,7 @@ export function App() {
                       onChange={(e) => setSettingsForm({ ...settingsForm, receipt_footer: e.target.value })}
                     />
                   </label>
+                  {!esSocioActivoCfg && (
                   <div className="companyIdentityActions">
                     <label style={{ display: "flex", alignItems: "flex-start", gap: 10, margin: 0 }}>
                       <input
@@ -22150,6 +22185,7 @@ export function App() {
                       />
                     </label>
                   </div>
+                  )}
                   <button className="primary" disabled={!isAdmin}>Guardar cambios</button>
                   {!isAdmin && <p className="muted">Solo un administrador puede modificar estos datos.</p>}
                 </form>
@@ -23227,11 +23263,22 @@ export function App() {
                   <details id="cfg-tarifas-libra">
                     <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🛒 Tarifas por libra (Venta al Detalle)</summary>
                     <p className="muted" style={{ marginTop: 8 }}>
-                      Precio por libra de cada producto de mostrador. El cotizador de «Venta Detalle» (Caja) lo
-                      autocompleta al elegir el producto. Se guarda solo al salir del campo. Deja 0 para no sugerir.
+                      Precio por libra de cada producto de mostrador. «Venta Detalle» (Caja) lo usa al elegir el producto:
+                      <strong> por Libra</strong> cobra esta tarifa y <strong>por QQ</strong> cobra el quintal (tarifa × {LIBRAS_POR_QQ})
+                      con {money(DESCUENTO_QQ)} menos. Se guarda solo al salir del campo. Con 0 no hay tarifa: Caja usa el último
+                      precio usado en ese equipo o no deja vender el producto.
+                      {esSocioActivoCfg && " Estas tarifas son las mismas para todos los accionistas."}
                     </p>
+                    {(() => {
+                      const faltan = PRODUCTOS_DETALLE.filter((dp) => !products.some((x) => x.code === dp.code));
+                      return faltan.length > 0 && products.length > 0 ? (
+                        <p className="vdCard__aviso" style={{ margin: "0 0 8px" }}>
+                          No están en el catálogo de productos (no salen en Venta Detalle): {faltan.map((dp) => `${dp.label} (código ${dp.code})`).join(", ")}.
+                        </p>
+                      ) : null;
+                    })()}
                     <table className="cajaTable" style={{ width: "100%" }}>
-                      <thead><tr><th>Producto</th><th className="num">Precio/lb $</th></tr></thead>
+                      <thead><tr><th>Producto</th><th className="num">Precio/lb $</th><th className="num">Venta por QQ $</th></tr></thead>
                       <tbody>
                         {PRODUCTOS_DETALLE.map((dp) => {
                           const p = products.find((x) => x.code === dp.code);
@@ -23248,6 +23295,15 @@ export function App() {
                                 onBlur={(e) => { const v = e.target.value.trim(); if (v !== "" && Number(v) !== Number(p.price_per_pound ?? 0)) guardarTarifaLibra(p.id, v); }}
                                 style={{ width: 110, padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }} />
                             </td>
+                            {(() => {
+                              const tarifa = Number(p.price_per_pound ?? 0);
+                              const qq = precioAplicadoDetalle(tarifa, "QQ");
+                              return (
+                                <td className="num" title={qq != null ? `Base ${formatoPrecio(round2(tarifa * LIBRAS_POR_QQ))} − ${money(DESCUENTO_QQ)}` : "Sin tarifa por libra"}>
+                                  {qq != null ? formatoPrecio(qq) : "—"}
+                                </td>
+                              );
+                            })()}
                           </tr>
                           );
                         })}
@@ -23515,6 +23571,76 @@ export function App() {
               </section>
             )}
 
+            {/* ── 📊 Parámetros contables (financial_settings del accionista ACTIVO) ── */}
+            {configSubTab === "operacion" && isAdmin && (
+              <section className="panelGrid">
+                <details className="formPanel" style={{ gridColumn: "1 / -1" }}
+                  onToggle={(e) => setParamContablesAbierto((e.currentTarget as HTMLDetailsElement).open)}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>
+                    📊 Parámetros contables <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· capital, resultados anteriores y fecha de inicio de los Estados Financieros</span>
+                  </summary>
+                  {paramContablesAbierto && (
+                    <ParametrosContables
+                      key={activeAccionistaId ?? "sin-accionista"}
+                      accionistaNombre={accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "el accionista activo"}
+                      puedeEditar={isAdmin}
+                      avisar={addToast}
+                      onSucio={setParamContablesSucio}
+                      irAEstados={visibleTabs.includes("Estados Financieros") ? () => irATab("Estados Financieros") : undefined}
+                    />
+                  )}
+                </details>
+              </section>
+            )}
+
+            {/* ── 🧭 Ajustes que viven dentro de su módulo (se configuran donde se usan) ── */}
+            {configSubTab === "operacion" && !esSocioActivoCfg && (() => {
+              const accesos: Array<{ icono: string; donde: string; que: string; ir?: () => void }> = [
+                { icono: "🚜", donde: `${campoNombre} → ⚙️ Configuración`,
+                  que: "Flota y maquinaria, operadores con su tarifa, cuentas (CAJA, BANCO…) y categorías de gasto. La Nómina de Operadores sugiere el pago con esas tarifas.",
+                  ir: esMatrizActiva ? () => abrirCampo("config") : undefined },
+                { icono: "⚖️", donde: "Báscula → «Contar tickets desde»",
+                  que: "Fecha desde la que los tickets de la báscula cuentan como pendientes (el historial anterior no).",
+                  ir: visibleTabs.includes("Bascula") ? () => irATab("Bascula") : undefined },
+                { icono: "🚚", donde: "Nómina → Bajada de carro → «Contar desde»",
+                  que: "Fecha desde la que la bajada de carro se paga por aquí (lo anterior se asume pagado).",
+                  ir: visibleTabs.includes("Nomina") ? () => { setNominaView("bajada"); loadBajadas().catch(() => undefined); irATab("Nomina"); } : undefined },
+                { icono: "📊", donde: "Costos Operativos → Resultado mensual",
+                  que: "Rubros del costo mensual, su enlace con las categorías de Caja y el switch «Aparece en Caja».",
+                  ir: esMatrizActiva && visibleTabs.includes("Costos Operativos") ? () => { setCostosView("resultado"); irATab("Costos Operativos"); } : undefined },
+                { icono: "🔩", donde: "Inventario → Repuestos",
+                  que: "Catálogo de repuestos de planta, su ubicación en bodega y el stock.",
+                  ir: esMatrizActiva && visibleTabs.includes("Inventario") ? () => { setInvVista("repuestos"); irATab("Inventario"); } : undefined },
+                { icono: "🏛️", donde: "Estados Financieros → Activos fijos",
+                  que: "Costo, vida útil y valor residual de cada equipo (depreciación del balance).",
+                  ir: visibleTabs.includes("Estados Financieros") ? () => irATab("Estados Financieros") : undefined }
+              ];
+              return (
+                <section className="panelGrid">
+                  <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                    <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>
+                      🧭 Ajustes dentro de otros módulos <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· se configuran donde se usan</span>
+                    </summary>
+                    <p className="muted" style={{ margin: "6px 0 10px" }}>Estos ajustes no están en Configuración porque se manejan en su propio módulo. Aquí tienes el acceso directo.</p>
+                    <div className="cfgAccesos">
+                      {accesos.map((a) => (
+                        <div key={a.donde} className="cfgAcceso">
+                          <span className="cfgAcceso__icono" aria-hidden="true">{a.icono}</span>
+                          <div className="cfgAcceso__texto">
+                            <strong>{a.donde}</strong>
+                            <small>{a.que}</small>
+                          </div>
+                          {a.ir
+                            ? <button type="button" className="btnSecondary" onClick={a.ir}>Ir →</button>
+                            : <span className="muted" style={{ fontSize: 12 }}>Sin acceso</span>}
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                </section>
+              );
+            })()}
+
             {/* ── Puesta en marcha / datos ── */}
             {/* Puesta en marcha + datos (Operación y Planta) */}
             {configSubTab === "operacion" && !esSocioActivoCfg && (
@@ -23574,7 +23700,7 @@ export function App() {
                         <span className="launchStepNumber">4</span>
                         <div>
                           <strong>Tarifas y secuenciales</strong>
-                          <p>Revisa precios de servicios, empaque, cuadrilla y numeracion de documentos.</p>
+                          <p>Revisa precios de servicios, empaque, procesos, tarifas por libra (venta al detalle), cuadrilla y numeracion de documentos.</p>
                         </div>
                         <div className="launchStepActions">
                           <button type="button" className="btnGhost" onClick={() => setConfigSubTab("nomina")}>Nómina</button>
@@ -23586,31 +23712,42 @@ export function App() {
                       <article className="launchStep">
                         <span className="launchStepNumber">5</span>
                         <div>
-                          <strong>Báscula móvil y Campo</strong>
-                          <p>Valida sincronizacion de la app Android y deja lista la operacion de transporte/cosechadora.</p>
+                          <strong>Catálogos de operación</strong>
+                          <p>Categorias de caja (p. ej. MATERIALES CONSUMIBLES), maquinas por area (las usan Repuestos y Materiales), sacos con stock minimo y precio del combustible.</p>
                         </div>
                         <div className="launchStepActions">
-                          <button type="button" className="btnGhost" onClick={() => setConfigSubTab("estado")}>Sync</button>
-                          <button type="button" className="btnGhost" onClick={() => irATab("Caja de Campo")}>Campo</button>
+                          <button type="button" className="btnGhost" onClick={() => irAAjuste({ sub: "operacion", tarjeta: "🏷️ Categorías de caja", claves: "" })}>Caja</button>
+                          <button type="button" className="btnGhost" onClick={() => irAAjuste({ sub: "operacion", tarjeta: "🔧 Categorías de Mantenimiento", claves: "" })}>Máquinas</button>
+                          {manejaSacosPropios && <button type="button" className="btnGhost" onClick={() => irAAjuste({ sub: "operacion", tarjeta: "📦 Catálogo de sacos", claves: "" })}>Sacos</button>}
+                          <button type="button" className="btnGhost" onClick={() => irAAjuste({ sub: "operacion", tarjeta: "⛽ Precio del combustible", claves: "" })}>Combustible</button>
                         </div>
                       </article>
 
                       <article className="launchStep">
                         <span className="launchStepNumber">6</span>
                         <div>
-                          <strong>Limpieza final y respaldo</strong>
-                          <p>Si hubo pruebas, limpia solo en modo prueba. Luego crea respaldo antes de trabajar real.</p>
+                          <strong>Báscula móvil y Campo</strong>
+                          <p>Valida sincronizacion de la app Android y deja lista la operacion de transporte/cosechadora (flota, operadores, cuentas).</p>
                         </div>
                         <div className="launchStepActions">
-                          {esMatrizActiva && <button type="button" className="btnGhost" onClick={() => { abrirTarjetaRef.current = "⚠️ Zona de peligro"; setConfigSubTab("operacion"); }}>Zona de peligro</button>}
-                          <button type="button" className="btnGhost" onClick={runBackupNow} disabled={!isAdmin || backupBusy}>
-                            {backupBusy ? "Respaldando..." : "Respaldar"}
-                          </button>
+                          <button type="button" className="btnGhost" onClick={() => setConfigSubTab("estado")}>Sync</button>
+                          <button type="button" className="btnGhost" onClick={() => abrirCampo("config")}>Campo</button>
                         </div>
                       </article>
 
                       <article className="launchStep">
                         <span className="launchStepNumber">7</span>
+                        <div>
+                          <strong>Limpieza final</strong>
+                          <p>Si hubo pruebas, borralas (solo en modo prueba): se conservan la configuracion y los catalogos.</p>
+                        </div>
+                        <div className="launchStepActions">
+                          {esMatrizActiva && <button type="button" className="btnGhost" onClick={() => { abrirTarjetaRef.current = "⚠️ Zona de peligro"; setConfigSubTab("operacion"); }}>Zona de peligro</button>}
+                        </div>
+                      </article>
+
+                      <article className="launchStep">
+                        <span className="launchStepNumber">8</span>
                         <div>
                           <strong>Saldos iniciales (cierre de mes)</strong>
                           <p>Carga lo que tenias al ultimo dia del mes: cuentas por cobrar y por pagar, inventario, cascara y anticipos.</p>
@@ -23618,6 +23755,30 @@ export function App() {
                         <button type="button" className="btnGhost" onClick={() => irAAjuste({ sub: "operacion", tarjeta: "📥 Saldos iniciales", claves: "" })}>
                           Abrir
                         </button>
+                      </article>
+
+                      <article className="launchStep">
+                        <span className="launchStepNumber">9</span>
+                        <div>
+                          <strong>Parámetros contables</strong>
+                          <p>Capital social, resultados acumulados y la fecha de inicio contable (el dia siguiente al corte de los saldos iniciales).</p>
+                        </div>
+                        <button type="button" className="btnGhost" onClick={() => irAAjuste({ sub: "operacion", tarjeta: "📊 Parámetros contables", claves: "" })}>
+                          Abrir
+                        </button>
+                      </article>
+
+                      <article className="launchStep">
+                        <span className="launchStepNumber">10</span>
+                        <div>
+                          <strong>Respaldo y modo producción</strong>
+                          <p>Crea un respaldo y pasa el sistema a produccion (APP_MODE=production) para proteger los datos reales.</p>
+                        </div>
+                        <div className="launchStepActions">
+                          <button type="button" className="btnGhost" onClick={runBackupNow} disabled={!isAdmin || backupBusy}>
+                            {backupBusy ? "Respaldando..." : "Respaldar"}
+                          </button>
+                        </div>
                       </article>
                     </div>
 
@@ -23636,11 +23797,13 @@ export function App() {
                 <form onSubmit={(e) => submitResetData(e).catch((err) => addToast(err.message, "error"))}>
                   <p className="muted">
                     Reinicia la operación borrando <strong>todos los movimientos operativos de prueba</strong> del ERP: tickets, lotes, traspasos, secado, producción,
-                    combustible, pilado, selección, pedidos, ventas, inventario (productos, insumos y sacos a 0), caja, gastos, nómina,
-                    anticipos, liquidaciones, fomentos, agricultores, clientes, cuentas por cobrar/pagar, conciliación bancaria,
-                    <strong> y los históricos de Transporte y Cosechadora</strong> (servicios de fletes/cosecha, partes diarios, caja de
-                    transporte y CxP), historial de auditoría y sincronización. Se conservan usuarios, accionistas, configuración,
-                    tarifas, productos, bodegas, equipos y catálogos de insumos/sacos <strong>y la flota/choferes de Transporte</strong>.
+                    combustible, pilado, selección, pedidos, ventas, compras, inventario (productos, insumos, sacos y repuestos a 0), caja, gastos, nómina,
+                    anticipos, liquidaciones, fomentos, agricultores, clientes (con sus tarifas), cuentas por cobrar/pagar, saldos iniciales,
+                    conciliación bancaria, notificaciones <strong>y los históricos de Transporte y Cosechadora</strong> (servicios de fletes/cosecha,
+                    partes diarios, nómina de operadores, caja de transporte y CxP), historial de auditoría y sincronización.
+                    Se conservan usuarios, accionistas, configuración, tarifas de planta y de socios, productos y presentaciones, bodegas,
+                    equipos y activos fijos, máquinas y categorías, catálogos de insumos, sacos y repuestos, proveedores, rubros y cifras
+                    manuales del Resultado mensual <strong>y la flota/choferes de Transporte</strong>. Los túneles quedan disponibles.
                   </p>
                   <p className="dangerNote">Esta acción no se puede deshacer. No recupera datos ni restaura una copia de seguridad.</p>
                   {companyReadiness?.reset_transactions_allowed === false && (

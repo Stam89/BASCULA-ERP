@@ -7,7 +7,7 @@ Actualizado: 2026-10-02
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: Caja · Venta Detalle por Libra o por QQ (QQ con un centavo menos), total de solo lectura y Enter para registrar.
+- Ultimo cambio funcional: Configuracion revisada: borrado de prueba conserva equipos/repuestos/tarifas de socios, Parametros contables, accesos a ajustes de otros modulos, Mi negocio del socio guarda en su fila.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,15 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Configuracion: revision completa y cabos sueltos (2026-10-02)
+- «Borrar datos de prueba» corregido (`services/datos-prueba.ts`, `vaciarDatosDePrueba` + `planVaciado` puro con test): TRUNCATE … CASCADE vaciaba tambien `equipment` (FK `cash_movement_id` → caja), el catalogo `repuestos` (FK al equipo) y `tarifario_servicio` (FK al cliente) aunque el texto decia que se conservaban. Ahora `CATALOGOS_PRESERVADOS` suelta esas FK, trunca, deja `cash_movement_id` en NULL / borra solo las tarifas de CLIENTES (las de socios quedan) y recrea las FK identicas. Se agregaron a la lista `notificaciones`, `purchases`, `purchase_items`, `tunnel_reservations`, `gas_consumption_reports`; se quito `selection_services` (la borro la mig 20260727); los tuneles vuelven a DISPONIBLE. Probado sobre una COPIA de la base (pg_dump → `bascula_erp_wipetest`, borrada al final): 255 FK identicas, catalogos intactos. `resultado_mensual_manual` sigue SIN borrarse (pendiente preguntar).
+- 📊 Parametros contables (tarjeta nueva en Operacion, admin, por accionista activo, `components/ParametrosContables.tsx`): capital social, resultados acumulados, fecha de inicio contable (boton «dia siguiente al corte de Saldos iniciales») y precio de referencia por QQ → GET/PUT `/finance/settings` (ya existian, no tenian pantalla; alimentan Balance y Estado de Resultados). Cuenta en «cambios sin guardar». Checklist «Empresa lista»: nuevo check `contabilidad` (Inicio contable de la Matriz) en grupo Contabilidad.
+- 🧭 Ajustes dentro de otros modulos (Matriz): accesos a Campo → ⚙️ Configuracion (flota, operadores, tarifas, cuentas, categorias; entra directo via `localStorage bascula-erp:campo-seccion` que lee `CampoWorkspace`), Bascula «Contar tickets desde», Nomina → Bajada «Contar desde», Costos Operativos → Resultado mensual (rubros), Inventario → Repuestos, Estados Financieros → Activos fijos.
+- Bug: con un SOCIO activo, «🏢 Datos del negocio» (Mi negocio) guardaba en la fila de la MATRIZ. `PUT /settings` ahora guarda en la fila del accionista activo (`resolveSettingsSocioId`); `sync_matriz` solo para la Matriz. El socio ya no ve nombre de Transporte, bloque Matriz ni «Actualizar tambien la Matriz». Prueba ROLLBACK `settings_socio_test.mjs`: OK.
+- Tarifas por libra: columna «Venta por QQ $» (tarifa × 100 − $0.01), texto al dia, aviso si falta un producto de mostrador en el catalogo; `PATCH /products/:id/tarifa-libra` ahora `requireAdmin` (la UI ya era solo admin). Ticket de Venta Detalle imprime subtitulo/RUC/direccion/telefono y el pie de comprobante.
+- Puesta en marcha en 10 pasos (+ «Catalogos de operacion», limpieza → saldos iniciales → parametros contables → respaldo y produccion). Indice del buscador con claves de lo nuevo. «Parametros de planta» apuntaba a la tarjeta inexistente «Tarifario de Cuadrilla» → enlace a 💲 Tarifas de pago.
+- Sin UI aun (no se construyo): catalogo de productos y presentaciones (sembrados por migracion).
 
 ### Caja · «Venta Detalle» por Libra o por QQ (2026-10-02)
 - `components/VentaDetalleCard.tsx` reemplaza el cotizador bidireccional: selector pill «Venta por Libra / Venta por QQ» (radiogroup; flechas, o L/Q dentro de Cantidad; el modo se recuerda por equipo en localStorage `bascula-erp:venta-detalle-modo`). Total $ es de SOLO LECTURA (tabIndex -1) y se recalcula con producto/cantidad/modo: `Total = Cantidad × PrecioAplicado`. Flujo sin mouse: Producto → Tab → Cantidad → Enter registra (candado contra doble Enter); al registrar se limpia y vuelve el foco a Producto.
