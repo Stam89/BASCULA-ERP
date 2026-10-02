@@ -4499,6 +4499,40 @@ textarea::placeholder {
 .mantSubRep output { font-weight: 800; color: #0f172a; font-variant-numeric: tabular-nums; }
 .mantFondo { border: 1px dashed #e5e7eb; border-radius: 10px; padding: 10px 12px; }
 .mantFondo.is-on { background: #fffbeb; border: 1px solid #fde68a; }
+/* Ventas · Nuevo Pedido: captura (2/3) + resumen sticky (1/3); equivalente a
+   grid-cols-1 lg:grid-cols-3 gap-6 / lg:col-span-2 / sticky top-4 / opacity-50. */
+.pedidoLayout { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; align-items: start; }
+.pedidoLayout__main { display: grid; gap: 16px; min-width: 0; }
+@media (min-width: 1024px) {
+  .pedidoLayout { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .pedidoLayout__main { grid-column: span 2 / span 2; }
+}
+.orderSummarySidebar { position: sticky; top: 16px; display: grid; gap: 16px; min-width: 0; }
+.orderSummarySidebar__cliente { margin: 0 0 10px; font-size: 13px; color: #334155; }
+.pedidoBloqueado { opacity: .5; pointer-events: none; user-select: none; }
+.socioChips { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.socioChips__label { font-size: 12px; font-weight: 700; color: #64748b; }
+.socioChip { border: 1.5px solid #cbd5e1; background: #fff; color: #334155; border-radius: 999px; padding: 6px 14px; font-weight: 700; font-size: 13px; cursor: pointer; line-height: 1.2; }
+.socioChip:hover:not(:disabled) { border-color: #0f766e; color: #0f766e; }
+.socioChip.is-activo { border-color: #0f766e; background: #0f766e; color: #fff; }
+.pedidoClienteSel { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 8px; background: #f0fdfa; border: 1px solid #99f6e4; font-size: 13.5px; }
+.orderItemsGrid__tabla { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 720px; }
+.orderItemsGrid__tabla th { background: #6b7280; color: #fff; padding: 8px 10px; text-align: left; font-size: 12px; white-space: nowrap; }
+.orderItemsGrid__tabla th.num, .orderItemsGrid__tabla td.num { text-align: right; }
+.orderItemsGrid__tabla td { padding: 8px 10px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+.orderItemsGrid__captura td { background: #fffbeb; border-bottom: 2px solid #fde68a; }
+.orderItemsGrid__captura select, .orderItemsGrid__captura input { width: 100%; min-width: 0; padding: 7px 8px !important; border: 1px solid #d1d5db; border-radius: 6px; font-size: 13px; background: #fff; }
+.orderItemsGrid__captura td:nth-child(1) { min-width: 150px; }
+.orderItemsGrid__captura td:nth-child(2) { min-width: 130px; }
+.orderItemsGrid__captura td:nth-child(3), .orderItemsGrid__captura td:nth-child(5) { min-width: 90px; }
+.orderItemsGrid__captura input[type="number"] { text-align: right; }
+.orderItemsGrid__bultos { color: #2563eb; font-weight: 700; padding-top: 15px !important; white-space: nowrap; }
+.orderItemsGrid__agregar { border: none; background: #f59e0b; color: #fff; border-radius: 6px; padding: 7px 10px; font-weight: 800; cursor: pointer; }
+.orderItemsGrid__agregar:disabled { background: #d1d5db; color: #6b7280; cursor: not-allowed; }
+.orderItemsGrid__info td { background: #fffdf5; padding-top: 4px; }
+.orderItemsGrid__infoGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px 16px; }
+.orderItemsGrid__vacio { padding: 20px 12px !important; text-align: center; color: #9ca3af; font-weight: 600; }
+.orderItemsGrid__tabla tfoot td { background: #f0fdf4; font-weight: 800; padding: 8px 10px; }
 /* Transporte y Cosechadora · Nómina de Operadores: matriz de entrada masiva. */
 .nomMatriz__barra { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
 .nomMatriz__filtros { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }

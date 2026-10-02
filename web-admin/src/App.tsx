@@ -14,6 +14,7 @@ import { RepuestosAlertaDashboard, RepuestosModule, etiquetaCompat, type Repuest
 import { BuscadorCombo } from "./components/BuscadorCombo";
 import { SaldosIniciales } from "./components/SaldosIniciales";
 import { MaquinaBuscador, etiquetaMaquina } from "./components/MaquinaBuscador";
+import { ShareholderQuickSelect, type AccionistaChip } from "./components/ShareholderQuickSelect";
 import * as XLSX from "xlsx";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
@@ -3211,6 +3212,17 @@ export function App() {
   const [customerSearch, setCustomerSearch] = useState("");
   const [filteredCustomers, setFilteredCustomers] = useState<Customer[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
+  // Nuevo Pedido · acceso rápido de accionistas: el socio elegido (su cliente queda
+  // en selectedCustomerId) y el que se está resolviendo/creando.
+  const [pedidoSocioId, setPedidoSocioId] = useState("");
+  const [pedidoSocioCargando, setPedidoSocioCargando] = useState("");
+  // Todos los accionistas activos (catálogo), para los chips del acceso rápido.
+  const [accionistasPedido, setAccionistasPedido] = useState<AccionistaChip[]>([]);
+  // Fila de captura del grid de productos (navegación cero mouse).
+  const pedidoProductoRef = useRef<HTMLSelectElement | null>(null);
+  const pedidoPresentacionRef = useRef<HTMLSelectElement | null>(null);
+  const pedidoCantidadRef = useRef<HTMLInputElement | null>(null);
+  const pedidoPrecioRef = useRef<HTMLInputElement | null>(null);
   const [showQuickNewCustomer, setShowQuickNewCustomer] = useState(false);
   // Pedido a compartir con el cliente (al tomarlo o desde la Cola de Despachos).
   const [pedidoCompartir, setPedidoCompartir] = useState<{ data: PedidoCompartirData; titulo?: string } | null>(null);
@@ -7407,19 +7419,19 @@ export function App() {
   }
 
   // ── Agregar línea de pedido al carrito ──
-  function addSaleLineItem() {
+  function addSaleLineItem(): boolean {
     if (!saleLineForm.product_id || !saleLineForm.presentation_id || !saleLineForm.quantity || saleLineForm.unit_price === "") {
       addToast("Completa producto, presentación, cantidad y precio", "error");
-      return;
+      return false;
     }
     if (lineaExcedeStock) {
       addToast("El socio no tiene suficiente producto terminado ni cáscara libre para respaldar esta cantidad", "error");
-      return;
+      return false;
     }
     const presentation = presentacionLineaActual;
     if (!presentation) {
       addToast("Escribe el peso del bulto en libras (Otro peso)", "error");
-      return;
+      return false;
     }
     const newItem: SaleLineItem = {
       id: `temp-${Date.now()}`,
@@ -7439,6 +7451,50 @@ export function App() {
     setSaleProductPresentations([]);
     setSelectedPresentationId("");
     addToast("Línea agregada", "success");
+    return true;
+  }
+  // Enter en «Precio» agrega la línea, limpia la captura y vuelve al producto.
+  function agregarLineaYVolver() {
+    if (addSaleLineItem()) window.setTimeout(() => pedidoProductoRef.current?.focus(), 0);
+  }
+
+  // Acceso rápido de accionistas: el pedido queda a nombre del socio. Su cliente
+  // es el registrado con su nombre (tipo ACCIONISTA); si no existe, se crea una vez.
+  async function elegirSocioPedido(a: AccionistaChip) {
+    if (pedidoSocioId === a.id) return;
+    const norm = (t: string) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toUpperCase();
+    const tipoDe = (c: Customer) => String((c as { customer_type?: string | null }).customer_type ?? "");
+    let cliente = customers.find((c) => tipoDe(c) === "ACCIONISTA" && norm(c.full_name) === norm(a.name))
+      ?? customers.find((c) => norm(c.full_name) === norm(a.name));
+    if (!cliente) {
+      setPedidoSocioCargando(a.id);
+      try {
+        cliente = await apiPost<Customer>("/customers", { full_name: a.name, customer_type: "ACCIONISTA" });
+        const nuevo = cliente;
+        setCustomers((prev) => [...prev, nuevo]);
+      } catch (e) {
+        addToast(e instanceof Error ? e.message : "No se pudo preparar el cliente del socio", "error");
+        return;
+      } finally {
+        setPedidoSocioCargando("");
+      }
+    }
+    setPedidoSocioId(a.id);
+    setSelectedCustomerId(cliente.id);
+    setCustomerSearch(cliente.full_name);
+    setFilteredCustomers([]);
+    window.setTimeout(() => pedidoProductoRef.current?.focus(), 0);
+  }
+  useEffect(() => {
+    if (activeTab !== "Ventas" || ventasView !== "nuevo" || accionistasPedido.length) return;
+    apiGet<AccionistaChip[]>("/catalogs/accionistas").then(setAccionistasPedido).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, ventasView]);
+  function quitarClientePedido() {
+    setPedidoSocioId("");
+    setSelectedCustomerId("");
+    setCustomerSearch("");
+    setFilteredCustomers([]);
   }
 
   // ── Mapeo de marcas a productos de inventario ──
@@ -10976,6 +11032,7 @@ export function App() {
     setSaleLineItems([]);
     setSaleLineForm({ product_id: "", presentation_id: "", quantity: "", unit_price: "" });
     setSelectedCustomerId("");
+    setPedidoSocioId("");
     setCustomerSearch("");
     setFilteredCustomers([]);
     setSelectedPresentationId("");
@@ -11428,6 +11485,7 @@ export function App() {
     setPedidoEditando(null);
     setSaleLineItems([]);
     setSelectedCustomerId("");
+    setPedidoSocioId("");
     setCustomerSearch("");
     setSaleLineForm({ product_id: "", presentation_id: "", quantity: "", unit_price: "" });
   }
@@ -15345,14 +15403,25 @@ export function App() {
 
             {ventasView === "nuevo" && (
             <>
-            {/* ===== TOMA DE PEDIDO · Vista dividida en 2 columnas ===== */}
-            <div className="pedidoSplit" style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 16, alignItems: "start" }}>
-            {/* Columna IZQUIERDA: buscar cliente + elegir producto/presentación con stock visible */}
-            <div style={{ display: "grid", gap: 16, alignItems: "start" }}>
+            {/* ===== TOMA DE PEDIDO · layout asimétrico: captura (2/3) + resumen sticky (1/3) ===== */}
+            <div className="pedidoLayout">
+            {/* ── Columna principal: cliente/socio + grid de productos ── */}
+            <div className="pedidoLayout__main">
 
-            {/* SECCIÓN 1: Cliente */}
-            <div className="formPanel stepPanel stepInfo" style={{ gridColumn: "1 / -1" }}>
+            {/* SECCIÓN 1: Cliente o accionista */}
+            <div className="formPanel stepPanel stepInfo">
               <h2 style={{ marginTop: 0 }}><span className="stepBadge">1</span>Cliente</h2>
+              {/* ShareholderQuickSelect: el pedido a nombre de un socio, sin buscador. */}
+              <ShareholderQuickSelect
+                accionistas={accionistasPedido.length ? accionistasPedido : accionistas.map((a) => ({ id: a.id, name: a.name, tipo: a.tipo }))}
+                activoId={activeAccionistaId} seleccionadoId={pedidoSocioId} cargandoId={pedidoSocioCargando}
+                onElegir={(a) => { elegirSocioPedido(a).catch((e) => addToast(e.message, "error")); }} />
+              {pedidoSocioId ? (
+                <div className="pedidoClienteSel">
+                  <span>🤝 Pedido para el socio <strong>{accionistas.find((a) => a.id === pedidoSocioId)?.name}</strong></span>
+                  <button type="button" className="mantLink" onClick={quitarClientePedido}>Cambiar</button>
+                </div>
+              ) : (
               <label>
                 <span>Busca cliente o crea uno nuevo</span>
                 <div className="pedidoBuscaCliente" style={{ position: "relative", display: "flex", gap: 6 }}>
@@ -15360,7 +15429,7 @@ export function App() {
                     type="text"
                     placeholder="Busca por nombre o teléfono..."
                     value={customerSearch}
-                    onChange={(e) => handleCustomerSearch(e.target.value)}
+                    onChange={(e) => { setPedidoSocioId(""); handleCustomerSearch(e.target.value); }}
                     style={{ flex: 1, padding: 8, border: "1px solid #d1d5db", borderRadius: 4 }}
                   />
                   <button type="button" onClick={() => setShowQuickNewCustomer(true)} style={{ padding: "8px 12px", background: "#059669", color: "white", border: "none", borderRadius: 4, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
@@ -15374,14 +15443,15 @@ export function App() {
                 {filteredCustomers.length > 0 && (
                   <div style={{ border: "1px solid #d1d5db", borderRadius: 4, marginTop: 4, maxHeight: 150, overflowY: "auto" }}>
                     {filteredCustomers.map((c) => (
-                      <button key={c.id} type="button" onClick={() => { setSelectedCustomerId(c.id); setCustomerSearch(c.full_name); setFilteredCustomers([]); }} style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", background: "white", border: "none", borderBottom: "1px solid #e5e7eb", cursor: "pointer", fontSize: 13 }}>
+                      <button key={c.id} type="button" onClick={() => { setSelectedCustomerId(c.id); setCustomerSearch(c.full_name); setFilteredCustomers([]); window.setTimeout(() => pedidoProductoRef.current?.focus(), 0); }} style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", background: "white", border: "none", borderBottom: "1px solid #e5e7eb", cursor: "pointer", fontSize: 13 }}>
                         {c.full_name} {c.phone ? `(${c.phone})` : ""}
                       </button>
                     ))}
                   </div>
                 )}
               </label>
-              {selectedCustomerId && (
+              )}
+              {selectedCustomerId && !pedidoSocioId && (
                 <div style={{ padding: 10, background: "#dcfce7", borderRadius: 6, marginTop: 8, fontSize: 13, fontWeight: 600, color: "#16a34a" }}>
                   ✓ {customers.find(c => c.id === selectedCustomerId)?.full_name} seleccionado
                 </div>
@@ -15409,47 +15479,114 @@ export function App() {
               )}
             </div>
 
-            {/* SECCIÓN 2: Agregar líneas de pedido */}
-            <div className="formPanel stepPanel stepWarn" style={{ gridColumn: "1 / -1" }}>
-              <h2 style={{ marginTop: 0 }}><span className="stepBadge">2</span>Agregar productos al pedido</h2>
-
-              {/* FILA 1: Marca y Presentación lado a lado */}
-              <div className="pedidoGrid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-                <label>
-                  <span>Marca / Producto *</span>
-                  <select
-                    value={saleLineForm.product_id}
-                    onChange={(e) => handleSaleLineProductChange(e.target.value)}
-                    style={{ width: "100%", padding: 8, border: "1px solid #d1d5db", borderRadius: 4, fontSize: 13 }}
-                  >
-                    <option value="">Selecciona marca</option>
-                    <option value="" disabled>━━━ MARCAS ━━━</option>
-                    {['Flor', 'Oso', 'Lira Verde', 'Lira Azul', 'Conejo'].map(brandName => {
-                      const prod = products.find(p => p.name === brandName);
-                      return prod ? <option key={prod.id} value={prod.id}>{prod.name}</option> : null;
-                    })}
-                    <option value="" disabled>━━━ ARROCILLOS ━━━</option>
-                    {['Arrocillo 3/4', 'Arrocillo Fino', 'Polvillo / Afrecho'].map(brandName => {
-                      const prod = products.find(p => p.name === brandName);
-                      return prod ? <option key={prod.id} value={prod.id}>{prod.name}</option> : null;
-                    })}
-                    {/* Productos vendibles nuevos: aparecen solos, sin tocar código. */}
-                    {(() => {
-                      const yaListados = new Set(['Flor', 'Oso', 'Lira Verde', 'Lira Azul', 'Conejo', 'Arrocillo 3/4', 'Arrocillo Fino', 'Polvillo / Afrecho']);
-                      const otros = products.filter(p =>
-                        !yaListados.has(p.name) &&
-                        (p.product_type === "FINISHED_GOOD" || p.product_type === "PACKAGED_GOOD" || p.product_type === "BYPRODUCT") &&
-                        !String(p.code || "").startsWith("ARROZ-PILADO") &&
-                        !String(p.code || "").startsWith("CASCARA")
-                      );
-                      return otros.length ? (
-                        <>
-                          <option value="" disabled>━━━ OTROS ━━━</option>
-                          {otros.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                        </>
-                      ) : null;
-                    })()}
-                  </select>
+            {/* SECCIÓN 2 · OrderItemsGrid: captura (1ª fila) + líneas del pedido en una sola tabla.
+                Sin mouse: Tab avanza, Enter en Cantidad pasa a Precio y Enter en Precio agrega
+                la línea, limpia la captura y vuelve al producto. Bloqueado sin cliente/socio. */}
+            <div className={`formPanel stepPanel stepWarn orderItemsGrid ${selectedCustomerId ? "" : "pedidoBloqueado"}`} aria-disabled={!selectedCustomerId}>
+              <h2 style={{ marginTop: 0 }}><span className="stepBadge">2</span>Productos del pedido{saleLineItems.length > 0 ? ` (${saleLineItems.length})` : ""}</h2>
+              {!selectedCustomerId && <p className="muted" style={{ marginTop: -4 }}>Elige primero el cliente o un socio.</p>}
+              <div style={{ overflowX: "auto" }}>
+                <table className="orderItemsGrid__tabla">
+                  <thead>
+                    <tr>
+                      <th>Marca / Producto</th>
+                      <th>Presentación</th>
+                      <th className="num">Cantidad (QQ)</th>
+                      <th className="num">Bultos</th>
+                      <th className="num">Precio $/QQ</th>
+                      <th className="num">Subtotal $</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {/* Fila de captura */}
+                    <tr className="orderItemsGrid__captura">
+                      <td>
+                        <select ref={pedidoProductoRef} value={saleLineForm.product_id} aria-label="Marca / Producto"
+                          onChange={(e) => handleSaleLineProductChange(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); pedidoPresentacionRef.current?.focus(); } }}>
+                          <option value="">Selecciona marca</option>
+                          <option value="" disabled>━━━ MARCAS ━━━</option>
+                          {['Flor', 'Oso', 'Lira Verde', 'Lira Azul', 'Conejo'].map(brandName => {
+                            const prod = products.find(p => p.name === brandName);
+                            return prod ? <option key={prod.id} value={prod.id}>{prod.name}</option> : null;
+                          })}
+                          <option value="" disabled>━━━ ARROCILLOS ━━━</option>
+                          {['Arrocillo 3/4', 'Arrocillo Fino', 'Polvillo / Afrecho'].map(brandName => {
+                            const prod = products.find(p => p.name === brandName);
+                            return prod ? <option key={prod.id} value={prod.id}>{prod.name}</option> : null;
+                          })}
+                          {/* Productos vendibles nuevos: aparecen solos, sin tocar código. */}
+                          {(() => {
+                            const yaListados = new Set(['Flor', 'Oso', 'Lira Verde', 'Lira Azul', 'Conejo', 'Arrocillo 3/4', 'Arrocillo Fino', 'Polvillo / Afrecho']);
+                            const otros = products.filter(p =>
+                              !yaListados.has(p.name) &&
+                              (p.product_type === "FINISHED_GOOD" || p.product_type === "PACKAGED_GOOD" || p.product_type === "BYPRODUCT") &&
+                              !String(p.code || "").startsWith("ARROZ-PILADO") &&
+                              !String(p.code || "").startsWith("CASCARA")
+                            );
+                            return otros.length ? (
+                              <>
+                                <option value="" disabled>━━━ OTROS ━━━</option>
+                                {otros.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                              </>
+                            ) : null;
+                          })()}
+                        </select>
+                      </td>
+                      <td>
+                        <select ref={pedidoPresentacionRef} value={saleLineForm.presentation_id} aria-label="Presentación"
+                          onChange={(e) => handleSalePresentationChange(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); pedidoCantidadRef.current?.focus(); } }}
+                          disabled={saleProductPresentations.length === 0}>
+                          <option value="">Presentación</option>
+                          {saleProductPresentations.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                          <option value={PRES_OTRO_PESO}>✏️ Otro peso (lb)…</option>
+                        </select>
+                        {saleLineForm.presentation_id === PRES_OTRO_PESO && (
+                          <input type="number" min="1" step="0.5" value={saleLineOtroPesoLb} autoFocus
+                            onChange={(e) => setSaleLineOtroPesoLb(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); pedidoCantidadRef.current?.focus(); } }}
+                            placeholder="Libras por bulto (ej: 98)" style={{ marginTop: 6 }} />
+                        )}
+                      </td>
+                      <td className="num">
+                        <input ref={pedidoCantidadRef} type="number" placeholder="0" min="0" step="0.01" aria-label="Cantidad (QQ)"
+                          value={saleLineForm.quantity}
+                          onChange={(e) => setSaleLineForm({ ...saleLineForm, quantity: e.target.value })}
+                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); pedidoPrecioRef.current?.focus(); pedidoPrecioRef.current?.select(); } }} />
+                      </td>
+                      <td className="num orderItemsGrid__bultos">
+                        {(() => {
+                          const q = Number(saleLineForm.quantity);
+                          const pres = presentacionLineaActual;
+                          if (!q || q <= 0 || !pres) return "—";
+                          return (q * bultosPorQqDePresentacion(pres.name)).toFixed(0);
+                        })()}
+                      </td>
+                      <td className="num">
+                        <input ref={pedidoPrecioRef} type="number" placeholder="0.00" min="0" step="0.01" aria-label="Precio $/QQ (Enter agrega la línea)"
+                          title="Enter agrega la línea"
+                          value={saleLineForm.unit_price}
+                          onChange={(e) => setSaleLineForm({ ...saleLineForm, unit_price: e.target.value })}
+                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); agregarLineaYVolver(); } }} />
+                      </td>
+                      <td className="num orderItemsGrid__bultos">
+                        {Number(saleLineForm.quantity) > 0 && saleLineForm.unit_price !== "" ? `$${(Number(saleLineForm.quantity) * Number(saleLineForm.unit_price)).toFixed(2)}` : "—"}
+                      </td>
+                      <td>
+                        <button type="button" className="orderItemsGrid__agregar" onClick={agregarLineaYVolver} disabled={lineaExcedeStock}
+                          title={lineaExcedeStock ? "La cantidad supera el producto y la cáscara disponibles" : "Agregar al pedido (Enter en Precio)"}>➕</button>
+                      </td>
+                    </tr>
+                    {/* Respaldo de stock, sacos y bultos de la línea en captura */}
+                    {saleLineForm.product_id && (
+                      <tr className="orderItemsGrid__info">
+                        <td colSpan={7}>
+                          <div className="orderItemsGrid__infoGrid">
+                            <div>
                   {saleLineForm.product_id && (() => {
                     const respaldo = respaldoDeMarca(saleLineForm.product_id);
                     const qq = respaldo.terminadoQq;
@@ -15479,31 +15616,8 @@ export function App() {
                       </div>
                     );
                   })()}
-                </label>
-
-                <label>
-                  <span>Presentación *</span>
-                  <select
-                    value={saleLineForm.presentation_id}
-                    onChange={(e) => handleSalePresentationChange(e.target.value)}
-                    style={{ width: "100%", padding: 8, border: "1px solid #d1d5db", borderRadius: 4, fontSize: 13 }}
-                    disabled={saleProductPresentations.length === 0}
-                  >
-                    <option value="">Selecciona presentación</option>
-                    {saleProductPresentations.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                    <option value={PRES_OTRO_PESO}>✏️ Otro peso (lb)…</option>
-                  </select>
-                  {saleLineForm.presentation_id === PRES_OTRO_PESO && (
-                    <input type="number" min="1" step="0.5" value={saleLineOtroPesoLb} autoFocus
-                      onChange={(e) => setSaleLineOtroPesoLb(e.target.value)}
-                      placeholder="Libras por bulto (ej: 98)"
-                      style={{ width: "100%", marginTop: 6, padding: 8, border: "1px solid #d1d5db", borderRadius: 4, fontSize: 13 }} />
-                  )}
-                  {/* Sacos de ESTA marca y peso en la bodega de la matriz: se
-                      descuentan al Confirmar Preparación del pedido. Informativo:
-                      si faltan, el pedido sigue y el Dashboard alerta la compra. */}
+                            </div>
+                            <div>
                   {saleLineForm.product_id && saleLineForm.presentation_id && (() => {
                     const pres = presentacionLineaActual;
                     const wl = Number(pres?.weight_lb) || 0;
@@ -15550,91 +15664,19 @@ export function App() {
                       </>
                     );
                   })()}
-                </label>
-              </div>
-
-              {/* FILA 2: Cantidad y Precio */}
-              <div className="pedidoGrid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
-                <label>
-                  <span>Cantidad (QQ) *</span>
-                  <input
-                    type="number"
-                    placeholder="0"
-                    value={saleLineForm.quantity}
-                    onChange={(e) => setSaleLineForm({...saleLineForm, quantity: e.target.value})}
-                    style={{ width: "100%", padding: 8, border: "1px solid #d1d5db", borderRadius: 4 }}
-                    min="0"
-                    step="0.01"
-                  />
-                  {(() => {
-                    const q = Number(saleLineForm.quantity);
-                    const pres = presentacionLineaActual;
-                    if (!q || q <= 0 || !pres) return null;
-                    const factor = bultosPorQqDePresentacion(pres.name);
-                    return <small style={{ color: "#2563eb", fontWeight: 600 }}>= {(q * factor).toFixed(0)} {unidadGuiaDePresentacion(pres.name).toLowerCase()} ({pres.name}) para la Guía</small>;
-                  })()}
-                </label>
-
-                <label>
-                  <span>Precio $/QQ (sugerido, editable)</span>
-                  <input
-                    type="number"
-                    placeholder="0.00"
-                    value={saleLineForm.unit_price}
-                    onChange={(e) => setSaleLineForm({...saleLineForm, unit_price: e.target.value})}
-                    style={{ width: "100%", padding: 8, border: "1px solid #d1d5db", borderRadius: 4 }}
-                    min="0"
-                    step="0.01"
-                  />
-                </label>
-
-                <button
-                  type="button"
-                  onClick={addSaleLineItem}
-                  disabled={lineaExcedeStock}
-                  title={lineaExcedeStock ? "La cantidad supera el producto y la cáscara disponibles" : "Agregar al pedido"}
-                  style={{ padding: "8px 12px", background: lineaExcedeStock ? "#d1d5db" : "#f59e0b", color: lineaExcedeStock ? "#6b7280" : "white", border: "none", borderRadius: 4, fontWeight: 700, cursor: lineaExcedeStock ? "not-allowed" : "pointer", alignSelf: "flex-end", fontSize: 13 }}
-                >
-                  ➕ Agregar
-                </button>
-              </div>
-
-              {/* Alerta de sobreventa: no hay producto terminado ni cascara suficiente. */}
-              {lineaExcedeStock && (
-                <div style={{ padding: "8px 12px", background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 6, color: "#92400e", fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>
-                  ⚠ La cantidad supera el producto terminado y la cáscara equivalente que este socio tiene libres. Reduce la cantidad para agregar la línea.
-                </div>
-              )}
-            </div>
-            {/* fin Columna IZQUIERDA */}
-            </div>
-
-            {/* Columna DERECHA: carrito acumulado + total + fecha de entrega + TOMAR PEDIDO */}
-            <div style={{ display: "grid", gap: 16, alignItems: "start" }}>
-
-            {/* SECCIÓN 3: Detalle del pedido (carrito) — SIEMPRE visible para que el layout no salte */}
-            <div className="formPanel stepPanel" style={{ gridColumn: "1 / -1" }}>
-              <h2 style={{ marginTop: 0 }}><span className="stepBadge">3</span>Detalle del pedido{saleLineItems.length > 0 ? ` (${saleLineItems.length})` : ""}</h2>
-              {saleLineItems.length === 0 ? (
-                <div style={{ padding: "28px 16px", textAlign: "center", color: "#9ca3af", background: "#f9fafb", border: "1px dashed #d1d5db", borderRadius: 8 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>🛒 No hay productos en el pedido aún</div>
-                  <div style={{ fontSize: 12, marginTop: 4 }}>Agrega productos desde el paso 2 y aparecerán aquí.</div>
-                </div>
-              ) : (
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                    <thead>
-                      <tr style={{ background: "#6b7280", color: "#fff" }}>
-                        <th style={{ padding: "8px 10px", textAlign: "left" }}>Marca</th>
-                        <th style={{ padding: "8px 10px", textAlign: "left" }}>Presentación</th>
-                        <th style={{ padding: "8px 10px", textAlign: "right" }}>Cantidad (QQ)</th>
-                        <th style={{ padding: "8px 10px", textAlign: "right" }}>Bultos</th>
-                        <th style={{ padding: "8px 10px", textAlign: "right" }}>Precio $/QQ</th>
-                        <th style={{ padding: "8px 10px", textAlign: "right" }}>Subtotal $</th>
-                        <th style={{ padding: "8px 10px", textAlign: "center" }}>Acción</th>
+                            </div>
+                          </div>
+                          {lineaExcedeStock && (
+                            <div style={{ padding: "8px 12px", background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 6, color: "#92400e", fontSize: 12.5, fontWeight: 700, marginTop: 8 }}>
+                              ⚠ La cantidad supera el producto terminado y la cáscara equivalente que este socio tiene libres. Reduce la cantidad para agregar la línea.
+                            </div>
+                          )}
+                        </td>
                       </tr>
-                    </thead>
-                    <tbody>
+                    )}
+                    {saleLineItems.length === 0 && (
+                      <tr><td colSpan={7} className="orderItemsGrid__vacio">🛒 Sin productos aún: completa la fila de arriba y presiona Enter en el precio.</td></tr>
+                    )}
                       {(() => {
                         // QQ acumulados por producto de inventario, para avisar
                         // AQUÍ si el pedido supera el stock (no al guardar).
@@ -15677,40 +15719,49 @@ export function App() {
                           );
                         });
                       })()}
-                    </tbody>
+                  </tbody>
+                  {saleLineItems.length > 0 && (
                     <tfoot>
-                      <tr style={{ background: "#f0fdf4", fontWeight: 800 }}>
-                        <td colSpan={2} style={{ padding: "8px 10px" }}>TOTAL</td>
-                        <td style={{ padding: "8px 10px", textAlign: "right" }}>{saleLineItems.reduce((s, l) => s + qqDeLinea(l), 0).toFixed(2)}</td>
-                        <td style={{ padding: "8px 10px", textAlign: "right", color: "#2563eb" }}>{saleLineItems.reduce((s, l) => s + bultosDeLinea(l), 0).toFixed(0)}</td>
+                      <tr>
+                        <td colSpan={2}>TOTAL</td>
+                        <td className="num">{saleLineItems.reduce((s, l) => s + qqDeLinea(l), 0).toFixed(2)}</td>
+                        <td className="num" style={{ color: "#2563eb" }}>{saleLineItems.reduce((s, l) => s + bultosDeLinea(l), 0).toFixed(0)}</td>
                         <td />
-                        <td style={{ padding: "8px 10px", textAlign: "right", color: "#15803d" }}>${calculateSaleTotal().toFixed(2)}</td>
+                        <td className="num" style={{ color: "#15803d" }}>${calculateSaleTotal().toFixed(2)}</td>
                         <td />
                       </tr>
                     </tfoot>
-                  </table>
-                </div>
-              )}
+                  )}
+                </table>
+              </div>
+            </div>
+            {/* fin columna principal */}
             </div>
 
-            {/* SECCIÓN 4: Guardar el pedido (preventa: se cobra al despachar) */}
-            <form className="formPanel stepPanel stepSuccess" onSubmit={(event) => submitOrderSale(event).catch((error) => setMessage(error.message))} style={{ gridColumn: "1 / -1" }}>
-              <h2 style={{ marginTop: 0 }}><span className="stepBadge">4</span>Guardar pedido</h2>
+            {/* ── OrderSummarySidebar: resumen + guardar (sticky). Bloqueado sin cliente/socio. ── */}
+            <aside className={`orderSummarySidebar ${selectedCustomerId ? "" : "pedidoBloqueado"}`} aria-disabled={!selectedCustomerId}>
+            <form className="formPanel stepPanel stepSuccess" onSubmit={(event) => submitOrderSale(event).catch((error) => setMessage(error.message))}>
+              <h2 style={{ marginTop: 0 }}><span className="stepBadge">3</span>Guardar pedido</h2>
               <p className="muted" style={{ marginTop: -4 }}>
                 El pedido es la promesa al cliente: no mueve inventario ni plata. El cobro y la salida de
                 bodega ocurren al <strong>despacharlo</strong> desde la «Cola de Despachos».
               </p>
 
-              <div className="totalBox" style={{ background: "#dcfce7", padding: 16, borderRadius: 8, marginBottom: 16 }}>
+              <div className="totalBox" style={{ background: "#dcfce7", padding: 16, borderRadius: 8, marginBottom: 12 }}>
                 <span style={{ fontSize: 14 }}>TOTAL DEL PEDIDO</span>
                 <strong style={{ fontSize: 28, color: "#16a34a" }}>${calculateSaleTotal().toFixed(2)}</strong>
-                <small style={{ color: "#6b7280" }}>Suma de todos los subtotales</small>
+                <small style={{ color: "#6b7280" }}>
+                  {saleLineItems.length} línea(s) · {saleLineItems.reduce((s, l) => s + qqDeLinea(l), 0).toFixed(2)} QQ · {saleLineItems.reduce((s, l) => s + bultosDeLinea(l), 0).toFixed(0)} bultos
+                </small>
               </div>
+              {selectedCustomerId && (
+                <p className="orderSummarySidebar__cliente">
+                  {pedidoSocioId ? "🤝 Socio" : "👤 Cliente"}: <strong>{customers.find((c) => c.id === selectedCustomerId)?.full_name ?? customerSearch}</strong>
+                </p>
+              )}
 
-              <div className="pedidoGrid" style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12 }}>
-                <Input name="delivery_date" label="Fecha de entrega" type="date" required={false} />
-                <Input name="order_notes" label="Nota (opcional)" required={false} />
-              </div>
+              <Input name="delivery_date" label="Fecha de entrega" type="date" required={false} />
+              <Input name="order_notes" label="Nota (opcional)" required={false} />
 
               {pedidoEditando ? (
                 <div className="buttonRow">
@@ -15721,14 +15772,13 @@ export function App() {
                   <button type="button" onClick={cancelarEdicionPedido}>Cancelar edición</button>
                 </div>
               ) : (
-                <button className="primary" style={{ width: "100%", padding: 12, fontSize: 16 }} disabled={pedidoGuardando}>
+                <button className="primary" style={{ width: "100%", padding: 12, fontSize: 16 }} disabled={pedidoGuardando || saleLineItems.length === 0}>
                   {pedidoGuardando ? "⏳ Guardando pedido…" : "📋 TOMAR PEDIDO"}
                 </button>
               )}
             </form>
-            {/* fin Columna DERECHA */}
-            </div>
-            {/* ===== fin vista dividida (Toma de pedido) ===== */}
+            </aside>
+            {/* ===== fin layout (Toma de pedido) ===== */}
             </div>
             </>
             )}

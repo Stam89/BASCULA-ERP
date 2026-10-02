@@ -63,7 +63,7 @@ catalogsRouter.get("/customers", asyncRoute(async (_req, res) => {
 }));
 
 catalogsRouter.get("/accionistas", asyncRoute(async (_req, res) => {
-  const result = await pool.query("SELECT id, name, code FROM accionistas WHERE is_active = true ORDER BY name ASC");
+  const result = await pool.query("SELECT id, name, code, tipo FROM accionistas WHERE is_active = true ORDER BY name ASC");
   res.json(result.rows);
 }));
 
