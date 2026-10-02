@@ -14,7 +14,7 @@ import { RepuestosAlertaDashboard, RepuestosModule, etiquetaCompat, type Repuest
 import { BuscadorCombo } from "./components/BuscadorCombo";
 import { SaldosIniciales } from "./components/SaldosIniciales";
 import { MaquinaBuscador, etiquetaMaquina } from "./components/MaquinaBuscador";
-import { ShareholderQuickSelect, type AccionistaChip } from "./components/ShareholderQuickSelect";
+import { SalesSessionSwitcher } from "./components/SalesSessionSwitcher";
 import * as XLSX from "xlsx";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
@@ -1190,6 +1190,12 @@ type SalesOrder = {
   transportista_cedula?: string | null;
   vehiculo_placa?: string | null;
   guia_number?: string | null;
+  // Cola de Despachos GLOBAL (/orders/cola-global): dueño del pedido y su stock
+  // propio (QQ) de los productos que pide.
+  accionista_id?: string | null;
+  accionista_name?: string | null;
+  accionista_tipo?: string | null;
+  stock_dueno?: Record<string, number> | null;
 };
 
 /** Resultado de pasar un lote a otro accionista, con la deuda que genera. */
@@ -3212,12 +3218,16 @@ export function App() {
   const [customerSearch, setCustomerSearch] = useState("");
   const [filteredCustomers, setFilteredCustomers] = useState<Customer[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
-  // Nuevo Pedido · acceso rápido de accionistas: el socio elegido (su cliente queda
-  // en selectedCustomerId) y el que se está resolviendo/creando.
-  const [pedidoSocioId, setPedidoSocioId] = useState("");
-  const [pedidoSocioCargando, setPedidoSocioCargando] = useState("");
-  // Todos los accionistas activos (catálogo), para los chips del acceso rápido.
-  const [accionistasPedido, setAccionistasPedido] = useState<AccionistaChip[]>([]);
+  // SESIÓN DE VENTAS: socio que vende (dueño del inventario del pedido). Por
+  // defecto el accionista activo; cambiarlo NO recarga la app. Si es otro, sus
+  // datos (stock, pedidos para lo comprometido, CxC del cliente) se piden aparte.
+  const [ventaSocioId, setVentaSocioId] = useState<string>(() => getActiveAccionistaId() ?? "");
+  const [ventaStock, setVentaStock] = useState<StockRow[]>([]);
+  const [ventaPedidos, setVentaPedidos] = useState<SalesOrder[]>([]);
+  const [ventaCxc, setVentaCxc] = useState<AccountsReceivable[]>([]);
+  const [ventaCargando, setVentaCargando] = useState(false);
+  // Cola de Despachos GLOBAL: pendientes de TODOS los socios (independiente de la sesión).
+  const [colaGlobal, setColaGlobal] = useState<SalesOrder[] | null>(null);
   // Fila de captura del grid de productos (navegación cero mouse).
   const pedidoProductoRef = useRef<HTMLSelectElement | null>(null);
   const pedidoPresentacionRef = useRef<HTMLSelectElement | null>(null);
@@ -4353,10 +4363,12 @@ export function App() {
   // Pedidos pendientes de carga (cola de despachos). Alimenta el badge de la
   // pestaña "Cola de Despachos" y del menú lateral, para que bodega sepa cuándo
   // hay trabajo. Se recalcula solo al cambiar los pedidos.
-  const pedidosPendientesCount = useMemo(
-    () => salesOrders.filter((o) => o.status === "PENDING").length,
-    [salesOrders]
+  // Pendientes de TODOS los socios (cola global); si no cargó, los del activo.
+  const colaPendientes = useMemo(
+    () => colaGlobal ?? salesOrders.filter((o) => o.status === "PENDING"),
+    [colaGlobal, salesOrders]
   );
+  const pedidosPendientesCount = colaPendientes.length;
 
   // Pestañas visibles según los módulos asignados al usuario.
   const visibleTabs = useMemo(() => {
@@ -6611,16 +6623,19 @@ export function App() {
   }
 
   async function refreshCustomersAndSales() {
-    const [custs, sls, ar, ords] = await Promise.all([
+    const [custs, sls, ar, ords, cola] = await Promise.all([
       apiGet<Customer[]>("/customers"),
       apiGet<Sale[]>("/sales"),
       apiGet<AccountsReceivable[]>("/receivable"),
-      apiGet<SalesOrder[]>("/orders").catch(() => [] as SalesOrder[])
+      apiGet<SalesOrder[]>("/orders").catch(() => [] as SalesOrder[]),
+      // Cola de Despachos GLOBAL (todos los socios). null = no disponible → la del activo.
+      apiGet<SalesOrder[]>("/orders/cola-global").catch(() => null)
     ]);
     setCustomers(custs);
     setSales(sls);
     setAccountsReceivable(ar.filter(a => a.status !== "PAID"));
     setSalesOrders(ords);
+    setColaGlobal(cola);
     loadGuias().catch(() => undefined);
   }
 
@@ -7458,46 +7473,50 @@ export function App() {
     if (addSaleLineItem()) window.setTimeout(() => pedidoProductoRef.current?.focus(), 0);
   }
 
-  // Acceso rápido de accionistas: el pedido queda a nombre del socio. Su cliente
-  // es el registrado con su nombre (tipo ACCIONISTA); si no existe, se crea una vez.
-  async function elegirSocioPedido(a: AccionistaChip) {
-    if (pedidoSocioId === a.id) return;
-    const norm = (t: string) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toUpperCase();
-    const tipoDe = (c: Customer) => String((c as { customer_type?: string | null }).customer_type ?? "");
-    let cliente = customers.find((c) => tipoDe(c) === "ACCIONISTA" && norm(c.full_name) === norm(a.name))
-      ?? customers.find((c) => norm(c.full_name) === norm(a.name));
-    if (!cliente) {
-      setPedidoSocioCargando(a.id);
-      try {
-        cliente = await apiPost<Customer>("/customers", { full_name: a.name, customer_type: "ACCIONISTA" });
-        const nuevo = cliente;
-        setCustomers((prev) => [...prev, nuevo]);
-      } catch (e) {
-        addToast(e instanceof Error ? e.message : "No se pudo preparar el cliente del socio", "error");
-        return;
-      } finally {
-        setPedidoSocioCargando("");
-      }
-    }
-    setPedidoSocioId(a.id);
-    setSelectedCustomerId(cliente.id);
-    setCustomerSearch(cliente.full_name);
-    setFilteredCustomers([]);
-    window.setTimeout(() => pedidoProductoRef.current?.focus(), 0);
+  // Datos del socio de la sesión de ventas cuando NO es el accionista activo (si
+  // lo es, se usan los de siempre: stock, salesOrders, accountsReceivable).
+  const ventaEsActivo = !ventaSocioId || ventaSocioId === activeAccionistaId;
+  const ventaOpts = { accionistaId: ventaSocioId || null };
+  async function cargarSesionVenta(socioId: string) {
+    if (!socioId || socioId === activeAccionistaId) return;
+    setVentaCargando(true);
+    try {
+      const o = { accionistaId: socioId };
+      const [st, ped, cxc] = await Promise.all([
+        apiGet<StockRow[]>("/inventory/stock", o),
+        apiGet<SalesOrder[]>("/orders", o).catch(() => [] as SalesOrder[]),
+        apiGet<AccountsReceivable[]>("/receivable", o).catch(() => [] as AccountsReceivable[])
+      ]);
+      setVentaStock(st); setVentaPedidos(ped); setVentaCxc(cxc.filter((a) => a.status !== "PAID"));
+    } finally { setVentaCargando(false); }
   }
+  // Cambiar el socio que vende: se conserva el CLIENTE, se vacían los productos
+  // (no se mezclan dueños en un pedido) y se trae el inventario del nuevo socio.
+  function cambiarSocioVenta(id: string) {
+    if (id === ventaSocioId) return;
+    if (pedidoEditando) { addToast("Termina o cancela la edición del pedido antes de cambiar de socio", "error"); return; }
+    const habia = saleLineItems.length;
+    setVentaSocioId(id);
+    setSaleLineItems([]);
+    setSaleLineForm({ product_id: "", presentation_id: "", quantity: "", unit_price: "" });
+    setSaleProductPresentations([]);
+    setSelectedPresentationId("");
+    setSaleLineOtroPesoLb("");
+    setSaleLineSobranteLb("");
+    cargarSesionVenta(id).catch((e) => addToast(e instanceof Error ? e.message : "No se pudo cargar el inventario del socio", "error"));
+    const nombre = accionistas.find((a) => a.id === id)?.name ?? "el socio";
+    addToast(`Vendiendo como ${nombre}${habia ? ` · se quitaron ${habia} producto(s) del pedido` : ""}`, habia ? "warn" : "success");
+  }
+  // Si cambia el accionista activo (o la sesión quedó vacía), la sesión vuelve a él.
   useEffect(() => {
-    if (activeTab !== "Ventas" || ventasView !== "nuevo" || accionistasPedido.length) return;
-    apiGet<AccionistaChip[]>("/catalogs/accionistas").then(setAccionistasPedido).catch(() => undefined);
+    setVentaSocioId((actual) => (actual && accionistas.some((a) => a.id === actual) ? actual : activeAccionistaId ?? ""));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, ventasView]);
-  function quitarClientePedido() {
-    setPedidoSocioId("");
-    setSelectedCustomerId("");
-    setCustomerSearch("");
-    setFilteredCustomers([]);
-  }
+  }, [activeAccionistaId, accionistas]);
+  // Acciones sobre un pedido de la cola global: en nombre de SU dueño.
+  const optsPedido = (o: SalesOrder) => ({ accionistaId: o.accionista_id || null });
+  const puedeOperarPedido = (o: SalesOrder) => !o.accionista_id || accionistas.some((a) => a.id === o.accionista_id);
 
-  // ── Mapeo de marcas a productos de inventario ──
+  // ── Mapeo de marcas a productos de inventario ──  // ── Mapeo de marcas a productos de inventario ──
   function getInventoryProductForBrand(brandName: string): string | null {
     // Flor, Oso, Extra, Lira Verde, Lira Azul → Producto 0.11
     if (['Flor', 'Oso', 'Extra', 'Lira Verde', 'Lira Azul'].includes(brandName)) {
@@ -7520,10 +7539,13 @@ export function App() {
   // Stock propio disponible (QQ) del producto de inventario que respalda una
   // marca. El vendedor lo ve ANTES de armar el pedido, en vez de descubrir el
   // "stock insuficiente" al guardar.
+  // Stock del socio que vende (sesión de ventas).
+  const stockVenta = ventaEsActivo ? stock : ventaStock;
+  const pedidosVenta = ventaEsActivo ? salesOrders : ventaPedidos;
   function stockDisponibleDeMarca(brandProductId: string): number | null {
     const marca = products.find((p) => p.id === brandProductId);
     const inventoryId = getInventoryProductForBrand(marca?.name || "") || brandProductId;
-    const filas = stock.filter((s) => s.product_id === inventoryId && s.ownership === "OWNED");
+    const filas = stockVenta.filter((s) => s.product_id === inventoryId && s.ownership === "OWNED");
     if (!filas.length) return 0;
     return round2(filas.reduce((sum, s) => sum + Number(s.quantity), 0));
   }
@@ -7537,7 +7559,7 @@ export function App() {
 
   function stockPropioPorProducto(productId: string | null): number {
     if (!productId) return 0;
-    return round2(stock
+    return round2(stockVenta
       .filter((s) => s.product_id === productId && s.ownership === "OWNED")
       .reduce((sum, s) => sum + Number(s.quantity), 0));
   }
@@ -7548,7 +7570,7 @@ export function App() {
     const rawProductId = rawBackingProductId(inventoryProductId);
     const terminadoQq = stockPropioPorProducto(inventoryProductId);
     const cascaraQq = stockPropioPorProducto(rawProductId);
-    const comprometidoQq = round2(salesOrders
+    const comprometidoQq = round2(pedidosVenta
       .filter((order) => order.status === "PENDING" && !order.prepared_at && order.id !== pedidoEditando)
       .flatMap((order) => order.items)
       .filter((item) => (item.inventory_product_id || getInventoryProductForBrand(item.product_name)) === inventoryProductId)
@@ -7587,7 +7609,7 @@ export function App() {
   // accountsReceivable, ya cargado en Ventas; no pega a la red.
   const creditoClienteSel = useMemo(() => {
     if (!selectedCustomerId) return null;
-    const lineas = accountsReceivable.filter((a) => a.customer_id === selectedCustomerId && Number(a.balance) > 0.001);
+    const lineas = (ventaEsActivo ? accountsReceivable : ventaCxc).filter((a) => a.customer_id === selectedCustomerId && Number(a.balance) > 0.001);
     const saldo = round2(lineas.reduce((s, a) => s + Number(a.balance), 0));
     const now = Date.now();
     const D30 = 30 * 24 * 60 * 60 * 1000;
@@ -7596,7 +7618,7 @@ export function App() {
       return venc < now;
     });
     return { saldo, enMora, cuentas: lineas.length };
-  }, [selectedCustomerId, accountsReceivable]);
+  }, [selectedCustomerId, accountsReceivable, ventaCxc, ventaEsActivo]);
 
   // El pedido puede respaldarse con producto terminado o con cascara del mismo
   // tipo. Los otros pedidos pendientes se descuentan de esta cobertura para no
@@ -7612,7 +7634,7 @@ export function App() {
       .reduce((s, it) => s + qqDeLinea(it), 0);
     const respaldo = respaldoDeMarca(saleLineForm.product_id);
     return qqLinea + yaCarrito > respaldo.coberturaLibreQq + 0.001;
-  }, [saleLineForm, saleLineItems, products, stock, salesOrders, pedidoEditando]);
+  }, [saleLineForm, saleLineItems, products, stockVenta, pedidosVenta, pedidoEditando]);
 
   // Precio sugerido: último precio al que se pidió esa marca+presentación. Solo
   // rellena si el campo está vacío/0 (no pisa un precio que el vendedor ya tecleó).
@@ -7620,11 +7642,11 @@ export function App() {
     if (!productId) return;
     try {
       let r = await apiGet<{ unit_price: number | null }>(
-        `/orders/suggest-price?product_id=${productId}${presentationId ? `&presentation_id=${presentationId}` : ""}`
+        `/orders/suggest-price?product_id=${productId}${presentationId ? `&presentation_id=${presentationId}` : ""}`, ventaOpts
       );
       // Sin historial de ESA presentación, cae al último precio del producto (cualquier presentación).
       if ((r.unit_price == null || r.unit_price <= 0) && presentationId) {
-        r = await apiGet<{ unit_price: number | null }>(`/orders/suggest-price?product_id=${productId}`);
+        r = await apiGet<{ unit_price: number | null }>(`/orders/suggest-price?product_id=${productId}`, ventaOpts);
       }
       if (r.unit_price != null && r.unit_price > 0) {
         setSaleLineForm((prev) => {
@@ -10998,7 +11020,7 @@ export function App() {
         notes: (form.get("order_notes") as string) || undefined,
         created_by: authUser?.id,
         items
-      });
+      }, ventaOpts);
     } finally {
       pedidoGuardandoRef.current = false;
       setPedidoGuardando(false);
@@ -11032,11 +11054,11 @@ export function App() {
     setSaleLineItems([]);
     setSaleLineForm({ product_id: "", presentation_id: "", quantity: "", unit_price: "" });
     setSelectedCustomerId("");
-    setPedidoSocioId("");
     setCustomerSearch("");
     setFilteredCustomers([]);
     setSelectedPresentationId("");
     setSaleProductPresentations([]);
+    if (!ventaEsActivo) cargarSesionVenta(ventaSocioId).catch(() => undefined);
     setMessage(`✓ Pedido ${pedido.order_number} tomado: ${money(pedido.total_amount)}`);
     addToast(`🚚 Pedido enviado a bodega · ${pedido.order_number} · ${money(pedido.total_amount)}`, "success");
     refreshSacks().catch(() => undefined);
@@ -11082,7 +11104,7 @@ export function App() {
       // Al preparar se descuenta el inventario de la bodega de producto terminado
       // y los SACOS de la marca + peso vendidos (bodega de la matriz).
       warehouse_id: finishedWarehouse?.id
-    });
+    }, optsPedido(order));
     const sacosTxt = prep.sacos?.descontados.length
       ? ` · Sacos: ${prep.sacos.descontados.map((d) => `${d.sacos} ${d.tipo}`).join(", ")}`
       : "";
@@ -11112,9 +11134,15 @@ export function App() {
       return;
     }
     const metodo = orderPayMethod[order.id] ?? "CASH";
-    const registerId = dashboard.current_cash_register?.id;
+    // El cobro entra a la caja abierta del DUEÑO del pedido (puede ser otro socio).
+    const esDelActivo = !order.accionista_id || order.accionista_id === activeAccionistaId;
+    const registerId = esDelActivo
+      ? dashboard.current_cash_register?.id
+      : metodo === "CREDIT" ? undefined
+        : (await apiGet<{ id: string } | null>("/cash/registers/current", optsPedido(order)).catch(() => null))?.id;
     if (metodo !== "CREDIT" && !registerId) {
-      addToast("Abre una caja para cobrar, o despacha a crédito", "error");
+      addToast(esDelActivo ? "Abre una caja para cobrar, o despacha a crédito"
+        : `${order.accionista_name ?? "El socio"} no tiene caja abierta: ábrela o despacha a crédito`, "error");
       return;
     }
     if (!finishedWarehouse?.id) {
@@ -11122,7 +11150,7 @@ export function App() {
       return;
     }
     const ok = window.confirm(
-      `¿Despachar el pedido ${order.order_number} de ${order.customer_name} por ${money(Number(order.total_amount))}?\n\n` +
+      `¿Despachar el pedido ${order.order_number} de ${order.customer_name} por ${money(Number(order.total_amount))}${esDelActivo ? "" : ` · socio ${order.accionista_name}`}?\n\n` +
       (metodo === "CREDIT" ? "Queda como CRÉDITO (cuenta por cobrar)." : "Se cobra ahora y entra a la caja abierta.") +
       "\nLa mercadería sale del inventario."
     );
@@ -11133,11 +11161,11 @@ export function App() {
       cash_register_id: metodo === "CREDIT" ? undefined : registerId,
       warehouse_id: finishedWarehouse.id,
       created_by: authUser?.id
-    });
-    addToast(`Pedido ${order.order_number} despachado → venta ${result.sale.sale_number}`, "success");
+    }, optsPedido(order));
+    addToast(`Pedido ${order.order_number} despachado → venta ${result.sale.sale_number}${esDelActivo ? "" : ` (${order.accionista_name})`}`, "success");
     await refreshCustomersAndSales();
     await refresh();
-    if (registerId) await refreshCaja(registerId);
+    if (registerId && esDelActivo) await refreshCaja(registerId);
   }
 
   // Guía de Remisión: si el pedido ya tiene datos de transporte, imprime
@@ -11188,7 +11216,8 @@ export function App() {
     if (!nombre.trim()) { addToast("Ingresa el nombre del transportista (chofer)", "error"); return; }
     const saved = await apiPut<Pick<SalesOrder, "guia_number" | "transportista_nombre" | "transportista_cedula" | "vehiculo_placa">>(
       `/orders/${order.id}/guia`,
-      { transportista_nombre: nombre.trim(), transportista_cedula: cedula.trim() || undefined, vehiculo_placa: placa.trim() || undefined }
+      { transportista_nombre: nombre.trim(), transportista_cedula: cedula.trim() || undefined, vehiculo_placa: placa.trim() || undefined },
+      optsPedido(order)
     );
     // Conserva los items del pedido y adjunta lo guardado para imprimir al instante.
     const merged: SalesOrder = { ...order, ...saved };
@@ -11439,7 +11468,10 @@ export function App() {
    * y al guardar se reemplazan; la cuenta por cobrar se ajusta sola.
    */
   async function editarPedido(order: SalesOrder) {
-    const detalle = await apiGet<{ items: Array<{ product_id: string; presentation_id: string | null; presentation_name: string | null; quantity: string | number; unit_price: string | number; sobrante_saco_lb?: string | number | null }>; delivery_date: string | null; notes: string | null; customer_id: string }>(`/orders/${order.id}`);
+    const detalle = await apiGet<{ items: Array<{ product_id: string; presentation_id: string | null; presentation_name: string | null; quantity: string | number; unit_price: string | number; sobrante_saco_lb?: string | number | null }>; delivery_date: string | null; notes: string | null; customer_id: string }>(`/orders/${order.id}`, optsPedido(order));
+    // La sesión de ventas pasa al dueño del pedido (su inventario respalda la edición).
+    const dueno = order.accionista_id || activeAccionistaId || "";
+    if (dueno && dueno !== ventaSocioId) { setVentaSocioId(dueno); await cargarSesionVenta(dueno).catch(() => undefined); }
     setSaleLineItems(detalle.items.map((it, i) => ({
       id: `edit-${i}`,
       product_id: it.product_id,
@@ -11475,7 +11507,7 @@ export function App() {
         sobrante_saco_lb: line.sobrante_saco_lb ?? null
       };
     });
-    const r = await apiPut<{ order_number: string; total_amount: string | number }>(`/orders/${pedidoEditando}`, { items });
+    const r = await apiPut<{ order_number: string; total_amount: string | number }>(`/orders/${pedidoEditando}`, { items }, ventaOpts);
     addToast(`Pedido ${r.order_number} actualizado: ${money(Number(r.total_amount))}`, "success");
     cancelarEdicionPedido();
     await refreshCustomersAndSales();
@@ -11485,14 +11517,13 @@ export function App() {
     setPedidoEditando(null);
     setSaleLineItems([]);
     setSelectedCustomerId("");
-    setPedidoSocioId("");
     setCustomerSearch("");
     setSaleLineForm({ product_id: "", presentation_id: "", quantity: "", unit_price: "" });
   }
 
   async function cancelarPedido(order: SalesOrder) {
     if (!window.confirm(`¿Cancelar el pedido ${order.order_number} de ${order.customer_name}?`)) return;
-    await apiPost(`/orders/${order.id}/cancel`, {});
+    await apiPost(`/orders/${order.id}/cancel`, {}, optsPedido(order));
     addToast(`Pedido ${order.order_number} cancelado`, "success");
     await refreshCustomersAndSales();
   }
@@ -15400,6 +15431,15 @@ export function App() {
               })}
             </div>
             {avisoSoloLectura("Ventas", ventasView)}
+            {/* SalesSessionSwitcher: socio que vende (inventario del pedido). No afecta la Cola de Despachos. */}
+            <div className="ventaSesionBarra">
+              <SalesSessionSwitcher
+                socios={accionistas.map((a) => ({ id: a.id, name: a.name, tipo: a.tipo }))}
+                valor={ventaSocioId} activoGlobalId={activeAccionistaId} cargando={ventaCargando}
+                bloqueado={pedidoEditando ? "Termina o cancela la edición del pedido para cambiar de socio" : null}
+                onCambio={cambiarSocioVenta} />
+              {ventasView === "despachos" && <small className="muted">La cola muestra los pedidos de todos los socios.</small>}
+            </div>
 
             {ventasView === "nuevo" && (
             <>
@@ -15408,20 +15448,9 @@ export function App() {
             {/* ── Columna principal: cliente/socio + grid de productos ── */}
             <div className="pedidoLayout__main">
 
-            {/* SECCIÓN 1: Cliente o accionista */}
+            {/* SECCIÓN 1: Cliente */}
             <div className="formPanel stepPanel stepInfo">
               <h2 style={{ marginTop: 0 }}><span className="stepBadge">1</span>Cliente</h2>
-              {/* ShareholderQuickSelect: el pedido a nombre de un socio, sin buscador. */}
-              <ShareholderQuickSelect
-                accionistas={accionistasPedido.length ? accionistasPedido : accionistas.map((a) => ({ id: a.id, name: a.name, tipo: a.tipo }))}
-                activoId={activeAccionistaId} seleccionadoId={pedidoSocioId} cargandoId={pedidoSocioCargando}
-                onElegir={(a) => { elegirSocioPedido(a).catch((e) => addToast(e.message, "error")); }} />
-              {pedidoSocioId ? (
-                <div className="pedidoClienteSel">
-                  <span>🤝 Pedido para el socio <strong>{accionistas.find((a) => a.id === pedidoSocioId)?.name}</strong></span>
-                  <button type="button" className="mantLink" onClick={quitarClientePedido}>Cambiar</button>
-                </div>
-              ) : (
               <label>
                 <span>Busca cliente o crea uno nuevo</span>
                 <div className="pedidoBuscaCliente" style={{ position: "relative", display: "flex", gap: 6 }}>
@@ -15429,7 +15458,7 @@ export function App() {
                     type="text"
                     placeholder="Busca por nombre o teléfono..."
                     value={customerSearch}
-                    onChange={(e) => { setPedidoSocioId(""); handleCustomerSearch(e.target.value); }}
+                    onChange={(e) => handleCustomerSearch(e.target.value)}
                     style={{ flex: 1, padding: 8, border: "1px solid #d1d5db", borderRadius: 4 }}
                   />
                   <button type="button" onClick={() => setShowQuickNewCustomer(true)} style={{ padding: "8px 12px", background: "#059669", color: "white", border: "none", borderRadius: 4, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
@@ -15450,8 +15479,7 @@ export function App() {
                   </div>
                 )}
               </label>
-              )}
-              {selectedCustomerId && !pedidoSocioId && (
+              {selectedCustomerId && (
                 <div style={{ padding: 10, background: "#dcfce7", borderRadius: 6, marginTop: 8, fontSize: 13, fontWeight: 600, color: "#16a34a" }}>
                   ✓ {customers.find(c => c.id === selectedCustomerId)?.full_name} seleccionado
                 </div>
@@ -15482,9 +15510,10 @@ export function App() {
             {/* SECCIÓN 2 · OrderItemsGrid: captura (1ª fila) + líneas del pedido en una sola tabla.
                 Sin mouse: Tab avanza, Enter en Cantidad pasa a Precio y Enter en Precio agrega
                 la línea, limpia la captura y vuelve al producto. Bloqueado sin cliente/socio. */}
-            <div className={`formPanel stepPanel stepWarn orderItemsGrid ${selectedCustomerId ? "" : "pedidoBloqueado"}`} aria-disabled={!selectedCustomerId}>
-              <h2 style={{ marginTop: 0 }}><span className="stepBadge">2</span>Productos del pedido{saleLineItems.length > 0 ? ` (${saleLineItems.length})` : ""}</h2>
-              {!selectedCustomerId && <p className="muted" style={{ marginTop: -4 }}>Elige primero el cliente o un socio.</p>}
+            <div className={`formPanel stepPanel stepWarn orderItemsGrid ${selectedCustomerId && ventaSocioId && !ventaCargando ? "" : "pedidoBloqueado"}`} aria-disabled={!(selectedCustomerId && ventaSocioId)}>
+              <h2 style={{ marginTop: 0 }}><span className="stepBadge">2</span>Productos del pedido{saleLineItems.length > 0 ? ` (${saleLineItems.length})` : ""}
+                {ventaSocioId && <span className="orderItemsGrid__socio">· inventario de {accionistas.find((a) => a.id === ventaSocioId)?.name ?? "—"}</span>}</h2>
+              {!selectedCustomerId && <p className="muted" style={{ marginTop: -4 }}>Elige primero el cliente.</p>}
               <div style={{ overflowX: "auto" }}>
                 <table className="orderItemsGrid__tabla">
                   <thead>
@@ -15739,7 +15768,7 @@ export function App() {
             </div>
 
             {/* ── OrderSummarySidebar: resumen + guardar (sticky). Bloqueado sin cliente/socio. ── */}
-            <aside className={`orderSummarySidebar ${selectedCustomerId ? "" : "pedidoBloqueado"}`} aria-disabled={!selectedCustomerId}>
+            <aside className={`orderSummarySidebar ${selectedCustomerId && ventaSocioId ? "" : "pedidoBloqueado"}`} aria-disabled={!(selectedCustomerId && ventaSocioId)}>
             <form className="formPanel stepPanel stepSuccess" onSubmit={(event) => submitOrderSale(event).catch((error) => setMessage(error.message))}>
               <h2 style={{ marginTop: 0 }}><span className="stepBadge">3</span>Guardar pedido</h2>
               <p className="muted" style={{ marginTop: -4 }}>
@@ -15756,7 +15785,8 @@ export function App() {
               </div>
               {selectedCustomerId && (
                 <p className="orderSummarySidebar__cliente">
-                  {pedidoSocioId ? "🤝 Socio" : "👤 Cliente"}: <strong>{customers.find((c) => c.id === selectedCustomerId)?.full_name ?? customerSearch}</strong>
+                  👤 Cliente: <strong>{customers.find((c) => c.id === selectedCustomerId)?.full_name ?? customerSearch}</strong>
+                  <br />🧾 Vende: <strong>{accionistas.find((a) => a.id === ventaSocioId)?.name ?? "—"}</strong>
                 </p>
               )}
 
@@ -15810,8 +15840,7 @@ export function App() {
                   </div>
                 ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, marginTop: 8 }}>
-                  {salesOrders
-                    .filter((o) => o.status === "PENDING")
+                  {colaPendientes
                     .slice()
                     .sort((a, b) => {
                       // Prioridad por fecha de entrega; los sin fecha van al final.
@@ -15833,12 +15862,15 @@ export function App() {
                       if (id) demandaPorProducto.set(id, round2((demandaPorProducto.get(id) ?? 0) + Number(it.quantity)));
                     });
                     const invIdsPedido = new Set(demandaPorProducto.keys());
-                    const dispUbicQq = round2([...invIdsPedido].reduce((s, id) =>
-                      s + stock.filter((r) => r.product_id === id && r.ownership === "OWNED").reduce((a, r) => a + Number(r.quantity), 0)
-                    , 0));
+                    // Stock propio del DUEÑO del pedido (cola global); si no viene, el del activo.
+                    const stockDueno = (id: string) => o.stock_dueno
+                      ? Number(o.stock_dueno[id] ?? 0)
+                      : stock.filter((r) => r.product_id === id && r.ownership === "OWNED").reduce((a, r) => a + Number(r.quantity), 0);
+                    const dispUbicQq = round2([...invIdsPedido].reduce((s, id) => s + stockDueno(id), 0));
                     const faltanteTerminadoQq = round2([...demandaPorProducto.entries()].reduce((total, [id, requerido]) =>
-                      total + Math.max(0, requerido - stockPropioPorProducto(id))
+                      total + Math.max(0, requerido - round2(stockDueno(id)))
                     , 0));
+                    const operable = puedeOperarPedido(o);
                     const listoParaPreparar = faltanteTerminadoQq <= 0.001;
                     const enfocado = focusOrderId === o.id;
                     return (
@@ -15871,6 +15903,11 @@ export function App() {
                       </div>
 
                       <div>
+                        {o.accionista_name && (
+                          <span className={`colaDueno ${o.accionista_id === activeAccionistaId ? "is-activo" : ""}`} title="Socio dueño del pedido (su inventario y su caja)">
+                            {o.accionista_tipo === "MATRIZ" ? "🏭" : "🤝"} {o.accionista_name}
+                          </span>
+                        )}
                         <div style={{ fontSize: 15, fontWeight: 800 }}>{o.customer_name}</div>
                         <div className="muted" style={{ fontSize: 12.5 }}>
                           {o.order_number}
@@ -15926,7 +15963,9 @@ export function App() {
                         Ya figura en Por Cobrar; el cobro y la salida de inventario se concretan al despachar.
                       </div>
 
-                      {!listo ? (
+                      {!operable ? (
+                        <div className="colaSoloLectura">👁️ Solo lectura: no tienes acceso a {o.accionista_name ?? "este socio"} para preparar o despachar su pedido.</div>
+                      ) : !listo ? (
                         // PASO 1: confirmar preparación. Aún NO se puede despachar.
                         <button type="button" className="primary" disabled={!listoParaPreparar} title={!listoParaPreparar ? "Primero produzca el arroz respaldado por cáscara" : "Confirmar preparación"} style={{ padding: "10px 12px", fontWeight: 800, marginTop: "auto", opacity: listoParaPreparar ? 1 : 0.55, cursor: listoParaPreparar ? "pointer" : "not-allowed" }} onClick={() => prepararPedido(o, true).catch((e) => addToast(e.message, "error"))}>
                           {listoParaPreparar ? "📦 Confirmar Preparación" : "⏳ Pendiente de producción"}
@@ -15955,13 +15994,13 @@ export function App() {
                           🖨️ Orden de Carga
                         </button>
                       )}
-                      <div style={{ display: "flex", gap: 8 }}>
+                      {operable && <div style={{ display: "flex", gap: 8 }}>
                         {listo && (
                           <button type="button" style={{ flex: 1 }} onClick={() => prepararPedido(o, false).catch((e) => addToast(e.message, "error"))} title="Volver a Pendiente por cargar">↩ Revertir</button>
                         )}
                         <button type="button" style={{ flex: 1 }} onClick={() => editarPedido(o).catch((e) => addToast(e.message, "error"))}>✎ Editar</button>
                         <button type="button" style={{ flex: 1 }} onClick={() => cancelarPedido(o).catch((e) => addToast(e.message, "error"))}>✕ Cancelar</button>
-                      </div>
+                      </div>}
                       <button type="button" className="btnSecondary" onClick={() => setPedidoCompartir({ data: pedidoCompartirDeOrden(o) })}
                         title="Enviar al cliente su pedido con el total a pagar">📤 Compartir con el cliente</button>
                     </article>
@@ -16042,11 +16081,15 @@ export function App() {
             {/* Modal: captura de datos del transportista para la Guía de Remisión */}
             {/* ===== Modal: Cantidades por Despachar y Entregar (saldos + stock) ===== */}
             {pendientesModalOpen && (() => {
-              const pendientes = salesOrders.filter((o) => o.status === "PENDING");
+              const pendientes = colaPendientes;
+              // Stock de los dueños con pedidos pendientes (cada socio una vez por producto).
+              const stockDuenos = new Map<string, number>();
+              for (const o of pendientes) for (const [pid, q] of Object.entries(o.stock_dueno ?? {})) stockDuenos.set(`${o.accionista_id}|${pid}`, Number(q));
               const stockDeNombre = (productName: string) => {
                 const invId = getInventoryProductForBrand(productName) || products.find((p) => p.name === productName)?.id || null;
                 if (!invId) return 0;
-                return round2(stock.filter((s) => s.product_id === invId && s.ownership === "OWNED").reduce((a, s) => a + Number(s.quantity), 0));
+                if (!colaGlobal) return round2(stock.filter((s) => s.product_id === invId && s.ownership === "OWNED").reduce((a, s) => a + Number(s.quantity), 0));
+                return round2([...stockDuenos.entries()].filter(([k]) => k.endsWith(`|${invId}`)).reduce((a, [, q]) => a + q, 0));
               };
               const consMap = new Map<string, { producto: string; presentacion: string; qq: number }>();
               const pendPorProducto = new Map<string, number>();

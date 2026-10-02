@@ -21,7 +21,14 @@ export function setActiveAccionistaId(accionistaId: string): void {
   localStorage.setItem(activeAccionistaKey, accionistaId);
 }
 
-function authHeaders(): Record<string, string> {
+/**
+ * Opciones por llamada. `accionistaId` manda la petición en nombre de OTRO
+ * accionista (al que el usuario tenga acceso) sin cambiar el activo: la sesión
+ * de venta de un socio y las acciones sobre un pedido de la cola global.
+ */
+export type OpcionesApi = { accionistaId?: string | null };
+
+function authHeaders(opts?: OpcionesApi): Record<string, string> {
   const headers: Record<string, string> = {};
   try {
     const raw = localStorage.getItem(authStorageKey);
@@ -30,7 +37,7 @@ function authHeaders(): Record<string, string> {
   } catch {
     // Sesión inválida o corrupta: se manda sin token, el backend responderá 401.
   }
-  const accionistaId = getActiveAccionistaId();
+  const accionistaId = opts?.accionistaId || getActiveAccionistaId();
   if (accionistaId) headers["X-Accionista-Id"] = accionistaId;
   return headers;
 }
@@ -61,43 +68,43 @@ async function parseResponse<T>(response: Response): Promise<T> {
 }
 
 /** fetch con token para llamadas que necesitan control manual de la respuesta. */
-export function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+export function apiFetch(path: string, init: RequestInit = {}, opts?: OpcionesApi): Promise<Response> {
   return fetch(`${API_URL}/api/v1${path}`, {
     ...init,
-    headers: { ...authHeaders(), ...(init.headers ?? {}) }
+    headers: { ...authHeaders(opts), ...(init.headers ?? {}) }
   }).then((response) => {
     handleUnauthorized(response);
     return response;
   });
 }
 
-export async function apiGet<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_URL}/api/v1${path}`, { headers: authHeaders() });
+export async function apiGet<T>(path: string, opts?: OpcionesApi): Promise<T> {
+  const response = await fetch(`${API_URL}/api/v1${path}`, { headers: authHeaders(opts) });
   return parseResponse<T>(response);
 }
 
-export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+export async function apiPost<T>(path: string, body: unknown, opts?: OpcionesApi): Promise<T> {
   const response = await fetch(`${API_URL}/api/v1${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
+    headers: { "Content-Type": "application/json", ...authHeaders(opts) },
     body: JSON.stringify(body)
   });
   return parseResponse<T>(response);
 }
 
-export async function apiPut<T>(path: string, body: unknown): Promise<T> {
+export async function apiPut<T>(path: string, body: unknown, opts?: OpcionesApi): Promise<T> {
   const response = await fetch(`${API_URL}/api/v1${path}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
+    headers: { "Content-Type": "application/json", ...authHeaders(opts) },
     body: JSON.stringify(body)
   });
   return parseResponse<T>(response);
 }
 
-export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
+export async function apiPatch<T>(path: string, body: unknown, opts?: OpcionesApi): Promise<T> {
   const response = await fetch(`${API_URL}/api/v1${path}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
+    headers: { "Content-Type": "application/json", ...authHeaders(opts) },
     body: JSON.stringify(body)
   });
   return parseResponse<T>(response);

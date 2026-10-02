@@ -65,6 +65,50 @@ ordersRouter.get("/", asyncRoute(async (req, res) => {
   res.json(result.rows);
 }));
 
+// COLA DE DESPACHOS GLOBAL: los pedidos PENDIENTES de TODOS los accionistas, para
+// que bodega vea todo lo que hay que cargar sin importar qué socio esté vendiendo.
+// Cada pedido trae su dueño y el stock propio del dueño de los productos que pide
+// (para la pista de picking). Las acciones sobre un pedido se envían en nombre de
+// su dueño (X-Accionista-Id), así siguen validando permisos y caja de ese socio.
+ordersRouter.get("/cola-global", asyncRoute(async (_req, res) => {
+  const result = await pool.query(
+    `SELECT o.*, c.full_name AS customer_name, c.phone AS customer_phone,
+            c.identification AS customer_identification, c.address AS customer_address,
+            a.name AS accionista_name, a.tipo AS accionista_tipo,
+            COALESCE((
+              SELECT json_agg(json_build_object(
+                       'product_id', i.product_id,
+                       'inventory_product_id', i.inventory_product_id,
+                       'presentation_name', i.presentation_name,
+                       'sobrante_saco_lb', i.sobrante_saco_lb,
+                       'quantity', i.quantity,
+                       'unit_price', i.unit_price,
+                       'total', i.total,
+                       'product_name', p.name
+                     ) ORDER BY p.name)
+              FROM sales_order_items i
+              JOIN products p ON p.id = i.product_id
+              WHERE i.order_id = o.id
+            ), '[]'::json) AS items,
+            COALESCE((
+              SELECT json_object_agg(x.product_id, x.qq) FROM (
+                SELECT m.product_id, SUM(m.quantity)::float AS qq
+                  FROM inventory_movements m
+                 WHERE m.accionista_id = o.accionista_id AND m.ownership = 'OWNED'
+                   AND m.product_id IN (SELECT i.inventory_product_id FROM sales_order_items i WHERE i.order_id = o.id)
+                 GROUP BY m.product_id
+              ) x
+            ), '{}'::json) AS stock_dueno
+     FROM sales_orders o
+     JOIN customers c ON c.id = o.customer_id
+     JOIN accionistas a ON a.id = o.accionista_id
+     WHERE o.status = 'PENDING'
+     ORDER BY o.delivery_date NULLS LAST, o.created_at
+     LIMIT 500`
+  );
+  res.json(result.rows);
+}));
+
 // Precio sugerido para una marca+presentación: el ÚLTIMO precio unitario al que
 // se vendió/pidió esa combinación para el accionista activo. Es una sugerencia
 // editable (no una tarifa fija); si nunca se ha pedido, devuelve null y la UI
