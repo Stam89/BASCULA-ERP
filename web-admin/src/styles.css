@@ -4781,3 +4781,29 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
   .cleanList--bodega .cleanList__monto { display: none; }
   .mantTotal strong { font-size: 20px; }
 }
+
+/* ── Venta Detalle (Caja): selector Libra/QQ, total de solo lectura ── */
+.vdCard { max-width: 600px; }
+.vdCard__titulo { margin: 0 0 10px; font-size: 18px; font-weight: 700; }
+.vdModo { display: inline-flex; gap: 4px; padding: 4px; margin-bottom: 8px; border-radius: 999px; background: var(--c-surface-3); border: 1px solid var(--c-border); }
+.vdModo__pill { border: none; background: transparent; color: var(--c-text-2); border-radius: 999px; padding: 7px 18px; font-weight: 700; font-size: 13.5px; cursor: pointer; line-height: 1.2; box-shadow: none; transition: background .15s, color .15s; }
+.content .vdModo__pill { min-height: 0; }
+.vdModo__pill:hover:not(.is-activo) { color: var(--c-brand); background: var(--c-surface); }
+.vdModo__pill.is-activo { background: var(--c-brand); color: #fff; box-shadow: 0 1px 3px rgba(15, 118, 110, .35); }
+.vdModo__pill:focus-visible { outline: 2px solid var(--c-brand-light); outline-offset: 2px; }
+.vdCard__ayuda { margin: 0 0 16px; color: var(--c-text-muted); font-size: 13px; }
+.vdCard__fila { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 8px; }
+@media (max-width: 520px) { .vdCard__fila { grid-template-columns: 1fr; } }
+.vdCard input.vdTotal { font-weight: 800; font-size: 16px; color: var(--c-text); cursor: default; }
+.vdCard__precio { margin: 0 0 12px; color: var(--c-success-text); font-size: 12px; }
+.vdCard__aviso { margin: 0 0 12px; color: var(--c-warning-text); font-size: 12px; }
+.vdResumen { background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; padding: 16px; margin-bottom: 16px; }
+.vdResumen__titulo { color: #166534; font-size: 12px; font-weight: 600; margin-bottom: 8px; }
+.vdResumen__grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 8px; }
+.vdResumen__k { font-size: 11px; color: #6b7280; margin-bottom: 2px; }
+.vdResumen__v { font-size: 16px; font-weight: 700; color: var(--c-success); }
+.vdResumen__v--sec { font-size: 14px; font-weight: 600; }
+.vdResumen__total { border-top: 1px solid #86efac; padding-top: 8px; }
+.vdResumen__monto { font-size: 22px; font-weight: 700; color: var(--c-success); }
+.vdCard__boton { width: 100%; padding: 10px 0; }
+.vdCard__atajos { margin: 6px 0 0; text-align: center; color: var(--c-text-muted); font-size: 11.5px; }

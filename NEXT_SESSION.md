@@ -7,7 +7,7 @@ Actualizado: 2026-10-02
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: Partes Diarios reconoce automaticamente los cobros hechos desde Liquidaciones y se retiro Servicios del menu de Campo.
+- Ultimo cambio funcional: Caja · Venta Detalle por Libra o por QQ (QQ con un centavo menos), total de solo lectura y Enter para registrar.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Caja · «Venta Detalle» por Libra o por QQ (2026-10-02)
+- `components/VentaDetalleCard.tsx` reemplaza el cotizador bidireccional: selector pill «Venta por Libra / Venta por QQ» (radiogroup; flechas, o L/Q dentro de Cantidad; el modo se recuerda por equipo en localStorage `bascula-erp:venta-detalle-modo`). Total $ es de SOLO LECTURA (tabIndex -1) y se recalcula con producto/cantidad/modo: `Total = Cantidad × PrecioAplicado`. Flujo sin mouse: Producto → Tab → Cantidad → Enter registra (candado contra doble Enter); al registrar se limpia y vuelve el foco a Producto.
+- `ventaDetalle.ts` (puro): `precioAplicadoDetalle` = tarifa/lb en modo Libra; en modo QQ = round2(tarifa/lb × 100) − `DESCUENTO_QQ` (0.01, un centavo por quintal). `calcularVentaDetalle` devuelve libras, qq (5 dec), base, aplicado y total; `redondear` sin ruido binario. INTERPRETACION a confirmar con el usuario: el centavo se resta al QQ (45.00 → 44.99), NO a cada libra.
+- Mutacion SIN CAMBIOS (`registrarVentaDetalle` en App): POST /inventory/adjustments (quantity = −QQ, OWNED, bodega de terminado; 409 si no hay stock → no toca caja) y luego POST /cash/movements (INCOME/VENTA, amount = total). Son DOS llamadas, no una transaccion atomica; si falla la caja tras descontar inventario se avisa y se limpia la tarjeta para que no se repita el descuento. Notas por libra con el formato de siempre; por QQ: `X QQ (Y lb) @ $P/QQ`. Ticket 80mm imprime QQ y $/QQ (campos opcionales `unidad/cantidad/precioUnitario`).
+- Se corrigio de paso: el Select de producto/cliente era no controlado y no se limpiaba tras registrar; la tarifa sin configurar heredaba el precio del producto anterior.
 
 ### Ventas · Sesion de venta por socio + Nuevo Pedido 2/3·1/3 + Cola de Despachos GLOBAL (2026-10-02)
 - Sin Tailwind en el proyecto: layout con CSS equivalente (`.pedidoLayout` 1 col → 3 col ≥1024px, `.pedidoLayout__main` span 2, `.orderSummarySidebar` sticky top 16px, `.pedidoBloqueado` opacity .5 + pointer-events none). Guardado intacto (sales_orders/sales_order_items).

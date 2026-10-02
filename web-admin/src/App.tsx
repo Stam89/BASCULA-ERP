@@ -15,6 +15,8 @@ import { BuscadorCombo } from "./components/BuscadorCombo";
 import { SaldosIniciales } from "./components/SaldosIniciales";
 import { MaquinaBuscador, etiquetaMaquina } from "./components/MaquinaBuscador";
 import { SalesSessionSwitcher } from "./components/SalesSessionSwitcher";
+import { VentaDetalleCard, type ProductoDetalle, type VentaDetalleRegistro } from "./components/VentaDetalleCard";
+import { formatoCantidad, formatoPrecio } from "./ventaDetalle";
 import * as XLSX from "xlsx";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
@@ -3342,14 +3344,8 @@ export function App() {
   type SackCartItem = { sack_id: string; tipo: string; cantidad: number; precio: number };
   const [sackCart, setSackCart] = useState<SackCartItem[]>([]);
 
-  // ── Venta Detalle (por libra) en Caja ──────────────────────────────────
-  const [ventaDetalleForm, setVentaDetalleForm] = useState({
-    product_id: "",
-    cantidad_libras: "",
-    precio_por_libra: "",
-    total_dolares: "",
-    customer_id: ""
-  });
+  // ── Venta Detalle (por Libra o por QQ) en Caja ─────────────────────────
+  // La captura (modo, producto, cantidad, total) vive en <VentaDetalleCard>.
   // Los ÚNICOS 5 productos que se venden al detalle por libra. Se matchean por
   // `code` (estable) contra el catálogo; el `label` es como los ve el cajero.
   // El catálogo de ventas MAYORISTAS no se toca (usa sus propias listas).
@@ -7171,143 +7167,105 @@ export function App() {
     setFomentoDetalle(data);
   }
 
-  // ── Cotizador bidireccional (Venta Detalle por libra) ──────────────────────
-  // Tres campos interdependientes: Cantidad (Libras), Precio por Libra $ y
-  // Total $. Al tocar uno, se recalcula el derivado en tiempo real. Guardas:
-  // nunca se divide por un precio 0 (o vacío). Los valores viven como strings en
-  // el form (inputs controlados); los cálculos se redondean a 2 decimales.
-  function vdTotalDesdeLibras(cantidad: string, precio: string): string {
-    const c = Number(cantidad), p = Number(precio);
-    if (!cantidad || !precio || !Number.isFinite(c) || !Number.isFinite(p)) return "";
-    return round2(c * p).toFixed(2);
-  }
-  function vdLibrasDesdeTotal(total: string, precio: string): string {
-    const t = Number(total), p = Number(precio);
-    if (!total || p <= 0 || !Number.isFinite(t)) return "";  // guarda contra división por 0
-    // Peso al detalle con precisión de 3 decimales (ej. 17.857 lb).
-    return (Math.round((t / p) * 1000) / 1000).toFixed(3);
-  }
-  // (a) Cambio de producto: precarga el precio/libra sugerido y recalcula.
-  // Prioridad de la tarifa: (1) la configurada en BD (Inventario/Productos,
-  // price_per_pound); (2) el último precio usado en este equipo (localStorage).
-  // Queda editable por si el cajero necesita una excepción manual.
-  function vdSetProducto(id: string) {
-    setVentaDetalleForm((prev) => {
-      const prod = products.find((p) => p.id === id);
-      const tarifaDb = prod ? Number(prod.price_per_pound ?? 0) : 0;
-      const ultimo = preciosLibraPorProducto[id];
-      const sugerido = tarifaDb > 0 ? tarifaDb : (ultimo != null && ultimo > 0 ? ultimo : null);
-      const precio = sugerido != null ? String(sugerido) : prev.precio_por_libra;
-      let cantidad = prev.cantidad_libras, total = prev.total_dolares;
-      if (prev.cantidad_libras) total = vdTotalDesdeLibras(prev.cantidad_libras, precio) || total;
-      else if (prev.total_dolares) cantidad = vdLibrasDesdeTotal(prev.total_dolares, precio) || cantidad;
-      return { ...prev, product_id: id, precio_por_libra: precio, cantidad_libras: cantidad, total_dolares: total };
+  // ── Venta Detalle (Libra / QQ) ──
+  // Productos de mostrador con su tarifa por libra. Prioridad: (1) la configurada
+  // en BD (Configuración → Tarifas por libra, price_per_pound); (2) el último
+  // precio usado en este equipo (localStorage). 0 = sin tarifa (no se puede vender).
+  function productosVentaDetalle(): ProductoDetalle[] {
+    return PRODUCTOS_DETALLE.flatMap((dp) => {
+      const p = products.find((x) => x.code === dp.code);
+      if (!p) return [];
+      const tarifaDb = Number(p.price_per_pound ?? 0);
+      const ultimo = preciosLibraPorProducto[p.id];
+      const precioLibra = tarifaDb > 0 ? tarifaDb : (ultimo != null && ultimo > 0 ? ultimo : 0);
+      return [{ id: p.id, label: dp.label, precioLibra }];
     });
   }
-  // (c) Digitar Cantidad (Libras) → Total = Cantidad × Precio.
-  function vdSetLibras(v: string) {
-    setVentaDetalleForm((prev) => ({ ...prev, cantidad_libras: v, total_dolares: vdTotalDesdeLibras(v, prev.precio_por_libra) }));
-  }
-  // (d) Editar Precio por Libra → Total = Cantidad × Precio (respeta las libras).
-  function vdSetPrecio(v: string) {
-    setVentaDetalleForm((prev) => ({ ...prev, precio_por_libra: v, total_dolares: vdTotalDesdeLibras(prev.cantidad_libras, v) }));
-  }
-  // (b) Digitar Total $ → Cantidad (Libras) = Total / Precio.
-  function vdSetTotal(v: string) {
-    setVentaDetalleForm((prev) => ({ ...prev, total_dolares: v, cantidad_libras: vdLibrasDesdeTotal(v, prev.precio_por_libra) }));
-  }
-  // Formatea Total $ a 2 decimales al perder el foco (estilo money, sin el "$"
-  // para que el número siga siendo editable/parseable).
-  function vdFormatTotalBlur() {
-    setVentaDetalleForm((prev) =>
-      prev.total_dolares === "" || !Number.isFinite(Number(prev.total_dolares))
-        ? prev
-        : { ...prev, total_dolares: Number(prev.total_dolares).toFixed(2) });
-  }
 
-  // ── Venta Detalle (por libra) ──
-  async function submitVentaDetalle() {
+  // Registra la venta que calculó la tarjeta. Mutación SIN CAMBIOS: (1) salida
+  // de inventario en QQ (POST /inventory/adjustments, el backend valida stock y
+  // responde 409 si no alcanza) y (2) ingreso a caja (POST /cash/movements).
+  // En modo QQ la cantidad ya viene en QQ y el precio con el centavo descontado.
+  async function registrarVentaDetalle(v: VentaDetalleRegistro): Promise<boolean> {
     const registerId = dashboard.current_cash_register?.id;
-    if (!registerId) { addToast("No hay caja abierta", "error"); return; }
-    if (!ventaDetalleForm.product_id || !ventaDetalleForm.cantidad_libras || !ventaDetalleForm.precio_por_libra) {
-      addToast("Completa producto, cantidad en libras y precio", "error");
-      return;
+    if (!registerId) { addToast("No hay caja abierta", "error"); return false; }
+    if (!v.product_id || !(v.libras > 0) || !(v.qq > 0) || !(v.precioAplicado > 0)) {
+      addToast("Completa producto, cantidad y precio", "error");
+      return false;
     }
+    if (!(v.total > 0)) { addToast("La cantidad y el total deben ser mayores a 0", "error"); return false; }
 
-    // Peso exacto en libras con 3 decimales; QQ conserva esa precisión (5 dec)
-    // para no perder el peso al convertir (100 lb = 1 QQ).
-    const cantidadLibras = Math.round(Number(ventaDetalleForm.cantidad_libras) * 1000) / 1000;
-    const precioLibra = Number(ventaDetalleForm.precio_por_libra);
-    const cantidadQQ = Math.round((cantidadLibras / 100) * 100000) / 100000; // libras → QQ
-    // Monto a cobrar: si el cajero fijó el Total $ explícito, ese manda (respeta
-    // el redondeo que ve en pantalla); si no, se calcula libras × precio.
-    const totalVenta = ventaDetalleForm.total_dolares !== ""
-      ? round2(Number(ventaDetalleForm.total_dolares))
-      : round2(cantidadLibras * precioLibra);
-    if (!(cantidadLibras > 0) || !(totalVenta > 0)) {
-      addToast("La cantidad y el total deben ser mayores a 0", "error");
-      return;
-    }
+    // Datos para el ticket, capturados ANTES de que la tarjeta se limpie.
+    const cliTicket = v.customer_id ? customers.find((c) => c.id === v.customer_id) ?? null : null;
+    const librasStr = v.libras.toFixed(3);
+    const qqStr = formatoCantidad(v.qq);
+    // Texto de nota/descripción: por libra, el MISMO formato de siempre.
+    const detalle = v.modo === "QQ"
+      ? `${qqStr} QQ (${librasStr} lb) @ $${v.precioAplicado.toFixed(2)}/QQ`
+      : `${librasStr} lb @ $${v.precioLibra.toFixed(2)}/lb`;
 
-    // Datos para el ticket, capturados ANTES de limpiar el formulario.
-    const prodTicket = products.find((p) => p.id === ventaDetalleForm.product_id);
-    const cliTicket = ventaDetalleForm.customer_id
-      ? customers.find((c) => c.id === ventaDetalleForm.customer_id) ?? null
-      : null;
-    const librasStr = cantidadLibras.toFixed(3);
-
+    // Descuento en kárdex (Producto Terminado / Arroz Pilado). Como apiFetch NO
+    // lanza en error, revisamos res.ok y abortamos ANTES de tocar la caja o
+    // imprimir. Así nunca se cobra una venta sin descontar inventario.
     try {
-
-      // Descuento en kárdex (Producto Terminado / Arroz Pilado). El backend valida
-      // que haya stock suficiente y devuelve 409 si no; como apiFetch NO lanza en
-      // error, revisamos res.ok y abortamos ANTES de tocar la caja o imprimir, con
-      // una alerta amigable. Así nunca se cobra una venta sin descontar inventario.
       const invRes = await apiFetch(`/inventory/adjustments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          product_id: ventaDetalleForm.product_id,
+          product_id: v.product_id,
           warehouse_id: finishedWarehouse?.id,
-          quantity: -cantidadQQ, // Negativo = salida
+          quantity: -v.qq, // Negativo = salida
           ownership: "OWNED",
-          notes: `Venta al detalle: ${librasStr} lb @ $${precioLibra.toFixed(2)}/lb`
+          notes: `Venta al detalle: ${detalle}`
         })
       });
       if (!invRes.ok) {
         let msg = "No hay stock suficiente de este producto para la venta.";
         try { const j = await invRes.json(); msg = j.error || j.message || msg; } catch { /* sin cuerpo JSON */ }
         addToast(msg, "error");
-        return; // No se registra caja ni se imprime ticket.
+        return false; // No se registra caja ni se imprime ticket.
       }
+    } catch (e) {
+      addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error");
+      return false;
+    }
 
-      // Crear movimiento de caja
+    // Ingreso a caja. Si falla, el inventario YA salió: se avisa y se limpia la
+    // tarjeta para que un segundo Enter no descuente el producto dos veces.
+    try {
       await apiPost("/cash/movements", {
         cash_register_id: registerId,
         movement: "INCOME",
         category: "VENTA",
-        amount: totalVenta,
-        description: `Venta detalle ${librasStr} lb @ $${precioLibra.toFixed(2)}/lb`
+        amount: v.total,
+        description: `Venta detalle ${detalle}`
       });
-
-      // Recordar el precio/libra usado para este producto (precarga futura).
-      const nuevosPrecios = { ...preciosLibraPorProducto, [ventaDetalleForm.product_id]: precioLibra };
-      setPreciosLibraPorProducto(nuevosPrecios);
-      try { localStorage.setItem(preciosLibraKey, JSON.stringify(nuevosPrecios)); } catch { /* almacenamiento no disponible */ }
-
-      setVentaDetalleForm({ product_id: "", cantidad_libras: "", precio_por_libra: "", total_dolares: "", customer_id: "" });
-      addToast(`✓ Venta ${librasStr} lb por ${money(totalVenta)} registrada`, "success");
-      // Ticket térmico 80mm (comprobante de mostrador).
-      printTicketVentaDetalle({
-        producto: PRODUCTOS_DETALLE.find((dp) => dp.code === prodTicket?.code)?.label ?? prodTicket?.name ?? "—",
-        cliente: cliTicket?.full_name || "Consumidor Final",
-        libras: librasStr,
-        precioLibra,
-        total: totalVenta
-      });
-      await refreshCaja(registerId);
     } catch (e) {
-      addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error");
+      addToast(`El inventario ya se descontó, pero la caja no registró el ingreso de ${money(v.total)} `
+        + `(${e instanceof Error ? e.message : "error"}). Regístralo en Caja → Movimiento; NO repitas la venta.`, "error");
+      await refreshCaja(registerId).catch(() => { /* el refresco no cambia la venta */ });
+      return true;
     }
+
+    // Recordar el precio/libra usado para este producto (precarga futura).
+    const nuevosPrecios = { ...preciosLibraPorProducto, [v.product_id]: v.precioLibra };
+    setPreciosLibraPorProducto(nuevosPrecios);
+    try { localStorage.setItem(preciosLibraKey, JSON.stringify(nuevosPrecios)); } catch { /* almacenamiento no disponible */ }
+
+    addToast(`✓ Venta ${v.modo === "QQ" ? `${qqStr} QQ` : `${librasStr} lb`} por ${money(v.total)} registrada`, "success");
+    // Ticket térmico 80mm (comprobante de mostrador).
+    printTicketVentaDetalle({
+      producto: v.producto,
+      cliente: cliTicket?.full_name || "Consumidor Final",
+      libras: librasStr,
+      precioLibra: v.precioLibra,
+      total: v.total,
+      unidad: v.modo === "QQ" ? "QQ" : "lb",
+      cantidad: v.modo === "QQ" ? qqStr : librasStr,
+      precioUnitario: v.precioAplicado
+    });
+    await refreshCaja(registerId).catch(() => { /* el refresco no cambia la venta */ });
+    return true;
   }
 
   // Guarda/actualiza la tarifa por libra de un producto (Inventario/Productos).
@@ -7327,7 +7285,10 @@ export function App() {
   // ── Ticket térmico 80mm de Venta al Detalle ────────────────────────────────
   function printTicketVentaDetalle(t: {
     producto: string; cliente: string; libras: string; precioLibra: number; total: number;
+    /** Unidad vendida (por defecto libras); en QQ se imprime la cantidad y el $/QQ. */
+    unidad?: "lb" | "QQ"; cantidad?: string; precioUnitario?: number;
   }) {
+    const enQQ = t.unidad === "QQ";
     const esc = (s: string | null | undefined) => (s ?? "").replace(/</g, "&lt;");
     const fecha = new Date().toLocaleString("es-EC", {
       day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit"
@@ -7360,16 +7321,17 @@ export function App() {
         <div class="row"><span class="k">Cliente:</span> <strong>${esc(t.cliente)}</strong></div>
         <hr>
         <table>
-          <thead><tr><th>Producto</th><th class="n">Libras</th><th class="n">$/lb</th><th class="n">Subtotal</th></tr></thead>
+          <thead><tr><th>Producto</th><th class="n">${enQQ ? "QQ" : "Libras"}</th><th class="n">${enQQ ? "$/QQ" : "$/lb"}</th><th class="n">Subtotal</th></tr></thead>
           <tbody>
             <tr>
               <td>${esc(t.producto)}</td>
-              <td class="n">${esc(t.libras)}</td>
-              <td class="n">${money(t.precioLibra)}</td>
+              <td class="n">${esc(enQQ ? t.cantidad ?? t.libras : t.libras)}</td>
+              <td class="n">${formatoPrecio(enQQ ? t.precioUnitario ?? t.precioLibra : t.precioLibra)}</td>
               <td class="n">${money(t.total)}</td>
             </tr>
           </tbody>
         </table>
+        ${enQQ ? `<div class="row"><span class="k">Equivale a:</span> <span>${esc(t.libras)} lb</span></div>` : ""}
         <div class="tot"><span>TOTAL</span><span>${money(t.total)}</span></div>
         <div class="foot">¡Gracias por su compra!<br>Vuelva pronto 🌾</div>
       </div>
@@ -16753,7 +16715,7 @@ export function App() {
                     .filter((t) => !(esSocio && soloMatriz.includes(t)));
                   const fomentosActivos = fomentos.filter((f) => f.status === "ACTIVOS").length;
                   const acciones: Array<{ key: typeof visibles[number]; icon: string; label: string; hint: string }> = [
-                    { key: "venta_detalle", icon: "🛒", label: "Venta Detalle", hint: "Venta por libra en mostrador" },
+                    { key: "venta_detalle", icon: "🛒", label: "Venta Detalle", hint: "Venta por libra o QQ en mostrador" },
                     { key: "fomentos", icon: "🌾", label: `Fomentos${fomentosActivos > 0 ? ` (${fomentosActivos})` : ""}`, hint: "Créditos a agricultores" },
                     { key: "anticipo", icon: "💸", label: "Anticipos", hint: "Anticipo a agricultor" },
                     { key: "sacos", icon: "📦", label: "Sacos", hint: "Compra y stock de sacos" },
@@ -17987,72 +17949,14 @@ export function App() {
                     </div>
                 )}
 
-                {/* ── Venta Detalle (por libra) ── */}
+                {/* ── Venta Detalle (por Libra o por QQ) ── */}
                 {cajaSubTab === "venta_detalle" && (
-                  <form className="formPanel" onSubmit={(e) => { e.preventDefault(); submitVentaDetalle(); }} style={{ maxWidth: 600 }}>
-                    <h2 style={{ margin: "0 0 8px", fontSize: 18, fontWeight: 700 }}>🛒 Venta Detalle por Libra</h2>
-                    <p style={{ margin: "0 0 20px", color: "#6b7280", fontSize: 13 }}>Registra ventas pequeñas. Se restan automáticamente del inventario y entra el dinero a la caja.</p>
-
-                    <Select name="product_id" label="Producto"
-                      rows={PRODUCTOS_DETALLE
-                        .map((dp) => { const p = products.find((x) => x.code === dp.code); return p ? [p.id, dp.label] as [string, string] : null; })
-                        .filter((r): r is [string, string] => r !== null)}
-                      onChange={(e: any) => vdSetProducto(e.target.value)} />
-
-                    {/* Cotizador: Cantidad (Libras) ↔ Total $. El precio por libra se
-                        carga en SEGUNDO PLANO desde la tarifa del producto (se configura
-                        en Administración → Tarifas y servicios de planta); el cajero ya
-                        no lo ve ni lo edita aquí. */}
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 8 }}>
-                      <Input name="cantidad_libras" label="Cantidad (Libras)" type="number"
-                        value={ventaDetalleForm.cantidad_libras}
-                        onChange={(e: any) => vdSetLibras(e.target.value)}
-                        placeholder="0" required />
-                      <Input name="total_dolares" label="Total $ (Monto a cobrar)" type="number"
-                        value={ventaDetalleForm.total_dolares}
-                        onChange={(e: any) => vdSetTotal(e.target.value)}
-                        onBlur={vdFormatTotalBlur}
-                        placeholder="0.00" required={false} step="0.01" />
-                    </div>
-                    {ventaDetalleForm.product_id && Number(ventaDetalleForm.precio_por_libra) > 0 && (
-                      <p style={{ margin: "0 0 12px", color: "#166534", fontSize: 12 }}>
-                        Precio aplicado: <strong>{money(ventaDetalleForm.precio_por_libra)}/lb</strong> ·{" "}
-                        {cfgLink("🛒 Tarifas por libra", "Editar tarifa en Configuración") ?? "tarifa configurada en Administración."}
-                      </p>
-                    )}
-                    {ventaDetalleForm.product_id && !(Number(ventaDetalleForm.precio_por_libra) > 0) && (
-                      <p style={{ margin: "0 0 12px", color: "#b45309", fontSize: 12 }}>
-                        Este producto no tiene tarifa por libra configurada. Un administrador puede definirla en Configuración → Tarifas por libra. {cfgLink("🛒 Tarifas por libra", "Definir tarifa")}
-                      </p>
-                    )}
-
-                    <Select name="customer_id" label="Cliente (opcional)"
-                      rows={customers.map((c) => [c.id, c.full_name])}
-                      onChange={(e: any) => setVentaDetalleForm({ ...ventaDetalleForm, customer_id: e.target.value })}
-                      required={false} />
-
-                    {ventaDetalleForm.cantidad_libras && ventaDetalleForm.precio_por_libra && (
-                      <div style={{ background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 6, padding: "16px", marginBottom: 16 }}>
-                        <div style={{ color: "#166534", fontSize: 12, fontWeight: 600, marginBottom: 8 }}>💰 RESUMEN DE VENTA</div>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 8 }}>
-                          <div>
-                            <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>Cantidad</div>
-                            <div style={{ fontSize: 16, fontWeight: 700, color: "#16a34a" }}>{Number(ventaDetalleForm.cantidad_libras).toFixed(3)} libras</div>
-                          </div>
-                          <div>
-                            <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>Equivalencia</div>
-                            <div style={{ fontSize: 14, fontWeight: 600, color: "#16a34a" }}>{(Number(ventaDetalleForm.cantidad_libras) / 100).toFixed(2)} QQ</div>
-                          </div>
-                        </div>
-                        <div style={{ borderTop: "1px solid #86efac", paddingTop: 8 }}>
-                          <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>Total a cobrar</div>
-                          <div style={{ fontSize: 22, fontWeight: 700, color: "#16a34a" }}>{money(ventaDetalleForm.total_dolares !== "" ? Number(ventaDetalleForm.total_dolares) : Number(ventaDetalleForm.cantidad_libras) * Number(ventaDetalleForm.precio_por_libra))}</div>
-                        </div>
-                      </div>
-                    )}
-
-                    <button className="primary" style={{ width: "100%", padding: "10px 0" }}>✓ Registrar venta detalle</button>
-                  </form>
+                  <VentaDetalleCard
+                    productos={productosVentaDetalle()}
+                    clientes={customers.map((c) => [c.id, c.full_name] as [string, string])}
+                    onRegistrar={registrarVentaDetalle}
+                    onAviso={(m) => addToast(m, "error")}
+                    enlaceTarifas={(texto) => cfgLink("🛒 Tarifas por libra", texto)} />
                 )}
 
                 {/* Las cuentas por pagar se administran en la pestaña "Por Pagar" (grupo Cuentas). */}
