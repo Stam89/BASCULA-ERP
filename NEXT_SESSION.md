@@ -7,7 +7,7 @@ Actualizado: 2026-10-02
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: entrar desde el celular con datos moviles — ERP preparado (IP real tras tunel, freno por usuario, cambiar mi clave, app instalable); FALTA que el usuario cree el tunel de Cloudflare y ponga PUBLIC_URL. Antes: catalogo de productos y recuperar clave por correo (SMTP pendiente).
+- Ultimo cambio funcional: acceso desde el celular con datos moviles ACTIVO en https://erp.ceyroerp.com (tunel Cloudflare). Pendiente: SMTP para «¿Olvidaste tu clave?» y pasar APP_MODE a production al arrancar real.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -49,9 +49,9 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
-### Entrar desde el celular con datos moviles (internet) — preparado, falta el tunel (2026-10-02)
-- Decision del usuario: enlace web https con TUNEL DE CLOUDFLARE (no Tailscale, no abrir puertos). El ERP sigue en esta PC (0.0.0.0:4000, LAN `http://192.168.88.58:4000`, regla de firewall «BASCULA-ERP», autoinicio por tarea «BASCULA-ERP Autoinicio» al iniciar sesion de Windows). cloudflared NO esta instalado.
-- PENDIENTE DEL USUARIO (no se puede hacer sin su cuenta/token): cuenta Cloudflare + dominio → Zero Trust → Tunnels → crear «bascula-erp» (Windows) → en esta PC `winget install --id Cloudflare.cloudflared` + `cloudflared.exe service install <TOKEN>` (admin) → Public Hostname `erp.<dominio>` → HTTP `localhost:4000` → `PUBLIC_URL=https://erp.<dominio>` en backend/.env y reiniciar. Pasos tambien en `.env.example` y en la tarjeta de Configuracion.
+### Entrar desde el celular con datos moviles (internet) — ACTIVO en https://erp.ceyroerp.com (2026-10-02)
+- HECHO con el usuario: dominio `ceyroerp.com` (Cloudflare Registrar), Zero Trust plan Free (team `ceyro`), tunel cloudflared `bascula-erp` (Healthy), ruta publicada `erp.ceyroerp.com` → HTTP `localhost:4000`. cloudflared 2026.9.3 instalado con winget en `C:\Program Files (x86)\cloudflared\`, servicio de Windows «cloudflared» Automatic/Running (el token lo puso el usuario; no esta en el repo). `PUBLIC_URL=https://erp.ceyroerp.com` agregado a `backend/.env` del checkout base (copia previa: `backend/.env.bak-antes-public-url`). Verificado: /health y manifest por https, login carga.
+- Decision del usuario: enlace web https con TUNEL DE CLOUDFLARE (no Tailscale, no abrir puertos). El ERP sigue en esta PC (0.0.0.0:4000, LAN `http://192.168.88.58:4000`, regla de firewall «BASCULA-ERP», autoinicio por tarea «BASCULA-ERP Autoinicio» al iniciar sesion de Windows): la PC debe quedar encendida y con sesion iniciada. El usuario pregunto por funcionar con la PC apagada (nube o mini PC): quedo sin decidir, eligio seguir con el tunel.
 - Seguridad para internet: `app.set("trust proxy", "loopback")` (IP real del celular por X-Forwarded-For SOLO si la conexion viene de localhost = cloudflared; una PC de la red no puede falsearla; probado que un XFF falseado no engaña). Freno por USUARIO en /login (10 fallos/15 min por nombre escrito, exista o no; ademas del de IP). `password_weak` en la respuesta de /login (clave < 8) → el panel abre «🔑 Cambia tu clave» (`CambiarClaveModal`, marca en sessionStorage). Nuevo `PUT /auth/me/password` (clave actual + nueva ≥ 8, distinta; anula codigos de recuperacion). Rutas de maquinas ya protegidas (sync/discover exigen DEVICE_SYNC_KEY, external exige API key). JWT 12 h.
 - `GET /settings/acceso-remoto` (public_url, lan_urls, via_internet por CF-Ray/CF-Connecting-IP, tu_ip) y `POST /settings/acceso-remoto/probar` (admin; GET `${PUBLIC_URL}/health` con timeout 12 s). `env.publicUrl` = PUBLIC_URL normalizado (solo https, sin credenciales; `utils/red.ts` + test). `lanAddresses` movido a `utils/red.ts`.
 - Configuracion → Usuarios → «🌐 Acceso desde el celular (internet)» (`components/AccesoRemoto.tsx`): estado, enlace publico (Copiar / Compartir por WhatsApp / Probar), pasos de Cloudflare si falta, enlaces LAN, recordatorios. Boton 🔑 junto al nombre. Buscador actualizado.
