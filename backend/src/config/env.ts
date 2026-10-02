@@ -83,5 +83,14 @@ export const env = {
   jwtSecret: loadJwtSecret(),
   externalApiKey: loadExternalApiKey(),
   deviceSyncKey: (process.env.DEVICE_SYNC_KEY ?? "").trim(),
+  // Correo saliente (código de recuperación de clave). Con Gmail: smtp.gmail.com:465
+  // y una «contraseña de aplicación» (Google la muestra con espacios: se quitan).
+  smtp: {
+    host: (process.env.SMTP_HOST ?? "smtp.gmail.com").trim(),
+    port: Number(process.env.SMTP_PORT ?? 465) || 465,
+    user: (process.env.SMTP_USER ?? "").trim(),
+    pass: (process.env.SMTP_PASS ?? "").replace(/\s+/g, ""),
+    from: (process.env.SMTP_FROM ?? "").trim()
+  },
   corsOrigins
 };

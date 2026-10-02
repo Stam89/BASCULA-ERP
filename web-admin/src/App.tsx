@@ -18,6 +18,8 @@ import { SalesSessionSwitcher } from "./components/SalesSessionSwitcher";
 import { VentaDetalleCard, type ProductoDetalle, type VentaDetalleRegistro } from "./components/VentaDetalleCard";
 import { formatoCantidad, formatoPrecio, precioAplicadoDetalle, DESCUENTO_QQ, LIBRAS_POR_QQ } from "./ventaDetalle";
 import { ParametrosContables } from "./components/ParametrosContables";
+import { CorreoRecuperacionModal } from "./components/CorreoRecuperacion";
+import { ConfigCorreoClaves } from "./components/ConfigCorreoClaves";
 import * as XLSX from "xlsx";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
@@ -233,6 +235,8 @@ type AdminUser = {
   name: string;
   username: string;
   cedula?: string | null;
+  /** Correo al que se envía el código si olvida su clave. */
+  recovery_email?: string | null;
   is_active: boolean;
   created_at: string;
   role_name: string | null;
@@ -2552,7 +2556,8 @@ export function App() {
     { sub: "socios", tarjeta: "Accionistas registrados", claves: "socios accionistas lista renombrar" },
     { sub: "socios", tarjeta: "🏦 Cuentas Bancarias de Socios", claves: "banco numero de cuenta datos bancarios" },
     { sub: "secuenciales", tarjeta: "📄 Secuenciales de documentos", claves: "numeracion guia de remision prefijo punto de emision factura" },
-    { sub: "usuarios", tarjeta: "👤 Crear usuario", claves: "usuario clave contrasena rol operador administrador cedula" },
+    { sub: "usuarios", tarjeta: "✉️ Correo para recuperar claves", claves: "correo gmail email recuperar clave contrasena olvide olvidaste perdio restablecer codigo smtp" },
+    { sub: "usuarios", tarjeta: "👤 Crear usuario", claves: "usuario clave contrasena rol operador administrador cedula correo recuperacion" },
     { sub: "usuarios", tarjeta: "Usuarios registrados", claves: "usuarios permisos modulos accionistas editar sub pestanas solo ver" },
     { sub: "usuarios", tarjeta: "🕓 Actividad del sistema", claves: "auditoria log historial quien creo modifico elimino" }
   ];
@@ -3078,7 +3083,7 @@ export function App() {
   // Paso 3 del alta = permisos POR ACCIONISTA (mismo modelo que el modal de
   // edición): accPerms[accionista_id] = claves de allowed_modules (VER, EDIT:,
   // SUB:, PERM:). La presencia de la clave del accionista = tiene acceso.
-  const [newUserForm, setNewUserForm] = useState({ name: "", username: "", cedula: "", password: "", role: "OPERADOR" as "ADMINISTRADOR" | "OPERADOR", accPerms: {} as Record<string, string[]> });
+  const [newUserForm, setNewUserForm] = useState({ name: "", username: "", cedula: "", email: "", password: "", role: "OPERADOR" as "ADMINISTRADOR" | "OPERADOR", accPerms: {} as Record<string, string[]> });
   // Qué accionista está expandido en el acordeón del Paso 3.
   const [newUserAccExpanded, setNewUserAccExpanded] = useState<string | null>(null);
   const [showNewUserPassword, setShowNewUserPassword] = useState(false);
@@ -3088,7 +3093,7 @@ export function App() {
   const [newAccionistaForm, setNewAccionistaForm] = useState({ name: "", code: "" });
   const [accionistaEditor, setAccionistaEditor] = useState<{ user: AdminUser; items: Array<{ accionista_id: string; access: boolean; modules: string[] }> } | null>(null);
   // Edición de datos de un usuario registrado (nombre, usuario, clave, rol).
-  const [userEditor, setUserEditor] = useState<{ user: AdminUser; name: string; username: string; cedula: string; password: string; role: "ADMINISTRADOR" | "OPERADOR" } | null>(null);
+  const [userEditor, setUserEditor] = useState<{ user: AdminUser; name: string; username: string; cedula: string; email: string; password: string; role: "ADMINISTRADOR" | "OPERADOR" } | null>(null);
   const [renameAccionista, setRenameAccionista] = useState<{ id: string; name: string; code: string } | null>(null);
   const [resetForm, setResetForm] = useState({ password: "", confirm: "" });
   const [backupInfo, setBackupInfo] = useState<{ directory: string; backups: Array<{ name: string; size_kb: number; created_at: string }> } | null>(null);
@@ -6290,6 +6295,7 @@ export function App() {
       name: createdAccess.name,
       username: createdAccess.username,
       cedula: newUserForm.cedula.trim() || undefined,
+      recovery_email: newUserForm.email.trim() || undefined,
       password: createdAccess.password,
       role: newUserForm.role,
       allowed_modules: [],
@@ -6301,7 +6307,7 @@ export function App() {
       });
     }
     setLastCreatedUserAccess(createdAccess);
-    setNewUserForm({ name: "", username: "", cedula: "", password: "", role: "OPERADOR", accPerms: {} });
+    setNewUserForm({ name: "", username: "", cedula: "", email: "", password: "", role: "OPERADOR", accPerms: {} });
     setNewUserAccExpanded(null);
     setShowNewUserPassword(false);
     addToast("Usuario creado", "success");
@@ -6349,6 +6355,7 @@ export function App() {
       name: userEditor.name.trim(),
       username: userEditor.username.trim(),
       cedula: userEditor.cedula.trim(),
+      recovery_email: userEditor.email.trim(), // vacío = quitarlo
       role: userEditor.role
     };
     if (userEditor.password.trim()) payload.password = userEditor.password.trim();
@@ -12022,6 +12029,30 @@ export function App() {
     if (win) { win.document.write(html); win.document.close(); win.print(); }
   }
 
+  // ✉️ Correo de recuperación del usuario: ventana para registrarlo y un aviso (con
+  // «Ahora no») mientras no tenga uno y el servidor ya pueda enviar correos.
+  const [correoModalAbierto, setCorreoModalAbierto] = useState(false);
+  const [correoAviso, setCorreoAviso] = useState(false);
+  const correoAvisoKey = authUser ? `bascula-erp:correo-aviso:${authUser.id}` : "";
+  useEffect(() => {
+    if (!authUser) { setCorreoAviso(false); return; }
+    let vivo = true;
+    apiGet<{ recovery_email: string | null; mail_configured: boolean }>("/auth/me/recovery-email")
+      .then((r) => {
+        if (!vivo) return;
+        let descartado = false;
+        try { descartado = localStorage.getItem(correoAvisoKey) === "1"; } catch { /* almacenamiento no disponible */ }
+        setCorreoAviso(r.mail_configured && !r.recovery_email && !descartado);
+      })
+      .catch(() => undefined);
+    return () => { vivo = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUser?.id]);
+  function descartarCorreoAviso() {
+    setCorreoAviso(false);
+    try { localStorage.setItem(correoAvisoKey, "1"); } catch { /* almacenamiento no disponible */ }
+  }
+
   function logout() {
     localStorage.removeItem(authStorageKey);
     setAuthUser(null);
@@ -12243,6 +12274,7 @@ export function App() {
               <strong>{authUser.name}</strong>
               <small>{(authUser.role_name ?? "usuario").toLowerCase()}</small>
             </div>
+            <button className="logoutBtn mailBtn" title="Mi correo de recuperación de clave" aria-label="Mi correo de recuperación de clave" onClick={() => setCorreoModalAbierto(true)}>✉️</button>
             <button className="logoutBtn" title="Cerrar sesión" onClick={logout}>⏻</button>
           </div>
           <span className={apiOnline ? "apiState on" : "apiState"}>
@@ -12286,6 +12318,23 @@ export function App() {
           </div>
         </header>
         <div className="content">
+
+        {correoAviso && (
+          <div className="correoAviso" role="status">
+            <span>✉️ <strong>Agrega un correo de recuperación</strong> para poder cambiar tu clave tú mismo si la olvidas.</span>
+            <span className="correoAviso__acciones">
+              <button type="button" className="btnSecondary" onClick={() => setCorreoModalAbierto(true)}>Agregar correo</button>
+              <button type="button" className="btnGhost" onClick={descartarCorreoAviso}>Ahora no</button>
+            </span>
+          </div>
+        )}
+        {correoModalAbierto && (
+          <CorreoRecuperacionModal
+            onCerrar={() => setCorreoModalAbierto(false)}
+            onGuardado={(correo) => { if (correo) setCorreoAviso(false); refreshConfig().catch(() => undefined); }}
+            avisar={addToast}
+          />
+        )}
 
         {activeTab === "Dashboard" && (
           <>
@@ -21791,7 +21840,7 @@ export function App() {
               const readinessPct = readinessTotal > 0 ? Math.round((readinessDone / readinessTotal) * 100) : 0;
               const readinessAreaLabel = (key: string) => {
                 if (["business_name", "matriz"].includes(key)) return "Empresa";
-                if (["admin", "users"].includes(key)) return "Usuarios";
+                if (["admin", "users", "correo_recuperacion"].includes(key)) return "Usuarios";
                 if (["firebase", "device_key"].includes(key)) return "Bascula movil";
                 if (key.startsWith("campo_")) return "Transporte y cosechadora";
                 if (key === "contabilidad") return "Contabilidad";
@@ -21801,6 +21850,7 @@ export function App() {
               const readinessAction = (key: string): { label: string; run: () => void } | null => {
                 if (key === "business_name") return { label: "Abrir datos", run: () => { abrirTarjetaRef.current = "🏢 Datos del negocio"; setConfigSubTab("operacion"); } };
                 if (key === "matriz") return { label: "Abrir socios", run: () => setConfigSubTab("socios") };
+                if (key === "correo_recuperacion") return { label: "Ver cómo activarlo", run: () => { abrirTarjetaRef.current = "✉️ Correo para recuperar claves"; setConfigSubTab("usuarios"); } };
                 if (key === "admin" || key === "users") return { label: "Abrir usuarios", run: () => setConfigSubTab("usuarios") };
                 if (key === "app_mode") return { label: "Ver puesta en marcha", run: () => { abrirTarjetaRef.current = "✅ Puesta en marcha"; setConfigSubTab("operacion"); } };
                 if (key === "contabilidad") return { label: "Abrir parámetros", run: () => irAAjuste({ sub: "operacion", tarjeta: "📊 Parámetros contables", claves: "" }) };
@@ -22212,6 +22262,18 @@ export function App() {
             {/* ── Usuarios ── */}
             {configSubTab === "usuarios" && (
               <section style={{ display: "grid", gridTemplateColumns: "minmax(0, 5fr) minmax(0, 7fr)", gap: 16, alignItems: "start" }} className="configUsersGrid">
+                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>
+                    ✉️ Correo para recuperar claves <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· «¿Olvidaste tu clave?» envía un código al correo del usuario</span>
+                  </summary>
+                  <ConfigCorreoClaves
+                    esAdmin={isAdmin}
+                    usuariosConCorreo={adminUsers.filter((u) => u.is_active && u.recovery_email).length}
+                    usuariosTotal={adminUsers.filter((u) => u.is_active).length}
+                    avisar={addToast}
+                    onAbrirMiCorreo={() => setCorreoModalAbierto(true)}
+                  />
+                </details>
                 <details className="formPanel userCreatePanel" style={{ gridColumn: "1 / -1" }} open>
                   <summary className="userPanelSummary">
                     <span>Crear usuario</span>
@@ -22261,6 +22323,18 @@ export function App() {
                           value={newUserForm.cedula}
                           onChange={(e) => setNewUserForm({ ...newUserForm, cedula: e.target.value.replace(/\D/g, "") })}
                         />
+                      </label>
+                      <label>
+                        <span>Correo de recuperación</span>
+                        <input
+                          type="email"
+                          autoComplete="off"
+                          maxLength={160}
+                          placeholder="Opcional · ej. juan@gmail.com"
+                          value={newUserForm.email}
+                          onChange={(e) => setNewUserForm({ ...newUserForm, email: e.target.value.trim() })}
+                        />
+                        <small className="muted">Aquí llega el código si olvida su clave (puede agregarlo después).</small>
                       </label>
                       <label>
                         <span>Usuario *</span>
@@ -22478,6 +22552,7 @@ export function App() {
                         <tr>
                           <th>Nombre</th>
                           <th>Usuario</th>
+                          <th>Correo</th>
                           <th style={{ whiteSpace: "nowrap" }}>Rol</th>
                           <th style={{ whiteSpace: "nowrap" }}>Permisos</th>
                           <th>Estado</th>
@@ -22489,6 +22564,7 @@ export function App() {
                           <tr key={u.id}>
                             <td>{u.name}</td>
                             <td>{u.username}</td>
+                            <td className="muted" style={{ fontSize: 12.5 }}>{u.recovery_email ?? "—"}</td>
                             <td style={{ textTransform: "capitalize" }}>{(u.role_name ?? "—").toLowerCase()}</td>
                             <td>
                               {u.role_name === "ADMINISTRADOR" ? (
@@ -22512,6 +22588,7 @@ export function App() {
                                   name: u.name,
                                   username: u.username,
                                   cedula: u.cedula ?? "",
+                                  email: u.recovery_email ?? "",
                                   password: "",
                                   role: u.role_name === "ADMINISTRADOR" ? "ADMINISTRADOR" : "OPERADOR"
                                 })}
@@ -22580,6 +22657,11 @@ export function App() {
                           <span>Cedula</span>
                           <input value={userEditor.cedula} inputMode="numeric"
                             onChange={(e) => setUserEditor({ ...userEditor, cedula: e.target.value })} />
+                        </label>
+                        <label>
+                          <span>Correo de recuperación</span>
+                          <input type="email" maxLength={160} value={userEditor.email} placeholder="nombre@gmail.com (vacío = sin correo)"
+                            onChange={(e) => setUserEditor({ ...userEditor, email: e.target.value.trim() })} />
                         </label>
                         <label>
                           <span>Clave nueva (opcional)</span>
@@ -23689,7 +23771,7 @@ export function App() {
                         <span className="launchStepNumber">3</span>
                         <div>
                           <strong>Usuarios y permisos</strong>
-                          <p>Crea un usuario por persona y limita operadores por modulo y accionista.</p>
+                          <p>Crea un usuario por persona (con su correo para recuperar la clave) y limita operadores por modulo y accionista.</p>
                         </div>
                         <button type="button" className="btnGhost" onClick={() => setConfigSubTab("usuarios")}>
                           Abrir
@@ -24199,11 +24281,16 @@ export function App() {
 }
 
 function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
-  const [mode, setMode] = useState<"loading" | "login" | "bootstrap">("loading");
+  // forgot = pedir el código al correo de recuperación; reset = código + clave nueva.
+  const [mode, setMode] = useState<"loading" | "login" | "bootstrap" | "forgot" | "reset">("loading");
   const [fullName, setFullName] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [password2, setPassword2] = useState("");
+  const [email, setEmail] = useState("");
+  const [codigo, setCodigo] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [aviso, setAviso] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -24212,13 +24299,36 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
       .catch(() => setMode("login"));
   }, []);
 
+  function irA(destino: "login" | "forgot" | "reset") {
+    setError(null);
+    if (destino === "login") setAviso(null);
+    setPassword("");
+    setPassword2("");
+    setMode(destino);
+  }
+
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
     setBusy(true);
     try {
+      if (mode === "forgot") {
+        const r = await apiPost<{ message: string }>("/auth/forgot-password", { username: username.trim() });
+        setAviso(r.message);
+        setCodigo("");
+        setMode("reset");
+        return;
+      }
+      if (mode === "reset") {
+        if (password !== password2) { setError("Las dos claves no coinciden."); return; }
+        const r = await apiPost<{ message: string }>("/auth/reset-password", { username: username.trim(), code: codigo.trim(), password });
+        setCodigo("");
+        irA("login");
+        setAviso(r.message); // después de irA(): volver al inicio de sesión mostrando «Clave cambiada»
+        return;
+      }
       const result = mode === "bootstrap"
-        ? await apiPost<{ token: string; user: AuthUser; accionistas: Accionista[] }>("/auth/bootstrap", { name: fullName, username, password })
+        ? await apiPost<{ token: string; user: AuthUser; accionistas: Accionista[] }>("/auth/bootstrap", { name: fullName, username, password, recovery_email: email.trim() || undefined })
         : await apiPost<{ token: string; user: AuthUser; accionistas: Accionista[] }>("/auth/login", { username, password });
       localStorage.setItem(authStorageKey, JSON.stringify(result));
       ensureActiveAccionista(result.accionistas);
@@ -24230,20 +24340,23 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
     }
   }
 
+  const subtitulo =
+    mode === "bootstrap" ? "Bienvenido. Crea el usuario administrador para comenzar."
+    : mode === "forgot" ? "Recuperar clave · te enviamos un código a tu correo de recuperación"
+    : mode === "reset" ? "Escribe el código que llegó a tu correo y elige una clave nueva"
+    : "Piladora de arroz · Inicia sesión para continuar";
+
   return (
     <main className="loginShell">
       <form className="loginCard" onSubmit={submit}>
         <div className="loginBrand">
           <span className="brandMark">B</span>
           <h1>Bascula ERP</h1>
-          <p>
-            {mode === "bootstrap"
-              ? "Bienvenido. Crea el usuario administrador para comenzar."
-              : "Piladora de arroz · Inicia sesión para continuar"}
-          </p>
+          <p>{subtitulo}</p>
         </div>
 
         {error && <div className="loginError">{error}</div>}
+        {aviso && !error && <div className="loginNotice">{aviso}</div>}
 
         {mode === "loading" ? (
           <p className="loginHint">Conectando con el servidor…</p>
@@ -24273,24 +24386,83 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
                 required
                 minLength={2}
                 autoComplete="username"
-                autoFocus={mode === "login"}
+                autoFocus={mode === "login" || mode === "forgot"}
               />
             </label>
-            <label>
-              <span>Clave</span>
-              <input
-                type="password"
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                minLength={4}
-                autoComplete={mode === "bootstrap" ? "new-password" : "current-password"}
-              />
-            </label>
+            {mode === "bootstrap" && (
+              <label>
+                <span>Correo de recuperación (opcional)</span>
+                <input
+                  type="email"
+                  placeholder="nombre@gmail.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  maxLength={160}
+                  autoComplete="email"
+                />
+              </label>
+            )}
+            {mode === "reset" && (
+              <label>
+                <span>Código de 6 dígitos</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]{6}"
+                  maxLength={6}
+                  placeholder="000000"
+                  value={codigo}
+                  onChange={(e) => setCodigo(e.target.value.replace(/\D/g, ""))}
+                  required
+                  autoComplete="one-time-code"
+                  autoFocus
+                />
+              </label>
+            )}
+            {mode !== "forgot" && (
+              <label>
+                <span>{mode === "reset" ? "Clave nueva" : "Clave"}</span>
+                <input
+                  type="password"
+                  placeholder={mode === "reset" ? "Mínimo 8 caracteres" : "••••••••"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  minLength={mode === "reset" ? 8 : 4}
+                  autoComplete={mode === "login" ? "current-password" : "new-password"}
+                />
+              </label>
+            )}
+            {mode === "reset" && (
+              <label>
+                <span>Repite la clave nueva</span>
+                <input
+                  type="password"
+                  value={password2}
+                  onChange={(e) => setPassword2(e.target.value)}
+                  required
+                  minLength={8}
+                  autoComplete="new-password"
+                />
+              </label>
+            )}
             <button className="primary" disabled={busy}>
-              {busy ? "Ingresando…" : mode === "bootstrap" ? "Crear administrador e ingresar" : "Ingresar"}
+              {mode === "forgot" ? (busy ? "Enviando…" : "Enviar código")
+                : mode === "reset" ? (busy ? "Cambiando…" : "Cambiar clave")
+                : busy ? "Ingresando…" : mode === "bootstrap" ? "Crear administrador e ingresar" : "Ingresar"}
             </button>
+            {mode === "login" && (
+              <button type="button" className="loginLink" onClick={() => irA("forgot")}>¿Olvidaste tu clave?</button>
+            )}
+            {mode === "forgot" && (
+              <button type="button" className="loginLink" onClick={() => irA("reset")}>Ya tengo un código</button>
+            )}
+            {mode === "reset" && (
+              <button type="button" className="loginLink" onClick={() => irA("forgot")}>Pedir otro código</button>
+            )}
+            {(mode === "forgot" || mode === "reset") && (
+              <button type="button" className="loginLink" onClick={() => irA("login")}>← Volver al inicio de sesión</button>
+            )}
             {mode === "bootstrap" && (
               <p className="loginHint">Este paso solo aparece la primera vez, cuando aún no existen usuarios.</p>
             )}

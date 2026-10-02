@@ -7,7 +7,7 @@ Actualizado: 2026-10-02
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: Configuracion revisada: borrado de prueba conserva equipos/repuestos/tarifas de socios, Parametros contables, accesos a ajustes de otros modulos, Mi negocio del socio guarda en su fila.
+- Ultimo cambio funcional: Inicio de sesion con «¿Olvidaste tu clave?» por correo (codigo de 6 digitos al correo de recuperacion de cada usuario; requiere SMTP_USER/SMTP_PASS en backend/.env).
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,14 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Inicio de sesion: recuperar la clave por correo (2026-10-02)
+- Migracion 20261067: `users.recovery_email` (NULL en los existentes) + `password_reset_tokens` (hash, vencimiento, intentos, un solo uso). Dependencia nueva: `nodemailer` (+ `@types/nodemailer`) en backend; hace falta `npm install` en backend tras el merge.
+- Flujo: login → «¿Olvidaste tu clave?» → `POST /auth/forgot-password {username}` (respuesta SIEMPRE igual exista o no el usuario/correo; envia el codigo sin esperar al SMTP para no dar pistas por tiempo; 1 codigo cada 60 s por usuario, max 5/hora; 10 pedidos/15 min por IP) → `POST /auth/reset-password {username, code, password}` (codigo de 6 digitos, vence a los 15 min, max 5 intentos y luego se anula, un solo uso, clave minimo 8; error unico «Codigo incorrecto o vencido»; 10 fallos/15 min por IP). Codigo = `crypto.randomInt`, guardado como HMAC-SHA256(JWT secret, userId:codigo). Reglas puras + tests en `services/recuperacion-clave.ts`; SMTP en `services/correo.ts` (transporte inyectable para pruebas).
+- SMTP SIN configurar por defecto → la opcion avisa «no esta configurado» y el admin sigue pudiendo cambiar claves en Configuracion → Usuarios → ✎ Editar → Clave nueva. Para activarla: en `backend/.env` poner `SMTP_USER` (cuenta Gmail del sistema) y `SMTP_PASS` («contrasena de aplicacion» de Google, 2 pasos activado; los espacios se quitan) y reiniciar. Opcionales `SMTP_HOST` (smtp.gmail.com), `SMTP_PORT` (465), `SMTP_FROM`. Documentado en `.env.example`. El usuario debe ponerlas el (no se pidieron ni se escribieron credenciales).
+- Correo de cada usuario: admin lo pone en «Crear usuario» / «✎ Editar» (campo `recovery_email`; vacio = quitarlo; se muestra en la tabla). Cada usuario: boton ✉️ junto a su nombre (`CorreoRecuperacionModal`; `GET/PUT /auth/me/recovery-email`, exige la clave actual) + aviso «Agrega un correo…» con «Ahora no» (localStorage por usuario) mientras no tenga y el servidor pueda enviar. Primer admin (bootstrap) puede ponerlo opcionalmente. NO se verifica el correo con un codigo al guardarlo (pendiente si se quiere).
+- Configuracion → Usuarios → «✉️ Correo para recuperar claves» (`ConfigCorreoClaves`): estado del SMTP, usuarios con correo, pasos para Gmail y `POST /auth/mail-test` (admin; manda a SU correo). Checklist «Empresa lista»: nuevo check `correo_recuperacion`. Buscador de Configuracion actualizado.
+- Prueba ROLLBACK `recuperacion_test.mjs` (scratchpad, correo simulado en memoria): 45 verificaciones OK, datos reales intactos. NO se envio ningun correo real (no hay credenciales SMTP).
 
 ### Configuracion: revision completa y cabos sueltos (2026-10-02)
 - «Borrar datos de prueba» corregido (`services/datos-prueba.ts`, `vaciarDatosDePrueba` + `planVaciado` puro con test): TRUNCATE … CASCADE vaciaba tambien `equipment` (FK `cash_movement_id` → caja), el catalogo `repuestos` (FK al equipo) y `tarifario_servicio` (FK al cliente) aunque el texto decia que se conservaban. Ahora `CATALOGOS_PRESERVADOS` suelta esas FK, trunca, deja `cash_movement_id` en NULL / borra solo las tarifas de CLIENTES (las de socios quedan) y recrea las FK identicas. Se agregaron a la lista `notificaciones`, `purchases`, `purchase_items`, `tunnel_reservations`, `gas_consumption_reports`; se quito `selection_services` (la borro la mig 20260727); los tuneles vuelven a DISPONIBLE. Probado sobre una COPIA de la base (pg_dump → `bascula_erp_wipetest`, borrada al final): 255 FK identicas, catalogos intactos. El usuario confirmo (2026-10-02) que las cifras manuales de septiembre (HIPOTECA 8250, GANANCIA ENVEJECIDO 6570, GANANCIA DE SELECTADO 5000) eran de ensayo: `resultado_mensual_manual` ahora SI se vacia (los rubros `costo_rubros` se conservan).

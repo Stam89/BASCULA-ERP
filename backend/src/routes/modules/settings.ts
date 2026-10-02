@@ -12,6 +12,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { getMatriz, getMatrizId } from "../../services/matriz.js";
 import { vaciarDatosDePrueba } from "../../services/datos-prueba.js";
+import { correoConfigurado } from "../../services/correo.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const settingsRouter = Router();
@@ -184,6 +185,11 @@ settingsRouter.get("/company-readiness", requireAdmin, asyncRoute(async (_req, r
         [matriz.id]
       )
     : null;
+  // Usuarios que podrían recuperar su clave por correo (tienen correo registrado).
+  const conCorreo = await pool.query(
+    `SELECT COUNT(*) FILTER (WHERE recovery_email IS NOT NULL)::int AS con_correo, COUNT(*)::int AS total
+       FROM users WHERE is_active = true`
+  ).then((r) => r.rows[0]).catch(() => ({ con_correo: 0, total: 0 }));
   const firebaseKey = (process.env.FIREBASE_KEY || "backend/firebase-service-account.json").trim();
   const firebaseKeyExists = Boolean(firebaseKey) && fs.existsSync(firebaseKey);
   const checks = [
@@ -192,6 +198,14 @@ settingsRouter.get("/company-readiness", requireAdmin, asyncRoute(async (_req, r
       label: "Modo del sistema",
       ok: env.appMode === "production",
       detail: env.appMode === "production" ? "Produccion: datos reales protegidos" : "Prueba: permite limpiar datos de ensayo"
+    },
+    {
+      key: "correo_recuperacion",
+      label: "Recuperar claves por correo",
+      ok: correoConfigurado(),
+      detail: correoConfigurado()
+        ? `Correo configurado · ${conCorreo.con_correo} de ${conCorreo.total} usuario(s) con correo de recuperación`
+        : "Falta SMTP_USER y SMTP_PASS en backend/.env (sin eso, «¿Olvidaste tu clave?» no puede enviar el código)"
     },
     {
       key: "business_name",

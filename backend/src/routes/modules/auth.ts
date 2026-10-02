@@ -5,6 +5,13 @@ import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { signToken } from "../../auth/jwt.js";
+import { inTransaction } from "../../db/transaction.js";
+import { env } from "../../config/env.js";
+import { correoConfigurado, enviarCorreo } from "../../services/correo.js";
+import {
+  CODIGO_MAX_INTENTOS, CODIGO_VIGENCIA_MIN, ESPERA_ENTRE_CODIGOS_SEG, MAX_CODIGOS_POR_HORA,
+  LimitadorVentana, codigoCoincide, enmascararCorreo, generarCodigo, hashCodigo, mensajeCodigo, normalizarCorreo
+} from "../../services/recuperacion-clave.js";
 import { APP_MODULES, requireAdmin, requireAuth, type AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const authRouter = Router();
@@ -56,10 +63,31 @@ function ensureUserColumns(): Promise<void> {
   if (!columnsReady) {
     columnsReady = pool
       .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS allowed_modules TEXT[] NOT NULL DEFAULT '{}';
-              ALTER TABLE users ADD COLUMN IF NOT EXISTS cedula VARCHAR(20)`)
+              ALTER TABLE users ADD COLUMN IF NOT EXISTS cedula VARCHAR(20);
+              ALTER TABLE users ADD COLUMN IF NOT EXISTS recovery_email VARCHAR(160);
+              CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                code_hash TEXT NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                attempts INT NOT NULL DEFAULT 0,
+                used_at TIMESTAMPTZ,
+                requested_ip TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+              )`)
       .then(() => undefined);
   }
   return columnsReady;
+}
+
+// Correo de recuperación recibido en un cuerpo: undefined = no tocar, null = quitar
+// (cadena vacía), otro = correo normalizado (400 si no tiene forma de correo).
+function correoDelBody(valor: string | undefined): string | null | undefined {
+  if (valor === undefined) return undefined;
+  if (valor.trim() === "") return null;
+  const correo = normalizarCorreo(valor);
+  if (!correo) throw new ApiError(400, "El correo de recuperación no es válido (ej. nombre@gmail.com).");
+  return correo;
 }
 
 // ── Gestión de usuarios (solo administradores) ─────────────────────────────
@@ -69,7 +97,7 @@ function ensureUserColumns(): Promise<void> {
 authRouter.get("/users", requireAuth, requireAdmin, asyncRoute(async (_req, res) => {
   await ensureUserColumns();
   const result = await pool.query(
-    `SELECT u.id, u.name, u.username, u.cedula, u.is_active, u.created_at, u.allowed_modules, r.name AS role_name,
+    `SELECT u.id, u.name, u.username, u.cedula, u.recovery_email, u.is_active, u.created_at, u.allowed_modules, r.name AS role_name,
             COALESCE(array_agg(ua.accionista_id) FILTER (WHERE ua.accionista_id IS NOT NULL), '{}') AS accionista_ids,
             COALESCE(
               json_agg(json_build_object('accionista_id', ua.accionista_id, 'modules', ua.allowed_modules))
@@ -91,6 +119,8 @@ authRouter.post("/users", requireAuth, requireAdmin, asyncRoute(async (req, res)
     name: z.string().min(2),
     username: z.string().min(2),
     cedula: z.string().trim().max(20).optional(),
+    // Correo (p. ej. Gmail) al que se envía el código si el usuario olvida su clave.
+    recovery_email: z.string().max(160).optional(),
     // Mínimo 8 al CREAR: una clave de 4 se adivina en segundos. El login sigue
     // aceptando 4 para no dejar fuera a usuarios creados antes de esta regla.
     password: z.string().min(8, "La clave debe tener al menos 8 caracteres."),
@@ -101,6 +131,7 @@ authRouter.post("/users", requireAuth, requireAdmin, asyncRoute(async (req, res)
     accionista_ids: z.array(z.string().uuid()).default([])
   }).parse(req.body);
 
+  const recoveryEmail = correoDelBody(body.recovery_email) ?? null;
   const duplicate = await pool.query("SELECT 1 FROM users WHERE username = $1", [body.username]);
   if (duplicate.rowCount) {
     throw new ApiError(409, `El usuario "${body.username}" ya existe.`);
@@ -126,10 +157,10 @@ authRouter.post("/users", requireAuth, requireAdmin, asyncRoute(async (req, res)
 
   const passwordHash = await bcrypt.hash(body.password, 10);
   const user = await pool.query(
-    `INSERT INTO users (role_id, name, username, cedula, password_hash, allowed_modules)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id, name, username, cedula, is_active, created_at, allowed_modules`,
-    [role.rows[0].id, body.name, body.username, body.cedula ?? null, passwordHash, allowedModules]
+    `INSERT INTO users (role_id, name, username, cedula, password_hash, allowed_modules, recovery_email)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id, name, username, cedula, recovery_email, is_active, created_at, allowed_modules`,
+    [role.rows[0].id, body.name, body.username, body.cedula ?? null, passwordHash, allowedModules, recoveryEmail]
   );
 
   // Los administradores ven todos los accionistas; al operador se le asignan
@@ -158,6 +189,8 @@ authRouter.put("/users/:id", requireAuth, requireAdmin, asyncRoute(async (req, r
     name: z.string().min(2).optional(),
     username: z.string().min(2).optional(),
     cedula: z.string().trim().max(20).optional(),
+    // Correo de recuperación: no enviarlo lo conserva; cadena vacía lo quita.
+    recovery_email: z.string().max(160).optional(),
     // La clave es opcional: si no se envía, se conserva la actual.
     password: z.string().min(8, "La clave debe tener al menos 8 caracteres.").optional(),
     role: z.enum(["ADMINISTRADOR", "OPERADOR"]).optional(),
@@ -169,6 +202,7 @@ authRouter.put("/users/:id", requireAuth, requireAdmin, asyncRoute(async (req, r
     throw new ApiError(400, "Nada que actualizar.");
   }
 
+  const recoveryEmail = correoDelBody(body.recovery_email);
   const requester = (req as AuthenticatedRequest).user;
   if (body.is_active === false && requester?.id === req.params.id) {
     throw new ApiError(400, "No puedes desactivar tu propio usuario.");
@@ -211,10 +245,12 @@ authRouter.put("/users/:id", requireAuth, requireAdmin, asyncRoute(async (req, r
        is_active = COALESCE($5, is_active),
        allowed_modules = COALESCE($6, allowed_modules),
        cedula = COALESCE($7, cedula),
+       recovery_email = CASE WHEN $9::boolean THEN $10::text ELSE recovery_email END,
        updated_at = now()
      WHERE id = $8
-     RETURNING id, name, username, cedula, is_active, allowed_modules`,
-    [body.name ?? null, body.username ?? null, passwordHash, roleId, body.is_active ?? null, allowedModules, body.cedula ?? null, req.params.id]
+     RETURNING id, name, username, cedula, recovery_email, is_active, allowed_modules`,
+    [body.name ?? null, body.username ?? null, passwordHash, roleId, body.is_active ?? null, allowedModules, body.cedula ?? null, req.params.id,
+     recoveryEmail !== undefined, recoveryEmail ?? null]
   );
 
   if (!result.rowCount) {
@@ -365,9 +401,12 @@ authRouter.post("/bootstrap", asyncRoute(async (req, res) => {
   const body = z.object({
     name: z.string().min(2),
     username: z.string().min(2),
-    password: z.string().min(8, "La clave debe tener al menos 8 caracteres.")
+    password: z.string().min(8, "La clave debe tener al menos 8 caracteres."),
+    recovery_email: z.string().max(160).optional()
   }).parse(req.body);
+  const recoveryEmail = correoDelBody(body.recovery_email) ?? null;
 
+  await ensureUserColumns();
   const existing = await pool.query("SELECT 1 FROM users LIMIT 1");
   if (existing.rowCount) {
     throw new ApiError(409, "Ya existe un usuario registrado. Inicia sesión.");
@@ -381,10 +420,10 @@ authRouter.post("/bootstrap", asyncRoute(async (req, res) => {
 
   const passwordHash = await bcrypt.hash(body.password, 10);
   const user = await pool.query(
-    `INSERT INTO users (role_id, name, username, password_hash)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO users (role_id, name, username, password_hash, recovery_email)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING id, username, name, role_id`,
-    [role.rows[0].id, body.name, body.username, passwordHash]
+    [role.rows[0].id, body.name, body.username, passwordHash, recoveryEmail]
   );
 
   const publicUser = { ...user.rows[0], role_name: "ADMINISTRADOR" };
@@ -472,4 +511,190 @@ authRouter.post("/login", asyncRoute(async (req, res) => {
     user: publicUser,
     accionistas
   });
+}));
+
+// ── Recuperación de clave por correo ────────────────────────────────────────
+// 1) POST /forgot-password {username}: si el usuario existe, está activo y tiene
+//    correo de recuperación, se le envía un código de 6 dígitos (vigencia 15 min,
+//    un solo uso). La respuesta es SIEMPRE la misma exista o no el usuario, para
+//    que nadie pueda averiguar qué usuarios hay.
+// 2) POST /reset-password {username, code, password}: valida el código (máx. 5
+//    intentos) y cambia la clave. El código solo se guarda como hash.
+// Si el servidor no tiene SMTP configurado, la opción se desactiva con un aviso
+// y un administrador sigue pudiendo restablecer claves desde Configuración.
+const MENSAJE_CODIGO_ENVIADO =
+  "Si el usuario existe y tiene un correo de recuperación registrado, te enviamos un código de 6 dígitos. " +
+  `Vence en ${CODIGO_VIGENCIA_MIN} minutos. Si no te llega, pide a un administrador que restablezca tu clave.`;
+const MENSAJE_CODIGO_INVALIDO = "Código incorrecto o vencido. Pide uno nuevo.";
+const limitePedirCodigo = new LimitadorVentana(10, 15 * 60 * 1000);
+const limiteFallosCodigo = new LimitadorVentana(10, 15 * 60 * 1000);
+
+/** Usuario activo por nombre de usuario (coincidencia exacta primero, luego sin distinguir mayúsculas). */
+async function usuarioActivoPorNombre(username: string): Promise<{ id: string; name: string; recovery_email: string | null } | null> {
+  const r = await pool.query(
+    `SELECT id, name, recovery_email FROM users
+      WHERE lower(username) = lower($1) AND is_active = true
+      ORDER BY (username = $1) DESC LIMIT 1`,
+    [username]
+  );
+  return r.rows[0] ?? null;
+}
+
+async function nombreDelNegocio(): Promise<string> {
+  try {
+    const r = await pool.query("SELECT business_name FROM app_settings WHERE socio_id IS NULL LIMIT 1");
+    return String(r.rows[0]?.business_name ?? "").trim() || "Bascula ERP";
+  } catch {
+    return "Bascula ERP";
+  }
+}
+
+authRouter.post("/forgot-password", asyncRoute(async (req, res) => {
+  await ensureUserColumns();
+  const ip = req.ip ?? "desconocida";
+  const limite = limitePedirCodigo.bloqueado(ip);
+  if (limite.bloqueado) {
+    throw new ApiError(429, `Demasiadas solicitudes. Espera ${limite.minutos} minuto(s) y vuelve a intentar.`);
+  }
+  const body = z.object({ username: z.string().trim().min(2).max(60) }).parse(req.body);
+  if (!correoConfigurado()) {
+    throw new ApiError(503, "El envío de correos no está configurado en este servidor. Pide a un administrador que restablezca tu clave.");
+  }
+  limitePedirCodigo.registrar(ip);
+
+  const user = await usuarioActivoPorNombre(body.username);
+  if (user?.recovery_email) {
+    const recientes = await pool.query(
+      `SELECT COUNT(*) FILTER (WHERE created_at > now() - make_interval(secs => $2))::int AS ultimo_minuto,
+              COUNT(*)::int AS ultima_hora
+         FROM password_reset_tokens
+        WHERE user_id = $1 AND created_at > now() - interval '1 hour'`,
+      [user.id, ESPERA_ENTRE_CODIGOS_SEG]
+    );
+    if (recientes.rows[0].ultimo_minuto === 0 && recientes.rows[0].ultima_hora < MAX_CODIGOS_POR_HORA) {
+      const codigo = generarCodigo();
+      // Un solo código vigente por usuario: el anterior deja de servir.
+      await pool.query("UPDATE password_reset_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL", [user.id]);
+      await pool.query(
+        `INSERT INTO password_reset_tokens (user_id, code_hash, expires_at, requested_ip)
+         VALUES ($1, $2, now() + make_interval(mins => $3), $4)`,
+        [user.id, hashCodigo(env.jwtSecret, user.id, codigo), CODIGO_VIGENCIA_MIN, ip]
+      );
+      const mensaje = mensajeCodigo({ nombreNegocio: await nombreDelNegocio(), nombreUsuario: user.name, codigo });
+      // Sin esperar al correo: así la respuesta tarda igual exista o no el usuario.
+      void enviarCorreo({ to: user.recovery_email, ...mensaje })
+        .catch((err) => console.error(`[recuperacion] No se pudo enviar el código a ${enmascararCorreo(user.recovery_email!)}: ${(err as Error).message}`));
+    }
+  }
+  res.json({ ok: true, message: MENSAJE_CODIGO_ENVIADO });
+}));
+
+authRouter.post("/reset-password", asyncRoute(async (req, res) => {
+  await ensureUserColumns();
+  const ip = req.ip ?? "desconocida";
+  const limite = limiteFallosCodigo.bloqueado(ip);
+  if (limite.bloqueado) {
+    throw new ApiError(429, `Demasiados intentos fallidos. Espera ${limite.minutos} minuto(s) y vuelve a intentar.`);
+  }
+  const body = z.object({
+    username: z.string().trim().min(2).max(60),
+    code: z.string().trim().regex(/^\d{6}$/, "El código tiene 6 dígitos."),
+    password: z.string().min(8, "La clave debe tener al menos 8 caracteres.").max(200)
+  }).parse(req.body);
+
+  const falla = (): never => {
+    limiteFallosCodigo.registrar(ip);
+    throw new ApiError(400, MENSAJE_CODIGO_INVALIDO);
+  };
+
+  const user = await usuarioActivoPorNombre(body.username);
+  if (!user) return falla();
+  const token = (await pool.query(
+    `SELECT id, code_hash, attempts FROM password_reset_tokens
+      WHERE user_id = $1 AND used_at IS NULL AND expires_at > now()
+      ORDER BY created_at DESC LIMIT 1`,
+    [user.id]
+  )).rows[0];
+  if (!token || token.attempts >= CODIGO_MAX_INTENTOS) return falla();
+
+  if (!codigoCoincide(env.jwtSecret, user.id, body.code, token.code_hash)) {
+    // Cada fallo suma; al llegar al máximo el código se anula (hay que pedir otro).
+    await pool.query(
+      `UPDATE password_reset_tokens
+          SET attempts = attempts + 1,
+              used_at = CASE WHEN attempts + 1 >= $2 THEN now() ELSE used_at END
+        WHERE id = $1`,
+      [token.id, CODIGO_MAX_INTENTOS]
+    );
+    return falla();
+  }
+
+  const passwordHash = await bcrypt.hash(body.password, 10);
+  await inTransaction(async (client) => {
+    const usado = await client.query(
+      "UPDATE password_reset_tokens SET used_at = now() WHERE id = $1 AND used_at IS NULL RETURNING id",
+      [token.id]
+    );
+    if (!usado.rowCount) throw new ApiError(400, MENSAJE_CODIGO_INVALIDO);
+    await client.query("UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1", [user.id, passwordHash]);
+    await client.query("UPDATE password_reset_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL", [user.id]);
+  });
+  limiteFallosCodigo.limpiar(ip);
+  loginFailures.delete(ip);
+  res.json({ ok: true, message: "Clave cambiada. Ya puedes iniciar sesión con la clave nueva." });
+}));
+
+// ── Correo de recuperación del propio usuario ───────────────────────────────
+// Cualquier usuario puede registrar o cambiar su correo; se exige la clave
+// actual para que una sesión ajena no pueda redirigir los códigos a otro correo.
+authRouter.get("/me/recovery-email", requireAuth, asyncRoute(async (req, res) => {
+  await ensureUserColumns();
+  const user = (req as AuthenticatedRequest).user!;
+  const r = await pool.query("SELECT recovery_email FROM users WHERE id = $1", [user.id]);
+  res.json({ recovery_email: r.rows[0]?.recovery_email ?? null, mail_configured: correoConfigurado() });
+}));
+
+authRouter.put("/me/recovery-email", requireAuth, asyncRoute(async (req, res) => {
+  await ensureUserColumns();
+  const ip = req.ip ?? "desconocida";
+  const limite = loginLimiter(ip);
+  if (limite.blocked) {
+    throw new ApiError(429, `Demasiados intentos fallidos. Espera ${limite.minutes} minuto(s) y vuelve a intentar.`);
+  }
+  const user = (req as AuthenticatedRequest).user!;
+  const body = z.object({ email: z.string().max(160), password: z.string().min(1) }).parse(req.body);
+  const correo = correoDelBody(body.email) ?? null;
+
+  const actual = await pool.query("SELECT password_hash FROM users WHERE id = $1 AND is_active = true", [user.id]);
+  if (!actual.rowCount || !(await bcrypt.compare(body.password, actual.rows[0].password_hash))) {
+    recordLoginFailure(ip);
+    throw new ApiError(401, "Clave incorrecta");
+  }
+  loginFailures.delete(ip);
+  await pool.query("UPDATE users SET recovery_email = $2, updated_at = now() WHERE id = $1", [user.id, correo]);
+  res.json({ recovery_email: correo, mail_configured: correoConfigurado() });
+}));
+
+// Prueba de envío (administrador): manda un correo a SU correo de recuperación
+// para confirmar que SMTP_USER / SMTP_PASS están bien.
+authRouter.post("/mail-test", requireAuth, requireAdmin, asyncRoute(async (req, res) => {
+  await ensureUserColumns();
+  if (!correoConfigurado()) {
+    throw new ApiError(503, "Falta configurar SMTP_USER y SMTP_PASS en backend/.env y reiniciar el servidor.");
+  }
+  const user = (req as AuthenticatedRequest).user!;
+  const r = await pool.query("SELECT name, recovery_email FROM users WHERE id = $1", [user.id]);
+  const correo = r.rows[0]?.recovery_email as string | null | undefined;
+  if (!correo) throw new ApiError(400, "Registra primero tu correo de recuperación (botón ✉️ junto a tu nombre).");
+  const negocio = await nombreDelNegocio();
+  try {
+    await enviarCorreo({
+      to: correo,
+      subject: `Prueba de correo · ${negocio}`,
+      text: `Hola ${r.rows[0].name},\n\nEste es un correo de prueba de ${negocio}. Si lo recibes, la recuperación de claves por correo funciona.\n`
+    });
+  } catch (err) {
+    throw new ApiError(502, `No se pudo enviar el correo: ${(err as Error).message.slice(0, 200)}`);
+  }
+  res.json({ ok: true, enviado_a: enmascararCorreo(correo) });
 }));
