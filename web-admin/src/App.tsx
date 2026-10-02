@@ -20,6 +20,7 @@ import { formatoCantidad, formatoPrecio, precioAplicadoDetalle, DESCUENTO_QQ, LI
 import { ParametrosContables } from "./components/ParametrosContables";
 import { CorreoRecuperacionModal } from "./components/CorreoRecuperacion";
 import { ConfigCorreoClaves } from "./components/ConfigCorreoClaves";
+import { CatalogoProductos } from "./components/CatalogoProductos";
 import * as XLSX from "xlsx";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
@@ -1775,6 +1776,16 @@ const LB_TO_KG = 0.45359237;
 const QQ_TO_LB = 100;
 const millingDraftStorageKey = "bascula-erp:milling-report-draft";
 const round2 = (n: number) => Math.round(n * 100) / 100;
+// Los 5 productos que se vendían al detalle desde el principio: la migración
+// 20261068 los marcó «venta_detalle» y aquí dan su ETIQUETA de mostrador y el orden
+// (los productos que se agreguen en el catálogo van después, con su nombre).
+const PRODUCTOS_DETALLE: Array<{ code: string; label: string }> = [
+  { code: "ARROZ-PILADO-011", label: "0.11" },
+  { code: "ARROZ-PILADO-CORRIENTE", label: "CORRIENTE" },
+  { code: "ARROCILLO-34", label: "ARROCILLO 3/4" },
+  { code: "ARROCILLO-FINO", label: "ARROCILLO FINO" },
+  { code: "POLVILLO", label: "POLVILLO" }
+];
 // crypto.randomUUID solo existe en orígenes "seguros" (https o localhost).
 // Desde otra PC por http://IP:4000 —o dentro de una app Android— no está, y
 // liquidar reventaría. Este generador funciona en cualquier entorno.
@@ -2533,6 +2544,7 @@ export function App() {
     { sub: "estado", tarjeta: "Estado del sistema", claves: "salud api sincronizacion bascula respaldo backup usuarios accionistas diagnostico checklist empresa lista" },
     { sub: "operacion", tarjeta: "⚙️ Parámetros de planta", claves: "tarifa de pilado humedad base merma quintal" },
     { sub: "operacion", tarjeta: "🏢 Datos del negocio", claves: "nombre comercial ruc telefono direccion pie de comprobante encabezado ticket recibo mi negocio nombre transporte cosechadora matriz principal" },
+    { sub: "operacion", tarjeta: "🧺 Catálogo de productos", claves: "crear producto nuevo marca empacado terminado subproducto materia prima presentaciones pesos arroz base calidad 0.11 corriente tarifa por libra venta al detalle mostrador codigo unidad" },
     { sub: "operacion", tarjeta: "📦 Catálogo de sacos", claves: "mis sacos envejecido propios sacos marcas flor oso extra lira azul conejo 100 50 25 10 libras arroba stock minimo alerta precio eliminar agregar usados segunda cambio de saco recuperado" },
     { sub: "operacion", tarjeta: "💼 Personal administrativo", claves: "empleado empleados agregar trabajador oficina contadora sueldo administrativo quincenal cargo nomina" },
     { sub: "operacion", tarjeta: "🏷️ Categorías de caja", claves: "categoria ingreso egreso movimiento caja materiales consumibles repuestos rubro costos operativos" },
@@ -3367,16 +3379,21 @@ export function App() {
   // Los ÚNICOS 5 productos que se venden al detalle por libra. Se matchean por
   // `code` (estable) contra el catálogo; el `label` es como los ve el cajero.
   // El catálogo de ventas MAYORISTAS no se toca (usa sus propias listas).
-  const PRODUCTOS_DETALLE: Array<{ code: string; label: string }> = [
-    { code: "ARROZ-PILADO-011", label: "0.11" },
-    { code: "ARROZ-PILADO-CORRIENTE", label: "CORRIENTE" },
-    { code: "ARROCILLO-34", label: "ARROCILLO 3/4" },
-    { code: "ARROCILLO-FINO", label: "ARROCILLO FINO" },
-    { code: "POLVILLO", label: "POLVILLO" }
-  ];
   // Precio por libra "sugerido": el catálogo de productos no guarda precio, así
   // que recordamos el ÚLTIMO precio/libra usado por producto (de facto, la config
   // del punto de venta) en localStorage y lo precargamos al elegir el producto.
+  // Productos de mostrador = los marcados «Se vende al detalle» en Configuración →
+  // 🧺 Catálogo de productos (antes eran esos 5 códigos fijos; la migración 20261068
+  // los marcó, así que el mostrador queda igual). Sin la marca en los datos (servidor
+  // viejo) se usan los 5 de siempre.
+  const productosMostrador = useMemo(() => {
+    const hayMarca = products.some((p) => p.venta_detalle !== undefined);
+    const orden = (p: Product) => { const i = PRODUCTOS_DETALLE.findIndex((d) => d.code === p.code); return i < 0 ? 999 : i; };
+    return products
+      .filter((p) => p.is_active !== false && (hayMarca ? p.venta_detalle === true : PRODUCTOS_DETALLE.some((d) => d.code === p.code)))
+      .sort((a, b) => orden(a) - orden(b) || a.name.localeCompare(b.name));
+  }, [products]);
+  const etiquetaMostrador = (p: Product) => PRODUCTOS_DETALLE.find((d) => d.code === p.code)?.label ?? p.name.toUpperCase();
   const preciosLibraKey = "bascula-erp:precio-libra-por-producto";
   const [preciosLibraPorProducto, setPreciosLibraPorProducto] = useState<Record<string, number>>(() => {
     try { return JSON.parse(localStorage.getItem(preciosLibraKey) || "{}") as Record<string, number>; }
@@ -7192,13 +7209,11 @@ export function App() {
   // en BD (Configuración → Tarifas por libra, price_per_pound); (2) el último
   // precio usado en este equipo (localStorage). 0 = sin tarifa (no se puede vender).
   function productosVentaDetalle(): ProductoDetalle[] {
-    return PRODUCTOS_DETALLE.flatMap((dp) => {
-      const p = products.find((x) => x.code === dp.code);
-      if (!p) return [];
+    return productosMostrador.map((p) => {
       const tarifaDb = Number(p.price_per_pound ?? 0);
       const ultimo = preciosLibraPorProducto[p.id];
       const precioLibra = tarifaDb > 0 ? tarifaDb : (ultimo != null && ultimo > 0 ? ultimo : 0);
-      return [{ id: p.id, label: dp.label, precioLibra }];
+      return { id: p.id, label: etiquetaMostrador(p), precioLibra };
     });
   }
 
@@ -14318,7 +14333,10 @@ export function App() {
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
                     <div>
                       <h3 style={{ marginTop: 0, marginBottom: 2 }}>⚙️ Catálogo de Productos</h3>
-                      <p className="muted" style={{ margin: 0 }}>Productos activos del inventario. Los nuevos aparecen con stock inicial 0.00 QQ.</p>
+                      <p className="muted" style={{ margin: 0 }}>
+                        Productos activos del inventario. Los nuevos aparecen con stock inicial 0.00 QQ.
+                        {" "}{cfgLink("🧺 Catálogo de productos", "Para marcas con presentaciones y sacos, o venta al detalle, usa el Catálogo de productos") ?? ""}
+                      </p>
                     </div>
                     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                       <button type="button" className="btnSecondary" onClick={() => setNewProductOpen((open) => !open)}>
@@ -23351,23 +23369,20 @@ export function App() {
                       precio usado en ese equipo o no deja vender el producto.
                       {esSocioActivoCfg && " Estas tarifas son las mismas para todos los accionistas."}
                     </p>
-                    {(() => {
-                      const faltan = PRODUCTOS_DETALLE.filter((dp) => !products.some((x) => x.code === dp.code));
-                      return faltan.length > 0 && products.length > 0 ? (
-                        <p className="vdCard__aviso" style={{ margin: "0 0 8px" }}>
-                          No están en el catálogo de productos (no salen en Venta Detalle): {faltan.map((dp) => `${dp.label} (código ${dp.code})`).join(", ")}.
-                        </p>
-                      ) : null;
-                    })()}
+                    <p className="muted" style={{ margin: "0 0 8px", fontSize: 12.5 }}>
+                      Los productos de esta lista son los marcados «Se vende al detalle» en el catálogo.
+                      {!esSocioActivoCfg && <> {cfgLink("🧺 Catálogo de productos", "Agregar o quitar productos del mostrador")}</>}
+                    </p>
+                    {productosMostrador.length === 0 && products.length > 0 && (
+                      <p className="vdCard__aviso" style={{ margin: "0 0 8px" }}>Ningún producto está marcado para vender al detalle: en Caja → Venta Detalle no habrá nada que elegir.</p>
+                    )}
                     <table className="cajaTable" style={{ width: "100%" }}>
                       <thead><tr><th>Producto</th><th className="num">Precio/lb $</th><th className="num">Venta por QQ $</th></tr></thead>
                       <tbody>
-                        {PRODUCTOS_DETALLE.map((dp) => {
-                          const p = products.find((x) => x.code === dp.code);
-                          if (!p) return null;
+                        {productosMostrador.map((p) => {
                           return (
                           <tr key={p.id}>
-                            <td>{dp.label}</td>
+                            <td>{etiquetaMostrador(p)}</td>
                             <td className="num">
                               <input type="number" step="0.001" min="0"
                                 key={`lb-${p.id}-${p.price_per_pound ?? 0}`}
@@ -23675,6 +23690,25 @@ export function App() {
               </section>
             )}
 
+            {/* ── 🧺 Catálogo de productos: crear productos ya enlazados (presentaciones, sacos, arroz base, mostrador) ── */}
+            {configSubTab === "operacion" && !esSocioActivoCfg && (
+              <section className="panelGrid">
+                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>
+                    🧺 Catálogo de productos <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· crea productos y marcas ya enlazados con sacos, presentaciones y mostrador</span>
+                  </summary>
+                  <CatalogoProductos
+                    puedeEditar={isAdmin}
+                    avisar={addToast}
+                    onCambio={() => { refresh().catch(() => undefined); refreshSacks().catch(() => undefined); }}
+                    irASaldos={isAdmin ? () => irAAjuste({ sub: "operacion", tarjeta: "📥 Saldos iniciales", claves: "" }) : undefined}
+                    irATarifas={() => irAAjuste({ sub: "tarifas", tarjeta: "🛒 Tarifas por libra", claves: "" })}
+                    irAInventario={visibleTabs.includes("Inventario") ? () => irATab("Inventario") : undefined}
+                  />
+                </details>
+              </section>
+            )}
+
             {/* ── 🧭 Ajustes que viven dentro de su módulo (se configuran donde se usan) ── */}
             {configSubTab === "operacion" && !esSocioActivoCfg && (() => {
               const accesos: Array<{ icono: string; donde: string; que: string; ir?: () => void }> = [
@@ -23795,9 +23829,10 @@ export function App() {
                         <span className="launchStepNumber">5</span>
                         <div>
                           <strong>Catálogos de operación</strong>
-                          <p>Categorias de caja (p. ej. MATERIALES CONSUMIBLES), maquinas por area (las usan Repuestos y Materiales), sacos con stock minimo y precio del combustible.</p>
+                          <p>Productos y marcas (con sus presentaciones y sacos), categorias de caja (p. ej. MATERIALES CONSUMIBLES), maquinas por area (las usan Repuestos y Materiales), sacos con stock minimo y precio del combustible.</p>
                         </div>
                         <div className="launchStepActions">
+                          <button type="button" className="btnGhost" onClick={() => irAAjuste({ sub: "operacion", tarjeta: "🧺 Catálogo de productos", claves: "" })}>Productos</button>
                           <button type="button" className="btnGhost" onClick={() => irAAjuste({ sub: "operacion", tarjeta: "🏷️ Categorías de caja", claves: "" })}>Caja</button>
                           <button type="button" className="btnGhost" onClick={() => irAAjuste({ sub: "operacion", tarjeta: "🔧 Categorías de Mantenimiento", claves: "" })}>Máquinas</button>
                           {manejaSacosPropios && <button type="button" className="btnGhost" onClick={() => irAAjuste({ sub: "operacion", tarjeta: "📦 Catálogo de sacos", claves: "" })}>Sacos</button>}

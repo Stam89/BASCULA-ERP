@@ -7,7 +7,7 @@ Actualizado: 2026-10-02
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: Inicio de sesion con «¿Olvidaste tu clave?» por correo (codigo de 6 digitos al correo de recuperacion de cada usuario; requiere SMTP_USER/SMTP_PASS en backend/.env).
+- Ultimo cambio funcional: Configuracion → 🧺 Catalogo de productos (crear marcas/productos ya enlazados con presentaciones, sacos, arroz base y mostrador). Antes: recuperar clave por correo (requiere SMTP_USER/SMTP_PASS en backend/.env).
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,17 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### Configuracion → 🧺 Catalogo de productos: crear productos ya enlazados (2026-10-02)
+- OJO: antes se dijo que no habia pantalla de productos; SI existia el modal «⚙️ Catalogo de Productos» de Inventario, pero solo creaba el producto basico (codigo/nombre/tipo/unidad) sin presentaciones, sacos ni tarifa. Se deja intacto y ahora enlaza a la tarjeta nueva.
+- Tarjeta nueva (Matriz, editar solo admin) `components/CatalogoProductos.tsx`: lista (presentaciones, sacos, arroz base, tarifa/lb, mostrador, stock; filtro por tipo/busqueda/desactivados) + «➕ Nuevo producto» por tipo + «✎ Editar».
+  - 🏷️ Marca/Empacado (PACKAGED_GOOD): nombre, arroz base obligatorio (0.11/Corriente = `sack_inventory.calidad`, de ahi sale el stock al vender: `getInventoryProductForBrand`), pesos (100/50/25/10 + otros) → crea producto + `product_presentations` + UN saco por peso (mismo alta que «📦 Catalogo de sacos → Nueva marca»; la logica se movio SIN cambios a `altaMarcaOGenerico` en `services/catalogo-productos.ts` y `POST /sacks` de la Matriz la usa: probado igual) con stock minimo y precios.
+  - 🍚 Terminado / 🌾 Subproducto: presentaciones opcionales (subproducto: 100lb por defecto), tarifa por libra y «Se vende al detalle» (exige tarifa). 🧺 Materia prima: solo el producto.
+  - Codigo sugerido (ARROZ-<NOMBRE>, MP-…) editable; unico; NO se renombra ni se cambia el codigo despues (pedidos, kardex y marcas por nombre dependen de ello). Muestra «¿Donde se enlaza?» por tipo y, al crear, un resumen con atajos (Saldo inicial, Inventario, Tarifas por libra). Producto desactivado del mismo tipo se reactiva al «crearlo» de nuevo.
+- Backend `routes/modules/products.ts`: `GET /products/catalogo` (ANTES de `/:id`), `POST /products/catalogo` (admin, una transaccion), `PATCH /products/:id` (admin: is_active / price_per_pound / venta_detalle; desactivar se bloquea con stock ≠ 0 o pedidos PENDING; venta al detalle exige tarifa y no aplica a materia prima), `POST /products/:id/presentaciones` (admin; en una marca crea tambien su saco heredando calidad/minimo/precios). Todas las lecturas de productos devuelven `venta_detalle`.
+- Migracion 20261068: `products.venta_detalle` (DEFAULT false; en el momento de crearla marca los 5 de siempre → el mostrador queda igual). Caja → Venta Detalle y «🛒 Tarifas por libra» ahora listan `productosMostrador` (los marcados) en vez de 5 codigos fijos (`PRODUCTOS_DETALLE` queda a nivel de modulo solo para etiqueta y orden; sin la marca en los datos cae a esos 5).
+- Lo que NO se enlaza solo: Produccion y Seleccion usan codigos de producto fijos (no aparece un producto nuevo ahi); la bascula reconoce solo cascara 0.11/Corriente. Dicho en la pantalla.
+- Prueba ROLLBACK `catalogo_test.mjs` (scratchpad): 43 verificaciones OK incl. regresion de POST /sacks; datos reales intactos. NO verificada visualmente en el navegador (requiere iniciar sesion).
 
 ### Inicio de sesion: recuperar la clave por correo (2026-10-02)
 - Migracion 20261067: `users.recovery_email` (NULL en los existentes) + `password_reset_tokens` (hash, vencimiento, intentos, un solo uso). Dependencia nueva: `nodemailer` (+ `@types/nodemailer`) en backend; hace falta `npm install` en backend tras el merge.

@@ -7,6 +7,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { sacosPorComprar } from "../../services/sacos.js";
+import { altaMarcaOGenerico } from "../../services/catalogo-productos.js";
 
 export const sacksRouter = Router();
 
@@ -132,70 +133,16 @@ sacksRouter.post("/", asyncRoute(async (req, res) => {
   if (body.categoria === "PROPIO") throw new ApiError(400, "La Matriz registra sacos de marca o genéricos.");
 
   const result = await inTransaction(async (client) => {
-    let productId: string | null = null;
-    let marca: string | null = null;
-    if (body.categoria === "MARCA") {
-      marca = body.marca!.replace(/\s+/g, " ").trim();
-      const prod = await client.query(
-        "SELECT id, name FROM products WHERE upper(name) = upper($1) ORDER BY is_active DESC LIMIT 1",
-        [marca]
-      );
-      if (prod.rowCount) {
-        productId = prod.rows[0].id;
-        marca = prod.rows[0].name;
-        await client.query("UPDATE products SET is_active = true WHERE id = $1", [productId]);
-      } else {
-        const code = `ARROZ-${marca.toUpperCase().normalize("NFD").replace(/\p{M}/gu, "").replace(/[^A-Z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
-        const choca = await client.query("SELECT 1 FROM products WHERE upper(code) = $1", [code]);
-        const created = await client.query(
-          `INSERT INTO products (code, name, product_type, unit, is_active)
-           VALUES ($1, $2, 'PACKAGED_GOOD', 'QQ', true) RETURNING id`,
-          [choca.rowCount ? `${code}-${Date.now().toString(36).slice(-4).toUpperCase()}` : code, marca]
-        );
-        productId = created.rows[0].id;
-      }
-    }
-
-    const creados: string[] = [];
-    const existentes: string[] = [];
-    for (const peso of [...new Set(body.pesos)]) {
-      const pesoTxt = String(peso);
-      const tipo = body.categoria === "MARCA" ? `${marca} ${pesoTxt} LB` : `Saco ${pesoTxt} LB`;
-      if (productId) {
-        const pres = await client.query(
-          "SELECT 1 FROM product_presentations WHERE product_id = $1 AND weight_lb = $2",
-          [productId, peso]
-        );
-        if (!pres.rowCount) {
-          await client.query(
-            "INSERT INTO product_presentations (product_id, name, weight_lb) VALUES ($1, $2, $3)",
-            [productId, `${pesoTxt}lb`, peso]
-          );
-        }
-      }
-      const prev = productId
-        ? await client.query("SELECT id, activo FROM sack_inventory WHERE product_id = $1 AND peso_lb = $2", [productId, peso])
-        : await client.query("SELECT id, activo FROM sack_inventory WHERE categoria = 'GENERICO' AND peso_lb = $1 AND accionista_id IS NULL", [peso]);
-      if (prev.rowCount) {
-        if (prev.rows[0].activo) { existentes.push(tipo); continue; }
-        await client.query(
-          `UPDATE sack_inventory SET activo = true, calidad = COALESCE($2, calidad), stock_minimo = $3,
-                  precio_compra_default = $4, precio_venta_cliente = $5, updated_at = now() WHERE id = $1`,
-          [prev.rows[0].id, body.calidad ?? null, body.stock_minimo, body.precio_compra_default, body.precio_venta_cliente]
-        );
-        creados.push(`${tipo} (reactivado)`);
-        continue;
-      }
-      await client.query(
-        `INSERT INTO sack_inventory
-           (tipo, stock, categoria, marca, calidad, peso_lb, product_id, stock_minimo, precio_compra_default, precio_venta_cliente)
-         VALUES ($1, 0, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [tipo, body.categoria, marca, body.calidad ?? null, peso, productId, body.stock_minimo,
-         body.precio_compra_default, body.precio_venta_cliente]
-      );
-      creados.push(tipo);
-    }
-    return { creados, existentes };
+    const alta = await altaMarcaOGenerico(client, {
+      categoria: body.categoria === "MARCA" ? "MARCA" : "GENERICO",
+      marca: body.marca ?? null,
+      calidad: body.calidad ?? null,
+      pesos: body.pesos,
+      stock_minimo: body.stock_minimo,
+      precio_compra_default: body.precio_compra_default,
+      precio_venta_cliente: body.precio_venta_cliente
+    });
+    return { creados: alta.creados, existentes: alta.existentes };
   });
   res.status(201).json(result);
 }));

@@ -20,6 +20,8 @@ export type Product = {
   is_active?: boolean;
   /** Tarifa por libra para venta al detalle (0 = sin tarifa configurada). */
   price_per_pound?: string | number | null;
+  /** Se vende al detalle en el mostrador (Caja → Venta Detalle); se elige en el catálogo de productos. */
+  venta_detalle?: boolean;
 };
 
 export type Warehouse = {
