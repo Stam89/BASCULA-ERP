@@ -23799,11 +23799,11 @@ export function App() {
                     Reinicia la operación borrando <strong>todos los movimientos operativos de prueba</strong> del ERP: tickets, lotes, traspasos, secado, producción,
                     combustible, pilado, selección, pedidos, ventas, compras, inventario (productos, insumos, sacos y repuestos a 0), caja, gastos, nómina,
                     anticipos, liquidaciones, fomentos, agricultores, clientes (con sus tarifas), cuentas por cobrar/pagar, saldos iniciales,
-                    conciliación bancaria, notificaciones <strong>y los históricos de Transporte y Cosechadora</strong> (servicios de fletes/cosecha,
+                    conciliación bancaria, notificaciones, cifras manuales del Resultado mensual <strong>y los históricos de Transporte y Cosechadora</strong> (servicios de fletes/cosecha,
                     partes diarios, nómina de operadores, caja de transporte y CxP), historial de auditoría y sincronización.
                     Se conservan usuarios, accionistas, configuración, tarifas de planta y de socios, productos y presentaciones, bodegas,
-                    equipos y activos fijos, máquinas y categorías, catálogos de insumos, sacos y repuestos, proveedores, rubros y cifras
-                    manuales del Resultado mensual <strong>y la flota/choferes de Transporte</strong>. Los túneles quedan disponibles.
+                    equipos y activos fijos, máquinas y categorías, catálogos de insumos, sacos y repuestos, proveedores, los rubros del
+                    Resultado mensual (sus cifras manuales sí se borran) <strong>y la flota/choferes de Transporte</strong>. Los túneles quedan disponibles.
                   </p>
                   <p className="dangerNote">Esta acción no se puede deshacer. No recupera datos ni restaura una copia de seguridad.</p>
                   {companyReadiness?.reset_transactions_allowed === false && (

@@ -90,7 +90,11 @@ export const WIPE_TABLES = [
   "purchases",
   "purchase_items",
   "tunnel_reservations",
-  "gas_consumption_reports"
+  "gas_consumption_reports",
+  // Cifras manuales del Resultado mensual (hipoteca, ganancias de envejecido/
+  // selectado…): las de la marcha blanca eran de ensayo. Los rubros (costo_rubros)
+  // y su enlace con las categorías de Caja se conservan.
+  "resultado_mensual_manual"
 ];
 
 /**
