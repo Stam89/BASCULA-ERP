@@ -241,6 +241,8 @@ export default function NominaOperadores() {
   const [periodo, setPeriodo] = useState<Periodo>("quincena");
   const [rango, setRango] = useState(() => rangoDe("quincena"));
   const [area, setArea] = useState<"todas" | Area>("todas");
+  // Partes NO pagados de antes del periodo: se deben igual, por eso entran por defecto.
+  const [conAnteriores, setConAnteriores] = useState(true);
   const [filas, setFilas] = useState<FilaMatriz[]>([]);
   const [edits, setEdits] = useState<Record<string, Edicion>>({});
   const [cuentas, setCuentas] = useState<Cuenta[]>([]);
@@ -255,7 +257,7 @@ export default function NominaOperadores() {
     try {
       setBusy(true);
       const qs = new URLSearchParams();
-      if (rango.from) qs.set("from", rango.from);
+      if (rango.from && !conAnteriores) qs.set("from", rango.from);
       if (rango.to) qs.set("to", rango.to);
       const [data, cuentasData] = await Promise.all([
         apiGet<{ filas: FilaMatriz[] }>(`/campo/nomina-operadores/matriz?${qs.toString()}`),
@@ -265,7 +267,7 @@ export default function NominaOperadores() {
       setFilas(data.filas); setCuentas(cuentasPago); setEdits({});
       setCuentaId((actual) => actual || cuentasPago.find((c) => c.nombre === "CAJA")?.id || cuentasPago[0]?.id || "");
     } catch (e) { notify((e as Error).message, "err"); } finally { setBusy(false); }
-  }, [rango.from, rango.to]);
+  }, [rango.from, rango.to, conAnteriores]);
   useEffect(() => { cargar(); }, [cargar]);
 
   // Edición estable (no cambia entre renders): solo se repinta la fila tocada.
@@ -332,6 +334,9 @@ export default function NominaOperadores() {
                 <label>Hasta<input type="date" value={rango.to} onChange={(e) => setRango({ ...rango, to: e.target.value })} /></label>
               </>
             ) : <span className="nomMatriz__rango">{rango.from.split("-").reverse().join("/")} → {rango.to.split("-").reverse().join("/")}</span>}
+            <label className="nomMatriz__anteriores" title="Partes no pagados de antes del periodo (se deben igual)">
+              <span><input type="checkbox" checked={conAnteriores} onChange={(e) => setConAnteriores(e.target.checked)} /> Incluir pendientes anteriores</span>
+            </label>
             <label>Departamento / Área
               <select value={area} onChange={(e) => setArea(e.target.value as "todas" | Area)}>
                 <option value="todas">Todas</option>
@@ -352,7 +357,7 @@ export default function NominaOperadores() {
         <p className="muted" style={{ margin: "8px 0 0", fontSize: 12.5 }}>
           Escribe directo en las celdas (Enter o ↓ baja a la siguiente fila). <strong>Base</strong> = producción × tarifa (editable con nota);
           <strong> Vales / Descuentos</strong> trae los vales por rendir del operador. <strong>Total</strong> = Base + Extras − Descuentos.
-          Se pagan las filas marcadas con total mayor a 0 o modificadas.
+          Se pagan las filas marcadas con total mayor a 0 o modificadas.{conAnteriores ? " Incluye los partes sin pagar de antes del periodo." : ""}
         </p>
       </div>
 

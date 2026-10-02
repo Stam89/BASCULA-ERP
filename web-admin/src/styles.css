@@ -4504,6 +4504,9 @@ textarea::placeholder {
 .nomMatriz__filtros { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
 .nomMatriz__filtros label { display: grid; gap: 3px; margin: 0; font-size: 12px; font-weight: 600; color: #475569; }
 .nomMatriz__rango { font-size: 12.5px; font-weight: 700; color: #0f766e; padding-bottom: 9px; }
+.nomMatriz__anteriores { padding-bottom: 8px; }
+.nomMatriz__anteriores span { display: flex; align-items: center; gap: 6px; font-weight: 600; white-space: nowrap; }
+.nomMatriz__anteriores input { width: auto; margin: 0; }
 .nomMatriz__scroll { overflow-x: auto; }
 .nomMatriz__tabla { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 860px; }
 .nomMatriz__tabla th { position: sticky; top: 0; background: #f8fafc; color: #475569; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; text-align: left; padding: 8px; border-bottom: 1px solid #e2e8f0; white-space: nowrap; }
