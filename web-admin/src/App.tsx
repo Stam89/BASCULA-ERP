@@ -4839,6 +4839,16 @@ export function App() {
   const reloadCashCategories = async () => {
     try { setCashCategories(await apiGet<CashCat[]>("/cash/categories")); } catch { /* noop */ }
   };
+  // Al volver a esta ventana del navegador con Caja o Costos Operativos abiertos,
+  // las categorías se vuelven a pedir (pudieron cambiar en otro equipo o pestaña).
+  useEffect(() => {
+    if (activeTab !== "Caja" && activeTab !== "Costos Operativos") return;
+    const alVolver = () => { if (document.visibilityState === "visible") reloadCashCategories(); };
+    window.addEventListener("focus", alVolver);
+    document.addEventListener("visibilitychange", alVolver);
+    return () => { window.removeEventListener("focus", alVolver); document.removeEventListener("visibilitychange", alVolver); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
   const toggleCashCategory = async (c: CashCat) => {
     try {
       await apiFetch(`/cash/categories/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ activo: !c.activo }) });
@@ -13391,7 +13401,8 @@ export function App() {
             {/* 📊 Resultado mensual de CEYRO: costo real vs estimado por rubro,
                 ingresos adicionales, gastos financieros y total neto. */}
             {costosView === "resultado" && esMatrizActiva && (
-              <ResultadoMensual puedeEditar={isAdmin} avisar={(msg, tipo) => addToast(msg, tipo)} calcularGana={calcularGanaMes} onCategoriasCaja={() => { reloadCashCategories(); }} />
+              <ResultadoMensual puedeEditar={isAdmin} avisar={(msg, tipo) => addToast(msg, tipo)} calcularGana={calcularGanaMes}
+                onCategoriasCaja={() => { reloadCashCategories(); }} categoriasVersion={cashCategories} />
             )}
             {costosView === "diario" && (
             <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
@@ -16659,6 +16670,8 @@ export function App() {
                   const abrir = (t: typeof visibles[number]) => {
                     setCajaMenu(null);
                     setCajaSubTab(t);
+                    // Categorías frescas (pudieron cambiar en Costos Operativos o Configuración).
+                    if (t === "movimiento") reloadCashCategories();
                     if (t === "mantenimiento") { refreshMaintenanceHistory(); loadMaintCategories(); loadMaintCategoriesAll(); if (esMatrizActiva) cargarRepCatalogo(); }
                     if (t === "sacos") { refreshSacks().catch(() => undefined); }
                   };

@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Costos Operativos ↔ Caja: categorias sincronizadas sin recargar (2026-10-01)
+- `ResultadoMensual` recibe `categoriasVersion` (= `cashCategories` de App): cada vez que App recarga las categorias (creadas/renombradas/ocultadas en Configuracion o Caja) el mapeo vuelve a pedir `/resultado-mensual/categorias-caja`. Tambien al abrir «+ Asignar» (Caja) y al volver a la ventana (focus/visibilitychange).
+- Cualquier cambio del mapeo (asignar/quitar enlace, «Asignar a rubro» desde Sin clasificar, crear/editar/quitar rubro, switch «Aparece en Caja») llama `sincronizarCaja()` = recarga propia + `onCategoriasCaja` (App `reloadCashCategories`). Asignar/quitar y el switch son optimistas (la tarjeta cambia al instante; si el servidor falla, vuelve atras).
+- Caja: «➕ Nuevo movimiento» recarga las categorias al abrirse, y Caja/Costos Operativos al volver a la ventana. Sin cambios de BD.
+
 ### Nomina → Cuadrilla · «CAMBIO DE SACO» con saco recuperado (2026-10-01)
 - Formulario «Registrar carga/descarga»: si la actividad contiene «CAMBIO DE SACO» (`esActividadCambioSaco`) aparece el bloque «♻️ Sacos recuperados» bajo el N.º de sacos: «Marca del Saco Recuperado» (select de sacos MARCA/GENERICO de la Matriz, agrupado) y «Destino / Estado» (BODEGA «Guardar en Bodega (Segunda/Usados)» / DESCARTE «Descarte / Basura»). Cantidad = N.º de sacos. Al cambiar a otra actividad se limpian. Lista: «♻️ Flor 100 LB → bodega (usados)/descarte».
 - Payload `marca_saco_recuperado` (id del tipo en sack_inventory) y `destino_saco`. `/cuadrilla/entries` POST/PUT/DELETE en transaccion: guarda `saco_recuperado_id`, `marca_saco_recuperado` (nombre), `destino_saco` (mig 20261065, NULL en historicos). BODEGA → ENTRADA a un tipo APARTE «<tipo> (Usado)» categoria USADO, misma marca/calidad/peso y SIN product_id (`sacoUsadoDe`/`registrarSacosRecuperados` en services/sacos.ts; `sacosCandidatos` busca por product_id → las ventas nunca lo usan), con `sack_movements.ref_cuadrilla`. Editar revierte y reaplica (sin reenviar campos se conservan); eliminar revierte (`revertirSacosRecuperados`). Otras actividades ignoran los campos.

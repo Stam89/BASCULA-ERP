@@ -39,11 +39,14 @@ const dinero = (n: number) => `$${(Number(n) || 0).toLocaleString("es-EC", { min
 const porQq = (n: number) => `$${(Number(n) || 0).toFixed(2)}`;
 const mesActual = () => new Date().toISOString().slice(0, 7);
 
-export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategoriasCaja }: {
+export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategoriasCaja, categoriasVersion }: {
   puedeEditar: boolean;
   avisar: (msg: string, tipo: "success" | "error" | "warn") => void;
-  /** Avisa a Caja que cambió su lista de categorías (rubro creado/renombrado). */
+  /** Avisa a Caja que cambió su lista de categorías (cualquier cambio del mapeo de rubros). */
   onCategoriasCaja?: () => void;
+  /** Cambia cada vez que la app recarga las categorías de Caja (creadas/renombradas/ocultadas
+   *  en Configuración o en Caja): el mapeo las vuelve a pedir sin recargar la página. */
+  categoriasVersion?: unknown;
   /** Ganancia «Gana» (lotes propios pilados) de cada operación en el mes, con el mismo cálculo del módulo Gana. */
   calcularGana: (periodo: string) => Promise<GanaOperacion[]>;
 }) {
@@ -65,7 +68,17 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
   const cargarCategorias = useCallback(() => {
     apiGet<CategoriaCaja[]>("/resultado-mensual/categorias-caja").then(setCategoriasCaja).catch(() => setCategoriasCaja([]));
   }, []);
-  useEffect(() => { cargarCategorias(); }, [cargarCategorias]);
+  useEffect(() => { cargarCategorias(); }, [cargarCategorias, categoriasVersion]);
+  // Al volver a esta ventana/pestaña del navegador (pudo cambiar en otro equipo).
+  useEffect(() => {
+    const alVolver = () => { if (document.visibilityState === "visible") cargarCategorias(); };
+    window.addEventListener("focus", alVolver);
+    document.addEventListener("visibilitychange", alVolver);
+    return () => { window.removeEventListener("focus", alVolver); document.removeEventListener("visibilitychange", alVolver); };
+  }, [cargarCategorias]);
+  // Tras CUALQUIER cambio del mapeo: las categorías de este panel y las de Caja
+  // (➕ Nuevo movimiento) se vuelven a pedir, sin recargar la página.
+  const sincronizarCaja = () => { cargarCategorias(); onCategoriasCaja?.(); };
   const nombreCategoria = (codigo: string) => categoriasCaja.find((c) => c.codigo === codigo)?.nombre ?? codigo;
 
   const cargar = useCallback(async () => {
@@ -104,13 +117,22 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
       const out = await apiPatch<{ categoria_renombrada: string | null }>(`/resultado-mensual/rubros/${r.id}`, cambios);
       avisar(out.categoria_renombrada ? `Rubro guardado · categoría de Caja renombrada a «${out.categoria_renombrada}»` : "Rubro guardado", "success");
       setEditando(null);
-      if (cambios.nombre) { cargarCategorias(); onCategoriasCaja?.(); }
+      sincronizarCaja();
       await cargar();
     } catch (e) { avisar(e instanceof Error ? e.message : "No se pudo guardar", "error"); }
   }
   async function cambiarEnlaces(r: Rubro, cambios: { categorias?: string[]; nomina?: string[] }) {
-    try { await apiPatch(`/resultado-mensual/rubros/${r.id}`, cambios); await cargar(); }
-    catch (e) { avisar(e instanceof Error ? e.message : "No se pudo guardar", "error"); }
+    // La tarjeta del rubro muestra el cambio al instante; si el servidor lo rechaza, vuelve atrás.
+    const antes = rep;
+    setRep((prev) => prev && { ...prev, rubros: prev.rubros.map((x) => (x.id === r.id ? { ...x, ...cambios } : x)) });
+    try {
+      await apiPatch(`/resultado-mensual/rubros/${r.id}`, cambios);
+      sincronizarCaja();
+      await cargar();
+    } catch (e) {
+      setRep(antes);
+      avisar(e instanceof Error ? e.message : "No se pudo guardar", "error");
+    }
   }
   async function asignar(m: Mov, rubroId: string) {
     if (!rubroId) return;
@@ -121,6 +143,7 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
       await apiPost(`/resultado-mensual/rubros/${rubroId}/asignar`, cuerpo);
       const que = m.tipo_nomina ? `los pagos de ${NOMINA_LABEL[m.tipo_nomina] ?? m.tipo_nomina}` : `la categoría «${m.categoria}»`;
       avisar(`Listo: desde ahora ${que} cuentan en ese rubro`, "success");
+      sincronizarCaja();
       await cargar();
     } catch (e) { avisar(e instanceof Error ? e.message : "No se pudo asignar", "error"); }
   }
@@ -148,7 +171,7 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
       });
       avisar(out.categoria_creada ? `Rubro creado · categoría «${out.categoria_creada}» agregada a Caja` : "Rubro creado", "success");
       setNuevoRubro({ nombre: "", estimado: "", categoria: "" });
-      cargarCategorias(); onCategoriasCaja?.();
+      sincronizarCaja();
       await cargar();
     } catch (e) { avisar(e instanceof Error ? e.message : "No se pudo crear", "error"); }
   }
@@ -163,15 +186,21 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
       const socios = propias.some((c) => c.aplicable_a === "AMBOS") ? " (tampoco en las cajas de los socios)" : "";
       if (!window.confirm(`¿Ocultar «${r.nombre}» en Caja?\n\nLa categoría ${nombres} ya no aparecerá en Caja → ➕ Nuevo movimiento${socios}.\nLo ya registrado se conserva y sigue contando en este reporte. Puedes volver a mostrarla cuando quieras.`)) return;
     }
+    const codigos = new Set(propias.map((c) => c.codigo));
+    const antes = categoriasCaja;
+    setCategoriasCaja((prev) => prev.map((c) => (codigos.has(c.codigo) ? { ...c, activo: mostrar } : c)));
     try {
       await apiPatch(`/resultado-mensual/rubros/${r.id}/caja`, { mostrar });
       avisar(mostrar ? `«${r.nombre}» vuelve a aparecer en Caja` : `«${r.nombre}» ya no aparece en Caja`, "success");
-      cargarCategorias(); onCategoriasCaja?.();
-    } catch (e) { avisar(e instanceof Error ? e.message : "No se pudo cambiar", "error"); }
+      sincronizarCaja();
+    } catch (e) {
+      setCategoriasCaja(antes);
+      avisar(e instanceof Error ? e.message : "No se pudo cambiar", "error");
+    }
   }
   async function desactivarRubro(r: Rubro) {
     if (!window.confirm(`¿Quitar el rubro «${r.nombre}» del reporte? Sus egresos pasarán a «Sin clasificar». La categoría de Caja se conserva (tiene historial).`)) return;
-    try { await apiPatch(`/resultado-mensual/rubros/${r.id}`, { activo: false }); await cargar(); }
+    try { await apiPatch(`/resultado-mensual/rubros/${r.id}`, { activo: false }); sincronizarCaja(); await cargar(); }
     catch (e) { avisar(e instanceof Error ? e.message : "No se pudo quitar", "error"); }
   }
 
@@ -563,10 +592,14 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
                         </span>
                         );
                       })}
-                      <button type="button" className="rm-link" onClick={() => setMenu(menu?.id === r.id && menu.tipo === "caja" ? null : { id: r.id, tipo: "caja" })}>+ Asignar</button>
+                      <button type="button" className="rm-link" onClick={() => {
+                        const abrir = !(menu?.id === r.id && menu.tipo === "caja");
+                        setMenu(abrir ? { id: r.id, tipo: "caja" } : null);
+                        if (abrir) cargarCategorias();
+                      }}>+ Asignar</button>
                       {menu?.id === r.id && menu.tipo === "caja" && (
                         <div className="rm-pop" role="menu">
-                          {libresCaja.length === 0 && <small style={{ display: "block", padding: 8 }}>No hay más categorías.</small>}
+                          {libresCaja.length === 0 && <small style={{ display: "block", padding: 8 }}>No hay más categorías. Créala en Configuración → 🏷️ Categorías de caja (o con «＋ Nuevo rubro»).</small>}
                           {libresCaja.map((c) => {
                             const otro = rep.rubros.find((x) => x.id !== r.id && x.categorias.includes(c.codigo));
                             return (
