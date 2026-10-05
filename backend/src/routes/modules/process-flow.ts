@@ -9,7 +9,7 @@ import { nextCode } from "../../utils/codes.js";
 import { nextSequentialLotCode } from "../../utils/lot-code.js";
 import { repartirPorPeso } from "../../utils/money.js";
 import { groupDryingEntries, isLastActiveDryingTunnel, normalizeDryingOperationType } from "../../utils/drying-groups.js";
-import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import {
   createLotProcessReport,
   findStageReportId,
@@ -729,6 +729,150 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
   });
 
   res.status(201).json(result);
+}));
+
+// ── ↩ REABRIR un túnel finalizado (solo ADMINISTRADOR) ────────────────────────
+// Para corregir un error de carga (p. ej. se finalizó el túnel equivocado): el
+// túnel vuelve a «en proceso» y se deshace lo que generó su cierre, para volver a
+// finalizarlo con los datos correctos. Se reabre el TÚNEL FÍSICO completo (todas
+// sus partidas, como al finalizar). Frenos: no si su arroz ya entró a Producción,
+// si la botada o el jornal del secador ya se PAGARON, o si el cobro del servicio
+// ya tiene abonos (hay que anular eso primero). Si el combustible del motor ya se
+// había cerrado, se deshace ese cierre completo (se vuelve a pedir al finalizar).
+// Queda en Observación del secado y en la auditoría (quién, cuándo y por qué).
+processFlowRouter.post("/drying/:dryingId/reabrir", requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({ motivo: z.string().trim().min(5, "Escribe el motivo (mínimo 5 letras).").max(400) }).parse(req.body);
+  const user = (req as AuthenticatedRequest).user;
+  const result = await inTransaction(async (client) => {
+    const rep = (await client.query(
+      `SELECT d.id, d.status, d.motor_number, d.tunnel_number, d.dry_method, d.dry_end_at, d.motor_fuel_id
+         FROM drying_tunnel_reports d WHERE d.id = $1`,
+      [req.params.dryingId]
+    )).rows[0];
+    if (!rep) throw new ApiError(404, "Informe de secado no encontrado.");
+    if (String(rep.status) !== "COMPLETED") throw new ApiError(409, "Este secado no está finalizado: no hay nada que reabrir.");
+    const motor = Number(rep.motor_number);
+    if (String(rep.dry_method ?? "TUNEL").toUpperCase() === "TENDAL" || ![1, 2].includes(motor)) {
+      throw new ApiError(409, "Solo se reabren túneles mecánicos. El Tendal se corrige desde su propio formulario.");
+    }
+    await client.query("SELECT pg_advisory_xact_lock($1, $2)", [71002, motor]);
+
+    // Partidas del MISMO túnel físico y la misma corrida (cerraron juntas).
+    const partidas = (await client.query(
+      `SELECT d.id, d.lot_id, d.operator_name, l.lot_code,
+              COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) AS work_date
+         FROM drying_tunnel_reports d
+         LEFT JOIN lots l ON l.id = d.lot_id
+        WHERE d.motor_number = $1 AND d.tunnel_number = $2 AND d.status = 'COMPLETED'
+          AND d.dry_end_at IS NOT DISTINCT FROM $3
+          AND d.motor_fuel_id IS NOT DISTINCT FROM $4
+        ORDER BY d.created_at
+        FOR UPDATE OF d`,
+      [motor, rep.tunnel_number, rep.dry_end_at, rep.motor_fuel_id]
+    )).rows;
+    const ids: string[] = partidas.map((p) => String(p.id));
+    const lotIds: string[] = partidas.map((p) => p.lot_id).filter(Boolean).map(String);
+    const lotes = [...new Set(partidas.map((p) => p.lot_code).filter(Boolean))].join(", ") || "—";
+
+    // 1) Frenos
+    const prod = (await client.query(
+      `SELECT 1 FROM processing_batch_drying_lots WHERE drying_report_id = ANY($1::uuid[])
+       UNION ALL SELECT 1 FROM processing_batches WHERE drying_report_id = ANY($1::uuid[]) LIMIT 1`,
+      [ids]
+    )).rowCount;
+    if (prod) throw new ApiError(409, `El arroz de este túnel (lote ${lotes}) ya entró a Producción: anula primero ese proceso.`);
+    const botadaPagada = (await client.query(
+      `SELECT 1 FROM cuadrilla_entries WHERE origen = 'SECADORA' AND momento = 'VACIADO'
+          AND referencia_id = ANY($1::uuid[]) AND paid_at IS NOT NULL LIMIT 1`,
+      [ids]
+    )).rowCount;
+    if (botadaPagada) throw new ApiError(409, "La botada de este túnel ya se pagó a la cuadrilla: anula primero ese pago en Nómina.");
+    for (const p of partidas) {
+      const nombre = String(p.operator_name ?? "").trim();
+      if (!nombre) continue;
+      const pagado = (await client.query(
+        `SELECT 1 FROM worker_payments WHERE worker_role = 'SECADOR' AND btrim(worker_name) = $1
+            AND work_date = $2::date AND status = 'PAID' LIMIT 1`,
+        [nombre, p.work_date]
+      )).rowCount;
+      if (pagado) throw new ApiError(409, `El jornal del secador ${nombre} de ese día ya se pagó: anula primero ese pago en Caja/Nómina.`);
+    }
+    const cobros = lotIds.length ? (await client.query(
+      `SELECT id, amount::float AS amount, balance::float AS balance FROM accounts_receivable
+        WHERE reference_type = 'secado_service' AND reference_id = ANY($1::uuid[])`,
+      [lotIds]
+    )).rows : [];
+    if (cobros.some((c) => c.balance < c.amount - 0.005)) {
+      throw new ApiError(409, "El cobro del servicio de secado de este lote ya tiene abonos: anúlalos primero en Por Cobrar.");
+    }
+
+    // 2) Combustible ya cerrado: deshacer ese cierre completo (mismo reparto por QQ).
+    let combustible: { costo_total: number; tuneles: number } | null = null;
+    if (rep.motor_fuel_id) {
+      const rec = (await client.query("SELECT * FROM motor_fuel_records WHERE id = $1 FOR UPDATE", [rep.motor_fuel_id])).rows[0];
+      if (rec) {
+        const parts = (await client.query(
+          "SELECT id, total_quintals::float AS qq FROM drying_tunnel_reports WHERE motor_fuel_id = $1 ORDER BY created_at FOR UPDATE",
+          [rec.id]
+        )).rows;
+        const pesos = parts.map((x) => Number(x.qq));
+        const gas = repartirPorPeso(Number(rec.gas_costo ?? 0), pesos);
+        const diesel = repartirPorPeso(Number(rec.diesel_costo ?? 0), pesos);
+        for (let i = 0; i < parts.length; i++) {
+          await client.query(
+            `UPDATE drying_tunnel_reports
+                SET gas_costo_total = GREATEST(0, COALESCE(gas_costo_total, 0) - $2),
+                    diesel_costo = GREATEST(0, COALESCE(diesel_costo, 0) - $3),
+                    motor_fuel_id = NULL
+              WHERE id = $1`,
+            [parts[i].id, gas[i], diesel[i]]
+          );
+        }
+        await client.query("DELETE FROM motor_fuel_records WHERE id = $1", [rec.id]);
+        combustible = { costo_total: round2(Number(rec.costo_total ?? 0)), tuneles: parts.length };
+      }
+    }
+
+    // 3) Deshacer lo que generó el cierre: botada (no pagada) y cobro del servicio (sin abonos).
+    await client.query(
+      `DELETE FROM cuadrilla_entries WHERE origen = 'SECADORA' AND momento = 'VACIADO'
+          AND referencia_id = ANY($1::uuid[]) AND paid_at IS NULL`,
+      [ids]
+    );
+    await client.query("DELETE FROM drying_tunnel_cuadrilla WHERE drying_report_id = ANY($1::uuid[]) AND momento = 'VACIADO'", [ids]);
+    if (cobros.length) await client.query("DELETE FROM accounts_receivable WHERE id = ANY($1::uuid[])", [cobros.map((c) => c.id)]);
+
+    // 4) Volver a «en proceso» y dejar constancia.
+    const fecha = new Date().toLocaleString("es-EC", { timeZone: "America/Guayaquil", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    const marca = `[Reabierto por ${user?.name ?? user?.username ?? "admin"} el ${fecha}: ${body.motivo}]`;
+    await client.query(
+      `UPDATE drying_tunnel_reports
+          SET status = 'IN_PROGRESS', dry_end_at = NULL, drying_hours = NULL,
+              notes = left(btrim(COALESCE(notes, '') || ' ' || $2), 1000)
+        WHERE id = ANY($1::uuid[])`,
+      [ids, marca]
+    );
+    await client.query(
+      `UPDATE lot_process_reports p
+          SET report_data = (p.report_data - 'dry_end_at') || jsonb_build_object('status', 'IN_PROGRESS')
+         FROM drying_tunnel_report_lots dl
+        WHERE dl.process_report_id = p.id AND dl.drying_report_id = ANY($1::uuid[])`,
+      [ids]
+    );
+    // El jornal del secador se recalcula solo (cuenta los túneles finalizados del día).
+    for (const id of ids) await autoGenerarPagoSecador(client, id);
+
+    return {
+      id: String(rep.id),
+      motor_number: motor,
+      tunnel_number: Number(rep.tunnel_number),
+      partidas: ids.length,
+      lotes,
+      combustible_revertido: combustible,
+      cobro_anulado: cobros.length > 0
+    };
+  });
+  res.json(result);
 }));
 
 // Finaliza un TUNEL FISICO, no un sublote aislado. Una carga mixta puede tener

@@ -9331,6 +9331,31 @@ export function App() {
     setDryingSelections((cur) => ({ ...cur, [secadora]: (cur[secadora] ?? []).filter((id) => id !== lotId) }));
   }
 
+  // ↩ Reabrir un túnel finalizado por error (solo administrador). El backend
+  // deshace botada, cobro del servicio y, si estaba cerrado, el combustible del
+  // motor; tiene frenos si algo ya se pagó o el arroz entró a Producción.
+  async function reabrirTunel(report: DryingTunnelReport) {
+    const motivo = window.prompt(
+      `↩ Reabrir el Túnel ${report.tunnel_number} (vuelve a «en proceso»).\n\n` +
+      "Se quitan su hora final, la botada de la cuadrilla y el cobro del servicio de secado; " +
+      "si el combustible del motor ya estaba cerrado, se deshace y se vuelve a pedir al finalizar.\n\n" +
+      "Escribe el MOTIVO (queda registrado):"
+    );
+    if (motivo == null) return;
+    if (motivo.trim().length < 5) { addToast("Escribe un motivo de al menos 5 letras.", "error"); return; }
+    const r = await apiPost<{ tunnel_number: number; lotes: string; combustible_revertido: { costo_total: number; tuneles: number } | null; cobro_anulado: boolean }>(
+      `/process-flow/drying/${report.id}/reabrir`, { motivo: motivo.trim() }
+    );
+    const extra = [
+      r.combustible_revertido ? `se deshizo el combustible (${money(r.combustible_revertido.costo_total)} de ${r.combustible_revertido.tuneles} túnel(es)): vuelve a registrarlo al finalizar` : "",
+      r.cobro_anulado ? "se anuló el cobro del servicio (se vuelve a generar al finalizar)" : ""
+    ].filter(Boolean).join(" · ");
+    addToast(`Túnel ${r.tunnel_number} reabierto (lote ${r.lotes}).${extra ? ` ${extra}.` : ""} Ahora finalízalo con los datos correctos.`, "success");
+    setEditingDryingReport(null);
+    await refresh();
+    await loadMotorActive();
+  }
+
   function editDryingReport(report: DryingTunnelReport) {
     // El TENDAL tiene su propio formulario (no vive bajo un motor). Se carga en él
     // para poder editarlo varios días y finalizarlo cuando corresponda.
@@ -13152,6 +13177,17 @@ export function App() {
                                   ✅ Finalizar este túnel
                                 </button>
                               )}
+                              {done && isAdmin && (
+                                <button
+                                  type="button"
+                                  className="btnSecondary"
+                                  title="Solo administrador: vuelve el túnel a «en proceso» para corregir una finalización equivocada"
+                                  style={{ flex: "1 1 160px", minHeight: 44, padding: "8px 16px", textAlign: "center", whiteSpace: "normal", borderRadius: 10, borderColor: "#f59e0b", color: "#b45309" }}
+                                  onClick={() => reabrirTunel(rep).catch((error) => addToast(error.message, "error"))}
+                                >
+                                  ↩ Reabrir túnel (admin)
+                                </button>
+                              )}
                             </div>
                           </form>
                         );
@@ -13471,7 +13507,8 @@ export function App() {
               );
             })()}
 
-            <DryingReportsPanel reports={dryingReports} onEdit={editDryingReport} onShare={compartirTunelWhatsApp} sharingId={tunelCompartiendoId} />
+            <DryingReportsPanel reports={dryingReports} onEdit={editDryingReport} onShare={compartirTunelWhatsApp} sharingId={tunelCompartiendoId}
+              onReabrir={isAdmin ? (r) => { reabrirTunel(r).catch((error) => addToast(error.message, "error")); } : undefined} />
 
             {/* Recibo de Secado OCULTO (fuera de pantalla): se renderiza para el
                 secado elegido en la lista y html2canvas lo captura como imagen para
@@ -25110,9 +25147,12 @@ function DryingReportsPanel({
   reports,
   onEdit,
   onShare,
-  sharingId
+  sharingId,
+  onReabrir
 }: {
   reports: DryingTunnelReport[];
+  /** Solo administrador: reabre un túnel finalizado por error. */
+  onReabrir?: (report: DryingTunnelReport) => void;
   onEdit: (report: DryingTunnelReport) => void;
   // Compartir por WhatsApp desde la lista (antes vivía dentro del editor).
   onShare?: (report: DryingTunnelReport) => void;
@@ -25150,6 +25190,10 @@ function DryingReportsPanel({
                 </button>
               )}
               <button type="button" onClick={() => onEdit(report)}>{done ? "Corregir" : "Editar"}</button>
+              {done && !esTendal && onReabrir && (
+                <button type="button" title="Solo administrador: vuelve el túnel a «en proceso» para corregir una finalización equivocada"
+                  style={{ color: "#b45309", borderColor: "#f59e0b" }} onClick={() => onReabrir(report)}>↩ Reabrir</button>
+              )}
             </div>
           </div>
 
