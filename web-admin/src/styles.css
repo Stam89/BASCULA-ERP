@@ -4910,3 +4910,9 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
   .er .er-controles, .sidebar, .topbar { display: none !important; }
   .er .cj-card, .er .cj-kpi { box-shadow: none; }
 }
+
+/* Nómina · «Pagar hasta» (fecha de corte del pago) */
+.pagoHasta { display: grid; gap: 4px; margin: 0 0 12px; padding: 8px 10px; border: 1px dashed #cbd5e1; border-radius: 8px; font-size: 13px; }
+.pagoHasta-row { display: flex; gap: 6px; align-items: center; }
+.pagoHasta-row input { flex: 1; min-width: 0; padding: 5px 8px; border-radius: 6px; border: 1px solid #d1d5db; }
+.pagoHasta-hint { font-size: 11.5px; }

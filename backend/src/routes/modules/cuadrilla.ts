@@ -1446,9 +1446,13 @@ async function detalleBajadas(db: Queryable, where: string, params: unknown[]) {
 }
 
 // Todo lo pendiente de bajada (cualquier semana: lo no pagado se arrastra).
-cuadrillaRouter.get("/bajadas/pendiente", asyncRoute(async (_req, res) => {
+// Con ?hasta=AAAA-MM-DD solo lo trabajado HASTA ese día (incluido): para pagar
+// por corte y dejar lo posterior pendiente.
+const FECHA_CORTE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional();
+cuadrillaRouter.get("/bajadas/pendiente", asyncRoute(async (req, res) => {
+  const { hasta } = z.object({ hasta: FECHA_CORTE }).parse(req.query);
   await inTransaction((client) => sincronizarBajadas(client));
-  res.json(resumirBajadas(await detalleBajadas(pool, "e.paid_at IS NULL", [])));
+  res.json(resumirBajadas(await detalleBajadas(pool, "e.paid_at IS NULL AND ($1::date IS NULL OR e.work_date <= $1::date)", [hasta ?? null])));
 }));
 
 // Recibo de un pago ya hecho (por la fecha/hora exacta del pago).
@@ -1457,18 +1461,23 @@ cuadrillaRouter.get("/bajadas/recibo", asyncRoute(async (req, res) => {
   res.json({ paid_at: q.paid_at, ...resumirBajadas(await detalleBajadas(pool, "date_trunc('milliseconds', e.paid_at) = date_trunc('milliseconds', $1::timestamptz)", [q.paid_at])) });
 }));
 
-// Paga TODA la bajada pendiente en un solo egreso de Caja (mano de obra).
+// Paga la bajada pendiente en un solo egreso de Caja (mano de obra): toda, o solo
+// hasta la fecha de corte `hasta` (incluida); lo posterior sigue pendiente.
 cuadrillaRouter.post("/bajadas/pagar", asyncRoute(async (req, res) => {
-  const body = z.object({ cash_register_id: z.string().uuid() }).parse(req.body);
+  const body = z.object({ cash_register_id: z.string().uuid(), hasta: FECHA_CORTE }).parse(req.body);
   const user = (req as AuthenticatedRequest).user;
   const out = await inTransaction(async (client) => {
     await sincronizarBajadas(client);
     const caja = await client.query("SELECT status FROM cash_registers WHERE id = $1", [body.cash_register_id]);
     if (caja.rows[0]?.status !== "OPEN") throw new ApiError(409, "La caja no está abierta.");
     const pendientes = await client.query(
-      "SELECT id FROM cuadrilla_entries WHERE origen = 'BASCULA' AND paid_at IS NULL FOR UPDATE"
+      `SELECT id FROM cuadrilla_entries WHERE origen = 'BASCULA' AND paid_at IS NULL
+          AND ($1::date IS NULL OR work_date <= $1::date) FOR UPDATE`,
+      [body.hasta ?? null]
     );
-    if (!pendientes.rowCount) throw new ApiError(400, "No hay bajadas de carro pendientes de pago.");
+    if (!pendientes.rowCount) {
+      throw new ApiError(400, body.hasta ? "No hay bajadas de carro pendientes hasta esa fecha." : "No hay bajadas de carro pendientes de pago.");
+    }
     const ids = pendientes.rows.map((r: { id: string }) => r.id);
     const pagado = (await client.query(
       "UPDATE cuadrilla_entries SET paid_at = now(), cash_register_id = $2 WHERE id = ANY($1) RETURNING paid_at",

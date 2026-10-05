@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Nómina: «📅 Pagar hasta» (fecha de corte) (2026-10-05)
+- El modal «Confirmar pago» (planta/secador, cuadrilla y bajada de carro) tiene «Pagar hasta (incluido)»; vacío = todo lo pendiente. Recalcula con `/labor/summary?to=`, `/cuadrilla/summary?to=` o `/cuadrilla/bajadas/pendiente?hasta=` y paga con ese `to`/`hasta`. Lo posterior queda pendiente.
+- Backend: `hasta` OPCIONAL (aditivo) en GET `/cuadrilla/bajadas/pendiente` y POST `/cuadrilla/bajadas/pagar`. Probado en ROLLBACK (`pagar_hasta_test.mjs`: corte 30/09 → 16 tickets $66.46, quedan 6 de octubre).
+- El usuario decidió dejar las bajadas desde 28/09 (son tickets reales).
+
 ### Borrado: Nómina queda en cero (bajada de carro) (2026-10-05)
 - Tras «Borrar datos de prueba» Nómina mostraba bajadas de carro que nadie cargó: `sincronizarBajadas` (cuadrilla.ts) las arma SOLA con los tickets de báscula, que vuelven a bajar de Firebase, y `bajada_carro_config.desde` (26/09) sobrevivía al borrado.
 - `vaciarDatosDePrueba` ahora pone `bajada_carro_config.desde` = día del borrado (hora Ecuador). El sync ya borra las bajadas NO pagadas fuera del rango, así que mover «Contar desde» en Nómina → Bajada de carro las quita o regenera (reversible). Probado en copia de BD (`wipe_copia.mjs`).

@@ -2867,6 +2867,11 @@ export function App() {
   // ── UX de Pagos: buscador, confirmación con desglose y aviso de caja ──
   const [pagoBuscar, setPagoBuscar] = useState("");
   const [pagoConfirm, setPagoConfirm] = useState<null | { kind: "nomina" | "cuadrilla" | "bajada"; nRow: WorkerSummary | null; cRow: CuadrillaSummaryRow | null }>(null);
+  // «Pagar hasta»: fecha de corte (incluida). Vacío = todo lo pendiente. Lo
+  // trabajado después queda pendiente para el próximo pago.
+  const [pagoHasta, setPagoHasta] = useState("");
+  const [pagoCorte, setPagoCorte] = useState<null | { gano: number; anticipos: number; neto: number; bajada: BajadaResumen | null }>(null);
+  const [pagoCorteBusy, setPagoCorteBusy] = useState(false);
   const cajaAbierta = Boolean(dashboard.current_cash_register?.id);
   // Personal administrativo (por accionista activo): staff, formulario, historial y modal de pago.
   const [adminStaff, setAdminStaff] = useState<AdminStaff[]>([]);
@@ -2889,16 +2894,47 @@ export function App() {
     const cuando = dd <= 0 ? "hoy" : dd === 1 ? "ayer" : dd < 7 ? `hace ${dd} días` : dd < 14 ? "hace 1 semana" : `hace ${Math.floor(dd / 7)} semanas`;
     return `desde ${fmtFechaCorta(f)} · ${cuando}${n && n > 0 ? ` · ${n} reg.` : ""}`;
   };
-  function abrirPagoNomina(row: WorkerSummary) { if (!cajaAbierta) { addToast("Abre una caja para pagar", "error"); return; } setPagoConfirm({ kind: "nomina", nRow: row, cRow: null }); }
-  function abrirPagoCuadrilla(row: CuadrillaSummaryRow) { if (!cajaAbierta) { addToast("Abre una caja para pagar", "error"); return; } setPagoConfirm({ kind: "cuadrilla", nRow: null, cRow: row }); }
-  function abrirPagoBajada() { if (!cajaAbierta) { addToast("Abre una caja para pagar", "error"); return; } setPagoConfirm({ kind: "bajada", nRow: null, cRow: null }); }
+  function abrirPagoConfirm(v: NonNullable<typeof pagoConfirm>) {
+    if (!cajaAbierta) { addToast("Abre una caja para pagar", "error"); return; }
+    setPagoHasta(""); setPagoCorte(null); setPagoConfirm(v);
+  }
+  function abrirPagoNomina(row: WorkerSummary) { abrirPagoConfirm({ kind: "nomina", nRow: row, cRow: null }); }
+  function abrirPagoCuadrilla(row: CuadrillaSummaryRow) { abrirPagoConfirm({ kind: "cuadrilla", nRow: null, cRow: row }); }
+  function abrirPagoBajada() { abrirPagoConfirm({ kind: "bajada", nRow: null, cRow: null }); }
   async function confirmarPago() {
     const pc = pagoConfirm; if (!pc) return;
+    const hasta = pagoHasta || undefined;
     setPagoConfirm(null);
-    if (pc.kind === "nomina" && pc.nRow) await payWorkerWeek(pc.nRow, PAGOS_FROM, PAGOS_TO);
-    else if (pc.kind === "cuadrilla" && pc.cRow) await payCuadrillaWorker(pc.cRow, PAGOS_FROM, PAGOS_TO);
-    else if (pc.kind === "bajada") await pagarBajadas();
+    if (pc.kind === "nomina" && pc.nRow) await payWorkerWeek(pc.nRow, PAGOS_FROM, hasta ?? PAGOS_TO);
+    else if (pc.kind === "cuadrilla" && pc.cRow) await payCuadrillaWorker(pc.cRow, PAGOS_FROM, hasta ?? PAGOS_TO);
+    else if (pc.kind === "bajada") await pagarBajadas(hasta);
   }
+  // Con fecha de corte, recalcula lo que se pagaría (mismas reglas del backend:
+  // nómina descuenta los anticipos hasta esa fecha; cuadrilla, todos sus anticipos).
+  useEffect(() => {
+    const pc = pagoConfirm;
+    if (!pc || !pagoHasta) { setPagoCorte(null); return; }
+    let vivo = true;
+    setPagoCorteBusy(true);
+    (async () => {
+      if (pc.kind === "bajada") {
+        const b = await apiGet<BajadaResumen>(`/cuadrilla/bajadas/pendiente?hasta=${pagoHasta}`);
+        return { gano: b.total, anticipos: 0, neto: b.total, bajada: b };
+      }
+      if (pc.kind === "nomina" && pc.nRow) {
+        const d = await apiGet<{ rows: WorkerSummary[] }>(`/labor/summary?from=${PAGOS_FROM}&to=${pagoHasta}`);
+        const r = d.rows.find((x) => x.worker_role === pc.nRow!.worker_role && x.worker_name === pc.nRow!.worker_name);
+        return { gano: r?.pending_amount ?? 0, anticipos: r?.advances ?? 0, neto: r ? (r.to_pay ?? (r.pending_amount ?? 0)) : 0, bajada: null };
+      }
+      const d = await apiGet<{ rows: CuadrillaSummaryRow[] }>(`/cuadrilla/summary?from=${PAGOS_FROM}&to=${pagoHasta}`);
+      const r = d.rows.find((x) => x.worker_name === pc.cRow?.worker_name);
+      return { gano: r ? round2((r.total ?? 0) - (r.pagado ?? 0)) : 0, anticipos: r?.anticipos ?? 0, neto: r?.neto ?? 0, bajada: null };
+    })()
+      .then((v) => { if (vivo) setPagoCorte(v); })
+      .catch((e) => { if (vivo) { setPagoCorte(null); addToast(e instanceof Error ? e.message : "No se pudo calcular el corte", "error"); } })
+      .finally(() => { if (vivo) setPagoCorteBusy(false); });
+    return () => { vivo = false; };
+  }, [pagoConfirm, pagoHasta]); // eslint-disable-line react-hooks/exhaustive-deps
   const nomina60Ago = (() => { const d = new Date(); d.setDate(d.getDate() - 60); return d.toISOString().slice(0, 10); })();
   const [histFrom, setHistFrom] = useState(nomina60Ago);
   const [histTo, setHistTo] = useState(nominaToday);
@@ -4676,12 +4712,13 @@ export function App() {
       addToast(e instanceof Error ? e.message : "No se pudo guardar", "error");
     }
   }
-  // Paga TODA la bajada pendiente en un solo egreso y abre el recibo desglosado.
-  async function pagarBajadas() {
+  // Paga la bajada pendiente (toda, o hasta la fecha de corte) en un solo egreso
+  // y abre el recibo desglosado.
+  async function pagarBajadas(hasta?: string) {
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) { addToast("Abre una caja para pagar", "error"); return; }
     try {
-      const r = await apiPost<BajadaResumen>("/cuadrilla/bajadas/pagar", { cash_register_id: registerId });
+      const r = await apiPost<BajadaResumen>("/cuadrilla/bajadas/pagar", { cash_register_id: registerId, ...(hasta ? { hasta } : {}) });
       addToast(`Bajada de carro pagada: ${money(r.total)} (${r.tickets} ticket(s))`, "success");
       imprimirReciboBajada(r, true);
       await refreshNomina();
@@ -21138,17 +21175,33 @@ export function App() {
                   const isNom = pagoConfirm.kind === "nomina";
                   const isBaj = pagoConfirm.kind === "bajada";
                   const nombre = isBaj ? "la bajada de carro" : isNom ? pagoConfirm.nRow?.worker_name : pagoConfirm.cRow?.worker_name;
-                  const gano = isBaj ? bajadaPendTotal : isNom ? (pagoConfirm.nRow?.pending_amount ?? 0) : round2((pagoConfirm.cRow?.total ?? 0) - (pagoConfirm.cRow?.pagado ?? 0));
-                  const anticipos = isBaj ? 0 : isNom ? (pagoConfirm.nRow?.advances ?? 0) : (pagoConfirm.cRow?.anticipos ?? 0);
-                  const neto = isBaj ? bajadaPendTotal : isNom ? (pagoConfirm.nRow?.to_pay ?? 0) : (pagoConfirm.cRow?.neto ?? 0);
+                  const conCorte = !!pagoHasta && !!pagoCorte;
+                  const bajadaVista = isBaj ? (conCorte ? pagoCorte!.bajada : bajadaPend) : null;
+                  const gano = conCorte ? pagoCorte!.gano : isBaj ? bajadaPendTotal : isNom ? (pagoConfirm.nRow?.pending_amount ?? 0) : round2((pagoConfirm.cRow?.total ?? 0) - (pagoConfirm.cRow?.pagado ?? 0));
+                  const anticipos = conCorte ? pagoCorte!.anticipos : isBaj ? 0 : isNom ? (pagoConfirm.nRow?.advances ?? 0) : (pagoConfirm.cRow?.anticipos ?? 0);
+                  const neto = conCorte ? pagoCorte!.neto : isBaj ? bajadaPendTotal : isNom ? (pagoConfirm.nRow?.to_pay ?? 0) : (pagoConfirm.cRow?.neto ?? 0);
+                  const sinNada = !!pagoHasta && !pagoCorteBusy && conCorte && !(gano > 0.004);
+                  const puedePagar = !pagoCorteBusy && !(pagoHasta && !pagoCorte) && !sinNada;
                   return (
                     <div className="modalOverlay" onClick={() => setPagoConfirm(null)}>
                       <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 380 }}>
                         <h3 style={{ marginTop: 0, marginBottom: 10 }}>Confirmar pago</h3>
-                        <p style={{ margin: "0 0 12px" }}>Vas a pagar {isBaj ? "" : "a "}<strong>{nombre}</strong>{isNom || isBaj ? "" : " (cuadrilla)"}{isBaj ? ` en un solo pago (${bajadaPend?.tickets ?? 0} ticket(s))` : ""}.</p>
-                        {isBaj && bajadaPend && (
+                        <p style={{ margin: "0 0 12px" }}>Vas a pagar {isBaj ? "" : "a "}<strong>{nombre}</strong>{isNom || isBaj ? "" : " (cuadrilla)"}{isBaj ? ` en un solo pago (${bajadaVista?.tickets ?? 0} ticket(s))` : ""}.</p>
+                        <label className="pagoHasta">
+                          <span>📅 Pagar hasta <span className="muted">(incluido)</span></span>
+                          <span className="pagoHasta-row">
+                            <input type="date" value={pagoHasta} max={nominaToday} onChange={(e) => setPagoHasta(e.target.value)} />
+                            {pagoHasta && <button type="button" className="btnGhost" onClick={() => setPagoHasta("")}>Todo</button>}
+                          </span>
+                          <span className="muted pagoHasta-hint">
+                            {pagoHasta
+                              ? pagoCorteBusy ? "Calculando…" : sinNada ? "No hay nada pendiente hasta esa fecha." : `Se paga lo trabajado hasta el ${fmtFechaCorta(pagoHasta)}; lo posterior sigue pendiente.`
+                              : "Vacío = todo lo pendiente. Elige una fecha para pagar solo hasta ese día."}
+                          </span>
+                        </label>
+                        {isBaj && bajadaVista && bajadaVista.por_trabajador.length > 0 && (
                           <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "6px 10px", marginBottom: 10, fontSize: 13 }}>
-                            {bajadaPend.por_trabajador.map((t) => (
+                            {bajadaVista.por_trabajador.map((t) => (
                               <div key={t.trabajador} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
                                 <span>{t.trabajador} <span className="muted">· {t.tickets} ticket(s)</span></span><strong className="num">{money(t.monto)}</strong>
                               </div>
@@ -21164,7 +21217,7 @@ export function App() {
                         <p className="muted" style={{ fontSize: 12, margin: "12px 0 16px" }}>{isBaj ? "Sale de la caja abierta en un solo egreso y se abre el recibo desglosado para que firme cada uno." : "Sale de la caja abierta y queda guardado en el Historial."}</p>
                         <div className="buttonRow" style={{ justifyContent: "flex-end", gap: 8 }}>
                           <button type="button" onClick={() => setPagoConfirm(null)}>Cancelar</button>
-                          <button type="button" onClick={() => confirmarPago()} style={{ background: "#047857", color: "#fff", border: "none", borderRadius: 8, padding: "8px 18px", fontWeight: 800, cursor: "pointer" }}>💵 Confirmar pago</button>
+                          <button type="button" disabled={!puedePagar} onClick={() => confirmarPago()} style={{ background: puedePagar ? "#047857" : "#9ca3af", color: "#fff", border: "none", borderRadius: 8, padding: "8px 18px", fontWeight: 800, cursor: puedePagar ? "pointer" : "not-allowed" }}>💵 Confirmar pago</button>
                         </div>
                       </div>
                     </div>
