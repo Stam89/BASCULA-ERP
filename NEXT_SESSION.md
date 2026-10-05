@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Bajada de carro: «📋 Todo desde [Contar desde]» (2026-10-05)
+- La tabla solo mostraba la semana (sáb→vie) y lo anterior iba resumido en «Pendiente de semanas anteriores»; ahora hay un selector «📅 Por semana / 📋 Todo desde dd/mm» que lista TODOS los tickets desde «Contar desde» hasta hoy (con nombre, monto y estado; se puede asignar quién bajó).
+- Backend: GET `/cuadrilla/bajadas?todo=1` (opcional, aditivo; devuelve `modo`). Probado: semana = 10 tickets, todo = 49 (23 con monto).
+- Reinicio del ERP: siempre `node dist/server.js` oculto (ver memoria despliegue-y-verificacion); una ventana minimizada se cerró y el ERP quedó caído.
+
 ### Nómina: «📅 Pagar hasta» (fecha de corte) (2026-10-05)
 - El modal «Confirmar pago» (planta/secador, cuadrilla y bajada de carro) tiene «Pagar hasta (incluido)»; vacío = todo lo pendiente. Recalcula con `/labor/summary?to=`, `/cuadrilla/summary?to=` o `/cuadrilla/bajadas/pendiente?hasta=` y paga con ese `to`/`hasta`. Lo posterior queda pendiente.
 - Backend: `hasta` OPCIONAL (aditivo) en GET `/cuadrilla/bajadas/pendiente` y POST `/cuadrilla/bajadas/pagar`. Probado en ROLLBACK (`pagar_hasta_test.mjs`: corte 30/09 → 16 tickets $66.46, quedan 6 de octubre).

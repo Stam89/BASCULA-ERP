@@ -409,6 +409,7 @@ type BajadaResumen = {
 };
 type BajadaData = {
   semana: { inicio: string; fin: string; actual: boolean };
+  modo?: "semana" | "todo";
   desde: string | null; tarifa: number | null; actividad: string | null;
   filas: BajadaFila[];
   arrastre: Array<{ trabajador: string; tickets: number; monto: number }>;
@@ -2817,6 +2818,8 @@ export function App() {
   const nominaGrupoActivo: NominaGrupo = (nominaView === "historial" || nominaView === "pagos" || nominaView === "sueldo-admin" || nominaView === "bajada") ? "planta" : nominaView;
   // 🚚 Bajada de carro: semana (sábado→viernes) mostrada y datos.
   const [bajadaSemana, setBajadaSemana] = useState<string | null>(null);
+  // false = una semana (sáb→vie); true = TODOS los tickets desde «Contar desde».
+  const [bajadaTodo, setBajadaTodo] = useState(false);
   const [bajadaData, setBajadaData] = useState<BajadaData | null>(null);
   const [bajadaBusy, setBajadaBusy] = useState(false);
   const [bajadaDesde, setBajadaDesde] = useState("");
@@ -4687,12 +4690,13 @@ export function App() {
   }
 
   // 🚚 Bajada de carro: trae la semana (el backend primero sincroniza los tickets).
-  async function loadBajadas(semana: string | null = bajadaSemana) {
+  async function loadBajadas(semana: string | null = bajadaSemana, todo: boolean = bajadaTodo) {
     setBajadaBusy(true);
     try {
-      const data = await apiGet<BajadaData>(`/cuadrilla/bajadas${semana ? `?semana=${semana}` : ""}`);
+      const qs = todo ? "?todo=1" : semana ? `?semana=${semana}` : "";
+      const data = await apiGet<BajadaData>(`/cuadrilla/bajadas${qs}`);
       setBajadaData(data);
-      setBajadaSemana(data.semana.inicio);
+      if (!todo) setBajadaSemana(data.semana.inicio);
       apiGet<BajadaResumen>("/cuadrilla/bajadas/pendiente").then(setBajadaPend).catch(() => undefined);
       setBajadaDesde(data.desde ?? "");
     } catch (e) {
@@ -20848,18 +20852,25 @@ export function App() {
                     </p>
                   </div>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                    <div className="segmented" role="group" aria-label="Qué tickets ver">
+                      <button type="button" className={!bajadaTodo ? "active" : ""} disabled={bajadaBusy} onClick={() => { setBajadaTodo(false); loadBajadas(null, false).catch(() => undefined); }}>📅 Por semana</button>
+                      <button type="button" className={bajadaTodo ? "active" : ""} disabled={bajadaBusy} onClick={() => { setBajadaTodo(true); loadBajadas(null, true).catch(() => undefined); }}>📋 Todo desde {d?.desde ? fmtDia(d.desde) : "el inicio"}</button>
+                    </div>
+                    {!bajadaTodo && <>
                     <button type="button" className="btnSecondary" disabled={bajadaBusy || !d} onClick={() => moverSemana(-7)}>◀ Anterior</button>
                     <strong style={{ minWidth: 190, textAlign: "center" }}>{d ? `${fmtDia(d.semana.inicio)} → ${fmtDia(d.semana.fin)}` : "…"}</strong>
                     <button type="button" className="btnSecondary" disabled={bajadaBusy || !d} onClick={() => moverSemana(7)}>Siguiente ▶</button>
                     {d && !d.semana.actual && <button type="button" className="btnGhost" onClick={() => loadBajadas(null).catch(() => undefined)}>Esta semana</button>}
+                    </>}
+                    {bajadaTodo && d && <strong style={{ minWidth: 190, textAlign: "center" }}>{fmtDia(d.semana.inicio)} → hoy</strong>}
                     <button type="button" className="btnSecondary" disabled={bajadaBusy} onClick={() => loadBajadas().catch(() => undefined)}>{bajadaBusy ? "Cargando…" : "↻"}</button>
                   </div>
                 </div>
 
                 {!d ? <div className="emptyState"><p>{bajadaBusy ? "Cargando…" : "Sin datos."}</p></div> : (<>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginBottom: 12 }}>
-                  <div className="cj-kpi"><div className="cj-kpi-label">Total de la semana</div><div className="cj-kpi-value">{money(totalSemana)}</div><div className="cj-kpi-hint">{conMonto.length} ticket(s) con bajada</div></div>
-                  <div className="cj-kpi"><div className="cj-kpi-label">Por pagar de la semana</div><div className="cj-kpi-value cj-pos">{money(pendienteSemana)}</div><div className="cj-kpi-hint">Se paga en 💵 Pagos</div></div>
+                  <div className="cj-kpi"><div className="cj-kpi-label">{bajadaTodo ? "Total del período" : "Total de la semana"}</div><div className="cj-kpi-value">{money(totalSemana)}</div><div className="cj-kpi-hint">{conMonto.length} ticket(s) con bajada</div></div>
+                  <div className="cj-kpi"><div className="cj-kpi-label">{bajadaTodo ? "Por pagar del período" : "Por pagar de la semana"}</div><div className="cj-kpi-value cj-pos">{money(pendienteSemana)}</div><div className="cj-kpi-hint">Se paga en 💵 Pagos</div></div>
                   <div className="cj-kpi"><div className="cj-kpi-label">Sin nombre</div><div className="cj-kpi-value" style={{ color: sinNombre.length ? "#b45309" : "#0f172a" }}>{sinNombre.length}</div><div className="cj-kpi-hint">{sinNombre.length ? "Ponle quién bajó el carro" : "Todos tienen nombre"}</div></div>
                   <div className="cj-kpi"><div className="cj-kpi-label">Pendiente de semanas anteriores</div><div className="cj-kpi-value" style={{ color: arrastreTotal > 0 ? "#b45309" : "#0f172a" }}>{money(arrastreTotal)}</div><div className="cj-kpi-hint">Pasa a esta semana en Pagos</div></div>
                 </div>
@@ -20869,7 +20880,7 @@ export function App() {
                   <table className="cajaTable">
                     <thead><tr><th>Fecha</th><th>Ticket</th><th>Cliente</th><th>Placa</th><th className="num">QQ</th><th>Bajó el carro</th><th className="num">Monto</th><th>Estado</th></tr></thead>
                     <tbody>
-                      {filas.length === 0 && <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 14 }}>No hay tickets de báscula en esta semana.</td></tr>}
+                      {filas.length === 0 && <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 14 }}>{bajadaTodo ? "No hay tickets de báscula desde esa fecha." : "No hay tickets de báscula en esta semana."}</td></tr>}
                       {filas.map((f) => {
                         const antesDeInicio = !!(d.desde && f.fecha < d.desde);
                         const noSePaga = f.bajada_manual === "__NO__";
@@ -20922,7 +20933,7 @@ export function App() {
                     </tbody>
                     {conMonto.length > 0 && (
                       <tfoot><tr>
-                        <td colSpan={4} style={{ fontWeight: 700 }}>TOTAL DE LA SEMANA</td>
+                        <td colSpan={4} style={{ fontWeight: 700 }}>{bajadaTodo ? "TOTAL DEL PERÍODO" : "TOTAL DE LA SEMANA"}</td>
                         <td className="num" style={{ fontWeight: 700 }}>{conMonto.reduce((a, f) => a + Number(f.qq), 0).toFixed(2)}</td>
                         <td />
                         <td className="num" style={{ fontWeight: 800 }}>{money(totalSemana)}</td>
@@ -20934,7 +20945,7 @@ export function App() {
 
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 14, marginTop: 14 }}>
                   <div>
-                    <h3 style={{ margin: "0 0 6px", fontSize: 14 }}>👷 Por trabajador · esta semana</h3>
+                    <h3 style={{ margin: "0 0 6px", fontSize: 14 }}>👷 Por trabajador · {bajadaTodo ? "todo el período" : "esta semana"}</h3>
                     <table className="cajaTable">
                       <thead><tr><th>Trabajador</th><th className="num">Tickets</th><th className="num">QQ</th><th className="num">Total</th><th className="num">Por pagar</th></tr></thead>
                       <tbody>

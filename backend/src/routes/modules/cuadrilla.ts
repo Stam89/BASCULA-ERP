@@ -1339,13 +1339,15 @@ cuadrillaRouter.post("/bajadas/sync", asyncRoute(async (_req, res) => {
 // Semana de pago (sábado→viernes) que contiene `semana` (hoy por defecto): tickets
 // con su monto y estado, y lo pendiente de semanas previas (se arrastra).
 cuadrillaRouter.get("/bajadas", asyncRoute(async (req, res) => {
-  const q = z.object({ semana: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).parse(req.query);
+  // ?todo=1: en vez de una semana, TODOS los tickets desde «Contar desde» hasta hoy.
+  const q = z.object({ semana: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), todo: z.enum(["0", "1"]).optional() }).parse(req.query);
   const hoy = (await pool.query("SELECT (now() AT TIME ZONE 'America/Guayaquil')::date::text AS d")).rows[0].d as string;
-  const ini = inicioSemana(q.semana ?? hoy);
-  const fin = sumarDias(ini, 6);
   await inTransaction((client) => sincronizarBajadas(client));
 
   const cfg = (await pool.query("SELECT desde::text AS desde FROM bajada_carro_config WHERE id = 1")).rows[0] ?? { desde: null };
+  const modoTodo = q.todo === "1";
+  const ini = modoTodo ? (cfg.desde && cfg.desde <= hoy ? cfg.desde : inicioSemana(hoy)) : inicioSemana(q.semana ?? hoy);
+  const fin = modoTodo ? sumarDias(inicioSemana(hoy), 6) : sumarDias(ini, 6);
   const act = await actividadBajada(pool);
   const filas = (await pool.query(
     `SELECT t.id AS ticket_id, t.raw_payload->>'numeroTicket' AS numero, (${FECHA_TICKET})::text AS fecha,
@@ -1368,6 +1370,7 @@ cuadrillaRouter.get("/bajadas", asyncRoute(async (req, res) => {
   )).rows;
   res.json({
     semana: { inicio: ini, fin, actual: inicioSemana(hoy) === ini },
+    modo: modoTodo ? "todo" : "semana",
     desde: cfg.desde,
     tarifa: act ? Number(act.unit_rate) : null,
     actividad: act?.name ?? null,
