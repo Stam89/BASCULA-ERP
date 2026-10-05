@@ -193,7 +193,9 @@ settingsRouter.get("/company-readiness", requireAdmin, asyncRoute(async (_req, r
     `SELECT COUNT(*) FILTER (WHERE recovery_email IS NOT NULL)::int AS con_correo, COUNT(*)::int AS total
        FROM users WHERE is_active = true`
   ).then((r) => r.rows[0]).catch(() => ({ con_correo: 0, total: 0 }));
-  const firebaseKey = (process.env.FIREBASE_KEY || "backend/firebase-service-account.json").trim();
+  // Misma ruta por defecto que la integración real (integrations/bascula-firebase.ts):
+  // backend/scripts/firebase-key.json, sin depender de desde dónde se arranque.
+  const firebaseKey = (process.env.FIREBASE_KEY || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "scripts", "firebase-key.json")).trim();
   const firebaseKeyExists = Boolean(firebaseKey) && fs.existsSync(firebaseKey);
   const checks = [
     {

@@ -25,8 +25,9 @@ function appMode(): "production" | "test" {
   return "production";
 }
 
-const firebaseKey = env("FIREBASE_KEY") || "backend/firebase-service-account.json";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Misma ruta por defecto que la integración real de Firebase (backend/scripts/firebase-key.json).
+const firebaseKey = env("FIREBASE_KEY") || path.resolve(__dirname, "../../scripts/firebase-key.json");
 const migrationsDir = path.resolve(__dirname, "../../../database/migrations");
 const checks: Check[] = [
   {

@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Auditoría general (2026-10-05)
+- Revisado: tsc/lint/133 pruebas OK; integridad de BD sin hallazgos; humo de las 169 rutas GET sin parámetros (con matriz y socio) sin errores 5xx (las que exigen parámetros responden 400 como debe); respaldos diarios 20:00 en OneDrive\BASCULA-ERP-Backups (30 copias, el de 7 días local no se usa); Cloudflared y PostgreSQL como servicio; sin secretos versionados.
+- Corregido: «Puesta en marcha» y `npm run preflight` decían «Falta archivo FIREBASE_KEY» (buscaban otra ruta); ahora usan la misma que la integración (`backend/scripts/firebase-key.json`).
+- Pendiente (usuario): fecha de «Inicio contable» (Parámetros contables) y recrear cuentas de banco (el borrado las eliminó); correo de recuperación de 3 de 4 usuarios.
+- Pendiente (decisión): `npm audit` (13 avisos DoS); `npm audit fix` sube @google-cloud/firestore 8→9 y storage 7→8 (Firebase/báscula): NO aplicar sin probar sincronización.
+
 ### Bajada de carro: «📋 Todo desde [Contar desde]» (2026-10-05)
 - La tabla solo mostraba la semana (sáb→vie) y lo anterior iba resumido en «Pendiente de semanas anteriores»; ahora hay un selector «📅 Por semana / 📋 Todo desde dd/mm» que lista TODOS los tickets desde «Contar desde» hasta hoy (con nombre, monto y estado; se puede asignar quién bajó).
 - Backend: GET `/cuadrilla/bajadas?todo=1` (opcional, aditivo; devuelve `modo`). Probado: semana = 10 tickets, todo = 49 (23 con monto).
