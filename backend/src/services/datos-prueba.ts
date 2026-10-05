@@ -139,7 +139,7 @@ export async function vaciarDatosDePrueba(db: Db): Promise<{ wiped: string[]; no
   const preservables = Object.keys(CATALOGOS_PRESERVADOS);
   const existing = await db.query(
     `SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = ANY($1)`,
-    [[...WIPE_TABLES, ...preservables, "insumos", "sack_inventory", "tunnel_status"]]
+    [[...WIPE_TABLES, ...preservables, "insumos", "sack_inventory", "tunnel_status", "bajada_carro_config"]]
   );
   const present = new Set<string>(existing.rows.map((r: { tablename: string }) => r.tablename));
   const tables = WIPE_TABLES.filter((t) => present.has(t));
@@ -197,6 +197,16 @@ export async function vaciarDatosDePrueba(db: Db): Promise<{ wiped: string[]; no
           SET status = 'DISPONIBLE', current_accionista_id = NULL, accionista_name = NULL,
               occupied_at = NULL, updated_at = now()
         WHERE status <> 'DISPONIBLE' OR current_accionista_id IS NOT NULL`
+    );
+  }
+
+  // Bajada de carro: Nómina la arma SOLA con los tickets de la báscula, y estos
+  // vuelven a bajar de Firebase tras el borrado. Si «Contar desde» quedara en una
+  // fecha vieja, Nómina reaparecería con bajadas que nadie cargó. Se reinicia al
+  // día del borrado (hora de Ecuador); el admin puede moverla atrás en Nómina.
+  if (present.has("bajada_carro_config")) {
+    await db.query(
+      `UPDATE bajada_carro_config SET desde = (now() AT TIME ZONE 'America/Guayaquil')::date, updated_at = now()`
     );
   }
 

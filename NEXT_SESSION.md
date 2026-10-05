@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Borrado: Nómina queda en cero (bajada de carro) (2026-10-05)
+- Tras «Borrar datos de prueba» Nómina mostraba bajadas de carro que nadie cargó: `sincronizarBajadas` (cuadrilla.ts) las arma SOLA con los tickets de báscula, que vuelven a bajar de Firebase, y `bajada_carro_config.desde` (26/09) sobrevivía al borrado.
+- `vaciarDatosDePrueba` ahora pone `bajada_carro_config.desde` = día del borrado (hora Ecuador). El sync ya borra las bajadas NO pagadas fuera del rango, así que mover «Contar desde» en Nómina → Bajada de carro las quita o regenera (reversible). Probado en copia de BD (`wipe_copia.mjs`).
+- Las entradas de SECADORA (recepción/botada) y el jornal del secador ANIBAL son de los secados reales cargados después del borrado.
+
 ### Secadoras: «↩ Reabrir túnel» (solo administrador) (2026-10-05)
 - Pedido del usuario: como ADMIN poder corregir lo que otro cargo mal. `POST /process-flow/drying/:dryingId/reabrir {motivo}` (`requireAdmin`): reabre el TUNEL FISICO completo (partidas con mismo motor/tunel/dry_end_at/motor_fuel_id) → IN_PROGRESS, sin dry_end_at/drying_hours, `lot_process_reports` a IN_PROGRESS; borra la BOTADA (cuadrilla_entries VACIADO no pagada + drying_tunnel_cuadrilla VACIADO) y el cobro `secado_service` sin abonos; si el combustible del motor estaba cerrado, deshace ese `motor_fuel_records` completo restando el mismo reparto por QQ (`repartirPorPeso`, orden created_at) a todos sus tuneles y lo borra (se vuelve a pedir al finalizar). Jornal del secador se recalcula solo. Frenos 409: arroz ya en Produccion, botada pagada, jornal del secador PAID, cobro con abonos. Marca en `notes` + auditoria (body con motivo).
 - UI: boton «↩ Reabrir» en Secados guardados (admin, tuneles finalizados no tendal) y «↩ Reabrir túnel (admin)» en el editor del tunel finalizado; pide motivo con prompt.

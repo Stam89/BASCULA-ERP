@@ -23987,6 +23987,8 @@ export function App() {
                     Se conservan usuarios, accionistas, configuración, tarifas de planta y de socios, productos y presentaciones, bodegas,
                     equipos y activos fijos, máquinas y categorías, catálogos de insumos, sacos y repuestos, proveedores, los rubros del
                     Resultado mensual (sus cifras manuales sí se borran) <strong>y la flota/choferes de Transporte</strong>. Los túneles quedan disponibles.
+                    La «Bajada de carro» de Nómina vuelve a contar <strong>desde el día del borrado</strong> (los tickets de la báscula se vuelven a
+                    descargar solos; si necesitas bajadas de días anteriores, cambia «Contar desde» en Nómina → Bajada de carro).
                   </p>
                   <p className="dangerNote">Esta acción no se puede deshacer. No recupera datos ni restaura una copia de seguridad.</p>
                   {companyReadiness?.reset_transactions_allowed === false && (
