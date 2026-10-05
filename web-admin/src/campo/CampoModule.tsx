@@ -14,6 +14,7 @@ async function patchMaquina(id: string, body: unknown): Promise<void> {
 }
 import { money } from "../format";
 import PartesModule from "./PartesModule";
+import EstadoResultadosCampo from "./EstadoResultadosCampo";
 import NominaOperadores, { TarifasOperadorCatalogo } from "./NominaOperadores";
 import { BuscadorHistorial } from "../components/BuscadorHistorial";
 import { BuscadorCombo, type OpcionCombo } from "../components/BuscadorCombo";
@@ -32,6 +33,7 @@ const CAMPO_SECCIONES: Array<{ id: CampoSeccion; label: string; icon: string }> 
   { id: "cxp", label: "Cuentas por Pagar", icon: "📤" },
   { id: "vales", label: "Vales por Rendir", icon: "🧾" },
   { id: "historial", label: "¿Cuándo se hizo?", icon: "🔎" },
+  { id: "resultados", label: "Estado de Resultados", icon: "📈" },
   { id: "reportes", label: "Reportes", icon: "📊" },
   { id: "config", label: "Configuración", icon: "⚙️" }
 ];
@@ -58,7 +60,7 @@ type Servicio = {
 const hoy = () => new Date().toISOString().slice(0, 10);
 // Secciones del menú propio de Campo (contexto aislado). Se amplía agregando
 // entradas aquí y en CAMPO_SECCIONES (ver CampoWorkspace).
-export type CampoSeccion = "caja" | "servicios" | "clientes" | "cxc" | "cxp" | "vales" | "partes" | "mantenimiento" | "nomina" | "historial" | "reportes" | "config";
+export type CampoSeccion = "caja" | "servicios" | "clientes" | "cxc" | "cxp" | "vales" | "partes" | "mantenimiento" | "nomina" | "historial" | "reportes" | "resultados" | "config";
 
 // Parte Diario pendiente (para importar/liquidar desde el form de servicio).
 type PartePendiente = { id: string; fecha: string; activo_id: string; activo_nombre: string; operador: string | null; cliente: string; qq: number };
@@ -226,8 +228,10 @@ type PorCobrar = { por_cliente: PorCobrarCliente[]; detalle: PorCobrarDetalle[];
 type Maquina = { activo_id: string | null; activo_nombre: string; activo_tipo: string | null; ingresos: number; gastos: number; ganancia: number; qq: number; gastos_por_categoria: Array<{ categoria: string; gasto: number }> };
 type PorMaquina = { periodo: { desde: string; hasta: string }; maquinas: Maquina[] };
 
-export default function CampoModule({ section = "caja", nombre, matrizName = "Matriz", onNombreChange }: {
+export default function CampoModule({ section = "caja", nombre, matrizName = "Matriz", onNombreChange, onIrSeccion }: {
   section?: CampoSeccion; nombre?: string; matrizName?: string; onNombreChange?: (n: string) => void;
+  /** Cambia de sección del menú de Transporte (p. ej. de la caja al Estado de Resultados). */
+  onIrSeccion?: (s: CampoSeccion) => void;
 }) {
   const [flash, setFlash] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
   const notify = (text: string, kind: "ok" | "err" = "ok") => { setFlash({ text, kind }); setTimeout(() => setFlash(null), 3500); };
@@ -240,6 +244,7 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
   const [cajaTab, setCajaTab] = useState<"ingreso" | "egreso" | "transferencia" | "cierres">("ingreso");
   const [sesion, setSesion] = useState<SesionResp | null>(null);
   const [modalCaja, setModalCaja] = useState<"" | "abrir" | "cerrar">("");
+  const [menuCaja, setMenuCaja] = useState(false);
   const refreshSesion = useCallback(async () => {
     try { setSesion(await apiGet<SesionResp>("/campo/caja/sesion-activa")); } catch { /* opcional */ }
   }, []);
@@ -287,6 +292,10 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
     setLibroVersion((v) => v + 1);
     notify(msg);
   };
+
+  if (section === "resultados") {
+    return <section className="panelGrid"><div style={{ gridColumn: "1 / -1" }}>{flashEl}<EstadoResultadosCampo nombre={nombre ?? "Transporte y Cosechadora"} onError={(m) => notify(m, "err")} /></div></section>;
+  }
 
   if (section === "reportes") {
     return <section className="panelGrid">{flashEl}<ReportesView onError={(m) => notify(m, "err")} /></section>;
@@ -392,50 +401,95 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
     );
   }
 
-  // section === "caja"
+  // section === "caja" · mismo formato que la Caja Principal (cj-*): encabezado,
+  // tarjetas de saldo, barra de acciones y luego el formulario y el libro.
   const cajaAbierta = !!sesion?.activa;
+  const arqueo = sesion?.activa?.arqueo;
+  const accionesCaja: Array<["ingreso" | "egreso" | "transferencia", string]> = [["ingreso", "➕ Ingreso"], ["egreso", "➖ Egreso"], ["transferencia", "⇄ Transferencia"]];
   return (
     <section className="panelGrid">
-      {/* Barra de estado de la sesión de caja */}
-      <div className="tablePanel" style={{ gridColumn: "1 / -1", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap",
-        background: cajaAbierta ? "var(--c-success-bg)" : "var(--c-danger-bg)" }}>
-        {cajaAbierta ? (
-          <>
-            <strong style={{ color: "#15803d" }}>🟢 Caja Abierta</strong>
-            <span className="muted">por {sesion!.activa!.usuario_nombre ?? "—"} · Saldo Inicial: <strong>{money(sesion!.activa!.saldo_inicial)}</strong> · abierta {new Date(sesion!.activa!.fecha_apertura).toLocaleString("es-EC")}</span>
-            <button type="button" className="primary" style={{ marginLeft: "auto" }} onClick={() => setModalCaja("cerrar")}>🔒 Cerrar / Arquear Caja</button>
-          </>
-        ) : (
-          <>
-            <strong style={{ color: "#b91c1c" }}>🔴 Caja Cerrada</strong>
-            <span className="muted">Debes abrir caja para registrar ingresos/egresos en CAJA.</span>
-            <button type="button" className="primary" style={{ marginLeft: "auto" }} onClick={() => setModalCaja("abrir")}>🔓 Abrir Caja</button>
-          </>
-        )}
-      </div>
+      <div style={{ gridColumn: "1 / -1", minWidth: 0 }}>
+        {/* Encabezado */}
+        <div className="cj-head">
+          <div>
+            <h2 className="cj-title">💰 Caja · {nombre ?? "Transporte y Cosechadora"}</h2>
+            <p className="cj-sub">
+              {cajaAbierta
+                ? <><span className="cj-live" /> Caja abierta por {sesion!.activa!.usuario_nombre ?? "—"} · desde {new Date(sesion!.activa!.fecha_apertura).toLocaleString("es-EC", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</>
+                : <><span className="cj-live cj-live--off" /> Caja cerrada · ábrela para registrar ingresos y egresos en efectivo</>}
+            </p>
+          </div>
+          {!cajaAbierta && <button type="button" className="cj-btn cj-btn--primary" onClick={() => setModalCaja("abrir")}>🔓 Abrir caja</button>}
+        </div>
 
-      <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-        <h2 style={{ marginBottom: 2 }}>💰 Caja <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· ingresos, egresos y transferencias</span></h2>
-        {/* Saldos por cuenta + total */}
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "6px 0 10px" }}>
-          {cuentas.map((c) => (
-            <div key={c.id} className="totalBox" style={{ minWidth: 120, margin: 0 }}>
-              <span>{c.nombre}</span>
-              <strong style={{ color: c.saldo >= 0 ? "#15803d" : "#b91c1c" }}>{money(c.saldo)}</strong>
-              <small>saldo</small>
+        {/* Tarjetas de saldo */}
+        <div className="cj-kpis">
+          <div className="cj-kpi cj-kpi--hero">
+            <div className="cj-kpi-label">Disponible</div>
+            <div className="cj-kpi-value">{money(totalDisponible)}</div>
+            <div className="cj-kpi-hint">Caja + bancos + otros (sin el cruce interno)</div>
+          </div>
+          <div className="cj-kpi">
+            <div className="cj-kpi-label"><span className="cj-ico cj-ico--in">⬆</span>Ingresos</div>
+            <div className="cj-kpi-value cj-pos">+{money(arqueo?.ingresos ?? 0)}</div>
+            <div className="cj-kpi-hint">{cajaAbierta ? "Entradas en efectivo de la sesión" : "Sin sesión abierta"}</div>
+          </div>
+          <div className="cj-kpi">
+            <div className="cj-kpi-label"><span className="cj-ico cj-ico--out">⬇</span>Egresos</div>
+            <div className="cj-kpi-value cj-neg">-{money(arqueo?.egresos ?? 0)}</div>
+            <div className="cj-kpi-hint">{cajaAbierta ? "Salidas en efectivo de la sesión" : "Sin sesión abierta"}</div>
+          </div>
+          <div className="cj-kpi">
+            <div className="cj-kpi-label"><span className="cj-ico cj-ico--base">◎</span>Saldos por cuenta</div>
+            <div className="cj-kpi-value">{money(arqueo?.saldo_inicial ?? 0)}</div>
+            <div className="cj-kpi-hint">Saldo inicial de la caja</div>
+            <div className="cj-kpi-split">
+              {cuentas.map((c) => (
+                <span key={c.id}>{c.nombre === "CAJA" ? "💵" : c.nombre === "BANCO" ? "🏦" : c.nombre === "CRUCE PILADORA" ? "🔁" : "📁"} {c.nombre} <b className={c.saldo < 0 ? "cj-neg" : undefined}>{money(c.saldo)}</b></span>
+              ))}
             </div>
-          ))}
-          <div className="totalBox" style={{ minWidth: 150, margin: 0, background: "#eff6ff", borderColor: "#bfdbfe" }}>
-            <span>DISPONIBLE</span>
-            <strong style={{ color: totalDisponible >= 0 ? "#15803d" : "#b91c1c" }}>{money(totalDisponible)}</strong>
-            <small>sin cruce interno</small>
           </div>
         </div>
-        <nav className="cajaSubNav" style={{ borderBottom: "none" }}>
-          {([["ingreso", "＋ Ingreso"], ["egreso", "－ Egreso"], ["transferencia", "⇄ Transferencia"], ["cierres", "📋 Cierres de Caja"]] as Array<["ingreso" | "egreso" | "transferencia" | "cierres", string]>).map(([v, label]) => (
-            <button key={v} type="button" className={cajaTab === v ? "active" : ""} onClick={() => setCajaTab(v)}>{label}</button>
-          ))}
-        </nav>
+
+        {/* Barra de acciones */}
+        <div className="cj-toolbar">
+          <div className="cj-toolbar-group">
+            {accionesCaja.map(([v, label]) => (
+              <button key={v} type="button" className={`cj-btn ${v === "ingreso" ? "cj-btn--primary" : ""} ${cajaTab === v ? "is-on is-open" : ""}`} onClick={() => setCajaTab(v)}>{label}</button>
+            ))}
+            {cajaTab === "cierres" && <button type="button" className="cj-btn cj-btn--ghost" onClick={() => setCajaTab("ingreso")}>📋 Ver movimientos</button>}
+          </div>
+          <div className="cj-toolbar-group">
+            {onIrSeccion && <button type="button" className="cj-btn" onClick={() => onIrSeccion("resultados")}>📈 Estado de resultados</button>}
+            <div className="cj-dd">
+              <button type="button" className={`cj-btn ${menuCaja ? "is-open" : ""}`} aria-haspopup="menu" aria-expanded={menuCaja} onClick={() => setMenuCaja((m) => !m)}>
+                ⚙️ Opciones <span className="cj-caret">▾</span>
+              </button>
+              {menuCaja && (
+                <div className="cj-menu cj-menu--right" role="menu">
+                  <button type="button" role="menuitem" className={`cj-menu-item ${cajaTab === "cierres" ? "is-current" : ""}`} onClick={() => { setMenuCaja(false); setCajaTab("cierres"); }}>
+                    <span className="cj-menu-ico">📋</span><span><span className="cj-menu-label">Cierres de caja</span><span className="cj-menu-hint">Historial de aperturas y arqueos</span></span>
+                  </button>
+                  {onIrSeccion && (
+                    <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setMenuCaja(false); onIrSeccion("reportes"); }}>
+                      <span className="cj-menu-ico">📊</span><span><span className="cj-menu-label">Reportes</span><span className="cj-menu-hint">Saldos, por cobrar y por máquina</span></span>
+                    </button>
+                  )}
+                  <div className="cj-menu-sep" />
+                  {cajaAbierta ? (
+                    <button type="button" role="menuitem" className="cj-menu-item cj-menu-item--danger" onClick={() => { setMenuCaja(false); setModalCaja("cerrar"); }}>
+                      <span className="cj-menu-ico">🔒</span><span className="cj-menu-label">Cerrar / arquear caja</span>
+                    </button>
+                  ) : (
+                    <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setMenuCaja(false); setModalCaja("abrir"); }}>
+                      <span className="cj-menu-ico">🔓</span><span className="cj-menu-label">Abrir caja</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
         {flashEl}
       </div>
 
@@ -2819,7 +2873,7 @@ export function CampoWorkspace({ operationSelector, userName, roleName, apiOnlin
           </div>
         </header>
         <div className="content">
-          <CampoModule section={seccion} nombre={nombre} matrizName={matrizName} onNombreChange={onNombreChange} />
+          <CampoModule section={seccion} nombre={nombre} matrizName={matrizName} onNombreChange={onNombreChange} onIrSeccion={setSeccion} />
         </div>
       </section>
     </main>

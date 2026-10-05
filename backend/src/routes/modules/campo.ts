@@ -7,6 +7,7 @@ import { ApiError } from "../../http/error-handler.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { crearParteDesdeBascula } from "../../services/campo-flete-bascula.js";
 import { calcularNominaCampo, tipoServicioPorActivo, totalFilaNomina, valeEsDeOperador, type CampoUnidadNomina } from "../../utils/campo.js";
+import { armarResultado, informativo, lineasDelPeriodo, notasDelPeriodo, qqPorActivo, rangoMes } from "../../services/campo-resultados.js";
 
 // MÓDULO INDEPENDIENTE: Caja de Campo (cosechadora + transporte/fletes).
 // V1 = solo captura (CRUD). Sin relación con túneles, piladora, ventas ni
@@ -2183,6 +2184,45 @@ campoRouter.get("/reportes/por-maquina", asyncRoute(async (req, res) => {
     gastos_por_categoria: (catPorActivo.get(f.activo_id ?? "SIN_ASIGNAR") ?? []).sort((a, b) => b.gasto - a.gasto)
   }));
   res.json({ periodo: { desde, hasta }, maquinas });
+}));
+
+// 4) ESTADO DE RESULTADOS del mes (base devengada): ingresos, costos directos por
+//    máquina, gastos generales, resultado, comparación con el mes anterior,
+//    indicadores por QQ y notas de lectura. Ver services/campo-resultados.ts.
+campoRouter.get("/reportes/estado-resultados", asyncRoute(async (req, res) => {
+  const q = z.object({ mes: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/) }).parse(req.query);
+  const { desde, hasta, anterior } = rangoMes(q.mes);
+  const activos = (await pool.query("SELECT id, nombre, tipo FROM campo_activos")).rows;
+  const [lineas, lineasAnt, info, qq] = await Promise.all([
+    lineasDelPeriodo(pool, desde, hasta),
+    lineasDelPeriodo(pool, anterior.desde, anterior.hasta),
+    informativo(pool, desde, hasta),
+    qqPorActivo(pool, desde, hasta)
+  ]);
+  const actual = armarResultado(lineas, activos, qq);
+  const previo = armarResultado(lineasAnt, activos);
+  const gastos = Math.round((actual.costos_directos.total + actual.gastos_generales.total) * 100) / 100;
+  const porQq = (v: number) => (info.qq_trabajados > 0.005 ? Math.round((v / info.qq_trabajados) * 100) / 100 : null);
+  res.json({
+    mes: q.mes,
+    periodo: { desde, hasta },
+    ...actual,
+    total_gastos: gastos,
+    anterior: {
+      mes: anterior.mes,
+      ingresos: previo.ingresos.total,
+      gastos: Math.round((previo.costos_directos.total + previo.gastos_generales.total) * 100) / 100,
+      resultado: previo.resultado
+    },
+    informativo: info,
+    indicadores: {
+      qq_trabajados: info.qq_trabajados,
+      ingreso_por_qq: porQq(actual.ingresos.total),
+      costo_por_qq: porQq(gastos),
+      combustible_por_qq: porQq(actual.combustible)
+    },
+    notas: notasDelPeriodo(actual, { resultado: previo.resultado, ingresos: previo.ingresos.total }, info)
+  });
 }));
 
 // ════════════════════════════════════════════════════════════════════════════
