@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Arranque real (2026-10-05): datos de ensayo borrados; sacos de subproducto a 100 LB
+- El usuario borro los datos de ensayo (respaldo previo `bascula-erp_2026-10-02T23-28-37.dump` en OneDrive). Firebase volvio a bajar 332 tickets de bascula (historial 11/06–02/10) y 6 agricultores: normal; «Contar tickets desde» 01/10/2026 se conservo (solo 8 pendientes). OJO: el borrado tambien elimino las CUENTAS DE BANCO (viven en `cash_registers` tipo BANCO): el usuario debe recrearlas; pendiente ofrecer conservarlas en un proximo borrado.
+- Modelo de negocio aclarado: los SOCIOS no aportan capital a la piladora; cada socio COMPRA su cascara y la Matriz le cobra servicios. Parametros contables: capital y resultados en 0, fecha de inicio 01/10/2026 en CADA accionista.
+- Sacos «Saco Usado (Arrocillo)» y «Saco Negro (Polvillo)» son de 100 LB (usuario): migracion 20261069 les pone `peso_lb = 100` y el Inventario de Sacos ya no manda los SUBPRODUCTO a «Sin peso» si tienen peso. El descuento al vender sigue por nombre (`tipoSacoEspecial`).
+- RODILLOS 20CM (repuesto) quedo en el catalogo con stock 0 y minimo 4: se pregunto si dejarlo o desactivarlo (sin respuesta).
+
 ### «Borrar datos de prueba» exige LLAVE MAESTRA (2026-10-02)
 - Decision del usuario: trabajan con DATOS REALES pero SIGUEN en APP_MODE=test hasta confirmar que no hay fallas; NO pasar a production todavia. En vez de bloquear por modo, el borrado exige una llave maestra.
 - `LLAVE_MAESTRA` (backend/.env, minimo 8; mas corta se ignora) → `env.llaveMaestra`. `POST /settings/reset-transactions` (admin): sin llave configurada → 403 SIEMPRE (prueba o produccion; `ALLOW_PRODUCTION_RESET` ya no tiene efecto); pide `llave_maestra` (comparacion en tiempo constante) + clave del admin + BORRAR; 5 llaves malas por IP en 15 min → 429. `company-readiness.reset_transactions_allowed` = llave configurada; nuevo `llave_maestra_configurada`. Zona de peligro con campo «Llave maestra».

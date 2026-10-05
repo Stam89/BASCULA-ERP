@@ -123,7 +123,9 @@ export function SacosTablero({ sacos, onVerKardex, onConfig }: { sacos: Saco[]; 
 
   const pesos = useMemo(() => {
     const set = new Set<number>();
-    activos.forEach((s) => { const p = num(s.peso_lb); if (p > 0 && s.categoria !== "SUBPRODUCTO") set.add(p); });
+    // Los sacos de subproducto (arrocillo, polvillo) también van en su columna de
+    // peso si lo tienen (son de 100 LB); «Sin peso» queda solo para los que no.
+    activos.forEach((s) => { const p = num(s.peso_lb); if (p > 0) set.add(p); });
     return [...set].sort((a, b) => b - a);
   }, [activos]);
 
@@ -209,14 +211,14 @@ export function SacosTablero({ sacos, onVerKardex, onConfig }: { sacos: Saco[]; 
                   <td colSpan={pesos.length + 3} style={{ padding: "8px 14px 4px", fontSize: 11, fontWeight: 800, color: "#0f766e", textTransform: "uppercase", letterSpacing: ".06em", background: "#fcfdfd" }}>{grupo}</td>
                 </tr>,
                 ...filas.map(([fila, items]) => {
-                  const sinPeso = items.filter((s) => !(num(s.peso_lb) > 0) || s.categoria === "SUBPRODUCTO");
+                  const sinPeso = items.filter((s) => !(num(s.peso_lb) > 0));
                   const total = items.reduce((a, s) => a + num(s.stock), 0);
                   return (
                     <tr key={`${grupo}-${fila}`} style={{ borderTop: "1px solid #f1f5f9" }}>
                       <td style={{ padding: "9px 14px", fontWeight: 700 }}>{fila}</td>
                       {pesos.map((p) => (
                         <td key={p} style={{ textAlign: "center", padding: "7px 6px" }}>
-                          {celda(items.find((s) => num(s.peso_lb) === p && s.categoria !== "SUBPRODUCTO"))}
+                          {celda(items.find((s) => num(s.peso_lb) === p))}
                         </td>
                       ))}
                       <td style={{ textAlign: "center", padding: "7px 6px" }}>{sinPeso.length ? celda(sinPeso[0]) : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
