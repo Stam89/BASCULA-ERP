@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🧭 Asistente de puesta en marcha (2026-10-06)
+- Arriba de la tarjeta «✅ Puesta en marcha» (Configuración → Operación y Planta, solo admin): guía paso a paso con barra de avance, el SIGUIENTE paso resaltado (qué es, por qué, qué falta y botón que lleva a la tarjeta exacta) y la lista de todos los pasos (clic = detalle). Marca solo lo que el servidor detecta; no cambia nada por sí mismo. Se actualiza al volver a la ventana y con «↻ Revisar de nuevo». La lista fija de 7 pasos de siempre queda debajo, sin tocar.
+- Pasos (orden): Datos del negocio · Matriz y socios · Usuarios y claves (incluye correo de cada usuario) · Tarifas de servicios · Contabilidad y saldos iniciales · Báscula móvil · Transporte y cosechadora · Respaldos · Resumen diario (opcional) · Pasar a producción (solo informativo: hoy el modo prueba es a propósito; NO cuenta).
+- Backend: `calcularPuestaEnMarcha()` (settings.ts) devuelve además `extra` = pasos RECOMENDADOS (`correos_usuarios`, `tarifas_servicios`, `saldos_iniciales`, `resumen_diario`) que NO afectan `ok`/`missing` ni «Hoy» ni el checklist de «Estado del sistema». No hay chequeo de «cuentas de banco»: en esta app un banco es una CAJA tipo BANCO/MIXTO que se abre en Caja (no una cuenta fija), no se puede detectar como configuración.
+- Frontend: `web-admin/src/asistente/pasos.ts` (lógica pura: `PASOS`, `evaluarPasos`; probada con 17 casos con el estado real) + `AsistenteArranque.tsx` (+ clases `asist-*`); `irAPasoArranque()` en App.tsx traduce cada destino a su tarjeta con `irAAjuste`. Para añadir un paso: agregarlo en `PASOS` (y, si hace falta, un chequeo en `extra` del servidor).
+
 ### Ventanas emergentes fuera de la vista — arreglo global (2026-10-06)
 - `.content > * { animation: contentIn … both }` dejaba un `transform` PERMANENTE (fill-mode forwards) en cada pantalla ⇒ todo `position: fixed` dentro (modales como «Pagar la semana», «Confirmar finalización», vista previa del resumen, y los de pagos/nómina existentes) se colocaba respecto a la pantalla completa y, en pantallas largas, quedaba fuera de la vista (detectado con la vista previa del resumen: modal en top −495 px). Se quitó `both`: la animación sigue (0.25 s) pero ya no deja transform. Regla: si un modal se ve mal, revisar si algún ancestro tiene `transform/filter` (crea contenedor para `fixed`).
 

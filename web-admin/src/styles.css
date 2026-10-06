@@ -5051,3 +5051,41 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .resDia-campos input[type="time"], .resDia-campos textarea { padding: 8px 10px; border-radius: 8px; border: 1px solid #d1d5db; font: inherit; font-weight: 400; }
 .resDia-modal { max-width: 620px; width: calc(100% - 24px); max-height: 92vh; display: flex; flex-direction: column; }
 .resDia-frame { width: 100%; height: 60vh; border: 1px solid var(--c-border); border-radius: 10px; background: #fff; }
+
+/* ── 🧭 Asistente de puesta en marcha ─────────────────────────────────────── */
+.asist { margin: 10px 0 16px; padding: 14px 16px; border: 1px solid #a7f3d0; border-radius: var(--r-lg); background: linear-gradient(180deg, #f0fdf8, #ffffff); }
+.asist-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.asist-title { margin: 2px 0 0; font-size: 18px; font-weight: 800; color: #065f46; }
+.asist-sub { margin: 2px 0 0; font-size: 13px; color: var(--c-text-muted); }
+.asist-barra { height: 8px; border-radius: 999px; background: #d1fae5; overflow: hidden; margin: 10px 0 12px; }
+.asist-barra span { display: block; height: 100%; background: #047857; border-radius: 999px; transition: width .4s ease; }
+@media (prefers-reduced-motion: reduce) { .asist-barra span { transition: none; } }
+.asist-vacio { margin: 8px 0; padding: 12px; border-radius: 10px; background: var(--c-surface-2); color: var(--c-text-muted); font-size: 14px; }
+.asist-siguiente { border: 2px solid #047857; border-radius: 14px; padding: 14px 16px; background: #fff; margin-bottom: 12px; }
+.asist-siguiente--opcional { border-color: #94a3b8; }
+.asist-sig-top { display: flex; gap: 12px; align-items: center; }
+.asist-sig-ico { font-size: 30px; line-height: 1; }
+.asist-sig-etq { font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #047857; }
+.asist-siguiente h4 { margin: 2px 0 0; font-size: 17px; }
+.asist-porque { margin: 8px 0; font-size: 13.5px; line-height: 1.5; color: var(--c-text-2); }
+.asist-items { list-style: none; margin: 6px 0 8px; padding: 0; display: grid; gap: 6px; }
+.asist-items li { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
+.asist-items li > span:first-child { flex: none; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 800; margin-top: 1px; }
+.asist-items li.ok > span:first-child { background: #d1fae5; color: #065f46; }
+.asist-items li.falta > span:first-child { background: #fef3c7; color: #92400e; }
+.asist-items li > span:last-child { display: grid; gap: 1px; }
+.asist-items small { color: var(--c-text-muted); font-size: 12px; }
+.asist-acciones { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.asist-lista { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.asist-paso { border: 1px solid var(--c-border); border-radius: 12px; background: #fff; overflow: hidden; }
+.asist-paso.es-siguiente { border-color: #047857; }
+.asist-paso-btn { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border: none; background: transparent; padding: 10px 12px; cursor: pointer; min-height: 46px; font: inherit; color: inherit; }
+.asist-num { flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 800; background: #fef3c7; color: #92400e; }
+.asist-paso--listo .asist-num { background: #d1fae5; color: #065f46; }
+.asist-paso-txt { flex: 1; min-width: 0; font-size: 14px; }
+.asist-chip { flex: none; font-size: 11.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; background: #fef3c7; color: #92400e; white-space: nowrap; }
+.asist-chip--listo { background: #d1fae5; color: #065f46; }
+.asist-chip--parcial { background: #fef9c3; color: #854d0e; }
+.asist-chip--opcional, .asist-chip--info { background: #e2e8f0; color: #475569; }
+.asist-detalle { padding: 0 14px 12px 48px; }
+@media (max-width: 640px) { .asist { padding: 12px; } .asist-detalle { padding-left: 14px; } .asist-acciones button { width: 100%; } }

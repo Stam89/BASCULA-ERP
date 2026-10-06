@@ -21,6 +21,8 @@ import { ParametrosContables } from "./components/ParametrosContables";
 import { CorreoRecuperacionModal } from "./components/CorreoRecuperacion";
 import { ConfigCorreoClaves } from "./components/ConfigCorreoClaves";
 import { ResumenDiarioConfig } from "./components/ResumenDiarioConfig";
+import { AsistenteArranque } from "./asistente/AsistenteArranque";
+import type { Destino as DestinoAsistente } from "./asistente/pasos";
 import { CatalogoProductos } from "./components/CatalogoProductos";
 import { AccesoRemoto } from "./components/AccesoRemoto";
 import { CambiarClaveModal } from "./components/CambiarClave";
@@ -4479,6 +4481,21 @@ export function App() {
   }
   // Cada tarea de «Hoy» lleva a la pantalla donde se resuelve.
   function irAHoy(t: TareaHoy) { irADestino(t.tab, t.sub); }
+  // Asistente de puesta en marcha: cada paso lleva a la tarjeta de Configuración donde se hace.
+  function irAPasoArranque(d: DestinoAsistente) {
+    switch (d) {
+      case "negocio": irAAjuste({ sub: "operacion", tarjeta: "🏢 Datos del negocio", claves: "" }); break;
+      case "socios": setConfigBuscar(""); setConfigSubTab("socios"); break;
+      case "usuarios": setConfigBuscar(""); setConfigSubTab("usuarios"); break;
+      case "tarifas": setConfigBuscar(""); setConfigSubTab("tarifas"); break;
+      case "parametros": irAAjuste({ sub: "operacion", tarjeta: "📊 Parámetros contables", claves: "" }); break;
+      case "saldos": irAAjuste({ sub: "operacion", tarjeta: "📥 Saldos iniciales", claves: "" }); break;
+      case "estado": setConfigBuscar(""); setConfigSubTab("estado"); break;
+      case "campo": abrirCampo("config"); break;
+      case "respaldos": irAAjuste({ sub: "operacion", tarjeta: "💾 Respaldos de la base de datos", claves: "" }); break;
+      case "resumen": irAAjuste({ sub: "usuarios", tarjeta: "📬 Resumen diario por correo", claves: "" }); break;
+    }
+  }
   // Resultado del buscador: abre su pantalla y, si esa pantalla tiene caja de búsqueda propia
   // (tickets de báscula, agricultores, pagos de nómina), la llena para dejar a la vista el
   // registro elegido. Solo llena filtros: no cambia ningún dato.
@@ -24088,6 +24105,7 @@ export function App() {
               <section className="panelGrid">
                 <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
                   <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>✅ Puesta en marcha</summary>
+                  {isAdmin && <AsistenteArranque onIr={irAPasoArranque} />}
                   <div className="launchGuide">
                     <div className="launchGuideIntro">
                       <div>

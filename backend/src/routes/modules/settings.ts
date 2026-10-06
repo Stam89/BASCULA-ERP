@@ -311,9 +311,45 @@ export async function calcularPuestaEnMarcha() {
     }
   ];
 
+  // Pasos RECOMENDADOS: se detectan aparte y NO cuentan en «ok» ni en «missing» (el checklist obligatorio de
+  // arriba no cambia). Los usa el asistente de puesta en marcha para guiar el resto de la configuración.
+  const [saldosIniciales, tarifasServicios, resumenActivo] = await Promise.all([
+    safeScalar<number>("saldos_iniciales", "SELECT COUNT(*)::int AS value FROM saldos_iniciales WHERE anulado_at IS NULL", 0),
+    safeScalar<number>("tarifario_servicio", "SELECT COUNT(*)::int AS value FROM tarifario_servicio WHERE is_active = true", 0),
+    safeScalar<boolean>("resumen_diario_config", "SELECT (activo AND cardinality(destinatarios) > 0) AS value FROM resumen_diario_config WHERE id = 1", false)
+  ]);
+  const sinCorreo = Math.max(0, Number(conCorreo.total) - Number(conCorreo.con_correo));
+  const extra = [
+    {
+      key: "correos_usuarios",
+      label: "Correo de recuperación de cada usuario",
+      ok: Number(conCorreo.total) > 0 && sinCorreo === 0,
+      detail: sinCorreo === 0 ? `Los ${conCorreo.total} usuario(s) activos tienen correo` : `Faltan ${sinCorreo} de ${conCorreo.total} usuario(s) activos: sin correo no pueden recuperar su clave solos`
+    },
+    {
+      key: "tarifas_servicios",
+      label: "Tarifas de servicios a clientes y socios",
+      ok: Number(tarifasServicios) > 0,
+      detail: Number(tarifasServicios) > 0 ? `${tarifasServicios} tarifa(s) activa(s)` : "Aún no hay tarifas de servicios (pilado, secado…): sin ellas no se puede cobrar el servicio"
+    },
+    {
+      key: "saldos_iniciales",
+      label: "Saldos iniciales (arranque con datos reales)",
+      ok: Number(saldosIniciales) > 0,
+      detail: Number(saldosIniciales) > 0 ? `${saldosIniciales} saldo(s) inicial(es) cargado(s)` : "Aún no se cargaron: cuentas por cobrar/pagar, inventario y capital con los que arrancas"
+    },
+    {
+      key: "resumen_diario",
+      label: "Resumen diario por correo",
+      ok: Boolean(resumenActivo),
+      detail: resumenActivo ? "Activado" : "Apagado (opcional): un correo al cierre del día con lo que pasó y lo pendiente"
+    }
+  ];
+
   const missing = checks.filter((c) => !c.ok);
   return {
     ok: missing.length === 0,
+    extra,
     checks,
     missing: missing.map((c) => c.label),
     app_mode: env.appMode,
