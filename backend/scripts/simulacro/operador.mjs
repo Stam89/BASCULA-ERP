@@ -30,6 +30,14 @@ try {
   await no("borrar datos de prueba", "POST", "/settings/reset-transactions", { confirmar: "x" });
   await no("crear usuarios", "POST", "/auth/users", { username: "x", password: "x" });
   await no("ver los respaldos", "GET", "/settings/backups");
+  await no("abrir la Caja de Campo (Transporte y Cosechadora)", "POST", "/campo/caja/abrir", { saldo_inicial: 10 });
+  await no("crear un cliente de Campo", "POST", "/campo/clientes", { nombre: "X" });
+  await no("tocar el Resultado mensual (Costos Operativos)", "POST", "/resultado-mensual/manual", { anio: 2026, mes: 10, concepto: "x", monto: 1 });
+  check((await pedir("GET", "/campo/config")).ok, "pero sí puede LEER la configuración de Campo (la pantalla la pide al entrar)");
+  // Con el permiso «Transporte / Cosechadora» (se le da en la COPIA) ya puede
+  await S.q("UPDATE user_accionistas SET allowed_modules = array_cat(allowed_modules, ARRAY['Transporte / Cosechadora','EDIT:Transporte / Cosechadora']) WHERE user_id=$1 AND accionista_id=$2", [u.id, S.matriz]);
+  const conPermiso = await pedir("POST", "/campo/caja/abrir", { saldo_inicial: 10 });
+  check(conPermiso.status !== 403, "con el permiso «Transporte / Cosechadora» ya NO le da 403", conPermiso.status);
   const otro = apiComo(u.id, u.username, u.name, "5e805a94-605e-4271-b3a7-90a564e28521");
   const rr = await otro("GET", "/dashboard/hoy");
   check(rr.ok, "sí entra a STALYN (está asignado)", rr.status);

@@ -1586,7 +1586,9 @@ function tabLabel(tab: string): string { return TAB_LABELS[tab] ?? tab; }
 // Modulos asignables a un operador = TODAS las pestanas del Sidebar excepto
 // Configuracion (solo-admin). Fuente unica: navGroups. Si manana se agrega una
 // seccion nueva al Sidebar, aparece SOLA como permiso, sin tocar esta lista.
-const APP_MODULES: string[] = tabs.filter((t) => t !== "Configuracion");
+// «Transporte / Cosechadora» (Caja de Campo) no es una pestaña del menú (se entra desde el selector de
+// operación) pero sí un permiso asignable.
+const APP_MODULES: string[] = [...tabs.filter((t) => t !== "Configuracion"), "Transporte / Cosechadora"];
 
 // Matriz de permisos (modal "Accionistas y permisos"): filas agrupadas por sección
 // del menú + módulos especiales + permisos de acción críticos. Las claves se guardan
@@ -2075,7 +2077,7 @@ export function App() {
     for (const a of accionistas) {
       // Cada unidad muestra ÚNICAMENTE su nombre (sin concatenar matriz ni rol).
       out.push({ value: a.id, label: a.name, icono: a.tipo === "MATRIZ" ? "🏭" : "🤝" });
-      if (a.tipo === "MATRIZ") out.push({ value: a.id + OPERACION_CAMPO, label: campoNombre, icono: "🚜" });
+      if (a.tipo === "MATRIZ" && (isAdmin || (a.allowed_modules ?? []).includes("Transporte / Cosechadora"))) out.push({ value: a.id + OPERACION_CAMPO, label: campoNombre, icono: "🚜" });
     }
     return out;
   }
@@ -4633,7 +4635,8 @@ export function App() {
     // accionista (arriba), no desde el sidebar. Se admite en el guard de
     // activeTab solo cuando la matriz está activa. No va en navGroups, así que NO
     // aparece como pastilla en el menú lateral.
-    if (esMatrizActiva) vis.push("Caja de Campo");
+    // Solo con el permiso «Transporte / Cosechadora» (el administrador siempre).
+    if (esMatrizActiva && (isAdmin || allowed.has("Transporte / Cosechadora"))) vis.push("Caja de Campo");
     return vis;
   }, [authUser, isAdmin, esMatrizActiva, accionistas, activeAccionistaId]);
 

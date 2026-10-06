@@ -25,7 +25,11 @@ export const APP_MODULES = [
   "Cuadrilla",
   "Servicio Pilado",
   "Estados Financieros",
-  "Reportes"
+  "Reportes",
+  // Caja de Campo (Transporte y Cosechadora): fila «Transporte / Cosechadora» de la matriz de permisos.
+  "Transporte / Cosechadora",
+  // Pestaña «Costos Operativos» (incluye el Resultado mensual).
+  "Costos Operativos"
 ] as const;
 
 export type AppModule = (typeof APP_MODULES)[number];
@@ -81,7 +85,12 @@ const WRITE_MODULES_BY_PREFIX: Record<string, AppModule[]> = {
   // Los estados financieros se LEEN (y leer no exige módulo); lo único que se
   // escribe aquí son los parámetros contables y el costo de los activos, que
   // además piden rol de administrador en la propia ruta.
-  "finance": ["Caja", "Estados Financieros"]
+  "finance": ["Caja", "Estados Financieros"],
+  // Transporte y Cosechadora (Caja de Campo, partes, nómina de operadores): su propio permiso.
+  // Las lecturas siguen compartidas (la pantalla las pide al entrar); escribir exige EDIT:Transporte / Cosechadora.
+  "campo": ["Transporte / Cosechadora"],
+  // Cifras manuales y rubros del Resultado mensual (pestaña Costos Operativos).
+  "resultado-mensual": ["Costos Operativos"]
 };
 
 // Escrituras que pertenecen a una SUB-PESTAÑA concreta del módulo (mismas claves
