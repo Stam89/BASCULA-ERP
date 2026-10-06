@@ -24,6 +24,7 @@ import { CatalogoProductos } from "./components/CatalogoProductos";
 import { AccesoRemoto } from "./components/AccesoRemoto";
 import { CambiarClaveModal } from "./components/CambiarClave";
 import { HoyPanel, type TareaHoy } from "./components/HoyPanel";
+import { BuscadorGlobal } from "./components/BuscadorGlobal";
 import { PagarSemana, imprimirReciboSemana, type SemanaVista, type SemanaPagada } from "./components/PagarSemana";
 import { revisarFinalizacion } from "./secadoras/revisarFinalizacion";
 import { ConfirmarFinalizacion } from "./secadoras/ConfirmarFinalizacion";
@@ -2145,6 +2146,8 @@ export function App() {
   const [panelData, setPanelData] = useState<PanelData | null>(null);
   const [panelMonth, setPanelMonth] = useState(new Date().toISOString().slice(0, 7));
   const [dashView, setDashView] = useState<"panel" | "resumen">("panel");
+  // 🔎 Buscador global (Ctrl+K).
+  const [buscadorAbierto, setBuscadorAbierto] = useState(false);
   // 🗓️ Pagar la semana: vista previa del cierre de Nómina (la calcula el servidor).
   const [semanaHasta, setSemanaHasta] = useState("");
   const [semanaVista, setSemanaVista] = useState<SemanaVista | null>(null);
@@ -4459,17 +4462,30 @@ export function App() {
     return () => { window.clearInterval(cada); document.removeEventListener("visibilitychange", alVolver); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUser, activeTab, activeAccionistaId]);
-  // Cada tarea lleva a la pantalla donde se resuelve.
-  function irAHoy(t: TareaHoy) {
-    if (t.tab === "Nomina") {
-      setNominaView(t.sub === "bajada" ? "bajada" : "pagos");
-      if (t.sub === "bajada") loadBajadas().catch(() => undefined);
+  // Lleva a una pantalla (y a su sección): lo usan «Hoy» y el buscador global.
+  function irADestino(tab: string, sub?: string) {
+    if (tab === "Nomina") {
+      const vista = sub === "bajada" ? "bajada" : sub === "historial" ? "historial" : "pagos";
+      setNominaView(vista);
+      if (vista === "bajada") loadBajadas().catch(() => undefined);
+      if (vista === "historial") loadNominaHistory().catch(() => undefined);
       irATab("Nomina");
       return;
     }
-    if (t.tab === "Configuracion" && t.sub === "puesta") { irAConfig("✅ Puesta en marcha"); return; }
-    irATab(t.tab as typeof activeTab);
+    if (tab === "Configuracion" && sub === "puesta") { irAConfig("✅ Puesta en marcha"); return; }
+    irATab(tab as typeof activeTab);
   }
+  // Cada tarea de «Hoy» lleva a la pantalla donde se resuelve.
+  function irAHoy(t: TareaHoy) { irADestino(t.tab, t.sub); }
+  // Ctrl+K (o ⌘K) abre/cierra el buscador desde cualquier pantalla.
+  useEffect(() => {
+    if (!authUser) return;
+    const alTeclear = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setBuscadorAbierto((a) => !a); }
+    };
+    window.addEventListener("keydown", alTeclear);
+    return () => window.removeEventListener("keydown", alTeclear);
+  }, [authUser]);
   function irARepuestos() { setInvVista("repuestos"); setActiveTab("Inventario"); }
   // Desde las alertas del Dashboard: Inventario → Existencias, directo a la sección de sacos.
   function irASacos() {
@@ -12470,6 +12486,13 @@ export function App() {
       </aside>
 
       <section className="workspace">
+        <BuscadorGlobal
+          abierto={buscadorAbierto && !!authUser}
+          onCerrar={() => setBuscadorAbierto(false)}
+          tabsDisponibles={visibleTabs}
+          etiquetaTab={tabLabel}
+          onIr={irADestino}
+        />
         <header className="topbar">
           <button type="button" className="mobileMenuBtn" onClick={() => setMenuMovilAbierto(true)} aria-label="Abrir menú">☰</button>
           <div className="topbarLeft">
@@ -12493,6 +12516,9 @@ export function App() {
               disabled={loading}
             >
               {loading ? "⟳" : "↻"} Actualizar
+            </button>
+            <button type="button" className="btnSecondary busq-btn" onClick={() => setBuscadorAbierto(true)} title="Buscar tickets, placas, nombres, lotes… (Ctrl+K)" aria-label="Buscar en el sistema">
+              🔎 <span className="busq-btn-txt">Buscar</span> <kbd className="busq-btn-kbd">Ctrl K</kbd>
             </button>
             {/* 🔔 Avisos de cobros/pagos entre socios, Matriz y Transporte. */}
             <CampanitaNotificaciones accionistaKey={authUser ? activeAccionistaId : null} />

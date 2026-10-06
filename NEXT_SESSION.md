@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🔎 Buscador global (Ctrl+K) (2026-10-05)
+- Botón «🔎 Buscar» en la barra superior y atajo Ctrl+K / ⌘K desde cualquier pantalla. Busca (sin distinguir mayúsculas ni tildes) tickets de báscula, ingresos, agricultores, clientes, proveedores, lotes, pedidos y trabajadores (Nómina, solo Matriz); placas y números de ticket también sin guiones/espacios («ghk553» = «GHK-553»). Además permite «Ir a» una pantalla por su nombre (Pagar la semana, Bajada de carro, Historial de pagos, Puesta en marcha, cada pestaña). Flechas ↑↓, Enter y Esc.
+- SOLO LECTURA. Backend: GET `/busqueda?q=` (`routes/modules/busqueda.ts` + lógica pura `services/busqueda.ts`, 11 pruebas). Máx. 5 por grupo; cada grupo falla por separado; parámetros siempre enlazados (sin SQL inyectable; `%` y `_` se buscan literales). Lo propio de cada accionista (tickets, ingresos, agricultores, lotes, pedidos) se limita al accionista activo; clientes/proveedores son compartidos.
+- Frontend: `components/BuscadorGlobal.tsx` (+ clases `busq-*`); en App.tsx `irADestino(tab, sub)` (lo comparten «Hoy» y el buscador) y los resultados de pestañas sin permiso se ocultan. Elegir un resultado abre su pestaña (no filtra todavía la lista).
+- Mejora futura: abrir directo el registro encontrado (hoy solo lleva a su pestaña).
+
 ### Bajada de carro: nombres limpios y vigilados (2026-10-05)
 - Hallazgo con datos reales (347 tickets): la PLACA no predice quién baja el carro (el mismo camión lo bajan hasta 14 personas) → NO se hizo «recordar por placa». Sí había nombres sucios de la báscula (~1 de cada 8): JOSÉ/JOSE, VARÓN/VARON (contaban como 2 personas), RPBERTO, VARO, «JOSE/ROBERTO», «SEMILLA JOSE»…
 - `services/bajada-nombres.ts` (lógica pura + 10 pruebas con nombres reales): `canonico()` (mayúsculas, SIN tildes, espacios), `evaluarNombre()` → «varias personas» o «poco usual» + sugerencias (nombres habituales parecidos, tolerancia 1–2 letras), `armarRoster()` (conocido = ≥3 tickets o con un pago previo; los textos con varias personas no cuentan como personas).
