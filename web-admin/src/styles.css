@@ -4916,3 +4916,42 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .pagoHasta-row { display: flex; gap: 6px; align-items: center; }
 .pagoHasta-row input { flex: 1; min-width: 0; padding: 5px 8px; border-radius: 6px; border: 1px solid #d1d5db; }
 .pagoHasta-hint { font-size: 11.5px; }
+
+/* ── Dashboard · 📌 Hoy (qué hacer ahora) ─────────────────────────────────── */
+.hoy { background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--r-lg); box-shadow: var(--shadow-sm); padding: 16px 18px; margin-bottom: 16px; }
+.hoy-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.hoy-title { margin: 0; font-size: 18px; font-weight: 800; color: var(--c-text); }
+.hoy-sub { margin: 2px 0 0; font-size: 13px; color: var(--c-text-muted); }
+.hoy-fecha { text-transform: capitalize; }
+.hoy-refresh { border: 1px solid var(--c-border); background: var(--c-surface-2); color: var(--c-text-2); width: 34px; height: 34px; border-radius: 10px; cursor: pointer; font-size: 17px; line-height: 1; display: grid; place-items: center; }
+.hoy-refresh:hover:not(:disabled) { background: var(--c-surface-3); }
+.hoy-refresh:disabled { cursor: default; opacity: .7; }
+.hoy-spin { display: inline-block; animation: hoySpin .9s linear infinite; }
+@keyframes hoySpin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .hoy-spin { animation: none; } }
+.hoy-lista { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.hoy-item { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--c-border); border-left-width: 5px; background: var(--c-surface-2); }
+.hoy-item--urgente { border-left-color: #dc2626; background: #fef2f2; }
+.hoy-item--atencion { border-left-color: #d97706; background: #fffbeb; }
+.hoy-item--info { border-left-color: var(--c-brand-light); }
+.hoy-ico { font-size: 22px; line-height: 1; }
+.hoy-texto { min-width: 0; }
+.hoy-titulo { font-weight: 700; color: var(--c-text); font-size: 14.5px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hoy-detalle { margin-top: 2px; font-size: 12.5px; color: var(--c-text-muted); line-height: 1.35; }
+.hoy-chip { font-size: 10.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; padding: 1px 7px; border-radius: 999px; }
+.hoy-chip--urgente { background: #fee2e2; color: #991b1b; }
+.hoy-chip--atencion { background: #fef3c7; color: #92400e; }
+.hoy-chip--info { background: var(--c-brand-glow); color: var(--c-brand-dark); }
+.hoy-btn { border: 1px solid var(--c-brand); background: var(--c-brand); color: #fff; font-weight: 700; font-size: 13px; padding: 8px 14px; border-radius: 10px; cursor: pointer; white-space: nowrap; min-height: 40px; }
+.hoy-btn:hover { background: var(--c-brand-dark); }
+.hoy-item--info .hoy-btn { background: transparent; color: var(--c-brand-dark); }
+.hoy-item--info .hoy-btn:hover { background: var(--c-brand-glow); }
+.hoy-vacio { margin: 4px 0 0; padding: 12px; border-radius: 10px; background: var(--c-surface-2); color: var(--c-text-muted); font-size: 14px; }
+.hoy-vacio--ok { background: var(--c-success-bg); color: var(--c-success-text); font-weight: 600; }
+.hoy-vacio--error { background: #fef2f2; color: #991b1b; }
+.hoy-link { background: none; border: none; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; font-weight: 700; }
+@media (max-width: 640px) {
+  .hoy { padding: 14px; }
+  .hoy-item { grid-template-columns: auto 1fr; }
+  .hoy-btn { grid-column: 1 / -1; width: 100%; }
+}

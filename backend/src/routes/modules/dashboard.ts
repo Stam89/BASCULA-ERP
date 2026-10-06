@@ -5,6 +5,9 @@ import { asyncRoute } from "../../http/async-route.js";
 import type { Request, Response, NextFunction } from "express";
 import { requireAuth, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { ApiError } from "../../http/error-handler.js";
+import { getMatrizId } from "../../services/matriz.js";
+import { tareasDeHoy } from "../../services/hoy.js";
+import { calcularPuestaEnMarcha } from "./settings.js";
 
 export const dashboardRouter = Router();
 
@@ -29,6 +32,23 @@ async function requirePanelAccess(req: Request, _res: Response, next: NextFuncti
   if (row?.role_name === "ADMINISTRADOR" || mods.includes("Dashboard")) { next(); return; }
   next(new ApiError(403, "No tienes acceso al Panel Integral."));
 }
+
+// ── «Hoy»: lo que hay que hacer ahora, para el accionista activo ───────────
+// Solo lectura. Cada tarea trae la pestaña donde se resuelve; el frontend oculta
+// las de pestañas a las que el usuario no tiene permiso.
+dashboardRouter.get("/hoy", asyncRoute(async (req, res) => {
+  const r = req as AuthenticatedRequest;
+  const accionistaId = r.accionistaId;
+  if (!accionistaId) throw new ApiError(400, "Selecciona un accionista antes de continuar.");
+  const esAdmin = r.user?.role_name === "ADMINISTRADOR";
+  const esMatriz = (await getMatrizId()) === accionistaId;
+  const tareas = await tareasDeHoy({
+    accionistaId, esMatriz, esAdmin,
+    // «app_mode» es solo informativo (modo prueba/producción): no es un paso pendiente.
+    faltantesPuesta: async () => (await calcularPuestaEnMarcha()).checks.filter((c) => !c.ok && c.key !== "app_mode").map((c) => c.label)
+  });
+  res.json({ generado: new Date().toISOString(), tareas });
+}));
 
 // ── Panel de Control Integral (todos los accionistas) ───────────────────────
 // Vista consolidada para el dueño/admin: compras, ventas, inventario y bancos

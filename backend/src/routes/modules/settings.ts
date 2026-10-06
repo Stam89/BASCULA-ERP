@@ -134,7 +134,9 @@ settingsRouter.get("/", asyncRoute(async (req, res) => {
   res.json(result);
 }));
 
-settingsRouter.get("/company-readiness", requireAdmin, asyncRoute(async (_req, res) => {
+// Revisión de «Puesta en marcha». Es una función aparte para que la use tanto la
+// pantalla de Configuración como la pantalla «Hoy» del Dashboard.
+export async function calcularPuestaEnMarcha() {
   await ensureTable();
   async function tableExists(tableName: string): Promise<boolean> {
     const result = await pool.query("SELECT to_regclass($1) AS name", [`public.${tableName}`]);
@@ -310,7 +312,7 @@ settingsRouter.get("/company-readiness", requireAdmin, asyncRoute(async (_req, r
   ];
 
   const missing = checks.filter((c) => !c.ok);
-  res.json({
+  return {
     ok: missing.length === 0,
     checks,
     missing: missing.map((c) => c.label),
@@ -333,7 +335,11 @@ settingsRouter.get("/company-readiness", requireAdmin, asyncRoute(async (_req, r
       operadores: campoOperadores,
       cliente_matriz: campoClienteMatriz
     }
-  });
+  };
+}
+
+settingsRouter.get("/company-readiness", requireAdmin, asyncRoute(async (_req, res) => {
+  res.json(await calcularPuestaEnMarcha());
 }));
 
 settingsRouter.put("/", requireAdmin, asyncRoute(async (req, res) => {

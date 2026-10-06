@@ -49,6 +49,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Dashboard: 📌 «Hoy» — lo que hay que hacer ahora (2026-10-05)
+- Tarjeta arriba del Dashboard (para todos): lista corta de tareas con botón que lleva a la pantalla donde se resuelven. Se actualiza al entrar, cada minuto y al volver a la ventana. Solo muestra tareas de pestañas a las que el usuario tiene acceso.
+- Backend: GET `/dashboard/hoy` (solo lectura) → `services/hoy.ts` (`construirTareas` pura + `reunirDatos` con consultas aisladas: si una falla, el resto sigue). Tareas: combustible del motor pendiente (urgente), túneles secando/largos (>18 h), bajadas sin nombre, pagos pendientes de Nómina (viernes/sábado = atención), caja cerrada o abierta desde ayer, CxC/CxP vencidas, pedidos por entregar, pasos de «Puesta en marcha» (solo admin). Nómina solo para la Matriz.
+- `calcularPuestaEnMarcha()` (settings.ts) se extrajo de la ruta `/settings/company-readiness` para reutilizarla (la ruta responde igual).
+- Frontend: `components/HoyPanel.tsx` + clases `hoy-*` en styles.css; `loadHoy`/`irAHoy` en App.tsx. Pruebas: `services/hoy.test.ts` (10) + prueba con filas en ROLLBACK.
+- Para sumar una tarea nueva: agregar el dato en `DatosHoy`/`reunirDatos` y la regla en `construirTareas`.
+
 ### Vigilante del ERP: no se cae más (2026-10-05)
 - Sin permisos de administrador no hay servicio de Windows; en su lugar, tarea «BASCULA-ERP Vigilante» (al iniciar sesión + cada 1 min) que ejecuta `backend/scripts/vigilante-erp.vbs` → `vigilante-erp.ps1`: si `/health` no responde (2 comprobaciones), cierra el proceso colgado y lanza `node dist/server.js` OCULTO con logs en `backend/logs`. Bitácora: `backend/logs/vigilante.log`. Reinstalar: `INSTALAR-VIGILANTE-ERP.bat`.
 - `AUTOINICIO-ERP.bat` ahora arranca por el vigilante (ya no abre ventana minimizada).

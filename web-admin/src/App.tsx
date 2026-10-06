@@ -23,6 +23,7 @@ import { ConfigCorreoClaves } from "./components/ConfigCorreoClaves";
 import { CatalogoProductos } from "./components/CatalogoProductos";
 import { AccesoRemoto } from "./components/AccesoRemoto";
 import { CambiarClaveModal } from "./components/CambiarClave";
+import { HoyPanel, type TareaHoy } from "./components/HoyPanel";
 import * as XLSX from "xlsx";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
@@ -2138,6 +2139,10 @@ export function App() {
   const [panelData, setPanelData] = useState<PanelData | null>(null);
   const [panelMonth, setPanelMonth] = useState(new Date().toISOString().slice(0, 7));
   const [dashView, setDashView] = useState<"panel" | "resumen">("panel");
+  // 📌 «Hoy»: tareas que calcula el servidor (null = aún sin cargar).
+  const [hoyTareas, setHoyTareas] = useState<TareaHoy[] | null>(null);
+  const [hoyBusy, setHoyBusy] = useState(false);
+  const [hoyError, setHoyError] = useState(false);
   const [farmers, setFarmers] = useState<Farmer[]>([]);
   // Directorio de agricultores: búsqueda por nombre/RUC y modal de edición.
   const [farmerSearch, setFarmerSearch] = useState("");
@@ -4388,6 +4393,37 @@ export function App() {
     if (!authUser || activeTab !== "Dashboard" || !esMatrizActiva) return;
     apiGet<Repuesto[]>("/repuestos").then(setRepuestosAlerta).catch(() => undefined);
   }, [authUser, activeTab, esMatrizActiva]);
+  // 📌 «Hoy»: se carga al entrar al Dashboard y se refresca cada minuto (y al volver a la ventana).
+  async function loadHoy() {
+    setHoyBusy(true);
+    try {
+      const r = await apiGet<{ tareas: TareaHoy[] }>("/dashboard/hoy");
+      setHoyTareas(r.tareas);
+      setHoyError(false);
+    } catch { setHoyError(true); }
+    finally { setHoyBusy(false); }
+  }
+  useEffect(() => {
+    if (!authUser || activeTab !== "Dashboard") return;
+    setHoyTareas(null);
+    loadHoy().catch(() => undefined);
+    const cada = window.setInterval(() => { if (!document.hidden) loadHoy().catch(() => undefined); }, 60000);
+    const alVolver = () => { if (!document.hidden) loadHoy().catch(() => undefined); };
+    document.addEventListener("visibilitychange", alVolver);
+    return () => { window.clearInterval(cada); document.removeEventListener("visibilitychange", alVolver); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUser, activeTab, activeAccionistaId]);
+  // Cada tarea lleva a la pantalla donde se resuelve.
+  function irAHoy(t: TareaHoy) {
+    if (t.tab === "Nomina") {
+      setNominaView(t.sub === "bajada" ? "bajada" : "pagos");
+      if (t.sub === "bajada") loadBajadas().catch(() => undefined);
+      irATab("Nomina");
+      return;
+    }
+    if (t.tab === "Configuracion" && t.sub === "puesta") { irAConfig("✅ Puesta en marcha"); return; }
+    irATab(t.tab as typeof activeTab);
+  }
   function irARepuestos() { setInvVista("repuestos"); setActiveTab("Inventario"); }
   // Desde las alertas del Dashboard: Inventario → Existencias, directo a la sección de sacos.
   function irASacos() {
@@ -12442,6 +12478,14 @@ export function App() {
 
         {activeTab === "Dashboard" && (
           <>
+            {/* 📌 Hoy: lo que hay que hacer ahora (solo lo de pestañas a las que tiene acceso). */}
+            <HoyPanel
+              tareas={hoyTareas ? hoyTareas.filter((t) => visibleTabs.includes(t.tab)) : null}
+              cargando={hoyBusy}
+              error={hoyError}
+              onIr={irAHoy}
+              onRefrescar={() => { loadHoy().catch(() => undefined); }}
+            />
             {/* Alerta de sacos en/bajo su stock mínimo (los sacos son de la Matriz). */}
             {/* Sacos por comprar para los pedidos ya tomados (los sacos son de la Matriz). */}
             {esMatrizActiva && <SacosPorComprarAlerta sacos={sacosPorComprar} onIr={visibleTabs.includes("Inventario") ? irASacos : undefined} />}
