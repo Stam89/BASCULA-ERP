@@ -5037,3 +5037,14 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .busq-pie { display: flex; gap: 14px; flex-wrap: wrap; padding: 8px 14px; border-top: 1px solid var(--c-border); background: var(--c-surface-2); font-size: 11.5px; color: var(--c-text-muted); }
 .busq-cargando { margin-left: auto; }
 @media (max-width: 640px) { .busq-btn-kbd, .busq-pie span:not(.busq-cargando) { display: none; } .busq-fondo { padding-top: 4vh; } }
+
+/* ── Configuración · 📬 Resumen diario por correo ─────────────────────────── */
+.resDia-switch { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--c-border); border-radius: 10px; background: var(--c-surface-2); cursor: pointer; margin-bottom: 10px; }
+.resDia-switch input { width: 20px; height: 20px; margin-top: 2px; flex: none; }
+.resDia-switch span { display: grid; gap: 2px; }
+.resDia-switch small { color: var(--c-text-muted); font-size: 12px; }
+.resDia-campos { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-start; }
+.resDia-campos label { display: grid; gap: 4px; font-size: 13px; font-weight: 600; margin: 0; }
+.resDia-campos input[type="time"], .resDia-campos textarea { padding: 8px 10px; border-radius: 8px; border: 1px solid #d1d5db; font: inherit; font-weight: 400; }
+.resDia-modal { max-width: 620px; width: calc(100% - 24px); max-height: 92vh; display: flex; flex-direction: column; }
+.resDia-frame { width: 100%; height: 60vh; border: 1px solid var(--c-border); border-radius: 10px; background: #fff; }

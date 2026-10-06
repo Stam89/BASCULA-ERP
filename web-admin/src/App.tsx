@@ -20,6 +20,7 @@ import { formatoCantidad, formatoPrecio, precioAplicadoDetalle, DESCUENTO_QQ, LI
 import { ParametrosContables } from "./components/ParametrosContables";
 import { CorreoRecuperacionModal } from "./components/CorreoRecuperacion";
 import { ConfigCorreoClaves } from "./components/ConfigCorreoClaves";
+import { ResumenDiarioConfig } from "./components/ResumenDiarioConfig";
 import { CatalogoProductos } from "./components/CatalogoProductos";
 import { AccesoRemoto } from "./components/AccesoRemoto";
 import { CambiarClaveModal } from "./components/CambiarClave";
@@ -2597,6 +2598,7 @@ export function App() {
     { sub: "secuenciales", tarjeta: "📄 Secuenciales de documentos", claves: "numeracion guia de remision prefijo punto de emision factura" },
     { sub: "usuarios", tarjeta: "🌐 Acceso desde el celular", claves: "internet datos moviles celular telefono remoto fuera del local enlace link cloudflare tunel dominio wifi ip red compartir whatsapp app pantalla de inicio" },
     { sub: "usuarios", tarjeta: "✉️ Correo para recuperar claves", claves: "correo gmail email recuperar clave contrasena olvide olvidaste perdio restablecer codigo smtp" },
+    { sub: "usuarios", tarjeta: "📬 Resumen diario por correo", claves: "resumen diario correo gmail email reporte cierre del dia informe automatico enviar hora" },
     { sub: "usuarios", tarjeta: "👤 Crear usuario", claves: "usuario clave contrasena rol operador administrador cedula correo recuperacion" },
     { sub: "usuarios", tarjeta: "Usuarios registrados", claves: "usuarios permisos modulos accionistas editar sub pestanas solo ver" },
     { sub: "usuarios", tarjeta: "🕓 Actividad del sistema", claves: "auditoria log historial quien creo modifico elimino" }
@@ -22608,6 +22610,12 @@ export function App() {
                     avisar={addToast}
                     onAbrirMiCorreo={() => setCorreoModalAbierto(true)}
                   />
+                </details>
+                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>
+                    📬 Resumen diario por correo <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· al cierre del día te llega lo que pasó y lo pendiente</span>
+                  </summary>
+                  <ResumenDiarioConfig esAdmin={isAdmin} avisar={addToast} />
                 </details>
                 <details className="formPanel userCreatePanel" style={{ gridColumn: "1 / -1" }} open>
                   <summary className="userPanelSummary">

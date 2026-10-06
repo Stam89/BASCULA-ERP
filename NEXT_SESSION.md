@@ -49,6 +49,15 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 📬 Resumen diario por correo (2026-10-06)
+- Un correo al cierre del día (por defecto 20:30 Ecuador) con: báscula (tickets/QQ del día), secado (túneles terminados hoy / en proceso), caja de la Matriz (ingresos/egresos/neto), ventas y «Pendiente para mañana» (las mismas tareas de 📌 Hoy). **NACE APAGADO**: no sale nada hasta que el administrador lo active en Configuración → Control de usuarios → «📬 Resumen diario por correo» y escriba hasta 5 correos. Tiene «👁 Ver ejemplo de hoy» (no envía) y «✉️ Enviar prueba ahora» (no cuenta como el envío del día; pausa de 60 s).
+- Migración `20261070_resumen_diario.sql` → tabla `resumen_diario_config` (1 fila: activo, hora, destinatarios, ultimo_envio_fecha, intentos…). Sobrevive al borrado de fábrica.
+- Backend: `services/resumen-diario.ts` (`construirResumen` y `decidirEnvio` puras con 14 pruebas; `reunirDatos` SOLO SELECT, cada bloque falla por separado y el correo avisa «No se pudo leer este dato»; `ticResumenDiario` NUNCA lanza), programador `iniciarProgramadorResumenDiario()` en server.ts (cada 60 s, `unref`, en try/catch). Una vez por día con candado atómico (UPDATE … WHERE ultimo_envio_fecha IS DISTINCT FROM hoy): 3 tics simultáneos = 1 correo. Si falla el SMTP: reintenta cada 30 min, máx. 4 por día; anota `ultimo_resultado`. Si la PC estaba apagada a esa hora, sale al encenderla ese mismo día.
+- Rutas (solo admin, `requireAdmin` en todo el router): GET/PUT `/resumen-diario/config`, GET `/resumen-diario/vista`, POST `/resumen-diario/prueba`. Usa `enviarCorreo` (SMTP de backend/.env); el HTML escapa todo lo que viene de la base.
+- Frontend: `components/ResumenDiarioConfig.tsx` (+ clases `resDia-*`); ejemplo en `<iframe sandbox>`.
+- Probado en una COPIA de la base con buzón falso (`resumen_test.mjs`): sin enviar correos reales. Para activarlo de verdad el usuario debe usar la pantalla (necesita SMTP_USER/SMTP_PASS en backend/.env, ya configurados).
+- Pendiente/futuro: WhatsApp (requiere servicio externo de pago/API), resumen de socios, incluir cobros recibidos del día.
+
 ### 🔎 Buscador global (Ctrl+K) (2026-10-05)
 - Botón «🔎 Buscar» en la barra superior y atajo Ctrl+K / ⌘K desde cualquier pantalla. Busca (sin distinguir mayúsculas ni tildes) tickets de báscula, ingresos, agricultores, clientes, proveedores, lotes, pedidos y trabajadores (Nómina, solo Matriz); placas y números de ticket también sin guiones/espacios («ghk553» = «GHK-553»). Además permite «Ir a» una pantalla por su nombre (Pagar la semana, Bajada de carro, Historial de pagos, Puesta en marcha, cada pestaña). Flechas ↑↓, Enter y Esc.
 - SOLO LECTURA. Backend: GET `/busqueda?q=` (`routes/modules/busqueda.ts` + lógica pura `services/busqueda.ts`, 11 pruebas). Máx. 5 por grupo; cada grupo falla por separado; parámetros siempre enlazados (sin SQL inyectable; `%` y `_` se buscan literales). Lo propio de cada accionista (tickets, ingresos, agricultores, lotes, pedidos) se limita al accionista activo; clientes/proveedores son compartidos.

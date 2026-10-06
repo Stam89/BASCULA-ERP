@@ -3,6 +3,7 @@ import { env } from "./config/env.js";
 import { startFirebaseAutoImport } from "./integrations/bascula-firebase.js";
 import { ensureLaborTables } from "./routes/modules/labor.js";
 import { lanAddresses } from "./utils/red.js";
+import { iniciarProgramadorResumenDiario } from "./services/resumen-diario.js";
 
 
 // Escucha en 0.0.0.0 para aceptar conexiones de otras PCs de la red local.
@@ -25,4 +26,7 @@ app.listen(env.port, "0.0.0.0", () => {
     .catch((e) => console.error("ensureLaborTables (arranque):", e));
   // Importa automáticamente los tickets de la báscula desde Firebase.
   startFirebaseAutoImport(3);
+  // Resumen diario por correo: revisa cada minuto si toca enviarlo. Nace APAGADO (solo actúa si el
+  // administrador lo activó) y cualquier fallo queda anotado sin afectar al resto del servidor.
+  try { iniciarProgramadorResumenDiario(); } catch (e) { console.error("resumen diario (arranque):", e); }
 });

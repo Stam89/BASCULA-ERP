@@ -1390,6 +1390,16 @@ cuadrillaRouter.post("/bajadas/sync", asyncRoute(async (_req, res) => {
   res.json(await inTransaction((client) => sincronizarBajadas(client)));
 }));
 
+// Tickets de báscula del día `fecha` (AAAA-MM-DD, Ecuador): cuántos y cuántos QQ. Lo usa el resumen diario.
+export async function resumenTicketsDelDia(db: Pick<PoolClient, "query">, fecha: string): Promise<{ n: number; qq: number }> {
+  const r = await db.query(
+    `SELECT COUNT(*)::int AS n, COALESCE(SUM(t.quintals), 0)::float AS qq
+       FROM mobile_synced_tickets t WHERE ${TICKET_ELEGIBLE} AND ${FECHA_TICKET} = $1::date`,
+    [fecha]
+  );
+  return { n: Number(r.rows[0].n), qq: Number(r.rows[0].qq) };
+}
+
 // Tickets de báscula (desde «Contar desde», y hasta `hasta` si se da) que NO tienen
 // quién bajó el carro ni están marcados «no se paga»: no entran a ningún pago.
 export async function contarBajadasSinNombre(db: Pick<PoolClient, "query">, hasta?: string | null): Promise<number> {
