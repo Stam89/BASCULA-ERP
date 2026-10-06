@@ -24,6 +24,7 @@ import { CatalogoProductos } from "./components/CatalogoProductos";
 import { AccesoRemoto } from "./components/AccesoRemoto";
 import { CambiarClaveModal } from "./components/CambiarClave";
 import { HoyPanel, type TareaHoy } from "./components/HoyPanel";
+import { PagarSemana, imprimirReciboSemana, type SemanaVista, type SemanaPagada } from "./components/PagarSemana";
 import * as XLSX from "xlsx";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
@@ -2139,6 +2140,10 @@ export function App() {
   const [panelData, setPanelData] = useState<PanelData | null>(null);
   const [panelMonth, setPanelMonth] = useState(new Date().toISOString().slice(0, 7));
   const [dashView, setDashView] = useState<"panel" | "resumen">("panel");
+  // 🗓️ Pagar la semana: vista previa del cierre de Nómina (la calcula el servidor).
+  const [semanaHasta, setSemanaHasta] = useState("");
+  const [semanaVista, setSemanaVista] = useState<SemanaVista | null>(null);
+  const [semanaBusy, setSemanaBusy] = useState(false);
   // 📌 «Hoy»: tareas que calcula el servidor (null = aún sin cargar).
   const [hoyTareas, setHoyTareas] = useState<TareaHoy[] | null>(null);
   const [hoyBusy, setHoyBusy] = useState(false);
@@ -4393,6 +4398,38 @@ export function App() {
     if (!authUser || activeTab !== "Dashboard" || !esMatrizActiva) return;
     apiGet<Repuesto[]>("/repuestos").then(setRepuestosAlerta).catch(() => undefined);
   }, [authUser, activeTab, esMatrizActiva]);
+  // 🗓️ Cierre semanal: vista previa (nada se paga) y pago en una sola transacción.
+  async function loadSemana(hasta: string = semanaHasta) {
+    if (!esMatrizActiva) { setSemanaVista(null); return; }
+    setSemanaBusy(true);
+    try {
+      const v = await apiGet<SemanaVista>(`/nomina-semanal/vista${hasta ? `?hasta=${hasta}` : ""}`);
+      setSemanaVista(v);
+      if (!hasta) setSemanaHasta(v.hasta);
+    } catch { setSemanaVista(null); }
+    finally { setSemanaBusy(false); }
+  }
+  async function pagarSemana() {
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) throw new Error("Abre una caja para pagar.");
+    if (!semanaVista) throw new Error("Aún se está calculando la semana.");
+    // confirmar_neto = lo que se revisó en pantalla: si al pagar es otro, el servidor no paga nada.
+    const r = await apiPost<SemanaPagada>("/nomina-semanal/pagar", {
+      hasta: semanaVista.hasta,
+      cash_register_id: registerId,
+      confirmar_neto: semanaVista.totales.neto
+    });
+    addToast(`Semana pagada: ${money(r.totales.neto)} a ${r.totales.personas} persona(s)`, "success");
+    imprimirReciboSemana(r, { nombre: appSettings.business_name, subtitulo: [appSettings.business_subtitle, appSettings.ruc && `RUC: ${appSettings.ruc}`].filter(Boolean).join(" · ") }, addToast);
+    await refreshNomina();
+    await refreshCaja(registerId);
+  }
+  // Al cambiar la fecha de corte se recalcula la vista.
+  useEffect(() => {
+    if (nominaView !== "pagos" || !semanaHasta) return;
+    loadSemana(semanaHasta).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [semanaHasta, nominaView, esMatrizActiva]);
   // 📌 «Hoy»: se carga al entrar al Dashboard y se refresca cada minuto (y al volver a la ventana).
   async function loadHoy() {
     setHoyBusy(true);
@@ -4847,6 +4884,7 @@ export function App() {
       await loadAdminStaff();
       await loadAdminHistory();
       await loadAdminPending();
+      loadSemana().catch(() => undefined);
     } catch (e) {
       addToast(`Error al cargar nómina: ${e instanceof Error ? e.message : "desconocido"}`, "error");
     } finally {
@@ -21059,6 +21097,18 @@ export function App() {
                   </div>
                   <button type="button" className="btnSecondary" disabled={nominaBusy} onClick={() => refreshNomina().catch(() => undefined)}>{nominaBusy ? "Cargando…" : "↻ Actualizar"}</button>
                 </div>
+
+                {esMatrizActiva && (
+                  <PagarSemana
+                    vista={semanaVista}
+                    cargando={semanaBusy}
+                    hasta={semanaHasta}
+                    onHasta={setSemanaHasta}
+                    cajaAbierta={cajaAbierta}
+                    onAbrirCaja={() => irATab("Caja")}
+                    onPagar={pagarSemana}
+                  />
+                )}
 
                 {adminPayMeta && !adminPayMeta.fecha_habilitada && adminStaff.length > 0 && (
                   <div className="alertBox" style={{ background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e40af" }}>

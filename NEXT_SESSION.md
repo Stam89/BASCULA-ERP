@@ -49,6 +49,15 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Nómina: «🗓️ Pagar la semana» — cierre semanal en un clic (2026-10-05)
+- Tarjeta arriba de Nómina → 💵 Pagos (solo Matriz): fecha de corte «Pagar hasta» (por defecto el último viernes, hoy si es viernes) → vista previa con personas, ganado, anticipos y neto → «Confirmar y pagar todo» → recibo con firmas (una tabla por grupo).
+- Backend `routes/modules/nomina-semanal.ts`: GET `/nomina-semanal/vista?hasta=` (solo calcula, no marca nada) y POST `/nomina-semanal/pagar {hasta, cash_register_id, confirmar_neto}` en UNA transacción con `pg_advisory_xact_lock`: si el neto recalculado ≠ `confirmar_neto` (llegó un ticket, alguien pagó) responde 409 y NO paga nada.
+- Sin reglas de dinero nuevas: reutiliza las funciones extraídas `pagarTrabajadorPlanta` (labor.ts), `pagarTrabajadorCuadrilla` y `pagarBajadasPendientes` (cuadrilla.ts), que ahora también usan las rutas individuales (`/labor/pay-worker`, `/cuadrilla/pay-worker`, `/cuadrilla/bajadas/pagar`) con `ejecutar=false` = solo calcular. Los egresos de caja son los mismos de siempre (uno por persona de planta/cuadrilla y uno para toda la bajada).
+- Fuera del cierre: sueldos administrativos (se habilitan solo el 15 y fin de mes, módulo aparte). Lo trabajado después del corte queda pendiente.
+- Permisos: prefijo `nomina-semanal` ⇒ módulos Caja/Nomina; sub-pestaña «pagos» (RO:SUB). Pruebas: `nomina-semanal.test.ts` + prueba en ROLLBACK con datos reales (`semanal_test.mjs`).
+- Frontend: `components/PagarSemana.tsx` (+ clases `semana-*`); estado/funciones `loadSemana`/`pagarSemana` en App.tsx.
+- `contarBajadasSinNombre` (cuadrilla.ts) lo comparten «Hoy» y el cierre.
+
 ### Dashboard: 📌 «Hoy» — lo que hay que hacer ahora (2026-10-05)
 - Tarjeta arriba del Dashboard (para todos): lista corta de tareas con botón que lleva a la pantalla donde se resuelven. Se actualiza al entrar, cada minuto y al volver a la ventana. Solo muestra tareas de pestañas a las que el usuario tiene acceso.
 - Backend: GET `/dashboard/hoy` (solo lectura) → `services/hoy.ts` (`construirTareas` pura + `reunirDatos` con consultas aisladas: si una falla, el resto sigue). Tareas: combustible del motor pendiente (urgente), túneles secando/largos (>18 h), bajadas sin nombre, pagos pendientes de Nómina (viernes/sábado = atención), caja cerrada o abierta desde ayer, CxC/CxP vencidas, pedidos por entregar, pasos de «Puesta en marcha» (solo admin). Nómina solo para la Matriz.

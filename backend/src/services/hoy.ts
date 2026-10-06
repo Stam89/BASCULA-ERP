@@ -5,6 +5,7 @@
 //    si una consulta se cae, el resto de «Hoy» sigue funcionando).
 import type { PoolClient } from "pg";
 import { pool } from "../db/pool.js";
+import { contarBajadasSinNombre } from "../routes/modules/cuadrilla.js";
 
 type Db = Pick<PoolClient, "query">;
 
@@ -211,20 +212,8 @@ export async function reunirDatos(
        )
        SELECT COALESCE(SUM(m), 0)::float AS monto, COUNT(DISTINCT n)::int AS personas FROM p WHERE m > 0`
     )).rows[0];
-    const sin = (await db.query(
-      `SELECT COUNT(*)::int AS n
-         FROM mobile_synced_tickets t
-         JOIN bajada_carro_config c ON c.id = 1
-        WHERE lower(coalesce(t.raw_payload->>'modo', 'principal')) = 'principal'
-          AND NOT coalesce(t.en_espera, false) AND coalesce(t.quintals, 0) > 0
-          AND COALESCE(
-                CASE WHEN t.raw_payload->>'fecha' ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}'
-                     THEN to_date(split_part(t.raw_payload->>'fecha', ' ', 1), 'DD/MM/YYYY') END,
-                (to_timestamp(t.mobile_created_at / 1000.0) AT TIME ZONE 'America/Guayaquil')::date) >= COALESCE(c.desde, CURRENT_DATE)
-          AND COALESCE(t.bajada_manual, '') <> '__NO__'
-          AND COALESCE(NULLIF(btrim(t.bajada_manual), ''), NULLIF(btrim(t.raw_payload->>'bajadaX'), '')) IS NULL`
-    )).rows[0];
-    return { aplica: true, monto: Number(r.monto), personas: Number(r.personas), bajadasSinNombre: Number(sin.n) };
+    const sin = await contarBajadasSinNombre(db);
+    return { aplica: true, monto: Number(r.monto), personas: Number(r.personas), bajadasSinNombre: sin };
   });
 
   const vencidas = (tabla: "accounts_receivable" | "accounts_payable") => seguro(tabla, { n: 0, monto: 0 }, async () => {

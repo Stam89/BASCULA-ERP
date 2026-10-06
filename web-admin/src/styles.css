@@ -4955,3 +4955,36 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
   .hoy-item { grid-template-columns: auto 1fr; }
   .hoy-btn { grid-column: 1 / -1; width: 100%; }
 }
+
+/* ── Nómina · 🗓️ Pagar la semana ──────────────────────────────────────────── */
+.semana { border: 1px solid #a7f3d0; background: linear-gradient(180deg, #f0fdf8, #ecfdf5); border-radius: var(--r-lg); padding: 14px 16px; margin-bottom: 14px; }
+.semana-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; flex-wrap: wrap; }
+.semana-title { margin: 0; font-size: 16px; font-weight: 800; color: #065f46; }
+.semana-sub { margin: 3px 0 0; font-size: 12.5px; color: var(--c-text-muted); max-width: 560px; }
+.semana-fecha { display: grid; gap: 4px; font-size: 12px; font-weight: 600; color: var(--c-text-2); margin: 0; }
+.semana-fecha small { font-weight: 400; color: var(--c-text-muted); }
+.semana-fecha-row { display: flex; gap: 6px; align-items: center; }
+.semana-fecha-row input { padding: 7px 9px; border-radius: 8px; border: 1px solid #d1d5db; min-height: 38px; }
+.semana-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 12px 0 8px; }
+.semana-kpis > div { background: #fff; border: 1px solid #d1fae5; border-radius: 10px; padding: 8px 12px; }
+.semana-kpis span { display: block; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--c-text-muted); }
+.semana-kpis b { font-size: 19px; font-variant-numeric: tabular-nums; color: var(--c-text); }
+.semana-kpis b.neg, .semana small.neg { color: var(--c-danger, #dc2626); }
+.semana-kpi-total { background: #047857 !important; border-color: #047857 !important; }
+.semana-kpi-total span, .semana-kpi-total b { color: #fff !important; }
+.semana-aviso { margin: 6px 0; font-size: 12.5px; padding: 7px 10px; border-radius: 8px; }
+.semana-aviso--info { background: #eff6ff; color: #1e40af; }
+.semana-aviso--warn { background: #fffbeb; color: #92400e; }
+.semana-acciones { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.semana-pagar { border: none; background: #047857; color: #fff; font-weight: 800; font-size: 15px; padding: 11px 22px; border-radius: 10px; cursor: pointer; min-height: 44px; }
+.semana-pagar:hover:not(:disabled) { background: #065f46; }
+.semana-pagar:disabled { background: #9ca3af; cursor: default; }
+.semana-modal { max-width: 560px; width: calc(100% - 24px); max-height: 90vh; overflow: auto; }
+.semana-detalle { border: 1px solid var(--c-border); border-radius: 10px; max-height: 42vh; overflow: auto; }
+.semana-grupo + .semana-grupo { border-top: 1px solid var(--c-border); }
+.semana-grupo-head { display: flex; justify-content: space-between; padding: 7px 12px; background: var(--c-surface-2); font-size: 13px; font-weight: 700; position: sticky; top: 0; }
+.semana-fila { display: flex; justify-content: space-between; gap: 10px; padding: 6px 12px; font-size: 13.5px; border-top: 1px solid var(--c-surface-3); }
+.semana-fila small { color: var(--c-text-muted); }
+.semana-total { display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px; padding-top: 8px; border-top: 2px solid var(--c-text); font-size: 16px; font-weight: 800; }
+.semana-total b { color: #047857; font-size: 20px; }
+@media (max-width: 640px) { .semana-pagar { width: 100%; } .semana-fecha { width: 100%; } }

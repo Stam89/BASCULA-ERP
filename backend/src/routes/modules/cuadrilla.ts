@@ -1097,6 +1097,72 @@ cuadrillaRouter.post("/advances/:id/settle", asyncRoute(async (req, res) => {
 // rango, aplica los anticipos pendientes (más viejos primero) y saca de la caja
 // SOLO el neto restante. Todo en una transacción. Los anticipos ya habían salido
 // de caja al entregarse, por eso no se vuelven a cobrar aquí.
+// Paga (o, con ejecutar=false, solo CALCULA) lo pendiente de UNA persona de la
+// cuadrilla entre `from` y `to` (sin la bajada de carro, que se paga aparte).
+// Lo comparten «Pagar» por persona y el cierre semanal. null = nada pendiente.
+export async function pagarTrabajadorCuadrilla(
+  client: PoolClient,
+  p: { name: string; from: string; to: string; cashRegisterId: string; userId: string | null },
+  ejecutar = true
+): Promise<{ gross: number; anticipos: number; paid: number; count: number } | null> {
+  const lock = ejecutar ? "FOR UPDATE" : "";
+  const pending = await client.query(
+    `SELECT id, subtotal FROM cuadrilla_entries
+     WHERE worker_name = $1 AND paid_at IS NULL
+       AND work_date BETWEEN $2 AND $3
+       AND origen <> 'BASCULA' -- la bajada de carro se paga aparte
+     ${lock}`,
+    [p.name, p.from, p.to]
+  );
+  if (!pending.rowCount) return null;
+
+  const gross = round2(pending.rows.reduce((s: number, r: { subtotal: string }) => s + Number(r.subtotal), 0));
+
+  // Anticipos pendientes de la persona (no atados a fecha, igual que el resumen).
+  // Se aplican del más viejo al más nuevo hasta agotar el bruto.
+  const advResult = await client.query(
+    `SELECT id, balance FROM cuadrilla_advances
+     WHERE worker_name = $1 AND status IN ('PENDING', 'PARTIAL')
+     ORDER BY issued_at ASC
+     ${lock}`,
+    [p.name]
+  );
+  let remaining = gross;
+  let applied = 0;
+  for (const adv of advResult.rows as Array<{ id: string; balance: string }>) {
+    if (remaining <= 0.001) break;
+    const bal = Number(adv.balance);
+    const use = round2(Math.min(bal, remaining));
+    if (use <= 0) continue;
+    const newBal = round2(bal - use);
+    if (ejecutar) {
+      await client.query(
+        `UPDATE cuadrilla_advances SET balance = $2, status = $3 WHERE id = $1`,
+        [adv.id, newBal, newBal < 0.01 ? "PAID" : "PARTIAL"]
+      );
+    }
+    applied = round2(applied + use);
+    remaining = round2(remaining - use);
+  }
+  const net = round2(Math.max(0, gross - applied));
+  const ids = pending.rows.map((r: { id: string }) => r.id);
+  if (!ejecutar) return { gross, anticipos: applied, paid: net, count: ids.length };
+
+  await client.query(
+    `UPDATE cuadrilla_entries SET paid_at = now(), cash_register_id = $2 WHERE id = ANY($1)`,
+    [ids, p.cashRegisterId]
+  );
+  if (net > 0) {
+    await client.query(
+      `INSERT INTO cash_movements
+         (cash_register_id, movement, category, reference_type, amount, description, created_by)
+       VALUES ($1, 'EXPENSE', 'PAGO_MANO_OBRA', 'cuadrilla_entries', $2, $3, $4)`,
+      [p.cashRegisterId, net, `Pago cuadrilla ${p.name}`, p.userId]
+    );
+  }
+  return { gross, anticipos: applied, paid: net, count: ids.length };
+}
+
 cuadrillaRouter.post("/pay-worker", asyncRoute(async (req, res) => {
   const body = z.object({
     worker_name: z.string().min(1),
@@ -1107,59 +1173,12 @@ cuadrillaRouter.post("/pay-worker", asyncRoute(async (req, res) => {
   const user = (req as AuthenticatedRequest).user;
 
   const result = await inTransaction(async (client) => {
-    const pending = await client.query(
-      `SELECT id, subtotal FROM cuadrilla_entries
-       WHERE worker_name = $1 AND paid_at IS NULL
-         AND work_date BETWEEN $2 AND $3
-         AND origen <> 'BASCULA' -- la bajada de carro se paga aparte
-       FOR UPDATE`,
-      [body.worker_name, body.from, body.to]
-    );
-    if (!pending.rowCount) throw new ApiError(400, "No hay pagos pendientes de esta cuadrilla en el período");
-
-    const gross = round2(pending.rows.reduce((s: number, r: { subtotal: string }) => s + Number(r.subtotal), 0));
-
-    // Anticipos pendientes de la persona (no atados a fecha, igual que el resumen).
-    // Se aplican del más viejo al más nuevo hasta agotar el bruto.
-    const advResult = await client.query(
-      `SELECT id, balance FROM cuadrilla_advances
-       WHERE worker_name = $1 AND status IN ('PENDING', 'PARTIAL')
-       ORDER BY issued_at ASC
-       FOR UPDATE`,
-      [body.worker_name]
-    );
-    let remaining = gross;
-    let applied = 0;
-    for (const adv of advResult.rows as Array<{ id: string; balance: string }>) {
-      if (remaining <= 0.001) break;
-      const bal = Number(adv.balance);
-      const use = round2(Math.min(bal, remaining));
-      if (use <= 0) continue;
-      const newBal = round2(bal - use);
-      await client.query(
-        `UPDATE cuadrilla_advances SET balance = $2, status = $3 WHERE id = $1`,
-        [adv.id, newBal, newBal < 0.01 ? "PAID" : "PARTIAL"]
-      );
-      applied = round2(applied + use);
-      remaining = round2(remaining - use);
-    }
-    const net = round2(Math.max(0, gross - applied));
-
-    const ids = pending.rows.map((r: { id: string }) => r.id);
-    await client.query(
-      `UPDATE cuadrilla_entries SET paid_at = now(), cash_register_id = $2 WHERE id = ANY($1)`,
-      [ids, body.cash_register_id]
-    );
-
-    if (net > 0) {
-      await client.query(
-        `INSERT INTO cash_movements
-           (cash_register_id, movement, category, reference_type, amount, description, created_by)
-         VALUES ($1, 'EXPENSE', 'PAGO_MANO_OBRA', 'cuadrilla_entries', $2, $3, $4)`,
-        [body.cash_register_id, net, `Pago cuadrilla ${body.worker_name}`, user?.id ?? null]
-      );
-    }
-    return { gross, anticipos: applied, paid: net, count: ids.length };
+    const r = await pagarTrabajadorCuadrilla(client, {
+      name: body.worker_name, from: body.from, to: body.to,
+      cashRegisterId: body.cash_register_id, userId: user?.id ?? null
+    });
+    if (!r) throw new ApiError(400, "No hay pagos pendientes de esta cuadrilla en el período");
+    return r;
   });
 
   res.json(result);
@@ -1336,6 +1355,23 @@ cuadrillaRouter.post("/bajadas/sync", asyncRoute(async (_req, res) => {
   res.json(await inTransaction((client) => sincronizarBajadas(client)));
 }));
 
+// Tickets de báscula (desde «Contar desde», y hasta `hasta` si se da) que NO tienen
+// quién bajó el carro ni están marcados «no se paga»: no entran a ningún pago.
+export async function contarBajadasSinNombre(db: Pick<PoolClient, "query">, hasta?: string | null): Promise<number> {
+  const r = await db.query(
+    `SELECT COUNT(*)::int AS n
+       FROM mobile_synced_tickets t
+       JOIN bajada_carro_config c ON c.id = 1
+      WHERE ${TICKET_ELEGIBLE}
+        AND ${FECHA_TICKET} >= COALESCE(c.desde, CURRENT_DATE)
+        AND ($1::date IS NULL OR ${FECHA_TICKET} <= $1::date)
+        AND COALESCE(t.bajada_manual, '') <> '__NO__'
+        AND COALESCE(NULLIF(btrim(t.bajada_manual), ''), NULLIF(btrim(t.raw_payload->>'bajadaX'), '')) IS NULL`,
+    [hasta ?? null]
+  );
+  return Number(r.rows[0].n);
+}
+
 // Semana de pago (sábado→viernes) que contiene `semana` (hoy por defecto): tickets
 // con su monto y estado, y lo pendiente de semanas previas (se arrastra).
 cuadrillaRouter.get("/bajadas", asyncRoute(async (req, res) => {
@@ -1465,38 +1501,51 @@ cuadrillaRouter.get("/bajadas/recibo", asyncRoute(async (req, res) => {
 }));
 
 // Paga la bajada pendiente en un solo egreso de Caja (mano de obra): toda, o solo
-// hasta la fecha de corte `hasta` (incluida); lo posterior sigue pendiente.
+// hasta la fecha de corte `hasta` (incluida); lo posterior sigue pendiente. Con
+// ejecutar=false solo CALCULA el resumen (no paga ni exige caja).
+// null = no hay bajadas pendientes. Lo comparten la ruta y el cierre semanal.
+export async function pagarBajadasPendientes(
+  client: PoolClient,
+  p: { cashRegisterId: string; hasta?: string | null; userId: string | null },
+  ejecutar = true
+) {
+  await sincronizarBajadas(client);
+  if (ejecutar) {
+    const caja = await client.query("SELECT status FROM cash_registers WHERE id = $1", [p.cashRegisterId]);
+    if (caja.rows[0]?.status !== "OPEN") throw new ApiError(409, "La caja no está abierta.");
+  }
+  const pendientes = await client.query(
+    `SELECT id FROM cuadrilla_entries WHERE origen = 'BASCULA' AND paid_at IS NULL
+        AND ($1::date IS NULL OR work_date <= $1::date) ${ejecutar ? "FOR UPDATE" : ""}`,
+    [p.hasta ?? null]
+  );
+  if (!pendientes.rowCount) return null;
+  const ids = pendientes.rows.map((r: { id: string }) => r.id);
+  if (!ejecutar) return { paid_at: null as string | null, ...resumirBajadas(await detalleBajadas(client, "e.id = ANY($1)", [ids])) };
+  const pagado = (await client.query(
+    "UPDATE cuadrilla_entries SET paid_at = now(), cash_register_id = $2 WHERE id = ANY($1) RETURNING paid_at",
+    [ids, p.cashRegisterId]
+  )).rows[0].paid_at as Date;
+  const resumen = resumirBajadas(await detalleBajadas(client, "e.id = ANY($1)", [ids]));
+  if (resumen.total > 0) {
+    const reparto = resumen.por_trabajador.map((t) => `${t.trabajador} $${t.monto.toFixed(2)}`).join(", ");
+    await client.query(
+      `INSERT INTO cash_movements
+         (cash_register_id, movement, category, reference_type, amount, description, created_by)
+       VALUES ($1, 'EXPENSE', 'PAGO_MANO_OBRA', 'cuadrilla_entries', $2, $3, $4)`,
+      [p.cashRegisterId, resumen.total, `Pago bajada de carro · ${resumen.tickets} ticket(s): ${reparto}`.slice(0, 500), p.userId]
+    );
+  }
+  return { paid_at: (pagado instanceof Date ? pagado.toISOString() : String(pagado)) as string | null, ...resumen };
+}
+
 cuadrillaRouter.post("/bajadas/pagar", asyncRoute(async (req, res) => {
   const body = z.object({ cash_register_id: z.string().uuid(), hasta: FECHA_CORTE }).parse(req.body);
   const user = (req as AuthenticatedRequest).user;
   const out = await inTransaction(async (client) => {
-    await sincronizarBajadas(client);
-    const caja = await client.query("SELECT status FROM cash_registers WHERE id = $1", [body.cash_register_id]);
-    if (caja.rows[0]?.status !== "OPEN") throw new ApiError(409, "La caja no está abierta.");
-    const pendientes = await client.query(
-      `SELECT id FROM cuadrilla_entries WHERE origen = 'BASCULA' AND paid_at IS NULL
-          AND ($1::date IS NULL OR work_date <= $1::date) FOR UPDATE`,
-      [body.hasta ?? null]
-    );
-    if (!pendientes.rowCount) {
-      throw new ApiError(400, body.hasta ? "No hay bajadas de carro pendientes hasta esa fecha." : "No hay bajadas de carro pendientes de pago.");
-    }
-    const ids = pendientes.rows.map((r: { id: string }) => r.id);
-    const pagado = (await client.query(
-      "UPDATE cuadrilla_entries SET paid_at = now(), cash_register_id = $2 WHERE id = ANY($1) RETURNING paid_at",
-      [ids, body.cash_register_id]
-    )).rows[0].paid_at as Date;
-    const resumen = resumirBajadas(await detalleBajadas(client, "e.id = ANY($1)", [ids]));
-    if (resumen.total > 0) {
-      const reparto = resumen.por_trabajador.map((t) => `${t.trabajador} $${t.monto.toFixed(2)}`).join(", ");
-      await client.query(
-        `INSERT INTO cash_movements
-           (cash_register_id, movement, category, reference_type, amount, description, created_by)
-         VALUES ($1, 'EXPENSE', 'PAGO_MANO_OBRA', 'cuadrilla_entries', $2, $3, $4)`,
-        [body.cash_register_id, resumen.total, `Pago bajada de carro · ${resumen.tickets} ticket(s): ${reparto}`.slice(0, 500), user?.id ?? null]
-      );
-    }
-    return { paid_at: pagado instanceof Date ? pagado.toISOString() : String(pagado), ...resumen };
+    const r = await pagarBajadasPendientes(client, { cashRegisterId: body.cash_register_id, hasta: body.hasta, userId: user?.id ?? null });
+    if (!r) throw new ApiError(400, body.hasta ? "No hay bajadas de carro pendientes hasta esa fecha." : "No hay bajadas de carro pendientes de pago.");
+    return r;
   });
   res.json(out);
 }));

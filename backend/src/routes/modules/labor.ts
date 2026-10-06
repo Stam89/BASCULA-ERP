@@ -774,6 +774,62 @@ laborRouter.post("/secador-days", asyncRoute(async (req, res) => {
 }));
 
 // ── Pagar toda la semana de un trabajador de una vez ───────────────────────
+// Paga (o, con ejecutar=false, solo CALCULA) lo pendiente de UN trabajador de
+// planta/secador entre `from` y `to`. Lo comparten «Pagar» por persona y el cierre
+// semanal (routes/modules/nomina-semanal): así lo que se muestra es lo que se paga.
+// Devuelve null si no hay nada pendiente.
+export async function pagarTrabajadorPlanta(
+  client: PoolClient,
+  p: { role: string; name: string; from: string; to: string; cashRegisterId: string; userId: string | null },
+  ejecutar = true
+): Promise<{ gross: number; advances: number; paid: number; count: number } | null> {
+  const lock = ejecutar ? "FOR UPDATE" : "";
+  const pending = await client.query(
+    `SELECT * FROM worker_payments
+     WHERE worker_role = $1 AND worker_name = $2 AND status = 'PENDING'
+       AND work_date BETWEEN $3 AND $4
+     ${lock}`,
+    [p.role, p.name, p.from, p.to]
+  );
+  if (!pending.rowCount) return null;
+
+  const gross = round2(pending.rows.reduce((s: number, r: { net_amount: string }) => s + Number(r.net_amount), 0));
+
+  // Anticipos pendientes del período: ya salieron de caja, se descuentan.
+  const advResult = await client.query(
+    `SELECT * FROM worker_advances
+     WHERE worker_role = $1 AND worker_name = $2 AND status = 'PENDING'
+       AND advance_date BETWEEN $3 AND $4
+     ${lock}`,
+    [p.role, p.name, p.from, p.to]
+  );
+  const advances = round2(advResult.rows.reduce((s: number, a: { amount: string }) => s + Number(a.amount), 0));
+  const net = round2(Math.max(0, gross - advances));
+  const ids = pending.rows.map((r: { id: string }) => r.id);
+  if (!ejecutar) return { gross, advances, paid: net, count: ids.length };
+
+  await client.query(
+    `UPDATE worker_payments SET status = 'PAID', paid_at = now(), cash_register_id = $2 WHERE id = ANY($1)`,
+    [ids, p.cashRegisterId]
+  );
+  if (advResult.rowCount) {
+    await client.query(
+      `UPDATE worker_advances SET status = 'APPLIED', applied_at = now() WHERE id = ANY($1)`,
+      [advResult.rows.map((a: { id: string }) => a.id)]
+    );
+  }
+  // El anticipo ya salió de caja antes; ahora solo sale el saldo restante.
+  if (net > 0) {
+    await client.query(
+      `INSERT INTO cash_movements
+         (cash_register_id, movement, category, reference_type, amount, description, created_by)
+       VALUES ($1, 'EXPENSE', 'PAGO_MANO_OBRA', 'worker_payments', $2, $3, $4)`,
+      [p.cashRegisterId, net, `Pago semana ${p.role.toLowerCase()} ${p.name}`, p.userId]
+    );
+  }
+  return { gross, advances, paid: net, count: ids.length };
+}
+
 laborRouter.post("/pay-worker", asyncRoute(async (req, res) => {
   await ensureLaborTables();
   const body = z.object({
@@ -786,50 +842,12 @@ laborRouter.post("/pay-worker", asyncRoute(async (req, res) => {
   const user = (req as AuthenticatedRequest).user;
 
   const result = await inTransaction(async (client) => {
-    const pending = await client.query(
-      `SELECT * FROM worker_payments
-       WHERE worker_role = $1 AND worker_name = $2 AND status = 'PENDING'
-         AND work_date BETWEEN $3 AND $4
-       FOR UPDATE`,
-      [body.worker_role, body.worker_name, body.from, body.to]
-    );
-    if (!pending.rowCount) throw new ApiError(400, "No hay pagos pendientes de este trabajador en el período");
-
-    const gross = round2(pending.rows.reduce((s: number, p: { net_amount: string }) => s + Number(p.net_amount), 0));
-
-    // Anticipos pendientes del período: ya salieron de caja, se descuentan.
-    const advResult = await client.query(
-      `SELECT * FROM worker_advances
-       WHERE worker_role = $1 AND worker_name = $2 AND status = 'PENDING'
-         AND advance_date BETWEEN $3 AND $4
-       FOR UPDATE`,
-      [body.worker_role, body.worker_name, body.from, body.to]
-    );
-    const advances = round2(advResult.rows.reduce((s: number, a: { amount: string }) => s + Number(a.amount), 0));
-    const net = round2(Math.max(0, gross - advances));
-
-    const ids = pending.rows.map((p: { id: string }) => p.id);
-    await client.query(
-      `UPDATE worker_payments SET status = 'PAID', paid_at = now(), cash_register_id = $2 WHERE id = ANY($1)`,
-      [ids, body.cash_register_id]
-    );
-    if (advResult.rowCount) {
-      await client.query(
-        `UPDATE worker_advances SET status = 'APPLIED', applied_at = now() WHERE id = ANY($1)`,
-        [advResult.rows.map((a: { id: string }) => a.id)]
-      );
-    }
-    // El anticipo ya salió de caja antes; ahora solo sale el saldo restante.
-    if (net > 0) {
-      await client.query(
-        `INSERT INTO cash_movements
-           (cash_register_id, movement, category, reference_type, amount, description, created_by)
-         VALUES ($1, 'EXPENSE', 'PAGO_MANO_OBRA', 'worker_payments', $2, $3, $4)`,
-        [body.cash_register_id, net,
-         `Pago semana ${body.worker_role.toLowerCase()} ${body.worker_name}`, user?.id ?? null]
-      );
-    }
-    return { gross, advances, paid: net, count: ids.length };
+    const r = await pagarTrabajadorPlanta(client, {
+      role: body.worker_role, name: body.worker_name, from: body.from, to: body.to,
+      cashRegisterId: body.cash_register_id, userId: user?.id ?? null
+    });
+    if (!r) throw new ApiError(400, "No hay pagos pendientes de este trabajador en el período");
+    return r;
   });
 
   res.json(result);

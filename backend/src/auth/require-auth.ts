@@ -73,6 +73,7 @@ const WRITE_MODULES_BY_PREFIX: Record<string, AppModule[]> = {
   // tiene Nómina, Caja o Producción; el backend aplica la misma regla.
   "labor": ["Caja", "Produccion", "Nomina"],
   "admin-payroll": ["Caja", "Nomina"],
+  "nomina-semanal": ["Caja", "Nomina"],
   "cuadrilla": ["Caja", "Produccion", "Cuadrilla"],
   "pilado": ["Caja", "Produccion", "Servicio Pilado"],
   "tunnel-reservations": ["Secadoras"],
@@ -98,6 +99,7 @@ const SUB_DE_ESCRITURA: Array<{ module: AppModule; prefix: string; sub: string; 
   { module: "Seleccion", prefix: "selection", sub: "proceso", test: (_m, r) => /^\/batches\/[^/]+\/(finish|cancel)\/?$/.test(r) },
   { module: "Nomina", prefix: "labor", sub: "secadora", test: (_m, r) => r.startsWith("/secador-days") },
   { module: "Nomina", prefix: "labor", sub: "pagos", test: () => true },
+  { module: "Nomina", prefix: "nomina-semanal", sub: "pagos", test: () => true },
   { module: "Nomina", prefix: "admin-payroll", sub: "sueldo-admin", test: () => true }
 ];
 
