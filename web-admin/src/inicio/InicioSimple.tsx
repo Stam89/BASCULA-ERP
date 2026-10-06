@@ -27,7 +27,7 @@ export function InicioSimple({ nombre, hoy, tiles, insignias, onIr, onVerComplet
   esVistaPrevia?: boolean;
 }) {
   const saludo = new Date().getHours() < 12 ? "Buenos días" : new Date().getHours() < 19 ? "Buenas tardes" : "Buenas noches";
-  const fecha = new Date().toLocaleDateString("es-EC", { weekday: "long", day: "numeric", month: "long" });
+  const fecha = new Date().toLocaleDateString("es-EC", { weekday: "long", day: "numeric", month: "long" }).replace(/^./, (c) => c.toUpperCase());
   const boton = (t: Tile, grande: boolean) => {
     const ins = insignias[t.tab];
     return (

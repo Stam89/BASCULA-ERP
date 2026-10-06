@@ -4925,7 +4925,6 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .hoy-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .hoy-title { margin: 0; font-size: 18px; font-weight: 800; color: var(--c-text); }
 .hoy-sub { margin: 2px 0 0; font-size: 13px; color: var(--c-text-muted); }
-.hoy-fecha { text-transform: capitalize; }
 .hoy-refresh { border: 1px solid var(--c-border); background: var(--c-surface-2); color: var(--c-text-2); width: 34px; height: 34px; border-radius: 10px; cursor: pointer; font-size: 17px; line-height: 1; display: grid; place-items: center; }
 .hoy-refresh:hover:not(:disabled) { background: var(--c-surface-3); }
 .hoy-refresh:disabled { cursor: default; opacity: .7; }
@@ -5093,11 +5092,11 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 /* ── 🏠 Inicio simple ─────────────────────────────────────────────────────── */
 .ini-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 .ini-hola { margin: 0; font-size: 22px; font-weight: 800; color: var(--c-text); }
-.ini-fecha { margin: 2px 0 0; font-size: 13.5px; color: var(--c-text-muted); text-transform: capitalize; }
+.ini-fecha { margin: 2px 0 0; font-size: 13.5px; color: var(--c-text-muted); }
 .ini-previa { margin: 0 0 12px; padding: 8px 12px; border-radius: 10px; background: #eff6ff; color: #1e40af; font-size: 13px; }
 .ini-sec { margin: 18px 0 8px; font-size: 13px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--c-text-muted); }
-.ini-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
-.ini-grid--grande { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.ini-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(190px, 100%), 1fr)); gap: 10px; }
+.ini-grid--grande { grid-template-columns: repeat(auto-fill, minmax(min(250px, 100%), 1fr)); gap: 12px; }
 .ini-tile { display: flex; align-items: center; gap: 12px; position: relative; text-align: left; width: 100%; min-height: 64px; padding: 12px 14px; border: 1px solid var(--c-border); border-radius: 14px; background: var(--c-surface); box-shadow: var(--shadow-xs); cursor: pointer; color: var(--c-text); font: inherit; transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease; }
 .ini-tile:hover { border-color: var(--c-brand); box-shadow: var(--shadow-sm); transform: translateY(-1px); }
 .ini-tile:focus-visible { outline: 3px solid var(--c-brand-glow); outline-offset: 2px; border-color: var(--c-brand); }

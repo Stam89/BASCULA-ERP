@@ -24,7 +24,7 @@ export function HoyPanel({ tareas, cargando, error, onIr, onRefrescar }: {
   onIr: (t: TareaHoy) => void;
   onRefrescar: () => void;
 }) {
-  const fecha = new Date().toLocaleDateString("es-EC", { weekday: "long", day: "numeric", month: "long" });
+  const fecha = new Date().toLocaleDateString("es-EC", { weekday: "long", day: "numeric", month: "long" }).replace(/^./, (c) => c.toUpperCase());
   const pendientes = tareas?.filter((t) => t.nivel !== "info").length ?? 0;
   return (
     <section className="hoy" aria-label="Qué hacer hoy">
