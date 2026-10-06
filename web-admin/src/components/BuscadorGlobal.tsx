@@ -6,8 +6,11 @@ import { apiGet } from "../api";
 // nombre. Elegir un resultado lleva a la pestaña donde se ve. No modifica nada.
 
 type Tipo = "ticket" | "ingreso" | "agricultor" | "cliente" | "proveedor" | "lote" | "pedido" | "trabajador";
-type Resultado = { tipo: Tipo; id: string; titulo: string; detalle: string; tab: string; sub?: string };
-type Item = { clave: string; grupo: string; icono: string; titulo: string; detalle: string; tab: string; sub?: string };
+type Resultado = { tipo: Tipo; id: string; titulo: string; detalle: string; tab: string; sub?: string; buscar?: string };
+type Item = { clave: string; grupo: string; icono: string; titulo: string; detalle: string; tab: string; sub?: string; filtro?: Filtro };
+
+/** Qué registro abrir: la pantalla de destino llena su propia caja de búsqueda con `texto`. */
+export type Filtro = { tipo: Tipo; texto: string };
 
 const GRUPOS: Record<Tipo, { titulo: string; icono: string }> = {
   ticket: { titulo: "Tickets de báscula", icono: "🎫" },
@@ -54,7 +57,7 @@ export function BuscadorGlobal({ abierto, onCerrar, tabsDisponibles, etiquetaTab
   /** Pestañas a las que el usuario tiene acceso (los resultados de las demás se ocultan). */
   tabsDisponibles: string[];
   etiquetaTab: (tab: string) => string;
-  onIr: (tab: string, sub?: string) => void;
+  onIr: (tab: string, sub?: string, filtro?: Filtro) => void;
 }) {
   const [q, setQ] = useState("");
   const [remotos, setRemotos] = useState<Resultado[]>([]);
@@ -103,7 +106,7 @@ export function BuscadorGlobal({ abierto, onCerrar, tabsDisponibles, etiquetaTab
     for (const r of remotos) {
       if (!tabsDisponibles.includes(r.tab)) continue;
       const g = GRUPOS[r.tipo];
-      lista.push({ clave: `${r.tipo}-${r.id}`, grupo: g.titulo, icono: g.icono, titulo: r.titulo, detalle: r.detalle ? `${r.detalle} · ${etiquetaTab(r.tab)}` : etiquetaTab(r.tab), tab: r.tab, sub: r.sub });
+      lista.push({ clave: `${r.tipo}-${r.id}`, grupo: g.titulo, icono: g.icono, titulo: r.titulo, detalle: r.detalle ? `${r.detalle} · ${etiquetaTab(r.tab)}` : etiquetaTab(r.tab), tab: r.tab, sub: r.sub, filtro: r.buscar ? { tipo: r.tipo, texto: r.buscar } : undefined });
     }
     return lista.slice(0, 40);
   }, [q, remotos, tabsDisponibles, etiquetaTab]);
@@ -112,7 +115,7 @@ export function BuscadorGlobal({ abierto, onCerrar, tabsDisponibles, etiquetaTab
   useEffect(() => { listaRef.current?.querySelector<HTMLElement>(`[data-i="${activo}"]`)?.scrollIntoView({ block: "nearest" }); }, [activo]);
 
   if (!abierto) return null;
-  const elegir = (it: Item | undefined) => { if (!it) return; onCerrar(); onIr(it.tab, it.sub); };
+  const elegir = (it: Item | undefined) => { if (!it) return; onCerrar(); onIr(it.tab, it.sub, it.filtro); };
   const teclas = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") { e.preventDefault(); onCerrar(); }
     else if (e.key === "ArrowDown") { e.preventDefault(); setActivo((a) => Math.min(items.length - 1, a + 1)); }

@@ -8,8 +8,8 @@ import { patronBusqueda, patronCompacto, sqlCompacto, sqlPlegar as P, unir, type
 
 // 🔎 Buscador global (Ctrl+K). SOLO LECTURA: nunca escribe nada. Cada grupo se consulta
 // por separado y, si uno falla, los demás siguen respondiendo. Lo propio de cada
-// accionista (agricultores, lotes, ingresos, pedidos, tickets) se limita al accionista
-// activo, igual que las pantallas; clientes y proveedores son compartidos.
+// accionista (lotes, ingresos, pedidos, tickets) se limita al accionista
+// activo, igual que las pantallas; agricultores, clientes y proveedores son compartidos.
 export const busquedaRouter = Router();
 
 const POR_GRUPO = 5;
@@ -42,7 +42,8 @@ busquedaRouter.get("/", asyncRoute(async (req, res) => {
       [patron, acc, compacto]
     )).rows.map((r): ResultadoBusqueda => ({
       tipo: "ticket", id: String(r.id), titulo: `Ticket #${r.numero ?? "—"} · ${r.cliente ?? "—"}`,
-      detalle: unir(r.placa, r.qq != null ? `${Number(r.qq).toFixed(2)} QQ` : "", String(r.fecha ?? "").split(" ")[0]), tab: "Bascula"
+      detalle: unir(r.placa, r.qq != null ? `${Number(r.qq).toFixed(2)} QQ` : "", String(r.fecha ?? "").split(" ")[0]), tab: "Bascula",
+      buscar: r.numero ? String(r.numero) : undefined
     }))),
     // Ingresos pesados en la planta.
     seguro("ingresos", async () => (await pool.query(
@@ -57,13 +58,15 @@ busquedaRouter.get("/", asyncRoute(async (req, res) => {
       tipo: "ingreso", id: String(r.id), titulo: `Ingreso ${r.ticket_number} · ${r.agricultor ?? "—"}`,
       detalle: unir(r.placa, r.qq != null ? `${Number(r.qq).toFixed(2)} QQ` : "", fecha(r.created_at)), tab: "Bascula"
     }))),
+    // El directorio de agricultores es COMPARTIDO por todos los accionistas (como su pantalla).
     seguro("agricultores", async () => (await pool.query(
       `SELECT id, full_name, identification, phone FROM farmers
-        WHERE accionista_id = $2 AND is_active AND (${like("full_name")} OR ${like("identification")} OR ${like("phone")})
+        WHERE ${like("full_name")} OR ${like("identification")} OR ${like("phone")}
         ORDER BY full_name LIMIT ${POR_GRUPO}`,
-      [patron, acc]
+      [patron]
     )).rows.map((r): ResultadoBusqueda => ({
-      tipo: "agricultor", id: String(r.id), titulo: r.full_name, detalle: unir(r.identification, r.phone), tab: "Agricultores"
+      tipo: "agricultor", id: String(r.id), titulo: r.full_name, detalle: unir(r.identification, r.phone), tab: "Agricultores",
+      buscar: r.full_name
     }))),
     seguro("clientes", async () => (await pool.query(
       `SELECT id, full_name, identification, phone FROM customers
@@ -111,7 +114,8 @@ busquedaRouter.get("/", asyncRoute(async (req, res) => {
         [patron]
       )).rows.map((r): ResultadoBusqueda => ({
         tipo: "trabajador", id: String(r.nombre), titulo: r.nombre,
-        detalle: r.pendientes > 0 ? `${r.pendientes} pago(s) pendiente(s)` : "Sin pagos pendientes", tab: "Nomina", sub: "pagos"
+        detalle: r.pendientes > 0 ? `${r.pendientes} pago(s) pendiente(s)` : "Sin pagos pendientes", tab: "Nomina", sub: "pagos",
+        buscar: r.nombre
       }));
     })
   ]);

@@ -45,6 +45,12 @@ export type ResultadoBusqueda = {
   /** Pestaña donde se ve (clave interna del menú). */
   tab: string;
   sub?: string;
+  /**
+   * Texto exacto con el que la pantalla de destino filtra su propia lista para dejar a la
+   * vista justo este registro (p. ej. el número del ticket, o el nombre del agricultor).
+   * Si no existe, solo se abre la pestaña.
+   */
+  buscar?: string;
 };
 
 /** Igual que `sqlPlegar` pero dejando solo letras y números (se compara con `patronCompacto`). */

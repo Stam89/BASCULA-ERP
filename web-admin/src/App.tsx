@@ -24,7 +24,7 @@ import { CatalogoProductos } from "./components/CatalogoProductos";
 import { AccesoRemoto } from "./components/AccesoRemoto";
 import { CambiarClaveModal } from "./components/CambiarClave";
 import { HoyPanel, type TareaHoy } from "./components/HoyPanel";
-import { BuscadorGlobal } from "./components/BuscadorGlobal";
+import { BuscadorGlobal, type Filtro } from "./components/BuscadorGlobal";
 import { PagarSemana, imprimirReciboSemana, type SemanaVista, type SemanaPagada } from "./components/PagarSemana";
 import { revisarFinalizacion } from "./secadoras/revisarFinalizacion";
 import { ConfirmarFinalizacion } from "./secadoras/ConfirmarFinalizacion";
@@ -4477,6 +4477,27 @@ export function App() {
   }
   // Cada tarea de «Hoy» lleva a la pantalla donde se resuelve.
   function irAHoy(t: TareaHoy) { irADestino(t.tab, t.sub); }
+  // Resultado del buscador: abre su pantalla y, si esa pantalla tiene caja de búsqueda propia
+  // (tickets de báscula, agricultores, pagos de nómina), la llena para dejar a la vista el
+  // registro elegido. Solo llena filtros: no cambia ningún dato.
+  function irAResultado(tab: string, sub?: string, filtro?: Filtro) {
+    let cajaDeBusqueda: string | null = null;
+    if (filtro?.texto) {
+      if (tab === "Bascula" && filtro.tipo === "ticket") { setTicketFilter("all"); setTicketSearch(filtro.texto); cajaDeBusqueda = "Buscar ticket"; }
+      else if (tab === "Agricultores" && filtro.tipo === "agricultor") { setFarmerSearch(filtro.texto); cajaDeBusqueda = "Buscar agricultor"; }
+      else if (tab === "Nomina" && filtro.tipo === "trabajador") { setPagoBuscar(filtro.texto); cajaDeBusqueda = "Buscar trabajador"; }
+    }
+    irADestino(tab, sub);
+    if (cajaDeBusqueda) {
+      addToast(`Mostrando solo «${filtro!.texto}». Borra el texto de la caja de búsqueda para ver todo.`, "warn");
+      const prefijo = cajaDeBusqueda;
+      // Tras cambiar de pantalla, se acerca la caja de búsqueda para que se vea el resultado.
+      window.setTimeout(() => {
+        const caja = [...document.querySelectorAll<HTMLInputElement>("input")].find((i) => i.placeholder.replace(/^[^\wÁÉÍÓÚáéíóú]+/, "").startsWith(prefijo));
+        caja?.scrollIntoView({ block: "center", behavior: "smooth" });
+      }, 450);
+    }
+  }
   // Ctrl+K (o ⌘K) abre/cierra el buscador desde cualquier pantalla.
   useEffect(() => {
     if (!authUser) return;
@@ -12491,7 +12512,7 @@ export function App() {
           onCerrar={() => setBuscadorAbierto(false)}
           tabsDisponibles={visibleTabs}
           etiquetaTab={tabLabel}
-          onIr={irADestino}
+          onIr={irAResultado}
         />
         <header className="topbar">
           <button type="button" className="mobileMenuBtn" onClick={() => setMenuMovilAbierto(true)} aria-label="Abrir menú">☰</button>
