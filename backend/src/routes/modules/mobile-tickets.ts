@@ -132,6 +132,14 @@ type LiquidationResult = {
   cashMovementId: string | null;
 };
 
+// Un ticket de la báscula se paga UNA sola vez y por un solo camino: o se liquida al agricultor, o
+// entra como materia prima. Sin esta guardia un doble clic (o dos pantallas a la vez) volvía a
+// pagarle al agricultor, y un ticket ya liquidado podía ingresar también al inventario.
+export function exigirTicketSinPagar(row: { liquidated_at?: unknown; weighing_ticket_id?: unknown }, para: "liquidar" | "ingresar"): void {
+  if (row.liquidated_at) throw new ApiError(409, "Este ticket ya fue liquidado: no se puede volver a " + (para === "liquidar" ? "liquidar" : "ingresar") + ".");
+  if (row.weighing_ticket_id) throw new ApiError(409, para === "liquidar" ? "Este ticket ya ingresó como materia prima: no se puede liquidar." : "Este ticket ya ingresó como materia prima.");
+}
+
 async function previewLiquidacionTicket(ticketId: string, precioQQ: number): Promise<LiquidationResult> {
   const ticket = await pool.query(
     "SELECT * FROM mobile_synced_tickets WHERE id = $1",
@@ -140,6 +148,7 @@ async function previewLiquidacionTicket(ticketId: string, precioQQ: number): Pro
   if (!ticket.rowCount) throw new ApiError(404, "Ticket no encontrado");
 
   const row = ticket.rows[0];
+  exigirTicketSinPagar(row, "liquidar");
   if (!row.farmer_id) throw new ApiError(400, "El ticket no tiene agricultor vinculado");
 
   const quintals = Number(row.quintals);
@@ -185,6 +194,7 @@ export async function procesarLiquidacionTicket(
     if (!ticket.rowCount) throw new ApiError(404, "Ticket no encontrado");
 
     const row = ticket.rows[0];
+    exigirTicketSinPagar(row, "liquidar");
     if (!row.farmer_id) throw new ApiError(400, "El ticket no tiene agricultor vinculado");
 
     const quintals = Number(row.quintals);
@@ -498,7 +508,7 @@ mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, asyn
   const ticketRow = await pool.query("SELECT * FROM mobile_synced_tickets WHERE id = $1", [req.params.id]);
   if (!ticketRow.rowCount) throw new ApiError(404, "Ticket no encontrado");
   const t = ticketRow.rows[0];
-  if (t.weighing_ticket_id) throw new ApiError(409, "Este ticket ya ingresó como materia prima.");
+  exigirTicketSinPagar(t, "ingresar");
   if (!t.farmer_id) throw new ApiError(400, "Primero vincula el ticket a un agricultor/cliente.");
   if (Number(t.quintals) <= 0) throw new ApiError(400, "El ticket no tiene quintales calculados.");
   const isMaquila = operationType !== "COMPRA";
@@ -534,6 +544,10 @@ mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, asyn
   }
 
   const result = await inTransaction(async (client) => {
+    // Con el ticket bloqueado se vuelve a comprobar: si otra pantalla lo liquidó o ingresó mientras
+    // tanto, se rechaza en vez de pagarlo / meterlo al inventario dos veces.
+    const fresco = await client.query("SELECT liquidated_at, weighing_ticket_id FROM mobile_synced_tickets WHERE id = $1 FOR UPDATE", [req.params.id]);
+    if (fresco.rowCount) exigirTicketSinPagar(fresco.rows[0], "ingresar");
     // El ingreso de materia prima nace sin lote (lot_id = NULL). El lote se le
     // asignará cuando entre a un túnel de secado.
     const ticket = await client.query(
