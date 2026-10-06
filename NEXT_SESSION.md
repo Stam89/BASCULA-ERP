@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🔒 Librerías con avisos de seguridad (2026-10-06)
+- Se actualizaron SOLO paquetes de bajo riesgo (`npm update` puntual, sin `--force`): express 4.22.3, qs, proxy-addr (crítico de suplantación de IP), morgan, multer, @grpc/grpc-js, @fastify/busboy, brace-expansion, source-map-js. Servidor: 15 avisos → 6 moderados, 0 críticos; web-admin: 3 → 1 (xlsx).
+- NO se tocó el árbol de Firebase (`google-gax`, `google-auth-library`, `@google-cloud/storage`): `npm audit fix` lo subiría de versión mayor y afectaría la sincronización de la báscula. Quedan 6 moderados de `uuid` (dentro de exceljs/firebase-admin; solo aplica si se llama con parámetro `buf`, aquí no) y `xlsx` (sin arreglo publicado; solo lee Excel que sube el administrador en su navegador).
+- Verificado: tsc, 182 pruebas, reinicio oculto, `/health` local y por túnel, consultas autenticadas 200 y la importación automática de Firebase siguió trayendo tickets. Para volver atrás: `git revert` del commit de lockfiles y `npm install` en `backend/`.
+
 ### 🏠 Inicio simple por persona (2026-10-06)
 - Quien NO es administrador entra al Dashboard con una pantalla de botones grandes: saludo, «📌 Hoy», **lo de todos los días** (💰 Caja → ⚖️ Ingresar materia prima → 🏭 Producción, el flujo que describió el dueño) y debajo «Otras pantallas» más pequeñas. Los botones salen de las pestañas que la persona YA tiene (`visibleTabs`): no cambia permisos ni datos. Si no tiene ninguna «diaria» (p. ej. Cecilia: Ventas/Por cobrar/Por pagar), sus primeras ≤4 pantallas pasan a ser las grandes. Botón «Ver panel completo» (el de siempre, con el Panel Integral para quien tiene permiso «Dashboard»); la elección se recuerda por usuario en localStorage (`bascula-erp:inicio-simple:<id>`). El ADMIN sigue entrando al panel completo de siempre y tiene «🏠 Ver inicio simple (vista previa)».
 - Datos de cada botón: Caja (abierta/cerrada, de `dashboard.current_cash_register`), Báscula (`GET /tickets/por-ingresar` → n, misma definición que «Pendientes» de la lista; al abrir la pestaña se pone «Pendientes» y se limpia la búsqueda), Producción (`productionDryingReports.length`), y el resto con cuántas tareas de «Hoy» tiene.
@@ -121,7 +126,7 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - Revisado: tsc/lint/133 pruebas OK; integridad de BD sin hallazgos; humo de las 169 rutas GET sin parámetros (con matriz y socio) sin errores 5xx (las que exigen parámetros responden 400 como debe); respaldos diarios 20:00 en OneDrive\BASCULA-ERP-Backups (30 copias, el de 7 días local no se usa); Cloudflared y PostgreSQL como servicio; sin secretos versionados.
 - Corregido: «Puesta en marcha» y `npm run preflight` decían «Falta archivo FIREBASE_KEY» (buscaban otra ruta); ahora usan la misma que la integración (`backend/scripts/firebase-key.json`).
 - Pendiente (usuario): fecha de «Inicio contable» (Parámetros contables) y recrear cuentas de banco (el borrado las eliminó); correo de recuperación de 3 de 4 usuarios.
-- Pendiente (decisión): `npm audit` (13 avisos DoS); `npm audit fix` sube @google-cloud/firestore 8→9 y storage 7→8 (Firebase/báscula): NO aplicar sin probar sincronización.
+- (Resuelto 2026-10-06) `npm audit`: ver sección «Librerías con avisos de seguridad».
 
 ### Bajada de carro: «📋 Todo desde [Contar desde]» (2026-10-05)
 - La tabla solo mostraba la semana (sáb→vie) y lo anterior iba resumido en «Pendiente de semanas anteriores»; ahora hay un selector «📅 Por semana / 📋 Todo desde dd/mm» que lista TODOS los tickets desde «Contar desde» hasta hoy (con nombre, monto y estado; se puede asignar quién bajó).
