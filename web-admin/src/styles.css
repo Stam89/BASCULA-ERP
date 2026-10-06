@@ -5089,3 +5089,30 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .asist-chip--opcional, .asist-chip--info { background: #e2e8f0; color: #475569; }
 .asist-detalle { padding: 0 14px 12px 48px; }
 @media (max-width: 640px) { .asist { padding: 12px; } .asist-detalle { padding-left: 14px; } .asist-acciones button { width: 100%; } }
+
+/* ── 🏠 Inicio simple ─────────────────────────────────────────────────────── */
+.ini-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.ini-hola { margin: 0; font-size: 22px; font-weight: 800; color: var(--c-text); }
+.ini-fecha { margin: 2px 0 0; font-size: 13.5px; color: var(--c-text-muted); text-transform: capitalize; }
+.ini-previa { margin: 0 0 12px; padding: 8px 12px; border-radius: 10px; background: #eff6ff; color: #1e40af; font-size: 13px; }
+.ini-sec { margin: 18px 0 8px; font-size: 13px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--c-text-muted); }
+.ini-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.ini-grid--grande { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.ini-tile { display: flex; align-items: center; gap: 12px; position: relative; text-align: left; width: 100%; min-height: 64px; padding: 12px 14px; border: 1px solid var(--c-border); border-radius: 14px; background: var(--c-surface); box-shadow: var(--shadow-xs); cursor: pointer; color: var(--c-text); font: inherit; transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease; }
+.ini-tile:hover { border-color: var(--c-brand); box-shadow: var(--shadow-sm); transform: translateY(-1px); }
+.ini-tile:focus-visible { outline: 3px solid var(--c-brand-glow); outline-offset: 2px; border-color: var(--c-brand); }
+.ini-tile--grande { min-height: 104px; padding: 16px 18px; border-width: 2px; border-color: #a7f3d0; background: linear-gradient(180deg, #f0fdf8, #fff); }
+.ini-ico { font-size: 26px; line-height: 1; flex: none; }
+.ini-tile--grande .ini-ico { font-size: 38px; }
+.ini-txt { display: grid; gap: 3px; min-width: 0; flex: 1; }
+.ini-titulo { font-weight: 800; font-size: 15px; }
+.ini-tile--grande .ini-titulo { font-size: 18px; }
+.ini-ayuda { font-size: 12.5px; color: var(--c-text-muted); line-height: 1.35; }
+.ini-badge { position: absolute; top: 8px; right: 10px; font-size: 11.5px; font-weight: 800; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
+.ini-badge--ok { background: #d1fae5; color: #065f46; }
+.ini-badge--atencion { background: #fef3c7; color: #92400e; }
+.ini-badge--info { background: #e2e8f0; color: #475569; }
+.ini-tile:not(.ini-tile--grande) .ini-badge { position: static; align-self: flex-start; }
+.ini-vacio { margin: 12px 0; padding: 14px; border-radius: 12px; background: var(--c-surface-2); color: var(--c-text-muted); font-size: 14px; }
+@media (prefers-reduced-motion: reduce) { .ini-tile { transition: none; } .ini-tile:hover { transform: none; } }
+@media (max-width: 640px) { .ini-grid--grande { grid-template-columns: 1fr; } .ini-grid { grid-template-columns: 1fr 1fr; } .ini-hola { font-size: 19px; } }

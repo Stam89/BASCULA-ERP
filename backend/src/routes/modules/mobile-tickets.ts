@@ -347,6 +347,20 @@ mobileTicketsRouter.get("/corte", requireAuth, asyncRoute(async (_req, res) => {
 
 // PUT: solo el administrador. desde = null quita el corte (se cuentan todos).
 // Es solo un filtro de vista: no cambia ni borra ningún ticket.
+// Cuántos tickets de la báscula están POR INGRESAR: misma definición que «Pendientes» de la lista
+// (sin ingreso ni liquidación, modo principal, desde «Contar tickets desde»). Lo usa el inicio simple.
+mobileTicketsRouter.get("/por-ingresar", requireAuth, asyncRoute(async (_req, res) => {
+  const desde = await leerCorteBascula();
+  const r = await pool.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM mobile_synced_tickets t
+      WHERE t.liquidated_at IS NULL AND t.weighing_ticket_id IS NULL
+        AND lower(coalesce(t.raw_payload->>'modo', 'principal')) = 'principal'
+        AND ($1::date IS NULL OR ${fechaTicketSql("t")} >= $1::date)`,
+    [desde]
+  );
+  res.json({ n: r.rows[0]?.n ?? 0, desde });
+}));
+
 mobileTicketsRouter.put("/corte", requireAuth, requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({ desde: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable() }).parse(req.body);
   const user = (req as AuthenticatedRequest).user;

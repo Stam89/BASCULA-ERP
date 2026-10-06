@@ -22,6 +22,8 @@ import { CorreoRecuperacionModal } from "./components/CorreoRecuperacion";
 import { ConfigCorreoClaves } from "./components/ConfigCorreoClaves";
 import { ResumenDiarioConfig } from "./components/ResumenDiarioConfig";
 import { AsistenteArranque } from "./asistente/AsistenteArranque";
+import { InicioSimple, type Insignia } from "./inicio/InicioSimple";
+import { armarTiles } from "./inicio/tiles";
 import type { Destino as DestinoAsistente } from "./asistente/pasos";
 import { CatalogoProductos } from "./components/CatalogoProductos";
 import { AccesoRemoto } from "./components/AccesoRemoto";
@@ -2151,6 +2153,10 @@ export function App() {
   const [dashView, setDashView] = useState<"panel" | "resumen">("panel");
   // 🔎 Buscador global (Ctrl+K).
   const [buscadorAbierto, setBuscadorAbierto] = useState(false);
+  // 🏠 Inicio simple (quien NO es administrador entra a una pantalla con botones grandes; puede
+  // pasar al panel completo y la elección se recuerda en este navegador). El admin la puede ver como vista previa.
+  const [inicioPref, setInicioPref] = useState<"1" | "0" | null>(null);
+  const [porIngresar, setPorIngresar] = useState<number | null>(null);
   // 🗓️ Pagar la semana: vista previa del cierre de Nómina (la calcula el servidor).
   const [semanaHasta, setSemanaHasta] = useState("");
   const [semanaVista, setSemanaVista] = useState<SemanaVista | null>(null);
@@ -4481,6 +4487,28 @@ export function App() {
   }
   // Cada tarea de «Hoy» lleva a la pantalla donde se resuelve.
   function irAHoy(t: TareaHoy) { irADestino(t.tab, t.sub); }
+  // 🏠 Inicio simple: recordar la elección por usuario y traer el contador de tickets por ingresar.
+  useEffect(() => {
+    if (!authUser) { setInicioPref(null); return; }
+    try { const v = localStorage.getItem(`bascula-erp:inicio-simple:${authUser.id}`); setInicioPref(v === "1" || v === "0" ? v : null); } catch { setInicioPref(null); }
+  }, [authUser]);
+  const inicioSimple = (inicioPref ?? (isAdmin ? "0" : "1")) === "1";
+  function cambiarInicio(simple: boolean) {
+    setInicioPref(simple ? "1" : "0");
+    if (authUser) { try { localStorage.setItem(`bascula-erp:inicio-simple:${authUser.id}`, simple ? "1" : "0"); } catch { /* sin almacenamiento */ } }
+  }
+  useEffect(() => {
+    if (!authUser || activeTab !== "Dashboard" || !inicioSimple || !visibleTabs.includes("Bascula")) { return; }
+    let vivo = true;
+    apiGet<{ n: number }>("/tickets/por-ingresar").then((r) => { if (vivo) setPorIngresar(r.n); }).catch(() => { if (vivo) setPorIngresar(null); });
+    return () => { vivo = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUser, activeTab, inicioSimple, activeAccionistaId, hoyTareas]);
+  // Un botón del inicio simple lleva a su pantalla (la de báscula se abre en «Pendientes», sin búsquedas viejas).
+  function irAInicio(tab: string) {
+    if (tab === "Bascula") { setTicketFilter("pending"); setTicketSearch(""); }
+    irATab(tab as typeof activeTab);
+  }
   // Asistente de puesta en marcha: cada paso lleva a la tarjeta de Configuración donde se hace.
   function irAPasoArranque(d: DestinoAsistente) {
     switch (d) {
@@ -12589,8 +12617,45 @@ export function App() {
           />
         )}
 
-        {activeTab === "Dashboard" && (
+        {activeTab === "Dashboard" && inicioSimple && (() => {
+          const tareasVisibles = hoyTareas ? hoyTareas.filter((t) => visibleTabs.includes(t.tab)) : null;
+          // Un dato corto por botón: lo de todos los días con su estado real; el resto, cuántas tareas de «Hoy» tiene.
+          const insignias: Record<string, Insignia | undefined> = {};
+          for (const t of tareasVisibles ?? []) {
+            if (t.nivel === "info") continue;
+            const previo = insignias[t.tab];
+            const n = previo ? Number(previo.texto.split(" ")[0]) + 1 : 1;
+            insignias[t.tab] = { texto: `${n} por atender`, nivel: "atencion" };
+          }
+          insignias["Caja"] = cajaAbierta ? { texto: "Abierta", nivel: "ok" } : { texto: "Cerrada · ábrela", nivel: "atencion" };
+          if (porIngresar != null) insignias["Bascula"] = porIngresar > 0 ? { texto: `${porIngresar} por ingresar`, nivel: "atencion" } : { texto: "Al día", nivel: "ok" };
+          insignias["Produccion"] = productionDryingReports.length > 0 ? { texto: `${productionDryingReports.length} lote(s) listos`, nivel: "atencion" } : { texto: "Nada por producir", nivel: "ok" };
+          return (
+            <InicioSimple
+              nombre={authUser?.name ?? ""}
+              tiles={armarTiles(visibleTabs)}
+              insignias={insignias}
+              onIr={irAInicio}
+              onVerCompleto={() => cambiarInicio(false)}
+              esVistaPrevia={isAdmin}
+              hoy={
+                <HoyPanel
+                  tareas={tareasVisibles}
+                  cargando={hoyBusy}
+                  error={hoyError}
+                  onIr={irAHoy}
+                  onRefrescar={() => { loadHoy().catch(() => undefined); }}
+                />
+              }
+            />
+          );
+        })()}
+        {activeTab === "Dashboard" && !inicioSimple && (
           <>
+            {/* 🏠 Para volver al inicio simple (el administrador lo ve como vista previa). */}
+            <div style={{ display: "flex", justifyContent: "flex-end", margin: "0 0 8px" }}>
+              <button type="button" className="btnGhost" onClick={() => cambiarInicio(true)} title="Pantalla de inicio con botones grandes para lo de todos los días">🏠 {isAdmin ? "Ver inicio simple (vista previa)" : "Volver al inicio simple"}</button>
+            </div>
             {/* 📌 Hoy: lo que hay que hacer ahora (solo lo de pestañas a las que tiene acceso). */}
             <HoyPanel
               tareas={hoyTareas ? hoyTareas.filter((t) => visibleTabs.includes(t.tab)) : null}
