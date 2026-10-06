@@ -36,8 +36,8 @@ export function InicioSimple({ nombre, hoy, tiles, insignias, onIr, onVerComplet
         <span className="ini-txt">
           <span className="ini-titulo">{t.titulo}</span>
           {grande && <span className="ini-ayuda">{t.ayuda}</span>}
+          {ins && <span className={`ini-badge ini-badge--${ins.nivel}`}>{ins.texto}</span>}
         </span>
-        {ins && <span className={`ini-badge ini-badge--${ins.nivel}`}>{ins.texto}</span>}
       </button>
     );
   };
