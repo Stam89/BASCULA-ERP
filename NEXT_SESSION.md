@@ -49,6 +49,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Secadoras: confirmación inteligente al finalizar un túnel (2026-10-05)
+- La ventana «Confirmar finalización» ahora dice en grande QUÉ se cierra (TÚNEL N · Motor M, lotes, QQ, entró/terminó, duración) y revisa antes de cerrar (`web-admin/src/secadoras/revisarFinalizacion.ts`, lógica pura):
+  - ⛔ bloquea: sin hora de inicio/fin, o fin ≤ inicio (el servidor ya lo rechazaba también);
+  - ⚠️ exige marcar «confirmo»: hora final futura (+5 min), duración < 6 h o > 30 h, y sobre todo si OTRO túnel del mismo motor que se llenó ANTES sigue en proceso (el error real del Túnel 2, 02/10);
+  - ℹ️ informa si es el último túnel (pedirá combustible) o cuántos quedan en el motor.
+- Componente `secadoras/ConfirmarFinalizacion.tsx` (clases `finConf-*`); App.tsx solo calcula los datos (reutiliza `dryingReports` para ver los túneles hermanos). Sin cambios de backend ni de datos. Reabrir un túnel por error sigue siendo del administrador (↩ Reabrir túnel).
+
 ### Nómina: «🗓️ Pagar la semana» — cierre semanal en un clic (2026-10-05)
 - Tarjeta arriba de Nómina → 💵 Pagos (solo Matriz): fecha de corte «Pagar hasta» (por defecto el último viernes, hoy si es viernes) → vista previa con personas, ganado, anticipos y neto → «Confirmar y pagar todo» → recibo con firmas (una tabla por grupo).
 - Backend `routes/modules/nomina-semanal.ts`: GET `/nomina-semanal/vista?hasta=` (solo calcula, no marca nada) y POST `/nomina-semanal/pagar {hasta, cash_register_id, confirmar_neto}` en UNA transacción con `pg_advisory_xact_lock`: si el neto recalculado ≠ `confirmar_neto` (llegó un ticket, alguien pagó) responde 409 y NO paga nada.

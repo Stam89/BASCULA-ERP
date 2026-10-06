@@ -25,6 +25,8 @@ import { AccesoRemoto } from "./components/AccesoRemoto";
 import { CambiarClaveModal } from "./components/CambiarClave";
 import { HoyPanel, type TareaHoy } from "./components/HoyPanel";
 import { PagarSemana, imprimirReciboSemana, type SemanaVista, type SemanaPagada } from "./components/PagarSemana";
+import { revisarFinalizacion } from "./secadoras/revisarFinalizacion";
+import { ConfirmarFinalizacion } from "./secadoras/ConfirmarFinalizacion";
 import * as XLSX from "xlsx";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
@@ -2216,6 +2218,10 @@ export function App() {
     reports?: DryingTunnelReport[];
   } | null>(null);
   const [dryingFinalizeBusy, setDryingFinalizeBusy] = useState(false);
+  // «Confirmo que es correcto»: se exige cuando la revisión previa detecta algo raro
+  // (p. ej. se finaliza un túnel que se llenó DESPUÉS de otro que sigue en proceso).
+  const [finalizarTick, setFinalizarTick] = useState(false);
+  useEffect(() => { setFinalizarTick(false); }, [dryingFinalizeConfirm]);
   // «Confirmar y Finalizar Secado» (combustible): pide confirmación antes de cerrar.
   const [fuelConfirmOpen, setFuelConfirmOpen] = useState(false);
   const [fuelConfirmBusy, setFuelConfirmBusy] = useState(false);
@@ -13489,33 +13495,47 @@ export function App() {
 
             {/* Confirmación independiente del combustible. Recién al aceptar se
                 valida y guarda el túnel; cancelar no modifica datos. */}
-            {dryingFinalizeConfirm && (
-              <div className="modalOverlay" onClick={() => { if (!dryingFinalizeBusy) setDryingFinalizeConfirm(null); }}>
-                <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520, width: "100%" }} role="dialog" aria-modal="true" aria-labelledby="drying-finalize-title">
-                  <h3 id="drying-finalize-title" style={{ marginTop: 0 }}>⚠️ Confirmar finalización</h3>
-                  <p style={{ lineHeight: 1.55 }}>
-                    {dryingFinalizeConfirm.reports && dryingFinalizeConfirm.reports.length > 1
-                      ? `¿Estás seguro de finalizar este túnel? Se cerrarán sus ${dryingFinalizeConfirm.reports.length} partidas al mismo tiempo: el arroz propio pasará a inventario/Producción y el servicio a su cobro. No podrás modificar los datos.`
-                      : "¿Estás seguro de finalizar este secado? Una vez cerrado el lote, los quintales pasarán a inventario o facturación y no podrás modificar los datos."}
-                  </p>
-                  <div className="buttonRow" style={{ marginTop: 16 }}>
-                    <button type="button" onClick={() => setDryingFinalizeConfirm(null)} disabled={dryingFinalizeBusy}>Cancelar</button>
-                    <button
-                      type="button"
-                      className="primary"
-                      style={{ background: "var(--c-success)", fontWeight: 800 }}
-                      disabled={dryingFinalizeBusy}
-                      onClick={() => confirmDryingFinalize().catch((error) => {
-                        setDryingFinalizeConfirm(null);
-                        setMessage(error.message);
-                      })}
-                    >
-                      {dryingFinalizeBusy ? "Finalizando…" : "Sí, finalizar"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
+            {dryingFinalizeConfirm && (() => {
+              // Revisión previa: qué túnel se cierra y si hay algo raro (el túnel equivocado,
+              // horas imposibles…). Todo sale de los datos que ya están en pantalla.
+              const conf = dryingFinalizeConfirm;
+              const grupo = conf.reports && conf.reports.length > 1 ? conf.reports : [conf.report];
+              const rep0 = conf.report;
+              const motor = motorDeSecadora(rep0.dryer_name);
+              const valorForm = (n: string) => (conf.formElement.elements.namedItem(n) as HTMLInputElement | null)?.value ?? "";
+              const ini = valorForm("dry_start_at");
+              const fin = valorForm("dry_end_at");
+              const ids = new Set(grupo.map((g) => g.id));
+              const hermanos = new Map<number, string | null>();
+              for (const d of dryingReports) {
+                if (d.status !== "IN_PROGRESS" || d.dry_method === "TENDAL" || motorDeSecadora(d.dryer_name) !== motor || d.tunnel_number === rep0.tunnel_number || ids.has(d.id)) continue;
+                const previo = hermanos.get(d.tunnel_number);
+                if (previo === undefined || (d.dry_start_at && (!previo || d.dry_start_at < previo))) hermanos.set(d.tunnel_number, d.dry_start_at);
+              }
+              const rev = revisarFinalizacion({ tunel: rep0.tunnel_number, motor, inicio: ini, fin, hermanosEnProceso: [...hermanos].map(([tunel, inicio]) => ({ tunel, inicio })) });
+              const qq = grupo.reduce((a, g) => a + Number(g.total_quintals || 0), 0);
+              const lotes = [...new Set(grupo.flatMap((g) => (g.lots ?? []).map((l) => l.lot_code)).filter(Boolean))];
+              return (
+                <ConfirmarFinalizacion
+                  tunel={rep0.tunnel_number}
+                  motor={motor}
+                  lotes={lotes}
+                  quintales={qq}
+                  partidas={grupo.length}
+                  inicio={ini}
+                  fin={fin}
+                  revision={rev}
+                  tick={finalizarTick}
+                  onTick={setFinalizarTick}
+                  ocupado={dryingFinalizeBusy}
+                  onCancelar={() => setDryingFinalizeConfirm(null)}
+                  onConfirmar={() => confirmDryingFinalize().catch((error) => {
+                    setDryingFinalizeConfirm(null);
+                    setMessage(error.message);
+                  })}
+                />
+              );
+            })()}
 
             {/* Modal: combustible del motor + cierre (los inputs solo aquí, al final) */}
             {fuelModalOpen && (
