@@ -5114,3 +5114,4 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .ini-vacio { margin: 12px 0; padding: 14px; border-radius: 12px; background: var(--c-surface-2); color: var(--c-text-muted); font-size: 14px; }
 @media (prefers-reduced-motion: reduce) { .ini-tile { transition: none; } .ini-tile:hover { transform: none; } }
 @media (max-width: 640px) { .ini-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ini-grid--grande { grid-template-columns: minmax(0, 1fr); } .ini-hola { font-size: 19px; } }
+@media (max-width: 400px) { .ini-grid { grid-template-columns: minmax(0, 1fr); } }
