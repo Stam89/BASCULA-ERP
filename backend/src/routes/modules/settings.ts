@@ -197,6 +197,9 @@ settingsRouter.get("/company-readiness", requireAdmin, asyncRoute(async (_req, r
   // backend/scripts/firebase-key.json, sin depender de desde dónde se arranque.
   const firebaseKey = (process.env.FIREBASE_KEY || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "scripts", "firebase-key.json")).trim();
   const firebaseKeyExists = Boolean(firebaseKey) && fs.existsSync(firebaseKey);
+  // Antigüedad del último respaldo (horas); null si no existe ninguno.
+  const ultimoRespaldo = listBackups().backups[0]?.created_at;
+  const respaldoHoras = ultimoRespaldo ? (Date.now() - new Date(ultimoRespaldo).getTime()) / 3600000 : null;
   const checks = [
     {
       key: "app_mode",
@@ -211,6 +214,16 @@ settingsRouter.get("/company-readiness", requireAdmin, asyncRoute(async (_req, r
       detail: correoConfigurado()
         ? `Correo configurado · ${conCorreo.con_correo} de ${conCorreo.total} usuario(s) con correo de recuperación`
         : "Falta SMTP_USER y SMTP_PASS en backend/.env (sin eso, «¿Olvidaste tu clave?» no puede enviar el código)"
+    },
+    {
+      key: "respaldo_reciente",
+      label: "Respaldo de la base de datos",
+      ok: respaldoHoras != null && respaldoHoras <= 30,
+      detail: respaldoHoras == null
+        ? "No hay ningún respaldo en la carpeta de respaldos: revisa la tarea «BASCULA-ERP Respaldo» (RESPALDO-BASCULA.bat)"
+        : respaldoHoras <= 30
+          ? `Último respaldo hace ${respaldoHoras < 1 ? "menos de 1 hora" : `${Math.round(respaldoHoras)} h`} (diario a las 8 pm, con la PC encendida)`
+          : `El último respaldo tiene ${Math.round(respaldoHoras)} h: la PC estuvo apagada a las 8 pm o la tarea falló. Haz uno ahora en Configuración → Respaldos`
     },
     {
       key: "business_name",

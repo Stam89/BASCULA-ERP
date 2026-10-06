@@ -19,8 +19,8 @@ goto esperar
 :listo
 REM Si ya responde el puerto 4000, salir sin hacer nada
 curl -s -o NUL --max-time 3 http://localhost:4000/ && exit /b 0
-cd /d "%PROYECTO%\backend"
-start "BASCULA-ERP Servidor" /min "C:\Program Files\nodejs\node.exe" dist/server.js
+REM El vigilante lo levanta OCULTO (sin ventana que se pueda cerrar por error).
+powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%PROYECTO%\backend\scripts\vigilante-erp.ps1"
 exit /b 0
 
 :fallo

@@ -21986,7 +21986,7 @@ export function App() {
                 if (["firebase", "device_key"].includes(key)) return "Bascula movil";
                 if (key.startsWith("campo_")) return "Transporte y cosechadora";
                 if (key === "contabilidad") return "Contabilidad";
-                if (key === "app_mode") return "Seguridad";
+                if (key === "app_mode" || key === "respaldo_reciente") return "Seguridad";
                 return "General";
               };
               const readinessAction = (key: string): { label: string; run: () => void } | null => {
@@ -21995,6 +21995,7 @@ export function App() {
                 if (key === "correo_recuperacion") return { label: "Ver cómo activarlo", run: () => { abrirTarjetaRef.current = "✉️ Correo para recuperar claves"; setConfigSubTab("usuarios"); } };
                 if (key === "admin" || key === "users") return { label: "Abrir usuarios", run: () => setConfigSubTab("usuarios") };
                 if (key === "app_mode") return { label: "Ver puesta en marcha", run: () => { abrirTarjetaRef.current = "✅ Puesta en marcha"; setConfigSubTab("operacion"); } };
+                if (key === "respaldo_reciente") return { label: "Abrir respaldos", run: () => irAAjuste({ sub: "operacion", tarjeta: "💾 Respaldos de la base de datos", claves: "backup respaldo" }) };
                 if (key === "contabilidad") return { label: "Abrir parámetros", run: () => irAAjuste({ sub: "operacion", tarjeta: "📊 Parámetros contables", claves: "" }) };
                 if (key.startsWith("campo_")) return { label: "Abrir configuración de Campo", run: () => abrirCampo("config") };
                 return null;

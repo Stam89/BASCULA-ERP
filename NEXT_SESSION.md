@@ -49,6 +49,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Vigilante del ERP: no se cae más (2026-10-05)
+- Sin permisos de administrador no hay servicio de Windows; en su lugar, tarea «BASCULA-ERP Vigilante» (al iniciar sesión + cada 1 min) que ejecuta `backend/scripts/vigilante-erp.vbs` → `vigilante-erp.ps1`: si `/health` no responde (2 comprobaciones), cierra el proceso colgado y lanza `node dist/server.js` OCULTO con logs en `backend/logs`. Bitácora: `backend/logs/vigilante.log`. Reinstalar: `INSTALAR-VIGILANTE-ERP.bat`.
+- `AUTOINICIO-ERP.bat` ahora arranca por el vigilante (ya no abre ventana minimizada).
+- «Puesta en marcha» tiene el chequeo `respaldo_reciente` (avisa si el último respaldo pasa de 30 h).
+- Pendiente del usuario: la PC en suspensión corta el ERP y el túnel (Configuración de energía → «Nunca» suspender con corriente).
+- Plan de mejoras acordado, en este orden: 1) vigilante ✅, 2) pantalla «Hoy», 3) cierre semanal de Nómina en un clic, 4) confirmaciones en secadoras (y luego: resumen diario, recordar quién bajó cada carro, asistente de puesta en marcha, rol simple, buscador global).
+
 ### Auditoría general (2026-10-05)
 - Revisado: tsc/lint/133 pruebas OK; integridad de BD sin hallazgos; humo de las 169 rutas GET sin parámetros (con matriz y socio) sin errores 5xx (las que exigen parámetros responden 400 como debe); respaldos diarios 20:00 en OneDrive\BASCULA-ERP-Backups (30 copias, el de 7 días local no se usa); Cloudflared y PostgreSQL como servicio; sin secretos versionados.
 - Corregido: «Puesta en marcha» y `npm run preflight` decían «Falta archivo FIREBASE_KEY» (buscaban otra ruta); ahora usan la misma que la integración (`backend/scripts/firebase-key.json`).
