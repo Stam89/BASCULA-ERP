@@ -21,6 +21,8 @@ export type SemanaVista = {
   totales: { ganado: number; anticipos: number; neto: number; personas: number };
   posterior: { ganado: number };
   bajada_sin_nombre: number;
+  /** Tickets de bajada con el nombre de la báscula dudoso (sin confirmar). */
+  bajada_nombres_por_revisar?: number;
 };
 export type SemanaPagada = {
   hasta: string;
@@ -142,6 +144,7 @@ export function PagarSemana({ vista, cargando, hasta, onHasta, cajaAbierta, onAb
           </div>
           {vista.posterior.ganado > 0.004 && <p className="semana-aviso semana-aviso--info">ℹ️ {money(vista.posterior.ganado)} trabajados después del {fechaCorta(vista.hasta)} quedan pendientes para la próxima semana.</p>}
           {vista.bajada_sin_nombre > 0 && <p className="semana-aviso semana-aviso--warn">⚠️ {vista.bajada_sin_nombre} {vista.bajada_sin_nombre === 1 ? "ticket" : "tickets"} de bajada de carro sin nombre no entran al pago hasta que les pongas quién bajó el carro.</p>}
+          {(vista.bajada_nombres_por_revisar ?? 0) > 0 && <p className="semana-aviso semana-aviso--warn">🔎 {vista.bajada_nombres_por_revisar} {vista.bajada_nombres_por_revisar === 1 ? "ticket" : "tickets"} de bajada de carro con el nombre por revisar (varias personas o poco usual). Confírmalos en Bajada de carro antes de pagar para no pagar a un nombre equivocado.</p>}
           <div className="semana-acciones">
             {cajaAbierta
               ? <button type="button" className="semana-pagar" onClick={() => { setError(""); setAbierto(true); }}>💵 Pagar la semana · {money(vista.totales.neto)}</button>

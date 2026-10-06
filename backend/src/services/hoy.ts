@@ -5,7 +5,7 @@
 //    si una consulta se cae, el resto de «Hoy» sigue funcionando).
 import type { PoolClient } from "pg";
 import { pool } from "../db/pool.js";
-import { contarBajadasSinNombre } from "../routes/modules/cuadrilla.js";
+import { contarBajadasSinNombre, contarNombresPorRevisar } from "../routes/modules/cuadrilla.js";
 
 type Db = Pick<PoolClient, "query">;
 
@@ -31,7 +31,7 @@ export type DatosHoy = {
     enProceso: Array<{ tunel: number; motor: number | null; horas: number }>;
     motoresSinCombustible: number[];
   };
-  nomina: { aplica: boolean; monto: number; personas: number; bajadasSinNombre: number };
+  nomina: { aplica: boolean; monto: number; personas: number; bajadasSinNombre: number; nombresPorRevisar: number };
   cxc: { n: number; monto: number };
   cxp: { n: number; monto: number };
   pedidos: { pendientes: number; paraHoy: number };
@@ -83,6 +83,14 @@ export function construirTareas(d: DatosHoy): TareaHoy[] {
         titulo: `${plural(d.nomina.bajadasSinNombre, "ticket sin", "tickets sin")} quién bajó el carro`,
         detalle: "Sin nombre no se les puede pagar la bajada de carro. Ponles el nombre o márcalos «no se paga».",
         tab: "Nomina", sub: "bajada", accion: "Completar nombres"
+      });
+    }
+    if (d.nomina.nombresPorRevisar > 0) {
+      t.push({
+        key: "bajadas-nombre-dudoso", nivel: "atencion", icono: "🔎",
+        titulo: `${plural(d.nomina.nombresPorRevisar, "ticket con un nombre por revisar", "tickets con un nombre por revisar")} en bajada de carro`,
+        detalle: "La báscula los trae con varias personas («JOSE/ROBERTO»), mal escritos o con un nombre poco usual. Confírmalos antes de pagar: un clic y listo.",
+        tab: "Nomina", sub: "bajada", accion: "Revisar nombres"
       });
     }
     if (d.nomina.monto > 0.004) {
@@ -202,8 +210,8 @@ export async function reunirDatos(
     return { enProceso, motoresSinCombustible: sinComb };
   });
 
-  const nomina = await seguro("nomina", { aplica: false, monto: 0, personas: 0, bajadasSinNombre: 0 }, async () => {
-    if (!ctx.esMatriz) return { aplica: false, monto: 0, personas: 0, bajadasSinNombre: 0 };
+  const nomina = await seguro("nomina", { aplica: false, monto: 0, personas: 0, bajadasSinNombre: 0, nombresPorRevisar: 0 }, async () => {
+    if (!ctx.esMatriz) return { aplica: false, monto: 0, personas: 0, bajadasSinNombre: 0, nombresPorRevisar: 0 };
     const r = (await db.query(
       `WITH p AS (
          SELECT worker_name AS n, net_amount::float AS m FROM worker_payments WHERE status = 'PENDING'
@@ -213,7 +221,8 @@ export async function reunirDatos(
        SELECT COALESCE(SUM(m), 0)::float AS monto, COUNT(DISTINCT n)::int AS personas FROM p WHERE m > 0`
     )).rows[0];
     const sin = await contarBajadasSinNombre(db);
-    return { aplica: true, monto: Number(r.monto), personas: Number(r.personas), bajadasSinNombre: sin };
+    const porRevisar = await contarNombresPorRevisar(db);
+    return { aplica: true, monto: Number(r.monto), personas: Number(r.personas), bajadasSinNombre: sin, nombresPorRevisar: porRevisar };
   });
 
   const vencidas = (tabla: "accounts_receivable" | "accounts_payable") => seguro(tabla, { n: 0, monto: 0 }, async () => {

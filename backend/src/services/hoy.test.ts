@@ -5,7 +5,7 @@ const base = (): DatosHoy => ({
   dow: 2,
   caja: { abierta: true, diasAbierta: 0 },
   tuneles: { enProceso: [], motoresSinCombustible: [] },
-  nomina: { aplica: true, monto: 0, personas: 0, bajadasSinNombre: 0 },
+  nomina: { aplica: true, monto: 0, personas: 0, bajadasSinNombre: 0, nombresPorRevisar: 0 },
   cxc: { n: 0, monto: 0 },
   cxp: { n: 0, monto: 0 },
   pedidos: { pendientes: 0, paraHoy: 0 },
@@ -48,7 +48,7 @@ describe("construirTareas («Hoy»)", () => {
   });
 
   it("nómina: monto pendiente es informativo entre semana y de atención viernes/sábado", () => {
-    const d = { ...base(), nomina: { aplica: true, monto: 90.41, personas: 8, bajadasSinNombre: 0 } };
+    const d = { ...base(), nomina: { aplica: true, monto: 90.41, personas: 8, bajadasSinNombre: 0, nombresPorRevisar: 0 } };
     const martes = construirTareas({ ...d, dow: 2 })[0];
     expect(martes).toMatchObject({ key: "nomina-pendiente", nivel: "info", tab: "Nomina", sub: "pagos" });
     expect(martes.titulo).toBe("Por pagar en Nómina: $90.41");
@@ -61,13 +61,19 @@ describe("construirTareas («Hoy»)", () => {
   });
 
   it("bajadas sin nombre llevan a la sección de bajada de carro (singular y plural)", () => {
-    const uno = construirTareas({ ...base(), nomina: { aplica: true, monto: 0, personas: 0, bajadasSinNombre: 1 } })[0];
+    const uno = construirTareas({ ...base(), nomina: { aplica: true, monto: 0, personas: 0, bajadasSinNombre: 1, nombresPorRevisar: 0 } })[0];
     expect(uno).toMatchObject({ key: "bajadas-sin-nombre", tab: "Nomina", sub: "bajada", titulo: "1 ticket sin quién bajó el carro" });
-    expect(construirTareas({ ...base(), nomina: { aplica: true, monto: 0, personas: 0, bajadasSinNombre: 4 } })[0].titulo).toBe("4 tickets sin quién bajó el carro");
+    expect(construirTareas({ ...base(), nomina: { aplica: true, monto: 0, personas: 0, bajadasSinNombre: 4, nombresPorRevisar: 0 } })[0].titulo).toBe("4 tickets sin quién bajó el carro");
+  });
+
+  it("nombres dudosos de la bajada: tarea de atención hacia la bajada de carro", () => {
+    const t = construirTareas({ ...base(), nomina: { aplica: true, monto: 0, personas: 0, bajadasSinNombre: 0, nombresPorRevisar: 3 } })[0];
+    expect(t).toMatchObject({ key: "bajadas-nombre-dudoso", nivel: "atencion", tab: "Nomina", sub: "bajada", titulo: "3 tickets con un nombre por revisar en bajada de carro" });
+    expect(construirTareas({ ...base(), nomina: { aplica: true, monto: 0, personas: 0, bajadasSinNombre: 0, nombresPorRevisar: 1 } })[0].titulo).toBe("1 ticket con un nombre por revisar en bajada de carro");
   });
 
   it("un socio (nómina no aplica) no ve tareas de nómina aunque lleguen datos", () => {
-    expect(keys({ ...base(), nomina: { aplica: false, monto: 500, personas: 3, bajadasSinNombre: 9 } })).toEqual([]);
+    expect(keys({ ...base(), nomina: { aplica: false, monto: 500, personas: 3, bajadasSinNombre: 9, nombresPorRevisar: 5 } })).toEqual([]);
   });
 
   it("cuentas vencidas y pedidos: textos con cantidades y montos", () => {
@@ -94,7 +100,7 @@ describe("construirTareas («Hoy»)", () => {
       ...base(), dow: 2,
       caja: { abierta: false, diasAbierta: 0 },
       tuneles: { enProceso: [{ tunel: 1, motor: 1, horas: 2 }], motoresSinCombustible: [2] },
-      nomina: { aplica: true, monto: 10, personas: 1, bajadasSinNombre: 2 },
+      nomina: { aplica: true, monto: 10, personas: 1, bajadasSinNombre: 2, nombresPorRevisar: 0 },
       cxc: { n: 1, monto: 5 }
     });
     expect(t.map((x) => x.key)).toEqual(["combustible-motor-2", "bajadas-sin-nombre", "caja-cerrada", "cxc-vencidas", "tuneles-en-proceso", "nomina-pendiente"]);

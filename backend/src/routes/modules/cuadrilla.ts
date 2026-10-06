@@ -7,6 +7,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { registrarSacosRecuperados, revertirSacosRecuperados } from "../../services/sacos.js";
+import { armarRoster, canonico, evaluarNombre, type Evaluacion } from "../../services/bajada-nombres.js";
 
 export const cuadrillaRouter = Router();
 
@@ -1273,7 +1274,41 @@ const sumarDias = (iso: string, n: number) => {
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 };
-const normalizarTrabajador = (s: string | null | undefined) => String(s ?? "").trim().replace(/\s+/g, " ").toUpperCase();
+// JOSÉ = JOSE = José: sin esto la misma persona quedaba como dos y se le pagaba por separado.
+const normalizarTrabajador = canonico;
+
+// «Roster» de nombres de la báscula: quién ha bajado carros (tickets) y a quién ya se le pagó.
+// Un nombre con pagos previos cuenta como validado por una persona.
+async function cargarRosterBajada(db: Pick<PoolClient, "query">) {
+  const filas = (await db.query(
+    `SELECT n AS nombre, COUNT(*)::int AS cuenta FROM (
+       SELECT NULLIF(btrim(COALESCE(NULLIF(btrim(t.bajada_manual), ''), t.raw_payload->>'bajadaX')), '') AS n
+         FROM mobile_synced_tickets t WHERE ${TICKET_ELEGIBLE}
+     ) x WHERE n IS NOT NULL AND n <> '__NO__' GROUP BY n
+     UNION ALL
+     SELECT worker_name, 3 FROM cuadrilla_entries WHERE origen = 'BASCULA' AND paid_at IS NOT NULL GROUP BY worker_name`
+  )).rows as Array<{ nombre: string; cuenta: number }>;
+  return armarRoster(filas);
+}
+
+/** Tickets con nombre de la báscula dudoso (varias personas / nombre poco usual) aún por pagar. */
+export async function contarNombresPorRevisar(db: Pick<PoolClient, "query">, hasta?: string | null): Promise<number> {
+  const roster = await cargarRosterBajada(db);
+  const filas = (await db.query(
+    `SELECT t.raw_payload->>'bajadaX' AS nombre
+       FROM mobile_synced_tickets t
+       JOIN bajada_carro_config c ON c.id = 1
+       LEFT JOIN cuadrilla_entries e ON e.origen = 'BASCULA' AND e.referencia_id = t.id
+      WHERE ${TICKET_ELEGIBLE}
+        AND ${FECHA_TICKET} >= COALESCE(c.desde, CURRENT_DATE)
+        AND ($1::date IS NULL OR ${FECHA_TICKET} <= $1::date)
+        AND e.paid_at IS NULL
+        AND COALESCE(t.bajada_manual, '') = ''
+        AND NULLIF(btrim(t.raw_payload->>'bajadaX'), '') IS NOT NULL`,
+    [hasta ?? null]
+  )).rows as Array<{ nombre: string }>;
+  return filas.filter((f) => evaluarNombre(f.nombre, roster) !== null).length;
+}
 const fechaIso = (v: Date | string) => (typeof v === "string" ? v.slice(0, 10) : new Date(v).toISOString().slice(0, 10));
 
 async function actividadBajada(db: Queryable) {
@@ -1404,13 +1439,20 @@ cuadrillaRouter.get("/bajadas", asyncRoute(async (req, res) => {
       GROUP BY worker_name ORDER BY worker_name`,
     [ini]
   )).rows;
+  // Nombre dudoso: solo si lo escribió la báscula (uno corregido a mano ya está confirmado) y no está pagado.
+  const roster = await cargarRosterBajada(pool);
+  const filasConAviso = filas.map((f) => ({
+    ...f,
+    nombre_revisar: (!f.bajada_manual && !f.paid_at && f.bajada_bascula ? evaluarNombre(f.bajada_bascula, roster) : null) as Evaluacion | null
+  }));
   res.json({
     semana: { inicio: ini, fin, actual: inicioSemana(hoy) === ini },
     modo: modoTodo ? "todo" : "semana",
     desde: cfg.desde,
     tarifa: act ? Number(act.unit_rate) : null,
     actividad: act?.name ?? null,
-    filas,
+    filas: filasConAviso,
+    por_revisar: filasConAviso.filter((f) => f.nombre_revisar).length,
     arrastre
   });
 }));

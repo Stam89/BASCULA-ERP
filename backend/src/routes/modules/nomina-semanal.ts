@@ -8,7 +8,7 @@ import { ApiError } from "../../http/error-handler.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { getMatrizId } from "../../services/matriz.js";
 import { ensureLaborTables, pagarTrabajadorPlanta } from "./labor.js";
-import { contarBajadasSinNombre, pagarBajadasPendientes, pagarTrabajadorCuadrilla } from "./cuadrilla.js";
+import { contarBajadasSinNombre, contarNombresPorRevisar, pagarBajadasPendientes, pagarTrabajadorCuadrilla } from "./cuadrilla.js";
 
 // 🗓️ Cierre semanal de Nómina en UN clic: paga a toda la planta/secador, la cuadrilla y
 // la bajada de carro hasta una fecha de corte (por defecto, el último viernes).
@@ -117,7 +117,8 @@ nominaSemanalRouter.get("/vista", asyncRoute(async (req, res) => {
     const corte = await procesarSemana(client, { hasta, cashRegisterId: "", userId: null }, false);
     const todo = await procesarSemana(client, { hasta: SIN_LIMITE, cashRegisterId: "", userId: null }, false);
     const sinNombre = await contarBajadasSinNombre(client, hasta);
-    return { corte, todo, sinNombre };
+    const porRevisar = await contarNombresPorRevisar(client, hasta);
+    return { corte, todo, sinNombre, porRevisar };
   });
   res.json({
     hasta,
@@ -126,7 +127,8 @@ nominaSemanalRouter.get("/vista", asyncRoute(async (req, res) => {
     totales: out.corte.totales,
     // Lo trabajado DESPUÉS del corte no entra: queda pendiente para la próxima semana.
     posterior: { ganado: r2(Math.max(0, out.todo.totales.ganado - out.corte.totales.ganado)) },
-    bajada_sin_nombre: out.sinNombre
+    bajada_sin_nombre: out.sinNombre,
+    bajada_nombres_por_revisar: out.porRevisar
   });
 }));
 

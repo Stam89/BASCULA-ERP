@@ -49,6 +49,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Bajada de carro: nombres limpios y vigilados (2026-10-05)
+- Hallazgo con datos reales (347 tickets): la PLACA no predice quién baja el carro (el mismo camión lo bajan hasta 14 personas) → NO se hizo «recordar por placa». Sí había nombres sucios de la báscula (~1 de cada 8): JOSÉ/JOSE, VARÓN/VARON (contaban como 2 personas), RPBERTO, VARO, «JOSE/ROBERTO», «SEMILLA JOSE»…
+- `services/bajada-nombres.ts` (lógica pura + 10 pruebas con nombres reales): `canonico()` (mayúsculas, SIN tildes, espacios), `evaluarNombre()` → «varias personas» o «poco usual» + sugerencias (nombres habituales parecidos, tolerancia 1–2 letras), `armarRoster()` (conocido = ≥3 tickets o con un pago previo; los textos con varias personas no cuentan como personas).
+- cuadrilla.ts: `normalizarTrabajador = canonico` (al sincronizar las bajadas NO pagadas se unifican solas; las pagadas no se tocan); GET `/cuadrilla/bajadas` devuelve por ticket `nombre_revisar` (solo si el nombre lo escribió la báscula, no está corregido a mano ni pagado) y `por_revisar`; `contarNombresPorRevisar()` lo usan «Hoy» (tarea «N tickets con un nombre por revisar») y el cierre semanal (aviso en la vista previa).
+- Frontend (Bajada de carro): aviso arriba + bajo cada nombre dudoso botones «¿Es ROBERTO?» / «Solo JOSE» / «✓ Está bien» (asignan con `/bajadas/asignar` = nombre manual = confirmado, no vuelve a avisar). No cambia nada solo: la persona confirma. Sin migraciones.
+- Posible mejora futura: repartir un ticket entre 2 personas (hoy hay 1 entrada por ticket por el índice único `referencia_id`).
+
 ### Secadoras: confirmación inteligente al finalizar un túnel (2026-10-05)
 - La ventana «Confirmar finalización» ahora dice en grande QUÉ se cierra (TÚNEL N · Motor M, lotes, QQ, entró/terminó, duración) y revisa antes de cerrar (`web-admin/src/secadoras/revisarFinalizacion.ts`, lógica pura):
   - ⛔ bloquea: sin hora de inicio/fin, o fin ≤ inicio (el servidor ya lo rechazaba también);

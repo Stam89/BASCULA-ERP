@@ -5005,3 +5005,13 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .finConf-aviso--info { background: #eff6ff; color: #1e40af; }
 .finConf-tick { display: flex; gap: 10px; align-items: flex-start; margin: 10px 0 0; padding: 10px 12px; border: 2px solid #d97706; border-radius: 10px; background: #fff; cursor: pointer; font-size: 13.5px; }
 .finConf-tick input { width: 20px; height: 20px; margin-top: 1px; flex: none; }
+
+/* ── Nómina · bajada de carro: nombres por revisar ────────────────────────── */
+.bajNom-aviso { margin: 0 0 10px; padding: 9px 12px; border-radius: 10px; background: #fffbeb; border: 1px solid #fde68a; color: #92400e; font-size: 13px; }
+.bajNom { margin-top: 5px; display: grid; gap: 4px; font-size: 12px; max-width: 260px; }
+.bajNom-motivo { color: #92400e; font-weight: 600; }
+.bajNom-botones { display: flex; flex-wrap: wrap; gap: 5px; }
+.bajNom-btn { border: 1px solid #f59e0b; background: #fff; color: #92400e; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 700; cursor: pointer; min-height: 28px; }
+.bajNom-btn:hover { background: #fffbeb; }
+.bajNom-btn--ok { border-color: #10b981; color: #047857; }
+.bajNom-btn--ok:hover { background: #ecfdf5; }

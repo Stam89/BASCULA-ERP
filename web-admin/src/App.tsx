@@ -405,6 +405,8 @@ type BajadaFila = {
   cliente: string | null; placa: string | null; qq: number;
   bajada_bascula: string | null; bajada_manual: string | null;
   entry_id: string | null; trabajador: string | null; monto: number | null; tarifa: number | null; paid_at: string | null;
+  /** El nombre que escribió la báscula es dudoso (varias personas o poco usual); trae sugerencias. */
+  nombre_revisar?: { motivo: "varias_personas" | "poco_usual"; sugerencias: string[] } | null;
 };
 type BajadaResumen = {
   total: number; tickets: number; desde: string | null; hasta: string | null; paid_at?: string;
@@ -414,6 +416,7 @@ type BajadaResumen = {
 type BajadaData = {
   semana: { inicio: string; fin: string; actual: boolean };
   modo?: "semana" | "todo";
+  por_revisar?: number;
   desde: string | null; tarifa: number | null; actividad: string | null;
   filas: BajadaFila[];
   arrastre: Array<{ trabajador: string; tickets: number; monto: number }>;
@@ -20977,6 +20980,11 @@ export function App() {
                   <div className="cj-kpi"><div className="cj-kpi-label">Pendiente de semanas anteriores</div><div className="cj-kpi-value" style={{ color: arrastreTotal > 0 ? "#b45309" : "#0f172a" }}>{money(arrastreTotal)}</div><div className="cj-kpi-hint">Pasa a esta semana en Pagos</div></div>
                 </div>
 
+                {(d.por_revisar ?? 0) > 0 && (
+                  <div className="bajNom-aviso" role="status">
+                    🔎 <strong>{d.por_revisar}</strong> {d.por_revisar === 1 ? "ticket tiene" : "tickets tienen"} un nombre por revisar (varias personas, mal escrito o poco usual). Confírmalos con un clic en la tabla antes de pagar.
+                  </div>
+                )}
                 <datalist id="bajada-trabajadores">{nombres.map((n) => <option key={n} value={n} />)}</datalist>
                 <div style={{ overflowX: "auto" }}>
                   <table className="cajaTable">
@@ -21001,6 +21009,7 @@ export function App() {
                               ) : noSePaga ? (
                                 <span className="muted">No se paga <button type="button" className="vdTarifaLink" onClick={() => asignarBajada(f, null).catch(() => undefined)}>↺ deshacer</button></span>
                               ) : (
+                                <>
                                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                                   <input
                                     key={`${f.ticket_id}-${actual}`}
@@ -21019,6 +21028,22 @@ export function App() {
                                   {f.bajada_manual && <span className="chip info" title={f.bajada_bascula ? `La báscula decía: ${f.bajada_bascula}` : "La báscula no traía nombre"}>manual</span>}
                                   <button type="button" className="btnGhost" title="Este ticket no paga bajada" onClick={() => asignarBajada(f, null, true).catch(() => undefined)}>🚫</button>
                                 </div>
+                                {f.nombre_revisar && (
+                                  <div className="bajNom">
+                                    <span className="bajNom-motivo">
+                                      {f.nombre_revisar.motivo === "varias_personas" ? "⚠️ Varias personas en un ticket: ¿quién lo pagó/bajó?" : "🔎 Nombre poco usual."}
+                                    </span>
+                                    <span className="bajNom-botones">
+                                      {f.nombre_revisar.sugerencias.map((s) => (
+                                        <button key={s} type="button" className="bajNom-btn" title={`Usar ${s}`} onClick={() => asignarBajada(f, s).catch(() => undefined)}>{f.nombre_revisar!.motivo === "varias_personas" ? `Solo ${s}` : `¿Es ${s}?`}</button>
+                                      ))}
+                                      {f.nombre_revisar.motivo === "poco_usual" && actual && (
+                                        <button type="button" className="bajNom-btn bajNom-btn--ok" title="El nombre está bien: no volver a avisar" onClick={() => asignarBajada(f, actual).catch(() => undefined)}>✓ Está bien</button>
+                                      )}
+                                    </span>
+                                  </div>
+                                )}
+                                </>
                               )}
                             </td>
                             <td className="num" style={{ fontWeight: 700 }}>{f.entry_id ? money(Number(f.monto ?? 0)) : "—"}</td>
