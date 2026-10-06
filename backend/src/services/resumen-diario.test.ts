@@ -24,6 +24,7 @@ describe("construirResumen", () => {
     expect(r.texto).toContain("martes, 6 de octubre de 2026");
     expect(r.html).toContain("<!doctype html>");
     expect(r.html).toContain("CEYRO");
+    expect(r.html).toContain("Martes, 6 de octubre de 2026"); // solo la primera letra en mayúscula
   });
   it("sin pendientes: lo dice y el asunto no cuenta nada", () => {
     const r = construirResumen({ ...datos(), tareas: [] });

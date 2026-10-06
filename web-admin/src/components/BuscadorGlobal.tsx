@@ -132,6 +132,7 @@ export function BuscadorGlobal({ abierto, onCerrar, tabsDisponibles, etiquetaTab
           <span aria-hidden="true">🔎</span>
           <input
             ref={inputRef}
+            autoFocus
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Busca un ticket, placa, nombre, lote, pedido… o una pantalla"

@@ -74,6 +74,7 @@ const qq = (n: number) => `${n.toLocaleString("en-US", { minimumFractionDigits: 
 const esc = (t: unknown) => String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
 const motorTxt = (m: number | null) => (m ? ` (Motor ${m})` : "");
 const fechaLarga = (iso: string) => new Date(`${iso}T12:00:00Z`).toLocaleDateString("es-EC", { timeZone: "UTC", weekday: "long", day: "numeric", month: "long", year: "numeric" });
+const conMayuscula = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
 const fechaCorta = (iso: string) => iso.split("-").reverse().join("/");
 
 export function construirResumen(d: DatosResumen): { asunto: string; texto: string; html: string } {
@@ -127,7 +128,7 @@ export function construirResumen(d: DatosResumen): { asunto: string; texto: stri
   <div style="background:#0f766e;color:#fff;border-radius:12px 12px 0 0;padding:16px 18px">
     <div style="font-size:12px;letter-spacing:.06em;text-transform:uppercase;opacity:.85">Resumen del día</div>
     <div style="font-size:20px;font-weight:700;margin-top:2px">${esc(d.negocio)}</div>
-    <div style="font-size:13px;opacity:.9;margin-top:2px;text-transform:capitalize">${esc(fechaLarga(d.fecha))}</div>
+    <div style="font-size:13px;opacity:.9;margin-top:2px">${esc(conMayuscula(fechaLarga(d.fecha)))}</div>
   </div>
   <div style="background:#fff;border:1px solid #d8e4df;border-top:none;border-radius:0 0 12px 12px;padding:6px 18px 14px">
     ${bloques.map((b) => `<div style="margin-top:14px"><div style="font-weight:700;font-size:14px;color:#065f46;border-bottom:1px solid #e5ece9;padding-bottom:4px">${esc(b.titulo)}</div>${b.lineas.map((l) => `<div style="font-size:14px;line-height:1.5;margin-top:5px">${esc(l)}</div>`).join("")}</div>`).join("")}
