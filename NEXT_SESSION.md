@@ -49,6 +49,9 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### Ventanas emergentes fuera de la vista — arreglo global (2026-10-06)
+- `.content > * { animation: contentIn … both }` dejaba un `transform` PERMANENTE (fill-mode forwards) en cada pantalla ⇒ todo `position: fixed` dentro (modales como «Pagar la semana», «Confirmar finalización», vista previa del resumen, y los de pagos/nómina existentes) se colocaba respecto a la pantalla completa y, en pantallas largas, quedaba fuera de la vista (detectado con la vista previa del resumen: modal en top −495 px). Se quitó `both`: la animación sigue (0.25 s) pero ya no deja transform. Regla: si un modal se ve mal, revisar si algún ancestro tiene `transform/filter` (crea contenedor para `fixed`).
+
 ### 📬 Resumen diario por correo (2026-10-06)
 - Un correo al cierre del día (por defecto 20:30 Ecuador) con: báscula (tickets/QQ del día), secado (túneles terminados hoy / en proceso), caja de la Matriz (ingresos/egresos/neto), ventas y «Pendiente para mañana» (las mismas tareas de 📌 Hoy). **NACE APAGADO**: no sale nada hasta que el administrador lo active en Configuración → Control de usuarios → «📬 Resumen diario por correo» y escriba hasta 5 correos. Tiene «👁 Ver ejemplo de hoy» (no envía) y «✉️ Enviar prueba ahora» (no cuenta como el envío del día; pausa de 60 s).
 - Migración `20261070_resumen_diario.sql` → tabla `resumen_diario_config` (1 fila: activo, hora, destinatarios, ultimo_envio_fecha, intentos…). Sobrevive al borrado de fábrica.

@@ -2402,7 +2402,10 @@ input[type="datetime-local"] { height: 36px; }
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-.content > * { animation: contentIn 0.25s ease both; }
+/* Sin «both»: con fill-mode forwards la animación dejaba un transform PERMANENTE en cada pantalla, y eso
+   hace que cualquier ventana emergente (position: fixed) dentro de ella se coloque respecto a la pantalla
+   completa y no respecto a lo que se ve: en pantallas largas la ventana quedaba fuera de la vista. */
+.content > * { animation: contentIn 0.25s ease; }
 
 /* ── Sidebar footer ───────────────────────────────────────────── */
 .sidebarFooter {
