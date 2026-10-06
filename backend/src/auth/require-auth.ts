@@ -130,7 +130,21 @@ function subSoloVer(allowed: string[], modules: AppModule[], prefix: string, met
 // Los permisos se releen de la base en cada escritura, no del token: el token
 // dura 12 horas y traía los permisos "congelados", así que quitarle un módulo
 // a alguien (o desactivarlo) no surtía efecto hasta que caducara la sesión.
-export async function enforceModulePermissions(req: Request, _res: Response, next: NextFunction) {
+export async function enforceModulePermissions(req: Request, res: Response, next: NextFunction) {
+  return aplicarPermisosDeEscritura(req, res, next);
+}
+
+/**
+ * Lo mismo para rutas que se montan FUERA del filtro general (p. ej. /tickets, que comparte
+ * ruta con la app Android sin sesión): se coloca en cada ruta con sesión que mueve dinero o inventario.
+ * Misma regla que el resto: administrador sin límite; los demás necesitan EDIT:<módulo> en el accionista activo.
+ * Debe ir después de requireAuth y resolveAccionista.
+ */
+export function exigirEscrituraEn(prefix: string, modules: AppModule[]) {
+  return (req: Request, res: Response, next: NextFunction) => aplicarPermisosDeEscritura(req, res, next, { prefix, modules });
+}
+
+async function aplicarPermisosDeEscritura(req: Request, _res: Response, next: NextFunction, forzado?: { prefix: string; modules: AppModule[] }) {
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
     next();
     return;
@@ -164,8 +178,8 @@ export async function enforceModulePermissions(req: Request, _res: Response, nex
       next();
       return;
     }
-    const prefix = req.path.split("/")[1] ?? "";
-    const requiredModules = WRITE_MODULES_BY_PREFIX[prefix];
+    const prefix = forzado?.prefix ?? req.path.split("/")[1] ?? "";
+    const requiredModules = forzado?.modules ?? WRITE_MODULES_BY_PREFIX[prefix];
     if (!requiredModules) {
       next();
       return;
@@ -176,7 +190,7 @@ export async function enforceModulePermissions(req: Request, _res: Response, nex
     // ESCRIBIR exige la clave 'EDIT:<módulo>'. Un operador "Solo Ver" recibe 403.
     // Sub-pestañas: RO:SUB:<módulo>:<sub> = «Solo ver» en esa sub-pestaña.
     const allowed: string[] = fresh.rows[0].allowed_modules ?? [];
-    const rest = req.path.slice(prefix.length + 1);
+    const rest = forzado ? req.path : req.path.slice(prefix.length + 1);
     if (requiredModules.some((module) => moduloPermiteEscritura(allowed, module, prefix, req.method, rest))) {
       next();
       return;

@@ -5,7 +5,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { requireAdmin, requireAuth, resolveAccionista, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { exigirEscrituraEn, requireAdmin, requireAuth, resolveAccionista, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { fechaTicketSql, leerCorteBascula } from "../../services/bascula-corte.js";
 import { calculateNetWeight, calculateQuintals, round2 } from "../../utils/rice-formulas.js";
 import { nextCode } from "../../utils/codes.js";
@@ -384,7 +384,7 @@ mobileTicketsRouter.put("/corte", requireAuth, requireAdmin, asyncRoute(async (r
 
 // Vincula un ticket a un agricultor del directorio global. El vínculo no cambia
 // el socio del ticket: el dueño operativo se elige al crear el lote.
-mobileTicketsRouter.post("/:id/link-farmer", requireAuth, resolveAccionista, asyncRoute(async (req, res) => {
+mobileTicketsRouter.post("/:id/link-farmer", requireAuth, resolveAccionista, exigirEscrituraEn("tickets", ["Bascula"]), asyncRoute(async (req, res) => {
   const userId = (req as AuthenticatedRequest).user?.id ?? null;
   const body = z.object({
     farmer_id: z.string().uuid().optional(),
@@ -490,7 +490,7 @@ mobileTicketsRouter.post("/:id/link-farmer", requireAuth, resolveAccionista, asy
 // Ingresa la materia prima de un ticket de báscula: registra el pesaje y mete
 // el arroz a la bodega de materia prima. NO crea lote: el lote se forma después
 // en la secadora, agrupando varios de estos ingresos en un túnel.
-mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, asyncRoute(async (req, res) => {
+mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, exigirEscrituraEn("tickets", ["Bascula"]), asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const body = z.object({
     rice_type: z.enum(["0.11", "CORRIENTE"]).default("0.11"),
@@ -884,12 +884,12 @@ mobileTicketsRouter.get("/firebase-diagnostics", requireAuth, asyncRoute(async (
 // Nota: un pesaje de báscula no pertenece a ningún accionista (la báscula es
 // compartida); el dueño se define al crear el lote. Por eso estas rutas no
 // restringen el ticket por accionista.
-mobileTicketsRouter.post("/:id/liquidation-preview", requireAuth, resolveAccionista, asyncRoute(async (req, res) => {
+mobileTicketsRouter.post("/:id/liquidation-preview", requireAuth, resolveAccionista, exigirEscrituraEn("tickets", ["Liquidaciones"]), asyncRoute(async (req, res) => {
   const body = liquidationSchema.parse(req.body);
   res.json(await previewLiquidacionTicket(String(req.params.id), body.precioQQ));
 }));
 
-mobileTicketsRouter.post("/:id/liquidate", requireAuth, resolveAccionista, asyncRoute(async (req, res) => {
+mobileTicketsRouter.post("/:id/liquidate", requireAuth, resolveAccionista, exigirEscrituraEn("tickets", ["Liquidaciones"]), asyncRoute(async (req, res) => {
   const body = liquidationSchema.parse(req.body);
   const result = await procesarLiquidacionTicket(
     String(req.params.id),
