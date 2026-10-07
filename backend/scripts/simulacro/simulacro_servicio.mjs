@@ -20,8 +20,11 @@ try {
   check((await stock("CASCARA-011")) === cascaraAntes, "2b. el arroz de un servicio NO entra al inventario propio", { antes: cascaraAntes, despues: await stock("CASCARA-011") });
   check(ing.ingreso.is_maquila === true && ing.ingreso.operation_type === "SECADO_PILADO", "2c. queda marcado como servicio", { m: ing.ingreso.is_maquila, op: ing.ingreso.operation_type });
 
-  const sec = exigir(await api("POST", "/process-flow/drying", { entry_ids: [entryId], tunnel_number: 2, dryer_name: "Secadora 2", rice_type: "0.11", moisture_before: 21, filled_at: new Date(Date.now() - 15 * 3600e3).toISOString() }), "3a. Llenar túnel 2");
-  exigir(await api("PUT", `/process-flow/drying/${sec.id}`, { rice_type: "0.11", moisture_before: 21, moisture_after: 13, filled_at: new Date(Date.now() - 15 * 3600e3).toISOString(), dry_start_at: new Date(Date.now() - 14 * 3600e3).toISOString(), dry_end_at: new Date().toISOString(), finalize: true, dryer_name: "Secadora 2", entry_ids: [entryId] }), "3b. Finalizar secado");
+  // Un túnel LIBRE (los datos de prueba del dueño pueden tener alguno ocupado).
+  const libre = (await q("SELECT tunnel_number FROM tunnel_status WHERE status = 'DISPONIBLE' ORDER BY tunnel_number DESC LIMIT 1"))[0]?.tunnel_number;
+  if (!libre) throw new Error("no hay túneles libres en la copia");
+  const sec = exigir(await api("POST", "/process-flow/drying", { entry_ids: [entryId], tunnel_number: libre, dryer_name: `Secadora ${libre}`, rice_type: "0.11", moisture_before: 21, filled_at: new Date(Date.now() - 15 * 3600e3).toISOString() }), "3a. Llenar un túnel libre");
+  exigir(await api("PUT", `/process-flow/drying/${sec.id}`, { rice_type: "0.11", moisture_before: 21, moisture_after: 13, filled_at: new Date(Date.now() - 15 * 3600e3).toISOString(), dry_start_at: new Date(Date.now() - 14 * 3600e3).toISOString(), dry_end_at: new Date().toISOString(), finalize: true, dryer_name: `Secadora ${libre}`, entry_ids: [entryId] }), "3b. Finalizar secado");
   const motor = 2;
   const fuel = await api("POST", "/process-flow/drying/motor-fuel", { motor_number: motor, gas_bombona_inicio: 90, gas_bombona_fin: 60, finalize: false });
   check(fuel.ok || fuel.status === 409, "3c. registrar combustible del motor (o ya estaba cubierto)", fuel.ok ? undefined : mostrar(fuel));
