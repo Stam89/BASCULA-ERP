@@ -70,6 +70,14 @@ try {
   const lista = Array.isArray(kardex) ? kardex : kardex.rows ?? [];
   check(lista.length >= 3 && lista[0].stock_resultante != null, "C5. el kárdex registra cada movimiento con su stock resultante", lista.length);
 
+  const rCompra = await api("POST", "/repuestos/compra", { items: [{ repuesto_id: rep.id, cantidad: 1, costo_unitario: 9_999_999 }], cash_register_id: caja.id, modalidad_pago: "CONTADO" });
+  check(rCompra.status === 409 && rCompra.data?.code === "SOBREGIRO" && (await repStock()) === rep.s, "C6. una compra de repuestos que deja la caja en negativo AVISA y no cambia el stock", mostrar(rCompra));
+  const equipo = (await q("SELECT id FROM equipment WHERE name='Piladora 1'"))[0].id;
+  const mant = await api("POST", `/equipment/${equipo}/maintenance`, { maintenance_type: "PREVENTIVO", description: "Mantenimiento de prueba", amount: 9_999_999, cash_register_id: caja.id });
+  check(mant.status === 409 && mant.data?.code === "SOBREGIRO", "C7. un mantenimiento que deja la caja en negativo AVISA", mostrar(mant));
+  const mantOk = await api("POST", `/equipment/${equipo}/maintenance`, { maintenance_type: "PREVENTIVO", description: "Mantenimiento normal", amount: 35, cash_register_id: caja.id });
+  check(mantOk.ok, "C8. y uno normal se registra", mostrar(mantOk));
+
   // ── FOMENTOS ───────────────────────────────────────────────────────────
   const agri = (await q("SELECT id, full_name FROM farmers ORDER BY full_name LIMIT 1"))[0];
   const fom = exigir(await api("POST", "/fomentos", { farmer_name: agri.full_name, farmer_id: agri.id, cuadras: 5, inicio: "2026-10-01", renta: 0.07 }), "D1. Crear un fomento de 5 cuadras");
@@ -87,15 +95,26 @@ try {
   check(borrar.ok ? cajaTrasBorrar === r2(f1 + 400 + 1500) || cajaTrasBorrar === r2(f1 + 400) : true, "D5. borrar una entrega con salida de caja: la caja queda coherente (se repone o se rechaza el borrado)", { borrado: borrar.status, caja: cajaTrasBorrar, sinReponer: r2(f1 + 400), repuesta: r2(f1 + 400 + 1500) });
 
   // ── TRASPASO DE LOTE ENTRE SOCIOS ──────────────────────────────────────
-  const lote = (await q("SELECT id, lot_code, accionista_id FROM lots WHERE accionista_id=$1 AND status <> 'PROCESSED' ORDER BY created_at DESC LIMIT 1", [matriz]))[0];
-  if (lote) {
-    const tr = await api("PUT", `/lots/${lote.id}/accionista`, { accionista_id: stalyn, notes: "Traspaso de prueba" });
-    check(tr.ok, "E1. traspasar un lote de CEYRO a STALYN", mostrar(tr));
-    const duenio = (await q("SELECT accionista_id FROM lots WHERE id=$1", [lote.id]))[0].accionista_id;
-    check(duenio === stalyn, "E2. el lote ya es de STALYN", duenio === stalyn);
-    const dup = await api("PUT", `/lots/${lote.id}/accionista`, { accionista_id: stalyn });
-    check(dup.ok && (dup.data?.sin_cambios === true), "E3. traspasar de nuevo al mismo dueño no hace nada (sin_cambios)", mostrar(dup));
-  } else console.log("   (no hay un lote de CEYRO sin pilar para probar el traspaso)");
+  const tk = (await q("SELECT id, quintals::float qq FROM mobile_synced_tickets WHERE liquidated_at IS NULL AND weighing_ticket_id IS NULL AND quintals > 5 ORDER BY id LIMIT 1"))[0];
+  await api("POST", `/tickets/${tk.id}/link-farmer`, { farmer_id: agri.id });
+  const ing = exigir(await api("POST", `/tickets/${tk.id}/create-lot`, { rice_type: "0.11", operation_type: "COMPRA", ownership: "OWNED" }), "E0. Ingresar un ticket (compra de CEYRO)");
+  const libre = (await q("SELECT tunnel_number FROM tunnel_status WHERE status = 'DISPONIBLE' ORDER BY tunnel_number DESC LIMIT 1"))[0]?.tunnel_number;
+  const sec = exigir(await api("POST", "/process-flow/drying", { entry_ids: [ing.ingreso.id], tunnel_number: libre, dryer_name: `Secadora ${libre}`, rice_type: "0.11", moisture_before: 20, filled_at: new Date().toISOString() }), "E0b. Formar el lote en un túnel libre");
+  const liq = exigir(await api("POST", "/liquidations", { farmer_id: agri.id, weighing_ticket_id: ing.ingreso.id, quintals: tk.qq, price_per_quintal: 30, other_discounts: 0 }), "E0c. Liquidarlo al agricultor");
+  const apLiq = (await q("SELECT id, amount::float a FROM accounts_payable WHERE liquidation_id=$1 AND reference_type IS NULL", [liq.id]))[0];
+  exigir(await api("POST", `/cash/payables/${apLiq.id}/pay`, { cash_register_id: caja.id, amount: apLiq.a }), "E0d. Pagarle al agricultor desde la caja de CEYRO");
+  const tr = await api("PUT", `/lots/${sec.lot_id}/accionista`, { accionista_id: stalyn, notes: "Traspaso de prueba" });
+  check(tr.ok, "E1. traspasar el lote de CEYRO a STALYN", mostrar(tr));
+  check((await q("SELECT accionista_id FROM lots WHERE id=$1", [sec.lot_id]))[0].accionista_id === stalyn, "E2. el lote ya es de STALYN");
+  const arT = (await q("SELECT * FROM accounts_receivable WHERE reference_type='lot_transfer' ORDER BY created_at DESC LIMIT 1"))[0];
+  const apT = (await q("SELECT * FROM accounts_payable WHERE reference_type='lot_transfer' ORDER BY created_at DESC LIMIT 1"))[0];
+  check(arT && apT && arT.accionista_id === matriz && apT.accionista_id === stalyn && r2(arT.amount) === r2(apLiq.a) && r2(apT.amount) === r2(apLiq.a), "E3. STALYN le debe a CEYRO lo que CEYRO ya pagó al agricultor ($" + r2(apLiq.a) + "), en los DOS lados (por cobrar de CEYRO y por pagar de STALYN)", { cxc: arT && [arT.accionista_id === matriz, arT.amount], cxp: apT && [apT.accionista_id === stalyn, apT.amount] });
+  check((await q("SELECT accionista_id FROM liquidations WHERE id=$1", [liq.id]))[0].accionista_id === stalyn && (await q("SELECT accionista_id FROM weighing_tickets WHERE id=$1", [ing.ingreso.id]))[0].accionista_id === stalyn, "E4. la liquidación y el ingreso también pasan a STALYN");
+  const dup = await api("PUT", `/lots/${sec.lot_id}/accionista`, { accionista_id: stalyn });
+  check(dup.ok && dup.data?.sin_cambios === true, "E5. traspasar de nuevo al mismo dueño no hace nada", mostrar(dup));
+  const cobroTr = await api("POST", `/receivable/${arT.id}/pay`, { amount: 50, cash_register_id: caja.id });
+  const trasAp = (await q("SELECT balance::float b FROM accounts_payable WHERE id=$1", [apT.id]))[0].b;
+  check(cobroTr.ok && trasAp === r2(apT.amount - 50), "E6. cuando STALYN reintegra $50, su cuenta por pagar baja también", { cobro: cobroTr.status, suPorPagar: trasAp, esperado: r2(apT.amount - 50) });
 
   // ── Consistencia global ────────────────────────────────────────────────
   const h = await revisar((sql) => q(sql));

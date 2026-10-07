@@ -5,6 +5,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
+import { avisarSobregiro } from "../../services/caja.js";
 import { type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { resolverProveedor } from "../../services/proveedores.js";
@@ -177,6 +178,7 @@ repuestosRouter.post("/:id/entrada", asyncRoute(async (req, res) => {
       );
       if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
       if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+      await avisarSobregiro(client, body.cash_register_id, total, req);
       const cm = await client.query(
         `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, reference_type, reference_id, created_by, subcategoria)
          VALUES ($1, 'EXPENSE', 'REPUESTOS', $2, $3, 'repuesto_compra', $4, $5, $6) RETURNING id`,
@@ -315,6 +317,11 @@ repuestosRouter.post("/compra", asyncRoute(async (req, res) => {
     const proveedor = await resolverProveedor(client, body.supplier_id, body.proveedor_nombre);
     const aCredito = body.modalidad_pago === "CREDITO";
     if (aCredito && !proveedor) throw new ApiError(400, "Para comprar a crédito elige o escribe el proveedor.");
+    // De contado sale dinero de la caja: si la deja en negativo, se avisa antes de escribir nada.
+    if (!aCredito) {
+      const totalContado = round2(body.items.reduce((s, it) => s + round2(it.cantidad) * round2(it.costo_unitario), 0));
+      await avisarSobregiro(client, body.cash_register_id, totalContado, req);
+    }
     return registrarCompraRepuestos(client, {
       items, cashRegisterId: body.cash_register_id, accionistaId, userId, proveedor, aCredito,
       dueDate: body.due_date ?? null, descripcion: body.descripcion ?? null

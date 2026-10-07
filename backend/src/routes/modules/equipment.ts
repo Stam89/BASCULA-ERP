@@ -7,6 +7,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
+import { avisarSobregiro } from "../../services/caja.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { signUploadUrl } from "../../auth/upload-sign.js";
 import { consumirRepuestosEnMantenimiento, exigirMatriz, registrarCompraRepuestos } from "./repuestos.js";
@@ -331,6 +332,7 @@ equipmentRouter.post("/:id/maintenance", asyncRoute(async (req, res) => {
     );
     if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
     if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+    await avisarSobregiro(pool, body.cash_register_id, body.amount, req);
   }
 
   // Guardar foto si se envió
@@ -501,6 +503,7 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
     );
     if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
     if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+    await avisarSobregiro(pool, body.cash_register_id, body.amount, req);
   }
 
   let photoUrl = null;

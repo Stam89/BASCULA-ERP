@@ -3,6 +3,7 @@ import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
+import { avisarSobregiro } from "../../services/caja.js";
 import { inTransaction } from "../../db/transaction.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { type AuthenticatedRequest } from "../../auth/require-auth.js";
@@ -382,6 +383,9 @@ sacksRouter.post("/purchases", asyncRoute(async (req, res) => {
       total = round2(total + round2(item.cantidad * item.precio));
       detalle.push(`${sack.rows[0].tipo} x${item.cantidad} @ $${item.precio}`);
     }
+
+    // Si el egreso deja la caja en negativo, se avisa antes de escribir nada.
+    await avisarSobregiro(client, body.cash_register_id, total, req);
 
     // Paso 2: UN solo egreso consolidado por el total general. Se crea ANTES de
     // los movimientos de kardex para enlazarlos por ref_batch = id del egreso, de
