@@ -931,15 +931,17 @@ cuadrillaRouter.post("/entries", asyncRoute(async (req, res) => {
 cuadrillaRouter.delete("/entries/:id", asyncRoute(async (req, res) => {
   // Los registros autogenerados NO se borran aquí: hacerlo descuadraría el
   // movimiento de origen. Se corrigen en Secadoras/Ventas según corresponda.
-  const current = await pool.query("SELECT origen, tunnel_number FROM cuadrilla_entries WHERE id = $1", [req.params.id]);
+  const current = await pool.query("SELECT origen, tunnel_number, paid_at FROM cuadrilla_entries WHERE id = $1", [req.params.id]);
   if (!current.rowCount) throw new ApiError(404, "Registro no encontrado");
+  if (current.rows[0].paid_at) throw new ApiError(409, "Este registro ya se pagó: no se puede borrar. Anula el pago en Caja y luego corrígelo.");
   if (current.rows[0].origen === "SECADORA" || current.rows[0].origen === "VENTA") {
     const origen = current.rows[0].origen === "VENTA" ? "Ventas" : `Secadoras (Túnel ${current.rows[0].tunnel_number ?? "?"})`;
     throw new ApiError(409, `Este registro se generó automáticamente desde ${origen}. Corrígelo en el módulo de origen.`);
   }
   await inTransaction(async (client) => {
+    const borrado = await client.query("DELETE FROM cuadrilla_entries WHERE id = $1 AND paid_at IS NULL", [req.params.id]);
+    if (!borrado.rowCount) throw new ApiError(409, "Este registro ya se pagó: no se puede borrar. Anula el pago en Caja y luego corrígelo.");
     await revertirSacosRecuperados(client, String(req.params.id), "Reverso: se eliminó el registro de cambio de saco");
-    await client.query("DELETE FROM cuadrilla_entries WHERE id = $1", [req.params.id]);
   });
   res.status(204).end();
 }));
@@ -956,8 +958,9 @@ cuadrillaRouter.put("/entries/:id", asyncRoute(async (req, res) => {
     ...sacoRecuperadoSchema
   }).parse(req.body);
 
-  const current = await pool.query("SELECT origen, tunnel_number, saco_recuperado_id, destino_saco FROM cuadrilla_entries WHERE id = $1", [req.params.id]);
+  const current = await pool.query("SELECT origen, tunnel_number, saco_recuperado_id, destino_saco, paid_at FROM cuadrilla_entries WHERE id = $1", [req.params.id]);
   if (!current.rowCount) throw new ApiError(404, "Registro no encontrado");
+  if (current.rows[0].paid_at) throw new ApiError(409, "Este registro ya se pagó: no se puede editar. Anula el pago en Caja y luego corrígelo.");
   if (current.rows[0].origen === "SECADORA" || current.rows[0].origen === "VENTA") {
     throw new ApiError(409, "Este registro es automático. Para modificarlo, corrija el movimiento de origen.");
   }
@@ -973,7 +976,7 @@ cuadrillaRouter.put("/entries/:id", asyncRoute(async (req, res) => {
        SET work_date = COALESCE($2::date, work_date),
            activity_id = $3, activity_name = $4, worker_name = $5,
            quantity = $6, unit_rate = $7, subtotal = $8
-       WHERE id = $1 AND origen NOT IN ('SECADORA', 'VENTA')
+       WHERE id = $1 AND origen NOT IN ('SECADORA', 'VENTA') AND paid_at IS NULL
        RETURNING id, work_date, activity_name, worker_name, quantity, unit_rate, subtotal, notes, origen, referencia_id, tunnel_number, momento`,
       [req.params.id, body.work_date ?? null, activity.id, activity.name, body.worker_name.trim(), body.quantity, rate, subtotal]
     );
@@ -1064,34 +1067,56 @@ cuadrillaRouter.post("/advances", asyncRoute(async (req, res) => {
     worker_name: z.string().min(2),
     amount: z.number().positive(),
     concept: z.string().optional(),
-    created_by: z.string().uuid().optional()
+    created_by: z.string().uuid().optional(),
+    // Si el anticipo se entrega en efectivo desde una caja, sale de ella (igual que los anticipos de mano de obra).
+    cash_register_id: z.string().uuid().optional()
   }).parse(req.body);
 
-  const result = await pool.query(
-    `INSERT INTO cuadrilla_advances (worker_name, amount, balance, concept, created_by)
-     VALUES ($1, $2, $2, $3, $4)
-     RETURNING id, worker_name, amount, balance, concept, status, issued_at`,
-    [body.worker_name.trim(), body.amount, body.concept ?? null, body.created_by ?? null]
-  );
-  res.status(201).json(result.rows[0]);
+  const row = await inTransaction(async (client) => {
+    if (body.cash_register_id) {
+      await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, (req as AuthenticatedRequest).accionistaId);
+      await avisarSobregiro(client, body.cash_register_id, body.amount, req);
+    }
+    const result = await client.query(
+      `INSERT INTO cuadrilla_advances (worker_name, amount, balance, concept, created_by)
+       VALUES ($1, $2, $2, $3, $4)
+       RETURNING id, worker_name, amount, balance, concept, status, issued_at`,
+      [body.worker_name.trim(), body.amount, body.concept ?? null, body.created_by ?? null]
+    );
+    if (body.cash_register_id) {
+      await client.query(
+        `INSERT INTO cash_movements
+           (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)
+         VALUES ($1, 'EXPENSE', 'PAGO_MANO_OBRA', 'cuadrilla_advances', $2, $3, $4, $5)`,
+        [body.cash_register_id, result.rows[0].id, body.amount,
+         `Anticipo cuadrilla ${body.worker_name.trim()}${body.concept ? ` · ${body.concept}` : ""}`, (req as AuthenticatedRequest).user?.id ?? null]
+      );
+    }
+    return result.rows[0];
+  });
+  res.status(201).json(row);
 }));
 
 // Salda (total o parcial) un anticipo pendiente.
 cuadrillaRouter.post("/advances/:id/settle", asyncRoute(async (req, res) => {
   const body = z.object({ amount: z.number().positive().optional() }).parse(req.body);
-  const current = await pool.query("SELECT balance FROM cuadrilla_advances WHERE id = $1", [req.params.id]);
-  if (!current.rowCount) throw new ApiError(404, "Anticipo no encontrado");
+  // Con candado: dos «saldar» a la vez no pueden leer el mismo saldo y pisarse.
+  const row = await inTransaction(async (client) => {
+    const current = await client.query("SELECT balance FROM cuadrilla_advances WHERE id = $1 FOR UPDATE", [req.params.id]);
+    if (!current.rowCount) throw new ApiError(404, "Anticipo no encontrado");
 
-  const balance = Number(current.rows[0].balance);
-  const pay = round2(Math.min(body.amount ?? balance, balance));
-  const newBalance = round2(balance - pay);
-  const newStatus = newBalance < 0.01 ? "PAID" : "PARTIAL";
+    const balance = Number(current.rows[0].balance);
+    const pay = round2(Math.min(body.amount ?? balance, balance));
+    const newBalance = round2(balance - pay);
+    const newStatus = newBalance < 0.01 ? "PAID" : "PARTIAL";
 
-  const result = await pool.query(
-    "UPDATE cuadrilla_advances SET balance = $2, status = $3 WHERE id = $1 RETURNING id, worker_name, amount, balance, status",
-    [req.params.id, newBalance, newStatus]
-  );
-  res.json(result.rows[0]);
+    const result = await client.query(
+      "UPDATE cuadrilla_advances SET balance = $2, status = $3 WHERE id = $1 RETURNING id, worker_name, amount, balance, status",
+      [req.params.id, newBalance, newStatus]
+    );
+    return result.rows[0];
+  });
+  res.json(row);
 }));
 
 // ── Pagar a una persona de la cuadrilla (liquida su neto del período) ────────

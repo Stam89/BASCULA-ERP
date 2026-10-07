@@ -5,6 +5,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { avisarSobregiro } from "../../services/caja.js";
 
 // Nómina administrativa (personal de oficina) POR ACCIONISTA. Cada accionista
 // (matriz y socios) administra su propio personal y le paga de su propia caja.
@@ -182,7 +183,7 @@ adminPayrollRouter.post("/pay", asyncRoute(async (req, res) => {
     if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no está abierta");
 
     const staff = await client.query(
-      "SELECT id, cargo, worker_name, base_salary::float AS base_salary FROM admin_staff WHERE id = $1 AND accionista_id = $2",
+      "SELECT id, cargo, worker_name, base_salary::float AS base_salary FROM admin_staff WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
       [body.staff_id, accionista]
     );
     if (!staff.rows[0]) throw new ApiError(404, "Empleado no encontrado");
@@ -204,6 +205,17 @@ adminPayrollRouter.post("/pay", asyncRoute(async (req, res) => {
       const dom = Number(m.rows[0].dom);
       periodo = `${m.rows[0].ym} ${dom < 16 ? "Quincena" : "Fin de mes"}`;
     }
+
+    // El mismo sueldo del mismo período no se paga dos veces (doble clic o dos personas).
+    // Si se pagó por error, se anula el movimiento en Caja y entonces se puede volver a pagar.
+    const yaPagado = await client.query(
+      "SELECT 1 FROM admin_salary_payments WHERE staff_id = $1 AND periodo = $2 AND anulado_at IS NULL LIMIT 1",
+      [body.staff_id, periodo]
+    );
+    if (yaPagado.rowCount) {
+      throw new ApiError(409, `${staff.rows[0].worker_name} ya cobró «${periodo}». Si fue un error, anula ese pago en Caja y luego vuelve a pagarlo.`);
+    }
+    await avisarSobregiro(client, body.cash_register_id, net, req);
 
     await client.query(
       `INSERT INTO cash_movements
