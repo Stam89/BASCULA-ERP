@@ -841,6 +841,19 @@ fomentosRouter.post("/:id/entregas", asyncRoute(async (req, res) => {
   res.status(201).json(result);
 }));
 
+// Una entrega o un pago de fomento que movió la caja no se borra a escondidas: su movimiento de caja seguiría
+// contando y la caja quedaría descuadrada contra el fomento. Primero se anula el movimiento en Caja (administrador).
+async function exigirSinMovimientoDeCajaVigente(client: PoolClient, referenceType: "fomento_entregas" | "fomento_pagos", id: string): Promise<void> {
+  const mov = await client.query(
+    `SELECT 1 FROM cash_movements
+      WHERE reference_type = $1 AND reference_id = $2 AND reversal_of IS NULL AND reversed_at IS NULL LIMIT 1`,
+    [referenceType, id]
+  );
+  if (mov.rowCount) {
+    throw new ApiError(409, `Este registro movió la caja: anula primero su movimiento en Caja (administrador) y luego elimínalo. Si no, la caja quedaría descuadrada.`);
+  }
+}
+
 fomentosRouter.delete("/:fomentoId/entregas/:id", asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
   const fomentoId = String(req.params.fomentoId);
@@ -853,6 +866,7 @@ fomentosRouter.delete("/:fomentoId/entregas/:id", asyncRoute(async (req, res) =>
       [entregaId, fomentoId]
     )).rows[0];
     if (!entrega) throw new ApiError(404, "Entrega no encontrada");
+    await exigirSinMovimientoDeCajaVigente(client, "fomento_entregas", entregaId);
 
     // Integridad: lo entregado NUNCA puede quedar por debajo de lo ya pagado.
     const pagado = Number((await client.query(
@@ -911,6 +925,9 @@ fomentosRouter.delete("/:fomentoId/pagos/:id", asyncRoute(async (req, res) => {
   const fomentoId = String(req.params.fomentoId);
   await inTransaction(async (client) => {
     await assertFomentoAccionista(client, fomentoId, accionistaId);
+    const pago = await client.query("SELECT 1 FROM fomento_pagos WHERE id=$1 AND fomento_id=$2 FOR UPDATE", [req.params.id, fomentoId]);
+    if (!pago.rowCount) throw new ApiError(404, "Pago no encontrado");
+    await exigirSinMovimientoDeCajaVigente(client, "fomento_pagos", String(req.params.id));
     await client.query("DELETE FROM fomento_pagos WHERE id=$1 AND fomento_id=$2",
       [req.params.id, fomentoId]);
   });

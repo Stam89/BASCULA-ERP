@@ -89,10 +89,22 @@ try {
   const f1 = await saldoCaja();
   const pagoF = await api("POST", `/fomentos/${fom.id}/pagos`, { fecha: "2026-10-05", valor: 400, concepto: "Abono del agricultor", cash_register_id: caja.id });
   check(pagoF.ok && r2((await saldoCaja()) - f1) === 400, "D4. el agricultor abona $400: entran a la caja", mostrar(pagoF));
-  const entregaId = (entrega.data.id ?? entrega.data.entrega?.id);
-  const borrar = await api("DELETE", `/fomentos/${fom.id}/entregas/${entregaId}`);
-  const cajaTrasBorrar = await saldoCaja();
-  check(borrar.ok ? cajaTrasBorrar === r2(f1 + 400 + 1500) || cajaTrasBorrar === r2(f1 + 400) : true, "D5. borrar una entrega con salida de caja: la caja queda coherente (se repone o se rechaza el borrado)", { borrado: borrar.status, caja: cajaTrasBorrar, sinReponer: r2(f1 + 400), repuesta: r2(f1 + 400 + 1500) });
+  const entregaId = entrega.data.id;
+  const pagoId = pagoF.data.id;
+  const cajaAntesBorrar = await saldoCaja();
+  const borraPago = await api("DELETE", `/fomentos/${fom.id}/pagos/${pagoId}`);
+  check(borraPago.status === 409 && (await q("SELECT 1 FROM fomento_pagos WHERE id=$1", [pagoId])).length === 1 && (await saldoCaja()) === cajaAntesBorrar, "D5. borrar un pago que movió la caja se RECHAZA (409): antes dejaba el ingreso huérfano en la caja", mostrar(borraPago));
+  const borraEntrega = await api("DELETE", `/fomentos/${fom.id}/entregas/${entregaId}`);
+  check(!borraEntrega.ok && (await q("SELECT 1 FROM fomento_entregas WHERE id=$1", [entregaId])).length === 1, "D6. y lo mismo con una entrega que sacó dinero de caja", mostrar(borraEntrega));
+  // Se anula primero el movimiento en Caja (admin) y entonces sí se puede borrar
+  const movPago = (await q("SELECT id FROM cash_movements WHERE reference_type='fomento_pagos' AND reference_id=$1", [pagoId]))[0].id;
+  const rev = await api("POST", `/cash/movements/${movPago}/reverse`, { reason: "pago cargado por error" });
+  const cajaTrasRev = await saldoCaja();
+  check(rev.ok && cajaTrasRev === r2(cajaAntesBorrar - 400), "D7. anular su movimiento en Caja descuenta los $400 de la caja", { rev: rev.status, caja: cajaTrasRev, esperada: r2(cajaAntesBorrar - 400) });
+  const borraPago2 = await api("DELETE", `/fomentos/${fom.id}/pagos/${pagoId}`);
+  check(borraPago2.ok && (await q("SELECT 1 FROM fomento_pagos WHERE id=$1", [pagoId])).length === 0 && (await saldoCaja()) === cajaTrasRev, "D8. ya anulado en Caja, el pago se puede borrar y la caja no cambia", mostrar(borraPago2));
+  const borraNoExiste = await api("DELETE", `/fomentos/${fom.id}/pagos/${pagoId}`);
+  check(borraNoExiste.status === 404, "D9. borrar un pago que ya no existe responde 404", borraNoExiste.status);
 
   // ── TRASPASO DE LOTE ENTRE SOCIOS ──────────────────────────────────────
   const tk = (await q("SELECT id, quintals::float qq FROM mobile_synced_tickets WHERE liquidated_at IS NULL AND weighing_ticket_id IS NULL AND quintals > 5 ORDER BY id LIMIT 1"))[0];
