@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🧾 Liquidaciones a agricultores: simulacro y arreglos (2026-10-07)
+- `node scripts/simulacro/liquidaciones.mjs` (≈45 comprobaciones): cálculo y vista previa, doble clic, pago desde caja, anticipos al liquidar y después, flete propio/tercero, descuentos > bruto, pertenencia (agricultor/socio), edición, anulación (incl. doble clic) y coherencia final (neto = monto de la cuenta; monto − pagado = saldo; nunca pagado > monto). Lo pagado se mide con los egresos de caja `reference_type=accounts_payable` menos sus reversas (los pagos por caja NO usan `payments_made`).
+- Corregido: `PUT /liquidations/:id` daba 500 SIEMPRE que cambiaba el neto (asignaba texto a `status` document_status). Ahora: monto = neto nuevo, saldo = neto − ya pagado, estado CONFIRMED/PARTIAL/PAID según lo pagado; 409 si el neto corregido queda por debajo de lo ya pagado; reutiliza la cuenta aunque haya quedado anulada en $0.
+- Corregido: `POST /liquidations/:id/apply-advances` bajaba solo el SALDO de la cuenta por pagar y dejaba el monto viejo → parecía pagada y la anulación respondía «ya tiene pagos al agricultor». Ahora baja monto y saldo. En la base real no había liquidaciones (nada que reparar).
+- Nota (no cambiado): los QQ de la liquidación los manda la pantalla (se pueden editar por línea) y no se validan contra los QQ del ingreso; una liquidación de varias líneas se envía línea por línea (si falla una a la mitad, las anteriores quedan hechas).
+
 ### 🔒 Caja: solo del mismo socio y abierta (2026-10-06)
 - `node scripts/simulacro/dinero.mjs` probó doble clic, cajas ajenas/cerradas, sobrepago y exceso de stock. Estaban bien protegidos (candado por fila): cobrar/pagar dos veces, reversar dos veces, cerrar dos veces, preparar/despachar dos veces, pagar de más, pedido mayor al stock.
 - Hueco real corregido: cobros de cuentas por cobrar, despacho de pedidos, venta directa, anticipos a agricultores, gastos, anticipos y pagos de nómina de planta, bajada de carro, fomentos y cobro de servicio de pilado aceptaban la caja de OTRO socio o una CERRADA (el dinero entraba/salía por la caja equivocada). Nuevo `services/caja.ts` → `exigirCajaAbiertaDelAccionista` (caja del accionista activo y OPEN), aplicado en esas rutas; responden 404/409.
