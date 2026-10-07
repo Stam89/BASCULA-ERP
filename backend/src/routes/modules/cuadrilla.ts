@@ -5,7 +5,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
+import { avisarSobregiro, exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { registrarSacosRecuperados, revertirSacosRecuperados } from "../../services/sacos.js";
 import { armarRoster, canonico, evaluarNombre, type Evaluacion } from "../../services/bajada-nombres.js";
@@ -1176,6 +1176,11 @@ cuadrillaRouter.post("/pay-worker", asyncRoute(async (req, res) => {
 
   const result = await inTransaction(async (client) => {
     await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, (req as AuthenticatedRequest).accionistaId);
+    const previa = await pagarTrabajadorCuadrilla(client, {
+      name: body.worker_name, from: body.from, to: body.to,
+      cashRegisterId: body.cash_register_id, userId: user?.id ?? null
+    }, false);
+    if (previa) await avisarSobregiro(client, body.cash_register_id, previa.paid, req);
     const r = await pagarTrabajadorCuadrilla(client, {
       name: body.worker_name, from: body.from, to: body.to,
       cashRegisterId: body.cash_register_id, userId: user?.id ?? null
@@ -1598,6 +1603,8 @@ cuadrillaRouter.post("/bajadas/pagar", asyncRoute(async (req, res) => {
   const user = (req as AuthenticatedRequest).user;
   const out = await inTransaction(async (client) => {
     await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, (req as AuthenticatedRequest).accionistaId);
+    const previa = await pagarBajadasPendientes(client, { cashRegisterId: body.cash_register_id, hasta: body.hasta, userId: user?.id ?? null }, false);
+    if (previa) await avisarSobregiro(client, body.cash_register_id, previa.total, req);
     const r = await pagarBajadasPendientes(client, { cashRegisterId: body.cash_register_id, hasta: body.hasta, userId: user?.id ?? null });
     if (!r) throw new ApiError(400, body.hasta ? "No hay bajadas de carro pendientes hasta esa fecha." : "No hay bajadas de carro pendientes de pago.");
     return r;

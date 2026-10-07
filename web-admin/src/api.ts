@@ -83,31 +83,42 @@ export async function apiGet<T>(path: string, opts?: OpcionesApi): Promise<T> {
   return parseResponse<T>(response);
 }
 
-export async function apiPost<T>(path: string, body: unknown, opts?: OpcionesApi): Promise<T> {
-  const response = await fetch(`${API_URL}/api/v1${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders(opts) },
+// Envío JSON con el AVISO DE SOBREGIRO: si un egreso dejaría la caja en negativo, el servidor responde 409 con
+// code «SOBREGIRO» (sin haber escrito nada). Aquí se le pregunta a la persona y, si acepta, se reenvía la misma
+// petición con «X-Confirmar-Sobregiro: 1». Sirve a todas las pantallas que sacan dinero de la caja.
+async function enviarJson<T>(method: "POST" | "PUT" | "PATCH", path: string, body: unknown, opts?: OpcionesApi): Promise<T> {
+  const enviar = (extra?: Record<string, string>) => fetch(`${API_URL}/api/v1${path}`, {
+    method,
+    headers: { "Content-Type": "application/json", ...authHeaders(opts), ...(extra ?? {}) },
     body: JSON.stringify(body)
   });
+  let response = await enviar();
+  if (response.status === 409) {
+    let aviso: string | null = null;
+    try {
+      const j = (await response.clone().json()) as { code?: string; error?: string };
+      if (j.code === "SOBREGIRO") aviso = j.error ?? "La caja quedará en negativo. ¿Registrarlo de todos modos?";
+    } catch {
+      // No era un JSON de aviso: sigue el manejo normal del error.
+    }
+    if (aviso !== null) {
+      if (!window.confirm(`⚠️ ${aviso}`)) throw new Error("No se registró: la caja iba a quedar en negativo y cancelaste.");
+      response = await enviar({ "X-Confirmar-Sobregiro": "1" });
+    }
+  }
   return parseResponse<T>(response);
 }
 
-export async function apiPut<T>(path: string, body: unknown, opts?: OpcionesApi): Promise<T> {
-  const response = await fetch(`${API_URL}/api/v1${path}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json", ...authHeaders(opts) },
-    body: JSON.stringify(body)
-  });
-  return parseResponse<T>(response);
+export function apiPost<T>(path: string, body: unknown, opts?: OpcionesApi): Promise<T> {
+  return enviarJson<T>("POST", path, body, opts);
 }
 
-export async function apiPatch<T>(path: string, body: unknown, opts?: OpcionesApi): Promise<T> {
-  const response = await fetch(`${API_URL}/api/v1${path}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json", ...authHeaders(opts) },
-    body: JSON.stringify(body)
-  });
-  return parseResponse<T>(response);
+export function apiPut<T>(path: string, body: unknown, opts?: OpcionesApi): Promise<T> {
+  return enviarJson<T>("PUT", path, body, opts);
+}
+
+export function apiPatch<T>(path: string, body: unknown, opts?: OpcionesApi): Promise<T> {
+  return enviarJson<T>("PATCH", path, body, opts);
 }
 
 // ── Consulta SRI (Cédula/RUC) ────────────────────────────────────────────────

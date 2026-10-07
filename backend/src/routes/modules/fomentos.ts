@@ -9,7 +9,7 @@ import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { inTransaction } from "../../db/transaction.js";
 import { ApiError } from "../../http/error-handler.js";
-import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
+import { avisarSobregiro, exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const fomentosRouter = Router();
@@ -807,7 +807,10 @@ fomentosRouter.post("/:id/entregas", asyncRoute(async (req, res) => {
 
   const result = await inTransaction(async (client) => {
     await assertFomentoAccionista(client, fomentoId, accionistaId);
-    if (data.cash_register_id && !data.es_saldo_anterior) await exigirCajaAbiertaDelAccionista(client, data.cash_register_id, accionistaId);
+    if (data.cash_register_id && !data.es_saldo_anterior) {
+      await exigirCajaAbiertaDelAccionista(client, data.cash_register_id, accionistaId);
+      await avisarSobregiro(client, data.cash_register_id, data.valor, req);
+    }
     // El saldo arrastrado no depende de la fecha; se deja en CURRENT_DATE (default).
     const entrega = await client.query(
       `INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto, es_saldo_anterior, meses_interes_fijo)

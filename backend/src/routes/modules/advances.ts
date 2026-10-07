@@ -3,7 +3,7 @@ import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
-import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
+import { avisarSobregiro, exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
 import { nextCode } from "../../utils/codes.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
@@ -39,7 +39,10 @@ advancesRouter.post("/", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const data = advanceSchema.parse(req.body);
   const result = await inTransaction(async (client) => {
-    if (data.cash_register_id) await exigirCajaAbiertaDelAccionista(client, data.cash_register_id, accionistaId);
+    if (data.cash_register_id) {
+      await exigirCajaAbiertaDelAccionista(client, data.cash_register_id, accionistaId);
+      await avisarSobregiro(client, data.cash_register_id, data.amount, req);
+    }
     const advance = await client.query(
       `INSERT INTO farmer_advances (farmer_id, advance_number, amount, balance, concept, created_by, accionista_id)
        VALUES ($1, $2, $3, $3, $4, $5, $6)

@@ -13,6 +13,7 @@ import { reabrirPagoNomina } from "../../services/nomina-reabrir.js";
 import { espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
 import { vidaUtilPorTipo } from "../../services/activos.js";
 import ExcelJS from "exceljs";
+import { avisarSobregiro } from "../../services/caja.js";
 import type { PoolClient } from "pg";
 
 export const cashRouter = Router();
@@ -560,6 +561,7 @@ cashRouter.post("/movements", asyncRoute(async (req, res) => {
     );
     if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
     if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+    if (body.movement === "EXPENSE") await avisarSobregiro(client, body.cash_register_id, body.amount, req);
     return client.query(
       `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, created_by)
        VALUES ($1, $2, $3, $4, $5, $6)
@@ -700,6 +702,7 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     );
     if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
     if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+    if (body.movement === "EXPENSE") await avisarSobregiro(client, req.params.id as string, body.amount, req);
     // Proveedor (opcional) del egreso de contado.
     const proveedor = body.movement === "EXPENSE" ? await resolverProveedor(client, body.supplier_id, body.proveedor_nombre) : null;
     const mov = await client.query(
@@ -1125,6 +1128,7 @@ cashRouter.post("/payables/:id/pay", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await inTransaction(async (client) => {
     await assertCajaDelAccionista(client, body.cash_register_id, accionistaId);
+    await avisarSobregiro(client, body.cash_register_id, body.amount, req);
     // Solo se pagan cuentas del accionista activo: cada socio con su plata.
     // FOR UPDATE OF ap: el candado va sobre la cuenta, no sobre el agricultor.
     const ap = await client.query(
@@ -1208,6 +1212,7 @@ cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await inTransaction(async (client) => {
     await assertCajaDelAccionista(client, body.cash_register_id, accionistaId);
+    await avisarSobregiro(client, body.cash_register_id, body.amount, req);
     const cuentas = await client.query(
       `SELECT ap.*, f.full_name AS farmer_name
        FROM accounts_payable ap

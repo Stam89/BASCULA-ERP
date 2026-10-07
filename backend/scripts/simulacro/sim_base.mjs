@@ -42,9 +42,9 @@ export async function montar({ puerto = 4001, copiar = true } = {}) {
   const admin = (await q("SELECT u.id, u.name, u.username, u.role_id, r.name AS role_name FROM users u JOIN roles r ON r.id=u.role_id WHERE r.name='ADMINISTRADOR' LIMIT 1"))[0];
   const matriz = (await q("SELECT id FROM accionistas WHERE tipo='MATRIZ' LIMIT 1"))[0].id;
   const token = signToken({ id: admin.id, username: admin.username, name: admin.name, role_id: admin.role_id, role_name: admin.role_name, allowed_modules: null });
-  const api = async (method, path, body, acc = matriz) => {
+  const api = async (method, path, body, acc = matriz, extra = {}) => {
     const r = await fetch(`http://127.0.0.1:${puerto}/api/v1${path}`, {
-      method, headers: { "content-type": "application/json", authorization: `Bearer ${token}`, "x-accionista-id": acc },
+      method, headers: { "content-type": "application/json", authorization: `Bearer ${token}`, "x-accionista-id": acc, ...extra },
       body: body === undefined ? undefined : JSON.stringify(body)
     });
     let data = null; const txt = await r.text(); try { data = JSON.parse(txt); } catch { data = txt; }

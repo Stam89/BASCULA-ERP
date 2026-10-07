@@ -94,7 +94,28 @@ try {
   // ── Caja ────────────────────────────────────────────────────────────────
   const sg = await saldoCaja();
   const gasto = await api("POST", "/cash/movements", { cash_register_id: caja.id, movement: "EXPENSE", category: "OTROS", amount: sg + 5000, description: "Sobregiro simulacro" });
-  check(!gasto.ok, "CAJA1. un egreso mayor al dinero que hay en la caja se rechaza (no queda saldo negativo)", { status: gasto.status, saldo: await saldoCaja() });
+  check(gasto.status === 409 && gasto.data?.code === "SOBREGIRO" && /quedará en -\$5000\.00/.test(gasto.data?.error ?? ""), "CAJA1. un egreso mayor al dinero de la caja AVISA (409 SOBREGIRO con el saldo que quedaría)", mostrar(gasto));
+  check((await saldoCaja()) === sg, "CAJA1b. y mientras no se confirme NO se registra nada", { saldo: await saldoCaja(), antes: sg });
+  const conf = await api("POST", "/cash/movements", { cash_register_id: caja.id, movement: "EXPENSE", category: "OTROS", amount: sg + 5000, description: "Sobregiro confirmado" }, matriz, { "x-confirmar-sobregiro": "1" });
+  check(conf.status === 201 && (await saldoCaja()) === -5000, "CAJA1c. confirmando el aviso, SÍ se registra (queda en -$5000)", { status: conf.status, saldo: await saldoCaja() });
+  const ingreso = await api("POST", "/cash/movements", { cash_register_id: caja.id, movement: "INCOME", category: "OTROS", amount: 5000, description: "Reponer" });
+  check(ingreso.status === 201 && (await saldoCaja()) === 0, "CAJA1d. un ingreso nunca pide confirmación", { status: ingreso.status });
+  const normal = await api("POST", "/cash/movements", { cash_register_id: caja.id, movement: "INCOME", category: "OTROS", amount: 300, description: "Para gastar" });
+  const dentro = await api("POST", "/cash/movements", { cash_register_id: caja.id, movement: "EXPENSE", category: "OTROS", amount: 100, description: "Gasto normal" });
+  check(normal.ok && dentro.status === 201, "CAJA1e. un egreso dentro del saldo no pide nada", dentro.status);
+  const exacto = await api("POST", "/cash/movements", { cash_register_id: caja.id, movement: "EXPENSE", category: "OTROS", amount: 200, description: "Vaciar la caja" });
+  check(exacto.status === 201 && (await saldoCaja()) === 0, "CAJA1f. gastar justo todo el saldo (queda en $0) tampoco avisa", { status: exacto.status, saldo: await saldoCaja() });
+  // Otros egresos con el mismo aviso
+  const apS = (await q("INSERT INTO accounts_payable (accionista_id, amount, balance, status, reference_type, description) VALUES ($1, 800, 800, 'CONFIRMED', 'purchase', 'Proveedor grande') RETURNING id", [matriz]))[0];
+  const pagoS = await api("POST", `/cash/payables/${apS.id}/pay`, { cash_register_id: caja.id, amount: 800 });
+  check(pagoS.status === 409 && pagoS.data?.code === "SOBREGIRO", "CAJA1g. pagar una cuenta por pagar mayor al saldo de caja también avisa", mostrar(pagoS));
+  const pagoOk = await api("POST", `/cash/payables/${apS.id}/pay`, { cash_register_id: caja.id, amount: 800 }, matriz, { "x-confirmar-sobregiro": "1" });
+  check(pagoOk.ok, "CAJA1h. y confirmando se paga", mostrar(pagoOk));
+  const antS = await api("POST", "/advances", { farmer_id: agri, amount: 50, concept: "anticipo sin caja", cash_register_id: caja.id });
+  check(antS.status === 409 && antS.data?.code === "SOBREGIRO", "CAJA1i. un anticipo a un agricultor con la caja en negativo también avisa", mostrar(antS));
+  const gS = await api("POST", "/expenses", { amount: 50, description: "gasto sin fondos", cash_register_id: caja.id });
+  check(gS.status === 409 && gS.data?.code === "SOBREGIRO", "CAJA1j. un gasto con la caja en negativo también avisa", mostrar(gS));
+  await api("POST", "/cash/movements", { cash_register_id: caja.id, movement: "INCOME", category: "OTROS", amount: 805, description: "Reponer otra vez" });
   const mov = (await api("POST", "/cash/movements", { cash_register_id: caja.id, movement: "EXPENSE", category: "OTROS", amount: 15, description: "Para reversar" })).data;
   const [ra, rb] = await dos(() => api("POST", `/cash/movements/${mov.id}/reverse`, { reason: "doble clic" }));
   check(unico([ra, rb]) && (await q("SELECT count(*)::int n FROM cash_movements WHERE reversal_of=$1", [mov.id]))[0].n === 1, "CAJA2. reversar el mismo movimiento dos veces a la vez lo reversa UNA sola vez", [ra.status, rb.status]);

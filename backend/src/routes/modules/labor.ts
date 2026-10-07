@@ -5,7 +5,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
+import { avisarSobregiro, exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { estibadorBaseFromTulas } from "../../utils/money.js";
 import { esDiaPagableSecador } from "../../utils/secador-workday.js";
@@ -628,6 +628,7 @@ laborRouter.post("/advances", asyncRoute(async (req, res) => {
 
   const result = await inTransaction(async (client) => {
     await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, (req as AuthenticatedRequest).accionistaId);
+    await avisarSobregiro(client, body.cash_register_id, body.amount, req);
     const adv = await client.query(
       `INSERT INTO worker_advances (worker_role, worker_name, amount, description, advance_date, cash_register_id, created_by)
        VALUES ($1, $2, $3, $4, COALESCE($5::date, CURRENT_DATE), $6, $7)
@@ -845,6 +846,11 @@ laborRouter.post("/pay-worker", asyncRoute(async (req, res) => {
 
   const result = await inTransaction(async (client) => {
     await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, (req as AuthenticatedRequest).accionistaId);
+    const previa = await pagarTrabajadorPlanta(client, {
+      role: body.worker_role, name: body.worker_name, from: body.from, to: body.to,
+      cashRegisterId: body.cash_register_id, userId: user?.id ?? null
+    }, false);
+    if (previa) await avisarSobregiro(client, body.cash_register_id, previa.paid, req);
     const r = await pagarTrabajadorPlanta(client, {
       role: body.worker_role, name: body.worker_name, from: body.from, to: body.to,
       cashRegisterId: body.cash_register_id, userId: user?.id ?? null
@@ -870,6 +876,7 @@ laborRouter.post("/payments/:id/pay", asyncRoute(async (req, res) => {
     if (p.status === "PAID") throw new ApiError(400, "Este pago ya fue registrado");
     const net = Number(p.net_amount);
     if (net <= 0) throw new ApiError(400, "El monto a pagar es cero");
+    await avisarSobregiro(client, body.cash_register_id, net, req);
 
     await client.query(
       `UPDATE worker_payments SET status = 'PAID', paid_at = now(), cash_register_id = $2 WHERE id = $1`,

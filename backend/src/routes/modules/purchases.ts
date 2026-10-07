@@ -7,6 +7,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { avisarSobregiro } from "../../services/caja.js";
 
 export const purchasesRouter = Router();
 
@@ -103,6 +104,7 @@ purchasesRouter.post("/", asyncRoute(async (req, res) => {
     );
     if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
     if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+    await avisarSobregiro(pool, body.cash_register_id, total, req);
   }
 
   // Existencia de insumos/productos + compatibilidad bodega<->tipo

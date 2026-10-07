@@ -5,6 +5,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
+import { avisarSobregiro } from "../../services/caja.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { getMatrizId } from "../../services/matriz.js";
 import { ensureLaborTables, pagarTrabajadorPlanta } from "./labor.js";
@@ -152,6 +153,7 @@ nominaSemanalRouter.post("/pagar", asyncRoute(async (req, res) => {
     const caja = (await client.query("SELECT status, accionista_id FROM cash_registers WHERE id = $1", [body.cash_register_id])).rows[0];
     if (!caja || caja.status !== "OPEN") throw new ApiError(409, "La caja no está abierta.");
     if (caja.accionista_id && caja.accionista_id !== accionistaId) throw new ApiError(409, "Esa caja es de otro accionista.");
+    await avisarSobregiro(client, body.cash_register_id, body.confirmar_neto, req);
 
     const resumen = await procesarSemana(client, { hasta: body.hasta, cashRegisterId: body.cash_register_id, userId }, true);
     if (resumen.personas.length === 0) throw new ApiError(400, "No hay nada pendiente de pago hasta esa fecha.");

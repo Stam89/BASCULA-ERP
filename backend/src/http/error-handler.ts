@@ -2,7 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { ZodError } from "zod";
 
 export class ApiError extends Error {
-  constructor(public statusCode: number, message: string) {
+  constructor(public statusCode: number, message: string, public code?: string) {
     super(message);
   }
 }
@@ -32,7 +32,7 @@ const MENSAJES_POSTGRES: Record<string, { status: number; mensaje: string }> = {
 
 export function errorHandler(error: Error, req: Request, res: Response, _next: NextFunction) {
   if (error instanceof ApiError) {
-    res.status(error.statusCode).json({ error: error.message, statusCode: error.statusCode });
+    res.status(error.statusCode).json({ error: error.message, statusCode: error.statusCode, ...(error.code ? { code: error.code } : {}) });
     return;
   }
 

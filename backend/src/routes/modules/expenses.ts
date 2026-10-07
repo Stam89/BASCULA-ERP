@@ -3,7 +3,7 @@ import { z } from "zod";
 import { inTransaction } from "../../db/transaction.js";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
-import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
+import { avisarSobregiro, exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const expensesRouter = Router();
@@ -20,7 +20,10 @@ expensesRouter.post("/", asyncRoute(async (req, res) => {
   }).parse(req.body);
 
   const result = await inTransaction(async (client) => {
-    if (body.cash_register_id) await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
+    if (body.cash_register_id) {
+      await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
+      await avisarSobregiro(client, body.cash_register_id, body.amount, req);
+    }
     const expense = await client.query(
       `INSERT INTO expenses (category_id, cash_register_id, amount, description, paid_to, created_by, accionista_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
