@@ -1897,13 +1897,16 @@ campoRouter.post("/cxc/abono", asyncRoute(async (req, res) => {
 
   const result = await inTransaction(async (client) => {
     await requireCajaAbierta([body.cuenta_id], client);
+    // 1) Se BLOQUEAN los servicios del cliente. 2) Recién entonces se lee el saldo con una consulta NUEVA: si el
+    //    candado y el saldo van en la misma consulta, el saldo se lee ANTES de esperar al otro abono y dos abonos
+    //    simultáneos cobran de más (el saldo del servicio quedaba negativo).
+    await client.query("SELECT s.id FROM campo_servicios s WHERE s.cliente_id = $1 ORDER BY s.fecha, s.created_at FOR UPDATE", [body.cliente_id]);
     // Servicios pendientes del cliente (FIFO por fecha) con su saldo real.
     const pend = (await client.query(
       `SELECT s.id, sv.saldo_pendiente::float AS saldo
        FROM campo_servicios s JOIN campo_servicios_saldo sv ON sv.id = s.id
        WHERE s.cliente_id = $1 AND sv.saldo_pendiente > 0.005
-       ORDER BY s.fecha ASC, s.created_at ASC
-       FOR UPDATE OF s`,
+       ORDER BY s.fecha ASC, s.created_at ASC`,
       [body.cliente_id]
     )).rows as Array<{ id: string; saldo: number }>;
     const totalPend = Math.round(pend.reduce((s, r) => s + Number(r.saldo), 0) * 100) / 100;

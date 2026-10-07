@@ -214,10 +214,14 @@ export async function espejarPagoATransporte(client: PoolClient, payableId: stri
     [payableId]
   )).rows[0];
   if (!ap?.reference_id) return;
+  // Candado y lectura del saldo van en sentencias SEPARADAS: si fueran una sola, al
+  // esperar el candado la vista del saldo quedaría con la foto vieja (dos pagos a la vez).
+  const bloqueado = await client.query("SELECT 1 FROM campo_servicios WHERE id = $1 FOR UPDATE", [ap.reference_id]);
+  if (!bloqueado.rowCount) throw new ApiError(404, "El servicio de Transporte de esta cuenta ya no existe.");
   const serv = (await client.query(
     `SELECT s.id, s.cliente_id, v.saldo_pendiente::float AS saldo
        FROM campo_servicios s JOIN campo_servicios_saldo v ON v.id = s.id
-      WHERE s.id = $1 FOR UPDATE OF s`,
+      WHERE s.id = $1`,
     [ap.reference_id]
   )).rows[0];
   if (!serv) throw new ApiError(404, "El servicio de Transporte de esta cuenta ya no existe.");
