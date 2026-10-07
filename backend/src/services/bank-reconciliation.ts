@@ -119,11 +119,11 @@ export async function conciliarAutomatico(client: PoolClient, statementId: strin
       `SELECT m.id
        FROM cash_movements m
        WHERE m.cash_register_id = $1
-         AND m.reversed_at IS NULL
          AND (CASE WHEN m.movement = 'INCOME' THEN m.amount ELSE -m.amount END) BETWEEN $2 - 0.01 AND $2 + 0.01
          AND m.created_at::date BETWEEN $3::date - 5 AND $3::date + 5
          AND NOT EXISTS (SELECT 1 FROM bank_statement_lines b WHERE b.cash_movement_id = m.id)
-       ORDER BY ABS(m.created_at::date - $3::date)
+       -- Primero los movimientos vigentes; un anulado o su contra-asiento solo si no hay otro.
+       ORDER BY (m.reversed_at IS NOT NULL OR m.reversal_of IS NOT NULL), ABS(m.created_at::date - $3::date)
        LIMIT 1`,
       [cajaId, monto, linea.fecha]
     );
@@ -155,11 +155,12 @@ export async function getConciliacion(client: PoolClient | typeof pool, statemen
   const extracto = st.rows[0];
 
   // Saldo en libros: saldo inicial de la caja más todos sus movimientos hasta
-  // la fecha de corte del extracto.
+  // la fecha de corte del extracto. Un movimiento anulado SÍ cuenta (con su
+  // contra-asiento, que lo neutraliza): así coincide siempre con el saldo de la Caja.
   const libros = await client.query(
     `SELECT COALESCE(SUM(CASE WHEN movement = 'INCOME' THEN amount ELSE -amount END), 0) AS neto
      FROM cash_movements
-     WHERE cash_register_id = $1 AND reversed_at IS NULL AND created_at::date <= $2`,
+     WHERE cash_register_id = $1 AND created_at::date <= $2`,
     [extracto.cash_register_id, extracto.periodo_hasta]
   );
   const saldoLibros = round2(Number(extracto.opening_balance) + Number(libros.rows[0].neto));
@@ -179,11 +180,14 @@ export async function getConciliacion(client: PoolClient | typeof pool, statemen
             (CASE WHEN m.movement = 'INCOME' THEN m.amount ELSE -m.amount END) AS monto
      FROM cash_movements m
      WHERE m.cash_register_id = $1
-       AND m.reversed_at IS NULL
        AND m.created_at::date <= $2
+       -- Ya cruzado en ESTE extracto o en uno anterior de la misma cuenta: el banco lo
+       -- procesó, no está «en tránsito». (Cruzado en uno posterior: sí lo estaba.)
        AND NOT EXISTS (
          SELECT 1 FROM bank_statement_lines b
-         WHERE b.cash_movement_id = m.id AND b.statement_id = $3
+         JOIN bank_statements bs ON bs.id = b.statement_id
+         WHERE b.cash_movement_id = m.id
+           AND (b.statement_id = $3 OR bs.periodo_hasta <= $2)
        )
      ORDER BY m.created_at`,
     [extracto.cash_register_id, extracto.periodo_hasta, statementId]

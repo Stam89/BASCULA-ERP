@@ -32,6 +32,12 @@ function rango(req: { query: Record<string, unknown> }) {
   return { desde: q.desde ?? inicioAnio(), hasta: q.hasta ?? hoy() };
 }
 
+/** Fecha AAAA-MM-DD que existe de verdad (rechaza 2026-13-45 antes de llegar a la base). */
+const fechaIso = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "La fecha debe ser AAAA-MM-DD").refine((s) => {
+  const d = new Date(`${s}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}, "La fecha no existe en el calendario");
+
 function accionista(req: AuthenticatedRequest): string {
   const id = req.accionistaId;
   if (!id) throw new ApiError(400, "Selecciona un accionista");
@@ -219,7 +225,7 @@ financeRouter.get("/bank/accounts", asyncRoute(async (req, res) => {
     `SELECT c.id, c.name, c.banco, c.numero_cuenta, c.status, c.opening_balance,
             COALESCE(c.opening_balance + (
               SELECT COALESCE(SUM(CASE WHEN m.movement = 'INCOME' THEN m.amount ELSE -m.amount END), 0)
-              FROM cash_movements m WHERE m.cash_register_id = c.id AND m.reversed_at IS NULL
+              FROM cash_movements m WHERE m.cash_register_id = c.id
             ), 0) AS saldo_libros,
             (SELECT COUNT(*)::int FROM bank_statements s WHERE s.cash_register_id = c.id) AS extractos
      FROM cash_registers c
@@ -331,13 +337,17 @@ financeRouter.get("/bank/statements", asyncRoute(async (req, res) => {
 financeRouter.post("/bank/statements", asyncRoute(async (req, res) => {
   const body = z.object({
     cash_register_id: z.string().uuid(),
-    periodo_desde: z.string(),
-    periodo_hasta: z.string(),
-    saldo_inicial: z.number().default(0),
+    periodo_desde: fechaIso,
+    periodo_hasta: fechaIso,
+    // Opcional: si se envía, el sistema comprueba que saldo inicial + líneas = saldo final.
+    saldo_inicial: z.number().optional(),
     saldo_final: z.number(),
     texto: z.string().min(1),
     notas: z.string().optional(),
     created_by: z.string().uuid().optional()
+  }).refine((b) => b.periodo_desde <= b.periodo_hasta, {
+    message: "El período es inválido: la fecha «desde» no puede ser posterior a «hasta».",
+    path: ["periodo_desde"]
   }).parse(req.body);
   const accionistaId = accionista(req as AuthenticatedRequest);
 
@@ -356,13 +366,29 @@ financeRouter.post("/bank/statements", asyncRoute(async (req, res) => {
     );
     if (!caja.rowCount) throw new ApiError(404, "Esa cuenta bancaria no es del accionista seleccionado");
 
+    // Candado por cuenta: dos envíos a la vez (doble clic) no pueden duplicar el extracto.
+    await client.query("SELECT id FROM cash_registers WHERE id = $1 FOR UPDATE", [body.cash_register_id]);
+    const solapado = await client.query(
+      `SELECT periodo_desde::text AS desde, periodo_hasta::text AS hasta FROM bank_statements
+        WHERE cash_register_id = $1 AND periodo_desde <= $3::date AND periodo_hasta >= $2::date
+        LIMIT 1`,
+      [body.cash_register_id, body.periodo_desde, body.periodo_hasta]
+    );
+    if (solapado.rowCount) {
+      throw new ApiError(
+        409,
+        `Ya hay un extracto de esta cuenta que cubre ${solapado.rows[0].desde.slice(0, 10)} al ${solapado.rows[0].hasta.slice(0, 10)}. ` +
+        "Cargarlo otra vez duplicaría las líneas: elimina el anterior (si estaba mal) o ajusta el período."
+      );
+    }
+
     const st = await client.query(
       `INSERT INTO bank_statements
        (cash_register_id, accionista_id, periodo_desde, periodo_hasta, saldo_inicial, saldo_final, notas, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id`,
       [body.cash_register_id, accionistaId, body.periodo_desde, body.periodo_hasta,
-       body.saldo_inicial, body.saldo_final, body.notas ?? null, body.created_by ?? null]
+       body.saldo_inicial ?? 0, body.saldo_final, body.notas ?? null, body.created_by ?? null]
     );
     const statementId = st.rows[0].id;
 
@@ -375,10 +401,38 @@ financeRouter.post("/bank/statements", asyncRoute(async (req, res) => {
     }
 
     const cruzadas = await conciliarAutomatico(client, statementId);
-    return { statement_id: statementId, lineas_leidas: lineas.length, cruzadas_automatico: cruzadas };
+    // Control de lectura: el texto pegado puede confundir el monto con una columna de saldo.
+    const sumaLineas = Math.round(lineas.reduce((s, l) => s + l.monto, 0) * 100) / 100;
+    const diferenciaExtracto = body.saldo_inicial === undefined
+      ? null
+      : Math.round((body.saldo_inicial + sumaLineas - body.saldo_final) * 100) / 100;
+    return {
+      statement_id: statementId,
+      lineas_leidas: lineas.length,
+      cruzadas_automatico: cruzadas,
+      suma_lineas: sumaLineas,
+      extracto_cuadra: diferenciaExtracto === null ? null : Math.abs(diferenciaExtracto) < 0.01,
+      diferencia_extracto: diferenciaExtracto
+    };
   });
 
   res.status(201).json(result);
+}));
+
+/** Elimina un extracto cargado por error (sus líneas y cruces); los movimientos de caja no se tocan. */
+financeRouter.delete("/bank/statements/:id", asyncRoute(async (req, res) => {
+  const accionistaId = accionista(req as AuthenticatedRequest);
+  const r = await inTransaction(async (client) => {
+    const st = await client.query(
+      "SELECT id FROM bank_statements WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
+      [req.params.id, accionistaId]
+    );
+    if (!st.rowCount) throw new ApiError(404, "Extracto no encontrado para este accionista");
+    await client.query("DELETE FROM bank_statement_lines WHERE statement_id = $1", [req.params.id]);
+    await client.query("DELETE FROM bank_statements WHERE id = $1", [req.params.id]);
+    return { ok: true };
+  });
+  res.json(r);
 }));
 
 financeRouter.get("/bank/statements/:id/reconciliation", asyncRoute(async (req, res) => {
@@ -410,7 +464,7 @@ financeRouter.post("/bank/lines/:id/match", asyncRoute(async (req, res) => {
     const mov = await client.query(
       `SELECT id, (CASE WHEN movement = 'INCOME' THEN amount ELSE -amount END) AS monto
        FROM cash_movements
-       WHERE id = $1 AND cash_register_id = $2 AND reversed_at IS NULL`,
+       WHERE id = $1 AND cash_register_id = $2`,
       [body.cash_movement_id, linea.rows[0].cash_register_id]
     );
     if (!mov.rowCount) throw new ApiError(404, "Ese movimiento no pertenece a esta cuenta bancaria");

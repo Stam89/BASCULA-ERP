@@ -3420,7 +3420,7 @@ export function App() {
   // Conciliación bancaria
   const [cuentasBanco, setCuentasBanco] = useState<CuentaBancaria[]>([]);
   const [conciliacion, setConciliacion] = useState<Conciliacion | null>(null);
-  const [extractoForm, setExtractoForm] = useState({ cash_register_id: "", saldo_final: "", texto: "" });
+  const [extractoForm, setExtractoForm] = useState({ cash_register_id: "", saldo_inicial: "", saldo_final: "", texto: "" });
   // Activos fijos: los equipos ya existen; aquí se cargan sus datos contables.
   const [activosFijos, setActivosFijos] = useState<ActivosFijosData | null>(null);
   const [activoEdit, setActivoEdit] = useState<Record<string, { costo: string; fecha: string; vida: string }>>({});
@@ -10651,18 +10651,22 @@ export function App() {
   async function cargarExtracto() {
     if (!extractoForm.cash_register_id) throw new Error("Elige la cuenta bancaria");
     if (!extractoForm.texto.trim()) throw new Error("Pega el extracto del banco");
-    const res = await apiPost<{ statement_id: string; lineas_leidas: number; cruzadas_automatico: number }>(
+    const res = await apiPost<{ statement_id: string; lineas_leidas: number; cruzadas_automatico: number; extracto_cuadra: boolean | null; diferencia_extracto: number | null }>(
       "/finance/bank/statements",
       {
         cash_register_id: extractoForm.cash_register_id,
         periodo_desde: finanzasDesde,
         periodo_hasta: finanzasHasta,
+        ...(extractoForm.saldo_inicial.trim() !== "" ? { saldo_inicial: Number(extractoForm.saldo_inicial) } : {}),
         saldo_final: Number(extractoForm.saldo_final || 0),
         texto: extractoForm.texto,
         created_by: authUser?.id
       }
     );
     addToast(`${res.lineas_leidas} línea(s) leídas · ${res.cruzadas_automatico} cruzadas automáticamente`, "success");
+    if (res.extracto_cuadra === false) {
+      addToast(`Ojo: saldo inicial + movimientos leídos no da el saldo final (diferencia ${res.diferencia_extracto}). Revisa que el último número de cada línea sea el monto y no el saldo.`, "error");
+    }
     setExtractoForm({ ...extractoForm, texto: "" });
     await verConciliacion(res.statement_id);
   }
@@ -14254,6 +14258,13 @@ export function App() {
                               </option>
                             ))}
                           </select>
+                        </label>
+                        <label><span>Saldo inicial según el banco (opcional: verifica la lectura)</span>
+                          <input
+                            type="number" step="0.01" placeholder="0.00"
+                            value={extractoForm.saldo_inicial}
+                            onChange={(e) => setExtractoForm({ ...extractoForm, saldo_inicial: e.target.value })}
+                          />
                         </label>
                         <label><span>Saldo final según el banco *</span>
                           <input
