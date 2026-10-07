@@ -49,6 +49,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### ⛽ Gas: fórmula de la planta y reparto por túnel (2026-10-07)
+- Fórmula del dueño: bombona = (inicio − fin, en %) × 10 kg por cada 1% × $0.334 por kg; cilindros × $2.45; suma ÷ QQ de los túneles = costo GLOBAL por QQ. Antes faltaba el ×10 (la bombona salía 10 veces más barata): el campo decía «$ por cada 1%» y tenía el precio por kg.
+- Ahora: `labor_rates.precio_gas_bombona` = $ por KG (pantalla: «$ por kg de gas (bombona)») y `gas_bombona_kg_por_punto` (10, «kg por cada 1% del medidor»). `calcularCombustible` multiplica por el factor; la pantalla de Secadoras muestra «% × kg por 1% × $ por kg».
+- Reparto por túnel = TIEMPO COMPARTIDO del quemador (`utils/reparto-combustible.ts` + 7 pruebas): horas en que secan juntos → por QQ; horas en que uno sigue solo → las paga él; si falta inicio/fin → por QQ. La humedad NO se usa (en la planta queda en 0). Lo de cada túnel se guarda en `motor_fuel_partes` (migración `20261072_gas_formula_reparto.sql`) y «reabrir» resta exactamente eso (registros viejos: por QQ). La respuesta trae `reparto_metodo`, y por túnel `tunel`, `horas`, `costo_por_qq`; el aviso muestra global y por túnel.
+- Prueba: `node scripts/simulacro/combustible.mjs` (túneles reales del Motor 1: 115.55 QQ/13.3 h y 135.47 QQ/15.3 h; $105.10 → $42.07 y $63.03).
+- OJO configuración real: el 2026-10-07 11:41 el dueño cambió el precio de la bombona a $0.034 (con la pantalla vieja). Con la fórmula nueva debe ser $0.334 por kg: confirmar con él antes de cambiarlo.
+
 ### ✅ Avisos confirmables, liquidación en lote y Estados Financieros (2026-10-07)
 - Avisos confirmables genéricos: `AvisoConfirmable` (409 + `code` + `confirmable: true`) en `http/error-handler.ts`, `confirmado(req, code)` en `http/confirmaciones.ts` (cabecera `X-Confirmar: COD1,COD2`; el sobregiro acepta también `X-Confirmar-Sobregiro: 1`). `api.ts` → `enviarJson` pregunta cada aviso (máx. 4 encadenados) y reenvía; si se cancela, no se registra nada.
 - Liquidaciones: `POST /liquidations/lote {lineas:[…]}` guarda TODAS las líneas en una transacción (todas o ninguna); la pantalla ya lo usa (antes línea por línea). Lógica común en `registrarLiquidacion(client, data, accionistaId)`; la vista previa corre dentro de la transacción (el anticipo se descuenta una vez en el lote). Aviso `QQ_EXCEDE` si una línea liquida más QQ de los que pesó su ticket (`avisarQuintalesDeMas`). Pruebas L1–L5 y M1–M5 en `liquidaciones.mjs`.
