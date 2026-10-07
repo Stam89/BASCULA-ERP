@@ -649,6 +649,17 @@ liquidationsRouter.put("/:id", asyncRoute(async (req, res) => {
     const oldNet = Number(liq.net_amount);
     const delta = round2(net - oldNet);
 
+    // Lo que YA se le pagó al agricultor (monto − saldo de su cuenta): el neto corregido no puede quedar
+    // por debajo, porque el dinero ya salió de caja. Primero se reversa el pago en «Por Pagar».
+    const apActual = (await client.query(
+      "SELECT id, amount, balance FROM accounts_payable WHERE liquidation_id = $1 AND reference_type IS NULL ORDER BY (status <> 'CANCELLED') DESC LIMIT 1 FOR UPDATE",
+      [req.params.id]
+    )).rows[0];
+    const yaPagado = apActual ? round2(Math.max(0, Number(apActual.amount) - Number(apActual.balance))) : 0;
+    if (net < yaPagado - 0.005) {
+      throw new ApiError(409, `Al agricultor ya se le pagaron $${yaPagado.toFixed(2)} y el neto corregido sería $${net.toFixed(2)}. Reversa el pago en «Por Pagar» antes de bajar el neto.`);
+    }
+
     const updated = await client.query(
       `UPDATE liquidations
        SET price_per_quintal = $2,
@@ -668,21 +679,18 @@ liquidationsRouter.put("/:id", asyncRoute(async (req, res) => {
       ]
     );
 
-    // Mantener la cuenta por pagar al día con la diferencia del neto.
+    // Mantener la cuenta por pagar al día: monto = neto nuevo; saldo = neto − lo ya pagado.
     if (delta !== 0) {
-      const ap = await client.query(
-        "SELECT id, balance FROM accounts_payable WHERE liquidation_id = $1 AND reference_type IS NULL FOR UPDATE",
-        [req.params.id]
-      );
-      if (ap.rowCount) {
-        const newBalance = Math.max(0, round2(Number(ap.rows[0].balance) + delta));
+      if (apActual) {
+        const newBalance = Math.max(0, round2(net - yaPagado));
+        const nuevoEstado = newBalance < 0.01 ? (yaPagado > 0.005 ? "PAID" : "CANCELLED") : (yaPagado > 0.005 ? "PARTIAL" : "CONFIRMED");
         await client.query(
           `UPDATE accounts_payable
            SET amount = $2,
                balance = $3,
-               status = CASE WHEN $3 < 0.01 THEN 'PAID' ELSE 'PARTIAL' END
+               status = $4::document_status
            WHERE id = $1`,
-          [ap.rows[0].id, net, newBalance]
+          [apActual.id, net, newBalance, nuevoEstado]
         );
       } else if (net > 0) {
         // Antes el neto era 0 (sin cuenta); al corregir aparece saldo a pagar.
@@ -766,12 +774,16 @@ liquidationsRouter.post("/:id/apply-advances", asyncRoute(async (req, res) => {
       remaining = round2(remaining - applyAmt);
     }
 
-    // Actualizar cuenta por pagar
+    // Actualizar cuenta por pagar: el anticipo REDUCE lo que se debe (monto y saldo), no es un pago.
+    // Antes solo bajaba el saldo y la cuenta parecía «ya pagada» (bloqueaba la anulación).
+    const apRow = (await client.query("SELECT amount FROM accounts_payable WHERE id = $1", [row.ap_id])).rows[0];
+    const newApAmount = round2(Math.max(0, Number(apRow?.amount ?? 0) - totalApplied));
     const newApBal = round2(apBalance - totalApplied);
-    const newApStatus = newApBal < 0.01 ? "PAID" : "PARTIAL";
+    const yaPagado = round2(Math.max(0, newApAmount - newApBal));
+    const newApStatus = newApBal < 0.01 ? (yaPagado > 0.005 ? "PAID" : "CANCELLED") : (yaPagado > 0.005 ? "PARTIAL" : "CONFIRMED");
     await client.query(
-      "UPDATE accounts_payable SET balance = $2, status = $3 WHERE id = $1",
-      [row.ap_id, newApBal, newApStatus]
+      "UPDATE accounts_payable SET amount = $2, balance = $3, status = $4::document_status WHERE id = $1",
+      [row.ap_id, newApAmount, newApBal, newApStatus]
     );
 
     return { applied: totalApplied, remaining: newApBal };

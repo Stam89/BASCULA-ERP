@@ -7,6 +7,11 @@ const r2 = (n) => Math.round(Number(n) * 100) / 100;
 const mostrar = (r) => `${r.status} ${typeof r.data === "string" ? r.data.slice(0, 160) : JSON.stringify(r.data).slice(0, 240)}`;
 const exigir = (r, msg) => { check(r.ok, msg, r.ok ? undefined : mostrar(r)); if (!r.ok) throw new Error("detenido en: " + msg); return r.data; };
 const dos = (f) => Promise.all([f(), f()]);
+// Lo pagado de una cuenta por pagar = egresos de caja que la pagaron − sus reversas.
+const PAGADO_SQL = `SELECT a.id, a.amount::float a, a.balance::float b,
+    COALESCE((SELECT sum(m.amount) FROM cash_movements m WHERE m.reference_type='accounts_payable' AND m.reference_id=a.id::text), 0)::float
+  - COALESCE((SELECT sum(r.amount) FROM cash_movements r JOIN cash_movements m ON m.id = r.reversal_of WHERE m.reference_type='accounts_payable' AND m.reference_id=a.id::text), 0)::float AS pagado
+  FROM accounts_payable a`;
 
 try {
   const farmer = (await q("SELECT id FROM farmers ORDER BY full_name LIMIT 1"))[0].id;
@@ -95,7 +100,7 @@ try {
   // ── I. Editar una liquidación (admin desbloquea) ───────────────────────
   exigir(await api("POST", "/liquidations/set-lock", { ids: [L1.id], unlocked: true }), "I0. Desbloquear la liquidación 1 (ya pagada)");
   const baja = await api("PUT", `/liquidations/${L1.id}`, { price_per_quintal: 10 });
-  const pagadoL1 = r2((await q("SELECT COALESCE(sum(amount),0)::float n FROM payments_made WHERE payable_id=$1", [ap1.id]))[0].n);
+  const pagadoL1 = r2((await q(PAGADO_SQL + " WHERE a.id=$1", [ap1.id]))[0]?.pagado ?? 0);
   const netoL1 = r2((await q("SELECT net_amount::float n FROM liquidations WHERE id=$1", [L1.id]))[0].n);
   check(!baja.ok || netoL1 >= pagadoL1 - 0.01, "I1. no se puede bajar el neto de una liquidación por debajo de lo ya pagado al agricultor", { neto: netoL1, pagado: pagadoL1, status: baja.status });
   const L2ap = await apDe(L2.id);
@@ -123,8 +128,8 @@ try {
   // ── K. Coherencia final: lo que debe el negocio = lo que dicen las cuentas ─
   const incoh = await q(`SELECT l.liquidation_number, l.net_amount::float n, a.amount::float a FROM liquidations l JOIN accounts_payable a ON a.liquidation_id=l.id AND a.reference_type IS NULL WHERE l.status<>'CANCELLED' AND abs(l.net_amount - a.amount) > 0.01`);
   check(incoh.length === 0, "K1. en toda liquidación vigente, el neto coincide con el monto de su cuenta por pagar", incoh);
-  const pagosDemas = await q(`SELECT a.id, a.amount::float a, COALESCE(sum(p.amount),0)::float pagado FROM accounts_payable a LEFT JOIN payments_made p ON p.payable_id=a.id WHERE a.status<>'CANCELLED' GROUP BY a.id HAVING COALESCE(sum(p.amount),0) > a.amount + 0.01`);
+  const pagosDemas = (await q(PAGADO_SQL + " WHERE a.status<>'CANCELLED'")).filter((x) => x.pagado > x.a + 0.01);
   check(pagosDemas.length === 0, "K2. ninguna cuenta por pagar tiene pagos mayores a su monto", pagosDemas);
-  const saldoMal = await q(`SELECT a.id, a.amount::float a, a.balance::float b, COALESCE(sum(p.amount),0)::float pagado FROM accounts_payable a LEFT JOIN payments_made p ON p.payable_id=a.id WHERE a.liquidation_id IS NOT NULL AND a.reference_type IS NULL AND a.status<>'CANCELLED' GROUP BY a.id HAVING abs((a.amount - COALESCE(sum(p.amount),0)) - a.balance) > 0.01`);
+  const saldoMal = (await q(PAGADO_SQL + " WHERE a.liquidation_id IS NOT NULL AND a.reference_type IS NULL AND a.status<>'CANCELLED'")).filter((x) => Math.abs((x.a - x.pagado) - x.b) > 0.01);
   check(saldoMal.length === 0, "K3. en las liquidaciones: monto − pagado = saldo (nada descuadrado)", saldoMal);
 } catch (e) { console.log("⛔", e.message); } finally { const f = resumen(); await S.cerrar(); process.exit(f ? 1 : 0); }
