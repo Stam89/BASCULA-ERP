@@ -32,6 +32,9 @@ try {
   const lote = (await q("SELECT flete_tipo, flete_monto::float m, flete_activo_id FROM selection_batches WHERE id=$1", [a.id]))[0];
   check(lote.flete_tipo === "propia" && lote.m === 60 && lote.flete_activo_id === plataforma, "A6. el lote guarda su flete", lote);
   check(r2(stock0 - (await stock())) === 40, "A7. el producto salió del inventario", { antes: stock0, ahora: await stock() });
+  const cxcCampo = await api("GET", "/campo/cxc");
+  const filaCxc = JSON.stringify(cxcCampo.data).includes("STALYN") && JSON.stringify(cxcCampo.data).includes("Flete a envejecer");
+  check(cxcCampo.ok && filaCxc, "A7b. Transporte y Cosechadora lo ve en sus cuentas por cobrar (contra STALYN)", cxcCampo.ok ? undefined : mostrar(cxcCampo));
   const lista = (await api("GET", "/selection/batches", undefined, stalyn)).data.rows.find((x) => x.id === a.id);
   check(lista?.flete_tipo === "propia" && lista.flete_activo_nombre === "PLATAFORMA" && lista.flete_monto === 60, "A8. la lista de lotes muestra el flete y el carro", lista && { t: lista.flete_tipo, c: lista.flete_activo_nombre, m: lista.flete_monto });
 

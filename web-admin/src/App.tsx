@@ -165,6 +165,11 @@ type SelectionBatch = {
   saldo: number;
   pago_estado: string;
   notes: string | null;
+  // Flete de envejecido: carro de Transporte y Cosechadora («propia») o transportista externo («tercero»).
+  flete_tipo?: "propia" | "tercero" | null;
+  flete_monto?: number | string | null;
+  flete_prestador?: string | null;
+  flete_activo_nombre?: string | null;
   inputs: SelectionLine[];
   outputs: SelectionLine[];
 };
@@ -2415,12 +2420,12 @@ export function App() {
   // operador asigna a cada fomento. Vacío = usa el sugerido LIFO.
   const [liqFomentoDist, setLiqFomentoDist] = useState<Record<string, string>>({});
   // Flota Propia (campo_activos) para el selector de vehículo del cruce de flete.
-  const [fletaActivos, setFletaActivos] = useState<Array<{ id: string; nombre: string }>>([]);
+  const [fletaActivos, setFletaActivos] = useState<Array<{ id: string; nombre: string; tipo?: string }>>([]);
   // Carga tolerante a fallos: si el módulo Campo no responde, el cruce de flete
   // sigue disponible (auto-detección desde la placa); solo faltaría el override manual.
   useEffect(() => {
-    apiGet<Array<{ id: string; nombre: string }>>("/campo/activos?solo_activos=1")
-      .then((rows) => setFletaActivos(rows.map((r) => ({ id: r.id, nombre: r.nombre }))))
+    apiGet<Array<{ id: string; nombre: string; tipo?: string }>>("/campo/activos?solo_activos=1")
+      .then((rows) => setFletaActivos(rows.map((r) => ({ id: r.id, nombre: r.nombre, tipo: r.tipo }))))
       .catch(() => { /* Campo opcional: se ignora */ });
   }, []);
   // Carga los fomentos ACTIVOS del agricultor (de todos los socios) al elegirlo, y
@@ -3105,6 +3110,11 @@ export function App() {
     rate_per_qq: "",
     service_date: nominaToday,
     notes: "",
+    // Flete (solo envejecimiento): "" = sin flete · "propia" = carro de Transporte y Cosechadora · "tercero" = carro externo.
+    flete_tipo: "" as "" | "propia" | "tercero",
+    flete_monto: "",
+    flete_activo_id: "",
+    flete_prestador: "",
     inputs: [{ ...emptyLine }] as LineDraft[]
   });
   // Fase 2: al recibir, las salidas de un lote en proceso (por lote id).
@@ -5313,6 +5323,19 @@ export function App() {
     if (inputs.length === 0) { addToast("Agrega al menos un producto con cantidad", "error"); return; }
     if (new Set(inputs.map((i) => i.product_id)).size !== inputs.length) { addToast("Hay un producto repetido; súmalo en una sola línea", "error"); return; }
     const rate = selectionForm.rate_per_qq === "" ? undefined : Number(selectionForm.rate_per_qq);
+    // Flete (solo envejecimiento): se valida aquí para avisar antes de enviar.
+    let flete: { tipo: "propia" | "tercero"; monto: number; activo_id?: string; prestador?: string } | undefined;
+    if (selectionForm.service_type === "ENVEJECIMIENTO" && selectionForm.flete_tipo) {
+      const monto = Number(selectionForm.flete_monto);
+      if (!(monto > 0)) { addToast("Escribe el valor del flete", "error"); return; }
+      if (selectionForm.flete_tipo === "propia") {
+        if (!selectionForm.flete_activo_id) { addToast("Elige el carro de Transporte y Cosechadora que lleva el producto", "error"); return; }
+        flete = { tipo: "propia", monto, activo_id: selectionForm.flete_activo_id };
+      } else {
+        if (selectionForm.flete_prestador.trim().length < 2) { addToast("Escribe el nombre del transportista externo", "error"); return; }
+        flete = { tipo: "tercero", monto, prestador: selectionForm.flete_prestador.trim() };
+      }
+    }
     await apiPost("/selection/batches", {
       provider_id: selectionForm.provider_id,
       service_type: selectionForm.service_type,
@@ -5320,11 +5343,16 @@ export function App() {
       rate_per_qq: rate,
       service_date: selectionForm.service_date,
       notes: selectionForm.notes.trim() || undefined,
+      flete,
       inputs
     });
-    setSelectionForm((f) => ({ ...f, notes: "", inputs: [{ ...emptyLine }] }));
+    setSelectionForm((f) => ({ ...f, notes: "", flete_tipo: "", flete_monto: "", flete_activo_id: "", flete_prestador: "", inputs: [{ ...emptyLine }] }));
     setSelectionView("proceso");
-    addToast("Enviado a selectar. Producto descontado del inventario y cuenta por pagar creada.", "success");
+    addToast(flete
+      ? (flete.tipo === "propia"
+          ? "Enviado a envejecer. Producto descontado, cuenta por pagar creada y flete cargado a Transporte y Cosechadora."
+          : "Enviado a envejecer. Producto descontado, cuenta por pagar creada y flete externo en Por Pagar.")
+      : "Enviado a selectar. Producto descontado del inventario y cuenta por pagar creada.", "success");
     await Promise.all([refreshSelection(), reloadStock()]);
   }
 
@@ -20341,7 +20369,7 @@ export function App() {
                 <input type="date" value={selectionForm.service_date} onChange={(e) => setSelectionForm({ ...selectionForm, service_date: e.target.value })} />
               </label>
               <label><span>Tipo de servicio</span>
-                <select value={selectionForm.service_type} onChange={(e) => setSelectionForm({ ...selectionForm, service_type: e.target.value as "SELECCION" | "ENVEJECIMIENTO", rate_per_qq: "" })}>
+                <select value={selectionForm.service_type} onChange={(e) => setSelectionForm({ ...selectionForm, service_type: e.target.value as "SELECCION" | "ENVEJECIMIENTO", rate_per_qq: "", flete_tipo: "", flete_monto: "", flete_activo_id: "", flete_prestador: "" })}>
                   <option value="SELECCION">Selección (limpiar impureza)</option>
                   {puedeEnvejecer && <option value="ENVEJECIMIENTO">Envejecimiento</option>}
                 </select>
@@ -20382,6 +20410,43 @@ export function App() {
               <label style={{ marginTop: 10 }}><span>Tarifa por QQ ($) {cfgLink("🧹 Tarifas de Procesos", "Tarifas por defecto")}</span>
                 <input type="number" step="0.001" min="0" value={selectionForm.rate_per_qq} placeholder={`Por defecto ${defaultRate}`} onChange={(e) => setSelectionForm({ ...selectionForm, rate_per_qq: e.target.value })} />
               </label>
+              {selectionForm.service_type === "ENVEJECIMIENTO" && (
+                <div className="fleteEnv">
+                  <span className="fleteEnv-titulo">🚚 Flete (opcional)</span>
+                  <label><span>¿Quién lleva el producto?</span>
+                    <select value={selectionForm.flete_tipo} onChange={(e) => setSelectionForm({ ...selectionForm, flete_tipo: e.target.value as "" | "propia" | "tercero", flete_activo_id: "", flete_prestador: "" })}>
+                      <option value="">Sin flete</option>
+                      <option value="propia">Carro de Transporte y Cosechadora</option>
+                      <option value="tercero">Carro externo</option>
+                    </select>
+                  </label>
+                  {selectionForm.flete_tipo === "propia" && (
+                    <label><span>Carro</span>
+                      <select value={selectionForm.flete_activo_id} onChange={(e) => setSelectionForm({ ...selectionForm, flete_activo_id: e.target.value })}>
+                        <option value="">Elige el carro…</option>
+                        {fletaActivos.filter((a) => String(a.tipo ?? "").toLowerCase() !== "cosechadora").map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}
+                      </select>
+                    </label>
+                  )}
+                  {selectionForm.flete_tipo === "tercero" && (
+                    <label><span>Transportista externo</span>
+                      <input type="text" value={selectionForm.flete_prestador} onChange={(e) => setSelectionForm({ ...selectionForm, flete_prestador: e.target.value })} placeholder="Nombre de quien lo lleva" />
+                    </label>
+                  )}
+                  {selectionForm.flete_tipo !== "" && (
+                    <label><span>Valor del flete ($)</span>
+                      <input type="number" step="0.01" min="0" value={selectionForm.flete_monto} onChange={(e) => setSelectionForm({ ...selectionForm, flete_monto: e.target.value })} placeholder="0.00" />
+                    </label>
+                  )}
+                  <small className="muted">
+                    {selectionForm.flete_tipo === "propia"
+                      ? "El dinero va a Transporte y Cosechadora: queda como cuenta por cobrar contra tu socio y como su cuenta por pagar."
+                      : selectionForm.flete_tipo === "tercero"
+                      ? "Queda como cuenta por pagar al transportista externo."
+                      : "Si el producto no lo lleva nadie que cobre, déjalo en «Sin flete»."}
+                  </small>
+                </div>
+              )}
               <label><span>Notas (opcional)</span>
                 <input type="text" value={selectionForm.notes} onChange={(e) => setSelectionForm({ ...selectionForm, notes: e.target.value })} placeholder="Ej: observación" />
               </label>
@@ -20389,6 +20454,9 @@ export function App() {
                 <span>Costo a pagar</span>
                 <strong>{money(costoN)}</strong>
                 <small>{round2(inputsTotal)} QQ × ${effectiveRate || 0}</small>
+                {selectionForm.service_type === "ENVEJECIMIENTO" && selectionForm.flete_tipo !== "" && Number(selectionForm.flete_monto) > 0 && (
+                  <small>+ flete {money(Number(selectionForm.flete_monto))} ({selectionForm.flete_tipo === "propia" ? "Transporte y Cosechadora" : "carro externo"}), aparte</small>
+                )}
               </div>
               {stockExcedidoSel && (
                 <div style={{ marginBottom: 6, padding: "8px 12px", background: "#fee2e2", border: "1px solid #fecaca", borderRadius: 8, color: "#b91c1c", fontSize: 12.5, fontWeight: 700 }}>
@@ -20413,6 +20481,9 @@ export function App() {
                         <div>
                           <strong>{b.batch_number}</strong> · {b.service_type === "ENVEJECIMIENTO" ? "Envejecido" : "Selección"} · {b.provider_name}
                           <div className="muted" style={{ fontSize: 12 }}>{String(b.service_date).slice(0, 10)} · {Number(b.input_qq).toFixed(2)} QQ enviados · costo {money(Number(b.total_cost))}</div>
+                          {b.flete_tipo && Number(b.flete_monto) > 0 && (
+                            <div style={{ fontSize: 12, marginTop: 2 }}>🚚 Flete {money(Number(b.flete_monto))} · {b.flete_tipo === "propia" ? `${b.flete_activo_nombre ?? "carro propio"} (Transporte y Cosechadora)` : `${b.flete_prestador ?? "carro externo"} (externo)`}</div>
+                          )}
                         </div>
                       </div>
                       <div style={{ fontSize: 12, marginTop: 6 }}>
@@ -20553,7 +20624,7 @@ export function App() {
                           <td>{b.outputs.length > 0 ? b.outputs.map((o, i) => <span key={i} className="chip" style={{ marginRight: 4 }}>{o.product_name}: {Number(o.quantity).toFixed(2)} QQ</span>) : "—"}</td>
                           <td>{Number(b.output_qq).toFixed(2)}</td>
                           <td>{Number(b.merma_qq).toFixed(2)}</td>
-                          <td><strong>{money(Number(b.total_cost))}</strong></td>
+                          <td><strong>{money(Number(b.total_cost))}</strong>{b.flete_tipo && Number(b.flete_monto) > 0 && <div className="muted" style={{ fontSize: 11 }}>+ flete {money(Number(b.flete_monto))} · {b.flete_tipo === "propia" ? (b.flete_activo_nombre ?? "Transp. y Cosech.") : (b.flete_prestador ?? "externo")}</div>}</td>
                           <td>{Number(b.saldo) > 0 ? <span style={{ color: "#dc2626" }}>{money(Number(b.saldo))}</span> : <span className="chip ok">Pagado</span>}</td>
                         </tr>
                       ))}
