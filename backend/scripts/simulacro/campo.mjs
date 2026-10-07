@@ -67,7 +67,10 @@ try {
   check(prev && r2(prev.saldo_teorico) === 30, "E1. el arqueo previo calcula el saldo teórico ($30)", prev && { teorico: prev.saldo_teorico });
   const cierre = await api("POST", "/campo/caja/cerrar", { saldo_real: 25, observaciones: "Faltan $5", generar_ajuste: true });
   check(cierre.ok && r2(cierre.data.diferencia ?? cierre.data.sesion?.diferencia) === -5, "E2. cerrar con $25 reales: diferencia −$5", mostrar(cierre));
-  check((await saldoCuenta(CAJA)) === 25, "E3. el ajuste deja la caja en $25 (lo que hay físicamente)", await saldoCuenta(CAJA));
+  const ajusteE = cierre.data.ajuste;
+  const sugE = (await api("GET", "/campo/caja/sesion-activa")).data;
+  check(ajusteE && ajusteE.signo === "salida" && r2(ajusteE.monto) === 5 && r2(cierre.data.sesion.saldo_real) === 25 && r2(sugE.saldo_sugerido) === 25 && (await saldoCuenta(CAJA)) === 0,
+    "E3. el ajuste registra el faltante de $5, la caja queda en 0 (se traslada) y la próxima apertura sugiere $25", { ajuste: ajusteE && [ajusteE.signo, ajusteE.monto], sugerido: sugE.saldo_sugerido, caja: await saldoCuenta(CAJA) });
   const trasCierre = await api("POST", "/campo/movimientos", { cuenta_id: CAJA, signo: "entrada", monto: 1, concepto: "después del cierre" });
   check(!trasCierre.ok, "E4. después de cerrar no se registran movimientos en CAJA", mostrar(trasCierre));
   const cierre2 = await api("POST", "/campo/caja/cerrar", { saldo_real: 25 });
@@ -94,7 +97,7 @@ try {
   check(abTodo.ok && (await espejo()).b === 0 && (await espejo()).status === "PAID", "F5. al saldar el resto, su Por Pagar queda PAGADA", await espejo());
 
   // ── Reportes de Campo responden ────────────────────────────────────────
-  for (const r of ["/campo/reportes/saldo-caja", "/campo/reportes/por-cobrar", "/campo/reportes/por-maquina", "/campo/reportes/estado-resultados", "/campo/clientes/estado-cuenta", "/campo/caja/libro", "/campo/caja/sesiones", "/campo/servicios", "/campo/movimientos"]) {
+  for (const r of ["/campo/reportes/saldo-caja", "/campo/reportes/por-cobrar", "/campo/reportes/por-maquina", "/campo/reportes/estado-resultados?mes=2026-10", "/campo/clientes/estado-cuenta", "/campo/caja/libro", "/campo/caja/sesiones", "/campo/servicios", "/campo/movimientos"]) {
     const x = await api("GET", r);
     check(x.status === 200, `G. ${r} responde`, x.status === 200 ? undefined : mostrar(x));
   }
