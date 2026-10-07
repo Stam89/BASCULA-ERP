@@ -1,0 +1,209 @@
+<title>Guía diaria del operador</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@600;700;800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap">
+<style>
+/* Layout: una sola columna de lectura (ficha de planta), pasos numerados solo donde hay secuencia real. */
+:root {
+  --bg: #f6f7f4;          /* papel con un toque verde */
+  --surface: #ffffff;
+  --fg: #1d2420;
+  --muted: #5a665f;
+  --line: #d9ded8;
+  --accent: #1f6b4f;      /* verde arrozal */
+  --accent-soft: #e3efe8;
+  --husk: #8a6a2f;        /* cáscara */
+  --warn: #9a5b00;  --warn-bg: #fdf1dc;
+  --bad: #a3262a;   --bad-bg: #fbe6e5;
+  --info: #3c5a7a;  --info-bg: #e7eef6;
+  --display: "Barlow Semi Condensed", "Arial Narrow", "Segoe UI", sans-serif;
+  --body: "Atkinson Hyperlegible", "Segoe UI", Roboto, Arial, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121614; --surface: #1a201d; --fg: #e6ece8; --muted: #a3b0a8; --line: #2c3530;
+  --accent: #6fc39d; --accent-soft: #1d3329; --husk: #d1ad6b;
+  --warn: #f0b75c; --warn-bg: #33270f; --bad: #f1898c; --bad-bg: #3a1a1b; --info: #9cbbe0; --info-bg: #1b2735;
+  color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #121614; --surface: #1a201d; --fg: #e6ece8; --muted: #a3b0a8; --line: #2c3530;
+  --accent: #6fc39d; --accent-soft: #1d3329; --husk: #d1ad6b;
+  --warn: #f0b75c; --warn-bg: #33270f; --bad: #f1898c; --bad-bg: #3a1a1b; --info: #9cbbe0; --info-bg: #1b2735;
+  color-scheme: dark; }
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 16px; line-height: 1.55; }
+.hoja { max-width: 760px; margin: 0 auto; padding-block: 28px 48px; padding-inline: 18px; display: grid; gap: 28px; }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; line-height: 1.15; }
+h1 { font-size: clamp(30px, 6vw, 40px); font-weight: 800; letter-spacing: .005em; }
+h2 { font-size: 23px; font-weight: 700; color: var(--accent); }
+h3 { font-size: 19px; font-weight: 700; }
+p { margin: 0; max-width: 65ch; }
+.eyebrow { font-family: var(--display); font-weight: 700; font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--husk); }
+.cabecera { display: grid; gap: 8px; border-bottom: 3px solid var(--accent); padding-bottom: 16px; }
+.cabecera p { color: var(--muted); }
+section { display: grid; gap: 12px; }
+.boton { display: inline-block; font-family: var(--display); font-weight: 700; font-size: .95em; padding: 0 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); white-space: nowrap; }
+.dir { font-family: var(--mono); font-size: 17px; background: var(--accent-soft); color: var(--fg); padding: 2px 8px; border-radius: 6px; user-select: all; }
+.nota { color: var(--muted); font-size: 15px; }
+ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+li { max-width: 65ch; }
+
+/* Tareas diarias: tarjeta por tarea, pasos numerados (es una secuencia real) */
+.tareas { display: grid; gap: 14px; }
+.tarea { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; display: grid; gap: 10px; min-width: 0; }
+.tarea header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.tarea .quien { font-size: 13.5px; color: var(--muted); }
+ol.pasos { margin: 0; padding: 0; list-style: none; counter-reset: paso; display: grid; gap: 8px; }
+ol.pasos li { counter-increment: paso; display: grid; grid-template-columns: 28px 1fr; gap: 8px; align-items: start; }
+ol.pasos li::before { content: counter(paso); font-family: var(--display); font-weight: 800; font-size: 15px; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); margin-top: 1px; }
+.ojo { border-left: 3px solid var(--husk); padding: 6px 0 6px 12px; font-size: 15px; }
+
+/* Niveles de «Hoy» */
+.niveles { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { font-family: var(--display); font-weight: 700; font-size: 14px; padding: 3px 10px; border-radius: 999px; }
+.chip.urgente { background: var(--bad-bg); color: var(--bad); }
+.chip.atencion { background: var(--warn-bg); color: var(--warn); }
+.chip.saber { background: var(--info-bg); color: var(--info); }
+
+/* Tablas */
+.tabla { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+table { width: 100%; border-collapse: collapse; font-size: 15px; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+th { font-family: var(--display); font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 700; background: var(--bg); }
+td:first-child { font-weight: 700; }
+
+.cierre { border-top: 1px solid var(--line); padding-top: 16px; color: var(--muted); font-size: 15px; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+@media print { body { background: #fff; color: #000; font-size: 12.5px; } .hoja { gap: 14px; padding-block: 0; } .tarea, .tabla { break-inside: avoid; } }
+</style>
+
+<main class="hoja">
+  <header class="cabecera">
+    <span class="eyebrow">CEYRO Piladora · ERP de planta · octubre 2026</span>
+    <h1>Guía diaria del operador</h1>
+    <p>Qué tocar cada día en el ERP y qué hacer si algo no sale. Los botones están escritos tal como aparecen en la pantalla.</p>
+  </header>
+
+  <section>
+    <h2>Para entrar</h2>
+    <ul>
+      <li>Desde el celular (con datos o wifi): <span class="dir">erp.ceyroerp.com</span></li>
+      <li>Entra con <strong>tu</strong> usuario y clave. No la compartas: todo lo que registras queda a tu nombre.</li>
+      <li>Si te sale el aviso azul <em>«Agrega un correo de recuperación»</em>, agrégalo. Así, si olvidas la clave, la recuperas tú mismo con <span class="boton">¿Olvidaste tu clave?</span> (te llega un código al correo).</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Al abrir: tu inicio</h2>
+    <p>Arriba está <strong>Hoy</strong>, con lo que hay que atender. Toca una tarea y te lleva a la pantalla donde se resuelve.</p>
+    <div class="niveles" aria-label="Niveles de las tareas de Hoy">
+      <span class="chip urgente">Urgente: hazlo ya</span>
+      <span class="chip atencion">Atención: hoy mismo</span>
+      <span class="chip saber">Para saber: solo informa</span>
+    </div>
+    <p>Debajo están los botones grandes de lo que haces todos los días, y en pequeño el resto de tus pantallas. Solo ves las pantallas que tienes permitidas.</p>
+  </section>
+
+  <section>
+    <h2>Lo de todos los días</h2>
+    <div class="tareas">
+
+      <article class="tarea">
+        <header><h3>💰 Caja</h3><span class="quien">Quien tenga el permiso de Caja</span></header>
+        <ol class="pasos">
+          <li><span>Al empezar el día, abre la caja con el dinero que realmente hay.</span></li>
+          <li><span>Registra cada ingreso y cada gasto en el momento, con su descripción.</span></li>
+          <li><span>Al terminar el día, cuenta el dinero y cierra la caja.</span></li>
+        </ol>
+        <p class="ojo">Si un gasto deja la caja en negativo, la app te pregunta antes de guardarlo. Acepta solo si estás seguro de que es correcto.</p>
+      </article>
+
+      <article class="tarea">
+        <header><h3>⚖️ Ingresar materia prima</h3><span class="quien">Báscula</span></header>
+        <ol class="pasos">
+          <li><span>Toca <span class="boton">Ingresar materia prima</span>: se abre la lista de tickets <strong>Pendientes</strong> que llegaron de la báscula.</span></li>
+          <li><span>Si el ticket dice <em>Sin vincular</em>, toca <span class="boton">Vincular cliente</span> y elige al agricultor.</span></li>
+          <li><span>Toca <span class="boton">Ingresar materia prima</span> en el ticket y elige el <strong>tipo de arroz</strong> (0.11 o Corriente) y el <strong>destino</strong>:
+            <ul>
+              <li><em>Compra / Producción Propia</em></li>
+              <li><em>Solo Servicio de Secado</em></li>
+              <li><em>Servicio Completo (Secada + Pilada)</em></li>
+              <li><em>Solo Servicio de Pilada (ya viene seco)</em></li>
+            </ul></span></li>
+        </ol>
+        <p class="ojo">Usa <span class="boton">⚖️ Ingreso manual (emergencia)</span> solo si la báscula no envió el ticket.</p>
+      </article>
+
+      <article class="tarea">
+        <header><h3>🔥 Secadoras</h3><span class="quien">Secadoras</span></header>
+        <ol class="pasos">
+          <li><span>Abre la secadora, agrega los ingresos que entran al túnel y completa la fecha de llenado, la <strong>hora de inicio</strong> y el secador. Toca <span class="boton">💾 Guardar informe completo</span>.</span></li>
+          <li><span>Si los túneles del mismo motor arrancaron juntos, toca <span class="boton">📌 Aplicar al motor</span> para copiar el horario a todos.</span></li>
+          <li><span>Cuando el túnel termina, ábrelo y toca <span class="boton">✅ Finalizar túnel</span>. Pon la <strong>hora final</strong>.</span></li>
+          <li><span>Si es el último túnel del motor, te pide el combustible: bombona al inicio y al final (en %), y los cilindros usados.</span></li>
+        </ol>
+        <p class="ojo">Anota bien la hora de inicio y la hora final de cada túnel. Con esas horas se reparte el gas entre los túneles: el que seca más tiempo paga más.</p>
+      </article>
+
+      <article class="tarea">
+        <header><h3>🏭 Producción</h3><span class="quien">Producción</span></header>
+        <ol class="pasos">
+          <li><span>Elige el lote que ya salió de la secadora.</span></li>
+          <li><span>Escribe lo que salió del pilado: arroz pilado, arrocillo y polvillo, en QQ.</span></li>
+          <li><span>Toca <span class="boton">✅ Finalizar Lote</span>. Si lo vas a terminar después, toca <span class="boton">💾 Guardar Proceso</span> y lo retomas desde «Procesos guardados».</span></li>
+        </ol>
+      </article>
+
+      <article class="tarea">
+        <header><h3>🚚 Bajada de carro</h3><span class="quien">Nómina</span></header>
+        <p>Cuando <strong>Hoy</strong> avise <em>«tickets sin quién bajó el carro»</em>, toca la tarea y pon el nombre de quien bajó cada carro. Sin nombre, ese trabajo no se puede pagar el viernes.</p>
+      </article>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>Avisos que te piden confirmar</h2>
+    <p>Algunas acciones muestran una pregunta antes de guardar. No es un error: el sistema quiere que lo revises.</p>
+    <ul>
+      <li><strong>«La caja quedará en −$…»</strong>: el gasto es mayor que el dinero que hay en la caja.</li>
+      <li><strong>«Estás liquidando más quintales de los que pesó la báscula»</strong>: revisa los QQ escritos.</li>
+    </ul>
+    <p class="nota">Si cancelas, no se guarda nada.</p>
+  </section>
+
+  <section>
+    <h2>Si algo sale mal</h2>
+    <div class="tabla">
+      <table>
+        <thead><tr><th scope="col">Qué ves</th><th scope="col">Qué hacer</th></tr></thead>
+        <tbody>
+          <tr><td>«No tienes permiso…» o «solo lectura»</td><td>No es un daño. Pide al administrador el permiso para esa pantalla.</td></tr>
+          <tr><td>La pantalla no carga o los datos no cambian</td><td>Toca <span class="boton">↻ Actualizar</span>. Si sigue igual, espera un minuto: el sistema se reinicia solo. Si aún no funciona, avisa al administrador (la PC del local debe estar encendida).</td></tr>
+          <tr><td>Registraste algo mal</td><td>No lo vuelvas a registrar encima. Avisa al administrador: él puede reabrir un túnel, anular una liquidación o reversar un movimiento de caja.</td></tr>
+          <tr><td>No encuentras un ticket, agricultor o lote</td><td>Toca <span class="boton">🔎 Buscar</span> (en computadora, <kbd>Ctrl</kbd>+<kbd>K</kbd>) y escribe el número, la placa o el nombre.</td></tr>
+          <tr><td>Un ticket de la báscula no aparece</td><td>Espera unos minutos: los tickets se traen solos cada 3 minutos. Si no llega, usa el ingreso manual de emergencia y avisa.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Quién hace qué</h2>
+    <div class="tabla">
+      <table>
+        <thead><tr><th scope="col">Persona</th><th scope="col">Sus pantallas</th></tr></thead>
+        <tbody>
+          <tr><td>Richar</td><td>Báscula, Secadoras, Producción, Servicio de Secado, Selección, Inventario, Ventas, Agricultores, Nómina y Gana.</td></tr>
+          <tr><td>Cecilia</td><td>Ventas, Por cobrar y Por pagar.</td></tr>
+          <tr><td>Angie</td><td>En CEYRO: Selección, Inventario, Por cobrar y Por pagar. En ROVINSON también la Caja.</td></tr>
+          <tr><td>Administrador</td><td>Todas las pantallas, configuración, permisos y correcciones.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="nota">Si necesitas una pantalla que no ves, pídesela al administrador.</p>
+  </section>
+
+  <p class="cierre">Ante la duda, pregunta antes de registrar. Corregir un registro mal hecho siempre cuesta más que preguntar.</p>
+</main>
