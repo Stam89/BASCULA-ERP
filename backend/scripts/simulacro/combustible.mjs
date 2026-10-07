@@ -47,4 +47,11 @@ try {
     check(tras.every((x) => r2(x.g) === 0 && x.motor_fuel_id === null), "12. los dos túneles vuelven a $0 de gas, sin centavos sueltos", tras);
     check((await q("SELECT count(*)::int n FROM motor_fuel_partes WHERE motor_fuel_id = $1", [reg.id]))[0].n === 0, "13. y se borra el detalle del reparto");
   }
+  // ── Tarifas de planta vistas desde un socio (la pantalla de Secadoras las usa) ──
+  const stalyn = (await q("SELECT id FROM accionistas WHERE name='STALYN'"))[0].id;
+  await q("UPDATE labor_rates SET precio_gas_cilindro = 2.20, precio_gas_bombona = 0.90, secado_servicio_per_qq = 1.50, pilador_per_qq = 0.20 WHERE socio_id = $1", [stalyn]);
+  const deSocio = (await api("GET", "/labor/rates", undefined, stalyn)).data;
+  check(deSocio.precio_gas_cilindro === 2.45 && deSocio.precio_gas_bombona === 0.334 && deSocio.gas_bombona_kg_por_punto === 10, "14. estando en STALYN, el combustible sale con los precios de la planta ($2.45 cilindro, $0.334/kg)", { cilindro: deSocio.precio_gas_cilindro, bombona: deSocio.precio_gas_bombona });
+  check(deSocio.secado_servicio_per_qq === Number(tar.secado_servicio_per_qq), "15. y el secado como servicio también es el de la planta", { socio: deSocio.secado_servicio_per_qq, planta: tar.secado_servicio_per_qq });
+  check(deSocio.pilador_per_qq === 0.2, "16. pero las tarifas propias del socio (pilador) siguen siendo las suyas", deSocio.pilador_per_qq);
 } catch (e) { console.log("⛔", e.message); } finally { const f = resumen(); await S.cerrar(); process.exit(f ? 1 : 0); }

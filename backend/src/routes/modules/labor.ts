@@ -159,6 +159,17 @@ async function ensureRatesForSocio(db: Queryable, socioId: string | null): Promi
   );
 }
 
+/**
+ * Tarifas que son de la PLANTA (una sola para todos): combustible de los motores y los servicios que la matriz
+ * cobra (secado a clientes). Se editan solo en la configuración de la matriz y el servidor siempre calcula con
+ * ellas; las filas de cada socio guardaban copias viejas que la pantalla mostraba (p. ej. cilindro $2.20 en vez
+ * de $2.45). Para un socio, estos valores salen siempre de la fila general.
+ */
+export const TARIFAS_DE_PLANTA = [
+  "precio_gas_bombona", "gas_bombona_kg_por_punto", "precio_gas_cilindro", "precio_diesel",
+  "secado_servicio_per_qq", "secado_servicio_saco_per_qq"
+] as const;
+
 export async function getRates(db: Queryable = pool, accionistaId?: string | null): Promise<LaborRates> {
   const socioId = await resolveRatesSocioId(db, accionistaId);
   await ensureRatesForSocio(db, socioId);
@@ -170,7 +181,14 @@ export async function getRates(db: Queryable = pool, accionistaId?: string | nul
      LIMIT 1`,
     [socioId]
   );
-  const row = r.rows[0];
+  let row = r.rows[0];
+  if (row?.socio_id) {
+    const general = (await db.query("SELECT * FROM labor_rates WHERE socio_id IS NULL LIMIT 1")).rows[0];
+    if (general) {
+      row = { ...row };
+      for (const k of TARIFAS_DE_PLANTA) row[k] = general[k];
+    }
+  }
   return {
     pilador_per_qq: Number(row.pilador_per_qq),
     pilador_per_saca: Number(row.pilador_per_saca),
