@@ -69,7 +69,6 @@ try {
   const adv2 = exigir(await api("POST", "/cuadrilla/advances", { worker_name: W + " 2", amount: 50 }), "B9a. anticipo de $50");
   const st = await dos(() => api("POST", `/cuadrilla/advances/${adv2.id}/settle`, { amount: 40 }));
   const balAdv = Number((await q("SELECT balance FROM cuadrilla_advances WHERE id=$1", [adv2.id]))[0].balance);
-  check(balAdv === 10 || balAdv === 50 - 40 - 0 ? balAdv >= 0 : false, "B9. saldar $40 dos veces a la vez sobre $50: el saldo nunca queda negativo", { saldo: balAdv });
   check(balAdv === 0, "B9b. los dos abonos se aplican uno tras otro: $40 y luego los $10 restantes (saldo 0, sin pisarse)", { saldo: balAdv, estados: st.map((r) => r.status) });
   // Anticipo con caja
   const sAdv = await saldo();
