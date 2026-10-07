@@ -1,5 +1,5 @@
 import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { apiFetch, apiGet, apiGetSRI, apiGetBasculaStatus, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId } from "./api";
+import { apiFetch, apiOk, apiGet, apiGetSRI, apiGetBasculaStatus, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId } from "./api";
 import type { BasculaSyncStatus } from "./api";
 import { money, categoryLabel, stockGroupLabel, formatPersonName, cantidad, kilos, numeroReal } from "./format";
 import type { Farmer, Product, Warehouse, Lot, MateriaPrimaEntry, MateriaPrimaCorreccion, PendingEntry } from "./types";
@@ -5116,7 +5116,7 @@ export function App() {
   };
   const toggleServicioTarifa = async (t: any) => {
     try {
-      await apiFetch(`/pilado/tarifas/${t.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ is_active: !t.is_active }) });
+      await apiOk(`/pilado/tarifas/${t.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ is_active: !t.is_active }) });
       await refreshServicioTarifas();
     } catch (e) { addToast(`Error: ${e instanceof Error ? e.message : "Error"}`, "error"); }
   };
@@ -5137,7 +5137,7 @@ export function App() {
   }, [activeTab]);
   const toggleCashCategory = async (c: CashCat) => {
     try {
-      await apiFetch(`/cash/categories/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ activo: !c.activo }) });
+      await apiOk(`/cash/categories/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ activo: !c.activo }) });
       await reloadCashCategories();
     } catch (e) { addToast(`Error: ${e instanceof Error ? e.message : "Error"}`, "error"); }
   };
@@ -5146,7 +5146,7 @@ export function App() {
     const nuevo = window.prompt(`Nuevo nombre para el concepto "${c.nombre}":`, c.nombre)?.trim();
     if (!nuevo || nuevo === c.nombre) return;
     try {
-      await apiFetch(`/cash/categories/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ nombre: nuevo }) });
+      await apiOk(`/cash/categories/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ nombre: nuevo }) });
       await reloadCashCategories();
       addToast("Concepto renombrado ✓", "success");
     } catch (e) { addToast(`Error: ${e instanceof Error ? e.message : "Error"}`, "error"); }
@@ -8210,7 +8210,7 @@ export function App() {
   async function deleteFomentoEntrega(fomentoId: string, entregaId: string) {
     // El backend valida integridad (no dejar entregas por debajo de lo pagado);
     // si rechaza, se muestra el error y NO se recalcula nada.
-    await apiFetch(`/fomentos/${fomentoId}/entregas/${entregaId}`, { method: "DELETE" });
+    await apiOk(`/fomentos/${fomentoId}/entregas/${entregaId}`, { method: "DELETE" });
     await loadFomentoDetalle(fomentoId);   // recalcula pedido/intereses/deuda (derivados)
     await refreshFomentos();
     addToast("Entrega eliminada correctamente", "success");
@@ -8233,7 +8233,7 @@ export function App() {
   }
 
   async function deleteFomentoPago(fomentoId: string, pagoId: string) {
-    await apiFetch(`/fomentos/${fomentoId}/pagos/${pagoId}`, { method: "DELETE" });
+    await apiOk(`/fomentos/${fomentoId}/pagos/${pagoId}`, { method: "DELETE" });
     await loadFomentoDetalle(fomentoId);
     await refreshFomentos();
   }
@@ -8241,7 +8241,7 @@ export function App() {
   async function saveRenta(fomentoId: string) {
     const renta = Number(fomentoRentaInput) / 100;
     if (!renta || renta <= 0 || renta > 1) { addToast("Porcentaje inválido", "error"); return; }
-    await apiFetch(`/fomentos/${fomentoId}`, {
+    await apiOk(`/fomentos/${fomentoId}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ renta })
     });
@@ -9250,7 +9250,7 @@ export function App() {
     if (!window.confirm(`Eliminar definitivamente la liquidación ANULADA de ${b.farmer_name}?\n\nEsta acción no se puede deshacer.`)) return;
     let borradas = 0;
     for (const id of b.liquidation_ids) {
-      await apiFetch(`/liquidations/${id}`, { method: "DELETE" });
+      await apiOk(`/liquidations/${id}`, { method: "DELETE" });
       borradas++;
     }
     addToast(`Liquidación eliminada (${borradas}).`, "success");
@@ -19695,7 +19695,7 @@ export function App() {
                                 <td style={{ padding: "4px 8px" }}>
                                   {canAnular && (
                                     <button type="button" title="Eliminar"
-                                      onClick={() => deleteFomentoPago(fomentoDetalle.id, p.id).catch(() => undefined)}
+                                      onClick={() => deleteFomentoPago(fomentoDetalle.id, p.id).catch((e) => addToast(e instanceof Error ? e.message : "No se pudo eliminar el pago", "error"))}
                                       style={{ background: "none", border: "none", cursor: "pointer", color: "#dc2626", fontSize: 13 }}>✕</button>
                                   )}
                                 </td>

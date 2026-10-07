@@ -78,6 +78,21 @@ export function apiFetch(path: string, init: RequestInit = {}, opts?: OpcionesAp
   });
 }
 
+/**
+ * Como apiFetch, pero si el servidor rechaza (4xx/5xx) LANZA un error con su mensaje. apiFetch solo devuelve la
+ * respuesta: quien no revisaba `.ok` mostraba «eliminado correctamente» aunque el servidor hubiera dicho que no.
+ */
+export async function apiOk(path: string, init: RequestInit = {}, opts?: OpcionesApi): Promise<Response> {
+  const response = await apiFetch(path, init, opts);
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    let message = text;
+    try { message = (JSON.parse(text) as { error?: string; message?: string }).error || (JSON.parse(text) as { message?: string }).message || text; } catch { /* texto plano */ }
+    throw new Error(message || `No se pudo completar (error ${response.status})`);
+  }
+  return response;
+}
+
 export async function apiGet<T>(path: string, opts?: OpcionesApi): Promise<T> {
   const response = await fetch(`${API_URL}/api/v1${path}`, { headers: authHeaders(opts) });
   return parseResponse<T>(response);

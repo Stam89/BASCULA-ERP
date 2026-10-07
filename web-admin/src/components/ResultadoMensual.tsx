@@ -7,7 +7,7 @@
 // Los datos salen de lo ya registrado (Caja, liquidaciones, servicios, fomentos);
 // solo los montos que el sistema no conoce se ingresan a mano por mes.
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { apiFetch, apiGet, apiPatch, apiPost } from "../api";
+import { apiFetch, apiGet, apiOk, apiPatch, apiPost } from "../api";
 
 type Mov = { fecha: string; descripcion: string; monto: number; categoria: string; subcategoria: string | null; categoria_codigo: string; tipo_nomina: string | null };
 type Rubro = { id: string; nombre: string; claves: string[]; categorias: string[]; nomina: string[]; costo_estimado_qq: number; gasto_total: number; costo_real_qq: number; alerta: boolean; detalle: Mov[] };
@@ -158,7 +158,7 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
   }
   async function borrarManual(id: string) {
     if (!window.confirm("¿Quitar este monto del mes?")) return;
-    try { await apiFetch(`/resultado-mensual/manual/${id}`, { method: "DELETE" }); await cargar(); }
+    try { await apiOk(`/resultado-mensual/manual/${id}`, { method: "DELETE" }); await cargar(); }
     catch (e) { avisar(e instanceof Error ? e.message : "No se pudo quitar", "error"); }
   }
   async function crearRubro() {

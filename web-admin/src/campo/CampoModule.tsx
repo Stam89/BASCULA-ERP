@@ -5,7 +5,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { apiFetch, apiGet, apiPost, apiPut } from "../api";
+import { apiFetch, apiGet, apiOk, apiPost, apiPut } from "../api";
 
 // PATCH a la maquinaria (campo_activos): el endpoint es PATCH (no PUT).
 async function patchMaquina(id: string, body: unknown): Promise<void> {
@@ -2158,7 +2158,7 @@ function CxPView({ onNotify, onError }: { onNotify: (m: string, k?: "ok" | "err"
   async function eliminar(c: CxP) {
     if (!window.confirm(`¿Eliminar la cuenta por pagar de ${c.acreedor} (${money(c.monto)})?`)) return;
     try {
-      await apiFetch(`/campo/cxp/${c.id}`, { method: "DELETE" });
+      await apiOk(`/campo/cxp/${c.id}`, { method: "DELETE" });
       await cargar(); onNotify("Cuenta por pagar eliminada");
     } catch (e) { onError((e as Error).message); }
   }
