@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🔢 Reportes con el valor real (2026-10-07)
+- Regla del dueño: en los reportes NO se redondea para presentar. Reportes → Combustible: `GET /reports/fuel` ya no hace `round()` (costo por QQ de gas/diésel y horas de secado salen con todos sus decimales); la pantalla muestra el costo por QQ con 4 decimales (`$0.3641`) y las horas como «13 h 20 min»; la exportación (App.tsx, `kind === "combustible"`) también 4 decimales. Los montos en $ siguen a centavos porque así se guardan (el reparto cierra al centavo).
+- «Gas consumo» del reporte ahora dice «30.00 % (300.00 kg) + 5.00 cil.» (antes sumaba % con cilindros). Registros anteriores a la fórmula nueva no guardaron los kg y muestran solo el %.
+- Pendiente de revisar con el dueño: otros reportes con `toFixed(2)`/`round` (ventas, producción: rendimiento a 1 decimal `toFixed(1)`) por si también los quiere sin redondear.
+- En la base real el Motor 1 ya tiene su combustible registrado con la fórmula nueva: 30 % × 10 kg × $0.334 + 5 cil × $2.45 = $112.45 (túnel 1 $45.01, túnel 2 $67.44, reparto TIEMPO). `combustible.mjs` desmarca ese registro EN LA COPIA antes de probar.
+
 ### 🏭 Tarifas de planta vs. tarifas de cada socio (2026-10-07)
 - `labor_rates` tiene una fila general (socio_id NULL) y una por socio. Tarifas PROPIAS de cada socio (las usa el servidor según el dueño del lote): pilador, estibador, secador (guardianía/túnel), tendal, polvillo, 3 tulas. Tarifas de PLANTA (una sola; el servidor siempre usa la general): `TARIFAS_DE_PLANTA` en `labor.ts` = gas bombona ($/kg), kg por 1%, cilindro, diésel, secado como servicio (granel/saco); el pilado como servicio también se lee siempre de la general (`processing.ts`).
 - Error corregido: en un socio, `getRates` devolvía las COPIAS viejas de la fila del socio (cilindro $2.20, bombona $0.90, secado $1.50) y Secadoras mostraba/validaba con ellas, aunque el servidor cobraba con las generales. Ahora `getRates` sobreescribe las de planta con la fila general; migración `20261073_tarifas_planta_socios.sql` alinea las copias. En Configuración esas tarjetas ya estaban ocultas para socios (solo se editan en la matriz). Prueba: `combustible.mjs` pasos 14–16.
