@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🚚 Flete de envejecido (2026-10-06)
+- Solo ENVEJECIMIENTO (no selección). En Selección → Nuevo envío, bloque «🚚 Flete (opcional)»: Sin flete / Carro de Transporte y Cosechadora (PLATAFORMA, TOYOTA AZUL… no cosechadoras) / Carro externo + valor.
+- Propio: `campo_servicios` (tipo flete, origen `envejecido_flete` = lote, cliente = el socio como «piladora», precio = valor/QQ) + Por Pagar espejo del socio (`campo_servicio`, igual que el flete de flota propia de una liquidación; su saldo lo sigue el trigger). Externo: Por Pagar del socio (`flete_envejecido_tercero`) al transportista. La cuenta por pagar a la piladora externa NO cambia.
+- Cancelar un lote en proceso deshace el flete; con cobros en Transporte o abonos en Por Pagar responde 409. Un lote completado conserva su flete.
+- Piezas: migración `20261071_flete_envejecido.sql` (columnas `flete_*` en `selection_batches`), `services/campo-flete-envejecido.ts` (+test), `routes/modules/selection.ts`, bloque en App.tsx. Prueba: `node scripts/simulacro/flete_envejecido.mjs` (34 comprobaciones). Pendiente opcional: imprimir el flete en la hoja de envío del lote.
+
 ### 🧪 Simulacro de un día completo (2026-10-06)
 - `backend/scripts/simulacro/` (con el backend compilado: `npm run build`): `node scripts/simulacro/simulacro.mjs` (compra propia: caja → ticket → ingreso → secado + combustible → producción → venta contado y crédito → cobro → cierre → día siguiente → liquidar ticket → pagar la semana de nómina), `simulacro_servicio.mjs` (servicio de pilado: custodia, cuentas por cobrar de secado y pilado, cobro en caja), `carrera.mjs` (doble clic / dos pantallas sobre el mismo ticket), `operador.mjs` (permisos reales de Richar y Cecilia). Cada uno copia la base real (pg_dump → `bascula_erp_simulacro`), levanta el Express REAL en :4001 con un token firmado para el admin de la copia y NUNCA toca la base real ni Firebase. Al terminar quedan en la copia; se borra con `dropdb bascula_erp_simulacro`. Repetirlos antes de pasar a modo real y tras cambios grandes.
 - Encontrado y corregido: **liquidar dos veces el mismo ticket pagaba dos veces** (`/tickets/:id/liquidate` no miraba `liquidated_at`) y un ticket liquidado podía ingresar como materia prima (y al revés). Ahora `exigirTicketSinPagar` rechaza con 409 (también en la vista previa) y el ingreso se re-comprueba con el ticket bloqueado (`FOR UPDATE`).
