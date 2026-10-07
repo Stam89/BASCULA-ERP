@@ -6364,8 +6364,8 @@ export function App() {
         m2(r.quintals),
         m2(r.gas_costo),
         m2(r.diesel_costo),
-        m2(r.costo_por_qq_gas),
-        m2(r.costo_por_qq_diesel),
+        Number(r.costo_por_qq_gas ?? 0).toFixed(4),
+        Number(r.costo_por_qq_diesel ?? 0).toFixed(4),
         m2(r.total)
       ]);
       const t = data.totals || { gas: 0, diesel: 0, total: 0 };

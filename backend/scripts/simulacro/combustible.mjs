@@ -39,6 +39,19 @@ try {
   const partes = await q("SELECT drying_report_id, gas::float g FROM motor_fuel_partes WHERE motor_fuel_id = $1", [reg.id]);
   check(partes.length === 2 && r2(partes.reduce((s, x) => s + x.g, 0)) === 105.10, "10. queda guardado lo que le tocó a cada túnel", partes.length);
 
+  // Reporte de Combustible: valores REALES, sin redondear para presentar
+  const hoy = new Date().toISOString().slice(0, 10);
+  const rep = await api("GET", `/reports/combustible?from=2026-01-01&to=${hoy}`);
+  check(rep.ok, "13b. el reporte de Combustible responde", rep.ok ? undefined : mostrar(rep));
+  if (rep.ok) {
+    const f1 = rep.data.rows.find((x) => x.tunnel_number === t1.tunnel_number && Number(x.quintals) === t1.qq);
+    const esperadoQq = p1.gas / t1.qq;
+    check(f1 && Math.abs(f1.costo_por_qq_gas - esperadoQq) < 1e-9 && f1.costo_por_qq_gas !== r2(esperadoQq), "13c. el costo por QQ de gas viene con su valor real (no a 2 decimales)", f1 && { reporte: f1.costo_por_qq_gas, real: esperadoQq });
+    check(f1 && Math.abs(f1.horas_secado - 13.3333333) < 0.001, "13d. las horas de secado vienen exactas (13.33… h, no 13.3)", f1?.horas_secado);
+    const mt = rep.data.motors.find((x) => x.motor === 1);
+    check(mt && mt.gas_bombona_pct === 30 && mt.gas_bombona_kg === 300, "13e. el consumo de la bombona se ve en % y en kg (30 % = 300 kg)", mt && { pct: mt.gas_bombona_pct, kg: mt.gas_bombona_kg });
+  }
+
   // Reabrir (admin) deshace EXACTAMENTE lo asignado
   const reab = await api("POST", `/process-flow/drying/${t1.id}/reabrir`, { motivo: "prueba de reparto de combustible" });
   check(reab.ok, "11. reabrir el túnel 1 deshace el cierre del combustible", reab.ok ? undefined : mostrar(reab));

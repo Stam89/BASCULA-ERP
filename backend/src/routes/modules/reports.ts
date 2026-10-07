@@ -548,6 +548,10 @@ reportsRouter.get("/fuel", asyncRoute(async (req, res) => {
         `SELECT m.created_at AS fecha,
                 m.motor_number AS motor,
                 (m.gas_bombona_inicio - m.gas_bombona_fin + m.gas_cilindro_cantidad)::float AS gas_consumo,
+                (m.gas_bombona_inicio - m.gas_bombona_fin)::float AS gas_bombona_pct,
+                -- Kg de la bombona (cada 1% = kg_por_punto kg). Los registros anteriores a la fórmula no lo guardaron.
+                CASE WHEN m.gas_bombona_kg_por_punto IS NOT NULL
+                     THEN ((m.gas_bombona_inicio - m.gas_bombona_fin) * m.gas_bombona_kg_por_punto)::float END AS gas_bombona_kg,
                 m.gas_cilindro_cantidad::float AS gas_cilindros,
                 (m.diesel_inicio - m.diesel_fin)::float AS diesel_consumo,
                 m.gas_costo::float AS gas_costo,
@@ -565,7 +569,7 @@ reportsRouter.get("/fuel", asyncRoute(async (req, res) => {
     `SELECT COALESCE(d.dry_end_at, d.filled_at, d.created_at) AS fecha,
             d.dry_start_at, d.dry_end_at,
             CASE WHEN d.dry_start_at IS NOT NULL AND d.dry_end_at IS NOT NULL
-                 THEN round(EXTRACT(EPOCH FROM (d.dry_end_at - d.dry_start_at))::numeric / 3600, 1)
+                 THEN EXTRACT(EPOCH FROM (d.dry_end_at - d.dry_start_at))::numeric / 3600
             END::float AS horas_secado,
             d.dryer_name, d.tunnel_number, d.motor_number,
             d.total_quintals::float AS quintals,
@@ -573,11 +577,11 @@ reportsRouter.get("/fuel", asyncRoute(async (req, res) => {
             COALESCE(d.diesel_costo, 0)::float AS diesel_costo,
             (COALESCE(d.gas_costo_total, 0) + COALESCE(d.diesel_costo, 0))::float AS total,
             CASE WHEN COALESCE(d.total_quintals, 0) > 0
-                 THEN round(COALESCE(d.gas_costo_total, 0) / d.total_quintals, 2)
+                 THEN COALESCE(d.gas_costo_total, 0) / d.total_quintals
                  ELSE 0
             END::float AS costo_por_qq_gas,
             CASE WHEN COALESCE(d.total_quintals, 0) > 0
-                 THEN round(COALESCE(d.diesel_costo, 0) / d.total_quintals, 2)
+                 THEN COALESCE(d.diesel_costo, 0) / d.total_quintals
                  ELSE 0
             END::float AS costo_por_qq_diesel
      FROM drying_tunnel_reports d
