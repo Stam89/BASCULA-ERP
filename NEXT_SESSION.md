@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🏦 Conciliación bancaria auditada (2026-10-07)
+- Simulacro `backend/scripts/simulacro/banco.mjs` (3 extractos sep/oct/nov, anulación, cruce manual, carreras, otro socio). Una cuenta de banco es una caja `tipo=BANCO` abierta; el extracto se pega como texto (`parsearExtracto`) y `conciliarAutomatico` cruza por importe ±0.01 y ±5 días.
+- Corregido: (1) un movimiento ANULADO se quitaba de libros pero su contra-asiento no → libros ≠ saldo de la Caja (ahora cuentan ambos, `/bank/accounts` también); (2) lo cruzado en un extracto anterior reaparecía como «depósito en tránsito» en el siguiente (ahora se excluye lo cruzado en extractos con corte ≤ al actual); (3) se podía cargar el mismo extracto/períodos solapados (ahora 409, con candado por cuenta contra doble clic); (4) fecha inválida daba 500 y «desde» > «hasta» se aceptaba (ahora 400); (5) NUEVO `DELETE /finance/bank/statements/:id` para quitar un extracto mal cargado (no toca movimientos de caja); (6) el texto pegado puede confundir el saldo con el monto: si se envía `saldo_inicial` (campo opcional nuevo en pantalla) la respuesta trae `extracto_cuadra`/`diferencia_extracto` y la pantalla avisa.
+- La anulación aparece en la conciliación como partida visible (contra-asiento en tránsito), no se oculta.
+- Sigue sin simular: nómina administrativa, cuadrilla/tendal (pagos), resumen diario por correo, Campo nómina de operadores.
+
 ### 🔗 Auditoría de integración «que todo esté bien conectado» (2026-10-07)
 - Método: simular el flujo real por HTTP sobre una COPIA de la base (`backend/scripts/simulacro/sim_base.mjs`; se ejecuta desde `backend/` del repo con `.env` y `dist` compilado), con doble clic/concurrencia, caja ajena, sobrepago y permisos, y luego un revisor global `consistencia.mjs` (29 reglas; por CLI es SOLO LECTURA sobre la base real).
 - Simulacros: `simulacro`, `simulacro_servicio`, `carrera`, `operador`, `flete_envejecido`, `dinero`, `liquidaciones`, `finanzas`, `combustible`, `saldos`, `modulos`, `socio_empaque` (venta de socio con cargo de empaque, espejo CxC/CxP), `campo` (Transporte y Cosechadora: caja, CxC/CxP, cierre, espejo del flete del socio). Todos «TODO OK» + 197 pruebas + 29 reglas sobre la base real sin hallazgos.
