@@ -135,7 +135,7 @@ export function MedidorRow({
       <span className="medidorOp">=</span>
       <div className="medidorOut">
         <small>Total {unidad}</small>
-        <strong>{total.toFixed(2)}</strong>
+        <strong>{total.enReal()}</strong>
       </div>
       {multiplicador && (
         <>

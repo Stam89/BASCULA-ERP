@@ -4,7 +4,7 @@
 
 /** Formatea un número como moneda: 12.5 -> "$12.50". */
 export function money(value: string | number | null | undefined): string {
-  return `$${Number(value ?? 0).toFixed(2)}`;
+  return `$${numeroReal(value, 2, 4)}`;
 }
 
 // Conectores de nombres/razones sociales que van en minúscula cuando NO son la
@@ -100,9 +100,20 @@ export function numeroReal(value: unknown, min = 0, max = 3): string {
   return d ? `${entero}.${d}` : entero;
 }
 
-/** Quintales (y otras cantidades): al menos 2 decimales y hasta 3 si los tiene (52.60, 115.55, 135.473). */
-export const cantidad = (value: unknown): string => numeroReal(value, 2, 3);
+/** Quintales, dólares y otras cantidades: al menos 2 decimales y hasta 4 si los tiene (52.60, 135.473, $0.3341). */
+export const cantidad = (value: unknown): string => numeroReal(value, 2, 4);
 
 /** Kilos: el valor real, con decimales solo si los tiene (5380, 5380.5). */
 export const kilos = (value: unknown): string => numeroReal(value, 0, 3);
 
+// `x.enReal()` reemplaza a `x.toFixed(2)` en TODA la pantalla: muestra el valor tal como es (mínimo 2 decimales y hasta 4;
+// con enReal(0, 3) / enReal(1, 3) para enteros y porcentajes), sin redondear «para presentar» ni dejar ceros de sobra.
+// Los montos que ya vienen a centavos se ven igual ($112.45); un precio por kg se ve $0.334; un costo por QQ, $0.3641.
+declare global {
+  interface Number {
+    enReal(min?: number, max?: number): string;
+  }
+}
+Number.prototype.enReal = function (this: number, min = 2, max = 4): string {
+  return numeroReal(Number(this), min, max);
+};

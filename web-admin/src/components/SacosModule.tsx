@@ -533,7 +533,7 @@ export function SacosCatalogoConfig({
                     <td key={campo} style={{ padding: "5px 10px", textAlign: "right" }}>
                       <input type="number" min="0" step={campo === "stock_minimo" ? "1" : "0.01"} disabled={!puedeEditar || inactivo}
                         key={`${s.id}-${campo}-${String(s[campo] ?? 0)}`}
-                        defaultValue={campo === "stock_minimo" ? num(s[campo]) : num(s[campo]).toFixed(2)}
+                        defaultValue={campo === "stock_minimo" ? num(s[campo]) : num(s[campo]).enReal()}
                         onBlur={(ev) => guardarCampo(s, campo, Number(ev.target.value))}
                         onKeyDown={(ev) => { if (ev.key === "Enter") (ev.target as HTMLInputElement).blur(); }}
                         style={inp} />

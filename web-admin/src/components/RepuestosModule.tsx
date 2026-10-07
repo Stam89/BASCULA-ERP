@@ -53,7 +53,7 @@ const ESTILO: Record<EstadoRepuesto, { bg: string; fg: string; bd: string; txt: 
   BAJO: { bg: "#fff7ed", fg: "#c2410c", bd: "#fdba74", txt: "Por terminarse" },
   OK: { bg: "#f0fdf4", fg: "#15803d", bd: "#86efac", txt: "OK" }
 };
-const n2 = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2));
+const n2 = (v: number) => (Number.isInteger(v) ? String(v) : v.enReal());
 const UNIDADES = ["UNIDAD", "JUEGO", "PAR", "METRO", "LITRO", "GALON", "KG", "ROLLO"];
 
 /** Dashboard: repuestos en o bajo su mínimo (solo Matriz). */

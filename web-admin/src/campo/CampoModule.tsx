@@ -1149,7 +1149,7 @@ function ConvertirAplicarModal({ credito, onClose, onDone, onError }: {
             <option value="">{partes === null ? "Cargando…" : partes.length ? "— seleccionar parte —" : "Sin partes pendientes de este cliente"}</option>
             {(partes ?? []).map((p) => (
               <option key={p.id} value={p.id}>
-                {String(p.fecha).slice(0, 10)} · {p.activo_nombre} · {p.qq.toFixed(2)} QQ{p.origen === "bascula" ? " · ⚖️ Báscula" : ""}
+                {String(p.fecha).slice(0, 10)} · {p.activo_nombre} · {p.qq.enReal()} QQ{p.origen === "bascula" ? " · ⚖️ Báscula" : ""}
               </option>
             ))}
           </select>
@@ -1170,7 +1170,7 @@ function ConvertirAplicarModal({ credito, onClose, onDone, onError }: {
         </label>
 
         <label><span>Crédito a aplicar (por defecto el máximo)</span>
-          <input type="number" step="0.01" min="0" placeholder={aplicarDefault.toFixed(2)} value={aplicar} onChange={(e) => setAplicar(e.target.value)} />
+          <input type="number" step="0.01" min="0" placeholder={aplicarDefault.enReal()} value={aplicar} onChange={(e) => setAplicar(e.target.value)} />
         </label>
 
         <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 12px", fontSize: 13, display: "grid", gap: 4 }}>
@@ -1247,9 +1247,9 @@ function EstadoCuentaModal({ cliente, nombreOperacion, matrizName, cajaCuenta, o
       <td>${l.detalle}${l.cuenta ? ` (${l.cuenta})` : ""}</td>
       <td>${l.maquina ?? ""}</td>
       <td style="text-align:right">${l.qq != null ? l.qq : ""}</td>
-      <td style="text-align:right">${l.debe ? l.debe.toFixed(2) : ""}</td>
-      <td style="text-align:right;color:#15803d">${l.haber ? l.haber.toFixed(2) : ""}</td>
-      <td style="text-align:right;font-weight:700">${l.saldo.toFixed(2)}</td></tr>`).join("");
+      <td style="text-align:right">${l.debe ? l.debe.enReal() : ""}</td>
+      <td style="text-align:right;color:#15803d">${l.haber ? l.haber.enReal() : ""}</td>
+      <td style="text-align:right;font-weight:700">${l.saldo.enReal()}</td></tr>`).join("");
     const w = window.open("", "_blank", "width=820,height=900");
     if (!w) return;
     w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Estado de Cuenta · ${cliente.nombre}</title>
@@ -1261,16 +1261,16 @@ function EstadoCuentaModal({ cliente, nombreOperacion, matrizName, cajaCuenta, o
       <body>
         <div class="head">
           <div><h1>${nombreOperacion} · ${matrizName}</h1><div class="muted">Estado de Cuenta de Cliente</div></div>
-          <div class="box"><div class="muted">SALDO ACTUAL</div><div style="font-size:18px;font-weight:700">$ ${ec.saldo_final.toFixed(2)}</div></div>
+          <div class="box"><div class="muted">SALDO ACTUAL</div><div style="font-size:18px;font-weight:700">$ ${ec.saldo_final.enReal()}</div></div>
         </div>
         <div><strong>${cliente.nombre}</strong> ${cliente.identificacion ? `· ${cliente.identificacion}` : ""}</div>
         <div class="muted">Período: ${ec.periodo.from} a ${ec.periodo.to} · Emitido: ${new Date().toLocaleDateString("es-EC")}</div>
         <table>
           <thead><tr><th>Fecha</th><th>Detalle</th><th>Máquina</th><th style="text-align:right">QQ</th><th style="text-align:right">Debe</th><th style="text-align:right">Haber</th><th style="text-align:right">Saldo</th></tr></thead>
           <tbody>
-            <tr><td colspan="6" class="muted">Saldo anterior</td><td style="text-align:right;font-weight:700">${ec.saldo_apertura.toFixed(2)}</td></tr>
+            <tr><td colspan="6" class="muted">Saldo anterior</td><td style="text-align:right;font-weight:700">${ec.saldo_apertura.enReal()}</td></tr>
             ${filas}
-            <tr class="tot"><td colspan="4">TOTALES DEL PERÍODO</td><td style="text-align:right">${ec.total_debe.toFixed(2)}</td><td style="text-align:right">${ec.total_haber.toFixed(2)}</td><td style="text-align:right">${ec.saldo_final.toFixed(2)}</td></tr>
+            <tr class="tot"><td colspan="4">TOTALES DEL PERÍODO</td><td style="text-align:right">${ec.total_debe.enReal()}</td><td style="text-align:right">${ec.total_haber.enReal()}</td><td style="text-align:right">${ec.saldo_final.enReal()}</td></tr>
           </tbody>
         </table>
         <p class="muted" style="margin-top:14px">Debe = servicios de cosecha/flete · Haber = abonos recibidos.</p>
@@ -2263,7 +2263,7 @@ function PagarCxPModal({ cxp, cuentas, onClose, onDone, onError }: {
   cxp: CxP; cuentas: Cuenta[];
   onClose: () => void; onDone: (m: string) => void | Promise<void>; onError: (m: string) => void;
 }) {
-  const [monto, setMonto] = useState(cxp.saldo > 0 ? cxp.saldo.toFixed(2) : "");
+  const [monto, setMonto] = useState(cxp.saldo > 0 ? cxp.saldo.enReal() : "");
   const [cuentaId, setCuentaId] = useState(cuentas[0]?.id ?? "");
   const [fecha, setFecha] = useState(hoy());
   const [busy, setBusy] = useState(false);
@@ -2389,7 +2389,7 @@ function ServicioForm({ activos, onSaved, onError }: {
   // Valor auto = QQ × Precio (2 decimales) o "" si falta alguno.
   const calcValor = (qq: string, pu: string): string => {
     const n = Number(qq) * Number(pu);
-    return qq.trim() !== "" && pu.trim() !== "" && n > 0 ? (Math.round(n * 100) / 100).toFixed(2) : "";
+    return qq.trim() !== "" && pu.trim() !== "" && n > 0 ? (Math.round(n * 100) / 100).enReal() : "";
   };
   const setQq = (qq: string) => setF((p) => ({ ...p, qq, valor: valorTouched ? p.valor : calcValor(qq, p.precio_unitario) }));
   const setPu = (pu: string) => setF((p) => ({ ...p, precio_unitario: pu, valor: valorTouched ? p.valor : calcValor(p.qq, pu) }));

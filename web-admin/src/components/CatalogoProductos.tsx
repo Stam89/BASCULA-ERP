@@ -315,7 +315,7 @@ export function CatalogoProductos({ puedeEditar, avisar, onCambio, irASaldos, ir
                 <td>{f.calidad ? (f.calidad === "CORRIENTE" ? "Corriente" : f.calidad) : "—"}</td>
                 <td className="num">{f.price_per_pound > 0 ? `$${f.price_per_pound}` : "—"}</td>
                 <td>{f.venta_detalle ? <span className="chip ok">Sí</span> : "—"}</td>
-                <td className="num">{f.con_movimientos ? f.stock_total.toFixed(2) : "—"}</td>
+                <td className="num">{f.con_movimientos ? f.stock_total.enReal() : "—"}</td>
                 <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                   <button type="button" className="btnGhost" onClick={() => setEditando(f)}>✎ {puedeEditar ? "Editar" : "Ver"}</button>
                 </td>
@@ -365,7 +365,7 @@ function EditarProducto({ fila, puedeEditar, avisar, onCerrar, onCambio }: {
         <h3 style={{ marginTop: 0 }}>{fila.name} <small className="muted">· {fila.code}</small></h3>
         <p className="muted" style={{ marginTop: -4 }}>
           {ETIQUETA_TIPO[fila.product_type] ?? fila.product_type} · unidad {fila.unit}
-          {fila.con_movimientos ? ` · stock ${fila.stock_total.toFixed(2)}` : ""}
+          {fila.con_movimientos ? ` · stock ${fila.stock_total.enReal()}` : ""}
           {esMarca ? ` · ${fila.sacos} saco(s) · arroz base ${fila.calidad === "CORRIENTE" ? "Corriente" : fila.calidad ?? "—"}` : ""}
         </p>
 

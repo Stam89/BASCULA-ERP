@@ -84,7 +84,7 @@ export function AccesoRemoto({ esAdmin, negocio, avisar }: {
           </div>
           {prueba && (
             <p className={prueba.ok ? "accesoRemoto__ok" : "vdCard__aviso"} role="status">
-              {prueba.ok ? "✓ " : "✗ "}{prueba.detalle}{prueba.ok ? ` (${(prueba.ms / 1000).toFixed(1)} s)` : ""}
+              {prueba.ok ? "✓ " : "✗ "}{prueba.detalle}{prueba.ok ? ` (${(prueba.ms / 1000).enReal(1, 3)} s)` : ""}
             </p>
           )}
         </div>

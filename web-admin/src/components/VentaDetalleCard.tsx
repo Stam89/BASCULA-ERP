@@ -151,7 +151,7 @@ export function VentaDetalleCard({ productos, clientes, onRegistrar, onAviso, en
         <label>
           <span>Total $ (Monto a cobrar)</span>
           <input name="total_dolares" className="vdTotal" readOnly tabIndex={-1} aria-live="polite"
-            value={calculo && hayCantidad ? calculo.total.toFixed(2) : ""} placeholder="0.00" />
+            value={calculo && hayCantidad ? calculo.total.enReal() : ""} placeholder="0.00" />
         </label>
       </div>
 
@@ -188,7 +188,7 @@ export function VentaDetalleCard({ productos, clientes, onRegistrar, onAviso, en
             <div>
               <div className="vdResumen__k">Equivalencia</div>
               <div className="vdResumen__v vdResumen__v--sec">
-                {enQQ ? `${calculo.libras.toFixed(3)} libras` : `${(calculo.libras / 100).toFixed(2)} QQ`}
+                {enQQ ? `${calculo.libras.toFixed(3)} libras` : `${(calculo.libras / 100).enReal()} QQ`}
               </div>
             </div>
           </div>

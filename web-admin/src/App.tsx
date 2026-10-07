@@ -495,8 +495,8 @@ type NominaCol = {
 /** Columnas intermedias por pestaña. Las fijas (A pagar / Pagado / Acciones)
  *  son iguales en las cuatro y se dibujan aparte. */
 function nominaColumnas(grupo: NominaGrupo): NominaCol[] {
-  const n0 = (v: unknown) => Number(v ?? 0).toFixed(0);
-  const m2 = (v: unknown) => Number(v ?? 0).toFixed(2);
+  const n0 = (v: unknown) => Number(v ?? 0).enReal(0, 3);
+  const m2 = (v: unknown) => Number(v ?? 0).enReal();
   const sum = (rows: WorkerSummary[], f: (r: WorkerSummary) => number) => rows.reduce((a, r) => a + (Number(f(r)) || 0), 0);
   const reg: NominaCol = { label: "Reg.", cell: (r) => String(r.cnt) };
   const gano: NominaCol = { label: "Ganó", cell: (r) => money(r.base_amount), plain: (r) => m2(r.base_amount),
@@ -525,7 +525,7 @@ function nominaColumnas(grupo: NominaGrupo): NominaCol[] {
   ];
   return [
     reg,
-    { label: "QQ", cell: (r) => Number(r.qq).toFixed(2), total: (rows) => sum(rows, (r) => r.qq).toFixed(2) },
+    { label: "QQ", cell: (r) => Number(r.qq).enReal(), total: (rows) => sum(rows, (r) => r.qq).enReal() },
     gano, descuento("Anticipos")
   ];
 }
@@ -1900,10 +1900,10 @@ function rindeDesgloseTexto(r: { rinde_flor_qq?: number | null; rinde_medio_qq?:
   const medio = Number(r.rinde_medio_qq ?? 0);
   const fino = Number(r.rinde_fino_qq ?? 0);
   const polv = Number(r.rinde_polvillo_qq ?? 0);
-  if (flor > 0) parts.push(`${flor.toFixed(0)} QQ Flor`);
-  if (medio > 0) parts.push(`${medio.toFixed(0)} QQ 3/4`);
-  if (fino > 0) parts.push(`${fino.toFixed(0)} QQ Fino`);
-  if (polv > 0) parts.push(`${polv.toFixed(0)} QQ Polvillo`);
+  if (flor > 0) parts.push(`${flor.enReal(0, 3)} QQ Flor`);
+  if (medio > 0) parts.push(`${medio.enReal(0, 3)} QQ 3/4`);
+  if (fino > 0) parts.push(`${fino.enReal(0, 3)} QQ Fino`);
+  if (polv > 0) parts.push(`${polv.enReal(0, 3)} QQ Polvillo`);
   return parts.length ? `📦 Rinde: ${parts.join(" | ")}` : null;
 }
 
@@ -2386,7 +2386,7 @@ export function App() {
   // Aplica una tarifa de flete a una fila recalculando su Total con SU PROPIO QQ.
   const aplicarTarifaFleteLiq = (ln: LiqLine, tarifa: string): LiqLine => {
     const qq = qqDeLiqLinea(ln);
-    const monto = tarifa.trim() !== "" && qq > 0 ? (Math.round(qq * Number(tarifa) * 100) / 100).toFixed(2) : "";
+    const monto = tarifa.trim() !== "" && qq > 0 ? (Math.round(qq * Number(tarifa) * 100) / 100).enReal() : "";
     return { ...ln, flete_tarifa: tarifa, flete_monto: monto };
   };
   type LiqResultItem = {
@@ -2443,7 +2443,7 @@ export function App() {
     apiGet<FomentoAgricultor[]>(`/liquidations/fomentos-agricultor?${qs.toString()}`)
       .then((rows) => {
         setLiqFomentosList(rows);
-        setLiqFomentoMontos(Object.fromEntries(rows.map((f) => [f.id, f.saldo.toFixed(2)])));
+        setLiqFomentoMontos(Object.fromEntries(rows.map((f) => [f.id, f.saldo.enReal()])));
         if (rows.length > 0) setDiscountsOpen(true);
       })
       .catch(() => { setLiqFomentosList([]); setLiqFomentoMontos({}); });
@@ -2761,7 +2761,7 @@ export function App() {
     // entrada (ej. (80−53.39)/53.39 = 49.84%). SOLO aplica al arroz blanco; los
     // subproductos usan % simple. 2 decimales, con guarda anti división por cero.
     const blancoRendPct = entrada > 0 ? ((blanco - entrada) / entrada) * 100 : 0;
-    const blancoRendStr = (Math.round(blancoRendPct * 100) / 100).toFixed(2);
+    const blancoRendStr = (Math.round(blancoRendPct * 100) / 100).enReal();
     // % Subproductos = (QQ subproducto / Total QQ Cáscara) × 100.
     const subPct = (x: number) => (entrada > 0 ? (x / entrada) * 100 : 0);
     // Costo Prod. (pilada) por QQ de cáscara = (QQ Blanco × Tarifa PILADO socio)/QQ Cáscara.
@@ -3053,19 +3053,19 @@ export function App() {
     const esc = (v: any) => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const L: string[] = [];
     L.push(esc(`COSTO OPERATIVO MENSUAL CONSOLIDADO · ${d.periodo} · ${matrizName}`));
-    L.push([esc("QQ producidos"), esc(Number(d.qq_usados).toFixed(2))].join(","));
+    L.push([esc("QQ producidos"), esc(Number(d.qq_usados).enReal())].join(","));
     L.push([esc("RUBRO"), esc("MONTO $"), esc("$/QQ"), esc("% del costo")].join(","));
     for (const r of d.rubros) {
       const pct = d.total_costo > 0 ? (r.monto / d.total_costo) * 100 : 0;
-      L.push([esc(r.rubro), esc(Number(r.monto).toFixed(2)), esc(Number(r.costo_qq).toFixed(4)), esc(pct.toFixed(1) + "%")].join(","));
+      L.push([esc(r.rubro), esc(Number(r.monto).enReal()), esc(Number(r.costo_qq).toFixed(4)), esc(pct.enReal(1, 3) + "%")].join(","));
     }
-    L.push([esc("TOTAL COSTO"), esc(Number(d.total_costo).toFixed(2)), esc(Number(d.costo_real_qq).toFixed(4)), esc("100%")].join(","));
+    L.push([esc("TOTAL COSTO"), esc(Number(d.total_costo).enReal()), esc(Number(d.costo_real_qq).toFixed(4)), esc("100%")].join(","));
     L.push("");
-    L.push([esc("INGRESO · Servicio Pilada"), esc(Number(d.ingresos.servicio_pilada).toFixed(2))].join(","));
-    L.push([esc("INGRESO · Ventas"), esc(Number(d.ingresos.ventas).toFixed(2))].join(","));
-    L.push([esc("TOTAL INGRESOS"), esc(Number(d.total_ingresos).toFixed(2))].join(","));
-    L.push([esc("(-) Financiero / Préstamos"), esc(Number(d.financiero).toFixed(2))].join(","));
-    L.push([esc("(=) GANANCIA NETA DEL MES"), esc(Number(d.ganancia_neta).toFixed(2))].join(","));
+    L.push([esc("INGRESO · Servicio Pilada"), esc(Number(d.ingresos.servicio_pilada).enReal())].join(","));
+    L.push([esc("INGRESO · Ventas"), esc(Number(d.ingresos.ventas).enReal())].join(","));
+    L.push([esc("TOTAL INGRESOS"), esc(Number(d.total_ingresos).enReal())].join(","));
+    L.push([esc("(-) Financiero / Préstamos"), esc(Number(d.financiero).enReal())].join(","));
+    L.push([esc("(=) GANANCIA NETA DEL MES"), esc(Number(d.ganancia_neta).enReal())].join(","));
     const blob = new Blob(["﻿" + L.join("\r\n")], { type: "text/csv;charset=utf-8;" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
     a.download = `Costo_Mensual_${d.periodo}.csv`; a.click(); URL.revokeObjectURL(a.href);
@@ -3074,7 +3074,7 @@ export function App() {
     const d = consolData; if (!d) return;
     const filas = d.rubros.map((r: any) => {
       const pct = d.total_costo > 0 ? (r.monto / d.total_costo) * 100 : 0;
-      return `<tr><td>${(r.rubro || "").replace(/</g, "&lt;")}</td><td class="r">$${Number(r.monto).toFixed(2)}</td><td class="r">$${Number(r.costo_qq).toFixed(4)}</td><td class="r">${pct.toFixed(1)}%</td></tr>`;
+      return `<tr><td>${(r.rubro || "").replace(/</g, "&lt;")}</td><td class="r">$${Number(r.monto).enReal()}</td><td class="r">$${Number(r.costo_qq).toFixed(4)}</td><td class="r">${pct.enReal(1, 3)}%</td></tr>`;
     }).join("");
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Costo Mensual ${d.periodo}</title>
       <style>body{font-family:Arial;font-size:12px;margin:24px}h1{font-size:17px;text-align:center;margin:0}h2{font-size:12px;text-align:center;font-weight:normal;margin:2px 0 12px}
@@ -3082,17 +3082,17 @@ export function App() {
       .r{text-align:right}.tot td{font-weight:700;background:#f0f0f0}.net{font-size:16px;font-weight:800;text-align:center;padding:12px;border-radius:8px;margin-top:8px}
       .favor{background:#dcfce7;color:#15803d}.contra{background:#fee2e2;color:#b91c1c}@media print{body{margin:10mm}}</style></head><body>
       <h1>COSTO OPERATIVO MENSUAL CONSOLIDADO</h1>
-      <h2>${matrizName} · Período ${d.periodo} · QQ producidos: ${Number(d.qq_usados).toFixed(2)}</h2>
+      <h2>${matrizName} · Período ${d.periodo} · QQ producidos: ${Number(d.qq_usados).enReal()}</h2>
       <table><thead><tr><th>Rubro</th><th class="r">Monto $</th><th class="r">$/QQ</th><th class="r">% del costo</th></tr></thead>
       <tbody>${filas}</tbody>
-      <tfoot><tr class="tot"><td>TOTAL COSTO</td><td class="r">$${Number(d.total_costo).toFixed(2)}</td><td class="r">$${Number(d.costo_real_qq).toFixed(4)}</td><td class="r">100%</td></tr></tfoot></table>
+      <tfoot><tr class="tot"><td>TOTAL COSTO</td><td class="r">$${Number(d.total_costo).enReal()}</td><td class="r">$${Number(d.costo_real_qq).toFixed(4)}</td><td class="r">100%</td></tr></tfoot></table>
       <table><tbody>
-        <tr><td>Ingreso · Servicio de Pilada</td><td class="r">$${Number(d.ingresos.servicio_pilada).toFixed(2)}</td></tr>
-        <tr><td>Ingreso · Ventas</td><td class="r">$${Number(d.ingresos.ventas).toFixed(2)}</td></tr>
-        <tr class="tot"><td>TOTAL INGRESOS</td><td class="r">$${Number(d.total_ingresos).toFixed(2)}</td></tr>
-        <tr><td>(-) Financiero / Préstamos e Hipotecas</td><td class="r">$${Number(d.financiero).toFixed(2)}</td></tr>
+        <tr><td>Ingreso · Servicio de Pilada</td><td class="r">$${Number(d.ingresos.servicio_pilada).enReal()}</td></tr>
+        <tr><td>Ingreso · Ventas</td><td class="r">$${Number(d.ingresos.ventas).enReal()}</td></tr>
+        <tr class="tot"><td>TOTAL INGRESOS</td><td class="r">$${Number(d.total_ingresos).enReal()}</td></tr>
+        <tr><td>(-) Financiero / Préstamos e Hipotecas</td><td class="r">$${Number(d.financiero).enReal()}</td></tr>
       </tbody></table>
-      <div class="net ${d.ganancia_neta >= 0 ? "favor" : "contra"}">${d.ganancia_neta >= 0 ? "🟢 GANANCIA NETA DEL MES" : "🔴 PÉRDIDA DEL MES"}: $${Math.abs(Number(d.ganancia_neta)).toFixed(2)}</div>
+      <div class="net ${d.ganancia_neta >= 0 ? "favor" : "contra"}">${d.ganancia_neta >= 0 ? "🟢 GANANCIA NETA DEL MES" : "🔴 PÉRDIDA DEL MES"}: $${Math.abs(Number(d.ganancia_neta)).enReal()}</div>
       </body></html>`;
     const w = window.open("", "_blank", "width=820,height=680"); if (w) { w.document.write(html); w.document.close(); w.print(); }
   }
@@ -3704,7 +3704,7 @@ export function App() {
     for (const e of sel) grupos.set(tipoDe(e)!, [...(grupos.get(tipoDe(e)!) ?? []), e]);
     if (grupos.size < 2) return true;
     const [mayor, menor] = [...grupos.entries()].sort((a, b) => b[1].length - a[1].length);
-    const lista = menor[1].map((e) => `  • ${entryLabel(e)} · ${e.farmer_name ?? "—"} · ${Number(e.quintals ?? 0).toFixed(2)} QQ`).join("\n");
+    const lista = menor[1].map((e) => `  • ${entryLabel(e)} · ${e.farmer_name ?? "—"} · ${Number(e.quintals ?? 0).enReal()} QQ`).join("\n");
     return window.confirm(
       `⚠️ ${donde}: estás mezclando arroz ${mayor[0]} (${mayor[1].length} ingreso/s) con ${menor[0]} (${menor[1].length}):\n\n${lista}\n\n` +
       `¿Es correcto? Si en la báscula se eligió mal el tipo, pulsa Cancelar, quita ese ingreso y corrígelo antes de secar.`
@@ -4378,7 +4378,7 @@ export function App() {
       movement: "EXPENSE",
       category: "PAGO_CUADRILLA",
       amount: total,
-      description: `Pago cuadrilla ${laborForm.worker_group.trim()}: ${sacks} sacos @ $${price.toFixed(2)}`
+      description: `Pago cuadrilla ${laborForm.worker_group.trim()}: ${sacks} sacos @ $${price.enReal()}`
     });
     setLaborForm({ worker_group: "", sacks_moved: "", price_per_sack: "" });
     addToast(`Pago de cuadrilla registrado (${money(total)})`, "success");
@@ -4921,10 +4921,10 @@ export function App() {
   function imprimirReciboBajada(r: BajadaResumen, pagado: boolean) {
     const esc = (t: unknown) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
     const f = (iso: string | null | undefined) => iso ? new Date(`${String(iso).slice(0, 10)}T12:00:00`).toLocaleDateString("es-EC") : "—";
-    const resumen = r.por_trabajador.map((t) => `<tr><td><b>${esc(t.trabajador)}</b></td><td class="n">${t.tickets}</td><td class="n">${t.qq.toFixed(2)}</td><td class="n"><b>${money(t.monto)}</b></td><td class="firma"></td></tr>`).join("");
+    const resumen = r.por_trabajador.map((t) => `<tr><td><b>${esc(t.trabajador)}</b></td><td class="n">${t.tickets}</td><td class="n">${t.qq.enReal()}</td><td class="n"><b>${money(t.monto)}</b></td><td class="firma"></td></tr>`).join("");
     const detalle = r.por_trabajador.map((t) => {
       const filas = r.detalle.filter((d) => d.trabajador === t.trabajador).map((d) =>
-        `<tr><td>${f(d.fecha)}</td><td>#${esc(d.numero ?? "—")}</td><td>${esc(d.cliente ?? "—")}</td><td>${esc(d.placa ?? "—")}</td><td class="n">${d.qq.toFixed(2)}</td><td class="n">${money(d.tarifa)}</td><td class="n">${money(d.monto)}</td></tr>`).join("");
+        `<tr><td>${f(d.fecha)}</td><td>#${esc(d.numero ?? "—")}</td><td>${esc(d.cliente ?? "—")}</td><td>${esc(d.placa ?? "—")}</td><td class="n">${d.qq.enReal()}</td><td class="n">${money(d.tarifa)}</td><td class="n">${money(d.monto)}</td></tr>`).join("");
       return `<h3>${esc(t.trabajador)} · ${money(t.monto)}</h3><table><thead><tr><th>Fecha</th><th>Ticket</th><th>Cliente</th><th>Placa</th><th class="n">QQ</th><th class="n">Tarifa</th><th class="n">Monto</th></tr></thead><tbody>${filas}</tbody></table>`;
     }).join("");
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>Recibo bajada de carro</title><style>
@@ -4948,7 +4948,7 @@ export function App() {
       <div class="p">Tickets del ${f(r.desde)} al ${f(r.hasta)} · <span class="est">${pagado ? `PAGADO ${r.paid_at ? new Date(r.paid_at).toLocaleString("es-EC") : ""}` : "PENDIENTE DE PAGO"}</span></div>
       <table><thead><tr><th>Trabajador</th><th class="n">Tickets</th><th class="n">QQ</th><th class="n">Le toca</th><th>Firma (recibí conforme)</th></tr></thead>
         <tbody>${resumen}</tbody>
-        <tfoot><tr><td>TOTAL · ${r.por_trabajador.length} persona(s)</td><td class="n">${r.tickets}</td><td class="n">${r.por_trabajador.reduce((a, t) => a + t.qq, 0).toFixed(2)}</td><td class="n">${money(r.total)}</td><td></td></tr></tfoot>
+        <tfoot><tr><td>TOTAL · ${r.por_trabajador.length} persona(s)</td><td class="n">${r.tickets}</td><td class="n">${r.por_trabajador.reduce((a, t) => a + t.qq, 0).enReal()}</td><td class="n">${money(r.total)}</td><td></td></tr></tfoot>
       </table>
       <div class="t" style="font-size:12px;margin-top:18px">DETALLE POR TRABAJADOR</div>
       ${detalle}
@@ -5068,7 +5068,7 @@ export function App() {
       const t = await apiGet<{ precio_por_qq: number } | null>(`/pilado/tarifa-vigente?socio_id=${socioId}&servicio=PILADO&fecha=${fecha}`);
       if (t && typeof t.precio_por_qq === "number") {
         setPiladoForm((f) => ({ ...f, rate_per_qq: String(t.precio_por_qq) }));
-        setTarifaVigenteHint(`Tarifa vigente: $${t.precio_por_qq.toFixed(2)}/QQ (editable)`);
+        setTarifaVigenteHint(`Tarifa vigente: $${t.precio_por_qq.enReal()}/QQ (editable)`);
       } else {
         setTarifaVigenteHint("Sin tarifa configurada para este socio (escríbela manual)");
       }
@@ -5392,7 +5392,7 @@ export function App() {
     const batch = selectionBatches.find((b) => b.id === batchId);
     const totalRecibido = outputs.reduce((sum, o) => sum + o.quantity, 0);
     if (batch && totalRecibido > Number(batch.input_qq) + 0.001) {
-      addToast(`Lo recibido (${totalRecibido.toFixed(2)} QQ) supera lo enviado (${Number(batch.input_qq).toFixed(2)} QQ)`, "error");
+      addToast(`Lo recibido (${totalRecibido.enReal()} QQ) supera lo enviado (${Number(batch.input_qq).enReal()} QQ)`, "error");
       return;
     }
     const cierre = await apiPost<{ sacos_propios?: Array<{ tipo: string; sacos: number; nuevo_stock: number }> }>(`/selection/batches/${batchId}/finish`, { outputs });
@@ -5665,9 +5665,9 @@ export function App() {
     if (!cuadSummary || cuadSummary.rows.length === 0) { addToast("No hay datos para imprimir", "warn"); return; }
     const filas = cuadSummary.rows.map((r) => `
       <tr><td>${r.worker_name || "(sin nombre)"}</td><td class="r">${r.entradas}</td>
-      <td class="r">$${r.total.toFixed(2)}</td>
-      <td class="r">${r.anticipos > 0 ? "-$" + r.anticipos.toFixed(2) : "—"}</td>
-      <td class="r"><strong>$${r.neto.toFixed(2)}</strong></td></tr>`).join("");
+      <td class="r">$${r.total.enReal()}</td>
+      <td class="r">${r.anticipos > 0 ? "-$" + r.anticipos.enReal() : "—"}</td>
+      <td class="r"><strong>$${r.neto.enReal()}</strong></td></tr>`).join("");
     const html = `<html><head><meta charset="utf-8"><title>Nómina cuadrilla</title><style>
       body{font-family:Arial,sans-serif;font-size:13px;margin:14mm}
       h1{font-size:18px;margin:0 0 2px;text-align:center}
@@ -5688,9 +5688,9 @@ export function App() {
         <thead><tr><th>Trabajador</th><th class="r">Trabajos</th><th class="r">Ganado</th><th class="r">Anticipos</th><th class="r">Neto a pagar</th></tr></thead>
         <tbody>${filas}</tbody>
         <tfoot><tr><td>TOTALES</td><td class="r">${cuadSummary.rows.reduce((s, r) => s + r.entradas, 0)}</td>
-          <td class="r">$${cuadSummary.total_general.toFixed(2)}</td>
-          <td class="r">${cuadSummary.total_anticipos > 0 ? "-$" + cuadSummary.total_anticipos.toFixed(2) : "—"}</td>
-          <td class="r">$${cuadSummary.total_neto.toFixed(2)}</td></tr></tfoot>
+          <td class="r">$${cuadSummary.total_general.enReal()}</td>
+          <td class="r">${cuadSummary.total_anticipos > 0 ? "-$" + cuadSummary.total_anticipos.enReal() : "—"}</td>
+          <td class="r">$${cuadSummary.total_neto.enReal()}</td></tr></tfoot>
       </table>
     </body></html>`;
     const w = window.open("", "_blank", "width=640,height=700");
@@ -5720,8 +5720,8 @@ export function App() {
         <td>${esc(String(e.work_date).slice(0, 10))}</td>
         <td>${esc(actividad)}</td>
         <td class="r">${Number(e.quantity)}</td>
-        <td class="r">$${Number(e.unit_rate).toFixed(2)}</td>
-        <td class="r"><strong>$${Number(e.subtotal).toFixed(2)}</strong></td>
+        <td class="r">$${Number(e.unit_rate).enReal()}</td>
+        <td class="r"><strong>$${Number(e.subtotal).enReal()}</strong></td>
       </tr>`;
     }).join("");
     const html = `<html><head><meta charset="utf-8"><title>Rol de Pago Cuadrilla · ${esc(nombre)}</title><style>
@@ -5752,9 +5752,9 @@ export function App() {
         <tbody>${filas}</tbody>
       </table>
       <table class="tot">
-        <tr><td>Ganado (${entradas.length} registro(s))</td><td class="r">$${ganado.toFixed(2)}</td></tr>
-        <tr><td>Anticipos descontados</td><td class="r">${anticipos > 0 ? "-$" + anticipos.toFixed(2) : "$0.00"}</td></tr>
-        <tr class="neto"><td>NETO A PAGAR</td><td class="r">$${neto.toFixed(2)}</td></tr>
+        <tr><td>Ganado (${entradas.length} registro(s))</td><td class="r">$${ganado.enReal()}</td></tr>
+        <tr><td>Anticipos descontados</td><td class="r">${anticipos > 0 ? "-$" + anticipos.enReal() : "$0.00"}</td></tr>
+        <tr class="neto"><td>NETO A PAGAR</td><td class="r">$${neto.enReal()}</td></tr>
       </table>
       <div class="sig"><hr><span>Recibí conforme — ${esc(nombre)}</span></div>
     </body></html>`;
@@ -5779,7 +5779,7 @@ export function App() {
   // Imprimir / Excel de la pestaña activa: usa exactamente las columnas que se
   // ven en pantalla (nominaColumnas) y solo las filas ya filtradas por rol.
   function nominaExportData(grupo: NominaGrupo, rows: WorkerSummary[]): { title: string; headers: string[]; rows: (string | number)[][]; totals: (string | number)[] } {
-    const m2 = (n: number) => Number(n || 0).toFixed(2);
+    const m2 = (n: number) => Number(n || 0).enReal();
     const cols = nominaColumnas(grupo);
     const body = rows.map((r) => [
       nominaRolLabel(r.worker_role), r.worker_name,
@@ -5848,13 +5848,13 @@ export function App() {
     const cantNum = Number(r.cantidad_num) || 0;
     const tarNum = Number(r.tarifa_num) || 0;
     const real = cantNum > 0 ? cantNum : (tarNum > 0 ? Number(r.subtotal) / tarNum : 0);
-    return `${real.toFixed(2)} QQ`;
+    return `${real.enReal()} QQ`;
   }
 
   function reciboFilasHtml(data: ReciboSemanal): string {
     if (!data.rows.length) return `<tr><td colspan="5" style="text-align:center;color:#888">Sin registros en el período</td></tr>`;
     return data.rows.map((r) =>
-      `<tr><td>${fmtFechaRecibo(r.fecha)}</td><td>${r.concepto}</td><td class="r">${cantidadReciboTxt(r)}</td><td class="r">${r.tarifa}</td><td class="r">$${r.subtotal.toFixed(2)}</td></tr>`
+      `<tr><td>${fmtFechaRecibo(r.fecha)}</td><td>${r.concepto}</td><td class="r">${cantidadReciboTxt(r)}</td><td class="r">${r.tarifa}</td><td class="r">$${r.subtotal.enReal()}</td></tr>`
     ).join("");
   }
 
@@ -5889,9 +5889,9 @@ export function App() {
         <tbody>${reciboFilasHtml(data)}</tbody>
       </table>
       <div class="cierre">
-        <div class="row"><span>(+) Total ganado</span><strong>$${t.earned.toFixed(2)}</strong></div>
-        <div class="row disc"><span>(−) Anticipos</span><strong>-$${t.advances.toFixed(2)}</strong></div>
-        <div class="row net"><span>(=) LÍQUIDO A PAGAR</span><strong>$${t.net.toFixed(2)}</strong></div>
+        <div class="row"><span>(+) Total ganado</span><strong>$${t.earned.enReal()}</strong></div>
+        <div class="row disc"><span>(−) Anticipos</span><strong>-$${t.advances.enReal()}</strong></div>
+        <div class="row net"><span>(=) LÍQUIDO A PAGAR</span><strong>$${t.net.enReal()}</strong></div>
       </div>
       <div class="sigs">
         <div class="sig"><hr><span>Entregado por (Caja / Admin)</span></div>
@@ -5907,7 +5907,7 @@ export function App() {
     if (!w) { addToast("El navegador bloqueó la ventana de impresión", "error"); return; }
     const t = data.totals;
     const filas = (data.rows.length ? data.rows : []).map((r) =>
-      `<div class="it"><div class="l1"><span>${fmtFechaRecibo(r.fecha)}</span><span>$${r.subtotal.toFixed(2)}</span></div><div class="l2">${r.concepto} · ${cantidadReciboTxt(r)} · ${r.tarifa}</div></div>`
+      `<div class="it"><div class="l1"><span>${fmtFechaRecibo(r.fecha)}</span><span>$${r.subtotal.enReal()}</span></div><div class="l2">${r.concepto} · ${cantidadReciboTxt(r)} · ${r.tarifa}</div></div>`
     ).join("") || `<div class="l2" style="text-align:center">Sin registros</div>`;
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Recibo ${data.worker.name}</title><style>
       @page{size:80mm auto;margin:5mm} *{box-sizing:border-box}
@@ -5927,9 +5927,9 @@ export function App() {
       <div class="meta"><b>Período:</b> ${reciboPeriodo(data)}</div>
       <div style="margin-top:6px">${filas}</div>
       <div class="cierre">
-        <div class="row"><span>(+) Ganado</span><span>$${t.earned.toFixed(2)}</span></div>
-        <div class="row disc"><span>(−) Anticipos</span><span>-$${t.advances.toFixed(2)}</span></div>
-        <div class="row net"><span>LÍQUIDO</span><span>$${t.net.toFixed(2)}</span></div>
+        <div class="row"><span>(+) Ganado</span><span>$${t.earned.enReal()}</span></div>
+        <div class="row disc"><span>(−) Anticipos</span><span>-$${t.advances.enReal()}</span></div>
+        <div class="row net"><span>LÍQUIDO</span><span>$${t.net.enReal()}</span></div>
       </div>
       <div class="sig"><hr>Entregado por (Caja/Admin)</div>
       <div class="sig"><hr>Recibido Conforme (Trabajador)</div>
@@ -5965,24 +5965,24 @@ export function App() {
         ? `<td>Fecha</td><td class="r">Piladas</td><td class="r">QQ</td><td class="r">Ganado</td>`
         : `<td>Fecha</td><td class="r">Ganado</td>`;
       const fila = (d: DailyRow) => isEstibador
-        ? `<td>${fmtFecha(d.fecha)}</td><td class="r">${d.piladas}</td><td class="r">${Number(d.tulas).toFixed(0)}</td><td class="r">${Number(d.arrocillo).toFixed(2)} QQ</td><td class="r">${Number(d.ganado).toFixed(2)}</td>`
+        ? `<td>${fmtFecha(d.fecha)}</td><td class="r">${d.piladas}</td><td class="r">${Number(d.tulas).enReal(0, 3)}</td><td class="r">${Number(d.arrocillo).enReal()} QQ</td><td class="r">${Number(d.ganado).enReal()}</td>`
         : isPilador
-        ? `<td>${fmtFecha(d.fecha)}</td><td class="r">${d.piladas}</td><td class="r">${Number(d.qq).toFixed(2)}</td><td class="r">$${Number(d.ganado).toFixed(2)}</td>`
-        : `<td>${fmtFecha(d.fecha)}</td><td class="r">$${Number(d.ganado).toFixed(2)}</td>`;
+        ? `<td>${fmtFecha(d.fecha)}</td><td class="r">${d.piladas}</td><td class="r">${Number(d.qq).enReal()}</td><td class="r">$${Number(d.ganado).enReal()}</td>`
+        : `<td>${fmtFecha(d.fecha)}</td><td class="r">$${Number(d.ganado).enReal()}</td>`;
       const colspan = isEstibador ? 4 : isPilador ? 3 : 1;
       detalleDiario = `<h4>Detalle por día</h4>
         <table>
           <tr class="th">${head}</tr>
           ${detail.rows.map((d) => `<tr>${fila(d)}</tr>`).join("")}
-          <tr class="tot"><td colspan="${colspan}">Total</td><td class="r">$${detail.rows.reduce((s, d) => s + Number(d.ganado), 0).toFixed(2)}</td></tr>
+          <tr class="tot"><td colspan="${colspan}">Total</td><td class="r">$${detail.rows.reduce((s, d) => s + Number(d.ganado), 0).enReal()}</td></tr>
         </table>`;
     } else {
       // Sin detalle: se muestra el resumen agregado como antes.
       const resumen = row.worker_role === "SECADOR"
         ? `<tr><td>Días trabajados</td><td class="r">${row.cnt}</td></tr>`
         : isEstibador
-        ? `<tr><td>Piladas</td><td class="r">${row.cnt}</td></tr><tr><td>Tulas</td><td class="r">${Number(row.tulas ?? 0).toFixed(0)}</td></tr><tr><td>Arrocillo</td><td class="r">${Number(row.arrocillo ?? 0).toFixed(2)} QQ</td></tr>`
-        : `<tr><td>Piladas</td><td class="r">${row.cnt}</td></tr><tr><td>Quintales de arroz</td><td class="r">${Number(row.qq).toFixed(2)} QQ</td></tr><tr><td>Sacas (@)</td><td class="r">${Number(row.sacas).toFixed(0)}</td></tr>`;
+        ? `<tr><td>Piladas</td><td class="r">${row.cnt}</td></tr><tr><td>Tulas</td><td class="r">${Number(row.tulas ?? 0).enReal(0, 3)}</td></tr><tr><td>Arrocillo</td><td class="r">${Number(row.arrocillo ?? 0).enReal()} QQ</td></tr>`
+        : `<tr><td>Piladas</td><td class="r">${row.cnt}</td></tr><tr><td>Quintales de arroz</td><td class="r">${Number(row.qq).enReal()} QQ</td></tr><tr><td>Sacas (@)</td><td class="r">${Number(row.sacas).enReal(0, 3)}</td></tr>`;
       detalleDiario = `<table>${resumen}</table>`;
     }
 
@@ -6009,9 +6009,9 @@ export function App() {
       <div class="meta"><div><strong>Trabajador:</strong> ${row.worker_name} (${roleLabel})</div><div><strong>Período:</strong> ${from} al ${to}</div></div>
       ${detalleDiario}
       <table>
-        <tr><td>Total ganado</td><td class="r">$${earned.toFixed(2)}</td></tr>
-        ${adv > 0 ? `<tr class="disc"><td>Anticipos recibidos</td><td class="r">-$${adv.toFixed(2)}</td></tr>` : ""}
-        <tr class="tot"><td>NETO A PAGAR</td><td class="r">$${net.toFixed(2)}</td></tr>
+        <tr><td>Total ganado</td><td class="r">$${earned.enReal()}</td></tr>
+        ${adv > 0 ? `<tr class="disc"><td>Anticipos recibidos</td><td class="r">-$${adv.enReal()}</td></tr>` : ""}
+        <tr class="tot"><td>NETO A PAGAR</td><td class="r">$${net.enReal()}</td></tr>
       </table>
       <div class="sig"><hr/><span>Firma del trabajador</span></div>
     </body></html>`;
@@ -6282,7 +6282,7 @@ export function App() {
 
   function getReportExport(): { title: string; headers: string[]; rows: (string | number)[][]; totals?: (string | number)[]; rango?: string } | null {
     if (!reportRows) return null;
-    const m2 = (n: number) => Number(n || 0).toFixed(2);
+    const m2 = (n: number) => Number(n || 0).enReal();
     const { kind, data } = reportRows;
     if (kind === "resumen") {
       const s = data as ReportSummary;
@@ -6984,7 +6984,7 @@ export function App() {
     const origen = entry.accionista_name ?? "sin asignar";
     const etiqueta = entry.numero_bascula ? `#${entry.numero_bascula}` : entry.ticket_number;
     const ok = window.confirm(
-      `¿Pasar el ingreso ${etiqueta} (${entry.farmer_name ?? "sin agricultor"}, ${Number(entry.quintals ?? 0).toFixed(2)} QQ) ` +
+      `¿Pasar el ingreso ${etiqueta} (${entry.farmer_name ?? "sin agricultor"}, ${Number(entry.quintals ?? 0).enReal()} QQ) ` +
       `de ${origen} a ${destino}?\n\nSe mueve también su cáscara en el inventario.`
     );
     if (!ok) return;
@@ -7375,9 +7375,9 @@ export function App() {
       return `<tr>
         <td>${(r.fecha || "").slice(0, 10)}</td>
         <td>${r.concepto}</td>
-        <td class="num">${r.monto.toFixed(2)}</td>
-        <td class="num">${abonos.toFixed(2)}</td>
-        <td class="num">${r.saldo.toFixed(2)}</td>
+        <td class="num">${r.monto.enReal()}</td>
+        <td class="num">${abonos.enReal()}</td>
+        <td class="num">${r.saldo.enReal()}</td>
       </tr>`;
     }).join("");
     const totMonto = rows.reduce((s, r) => s + r.monto, 0);
@@ -7404,7 +7404,7 @@ export function App() {
       <table>
         <thead><tr><th>Fecha</th><th>Concepto</th><th class="num">Monto</th><th class="num">Abonos</th><th class="num">Saldo</th></tr></thead>
         <tbody>${filas}</tbody>
-        <tfoot><tr><td colspan="2">TOTAL</td><td class="num">${totMonto.toFixed(2)}</td><td class="num">${totAbonos.toFixed(2)}</td><td class="num">${totSaldo.toFixed(2)}</td></tr></tfoot>
+        <tfoot><tr><td colspan="2">TOTAL</td><td class="num">${totMonto.enReal()}</td><td class="num">${totAbonos.enReal()}</td><td class="num">${totSaldo.enReal()}</td></tr></tfoot>
       </table>
       <p style="margin-top:14px;color:#555">Emitido el ${new Date().toLocaleString("es-EC")}</p>
     </body></html>`;
@@ -7486,8 +7486,8 @@ export function App() {
     const qqStr = formatoCantidad(v.qq);
     // Texto de nota/descripción: por libra, el MISMO formato de siempre.
     const detalle = v.modo === "QQ"
-      ? `${qqStr} QQ (${librasStr} lb) @ $${v.precioAplicado.toFixed(2)}/QQ`
-      : `${librasStr} lb @ $${v.precioLibra.toFixed(2)}/lb`;
+      ? `${qqStr} QQ (${librasStr} lb) @ $${v.precioAplicado.enReal()}/QQ`
+      : `${librasStr} lb @ $${v.precioLibra.enReal()}/lb`;
 
     // Descuento en kárdex (Producto Terminado / Arroz Pilado). Como apiFetch NO
     // lanza en error, revisamos res.ok y abortamos ANTES de tocar la caja o
@@ -8431,10 +8431,10 @@ export function App() {
         m.maintenance_type,
         m.description || "",
         m.provider || "",
-        Number(m.amount || 0).toFixed(2),
-        Number(m.labor_cost || 0).toFixed(2),
-        Number(m.parts_cost || 0).toFixed(2),
-        Number(m.repuestos_stock_valor || 0).toFixed(2),
+        Number(m.amount || 0).enReal(),
+        Number(m.labor_cost || 0).enReal(),
+        Number(m.parts_cost || 0).enReal(),
+        Number(m.repuestos_stock_valor || 0).enReal(),
         m.repuestos_detalle || "",
         m.repuestos_comprados || ""
       ]);
@@ -8462,7 +8462,7 @@ export function App() {
     c.supplier_name || "",
     c.payment_type === "CASH" ? "Contado" : "Credito",
     c.status,
-    Number(c.total_amount || 0).toFixed(2)
+    Number(c.total_amount || 0).enReal()
   ]);
   const exportPurchCsv = () => exportReportCsv(PURCH_HEADERS, purchReportRows(), "compras.csv");
   const printPurchReport = () => printReport("Reporte de Compras", PURCH_HEADERS, purchReportRows());
@@ -8483,7 +8483,7 @@ export function App() {
     m.product_name || "",
     m.warehouse_name || "",
     m.movement,
-    Number(m.quantity || 0).toFixed(2),
+    Number(m.quantity || 0).enReal(),
     m.reference_type || ""
   ]);
   const exportInvCsv = () => exportReportCsv(INV_HEADERS, invReportRows(), "inventario_movimientos.csv");
@@ -8749,20 +8749,20 @@ export function App() {
         <td>${m.description ?? ""}</td>
         <td>${m.proveedor_nombre ?? ""}</td>
         <td>${isIncome ? "" : "Contado"}</td>
-        <td style="color:green">${isIncome ? "$"+Number(m.amount).toFixed(2) : ""}</td>
-        <td style="color:#c00">${!isIncome ? "$"+Number(m.amount).toFixed(2) : ""}</td>
+        <td style="color:green">${isIncome ? "$"+Number(m.amount).enReal() : ""}</td>
+        <td style="color:#c00">${!isIncome ? "$"+Number(m.amount).enReal() : ""}</td>
       </tr>`;
     }).join("");
     // Egresos A CRÉDITO: informativos, no suman ni restan al saldo.
     const creditosVig = cajaCreditos.filter((c) => c.status !== "CANCELLED");
     const creditosHtml = cajaCreditos.length ? `<h4 style="margin:16px 0 4px;color:#6d28d9">Egresos a crédito (Cuentas por Pagar · no afectan el saldo de caja)</h4>
     <table><thead><tr><th>#</th><th>Fecha/Hora</th><th>Categoría</th><th>Concepto</th><th>Proveedor</th><th>Estado</th><th>Monto</th></tr></thead><tbody>${
-      cajaCreditos.map((c, i) => `<tr><td>${i + 1}</td><td>${new Date(c.created_at).toLocaleString("es-EC")}</td><td>${c.categoria ?? ""}</td><td>${c.description ?? ""}</td><td>${c.proveedor_nombre ?? ""}</td><td>${c.status === "CANCELLED" ? "ANULADO" : Number(c.balance) < 0.005 ? "Pagada" : "Por pagar"}</td><td>$${Number(c.amount).toFixed(2)}</td></tr>`).join("")
-    }</tbody><tfoot><tr class="tot"><td colspan="6">TOTAL A CRÉDITO</td><td>$${creditosVig.reduce((s, c) => s + Number(c.amount), 0).toFixed(2)}</td></tr></tfoot></table>` : "";
-    const balance = (opening + cashSummary.total_income - cashSummary.total_expense).toFixed(2);
+      cajaCreditos.map((c, i) => `<tr><td>${i + 1}</td><td>${new Date(c.created_at).toLocaleString("es-EC")}</td><td>${c.categoria ?? ""}</td><td>${c.description ?? ""}</td><td>${c.proveedor_nombre ?? ""}</td><td>${c.status === "CANCELLED" ? "ANULADO" : Number(c.balance) < 0.005 ? "Pagada" : "Por pagar"}</td><td>$${Number(c.amount).enReal()}</td></tr>`).join("")
+    }</tbody><tfoot><tr class="tot"><td colspan="6">TOTAL A CRÉDITO</td><td>$${creditosVig.reduce((s, c) => s + Number(c.amount), 0).enReal()}</td></tr></tfoot></table>` : "";
+    const balance = (opening + cashSummary.total_income - cashSummary.total_expense).enReal();
     const saldoLinea = openingCash > 0 || openingBank > 0
-      ? `Efectivo: $${openingCash.toFixed(2)} · Banco: $${openingBank.toFixed(2)} · Total: $${opening.toFixed(2)}`
-      : `Saldo inicial: $${opening.toFixed(2)}`;
+      ? `Efectivo: $${openingCash.enReal()} · Banco: $${openingBank.enReal()} · Total: $${opening.enReal()}`
+      : `Saldo inicial: $${opening.enReal()}`;
     const html = `<html><head><title>Cierre de Caja</title>
     <style>body{font-family:Arial;font-size:12px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:4px 8px}th{background:#16a34a;color:#fff}.tot{font-weight:bold}</style>
     </head><body>
@@ -8773,7 +8773,7 @@ export function App() {
     <table><thead><tr><th>#</th><th>Fecha/Hora</th><th>Categoría</th><th>Descripción</th><th>Proveedor</th><th>Pago</th><th>Ingreso</th><th>Egreso</th></tr></thead>
     <tbody>${rows}</tbody>
     <tfoot>
-      <tr class="tot"><td colspan="6">TOTALES</td><td style="color:green">$${cashSummary.total_income.toFixed(2)}</td><td style="color:#c00">$${cashSummary.total_expense.toFixed(2)}</td></tr>
+      <tr class="tot"><td colspan="6">TOTALES</td><td style="color:green">$${cashSummary.total_income.enReal()}</td><td style="color:#c00">$${cashSummary.total_expense.enReal()}</td></tr>
       <tr class="tot"><td colspan="6">SALDO FINAL</td><td colspan="2">$${balance}</td></tr>
     </tfoot></table>
     ${creditosHtml}
@@ -8909,18 +8909,18 @@ export function App() {
           apiGet<{ final_balance: number }>("/cash/registers/previous-balance?tipo=EFECTIVO"),
           apiGet<{ final_balance: number }>("/cash/registers/previous-balance?tipo=BANCO")
         ]);
-        setNewCajaCash(Math.max(0, cash.final_balance).toFixed(2));
-        setNewCajaBank(Math.max(0, bank.final_balance).toFixed(2));
+        setNewCajaCash(Math.max(0, cash.final_balance).enReal());
+        setNewCajaBank(Math.max(0, bank.final_balance).enReal());
         return;
       }
       const data = await apiGet<{ final_balance: number }>(`/cash/registers/previous-balance?tipo=${tipo}`);
       const total = data.final_balance;
       if (total <= 0) return;
       if (tipo === "EFECTIVO") {
-        setNewCajaCash(total.toFixed(2));
+        setNewCajaCash(total.enReal());
         setNewCajaBank("0");
       } else {
-        setNewCajaBank(total.toFixed(2));
+        setNewCajaBank(total.enReal());
         setNewCajaCash("0");
       }
     } catch {
@@ -9208,7 +9208,7 @@ export function App() {
       }
     }
     if (totalAplicado === 0) throw new Error("No hay anticipos pendientes para este agricultor");
-    addToast(`Anticipo aplicado: $${totalAplicado.toFixed(2)} descontados`, "success");
+    addToast(`Anticipo aplicado: $${totalAplicado.enReal()} descontados`, "success");
     const [liqRows] = await Promise.all([apiGet<LiqRecord[]>("/liquidations")]);
     setLiquidacionesList(liqRows);
     await refresh();
@@ -9227,7 +9227,7 @@ export function App() {
   // Confirma y pide el MOTIVO (queda registrado). Revierte por cada liquidación.
   async function anularLiquidacion(b: LiqBatch) {
     const motivo = window.prompt(
-      `Anular la liquidación de ${b.farmer_name} (neto $${b.net_total.toFixed(2)}).\n\n` +
+      `Anular la liquidación de ${b.farmer_name} (neto $${b.net_total.enReal()}).\n\n` +
       "Esto revierte los pagos de fomento, la deuda inter-socios y la cuenta por pagar. " +
       "NO se puede si ya hay pagos al agricultor.\n\nEscribe el MOTIVO (obligatorio, queda registrado):"
     );
@@ -9263,7 +9263,7 @@ export function App() {
   function openLiqEdit(b: LiqBatch) {
     const rows = liquidacionesList
       .filter((r) => b.liquidation_ids.includes(r.id))
-      .map((r) => ({ id: r.id, lot_code: r.lot_code, price: String(Number(r.price_per_quintal).toFixed(2)), other: String(Number(r.other_discounts).toFixed(2)) }));
+      .map((r) => ({ id: r.id, lot_code: r.lot_code, price: String(Number(r.price_per_quintal).enReal()), other: String(Number(r.other_discounts).enReal()) }));
     setLiqEditRows(rows);
     setLiqEdit(b);
   }
@@ -10025,7 +10025,7 @@ export function App() {
       const file = new File([blob], nombre, { type: "image/png" });
       const gq = c.qq > 0 ? c.gas / c.qq : 0;
       const dq = c.qq > 0 ? c.diesel / c.qq : 0;
-      const texto = `⛽ Combustible Motor ${c.motor}: ${money(gq)} gas + ${money(dq)} diésel por QQ (${money(c.gas)} gas + ${money(c.diesel)} diésel ÷ ${c.qq.toFixed(2)} QQ)`;
+      const texto = `⛽ Combustible Motor ${c.motor}: ${money(gq)} gas + ${money(dq)} diésel por QQ (${money(c.gas)} gas + ${money(c.diesel)} diésel ÷ ${c.qq.enReal()} QQ)`;
       const nav = navigator as Navigator & { canShare?: (d: unknown) => boolean };
       const ClipItem = (window as unknown as { ClipboardItem?: typeof ClipboardItem }).ClipboardItem;
       const descargar = () => {
@@ -10368,7 +10368,7 @@ export function App() {
             <div className="costoQqTotal">
               <small>Combustible por QQ</small>
               <strong>{money(gasPorQq)} gas + {money(dieselPorQq)} diésel</strong>
-              <span className="muted">{money(gasCostoTotal)} gas + {money(dieselCosto)} diésel ÷ {qqMotor.toFixed(2)} QQ</span>
+              <span className="muted">{money(gasCostoTotal)} gas + {money(dieselCosto)} diésel ÷ {qqMotor.enReal()} QQ</span>
             </div>
           </div>
         )}
@@ -10709,7 +10709,7 @@ export function App() {
       `<tr${bold ? ' style="font-weight:700;border-top:1px solid #cbd5e1"' : ""}><td>${k}</td><td style="text-align:right">${money(v)}</td></tr>`;
     const ind = Object.entries(f.indicadores).map(([k, v]) => {
       const nombre = k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-      const val = v.sin_deuda ? "Sin Deuda (N/A)" : (Number(v.valor) || 0).toFixed(2);
+      const val = v.sin_deuda ? "Sin Deuda (N/A)" : (Number(v.valor) || 0).enReal();
       const estado = v.sin_deuda ? "✓ OK" : (v.ok ? "✓ OK" : "⚠ Revisar");
       return `<tr><td>${nombre}</td><td style="text-align:right">${val}</td><td>${v.meta}</td><td>${estado}</td></tr>`;
     }).join("");
@@ -10818,7 +10818,7 @@ export function App() {
       }).then((r) => { if (!r.ok) throw new Error("No se pudo guardar el precio de venta"); });
       // Refleja en memoria sin recargar toda la lista.
       setProductionHistory((cur) => cur.map((it) => it.id === batchId ? { ...it, [campo]: num } : it));
-      addToast(num != null ? `Precio guardado: $${num.toFixed(2)}/QQ` : "Precio borrado", "success");
+      addToast(num != null ? `Precio guardado: $${num.enReal()}/QQ` : "Precio borrado", "success");
     } catch (err) {
       addToast(err instanceof Error ? err.message : "Error al guardar el precio", "error");
     }
@@ -10893,7 +10893,7 @@ export function App() {
       if (!blob) throw new Error("No se pudo generar la imagen");
       const nombre = `resumen-tunel-${rep.tunnel_number}.png`;
       const file = new File([blob], nombre, { type: "image/png" });
-      const texto = `🌀 Resumen de Secado — ${rep.dryer_name ?? "Secadora"} · Túnel ${rep.tunnel_number} · ${Number(rep.total_quintals ?? 0).toFixed(2)} QQ`;
+      const texto = `🌀 Resumen de Secado — ${rep.dryer_name ?? "Secadora"} · Túnel ${rep.tunnel_number} · ${Number(rep.total_quintals ?? 0).enReal()} QQ`;
       const nav = navigator as Navigator & { canShare?: (d: unknown) => boolean };
       const ClipItem = (window as unknown as { ClipboardItem?: typeof ClipboardItem }).ClipboardItem;
       if (nav.canShare && nav.canShare({ files: [file] }) && navigator.share) {
@@ -11486,7 +11486,7 @@ export function App() {
       return {
         cantidad: String(bultos),
         unidad: unidadGuiaDePresentacion(it.presentation_name),
-        descripcion: `${it.product_name}${it.presentation_name ? ` (${it.presentation_name})` : ""} - Total: ${qq.toFixed(2)} QQ`
+        descripcion: `${it.product_name}${it.presentation_name ? ` (${it.presentation_name})` : ""} - Total: ${qq.enReal()} QQ`
       };
     });
     setGuiaItems(items.length ? items : [{ cantidad: "", unidad: "QQ", descripcion: "" }]);
@@ -11526,7 +11526,7 @@ export function App() {
     const filas = order.items.map((it) => `
       <tr>
         <td class="c big">${bultosDe(it)}</td>
-        <td>${esc(it.product_name)}${it.presentation_name ? ` · ${esc(it.presentation_name)}` : ""} <small>(${(Number(it.quantity) || 0).toFixed(2)} QQ)</small></td>
+        <td>${esc(it.product_name)}${it.presentation_name ? ` · ${esc(it.presentation_name)}` : ""} <small>(${(Number(it.quantity) || 0).enReal()} QQ)</small></td>
         <td class="c chk">☐</td>
       </tr>`).join("");
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -11587,7 +11587,7 @@ export function App() {
     const fecha = new Date(String(b.service_date).slice(0, 10) + "T12:00:00").toLocaleDateString("es-EC", { year: "numeric", month: "long", day: "numeric" });
     const totalQq = (b.inputs || []).reduce((s, l) => s + Number(l.quantity), 0);
     const filas = (b.inputs || []).map((l) => `
-      <tr><td>${esc(l.product_name)}</td><td class="c">${Number(l.quantity).toFixed(2)} QQ</td></tr>`).join("");
+      <tr><td>${esc(l.product_name)}</td><td class="c">${Number(l.quantity).enReal()} QQ</td></tr>`).join("");
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
       <title>Ticket de Salida ${esc(b.batch_number)}</title>
       <style>
@@ -11623,10 +11623,10 @@ export function App() {
           <thead><tr><th>Producto</th><th class="c">Cantidad</th></tr></thead>
           <tbody>${filas}</tbody>
         </table>
-        <div class="tot">Total: ${totalQq.toFixed(2)} QQ</div>
+        <div class="tot">Total: ${totalQq.enReal()} QQ</div>
         <div class="cost">
-          <div class="row"><span class="k">Tarifa acordada:</span> <strong>$${Number(b.rate_per_qq).toFixed(2)} / QQ</strong></div>
-          <div class="row"><span class="k">Costo estimado:</span> <strong>$${Number(b.total_cost).toFixed(2)}</strong></div>
+          <div class="row"><span class="k">Tarifa acordada:</span> <strong>$${Number(b.rate_per_qq).enReal()} / QQ</strong></div>
+          <div class="row"><span class="k">Costo estimado:</span> <strong>$${Number(b.total_cost).enReal()}</strong></div>
         </div>
         <div class="sigs">
           <div class="sig"><hr><span>Entregado por (Bodega)</span></div>
@@ -11652,7 +11652,7 @@ export function App() {
       <tr>
         <td class="c">${bultos}</td>
         <td>${unidadGuiaDePresentacion(it.presentation_name)}${it.presentation_name ? ` de ${it.presentation_name}` : ""}</td>
-        <td>${it.product_name}${it.presentation_name ? ` (${it.presentation_name})` : ""} - Total: ${qq.toFixed(2)} QQ</td>
+        <td>${it.product_name}${it.presentation_name ? ` (${it.presentation_name})` : ""} - Total: ${qq.enReal()} QQ</td>
       </tr>`;
     }).join("");
     const esc = (s: string | null | undefined) => (s ?? "").replace(/</g, "&lt;");
@@ -11866,7 +11866,7 @@ export function App() {
         let line: LiqLine = {
           ...liqLineHeredada(base),
           lot_id: entry.id,
-          quintals: Number(entry.quintals ?? 0).toFixed(2),
+          quintals: Number(entry.quintals ?? 0).enReal(),
           flete_tipo: esPropia ? "propia" : "tercero",
           flete_activo_id: esPropia ? String(entry.flota_activo_id) : ""
         };
@@ -11885,7 +11885,7 @@ export function App() {
       return;
     }
     if (liqFomentoTotal > liqFomentoLifo.disponible + 0.005) {
-      addToast(`La asignacion a fomentos ($${liqFomentoTotal.toFixed(2)}) supera el disponible de la liquidacion ($${liqFomentoLifo.disponible.toFixed(2)}).`, "error");
+      addToast(`La asignacion a fomentos ($${liqFomentoTotal.enReal()}) supera el disponible de la liquidacion ($${liqFomentoLifo.disponible.enReal()}).`, "error");
       return;
     }
     type LiqApiResult = {
@@ -11995,9 +11995,9 @@ export function App() {
     setDiscountsOpen(false);
     // Confirma que los servicios propios quedaron pendientes en CxC de Campo.
     let cruceMsg = "";
-    if (cargosCampoTotal > 0.005) cruceMsg = ` · CxC Transporte: $${cargosCampoTotal.toFixed(2)} (${cargosCampoCantidad} cargo${cargosCampoCantidad === 1 ? "" : "s"})`;
-    if (fomentoCruceSocios > 0.005) cruceMsg += ` · Cruce inter-socios (fomento): $${fomentoCruceSocios.toFixed(2)}`;
-    if (saldoContraMonto > 0.005) cruceMsg += ` · ⚠️ Saldo en contra: nuevo fomento por $${saldoContraMonto.toFixed(2)}${saldoContraAcreedor ? ` (a favor de ${saldoContraAcreedor})` : ""}`;
+    if (cargosCampoTotal > 0.005) cruceMsg = ` · CxC Transporte: $${cargosCampoTotal.enReal()} (${cargosCampoCantidad} cargo${cargosCampoCantidad === 1 ? "" : "s"})`;
+    if (fomentoCruceSocios > 0.005) cruceMsg += ` · Cruce inter-socios (fomento): $${fomentoCruceSocios.enReal()}`;
+    if (saldoContraMonto > 0.005) cruceMsg += ` · ⚠️ Saldo en contra: nuevo fomento por $${saldoContraMonto.enReal()}${saldoContraAcreedor ? ` (a favor de ${saldoContraAcreedor})` : ""}`;
     setMessage(`${resultItems.length} lote(s) liquidado(s)${cruceMsg}`);
     await refresh();
   }
@@ -12019,13 +12019,13 @@ export function App() {
       // que recupera lo que se vendió (p. ej. 50, no los 5 QQ equivalentes).
       const precio = Number(it.unit_price);
       const cant = precio > 0 ? Number(it.total) / precio : Number(it.quantity);
-      const cantTxt = Number.isInteger(cant) ? String(cant) : cant.toFixed(2);
+      const cantTxt = Number.isInteger(cant) ? String(cant) : cant.enReal();
       return `
       <tr>
         <td>${it.product_name}</td>
         <td style="text-align:right">${cantTxt}</td>
-        <td style="text-align:right">$${precio.toFixed(2)}</td>
-        <td style="text-align:right">$${Number(it.total).toFixed(2)}</td>
+        <td style="text-align:right">$${precio.enReal()}</td>
+        <td style="text-align:right">$${Number(it.total).enReal()}</td>
       </tr>`;
     }).join("");
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -12061,7 +12061,7 @@ export function App() {
       <table>
         <thead><tr><th>Producto</th><th style="text-align:right">Cantidad</th><th style="text-align:right">Precio</th><th style="text-align:right">Total</th></tr></thead>
         <tbody>${filas}</tbody>
-        <tfoot><tr class="tot"><td colspan="3">TOTAL</td><td style="text-align:right">$${Number(venta.total_amount).toFixed(2)}</td></tr></tfoot>
+        <tfoot><tr class="tot"><td colspan="3">TOTAL</td><td style="text-align:right">$${Number(venta.total_amount).enReal()}</td></tr></tfoot>
       </table>
       ${venta.payment_status !== "PAID" ? `<p style="color:#b91c1c;font-weight:700">VENTA A CRÉDITO — saldo pendiente</p>` : ""}
       <div class="sigs">
@@ -12103,8 +12103,8 @@ export function App() {
     }
     const fomentoRows = fomentoRecibo && (fomentoRecibo.descuentos.length || fomentoRecibo.nuevos_saldos.length)
       ? `<tr><td colspan="2" style="padding-top:6px;font-weight:bold;color:#15803d">Amortización de Fomentos (LIFO)</td></tr>`
-        + fomentoRecibo.descuentos.map((d) => `<tr><td class="lbl">Descuento a ${d.accionista_nombre}:</td><td class="val disc">-$${Number(d.monto).toFixed(2)}</td></tr>`).join("")
-        + fomentoRecibo.nuevos_saldos.map((n) => `<tr><td class="lbl">Nuevo saldo pendiente (${n.accionista_nombre}):</td><td class="val" style="color:#b45309">$${Number(n.monto).toFixed(2)}</td></tr>`).join("")
+        + fomentoRecibo.descuentos.map((d) => `<tr><td class="lbl">Descuento a ${d.accionista_nombre}:</td><td class="val disc">-$${Number(d.monto).enReal()}</td></tr>`).join("")
+        + fomentoRecibo.nuevos_saldos.map((n) => `<tr><td class="lbl">Nuevo saldo pendiente (${n.accionista_nombre}):</td><td class="val" style="color:#b45309">$${Number(n.monto).enReal()}</td></tr>`).join("")
       : "";
 
     const qqTotal = b.lots.reduce((s, l) => s + l.quintals, 0);
@@ -12128,9 +12128,9 @@ export function App() {
       <tr>
         <td>${l.lot_code ?? "—"}</td>
         <td>${l.rice_type ?? "—"}</td>
-        <td style="text-align:right">${l.quintals.toFixed(2)}</td>
-        <td style="text-align:right">$${l.price_per_quintal.toFixed(2)}</td>
-        <td style="text-align:right">$${(l.quintals * l.price_per_quintal).toFixed(2)}</td>
+        <td style="text-align:right">${l.quintals.enReal()}</td>
+        <td style="text-align:right">$${l.price_per_quintal.enReal()}</td>
+        <td style="text-align:right">$${(l.quintals * l.price_per_quintal).enReal()}</td>
       </tr>`).join("");
 
     // Filas de anticipos individuales
@@ -12138,10 +12138,10 @@ export function App() {
       ? appliedAdvances.map((a) => `
         <tr>
           <td class="lbl disc">${a.advance_number} — ${a.concept}</td>
-          <td class="val disc">-$${Number(a.amount_applied).toFixed(2)}</td>
+          <td class="val disc">-$${Number(a.amount_applied).enReal()}</td>
         </tr>`).join("")
       : b.advances_total > 0
-        ? `<tr><td class="lbl disc">Desc. Anticipos</td><td class="val disc">-$${b.advances_total.toFixed(2)}</td></tr>`
+        ? `<tr><td class="lbl disc">Desc. Anticipos</td><td class="val disc">-$${b.advances_total.enReal()}</td></tr>`
         : "";
 
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -12186,21 +12186,21 @@ export function App() {
         <tbody>${lotsRows}</tbody>
       </table>
       <table class="totals">
-        <tr><td class="lbl">Total QQ:</td><td class="val">${qqTotal.toFixed(2)} QQ</td></tr>
-        <tr><td class="lbl">Bruto:</td><td class="val">$${b.gross_total.toFixed(2)}</td></tr>
+        <tr><td class="lbl">Total QQ:</td><td class="val">${qqTotal.enReal()} QQ</td></tr>
+        <tr><td class="lbl">Bruto:</td><td class="val">$${b.gross_total.enReal()}</td></tr>
         ${advanceRows.length > 0 ? `<tr class="disc-header"><td colspan="2">Anticipos descontados</td></tr>${advanceRows}` : ""}
         ${b.other_disc_total > 0 ? `
           <tr class="disc-header"><td colspan="2">Desglose de descuentos operativos</td></tr>
-          ${b.discount_breakdown.fomento     > 0 ? `<tr><td class="lbl disc">Fomento:</td><td class="val disc">-$${b.discount_breakdown.fomento.toFixed(2)}</td></tr>` : ""}
-          ${b.discount_breakdown.bascula     > 0 ? `<tr><td class="lbl disc">Báscula:</td><td class="val disc">-$${b.discount_breakdown.bascula.toFixed(2)}</td></tr>` : ""}
-          <tr><td class="lbl disc">Descuento de Cosechadora:</td><td class="val disc">-$${b.discount_breakdown.cosechadora.toFixed(2)}</td></tr>
-          <tr><td class="lbl disc">Total de Descuento de Flete:</td><td class="val disc">-$${b.discount_breakdown.flete.toFixed(2)}</td></tr>
+          ${b.discount_breakdown.fomento     > 0 ? `<tr><td class="lbl disc">Fomento:</td><td class="val disc">-$${b.discount_breakdown.fomento.enReal()}</td></tr>` : ""}
+          ${b.discount_breakdown.bascula     > 0 ? `<tr><td class="lbl disc">Báscula:</td><td class="val disc">-$${b.discount_breakdown.bascula.enReal()}</td></tr>` : ""}
+          <tr><td class="lbl disc">Descuento de Cosechadora:</td><td class="val disc">-$${b.discount_breakdown.cosechadora.enReal()}</td></tr>
+          <tr><td class="lbl disc">Total de Descuento de Flete:</td><td class="val disc">-$${b.discount_breakdown.flete.enReal()}</td></tr>
           ${otrosAdicionales > 0.01
-            ? `<tr><td class="lbl disc">Otros descuentos:</td><td class="val disc">-$${otrosAdicionales.toFixed(2)}</td></tr>`
+            ? `<tr><td class="lbl disc">Otros descuentos:</td><td class="val disc">-$${otrosAdicionales.enReal()}</td></tr>`
             : ""}
         ` : ""}
-        <tr><td class="lbl disc">TOTAL DESCUENTOS:</td><td class="val disc">-$${totalDescuentos.toFixed(2)}</td></tr>
-        <tr class="total-row"><td class="lbl">NETO A PAGAR:</td><td class="val">$${netoReal.toFixed(2)}</td></tr>
+        <tr><td class="lbl disc">TOTAL DESCUENTOS:</td><td class="val disc">-$${totalDescuentos.enReal()}</td></tr>
+        <tr class="total-row"><td class="lbl">NETO A PAGAR:</td><td class="val">$${netoReal.enReal()}</td></tr>
         ${fomentoRows}
       </table>
       <div class="sigs">
@@ -12236,10 +12236,10 @@ export function App() {
         <td>${e.fecha?.slice(0,10) ?? "—"}<small>${esc(e.concepto) || "Crédito / insumo"}</small></td>
         <td>${fechaFinal}</td>
         <td style="text-align:right">${dias}</td>
-        <td style="text-align:right">${meses.toFixed(2)}${e.es_saldo_anterior ? " fijo" : ""}</td>
-        <td style="text-align:right">$${Number(e.valor).toFixed(2)}</td>
-        <td style="text-align:right;color:#b45309">$${Number(e.interes ?? 0).toFixed(2)}</td>
-        <td style="text-align:right;font-weight:600">$${Number(e.suman ?? (Number(e.valor)+Number(e.interes ?? 0))).toFixed(2)}</td>
+        <td style="text-align:right">${meses.enReal()}${e.es_saldo_anterior ? " fijo" : ""}</td>
+        <td style="text-align:right">$${Number(e.valor).enReal()}</td>
+        <td style="text-align:right;color:#b45309">$${Number(e.interes ?? 0).enReal()}</td>
+        <td style="text-align:right;font-weight:600">$${Number(e.suman ?? (Number(e.valor)+Number(e.interes ?? 0))).enReal()}</td>
       </tr>`;
     }).join("");
 
@@ -12296,27 +12296,27 @@ export function App() {
           <tbody>${entregaRows || `<tr><td colspan="8" style="text-align:center;color:#888">Sin cargos registrados</td></tr>`}</tbody>
           <tfoot><tr>
             <td colspan="3">TOTALES</td><td></td><td></td>
-            <td style="text-align:right">$${totalPedido.toFixed(2)}</td>
-            <td style="text-align:right;color:#b45309">$${totalInteres.toFixed(2)}</td>
-            <td style="text-align:right">$${cargosFomento.toFixed(2)}</td>
+            <td style="text-align:right">$${totalPedido.enReal()}</td>
+            <td style="text-align:right;color:#b45309">$${totalInteres.enReal()}</td>
+            <td style="text-align:right">$${cargosFomento.enReal()}</td>
           </tr></tfoot>
         </table>
       </div>
 
       <div class="sec">
         <table class="subt" style="width:380px">
-          <tr><td class="lbl">(+) Total pedido:</td><td class="val">$${totalPedido.toFixed(2)}</td></tr>
-          <tr><td class="lbl">(+) Interés acumulado:</td><td class="val">$${totalInteres.toFixed(2)}</td></tr>
-          <tr><td class="lbl">Total deuda generada:</td><td class="val">$${cuenta.totalCargos.toFixed(2)}</td></tr>
-          <tr><td class="lbl">(−) Total pagado:</td><td class="val" style="color:#15803d">-$${cuenta.totalPagado.toFixed(2)}</td></tr>
-          <tr><td class="lbl" style="border-top:1px solid #999">Deuda total:</td><td class="val" style="border-top:1px solid #999;font-weight:800">$${cuenta.deudaPendiente.toFixed(2)}</td></tr>
+          <tr><td class="lbl">(+) Total pedido:</td><td class="val">$${totalPedido.enReal()}</td></tr>
+          <tr><td class="lbl">(+) Interés acumulado:</td><td class="val">$${totalInteres.enReal()}</td></tr>
+          <tr><td class="lbl">Total deuda generada:</td><td class="val">$${cuenta.totalCargos.enReal()}</td></tr>
+          <tr><td class="lbl">(−) Total pagado:</td><td class="val" style="color:#15803d">-$${cuenta.totalPagado.enReal()}</td></tr>
+          <tr><td class="lbl" style="border-top:1px solid #999">Deuda total:</td><td class="val" style="border-top:1px solid #999;font-weight:800">$${cuenta.deudaPendiente.enReal()}</td></tr>
         </table>
       </div>
 
       <div class="result ${cuenta.saldado ? "favor" : "contra"}">
         <div class="cap">${cuenta.saldado ? "SALDADO" : "DEUDA PENDIENTE"}</div>
-        <div class="amt">$ ${cuenta.deudaPendiente.toFixed(2)}</div>
-        <div style="font-size:12px;margin-top:4px;font-weight:700">${cuenta.saldoFavor > 0 ? `Saldo a favor del agricultor: $${cuenta.saldoFavor.toFixed(2)}` : cuenta.saldado ? "Cuenta cubierta por completo." : "Monto pendiente de pago del agricultor."}</div>
+        <div class="amt">$ ${cuenta.deudaPendiente.enReal()}</div>
+        <div style="font-size:12px;margin-top:4px;font-weight:700">${cuenta.saldoFavor > 0 ? `Saldo a favor del agricultor: $${cuenta.saldoFavor.enReal()}` : cuenta.saldado ? "Cuenta cubierta por completo." : "Monto pendiente de pago del agricultor."}</div>
       </div>
 
       <div class="sigs">
@@ -12384,8 +12384,8 @@ export function App() {
                     <p className="muted">{new Date(piladoReport.service_date).toLocaleDateString("es-EC")} · {piladoReport.cliente}</p>
                     <table className="cajaTable" style={{ marginTop: 10 }}>
                       <tbody>
-                        <tr><td>Total QQ procesados</td><td className="num">{Number(piladoReport.quintals).toFixed(2)} QQ</td></tr>
-                        <tr><td>Tarifa por QQ</td><td className="num">${Number(piladoReport.rate_per_qq).toFixed(2)}</td></tr>
+                        <tr><td>Total QQ procesados</td><td className="num">{Number(piladoReport.quintals).enReal()} QQ</td></tr>
+                        <tr><td>Tarifa por QQ</td><td className="num">${Number(piladoReport.rate_per_qq).enReal()}</td></tr>
                         <tr><td>Total a cobrar</td><td className="num"><strong>{money(Number(piladoReport.total))}</strong></td></tr>
                         <tr><td>Saldo pendiente</td><td className="num">{Number(piladoReport.saldo) > 0 ? money(Number(piladoReport.saldo)) : "Pagado"}</td></tr>
                       </tbody>
@@ -12400,8 +12400,8 @@ export function App() {
                             {piladoReport.detalle.map((d, i) => (
                               <tr key={i}>
                                 <td>{d.presentacion}</td>
-                                <td className="num">{Number(d.quintales).toFixed(2)}</td>
-                                <td className="num">${Number(d.precio_total_qq).toFixed(2)}</td>
+                                <td className="num">{Number(d.quintales).enReal()}</td>
+                                <td className="num">${Number(d.precio_total_qq).enReal()}</td>
                                 <td className="num">{money(Number(d.subtotal))}</td>
                               </tr>
                             ))}
@@ -12425,7 +12425,7 @@ export function App() {
                             {piladoReport.outputs.filter((o) => !o.is_byproduct).map((o, i) => (
                               <tr key={i}>
                                 <td>{o.product_name}{o.presentation ? ` (${o.presentation})` : ""}</td>
-                                <td className="num">{Number(o.quantity).toFixed(2)}</td>
+                                <td className="num">{Number(o.quantity).enReal()}</td>
                                 <td className="num">{o.unit}</td>
                               </tr>
                             ))}
@@ -12445,10 +12445,10 @@ export function App() {
                             {/* Solo la entrega al cliente: se quitaron a petición
                                 Cascarilla ingresada, Total de salida, Merma,
                                 Rendimiento y QQ de tulas. */}
-                            <tr><td>Arroz blanco entregado</td><td className="num">{Number(piladoReport.yield.white_rice_qty).toFixed(2)} {piladoReport.yield.white_rice_unit}</td></tr>
-                            <tr><td>Arrocillo 3/4</td><td className="num">{Number(piladoReport.yield.broken_rice_qty).toFixed(2)} QQ</td></tr>
-                            <tr><td>Arrocillo fino</td><td className="num">{Number(piladoReport.yield.fine_broken_rice_qty).toFixed(2)} QQ</td></tr>
-                            <tr><td>Polvillo / afrecho</td><td className="num">{Number(piladoReport.yield.bran_qty).toFixed(2)} QQ</td></tr>
+                            <tr><td>Arroz blanco entregado</td><td className="num">{Number(piladoReport.yield.white_rice_qty).enReal()} {piladoReport.yield.white_rice_unit}</td></tr>
+                            <tr><td>Arrocillo 3/4</td><td className="num">{Number(piladoReport.yield.broken_rice_qty).enReal()} QQ</td></tr>
+                            <tr><td>Arrocillo fino</td><td className="num">{Number(piladoReport.yield.fine_broken_rice_qty).enReal()} QQ</td></tr>
+                            <tr><td>Polvillo / afrecho</td><td className="num">{Number(piladoReport.yield.bran_qty).enReal()} QQ</td></tr>
                           </tbody>
                         </table>
                       </>
@@ -12734,7 +12734,7 @@ export function App() {
             <section className="moduleGrid">
               <Metric title="Agricultores" value={dashboard.active_farmers} icon="👨‍🌾" />
               <Metric title="Tickets hoy" value={dashboard.tickets_today} icon="🎫" accent="accBlue" />
-              <Metric title="Stock propio" value={`${dashboard.owned_stock.toFixed(2)} QQ`} icon="🌾" accent="accGreen" />
+              <Metric title="Stock propio" value={`${dashboard.owned_stock.enReal()} QQ`} icon="🌾" accent="accGreen" />
               <Metric title="Anticipos" value={money(dashboard.pending_advances)} icon="💸" accent="accAmber" />
               <Metric title="Por pagar" value={money(dashboard.pending_payables)} icon="📑" accent="accRed" />
               <Metric title="Ventas hoy" value={money(dashboard.sales_today)} icon="🛒" accent="accGreen" />
@@ -12765,7 +12765,7 @@ export function App() {
             </section>
             {criticalSupplies.length > 0 && (
               <section className="alertBox">
-                Insumos en nivel critico: {criticalSupplies.map((item) => `${item.nombre} (${Number(item.stock_actual).toFixed(0)})`).join(", ")}
+                Insumos en nivel critico: {criticalSupplies.map((item) => `${item.nombre} (${Number(item.stock_actual).enReal(0, 3)})`).join(", ")}
               </section>
             )}
             <section className="workPanel">
@@ -12822,7 +12822,7 @@ export function App() {
                         <td style={{ fontWeight: 600 }}>{e.numero_bascula ? `#${e.numero_bascula}` : e.ticket_number}</td>
                         <td>{e.farmer_name ?? "—"}</td>
                         <td>{new Date(e.created_at).toLocaleDateString("es-EC")}</td>
-                        <td className="num">{Number(e.quintals ?? 0).toFixed(2)}</td>
+                        <td className="num">{Number(e.quintals ?? 0).enReal()}</td>
                         <td>
                           <select
                             value={e.accionista_id ?? ""}
@@ -13034,11 +13034,11 @@ export function App() {
                               )}
                           </td>
                           <td>{t.placa || "—"}</td>
-                          <td className="num">{Number(t.gross_weight).toFixed(0)}</td>
-                          <td className="num">{Number(t.tare_weight).toFixed(0)}</td>
-                          <td className="num">{Number(t.net_weight).toFixed(0)}</td>
+                          <td className="num">{Number(t.gross_weight).enReal(0, 3)}</td>
+                          <td className="num">{Number(t.tare_weight).enReal(0, 3)}</td>
+                          <td className="num">{Number(t.net_weight).enReal(0, 3)}</td>
                           <td>{t.calidad || "—"}</td>
-                          <td className="num" style={{ fontWeight: 700 }}>{Number(t.quintals).toFixed(2)}</td>
+                          <td className="num" style={{ fontWeight: 700 }}>{Number(t.quintals).enReal()}</td>
                           <td>
                             {t.en_espera ? <span className="chip warn" title="La báscula aún espera el segundo pesaje">En espera 2º pesaje</span>
                               : t.weighing_ticket_id ? <span className="chip ok">Ingresado</span>
@@ -13243,7 +13243,7 @@ export function App() {
                                 <label key={entry.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", margin: 0, borderBottom: "1px solid var(--c-border)", cursor: "pointer" }}>
                                   <input type="checkbox" checked={checked} onChange={() => toggleDryingEntryPick("TENDAL", entry.id)} style={{ width: 18, height: 18, marginTop: 1, flex: "0 0 auto" }} />
                                   <span style={{ fontSize: 13, lineHeight: 1.35 }}>
-                                    <strong>{entryLabel(entry)}</strong> · {entry.farmer_name ?? "Sin agricultor"} · {Number(entry.quintals ?? 0).toFixed(2)} QQ
+                                    <strong>{entryLabel(entry)}</strong> · {entry.farmer_name ?? "Sin agricultor"} · {Number(entry.quintals ?? 0).enReal()} QQ
                                     {badge ? <small style={{ display: "block", color: "var(--c-muted)" }}>{badge}</small> : null}
                                   </span>
                                 </label>
@@ -13263,7 +13263,7 @@ export function App() {
                 )}
                 <DryingLotSelector selectedLots={editingTendal ? editingTendal.lots : tendalLotes} editing={!!editingTendal} onRemove={(id) => removeDryingEntry("TENDAL", id)} />
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  {!editingTendal && <label><span>Peso Total (QQ)</span><input type="text" readOnly value={tendalQQ.toFixed(2)} style={{ fontWeight: 700 }} /></label>}
+                  {!editingTendal && <label><span>Peso Total (QQ)</span><input type="text" readOnly value={tendalQQ.enReal()} style={{ fontWeight: 700 }} /></label>}
                   <label><span>Salida <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>(define la tarifa)</span> {cfgLink("💲 Tarifas de pago", "Tarifas")}</span><select value={tendalForm.modo} onChange={(e) => setTendalForm((f) => ({ ...f, modo: e.target.value as "GRANEL" | "ENSACADO" }))}><option value="GRANEL">Directo a Producción (A granel)</option><option value="ENSACADO">Sacos</option></select></label>
                   {!editingTendal && <label><span>Código de lote (opcional)</span><input value={tendalForm.lot_code} onChange={(e) => setTendalForm((f) => ({ ...f, lot_code: e.target.value }))} placeholder="Automático (00001-DD-MM-YY)" /></label>}
                   <label><span>Humedad inicial (%)</span><input type="number" step="0.1" min="0" value={tendalForm.moisture_before} onChange={(e) => setTendalForm((f) => ({ ...f, moisture_before: e.target.value }))} /></label>
@@ -13356,7 +13356,7 @@ export function App() {
                                     <span style={{ background: col.bg, color: col.fg, borderRadius: 999, padding: "3px 10px", fontSize: 12.5, fontWeight: 800 }}>
                                       {opTypeBadgeLabel(l0?.operation_type, l0?.is_maquila)}
                                     </span>
-                                    <strong>{Number(rep.total_quintals ?? 0).toFixed(2)} QQ</strong>
+                                    <strong>{Number(rep.total_quintals ?? 0).enReal()} QQ</strong>
                                   </div>
                                   <DryingLotSelector
                                     selectedLots={rep.lots}
@@ -13378,7 +13378,7 @@ export function App() {
                                 </div>
                               );
                             })}
-                            <div className="totalBox"><span>Peso total del túnel</span><strong>{qqTunel.toFixed(2)} QQ</strong></div>
+                            <div className="totalBox"><span>Peso total del túnel</span><strong>{qqTunel.enReal()} QQ</strong></div>
                             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                               <Input name="filled_at" label="Fecha de llenado" type="date" defaultValue={(base.filled_at ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10)} required={false} />
                               <Input name="moisture_before" label="Humedad inicial %" type="number" defaultValue={String(base.moisture_before ?? 0)} required={false} />
@@ -13434,7 +13434,7 @@ export function App() {
                               onChangeServiceType={done ? undefined : (lotId, op) => cambiarTipoServicioLote(rep.id, lotId, op).catch((error) => setMessage(error.message))}
                               changingLotId={changingServiceLotId}
                             />
-                            <div className="totalBox"><span>Peso total</span><strong>{Number(rep.total_quintals ?? 0).toFixed(2)} QQ</strong></div>
+                            <div className="totalBox"><span>Peso total</span><strong>{Number(rep.total_quintals ?? 0).enReal()} QQ</strong></div>
                             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                               <Select name="rice_type" label="Tipo de arroz" rows={[["0.11", "0.11"], ["CORRIENTE", "Corriente"]]} defaultValue={rep.rice_type ?? "0.11"} />
                               <Input name="filled_at" label="Fecha de llenado" type="date" defaultValue={(rep.filled_at ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10)} required={false} />
@@ -13607,7 +13607,7 @@ export function App() {
                                     <label key={entry.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", margin: 0, borderBottom: "1px solid var(--c-border)", cursor: "pointer" }}>
                                       <input type="checkbox" checked={checked} onChange={() => toggleDryingEntryPick(secadora, entry.id)} style={{ width: 18, height: 18, marginTop: 1, flex: "0 0 auto" }} />
                                       <span style={{ fontSize: 13, lineHeight: 1.35 }}>
-                                        <strong>{entryLabel(entry)}</strong> · {entry.farmer_name ?? "Sin agricultor"} · {Number(entry.quintals ?? 0).toFixed(2)} QQ
+                                        <strong>{entryLabel(entry)}</strong> · {entry.farmer_name ?? "Sin agricultor"} · {Number(entry.quintals ?? 0).enReal()} QQ
                                         {badge ? <small style={{ display: "block", color: "var(--c-muted)" }}>{badge}</small> : null}
                                       </span>
                                     </label>
@@ -13627,8 +13627,8 @@ export function App() {
                         <DryingLotSelector selectedLots={lotes} editing={false} onRemove={(id) => removeDryingEntry(secadora, id)} />
                         <div className="totalBox">
                           <span>Peso total</span>
-                          <strong>{qqDe(secadora).toFixed(2)} QQ</strong>
-                          <small>{kgDe(secadora).toFixed(2)} kg netos</small>
+                          <strong>{qqDe(secadora).enReal()} QQ</strong>
+                          <small>{kgDe(secadora).enReal()} kg netos</small>
                         </div>
                         <label>
                           <span>Número de lote <span className="muted">(automático)</span></span>
@@ -13793,7 +13793,7 @@ export function App() {
                       <div style={{ marginTop: 12, padding: "12px 14px", borderRadius: 12, border: "1px solid #bbf7d0", background: "#f0fdf4" }}>
                         <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: ".05em", color: "#6b7280" }}>COMBUSTIBLE POR QQ</div>
                         <div style={{ fontSize: 24, fontWeight: 900, color: "#15803d", lineHeight: 1.2 }}>{money(gq)} gas + {money(dq)} diésel</div>
-                        <div style={{ fontSize: 12.5, color: "#6b7280" }}>{money(c.gas)} gas + {money(c.diesel)} diésel ÷ {c.qq.toFixed(2)} QQ</div>
+                        <div style={{ fontSize: 12.5, color: "#6b7280" }}>{money(c.gas)} gas + {money(c.diesel)} diésel ÷ {c.qq.enReal()} QQ</div>
                       </div>
                       <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 12, fontSize: 12.5 }}>
                         <thead>
@@ -13807,7 +13807,7 @@ export function App() {
                             <tr key={i} style={{ borderTop: "1px solid #f1f5f9" }}>
                               <td style={{ padding: "4px 2px" }}>{p.tunel || "—"}</td>
                               <td style={{ padding: "4px 2px" }}>{p.lote}{p.socio ? <span style={{ color: "#6b7280" }}> · {p.socio}</span> : null}</td>
-                              <td style={{ padding: "4px 2px", textAlign: "right" }}>{p.qq.toFixed(2)}</td>
+                              <td style={{ padding: "4px 2px", textAlign: "right" }}>{p.qq.enReal()}</td>
                               <td style={{ padding: "4px 2px", textAlign: "right" }}>{money(p.gas)}</td>
                               <td style={{ padding: "4px 2px", textAlign: "right" }}>{money(p.diesel)}</td>
                             </tr>
@@ -13815,7 +13815,7 @@ export function App() {
                         </tbody>
                       </table>
                       <div style={{ marginTop: 10, fontSize: 12, color: "#6b7280" }}>
-                        Consumo: bombona {c.consumo.bombona.toFixed(2)}% · cilindros {c.consumo.cilindros} · diésel {c.consumo.diesel.toFixed(2)} · Total {money(c.gas + c.diesel)}
+                        Consumo: bombona {c.consumo.bombona.enReal()}% · cilindros {c.consumo.cilindros} · diésel {c.consumo.diesel.enReal()} · Total {money(c.gas + c.diesel)}
                       </div>
                     </div>
                     <div className="buttonRow" style={{ marginTop: 14 }}>
@@ -13844,7 +13844,7 @@ export function App() {
               const subtitulo = esTendal ? "Patio · al sol" : `Túnel ${tk.tunnel_number}`;
               const fecha = (tk.filled_at ? new Date(tk.filled_at) : new Date())
                 .toLocaleDateString("es-EC", { day: "2-digit", month: "2-digit", year: "numeric" });
-              const totalQQ = Number(tk.total_quintals ?? 0).toFixed(2);
+              const totalQQ = Number(tk.total_quintals ?? 0).enReal();
               const tipoArroz = String(tk.rice_type ?? "").toUpperCase() === "CORRIENTE" ? "Corriente" : (tk.rice_type ? `Grano ${tk.rice_type}` : "—");
               return (
                 <div style={{ position: "absolute", left: -9999, top: 0, pointerEvents: "none" }} aria-hidden="true">
@@ -13884,7 +13884,7 @@ export function App() {
                             <div style={{ fontSize: 14, fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{lot.farmer_name ?? "Sin agricultor"}</div>
                             <div style={{ fontSize: 11, color: "#6b7280" }}>{opTypeBadgeLabel(lot.operation_type, lot.is_maquila)}</div>
                           </div>
-                          <div style={{ fontSize: 14, fontWeight: 700, color: "#374151", whiteSpace: "nowrap" }}>{Number(lot.quintals ?? 0).toFixed(2)} QQ</div>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: "#374151", whiteSpace: "nowrap" }}>{Number(lot.quintals ?? 0).enReal()} QQ</div>
                         </div>
                       ))}
                     </div>
@@ -13935,7 +13935,7 @@ export function App() {
                   }}>
                     <option value="">— Sin ligar / manual —</option>
                     {costoBatches.map((b: any) => (
-                      <option key={b.id} value={b.id}>{(b.created_at || "").slice(0, 10)} · {Number(b.qq_producidos).toFixed(2)} QQ · {b.status}</option>
+                      <option key={b.id} value={b.id}>{(b.created_at || "").slice(0, 10)} · {Number(b.qq_producidos).enReal()} QQ · {b.status}</option>
                     ))}
                   </select>
                 </label>
@@ -13955,7 +13955,7 @@ export function App() {
               {(() => {
                 const total = costoFormTotal();
                 const qq = parseFloat(costoForm.qq_producidos) || 0;
-                return <p style={{ fontWeight: 700, margin: "8px 0" }}>Costo total: ${total.toFixed(2)}{qq > 0 && ` · Costo por QQ: $${(total / qq).toFixed(2)}`}</p>;
+                return <p style={{ fontWeight: 700, margin: "8px 0" }}>Costo total: ${total.enReal()}{qq > 0 && ` · Costo por QQ: $${(total / qq).enReal()}`}</p>;
               })()}
               <button type="button" className="primary" onClick={submitCosto}>Registrar costo</button>
               <hr className="divider" />
@@ -13965,12 +13965,12 @@ export function App() {
                 {costos.map((c: any) => (
                   <div key={c.id} className="equipItem">
                     <div>
-                      <strong>{(c.fecha || "").slice(0, 10)} · {Number(c.qq_producidos).toFixed(2)} QQ</strong>
-                      <small>Luz {Number(c.luz).toFixed(0)} · Mant {Number(c.mantenimiento).toFixed(0)} · M.obra {Number(c.mano_obra).toFixed(0)} · Comb {Number(c.combustible).toFixed(0)} · Desg {Number(c.desgaste).toFixed(0)} · Otros {Number(c.otros).toFixed(0)}</small>
+                      <strong>{(c.fecha || "").slice(0, 10)} · {Number(c.qq_producidos).enReal()} QQ</strong>
+                      <small>Luz {Number(c.luz).enReal(0, 3)} · Mant {Number(c.mantenimiento).enReal(0, 3)} · M.obra {Number(c.mano_obra).enReal(0, 3)} · Comb {Number(c.combustible).enReal(0, 3)} · Desg {Number(c.desgaste).enReal(0, 3)} · Otros {Number(c.otros).enReal(0, 3)}</small>
                     </div>
                     <div style={{ textAlign: "right" }}>
-                      <strong>${Number(c.costo_total).toFixed(2)}</strong>
-                      <small>${Number(c.costo_por_qq).toFixed(2)}/QQ</small>
+                      <strong>${Number(c.costo_total).enReal()}</strong>
+                      <small>${Number(c.costo_por_qq).enReal()}/QQ</small>
                     </div>
                   </div>
                 ))}
@@ -13990,7 +13990,7 @@ export function App() {
                     {["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"].map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
                   </select></label>
                 <label style={{ margin: 0 }}><span>QQ del mes {consolData && !consolData.qq_manual ? "(auto)" : ""}</span>
-                  <input type="number" step="0.01" min="0" placeholder={consolData ? Number(consolData.qq_producidos).toFixed(2) : "auto"} value={consolMes.qq} onChange={(e) => setConsolMes({ ...consolMes, qq: e.target.value })} style={{ width: 110 }} /></label>
+                  <input type="number" step="0.01" min="0" placeholder={consolData ? Number(consolData.qq_producidos).enReal() : "auto"} value={consolMes.qq} onChange={(e) => setConsolMes({ ...consolMes, qq: e.target.value })} style={{ width: 110 }} /></label>
                 <label style={{ margin: 0 }}><span>(-) Financiero/Préstamos</span>
                   <input type="number" step="0.01" min="0" placeholder="0.00" value={consolMes.financiero} onChange={(e) => setConsolMes({ ...consolMes, financiero: e.target.value })} style={{ width: 120 }} /></label>
                 <button type="button" className="primary" disabled={consolBusy} onClick={loadConsolidadoMensual}>{consolBusy ? "…" : "↻ Generar"}</button>
@@ -14003,7 +14003,7 @@ export function App() {
                 <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16 }}>
                   {/* Matriz de costos */}
                   <div style={{ overflowX: "auto" }}>
-                    <div style={{ fontWeight: 700, marginBottom: 4 }}>Costos · {consolData.periodo} · {Number(consolData.qq_usados).toFixed(2)} QQ</div>
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>Costos · {consolData.periodo} · {Number(consolData.qq_usados).enReal()} QQ</div>
                     <table className="cajaTable">
                       <thead><tr><th>Rubro</th><th style={{ textAlign: "right" }}>Monto</th><th style={{ textAlign: "right" }}>$/QQ</th><th style={{ textAlign: "right" }}>%</th></tr></thead>
                       <tbody>
@@ -14016,7 +14016,7 @@ export function App() {
                               <td>{r.rubro} {r.origen === "caja" && <span className="muted" style={{ fontSize: 10 }}>🔎</span>}{r.origen === "costo" && <span className="muted" style={{ fontSize: 10 }}>· corrida</span>}</td>
                               <td style={{ textAlign: "right" }}>{money(r.monto)}</td>
                               <td style={{ textAlign: "right" }}>${Number(r.costo_qq).toFixed(4)}</td>
-                              <td style={{ textAlign: "right" }}>{pct.toFixed(1)}%</td>
+                              <td style={{ textAlign: "right" }}>{pct.enReal(1, 3)}%</td>
                             </tr>
                           );
                         })}
@@ -14404,7 +14404,7 @@ export function App() {
                     {esMerc && (
                       <p className="muted" style={{ marginTop: 0 }}>
                         Salidas de inventario valorizadas al costo del producto terminado
-                        (${detalleCosto.data.costo_qq_terminado.toFixed(2)}/QQ).
+                        (${detalleCosto.data.costo_qq_terminado.enReal()}/QQ).
                       </p>
                     )}
                     {bloque.items.length === 0 ? (
@@ -14425,7 +14425,7 @@ export function App() {
                                 <td>{it.fecha ? String(it.fecha).slice(0, 10) : "—"}</td>
                                 <td>{it.concepto}<small className="muted" style={{ display: "block" }}>{it.referencia}</small></td>
                                 {esMerc
-                                  ? <><td className="num">{(it.cantidad ?? 0).toFixed(2)}</td><td className="num">{money(it.costo_unitario ?? 0)}</td></>
+                                  ? <><td className="num">{(it.cantidad ?? 0).enReal()}</td><td className="num">{money(it.costo_unitario ?? 0)}</td></>
                                   : <><td className="num">{money(it.gas ?? 0)}</td><td className="num">{money(it.diesel ?? 0)}</td></>}
                                 <td className="num" style={{ fontWeight: 600 }}>{money(it.monto)}</td>
                               </tr>
@@ -14615,10 +14615,10 @@ export function App() {
 
             {/* Tarjetas resumen (KPIs) — totales en QQ */}
             <div style={{ gridColumn: "1 / -1", display: "flex", gap: 12, flexWrap: "wrap" }}>
-              <KpiCard title="Total Cáscara" value={`${rawStockRows.reduce((s, r) => s + Number(r.quantity), 0).toFixed(2)} QQ`} sub={`${rawStockRows.length} ítem(s)`} color="#b45309" />
-              <KpiCard title="Total Producto Terminado" value={`${finishedStockRows.reduce((s, r) => s + Number(r.quantity), 0).toFixed(2)} QQ`} sub={`${finishedStockRows.length} ítem(s)`} color="#16a34a" />
-              <KpiCard title="Total Marcas / Empacados" value={`${packagedStockRows.reduce((s, r) => s + Number(r.quantity), 0).toFixed(2)} QQ`} sub={`${packagedStockRows.length} ítem(s)`} color="#7c3aed" />
-              <KpiCard title="Total Subproductos" value={`${byproductStockRows.reduce((s, r) => s + Number(r.quantity), 0).toFixed(2)} QQ`} sub={`${byproductStockRows.length} ítem(s)`} color="#2563eb" />
+              <KpiCard title="Total Cáscara" value={`${rawStockRows.reduce((s, r) => s + Number(r.quantity), 0).enReal()} QQ`} sub={`${rawStockRows.length} ítem(s)`} color="#b45309" />
+              <KpiCard title="Total Producto Terminado" value={`${finishedStockRows.reduce((s, r) => s + Number(r.quantity), 0).enReal()} QQ`} sub={`${finishedStockRows.length} ítem(s)`} color="#16a34a" />
+              <KpiCard title="Total Marcas / Empacados" value={`${packagedStockRows.reduce((s, r) => s + Number(r.quantity), 0).enReal()} QQ`} sub={`${packagedStockRows.length} ítem(s)`} color="#7c3aed" />
+              <KpiCard title="Total Subproductos" value={`${byproductStockRows.reduce((s, r) => s + Number(r.quantity), 0).enReal()} QQ`} sub={`${byproductStockRows.length} ítem(s)`} color="#2563eb" />
             </div>
 
             {/* Existencias en 2×2: cáscara | terminado (arriba) · subproductos | sacos (abajo).
@@ -14628,22 +14628,22 @@ export function App() {
               <DataList
                 title="Stock cáscara"
                 headers={["Producto", "Cantidad"]}
-                rows={rawStockRows.map((row) => [row.product_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
+                rows={rawStockRows.map((row) => [row.product_name, `${Number(row.quantity).enReal()} ${row.unit}`])}
               />
               <DataList
                 title="Stock producto terminado"
                 headers={["Producto", "Cantidad"]}
-                rows={finishedStockRows.map((row) => [row.product_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
+                rows={finishedStockRows.map((row) => [row.product_name, `${Number(row.quantity).enReal()} ${row.unit}`])}
               />
               <DataList
                 title="Stock marcas / empacados"
                 headers={["Producto", "Cantidad"]}
-                rows={packagedStockRows.map((row) => [row.product_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
+                rows={packagedStockRows.map((row) => [row.product_name, `${Number(row.quantity).enReal()} ${row.unit}`])}
               />
               <DataList
                 title="Stock subproductos"
                 headers={["Producto", "Cantidad"]}
-                rows={byproductStockRows.map((row) => [row.product_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
+                rows={byproductStockRows.map((row) => [row.product_name, `${Number(row.quantity).enReal()} ${row.unit}`])}
               />
 
               {/* ── Inventario de Sacos (cuarto cuadrante, balancea el grid) ──
@@ -14698,7 +14698,7 @@ export function App() {
                 <DataList
                   title="Otros stocks"
                   headers={["Producto", "Cantidad"]}
-                  rows={otherStockRows.map((row) => [row.product_name, `${Number(row.quantity).toFixed(2)} ${row.unit}`])}
+                  rows={otherStockRows.map((row) => [row.product_name, `${Number(row.quantity).enReal()} ${row.unit}`])}
                 />
               </div>
             )}
@@ -14836,7 +14836,7 @@ export function App() {
                               <td style={{ fontWeight: 600 }}>{lot.lot_code}</td>
                               <td>{lot.farmer_name ?? "—"}</td>
                               <td className="num">{lot.entries_count ?? 1}</td>
-                              <td className="num">{Number(lot.quintals ?? 0).toFixed(2)}</td>
+                              <td className="num">{Number(lot.quintals ?? 0).enReal()}</td>
                               <td><span className="chip info">{lot.status}</span></td>
                               <td>
                                 <select
@@ -14893,7 +14893,7 @@ export function App() {
                     const salidas = vis.filter((m: any) => Number(m.quantity) < 0).reduce((s: number, m: any) => s + Number(m.quantity), 0);
                     return (
                       <>
-                        <p style={{ fontWeight: 600, margin: "4px 0" }}>{vis.length} mov. · Entradas: {entradas.toFixed(2)} · Salidas: {salidas.toFixed(2)}</p>
+                        <p style={{ fontWeight: 600, margin: "4px 0" }}>{vis.length} mov. · Entradas: {entradas.enReal()} · Salidas: {salidas.enReal()}</p>
                         {vis.length === 0 && <p className="muted">Sin movimientos</p>}
                         <div className="equipList">
                           {vis.slice(0, 300).map((m: any) => (
@@ -14902,7 +14902,7 @@ export function App() {
                                 <strong>{m.product_name}</strong>
                                 <small>{(m.created_at || "").slice(0, 10)} · {m.warehouse_name} · {m.movement}{m.reference_type ? " · " + m.reference_type : ""}</small>
                               </div>
-                              <strong>{Number(m.quantity).toFixed(2)}</strong>
+                              <strong>{Number(m.quantity).enReal()}</strong>
                             </div>
                           ))}
                         </div>
@@ -14925,7 +14925,7 @@ export function App() {
                         <div key={`${row.product_id}-${row.warehouse_id}`} style={{ border: "1px solid var(--c-border)", borderRadius: 8, padding: 12 }}>
                           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
                             <strong>{row.product_name} ({row.code})</strong>
-                            <span style={{ color: "var(--c-danger)", fontWeight: 700 }}>{row.quantity.toFixed(2)} {row.unit}</span>
+                            <span style={{ color: "var(--c-danger)", fontWeight: 700 }}>{row.quantity.enReal()} {row.unit}</span>
                           </div>
                           <p className="muted" style={{ marginBottom: 8 }}>{row.warehouse_name} · {row.ownership}</p>
                           <table className="cajaTable" style={{ fontSize: 11 }}>
@@ -14943,7 +14943,7 @@ export function App() {
                                 <tr key={i}>
                                   <td>{new Date(m.created_at).toLocaleString("es-EC")}</td>
                                   <td>{m.movement}</td>
-                                  <td className="num">{Number(m.quantity).toFixed(2)}</td>
+                                  <td className="num">{Number(m.quantity).enReal()}</td>
                                   <td>{m.reference_type || "—"}</td>
                                   <td>{m.notes || "—"}</td>
                                 </tr>
@@ -14981,7 +14981,7 @@ export function App() {
                         <td style={{ fontWeight: 600 }}>{d.lot_code ?? "—"}</td>
                         <td>Túnel {d.tunnel_number}</td>
                         <td>{d.rice_type === "CORRIENTE" ? "Corriente" : "0.11"}</td>
-                        <td className="num">{Number(d.total_quintals ?? 0).toFixed(2)}</td>
+                        <td className="num">{Number(d.total_quintals ?? 0).enReal()}</td>
                         <td className="muted">{new Date(d.saved_at).toLocaleString("es-EC")}</td>
                         <td>
                           {d.has_open_batch ? (
@@ -15049,7 +15049,7 @@ export function App() {
                         });
                         return (
                           <option key={report.id} value={report.id}>
-                            Secadora {report.tunnel_number} - {report.rice_type === "CORRIENTE" ? "Corriente" : "0.11"} - {Number(report.total_quintals ?? 0).toFixed(2)} QQ{esServ ? " · 🔧 SERV. PILADA" : ""}
+                            Secadora {report.tunnel_number} - {report.rice_type === "CORRIENTE" ? "Corriente" : "0.11"} - {Number(report.total_quintals ?? 0).enReal()} QQ{esServ ? " · 🔧 SERV. PILADA" : ""}
                           </option>
                         );
                       })}
@@ -15058,9 +15058,9 @@ export function App() {
                   {selectedProductionDrying ? (
                     <div className="totalBox dryerTotalBox">
                       <span>Total cascara desde Secadoras</span>
-                      <strong>{Number(selectedProductionDrying.total_quintals ?? 0).toFixed(2)} QQ</strong>
+                      <strong>{Number(selectedProductionDrying.total_quintals ?? 0).enReal()} QQ</strong>
                       <small>Secadora {selectedProductionDrying.tunnel_number} - {selectedProductionDrying.lots.length} lote(s)</small>
-                      <small>{selectedProductionDrying.lots.map((lot) => `${lot.farmer_name ?? "Sin agricultor"} (${Number(lot.quintals ?? 0).toFixed(2)} QQ)`).join(" + ")}</small>
+                      <small>{selectedProductionDrying.lots.map((lot) => `${lot.farmer_name ?? "Sin agricultor"} (${Number(lot.quintals ?? 0).enReal()} QQ)`).join(" + ")}</small>
                     </div>
                   ) : (
                     <div className="muted" style={{ padding: 10, background: "#fef3c7", borderRadius: 8, border: "1px solid #fde68a" }}>
@@ -15082,7 +15082,7 @@ export function App() {
                       </option>
                       {stockLotsDisponibles.map((lot) => (
                         <option key={lot.id} value={lot.id}>
-                          {lot.lot_code} · {lot.farmer_name ?? "s/agricultor"} · {riceTypeLabel(lot.rice_type)} · {Number(lot.quintals ?? 0).toFixed(2)} QQ
+                          {lot.lot_code} · {lot.farmer_name ?? "s/agricultor"} · {riceTypeLabel(lot.rice_type)} · {Number(lot.quintals ?? 0).enReal()} QQ
                         </option>
                       ))}
                     </select>
@@ -15098,7 +15098,7 @@ export function App() {
                   ) : selectedStockLot ? (
                     <div className="totalBox dryerTotalBox">
                       <span>Total cascara desde Stock</span>
-                      <strong>{Number(selectedStockLot.quintals ?? 0).toFixed(2)} QQ</strong>
+                      <strong>{Number(selectedStockLot.quintals ?? 0).enReal()} QQ</strong>
                       <small>Lote {selectedStockLot.lot_code} · {selectedStockLot.farmer_name ?? "Sin agricultor"}</small>
                       <small>{riceTypeLabel(selectedStockLot.rice_type)}</small>
                     </div>
@@ -15164,7 +15164,7 @@ export function App() {
                         <select value={millingSacoServicioForm.sack_id} onChange={(e) => setMillingSacoServicioForm({ sack_id: e.target.value, cantidad: "" })}>
                           <option value="">— Elegir saco —</option>
                           {disponibles.map((sk) => (
-                            <option key={sk.id} value={sk.id}>{sk.tipo} · stock {Number(sk.stock)} · ${Number(sk.precio_venta_cliente ?? 0).toFixed(2)} c/u</option>
+                            <option key={sk.id} value={sk.id}>{sk.tipo} · stock {Number(sk.stock)} · ${Number(sk.precio_venta_cliente ?? 0).enReal()} c/u</option>
                           ))}
                         </select>
                       </label>
@@ -15187,7 +15187,7 @@ export function App() {
                             return (
                               <tr key={l.sack_id} style={{ borderTop: "1px solid #e0e7ff" }}>
                                 <td style={{ padding: "5px 4px", fontWeight: 700 }}>{sk?.tipo ?? "Saco"}</td>
-                                <td style={{ padding: "5px 4px", textAlign: "right" }}>{l.cantidad} × ${precio.toFixed(2)}</td>
+                                <td style={{ padding: "5px 4px", textAlign: "right" }}>{l.cantidad} × ${precio.enReal()}</td>
                                 <td style={{ padding: "5px 4px", textAlign: "right", fontWeight: 700 }}>{money(l.cantidad * precio)}</td>
                                 <td style={{ padding: "5px 4px", textAlign: "right" }}>
                                   <button type="button" className="btnSecondary" style={{ fontSize: 11, padding: "2px 8px" }}
@@ -15221,7 +15221,7 @@ export function App() {
                     lot.lot_code,
                     lot.farmer_name ?? "—",
                     riceTypeLabel(lot.rice_type) + (esServicioPiladaOp(lot.operation_type, lot.is_maquila, lot.lot_code) ? " · 🔧 SERV. PILADA" : ""),
-                    `${Number(lot.quintals ?? 0).toFixed(2)} QQ`
+                    `${Number(lot.quintals ?? 0).enReal()} QQ`
                   ])}
               />
             </aside>
@@ -15344,7 +15344,7 @@ export function App() {
                           {entry.destino === "TULA" ? "🧺 Tula" : `📦 ${entry.presentation}`}
                           {entry.destino === "TULA" && entry.tulas ? <span className="muted" style={{ fontWeight: 400 }}> · {entry.tulas} tula(s)</span> : null}
                         </strong>
-                        <span>{entry.quantityQq.toFixed(2)} QQ</span>
+                        <span>{entry.quantityQq.enReal()} QQ</span>
                         <button type="button" onClick={() => removeMillingPiladoEntry(entry.id)}>
                           Quitar
                         </button>
@@ -15395,11 +15395,11 @@ export function App() {
               <div className="productionTotalHero">
                 <div>
                   <span>Total arroz pilado</span>
-                  <strong>{millingPiladoTotalQq.toFixed(2)} <small>QQ</small></strong>
+                  <strong>{millingPiladoTotalQq.enReal()} <small>QQ</small></strong>
                 </div>
                 <div className="productionTotalBreakdown">
-                  <span><b>{millingMix.tulaQq.toFixed(2)} QQ</b> Tula / Selección</span>
-                  <span><b>{millingMix.sacoQq.toFixed(2)} QQ</b> Saco / Comercial</span>
+                  <span><b>{millingMix.tulaQq.enReal()} QQ</b> Tula / Selección</span>
+                  <span><b>{millingMix.sacoQq.enReal()} QQ</b> Saco / Comercial</span>
                 </div>
               </div>
 
@@ -15514,8 +15514,8 @@ export function App() {
                           </header>
                           <div style={{ fontSize: 12, color: "#1d4ed8", fontWeight: 700, marginBottom: 8 }}>🧾 Liquidación de Cobro por Servicio</div>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                            <div><div style={{ fontSize: 11, color: "var(--c-muted)" }}>QQ pilados</div><div style={{ fontWeight: 700 }}>{qq.toFixed(2)} QQ</div></div>
-                            <div><div style={{ fontSize: 11, color: "var(--c-muted)" }}>Tarifa</div><div style={{ fontWeight: 700 }}>${tarifa.toFixed(2)}/QQ</div></div>
+                            <div><div style={{ fontSize: 11, color: "var(--c-muted)" }}>QQ pilados</div><div style={{ fontWeight: 700 }}>{qq.enReal()} QQ</div></div>
+                            <div><div style={{ fontSize: 11, color: "var(--c-muted)" }}>Tarifa</div><div style={{ fontWeight: 700 }}>${tarifa.enReal()}/QQ</div></div>
                           </div>
                           <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid #bfdbfe", display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                             <span style={{ fontSize: 12, fontWeight: 800, color: "#1d4ed8" }}>TOTAL COBRO</span>
@@ -15575,8 +15575,8 @@ export function App() {
                 const item = productionHistory.find((h) => h.id === ganaModalId);
                 if (!item) return null;
                 const c = ganaCalc(item);
-                const n2 = (v: number) => Number(v).toFixed(2);
-                const p1 = (v: number) => `${Number(v).toFixed(1)}%`;
+                const n2 = (v: number) => Number(v).enReal();
+                const p1 = (v: number) => `${Number(v).enReal(1, 3)}%`;
                 const dcell = { padding: "6px 10px", textAlign: "right" as const };
                 const resumen = `Total cáscara: ${money(c.totalCascaraSeccion)}\nIngreso proyectado: ${money(c.ingresoTotal)}\nUtilidad proyectada: ${money(c.utilidad)}\n% Arroz Blanco: ${c.blancoRendStr}%`;
                 // Celdas [Precio Unit. editable | Costo Prod. (—) | Total ($)] de un producto.
@@ -15619,7 +15619,7 @@ export function App() {
                         </div>
                         {/* Tarifa de pilado CONGELADA para este lote (histórica). */}
                         <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "4px 10px", marginBottom: 10 }}>
-                          ⚙️ Tarifa de pilada aplicada: ${c.precioPilada.toFixed(2)} <span className="muted" style={{ fontWeight: 400 }}>(Histórica)</span>
+                          ⚙️ Tarifa de pilada aplicada: ${c.precioPilada.enReal()} <span className="muted" style={{ fontWeight: 400 }}>(Histórica)</span>
                         </div>
                         <div style={{ overflowX: "auto" }}>
                           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 620 }}>
@@ -15653,7 +15653,7 @@ export function App() {
                                   <tr key={p.weighing_ticket_id ?? idx} style={{ borderBottom: "1px solid var(--c-border)" }}>
                                     <td style={{ padding: "6px 10px 6px 22px" }}>· {p.farmer_name ?? "Sin agricultor"} <span className="muted">· {etq}</span></td>
                                     <td style={dcell}>{n2(qq)}</td>
-                                    <td style={dcell}>{precio != null ? `$${precio.toFixed(2)}` : <span className="muted" title="Aún no liquidado">— pend.</span>}</td>
+                                    <td style={dcell}>{precio != null ? `$${precio.enReal()}` : <span className="muted" title="Aún no liquidado">— pend.</span>}</td>
                                     <td style={dcell}>{c.costoProdUnit > 0 ? `$${c.costoProdUnit.toFixed(4)}` : <span className="muted" title="Define la Tarifa de Pilado del socio en Configuración → Tarifas">—</span>}</td>
                                     <td style={dcell}>{tieneValor ? money(totalFila) : "—"}</td>
                                   </tr>
@@ -16024,7 +16024,7 @@ export function App() {
                           const q = Number(saleLineForm.quantity);
                           const pres = presentacionLineaActual;
                           if (!q || q <= 0 || !pres) return "—";
-                          return (q * bultosPorQqDePresentacion(pres.name)).toFixed(0);
+                          return (q * bultosPorQqDePresentacion(pres.name)).enReal(0, 3);
                         })()}
                       </td>
                       <td className="num">
@@ -16035,7 +16035,7 @@ export function App() {
                           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); agregarLineaYVolver(); } }} />
                       </td>
                       <td className="num orderItemsGrid__bultos">
-                        {Number(saleLineForm.quantity) > 0 && saleLineForm.unit_price !== "" ? `$${(Number(saleLineForm.quantity) * Number(saleLineForm.unit_price)).toFixed(2)}` : "—"}
+                        {Number(saleLineForm.quantity) > 0 && saleLineForm.unit_price !== "" ? `$${(Number(saleLineForm.quantity) * Number(saleLineForm.unit_price)).enReal()}` : "—"}
                       </td>
                       <td>
                         <button type="button" className="orderItemsGrid__agregar" onClick={agregarLineaYVolver} disabled={lineaExcedeStock}
@@ -16061,18 +16061,18 @@ export function App() {
                         <small style={{ fontWeight: 700, color: hayTerminado ? "#15803d" : "#b45309" }}>
                           {hayTerminado
                             ? (wl
-                                ? `📦 Producto terminado: ${sacos} sacos (${qq.toFixed(2)} QQ)`
-                                : `📦 Producto terminado: ${qq.toFixed(2)} QQ`)
+                                ? `📦 Producto terminado: ${sacos} sacos (${qq.enReal()} QQ)`
+                                : `📦 Producto terminado: ${qq.enReal()} QQ`)
                             : "Producto terminado: 0.00 QQ"}
                         </small>
                         {respaldo.rawProductId && (
                           <small style={{ fontWeight: 700, color: respaldo.cascaraQq > 0 ? "#1d4ed8" : "#6b7280" }}>
-                            🌾 Respaldo {respaldo.rawProductName}: {respaldo.cascaraQq.toFixed(2)} QQ
-                            {respaldo.comprometidoQq > 0 ? ` · comprometido: ${respaldo.comprometidoQq.toFixed(2)} QQ` : ""}
+                            🌾 Respaldo {respaldo.rawProductName}: {respaldo.cascaraQq.enReal()} QQ
+                            {respaldo.comprometidoQq > 0 ? ` · comprometido: ${respaldo.comprometidoQq.enReal()} QQ` : ""}
                           </small>
                         )}
                         <small style={{ fontWeight: 800, color: hayRespaldo ? "#0f766e" : "#b91c1c" }}>
-                          {hayRespaldo ? `Disponible para nuevos pedidos: ${respaldo.coberturaLibreQq.toFixed(2)} QQ` : "Sin producto ni cáscara libre para vender"}
+                          {hayRespaldo ? `Disponible para nuevos pedidos: ${respaldo.coberturaLibreQq.enReal()} QQ` : "Sin producto ni cáscara libre para vender"}
                         </small>
                       </div>
                     );
@@ -16156,17 +16156,17 @@ export function App() {
                             <tr key={item.id} style={{ background: excede ? "#fee2e2" : requiereProduccion ? "#fffbeb" : i % 2 === 0 ? "#fff" : "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>
                               <td style={{ padding: "8px 10px" }}>
                                 <strong>{product?.name}</strong>
-                                {excede && <small style={{ display: "block", color: "#b91c1c", fontWeight: 700 }}>⚠ Supera la cobertura libre ({respaldo.coberturaLibreQq.toFixed(2)} QQ)</small>}
+                                {excede && <small style={{ display: "block", color: "#b91c1c", fontWeight: 700 }}>⚠ Supera la cobertura libre ({respaldo.coberturaLibreQq.enReal()} QQ)</small>}
                                 {requiereProduccion && <small style={{ display: "block", color: "#b45309", fontWeight: 700 }}>🌾 Respaldado por cáscara · pendiente de producir</small>}
                               </td>
                               <td style={{ padding: "8px 10px" }}>
                                 {item.presentation_name || "—"}
                                 {item.sobrante_saco_lb ? <small style={{ display: "block", color: "#0f766e", fontWeight: 700 }}>Sobrante en saco de {item.sobrante_saco_lb} LB</small> : null}
                               </td>
-                              <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>{qq.toFixed(2)}</td>
-                              <td style={{ padding: "8px 10px", textAlign: "right", color: "#2563eb" }} title="Bultos físicos = QQ × factor de la presentación (para la Guía)">{bultosDeLinea(item).toFixed(0)}</td>
-                              <td style={{ padding: "8px 10px", textAlign: "right" }}>${item.unit_price.toFixed(2)}</td>
-                              <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>${subtotal.toFixed(2)}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>{qq.enReal()}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "right", color: "#2563eb" }} title="Bultos físicos = QQ × factor de la presentación (para la Guía)">{bultosDeLinea(item).enReal(0, 3)}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "right" }}>${item.unit_price.enReal()}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>${subtotal.enReal()}</td>
                               <td style={{ padding: "8px 10px", textAlign: "center" }}>
                                 <button
                                   type="button"
@@ -16185,10 +16185,10 @@ export function App() {
                     <tfoot>
                       <tr>
                         <td colSpan={2}>TOTAL</td>
-                        <td className="num">{saleLineItems.reduce((s, l) => s + qqDeLinea(l), 0).toFixed(2)}</td>
-                        <td className="num" style={{ color: "#2563eb" }}>{saleLineItems.reduce((s, l) => s + bultosDeLinea(l), 0).toFixed(0)}</td>
+                        <td className="num">{saleLineItems.reduce((s, l) => s + qqDeLinea(l), 0).enReal()}</td>
+                        <td className="num" style={{ color: "#2563eb" }}>{saleLineItems.reduce((s, l) => s + bultosDeLinea(l), 0).enReal(0, 3)}</td>
                         <td />
-                        <td className="num" style={{ color: "#15803d" }}>${calculateSaleTotal().toFixed(2)}</td>
+                        <td className="num" style={{ color: "#15803d" }}>${calculateSaleTotal().enReal()}</td>
                         <td />
                       </tr>
                     </tfoot>
@@ -16210,9 +16210,9 @@ export function App() {
 
               <div className="totalBox" style={{ background: "#dcfce7", padding: 16, borderRadius: 8, marginBottom: 12 }}>
                 <span style={{ fontSize: 14 }}>TOTAL DEL PEDIDO</span>
-                <strong style={{ fontSize: 28, color: "#16a34a" }}>${calculateSaleTotal().toFixed(2)}</strong>
+                <strong style={{ fontSize: 28, color: "#16a34a" }}>${calculateSaleTotal().enReal()}</strong>
                 <small style={{ color: "#6b7280" }}>
-                  {saleLineItems.length} línea(s) · {saleLineItems.reduce((s, l) => s + qqDeLinea(l), 0).toFixed(2)} QQ · {saleLineItems.reduce((s, l) => s + bultosDeLinea(l), 0).toFixed(0)} bultos
+                  {saleLineItems.length} línea(s) · {saleLineItems.reduce((s, l) => s + qqDeLinea(l), 0).enReal()} QQ · {saleLineItems.reduce((s, l) => s + bultosDeLinea(l), 0).enReal(0, 3)} bultos
                 </small>
               </div>
               {selectedCustomerId && (
@@ -16369,7 +16369,7 @@ export function App() {
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
                           <span className="muted" style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>📍 Ubicación / Lote</span>
                           <span style={{ fontSize: 11, fontWeight: 700, color: dispUbicQq > 0 ? "#15803d" : "#b91c1c" }}>
-                            {dispUbicQq > 0 ? `${dispUbicQq.toFixed(2)} QQ disp.` : "sin stock"}
+                            {dispUbicQq > 0 ? `${dispUbicQq.enReal()} QQ disp.` : "sin stock"}
                           </span>
                         </div>
                         {listo ? (
@@ -16387,7 +16387,7 @@ export function App() {
 
                       {!listo && !listoParaPreparar && (
                         <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: "8px 12px", color: "#92400e", fontSize: 12.5, fontWeight: 700 }}>
-                          🌾 Pedido aceptado con respaldo de cáscara. Faltan producir {faltanteTerminadoQq.toFixed(2)} QQ antes de preparar y despachar.
+                          🌾 Pedido aceptado con respaldo de cáscara. Faltan producir {faltanteTerminadoQq.enReal()} QQ antes de preparar y despachar.
                         </div>
                       )}
 
@@ -16467,7 +16467,7 @@ export function App() {
                         <tr key={s.id} style={{ background: i % 2 === 0 ? "#fff" : "#f9fafb" }}>
                           <td style={{ padding: "5px 10px" }}><strong>{s.sale_number}</strong></td>
                           <td style={{ padding: "5px 10px" }}>{s.customer_name ?? "Sin cliente"}</td>
-                          <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700 }}>${Number(s.total_amount).toFixed(2)}</td>
+                          <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700 }}>${Number(s.total_amount).enReal()}</td>
                           <td style={{ padding: "5px 10px" }}>
                             <span style={{
                               padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700,
@@ -16571,10 +16571,10 @@ export function App() {
                                     <tr key={i} style={{ background: insuf ? "#fee2e2" : (i % 2 ? "#f9fafb" : "#fff") }}>
                                       <td style={{ ...td, fontWeight: 700 }}>{c.producto}</td>
                                       <td style={td}>{c.presentacion}</td>
-                                      <td style={{ ...td, textAlign: "right", fontWeight: 700 }}>{c.qq.toFixed(2)}</td>
+                                      <td style={{ ...td, textAlign: "right", fontWeight: 700 }}>{c.qq.enReal()}</td>
                                       <td style={{ ...td, textAlign: "right", color: "#2563eb" }}>{bultos} {unidadGuiaDePresentacion(c.presentacion === "—" ? null : c.presentacion).toLowerCase()}</td>
-                                      <td style={{ ...td, textAlign: "right", color: insuf ? "#b91c1c" : "#15803d", fontWeight: 700 }}>{stk.toFixed(2)} QQ</td>
-                                      <td style={td}>{insuf ? <span style={{ color: "#b91c1c", fontWeight: 800, fontSize: 12 }}>⚠️ Stock insuficiente (Faltan {falta.toFixed(2)} QQ)</span> : <span style={{ color: "#15803d", fontSize: 12 }}>✔️ OK</span>}</td>
+                                      <td style={{ ...td, textAlign: "right", color: insuf ? "#b91c1c" : "#15803d", fontWeight: 700 }}>{stk.enReal()} QQ</td>
+                                      <td style={td}>{insuf ? <span style={{ color: "#b91c1c", fontWeight: 800, fontSize: 12 }}>⚠️ Stock insuficiente (Faltan {falta.enReal()} QQ)</span> : <span style={{ color: "#15803d", fontSize: 12 }}>✔️ OK</span>}</td>
                                     </tr>
                                   );
                                 })}
@@ -16605,9 +16605,9 @@ export function App() {
                                     <tr key={o.id} style={{ background: listo ? "#f0fdf4" : "#fff" }}>
                                       <td style={{ ...td, fontWeight: 700 }}>{o.order_number}</td>
                                       <td style={td}>{o.customer_name}</td>
-                                      <td style={{ ...td, textAlign: "right" }}>{totalQq.toFixed(2)} QQ</td>
-                                      <td style={{ ...td, textAlign: "right" }}>{despachado.toFixed(2)} QQ</td>
-                                      <td style={{ ...td, textAlign: "right", fontWeight: 700 }}>{pendienteEntregar.toFixed(2)} QQ</td>
+                                      <td style={{ ...td, textAlign: "right" }}>{totalQq.enReal()} QQ</td>
+                                      <td style={{ ...td, textAlign: "right" }}>{despachado.enReal()} QQ</td>
+                                      <td style={{ ...td, textAlign: "right", fontWeight: 700 }}>{pendienteEntregar.enReal()} QQ</td>
                                       <td style={td}>{listo ? <span style={{ fontSize: 11, fontWeight: 800, color: "#15803d", background: "#dcfce7", borderRadius: 6, padding: "2px 8px" }}>🟢 En cola de carga</span> : <span style={{ fontSize: 11, fontWeight: 800, color: "#b45309", background: "#fef3c7", borderRadius: 6, padding: "2px 8px" }}>🟡 Pendiente preparación</span>}</td>
                                       <td style={td}>
                                         <button type="button" onClick={() => { setPendientesModalOpen(false); setVentasView("despachos"); setFocusOrderId(o.id); }}
@@ -17008,7 +17008,7 @@ export function App() {
                 </div>
               ))}
               <button type="button" onClick={addPurchaseItem} style={{ marginBottom: 8 }}>+ Agregar item</button>
-              <p style={{ fontWeight: 600 }}>Total: ${purchaseTotal().toFixed(2)}</p>
+              <p style={{ fontWeight: 600 }}>Total: ${purchaseTotal().enReal()}</p>
               <button type="button" className="primary" onClick={submitPurchase}>Registrar compra</button>
             </div>
 
@@ -17039,7 +17039,7 @@ export function App() {
                 const total = vis.reduce((s: number, c: any) => s + Number(c.total_amount || 0), 0);
                 return (
                   <>
-                    <p style={{ fontWeight: 600, margin: "4px 0" }}>{vis.length} compras · Total: ${total.toFixed(2)}</p>
+                    <p style={{ fontWeight: 600, margin: "4px 0" }}>{vis.length} compras · Total: ${total.enReal()}</p>
                     {vis.length === 0 && <p className="muted">Sin compras</p>}
                     <div className="equipList">
                       {vis.map((c: any) => (
@@ -17048,7 +17048,7 @@ export function App() {
                             <strong>{c.purchase_number} — {c.supplier_name}</strong>
                             <small>{(c.purchase_date || "").slice(0, 10)} · {c.payment_type === "CASH" ? "Contado" : "Credito"} · {c.status}</small>
                           </div>
-                          <strong>${Number(c.total_amount).toFixed(2)}</strong>
+                          <strong>${Number(c.total_amount).enReal()}</strong>
                         </div>
                       ))}
                     </div>
@@ -17288,8 +17288,8 @@ export function App() {
                                 {isAdmin && (
                                   <button type="button" role="menuitem" className="cj-menu-item" onClick={() => {
                                     setCajaMenu(null);
-                                    setNewCajaCash(String(Number(dashboard.current_cash_register?.opening_balance_cash ?? 0).toFixed(2)));
-                                    setNewCajaBank(String(Number(dashboard.current_cash_register?.opening_balance_bank ?? 0).toFixed(2)));
+                                    setNewCajaCash(String(Number(dashboard.current_cash_register?.opening_balance_cash ?? 0).enReal()));
+                                    setNewCajaBank(String(Number(dashboard.current_cash_register?.opening_balance_bank ?? 0).enReal()));
                                     setEditOpeningBalance(true);
                                   }}>
                                     <span className="cj-menu-ico">✏️</span><span className="cj-menu-label">Editar saldo inicial</span>
@@ -17484,7 +17484,7 @@ export function App() {
                             style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
                             <option value="">Seleccione un agricultor</option>
                             {farmersWithPendingLiq.map((f) => (
-                              <option key={f.id} value={f.id}>{f.full_name} (Pendiente: ${f.pending_advance_balance.toFixed(2)})</option>
+                              <option key={f.id} value={f.id}>{f.full_name} (Pendiente: ${f.pending_advance_balance.enReal()})</option>
                             ))}
                           </select>
                         </label>
@@ -17856,7 +17856,7 @@ export function App() {
                         entra al stock con su «Compatibilidad / etiqueta». El monto del egreso
                         es la suma de la lista. Sin lista es un egreso común. Solo Matriz. */}
                     {movType === "EXPENSE" && movCategory === "REPUESTOS" && esMatrizActiva && !movEsFondo && (() => {
-                      const n2 = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2));
+                      const n2 = (v: number) => (Number.isInteger(v) ? String(v) : v.enReal());
                       const enLista = new Set(repCart.map((l) => l.repuesto_id).filter(Boolean));
                       const opciones = repCatalogo
                         .filter((r) => r.activo && !enLista.has(r.id))
@@ -17941,7 +17941,7 @@ export function App() {
                                       onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); agregarALista(); } }} />
                                   </label>
                                   <label className="mantCampo">Subtotal $
-                                    <input readOnly tabIndex={-1} value={subSel.toFixed(2)} className="repEntrada__num mantMontos__solo" aria-readonly="true" />
+                                    <input readOnly tabIndex={-1} value={subSel.enReal()} className="repEntrada__num mantMontos__solo" aria-readonly="true" />
                                   </label>
                                   <button type="button" className="primary repEntrada__btn" disabled={!puedeAgregar} onClick={agregarALista}
                                     title={puedeAgregar ? "Agregar a la lista" : "Cantidad mínima 1 y precio mayor a 0"}>➕ Agregar a la lista</button>
@@ -18073,7 +18073,7 @@ export function App() {
                         <div style={{ fontSize: 12, fontWeight: 700, color: "#15803d", marginBottom: 10 }}>📦 Compra de sacos (suma al inventario de la Matriz)</div>
                         <label style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Tipo de saco
                           <select value={sackBuyForm.sack_id} required={false}
-                            onChange={(e) => { const sel = sacosDelActivo.find((s) => s.id === e.target.value); const base = sel && Number(sel.precio_compra_default) > 0 ? Number(sel.precio_compra_default).toFixed(2) : ""; setSackBuyForm({ ...sackBuyForm, sack_id: e.target.value, precio: base }); }}
+                            onChange={(e) => { const sel = sacosDelActivo.find((s) => s.id === e.target.value); const base = sel && Number(sel.precio_compra_default) > 0 ? Number(sel.precio_compra_default).enReal() : ""; setSackBuyForm({ ...sackBuyForm, sack_id: e.target.value, precio: base }); }}
                             style={{ display: "block", width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 }}>
                             <option value="">Seleccione un tipo</option>
                             {/* Agrupado por marca (0.11 / Corriente), luego subproductos y genéricos. */}
@@ -18104,7 +18104,7 @@ export function App() {
                         </div>
                         {sackBuyForm.cantidad && sackBuyForm.precio && (
                           <div style={{ background: "#dbeafe", border: "1px solid #93c5fd", borderRadius: 6, padding: "8px 12px", marginBottom: 10, fontSize: 12, color: "#1e40af" }}>
-                            Subtotal del ítem: <strong>${(parseInt(sackBuyForm.cantidad || "0") * parseFloat(sackBuyForm.precio || "0")).toFixed(2)}</strong>
+                            Subtotal del ítem: <strong>${(parseInt(sackBuyForm.cantidad || "0") * parseFloat(sackBuyForm.precio || "0")).enReal()}</strong>
                           </div>
                         )}
                         <button type="button" className="btnSecondary" onClick={agregarSacoALista} style={{ width: "100%", padding: "8px 0", fontWeight: 700, borderRadius: 6 }}>➕ Agregar a la lista</button>
@@ -18123,8 +18123,8 @@ export function App() {
                                   <tr key={i} style={{ background: i % 2 === 0 ? "#fff" : "#f9fafb" }}>
                                     <td style={{ padding: "4px 8px" }}>{it.tipo}</td>
                                     <td style={{ padding: "4px 8px", textAlign: "right" }}>{it.cantidad}</td>
-                                    <td style={{ padding: "4px 8px", textAlign: "right" }}>${it.precio.toFixed(2)}</td>
-                                    <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700 }}>${(it.cantidad * it.precio).toFixed(2)}</td>
+                                    <td style={{ padding: "4px 8px", textAlign: "right" }}>${it.precio.enReal()}</td>
+                                    <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700 }}>${(it.cantidad * it.precio).enReal()}</td>
                                     <td style={{ padding: "4px 8px", textAlign: "center" }}>
                                       <button type="button" onClick={() => quitarSacoDeLista(i)} style={{ padding: "2px 8px", background: "#ef4444", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 11 }}>🗑️</button>
                                     </td>
@@ -18133,7 +18133,7 @@ export function App() {
                               </tbody>
                               <tfoot><tr style={{ background: "#f0fdf4", fontWeight: 800 }}>
                                 <td colSpan={3} style={{ padding: "6px 8px" }}>MONTO TOTAL $</td>
-                                <td style={{ padding: "6px 8px", textAlign: "right", color: "#15803d", fontSize: 15 }}>${sackCart.reduce((s, it) => s + it.cantidad * it.precio, 0).toFixed(2)}</td>
+                                <td style={{ padding: "6px 8px", textAlign: "right", color: "#15803d", fontSize: 15 }}>${sackCart.reduce((s, it) => s + it.cantidad * it.precio, 0).enReal()}</td>
                                 <td />
                               </tr></tfoot>
                             </table>
@@ -18153,7 +18153,7 @@ export function App() {
                         {movCategory === "REPUESTOS" && repCart.length > 0 ? (
                           <label>
                             <span>Monto $ <span className="muted" style={{ fontWeight: 400 }}>(suma de la lista, automático)</span></span>
-                            <input readOnly tabIndex={-1} value={repCartTotal.toFixed(2)} aria-readonly="true" className="montoAuto" />
+                            <input readOnly tabIndex={-1} value={repCartTotal.enReal()} aria-readonly="true" className="montoAuto" />
                           </label>
                         ) : <Input name="amount" label="Monto $" type="number" />}
                       </>
@@ -18244,7 +18244,7 @@ export function App() {
                       <div className="totalBox">
                         <span>Total a pagar</span>
                         <strong>{money(round2((Number(laborForm.sacks_moved) || 0) * (Number(laborForm.price_per_sack) || 0)))}</strong>
-                        <small>{laborForm.sacks_moved || 0} sacos × ${Number(laborForm.price_per_sack || 0).toFixed(2)}</small>
+                        <small>{laborForm.sacks_moved || 0} sacos × ${Number(laborForm.price_per_sack || 0).enReal()}</small>
                       </div>
                       <button className="primary" disabled={busy}>Registrar pago</button>
                     </form>
@@ -18386,8 +18386,8 @@ export function App() {
                         return (
                           <>
                             <p style={{ fontWeight: 600, margin: "4px 0" }}>
-                              {vis.length} registros · Pagado en caja: ${total.toFixed(2)}
-                              {totalStock > 0 && <span style={{ color: "#0f766e" }}> · Repuestos del stock: ${totalStock.toFixed(2)} · Costo total: ${(total + totalStock).toFixed(2)}</span>}
+                              {vis.length} registros · Pagado en caja: ${total.enReal()}
+                              {totalStock > 0 && <span style={{ color: "#0f766e" }}> · Repuestos del stock: ${totalStock.enReal()} · Costo total: ${(total + totalStock).enReal()}</span>}
                             </p>
                             {vis.length === 0 && <p className="muted">Sin mantenimientos</p>}
                             <div className="equipList">
@@ -18397,16 +18397,16 @@ export function App() {
                                     <strong>{m.area_label}{m.section_label ? " / " + m.section_label : ""}{m.maquina ? " · " + m.maquina : ""}</strong>
                                     <small>{(m.created_at || "").slice(0, 10)} · {m.maintenance_type} · {m.description}{m.provider ? " · " + m.provider : ""}</small>
                                     {Number(m.repuestos_stock_valor || 0) > 0 && (
-                                      <small style={{ display: "block", color: "#0f766e" }}>🔩 Del inventario: {m.repuestos_detalle ?? "repuestos"} · ${Number(m.repuestos_stock_valor).toFixed(2)}</small>
+                                      <small style={{ display: "block", color: "#0f766e" }}>🔩 Del inventario: {m.repuestos_detalle ?? "repuestos"} · ${Number(m.repuestos_stock_valor).enReal()}</small>
                                     )}
                                     {m.repuestos_comprados && <small style={{ display: "block", color: "#9a3412" }}>🛒 Comprados: {m.repuestos_comprados}</small>}
                                     {Number(m.parts_cost || 0) > 0 && !m.repuestos_comprados && (
-                                      <small style={{ display: "block", color: "#475569" }}>Mano de obra ${Number(m.labor_cost || 0).toFixed(2)} · Materiales ${Number(m.parts_cost).toFixed(2)}</small>
+                                      <small style={{ display: "block", color: "#475569" }}>Mano de obra ${Number(m.labor_cost || 0).enReal()} · Materiales ${Number(m.parts_cost).enReal()}</small>
                                     )}
                                   </div>
                                   <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
-                                    <strong>${Number(m.amount).toFixed(2)}</strong>
-                                    {Number(m.repuestos_stock_valor || 0) > 0 && <small style={{ color: "#0f766e" }}>+ ${Number(m.repuestos_stock_valor).toFixed(2)} stock</small>}
+                                    <strong>${Number(m.amount).enReal()}</strong>
+                                    {Number(m.repuestos_stock_valor || 0) > 0 && <small style={{ color: "#0f766e" }}>+ ${Number(m.repuestos_stock_valor).enReal()} stock</small>}
                                     {m.receipt_photo_signed_url && <a href={m.receipt_photo_signed_url} target="_blank" rel="noreferrer">foto</a>}
                                   </div>
                                 </div>
@@ -18469,7 +18469,7 @@ export function App() {
                             const cuenta = obtenerResumenCuentaFomento(f);
                             return (
                               <option key={f.id} value={f.id}>
-                                {f.farmer_name} | Deuda: ${cuenta.deudaPendiente.toFixed(2)} | Disp: ${Number(f.falta_por_pedir).toFixed(2)}
+                                {f.farmer_name} | Deuda: ${cuenta.deudaPendiente.enReal()} | Disp: ${Number(f.falta_por_pedir).enReal()}
                               </option>
                             );
                           })}
@@ -18483,9 +18483,9 @@ export function App() {
                         const cuenta = obtenerResumenCuentaFomento(f);
                         return (
                           <div style={{ background: "#f0fdf4", borderRadius: 6, padding: "8px 12px", marginBottom: 10, fontSize: 12, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
-                            <div><span style={{ color: "var(--c-muted)" }}>Pedido</span><br/><strong>${Number(f.total_pedido).toFixed(2)}</strong></div>
-                            <div><span style={{ color: "var(--c-muted)" }}>Interés</span><br/><strong style={{ color: "#b45309" }}>${Number(f.gasto_adm).toFixed(2)}</strong></div>
-                            <div><span style={{ color: "var(--c-muted)" }}>Deuda total</span><br/><strong style={{ color: cuenta.deudaPendiente > 0 ? "#dc2626" : "#16a34a" }}>${cuenta.deudaPendiente.toFixed(2)}</strong></div>
+                            <div><span style={{ color: "var(--c-muted)" }}>Pedido</span><br/><strong>${Number(f.total_pedido).enReal()}</strong></div>
+                            <div><span style={{ color: "var(--c-muted)" }}>Interés</span><br/><strong style={{ color: "#b45309" }}>${Number(f.gasto_adm).enReal()}</strong></div>
+                            <div><span style={{ color: "var(--c-muted)" }}>Deuda total</span><br/><strong style={{ color: cuenta.deudaPendiente > 0 ? "#dc2626" : "#16a34a" }}>${cuenta.deudaPendiente.enReal()}</strong></div>
                           </div>
                         );
                       })()}
@@ -18532,19 +18532,19 @@ export function App() {
                           <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6, fontSize: 12 }}>
                             <div style={{ textAlign: "center" }}>
                               <div style={{ color: "var(--c-muted)", fontSize: 10 }}>PEDIDO</div>
-                              <strong>${Number(f.total_pedido).toFixed(2)}</strong>
+                              <strong>${Number(f.total_pedido).enReal()}</strong>
                             </div>
                             <div style={{ textAlign: "center" }}>
                               <div style={{ color: "var(--c-muted)", fontSize: 10 }}>INTERÉS</div>
-                              <strong style={{ color: "#b45309" }}>${Number(f.gasto_adm).toFixed(2)}</strong>
+                              <strong style={{ color: "#b45309" }}>${Number(f.gasto_adm).enReal()}</strong>
                             </div>
                             <div style={{ textAlign: "center" }}>
                               <div style={{ color: "var(--c-muted)", fontSize: 10 }}>PAGADO</div>
-                              <strong style={{ color: "#16a34a" }}>${cuenta.totalPagado.toFixed(2)}</strong>
+                              <strong style={{ color: "#16a34a" }}>${cuenta.totalPagado.enReal()}</strong>
                             </div>
                             <div style={{ textAlign: "center" }}>
                               <div style={{ color: "var(--c-muted)", fontSize: 10 }}>DEUDA</div>
-                              <strong style={{ color: cuenta.deudaPendiente > 0 ? "#dc2626" : "#16a34a" }}>${cuenta.deudaPendiente.toFixed(2)}</strong>
+                              <strong style={{ color: cuenta.deudaPendiente > 0 ? "#dc2626" : "#16a34a" }}>${cuenta.deudaPendiente.enReal()}</strong>
                             </div>
                           </div>
                           <button type="button"
@@ -18572,7 +18572,7 @@ export function App() {
           const gasto = Number(lf.gasto_real);
           const tieneGasto = Number.isFinite(gasto) && lf.gasto_real !== "";
           const diff = tieneGasto ? round2(entregado - gasto) : null;
-          const n2 = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2));
+          const n2 = (v: number) => (Number.isInteger(v) ? String(v) : v.enReal());
           // Solo un fondo de «Repuestos» registra las piezas compradas (entran a bodega).
           // Mantenimiento Planta y demás: solo gasto real y vuelto.
           const conBodega = lf.mov.category === "REPUESTOS" && esMatrizActiva;
@@ -18646,11 +18646,11 @@ export function App() {
                   <div style={{ display: "grid", gap: 10 }}>
                     <label className="mantCampo">Gasto real final $ <span className="mantCampo__nota">según la factura</span>
                       <span style={{ display: "flex", gap: 6, marginTop: 4 }}>
-                        <input type="number" min="0" step="0.01" autoFocus={!conBodega} value={lf.gasto_real} placeholder={totalRep > 0 ? totalRep.toFixed(2) : "0.00"}
+                        <input type="number" min="0" step="0.01" autoFocus={!conBodega} value={lf.gasto_real} placeholder={totalRep > 0 ? totalRep.enReal() : "0.00"}
                           onChange={(e) => setLf({ gasto_real: e.target.value })}
                           style={{ flex: 1, padding: "10px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 14, fontWeight: 700 }} />
                         {totalRep > 0 && lf.gasto_real === "" && (
-                          <button type="button" className="mantMini" style={{ width: "auto", flex: "0 0 auto", padding: "0 10px", fontSize: 12 }} onClick={() => setLf({ gasto_real: totalRep.toFixed(2) })}>= repuestos</button>
+                          <button type="button" className="mantMini" style={{ width: "auto", flex: "0 0 auto", padding: "0 10px", fontSize: 12 }} onClick={() => setLf({ gasto_real: totalRep.enReal() })}>= repuestos</button>
                         )}
                       </span>
                     </label>
@@ -18708,19 +18708,19 @@ export function App() {
                       <div key={i} className="liqResultRow">
                         <span>{item.lot_code}</span>
                         <span>{item.rice_type ?? "—"}</span>
-                        <span>{Number(item.quintals).toFixed(2)}</span>
-                        <span>${Number(item.price_per_quintal).toFixed(2)}</span>
+                        <span>{Number(item.quintals).enReal()}</span>
+                        <span>${Number(item.price_per_quintal).enReal()}</span>
                         <span className="liqDiscount">
-                          -${(Number(item.advances_discount) + Number(item.other_discounts)).toFixed(2)}
+                          -${(Number(item.advances_discount) + Number(item.other_discounts)).enReal()}
                         </span>
-                        <span className="liqNet">${Number(item.net_amount).toFixed(2)}</span>
+                        <span className="liqNet">${Number(item.net_amount).enReal()}</span>
                       </div>
                     ))}
                     <div className="liqResultTotal">
                       <span>Total neto</span><span /><span />
                       <span /><span />
                       <span className="liqNet">
-                        ${liqResult.reduce((s, r) => s + Number(r.net_amount), 0).toFixed(2)}
+                        ${liqResult.reduce((s, r) => s + Number(r.net_amount), 0).enReal()}
                       </span>
                     </div>
                   </div>
@@ -18780,7 +18780,7 @@ export function App() {
                             <label key={entry.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", margin: 0, borderBottom: "1px solid var(--c-border)", cursor: "pointer" }}>
                               <input type="checkbox" checked={checked} onChange={() => toggleLiqEntryPick(entry.id)} style={{ width: 18, height: 18, marginTop: 1, flex: "0 0 auto" }} />
                               <span style={{ fontSize: 13, lineHeight: 1.35 }}>
-                                <strong>{entryLabel(entry)}</strong> · {entry.placa?.trim() || "S/P"} · {entry.rice_type ?? "—"} · {Number(entry.quintals ?? 0).toFixed(2)} QQ
+                                <strong>{entryLabel(entry)}</strong> · {entry.placa?.trim() || "S/P"} · {entry.rice_type ?? "—"} · {Number(entry.quintals ?? 0).enReal()} QQ
                               </span>
                             </label>
                           );
@@ -18811,7 +18811,7 @@ export function App() {
                           <small>{selEntry?.placa?.trim() || "S/P"} · {selEntry?.rice_type ?? "—"}</small>
                         </div>
                         <input type="number" step="0.01" min="0"
-                          placeholder={farmerLots.find((l) => l.id === line.lot_id) ? String(Number(farmerLots.find((l) => l.id === line.lot_id)!.quintals ?? 0).toFixed(2)) : "QQ"}
+                          placeholder={farmerLots.find((l) => l.id === line.lot_id) ? String(Number(farmerLots.find((l) => l.id === line.lot_id)!.quintals ?? 0).enReal()) : "QQ"}
                           value={line.quintals}
                           onChange={(e) => { const u = [...liqLines]; u[i] = { ...u[i], quintals: e.target.value }; setLiqLines(u); }} />
                         <input type="number" step="0.01" min="0" placeholder="0.00"
@@ -18899,7 +18899,7 @@ export function App() {
                       {!discountsOpen && <line x1="8" y1="3" x2="8" y2="13"/>}
                     </svg>
                     Descuentos
-                    {liqDiscountsTotal > 0 && <span className="liqDiscBadge">-${liqDiscountsTotal.toFixed(2)}</span>}
+                    {liqDiscountsTotal > 0 && <span className="liqDiscBadge">-${liqDiscountsTotal.enReal()}</span>}
                     <svg className="chevron" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                       <polyline points="2,4 6,8 10,4"/>
                     </svg>
@@ -18920,7 +18920,7 @@ export function App() {
                       <div className="liqFleteDesglose">
                         <div className="liqFleteDesgloseHd">
                           🚜 Cosechadora
-                          {liqCosechadoraQq > 0 && <span className="muted" style={{ fontWeight: 400 }}> · partes diarios: {liqCosechadoraQq.toFixed(2)} QQ</span>}
+                          {liqCosechadoraQq > 0 && <span className="muted" style={{ fontWeight: 400 }}> · partes diarios: {liqCosechadoraQq.enReal()} QQ</span>}
                         </div>
                         {liqCosechadoras.length === 0 && (
                           <p className="muted" style={{ margin: "4px 0 8px", fontSize: 12 }}>
@@ -18931,7 +18931,7 @@ export function App() {
                           <div key={row.key} className="liqHarvesterRow">
                             <div className="liqHarvesterTitle">
                               <strong>{row.maquina || `Máquina ${index + 1}`}</strong>
-                              {row.automatica && <span className="chip">Parte diario · {row.qq_sugerido.toFixed(2)} QQ</span>}
+                              {row.automatica && <span className="chip">Parte diario · {row.qq_sugerido.enReal()} QQ</span>}
                               <button type="button" className="liqRemoveBtn" title="Quitar máquina"
                                 onClick={() => setLiqCosechadoras((current) => current.filter((item) => item.key !== row.key))}>×</button>
                             </div>
@@ -18957,7 +18957,7 @@ export function App() {
                             </div>
                             <div className="liqHarvesterSubtotal">
                               <span>Subtotal</span>
-                              <strong>${(Number(row.qq || 0) * Number(row.precio || 0)).toFixed(2)}</strong>
+                              <strong>${(Number(row.qq || 0) * Number(row.precio || 0)).enReal()}</strong>
                             </div>
                           </div>
                         ))}
@@ -18966,7 +18966,7 @@ export function App() {
                         </button>
                         <div className="liqDiscRow liqHarvesterTotal">
                           <span>Total cosechadora</span>
-                          <strong>${liqCosechadoraTotal.toFixed(2)}</strong>
+                          <strong>${liqCosechadoraTotal.enReal()}</strong>
                         </div>
                       </div>
                       {/* ─ Fomentos del agricultor ─ */}
@@ -18974,26 +18974,26 @@ export function App() {
                         <div className="liqFleteDesglose">
                           <div className="liqFleteDesgloseHd">🌱 Fomentos · amortización LIFO (más reciente primero)</div>
                           {liqFomentoLifo.items.map((f) => (
-                            <div key={f.id} className="liqDiscRow" title={`Saldo: $${f.saldo.toFixed(2)}`}
+                            <div key={f.id} className="liqDiscRow" title={`Saldo: $${f.saldo.enReal()}`}
                               style={{ opacity: f.tocado ? 1 : 0.55, alignItems: "flex-start" }}>
                               <span>
                                 {f.es_de_otro_socio
                                   ? <span className="chip" style={{ background: "#f0fdf4", color: "#15803d", border: "1px solid #bbf7d0", marginRight: 6 }}>Fomento de {f.accionista_nombre}</span>
                                   : <>Fomento propio </>}
-                                <small className="muted">saldo ${f.saldo.toFixed(2)}</small>
+                                <small className="muted">saldo ${f.saldo.enReal()}</small>
                                 {f.tocado && (
                                   <small style={{ display: "block", color: f.renovado ? "#b45309" : "#15803d", fontSize: 11 }}>
                                     {f.renovado
-                                      ? `→ se cierra (histórico) · renueva $${f.nuevoSaldo.toFixed(2)}`
+                                      ? `→ se cierra (histórico) · renueva $${f.nuevoSaldo.enReal()}`
                                       : "→ se cierra (pagado)"}
                                   </small>
                                 )}
                               </span>
-                              <strong style={{ color: f.tocado ? "#b91c1c" : "var(--c-muted)" }}>-${f.abono.toFixed(2)}</strong>
+                              <strong style={{ color: f.tocado ? "#b91c1c" : "var(--c-muted)" }}>-${f.abono.enReal()}</strong>
                             </div>
                           ))}
                           <small className="muted" style={{ display: "block", marginTop: 2 }}>
-                            El estimado a pagar (${liqFomentoLifo.disponible.toFixed(2)}) amortiza los fomentos del más reciente al más antiguo. Descontar un fomento de otro socio genera una deuda inter-socios.
+                            El estimado a pagar (${liqFomentoLifo.disponible.enReal()}) amortiza los fomentos del más reciente al más antiguo. Descontar un fomento de otro socio genera una deuda inter-socios.
                           </small>
                         </div>
                       )}
@@ -19002,7 +19002,7 @@ export function App() {
                         <div className="liqFleteDesglose" style={{ borderColor: "#93c5fd" }}>
                           <div className="liqFleteDesgloseHd">💵 Distribución de Pago · {liqFomentosList.length} fondeadores</div>
                           <small className="muted" style={{ display: "block", marginBottom: 6 }}>
-                            Disponible del arroz: <strong>${liqFomentoLifo.disponible.toFixed(2)}</strong>. Asigna cuánto va a cada fomento (prellenado con el sugerido).
+                            Disponible del arroz: <strong>${liqFomentoLifo.disponible.enReal()}</strong>. Asigna cuánto va a cada fomento (prellenado con el sugerido).
                           </small>
                           {liqFomentoResuelto.map((r) => {
                             const it = liqFomentoLifo.items.find((x) => x.id === r.id);
@@ -19013,10 +19013,10 @@ export function App() {
                                   {r.es_de_otro_socio
                                     ? <span className="chip" style={{ background: "#f0fdf4", color: "#15803d", border: "1px solid #bbf7d0", marginRight: 6 }}>Fomento de {r.accionista_nombre}</span>
                                     : <>Fomento propio </>}
-                                  <small className="muted">saldo ${r.saldo.toFixed(2)}</small>
+                                  <small className="muted">saldo ${r.saldo.enReal()}</small>
                                   {r.monto > 0.005 && (
                                     <small style={{ display: "block", color: remanente > 0.005 ? "#b45309" : "#15803d", fontSize: 11 }}>
-                                      {remanente > 0.005 ? `→ se cierra (histórico) · arrastra $${remanente.toFixed(2)}` : "→ se cierra (pagado)"}
+                                      {remanente > 0.005 ? `→ se cierra (histórico) · arrastra $${remanente.enReal()}` : "→ se cierra (pagado)"}
                                     </small>
                                   )}
                                 </span>
@@ -19024,7 +19024,7 @@ export function App() {
                                   <span style={{ fontWeight: 700 }}>$</span>
                                   <input type="number" step="0.01" min="0" max={r.saldo}
                                     style={{ width: 90, textAlign: "right" }}
-                                    placeholder={(it?.abono ?? 0).toFixed(2)}
+                                    placeholder={(it?.abono ?? 0).enReal()}
                                     value={liqFomentoDist[r.id] ?? String(it?.abono ?? 0)}
                                     onChange={(e) => setLiqFomentoDist((p) => ({ ...p, [r.id]: e.target.value }))} />
                                 </span>
@@ -19033,16 +19033,16 @@ export function App() {
                           })}
                           <div className="liqDiscRow" style={{ fontWeight: 700, borderTop: "1px solid #e5e7eb", marginTop: 4, paddingTop: 4 }}>
                             <span>Total asignado a fomentos</span>
-                            <strong style={{ color: liqFomentoManualTotal > liqFomentoLifo.disponible + 0.005 ? "#b91c1c" : "#15803d" }}>${liqFomentoManualTotal.toFixed(2)}</strong>
+                            <strong style={{ color: liqFomentoManualTotal > liqFomentoLifo.disponible + 0.005 ? "#b91c1c" : "#15803d" }}>${liqFomentoManualTotal.enReal()}</strong>
                           </div>
                           {liqFomentoManualTotal > liqFomentoLifo.disponible + 0.005 && (
-                            <small style={{ color: "#b91c1c", display: "block" }}>⚠️ Asignaste más que el disponible del arroz (${liqFomentoLifo.disponible.toFixed(2)}).</small>
+                            <small style={{ color: "#b91c1c", display: "block" }}>⚠️ Asignaste más que el disponible del arroz (${liqFomentoLifo.disponible.enReal()}).</small>
                           )}
                         </div>
                       )}
                       {liqFomentosList.length > 0 && liqSaldoLibreFomento > 0.005 && (
                         <div style={{ marginTop: 6, padding: "7px 10px", borderRadius: 7, background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", fontSize: 12 }}>
-                          <strong>Saldo libre después de Fomentos: ${liqSaldoLibreFomento.toFixed(2)}</strong>
+                          <strong>Saldo libre después de Fomentos: ${liqSaldoLibreFomento.enReal()}</strong>
                           <span style={{ display: "block", marginTop: 2 }}>
                             Permanece disponible en la liquidación para pagar al agricultor o para asignarlo arriba a otro fomento del mismo agricultor.
                           </span>
@@ -19054,11 +19054,11 @@ export function App() {
                           <div className="liqFleteDesgloseHd">Fletes (por transporte)</div>
                           <div className="liqDiscRow">
                             <span>🏭 Flota Propia (interno)</span>
-                            <strong>-${liqFleteInterno.toFixed(2)}</strong>
+                            <strong>-${liqFleteInterno.enReal()}</strong>
                           </div>
                           <div className="liqDiscRow">
                             <span>🚚 Terceros (a pagar)</span>
-                            <strong>-${liqFleteTerceros.toFixed(2)}</strong>
+                            <strong>-${liqFleteTerceros.enReal()}</strong>
                           </div>
                           <small className="muted" style={{ display: "block" }}>
                             Flota Propia salda la deuda interna con Campo (no entra a caja). Terceros queda como saldo a pagar al chofer.
@@ -19072,25 +19072,25 @@ export function App() {
                   <div className="liqSummary">
                     <div className="liqSummaryRow">
                       <span>Total QQ</span>
-                      <strong>{liqQqTotal.toFixed(2)} QQ</strong>
+                      <strong>{liqQqTotal.enReal()} QQ</strong>
                     </div>
                     <div className="liqSummaryRow">
                       <span>Total bruto</span>
-                      <strong>${liqGrossTotal.toFixed(2)}</strong>
+                      <strong>${liqGrossTotal.enReal()}</strong>
                     </div>
                     {liqDiscountsTotal > 0 && (
                       <div className="liqSummaryRow disc">
                         <span>Descuentos manuales</span>
-                        <strong>-${liqDiscountsTotal.toFixed(2)}</strong>
+                        <strong>-${liqDiscountsTotal.enReal()}</strong>
                       </div>
                     )}
                     <div className="liqSummaryRow total">
                       <span>Estimado a pagar</span>
-                      <strong>${Math.max(0, liqGrossTotal - liqDiscountsTotal).toFixed(2)}</strong>
+                      <strong>${Math.max(0, liqGrossTotal - liqDiscountsTotal).enReal()}</strong>
                     </div>
                     {liqSaldoEnContra > 0 && (
                       <div className="liqSummaryRow" style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, padding: "6px 8px", marginTop: 4 }}>
-                        <span style={{ color: "#b91c1c", fontWeight: 600 }}>⚠️ Saldo en contra: -${liqSaldoEnContra.toFixed(2)}</span>
+                        <span style={{ color: "#b91c1c", fontWeight: 600 }}>⚠️ Saldo en contra: -${liqSaldoEnContra.enReal()}</span>
                         <small style={{ color: "#b91c1c" }}>Se generará nuevo fomento</small>
                       </div>
                     )}
@@ -19141,7 +19141,7 @@ export function App() {
                             <td style={td}>{e.farmer_name ?? "—"}</td>
                             <td style={td}>{e.placa?.trim() || "S/P"}</td>
                             <td style={td}>{e.lot_code ?? "sin lote aún"}</td>
-                            <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>{Number(e.quintals ?? 0).toFixed(2)} QQ</td>
+                            <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>{Number(e.quintals ?? 0).enReal()} QQ</td>
                           </tr>
                         ))}
                       </tbody>
@@ -19176,14 +19176,14 @@ export function App() {
                       return (
                         <div key={b.key} className="liqHistRow">
                           <span>{b.farmer_name}</span>
-                          <span>{qqTotal.toFixed(2)} QQ</span>
-                          <span>${b.gross_total.toFixed(2)}</span>
-                          <span className="liqDiscount">-${b.advances_total.toFixed(2)}</span>
-                          <span className="liqDiscount">-${b.other_disc_total.toFixed(2)}</span>
-                          <span className="liqNet">${b.net_total.toFixed(2)}</span>
+                          <span>{qqTotal.enReal()} QQ</span>
+                          <span>${b.gross_total.enReal()}</span>
+                          <span className="liqDiscount">-${b.advances_total.enReal()}</span>
+                          <span className="liqDiscount">-${b.other_disc_total.enReal()}</span>
+                          <span className="liqNet">${b.net_total.enReal()}</span>
                           <span>
                             <span className={paid ? "liqBadgePaid" : "liqBadgePending"}>
-                              {paid ? "Pagado" : `Pend. $${b.pending_total.toFixed(2)}`}
+                              {paid ? "Pagado" : `Pend. $${b.pending_total.enReal()}`}
                             </span>
                           </span>
                           <span className="liqActions">
@@ -19403,14 +19403,14 @@ export function App() {
                           </div>
                           <div style={{ fontSize: 12, color: "var(--c-muted)", display: "flex", gap: 12, flexWrap: "wrap" }}>
                             <span>{f.cuadras} cuadras</span>
-                            <span>Límite: ${Number(f.monto_limite).toFixed(2)}</span>
-                            <span>Pedido: ${Number(f.total_pedido).toFixed(2)}</span>
+                            <span>Límite: ${Number(f.monto_limite).enReal()}</span>
+                            <span>Pedido: ${Number(f.total_pedido).enReal()}</span>
                             <span style={{ color: habilitado ? "#16a34a" : "#dc2626", fontWeight: 700 }}>{f.estado_credito}</span>
                           </div>
                           <div style={{ fontSize: 11, color: "var(--c-muted)", marginTop: 2 }}>
                             {f.status === "CERRADO_LIQUIDACION"
-                              ? <>Liquidado: {f.liquidado_at?.slice(0,10) ?? "—"} | <strong style={{ color: cuenta.deudaPendiente > 0 ? "#dc2626" : "#16a34a" }}>{cuenta.deudaPendiente > 0 ? `Deuda $${cuenta.deudaPendiente.toFixed(2)}` : "SALDADO"}{cuenta.saldoFavor > 0 ? ` · A favor $${cuenta.saldoFavor.toFixed(2)}` : ""}</strong></>
-                              : <>Inicio: {f.inicio?.slice(0,10)} | Cosecha: {f.cosecha?.slice(0,10) ?? "—"} | Interés: ${Number(f.gasto_adm).toFixed(2)}</>}
+                              ? <>Liquidado: {f.liquidado_at?.slice(0,10) ?? "—"} | <strong style={{ color: cuenta.deudaPendiente > 0 ? "#dc2626" : "#16a34a" }}>{cuenta.deudaPendiente > 0 ? `Deuda $${cuenta.deudaPendiente.enReal()}` : "SALDADO"}{cuenta.saldoFavor > 0 ? ` · A favor $${cuenta.saldoFavor.enReal()}` : ""}</strong></>
+                              : <>Inicio: {f.inicio?.slice(0,10)} | Cosecha: {f.cosecha?.slice(0,10) ?? "—"} | Interés: ${Number(f.gasto_adm).enReal()}</>}
                           </div>
                         </div>
                       );
@@ -19469,8 +19469,8 @@ export function App() {
                       return (
                         <div style={{ background: saldado ? "#f0fdf4" : "#fef2f2", border: `1px solid ${saldado ? "#86efac" : "#fecaca"}`, borderRadius: 8, padding: "9px 12px", marginBottom: 12, fontSize: 12, color: saldado ? "#166534" : "#991b1b" }}>
                           {fomentoDetalle.status === "CERRADO_LIQUIDACION" && <><strong>Fomento archivado</strong>{fomentoDetalle.liquidado_at ? ` el ${fomentoDetalle.liquidado_at.slice(0,10)}` : ""}. </>}
-                          <strong>{saldado ? "SALDADO" : `Deuda pendiente: $${cuenta.deudaPendiente.toFixed(2)}`}</strong>
-                          {cuenta.saldoFavor > 0 && <span style={{ display: "block", marginTop: 3, fontWeight: 800 }}>Saldo a favor del agricultor: ${cuenta.saldoFavor.toFixed(2)}</span>}
+                          <strong>{saldado ? "SALDADO" : `Deuda pendiente: $${cuenta.deudaPendiente.enReal()}`}</strong>
+                          {cuenta.saldoFavor > 0 && <span style={{ display: "block", marginTop: 3, fontWeight: 800 }}>Saldo a favor del agricultor: ${cuenta.saldoFavor.enReal()}</span>}
                         </div>
                       );
                     })()}
@@ -19496,10 +19496,10 @@ export function App() {
                         </>
                       ) : (
                         <>
-                          <strong style={{ fontSize: 15, color: "#b45309" }}>{(Number(fomentoDetalle.renta) * 100).toFixed(2)}%</strong>
+                          <strong style={{ fontSize: 15, color: "#b45309" }}>{(Number(fomentoDetalle.renta) * 100).enReal()}%</strong>
                           <span style={{ fontSize: 10, color: "var(--c-muted)" }}>mensual</span>
                           {canEditarPrecios && (
-                            <button type="button" onClick={() => { setFomentoEditingRenta(fomentoDetalle.id); setFomentoRentaInput((Number(fomentoDetalle.renta)*100).toFixed(2)); }}
+                            <button type="button" onClick={() => { setFomentoEditingRenta(fomentoDetalle.id); setFomentoRentaInput((Number(fomentoDetalle.renta)*100).enReal()); }}
                               style={{ background: "none", border: "1px solid #fcd34d", borderRadius: 5, padding: "3px 8px", cursor: "pointer", fontSize: 11, color: "#92400e" }}>
                               ✏ Editar %
                             </button>
@@ -19513,14 +19513,14 @@ export function App() {
                       const cuenta = obtenerResumenCuentaFomento(fomentoDetalle);
                       const resumen: [string, string | number][] = [
                         ["Cuadras", fomentoDetalle.cuadras],
-                        ["Paradas", Number(fomentoDetalle.paradas).toFixed(0)],
-                        ["Monto Límite", `$${Number(fomentoDetalle.monto_limite).toFixed(2)}`],
-                        ["Total Pedido", `$${Number(fomentoDetalle.total_pedido).toFixed(2)}`],
-                        ["Disponible", `$${Number(fomentoDetalle.falta_por_pedir).toFixed(2)}`],
-                        ["Interés Acum.", `$${Number(fomentoDetalle.gasto_adm).toFixed(2)}`],
-                        ["Total Pagado", `$${cuenta.totalPagado.toFixed(2)}`],
-                        ["Deuda Total", `$${cuenta.deudaPendiente.toFixed(2)}`],
-                        ...(cuenta.saldoFavor > 0 ? [["Saldo a favor", `$${cuenta.saldoFavor.toFixed(2)}`] as [string, string]] : []),
+                        ["Paradas", Number(fomentoDetalle.paradas).enReal(0, 3)],
+                        ["Monto Límite", `$${Number(fomentoDetalle.monto_limite).enReal()}`],
+                        ["Total Pedido", `$${Number(fomentoDetalle.total_pedido).enReal()}`],
+                        ["Disponible", `$${Number(fomentoDetalle.falta_por_pedir).enReal()}`],
+                        ["Interés Acum.", `$${Number(fomentoDetalle.gasto_adm).enReal()}`],
+                        ["Total Pagado", `$${cuenta.totalPagado.enReal()}`],
+                        ["Deuda Total", `$${cuenta.deudaPendiente.enReal()}`],
+                        ...(cuenta.saldoFavor > 0 ? [["Saldo a favor", `$${cuenta.saldoFavor.enReal()}`] as [string, string]] : []),
                         ["Estado", fomentoDetalle.estado_credito],
                       ];
                       return (
@@ -19570,11 +19570,11 @@ export function App() {
                                 <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>{obtenerFechaFinalFomento(fomentoDetalle)}</td>
                                 <td style={{ padding: "4px 8px", textAlign: "right" }}>{dias}</td>
                                 <td style={{ padding: "4px 8px", textAlign: "right", whiteSpace: "nowrap" }}>
-                                  {meses.toFixed(2)}{e.es_saldo_anterior && <span style={{ marginLeft: 4, fontSize: 10, fontWeight: 800, color: "#92400e" }}>FIJO</span>}
+                                  {meses.enReal()}{e.es_saldo_anterior && <span style={{ marginLeft: 4, fontSize: 10, fontWeight: 800, color: "#92400e" }}>FIJO</span>}
                                 </td>
-                                <td style={{ padding: "4px 8px", textAlign: "right" }}>${Number(e.valor).toFixed(2)}</td>
-                                <td style={{ padding: "4px 8px", textAlign: "right", color: "#b45309" }}>${Number(e.interes).toFixed(2)}</td>
-                                <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700 }}>${Number(e.suman).toFixed(2)}</td>
+                                <td style={{ padding: "4px 8px", textAlign: "right" }}>${Number(e.valor).enReal()}</td>
+                                <td style={{ padding: "4px 8px", textAlign: "right", color: "#b45309" }}>${Number(e.interes).enReal()}</td>
+                                <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700 }}>${Number(e.suman).enReal()}</td>
                                 <td style={{ padding: "4px 8px" }}>
                                   {canAnular && (
                                     <button type="button" title="Eliminar entrega"
@@ -19594,9 +19594,9 @@ export function App() {
                             <tr style={{ fontWeight: 700, borderTop: "2px solid #e5e7eb" }}>
                               <td colSpan={3} style={{ padding: "4px 8px" }}>TOTALES</td>
                               <td></td><td></td>
-                              <td style={{ padding: "4px 8px", textAlign: "right" }}>${Number(fomentoDetalle.total_pedido).toFixed(2)}</td>
-                              <td style={{ padding: "4px 8px", textAlign: "right", color: "#b45309" }}>${Number(fomentoDetalle.gasto_adm).toFixed(2)}</td>
-                              <td style={{ padding: "4px 8px", textAlign: "right" }}>${(Number(fomentoDetalle.total_pedido)+Number(fomentoDetalle.gasto_adm)).toFixed(2)}</td>
+                              <td style={{ padding: "4px 8px", textAlign: "right" }}>${Number(fomentoDetalle.total_pedido).enReal()}</td>
+                              <td style={{ padding: "4px 8px", textAlign: "right", color: "#b45309" }}>${Number(fomentoDetalle.gasto_adm).enReal()}</td>
+                              <td style={{ padding: "4px 8px", textAlign: "right" }}>${(Number(fomentoDetalle.total_pedido)+Number(fomentoDetalle.gasto_adm)).enReal()}</td>
                               <td></td>
                             </tr>
                           </tfoot>
@@ -19611,7 +19611,7 @@ export function App() {
                         <div onClick={(ev) => ev.stopPropagation()} className="formPanel" style={{ maxWidth: 440, width: "100%", margin: 0 }}>
                           <h3 style={{ marginTop: 0, color: "#b91c1c" }}>⚠️ ¿Eliminar entrega de crédito?</h3>
                           <p style={{ lineHeight: 1.5 }}>
-                            Estás a punto de borrar la entrega de <strong>${confirmarEntrega.valor.toFixed(2)}</strong> del <strong>{confirmarEntrega.fecha}</strong>.
+                            Estás a punto de borrar la entrega de <strong>${confirmarEntrega.valor.enReal()}</strong> del <strong>{confirmarEntrega.fecha}</strong>.
                             Esto recalculará la deuda total y los intereses del fomento.
                           </p>
                           <div className="buttonRow" style={{ marginTop: 14 }}>
@@ -19656,7 +19656,7 @@ export function App() {
                               const valor = Number(fomentoEntregaForm.valor);
                               const dias = Math.max(0, Math.floor((Date.now() - new Date(fomentoEntregaForm.fecha).getTime()) / 86400000));
                               const interes = valor * renta / 30 * dias;
-                              return `Días: ${dias} | Tasa: ${(renta*100).toFixed(2)}% | Interés: $${interes.toFixed(2)} | Total: $${(valor + interes).toFixed(2)}`;
+                              return `Días: ${dias} | Tasa: ${(renta*100).enReal()}% | Interés: $${interes.enReal()} | Total: $${(valor + interes).enReal()}`;
                             })()}
                           </div>
                         )}
@@ -19690,7 +19690,7 @@ export function App() {
                             {fomentoDetalle.pagos.map((p, i) => (
                               <tr key={p.id} style={{ background: i % 2 === 0 ? "#fff" : "#f0fdf4" }}>
                                 <td style={{ padding: "4px 8px" }}>{p.fecha?.slice(0,10)}</td>
-                                <td style={{ padding: "4px 8px", textAlign: "right", color: "#16a34a", fontWeight: 700 }}>${Number(p.valor).toFixed(2)}</td>
+                                <td style={{ padding: "4px 8px", textAlign: "right", color: "#16a34a", fontWeight: 700 }}>${Number(p.valor).enReal()}</td>
                                 <td style={{ padding: "4px 8px" }}>{p.concepto ?? "—"}</td>
                                 <td style={{ padding: "4px 8px" }}>
                                   {canAnular && (
@@ -19706,7 +19706,7 @@ export function App() {
                             <tr style={{ fontWeight: 700, borderTop: "2px solid #bbf7d0" }}>
                               <td style={{ padding: "4px 8px" }}>TOTAL</td>
                               <td style={{ padding: "4px 8px", textAlign: "right", color: "#16a34a" }}>
-                                ${fomentoDetalle.pagos.reduce((s, p) => s + Number(p.valor), 0).toFixed(2)}
+                                ${fomentoDetalle.pagos.reduce((s, p) => s + Number(p.valor), 0).enReal()}
                               </td>
                               <td colSpan={2}></td>
                             </tr>
@@ -19789,7 +19789,7 @@ export function App() {
                   </label>
                   {fomentoForm.cuadras && (
                     <div style={{ fontSize: 12, color: "var(--c-muted)", background: "#f0fdf4", borderRadius: 6, padding: "4px 8px" }}>
-                      Paradas: {(Number(fomentoForm.cuadras)*16).toFixed(0)} | Límite automático: ${(Number(fomentoForm.cuadras)*800).toFixed(2)}
+                      Paradas: {(Number(fomentoForm.cuadras)*16).enReal(0, 3)} | Límite automático: ${(Number(fomentoForm.cuadras)*800).enReal()}
                     </div>
                   )}
                   <label style={{ fontSize: 12, fontWeight: 600 }}>Límite de Crédito ($)
@@ -20176,7 +20176,7 @@ export function App() {
                   <select value={secadoForm.lot_id} onChange={(e) => setSecadoForm({ ...secadoForm, lot_id: e.target.value })}>
                     <option value="">Seleccione</option>
                     {serviceDriedLots.map((l) => (
-                      <option key={l.lot_id} value={l.lot_id}>{l.lot_code} · {l.farmer_name ?? "Sin cliente"} · {Number(l.quintals).toFixed(2)} QQ · {secadoMetodoLabel(l.dry_method)}</option>
+                      <option key={l.lot_id} value={l.lot_id}>{l.lot_code} · {l.farmer_name ?? "Sin cliente"} · {Number(l.quintals).enReal()} QQ · {secadoMetodoLabel(l.dry_method)}</option>
                     ))}
                   </select>
                 </label>
@@ -20190,13 +20190,13 @@ export function App() {
                   <input type="text" readOnly value={secadoLotSel?.farmer_name ?? ""} placeholder="Se toma del lote seleccionado" />
                 </label>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  <label><span>QQ Secos <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>(kárdex, exacto)</span></span><input type="text" readOnly value={secadoLotSel ? Number(secadoLotSel.quintals).toFixed(2) : "0.00"} style={{ fontWeight: 700 }} /></label>
-                  <label><span>Tarifa de Secado $ / QQ {cfgLink("🛎️ Secado como Servicio", "Tarifa global")}</span><input type="number" step="0.001" min="0" value={secadoForm.rate} onChange={(e) => setSecadoForm({ ...secadoForm, rate: e.target.value })} placeholder={`Global: $${Number(laborRatesForm.secado_servicio_per_qq || 0).toFixed(2)}`} /></label>
+                  <label><span>QQ Secos <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>(kárdex, exacto)</span></span><input type="text" readOnly value={secadoLotSel ? Number(secadoLotSel.quintals).enReal() : "0.00"} style={{ fontWeight: 700 }} /></label>
+                  <label><span>Tarifa de Secado $ / QQ {cfgLink("🛎️ Secado como Servicio", "Tarifa global")}</span><input type="number" step="0.001" min="0" value={secadoForm.rate} onChange={(e) => setSecadoForm({ ...secadoForm, rate: e.target.value })} placeholder={`Global: $${Number(laborRatesForm.secado_servicio_per_qq || 0).enReal()}`} /></label>
                 </div>
                 <div className="totalBox" style={{ margin: "6px 0 10px" }}>
                   <span>Total a cobrar</span>
                   <strong>{money(secadoTotal)}</strong>
-                  <small>{secadoLotSel ? Number(secadoLotSel.quintals).toFixed(2) : "0.00"} QQ × ${(secadoRate || 0).toFixed(2)}</small>
+                  <small>{secadoLotSel ? Number(secadoLotSel.quintals).enReal() : "0.00"} QQ × ${(secadoRate || 0).enReal()}</small>
                 </div>
                 <button type="button" className="primary" disabled={!secadoLotSel || !(secadoTotal > 0)} onClick={submitSecado}>Registrar cobro de secado</button>
                 {serviceDriedLots.length === 0 && <p className="muted" style={{ marginTop: 8 }}>No hay lotes de servicio secados pendientes de cobro.</p>}
@@ -20409,13 +20409,13 @@ export function App() {
                         <option value="">Producto…</option>
                         {(inputProducts.length ? inputProducts : selectableProducts).map((p) => (
                           <option key={p.id} value={p.id}>
-                            {p.name} [Disp: {(sourceWarehouseId ? availableFor(p.id, sourceWarehouseId) : 0).toFixed(2)} QQ]
+                            {p.name} [Disp: {(sourceWarehouseId ? availableFor(p.id, sourceWarehouseId) : 0).enReal()} QQ]
                           </option>
                         ))}
                       </select>
                       <input type="number" step="0.01" min="0" placeholder="QQ" value={line.quantity} onChange={(e) => setInputLine(i, { quantity: e.target.value })} style={inputStyle} />
                       <button type="button" onClick={() => removeInputLine(i)} title="Quitar" style={{ border: "none", background: "transparent", color: "#dc2626", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
-                      {disp !== null && <small style={{ gridColumn: "1 / -1", color: disp + 0.001 < (Number(line.quantity) || 0) ? "#dc2626" : "var(--c-muted)", marginTop: -2 }}>Disponible: {disp.toFixed(2)} QQ</small>}
+                      {disp !== null && <small style={{ gridColumn: "1 / -1", color: disp + 0.001 < (Number(line.quantity) || 0) ? "#dc2626" : "var(--c-muted)", marginTop: -2 }}>Disponible: {disp.enReal()} QQ</small>}
                     </div>
                   );
                 })}
@@ -20495,14 +20495,14 @@ export function App() {
                       <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
                         <div>
                           <strong>{b.batch_number}</strong> · {b.service_type === "ENVEJECIMIENTO" ? "Envejecido" : "Selección"} · {b.provider_name}
-                          <div className="muted" style={{ fontSize: 12 }}>{String(b.service_date).slice(0, 10)} · {Number(b.input_qq).toFixed(2)} QQ enviados · costo {money(Number(b.total_cost))}</div>
+                          <div className="muted" style={{ fontSize: 12 }}>{String(b.service_date).slice(0, 10)} · {Number(b.input_qq).enReal()} QQ enviados · costo {money(Number(b.total_cost))}</div>
                           {b.flete_tipo && Number(b.flete_monto) > 0 && (
                             <div style={{ fontSize: 12, marginTop: 2 }}>🚚 Flete {money(Number(b.flete_monto))} · {b.flete_tipo === "propia" ? `${b.flete_activo_nombre ?? "carro propio"} (Transporte y Cosechadora)` : `${b.flete_prestador ?? "carro externo"} (externo)`}</div>
                           )}
                         </div>
                       </div>
                       <div style={{ fontSize: 12, marginTop: 6 }}>
-                        {b.inputs.map((l, idx) => <span key={idx} className="chip" style={{ marginRight: 4 }}>{l.product_name}: {Number(l.quantity).toFixed(2)}</span>)}
+                        {b.inputs.map((l, idx) => <span key={idx} className="chip" style={{ marginRight: 4 }}>{l.product_name}: {Number(l.quantity).enReal()}</span>)}
                       </div>
                       <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                         {finishingBatchId === b.id ? (
@@ -20588,7 +20588,7 @@ export function App() {
                             const cell = (label: string, val: number, color: string) => (
                               <div style={{ textAlign: "center", padding: "6px 8px" }}>
                                 <div style={{ fontSize: 10.5, color: "#64748b", fontWeight: 700, textTransform: "uppercase" }}>{label}</div>
-                                <div style={{ fontSize: 16, fontWeight: 800, color }}>{val.toFixed(2)}</div>
+                                <div style={{ fontSize: 16, fontWeight: 800, color }}>{val.enReal()}</div>
                               </div>
                             );
                             return (
@@ -20602,7 +20602,7 @@ export function App() {
                                 </div>
                                 {merma < -0.001 && (
                                   <div style={{ padding: "6px 10px", background: "#fef2f2", color: "#b91c1c", fontSize: 11.5, fontWeight: 700, borderTop: "1px solid #fecaca" }}>
-                                    ⛔ Lo recibido supera lo enviado ({(-merma).toFixed(2)} QQ de más). Revisa las cantidades.
+                                    ⛔ Lo recibido supera lo enviado ({(-merma).enReal()} QQ de más). Revisa las cantidades.
                                   </div>
                                 )}
                               </div>
@@ -20635,10 +20635,10 @@ export function App() {
                           <td>{String(b.service_date).slice(0, 10)}</td>
                           <td>{b.provider_name}</td>
                           <td>{b.status === "COMPLETED" ? <span className="chip ok">Completado</span> : <span className="chip warn">Cancelado</span>}</td>
-                          <td>{Number(b.input_qq).toFixed(2)}</td>
-                          <td>{b.outputs.length > 0 ? b.outputs.map((o, i) => <span key={i} className="chip" style={{ marginRight: 4 }}>{o.product_name}: {Number(o.quantity).toFixed(2)} QQ</span>) : "—"}</td>
-                          <td>{Number(b.output_qq).toFixed(2)}</td>
-                          <td>{Number(b.merma_qq).toFixed(2)}</td>
+                          <td>{Number(b.input_qq).enReal()}</td>
+                          <td>{b.outputs.length > 0 ? b.outputs.map((o, i) => <span key={i} className="chip" style={{ marginRight: 4 }}>{o.product_name}: {Number(o.quantity).enReal()} QQ</span>) : "—"}</td>
+                          <td>{Number(b.output_qq).enReal()}</td>
+                          <td>{Number(b.merma_qq).enReal()}</td>
                           <td><strong>{money(Number(b.total_cost))}</strong>{b.flete_tipo && Number(b.flete_monto) > 0 && <div className="muted" style={{ fontSize: 11 }}>+ flete {money(Number(b.flete_monto))} · {b.flete_tipo === "propia" ? (b.flete_activo_nombre ?? "Transp. y Cosech.") : (b.flete_prestador ?? "externo")}</div>}</td>
                           <td>{Number(b.saldo) > 0 ? <span style={{ color: "#dc2626" }}>{money(Number(b.saldo))}</span> : <span className="chip ok">Pagado</span>}</td>
                         </tr>
@@ -20981,7 +20981,7 @@ export function App() {
                       <div className="totalBox" style={{ marginBottom: 10 }}>
                         <span>Subtotal{anticipo > 0 ? " (neto)" : ""}</span>
                         <strong>{money(previewSubtotal)}</strong>
-                        <small>{selAct ? `${cuadEntryForm.quantity || 0} × $${Number(selAct.unit_rate)}${anticipo > 0 ? ` − $${anticipo.toFixed(2)} anticipo` : ""}` : "elige actividad"}</small>
+                        <small>{selAct ? `${cuadEntryForm.quantity || 0} × $${Number(selAct.unit_rate)}${anticipo > 0 ? ` − $${anticipo.enReal()} anticipo` : ""}` : "elige actividad"}</small>
                       </div>
                       <div style={{ display: "flex", gap: 8 }}>
                         <button className="primary">{editingCuadId ? "Guardar cambios" : "Agregar"}</button>
@@ -21222,7 +21222,7 @@ export function App() {
                             <td style={{ fontWeight: 600 }}>#{f.numero ?? "—"}</td>
                             <td>{f.cliente ?? "—"}</td>
                             <td>{f.placa || "—"}</td>
-                            <td className="num">{Number(f.qq).toFixed(2)}</td>
+                            <td className="num">{Number(f.qq).enReal()}</td>
                             <td style={{ minWidth: 190 }}>
                               {pagado || antesDeInicio ? (
                                 <span style={{ fontWeight: 600 }}>{f.trabajador ?? (actual || "—")}</span>
@@ -21281,7 +21281,7 @@ export function App() {
                     {conMonto.length > 0 && (
                       <tfoot><tr>
                         <td colSpan={4} style={{ fontWeight: 700 }}>{bajadaTodo ? "TOTAL DEL PERÍODO" : "TOTAL DE LA SEMANA"}</td>
-                        <td className="num" style={{ fontWeight: 700 }}>{conMonto.reduce((a, f) => a + Number(f.qq), 0).toFixed(2)}</td>
+                        <td className="num" style={{ fontWeight: 700 }}>{conMonto.reduce((a, f) => a + Number(f.qq), 0).enReal()}</td>
                         <td />
                         <td className="num" style={{ fontWeight: 800 }}>{money(totalSemana)}</td>
                         <td />
@@ -21297,7 +21297,7 @@ export function App() {
                       <thead><tr><th>Trabajador</th><th className="num">Tickets</th><th className="num">QQ</th><th className="num">Total</th><th className="num">Por pagar</th></tr></thead>
                       <tbody>
                         {[...porTrabajador.entries()].sort((a, b) => b[1].monto - a[1].monto).map(([n, t]) => (
-                          <tr key={n}><td style={{ fontWeight: 600 }}>{n}</td><td className="num">{t.tickets}</td><td className="num">{t.qq.toFixed(2)}</td><td className="num">{money(round2(t.monto))}</td><td className="num" style={{ color: "#047857", fontWeight: 700 }}>{money(round2(t.pendiente))}</td></tr>
+                          <tr key={n}><td style={{ fontWeight: 600 }}>{n}</td><td className="num">{t.tickets}</td><td className="num">{t.qq.enReal()}</td><td className="num">{money(round2(t.monto))}</td><td className="num" style={{ color: "#047857", fontWeight: 700 }}>{money(round2(t.pendiente))}</td></tr>
                         ))}
                         {porTrabajador.size === 0 && <tr><td colSpan={5} className="muted">Sin bajadas en la semana.</td></tr>}
                       </tbody>
@@ -21485,7 +21485,7 @@ export function App() {
                             <div className="muted" style={{ fontSize: 11.5, marginBottom: 6 }}>{antiguedadLabel(bajadaPend.desde, bajadaPend.tickets)}</div>
                             {bajadaPend.por_trabajador.map((t) => (
                               <div key={t.trabajador} className="desglosePop__fila">
-                                <span>{t.trabajador} <span className="muted">· {t.tickets} ticket(s) · {Number(t.qq).toFixed(2)} QQ</span></span>
+                                <span>{t.trabajador} <span className="muted">· {t.tickets} ticket(s) · {Number(t.qq).enReal()} QQ</span></span>
                                 <strong className="num">{money(t.monto)}</strong>
                               </div>
                             ))}
@@ -21835,7 +21835,7 @@ export function App() {
                                 const cantNum = Number(r.cantidad_num) || 0;
                                 const tarNum = Number(r.tarifa_num) || 0;
                                 const cantidadReal = cantNum > 0 ? cantNum : (tarNum > 0 ? Number(r.subtotal) / tarNum : 0);
-                                const cantidadTxt = esQQ ? `${cantidadReal.toFixed(2)} QQ` : (r.cantidad || "—");
+                                const cantidadTxt = esQQ ? `${cantidadReal.enReal()} QQ` : (r.cantidad || "—");
                                 return (
                                 <tr key={i}>
                                   <td>{fmtFechaRecibo(r.fecha)}
@@ -21915,10 +21915,10 @@ export function App() {
                             return (
                               <tr key={p.id}>
                                 <td>{new Date(p.work_date).toLocaleDateString("es-EC")}</td>
-                                <td className="num">{Number(p.qq).toFixed(2)}</td>
-                                <td className="num">{Number(p.tulas).toFixed(0)}</td>
-                                <td className="num">{Number(p.sacas).toFixed(0)}</td>
-                                <td className="num">{Number(p.arrocillo).toFixed(2)}</td>
+                                <td className="num">{Number(p.qq).enReal()}</td>
+                                <td className="num">{Number(p.tulas).enReal(0, 3)}</td>
+                                <td className="num">{Number(p.sacas).enReal(0, 3)}</td>
+                                <td className="num">{Number(p.arrocillo).enReal()}</td>
                                 <td className="num" style={{ fontWeight: 700 }}>{money(p.base_amount)}</td>
                                 <td style={{ fontSize: 12, maxWidth: 260 }}>{parts.length > 0 ? parts.join(" · ") : "—"}</td>
                               </tr>
@@ -24739,7 +24739,7 @@ export function App() {
       <div className="modalOverlay" onClick={() => setLotTicket(null)}>
         <div className="modalCard" onClick={(e) => e.stopPropagation()}>
           <h3>Ingresar materia prima · ticket #{lotTicket.numero}</h3>
-          <p className="muted">{lotTicket.farmer_name} · {Number(lotTicket.quintals).toFixed(2)} QQ. Entra como materia prima. El <strong>lote se formará después en la secadora</strong>, agrupando varios ingresos en un túnel.</p>
+          <p className="muted">{lotTicket.farmer_name} · {Number(lotTicket.quintals).enReal()} QQ. Entra como materia prima. El <strong>lote se formará después en la secadora</strong>, agrupando varios ingresos en un túnel.</p>
           <label>
             <span>Tipo de arroz</span>
             <select value={lotForm.rice_type} onChange={(e) => setLotForm({ ...lotForm, rice_type: e.target.value as "0.11" | "CORRIENTE" })}>
@@ -24791,7 +24791,7 @@ export function App() {
       <div className="modalOverlay" onClick={() => setLiqTicket(null)}>
         <div className="modalCard" onClick={(e) => e.stopPropagation()}>
           <h3>Liquidar ticket #{liqTicket.numero}</h3>
-          <p className="muted">{liqTicket.farmer_name} · {Number(liqTicket.quintals).toFixed(2)} QQ</p>
+          <p className="muted">{liqTicket.farmer_name} · {Number(liqTicket.quintals).enReal()} QQ</p>
           {!dashboard.current_cash_register && <div className="alertBox">Abre una caja para que el pago quede registrado.</div>}
           <label>
             <span>Precio por quintal $</span>
@@ -24800,7 +24800,7 @@ export function App() {
           </label>
           {liqPreview ? (
             <div className="liqSummary">
-              <div className="liqSummaryRow"><span>Bruto ({Number(liqTicket.quintals).toFixed(2)} QQ × ${Number(liqPrecio).toFixed(2)})</span><span>{money(liqPreview.grossPayable)}</span></div>
+              <div className="liqSummaryRow"><span>Bruto ({Number(liqTicket.quintals).enReal()} QQ × ${Number(liqPrecio).enReal()})</span><span>{money(liqPreview.grossPayable)}</span></div>
               {liqPreview.advancesDiscount > 0 && <div className="liqSummaryRow disc"><span>Descuento anticipos</span><span>−{money(liqPreview.advancesDiscount)}</span></div>}
               <div className="liqSummaryRow total"><span>Neto a pagar</span><span>{money(liqPreview.netPayable)}</span></div>
             </div>
@@ -25133,7 +25133,7 @@ function ProductionQqFields({
           onChange={(event) => onChange({ pounds: Number(event.target.value || 0) })}
         />
       </label>
-      <small>{qqAndPoundsToQq(value).toFixed(2)} QQ equivalentes</small>
+      <small>{qqAndPoundsToQq(value).enReal()} QQ equivalentes</small>
     </article>
   );
 }
@@ -25228,9 +25228,9 @@ function PanelIntegral({ data, month, onMonth, activeAccionistaId, accionistas }
       {/* 4 tarjetas destacadas. Las métricas de apoyo (Utilidad, Ingresos por
           Servicio, Costo Operativo) van como chips dentro de la tarjeta afín. */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 12 }}>
-        {bigCard("COMPRAS DEL MES", money(kView.compras), `${comprasQqView.toFixed(2)} quintales`, "#16a34a",
-          costoView ? chip("Costo op.", costoView.qq > 0 ? `${money(costoView.total)} · $${costoView.por_qq.toFixed(2)}/QQ` : money(costoView.total), "#b91c1c") : null)}
-        {bigCard("VENTAS DEL MES", money(kView.ventas), `${ventasQqView.toFixed(2)} quintales`, "#2563eb",
+        {bigCard("COMPRAS DEL MES", money(kView.compras), `${comprasQqView.enReal()} quintales`, "#16a34a",
+          costoView ? chip("Costo op.", costoView.qq > 0 ? `${money(costoView.total)} · $${costoView.por_qq.enReal()}/QQ` : money(costoView.total), "#b91c1c") : null)}
+        {bigCard("VENTAS DEL MES", money(kView.ventas), `${ventasQqView.enReal()} quintales`, "#2563eb",
           <>
             {chip("Utilidad", `${money(kView.utilidad)} · ${kView.margen}%`, "#f59e0b")}
             {serviciosView ? chip("Ing. servicio", money(serviciosView.facturado), "#0891b2") : null}
@@ -25260,28 +25260,28 @@ function PanelIntegral({ data, month, onMonth, activeAccionistaId, accionistas }
                 {acc.map((a, i) => (
                   <tr key={i}>
                     <td style={{ textAlign: "left", padding: "6px 8px" }}>{a.name}</td>
-                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.cascara_011.toFixed(2)}</td>
-                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.seco_011.toFixed(2)}</td>
-                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.cascara_corriente.toFixed(2)}</td>
-                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.seco_corriente.toFixed(2)}</td>
-                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.producto_011.toFixed(2)}</td>
-                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.producto_corriente.toFixed(2)}</td>
-                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.arrocillo_34.toFixed(2)}</td>
-                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.arrocillo_fino.toFixed(2)}</td>
-                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.polvillo.toFixed(2)}</td>
+                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.cascara_011.enReal()}</td>
+                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.seco_011.enReal()}</td>
+                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.cascara_corriente.enReal()}</td>
+                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.seco_corriente.enReal()}</td>
+                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.producto_011.enReal()}</td>
+                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.producto_corriente.enReal()}</td>
+                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.arrocillo_34.enReal()}</td>
+                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.arrocillo_fino.enReal()}</td>
+                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.polvillo.enReal()}</td>
                   </tr>
                 ))}
                 <tr style={{ fontWeight: 700, background: "#f8fafc" }}>
                   <td style={{ textAlign: "left", padding: "6px 8px" }}>TOTAL</td>
-                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.cascara_011.toFixed(2)}</td>
-                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.seco_011.toFixed(2)}</td>
-                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.cascara_corriente.toFixed(2)}</td>
-                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.seco_corriente.toFixed(2)}</td>
-                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.producto_011.toFixed(2)}</td>
-                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.producto_corriente.toFixed(2)}</td>
-                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.arrocillo_34.toFixed(2)}</td>
-                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.arrocillo_fino.toFixed(2)}</td>
-                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.polvillo.toFixed(2)}</td>
+                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.cascara_011.enReal()}</td>
+                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.seco_011.enReal()}</td>
+                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.cascara_corriente.enReal()}</td>
+                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.seco_corriente.enReal()}</td>
+                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.producto_011.enReal()}</td>
+                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.producto_corriente.enReal()}</td>
+                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.arrocillo_34.enReal()}</td>
+                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.arrocillo_fino.enReal()}</td>
+                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.polvillo.enReal()}</td>
                 </tr>
               </tbody>
             </table>
@@ -25291,11 +25291,11 @@ function PanelIntegral({ data, month, onMonth, activeAccionistaId, accionistas }
       {/* Ventas y Compras por accionista, lado a lado (2 columnas en desktop). */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 12 }}>
         {tbl("VENTAS POR ACCIONISTA", "#2563eb", ["Accionista", "Total ventas", "QQ", "Facturas"],
-          acc.map((a) => [a.name, money(a.ventas_total), a.ventas_qq.toFixed(2), a.ventas_cnt]),
-          ["TOTAL", money(k.ventas), data.totales.ventas_qq.toFixed(2), data.totales.ventas_cnt])}
+          acc.map((a) => [a.name, money(a.ventas_total), a.ventas_qq.enReal(), a.ventas_cnt]),
+          ["TOTAL", money(k.ventas), data.totales.ventas_qq.enReal(), data.totales.ventas_cnt])}
         {tbl("COMPRAS POR ACCIONISTA", "#0d9488", ["Accionista", "Total compras", "QQ", "Liquid."],
-          acc.map((a) => [a.name, money(a.compras_total), a.compras_qq.toFixed(2), a.compras_cnt]),
-          ["TOTAL", money(k.compras), data.totales.compras_qq.toFixed(2), data.totales.compras_cnt])}
+          acc.map((a) => [a.name, money(a.compras_total), a.compras_qq.enReal(), a.compras_cnt]),
+          ["TOTAL", money(k.compras), data.totales.compras_qq.enReal(), data.totales.compras_cnt])}
       </div>
 
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -25461,7 +25461,7 @@ function InventarioDonut({ data }: { data: Array<{ name: string; value: number }
           <div key={d.name} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
             <span style={{ width: 12, height: 12, borderRadius: 3, background: colors[i % colors.length], display: "inline-block" }} />
             <span style={{ fontWeight: 600 }}>{d.name}</span>
-            <span className="muted">{Number(d.value).toFixed(1)} QQ ({total > 0 ? Math.round((d.value / total) * 100) : 0}%)</span>
+            <span className="muted">{Number(d.value).enReal(1, 3)} QQ ({total > 0 ? Math.round((d.value / total) * 100) : 0}%)</span>
           </div>
         ))}
       </div>
@@ -25548,7 +25548,7 @@ function DryingLotSelector({
         <div className="usedLotRow" key={lot.lot_id}>
           <div>
             <strong style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>{lot.farmer_name ?? "Sin agricultor"}<OpTypeBadge operationType={lot.operation_type} isMaquila={lot.is_maquila} /></strong>
-            <small>{lot.lot_code} - {Number(lot.quintals ?? 0).toFixed(2)} QQ</small>
+            <small>{lot.lot_code} - {Number(lot.quintals ?? 0).enReal()} QQ</small>
             {onChangeServiceType && (
               <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 12, color: "#6b7280" }}>
                 <span>✎ Tipo de servicio:</span>
@@ -25601,9 +25601,9 @@ function DryingReportsPanel({
         const op = reportOpType(report);
         const esTendal = String(report.dry_method ?? "").toUpperCase() === "TENDAL" || (report.tunnel_number == null && !report.dryer_name);
         const horas = Number(report.drying_hours);
-        const duracion = Number.isFinite(horas) && horas > 0 ? `${horas.toFixed(1)} h` : "Pendiente";
+        const duracion = Number.isFinite(horas) && horas > 0 ? `${horas.enReal(1, 3)} h` : "Pendiente";
         const lotesResumen = report.lots.length > 0
-          ? report.lots.map((lot) => `${lot.farmer_name ?? "Sin agricultor"} · ${Number(lot.quintals ?? 0).toFixed(2)} QQ`).join("  |  ")
+          ? report.lots.map((lot) => `${lot.farmer_name ?? "Sin agricultor"} · ${Number(lot.quintals ?? 0).enReal()} QQ`).join("  |  ")
           : "Sin lotes registrados";
         return (
         <article className="dryingReportCard" key={report.id}>
@@ -25632,7 +25632,7 @@ function DryingReportsPanel({
           </div>
 
           <div className="dryingReportFacts">
-            <span><small>Peso</small><strong>{Number(report.total_quintals ?? 0).toFixed(2)} QQ</strong></span>
+            <span><small>Peso</small><strong>{Number(report.total_quintals ?? 0).enReal()} QQ</strong></span>
             <span><small>Secador</small><strong>{report.operator_name || "No asignado"}</strong></span>
             <span><small>Secadora</small><strong>{esTendal ? "Patio" : (report.dryer_name ?? `Túnel ${report.tunnel_number}`)}</strong></span>
             <span><small>Variedad</small><strong>{report.rice_type === "CORRIENTE" ? "Corriente" : "0.11"}</strong></span>
@@ -25691,15 +25691,15 @@ function ProductionSummary({ result }: { result: ProductionResult | null }) {
       <h2>Resultado del proceso</h2>
       {result.packagingAlert?.isCritical && (
         <div className="alertBox">
-          Stock critico: {result.packagingAlert.nombre} quedo en {result.packagingAlert.stockActual.toFixed(0)} unidades.
+          Stock critico: {result.packagingAlert.nombre} quedo en {result.packagingAlert.stockActual.enReal(0, 3)} unidades.
         </div>
       )}
       <div className="summaryGrid">
-        <Metric title="Entrada cascara" value={`${Number(result.yield.input_paddy_kg).toFixed(2)} kg`} />
-        <Metric title="Arroz blanco" value={`${Number(result.yield.white_rice_qty).toFixed(2)} ${result.yield.white_rice_unit}`} />
-        <Metric title="Arrocillo fino" value={`${Number(result.yield.fine_broken_rice_qty ?? 0).toFixed(2)} ${result.yield.fine_broken_rice_unit ?? "QQ"}`} />
-        <Metric title="Merma" value={`${Number(result.yield.process_loss_kg).toFixed(2)} kg`} />
-        <Metric title="Rendimiento" value={`${Number(result.yield.yield_percent).toFixed(2)}%`} />
+        <Metric title="Entrada cascara" value={`${Number(result.yield.input_paddy_kg).enReal()} kg`} />
+        <Metric title="Arroz blanco" value={`${Number(result.yield.white_rice_qty).enReal()} ${result.yield.white_rice_unit}`} />
+        <Metric title="Arrocillo fino" value={`${Number(result.yield.fine_broken_rice_qty ?? 0).enReal()} ${result.yield.fine_broken_rice_unit ?? "QQ"}`} />
+        <Metric title="Merma" value={`${Number(result.yield.process_loss_kg).enReal()} kg`} />
+        <Metric title="Rendimiento" value={`${Number(result.yield.yield_percent).enReal()}%`} />
         <Metric title="Modo" value={result.custodyMode ? "Maquila" : "Propio"} />
       </div>
       {result.maquila && (
@@ -25707,12 +25707,12 @@ function ProductionSummary({ result }: { result: ProductionResult | null }) {
           <strong>Cuenta por cobrar de maquila</strong>
           {Number(result.maquila.secadoAmount ?? 0) > 0 ? (
             <>
-              <span>Secado: {Number(result.maquila.serviceQuantityQq).toFixed(2)} QQ × {money(Number(result.maquila.secadoRatePerQq ?? 0))} = {money(Number(result.maquila.secadoAmount ?? 0))}</span>
+              <span>Secado: {Number(result.maquila.serviceQuantityQq).enReal()} QQ × {money(Number(result.maquila.secadoRatePerQq ?? 0))} = {money(Number(result.maquila.secadoAmount ?? 0))}</span>
               <span>Pilado: {money(Number(result.maquila.piladoAmount ?? 0))}</span>
               <span><strong>Total (Secado + Pilado): {money(result.maquila.serviceAmount)}</strong></span>
             </>
           ) : (
-            <span>{Number(result.maquila.serviceQuantityQq).toFixed(2)} QQ x {money(result.maquila.serviceRatePerQq)} = {money(result.maquila.serviceAmount)}</span>
+            <span>{Number(result.maquila.serviceQuantityQq).enReal()} QQ x {money(result.maquila.serviceRatePerQq)} = {money(result.maquila.serviceAmount)}</span>
           )}
           <small>Los productos quedaron en custodia de terceros, no en inventario propio.</small>
         </div>
@@ -25781,9 +25781,9 @@ function ProcessFlowPanel({ flow }: { flow: ProcessFlow | null }) {
           headers={["Túnel", "QQ", "Estado", "Consumo"]}
           rows={flow.tunnels.map((tunnel) => [
             `Túnel ${tunnel.tunnel_number}`,
-            `${Number(tunnel.total_quintals ?? 0).toFixed(2)} QQ`,
+            `${Number(tunnel.total_quintals ?? 0).enReal()} QQ`,
             tunnel.status === "COMPLETED" ? "✓ Finalizado" : "En proceso",
-            `Gas ${Number(tunnel.gas_used ?? 0).toFixed(1)} / Diesel ${Number(tunnel.diesel_used ?? 0).toFixed(1)}`
+            `Gas ${Number(tunnel.gas_used ?? 0).enReal(1, 3)} / Diesel ${Number(tunnel.diesel_used ?? 0).enReal(1, 3)}`
           ])}
         />
       </div>
@@ -25843,7 +25843,7 @@ function CuentaDetalleModal(props: {
   const saldoTotal = props.rows.reduce((s, r) => s + Number(r.saldo), 0);
   const barColor = props.color === "cobrar" ? "#16a34a" : "#dc2626";
   const [modoAbono, setModoAbono] = React.useState(false);
-  const [monto, setMonto] = React.useState(String(saldoTotal.toFixed(2)));
+  const [monto, setMonto] = React.useState(String(saldoTotal.enReal()));
   const valor = Number(monto);
   return (
     <div className="modalOverlay" onClick={props.onClose}>
@@ -25884,7 +25884,7 @@ function CuentaDetalleModal(props: {
 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
           <button type="button" className="primary" disabled={props.disabled} onClick={props.onPagarTotal} style={{ fontWeight: 700 }}>✅ Pagar total</button>
-          <button type="button" disabled={props.disabled} onClick={() => { setMonto(String(saldoTotal.toFixed(2))); setModoAbono((v) => !v); }}>💳 Abono parcial</button>
+          <button type="button" disabled={props.disabled} onClick={() => { setMonto(String(saldoTotal.enReal())); setModoAbono((v) => !v); }}>💳 Abono parcial</button>
           <button type="button" onClick={props.onImprimir}>🖨️ Imprimir</button>
           <button type="button" onClick={props.onClose} style={{ marginLeft: "auto" }}>Cerrar</button>
         </div>
@@ -26032,7 +26032,7 @@ function ComprarProductoModal(props: {
 }
 
 function PayablePayForm({ payable, onPay }: { payable: AccountPayable; onPay: (amount: number) => void }) {
-  const [amount, setAmount] = React.useState(String(Number(payable.balance).toFixed(2)));
+  const [amount, setAmount] = React.useState(String(Number(payable.balance).enReal()));
   return (
     <div className="payablePayRow">
       <input
@@ -26061,7 +26061,7 @@ function PayablePayForm({ payable, onPay }: { payable: AccountPayable; onPay: (a
  * saldo restante queda pendiente para el próximo abono.
  */
 function AbonoForm({ saldo, disabled, onAbonar }: { saldo: number; disabled?: boolean; onAbonar: (monto: number) => void }) {
-  const [monto, setMonto] = React.useState(String(saldo.toFixed(2)));
+  const [monto, setMonto] = React.useState(String(saldo.enReal()));
   const valor = Number(monto);
   const parcial = valor > 0 && valor < saldo - 0.001;
   return (
@@ -26196,7 +26196,7 @@ function calculateMillingYields(report: MillingReportState, pilado: number, tota
 }
 
 function formatYield(value: number) {
-  return `${(value * 100).toFixed(2)}%`;
+  return `${(value * 100).enReal()}%`;
 }
 
 function packagePayload(productId: string, warehouseId: string, item: ProductionPackageState[ProductionPackageKey]) {

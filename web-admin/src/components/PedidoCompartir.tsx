@@ -30,7 +30,7 @@ const fechaCorta = (v: string) => {
   const d = /^\d{4}-\d{2}-\d{2}$/.test(v) ? new Date(`${v}T12:00:00`) : new Date(v);
   return Number.isNaN(d.getTime()) ? v : d.toLocaleDateString("es-EC", { day: "2-digit", month: "2-digit", year: "numeric" });
 };
-const qqTxt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
+const qqTxt = (n: number) => (Number.isInteger(n) ? String(n) : n.enReal());
 
 /** Número para wa.me: 0987654321 → 593987654321 (Ecuador). null si no sirve. */
 export function telefonoWhatsApp(tel: string | null | undefined): string | null {

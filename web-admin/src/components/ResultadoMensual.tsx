@@ -36,7 +36,7 @@ type Reporte = {
 export type GanaOperacion = { operacion: string; utilidad: number; lotes: number };
 
 const dinero = (n: number) => `$${(Number(n) || 0).toLocaleString("es-EC", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const porQq = (n: number) => `$${(Number(n) || 0).toFixed(2)}`;
+const porQq = (n: number) => `$${(Number(n) || 0).enReal()}`;
 const mesActual = () => new Date().toISOString().slice(0, 7);
 
 export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategoriasCaja, categoriasVersion }: {
@@ -244,13 +244,13 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
     const filasFin = rep.financieros.map((f) => `<tr><td>${esc(f.concepto)}</td><td class="num">${dinero(f.monto)}</td></tr>`).join("")
       || `<tr><td colspan="2" class="muted">Sin gastos financieros.</td></tr>`;
 
-    const filasCascara = rep.cascara.operaciones.map((o) => `<tr><td>${esc(o.operacion)} <span class="muted">· ${o.liquidaciones} liq.</span></td><td class="num">${o.qq.toFixed(2)} QQ</td></tr>`).join("");
+    const filasCascara = rep.cascara.operaciones.map((o) => `<tr><td>${esc(o.operacion)} <span class="muted">· ${o.liquidaciones} liq.</span></td><td class="num">${o.qq.enReal()} QQ</td></tr>`).join("");
 
     const recepcion = rep.recepcion
       ? `<h3>Cáscara recibida por servicio</h3><table><thead><tr><th>Tipo</th><th class="num">Tickets</th><th class="num">QQ</th></tr></thead><tbody>` +
-        rep.recepcion.tipos.map((t) => `<tr><td>${esc(t.nombre)}</td><td class="num">${t.tickets}</td><td class="num">${t.qq.toFixed(2)}</td></tr>`).join("") +
-        `</tbody><tfoot><tr><td>Total servicios</td><td class="num">${rep.recepcion.tipos.filter((t) => t.tipo !== "COMPRA").reduce((s2, t) => s2 + t.tickets, 0)}</td><td class="num">${rep.recepcion.total_servicios_qq.toFixed(2)}</td></tr>` +
-        `<tr><td>Total recibido</td><td class="num">${rep.recepcion.total_tickets}</td><td class="num">${rep.recepcion.total_qq.toFixed(2)}</td></tr></tfoot></table>`
+        rep.recepcion.tipos.map((t) => `<tr><td>${esc(t.nombre)}</td><td class="num">${t.tickets}</td><td class="num">${t.qq.enReal()}</td></tr>`).join("") +
+        `</tbody><tfoot><tr><td>Total servicios</td><td class="num">${rep.recepcion.tipos.filter((t) => t.tipo !== "COMPRA").reduce((s2, t) => s2 + t.tickets, 0)}</td><td class="num">${rep.recepcion.total_servicios_qq.enReal()}</td></tr>` +
+        `<tr><td>Total recibido</td><td class="num">${rep.recepcion.total_tickets}</td><td class="num">${rep.recepcion.total_qq.enReal()}</td></tr></tfoot></table>`
       : "";
 
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>Resultado mensual ${esc(rep.periodo)}</title><style>
@@ -280,7 +280,7 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
     </style></head><body>
       <div class="head">
         <div><h1>RESULTADO MENSUAL · ${esc(mesNombre)}</h1>
-          <div class="sub">Costo real = gasto del rubro ÷ ${qq.toFixed(2)} QQ de cáscara${rep.cascara.manual ? " (ingresado a mano)" : " comprada en el mes"}</div></div>
+          <div class="sub">Costo real = gasto del rubro ÷ ${qq.enReal()} QQ de cáscara${rep.cascara.manual ? " (ingresado a mano)" : " comprada en el mes"}</div></div>
         <div class="sub">Impreso: ${esc(new Date().toLocaleString("es-EC"))}</div>
       </div>
 
@@ -316,7 +316,7 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
         </section>
         <section>
           <h3>Cáscara comprada</h3>
-          <table><tbody>${filasCascara}</tbody><tfoot><tr><td>Total${rep.cascara.manual ? " (manual)" : ""}</td><td class="num">${qq.toFixed(2)} QQ</td></tr></tfoot></table>
+          <table><tbody>${filasCascara}</tbody><tfoot><tr><td>Total${rep.cascara.manual ? " (manual)" : ""}</td><td class="num">${qq.enReal()} QQ</td></tr></tfoot></table>
           ${recepcion}
         </section>
       </div>
@@ -457,13 +457,13 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
                   <tbody>
                     {rep.recepcion.tipos.map((t) => (
                       <tr key={t.tipo} style={t.tipo === "COMPRA" ? { color: "#64748b" } : undefined}>
-                        <td>{t.nombre}</td><td className="num">{t.tickets}</td><td className="num">{t.qq.toFixed(2)}</td>
+                        <td>{t.nombre}</td><td className="num">{t.tickets}</td><td className="num">{t.qq.enReal()}</td>
                       </tr>
                     ))}
                   </tbody>
                   <tfoot>
-                    <tr><td>Total servicios</td><td className="num">{rep.recepcion.tipos.filter((t) => t.tipo !== "COMPRA").reduce((s, t) => s + t.tickets, 0)}</td><td className="num">{rep.recepcion.total_servicios_qq.toFixed(2)}</td></tr>
-                    <tr><td>Total recibido</td><td className="num">{rep.recepcion.total_tickets}</td><td className="num">{rep.recepcion.total_qq.toFixed(2)}</td></tr>
+                    <tr><td>Total servicios</td><td className="num">{rep.recepcion.tipos.filter((t) => t.tipo !== "COMPRA").reduce((s, t) => s + t.tickets, 0)}</td><td className="num">{rep.recepcion.total_servicios_qq.enReal()}</td></tr>
+                    <tr><td>Total recibido</td><td className="num">{rep.recepcion.total_tickets}</td><td className="num">{rep.recepcion.total_qq.enReal()}</td></tr>
                   </tfoot>
                 </table>
               </div>
@@ -473,10 +473,10 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
               <table className="rm-table">
                 <tbody>
                   {rep.cascara.operaciones.map((o) => (
-                    <tr key={o.operacion}><td>{o.operacion}<span className="rm-muted" style={{ fontSize: 11.5 }}> · {o.liquidaciones} liq.</span></td><td className="num">{o.qq.toFixed(2)} QQ</td></tr>
+                    <tr key={o.operacion}><td>{o.operacion}<span className="rm-muted" style={{ fontSize: 11.5 }}> · {o.liquidaciones} liq.</span></td><td className="num">{o.qq.enReal()} QQ</td></tr>
                   ))}
                 </tbody>
-                <tfoot><tr><td>Total {rep.cascara.manual ? "(manual)" : ""}</td><td className="num">{rep.cascara.total.toFixed(2)} QQ</td></tr></tfoot>
+                <tfoot><tr><td>Total {rep.cascara.manual ? "(manual)" : ""}</td><td className="num">{rep.cascara.total.enReal()} QQ</td></tr></tfoot>
               </table>
             </div>
 

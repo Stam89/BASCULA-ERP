@@ -38,7 +38,7 @@ const qqFmt = (n: number) => (Number(n) || 0).toLocaleString("es-EC", { maximumF
 function variacion(actual: number, antes: number): { texto: string; sube: boolean } | null {
   if (Math.abs(antes) < 0.005) return null;
   const pct = ((actual - antes) / Math.abs(antes)) * 100;
-  return { texto: `${pct >= 0 ? "▲" : "▼"} ${Math.abs(pct).toFixed(0)}% vs mes anterior`, sube: pct >= 0 };
+  return { texto: `${pct >= 0 ? "▲" : "▼"} ${Math.abs(pct).enReal(0, 3)}% vs mes anterior`, sube: pct >= 0 };
 }
 
 export default function EstadoResultadosCampo({ nombre, onError }: { nombre: string; onError: (m: string) => void }) {

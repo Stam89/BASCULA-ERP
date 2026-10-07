@@ -41,7 +41,7 @@ export function ConfirmarFinalizacion({ tunel, motor, lotes, quintales, partidas
         </div>
         <dl className="finConf-datos">
           <div><dt>Lote{lotes.length === 1 ? "" : "s"}</dt><dd>{lotes.length ? lotes.join(", ") : "—"}</dd></div>
-          <div><dt>Quintales</dt><dd>{quintales.toFixed(2)} QQ</dd></div>
+          <div><dt>Quintales</dt><dd>{quintales.enReal()} QQ</dd></div>
           <div><dt>Entró a secar</dt><dd>{fechaHora(inicio)}</dd></div>
           <div><dt>Terminó</dt><dd>{fechaHora(fin)}</dd></div>
           <div className="finConf-dur"><dt>Duración</dt><dd>{revision.horas != null && revision.horas > 0 ? duracionTexto(revision.horas) : "—"}</dd></div>

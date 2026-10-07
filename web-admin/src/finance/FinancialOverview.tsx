@@ -85,7 +85,7 @@ export default function FinancialOverview({ data, onOpenCostDetail }: { data: Fi
         <h2>📈 Dashboard financiero</h2>
         <section className="yieldResults" style={{ marginTop: 8 }}>
           <Metric title="Total activos" value={money(data.kpis.total_activos)} /><Metric title="Total pasivos" value={money(data.kpis.total_pasivos)} />
-          <Metric title="Patrimonio" value={money(data.kpis.patrimonio)} /><Metric title="Liquidez" value={data.kpis.liquidez.toFixed(2)} />
+          <Metric title="Patrimonio" value={money(data.kpis.patrimonio)} /><Metric title="Liquidez" value={data.kpis.liquidez.enReal()} />
           <Metric title="Ventas" value={money(data.kpis.ventas)} /><Metric title="Compras" value={money(data.kpis.compras)} />
           <Metric title="Utilidad" value={money(data.kpis.utilidad)} /><Metric title="Efectivo" value={money(data.kpis.efectivo)} />
           <Metric title="Bancos" value={money(data.kpis.bancos)} /><Metric title="Inventario" value={money(data.kpis.inventario)} />
@@ -139,7 +139,7 @@ export default function FinancialOverview({ data, onOpenCostDetail }: { data: Fi
         </tbody></table>
       </div>
       <div className="tablePanel"><h2>🎯 Indicadores financieros</h2><table className="cajaTable" style={{ marginTop: 8 }}><thead><tr><th>Indicador</th><th className="num">Valor</th><th>Meta</th><th>Estado</th></tr></thead><tbody>
-        {Object.entries(indicatorLabels).map(([key, label]) => { const indicator = data.indicadores[key]; if (!indicator) return null; const percent = key.endsWith("_pct"); const cash = key === "capital_trabajo"; return <tr key={key}><td>{label}</td><td className="num">{indicator.sin_deuda ? "N/A" : cash ? money(indicator.valor) : percent ? `${indicator.valor}%` : indicator.valor.toFixed(2)}</td><td className="muted">{indicator.sin_deuda ? "Sin deuda" : indicator.meta}</td><td><span className={indicator.ok ? "chip success" : "chip warning"}>{indicator.sin_deuda ? "✓ Sin deuda" : indicator.ok ? "✓ OK" : "⚠ Revisar"}</span></td></tr>; })}
+        {Object.entries(indicatorLabels).map(([key, label]) => { const indicator = data.indicadores[key]; if (!indicator) return null; const percent = key.endsWith("_pct"); const cash = key === "capital_trabajo"; return <tr key={key}><td>{label}</td><td className="num">{indicator.sin_deuda ? "N/A" : cash ? money(indicator.valor) : percent ? `${indicator.valor}%` : indicator.valor.enReal()}</td><td className="muted">{indicator.sin_deuda ? "Sin deuda" : indicator.meta}</td><td><span className={indicator.ok ? "chip success" : "chip warning"}>{indicator.sin_deuda ? "✓ Sin deuda" : indicator.ok ? "✓ OK" : "⚠ Revisar"}</span></td></tr>; })}
       </tbody></table></div>
     </>
   );
