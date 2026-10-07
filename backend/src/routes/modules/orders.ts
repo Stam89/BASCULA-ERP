@@ -5,6 +5,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
+import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
 import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
@@ -514,6 +515,10 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
     // despachar. Evita que se cargue un pedido cuyos sacos no se alistaron.
     if (!order.rows[0].prepared_at) {
       throw new ApiError(409, "Confirma la preparación del pedido (📦 Confirmar Preparación) antes de despacharlo.");
+    }
+    // El cobro entra a una caja ABIERTA del mismo socio dueño del pedido.
+    if (body.payment_method !== "CREDIT" && body.cash_register_id) {
+      await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
     }
 
     const items = await client.query(

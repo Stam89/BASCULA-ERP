@@ -6,6 +6,7 @@ import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { exigirEscrituraEn, requireAdmin, requireAuth, resolveAccionista, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
 import { fechaTicketSql, leerCorteBascula } from "../../services/bascula-corte.js";
 import { calculateNetWeight, calculateQuintals, round2 } from "../../utils/rice-formulas.js";
 import { nextCode } from "../../utils/codes.js";
@@ -891,6 +892,7 @@ mobileTicketsRouter.post("/:id/liquidation-preview", requireAuth, resolveAccioni
 
 mobileTicketsRouter.post("/:id/liquidate", requireAuth, resolveAccionista, exigirEscrituraEn("tickets", ["Liquidaciones"]), asyncRoute(async (req, res) => {
   const body = liquidationSchema.parse(req.body);
+  if (body.cash_register_id) await exigirCajaAbiertaDelAccionista(pool, body.cash_register_id, (req as AuthenticatedRequest).accionistaId);
   const result = await procesarLiquidacionTicket(
     String(req.params.id),
     body.precioQQ,

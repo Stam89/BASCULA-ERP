@@ -5,6 +5,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
+import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { estibadorBaseFromTulas } from "../../utils/money.js";
 import { esDiaPagableSecador } from "../../utils/secador-workday.js";
@@ -626,6 +627,7 @@ laborRouter.post("/advances", asyncRoute(async (req, res) => {
   const user = (req as AuthenticatedRequest).user;
 
   const result = await inTransaction(async (client) => {
+    await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, (req as AuthenticatedRequest).accionistaId);
     const adv = await client.query(
       `INSERT INTO worker_advances (worker_role, worker_name, amount, description, advance_date, cash_register_id, created_by)
        VALUES ($1, $2, $3, $4, COALESCE($5::date, CURRENT_DATE), $6, $7)
@@ -842,6 +844,7 @@ laborRouter.post("/pay-worker", asyncRoute(async (req, res) => {
   const user = (req as AuthenticatedRequest).user;
 
   const result = await inTransaction(async (client) => {
+    await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, (req as AuthenticatedRequest).accionistaId);
     const r = await pagarTrabajadorPlanta(client, {
       role: body.worker_role, name: body.worker_name, from: body.from, to: body.to,
       cashRegisterId: body.cash_register_id, userId: user?.id ?? null
@@ -860,6 +863,7 @@ laborRouter.post("/payments/:id/pay", asyncRoute(async (req, res) => {
   const user = (req as AuthenticatedRequest).user;
 
   const result = await inTransaction(async (client) => {
+    await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, (req as AuthenticatedRequest).accionistaId);
     const wp = await client.query("SELECT * FROM worker_payments WHERE id = $1 FOR UPDATE", [req.params.id]);
     if (!wp.rows[0]) throw new ApiError(404, "Pago no encontrado");
     const p = wp.rows[0];

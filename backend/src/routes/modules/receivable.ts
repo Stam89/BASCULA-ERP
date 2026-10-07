@@ -4,6 +4,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
+import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { bajarPayableHermanaSinCaja, espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
@@ -257,6 +258,7 @@ receivableRouter.post("/:id/pay", asyncRoute(async (req, res) => {
       [req.params.id, accionistaId]
     );
     if (!ar.rows[0]) throw new ApiError(404, "Cuenta no encontrada para el accionista seleccionado");
+    if (body.cash_register_id) await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
 
     const current = Number(ar.rows[0].balance);
     if (body.amount > current + 0.01) {

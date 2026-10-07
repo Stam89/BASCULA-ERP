@@ -6,6 +6,7 @@ import { lockInventoryStock } from "../../db/inventory-lock.js";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
+import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
 import { nextCode } from "../../utils/codes.js";
 import { createLotProcessReport } from "../../utils/process-reports.js";
 import { round2 } from "../../utils/rice-formulas.js";
@@ -86,6 +87,9 @@ async function crearVentaInterna(
   opciones: OpcionesVenta = {}
 ) {
   {
+    if (body.payment_method !== "CREDIT" && body.cash_register_id) {
+      await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
+    }
     // Tomar todos los candados en orden estable evita interbloqueos cuando dos
     // ventas incluyen los mismos productos en distinto orden.
     const stockScopes = [...new Map(body.items.map((item) => {

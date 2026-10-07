@@ -4,6 +4,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
+import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
 import { espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
 import { getMatriz, getMatrizId } from "../../services/matriz.js";
 
@@ -202,6 +203,7 @@ piladoRouter.post("/services/:id/settle", asyncRoute(async (req, res) => {
     await tx.query("UPDATE accounts_receivable SET balance = $2, status = $3 WHERE id = $1", [receivable_id, newBalance, newStatus]);
 
     // INGRESO en la caja de la matriz (quien cobra): la indicada, o su caja abierta.
+    if (body.cash_register_id) await exigirCajaAbiertaDelAccionista(tx, body.cash_register_id, provider_accionista_id);
     let cajaId: string | null = body.cash_register_id ?? null;
     if (!cajaId) {
       const caja = await tx.query(
