@@ -1,9 +1,11 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
+import type { PoolClient } from "pg";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
-import { ApiError } from "../../http/error-handler.js";
+import { ApiError, AvisoConfirmable } from "../../http/error-handler.js";
+import { confirmado } from "../../http/confirmaciones.js";
 import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { calcularNetoLiquidacion, conciliarDescuentoFomento } from "../../utils/money.js";
@@ -184,9 +186,11 @@ const liquidationInput = z.object({
   created_by: z.string().uuid().optional()
 });
 
-async function previewLiquidation(data: z.infer<typeof liquidationInput>, accionistaId: string | undefined) {
+type Consultable = { query: PoolClient["query"] };
+
+async function previewLiquidation(data: z.infer<typeof liquidationInput>, accionistaId: string | undefined, db: Consultable = pool) {
   const gross = round2(data.quintals * data.price_per_quintal);
-  const advances = await pool.query(
+  const advances = await db.query(
     `SELECT COALESCE(SUM(balance), 0) AS pending
      FROM farmer_advances
      WHERE farmer_id = $1 AND accionista_id = $2 AND status IN ('CONFIRMED', 'PARTIAL')`,
@@ -210,374 +214,419 @@ liquidationsRouter.post("/preview", asyncRoute(async (req, res) => {
   res.json(await previewLiquidation(data, accionistaId));
 }));
 
+type LiquidationInput = z.infer<typeof liquidationInput>;
+
+// AVISO (no bloqueo): liquidar MÁS quintales de los que pesó la báscula en ese ingreso. La pantalla deja
+// editar los QQ por línea; si se pasan del ticket, pregunta antes de guardar (X-Confirmar: QQ_EXCEDE).
+async function avisarQuintalesDeMas(lineas: LiquidationInput[], req: Pick<Request, "headers">): Promise<void> {
+  if (confirmado(req, "QQ_EXCEDE")) return;
+  const ids = [...new Set(lineas.map((l) => l.weighing_ticket_id).filter((x): x is string => Boolean(x)))];
+  if (!ids.length) return;
+  const r = await pool.query(
+    `SELECT w.id, w.ticket_number, w.quintals::float AS qq, m.raw_payload->>'numeroTicket' AS numero
+       FROM weighing_tickets w
+       LEFT JOIN mobile_synced_tickets m ON m.weighing_ticket_id = w.id
+      WHERE w.id = ANY($1::uuid[])`,
+    [ids]
+  );
+  type Fila = { id: string; ticket_number: string; qq: number; numero: string | null };
+  const porId = new Map<string, Fila>(r.rows.map((x: Fila) => [x.id, x]));
+  const excesos: string[] = [];
+  for (const l of lineas) {
+    const t = l.weighing_ticket_id ? porId.get(l.weighing_ticket_id) : undefined;
+    if (t && l.quintals > Number(t.qq) + 0.01) {
+      excesos.push(`ticket #${t.numero ?? t.ticket_number}: liquidas ${l.quintals.toFixed(2)} QQ y la báscula pesó ${Number(t.qq).toFixed(2)} QQ`);
+    }
+  }
+  if (excesos.length) {
+    throw new AvisoConfirmable(`Estás liquidando más quintales de los que pesó la báscula (${excesos.join("; ")}). ¿Liquidar de todos modos?`, "QQ_EXCEDE");
+  }
+}
+
 liquidationsRouter.post("/", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const data = liquidationInput.parse(req.body);
-  const preview = await previewLiquidation(data, accionistaId);
+  await avisarQuintalesDeMas([data], req);
+  const result = await inTransaction((client) => registrarLiquidacion(client, data, accionistaId));
+  res.status(201).json(result);
+}));
 
+// Liquidación de VARIAS líneas (un lote del agricultor) en UNA sola transacción: o se guardan todas, o
+// ninguna. Antes la pantalla enviaba línea por línea y, si una fallaba a la mitad, las anteriores quedaban hechas.
+liquidationsRouter.post("/lote", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const { lineas } = z.object({ lineas: z.array(liquidationInput).min(1).max(50) }).parse(req.body);
+  await avisarQuintalesDeMas(lineas, req);
   const result = await inTransaction(async (client) => {
-    // El ingreso se liquida una sola vez y debe ser del agricultor indicado.
-    let lotId = data.lot_id ?? null;
-    if (data.weighing_ticket_id) {
-      const entry = await client.query(
-        "SELECT farmer_id, lot_id, accionista_id FROM weighing_tickets WHERE id = $1 FOR UPDATE",
-        [data.weighing_ticket_id]
-      );
-      if (!entry.rowCount) throw new ApiError(404, "Ingreso de materia prima no encontrado");
-      if (entry.rows[0].accionista_id !== accionistaId) {
-        throw new ApiError(403, "Ese ingreso pertenece a otro socio operativo.");
-      }
-      if (entry.rows[0].farmer_id !== data.farmer_id) {
-        throw new ApiError(400, "Ese ingreso es de otro agricultor.");
-      }
-      const yaLiquidado = await client.query(
-        "SELECT liquidation_number FROM liquidations WHERE weighing_ticket_id = $1 AND status <> 'CANCELLED'",
-        [data.weighing_ticket_id]
-      );
-      if (yaLiquidado.rowCount) {
-        throw new ApiError(409, `Ese ingreso ya fue liquidado (${yaLiquidado.rows[0].liquidation_number}).`);
-      }
-      lotId = lotId ?? entry.rows[0].lot_id;
-    }
+    const hechas = [];
+    for (const data of lineas) hechas.push(await registrarLiquidacion(client, data, accionistaId));
+    return hechas;
+  });
+  res.status(201).json(result);
+}));
 
-    const cosechadoraDetalles = data.cosechadora_detalles ?? [];
-    if (cosechadoraDetalles.length > 0) {
-      const totalDetalle = round2(cosechadoraDetalles.reduce(
-        (sum, item) => sum + round2(item.qq * item.precio_por_qq), 0
-      ));
-      const totalDeclarado = round2(data.discount_breakdown?.cosechadora ?? 0);
-      if (Math.abs(totalDetalle - totalDeclarado) > 0.01) {
-        throw new ApiError(400, "El total de cosechadora no coincide con el detalle de maquinas.");
-      }
-
-      const parteIds = cosechadoraDetalles.flatMap((item) => item.campo_parte_id ? [item.campo_parte_id] : []);
-      if (new Set(parteIds).size !== parteIds.length) {
-        throw new ApiError(400, "Un Parte Diario no puede repetirse en la misma liquidacion.");
-      }
-      if (parteIds.length > 0) {
-        const partes = await client.query(
-          `SELECT p.id
-             FROM campo_partes p
-             JOIN campo_activos a ON a.id = p.activo_id
-             JOIN farmers f ON f.id = $2
-            WHERE p.id = ANY($1::uuid[])
-              AND a.tipo = 'cosechadora'
-              AND p.estado = 'por_cobrar'
-              AND p.servicio_id IS NULL
-              AND (p.farmer_id = $2 OR (p.farmer_id IS NULL AND lower(trim(p.cliente)) = lower(trim(f.full_name))))
-              AND NOT EXISTS (SELECT 1 FROM liquidation_harvest_details d WHERE d.campo_parte_id = p.id)
-            FOR UPDATE OF p`,
-          [parteIds, data.farmer_id]
-        );
-        if (partes.rowCount !== parteIds.length) {
-          throw new ApiError(409, "Un Parte Diario ya fue liquidado o no pertenece al agricultor.");
-        }
-      }
-    }
-
-    const liquidation = await client.query(
-      `INSERT INTO liquidations
-       (liquidation_number, farmer_id, weighing_ticket_id, lot_id, quintals, price_per_quintal, gross_amount,
-        advances_discount, other_discounts, discount_breakdown, net_amount, batch_id, created_by, accionista_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-       RETURNING *`,
-      [
-        nextCode("LIQ"),
-        data.farmer_id,
-        data.weighing_ticket_id ?? null,
-        lotId,
-        data.quintals,
-        data.price_per_quintal,
-        preview.gross_amount,
-        preview.advances_discount,
-        preview.other_discounts,
-        data.discount_breakdown ? JSON.stringify(data.discount_breakdown) : null,
-        preview.net_amount,
-        data.batch_id ?? null,
-        data.created_by,
-        accionistaId
-      ]
+// Registra UNA liquidación dentro de la transacción recibida (la usan la ruta de una línea y la del lote).
+async function registrarLiquidacion(client: PoolClient, data: LiquidationInput, accionistaId: string | undefined) {
+  const preview = await previewLiquidation(data, accionistaId, client);
+  // El ingreso se liquida una sola vez y debe ser del agricultor indicado.
+  let lotId = data.lot_id ?? null;
+  if (data.weighing_ticket_id) {
+    const entry = await client.query(
+      "SELECT farmer_id, lot_id, accionista_id FROM weighing_tickets WHERE id = $1 FOR UPDATE",
+      [data.weighing_ticket_id]
     );
-    let liquidacionFinal = liquidation.rows[0];
-
-    // El lote solo se marca como liquidado cuando TODOS sus ingresos ya se
-    // pagaron: un lote puede juntar arroz de varios agricultores.
-    if (lotId) {
-      const pendientes = await client.query(
-        `SELECT 1 FROM weighing_tickets w
-         WHERE w.lot_id = $1
-           AND w.is_maquila = false
-           AND NOT EXISTS (
-             SELECT 1 FROM liquidations q
-             WHERE q.weighing_ticket_id = w.id AND q.status <> 'CANCELLED'
-           )
-         LIMIT 1`,
-        [lotId]
-      );
-      if (!pendientes.rowCount) {
-        await client.query("UPDATE lots SET status = 'LIQUIDATED' WHERE id = $1", [lotId]);
-      }
+    if (!entry.rowCount) throw new ApiError(404, "Ingreso de materia prima no encontrado");
+    if (entry.rows[0].accionista_id !== accionistaId) {
+      throw new ApiError(403, "Ese ingreso pertenece a otro socio operativo.");
     }
-
-    // Flota Propia: el valor descontado al agricultor queda como CxC de Campo
-    // contra el socio que realiza la liquidacion. No se marca como pagado hasta
-    // que el socio registre un abono real desde Cuentas por Cobrar de Campo.
-    const cargosCampo: CargoCampoLiquidacion[] = [];
-    if (data.flete_detalle?.tipo === "propia" && data.flete_detalle.monto > 0) {
-      const cargo = await registrarCargoCampoLiquidacion(client, {
-        liquidationId: liquidation.rows[0].id,
-        origenTipo: "liquidacion_flete",
-        origenId: liquidation.rows[0].id,
-        tipo: "flete",
-        monto: data.flete_detalle.monto,
-        qq: data.quintals,
-        precioUnitario: data.quintals > 0 ? data.flete_detalle.monto / data.quintals : null,
-        activoId: data.flete_detalle.activo_id,
-        prestador: data.flete_detalle.prestador,
-        createdBy: data.created_by ?? null
-      });
-      if (cargo) cargosCampo.push(cargo);
+    if (entry.rows[0].farmer_id !== data.farmer_id) {
+      throw new ApiError(400, "Ese ingreso es de otro agricultor.");
     }
-    // Flete de TERCERO (chofer particular): CxP a su favor por el valor del servicio.
-    if (data.flete_detalle?.tipo === "tercero" && data.flete_detalle.monto > 0) {
-      const prestador = (data.flete_detalle.prestador ?? "").trim() || "chofer particular";
-      await client.query(
-        `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
-         VALUES (NULL, $1, $2, $2, 'CONFIRMED', $3, 'flete_tercero', $1, $4)`,
-        [liquidation.rows[0].id, data.flete_detalle.monto, accionistaId,
-         `Flete (tercero) - ${prestador} - ${liquidation.rows[0].liquidation_number}`]
-      );
-    }
-
-    // AMORTIZACIÓN LIFO CON RENOVACIÓN: el descuento de fomento (monto disponible)
-    // amortiza los fomentos ACTIVOS del agricultor (de cualquier socio) en orden
-    // LIFO; cada fomento tocado se cierra como histórico y su remanente se traspasa
-    // a un fomento nuevo (renovación); el abono conserva el cruce inter-socios.
-    let fomentoPagos: AmortizacionFomentoResultado | null = null;
-    const fomentoDiscount = data.discount_breakdown?.fomento ?? 0;
-    const necesitaFarmerName = fomentoDiscount > 0 || (data.saldo_en_contra ?? 0) > 0;
-    const farmerName = necesitaFarmerName
-      ? ((await client.query("SELECT full_name FROM farmers WHERE id = $1", [data.farmer_id])).rows[0]?.full_name ?? "")
-      : "";
-    if (fomentoDiscount > 0) {
-      fomentoPagos = await amortizarFomentosLIFO(client, {
-        liquidationId: liquidation.rows[0].id,
-        liquidationNumber: liquidation.rows[0].liquidation_number,
-        liquidatingAccionistaId: accionistaId,
-        farmerId: data.farmer_id,
-        farmerName,
-        montoDisponible: fomentoDiscount,
-        qqLiquidados: data.qq_liquidados ?? null,
-        // Distribución MANUAL entre fondeadores si el operador la envió; si no, LIFO.
-        distribucion: data.fomento_pagos && data.fomento_pagos.length
-          ? data.fomento_pagos.map((p) => ({ fomento_id: p.fomento_id, monto: p.monto }))
-          : undefined
-      });
-    }
-
-    // El descuento solicitado puede ser mayor que la deuda real (por datos
-    // desactualizados o una distribución manual). Solo el abono efectivamente
-    // aplicado pertenece a Fomentos; el resto vuelve al neto de la liquidación.
-    const conciliacionFomento = conciliarDescuentoFomento(fomentoDiscount, fomentoPagos?.total_abonado ?? 0);
-    const otrosDescuentosFinales = round2(Math.max(0, preview.other_discounts - conciliacionFomento.noAplicado));
-    const advances = await client.query(
-      `SELECT * FROM farmer_advances
-       WHERE farmer_id = $1 AND accionista_id = $2 AND status IN ('CONFIRMED', 'PARTIAL') AND balance > 0
-       ORDER BY issued_at ASC
-       FOR UPDATE`,
-      [data.farmer_id, accionistaId]
+    const yaLiquidado = await client.query(
+      "SELECT liquidation_number FROM liquidations WHERE weighing_ticket_id = $1 AND status <> 'CANCELLED'",
+      [data.weighing_ticket_id]
     );
-    const anticiposPendientes = round2(advances.rows.reduce((sum, advance) => sum + Number(advance.balance || 0), 0));
-    const calculoFinal = calcularNetoLiquidacion(preview.gross_amount, otrosDescuentosFinales, anticiposPendientes);
-    const desgloseFinal = data.discount_breakdown
-      ? { ...data.discount_breakdown, fomento: conciliacionFomento.aplicado }
-      : null;
+    if (yaLiquidado.rowCount) {
+      throw new ApiError(409, `Ese ingreso ya fue liquidado (${yaLiquidado.rows[0].liquidation_number}).`);
+    }
+    lotId = lotId ?? entry.rows[0].lot_id;
+  }
 
-    liquidacionFinal = (await client.query(
-      `UPDATE liquidations
-       SET advances_discount = $2, other_discounts = $3, discount_breakdown = $4::jsonb, net_amount = $5
-       WHERE id = $1
-       RETURNING *`,
-      [liquidation.rows[0].id, calculoFinal.descuentoAnticipos, otrosDescuentosFinales,
-       desgloseFinal ? JSON.stringify(desgloseFinal) : null, calculoFinal.neto]
-    )).rows[0];
-
-    let remainingDiscount = calculoFinal.descuentoAnticipos;
-    for (const advance of advances.rows) {
-      if (remainingDiscount <= 0) break;
-      const applied = Math.min(Number(advance.balance), remainingDiscount);
-      const newBalance = round2(Number(advance.balance) - applied);
-      const newStatus = newBalance === 0 ? "PAID" : "PARTIAL";
-      await client.query(
-        "UPDATE farmer_advances SET balance = $2, status = $3 WHERE id = $1",
-        [advance.id, newBalance, newStatus]
-      );
-      await client.query(
-        `INSERT INTO advance_applications (advance_id, liquidation_id, amount_applied)
-         VALUES ($1, $2, $3)`,
-        [advance.id, liquidation.rows[0].id, applied]
-      );
-      remainingDiscount = round2(remainingDiscount - applied);
+  const cosechadoraDetalles = data.cosechadora_detalles ?? [];
+  if (cosechadoraDetalles.length > 0) {
+    const totalDetalle = round2(cosechadoraDetalles.reduce(
+      (sum, item) => sum + round2(item.qq * item.precio_por_qq), 0
+    ));
+    const totalDeclarado = round2(data.discount_breakdown?.cosechadora ?? 0);
+    if (Math.abs(totalDetalle - totalDeclarado) > 0.01) {
+      throw new ApiError(400, "El total de cosechadora no coincide con el detalle de maquinas.");
     }
 
-    if (calculoFinal.neto > 0) {
-      await client.query(
-        `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, accionista_id)
-         VALUES ($1, $2, $3, $3, $4)`,
-        [data.farmer_id, liquidation.rows[0].id, calculoFinal.neto, accionistaId]
-      );
+    const parteIds = cosechadoraDetalles.flatMap((item) => item.campo_parte_id ? [item.campo_parte_id] : []);
+    if (new Set(parteIds).size !== parteIds.length) {
+      throw new ApiError(400, "Un Parte Diario no puede repetirse en la misma liquidacion.");
     }
-
-    // Saldo EN CONTRA (Descuentos > Bruto): el remanente se registra como un NUEVO
-    // fomento a nombre del SOCIO ACREEDOR ORIGINAL (dueño del fomento financiado),
-    // nunca del socio que liquida. Si no hubo fomento (déficit por otros descuentos),
-    // no hay acreedor de fomento → se atribuye al socio que liquida (único posible).
-    let saldoContra: { fomento_id: string; monto: number; acreedor: string | null } | null = null;
-    const saldoEnContraReal = round2(Math.max(0, (data.saldo_en_contra ?? 0) - conciliacionFomento.noAplicado));
-    if (saldoEnContraReal > 0) {
-      const acreedorId = fomentoPagos?.acreedor?.accionista_id ?? accionistaId ?? null;
-      const acreedorNombre = fomentoPagos?.acreedor?.nombre ?? null;
-      saldoContra = await generarFomentoSaldoEnContra(client, {
-        liquidationId: liquidation.rows[0].id,
-        liquidationNumber: liquidation.rows[0].liquidation_number,
-        acreedorAccionistaId: acreedorId,
-        acreedorNombre,
-        farmerId: data.farmer_id,
-        farmerName,
-        deficit: saldoEnContraReal,
-        createdBy: data.created_by ?? null
-      });
-    }
-
-    // ── Distribución de retenciones inter-compañías (movimiento INTERNO; NO altera
-    // el bruto/neto del agricultor: esos descuentos ya redujeron su pago). Solo en
-    // la primera línea del lote (donde vienen los descuentos a nivel lote). ──
-    let retenciones: { bascula_matriz: number; cosechadora_campo: number } | null = null;
-    const bascula = data.discount_breakdown?.bascula ?? 0;
-    const cosechadora = data.discount_breakdown?.cosechadora ?? 0;
-    const matrizId = await getMatrizId(client);
-    const detallesCosechadora = data.cosechadora_detalles ?? [];
-    const usaDetalleMultiple = detallesCosechadora.length > 0;
-    const cosechadoraTerceroLegacy = data.cosechadora_detalle?.tipo === "tercero";
-    const cosechadoraPropia = usaDetalleMultiple
-      ? round2(detallesCosechadora
-          .filter((item) => item.tipo === "propia")
-          .reduce((sum, item) => sum + round2(item.qq * item.precio_por_qq), 0))
-      : (cosechadoraTerceroLegacy ? 0 : cosechadora);
-
-    // Persiste el desglose antes de generar asientos. La transaccion completa
-    // revierte si un Parte Diario ya fue tomado concurrentemente.
-    for (const item of detallesCosechadora) {
-      const monto = round2(item.qq * item.precio_por_qq);
-      const detail = await client.query(
-        `INSERT INTO liquidation_harvest_details
-           (liquidation_id, campo_parte_id, activo_id, provider_type, provider_name,
-            quintals, price_per_quintal, amount)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         RETURNING id`,
-        [liquidation.rows[0].id, item.campo_parte_id ?? null, item.activo_id ?? null,
-         item.tipo, item.prestador?.trim() || null, item.qq, item.precio_por_qq, monto]
+    if (parteIds.length > 0) {
+      const partes = await client.query(
+        `SELECT p.id
+           FROM campo_partes p
+           JOIN campo_activos a ON a.id = p.activo_id
+           JOIN farmers f ON f.id = $2
+          WHERE p.id = ANY($1::uuid[])
+            AND a.tipo = 'cosechadora'
+            AND p.estado = 'por_cobrar'
+            AND p.servicio_id IS NULL
+            AND (p.farmer_id = $2 OR (p.farmer_id IS NULL AND lower(trim(p.cliente)) = lower(trim(f.full_name))))
+            AND NOT EXISTS (SELECT 1 FROM liquidation_harvest_details d WHERE d.campo_parte_id = p.id)
+          FOR UPDATE OF p`,
+        [parteIds, data.farmer_id]
       );
-      if (item.tipo === "propia") {
-        const cargo = await registrarCargoCampoLiquidacion(client, {
-          liquidationId: liquidation.rows[0].id,
-          origenTipo: "liquidacion_cosechadora",
-          origenId: detail.rows[0].id,
-          tipo: "cosecha",
-          monto,
-          qq: item.qq,
-          precioUnitario: item.precio_por_qq,
-          activoId: item.activo_id,
-          prestador: item.prestador,
-          createdBy: data.created_by ?? null
-        });
-        if (cargo) cargosCampo.push(cargo);
+      if (partes.rowCount !== parteIds.length) {
+        throw new ApiError(409, "Un Parte Diario ya fue liquidado o no pertenece al agricultor.");
       }
     }
+  }
 
-    // Compatibilidad con clientes antiguos que enviaban una sola cosechadora
-    // agregada, sin cosechadora_detalles.
-    if (!usaDetalleMultiple && cosechadoraPropia > 0) {
+  const liquidation = await client.query(
+    `INSERT INTO liquidations
+     (liquidation_number, farmer_id, weighing_ticket_id, lot_id, quintals, price_per_quintal, gross_amount,
+      advances_discount, other_discounts, discount_breakdown, net_amount, batch_id, created_by, accionista_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+     RETURNING *`,
+    [
+      nextCode("LIQ"),
+      data.farmer_id,
+      data.weighing_ticket_id ?? null,
+      lotId,
+      data.quintals,
+      data.price_per_quintal,
+      preview.gross_amount,
+      preview.advances_discount,
+      preview.other_discounts,
+      data.discount_breakdown ? JSON.stringify(data.discount_breakdown) : null,
+      preview.net_amount,
+      data.batch_id ?? null,
+      data.created_by,
+      accionistaId
+    ]
+  );
+  let liquidacionFinal = liquidation.rows[0];
+
+  // El lote solo se marca como liquidado cuando TODOS sus ingresos ya se
+  // pagaron: un lote puede juntar arroz de varios agricultores.
+  if (lotId) {
+    const pendientes = await client.query(
+      `SELECT 1 FROM weighing_tickets w
+       WHERE w.lot_id = $1
+         AND w.is_maquila = false
+         AND NOT EXISTS (
+           SELECT 1 FROM liquidations q
+           WHERE q.weighing_ticket_id = w.id AND q.status <> 'CANCELLED'
+         )
+       LIMIT 1`,
+      [lotId]
+    );
+    if (!pendientes.rowCount) {
+      await client.query("UPDATE lots SET status = 'LIQUIDATED' WHERE id = $1", [lotId]);
+    }
+  }
+
+  // Flota Propia: el valor descontado al agricultor queda como CxC de Campo
+  // contra el socio que realiza la liquidacion. No se marca como pagado hasta
+  // que el socio registre un abono real desde Cuentas por Cobrar de Campo.
+  const cargosCampo: CargoCampoLiquidacion[] = [];
+  if (data.flete_detalle?.tipo === "propia" && data.flete_detalle.monto > 0) {
+    const cargo = await registrarCargoCampoLiquidacion(client, {
+      liquidationId: liquidation.rows[0].id,
+      origenTipo: "liquidacion_flete",
+      origenId: liquidation.rows[0].id,
+      tipo: "flete",
+      monto: data.flete_detalle.monto,
+      qq: data.quintals,
+      precioUnitario: data.quintals > 0 ? data.flete_detalle.monto / data.quintals : null,
+      activoId: data.flete_detalle.activo_id,
+      prestador: data.flete_detalle.prestador,
+      createdBy: data.created_by ?? null
+    });
+    if (cargo) cargosCampo.push(cargo);
+  }
+  // Flete de TERCERO (chofer particular): CxP a su favor por el valor del servicio.
+  if (data.flete_detalle?.tipo === "tercero" && data.flete_detalle.monto > 0) {
+    const prestador = (data.flete_detalle.prestador ?? "").trim() || "chofer particular";
+    await client.query(
+      `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
+       VALUES (NULL, $1, $2, $2, 'CONFIRMED', $3, 'flete_tercero', $1, $4)`,
+      [liquidation.rows[0].id, data.flete_detalle.monto, accionistaId,
+       `Flete (tercero) - ${prestador} - ${liquidation.rows[0].liquidation_number}`]
+    );
+  }
+
+  // AMORTIZACIÓN LIFO CON RENOVACIÓN: el descuento de fomento (monto disponible)
+  // amortiza los fomentos ACTIVOS del agricultor (de cualquier socio) en orden
+  // LIFO; cada fomento tocado se cierra como histórico y su remanente se traspasa
+  // a un fomento nuevo (renovación); el abono conserva el cruce inter-socios.
+  let fomentoPagos: AmortizacionFomentoResultado | null = null;
+  const fomentoDiscount = data.discount_breakdown?.fomento ?? 0;
+  const necesitaFarmerName = fomentoDiscount > 0 || (data.saldo_en_contra ?? 0) > 0;
+  const farmerName = necesitaFarmerName
+    ? ((await client.query("SELECT full_name FROM farmers WHERE id = $1", [data.farmer_id])).rows[0]?.full_name ?? "")
+    : "";
+  if (fomentoDiscount > 0) {
+    fomentoPagos = await amortizarFomentosLIFO(client, {
+      liquidationId: liquidation.rows[0].id,
+      liquidationNumber: liquidation.rows[0].liquidation_number,
+      liquidatingAccionistaId: accionistaId,
+      farmerId: data.farmer_id,
+      farmerName,
+      montoDisponible: fomentoDiscount,
+      qqLiquidados: data.qq_liquidados ?? null,
+      // Distribución MANUAL entre fondeadores si el operador la envió; si no, LIFO.
+      distribucion: data.fomento_pagos && data.fomento_pagos.length
+        ? data.fomento_pagos.map((p) => ({ fomento_id: p.fomento_id, monto: p.monto }))
+        : undefined
+    });
+  }
+
+  // El descuento solicitado puede ser mayor que la deuda real (por datos
+  // desactualizados o una distribución manual). Solo el abono efectivamente
+  // aplicado pertenece a Fomentos; el resto vuelve al neto de la liquidación.
+  const conciliacionFomento = conciliarDescuentoFomento(fomentoDiscount, fomentoPagos?.total_abonado ?? 0);
+  const otrosDescuentosFinales = round2(Math.max(0, preview.other_discounts - conciliacionFomento.noAplicado));
+  const advances = await client.query(
+    `SELECT * FROM farmer_advances
+     WHERE farmer_id = $1 AND accionista_id = $2 AND status IN ('CONFIRMED', 'PARTIAL') AND balance > 0
+     ORDER BY issued_at ASC
+     FOR UPDATE`,
+    [data.farmer_id, accionistaId]
+  );
+  const anticiposPendientes = round2(advances.rows.reduce((sum, advance) => sum + Number(advance.balance || 0), 0));
+  const calculoFinal = calcularNetoLiquidacion(preview.gross_amount, otrosDescuentosFinales, anticiposPendientes);
+  const desgloseFinal = data.discount_breakdown
+    ? { ...data.discount_breakdown, fomento: conciliacionFomento.aplicado }
+    : null;
+
+  liquidacionFinal = (await client.query(
+    `UPDATE liquidations
+     SET advances_discount = $2, other_discounts = $3, discount_breakdown = $4::jsonb, net_amount = $5
+     WHERE id = $1
+     RETURNING *`,
+    [liquidation.rows[0].id, calculoFinal.descuentoAnticipos, otrosDescuentosFinales,
+     desgloseFinal ? JSON.stringify(desgloseFinal) : null, calculoFinal.neto]
+  )).rows[0];
+
+  let remainingDiscount = calculoFinal.descuentoAnticipos;
+  for (const advance of advances.rows) {
+    if (remainingDiscount <= 0) break;
+    const applied = Math.min(Number(advance.balance), remainingDiscount);
+    const newBalance = round2(Number(advance.balance) - applied);
+    const newStatus = newBalance === 0 ? "PAID" : "PARTIAL";
+    await client.query(
+      "UPDATE farmer_advances SET balance = $2, status = $3 WHERE id = $1",
+      [advance.id, newBalance, newStatus]
+    );
+    await client.query(
+      `INSERT INTO advance_applications (advance_id, liquidation_id, amount_applied)
+       VALUES ($1, $2, $3)`,
+      [advance.id, liquidation.rows[0].id, applied]
+    );
+    remainingDiscount = round2(remainingDiscount - applied);
+  }
+
+  if (calculoFinal.neto > 0) {
+    await client.query(
+      `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, accionista_id)
+       VALUES ($1, $2, $3, $3, $4)`,
+      [data.farmer_id, liquidation.rows[0].id, calculoFinal.neto, accionistaId]
+    );
+  }
+
+  // Saldo EN CONTRA (Descuentos > Bruto): el remanente se registra como un NUEVO
+  // fomento a nombre del SOCIO ACREEDOR ORIGINAL (dueño del fomento financiado),
+  // nunca del socio que liquida. Si no hubo fomento (déficit por otros descuentos),
+  // no hay acreedor de fomento → se atribuye al socio que liquida (único posible).
+  let saldoContra: { fomento_id: string; monto: number; acreedor: string | null } | null = null;
+  const saldoEnContraReal = round2(Math.max(0, (data.saldo_en_contra ?? 0) - conciliacionFomento.noAplicado));
+  if (saldoEnContraReal > 0) {
+    const acreedorId = fomentoPagos?.acreedor?.accionista_id ?? accionistaId ?? null;
+    const acreedorNombre = fomentoPagos?.acreedor?.nombre ?? null;
+    saldoContra = await generarFomentoSaldoEnContra(client, {
+      liquidationId: liquidation.rows[0].id,
+      liquidationNumber: liquidation.rows[0].liquidation_number,
+      acreedorAccionistaId: acreedorId,
+      acreedorNombre,
+      farmerId: data.farmer_id,
+      farmerName,
+      deficit: saldoEnContraReal,
+      createdBy: data.created_by ?? null
+    });
+  }
+
+  // ── Distribución de retenciones inter-compañías (movimiento INTERNO; NO altera
+  // el bruto/neto del agricultor: esos descuentos ya redujeron su pago). Solo en
+  // la primera línea del lote (donde vienen los descuentos a nivel lote). ──
+  let retenciones: { bascula_matriz: number; cosechadora_campo: number } | null = null;
+  const bascula = data.discount_breakdown?.bascula ?? 0;
+  const cosechadora = data.discount_breakdown?.cosechadora ?? 0;
+  const matrizId = await getMatrizId(client);
+  const detallesCosechadora = data.cosechadora_detalles ?? [];
+  const usaDetalleMultiple = detallesCosechadora.length > 0;
+  const cosechadoraTerceroLegacy = data.cosechadora_detalle?.tipo === "tercero";
+  const cosechadoraPropia = usaDetalleMultiple
+    ? round2(detallesCosechadora
+        .filter((item) => item.tipo === "propia")
+        .reduce((sum, item) => sum + round2(item.qq * item.precio_por_qq), 0))
+    : (cosechadoraTerceroLegacy ? 0 : cosechadora);
+
+  // Persiste el desglose antes de generar asientos. La transaccion completa
+  // revierte si un Parte Diario ya fue tomado concurrentemente.
+  for (const item of detallesCosechadora) {
+    const monto = round2(item.qq * item.precio_por_qq);
+    const detail = await client.query(
+      `INSERT INTO liquidation_harvest_details
+         (liquidation_id, campo_parte_id, activo_id, provider_type, provider_name,
+          quintals, price_per_quintal, amount)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id`,
+      [liquidation.rows[0].id, item.campo_parte_id ?? null, item.activo_id ?? null,
+       item.tipo, item.prestador?.trim() || null, item.qq, item.precio_por_qq, monto]
+    );
+    if (item.tipo === "propia") {
       const cargo = await registrarCargoCampoLiquidacion(client, {
         liquidationId: liquidation.rows[0].id,
         origenTipo: "liquidacion_cosechadora",
-        origenId: liquidation.rows[0].id,
+        origenId: detail.rows[0].id,
         tipo: "cosecha",
-        monto: cosechadoraPropia,
-        qq: data.quintals,
-        precioUnitario: data.quintals > 0 ? cosechadoraPropia / data.quintals : null,
-        activoId: null,
-        prestador: data.cosechadora_detalle?.prestador,
+        monto,
+        qq: item.qq,
+        precioUnitario: item.precio_por_qq,
+        activoId: item.activo_id,
+        prestador: item.prestador,
         createdBy: data.created_by ?? null
       });
       if (cargo) cargosCampo.push(cargo);
     }
+  }
 
-    // Cosechadoras de TERCEROS: una CxP independiente por prestador/maquina.
-    for (const item of detallesCosechadora.filter((row) => row.tipo === "tercero")) {
-      const monto = round2(item.qq * item.precio_por_qq);
-      const prestador = (item.prestador ?? "").trim() || "cosechadora contratada";
+  // Compatibilidad con clientes antiguos que enviaban una sola cosechadora
+  // agregada, sin cosechadora_detalles.
+  if (!usaDetalleMultiple && cosechadoraPropia > 0) {
+    const cargo = await registrarCargoCampoLiquidacion(client, {
+      liquidationId: liquidation.rows[0].id,
+      origenTipo: "liquidacion_cosechadora",
+      origenId: liquidation.rows[0].id,
+      tipo: "cosecha",
+      monto: cosechadoraPropia,
+      qq: data.quintals,
+      precioUnitario: data.quintals > 0 ? cosechadoraPropia / data.quintals : null,
+      activoId: null,
+      prestador: data.cosechadora_detalle?.prestador,
+      createdBy: data.created_by ?? null
+    });
+    if (cargo) cargosCampo.push(cargo);
+  }
+
+  // Cosechadoras de TERCEROS: una CxP independiente por prestador/maquina.
+  for (const item of detallesCosechadora.filter((row) => row.tipo === "tercero")) {
+    const monto = round2(item.qq * item.precio_por_qq);
+    const prestador = (item.prestador ?? "").trim() || "cosechadora contratada";
+    await client.query(
+      `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
+       VALUES (NULL, $1, $2, $2, 'CONFIRMED', $3, 'cosechadora_tercero', $1, $4)`,
+      [liquidation.rows[0].id, monto, accionistaId,
+       `Cosechadora (tercero) - ${prestador} - ${liquidation.rows[0].liquidation_number}`]
+    );
+  }
+
+  // Compatibilidad con clientes anteriores: formato singular agregado.
+  if (!usaDetalleMultiple && cosechadora > 0 && cosechadoraTerceroLegacy) {
+    const prestador = (data.cosechadora_detalle?.prestador ?? "").trim() || "cosechadora contratada";
+    await client.query(
+      `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
+       VALUES (NULL, $1, $2, $2, 'CONFIRMED', $3, 'cosechadora_tercero', $1, $4)`,
+      [liquidation.rows[0].id, cosechadora, accionistaId,
+       `Cosechadora (tercero) - ${prestador} - ${liquidation.rows[0].liquidation_number}`]
+    );
+  }
+
+  // Retenciones inter-compañías: báscula → Matriz; cada cosechadora PROPIA
+  // cruza con Campo de forma independiente. Las de terceros ya generaron CxP.
+  if ((bascula > 0 || cosechadoraPropia > 0) && accionistaId && accionistaId !== matrizId) {
+    // (1) BÁSCULA → Matriz: el socio asume CxP a favor de la Matriz.
+    if (bascula > 0) {
+      // Detalle HUMANIZADO: sin el #LIQ crudo. Especifica el peso/ticket de
+      // báscula y el agricultor de origen, para que en "Ver detalle y Cobrar"
+      // se lea a qué carga corresponde cada retención de $10.
+      const detRet = await client.query(
+        `SELECT f.full_name AS farmer_name,
+                COALESCE(m.raw_payload->>'numeroTicket', w.ticket_number) AS ticket_nro
+         FROM liquidations liq
+         LEFT JOIN farmers f ON f.id = liq.farmer_id
+         LEFT JOIN weighing_tickets w ON w.id = liq.weighing_ticket_id
+         LEFT JOIN mobile_synced_tickets m ON m.weighing_ticket_id = w.id
+         WHERE liq.id = $1`,
+        [liquidation.rows[0].id]
+      );
+      const rFarmer = detRet.rows[0]?.farmer_name ?? "sin agricultor";
+      const rTicket = String(detRet.rows[0]?.ticket_nro ?? "").trim() || "s/n";
+      const retDesc = `Retención de báscula - Ticket/Peso #${rTicket} - Agricultor: ${rFarmer}`;
       await client.query(
         `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
-         VALUES (NULL, $1, $2, $2, 'CONFIRMED', $3, 'cosechadora_tercero', $1, $4)`,
-        [liquidation.rows[0].id, monto, accionistaId,
-         `Cosechadora (tercero) - ${prestador} - ${liquidation.rows[0].liquidation_number}`]
+         VALUES (NULL, $1, $2, $2, 'CONFIRMED', $3, 'retencion_matriz', $1, $4)`,
+        [liquidation.rows[0].id, bascula, accionistaId, retDesc]
       );
-    }
-
-    // Compatibilidad con clientes anteriores: formato singular agregado.
-    if (!usaDetalleMultiple && cosechadora > 0 && cosechadoraTerceroLegacy) {
-      const prestador = (data.cosechadora_detalle?.prestador ?? "").trim() || "cosechadora contratada";
       await client.query(
-        `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
-         VALUES (NULL, $1, $2, $2, 'CONFIRMED', $3, 'cosechadora_tercero', $1, $4)`,
-        [liquidation.rows[0].id, cosechadora, accionistaId,
-         `Cosechadora (tercero) - ${prestador} - ${liquidation.rows[0].liquidation_number}`]
+        `INSERT INTO accounts_receivable (farmer_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
+         VALUES (NULL, $1, $1, 'CONFIRMED', $2, 'retencion_matriz', $3, $4)`,
+        [bascula, matrizId, liquidation.rows[0].id, retDesc]
       );
     }
+    // (2) COSECHADORA → Campo se registra arriba, junto con cada detalle de
+    //     maquina, para conservar agricultor/QQ/tarifa y agruparlo por socio.
+    retenciones = { bascula_matriz: bascula, cosechadora_campo: cosechadoraPropia };
+  }
 
-    // Retenciones inter-compañías: báscula → Matriz; cada cosechadora PROPIA
-    // cruza con Campo de forma independiente. Las de terceros ya generaron CxP.
-    if ((bascula > 0 || cosechadoraPropia > 0) && accionistaId && accionistaId !== matrizId) {
-      // (1) BÁSCULA → Matriz: el socio asume CxP a favor de la Matriz.
-      if (bascula > 0) {
-        // Detalle HUMANIZADO: sin el #LIQ crudo. Especifica el peso/ticket de
-        // báscula y el agricultor de origen, para que en "Ver detalle y Cobrar"
-        // se lea a qué carga corresponde cada retención de $10.
-        const detRet = await client.query(
-          `SELECT f.full_name AS farmer_name,
-                  COALESCE(m.raw_payload->>'numeroTicket', w.ticket_number) AS ticket_nro
-           FROM liquidations liq
-           LEFT JOIN farmers f ON f.id = liq.farmer_id
-           LEFT JOIN weighing_tickets w ON w.id = liq.weighing_ticket_id
-           LEFT JOIN mobile_synced_tickets m ON m.weighing_ticket_id = w.id
-           WHERE liq.id = $1`,
-          [liquidation.rows[0].id]
-        );
-        const rFarmer = detRet.rows[0]?.farmer_name ?? "sin agricultor";
-        const rTicket = String(detRet.rows[0]?.ticket_nro ?? "").trim() || "s/n";
-        const retDesc = `Retención de báscula - Ticket/Peso #${rTicket} - Agricultor: ${rFarmer}`;
-        await client.query(
-          `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
-           VALUES (NULL, $1, $2, $2, 'CONFIRMED', $3, 'retencion_matriz', $1, $4)`,
-          [liquidation.rows[0].id, bascula, accionistaId, retDesc]
-        );
-        await client.query(
-          `INSERT INTO accounts_receivable (farmer_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
-           VALUES (NULL, $1, $1, 'CONFIRMED', $2, 'retencion_matriz', $3, $4)`,
-          [bascula, matrizId, liquidation.rows[0].id, retDesc]
-        );
-      }
-      // (2) COSECHADORA → Campo se registra arriba, junto con cada detalle de
-      //     maquina, para conservar agricultor/QQ/tarifa y agruparlo por socio.
-      retenciones = { bascula_matriz: bascula, cosechadora_campo: cosechadoraPropia };
-    }
-
-    return { ...liquidacionFinal, cargos_campo: cargosCampo, fomento_pagos: fomentoPagos, saldo_en_contra: saldoContra, retenciones };
-  });
-
-  res.status(201).json(result);
-}));
+  return { ...liquidacionFinal, cargos_campo: cargosCampo, fomento_pagos: fomentoPagos, saldo_en_contra: saldoContra, retenciones };
+}
 
 liquidationsRouter.get("/", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;

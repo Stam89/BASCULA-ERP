@@ -1,5 +1,6 @@
 import type { Request } from "express";
-import { ApiError } from "../http/error-handler.js";
+import { ApiError, AvisoConfirmable } from "../http/error-handler.js";
+import { confirmado } from "../http/confirmaciones.js";
 
 type Db = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }> };
 
@@ -25,7 +26,7 @@ const redondear2 = (n: number) => Math.round(n * 100) / 100;
 const dinero = (n: number) => `$${Math.abs(n).toFixed(2)}`;
 
 /** La persona ya vio el aviso de sobregiro y decidió seguir (la pantalla reenvía con esta cabecera). */
-export const confirmaSobregiro = (req: Pick<Request, "headers">): boolean => req.headers["x-confirmar-sobregiro"] === "1";
+export const confirmaSobregiro = (req: Pick<Request, "headers">): boolean => confirmado(req, "SOBREGIRO");
 
 /**
  * AVISO (no bloqueo) cuando un egreso dejaría la caja en negativo. Responde 409 con code «SOBREGIRO» y el saldo
@@ -47,8 +48,7 @@ export async function avisarSobregiro(db: Db, cashRegisterId: string, monto: num
   const saldo = redondear2(Number(r.rows[0].apertura ?? 0) + Number(r.rows[0].movimientos ?? 0));
   const quedara = redondear2(saldo - Number(monto));
   if (quedara < -0.005) {
-    throw new ApiError(
-      409,
+    throw new AvisoConfirmable(
       `La caja quedará en -${dinero(quedara)}: hoy tiene ${saldo < 0 ? "-" : ""}${dinero(saldo)} y este egreso es de ${dinero(monto)}. ¿Registrarlo de todos modos?`,
       "SOBREGIRO"
     );

@@ -21,14 +21,14 @@ try {
   const saldoCaja = async () => r2((await api("GET", `/cash/registers/${caja.id}/summary`)).data.current_balance);
 
   // Ingresos de materia prima (COMPRA) del mismo agricultor, listos para liquidar.
-  const tickets = await q(`SELECT id, quintals::float qq FROM mobile_synced_tickets WHERE liquidated_at IS NULL AND weighing_ticket_id IS NULL AND quintals > 5 ORDER BY id LIMIT 8`);
+  const tickets = await q(`SELECT id, quintals::float qq FROM mobile_synced_tickets WHERE liquidated_at IS NULL AND weighing_ticket_id IS NULL AND quintals > 5 ORDER BY id LIMIT 14`);
   const ingresos = [];
   for (const t of tickets) {
     await api("POST", `/tickets/${t.id}/link-farmer`, { farmer_id: farmer });
     const i = await api("POST", `/tickets/${t.id}/create-lot`, { rice_type: "0.11", operation_type: "COMPRA", ownership: "OWNED" });
     if (i.ok) ingresos.push({ id: i.data.ingreso.id, qq: t.qq });
   }
-  check(ingresos.length >= 7, "0b. hay 7+ ingresos para probar", ingresos.length);
+  check(ingresos.length >= 13, "0b. hay 13+ ingresos para probar", ingresos.length);
   const [E1, E2, E3, E4, E5, E6, E7] = ingresos;
   const liquidar = (E, extra = {}) => api("POST", "/liquidations", { farmer_id: farmer, weighing_ticket_id: E.id, quintals: E.qq, price_per_quintal: 30, other_discounts: 0, ...extra });
   const apDe = async (liqId) => (await q("SELECT * FROM accounts_payable WHERE liquidation_id=$1 AND reference_type IS NULL", [liqId]))[0];
@@ -124,6 +124,35 @@ try {
   check(reliq.status === 201, "J6. el ingreso de una liquidación anulada se puede volver a liquidar", mostrar(reliq));
   const [za, zb] = await dos(() => api("POST", `/liquidations/${L6.id}/anular`, { motivo: "doble clic" }));
   check([za, zb].filter((r) => r.ok).length === 1, "J7. anular dos veces a la vez anula UNA sola vez", [za.status, zb.status]);
+
+  // ── L. Liquidación de VARIAS líneas: todas o ninguna ───────────────────
+  const [E8, E9, E10, E11, E12, E13] = ingresos.slice(7);
+  const linea = (E, extra = {}) => ({ farmer_id: farmer, weighing_ticket_id: E.id, quintals: E.qq, price_per_quintal: 30, other_discounts: 0, ...extra });
+  const nLiq = async () => (await q("SELECT count(*)::int n FROM liquidations WHERE status<>'CANCELLED'"))[0].n;
+  const n0 = await nLiq();
+  const lote = await api("POST", "/liquidations/lote", { lineas: [linea(E8), linea(E9)] });
+  check(lote.status === 201 && Array.isArray(lote.data) && lote.data.length === 2 && (await nLiq()) === n0 + 2, "L1. un lote de 2 líneas se guarda completo", mostrar(lote));
+  const n1 = await nLiq();
+  const loteMalo = await api("POST", "/liquidations/lote", { lineas: [linea(E10), linea(E1)] });
+  check(loteMalo.status === 409 && (await nLiq()) === n1, "L2. si una línea falla (ingreso ya liquidado), NO se guarda ninguna", { status: loteMalo.status, antes: n1, despues: await nLiq() });
+  check((await q("SELECT 1 FROM liquidations WHERE weighing_ticket_id=$1 AND status<>'CANCELLED'", [E10.id])).length === 0, "L3. la primera línea del lote fallido tampoco quedó hecha");
+  const ant3 = exigir(await api("POST", "/advances", { farmer_id: farmer, amount: 50, concept: "Anticipo para lote" }), "L4. Anticipo de $50 antes de un lote");
+  const loteAnt = await api("POST", "/liquidations/lote", { lineas: [linea(E10), linea(E11)] });
+  const descTotal = r2((loteAnt.data ?? []).reduce((acc, l) => acc + Number(l.advances_discount), 0));
+  check(loteAnt.status === 201 && descTotal === 50 && r2(loteAnt.data[0].advances_discount) === 50 && r2(loteAnt.data[1].advances_discount) === 0, "L5. en un lote el anticipo se descuenta UNA sola vez (en la primera línea)", { status: loteAnt.status, desc: (loteAnt.data ?? []).map?.((l) => l.advances_discount) });
+  void ant3;
+
+  // ── M. Aviso de quintales de más ───────────────────────────────────────
+  const n2 = await nLiq();
+  const demas = await api("POST", "/liquidations/lote", { lineas: [linea(E12, { quintals: r2(E12.qq + 10) })] });
+  check(demas.status === 409 && demas.data?.code === "QQ_EXCEDE" && demas.data?.confirmable === true && /pesó/.test(demas.data?.error ?? ""), "M1. liquidar más QQ de los que pesó el ticket AVISA (confirmable)", mostrar(demas));
+  check((await nLiq()) === n2, "M2. mientras no se confirme NO se guarda nada");
+  const demasOk = await api("POST", "/liquidations/lote", { lineas: [linea(E12, { quintals: r2(E12.qq + 10) })] }, matriz, { "x-confirmar": "QQ_EXCEDE" });
+  check(demasOk.status === 201 && r2(demasOk.data[0].quintals) === r2(E12.qq + 10), "M3. confirmando, se liquida con los QQ escritos", mostrar(demasOk));
+  const menos = await api("POST", "/liquidations", linea(E13, { quintals: r2(E13.qq - 1) }));
+  check(menos.status === 201, "M4. liquidar MENOS QQ de los pesados no pide nada", mostrar(menos));
+  const unaDemas = await api("POST", "/liquidations", linea(E8, { quintals: 9999 }));
+  check(unaDemas.status === 409 && (unaDemas.data?.code === "QQ_EXCEDE" || /ya fue liquidado/.test(unaDemas.data?.error ?? "")), "M5. la ruta de una sola línea también avisa (o rechaza si ya estaba liquidado)", mostrar(unaDemas));
 
   // ── K. Coherencia final: lo que debe el negocio = lo que dicen las cuentas ─
   const incoh = await q(`SELECT l.liquidation_number, l.net_amount::float n, a.amount::float a FROM liquidations l JOIN accounts_payable a ON a.liquidation_id=l.id AND a.reference_type IS NULL WHERE l.status<>'CANCELLED' AND abs(l.net_amount - a.amount) > 0.01`);

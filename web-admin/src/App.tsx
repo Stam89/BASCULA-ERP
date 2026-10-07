@@ -11912,9 +11912,9 @@ export function App() {
       batchDiscountRemaining = Math.max(0, Math.round((batchDiscountRemaining - batchDiscount) * 100) / 100);
       return [{ line, entry, qq, price, lineFlete, batchDiscount }];
     });
-    for (let i = 0; i < preparedLines.length; i++) {
-      const { line, entry, qq, price, lineFlete, batchDiscount } = preparedLines[i];
-      const result = await apiPost<LiqApiResult>("/liquidations", {
+    // Todas las líneas viajan JUNTAS: el servidor las guarda en UNA transacción (todas o ninguna). Si alguna
+    // liquida más QQ de los que pesó su ticket, el servidor avisa y se pregunta antes de guardar.
+    const cuerpos = preparedLines.map(({ line, qq, price, lineFlete, batchDiscount }, i) => ({
         farmer_id: liqFarmerId,
         weighing_ticket_id: line.lot_id,
         quintals: qq,
@@ -11952,7 +11952,11 @@ export function App() {
               }))
           : undefined,
         batch_id: batchId
-      });
+    }));
+    const resultados = await apiPost<LiqApiResult[]>("/liquidations/lote", { lineas: cuerpos });
+    for (let i = 0; i < resultados.length; i++) {
+      const result = resultados[i];
+      const { entry } = preparedLines[i];
       if (result.saldo_en_contra) { saldoContraMonto += result.saldo_en_contra.monto; saldoContraAcreedor = result.saldo_en_contra.acreedor; }
       if (result.cargos_campo?.length) {
         cargosCampoTotal += result.cargos_campo.reduce((sum, cargo) => sum + Number(cargo.monto), 0);

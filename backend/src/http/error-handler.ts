@@ -7,6 +7,17 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * AVISO que la persona puede confirmar (no es un bloqueo): 409 con `code` y `confirmable: true`. La pantalla
+ * pregunta y, si acepta, reenvía la misma petición con la cabecera «X-Confirmar: <code>». Se lanza ANTES de
+ * escribir nada.
+ */
+export class AvisoConfirmable extends ApiError {
+  constructor(message: string, code: string) {
+    super(409, message, code);
+  }
+}
+
 export function notFound(req: Request, _res: Response, next: NextFunction) {
   next(new ApiError(404, `Ruta no encontrada: ${req.method} ${req.path}`));
 }
@@ -32,7 +43,11 @@ const MENSAJES_POSTGRES: Record<string, { status: number; mensaje: string }> = {
 
 export function errorHandler(error: Error, req: Request, res: Response, _next: NextFunction) {
   if (error instanceof ApiError) {
-    res.status(error.statusCode).json({ error: error.message, statusCode: error.statusCode, ...(error.code ? { code: error.code } : {}) });
+    res.status(error.statusCode).json({
+      error: error.message, statusCode: error.statusCode,
+      ...(error.code ? { code: error.code } : {}),
+      ...(error instanceof AvisoConfirmable ? { confirmable: true } : {})
+    });
     return;
   }
 

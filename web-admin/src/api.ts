@@ -83,28 +83,37 @@ export async function apiGet<T>(path: string, opts?: OpcionesApi): Promise<T> {
   return parseResponse<T>(response);
 }
 
-// Envío JSON con el AVISO DE SOBREGIRO: si un egreso dejaría la caja en negativo, el servidor responde 409 con
-// code «SOBREGIRO» (sin haber escrito nada). Aquí se le pregunta a la persona y, si acepta, se reenvía la misma
-// petición con «X-Confirmar-Sobregiro: 1». Sirve a todas las pantallas que sacan dinero de la caja.
+// Envío JSON con AVISOS CONFIRMABLES: cuando el servidor responde 409 con `confirmable: true` (o el código
+// «SOBREGIRO»), no escribió nada y solo pide confirmación: caja que quedaría en negativo, quintales de más en una
+// liquidación… Aquí se le pregunta a la persona y, si acepta, se reenvía la misma petición con
+// «X-Confirmar: CODIGO». Si hay varios avisos seguidos se preguntan uno a uno (máximo 4).
 async function enviarJson<T>(method: "POST" | "PUT" | "PATCH", path: string, body: unknown, opts?: OpcionesApi): Promise<T> {
-  const enviar = (extra?: Record<string, string>) => fetch(`${API_URL}/api/v1${path}`, {
-    method,
-    headers: { "Content-Type": "application/json", ...authHeaders(opts), ...(extra ?? {}) },
-    body: JSON.stringify(body)
-  });
+  const confirmados: string[] = [];
+  const enviar = () => {
+    const extra: Record<string, string> = {};
+    if (confirmados.length) extra["X-Confirmar"] = confirmados.join(",");
+    if (confirmados.includes("SOBREGIRO")) extra["X-Confirmar-Sobregiro"] = "1";
+    return fetch(`${API_URL}/api/v1${path}`, {
+      method,
+      headers: { "Content-Type": "application/json", ...authHeaders(opts), ...extra },
+      body: JSON.stringify(body)
+    });
+  };
   let response = await enviar();
-  if (response.status === 409) {
-    let aviso: string | null = null;
+  for (let intento = 0; intento < 4 && response.status === 409; intento++) {
+    let aviso: { code: string; texto: string } | null = null;
     try {
-      const j = (await response.clone().json()) as { code?: string; error?: string };
-      if (j.code === "SOBREGIRO") aviso = j.error ?? "La caja quedará en negativo. ¿Registrarlo de todos modos?";
+      const j = (await response.clone().json()) as { code?: string; error?: string; confirmable?: boolean };
+      if (j.code && (j.confirmable || j.code === "SOBREGIRO") && !confirmados.includes(j.code)) {
+        aviso = { code: j.code, texto: j.error ?? "¿Continuar de todos modos?" };
+      }
     } catch {
       // No era un JSON de aviso: sigue el manejo normal del error.
     }
-    if (aviso !== null) {
-      if (!window.confirm(`⚠️ ${aviso}`)) throw new Error("No se registró: la caja iba a quedar en negativo y cancelaste.");
-      response = await enviar({ "X-Confirmar-Sobregiro": "1" });
-    }
+    if (!aviso) break;
+    if (!window.confirm(`⚠️ ${aviso.texto}`)) throw new Error("No se registró: cancelaste el aviso.");
+    confirmados.push(aviso.code);
+    response = await enviar();
   }
   return parseResponse<T>(response);
 }
