@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🔒 Caja: solo del mismo socio y abierta (2026-10-06)
+- `node scripts/simulacro/dinero.mjs` probó doble clic, cajas ajenas/cerradas, sobrepago y exceso de stock. Estaban bien protegidos (candado por fila): cobrar/pagar dos veces, reversar dos veces, cerrar dos veces, preparar/despachar dos veces, pagar de más, pedido mayor al stock.
+- Hueco real corregido: cobros de cuentas por cobrar, despacho de pedidos, venta directa, anticipos a agricultores, gastos, anticipos y pagos de nómina de planta, bajada de carro, fomentos y cobro de servicio de pilado aceptaban la caja de OTRO socio o una CERRADA (el dinero entraba/salía por la caja equivocada). Nuevo `services/caja.ts` → `exigirCajaAbiertaDelAccionista` (caja del accionista activo y OPEN), aplicado en esas rutas; responden 404/409.
+- Abierto (decisión del dueño): un egreso mayor al saldo de la caja se acepta y deja la caja en negativo (`POST /cash/movements`; Campo sí lo bloquea con `requireSaldoCajaDisponible`). No se cambió: puede haber aperturas con saldo 0 que luego se corrigen.
+
 ### 🚚 Flete de envejecido (2026-10-06)
 - Solo ENVEJECIMIENTO (no selección). En Selección → Nuevo envío, bloque «🚚 Flete (opcional)»: Sin flete / Carro de Transporte y Cosechadora (PLATAFORMA, TOYOTA AZUL… no cosechadoras) / Carro externo + valor.
 - Propio: `campo_servicios` (tipo flete, origen `envejecido_flete` = lote, cliente = el socio como «piladora», precio = valor/QQ) + Por Pagar espejo del socio (`campo_servicio`, igual que el flete de flota propia de una liquidación; su saldo lo sigue el trigger). Externo: Por Pagar del socio (`flete_envejecido_tercero`) al transportista. La cuenta por pagar a la piladora externa NO cambia.
