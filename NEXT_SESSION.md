@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🏭 Tarifas de planta vs. tarifas de cada socio (2026-10-07)
+- `labor_rates` tiene una fila general (socio_id NULL) y una por socio. Tarifas PROPIAS de cada socio (las usa el servidor según el dueño del lote): pilador, estibador, secador (guardianía/túnel), tendal, polvillo, 3 tulas. Tarifas de PLANTA (una sola; el servidor siempre usa la general): `TARIFAS_DE_PLANTA` en `labor.ts` = gas bombona ($/kg), kg por 1%, cilindro, diésel, secado como servicio (granel/saco); el pilado como servicio también se lee siempre de la general (`processing.ts`).
+- Error corregido: en un socio, `getRates` devolvía las COPIAS viejas de la fila del socio (cilindro $2.20, bombona $0.90, secado $1.50) y Secadoras mostraba/validaba con ellas, aunque el servidor cobraba con las generales. Ahora `getRates` sobreescribe las de planta con la fila general; migración `20261073_tarifas_planta_socios.sql` alinea las copias. En Configuración esas tarjetas ya estaban ocultas para socios (solo se editan en la matriz). Prueba: `combustible.mjs` pasos 14–16.
+- Observación (sin cambiar): la tarifa SECADO cargada para ROVINSON/STALYN en el tarifario no la usa ningún cálculo; hoy no existe cobro de secado de la matriz al socio por sus lotes propios (solo «Solo Servicio de Secado» a clientes, que siempre es de la matriz).
+
 ### ⛽ Gas: fórmula de la planta y reparto por túnel (2026-10-07)
 - Fórmula del dueño: bombona = (inicio − fin, en %) × 10 kg por cada 1% × $0.334 por kg; cilindros × $2.45; suma ÷ QQ de los túneles = costo GLOBAL por QQ. Antes faltaba el ×10 (la bombona salía 10 veces más barata): el campo decía «$ por cada 1%» y tenía el precio por kg.
 - Ahora: `labor_rates.precio_gas_bombona` = $ por KG (pantalla: «$ por kg de gas (bombona)») y `gas_bombona_kg_por_punto` (10, «kg por cada 1% del medidor»). `calcularCombustible` multiplica por el factor; la pantalla de Secadoras muestra «% × kg por 1% × $ por kg».
