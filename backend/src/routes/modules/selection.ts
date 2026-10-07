@@ -4,6 +4,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
+import { anularFleteEnvejecido, registrarFleteEnvejecido, validarFleteEnvejecido, type FleteEnvejecido } from "../../services/campo-flete-envejecido.js";
 import { tipoSacoEspecial } from "../../services/cargo-empaque.js";
 import { nextCode } from "../../utils/codes.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
@@ -114,6 +115,7 @@ selectionRouter.get("/batches", asyncRoute(async (req, res) => {
     `SELECT b.id, b.batch_number, b.service_date, b.service_type, b.status,
             b.input_qq, b.output_qq, b.merma_qq, b.rate_per_qq, b.total_cost, b.notes,
             b.started_at, b.finished_at,
+            b.flete_tipo, b.flete_monto::float AS flete_monto, b.flete_prestador, fa.nombre AS flete_activo_nombre,
             pr.name AS provider_name,
             w.name AS warehouse_name,
             COALESCE(ap.balance, 0)::float AS saldo,
@@ -136,6 +138,7 @@ selectionRouter.get("/batches", asyncRoute(async (req, res) => {
      JOIN external_providers pr ON pr.id = b.provider_id
      JOIN warehouses w ON w.id = b.warehouse_id
      LEFT JOIN accounts_payable ap ON ap.id = b.payable_id
+     LEFT JOIN campo_activos fa ON fa.id = b.flete_activo_id
      WHERE b.accionista_id = $1
        AND ($2::text IS NULL OR b.status = $2)
        AND ($3::date IS NULL OR b.service_date >= $3)
@@ -186,8 +189,16 @@ selectionRouter.post("/batches", asyncRoute(async (req, res) => {
     service_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     notes: z.string().optional(),
     created_by: z.string().uuid().optional(),
+    // Flete (SOLO envejecimiento): 'propia' = carro de Transporte y Cosechadora; 'tercero' = carro externo.
+    flete: z.object({
+      tipo: z.enum(["propia", "tercero"]),
+      monto: z.number().positive(),
+      activo_id: z.string().uuid().optional(),
+      prestador: z.string().trim().max(120).optional()
+    }).optional(),
     inputs: z.array(lineSchema).min(1)
   }).parse(req.body);
+  if (body.flete) validarFleteEnvejecido(body.flete as FleteEnvejecido, body.service_type);
 
   // El envejecido solo lo hace el accionista habilitado (regla del negocio).
   const acc = await pool.query(
@@ -237,6 +248,20 @@ selectionRouter.post("/batches", asyncRoute(async (req, res) => {
     const batchId = batch.rows[0].id;
     await tx.query("UPDATE accounts_payable SET reference_id = $2 WHERE id = $1", [payableId, batchId]);
 
+    let flete: Awaited<ReturnType<typeof registrarFleteEnvejecido>> | null = null;
+    if (body.flete) {
+      flete = await registrarFleteEnvejecido(tx, {
+        batchId, batchNumber, accionistaId, fecha: body.service_date ?? new Date().toISOString().slice(0, 10),
+        qq: inputQq, flete: body.flete as FleteEnvejecido, createdBy: body.created_by ?? null
+      });
+      await tx.query(
+        `UPDATE selection_batches
+            SET flete_tipo = $2, flete_monto = $3, flete_activo_id = $4, flete_prestador = $5, flete_payable_id = $6
+          WHERE id = $1`,
+        [batchId, flete.tipo, flete.monto, flete.activo_id, flete.prestador, flete.payable_id]
+      );
+    }
+
     for (const line of body.inputs) {
       const qty = round3(line.quantity);
       await tx.query(
@@ -256,7 +281,7 @@ selectionRouter.post("/batches", asyncRoute(async (req, res) => {
       });
     }
 
-    return { ...batch.rows[0], provider_name: provider.rows[0].name };
+    return { ...batch.rows[0], provider_name: provider.rows[0].name, flete };
   });
 
   res.status(201).json(result);
@@ -401,6 +426,9 @@ selectionRouter.post("/batches/:id/cancel", asyncRoute(async (req, res) => {
     if (batch.rows[0].status !== "IN_PROCESS") throw new ApiError(409, "Solo se puede cancelar un lote en proceso.");
 
     const label = TYPE_LABEL[batch.rows[0].service_type] ?? "Selección";
+
+    // Si el lote llevaba flete (envejecido), se deshace primero; con cobros/abonos se bloquea.
+    await anularFleteEnvejecido(tx, batch.rows[0]);
 
     // Anular la cuenta por pagar solo si no se le abonó nada.
     if (batch.rows[0].payable_id) {
