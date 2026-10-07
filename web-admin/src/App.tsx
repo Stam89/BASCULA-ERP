@@ -1,7 +1,7 @@
 import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, apiGet, apiGetSRI, apiGetBasculaStatus, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId } from "./api";
 import type { BasculaSyncStatus } from "./api";
-import { money, categoryLabel, stockGroupLabel, formatPersonName } from "./format";
+import { money, categoryLabel, stockGroupLabel, formatPersonName, cantidad, kilos, numeroReal } from "./format";
 import type { Farmer, Product, Warehouse, Lot, MateriaPrimaEntry, MateriaPrimaCorreccion, PendingEntry } from "./types";
 import { Metric, ReportTable, Input, Select, MedidorRow, DataList } from "./components/ui";
 import { ClienteSearchInput } from "./components/ClienteSearchInput";
@@ -6310,9 +6310,9 @@ export function App() {
       return { title: "Ventas por producto", headers: ["Producto", "Cantidad", "Total"], rows, totals: ["TOTAL", "", m2(total)] };
     }
     if (kind === "liquidaciones") {
-      const rows = (data.rows || []).map((r: any) => [r.full_name, r.cnt, m2(r.qq), m2(r.gross), m2(r.discounts), m2(r.net)]);
+      const rows = (data.rows || []).map((r: any) => [r.full_name, r.cnt, cantidad(r.qq), m2(r.gross), m2(r.discounts), m2(r.net)]);
       const t = (data.rows || []).reduce((a: any, r: any) => ({ qq: a.qq + r.qq, gross: a.gross + r.gross, disc: a.disc + r.discounts, net: a.net + r.net }), { qq: 0, gross: 0, disc: 0, net: 0 });
-      return { title: "Liquidaciones por agricultor", headers: ["Agricultor", "N.º", "Quintales", "Bruto", "Descuentos", "Neto"], rows, totals: ["TOTAL", "", m2(t.qq), m2(t.gross), m2(t.disc), m2(t.net)] };
+      return { title: "Liquidaciones por agricultor", headers: ["Agricultor", "N.º", "Quintales", "Bruto", "Descuentos", "Neto"], rows, totals: ["TOTAL", "", cantidad(t.qq), m2(t.gross), m2(t.disc), m2(t.net)] };
     }
     if (kind === "gastos") {
       const rows = (data.rows || []).map((r: any) => [new Date(r.created_at).toLocaleDateString("es-EC"), `${r.categoria ?? ""}${r.no_operativo ? " (no operativo)" : ""}`, r.subcategoria || "", r.description || "", r.socio || "", m2(r.amount)]);
@@ -6342,9 +6342,9 @@ export function App() {
           r.es_socio ? "Socio" : "Cliente externo",
           new Date(r.fecha).toLocaleDateString("es-EC"), r.lot_code,
           r.es_socio ? (r.socio ?? "—") : (r.clientes ?? "—"),
-          r.tickets ?? "—", Number(r.kg).toFixed(0), m2(r.qq)
+          r.tickets ?? "—", kilos(r.kg), cantidad(r.qq)
         ];
-        if (conPilado) base.push(Number(r.qq_pilado) > 0 ? m2(r.qq_pilado) : "—");
+        if (conPilado) base.push(Number(r.qq_pilado) > 0 ? cantidad(r.qq_pilado) : "—");
         return base;
       };
       const [yy, mm] = String(data.mes ?? servicioMes).split("-");
@@ -6354,14 +6354,14 @@ export function App() {
         rango: `Servicios finalizados en ${mesTxt}`,
         headers: ["Tipo de cliente", "Finalizado", "Lote", "Socio / Cliente", "Tickets", "Kg neto", "QQ cáscara", ...(conPilado ? ["QQ pilado"] : [])],
         rows: [...filas.filter((r) => r.es_socio), ...filas.filter((r) => !r.es_socio)].map(fila),
-        totals: [`TOTAL · ${filas.length} lotes`, "", "", "", String(t.tickets), Number(t.kg).toFixed(0), m2(t.qq), ...(conPilado ? [m2(t.qq_pilado)] : [])]
+        totals: [`TOTAL · ${filas.length} lotes`, "", "", "", String(t.tickets), kilos(t.kg), cantidad(t.qq), ...(conPilado ? [cantidad(t.qq_pilado)] : [])]
       };
     }
     if (kind === "combustible") {
       const rows = (data.rows || []).map((r: any) => [
         new Date(r.fecha).toLocaleDateString("es-EC"),
         r.dryer_name ?? `Túnel ${r.tunnel_number}`,
-        m2(r.quintals),
+        cantidad(r.quintals),
         m2(r.gas_costo),
         m2(r.diesel_costo),
         Number(r.costo_por_qq_gas ?? 0).toFixed(4),
@@ -6379,11 +6379,11 @@ export function App() {
     // produccion (unidades explícitas: kg y QQ de cáscara → QQ pilados)
     const prod = data.rows || [];
     const rows = prod.map((r: any) => [new Date(r.created_at).toLocaleDateString("es-EC"), r.batch_number, r.lot_code || "—", r.socio || "—",
-      String(r.operation_type ?? "").toUpperCase() === "COMPRA" ? "Propio" : "Servicio", Number(r.input_kg).toFixed(0), m2(r.qq_cascara), m2(r.output_qty), m2(r.byproduct_qty),
-      r.yield_percent != null ? `${Number(r.yield_percent).toFixed(1)} %` : "—", String(r.status).toUpperCase() === "CANCELLED" ? "Anulado" : r.finished_at ? "Finalizado" : "En proceso"]);
+      String(r.operation_type ?? "").toUpperCase() === "COMPRA" ? "Propio" : "Servicio", kilos(r.input_kg), cantidad(r.qq_cascara), cantidad(r.output_qty), cantidad(r.byproduct_qty),
+      r.yield_percent != null ? `${numeroReal(r.yield_percent, 1, 3)} %` : "—", String(r.status).toUpperCase() === "CANCELLED" ? "Anulado" : r.finished_at ? "Finalizado" : "En proceso"]);
     const sum = (k: string) => prod.reduce((a: number, r: any) => a + (Number(r[k]) || 0), 0);
     return { title: "Producción del período", headers: ["Fecha", "Proceso", "Lote", "Socio", "Tipo", "Cáscara (kg)", "Cáscara (QQ)", "Pilado (QQ)", "Subprod. (QQ)", "Rend.", "Estado"], rows,
-      totals: ["TOTAL", `${prod.length} procesos`, "", "", "", sum("input_kg").toFixed(0), m2(sum("qq_cascara")), m2(sum("output_qty")), m2(sum("byproduct_qty")), "", ""] };
+      totals: ["TOTAL", `${prod.length} procesos`, "", "", "", kilos(sum("input_kg")), cantidad(sum("qq_cascara")), cantidad(sum("output_qty")), cantidad(sum("byproduct_qty")), "", ""] };
   }
 
   async function runBackupNow() {
@@ -22110,7 +22110,7 @@ export function App() {
               const conPilado = servicioTab !== "SECADO";
               const tabla = (titulo: string, filas: ServicioRow[], suma: ServicioSuma, socio: boolean) => (
                 <div style={{ marginTop: 14 }}>
-                  <h4 style={{ margin: "0 0 6px", fontSize: 14 }}>{titulo} <span className="muted" style={{ fontWeight: 400, fontSize: 12.5 }}>· {suma.lotes} lote{suma.lotes === 1 ? "" : "s"} · {suma.qq.toFixed(2)} QQ</span></h4>
+                  <h4 style={{ margin: "0 0 6px", fontSize: 14 }}>{titulo} <span className="muted" style={{ fontWeight: 400, fontSize: 12.5 }}>· {suma.lotes} lote{suma.lotes === 1 ? "" : "s"} · {cantidad(suma.qq)} QQ</span></h4>
                   <table>
                     <thead><tr>
                       <th>Finalizado</th><th>Lote</th><th>{socio ? "Socio" : "Cliente"}</th><th>Tickets</th><th>Arroz</th>
@@ -22126,8 +22126,8 @@ export function App() {
                           <td>{r.tickets ? `#${r.tickets.split(", ").join(", #")}` : "—"}</td>
                           <td>{r.rice_type ?? "—"}</td>
                           <td className="num">{Number(r.kg).toLocaleString("es-EC")}</td>
-                          <td className="num" style={{ fontWeight: 700 }}>{Number(r.qq).toFixed(2)}</td>
-                          {conPilado && <td className="num">{Number(r.qq_pilado) > 0 ? Number(r.qq_pilado).toFixed(2) : "—"}</td>}
+                          <td className="num" style={{ fontWeight: 700 }}>{cantidad(Number(r.qq))}</td>
+                          {conPilado && <td className="num">{Number(r.qq_pilado) > 0 ? cantidad(Number(r.qq_pilado)) : "—"}</td>}
                         </tr>
                       ))}
                     </tbody>
@@ -22135,8 +22135,8 @@ export function App() {
                       <tfoot><tr>
                         <td colSpan={3} style={{ fontWeight: 700 }}>TOTAL</td><td style={{ fontWeight: 700 }}>{suma.tickets}</td><td />
                         <td className="num" style={{ fontWeight: 700 }}>{suma.kg.toLocaleString("es-EC")}</td>
-                        <td className="num" style={{ fontWeight: 700 }}>{suma.qq.toFixed(2)}</td>
-                        {conPilado && <td className="num" style={{ fontWeight: 700 }}>{suma.qq_pilado.toFixed(2)}</td>}
+                        <td className="num" style={{ fontWeight: 700 }}>{cantidad(suma.qq)}</td>
+                        {conPilado && <td className="num" style={{ fontWeight: 700 }}>{cantidad(suma.qq_pilado)}</td>}
                       </tr></tfoot>
                     )}
                   </table>
@@ -22156,8 +22156,8 @@ export function App() {
                             border: servicioTab === st.key ? "2px solid #0f766e" : "1px solid #e2e8f0",
                             background: servicioTab === st.key ? "#f0fdfa" : "#fff" }}>
                           <div style={{ fontSize: 12.5, fontWeight: 700, color: "#334155" }}>{st.label}</div>
-                          <div style={{ fontSize: 22, fontWeight: 800, color: "#0f172a" }}>{tt.total.qq.toFixed(2)} QQ</div>
-                          <div className="muted" style={{ fontSize: 12 }}>👥 Socios {tt.socios.qq.toFixed(2)} · 🧑‍🌾 Externos {tt.externos.qq.toFixed(2)}</div>
+                          <div style={{ fontSize: 22, fontWeight: 800, color: "#0f172a" }}>{cantidad(tt.total.qq)} QQ</div>
+                          <div className="muted" style={{ fontSize: 12 }}>👥 Socios {cantidad(tt.socios.qq)} · 🧑‍🌾 Externos {cantidad(tt.externos.qq)}</div>
                         </button>
                       );
                     })}
@@ -22198,15 +22198,15 @@ export function App() {
                               <td>{fmtF(r.dry_end_at)}</td>
                               <td>{r.lot_code ?? "—"}</td>
                               <td>{r.rice_type}</td>
-                              <td className="num">{Number(r.quintals).toFixed(2)}</td>
+                              <td className="num">{cantidad(Number(r.quintals))}</td>
                               <td><input value={arianosUbic[r.id] ?? ""} placeholder="Bodega / sitio" style={inp} onChange={(e) => setArianosUbic((m) => ({ ...m, [r.id]: e.target.value }))} /></td>
                               <td className="num"><button type="button" className="btnSecondary" onClick={() => apartarArianos(r.id, true, arianosUbic[r.id]).catch((e) => addToast(e.message, "error"))}>Guardar</button></td>
                             </tr>
                           ))}
                         </tbody>
                         <tfoot>
-                          <tr><td colSpan={3} style={{ fontWeight: 700 }}>TOTAL 0.11</td><td className="num" style={{ fontWeight: 700 }}>{totQ(pend, "0.11").toFixed(2)}</td><td /><td /></tr>
-                          <tr><td colSpan={3} style={{ fontWeight: 700 }}>TOTAL CORRIENTE</td><td className="num" style={{ fontWeight: 700 }}>{totQ(pend, "CORRIENTE").toFixed(2)}</td><td /><td /></tr>
+                          <tr><td colSpan={3} style={{ fontWeight: 700 }}>TOTAL 0.11</td><td className="num" style={{ fontWeight: 700 }}>{cantidad(totQ(pend, "0.11"))}</td><td /><td /></tr>
+                          <tr><td colSpan={3} style={{ fontWeight: 700 }}>TOTAL CORRIENTE</td><td className="num" style={{ fontWeight: 700 }}>{cantidad(totQ(pend, "CORRIENTE"))}</td><td /><td /></tr>
                         </tfoot>
                       </table>
                     </div>
@@ -22227,7 +22227,7 @@ export function App() {
                               <td>{fmtF(r.dry_end_at)}</td>
                               <td>{r.lot_code ?? "—"}</td>
                               <td>{r.rice_type}</td>
-                              <td className="num">{Number(r.quintals).toFixed(2)}</td>
+                              <td className="num">{cantidad(Number(r.quintals))}</td>
                               <td><input value={arianosUbic[r.id] ?? (r.ubicacion_arianos ?? "")} placeholder="Bodega / sitio" style={inp} onChange={(e) => setArianosUbic((m) => ({ ...m, [r.id]: e.target.value }))} /></td>
                               <td className="num" style={{ whiteSpace: "nowrap" }}>
                                 <button type="button" className="btnSecondary" onClick={() => actualizarUbicArianos(r.id, arianosUbic[r.id] ?? r.ubicacion_arianos).catch((e) => addToast(e.message, "error"))}>Actualizar</button>
@@ -22238,8 +22238,8 @@ export function App() {
                           ))}
                         </tbody>
                         <tfoot>
-                          <tr><td colSpan={3} style={{ fontWeight: 700 }}>TOTAL 0.11</td><td className="num" style={{ fontWeight: 700 }}>{totQ(apart, "0.11").toFixed(2)}</td><td /><td /></tr>
-                          <tr><td colSpan={3} style={{ fontWeight: 700 }}>TOTAL CORRIENTE</td><td className="num" style={{ fontWeight: 700 }}>{totQ(apart, "CORRIENTE").toFixed(2)}</td><td /><td /></tr>
+                          <tr><td colSpan={3} style={{ fontWeight: 700 }}>TOTAL 0.11</td><td className="num" style={{ fontWeight: 700 }}>{cantidad(totQ(apart, "0.11"))}</td><td /><td /></tr>
+                          <tr><td colSpan={3} style={{ fontWeight: 700 }}>TOTAL CORRIENTE</td><td className="num" style={{ fontWeight: 700 }}>{cantidad(totQ(apart, "CORRIENTE"))}</td><td /><td /></tr>
                         </tfoot>
                       </table>
                     </div>

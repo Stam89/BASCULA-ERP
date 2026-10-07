@@ -1,4 +1,4 @@
-import { money } from "../format";
+import { cantidad, kilos, money, numeroReal } from "../format";
 import { ReportTable } from "../components/ui";
 
 // Valores REALES, sin redondear para presentar: costo por QQ con 4 decimales y horas en horas y minutos.
@@ -38,7 +38,7 @@ export default function ReportReadOnlyViews({ report, matrizName = "Matriz" }: {
       <div className="reportGrid">
         <div className="tablePanel">
           <h2>Ventas por producto</h2>
-          <ReportTable headers={["Producto", "Cantidad", "Total"]} rows={reportRows(data.by_product).map((row) => [row.name ?? "—", Number(row.qty).toFixed(2), money(Number(row.total))])} empty="Sin ventas en el período" />
+          <ReportTable headers={["Producto", "Cantidad", "Total"]} rows={reportRows(data.by_product).map((row) => [row.name ?? "—", cantidad(row.qty), money(Number(row.total))])} empty="Sin ventas en el período" />
         </div>
         <div className="tablePanel">
           <h2>Ventas por cliente</h2>
@@ -56,7 +56,7 @@ export default function ReportReadOnlyViews({ report, matrizName = "Matriz" }: {
     return (
       <div className="tablePanel">
         <h2>Liquidaciones por agricultor</h2>
-        <ReportTable headers={["Agricultor", "N.º", "Quintales", "Bruto", "Descuentos", "Neto"]} rows={reportRows(data.rows).map((row) => [row.full_name ?? "—", row.cnt ?? 0, Number(row.qq).toFixed(2), money(Number(row.gross)), money(Number(row.discounts)), money(Number(row.net))])} empty="Sin liquidaciones en el período" />
+        <ReportTable headers={["Agricultor", "N.º", "Quintales", "Bruto", "Descuentos", "Neto"]} rows={reportRows(data.rows).map((row) => [row.full_name ?? "—", row.cnt ?? 0, cantidad(row.qq), money(Number(row.gross)), money(Number(row.discounts)), money(Number(row.net))])} empty="Sin liquidaciones en el período" />
       </div>
     );
   }
@@ -79,7 +79,7 @@ export default function ReportReadOnlyViews({ report, matrizName = "Matriz" }: {
             <div className="totalBox" style={{ margin: 0 }}><span>No operativos</span><strong>{money(Number(totals.no_operativo))}</strong><small>cáscara, fomentos, activos, socios</small></div>
           </div>
           <ReportTable headers={["Categoría", "N.º", "Total", "% del total"]}
-            rows={cats.map((c) => [`${c.categoria ?? "—"}${c.no_operativo ? " (no operativo)" : ""}`, c.cnt ?? 0, money(Number(c.total)), total > 0 ? `${((Number(c.total) / total) * 100).toFixed(1)} %` : "—"])}
+            rows={cats.map((c) => [`${c.categoria ?? "—"}${c.no_operativo ? " (no operativo)" : ""}`, c.cnt ?? 0, money(Number(c.total)), total > 0 ? `${numeroReal((Number(c.total) / total) * 100, 2, 2)} %` : "—"])}
             empty="Sin egresos en el período" />
         </div>
         <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
@@ -133,8 +133,8 @@ export default function ReportReadOnlyViews({ report, matrizName = "Matriz" }: {
         <p className="muted" style={{ marginTop: -4 }}>Cáscara que entró a pilar → arroz pilado y subproductos. El rendimiento es en peso (kg de salida ÷ kg de cáscara).</p>
         <ReportTable headers={["Fecha", "Proceso", "Lote", "Socio", "Tipo", "Cáscara (kg)", "Cáscara (QQ)", "Pilado (QQ)", "Subprod. (QQ)", "Rend. %", "Estado"]}
           rows={[
-            ...rows.map((r) => [new Date(String(r.created_at)).toLocaleDateString("es-EC"), r.batch_number ?? "—", r.lot_code || "—", r.socio ?? "—", tipo(r.operation_type), Number(r.input_kg).toLocaleString("es-EC"), r.qq_cascara != null ? Number(r.qq_cascara).toFixed(2) : "—", Number(r.output_qty).toFixed(2), Number(r.byproduct_qty).toFixed(2), r.yield_percent != null ? `${Number(r.yield_percent).toFixed(1)} %` : "—", estado(r)]),
-            ...(rows.length > 1 ? [["TOTAL", `${rows.length} procesos`, "", "", "", suma("input_kg").toLocaleString("es-EC"), suma("qq_cascara").toFixed(2), suma("output_qty").toFixed(2), suma("byproduct_qty").toFixed(2), "", ""]] : [])
+            ...rows.map((r) => [new Date(String(r.created_at)).toLocaleDateString("es-EC"), r.batch_number ?? "—", r.lot_code || "—", r.socio ?? "—", tipo(r.operation_type), kilos(r.input_kg), r.qq_cascara != null ? cantidad(r.qq_cascara) : "—", cantidad(r.output_qty), cantidad(r.byproduct_qty), r.yield_percent != null ? `${numeroReal(r.yield_percent, 1, 3)} %` : "—", estado(r)]),
+            ...(rows.length > 1 ? [["TOTAL", `${rows.length} procesos`, "", "", "", kilos(suma("input_kg")), cantidad(suma("qq_cascara")), cantidad(suma("output_qty")), cantidad(suma("byproduct_qty")), "", ""]] : [])
           ]}
           empty="Sin producción registrada en el período" />
       </div>
@@ -144,10 +144,10 @@ export default function ReportReadOnlyViews({ report, matrizName = "Matriz" }: {
   return (
     <div className="tablePanel">
       <h2>Combustible por motor · consumo real (consolidado {matrizName})</h2>
-      <ReportTable headers={["Fecha", "Motor", "Gas consumo", "Gas $", "Diésel consumo", "Diésel $", "Total $"]} rows={reportRows(data.motors).map((row) => [new Date(String(row.fecha)).toLocaleDateString("es-EC"), `Motor ${row.motor}`, `${Number(row.gas_bombona_pct).toFixed(2)} %${row.gas_bombona_kg != null ? ` (${Number(row.gas_bombona_kg).toFixed(2)} kg)` : ""} + ${Number(row.gas_cilindros).toFixed(2)} cil.`, money(Number(row.gas_costo)), `${Number(row.diesel_consumo).toFixed(2)}`, money(Number(row.diesel_costo)), money(Number(row.total))])} empty="Sin combustible registrado en el período" />
+      <ReportTable headers={["Fecha", "Motor", "Gas consumo", "Gas $", "Diésel consumo", "Diésel $", "Total $"]} rows={reportRows(data.motors).map((row) => [new Date(String(row.fecha)).toLocaleDateString("es-EC"), `Motor ${row.motor}`, `${cantidad(row.gas_bombona_pct)} %${row.gas_bombona_kg != null ? ` (${cantidad(row.gas_bombona_kg)} kg)` : ""} + ${cantidad(row.gas_cilindros)} cil.`, money(Number(row.gas_costo)), cantidad(row.diesel_consumo), money(Number(row.diesel_costo)), money(Number(row.total))])} empty="Sin combustible registrado en el período" />
       {Boolean(data.totals) && (() => { const totals = reportRecord(data.totals); return <div className="totalBox" style={{ marginTop: 10 }}><span>Totales por motor</span><strong>Gas {money(Number(totals.gas))} · Diésel {money(Number(totals.diesel))} · Total {money(Number(totals.total))}</strong></div>; })()}
       <h3 style={{ marginTop: 20, fontSize: 14 }}>Reparto por secadora</h3>
-      <ReportTable headers={["Fecha", "Hora secado", "Horas", "Secadora", "Motor", "QQ", "Gas $", "Diésel $", "Costo/QQ Gas", "Costo/QQ Diésel", "Total $"]} rows={reportRows(data.rows).map((row) => [new Date(String(row.fecha)).toLocaleDateString("es-EC"), `${formatDryingTime(String(row.dry_start_at ?? ""))} – ${formatDryingTime(String(row.dry_end_at ?? ""))}`, row.horas_secado != null ? horasMinutos(Number(row.horas_secado)) : "—", row.dryer_name ?? `Túnel ${row.tunnel_number}`, `Motor ${row.motor_number}`, Number(row.quintals).toFixed(2), money(Number(row.gas_costo)), money(Number(row.diesel_costo)), costoPorQq(row.costo_por_qq_gas), costoPorQq(row.costo_por_qq_diesel), money(Number(row.total))])} empty="Sin reparto por secadora" />
+      <ReportTable headers={["Fecha", "Hora secado", "Horas", "Secadora", "Motor", "QQ", "Gas $", "Diésel $", "Costo/QQ Gas", "Costo/QQ Diésel", "Total $"]} rows={reportRows(data.rows).map((row) => [new Date(String(row.fecha)).toLocaleDateString("es-EC"), `${formatDryingTime(String(row.dry_start_at ?? ""))} – ${formatDryingTime(String(row.dry_end_at ?? ""))}`, row.horas_secado != null ? horasMinutos(Number(row.horas_secado)) : "—", row.dryer_name ?? `Túnel ${row.tunnel_number}`, `Motor ${row.motor_number}`, cantidad(row.quintals), money(Number(row.gas_costo)), money(Number(row.diesel_costo)), costoPorQq(row.costo_por_qq_gas), costoPorQq(row.costo_por_qq_diesel), money(Number(row.total))])} empty="Sin reparto por secadora" />
     </div>
   );
 }

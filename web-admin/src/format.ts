@@ -85,3 +85,24 @@ export function stockGroupLabel(row: { code?: string; product_type?: string }): 
   if (row.product_type === "BYPRODUCT") return "Subproducto";
   return row.product_type ?? "Stock";
 }
+
+/**
+ * Número con su valor REAL: hasta `max` decimales (3 = la precisión con que se guardan los quintales, kilos y
+ * rendimientos), sin ceros de sobra pero con al menos `min`. No redondea «para presentar»; solo limpia el ruido de
+ * los decimales binarios (252.50000000000003 → 252.50).
+ */
+export function numeroReal(value: unknown, min = 0, max = 3): string {
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n)) return "—";
+  const [entero, dec = ""] = n.toFixed(max).split(".");
+  let d = dec.replace(/0+$/, "");
+  while (d.length < min) d += "0";
+  return d ? `${entero}.${d}` : entero;
+}
+
+/** Quintales (y otras cantidades): al menos 2 decimales y hasta 3 si los tiene (52.60, 115.55, 135.473). */
+export const cantidad = (value: unknown): string => numeroReal(value, 2, 3);
+
+/** Kilos: el valor real, con decimales solo si los tiene (5380, 5380.5). */
+export const kilos = (value: unknown): string => numeroReal(value, 0, 3);
+
