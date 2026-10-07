@@ -41,7 +41,7 @@ try {
 
   // Reporte de Combustible: valores REALES, sin redondear para presentar
   const hoy = new Date().toISOString().slice(0, 10);
-  const rep = await api("GET", `/reports/combustible?from=2026-01-01&to=${hoy}`);
+  const rep = await api("GET", `/reports/fuel?from=2026-01-01&to=${hoy}`);
   check(rep.ok, "13b. el reporte de Combustible responde", rep.ok ? undefined : mostrar(rep));
   if (rep.ok) {
     const f1 = rep.data.rows.find((x) => x.tunnel_number === t1.tunnel_number && Number(x.quintals) === t1.qq);
