@@ -9,8 +9,8 @@ const exigir = (r, msg) => { check(r.ok, msg, r.ok ? undefined : mostrar(r)); if
 const dos = (f) => Promise.all([f(), f()]);
 // Lo pagado de una cuenta por pagar = egresos de caja que la pagaron − sus reversas.
 const PAGADO_SQL = `SELECT a.id, a.amount::float a, a.balance::float b,
-    COALESCE((SELECT sum(m.amount) FROM cash_movements m WHERE m.reference_type='accounts_payable' AND m.reference_id=a.id::text), 0)::float
-  - COALESCE((SELECT sum(r.amount) FROM cash_movements r JOIN cash_movements m ON m.id = r.reversal_of WHERE m.reference_type='accounts_payable' AND m.reference_id=a.id::text), 0)::float AS pagado
+    COALESCE((SELECT sum(m.amount) FROM cash_movements m WHERE m.reference_type='accounts_payable' AND m.reference_id=a.id), 0)::float
+  - COALESCE((SELECT sum(r.amount) FROM cash_movements r JOIN cash_movements m ON m.id = r.reversal_of WHERE m.reference_type='accounts_payable' AND m.reference_id=a.id), 0)::float AS pagado
   FROM accounts_payable a`;
 
 try {
