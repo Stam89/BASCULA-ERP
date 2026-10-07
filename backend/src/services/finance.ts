@@ -21,7 +21,9 @@ export type Cuenta = { concepto: string; valor: number; detalle?: string };
 // ── Parámetros contables del accionista ─────────────────────────────────────
 async function getSettings(client: PoolClient | typeof pool, accionistaId: string) {
   const r = await client.query(
-    `SELECT capital_social, resultados_acumulados, fecha_inicio_contable, precio_referencia_qq
+    `SELECT capital_social, resultados_acumulados,
+            -- Como texto «AAAA-MM-DD»: el driver devuelve un Date y String(Date) daba «Thu Oct 01 …» (error 500).
+            to_char(fecha_inicio_contable, 'YYYY-MM-DD') AS fecha_inicio_contable, precio_referencia_qq
      FROM financial_settings WHERE accionista_id = $1`,
     [accionistaId]
   );

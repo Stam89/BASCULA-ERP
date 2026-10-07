@@ -50,9 +50,16 @@ export async function montar({ puerto = 4001, copiar = true } = {}) {
     let data = null; const txt = await r.text(); try { data = JSON.parse(txt); } catch { data = txt; }
     return { status: r.status, ok: r.ok, data };
   };
+  // Descarga binaria (Excel/PDF): devuelve estado, tipo y tamaño.
+  const descargar = async (path, acc = matriz) => {
+    const t0 = Date.now();
+    const r = await fetch(`http://127.0.0.1:${puerto}/api/v1${path}`, { headers: { authorization: `Bearer ${token}`, "x-accionista-id": acc } });
+    const buf = Buffer.from(await r.arrayBuffer());
+    return { status: r.status, tipo: r.headers.get("content-type"), bytes: buf.length, ms: Date.now() - t0, texto: r.ok ? "" : buf.toString("utf8").slice(0, 200) };
+  };
   const cerrar = async () => { await new Promise((r) => server.close(r)); await c.end(); await pool.end().catch(() => {}); };
   const apiComo = (userId, username, nombre, acc = matriz) => { const tk = signToken({ id: userId, username, name: nombre, role_id: null, role_name: null, allowed_modules: null }); return async (method, path, body) => { const r = await fetch(`http://127.0.0.1:${puerto}/api/v1${path}`, { method, headers: { "content-type": "application/json", authorization: `Bearer ${tk}`, "x-accionista-id": acc }, body: body === undefined ? undefined : JSON.stringify(body) }); const t = await r.text(); let d = t; try { d = JSON.parse(t); } catch {} return { status: r.status, ok: r.ok, data: d }; }; };
-  return { api, apiComo, q, matriz, admin, cerrar, c };
+  return { api, apiComo, descargar, q, matriz, admin, cerrar, c };
 }
 
 let fallas = 0; const lineas = [];
