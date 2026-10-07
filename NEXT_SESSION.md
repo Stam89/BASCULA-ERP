@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🔢 Sin redondear en TODA la pantalla (2026-10-07)
+- Regla del dueño: ningún número se redondea «para presentar». `format.ts` define `numeroReal(v, min, max)` y `Number.prototype.enReal(min=2, max=4)` (declarado en `declare global`; `main.tsx` importa `./format` primero). En los ~460 sitios del frontend `x.toFixed(2)` → `x.enReal()`, `toFixed(1)` → `enReal(1, 3)`, `toFixed(0)` → `enReal(0, 3)`; `money()` también (hasta 4 decimales). Se dejaron `toFixed(3)/(4)` (ya muestran la precisión completa). NINGÚN sitio usaba el resultado de `toFixed` para calcular (se verificó con búsqueda de `Number(...toFixed)`), por eso el cambio es solo de presentación.
+- Montos a centavos se ven igual ($112.45); precios/costos unitarios con más decimales se ven completos hasta 4 ($0.334, $0.3641); quintales hasta 3-4. El servidor SOLO redondea a centavos los montos en dólares que guarda (`round2`), a propósito. Los mensajes de error del backend con montos siguen a centavos.
+- Al escribir código nuevo: usar `money()`, `cantidad()`, `kilos()` o `x.enReal()`; NO `toFixed(2)`.
+
 ### 🔢 Reportes con el valor real (2026-10-07)
 - Regla del dueño: en los reportes NO se redondea para presentar. Reportes → Combustible: `GET /reports/fuel` ya no hace `round()` (costo por QQ de gas/diésel y horas de secado salen con todos sus decimales); la pantalla muestra el costo por QQ con 4 decimales (`$0.3641`) y las horas como «13 h 20 min»; la exportación (App.tsx, `kind === "combustible"`) también 4 decimales. Los montos en $ siguen a centavos porque así se guardan (el reparto cierra al centavo).
 - «Gas consumo» del reporte ahora dice «30.00 % (300.00 kg) + 5.00 cil.» (antes sumaba % con cilindros). Registros anteriores a la fórmula nueva no guardaron los kg y muestran solo el %.
