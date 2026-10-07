@@ -12,6 +12,9 @@ try {
   const guardar = await api("PUT", "/labor/rates", { ...tar, precio_gas_bombona: 0.334, gas_bombona_kg_por_punto: 10, precio_gas_cilindro: 2.45 });
   check(guardar.ok && guardar.data.gas_bombona_kg_por_punto === 10 && guardar.data.precio_gas_bombona === 0.334, "1. Configuración guarda $0.334/kg y 10 kg por cada 1%", guardar.ok ? { kg: guardar.data.gas_bombona_kg_por_punto, precio: guardar.data.precio_gas_bombona } : mostrar(guardar));
 
+  // En la COPIA se deja el combustible del Motor 1 sin registrar (en la base real el dueño ya lo registró).
+  await q("UPDATE drying_tunnel_reports SET motor_fuel_id = NULL, gas_costo_total = 0, diesel_costo = 0 WHERE motor_number = 1");
+  await q("DELETE FROM motor_fuel_records WHERE motor_number = 1");
   // Los dos túneles del Motor 1 (pendientes de combustible): mismo inicio, uno seca 2 h más.
   const tun = await q("SELECT id, tunnel_number, total_quintals::float qq FROM drying_tunnel_reports WHERE motor_number = 1 AND motor_fuel_id IS NULL AND status <> 'CANCELLED' ORDER BY tunnel_number");
   check(tun.length === 2, "2. hay 2 túneles del Motor 1 pendientes de combustible", tun.map((t) => `T${t.tunnel_number}: ${t.qq} QQ`));
