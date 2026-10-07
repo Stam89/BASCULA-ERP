@@ -336,8 +336,10 @@ type LaborRates = {
   polvillo_per_qq: number;
   secador_guardiania: number;
   secador_per_tunel: number;
-  /** Precio fijo del gas por unidad de bombona (medidor). */
+  /** Precio del gas de la bombona POR KG. */
   precio_gas_bombona: number;
+  /** Kg de gas por cada 1% del medidor de la bombona (la planta usa 10). */
+  gas_bombona_kg_por_punto: number;
   /** Precio fijo de cada cilindro de gas. */
   precio_gas_cilindro: number;
   /** Precio fijo del diesel por unidad de medidor. */
@@ -361,6 +363,7 @@ const defaultLaborRates: LaborRates = {
   secador_guardiania: 10,
   secador_per_tunel: 5,
   precio_gas_bombona: 0,
+  gas_bombona_kg_por_punto: 10,
   precio_gas_cilindro: 0,
   precio_diesel: 0,
   tendal_per_qq: 0,
@@ -3752,7 +3755,9 @@ export function App() {
   // guardar). Los medidores marcan lo que queda: inicio − fin es lo consumido.
   // El costo se reparte entre los secados activos del motor según sus QQ.
   const gasBombonaTotal = Math.max(0, Number(gasForm.bombona_inicio || 0) - Number(gasForm.bombona_fin || 0));
-  const gasBombonaCosto = round2(gasBombonaTotal * Number(laborRatesForm.precio_gas_bombona || 0));
+  // Bombona: (inicio − fin en %) × kg por cada 1% (10) × $ por kg (0.334).
+  const gasKgPorPunto = Number(laborRatesForm.gas_bombona_kg_por_punto || 10) || 10;
+  const gasBombonaCosto = round2(gasBombonaTotal * gasKgPorPunto * Number(laborRatesForm.precio_gas_bombona || 0));
   const gasCilindroCosto = round2(Number(gasForm.cilindro_cantidad || 0) * Number(laborRatesForm.precio_gas_cilindro || 0));
   const dieselTotal = Math.max(0, Number(gasForm.diesel_inicio || 0) - Number(gasForm.diesel_fin || 0));
   const dieselCosto = round2(dieselTotal * Number(laborRatesForm.precio_diesel || 0));
@@ -9896,7 +9901,7 @@ export function App() {
       await refresh();
     }
 
-  type RepartoCombustible = { costo_por_qq: number; finalized?: number; reparto?: Array<{ drying_report_id: string; quintales: number; gas: number; diesel: number; total: number }> };
+  type RepartoCombustible = { costo_por_qq: number; finalized?: number; reparto_metodo?: "TIEMPO" | "QQ" | null; reparto?: Array<{ drying_report_id: string; tunel?: number | null; quintales: number; horas?: number | null; gas: number; diesel: number; total: number; costo_por_qq?: number }> };
   async function cerrarCombustibleMotor(): Promise<RepartoCombustible | null> {
     // Seguridad: no registrar combustible si las tarifas no cargaron o falta el
     // precio de algo consumido (evita un gasto guardado en $0).
@@ -9921,7 +9926,11 @@ export function App() {
     });
     setGasForm({ bombona_inicio: "", bombona_fin: "", cilindro_cantidad: "", diesel_inicio: "", diesel_fin: "" });
     setEditingDryingReport(null);
-    addToast(`Combustible del Motor ${motorActivo} repartido (${money(fuel.costo_por_qq)}/QQ) y ${fuel.finalized ?? 0} secado(s) finalizado(s)`, "success");
+    const porTunel = (fuel.reparto ?? []).map((p) => `Túnel ${p.tunel ?? "?"}: ${money(p.total)} (${money(p.costo_por_qq ?? 0)}/QQ)`).join(" · ");
+    addToast(
+      `Combustible del Motor ${motorActivo}: ${money(fuel.costo_por_qq)}/QQ global · ${porTunel}` +
+      (fuel.reparto_metodo === "QQ" ? " · repartido por QQ (faltan horas)" : " · repartido por horas de quemador") +
+      ` · ${fuel.finalized ?? 0} secado(s) finalizado(s)`, "success");
     await refresh();
     await loadMotorActive();
     return fuel;
@@ -10312,8 +10321,8 @@ export function App() {
       <fieldset className="medidorPanel" style={{ marginTop: 16 }}>
         <legend>⛽ Combustible del Motor {motorActivo}</legend>
         <p className="muted">
-          El medidor es del motor y se reparte entre las secadoras de la corrida según sus quintales.
-          Como pueden terminar en momentos distintos, regístralo al final: se reparte igual entre las dos.
+          El combustible es del motor. Regístralo al final de la corrida: se reparte por el tiempo que cada túnel
+          usó el quemador (las horas en que secan juntos se dividen por quintales; las que uno sigue solo, las paga él).
         </p>
         <MedidorRow
           label="Bombona" unidad="%"
@@ -10321,6 +10330,8 @@ export function App() {
           inicio={gasForm.bombona_inicio} fin={gasForm.bombona_fin}
           onInicio={(v) => setGasForm({ ...gasForm, bombona_inicio: v })}
           onFin={(v) => setGasForm({ ...gasForm, bombona_fin: v })}
+          multiplicador={{ valor: gasKgPorPunto, etiqueta: "kg por 1%" }}
+          precioEtiqueta="$ por kg"
           precio={laborRatesForm.precio_gas_bombona}
         />
         <div className="medidorRow">
@@ -23671,8 +23682,9 @@ export function App() {
                 <form className="formPanel" onSubmit={(e) => saveLaborRates(e).catch((err) => addToast(err.message, "error"))}>
                   <details>
                     <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>⛽ Precio del combustible <span className="muted" style={{ fontWeight: 400 }}>(se usa en Secadoras)</span></summary>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                    <label><span>$ bombona por cada 1%</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.precio_gas_bombona} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_bombona: Number(e.target.value) })} /></label>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+                    <label><span>$ por kg de gas (bombona)</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.precio_gas_bombona} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_bombona: Number(e.target.value) })} /></label>
+                    <label><span>kg por cada 1% del medidor</span><input type="number" step="0.01" min="0.01" disabled={!isAdmin} value={laborRatesForm.gas_bombona_kg_por_punto} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, gas_bombona_kg_por_punto: Number(e.target.value) })} /></label>
                     <label><span>$ por cilindro</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.precio_gas_cilindro} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_cilindro: Number(e.target.value) })} /></label>
                     <label><span>$ diesel por unidad de medidor</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.precio_diesel} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_diesel: Number(e.target.value) })} /></label>
                   </div>

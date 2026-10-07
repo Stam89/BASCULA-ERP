@@ -110,6 +110,8 @@ export type LaborRates = {
   secador_guardiania: number;
   secador_per_tunel: number;
   precio_gas_bombona: number;
+  /** Kg de gas por cada 1% del medidor de la bombona (bombona: (inicio − fin) × kg × $ por kg). */
+  gas_bombona_kg_por_punto: number;
   precio_gas_cilindro: number;
   precio_diesel: number;
   tendal_per_qq: number;
@@ -182,6 +184,7 @@ export async function getRates(db: Queryable = pool, accionistaId?: string | nul
     precio_gas_bombona: Number(row.precio_gas_bombona ?? 0),
     precio_gas_cilindro: Number(row.precio_gas_cilindro ?? 0),
     precio_diesel: Number(row.precio_diesel ?? 0),
+    gas_bombona_kg_por_punto: Number(row.gas_bombona_kg_por_punto ?? 10),
     tendal_per_qq: Number(row.tendal_per_qq ?? 0),
     secado_servicio_per_qq: Number(row.secado_servicio_per_qq ?? 0),
     secado_servicio_saco_per_qq: Number(row.secado_servicio_saco_per_qq ?? 0)
@@ -338,7 +341,8 @@ laborRouter.put("/rates", requireAdmin, asyncRoute(async (req, res) => {
     tendal_per_qq: z.number().nonnegative().default(0),
     secado_servicio_per_qq: z.number().nonnegative().default(0),
     // Opcional a propósito: si no llega se CONSERVA el valor guardado (COALESCE).
-    secado_servicio_saco_per_qq: z.number().nonnegative().optional()
+    secado_servicio_saco_per_qq: z.number().nonnegative().optional(),
+    gas_bombona_kg_por_punto: z.number().positive().max(10000).optional()
   }).parse(req.body);
 
   await inTransaction(async (client) => {
@@ -357,12 +361,13 @@ laborRouter.put("/rates", requireAdmin, asyncRoute(async (req, res) => {
          precio_gas_bombona = $9, precio_gas_cilindro = $10, precio_diesel = $11,
          estibador_por_3tulas = $12, polvillo_per_qq = $13, tendal_per_qq = $14,
          secado_servicio_per_qq = $15,
-         secado_servicio_saco_per_qq = COALESCE($16, secado_servicio_saco_per_qq), updated_at = now()
+         secado_servicio_saco_per_qq = COALESCE($16, secado_servicio_saco_per_qq),
+         gas_bombona_kg_por_punto = COALESCE($17, gas_bombona_kg_por_punto), updated_at = now()
        WHERE socio_id IS NOT DISTINCT FROM $1::uuid`,
       [socioId, body.pilador_per_qq, body.pilador_per_saca, body.estibador_per_qq, body.estibador_per_saca,
        body.estibador_per_arrocillo, body.secador_guardiania, body.secador_per_tunel,
        body.precio_gas_bombona, body.precio_gas_cilindro, body.precio_diesel, body.estibador_por_3tulas, body.polvillo_per_qq, body.tendal_per_qq,
-       body.secado_servicio_per_qq, body.secado_servicio_saco_per_qq ?? null]
+       body.secado_servicio_per_qq, body.secado_servicio_saco_per_qq ?? null, body.gas_bombona_kg_por_punto ?? null]
     );
   });
   res.json(await getRates(pool, (req as AuthenticatedRequest).accionistaId));

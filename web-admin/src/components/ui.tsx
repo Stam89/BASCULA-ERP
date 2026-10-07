@@ -107,17 +107,21 @@ export function Select({
  * Se usa en el informe de secado para que gas y diesel se lean igual.
  */
 export function MedidorRow({
-  label, nameInicio, nameFin, inicio, fin, onInicio, onFin, precio, unidad
+  label, nameInicio, nameFin, inicio, fin, onInicio, onFin, precio, unidad, multiplicador, precioEtiqueta
 }: {
   label: string;
   nameInicio: string; nameFin: string;
   inicio: string; fin: string;
   onInicio: (v: string) => void; onFin: (v: string) => void;
   precio: number; unidad: string;
+  /** Conversión del medidor (p. ej. bombona: cada 1% son 10 kg). */
+  multiplicador?: { valor: number; etiqueta: string };
+  precioEtiqueta?: string;
 }) {
   // El medidor marca lo que queda: baja al consumir (50 → 39.99 = 10.01 usado).
   const total = Math.max(0, Number(inicio || 0) - Number(fin || 0));
-  const costo = Math.round(total * Number(precio || 0) * 100) / 100;
+  const cantidad = multiplicador ? total * Number(multiplicador.valor || 0) : total;
+  const costo = Math.round(cantidad * Number(precio || 0) * 100) / 100;
   return (
     <div className="medidorRow">
       <span className="medidorLabel">{label}</span>
@@ -133,10 +137,19 @@ export function MedidorRow({
         <small>Total {unidad}</small>
         <strong>{total.toFixed(2)}</strong>
       </div>
+      {multiplicador && (
+        <>
+          <span className="medidorOp">×</span>
+          <div className="medidorOut muted">
+            <small>{multiplicador.etiqueta}</small>
+            <strong>{multiplicador.valor}</strong>
+          </div>
+        </>
+      )}
       <span className="medidorOp">×</span>
       <div className="medidorOut muted">
-        <small>Precio</small>
-        <strong>{money(precio)}</strong>
+        <small>{precioEtiqueta ?? "Precio"}</small>
+        <strong>{precioEtiqueta ? `$${Number(precio || 0).toFixed(3)}` : money(precio)}</strong>
       </div>
       <span className="medidorOp">=</span>
       <div className="medidorOut total">

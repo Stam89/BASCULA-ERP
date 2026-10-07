@@ -21,6 +21,7 @@ import { getMatrizId } from "../../services/matriz.js";
 import { getRates } from "./labor.js";
 import { loteEsMaquila } from "../../utils/maquila.js";
 import { esDiaPagableSecador } from "../../utils/secador-workday.js";
+import { pesosPorTiempoCompartido } from "../../utils/reparto-combustible.js";
 
 export const processFlowRouter = Router();
 
@@ -347,21 +348,23 @@ async function calcularCombustible(
 ) {
   const r = await client.query(
     `SELECT COALESCE(precio_gas_bombona,0) bombona, COALESCE(precio_gas_cilindro,0) cilindro,
-            COALESCE(precio_diesel,0) diesel
+            COALESCE(precio_diesel,0) diesel, COALESCE(gas_bombona_kg_por_punto, 10) kg_por_punto
      FROM labor_rates WHERE socio_id IS NULL LIMIT 1`
   );
+  // Bombona: el medidor marca % del tanque; cada 1% son `kgPorPunto` kg (10) y el precio es por kg (0.334).
+  const kgPorPunto = Number(r.rows[0]?.kg_por_punto ?? 10) || 10;
   const precioBombona = Number(r.rows[0]?.bombona ?? 0);
   const precioCilindro = Number(r.rows[0]?.cilindro ?? 0);
   const precioDiesel = Number(r.rows[0]?.diesel ?? 0);
 
   const bombonaTotal = consumoMedidor(input.gas_bombona_inicio, input.gas_bombona_fin);
-  const bombonaCosto = round2(bombonaTotal * precioBombona);
+  const bombonaCosto = round2(bombonaTotal * kgPorPunto * precioBombona);
   const cilindroCosto = round2(Number(input.gas_cilindro_cantidad) * precioCilindro);
   const dieselTotal = consumoMedidor(input.diesel_inicio, input.diesel_fin);
   const dieselCosto = round2(dieselTotal * precioDiesel);
 
   return {
-    precioBombona, precioCilindro, precioDiesel,
+    precioBombona, precioCilindro, precioDiesel, kgPorPunto,
     bombonaTotal, bombonaCosto, cilindroCosto,
     dieselTotal, dieselCosto,
     // El gas total del secado es la suma de lo que se haya usado.
@@ -626,7 +629,7 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
     // misma corrida del motor.
     await client.query("SELECT pg_advisory_xact_lock($1, $2)", [71002, body.motor_number]);
     const reports = await client.query(
-      `SELECT d.id, d.tunnel_number, d.total_quintals, d.dry_start_at, d.dry_end_at
+      `SELECT d.id, d.tunnel_number, d.total_quintals, d.dry_start_at, d.dry_end_at, d.drying_hours
        FROM drying_tunnel_reports d
        WHERE ${SECADOS_PENDIENTES_COMBUSTIBLE}
        ORDER BY d.created_at
@@ -651,25 +654,34 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
       `INSERT INTO motor_fuel_records
        (motor_number, gas_bombona_inicio, gas_bombona_fin, gas_cilindro_cantidad,
         diesel_inicio, diesel_fin, gas_bombona_precio, gas_cilindro_precio, diesel_precio,
-        gas_costo, diesel_costo, costo_total, total_quintals, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        gas_costo, diesel_costo, costo_total, total_quintals, created_by, gas_bombona_kg_por_punto, reparto_metodo)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        RETURNING *`,
       [
         body.motor_number, body.gas_bombona_inicio, body.gas_bombona_fin, body.gas_cilindro_cantidad,
         body.diesel_inicio, body.diesel_fin, c.precioBombona, c.precioCilindro, c.precioDiesel,
-        c.costoTotal, c.dieselCosto, costoTotal, totalQq, body.created_by ?? null
+        c.costoTotal, c.dieselCosto, costoTotal, totalQq, body.created_by ?? null, c.kgPorPunto,
+        pesosPorTiempoCompartido(reports.rows.map((r) => ({ qq: Number(r.total_quintals), inicio: r.dry_start_at, fin: r.dry_end_at }))).metodo
       ]
     );
 
-    // Reparto proporcional por QQ (el último secado se lleva el residuo del
-    // redondeo para que la suma sea exacta). La lógica vive en utils/money.ts y
-    // está cubierta por tests: repartirPorPeso.
-    const pesos = reports.rows.map((r) => Number(r.total_quintals));
+    // Reparto por TIEMPO COMPARTIDO del quemador (utils/reparto-combustible.ts, con pruebas): mientras
+    // los túneles secan juntos, esas horas se dividen por QQ; las horas en que un túnel sigue solo, las
+    // paga él. Sin horas en algún túnel → solo por QQ. El último se lleva el residuo del redondeo.
+    const { pesos } = pesosPorTiempoCompartido(reports.rows.map((r) => ({ qq: Number(r.total_quintals), inicio: r.dry_start_at, fin: r.dry_end_at })));
     const gasPartes = repartirPorPeso(c.costoTotal, pesos);
     const dieselPartes = repartirPorPeso(c.dieselCosto, pesos);
     const partes = reports.rows.map((r, i) => ({
-      id: r.id, qq: pesos[i], gas: gasPartes[i], diesel: dieselPartes[i]
+      id: r.id, tunel: r.tunnel_number as number | null, qq: Number(r.total_quintals), peso: pesos[i],
+      horas: r.drying_hours != null ? Number(r.drying_hours) : null, gas: gasPartes[i], diesel: dieselPartes[i]
     }));
+    for (const parte of partes) {
+      await client.query(
+        `INSERT INTO motor_fuel_partes (motor_fuel_id, drying_report_id, quintales, horas, peso, gas, diesel)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [record.rows[0].id, parte.id, parte.qq, parte.horas, parte.peso, parte.gas, parte.diesel]
+      );
+    }
 
     for (const parte of partes) {
       // Se ACUMULA (no se pisa): un mismo secado puede recibir varios llenados
@@ -716,13 +728,18 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
 
     return {
       registro: record.rows[0],
+      reparto_metodo: record.rows[0].reparto_metodo,
       reparto: partes.map((p) => ({
         drying_report_id: p.id,
+        tunel: p.tunel,
         quintales: p.qq,
+        horas: p.horas,
         gas: p.gas,
         diesel: p.diesel,
-        total: round2(p.gas + p.diesel)
+        total: round2(p.gas + p.diesel),
+        costo_por_qq: p.qq > 0 ? round2((p.gas + p.diesel) / p.qq) : 0
       })),
+      // Costo GLOBAL por QQ (la fórmula de la planta: total ÷ QQ de los túneles); cada túnel trae el suyo.
       costo_por_qq: round2(costoTotal / totalQq),
       finalized: body.finalize ? partes.length : 0
     };
@@ -815,9 +832,17 @@ processFlowRouter.post("/drying/:dryingId/reabrir", requireAdmin, asyncRoute(asy
           "SELECT id, total_quintals::float AS qq FROM drying_tunnel_reports WHERE motor_fuel_id = $1 ORDER BY created_at FOR UPDATE",
           [rec.id]
         )).rows;
+        // Lo que se le asignó a cada túnel queda guardado (motor_fuel_partes); los registros viejos, sin
+        // ese detalle, se deshacen como se repartieron entonces: por QQ.
+        const guardadas = new Map<string, { gas: number; diesel: number }>((await client.query(
+          "SELECT drying_report_id, gas::float AS gas, diesel::float AS diesel FROM motor_fuel_partes WHERE motor_fuel_id = $1",
+          [rec.id]
+        )).rows.map((x: { drying_report_id: string; gas: number; diesel: number }) => [x.drying_report_id, { gas: x.gas, diesel: x.diesel }]));
         const pesos = parts.map((x) => Number(x.qq));
-        const gas = repartirPorPeso(Number(rec.gas_costo ?? 0), pesos);
-        const diesel = repartirPorPeso(Number(rec.diesel_costo ?? 0), pesos);
+        const gasQq = repartirPorPeso(Number(rec.gas_costo ?? 0), pesos);
+        const dieselQq = repartirPorPeso(Number(rec.diesel_costo ?? 0), pesos);
+        const gas = parts.map((x, i) => guardadas.get(x.id)?.gas ?? gasQq[i]);
+        const diesel = parts.map((x, i) => guardadas.get(x.id)?.diesel ?? dieselQq[i]);
         for (let i = 0; i < parts.length; i++) {
           await client.query(
             `UPDATE drying_tunnel_reports
