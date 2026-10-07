@@ -115,7 +115,7 @@ try {
   check(antS.status === 409 && antS.data?.code === "SOBREGIRO", "CAJA1i. un anticipo a un agricultor con la caja en negativo también avisa", mostrar(antS));
   const gS = await api("POST", "/expenses", { amount: 50, description: "gasto sin fondos", cash_register_id: caja.id });
   check(gS.status === 409 && gS.data?.code === "SOBREGIRO", "CAJA1j. un gasto con la caja en negativo también avisa", mostrar(gS));
-  await api("POST", "/cash/movements", { cash_register_id: caja.id, movement: "INCOME", category: "OTROS", amount: 805, description: "Reponer otra vez" });
+  await api("POST", "/cash/movements", { cash_register_id: caja.id, movement: "INCOME", category: "OTROS", amount: 2000, description: "Reponer otra vez" });
   const mov = (await api("POST", "/cash/movements", { cash_register_id: caja.id, movement: "EXPENSE", category: "OTROS", amount: 15, description: "Para reversar" })).data;
   const [ra, rb] = await dos(() => api("POST", `/cash/movements/${mov.id}/reverse`, { reason: "doble clic" }));
   check(unico([ra, rb]) && (await q("SELECT count(*)::int n FROM cash_movements WHERE reversal_of=$1", [mov.id]))[0].n === 1, "CAJA2. reversar el mismo movimiento dos veces a la vez lo reversa UNA sola vez", [ra.status, rb.status]);
