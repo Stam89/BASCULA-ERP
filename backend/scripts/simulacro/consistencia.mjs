@@ -44,7 +44,7 @@ const REGLAS = [
   ["Reversas: cada movimiento se reversa a lo sumo una vez", `SELECT reversal_of FROM cash_movements WHERE reversal_of IS NOT NULL GROUP BY reversal_of HAVING count(*) > 1`],
   ["Inventario: sin existencias negativas por producto/bodega/socio/propiedad", `
     SELECT s.product_id, s.warehouse_id, s.accionista_id, sum(s.quantity)::float q FROM inventory_stock s GROUP BY s.product_id, s.warehouse_id, s.accionista_id, s.ownership HAVING sum(s.quantity) < -0.005`],
-  ["Sacos: existencias no negativas", `SELECT id, stock::float s FROM sack_inventory WHERE stock < -0.0001`],
+  // (Los sacos pueden quedar en negativo A PROPÓSITO: es la señal «la matriz debe comprar sacos» de Sacos por comprar.)
   ["Ventas: total = suma de sus líneas", `
     SELECT s.id, s.total_amount::float t, sum(i.total)::float l FROM sales s JOIN sale_items i ON i.sale_id = s.id
      WHERE s.sale_status <> 'CANCELLED' GROUP BY s.id HAVING abs(s.total_amount - sum(i.total)) > 0.02`],
