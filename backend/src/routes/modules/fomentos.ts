@@ -879,6 +879,26 @@ fomentosRouter.patch("/:id/interes-fijo", asyncRoute(async (req, res) => {
   res.json(full.rows[0]);
 }));
 
+// Interés de UNA entrega: por días (meses = null) o N meses fijos (1–24). Así cada entrega lleva lo suyo:
+// a una 1 mes, a otra 2 meses, y las demás por días. No se permite en un fomento ya cerrado por su cuenta.
+fomentosRouter.patch("/:id/entregas/:entregaId/interes-fijo", asyncRoute(async (req, res) => {
+  const accionistaId = getAccionistaId(req);
+  const body = z.object({ meses: z.number().int().min(1).max(24).nullable() }).parse(req.body);
+  const fomentoId = String(req.params.id);
+  await inTransaction(async (client) => {
+    const fom = await client.query("SELECT status, liquidado_at FROM fomentos WHERE id = $1 AND accionista_id = $2 FOR UPDATE", [fomentoId, accionistaId]);
+    if (!fom.rowCount) throw new ApiError(404, "Fomento no encontrado o no pertenece al accionista activo");
+    if (fom.rows[0].liquidado_at) throw new ApiError(409, "A este fomento ya se le hizo la cuenta: su interés quedó cerrado.");
+    const r = await client.query(
+      `UPDATE fomento_entregas SET es_saldo_anterior = $3, meses_interes_fijo = $4 WHERE id = $2 AND fomento_id = $1`,
+      [fomentoId, req.params.entregaId, body.meses != null, body.meses]
+    );
+    if (!r.rowCount) throw new ApiError(404, "Entrega no encontrada en este fomento");
+  });
+  const full = await pool.query(`${SELECT_FOMENTO} WHERE f.id = $1 AND f.accionista_id = $2`, [fomentoId, accionistaId]);
+  res.json(full.rows[0]);
+}));
+
 fomentosRouter.delete("/:id", asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
   const result = await pool.query("DELETE FROM fomentos WHERE id = $1 AND accionista_id = $2", [req.params.id, accionistaId]);

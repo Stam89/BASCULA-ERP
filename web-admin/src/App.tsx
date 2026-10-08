@@ -8424,6 +8424,21 @@ export function App() {
 
   // Ajuste del INTERÉS FIJO del saldo arrastrado desde la cabecera del fomento.
   const [fomentoInteresFijoBusy, setFomentoInteresFijoBusy] = useState(false);
+  // Interés de UNA entrega: por días (null) o N meses fijos.
+  async function ajustarInteresFijoEntrega(entrega: FomentoEntrega, meses: number | null) {
+    if (!fomentoDetalle) return;
+    setFomentoInteresFijoBusy(true);
+    try {
+      await apiPatch(`/fomentos/${fomentoDetalle.id}/entregas/${entrega.id}/interes-fijo`, { meses });
+      addToast(meses != null ? `🔒 Entrega de ${money(Number(entrega.valor))}: ${meses} ${meses === 1 ? "mes fijo" : "meses fijos"}` : `Entrega de ${money(Number(entrega.valor))}: interés por días`, "success");
+      await loadFomentoDetalle(fomentoDetalle.id);
+      await refreshFomentos();
+    } catch (err) {
+      addToast(err instanceof Error ? err.message : "No se pudo ajustar el interés", "error");
+    } finally {
+      setFomentoInteresFijoBusy(false);
+    }
+  }
   async function ajustarInteresFijoFomento(activo: boolean, meses: number) {
     if (!fomentoDetalle) return;
     setFomentoInteresFijoBusy(true);
@@ -19845,7 +19860,7 @@ Motivo (obligatorio):`, "");
                       {canEditarPrecios && (
                         <button type="button" onClick={() => setFomentoInteresFijoModalOpen(true)}
                           style={{ background: "#fff", color: "#92400e", border: "1px solid #f59e0b", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
-                          ⚙️ Ajustar interés fijo
+                          ⚙️ Interés por entrega
                         </button>
                       )}
                       {canAnular && (
@@ -20222,42 +20237,54 @@ Motivo (obligatorio):`, "");
             {/* El ajuste poco frecuente de interés fijo vive en un modal para
                 mantener limpia la vista operativa del estado de cuenta. */}
             {fomentoInteresFijoModalOpen && fomentoDetalle && (() => {
-              const fija = (fomentoDetalle.entregas ?? []).find(e => e.es_saldo_anterior);
-              const activo = !!fija;
-              const mesesActual = Number(fija?.meses_interes_fijo ?? 1) || 1;
+              const entregas = fomentoDetalle.entregas ?? [];
+              const renta = Number(fomentoDetalle.renta) || 0;
+              const cerrado = !!fomentoDetalle.liquidado_at;
+              const interesDe = (e: FomentoEntrega, meses: number | null) => {
+                if (meses != null) return round2(Number(e.valor) * renta * meses);
+                return round2(Number(e.valor) * renta / 30 * obtenerDiasEntregaFomento(fomentoDetalle, e));
+              };
+              const total = entregas.reduce((a, e) => a + interesDe(e, e.es_saldo_anterior && e.meses_interes_fijo != null ? Number(e.meses_interes_fijo) : null), 0);
               return (
                 <div className="modalOverlay" onClick={() => !fomentoInteresFijoBusy && setFomentoInteresFijoModalOpen(false)}>
-                  <div className="modalCard formPanel" onClick={(e) => e.stopPropagation()}
-                    style={{ maxWidth: 460, width: "100%" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                  <div className="modalCard interesFijoModal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+                    <div className="interesFijoModal__cab">
                       <div>
-                        <h3 style={{ margin: 0 }}>Ajustar interés fijo</h3>
-                        <p className="muted" style={{ margin: "4px 0 16px", fontSize: 12 }}>{fomentoDetalle.farmer_name}</p>
+                        <h3 style={{ margin: 0 }}>⚙️ Interés por entrega</h3>
+                        <p className="muted" style={{ margin: "2px 0 0", fontSize: 12.5 }}>{fomentoDetalle.farmer_name} · renta {(renta * 100).enReal(0, 2)} % mensual</p>
                       </div>
-                      <button type="button" disabled={fomentoInteresFijoBusy} onClick={() => setFomentoInteresFijoModalOpen(false)}
-                        style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--c-muted)" }}>✕</button>
+                      <button type="button" className="interesFijoModal__x" disabled={fomentoInteresFijoBusy} onClick={() => setFomentoInteresFijoModalOpen(false)} aria-label="Cerrar">✕</button>
                     </div>
-                    <label style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 13, fontWeight: 700, cursor: fomentoInteresFijoBusy ? "wait" : "pointer" }}>
-                      <input type="checkbox" checked={activo} disabled={fomentoInteresFijoBusy}
-                        onChange={(e) => ajustarInteresFijoFomento(e.target.checked, mesesActual)} />
-                      Interés fijo del saldo arrastrado
-                    </label>
-                    {activo && (
-                      <label style={{ display: "block", marginTop: 16, fontSize: 12, fontWeight: 600 }}>Meses fijos
-                        <select value={mesesActual} disabled={fomentoInteresFijoBusy}
-                          onChange={(e) => ajustarInteresFijoFomento(true, Number(e.target.value))}
-                          style={{ display: "block", width: "100%", marginTop: 4, padding: "7px 8px", borderRadius: 6, border: "1px solid #d1d5db" }}>
-                          {[1,2,3,4,5,6].map(m => <option key={m} value={m}>{m}</option>)}
-                        </select>
-                      </label>
-                    )}
-                    <p className="muted" style={{ fontSize: 12, lineHeight: 1.45, margin: "14px 0" }}>
-                      {activo
-                        ? `El saldo arrastrado cobra ${mesesActual} mes(es) fijos; no aumenta por días.`
-                        : "Al activarlo, el saldo arrastrado dejará de calcular interés diario y usará la cantidad fija de meses."}
+                    <p className="interesFijoModal__nota">
+                      Elige en cada entrega: <b>por días</b> (sube cada día hasta que se haga la cuenta) o <b>meses fijos</b> (cobra solo esos meses y no sube más).
                     </p>
+                    {cerrado && <p className="cfgAviso">A este fomento ya se le hizo la cuenta: su interés quedó cerrado.</p>}
+                    <div className="interesFijoModal__lista">
+                      {entregas.length === 0 && <p className="muted">Este fomento no tiene entregas.</p>}
+                      {entregas.map((e) => {
+                        const meses = e.es_saldo_anterior && e.meses_interes_fijo != null ? Number(e.meses_interes_fijo) : null;
+                        const dias = obtenerDiasEntregaFomento(fomentoDetalle, e);
+                        return (
+                          <div key={e.id} className={`interesFijoModal__fila${meses != null ? " interesFijoModal__fila--fijo" : ""}`}>
+                            <span className="interesFijoModal__txt">
+                              <strong>{money(Number(e.valor))}</strong>
+                              <small>{e.fecha ? e.fecha.slice(0, 10).split("-").reverse().join("/") : "—"} · {dias} días{e.concepto ? ` · ${e.concepto}` : ""}</small>
+                            </span>
+                            <select value={meses ?? ""} disabled={fomentoInteresFijoBusy || cerrado}
+                              onChange={(ev) => ajustarInteresFijoEntrega(e, ev.target.value === "" ? null : Number(ev.target.value))}>
+                              <option value="">Por días ({money(interesDe(e, null))})</option>
+                              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((m) => (
+                                <option key={m} value={m}>{m} {m === 1 ? "mes fijo" : "meses fijos"} ({money(interesDe(e, m))})</option>
+                              ))}
+                            </select>
+                            <b className="interesFijoModal__int">{money(interesDe(e, meses))}</b>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="interesFijoModal__total"><span>Interés total de este fomento</span><b>{money(round2(total))}</b></div>
                     <div className="buttonRow">
-                      <button type="button" disabled={fomentoInteresFijoBusy} onClick={() => setFomentoInteresFijoModalOpen(false)}>Cerrar</button>
+                      <button type="button" disabled={fomentoInteresFijoBusy} onClick={() => setFomentoInteresFijoModalOpen(false)}>Listo</button>
                     </div>
                   </div>
                 </div>

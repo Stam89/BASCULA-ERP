@@ -65,6 +65,24 @@ try {
   const otro = (await api("GET", `/fomentos/intereses?desde=${hoy}&hasta=${hoy}`, undefined, (await q("SELECT id FROM accionistas WHERE name='STALYN'"))[0].id)).data;
   check(otro && otro.totales.cuentas === 0, "C4. cada accionista ve solo sus fomentos (STALYN no ve los de CEYRO)", otro?.totales);
 
+  // ── D. Interés por entrega: a una 1 mes fijo, a otra 2 meses, la tercera por días ──
+  const D = await nuevo("SIM FOMENTO D");
+  const fD = await fomento(D);
+  await entrega(fD, 90, 600); await entrega(fD, 60, 400); await entrega(fD, 30, 100);
+  const ents = await q("SELECT id, valor::float v FROM fomento_entregas WHERE fomento_id=$1 ORDER BY fecha", [fD.id]);
+  const deuda = async () => r2((await api("GET", "/fomentos")).data.find((x) => x.id === fD.id)?.deuda_total);
+  check(await deuda() === r2(1100 + 600 * 0.07 * 3 + 400 * 0.07 * 2 + 100 * 0.07), "D1. todas por días: interés 126 + 56 + 7 = 189", await deuda());
+  exigir(await api("PATCH", `/fomentos/${fD.id}/entregas/${ents[0].id}/interes-fijo`, { meses: 1 }), "D2. a la entrega de $600 se le pone 1 mes fijo");
+  exigir(await api("PATCH", `/fomentos/${fD.id}/entregas/${ents[1].id}/interes-fijo`, { meses: 2 }), "D3. a la de $400, 2 meses fijos");
+  check(await deuda() === r2(1100 + 42 + 56 + 7), "D4. ahora el interés es 42 (1 mes) + 56 (2 meses) + 7 (por días) = 105", await deuda());
+  const fijas = await q("SELECT meses_interes_fijo m FROM fomento_entregas WHERE fomento_id=$1 ORDER BY fecha", [fD.id]);
+  check(fijas[0].m === 1 && fijas[1].m === 2 && fijas[2].m === null, "D5. cada entrega guarda lo suyo (1, 2, por días)", fijas.map((x) => x.m));
+  exigir(await api("PATCH", `/fomentos/${fD.id}/entregas/${ents[0].id}/interes-fijo`, { meses: null }), "D6. la de $600 vuelve a «por días»");
+  check(await deuda() === r2(1100 + 126 + 56 + 7), "D7. y su interés vuelve a 126", await deuda());
+  const eA = (await q("SELECT id FROM fomento_entregas WHERE fomento_id=$1 LIMIT 1", [fA.id]))[0].id;
+  check((await api("PATCH", `/fomentos/${fA.id}/entregas/${eA}/interes-fijo`, { meses: 1 })).status === 409, "D8. a un fomento con la cuenta ya hecha no se le cambia el interés → 409");
+  check((await api("PATCH", `/fomentos/${fD.id}/entregas/${eA}/interes-fijo`, { meses: 1 })).status === 404, "D9. una entrega de otro fomento → 404");
+
   const h = await revisar((sql) => q(sql));
   check(h.length === 0, `Z. los ${TOTAL_REGLAS} controles de integridad se cumplen`, h.map((x) => x.error ? `${x.regla}: ${x.error}` : `${x.regla} → ${JSON.stringify(x.filas)}`));
 } catch (e) { console.log("⛔", e.message, e.stack?.split("\n")[1]); } finally { const f = resumen(); await S.cerrar(); process.exit(f ? 1 : 0); }
