@@ -29,6 +29,20 @@ try {
   const filas = Array.isArray(hist) ? hist : hist?.rows ?? [];
   check(filas.some((x) => x.worker_name === "SIM CON PAGOS"), "B3. su pago sigue en el historial de sueldos", JSON.stringify(hist).slice(0, 200));
 
+  // C. Reactivar: aparece en «dados de baja», vuelve a la lista con su historial; no se duplica un activo.
+  const bajas = (await api("GET", "/admin-payroll/staff/bajas")).data;
+  check(Array.isArray(bajas) && bajas.some((x) => x.id === b.data.id && x.pagos === 1), "C1. sale en «Dados de baja» con sus pagos", JSON.stringify(bajas).slice(0, 200));
+  const dupe = await api("POST", "/admin-payroll/staff", { cargo: "PRUEBA", worker_name: "SIM CON PAGOS", base_salary: 150 });
+  const r1 = await api("POST", `/admin-payroll/staff/${b.data.id}/reactivar`, {});
+  check(r1.status === 409, "C2. no reactiva si ya hay un activo con el mismo nombre (se pagaría doble)", mostrar(r1));
+  await api("DELETE", `/admin-payroll/staff/${dupe.data.id}`);
+  const r2 = await api("POST", `/admin-payroll/staff/${b.data.id}/reactivar`, {});
+  const lista2 = (await api("GET", "/admin-payroll/staff")).data;
+  const pagos2 = (await q("SELECT count(*)::int n FROM admin_salary_payments WHERE staff_id = $1", [b.data.id]))[0].n;
+  check(r2.ok && lista2.some((x) => x.id === b.data.id) && pagos2 === 1, "C3. reactivado: vuelve a la lista con su historial intacto", mostrar(r2));
+  const r3 = await api("POST", `/admin-payroll/staff/${b.data.id}/reactivar`, {});
+  check(r3.status === 409, "C4. reactivar a alguien ya activo → 409", mostrar(r3));
+
   const h = await revisar((sql) => q(sql));
   check(h.length === 0, `Z. los ${TOTAL_REGLAS} controles de integridad se cumplen`, h.map((x) => x.error ? `${x.regla}: ${x.error}` : `${x.regla} → ${JSON.stringify(x.filas)}`));
 } catch (e) { console.log("⛔", e.message, e.stack?.split("\n")[1]); } finally { const f = resumen(); await S.cerrar(); process.exit(f ? 1 : 0); }

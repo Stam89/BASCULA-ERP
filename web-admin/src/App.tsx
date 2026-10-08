@@ -3024,6 +3024,8 @@ export function App() {
   const cajaAbierta = Boolean(dashboard.current_cash_register?.id);
   // Personal administrativo (por accionista activo): staff, formulario, historial y modal de pago.
   const [adminStaff, setAdminStaff] = useState<AdminStaff[]>([]);
+  // Dados de baja (ocultos, con su historial): se pueden reactivar.
+  const [adminBajas, setAdminBajas] = useState<Array<AdminStaff & { pagos: number }>>([]);
   const [adminStaffForm, setAdminStaffForm] = useState({ cargo: "", worker_name: "", base_salary: "" });
   const [adminEditId, setAdminEditId] = useState<string | null>(null);
   const [adminHistory, setAdminHistory] = useState<AdminSalaryPayment[]>([]);
@@ -6317,6 +6319,16 @@ export function App() {
   async function loadAdminStaff() {
     try { setAdminStaff(await apiGet<AdminStaff[]>("/admin-payroll/staff")); }
     catch (e) { addToast(`No se pudo cargar el personal: ${e instanceof Error ? e.message : "error"}`, "error"); }
+    apiGet<Array<AdminStaff & { pagos: number }>>("/admin-payroll/staff/bajas").then(setAdminBajas).catch(() => setAdminBajas([]));
+  }
+  async function reactivarAdminStaff(st: AdminStaff) {
+    if (!window.confirm(`¿Reactivar a ${st.worker_name}?\n\nVuelve a la nómina administrativa y a los pagos pendientes, con su historial intacto.`)) return;
+    try {
+      await apiPost(`/admin-payroll/staff/${st.id}/reactivar`, {});
+      addToast(`${st.worker_name} reactivado`, "success");
+      await loadAdminStaff();
+      loadAdminPending().catch(() => undefined);
+    } catch (e) { addToast(e instanceof Error ? e.message : "No se pudo reactivar", "error"); }
   }
   async function loadAdminHistory() {
     try { setAdminHistory(await apiGet<AdminSalaryPayment[]>("/admin-payroll/history")); } catch { setAdminHistory([]); }
@@ -24205,6 +24217,22 @@ Motivo (obligatorio):`, "");
                           <tfoot><tr><td colSpan={2} style={{ fontWeight: 700 }}>TOTAL sueldos base (quincena)</td><td className="num" style={{ fontWeight: 700 }}>{money(totalStaff)}</td><td /></tr></tfoot>
                         </table>
                       </div>
+                    )}
+                    {adminBajas.length > 0 && (
+                      <details className="staffBajas" style={{ gridColumn: "1 / -1" }}>
+                        <summary>🗂️ Dados de baja ({adminBajas.length}) · se pueden reactivar</summary>
+                        <div className="staffBajas__lista">
+                          {adminBajas.map((b) => (
+                            <div key={b.id} className="staffBajas__item">
+                              <span>
+                                <strong>{b.worker_name}</strong>
+                                <small>{b.cargo || "Sin cargo"} · {money(b.base_salary)} quincenal · {b.pagos} {b.pagos === 1 ? "pago" : "pagos"} en el historial</small>
+                              </span>
+                              <button type="button" className="btnSecondary" onClick={() => reactivarAdminStaff(b)}>↩️ Reactivar</button>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
                     )}
                   </div>
                 </details>

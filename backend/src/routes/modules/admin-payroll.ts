@@ -48,6 +48,41 @@ adminPayrollRouter.post("/staff", asyncRoute(async (req, res) => {
   res.status(201).json(result.rows[0]);
 }));
 
+// Dados de baja (ocultos) del accionista activo, con cuántos pagos conservan: para reactivarlos.
+adminPayrollRouter.get("/staff/bajas", asyncRoute(async (req, res) => {
+  const result = await pool.query(
+    `SELECT s.id, s.cargo, s.worker_name, s.base_salary::float AS base_salary, s.is_active,
+            (SELECT count(*)::int FROM admin_salary_payments p WHERE p.staff_id = s.id AND p.anulado_at IS NULL) AS pagos
+       FROM admin_staff s
+      WHERE s.accionista_id = $1 AND s.is_active = false
+      ORDER BY s.worker_name`,
+    [accId(req)]
+  );
+  res.json(result.rows);
+}));
+
+// Reactivar a un dado de baja: vuelve a la lista y a los pagos pendientes, con su historial intacto.
+adminPayrollRouter.post("/staff/:id/reactivar", asyncRoute(async (req, res) => {
+  const accionista = accId(req);
+  const out = await inTransaction(async (client) => {
+    const s = await client.query<{ worker_name: string; is_active: boolean }>(
+      "SELECT worker_name, is_active FROM admin_staff WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
+      [req.params.id, accionista]
+    );
+    if (!s.rows[0]) throw new ApiError(404, "Empleado no encontrado");
+    if (s.rows[0].is_active) throw new ApiError(409, `${s.rows[0].worker_name} ya está activo.`);
+    // No dejar dos activos con el mismo nombre (se pagaría doble).
+    const dup = await client.query(
+      "SELECT 1 FROM admin_staff WHERE accionista_id = $1 AND is_active = true AND upper(btrim(worker_name)) = upper(btrim($2)) AND id <> $3 LIMIT 1",
+      [accionista, s.rows[0].worker_name, req.params.id]
+    );
+    if (dup.rowCount) throw new ApiError(409, `Ya hay un empleado activo llamado ${s.rows[0].worker_name}. Dalo de baja o cámbiale el nombre antes de reactivar.`);
+    await client.query("UPDATE admin_staff SET is_active = true WHERE id = $1", [req.params.id]);
+    return { worker_name: s.rows[0].worker_name };
+  });
+  res.json({ ok: true, ...out });
+}));
+
 adminPayrollRouter.put("/staff/:id", asyncRoute(async (req, res) => {
   const body = z.object({
     cargo: z.string().max(80).optional(),

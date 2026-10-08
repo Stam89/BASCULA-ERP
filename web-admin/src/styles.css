@@ -5477,3 +5477,12 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .tarifaEstado--VIGENTE { background: #dcfce7; color: #15803d; }
 .tarifaEstado--PROGRAMADA { background: #e0e7ff; color: #3730a3; }
 .tarifaEstado--ANTERIOR { background: #f1f5f9; color: #64748b; }
+
+/* Personal administrativo: dados de baja (se pueden reactivar). */
+.staffBajas { margin-top: 4px; border: 1px dashed var(--c-border-strong, #bfcfc9); border-radius: 12px; padding: 8px 12px; background: var(--c-surface-2, #f8fafc); }
+.staffBajas > summary { cursor: pointer; font-size: 13px; font-weight: 700; color: var(--c-text-muted); }
+.staffBajas__lista { display: grid; gap: 6px; margin-top: 8px; }
+.staffBajas__item { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: 10px; background: var(--c-surface); border: 1px solid var(--c-border); }
+.staffBajas__item span { display: grid; gap: 2px; min-width: 0; }
+.staffBajas__item small { font-size: 11.5px; color: var(--c-text-muted); }
+.staffBajas__item button { margin: 0; font-size: 12.5px; }
