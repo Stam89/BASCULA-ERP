@@ -10,6 +10,7 @@ import { getMatrizId } from "../../services/matriz.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { registrarSacosRecuperados, revertirSacosRecuperados } from "../../services/sacos.js";
 import { armarRoster, canonico, evaluarNombre, type Evaluacion } from "../../services/bajada-nombres.js";
+import { numeroTicketSql } from "../../services/bascula-corte.js";
 
 export const cuadrillaRouter = Router();
 
@@ -1305,6 +1306,12 @@ const FECHA_TICKET = `COALESCE(
   CASE WHEN t.raw_payload->>'fecha' ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}'
        THEN to_date(split_part(t.raw_payload->>'fecha', ' ', 1), 'DD/MM/YYYY') END,
   (to_timestamp(t.mobile_created_at / 1000.0) AT TIME ZONE 'America/Guayaquil')::date)`;
+// Número del ticket («000 300» → 300) y el corte «Contar desde»: por NÚMERO de ticket
+// (bajada_carro_config.desde_numero); si no hay número, por la fecha `desde` (o hoy).
+// Un ticket sin número no se esconde por el corte numérico. Requiere `JOIN bajada_carro_config c`.
+const NUM_TICKET = numeroTicketSql("t");
+const CORTE_BAJADA = `(CASE WHEN c.desde_numero IS NOT NULL THEN COALESCE(${NUM_TICKET} >= c.desde_numero, true)
+  ELSE ${FECHA_TICKET} >= COALESCE(c.desde, CURRENT_DATE) END)`;
 const TICKET_ELEGIBLE = `lower(coalesce(t.raw_payload->>'modo', 'principal')) = 'principal'
   AND NOT coalesce(t.en_espera, false) AND coalesce(t.quintals, 0) > 0`;
 // Sábado que abre la semana de pago de una fecha (getUTCDay: dom=0 … sáb=6).
@@ -1344,7 +1351,7 @@ export async function contarNombresPorRevisar(db: Pick<PoolClient, "query">, has
        JOIN bajada_carro_config c ON c.id = 1
        LEFT JOIN cuadrilla_entries e ON e.origen = 'BASCULA' AND e.referencia_id = t.id
       WHERE ${TICKET_ELEGIBLE}
-        AND ${FECHA_TICKET} >= COALESCE(c.desde, CURRENT_DATE)
+        AND ${CORTE_BAJADA}
         AND ($1::date IS NULL OR ${FECHA_TICKET} <= $1::date)
         AND e.paid_at IS NULL
         AND COALESCE(t.bajada_manual, '') = ''
@@ -1367,9 +1374,9 @@ export async function sincronizarBajadas(client: PoolClient): Promise<{ creados:
   const out = { creados: 0, actualizados: 0, eliminados: 0 };
   // Serializa sincronizaciones simultáneas (dos pantallas abiertas).
   await client.query("SELECT pg_advisory_xact_lock($1)", [71010]);
-  const cfg = (await client.query("SELECT desde::text AS desde FROM bajada_carro_config WHERE id = 1")).rows[0];
+  const cfg = (await client.query("SELECT desde::text AS desde, desde_numero::text AS numero FROM bajada_carro_config WHERE id = 1")).rows[0];
   const act = await actividadBajada(client);
-  if (!cfg?.desde || !act) return out;
+  if ((!cfg?.desde && !cfg?.numero) || !act) return out;
   const tarifa = Number(act.unit_rate) || 0;
 
   const tickets = (await client.query(
@@ -1378,8 +1385,8 @@ export async function sincronizarBajadas(client: PoolClient): Promise<{ creados:
             COALESCE(NULLIF(btrim(t.bajada_manual), ''), NULLIF(btrim(t.raw_payload->>'bajadaX'), '')) AS trabajador,
             (${FECHA_TICKET})::text AS fecha
        FROM mobile_synced_tickets t
-      WHERE ${TICKET_ELEGIBLE} AND ${FECHA_TICKET} >= $1::date`,
-    [cfg.desde]
+       JOIN bajada_carro_config c ON c.id = 1
+      WHERE ${TICKET_ELEGIBLE} AND ${CORTE_BAJADA}`
   )).rows as Array<{ id: string; qq: number; farmer_name: string | null; numero: string | null; placa: string | null; trabajador: string | null; fecha: string }>;
 
   const existentes = new Map<string, { id: string; paid_at: Date | null; worker_name: string; quantity: number; unit_rate: number; work_date: string }>();
@@ -1452,7 +1459,7 @@ export async function contarBajadasSinNombre(db: Pick<PoolClient, "query">, hast
        FROM mobile_synced_tickets t
        JOIN bajada_carro_config c ON c.id = 1
       WHERE ${TICKET_ELEGIBLE}
-        AND ${FECHA_TICKET} >= COALESCE(c.desde, CURRENT_DATE)
+        AND ${CORTE_BAJADA}
         AND ($1::date IS NULL OR ${FECHA_TICKET} <= $1::date)
         AND COALESCE(t.bajada_manual, '') <> '__NO__'
         AND COALESCE(NULLIF(btrim(t.bajada_manual), ''), NULLIF(btrim(t.raw_payload->>'bajadaX'), '')) IS NULL`,
@@ -1469,9 +1476,18 @@ cuadrillaRouter.get("/bajadas", asyncRoute(async (req, res) => {
   const hoy = (await pool.query("SELECT (now() AT TIME ZONE 'America/Guayaquil')::date::text AS d")).rows[0].d as string;
   await inTransaction((client) => sincronizarBajadas(client));
 
-  const cfg = (await pool.query("SELECT desde::text AS desde FROM bajada_carro_config WHERE id = 1")).rows[0] ?? { desde: null };
+  const cfg = (await pool.query("SELECT desde::text AS desde, desde_numero::text AS numero FROM bajada_carro_config WHERE id = 1")).rows[0] ?? { desde: null, numero: null };
+  const desdeNumero = cfg.numero != null ? Number(cfg.numero) : null;
+  // Con corte por número, «desde» (fecha) = la del primer ticket que cuenta.
+  const extra = (await pool.query(
+    `SELECT (SELECT min(${FECHA_TICKET})::text FROM mobile_synced_tickets t
+              WHERE $1::bigint IS NOT NULL AND ${TICKET_ELEGIBLE} AND ${NUM_TICKET} >= $1::bigint) AS fecha_numero,
+            (SELECT max(${NUM_TICKET})::text FROM mobile_synced_tickets t WHERE ${TICKET_ELEGIBLE}) AS ultimo`,
+    [desdeNumero]
+  )).rows[0] as { fecha_numero: string | null; ultimo: string | null };
+  const desdeFecha: string | null = desdeNumero != null ? (extra.fecha_numero ?? hoy) : cfg.desde;
   const modoTodo = q.todo === "1";
-  const ini = modoTodo ? (cfg.desde && cfg.desde <= hoy ? cfg.desde : inicioSemana(hoy)) : inicioSemana(q.semana ?? hoy);
+  const ini = modoTodo ? (desdeFecha && desdeFecha <= hoy ? desdeFecha : inicioSemana(hoy)) : inicioSemana(q.semana ?? hoy);
   const fin = modoTodo ? sumarDias(inicioSemana(hoy), 6) : sumarDias(ini, 6);
   const act = await actividadBajada(pool);
   const filas = (await pool.query(
@@ -1480,8 +1496,9 @@ cuadrillaRouter.get("/bajadas", asyncRoute(async (req, res) => {
             t.quintals::float AS qq, NULLIF(btrim(t.raw_payload->>'bajadaX'), '') AS bajada_bascula,
             NULLIF(btrim(t.bajada_manual), '') AS bajada_manual,
             e.id AS entry_id, e.worker_name AS trabajador, e.subtotal::float AS monto, e.unit_rate::float AS tarifa,
-            e.paid_at
+            e.paid_at, NOT ${CORTE_BAJADA} AS antes_del_corte
        FROM mobile_synced_tickets t
+       JOIN bajada_carro_config c ON c.id = 1
        LEFT JOIN cuadrilla_entries e ON e.origen = 'BASCULA' AND e.referencia_id = t.id
       WHERE ${TICKET_ELEGIBLE} AND ${FECHA_TICKET} BETWEEN $1::date AND $2::date
       ORDER BY ${FECHA_TICKET}, NULLIF(regexp_replace(coalesce(t.raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '')::bigint NULLS LAST`,
@@ -1502,7 +1519,9 @@ cuadrillaRouter.get("/bajadas", asyncRoute(async (req, res) => {
   res.json({
     semana: { inicio: ini, fin, actual: inicioSemana(hoy) === ini },
     modo: modoTodo ? "todo" : "semana",
-    desde: cfg.desde,
+    desde: desdeFecha,
+    desde_numero: desdeNumero,
+    ultimo_numero: extra.ultimo != null ? Number(extra.ultimo) : null,
     tarifa: act ? Number(act.unit_rate) : null,
     actividad: act?.name ?? null,
     filas: filasConAviso,
@@ -1532,19 +1551,26 @@ cuadrillaRouter.post("/bajadas/asignar", asyncRoute(async (req, res) => {
   res.json({ ok: true, ...out });
 }));
 
-// Desde qué fecha se cuentan las bajadas (lo anterior ya se pagó por fuera).
+// Desde qué NÚMERO de ticket se cuentan las bajadas (lo anterior ya se pagó por fuera).
+// `desde` (fecha) se acepta por compatibilidad y solo aplica si no se manda número.
 cuadrillaRouter.put("/bajadas/desde", requireAdmin, asyncRoute(async (req, res) => {
-  const body = z.object({ desde: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).parse(req.body);
+  const body = z.object({
+    numero: z.coerce.number().int().positive().max(999_999_999).optional(),
+    desde: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+  }).refine((b) => b.numero != null || b.desde != null, "Indica el número de ticket").parse(req.body);
+  const numero = body.numero ?? null;
+  const desde = numero != null ? null : body.desde ?? null;
   const user = (req as AuthenticatedRequest).user;
   const out = await inTransaction(async (client) => {
     await client.query(
-      `INSERT INTO bajada_carro_config (id, desde, updated_at, updated_by) VALUES (1, $1, now(), $2)
-       ON CONFLICT (id) DO UPDATE SET desde = EXCLUDED.desde, updated_at = now(), updated_by = EXCLUDED.updated_by`,
-      [body.desde, user?.id ?? null]
+      `INSERT INTO bajada_carro_config (id, desde, desde_numero, updated_at, updated_by) VALUES (1, $1::date, $2::bigint, now(), $3)
+       ON CONFLICT (id) DO UPDATE SET desde = COALESCE(EXCLUDED.desde, bajada_carro_config.desde), desde_numero = EXCLUDED.desde_numero,
+         updated_at = now(), updated_by = EXCLUDED.updated_by`,
+      [desde, numero, user?.id ?? null]
     );
     return sincronizarBajadas(client);
   });
-  res.json({ ok: true, desde: body.desde, ...out });
+  res.json({ ok: true, desde, numero, ...out });
 }));
 
 // ── Bajada de carro: se paga como UN SOLO pago (todas las personas juntas) ──

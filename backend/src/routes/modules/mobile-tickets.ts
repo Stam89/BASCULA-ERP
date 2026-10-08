@@ -7,7 +7,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { exigirEscrituraEn, requireAdmin, requireAuth, resolveAccionista, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
-import { fechaTicketSql, leerCorteBascula } from "../../services/bascula-corte.js";
+import { dentroDelCorteSql, fechaTicketSql, leerCorteBascula, numeroTicketSql } from "../../services/bascula-corte.js";
 import { calculateNetWeight, calculateQuintals, round2 } from "../../utils/rice-formulas.js";
 import { nextCode } from "../../utils/codes.js";
 import { nextSequentialLotCode } from "../../utils/lot-code.js";
@@ -317,11 +317,11 @@ mobileTicketsRouter.get("/", requireAuth, resolveAccionista, asyncRoute(async (r
   if (statusFilter) conditions.push(statusFilter);
   // «Contar tickets desde»: lo anterior al corte no es pendiente (sí sale en Todos).
   const corte = await leerCorteBascula();
-  const params: unknown[] = [corte];
-  if (q.status === "pending" && corte) conditions.push(`${fechaTicketSql("t")} >= $1::date`);
+  const params: unknown[] = [corte.numero, corte.desde];
+  if (q.status === "pending") conditions.push(dentroDelCorteSql("t", "$1", "$2"));
   const result = await pool.query(
     `SELECT t.id, t.farmer_id, t.farmer_name, t.accionista_id, t.lot_id, t.weighing_ticket_id, t.en_espera,
-            ($1::date IS NOT NULL AND ${fechaTicketSql("t")} < $1::date) AS antes_del_corte,
+            NOT ${dentroDelCorteSql("t", "$1", "$2")} AS antes_del_corte,
             t.gross_weight, t.tare_weight, t.net_weight,
             t.qualification, t.quintals, t.price_per_quintal, t.net_payable, t.liquidated_at,
             t.mobile_updated_at,
@@ -343,17 +343,25 @@ mobileTicketsRouter.get("/", requireAuth, resolveAccionista, asyncRoute(async (r
 }));
 
 // ── «Contar tickets desde» (corte de la báscula) ────────────────────────────
-// GET: fecha vigente + cuántos pendientes quedan fuera por ser anteriores.
+// GET: corte vigente (número de ticket; o fecha si no hay número) + cuántos pendientes
+// quedan fuera por ser anteriores + la fecha de ese ticket (para mostrarla) y el último número.
 mobileTicketsRouter.get("/corte", requireAuth, asyncRoute(async (_req, res) => {
-  const desde = await leerCorteBascula();
-  const ocultos = desde
-    ? (await pool.query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM mobile_synced_tickets t
-        WHERE t.liquidated_at IS NULL AND t.weighing_ticket_id IS NULL
-          AND lower(coalesce(t.raw_payload->>'modo', 'principal')) = 'principal'
-          AND ${fechaTicketSql("t")} < $1::date`, [desde])).rows[0]?.n ?? 0
-    : 0;
-  res.json({ desde, ocultos });
+  const corte = await leerCorteBascula();
+  const r = (await pool.query<{ ocultos: number; fecha_numero: string | null; ultimo: string | null }>(
+    `SELECT
+       (SELECT count(*)::int FROM mobile_synced_tickets t
+         WHERE t.liquidated_at IS NULL AND t.weighing_ticket_id IS NULL
+           AND lower(coalesce(t.raw_payload->>'modo', 'principal')) = 'principal'
+           AND NOT ${dentroDelCorteSql("t", "$1", "$2")}) AS ocultos,
+       (SELECT (${fechaTicketSql("t")})::text FROM mobile_synced_tickets t
+         WHERE $1::bigint IS NOT NULL AND lower(coalesce(t.raw_payload->>'modo', 'principal')) = 'principal'
+           AND ${numeroTicketSql("t")} >= $1::bigint
+         ORDER BY ${numeroTicketSql("t")} LIMIT 1) AS fecha_numero,
+       (SELECT max(${numeroTicketSql("t")})::text FROM mobile_synced_tickets t
+         WHERE lower(coalesce(t.raw_payload->>'modo', 'principal')) = 'principal') AS ultimo`,
+    [corte.numero, corte.desde]
+  )).rows[0];
+  res.json({ desde: corte.desde, numero: corte.numero, fecha_numero: r?.fecha_numero ?? null, ultimo: r?.ultimo != null ? Number(r.ultimo) : null, ocultos: r?.ocultos ?? 0 });
 }));
 
 // PUT: solo el administrador. desde = null quita el corte (se cuentan todos).
@@ -361,26 +369,33 @@ mobileTicketsRouter.get("/corte", requireAuth, asyncRoute(async (_req, res) => {
 // Cuántos tickets de la báscula están POR INGRESAR: misma definición que «Pendientes» de la lista
 // (sin ingreso ni liquidación, modo principal, desde «Contar tickets desde»). Lo usa el inicio simple.
 mobileTicketsRouter.get("/por-ingresar", requireAuth, asyncRoute(async (_req, res) => {
-  const desde = await leerCorteBascula();
+  const corte = await leerCorteBascula();
   const r = await pool.query<{ n: number }>(
     `SELECT count(*)::int AS n FROM mobile_synced_tickets t
       WHERE t.liquidated_at IS NULL AND t.weighing_ticket_id IS NULL
         AND lower(coalesce(t.raw_payload->>'modo', 'principal')) = 'principal'
-        AND ($1::date IS NULL OR ${fechaTicketSql("t")} >= $1::date)`,
-    [desde]
+        AND ${dentroDelCorteSql("t", "$1", "$2")}`,
+    [corte.numero, corte.desde]
   );
-  res.json({ n: r.rows[0]?.n ?? 0, desde });
+  res.json({ n: r.rows[0]?.n ?? 0, desde: corte.desde, numero: corte.numero });
 }));
 
+// Se fija por NÚMERO de ticket (`numero`); null quita el corte. `desde` (fecha) se acepta
+// por compatibilidad y solo aplica si no se manda número.
 mobileTicketsRouter.put("/corte", requireAuth, requireAdmin, asyncRoute(async (req, res) => {
-  const body = z.object({ desde: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable() }).parse(req.body);
+  const body = z.object({
+    numero: z.coerce.number().int().positive().max(999_999_999).nullable().optional(),
+    desde: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional()
+  }).parse(req.body);
+  const numero = body.numero ?? null;
+  const desde = numero != null ? null : body.desde ?? null;
   const user = (req as AuthenticatedRequest).user;
   await pool.query(
-    `INSERT INTO bascula_config (id, desde, updated_at, updated_by) VALUES (1, $1::date, now(), $2)
-     ON CONFLICT (id) DO UPDATE SET desde = EXCLUDED.desde, updated_at = now(), updated_by = EXCLUDED.updated_by`,
-    [body.desde, user?.id ?? null]
+    `INSERT INTO bascula_config (id, desde, desde_numero, updated_at, updated_by) VALUES (1, $1::date, $2::bigint, now(), $3)
+     ON CONFLICT (id) DO UPDATE SET desde = EXCLUDED.desde, desde_numero = EXCLUDED.desde_numero, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+    [desde, numero, user?.id ?? null]
   );
-  res.json({ ok: true, desde: body.desde });
+  res.json({ ok: true, desde, numero });
 }));
 
 // Vincula un ticket a un agricultor del directorio global. El vínculo no cambia

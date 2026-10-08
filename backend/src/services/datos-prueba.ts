@@ -206,7 +206,7 @@ export async function vaciarDatosDePrueba(db: Db): Promise<{ wiped: string[]; no
   // día del borrado (hora de Ecuador); el admin puede moverla atrás en Nómina.
   if (present.has("bajada_carro_config")) {
     await db.query(
-      `UPDATE bajada_carro_config SET desde = (now() AT TIME ZONE 'America/Guayaquil')::date, updated_at = now()`
+      `UPDATE bajada_carro_config SET desde = (now() AT TIME ZONE 'America/Guayaquil')::date, desde_numero = NULL, updated_at = now()`
     );
   }
 

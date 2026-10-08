@@ -7,7 +7,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { requireAuth } from "../../auth/require-auth.js";
 import { env } from "../../config/env.js";
 import { importBasculaTickets } from "./mobile-tickets.js";
-import { fechaTicketSql, leerCorteBascula } from "../../services/bascula-corte.js";
+import { dentroDelCorteSql, leerCorteBascula } from "../../services/bascula-corte.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SINCRONIZACIÓN DIRECTA POR WiFi (tablet de báscula → ERP en la red local).
@@ -224,8 +224,8 @@ basculaSyncRouter.get("/status", requireAuth, asyncRoute(async (_req, res) => {
         WHERE t.liquidated_at IS NULL
           AND t.weighing_ticket_id IS NULL
           AND lower(coalesce(t.raw_payload->>'modo', 'principal')) = 'principal'
-          AND ($1::date IS NULL OR ${fechaTicketSql("t")} >= $1::date)`,
-      [corte]
+          AND ${dentroDelCorteSql("t", "$1", "$2")}`,
+      [corte.numero, corte.desde]
     ),
     pool.query<{ t: string | null }>(
       "SELECT max(synced_at) AS t FROM mobile_synced_tickets"

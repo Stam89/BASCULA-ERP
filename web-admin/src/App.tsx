@@ -421,6 +421,8 @@ type BajadaFila = {
   cliente: string | null; placa: string | null; qq: number;
   bajada_bascula: string | null; bajada_manual: string | null;
   entry_id: string | null; trabajador: string | null; monto: number | null; tarifa: number | null; paid_at: string | null;
+  /** Anterior a «Contar desde el ticket #»: no se paga por aquí. */
+  antes_del_corte?: boolean;
   /** El nombre que escribió la báscula es dudoso (varias personas o poco usual); trae sugerencias. */
   nombre_revisar?: { motivo: "varias_personas" | "poco_usual"; sugerencias: string[] } | null;
 };
@@ -429,11 +431,19 @@ type BajadaResumen = {
   por_trabajador: Array<{ trabajador: string; tickets: number; qq: number; monto: number }>;
   detalle: Array<{ entry_id: string; fecha: string; trabajador: string; qq: number; tarifa: number; monto: number; numero: string | null; cliente: string | null; placa: string | null }>;
 };
+/** «Contar tickets desde el #» de la báscula (GET /tickets/corte). */
+type BasculaCorte = { desde: string | null; numero: number | null; fecha_numero: string | null; ultimo: number | null; ocultos: number };
+
 type BajadaData = {
   semana: { inicio: string; fin: string; actual: boolean };
   modo?: "semana" | "todo";
   por_revisar?: number;
+  /** Fecha del primer ticket que cuenta (con corte por número) o la fecha de corte antigua. */
   desde: string | null; tarifa: number | null; actividad: string | null;
+  /** «Contar desde el ticket #» (null = corte por fecha). */
+  desde_numero?: number | null;
+  /** Último número de ticket de la báscula (ayuda al elegir). */
+  ultimo_numero?: number | null;
   filas: BajadaFila[];
   arrastre: Array<{ trabajador: string; tickets: number; monto: number }>;
 };
@@ -2337,7 +2347,7 @@ export function App() {
   const [transferLoteOpen, setTransferLoteOpen] = useState(false);
   const [ticketSearch, setTicketSearch] = useState("");
   // «Contar tickets desde» de la báscula: lo anterior no cuenta como pendiente.
-  const [basculaCorte, setBasculaCorte] = useState<{ desde: string | null; ocultos: number } | null>(null);
+  const [basculaCorte, setBasculaCorte] = useState<BasculaCorte | null>(null);
   const [basculaCorteInput, setBasculaCorteInput] = useState("");
   const [linkTicket, setLinkTicket] = useState<BasculaTicket | null>(null);
   const [linkFarmerId, setLinkFarmerId] = useState("");
@@ -4911,7 +4921,7 @@ export function App() {
       setBajadaData(data);
       if (!todo) setBajadaSemana(data.semana.inicio);
       apiGet<BajadaResumen>("/cuadrilla/bajadas/pendiente").then(setBajadaPend).catch(() => undefined);
-      setBajadaDesde(data.desde ?? "");
+      setBajadaDesde(data.desde_numero != null ? String(data.desde_numero) : "");
     } catch (e) {
       addToast(`No se pudo cargar la bajada de carro: ${e instanceof Error ? e.message : "error"}`, "error");
     } finally {
@@ -4989,11 +4999,12 @@ export function App() {
   }
 
   async function guardarBajadaDesde() {
-    if (!bajadaDesde) return;
-    if (!window.confirm(`¿Contar la bajada de carro desde el ${new Date(`${bajadaDesde}T12:00:00`).toLocaleDateString("es-EC")}?\n\nLos tickets anteriores a esa fecha no se pagan por aquí (se asumen pagados por fuera). Lo ya pagado no cambia.`)) return;
+    const numero = Math.trunc(Number(bajadaDesde));
+    if (!(numero >= 1)) return;
+    if (!window.confirm(`¿Contar la bajada de carro desde el ticket #${numero}?\n\nLos tickets anteriores a ese número no se pagan por aquí (se asumen pagados por fuera). Lo ya pagado no cambia.`)) return;
     try {
-      await apiPut("/cuadrilla/bajadas/desde", { desde: bajadaDesde });
-      addToast("Fecha de inicio actualizada", "success");
+      await apiPut("/cuadrilla/bajadas/desde", { numero });
+      addToast(`Bajada de carro: se cuenta desde el ticket #${numero}`, "success");
       await loadBajadas();
       refreshNomina().catch(() => undefined);
     } catch (e) {
@@ -7002,18 +7013,18 @@ export function App() {
     const [data, materia, corte] = await Promise.all([
       apiGet<BasculaTicket[]>(`/tickets${qs}`),
       apiGet<MateriaPrimaCorreccion[]>("/weighing-tickets/materia-prima").catch(() => [] as MateriaPrimaCorreccion[]),
-      apiGet<{ desde: string | null; ocultos: number }>("/tickets/corte").catch(() => null)
+      apiGet<BasculaCorte>("/tickets/corte").catch(() => null)
     ]);
     setBasculaTickets(data);
     setMateriaPrimaEntries(materia);
-    if (corte) { setBasculaCorte(corte); setBasculaCorteInput(corte.desde ?? ""); }
+    if (corte) { setBasculaCorte(corte); setBasculaCorteInput(corte.numero != null ? String(corte.numero) : ""); }
   }
 
-  // Guarda (o quita, con null) la fecha «Contar tickets desde». Solo es un
-  // filtro de la vista: no cambia ni borra tickets.
-  async function guardarBasculaCorte(desde: string | null) {
-    await apiPut("/tickets/corte", { desde });
-    addToast(desde ? `Báscula: se cuentan los tickets desde el ${desde.split("-").reverse().join("/")}` : "Báscula: se cuentan todos los tickets", "success");
+  // Guarda (o quita, con null) «Contar tickets desde el #» (número de ticket de la
+  // báscula). Solo es un filtro de la vista: no cambia ni borra tickets.
+  async function guardarBasculaCorte(numero: number | null) {
+    await apiPut("/tickets/corte", { numero });
+    addToast(numero != null ? `Báscula: se cuentan los tickets desde el #${numero}` : "Báscula: se cuentan todos los tickets", "success");
     await refreshBasculaTickets();
     apiGetBasculaStatus().then((s) => setBasculaSync(s)).catch(() => undefined);
   }
@@ -13031,21 +13042,24 @@ Motivo (obligatorio):`, "");
               />
             </div>
             {/* «Contar tickets desde»: el historial viejo de la báscula no cuenta como pendiente. */}
-            {(isAdmin || basculaCorte?.desde) && (
+            {(isAdmin || basculaCorte?.desde || basculaCorte?.numero != null) && (
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 12, flexWrap: "wrap", marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--c-border)" }}>
                 <p className="muted" style={{ margin: 0, fontSize: 12.5, maxWidth: 560 }}>
-                  {basculaCorte?.desde
-                    ? <>Se cuentan los tickets desde el <strong>{basculaCorte.desde.split("-").reverse().join("/")}</strong>.{basculaCorte.ocultos > 0 && <> {basculaCorte.ocultos} ticket(s) anteriores sin ingresar no salen en Pendientes (siguen en «Todos»).</>}</>
-                    : "Se cuentan todos los tickets de la báscula. Pon una fecha para que el historial anterior no salga como pendiente."}
+                  {basculaCorte?.numero != null
+                    ? <>Se cuentan los tickets desde el <strong>#{basculaCorte.numero}</strong>{basculaCorte.fecha_numero && <> (del {basculaCorte.fecha_numero.split("-").reverse().join("/")})</>}.{basculaCorte.ocultos > 0 && <> {basculaCorte.ocultos} ticket(s) anteriores sin ingresar no salen en Pendientes (siguen en «Todos»).</>}</>
+                    : basculaCorte?.desde
+                    ? <>Se cuentan los tickets desde el <strong>{basculaCorte.desde.split("-").reverse().join("/")}</strong> (por fecha). Pon el número de ticket para fijarlo exacto.{basculaCorte.ocultos > 0 && <> {basculaCorte.ocultos} ticket(s) anteriores sin ingresar no salen en Pendientes.</>}</>
+                    : "Se cuentan todos los tickets de la báscula. Pon el número de ticket desde el que se empieza a contar, para que el historial anterior no salga como pendiente."}
                 </p>
                 {isAdmin && (
                   <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
-                    <label style={{ margin: 0 }}><span style={{ fontSize: 12 }}>Contar tickets desde</span>
-                      <input type="date" value={basculaCorteInput} onChange={(e) => setBasculaCorteInput(e.target.value)} />
+                    <label style={{ margin: 0 }}><span style={{ fontSize: 12 }}>Contar desde el ticket #</span>
+                      <input type="number" min={1} step={1} inputMode="numeric" style={{ width: 120 }} value={basculaCorteInput}
+                        placeholder={basculaCorte?.ultimo ? `último: ${basculaCorte.ultimo}` : "N.º"} onChange={(e) => setBasculaCorteInput(e.target.value)} />
                     </label>
-                    <button type="button" className="btnSecondary" disabled={!basculaCorteInput || basculaCorteInput === (basculaCorte?.desde ?? "")}
-                      onClick={() => guardarBasculaCorte(basculaCorteInput).catch((err) => addToast(err.message, "error"))}>Guardar</button>
-                    {basculaCorte?.desde && (
+                    <button type="button" className="btnSecondary" disabled={!(Number(basculaCorteInput) >= 1) || Number(basculaCorteInput) === basculaCorte?.numero}
+                      onClick={() => guardarBasculaCorte(Math.trunc(Number(basculaCorteInput))).catch((err) => addToast(err.message, "error"))}>Guardar</button>
+                    {(basculaCorte?.desde || basculaCorte?.numero != null) && (
                       <button type="button" className="btnSecondary" title="Volver a contar todos los tickets"
                         onClick={() => guardarBasculaCorte(null).catch((err) => addToast(err.message, "error"))}>Quitar</button>
                     )}
@@ -21208,7 +21222,7 @@ Motivo (obligatorio):`, "");
               const conMonto = filas.filter((f) => f.entry_id);
               const totalSemana = round2(conMonto.reduce((a, f) => a + Number(f.monto ?? 0), 0));
               const pendienteSemana = round2(conMonto.filter((f) => !f.paid_at).reduce((a, f) => a + Number(f.monto ?? 0), 0));
-              const sinNombre = filas.filter((f) => !f.entry_id && f.bajada_manual !== "__NO__" && !(d?.desde && f.fecha < d.desde));
+              const sinNombre = filas.filter((f) => !f.entry_id && f.bajada_manual !== "__NO__" && !(f.antes_del_corte ?? (d?.desde && f.fecha < d.desde)));
               const arrastreTotal = round2((d?.arrastre ?? []).reduce((a, r) => a + Number(r.monto), 0));
               const porTrabajador = new Map<string, { tickets: number; qq: number; monto: number; pendiente: number }>();
               for (const f of conMonto) {
@@ -21231,7 +21245,7 @@ Motivo (obligatorio):`, "");
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
                     <div className="segmented" role="group" aria-label="Qué tickets ver">
                       <button type="button" className={!bajadaTodo ? "active" : ""} disabled={bajadaBusy} onClick={() => { setBajadaTodo(false); loadBajadas(null, false).catch(() => undefined); }}>📅 Por semana</button>
-                      <button type="button" className={bajadaTodo ? "active" : ""} disabled={bajadaBusy} onClick={() => { setBajadaTodo(true); loadBajadas(null, true).catch(() => undefined); }}>📋 Todo desde {d?.desde ? fmtDia(d.desde) : "el inicio"}</button>
+                      <button type="button" className={bajadaTodo ? "active" : ""} disabled={bajadaBusy} onClick={() => { setBajadaTodo(true); loadBajadas(null, true).catch(() => undefined); }}>📋 Todo desde {d?.desde_numero != null ? `el #${d.desde_numero}` : d?.desde ? fmtDia(d.desde) : "el inicio"}</button>
                     </div>
                     {!bajadaTodo && <>
                     <button type="button" className="btnSecondary" disabled={bajadaBusy || !d} onClick={() => moverSemana(-7)}>◀ Anterior</button>
@@ -21264,7 +21278,7 @@ Motivo (obligatorio):`, "");
                     <tbody>
                       {filas.length === 0 && <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 14 }}>{bajadaTodo ? "No hay tickets de báscula desde esa fecha." : "No hay tickets de báscula en esta semana."}</td></tr>}
                       {filas.map((f) => {
-                        const antesDeInicio = !!(d.desde && f.fecha < d.desde);
+                        const antesDeInicio = !!(f.antes_del_corte ?? (d.desde && f.fecha < d.desde));
                         const noSePaga = f.bajada_manual === "__NO__";
                         const actual = noSePaga ? "" : (f.bajada_manual ?? f.bajada_bascula ?? "");
                         const pagado = !!f.paid_at;
@@ -21377,10 +21391,11 @@ Motivo (obligatorio):`, "");
                   </div>
                   {isAdmin && (
                     <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
-                      <label style={{ margin: 0 }}><span style={{ fontSize: 12 }}>Contar tickets desde</span>
-                        <input type="date" value={bajadaDesde} onChange={(e) => setBajadaDesde(e.target.value)} />
+                      <label style={{ margin: 0 }}><span style={{ fontSize: 12 }}>Contar desde el ticket #{d.desde_numero != null && d.desde ? <span className="muted"> (del {fmtDia(d.desde)})</span> : null}</span>
+                        <input type="number" min={1} step={1} inputMode="numeric" style={{ width: 120 }} value={bajadaDesde}
+                          placeholder={d.ultimo_numero ? `último: ${d.ultimo_numero}` : "N.º"} onChange={(e) => setBajadaDesde(e.target.value)} />
                       </label>
-                      <button type="button" className="btnSecondary" disabled={!bajadaDesde || bajadaDesde === (d.desde ?? "")} onClick={() => guardarBajadaDesde().catch(() => undefined)}>Guardar</button>
+                      <button type="button" className="btnSecondary" disabled={!(Number(bajadaDesde) >= 1) || Number(bajadaDesde) === d.desde_numero} onClick={() => guardarBajadaDesde().catch(() => undefined)}>Guardar</button>
                     </div>
                   )}
                 </div>
@@ -24266,11 +24281,11 @@ Motivo (obligatorio):`, "");
                 { icono: "🚜", donde: `${campoNombre} → ⚙️ Configuración`,
                   que: "Flota y maquinaria, operadores con su tarifa, cuentas (CAJA, BANCO…) y categorías de gasto. La Nómina de Operadores sugiere el pago con esas tarifas.",
                   ir: esMatrizActiva ? () => abrirCampo("config") : undefined },
-                { icono: "⚖️", donde: "Báscula → «Contar tickets desde»",
-                  que: "Fecha desde la que los tickets de la báscula cuentan como pendientes (el historial anterior no).",
+                { icono: "⚖️", donde: "Báscula → «Contar desde el ticket #»",
+                  que: "Número de ticket de la báscula desde el que cuentan como pendientes (el historial anterior no).",
                   ir: visibleTabs.includes("Bascula") ? () => irATab("Bascula") : undefined },
-                { icono: "🚚", donde: "Nómina → Bajada de carro → «Contar desde»",
-                  que: "Fecha desde la que la bajada de carro se paga por aquí (lo anterior se asume pagado).",
+                { icono: "🚚", donde: "Nómina → Bajada de carro → «Contar desde el ticket #»",
+                  que: "Número de ticket desde el que la bajada de carro se paga por aquí (lo anterior se asume pagado).",
                   ir: visibleTabs.includes("Nomina") ? () => { setNominaView("bajada"); loadBajadas().catch(() => undefined); irATab("Nomina"); } : undefined },
                 { icono: "📊", donde: "Costos Operativos → Resultado mensual",
                   que: "Rubros del costo mensual, su enlace con las categorías de Caja y el switch «Aparece en Caja».",
@@ -24474,7 +24489,7 @@ Motivo (obligatorio):`, "");
                     equipos y activos fijos, máquinas y categorías, catálogos de insumos, sacos y repuestos, proveedores, los rubros del
                     Resultado mensual (sus cifras manuales sí se borran) <strong>y la flota/choferes de Transporte</strong>. Los túneles quedan disponibles.
                     La «Bajada de carro» de Nómina vuelve a contar <strong>desde el día del borrado</strong> (los tickets de la báscula se vuelven a
-                    descargar solos; si necesitas bajadas de días anteriores, cambia «Contar desde» en Nómina → Bajada de carro).
+                    descargar solos; si necesitas bajadas anteriores, pon el número de ticket en «Contar desde el ticket #» de Nómina → Bajada de carro).
                   </p>
                   <p className="dangerNote">Esta acción no se puede deshacer. No recupera datos ni restaura una copia de seguridad.</p>
                   {companyReadiness?.reset_transactions_allowed === false && (
