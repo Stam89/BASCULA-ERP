@@ -12,6 +12,7 @@ type Fila = {
 };
 type Respuesta = {
   desde: string; hasta: string;
+  activos?: { fomentos: number; capital: number; interes_acumulado: number; abonado: number; deuda: number };
   totales: { cuentas: number; interes: number; capital: number; saldo_anterior: number; cobrado: number; saldo_en_contra: number; con_saldo_en_contra: number };
   por_mes: Array<{ mes: string; interes: number; cuentas: number }>;
   filas: Fila[];
@@ -85,9 +86,22 @@ export function FomentoIntereses({ accionistaNombre }: { accionistaNombre: strin
           <span>{rango === "todo" ? "desde el inicio" : `${ddmm(fechas.desde)} – ${ddmm(fechas.hasta)}`}</span>
         </div>
         <div className="fomInt__kpi"><small>🤝 Cuentas hechas</small><strong>{t?.cuentas ?? 0}</strong><span>{t?.con_saldo_en_contra ? `${t.con_saldo_en_contra} con saldo en contra` : "ninguna con saldo en contra"}</span></div>
-        <div className="fomInt__kpi"><small>💵 Capital prestado</small><strong>{money((t?.capital ?? 0) + (t?.saldo_anterior ?? 0))}</strong><span>{t?.saldo_anterior ? `incluye ${money(t.saldo_anterior)} de saldos anteriores` : "entregas de esos fomentos"}</span></div>
+        <div className="fomInt__kpi"><small>💵 Capital de esas cuentas</small><strong>{money((t?.capital ?? 0) + (t?.saldo_anterior ?? 0))}</strong><span>{t?.saldo_anterior ? `incluye ${money(t.saldo_anterior)} de saldos anteriores` : "entregas de esos fomentos"}</span></div>
         <div className="fomInt__kpi"><small>🌾 Cobrado con la cosecha</small><strong>{money(t?.cobrado ?? 0)}</strong><span>{t?.saldo_en_contra ? `${money(t.saldo_en_contra)} pasaron como saldo en contra` : "sin saldo en contra"}</span></div>
       </div>
+
+      {data?.activos && data.activos.fomentos > 0 && (
+        <div className="fomInt__activos">
+          <h4>📂 Cartera activa <small>(todavía sin hacer la cuenta · hoy)</small></h4>
+          <div className="fomInt__activosGrid">
+            <span><small>Fomentos</small><strong>{data.activos.fomentos}</strong></span>
+            <span><small>Prestado</small><strong>{money(data.activos.capital)}</strong></span>
+            <span><small>Interés acumulado</small><strong>{money(data.activos.interes_acumulado)}</strong></span>
+            <span><small>Deuda total</small><strong>{money(data.activos.deuda)}</strong></span>
+          </div>
+          <p>El interés acumulado todavía no es ganado: se cuenta como ganado el día que se le hace la cuenta a cada agricultor.</p>
+        </div>
+      )}
 
       {(data?.por_mes.length ?? 0) > 1 && (
         <div className="fomInt__meses">

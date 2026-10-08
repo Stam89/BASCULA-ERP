@@ -196,8 +196,30 @@ fomentosRouter.get("/intereses", asyncRoute(async (req, res) => {
     m.interes = Math.round((m.interes + Number(f.interes)) * 100) / 100; m.cuentas++;
     porMes.set(mes, m);
   }
+  // Cartera ACTIVA (aún sin hacer la cuenta): lo prestado hoy y el interés que va acumulado a la fecha.
+  // Ese interés todavía NO es ganado: se gana (y se congela) cuando se le hace la cuenta.
+  const act = (await pool.query(
+    `SELECT count(*)::int AS fomentos,
+            COALESCE(sum(e.capital), 0)::float AS capital,
+            ROUND(COALESCE(sum(e.interes), 0)::numeric, 2)::float AS interes,
+            COALESCE(sum(p.pagado), 0)::float AS abonado
+       FROM fomentos f
+       LEFT JOIN LATERAL (
+         SELECT sum(fe.valor) AS capital,
+                sum(CASE WHEN fe.es_saldo_anterior THEN fe.valor * f.renta * COALESCE(fe.meses_interes_fijo, 0)
+                         ELSE fe.valor * f.renta / 30.0 * GREATEST(CURRENT_DATE - fe.fecha, 0) END) AS interes
+           FROM fomento_entregas fe WHERE fe.fomento_id = f.id
+       ) e ON true
+       LEFT JOIN LATERAL (SELECT sum(fp.valor) AS pagado FROM fomento_pagos fp WHERE fp.fomento_id = f.id) p ON true
+      WHERE f.accionista_id = $1 AND f.liquidado_at IS NULL AND f.status = 'ACTIVOS'`,
+    [accionistaId]
+  )).rows[0];
   res.json({
     desde: q.desde, hasta: q.hasta,
+    activos: {
+      fomentos: Number(act.fomentos), capital: Number(act.capital), interes_acumulado: Number(act.interes),
+      abonado: Number(act.abonado), deuda: Math.round((Number(act.capital) + Number(act.interes) - Number(act.abonado)) * 100) / 100
+    },
     totales: {
       cuentas: filas.length, interes: sum("interes"), capital: sum("capital"), saldo_anterior: sum("saldo_anterior"),
       cobrado: sum("cobrado"), saldo_en_contra: sum("saldo_en_contra"),
