@@ -172,7 +172,8 @@ export async function anularProcesoProduccion(
   const lotes = await client.query("UPDATE lots SET status = $2::lot_status WHERE id = ANY($1::uuid[]) AND status IN ('PROCESSED', 'IN_PROCESS')", [lotesDelProceso, previo]);
   await client.query(
     `UPDATE processing_batches
-        SET status = 'CANCELLED', finished_at = NULL, anulado_at = now(), anulado_por = $2, anulado_motivo = $3
+        SET status = 'CANCELLED', finished_at = NULL, anulado_at = now(), anulado_por = $2, anulado_motivo = $3,
+            drying_report_id_anulado = drying_report_id, drying_report_id = NULL
       WHERE id = $1`,
     [batchId, opts.userId, opts.motivo]
   );
