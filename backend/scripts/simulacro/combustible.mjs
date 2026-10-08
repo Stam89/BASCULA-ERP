@@ -1,7 +1,7 @@
 // Combustible del motor: fórmula de la planta y reparto por tiempo compartido del quemador.
 // Sobre una COPIA de la base (servidor real en :4001). Usa los túneles reales del Motor 1 de la copia.
 import { montar, check, resumen } from "./sim_base.mjs";
-const S = await montar({ copiar: process.argv[2] !== "nocopia" });
+const S = await montar({ copiar: process.argv[2] !== "nocopia", liberarTuneles: false });
 const { api, q } = S;
 const r2 = (n) => Math.round(Number(n) * 100) / 100;
 const mostrar = (r) => `${r.status} ${typeof r.data === "string" ? r.data.slice(0, 160) : JSON.stringify(r.data).slice(0, 300)}`;
