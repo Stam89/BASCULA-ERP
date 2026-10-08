@@ -49,6 +49,10 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🛍️ Inventario: marcas/empacados en un MODAL (2026-10-08, pedido del dueño)
+- La tarjeta de detalle «Marcas / empacados» ya no se muestra. En «Producto terminado», las filas Producto 0.11 / Producto Corriente son botones («🛍️ Empacado en N marcas · X QQ  Ver ›») que abren el modal `ModalEmpacados` (en `InventarioExistencias.tsx`): granel sin empacar, total empacado y una tarjeta por marca (QQ, barra, estado y presentaciones del catálogo de sacos con sacos vacíos en bodega). La tarjeta de resumen «Marcas» abre todas, agrupadas por 0.11 / Corriente. Si se busca una marca, aparece un atajo para abrirla. Esc / ✕ / clic fuera cierran; en el celular sube desde abajo como hoja.
+- Calidad de cada marca = la misma regla que al vender (`getInventoryProductForBrand` → ARROZ-PILADO-011/CORRIENTE; si no, el nombre con «0.11»/«CORRIENTE»). Se arma en App.tsx (`marcasEmpacadas`, `calidadDeProductoTerminado`, declarados DESPUÉS de `sacosDelActivo` para no caer en TDZ). Solo presentación: no cambia stock ni ventas.
+
 ### 🧵 Inventario → pestaña propia «Sacos» + tarjetas sin huecos (2026-10-08, pedido del dueño; los jefes lo revisan en el CELULAR)
 - Inventario tiene pestañas «📦 Existencias / 🧵 Sacos / 🔧 Repuestos de planta» (`invVista`; Sacos se ve si `manejaSacosPropios`, Repuestos solo Matriz). La sección `#inv-sacos` salió de Existencias; `irASacos()` (alertas del Dashboard) abre la pestaña Sacos.
 - `SacosTablero` (SacosModule.tsx) rediseñado con clases `.sacx*`: 4 tarjetas de color (sacos en bodega, marcas, valor estimado, alertas), barra con «Solo alertas»/Kárdex, grupos con punto de color (`COLOR_GRUPO`), una tarjeta por marca (borde del color del grupo; rojo/naranja si faltante/bajo) con pastillas por presentación (LB, stock, mín). Mismas props: también se usa en Caja → Sacos. Nuevo `SacosMovimientosRecientes` (entradas verdes ⬇ / salidas rojas ⬆). El «Movimiento manual» de la pestaña usa el mismo `submitSackMovement` con selector Entrada/Salida.
