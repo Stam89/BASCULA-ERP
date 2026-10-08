@@ -1893,6 +1893,13 @@ campoRouter.post("/conciliacion/convertir-y-aplicar", asyncRoute(async (req, res
 
     const cli = (await client.query("SELECT id, nombre FROM campo_clientes WHERE id = $1", [body.cliente_id])).rows[0];
     if (!cli) throw new ApiError(404, "Cliente no encontrado");
+    // El crédito de una piladora solo paga fletes de ESA piladora: el parte debe ser suyo.
+    const esDelCliente = parte.cliente_id
+      ? String(parte.cliente_id) === String(cli.id)
+      : String(parte.cliente ?? "").trim().toLowerCase() === String(cli.nombre ?? "").trim().toLowerCase();
+    if (!esDelCliente) {
+      throw new ApiError(409, `Este parte es de «${String(parte.cliente).trim()}», no de «${cli.nombre}»: su crédito no puede pagarlo.`);
+    }
 
     // Valor del servicio: por precio×qq o valor cerrado.
     const qq = Number(parte.qq);
