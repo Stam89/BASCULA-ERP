@@ -3,6 +3,8 @@
 import { montar, check, resumen } from "./sim_base.mjs";
 const S = await montar({ copiar: process.argv[2] !== "nocopia", liberarTuneles: false });
 const { api, q } = S;
+// Este simulacro necesita ver SOLO los túneles ya terminados del Motor 1: si hay secados en proceso en la base real (operación del día), se sacan de su alcance SOLO en la copia.
+await q("UPDATE drying_tunnel_reports SET motor_number = NULL WHERE status = 'IN_PROGRESS'").catch(() => undefined);
 const r2 = (n) => Math.round(Number(n) * 100) / 100;
 const mostrar = (r) => `${r.status} ${typeof r.data === "string" ? r.data.slice(0, 160) : JSON.stringify(r.data).slice(0, 300)}`;
 
