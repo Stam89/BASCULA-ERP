@@ -121,14 +121,6 @@ export function SacosTablero({ sacos, onVerKardex, onConfig }: { sacos: Saco[]; 
   const activos = useMemo(() => sacos.filter((s) => s.activo !== false), [sacos]);
   const alertas = useMemo(() => sacosConAlerta(activos), [activos]);
 
-  const pesos = useMemo(() => {
-    const set = new Set<number>();
-    // Los sacos de subproducto (arrocillo, polvillo) también van en su columna de
-    // peso si lo tienen (son de 100 LB); «Sin peso» queda solo para los que no.
-    activos.forEach((s) => { const p = num(s.peso_lb); if (p > 0) set.add(p); });
-    return [...set].sort((a, b) => b - a);
-  }, [activos]);
-
   const grupos = useMemo(() => {
     const base = soloAlertas ? alertas : activos;
     const porGrupo = new Map<string, Map<string, Saco[]>>();
@@ -146,99 +138,126 @@ export function SacosTablero({ sacos, onVerKardex, onConfig }: { sacos: Saco[]; 
   const valor = activos.reduce((a, s) => a + Math.max(0, num(s.stock)) * num(s.precio_compra_default), 0);
   const marcas = new Set(activos.filter((s) => s.categoria === "MARCA" || s.categoria === "PROPIO").map((s) => s.marca)).size;
 
-  const kpi = (titulo: string, valorTxt: string, sub: string, color = "#0f172a") => (
-    <div style={{ flex: "1 1 150px", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "12px 14px" }}>
-      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase", color: "#64748b" }}>{titulo}</div>
-      <div style={{ fontSize: 24, fontWeight: 800, color, marginTop: 2 }}>{valorTxt}</div>
-      <div style={{ fontSize: 11.5, color: "#64748b" }}>{sub}</div>
+  const kpi = (icono: string, titulo: string, valorTxt: string, sub: string, c1: string, c2: string) => (
+    <div className="sacx__kpi" style={{ ["--c1" as string]: c1, ["--c2" as string]: c2 }}>
+      <span className="sacx__kpiIcono" aria-hidden="true">{icono}</span>
+      <span className="sacx__kpiTitulo">{titulo}</span>
+      <span className="sacx__kpiValor">{valorTxt}</span>
+      <span className="sacx__kpiSub">{sub}</span>
     </div>
   );
-
-  const celda = (s: Saco | undefined) => {
-    if (!s) return <span style={{ color: "#cbd5e1" }}>—</span>;
-    const e = ESTILO[estadoSaco(s)];
-    const minimo = num(s.stock_minimo);
-    return (
-      <span title={`${s.tipo} · ${e.label}${minimo > 0 ? ` · mínimo ${fmt(minimo)}` : " · sin mínimo definido"}`}
-        style={{ display: "inline-block", minWidth: 64, padding: "5px 10px", borderRadius: 999, background: e.bg, border: `1px solid ${e.bd}`, color: e.fg, fontWeight: 800, fontSize: 13, fontVariantNumeric: "tabular-nums" }}>
-        {fmt(num(s.stock))}
-        {minimo > 0 && <span style={{ fontWeight: 600, fontSize: 10.5, opacity: 0.75 }}> / {fmt(minimo)}</span>}
-      </span>
-    );
-  };
+  // El peor estado de la marca colorea su tarjeta (faltante > bajo > sin stock > disponible).
+  const PRIORIDAD: Estado[] = ["NEGATIVO", "BAJO", "SIN_STOCK", "OK"];
+  const peorEstado = (items: Saco[]) => PRIORIDAD.find((e) => items.some((s) => estadoSaco(s) === e)) ?? "OK";
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        {kpi("Sacos en bodega", fmt(totalSacos), `${activos.length} presentaciones activas`)}
-        {kpi("Marcas", String(marcas), "con sacos registrados")}
-        {kpi("Valor estimado", `$${valor.toLocaleString("es-EC", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, "stock × precio de compra")}
-        {kpi("Alertas", String(alertas.length), alertas.length ? "sacos por comprar" : "todo en orden", alertas.length ? "#c2410c" : "#15803d")}
+    <div className="sacx">
+      <div className="sacx__kpis">
+        {kpi("🧵", "Sacos en bodega", fmt(totalSacos), `${activos.length} presentaciones activas`, "#2dd4bf", "#0f766e")}
+        {kpi("🏷️", "Marcas", String(marcas), "con sacos registrados", "#a78bfa", "#6d28d9")}
+        {kpi("💲", "Valor estimado", `$${valor.toLocaleString("es-EC", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, "stock × precio de compra", "#60a5fa", "#1d4ed8")}
+        {alertas.length
+          ? kpi("⚠️", "Alertas", String(alertas.length), "sacos por comprar", "#fb923c", "#c2410c")
+          : kpi("✅", "Alertas", "0", "todo en orden", "#4ade80", "#15803d")}
       </div>
 
-      <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", padding: "12px 14px", borderBottom: "1px solid #eef2f7" }}>
-          <div>
-            <div style={{ fontWeight: 800, fontSize: 15 }}>Stock por marca y presentación</div>
-            <div style={{ fontSize: 12, color: "#64748b" }}>Se descuentan al confirmar la preparación del pedido. Número pequeño = stock mínimo.</div>
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button type="button" className={soloAlertas ? "primary" : "btnSecondary"} onClick={() => setSoloAlertas((v) => !v)} style={{ fontSize: 12 }}>
-              {soloAlertas ? "Ver todos" : `⚠️ Solo alertas (${alertas.length})`}
-            </button>
-            {onVerKardex && <button type="button" className="btnSecondary" onClick={onVerKardex} style={{ fontSize: 12 }}>📄 Kárdex</button>}
-          </div>
+      <div className="sacx__barra">
+        <div className="sacx__barraTxt">
+          <strong>Stock por marca y presentación</strong>
+          <small>Se descuentan al confirmar la preparación del pedido. «mín» = stock mínimo.</small>
         </div>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: "#f8fafc", color: "#475569" }}>
-                <th style={{ textAlign: "left", padding: "9px 14px", fontSize: 11.5, textTransform: "uppercase", letterSpacing: ".04em" }}>Marca / Saco</th>
-                {pesos.map((p) => <th key={p} style={{ textAlign: "center", padding: "9px 10px", fontSize: 11.5 }}>{p} LB{p === 100 ? " · 1 QQ" : p === 25 ? " · @" : ""}</th>)}
-                <th style={{ textAlign: "center", padding: "9px 10px", fontSize: 11.5 }}>Sin peso</th>
-                <th style={{ textAlign: "right", padding: "9px 14px", fontSize: 11.5 }}>Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {grupos.length === 0 && (
-                <tr><td colSpan={pesos.length + 3} style={{ padding: 18, textAlign: "center", color: "#64748b" }}>
-                  {soloAlertas ? "Ningún saco está por debajo de su mínimo." : "No hay sacos registrados. Agrégalos en Configuración → Operación y Planta → Catálogo de sacos."}
-                  {!soloAlertas && onConfig && <> <button type="button" className="vdTarifaLink" onClick={onConfig}>⚙️ Abrir catálogo</button></>}
-                </td></tr>
-              )}
-              {grupos.map(({ grupo, filas }) => [
-                <tr key={`g-${grupo}`}>
-                  <td colSpan={pesos.length + 3} style={{ padding: "8px 14px 4px", fontSize: 11, fontWeight: 800, color: "#0f766e", textTransform: "uppercase", letterSpacing: ".06em", background: "#fcfdfd" }}>{grupo}</td>
-                </tr>,
-                ...filas.map(([fila, items]) => {
-                  const sinPeso = items.filter((s) => !(num(s.peso_lb) > 0));
-                  const total = items.reduce((a, s) => a + num(s.stock), 0);
-                  return (
-                    <tr key={`${grupo}-${fila}`} style={{ borderTop: "1px solid #f1f5f9" }}>
-                      <td style={{ padding: "9px 14px", fontWeight: 700 }}>{fila}</td>
-                      {pesos.map((p) => (
-                        <td key={p} style={{ textAlign: "center", padding: "7px 6px" }}>
-                          {celda(items.find((s) => num(s.peso_lb) === p))}
-                        </td>
-                      ))}
-                      <td style={{ textAlign: "center", padding: "7px 6px" }}>{sinPeso.length ? celda(sinPeso[0]) : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
-                      <td style={{ textAlign: "right", padding: "9px 14px", fontWeight: 800, fontVariantNumeric: "tabular-nums", color: total < 0 ? "#b91c1c" : "#0f172a" }}>{fmt(total)}</td>
-                    </tr>
-                  );
-                })
-              ])}
-            </tbody>
-          </table>
-        </div>
-        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", padding: "10px 14px", borderTop: "1px solid #eef2f7", fontSize: 11.5, color: "#64748b" }}>
-          {(["OK", "BAJO", "NEGATIVO", "SIN_STOCK"] as Estado[]).map((e) => (
-            <span key={e} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <span style={{ width: 10, height: 10, borderRadius: 999, background: ESTILO[e].bg, border: `1px solid ${ESTILO[e].bd}` }} />
-              {ESTILO[e].label}
-            </span>
-          ))}
+        <div className="sacx__acciones">
+          <button type="button" className={soloAlertas ? "primary" : "btnSecondary"} onClick={() => setSoloAlertas((v) => !v)}>
+            {soloAlertas ? "Ver todos" : `⚠️ Solo alertas (${alertas.length})`}
+          </button>
+          {onVerKardex && <button type="button" className="btnSecondary" onClick={onVerKardex}>📄 Kárdex</button>}
         </div>
       </div>
+
+      {grupos.length === 0 && (
+        <p className="sacx__vacio">
+          {soloAlertas ? "Ningún saco está por debajo de su mínimo. ✅" : "No hay sacos registrados. Agrégalos en Configuración → Operación y Planta → Catálogo de sacos."}
+          {!soloAlertas && onConfig && <> <button type="button" className="vdTarifaLink" onClick={onConfig}>⚙️ Abrir catálogo</button></>}
+        </p>
+      )}
+
+      {grupos.map(({ grupo, filas }) => (
+        <section key={grupo} className="sacx__grupo" style={{ ["--cg" as string]: COLOR_GRUPO[grupo] ?? "#64748b" }}>
+          <h4 className="sacx__grupoTitulo"><span className="sacx__punto" aria-hidden="true" />{grupo}<small>{filas.length} {filas.length === 1 ? "marca" : "marcas"}</small></h4>
+          <div className="sacx__marcas">
+            {filas.map(([fila, items]) => {
+              const total = items.reduce((a, s) => a + num(s.stock), 0);
+              const ordenados = [...items].sort((a, b) => num(b.peso_lb) - num(a.peso_lb));
+              return (
+                <article key={`${grupo}-${fila}`} className={`sacx__marca sacx__marca--${peorEstado(items)}`}>
+                  <header className="sacx__marcaCabeza">
+                    <strong>{fila}</strong>
+                    <span className={total < 0 ? "sacx__total sacx__total--neg" : "sacx__total"}>{fmt(total)} <small>sacos</small></span>
+                  </header>
+                  <div className="sacx__pres">
+                    {ordenados.map((s) => {
+                      const e = estadoSaco(s);
+                      const peso = num(s.peso_lb);
+                      const minimo = num(s.stock_minimo);
+                      return (
+                        <span key={s.id} className={`sacx__pill sacx__pill--${e}`}
+                          title={`${s.tipo} · ${ESTILO[e].label}${minimo > 0 ? ` · mínimo ${fmt(minimo)}` : " · sin mínimo definido"}`}>
+                          <b>{peso > 0 ? `${peso} LB${peso === 100 ? " · 1 QQ" : peso === 25 ? " · @" : ""}` : s.tipo}</b>
+                          <span className="sacx__pillNum">{fmt(num(s.stock))}</span>
+                          {minimo > 0 && <small>mín {fmt(minimo)}</small>}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      ))}
+
+      <div className="sacx__leyenda">
+        {(["OK", "BAJO", "NEGATIVO", "SIN_STOCK"] as Estado[]).map((e) => (
+          <span key={e} className={`sacx__pill sacx__pill--${e} sacx__pill--mini`}>{ESTILO[e].label}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Color de cada grupo de sacos (barra lateral de sus tarjetas). */
+const COLOR_GRUPO: Record<string, string> = {
+  "Mis sacos": "#0d9488",
+  "Arroz 0.11": "#16a34a",
+  "Arroz Corriente": "#d97706",
+  "Otras marcas": "#7c3aed",
+  "Subproductos": "#2563eb",
+  "Genéricos": "#64748b",
+  "Usados (segunda)": "#a16207"
+};
+
+/** Últimos movimientos del kárdex de sacos (entradas en verde, salidas en rojo). */
+export function SacosMovimientosRecientes({ movs, limite = 15 }: {
+  movs: Array<{ id: string; tipo: string; movement: "ENTRADA" | "SALIDA"; cantidad: number | string; concepto: string | null; created_at: string }>;
+  limite?: number;
+}) {
+  const lista = movs.slice(0, limite);
+  return (
+    <div className="sacx__movs">
+      {lista.length === 0 && <p className="sacx__vacio">Aún no hay movimientos de sacos.</p>}
+      {lista.map((m) => {
+        const entrada = m.movement === "ENTRADA";
+        return (
+          <div key={m.id} className={`sacx__mov ${entrada ? "sacx__mov--in" : "sacx__mov--out"}`}>
+            <span className="sacx__movIcono" aria-hidden="true">{entrada ? "⬇" : "⬆"}</span>
+            <span className="sacx__movTxt">
+              <strong>{m.tipo}</strong>
+              <small>{new Date(m.created_at).toLocaleString("es-EC", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}{m.concepto ? ` · ${m.concepto}` : ""}</small>
+            </span>
+            <span className="sacx__movNum">{entrada ? "+" : "−"}{fmt(Math.abs(num(m.cantidad)))}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }

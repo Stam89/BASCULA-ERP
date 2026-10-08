@@ -30,6 +30,7 @@ export function InventarioExistencias({ grupos }: { grupos: GrupoStock[] }) {
   const hayAlgo = grupos.some((g) => g.filas.length > 0);
   const irA = (clave: string) => document.getElementById(`invx-${clave}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
 
+  const resumen = grupos.filter((g) => g.filas.length > 0 || ["cascara", "terminado", "marcas", "subproductos"].includes(g.clave));
   const visibles = grupos
     .map((g, i) => ({ g, i, filas: g.filas.filter((f) => (!q || f.product_name.toLowerCase().includes(q)) && (!soloConExistencias || Math.abs(num(f.quantity)) >= 0.0005)) }))
     .filter((x) => x.g.filas.length > 0 && x.filas.length > 0);
@@ -37,8 +38,9 @@ export function InventarioExistencias({ grupos }: { grupos: GrupoStock[] }) {
   return (
     <div className="invx">
       {/* Resumen por categoría */}
-      <div className="invx__resumen">
-        {grupos.filter((g) => g.filas.length > 0 || ["cascara", "terminado", "marcas", "subproductos"].includes(g.clave)).map((g) => {
+      {/* --n = cuántas tarjetas: en pantalla ancha van todas en UNA fila (sin una suelta abajo). */}
+      <div className="invx__resumen" style={{ ["--n" as string]: resumen.length }}>
+        {resumen.map((g) => {
           const i = grupos.indexOf(g);
           const total = totales[i];
           const pct = granTotal > 0 ? Math.max(0, Math.min(100, (Math.max(0, total) / granTotal) * 100)) : 0;

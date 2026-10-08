@@ -8,7 +8,7 @@ import { ClienteSearchInput } from "./components/ClienteSearchInput";
 import { CampanitaNotificaciones } from "./components/Notificaciones";
 import { BuscadorHistorial } from "./components/BuscadorHistorial";
 import { ResultadoMensual, type GanaOperacion } from "./components/ResultadoMensual";
-import { planDeSacos, sobranteLb, SacosAlertaDashboard, SacosCatalogoConfig, SacosPorComprarAlerta, SacosSinMinimosAviso, SacosTablero, type SacoPorComprar } from "./components/SacosModule";
+import { planDeSacos, sobranteLb, SacosAlertaDashboard, SacosCatalogoConfig, SacosMovimientosRecientes, SacosPorComprarAlerta, SacosSinMinimosAviso, SacosTablero, type SacoPorComprar } from "./components/SacosModule";
 import { PedidoCompartirModal, type PedidoCompartirData } from "./components/PedidoCompartir";
 import { RepuestosAlertaDashboard, RepuestosModule, etiquetaCompat, type Repuesto } from "./components/RepuestosModule";
 import { BuscadorCombo } from "./components/BuscadorCombo";
@@ -3284,7 +3284,7 @@ export function App() {
   const [sackMovements, setSackMovements] = useState<SackMovement[]>([]);
   const [sacosPorComprar, setSacosPorComprar] = useState<SacoPorComprar[]>([]);
   // Inventario: existencias (arroz, sacos…) o repuestos de la planta (Matriz).
-  const [invVista, setInvVista] = useState<"existencias" | "repuestos">("existencias");
+  const [invVista, setInvVista] = useState<"existencias" | "sacos" | "repuestos">("existencias");
   // Repuestos para la alerta «por terminarse» del Dashboard (Matriz).
   const [repuestosAlerta, setRepuestosAlerta] = useState<Repuesto[]>([]);
   // Caja ↔ Repuestos de planta: catálogo para comprar (categoría Repuestos) o
@@ -4577,11 +4577,11 @@ export function App() {
     return () => window.removeEventListener("keydown", alTeclear);
   }, [authUser]);
   function irARepuestos() { setInvVista("repuestos"); setActiveTab("Inventario"); }
-  // Desde las alertas del Dashboard: Inventario → Existencias, directo a la sección de sacos.
+  // Desde las alertas del Dashboard: Inventario → pestaña Sacos.
   function irASacos() {
-    setInvVista("existencias");
+    setInvVista("sacos");
     setActiveTab("Inventario");
-    setTimeout(() => document.getElementById("inv-sacos")?.scrollIntoView({ behavior: "smooth", block: "start" }), 350);
+    setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 200);
   }
   // Catálogo de repuestos al elegir en Caja la categoría Repuestos o Mantenimiento (Matriz).
   function cargarRepCatalogo() {
@@ -14634,11 +14634,12 @@ Motivo (obligatorio):`, "");
 
         {activeTab === "Inventario" && (
           <section className="panelGrid">
-            {/* Pestañas: existencias del accionista · repuestos de la planta (solo Matriz). */}
-            {esMatrizActiva && (
-              <nav className="cajaSubNav" style={{ gridColumn: "1 / -1", marginBottom: 0 }}>
+            {/* Pestañas: existencias del accionista · sacos (Matriz o socio con sacos propios) · repuestos de la planta (solo Matriz). */}
+            {(esMatrizActiva || manejaSacosPropios) && (
+              <nav className="cajaSubNav invNav" style={{ gridColumn: "1 / -1", marginBottom: 0 }}>
                 <button type="button" className={invVista === "existencias" ? "active" : ""} onClick={() => setInvVista("existencias")}>📦 Existencias</button>
-                <button type="button" className={invVista === "repuestos" ? "active" : ""} onClick={() => setInvVista("repuestos")}>🔧 Repuestos de planta</button>
+                {manejaSacosPropios && <button type="button" className={invVista === "sacos" ? "active" : ""} onClick={() => setInvVista("sacos")}>🧵 Sacos</button>}
+                {esMatrizActiva && <button type="button" className={invVista === "repuestos" ? "active" : ""} onClick={() => setInvVista("repuestos")}>🔧 Repuestos de planta</button>}
               </nav>
             )}
             {esMatrizActiva && invVista === "repuestos" ? (
@@ -14646,6 +14647,48 @@ Motivo (obligatorio):`, "");
                 puedeEditar={canEdit("Inventario")}
                 avisar={(m, t) => addToast(m, t)}
                 onCambio={() => apiGet<Repuesto[]>("/repuestos").then(setRepuestosAlerta).catch(() => undefined)} />
+            ) : manejaSacosPropios && invVista === "sacos" ? (
+              <div className="sacxVista" style={{ gridColumn: "1 / -1" }}>
+                <div className="sacxVista__cabeza">
+                  <div>
+                    <h2 style={{ margin: 0 }}>🧵 Inventario de Sacos</h2>
+                    <p className="muted" style={{ margin: "2px 0 0", fontSize: 12.5 }}>Marcas, pesos, mínimos y precios: {cfgLink("📦 Catálogo de sacos", "Catálogo de sacos en Configuración") ?? "Configuración → Operación y Planta → Catálogo de sacos"}</p>
+                  </div>
+                </div>
+                <SacosTablero sacos={sacosDelActivo} onConfig={puedeIrAConfig("📦 Catálogo de sacos") ? () => irAConfig("📦 Catálogo de sacos") : undefined} />
+                <div className="sacxVista__abajo">
+                  <section className="sacxCard">
+                    <h3 className="sacxCard__titulo">✍️ Movimiento manual <small>(ajuste de bodega)</small></h3>
+                    <form className="sacxForm" onSubmit={(e) => submitSackMovement(e).catch((err) => addToast(err instanceof Error ? err.message : "No se pudo registrar", "error"))}>
+                      <div className="sacxForm__seg" role="group" aria-label="Tipo de movimiento">
+                        <button type="button" className={sackMovForm.movement === "ENTRADA" ? "on in" : ""} onClick={() => setSackMovForm(p => ({ ...p, movement: "ENTRADA" }))}>⬇ Entrada</button>
+                        <button type="button" className={sackMovForm.movement === "SALIDA" ? "on out" : ""} onClick={() => setSackMovForm(p => ({ ...p, movement: "SALIDA" }))}>⬆ Salida</button>
+                      </div>
+                      <label>Saco
+                        <select required value={sackMovForm.sack_id} onChange={e => setSackMovForm(p => ({ ...p, sack_id: e.target.value }))}>
+                          <option value="">— Seleccionar —</option>
+                          {sacosDelActivo.filter(s => s.activo !== false).map(s => (<option key={s.id} value={s.id}>{s.tipo} ({Number(s.stock)})</option>))}
+                        </select>
+                      </label>
+                      <div className="sacxForm__fila">
+                        <label>Cantidad
+                          <input required type="number" min="1" step="1" inputMode="numeric" value={sackMovForm.cantidad} onChange={e => setSackMovForm(p => ({ ...p, cantidad: e.target.value }))} />
+                        </label>
+                        <label>Concepto
+                          <input value={sackMovForm.concepto} onChange={e => setSackMovForm(p => ({ ...p, concepto: e.target.value }))} placeholder="Compra / Uso..." />
+                        </label>
+                      </div>
+                      <button type="submit" className={`sacxForm__ok ${sackMovForm.movement === "ENTRADA" ? "in" : "out"}`}>
+                        {sackMovForm.movement === "ENTRADA" ? "⬇ Registrar entrada" : "⬆ Registrar salida"}
+                      </button>
+                    </form>
+                  </section>
+                  <section className="sacxCard">
+                    <h3 className="sacxCard__titulo">🕘 Últimos movimientos</h3>
+                    <SacosMovimientosRecientes movs={sackMovements} />
+                  </section>
+                </div>
+              </div>
             ) : (<>
             {/* Cabecera del panel de existencias + acciones */}
             <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 12 }}>
@@ -14653,7 +14696,7 @@ Motivo (obligatorio):`, "");
                 <h2 style={{ marginBottom: 2 }}>📦 Inventario</h2>
                 <p className="muted" style={{ margin: 0 }}>Panel de existencias del accionista activo.</p>
               </div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <div className="invAcciones">
                 {accionistas.length > 1 && (
                   <button type="button" className="btnSecondary" onClick={() => setTransferLoteOpen(true)}>🔄 Transferir Lote</button>
                 )}
@@ -14672,55 +14715,6 @@ Motivo (obligatorio):`, "");
                 { clave: "subproductos", titulo: "Subproductos", ayuda: "Arrocillo, polvillo y otros que salen del pilado", icono: "🌿", color: "#60a5fa", color2: "#1d4ed8", filas: byproductStockRows },
                 ...(otherStockRows.length > 0 ? [{ clave: "otros", titulo: "Otros stocks", ayuda: "Productos fuera de las categorías anteriores", icono: "📦", color: "#94a3b8", color2: "#475569", filas: otherStockRows }] : [])
               ] as GrupoStock[]} />
-            </div>
-
-            {/* Sacos (solo Matriz). */}
-            <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 14, alignItems: "start" }}>
-              {/* ── Inventario de Sacos (cuarto cuadrante, balancea el grid) ──
-                  Los sacos son propiedad exclusiva de la Matriz. Un socio
-                  operativo no maneja empaques: se oculta por completo (tabla +
-                  formulario de movimientos). Solo visible en contexto Matriz. */}
-              {manejaSacosPropios && (
-              <section id="inv-sacos" style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, background: "#fbfdfc", scrollMarginTop: 80 }}>
-                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
-                  <h3 style={{ margin: 0 }}>📦 Inventario de Sacos</h3>
-                  <span className="muted" style={{ fontSize: 12 }}>Marcas, pesos, mínimos y precios: {cfgLink("📦 Catálogo de sacos", "Catálogo de sacos en Configuración") ?? "Configuración → Operación y Planta → Catálogo de sacos"}</span>
-                </div>
-                <SacosTablero sacos={sacosDelActivo} onConfig={puedeIrAConfig("📦 Catálogo de sacos") ? () => irAConfig("📦 Catálogo de sacos") : undefined} />
-                <div style={{ fontWeight: 700, fontSize: 13, margin: "14px 0 6px" }}>Movimiento manual (ajuste de bodega)</div>
-                <form onSubmit={submitSackMovement} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10, alignItems: "end", background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
-                  <label style={{ fontSize: 12, fontWeight: 600 }}>Tipo
-                    <select required value={sackMovForm.sack_id} onChange={e => setSackMovForm(p => ({ ...p, sack_id: e.target.value }))}
-                      style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}>
-                      <option value="">— Seleccionar —</option>
-                      {sacosDelActivo.filter(s => s.activo !== false).map(s => (<option key={s.id} value={s.id}>{s.tipo} ({Number(s.stock)})</option>))}
-                    </select>
-                  </label>
-                  <label style={{ fontSize: 12, fontWeight: 600 }}>Movimiento
-                    <select value={sackMovForm.movement} onChange={e => setSackMovForm(p => ({ ...p, movement: e.target.value as "ENTRADA"|"SALIDA" }))}
-                      style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}>
-                      <option value="ENTRADA">⬇ ENTRADA</option>
-                      <option value="SALIDA">⬆ SALIDA</option>
-                    </select>
-                  </label>
-                  <label style={{ fontSize: 12, fontWeight: 600 }}>Cantidad
-                    <input required type="number" min="1" step="1" value={sackMovForm.cantidad}
-                      onChange={e => setSackMovForm(p => ({ ...p, cantidad: e.target.value }))}
-                      style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
-                  </label>
-                  <label style={{ fontSize: 12, fontWeight: 600 }}>Concepto
-                    <input value={sackMovForm.concepto}
-                      onChange={e => setSackMovForm(p => ({ ...p, concepto: e.target.value }))}
-                      style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }}
-                      placeholder="Compra / Uso..." />
-                  </label>
-                  <button type="submit" style={{ padding: "7px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontWeight: 700,
-                    background: sackMovForm.movement === "ENTRADA" ? "var(--c-brand)" : "#dc2626", color: "#fff", fontSize: 12 }}>
-                    Registrar
-                  </button>
-                </form>
-              </section>
-              )}
             </div>
 
             <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
