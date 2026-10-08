@@ -102,6 +102,12 @@ try {
   const noMatriz = await api("GET", `/nomina-semanal/vista?hasta=${hoy}`, undefined, stalyn);
   check(noMatriz.status === 403, "D5. el cierre semanal es solo de la matriz (el socio recibe 403)", noMatriz.status);
 
+  // La cuadrilla es solo de la matriz: un socio no paga ni da anticipos con su caja
+  const sPago = await api("POST", "/cuadrilla/pay-worker", { worker_name: W, from: hoy, to: hoy, cash_register_id: cajaS.id }, stalyn);
+  const sAdv = await api("POST", "/cuadrilla/advances", { worker_name: "X", amount: 5, cash_register_id: cajaS.id }, stalyn);
+  const sBaj = await api("POST", "/cuadrilla/bajadas/pagar", { cash_register_id: cajaS.id }, stalyn);
+  check(sPago.status === 403 && sAdv.status === 403 && sBaj.status === 403, "E1. un socio NO puede pagar cuadrilla, bajadas ni dar anticipos de cuadrilla (403)", [sPago.status, sAdv.status, sBaj.status]);
+
   const h = await revisar((sql) => q(sql));
   check(h.length === 0, `Z. las ${TOTAL_REGLAS} reglas de consistencia se cumplen`, h.map((x) => x.error ? `${x.regla}: ${x.error}` : `${x.regla} → ${JSON.stringify(x.filas)}`));
 } catch (e) { console.log("⛔", e.message, e.stack?.split("\n")[1]); } finally { const f = resumen(); await S.cerrar(); process.exit(f ? 1 : 0); }

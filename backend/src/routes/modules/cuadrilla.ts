@@ -6,11 +6,20 @@ import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { avisarSobregiro, exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
+import { getMatrizId } from "../../services/matriz.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { registrarSacosRecuperados, revertirSacosRecuperados } from "../../services/sacos.js";
 import { armarRoster, canonico, evaluarNombre, type Evaluacion } from "../../services/bajada-nombres.js";
 
 export const cuadrillaRouter = Router();
+
+/** La cuadrilla es solo de la Matriz: pagos y anticipos no se hacen con la caja de un socio. */
+async function exigirMatrizCuadrilla(req: unknown): Promise<void> {
+  const acc = (req as AuthenticatedRequest).accionistaId;
+  if (!acc || acc !== (await getMatrizId())) {
+    throw new ApiError(403, "La cuadrilla es de la Matriz: cambia al accionista principal para pagar o dar anticipos.");
+  }
+}
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 type Queryable = { query: typeof pool.query };
@@ -1071,6 +1080,7 @@ cuadrillaRouter.post("/advances", asyncRoute(async (req, res) => {
     // Si el anticipo se entrega en efectivo desde una caja, sale de ella (igual que los anticipos de mano de obra).
     cash_register_id: z.string().uuid().optional()
   }).parse(req.body);
+  await exigirMatrizCuadrilla(req);
 
   const row = await inTransaction(async (client) => {
     if (body.cash_register_id) {
@@ -1100,6 +1110,7 @@ cuadrillaRouter.post("/advances", asyncRoute(async (req, res) => {
 // Salda (total o parcial) un anticipo pendiente.
 cuadrillaRouter.post("/advances/:id/settle", asyncRoute(async (req, res) => {
   const body = z.object({ amount: z.number().positive().optional() }).parse(req.body);
+  await exigirMatrizCuadrilla(req);
   // Con candado: dos «saldar» a la vez no pueden leer el mismo saldo y pisarse.
   const row = await inTransaction(async (client) => {
     const current = await client.query("SELECT balance FROM cuadrilla_advances WHERE id = $1 FOR UPDATE", [req.params.id]);
@@ -1198,6 +1209,7 @@ cuadrillaRouter.post("/pay-worker", asyncRoute(async (req, res) => {
     cash_register_id: z.string().uuid()
   }).parse(req.body);
   const user = (req as AuthenticatedRequest).user;
+  await exigirMatrizCuadrilla(req);
 
   const result = await inTransaction(async (client) => {
     await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, (req as AuthenticatedRequest).accionistaId);
@@ -1626,6 +1638,7 @@ export async function pagarBajadasPendientes(
 cuadrillaRouter.post("/bajadas/pagar", asyncRoute(async (req, res) => {
   const body = z.object({ cash_register_id: z.string().uuid(), hasta: FECHA_CORTE }).parse(req.body);
   const user = (req as AuthenticatedRequest).user;
+  await exigirMatrizCuadrilla(req);
   const out = await inTransaction(async (client) => {
     await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, (req as AuthenticatedRequest).accionistaId);
     const previa = await pagarBajadasPendientes(client, { cashRegisterId: body.cash_register_id, hasta: body.hasta, userId: user?.id ?? null }, false);
