@@ -176,7 +176,7 @@ export function SacosTablero({ sacos, onVerKardex, onConfig }: { sacos: Saco[]; 
 
       {grupos.length === 0 && (
         <p className="sacx__vacio">
-          {soloAlertas ? "Ningún saco está por debajo de su mínimo. ✅" : "No hay sacos registrados. Agrégalos en Configuración → Operación y Planta → Catálogo de sacos."}
+          {soloAlertas ? "Ningún saco está por debajo de su mínimo. ✅" : "No hay sacos registrados. Agrégalos en Configuración → Planta y productos → Catálogo de sacos."}
           {!soloAlertas && onConfig && <> <button type="button" className="vdTarifaLink" onClick={onConfig}>⚙️ Abrir catálogo</button></>}
         </p>
       )}

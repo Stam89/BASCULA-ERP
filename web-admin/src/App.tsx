@@ -14736,7 +14736,7 @@ Motivo (obligatorio):`, "");
                 <div className="sacxVista__cabeza">
                   <div>
                     <h2 style={{ margin: 0 }}>🧵 Inventario de Sacos</h2>
-                    <p className="muted" style={{ margin: "2px 0 0", fontSize: 12.5 }}>Marcas, pesos, mínimos y precios: {cfgLink("📦 Catálogo de sacos", "Catálogo de sacos en Configuración") ?? "Configuración → Operación y Planta → Catálogo de sacos"}</p>
+                    <p className="muted" style={{ margin: "2px 0 0", fontSize: 12.5 }}>Marcas, pesos, mínimos y precios: {cfgLink("📦 Catálogo de sacos", "Catálogo de sacos en Configuración") ?? "Configuración → Planta y productos → Catálogo de sacos"}</p>
                   </div>
                 </div>
                 <SacosTablero sacos={sacosDelActivo} onConfig={puedeIrAConfig("📦 Catálogo de sacos") ? () => irAConfig("📦 Catálogo de sacos") : undefined} />
