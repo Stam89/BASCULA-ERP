@@ -72,6 +72,13 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
   { modulo: "Secadoras", nombre: "Combustible: el detalle por túnel (motor_fuel_partes) suma el registro", sql: `
     SELECT m.id FROM motor_fuel_records m JOIN motor_fuel_partes p ON p.motor_fuel_id = m.id GROUP BY m.id
      HAVING abs(m.gas_costo + m.diesel_costo - sum(p.gas + p.diesel)) > 0.02` },
+  { modulo: "Báscula", nombre: "Tickets ya ingresados que la báscula cambió después (últimos 7 días): revisa el peso o la calificación", sql: `
+    SELECT raw_payload->>'numeroTicket' AS ticket, gross_weight::float AS bruto_erp, tare_weight::float AS tara_erp, qualification::float AS calif_erp,
+           raw_payload->'cambioPosterior' AS cambio_en_bascula
+      FROM mobile_synced_tickets
+     WHERE raw_payload ? 'cambioPosterior' AND (weighing_ticket_id IS NOT NULL OR liquidated_at IS NOT NULL)
+       AND (raw_payload->'cambioPosterior'->>'en')::timestamptz > now() - interval '7 days'
+     LIMIT 20` },
   // ── Arranque / selección ──
   { modulo: "Saldos", nombre: "Saldos iniciales vigentes: su cuenta/anticipo existe", sql: `
     SELECT si.id, si.tipo FROM saldos_iniciales si WHERE si.anulado_at IS NULL AND si.tipo IN ('CXC','CXP') AND si.ref_id IS NOT NULL

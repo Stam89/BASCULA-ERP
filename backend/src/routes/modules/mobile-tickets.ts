@@ -689,7 +689,9 @@ mobileTicketsRouter.post("/sync", asyncRoute(async (req, res) => {
         mobile_created_at = EXCLUDED.mobile_created_at,
         mobile_updated_at = EXCLUDED.mobile_updated_at,
         synced_at = now(),
-        raw_payload = EXCLUDED.raw_payload`,
+        raw_payload = EXCLUDED.raw_payload
+      -- Un ticket que el ERP ya ingresó o liquidó NO se pisa desde la tablet (deshacería una liquidación ya pagada).
+      WHERE mobile_synced_tickets.weighing_ticket_id IS NULL AND mobile_synced_tickets.liquidated_at IS NULL`,
       [
         ticket.id,
         body.deviceId,
@@ -834,6 +836,28 @@ export async function importBasculaTickets(
     );
     if (saved.rowCount) {
       imported.push({ numeroTicket: t.numeroTicket, id: String(saved.rows[0].id) });
+    } else {
+      // No se actualizó: o llegó un dato más viejo, o el ticket YA se ingresó/liquidó y la báscula lo cambió después.
+      // En el segundo caso el ERP conserva lo que ya compró y paga, pero deja MARCADO el cambio para que se revise
+      // (el control de integridad lo muestra durante 7 días).
+      const numero = String(t.numeroTicket).replace(/\D/g, "").replace(/^0+/, "") || "0";
+      await pool.query(
+        `UPDATE mobile_synced_tickets
+            SET raw_payload = jsonb_set(raw_payload, '{cambioPosterior}', $5::jsonb)
+          WHERE COALESCE(NULLIF(raw_payload->>'firebaseNegocioId', ''), 'principal') = $1
+            AND lower(COALESCE(NULLIF(raw_payload->>'modo', ''), 'principal')) = 'principal'
+            AND COALESCE(NULLIF(ltrim(regexp_replace(COALESCE(raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '0'), ''), '0') = $2
+            AND (weighing_ticket_id IS NOT NULL OR liquidated_at IS NOT NULL)
+            AND mobile_updated_at <= $3
+            AND (gross_weight <> $4::numeric OR tare_weight <> $6::numeric OR qualification <> $7::numeric)
+            AND (raw_payload->'cambioPosterior' IS NULL
+                 OR (raw_payload->'cambioPosterior'->>'pesoBruto')::numeric <> $4::numeric
+                 OR (raw_payload->'cambioPosterior'->>'pesoTara')::numeric <> $6::numeric
+                 OR (raw_payload->'cambioPosterior'->>'calificacion')::numeric <> $7::numeric)`,
+        [idScope || "principal", numero, ts, t.pesoBruto,
+         JSON.stringify({ pesoBruto: t.pesoBruto, pesoTara: t.pesoTara, calificacion: t.calificacion, en: new Date().toISOString() }),
+         t.pesoTara, t.calificacion]
+      );
     }
     } catch (err) {
       // Un ticket que falle al guardar (dato raro que pasa el esquema pero no la
@@ -848,7 +872,7 @@ export async function importBasculaTickets(
 // Importa tickets en el formato NATIVO de la app de báscula (por ejemplo desde
 // un puente que los lee de Firebase). Solo la web lo usa, así que exige sesión:
 // abierto permitía inyectar tickets falsos desde cualquier equipo de la red.
-mobileTicketsRouter.post("/import-bascula", requireAuth, asyncRoute(async (req, res) => {
+mobileTicketsRouter.post("/import-bascula", requireAuth, resolveAccionista, exigirEscrituraEn("tickets", ["Bascula"]), asyncRoute(async (req, res) => {
   const body = basculaImportSchema.parse(req.body);
   const result = await importBasculaTickets(body.tickets, body.deviceId);
   res.status(201).json(result);
@@ -857,7 +881,7 @@ mobileTicketsRouter.post("/import-bascula", requireAuth, asyncRoute(async (req, 
 // Trae los tickets desde Firebase ahora mismo (botón "Importar" en la app).
 // Con { full: true } ignora la marca incremental y re-lee las colecciones
 // completas (recuperación tras borrar datos; la importación es idempotente).
-mobileTicketsRouter.post("/refresh-firebase", requireAuth, asyncRoute(async (req, res) => {
+mobileTicketsRouter.post("/refresh-firebase", requireAuth, resolveAccionista, exigirEscrituraEn("tickets", ["Bascula"]), asyncRoute(async (req, res) => {
   const body = z.object({
     full: z.boolean().optional(),
     force: z.boolean().optional(),
@@ -877,7 +901,7 @@ mobileTicketsRouter.post("/refresh-firebase", requireAuth, asyncRoute(async (req
 
 // Diagnóstico liviano para ver si el ERP está mirando el negocio Firebase
 // correcto y cuántos tickets hay en cada negocio encontrado.
-mobileTicketsRouter.get("/firebase-diagnostics", requireAuth, asyncRoute(async (_req, res) => {
+mobileTicketsRouter.get("/firebase-diagnostics", requireAuth, requireAdmin, asyncRoute(async (_req, res) => {
   const { getFirebaseDiagnostics } = await import("../../integrations/bascula-firebase.js");
   res.json(await getFirebaseDiagnostics());
 }));
