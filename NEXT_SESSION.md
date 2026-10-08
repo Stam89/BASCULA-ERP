@@ -49,6 +49,9 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🎨 Inventario: panel de existencias colorido (2026-10-07, pedido del dueño)
+- Nuevo `web-admin/src/components/InventarioExistencias.tsx` (+ estilos `.invx*` en `styles.css`): resumen de tarjetas con degradado e ícono por categoría (cáscara 🌾 ámbar, producto terminado 🍚 verde, marcas 🛍️ violeta, subproductos 🌿 azul, otros gris) con total, n.º de productos y barra de % del total (clic = ir al detalle); debajo, una tarjeta por categoría con cabecera de color, barras proporcionales y estados (Disponible / Sin existencias / En negativo), buscador de producto y casilla «Ocultar sin existencias». Solo presenta: los datos salen de `rawStockRows`, `finishedStockRows`, `packagedStockRows`, `byproductStockRows`, `otherStockRows` (App.tsx). Reemplazó las 4 tarjetas KPI y las 4 tablas simples; el Inventario de Sacos, Kardex, Cuadre y Catálogo siguen igual.
+
 ### 🔥 Túneles auditados (2026-10-07)
 - Simulacro `tuneles.mjs` (lo que usa la pantalla de Secadoras): dos personas llenando el MISMO túnel a la vez → una entra y la otra recibe 409 (nunca 500); un túnel en uso no se llena con otro lote ajeno; al finalizar se libera solo si ya no queda nada en proceso. Todo bien.
 - RETIRADO (2026-10-07, a pedido del dueño): `tunnel-reservations.ts` y `tunnel-occupancy.ts` eran API huérfana (el tab «Reserva de Túneles» ya no existía) y tenían fallos (reservas solapadas a la vez, 500 al completar, túnel «ocupado» sin secado). Se quitaron rutas, permisos y archivos; las TABLAS `tunnel_reservations`, `tunnel_status` y `gas_consumption_reports` se conservan (sin uso; nada se borra de la base). La ocupación real de un túnel sale de los informes de secado (`drying_tunnel_reports`). Si algún día se quiere una agenda de túneles por fechas, rehacerla completa (reservar/cancelar con candado, sin solapes, gas).
