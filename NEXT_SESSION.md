@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🧵 Inventario → pestaña propia «Sacos» + tarjetas sin huecos (2026-10-08, pedido del dueño; los jefes lo revisan en el CELULAR)
+- Inventario tiene pestañas «📦 Existencias / 🧵 Sacos / 🔧 Repuestos de planta» (`invVista`; Sacos se ve si `manejaSacosPropios`, Repuestos solo Matriz). La sección `#inv-sacos` salió de Existencias; `irASacos()` (alertas del Dashboard) abre la pestaña Sacos.
+- `SacosTablero` (SacosModule.tsx) rediseñado con clases `.sacx*`: 4 tarjetas de color (sacos en bodega, marcas, valor estimado, alertas), barra con «Solo alertas»/Kárdex, grupos con punto de color (`COLOR_GRUPO`), una tarjeta por marca (borde del color del grupo; rojo/naranja si faltante/bajo) con pastillas por presentación (LB, stock, mín). Mismas props: también se usa en Caja → Sacos. Nuevo `SacosMovimientosRecientes` (entradas verdes ⬇ / salidas rojas ⬆). El «Movimiento manual» de la pestaña usa el mismo `submitSackMovement` con selector Entrada/Salida.
+- Separación de tarjetas: el resumen de Existencias va en UNA fila en PC (`--n` = n.º de tarjetas) y de a 2 en tablet/celular (si queda una impar ocupa todo el ancho); el detalle usa columnas tipo mosaico (`columns: 340px 3` + `break-inside: avoid`), así una tarjeta corta ya no deja un hueco al lado de una larga. En el celular las pestañas se reparten el ancho y los botones de cabecera (`.invAcciones`) van en 2 columnas.
+- Probado en el navegador a 391 px (celular), 768 px (tablet) y 1366 px: sin desborde horizontal.
+
 ### 🎨 Inventario: panel de existencias colorido (2026-10-07, pedido del dueño)
 - Nuevo `web-admin/src/components/InventarioExistencias.tsx` (+ estilos `.invx*` en `styles.css`): resumen de tarjetas con degradado e ícono por categoría (cáscara 🌾 ámbar, producto terminado 🍚 verde, marcas 🛍️ violeta, subproductos 🌿 azul, otros gris) con total, n.º de productos y barra de % del total (clic = ir al detalle); debajo, una tarjeta por categoría con cabecera de color, barras proporcionales y estados (Disponible / Sin existencias / En negativo), buscador de producto y casilla «Ocultar sin existencias». Solo presenta: los datos salen de `rawStockRows`, `finishedStockRows`, `packagedStockRows`, `byproductStockRows`, `otherStockRows` (App.tsx). Reemplazó las 4 tarjetas KPI y las 4 tablas simples; el Inventario de Sacos, Kardex, Cuadre y Catálogo siguen igual.
 
