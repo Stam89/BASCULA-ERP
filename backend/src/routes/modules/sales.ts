@@ -247,6 +247,12 @@ salesRouter.get("/", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(`
     SELECT s.*,
+           -- Estado de pago REAL: el de su cuenta por cobrar (a crédito pasa a Parcial / Pagado con los abonos).
+           CASE WHEN ar.id IS NULL OR ar.status = 'CANCELLED' THEN s.payment_status
+                WHEN ar.balance <= 0.005 THEN 'PAID'
+                WHEN ar.balance + 0.005 < ar.amount THEN 'PARTIAL'
+                ELSE 'PENDING' END AS payment_status,
+           ar.balance::float AS saldo_pendiente,
            c.full_name AS customer_name,
            c.phone AS customer_phone,
            COUNT(si.id) AS items_count,
@@ -254,8 +260,12 @@ salesRouter.get("/", asyncRoute(async (req, res) => {
     FROM sales s
     LEFT JOIN customers c ON c.id = s.customer_id
     LEFT JOIN sale_items si ON si.sale_id = s.id
+    LEFT JOIN LATERAL (
+      SELECT a.id, a.status, a.amount, a.balance FROM accounts_receivable a
+       WHERE a.sale_id = s.id ORDER BY a.created_at DESC LIMIT 1
+    ) ar ON true
     WHERE s.accionista_id = $1
-    GROUP BY s.id, c.full_name, c.phone
+    GROUP BY s.id, c.full_name, c.phone, ar.id, ar.status, ar.amount, ar.balance
     ORDER BY s.created_at DESC
     LIMIT 500
   `, [accionistaId]);

@@ -258,7 +258,9 @@ receivableRouter.post("/:id/pay", asyncRoute(async (req, res) => {
       [req.params.id, accionistaId]
     );
     if (!ar.rows[0]) throw new ApiError(404, "Cuenta no encontrada para el accionista seleccionado");
-    if (body.cash_register_id) await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
+    // Un abono SIEMPRE entra a una caja abierta: sin caja bajaba la deuda y el dinero no aparecía en ningún lado.
+    if (!body.cash_register_id) throw new ApiError(400, "Abre una caja para registrar el abono: el dinero tiene que entrar a una caja.");
+    await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
 
     const current = Number(ar.rows[0].balance);
     if (body.amount > current + 0.01) {
