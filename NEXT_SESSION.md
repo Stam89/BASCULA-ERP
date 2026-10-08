@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🔐 Permisos de Configuración auditados (2026-10-08)
+- Antes un operador con EDIT del módulo podía cambiar tarifas/catálogos. Ahora `requireAdmin` en: selection PUT /rates; pilado POST/PATCH /tarifas; cash POST/PATCH/DELETE /categories; admin-payroll POST/PUT/DELETE /staff y /reactivar; cuadrilla POST/PUT /activities; sacks POST/PATCH/DELETE y /precio; products POST /. Botón «⚙️ Catálogo de Productos» oculto a no-admin.
+- Siguen operativos (a propósito): categorías de equipos (se usan desde mantenimiento), Campo (permiso propio), clientes.
+- Observación abierta: los GET no se filtran por módulo (cualquier usuario logueado lee por API); lo sensible (usuarios, accionistas, respaldos, auditoría, saldos iniciales, resumen diario) ya es solo admin.
+- Tarifa empaque 25 lb corregida en la base real 22 → 0.22 (dueño: «22 ctv por saco»). Simulacro `operador.mjs` ampliado.
+
 ### 🧾 Auditoría de Ventas y Despachos — parte 2 (2026-10-08)
 - Simulacro `ventas_auditoria.mjs` TODO OK: editar pedido (CxC sigue al total), validaciones (cantidad 0, precio negativo, sin respaldo de stock → 409), preparar 2× a la vez = 1 descuento (arroz y sacos), revertir devuelve exacto, preparado no se edita, cancelar con adelanto → 409, crédito con abonos (PENDING→PARTIAL→PAID), guía conserva su número, cuadrilla del despacho, pedido ajeno → 404.
 - ARREGLOS: (1) `POST /receivable/:id/pay` ahora EXIGE caja abierta (antes, sin caja, bajaba la deuda y el dinero no entraba a ninguna caja). (2) `GET /sales` calcula `payment_status` desde su cuenta por cobrar (+ `saldo_pendiente`): una venta a crédito pasa a Parcial/Pagada con los abonos (antes quedaba «Pendiente» para siempre). (3) **Anular en Caja un cobro/pago de una cuenta** (`cash_movements.reference_type` accounts_receivable/payable) ahora devuelve el saldo a esa cuenta, y si es entre accionistas también a su hermana anulando el movimiento espejo de la otra caja (`revertirAbonoDeCuentaPorAnulacion` en `cuentas-vinculadas.ts`); la Por Pagar a Transporte (campo_servicio) se anula desde Transporte (409). Antes el cliente quedaba debiendo de menos. En la base real no había ninguna anulación (sin datos dañados).
