@@ -6,14 +6,27 @@ import { fileURLToPath, pathToFileURL } from "url";
 import path from "path";
 const BACKEND = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-// Las reglas viven en el servidor (src/services/consistencia.ts → dist). Una sola fuente de verdad.
-const { REGLAS_CONSISTENCIA } = await import(pathToFileURL(path.join(BACKEND, "dist", "services", "consistencia.js")).href);
-const REGLAS = REGLAS_CONSISTENCIA.map((r) => [r.nombre, r.sql]);
+// Las reglas viven en el servidor (src/services/consistencia.ts → dist): una sola fuente de verdad.
+// IMPORTANTE: se cargan de forma PEREZOSA (al revisar), NUNCA al importar este archivo. Importar `dist` antes de que el
+// simulacro apunte a su copia deja a la app conectada a la base REAL (ya ocurrió una vez): por eso `sim_base.mjs` además aborta.
+let _reglas = null;
+async function reglas() {
+  if (!_reglas) {
+    const { REGLAS_CONSISTENCIA } = await import(pathToFileURL(path.join(BACKEND, "dist", "services", "consistencia.js")).href);
+    _reglas = REGLAS_CONSISTENCIA.map((r) => [r.nombre, r.sql]);
+  }
+  return _reglas;
+}
+
+/** Cuántas reglas hay: se completa en la primera revisión (los simulacros lo leen después de revisar). */
+export let TOTAL_REGLAS = 0;
 
 /** Corre todas las reglas con la función q(sql) → filas. Devuelve [{regla, filas, error?}] solo de las que fallan. */
 export async function revisar(q) {
+  const lista = await reglas();
+  TOTAL_REGLAS = lista.length;
   const hallazgos = [];
-  for (const [nombre, sql] of REGLAS) {
+  for (const [nombre, sql] of lista) {
     try {
       const filas = await q(sql);
       if (filas.length) hallazgos.push({ regla: nombre, filas: filas.slice(0, 5), total: filas.length });
@@ -23,7 +36,6 @@ export async function revisar(q) {
   }
   return hallazgos;
 }
-export const TOTAL_REGLAS = REGLAS.length;
 
 // ── Uso por consola: base REAL, solo lectura ──
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
