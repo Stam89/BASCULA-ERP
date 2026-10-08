@@ -416,6 +416,9 @@ type WorkerSummary = {
 // ninguna fila se pierde.
 type NominaGrupo = "planta" | "secadora" | "cuadrilla" | "administrativo";
 // 🚚 Bajada de carro (Nómina): un ticket de báscula = QQ × tarifa a quien bajó.
+/** Secciones de Configuración. */
+type CfgSub = "estado" | "negocio" | "planta" | "nomina" | "tarifas" | "contabilidad" | "socios" | "usuarios" | "sistema";
+
 type BajadaFila = {
   ticket_id: string; numero: string | null; fecha: string; fecha_hora: string | null;
   cliente: string | null; placa: string | null; qq: number;
@@ -2570,7 +2573,10 @@ export function App() {
   const [laborForm, setLaborForm] = useState({ worker_group: "", sacks_moved: "", price_per_sack: "" });
 
   // ── Configuración ─────────────────────────────────────────────────────────
-  const [configSubTab, setConfigSubTab] = useState<"estado" | "operacion" | "nomina" | "tarifas" | "socios" | "secuenciales" | "usuarios">("estado");
+  const [configSubTab, setConfigSubTab] = useState<CfgSub>("estado");
+  // Celular: la Configuración abre en el MENÚ de secciones (mosaico); al elegir una se ve solo esa,
+  // con «← Secciones» para volver. En la PC el menú queda siempre a la izquierda.
+  const [cfgMenuMovil, setCfgMenuMovil] = useState(true);
   // Qué acordeones de Configuración dejó abiertos el usuario, por subpestaña.
   // Es una comodidad por equipo (no dato del negocio), por eso vive en localStorage.
   const acordeonesKey = "bascula-erp:config-acordeones";
@@ -2594,30 +2600,54 @@ export function App() {
   // nómina/mano de obra, tarifas de planta, categorías, usuarios, etc. son de la
   // Matriz: los socios no pagan a esos trabajadores (solo sueldo administrativo).
   const esSocioActivoCfg = accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "SOCIO";
-  const SUBTABS_SOCIO = ["operacion", "tarifas", "socios"] as const;
+  const socioConSacosCfg = esSocioActivoCfg && accionistaEnvejecidoHabilitado(accionistas.find((a) => a.id === activeAccionistaId));
+  const SUBTABS_SOCIO: CfgSub[] = socioConSacosCfg ? ["negocio", "planta", "tarifas", "contabilidad", "socios"] : ["negocio", "tarifas", "contabilidad", "socios"];
   const tarjetaVisibleSocio = (tarjeta: string) =>
     tarjeta.startsWith("🏢 Datos del negocio") || tarjeta.startsWith("🛒 Tarifas por libra") ||
     tarjeta.startsWith("🏦 Cuentas Bancarias") || tarjeta.startsWith("💼 Personal administrativo") ||
     tarjeta.startsWith("📥 Saldos iniciales") || tarjeta.startsWith("📊 Parámetros contables") ||
     (tarjeta.startsWith("📦 Catálogo de sacos") && accionistaEnvejecidoHabilitado(accionistas.find((a) => a.id === activeAccionistaId)));
+  // Secciones de Configuración (orden del menú). El socio ve solo las suyas, con nombres de lo que usa.
+  const CFG_SECCIONES: Array<{ id: CfgSub; icono: string; titulo: string; desc: string; color: string }> = [
+    { id: "estado", icono: "🩺", titulo: "Estado del sistema", desc: "Salud del sistema, checklist y puesta en marcha", color: "#0d9488" },
+    { id: "negocio", icono: "🏢", titulo: "Mi negocio", desc: "Datos, personal de oficina y numeración", color: "#2563eb" },
+    { id: "planta", icono: "🏭", titulo: "Planta y productos", desc: "Pilado, productos, sacos, combustible y máquinas", color: "#d97706" },
+    { id: "nomina", icono: "👷", titulo: "Nómina y mano de obra", desc: "Tarifas de pago y actividades de cuadrilla", color: "#7c3aed" },
+    { id: "tarifas", icono: "🧾", titulo: "Tarifas a clientes", desc: "Servicios, empaque, procesos y venta por libra", color: "#db2777" },
+    { id: "contabilidad", icono: "💰", titulo: "Contabilidad", desc: "Saldos iniciales, capital y categorías de caja", color: "#16a34a" },
+    { id: "socios", icono: "👥", titulo: "Socios y bancos", desc: "Accionistas y cuentas bancarias", color: "#0891b2" },
+    { id: "usuarios", icono: "🔐", titulo: "Usuarios y acceso", desc: "Usuarios, permisos, celular y correos", color: "#4f46e5" },
+    { id: "sistema", icono: "🛡️", titulo: "Respaldos y seguridad", desc: "Copias de seguridad, actividad y borrado de pruebas", color: "#dc2626" }
+  ];
+  const CFG_SOCIO: Partial<Record<CfgSub, { icono: string; titulo: string; desc: string }>> = {
+    negocio: { icono: "🏢", titulo: "Mi negocio", desc: "Datos de tus comprobantes y personal de oficina" },
+    planta: { icono: "📦", titulo: "Mis sacos", desc: "Sacos propios del envejecido" },
+    tarifas: { icono: "🛒", titulo: "Tarifas por libra", desc: "Precios de venta al detalle" },
+    contabilidad: { icono: "💰", titulo: "Contabilidad", desc: "Saldos iniciales y capital" },
+    socios: { icono: "🏦", titulo: "Mis cuentas bancarias", desc: "Bancos y números de cuenta" }
+  };
+  const cfgSecciones = CFG_SECCIONES
+    .filter((x) => !esSocioActivoCfg || SUBTABS_SOCIO.includes(x.id))
+    .map((x) => (esSocioActivoCfg && CFG_SOCIO[x.id] ? { ...x, ...CFG_SOCIO[x.id]! } : x));
+  const cfgSeccionActual = cfgSecciones.find((x) => x.id === configSubTab) ?? cfgSecciones[0] ?? CFG_SECCIONES[0];
   const CONFIG_INDICE: AjusteIndex[] = [
     { sub: "estado", tarjeta: "Estado del sistema", claves: "salud api sincronizacion bascula respaldo backup usuarios accionistas diagnostico checklist empresa lista" },
-    { sub: "operacion", tarjeta: "⚙️ Parámetros de planta", claves: "tarifa de pilado humedad base merma quintal" },
-    { sub: "operacion", tarjeta: "🏢 Datos del negocio", claves: "nombre comercial ruc telefono direccion pie de comprobante encabezado ticket recibo mi negocio nombre transporte cosechadora matriz principal" },
-    { sub: "operacion", tarjeta: "🧺 Catálogo de productos", claves: "crear producto nuevo marca empacado terminado subproducto materia prima presentaciones pesos arroz base calidad 0.11 corriente tarifa por libra venta al detalle mostrador codigo unidad" },
-    { sub: "operacion", tarjeta: "📦 Catálogo de sacos", claves: "mis sacos envejecido propios sacos marcas flor oso extra lira azul conejo 100 50 25 10 libras arroba stock minimo alerta precio eliminar agregar usados segunda cambio de saco recuperado" },
-    { sub: "operacion", tarjeta: "💼 Personal administrativo", claves: "empleado empleados agregar trabajador oficina contadora sueldo administrativo quincenal cargo nomina" },
-    { sub: "operacion", tarjeta: "🏷️ Categorías de caja", claves: "categoria ingreso egreso movimiento caja materiales consumibles repuestos rubro costos operativos" },
-    { sub: "operacion", tarjeta: "🔧 Categorías de Mantenimiento", claves: "areas tipos secciones sistemas equipos mantenimiento maquinas maquina equipo compra de repuestos uso inmediato materiales consumibles hoja de vida" },
-    { sub: "operacion", tarjeta: "✅ Puesta en marcha", claves: "checklist pasos inicio configuracion inicial arranque datos reales produccion" },
-    { sub: "operacion", tarjeta: "📥 Saldos iniciales", claves: "arranque datos reales mes anterior corte fin de mes cuentas por cobrar pagar cxc cxp inventario cascara anticipos saldo anterior deudas" },
-    { sub: "operacion", tarjeta: "📊 Parámetros contables", claves: "capital social resultados acumulados fecha de inicio contable apertura balance general estado de resultados estados financieros patrimonio precio de referencia quintal valorizar inventario" },
-    { sub: "operacion", tarjeta: "🧭 Ajustes dentro de otros módulos", claves: "flota maquinaria operadores choferes tarifa operador transporte cosechadora campo cuentas categorias de gasto contar tickets desde bascula bajada de carro rubros aparece en caja repuestos ubicacion bodega activos fijos vida util depreciacion" },
-    { sub: "operacion", tarjeta: "⚠️ Zona de peligro", claves: "borrar datos de prueba reiniciar operacion reset limpiar pruebas movimientos tickets" },
-    { sub: "operacion", tarjeta: "💾 Respaldos de la base de datos", claves: "backup respaldo copia de seguridad onedrive pg_dump" },
+    { sub: "planta", tarjeta: "⚙️ Parámetros de planta", claves: "tarifa de pilado humedad base merma quintal" },
+    { sub: "negocio", tarjeta: "🏢 Datos del negocio", claves: "nombre comercial ruc telefono direccion pie de comprobante encabezado ticket recibo mi negocio nombre transporte cosechadora matriz principal" },
+    { sub: "planta", tarjeta: "🧺 Catálogo de productos", claves: "crear producto nuevo marca empacado terminado subproducto materia prima presentaciones pesos arroz base calidad 0.11 corriente tarifa por libra venta al detalle mostrador codigo unidad" },
+    { sub: "planta", tarjeta: "📦 Catálogo de sacos", claves: "mis sacos envejecido propios sacos marcas flor oso extra lira azul conejo 100 50 25 10 libras arroba stock minimo alerta precio eliminar agregar usados segunda cambio de saco recuperado" },
+    { sub: "negocio", tarjeta: "💼 Personal administrativo", claves: "empleado empleados agregar trabajador oficina contadora sueldo administrativo quincenal cargo nomina" },
+    { sub: "contabilidad", tarjeta: "🏷️ Categorías de caja", claves: "categoria ingreso egreso movimiento caja materiales consumibles repuestos rubro costos operativos" },
+    { sub: "planta", tarjeta: "🔧 Categorías de Mantenimiento", claves: "areas tipos secciones sistemas equipos mantenimiento maquinas maquina equipo compra de repuestos uso inmediato materiales consumibles hoja de vida" },
+    { sub: "estado", tarjeta: "✅ Puesta en marcha", claves: "checklist pasos inicio configuracion inicial arranque datos reales produccion" },
+    { sub: "contabilidad", tarjeta: "📥 Saldos iniciales", claves: "arranque datos reales mes anterior corte fin de mes cuentas por cobrar pagar cxc cxp inventario cascara anticipos saldo anterior deudas" },
+    { sub: "contabilidad", tarjeta: "📊 Parámetros contables", claves: "capital social resultados acumulados fecha de inicio contable apertura balance general estado de resultados estados financieros patrimonio precio de referencia quintal valorizar inventario" },
+    { sub: "estado", tarjeta: "🧭 Ajustes dentro de otros módulos", claves: "flota maquinaria operadores choferes tarifa operador transporte cosechadora campo cuentas categorias de gasto contar tickets desde bascula bajada de carro rubros aparece en caja repuestos ubicacion bodega activos fijos vida util depreciacion" },
+    { sub: "sistema", tarjeta: "⚠️ Zona de peligro", claves: "borrar datos de prueba reiniciar operacion reset limpiar pruebas movimientos tickets" },
+    { sub: "sistema", tarjeta: "💾 Respaldos de la base de datos", claves: "backup respaldo copia de seguridad onedrive pg_dump" },
     { sub: "nomina", tarjeta: "💲 Tarifas de pago", claves: "pilador estibador secador saca tulas 3 tulas arrocillo guardiania tunel costo de secado tendal cuadrilla nomina mano de obra" },
     { sub: "tarifas", tarjeta: "🛎️ Secado como Servicio", claves: "secado servicio cliente cobro granel saco maquila cxc" },
-    { sub: "operacion", tarjeta: "⛽ Precio del combustible", claves: "combustible gas diesel bombona cilindro medidor secadoras" },
+    { sub: "planta", tarjeta: "⛽ Precio del combustible", claves: "combustible gas diesel bombona cilindro medidor secadoras" },
     { sub: "tarifas", tarjeta: "🧾 Tarifario de Servicios", claves: "socios clientes pilado secado flete seleccion envejecido precio por qq vigencia" },
     { sub: "tarifas", tarjeta: "📦 Tarifas de empaque", claves: "sacos 10 25 50 libras empaque matriz cargo por bulto socio despacho" },
     { sub: "tarifas", tarjeta: "🧹 Tarifas de Procesos", claves: "seleccion envejecido envejecimiento por qq" },
@@ -2627,19 +2657,16 @@ export function App() {
     { sub: "socios", tarjeta: "🧑‍🤝‍🧑 Nuevo accionista", claves: "crear socio accionista codigo" },
     { sub: "socios", tarjeta: "Accionistas registrados", claves: "socios accionistas lista renombrar" },
     { sub: "socios", tarjeta: "🏦 Cuentas Bancarias de Socios", claves: "banco numero de cuenta datos bancarios" },
-    { sub: "secuenciales", tarjeta: "📄 Secuenciales de documentos", claves: "numeracion guia de remision prefijo punto de emision factura" },
+    { sub: "negocio", tarjeta: "📄 Secuenciales de documentos", claves: "numeracion guia de remision prefijo punto de emision factura" },
     { sub: "usuarios", tarjeta: "🌐 Acceso desde el celular", claves: "internet datos moviles celular telefono remoto fuera del local enlace link cloudflare tunel dominio wifi ip red compartir whatsapp app pantalla de inicio" },
     { sub: "usuarios", tarjeta: "✉️ Correo para recuperar claves", claves: "correo gmail email recuperar clave contrasena olvide olvidaste perdio restablecer codigo smtp" },
     { sub: "usuarios", tarjeta: "📬 Resumen diario por correo", claves: "resumen diario correo gmail email reporte cierre del dia informe automatico enviar hora" },
     { sub: "usuarios", tarjeta: "👤 Crear usuario", claves: "usuario clave contrasena rol operador administrador cedula correo recuperacion" },
     { sub: "usuarios", tarjeta: "Usuarios registrados", claves: "usuarios permisos modulos accionistas editar sub pestanas solo ver" },
-    { sub: "usuarios", tarjeta: "🕓 Actividad del sistema", claves: "auditoria log historial quien creo modifico elimino" }
+    { sub: "sistema", tarjeta: "🕓 Actividad del sistema", claves: "auditoria log historial quien creo modifico elimino" }
   ];
 
-  const subLabel: Record<typeof configSubTab, string> = {
-    estado: "Estado del sistema", operacion: "⚙️ Operación y Planta", nomina: "👷 Tarifas de Nómina y Mano de Obra", tarifas: "🧾 Tarifas de Servicios y Clientes",
-    socios: "👥 Socios & Bancos", secuenciales: "📄 Secuenciales", usuarios: "🔐 Control de Usuarios"
-  };
+  const subLabel = Object.fromEntries(cfgSecciones.map((x) => [x.id, `${x.icono} ${x.titulo}`])) as Record<CfgSub, string>;
 
   // Búsqueda sin acentos ni mayúsculas: "parametros" encuentra "Parámetros".
   // (̀-ͯ = marcas diacríticas que deja NFD al separar los acentos.)
@@ -2655,7 +2682,7 @@ export function App() {
 
   // Si el socio estaba en una subpestaña que no usa, volver a «Operación».
   React.useEffect(() => {
-    if (esSocioActivoCfg && !(SUBTABS_SOCIO as readonly string[]).includes(configSubTab)) setConfigSubTab("operacion");
+    if (esSocioActivoCfg && !SUBTABS_SOCIO.includes(configSubTab)) setConfigSubTab("negocio");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [esSocioActivoCfg, configSubTab]);
 
@@ -2684,10 +2711,27 @@ export function App() {
   // anotado cuál abrir (lo hace el efecto de acordeones, ya con el DOM montado).
   function irAAjuste(a: AjusteIndex) {
     setConfigBuscar("");
+    setCfgMenuMovil(false);
     if (a.sub === configSubTab) { window.setTimeout(() => abrirTarjetaEnDom(a.tarjeta), 0); return; }
     abrirTarjetaRef.current = a.tarjeta;
     setConfigSubTab(a.sub);
   }
+  // Salta a una tarjeta por su título; la sección sale del índice (así un cambio de sección no rompe los accesos).
+  function irATarjeta(tarjeta: string) {
+    const a = CONFIG_INDICE.find((x) => x.tarjeta.startsWith(tarjeta));
+    if (a) irAAjuste(a);
+  }
+  // Abre una sección completa (sin tarjeta concreta).
+  function abrirSeccionCfg(sub: CfgSub) {
+    setConfigBuscar("");
+    setConfigSubTab(sub);
+    setCfgMenuMovil(false);
+  }
+  // Título uniforme de las tarjetas: ícono + título + una línea de qué es. El espacio entre
+  // ícono y título mantiene el texto «⚙️ Parámetros…» con el que el buscador ubica la tarjeta.
+  const cfgSum = (icono: string, titulo: React.ReactNode, desc?: React.ReactNode) => (
+    <><span className="cfgSum__ico" aria-hidden="true">{icono}</span>{" "}<span className="cfgSum__txt"><b>{titulo}</b>{desc ? <small>{desc}</small> : null}</span></>
+  );
   // ── Accesos directos a Configuración desde cualquier módulo ──────────────
   // Lleva a la subpestaña de la tarjeta (por su título en CONFIG_INDICE), la
   // despliega y desplaza hasta ella. El efecto de acordeones la abre al montar
@@ -2697,6 +2741,7 @@ export function App() {
     if (!a) return;
     abrirTarjetaRef.current = a.tarjeta;
     setConfigSubTab(a.sub);
+    setCfgMenuMovil(false);
     irATab("Configuracion");
     window.setTimeout(() => abrirTarjetaEnDom(a.tarjeta), 350);
   }
@@ -4544,16 +4589,16 @@ export function App() {
   // Asistente de puesta en marcha: cada paso lleva a la tarjeta de Configuración donde se hace.
   function irAPasoArranque(d: DestinoAsistente) {
     switch (d) {
-      case "negocio": irAAjuste({ sub: "operacion", tarjeta: "🏢 Datos del negocio", claves: "" }); break;
-      case "socios": setConfigBuscar(""); setConfigSubTab("socios"); break;
-      case "usuarios": setConfigBuscar(""); setConfigSubTab("usuarios"); break;
-      case "tarifas": setConfigBuscar(""); setConfigSubTab("tarifas"); break;
-      case "parametros": irAAjuste({ sub: "operacion", tarjeta: "📊 Parámetros contables", claves: "" }); break;
-      case "saldos": irAAjuste({ sub: "operacion", tarjeta: "📥 Saldos iniciales", claves: "" }); break;
-      case "estado": setConfigBuscar(""); setConfigSubTab("estado"); break;
+      case "negocio": irATarjeta("🏢 Datos del negocio"); break;
+      case "socios": abrirSeccionCfg("socios"); break;
+      case "usuarios": abrirSeccionCfg("usuarios"); break;
+      case "tarifas": abrirSeccionCfg("tarifas"); break;
+      case "parametros": irATarjeta("📊 Parámetros contables"); break;
+      case "saldos": irATarjeta("📥 Saldos iniciales"); break;
+      case "estado": abrirSeccionCfg("estado"); break;
       case "campo": abrirCampo("config"); break;
-      case "respaldos": irAAjuste({ sub: "operacion", tarjeta: "💾 Respaldos de la base de datos", claves: "" }); break;
-      case "resumen": irAAjuste({ sub: "usuarios", tarjeta: "📬 Resumen diario por correo", claves: "" }); break;
+      case "respaldos": irATarjeta("💾 Respaldos de la base de datos"); break;
+      case "resumen": irATarjeta("📬 Resumen diario por correo"); break;
     }
   }
   // Resultado del buscador: abre su pantalla y, si esa pantalla tiene caja de búsqueda propia
@@ -8050,7 +8095,7 @@ export function App() {
 
   // Carga de datos de cada subpestaña de Configuración. Va en un EFECTO (antes
   // estaba en el onClick de la pestaña), por dos razones: (1) al entrar a
-  // Configuración el subtab por defecto es "operacion" y sus datos nunca se
+  // Configuración la subpestaña por defecto no cargaba sus datos y nunca se
   // cargaban hasta hacer clic en la pestaña ya activa —«Categorías de caja» y
   // «Categorías de Mantenimiento» salían vacías—; (2) todas las cargas capturan
   // su error y avisan, en vez de dejar una promesa sin manejar.
@@ -8059,10 +8104,11 @@ export function App() {
     const fail = (e: unknown) =>
       addToast(`No se pudo cargar la configuración: ${e instanceof Error ? e.message : "error"}`, "error");
     if (configSubTab === "estado") refreshSystemStatus(true).catch(fail);
-    if (configSubTab === "operacion") { reloadCashCategories().catch(fail); loadMaintCategoriesAll().catch(fail); }
+    if (configSubTab === "planta") loadMaintCategoriesAll().catch(fail);
+    if (configSubTab === "contabilidad") reloadCashCategories().catch(fail);
     if (configSubTab === "socios") loadBankAccounts().catch(fail);
     if (configSubTab === "nomina") refreshCuadrilla().catch(fail); // actividades de cuadrilla viven en Nómina
-    if (configSubTab === "secuenciales") loadSequences().catch(fail);
+    if (configSubTab === "negocio") loadSequences().catch(fail);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, configSubTab, activeAccionistaId]);
 
@@ -22320,63 +22366,54 @@ Motivo (obligatorio):`, "");
         )}
 
         {activeTab === "Configuracion" && (
-          <div className="configLayout">
-            {/* Pestañas verticales (panel lateral) para los parámetros del sistema. */}
-            <aside className="configVTabs">
-              {([
-                ["estado", "Estado del sistema"],
-                ["operacion", "⚙️ Operación y Planta"],
-                ["nomina", "👷 Tarifas de Nómina y Mano de Obra"],
-                ["tarifas", "🧾 Tarifas de Servicios y Clientes"],
-                ["socios", "👥 Socios & Bancos"],
-                ["secuenciales", "📄 Secuenciales"],
-                ["usuarios", "🔐 Control de Usuarios"]
-              ] as const)
-                // Socio: solo sus pestañas, con nombres de lo que realmente usa.
-                .filter(([t]) => !esSocioActivoCfg || (SUBTABS_SOCIO as readonly string[]).includes(t))
-                .map(([t, label]) => (
-                <button key={t} type="button" className={configSubTab === t ? "active" : ""}
-                  onClick={() => setConfigSubTab(t)}>
-                  {esSocioActivoCfg
-                    ? ({ operacion: "🏢 Mi negocio", tarifas: "🛒 Tarifas por libra", socios: "🏦 Mis cuentas bancarias" } as Record<string, string>)[t] ?? label
-                    : label}
-                </button>
-              ))}
-            </aside>
-
-            <div className="configVContent">
-
-            {/* Buscador de ajustes: busca en LAS 6 subpestañas a la vez y salta
-                a la tarjeta (la abre y desplaza). Resuelve el "¿dónde estaba esto?" */}
-            <div style={{ position: "relative", marginBottom: 12 }}>
+          <div className={`configLayout ${cfgMenuMovil ? "configLayout--menu" : "configLayout--seccion"}`}>
+            {/* Buscador de ajustes: busca en TODAS las secciones a la vez y salta a la tarjeta
+                (la abre y desplaza). Resuelve el «¿dónde estaba esto?». */}
+            <div className="cfgTop">
               <input
                 type="search"
+                className="cfgTop__buscar"
                 value={configBuscar}
                 onChange={(e) => setConfigBuscar(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Escape") setConfigBuscar("");
                   if (e.key === "Enter" && configResultados.length > 0) { e.preventDefault(); irAAjuste(configResultados[0]); }
                 }}
-                placeholder="🔍 Buscar ajuste… (ej: humedad, respaldo, RUC, permisos, saco)"
-                style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "1px solid var(--c-border)", fontSize: 13 }}
+                placeholder="🔍 Buscar un ajuste… (humedad, respaldo, RUC, permisos, saco)"
+                aria-label="Buscar un ajuste"
               />
               {configBuscar.trim().length >= 2 && (
-                <div style={{ position: "absolute", zIndex: 20, left: 0, right: 0, marginTop: 4, background: "var(--c-surface)", border: "1px solid var(--c-border)", borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,.12)", overflow: "hidden" }}>
+                <div className="cfgTop__resultados">
                   {configResultados.length === 0 ? (
-                    <div className="muted" style={{ padding: "10px 12px", fontSize: 13 }}>Sin coincidencias.</div>
+                    <div className="muted cfgTop__vacio">Sin coincidencias.</div>
                   ) : configResultados.map((a) => (
-                    <button
-                      key={`${a.sub}-${a.tarjeta}`}
-                      type="button"
-                      onClick={() => irAAjuste(a)}
-                      style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 12px", background: "none", border: "none", borderBottom: "1px solid var(--c-border)", cursor: "pointer", fontSize: 13 }}
-                    >
+                    <button key={`${a.sub}-${a.tarjeta}`} type="button" onClick={() => irAAjuste(a)}>
                       <strong>{a.tarjeta}</strong>
-                      <span className="muted" style={{ display: "block", fontSize: 11.5 }}>{subLabel[a.sub]}</span>
+                      <span className="muted">{subLabel[a.sub]}</span>
                     </button>
                   ))}
                 </div>
               )}
+            </div>
+
+            {/* Menú de secciones: lista a la izquierda (PC) o mosaico (celular). */}
+            <nav className="configVTabs" aria-label="Secciones de Configuración">
+              {cfgSecciones.map((x) => (
+                <button key={x.id} type="button" className={configSubTab === x.id ? "active" : ""} style={{ ["--cs" as string]: x.color }}
+                  aria-current={configSubTab === x.id ? "page" : undefined}
+                  onClick={() => { abrirSeccionCfg(x.id); document.querySelector(".configLayout")?.scrollIntoView({ block: "start" }); }}>
+                  <span className="cfgNav__ico" aria-hidden="true">{x.icono}</span>
+                  <span className="cfgNav__txt"><b>{x.titulo}</b><small>{x.desc}</small></span>
+                </button>
+              ))}
+            </nav>
+
+            <div className="configVContent" style={{ ["--cs" as string]: cfgSeccionActual.color }}>
+            {/* Cabecera de la sección; en el celular trae «← Secciones» para volver al menú. */}
+            <div className="cfgSeccion">
+              <button type="button" className="cfgSeccion__volver" onClick={() => { setCfgMenuMovil(true); document.querySelector(".configLayout")?.scrollIntoView({ block: "start" }); }}>← Secciones</button>
+              <span className="cfgSeccion__ico" aria-hidden="true">{cfgSeccionActual.icono}</span>
+              <span className="cfgSeccion__txt"><b>{cfgSeccionActual.titulo}</b><small>{cfgSeccionActual.desc}</small></span>
             </div>
 
             {/* Aviso de cambios pendientes: se pierden si se sale del módulo,
@@ -22416,13 +22453,13 @@ Motivo (obligatorio):`, "");
                 return "General";
               };
               const readinessAction = (key: string): { label: string; run: () => void } | null => {
-                if (key === "business_name") return { label: "Abrir datos", run: () => { abrirTarjetaRef.current = "🏢 Datos del negocio"; setConfigSubTab("operacion"); } };
+                if (key === "business_name") return { label: "Abrir datos", run: () => irATarjeta("🏢 Datos del negocio") };
                 if (key === "matriz") return { label: "Abrir socios", run: () => setConfigSubTab("socios") };
-                if (key === "correo_recuperacion") return { label: "Ver cómo activarlo", run: () => { abrirTarjetaRef.current = "✉️ Correo para recuperar claves"; setConfigSubTab("usuarios"); } };
+                if (key === "correo_recuperacion") return { label: "Ver cómo activarlo", run: () => irATarjeta("✉️ Correo para recuperar claves") };
                 if (key === "admin" || key === "users") return { label: "Abrir usuarios", run: () => setConfigSubTab("usuarios") };
-                if (key === "app_mode") return { label: "Ver puesta en marcha", run: () => { abrirTarjetaRef.current = "✅ Puesta en marcha"; setConfigSubTab("operacion"); } };
-                if (key === "respaldo_reciente") return { label: "Abrir respaldos", run: () => irAAjuste({ sub: "operacion", tarjeta: "💾 Respaldos de la base de datos", claves: "backup respaldo" }) };
-                if (key === "contabilidad") return { label: "Abrir parámetros", run: () => irAAjuste({ sub: "operacion", tarjeta: "📊 Parámetros contables", claves: "" }) };
+                if (key === "app_mode") return { label: "Ver puesta en marcha", run: () => irATarjeta("✅ Puesta en marcha") };
+                if (key === "respaldo_reciente") return { label: "Abrir respaldos", run: () => irATarjeta("💾 Respaldos de la base de datos") };
+                if (key === "contabilidad") return { label: "Abrir parámetros", run: () => irATarjeta("📊 Parámetros contables") };
                 if (key.startsWith("campo_")) return { label: "Abrir configuración de Campo", run: () => abrirCampo("config") };
                 return null;
               };
@@ -22435,12 +22472,9 @@ Motivo (obligatorio):`, "");
                     .filter((group) => group.checks.length > 0)
                 : [];
               return (
-                <section className="systemStatusPanel">
+                <section className="systemStatusPanel" style={{ order: 1 }}>
                   <div className="systemStatusHeader">
-                    <div>
-                      <h2>Estado del sistema</h2>
-                      <p className="muted">Resumen rápido para confirmar que el ERP está listo para operar.</p>
-                    </div>
+                    <p className="muted" style={{ margin: 0 }}>Resumen rápido para confirmar que el ERP está listo para operar.</p>
                     <button type="button" className="primary" onClick={() => refreshSystemStatus()} disabled={systemStatusBusy}>
                       {systemStatusBusy ? "Actualizando..." : "Actualizar estado"}
                     </button>
@@ -22586,7 +22620,7 @@ Motivo (obligatorio):`, "");
                       )}
 
                       <div className="readinessActions">
-                        <button type="button" onClick={() => setConfigSubTab("operacion")}>Configurar operacion</button>
+                        <button type="button" onClick={() => setConfigSubTab("planta")}>Planta y productos</button>
                         <button type="button" onClick={() => setConfigSubTab("socios")}>Socios y matriz</button>
                         <button type="button" onClick={() => setConfigSubTab("usuarios")}>Usuarios</button>
                         <button type="button" onClick={() => irATab("Caja de Campo")}>Campo</button>
@@ -22601,7 +22635,7 @@ Motivo (obligatorio):`, "");
                     <button type="button" onClick={runBackupNow} disabled={!isAdmin || backupBusy}>
                       {backupBusy ? "Respaldando..." : "Crear respaldo ahora"}
                     </button>
-                    <button type="button" onClick={() => setConfigSubTab("operacion")}>Revisar operación</button>
+                    <button type="button" onClick={() => setConfigSubTab("planta")}>Revisar planta</button>
                     <button type="button" onClick={() => irATab("Caja de Campo")}>Revisar Campo</button>
                     <button type="button" onClick={() => setConfigSubTab("usuarios")}>Revisar usuarios</button>
                   </div>
@@ -22627,10 +22661,10 @@ Motivo (obligatorio):`, "");
             })()}
 
             {/* ── Operación y Planta: parámetros ── */}
-            {configSubTab === "operacion" && !esSocioActivoCfg && (
-              <section className="panelGrid">
-                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>⚙️ Parámetros de planta</summary>
+            {configSubTab === "planta" && !esSocioActivoCfg && (
+              <section className="panelGrid" style={{ order: 1 }}>
+                <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("⚙️", "Parámetros de planta", "Tarifa de pilado y humedad base para calcular la merma")}</summary>
                 <form onSubmit={(e) => savePlantParams(e).catch((err) => addToast(err.message, "error"))}>
                   <p className="muted">Parámetros operativos de la piladora. La humedad base se usa para calcular la merma al pesar en báscula.</p>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -22651,7 +22685,7 @@ Motivo (obligatorio):`, "");
                   {!isAdmin && <p className="muted">Solo un administrador puede cambiar estos parámetros.</p>}
                   <p className="muted" style={{ fontSize: 12 }}>
                     El <strong>costo de secado</strong> (guardianía + por túnel) se edita en{" "}
-                    <button type="button" className="vdTarifaLink" onClick={() => irAAjuste({ sub: "nomina", tarjeta: "💲 Tarifas de pago", claves: "" })}>💲 Tarifas de pago (Nómina)</button>.
+                    <button type="button" className="vdTarifaLink" onClick={() => irATarjeta("💲 Tarifas de pago")}>💲 Tarifas de pago (Nómina)</button>.
                   </p>
                 </form>
                 </details>
@@ -22659,10 +22693,10 @@ Motivo (obligatorio):`, "");
             )}
 
             {/* ── Datos del negocio (Operación y Planta) ── */}
-            {configSubTab === "operacion" && (
-              <section className="panelGrid">
-                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🏢 Datos del negocio y Vista previa de encabezado</summary>
+            {configSubTab === "negocio" && (
+              <section className="panelGrid" style={{ order: 1 }}>
+                <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("🏢", "Datos del negocio", "Nombre, RUC, teléfono y encabezado de comprobantes")}</summary>
                 <form onSubmit={(e) => saveSettings(e).catch((err) => addToast(err.message, "error"))}>
                   <p className="muted">Estos datos aparecen en comprobantes, reportes impresos y documentos operativos.</p>
                   {esSocioActivoCfg && (
@@ -22833,16 +22867,12 @@ Motivo (obligatorio):`, "");
             {/* ── Usuarios ── */}
             {configSubTab === "usuarios" && (
               <section style={{ display: "grid", gridTemplateColumns: "minmax(0, 5fr) minmax(0, 7fr)", gap: 16, alignItems: "start" }} className="configUsersGrid">
-                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>
-                    🌐 Acceso desde el celular (internet) <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· entrar con datos móviles, con su usuario y clave</span>
-                  </summary>
+                <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("🌐", "Acceso desde el celular", "Entrar desde cualquier lugar con datos móviles, con su usuario y clave")}</summary>
                   <AccesoRemoto esAdmin={isAdmin} negocio={(appSettings.business_name || "la piladora").trim()} avisar={addToast} />
                 </details>
-                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>
-                    ✉️ Correo para recuperar claves <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· «¿Olvidaste tu clave?» envía un código al correo del usuario</span>
-                  </summary>
+                <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("✉️", "Correo para recuperar claves", "«¿Olvidaste tu clave?» envía un código al correo del usuario")}</summary>
                   <ConfigCorreoClaves
                     esAdmin={isAdmin}
                     usuariosConCorreo={adminUsers.filter((u) => u.is_active && u.recovery_email).length}
@@ -22851,17 +22881,12 @@ Motivo (obligatorio):`, "");
                     onAbrirMiCorreo={() => setCorreoModalAbierto(true)}
                   />
                 </details>
-                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>
-                    📬 Resumen diario por correo <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· al cierre del día te llega lo que pasó y lo pendiente</span>
-                  </summary>
+                <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("📬", "Resumen diario por correo", "Al cierre del día te llega lo que pasó y lo pendiente")}</summary>
                   <ResumenDiarioConfig esAdmin={isAdmin} avisar={addToast} />
                 </details>
-                <details className="formPanel userCreatePanel" style={{ gridColumn: "1 / -1" }} open>
-                  <summary className="userPanelSummary">
-                    <span>Crear usuario</span>
-                    <small>Nuevo acceso al ERP</small>
-                  </summary>
+                <details className="cfgCard formPanel userCreatePanel" style={{ gridColumn: "1 / -1" }} open>
+                  <summary>{cfgSum("👤", "Crear usuario", "Nuevo acceso al ERP con su rol y sus permisos")}</summary>
                 <form className="userCreateForm" onSubmit={(e) => submitConfigUser(e).catch((err) => addToast(err.message, "error"))}>
                   <div className="userFormIntro">
                     <div>
@@ -23121,8 +23146,8 @@ Motivo (obligatorio):`, "");
                 </form>
                 </details>
 
-                <details className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>Usuarios registrados</summary>
+                <details className="cfgCard tablePanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("👥", "Usuarios registrados", "Editar, permisos por módulo, activar o desactivar")}</summary>
                   {adminUsers.length === 0 ? (
                     <div className="emptyState">
                       <div className="emptyIcon">👥</div>
@@ -23503,8 +23528,8 @@ Motivo (obligatorio):`, "");
               <section style={{ display: "grid", gridTemplateColumns: "minmax(0, 5fr) minmax(0, 7fr)", gap: 14, alignItems: "start" }} className="configSociosGrid">
                 {/* Crear/listar accionistas: solo desde la Matriz. */}
                 {!esSocioActivoCfg && (<>
-                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🧑‍🤝‍🧑 Nuevo accionista</summary>
+                <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("🧑‍🤝‍🧑", "Nuevo accionista", "Crear un socio con su código")}</summary>
                 <form onSubmit={(e) => createAccionista(e).catch((err) => addToast(err.message, "error"))}>
                   <p className="muted">Cada accionista compra y maneja su arroz, inventario, caja y cuentas por separado, usando la misma app.</p>
                   <label>
@@ -23530,8 +23555,8 @@ Motivo (obligatorio):`, "");
                 </form>
                 </details>
 
-                <details className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>Accionistas registrados</summary>
+                <details className="cfgCard tablePanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("📋", "Accionistas registrados", "Socios de la piladora: renombrar y activar")}</summary>
                   {adminAccionistas.length === 0 ? (
                     <div className="emptyState">
                       <div className="emptyIcon">🧑‍🤝‍🧑</div>
@@ -23597,8 +23622,8 @@ Motivo (obligatorio):`, "");
 
                 </>)}
                 {/* ── Cuentas bancarias oficiales de cada socio ── */}
-                <details className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>{esSocioActivoCfg ? "🏦 Mis cuentas bancarias" : "🏦 Cuentas bancarias de socios"}</summary>
+                <details className="cfgCard tablePanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("🏦", esSocioActivoCfg ? "Mis cuentas bancarias" : "Cuentas bancarias de socios", "Bancos y números de cuenta para pagos y depósitos")}</summary>
                   <p className="muted" style={{ marginTop: -4 }}>Registra las cuentas oficiales del socio seleccionado. Agregar una cuenta aquí no abre una jornada ni modifica el saldo de Caja.</p>
                   {isAdmin && (
                     <div className="buttonRow" style={{ marginBottom: 12 }}>
@@ -23699,8 +23724,8 @@ Motivo (obligatorio):`, "");
             {configSubTab === "nomina" && (
               <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 <form className="formPanel" onSubmit={(e) => saveLaborRates(e).catch((err) => addToast(err.message, "error"))}>
-                  <details open>
-                    <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>💲 Tarifas de pago (Pilador, Estibador, Secador y Tendal)</summary>
+                  <details className="cfgCard" open>
+                    <summary>{cfgSum("💲", "Tarifas de pago", "Pilador, estibador, secador, guardianía, túnel y tendal")}</summary>
                   <p className="muted">Egresos: con estas tarifas se calcula automáticamente el pago al personal (Producción, Secadoras y Cuadrilla).</p>
                   <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>Pilador</h2>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -23746,11 +23771,11 @@ Motivo (obligatorio):`, "");
 
             {/* ── ⛽ Precio del combustible (bloque operativo, en Operación y Planta).
                 Mismos campos/guardado de labor_rates que antes. */}
-            {configSubTab === "operacion" && !esSocioActivoCfg && (
-              <section style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 12 }}>
+            {configSubTab === "planta" && !esSocioActivoCfg && (
+              <section style={{ order: 4, display: "flex", flexDirection: "column", gap: 12, marginBottom: 12 }}>
                 <form className="formPanel" onSubmit={(e) => saveLaborRates(e).catch((err) => addToast(err.message, "error"))}>
-                  <details>
-                    <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>⛽ Precio del combustible <span className="muted" style={{ fontWeight: 400 }}>(se usa en Secadoras)</span></summary>
+                  <details className="cfgCard">
+                    <summary>{cfgSum("⛽", "Precio del combustible", "Gas y diésel: Secadoras lo usa para el costo de cada secado")}</summary>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
                     <label><span>$ por kg de gas (bombona)</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.precio_gas_bombona} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, precio_gas_bombona: Number(e.target.value) })} /></label>
                     <label><span>kg por cada 1% del medidor</span><input type="number" step="0.01" min="0.01" disabled={!isAdmin} value={laborRatesForm.gas_bombona_kg_por_punto} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, gas_bombona_kg_por_punto: Number(e.target.value) })} /></label>
@@ -23774,8 +23799,8 @@ Motivo (obligatorio):`, "");
                     mismo guardado (saveLaborRates → /labor/rates) que Nómina y
                     Combustible: se reorganizó solo la vista, no las claves. */}
                 <form className="formPanel" onSubmit={(e) => saveLaborRates(e).catch((err) => addToast(err.message, "error"))}>
-                  <details>
-                    <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🛎️ Secado como Servicio (cobro al cliente)</summary>
+                  <details className="cfgCard">
+                    <summary>{cfgSum("🛎️", "Secado como Servicio", "Lo que se cobra al cliente por secar su arroz")}</summary>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <label><span>Secado A Granel / Directo a Producción ($ x QQ)</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.secado_servicio_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secado_servicio_per_qq: Number(e.target.value) })} /></label>
                     <label><span>Secado En Saco ($ x QQ)</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.secado_servicio_saco_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secado_servicio_saco_per_qq: Number(e.target.value) })} /></label>
@@ -23787,8 +23812,8 @@ Motivo (obligatorio):`, "");
                 </form>
                 {/* 2) Tarifario de Servicios (Socios y Clientes) */}
                 <div className="formPanel">
-                  <details>
-                    <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🧾 Tarifario de Servicios (Socios y Clientes)</summary>
+                  <details className="cfgCard">
+                    <summary>{cfgSum("🧾", "Tarifario de Servicios", "Precios por QQ a socios y clientes: pilado, secado, flete…")}</summary>
                   <p className="muted">Precio por QQ por <strong>socio o cliente</strong> y servicio, con fecha de vigencia. El monto es libre: asigna la tarifa negociada con cada quien.</p>
 
                   {/* Formulario en tarjeta: cuadrícula armónica con iconos */}
@@ -23874,8 +23899,8 @@ Motivo (obligatorio):`, "");
                 </div>
                 {/* 3) Tarifas de empaque / uso de sacos (Matriz) */}
                 <div className="formPanel">
-                  <details>
-                    <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>📦 Tarifas de empaque / uso de sacos (Matriz)</summary>
+                  <details className="cfgCard">
+                    <summary>{cfgSum("📦", "Tarifas de empaque", "Cargo por bulto que la Matriz cobra a los socios al despachar")}</summary>
                   <p className="muted">
                     Precio que {matrizName} cobra a un socio por cada saco al despachar un pedido.
                     Se genera automáticamente como cuenta por cobrar de la matriz y por pagar del socio.
@@ -23902,8 +23927,8 @@ Motivo (obligatorio):`, "");
                 </div>
                 {/* 4) Tarifas de Procesos (Selección / Envejecido) */}
                 <div className="formPanel">
-                  <details>
-                    <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🧹 Tarifas de Procesos (Selección / Envejecido)</summary>
+                  <details className="cfgCard">
+                    <summary>{cfgSum("🧹", "Tarifas de Procesos", "Selección y envejecido, por QQ")}</summary>
                   <p className="muted">
                     Tarifa por defecto ($/QQ) para selección y envejecido. El formulario de «Mandar a selectar»
                     en Selección la lee para autocompletar la «Tarifa por QQ».
@@ -23926,8 +23951,8 @@ Motivo (obligatorio):`, "");
                 </>)}
                 {/* 5) Tarifas por libra (Venta al Detalle) — ya era acordeón */}
                 <div className="formPanel">
-                  <details id="cfg-tarifas-libra">
-                    <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🛒 Tarifas por libra (Venta al Detalle)</summary>
+                  <details className="cfgCard" id="cfg-tarifas-libra">
+                    <summary>{cfgSum("🛒", "Tarifas por libra", "Precios de venta al detalle (mostrador)")}</summary>
                     <p className="muted" style={{ marginTop: 8 }}>
                       Precio por libra de cada producto de mostrador. «Venta Detalle» (Caja) lo usa al elegir el producto:
                       <strong> por Libra</strong> cobra esta tarifa y <strong>por QQ</strong> cobra el quintal (tarifa × {LIBRAS_POR_QQ})
@@ -23982,13 +24007,13 @@ Motivo (obligatorio):`, "");
                 Aquí se agregan/editan/dan de baja los empleados de oficina de la
                 Matriz o de cada socio. El PAGO sigue en Nómina → 💵 Pagos. Mismas
                 funciones que antes estaban en Nómina (submitAdminStaff, etc.). */}
-            {configSubTab === "operacion" && (() => {
+            {configSubTab === "negocio" && (() => {
               const accName = accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "—";
               const totalStaff = adminStaff.reduce((sum, r) => sum + (r.base_salary ?? 0), 0);
               return (
-              <section className="panelGrid">
-                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>💼 Personal administrativo <span className="muted" style={{ fontWeight: 400 }}>(empleados de oficina de {accName} · sueldo quincenal)</span></summary>
+              <section className="panelGrid" style={{ order: 2 }}>
+                <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("💼", "Personal administrativo", <>Empleados de oficina de {accName} · sueldo quincenal</>)}</summary>
                   <p className="muted" style={{ margin: "6px 0 10px" }}>Agrega aquí al personal de oficina (cargo y sueldo base quincenal). El pago se hace en <strong>Nómina → 💵 Pagos</strong> en las fechas de corte.</p>
                   <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.4fr)", gap: 14, alignItems: "start" }} className="configPersonalGrid">
                     <form onSubmit={submitAdminStaff} style={{ display: "grid", gap: 8, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: 12 }}>
@@ -24032,17 +24057,14 @@ Motivo (obligatorio):`, "");
 
             {/* ── Categorías de caja ── */}
             {/* Categorías de caja (Operación y Planta) */}
-            {configSubTab === "operacion" && (
-              <section className="panelGrid">
+            {configSubTab === "planta" && (
+              <section className="panelGrid" style={{ order: 3 }}>
                 {/* Catálogo de sacos del accionista ACTIVO: la Matriz ve sus marcas
                     (ventas/producción); el socio con envejecido (STALYN), solo SUS
                     sacos; quien no maneja sacos (ROVINSON) no ve esta sección. */}
                 {manejaSacosPropios && (
-                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>
-                    📦 Catálogo de sacos{esMatrizActiva ? "" : " · Mis sacos (envejecido)"}{" "}
-                    <span className="muted" style={{ fontWeight: 400 }}>{esMatrizActiva ? "(marcas, pesos, stock mínimo y precios)" : "(tus sacos propios: se compran en tu Caja y se descuentan al recibir el envejecido)"}</span>
-                  </summary>
+                <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("📦", esMatrizActiva ? "Catálogo de sacos" : "Catálogo de sacos · Mis sacos", esMatrizActiva ? "Marcas, pesos, stock mínimo y precios" : "Tus sacos propios: se compran en tu Caja y se descuentan al recibir el envejecido")}</summary>
                   <SacosCatalogoConfig
                     sacos={sacosDelActivo}
                     modo={esMatrizActiva ? "MATRIZ" : "PROPIO"}
@@ -24055,10 +24077,10 @@ Motivo (obligatorio):`, "");
               </section>
             )}
 
-            {configSubTab === "operacion" && !esSocioActivoCfg && (
-              <section className="panelGrid">
-                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🏷️ Categorías de caja</summary>
+            {configSubTab === "contabilidad" && !esSocioActivoCfg && (
+              <section className="panelGrid" style={{ order: 3 }}>
+                <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("🏷️", "Categorías de caja", "Rubros de ingresos y egresos que aparecen en Caja")}</summary>
                 <div>
                   <h3 style={{ marginTop: 8 }}>Nueva categoría</h3>
                   <p className="muted">Se usa en el form de Movimiento, filtrada por tipo de accionista. No afecta movimientos ya registrados.</p>
@@ -24109,10 +24131,10 @@ Motivo (obligatorio):`, "");
 
             {/* ── Categorías de Mantenimiento (áreas / secciones / tipos) ── */}
             {/* Categorías de mantenimiento (Operación y Planta) */}
-            {configSubTab === "operacion" && !esSocioActivoCfg && (
-              <section className="panelGrid">
-                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🔧 Categorías de Mantenimiento</summary>
+            {configSubTab === "planta" && !esSocioActivoCfg && (
+              <section className="panelGrid" style={{ order: 5 }}>
+                <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("🔧", "Categorías de Mantenimiento", "Áreas y tipos de máquinas para su hoja de vida")}</summary>
                 <div>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
                     <div>
@@ -24161,9 +24183,9 @@ Motivo (obligatorio):`, "");
 
             {/* ── Actividad / auditoría ── */}
             {/* Log de actividad (Control de Usuarios) */}
-            {configSubTab === "usuarios" && (
-              <details className="tablePanel">
-                <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🕓 Actividad del sistema</summary>
+            {configSubTab === "sistema" && (
+              <details className="cfgCard tablePanel" style={{ order: 2 }}>
+                <summary>{cfgSum("🕓", "Actividad del sistema", "Quién creó, modificó o eliminó, y cuándo")}</summary>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
                   <div>
                     <p className="muted" style={{ margin: 0 }}>Registro de quién creó, modificó o eliminó información. Se guarda automáticamente.</p>
@@ -24207,13 +24229,11 @@ Motivo (obligatorio):`, "");
             )}
 
             {/* ── 📥 Saldos iniciales: arranque con datos reales al corte de fin de mes ── */}
-            {configSubTab === "operacion" && isAdmin && (
-              <section className="panelGrid">
-                <details className="formPanel" style={{ gridColumn: "1 / -1" }}
+            {configSubTab === "contabilidad" && isAdmin && (
+              <section className="panelGrid" style={{ order: 1 }}>
+                <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}
                   onToggle={(e) => setSaldosInicialesAbierto((e.currentTarget as HTMLDetailsElement).open)}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>
-                    📥 Saldos iniciales <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· lo que tenías al cierre del mes (CxC, CxP, inventario, cáscara, anticipos)</span>
-                  </summary>
+                  <summary>{cfgSum("📥", "Saldos iniciales", "Lo que tenías al cierre del mes: CxC, CxP, inventario, cáscara y anticipos")}</summary>
                   {saldosInicialesAbierto && (
                     <SaldosIniciales
                       key={activeAccionistaId ?? "sin-accionista"}
@@ -24235,13 +24255,11 @@ Motivo (obligatorio):`, "");
             )}
 
             {/* ── 📊 Parámetros contables (financial_settings del accionista ACTIVO) ── */}
-            {configSubTab === "operacion" && isAdmin && (
-              <section className="panelGrid">
-                <details className="formPanel" style={{ gridColumn: "1 / -1" }}
+            {configSubTab === "contabilidad" && isAdmin && (
+              <section className="panelGrid" style={{ order: 2 }}>
+                <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}
                   onToggle={(e) => setParamContablesAbierto((e.currentTarget as HTMLDetailsElement).open)}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>
-                    📊 Parámetros contables <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· capital, resultados anteriores y fecha de inicio de los Estados Financieros</span>
-                  </summary>
+                  <summary>{cfgSum("📊", "Parámetros contables", "Capital, resultados anteriores y fecha de inicio de los Estados Financieros")}</summary>
                   {paramContablesAbierto && (
                     <ParametrosContables
                       key={activeAccionistaId ?? "sin-accionista"}
@@ -24257,18 +24275,16 @@ Motivo (obligatorio):`, "");
             )}
 
             {/* ── 🧺 Catálogo de productos: crear productos ya enlazados (presentaciones, sacos, arroz base, mostrador) ── */}
-            {configSubTab === "operacion" && !esSocioActivoCfg && (
-              <section className="panelGrid">
-                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>
-                    🧺 Catálogo de productos <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· crea productos y marcas ya enlazados con sacos, presentaciones y mostrador</span>
-                  </summary>
+            {configSubTab === "planta" && !esSocioActivoCfg && (
+              <section className="panelGrid" style={{ order: 2 }}>
+                <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("🧺", "Catálogo de productos", "Productos y marcas enlazados con sacos, presentaciones y mostrador")}</summary>
                   <CatalogoProductos
                     puedeEditar={isAdmin}
                     avisar={addToast}
                     onCambio={() => { refresh().catch(() => undefined); refreshSacks().catch(() => undefined); }}
-                    irASaldos={isAdmin ? () => irAAjuste({ sub: "operacion", tarjeta: "📥 Saldos iniciales", claves: "" }) : undefined}
-                    irATarifas={() => irAAjuste({ sub: "tarifas", tarjeta: "🛒 Tarifas por libra", claves: "" })}
+                    irASaldos={isAdmin ? () => irATarjeta("📥 Saldos iniciales") : undefined}
+                    irATarifas={() => irATarjeta("🛒 Tarifas por libra")}
                     irAInventario={visibleTabs.includes("Inventario") ? () => irATab("Inventario") : undefined}
                   />
                 </details>
@@ -24276,7 +24292,7 @@ Motivo (obligatorio):`, "");
             )}
 
             {/* ── 🧭 Ajustes que viven dentro de su módulo (se configuran donde se usan) ── */}
-            {configSubTab === "operacion" && !esSocioActivoCfg && (() => {
+            {configSubTab === "estado" && !esSocioActivoCfg && (() => {
               const accesos: Array<{ icono: string; donde: string; que: string; ir?: () => void }> = [
                 { icono: "🚜", donde: `${campoNombre} → ⚙️ Configuración`,
                   que: "Flota y maquinaria, operadores con su tarifa, cuentas (CAJA, BANCO…) y categorías de gasto. La Nómina de Operadores sugiere el pago con esas tarifas.",
@@ -24298,11 +24314,9 @@ Motivo (obligatorio):`, "");
                   ir: visibleTabs.includes("Estados Financieros") ? () => irATab("Estados Financieros") : undefined }
               ];
               return (
-                <section className="panelGrid">
-                  <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
-                    <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>
-                      🧭 Ajustes dentro de otros módulos <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· se configuran donde se usan</span>
-                    </summary>
+                <section className="panelGrid" style={{ order: 3 }}>
+                  <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}>
+                    <summary>{cfgSum("🧭", "Ajustes dentro de otros módulos", "Accesos directos a lo que se configura donde se usa")}</summary>
                     <p className="muted" style={{ margin: "6px 0 10px" }}>Estos ajustes no están en Configuración porque se manejan en su propio módulo. Aquí tienes el acceso directo.</p>
                     <div className="cfgAccesos">
                       {accesos.map((a) => (
@@ -24325,10 +24339,10 @@ Motivo (obligatorio):`, "");
 
             {/* ── Puesta en marcha / datos ── */}
             {/* Puesta en marcha + datos (Operación y Planta) */}
-            {configSubTab === "operacion" && !esSocioActivoCfg && (
-              <section className="panelGrid">
-                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>✅ Puesta en marcha</summary>
+            {configSubTab === "estado" && !esSocioActivoCfg && (
+              <section className="panelGrid" style={{ order: 2 }}>
+                <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("✅", "Puesta en marcha", "Pasos para arrancar con datos reales")}</summary>
                   {isAdmin && <AsistenteArranque onIr={irAPasoArranque} />}
                   <div className="launchGuide">
                     <div className="launchGuideIntro">
@@ -24352,7 +24366,7 @@ Motivo (obligatorio):`, "");
                           <strong>Datos del negocio</strong>
                           <p>Nombre, telefono, direccion, RUC y texto que saldra en comprobantes.</p>
                         </div>
-                        <button type="button" className="btnGhost" onClick={() => { abrirTarjetaRef.current = "🏢 Datos del negocio"; setConfigSubTab("operacion"); }}>
+                        <button type="button" className="btnGhost" onClick={() => irATarjeta("🏢 Datos del negocio")}>
                           Abrir
                         </button>
                       </article>
@@ -24388,7 +24402,7 @@ Motivo (obligatorio):`, "");
                         <div className="launchStepActions">
                           <button type="button" className="btnGhost" onClick={() => setConfigSubTab("nomina")}>Nómina</button>
                           <button type="button" className="btnGhost" onClick={() => setConfigSubTab("tarifas")}>Servicios</button>
-                          <button type="button" className="btnGhost" onClick={() => setConfigSubTab("secuenciales")}>Secuenciales</button>
+                          <button type="button" className="btnGhost" onClick={() => irATarjeta("📄 Secuenciales de documentos")}>Secuenciales</button>
                         </div>
                       </article>
 
@@ -24399,11 +24413,11 @@ Motivo (obligatorio):`, "");
                           <p>Productos y marcas (con sus presentaciones y sacos), categorias de caja (p. ej. MATERIALES CONSUMIBLES), maquinas por area (las usan Repuestos y Materiales), sacos con stock minimo y precio del combustible.</p>
                         </div>
                         <div className="launchStepActions">
-                          <button type="button" className="btnGhost" onClick={() => irAAjuste({ sub: "operacion", tarjeta: "🧺 Catálogo de productos", claves: "" })}>Productos</button>
-                          <button type="button" className="btnGhost" onClick={() => irAAjuste({ sub: "operacion", tarjeta: "🏷️ Categorías de caja", claves: "" })}>Caja</button>
-                          <button type="button" className="btnGhost" onClick={() => irAAjuste({ sub: "operacion", tarjeta: "🔧 Categorías de Mantenimiento", claves: "" })}>Máquinas</button>
-                          {manejaSacosPropios && <button type="button" className="btnGhost" onClick={() => irAAjuste({ sub: "operacion", tarjeta: "📦 Catálogo de sacos", claves: "" })}>Sacos</button>}
-                          <button type="button" className="btnGhost" onClick={() => irAAjuste({ sub: "operacion", tarjeta: "⛽ Precio del combustible", claves: "" })}>Combustible</button>
+                          <button type="button" className="btnGhost" onClick={() => irATarjeta("🧺 Catálogo de productos")}>Productos</button>
+                          <button type="button" className="btnGhost" onClick={() => irATarjeta("🏷️ Categorías de caja")}>Caja</button>
+                          <button type="button" className="btnGhost" onClick={() => irATarjeta("🔧 Categorías de Mantenimiento")}>Máquinas</button>
+                          {manejaSacosPropios && <button type="button" className="btnGhost" onClick={() => irATarjeta("📦 Catálogo de sacos")}>Sacos</button>}
+                          <button type="button" className="btnGhost" onClick={() => irATarjeta("⛽ Precio del combustible")}>Combustible</button>
                         </div>
                       </article>
 
@@ -24426,7 +24440,7 @@ Motivo (obligatorio):`, "");
                           <p>Si hubo pruebas, borralas (pide la llave maestra del archivo de configuracion): se conservan la configuracion y los catalogos.</p>
                         </div>
                         <div className="launchStepActions">
-                          {esMatrizActiva && <button type="button" className="btnGhost" onClick={() => { abrirTarjetaRef.current = "⚠️ Zona de peligro"; setConfigSubTab("operacion"); }}>Zona de peligro</button>}
+                          {esMatrizActiva && <button type="button" className="btnGhost" onClick={() => irATarjeta("⚠️ Zona de peligro")}>Zona de peligro</button>}
                         </div>
                       </article>
 
@@ -24436,7 +24450,7 @@ Motivo (obligatorio):`, "");
                           <strong>Saldos iniciales (cierre de mes)</strong>
                           <p>Carga lo que tenias al ultimo dia del mes: cuentas por cobrar y por pagar, inventario, cascara y anticipos.</p>
                         </div>
-                        <button type="button" className="btnGhost" onClick={() => irAAjuste({ sub: "operacion", tarjeta: "📥 Saldos iniciales", claves: "" })}>
+                        <button type="button" className="btnGhost" onClick={() => irATarjeta("📥 Saldos iniciales")}>
                           Abrir
                         </button>
                       </article>
@@ -24447,7 +24461,7 @@ Motivo (obligatorio):`, "");
                           <strong>Parámetros contables</strong>
                           <p>Capital social, resultados acumulados y la fecha de inicio contable (el dia siguiente al corte de los saldos iniciales).</p>
                         </div>
-                        <button type="button" className="btnGhost" onClick={() => irAAjuste({ sub: "operacion", tarjeta: "📊 Parámetros contables", claves: "" })}>
+                        <button type="button" className="btnGhost" onClick={() => irATarjeta("📊 Parámetros contables")}>
                           Abrir
                         </button>
                       </article>
@@ -24474,10 +24488,14 @@ Motivo (obligatorio):`, "");
                     </div>
                   </div>
                 </details>
+              </section>
+            )}
 
-                {esMatrizActiva && (
-                <details className="formPanel dangerZone" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>⚠️ Zona de peligro · Borrar datos de prueba</summary>
+            {/* ── 🛡️ Respaldos y seguridad: zona de peligro (al final) ── */}
+            {configSubTab === "sistema" && !esSocioActivoCfg && esMatrizActiva && (
+              <section className="panelGrid" style={{ order: 3 }}>
+                <details className="cfgCard formPanel dangerZone" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("⚠️", "Zona de peligro", "Borrar datos de prueba (no se puede deshacer)")}</summary>
                 <form onSubmit={(e) => submitResetData(e).catch((err) => addToast(err.message, "error"))}>
                   <p className="muted">
                     Reinicia la operación borrando <strong>todos los movimientos operativos de prueba</strong> del ERP: tickets, lotes, traspasos, secado, producción,
@@ -24538,10 +24556,14 @@ Motivo (obligatorio):`, "");
                   </button>
                 </form>
                 </details>
-                )}
+              </section>
+            )}
 
-                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>💾 Respaldos de la base de datos</summary>
+            {/* ── 🛡️ Respaldos y seguridad: respaldos (primero) ── */}
+            {configSubTab === "sistema" && !esSocioActivoCfg && (
+              <section className="panelGrid" style={{ order: 1 }}>
+                <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("💾", "Respaldos de la base de datos", "Copias de seguridad: crear una ahora y ver las últimas")}</summary>
                 <div>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
                     <div>
@@ -24614,8 +24636,8 @@ Motivo (obligatorio):`, "");
               return (
               <section className="cuadCfgGrid">
                 {/* Columna izquierda (5/12): alta de actividad */}
-                <details className="formPanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>🏷️ Nueva actividad de cuadrilla</summary>
+                <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("🏷️", "Nueva actividad de cuadrilla", "Crear una actividad con su tarifa por saco")}</summary>
                 <form onSubmit={(e) => createActivity(e).catch((err) => addToast(err.message, "error"))}>
                   <p className="muted">Actividad + tarifa por saco/unidad. Si ya existe, actualiza su tarifa. Es el <strong>mismo tarifario dinámico</strong> que usa «Nómina → Cuadrilla».</p>
                   <label><span>Nombre / Descripción</span>
@@ -24629,8 +24651,8 @@ Motivo (obligatorio):`, "");
                 </details>
 
                 {/* Columna derecha (7/12): lista + buscador */}
-                <details className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>Actividades y tarifas ({actividadesFiltradas.length}{q ? ` de ${cuadActivities.length}` : ""})</summary>
+                <details className="cfgCard tablePanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("📋", <>Actividades y tarifas ({actividadesFiltradas.length}{q ? ` de ${cuadActivities.length}` : ""})</>, "Cuadrilla: buscar y editar tarifas por saco")}</summary>
                   <input
                     type="search"
                     value={cuadActivitySearch}
@@ -24677,10 +24699,10 @@ Motivo (obligatorio):`, "");
             })()}
 
             {/* ── Secuenciales (maqueta; aún no editables) ── */}
-            {configSubTab === "secuenciales" && (
-              <section className="panelGrid">
-                <details className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 15 }}>📄 Secuenciales de documentos</summary>
+            {configSubTab === "negocio" && !esSocioActivoCfg && (
+              <section className="panelGrid" style={{ order: 3 }}>
+                <details className="cfgCard tablePanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("📄", "Secuenciales de documentos", "Numeración de guías de remisión y otros documentos")}</summary>
                   <p className="muted" style={{ marginTop: -4 }}>Numeración que asigna el servidor. Solo la <strong>Guía de Remisión</strong> es un contador secuencial editable (prefijo/punto de emisión y próximo número); el resto se numera automáticamente por fecha.</p>
                   <div style={{ overflowX: "auto" }}>
                     <table className="cajaTable" style={{ minWidth: 720 }}>

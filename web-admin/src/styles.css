@@ -5379,3 +5379,89 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
   .invxModal__totales { grid-template-columns: 1fr 1fr; }
   .invxModal__total strong { font-size: 18px; }
 }
+
+/* ══ Configuración (rediseño 2026-10-08): menú de secciones con ícono, mosaico en el celular,
+   cabecera de sección y tarjetas con el mismo título (ícono + título + qué es). ══ */
+.configLayout { grid-template-columns: 270px minmax(0, 1fr); grid-template-areas: "top top" "nav content"; row-gap: 14px; }
+.cfgTop { grid-area: top; position: relative; }
+.cfgTop__buscar { width: 100%; box-sizing: border-box; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--c-border); font-size: 14px; background: var(--c-surface); }
+.cfgTop__buscar:focus { outline: none; border-color: var(--c-brand); box-shadow: 0 0 0 3px rgba(13,148,136,.15); }
+.cfgTop__resultados { position: absolute; z-index: 30; left: 0; right: 0; margin-top: 6px; background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 12px; box-shadow: 0 12px 28px rgba(0,0,0,.14); overflow: hidden; }
+.cfgTop__resultados button { display: block; width: 100%; text-align: left; padding: 10px 14px; margin: 0; background: none; border: 0; border-bottom: 1px solid var(--c-border); border-radius: 0; cursor: pointer; font-size: 13.5px; color: var(--c-text); min-width: 0; white-space: normal; }
+.cfgTop__resultados button:last-child { border-bottom: 0; }
+.cfgTop__resultados button:hover { background: var(--c-surface-3); }
+.cfgTop__resultados button span { display: block; font-size: 11.5px; }
+.cfgTop__vacio { padding: 10px 14px; font-size: 13px; }
+
+.configLayout .configVTabs { grid-area: nav; gap: 4px; padding: 6px; border-radius: 16px; background: var(--c-surface); border: 1px solid var(--c-border); top: 12px; }
+.configLayout .configVTabs button { display: flex; align-items: center; gap: 10px; text-align: left; white-space: normal; padding: 8px 10px; margin: 0; border-radius: 12px;
+  background: transparent; border: 1px solid transparent; color: var(--c-text); min-width: 0; width: 100%; }
+.configLayout .configVTabs button:hover { background: var(--c-surface-3); }
+.configLayout .configVTabs button.active { background: color-mix(in srgb, var(--cs) 11%, var(--c-surface)); border-color: color-mix(in srgb, var(--cs) 35%, transparent); color: var(--c-text); }
+.cfgNav__ico { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 11px; font-size: 18px; flex: none;
+  background: color-mix(in srgb, var(--cs) 14%, transparent); transition: background .15s, box-shadow .15s; }
+.configLayout .configVTabs button.active .cfgNav__ico { background: var(--cs); box-shadow: 0 6px 14px -8px var(--cs); }
+.cfgNav__txt { display: grid; gap: 1px; min-width: 0; }
+.cfgNav__txt b { font-size: 13.5px; font-weight: 700; line-height: 1.2; }
+.cfgNav__txt small { font-size: 11.5px; color: var(--c-text-muted); line-height: 1.25; font-weight: 500; }
+.configLayout .configVTabs button.active .cfgNav__txt b { color: color-mix(in srgb, var(--cs) 75%, #000); }
+
+.configLayout .configVContent { grid-area: content; }
+.cfgSeccion { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-radius: 16px; color: #fff;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--cs) 80%, #fff), var(--cs)); box-shadow: 0 10px 22px -16px var(--cs); }
+.cfgSeccion, .cfgSeccion * { color: #fff; }
+.cfgSeccion__ico { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 14px; font-size: 24px; background: rgba(255,255,255,.22); flex: none; }
+.cfgSeccion__txt { display: grid; gap: 2px; min-width: 0; }
+.cfgSeccion__txt b { font-size: 18px; line-height: 1.2; }
+.cfgSeccion__txt small { font-size: 12.5px; opacity: .95; }
+.cfgSeccion__volver { display: none; }
+
+/* Tarjetas de Configuración (todas iguales, abiertas o cerradas). */
+.configVContent details.cfgCard > summary { display: flex; align-items: center; gap: 12px; list-style: none; cursor: pointer; min-height: 44px;
+  margin: 0; padding: 0; border: 0; font-size: inherit; font-weight: inherit; letter-spacing: 0; }
+.configVContent details.cfgCard > summary::-webkit-details-marker { display: none; }
+.configVContent details.cfgCard > summary::before { content: none; display: none; }
+.configVContent details.cfgCard > summary::after { content: "\203A"; display: grid; place-items: center; flex: none; margin-left: auto; width: 30px; height: 30px; border-radius: 50%;
+  background: var(--c-surface-3); color: var(--c-brand-dark); font-size: 19px; font-weight: 700; line-height: 1; transition: transform .2s, background .2s; }
+.configVContent details.cfgCard[open] > summary::after { transform: rotate(90deg); background: color-mix(in srgb, var(--cs) 16%, transparent); }
+.configVContent details.cfgCard[open] > summary { padding-bottom: 12px; margin-bottom: 14px; border-bottom: 1px solid var(--c-border); }
+.cfgSum__ico { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 13px; font-size: 21px; flex: none;
+  background: color-mix(in srgb, var(--cs) 13%, transparent); }
+.cfgSum__txt { display: grid; gap: 2px; min-width: 0; }
+.cfgSum__txt b { font-size: 14.5px; font-weight: 800; color: var(--c-text); line-height: 1.25; }
+.cfgSum__txt small { font-size: 12px; font-weight: 500; color: var(--c-text-muted); line-height: 1.3; }
+.configVContent details.cfgCard:is(.formPanel, .tablePanel):not([open]),
+.configVContent form.formPanel:has(> details.cfgCard:not([open])) { padding-top: 12px; padding-bottom: 12px; }
+.configVContent details.cfgCard:is(.formPanel, .tablePanel):not([open]):hover,
+.configVContent form.formPanel:has(> details.cfgCard:not([open])):hover { border-color: color-mix(in srgb, var(--cs) 40%, var(--c-border)); }
+.configVContent details.cfgCard:is(.formPanel, .tablePanel)[open],
+.configVContent form.formPanel:has(> details.cfgCard[open]) { border-left: 4px solid var(--cs); }
+.configVContent .dangerZone .cfgSum__ico { background: #fee2e2; }
+.configVContent .dangerZone .cfgSum__txt b { color: #b91c1c; }
+
+@media (max-width: 780px) {
+  .configLayout { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "nav" "content"; gap: 12px; }
+  /* Menú en mosaico: todas las secciones a la vista, sin deslizar de lado. */
+  .configLayout .configVTabs { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 0; background: none; border: 0; overflow: visible; }
+  .configLayout .configVTabs button { flex-direction: column; align-items: flex-start; gap: 8px; padding: 12px; min-height: 118px; border-radius: 16px;
+    background: var(--c-surface); border: 1px solid var(--c-border); box-shadow: 0 4px 12px -10px rgba(15,23,42,.35); }
+  .configLayout .configVTabs button.active { background: color-mix(in srgb, var(--cs) 9%, var(--c-surface)); border-color: color-mix(in srgb, var(--cs) 45%, transparent); }
+  .cfgNav__ico { width: 40px; height: 40px; font-size: 21px; border-radius: 12px; }
+  .configLayout--menu .configVContent { display: none; }
+  .configLayout--seccion .configVTabs { display: none; }
+  .cfgSeccion { flex-wrap: wrap; padding: 12px 14px; gap: 10px; }
+  .cfgSeccion__volver { display: inline-flex; flex-basis: 100%; width: max-content; align-items: center; gap: 4px; margin: 0; padding: 6px 12px; min-width: 0;
+    border-radius: 999px; border: 1px solid rgba(255,255,255,.45); background: rgba(255,255,255,.18); font-size: 12.5px; font-weight: 700; cursor: pointer; }
+  .cfgSeccion__ico { width: 40px; height: 40px; font-size: 21px; }
+  .cfgSeccion__txt b { font-size: 16.5px; }
+  .configVContent details.cfgCard > summary { gap: 10px; }
+  .cfgSum__ico { width: 38px; height: 38px; font-size: 19px; border-radius: 12px; }
+  .cfgSum__txt b { font-size: 14px; }
+  .cfgSum__txt small { font-size: 11.5px; }
+  .configVContent details.cfgCard:is(.formPanel, .tablePanel):not([open]),
+  .configVContent form.formPanel:has(> details.cfgCard:not([open])) { padding: 10px 12px; }
+  /* Estado del sistema: indicadores de a dos. */
+  .configVContent .systemStatusGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .configVContent .systemStatusCard { min-height: 0; padding: 10px; gap: 8px; }
+  .configVContent .systemStatusCard span { font-size: 11.5px; }
+}
