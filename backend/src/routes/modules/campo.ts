@@ -1021,6 +1021,8 @@ campoRouter.post("/movimientos/:id/liquidar", asyncRoute(async (req, res) => {
       const esDevolucion = diff > 0;                    // gastó menos → entra dinero
       const signo = esDevolucion ? "entrada" : "salida";
       const monto = Math.abs(diff);
+      // La devolución o el reembolso mueven efectivo: con la caja cerrada no se puede (hay que abrirla primero).
+      await requireCajaAbierta([vale.cuenta_id], client);
       if (signo === "salida") await requireSaldoCajaDisponible(client, vale.cuenta_id, monto);
       const concepto = esDevolucion
         ? `Devolución de saldo de vale${vale.concepto ? ` · ${vale.concepto}` : ""}`
