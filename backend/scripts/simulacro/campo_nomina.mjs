@@ -57,6 +57,8 @@ try {
   // ── B. Lo ya pagado no se toca ─────────────────────────────────────────
   const borra = await api("DELETE", `/campo/partes/${p1[0]}`);
   check(borra.status === 409, "B1. un parte YA PAGADO al operador no se puede borrar (dejaría el pago sin respaldo)", mostrar(borra));
+  const edita = await api("PATCH", `/campo/partes/${p1[0]}`, { qq: 999 });
+  check(edita.status === 409, "B1b. un parte YA PAGADO tampoco se edita", mostrar(edita));
   const movPago = (await q("SELECT id FROM campo_movimientos WHERE naturaleza='pago_nomina_operador' ORDER BY created_at LIMIT 1"))[0];
   const rev = await api("POST", `/campo/movimientos/${movPago.id}/reversar`, { motivo: "intento de reversar nómina" });
   check(rev.status === 409, "B2. el movimiento de un pago de nómina no se reversa a mano (409)", mostrar(rev));

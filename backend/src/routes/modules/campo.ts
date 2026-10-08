@@ -1192,8 +1192,9 @@ campoRouter.patch("/partes/:id", asyncRoute(async (req, res) => {
     if (!act.rowCount) throw new ApiError(404, "Máquina no encontrada");
   }
   const row = await inTransaction(async (client) => {
-    const parte = (await client.query("SELECT estado FROM campo_partes WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
+    const parte = (await client.query("SELECT estado, operador_pagado_at FROM campo_partes WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
     if (!parte) throw new ApiError(404, "Parte no encontrado");
+    if (parte.operador_pagado_at) throw new ApiError(409, "El parte ya se le pagó al operador en la nómina: no se puede editar (cambiaría lo que ya se pagó).");
     const liquidacion = await liquidacionActivaDeParte(client, String(req.params.id));
     if (liquidacion) {
       throw new ApiError(409, `El parte pertenece a la liquidacion ${liquidacion.liquidation_number}; anula esa liquidacion antes de editarlo.`);
@@ -1236,8 +1237,9 @@ campoRouter.patch("/partes/:id", asyncRoute(async (req, res) => {
 // Anular (borrar) un parte. Solo si NO tiene cobro generado (sin servicio).
 campoRouter.delete("/partes/:id", asyncRoute(async (req, res) => {
   const row = await inTransaction(async (client) => {
-    const parte = (await client.query("SELECT estado FROM campo_partes WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
+    const parte = (await client.query("SELECT estado, operador_pagado_at FROM campo_partes WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
     if (!parte) throw new ApiError(404, "Parte no encontrado");
+    if (parte.operador_pagado_at) throw new ApiError(409, "El parte ya se le pagó al operador en la nómina: no se puede borrar (el pago quedaría sin respaldo).");
     const liquidacion = await liquidacionActivaDeParte(client, String(req.params.id));
     if (liquidacion) {
       throw new ApiError(409, `El parte pertenece a la liquidacion ${liquidacion.liquidation_number}; anula esa liquidacion antes de borrarlo.`);
