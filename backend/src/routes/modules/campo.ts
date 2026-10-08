@@ -1015,6 +1015,7 @@ campoRouter.post("/movimientos/:id/liquidar", asyncRoute(async (req, res) => {
       [req.params.id]
     )).rows[0];
     if (!vale) throw new ApiError(404, "Vale no encontrado");
+    if (vale.reversado_at) throw new ApiError(409, "Este vale fue anulado: ya no se puede rendir.");
     if (vale.estado !== "PENDIENTE_RENDICION") {
       throw new ApiError(409, "Este movimiento no es un vale pendiente de rendición.");
     }
