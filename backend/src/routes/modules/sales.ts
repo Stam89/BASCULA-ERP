@@ -248,7 +248,7 @@ salesRouter.get("/", asyncRoute(async (req, res) => {
   const result = await pool.query(`
     SELECT s.*,
            -- Estado de pago REAL: el de su cuenta por cobrar (a crédito pasa a Parcial / Pagado con los abonos).
-           CASE WHEN ar.id IS NULL OR ar.status = 'CANCELLED' THEN s.payment_status
+           CASE WHEN ar.id IS NULL OR ar.status = 'CANCELLED' THEN s.payment_status::text
                 WHEN ar.balance <= 0.005 THEN 'PAID'
                 WHEN ar.balance + 0.005 < ar.amount THEN 'PARTIAL'
                 ELSE 'PENDING' END AS payment_status,
