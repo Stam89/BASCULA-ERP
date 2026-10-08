@@ -32,6 +32,10 @@ async function sesionAbierta(client: Q = pool): Promise<{ id: string; fecha_aper
     "SELECT id, fecha_apertura, saldo_inicial FROM campo_caja_sesiones WHERE estado = 'ABIERTA' ORDER BY fecha_apertura DESC LIMIT 1"
   )).rows[0] ?? null;
 }
+// CRUCE PILADORA es una cuenta puente contable (crédito a favor de las piladoras): no es dinero. Nunca puede
+// ser origen/destino de un pago, cobro, gasto o transferencia manual; solo la mueve el cruce de liquidaciones.
+const CUENTA_INTERNA_CRUCE = "CRUCE PILADORA";
+const MSG_CUENTA_INTERNA = "CRUCE PILADORA es una cuenta interna (crédito de piladoras): no se usa para pagos, cobros ni transferencias. Elige CAJA o BANCO.";
 // Bloquea si alguna de las cuentas es CAJA y no hay sesión abierta (400).
 async function requireCajaAbierta(cuentaIds: string[], client: Q = pool): Promise<void> {
   const cajaId = await cajaCuentaId(client);
@@ -669,8 +673,9 @@ campoRouter.post("/movimientos", asyncRoute(async (req, res) => {
   }
   const estado = body.es_anticipo ? "PENDIENTE_RENDICION" : null;
 
-  const cta = await pool.query("SELECT 1 FROM campo_cuentas WHERE id = $1", [body.cuenta_id]);
+  const cta = await pool.query("SELECT nombre FROM campo_cuentas WHERE id = $1", [body.cuenta_id]);
   if (!cta.rowCount) throw new ApiError(404, "Cuenta no encontrada");
+  if (cta.rows[0].nombre === CUENTA_INTERNA_CRUCE) throw new ApiError(400, MSG_CUENTA_INTERNA);
   // Integridad: si el movimiento es sobre CAJA, exige una sesión de caja abierta.
   await requireCajaAbierta([body.cuenta_id]);
   if (body.categoria_id) {
@@ -1977,8 +1982,9 @@ campoRouter.post("/cxc/abono", asyncRoute(async (req, res) => {
     fecha: fechaSchema.optional(),
     concepto: z.string().max(300).optional()
   }).parse(req.body);
-  const cta = await pool.query("SELECT 1 FROM campo_cuentas WHERE id = $1", [body.cuenta_id]);
+  const cta = await pool.query("SELECT nombre FROM campo_cuentas WHERE id = $1", [body.cuenta_id]);
   if (!cta.rowCount) throw new ApiError(404, "Cuenta no encontrada");
+  if (cta.rows[0].nombre === CUENTA_INTERNA_CRUCE) throw new ApiError(400, MSG_CUENTA_INTERNA);
   const cli = await pool.query("SELECT nombre FROM campo_clientes WHERE id = $1", [body.cliente_id]);
   if (!cli.rowCount) throw new ApiError(404, "Cliente no encontrado");
 
@@ -2061,8 +2067,9 @@ campoRouter.post("/cxp/:id/abono", asyncRoute(async (req, res) => {
     fecha: fechaSchema.optional(),
     concepto: z.string().max(300).optional()
   }).parse(req.body);
-  const cta = await pool.query("SELECT 1 FROM campo_cuentas WHERE id = $1", [body.cuenta_id]);
+  const cta = await pool.query("SELECT nombre FROM campo_cuentas WHERE id = $1", [body.cuenta_id]);
   if (!cta.rowCount) throw new ApiError(404, "Cuenta no encontrada");
+  if (cta.rows[0].nombre === CUENTA_INTERNA_CRUCE) throw new ApiError(400, MSG_CUENTA_INTERNA);
   const row = await inTransaction(async (client) => {
     const cxp = (await client.query("SELECT id, acreedor, monto, categoria_id, activo_id FROM campo_cxp WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
     if (!cxp) throw new ApiError(404, "Cuenta por pagar no encontrada");
@@ -2221,7 +2228,8 @@ campoRouter.get("/reportes/por-maquina", asyncRoute(async (req, res) => {
        SELECT activo_id, SUM(CASE WHEN signo = 'salida' THEN monto ELSE -monto END) AS g
        FROM campo_movimientos
        WHERE fecha BETWEEN $1 AND $2
-         AND ((naturaleza IN ('operativo', 'mantenimiento_flota') AND signo = 'salida')
+         AND ((naturaleza IN ('operativo', 'mantenimiento_flota') AND signo = 'salida'
+               AND COALESCE(estado, '') <> 'PENDIENTE_RENDICION')   -- un vale sin rendir aún no es gasto
               OR naturaleza IN ('ajuste_vale', 'reversion_gasto'))
        GROUP BY activo_id
      ), prod AS (
@@ -2250,7 +2258,8 @@ campoRouter.get("/reportes/por-maquina", asyncRoute(async (req, res) => {
      FROM campo_movimientos m
      LEFT JOIN campo_categorias_gasto cat ON cat.id = m.categoria_id
      WHERE m.fecha BETWEEN $1 AND $2
-       AND ((m.naturaleza IN ('operativo', 'mantenimiento_flota') AND m.signo = 'salida')
+       AND ((m.naturaleza IN ('operativo', 'mantenimiento_flota') AND m.signo = 'salida'
+             AND COALESCE(m.estado, '') <> 'PENDIENTE_RENDICION')
             OR m.naturaleza IN ('ajuste_vale', 'reversion_gasto'))
      GROUP BY m.activo_id, cat.nombre`,
     [desde, hasta]
@@ -2364,6 +2373,7 @@ campoRouter.post("/transferencias", asyncRoute(async (req, res) => {
     [[body.cuenta_origen_id, body.cuenta_destino_id]]
   );
   if (cuentas.rowCount !== 2) throw new ApiError(404, "Cuenta origen o destino no encontrada.");
+  if (cuentas.rows.some((c) => c.nombre === CUENTA_INTERNA_CRUCE)) throw new ApiError(400, MSG_CUENTA_INTERNA);
   // Integridad: una transferencia que toca CAJA también exige sesión abierta.
   await requireCajaAbierta([body.cuenta_origen_id, body.cuenta_destino_id]);
   const nombre = (id: string) => cuentas.rows.find((c) => c.id === id)?.nombre ?? "";
