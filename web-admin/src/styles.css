@@ -5362,6 +5362,8 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .invxModal__marca--neg { border-left-color: #dc2626; background: #fff5f5; }
 .invxModal__marca--neg .invx__cant { color: #dc2626; }
 .invxModal__marca--neg .invx__barra2 i { background: #dc2626; }
+.invxModal__marca { grid-template-columns: minmax(0, 1fr); }
+.invxModal__marca .invx__barra2, .invxModal__marca .invx__cant { grid-area: auto; }
 .invxModal__marcaFila { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
 .invxModal__marcaFila strong { font-size: 15px; min-width: 0; overflow-wrap: anywhere; }
 .invxModal__marcaPie { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; }
