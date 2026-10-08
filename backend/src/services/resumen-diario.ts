@@ -182,7 +182,9 @@ export async function reunirDatos(db: Db = pool): Promise<DatosResumen> {
       `SELECT COALESCE(SUM(m.amount) FILTER (WHERE m.movement = 'INCOME'), 0)::float AS ingresos,
               COALESCE(SUM(m.amount) FILTER (WHERE m.movement = 'EXPENSE'), 0)::float AS egresos
          FROM cash_movements m JOIN cash_registers r ON r.id = m.cash_register_id
-        WHERE r.accionista_id = $1 AND (m.created_at AT TIME ZONE 'America/Guayaquil')::date = $2::date`, [matrizId, fecha]
+        WHERE r.accionista_id = $1 AND (m.created_at AT TIME ZONE 'America/Guayaquil')::date = $2::date
+          -- solo lo vigente: un movimiento anulado y su contra-asiento no son ingresos ni egresos reales del día
+          AND m.reversed_at IS NULL AND m.reversal_of IS NULL`, [matrizId, fecha]
     )).rows[0];
     return { abierta, ingresos: Number(m.ingresos), egresos: Number(m.egresos) };
   });
