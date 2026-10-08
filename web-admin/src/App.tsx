@@ -4618,6 +4618,30 @@ export function App() {
   const mantTotalCaja = movEsFondo ? mantManoObra : round2(mantManoObra + mantMaterialesN);
   const mantPuedeGuardar = mantTotalCaja > 0;
   const sacosDelActivo = esMatrizActiva ? sackInventory : sacosPropios;
+  // Marcas/empacados para el modal de Inventario: cada marca con el arroz base que la respalda (0.11 o
+  // Corriente, igual que al vender: getInventoryProductForBrand) y sus presentaciones del catálogo de sacos.
+  const calidadDeProductoTerminado = (nombre: string): "0.11" | "CORRIENTE" | null => {
+    const code = products.find((p) => p.name === nombre)?.code;
+    return code === "ARROZ-PILADO-011" ? "0.11" : code === "ARROZ-PILADO-CORRIENTE" ? "CORRIENTE" : null;
+  };
+  const marcasEmpacadas = visibleInventoryProducts
+    .filter((product) => product.product_type === "PACKAGED_GOOD")
+    .map((product) => {
+      const fila = packagedStockRows.find((r) => r.product_name === product.name);
+      const base = products.find((p) => p.id === getInventoryProductForBrand(product.name));
+      const nombre = product.name.toUpperCase();
+      const calidad: "0.11" | "CORRIENTE" | null =
+        base?.code === "ARROZ-PILADO-011" ? "0.11"
+        : base?.code === "ARROZ-PILADO-CORRIENTE" ? "CORRIENTE"
+        : nombre.includes("0.11") ? "0.11"
+        : nombre.includes("CORRIENTE") ? "CORRIENTE"
+        : null;
+      const presentaciones = sacosDelActivo
+        .filter((sk) => sk.categoria === "MARCA" && sk.activo !== false && (sk.marca ?? "").toUpperCase() === nombre && Number(sk.peso_lb) > 0)
+        .map((sk) => ({ peso_lb: Number(sk.peso_lb), sacos: Number(sk.stock) || 0 }))
+        .sort((a, b) => b.peso_lb - a.peso_lb);
+      return { nombre: product.name, calidad, cantidad: fila?.quantity ?? 0, unit: fila?.unit ?? product.unit, presentaciones };
+    });
 
   useEffect(() => {
     setMatrizCodeForm(matrizAccionista?.code ?? "");
@@ -14714,7 +14738,7 @@ Motivo (obligatorio):`, "");
                 { clave: "marcas", titulo: "Marcas / empacados", ayuda: "Arroz empacado por marca y presentación", icono: "🛍️", color: "#a78bfa", color2: "#6d28d9", filas: packagedStockRows },
                 { clave: "subproductos", titulo: "Subproductos", ayuda: "Arrocillo, polvillo y otros que salen del pilado", icono: "🌿", color: "#60a5fa", color2: "#1d4ed8", filas: byproductStockRows },
                 ...(otherStockRows.length > 0 ? [{ clave: "otros", titulo: "Otros stocks", ayuda: "Productos fuera de las categorías anteriores", icono: "📦", color: "#94a3b8", color2: "#475569", filas: otherStockRows }] : [])
-              ] as GrupoStock[]} />
+              ] as GrupoStock[]} empacados={{ marcas: marcasEmpacadas, calidadDe: calidadDeProductoTerminado }} />
             </div>
 
             <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
