@@ -6,6 +6,7 @@
 import type { PoolClient } from "pg";
 import { pool } from "../db/pool.js";
 import { contarBajadasSinNombre, contarNombresPorRevisar } from "../routes/modules/cuadrilla.js";
+import { resumenIntegridad } from "./consistencia.js";
 
 type Db = Pick<PoolClient, "query">;
 
@@ -36,6 +37,8 @@ export type DatosHoy = {
   cxp: { n: number; monto: number };
   pedidos: { pendientes: number; paraHoy: number };
   puesta: { aplica: boolean; faltantes: string[] };
+  /** Solo administrador: controles de integridad entre módulos que fallan (opcional: sin dato no se muestra nada). */
+  integridad?: { problemas: number; nombres: string[] };
 };
 
 /** Horas a partir de las cuales un túnel «lleva mucho»: los secados reales duran ~13–16 h. */
@@ -150,6 +153,17 @@ export function construirTareas(d: DatosHoy): TareaHoy[] {
     });
   }
 
+  // ── Integridad entre módulos (solo administrador) ────────────────────────
+  if (d.integridad && d.integridad.problemas > 0) {
+    const n = d.integridad.problemas;
+    t.push({
+      key: "integridad", nivel: "urgente", icono: "🩺",
+      titulo: `${plural(n, "control de integridad falla", "controles de integridad fallan")}`,
+      detalle: `${d.integridad.nombres.slice(0, 2).join(" · ")}${n > 2 ? ` · y ${n - 2} más` : ""}. Algo no cuadra entre módulos: revísalo antes de seguir.`,
+      tab: "Configuracion", sub: "integridad", accion: "Ver controles"
+    });
+  }
+
   // ── Puesta en marcha (solo administrador) ────────────────────────────────
   if (d.puesta.aplica && d.puesta.faltantes.length > 0) {
     const f = d.puesta.faltantes;
@@ -250,7 +264,14 @@ export async function reunirDatos(
     ? await seguro("puesta", { aplica: true, faltantes: [] as string[] }, async () => ({ aplica: true, faltantes: await ctx.faltantesPuesta() }))
     : { aplica: false, faltantes: [] as string[] };
 
-  return { dow, caja, tuneles, nomina, cxc, cxp, pedidos, puesta };
+  const integridad = ctx.esAdmin
+    ? await seguro<{ problemas: number; nombres: string[] } | undefined>("integridad", undefined, async () => {
+      const r = await resumenIntegridad();
+      return { problemas: r.problemas, nombres: r.nombres };
+    })
+    : undefined;
+
+  return { dow, caja, tuneles, nomina, cxc, cxp, pedidos, puesta, ...(integridad ? { integridad } : {}) };
 }
 
 export async function tareasDeHoy(ctx: Parameters<typeof reunirDatos>[1]): Promise<TareaHoy[]> {

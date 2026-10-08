@@ -21,6 +21,7 @@ import { ParametrosContables } from "./components/ParametrosContables";
 import { CorreoRecuperacionModal } from "./components/CorreoRecuperacion";
 import { ConfigCorreoClaves } from "./components/ConfigCorreoClaves";
 import { ResumenDiarioConfig } from "./components/ResumenDiarioConfig";
+import { ControlIntegridad } from "./components/ControlIntegridad";
 import { AsistenteArranque } from "./asistente/AsistenteArranque";
 import { InicioSimple, type Insignia } from "./inicio/InicioSimple";
 import { armarTiles } from "./inicio/tiles";
@@ -4500,6 +4501,7 @@ export function App() {
       return;
     }
     if (tab === "Configuracion" && sub === "puesta") { irAConfig("✅ Puesta en marcha"); return; }
+    if (tab === "Configuracion" && sub === "integridad") { irAConfig("Estado del sistema"); return; }
     irATab(tab as typeof activeTab);
   }
   // Cada tarea de «Hoy» lleva a la pantalla donde se resuelve.
@@ -22462,6 +22464,8 @@ export function App() {
                       </div>
                     </div>
                   </div>
+
+                  {isAdmin && <ControlIntegridad avisar={addToast} />}
 
                   {companyReadiness && (
                     <div className="companyReadinessPanel">

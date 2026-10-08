@@ -11,6 +11,7 @@ import { getMatrizId } from "./matriz.js";
 import { tareasDeHoy, type TareaHoy } from "./hoy.js";
 import { resumenTicketsDelDia } from "../routes/modules/cuadrilla.js";
 import { calcularPuestaEnMarcha } from "../routes/modules/settings.js";
+import { resumenIntegridad } from "./consistencia.js";
 
 type Db = Pick<PoolClient, "query">;
 
@@ -67,6 +68,8 @@ export type DatosResumen = {
   caja: { abierta: boolean; ingresos: number; egresos: number } | null;
   ventas: { n: number; total: number } | null;
   tareas: Array<Pick<TareaHoy, "nivel" | "icono" | "titulo" | "detalle">> | null;
+  /** undefined = no se incluye el bloque; null = no se pudo revisar. */
+  integridad?: { reglas: number; problemas: number; nombres: string[] } | null;
 };
 
 const dinero = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -113,6 +116,15 @@ export function construirResumen(d: DatosResumen): { asunto: string; texto: stri
     ? ["✅ No hay nada pendiente."]
     : d.tareas.map((t) => `${t.nivel === "urgente" ? "🔴" : t.nivel === "atencion" ? "🟠" : "🔵"} ${t.titulo}`);
   bloques.push({ titulo: "📌 Pendiente para mañana", lineas: pend });
+
+  if (d.integridad !== undefined) {
+    bloques.push({
+      titulo: "🩺 Integridad entre módulos",
+      lineas: d.integridad === null ? [noDisp]
+        : d.integridad.problemas === 0 ? [`✅ Todo conectado: ${d.integridad.reglas} controles sin problemas.`]
+          : [`⚠️ ${d.integridad.problemas} de ${d.integridad.reglas} controles fallan:`, ...d.integridad.nombres.slice(0, 5).map((n) => `• ${n}`), "Entra a Configuración → Estado del sistema para ver el detalle."]
+    });
+  }
 
   const urgentes = (d.tareas ?? []).filter((t) => t.nivel !== "info").length;
   const asunto = `Resumen del día · ${d.negocio} · ${fechaCorta(d.fecha)}${urgentes > 0 ? ` · ${urgentes} por atender` : ""}`;
@@ -202,7 +214,9 @@ export async function reunirDatos(db: Db = pool): Promise<DatosResumen> {
     faltantesPuesta: async () => (await calcularPuestaEnMarcha()).checks.filter((c) => !c.ok && c.key !== "app_mode").map((c) => c.label)
   })).map((t) => ({ nivel: t.nivel, icono: t.icono, titulo: t.titulo, detalle: t.detalle })));
 
-  return { negocio, fecha, tickets, secado, caja, ventas, tareas };
+  const integridad = await seguro("integridad", () => resumenIntegridad());
+
+  return { negocio, fecha, tickets, secado, caja, ventas, tareas, integridad };
 }
 
 export async function armarResumenDelDia() {
