@@ -1,3 +1,4 @@
+import { leerCuadros, type CuadroMosaico, type HojaMosaico } from "./components/fomentoMosaico";
 import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, apiOk, apiGet, apiGetSRI, apiGetBasculaStatus, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId } from "./api";
 import type { BasculaSyncStatus } from "./api";
@@ -3359,6 +3360,8 @@ export function App() {
   const [fomentoPagoForm, setFomentoPagoForm] = useState({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
   const [fomentoImporting, setFomentoImporting] = useState(false);
   const [fomentoMosaicoImporting, setFomentoMosaicoImporting] = useState(false);
+  // 🧩 Vista previa del Excel en mosaico: hojas con cuadros, la elegida y los cuadros que NO se importan.
+  const [mosaico, setMosaico] = useState<{ archivo: string; hojas: HojaMosaico[]; hoja: string; excluidos: Record<string, boolean>; busy?: boolean } | null>(null);
   const [fomentoImportModal, setFomentoImportModal] = useState<{ open: boolean; title: string; message: string; isError: boolean } | null>(null);
   // ── Pilador / Estibador en Producción ────────────────────────────────────
   const [piladorName, setPiladorName] = useState(() => {
@@ -7020,107 +7023,78 @@ export function App() {
     return undefined;
   }
 
+  // Lee TODAS las hojas del Excel (antes solo la primera: si era una hoja vacía u oculta salía «Sin bloques»),
+  // detecta los cuadros de cada una y abre la VISTA PREVIA para elegir la hoja y revisar antes de importar.
   async function importFomentosMosaico(file: File) {
     setFomentoMosaicoImporting(true);
     try {
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array", cellDates: true });
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      if (!sheet) throw new Error("El archivo no tiene hojas.");
-      // Matriz 2D (Array de Arrays).
-      const data = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, blankrows: true, defval: null });
-
-      type Entrega = { fecha?: string; valor: number; es_saldo_anterior?: boolean; meses_interes_fijo?: number };
-      type Bloque = { cliente: string; cuadras?: number; limite?: number; entregas: Entrega[] };
-      const bloques: Bloque[] = [];
-      const at = (r: number, c: number): unknown => (data[r] ? data[r][c] : undefined);
-      const esNombre = (v: unknown) => celdaTexto(v).replace(/\s/g, "").toUpperCase() === "NOMBRE:";
-      const norm = (v: unknown) => celdaTexto(v).replace(/\s+/g, " ").trim().toUpperCase();
-
-      // Escaneo 2D: recorre filas y columnas buscando el ancla "NOMBRE:". Cada bloque
-      // se lee de forma ROBUSTA: las columnas del detalle (Fecha inicial, Valor, Mes,
-      // Es saldo) se detectan por su ENCABEZADO, no por una posición fija — así el
-      // mismo cuadro del cliente funciona sin importar en qué columnas esté.
-      for (let r = 0; r < data.length; r++) {
-        const row = data[r]; if (!row) continue;
-        for (let c = 0; c < row.length; c++) {
-          if (!esNombre(row[c])) continue;
-
-          // Nombre: primera celda con texto a la derecha del ancla.
-          let cliente = "";
-          for (let k = 1; k <= 8 && !cliente; k++) cliente = celdaTexto(at(r, c + k));
-          if (!cliente) continue;
-
-          // Cuadras / Límite: por ETIQUETA (busca "CUADRAS"/"LIMITE" cerca del ancla
-          // y toma el primer número a su derecha).
-          const numDerecha = (rr: number, cc: number): number | undefined => {
-            for (let k = 1; k <= 5; k++) { const n = celdaNumero(at(rr, cc + k)); if (n != null) return n; }
-            return undefined;
-          };
-          let cuadras: number | undefined, limite: number | undefined;
-          for (let rr = r; rr <= r + 6; rr++) for (let cc = Math.max(0, c - 1); cc <= c + 4; cc++) {
-            const t = norm(at(rr, cc)).replace(/\s/g, "");
-            if (cuadras == null && t.startsWith("CUADRAS")) cuadras = numDerecha(rr, cc);
-            if (limite == null && (t.startsWith("LIMITE") || t.startsWith("LÍMITE"))) limite = numDerecha(rr, cc);
-          }
-
-          // Fila de ENCABEZADO del detalle: la primera (bajo el ancla) que tenga "VALOR".
-          let hr = -1, colValor = -1, colFecha = -1, colMes = -1, colSaldo = -1;
-          for (let rr = r + 1; rr <= Math.min(data.length - 1, r + 10) && hr < 0; rr++) {
-            let cv = -1, cf = -1, cm = -1, cs = -1;
-            for (let cc = Math.max(0, c - 2); cc <= c + 14; cc++) {
-              const t = norm(at(rr, cc));
-              if (!t) continue;
-              if (t === "VALOR") cv = cc;
-              else if (t.startsWith("FECHA INICIAL") || t.startsWith("FECHA INICIO")) cf = cc;
-              else if (t === "MES" || t === "MESES") cm = cc;
-              else if (t.includes("SALDO")) cs = cc;
-            }
-            if (cv >= 0) { hr = rr; colValor = cv; colFecha = cf >= 0 ? cf : cv - 4; colMes = cm; colSaldo = cs; }
-          }
-          if (hr < 0) { hr = r + 3; colFecha = c + 1; colValor = c + 5; } // fallback (spec anterior)
-
-          // Entregas: desde hr+1 hacia abajo, hasta un VALOR vacío o "TOTAL/SUMAN".
-          const entregas: Entrega[] = [];
-          for (let rr = hr + 1; rr < data.length; rr++) {
-            const fila = norm(at(rr, colFecha)) + " " + norm(at(rr, colValor));
-            if (/TOTAL|SUMAN/.test(fila)) break;
-            const valor = celdaNumero(at(rr, colValor));
-            if (valor == null || !(valor > 0)) break; // fin de datos (filas finales vacías)
-            let esSaldo = false, meses: number | undefined;
-            if (colSaldo >= 0) { esSaldo = norm(at(rr, colSaldo)).startsWith("SI"); if (esSaldo && colMes >= 0) meses = celdaNumero(at(rr, colMes)); }
-            entregas.push({
-              fecha: fechaAISO(colFecha >= 0 ? at(rr, colFecha) : undefined), valor,
-              es_saldo_anterior: esSaldo || undefined,
-              meses_interes_fijo: esSaldo ? Math.max(1, Math.round(meses ?? 1)) : undefined
-            });
-          }
-
-          if (entregas.length > 0 || cuadras != null || limite != null) bloques.push({ cliente, cuadras, limite, entregas });
-        }
-      }
-
-      if (bloques.length === 0) {
-        setFomentoImportModal({ open: true, title: "❌ Sin bloques", message: "No se detectó ninguna celda 'NOMBRE:' en la hoja. Verifica el formato del mosaico.", isError: true });
+      if (!wb.SheetNames.length) throw new Error("El archivo no tiene hojas.");
+      const hojas: HojaMosaico[] = wb.SheetNames.map((nombre, i) => {
+        const data = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[nombre], { header: 1, blankrows: true, defval: null });
+        const { cuadros, sinNombre } = leerCuadros(data);
+        return { nombre, oculta: Number(wb.Workbook?.Sheets?.[i]?.Hidden ?? 0) > 0, cuadros, sinNombre };
+      }).filter((h) => h.cuadros.length > 0 || h.sinNombre.length > 0);
+      if (hojas.length === 0) {
+        setFomentoImportModal({ open: true, title: "❌ Sin cuadros de fomento", isError: true,
+          message: `Revisé las ${wb.SheetNames.length} hojas del archivo y ninguna tiene cuadros con el encabezado «No … Fecha inicial … VALOR».` });
         return;
       }
+      const conEntregas = (h: HojaMosaico) => h.cuadros.filter((c) => c.entregas.length > 0).length;
+      // Hoja sugerida: la que estaba abierta en Excel si tiene cuadros; si no, la visible con más cuadros con entregas.
+      const activa = wb.SheetNames[Number((wb.Workbook as { WBView?: Array<{ activeTab?: number }> } | undefined)?.WBView?.[0]?.activeTab ?? -1)];
+      const sugerida = hojas.find((h) => h.nombre === activa && conEntregas(h) > 0)
+        ?? [...hojas].sort((a, b) => Number(a.oculta) - Number(b.oculta) || conEntregas(b) - conEntregas(a))[0];
+      setMosaico({ archivo: file.name, hojas, hoja: sugerida.nombre, excluidos: {} });
+    } catch (err) {
+      setFomentoImportModal({ open: true, title: "❌ Error al leer el Excel", message: err instanceof Error ? err.message : "Error desconocido", isError: true });
+    } finally {
+      setFomentoMosaicoImporting(false);
+    }
+  }
 
+  // Avisos de un cuadro para la vista previa (no bloquean: el usuario decide).
+  function avisosCuadro(c: CuadroMosaico): string[] {
+    const hoyLocal = new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+    const hace1 = new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
+    const av: string[] = [];
+    const deHoy = c.entregas.filter((e) => e.fecha === hoyLocal).length;
+    if (deHoy) av.push(`${deHoy} con fecha de HOY (¿fórmula =HOY()?)`);
+    if (c.entregasSinFecha) av.push(`${c.entregasSinFecha} sin fecha (queda hoy)`);
+    const viejas = c.entregas.filter((e) => e.fecha && e.fecha < hace1).map((e) => e.fecha as string).sort();
+    if (viejas.length) av.push(`desde ${viejas[0].slice(0, 4)}: interés de más de un año`);
+    if (c.sumanSinValor.length) av.push(`«Suman» sin VALOR: $${c.sumanSinValor.join(", $")} (no se importa)`);
+    if (/\(|\d+\s*(CUADRA|PARADA)/i.test(c.cliente)) av.push("el nombre trae notas");
+    return av;
+  }
+
+  async function confirmarMosaico() {
+    const m = mosaico;
+    if (!m) return;
+    const hoja = m.hojas.find((h) => h.nombre === m.hoja);
+    const sel = (hoja?.cuadros ?? []).filter((c) => c.entregas.length > 0 && !m.excluidos[c.celda]);
+    if (!sel.length) { addToast("No hay cuadros marcados para importar", "error"); return; }
+    setMosaico({ ...m, busy: true });
+    try {
+      const bloques = sel.map((c) => ({ cliente: c.cliente, cuadras: c.cuadras, limite: c.limite, renta: c.renta, entregas: c.entregas }));
       const resp = await apiPost<{ success: boolean; fomentosCreados: number; agricultoresCreados: number; entregasCreadas: number; omitidos: number; errores: Array<{ cliente: string; error: string }> }>("/fomentos/bulk-import", { bloques });
-      addToast(`✅ Mosaico importado: ${resp.fomentosCreados} fomentos`, "success");
+      setMosaico(null);
+      addToast(`✅ ${resp.fomentosCreados} fomentos importados de «${m.hoja}»`, "success");
       const detalle = [
-        `Bloques detectados: ${bloques.length}`,
+        `Hoja: ${m.hoja}`,
+        `Cuadros enviados: ${sel.length}`,
         `Fomentos creados: ${resp.fomentosCreados}`,
         `Agricultores nuevos: ${resp.agricultoresCreados}`,
         `Entregas importadas: ${resp.entregasCreadas}`,
         resp.omitidos > 0 ? `Omitidos (ya existían): ${resp.omitidos}` : null,
         resp.errores?.length ? `\nAvisos:\n${resp.errores.map((e) => `${e.cliente}: ${e.error}`).join("\n")}` : null
       ].filter(Boolean).join("\n");
-      setFomentoImportModal({ open: true, title: "✅ Mosaico importado", message: detalle, isError: false });
+      setFomentoImportModal({ open: true, title: "✅ Fomentos importados", message: detalle, isError: false });
       await refreshFomentos();
     } catch (err) {
-      setFomentoImportModal({ open: true, title: "❌ Error al leer el mosaico", message: err instanceof Error ? err.message : "Error desconocido", isError: true });
-    } finally {
-      setFomentoMosaicoImporting(false);
+      setMosaico((cur) => cur && { ...cur, busy: false });
+      setFomentoImportModal({ open: true, title: "❌ No se pudo importar", message: err instanceof Error ? err.message : "Error desconocido", isError: true });
     }
   }
 
@@ -20302,6 +20276,74 @@ Motivo (obligatorio):`, "");
                 </div>
               </div>
             )}
+
+            {mosaico && (() => {
+              const m = mosaico;
+              const hoja = m.hojas.find((h) => h.nombre === m.hoja) ?? m.hojas[0];
+              const conEnt = hoja.cuadros.filter((c) => c.entregas.length > 0);
+              const sel = conEnt.filter((c) => !m.excluidos[c.celda]);
+              const totalSel = sel.reduce((a, c) => a + c.entregas.reduce((x, e) => x + e.valor, 0), 0);
+              const conocidos = new Set(farmers.map((f) => f.full_name.trim().toLowerCase()));
+              const nuevos = sel.filter((c) => !conocidos.has(c.cliente.trim().toLowerCase())).length;
+              const sinNombreConEnt = hoja.sinNombre.filter((c) => c.entregas.length > 0);
+              const soloSuman = hoja.cuadros.filter((c) => !c.entregas.length && c.sumanSinValor.length);
+              const accNombre = accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "el accionista activo";
+              const resumenHoja = (h: HojaMosaico) => {
+                const ce = h.cuadros.filter((c) => c.entregas.length > 0);
+                return `${h.nombre}${h.oculta ? " (oculta)" : ""} · ${ce.length} con entregas · $${ce.reduce((a, c) => a + c.entregas.reduce((x, e) => x + e.valor, 0), 0).enReal()}`;
+              };
+              return (
+                <div className="modalOverlay" onClick={() => !m.busy && setMosaico(null)}>
+                  <div className="modalCard mosaicoModal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+                    <h3 style={{ margin: 0 }}>🧩 Importar fomentos desde Excel</h3>
+                    <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>Archivo <strong>{m.archivo}</strong> · se cargan a <strong>{accNombre}</strong>. Revisa antes de importar: no se guarda nada hasta que confirmes.</p>
+                    <label className="mosaicoModal__hoja"><span>Hoja del Excel</span>
+                      <select value={m.hoja} disabled={m.busy} onChange={(e) => setMosaico({ ...m, hoja: e.target.value, excluidos: {} })}>
+                        {m.hojas.map((h) => <option key={h.nombre} value={h.nombre}>{resumenHoja(h)}</option>)}
+                      </select>
+                    </label>
+                    <div className="mosaicoModal__kpis">
+                      <span><small>A importar</small><strong>{sel.length}</strong></span>
+                      <span><small>Total entregado</small><strong>${totalSel.enReal()}</strong></span>
+                      <span><small>Agricultores nuevos</small><strong>{nuevos}</strong></span>
+                    </div>
+                    <p className="mosaicoModal__nota">El interés se calcula desde la fecha de cada entrega con la <b>renta</b> del cuadro (si no tiene, 7 %). Desmarca lo que no quieras importar.</p>
+                    <div className="mosaicoModal__lista">
+                      {conEnt.length === 0 && <p className="muted">Esta hoja no tiene cuadros con entregas.</p>}
+                      {conEnt.map((c) => {
+                        const av = avisosCuadro(c);
+                        const total = c.entregas.reduce((x, e) => x + e.valor, 0);
+                        const nuevo = !conocidos.has(c.cliente.trim().toLowerCase());
+                        return (
+                          <label key={c.celda} className={`mosaicoModal__fila${m.excluidos[c.celda] ? " mosaicoModal__fila--off" : ""}`}>
+                            <input type="checkbox" checked={!m.excluidos[c.celda]} disabled={m.busy}
+                              onChange={(e) => setMosaico({ ...m, excluidos: { ...m.excluidos, [c.celda]: !e.target.checked } })} />
+                            <span className="mosaicoModal__txt">
+                              <strong>{c.cliente}{nuevo && <em className="mosaicoModal__nuevo">nuevo</em>}</strong>
+                              <small>{c.celda} · {c.entregas.length} {c.entregas.length === 1 ? "entrega" : "entregas"} · renta {c.renta != null ? `${(c.renta * 100).enReal(0, 2)} %` : "7 % (sin dato)"}</small>
+                              {av.length > 0 && <small className="mosaicoModal__aviso">⚠️ {av.join(" · ")}</small>}
+                            </span>
+                            <b className="mosaicoModal__monto">${total.enReal()}</b>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    {(sinNombreConEnt.length > 0 || soloSuman.length > 0) && (
+                      <div className="mosaicoModal__fuera">
+                        {sinNombreConEnt.length > 0 && <div>⛔ {sinNombreConEnt.length} cuadro(s) con entregas pero SIN nombre no se importan: {sinNombreConEnt.map((c) => c.celda).join(", ")}.</div>}
+                        {soloSuman.map((c) => <div key={c.celda}>⛔ {c.cliente} ({c.celda}): tiene ${c.sumanSinValor.join(", $")} en «Suman» pero el VALOR está vacío; no se importa.</div>)}
+                      </div>
+                    )}
+                    <div className="buttonRow">
+                      <button type="button" className="primary" disabled={m.busy || sel.length === 0} onClick={() => confirmarMosaico()}>
+                        {m.busy ? "Importando…" : `Importar ${sel.length} fomento${sel.length === 1 ? "" : "s"}`}
+                      </button>
+                      <button type="button" disabled={m.busy} onClick={() => setMosaico(null)}>Cancelar</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
             {fomentoImportModal && fomentoImportModal.open && (
               <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>

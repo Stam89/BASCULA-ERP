@@ -5505,3 +5505,29 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
   .modalOverlay:has(.despachoModal) { align-items: flex-end; padding: 0; }
   .despachoModal { max-width: none; border-radius: 20px 20px 0 0; max-height: 90vh; }
 }
+
+/* 🧩 Vista previa de la importación de fomentos (Excel en mosaico). */
+.mosaicoModal { max-width: 640px; gap: 10px; }
+.mosaicoModal__hoja { display: grid; gap: 4px; margin: 0; font-size: 12.5px; font-weight: 700; }
+.mosaicoModal__hoja select { width: 100%; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--c-border); font: inherit; }
+.mosaicoModal__kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.mosaicoModal__kpis span { display: grid; gap: 1px; padding: 8px 10px; border-radius: 10px; background: #f5f3ff; border: 1px solid #ddd6fe; }
+.mosaicoModal__kpis small { font-size: 11px; font-weight: 700; color: #6d28d9; }
+.mosaicoModal__kpis strong { font-size: 17px; color: #4c1d95; }
+.mosaicoModal__nota { margin: 0; font-size: 12px; color: var(--c-text-muted); }
+.mosaicoModal__lista { display: grid; gap: 6px; max-height: 46vh; overflow-y: auto; padding-right: 2px; }
+.mosaicoModal__fila { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 10px; align-items: center; margin: 0; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--c-border); background: var(--c-surface); cursor: pointer; }
+.mosaicoModal__fila input { width: 18px; height: 18px; margin: 0; }
+.mosaicoModal__fila--off { opacity: .5; }
+.mosaicoModal__txt { display: grid; gap: 2px; min-width: 0; }
+.mosaicoModal__txt strong { font-size: 13.5px; overflow-wrap: anywhere; }
+.mosaicoModal__txt small { font-size: 11.5px; color: var(--c-text-muted); }
+.mosaicoModal__aviso { color: #b45309 !important; font-weight: 600; }
+.mosaicoModal__nuevo { margin-left: 6px; font-style: normal; font-size: 10px; font-weight: 800; padding: 1px 6px; border-radius: 999px; background: #dbeafe; color: #1d4ed8; vertical-align: middle; }
+.mosaicoModal__monto { font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mosaicoModal__fuera { display: grid; gap: 4px; padding: 8px 10px; border-radius: 10px; background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; font-size: 12px; }
+@media (max-width: 640px) {
+  .modalOverlay:has(.mosaicoModal) { align-items: flex-end; padding: 0; }
+  .mosaicoModal { max-width: none; border-radius: 20px 20px 0 0; max-height: 92vh; }
+  .mosaicoModal__kpis strong { font-size: 15px; }
+}

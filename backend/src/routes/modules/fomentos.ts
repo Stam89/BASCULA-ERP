@@ -533,6 +533,8 @@ const bulkImportSchema = z.object({
     cliente: z.string().min(2).max(160),
     cuadras: z.number().nonnegative().optional(),
     limite:  z.number().nonnegative().optional(),
+    // Interés mensual del cuadro («RENTA:», p. ej. 0.07 = 7 %). Sin dato → 0.07 como antes.
+    renta: z.number().min(0).max(0.5).optional(),
     entregas: z.array(z.object({
       // El front ya convierte la fecha de Excel a ISO; se acepta opcional.
       fecha: z.string().optional(),
@@ -592,8 +594,8 @@ fomentosRouter.post("/bulk-import", asyncRoute(async (req, res) => {
       // (b) Fomento principal.
       const fom = await client.query(
         `INSERT INTO fomentos (accionista_id, farmer_name, farmer_id, cuadras, inicio, cosecha, renta, status, notes, limite_credito)
-         VALUES ($1,$2,$3,$4,$5,$6,0.07,'ACTIVOS',$7,$8) RETURNING id`,
-        [accionistaId, nombre, farmerId, cuadras, inicio, cosecha, "Importado (mosaico 2D)", limite]
+         VALUES ($1,$2,$3,$4,$5,$6,$9,'ACTIVOS',$7,$8) RETURNING id`,
+        [accionistaId, nombre, farmerId, cuadras, inicio, cosecha, "Importado (mosaico 2D)", limite, b.renta ?? 0.07]
       );
       fomentosCreados++;
 
