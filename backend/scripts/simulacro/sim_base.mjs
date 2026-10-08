@@ -35,6 +35,10 @@ export async function montar({ puerto = 4001, copiar = true } = {}) {
   const { signToken } = await import(`${DIST}/auth/jwt.js`);
   const { ensureLaborTables } = await import(`${DIST}/routes/modules/labor.js`);
   const { pool } = await import(`${DIST}/db/pool.js`);
+  // SEGURIDAD: si algún módulo cargó `dist/db/pool.js` ANTES de apuntar a la copia (por ejemplo un import estático
+  // que lo arrastre), la app escribiría en la base REAL. Se comprueba y se aborta antes de hacer cualquier cosa.
+  const dbApp = (await pool.query("SELECT current_database() AS d")).rows[0].d;
+  if (dbApp !== COPIA) throw new Error(`ABORTADO: la app quedó conectada a «${dbApp}» y no a la copia «${COPIA}». No se ejecuta nada.`);
   await ensureLaborTables();
   const server = await new Promise((res) => { const s = app.listen(puerto, "127.0.0.1", () => res(s)); });
   const c = new pg.Client({ connectionString: process.env.DATABASE_URL }); await c.connect();
