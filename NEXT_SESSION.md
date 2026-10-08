@@ -49,6 +49,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🔢 «Contar desde» por NÚMERO de ticket (Báscula y Bajada de carro) (2026-10-08, pedido del dueño)
+- Antes el corte era una FECHA; ahora es el número de ticket de la báscula (`raw_payload->>'numeroTicket'`, «000 300» → 300; único y correlativo). Migración `20261077` agrega `desde_numero` a `bascula_config` y `bajada_carro_config` y lo llenó con el primer ticket desde la fecha vigente: Báscula 28/09 → **#300**, Bajada 26/09 → **#299** (verificado: mismos pendientes, mismos ocultos (294), mismas bajadas, mismos 44 sin nombre).
+- Si `desde_numero` está vacío se usa la fecha `desde` como antes (el borrado de datos de prueba deja Bajada con fecha = hoy y número NULL). Un ticket sin número no se esconde por el corte numérico.
+- Backend: `services/bascula-corte.ts` (`numeroTicketSql`, `leerCorteBascula` → `{desde, numero}`, `dentroDelCorteSql`), usado en `/tickets` (pendientes y `antes_del_corte`), `/tickets/corte` (devuelve `numero`, `fecha_numero`, `ultimo`, `ocultos`), `/tickets/por-ingresar`, `/api/bascula/status`. `PUT /tickets/corte {numero|null}`. Bajada (`cuadrilla.ts`): `CORTE_BAJADA` en sincronizar/contadores, `GET /bajadas` devuelve `desde_numero`, `ultimo_numero`, `desde` (= fecha del primer ticket que cuenta) y `antes_del_corte` por fila; `PUT /bajadas/desde {numero}`.
+- UI: campo «Contar desde el ticket #» (con «último: N» de ayuda y la fecha de ese ticket) en Báscula y en Nómina → Bajada de carro; botón «📋 Todo desde el #N».
+- Simulacro `contar_desde.mjs` (copia; aplica la migración en la copia si falta): TODO OK.
+
 ### 🛍️ Inventario: marcas/empacados en un MODAL (2026-10-08, pedido del dueño)
 - La tarjeta de detalle «Marcas / empacados» ya no se muestra. En «Producto terminado», las filas Producto 0.11 / Producto Corriente son botones («🛍️ Empacado en N marcas · X QQ  Ver ›») que abren el modal `ModalEmpacados` (en `InventarioExistencias.tsx`): granel sin empacar, total empacado y una tarjeta por marca (QQ, barra, estado y presentaciones del catálogo de sacos con sacos vacíos en bodega). La tarjeta de resumen «Marcas» abre todas, agrupadas por 0.11 / Corriente. Si se busca una marca, aparece un atajo para abrirla. Esc / ✕ / clic fuera cierran; en el celular sube desde abajo como hoja.
 - Calidad de cada marca = la misma regla que al vender (`getInventoryProductForBrand` → ARROZ-PILADO-011/CORRIENTE; si no, el nombre con «0.11»/«CORRIENTE»). Se arma en App.tsx (`marcasEmpacadas`, `calidadDeProductoTerminado`, declarados DESPUÉS de `sacosDelActivo` para no caer en TDZ). Solo presentación: no cambia stock ni ventas.
