@@ -17,7 +17,10 @@ try {
   // Arroz terminado de STALYN (solo en la copia) y su caja
   await q("INSERT INTO inventory_movements (product_id, warehouse_id, movement, quantity, reference_type, ownership, accionista_id) VALUES ($1,$2,'IN',200,'simulacro','OWNED',$3)", [prod, bodPT, stalyn]);
   const cajaS = exigir(await api("POST", "/cash/registers/open", { name: "Caja STALYN", tipo: "EFECTIVO", opening_balance_cash: 800 }, stalyn), "0a. STALYN abre su caja con $800");
-  const cajaM = exigir(await api("POST", "/cash/registers/open", { name: "Caja CEYRO", tipo: "EFECTIVO", opening_balance_cash: 300 }), "0b. CEYRO abre su caja con $300");
+  // Si la base real ya tiene la caja de CEYRO abierta (operación del día), se usa esa.
+  const abiertaM = await api("POST", "/cash/registers/open", { name: "Caja CEYRO", tipo: "EFECTIVO", opening_balance_cash: 300 });
+  const cajaM = abiertaM.ok ? abiertaM.data : (await api("GET", "/cash/registers/current")).data;
+  check(!!cajaM?.id, "0b. CEYRO tiene caja abierta");
   const saldo = async (id, acc) => r2((await api("GET", `/cash/registers/${id}/summary`, undefined, acc)).data.current_balance);
   const cli = exigir(await api("POST", "/customers", { full_name: "CLIENTE DE STALYN" }, stalyn), "0c. Cliente de STALYN");
   const tarifa = (await q("SELECT precio_saco_10lb::float a, precio_saco_25lb::float b, precio_saco_50lb::float c FROM matriz_packaging_rates WHERE accionista_id=$1", [matriz]))[0];
