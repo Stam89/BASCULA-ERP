@@ -5139,3 +5139,18 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
   .nomHist td:empty { display: none; }
   .nomHist td[colspan] { grid-column: 1 / -1; grid-row: 1; text-align: center; }
 }
+
+/* Transporte y Cosechadora: franja de pendientes en la pantalla de Caja. */
+.campoAlertas { display: grid; gap: 8px; margin: 0 0 14px; }
+.campoAlerta { display: flex; gap: 10px; align-items: flex-start; text-align: left; width: 100%; padding: 10px 12px; border-radius: 12px;
+  border: 1px solid var(--c-border, #e2e8f0); background: var(--c-surface, #fff); cursor: pointer; font: inherit; color: inherit; }
+.campoAlerta:disabled { cursor: default; }
+.campoAlerta--atencion { background: #fff7ed; border-color: #fdba74; }
+.campoAlerta--info { background: #f0f9ff; border-color: #bae6fd; }
+.campoAlerta__ico { font-size: 20px; line-height: 1.2; }
+.campoAlerta__txt { display: grid; gap: 2px; min-width: 0; }
+.campoAlerta__txt small { opacity: 0.8; font-size: 12.5px; overflow-wrap: anywhere; }
+@media (prefers-color-scheme: dark) {
+  .campoAlerta--atencion { background: #3a2412; border-color: #9a5b1f; }
+  .campoAlerta--info { background: #10303f; border-color: #1f6a8a; }
+}

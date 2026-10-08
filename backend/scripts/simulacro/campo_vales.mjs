@@ -144,6 +144,13 @@ try {
   const nominaCerrada = await api("POST", "/campo/nomina-operadores/liquidar", { parte_ids: [(await parte(5)).id], cuenta_id: CAJA, monto: 1, motivo: "prueba" });
   check(nominaCerrada.status >= 400, "G2. pagar nómina con la caja cerrada se rechaza", nominaCerrada.status);
 
+  // ── H. Alertas del módulo ──────────────────────────────────────────────
+  exigir(await api("POST", "/campo/movimientos", { cuenta_id: BANCO, signo: "salida", monto: 7, concepto: "Vale en banco", es_anticipo: true, activo_id: camion }), "H0. vale de $7 desde BANCO");
+  const al = await api("GET", "/campo/alertas");
+  const claves = (al.data.alertas ?? []).map((x) => x.key);
+  check(al.ok && claves.includes("partes-por-cobrar") && claves.includes("operadores-sin-pagar") && claves.includes("cartera"), "H1. las alertas de Campo muestran partes por cobrar, operadores sin pagar y cartera", claves);
+  check((al.data.alertas ?? []).every((x) => ["atencion", "info"].includes(x.nivel) && x.titulo && x.seccion), "H2. cada alerta trae nivel, título y la sección donde se resuelve");
+
   // ── D. Cuadre global de Campo ──────────────────────────────────────────
   const neg = (await q("SELECT count(*)::int n FROM campo_servicios_saldo WHERE saldo_pendiente < -0.005"))[0].n;
   check(neg === 0, "D1. ningún servicio con saldo negativo", neg);

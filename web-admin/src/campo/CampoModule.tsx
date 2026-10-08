@@ -228,6 +228,29 @@ type PorCobrar = { por_cliente: PorCobrarCliente[]; detalle: PorCobrarDetalle[];
 type Maquina = { activo_id: string | null; activo_nombre: string; activo_tipo: string | null; ingresos: number; gastos: number; ganancia: number; qq: number; gastos_por_categoria: Array<{ categoria: string; gasto: number }> };
 type PorMaquina = { periodo: { desde: string; hasta: string }; maquinas: Maquina[] };
 
+type AlertaCampoUI = { key: string; nivel: "atencion" | "info"; icono: string; titulo: string; detalle: string; seccion: CampoSeccion };
+
+/** Franja de «lo que hay que atender» al abrir Transporte y Cosechadora. Si falla, no se muestra (no estorba). */
+function AlertasCampo({ onIr, version }: { onIr?: (s: CampoSeccion) => void; version: number }) {
+  const [alertas, setAlertas] = useState<AlertaCampoUI[]>([]);
+  useEffect(() => {
+    let vivo = true;
+    apiGet<{ alertas: AlertaCampoUI[] }>("/campo/alertas").then((r) => { if (vivo) setAlertas(r.alertas); }).catch(() => { if (vivo) setAlertas([]); });
+    return () => { vivo = false; };
+  }, [version]);
+  if (alertas.length === 0) return null;
+  return (
+    <div className="campoAlertas" role="region" aria-label="Pendientes de Transporte y Cosechadora">
+      {alertas.map((a) => (
+        <button key={a.key} type="button" className={`campoAlerta campoAlerta--${a.nivel}`} onClick={() => onIr?.(a.seccion)} disabled={!onIr}>
+          <span className="campoAlerta__ico" aria-hidden="true">{a.icono}</span>
+          <span className="campoAlerta__txt"><strong>{a.titulo}</strong><small>{a.detalle}</small></span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function CampoModule({ section = "caja", nombre, matrizName = "Matriz", onNombreChange, onIrSeccion }: {
   section?: CampoSeccion; nombre?: string; matrizName?: string; onNombreChange?: (n: string) => void;
   /** Cambia de sección del menú de Transporte (p. ej. de la caja al Estado de Resultados). */
@@ -421,6 +444,8 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
           </div>
           {!cajaAbierta && <button type="button" className="cj-btn cj-btn--primary" onClick={() => setModalCaja("abrir")}>🔓 Abrir caja</button>}
         </div>
+
+        <AlertasCampo onIr={onIrSeccion} version={libroVersion} />
 
         {/* Tarjetas de saldo */}
         <div className="cj-kpis">

@@ -8,6 +8,7 @@ import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { crearParteDesdeBascula } from "../../services/campo-flete-bascula.js";
 import { calcularNominaCampo, tipoServicioPorActivo, totalFilaNomina, valeEsDeOperador, type CampoUnidadNomina } from "../../utils/campo.js";
 import { armarResultado, informativo, lineasDelPeriodo, notasDelPeriodo, qqPorActivo, rangoMes } from "../../services/campo-resultados.js";
+import { alertasDeCampo } from "../../services/campo-alertas.js";
 
 // MÓDULO INDEPENDIENTE: Caja de Campo (cosechadora + transporte/fletes).
 // V1 = solo captura (CRUD). Sin relación con túneles, piladora, ventas ni
@@ -182,6 +183,11 @@ async function exigirNombreLibre(tabla: "campo_activos" | "campo_operadores", no
   );
   if (r.rowCount) throw new ApiError(409, `Ya existe ${que} con el nombre «${nombre.trim()}». Edítalo o usa otro nombre.`);
 }
+
+// Alertas del módulo (vales sin rendir, mantenimientos vencidos, partes sin cobrar, operadores sin pagar, cartera).
+campoRouter.get("/alertas", asyncRoute(async (_req, res) => {
+  res.json({ alertas: await alertasDeCampo() });
+}));
 
 // ── Catálogo: maquinaria/flota (activos: cosechadora/camión/vehículo/otro) ────
 // La FK "maquinaria_id" es campo_movimientos.activo_id → campo_activos.
