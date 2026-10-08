@@ -85,7 +85,7 @@ try {
     const cajaM = await abrir(matriz, "Caja CEYRO");
     const saldoM = async () => r2((await api("GET", `/cash/registers/${cajaM.id}/summary`)).data.current_balance);
     const m0 = await saldoM(), s0 = await saldoCaja();
-    exigir(await api("POST", `/cash/payables/${ch.payable_id}/pay`, { cash_register_id: caja.id, amount: Number(ch.monto) }, stalyn), "E6. STALYN paga el cargo de empaque a CEYRO");
+    exigir(await api("POST", `/cash/payables/${ch.payable_id}/pay`, { cash_register_id: caja.id, amount: Number(ch.monto) }, stalyn, { "x-confirmar": "SOBREGIRO" }), "E6. STALYN paga el cargo de empaque a CEYRO");
     const mov = (await q("SELECT id FROM cash_movements WHERE reference_type='accounts_payable' AND reference_id=$1 AND reversed_at IS NULL", [ch.payable_id]))[0];
     exigir(await api("POST", `/cash/movements/${mov.id}/reverse`, { reason: "pago equivocado" }, stalyn), "E7. STALYN anula ese pago en su Caja");
     const ap = (await q("SELECT balance::float b, status FROM accounts_payable WHERE id=$1", [ch.payable_id]))[0];
