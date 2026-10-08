@@ -5123,7 +5123,7 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 
 /* Historial de pagos de nómina de operadores: en el celular se ve como tarjetas (el botón Anular siempre a la vista). */
 @media (max-width: 640px) {
-  .nomHist, .nomHist tbody { display: block; width: 100%; }
+  .nomHist, .nomHist tbody { display: block; width: 100%; min-width: 0; }
   .nomHist thead { display: none; }
   .nomHist tr { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 10px 0; border-bottom: 1px solid var(--c-border, #e2e8f0); }
   .nomHist td { display: block; padding: 0; border: 0; text-align: left; white-space: normal; }

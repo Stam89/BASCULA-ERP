@@ -14258,7 +14258,7 @@ export function App() {
                         movimiento con fecha, descripción y monto. Los egresos con signo menos. El sistema cruza solo
                         lo que coincide en importe y fecha, y te muestra las partidas que explican la diferencia.
                       </p>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 8 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginTop: 8 }}>
                         <label><span>Cuenta bancaria</span>
                           <select
                             value={extractoForm.cash_register_id}
@@ -20998,7 +20998,7 @@ export function App() {
                         );
                       })()}
                       {!editingCuadId && (
-                        <label><span>Anticipo / Adelanto ($) <small className="muted">— opcional</small></span>
+                        <label><span>Anticipo / Adelanto ($) <small className="muted">— opcional · sale de la caja abierta</small></span>
                           <input type="number" step="0.01" min="0" value={cuadEntryForm.anticipo} onChange={(e) => setCuadEntryForm({ ...cuadEntryForm, anticipo: e.target.value })} placeholder="0.00" />
                         </label>
                       )}
