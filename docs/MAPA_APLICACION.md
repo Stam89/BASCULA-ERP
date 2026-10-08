@@ -47,7 +47,7 @@ Los administradores pueden operar todos los modulos. Los operadores usan permiso
 |---|---|---|
 | Dashboard | `dashboard.ts` | Indicadores del socio activo |
 | Bascula Android/web | `mobile-tickets.ts`, `bascula-sync.ts`, `weighing-tickets.ts`, `lots.ts` | Tickets, identidad anti-duplicado, lotes, pesos y traspasos |
-| Secadoras y Tendal | `process-flow.ts`, `tunnel-reservations.ts`, `tunnel-occupancy.ts` | Llenado, horarios, combustible, servicio/propio y cierres |
+| Secadoras y Tendal | `process-flow.ts` | Llenado, horarios, combustible, servicio/propio y cierres |
 | Produccion/Pilado | `processing.ts` | Cascara consumida, productos, subproductos, mermas y maquila |
 | Inventario | `inventory.ts`, `sacks.ts`, `products.ts` | Movimientos, existencias derivadas, sacos y catalogo |
 | Seleccion/Envejecido | `selection.ts` | Envios, proceso externo, reingreso, merma y transformacion |
