@@ -22,6 +22,7 @@ import { CorreoRecuperacionModal } from "./components/CorreoRecuperacion";
 import { ConfigCorreoClaves } from "./components/ConfigCorreoClaves";
 import { ResumenDiarioConfig } from "./components/ResumenDiarioConfig";
 import { ControlIntegridad } from "./components/ControlIntegridad";
+import { InventarioExistencias, type GrupoStock } from "./components/InventarioExistencias";
 import { AsistenteArranque } from "./asistente/AsistenteArranque";
 import { InicioSimple, type Insignia } from "./inicio/InicioSimple";
 import { armarTiles } from "./inicio/tiles";
@@ -14662,39 +14663,19 @@ Motivo (obligatorio):`, "");
               </div>
             </div>
 
-            {/* Tarjetas resumen (KPIs) — totales en QQ */}
-            <div style={{ gridColumn: "1 / -1", display: "flex", gap: 12, flexWrap: "wrap" }}>
-              <KpiCard title="Total Cáscara" value={`${rawStockRows.reduce((s, r) => s + Number(r.quantity), 0).enReal()} QQ`} sub={`${rawStockRows.length} ítem(s)`} color="#b45309" />
-              <KpiCard title="Total Producto Terminado" value={`${finishedStockRows.reduce((s, r) => s + Number(r.quantity), 0).enReal()} QQ`} sub={`${finishedStockRows.length} ítem(s)`} color="#16a34a" />
-              <KpiCard title="Total Marcas / Empacados" value={`${packagedStockRows.reduce((s, r) => s + Number(r.quantity), 0).enReal()} QQ`} sub={`${packagedStockRows.length} ítem(s)`} color="#7c3aed" />
-              <KpiCard title="Total Subproductos" value={`${byproductStockRows.reduce((s, r) => s + Number(r.quantity), 0).enReal()} QQ`} sub={`${byproductStockRows.length} ítem(s)`} color="#2563eb" />
+            {/* Panel de existencias: resumen de colores por categoría + detalle con barras y estados. */}
+            <div style={{ gridColumn: "1 / -1" }}>
+              <InventarioExistencias grupos={[
+                { clave: "cascara", titulo: "Cáscara", ayuda: "Arroz en cáscara recibido, antes de pilar", icono: "🌾", color: "#f59e0b", color2: "#b45309", filas: rawStockRows },
+                { clave: "terminado", titulo: "Producto terminado", ayuda: "Arroz pilado listo para vender", icono: "🍚", color: "#22c55e", color2: "#15803d", filas: finishedStockRows },
+                { clave: "marcas", titulo: "Marcas / empacados", ayuda: "Arroz empacado por marca y presentación", icono: "🛍️", color: "#a78bfa", color2: "#6d28d9", filas: packagedStockRows },
+                { clave: "subproductos", titulo: "Subproductos", ayuda: "Arrocillo, polvillo y otros que salen del pilado", icono: "🌿", color: "#60a5fa", color2: "#1d4ed8", filas: byproductStockRows },
+                ...(otherStockRows.length > 0 ? [{ clave: "otros", titulo: "Otros stocks", ayuda: "Productos fuera de las categorías anteriores", icono: "📦", color: "#94a3b8", color2: "#475569", filas: otherStockRows }] : [])
+              ] as GrupoStock[]} />
             </div>
 
-            {/* Existencias en 2×2: cáscara | terminado (arriba) · subproductos | sacos (abajo).
-                Las tablas ya están categorizadas por su título, así que la columna "Bodega"
-                se omite por redundante. */}
-            <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 14, alignItems: "start" }}>
-              <DataList
-                title="Stock cáscara"
-                headers={["Producto", "Cantidad"]}
-                rows={rawStockRows.map((row) => [row.product_name, `${Number(row.quantity).enReal()} ${row.unit}`])}
-              />
-              <DataList
-                title="Stock producto terminado"
-                headers={["Producto", "Cantidad"]}
-                rows={finishedStockRows.map((row) => [row.product_name, `${Number(row.quantity).enReal()} ${row.unit}`])}
-              />
-              <DataList
-                title="Stock marcas / empacados"
-                headers={["Producto", "Cantidad"]}
-                rows={packagedStockRows.map((row) => [row.product_name, `${Number(row.quantity).enReal()} ${row.unit}`])}
-              />
-              <DataList
-                title="Stock subproductos"
-                headers={["Producto", "Cantidad"]}
-                rows={byproductStockRows.map((row) => [row.product_name, `${Number(row.quantity).enReal()} ${row.unit}`])}
-              />
-
+            {/* Sacos (solo Matriz). */}
+            <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 14, alignItems: "start" }}>
               {/* ── Inventario de Sacos (cuarto cuadrante, balancea el grid) ──
                   Los sacos son propiedad exclusiva de la Matriz. Un socio
                   operativo no maneja empaques: se oculta por completo (tabla +
@@ -14741,16 +14722,6 @@ Motivo (obligatorio):`, "");
               </section>
               )}
             </div>
-
-            {otherStockRows.length > 0 && (
-              <div style={{ gridColumn: "1 / -1" }}>
-                <DataList
-                  title="Otros stocks"
-                  headers={["Producto", "Cantidad"]}
-                  rows={otherStockRows.map((row) => [row.product_name, `${Number(row.quantity).enReal()} ${row.unit}`])}
-                />
-              </div>
-            )}
 
             <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
               <button type="button" className="btnSecondary" onClick={() => loadNegativeStock().catch((e) => addToast(e.message, "error"))}>

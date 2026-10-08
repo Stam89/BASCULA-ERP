@@ -5154,3 +5154,48 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
   .campoAlerta--atencion { background: #3a2412; border-color: #9a5b1f; }
   .campoAlerta--info { background: #10303f; border-color: #1f6a8a; }
 }
+
+/* ── Inventario → panel de existencias (colorido) ───────────────────────────── */
+.invx { display: grid; gap: 16px; }
+.invx__resumen { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.invx__kpi { position: relative; display: grid; gap: 2px; text-align: left; color: #fff; border: 0; cursor: pointer; font: inherit;
+  padding: 14px 16px 12px; border-radius: 18px; background: linear-gradient(135deg, var(--c1), var(--c2));
+  box-shadow: 0 8px 20px -10px var(--c2); transition: transform .15s ease, box-shadow .15s ease; overflow: hidden; }
+.invx__kpi::after { content: ""; position: absolute; right: -28px; bottom: -28px; width: 110px; height: 110px; border-radius: 50%; background: rgba(255,255,255,.12); }
+.invx__kpi:hover { transform: translateY(-2px); box-shadow: 0 12px 24px -10px var(--c2); }
+.invx__kpiIcono { position: absolute; right: 14px; top: 10px; font-size: 34px; line-height: 1; filter: drop-shadow(0 2px 3px rgba(0,0,0,.25)); }
+.invx__kpiTitulo { font-size: 11.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; opacity: .95; padding-right: 44px; }
+.invx__kpiValor { font-size: 28px; font-weight: 800; line-height: 1.1; font-variant-numeric: tabular-nums; margin-top: 4px; }
+.invx__kpiValor small { font-size: 14px; font-weight: 700; opacity: .9; }
+.invx__kpiSub { font-size: 12px; opacity: .92; }
+.invx__kpiBarra { display: block; height: 6px; border-radius: 99px; background: rgba(255,255,255,.3); margin-top: 8px; overflow: hidden; }
+.invx__kpiBarra i { display: block; height: 100%; background: #fff; border-radius: 99px; }
+.invx__kpiPct { font-size: 11px; opacity: .92; position: relative; z-index: 1; }
+.invx__barra { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.invx__barra input { flex: 1 1 240px; min-width: 0; padding: 11px 14px; border-radius: 14px; border: 1px solid var(--c-border, #d8e4df); background: var(--c-surface, #fff); color: inherit; font: inherit; }
+.invx__leyenda { display: flex; flex-wrap: wrap; gap: 6px; }
+.invx__chip { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
+.invx__chip--ok { background: #dcfce7; color: #166534; }
+.invx__chip--cero { background: #f1f5f9; color: #64748b; }
+.invx__chip--neg { background: #fee2e2; color: #b91c1c; }
+.invx__vacio { margin: 0; padding: 18px; text-align: center; border-radius: 14px; border: 1px dashed var(--c-border-strong, #bfcfc9); color: var(--c-text-muted, #5a7168); }
+.invx__detalle { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; align-items: start; }
+.invx__card { background: var(--c-surface, #fff); border: 1px solid var(--c-border, #d8e4df); border-radius: 18px; overflow: hidden; scroll-margin-top: 80px; box-shadow: 0 2px 8px -4px rgba(15,23,42,.18); }
+.invx__cabeza { display: flex; align-items: center; gap: 12px; padding: 12px 14px; color: #fff; background: linear-gradient(135deg, var(--c1), var(--c2)); }
+.invx__cabezaIcono { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 14px; font-size: 22px; background: rgba(255,255,255,.22); flex: none; }
+.invx__cabezaTxt { display: grid; min-width: 0; }
+.invx__cabezaTxt strong { font-size: 15px; }
+.invx__cabezaTxt small { font-size: 11.5px; opacity: .92; overflow-wrap: anywhere; }
+.invx__lista { list-style: none; margin: 0; padding: 4px 12px 10px; }
+.invx__fila { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "nombre cant" "barra chip"; gap: 6px 10px; align-items: center; padding: 11px 2px; border-bottom: 1px solid var(--c-border, #e2e8f0); }
+.invx__fila:last-child { border-bottom: 0; }
+.invx__nombre { grid-area: nombre; font-weight: 700; min-width: 0; overflow-wrap: anywhere; }
+.invx__cant { grid-area: cant; font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; text-align: right; }
+.invx__cant small { font-size: 11px; font-weight: 700; opacity: .7; }
+.invx__barra2 { grid-area: barra; display: block; height: 8px; border-radius: 99px; background: rgba(100,116,139,.18); overflow: hidden; }
+.invx__barra2 i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--c1), var(--c2)); }
+.invx__fila .invx__chip { grid-area: chip; justify-self: end; }
+.invx__fila--neg .invx__barra2 i { background: #dc2626; }
+.invx__fila--neg .invx__cant { color: #dc2626; }
+.invx__fila--cero .invx__nombre, .invx__fila--cero .invx__cant { opacity: .6; }
+@media (max-width: 640px) { .invx__kpiValor { font-size: 24px; } .invx__resumen { grid-template-columns: repeat(2, minmax(0, 1fr)); } .invx__kpi { padding: 12px 12px 10px; } .invx__kpiIcono { font-size: 26px; } .invx__kpiTitulo { padding-right: 30px; font-size: 10.5px; } }
