@@ -160,6 +160,26 @@ td:first-child { font-weight: 700; }
         <p>Cuando <strong>Hoy</strong> avise <em>«tickets sin quién bajó el carro»</em>, toca la tarea y pon el nombre de quien bajó cada carro. Sin nombre, ese trabajo no se puede pagar el viernes.</p>
       </article>
 
+      <article class="tarea">
+        <header><h3>👷 Cuadrilla y anticipos</h3><span class="quien">Nómina · solo la Matriz (CEYRO)</span></header>
+        <ol class="pasos">
+          <li><span>Registra la carga o descarga con la actividad, la cuadrilla y la cantidad.</span></li>
+          <li><span>Si le das un adelanto, escríbelo en <strong>Anticipo</strong>: el dinero <strong>sale de la caja abierta</strong>. Sin caja abierta, la app te pide abrirla.</span></li>
+          <li><span>Para pagar, toca <span class="boton">Pagar</span> en esa persona: se descuenta el anticipo y sale de caja solo el resto.</span></li>
+        </ol>
+        <p class="ojo">Un registro que ya se pagó no se puede editar ni borrar. Si fue un error, el administrador anula el pago en Caja y entonces se corrige.</p>
+      </article>
+
+      <article class="tarea">
+        <header><h3>🚛 Pagar a los operadores</h3><span class="quien">Transporte y Cosechadora · administrador</span></header>
+        <ol class="pasos">
+          <li><span>En <strong>Nómina Operadores</strong> elige el periodo y la cuenta desde la que se paga.</span></li>
+          <li><span>Revisa cada fila (base, extras, descuentos de vales). Si cambias la base, escribe el motivo.</span></li>
+          <li><span>Toca <span class="boton">Procesar Nómina en Lote</span>. Si una fila falla, no se paga ninguna.</span></li>
+        </ol>
+        <p class="ojo">¿Se pagó mal? En <strong>Pagos de nómina recientes</strong> toca <span class="boton">Anular</span> y escribe el motivo: el dinero vuelve a la cuenta, los partes quedan sin pagar y los vales se devuelven.</p>
+      </article>
+
     </div>
   </section>
 
@@ -181,6 +201,7 @@ td:first-child { font-weight: 700; }
         <tbody>
           <tr><td>«No tienes permiso…» o «solo lectura»</td><td>No es un daño. Pide al administrador el permiso para esa pantalla.</td></tr>
           <tr><td>La pantalla no carga o los datos no cambian</td><td>Toca <span class="boton">↻ Actualizar</span>. Si sigue igual, espera un minuto: el sistema se reinicia solo. Si aún no funciona, avisa al administrador (la PC del local debe estar encendida).</td></tr>
+          <tr><td>«Ya se pagó: no se puede editar / borrar» o «ya cobró ese período»</td><td>Es una protección: ese dinero ya salió de la caja. Avisa al administrador para anular el pago (en Caja, o <span class="boton">Anular</span> en la nómina de operadores) y luego se corrige.</td></tr>
           <tr><td>Registraste algo mal</td><td>No lo vuelvas a registrar encima. Avisa al administrador: él puede reabrir un túnel, anular una liquidación o reversar un movimiento de caja.</td></tr>
           <tr><td>No encuentras un ticket, agricultor o lote</td><td>Toca <span class="boton">🔎 Buscar</span> (en computadora, <kbd>Ctrl</kbd>+<kbd>K</kbd>) y escribe el número, la placa o el nombre.</td></tr>
           <tr><td>Un ticket de la báscula no aparece</td><td>Espera unos minutos: los tickets se traen solos cada 3 minutos. Si no llega, usa el ingreso manual de emergencia y avisa.</td></tr>
@@ -198,6 +219,7 @@ td:first-child { font-weight: 700; }
           <tr><td>Richar</td><td>Báscula, Secadoras, Producción, Servicio de Secado, Selección, Inventario, Ventas, Agricultores, Nómina y Gana.</td></tr>
           <tr><td>Cecilia</td><td>Ventas, Por cobrar y Por pagar.</td></tr>
           <tr><td>Angie</td><td>En CEYRO: Selección, Inventario, Por cobrar y Por pagar. En ROVINSON también la Caja.</td></tr>
+          <tr><td>Cuadrilla y anticipos</td><td>Solo la Matriz (CEYRO). Los socios no pagan cuadrilla.</td></tr>
           <tr><td>Administrador</td><td>Todas las pantallas, configuración, permisos y correcciones.</td></tr>
         </tbody>
       </table>
