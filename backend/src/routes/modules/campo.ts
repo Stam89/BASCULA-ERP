@@ -1636,13 +1636,13 @@ campoRouter.post("/nomina-operadores/lote", asyncRoute(async (req, res) => {
       const pago = (await client.query(
         `INSERT INTO campo_nomina_pagos
            (operador, activo_id, unidad, base, tarifa, monto_sugerido, monto, ajustado, motivo,
-            desde, hasta, partes_count, cuenta_id, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11::date, $12, $13, $14)
+            desde, hasta, partes_count, cuenta_id, created_by, vale_ids)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11::date, $12, $13, $14, $15::uuid[])
          RETURNING id`,
         [operador, activoId, unidad, calculo?.base ?? 0, tarifa, calculo?.total ?? null, monto,
          calculo ? Math.abs(monto - calculo.total) > 0.005 : true, motivo,
          partes[0]?.fecha ?? body.desde ?? null, partes[partes.length - 1]?.fecha ?? body.hasta ?? null,
-         partes.length, body.cuenta_id, userId(req)]
+         partes.length, body.cuenta_id, userId(req), vales.map((v) => v.id)]
       )).rows[0];
       if (monto > 0) {
         const extra = [f.extras > 0 ? `+ extras ${usd(f.extras)}` : "", f.descuentos > 0 ? `- desc. ${usd(f.descuentos)}` : ""].filter(Boolean).join(" ");
@@ -1762,6 +1762,84 @@ campoRouter.post("/nomina-operadores/liquidar", asyncRoute(async (req, res) => {
     return { pago_id: pago.id, movimiento_id: movimiento?.id ?? null, pagados: upd.rowCount ?? 0, monto_sugerido: calculo.total };
   });
   res.status(201).json({ ok: true, ...result });
+}));
+
+// Historial de pagos de nómina de operadores (los más recientes primero), con su estado.
+campoRouter.get("/nomina-operadores/pagos", asyncRoute(async (req, res) => {
+  const { limit } = z.object({ limit: z.coerce.number().int().min(1).max(500).default(100) }).parse(req.query);
+  const rows = (await pool.query(
+    `SELECT p.id, p.created_at, p.operador, a.nombre AS activo_nombre, p.monto::float AS monto,
+            p.partes_count, p.desde::text AS desde, p.hasta::text AS hasta, p.motivo,
+            c.nombre AS cuenta_nombre, p.anulado_at, p.anulado_motivo
+       FROM campo_nomina_pagos p
+       LEFT JOIN campo_activos a ON a.id = p.activo_id
+       LEFT JOIN campo_cuentas c ON c.id = p.cuenta_id
+      ORDER BY p.created_at DESC
+      LIMIT $1`,
+    [limit]
+  )).rows;
+  res.json(rows);
+}));
+
+// Anular un pago de nómina: devuelve el dinero a la cuenta (contra-movimiento), deja los partes otra vez
+// «sin pagar» y devuelve los vales que ese pago había descontado. Conserva el historial (queda marcado anulado).
+campoRouter.post("/nomina-operadores/pagos/:id/anular", asyncRoute(async (req, res) => {
+  const body = z.object({ motivo: z.string().trim().min(5).max(400) }).parse(req.body);
+  const result = await inTransaction(async (client) => {
+    const pago = (await client.query(
+      "SELECT * FROM campo_nomina_pagos WHERE id = $1 FOR UPDATE",
+      [req.params.id]
+    )).rows[0];
+    if (!pago) throw new ApiError(404, "Pago de nómina no encontrado");
+    if (pago.anulado_at) throw new ApiError(409, "Este pago ya fue anulado.");
+    const valeIds: string[] = pago.vale_ids ?? [];
+    // Pagos anteriores a esta función no guardaron qué vales descontaron: no se pueden devolver solos.
+    if (!pago.vale_ids && /vale\(s\)/.test(String(pago.motivo ?? ""))) {
+      throw new ApiError(409, "Este pago descontó vales y es anterior a la función de anular: corrige los vales a mano antes.");
+    }
+    const uid = userId(req);
+
+    let reversion = null;
+    if (pago.movimiento_id) {
+      const mov = (await client.query("SELECT * FROM campo_movimientos WHERE id = $1 FOR UPDATE", [pago.movimiento_id])).rows[0];
+      if (!mov) throw new ApiError(409, "El movimiento de este pago ya no existe.");
+      if (mov.reversado_at) throw new ApiError(409, "El movimiento de este pago ya fue reversado.");
+      await requireCajaAbierta([mov.cuenta_id], client);
+      reversion = (await client.query(
+        `INSERT INTO campo_movimientos
+           (fecha, cuenta_id, signo, monto, concepto, activo_id, naturaleza, movimiento_origen_id, motivo_reversion, created_by)
+         VALUES (CURRENT_DATE, $1, 'entrada', $2, $3, $4, 'reversion_nomina_operador', $5, $6, $7)
+         RETURNING id`,
+        [mov.cuenta_id, mov.monto, `Anulación de pago de nómina: ${pago.operador}`.slice(0, 400), mov.activo_id, mov.id, body.motivo, uid]
+      )).rows[0];
+      await client.query("UPDATE campo_movimientos SET reversado_at = now(), reversado_por = $2 WHERE id = $1", [mov.id, uid]);
+    }
+
+    const partes = await client.query(
+      `UPDATE campo_partes SET operador_pagado_at = NULL, operador_pago_monto = NULL, operador_pago_id = NULL
+        WHERE operador_pago_id = $1 RETURNING id`,
+      [pago.id]
+    );
+    let vales = 0;
+    if (valeIds.length) {
+      const v = await client.query(
+        `UPDATE campo_movimientos
+            SET estado = 'PENDIENTE_RENDICION', monto_rendido = NULL,
+                concepto = regexp_replace(COALESCE(concepto, ''), ' · Descontado en nómina de .*$', '')
+          WHERE id = ANY($1::uuid[]) AND estado = 'LIQUIDADO' AND concepto LIKE '%Descontado en nómina de%'
+          RETURNING id`,
+        [valeIds]
+      );
+      if (v.rowCount !== valeIds.length) throw new ApiError(409, "Uno de los vales de este pago ya cambió de estado: corrígelo antes de anular.");
+      vales = v.rowCount ?? 0;
+    }
+    await client.query(
+      "UPDATE campo_nomina_pagos SET anulado_at = now(), anulado_por = $2, anulado_motivo = $3 WHERE id = $1",
+      [pago.id, uid, body.motivo]
+    );
+    return { ok: true, reversion_id: reversion?.id ?? null, partes_liberados: partes.rowCount ?? 0, vales_devueltos: vales };
+  });
+  res.status(201).json(result);
 }));
 
 // ── Conciliación / Cruce de fletes: crédito a favor → convertir parte y aplicar ─

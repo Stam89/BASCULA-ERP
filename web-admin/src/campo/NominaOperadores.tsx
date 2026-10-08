@@ -237,6 +237,11 @@ const FilaNomina = memo(function FilaNomina({ fila: f, idx, edit, onEdit }: {
   );
 });
 
+type PagoHist = {
+  id: string; created_at: string; operador: string; activo_nombre: string | null; monto: number; partes_count: number;
+  cuenta_nombre: string | null; anulado_at: string | null; anulado_motivo: string | null;
+};
+
 export default function NominaOperadores() {
   const [periodo, setPeriodo] = useState<Periodo>("quincena");
   const [rango, setRango] = useState(() => rangoDe("quincena"));
@@ -247,6 +252,7 @@ export default function NominaOperadores() {
   const [edits, setEdits] = useState<Record<string, Edicion>>({});
   const [cuentas, setCuentas] = useState<Cuenta[]>([]);
   const [cuentaId, setCuentaId] = useState("");
+  const [pagos, setPagos] = useState<PagoHist[]>([]);
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
   const notify = (text: string, kind: "ok" | "err" = "ok") => { setFlash({ text, kind }); setTimeout(() => setFlash(null), 4000); };
@@ -263,6 +269,7 @@ export default function NominaOperadores() {
         apiGet<{ filas: FilaMatriz[] }>(`/campo/nomina-operadores/matriz?${qs.toString()}`),
         apiGet<Cuenta[]>("/campo/cuentas")
       ]);
+      setPagos(await apiGet<PagoHist[]>("/campo/nomina-operadores/pagos?limit=60").catch(() => []));
       const cuentasPago = cuentasData.filter((c) => c.nombre !== "CRUCE PILADORA");
       setFilas(data.filas); setCuentas(cuentasPago); setEdits({});
       setCuentaId((actual) => actual || cuentasPago.find((c) => c.nombre === "CAJA")?.id || cuentasPago[0]?.id || "");
@@ -310,6 +317,22 @@ export default function NominaOperadores() {
         }))
       });
       notify(`Nómina procesada: ${r.pagos.length} pago(s) por ${money(r.total)} ✓`);
+      await cargar();
+    } catch (e) { notify((e as Error).message, "err"); } finally { setBusy(false); }
+  }
+
+  async function anularPago(p: PagoHist) {
+    const motivo = window.prompt(`Anular el pago de ${money(p.monto)} a ${p.operador}.
+
+El dinero vuelve a ${p.cuenta_nombre ?? "la cuenta"}, sus partes quedan sin pagar y los vales que descontó vuelven a pendientes.
+
+Motivo (obligatorio):`, "");
+    if (motivo === null) return;
+    if (motivo.trim().length < 5) { notify("Escribe el motivo (mínimo 5 letras).", "err"); return; }
+    try {
+      setBusy(true);
+      const r = await apiPost<{ partes_liberados: number; vales_devueltos: number }>(`/campo/nomina-operadores/pagos/${p.id}/anular`, { motivo: motivo.trim() });
+      notify(`Pago anulado ✓ · ${r.partes_liberados} parte(s) vuelven a pendientes${r.vales_devueltos ? ` · ${r.vales_devueltos} vale(s) devueltos` : ""}`);
       await cargar();
     } catch (e) { notify((e as Error).message, "err"); } finally { setBusy(false); }
   }
@@ -388,6 +411,30 @@ export default function NominaOperadores() {
           <button type="button" className="primary" disabled={busy || resumen.incluidas === 0 || resumen.errores > 0} onClick={procesar}>
             {busy ? "Procesando…" : `💾 Procesar Nómina en Lote · ${resumen.incluidas} · ${money(resumen.total)}`}
           </button>
+        </div>
+      </div>
+
+      <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+        <h3 style={{ margin: "0 0 8px" }}>🧾 Pagos de nómina recientes</h3>
+        <div className="nomMatriz__scroll">
+          <table className="nomMatriz__tabla">
+            <thead><tr><th>Fecha</th><th>Operador</th><th>Máquina</th><th className="num">Partes</th><th className="num">Monto</th><th>Cuenta</th><th>Estado</th><th></th></tr></thead>
+            <tbody>
+              {pagos.length === 0 && <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 12 }}>Aún no hay pagos de nómina.</td></tr>}
+              {pagos.map((p) => (
+                <tr key={p.id} style={p.anulado_at ? { opacity: 0.55 } : undefined}>
+                  <td>{String(p.created_at).slice(0, 10).split("-").reverse().join("/")}</td>
+                  <td>{p.operador}</td>
+                  <td>{p.activo_nombre ?? "—"}</td>
+                  <td className="num">{p.partes_count}</td>
+                  <td className="num">{money(p.monto)}</td>
+                  <td>{p.cuenta_nombre ?? "—"}</td>
+                  <td>{p.anulado_at ? <span title={p.anulado_motivo ?? ""}>Anulado</span> : "Pagado"}</td>
+                  <td>{!p.anulado_at && <button type="button" disabled={busy} onClick={() => anularPago(p)}>Anular</button>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
     </section>

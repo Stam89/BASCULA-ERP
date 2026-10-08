@@ -5548,6 +5548,10 @@ export function App() {
       addToast("Para registrar un anticipo, indica la cuadrilla/trabajador", "error");
       return;
     }
+    if (anticipo > 0 && !dashboard.current_cash_register?.id) {
+      addToast("Abre una caja para entregar el anticipo (el dinero sale de la caja)", "error");
+      return;
+    }
     const creado = await apiPost<{ ingreso_bodega?: { tipo: string; cantidad: number } | null }>("/cuadrilla/entries", {
       work_date: cuadEntryForm.work_date,
       activity_id: cuadEntryForm.activity_id,
@@ -5559,7 +5563,8 @@ export function App() {
       await apiPost("/cuadrilla/advances", {
         worker_name: cuadEntryForm.worker_name.trim(),
         amount: anticipo,
-        concept: "Adelanto en carga/descarga"
+        concept: "Adelanto en carga/descarga",
+        cash_register_id: dashboard.current_cash_register?.id
       });
     }
     setCuadEntryForm({ ...cuadEntryForm, worker_name: "", quantity: "", anticipo: "" });
@@ -5616,13 +5621,19 @@ export function App() {
       addToast("Ingresa el nombre y un monto mayor a 0", "error");
       return;
     }
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) {
+      addToast("Abre una caja para entregar el anticipo (el dinero sale de la caja)", "error");
+      return;
+    }
     await apiPost("/cuadrilla/advances", {
       worker_name: cuadAdvanceForm.worker_name.trim(),
       amount,
-      concept: cuadAdvanceForm.concept.trim() || undefined
+      concept: cuadAdvanceForm.concept.trim() || undefined,
+      cash_register_id: registerId
     });
     setCuadAdvanceForm({ worker_name: "", amount: "", concept: "" });
-    addToast("Anticipo registrado", "success");
+    addToast("Anticipo registrado y descontado de la caja", "success");
     await refreshCuadrilla();
   }
 
@@ -6049,9 +6060,11 @@ export function App() {
     const amount = Number(amtStr);
     if (!amount || amount <= 0) { addToast("Monto inválido", "error"); return; }
     const concept = window.prompt("Concepto (opcional):", "Anticipo") ?? undefined;
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) { addToast("Abre una caja para entregar el anticipo (el dinero sale de la caja)", "error"); return; }
     try {
-      await apiPost("/cuadrilla/advances", { worker_name: workerName, amount, concept });
-      addToast(`Anticipo de ${money(amount)} registrado a ${workerName}`, "success");
+      await apiPost("/cuadrilla/advances", { worker_name: workerName, amount, concept, cash_register_id: registerId });
+      addToast(`Anticipo de ${money(amount)} registrado a ${workerName} (salió de la caja)`, "success");
       await refreshNomina();
     } catch (e) { addToast(`No se pudo registrar: ${e instanceof Error ? e.message : "error"}`, "error"); }
   }

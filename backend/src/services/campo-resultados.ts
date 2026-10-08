@@ -169,7 +169,7 @@ export async function lineasDelPeriodo(db: Db, desde: string, hasta: string): Pr
      UNION ALL
      -- Gastos pagados por caja/banco (sin pagos de créditos: esos ya cuentan como compra).
      SELECT 'gasto',
-            CASE WHEN m.naturaleza = 'pago_nomina_operador' THEN 'NOMINA'
+            CASE WHEN m.naturaleza IN ('pago_nomina_operador', 'reversion_nomina_operador') THEN 'NOMINA'
                  WHEN m.naturaleza = 'ajuste_caja' THEN 'FALTANTE'
                  WHEN m.estado = 'LIQUIDADO' AND m.concepto LIKE '%Descontado en nómina%' THEN 'NOMINA'
                  WHEN cat.nombre IS NOT NULL THEN cat.nombre
@@ -182,7 +182,7 @@ export async function lineasDelPeriodo(db: Db, desde: string, hasta: string): Pr
       WHERE m.fecha BETWEEN $1 AND $2
         AND ((m.naturaleza IN ('operativo', 'mantenimiento_flota') AND m.signo = 'salida'
               AND m.cxp_id IS NULL AND COALESCE(m.estado, '') <> 'PENDIENTE_RENDICION')
-             OR m.naturaleza IN ('ajuste_vale', 'reversion_gasto', 'pago_nomina_operador')
+             OR m.naturaleza IN ('ajuste_vale', 'reversion_gasto', 'pago_nomina_operador', 'reversion_nomina_operador')
              OR (m.naturaleza = 'ajuste_caja' AND m.signo = 'salida'))
      UNION ALL
      -- Compras a crédito: gasto en la fecha de la compra.
