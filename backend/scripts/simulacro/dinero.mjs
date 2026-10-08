@@ -13,6 +13,7 @@ try {
   const bodPT = (await q("SELECT id FROM warehouses WHERE type='FINISHED_GOODS'"))[0].id;
   const stalyn = (await q("SELECT id FROM accionistas WHERE name='STALYN'"))[0].id;
   const stock = async (acc = matriz) => Number((await q("SELECT COALESCE(sum(quantity),0)::float n FROM inventory_movements WHERE product_id=$1 AND warehouse_id=$2 AND accionista_id=$3", [prod, bodPT, acc]))[0].n);
+  const base0 = await stock(); // la base real ya puede tener arroz: todo se mide contra esto + 100
   await q("INSERT INTO inventory_movements (product_id, warehouse_id, movement, quantity, reference_type, ownership, accionista_id) VALUES ($1,$2,'IN',100,'simulacro','OWNED',$3)", [prod, bodPT, matriz]);
   const caja = (await api("POST", "/cash/registers/open", { name: "Caja A", tipo: "EFECTIVO", opening_balance_cash: 1000 })).data;
   const cajaSocio = (await api("POST", "/cash/registers/open", { name: "Caja STALYN", tipo: "EFECTIVO", opening_balance_cash: 500 }, stalyn)).data;
@@ -28,9 +29,9 @@ try {
 
   const p1 = await pedido(10);
   const [pa, pb] = await dos(() => api("PATCH", `/orders/${p1.id}/prepare`, { prepared: true, warehouse_id: bodPT }));
-  check(r2(100 - (await stock())) === 10, "INV2. preparar el mismo pedido dos veces a la vez descuenta UNA sola vez", { descontado: r2(100 - (await stock())), r: [pa.status, pb.status] });
+  check(r2(base0 + 100 - (await stock())) === 10, "INV2. preparar el mismo pedido dos veces a la vez descuenta UNA sola vez", { descontado: r2(base0 + 100 - (await stock())), r: [pa.status, pb.status] });
   const [ca, cb] = await dos(() => api("PATCH", `/orders/${p1.id}/prepare`, { prepared: false }));
-  check(r2(await stock()) === 100, "INV3. revertir la preparación dos veces a la vez devuelve UNA sola vez", { stock: await stock(), r: [ca.status, cb.status] });
+  check(r2(await stock()) === r2(base0 + 100), "INV3. revertir la preparación dos veces a la vez devuelve UNA sola vez", { stock: await stock(), r: [ca.status, cb.status] });
 
   // ── Despacho y cobro ────────────────────────────────────────────────────
   await api("PATCH", `/orders/${p1.id}/prepare`, { prepared: true, warehouse_id: bodPT });
