@@ -140,6 +140,74 @@ fomentosRouter.get("/", asyncRoute(async (req, res) => {
 const upload = multer({ storage: multer.memoryStorage() });
 
 // ── Exportar fomentos a Excel ───────────────────────────────────────────────
+// 📈 INTERESES GANADOS: solo los fomentos a los que YA se les hizo la cuenta (liquidado_at), aunque el
+// agricultor haya quedado con saldo en contra. El interés es el de ese fomento congelado al día de la
+// cuenta (misma fórmula que la deuda: por días desde cada entrega; el saldo arrastrado, por meses fijos).
+// El saldo en contra que pasa a un fomento nuevo incluye ese interés como capital: allí NO se vuelve a
+// contar (solo su interés nuevo, cuando a ese fomento se le haga la cuenta).
+fomentosRouter.get("/intereses", asyncRoute(async (req, res) => {
+  const accionistaId = getAccionistaId(req);
+  const q = z.object({
+    desde: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    hasta: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+  }).parse(req.query);
+  if (q.desde > q.hasta) throw new ApiError(400, "La fecha «desde» es posterior a «hasta».");
+  const r = await pool.query(
+    `WITH c AS (
+       SELECT f.id, f.farmer_name, f.renta::float AS renta, f.status, f.liquidado_at,
+              (f.liquidado_at AT TIME ZONE 'America/Guayaquil')::date AS fecha_cuenta,
+              f.liquidado_at::date AS corte
+         FROM fomentos f
+        WHERE f.accionista_id = $1 AND f.liquidado_at IS NOT NULL
+          AND (f.liquidado_at AT TIME ZONE 'America/Guayaquil')::date BETWEEN $2::date AND $3::date
+     )
+     SELECT c.id, c.farmer_name, c.renta, c.fecha_cuenta::text AS fecha_cuenta,
+            COALESCE(e.capital, 0)::float AS capital,
+            COALESCE(e.saldo_anterior, 0)::float AS saldo_anterior,
+            ROUND(COALESCE(e.interes, 0), 2)::float AS interes,
+            COALESCE(p.cobrado, 0)::float AS cobrado,
+            COALESCE(p.arrastrado, 0)::float AS saldo_en_contra,
+            p.liquidacion
+       FROM c
+       LEFT JOIN LATERAL (
+         SELECT SUM(fe.valor) FILTER (WHERE NOT fe.es_saldo_anterior) AS capital,
+                SUM(fe.valor) FILTER (WHERE fe.es_saldo_anterior) AS saldo_anterior,
+                SUM(CASE WHEN fe.es_saldo_anterior
+                         THEN fe.valor * c.renta * COALESCE(fe.meses_interes_fijo, 0)
+                         ELSE fe.valor * c.renta / 30.0 * GREATEST(c.corte - fe.fecha, 0) END) AS interes
+           FROM fomento_entregas fe WHERE fe.fomento_id = c.id
+       ) e ON true
+       LEFT JOIN LATERAL (
+         SELECT SUM(fp.valor) FILTER (WHERE fp.concepto IS NULL OR fp.concepto NOT LIKE 'Traspaso a fomento nuevo%') AS cobrado,
+                SUM(fp.valor) FILTER (WHERE fp.concepto LIKE 'Traspaso a fomento nuevo%') AS arrastrado,
+                (SELECT l.liquidation_number FROM fomento_pagos x JOIN liquidations l ON l.id = x.liquidation_id
+                  WHERE x.fomento_id = c.id ORDER BY x.created_at DESC NULLS LAST LIMIT 1) AS liquidacion
+           FROM fomento_pagos fp WHERE fp.fomento_id = c.id
+       ) p ON true
+      ORDER BY c.fecha_cuenta DESC, c.farmer_name`,
+    [accionistaId, q.desde, q.hasta]
+  );
+  const filas = r.rows as Array<{ interes: number; capital: number; saldo_anterior: number; cobrado: number; saldo_en_contra: number; fecha_cuenta: string }>;
+  const sum = (k: keyof (typeof filas)[number]) => Math.round(filas.reduce((a, f) => a + Number(f[k] || 0), 0) * 100) / 100;
+  const porMes = new Map<string, { mes: string; interes: number; cuentas: number }>();
+  for (const f of filas) {
+    const mes = f.fecha_cuenta.slice(0, 7);
+    const m = porMes.get(mes) ?? { mes, interes: 0, cuentas: 0 };
+    m.interes = Math.round((m.interes + Number(f.interes)) * 100) / 100; m.cuentas++;
+    porMes.set(mes, m);
+  }
+  res.json({
+    desde: q.desde, hasta: q.hasta,
+    totales: {
+      cuentas: filas.length, interes: sum("interes"), capital: sum("capital"), saldo_anterior: sum("saldo_anterior"),
+      cobrado: sum("cobrado"), saldo_en_contra: sum("saldo_en_contra"),
+      con_saldo_en_contra: filas.filter((f) => Number(f.saldo_en_contra) > 0.005).length
+    },
+    por_mes: [...porMes.values()].sort((a, b) => a.mes.localeCompare(b.mes)),
+    filas
+  });
+}));
+
 fomentosRouter.get("/export", asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
   const result = await pool.query(`${SELECT_FOMENTO} WHERE f.accionista_id = $1 ORDER BY f.created_at DESC`, [accionistaId]);
