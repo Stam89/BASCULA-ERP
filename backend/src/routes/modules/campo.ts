@@ -174,6 +174,15 @@ async function resolverFarmerIdParte(client: Q, clienteId: string | undefined, n
   return porNombre.rowCount === 1 ? porNombre.rows[0].id : null;
 }
 
+/** Impide duplicar nombres de un catálogo (sin importar mayúsculas ni espacios). `exceptoId` = el registro que se está editando. */
+async function exigirNombreLibre(tabla: "campo_activos" | "campo_operadores", nombre: string, que: string, exceptoId?: string): Promise<void> {
+  const r = await pool.query(
+    `SELECT id FROM ${tabla} WHERE lower(trim(nombre)) = lower(trim($1)) AND ($2::uuid IS NULL OR id <> $2::uuid) LIMIT 1`,
+    [nombre, exceptoId ?? null]
+  );
+  if (r.rowCount) throw new ApiError(409, `Ya existe ${que} con el nombre «${nombre.trim()}». Edítalo o usa otro nombre.`);
+}
+
 // ── Catálogo: maquinaria/flota (activos: cosechadora/camión/vehículo/otro) ────
 // La FK "maquinaria_id" es campo_movimientos.activo_id → campo_activos.
 const TIPO_MAQUINARIA = ["cosechadora", "camion", "vehiculo", "transporte", "otro"] as const;
@@ -196,6 +205,7 @@ campoRouter.post("/activos", asyncRoute(async (req, res) => {
     operador: z.string().max(140).optional(),
     activo: z.boolean().optional()
   }).parse(req.body);
+  await exigirNombreLibre("campo_activos", body.nombre, "una máquina o vehículo");
   const result = await pool.query(
     `INSERT INTO campo_activos (nombre, tipo, placa_codigo, operador, activo)
      VALUES ($1, $2, $3, $4, COALESCE($5, true))
@@ -220,6 +230,7 @@ campoRouter.patch("/activos/:id", asyncRoute(async (req, res) => {
     if (body[k] !== undefined) { fields.push(`${k} = $${i++}`); values.push(body[k]); }
   }
   if (fields.length === 0) throw new ApiError(400, "Sin cambios");
+  if (body.nombre !== undefined) await exigirNombreLibre("campo_activos", body.nombre, "una máquina o vehículo", String(req.params.id));
   values.push(req.params.id);
   const result = await pool.query(
     `UPDATE campo_activos SET ${fields.join(", ")} WHERE id = $${i} RETURNING *`,
@@ -247,6 +258,7 @@ campoRouter.post("/operadores", asyncRoute(async (req, res) => {
     telefono: z.string().max(40).optional(),
     activo: z.boolean().optional()
   }).parse(req.body);
+  await exigirNombreLibre("campo_operadores", body.nombre, "un operador");
   const result = await pool.query(
     `INSERT INTO campo_operadores (nombre, identificacion, telefono, activo, created_by)
      VALUES ($1, $2, $3, COALESCE($4, true), $5) RETURNING *`,
@@ -269,6 +281,7 @@ campoRouter.patch("/operadores/:id", asyncRoute(async (req, res) => {
     if (body[k] !== undefined) { fields.push(`${k} = $${i++}`); values.push(body[k]); }
   }
   if (fields.length === 0) throw new ApiError(400, "Sin cambios");
+  if (body.nombre !== undefined) await exigirNombreLibre("campo_operadores", body.nombre, "un operador", String(req.params.id));
   values.push(req.params.id);
   const result = await pool.query(`UPDATE campo_operadores SET ${fields.join(", ")} WHERE id = $${i} RETURNING *`, values);
   if (!result.rows[0]) throw new ApiError(404, "Operador no encontrado");
@@ -1347,8 +1360,9 @@ campoRouter.post("/partes", asyncRoute(async (req, res) => {
     observaciones: z.string().max(400).optional()
   }).parse(req.body);
   const result = await inTransaction(async (client) => {
-    const act = await client.query("SELECT 1 FROM campo_activos WHERE id = $1", [body.activo_id]);
+    const act = await client.query("SELECT activo FROM campo_activos WHERE id = $1", [body.activo_id]);
     if (!act.rowCount) throw new ApiError(404, "Maquina no encontrada");
+    if (act.rows[0].activo === false) throw new ApiError(409, "Esa máquina está dada de baja: reactívala en el catálogo o elige otra.");
     const cliente = await resolverClienteParte(client, {
       cliente: body.cliente,
       cliente_id: body.cliente_id,

@@ -105,6 +105,45 @@ try {
   const bd = await dos(() => api("POST", "/campo/partes/integracion-bascula", { ...bascula, referencia: "TICKET-SIM-0002" }));
   check((await q("SELECT count(*)::int n FROM campo_partes WHERE observaciones LIKE '%TICKET-SIM-0002%' OR origen_uid LIKE '%TICKET-SIM-0002%'"))[0].n === 1 && bd.every((r) => r.status !== 500), "C10. y con doble envío simultáneo también", bd.map((r) => r.status));
 
+  // ── E. Mantenimientos de flota ─────────────────────────────────────────
+  const sMant = await saldo(CAJA);
+  const mt = await api("POST", "/campo/mantenimientos", { activo_id: camion, tipo: "CAMBIO_ACEITE", detalle: "Cambio de aceite y filtro", costo: 12.5, cuenta_id: CAJA, lectura: 1500, unidad_lectura: "KM", proxima_lectura: 6500 });
+  check(mt.ok && (await saldo(CAJA)) === r2(sMant - 12.5) && (await q("SELECT count(*)::int n FROM equipment_maintenance WHERE campo_mantenimiento_id=$1", [mt.data.id]))[0].n === 1, "E1. un mantenimiento con costo saca el dinero de la caja y queda en la hoja de vida de Equipos", mostrar(mt));
+  check((await api("POST", "/campo/mantenimientos", { activo_id: camion, tipo: "INSPECCION", detalle: "Revisión general", costo: 0, cuenta_id: CAJA })).status === 400, "E2. un mantenimiento sin costo no lleva cuenta (400)");
+  check((await api("POST", "/campo/mantenimientos", { activo_id: camion, tipo: "REPUESTO", detalle: "Llanta", costo: 80 })).status === 400, "E3. con costo exige la cuenta de pago (400)");
+  check((await api("POST", "/campo/mantenimientos", { activo_id: camion, tipo: "REPUESTO", detalle: "Turbo", costo: 999999, cuenta_id: CAJA })).status === 422, "E4. no se paga más de lo que hay en CAJA (422)");
+  const ult = (await api("GET", `/campo/lecturas/ultima?activo_id=${camion}`)).data;
+  check(ult && ult.lectura === 1500 && ult.unidad_lectura === "KM", "E5. la última lectura de la máquina es la del mantenimiento (1500 KM)", ult);
+  const revM = await api("POST", `/campo/movimientos/${mt.data.movimiento_id}/reversar`, { motivo: "mantenimiento mal cargado" });
+  check(revM.ok && (await q("SELECT anulado_at FROM campo_mantenimientos WHERE id=$1", [mt.data.id]))[0].anulado_at && (await q("SELECT status FROM equipment_maintenance WHERE campo_mantenimiento_id=$1", [mt.data.id]))[0].status === "ANULADO" && (await saldo(CAJA)) === sMant, "E6. reversar el gasto anula el mantenimiento y devuelve el dinero", mostrar(revM));
+
+  // ── F. Mantenedores: máquinas, operadores y tarifas ────────────────────
+  const a1 = await api("POST", "/campo/activos", { nombre: "CAMION PRUEBA 1", tipo: "camion" });
+  const a2 = await api("POST", "/campo/activos", { nombre: "camion prueba 1", tipo: "camion" });
+  check(a1.ok && a2.status === 409, "F1. no se crean dos máquinas con el mismo nombre (aunque cambien mayúsculas)", [a1.status, a2.status]);
+  const o1 = await api("POST", "/campo/operadores", { nombre: "OPERADOR PRUEBA" });
+  const o2 = await api("POST", "/campo/operadores", { nombre: "operador prueba" });
+  check(o1.ok && o2.status === 409, "F2. no se crean dos operadores con el mismo nombre", [o1.status, o2.status]);
+  const c1 = await api("POST", "/campo/clientes", { nombre: "CLIENTE DUPLICADO", tipo: "externo" });
+  const c2 = await api("POST", "/campo/clientes", { nombre: "cliente duplicado", tipo: "externo" });
+  check(c1.ok && (c2.status === 409 || c2.data?.id === c1.data.id), "F3. no se crean dos clientes con el mismo nombre", [c1.status, c2.status]);
+  await api("PATCH", `/campo/activos/${a1.data.id}`, { activo: false });
+  const pInact = await api("POST", "/campo/partes", { activo_id: a1.data.id, operador: "X", cliente: "CLIENTE DUPLICADO", cliente_id: c1.data.id, qq: 5 });
+  check(pInact.status === 409 || pInact.status === 400, "F4. no se registran partes en una máquina dada de baja", mostrar(pInact));
+  const t1 = await api("POST", "/campo/tarifas-operador", { operador: "OPERADOR PRUEBA", activo_id: camion, tarifa: 8, unidad: "VIAJE" });
+  const t2 = await api("POST", "/campo/tarifas-operador", { operador: "operador prueba", activo_id: camion, tarifa: 9, unidad: "VIAJE" });
+  check(t1.ok && t2.ok && (await q("SELECT count(*)::int n FROM campo_tarifas_operador WHERE lower(operador)='operador prueba' AND activo_id=$1", [camion]))[0].n === 1, "F5. la tarifa de un operador+máquina se actualiza, no se duplica", [t1.status, t2.status]);
+
+  // ── G. Con la caja CERRADA no se mueve dinero de CAJA (rendir un vale incluido) ──
+  const valeAbierto = await vale(10);
+  const prev = (await api("GET", "/campo/caja/cierre-preview")).data;
+  exigir(await api("POST", "/campo/caja/cerrar", { saldo_real: prev.saldo_teorico }), "G0. se cierra la caja de Campo");
+  const sCerrada = await saldo(CAJA);
+  const lc = await api("POST", `/campo/movimientos/${valeAbierto.id}/liquidar`, { monto_real: 0 });
+  check(lc.status >= 400 && (await saldo(CAJA)) === sCerrada, "G1. rendir un vale con la caja cerrada no devuelve dinero a CAJA (hay que abrirla primero)", mostrar(lc));
+  const nominaCerrada = await api("POST", "/campo/nomina-operadores/liquidar", { parte_ids: [(await parte(5)).id], cuenta_id: CAJA, monto: 1, motivo: "prueba" });
+  check(nominaCerrada.status >= 400, "G2. pagar nómina con la caja cerrada se rechaza", nominaCerrada.status);
+
   // ── D. Cuadre global de Campo ──────────────────────────────────────────
   const neg = (await q("SELECT count(*)::int n FROM campo_servicios_saldo WHERE saldo_pendiente < -0.005"))[0].n;
   check(neg === 0, "D1. ningún servicio con saldo negativo", neg);
