@@ -1737,6 +1737,21 @@ function ValesPanel({ onLiquidated, onError }: {
   }, [vista, onError]);
   useEffect(() => { cargar(); }, [cargar]);
 
+  async function anularVale(v: Vale) {
+    const motivo = window.prompt(`Anular el vale de ${money(v.entregado)}${v.concepto ? ` (${v.concepto})` : ""}.
+
+El dinero vuelve a ${v.cuenta_nombre} y el vale desaparece de pendientes. Úsalo solo si se entregó mal; si ya gastaron algo, mejor «Liquidar / Rendir».
+
+Motivo (obligatorio):`, "");
+    if (motivo === null) return;
+    if (motivo.trim().length < 5) { onError("Escribe el motivo (mínimo 5 letras)."); return; }
+    try {
+      await apiPost(`/campo/movimientos/${v.id}/anular-vale`, { motivo: motivo.trim() });
+      await cargar();
+      await onLiquidated();
+    } catch (e) { onError((e as Error).message); }
+  }
+
   const pend = vista === "PENDIENTE_RENDICION";
   const totalPend = useMemo(() => vales.reduce((s, v) => s + v.entregado, 0), [vales]);
 
@@ -1778,7 +1793,10 @@ function ValesPanel({ onLiquidated, onError }: {
                 <td>{v.cuenta_nombre}</td>
                 <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                   {pend
-                    ? <button type="button" className="primary" onClick={() => setLiquidando(v)}>🧾 Liquidar / Rendir</button>
+                    ? <>
+                        <button type="button" className="primary" onClick={() => setLiquidando(v)}>🧾 Liquidar / Rendir</button>{" "}
+                        <button type="button" title="Si el vale se entregó mal (monto o persona equivocados), devuelve el dinero a la cuenta" onClick={() => anularVale(v)}>↩ Anular</button>
+                      </>
                     : <span className="chip ok">Liquidado</span>}
                 </td>
               </tr>

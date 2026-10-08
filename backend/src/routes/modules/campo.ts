@@ -986,7 +986,7 @@ const VALE_SELECT = `
   JOIN campo_cuentas c ON c.id = m.cuenta_id
   LEFT JOIN campo_categorias_gasto cat ON cat.id = m.categoria_id
   LEFT JOIN campo_activos a ON a.id = m.activo_id
-  WHERE m.signo = 'salida' AND m.estado IN ('PENDIENTE_RENDICION', 'LIQUIDADO')`;
+  WHERE m.signo = 'salida' AND m.estado IN ('PENDIENTE_RENDICION', 'LIQUIDADO') AND m.reversado_at IS NULL`;
 
 campoRouter.get("/movimientos/vales", asyncRoute(async (req, res) => {
   const q = z.object({ estado: z.enum(["PENDIENTE_RENDICION", "LIQUIDADO"]).optional() }).parse(req.query);
@@ -1055,6 +1055,37 @@ campoRouter.post("/movimientos/:id/liquidar", asyncRoute(async (req, res) => {
       reembolso: diff < 0 ? -diff : 0,
       ajuste
     };
+  });
+  res.status(201).json(result);
+}));
+
+// Anular un vale MAL ENTREGADO (monto o persona equivocados): el dinero vuelve a la cuenta con un contra-movimiento y el vale
+// deja de aparecer en pendientes. Solo si sigue pendiente de rendir (uno ya rendido tiene su ajuste: se corrige rindiéndolo).
+// La naturaleza 'reversion_vale' no cuenta como gasto ni ingreso en los reportes (un vale pendiente tampoco era gasto).
+campoRouter.post("/movimientos/:id/anular-vale", asyncRoute(async (req, res) => {
+  const body = z.object({ motivo: z.string().trim().min(5).max(400) }).parse(req.body);
+  const result = await inTransaction(async (client) => {
+    const vale = (await client.query(
+      "SELECT * FROM campo_movimientos WHERE id = $1 AND signo = 'salida' FOR UPDATE",
+      [req.params.id]
+    )).rows[0];
+    if (!vale) throw new ApiError(404, "Vale no encontrado");
+    if (vale.reversado_at) throw new ApiError(409, "Este vale ya fue anulado.");
+    if (vale.estado !== "PENDIENTE_RENDICION") {
+      throw new ApiError(409, "Solo se anula un vale que sigue pendiente de rendir. Si ya se rindió, no se puede anular: corrige con la rendición.");
+    }
+    await requireCajaAbierta([vale.cuenta_id], client);
+    const uid = userId(req);
+    const reversion = (await client.query(
+      `INSERT INTO campo_movimientos
+         (fecha, cuenta_id, signo, monto, concepto, categoria_id, activo_id, naturaleza, movimiento_origen_id, motivo_reversion, created_by)
+       VALUES (CURRENT_DATE, $1, 'entrada', $2, $3, $4, $5, 'reversion_vale', $6, $7, $8)
+       RETURNING id`,
+      [vale.cuenta_id, vale.monto, `Anulación de vale${vale.concepto ? ` · ${vale.concepto}` : ""}`.slice(0, 400),
+       vale.categoria_id, vale.activo_id, vale.id, body.motivo, uid]
+    )).rows[0];
+    await client.query("UPDATE campo_movimientos SET reversado_at = now(), reversado_por = $2 WHERE id = $1", [vale.id, uid]);
+    return { ok: true, vale_id: vale.id, reversion_id: reversion.id, devuelto: Number(vale.monto) };
   });
   res.status(201).json(result);
 }));

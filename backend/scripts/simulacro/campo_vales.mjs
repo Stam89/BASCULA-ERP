@@ -52,6 +52,20 @@ try {
   const er = (await api("GET", "/campo/reportes/estado-resultados?mes=2026-10")).data;
   check(er && JSON.stringify(er).length > 100, "A11. el estado de resultados responde con el vale a medias");
 
+  // Anular un vale mal entregado
+  const vm = await vale(25);
+  const sVm = await saldo(CAJA);
+  const gAntes = await gastoActivo();
+  const an = await dos(() => api("POST", `/campo/movimientos/${vm.id}/anular-vale`, { motivo: "Se entregó a otra persona" }));
+  check(an.filter((r) => r.ok).length === 1 && an.every((r) => r.status !== 500) && r2((await saldo(CAJA)) - sVm) === 25, "A12. anular un vale mal entregado devuelve los $25 a la caja UNA vez (aun con doble clic)", an.map((r) => r.status));
+  const valesPend = (await api("GET", "/campo/movimientos/vales?estado=PENDIENTE_RENDICION")).data;
+  check(!valesPend.some((x) => x.id === vm.id), "A13. el vale anulado ya no aparece en pendientes");
+  check((await api("POST", `/campo/movimientos/${vm.id}/liquidar`, { monto_real: 5 })).status === 409, "A14. un vale anulado no se puede rendir (409)");
+  check((await api("POST", `/campo/movimientos/${vm.id}/anular-vale`, { motivo: "otra vez por favor" })).status === 409, "A15. ni anular de nuevo (409)");
+  check((await api("POST", `/campo/movimientos/${v1.id}/anular-vale`, { motivo: "ya estaba rendido" })).status === 409, "A16. un vale YA rendido no se anula (409): se corrige con la rendición");
+  check((await api("POST", `/campo/movimientos/${(await vale(3)).id}/anular-vale`, { motivo: "no" })).status === 400, "A17. anular sin motivo claro se rechaza (400)");
+  check((await gastoActivo()) === gAntes, "A18. anular un vale no cambia el gasto de la máquina (un vale pendiente tampoco era gasto)", { antes: gAntes, despues: await gastoActivo() });
+
   // ── B. Transferencias ──────────────────────────────────────────────────
   const sC = await saldo(CAJA), sB = await saldo(BANCO);
   const tr = await api("POST", "/campo/transferencias", { cuenta_origen_id: CAJA, cuenta_destino_id: BANCO, monto: 20 });
