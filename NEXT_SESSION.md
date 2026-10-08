@@ -49,6 +49,15 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🧾 Revisión de cada formulario de Configuración (2026-10-08)
+- `confirmarCambiosCfg(titulo, cambios)` (App.tsx): antes de guardar tarifas/precios muestra «antes → después» y marca ⚠️ lo que queda en 0 o cambia ×3 o más (error de tecleo); sin cambios no guarda («No hay cambios que guardar»). Usado en: Tarifas de pago + Combustible + Secado como servicio (comparten `saveLaborRates`: el aviso lista TODO lo que cambia, `ETIQUETAS_TARIFAS`), Parámetros de planta, Tarifas de empaque, Tarifas de procesos, Tarifario (editar precio / nueva tarifa que reemplaza a la anterior / aviso si ya hay otra del mismo día), y —solo si parece error— Tarifas por libra, tarifas de cuadrilla y precios del catálogo de sacos (se guardan al salir de la casilla; al cancelar vuelve el valor).
+- Tarifa de **Polvillo** ($ por QQ llenado, `polvillo_per_qq`) ahora editable en Tarifas de pago (se usaba en el pago pero no había pantalla; seguía en 0.25).
+- Tarifario: cada fila dice ✅ Vigente / 🕓 Programada / Anterior (la que aplica hoy por cliente y servicio, fecha LOCAL).
+- Datos del negocio: avisos suaves (no bloquean) de RUC (10 dígitos = parece cédula; RUC = 13) y teléfono. El RUC actual de CEYRO tiene 10 dígitos.
+- Categorías de caja: el código se arma solo desde el nombre (`codigoDesdeNombre`), con aviso de nombre/código repetido. Accionistas: código repetido bloquea, nombre repetido pregunta. Cuentas bancarias: misma cuenta y banco repetidos bloquea. Actividades de cuadrilla: nombre activo repetido bloquea, tarifa 0 pregunta; la casilla de tarifa queda deshabilitada para no administradores.
+- Guías de remisión: bajar el «próximo número» (mismo prefijo) pide confirmar (repetiría números).
+- PENDIENTE (decisión del dueño): «Dar de baja» a un empleado administrativo BORRA también su historial de sueldos (`admin-payroll.ts DELETE /staff/:id`, pedido en `c441066`). Se recomendó conservar el historial y solo ocultarlo (`is_active=false` ya existe y las listas lo filtran); no se cambió sin su visto bueno.
+
 ### ⚙️ Configuración reorganizada y rediseñada (2026-10-08, pedido del dueño: «más intuitiva, celular y PC»)
 - Antes: 7 subpestañas, «Operación y Planta» era un cajón de 14 tarjetas mezcladas y «Secuenciales» una pestaña de 1 tarjeta. Ahora 9 secciones por tema (`type CfgSub`, `CFG_SECCIONES` en App.tsx):
   🩺 Estado del sistema (panel + ✅ Puesta en marcha + 🧭 Ajustes en otros módulos) · 🏢 Mi negocio (Datos del negocio, Personal administrativo, Secuenciales) · 🏭 Planta y productos (Parámetros de planta, Catálogo de productos, Catálogo de sacos, Combustible, Categorías de mantenimiento) · 👷 Nómina y mano de obra · 🧾 Tarifas a clientes · 💰 Contabilidad (Saldos iniciales, Parámetros contables, Categorías de caja) · 👥 Socios y bancos · 🔐 Usuarios y acceso · 🛡️ Respaldos y seguridad (Respaldos, Actividad del sistema, Zona de peligro al final).
