@@ -155,7 +155,7 @@ export function SacosTablero({ sacos, onVerKardex, onConfig }: { sacos: Saco[]; 
       <div className="sacx__kpis">
         {kpi("🧵", "Sacos en bodega", fmt(totalSacos), `${activos.length} presentaciones activas`, "#2dd4bf", "#0f766e")}
         {kpi("🏷️", "Marcas", String(marcas), "con sacos registrados", "#a78bfa", "#6d28d9")}
-        {kpi("💲", "Valor estimado", `$${valor.toLocaleString("es-EC", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, "stock × precio de compra", "#60a5fa", "#1d4ed8")}
+        {kpi("💲", "Valor estimado", `$${valor.enReal()}`, "stock × precio de compra", "#60a5fa", "#1d4ed8")}
         {alertas.length
           ? kpi("⚠️", "Alertas", String(alertas.length), "sacos por comprar", "#fb923c", "#c2410c")
           : kpi("✅", "Alertas", "0", "todo en orden", "#4ade80", "#15803d")}

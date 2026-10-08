@@ -5228,8 +5228,9 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 /* Pestañas de Inventario y botones de la cabecera (compactos en el celular). */
 .invAcciones { display: flex; gap: 8px; flex-wrap: wrap; }
 @media (max-width: 640px) {
-  .invNav { overflow-x: auto; flex-wrap: nowrap; }
-  .invNav button { white-space: nowrap; }
+  /* Las pestañas se reparten el ancho: se ven todas sin deslizar. */
+  .invNav { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); align-self: stretch; overflow: visible; gap: 6px; }
+  .invNav button { white-space: normal; line-height: 1.15; padding: 8px 6px; font-size: 12px; text-align: center; }
   .invAcciones { display: grid; grid-template-columns: 1fr 1fr; width: 100%; gap: 6px; }
   .invAcciones > button { font-size: 12px; padding: 8px 6px; white-space: normal; line-height: 1.2; min-height: 40px; margin: 0; }
 }
