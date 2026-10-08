@@ -56,7 +56,7 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - Datos del negocio: avisos suaves (no bloquean) de RUC (10 dígitos = parece cédula; RUC = 13) y teléfono. El RUC actual de CEYRO tiene 10 dígitos.
 - Categorías de caja: el código se arma solo desde el nombre (`codigoDesdeNombre`), con aviso de nombre/código repetido. Accionistas: código repetido bloquea, nombre repetido pregunta. Cuentas bancarias: misma cuenta y banco repetidos bloquea. Actividades de cuadrilla: nombre activo repetido bloquea, tarifa 0 pregunta; la casilla de tarifa queda deshabilitada para no administradores.
 - Guías de remisión: bajar el «próximo número» (mismo prefijo) pide confirmar (repetiría números).
-- PENDIENTE (decisión del dueño): «Dar de baja» a un empleado administrativo BORRA también su historial de sueldos (`admin-payroll.ts DELETE /staff/:id`, pedido en `c441066`). Se recomendó conservar el historial y solo ocultarlo (`is_active=false` ya existe y las listas lo filtran); no se cambió sin su visto bueno.
+- RESUELTO (el dueño aprobó, 2026-10-08): «Dar de baja» a un empleado administrativo ya NO borra su historial. `DELETE /admin-payroll/staff/:id`: con pagos (aunque anulados) → `is_active=false` (oculto de listas y pendientes; sus pagos siguen en el historial); sin pagos → se borra. Responde `{resultado: "OCULTO"|"ELIMINADO", pagos_conservados}`. Simulacro `personal_baja.mjs`: TODO OK. (Reemplaza el borrado total de `c441066`.)
 
 ### ⚙️ Configuración reorganizada y rediseñada (2026-10-08, pedido del dueño: «más intuitiva, celular y PC»)
 - Antes: 7 subpestañas, «Operación y Planta» era un cajón de 14 tarjetas mezcladas y «Secuenciales» una pestaña de 1 tarjeta. Ahora 9 secciones por tema (`type CfgSub`, `CFG_SECCIONES` en App.tsx):
