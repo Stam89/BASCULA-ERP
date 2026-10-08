@@ -118,6 +118,8 @@ export const CATEGORIAS_NO_OPERATIVAS = [
   "FOMENTO_ENTREGA", "FOMENTOS", "PAGO_FOMENTO",
   "COMPRA_ACTIVO_FIJO", "PAGO_ENTRE_SOCIOS",
   "PAGO_SERVICIO_PILADO", "PAGO_SERVICIO_MAQUILA", "PAGO_SELECCION", "REVERSA_COMPRA",
+  // Devolución del dinero de una venta anulada (no es gasto: deshace un ingreso; la venta ya no cuenta).
+  "DEVOLUCION_VENTA",
   // Pago de una deuda cargada como saldo inicial (es de antes del arranque).
   "PAGO_SALDO_INICIAL"
 ];

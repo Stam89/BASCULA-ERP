@@ -8,7 +8,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
 import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
-import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { crearVenta } from "./sales.js";
 import { cobrarEmpaqueAlDespachar } from "../../services/cargo-empaque.js";
 import { descontarSacosPedido, restaurarSacosPedido, type ResultadoSacos } from "../../services/sacos.js";
@@ -719,6 +719,116 @@ ordersRouter.delete("/:id/flete", asyncRoute(async (req, res) => {
     )).rows[0];
     if (!order) throw new ApiError(404, "Pedido no encontrado para el accionista seleccionado");
     return quitarFleteVenta(client, order.id);
+  });
+  res.json({ ok: true, ...out });
+}));
+
+// ── ANULAR UNA VENTA YA DESPACHADA (solo administrador) ──────────────────────
+// Deshace todo lo que hizo el despacho, en UNA transacción:
+//  · arroz y sacos vuelven a la bodega (salidas de la preparación);
+//  · dinero: contado → se anula el ingreso de la venta en su caja (si sigue abierta) o, si ya se cerró,
+//    se registra la DEVOLUCIÓN en la caja abierta que se elija; crédito → la cuenta por cobrar se anula
+//    (si el cliente ya abonó, primero se anulan esos abonos en Caja);
+//  · flete de Transporte y cargo de empaque entre socios: se quitan (si ya se cobraron → 409);
+//  · cuadrilla del despacho: se quita si aún no se pagó (si ya se pagó, queda: el trabajo se hizo).
+// El pedido queda CANCELLED con motivo, fecha y quién; la venta, sale_status CANCELLED. Nada se borra.
+ordersRouter.post("/:id/anular-despacho", requireAdmin, asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const user = (req as AuthenticatedRequest).user;
+  const body = z.object({
+    motivo: z.string().trim().min(5, "Escribe el motivo (mínimo 5 letras)."),
+    cash_register_id: z.string().uuid().optional()
+  }).parse(req.body);
+
+  const out = await inTransaction(async (client) => {
+    const order = (await client.query(
+      "SELECT * FROM sales_orders WHERE id = $1 AND accionista_id = $2 FOR UPDATE", [req.params.id, accionistaId]
+    )).rows[0];
+    if (!order) throw new ApiError(404, "Pedido no encontrado para el accionista seleccionado");
+    if (order.status === "CANCELLED") throw new ApiError(409, "Este pedido ya está anulado.");
+    if (order.status !== "DELIVERED" || !order.sale_id) throw new ApiError(409, "Solo se anula así un pedido ya despachado. Uno pendiente se cancela normal.");
+    const sale = (await client.query("SELECT * FROM sales WHERE id = $1 FOR UPDATE", [order.sale_id])).rows[0];
+    if (!sale) throw new ApiError(404, "No se encontró la venta de este pedido.");
+    const total = round2(Number(sale.total_amount));
+    const esCredito = sale.payment_status === "CONFIRMED" || sale.payment_status === "PARTIAL";
+
+    // 1) Cargo de empaque entre socios (si lo hubo): sin pagos se anula; con pagos → 409.
+    const cargo = (await client.query(
+      "SELECT * FROM matriz_packaging_charges WHERE order_id = $1 AND status <> 'ANULADO' FOR UPDATE", [order.id]
+    )).rows[0];
+    if (cargo) {
+      const ar = (await client.query("SELECT amount, balance, status FROM accounts_receivable WHERE id = $1 FOR UPDATE", [cargo.receivable_id])).rows[0];
+      const ap = (await client.query("SELECT amount, balance, status FROM accounts_payable WHERE id = $1 FOR UPDATE", [cargo.payable_id])).rows[0];
+      const pagado = (c?: { amount: string; balance: string; status: string }) => !!c && c.status !== "CANCELLED" && Number(c.balance) + 0.005 < Number(c.amount);
+      if (pagado(ar) || pagado(ap)) throw new ApiError(409, "El cargo de empaque de este despacho ya tiene pagos: anúlalos primero en Caja.");
+      await client.query("UPDATE accounts_receivable SET balance = 0, status = 'CANCELLED' WHERE id = $1", [cargo.receivable_id]);
+      await client.query("UPDATE accounts_payable SET balance = 0, status = 'CANCELLED' WHERE id = $1", [cargo.payable_id]);
+      await client.query("UPDATE matriz_packaging_charges SET status = 'ANULADO' WHERE id = $1", [cargo.id]);
+    }
+
+    // 2) Flete de Transporte (si lo hubo). Con cobros en Transporte lanza 409.
+    await quitarFleteVenta(client, order.id);
+
+    // 3) El dinero.
+    let devolucion: { tipo: "anulado_en_caja" | "devuelto_en_otra_caja" | "credito_anulado"; caja_id: string | null } ;
+    const cuentas = (await client.query(
+      "SELECT id, amount, balance, status FROM accounts_receivable WHERE (id = $1 OR sale_id = $2) AND status <> 'CANCELLED' FOR UPDATE",
+      [order.receivable_id, sale.id]
+    )).rows as Array<{ id: string; amount: string; balance: string; status: string }>;
+    if (esCredito) {
+      if (cuentas.some((c) => Number(c.balance) + 0.005 < Number(c.amount))) {
+        throw new ApiError(409, "El cliente ya abonó a esta venta: anula primero esos abonos en Caja (o deja la venta y regístrale una devolución).");
+      }
+      devolucion = { tipo: "credito_anulado", caja_id: null };
+    } else {
+      const ingreso = (await client.query(
+        `SELECT m.*, cr.status AS caja_estado FROM cash_movements m JOIN cash_registers cr ON cr.id = m.cash_register_id
+          WHERE m.reference_type = 'sales' AND m.reference_id = $1 AND m.movement = 'INCOME'
+            AND m.reversed_at IS NULL AND m.reversal_of IS NULL
+          ORDER BY m.created_at LIMIT 1 FOR UPDATE OF m`, [sale.id]
+      )).rows[0];
+      if (ingreso && ingreso.caja_estado === "OPEN") {
+        await client.query(
+          `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, reference_type, reference_id, reversal_of, created_by)
+           VALUES ($1, 'EXPENSE', $2, $3, $4, 'reversal', $5, $5, $6)`,
+          [ingreso.cash_register_id, ingreso.category, ingreso.amount, `Anulación de venta ${sale.sale_number}: ${body.motivo}`, ingreso.id, user?.id ?? null]
+        );
+        await client.query("UPDATE cash_movements SET reversed_at = now(), reversed_by = $2, reversed_reason = $3 WHERE id = $1",
+          [ingreso.id, user?.id ?? null, `Venta anulada: ${body.motivo}`]);
+        devolucion = { tipo: "anulado_en_caja", caja_id: ingreso.cash_register_id };
+      } else {
+        if (!body.cash_register_id) {
+          throw new ApiError(409, "La caja donde entró esta venta ya está cerrada: elige una caja abierta para registrar la devolución del dinero.");
+        }
+        await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
+        await client.query(
+          `INSERT INTO cash_movements (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)
+           VALUES ($1, 'EXPENSE', 'DEVOLUCION_VENTA', 'sales', $2, $3, $4, $5)`,
+          [body.cash_register_id, sale.id, total, `Devolución por venta anulada ${sale.sale_number}: ${body.motivo}`, user?.id ?? null]
+        );
+        devolucion = { tipo: "devuelto_en_otra_caja", caja_id: body.cash_register_id };
+      }
+    }
+    for (const c of cuentas) {
+      await client.query("UPDATE accounts_receivable SET balance = 0, status = 'CANCELLED' WHERE id = $1", [c.id]);
+    }
+
+    // 4) Cuadrilla del despacho (solo si aún no se pagó).
+    const cuadrillaQuitada = await revertCuadrillaDespachoVentaEntry(client, order.id);
+
+    // 5) Arroz y sacos vuelven a la bodega.
+    await restaurarInventarioPreparacion(client, order.id);
+
+    // 6) Estados finales (nada se borra).
+    await client.query("UPDATE sales SET sale_status = 'CANCELLED' WHERE id = $1", [sale.id]);
+    await client.query(
+      `UPDATE sales_orders SET status = 'CANCELLED', anulado_at = now(), anulado_motivo = $2, anulado_by = $3 WHERE id = $1`,
+      [order.id, body.motivo, user?.id ?? null]
+    );
+    return {
+      order_number: order.order_number, sale_number: sale.sale_number, total,
+      devolucion, cargo_empaque_anulado: !!cargo, cuadrilla_quitada: cuadrillaQuitada > 0
+    };
   });
   res.json({ ok: true, ...out });
 }));

@@ -1441,8 +1441,9 @@ type Sale = {
   customer_phone: string | null;
   cash_register_id: string | null;
   total_amount: number;
-  payment_status: "PAID" | "CONFIRMED" | "PARTIAL";
+  payment_status: "PAID" | "CONFIRMED" | "PARTIAL" | "PENDING";
   sale_status: string;
+  saldo_pendiente?: number | null;
   created_at: string;
   items_count?: number;
 };
@@ -3555,6 +3556,8 @@ export function App() {
   const [orderPickLocation, setOrderPickLocation] = useState<Record<string, string>>({});
   // Modal de captura de datos del transportista para la Guía de Remisión.
   const [guiaModal, setGuiaModal] = useState<{ order: SalesOrder; nombre: string; cedula: string; placa: string } | null>(null);
+  // 🚫 Anular una venta YA despachada (solo administrador).
+  const [anularVentaModal, setAnularVentaModal] = useState<{ order: SalesOrder; sale: Sale; motivo: string; busy?: boolean } | null>(null);
   // 🚚 Despacho (con flete opcional) y flete de un pedido ya despachado.
   const [fleteModal, setFleteModal] = useState<{
     order: SalesOrder; modo: "despacho" | "editar"; conFlete: boolean; activoId: string; porQq: string; total: string;
@@ -11754,6 +11757,31 @@ Motivo (obligatorio):`, "");
     }
   }
 
+  // Anula una venta despachada: devuelve arroz y sacos, el dinero (o anula el crédito), quita flete y
+  // cargo de empaque. Si la caja de la venta ya se cerró, la devolución sale de la caja abierta actual.
+  async function confirmarAnularVenta() {
+    const m = anularVentaModal;
+    if (!m) return;
+    if (m.motivo.trim().length < 5) { addToast("Escribe el motivo (mínimo 5 letras)", "error"); return; }
+    setAnularVentaModal({ ...m, busy: true });
+    try {
+      const r = await apiPost<{ sale_number: string; total: number; devolucion: { tipo: string } }>(`/orders/${m.order.id}/anular-despacho`,
+        { motivo: m.motivo.trim(), cash_register_id: dashboard.current_cash_register?.id }, optsPedido(m.order));
+      setAnularVentaModal(null);
+      const dinero = r.devolucion.tipo === "credito_anulado" ? "se anuló la cuenta por cobrar"
+        : r.devolucion.tipo === "anulado_en_caja" ? `salieron ${money(r.total)} de la caja de la venta`
+        : `se registró la devolución de ${money(r.total)} en la caja abierta`;
+      addToast(`Venta ${r.sale_number} anulada: volvieron el arroz y los sacos, y ${dinero}.`, "success");
+      await refreshCustomersAndSales();
+      await refresh();
+      if (dashboard.current_cash_register?.id) await refreshCaja(dashboard.current_cash_register.id);
+      refreshSacks().catch(() => undefined);
+    } catch (e) {
+      setAnularVentaModal((cur) => cur && { ...cur, busy: false });
+      addToast(e instanceof Error ? e.message : "No se pudo anular la venta", "error");
+    }
+  }
+
   // Flete de un pedido YA despachado: poner, cambiar o quitar (si Transporte aún no lo cobró).
   function abrirFletePedido(order: SalesOrder) {
     const monto = Number(order.flete_monto ?? 0);
@@ -16790,7 +16818,7 @@ Motivo (obligatorio):`, "");
                               background: s.payment_status === "PAID" ? "#dcfce7" : "#fef3c7",
                               color: s.payment_status === "PAID" ? "#16a34a" : "#92400e"
                             }}>
-                              {s.payment_status === "PAID" ? "✓ Pagado" : s.payment_status === "PARTIAL" ? "⏳ Parcial" : "📋 Pendiente"}
+                              {s.sale_status === "CANCELLED" ? "🚫 Anulada" : s.payment_status === "PAID" ? "✓ Pagado" : s.payment_status === "PARTIAL" ? "⏳ Parcial" : "📋 Pendiente"}
                             </span>
                           </td>
                           <td style={{ padding: "5px 10px" }}>{new Date(s.created_at).toLocaleDateString("es-EC")}</td>
@@ -16808,6 +16836,13 @@ Motivo (obligatorio):`, "");
                                 📄 Guía
                               </button>
                             )}
+                            {isAdmin && s.sale_status !== "CANCELLED" && (() => {
+                              const ord = salesOrders.find((o) => o.sale_id === s.id);
+                              return ord ? (
+                                <button type="button" className="anularChip" title="Anular esta venta despachada"
+                                  onClick={() => setAnularVentaModal({ order: ord, sale: s, motivo: "" })}>🚫 Anular</button>
+                              ) : null;
+                            })()}
                             {order && (
                               <button type="button" className={Number(order.flete_monto ?? 0) > 0 ? "fleteChip fleteChip--on" : "fleteChip"}
                                 title={Number(order.flete_monto ?? 0) > 0 ? `Flete con ${order.flete_activo_nombre ?? "carro de Transporte"}: ${money(Number(order.flete_monto))}` : "Registrar el flete (carro de Transporte y Cosechadora)"}
@@ -16946,6 +16981,33 @@ Motivo (obligatorio):`, "");
                           </div>
                         </>
                       )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {anularVentaModal && (() => {
+              const m = anularVentaModal;
+              const credito = m.sale.payment_status !== "PAID";
+              return (
+                <div className="modalOverlay" onClick={() => !m.busy && setAnularVentaModal(null)}>
+                  <div className="modalCard anularVentaModal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+                    <h3 style={{ margin: 0, color: "#b91c1c" }}>🚫 Anular venta {m.sale.sale_number}</h3>
+                    <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>Pedido {m.order.order_number} · {m.sale.customer_name ?? "Sin cliente"} · <b>{money(Number(m.sale.total_amount))}</b></p>
+                    <ul className="anularVentaModal__lista">
+                      <li>📦 El arroz y los sacos vuelven a la bodega.</li>
+                      <li>{credito ? "📋 Se anula la cuenta por cobrar del cliente (si ya abonó, primero anula esos abonos en Caja)." : "💵 El dinero sale de la caja donde entró; si esa caja ya se cerró, sale de tu caja abierta como devolución."}</li>
+                      <li>🚚 Se quitan el flete de Transporte y el cargo de empaque entre socios (si ya se cobraron, no deja).</li>
+                      <li>📝 Nada se borra: la venta queda «Anulada» con el motivo.</li>
+                    </ul>
+                    <label className="anularVentaModal__motivo"><span>Motivo</span>
+                      <textarea rows={2} value={m.motivo} disabled={m.busy} placeholder="Ej: el cliente devolvió la carga / se registró por error"
+                        onChange={(e) => setAnularVentaModal({ ...m, motivo: e.target.value })} />
+                    </label>
+                    <div className="buttonRow">
+                      <button type="button" className="dangerBtn" disabled={m.busy || m.motivo.trim().length < 5} onClick={() => confirmarAnularVenta()}>{m.busy ? "Anulando…" : "Anular venta"}</button>
+                      <button type="button" disabled={m.busy} onClick={() => setAnularVentaModal(null)}>Cancelar</button>
                     </div>
                   </div>
                 </div>

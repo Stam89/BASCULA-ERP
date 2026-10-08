@@ -253,7 +253,7 @@ dashboardRouter.get("/", asyncRoute(async (req, res) => {
     pool.query("SELECT COALESCE(SUM(quantity), 0)::numeric AS quantity FROM inventory_stock WHERE ownership = 'OWNED' AND accionista_id = $1", [accionistaId]),
     pool.query("SELECT COALESCE(SUM(balance), 0)::numeric AS amount FROM farmer_advances WHERE status IN ('CONFIRMED', 'PARTIAL') AND accionista_id = $1", [accionistaId]),
     pool.query("SELECT COALESCE(SUM(balance), 0)::numeric AS amount FROM accounts_payable WHERE status IN ('CONFIRMED', 'PARTIAL') AND accionista_id = $1", [accionistaId]),
-    pool.query("SELECT COALESCE(SUM(total_amount), 0)::numeric AS amount FROM sales WHERE created_at::date = CURRENT_DATE AND accionista_id = $1", [accionistaId]),
+    pool.query("SELECT COALESCE(SUM(total_amount), 0)::numeric AS amount FROM sales WHERE created_at::date = CURRENT_DATE AND accionista_id = $1 AND sale_status <> 'CANCELLED'", [accionistaId]),
     pool.query(
       `SELECT *
        FROM cash_registers

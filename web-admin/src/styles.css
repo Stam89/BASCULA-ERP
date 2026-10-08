@@ -5602,3 +5602,14 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
   .interesFijoModal__fila { grid-template-columns: minmax(0, 1fr) auto; }
   .interesFijoModal__fila select { grid-column: 1 / -1; grid-row: 2; }
 }
+
+/* 🚫 Anular una venta despachada */
+.anularChip { padding: 3px 10px; font-size: 12px; cursor: pointer; margin-left: 6px; border-radius: 4px; border: 1px solid #dc2626; color: #b91c1c; background: transparent; min-width: 0; }
+.anularVentaModal { max-width: 480px; gap: 10px; border-top: 5px solid #dc2626; }
+.anularVentaModal__lista { margin: 0; padding: 10px 12px 10px 28px; border-radius: 12px; background: #fef2f2; border: 1px solid #fecaca; font-size: 12.5px; color: #7f1d1d; display: grid; gap: 4px; }
+.anularVentaModal__motivo { display: grid; gap: 4px; margin: 0; font-size: 12.5px; font-weight: 700; }
+.anularVentaModal__motivo textarea { width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--c-border); font: inherit; resize: vertical; }
+@media (max-width: 640px) {
+  .modalOverlay:has(.anularVentaModal) { align-items: flex-end; padding: 0; }
+  .anularVentaModal { max-width: none; border-radius: 20px 20px 0 0; }
+}

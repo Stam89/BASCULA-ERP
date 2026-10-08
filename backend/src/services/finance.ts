@@ -221,7 +221,7 @@ export async function getEstadoResultados(
 
   const ventas = await client.query(
     `SELECT COALESCE(SUM(total_amount), 0) AS v, COUNT(*) AS n
-     FROM sales WHERE accionista_id = $1 AND created_at::date BETWEEN $2 AND $3`,
+     FROM sales WHERE accionista_id = $1 AND sale_status <> 'CANCELLED' AND created_at::date BETWEEN $2 AND $3`,
     rango
   );
   const pilado = await client.query(
