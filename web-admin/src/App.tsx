@@ -416,6 +416,33 @@ type WorkerSummary = {
 // ninguna fila se pierde.
 type NominaGrupo = "planta" | "secadora" | "cuadrilla" | "administrativo";
 // 🚚 Bajada de carro (Nómina): un ticket de báscula = QQ × tarifa a quien bajó.
+/** Un valor que cambia al guardar un formulario de Configuración (para el aviso «qué vas a cambiar»). */
+type CambioCfg = { etiqueta: string; antes: number; despues: number };
+
+/** Nombre legible de cada tarifa de `labor_rates` (Nómina, Combustible y Secado como servicio se guardan juntas). */
+const ETIQUETAS_TARIFAS: Partial<Record<keyof LaborRates, string>> = {
+  pilador_per_qq: "Pilador · $ por QQ",
+  pilador_per_saca: "Pilador · $ por saca (@)",
+  estibador_per_qq: "Estibador · $ por QQ",
+  estibador_per_saca: "Estibador · $ por saca (@)",
+  estibador_per_arrocillo: "Estibador · $ por arrocillo",
+  estibador_por_3tulas: "Estibador · $ por cada 3 tulas",
+  polvillo_per_qq: "Polvillo · $ por QQ llenado",
+  secador_guardiania: "Secador · $ guardianía por día",
+  secador_per_tunel: "Secador · $ por túnel secado",
+  precio_gas_bombona: "Combustible · $ por kg de gas (bombona)",
+  gas_bombona_kg_por_punto: "Combustible · kg por cada 1% del medidor",
+  precio_gas_cilindro: "Combustible · $ por cilindro",
+  precio_diesel: "Combustible · $ diésel por unidad de medidor",
+  secado_servicio_per_qq: "Secado como servicio · a granel ($ por QQ)",
+  secado_servicio_saco_per_qq: "Secado como servicio · en saco ($ por QQ)"
+};
+
+/** Código de categoría a partir del nombre: «Venta al por mayor» → VENTA_AL_POR_MAYOR. */
+function codigoDesdeNombre(nombre: string): string {
+  return nombre.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40);
+}
+
 /** Secciones de Configuración. */
 type CfgSub = "estado" | "negocio" | "planta" | "nomina" | "tarifas" | "contabilidad" | "socios" | "usuarios" | "sistema";
 
@@ -2732,6 +2759,24 @@ export function App() {
   const cfgSum = (icono: string, titulo: React.ReactNode, desc?: React.ReactNode) => (
     <><span className="cfgSum__ico" aria-hidden="true">{icono}</span>{" "}<span className="cfgSum__txt"><b>{titulo}</b>{desc ? <small>{desc}</small> : null}</span></>
   );
+  // Antes de guardar valores que mueven dinero (tarifas, precios, parámetros) se muestra QUÉ cambia
+  // —incluido lo editado en otras tarjetas que se guardan juntas— y se marca lo que parece error de
+  // tecleo: un valor que queda en 0, o que se multiplica o divide por 3 o más. Sin cambios no guarda.
+  function confirmarCambiosCfg(titulo: string, cambios: CambioCfg[]): boolean {
+    const reales = cambios.filter((c) => Math.abs((Number(c.antes) || 0) - (Number(c.despues) || 0)) > 1e-9);
+    if (reales.length === 0) { addToast("No hay cambios que guardar", "warn"); return false; }
+    const f = (n: number) => (Number(n) || 0).enReal(2, 4);
+    const lineas = reales.map((c) => {
+      const a = Number(c.antes) || 0, d = Number(c.despues) || 0;
+      const aviso = d === 0 && a > 0 ? "   ⚠️ queda en 0"
+        : a > 0 && d > 0 && d / a >= 3 ? `   ⚠️ ${(d / a).enReal(0, 1)} veces más`
+        : a > 0 && d > 0 && a / d >= 3 ? `   ⚠️ ${(a / d).enReal(0, 1)} veces menos`
+        : "";
+      return `• ${c.etiqueta}: ${f(a)} → ${f(d)}${aviso}`;
+    });
+    const sospechoso = lineas.some((l) => l.includes("⚠️"));
+    return window.confirm(`${titulo}\n\n${lineas.join("\n")}\n\n${sospechoso ? "⚠️ Revisa lo marcado: puede ser un error de tecleo.\n\n" : ""}¿Guardar?`);
+  }
   // ── Accesos directos a Configuración desde cualquier módulo ──────────────
   // Lleva a la subpestaña de la tarjeta (por su título en CONFIG_INDICE), la
   // despliega y desplaza hasta ella. El efecto de acordeones la abre al montar
@@ -4851,6 +4896,12 @@ export function App() {
     }
   }
   async function savePackagingRates() {
+    const a = packagingRatesPristine.current, d = packagingRatesForm;
+    if (!confirmarCambiosCfg("Tarifas de empaque (lo que la Matriz cobra por bulto):", [
+      { etiqueta: "Saco de 10 lb ($)", antes: a.precio_saco_10lb, despues: Number(d.precio_saco_10lb) || 0 },
+      { etiqueta: "Saco de 25 lb ($)", antes: a.precio_saco_25lb, despues: Number(d.precio_saco_25lb) || 0 },
+      { etiqueta: "Saco de 50 lb ($)", antes: a.precio_saco_50lb, despues: Number(d.precio_saco_50lb) || 0 }
+    ])) return;
     const saved = await apiPut<PackagingRates>("/settings/packaging-rates", packagingRatesForm);
     const norm = {
       precio_saco_10lb: Number(saved.precio_saco_10lb) || 0,
@@ -4900,6 +4951,10 @@ export function App() {
       addToast("Escribe un nombre y un código (mínimo 2 caracteres)", "error");
       return;
     }
+    const mismoCodigo = adminAccionistas.find((a) => a.code.trim().toUpperCase() === code);
+    if (mismoCodigo) { addToast(`El código ${code} ya es de «${mismoCodigo.name}»`, "error"); return; }
+    const mismoNombre = adminAccionistas.find((a) => a.name.trim().toUpperCase() === name.toUpperCase());
+    if (mismoNombre && !window.confirm(`Ya existe un accionista llamado «${mismoNombre.name}» (código ${mismoNombre.code}).\n\n¿Crear otro con el mismo nombre?`)) return;
     await apiPost("/auth/accionistas", { name, code });
     setNewAccionistaForm({ name: "", code: "" });
     addToast("Accionista creado", "success");
@@ -4951,10 +5006,16 @@ export function App() {
 
   async function saveLaborRates(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const saved = await apiPut<LaborRates>("/labor/rates", { ...laborRatesForm, accionista_id: activeAccionistaId });
+    const antes = laborRatesPristine.current;
+    const cambios = (Object.keys(ETIQUETAS_TARIFAS) as Array<keyof LaborRates>)
+      .map((k) => ({ etiqueta: ETIQUETAS_TARIFAS[k] ?? k, antes: Number(antes[k]) || 0, despues: Number(laborRatesForm[k]) || 0 }));
+    // Nómina, Combustible y Secado como servicio comparten este guardado: el aviso lista TODO lo que cambia.
+    if (!confirmarCambiosCfg("Se guardarán estas tarifas:", cambios)) return;
+    const n = cambios.filter((c) => Math.abs(c.antes - c.despues) > 1e-9).length;
+    const saved = coerceLaborRates(await apiPut<Record<string, unknown>>("/labor/rates", { ...laborRatesForm, accionista_id: activeAccionistaId }));
     laborRatesPristine.current = saved; // nueva referencia "limpia": apaga el aviso de sin guardar
     setLaborRatesForm(saved);
-    addToast("Tarifas de pago guardadas", "success");
+    addToast(`Tarifas guardadas (${n} ${n === 1 ? "cambio" : "cambios"})`, "success");
   }
 
   // 🚚 Bajada de carro: trae la semana (el backend primero sincroniza los tickets).
@@ -5166,11 +5227,49 @@ export function App() {
     try { setTarifaEntidades(await apiGet<TarifaEntidad[]>("/pilado/entidades")); }
     catch { /* noop */ }
   };
+  // Qué tarifa del tarifario se aplica HOY por cliente y servicio (la última vigente hasta hoy);
+  // las de fecha futura quedan «Programada» y las reemplazadas «Anterior».
+  const estadoTarifas = useMemo(() => {
+    const out = new Map<string, "VIGENTE" | "PROGRAMADA" | "ANTERIOR">();
+    const hoy = new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 10); // fecha LOCAL
+    const grupos = new Map<string, any[]>();
+    for (const t of servicioTarifas) {
+      if (!t.is_active) continue;
+      const k = `${t.entity_id ?? t.socio_id ?? t.customer_id}|${t.servicio}`;
+      grupos.set(k, [...(grupos.get(k) ?? []), t]);
+    }
+    for (const lista of grupos.values()) {
+      const hasta = lista.filter((t) => String(t.fecha_vigencia ?? "").slice(0, 10) <= hoy)
+        .sort((a, b) => String(b.fecha_vigencia).localeCompare(String(a.fecha_vigencia)) || String(b.created_at).localeCompare(String(a.created_at)));
+      for (const t of lista) {
+        out.set(t.id, String(t.fecha_vigencia ?? "").slice(0, 10) > hoy ? "PROGRAMADA" : t.id === hasta[0]?.id ? "VIGENTE" : "ANTERIOR");
+      }
+    }
+    return out;
+  }, [servicioTarifas]);
   const resetTarifaForm = () => setTarifaForm({ entidad: null, servicio: "PILADO", precio_por_qq: "", fecha_vigencia: nominaToday, editingId: null });
   const submitServicioTarifa = async () => {
     if (!tarifaForm.entidad) { addToast("Elige el cliente o socio", "error"); return; }
     const precio = parseFloat(tarifaForm.precio_por_qq);
     if (isNaN(precio) || precio < 0) { addToast("Precio inválido", "error"); return; }
+    const ent = tarifaForm.entidad;
+    const fechaNueva = tarifaForm.fecha_vigencia || nominaToday;
+    const mismas = servicioTarifas.filter((t) => t.is_active && t.id !== tarifaForm.editingId
+      && String(t.entity_id ?? t.socio_id ?? t.customer_id) === ent.id && t.servicio === tarifaForm.servicio);
+    const etiqueta = `${ent.nombre} · ${tarifaForm.servicio} ($ por QQ)`;
+    if (tarifaForm.editingId) {
+      const orig = servicioTarifas.find((t) => t.id === tarifaForm.editingId);
+      if (orig && Math.abs(Number(orig.precio_por_qq) - precio) > 1e-9
+        && !confirmarCambiosCfg("Editar tarifa (cambia el precio desde su fecha de vigencia):", [{ etiqueta, antes: Number(orig.precio_por_qq), despues: precio }])) return;
+    } else {
+      const mismaFecha = mismas.find((t) => String(t.fecha_vigencia ?? "").slice(0, 10) === fechaNueva);
+      if (mismaFecha && !window.confirm(`${ent.nombre} ya tiene una tarifa de ${tarifaForm.servicio} desde ese mismo día ($${Number(mismaFecha.precio_por_qq).enReal()}/QQ).\n\nSi guardas, quedarán dos y se usará la más nueva. Lo normal es EDITAR la que ya existe.\n\n¿Guardar otra igual?`)) return;
+      const anterior = mismas
+        .filter((t) => String(t.fecha_vigencia ?? "").slice(0, 10) < fechaNueva)
+        .sort((x, y) => String(y.fecha_vigencia).localeCompare(String(x.fecha_vigencia)))[0];
+      if (!mismaFecha && anterior && !confirmarCambiosCfg(`Nueva tarifa desde el ${fechaNueva.split("-").reverse().join("/")} (la anterior sigue para fechas previas):`,
+        [{ etiqueta, antes: Number(anterior.precio_por_qq), despues: precio }])) return;
+    }
     const payload = {
       cliente_tipo: tarifaForm.entidad.tipo,
       entity_id: tarifaForm.entidad.id,
@@ -5251,9 +5350,14 @@ export function App() {
     } catch (e) { addToast(`❌ ${e instanceof Error ? e.message : "No se pudo eliminar"}`, "error"); }
   };
   const submitCashCategory = async () => {
-    if (!catForm.codigo || !catForm.nombre) { addToast("Código y nombre requeridos", "error"); return; }
+    const nombre = catForm.nombre.trim();
+    if (nombre.length < 2) { addToast("Escribe el nombre de la categoría", "error"); return; }
+    const codigo = (catForm.codigo.trim() ? catForm.codigo.toUpperCase().replace(/[^A-Z0-9_]/g, "_") : codigoDesdeNombre(nombre));
+    if (!codigo) { addToast("El nombre debe tener letras o números", "error"); return; }
+    if (cashCategories.some((c) => c.codigo === codigo)) { addToast(`Ya existe una categoría con el código ${codigo}`, "error"); return; }
+    if (cashCategories.some((c) => c.nombre.trim().toUpperCase() === nombre.toUpperCase())) { addToast(`Ya existe la categoría «${nombre}»`, "error"); return; }
     try {
-      await apiPost("/cash/categories", { codigo: catForm.codigo.toUpperCase().replace(/[^A-Z0-9_]/g, "_"), nombre: catForm.nombre, tipo: catForm.tipo, aplicable_a: catForm.aplicable_a });
+      await apiPost("/cash/categories", { codigo, nombre, tipo: catForm.tipo, aplicable_a: catForm.aplicable_a });
       setCatForm({ codigo: "", nombre: "", tipo: "EGRESO", aplicable_a: "AMBOS" });
       await reloadCashCategories();
       addToast("Categoría creada ✓", "success");
@@ -5519,8 +5623,12 @@ export function App() {
     e.preventDefault();
     const sel = Number(selectionRatesForm.seleccion_rate), env = Number(selectionRatesForm.envejecimiento_rate);
     if (!(sel >= 0) || !(env >= 0)) { addToast("Las tarifas deben ser números válidos", "error"); return; }
+    if (!confirmarCambiosCfg("Tarifas de procesos:", [
+      { etiqueta: "Selección ($ por QQ)", antes: Number(selectionRates.seleccion_rate) || 0, despues: sel },
+      { etiqueta: "Envejecido ($ por QQ)", antes: Number(selectionRates.envejecimiento_rate) || 0, despues: env }
+    ])) return;
     await apiPut("/selection/rates", { seleccion_rate: sel, envejecimiento_rate: env });
-    addToast("Tarifas actualizadas", "success");
+    addToast("Tarifas de procesos guardadas", "success");
     await refreshSelection();
   }
 
@@ -5735,6 +5843,10 @@ export function App() {
       addToast("Ingresa nombre y valor unitario", "error");
       return;
     }
+    const nombreNuevo = newActivityForm.name.trim().toUpperCase();
+    const repetida = cuadActivities.find((x) => x.is_active !== false && x.name.trim().toUpperCase() === nombreNuevo);
+    if (repetida) { addToast(`Ya existe la actividad «${repetida.name}»: cambia su tarifa en la lista`, "error"); return; }
+    if (rate === 0 && !window.confirm(`«${newActivityForm.name.trim()}» quedará con tarifa $0 (no se pagará nada por ella). ¿Crearla así?`)) return;
     await apiPost("/cuadrilla/activities", { name: newActivityForm.name.trim(), unit_rate: rate, accionista_id: activeAccionistaId });
     setNewActivityForm({ name: "", unit_rate: "" });
     addToast("Actividad guardada", "success");
@@ -6560,6 +6672,10 @@ export function App() {
     const humedad = Number(settingsForm.humedad_base_pct ?? 0);
     if (!(tarifa >= 0)) throw new Error("La tarifa de pilado no es válida");
     if (!(humedad >= 0 && humedad < 100)) throw new Error("La humedad base debe estar entre 0 y 100");
+    if (!confirmarCambiosCfg("Parámetros de planta:", [
+      { etiqueta: "Tarifa de pilado ($ por QQ)", antes: Number(appSettings.tarifa_pilado_qq ?? 0), despues: tarifa },
+      { etiqueta: "Humedad base (%)", antes: Number(appSettings.humedad_base_pct ?? 0), despues: humedad }
+    ])) return;
     const saved = await apiPut<AppSettings>("/settings/plant-params", {
       accionista_id: activeAccionistaId,
       tarifa_pilado_qq: tarifa,
@@ -6594,7 +6710,9 @@ export function App() {
     const name = newBankAccount.name.trim();
     const banco = newBankAccount.banco.trim();
     const numero = newBankAccount.numero_cuenta.trim();
-    if (!name || !banco || !numero) throw new Error("Completa el nombre, banco y numero de cuenta");
+    if (!name || !banco || !numero) throw new Error("Completa el nombre, banco y número de cuenta");
+    const repetida = bankAccounts.find((b) => (b.numero_cuenta ?? "").replace(/\D/g, "") === numero.replace(/\D/g, "") && (b.banco ?? "").trim().toUpperCase() === banco.toUpperCase());
+    if (repetida) throw new Error(`Esa cuenta ya está registrada: ${repetida.name} (${repetida.socio})`);
     await apiPost("/finance/bank/accounts", {
       accionista_id: activeAccionistaId,
       name,
@@ -6626,6 +6744,12 @@ export function App() {
     if (!seqModal) return;
     const next = Number(seqModal.next_number);
     if (!Number.isInteger(next) || next < 1) { addToast("El próximo número debe ser un entero ≥ 1", "error"); return; }
+    // Bajar el número (con el mismo prefijo) haría que el servidor repita guías ya emitidas.
+    const actual = sequences.find((x) => x.editable);
+    const actualNum = Number(actual?.next_number ?? 0);
+    const mismoPrefijo = !seqModal.prefijo.trim() || seqModal.prefijo.trim() === (actual?.prefijo ?? "").trim();
+    if (mismoPrefijo && actualNum > 0 && next < actualNum
+      && !window.confirm(`El próximo número iba en ${actualNum} y lo bajas a ${next}.\n\nLas guías del ${next} al ${actualNum - 1} ya pueden existir: se repetirían números. Solo hazlo si estás corrigiendo un error.\n\n¿Continuar?`)) return;
     await apiPut("/settings/sequences/guia", { prefijo: seqModal.prefijo.trim() || undefined, next_number: next });
     setSeqModal(null);
     addToast("Numeración de guías actualizada ✓", "success");
@@ -7653,9 +7777,16 @@ export function App() {
 
   // Guarda/actualiza la tarifa por libra de un producto (Inventario/Productos).
   // Actualiza el estado local `products` para que el cotizador la use al instante.
-  async function guardarTarifaLibra(productId: string, valor: string) {
+  async function guardarTarifaLibra(productId: string, valor: string, campo?: HTMLInputElement) {
     const price = Number(valor);
     if (!Number.isFinite(price) || price < 0) { addToast("Precio inválido", "error"); return; }
+    const prod = products.find((x) => x.id === productId);
+    const antes = Number(prod?.price_per_pound ?? 0);
+    const sospechoso = antes > 0 && (price === 0 || price / antes >= 3 || antes / price >= 3);
+    if (sospechoso && !confirmarCambiosCfg("Tarifa por libra:", [{ etiqueta: `${prod?.name ?? "Producto"} ($ por libra)`, antes, despues: price }])) {
+      if (campo) campo.value = antes ? String(antes) : "";
+      return;
+    }
     try {
       const upd = await apiPatch<Product>(`/products/${productId}/tarifa-libra`, { price_per_pound: price });
       setProducts((prev) => prev.map((p) => (p.id === productId ? { ...p, price_per_pound: upd.price_per_pound } : p)));
@@ -22780,6 +22911,14 @@ Motivo (obligatorio):`, "");
                         value={settingsForm.ruc}
                         onChange={(e) => setSettingsForm({ ...settingsForm, ruc: e.target.value })}
                       />
+                      {(() => {
+                        const r = (settingsForm.ruc ?? "").trim();
+                        if (!r) return <small className="cfgAviso">Falta el RUC: sale en los comprobantes.</small>;
+                        if (!/^\d+$/.test(r)) return <small className="cfgAviso">El RUC lleva solo números.</small>;
+                        if (r.length === 10) return <small className="cfgAviso">Tiene 10 dígitos: parece una cédula. El RUC de persona natural es la cédula + 001 (13 dígitos).</small>;
+                        if (r.length !== 13) return <small className="cfgAviso">El RUC tiene 13 dígitos (este tiene {r.length}).</small>;
+                        return null;
+                      })()}
                     </label>
                     <label>
                       <span>Teléfono</span>
@@ -22790,6 +22929,10 @@ Motivo (obligatorio):`, "");
                         value={settingsForm.phone}
                         onChange={(e) => setSettingsForm({ ...settingsForm, phone: e.target.value })}
                       />
+                      {(() => {
+                        const dig = (settingsForm.phone ?? "").replace(/\D/g, "");
+                        return dig && (dig.length < 7 || dig.length > 10) ? <small className="cfgAviso">Revisa el teléfono: tiene {dig.length} dígitos.</small> : null;
+                      })()}
                     </label>
                   </div>
                   <label>
@@ -23733,11 +23876,16 @@ Motivo (obligatorio):`, "");
                     <label><span>$ por saca (@)</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.pilador_per_saca} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, pilador_per_saca: Number(e.target.value) })} /></label>
                   </div>
                   <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>Estibador</h2>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <label><span>$ por QQ</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.estibador_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_qq: Number(e.target.value) })} /></label>
                     <label><span>$ por saca (@)</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.estibador_per_saca} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_saca: Number(e.target.value) })} /></label>
                     <label><span>$ por arrocillo</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.estibador_per_arrocillo} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_per_arrocillo: Number(e.target.value) })} /></label>
                     <label><span>$ por cada 3 tulas ⭐</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.estibador_por_3tulas} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, estibador_por_3tulas: Number(e.target.value) })} /></label>
+                  </div>
+                  <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>Polvillo</h2>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <label><span>$ por QQ de polvillo llenado</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.polvillo_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, polvillo_per_qq: Number(e.target.value) })} /></label>
+                    <small className="muted" style={{ alignSelf: "end" }}>Pago al trabajador que llena el polvillo (se calcula en Producción).</small>
                   </div>
                   <h2 style={{ marginTop: 6, marginBottom: 0, fontSize: 13 }}>Secador</h2>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -23882,7 +24030,13 @@ Motivo (obligatorio):`, "");
                                   <span style={{ fontSize: 11, fontWeight: 600, borderRadius: 4, padding: "2px 8px", background: "#ecfdf5", color: "#15803d" }}>{t.servicio}</span>
                                 </td>
                                 <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700 }}>${fmtTarifa(t.precio_por_qq)}</td>
-                                <td style={{ padding: "6px 8px", color: "var(--c-muted)" }}>{(t.fecha_vigencia || "").slice(0, 10)}</td>
+                                <td style={{ padding: "6px 8px", color: "var(--c-muted)", whiteSpace: "nowrap" }}>
+                                  {(t.fecha_vigencia || "").slice(0, 10).split("-").reverse().join("/")}
+                                  {(() => {
+                                    const e = estadoTarifas.get(t.id);
+                                    return e ? <span className={`tarifaEstado tarifaEstado--${e}`}>{e === "VIGENTE" ? "✅ Vigente" : e === "PROGRAMADA" ? "🕓 Programada" : "Anterior"}</span> : null;
+                                  })()}
+                                </td>
                                 <td style={{ padding: "6px 8px", textAlign: "right", whiteSpace: "nowrap" }}>
                                   <button type="button" disabled={!isAdmin} onClick={() => startEditTarifa(t)}
                                     style={{ background: "none", border: "1px solid #93c5fd", color: "#1d4ed8", borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontSize: 12, marginRight: 6 }}>✏️ Editar</button>
@@ -23980,7 +24134,7 @@ Motivo (obligatorio):`, "");
                                 defaultValue={Number(p.price_per_pound ?? 0) || ""}
                                 placeholder="0.00" disabled={!isAdmin}
                                 onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-                                onBlur={(e) => { const v = e.target.value.trim(); if (v !== "" && Number(v) !== Number(p.price_per_pound ?? 0)) guardarTarifaLibra(p.id, v); }}
+                                onBlur={(e) => { const v = e.target.value.trim(); if (v !== "" && Number(v) !== Number(p.price_per_pound ?? 0)) guardarTarifaLibra(p.id, v, e.target); }}
                                 style={{ width: 110, padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }} />
                             </td>
                             {(() => {
@@ -24085,10 +24239,10 @@ Motivo (obligatorio):`, "");
                   <h3 style={{ marginTop: 8 }}>Nueva categoría</h3>
                   <p className="muted">Se usa en el form de Movimiento, filtrada por tipo de accionista. No afecta movimientos ya registrados.</p>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <label><span>Código (MAYÚSCULAS_)</span>
-                      <input type="text" value={catForm.codigo} onChange={(e) => setCatForm({ ...catForm, codigo: e.target.value })} placeholder="Ej: VENTA_MAYOR" /></label>
                     <label><span>Nombre visible</span>
                       <input type="text" value={catForm.nombre} onChange={(e) => setCatForm({ ...catForm, nombre: e.target.value })} placeholder="Ej: Venta Mayor" /></label>
+                    <label><span>Código <small className="muted">(opcional: se arma solo)</small></span>
+                      <input type="text" value={catForm.codigo} onChange={(e) => setCatForm({ ...catForm, codigo: e.target.value })} placeholder={codigoDesdeNombre(catForm.nombre) || "VENTA_MAYOR"} /></label>
                     <label><span>Tipo</span>
                       <select value={catForm.tipo} onChange={(e) => setCatForm({ ...catForm, tipo: e.target.value })}>
                         <option value="EGRESO">Egreso</option>
@@ -24672,12 +24826,21 @@ Motivo (obligatorio):`, "");
                           <tr key={a.id}>
                             <td>{a.name}</td>
                             <td className="num">
-                              <input type="number" step="0.001" min="0" key={`cuad-${a.id}-${a.unit_rate}`} defaultValue={fmtTarifa(a.unit_rate)} style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }}
+                              <input type="number" step="0.001" min="0" key={`cuad-${a.id}-${a.unit_rate}`} defaultValue={fmtTarifa(a.unit_rate)} disabled={!isAdmin} style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }}
+                                onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
                                 onBlur={(e) => {
                                   const v = Number(e.target.value);
+                                  const antes = Number(a.unit_rate) || 0;
+                                  if (!(v >= 0) || v === antes) { e.target.value = fmtTarifa(antes); return; }
+                                  // Queda en 0 o cambia 3 veces o más: puede ser un error de tecleo → preguntar.
+                                  if (antes > 0 && (v === 0 || v / antes >= 3 || antes / v >= 3)
+                                    && !confirmarCambiosCfg("Tarifa de cuadrilla:", [{ etiqueta: `${a.name} ($ por unidad)`, antes, despues: v }])) {
+                                    e.target.value = fmtTarifa(antes);
+                                    return;
+                                  }
                                   // Muestra al menos 2 decimales (hasta 3) al salir del casillero.
-                                  e.target.value = fmtTarifa(v >= 0 ? v : 0);
-                                  if (v >= 0 && v !== Number(a.unit_rate)) updateActivityRate(a.id, v).catch((err) => addToast(err.message, "error"));
+                                  e.target.value = fmtTarifa(v);
+                                  updateActivityRate(a.id, v).catch((err) => addToast(err.message, "error"));
                                 }} />
                             </td>
                             <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>

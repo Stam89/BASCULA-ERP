@@ -405,9 +405,18 @@ export function SacosCatalogoConfig({
     }
   }
 
-  async function guardarCampo(s: Saco, campo: "stock_minimo" | "precio_compra_default" | "precio_venta_cliente", valor: number) {
+  async function guardarCampo(s: Saco, campo: "stock_minimo" | "precio_compra_default" | "precio_venta_cliente", valor: number, input?: HTMLInputElement) {
     if (!Number.isFinite(valor) || valor < 0) return;
-    if (num(s[campo]) === valor) return;
+    const antes = num(s[campo]);
+    if (antes === valor) return;
+    // Precios: si queda en 0 o cambia 3 veces o más, puede ser un error de tecleo → preguntar.
+    if (campo !== "stock_minimo" && antes > 0 && (valor === 0 || valor / antes >= 3 || antes / valor >= 3)) {
+      const nombre = campo === "precio_compra_default" ? "precio de compra" : "precio al cliente";
+      if (!window.confirm(`${s.tipo}: el ${nombre} pasa de $${antes.enReal()} a $${valor.enReal()}${valor === 0 ? " (queda en 0)" : ""}.\n\n¿Es correcto?`)) {
+        if (input) input.value = antes.enReal();
+        return;
+      }
+    }
     try {
       await apiPatch(`/sacks/${s.id}`, { [campo]: campo === "stock_minimo" ? Math.round(valor) : valor });
       await onCambio();
@@ -553,7 +562,7 @@ export function SacosCatalogoConfig({
                       <input type="number" min="0" step={campo === "stock_minimo" ? "1" : "0.01"} disabled={!puedeEditar || inactivo}
                         key={`${s.id}-${campo}-${String(s[campo] ?? 0)}`}
                         defaultValue={campo === "stock_minimo" ? num(s[campo]) : num(s[campo]).enReal()}
-                        onBlur={(ev) => guardarCampo(s, campo, Number(ev.target.value))}
+                        onBlur={(ev) => guardarCampo(s, campo, Number(ev.target.value), ev.target)}
                         onKeyDown={(ev) => { if (ev.key === "Enter") (ev.target as HTMLInputElement).blur(); }}
                         style={inp} />
                     </td>
