@@ -19,7 +19,7 @@ export const REAL = url.pathname.slice(1), COPIA = "bascula_erp_simulacro";
 if (REAL === COPIA) throw new Error("copia igual a real");
 const run = (exe, args) => { const r = spawnSync(`${BIN}/${exe}`, args, { env, encoding: "utf8" }); if (r.status !== 0) throw new Error(`${exe}: ${r.stderr}`); };
 
-export async function montar({ puerto = 4001, copiar = true, liberarTuneles = true } = {}) {
+export async function montar({ puerto = 4001, copiar = true, liberarTuneles = true, cerrarCajas = true } = {}) {
   if (copiar) {
     const dump = `${SP}/simulacro.dump`;
     run("pg_dump", ["-Fc", "-f", dump, REAL]);
@@ -45,6 +45,9 @@ export async function montar({ puerto = 4001, copiar = true, liberarTuneles = tr
   // Los túneles que estén en uso en la base REAL (operación del día) estorbarían a los simulacros: SOLO en la COPIA se dan por terminados.
   // (El control de arriba ya garantizó que `c` y la app apuntan a la copia.)
   if ((await c.query("SELECT current_database() AS d")).rows[0].d !== COPIA) throw new Error("ABORTADO: la conexión del simulacro no es la copia.");
+  // Las cajas abiertas en la base REAL (operación del día) harían fallar los simulacros que abren su caja:
+  // SOLO en la COPIA se cierran al empezar (la base real no se toca).
+  if (cerrarCajas) await c.query("UPDATE cash_registers SET status = 'CLOSED', closed_at = COALESCE(closed_at, now()) WHERE status = 'OPEN'");
   if (liberarTuneles) await c.query("UPDATE drying_tunnel_reports SET status = 'COMPLETED', dry_end_at = COALESCE(dry_end_at, now()), drying_hours = COALESCE(drying_hours, 1) WHERE status = 'IN_PROGRESS'");
   const q = async (sql, p) => (await c.query(sql, p)).rows;
   const admin = (await q("SELECT u.id, u.name, u.username, u.role_id, r.name AS role_name FROM users u JOIN roles r ON r.id=u.role_id WHERE r.name='ADMINISTRADOR' LIMIT 1"))[0];
