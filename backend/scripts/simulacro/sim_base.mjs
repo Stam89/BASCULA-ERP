@@ -42,6 +42,10 @@ export async function montar({ puerto = 4001, copiar = true } = {}) {
   await ensureLaborTables();
   const server = await new Promise((res) => { const s = app.listen(puerto, "127.0.0.1", () => res(s)); });
   const c = new pg.Client({ connectionString: process.env.DATABASE_URL }); await c.connect();
+  // Los túneles que estén en uso en la base REAL (operación del día) estorbarían a los simulacros: SOLO en la COPIA se dan por terminados.
+  // (El control de arriba ya garantizó que `c` y la app apuntan a la copia.)
+  if ((await c.query("SELECT current_database() AS d")).rows[0].d !== COPIA) throw new Error("ABORTADO: la conexión del simulacro no es la copia.");
+  await c.query("UPDATE drying_tunnel_reports SET status = 'COMPLETED', dry_end_at = COALESCE(dry_end_at, now()), drying_hours = COALESCE(drying_hours, 1) WHERE status = 'IN_PROGRESS'");
   const q = async (sql, p) => (await c.query(sql, p)).rows;
   const admin = (await q("SELECT u.id, u.name, u.username, u.role_id, r.name AS role_name FROM users u JOIN roles r ON r.id=u.role_id WHERE r.name='ADMINISTRADOR' LIMIT 1"))[0];
   const matriz = (await q("SELECT id FROM accionistas WHERE tipo='MATRIZ' LIMIT 1"))[0].id;
