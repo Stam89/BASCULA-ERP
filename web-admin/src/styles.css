@@ -5199,3 +5199,6 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .invx__fila--neg .invx__cant { color: #dc2626; }
 .invx__fila--cero .invx__nombre, .invx__fila--cero .invx__cant { opacity: .6; }
 @media (max-width: 640px) { .invx__kpiValor { font-size: 24px; } .invx__resumen { grid-template-columns: repeat(2, minmax(0, 1fr)); } .invx__kpi { padding: 12px 12px 10px; } .invx__kpiIcono { font-size: 26px; } .invx__kpiTitulo { padding-right: 30px; font-size: 10.5px; } }
+.invx__kpi, .invx__kpi *, .invx__cabeza, .invx__cabeza * { color: #fff; }
+.invx__kpi small, .invx__cabezaTxt small { color: rgba(255,255,255,.95); }
+.invx__cant small { color: inherit; }
