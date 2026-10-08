@@ -22,6 +22,7 @@ const num = (v: number | string) => Number(v) || 0;
 
 export function InventarioExistencias({ grupos }: { grupos: GrupoStock[] }) {
   const [buscar, setBuscar] = useState("");
+  const [soloConExistencias, setSoloConExistencias] = useState(false);
   const q = buscar.trim().toLowerCase();
 
   const totales = useMemo(() => grupos.map((g) => g.filas.reduce((s, f) => s + num(f.quantity), 0)), [grupos]);
@@ -30,8 +31,8 @@ export function InventarioExistencias({ grupos }: { grupos: GrupoStock[] }) {
   const irA = (clave: string) => document.getElementById(`invx-${clave}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
 
   const visibles = grupos
-    .map((g, i) => ({ g, i, filas: g.filas.filter((f) => !q || f.product_name.toLowerCase().includes(q)) }))
-    .filter((x) => x.g.filas.length > 0 && (!q || x.filas.length > 0));
+    .map((g, i) => ({ g, i, filas: g.filas.filter((f) => (!q || f.product_name.toLowerCase().includes(q)) && (!soloConExistencias || Math.abs(num(f.quantity)) >= 0.0005)) }))
+    .filter((x) => x.g.filas.length > 0 && x.filas.length > 0);
 
   return (
     <div className="invx">
@@ -58,6 +59,9 @@ export function InventarioExistencias({ grupos }: { grupos: GrupoStock[] }) {
       {/* Buscador */}
       <div className="invx__barra">
         <input type="search" value={buscar} onChange={(e) => setBuscar(e.target.value)} placeholder="🔎 Buscar un producto…" aria-label="Buscar un producto" />
+        <label className="invx__toggle">
+          <input type="checkbox" checked={soloConExistencias} onChange={(e) => setSoloConExistencias(e.target.checked)} /> Ocultar sin existencias
+        </label>
         <span className="invx__leyenda">
           <span className="invx__chip invx__chip--ok">Disponible</span>
           <span className="invx__chip invx__chip--cero">Sin existencias</span>
@@ -66,7 +70,7 @@ export function InventarioExistencias({ grupos }: { grupos: GrupoStock[] }) {
       </div>
 
       {!hayAlgo && <p className="invx__vacio">Aún no hay productos con movimientos en el inventario.</p>}
-      {hayAlgo && visibles.length === 0 && <p className="invx__vacio">Ningún producto coincide con «{buscar}».</p>}
+      {hayAlgo && visibles.length === 0 && <p className="invx__vacio">{q ? `Ningún producto coincide con «${buscar}».` : "No hay productos con existencias en este momento."}</p>}
 
       {/* Detalle por categoría */}
       <div className="invx__detalle">
