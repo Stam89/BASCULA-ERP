@@ -49,6 +49,9 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 📋 Checklist de producción y guía (2026-10-07)
+- Nuevo `docs/checklist-produccion.md` (orden del día del cambio, pendientes del dueño, reglas del dueño). PRUEBA DE RESTAURACIÓN HECHA: el respaldo de OneDrive del 2026-10-07 se restauró en una base temporal (128 tablas, mismos conteos que la real). La guía del operador (`docs/guia-operador.html`) ahora cubre cuadrilla/anticipos (solo matriz), pagar y anular nómina de operadores y el aviso «ya se pagó». SMTP de Gmail ya estaba configurado (2026-10-02): del resumen diario solo faltan los correos de destino.
+
 ### 📬 Resumen diario auditado (2026-10-07)
 - Simulacro `backend/scripts/simulacro/resumen_diario.mjs`: pone SMTP de mentira (`SMTP_USER/PASS` falsos ANTES de cargar la app, que dotenv no pisa) e instala `__usarTransporteDePrueba` que solo guarda los mensajes: NUNCA envía correo real. Cubre: solo admin (403), validaciones (hora, correos, máx. 5, activar sin correos), contenido, HTML escapado, prueba manual (429 en 60 s, no cuenta como envío del día) y programador (dos tics a la vez = un solo correo; si falla el SMTP queda el ERROR y reintenta a los 30 min; tope 4 intentos/día; apagado; hora de Ecuador).
 - Corregido: la caja del resumen sumaba movimientos anulados y sus contra-asientos (ingresos $110/egresos $50 en vez de $100/$40); ahora solo vigentes (`reversed_at IS NULL AND reversal_of IS NULL`).
