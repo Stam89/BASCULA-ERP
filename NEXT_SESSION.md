@@ -49,6 +49,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🔁 Anular pago de nómina, anticipo de cuadrilla con caja y conciliación de Campo (2026-10-07)
+- Anticipo de cuadrilla: la pantalla (3 sitios en App.tsx: adelanto en el registro de carga/descarga, formulario de anticipos y «anticipo» desde Nómina) ahora envía `cash_register_id` = la caja abierta del socio; el dinero SALE de la caja (con aviso de sobregiro). Sin caja abierta pide abrirla antes. El API sigue aceptando anticipos sin caja (compatibilidad).
+- Anular pago de nómina de operador (Transporte y Cosechadora): migración `20261074_campo_nomina_anular.sql` (`anulado_at/por/motivo`, `vale_ids`). `GET /campo/nomina-operadores/pagos` (historial) y `POST /campo/nomina-operadores/pagos/:id/anular {motivo}`: contra-movimiento `reversion_nomina` (naturaleza ≤ 20 caracteres, varchar(20)) que devuelve el dinero a la cuenta, deja los partes «sin pagar» y devuelve los vales descontados a PENDIENTE_RENDICION. Pagos anteriores con vales descontados no se pueden anular solos (409). Pantalla: tabla «Pagos de nómina recientes» con botón Anular (NominaOperadores.tsx). `campo-resultados.ts` cuenta la reversión como NÓMINA negativa.
+- Conciliación de Campo (`/campo/conciliacion/convertir-y-aplicar`): simulacro `campo_cruce.mjs`. Ya estaba bien la carrera (dos conversiones a la vez con $50 de crédito aplican $50 en total). Corregido: el crédito de una piladora podía pagar el parte de OTRA piladora; ahora 409 si el parte no es del cliente.
+- Batería 2026-10-07: 197 pruebas + 13 simulacros (campo_cruce, campo_nomina, campo, nomina, banco, dinero, liquidaciones, finanzas, saldos, modulos, operador, carrera, …) y 29 reglas de consistencia.
+- Pendiente: resumen diario por correo (esperan los correos del dueño).
+
 ### 🧑‍🌾 Cuadrilla solo matriz + nómina de operadores de Campo (2026-10-07)
 - Regla del dueño: SOLO la matriz tiene cuadrilla. `cuadrilla.ts` → `exigirMatrizCuadrilla` (403 para socios) en `POST /cuadrilla/advances`, `/advances/:id/settle`, `/pay-worker` y `/bajadas/pagar`. Resuelve la observación anterior (un socio podía pagar entradas de cuadrilla con su caja). La lectura y el registro automático (Secadoras/Ventas) no se tocaron.
 - Simulacro `campo_nomina.mjs` (pago por lote y «liquidar» de operadores de Transporte y Cosechadora: nota obligatoria si cambia la base, doble clic, partes de otro operador, saldo insuficiente en CAJA, parte repetido en dos filas, CRUCE PILADORA, pagos = movimientos).
