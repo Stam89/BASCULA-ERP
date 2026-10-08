@@ -116,7 +116,7 @@ dashboardRouter.get("/panel", requireAuth, requirePanelAccess, asyncRoute(async 
        JOIN lots l ON l.id = d.lot_id
        WHERE d.status = 'COMPLETED'
          AND COALESCE(d.apartado_arianos, false) = false
-         AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id)
+         AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id AND b.status <> 'CANCELLED')
        GROUP BY l.accionista_id`),
     // F-D: ingresos por servicio de pilado a socios (facturado en el mes,
     // pendiente por cobrar, y cobrado en el mes). Aditivo: no toca los totales.

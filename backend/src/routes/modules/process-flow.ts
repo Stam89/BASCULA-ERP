@@ -794,7 +794,7 @@ processFlowRouter.post("/drying/:dryingId/reabrir", requireAdmin, asyncRoute(asy
     // 1) Frenos
     const prod = (await client.query(
       `SELECT 1 FROM processing_batch_drying_lots WHERE drying_report_id = ANY($1::uuid[])
-       UNION ALL SELECT 1 FROM processing_batches WHERE drying_report_id = ANY($1::uuid[]) LIMIT 1`,
+       UNION ALL SELECT 1 FROM processing_batches WHERE drying_report_id = ANY($1::uuid[]) AND status <> 'CANCELLED' LIMIT 1`,
       [ids]
     )).rowCount;
     if (prod) throw new ApiError(409, `El arroz de este túnel (lote ${lotes}) ya entró a Producción: anula primero ese proceso.`);

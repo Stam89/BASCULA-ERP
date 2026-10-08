@@ -77,7 +77,7 @@ reportsRouter.get("/arianos", asyncRoute(async (req, res) => {
        JOIN lots l ON l.id = d.lot_id
       WHERE d.status = 'COMPLETED'
         AND l.accionista_id = $1
-        AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id)
+        AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id AND b.status <> 'CANCELLED')
       ORDER BY d.dry_end_at DESC NULLS LAST`,
     [acc]
   );
@@ -104,7 +104,7 @@ reportsRouter.post("/arianos/apartar", asyncRoute(async (req, res) => {
         AND d.id = ANY($1::uuid[])
         AND l.accionista_id = $3
         AND d.status = 'COMPLETED'
-        AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id)
+        AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id AND b.status <> 'CANCELLED')
       RETURNING d.id`,
     [body.ids, body.apartar, acc, body.ubicacion ?? null]
   );

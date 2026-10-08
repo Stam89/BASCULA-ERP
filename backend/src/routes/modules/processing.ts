@@ -3,7 +3,8 @@ import type { PoolClient } from "pg";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
-import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { anularProcesoProduccion } from "../../services/anular-produccion.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
@@ -46,7 +47,7 @@ processingRouter.get("/drafts", asyncRoute(async (req, res) => {
             l.lot_code,
             EXISTS (
               SELECT 1 FROM processing_batches b
-              WHERE b.drying_report_id = d.drying_report_id AND b.finished_at IS NULL
+              WHERE b.drying_report_id = d.drying_report_id AND b.finished_at IS NULL AND b.status <> 'CANCELLED'
             ) AS has_open_batch
      FROM milling_drafts d
      JOIN drying_tunnel_reports t ON t.id = d.drying_report_id
@@ -1120,7 +1121,7 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
       const alreadyProcessed = await client.query(
         `SELECT *
          FROM processing_batches
-         WHERE drying_report_id = $1
+         WHERE drying_report_id = $1 AND status <> 'CANCELLED'
          ORDER BY started_at ASC
          LIMIT 1`,
         [body.drying_report_id]
@@ -1199,6 +1200,11 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
         body.created_by,
         batchAccionistaId
       ]
+    );
+
+    await client.query(
+      "UPDATE processing_batches SET estado_lote_previo = (SELECT status::text FROM lots WHERE id = $2) WHERE id = $1",
+      [batch.rows[0].id, lotId]
     );
 
     if (body.drying_report_id) {
@@ -1412,6 +1418,15 @@ processingRouter.post("/:id/finish-production", asyncRoute(async (req, res) => {
   const body = finishProductionSchema.parse(req.body);
   const result = await cerrarProcesoProduccion(String(req.params.id), body);
   res.json(result);
+}));
+
+// ↩ Anular un proceso de producción YA CERRADO (solo administrador): deshace inventario, cuentas del servicio, sacos/empaque y
+// nómina del proceso, y deja el lote listo para volver a pilarse. Ver services/anular-produccion.ts (frenos y detalle).
+processingRouter.post("/:id/anular", requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({ motivo: z.string().trim().min(5, "Escribe el motivo (mínimo 5 letras).").max(400) }).parse(req.body);
+  const userId = (req as AuthenticatedRequest).user?.id ?? null;
+  const result = await inTransaction((client) => anularProcesoProduccion(client, String(req.params.id), { motivo: body.motivo, userId }));
+  res.status(201).json({ ok: true, ...result });
 }));
 
 // Precio de venta MANUAL por producto de salida de un lote finalizado (liquidación
