@@ -283,10 +283,11 @@ export async function revertirAbonoDeCuentaPorAnulacion(
     await devolver(tablaH, hermanaId);
     const espejo = (await client.query(
       `SELECT id, cash_register_id, movement, category, amount FROM cash_movements
-        WHERE reference_type = $1 AND reference_id = $2 AND amount = $3 AND created_at = $4
+        WHERE reference_type = $1 AND reference_id = $2 AND amount = $3
+          AND created_at = (SELECT created_at FROM cash_movements WHERE id = $4)
           AND reversed_at IS NULL AND reversal_of IS NULL
         ORDER BY created_at LIMIT 1 FOR UPDATE`,
-      [tablaH, hermanaId, monto, m.created_at]
+      [tablaH, hermanaId, monto, m.id]
     )).rows[0];
     if (espejo) {
       await client.query(
