@@ -51,7 +51,7 @@ try {
   check(put.ok && lista.length === esperados && lista.every((t) => Number(String(t.numero).replace(/\D/g, "")) >= corteN), `C1. con «desde el #${corteN}» solo salen pendientes desde ese número`, { put: put.status, lista: lista.length, esperados });
   const todos = (await api("GET", "/tickets")).data;
   check(todos.filter((t) => t.antes_del_corte).every((t) => Number(String(t.numero).replace(/\D/g, "")) < corteN) && todos.some((t) => t.antes_del_corte), "C2. «Todos» marca como anteriores al corte solo los de número menor");
-  const st = (await api("GET", "/bascula/status")).data;
+  const st = (await api("GET", "/../bascula/status")).data;
   const pi = (await api("GET", "/tickets/por-ingresar")).data;
   check(pi.n === esperados && pi.numero === corteN && st.pendientes === esperados, "C3. contador de inicio y estado de la báscula usan el mismo corte", { pi, st: JSON.stringify(st).slice(0, 160) });
   check((await api("PUT", "/tickets/corte", { numero: 0 })).status === 400 && (await api("PUT", "/tickets/corte", { numero: "abc" })).status === 400, "C4. número inválido → 400");
