@@ -164,7 +164,7 @@ fomentosRouter.get("/intereses", asyncRoute(async (req, res) => {
      SELECT c.id, c.farmer_name, c.renta, c.fecha_cuenta::text AS fecha_cuenta,
             COALESCE(e.capital, 0)::float AS capital,
             COALESCE(e.saldo_anterior, 0)::float AS saldo_anterior,
-            ROUND(COALESCE(e.interes, 0), 2)::float AS interes,
+            ROUND(COALESCE(e.interes, 0)::numeric, 2)::float AS interes,
             COALESCE(p.cobrado, 0)::float AS cobrado,
             COALESCE(p.arrastrado, 0)::float AS saldo_en_contra,
             p.liquidacion
