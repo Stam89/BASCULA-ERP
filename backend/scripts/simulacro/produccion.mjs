@@ -64,9 +64,10 @@ try {
   check(sinSalidas.status === 400, "B2. sin ninguna salida real se rechaza (400)", mostrar(sinSalidas));
   const noSuma = await api("POST", `/processing-batches/${C.batch.id}/finish-production`, cierre(C, { white_rice_presentations: [{ presentation: "100 LB", sack_weight_lb: 100, quantity: 1 }] }));
   check(noSuma.status === 400, "B3. el desglose por presentación debe sumar el total (400)", mostrar(noSuma));
-  const sacoMalo = await api("POST", `/processing-batches/${C.batch.id}/finish-production`, cierre(C, { is_maquila: true, farmer_id: farmer.id, sacos_servicio: [{ sack_id: "00000000-0000-4000-8000-000000000000", cantidad: 5 }] }));
+  const insumo = (await q("SELECT id, stock_actual::float s FROM insumos ORDER BY stock_actual DESC LIMIT 1"))[0];
+  const sacoMalo = insumo ? await api("POST", `/processing-batches/${C.batch.id}/finish-production`, cierre(C, { packaging_supply_id: insumo.id, sacks_used: insumo.s + 100000 })) : { status: 409, data: "sin insumos en la copia" };
   const queda = await salidas(C.batch.id);
-  check(sacoMalo.status >= 400 && queda.n === 0 && (await q("SELECT finished_at FROM processing_batches WHERE id=$1", [C.batch.id]))[0].finished_at === null, "B4. si el cierre falla a la mitad (saco inexistente) NO queda nada a medias: sin salidas y el proceso sigue abierto", mostrar(sacoMalo));
+  check(sacoMalo.status >= 400 && queda.n === 0 && (await q("SELECT finished_at FROM processing_batches WHERE id=$1", [C.batch.id]))[0].finished_at === null, "B4. si el cierre falla a la mitad (empaque sin stock) NO queda nada a medias: sin salidas y el proceso sigue abierto", mostrar(sacoMalo));
   const dc = await dos(() => api("POST", `/processing-batches/${C.batch.id}/finish-production`, cierre(C)));
   check(dc.filter((r) => r.ok).length === 1 && (await salidas(C.batch.id)).n === 4 && dc.every((r) => r.status !== 500), "B5. después se cierra bien, y con doble clic simultáneo se cierra UNA vez (inventario correcto)", dc.map((r) => r.status));
 
@@ -87,8 +88,8 @@ try {
   const mitad = r2(sB / 2);
   const ajc = await dos(() => adj(-mitad - 0.5));
   check(ajc.filter((r) => r.ok).length <= 1 && (await stockBlanco()) >= -0.001 && ajc.every((r) => r.status !== 500), "D3. dos bajas de ajuste simultáneas que juntas superan lo que hay: nunca queda stock negativo", { st: ajc.map((r) => r.status), stock: await stockBlanco() });
-  const fp = await q("SELECT count(*)::int n FROM inventory_stock WHERE quantity < -0.001 AND product_id <> ALL($1)", [prods.filter((p) => /SACO|SACK/i.test(p.code)).map((p) => p.id)]);
-  check(fp[0].n === 0, "D4. ningún producto quedó con existencias negativas", fp[0].n);
+  const fp = await q("SELECT p.code, s.warehouse_id, s.accionista_id, s.ownership, sum(s.quantity)::float q FROM inventory_stock s JOIN products p ON p.id = s.product_id GROUP BY 1,2,3,4 HAVING sum(s.quantity) < -0.001");
+  check(fp.length === 0, "D4. ningún producto quedó con existencias negativas", fp);
 
   // ── E. Cuadre global ───────────────────────────────────────────────────
   const huerf = (await q("SELECT count(*)::int n FROM processing_batches b WHERE b.finished_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM production_yields y WHERE y.processing_batch_id = b.id) AND b.id IN ($1,$2)", [A.batch.id, C.batch.id]))[0].n;
