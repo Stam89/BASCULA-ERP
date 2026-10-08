@@ -1808,7 +1808,7 @@ campoRouter.post("/nomina-operadores/pagos/:id/anular", asyncRoute(async (req, r
       reversion = (await client.query(
         `INSERT INTO campo_movimientos
            (fecha, cuenta_id, signo, monto, concepto, activo_id, naturaleza, movimiento_origen_id, motivo_reversion, created_by)
-         VALUES (CURRENT_DATE, $1, 'entrada', $2, $3, $4, 'reversion_nomina_operador', $5, $6, $7)
+         VALUES (CURRENT_DATE, $1, 'entrada', $2, $3, $4, 'reversion_nomina', $5, $6, $7)
          RETURNING id`,
         [mov.cuenta_id, mov.monto, `Anulación de pago de nómina: ${pago.operador}`.slice(0, 400), mov.activo_id, mov.id, body.motivo, uid]
       )).rows[0];

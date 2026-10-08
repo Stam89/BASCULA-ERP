@@ -104,7 +104,7 @@ try {
 
   // ── D. Cuadre global ───────────────────────────────────────────────────
   const sumaPagos = r2((await q("SELECT COALESCE(sum(monto),0)::float t FROM campo_nomina_pagos WHERE anulado_at IS NULL"))[0].t);
-  const sumaMov = r2((await q("SELECT COALESCE(sum(CASE WHEN signo='salida' THEN monto ELSE -monto END),0)::float t FROM campo_movimientos WHERE naturaleza IN ('pago_nomina_operador','reversion_nomina_operador')"))[0].t);
+  const sumaMov = r2((await q("SELECT COALESCE(sum(CASE WHEN signo='salida' THEN monto ELSE -monto END),0)::float t FROM campo_movimientos WHERE naturaleza IN ('pago_nomina_operador','reversion_nomina')"))[0].t);
   check(sumaPagos === sumaMov, "D1. lo registrado en pagos de nómina = lo que salió en movimientos", { pagos: sumaPagos, movimientos: sumaMov });
   const huerfanas = (await q("SELECT count(*)::int n FROM campo_partes WHERE operador_pagado_at IS NOT NULL AND operador_pago_id IS NULL"))[0].n;
   check(huerfanas === 0, "D2. todo parte pagado apunta a su pago", huerfanas);
