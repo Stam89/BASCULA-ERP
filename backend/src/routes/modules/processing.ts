@@ -472,6 +472,16 @@ function buildOutputRows(body: FinishProductionInput) {
   return rows;
 }
 
+/** El lote que llega al cerrar debe ser el del proceso (o uno de los lotes de su secado): si no, las salidas irían al lote equivocado. */
+async function exigirLoteDelProceso(client: PoolClient, processingBatchId: string, batchLotId: string, loteIndicado: string): Promise<void> {
+  if (loteIndicado === batchLotId) return;
+  const vinculado = await client.query(
+    "SELECT 1 FROM processing_batch_drying_lots WHERE processing_batch_id = $1 AND lot_id = $2 LIMIT 1",
+    [processingBatchId, loteIndicado]
+  );
+  if (!vinculado.rowCount) throw new ApiError(409, "El lote indicado no pertenece a este proceso de producción.");
+}
+
 export async function cerrarProcesoProduccion(processingBatchId: string, body: FinishProductionInput) {
   return inTransaction(async (client) => {
     const batchResult = await client.query(
@@ -489,6 +499,7 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
 
     const batch = batchResult.rows[0];
     if (batch.finished_at) throw new ApiError(409, "El proceso ya fue cerrado");
+    await exigirLoteDelProceso(client, processingBatchId, String(batch.lot_id), body.lot_id);
 
     // El arroz procesado pertenece al accionista dueño del lote, sin importar
     // qué accionista tenga seleccionado el usuario que cierra la pilada.
@@ -1340,6 +1351,13 @@ processingRouter.post("/:id/finish", asyncRoute(async (req, res) => {
   }).parse(req.body);
 
   const result = await inTransaction(async (client) => {
+    // Candado y comprobaciones: un proceso se cierra UNA sola vez y con su propio lote (sin esto, un doble clic
+    // duplicaba las salidas del inventario).
+    const proceso = (await client.query("SELECT id, lot_id, finished_at, status FROM processing_batches WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
+    if (!proceso) throw new ApiError(404, "Proceso no encontrado");
+    if (proceso.finished_at) throw new ApiError(409, "El proceso ya fue cerrado");
+    if (proceso.status === "CANCELLED") throw new ApiError(409, "El proceso de este lote fue anulado");
+    await exigirLoteDelProceso(client, String(req.params.id), String(proceso.lot_id), body.lot_id);
     // El inventario producido se atribuye al accionista dueño del lote.
     const lotOwner = await client.query("SELECT accionista_id FROM lots WHERE id = $1", [body.lot_id]);
     if (!lotOwner.rowCount) throw new ApiError(404, "Lote no encontrado");
