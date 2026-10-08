@@ -8430,11 +8430,11 @@ export function App() {
     setFomentoInteresFijoBusy(true);
     try {
       await apiPatch(`/fomentos/${fomentoDetalle.id}/entregas/${entrega.id}/interes-fijo`, { meses });
-      addToast(meses != null ? `🔒 Entrega de ${money(Number(entrega.valor))}: ${meses} ${meses === 1 ? "mes fijo" : "meses fijos"}` : `Entrega de ${money(Number(entrega.valor))}: interés por días`, "success");
+      addToast(meses != null ? `🔒 Gasto adm. · entrega de ${money(Number(entrega.valor))}: ${meses} ${meses === 1 ? "mes fijo" : "meses fijos"}` : `Gasto adm. · entrega de ${money(Number(entrega.valor))}: por días`, "success");
       await loadFomentoDetalle(fomentoDetalle.id);
       await refreshFomentos();
     } catch (err) {
-      addToast(err instanceof Error ? err.message : "No se pudo ajustar el interés", "error");
+      addToast(err instanceof Error ? err.message : "No se pudo ajustar el gasto administrativo", "error");
     } finally {
       setFomentoInteresFijoBusy(false);
     }
@@ -8448,7 +8448,7 @@ export function App() {
       await loadFomentoDetalle(fomentoDetalle.id);
       await refreshFomentos();
     } catch (err) {
-      addToast(err instanceof Error ? err.message : "No se pudo ajustar el interés", "error");
+      addToast(err instanceof Error ? err.message : "No se pudo ajustar el gasto administrativo", "error");
     } finally {
       setFomentoInteresFijoBusy(false);
     }
@@ -12568,7 +12568,6 @@ Motivo (obligatorio):`, "");
         <td style="text-align:right">${dias}</td>
         <td style="text-align:right">${meses.enReal()}${e.es_saldo_anterior ? " fijo" : ""}</td>
         <td style="text-align:right">$${Number(e.valor).enReal()}</td>
-        <td style="text-align:right;color:#b45309">$${Number(e.interes ?? 0).enReal()}</td>
         <td style="text-align:right;font-weight:600">$${Number(e.suman ?? (Number(e.valor)+Number(e.interes ?? 0))).enReal()}</td>
       </tr>`;
     }).join("");
@@ -12620,14 +12619,13 @@ Motivo (obligatorio):`, "");
       </div>
 
       <div class="sec">
-        <h4>Detalle de entregas, créditos e interés</h4>
+        <h4>Detalle de entregas y créditos</h4>
         <table>
-          <thead><tr><th style="text-align:center">N.º</th><th>Fecha Inicial</th><th>Fecha Final</th><th style="text-align:right">Días</th><th style="text-align:right">Meses</th><th style="text-align:right">Valor</th><th style="text-align:right">Interés</th><th style="text-align:right">Suman</th></tr></thead>
-          <tbody>${entregaRows || `<tr><td colspan="8" style="text-align:center;color:#888">Sin cargos registrados</td></tr>`}</tbody>
+          <thead><tr><th style="text-align:center">N.º</th><th>Fecha Inicial</th><th>Fecha Final</th><th style="text-align:right">Días</th><th style="text-align:right">Meses</th><th style="text-align:right">Valor</th><th style="text-align:right">Suman</th></tr></thead>
+          <tbody>${entregaRows || `<tr><td colspan="7" style="text-align:center;color:#888">Sin cargos registrados</td></tr>`}</tbody>
           <tfoot><tr>
             <td colspan="3">TOTALES</td><td></td><td></td>
             <td style="text-align:right">$${totalPedido.enReal()}</td>
-            <td style="text-align:right;color:#b45309">$${totalInteres.enReal()}</td>
             <td style="text-align:right">$${cargosFomento.enReal()}</td>
           </tr></tfoot>
         </table>
@@ -12636,7 +12634,7 @@ Motivo (obligatorio):`, "");
       <div class="sec">
         <table class="subt" style="width:380px">
           <tr><td class="lbl">(+) Total pedido:</td><td class="val">$${totalPedido.enReal()}</td></tr>
-          <tr><td class="lbl">(+) Interés acumulado:</td><td class="val">$${totalInteres.enReal()}</td></tr>
+          <tr><td class="lbl">(+) Gasto administrativo:</td><td class="val">$${totalInteres.enReal()}</td></tr>
           <tr><td class="lbl">Total deuda generada:</td><td class="val">$${cuenta.totalCargos.enReal()}</td></tr>
           <tr><td class="lbl">(−) Total pagado:</td><td class="val" style="color:#15803d">-$${cuenta.totalPagado.enReal()}</td></tr>
           <tr><td class="lbl" style="border-top:1px solid #999">Deuda total:</td><td class="val" style="border-top:1px solid #999;font-weight:800">$${cuenta.deudaPendiente.enReal()}</td></tr>
@@ -18884,7 +18882,7 @@ Motivo (obligatorio):`, "");
                         return (
                           <div style={{ background: "#f0fdf4", borderRadius: 6, padding: "8px 12px", marginBottom: 10, fontSize: 12, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
                             <div><span style={{ color: "var(--c-muted)" }}>Pedido</span><br/><strong>${Number(f.total_pedido).enReal()}</strong></div>
-                            <div><span style={{ color: "var(--c-muted)" }}>Interés</span><br/><strong style={{ color: "#b45309" }}>${Number(f.gasto_adm).enReal()}</strong></div>
+                            <div><span style={{ color: "var(--c-muted)" }}>Gasto adm.</span><br/><strong style={{ color: "#b45309" }}>${Number(f.gasto_adm).enReal()}</strong></div>
                             <div><span style={{ color: "var(--c-muted)" }}>Deuda total</span><br/><strong style={{ color: cuenta.deudaPendiente > 0 ? "#dc2626" : "#16a34a" }}>${cuenta.deudaPendiente.enReal()}</strong></div>
                           </div>
                         );
@@ -19708,7 +19706,7 @@ Motivo (obligatorio):`, "");
             <h2>Fomentos de Insumos</h2>
             <nav className="cajaSubNav fomNav" aria-label="Vistas de Fomentos">
               <button type="button" className={fomentoVista === "lista" ? "active" : ""} onClick={() => setFomentoVista("lista")}>📋 Fomentos</button>
-              <button type="button" className={fomentoVista === "intereses" ? "active" : ""} onClick={() => setFomentoVista("intereses")}>📈 Intereses ganados</button>
+              <button type="button" className={fomentoVista === "intereses" ? "active" : ""} onClick={() => setFomentoVista("intereses")}>📈 Gasto administrativo</button>
             </nav>
             {fomentoVista === "intereses" ? (
               <FomentoIntereses key={activeAccionistaId ?? ""} accionistaNombre={accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "el accionista activo"} />
@@ -19817,7 +19815,7 @@ Motivo (obligatorio):`, "");
                           <div style={{ fontSize: 11, color: "var(--c-muted)", marginTop: 2 }}>
                             {f.status === "CERRADO_LIQUIDACION"
                               ? <>Liquidado: {f.liquidado_at?.slice(0,10) ?? "—"} | <strong style={{ color: cuenta.deudaPendiente > 0 ? "#dc2626" : "#16a34a" }}>{cuenta.deudaPendiente > 0 ? `Deuda $${cuenta.deudaPendiente.enReal()}` : "SALDADO"}{cuenta.saldoFavor > 0 ? ` · A favor $${cuenta.saldoFavor.enReal()}` : ""}</strong></>
-                              : <>Inicio: {f.inicio?.slice(0,10)} | Cosecha: {f.cosecha?.slice(0,10) ?? "—"} | Interés: ${Number(f.gasto_adm).enReal()}</>}
+                              : <>Inicio: {f.inicio?.slice(0,10)} | Cosecha: {f.cosecha?.slice(0,10) ?? "—"} | Gasto adm.: ${Number(f.gasto_adm).enReal()}</>}
                           </div>
                         </div>
                       );
@@ -19860,7 +19858,7 @@ Motivo (obligatorio):`, "");
                       {canEditarPrecios && (
                         <button type="button" onClick={() => setFomentoInteresFijoModalOpen(true)}
                           style={{ background: "#fff", color: "#92400e", border: "1px solid #f59e0b", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
-                          ⚙️ Interés por entrega
+                          ⚙️ Gasto adm. por entrega
                         </button>
                       )}
                       {canAnular && (
@@ -19884,7 +19882,7 @@ Motivo (obligatorio):`, "");
 
                     {/* Tasa de interés editable */}
                     <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 12px", marginBottom: 12, display: "flex", alignItems: "center", gap: 10 }}>
-                      <span style={{ fontSize: 12, fontWeight: 600 }}>Tasa de interés:</span>
+                      <span style={{ fontSize: 12, fontWeight: 600 }}>Tasa de gasto administrativo:</span>
                       {fomentoEditingRenta === fomentoDetalle.id ? (
                         <>
                           <input type="number" step="0.01" min="0.1" max="100" value={fomentoRentaInput}
@@ -19924,7 +19922,7 @@ Motivo (obligatorio):`, "");
                         ["Monto Límite", `$${Number(fomentoDetalle.monto_limite).enReal()}`],
                         ["Total Pedido", `$${Number(fomentoDetalle.total_pedido).enReal()}`],
                         ["Disponible", `$${Number(fomentoDetalle.falta_por_pedir).enReal()}`],
-                        ["Interés Acum.", `$${Number(fomentoDetalle.gasto_adm).enReal()}`],
+                        ["Gasto adm. acum.", `$${Number(fomentoDetalle.gasto_adm).enReal()}`],
                         ["Total Pagado", `$${cuenta.totalPagado.enReal()}`],
                         ["Deuda Total", `$${cuenta.deudaPendiente.enReal()}`],
                         ...(cuenta.saldoFavor > 0 ? [["Saldo a favor", `$${cuenta.saldoFavor.enReal()}`] as [string, string]] : []),
@@ -19958,7 +19956,7 @@ Motivo (obligatorio):`, "");
                             <th style={{ padding: "4px 8px", textAlign: "right" }}>Días</th>
                             <th style={{ padding: "4px 8px", textAlign: "right" }}>Meses</th>
                             <th style={{ padding: "4px 8px", textAlign: "right" }}>Valor</th>
-                            <th style={{ padding: "4px 8px", textAlign: "right" }}>Interés</th>
+                            <th style={{ padding: "4px 8px", textAlign: "right" }}>Gasto adm.</th>
                             <th style={{ padding: "4px 8px", textAlign: "right" }}>Suman</th>
                             <th style={{ padding: "4px 8px" }}></th>
                           </tr>
@@ -20019,7 +20017,7 @@ Motivo (obligatorio):`, "");
                           <h3 style={{ marginTop: 0, color: "#b91c1c" }}>⚠️ ¿Eliminar entrega de crédito?</h3>
                           <p style={{ lineHeight: 1.5 }}>
                             Estás a punto de borrar la entrega de <strong>${confirmarEntrega.valor.enReal()}</strong> del <strong>{confirmarEntrega.fecha}</strong>.
-                            Esto recalculará la deuda total y los intereses del fomento.
+                            Esto recalculará la deuda total y el gasto administrativo del fomento.
                           </p>
                           <div className="buttonRow" style={{ marginTop: 14 }}>
                             <button type="button" onClick={() => setConfirmarEntrega(null)} disabled={borrandoEntrega}>Cancelar</button>
@@ -20063,7 +20061,7 @@ Motivo (obligatorio):`, "");
                               const valor = Number(fomentoEntregaForm.valor);
                               const dias = Math.max(0, Math.floor((Date.now() - new Date(fomentoEntregaForm.fecha).getTime()) / 86400000));
                               const interes = valor * renta / 30 * dias;
-                              return `Días: ${dias} | Tasa: ${(renta*100).enReal()}% | Interés: $${interes.enReal()} | Total: $${(valor + interes).enReal()}`;
+                              return `Días: ${dias} | Tasa: ${(renta*100).enReal()}% | Gasto adm.: $${interes.enReal()} | Total: $${(valor + interes).enReal()}`;
                             })()}
                           </div>
                         )}
@@ -20207,7 +20205,7 @@ Motivo (obligatorio):`, "");
                   <label style={{ fontSize: 12, fontWeight: 600 }}>Fecha Inicio
                     <input required type="date" value={fomentoForm.inicio} onChange={e => setFomentoForm(p => ({...p, inicio: e.target.value}))}
                       style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} />
-                    {fomentoEditingId && <small className="muted" style={{ fontSize: 11 }}>Al guardar una fecha distinta se recalcularán automáticamente los días e intereses dinámicos.</small>}
+                    {fomentoEditingId && <small className="muted" style={{ fontSize: 11 }}>Al guardar una fecha distinta se recalcularán automáticamente los días y el gasto administrativo.</small>}
                   </label>
                   <label style={{ fontSize: 12, fontWeight: 600 }}>Estado
                     <select value={fomentoForm.status} disabled={fomentoForm.status === "CERRADO_LIQUIDACION"}
@@ -20250,7 +20248,7 @@ Motivo (obligatorio):`, "");
                   <div className="modalCard interesFijoModal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
                     <div className="interesFijoModal__cab">
                       <div>
-                        <h3 style={{ margin: 0 }}>⚙️ Interés por entrega</h3>
+                        <h3 style={{ margin: 0 }}>⚙️ Gasto administrativo por entrega</h3>
                         <p className="muted" style={{ margin: "2px 0 0", fontSize: 12.5 }}>{fomentoDetalle.farmer_name} · renta {(renta * 100).enReal(0, 2)} % mensual</p>
                       </div>
                       <button type="button" className="interesFijoModal__x" disabled={fomentoInteresFijoBusy} onClick={() => setFomentoInteresFijoModalOpen(false)} aria-label="Cerrar">✕</button>
@@ -20258,7 +20256,7 @@ Motivo (obligatorio):`, "");
                     <p className="interesFijoModal__nota">
                       Elige en cada entrega: <b>por días</b> (sube cada día hasta que se haga la cuenta) o <b>meses fijos</b> (cobra solo esos meses y no sube más).
                     </p>
-                    {cerrado && <p className="cfgAviso">A este fomento ya se le hizo la cuenta: su interés quedó cerrado.</p>}
+                    {cerrado && <p className="cfgAviso">A este fomento ya se le hizo la cuenta: su gasto administrativo quedó cerrado.</p>}
                     <div className="interesFijoModal__lista">
                       {entregas.length === 0 && <p className="muted">Este fomento no tiene entregas.</p>}
                       {entregas.map((e) => {
@@ -20282,7 +20280,7 @@ Motivo (obligatorio):`, "");
                         );
                       })}
                     </div>
-                    <div className="interesFijoModal__total"><span>Interés total de este fomento</span><b>{money(round2(total))}</b></div>
+                    <div className="interesFijoModal__total"><span>Gasto administrativo total de este fomento</span><b>{money(round2(total))}</b></div>
                     <div className="buttonRow">
                       <button type="button" disabled={fomentoInteresFijoBusy} onClick={() => setFomentoInteresFijoModalOpen(false)}>Listo</button>
                     </div>
@@ -20344,7 +20342,7 @@ Motivo (obligatorio):`, "");
                       <span><small>Total entregado</small><strong>${totalSel.enReal()}</strong></span>
                       <span><small>Agricultores nuevos</small><strong>{nuevos}</strong></span>
                     </div>
-                    <p className="mosaicoModal__nota">El interés se calcula desde la fecha de cada entrega con la <b>renta</b> del cuadro (si no tiene, 7 %). Desmarca lo que no quieras importar.</p>
+                    <p className="mosaicoModal__nota">El gasto administrativo se calcula desde la fecha de cada entrega con la <b>renta</b> del cuadro (si no tiene, 7 %). Desmarca lo que no quieras importar.</p>
                     <div className="mosaicoModal__lista">
                       {conEnt.length === 0 && <p className="muted">Esta hoja no tiene cuadros con entregas.</p>}
                       {conEnt.map((c) => {

@@ -62,7 +62,7 @@ export function FomentoIntereses({ accionistaNombre }: { accionistaNombre: strin
   return (
     <div className="fomInt">
       <p className="fomInt__intro">
-        Interés que dejaron los fomentos de <strong>{accionistaNombre}</strong> a los que <strong>ya se les hizo la cuenta</strong>,
+        Gasto administrativo que dejaron los fomentos de <strong>{accionistaNombre}</strong> a los que <strong>ya se les hizo la cuenta</strong>,
         aunque hayan quedado con saldo en contra. Los fomentos activos todavía no cuentan.
       </p>
       <div className="fomInt__rangos" role="group" aria-label="Período">
@@ -81,7 +81,7 @@ export function FomentoIntereses({ accionistaNombre }: { accionistaNombre: strin
 
       <div className="fomInt__kpis">
         <div className="fomInt__kpi fomInt__kpi--main">
-          <small>💰 Interés ganado</small>
+          <small>💰 Gasto administrativo ganado</small>
           <strong>{t ? money(t.interes) : cargando ? "…" : money(0)}</strong>
           <span>{rango === "todo" ? "desde el inicio" : `${ddmm(fechas.desde)} – ${ddmm(fechas.hasta)}`}</span>
         </div>
@@ -96,10 +96,10 @@ export function FomentoIntereses({ accionistaNombre }: { accionistaNombre: strin
           <div className="fomInt__activosGrid">
             <span><small>Fomentos</small><strong>{data.activos.fomentos}</strong></span>
             <span><small>Prestado</small><strong>{money(data.activos.capital)}</strong></span>
-            <span><small>Interés acumulado</small><strong>{money(data.activos.interes_acumulado)}</strong></span>
+            <span><small>Gasto adm. acumulado</small><strong>{money(data.activos.interes_acumulado)}</strong></span>
             <span><small>Deuda total</small><strong>{money(data.activos.deuda)}</strong></span>
           </div>
-          <p>El interés acumulado todavía no es ganado: se cuenta como ganado el día que se le hace la cuenta a cada agricultor.</p>
+          <p>El gasto administrativo acumulado todavía no es ganado: se cuenta como ganado el día que se le hace la cuenta a cada agricultor.</p>
         </div>
       )}
 
