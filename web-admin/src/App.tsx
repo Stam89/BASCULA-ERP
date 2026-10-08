@@ -15017,7 +15017,7 @@ Motivo (obligatorio):`, "");
                   <button type="button" className="btnSecondary" onClick={() => setTransferLoteOpen(true)}>🔄 Transferir Lote</button>
                 )}
                 <button type="button" className="btnSecondary" onClick={() => setKardexOpen(true)}>📄 Ver Kardex / Movimientos</button>
-                <button type="button" className="btnSecondary" onClick={() => setCatalogoOpen(true)}>⚙️ Catálogo de Productos</button>
+                {isAdmin && <button type="button" className="btnSecondary" onClick={() => setCatalogoOpen(true)}>⚙️ Catálogo de Productos</button>}
                 <button type="button" className="primary" onClick={() => setCuadreOpen(true)}>⚖️ Ajuste / Cuadre Manual</button>
               </div>
             </div>

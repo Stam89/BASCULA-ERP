@@ -6,7 +6,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { avisarSobregiro } from "../../services/caja.js";
 import { inTransaction } from "../../db/transaction.js";
 import { round2 } from "../../utils/rice-formulas.js";
-import { type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { sacosPorComprar } from "../../services/sacos.js";
 import { altaMarcaOGenerico } from "../../services/catalogo-productos.js";
 
@@ -83,7 +83,7 @@ sacksRouter.get("/", asyncRoute(async (req, res) => {
 // saco GENÉRICO "Saco N LB". Una marca nueva se crea también como producto
 // empacado (con sus presentaciones) para poder venderla y descontar su saco.
 const PESOS_VALIDOS = z.number().positive().max(1000);
-sacksRouter.post("/", asyncRoute(async (req, res) => {
+sacksRouter.post("/", requireAdmin, asyncRoute(async (req, res) => {
   const ambito = await ambitoSacos(req as AuthenticatedRequest);
   const body = z.object({
     categoria: z.enum(["MARCA", "GENERICO", "PROPIO"]).default("MARCA"),
@@ -150,7 +150,7 @@ sacksRouter.post("/", asyncRoute(async (req, res) => {
 
 // Edita los datos de control de un saco (no su stock: el stock solo cambia con
 // compras, ventas y movimientos, para que el kárdex siempre cuadre).
-sacksRouter.patch("/:id", asyncRoute(async (req, res) => {
+sacksRouter.patch("/:id", requireAdmin, asyncRoute(async (req, res) => {
   const ambito = await ambitoSacos(req as AuthenticatedRequest);
   await assertSacosDelAmbito(pool, ambito, [String(req.params.id)]);
   const body = z.object({
@@ -179,7 +179,7 @@ sacksRouter.patch("/:id", asyncRoute(async (req, res) => {
 
 // Eliminar: si el saco nunca tuvo movimientos se borra; si tiene historial se
 // DESACTIVA (conserva su kárdex y deja de aparecer en compras/ventas).
-sacksRouter.delete("/:id", asyncRoute(async (req, res) => {
+sacksRouter.delete("/:id", requireAdmin, asyncRoute(async (req, res) => {
   const ambito = await ambitoSacos(req as AuthenticatedRequest);
   await assertSacosDelAmbito(pool, ambito, [String(req.params.id)]);
   const result = await inTransaction(async (client) => {
@@ -317,7 +317,7 @@ sacksRouter.patch("/:id/adjust", asyncRoute(async (req, res) => {
 // PATCH precio de compra por defecto (tarifa de referencia editable). Exclusivo de
 // la matriz (los sacos son inventario de la planta). Solo autocompleta la compra;
 // el valor sigue siendo editable línea por línea al comprar.
-sacksRouter.patch("/:id/precio", asyncRoute(async (req, res) => {
+sacksRouter.patch("/:id/precio", requireAdmin, asyncRoute(async (req, res) => {
   const ambito = await ambitoSacos(req as AuthenticatedRequest);
   await assertSacosDelAmbito(pool, ambito, [String(req.params.id)]);
   const body = z.object({ precio_compra_default: z.number().nonnegative() }).parse(req.body);

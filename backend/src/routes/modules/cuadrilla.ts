@@ -781,7 +781,7 @@ cuadrillaRouter.post("/tunnel-autoprocess", asyncRoute(async (req, res) => {
   res.json(result);
 }));
 
-cuadrillaRouter.post("/activities", asyncRoute(async (req, res) => {
+cuadrillaRouter.post("/activities", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({
     name: z.string().min(2),
     unit_rate: z.number().nonnegative(),
@@ -799,7 +799,7 @@ cuadrillaRouter.post("/activities", asyncRoute(async (req, res) => {
   res.status(201).json(activity);
 }));
 
-cuadrillaRouter.put("/activities/:id", asyncRoute(async (req, res) => {
+cuadrillaRouter.put("/activities/:id", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({
     unit_rate: z.number().nonnegative().optional(),
     is_active: z.boolean().optional(),

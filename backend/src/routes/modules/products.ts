@@ -68,7 +68,7 @@ productsRouter.get("/:id", asyncRoute(async (req, res) => {
 
 // POST crear producto de inventario. El stock inicial queda en 0 porque
 // inventory_stock es una vista sobre movimientos reales y no admite cantidad 0.
-productsRouter.post("/", asyncRoute(async (req, res) => {
+productsRouter.post("/", requireAdmin, asyncRoute(async (req, res) => {
   const body = createProductSchema.parse(req.body);
   const normalizedCode = body.code.toUpperCase();
   const normalizedUnit = body.unit.toUpperCase();

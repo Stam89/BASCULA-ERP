@@ -7,7 +7,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { anularFleteEnvejecido, registrarFleteEnvejecido, validarFleteEnvejecido, type FleteEnvejecido } from "../../services/campo-flete-envejecido.js";
 import { tipoSacoEspecial } from "../../services/cargo-empaque.js";
 import { nextCode } from "../../utils/codes.js";
-import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import type { PoolClient } from "pg";
 import { consumeInventoryFIFO } from "../../services/inventory-consume.js";
 
@@ -84,7 +84,7 @@ selectionRouter.get("/rates", asyncRoute(async (req, res) => {
   res.json({ seleccion_rate: seleccionRate, envejecimiento_rate: envejecimientoRate });
 }));
 
-selectionRouter.put("/rates", asyncRoute(async (req, res) => {
+selectionRouter.put("/rates", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({
     seleccion_rate: z.number().nonnegative(),
     envejecimiento_rate: z.number().nonnegative()

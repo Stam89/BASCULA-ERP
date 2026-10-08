@@ -95,7 +95,7 @@ cashRouter.get("/categories", asyncRoute(async (req, res) => {
   res.json(r.rows);
 }));
 
-cashRouter.post("/categories", asyncRoute(async (req, res) => {
+cashRouter.post("/categories", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({
     codigo: z.string().min(2).max(40).regex(/^[A-Z0-9_]+$/, "Solo mayusculas, numeros y guion bajo"),
     nombre: z.string().min(2).max(80),
@@ -111,7 +111,7 @@ cashRouter.post("/categories", asyncRoute(async (req, res) => {
   res.status(201).json(r.rows[0]);
 }));
 
-cashRouter.patch("/categories/:id", asyncRoute(async (req, res) => {
+cashRouter.patch("/categories/:id", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({
     nombre: z.string().min(2).max(80).optional(),
     tipo: z.enum(["INGRESO", "EGRESO"]).optional(),
@@ -134,7 +134,7 @@ cashRouter.patch("/categories/:id", asyncRoute(async (req, res) => {
 // DELETE físico (hard delete) de una categoría de caja. Integridad referencial:
 // se BLOQUEA si ya hay movimientos que la usan (cash_movements.category = codigo),
 // para no romper el histórico. En ese caso, usar "Desactivar".
-cashRouter.delete("/categories/:id", asyncRoute(async (req, res) => {
+cashRouter.delete("/categories/:id", requireAdmin, asyncRoute(async (req, res) => {
   const cat = await pool.query("SELECT id, codigo FROM cash_categories WHERE id = $1", [req.params.id]);
   if (!cat.rows[0]) throw new ApiError(404, "Categoria no encontrada");
   const enUso = await pool.query("SELECT 1 FROM cash_movements WHERE category = $1 LIMIT 1", [cat.rows[0].codigo]);

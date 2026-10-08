@@ -33,6 +33,14 @@ try {
   await no("abrir la Caja de Campo (Transporte y Cosechadora)", "POST", "/campo/caja/abrir", { saldo_inicial: 10 });
   await no("crear un cliente de Campo", "POST", "/campo/clientes", { nombre: "X" });
   await no("tocar el Resultado mensual (Costos Operativos)", "POST", "/resultado-mensual/manual", { anio: 2026, mes: 10, concepto: "x", monto: 1 });
+  // Configuración: aunque tenga EDIT del módulo, las tarifas y catálogos son solo del administrador
+  await no("cambiar tarifas de Selección", "PUT", "/selection/rates", { seleccion_per_qq: 9 });
+  await no("crear tarifa de Servicio Pilado", "POST", "/pilado/tarifas", { nombre: "X", precio: 1 });
+  await no("crear actividad de cuadrilla", "POST", "/cuadrilla/activities", { name: "X", rate: 1 });
+  await no("crear tipo de saco", "POST", "/sacks", { nombre: "X" });
+  await no("crear producto", "POST", "/products", { name: "X", code: "X" });
+  await no("crear personal administrativo / sueldo", "POST", "/admin-payroll/staff", { name: "X", salary: 1 });
+  check((await pedir("GET", "/selection/rates")).ok, "pero sí puede LEER las tarifas de Selección");
   check((await pedir("GET", "/campo/config")).ok, "pero sí puede LEER la configuración de Campo (la pantalla la pide al entrar)");
   // Con el permiso «Transporte / Cosechadora» (se le da en la COPIA) ya puede
   await S.q("UPDATE user_accionistas SET allowed_modules = array_cat(allowed_modules, ARRAY['Transporte / Cosechadora','EDIT:Transporte / Cosechadora']) WHERE user_id=$1 AND accionista_id=$2", [u.id, S.matriz]);

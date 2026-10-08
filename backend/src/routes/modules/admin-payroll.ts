@@ -4,7 +4,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { avisarSobregiro } from "../../services/caja.js";
 
 // Nómina administrativa (personal de oficina) POR ACCIONISTA. Cada accionista
@@ -33,7 +33,7 @@ adminPayrollRouter.get("/staff", asyncRoute(async (req, res) => {
   res.json(result.rows);
 }));
 
-adminPayrollRouter.post("/staff", asyncRoute(async (req, res) => {
+adminPayrollRouter.post("/staff", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({
     cargo: z.string().max(80).optional().default(""),
     worker_name: z.string().min(2),
@@ -62,7 +62,7 @@ adminPayrollRouter.get("/staff/bajas", asyncRoute(async (req, res) => {
 }));
 
 // Reactivar a un dado de baja: vuelve a la lista y a los pagos pendientes, con su historial intacto.
-adminPayrollRouter.post("/staff/:id/reactivar", asyncRoute(async (req, res) => {
+adminPayrollRouter.post("/staff/:id/reactivar", requireAdmin, asyncRoute(async (req, res) => {
   const accionista = accId(req);
   const out = await inTransaction(async (client) => {
     const s = await client.query<{ worker_name: string; is_active: boolean }>(
@@ -83,7 +83,7 @@ adminPayrollRouter.post("/staff/:id/reactivar", asyncRoute(async (req, res) => {
   res.json({ ok: true, ...out });
 }));
 
-adminPayrollRouter.put("/staff/:id", asyncRoute(async (req, res) => {
+adminPayrollRouter.put("/staff/:id", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({
     cargo: z.string().max(80).optional(),
     worker_name: z.string().min(2).optional(),
@@ -107,7 +107,7 @@ adminPayrollRouter.put("/staff/:id", asyncRoute(async (req, res) => {
 //  · Con pagos registrados (aunque estén anulados) → is_active = false (oculto).
 //  · Sin ningún pago → se borra el registro (no hay historia que cuidar).
 // Antes se borraban también sus pagos y se perdía qué se le pagó (la caja sí quedaba).
-adminPayrollRouter.delete("/staff/:id", asyncRoute(async (req, res) => {
+adminPayrollRouter.delete("/staff/:id", requireAdmin, asyncRoute(async (req, res) => {
   const accionista = accId(req);
   const out = await inTransaction(async (client) => {
     const staff = await client.query(

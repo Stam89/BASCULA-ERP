@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { requireAdmin } from "../../auth/require-auth.js";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
@@ -322,7 +323,7 @@ piladoRouter.get("/tarifas", asyncRoute(async (req, res) => {
 }));
 
 // POST crear/registrar una tarifa vigente desde una fecha (socio o cliente).
-piladoRouter.post("/tarifas", asyncRoute(async (req, res) => {
+piladoRouter.post("/tarifas", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({
     cliente_tipo: z.enum(["SOCIO", "CLIENTE"]).optional(),
     entity_id: z.string().uuid().optional(),
@@ -347,7 +348,7 @@ piladoRouter.post("/tarifas", asyncRoute(async (req, res) => {
 
 // PATCH editar una tarifa: precio, servicio, fecha, notas, activar/desactivar y
 // (opcional) reasignar el cliente/socio. Actualiza in-place (edición del form).
-piladoRouter.patch("/tarifas/:id", asyncRoute(async (req, res) => {
+piladoRouter.patch("/tarifas/:id", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({
     precio_por_qq: z.number().nonnegative().optional(),
     servicio: z.enum(SERVICIOS).optional(),
