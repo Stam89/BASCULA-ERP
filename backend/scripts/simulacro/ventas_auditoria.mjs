@@ -47,7 +47,11 @@ try {
   exigir(await api("PATCH", `/orders/${pA.id}/prepare`, { prepared: true, warehouse_id: bodPT }, stalyn), "C0. preparar de nuevo");
   exigir(await api("POST", `/receivable/${arA.id}/pay`, { amount: 50, cash_register_id: caja.id }, stalyn), "C1. el cliente deja $50 de adelanto");
   check((await api("POST", `/orders/${pA.id}/cancel`, {}, stalyn)).status === 409, "C2. con adelanto cobrado no se cancela → 409");
-  exigir(await api("POST", `/receivable/${arA.id}/reverse-payment`, {}, stalyn), "C3. se devuelve el adelanto");
+  const movAde = (await q("SELECT id FROM cash_movements WHERE reference_type='accounts_receivable' AND reference_id=$1 AND reversed_at IS NULL", [arA.id]))[0];
+  const cAntes = await saldoCaja();
+  exigir(await api("POST", `/cash/movements/${movAde.id}/reverse`, { reason: "adelanto devuelto" }, stalyn), "C3. se anula en Caja el adelanto de $50");
+  const arC3 = await arDe(pA.id);
+  check(r2(cAntes - await saldoCaja()) === 50 && r2(arC3.balance) === 248 && arC3.status === "CONFIRMED", "C3b. salen los $50 de la caja Y el cliente vuelve a deber $248 (antes quedaba debiendo $198)", { caja: r2(cAntes - await saldoCaja()), saldo: arC3.balance, estado: arC3.status });
   exigir(await api("POST", `/orders/${pA.id}/cancel`, {}, stalyn), "C4. ahora sí se cancela");
   const arC = await arDe(pA.id);
   check(arC.status === "CANCELLED" && r2(arC.balance) === 0 && await stock() === st0 && await sacos() === sc0, "C5. cuenta anulada y vuelven arroz y sacos", { ar: arC.status, stock: await stock(), sacos: await sacos() });
@@ -74,6 +78,21 @@ try {
   check(g1.guia_number && g1.guia_number === g2.guia_number && g2.transportista_nombre === "CHOFER DOS", "E4. la guía conserva su número al corregirla", { g1: g1.guia_number, g2: g2.guia_number });
   const cuad = (await q("SELECT quantity::float qq FROM cuadrilla_entries WHERE origen='VENTA' AND referencia_id=$1", [pD.id]))[0];
   check(!cuad || r2(cuad.qq) === 5, "E5. la cuadrilla del despacho registra los 5 QQ (si hay tarifa de despacho)", cuad);
+
+  // ── E2. Pago ENTRE SOCIOS (cargo de empaque) anulado en Caja: se deshace en los dos lados ──
+  const ch = (await q("SELECT * FROM matriz_packaging_charges WHERE order_id=$1", [pD.id]))[0];
+  if (ch) {
+    const cajaM = await abrir(matriz, "Caja CEYRO");
+    const saldoM = async () => r2((await api("GET", `/cash/registers/${cajaM.id}/summary`)).data.current_balance);
+    const m0 = await saldoM(), s0 = await saldoCaja();
+    exigir(await api("POST", `/cash/payables/${ch.payable_id}/pay`, { cash_register_id: caja.id, amount: Number(ch.monto) }, stalyn), "E6. STALYN paga el cargo de empaque a CEYRO");
+    const mov = (await q("SELECT id FROM cash_movements WHERE reference_type='accounts_payable' AND reference_id=$1 AND reversed_at IS NULL", [ch.payable_id]))[0];
+    exigir(await api("POST", `/cash/movements/${mov.id}/reverse`, { reason: "pago equivocado" }, stalyn), "E7. STALYN anula ese pago en su Caja");
+    const ap = (await q("SELECT balance::float b, status FROM accounts_payable WHERE id=$1", [ch.payable_id]))[0];
+    const ar = (await q("SELECT balance::float b, status FROM accounts_receivable WHERE id=$1", [ch.receivable_id]))[0];
+    check(r2(ap.b) === r2(ch.monto) && r2(ar.b) === r2(ch.monto), "E8. STALYN vuelve a deber y CEYRO vuelve a tener por cobrar el cargo completo", { ap, ar, monto: ch.monto });
+    check(await saldoCaja() === s0 && await saldoM() === m0, "E9. las DOS cajas quedan como antes (también se anuló el ingreso en la caja de CEYRO)", { stalyn: [s0, await saldoCaja()], ceyro: [m0, await saldoM()] });
+  } else console.log("   (info) sin cargo de empaque para probar el espejo");
 
   // ── F. Pedido de otro socio desde la cola global ─────────────────────────
   const ajeno = await api("POST", `/orders/${pD.id}/cancel`, {}, matriz);

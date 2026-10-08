@@ -10,7 +10,7 @@ import { reversarEntradaRepuestosDeCaja, reversarEntradaRepuestosDeCredito, devo
 import { etiquetaMaquina, resolverMaquina, type Maquina } from "../../services/maquinas.js";
 import { resolverProveedor } from "../../services/proveedores.js";
 import { reabrirPagoNomina } from "../../services/nomina-reabrir.js";
-import { espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
+import { espejarAbonoEnContraparte, revertirAbonoDeCuentaPorAnulacion } from "../../services/cuentas-vinculadas.js";
 import { vidaUtilPorTipo } from "../../services/activos.js";
 import ExcelJS from "exceljs";
 import { avisarSobregiro } from "../../services/caja.js";
@@ -457,6 +457,9 @@ cashRouter.post("/movements/:id/reverse", requireAdmin, asyncRoute(async (req, r
       [m.id, user?.id ?? null, body.reason]
     );
 
+    // Si cobró/pagó una CUENTA, esa cuenta (y su hermana entre accionistas) vuelve a deber lo anulado.
+    const cuentaRevertida = await revertirAbonoDeCuentaPorAnulacion(client, m, { userId: user?.id ?? null, motivo: body.reason });
+
     // Fondos a rendir cuentas: sin estados colgados.
     //  · Anular el FONDO anula también su vuelto/faltante registrado aparte (si
     //    lo hubo): la caja vuelve exactamente a como estaba antes de entregarlo.
@@ -536,7 +539,7 @@ cashRouter.post("/movements/:id/reverse", requireAdmin, asyncRoute(async (req, r
       activosRetirados.push(a.name);
     }
 
-    return { ...reversal.rows[0], sacos_revertidos: sacosRevertidos, activos_retirados: activosRetirados, ajustes_anulados: ajustesAnulados, repuestos_revertidos: repuestosRevertidos, nomina_reabierta: nominaReabierta };
+    return { ...reversal.rows[0], sacos_revertidos: sacosRevertidos, activos_retirados: activosRetirados, ajustes_anulados: ajustesAnulados, repuestos_revertidos: repuestosRevertidos, nomina_reabierta: nominaReabierta, cuenta_revertida: cuentaRevertida };
   });
 
   res.status(201).json(result);

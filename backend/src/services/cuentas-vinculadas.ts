@@ -242,3 +242,62 @@ export async function espejarPagoATransporte(client: PoolClient, payableId: stri
   );
   await client.query("SELECT set_config('bascula.origen_pago', '', true)");
 }
+
+/**
+ * ANULAR EN CAJA un cobro o pago de una cuenta (cash_movements con reference_type accounts_receivable /
+ * accounts_payable): antes solo devolvía el dinero a la caja y la cuenta quedaba con el saldo rebajado
+ * (el cliente "debía menos" sin haber pagado). Ahora:
+ *  1) la cuenta vuelve a deber lo anulado (tope: su monto original);
+ *  2) si tiene cuenta HERMANA (deuda entre accionistas), también vuelve su saldo y se anula el movimiento
+ *     que el espejo registró en la caja del otro accionista (mismo instante, misma cuenta, mismo monto);
+ *  3) la Por Pagar a Transporte (campo_servicio) se cuadra desde Transporte: allí se anula el cobro.
+ * Se llama DENTRO de la transacción de la anulación, después de marcar el movimiento como anulado.
+ */
+export async function revertirAbonoDeCuentaPorAnulacion(
+  client: PoolClient,
+  m: { id: string; movement: string; reference_type: string | null; reference_id: string | null; amount: string | number; created_at: Date | string },
+  opts: { userId: string | null; motivo: string }
+): Promise<{ cuenta: string; hermana: string | null } | null> {
+  if (!m.reference_id || (m.reference_type !== "accounts_receivable" && m.reference_type !== "accounts_payable")) return null;
+  const esCxC = m.reference_type === "accounts_receivable";
+  const tabla = esCxC ? "accounts_receivable" : "accounts_payable";
+  const cuenta = (await client.query(`SELECT id, amount, balance, reference_type FROM ${tabla} WHERE id = $1 FOR UPDATE`, [m.reference_id])).rows[0];
+  if (!cuenta) return null;
+  if (!esCxC && cuenta.reference_type === "campo_servicio") {
+    throw new ApiError(409, "Este pago a Transporte y Cosechadora se anula desde Transporte (anula allí el cobro): así su saldo y el de la Por Pagar quedan cuadrados.");
+  }
+  const monto = round2(Number(m.amount));
+  const devolver = async (t: string, id: string) => {
+    const c = (await client.query(`SELECT amount, balance, status FROM ${t} WHERE id = $1 FOR UPDATE`, [id])).rows[0];
+    if (!c || c.status === "CANCELLED") return;
+    const nuevo = round2(Math.min(Number(c.amount), Number(c.balance) + monto));
+    await client.query(`UPDATE ${t} SET balance = $2, status = $3 WHERE id = $1`,
+      [id, nuevo, nuevo + 0.005 >= Number(c.amount) ? "CONFIRMED" : nuevo < 0.01 ? "PAID" : "PARTIAL"]);
+  };
+  await devolver(tabla, cuenta.id);
+
+  // Cuenta hermana (deuda entre accionistas): su saldo vuelve y se anula el movimiento del espejo.
+  const hermanaId = await buscarCuentaHermana(client, esCxC ? "receivable" : "payable", cuenta.id);
+  if (hermanaId) {
+    const tablaH = esCxC ? "accounts_payable" : "accounts_receivable";
+    await devolver(tablaH, hermanaId);
+    const espejo = (await client.query(
+      `SELECT id, cash_register_id, movement, category, amount FROM cash_movements
+        WHERE reference_type = $1 AND reference_id = $2 AND amount = $3 AND created_at = $4
+          AND reversed_at IS NULL AND reversal_of IS NULL
+        ORDER BY created_at LIMIT 1 FOR UPDATE`,
+      [tablaH, hermanaId, monto, m.created_at]
+    )).rows[0];
+    if (espejo) {
+      await client.query(
+        `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, reference_type, reference_id, reversal_of, created_by)
+         VALUES ($1, $2, $3, $4, $5, 'reversal', $6, $6, $7)`,
+        [espejo.cash_register_id, espejo.movement === "INCOME" ? "EXPENSE" : "INCOME", espejo.category, espejo.amount,
+         `Anulación (espejo): ${opts.motivo} (mov. ${String(m.id).slice(0, 8)})`, espejo.id, opts.userId]
+      );
+      await client.query(`UPDATE cash_movements SET reversed_at = now(), reversed_by = $2, reversed_reason = $3 WHERE id = $1`,
+        [espejo.id, opts.userId, `Espejo de una anulación: ${opts.motivo}`]);
+    }
+  }
+  return { cuenta: cuenta.id, hermana: hermanaId };
+}
