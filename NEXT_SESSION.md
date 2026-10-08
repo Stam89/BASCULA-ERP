@@ -49,6 +49,14 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🧑‍🌾 Cuadrilla solo matriz + nómina de operadores de Campo (2026-10-07)
+- Regla del dueño: SOLO la matriz tiene cuadrilla. `cuadrilla.ts` → `exigirMatrizCuadrilla` (403 para socios) en `POST /cuadrilla/advances`, `/advances/:id/settle`, `/pay-worker` y `/bajadas/pagar`. Resuelve la observación anterior (un socio podía pagar entradas de cuadrilla con su caja). La lectura y el registro automático (Secadoras/Ventas) no se tocaron.
+- Simulacro `campo_nomina.mjs` (pago por lote y «liquidar» de operadores de Transporte y Cosechadora: nota obligatoria si cambia la base, doble clic, partes de otro operador, saldo insuficiente en CAJA, parte repetido en dos filas, CRUCE PILADORA, pagos = movimientos).
+- Corregido: un parte YA pagado al operador (`operador_pagado_at`) se podía borrar o editar (el pago quedaba sin respaldo): ahora 409 en `DELETE` y `PATCH /campo/partes/:id`.
+- Ya estaba bien: candado `FOR UPDATE OF p` en el pago (doble clic = un solo pago), `requireSaldoCajaDisponible` (bloquea en CAJA con candado de cuenta).
+- Observación (sin cambiar): un pago de nómina de operador NO tiene «anular» (su movimiento no se reversa a mano, por diseño); si se pagó mal hay que corregirlo con un movimiento manual. Preguntar al dueño si quiere un botón de anular pago de nómina.
+- Sigue sin simular: resumen diario por correo (esperan los correos del dueño) y Campo → conciliación convertir-y-aplicar.
+
 ### 💵 Nómina auditada: sueldos, cuadrilla y cierre semanal (2026-10-07)
 - Simulacro `backend/scripts/simulacro/nomina.mjs` (sueldo admin, cuadrilla por persona, anticipos, anulación en Caja, cierre semanal, otro socio).
 - Corregido: (1) `POST /admin-payroll/pay` pagaba dos veces el mismo período al mismo empleado (doble clic o repetido): ahora 409 si ya cobró ese `periodo` (si se anula el pago en Caja, se puede repagar) y bloquea al empleado durante el pago; (2) ese pago no avisaba sobregiro (ahora `avisarSobregiro`); (3) un registro de cuadrilla YA PAGADO se podía editar/borrar (descuadraba la caja): ahora 409 en PUT/DELETE `/cuadrilla/entries/:id`; (4) `POST /cuadrilla/advances/:id/settle` sin candado perdía un abono si dos llegaban a la vez; (5) `POST /cuadrilla/advances` acepta `cash_register_id` OPCIONAL: si viene, el anticipo SALE de esa caja (con aviso de sobregiro). La pantalla todavía NO lo envía: hoy el anticipo de cuadrilla solo queda anotado y no mueve caja; decidir con el dueño si lo quiere (evitar registrarlo dos veces).
