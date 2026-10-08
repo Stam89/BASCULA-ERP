@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🧵 Sacos, repuestos y equipos auditados (2026-10-07)
+- Simulacro `sacos_equipos.mjs`: compra de sacos con caja y anulación en Caja (devuelve el stock), salidas/ajustes con carreras, aislamiento (un socio no toca sacos ni repuestos de la Matriz), repuestos (alta, salida, entrada con caja y su anulación), mantenimiento por área consumiendo repuestos del stock (sin stock suficiente no queda nada a medias; dos a la vez no dejan negativo; anular el egreso en Caja anula el mantenimiento y devuelve los repuestos) y equipos (con mantenimientos pasan a «fuera de servicio» en vez de borrarse).
+- Corregido: `PATCH /sacks/:id/adjust` cambiaba el stock SIN dejar movimiento en el kárdex y sin candado (stock y kárdex dejaban de cuadrar): ahora es una transacción con candado que registra ENTRADA/SALIDA «Ajuste manual: de X a Y».
+- Ya estaba bien: candados de stock, 409 ante sobresalidas, anulación de compras desde Caja, permisos por accionista/Matriz.
+- Pendiente por auditar: compras/proveedores (`purchases.ts`, `suppliers.ts`) y reservas/ocupación de túneles.
+
 ### ↩ Anular producción cerrada (2026-10-07, pedido del dueño)
 - `POST /processing-batches/:id/anular {motivo}` (solo admin; `services/anular-produccion.ts`; migraciones `20261075` y `20261076`). En UNA transacción: contra-movimientos `REVERSAL` (`reference_type='produccion_anulada'`) de las salidas Y de la cáscara consumida (queda el kárdex), devuelve empaque (insumo) y sacos del servicio, cancela las cuentas del servicio (CxC cliente/socio, CxP del socio, sacos del servicio, maquila) con saldo 0, borra salidas/rendimiento/informes/custodia/pagos de nómina PENDIENTES y las partidas del secado, y devuelve el lote a `estado_lote_previo` (se guarda al abrir el proceso; los antiguos → WEIGHED). El proceso queda `CANCELLED` con `finished_at = NULL` (así el secado vuelve a estar disponible), `anulado_*` y `drying_report_id_anulado` (el índice único de `drying_report_id` obliga a soltar el enlace). Consultas que miraban «ya hay proceso» ahora ignoran los CANCELLED (borradores, `alreadyProcessed`, Hoy, reportes, reabrir túnel).
 - FRENOS (409, no toca nada): parte del arroz producido ya se vendió/usó (la existencia quedaría negativa; con candado de inventario), el cobro del servicio/sacos ya tiene abonos, el CxP del socio ya tiene pagos, o algún pago de nómina del proceso ya está PAGADO (anular antes en Caja). Un proceso sin cerrar no se anula.
