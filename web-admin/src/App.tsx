@@ -23,6 +23,7 @@ import { CorreoRecuperacionModal } from "./components/CorreoRecuperacion";
 import { ConfigCorreoClaves } from "./components/ConfigCorreoClaves";
 import { ResumenDiarioConfig } from "./components/ResumenDiarioConfig";
 import { ControlIntegridad } from "./components/ControlIntegridad";
+import { FomentoIntereses } from "./components/FomentoIntereses";
 import { InventarioExistencias, type GrupoStock } from "./components/InventarioExistencias";
 import { AsistenteArranque } from "./asistente/AsistenteArranque";
 import { InicioSimple, type Insignia } from "./inicio/InicioSimple";
@@ -3360,6 +3361,8 @@ export function App() {
   const [fomentoPagoForm, setFomentoPagoForm] = useState({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
   const [fomentoImporting, setFomentoImporting] = useState(false);
   const [fomentoMosaicoImporting, setFomentoMosaicoImporting] = useState(false);
+  // Fomentos: lista de fomentos o «Intereses ganados».
+  const [fomentoVista, setFomentoVista] = useState<"lista" | "intereses">("lista");
   // 🧩 Vista previa del Excel en mosaico: hojas con cuadros, la elegida y los cuadros que NO se importan.
   const [mosaico, setMosaico] = useState<{ archivo: string; hojas: HojaMosaico[]; hoja: string; excluidos: Record<string, boolean>; busy?: boolean } | null>(null);
   const [fomentoImportModal, setFomentoImportModal] = useState<{ open: boolean; title: string; message: string; isError: boolean } | null>(null);
@@ -19688,6 +19691,13 @@ Motivo (obligatorio):`, "");
         {activeTab === "Fomentos" && (
           <section className="tabSection">
             <h2>Fomentos de Insumos</h2>
+            <nav className="cajaSubNav fomNav" aria-label="Vistas de Fomentos">
+              <button type="button" className={fomentoVista === "lista" ? "active" : ""} onClick={() => setFomentoVista("lista")}>📋 Fomentos</button>
+              <button type="button" className={fomentoVista === "intereses" ? "active" : ""} onClick={() => setFomentoVista("intereses")}>📈 Intereses ganados</button>
+            </nav>
+            {fomentoVista === "intereses" ? (
+              <FomentoIntereses key={activeAccionistaId ?? ""} accionistaNombre={accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "el accionista activo"} />
+            ) : (<>
 
             <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
               <button type="button" onClick={() => exportFomentos().catch(() => undefined)}
@@ -20361,6 +20371,7 @@ Motivo (obligatorio):`, "");
                 </div>
               </div>
             )}
+            </>)}
           </section>
         )}
 
