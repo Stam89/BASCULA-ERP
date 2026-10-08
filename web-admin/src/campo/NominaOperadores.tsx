@@ -417,7 +417,7 @@ Motivo (obligatorio):`, "");
       <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
         <h3 style={{ margin: "0 0 8px" }}>🧾 Pagos de nómina recientes</h3>
         <div className="nomMatriz__scroll">
-          <table className="nomMatriz__tabla">
+          <table className="nomMatriz__tabla nomHist">
             <thead><tr><th>Fecha</th><th>Operador</th><th>Máquina</th><th className="num">Partes</th><th className="num">Monto</th><th>Cuenta</th><th>Estado</th><th></th></tr></thead>
             <tbody>
               {pagos.length === 0 && <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 12 }}>Aún no hay pagos de nómina.</td></tr>}

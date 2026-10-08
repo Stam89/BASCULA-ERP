@@ -5120,3 +5120,22 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .fleteEnv { display: grid; gap: 8px; margin: 10px 0; padding: 10px 12px; border: 1px dashed #94a3b8; border-radius: 10px; background: #f8fafc; }
 .fleteEnv-titulo { font-size: 13px; font-weight: 800; color: #334155; }
 .fleteEnv label { margin: 0; }
+
+/* Historial de pagos de nómina de operadores: en el celular se ve como tarjetas (el botón Anular siempre a la vista). */
+@media (max-width: 640px) {
+  .nomHist, .nomHist tbody { display: block; width: 100%; }
+  .nomHist thead { display: none; }
+  .nomHist tr { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 10px 0; border-bottom: 1px solid var(--c-border, #e2e8f0); }
+  .nomHist td { display: block; padding: 0; border: 0; text-align: left; white-space: normal; }
+  .nomHist td:nth-child(2) { grid-column: 1; grid-row: 1; font-weight: 700; }
+  .nomHist td:nth-child(5) { grid-column: 2; grid-row: 1; font-weight: 700; text-align: right; }
+  .nomHist td:nth-child(1) { grid-column: 1; grid-row: 2; font-size: 12.5px; opacity: 0.75; }
+  .nomHist td:nth-child(7) { grid-column: 2; grid-row: 2; font-size: 12.5px; text-align: right; }
+  .nomHist td:nth-child(3) { grid-column: 1 / -1; grid-row: 3; font-size: 12.5px; opacity: 0.75; }
+  .nomHist td:nth-child(6) { grid-column: 1 / -1; grid-row: 4; font-size: 12.5px; opacity: 0.75; }
+  .nomHist td:nth-child(4) { display: none; }
+  .nomHist td:nth-child(8) { grid-column: 1 / -1; grid-row: 5; margin-top: 6px; }
+  .nomHist td:nth-child(8) button { width: 100%; min-height: 40px; }
+  .nomHist td:empty { display: none; }
+  .nomHist td[colspan] { grid-column: 1 / -1; grid-row: 1; text-align: center; }
+}
