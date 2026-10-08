@@ -292,12 +292,26 @@ sacksRouter.post("/movements", asyncRoute(async (req, res) => {
 sacksRouter.patch("/:id/adjust", asyncRoute(async (req, res) => {
   const ambito = await ambitoSacos(req as AuthenticatedRequest);
   await assertSacosDelAmbito(pool, ambito, [String(req.params.id)]);
-  const body = z.object({ stock: z.number().int().nonnegative() }).parse(req.body);
-  const result = await pool.query(
-    "UPDATE sack_inventory SET stock = $2, updated_at = NOW() WHERE id = $1 RETURNING *",
-    [req.params.id, body.stock]
-  );
-  res.json(result.rows[0]);
+  const body = z.object({ stock: z.number().int().nonnegative(), motivo: z.string().trim().max(200).optional() }).parse(req.body);
+  // El ajuste también deja su movimiento en el kárdex (ENTRADA/SALIDA por la diferencia): sin eso, el stock y el kárdex
+  // dejaban de cuadrar y no se podía saber quién cambió el stock ni por cuánto.
+  const result = await inTransaction(async (client) => {
+    const actual = await client.query("SELECT stock FROM sack_inventory WHERE id = $1 FOR UPDATE", [req.params.id]);
+    if (!actual.rowCount) throw new ApiError(404, "Saco no encontrado");
+    const antes = Number(actual.rows[0].stock);
+    const delta = body.stock - antes;
+    if (delta !== 0) {
+      await client.query(
+        "INSERT INTO sack_movements (sack_id, movement, cantidad, concepto) VALUES ($1, $2, $3, $4)",
+        [req.params.id, delta > 0 ? "ENTRADA" : "SALIDA", Math.abs(delta), `Ajuste manual: de ${antes} a ${body.stock}${body.motivo ? ` · ${body.motivo}` : ""}`]
+      );
+    }
+    return (await client.query(
+      "UPDATE sack_inventory SET stock = $2, updated_at = NOW() WHERE id = $1 RETURNING *",
+      [req.params.id, body.stock]
+    )).rows[0];
+  });
+  res.json(result);
 }));
 
 // PATCH precio de compra por defecto (tarifa de referencia editable). Exclusivo de
