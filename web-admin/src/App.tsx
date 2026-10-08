@@ -1248,6 +1248,8 @@ type LotTransferResult = {
 /** Pilado ya cerrado, con su rendimiento. Alimenta el historial de Producción. */
 type ProductionHistoryItem = {
   id: string;
+  /** Solo en servicios de pilada: el proceso de producción del que nacieron (para anularlo). */
+  processing_batch_id?: string | null;
   batch_number: string | null;
   finished_at: string;
   pilador_name: string | null;
@@ -10843,6 +10845,27 @@ export function App() {
     }
   }
 
+  // ↩ Anula una producción YA CERRADA (solo administrador): devuelve el arroz y la cáscara, anula las cuentas del servicio y los
+  // pagos pendientes del proceso, y deja el lote listo para volver a pilarse. El servidor rechaza si ya se usó el arroz o hay abonos.
+  async function anularProduccion(batchId: string, etiqueta: string) {
+    const motivo = window.prompt(`Anular la producción de «${etiqueta}».
+
+Se devuelve la cáscara al lote, se quita el arroz producido de la bodega, se anulan el cobro del servicio y los pagos pendientes de nómina de este proceso, y el lote queda listo para pilarse de nuevo.
+
+No se puede si ya se vendió o usó parte del arroz, o si el cobro ya tiene abonos.
+
+Motivo (obligatorio):`, "");
+    if (motivo === null) return;
+    if (motivo.trim().length < 5) { addToast("Escribe el motivo (mínimo 5 letras).", "error"); return; }
+    try {
+      const r = await apiPost<{ salidas_revertidas: number; cuentas_anuladas: number; pagos_nomina_eliminados: number }>(`/processing-batches/${batchId}/anular`, { motivo: motivo.trim() });
+      addToast(`Producción anulada ✓ · ${r.salidas_revertidas} salida(s) revertidas${r.cuentas_anuladas ? ` · ${r.cuentas_anuladas} cuenta(s) anulada(s)` : ""}${r.pagos_nomina_eliminados ? ` · ${r.pagos_nomina_eliminados} pago(s) de nómina quitados` : ""}`, "success");
+      await loadProductionHistory();
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : "No se pudo anular la producción", "error");
+    }
+  }
+
   // Marca el cuadro «Gana» de un lote como compartido por WhatsApp (tarjeta verde).
   async function marcarGanaWhatsApp(batchId: string) {
     await apiFetch(`/processing-batches/${batchId}/gana-whatsapp`, {
@@ -15548,6 +15571,13 @@ export function App() {
                             <strong style={{ fontSize: 18, color: "#1d4ed8" }}>{money(total)}</strong>
                           </div>
                           <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>{new Date(item.finished_at).toLocaleString("es-EC")} · registrado en Cuentas por Cobrar</div>
+                          {isAdmin && item.processing_batch_id && (
+                            <button type="button" onClick={() => anularProduccion(String(item.processing_batch_id), String(item.client_name ?? item.lot_code))}
+                              title="Solo si se cerró con datos mal digitados (sin abonos al cobro)"
+                              style={{ width: "100%", marginTop: 8, padding: "6px 0", borderRadius: 8, border: "1px solid #fecaca", cursor: "pointer", fontWeight: 600, fontSize: 12, background: "transparent", color: "#b91c1c" }}>
+                              ↩ Anular producción
+                            </button>
+                          )}
                         </article>
                       );
                     })}
@@ -15589,6 +15619,13 @@ export function App() {
                             style={{ width: "100%", padding: "8px 0", borderRadius: 8, border: "none", cursor: "pointer", fontWeight: 700, fontSize: 13, background: "#15803d", color: "#fff" }}>
                             👁️ Ver Gana
                           </button>
+                          {isAdmin && (
+                            <button type="button" onClick={() => anularProduccion(item.id, item.lot_code)}
+                              title="Solo si se cerró con datos mal digitados: devuelve el arroz y deja el lote listo para pilar de nuevo"
+                              style={{ width: "100%", marginTop: 6, padding: "6px 0", borderRadius: 8, border: "1px solid #fecaca", cursor: "pointer", fontWeight: 600, fontSize: 12, background: "transparent", color: "#b91c1c" }}>
+                              ↩ Anular producción
+                            </button>
+                          )}
                         </article>
                       );
                     })}

@@ -159,6 +159,7 @@ processingRouter.get("/history", asyncRoute(async (req, res) => {
     ),
     pool.query(
       `SELECT s.id,
+              s.processing_batch_id,
               NULL::varchar AS batch_number,
               s.service_date::timestamptz AS finished_at,
               NULL::varchar AS pilador_name,
