@@ -49,6 +49,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🚜 Transporte y Cosechadora: auditoría 2 (vales, transferencias, partes, mantenedores) + alertas (2026-10-07)
+- Simulacro `campo_vales.mjs` (vales por rendir, transferencias, partes, mantenimientos, mantenedores, caja cerrada, alertas). Con la auditoría 1 (`campo`, `campo_nomina`, `campo_cruce`, `flete_envejecido`) Campo queda cubierto casi por completo.
+- Corregido: (1) rendir un vale con la caja CERRADA metía dinero a CAJA sin sesión (ahora `requireCajaAbierta` si hay devolución/reembolso); (2) la cuenta interna CRUCE PILADORA se podía usar como cuenta de cobro (`/cxc/abono`), pago (`/cxp/:id/abono`), movimiento manual y transferencia: ahora 400 (`CUENTA_INTERNA_CRUCE`); (3) «Por máquina» contaba un vale sin rendir como gasto mientras el Estado de Resultados no: ahora ambos lo excluyen hasta que se rinde; (4) se podían crear máquinas y operadores con el mismo nombre (`exigirNombreLibre`, 409; sin índice único para no chocar con datos viejos: la base real no tenía duplicados); (5) se podían registrar partes en una máquina dada de baja (409; el parte automático desde báscula NO se bloquea).
+- Ya estaba bien: transferencias (par de movimientos, candado, nunca negativa), vales (doble clic, reembolso con saldo), partes (cobrar con doble clic, des-cobrar/tarifa solo sin abonos, ticket de báscula idempotente), mantenimientos (egreso + hoja de vida de Equipos + anulación al reversar), upsert de tarifas.
+- Por diseño: un vale no se reversa como gasto (se rinde con $0 y devuelve todo); una transferencia no se reversa (se hace la contraria).
+- NUEVO `GET /campo/alertas` (`services/campo-alertas.ts` + 5 pruebas): vales sin rendir (atención >7 días), mantenimientos vencidos/próximos 30 días (se ignoran los ya repetidos después), partes por cobrar y operadores sin pagar (atención >15 días), cartera (atención si hay saldo >30 días). Franja `AlertasCampo` arriba de la pantalla de Caja del módulo; cada alerta lleva a su sección. Candidatos a futuro: alertas de Campo en «Hoy»/resumen diario, antigüedad de cartera por cliente, recibo imprimible del pago al operador.
+
 ### 📋 Checklist de producción y guía (2026-10-07)
 - Nuevo `docs/checklist-produccion.md` (orden del día del cambio, pendientes del dueño, reglas del dueño). PRUEBA DE RESTAURACIÓN HECHA: el respaldo de OneDrive del 2026-10-07 se restauró en una base temporal (128 tablas, mismos conteos que la real). La guía del operador (`docs/guia-operador.html`) ahora cubre cuadrilla/anticipos (solo matriz), pagar y anular nómina de operadores y el aviso «ya se pagó». SMTP de Gmail ya estaba configurado (2026-10-02): del resumen diario solo faltan los correos de destino.
 
