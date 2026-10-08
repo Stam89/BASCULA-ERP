@@ -49,6 +49,14 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### ⚙️ Configuración reorganizada y rediseñada (2026-10-08, pedido del dueño: «más intuitiva, celular y PC»)
+- Antes: 7 subpestañas, «Operación y Planta» era un cajón de 14 tarjetas mezcladas y «Secuenciales» una pestaña de 1 tarjeta. Ahora 9 secciones por tema (`type CfgSub`, `CFG_SECCIONES` en App.tsx):
+  🩺 Estado del sistema (panel + ✅ Puesta en marcha + 🧭 Ajustes en otros módulos) · 🏢 Mi negocio (Datos del negocio, Personal administrativo, Secuenciales) · 🏭 Planta y productos (Parámetros de planta, Catálogo de productos, Catálogo de sacos, Combustible, Categorías de mantenimiento) · 👷 Nómina y mano de obra · 🧾 Tarifas a clientes · 💰 Contabilidad (Saldos iniciales, Parámetros contables, Categorías de caja) · 👥 Socios y bancos · 🔐 Usuarios y acceso · 🛡️ Respaldos y seguridad (Respaldos, Actividad del sistema, Zona de peligro al final).
+- Socio: Mi negocio · Mis sacos (solo si envejece) · Tarifas por libra · Contabilidad · Mis cuentas bancarias (`SUBTABS_SOCIO`, `CFG_SOCIO`).
+- PC: buscador arriba, menú a la izquierda con ícono de color + descripción, cabecera de sección en degradado. Celular: la Configuración abre en un MOSAICO de secciones (2 columnas); al tocar una se ve solo esa con «← Secciones» (`cfgMenuMovil`). Todas las tarjetas usan `cfgSum(ícono, título, descripción)` + clase `cfgCard` (mismo título, flecha a la derecha, compactas cerradas, borde de color abiertas). El orden dentro de cada sección es CSS `order` en cada `<section>`.
+- Saltos: `irATarjeta(título)` (sección sale de `CONFIG_INDICE`) y `abrirSeccionCfg(sub)`; ya no hay `sub` fijo en los accesos. Arreglado de paso: el buscador no encontraba «👤 Crear usuario»; «Tarifas a clientes» desbordaba a 532 px en el celular (tabla del Tarifario estiraba la columna → `min-width: 0`).
+- Solo vista: mismos formularios, estados, guardados y API. Verificado en el navegador a 391 px (las 9 secciones con todas las tarjetas abiertas: sin desborde), 1024 y 1366 px; buscador y acceso desde Inventario → Sacos abren la tarjeta correcta.
+
 ### 🔢 «Contar desde» por NÚMERO de ticket (Báscula y Bajada de carro) (2026-10-08, pedido del dueño)
 - Antes el corte era una FECHA; ahora es el número de ticket de la báscula (`raw_payload->>'numeroTicket'`, «000 300» → 300; único y correlativo). Migración `20261077` agrega `desde_numero` a `bascula_config` y `bajada_carro_config` y lo llenó con el primer ticket desde la fecha vigente: Báscula 28/09 → **#300**, Bajada 26/09 → **#299** (verificado: mismos pendientes, mismos ocultos (294), mismas bajadas, mismos 44 sin nombre).
 - Si `desde_numero` está vacío se usa la fecha `desde` como antes (el borrado de datos de prueba deja Bajada con fecha = hoy y número NULL). Un ticket sin número no se esconde por el corte numérico.
