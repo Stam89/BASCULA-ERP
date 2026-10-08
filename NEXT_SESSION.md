@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🧩 Fomentos: importar Excel en mosaico arreglado (2026-10-08)
+- Error del dueño «❌ Sin bloques» con `G:\Mi unidad\PILADORA FOMENTO.xlsx`: el importador leía SOLO la primera hoja (`Hoja3`, oculta y vacía); los cuadros están en `FOMEN` (y otras ocultas: MAIZ, Hoja4). Además: buscaba «VALOR» hasta 14 columnas a la derecha → tomaba el VALOR del cuadro VECINO; y perdía cuadros sin el rótulo «NOMBRE:» (borrado/«0»/«q»).
+- Nuevo lector puro `web-admin/src/components/fomentoMosaico.ts` (`leerCuadros`): el cuadro se reconoce por su encabezado («No» … «VALOR»), todo dentro del ancho del cuadro; nombre por «NOMBRE:» o el primer nombre de la fila 1; renta por «RENTA:» o el número de la fila 2; entregas hasta «TOTAL»; avisa «Suman» sin VALOR y entregas sin fecha. Lee TODAS las hojas y abre una VISTA PREVIA (hoja sugerida = la activa en Excel; selector de hoja; casillas por cuadro; avisos: fecha de HOY por fórmula =HOY(), sin fecha, entregas de hace >1 año, nombre con notas; cuadros sin nombre o solo «Suman» quedan fuera). Nada se guarda hasta «Importar N fomentos».
+- Backend `/fomentos/bulk-import` acepta `renta` por cuadro (antes fijo 0.07; sin dato sigue 0.07).
+- Con el archivo del dueño (hoja FOMEN): 77 cuadros con nombre, 35 con entregas = $34,188.84. Verificado en pantalla con un Excel de EJEMPLO inyectado (no se importó nada).
+
 ### 🚚 Flete de VENTA con carro de Transporte y Cosechadora (2026-10-08, regla del dueño)
 - Regla: si un carro de Transporte y Cosechadora lleva un pedido, ese flete se le cobra al accionista que VENDE (socio o Matriz, igual que en liquidaciones): `campo_servicios` tipo flete, `origen_tipo='venta_flete'`, `origen_id`=pedido, cliente = el accionista (tipo piladora) = CxC de Transporte; + `accounts_payable reference_type='campo_servicio'` = Por Pagar espejo del vendedor (saldo por trigger; pagar desde el ERP registra el cobro en Transporte). La venta al cliente NO cambia (el flete va aparte).
 - Al despachar: ventana nueva (reemplaza el `window.confirm`) con resumen y «¿Lo lleva un carro de Transporte y Cosechadora?» → carro + $/QQ ↔ valor total (sugiere la tarifa FLETE vigente del vendedor del Tarifario). `POST /orders/:id/deliver` acepta `flete {activo_id, monto}` (todo o nada). Después: botón «🚚 Flete» en Ventas realizadas → `PUT /orders/:id/flete` (poner/cambiar) y `DELETE /orders/:id/flete`; con cobros en Transporte o abonos → 409. La guía toma placa y chofer del carro si no tenía.
