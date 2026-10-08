@@ -77,7 +77,7 @@ export function InventarioExistencias({ grupos, empacados }: { grupos: GrupoStoc
               <span className="invx__kpiIcono" aria-hidden="true">{g.icono}</span>
               <span className="invx__kpiTitulo">{g.titulo}</span>
               <span className="invx__kpiValor">{total.enReal()} <small>QQ</small></span>
-              <span className="invx__kpiSub">{g.filas.length} {g.filas.length === 1 ? "producto" : "productos"}{enModal(g) ? " · tocar para ver" : ""}</span>
+              <span className="invx__kpiSub">{enModal(g) ? `${g.filas.length} ${g.filas.length === 1 ? "marca" : "marcas"} · ver ›` : `${g.filas.length} ${g.filas.length === 1 ? "producto" : "productos"}`}</span>
               <span className="invx__kpiBarra" aria-hidden="true"><i style={{ width: `${pct}%` }} /></span>
               <span className="invx__kpiPct">{pct.enReal(0, 0)}% del total</span>
             </button>
