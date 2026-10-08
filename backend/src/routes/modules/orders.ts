@@ -15,6 +15,7 @@ import { descontarSacosPedido, restaurarSacosPedido, type ResultadoSacos } from 
 import { revertCuadrillaDespachoVentaEntry, upsertCuadrillaDespachoVentaEntry } from "./cuadrilla.js";
 import { consumeInventoryFIFO } from "../../services/inventory-consume.js";
 import { calculateOrderStockCoverage, rawBackingCode } from "../../utils/order-stock-coverage.js";
+import { quitarFleteVenta, registrarFleteVenta, validarFleteVenta } from "../../services/campo-flete-venta.js";
 
 export const ordersRouter = Router();
 
@@ -40,6 +41,10 @@ ordersRouter.get("/", asyncRoute(async (req, res) => {
     `SELECT o.*, c.full_name AS customer_name, c.phone AS customer_phone,
             c.identification AS customer_identification, c.address AS customer_address,
             s.sale_number,
+            fa.nombre AS flete_activo_nombre,
+            (SELECT GREATEST(0, cs.valor - COALESCE(v.saldo_pendiente, cs.valor))::float
+               FROM campo_servicios cs LEFT JOIN campo_servicios_saldo v ON v.id = cs.id
+              WHERE cs.id = o.flete_servicio_id) AS flete_cobrado,
             COALESCE((
               SELECT json_agg(json_build_object(
                        'product_id', i.product_id,
@@ -58,6 +63,7 @@ ordersRouter.get("/", asyncRoute(async (req, res) => {
      FROM sales_orders o
      JOIN customers c ON c.id = o.customer_id
      LEFT JOIN sales s ON s.id = o.sale_id
+     LEFT JOIN campo_activos fa ON fa.id = o.flete_activo_id
      WHERE o.accionista_id = $1
      ORDER BY (o.status = 'PENDING') DESC, o.created_at DESC
      LIMIT 200`,
@@ -496,8 +502,11 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
     payment_method: z.enum(["CASH", "TRANSFER", "CARD", "CHECK", "CREDIT"]).default("CASH"),
     cash_register_id: z.string().uuid().optional(),
     warehouse_id: z.string().uuid(),
-    created_by: z.string().uuid().optional()
+    created_by: z.string().uuid().optional(),
+    // Si un carro de Transporte y Cosechadora lleva el pedido: ese flete se le cobra al que vende.
+    flete: z.object({ activo_id: z.string().uuid(), monto: z.coerce.number().positive().max(100000) }).optional()
   }).parse(req.body);
+  if (body.flete) validarFleteVenta(body.flete);
 
   if (body.payment_method !== "CREDIT" && !body.cash_register_id) {
     throw new ApiError(400, "Abre una caja para cobrar el pedido (o despáchalo a crédito).");
@@ -596,6 +605,15 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
 
     const customer = await client.query("SELECT full_name FROM customers WHERE id = $1", [order.rows[0].customer_id]);
     const totalQqDespachado = round2(items.rows.reduce((sum, item) => sum + Number(item.quantity || 0), 0));
+
+    // Flete con carro de Transporte y Cosechadora: CxC de Transporte + Por Pagar del que vende.
+    const flete = body.flete
+      ? await registrarFleteVenta(client, {
+          orderId: ordRef.id, orderNumber: ordRef.order_number, accionistaId: accionistaId as string,
+          fecha: (await client.query("SELECT (now() AT TIME ZONE 'America/Guayaquil')::date::text AS d")).rows[0].d,
+          qq: totalQqDespachado, cliente: customer.rows[0]?.full_name ?? null, flete: body.flete, createdBy: body.created_by ?? null
+        })
+      : null;
     await upsertCuadrillaDespachoVentaEntry(client, {
       order_id: order.rows[0].id,
       order_number: order.rows[0].order_number,
@@ -611,7 +629,7 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
     // la matriz al CONFIRMAR LA PREPARACIÓN (descontarSacosPedido). En el despacho
     // solo se registra la venta y, si aplica, el CARGO financiero por empaque.
 
-    return { order_number: order.rows[0].order_number, sale, cargo_empaque: cargoEmpaque };
+    return { order_number: order.rows[0].order_number, sale, cargo_empaque: cargoEmpaque, flete };
   });
 
   res.json(result);
@@ -659,6 +677,50 @@ ordersRouter.put("/:id/guia", asyncRoute(async (req, res) => {
   });
 
   res.json(result);
+}));
+
+// Flete de un pedido YA despachado (si se olvidó al despachar o hay que corregirlo). Cambiarlo =
+// quitar el anterior (solo si Transporte aún no cobró nada de él) y registrar el nuevo.
+ordersRouter.put("/:id/flete", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const body = z.object({
+    activo_id: z.string().uuid(),
+    monto: z.coerce.number().positive().max(100000),
+    created_by: z.string().uuid().optional()
+  }).parse(req.body);
+  validarFleteVenta(body);
+  const out = await inTransaction(async (client) => {
+    const order = (await client.query(
+      `SELECT o.id, o.order_number, o.status, o.delivered_at, c.full_name AS cliente
+         FROM sales_orders o JOIN customers c ON c.id = o.customer_id
+        WHERE o.id = $1 AND o.accionista_id = $2 FOR UPDATE OF o`,
+      [req.params.id, accionistaId]
+    )).rows[0];
+    if (!order) throw new ApiError(404, "Pedido no encontrado para el accionista seleccionado");
+    if (order.status !== "DELIVERED") throw new ApiError(409, "El flete se registra al despachar el pedido.");
+    await quitarFleteVenta(client, order.id);
+    const qq = Number((await client.query("SELECT COALESCE(sum(quantity), 0)::float AS q FROM sales_order_items WHERE order_id = $1", [order.id])).rows[0].q);
+    const fecha = order.delivered_at
+      ? (await client.query("SELECT ($1::timestamptz AT TIME ZONE 'America/Guayaquil')::date::text AS d", [order.delivered_at])).rows[0].d
+      : (await client.query("SELECT (now() AT TIME ZONE 'America/Guayaquil')::date::text AS d")).rows[0].d;
+    return registrarFleteVenta(client, {
+      orderId: order.id, orderNumber: order.order_number, accionistaId: accionistaId as string,
+      fecha, qq, cliente: order.cliente, flete: { activo_id: body.activo_id, monto: body.monto }, createdBy: body.created_by ?? null
+    });
+  });
+  res.json({ ok: true, flete: out });
+}));
+
+ordersRouter.delete("/:id/flete", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const out = await inTransaction(async (client) => {
+    const order = (await client.query(
+      "SELECT id FROM sales_orders WHERE id = $1 AND accionista_id = $2 FOR UPDATE", [req.params.id, accionistaId]
+    )).rows[0];
+    if (!order) throw new ApiError(404, "Pedido no encontrado para el accionista seleccionado");
+    return quitarFleteVenta(client, order.id);
+  });
+  res.json({ ok: true, ...out });
 }));
 
 ordersRouter.post("/:id/cancel", asyncRoute(async (req, res) => {

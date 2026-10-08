@@ -5486,3 +5486,22 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .staffBajas__item span { display: grid; gap: 2px; min-width: 0; }
 .staffBajas__item small { font-size: 11.5px; color: var(--c-text-muted); }
 .staffBajas__item button { margin: 0; font-size: 12.5px; }
+
+/* 🚚 Ventana de despacho con flete de Transporte y Cosechadora. */
+.despachoModal { max-width: 480px; gap: 12px; }
+.despachoModal__resumen { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+.despachoModal__resumen span { display: grid; gap: 1px; padding: 8px 10px; border-radius: 10px; background: var(--c-surface-3, #f1f5f9); }
+.despachoModal__resumen small { font-size: 11px; color: var(--c-text-muted); font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+.despachoModal__resumen strong { font-size: 14px; overflow-wrap: anywhere; }
+.despachoModal__flete { display: grid; gap: 10px; padding: 12px; border-radius: 12px; border: 1px solid #fde68a; background: #fffbeb; }
+.despachoModal__pregunta { font-weight: 800; font-size: 13.5px; color: #92400e; }
+.despachoModal__flete label { display: grid; gap: 4px; margin: 0; font-size: 12.5px; font-weight: 700; }
+.despachoModal__flete select, .despachoModal__flete input { width: 100%; box-sizing: border-box; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--c-border); background: #fff; font: inherit; }
+.despachoModal__valores { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.despachoModal__nota { font-size: 12px; color: #78350f; line-height: 1.4; }
+.fleteChip { padding: 3px 10px; font-size: 12px; cursor: pointer; margin-left: 6px; border-radius: 4px; border: 1px solid #d97706; color: #b45309; background: transparent; min-width: 0; }
+.fleteChip--on { background: #fef3c7; font-weight: 700; }
+@media (max-width: 640px) {
+  .modalOverlay:has(.despachoModal) { align-items: flex-end; padding: 0; }
+  .despachoModal { max-width: none; border-radius: 20px 20px 0 0; max-height: 90vh; }
+}

@@ -20,8 +20,8 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
   { modulo: "Transporte", nombre: "Espejo de Transporte: la Por Pagar del socio = saldo pendiente del servicio en Campo", sql: `
     SELECT p.id, p.balance::float b, v.saldo_pendiente::float s FROM accounts_payable p JOIN campo_servicios_saldo v ON v.id = p.reference_id
      WHERE p.reference_type = 'campo_servicio' AND p.status <> 'CANCELLED' AND abs(p.balance - GREATEST(0, v.saldo_pendiente)) > 0.01` },
-  { modulo: "Transporte", nombre: "Servicios de Campo huérfanos de su Por Pagar espejo (flete/cosecha de liquidación o envejecido)", sql: `
-    SELECT s.id FROM campo_servicios s WHERE s.origen_tipo IN ('liquidacion_flete','liquidacion_cosechadora','envejecido_flete')
+  { modulo: "Transporte", nombre: "Servicios de Campo huérfanos de su Por Pagar espejo (flete/cosecha de liquidación, envejecido o venta)", sql: `
+    SELECT s.id FROM campo_servicios s WHERE s.origen_tipo IN ('liquidacion_flete','liquidacion_cosechadora','envejecido_flete','venta_flete')
        AND NOT EXISTS (SELECT 1 FROM accounts_payable p WHERE p.reference_type = 'campo_servicio' AND p.reference_id = s.id)` },
   // ── Agricultores: anticipos y liquidaciones ──
   { modulo: "Liquidaciones", nombre: "Anticipos: saldo = monto − aplicado en liquidaciones vigentes", sql: `
@@ -85,6 +85,12 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
        AND NOT EXISTS (SELECT 1 FROM accounts_receivable a WHERE a.id = si.ref_id UNION ALL SELECT 1 FROM accounts_payable p WHERE p.id = si.ref_id)` },
   { modulo: "Selección", nombre: "Lotes de selección en proceso: su cuenta por pagar existe", sql: `
     SELECT b.id FROM selection_batches b WHERE b.status = 'IN_PROCESS' AND b.payable_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts_payable p WHERE p.id = b.payable_id)` },
+  { modulo: "Ventas", nombre: "Fletes de venta: cada pedido con flete tiene su servicio de Transporte (y viceversa)", sql: `
+    SELECT o.id FROM sales_orders o WHERE o.flete_servicio_id IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM campo_servicios s WHERE s.id = o.flete_servicio_id AND s.origen_tipo = 'venta_flete' AND s.origen_id = o.id)
+    UNION ALL
+    SELECT s.origen_id FROM campo_servicios s WHERE s.origen_tipo = 'venta_flete'
+       AND NOT EXISTS (SELECT 1 FROM sales_orders o WHERE o.id = s.origen_id AND o.flete_servicio_id = s.id)` },
   { modulo: "Selección", nombre: "Fletes de envejecido: cada lote con flete propio tiene su servicio de Transporte", sql: `
     SELECT b.id FROM selection_batches b WHERE b.flete_tipo = 'propia' AND b.status <> 'CANCELLED' AND NOT EXISTS (SELECT 1 FROM campo_servicios s WHERE s.origen_tipo = 'envejecido_flete' AND s.origen_id = b.id)` },
   { modulo: "Nómina", nombre: "Pagos a trabajadores PAID con caja", sql: `SELECT id FROM worker_payments WHERE status = 'PAID' AND cash_register_id IS NULL AND paid_at IS NOT NULL LIMIT 20` },

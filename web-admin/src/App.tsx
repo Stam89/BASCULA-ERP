@@ -1266,6 +1266,11 @@ type SalesOrder = {
   transportista_cedula?: string | null;
   vehiculo_placa?: string | null;
   guia_number?: string | null;
+  // Flete con carro de Transporte y Cosechadora (se le cobra al que vende).
+  flete_activo_id?: string | null;
+  flete_activo_nombre?: string | null;
+  flete_monto?: string | number | null;
+  flete_cobrado?: number | null;
   // Cola de Despachos GLOBAL (/orders/cola-global): dueño del pedido y su stock
   // propio (QQ) de los productos que pide.
   accionista_id?: string | null;
@@ -3544,6 +3549,11 @@ export function App() {
   const [orderPickLocation, setOrderPickLocation] = useState<Record<string, string>>({});
   // Modal de captura de datos del transportista para la Guía de Remisión.
   const [guiaModal, setGuiaModal] = useState<{ order: SalesOrder; nombre: string; cedula: string; placa: string } | null>(null);
+  // 🚚 Despacho (con flete opcional) y flete de un pedido ya despachado.
+  const [fleteModal, setFleteModal] = useState<{
+    order: SalesOrder; modo: "despacho" | "editar"; conFlete: boolean; activoId: string; porQq: string; total: string;
+    metodo?: string; registerId?: string; esDelActivo?: boolean; tarifaHint?: string; busy?: boolean;
+  } | null>(null);
   /** Pedido que se está editando (sus líneas vuelven al carrito). */
   const [pedidoEditando, setPedidoEditando] = useState<string | null>(null);
   const [saleLineForm, setSaleLineForm] = useState({
@@ -11704,23 +11714,81 @@ Motivo (obligatorio):`, "");
       addToast("Falta la bodega de producto terminado (Crear datos base en Dashboard)", "error");
       return;
     }
-    const ok = window.confirm(
-      `¿Despachar el pedido ${order.order_number} de ${order.customer_name} por ${money(Number(order.total_amount))}${esDelActivo ? "" : ` · socio ${order.accionista_name}`}?\n\n` +
-      (metodo === "CREDIT" ? "Queda como CRÉDITO (cuenta por cobrar)." : "Se cobra ahora y entra a la caja abierta.") +
-      "\nLa mercadería sale del inventario."
-    );
-    if (!ok) return;
+    // Ventana de despacho: resumen + ¿lo lleva un carro de Transporte y Cosechadora? (flete al que vende).
+    setFleteModal({ order, modo: "despacho", conFlete: false, activoId: "", porQq: "", total: "", metodo, registerId, esDelActivo });
+    sugerirTarifaFlete(order);
+  }
 
-    const result = await apiPost<{ sale: { sale_number: string } }>(`/orders/${order.id}/deliver`, {
-      payment_method: metodo,
-      cash_register_id: metodo === "CREDIT" ? undefined : registerId,
-      warehouse_id: finishedWarehouse.id,
-      created_by: authUser?.id
-    }, optsPedido(order));
-    addToast(`Pedido ${order.order_number} despachado → venta ${result.sale.sale_number}${esDelActivo ? "" : ` (${order.accionista_name})`}`, "success");
-    await refreshCustomersAndSales();
-    await refresh();
-    if (registerId && esDelActivo) await refreshCaja(registerId);
+  // $/QQ de flete sugerido: la tarifa FLETE vigente del vendedor en el Tarifario de Servicios (si tiene).
+  function sugerirTarifaFlete(order: SalesOrder) {
+    const vendedor = order.accionista_id || activeAccionistaId;
+    if (!vendedor) return;
+    const hoy = new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+    apiGet<{ precio_por_qq: number } | null>(`/pilado/tarifa-vigente?socio_id=${vendedor}&servicio=FLETE&fecha=${hoy}`)
+      .then((t) => {
+        if (!t || !(Number(t.precio_por_qq) > 0)) return;
+        setFleteModal((m) => m && m.order.id === order.id && !m.porQq
+          ? { ...m, porQq: String(t.precio_por_qq), total: m.total || String(round2(Number(t.precio_por_qq) * qqDePedido(order))), tarifaHint: `Tarifa de flete vigente: $${Number(t.precio_por_qq).enReal()}/QQ` }
+          : m);
+      })
+      .catch(() => undefined);
+  }
+  const qqDePedido = (o: SalesOrder) => round2((o.items ?? []).reduce((acc, it) => acc + (Number(it.quantity) || 0), 0));
+
+  // Confirma el despacho (y el flete, si lo lleva un carro de Transporte).
+  async function confirmarDespacho() {
+    const m = fleteModal;
+    if (!m || m.modo !== "despacho" || !finishedWarehouse?.id) return;
+    const total = round2(Number(m.total));
+    if (m.conFlete && (!m.activoId || !(total > 0))) { addToast("Elige el carro y el valor del flete (o marca que no lo lleva Transporte).", "error"); return; }
+    setFleteModal({ ...m, busy: true });
+    try {
+      const result = await apiPost<{ sale: { sale_number: string }; flete?: { monto: number; activo_nombre: string } | null }>(`/orders/${m.order.id}/deliver`, {
+        payment_method: m.metodo,
+        cash_register_id: m.metodo === "CREDIT" ? undefined : m.registerId,
+        warehouse_id: finishedWarehouse.id,
+        created_by: authUser?.id,
+        flete: m.conFlete ? { activo_id: m.activoId, monto: total } : undefined
+      }, optsPedido(m.order));
+      setFleteModal(null);
+      addToast(`Pedido ${m.order.order_number} despachado → venta ${result.sale.sale_number}${m.esDelActivo ? "" : ` (${m.order.accionista_name})`}`
+        + (result.flete ? ` · Flete ${money(result.flete.monto)} a Transporte (${result.flete.activo_nombre})` : ""), "success");
+      await refreshCustomersAndSales();
+      await refresh();
+      if (m.registerId && m.esDelActivo) await refreshCaja(m.registerId);
+    } catch (e) {
+      setFleteModal((cur) => cur && { ...cur, busy: false });
+      addToast(e instanceof Error ? e.message : "No se pudo despachar", "error");
+    }
+  }
+
+  // Flete de un pedido YA despachado: poner, cambiar o quitar (si Transporte aún no lo cobró).
+  function abrirFletePedido(order: SalesOrder) {
+    const monto = Number(order.flete_monto ?? 0);
+    const qq = qqDePedido(order);
+    setFleteModal({
+      order, modo: "editar", conFlete: true, activoId: order.flete_activo_id ?? "",
+      porQq: monto > 0 && qq > 0 ? String(round2(monto / qq * 10000) / 10000) : "", total: monto > 0 ? String(monto) : ""
+    });
+    if (!(monto > 0)) sugerirTarifaFlete(order);
+  }
+  async function guardarFletePedido(quitar = false) {
+    const m = fleteModal;
+    if (!m || m.modo !== "editar") return;
+    const total = round2(Number(m.total));
+    if (!quitar && (!m.activoId || !(total > 0))) { addToast("Elige el carro y el valor del flete.", "error"); return; }
+    if (quitar && !window.confirm(`¿Quitar el flete del pedido ${m.order.order_number}?\n\nSe borra la cuenta por cobrar de Transporte y la cuenta por pagar del vendedor.`)) return;
+    setFleteModal({ ...m, busy: true });
+    try {
+      if (quitar) await apiFetch(`/orders/${m.order.id}/flete`, { method: "DELETE" }).then(async (r) => { if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? "No se pudo quitar el flete"); });
+      else await apiPut(`/orders/${m.order.id}/flete`, { activo_id: m.activoId, monto: total, created_by: authUser?.id }, optsPedido(m.order));
+      setFleteModal(null);
+      addToast(quitar ? `Flete quitado del pedido ${m.order.order_number}` : `Flete del pedido ${m.order.order_number}: ${money(total)} a Transporte y Cosechadora`, "success");
+      await refreshCustomersAndSales();
+    } catch (e) {
+      setFleteModal((cur) => cur && { ...cur, busy: false });
+      addToast(e instanceof Error ? e.message : "No se pudo guardar el flete", "error");
+    }
   }
 
   // Guía de Remisión: si el pedido ya tiene datos de transporte, imprime
@@ -16751,6 +16819,13 @@ Motivo (obligatorio):`, "");
                               </button>
                             )}
                             {order && (
+                              <button type="button" className={Number(order.flete_monto ?? 0) > 0 ? "fleteChip fleteChip--on" : "fleteChip"}
+                                title={Number(order.flete_monto ?? 0) > 0 ? `Flete con ${order.flete_activo_nombre ?? "carro de Transporte"}: ${money(Number(order.flete_monto))}` : "Registrar el flete (carro de Transporte y Cosechadora)"}
+                                onClick={() => abrirFletePedido(order)}>
+                                🚚 {Number(order.flete_monto ?? 0) > 0 ? money(Number(order.flete_monto)) : "Flete"}
+                              </button>
+                            )}
+                            {order && (
                               <button type="button" title="Generar Guía en la pestaña (con conversión a bultos)" onClick={() => generarGuiaDesdePedido(order)}
                                 style={{ padding: "3px 10px", fontSize: 12, cursor: "pointer", marginLeft: 6, border: "1px solid #2563eb", color: "#2563eb", borderRadius: 4, background: "transparent" }}>
                                 📄→ Bultos
@@ -16881,6 +16956,81 @@ Motivo (obligatorio):`, "");
                           </div>
                         </>
                       )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {fleteModal && (() => {
+              const m = fleteModal;
+              const o = m.order;
+              const qq = qqDePedido(o);
+              const vendedor = o.accionista_name ?? accionistas.find((a) => a.id === (o.accionista_id || activeAccionistaId))?.name ?? "el vendedor";
+              const carros = fletaActivos.filter((a) => String(a.tipo ?? "").toLowerCase() !== "cosechadora");
+              const cobrado = Number(o.flete_cobrado ?? 0);
+              return (
+                <div className="modalOverlay" onClick={() => !m.busy && setFleteModal(null)}>
+                  <div className="modalCard despachoModal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+                    <h3 style={{ margin: 0 }}>🚚 {m.modo === "despacho" ? `Despachar pedido ${o.order_number}` : `Flete del pedido ${o.order_number}`}</h3>
+                    <div className="despachoModal__resumen">
+                      <span><small>Cliente</small><strong>{o.customer_name}</strong></span>
+                      <span><small>Cantidad</small><strong>{qq.enReal()} QQ</strong></span>
+                      {m.modo === "despacho" && <span><small>Total</small><strong>{money(Number(o.total_amount))}</strong></span>}
+                      {m.modo === "despacho" && <span><small>Cobro</small><strong>{m.metodo === "CREDIT" ? "📋 Crédito" : "💵 Ahora, a la caja"}</strong></span>}
+                      {!m.esDelActivo && m.modo === "despacho" && <span><small>Vende</small><strong>{o.accionista_name}</strong></span>}
+                    </div>
+                    {m.modo === "despacho" && <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>La mercadería sale del inventario. {m.metodo === "CREDIT" ? "Queda como cuenta por cobrar al cliente." : "El cobro entra a la caja abierta."}</p>}
+
+                    <div className="despachoModal__flete">
+                      <span className="despachoModal__pregunta">¿Lo lleva un carro de Transporte y Cosechadora?</span>
+                      {m.modo === "despacho" && (
+                        <div className="sacxForm__seg" role="group" aria-label="Flete">
+                          <button type="button" className={!m.conFlete ? "on in" : ""} onClick={() => setFleteModal({ ...m, conFlete: false })}>No</button>
+                          <button type="button" className={m.conFlete ? "on in" : ""} onClick={() => setFleteModal({ ...m, conFlete: true })}>Sí, carro propio</button>
+                        </div>
+                      )}
+                      {m.conFlete && (
+                        <>
+                          <label><span>Carro</span>
+                            <select value={m.activoId} onChange={(e) => setFleteModal({ ...m, activoId: e.target.value })}>
+                              <option value="">Elige el carro…</option>
+                              {carros.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}
+                            </select>
+                          </label>
+                          <div className="despachoModal__valores">
+                            <label><span>$ por QQ</span>
+                              <input type="number" min="0" step="0.001" inputMode="decimal" value={m.porQq} placeholder="0.00"
+                                onChange={(e) => setFleteModal({ ...m, porQq: e.target.value, total: e.target.value && qq > 0 ? String(round2(Number(e.target.value) * qq)) : m.total })} />
+                            </label>
+                            <label><span>Valor del flete ($)</span>
+                              <input type="number" min="0" step="0.01" inputMode="decimal" value={m.total} placeholder="0.00"
+                                onChange={(e) => setFleteModal({ ...m, total: e.target.value, porQq: e.target.value && qq > 0 ? String(round2(Number(e.target.value) / qq * 10000) / 10000) : m.porQq })} />
+                            </label>
+                          </div>
+                          {m.tarifaHint && <small className="muted">{m.tarifaHint}</small>}
+                          {carros.length === 0 && <small className="cfgAviso">No hay carros activos en Transporte y Cosechadora.</small>}
+                          <small className="despachoModal__nota">
+                            Se le cobra a <strong>{vendedor}</strong>: queda como cuenta por cobrar de <strong>Transporte y Cosechadora</strong> y
+                            como cuenta por pagar de {vendedor}. La guía de remisión toma la placa y el chofer del carro.
+                          </small>
+                          {m.modo === "editar" && cobrado > 0.005 && <small className="cfgAviso">Transporte ya cobró {money(cobrado)} de este flete: no se puede cambiar ni quitar.</small>}
+                        </>
+                      )}
+                    </div>
+
+                    <div className="buttonRow">
+                      {m.modo === "despacho" ? (
+                        <button type="button" className="primary" disabled={m.busy} onClick={() => confirmarDespacho()}>
+                          {m.busy ? "Despachando…" : m.conFlete ? `🚚 Despachar con flete${Number(m.total) > 0 ? ` (${money(Number(m.total))})` : ""}` : "🚚 Despachar"}
+                        </button>
+                      ) : (
+                        <>
+                          <button type="button" className="primary" disabled={m.busy || cobrado > 0.005} onClick={() => guardarFletePedido(false)}>{m.busy ? "Guardando…" : "Guardar flete"}</button>
+                          {Number(o.flete_monto ?? 0) > 0 && <button type="button" disabled={m.busy || cobrado > 0.005} onClick={() => guardarFletePedido(true)}>Quitar flete</button>}
+                        </>
+                      )}
+                      <button type="button" disabled={m.busy} onClick={() => setFleteModal(null)}>Cancelar</button>
                     </div>
                   </div>
                 </div>
