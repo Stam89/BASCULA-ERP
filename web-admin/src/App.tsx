@@ -6349,13 +6349,16 @@ export function App() {
     setAdminStaffForm({ cargo: st.cargo ?? "", worker_name: st.worker_name, base_salary: String(st.base_salary ?? "") });
   }
   async function removeAdminStaff(st: AdminStaff) {
-    if (!window.confirm(`¿Eliminar a ${st.worker_name} de la nómina administrativa? Se borrará el empleado y TODO su historial de sueldos. Esta acción no se puede deshacer.`)) return;
+    if (!window.confirm(`¿Dar de baja a ${st.worker_name}?\n\nDeja de aparecer en la nómina administrativa y en los pagos pendientes. Su historial de sueldos ya pagados se CONSERVA.`)) return;
     // Optimista: quítalo de la lista al instante para que desaparezca sin refrescar.
     setAdminStaff((prev) => prev.filter((e) => e.id !== st.id));
     try {
       const r = await apiFetch(`/admin-payroll/staff/${st.id}`, { method: "DELETE" });
-      if (!r.ok) throw new Error("No se pudo eliminar");
-      addToast(`${st.worker_name} eliminado de la nómina administrativa`, "success");
+      if (!r.ok) throw new Error("No se pudo dar de baja");
+      const data = await r.json().catch(() => null) as { resultado?: string; pagos_conservados?: number } | null;
+      addToast(data?.resultado === "OCULTO"
+        ? `${st.worker_name} dado de baja · se conservan sus ${data.pagos_conservados} pago(s) en el historial`
+        : `${st.worker_name} dado de baja`, "success");
       await loadAdminStaff();
       await loadAdminHistory();
     } catch (e) {

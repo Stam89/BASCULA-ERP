@@ -67,11 +67,11 @@ adminPayrollRouter.put("/staff/:id", asyncRoute(async (req, res) => {
   res.json(result.rows[0]);
 }));
 
-// Borrado REAL del empleado y de su historial de sueldos (aunque tenga pagos).
-// El cliente pide que el trabajador desaparezca por completo del módulo. Se borra
-// en transacción y scoped por accionista. NO se tocan los cash_movements: la caja
-// es un libro contable aparte y debe permanecer cuadrada (el vínculo por
-// reference_id es suave, sin FK). Devuelve cuántos pagos se borraron.
+// Dar de baja a un empleado (decisión del dueño, 2026-10-08): el trabajador desaparece del
+// módulo (listas y pendientes filtran is_active) pero su HISTORIAL DE SUELDOS SE CONSERVA.
+//  · Con pagos registrados (aunque estén anulados) → is_active = false (oculto).
+//  · Sin ningún pago → se borra el registro (no hay historia que cuidar).
+// Antes se borraban también sus pagos y se perdía qué se le pagó (la caja sí quedaba).
 adminPayrollRouter.delete("/staff/:id", asyncRoute(async (req, res) => {
   const accionista = accId(req);
   const out = await inTransaction(async (client) => {
@@ -80,17 +80,18 @@ adminPayrollRouter.delete("/staff/:id", asyncRoute(async (req, res) => {
       [req.params.id, accionista]
     );
     if (!staff.rows[0]) throw new ApiError(404, "Empleado no encontrado");
-    const pagos = await client.query(
-      "DELETE FROM admin_salary_payments WHERE staff_id = $1 AND accionista_id = $2",
+    const pagos = Number((await client.query<{ n: number }>(
+      "SELECT count(*)::int AS n FROM admin_salary_payments WHERE staff_id = $1 AND accionista_id = $2",
       [req.params.id, accionista]
-    );
-    await client.query(
-      "DELETE FROM admin_staff WHERE id = $1 AND accionista_id = $2",
-      [req.params.id, accionista]
-    );
-    return { pagos: pagos.rowCount ?? 0 };
+    )).rows[0]?.n ?? 0);
+    if (pagos > 0) {
+      await client.query("UPDATE admin_staff SET is_active = false WHERE id = $1 AND accionista_id = $2", [req.params.id, accionista]);
+      return { resultado: "OCULTO" as const, pagos };
+    }
+    await client.query("DELETE FROM admin_staff WHERE id = $1 AND accionista_id = $2", [req.params.id, accionista]);
+    return { resultado: "ELIMINADO" as const, pagos: 0 };
   });
-  res.json({ ok: true, pagos_borrados: out.pagos });
+  res.json({ ok: true, resultado: out.resultado, pagos_conservados: out.pagos });
 }));
 
 // ── Pendientes de cobro del período de corte ─────────────────────────────────
