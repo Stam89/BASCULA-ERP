@@ -7,7 +7,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { anularFleteEnvejecido, registrarFleteEnvejecido, validarFleteEnvejecido, validarFleteRegreso, type FleteEnvejecido } from "../../services/campo-flete-envejecido.js";
 import { tipoSacoEspecial } from "../../services/cargo-empaque.js";
 import { nextCode } from "../../utils/codes.js";
-import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, requirePermiso, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import type { PoolClient } from "pg";
 import { consumeInventoryFIFO } from "../../services/inventory-consume.js";
 
@@ -230,6 +230,35 @@ selectionRouter.post("/batches", asyncRoute(async (req, res) => {
 
   const provider = await pool.query("SELECT name FROM external_providers WHERE id = $1 AND is_active = true", [body.provider_id]);
   if (!provider.rowCount) throw new ApiError(404, "Proveedor externo no encontrado.");
+
+  // Sale de la bodega de PRODUCTO TERMINADO de la piladora (no de «Allá» ni de materia prima).
+  const bodega = await pool.query("SELECT type FROM warehouses WHERE id = $1 AND is_active = true", [body.warehouse_id]);
+  if (bodega.rows[0]?.type !== "FINISHED_GOODS") throw new ApiError(400, "Se manda desde la bodega de producto terminado de la piladora.");
+  // Solo arroz pilado y arrocillos (no cáscara, ni empacados por marca, ni polvillo/rechazo).
+  const prods = await pool.query(
+    "SELECT id, name, code, product_type FROM products WHERE id = ANY($1::uuid[])", [body.inputs.map((l) => l.product_id)]
+  );
+  for (const pr of prods.rows as Array<{ name: string; code: string; product_type: string }>) {
+    const permitido = pr.product_type === "FINISHED_GOOD" || (pr.product_type === "BYPRODUCT" && /^ARROCILLO/i.test(pr.code));
+    if (!permitido) throw new ApiError(400, `${pr.name} no se manda a selectar/envejecer (solo arroz pilado y arrocillos).`);
+  }
+  if (prods.rowCount !== new Set(body.inputs.map((l) => l.product_id)).size) throw new ApiError(400, "Hay un producto que no existe.");
+
+  // Cambiar la tarifa del lote (distinta a la vigente) es «editar precios»: admin o PERM:EDITAR_PRECIOS.
+  if (body.rate_per_qq !== undefined) {
+    const vigente = await (async () => { const c = await pool.connect(); try { return await resolveRate(c, body.service_type, accionistaId, body.service_date); } finally { c.release(); } })();
+    if (Math.abs(vigente - body.rate_per_qq) > 0.00001) {
+      const u = await pool.query(
+        `SELECT r.name AS role_name, ua.allowed_modules FROM users u LEFT JOIN roles r ON r.id = u.role_id
+           LEFT JOIN user_accionistas ua ON ua.user_id = u.id AND ua.accionista_id = $2 WHERE u.id = $1`,
+        [(req as AuthenticatedRequest).user?.id, accionistaId]
+      );
+      const fila = u.rows[0];
+      if (fila?.role_name !== "ADMINISTRADOR" && !(fila?.allowed_modules ?? []).includes("PERM:EDITAR_PRECIOS")) {
+        throw new ApiError(403, `La tarifa vigente es $${vigente}/QQ. Para usar otra necesitas el permiso «Editar Precios y Tarifas».`);
+      }
+    }
+  }
 
   // No se puede mandar dos veces el mismo producto en un lote (suma las líneas).
   const seen = new Set<string>();
@@ -530,7 +559,8 @@ selectionRouter.get("/ubicacion", asyncRoute(async (req, res) => {
   }
   const traidas = (await pool.query(
     `SELECT t.id, t.fecha::text AS fecha, t.items, t.total_qq::float AS total_qq, t.notes, pr.name AS proveedor,
-            t.flete_tipo, t.flete_monto::float AS flete_monto, t.flete_prestador, fa.nombre AS flete_activo_nombre
+            t.flete_tipo, t.flete_monto::float AS flete_monto, t.flete_prestador, fa.nombre AS flete_activo_nombre,
+            t.anulado_at, t.anulado_motivo
        FROM selection_traidas t JOIN external_providers pr ON pr.id = t.provider_id
        LEFT JOIN campo_activos fa ON fa.id = t.flete_activo_id
       WHERE t.accionista_id = $1 ORDER BY t.created_at DESC LIMIT 20`,
@@ -608,4 +638,109 @@ selectionRouter.post("/traer", asyncRoute(async (req, res) => {
     return { id: traidaId, total_qq: round3(body.items.reduce((s, i) => s + i.quantity, 0)), flete };
   });
   res.status(201).json(result);
+}));
+
+// ── Anular un viaje traído (se registró mal): lo traído vuelve a «Allá» y se deshace su flete ──
+selectionRouter.post("/traidas/:id/anular", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const userId = (req as AuthenticatedRequest).user?.id ?? null;
+  const { motivo } = z.object({ motivo: z.string().trim().min(5, "Escribe el motivo (mínimo 5 letras)") }).parse(req.body);
+  const result = await inTransaction(async (tx) => {
+    const t = (await tx.query("SELECT * FROM selection_traidas WHERE id = $1 AND accionista_id = $2 FOR UPDATE", [req.params.id, accionistaId])).rows[0];
+    if (!t) throw new ApiError(404, "Viaje no encontrado para el accionista activo.");
+    if (t.anulado_at) throw new ApiError(409, "Este viaje ya está anulado.");
+    const alla = (await tx.query("SELECT id FROM warehouses WHERE external_provider_id = $1", [t.provider_id])).rows[0];
+    if (!alla) throw new ApiError(409, "No se encontró la bodega «Allá» del proveedor.");
+
+    // El flete de regreso primero (si ya se cobró/abonó, no deja: todo o nada).
+    if (t.flete_tipo === "propia") {
+      const sv = (await tx.query("SELECT id FROM campo_servicios WHERE origen_tipo = 'envejecido_regreso' AND origen_id = $1", [t.id])).rows.map((r: { id: string }) => r.id);
+      if (sv.length) {
+        const abonos = Number((await tx.query("SELECT COUNT(*)::int AS n FROM campo_movimientos WHERE servicio_id = ANY($1::uuid[])", [sv])).rows[0].n);
+        if (abonos > 0) throw new ApiError(409, "El flete de este viaje ya tiene cobros en Transporte y Cosechadora. Reversa esos cobros primero.");
+        await tx.query("DELETE FROM campo_servicios WHERE id = ANY($1::uuid[])", [sv]);
+      }
+    } else if (t.flete_tipo === "tercero" && t.flete_payable_id) {
+      const ap = (await tx.query("SELECT amount, balance FROM accounts_payable WHERE id = $1 FOR UPDATE", [t.flete_payable_id])).rows[0];
+      if (ap && Number(ap.balance) + 0.001 < Number(ap.amount)) throw new ApiError(409, "El flete de este viaje ya tiene abonos en Por Pagar. Anúlalos primero.");
+      if (ap) await tx.query("UPDATE accounts_payable SET balance = 0, status = 'CANCELLED' WHERE id = $1", [t.flete_payable_id]);
+    }
+
+    // Lo traído sale de la piladora (si ya se vendió o se usó, no se puede: 409) y vuelve a «Allá».
+    const planta = (await tx.query(
+      `SELECT DISTINCT m.warehouse_id FROM inventory_movements m WHERE m.reference_type = 'selection_traida' AND m.reference_id = $1 AND m.quantity > 0`, [t.id]
+    )).rows[0]?.warehouse_id;
+    for (const it of (t.items ?? []) as Array<{ product_id: string; quantity: number }>) {
+      const qty = round3(Number(it.quantity));
+      await consumeInventoryFIFO(tx, {
+        productId: it.product_id, warehouseId: planta, accionistaId: accionistaId!, quantity: qty,
+        referenceType: "selection_traida_anulada", referenceId: t.id, notes: `Viaje anulado: ${motivo}`, createdBy: userId
+      });
+      await tx.query(
+        `INSERT INTO inventory_movements (product_id, warehouse_id, movement, quantity, reference_type, reference_id, ownership, notes, created_by, accionista_id)
+         VALUES ($1, $2, 'IN', $3, 'selection_traida_anulada', $4, 'OWNED', $5, $6, $7)`,
+        [it.product_id, alla.id, qty, t.id, `Viaje anulado (vuelve a «Allá»): ${motivo}`, userId, accionistaId]
+      );
+    }
+    await tx.query("UPDATE selection_traidas SET anulado_at = now(), anulado_motivo = $2, anulado_by = $3 WHERE id = $1", [t.id, motivo, userId]);
+    return { ok: true, total_qq: Number(t.total_qq) };
+  });
+  res.json(result);
+}));
+
+// ── Reabrir un lote COMPLETADO (el informe se registró mal): lo recibido sale del inventario y el lote vuelve
+//    a «En proceso» para registrarlo bien (o cancelarlo). La cuenta por pagar y el flete de ida no cambian. ──
+selectionRouter.post("/batches/:id/reabrir", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const userId = (req as AuthenticatedRequest).user?.id ?? null;
+  const { motivo } = z.object({ motivo: z.string().trim().min(5, "Escribe el motivo (mínimo 5 letras)") }).parse(req.body);
+  const result = await inTransaction(async (tx) => {
+    const b = (await tx.query("SELECT * FROM selection_batches WHERE id = $1 AND accionista_id = $2 FOR UPDATE", [req.params.id, accionistaId])).rows[0];
+    if (!b) throw new ApiError(404, "Lote no encontrado para el accionista activo.");
+    if (b.status !== "COMPLETED") throw new ApiError(409, "Solo se reabre un lote completado.");
+    const salidas = (await tx.query(
+      "SELECT product_id, warehouse_id, quantity::float AS quantity, COALESCE(qty_alla, 0)::float AS qty_alla, is_reject, presentation, sack_weight_lb, empaque, sack_id FROM selection_batch_outputs WHERE batch_id = $1",
+      [b.id]
+    )).rows as Array<{ product_id: string; warehouse_id: string; quantity: number; qty_alla: number; sack_id: string | null; is_reject: boolean }>;
+    const alla = (await tx.query("SELECT id FROM warehouses WHERE external_provider_id = $1", [b.provider_id])).rows[0];
+    const label = TYPE_LABEL[b.service_type] ?? "Selección";
+    for (const o of salidas) {
+      const llego = round3(o.quantity - o.qty_alla);
+      try {
+        if (llego > 0.0005) {
+          await consumeInventoryFIFO(tx, { productId: o.product_id, warehouseId: o.warehouse_id, accionistaId: accionistaId!, quantity: llego,
+            referenceType: "selection_batch_reabierto", referenceId: b.id, notes: `${label} ${b.batch_number} reabierto: ${motivo}`, createdBy: userId });
+        }
+        if (o.qty_alla > 0.0005) {
+          if (!alla) throw new ApiError(409, "No se encontró la bodega «Allá» del proveedor.");
+          await consumeInventoryFIFO(tx, { productId: o.product_id, warehouseId: alla.id, accionistaId: accionistaId!, quantity: round3(o.qty_alla),
+            referenceType: "selection_batch_reabierto", referenceId: b.id, notes: `${label} ${b.batch_number} reabierto: ${motivo}`, createdBy: userId });
+        }
+      } catch (e) {
+        if (e instanceof ApiError && e.statusCode === 409) {
+          throw new ApiError(409, `No se puede reabrir: parte de lo que regresó ya se vendió, se usó o se trajo de «Allá» (${e.message}). Anula primero esos movimientos.`);
+        }
+        throw e;
+      }
+      // Sacos propios del socio que se descontaron al recibir: vuelven a su inventario.
+      if (o.sack_id && !o.is_reject) {
+        const mov = (await tx.query("SELECT cantidad FROM sack_movements WHERE ref_selection = $1 AND sack_id = $2 AND movement = 'SALIDA' ORDER BY created_at DESC LIMIT 1", [b.id, o.sack_id])).rows[0];
+        if (mov) {
+          await tx.query("UPDATE sack_inventory SET stock = stock + $2, updated_at = now() WHERE id = $1", [o.sack_id, mov.cantidad]);
+          await tx.query("INSERT INTO sack_movements (sack_id, movement, cantidad, concepto, ref_selection) VALUES ($1, 'ENTRADA', $2, $3, $4)",
+            [o.sack_id, mov.cantidad, `${label} ${b.batch_number} reabierto: vuelven los sacos`, b.id]);
+        }
+      }
+    }
+    await tx.query(
+      "INSERT INTO selection_batch_reaperturas (batch_id, motivo, salidas, output_qq, created_by) VALUES ($1, $2, $3::jsonb, $4, $5)",
+      [b.id, motivo, JSON.stringify(salidas), b.output_qq, userId]
+    );
+    await tx.query("DELETE FROM selection_batch_outputs WHERE batch_id = $1", [b.id]);
+    const upd = await tx.query(
+      "UPDATE selection_batches SET status = 'IN_PROCESS', output_qq = NULL, merma_qq = NULL, finished_at = NULL WHERE id = $1 RETURNING *", [b.id]
+    );
+    return upd.rows[0];
+  });
+  res.json(result);
 }));

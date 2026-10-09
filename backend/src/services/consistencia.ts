@@ -111,7 +111,22 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
   { modulo: "Selección", nombre: "Fletes de envejecido: cada lote con flete propio tiene su servicio de Transporte", sql: `
     SELECT b.id FROM selection_batches b WHERE b.flete_tipo = 'propia' AND b.status <> 'CANCELLED' AND NOT EXISTS (SELECT 1 FROM campo_servicios s WHERE s.origen_tipo = 'envejecido_flete' AND s.origen_id = b.id)` },
   { modulo: "Selección", nombre: "Fletes de regreso (traer de donde el proveedor): cada viaje con carro propio tiene su servicio de Transporte", sql: `
-    SELECT t.id FROM selection_traidas t WHERE t.flete_tipo = 'propia' AND NOT EXISTS (SELECT 1 FROM campo_servicios s WHERE s.origen_tipo = 'envejecido_regreso' AND s.origen_id = t.id)` },
+    SELECT t.id FROM selection_traidas t WHERE t.flete_tipo = 'propia' AND t.anulado_at IS NULL AND NOT EXISTS (SELECT 1 FROM campo_servicios s WHERE s.origen_tipo = 'envejecido_regreso' AND s.origen_id = t.id)` },
+  { modulo: "Selección", nombre: "Lotes: lo que salió de bodega = lo enviado y lo que entró = lo recibido (sin cancelados)", sql: `
+    SELECT b.batch_number, b.status, b.input_qq::float AS enviado, b.output_qq::float AS recibido,
+           COALESCE((SELECT -SUM(m.quantity) FROM inventory_movements m WHERE m.reference_type = 'selection_batch' AND m.reference_id = b.id AND m.quantity < 0), 0)::float AS salio,
+           COALESCE((SELECT SUM(m.quantity) FROM inventory_movements m WHERE m.reference_type = 'selection_batch' AND m.reference_id = b.id AND m.quantity > 0), 0)::float
+             - COALESCE((SELECT -SUM(m.quantity) FROM inventory_movements m WHERE m.reference_type = 'selection_batch_reabierto' AND m.reference_id = b.id), 0)::float AS entro
+      FROM selection_batches b
+     WHERE b.status <> 'CANCELLED'
+       AND (abs(b.input_qq - COALESCE((SELECT -SUM(m.quantity) FROM inventory_movements m WHERE m.reference_type = 'selection_batch' AND m.reference_id = b.id AND m.quantity < 0), 0)) > 0.005
+         OR abs(COALESCE(b.output_qq, 0)
+                - COALESCE((SELECT SUM(m.quantity) FROM inventory_movements m WHERE m.reference_type = 'selection_batch' AND m.reference_id = b.id AND m.quantity > 0), 0)
+                + COALESCE((SELECT -SUM(m.quantity) FROM inventory_movements m WHERE m.reference_type = 'selection_batch_reabierto' AND m.reference_id = b.id), 0)) > 0.005)` },
+  { modulo: "Selección", nombre: "Lotes completados: la cuenta por pagar al proveedor = enviado × tarifa", sql: `
+    SELECT b.batch_number, b.total_cost::float AS costo, p.amount::float AS cuenta
+      FROM selection_batches b JOIN accounts_payable p ON p.id = b.payable_id
+     WHERE b.status <> 'CANCELLED' AND p.status <> 'CANCELLED' AND abs(p.amount - round(b.input_qq * b.rate_per_qq, 2)) > 0.01` },
   { modulo: "Nómina", nombre: "Pagos a trabajadores PAID con caja", sql: `SELECT id FROM worker_payments WHERE status = 'PAID' AND cash_register_id IS NULL AND paid_at IS NOT NULL LIMIT 20` },
   { modulo: "Nómina", nombre: "Tarifas de planta: las filas de socios no difieren de la general", sql: `
     SELECT s.socio_id FROM labor_rates s JOIN labor_rates g ON g.socio_id IS NULL WHERE s.socio_id IS NOT NULL

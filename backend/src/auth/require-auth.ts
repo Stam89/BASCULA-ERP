@@ -183,7 +183,7 @@ const SUB_DE_ESCRITURA: Array<{ module: AppModule; prefix: string; sub: string; 
   { module: "Ventas", prefix: "orders", sub: "nuevo", test: () => true },
   { module: "Ventas", prefix: "guias-remision", sub: "guias", test: () => true },
   { module: "Seleccion", prefix: "selection", sub: "nuevo", test: (m, r) => m === "POST" && /^\/batches\/?$/.test(r) },
-  { module: "Seleccion", prefix: "selection", sub: "proceso", test: (_m, r) => /^\/batches\/[^/]+\/(finish|cancel)\/?$/.test(r) },
+  { module: "Seleccion", prefix: "selection", sub: "proceso", test: (_m, r) => /^\/batches\/[^/]+\/(finish|cancel|reabrir)\/?$/.test(r) || /^\/(traer|traidas\/[^/]+\/anular)\/?$/.test(r) },
   { module: "Nomina", prefix: "labor", sub: "secadora", test: (_m, r) => r.startsWith("/secador-days") },
   { module: "Nomina", prefix: "labor", sub: "pagos", test: () => true },
   { module: "Nomina", prefix: "nomina-semanal", sub: "pagos", test: () => true },

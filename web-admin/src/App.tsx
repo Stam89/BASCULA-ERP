@@ -157,7 +157,8 @@ type SelectionLine = { product_id: string; product_name: string; quantity: numbe
 type UbicacionSeleccion = {
   productos: Array<{ product_id: string; producto: string; code: string; piladora: number; alla_total: number; alla: Array<{ provider_id: string; proveedor: string; qq: number }> }>;
   traidas: Array<{ id: string; fecha: string; items: Array<{ product_id: string; quantity: number }>; total_qq: number; notes: string | null; proveedor: string;
-    flete_tipo?: "propia" | "tercero" | null; flete_monto?: number | null; flete_prestador?: string | null; flete_activo_nombre?: string | null }>;
+    flete_tipo?: "propia" | "tercero" | null; flete_monto?: number | null; flete_prestador?: string | null; flete_activo_nombre?: string | null;
+    anulado_at?: string | null; anulado_motivo?: string | null }>;
 };
 type SelectionBatch = {
   id: string;
@@ -3239,6 +3240,8 @@ export function App() {
   const [selectionRates, setSelectionRates] = useState<SelectionRates>({ seleccion_rate: 1.25, envejecimiento_rate: 3.5 });
   const [selectionView, setSelectionView] = useState<"nuevo" | "proceso" | "historial">("nuevo");
   const [ubicacionSel, setUbicacionSel] = useState<UbicacionSeleccion | null>(null);
+  // Anular un viaje traído o reabrir un lote completado (con motivo).
+  const [selCorregir, setSelCorregir] = useState<{ tipo: "viaje" | "lote"; id: string; titulo: string; detalle: string; motivo: string; busy?: boolean } | null>(null);
   const [traerModal, setTraerModal] = useState<{
     provider_id: string; proveedor: string; cantidades: Record<string, string>; notes: string; busy?: boolean;
     // Flete de regreso (opcional): carro de Transporte y Cosechadora o carro externo.
@@ -5657,6 +5660,28 @@ export function App() {
       "success"
     );
     await Promise.all([refreshSelection(), reloadStock(), sp.length ? refreshSacks() : Promise.resolve()]);
+  }
+
+  async function confirmarSelCorregir() {
+    const m = selCorregir;
+    if (!m) return;
+    if (m.motivo.trim().length < 5) { addToast("Escribe el motivo (mínimo 5 letras)", "error"); return; }
+    setSelCorregir({ ...m, busy: true });
+    try {
+      if (m.tipo === "viaje") {
+        await apiPost(`/selection/traidas/${m.id}/anular`, { motivo: m.motivo.trim() });
+        addToast("Viaje anulado: lo traído volvió a «Allá» y se deshizo su flete.", "success");
+      } else {
+        await apiPost(`/selection/batches/${m.id}/reabrir`, { motivo: m.motivo.trim() });
+        addToast("Lote reabierto: está otra vez «En proceso» para registrar bien lo que regresó.", "success");
+        setSelectionView("proceso");
+      }
+      setSelCorregir(null);
+      await Promise.all([refreshSelection(), reloadStock(), refreshSacks().catch(() => undefined)]);
+    } catch (e) {
+      setSelCorregir((cur) => cur && { ...cur, busy: false });
+      addToast(e instanceof Error ? e.message : "No se pudo", "error");
+    }
   }
 
   // 🚚 Traer a la piladora lo que quedó allá donde el proveedor (un viaje).
@@ -21052,7 +21077,9 @@ Motivo (obligatorio):`, "");
               </div>
 
               <label style={{ marginTop: 10 }}><span>Tarifa por QQ ($) {cfgLink("🧹 Tarifas de Procesos", "Tarifas por defecto")}</span>
-                <input type="number" step="0.001" min="0" value={selectionForm.rate_per_qq} placeholder={`Por defecto ${defaultRate}`} onChange={(e) => setSelectionForm({ ...selectionForm, rate_per_qq: e.target.value })} />
+                <input type="number" step="0.001" min="0" value={selectionForm.rate_per_qq} placeholder={`Por defecto ${defaultRate}`} disabled={!canEditarPrecios}
+                  title={canEditarPrecios ? "Déjalo vacío para usar la tarifa vigente" : "Usa la tarifa vigente (cambiarla requiere el permiso «Editar Precios y Tarifas»)"}
+                  onChange={(e) => setSelectionForm({ ...selectionForm, rate_per_qq: e.target.value })} />
               </label>
               {selectionForm.service_type === "ENVEJECIMIENTO" && (
                 <div className="fleteEnv">
@@ -21144,8 +21171,13 @@ Motivo (obligatorio):`, "");
                       <summary style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700 }}>Últimos viajes traídos ({ubicacionSel.traidas.length})</summary>
                       <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 12.5 }}>
                         {ubicacionSel.traidas.slice(0, 8).map((t) => (
-                          <li key={t.id}>{t.fecha} · {t.proveedor} · {Number(t.total_qq).enReal()} QQ{t.notes ? ` · ${t.notes}` : ""}
-                            {Number(t.flete_monto ?? 0) > 0 && ` · 🚚 flete ${money(Number(t.flete_monto))} (${t.flete_tipo === "propia" ? t.flete_activo_nombre ?? "Transporte" : t.flete_prestador ?? "externo"})`}</li>
+                          <li key={t.id} style={t.anulado_at ? { textDecoration: "line-through", opacity: 0.6 } : undefined}>{t.fecha} · {t.proveedor} · {Number(t.total_qq).enReal()} QQ{t.notes ? ` · ${t.notes}` : ""}
+                            {Number(t.flete_monto ?? 0) > 0 && ` · 🚚 flete ${money(Number(t.flete_monto))} (${t.flete_tipo === "propia" ? t.flete_activo_nombre ?? "Transporte" : t.flete_prestador ?? "externo"})`}
+                            {t.anulado_at && <span style={{ textDecoration: "none", display: "inline" }}> · 🚫 anulado{t.anulado_motivo ? `: ${t.anulado_motivo}` : ""}</span>}
+                            {!t.anulado_at && canAnular && (
+                              <button type="button" className="anularChip" onClick={() => setSelCorregir({ tipo: "viaje", id: t.id, titulo: "🚫 Anular viaje traído",
+                                detalle: `${t.fecha} · ${t.proveedor} · ${Number(t.total_qq).enReal()} QQ. Lo traído sale de la piladora y vuelve a «Allá»; si tuvo flete, se deshace.`, motivo: "" })}>Anular</button>
+                            )}</li>
                         ))}
                       </ul>
                     </details>
@@ -21153,6 +21185,23 @@ Motivo (obligatorio):`, "");
                 </div>
               );
             })()}
+
+            {selCorregir && (
+              <div className="modalOverlay" onClick={() => !selCorregir.busy && setSelCorregir(null)}>
+                <div className="modalCard anularVentaModal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+                  <h3 style={{ margin: 0, color: "#b91c1c" }}>{selCorregir.titulo}</h3>
+                  <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>{selCorregir.detalle}</p>
+                  <label className="anularVentaModal__motivo"><span>Motivo</span>
+                    <textarea rows={2} value={selCorregir.motivo} disabled={selCorregir.busy} placeholder="Ej: se registraron mal las cantidades"
+                      onChange={(e) => setSelCorregir({ ...selCorregir, motivo: e.target.value })} />
+                  </label>
+                  <div className="buttonRow">
+                    <button type="button" className="dangerBtn" disabled={selCorregir.busy || selCorregir.motivo.trim().length < 5} onClick={() => confirmarSelCorregir()}>{selCorregir.busy ? "Guardando…" : "Confirmar"}</button>
+                    <button type="button" disabled={selCorregir.busy} onClick={() => setSelCorregir(null)}>Cancelar</button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {traerModal && (() => {
               const m = traerModal;
@@ -21372,7 +21421,7 @@ Motivo (obligatorio):`, "");
               ) : (
                 <div style={{ overflowX: "auto" }}>
                   <table className="cajaTable" style={{ marginTop: 6 }}>
-                    <thead><tr><th>#</th><th>Fecha</th><th>Persona</th><th>Estado</th><th>Enviado</th><th>Productos resultantes</th><th>Regresó</th><th>Merma</th><th>Costo</th><th>Saldo</th></tr></thead>
+                    <thead><tr><th>#</th><th>Fecha</th><th>Persona</th><th>Estado</th><th>Enviado</th><th>Productos resultantes</th><th>Regresó</th><th>Merma</th><th>Costo</th><th>Saldo</th>{canAnular && <th />}</tr></thead>
                     <tbody>
                       {historyBatches.map((b) => (
                         <tr key={b.id}>
@@ -21386,6 +21435,13 @@ Motivo (obligatorio):`, "");
                           <td>{Number(b.merma_qq).enReal()}</td>
                           <td><strong>{money(Number(b.total_cost))}</strong>{b.flete_tipo && Number(b.flete_monto) > 0 && <div className="muted" style={{ fontSize: 11 }}>+ flete {money(Number(b.flete_monto))} · {b.flete_tipo === "propia" ? (b.flete_activo_nombre ?? "Transp. y Cosech.") : (b.flete_prestador ?? "externo")}</div>}</td>
                           <td>{Number(b.saldo) > 0 ? <span style={{ color: "#dc2626" }}>{money(Number(b.saldo))}</span> : <span className="chip ok">Pagado</span>}</td>
+                          {canAnular && (
+                            <td>{b.status === "COMPLETED" && (
+                              <button type="button" className="anularChip" title="El informe se registró mal: vuelve a «En proceso» para registrarlo bien"
+                                onClick={() => setSelCorregir({ tipo: "lote", id: b.id, titulo: `↩ Reabrir ${b.batch_number}`,
+                                  detalle: `Lo que regresó (${Number(b.output_qq).enReal()} QQ) sale del inventario —piladora y «Allá»— y el lote vuelve a «En proceso» para registrarlo bien. La cuenta por pagar al proveedor y el flete no cambian.`, motivo: "" })}>↩ Reabrir</button>
+                            )}</td>
+                          )}
                         </tr>
                       ))}
                     </tbody>
