@@ -132,8 +132,8 @@ export async function getInventarioValorizado(client: PoolClient | typeof pool, 
 }
 
 /**
- * Caja y bancos A LA FECHA del corte, separado por tipo. Cuentan las cajas que estaban vigentes ese día
- * (abiertas hasta entonces, o cerradas ese mismo día o después) con sus movimientos hasta esa fecha.
+ * Caja y bancos A LA FECHA del corte, separado por tipo. Cuentan las cajas que seguían ABIERTAS al terminar
+ * ese día (una que se cerró y se reemplazó el mismo día no se suma dos veces), con sus movimientos hasta esa fecha.
  * Si ese día no había ninguna caja abierta (se cerró y aún no se abría la siguiente), cuenta con lo que
  * quedó en la última que se cerró: antes el dinero «desaparecía» del balance mientras la caja estaba cerrada.
  */
@@ -147,7 +147,7 @@ async function getCajaBancos(client: PoolClient | typeof pool, accionistaId: str
      ), vigentes AS (
        SELECT * FROM candidatas
         WHERE ($2::date IS NULL AND status = 'OPEN')
-           OR ($2::date IS NOT NULL AND (closed_at IS NULL OR closed_at::date >= $2::date))
+           OR ($2::date IS NOT NULL AND (closed_at IS NULL OR closed_at::date > $2::date))
      ), elegidas AS (
        SELECT * FROM vigentes
        UNION ALL
