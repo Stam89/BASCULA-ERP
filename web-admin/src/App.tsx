@@ -8631,8 +8631,10 @@ export function App() {
     try {
       await apiPost("/sacks/purchases", {
         items: sackCart.map((it) => ({ sack_id: it.sack_id, cantidad: it.cantidad, precio: it.precio })),
-        cash_register_id: registerId
+        cash_register_id: registerId,
+        ...cuerpoMedio(movMedio)
       });
+      setMovMedio("EFECTIVO");
       setSackCart([]);
       setSackBuyForm({ sack_id: "", cantidad: "", precio: "" });
       await refreshSacks();
@@ -9025,6 +9027,7 @@ export function App() {
           receipt_photo_base64: photoBase64,
           amount,
           cash_register_id: registerId,
+          ...cuerpoMedio(movMedio),
           es_fondo: esFondoMant || undefined,
           responsable: esFondoMant ? movResponsable.trim() : undefined,
           // Desglose para la hoja de vida (un fondo aún no lo sabe: se rinde después).
@@ -9455,6 +9458,7 @@ export function App() {
       const r = await apiPost<{ total: number; credito: boolean; proveedor: string | null; total_bodega: number; total_uso_inmediato: number; hojas_de_vida: Array<{ maquina: string; monto: number }> }>("/repuestos/compra", {
         cash_register_id: registerId,
         modalidad_pago: creditoR ? "CREDITO" : "CONTADO",
+        ...(creditoR ? {} : cuerpoMedio(movMedio)),
         supplier_id: provSelR?.id,
         proveedor_nombre: provTxtR && !provSelR ? provTxtR : undefined,
         due_date: creditoR && movVence ? movVence : undefined,
@@ -15125,6 +15129,7 @@ Motivo (obligatorio):`, "");
             )}
             {esMatrizActiva && invVista === "repuestos" ? (
               <RepuestosModule cajaAbiertaId={dashboard.current_cash_register?.id ?? null}
+                cajaMixta={dashboard.current_cash_register?.tipo === "MIXTO"}
                 puedeEditar={canEdit("Inventario")}
                 avisar={(m, t) => addToast(m, t)}
                 onCambio={() => apiGet<Repuesto[]>("/repuestos").then(setRepuestosAlerta).catch(() => undefined)} />
@@ -18868,7 +18873,7 @@ Motivo (obligatorio):`, "");
                         ) : <Input name="amount" label="Monto $" type="number" />}
                       </>
                     )}
-                    {dashboard.current_cash_register?.tipo === "MIXTO" && movCategory !== "MANTENIMIENTO_EQUIPO" && !esCategoriaSacos(movCategory)
+                    {dashboard.current_cash_register?.tipo === "MIXTO"
                       && (!CASH_REUSE[movCategory] || CASH_REUSE[movCategory] === "agricultor") && (movModalidad !== "CREDITO" || CASH_REUSE[movCategory] === "agricultor" || movType === "INCOME") && (
                       <div className="cjMedio" role="radiogroup" aria-label="Efectivo o banco">
                         <span>¿{movType === "INCOME" ? "Entró" : "Salió"} en efectivo o por el banco?</span>

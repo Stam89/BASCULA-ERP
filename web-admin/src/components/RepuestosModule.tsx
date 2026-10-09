@@ -91,14 +91,16 @@ export function RepuestosAlertaDashboard({ repuestos, onIr }: { repuestos: Repue
 type Accion =
   // Pago: CAJA (egreso «Repuestos» en la caja abierta) · CREDITO (Cuenta por
   // Pagar al proveedor, no toca la caja) · ENTRADA (solo suma al stock: ya pagado).
-  | { tipo: "compra"; r: Repuesto; cantidad: string; costo: string; pago: "CAJA" | "CREDITO" | "ENTRADA"; proveedor: string; nota: string; vence: string }
+  | { tipo: "compra"; r: Repuesto; cantidad: string; costo: string; pago: "CAJA" | "BANCO" | "CREDITO" | "ENTRADA"; proveedor: string; nota: string; vence: string }
   | { tipo: "uso"; r: Repuesto; cantidad: string; equipo: string; motivo: string }
   | { tipo: "conteo"; r: Repuesto; real: string; motivo: string };
 
 const vacio = { nombre: "", referencia: "", unidad: "UNIDAD", stock_inicial: "", stock_minimo: "", costo_unitario: "", equipment_id: "", notas: "", compatibilidad: "", ubicacion: "" };
 
-export function RepuestosModule({ cajaAbiertaId, puedeEditar, avisar, onCambio }: {
+export function RepuestosModule({ cajaAbiertaId, cajaMixta, puedeEditar, avisar, onCambio }: {
   cajaAbiertaId: string | null;
+  /** Caja MIXTA (efectivo y banco): la compra pregunta si se paga en efectivo o por el banco. */
+  cajaMixta?: boolean;
   puedeEditar: boolean;
   avisar: Avisar;
   /** Tras un cambio (p. ej. refrescar la caja y la alerta del Dashboard). */
@@ -177,6 +179,7 @@ export function RepuestosModule({ cajaAbiertaId, puedeEditar, avisar, onCambio }
           if (a.pago === "CREDITO" && a.proveedor.trim().length < 2) throw new Error("Para comprar a crédito escribe el proveedor");
           const r = await apiPost<{ total: number; stocks: Array<{ stock: number }> }>("/repuestos/compra", {
             cash_register_id: cajaAbiertaId, modalidad_pago: a.pago === "CREDITO" ? "CREDITO" : "CONTADO",
+            ...(cajaMixta && (a.pago === "CAJA" || a.pago === "BANCO") ? { medio_pago: a.pago === "BANCO" ? "BANCO" : "EFECTIVO" } : {}),
             proveedor_nombre: a.proveedor.trim() || undefined, due_date: a.pago === "CREDITO" && a.vence ? a.vence : undefined,
             descripcion: a.nota.trim() || undefined,
             items: [{ repuesto_id: a.r.id, cantidad, costo_unitario: costo }]
@@ -343,10 +346,13 @@ export function RepuestosModule({ cajaAbiertaId, puedeEditar, avisar, onCambio }
                 </div>
                 <div style={{ display: "grid", gap: 6 }}>
                   {([
-                    ["CAJA", "💵 Pagar con la caja abierta", `Egreso «Repuestos» por ${money(total)} en Caja`],
+                    ...(cajaMixta
+                      ? [["CAJA", "💵 Pagar en efectivo", `Egreso «Repuestos» por ${money(total)} · sale de la gaveta`],
+                         ["BANCO", "🏦 Pagar por el banco", `Egreso «Repuestos» por ${money(total)} · sale del banco`]] as const
+                      : [["CAJA", "💵 Pagar con la caja abierta", `Egreso «Repuestos» por ${money(total)} en Caja`]] as const),
                     ["CREDITO", "💳 A crédito", "Cuenta por Pagar al proveedor · la caja no cambia"],
                     ["ENTRADA", "📥 Solo entrada al stock", "Ya estaba pagado (no toca Caja ni Por Pagar)"]
-                  ] as const).map(([valor, titulo, sub]) => {
+                  ] as ReadonlyArray<readonly ["CAJA" | "BANCO" | "CREDITO" | "ENTRADA", string, string]>).map(([valor, titulo, sub]) => {
                     const bloqueado = valor !== "ENTRADA" && !cajaAbiertaId;
                     return (
                       <label key={valor} style={{ display: "flex", alignItems: "flex-start", gap: 8, margin: 0, padding: "7px 10px", borderRadius: 8, fontSize: 13,

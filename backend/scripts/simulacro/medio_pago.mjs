@@ -64,8 +64,17 @@ try {
   exigir(await api("POST", `/cash/payables/${ap2}/pay`, { amount: 5, cash_register_id: cajaE.id, medio_pago: "BANCO" }, stalyn, SOBRE), "E2. pagar pidiendo «banco» desde una caja de solo efectivo");
   check((await ultimo(cajaE.id)).medio === "EFECTIVO", "E3. queda en efectivo (esa caja no tiene banco)");
 
+  // ── G. Compras de sacos y repuestos, y mantenimiento, pagados por el banco ──
+  const saco = (await q("SELECT id FROM sack_inventory WHERE accionista_id IS NULL AND activo ORDER BY tipo LIMIT 1"))[0];
+  exigir(await api("POST", "/sacks/purchases", { items: [{ sack_id: saco.id, cantidad: 10, precio: 0.5 }], cash_register_id: cajaC.id, medio_pago: "BANCO" }, ceyro, SOBRE), "G1. compra de 10 sacos ($5) por el banco");
+  check((await ultimo(cajaC.id)).medio === "BANCO", "G2. el egreso de sacos sale del banco");
+  exigir(await api("POST", "/repuestos/compra", { items: [{ nuevo: { nombre: "RODAMIENTO SIM MEDIO", referencia: null, unidad: "UNIDAD", stock_minimo: 0 }, cantidad: 1, costo_unitario: 7 }], cash_register_id: cajaC.id, modalidad_pago: "CONTADO", medio_pago: "BANCO" }, ceyro, SOBRE), "G3. compra de un repuesto ($7) por el banco");
+  check((await ultimo(cajaC.id)).medio === "BANCO", "G4. el egreso de repuestos sale del banco");
+  exigir(await api("POST", "/equipment/maintenance", { area: "PILADORA", section: "MOTOR PRINCIPAL", maintenance_type: "CORRECTIVO", description: "Soldadura (sim medio)", amount: 8, cash_register_id: cajaC.id, medio_pago: "BANCO" }, ceyro, SOBRE), "G5. mantenimiento ($8) pagado por el banco");
+  check((await ultimo(cajaC.id)).medio === "BANCO", "G6. el egreso del mantenimiento sale del banco");
+
   const sC = (await api("GET", `/cash/registers/${cajaC.id}/summary`, undefined, ceyro)).data;
-  check(sC.saldo_banco === 1000 + 80 + 30 + 50 && sC.saldo_efectivo === 1000 + 30 - (ant.ok ? 10 : 0), "F1. la caja de CEYRO cuadra por medio: banco +$160, efectivo +$30 (−$10 del anticipo)", { banco: sC.saldo_banco, efectivo: sC.saldo_efectivo });
+  check(sC.saldo_banco === 1000 + 80 + 30 + 50 - 5 - 7 - 8 && sC.saldo_efectivo === 1000 + 30 - (ant.ok ? 10 : 0), "F1. la caja de CEYRO cuadra por medio: banco +$160 −$20 de compras, efectivo +$30 (−$10 del anticipo)", { banco: sC.saldo_banco, efectivo: sC.saldo_efectivo });
 
   const h = await revisar((sql) => q(sql));
   check(h.length === 0, `Z. los ${TOTAL_REGLAS} controles de integridad se cumplen`, h.map((x) => x.error ? `${x.regla}: ${x.error}` : `${x.regla} → ${JSON.stringify(x.filas)}`));
