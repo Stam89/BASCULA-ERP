@@ -5667,3 +5667,31 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
   .modalOverlay:has(.traerModal) { align-items: flex-end; padding: 0; }
   .traerModal { max-width: none; border-radius: 20px 20px 0 0; }
 }
+
+/* 📸 Cierres de mes */
+.cierresMes { border-top: 4px solid #0f766e; }
+.cierresMes__cabeza { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+.cierresMes__lista { display: grid; gap: 10px; margin-top: 10px; }
+.cierresMes__mes { border: 1px solid var(--c-border); border-radius: 12px; padding: 10px 12px; }
+.cierresMes__mes--anulado { opacity: .6; }
+.cierresMes__mes > header { display: grid; gap: 2px; margin-bottom: 8px; }
+.cierresMes__mes > header strong { font-size: 15px; }
+.cierresMes__anulado { color: #b91c1c; font-weight: 600; }
+.cierresMes__aviso { color: #92400e; font-weight: 600; }
+.cierresMes__socios { display: grid; gap: 6px; }
+.cierresMes__socio { display: grid; grid-template-columns: minmax(90px, 1fr) repeat(4, minmax(0, 1fr)) auto; gap: 4px 10px; align-items: center; font-size: 12.5px; padding: 6px 8px; border-radius: 8px; background: var(--c-surface-2, #f8fafc); }
+.cierresMes__socio span { color: #475569; }
+.cierresMes__socio span b { display: block; color: #0f172a; font-size: 13.5px; }
+.cierresMes__socio b.neg { color: #b91c1c; }
+.cierresMes__socio b.pos { color: #166534; }
+.cierresMes__socio button { min-width: 0; padding: 4px 10px; font-size: 12px; }
+.cierresMes__modal { max-width: 500px; gap: 10px; border-top: 5px solid #0f766e; }
+.cierresMes__modal label { display: grid; gap: 4px; margin: 0; font-size: 12.5px; font-weight: 700; }
+.cierresMes__pasos { margin: 0; padding: 8px 12px 8px 26px; border-radius: 10px; background: #f0fdfa; border: 1px solid #99f6e4; font-size: 12.5px; display: grid; gap: 4px; }
+@media (max-width: 640px) {
+  .cierresMes__socio { grid-template-columns: 1fr 1fr; }
+  .cierresMes__socio > b { grid-column: 1 / -1; }
+  .cierresMes__socio button { grid-column: 1 / -1; }
+  .modalOverlay:has(.cierresMes__modal) { align-items: flex-end; padding: 0; }
+  .cierresMes__modal { max-width: none; border-radius: 20px 20px 0 0; }
+}

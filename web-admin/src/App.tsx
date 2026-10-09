@@ -24,6 +24,7 @@ import { ConfigCorreoClaves } from "./components/ConfigCorreoClaves";
 import { ResumenDiarioConfig } from "./components/ResumenDiarioConfig";
 import { ControlIntegridad } from "./components/ControlIntegridad";
 import { FomentoIntereses } from "./components/FomentoIntereses";
+import { CierresMes } from "./components/CierresMes";
 import { InventarioExistencias, type GrupoStock } from "./components/InventarioExistencias";
 import { AsistenteArranque } from "./asistente/AsistenteArranque";
 import { InicioSimple, type Insignia } from "./inicio/InicioSimple";
@@ -14549,6 +14550,8 @@ Motivo (obligatorio):`, "");
               </div>
               <span className="muted" style={{ flexBasis: "100%", marginTop: 2 }}>Todo se calcula solo desde compras, ventas, caja, inventario y producción.</span>
             </div>
+
+            <CierresMes isAdmin={isAdmin} money={money} onToast={(t, tipo) => addToast(t, tipo)} />
 
             {!finanzas ? (
               <div className="emptyState" style={{ gridColumn: "1 / -1" }}><div className="emptyIcon">📊</div><p>Calculando estados financieros…</p></div>

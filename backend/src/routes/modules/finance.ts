@@ -15,6 +15,9 @@ import {
   getActivosFijos,
   getCostoVentasDetalle
 } from "../../services/finance.js";
+import { revisarConsistencia } from "../../services/consistencia.js";
+import { calcularResultadoMensual } from "../../services/resultado-mensual.js";
+import { getMatrizId } from "../../services/matriz.js";
 import {
   parsearExtracto,
   conciliarAutomatico,
@@ -23,7 +26,8 @@ import {
 
 export const financeRouter = Router();
 
-const hoy = () => new Date().toISOString().slice(0, 10);
+// Fecha de HOY en Ecuador (antes era UTC: después de las 19:00 «hoy» ya era mañana).
+const hoy = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Guayaquil" });
 const inicioAnio = () => `${new Date().getFullYear()}-01-01`;
 
 /** Rango del período: por defecto, el año en curso hasta hoy. */
@@ -584,6 +588,19 @@ financeRouter.get("/export/excel", asyncRoute(async (req, res) => {
   const ruc = empresa.rows[0]?.ruc ? ` · RUC: ${empresa.rows[0].ruc}` : "";
   const pie = `${nombreAcc}${ruc} · Generado ${new Date().toLocaleString("es-EC")}`;
 
+  const activos = await getActivosFijos(pool, accionistaId, hasta);
+  const wb = construirExcelEstados({ data, activos, desde, hasta, nombreEmpresa, pie });
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="estados-financieros-${nombreAcc}-${hasta}.xlsx"`);
+  await wb.xlsx.write(res);
+}));
+
+type DatosEstados = Awaited<ReturnType<typeof getDashboardFinanciero>>;
+type ActivosFijos = Awaited<ReturnType<typeof getActivosFijos>>;
+
+/** Libro Excel de los estados financieros (en vivo o desde un cierre de mes guardado). */
+function construirExcelEstados(opts: { data: DatosEstados; activos: ActivosFijos; desde: string; hasta: string; nombreEmpresa: string; pie: string }): ExcelJS.Workbook {
+  const { data, activos, desde, hasta, nombreEmpresa, pie } = opts;
   const wb = new ExcelJS.Workbook();
   wb.creator = nombreEmpresa;
   wb.created = new Date();
@@ -735,7 +752,6 @@ financeRouter.get("/export/excel", asyncRoute(async (req, res) => {
   }
 
   // ── Activos fijos ──
-  const activos = await getActivosFijos(pool, accionistaId, hasta);
   const ws5 = wb.addWorksheet("Activos Fijos", { properties: { tabColor: { argb: TEAL } } });
   ws5.getColumn(1).width = 3;
   ws5.getColumn(2).width = 30;
@@ -759,7 +775,176 @@ financeRouter.get("/export/excel", asyncRoute(async (req, res) => {
     tot5.getCell(n).border = { top: { style: "thin" }, bottom: { style: "double" } };
   });
 
+  return wb;
+}
+
+// ═══ 📸 CIERRE DE MES ═══════════════════════════════════════════════════════
+// Foto de los estados de CADA accionista al último día del mes. Lo cerrado no cambia aunque después se
+// corrija algo; para volver a cerrar se anula el cierre del mes (con motivo).
+const ultimoDia = (anio: number, mes: number) => new Date(Date.UTC(anio, mes, 0)).toISOString().slice(0, 10);
+
+type CuentaCierre = { id: string; tipo: string | null; descripcion: string | null; nombre: string | null; monto: number; saldo: number; fecha: string };
+
+async function fotoDelAccionista(accionistaId: string, desde: string, hasta: string, anio: number, mes: number, esMatriz: boolean) {
+  const [dashboard, activos, cxc, cxp, inventario] = await Promise.all([
+    getDashboardFinanciero(accionistaId, desde, hasta),
+    getActivosFijos(pool, accionistaId, hasta),
+    pool.query(
+      `SELECT ar.id, ar.reference_type AS tipo, ar.description AS descripcion, COALESCE(c.full_name, f.full_name) AS nombre,
+              ar.amount::float AS monto, ar.balance::float AS saldo, to_char(ar.created_at, 'YYYY-MM-DD') AS fecha
+         FROM accounts_receivable ar LEFT JOIN customers c ON c.id = ar.customer_id LEFT JOIN farmers f ON f.id = ar.farmer_id
+        WHERE ar.accionista_id = $1 AND ar.status IN ('CONFIRMED','PARTIAL') AND ar.balance > 0.005 ORDER BY ar.created_at`, [accionistaId]),
+    pool.query(
+      `SELECT ap.id, ap.reference_type AS tipo, ap.description AS descripcion, COALESCE(f.full_name, s.name) AS nombre,
+              ap.amount::float AS monto, ap.balance::float AS saldo, to_char(ap.created_at, 'YYYY-MM-DD') AS fecha
+         FROM accounts_payable ap LEFT JOIN farmers f ON f.id = ap.farmer_id LEFT JOIN suppliers s ON s.id = ap.supplier_id
+        WHERE ap.accionista_id = $1 AND ap.status IN ('CONFIRMED','PARTIAL') AND ap.balance > 0.005 ORDER BY ap.created_at`, [accionistaId]),
+    pool.query(
+      `SELECT p.name AS producto, w.name AS bodega, SUM(m.quantity)::float AS qq
+         FROM inventory_movements m JOIN products p ON p.id = m.product_id JOIN warehouses w ON w.id = m.warehouse_id
+        WHERE m.accionista_id = $1 AND m.ownership = 'OWNED' AND m.created_at::date <= $2::date
+        GROUP BY p.name, w.name HAVING abs(SUM(m.quantity)) > 0.0005 ORDER BY p.name, w.name`, [accionistaId, hasta])
+  ]);
+  const resultadoMensual = esMatriz
+    ? await calcularResultadoMensual(pool, { year: anio, month: mes, matrizId: accionistaId }).catch(() => null)
+    : null;
+  return {
+    dashboard, activos,
+    por_cobrar: cxc.rows as CuentaCierre[],
+    por_pagar: cxp.rows as CuentaCierre[],
+    inventario: inventario.rows,
+    resultado_mensual: resultadoMensual
+  };
+}
+
+financeRouter.post("/cierres", requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({
+    anio: z.number().int().min(2020).max(2100),
+    mes: z.number().int().min(1).max(12),
+    notas: z.string().max(500).optional(),
+    // Cerrar aunque el control de integridad tenga avisos (el usuario los vio).
+    confirmar_hallazgos: z.boolean().optional()
+  }).parse(req.body);
+  const desde = `${body.anio}-${String(body.mes).padStart(2, "0")}-01`;
+  const hasta = ultimoDia(body.anio, body.mes);
+  const hoyEc = hoy();
+  if (hasta > hoyEc) throw new ApiError(409, `El mes aún no termina: se puede cerrar desde el ${hasta.split("-").reverse().join("/")} al terminar la jornada.`);
+  const ya = await pool.query("SELECT 1 FROM cierres_mes WHERE anio = $1 AND mes = $2 AND anulado_at IS NULL LIMIT 1", [body.anio, body.mes]);
+  if (ya.rowCount) throw new ApiError(409, "Ese mes ya está cerrado. Si hay que corregir algo, anula el cierre y vuelve a cerrarlo.");
+
+  const integridad = await revisarConsistencia();
+  const problemas = integridad.hallazgos.filter((h) => !h.error);
+  if (problemas.length && !body.confirmar_hallazgos) {
+    throw new ApiError(409, `El control de integridad tiene ${problemas.length} aviso(s): ${problemas.map((h) => h.regla).join(" · ")}. Revísalos o confirma para cerrar igual.`, "HALLAZGOS");
+  }
+
+  const matrizId = await getMatrizId();
+  const accionistas = (await pool.query("SELECT id, name FROM accionistas WHERE is_active = true ORDER BY name")).rows as Array<{ id: string; name: string }>;
+  const fotos: Array<{ a: { id: string; name: string }; foto: Awaited<ReturnType<typeof fotoDelAccionista>> }> = [];
+  for (const a of accionistas) fotos.push({ a, foto: await fotoDelAccionista(a.id, desde, hasta, body.anio, body.mes, a.id === matrizId) });
+
+  // Las cuentas por cobrar/pagar se toman con su saldo de HOY: si se cierra días después, se avisa en la foto.
+  const diasDespues = Math.round((new Date(`${hoyEc}T00:00:00Z`).getTime() - new Date(`${hasta}T00:00:00Z`).getTime()) / 86400000);
+  const meta = { tomado_el: hoyEc, dias_despues_del_corte: diasDespues };
+  const userId = (req as AuthenticatedRequest).user?.id ?? null;
+  const creados = await inTransaction(async (tx) => {
+    const out = [];
+    for (const { a, foto } of fotos) {
+      const r = await tx.query(
+        `INSERT INTO cierres_mes (anio, mes, accionista_id, desde, hasta, datos, integridad, notas, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9) RETURNING id`,
+        [body.anio, body.mes, a.id, desde, hasta, JSON.stringify({ ...foto, meta }),
+         JSON.stringify({ reglas: integridad.reglas, avisos: problemas.map((h) => h.regla) }), body.notas ?? null, userId]
+      );
+      out.push({ id: r.rows[0].id, accionista: a.name, kpis: foto.dashboard.kpis });
+    }
+    return out;
+  });
+  res.status(201).json({ anio: body.anio, mes: body.mes, desde, hasta, cierres: creados, meta });
+}));
+
+// Lista de meses cerrados: el administrador ve todos; los demás, solo los del accionista activo.
+financeRouter.get("/cierres", asyncRoute(async (req, res) => {
+  const r = req as AuthenticatedRequest;
+  const esAdmin = r.user?.role_name === "ADMINISTRADOR";
+  const rows = await pool.query(
+    `SELECT c.id, c.anio, c.mes, c.desde::text, c.hasta::text, a.name AS accionista, c.accionista_id,
+            c.datos->'dashboard'->'kpis' AS kpis, c.datos->'meta' AS meta, c.integridad, c.notas,
+            c.created_at, u.name AS creado_por, c.anulado_at, c.anulado_motivo, ua.name AS anulado_por
+       FROM cierres_mes c JOIN accionistas a ON a.id = c.accionista_id
+       LEFT JOIN users u ON u.id = c.created_by LEFT JOIN users ua ON ua.id = c.anulado_by
+      WHERE ($1::boolean OR c.accionista_id = $2)
+      ORDER BY c.anio DESC, c.mes DESC, c.created_at DESC, a.name`,
+    [esAdmin, r.accionistaId ?? null]
+  );
+  res.json(rows.rows);
+}));
+
+async function cierreVisible(req: AuthenticatedRequest, id: string) {
+  const c = (await pool.query(
+    "SELECT c.*, a.name AS accionista FROM cierres_mes c JOIN accionistas a ON a.id = c.accionista_id WHERE c.id = $1", [id]
+  )).rows[0];
+  if (!c) throw new ApiError(404, "Cierre no encontrado.");
+  if (req.user?.role_name !== "ADMINISTRADOR" && c.accionista_id !== req.accionistaId) throw new ApiError(403, "Ese cierre es de otro accionista.");
+  return c;
+}
+
+financeRouter.get("/cierres/:id", asyncRoute(async (req, res) => {
+  res.json(await cierreVisible(req as AuthenticatedRequest, String(req.params.id)));
+}));
+
+// Excel del cierre tal como quedó (mismas hojas que «Exportar» + Por Cobrar, Por Pagar e Inventario).
+financeRouter.get("/cierres/:id/excel", asyncRoute(async (req, res) => {
+  const c = await cierreVisible(req as AuthenticatedRequest, String(req.params.id));
+  const empresa = await pool.query("SELECT business_name, ruc FROM app_settings WHERE socio_id IS NULL LIMIT 1");
+  const nombreEmpresa = empresa.rows[0]?.business_name ?? "BASCULA ERP";
+  const ruc = empresa.rows[0]?.ruc ? ` · RUC: ${empresa.rows[0].ruc}` : "";
+  const desde = String(c.desde instanceof Date ? c.desde.toISOString().slice(0, 10) : c.desde).slice(0, 10);
+  const hasta = String(c.hasta instanceof Date ? c.hasta.toISOString().slice(0, 10) : c.hasta).slice(0, 10);
+  const pie = `${c.accionista}${ruc} · CIERRE DE ${String(c.mes).padStart(2, "0")}/${c.anio} (guardado el ${new Date(c.created_at).toLocaleString("es-EC")})${c.anulado_at ? " · ANULADO" : ""}`;
+  const wb = construirExcelEstados({ data: c.datos.dashboard, activos: c.datos.activos, desde, hasta, nombreEmpresa, pie });
+  const hojaCuentas = (titulo: string, filas: CuentaCierre[]) => {
+    const ws = wb.addWorksheet(titulo, { properties: { tabColor: { argb: TEAL } } });
+    ws.getColumn(1).width = 3; ws.getColumn(2).width = 12; ws.getColumn(3).width = 28; ws.getColumn(4).width = 44;
+    [5, 6].forEach((n) => (ws.getColumn(n).width = 14));
+    ws.views = [{ showGridLines: false }];
+    tituloHoja(ws, titulo.toUpperCase(), `Al ${hasta} · ${pie}`, nombreEmpresa);
+    const enc = ws.addRow(["", "Fecha", "Quién", "Concepto", "Monto", "Saldo"]);
+    enc.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    enc.eachCell((cell, n) => { if (n >= 2) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: AZUL } }; });
+    for (const f of filas) {
+      const row = ws.addRow(["", f.fecha, f.nombre ?? "", f.descripcion ?? f.tipo ?? "", f.monto, f.saldo]);
+      [5, 6].forEach((n) => (row.getCell(n).numFmt = '"$"#,##0.00'));
+    }
+    const tot = ws.addRow(["", "", "", "TOTAL", filas.reduce((s, f) => s + f.monto, 0), filas.reduce((s, f) => s + f.saldo, 0)]);
+    tot.font = { bold: true };
+    [5, 6].forEach((n) => (tot.getCell(n).numFmt = '"$"#,##0.00'));
+  };
+  hojaCuentas("Por Cobrar", c.datos.por_cobrar ?? []);
+  hojaCuentas("Por Pagar", c.datos.por_pagar ?? []);
+  const wsI = wb.addWorksheet("Inventario", { properties: { tabColor: { argb: TEAL } } });
+  wsI.getColumn(1).width = 3; wsI.getColumn(2).width = 32; wsI.getColumn(3).width = 30; wsI.getColumn(4).width = 14;
+  wsI.views = [{ showGridLines: false }];
+  tituloHoja(wsI, "INVENTARIO (QQ)", `Al ${hasta} · ${pie}`, nombreEmpresa);
+  const encI = wsI.addRow(["", "Producto", "Bodega", "QQ"]);
+  encI.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  encI.eachCell((cell, n) => { if (n >= 2) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: AZUL } }; });
+  for (const f of (c.datos.inventario ?? []) as Array<{ producto: string; bodega: string; qq: number }>) {
+    wsI.addRow(["", f.producto, f.bodega, f.qq]).getCell(4).numFmt = "#,##0.00";
+  }
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-  res.setHeader("Content-Disposition", `attachment; filename="estados-financieros-${nombreAcc}-${hasta}.xlsx"`);
+  res.setHeader("Content-Disposition", `attachment; filename="cierre-${c.anio}-${String(c.mes).padStart(2, "0")}-${c.accionista}.xlsx"`);
   await wb.xlsx.write(res);
+}));
+
+// Anular el cierre de un mes (todos los accionistas): permite volver a cerrarlo. No se borra nada.
+financeRouter.post("/cierres/:anio/:mes/anular", requireAdmin, asyncRoute(async (req, res) => {
+  const anio = Number(req.params.anio), mes = Number(req.params.mes);
+  const { motivo } = z.object({ motivo: z.string().trim().min(5, "Escribe el motivo (mínimo 5 letras)") }).parse(req.body);
+  const r = await pool.query(
+    "UPDATE cierres_mes SET anulado_at = now(), anulado_motivo = $3, anulado_by = $4 WHERE anio = $1 AND mes = $2 AND anulado_at IS NULL RETURNING id",
+    [anio, mes, motivo, (req as AuthenticatedRequest).user?.id ?? null]
+  );
+  if (!r.rowCount) throw new ApiError(404, "Ese mes no tiene un cierre vigente.");
+  res.json({ ok: true, anulados: r.rowCount });
 }));
