@@ -49,6 +49,15 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 📥📤 Por Cobrar / Por Pagar auditados (2026-10-08)
+- BUG GRAVE arreglado: `POST /cash/payables/pay-group` (lo usa SIEMPRE Por Pagar al pagar a un acreedor) dejaba UN movimiento apuntando solo a la 1ª cuenta → al anularlo volvía a deber solo esa y las demás quedaban pagadas. Ahora guarda el desglose en `cash_movement_cuentas` (migración `20261080`) y `revertirAbonoDeCuentaPorAnulacion` revierte TODAS (y sus espejos). La base real no tenía casos.
+- Nuevo `POST /receivable/pay-group` (todo o nada, un ingreso, desglose, espejos). Antes el front cobraba cuenta por cuenta (si fallaba a la mitad quedaba a medias).
+- «Comprar producto / Cruzar»: si el comprador es OTRO socio, se crea su deuda espejo `compra_producto_socio` (CxC del que cobraba ↔ CxP del comprador; en PARES_POR_REFERENCIA). Antes el otro socio recibía el producto gratis.
+- `categoriaDePagoCxP` (cash.ts) unifica la categoría del egreso; service_charge y compra_producto_socio → PAGO_ENTRE_SOCIOS. Abono de CxC nunca deja saldo negativo.
+- Integridad: 43 reglas (nuevas: espejos entre socios con mismo monto/saldo/estado; desglose = movimiento).
+- Pantalla: tarjetas en el celular (`.cuentasTabla`), buscador por nombre, total en cada filtro (Por Cobrar abre en «Ventas» y escondía deudas de socios), antigüedad de la deuda más vieja (`AntiguedadDeuda`).
+- Simulacro `cuentas.mjs` TODO OK; regresión (ventas×3, socio_empaque, liquidaciones, dinero, simulacro, modulos, permisos, fomento_intereses) TODO OK.
+
 ### 🔐 Permisos completos: LECTURA por módulo + permisos especiales (2026-10-08, pedido del dueño)
 - `require-auth.ts`: `READ_MODULES_BY_PREFIX` (GET exige Ver/Editar en ALGUNA pestaña que use esos datos; `abiertas` = lecturas de apoyo: caja abierta, categorías, tarifas vigentes, cuentas bancarias, lista de carros…). Base compartida (agricultores, inventario, lotes, productos, catálogos, secadoras, sacos, repuestos, tablero, ajustes) sigue libre. `exigirLecturaEn` para /tickets. `SUB_DE_LECTURA`: Reportes respeta sub-pestañas marcadas.
 - Buscador Ctrl+K filtra por pestañas permitidas. Reportes ya NO es solo admin: se abre con el permiso «Reportes» (antes el operador veía la pestaña vacía).
