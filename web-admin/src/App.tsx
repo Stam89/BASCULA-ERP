@@ -21112,13 +21112,14 @@ Motivo (obligatorio):`, "");
             </form>
             )}
 
-            {selectionView === "proceso" && ubicacionSel && ubicacionSel.productos.some((p) => p.alla_total > 0.0005) && (() => {
+            {selectionView === "proceso" && ubicacionSel && (ubicacionSel.productos.some((p) => p.alla_total > 0.0005) || ubicacionSel.traidas.length > 0) && (() => {
               const conAlla = ubicacionSel.productos.filter((p) => p.alla_total > 0.0005);
               const proveedores = [...new Map(conAlla.flatMap((p) => p.alla).filter((a) => a.qq > 0.0005).map((a) => [a.provider_id, a.proveedor])).entries()];
               return (
                 <div className="tablePanel selUbic" style={{ gridColumn: "1 / -1" }}>
                   <h2>📍 Producto procesado: ¿dónde está?</h2>
                   <p className="muted" style={{ margin: "0 0 8px", fontSize: 12.5 }}>Lo que el proveedor ya procesó pero sigue allá es tuyo (cuenta en tu inventario), pero no se puede despachar desde la piladora hasta traerlo.</p>
+                  {conAlla.length === 0 && <p style={{ margin: "0 0 4px", fontWeight: 700, color: "#166534" }}>✅ Todo el producto procesado ya está en la piladora.</p>}
                   <div className="selUbic__lista">
                     {conAlla.map((p) => (
                       <div key={p.product_id} className="selUbic__fila">
