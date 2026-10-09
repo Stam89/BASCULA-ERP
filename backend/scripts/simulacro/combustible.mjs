@@ -18,9 +18,9 @@ try {
   await q("UPDATE drying_tunnel_reports SET motor_fuel_id = NULL, gas_costo_total = 0, diesel_costo = 0 WHERE motor_number = 1");
   await q("DELETE FROM motor_fuel_records WHERE motor_number = 1");
   // La base real ya tiene más secados del Motor 1 (operación diaria): SOLO en la COPIA se dejan las dos últimas corridas
-  // (la última de cada túnel) y las anteriores se dan por anuladas, para que el escenario sea siempre el mismo.
-  await q(`UPDATE drying_tunnel_reports SET status = 'CANCELLED' WHERE motor_number = 1 AND id NOT IN (
-             SELECT DISTINCT ON (tunnel_number) id FROM drying_tunnel_reports WHERE motor_number = 1 AND status <> 'CANCELLED'
+  // (la última de cada túnel); las anteriores se pasan a un motor que no existe (9), para que el escenario sea siempre el mismo.
+  await q(`UPDATE drying_tunnel_reports SET motor_number = 9 WHERE motor_number = 1 AND id NOT IN (
+             SELECT DISTINCT ON (tunnel_number) id FROM drying_tunnel_reports WHERE motor_number = 1
               ORDER BY tunnel_number, COALESCE(filled_at, created_at) DESC)`);
   // Los dos túneles del Motor 1 (pendientes de combustible): mismo inicio, uno seca 2 h más.
   const tun = await q("SELECT id, tunnel_number, total_quintals::float qq FROM drying_tunnel_reports WHERE motor_number = 1 AND motor_fuel_id IS NULL AND status <> 'CANCELLED' ORDER BY tunnel_number");
