@@ -49,6 +49,14 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🔐 Credencial individual por tablet BASCULA (2026-10-09)
+- Migración `20261086`: tabla `bascula_devices`; el ERP conserva únicamente el hash SHA-256 del token, estado activo, modelo y último contacto.
+- `POST /api/bascula/register-device`: alta/rotación autorizada con la clave de instalación. Las rutas directas aceptan token individual + `X-Device-Id`; durante la transición también aceptan la clave legada para no cortar APK anteriores.
+- Android histórico externo actualizado a v11.44 (code 235): obtiene el token una vez, lo guarda en `bascula_device_auth.xml` (excluido del backup), y lo usa en sincronización, restauración, descubrimiento y eliminación/renumeración.
+- Compatibilidad comprobada en API: token individual → `auth=device`, clave anterior → `auth=legacy`, token falso → HTTP 401. El dispositivo de prueba fue retirado.
+- Respaldo DB previo: `bascula-erp_2026-10-09T13-51-54.dump`. Respaldo Android v11.43: `BASCULA\Respaldos\credencial-tablet-20261009134551`.
+- Siguiente paso, solo después de instalar/probar v11.44 en la tablet real: mostrar/administrar dispositivos desde Configuración y luego retirar la clave compartida del uso rutinario. No retirarla antes.
+
 ### 💰 Caja auditada (2026-10-09)
 - Migración `20261085`: `cash_movements.medio` (EFECTIVO/BANCO) con trigger por defecto (caja BANCO → BANCO; resto → EFECTIVO; un contra-asiento copia el medio del original) + backfill; columnas de arqueo en cash_registers; categorías FALTANTE_CAJA / SOBRANTE_CAJA inactivas (solo las usa el cierre).
 - `services/caja.ts`: `saldosDeCaja` (efectivo/banco/total) y `medioParaCaja`. Summary devuelve saldo_efectivo, saldo_banco, fondos_por_liquidar.
