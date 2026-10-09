@@ -26,10 +26,18 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
       UNION ALL SELECT 'empaque', receivable_id, payable_id FROM matriz_packaging_charges WHERE receivable_id IS NOT NULL AND payable_id IS NOT NULL
       UNION ALL SELECT r.reference_type, r.id, p.id FROM accounts_receivable r
         JOIN accounts_payable p ON p.reference_type = r.reference_type AND p.reference_id = r.reference_id AND p.accionista_id IS DISTINCT FROM r.accionista_id
-       WHERE r.reference_type IN ('fomento_cruce', 'retencion_matriz', 'compra_producto_socio') AND r.reference_id IS NOT NULL
+       WHERE r.reference_type IN ('fomento_cruce', 'retencion_matriz', 'compra_producto_socio', 'cobro_por_socio') AND r.reference_id IS NOT NULL
       ) x JOIN accounts_receivable r ON r.id = x.ar JOIN accounts_payable p ON p.id = x.ap
      WHERE abs(r.amount - p.amount) > 0.005 OR abs(r.balance - p.balance) > 0.005
         OR (r.status::text = 'CANCELLED') <> (p.status::text = 'CANCELLED')` },
+  { modulo: "Cuentas", nombre: "Cobros que recibió otro socio: cada depósito vigente tiene su deuda entre socios por el mismo valor (y uno anulado, la suya anulada)", sql: `
+    SELECT cm.id, cm.amount::float AS deposito, p.amount::float AS por_pagar, p.status::text AS estado, cm.reversed_at IS NOT NULL AS anulado
+      FROM cash_movements cm
+      LEFT JOIN accounts_payable p ON p.reference_type = 'cobro_por_socio' AND p.reference_id = cm.id
+     WHERE cm.category = 'COBRO_POR_SOCIO' AND cm.reversal_of IS NULL
+       AND (p.id IS NULL
+            OR (cm.reversed_at IS NULL AND (p.status::text = 'CANCELLED' OR abs(p.amount - cm.amount) > 0.005))
+            OR (cm.reversed_at IS NOT NULL AND p.status::text <> 'CANCELLED'))` },
   { modulo: "Caja", nombre: "Pagos y cobros de varias cuentas: el desglose suma lo que movió la caja", sql: `
     SELECT cm.id, cm.amount::float AS movimiento, sum(d.monto)::float AS desglose
       FROM cash_movement_cuentas d JOIN cash_movements cm ON cm.id = d.cash_movement_id

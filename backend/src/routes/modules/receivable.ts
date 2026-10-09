@@ -4,7 +4,8 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
+import { exigirCajaAbiertaDelAccionista, medioParaCaja } from "../../services/caja.js";
+import { dinero, notificar } from "../../services/notificaciones.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { bajarPayableHermanaSinCaja, espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
@@ -29,7 +30,7 @@ receivableRouter.get("/", asyncRoute(async (req, res) => {
             COALESCE(par.name, c.full_name, dest.name, ps_acc.name, ps.client_name,
                      msc_acc.name, mpc_acc.name, soc_ret.name, fr.full_name) AS customer_name,
             -- Deuda entre socios / Matriz (se espeja con la Por Pagar del otro).
-            (ar.reference_type IN ('fomento_cruce', 'retencion_matriz', 'packaging_charge', 'pilado_service', 'lot_transfer', 'service_charge', 'saldo_inicial_socio', 'compra_producto_socio')
+            (ar.reference_type IN ('fomento_cruce', 'retencion_matriz', 'packaging_charge', 'pilado_service', 'lot_transfer', 'service_charge', 'saldo_inicial_socio', 'compra_producto_socio', 'cobro_por_socio')
               OR lt.id IS NOT NULL OR ps.client_accionista_id IS NOT NULL OR msc.id IS NOT NULL OR mpc.id IS NOT NULL) AS entre_socios,
             c.phone     AS customer_phone,
             s.sale_number,
@@ -55,7 +56,7 @@ receivableRouter.get("/", asyncRoute(async (req, res) => {
      LEFT JOIN accionistas soc_ret ON soc_ret.id = liq_ret.accionista_id
      LEFT JOIN LATERAL (
        SELECT a.name FROM accounts_payable h JOIN accionistas a ON a.id = h.accionista_id
-        WHERE ar.reference_type IN ('fomento_cruce', 'saldo_inicial_socio', 'compra_producto_socio')
+        WHERE ar.reference_type IN ('fomento_cruce', 'saldo_inicial_socio', 'compra_producto_socio', 'cobro_por_socio')
           AND h.reference_type = ar.reference_type AND h.reference_id = ar.reference_id
           AND h.accionista_id IS DISTINCT FROM ar.accionista_id
         LIMIT 1
@@ -334,18 +335,46 @@ receivableRouter.post("/:id/pay", asyncRoute(async (req, res) => {
 // POST cobrar VARIAS cuentas de un mismo deudor con UN solo ingreso de caja (todo o nada).
 // Se aplica de la más antigua a la más nueva. El desglose (cash_movement_cuentas) permite que, si se
 // anula el ingreso en Caja, TODAS las cuentas vuelvan a deber lo suyo (y sus espejos entre socios).
+//
+// COBRO QUE RECIBIÓ OTRO SOCIO (`recibido_por`): el cliente de este socio le depositó a otro (casi siempre a la
+// Matriz). El cliente deja de deber aquí, el dinero entra a la caja ABIERTA del que lo recibió (categoría
+// COBRO_POR_SOCIO, por defecto al banco) y nace la deuda entre los dos: Por Pagar del que recibió ↔ Por Cobrar
+// de este socio (reference_type 'cobro_por_socio', reference_id = el ingreso). Se salda como cualquier deuda
+// entre socios. No es venta ni ingreso del que recibió: es dinero ajeno de paso.
 receivableRouter.post("/pay-group", asyncRoute(async (req, res) => {
   const body = z.object({
     receivable_ids:   z.array(z.string().uuid()).min(1),
     amount:           z.number().positive().transform(round2),
     cash_register_id: z.string().uuid().optional(),
-    concepto:         z.string().max(200).optional()
+    concepto:         z.string().max(200).optional(),
+    recibido_por:     z.string().uuid().optional(),
+    medio_pago:       z.enum(["EFECTIVO", "BANCO"]).optional()
   }).parse(req.body);
-  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const auth = req as AuthenticatedRequest;
+  const accionistaId = auth.accionistaId;
+  const otroSocio = body.recibido_por && body.recibido_por !== accionistaId ? body.recibido_por : null;
 
   const result = await inTransaction(async (client) => {
-    if (!body.cash_register_id) throw new ApiError(400, "Abre una caja para registrar el cobro: el dinero tiene que entrar a una caja.");
-    await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
+    let cajaId: string;
+    let receptor: { id: string; name: string; caja_tipo: string } | null = null;
+    if (otroSocio) {
+      const acc = (await client.query("SELECT id, name FROM accionistas WHERE id = $1 AND is_active = true", [otroSocio])).rows[0];
+      if (!acc) throw new ApiError(404, "El socio que recibió el dinero no existe o está inactivo.");
+      if (auth.user?.role_name !== "ADMINISTRADOR") {
+        const acceso = await client.query("SELECT 1 FROM user_accionistas WHERE user_id = $1 AND accionista_id = $2", [auth.user?.id ?? null, otroSocio]);
+        if (!acceso.rowCount) throw new ApiError(403, `No tienes acceso a la caja de ${acc.name}: pide al administrador que registre este depósito.`);
+      }
+      const caja = (await client.query(
+        "SELECT id, tipo FROM cash_registers WHERE accionista_id = $1 AND status = 'OPEN' ORDER BY opened_at DESC LIMIT 1", [otroSocio]
+      )).rows[0];
+      if (!caja) throw new ApiError(409, `${acc.name} no tiene la caja abierta: ábrela para registrar el dinero que recibió.`);
+      cajaId = caja.id;
+      receptor = { id: acc.id, name: acc.name, caja_tipo: caja.tipo };
+    } else {
+      if (!body.cash_register_id) throw new ApiError(400, "Abre una caja para registrar el cobro: el dinero tiene que entrar a una caja.");
+      await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
+      cajaId = body.cash_register_id;
+    }
     const cuentas = (await client.query(
       `SELECT ar.id, ar.balance, ar.status, ar.description, COALESCE(c.full_name, f.full_name) AS nombre
          FROM accounts_receivable ar
@@ -378,12 +407,21 @@ receivableRouter.post("/pay-group", asyncRoute(async (req, res) => {
     }
 
     const nombre = vivas[0]?.nombre ?? vivas[0]?.description ?? "cliente";
-    const mov = await client.query(
-      `INSERT INTO cash_movements (cash_register_id, movement, category, reference_type, reference_id, amount, description)
-       VALUES ($1, 'INCOME', 'COBRO_CREDITO', 'accounts_receivable', $2, $3, $4) RETURNING id`,
-      [body.cash_register_id, desglose[0].id, body.amount,
-       `Cobro crédito: ${nombre}${desglose.length > 1 ? ` (${desglose.length} cuentas)` : ""}`]
-    );
+    const dueno = receptor
+      ? (await client.query("SELECT name FROM accionistas WHERE id = $1", [accionistaId])).rows[0]?.name ?? "el socio"
+      : null;
+    const mov = receptor
+      ? await client.query(
+        `INSERT INTO cash_movements (cash_register_id, movement, category, reference_type, reference_id, amount, description, medio)
+         VALUES ($1, 'INCOME', 'COBRO_POR_SOCIO', 'accounts_receivable', $2, $3, $4, $5) RETURNING id`,
+        [cajaId, desglose[0].id, body.amount,
+         `Cobro de ${nombre} para ${dueno} (se lo debes)${desglose.length > 1 ? ` · ${desglose.length} cuentas` : ""}`,
+         medioParaCaja(receptor.caja_tipo, body.medio_pago ?? "BANCO")])
+      : await client.query(
+        `INSERT INTO cash_movements (cash_register_id, movement, category, reference_type, reference_id, amount, description)
+         VALUES ($1, 'INCOME', 'COBRO_CREDITO', 'accounts_receivable', $2, $3, $4) RETURNING id`,
+        [cajaId, desglose[0].id, body.amount,
+         `Cobro crédito: ${nombre}${desglose.length > 1 ? ` (${desglose.length} cuentas)` : ""}`]);
     for (const d of desglose) {
       await client.query(
         "INSERT INTO cash_movement_cuentas (cash_movement_id, tabla, cuenta_id, monto) VALUES ($1, 'accounts_receivable', $2, $3)",
@@ -399,7 +437,35 @@ receivableRouter.post("/pay-group", asyncRoute(async (req, res) => {
       });
       if (e) espejos.push(e);
     }
-    return { paid: body.amount, cuentas: desglose.length, remaining: round2(pendiente - body.amount), espejos };
+
+    // El que recibió el dinero ahora se lo debe a este socio (CxC ↔ CxP espejo, ligadas al ingreso).
+    let deudaEntreSocios: { deudor: string; monto: number } | null = null;
+    if (receptor) {
+      const movId = mov.rows[0].id;
+      const cxc = await client.query(
+        `INSERT INTO accounts_receivable (accionista_id, reference_type, reference_id, description, amount, balance, status)
+         VALUES ($1, 'cobro_por_socio', $2, $3, $4, $4, 'CONFIRMED') RETURNING id`,
+        [accionistaId, movId, `${receptor.name} recibió el pago de ${nombre}${body.concepto ? ` · ${body.concepto}` : ""}`, body.amount]
+      );
+      const cxp = await client.query(
+        `INSERT INTO accounts_payable (accionista_id, reference_type, reference_id, description, amount, balance, status)
+         VALUES ($1, 'cobro_por_socio', $2, $3, $4, $4, 'CONFIRMED') RETURNING id`,
+        [receptor.id, movId, `Recibiste el pago de ${nombre}, cliente de ${dueno}${body.concepto ? ` · ${body.concepto}` : ""}`, body.amount]
+      );
+      await notificar(client, {
+        accionistaId: receptor.id, tipo: "PAGO",
+        titulo: `Entró un pago para ${dueno}`,
+        mensaje: `${nombre} te depositó ${dinero(body.amount)} que eran para ${dueno}. Quedó en tu caja y en tu Por Pagar a ${dueno}.`,
+        monto: body.amount, referenciaTipo: "accounts_payable", referenciaId: cxp.rows[0].id
+      });
+      await notificar(client, {
+        accionistaId, titulo: `${receptor.name} recibió un pago tuyo`,
+        mensaje: `${nombre} pagó ${dinero(body.amount)} a ${receptor.name}. Tu cliente ya no lo debe; ahora te lo debe ${receptor.name} (Por Cobrar).`,
+        monto: body.amount, referenciaTipo: "accounts_receivable", referenciaId: cxc.rows[0].id
+      });
+      deudaEntreSocios = { deudor: receptor.name, monto: body.amount };
+    }
+    return { paid: body.amount, cuentas: desglose.length, remaining: round2(pendiente - body.amount), espejos, deuda_entre_socios: deudaEntreSocios };
   });
   res.json(result);
 }));

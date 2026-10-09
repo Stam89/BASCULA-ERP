@@ -5718,3 +5718,9 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 /* Selector efectivo/banco: botones compactos (el estilo general de inputs agrandaba los círculos) */
 .cjMedio label { flex: 0 0 auto; }
 .cjMedio input[type="radio"] { width: 16px; height: 16px; min-width: 16px; margin: 0; padding: 0; flex: 0 0 16px; accent-color: #0f766e; box-shadow: none; }
+
+/* Por Cobrar · ¿quién recibió el dinero? (depósito de un cliente del socio en la cuenta de la Matriz) */
+.cobroRecibe { margin-top: 12px; display: grid; gap: 6px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 10px; padding: 10px 12px; }
+.cobroRecibe label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
+.cobroRecibe select { flex: 1 1 200px; min-width: 0; padding: 7px 9px; border-radius: 8px; border: 1px solid #cbd5e1; background: #fff; font-size: 14px; }
+.cobroRecibe small { color: #0c4a6e; line-height: 1.4; }

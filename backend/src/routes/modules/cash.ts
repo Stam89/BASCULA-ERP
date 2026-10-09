@@ -10,7 +10,7 @@ import { reversarEntradaRepuestosDeCaja, reversarEntradaRepuestosDeCredito, devo
 import { etiquetaMaquina, resolverMaquina, type Maquina } from "../../services/maquinas.js";
 import { resolverProveedor } from "../../services/proveedores.js";
 import { reabrirPagoNomina } from "../../services/nomina-reabrir.js";
-import { espejarAbonoEnContraparte, revertirAbonoDeCuentaPorAnulacion } from "../../services/cuentas-vinculadas.js";
+import { anularDeudaDeCobroPorSocio, espejarAbonoEnContraparte, revertirAbonoDeCuentaPorAnulacion } from "../../services/cuentas-vinculadas.js";
 import { vidaUtilPorTipo } from "../../services/activos.js";
 import ExcelJS from "exceljs";
 import { avisarSobregiro, medioParaCaja, saldosDeCaja } from "../../services/caja.js";
@@ -594,6 +594,8 @@ cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(a
       }
     }
 
+    // Cobro que recibió este accionista POR OTRO socio: se anula también la deuda entre los dos.
+    if (m.category === "COBRO_POR_SOCIO") await anularDeudaDeCobroPorSocio(client, m.id, body.reason);
     // Si cobró/pagó una CUENTA, esa cuenta (y su hermana entre accionistas) vuelve a deber lo anulado.
     const cuentaRevertida = await revertirAbonoDeCuentaPorAnulacion(client, m, { userId: user?.id ?? null, motivo: body.reason });
 
@@ -1080,7 +1082,7 @@ export function categoriaDePagoCxP(ap: { reference_type: string | null; categori
   if (t === "pilado_service") return "PAGO_SERVICIO_PILADO";
   // Deudas entre socios / Matriz / Transporte (incluye el saldo inicial entre socios).
   if (t && ["lot_transfer", "campo_servicio", "fomento_cruce", "retencion_matriz", "packaging_charge", "service_charge",
-    "saldo_inicial_socio", "compra_producto_socio"].includes(t)) return "PAGO_ENTRE_SOCIOS";
+    "saldo_inicial_socio", "compra_producto_socio", "cobro_por_socio"].includes(t)) return "PAGO_ENTRE_SOCIOS";
   // Selección/envejecido y sus fletes con carro externo (ida o regreso): ya son costo al nacer la deuda.
   if (t === "selection_batch" || t === "flete_envejecido_tercero") return "PAGO_SELECCION";
   if (t === "purchase") return "PAGO_PROVEEDOR";
@@ -1127,7 +1129,7 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
               'Cuenta por pagar'
             ) AS farmer_name,
             -- Deuda entre socios / Matriz / Transporte (se espeja con la otra cara).
-            (ap.reference_type IN ('campo_servicio', 'fomento_cruce', 'retencion_matriz', 'packaging_charge', 'pilado_service', 'lot_transfer', 'service_charge', 'saldo_inicial_socio', 'compra_producto_socio')
+            (ap.reference_type IN ('campo_servicio', 'fomento_cruce', 'retencion_matriz', 'packaging_charge', 'pilado_service', 'lot_transfer', 'service_charge', 'saldo_inicial_socio', 'compra_producto_socio', 'cobro_por_socio')
               OR ps.id IS NOT NULL OR msc.id IS NOT NULL OR mpc.id IS NOT NULL OR lt.id IS NOT NULL) AS entre_socios,
             l.liquidation_number, l.batch_id
      FROM accounts_payable ap
@@ -1146,7 +1148,7 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
      LEFT JOIN accionistas lt_from ON lt_from.id = lt.from_accionista_id
      LEFT JOIN LATERAL (
        SELECT a.name FROM accounts_receivable h JOIN accionistas a ON a.id = h.accionista_id
-        WHERE ap.reference_type IN ('fomento_cruce', 'retencion_matriz', 'saldo_inicial_socio', 'compra_producto_socio')
+        WHERE ap.reference_type IN ('fomento_cruce', 'retencion_matriz', 'saldo_inicial_socio', 'compra_producto_socio', 'cobro_por_socio')
           AND h.reference_type = ap.reference_type AND h.reference_id = ap.reference_id
           AND h.accionista_id IS DISTINCT FROM ap.accionista_id
         LIMIT 1
