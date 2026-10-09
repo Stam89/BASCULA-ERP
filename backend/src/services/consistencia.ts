@@ -61,6 +61,20 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
     SELECT cr.id FROM cash_registers cr JOIN cash_movements m ON m.cash_register_id = cr.id
      WHERE cr.status = 'CLOSED' AND cr.closed_at IS NOT NULL AND m.created_at > cr.closed_at + interval '1 minute' AND m.reversal_of IS NULL AND m.reference_type IS DISTINCT FROM 'reversal' LIMIT 20` },
   { modulo: "Caja", nombre: "Movimientos de caja: monto positivo", sql: `SELECT id FROM cash_movements WHERE amount <= 0` },
+  { modulo: "Caja", nombre: "Cajas cerradas con arqueo: su saldo de cierre = apertura + movimientos (nada se movió después)", sql: `
+    SELECT cr.id, cr.closing_balance::float AS cierre,
+           (COALESCE(cr.opening_balance, 0) + COALESCE((SELECT SUM(CASE WHEN m.movement = 'INCOME' THEN m.amount ELSE -m.amount END) FROM cash_movements m WHERE m.cash_register_id = cr.id), 0))::float AS saldo
+      FROM cash_registers cr
+     WHERE cr.status = 'CLOSED' AND cr.closing_balance IS NOT NULL
+       AND abs(cr.closing_balance - (COALESCE(cr.opening_balance, 0) + COALESCE((SELECT SUM(CASE WHEN m.movement = 'INCOME' THEN m.amount ELSE -m.amount END) FROM cash_movements m WHERE m.cash_register_id = cr.id), 0))) > 0.005` },
+  { modulo: "Caja", nombre: "Movimientos de caja: cada uno dice si fue efectivo o banco (y una caja de un solo medio no tiene del otro)", sql: `
+    SELECT m.id, m.medio, cr.tipo FROM cash_movements m JOIN cash_registers cr ON cr.id = m.cash_register_id
+     WHERE m.medio IS NULL OR (cr.tipo = 'EFECTIVO' AND m.medio = 'BANCO') OR (cr.tipo = 'BANCO' AND m.medio = 'EFECTIVO') LIMIT 20` },
+  { modulo: "Caja", nombre: "Traspasos efectivo↔banco: cada uno con sus dos líneas vigentes o las dos anuladas", sql: `
+    SELECT s.id FROM cash_movements s
+     WHERE s.reference_type = 'traspaso_interno' AND s.movement = 'EXPENSE'
+       AND NOT EXISTS (SELECT 1 FROM cash_movements e WHERE e.reference_type = 'traspaso_interno' AND e.reference_id = s.id AND e.amount = s.amount
+                         AND (e.reversed_at IS NULL) = (s.reversed_at IS NULL))` },
   { modulo: "Caja", nombre: "Reversas: cada movimiento se reversa a lo sumo una vez", sql: `SELECT reversal_of FROM cash_movements WHERE reversal_of IS NOT NULL GROUP BY reversal_of HAVING count(*) > 1` },
   // ── Inventario / ventas ──
   // (Los sacos pueden quedar en negativo A PROPÓSITO: es la señal «la matriz debe comprar sacos» de Sacos por comprar.)

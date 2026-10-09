@@ -46,24 +46,10 @@ expensesRouter.post("/", asyncRoute(async (req, res) => {
   res.status(201).json(result);
 }));
 
-expensesRouter.post("/labor-payments", asyncRoute(async (req, res) => {
-  const body = z.object({
-    cash_register_id: z.string().uuid().optional(),
-    worker_group: z.string().min(2),
-    sacks_moved: z.number().positive(),
-    price_per_sack: z.number().nonnegative(),
-    created_by: z.string().uuid().optional()
-  }).parse(req.body);
-
-  const total = roundCurrency(body.sacks_moved * body.price_per_sack);
-  const result = await pool.query(
-    `INSERT INTO labor_payments
-     (cash_register_id, worker_group, sacks_moved, price_per_sack, total_amount, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING *`,
-    [body.cash_register_id, body.worker_group, body.sacks_moved, body.price_per_sack, total, body.created_by]
-  );
-  res.status(201).json(result.rows[0]);
+// RETIRADO (auditoría de Caja 2026-10-08): pagaba cuadrilla por fuera de Nómina › Cuadrilla (se podía pagar dos
+// veces) y en dos pasos sueltos. La cuadrilla se paga en Nómina.
+expensesRouter.post("/labor-payments", asyncRoute(async (_req, res) => {
+  res.status(410).json({ error: "El pago de cuadrilla se registra en Nómina › Cuadrilla (así no se paga dos veces)." });
 }));
 
 expensesRouter.get("/", asyncRoute(async (req, res) => {
@@ -74,7 +60,3 @@ expensesRouter.get("/", asyncRoute(async (req, res) => {
   );
   res.json(result.rows);
 }));
-
-function roundCurrency(value: number): number {
-  return Math.round(value * 100) / 100;
-}

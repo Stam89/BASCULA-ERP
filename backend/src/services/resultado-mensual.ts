@@ -121,7 +121,9 @@ export const CATEGORIAS_NO_OPERATIVAS = [
   // Devolución del dinero de una venta anulada (no es gasto: deshace un ingreso; la venta ya no cuenta).
   "DEVOLUCION_VENTA",
   // Pago de una deuda cargada como saldo inicial (es de antes del arranque).
-  "PAGO_SALDO_INICIAL"
+  "PAGO_SALDO_INICIAL",
+  // Paso de dinero entre efectivo y banco de la misma caja (no sale del negocio).
+  "TRASPASO_INTERNO"
 ];
 
 const r2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;

@@ -54,3 +54,35 @@ export async function avisarSobregiro(db: Db, cashRegisterId: string, monto: num
     );
   }
 }
+
+/**
+ * Saldo de una caja separado por MEDIO: efectivo (lo que debe haber en la gaveta) y banco. Apertura de cada medio +
+ * sus movimientos (cada movimiento guarda su medio; ver migración 20261085). `hasta` (opcional) = movimientos hasta
+ * ese instante (para el arqueo al cerrar).
+ */
+export async function saldosDeCaja(db: Db, cashRegisterId: string): Promise<{ efectivo: number; banco: number; total: number; tipo: string }> {
+  const r = await db.query(
+    `SELECT cr.tipo,
+            COALESCE(cr.opening_balance_cash, CASE WHEN cr.tipo = 'BANCO' THEN 0 ELSE cr.opening_balance END, 0)::float AS ap_efectivo,
+            COALESCE(cr.opening_balance_bank, CASE WHEN cr.tipo = 'BANCO' THEN cr.opening_balance ELSE 0 END, 0)::float AS ap_banco,
+            COALESCE(SUM(CASE WHEN m.movement = 'INCOME' THEN m.amount ELSE -m.amount END) FILTER (WHERE COALESCE(m.medio, 'EFECTIVO') = 'EFECTIVO'), 0)::float AS mov_efectivo,
+            COALESCE(SUM(CASE WHEN m.movement = 'INCOME' THEN m.amount ELSE -m.amount END) FILTER (WHERE m.medio = 'BANCO'), 0)::float AS mov_banco
+       FROM cash_registers cr
+       LEFT JOIN cash_movements m ON m.cash_register_id = cr.id
+      WHERE cr.id = $1
+      GROUP BY cr.id`,
+    [cashRegisterId]
+  );
+  const f = r.rows[0];
+  if (!f) throw new ApiError(404, "Caja no encontrada");
+  const efectivo = redondear2(Number(f.ap_efectivo) + Number(f.mov_efectivo));
+  const banco = redondear2(Number(f.ap_banco) + Number(f.mov_banco));
+  return { efectivo, banco, total: redondear2(efectivo + banco), tipo: f.tipo };
+}
+
+/** Medio de un movimiento según la caja: una caja de EFECTIVO o de BANCO solo tiene ese medio; la MIXTA, el que se elija. */
+export function medioParaCaja(tipoCaja: string, pedido?: string | null): "EFECTIVO" | "BANCO" {
+  if (tipoCaja === "BANCO") return "BANCO";
+  if (tipoCaja === "EFECTIVO") return "EFECTIVO";
+  return pedido === "BANCO" ? "BANCO" : "EFECTIVO";
+}

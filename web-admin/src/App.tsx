@@ -128,7 +128,7 @@ type Dashboard = {
   pending_advances: number;
   pending_payables: number;
   sales_today: number;
-  current_cash_register: { id: string; name: string; opening_balance: string; opening_balance_cash: string; opening_balance_bank: string } | null;
+  current_cash_register: { id: string; name: string; opening_balance: string; opening_balance_cash: string; opening_balance_bank: string; tipo?: string; opened_at?: string } | null;
 };
 
 type Expense = {
@@ -1027,6 +1027,8 @@ type CashMovement = {
   // Proveedor del egreso (opcional). Todo movimiento de caja es de CONTADO.
   supplier_id?: string | null;
   proveedor_nombre?: string | null;
+  // Efectivo o banco (en una caja MIXTA).
+  medio?: "EFECTIVO" | "BANCO" | null;
 };
 
 /** Egreso A CRÉDITO registrado en la sesión: es una Cuenta por Pagar, no toca la caja. */
@@ -1046,6 +1048,10 @@ type CashSummary = {
   total_expense: number;
   current_balance: number;
   opened_at: string;
+  // Lo que debe haber en la gaveta (efectivo) y en el banco, por separado.
+  saldo_efectivo?: number;
+  saldo_banco?: number;
+  fondos_por_liquidar?: { n: number; monto: number };
 };
 
 type AccountPayable = {
@@ -2617,6 +2623,10 @@ export function App() {
   const [cashCategories, setCashCategories] = useState<CashCat[]>([]);
   const [catForm, setCatForm] = useState({ codigo: "", nombre: "", tipo: "EGRESO", aplicable_a: "AMBOS" });
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
+  // Cierre de caja con arqueo y traspaso efectivo↔banco (caja mixta).
+  const [cierreCaja, setCierreCaja] = useState<{ efectivo: string; banco: string; notas: string; busy?: boolean } | null>(null);
+  const [traspaso, setTraspaso] = useState<{ direccion: "DEPOSITO" | "RETIRO"; monto: string; descripcion: string; busy?: boolean } | null>(null);
+  const [movMedio, setMovMedio] = useState<"EFECTIVO" | "BANCO">("EFECTIVO");
   const [cashSummary, setCashSummary] = useState<CashSummary | null>(null);
   const [cashPayables, setCashPayables] = useState<AccountPayable[]>([]);
   const [anticipoFarmerId, setAnticipoFarmerId] = useState("");
@@ -9286,13 +9296,50 @@ export function App() {
     }
   }
 
+  // Cerrar la caja con ARQUEO: se cuenta el efectivo (y se confirma el banco); la diferencia queda como faltante o
+  // sobrante con su motivo. Si no se cuenta, cierra como antes.
   async function closeCaja() {
     if (!cashSummary) return;
-    await apiPost(`/cash/registers/${cashSummary.id}/close`, {});
-    addToast("Caja cerrada", "success");
-    setCashSummary(null);
-    setCashMovements([]);
-    await refresh();
+    await refreshCaja(cashSummary.id).catch(() => undefined);
+    setCierreCaja({ efectivo: "", banco: "", notas: "" });
+  }
+  async function confirmarCierreCaja() {
+    const c = cierreCaja;
+    if (!c || !cashSummary) return;
+    setCierreCaja({ ...c, busy: true });
+    try {
+      const r = await apiPost<{ ajustes: Array<{ medio: string; diferencia: number }>; final: { total: number } }>(`/cash/registers/${cashSummary.id}/close`, {
+        efectivo_contado: c.efectivo.trim() === "" ? undefined : Number(c.efectivo),
+        banco_contado: c.banco.trim() === "" ? undefined : Number(c.banco),
+        notas: c.notas.trim() || undefined
+      });
+      setCierreCaja(null);
+      addToast(r.ajustes.length
+        ? `Caja cerrada con ${money(r.final.total)}. Arqueo: ${r.ajustes.map((a) => `${a.medio === "EFECTIVO" ? "efectivo" : "banco"} ${a.diferencia < 0 ? "faltante" : "sobrante"} ${money(Math.abs(a.diferencia))}`).join(", ")}.`
+        : `Caja cerrada con ${money(r.final.total)}.`, "success");
+      setCashSummary(null);
+      setCashMovements([]);
+      await refresh();
+    } catch (e) {
+      setCierreCaja((cur) => cur && { ...cur, busy: false });
+      addToast(e instanceof Error ? e.message : "No se pudo cerrar la caja", "error");
+    }
+  }
+  async function confirmarTraspaso() {
+    const t = traspaso;
+    const id = dashboard.current_cash_register?.id;
+    if (!t || !id) return;
+    if (!(Number(t.monto) > 0)) { addToast("Escribe el monto", "error"); return; }
+    setTraspaso({ ...t, busy: true });
+    try {
+      await apiPost(`/cash/registers/${id}/traspaso`, { direccion: t.direccion, monto: Number(t.monto), descripcion: t.descripcion.trim() || undefined });
+      setTraspaso(null);
+      addToast(t.direccion === "DEPOSITO" ? `🏦 Depósito de ${money(Number(t.monto))} al banco registrado` : `💵 Retiro de ${money(Number(t.monto))} del banco registrado`, "success");
+      await refreshCaja(id);
+    } catch (e) {
+      setTraspaso((cur) => cur && { ...cur, busy: false });
+      addToast(e instanceof Error ? e.message : "No se pudo registrar", "error");
+    }
   }
 
   async function submitCajaAnticipo(event: FormEvent<HTMLFormElement>) {
@@ -9459,9 +9506,11 @@ export function App() {
       proveedor_nombre: provTxt && !provSel ? provTxt : undefined,
       modalidad_pago: aCredito ? "CREDITO" : "CONTADO",
       due_date: aCredito && movVence ? movVence : undefined,
-      maquina_id: maquinaId
+      maquina_id: maquinaId,
+      medio: dashboard.current_cash_register?.tipo === "MIXTO" ? movMedio : undefined
     });
     safeResetForm(formElement);
+    setMovMedio("EFECTIVO");
     setMovCategory("");
     setMovPayableId("");
     setMovMaquinaId(""); setRepDestino("INVENTARIO"); setRepUbicacion("");
@@ -17758,7 +17807,11 @@ Motivo (obligatorio):`, "");
                       <div className="cj-head">
                         <div>
                           <h2 className="cj-title">💰 {caja.name}</h2>
-                          <p className="cj-sub"><span className="cj-live" /> Sesión activa · {new Date().toLocaleDateString("es-EC", { weekday: "long", day: "2-digit", month: "long", year: "numeric" })}</p>
+                          <p className="cj-sub"><span className="cj-live" /> Sesión activa · {(() => {
+                            const ab = caja.opened_at ? new Date(caja.opened_at) : null;
+                            const dias = ab ? Math.floor((Date.now() - ab.getTime()) / 86400000) : 0;
+                            return ab ? `abierta el ${ab.toLocaleDateString("es-EC", { weekday: "long", day: "2-digit", month: "long" })}${dias >= 1 ? ` (hace ${dias} día${dias === 1 ? "" : "s"})` : ""}` : new Date().toLocaleDateString("es-EC", { weekday: "long", day: "2-digit", month: "long", year: "numeric" });
+                          })()}</p>
                         </div>
                       </div>
 
@@ -17767,7 +17820,12 @@ Motivo (obligatorio):`, "");
                         <div className="cj-kpi cj-kpi--hero">
                           <div className="cj-kpi-label">Saldo actual</div>
                           <div className="cj-kpi-value">{money(saldoActual)}</div>
-                          <div className="cj-kpi-hint">Inicial + ingresos − egresos de la sesión</div>
+                          {caja.tipo === "MIXTO" && cashSummary?.saldo_efectivo !== undefined ? (
+                            <div className="cj-kpi-split">
+                              <span>💵 En la gaveta <b>{money(Number(cashSummary.saldo_efectivo))}</b></span>
+                              <span>🏦 En el banco <b>{money(Number(cashSummary.saldo_banco ?? 0))}</b></span>
+                            </div>
+                          ) : <div className="cj-kpi-hint">Inicial + ingresos − egresos de la sesión</div>}
                         </div>
                         <div className="cj-kpi">
                           <div className="cj-kpi-label"><span className="cj-ico cj-ico--in">⬆</span>Ingresos</div>
@@ -17852,6 +17910,11 @@ Motivo (obligatorio):`, "");
                                     <span className="cj-menu-ico">🔎</span><span className="cj-menu-label">¿Cuándo se hizo?</span>
                                   </button>
                                 )}
+                                {caja.tipo === "MIXTO" && (
+                                  <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setCajaMenu(null); setTraspaso({ direccion: "DEPOSITO", monto: "", descripcion: "" }); }}>
+                                    <span className="cj-menu-ico">🏦</span><span className="cj-menu-label">Depositar / retirar del banco</span>
+                                  </button>
+                                )}
                                 <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setCajaMenu(null); downloadCajaExcel(); }}>
                                   <span className="cj-menu-ico">📥</span><span className="cj-menu-label">Descargar Excel</span>
                                 </button>
@@ -17883,6 +17946,75 @@ Motivo (obligatorio):`, "");
                     </>
                   );
                 })()}
+
+                {cierreCaja && cashSummary && (() => {
+                  const c = cierreCaja;
+                  const tipo = dashboard.current_cash_register?.tipo ?? "EFECTIVO";
+                  const sisEf = Number(cashSummary.saldo_efectivo ?? cashSummary.current_balance);
+                  const sisBa = Number(cashSummary.saldo_banco ?? 0);
+                  const difEf = c.efectivo.trim() === "" ? null : round2(Number(c.efectivo) - sisEf);
+                  const difBa = c.banco.trim() === "" ? null : round2(Number(c.banco) - sisBa);
+                  const hayDif = (difEf !== null && Math.abs(difEf) > 0.005) || (difBa !== null && Math.abs(difBa) > 0.005);
+                  const fila = (titulo: string, sistema: number, valor: string, set: (v: string) => void, dif: number | null) => (
+                    <div className="cjArqueo__fila">
+                      <span className="cjArqueo__titulo">{titulo}</span>
+                      <span>Sistema <b>{money(sistema)}</b></span>
+                      <label><span>Contado</span>
+                        <input type="number" step="0.01" min="0" inputMode="decimal" placeholder={sistema.enReal()} value={valor} disabled={c.busy} onChange={(e) => set(e.target.value)} />
+                      </label>
+                      <span className={dif === null ? "muted" : Math.abs(dif) < 0.005 ? "cjArqueo__ok" : "cjArqueo__dif"}>
+                        {dif === null ? "sin contar" : Math.abs(dif) < 0.005 ? "✓ cuadra" : `${dif < 0 ? "Faltante" : "Sobrante"} ${money(Math.abs(dif))}`}
+                      </span>
+                    </div>
+                  );
+                  return (
+                    <div className="modalOverlay" onClick={() => !c.busy && setCierreCaja(null)}>
+                      <div className="modalCard cjArqueo" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+                        <h3 style={{ margin: 0 }}>🔒 Cerrar caja · arqueo</h3>
+                        <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>Cuenta el dinero y escríbelo. Si no cuadra, la diferencia queda registrada como faltante o sobrante con su motivo.</p>
+                        {tipo !== "BANCO" && fila("💵 Efectivo en la gaveta", sisEf, c.efectivo, (v) => setCierreCaja({ ...c, efectivo: v }), difEf)}
+                        {tipo !== "EFECTIVO" && fila("🏦 Banco", sisBa, c.banco, (v) => setCierreCaja({ ...c, banco: v }), difBa)}
+                        {Number(cashSummary.fondos_por_liquidar?.n ?? 0) > 0 && (
+                          <div className="alertBox" style={{ margin: 0 }}>⏳ Hay {cashSummary.fondos_por_liquidar?.n} fondo(s) a rendir cuentas por liquidar ({money(Number(cashSummary.fondos_por_liquidar?.monto ?? 0))}). Puedes cerrar igual: se liquidan después desde la caja abierta.</div>
+                        )}
+                        <label className="anularVentaModal__motivo"><span>{hayDif ? "Motivo de la diferencia (obligatorio)" : "Nota (opcional)"}</span>
+                          <textarea rows={2} value={c.notas} disabled={c.busy} placeholder={hayDif ? "Ej: se pagó un taxi sin registrar" : "Ej: todo cuadrado"} onChange={(e) => setCierreCaja({ ...c, notas: e.target.value })} />
+                        </label>
+                        <div className="buttonRow">
+                          <button type="button" className="dangerBtn" disabled={c.busy || (hayDif && c.notas.trim().length < 5)} onClick={() => confirmarCierreCaja()}>{c.busy ? "Cerrando…" : "Cerrar caja"}</button>
+                          <button type="button" disabled={c.busy} onClick={() => setCierreCaja(null)}>Cancelar</button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {traspaso && (
+                  <div className="modalOverlay" onClick={() => !traspaso.busy && setTraspaso(null)}>
+                    <div className="modalCard cjArqueo" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+                      <h3 style={{ margin: 0 }}>🏦 Efectivo ↔ banco</h3>
+                      <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>El dinero sigue en la caja; solo cambia de lugar. No es ingreso ni gasto.</p>
+                      <div className="cjMedio" role="radiogroup">
+                        <label className={traspaso.direccion === "DEPOSITO" ? "is-on" : ""}><input type="radio" checked={traspaso.direccion === "DEPOSITO"} onChange={() => setTraspaso({ ...traspaso, direccion: "DEPOSITO" })} /> 💵→🏦 Depositar efectivo al banco</label>
+                        <label className={traspaso.direccion === "RETIRO" ? "is-on" : ""}><input type="radio" checked={traspaso.direccion === "RETIRO"} onChange={() => setTraspaso({ ...traspaso, direccion: "RETIRO" })} /> 🏦→💵 Retirar del banco a efectivo</label>
+                      </div>
+                      <div className="cj-kpi-split" style={{ margin: 0 }}>
+                        <span>💵 En la gaveta <b>{money(Number(cashSummary?.saldo_efectivo ?? 0))}</b></span>
+                        <span>🏦 En el banco <b>{money(Number(cashSummary?.saldo_banco ?? 0))}</b></span>
+                      </div>
+                      <label className="anularVentaModal__motivo"><span>Monto $</span>
+                        <input type="number" step="0.01" min="0" inputMode="decimal" value={traspaso.monto} disabled={traspaso.busy} onChange={(e) => setTraspaso({ ...traspaso, monto: e.target.value })} />
+                      </label>
+                      <label className="anularVentaModal__motivo"><span>Detalle (opcional)</span>
+                        <input type="text" value={traspaso.descripcion} disabled={traspaso.busy} placeholder="Ej: depósito en Banco Pichincha, papeleta 123" onChange={(e) => setTraspaso({ ...traspaso, descripcion: e.target.value })} />
+                      </label>
+                      <div className="buttonRow">
+                        <button type="button" className="primary" disabled={traspaso.busy || !(Number(traspaso.monto) > 0)} onClick={() => confirmarTraspaso()}>{traspaso.busy ? "Guardando…" : "Registrar"}</button>
+                        <button type="button" disabled={traspaso.busy} onClick={() => setTraspaso(null)}>Cancelar</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Área de trabajo: «Nuevo movimiento» usa todo el ancho; los
                     movimientos de la sesión se ven en «📋 Ver movimientos». */}
@@ -17974,6 +18106,7 @@ Motivo (obligatorio):`, "");
                                   </span>
                                   {isReversed && <span className="chip bad" style={{ marginLeft: 6 }}>ANULADO</span>}
                                   {isReversal && <span className="chip info" style={{ marginLeft: 6 }}>Anulación</span>}
+                                  {m.medio === "BANCO" && dashboard.current_cash_register?.tipo === "MIXTO" && <span className="chip" style={{ marginLeft: 6 }}>🏦 Banco</span>}
                                 </td>
                                 <td style={{ padding: "12px 16px", color: "#6b7280" }}>
                                   {categoryLabel(m.category)}
@@ -18710,10 +18843,19 @@ Motivo (obligatorio):`, "");
                         ) : <Input name="amount" label="Monto $" type="number" />}
                       </>
                     )}
+                    {dashboard.current_cash_register?.tipo === "MIXTO" && movCategory !== "MANTENIMIENTO_EQUIPO" && !esCategoriaSacos(movCategory) && !CASH_REUSE[movCategory] && movModalidad !== "CREDITO" && (
+                      <div className="cjMedio" role="radiogroup" aria-label="Efectivo o banco">
+                        <span>¿{movType === "INCOME" ? "Entró" : "Salió"} en efectivo o por el banco?</span>
+                        <label className={movMedio === "EFECTIVO" ? "is-on" : ""}><input type="radio" checked={movMedio === "EFECTIVO"} onChange={() => setMovMedio("EFECTIVO")} /> 💵 Efectivo</label>
+                        <label className={movMedio === "BANCO" ? "is-on" : ""}><input type="radio" checked={movMedio === "BANCO"} onChange={() => setMovMedio("BANCO")} /> 🏦 Banco / transferencia</label>
+                      </div>
+                    )}
                     <button className="primary"
-                      disabled={CASH_REUSE[movCategory] === "pilado" || CASH_REUSE[movCategory] === "fomento" || (movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !mantPuedeGuardar)
+                      disabled={CASH_REUSE[movCategory] === "pilado" || CASH_REUSE[movCategory] === "fomento" || (CASH_REUSE[movCategory] === "agricultor" && !movPayableId)
+                        || (movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !mantPuedeGuardar)
                         || (movType === "EXPENSE" && movCategory === CATEGORIA_MATERIALES && !movMaquinaId)}
-                      title={movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !mantPuedeGuardar ? "El total a descontar de caja es $0.00"
+                      title={CASH_REUSE[movCategory] === "agricultor" && !movPayableId ? "Elige la liquidación que se paga (así baja la deuda con el agricultor)"
+                        : movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !mantPuedeGuardar ? "El total a descontar de caja es $0.00"
                         : movType === "EXPENSE" && movCategory === CATEGORIA_MATERIALES && !movMaquinaId ? "Elige el equipo / máquina" : undefined}
                       style={{ width: "100%", padding: "10px 0", marginTop: 8 }}>💾 Registrar movimiento</button>
                   </form>

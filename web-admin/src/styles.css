@@ -5695,3 +5695,20 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
   .modalOverlay:has(.cierresMes__modal) { align-items: flex-end; padding: 0; }
   .cierresMes__modal { max-width: none; border-radius: 20px 20px 0 0; }
 }
+
+/* 🔒 Caja: arqueo al cerrar, efectivo/banco y traspaso */
+.cjArqueo { max-width: 500px; gap: 10px; border-top: 5px solid #0f766e; }
+.cjArqueo__fila { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; align-items: center; padding: 10px 12px; border: 1px solid var(--c-border); border-radius: 12px; font-size: 12.5px; }
+.cjArqueo__titulo { grid-column: 1 / -1; font-weight: 800; font-size: 13.5px; }
+.cjArqueo__fila label { display: grid; gap: 2px; margin: 0; font-weight: 700; }
+.cjArqueo__fila input { width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--c-border); font: inherit; font-size: 15px; }
+.cjArqueo__ok { color: #166534; font-weight: 700; }
+.cjArqueo__dif { color: #b91c1c; font-weight: 800; }
+.cjMedio { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0 10px; font-size: 12.5px; }
+.cjMedio > span { flex-basis: 100%; font-weight: 700; }
+.cjMedio label { display: flex; align-items: center; gap: 6px; margin: 0; padding: 7px 12px; border-radius: 999px; border: 1px solid var(--c-border); cursor: pointer; font-weight: 600; }
+.cjMedio label.is-on { border-color: #0f766e; background: #f0fdfa; color: #0f766e; }
+@media (max-width: 640px) {
+  .modalOverlay:has(.cjArqueo) { align-items: flex-end; padding: 0; }
+  .cjArqueo { max-width: none; border-radius: 20px 20px 0 0; }
+}

@@ -155,12 +155,17 @@ async function getCajaBancos(client: PoolClient | typeof pool, accionistaId: str
         WHERE NOT EXISTS (SELECT 1 FROM vigentes)
      )
      SELECT c.tipo,
-            COALESCE(c.opening_balance_cash, 0) AS opening_cash,
-            COALESCE(c.opening_balance_bank, 0) AS opening_bank,
+            COALESCE(c.opening_balance_cash, CASE WHEN c.tipo = 'BANCO' THEN 0 ELSE c.opening_balance END, 0) AS opening_cash,
+            COALESCE(c.opening_balance_bank, CASE WHEN c.tipo = 'BANCO' THEN c.opening_balance ELSE 0 END, 0) AS opening_bank,
+            -- Cada movimiento dice si fue efectivo o banco (migración 20261085).
             COALESCE((SELECT SUM(CASE WHEN m.movement = 'INCOME' THEN m.amount ELSE -m.amount END)
                       FROM cash_movements m
-                     WHERE m.cash_register_id = c.id
-                       AND ($2::date IS NULL OR m.created_at::date <= $2::date)), 0) AS movimientos
+                     WHERE m.cash_register_id = c.id AND COALESCE(m.medio, 'EFECTIVO') = 'EFECTIVO'
+                       AND ($2::date IS NULL OR m.created_at::date <= $2::date)), 0) AS mov_efectivo,
+            COALESCE((SELECT SUM(CASE WHEN m.movement = 'INCOME' THEN m.amount ELSE -m.amount END)
+                      FROM cash_movements m
+                     WHERE m.cash_register_id = c.id AND m.medio = 'BANCO'
+                       AND ($2::date IS NULL OR m.created_at::date <= $2::date)), 0) AS mov_banco
      FROM elegidas c
      ORDER BY c.opened_at ASC`,
     [accionistaId, hasta]
@@ -168,17 +173,8 @@ async function getCajaBancos(client: PoolClient | typeof pool, accionistaId: str
   let efectivo = 0;
   let bancos = 0;
   for (const row of r.rows) {
-    const movimientos = Number(row.movimientos ?? 0);
-    if (row.tipo === "BANCO") {
-      bancos = round2(bancos + Number(row.opening_bank ?? 0) + movimientos);
-    } else if (row.tipo === "MIXTO") {
-      // Los movimientos antiguos no distinguen medio de pago; por compatibilidad
-      // se conservan como efectivo y el saldo bancario inicial queda separado.
-      efectivo = round2(efectivo + Number(row.opening_cash ?? 0) + movimientos);
-      bancos = round2(bancos + Number(row.opening_bank ?? 0));
-    } else {
-      efectivo = round2(efectivo + Number(row.opening_cash ?? 0) + movimientos);
-    }
+    efectivo = round2(efectivo + Number(row.opening_cash ?? 0) + Number(row.mov_efectivo ?? 0));
+    bancos = round2(bancos + Number(row.opening_bank ?? 0) + Number(row.mov_banco ?? 0));
   }
   return { efectivo, bancos, total: round2(efectivo + bancos) };
 }

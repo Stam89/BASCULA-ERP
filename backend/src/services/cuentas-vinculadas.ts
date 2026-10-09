@@ -302,10 +302,16 @@ export async function revertirAbonoDeCuentaPorAnulacion(
         [tablaH, hermanaId, p.monto, m.id]
       )).rows[0];
       if (espejo) {
+        // Si la caja del espejo ya cerró, el contra-asiento va a la caja abierta de ese accionista (si tiene).
+        const cajaEspejo = (await client.query(
+          `SELECT CASE WHEN cr.status = 'OPEN' THEN cr.id
+                       ELSE COALESCE((SELECT o.id FROM cash_registers o WHERE o.accionista_id = cr.accionista_id AND o.status = 'OPEN' ORDER BY o.opened_at DESC LIMIT 1), cr.id) END AS id
+             FROM cash_registers cr WHERE cr.id = $1`, [espejo.cash_register_id]
+        )).rows[0]?.id ?? espejo.cash_register_id;
         await client.query(
           `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, reference_type, reference_id, reversal_of, created_by)
            VALUES ($1, $2, $3, $4, $5, 'reversal', $6, $6, $7)`,
-          [espejo.cash_register_id, espejo.movement === "INCOME" ? "EXPENSE" : "INCOME", espejo.category, espejo.amount,
+          [cajaEspejo, espejo.movement === "INCOME" ? "EXPENSE" : "INCOME", espejo.category, espejo.amount,
            `Anulación (espejo): ${opts.motivo} (mov. ${String(m.id).slice(0, 8)})`, espejo.id, opts.userId]
         );
         await client.query(`UPDATE cash_movements SET reversed_at = now(), reversed_by = $2, reversed_reason = $3 WHERE id = $1`,

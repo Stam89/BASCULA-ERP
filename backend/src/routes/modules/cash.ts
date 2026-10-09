@@ -13,7 +13,7 @@ import { reabrirPagoNomina } from "../../services/nomina-reabrir.js";
 import { espejarAbonoEnContraparte, revertirAbonoDeCuentaPorAnulacion } from "../../services/cuentas-vinculadas.js";
 import { vidaUtilPorTipo } from "../../services/activos.js";
 import ExcelJS from "exceljs";
-import { avisarSobregiro } from "../../services/caja.js";
+import { avisarSobregiro, medioParaCaja, saldosDeCaja } from "../../services/caja.js";
 import type { PoolClient } from "pg";
 
 export const cashRouter = Router();
@@ -64,6 +64,26 @@ async function recordarSubcategoria(client: PoolClient, nombre?: string | null, 
       [n, categoria ?? null]
     );
   } catch { /* la tabla puede no existir aún (migración pendiente): no romper */ }
+}
+
+// Categorías que NO se registran a mano: mueven una cuenta y tienen su flujo propio (si se registran como un
+// movimiento suelto, sale el dinero pero la deuda queda igual y se podría pagar dos veces).
+const CATEGORIAS_CON_FLUJO_PROPIO: Record<string, string> = {
+  PAGO_AGRICULTOR: "Para pagar a un agricultor elige su liquidación (o págala en Por Pagar): así baja su deuda.",
+  FOMENTOS: "Las entregas de fomento se registran en Fomentos (quedan a nombre del agricultor).",
+  PAGO_SERVICIO_PILADO: "El pago del servicio de pilado se registra en Por Pagar (abona la cuenta de la Matriz)."
+};
+
+/** Un movimiento MANUAL de caja solo usa categorías del catálogo, activas y del tipo correcto (o VENTA: venta al detalle). */
+async function validarCategoriaManual(client: PoolClient, category: string, movement: "INCOME" | "EXPENSE"): Promise<void> {
+  if (category === "VENTA" && movement === "INCOME") return; // venta al detalle de Caja (por libra/QQ)
+  if (CATEGORIAS_CON_FLUJO_PROPIO[category]) throw new ApiError(400, CATEGORIAS_CON_FLUJO_PROPIO[category]);
+  const c = (await client.query("SELECT tipo, activo FROM cash_categories WHERE codigo = $1", [category])).rows[0];
+  if (!c) throw new ApiError(400, `La categoría «${category}» no existe en el catálogo de Caja.`);
+  if (!c.activo) throw new ApiError(400, `La categoría «${category}» está desactivada.`);
+  if ((c.tipo === "INGRESO") !== (movement === "INCOME")) {
+    throw new ApiError(400, `La categoría «${category}» es de ${c.tipo === "INGRESO" ? "ingreso" : "egreso"}.`);
+  }
 }
 
 // ── Subcategorías de gasto (memoria para el datalist del form de Caja) ───────
@@ -208,22 +228,22 @@ cashRouter.get("/registers/current", asyncRoute(async (req, res) => {
 }));
 
 // ── Saldo final de la última caja cerrada del accionista (para sugerir apertura) ─
+// Antes buscaba la última caja del MISMO tipo: una caja MIXTA (la de CEYRO) nunca la encontraba y sugería $0.
+// Ahora toma la última caja cerrada (de cualquier tipo) y da su efectivo y su banco por separado.
 cashRouter.get("/registers/previous-balance", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const tipo = String(req.query.tipo ?? "EFECTIVO");
-  const result = await pool.query(
-    `SELECT r.id,
-            COALESCE(r.opening_balance, 0) +
-            COALESCE(SUM(CASE WHEN m.movement = 'INCOME' THEN m.amount ELSE -m.amount END), 0) AS final_balance
-     FROM cash_registers r
-     LEFT JOIN cash_movements m ON m.cash_register_id = r.id
-     WHERE r.accionista_id = $1 AND r.status = 'CLOSED' AND r.tipo = $2
-     GROUP BY r.id
-     ORDER BY r.closed_at DESC NULLS LAST, r.opened_at DESC
-     LIMIT 1`,
-    [accionistaId, tipo]
-  );
-  res.json({ final_balance: Number(result.rows[0]?.final_balance ?? 0) });
+  const last = (await pool.query(
+    `SELECT id FROM cash_registers WHERE accionista_id = $1 AND status = 'CLOSED'
+      ORDER BY closed_at DESC NULLS LAST, opened_at DESC LIMIT 1`,
+    [accionistaId]
+  )).rows[0];
+  if (!last) { res.json({ final_balance: 0, final_efectivo: 0, final_banco: 0 }); return; }
+  const s = await saldosDeCaja(pool, last.id);
+  res.json({
+    final_balance: tipo === "EFECTIVO" ? s.efectivo : tipo === "BANCO" ? s.banco : s.total,
+    final_efectivo: s.efectivo, final_banco: s.banco, caja_anterior: last.id
+  });
 }));
 
 // ── Resumen de caja (balance) ────────────────────────────────────────────────
@@ -249,6 +269,12 @@ cashRouter.get("/registers/:id/summary", asyncRoute(async (req, res) => {
   const opening = Number(reg.rows[0].opening_balance);
   const income = Number(totals.rows[0].total_income);
   const expense = Number(totals.rows[0].total_expense);
+  const saldos = await saldosDeCaja(pool, String(req.params.id));
+  const fondos = await pool.query(
+    `SELECT count(*)::int AS n, COALESCE(sum(amount), 0)::float AS monto FROM cash_movements
+      WHERE cash_register_id = $1 AND es_fondo AND fondo_estado = 'POR_LIQUIDAR' AND reversed_at IS NULL AND reversal_of IS NULL`,
+    [req.params.id]
+  );
 
   res.json({
     ...reg.rows[0],
@@ -256,21 +282,101 @@ cashRouter.get("/registers/:id/summary", asyncRoute(async (req, res) => {
     opening_balance_bank: openingBank,
     total_income: income,
     total_expense: expense,
-    current_balance: opening + income - expense
+    current_balance: opening + income - expense,
+    // Lo que debe haber en la gaveta (efectivo) y en el banco, por separado.
+    saldo_efectivo: saldos.efectivo,
+    saldo_banco: saldos.banco,
+    fondos_por_liquidar: fondos.rows[0]
   });
 }));
 
 // ── Cerrar caja ──────────────────────────────────────────────────────────────
+// ARQUEO: si se manda lo contado (efectivo y/o banco), la diferencia con el sistema queda como «Faltante de caja»
+// (egreso) o «Sobrante de caja» (ingreso) con su motivo, y la caja cierra con el saldo real. Guarda quién cerró y
+// con cuánto (antes no se guardaba). Sin contar, cierra como antes.
 cashRouter.post("/registers/:id/close", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
-  const result = await pool.query(
-    `UPDATE cash_registers SET status = 'CLOSED', closed_at = NOW()
-     WHERE id = $1 AND accionista_id = $2 AND status = 'OPEN'
-     RETURNING *`,
-    [req.params.id, accionistaId]
-  );
-  if (!result.rows[0]) { res.status(400).json({ error: "Caja no está abierta o no existe" }); return; }
-  res.json(result.rows[0]);
+  const userId = (req as AuthenticatedRequest).user?.id ?? null;
+  const body = z.object({
+    efectivo_contado: z.number().nonnegative().optional(),
+    banco_contado: z.number().nonnegative().optional(),
+    notas: z.string().trim().max(300).optional()
+  }).parse(req.body ?? {});
+  const result = await inTransaction(async (client) => {
+    const reg = (await client.query(
+      "SELECT * FROM cash_registers WHERE id = $1 AND accionista_id = $2 FOR UPDATE", [req.params.id, accionistaId]
+    )).rows[0];
+    if (!reg || reg.status !== "OPEN") throw new ApiError(400, "Caja no está abierta o no existe");
+    const sistema = await saldosDeCaja(client, reg.id);
+    const ajustes: Array<{ medio: "EFECTIVO" | "BANCO"; diferencia: number }> = [];
+    if (body.efectivo_contado !== undefined) ajustes.push({ medio: "EFECTIVO", diferencia: round2(body.efectivo_contado - sistema.efectivo) });
+    if (body.banco_contado !== undefined) ajustes.push({ medio: "BANCO", diferencia: round2(body.banco_contado - sistema.banco) });
+    const conDiferencia = ajustes.filter((a) => Math.abs(a.diferencia) > 0.005);
+    if (conDiferencia.length && (body.notas ?? "").length < 5) {
+      throw new ApiError(400, `El arqueo no cuadra (${conDiferencia.map((a) => `${a.medio === "EFECTIVO" ? "efectivo" : "banco"} ${a.diferencia > 0 ? "+" : "−"}$${Math.abs(a.diferencia).toFixed(2)}`).join(", ")}): escribe el motivo de la diferencia.`);
+    }
+    for (const a of conDiferencia) {
+      await client.query(
+        `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, medio, reference_type, reference_id, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, 'arqueo', $1, $7)`,
+        [reg.id, a.diferencia < 0 ? "EXPENSE" : "INCOME", a.diferencia < 0 ? "FALTANTE_CAJA" : "SOBRANTE_CAJA", Math.abs(a.diferencia),
+         `Arqueo al cerrar (${a.medio === "EFECTIVO" ? "efectivo" : "banco"}): ${a.diferencia < 0 ? "faltante" : "sobrante"} · ${body.notas}`, a.medio, userId]
+      );
+    }
+    const final = await saldosDeCaja(client, reg.id);
+    const upd = await client.query(
+      `UPDATE cash_registers SET status = 'CLOSED', closed_at = NOW(), closed_by = $2, closing_balance = $3,
+              closing_cash_counted = $4, closing_bank_counted = $5, closing_diferencia = $6, closing_notas = $7
+        WHERE id = $1 RETURNING *`,
+      [reg.id, userId, final.total, body.efectivo_contado ?? null, body.banco_contado ?? null,
+       ajustes.length ? round2(ajustes.reduce((s, a) => s + a.diferencia, 0)) : null, body.notas || null]
+    );
+    const fondos = (await client.query(
+      `SELECT count(*)::int AS n FROM cash_movements WHERE cash_register_id = $1 AND es_fondo AND fondo_estado = 'POR_LIQUIDAR'
+          AND reversed_at IS NULL AND reversal_of IS NULL`, [reg.id]
+    )).rows[0].n;
+    return { ...upd.rows[0], sistema, final, ajustes: conDiferencia, fondos_por_liquidar: fondos };
+  });
+  res.json(result);
+}));
+
+// ── Traspaso entre EFECTIVO y BANCO de una caja mixta (depositar el efectivo / retirar del banco) ──
+// Dos líneas enlazadas (sale de un medio, entra al otro): el saldo total no cambia. Anular una anula las dos.
+cashRouter.post("/registers/:id/traspaso", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const body = z.object({
+    direccion: z.enum(["DEPOSITO", "RETIRO"]),
+    monto: z.number().positive().transform(round2),
+    descripcion: z.string().trim().max(200).optional()
+  }).parse(req.body);
+  const result = await inTransaction(async (client) => {
+    const reg = (await client.query(
+      "SELECT id, status, tipo FROM cash_registers WHERE id = $1 AND accionista_id = $2 FOR UPDATE", [req.params.id, accionistaId]
+    )).rows[0];
+    if (!reg) throw new ApiError(404, "Caja no disponible para el accionista activo");
+    if (reg.status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+    if (reg.tipo !== "MIXTO") throw new ApiError(400, "El traspaso entre efectivo y banco es para una caja mixta.");
+    const origen = body.direccion === "DEPOSITO" ? "EFECTIVO" : "BANCO";
+    const destino = origen === "EFECTIVO" ? "BANCO" : "EFECTIVO";
+    const s = await saldosDeCaja(client, reg.id);
+    const disponible = origen === "EFECTIVO" ? s.efectivo : s.banco;
+    if (body.monto > disponible + 0.005) {
+      throw new ApiError(409, `No alcanza: hay $${disponible.toFixed(2)} en ${origen === "EFECTIVO" ? "efectivo" : "el banco"}.`);
+    }
+    const txt = body.direccion === "DEPOSITO" ? "Depósito del efectivo al banco" : "Retiro del banco a efectivo";
+    const sale = (await client.query(
+      `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, medio, reference_type, created_by)
+       VALUES ($1, 'EXPENSE', 'TRASPASO_INTERNO', $2, $3, $4, 'traspaso_interno', $5) RETURNING *`,
+      [reg.id, body.monto, `${txt}${body.descripcion ? ` · ${body.descripcion}` : ""}`, origen, (req as AuthenticatedRequest).user?.id ?? null]
+    )).rows[0];
+    const entra = (await client.query(
+      `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, medio, reference_type, reference_id, created_by)
+       VALUES ($1, 'INCOME', 'TRASPASO_INTERNO', $2, $3, $4, 'traspaso_interno', $5, $6) RETURNING *`,
+      [reg.id, body.monto, `${txt}${body.descripcion ? ` · ${body.descripcion}` : ""}`, destino, sale.id, (req as AuthenticatedRequest).user?.id ?? null]
+    )).rows[0];
+    return { sale, entra, saldos: await saldosDeCaja(client, reg.id) };
+  });
+  res.status(201).json(result);
 }));
 
 // ── Editar saldo inicial de una caja abierta (para corregir aperturas con saldo 0) ─
@@ -440,22 +546,53 @@ cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(a
     const m = await getMovimientoDelAccionistaForUpdate(client, req.params.id as string, accionistaId);
     if (m.reversal_of) throw new ApiError(400, "No se puede anular un contra-asiento.");
     if (m.reversed_at) throw new ApiError(400, "Este movimiento ya fue anulado.");
+    if (m.reference_type === "arqueo") throw new ApiError(409, "El faltante/sobrante del arqueo es parte del cierre de esa caja: no se anula.");
+
+    // El contra-asiento va a la caja donde está el dinero HOY: si la caja del movimiento ya se cerró, a la abierta
+    // del mismo accionista (antes caía en la caja cerrada y cambiaba su saldo después del cierre).
+    const cajaMov = (await client.query("SELECT status FROM cash_registers WHERE id = $1", [m.cash_register_id])).rows[0];
+    let cajaDestino = m.cash_register_id;
+    if (cajaMov?.status !== "OPEN") {
+      const abierta = (await client.query(
+        "SELECT id FROM cash_registers WHERE accionista_id = $1 AND status = 'OPEN' ORDER BY opened_at DESC LIMIT 1", [accionistaId ?? null]
+      )).rows[0];
+      if (!abierta) throw new ApiError(409, "La caja de ese movimiento ya se cerró: abre la caja de hoy para registrar la anulación ahí.");
+      cajaDestino = abierta.id;
+    }
 
     // Movimiento opuesto que neutraliza el efecto en el saldo.
     const opposite = m.movement === "INCOME" ? "EXPENSE" : "INCOME";
     const reversal = await client.query(
       `INSERT INTO cash_movements
-         (cash_register_id, movement, category, amount, description, reference_type, reference_id, reversal_of, created_by)
-       VALUES ($1, $2, $3, $4, $5, 'reversal', $6, $6, $7)
+         (cash_register_id, movement, category, amount, description, reference_type, reference_id, reversal_of, created_by, medio)
+       VALUES ($1, $2, $3, $4, $5, 'reversal', $6, $6, $7, $8)
        RETURNING *`,
-      [m.cash_register_id, opposite, m.category, m.amount,
-       `Anulación: ${body.reason} (mov. ${String(m.id).slice(0, 8)})`, m.id, user?.id ?? null]
+      [cajaDestino, opposite, m.category, m.amount,
+       `Anulación: ${body.reason} (mov. ${String(m.id).slice(0, 8)}${cajaDestino !== m.cash_register_id ? ", de una caja ya cerrada" : ""})`, m.id, user?.id ?? null, m.medio ?? null]
     );
 
     await client.query(
       `UPDATE cash_movements SET reversed_at = now(), reversed_by = $2, reversed_reason = $3 WHERE id = $1`,
       [m.id, user?.id ?? null, body.reason]
     );
+
+    // Traspaso efectivo↔banco: sus dos líneas se anulan juntas.
+    if (m.reference_type === "traspaso_interno") {
+      const par = (await client.query(
+        `SELECT * FROM cash_movements WHERE reference_type = 'traspaso_interno' AND reversed_at IS NULL AND reversal_of IS NULL
+            AND id <> $1 AND (id = $2 OR reference_id = $1) FOR UPDATE`,
+        [m.id, m.reference_id]
+      )).rows[0];
+      if (par) {
+        await client.query(
+          `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, reference_type, reference_id, reversal_of, created_by, medio)
+           VALUES ($1, $2, $3, $4, $5, 'reversal', $6, $6, $7, $8)`,
+          [cajaDestino, par.movement === "INCOME" ? "EXPENSE" : "INCOME", par.category, par.amount,
+           `Anulación: ${body.reason} (otra línea del traspaso)`, par.id, user?.id ?? null, par.medio]
+        );
+        await client.query("UPDATE cash_movements SET reversed_at = now(), reversed_by = $2, reversed_reason = $3 WHERE id = $1", [par.id, user?.id ?? null, body.reason]);
+      }
+    }
 
     // Si cobró/pagó una CUENTA, esa cuenta (y su hermana entre accionistas) vuelve a deber lo anulado.
     const cuentaRevertida = await revertirAbonoDeCuentaPorAnulacion(client, m, { userId: user?.id ?? null, motivo: body.reason });
@@ -553,23 +690,26 @@ cashRouter.post("/movements", asyncRoute(async (req, res) => {
     category: z.string().min(1).max(80),
     amount: z.number().positive().transform(round2), // 2 decimales exactos (evita 219.999…)
     description: z.string().optional(),
+    medio: z.enum(["EFECTIVO", "BANCO"]).optional(),
     created_by: z.string().uuid().optional()
   }).parse(req.body);
 
   const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
   const result = await inTransaction(async (client) => {
     const reg = await client.query(
-      "SELECT id, status FROM cash_registers WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
+      "SELECT id, status, tipo FROM cash_registers WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
       [body.cash_register_id, accionistaId]
     );
     if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
     if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+    await validarCategoriaManual(client, body.category, body.movement);
     if (body.movement === "EXPENSE") await avisarSobregiro(client, body.cash_register_id, body.amount, req);
     return client.query(
-      `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, created_by, medio)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [body.cash_register_id, body.movement, body.category, body.amount, body.description, body.created_by]
+      [body.cash_register_id, body.movement, body.category, body.amount, body.description, body.created_by,
+       medioParaCaja(reg.rows[0].tipo, body.medio)]
     );
   });
   res.status(201).json(result.rows[0]);
@@ -639,8 +779,13 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     created_by: z.string().uuid().optional(),
     // Equipo / máquina en que se gastó (sección del catálogo de mantenimiento):
     // el egreso queda en su hoja de vida. Obligatorio en «Materiales consumibles».
-    maquina_id: z.string().uuid().optional()
+    maquina_id: z.string().uuid().optional(),
+    // Efectivo o banco (solo cuenta en una caja MIXTA; las otras tienen un solo medio).
+    medio: z.enum(["EFECTIVO", "BANCO"]).optional()
   }).parse(req.body);
+  // Un movimiento manual no se enlaza a mano a cuentas, ventas, nómina…: cada uno tiene su flujo (si no, al anularlo
+  // devolvería saldo a una cuenta que nunca se pagó).
+  if (body.reference_type || body.reference_id) throw new ApiError(400, "Un movimiento manual no se enlaza a otro registro: usa el flujo de ese módulo.");
   if (body.activo_fijo && (body.movement !== "EXPENSE" || body.category !== "COMPRA_ACTIVO_FIJO")) {
     throw new ApiError(400, "El activo fijo se registra con un EGRESO de categoría «Compra de activo fijo».");
   }
@@ -672,6 +817,7 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
       );
       if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
       if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+      await validarCategoriaManual(client, body.category, body.movement);
       const proveedor = await resolverProveedor(client, body.supplier_id, body.proveedor_nombre);
       if (!proveedor) throw new ApiError(400, "Para registrar un egreso a crédito elige o escribe el proveedor.");
       const cat = await client.query("SELECT nombre FROM cash_categories WHERE codigo = $1", [body.category]);
@@ -700,23 +846,24 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
 
   const row = await inTransaction(async (client) => {
     const reg = await client.query(
-      "SELECT id, status FROM cash_registers WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
+      "SELECT id, status, tipo FROM cash_registers WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
       [req.params.id, accionistaId]
     );
     if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
     if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+    await validarCategoriaManual(client, body.category, body.movement);
     if (body.movement === "EXPENSE") await avisarSobregiro(client, req.params.id as string, body.amount, req);
     // Proveedor (opcional) del egreso de contado.
     const proveedor = body.movement === "EXPENSE" ? await resolverProveedor(client, body.supplier_id, body.proveedor_nombre) : null;
     const mov = await client.query(
       `INSERT INTO cash_movements
         (cash_register_id, movement, category, amount, description, reference_type, reference_id, created_by,
-         subcategoria, maq_activo, area, es_fondo, responsable, fondo_estado, supplier_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+         subcategoria, maq_activo, area, es_fondo, responsable, fondo_estado, supplier_id, medio)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        RETURNING *`,
-      [req.params.id, body.movement, body.category, body.amount, body.description, body.reference_type, body.reference_id, body.created_by,
+      [req.params.id, body.movement, body.category, body.amount, body.description, null, null, body.created_by,
        body.subcategoria?.trim() || null, body.maq_activo?.trim() || null, body.area?.trim() || null, esFondo, esFondo ? (body.responsable?.trim() || null) : null, fondoEstado,
-       proveedor?.id ?? null]
+       proveedor?.id ?? null, medioParaCaja(reg.rows[0].tipo, body.medio)]
     );
     await recordarSubcategoria(client, body.subcategoria, body.category);
     // Equipo / máquina: el egreso entra a su hoja de vida (Materiales consumibles…).
