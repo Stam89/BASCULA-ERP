@@ -26,7 +26,6 @@ try {
     `SELECT COALESCE(sum(m.quantity),0)::float n FROM inventory_movements m JOIN warehouses w ON w.id=m.warehouse_id
       WHERE m.product_id=$1 AND m.accionista_id=$2 AND m.ownership='OWNED' AND (w.type='EXTERNO') = $3`, [pid, acc, externo]))[0].n);
   const piladora = (pid) => stock(pid, false), alla = (pid) => stock(pid, true);
-  const inv0 = (await api("GET", "/finance/balance", undefined, acc)).data.activo.corriente.inventario_detalle;
 
   // ── A. Mandar a envejecer y registrar el informe: parte llegó, parte quedó allá ──
   const p0 = await piladora(arroz), a0 = await alla(arroz), p34 = await piladora(a34);
@@ -58,6 +57,7 @@ try {
 
   // ── C. Traer a la piladora ──
   const pA = await piladora(arroz), aA = await alla(arroz);
+  const inv0 = (await api("GET", "/finance/balance", undefined, acc)).data.activo.corriente.inventario_detalle;
   exigir(await api("POST", "/selection/traer", { provider_id: prov.id, items: [{ product_id: arroz, quantity: 3 }], notes: "viaje 1" }, acc), "C1. traer 3 QQ de envejecido");
   check(r3(await piladora(arroz) - pA) === 3 && r3(aA - await alla(arroz)) === 3, "C2. +3 en la piladora y −3 allá");
   const antes34 = [await piladora(a34), await alla(a34)];
@@ -68,7 +68,7 @@ try {
 
   // ── D. Lo de allá sigue siendo del socio (inventario del balance) ──
   const inv1 = (await api("GET", "/finance/balance", undefined, acc)).data.activo.corriente.inventario_detalle;
-  check(inv1.total >= inv0.total - 0.01, "D1. el balance cuenta lo que está allá: traer de un lado al otro no cambia el inventario total", { antes: inv0.total, ahora: inv1.total });
+  check(Math.abs(inv1.total - inv0.total) < 0.01, "D1. el balance cuenta lo que está allá: traerlo a la piladora no cambia el inventario total", { antes: inv0.total, ahora: inv1.total });
   const stockApi = (await api("GET", "/inventory/stock", undefined, acc)).data;
   check(stockApi.some((r) => r.warehouse_type === "EXTERNO" && r.product_id === arroz), "D2. Inventario recibe la parte de allá marcada (para mostrarla aparte)");
 
