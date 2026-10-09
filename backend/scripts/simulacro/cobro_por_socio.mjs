@@ -47,10 +47,10 @@ try {
   check(sinCaja.status === 409 && /caja abierta/.test(JSON.stringify(sinCaja.data)), "C1. si el que recibió no tiene caja abierta → aviso claro (409)", mostrar(sinCaja));
   const rol = (await q("SELECT id FROM roles WHERE name='OPERADOR'"))[0].id;
   const u = (await q("INSERT INTO users (name, username, password_hash, role_id, is_active) VALUES ('sim_cobro_socio','sim_cobro_socio','x',$1,true) RETURNING id", [rol]))[0];
-  await q("INSERT INTO user_accionistas (user_id, accionista_id, allowed_modules) VALUES ($1,$2,$3)", [u.id, stalyn, ["Por Cobrar", "Caja"]]);
+  await q("INSERT INTO user_accionistas (user_id, accionista_id, allowed_modules) VALUES ($1,$2,$3)", [u.id, stalyn, ["Por Cobrar", "EDIT:Por Cobrar", "Caja", "EDIT:Caja"]]);
   const operador = apiComo(u.id, "sim_cobro_socio", "sim_cobro_socio", stalyn);
   const sinAcceso = await operador("POST", "/receivable/pay-group", { receivable_ids: [ar], amount: 5, recibido_por: ceyro });
-  check(sinAcceso.status === 403, "C2. un operador que no tiene acceso a la caja de CEYRO no puede registrarlo (403)", mostrar(sinAcceso));
+  check(sinAcceso.status === 403 && /acceso a la caja de CEYRO/.test(JSON.stringify(sinAcceso.data)), "C2. un operador que no tiene acceso a la caja de CEYRO no puede registrarlo (403)", mostrar(sinAcceso));
   const deMas = await api("POST", "/receivable/pay-group", { receivable_ids: [ar], amount: 41, recibido_por: ceyro }, stalyn);
   check(deMas.status === 409, "C3. no se puede registrar más de lo que debe el cliente", mostrar(deMas));
 
