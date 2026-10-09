@@ -3,7 +3,7 @@ import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { CATEGORIAS_NO_OPERATIVAS } from "../../services/resultado-mensual.js";
 
 export const reportsRouter = Router();
@@ -47,8 +47,8 @@ async function hasTable(name: string): Promise<boolean> {
   return exists;
 }
 
-// Todos los reportes requieren rol administrador (datos financieros del negocio).
-reportsRouter.use(requireAdmin);
+// Reportes: leerlos exige el permiso «Reportes» y apartar arianos «Editar» en Reportes
+// (require-auth: READ_MODULES_BY_PREFIX / WRITE_MODULES_BY_PREFIX). Cada reporte es del accionista activo.
 
 // ── Arianos: arroz ya secado que aun no se procesa ──────────────────────────
 // "Apartar como arianos" marca el secado para que deje de contar como pendiente

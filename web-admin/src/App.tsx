@@ -1661,14 +1661,14 @@ const PERM_MATRIX: Array<{ label: string; rows: Array<{ key: string; label: stri
     { key: "Produccion", label: "Producción" }, { key: "Gana", label: "Gana" },
     { key: "Inventario", label: "Inventario" }, { key: "Seleccion", label: "Selección" },
     { key: "Transporte / Cosechadora", label: "Transporte / Cosechadora" },
-    { key: "Gestión de Cuadrilla", label: "Gestión de Cuadrilla" },
+    // «Gestión de Cuadrilla» y «Bancos» se quitaron (2026-10-08): no abrían ninguna pantalla ni
+    // permitían nada. La cuadrilla se gobierna con Nómina › Cuadrilla / Bajada de carro.
   ] },
   { label: "COMERCIAL", rows: [{ key: "Ventas", label: "Ventas" }, { key: "Compras", label: "Compras" }, { key: "Caja", label: "Caja" }] },
   { label: "CUENTAS", rows: [{ key: "Por Cobrar", label: "Por Cobrar" }, { key: "Por Pagar", label: "Por Pagar" }] },
   { label: "FINANZAS", rows: [
     { key: "Liquidaciones", label: "Liquidaciones" }, { key: "Fomentos", label: "Fomentos" },
     { key: "Agricultores", label: "Agricultores" }, { key: "Nomina", label: "Nómina" },
-    { key: "Bancos", label: "Bancos" },
   ] },
   { label: "CONTABILIDAD", rows: [{ key: "Costos Operativos", label: "Costos Operativos" }, { key: "Estados Financieros", label: "Estados Financieros" }] },
   { label: "SISTEMA", rows: [{ key: "Reportes", label: "Reportes" }] },
@@ -6466,7 +6466,8 @@ export function App() {
   }
 
   useEffect(() => {
-    if (activeTab === "Reportes") loadReport("resumen").catch(() => undefined);
+    // Abre la primera sub-pestaña que el usuario puede ver (si le marcaron solo algunas, el servidor niega las otras).
+    if (activeTab === "Reportes") { const k = (SUB_TABS.Reportes.find((s) => puedeVerSubTab("Reportes", s.key))?.key ?? "resumen") as ReportKind; loadReport(k).catch(() => undefined); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
@@ -13242,7 +13243,8 @@ Motivo (obligatorio):`, "");
                 </div>
               </div>
             </div>
-            <div style={{ marginTop: 12, borderTop: "1px solid var(--c-border)", paddingTop: 10 }}>
+            {/* Diagnóstico técnico: el servidor lo permite solo al administrador. */}
+            {isAdmin && <div style={{ marginTop: 12, borderTop: "1px solid var(--c-border)", paddingTop: 10 }}>
               <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
                 <p className="muted" style={{ margin: 0 }}>
                   Diagnóstico para confirmar cuántos tickets tiene Firebase y cuántos ya están en este ERP.
@@ -13280,7 +13282,7 @@ Motivo (obligatorio):`, "");
                   </table>
                 </div>
               )}
-            </div>
+            </div>}
           </div>
 
           <div className="tablePanel">

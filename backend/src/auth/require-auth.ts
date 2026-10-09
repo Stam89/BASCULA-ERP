@@ -88,7 +88,9 @@ const WRITE_MODULES_BY_PREFIX: Record<string, AppModule[]> = {
   // Escribir exige EDIT:Transporte / Cosechadora; leer, ver READ_MODULES_BY_PREFIX.
   "campo": ["Transporte / Cosechadora"],
   // Cifras manuales y rubros del Resultado mensual (pestaña Costos Operativos).
-  "resultado-mensual": ["Costos Operativos"]
+  "resultado-mensual": ["Costos Operativos"],
+  // Pestaña Reportes: «Apartar como arianos» y su ubicación.
+  "reports": ["Reportes"]
 };
 
 // Quién puede LEER cada prefijo: basta tener el módulo (Ver o Editar) en ALGUNA de las pestañas que
@@ -115,6 +117,7 @@ const READ_MODULES_BY_PREFIX: Record<string, ReglaLectura> = {
   "finance": { modules: ["Estados Financieros", "Caja", "Costos Operativos", "Por Pagar", "Por Cobrar"], abiertas: [/^\/bank\/accounts\/?$/] },
   "costos": { modules: ["Costos Operativos", "Caja", "Produccion", "Estados Financieros"] },
   "resultado-mensual": { modules: ["Costos Operativos", "Estados Financieros"] },
+  "reports": { modules: ["Reportes"] },
   "labor": { modules: ["Nomina", "Caja", "Produccion", "Secadoras", "Gana", "Servicio Pilado", "Cuadrilla", "Gestión de Cuadrilla"], abiertas: [/^\/rates\/?$/] },
   "nomina-semanal": { modules: ["Nomina", "Caja"] },
   "admin-payroll": { modules: ["Nomina", "Caja"] },
@@ -143,6 +146,29 @@ export function reglaDeLectura(prefix: string, rest: string): string[] | null {
   if (!regla) return null;
   if (regla.abiertas?.some((re) => re.test(rest || "/"))) return null;
   return regla.modules;
+}
+
+// Lecturas que pertenecen a una SUB-PESTAÑA (claves SUB:<módulo>:<sub> del web-admin). Si el
+// administrador marcó alguna sub-pestaña de ese módulo, solo se leen las marcadas (misma regla
+// que la pantalla: sin ninguna marcada, se ven todas).
+const SUB_DE_LECTURA: Record<string, { module: string; subs: Record<string, string> }> = {
+  "reports": { module: "Reportes", subs: {
+    summary: "resumen", sales: "ventas", liquidations: "liquidaciones", expenses: "gastos", production: "produccion",
+    fuel: "combustible", "receivable-aging": "porcobrar", arianos: "arianos", servicios: "servicios"
+  } }
+};
+
+/** Sub-pestaña que exige esta lectura, o null. */
+export function subDeLectura(prefix: string, rest: string): { module: string; sub: string } | null {
+  const regla = SUB_DE_LECTURA[prefix];
+  const sub = regla?.subs[rest.split("/")[1] ?? ""];
+  return regla && sub ? { module: regla.module, sub } : null;
+}
+
+/** ¿Las sub-pestañas marcadas le permiten esta? (sin ninguna marcada de ese módulo → todas) */
+export function subPermitida(allowed: string[], module: string, sub: string): boolean {
+  const marcadas = allowed.filter((k) => k.startsWith(`SUB:${module}:`));
+  return marcadas.length === 0 || marcadas.includes(`SUB:${module}:${sub}`);
 }
 
 // Escrituras que pertenecen a una SUB-PESTAÑA concreta del módulo (mismas claves
@@ -215,7 +241,7 @@ export function exigirLecturaEn(modules: string[]) {
   };
 }
 
-async function verificarLectura(req: Request, modules: string[]): Promise<void> {
+async function verificarLectura(req: Request, modules: string[], sub?: { module: string; sub: string } | null): Promise<void> {
   const user = (req as AuthenticatedRequest).user;
   if (!user) throw new ApiError(401, "Sesión requerida");
   // Rol y módulos se releen de la base (igual que en las escrituras): el token puede tener 12 h.
@@ -229,8 +255,9 @@ async function verificarLectura(req: Request, modules: string[]): Promise<void> 
   );
   if (!fresh.rowCount || !fresh.rows[0].is_active) throw new ApiError(401, "Tu usuario fue desactivado. Habla con un administrador.");
   if (fresh.rows[0].role_name === "ADMINISTRADOR") return;
-  if (puedeLeer(fresh.rows[0].allowed_modules ?? [], modules)) return;
-  throw new ApiError(403, `Tu usuario no tiene permiso para ver ${modules[0]} en este accionista. Pide acceso a un administrador.`);
+  const allowed: string[] = fresh.rows[0].allowed_modules ?? [];
+  if (!puedeLeer(allowed, modules)) throw new ApiError(403, `Tu usuario no tiene permiso para ver ${modules[0]} en este accionista. Pide acceso a un administrador.`);
+  if (sub && !subPermitida(allowed, sub.module, sub.sub)) throw new ApiError(403, `No tienes acceso a ${sub.module} › ${sub.sub} en este accionista. Pide acceso a un administrador.`);
 }
 
 async function aplicarPermisosDeEscritura(req: Request, _res: Response, next: NextFunction, forzado?: { prefix: string; modules: AppModule[] }) {
@@ -241,9 +268,10 @@ async function aplicarPermisosDeEscritura(req: Request, _res: Response, next: Ne
   if (req.method === "GET" || req.method === "HEAD") {
     // Lectura: solo se limita en los prefijos con regla (datos de dinero y de cada módulo).
     const prefix = req.path.split("/")[1] ?? "";
-    const modules = forzado ? null : reglaDeLectura(prefix, req.path.slice(prefix.length + 1));
+    const rest = req.path.slice(prefix.length + 1);
+    const modules = forzado ? null : reglaDeLectura(prefix, rest);
     if (!modules) { next(); return; }
-    verificarLectura(req, modules).then(() => next(), next);
+    verificarLectura(req, modules, subDeLectura(prefix, rest)).then(() => next(), next);
     return;
   }
   const user = (req as AuthenticatedRequest).user;

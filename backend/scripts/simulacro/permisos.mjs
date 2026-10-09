@@ -26,7 +26,8 @@ const POR_PESTANA = {
   Nomina: ["/labor/rates", "/labor/summary?from=2026-10-01&to=2026-10-07", "/cuadrilla/bajadas/pendiente", "/cuadrilla/summary?from=2026-10-01&to=2026-10-07", "/nomina-semanal/vista", "/admin-payroll/staff"],
   "Costos Operativos": ["/costos", "/costos/batches", "/cash/categories", "/resultado-mensual/categorias-caja"],
   "Estados Financieros": ["/finance/dashboard", "/finance/bank/accounts"],
-  "Transporte / Cosechadora": ["/campo/activos?solo_activos=1", "/campo/cuentas"]
+  "Transporte / Cosechadora": ["/campo/activos?solo_activos=1", "/campo/cuentas"],
+  Reportes: ["/reports/summary?from=2026-10-01&to=2026-10-08&scope=cash", "/reports/arianos"]
 };
 
 try {
@@ -42,7 +43,7 @@ try {
   const bas = await crear("sim_solo_bascula", ["Bascula", "EDIT:Bascula"]);
   for (const p of ["/cash/payables", "/liquidations", "/fomentos", "/sales", "/orders", "/receivable", "/finance/dashboard",
     "/labor/summary?from=2026-10-01&to=2026-10-07", "/admin-payroll/staff", "/costos", "/resultado-mensual/categorias-caja",
-    "/campo/cuentas", "/purchases", "/pilado/services", "/customers"]) {
+    "/campo/cuentas", "/purchases", "/pilado/services", "/customers", "/reports/summary?from=2026-10-01&to=2026-10-08"]) {
     check(await st(bas, "GET", p) === 403, `A. sin el módulo NO puede ver ${p}`);
   }
   for (const p of [...GLOBAL, ...POR_PESTANA.Bascula, "/labor/rates", "/selection/rates", "/cash/categories", "/finance/bank/accounts"]) {
