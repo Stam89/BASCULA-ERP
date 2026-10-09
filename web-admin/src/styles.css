@@ -5616,7 +5616,8 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 
 /* 📥📤 Por Cobrar / Por Pagar: filtros con su total, buscador, antigüedad y tarjetas en el celular */
 .cuentasChip { font-size: 12px; padding: 6px 14px; border-radius: 999px; min-width: 0; }
-.cuentasChip small { font-weight: 600; opacity: .85; }
+.cuentasChip small { font-weight: 600; opacity: .85; color: inherit; }
+.cuentasChip.primary small { color: #fff; opacity: .95; }
 .cuentasBuscar { width: 100%; max-width: 360px; box-sizing: border-box; margin: 8px 0 0; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--c-border); font: inherit; }
 .cuentasEdad { display: inline-block; margin-top: 3px; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: #f1f5f9; color: #475569; }
 .cuentasEdad--media { background: #fef3c7; color: #92400e; }
