@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 import { pool } from "../db/pool.js";
+import { CATEGORIAS_NO_OPERATIVAS } from "./resultado-mensual.js";
 
 /**
  * MOTOR FINANCIERO
@@ -14,6 +15,10 @@ import { pool } from "../db/pool.js";
  */
 
 const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
+
+/** Salidas de inventario que son una VENTA: pedidos/ventas y la venta al detalle de Caja (ajuste con esa nota). */
+const SALIDA_POR_VENTA = `(m.reference_type IN ('sales', 'sales_order')
+       OR (m.reference_type = 'manual_adjustment' AND m.notes ILIKE 'Venta al detalle%'))`;
 const div = (a: number, b: number) => (b !== 0 ? round2(a / b) : 0);
 
 export type Cuenta = { concepto: string; valor: number; detalle?: string };
@@ -91,17 +96,18 @@ async function costoQqTerminado(
 }
 
 /** Inventario valorizado a costo, separado por tipo de producto. */
-export async function getInventarioValorizado(client: PoolClient | typeof pool, accionistaId: string) {
+export async function getInventarioValorizado(client: PoolClient | typeof pool, accionistaId: string, hasta: string | null = null) {
   const costoMp = await costoQqMateriaPrima(client, accionistaId);
   const costoPt = await costoQqTerminado(client, accionistaId, costoMp);
 
+  // Cantidades A LA FECHA del corte (para el cierre de mes): solo movimientos hasta ese día.
   const r = await client.query(
     `SELECT p.product_type, COALESCE(SUM(m.quantity), 0) AS qq
      FROM inventory_movements m
      JOIN products p ON p.id = m.product_id
-     WHERE m.accionista_id = $1
+     WHERE m.accionista_id = $1 AND ($2::date IS NULL OR m.created_at::date <= $2::date)
      GROUP BY p.product_type`,
-    [accionistaId]
+    [accionistaId, hasta]
   );
 
   let materiaPrima = 0;
@@ -125,18 +131,39 @@ export async function getInventarioValorizado(client: PoolClient | typeof pool, 
   };
 }
 
-/** Caja y bancos: saldo real de las cajas abiertas, separado por tipo. */
-async function getCajaBancos(client: PoolClient | typeof pool, accionistaId: string) {
+/**
+ * Caja y bancos A LA FECHA del corte, separado por tipo. Cuentan las cajas que estaban vigentes ese día
+ * (abiertas hasta entonces, o cerradas ese mismo día o después) con sus movimientos hasta esa fecha.
+ * Si ese día no había ninguna caja abierta (se cerró y aún no se abría la siguiente), cuenta con lo que
+ * quedó en la última que se cerró: antes el dinero «desaparecía» del balance mientras la caja estaba cerrada.
+ */
+async function getCajaBancos(client: PoolClient | typeof pool, accionistaId: string, hasta: string | null = null) {
   const r = await client.query(
-    `SELECT c.tipo,
+    `WITH candidatas AS (
+       SELECT c.*
+         FROM cash_registers c
+        WHERE c.accionista_id = $1
+          AND ($2::date IS NULL OR c.opened_at::date <= $2::date)
+     ), vigentes AS (
+       SELECT * FROM candidatas
+        WHERE ($2::date IS NULL AND status = 'OPEN')
+           OR ($2::date IS NOT NULL AND (closed_at IS NULL OR closed_at::date >= $2::date))
+     ), elegidas AS (
+       SELECT * FROM vigentes
+       UNION ALL
+       SELECT * FROM (SELECT * FROM candidatas ORDER BY opened_at DESC LIMIT 1) ultima
+        WHERE NOT EXISTS (SELECT 1 FROM vigentes)
+     )
+     SELECT c.tipo,
             COALESCE(c.opening_balance_cash, 0) AS opening_cash,
             COALESCE(c.opening_balance_bank, 0) AS opening_bank,
             COALESCE((SELECT SUM(CASE WHEN m.movement = 'INCOME' THEN m.amount ELSE -m.amount END)
-                      FROM cash_movements m WHERE m.cash_register_id = c.id), 0) AS movimientos
-     FROM cash_registers c
-     WHERE c.accionista_id = $1 AND c.status = 'OPEN'
+                      FROM cash_movements m
+                     WHERE m.cash_register_id = c.id
+                       AND ($2::date IS NULL OR m.created_at::date <= $2::date)), 0) AS movimientos
+     FROM elegidas c
      ORDER BY c.opened_at ASC`,
-    [accionistaId]
+    [accionistaId, hasta]
   );
   let efectivo = 0;
   let bancos = 0;
@@ -224,20 +251,37 @@ export async function getEstadoResultados(
      FROM sales WHERE accionista_id = $1 AND sale_status <> 'CANCELLED' AND created_at::date BETWEEN $2 AND $3`,
     rango
   );
-  const pilado = await client.query(
-    `SELECT COALESCE(SUM(total), 0) AS v
-     FROM pilado_services WHERE provider_accionista_id = $1 AND service_date BETWEEN $2 AND $3`,
+  // Venta al detalle (Caja → por libra/QQ): no crea una «venta», solo el ingreso VENTA en caja sin referencia.
+  const ventasDetalle = await client.query(
+    `SELECT COALESCE(SUM(m.amount), 0) AS v
+       FROM cash_movements m JOIN cash_registers c ON c.id = m.cash_register_id
+      WHERE c.accionista_id = $1 AND m.movement = 'INCOME' AND m.category = 'VENTA'
+        AND COALESCE(m.reference_type, '') <> 'sales'
+        AND m.reversed_at IS NULL AND m.reversal_of IS NULL
+        AND m.created_at::date BETWEEN $2 AND $3`,
+    rango
+  );
+  // Servicios que este accionista facturó en el período (devengado): cada servicio nace como una cuenta
+  // por cobrar (pilado, solo secado, sacos del servicio, empaque y cobros de la Matriz a socios). Sin anulados.
+  const servicios = await client.query(
+    `SELECT COALESCE(SUM(amount), 0) AS v
+       FROM accounts_receivable
+      WHERE accionista_id = $1 AND status <> 'CANCELLED'
+        AND reference_type IN ('pilado_service', 'secado_service', 'sacos_servicio', 'packaging_charge', 'service_charge')
+        AND created_at::date BETWEEN $2 AND $3`,
     rango
   );
 
-  // Costo de la mercadería vendida: los quintales que salieron por venta,
-  // valorizados al costo del producto terminado.
+  // Costo de la mercadería vendida: los quintales que salieron POR VENTA (pedidos, ventas y venta al
+  // detalle), valorizados al costo del producto terminado. Antes contaba TODA salida (incluida la
+  // cáscara que entra al molino), así que el costo de ventas salía inflado.
   const costoMp = await costoQqMateriaPrima(client, accionistaId);
   const costoPt = await costoQqTerminado(client, accionistaId, costoMp);
   const salidas = await client.query(
     `SELECT COALESCE(SUM(-m.quantity), 0) AS qq
      FROM inventory_movements m
-     WHERE m.accionista_id = $1 AND m.movement = 'OUT'
+     WHERE m.accionista_id = $1 AND m.quantity < 0
+       AND ${SALIDA_POR_VENTA}
        AND m.created_at::date BETWEEN $2 AND $3`,
     rango
   );
@@ -250,22 +294,29 @@ export async function getEstadoResultados(
      WHERE l.accionista_id = $1 AND d.created_at::date BETWEEN $2 AND $3`,
     rango
   );
-  const gastos = await client.query(
-    `SELECT COALESCE(SUM(amount), 0) AS v
-     FROM expenses WHERE accionista_id = $1 AND created_at::date BETWEEN $2 AND $3`,
-    rango
+  // Gastos y mano de obra: lo que de verdad salió de las cajas de este accionista en el período
+  // (sin anulados). Antes se leían tablas que ya no se usan (expenses, labor_payments) y salían en 0.
+  // No son gasto: compra de cáscara, fomentos, pagos entre socios, activos fijos… (CATEGORIAS_NO_OPERATIVAS).
+  const egresos = await client.query(
+    `SELECT COALESCE(SUM(m.amount) FILTER (WHERE m.category = 'PAGO_MANO_OBRA'), 0) AS mano_obra,
+            COALESCE(SUM(m.amount) FILTER (WHERE m.category <> 'PAGO_MANO_OBRA'), 0) AS gastos
+       FROM cash_movements m JOIN cash_registers c ON c.id = m.cash_register_id
+      WHERE c.accionista_id = $1 AND m.movement = 'EXPENSE'
+        AND m.reversed_at IS NULL AND m.reversal_of IS NULL
+        AND NOT (COALESCE(m.category, '') = ANY($4::text[]))
+        AND m.created_at::date BETWEEN $2 AND $3`,
+    [accionistaId, desde, hasta, CATEGORIAS_NO_OPERATIVAS]
   );
-  const manoObra = await client.query(
-    `SELECT COALESCE(SUM(total_amount), 0) AS v
-     FROM labor_payments WHERE paid_at::date BETWEEN $1 AND $2`,
-    [desde, hasta]
-  );
+  const gastos = { rows: [{ v: egresos.rows[0].gastos }] };
+  const manoObra = { rows: [{ v: egresos.rows[0].mano_obra }] };
 
   const activos = await getActivosFijos(client, accionistaId, hasta);
   const dias = Math.max(1, (new Date(hasta).getTime() - new Date(desde).getTime()) / (24 * 3600 * 1000));
   const depreciacionPeriodo = round2((activos.depreciacion_anual / 365.25) * dias);
 
-  const ingresos = round2(Number(ventas.rows[0].v) + Number(pilado.rows[0].v));
+  const ingresoServicios = round2(Number(servicios.rows[0].v));
+  const totalVentas = round2(Number(ventas.rows[0].v) + Number(ventasDetalle.rows[0].v));
+  const ingresos = round2(totalVentas + ingresoServicios);
   const costoTotal = round2(costoVentas + Number(combustible.rows[0].v));
   const utilidadBruta = round2(ingresos - costoTotal);
   const gastosOperativos = round2(Number(gastos.rows[0].v) + Number(manoObra.rows[0].v) + depreciacionPeriodo);
@@ -274,8 +325,9 @@ export async function getEstadoResultados(
   return {
     periodo: { desde, hasta },
     ingresos: {
-      ventas: round2(Number(ventas.rows[0].v)),
-      servicio_pilado: round2(Number(pilado.rows[0].v)),
+      ventas: totalVentas,
+      ventas_detalle: round2(Number(ventasDetalle.rows[0].v)),
+      servicio_pilado: ingresoServicios,
       total: ingresos
     },
     costo_ventas: {
@@ -314,7 +366,8 @@ export async function getCostoVentasDetalle(
             m.reference_type, (-m.quantity) AS qq
      FROM inventory_movements m
      LEFT JOIN products p ON p.id = m.product_id
-     WHERE m.accionista_id = $1 AND m.movement = 'OUT'
+     WHERE m.accionista_id = $1 AND m.quantity < 0
+       AND ${SALIDA_POR_VENTA}
        AND m.created_at::date BETWEEN $2 AND $3
      ORDER BY m.created_at DESC`,
     rango
@@ -375,8 +428,8 @@ export async function getBalanceGeneral(
   hasta: string
 ) {
   const settings = await getSettings(client, accionistaId);
-  const caja = await getCajaBancos(client, accionistaId);
-  const inventario = await getInventarioValorizado(client, accionistaId);
+  const caja = await getCajaBancos(client, accionistaId, hasta);
+  const inventario = await getInventarioValorizado(client, accionistaId, hasta);
   const activosFijos = await getActivosFijos(client, accionistaId, hasta);
 
   const porCobrar = await client.query(
@@ -452,6 +505,9 @@ export async function getBalanceGeneral(
     },
     // Prueba de cuadre: activo = pasivo + patrimonio. Debe dar 0.
     cuadre: round2(totalActivo - (totalPasivo + totalPatrimonio)),
+    // Caja e inventario salen A LA FECHA del corte; las cuentas por cobrar/pagar y los anticipos, con el
+    // saldo de HOY. Para un cierre de mes exacto, imprime/exporta el balance el último día del mes.
+    cuentas_al_dia_de_hoy: hasta < new Date().toLocaleDateString("en-CA", { timeZone: "America/Guayaquil" }),
     resultados
   };
 }
@@ -480,7 +536,7 @@ export async function getFlujoCaja(
 
   const totalEntradas = round2(entradas.reduce((s, x) => s + x.valor, 0));
   const totalSalidas = round2(salidas.reduce((s, x) => s + x.valor, 0));
-  const caja = await getCajaBancos(client, accionistaId);
+  const caja = await getCajaBancos(client, accionistaId, hasta);
 
   return {
     periodo: { desde, hasta },

@@ -658,7 +658,7 @@ financeRouter.get("/export/excel", asyncRoute(async (req, res) => {
   const e = data.resultados;
   seccion(ws2, "INGRESOS");
   linea(ws2, "Ventas de arroz y subproductos", e.ingresos.ventas, { sangria: 3 });
-  linea(ws2, "Servicio de pilado", e.ingresos.servicio_pilado, { sangria: 3 });
+  linea(ws2, "Servicios (pilado, secado, empaque)", e.ingresos.servicio_pilado, { sangria: 3 });
   linea(ws2, "Total ingresos", e.ingresos.total, { negrita: true });
   ws2.addRow([]);
   seccion(ws2, "COSTO DE VENTAS");

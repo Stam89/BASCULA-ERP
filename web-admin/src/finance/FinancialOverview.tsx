@@ -22,6 +22,7 @@ export type FinancialOverviewData = {
     pasivo: { corriente: { cuentas_por_pagar: number }; total: number };
     patrimonio: { capital_social: number; resultados_acumulados: number; resultado_ejercicio: number; ajuste_apertura: number; total: number };
     cuadre: number;
+    cuentas_al_dia_de_hoy?: boolean;
   };
   resultados: {
     ingresos: { ventas: number; servicio_pilado: number; total: number };
@@ -128,10 +129,11 @@ export default function FinancialOverview({ data, onOpenCostDetail }: { data: Fi
           <tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border-strong)" }}><td>TOTAL PATRIMONIO</td><td className="num">{money(data.balance.patrimonio.total)}</td></tr>
         </tbody></table>
         <p style={{ marginTop: 8, fontWeight: 700, color: Math.abs(data.balance.cuadre) < 0.01 ? "#15803d" : "#b91c1c" }}>{Math.abs(data.balance.cuadre) < 0.01 ? "✓ Balance cuadrado (Activo = Pasivo + Patrimonio)" : `⚠ Descuadre de ${money(data.balance.cuadre)}`}</p>
+        {data.balance.cuentas_al_dia_de_hoy && <p className="muted" style={{ marginTop: 4, fontSize: 12 }}>📅 Caja e inventario están a la fecha del corte; las cuentas por cobrar, por pagar y los anticipos, con el saldo de HOY. Para el cierre de mes, imprime o exporta el balance el último día del mes.</p>}
       </div>
       <div className="tablePanel">
         <h2>📑 Estado de Resultados</h2><table className="cajaTable" style={{ marginTop: 8 }}><tbody>
-          <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>INGRESOS</td></tr><tr><td>Ventas</td><td className="num">{money(data.resultados.ingresos.ventas)}</td></tr><tr><td>Servicio de pilado</td><td className="num">{money(data.resultados.ingresos.servicio_pilado)}</td></tr><tr style={{ fontWeight: 700 }}><td>Total ingresos</td><td className="num">{money(data.resultados.ingresos.total)}</td></tr>
+          <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>INGRESOS</td></tr><tr><td>Ventas</td><td className="num">{money(data.resultados.ingresos.ventas)}</td></tr><tr><td>Servicios (pilado, secado, empaque)</td><td className="num">{money(data.resultados.ingresos.servicio_pilado)}</td></tr><tr style={{ fontWeight: 700 }}><td>Total ingresos</td><td className="num">{money(data.resultados.ingresos.total)}</td></tr>
           <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>COSTO DE VENTAS</td></tr><tr><td><button type="button" className="linkBtn" onClick={() => onOpenCostDetail("mercaderia")}>Mercadería vendida 🔍</button></td><td className="num">{money(data.resultados.costo_ventas.mercaderia_vendida)}</td></tr><tr><td><button type="button" className="linkBtn" onClick={() => onOpenCostDetail("combustible")}>Combustible de secado 🔍</button></td><td className="num">{money(data.resultados.costo_ventas.combustible_secado)}</td></tr>
           <tr style={{ fontWeight: 700, borderTop: "1px solid var(--c-border)" }}><td>UTILIDAD BRUTA <small className="muted">({data.resultados.margen_bruto_pct}%)</small></td><td className="num">{money(data.resultados.utilidad_bruta)}</td></tr>
           <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>GASTOS OPERATIVOS</td></tr><tr><td>Gastos generales</td><td className="num">{money(data.resultados.gastos_operativos.gastos_generales)}</td></tr><tr><td>Mano de obra</td><td className="num">{money(data.resultados.gastos_operativos.mano_obra)}</td></tr><tr><td>Depreciación</td><td className="num">{money(data.resultados.gastos_operativos.depreciacion)}</td></tr>
