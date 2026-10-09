@@ -1173,7 +1173,7 @@ type FinanzasData = {
   };
   resultados: {
     ingresos: { ventas: number; servicio_pilado: number; total: number };
-    costo_ventas: { mercaderia_vendida: number; combustible_secado: number; total: number };
+    costo_ventas: { mercaderia_vendida: number; combustible_secado: number; servicios_recibidos?: number; total: number };
     utilidad_bruta: number; margen_bruto_pct: number;
     gastos_operativos: { gastos_generales: number; mano_obra: number; depreciacion: number; total: number };
     utilidad_neta: number; margen_neto_pct: number;

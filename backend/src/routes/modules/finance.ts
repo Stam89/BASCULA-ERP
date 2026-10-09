@@ -664,6 +664,7 @@ financeRouter.get("/export/excel", asyncRoute(async (req, res) => {
   seccion(ws2, "COSTO DE VENTAS");
   linea(ws2, "Costo de mercadería vendida", e.costo_ventas.mercaderia_vendida, { sangria: 3 });
   linea(ws2, "Combustible de secado", e.costo_ventas.combustible_secado, { sangria: 3 });
+  linea(ws2, "Servicios recibidos (pilado, empaque, selección, fletes)", e.costo_ventas.servicios_recibidos, { sangria: 3 });
   linea(ws2, "Total costo de ventas", e.costo_ventas.total, { negrita: true });
   linea(ws2, "UTILIDAD BRUTA", e.utilidad_bruta, { total: true });
   const mb = ws2.addRow(["", "Margen bruto", "", e.margen_bruto_pct / 100]);

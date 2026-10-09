@@ -294,6 +294,19 @@ export async function getEstadoResultados(
      WHERE l.accionista_id = $1 AND d.created_at::date BETWEEN $2 AND $3`,
     rango
   );
+  // Servicios que este accionista RECIBIÓ en el período (devengado, al nacer su deuda): pilado/maquila de la
+  // Matriz, empaque, selección/envejecido y fletes de Transporte de sus ventas o envejecido. Su pago luego
+  // sale de caja como pago entre socios/servicio (no operativo), así que no se cuenta dos veces.
+  // Los fletes/cosecha de una liquidación no: se le descuentan al agricultor.
+  const serviciosRecibidos = await client.query(
+    `SELECT COALESCE(SUM(p.amount), 0) AS v
+       FROM accounts_payable p
+       LEFT JOIN campo_servicios cs ON p.reference_type = 'campo_servicio' AND cs.id = p.reference_id
+      WHERE p.accionista_id = $1 AND p.status <> 'CANCELLED' AND p.created_at::date BETWEEN $2 AND $3
+        AND (p.reference_type IN ('pilado_service', 'service_charge', 'packaging_charge', 'selection_batch')
+             OR (p.reference_type = 'campo_servicio' AND cs.origen_tipo IN ('venta_flete', 'envejecido_flete')))`,
+    rango
+  );
   // Gastos y mano de obra: lo que de verdad salió de las cajas de este accionista en el período
   // (sin anulados). Antes se leían tablas que ya no se usan (expenses, labor_payments) y salían en 0.
   // No son gasto: compra de cáscara, fomentos, pagos entre socios, activos fijos… (CATEGORIAS_NO_OPERATIVAS).
@@ -317,7 +330,7 @@ export async function getEstadoResultados(
   const ingresoServicios = round2(Number(servicios.rows[0].v));
   const totalVentas = round2(Number(ventas.rows[0].v) + Number(ventasDetalle.rows[0].v));
   const ingresos = round2(totalVentas + ingresoServicios);
-  const costoTotal = round2(costoVentas + Number(combustible.rows[0].v));
+  const costoTotal = round2(costoVentas + Number(combustible.rows[0].v) + Number(serviciosRecibidos.rows[0].v));
   const utilidadBruta = round2(ingresos - costoTotal);
   const gastosOperativos = round2(Number(gastos.rows[0].v) + Number(manoObra.rows[0].v) + depreciacionPeriodo);
   const utilidadNeta = round2(utilidadBruta - gastosOperativos);
@@ -333,6 +346,7 @@ export async function getEstadoResultados(
     costo_ventas: {
       mercaderia_vendida: costoVentas,
       combustible_secado: round2(Number(combustible.rows[0].v)),
+      servicios_recibidos: round2(Number(serviciosRecibidos.rows[0].v)),
       total: costoTotal
     },
     utilidad_bruta: utilidadBruta,

@@ -80,6 +80,18 @@ try {
     "C3. el balance de AYER no cambia por lo de hoy (caja e inventario a la fecha del corte)", { ayer_antes: bAyer0.activo.corriente.inventario, ayer_ahora: bAyer1.activo.corriente.inventario });
   check(bAyer1.cuentas_al_dia_de_hoy === true && b2.cuentas_al_dia_de_hoy === false, "C4. un balance a fecha pasada avisa que las cuentas son al día de hoy");
 
+  // ── D. Servicio entre socios: ingreso de uno = costo del otro ──
+  const stalyn = (await q("SELECT id FROM accionistas WHERE name='STALYN'"))[0].id;
+  const erS = async () => exigir(await api("GET", `/finance/income-statement?desde=${hoy}&hasta=${hoy}`, undefined, stalyn), "estado de resultados STALYN");
+  const erC0 = await er(), erS0 = await erS();
+  const ar = (await q("INSERT INTO accounts_receivable (accionista_id, reference_type, description, amount, balance, status) VALUES ($1,'service_charge','sim cobro maquila',40,40,'CONFIRMED') RETURNING id", [matriz]))[0].id;
+  const ap = (await q("INSERT INTO accounts_payable (accionista_id, reference_type, description, amount, balance, status) VALUES ($1,'service_charge','sim cobro maquila',40,40,'CONFIRMED') RETURNING id", [stalyn]))[0].id;
+  await q("INSERT INTO matriz_service_charges (provider_accionista_id, client_accionista_id, servicio, monto, receivable_id, payable_id) VALUES ($1,$2,'OTRO',40,$3,$4)", [matriz, stalyn, ar, ap]);
+  const erC1 = await er(), erS1 = await erS();
+  check(d(erC1.ingresos.servicio_pilado, erC0.ingresos.servicio_pilado) === 40 && d(erS1.costo_ventas.servicios_recibidos, erS0.costo_ventas.servicios_recibidos) === 40,
+    "D1. un servicio de CEYRO a STALYN: +$40 de ingreso para CEYRO y +$40 de costo para STALYN (antes STALYN no lo veía)",
+    { ceyro: erC1.ingresos.servicio_pilado, stalyn: erS1.costo_ventas.servicios_recibidos });
+
   const h = await revisar((sql) => q(sql));
   check(h.length === 0, `Z. los ${TOTAL_REGLAS} controles de integridad se cumplen`, h.map((x) => x.error ? `${x.regla}: ${x.error}` : `${x.regla} → ${JSON.stringify(x.filas)}`));
 } catch (e) { console.log("⛔", e.message, e.stack?.split("\n")[1]); } finally { const f = resumen(); await S.cerrar(); process.exit(f ? 1 : 0); }
