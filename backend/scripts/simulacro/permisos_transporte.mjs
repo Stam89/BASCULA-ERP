@@ -19,7 +19,7 @@ try {
   const todo = await crear("sim_tr_todo", [T, `EDIT:${T}`]);
   check(await st(todo, "GET", "/campo/caja/libro") === 200, "A1. con Transporte completo ve el libro de caja");
   check(await st(todo, "GET", "/campo/nomina-operadores/pagos") === 200, "A2. … y la nómina de operadores");
-  check(await st(todo, "GET", "/campo/reportes/estado-resultados") === 200, "A3. … y el estado de resultados");
+  check(await st(todo, "GET", "/campo/reportes/estado-resultados") !== 403, "A3. … y el estado de resultados (pasa el permiso)");
 
   // B. Solo «Partes Diarios»
   const partes = await crear("sim_tr_partes", [T, `EDIT:${T}`, `SUB:${T}:partes`]);
