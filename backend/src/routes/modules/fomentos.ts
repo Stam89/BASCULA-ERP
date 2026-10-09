@@ -10,7 +10,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { inTransaction } from "../../db/transaction.js";
 import { ApiError } from "../../http/error-handler.js";
 import { avisarSobregiro, exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
-import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requirePermiso, type AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const fomentosRouter = Router();
 
@@ -784,7 +784,8 @@ fomentosRouter.post("/", asyncRoute(async (req, res) => {
   res.status(201).json(result.rows[0]);
 }));
 
-fomentosRouter.patch("/:id", asyncRoute(async (req, res) => {
+// Cambiar la tasa (renta) es «editar precios y tarifas»; el resto de la edición, no.
+fomentosRouter.patch("/:id", (req, res, next) => (req.body?.renta !== undefined ? requirePermiso("EDITAR_PRECIOS")(req, res, next) : next()), asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
   const fomentoId = String(req.params.id);
   const parsed = fomentoSchema.partial().parse(req.body);
@@ -849,7 +850,7 @@ fomentosRouter.patch("/:id", asyncRoute(async (req, res) => {
 // marca (o desmarca) TODAS las entregas del fomento como saldo anterior con N meses
 // fijos. `activo:false` vuelve al interés dinámico por días. Modificador directo
 // sobre el saldo de la cuenta (regla de negocio del cliente).
-fomentosRouter.patch("/:id/interes-fijo", asyncRoute(async (req, res) => {
+fomentosRouter.patch("/:id/interes-fijo", requirePermiso("EDITAR_PRECIOS"), asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
   const body = z.object({
     activo: z.boolean(),
@@ -881,7 +882,7 @@ fomentosRouter.patch("/:id/interes-fijo", asyncRoute(async (req, res) => {
 
 // Interés de UNA entrega: por días (meses = null) o N meses fijos (1–24). Así cada entrega lleva lo suyo:
 // a una 1 mes, a otra 2 meses, y las demás por días. No se permite en un fomento ya cerrado por su cuenta.
-fomentosRouter.patch("/:id/entregas/:entregaId/interes-fijo", asyncRoute(async (req, res) => {
+fomentosRouter.patch("/:id/entregas/:entregaId/interes-fijo", requirePermiso("EDITAR_PRECIOS"), asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
   const body = z.object({ meses: z.number().int().min(1).max(24).nullable() }).parse(req.body);
   const fomentoId = String(req.params.id);
@@ -899,7 +900,7 @@ fomentosRouter.patch("/:id/entregas/:entregaId/interes-fijo", asyncRoute(async (
   res.json(full.rows[0]);
 }));
 
-fomentosRouter.delete("/:id", asyncRoute(async (req, res) => {
+fomentosRouter.delete("/:id", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
   const result = await pool.query("DELETE FROM fomentos WHERE id = $1 AND accionista_id = $2", [req.params.id, accionistaId]);
   if (!result.rowCount) throw new ApiError(404, "Fomento no encontrado o no pertenece al accionista activo");
@@ -966,7 +967,7 @@ async function exigirSinMovimientoDeCajaVigente(client: PoolClient, referenceTyp
   }
 }
 
-fomentosRouter.delete("/:fomentoId/entregas/:id", asyncRoute(async (req, res) => {
+fomentosRouter.delete("/:fomentoId/entregas/:id", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
   const fomentoId = String(req.params.fomentoId);
   const entregaId = String(req.params.id);
@@ -1032,7 +1033,7 @@ fomentosRouter.post("/:id/pagos", asyncRoute(async (req, res) => {
   res.status(201).json(result);
 }));
 
-fomentosRouter.delete("/:fomentoId/pagos/:id", asyncRoute(async (req, res) => {
+fomentosRouter.delete("/:fomentoId/pagos/:id", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
   const fomentoId = String(req.params.fomentoId);
   await inTransaction(async (client) => {

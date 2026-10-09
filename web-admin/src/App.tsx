@@ -4351,8 +4351,9 @@ export function App() {
         apiGet<Insumo[]>("/inventory/insumos"),
         apiGet<MateriaPrimaEntry[]>("/process-flow/drying/available-lots"),
         apiGet<DryingTunnelReport[]>("/process-flow/drying/reports"),
-        apiGet<LiqRecord[]>("/liquidations"),
-        apiGet<PendingEntry[]>("/liquidations/pending-entries"),
+        // Sin permiso de Liquidaciones (ni de las pestañas que las usan) el backend responde 403: lista vacía.
+        apiGet<LiqRecord[]>("/liquidations").catch(() => [] as LiqRecord[]),
+        apiGet<PendingEntry[]>("/liquidations/pending-entries").catch(() => [] as PendingEntry[]),
         apiGet<Lot[]>("/lots/dry-in-storage")
       ]);
 

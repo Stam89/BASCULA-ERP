@@ -9,7 +9,7 @@ import { confirmado } from "../../http/confirmaciones.js";
 import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { calcularNetoLiquidacion, conciliarDescuentoFomento } from "../../utils/money.js";
-import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, requirePermiso, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { registrarCargoCampoLiquidacion, type CargoCampoLiquidacion } from "../../services/campo-cxc-liquidacion.js";
 import { amortizarFomentosLIFO, generarFomentoSaldoEnContra, revertirPagosFomentoDeLiquidacion, type AmortizacionFomentoResultado } from "../../services/fomento-liquidacion.js";
 import { getMatrizId } from "../../services/matriz.js";
@@ -648,7 +648,7 @@ liquidationsRouter.get("/", asyncRoute(async (req, res) => {
 
 // Bloquear / desbloquear la edición de liquidaciones (una o varias de un mismo
 // grupo). SOLO administrador: es el candado que protege las liquidaciones.
-liquidationsRouter.post("/set-lock", requireAdmin, asyncRoute(async (req, res) => {
+liquidationsRouter.post("/set-lock", requirePermiso("EDITAR_PRECIOS"), asyncRoute(async (req, res) => {
   const body = z.object({
     ids: z.array(z.string().uuid()).min(1),
     unlocked: z.boolean()
@@ -953,7 +953,7 @@ liquidationsRouter.get("/:batchId/fomento-recibo", asyncRoute(async (req, res) =
 // Campo, aplicaciones de anticipos, la CxP del agricultor y el estado del lote.
 // Se BLOQUEA si la CxP del agricultor ya tiene pagos (revertir efectivo real es
 // responsabilidad del módulo Por Pagar). Registra el motivo.
-liquidationsRouter.post("/:id/anular", requireAdmin, asyncRoute(async (req, res) => {
+liquidationsRouter.post("/:id/anular", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const body = z.object({ motivo: z.string().trim().min(3, "Indica el motivo de la anulación.") }).parse(req.body);
   const liqId = String(req.params.id);
   const accionistaId = (req as AuthenticatedRequest).accionistaId;

@@ -3,7 +3,7 @@ import type { PoolClient } from "pg";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
-import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, requirePermiso, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { anularProcesoProduccion } from "../../services/anular-produccion.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
@@ -1439,7 +1439,7 @@ const PRECIO_VENTA_COL: Record<string, string> = {
   fine: "precio_venta_fine",
   bran: "precio_venta_bran"
 };
-processingRouter.patch("/:id/precio-venta", asyncRoute(async (req, res) => {
+processingRouter.patch("/:id/precio-venta", requirePermiso("EDITAR_PRECIOS"), asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
   const body = z.object({
     producto: z.enum(["blanco", "broken", "fine", "bran"]).default("blanco"),

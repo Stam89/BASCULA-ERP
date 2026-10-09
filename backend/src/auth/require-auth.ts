@@ -91,6 +91,59 @@ const WRITE_MODULES_BY_PREFIX: Record<string, AppModule[]> = {
   "resultado-mensual": ["Costos Operativos"]
 };
 
+// Quién puede LEER cada prefijo: basta tener el módulo (Ver o Editar) en ALGUNA de las pestañas que
+// usan esos datos. Las pantallas piden datos de otros módulos (Ventas lee la caja abierta y las
+// tarifas de flete, Nómina lee la cuadrilla…), por eso cada prefijo lista todas las pestañas que lo
+// consultan. `abiertas` = lecturas de apoyo que cualquier pantalla necesita (sin datos de dinero).
+// Lo que no está aquí es base compartida que se carga al entrar (agricultores, inventario, lotes,
+// productos, catálogos, secadoras, sacos, repuestos, tablero, ajustes, campanita).
+type ReglaLectura = { modules: string[]; abiertas?: RegExp[] };
+const READ_MODULES_BY_PREFIX: Record<string, ReglaLectura> = {
+  "liquidations": { modules: ["Liquidaciones", "Caja", "Fomentos", "Agricultores", "Transporte / Cosechadora"] },
+  "fomentos": { modules: ["Fomentos", "Liquidaciones", "Caja", "Agricultores", "Transporte / Cosechadora"] },
+  "advances": { modules: ["Caja", "Liquidaciones", "Fomentos", "Agricultores"] },
+  "cash": { modules: ["Caja", "Por Pagar", "Costos Operativos", "Estados Financieros"],
+    abiertas: [/^\/registers\/current\/?$/, /^\/categories\/?$/, /^\/subcategorias\/?$/] },
+  "expenses": { modules: ["Caja", "Costos Operativos", "Estados Financieros"] },
+  "equipment": { modules: ["Caja", "Inventario", "Produccion", "Costos Operativos", "Estados Financieros"], abiertas: [/^\/categories\/?$/] },
+  "receivable": { modules: ["Por Cobrar", "Ventas", "Caja", "Servicio Pilado"] },
+  "sales": { modules: ["Ventas", "Caja", "Por Cobrar"] },
+  "orders": { modules: ["Ventas", "Caja", "Por Cobrar", "Inventario"] },
+  "guias-remision": { modules: ["Ventas"] },
+  "customers": { modules: ["Ventas", "Caja", "Por Cobrar", "Servicio Pilado"] },
+  "documents": { modules: ["Bascula", "Liquidaciones", "Ventas", "Caja", "Por Cobrar"] },
+  "finance": { modules: ["Estados Financieros", "Caja", "Costos Operativos", "Por Pagar", "Por Cobrar"], abiertas: [/^\/bank\/accounts\/?$/] },
+  "costos": { modules: ["Costos Operativos", "Caja", "Produccion", "Estados Financieros"] },
+  "resultado-mensual": { modules: ["Costos Operativos", "Estados Financieros"] },
+  "labor": { modules: ["Nomina", "Caja", "Produccion", "Secadoras", "Gana", "Servicio Pilado", "Cuadrilla", "Gestión de Cuadrilla"], abiertas: [/^\/rates\/?$/] },
+  "nomina-semanal": { modules: ["Nomina", "Caja"] },
+  "admin-payroll": { modules: ["Nomina", "Caja"] },
+  "cuadrilla": { modules: ["Cuadrilla", "Gestión de Cuadrilla", "Nomina", "Caja", "Produccion", "Ventas", "Bascula"] },
+  "pilado": { modules: ["Servicio Pilado", "Caja", "Por Cobrar", "Por Pagar", "Produccion"], abiertas: [/^\/tarifa-vigente\/?$/] },
+  "cobros": { modules: ["Caja", "Por Cobrar", "Servicio Pilado"] },
+  "selection": { modules: ["Seleccion", "Inventario", "Produccion", "Caja", "Por Pagar"], abiertas: [/^\/rates\/?$/] },
+  "purchases": { modules: ["Compras", "Inventario", "Caja", "Por Pagar"] },
+  "suppliers": { modules: ["Compras", "Inventario", "Caja", "Por Pagar", "Seleccion", "Transporte / Cosechadora"] },
+  "processing-batches": { modules: ["Produccion", "Gana", "Inventario", "Secadoras", "Costos Operativos", "Estados Financieros"] },
+  "weighing-tickets": { modules: ["Bascula", "Liquidaciones", "Secadoras"] },
+  "historial": { modules: ["Caja", "Costos Operativos", "Inventario", "Transporte / Cosechadora"] },
+  // Transporte y Cosechadora: la liquidación de cosechadora (pestaña Liquidaciones) lee sus máquinas.
+  "campo": { modules: ["Transporte / Cosechadora", "Liquidaciones"], abiertas: [/^\/config\/?$/] }
+};
+
+/** ¿Tiene alguno de estos módulos (Ver o Editar) en el accionista activo? */
+export function puedeLeer(allowed: string[], modules: string[]): boolean {
+  return modules.some((m) => allowed.includes(m) || allowed.includes(`EDIT:${m}`));
+}
+
+/** Regla de lectura que aplica a esta ruta (null = lectura libre para cualquier usuario con sesión). */
+export function reglaDeLectura(prefix: string, rest: string): string[] | null {
+  const regla = READ_MODULES_BY_PREFIX[prefix];
+  if (!regla) return null;
+  if (regla.abiertas?.some((re) => re.test(rest || "/"))) return null;
+  return regla.modules;
+}
+
 // Escrituras que pertenecen a una SUB-PESTAÑA concreta del módulo (mismas claves
 // que SUB_TABS del web-admin). Sirve para el permiso «Solo ver» por sub-pestaña:
 // la clave RO:SUB:<módulo>:<sub> quita la edición de esa sub-pestaña aunque el
@@ -151,9 +204,45 @@ export function exigirEscrituraEn(prefix: string, modules: AppModule[]) {
   return (req: Request, res: Response, next: NextFunction) => aplicarPermisosDeEscritura(req, res, next, { prefix, modules });
 }
 
+/**
+ * Lecturas de rutas montadas FUERA del filtro general (p. ej. /tickets): exige ver alguno de estos módulos.
+ * Debe ir después de requireAuth y resolveAccionista.
+ */
+export function exigirLecturaEn(modules: string[]) {
+  return (req: Request, _res: Response, next: NextFunction) => {
+    verificarLectura(req, modules).then(() => next(), next);
+  };
+}
+
+async function verificarLectura(req: Request, modules: string[]): Promise<void> {
+  const user = (req as AuthenticatedRequest).user;
+  if (!user) throw new ApiError(401, "Sesión requerida");
+  // Rol y módulos se releen de la base (igual que en las escrituras): el token puede tener 12 h.
+  const fresh = await pool.query(
+    `SELECT u.is_active, r.name AS role_name, ua.allowed_modules
+       FROM users u
+       LEFT JOIN roles r ON r.id = u.role_id
+       LEFT JOIN user_accionistas ua ON ua.user_id = u.id AND ua.accionista_id = $2
+      WHERE u.id = $1`,
+    [user.id, (req as AuthenticatedRequest).accionistaId ?? null]
+  );
+  if (!fresh.rowCount || !fresh.rows[0].is_active) throw new ApiError(401, "Tu usuario fue desactivado. Habla con un administrador.");
+  if (fresh.rows[0].role_name === "ADMINISTRADOR") return;
+  if (puedeLeer(fresh.rows[0].allowed_modules ?? [], modules)) return;
+  throw new ApiError(403, `Tu usuario no tiene permiso para ver ${modules[0]} en este accionista. Pide acceso a un administrador.`);
+}
+
 async function aplicarPermisosDeEscritura(req: Request, _res: Response, next: NextFunction, forzado?: { prefix: string; modules: AppModule[] }) {
-  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
+  if (req.method === "OPTIONS") {
     next();
+    return;
+  }
+  if (req.method === "GET" || req.method === "HEAD") {
+    // Lectura: solo se limita en los prefijos con regla (datos de dinero y de cada módulo).
+    const prefix = req.path.split("/")[1] ?? "";
+    const modules = forzado ? null : reglaDeLectura(prefix, req.path.slice(prefix.length + 1));
+    if (!modules) { next(); return; }
+    verificarLectura(req, modules).then(() => next(), next);
     return;
   }
   const user = (req as AuthenticatedRequest).user;
@@ -215,6 +304,34 @@ async function aplicarPermisosDeEscritura(req: Request, _res: Response, next: Ne
   } catch (err) {
     next(err);
   }
+}
+
+/**
+ * Permisos especiales de la matriz «Accionistas y permisos»: el administrador, o un operador con
+ * PERM:ANULAR («Permitir Anular / Eliminar registros») o PERM:EDITAR_PRECIOS («Permitir Editar
+ * Precios y Tarifas») en el accionista activo. Los botones ya se ocultan sin el permiso; esto
+ * hace que el servidor diga lo mismo. Va después de resolveAccionista.
+ */
+export function requirePermiso(permiso: "ANULAR" | "EDITAR_PRECIOS") {
+  return (req: Request, _res: Response, next: NextFunction) => {
+    const user = (req as AuthenticatedRequest).user;
+    if (!user) { next(new ApiError(401, "Sesión requerida")); return; }
+    pool.query(
+      `SELECT u.is_active, r.name AS role_name, ua.allowed_modules
+         FROM users u
+         LEFT JOIN roles r ON r.id = u.role_id
+         LEFT JOIN user_accionistas ua ON ua.user_id = u.id AND ua.accionista_id = $2
+        WHERE u.id = $1`,
+      [user.id, (req as AuthenticatedRequest).accionistaId ?? null]
+    ).then((fresh) => {
+      const row = fresh.rows[0];
+      if (!row || !row.is_active) { next(new ApiError(401, "Tu usuario fue desactivado. Habla con un administrador.")); return; }
+      if (row.role_name === "ADMINISTRADOR" || (row.allowed_modules ?? []).includes(`PERM:${permiso}`)) { next(); return; }
+      next(new ApiError(403, permiso === "ANULAR"
+        ? "No tienes permiso para anular o eliminar registros. Pide el permiso «Anular / Eliminar» a un administrador."
+        : "No tienes permiso para editar precios y tarifas. Pide el permiso «Editar Precios y Tarifas» a un administrador."));
+    }, next);
+  };
 }
 
 export function requireAdmin(req: Request, _res: Response, next: NextFunction) {

@@ -4,7 +4,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, requirePermiso, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { reversarEntradaRepuestosDeCaja, reversarEntradaRepuestosDeCredito, devolverRepuestosDeMantenimiento, exigirMatriz, registrarCompraRepuestos } from "./repuestos.js";
 import { etiquetaMaquina, resolverMaquina, type Maquina } from "../../services/maquinas.js";
@@ -331,7 +331,7 @@ cashRouter.get("/registers/:id/creditos", asyncRoute(async (req, res) => {
 
 // Anular un egreso A CRÉDITO (solo admin): se cancela su Cuenta por Pagar. Si ya
 // tiene abonos, primero hay que anular esos pagos en Caja.
-cashRouter.post("/creditos/:id/anular", requireAdmin, asyncRoute(async (req, res) => {
+cashRouter.post("/creditos/:id/anular", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const body = z.object({ reason: z.string().trim().min(3) }).parse(req.body);
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const out = await inTransaction(async (client) => {
@@ -430,7 +430,7 @@ async function reversarEntradaSacosDeCaja(client: PoolClient, cashMovementId: st
   return count;
 }
 
-cashRouter.post("/movements/:id/reverse", requireAdmin, asyncRoute(async (req, res) => {
+cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   await ensureCashColumns();
   const body = z.object({ reason: z.string().min(3) }).parse(req.body);
   const user = (req as AuthenticatedRequest).user;

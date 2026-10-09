@@ -5,7 +5,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { exigirEscrituraEn, requireAdmin, requireAuth, resolveAccionista, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { exigirEscrituraEn, exigirLecturaEn, requireAdmin, requireAuth, resolveAccionista, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
 import { dentroDelCorteSql, fechaTicketSql, leerCorteBascula, numeroTicketSql } from "../../services/bascula-corte.js";
 import { calculateNetWeight, calculateQuintals, round2 } from "../../utils/rice-formulas.js";
@@ -303,7 +303,7 @@ export async function procesarLiquidacionTicket(
 // La báscula es compartida por los accionistas: un pesaje todavía no es de
 // nadie, por eso NO se filtra por accionista. El dueño se decide al crear el
 // lote (ahí se elige qué accionista compra). Filtrarlos aquí escondía tickets.
-mobileTicketsRouter.get("/", requireAuth, resolveAccionista, asyncRoute(async (req, res) => {
+mobileTicketsRouter.get("/", requireAuth, resolveAccionista, exigirLecturaEn(["Bascula", "Liquidaciones"]), asyncRoute(async (req, res) => {
   const q = z.object({ status: z.enum(["pending", "liquidated"]).optional() }).parse(req.query);
   // "Pendiente" = todavía por procesar: ni ingresado como materia prima
   // (weighing_ticket_id) ni liquidado (liquidated_at). Así la lista de pendientes

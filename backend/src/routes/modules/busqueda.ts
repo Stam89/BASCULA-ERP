@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
-import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { puedeLeer, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { getMatrizId } from "../../services/matriz.js";
 import { patronBusqueda, patronCompacto, sqlCompacto, sqlPlegar as P, unir, type ResultadoBusqueda } from "../../services/busqueda.js";
 
@@ -119,5 +119,13 @@ busquedaRouter.get("/", asyncRoute(async (req, res) => {
       }));
     })
   ]);
-  res.json({ q, resultados: grupos.flat() });
+  // Solo resultados de las pestañas que el usuario puede ver en este accionista (el admin ve todo).
+  const u = await pool.query(
+    `SELECT r.name AS role_name, ua.allowed_modules FROM users u LEFT JOIN roles r ON r.id = u.role_id
+       LEFT JOIN user_accionistas ua ON ua.user_id = u.id AND ua.accionista_id = $2 WHERE u.id = $1`,
+    [(req as AuthenticatedRequest).user?.id, acc]
+  );
+  const esAdmin = u.rows[0]?.role_name === "ADMINISTRADOR";
+  const permitidos: string[] = u.rows[0]?.allowed_modules ?? [];
+  res.json({ q, resultados: grupos.flat().filter((r) => esAdmin || puedeLeer(permitidos, [r.tab])) });
 }));
