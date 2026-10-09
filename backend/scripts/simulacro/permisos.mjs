@@ -83,6 +83,13 @@ try {
   }
   check(await st(caj, "PATCH", `/fomentos/${fake}`, { notes: "x" }) !== 403, "C. editar datos del fomento (sin tocar la tasa) no exige el permiso");
 
+  // ── C2. Reportes con sub-pestañas marcadas: solo las marcadas ──
+  const rep = await crear("sim_reportes_ventas", ["Reportes", "SUB:Reportes:ventas"]);
+  check(await st(rep, "GET", "/reports/sales?from=2026-10-01&to=2026-10-08") === 200, "C2. con «Reportes › Ventas» marcado puede ver el reporte de ventas");
+  check(await st(rep, "GET", "/reports/summary?from=2026-10-01&to=2026-10-08") === 403, "C2. pero no el Resumen (no lo tiene marcado)");
+  const repTodo = await crear("sim_reportes_todo", ["Reportes"]);
+  check(await st(repTodo, "GET", "/reports/summary?from=2026-10-01&to=2026-10-08") === 200, "C2. sin sub-pestañas marcadas ve todos los reportes");
+
   // ── D. Administrador: lee todo ──
   for (const p of [...new Set(Object.values(POR_PESTANA).flat())]) {
     const r = await api("GET", p);
