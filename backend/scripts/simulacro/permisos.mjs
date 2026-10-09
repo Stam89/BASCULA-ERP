@@ -106,7 +106,7 @@ try {
     const tabs = Object.keys(POR_PESTANA).filter((t) => mods.includes(t));
     const malos = [];
     for (const p of [...GLOBAL, ...tabs.flatMap((t) => POR_PESTANA[t])]) {
-      if (u.tipo !== "MATRIZ" && /^\/(campo|nomina-semanal|admin-payroll|cuadrilla|repuestos)/.test(p)) continue; // solo matriz
+      if (u.tipo !== "MATRIZ" && /^\/(campo|nomina-semanal|admin-payroll|cuadrilla|repuestos|resultado-mensual)/.test(p)) continue; // solo matriz (Resultado mensual: la pantalla solo lo abre en la Matriz)
       const s = await st(R, "GET", p);
       if (s === 403) malos.push(p);
     }
