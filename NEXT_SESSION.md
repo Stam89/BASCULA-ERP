@@ -54,6 +54,7 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - `POST /selection/batches/:id/finish` acepta `qty_alla` por línea: lo que llegó → bodega PT; lo que quedó → «Allá». `GET /selection/ubicacion` (por producto: piladora / allá por proveedor + viajes). `POST /selection/traer` (OUT de allá con FIFO → IN a PT; 409 si se trae más de lo que hay).
 - Lo de allá es del socio (inventario/balance lo cuentan) pero Ventas NO lo ofrece (orders: stock_dueno y saldo excluyen EXTERNO). `/inventory/stock` trae `warehouse_type`.
 - `buildDisplayStockRows` (App.tsx) ahora SUMA todas las filas OWNED del producto (antes tomaba la 1ª) y separa `alla`; InventarioExistencias muestra «🏭 en piladora · 📍 allá».
+- Flete de REGRESO (2026-10-08): `POST /selection/traer` acepta `flete` {propia+activo_id | tercero+prestador, monto} (migración `20261082`, columnas flete_* en selection_traidas). Propia → campo_servicios origen `envejecido_regreso` + CxP campo_servicio del socio; tercero → CxP `flete_envejecido_tercero` (ref = id del viaje). Fletes de envejecido (ida/regreso, propia o tercero) cuentan como servicio recibido en el ER; pagar `flete_envejecido_tercero` → PAGO_SELECCION. Regla de integridad nueva (44).
 - UI: en «Registrar lo que regresó» cada línea tiene «📍 De esto quedó allá» (+ «Todo quedó allá» / «Todo llegó»); En Proceso → tarjeta «📍 ¿Dónde está?» con «🚚 Traer a piladora desde X» (ventana con lo que hay allá precargado). Simulacro `envejecido_alla.mjs` TODO OK; verificado en celular.
 
 ### 📅 Ensayo del cierre de mes (2026-10-08)
