@@ -80,12 +80,12 @@ const WRITE_MODULES_BY_PREFIX: Record<string, AppModule[]> = {
   "nomina-semanal": ["Caja", "Nomina"],
   "cuadrilla": ["Caja", "Produccion", "Cuadrilla"],
   "pilado": ["Caja", "Produccion", "Servicio Pilado"],
-  // Los estados financieros se LEEN (y leer no exige módulo); lo único que se
+  // Los estados financieros se LEEN con su permiso (ver READ_MODULES_BY_PREFIX); lo único que se
   // escribe aquí son los parámetros contables y el costo de los activos, que
   // además piden rol de administrador en la propia ruta.
   "finance": ["Caja", "Estados Financieros"],
   // Transporte y Cosechadora (Caja de Campo, partes, nómina de operadores): su propio permiso.
-  // Las lecturas siguen compartidas (la pantalla las pide al entrar); escribir exige EDIT:Transporte / Cosechadora.
+  // Escribir exige EDIT:Transporte / Cosechadora; leer, ver READ_MODULES_BY_PREFIX.
   "campo": ["Transporte / Cosechadora"],
   // Cifras manuales y rubros del Resultado mensual (pestaña Costos Operativos).
   "resultado-mensual": ["Costos Operativos"]
@@ -127,8 +127,9 @@ const READ_MODULES_BY_PREFIX: Record<string, ReglaLectura> = {
   "processing-batches": { modules: ["Produccion", "Gana", "Inventario", "Secadoras", "Costos Operativos", "Estados Financieros"] },
   "weighing-tickets": { modules: ["Bascula", "Liquidaciones", "Secadoras"] },
   "historial": { modules: ["Caja", "Costos Operativos", "Inventario", "Transporte / Cosechadora"] },
-  // Transporte y Cosechadora: la liquidación de cosechadora (pestaña Liquidaciones) lee sus máquinas.
-  "campo": { modules: ["Transporte / Cosechadora", "Liquidaciones"], abiertas: [/^\/config\/?$/] }
+  // Transporte y Cosechadora: la liquidación de cosechadora (pestaña Liquidaciones) lee sus máquinas; la
+  // lista de carros (solo nombres) la usan además Ventas (flete del pedido) y el cruce de flete.
+  "campo": { modules: ["Transporte / Cosechadora", "Liquidaciones"], abiertas: [/^\/config\/?$/, /^\/activos\/?$/] }
 };
 
 /** ¿Tiene alguno de estos módulos (Ver o Editar) en el accionista activo? */
@@ -184,7 +185,7 @@ function subSoloVer(allowed: string[], modules: AppModule[], prefix: string, met
   return null;
 }
 
-// Las lecturas son compartidas por todo el equipo; las escrituras se limitan
+// Lecturas: libres salvo los prefijos de READ_MODULES_BY_PREFIX; las escrituras se limitan
 // a los módulos asignados al usuario. Los administradores no tienen límite.
 //
 // Los permisos se releen de la base en cada escritura, no del token: el token

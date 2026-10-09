@@ -8,7 +8,7 @@ const { api, apiComo, q } = S;
 // Lo que pide cada pestaña al abrirse (App.tsx: refresh() global + efectos por pestaña).
 const GLOBAL = ["/dashboard", "/farmers", "/inventory/products", "/inventory/warehouses", "/lots", "/inventory/stock", "/inventory/insumos",
   "/process-flow/drying/available-lots", "/process-flow/drying/reports", "/lots/dry-in-storage", "/settings", "/campo/config",
-  "/cash/registers/current", "/notificaciones", "/dashboard/hoy", "/sacks", "/repuestos"];
+  "/cash/registers/current", "/notificaciones", "/dashboard/hoy", "/sacks", "/repuestos", "/campo/activos?solo_activos=1"];
 const POR_PESTANA = {
   Bascula: ["/tickets", "/weighing-tickets/materia-prima", "/tickets/corte"],
   Secadoras: ["/labor/rates", "/process-flow/drying/tunnels-status"],
