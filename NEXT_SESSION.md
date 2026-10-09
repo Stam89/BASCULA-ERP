@@ -49,6 +49,20 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 💰 Caja auditada (2026-10-09)
+- Migración `20261085`: `cash_movements.medio` (EFECTIVO/BANCO) con trigger por defecto (caja BANCO → BANCO; resto → EFECTIVO; un contra-asiento copia el medio del original) + backfill; columnas de arqueo en cash_registers; categorías FALTANTE_CAJA / SOBRANTE_CAJA inactivas (solo las usa el cierre).
+- `services/caja.ts`: `saldosDeCaja` (efectivo/banco/total) y `medioParaCaja`. Summary devuelve saldo_efectivo, saldo_banco, fondos_por_liquidar.
+- `POST /cash/registers/:id/close {efectivo_contado?, banco_contado?, notas?}`: ARQUEO (diferencia → movimiento FALTANTE/SOBRANTE con motivo obligatorio, reference_type 'arqueo', no se anula suelto); guarda closed_by, closing_balance, contado. Sin contar cierra como antes (sims viejos).
+- `GET /cash/registers/previous-balance`: última caja cerrada de CUALQUIER tipo, con final_efectivo/final_banco (antes una caja MIXTA sugería $0 → se perdían los $25.000 de CEYRO al reabrir).
+- `POST /cash/registers/:id/traspaso {DEPOSITO|RETIRO, monto}` (solo MIXTO): dos líneas TRASPASO_INTERNO (no operativa); anular una anula las dos.
+- Anular un movimiento de una caja CERRADA → el contra-asiento va a la caja ABIERTA del accionista (409 si no hay); igual para el espejo entre socios.
+- Movimientos manuales: categoría del catálogo, activa y del tipo correcto (o VENTA ingreso = venta al detalle); bloqueados PAGO_AGRICULTOR / FOMENTOS / PAGO_SERVICIO_PILADO sueltos; no aceptan reference_type. Front: «Pago a agricultor» exige elegir la liquidación; selector 💵/🏦 en caja MIXTA.
+- `/expenses/labor-payments` → 410 (pagaba cuadrilla por fuera de Nómina; la pestaña «Gastos» que lo usaba ya no era accesible).
+- Finanzas: `getCajaBancos` separa efectivo y bancos por medio.
+- Integridad: 49 reglas (cierre con arqueo = apertura + movimientos; medio coherente; traspasos completos).
+- Simulacros: `caja_auditoria.mjs` TODO OK; sims viejos actualizados (categoría «OTROS» → GASTO_OPERATIVO/VENTA; combustible y produccion_anular ya no dependen de los datos reales del día). Verificado en celular (saldo sugerido 15000/10000, gasto por banco, arqueo con faltante).
+- Pendiente opcional: que los flujos automáticos (venta al contado, cobros, pagos) pregunten si fue efectivo o transferencia (hoy van a efectivo por defecto).
+
 ### 📸 «Cerrar mes» (2026-10-08, pedido del dueño)
 - Migración `20261084` (tabla `cierres_mes`, única vigente por año/mes/accionista). En `routes/modules/finance.ts`: `POST /finance/cierres {anio, mes, notas?, confirmar_hallazgos?}` (admin; 409 si el mes no terminó, si ya está cerrado, o code HALLAZGOS si la integridad tiene avisos); guarda por accionista `getDashboardFinanciero` + activos + CxC/CxP abiertas + inventario a la fecha + resultado mensual (matriz) + meta (tomado_el, días después del corte). `GET /finance/cierres` (no admin: solo su accionista), `GET /:id`, `GET /:id/excel` (mismo libro que Exportar vía `construirExcelEstados` + hojas Por Cobrar/Por Pagar/Inventario), `POST /cierres/:anio/:mes/anular {motivo}` (admin).
 - `hoy()` de finance ahora es fecha de Ecuador (antes UTC: después de las 19:00 era mañana).
