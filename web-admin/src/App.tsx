@@ -152,7 +152,12 @@ type Accionista = { id: string; name: string; code: string; tipo?: string; puede
 // Selección / envejecido de producto terminado (persona externa), por lotes.
 type ExternalProvider = { id: string; name: string; identification: string | null; phone: string | null };
 type SelectionRates = { seleccion_rate: number; envejecimiento_rate: number };
-type SelectionLine = { product_id: string; product_name: string; quantity: number | string; is_reject?: boolean };
+type SelectionLine = { product_id: string; product_name: string; quantity: number | string; is_reject?: boolean; qty_alla?: number | string | null };
+// 📍 Dónde está el producto procesado: en la piladora o ALLÁ donde el proveedor (por proveedor).
+type UbicacionSeleccion = {
+  productos: Array<{ product_id: string; producto: string; code: string; piladora: number; alla_total: number; alla: Array<{ provider_id: string; proveedor: string; qq: number }> }>;
+  traidas: Array<{ id: string; fecha: string; items: Array<{ product_id: string; quantity: number }>; total_qq: number; notes: string | null; proveedor: string }>;
+};
 type SelectionBatch = {
   id: string;
   batch_number: string;
@@ -777,6 +782,8 @@ type StockRow = {
   product_name: string;
   product_type?: string;
   warehouse_name: string;
+  // EXTERNO = «Allá: <proveedor>» (envejecido que quedó donde el proveedor): es del socio, pero no está en la piladora.
+  warehouse_type?: string;
   ownership: string;
   quantity: string | number;
   unit: string;
@@ -3230,8 +3237,11 @@ export function App() {
   const [selectionProviders, setSelectionProviders] = useState<ExternalProvider[]>([]);
   const [selectionRates, setSelectionRates] = useState<SelectionRates>({ seleccion_rate: 1.25, envejecimiento_rate: 3.5 });
   const [selectionView, setSelectionView] = useState<"nuevo" | "proceso" | "historial">("nuevo");
+  const [ubicacionSel, setUbicacionSel] = useState<UbicacionSeleccion | null>(null);
+  const [traerModal, setTraerModal] = useState<{ provider_id: string; proveedor: string; cantidades: Record<string, string>; notes: string; busy?: boolean } | null>(null);
   // empaque (salidas de Selección): "TULA" (por defecto) · "SACO:<lb>" · "PROPIO:<sack_id>" (saco propio del socio).
-  type LineDraft = { product_id: string; quantity: string; is_reject?: boolean; sack_weight_lb?: string; empaque?: string };
+  // alla = QQ de esta línea que QUEDARON ALLÁ donde el proveedor (no llegaron a la piladora).
+  type LineDraft = { product_id: string; quantity: string; is_reject?: boolean; sack_weight_lb?: string; empaque?: string; alla?: string };
   const emptyLine: LineDraft = { product_id: "", quantity: "" };
   // Fase 1: lo que se manda a selectar (varias líneas de producto).
   const [selectionForm, setSelectionForm] = useState({
@@ -5534,6 +5544,7 @@ export function App() {
       ]);
       setSelectionBatches(batches.rows);
       setSelectionProviders(providers);
+      apiGet<UbicacionSeleccion>("/selection/ubicacion").then(setUbicacionSel).catch(() => setUbicacionSel(null));
       setSelectionRates(rates);
       setSelectionRatesForm({ seleccion_rate: String(rates.seleccion_rate), envejecimiento_rate: String(rates.envejecimiento_rate) });
     } catch (e) {
@@ -5597,7 +5608,8 @@ export function App() {
     const outputs = finishOutputs
       .filter((l) => l.product_id && Number(l.quantity) > 0)
       .map((l) => {
-        const base = { product_id: l.product_id, quantity: Number(l.quantity), is_reject: !!l.is_reject };
+        const alla = Math.min(Number(l.quantity) || 0, Number(l.alla) || 0);
+        const base = { product_id: l.product_id, quantity: Number(l.quantity), is_reject: !!l.is_reject, ...(alla > 0 ? { qty_alla: alla } : {}) };
         if (l.is_reject) return base;
         // Arrocillo/polvillo: su saco especial con lb/saco (como antes; informativo).
         const prod = products.find((p) => p.id === l.product_id);
@@ -5619,6 +5631,7 @@ export function App() {
         return { ...base, presentation: "TULA", empaque: "TULA" as const };
       });
     if (outputs.length === 0) { addToast("Agrega al menos un producto que regresó", "error"); return; }
+    if (finishOutputs.some((l) => Number(l.alla) > Number(l.quantity) + 0.0005)) { addToast("Lo que quedó allá no puede ser más que lo que salió de ese producto", "error"); return; }
     if (new Set(outputs.map((o) => o.product_id)).size !== outputs.length) { addToast("Hay un producto repetido en las salidas", "error"); return; }
     const batch = selectionBatches.find((b) => b.id === batchId);
     const totalRecibido = outputs.reduce((sum, o) => sum + o.quantity, 0);
@@ -5631,12 +5644,32 @@ export function App() {
     setFinishOutputs([{ ...emptyLine }]);
     setSelectionView("historial");
     const sp = cierre.sacos_propios ?? [];
+    const qqAlla = outputs.reduce((s, o) => s + Number((o as { qty_alla?: number }).qty_alla ?? 0), 0);
     addToast(
       "Lote cerrado. Producto procesado ingresado al inventario." +
+      (qqAlla > 0 ? ` 📍 ${qqAlla.enReal()} QQ quedaron allá donde el proveedor (míralos en «En Proceso» y tráelos cuando lleguen).` : "") +
       (sp.length ? ` Sacos descontados de tu inventario: ${sp.map((x) => `${x.sacos} × ${x.tipo} (quedan ${x.nuevo_stock})`).join(", ")}.` : ""),
       "success"
     );
     await Promise.all([refreshSelection(), reloadStock(), sp.length ? refreshSacks() : Promise.resolve()]);
+  }
+
+  // 🚚 Traer a la piladora lo que quedó allá donde el proveedor (un viaje).
+  async function confirmarTraer() {
+    const m = traerModal;
+    if (!m) return;
+    const items = Object.entries(m.cantidades).map(([product_id, q]) => ({ product_id, quantity: Number(q) || 0 })).filter((i) => i.quantity > 0);
+    if (items.length === 0) { addToast("Escribe cuántos QQ trajeron", "error"); return; }
+    setTraerModal({ ...m, busy: true });
+    try {
+      const r = await apiPost<{ total_qq: number }>("/selection/traer", { provider_id: m.provider_id, items, notes: m.notes.trim() || undefined });
+      setTraerModal(null);
+      addToast(`🚚 ${Number(r.total_qq).enReal()} QQ llegaron a la piladora desde ${m.proveedor}`, "success");
+      await Promise.all([refreshSelection(), reloadStock()]);
+    } catch (e) {
+      setTraerModal((cur) => cur && { ...cur, busy: false });
+      addToast(e instanceof Error ? e.message : "No se pudo registrar", "error");
+    }
   }
 
   async function cancelBatch(batchId: string) {
@@ -16654,7 +16687,7 @@ Motivo (obligatorio):`, "");
                     // Stock propio del DUEÑO del pedido (cola global); si no viene, el del activo.
                     const stockDueno = (id: string) => o.stock_dueno
                       ? Number(o.stock_dueno[id] ?? 0)
-                      : stock.filter((r) => r.product_id === id && r.ownership === "OWNED").reduce((a, r) => a + Number(r.quantity), 0);
+                      : stock.filter((r) => r.product_id === id && r.ownership === "OWNED" && r.warehouse_type !== "EXTERNO").reduce((a, r) => a + Number(r.quantity), 0);
                     const dispUbicQq = round2([...invIdsPedido].reduce((s, id) => s + stockDueno(id), 0));
                     const faltanteTerminadoQq = round2([...demandaPorProducto.entries()].reduce((total, [id, requerido]) =>
                       total + Math.max(0, requerido - round2(stockDueno(id)))
@@ -16891,7 +16924,7 @@ Motivo (obligatorio):`, "");
               const stockDeNombre = (productName: string) => {
                 const invId = getInventoryProductForBrand(productName) || products.find((p) => p.name === productName)?.id || null;
                 if (!invId) return 0;
-                if (!colaGlobal) return round2(stock.filter((s) => s.product_id === invId && s.ownership === "OWNED").reduce((a, s) => a + Number(s.quantity), 0));
+                if (!colaGlobal) return round2(stock.filter((s) => s.product_id === invId && s.ownership === "OWNED" && s.warehouse_type !== "EXTERNO").reduce((a, s) => a + Number(s.quantity), 0));
                 return round2([...stockDuenos.entries()].filter(([k]) => k.endsWith(`|${invId}`)).reduce((a, [, q]) => a + q, 0));
               };
               const consMap = new Map<string, { producto: string; presentacion: string; qq: number }>();
@@ -21061,6 +21094,74 @@ Motivo (obligatorio):`, "");
             </form>
             )}
 
+            {selectionView === "proceso" && ubicacionSel && ubicacionSel.productos.some((p) => p.alla_total > 0.0005) && (() => {
+              const conAlla = ubicacionSel.productos.filter((p) => p.alla_total > 0.0005);
+              const proveedores = [...new Map(conAlla.flatMap((p) => p.alla).filter((a) => a.qq > 0.0005).map((a) => [a.provider_id, a.proveedor])).entries()];
+              return (
+                <div className="tablePanel selUbic" style={{ gridColumn: "1 / -1" }}>
+                  <h2>📍 Producto procesado: ¿dónde está?</h2>
+                  <p className="muted" style={{ margin: "0 0 8px", fontSize: 12.5 }}>Lo que el proveedor ya procesó pero sigue allá es tuyo (cuenta en tu inventario), pero no se puede despachar desde la piladora hasta traerlo.</p>
+                  <div className="selUbic__lista">
+                    {conAlla.map((p) => (
+                      <div key={p.product_id} className="selUbic__fila">
+                        <strong>{p.producto}</strong>
+                        <span className="selUbic__dato selUbic__dato--alla">📍 Allá <b>{p.alla_total.enReal()}</b> QQ{p.alla.length > 1 ? "" : p.alla[0] ? ` · ${p.alla[0].proveedor}` : ""}</span>
+                        <span className="selUbic__dato">🏭 Piladora <b>{p.piladora.enReal()}</b> QQ</span>
+                        <span className="selUbic__dato selUbic__dato--total">Total <b>{(p.piladora + p.alla_total).enReal()}</b> QQ</span>
+                        {p.alla.length > 1 && <small className="muted">{p.alla.map((a) => `${a.proveedor}: ${a.qq.enReal()}`).join(" · ")}</small>}
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                    {proveedores.map(([pid, nombre]) => (
+                      <button key={pid} type="button" className="primary" onClick={() => setTraerModal({
+                        provider_id: pid, proveedor: nombre, notes: "",
+                        cantidades: Object.fromEntries(conAlla.map((p) => [p.product_id, String(p.alla.find((a) => a.provider_id === pid)?.qq ?? "")]).filter(([, q]) => Number(q) > 0))
+                      })}>🚚 Traer a piladora desde {nombre}</button>
+                    ))}
+                  </div>
+                  {ubicacionSel.traidas.length > 0 && (
+                    <details style={{ marginTop: 10 }}>
+                      <summary style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700 }}>Últimos viajes traídos ({ubicacionSel.traidas.length})</summary>
+                      <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 12.5 }}>
+                        {ubicacionSel.traidas.slice(0, 8).map((t) => (
+                          <li key={t.id}>{t.fecha} · {t.proveedor} · {Number(t.total_qq).enReal()} QQ{t.notes ? ` · ${t.notes}` : ""}</li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                </div>
+              );
+            })()}
+
+            {traerModal && (() => {
+              const m = traerModal;
+              const filas = (ubicacionSel?.productos ?? []).map((p) => ({ p, qq: p.alla.find((a) => a.provider_id === m.provider_id)?.qq ?? 0 })).filter((x) => x.qq > 0.0005);
+              const total = Object.values(m.cantidades).reduce((s, q) => s + (Number(q) || 0), 0);
+              return (
+                <div className="modalOverlay" onClick={() => !m.busy && setTraerModal(null)}>
+                  <div className="modalCard traerModal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+                    <h3 style={{ margin: 0 }}>🚚 Traer a la piladora</h3>
+                    <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>Desde <b>{m.proveedor}</b>. Escribe cuántos QQ llegaron en este viaje (lo demás sigue allá).</p>
+                    {filas.map(({ p, qq }) => (
+                      <label key={p.product_id} className="traerModal__fila">
+                        <span><b>{p.producto}</b><small>allá hay {qq.enReal()} QQ</small></span>
+                        <input type="number" step="0.01" min="0" max={qq} value={m.cantidades[p.product_id] ?? ""} disabled={m.busy}
+                          onChange={(e) => setTraerModal({ ...m, cantidades: { ...m.cantidades, [p.product_id]: e.target.value } })} />
+                      </label>
+                    ))}
+                    <label className="traerModal__fila"><span>Nota (opcional)</span>
+                      <input type="text" placeholder="Ej: viaje en el carro de Transporte" value={m.notes} disabled={m.busy} onChange={(e) => setTraerModal({ ...m, notes: e.target.value })} />
+                    </label>
+                    <div className="buttonRow">
+                      <button type="button" className="primary" disabled={m.busy || !(total > 0)} onClick={() => confirmarTraer()}>{m.busy ? "Guardando…" : `Llegaron ${total.enReal()} QQ`}</button>
+                      <button type="button" disabled={m.busy} onClick={() => setTraerModal(null)}>Cancelar</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
             {selectionView === "proceso" && (
             <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
               <h2>⏳ En proceso (fuera de bodega)</h2>
@@ -21149,10 +21250,21 @@ Motivo (obligatorio):`, "");
                                 </label>
                               )}
                               {i === 0 ? <span /> : <button type="button" onClick={() => removeOutLine(i)} title="Quitar" style={{ border: "none", background: "transparent", color: "#dc2626", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>}
+                              {Number(line.quantity) > 0 && (
+                                <label className="selAlla">
+                                  <span>📍 De esto quedó allá ({b.provider_name}):</span>
+                                  <input type="number" step="0.01" min="0" max={line.quantity} placeholder="0" value={line.alla ?? ""} onChange={(e) => setOutLine(i, { alla: e.target.value })} />
+                                  <span>QQ</span>
+                                  <button type="button" onClick={() => setOutLine(i, { alla: line.quantity })}>Todo</button>
+                                  {Number(line.alla) > 0 && <small>🏭 llegan {Math.max(0, (Number(line.quantity) || 0) - (Number(line.alla) || 0)).enReal()} a la piladora</small>}
+                                </label>
+                              )}
                             </div>
                           ))}
                           <div style={{ marginTop: 8 }}>
                             <button type="button" onClick={addOutLine} style={{ background: "transparent", border: "1px dashed #cbd5e1", borderRadius: 6, padding: "5px 10px", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>+ Agregar subproducto</button>
+                            <button type="button" className="selAllaTodo" onClick={() => setFinishOutputs((o) => o.map((l) => ({ ...l, alla: l.quantity })))}>📍 Todo quedó allá</button>
+                            <button type="button" className="selAllaTodo" onClick={() => setFinishOutputs((o) => o.map((l) => ({ ...l, alla: "" })))}>🏭 Todo llegó a la piladora</button>
                           </div>
                           {/* Resumen de recepción: QQ Limpios / Subproducto / Merma (auto). */}
                           {(() => {
@@ -21214,7 +21326,7 @@ Motivo (obligatorio):`, "");
                           <td>{b.provider_name}</td>
                           <td>{b.status === "COMPLETED" ? <span className="chip ok">Completado</span> : <span className="chip warn">Cancelado</span>}</td>
                           <td>{Number(b.input_qq).enReal()}</td>
-                          <td>{b.outputs.length > 0 ? b.outputs.map((o, i) => <span key={i} className="chip" style={{ marginRight: 4 }}>{o.product_name}: {Number(o.quantity).enReal()} QQ</span>) : "—"}</td>
+                          <td>{b.outputs.length > 0 ? b.outputs.map((o, i) => <span key={i} className="chip" style={{ marginRight: 4 }}>{o.product_name}: {Number(o.quantity).enReal()} QQ{Number(o.qty_alla ?? 0) > 0 ? ` (📍 ${Number(o.qty_alla).enReal()} quedaron allá)` : ""}</span>) : "—"}</td>
                           <td>{Number(b.output_qq).enReal()}</td>
                           <td>{Number(b.merma_qq).enReal()}</td>
                           <td><strong>{money(Number(b.total_cost))}</strong>{b.flete_tipo && Number(b.flete_monto) > 0 && <div className="muted" style={{ fontSize: 11 }}>+ flete {money(Number(b.flete_monto))} · {b.flete_tipo === "propia" ? (b.flete_activo_nombre ?? "Transp. y Cosech.") : (b.flete_prestador ?? "externo")}</div>}</td>
@@ -26712,14 +26824,19 @@ function isCurrentStockProduct(product: Product) {
   return product.is_active !== false && ["RAW_MATERIAL", "FINISHED_GOOD", "PACKAGED_GOOD", "BYPRODUCT"].includes(product.product_type);
 }
 
+// Existencia por producto: SUMA de todas sus filas (antes tomaba solo la primera bodega que encontraba).
+// `alla` = lo que quedó donde el proveedor de envejecido/selección (bodegas EXTERNO); `quantity` = total.
 function buildDisplayStockRows(products: Product[], stock: StockRow[], fallbackWarehouse: string) {
   return products.map((product) => {
-    const row = stock.find((item) => item.code === product.code);
+    const filas = stock.filter((item) => item.code === product.code && item.ownership === "OWNED");
+    const total = filas.reduce((s, r) => s + Number(r.quantity), 0);
+    const alla = filas.filter((r) => r.warehouse_type === "EXTERNO").reduce((s, r) => s + Number(r.quantity), 0);
     return {
       product_name: product.name,
-      warehouse_name: row?.warehouse_name ?? fallbackWarehouse,
-      quantity: row?.quantity ?? 0,
-      unit: row?.unit ?? product.unit
+      warehouse_name: filas.find((r) => r.warehouse_type !== "EXTERNO")?.warehouse_name ?? fallbackWarehouse,
+      quantity: Math.round(total * 1000) / 1000,
+      alla: Math.round(alla * 1000) / 1000,
+      unit: filas[0]?.unit ?? product.unit
     };
   });
 }

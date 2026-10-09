@@ -6,7 +6,8 @@ import { useEffect, useMemo, useState } from "react";
 // Las MARCAS no tienen tarjeta propia: al tocar «Producto 0.11» o «Producto Corriente» se abre un modal con las
 // marcas en que está empacado ese arroz (y la tarjeta de resumen «Marcas» abre todas).
 
-export type FilaStock = { product_name: string; quantity: number | string; unit: string };
+// `alla` = parte que quedó donde el proveedor de envejecido (no está en la piladora); `quantity` es el total.
+export type FilaStock = { product_name: string; quantity: number | string; unit: string; alla?: number };
 export type GrupoStock = {
   clave: string;
   titulo: string;
@@ -132,6 +133,7 @@ export function InventarioExistencias({ grupos, empacados }: { grupos: GrupoStoc
                       <span className="invx__cant">{cant.enReal()} <small>{f.unit}</small></span>
                       <span className="invx__barra2" aria-hidden="true"><i style={{ width: `${estado === "cero" ? 0 : Math.max(4, (Math.abs(cant) / maximo) * 100)}%` }} /></span>
                       <span className={`invx__chip invx__chip--${estado}`}>{TEXTO_ESTADO[estado]}</span>
+                      {num(f.alla ?? 0) > 0.0005 && <span className="invx__alla">🏭 {(cant - num(f.alla ?? 0)).enReal()} en piladora · 📍 {num(f.alla ?? 0).enReal()} allá (proveedor)</span>}
                       {calidad && (
                         <span className="invx__verMarcas">
                           🛍️ {marcas.length ? `Empacado en ${marcas.length} ${marcas.length === 1 ? "marca" : "marcas"} · ${marcas.reduce((s, m) => s + num(m.cantidad), 0).enReal()} QQ` : "Sin marcas registradas"} <b>Ver ›</b>

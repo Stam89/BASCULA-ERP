@@ -102,6 +102,8 @@ ordersRouter.get("/cola-global", asyncRoute(async (_req, res) => {
                 SELECT m.product_id, SUM(m.quantity)::float AS qq
                   FROM inventory_movements m
                  WHERE m.accionista_id = o.accionista_id AND m.ownership = 'OWNED'
+                   -- Lo que quedó ALLÁ donde el proveedor de envejecido no se despacha desde la piladora.
+                   AND m.warehouse_id NOT IN (SELECT id FROM warehouses WHERE type = 'EXTERNO')
                    AND m.product_id IN (SELECT i.inventory_product_id FROM sales_order_items i WHERE i.order_id = o.id)
                  GROUP BY m.product_id
               ) x
@@ -224,6 +226,7 @@ async function validarRespaldoDelPedido(
         WHERE accionista_id = $1
           AND ownership = 'OWNED'
           AND product_id = ANY($2::uuid[])
+          AND warehouse_id NOT IN (SELECT id FROM warehouses WHERE type = 'EXTERNO')
         GROUP BY product_id`,
       [accionistaId, stockIds]
     );

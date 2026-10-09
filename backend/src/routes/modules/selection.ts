@@ -21,6 +21,24 @@ const TYPE_LABEL: Record<string, string> = {
   ENVEJECIMIENTO: "Envejecido"
 };
 
+/**
+ * Bodega «Allá: <proveedor>» (tipo EXTERNO): lo que el proveedor ya procesó pero QUEDÓ ALLÁ. Sigue siendo del
+ * socio (inventario y balance) pero no se despacha desde la piladora hasta traerlo. Se crea la primera vez.
+ */
+async function bodegaAlla(tx: PoolClient, providerId: string): Promise<string> {
+  const ya = await tx.query("SELECT id FROM warehouses WHERE external_provider_id = $1", [providerId]);
+  if (ya.rowCount) return ya.rows[0].id;
+  const prov = await tx.query("SELECT name FROM external_providers WHERE id = $1", [providerId]);
+  if (!prov.rowCount) throw new ApiError(404, "Proveedor externo no encontrado.");
+  const nueva = await tx.query(
+    `INSERT INTO warehouses (name, type, is_active, external_provider_id) VALUES ($1, 'EXTERNO', true, $2)
+     ON CONFLICT (external_provider_id) WHERE external_provider_id IS NOT NULL DO UPDATE SET is_active = true
+     RETURNING id`,
+    [`Allá: ${prov.rows[0].name}`, providerId]
+  );
+  return nueva.rows[0].id;
+}
+
 // ── Proveedores externos ─────────────────────────────────────────────────────
 // La persona ajena al negocio que hace la selección/envejecido y a la que se le
 // queda debiendo. Catálogo compartido (no se segrega por accionista).
@@ -129,7 +147,7 @@ selectionRouter.get("/batches", asyncRoute(async (req, res) => {
               SELECT json_agg(json_build_object(
                 'product_id', o.product_id, 'product_name', p.name,
                 'quantity', o.quantity, 'is_reject', o.is_reject,
-                'presentation', o.presentation, 'sack_weight_lb', o.sack_weight_lb
+                'presentation', o.presentation, 'sack_weight_lb', o.sack_weight_lb, 'qty_alla', o.qty_alla
               ) ORDER BY o.is_reject, p.name)
               FROM selection_batch_outputs o JOIN products p ON p.id = o.product_id
               WHERE o.batch_id = b.id
@@ -305,9 +323,14 @@ selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
       // Empaque: TULA (por defecto, reutilizable) o SACO. `sack_id` = saco del
       // catálogo PROPIO del socio (envejecido): se descuenta de su inventario.
       empaque: z.enum(["TULA", "SACO"]).optional(),
-      sack_id: z.string().uuid().optional()
+      sack_id: z.string().uuid().optional(),
+      // Parte de esta línea que QUEDÓ ALLÁ, donde el proveedor (no llegó a la piladora). 0 = llegó todo.
+      qty_alla: z.number().nonnegative().optional()
     })).min(1)
   }).parse(req.body);
+  for (const o of body.outputs) {
+    if ((o.qty_alla ?? 0) > o.quantity + 0.0005) throw new ApiError(400, "Lo que quedó allá no puede ser más que lo que salió de ese producto.");
+  }
 
   const result = await inTransaction(async (tx) => {
     const batch = await tx.query(
@@ -349,13 +372,16 @@ selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
     // (por producto); resto → "Saco N LB". sacos = QQ*100/peso_por_saco.
     const sacosPorTipo = new Map<string, number>();
     const sacosPropios: Array<{ tipo: string; sacos: number; nuevo_stock: number }> = [];
+    const hayAlla = body.outputs.some((o) => (o.qty_alla ?? 0) > 0.0005);
+    const widAlla = hayAlla ? await bodegaAlla(tx, batch.rows[0].provider_id) : null;
     for (const o of body.outputs) {
       const qty = round3(o.quantity);
+      const alla = round3(Math.min(qty, o.qty_alla ?? 0));
       const wid = o.warehouse_id ?? defaultWarehouse;
       await tx.query(
-        "INSERT INTO selection_batch_outputs (batch_id, product_id, warehouse_id, quantity, is_reject, presentation, sack_weight_lb, empaque, sack_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        "INSERT INTO selection_batch_outputs (batch_id, product_id, warehouse_id, quantity, is_reject, presentation, sack_weight_lb, empaque, sack_id, qty_alla) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         [req.params.id, o.product_id, wid, qty, o.is_reject ?? false, o.presentation ?? null, o.sack_weight_lb ?? null,
-         o.empaque ?? null, o.sack_id ?? null]
+         o.empaque ?? null, o.sack_id ?? null, alla]
       );
       // SACOS PROPIOS del socio (envejecido): se descuentan de SU catálogo al
       // recibir. Los de la Matriz no se tocan aquí (se descuentan al vender).
@@ -384,13 +410,24 @@ selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
         const nSacos = Math.round((qty * 100) / o.sack_weight_lb);
         if (nSacos > 0) sacosPorTipo.set(tipo, (sacosPorTipo.get(tipo) ?? 0) + nSacos);
       }
-      // Reingresa al inventario (IN = cantidad positiva).
-      await tx.query(
-        `INSERT INTO inventory_movements
-         (product_id, warehouse_id, movement, quantity, reference_type, reference_id, ownership, notes, created_by, accionista_id)
-         VALUES ($1, $2, 'IN', $3, 'selection_batch', $4, 'OWNED', $5, $6, $7)`,
-        [o.product_id, wid, qty, req.params.id, `${label}: regresó procesado${o.is_reject ? " (rechazo)" : ""}`, body.created_by ?? null, accionistaId]
-      );
+      // Reingresa al inventario (IN = cantidad positiva): lo que llegó, a la piladora; lo que quedó, a «Allá».
+      const llego = round3(qty - alla);
+      if (llego > 0.0005) {
+        await tx.query(
+          `INSERT INTO inventory_movements
+           (product_id, warehouse_id, movement, quantity, reference_type, reference_id, ownership, notes, created_by, accionista_id)
+           VALUES ($1, $2, 'IN', $3, 'selection_batch', $4, 'OWNED', $5, $6, $7)`,
+          [o.product_id, wid, llego, req.params.id, `${label}: regresó procesado${o.is_reject ? " (rechazo)" : ""}`, body.created_by ?? null, accionistaId]
+        );
+      }
+      if (alla > 0.0005 && widAlla) {
+        await tx.query(
+          `INSERT INTO inventory_movements
+           (product_id, warehouse_id, movement, quantity, reference_type, reference_id, ownership, notes, created_by, accionista_id)
+           VALUES ($1, $2, 'IN', $3, 'selection_batch', $4, 'OWNED', $5, $6, $7)`,
+          [o.product_id, widAlla, alla, req.params.id, `${label}: procesado, QUEDÓ ALLÁ donde el proveedor${o.is_reject ? " (rechazo)" : ""}`, body.created_by ?? null, accionistaId]
+        );
+      }
     }
 
     // SACOS: desde 2026-09 se descuentan al VENDER (Confirmar Preparación del
@@ -460,4 +497,92 @@ selectionRouter.post("/batches/:id/cancel", asyncRoute(async (req, res) => {
   });
 
   res.json(result);
+}));
+
+// ── ¿Dónde está el producto? En la piladora o ALLÁ donde el proveedor ─────────
+// Por producto del accionista activo: QQ en la piladora (bodegas propias) y QQ allá (por proveedor), más los viajes.
+selectionRouter.get("/ubicacion", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const filas = (await pool.query(
+    `SELECT p.id AS product_id, p.name AS producto, p.code,
+            w.type = 'EXTERNO' AS es_alla, w.external_provider_id AS provider_id, pr.name AS proveedor,
+            SUM(m.quantity)::float AS qq
+       FROM inventory_movements m
+       JOIN products p ON p.id = m.product_id
+       JOIN warehouses w ON w.id = m.warehouse_id
+       LEFT JOIN external_providers pr ON pr.id = w.external_provider_id
+      WHERE m.accionista_id = $1 AND m.ownership = 'OWNED'
+        AND p.product_type IN ('FINISHED_GOOD', 'PACKAGED_GOOD', 'BYPRODUCT')
+      GROUP BY p.id, p.name, p.code, w.type, w.external_provider_id, pr.name
+     HAVING abs(SUM(m.quantity)) > 0.0005`,
+    [accionistaId]
+  )).rows as Array<{ product_id: string; producto: string; code: string; es_alla: boolean; provider_id: string | null; proveedor: string | null; qq: number }>;
+  const porProducto = new Map<string, { product_id: string; producto: string; code: string; piladora: number; alla_total: number; alla: Array<{ provider_id: string; proveedor: string; qq: number }> }>();
+  for (const f of filas) {
+    const x = porProducto.get(f.product_id) ?? { product_id: f.product_id, producto: f.producto, code: f.code, piladora: 0, alla_total: 0, alla: [] };
+    if (f.es_alla && f.provider_id) {
+      x.alla.push({ provider_id: f.provider_id, proveedor: f.proveedor ?? "Proveedor", qq: round3(f.qq) });
+      x.alla_total = round3(x.alla_total + f.qq);
+    } else {
+      x.piladora = round3(x.piladora + f.qq);
+    }
+    porProducto.set(f.product_id, x);
+  }
+  const traidas = (await pool.query(
+    `SELECT t.id, t.fecha::text AS fecha, t.items, t.total_qq::float AS total_qq, t.notes, pr.name AS proveedor
+       FROM selection_traidas t JOIN external_providers pr ON pr.id = t.provider_id
+      WHERE t.accionista_id = $1 ORDER BY t.created_at DESC LIMIT 20`,
+    [accionistaId]
+  )).rows;
+  res.json({
+    productos: [...porProducto.values()].sort((a, b) => (b.alla_total - a.alla_total) || a.producto.localeCompare(b.producto)),
+    traidas
+  });
+}));
+
+// ── Traer a la piladora lo que quedó allá (un viaje) ──────────────────────────
+selectionRouter.post("/traer", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  if (!accionistaId) throw new ApiError(400, "No hay accionista activo.");
+  const body = z.object({
+    provider_id: z.string().uuid(),
+    fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    notes: z.string().max(300).optional(),
+    created_by: z.string().uuid().optional(),
+    items: z.array(z.object({ product_id: z.string().uuid(), quantity: z.number().positive() })).min(1)
+  }).parse(req.body);
+  const ids = body.items.map((i) => i.product_id);
+  if (new Set(ids).size !== ids.length) throw new ApiError(400, "Hay un producto repetido; súmalo en una sola línea.");
+
+  const result = await inTransaction(async (tx) => {
+    const alla = await tx.query("SELECT id, name FROM warehouses WHERE external_provider_id = $1", [body.provider_id]);
+    if (!alla.rowCount) throw new ApiError(404, "No hay nada registrado allá con ese proveedor.");
+    const planta = await tx.query("SELECT id FROM warehouses WHERE type = 'FINISHED_GOODS' AND is_active = true ORDER BY name LIMIT 1");
+    if (!planta.rowCount) throw new ApiError(400, "No existe la bodega de producto terminado de la piladora.");
+    const traida = await tx.query(
+      `INSERT INTO selection_traidas (accionista_id, provider_id, fecha, items, total_qq, notes, created_by)
+       VALUES ($1, $2, COALESCE($3::date, CURRENT_DATE), $4::jsonb, $5, $6, $7) RETURNING id`,
+      [accionistaId, body.provider_id, body.fecha ?? null, JSON.stringify(body.items.map((i) => ({ product_id: i.product_id, quantity: round3(i.quantity) }))),
+       round3(body.items.reduce((s, i) => s + i.quantity, 0)), body.notes ?? null, body.created_by ?? null]
+    );
+    const traidaId = traida.rows[0].id;
+    for (const it of body.items) {
+      const qty = round3(it.quantity);
+      // Sale de «Allá» (valida que haya: no se trae más de lo que quedó)…
+      await consumeInventoryFIFO(tx, {
+        productId: it.product_id, warehouseId: alla.rows[0].id, accionistaId, quantity: qty,
+        referenceType: "selection_traida", referenceId: traidaId,
+        notes: `Traído a la piladora desde ${alla.rows[0].name}`, createdBy: body.created_by ?? null
+      });
+      // …y entra a la piladora.
+      await tx.query(
+        `INSERT INTO inventory_movements
+         (product_id, warehouse_id, movement, quantity, reference_type, reference_id, ownership, notes, created_by, accionista_id)
+         VALUES ($1, $2, 'IN', $3, 'selection_traida', $4, 'OWNED', $5, $6, $7)`,
+        [it.product_id, planta.rows[0].id, qty, traidaId, `Llegó a la piladora desde ${alla.rows[0].name}`, body.created_by ?? null, accionistaId]
+      );
+    }
+    return { id: traidaId, total_qq: round3(body.items.reduce((s, i) => s + i.quantity, 0)) };
+  });
+  res.status(201).json(result);
 }));

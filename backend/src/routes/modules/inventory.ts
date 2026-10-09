@@ -21,12 +21,13 @@ inventoryRouter.get("/stock", asyncRoute(async (req, res) => {
        p.name AS product_name,
        p.product_type,
        p.unit,
-       w.name AS warehouse_name
+       w.name AS warehouse_name,
+       w.type AS warehouse_type
      FROM inventory_stock s
      JOIN products p ON p.id = s.product_id
      JOIN warehouses w ON w.id = s.warehouse_id
      WHERE s.accionista_id = $1
-     GROUP BY s.product_id, s.warehouse_id, s.ownership, p.code, p.name, p.product_type, p.unit, w.name
+     GROUP BY s.product_id, s.warehouse_id, s.ownership, p.code, p.name, p.product_type, p.unit, w.name, w.type
      HAVING SUM(s.quantity) <> 0
      ORDER BY p.product_type, p.name, w.name`,
     [accionistaId]
