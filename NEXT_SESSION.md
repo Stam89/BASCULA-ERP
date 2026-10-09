@@ -49,6 +49,10 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🤝 Cobro que recibió OTRO socio (2026-10-09, pedido del dueño)
+
+- Caso: el cliente de un socio le deposita a la Matriz (u otro socio). Por Cobrar › «Ver detalle y cobrar» › «¿Quién recibió el dinero?» (solo cuentas de clientes/agricultores, no entre socios). `POST /receivable/pay-group` con `recibido_por` (+ `medio_pago`, por defecto BANCO): el cliente baja su deuda; el dinero entra a la caja ABIERTA del que lo recibió como `COBRO_POR_SOCIO` (no es venta ni ingreso suyo); nace la deuda espejo `cobro_por_socio` (CxC del socio ↔ CxP del que recibió, reference_id = el ingreso) que se salda como cualquier deuda entre socios (`PAGO_ENTRE_SOCIOS`). Sin caja abierta del que recibió → 409; operador sin acceso a ese accionista → 403. Anular el ingreso en Caja (desde el que recibió) devuelve la deuda al cliente y anula la deuda entre socios (409 si ya tiene abonos). Regla de integridad nueva (50). Simulacro `cobro_por_socio.mjs` TODO OK; verificado en celular sobre la copia.
+
 ### 🔐 Credencial individual por tablet BASCULA (2026-10-09)
 - Migración `20261086`: tabla `bascula_devices`; el ERP conserva únicamente el hash SHA-256 del token, estado activo, modelo y último contacto.
 - `POST /api/bascula/register-device`: alta/rotación autorizada con la clave de instalación. Las rutas directas aceptan token individual + `X-Device-Id`; durante la transición también aceptan la clave legada para no cortar APK anteriores.
