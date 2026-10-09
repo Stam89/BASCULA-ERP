@@ -49,6 +49,14 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🔐 Permisos completos: LECTURA por módulo + permisos especiales (2026-10-08, pedido del dueño)
+- `require-auth.ts`: `READ_MODULES_BY_PREFIX` (GET exige Ver/Editar en ALGUNA pestaña que use esos datos; `abiertas` = lecturas de apoyo: caja abierta, categorías, tarifas vigentes, cuentas bancarias, lista de carros…). Base compartida (agricultores, inventario, lotes, productos, catálogos, secadoras, sacos, repuestos, tablero, ajustes) sigue libre. `exigirLecturaEn` para /tickets. `SUB_DE_LECTURA`: Reportes respeta sub-pestañas marcadas.
+- Buscador Ctrl+K filtra por pestañas permitidas. Reportes ya NO es solo admin: se abre con el permiso «Reportes» (antes el operador veía la pestaña vacía).
+- `requirePermiso("ANULAR"|"EDITAR_PRECIOS")`: PERM:ANULAR / PERM:EDITAR_PRECIOS ahora valen en el servidor (antes solo ocultaban botones; y anular movimiento/egreso crédito/liquidación eran solo admin aunque el permiso se diera). Aplica a: cash reverse y creditos anular; liquidations anular y set-lock; fomentos DELETE (fomento, entrega, pago), PATCH renta, interés fijo; processing precio-venta (Gana). Anular venta despachada y producción siguen solo admin.
+- Matriz de permisos: quitadas «Gestión de Cuadrilla» y «Bancos» (nunca hacían nada). Diagnóstico Firebase solo admin. Carga inicial no pide liquidaciones sin permiso.
+- Simulacro `permisos.mjs` (operadores de prueba en la COPIA + cada operador REAL × accionista: sus pestañas cargan sin 403). Verificado además en navegador (copia :4001) con Richar, Angie (CEYRO y ROVINSON) y Cecilia: 0 bloqueos.
+- Al agregar una pestaña nueva que lea datos de otro módulo: sumar esa pestaña en READ_MODULES_BY_PREFIX y en POR_PESTANA de permisos.mjs.
+
 ### 🔐 Permisos de Configuración auditados (2026-10-08)
 - Antes un operador con EDIT del módulo podía cambiar tarifas/catálogos. Ahora `requireAdmin` en: selection PUT /rates; pilado POST/PATCH /tarifas; cash POST/PATCH/DELETE /categories; admin-payroll POST/PUT/DELETE /staff y /reactivar; cuadrilla POST/PUT /activities; sacks POST/PATCH/DELETE y /precio; products POST /. Botón «⚙️ Catálogo de Productos» oculto a no-admin.
 - Siguen operativos (a propósito): categorías de equipos (se usan desde mantenimiento), Campo (permiso propio), clientes.
