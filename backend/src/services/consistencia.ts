@@ -17,6 +17,23 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
     SELECT r.reference_id FROM accounts_receivable r JOIN accounts_payable p ON p.reference_type = r.reference_type AND p.reference_id = r.reference_id
      WHERE r.reference_type = 'saldo_inicial_socio' AND r.status <> 'CANCELLED' AND p.status <> 'CANCELLED'
        AND (abs(r.amount - p.amount) > 0.005 OR abs(r.balance - p.balance) > 0.005)` },
+  { modulo: "Cuentas", nombre: "Deudas entre socios: la Por Cobrar de uno y la Por Pagar del otro tienen el mismo monto, saldo y estado", sql: `
+    WITH pares AS (
+      SELECT 'pilado' AS tipo, receivable_id AS ar, payable_id AS ap FROM pilado_services WHERE receivable_id IS NOT NULL AND payable_id IS NOT NULL
+      UNION ALL SELECT 'traspaso', receivable_id, payable_id FROM lot_transfers WHERE receivable_id IS NOT NULL AND payable_id IS NOT NULL
+      UNION ALL SELECT 'servicio_matriz', receivable_id, payable_id FROM matriz_service_charges WHERE receivable_id IS NOT NULL AND payable_id IS NOT NULL
+      UNION ALL SELECT 'empaque', receivable_id, payable_id FROM matriz_packaging_charges WHERE receivable_id IS NOT NULL AND payable_id IS NOT NULL
+      UNION ALL SELECT r.reference_type, r.id, p.id FROM accounts_receivable r
+        JOIN accounts_payable p ON p.reference_type = r.reference_type AND p.reference_id = r.reference_id AND p.accionista_id IS DISTINCT FROM r.accionista_id
+       WHERE r.reference_type IN ('fomento_cruce', 'retencion_matriz', 'compra_producto_socio') AND r.reference_id IS NOT NULL)
+    SELECT x.tipo, r.id AS cxc, p.id AS cxp, r.balance::float AS saldo_cxc, p.balance::float AS saldo_cxp, r.status::text AS est_cxc, p.status::text AS est_cxp
+      FROM pares x JOIN accounts_receivable r ON r.id = x.ar JOIN accounts_payable p ON p.id = x.ap
+     WHERE abs(r.amount - p.amount) > 0.005 OR abs(r.balance - p.balance) > 0.005
+        OR (r.status::text = 'CANCELLED') <> (p.status::text = 'CANCELLED')` },
+  { modulo: "Caja", nombre: "Pagos y cobros de varias cuentas: el desglose suma lo que movió la caja", sql: `
+    SELECT cm.id, cm.amount::float AS movimiento, sum(d.monto)::float AS desglose
+      FROM cash_movement_cuentas d JOIN cash_movements cm ON cm.id = d.cash_movement_id
+     GROUP BY cm.id, cm.amount HAVING abs(cm.amount - sum(d.monto)) > 0.005` },
   { modulo: "Transporte", nombre: "Espejo de Transporte: la Por Pagar del socio = saldo pendiente del servicio en Campo", sql: `
     SELECT p.id, p.balance::float b, v.saldo_pendiente::float s FROM accounts_payable p JOIN campo_servicios_saldo v ON v.id = p.reference_id
      WHERE p.reference_type = 'campo_servicio' AND p.status <> 'CANCELLED' AND abs(p.balance - GREATEST(0, v.saldo_pendiente)) > 0.01` },

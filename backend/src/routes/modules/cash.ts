@@ -927,6 +927,22 @@ cashRouter.post("/movements/:id/convertir-fondo", asyncRoute(async (req, res) =>
   res.json(result);
 }));
 
+// Categoría del egreso al pagar una cuenta por pagar: depende de QUÉ se paga (no todo es a un agricultor).
+export function categoriaDePagoCxP(ap: { reference_type: string | null; categoria?: string | null; farmer_id?: string | null }): string {
+  const t = ap.reference_type;
+  if (t === "pilado_service") return "PAGO_SERVICIO_PILADO";
+  // Deudas entre socios / Matriz / Transporte (incluye el saldo inicial entre socios).
+  if (t && ["lot_transfer", "campo_servicio", "fomento_cruce", "retencion_matriz", "packaging_charge", "service_charge",
+    "saldo_inicial_socio", "compra_producto_socio"].includes(t)) return "PAGO_ENTRE_SOCIOS";
+  if (t === "selection_batch") return "PAGO_SELECCION";
+  if (t === "purchase") return "PAGO_PROVEEDOR";
+  // Gasto a crédito: el egreso lleva la categoría del gasto original (el Resultado mensual lo cuenta en su rubro).
+  if (t === "gasto_credito") return ap.categoria || "PAGO_PROVEEDOR";
+  // Deuda del saldo inicial (anterior al arranque): no es costo del mes en que se paga.
+  if (t === "saldo_inicial" && !ap.farmer_id) return "PAGO_SALDO_INICIAL";
+  return "PAGO_AGRICULTOR";
+}
+
 // ── Cuentas por pagar pendientes ─────────────────────────────────────────────
 cashRouter.get("/payables", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
@@ -963,7 +979,7 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
               'Cuenta por pagar'
             ) AS farmer_name,
             -- Deuda entre socios / Matriz / Transporte (se espeja con la otra cara).
-            (ap.reference_type IN ('campo_servicio', 'fomento_cruce', 'retencion_matriz', 'packaging_charge', 'pilado_service', 'lot_transfer', 'service_charge', 'saldo_inicial_socio')
+            (ap.reference_type IN ('campo_servicio', 'fomento_cruce', 'retencion_matriz', 'packaging_charge', 'pilado_service', 'lot_transfer', 'service_charge', 'saldo_inicial_socio', 'compra_producto_socio')
               OR ps.id IS NOT NULL OR msc.id IS NOT NULL OR mpc.id IS NOT NULL OR lt.id IS NOT NULL) AS entre_socios,
             l.liquidation_number, l.batch_id
      FROM accounts_payable ap
@@ -982,7 +998,7 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
      LEFT JOIN accionistas lt_from ON lt_from.id = lt.from_accionista_id
      LEFT JOIN LATERAL (
        SELECT a.name FROM accounts_receivable h JOIN accionistas a ON a.id = h.accionista_id
-        WHERE ap.reference_type IN ('fomento_cruce', 'retencion_matriz', 'saldo_inicial_socio')
+        WHERE ap.reference_type IN ('fomento_cruce', 'retencion_matriz', 'saldo_inicial_socio', 'compra_producto_socio')
           AND h.reference_type = ap.reference_type AND h.reference_id = ap.reference_id
           AND h.accionista_id IS DISTINCT FROM ap.accionista_id
         LIMIT 1
@@ -1147,7 +1163,7 @@ cashRouter.post("/payables/:id/pay", asyncRoute(async (req, res) => {
     const current = Number(ap.rows[0].balance);
     if (body.amount > current + 0.001) throw new ApiError(409, `El monto supera el saldo pendiente ($${current.toFixed(2)})`);
 
-    const newBalance = Math.max(0, current - body.amount);
+    const newBalance = Math.max(0, round2(current - body.amount));
     const newStatus = newBalance < 0.01 ? "PAID" : "PARTIAL";
 
     await client.query(
@@ -1158,18 +1174,7 @@ cashRouter.post("/payables/:id/pay", asyncRoute(async (req, res) => {
     // La categoría del movimiento depende de QUÉ se paga: no todo es a un
     // agricultor. Un servicio de pilado o un traspaso son entre socios.
     const refType = ap.rows[0].reference_type;
-    const categoria =
-      refType === "pilado_service" ? "PAGO_SERVICIO_PILADO" :
-      refType === "lot_transfer" || refType === "campo_servicio" || refType === "fomento_cruce" || refType === "retencion_matriz" || refType === "packaging_charge" ? "PAGO_ENTRE_SOCIOS" :
-      refType === "selection_batch" ? "PAGO_SELECCION" :
-      refType === "purchase" ? "PAGO_PROVEEDOR" :
-      // Gasto a crédito: al pagarlo, el egreso lleva la categoría del gasto
-      // original (así el Resultado mensual lo cuenta en su rubro).
-      refType === "gasto_credito" ? (ap.rows[0].categoria || "PAGO_PROVEEDOR") :
-      // Deuda del saldo inicial (anterior al arranque): no es costo del mes en que se paga.
-      refType === "saldo_inicial_socio" ? "PAGO_ENTRE_SOCIOS" :
-      refType === "saldo_inicial" && !ap.rows[0].farmer_id ? "PAGO_SALDO_INICIAL" :
-      "PAGO_AGRICULTOR";
+    const categoria = categoriaDePagoCxP(ap.rows[0]);
     // La descripción dice a quién se paga, sin repetir "Pago a" si ya lo trae.
     const aQuien = ap.rows[0].farmer_name
       ? `Pago a ${ap.rows[0].farmer_name}`
@@ -1235,6 +1240,7 @@ cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
     }
 
     let restante = body.amount;
+    const desglose: Array<{ id: string; monto: number }> = [];
     const espejos: Array<Awaited<ReturnType<typeof espejarAbonoEnContraparte>>> = [];
     for (const ap of cuentas.rows) {
       if (restante <= 0) break;
@@ -1247,6 +1253,7 @@ cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
       // Deuda entre socios/Matriz/Transporte: el abono baja también la POR COBRAR
       // del que cobra, entra a su caja y le avisa (antes el pago en grupo no espejaba).
       if (abono > 0) {
+        desglose.push({ id: ap.id, monto: abono });
         espejos.push(await espejarAbonoEnContraparte(client, {
           desde: "payable",
           cuentaId: String(ap.id),
@@ -1258,26 +1265,21 @@ cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
     }
 
     const primera = cuentas.rows[0];
-    const refType = primera.reference_type;
-    const categoria =
-      refType === "pilado_service" ? "PAGO_SERVICIO_PILADO" :
-      refType === "lot_transfer" || refType === "campo_servicio" || refType === "fomento_cruce" || refType === "retencion_matriz" || refType === "packaging_charge" ? "PAGO_ENTRE_SOCIOS" :
-      refType === "selection_batch" ? "PAGO_SELECCION" :
-      refType === "purchase" ? "PAGO_PROVEEDOR" :
-      // Gasto a crédito: al pagarlo, el egreso lleva la categoría del gasto
-      // original (así el Resultado mensual lo cuenta en su rubro).
-      refType === "gasto_credito" ? (primera.categoria || "PAGO_PROVEEDOR") :
-      // Deuda del saldo inicial (anterior al arranque): no es costo del mes en que se paga.
-      refType === "saldo_inicial_socio" ? "PAGO_ENTRE_SOCIOS" :
-      refType === "saldo_inicial" && !primera.farmer_id ? "PAGO_SALDO_INICIAL" :
-      "PAGO_AGRICULTOR";
-    await client.query(
+    const categoria = categoriaDePagoCxP(primera);
+    const mov = await client.query(
       `INSERT INTO cash_movements
        (cash_register_id, movement, category, reference_type, reference_id, amount, description)
-       VALUES ($1, 'EXPENSE', $2, 'accounts_payable', $3, $4, $5)`,
+       VALUES ($1, 'EXPENSE', $2, 'accounts_payable', $3, $4, $5) RETURNING id`,
       [body.cash_register_id, categoria, primera.id, body.amount,
        `Pago a ${primera.farmer_name ?? primera.description ?? "proveedor"}`]
     );
+    // Desglose: cuánto se abonó a cada cuenta (al anular el pago, TODAS vuelven a deber lo suyo).
+    for (const d of desglose) {
+      await client.query(
+        "INSERT INTO cash_movement_cuentas (cash_movement_id, tabla, cuenta_id, monto) VALUES ($1, 'accounts_payable', $2, $3)",
+        [mov.rows[0].id, d.id, d.monto]
+      );
+    }
 
     return { paid: body.amount, remaining: round2(pendiente - body.amount), espejos: espejos.filter(Boolean) };
   });

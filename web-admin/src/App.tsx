@@ -2115,6 +2115,20 @@ function EntityAutocomplete({ options, value, onSelect, disabled, placeholder }:
   );
 }
 
+// Sin tildes y en minúsculas, para buscar nombres («Peña» = «pena»).
+function normalizarTexto(t: string): string {
+  return t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+// Antigüedad de la deuda MÁS VIEJA de un deudor/acreedor: ayuda a decidir a quién cobrar (o pagar) primero.
+function AntiguedadDeuda({ fechas }: { fechas: Array<string | null | undefined> }) {
+  const vieja = fechas.filter(Boolean).map((f) => new Date(String(f)).getTime()).filter((t) => !Number.isNaN(t)).sort((a, b) => a - b)[0];
+  if (!vieja) return null;
+  const dias = Math.max(0, Math.floor((Date.now() - vieja) / 86400000));
+  const tono = dias > 60 ? "cuentasEdad cuentasEdad--alta" : dias > 30 ? "cuentasEdad cuentasEdad--media" : "cuentasEdad";
+  return <small className={tono}>⏱ {dias === 0 ? "desde hoy" : dias === 1 ? "hace 1 día" : `hace ${dias} días`}</small>;
+}
+
 export function App() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(() => {
     const user = loadStoredAuth();
@@ -3449,6 +3463,8 @@ export function App() {
   );
   const [comprarProdBusy, setComprarProdBusy] = useState(false);
   const [apFilter, setApFilter] = useState<"todos" | "socios" | "agricultores" | "matriz">("todos");
+  // Buscador por nombre en Por Cobrar / Por Pagar (útil en el celular con muchos deudores).
+  const [cuentasBuscar, setCuentasBuscar] = useState("");
   const [newCustomerForm, setNewCustomerForm] = useState({ full_name: "", phone: "", identification: "", address: "", customer_type: "NATURAL" as "NATURAL"|"EMPRESA" });
   // Modal de edición de un cliente existente (para completar/corregir datos fiscales).
   const [editCustomer, setEditCustomer] = useState<Customer | null>(null);
@@ -7509,44 +7525,31 @@ export function App() {
     await refreshCaja(registerId);
   }
 
-  // Pago crudo de UNA cuenta por cobrar (sin toast/refresh individuales), para
-  // encadenar varios cobros del mismo deudor y refrescar/avisar una sola vez.
-  async function payReceivableRaw(id: string, amount: number) {
-    const registerId = dashboard.current_cash_register?.id;
-    if (!registerId) throw new Error("No hay caja abierta");
-    await apiPost(`/receivable/${id}/pay`, { amount, cash_register_id: registerId });
-  }
-
-  // Pagar TODO el saldo de un deudor (todas sus cuentas), una por una.
-  async function pagarTotalReceivableGrupo(items: AccountsReceivable[]) {
+  // Cobro de VARIAS cuentas del mismo deudor: UN solo ingreso en caja y todo o nada (si algo falla no queda
+  // nada a medias). Se aplica a las deudas más antiguas primero; si se anula en Caja, todas vuelven a deber.
+  async function cobrarReceivableGrupo(items: AccountsReceivable[], monto: number) {
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) { addToast("No hay caja abierta", "error"); return; }
-    let cobrado = 0;
-    for (const it of items) {
-      const saldo = round2(Number(it.balance));
-      if (saldo > 0.001) { await payReceivableRaw(it.id, saldo); cobrado = round2(cobrado + saldo); }
-    }
+    const total = round2(monto);
+    if (!(total > 0)) { addToast("Monto inválido", "error"); return; }
+    const r = await apiPost<{ paid: number; cuentas: number; espejos: Array<{ accionista: string; caja_registrada: boolean }> }>(
+      "/receivable/pay-group", { receivable_ids: items.map((it) => it.id), amount: total, cash_register_id: registerId }
+    );
     await refreshReceivables();
     await refreshCaja(registerId);
-    addToast(`Cobro total registrado: ${money(cobrado)}`, "success");
+    const espejo = r.espejos[0];
+    addToast(`Cobro de ${money(r.paid)} aplicado a ${r.cuentas > 1 ? `${r.cuentas} deudas (las más antiguas primero)` : "la deuda"}` +
+      (espejo ? `. También bajó la Por Pagar de ${espejo.accionista}.` : ""), "success");
+  }
+
+  // Pagar TODO el saldo de un deudor (todas sus cuentas).
+  async function pagarTotalReceivableGrupo(items: AccountsReceivable[]) {
+    await cobrarReceivableGrupo(items, items.reduce((s, it) => round2(s + Number(it.balance)), 0));
   }
 
   // Abono parcial de un deudor: se aplica a sus deudas más antiguas primero.
   async function abonarReceivableGrupo(items: AccountsReceivable[], monto: number) {
-    const registerId = dashboard.current_cash_register?.id;
-    if (!registerId) { addToast("No hay caja abierta", "error"); return; }
-    let restante = round2(monto);
-    if (restante <= 0) { addToast("Monto inválido", "error"); return; }
-    const ordenadas = [...items].sort((a, b) => (a.created_at || "").localeCompare(b.created_at || ""));
-    let aplicado = 0;
-    for (const it of ordenadas) {
-      if (restante <= 0.001) break;
-      const aplica = round2(Math.min(restante, Number(it.balance)));
-      if (aplica > 0.001) { await payReceivableRaw(it.id, aplica); restante = round2(restante - aplica); aplicado = round2(aplicado + aplica); }
-    }
-    await refreshReceivables();
-    await refreshCaja(registerId);
-    addToast(`Abono de ${money(aplicado)} aplicado a ${items.length > 1 ? "las deudas más antiguas" : "la deuda"}`, "success");
+    await cobrarReceivableGrupo(items, monto);
   }
 
   // Abre el modal de "Comprar producto / Cruzar CxC" para un cliente (grupo de
@@ -7573,7 +7576,7 @@ export function App() {
     if (items.some((it) => !(it.price_per_qq > 0))) { addToast("Hay filas con precio en 0", "error"); return; }
     setComprarProdBusy(true);
     try {
-      const res = await apiPost<{ monto: number; aplicado: number; credito_a_favor: number; cuentas_afectadas: number; comprador: string; producto: string; items: number; quintals: number }>(
+      const res = await apiPost<{ monto: number; aplicado: number; credito_a_favor: number; cuentas_afectadas: number; comprador: string; producto: string; items: number; quintals: number; deuda_entre_socios: { deudor: string; monto: number } | null }>(
         "/receivable/comprar-producto",
         {
           buyer_accionista_id: f.buyer_accionista_id,
@@ -7585,9 +7588,12 @@ export function App() {
       const extra = res.credito_a_favor > 0.01
         ? ` Excedente ${money(res.credito_a_favor)} quedó como crédito a favor del cliente.`
         : "";
+      const entreSocios = res.deuda_entre_socios
+        ? ` Como el producto se lo quedó ${res.deuda_entre_socios.deudor}, ${res.deuda_entre_socios.deudor} te debe ${money(res.deuda_entre_socios.monto)} (Por Cobrar).`
+        : "";
       addToast(
         `${res.items} ítem(s) (${res.quintals} QQ) ingresaron al stock de ${res.comprador}. ` +
-        `Se cruzaron ${money(res.aplicado)} contra ${res.cuentas_afectadas} deuda(s).${extra}`,
+        `Se cruzaron ${money(res.aplicado)} contra ${res.cuentas_afectadas} deuda(s).${extra}${entreSocios}`,
         "success"
       );
       setComprarProd(null);
@@ -20487,10 +20493,10 @@ Motivo (obligatorio):`, "");
           const esVenta = (ar: AccountsReceivable) => ["sales_order", "sales", "sale", "invoice"].includes(ar.reference_type || "")
             // Saldo inicial de un cliente (ventas de antes del arranque).
             || (ar.reference_type === "saldo_inicial" && !!ar.customer_id);
-          const filtrado = accountsReceivable.filter((ar) =>
-            arFilter === "todos" ? true : arFilter === "ventas" ? esVenta(ar) : clasif(ar) === arFilter
-          );
-          const grupos = groupReceivables(filtrado);
+          const enFiltro = (ar: AccountsReceivable, f: typeof arFilter) => f === "todos" ? true : f === "ventas" ? esVenta(ar) : clasif(ar) === f;
+          const filtrado = accountsReceivable.filter((ar) => enFiltro(ar, arFilter));
+          const buscado = normalizarTexto(cuentasBuscar.trim());
+          const grupos = groupReceivables(filtrado).filter((g) => !buscado || normalizarTexto(g.nombre).includes(buscado));
           const totalPend = filtrado.reduce((a, r) => a + Number(r.balance), 0);
           const vencidas = filtrado.filter(esVencida);
           // Orden solicitado: CxC por Ventas · Socios · Agricultores · Matriz · Todos (al final).
@@ -20525,22 +20531,29 @@ Motivo (obligatorio):`, "");
                 </div>
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "12px 0 4px" }}>
-                {tabs.map(([k, lbl]) => (
-                  <button key={k} type="button" onClick={() => setArFilter(k)} className={arFilter === k ? "primary" : ""} style={{ fontSize: 12, padding: "6px 14px", borderRadius: 999 }}>{lbl}</button>
-                ))}
+                {tabs.map(([k, lbl]) => {
+                  // Cada filtro dice cuánto hay: así no se pierde una deuda que está en otra vista.
+                  const suma = accountsReceivable.filter((ar) => enFiltro(ar, k)).reduce((a, r) => a + Number(r.balance), 0);
+                  return (
+                    <button key={k} type="button" onClick={() => setArFilter(k)} className={arFilter === k ? "primary cuentasChip" : "cuentasChip"}>
+                      {lbl}{suma > 0.005 && <small> · {money(suma)}</small>}
+                    </button>
+                  );
+                })}
               </div>
+              <input type="search" className="cuentasBuscar" placeholder="🔎 Buscar por nombre…" value={cuentasBuscar} onChange={(e) => setCuentasBuscar(e.target.value)} />
               {!dashboard.current_cash_register && (
                 <div className="alertBox" style={{ marginTop: 8 }}>Abre una caja para poder registrar cobros.</div>
               )}
               <div style={{ overflowX: "auto" }}>
-                <table className="cajaTable" style={{ marginTop: 8 }}>
+                <table className="cajaTable cuentasTabla" style={{ marginTop: 8 }}>
                   <thead><tr>
                     <th>Cliente / Deudor</th><th className="num">Movimientos</th><th className="num">Debe</th>
                     <th className="num">Haber</th><th className="num">Saldo</th><th>Acciones</th>
                   </tr></thead>
                   <tbody>
                     {grupos.length === 0 ? (
-                      <tr><td colSpan={6} className="muted" style={{ textAlign: "center", padding: 14 }}>✅ No hay cuentas por cobrar en esta vista.</td></tr>
+                      <tr><td colSpan={6} className="muted" style={{ textAlign: "center", padding: 14 }}>{buscado ? "Nadie con ese nombre en esta vista." : "✅ No hay cuentas por cobrar en esta vista."}</td></tr>
                     ) : grupos.map((g) => {
                       const saldo = g.items.reduce((a, r) => a + Number(r.balance), 0);
                       const total = g.items.reduce((a, r) => a + Number(r.amount), 0);
@@ -20551,17 +20564,18 @@ Motivo (obligatorio):`, "");
                       const rinde = rindeDesgloseGrupo(g.items);
                       return (
                         <tr key={g.key}>
-                          <td style={{ fontWeight: 600 }}>
+                          <td className="cuentasNombre" style={{ fontWeight: 600 }}>
                             {g.nombre}
                             {hayVencida && <span style={{ marginLeft: 6 }}><EstadoBadge status="PARTIAL" vencido={true} /></span>}
                             <small className="muted" style={{ display: "block", fontWeight: 400 }}>{etiqueta}</small>
+                            <AntiguedadDeuda fechas={g.items.map((r) => r.created_at)} />
                             {rinde && <small style={{ display: "block", color: "#6b21a8", fontWeight: 600 }}>{rinde}</small>}
                           </td>
-                          <td className="num">{g.items.length}</td>
-                          <td className="num">{money(total)}</td>
-                          <td className="num" style={{ color: "#15803d" }}>{money(haber)}</td>
-                          <td className="num" style={{ fontWeight: 700, color: saldo > 0.005 ? "#b45309" : "#15803d" }}>{money(saldo)}</td>
-                          <td style={{ whiteSpace: "nowrap" }}>
+                          <td className="num" data-label="Movimientos">{g.items.length}</td>
+                          <td className="num" data-label="Debe">{money(total)}</td>
+                          <td className="num" data-label="Haber" style={{ color: "#15803d" }}>{money(haber)}</td>
+                          <td className="num cuentasSaldo" data-label="Saldo" style={{ fontWeight: 700, color: saldo > 0.005 ? "#b45309" : "#15803d" }}>{money(saldo)}</td>
+                          <td className="cuentasAcciones" style={{ whiteSpace: "nowrap" }}>
                             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                               <button type="button" className="primary" onClick={() => setArDetalleKey(g.key)}>📄 Ver detalle y cobrar</button>
                               <button type="button" onClick={() => abrirComprarProducto(g)}
@@ -20627,9 +20641,11 @@ Motivo (obligatorio):`, "");
             if (socioNames.some((s) => s && nm.includes(s))) return "socios";
             return "matriz";
           };
-          const grupos = groupPayablesByAcreedor(cashPayables)
-            .map((g) => ({ ...g, clase: clasif(g.items[0]) }))
-            .filter((g) => apFilter === "todos" || g.clase === apFilter);
+          const buscado = normalizarTexto(cuentasBuscar.trim());
+          const todosGrupos = groupPayablesByAcreedor(cashPayables).map((g) => ({ ...g, clase: clasif(g.items[0]) }));
+          const grupos = todosGrupos
+            .filter((g) => apFilter === "todos" || g.clase === apFilter)
+            .filter((g) => !buscado || normalizarTexto(g.nombre).includes(buscado));
           const totalPend = grupos.reduce((a, g) => a + g.items.reduce((s, p) => s + Number(p.balance), 0), 0);
           const totalTx = grupos.reduce((a, g) => a + g.items.length, 0);
           const vencidos = grupos.filter((g) => g.items.some((p) => !!p.due_date && p.due_date.slice(0, 10) < hoy && Number(p.balance) > 0.001));
@@ -20655,22 +20671,28 @@ Motivo (obligatorio):`, "");
                 </div>
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "12px 0 4px" }}>
-                {tabs.map(([k, lbl]) => (
-                  <button key={k} type="button" onClick={() => setApFilter(k)} className={apFilter === k ? "primary" : ""} style={{ fontSize: 12, padding: "6px 14px", borderRadius: 999 }}>{lbl}</button>
-                ))}
+                {tabs.map(([k, lbl]) => {
+                  const suma = todosGrupos.filter((g) => k === "todos" || g.clase === k).reduce((a, g) => a + g.items.reduce((s2, p) => s2 + Number(p.balance), 0), 0);
+                  return (
+                    <button key={k} type="button" onClick={() => setApFilter(k)} className={apFilter === k ? "primary cuentasChip" : "cuentasChip"}>
+                      {lbl}{suma > 0.005 && <small> · {money(suma)}</small>}
+                    </button>
+                  );
+                })}
               </div>
+              <input type="search" className="cuentasBuscar" placeholder="🔎 Buscar por nombre…" value={cuentasBuscar} onChange={(e) => setCuentasBuscar(e.target.value)} />
               {!dashboard.current_cash_register && (
                 <div className="alertBox" style={{ marginTop: 8 }}>Abre una caja para poder registrar pagos.</div>
               )}
               <div style={{ overflowX: "auto" }}>
-                <table className="cajaTable" style={{ marginTop: 8 }}>
+                <table className="cajaTable cuentasTabla" style={{ marginTop: 8 }}>
                   <thead><tr>
                     <th>Acreedor</th><th className="num">Movimientos</th><th className="num">Debe</th>
                     <th className="num">Pagado</th><th className="num">Saldo</th><th>Acciones</th>
                   </tr></thead>
                   <tbody>
                     {grupos.length === 0 ? (
-                      <tr><td colSpan={6} className="muted" style={{ textAlign: "center", padding: 14 }}>✅ No hay cuentas por pagar en esta vista.</td></tr>
+                      <tr><td colSpan={6} className="muted" style={{ textAlign: "center", padding: 14 }}>{buscado ? "Nadie con ese nombre en esta vista." : "✅ No hay cuentas por pagar en esta vista."}</td></tr>
                     ) : grupos.map((g) => {
                       const saldo = g.items.reduce((a, p) => a + Number(p.balance), 0);
                       const total = g.items.reduce((a, p) => a + Number(p.amount), 0);
@@ -20679,16 +20701,17 @@ Motivo (obligatorio):`, "");
                       const etiqueta = g.clase === "socios" ? "Socio / Matriz / Transporte · se espeja en su Por Cobrar" : g.clase === "agricultores" ? "Agricultor / liquidación" : "Proveedor / otros";
                       return (
                         <tr key={g.key}>
-                          <td style={{ fontWeight: 600 }}>
+                          <td className="cuentasNombre" style={{ fontWeight: 600 }}>
                             {g.nombre}
                             {hayVencida && <span style={{ marginLeft: 6 }}><EstadoBadge status="PARTIAL" vencido={true} /></span>}
                             <small className="muted" style={{ display: "block", fontWeight: 400 }}>{etiqueta}</small>
+                            <AntiguedadDeuda fechas={g.items.map((p) => p.created_at)} />
                           </td>
-                          <td className="num">{g.items.length}</td>
-                          <td className="num">{money(total)}</td>
-                          <td className="num" style={{ color: "#15803d" }}>{money(pagado)}</td>
-                          <td className="num" style={{ fontWeight: 700, color: saldo > 0.005 ? "#b91c1c" : "#15803d" }}>{money(saldo)}</td>
-                          <td style={{ whiteSpace: "nowrap" }}>
+                          <td className="num" data-label="Movimientos">{g.items.length}</td>
+                          <td className="num" data-label="Debe">{money(total)}</td>
+                          <td className="num" data-label="Pagado" style={{ color: "#15803d" }}>{money(pagado)}</td>
+                          <td className="num cuentasSaldo" data-label="Saldo" style={{ fontWeight: 700, color: saldo > 0.005 ? "#b91c1c" : "#15803d" }}>{money(saldo)}</td>
+                          <td className="cuentasAcciones" style={{ whiteSpace: "nowrap" }}>
                             <button type="button" className="primary" onClick={() => setApDetalleKey(g.key)}>📄 Ver detalle y pagar</button>
                           </td>
                         </tr>

@@ -29,7 +29,7 @@ receivableRouter.get("/", asyncRoute(async (req, res) => {
             COALESCE(par.name, c.full_name, dest.name, ps_acc.name, ps.client_name,
                      msc_acc.name, mpc_acc.name, soc_ret.name, fr.full_name) AS customer_name,
             -- Deuda entre socios / Matriz (se espeja con la Por Pagar del otro).
-            (ar.reference_type IN ('fomento_cruce', 'retencion_matriz', 'packaging_charge', 'pilado_service', 'lot_transfer', 'service_charge', 'saldo_inicial_socio')
+            (ar.reference_type IN ('fomento_cruce', 'retencion_matriz', 'packaging_charge', 'pilado_service', 'lot_transfer', 'service_charge', 'saldo_inicial_socio', 'compra_producto_socio')
               OR lt.id IS NOT NULL OR ps.client_accionista_id IS NOT NULL OR msc.id IS NOT NULL OR mpc.id IS NOT NULL) AS entre_socios,
             c.phone     AS customer_phone,
             s.sale_number,
@@ -55,7 +55,7 @@ receivableRouter.get("/", asyncRoute(async (req, res) => {
      LEFT JOIN accionistas soc_ret ON soc_ret.id = liq_ret.accionista_id
      LEFT JOIN LATERAL (
        SELECT a.name FROM accounts_payable h JOIN accionistas a ON a.id = h.accionista_id
-        WHERE ar.reference_type IN ('fomento_cruce', 'saldo_inicial_socio')
+        WHERE ar.reference_type IN ('fomento_cruce', 'saldo_inicial_socio', 'compra_producto_socio')
           AND h.reference_type = ar.reference_type AND h.reference_id = ar.reference_id
           AND h.accionista_id IS DISTINCT FROM ar.accionista_id
         LIMIT 1
@@ -229,7 +229,28 @@ receivableRouter.post("/comprar-producto", asyncRoute(async (req, res) => {
       creditoRegistrado = true;
     }
 
+    // El producto se lo quedó OTRO socio/Matriz: ese comprador le debe el valor a quien cobraba
+    // (el que cobraba dio por pagada la deuda —y el excedente— a cambio de un producto que no recibió).
+    let deudaEntreSocios: { deudor: string; monto: number } | null = null;
+    if (body.buyer_accionista_id !== provider) {
+      const ref = (await client.query("SELECT gen_random_uuid() AS id")).rows[0].id;
+      const prov = (await client.query("SELECT name FROM accionistas WHERE id = $1", [provider])).rows[0]?.name ?? "el socio";
+      const detalle = `${qqTotal} QQ de ${nombresProductos.join(", ")} recibidos de ${body.cliente_nombre?.trim() || "un cliente"}`;
+      await client.query(
+        `INSERT INTO accounts_receivable (accionista_id, reference_type, reference_id, description, amount, balance, status)
+         VALUES ($1, 'compra_producto_socio', $2, $3, $4, $4, 'CONFIRMED')`,
+        [provider, ref, `${buyer.rows[0].name} se quedó ${detalle} (pago de su deuda contigo)`, monto]
+      );
+      await client.query(
+        `INSERT INTO accounts_payable (accionista_id, reference_type, reference_id, description, amount, balance, status)
+         VALUES ($1, 'compra_producto_socio', $2, $3, $4, $4, 'CONFIRMED')`,
+        [body.buyer_accionista_id, ref, `Producto para ti: ${detalle}, que le debían a ${prov}`, monto]
+      );
+      deudaEntreSocios = { deudor: buyer.rows[0].name, monto };
+    }
+
     return {
+      deuda_entre_socios: deudaEntreSocios,
       monto, aplicado, credito_a_favor: credito, credito_registrado: creditoRegistrado,
       cuentas_afectadas: afectadas.length,
       comprador: buyer.rows[0].name,
@@ -267,7 +288,7 @@ receivableRouter.post("/:id/pay", asyncRoute(async (req, res) => {
       throw new ApiError(409, `El monto ($${body.amount}) supera el saldo pendiente ($${current.toFixed(2)})`);
     }
 
-    const newBalance = round2(current - body.amount);
+    const newBalance = Math.max(0, round2(current - body.amount));
     const newStatus  = newBalance < 0.01 ? "PAID" : "PARTIAL";
 
     await client.query(
@@ -307,5 +328,78 @@ receivableRouter.post("/:id/pay", asyncRoute(async (req, res) => {
     return { paid: body.amount, remaining: newBalance, status: newStatus, espejo };
   });
 
+  res.json(result);
+}));
+
+// POST cobrar VARIAS cuentas de un mismo deudor con UN solo ingreso de caja (todo o nada).
+// Se aplica de la más antigua a la más nueva. El desglose (cash_movement_cuentas) permite que, si se
+// anula el ingreso en Caja, TODAS las cuentas vuelvan a deber lo suyo (y sus espejos entre socios).
+receivableRouter.post("/pay-group", asyncRoute(async (req, res) => {
+  const body = z.object({
+    receivable_ids:   z.array(z.string().uuid()).min(1),
+    amount:           z.number().positive().transform(round2),
+    cash_register_id: z.string().uuid().optional(),
+    concepto:         z.string().max(200).optional()
+  }).parse(req.body);
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+
+  const result = await inTransaction(async (client) => {
+    if (!body.cash_register_id) throw new ApiError(400, "Abre una caja para registrar el cobro: el dinero tiene que entrar a una caja.");
+    await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
+    const cuentas = (await client.query(
+      `SELECT ar.id, ar.balance, ar.status, ar.description, COALESCE(c.full_name, f.full_name) AS nombre
+         FROM accounts_receivable ar
+         LEFT JOIN customers c ON c.id = ar.customer_id
+         LEFT JOIN farmers f ON f.id = ar.farmer_id
+        WHERE ar.id = ANY($1::uuid[]) AND ar.accionista_id = $2
+        ORDER BY ar.created_at ASC, ar.id
+        FOR UPDATE OF ar`,
+      [body.receivable_ids, accionistaId]
+    )).rows as Array<{ id: string; balance: string; status: string; description: string | null; nombre: string | null }>;
+    if (cuentas.length !== new Set(body.receivable_ids).size) {
+      throw new ApiError(404, "Alguna cuenta no existe o es de otro accionista. Refresca la pantalla.");
+    }
+    const vivas = cuentas.filter((c) => c.status !== "CANCELLED" && Number(c.balance) > 0.005);
+    const pendiente = round2(vivas.reduce((s, c) => s + Number(c.balance), 0));
+    if (body.amount > pendiente + 0.005) {
+      throw new ApiError(409, `El monto ($${body.amount.toFixed(2)}) supera el saldo pendiente ($${pendiente.toFixed(2)})`);
+    }
+
+    let restante = body.amount;
+    const desglose: Array<{ id: string; monto: number }> = [];
+    for (const c of vivas) {
+      if (restante <= 0.005) break;
+      const abono = round2(Math.min(restante, Number(c.balance)));
+      const nuevo = Math.max(0, round2(Number(c.balance) - abono));
+      await client.query("UPDATE accounts_receivable SET balance = $2, status = $3 WHERE id = $1",
+        [c.id, nuevo, nuevo < 0.01 ? "PAID" : "PARTIAL"]);
+      desglose.push({ id: c.id, monto: abono });
+      restante = round2(restante - abono);
+    }
+
+    const nombre = vivas[0]?.nombre ?? vivas[0]?.description ?? "cliente";
+    const mov = await client.query(
+      `INSERT INTO cash_movements (cash_register_id, movement, category, reference_type, reference_id, amount, description)
+       VALUES ($1, 'INCOME', 'COBRO_CREDITO', 'accounts_receivable', $2, $3, $4) RETURNING id`,
+      [body.cash_register_id, desglose[0].id, body.amount,
+       `Cobro crédito: ${nombre}${desglose.length > 1 ? ` (${desglose.length} cuentas)` : ""}`]
+    );
+    for (const d of desglose) {
+      await client.query(
+        "INSERT INTO cash_movement_cuentas (cash_movement_id, tabla, cuenta_id, monto) VALUES ($1, 'accounts_receivable', $2, $3)",
+        [mov.rows[0].id, d.id, d.monto]
+      );
+    }
+    // Deudas entre socios: cada abono baja también la Por Pagar del otro y sale de su caja.
+    const espejos = [];
+    for (const d of desglose) {
+      const e = await espejarAbonoEnContraparte(client, {
+        desde: "receivable", cuentaId: d.id, monto: d.monto,
+        descripcion: body.concepto ?? "Abono de cuenta entre accionistas"
+      });
+      if (e) espejos.push(e);
+    }
+    return { paid: body.amount, cuentas: desglose.length, remaining: round2(pendiente - body.amount), espejos };
+  });
   res.json(result);
 }));

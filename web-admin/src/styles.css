@@ -5613,3 +5613,25 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
   .modalOverlay:has(.anularVentaModal) { align-items: flex-end; padding: 0; }
   .anularVentaModal { max-width: none; border-radius: 20px 20px 0 0; }
 }
+
+/* 📥📤 Por Cobrar / Por Pagar: filtros con su total, buscador, antigüedad y tarjetas en el celular */
+.cuentasChip { font-size: 12px; padding: 6px 14px; border-radius: 999px; min-width: 0; }
+.cuentasChip small { font-weight: 600; opacity: .85; }
+.cuentasBuscar { width: 100%; max-width: 360px; box-sizing: border-box; margin: 8px 0 0; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--c-border); font: inherit; }
+.cuentasEdad { display: inline-block; margin-top: 3px; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: #f1f5f9; color: #475569; }
+.cuentasEdad--media { background: #fef3c7; color: #92400e; }
+.cuentasEdad--alta { background: #fee2e2; color: #b91c1c; }
+@media (max-width: 640px) {
+  .cuentasTabla thead { display: none; }
+  .cuentasTabla, .cuentasTabla tbody { display: block; width: 100%; }
+  .cuentasTabla tr { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 12px; padding: 12px; margin: 0 0 10px; border: 1px solid var(--c-border); border-radius: 14px; background: var(--c-surface, #fff); }
+  .cuentasTabla td { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; border: 0; font-size: 13px; }
+  .cuentasTabla td[data-label]::before { content: attr(data-label); color: #64748b; font-weight: 500; }
+  .cuentasTabla td.cuentasNombre { grid-column: 1 / -1; display: block; font-size: 15px; margin-bottom: 4px; }
+  .cuentasTabla td.cuentasSaldo { grid-column: 1 / -1; font-size: 16px; padding-top: 6px; border-top: 1px dashed var(--c-border); }
+  .cuentasTabla td.cuentasAcciones { grid-column: 1 / -1; display: block; white-space: normal !important; margin-top: 6px; }
+  .cuentasTabla td.cuentasAcciones > div, .cuentasTabla td.cuentasAcciones { width: 100%; }
+  .cuentasTabla td.cuentasAcciones button { flex: 1 1 auto; width: 100%; margin-top: 4px; }
+  .cuentasTabla td[colspan] { grid-column: 1 / -1; display: block; }
+  .cuentasBuscar { max-width: none; }
+}
