@@ -115,7 +115,7 @@ try {
   check(!quedaCuenta, "6f. la cuenta queda saldada", quedaCuenta);
 
   // ── 7. Un egreso y el cierre de caja ─────────────────────────────────────
-  exigir(await api("POST", "/cash/movements", { cash_register_id: caja.id, movement: "EXPENSE", category: "OTROS", amount: 20, description: "Simulacro: gasto menor" }), "7a. Egreso de $20 en caja");
+  exigir(await api("POST", "/cash/movements", { cash_register_id: caja.id, movement: "EXPENSE", category: "GASTO_OPERATIVO", amount: 20, description: "Simulacro: gasto menor" }), "7a. Egreso de $20 en caja");
   const sum2 = (await api("GET", `/cash/registers/${caja.id}/summary`)).data;
   console.log("   caja antes de cerrar:", JSON.stringify(sum2));
   const finalEsperado = r2(sum2.current_balance);

@@ -38,7 +38,7 @@ try {
 
   // ── C. Contenido: la caja cuenta lo VIGENTE (sin inflar con anulaciones) ──
   const caja = exigir(await api("POST", "/cash/registers/open", { name: "Caja resumen", tipo: "EFECTIVO", opening_balance_cash: 500 }), "C0. caja abierta con $500");
-  const mov = (movement, amount, d) => api("POST", "/cash/movements", { cash_register_id: caja.id, movement, category: "OTROS", amount, description: d });
+  const mov = (movement, amount, d) => api("POST", "/cash/movements", { cash_register_id: caja.id, movement, category: movement === "INCOME" ? "VENTA" : "GASTO_OPERATIVO", amount, description: d });
   exigir(await mov("INCOME", 100, "ingreso"), "C1a. ingreso de $100");
   exigir(await mov("EXPENSE", 40, "gasto"), "C1b. gasto de $40");
   const equivocado = exigir(await mov("EXPENSE", 10, "gasto equivocado"), "C1c. gasto de $10 (se anulará)");

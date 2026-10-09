@@ -13,7 +13,7 @@ try {
   const caja = exigir(await api("POST", "/cash/registers/open", { name: "Banco Pichincha", tipo: "BANCO", opening_balance_bank: 1000 }), "A1. CEYRO abre su cuenta de banco con $1000");
   await api("PUT", `/finance/bank/accounts/${caja.id}`, { banco: "Pichincha", numero_cuenta: "2200123456" });
   const mov = async (movement, amount, desc, fecha) => {
-    const m = exigir(await api("POST", "/cash/movements", { cash_register_id: caja.id, movement, category: "OTROS", amount, description: desc }), `A2. ${desc}`);
+    const m = exigir(await api("POST", "/cash/movements", { cash_register_id: caja.id, movement, category: movement === "INCOME" ? "VENTA" : "GASTO_OPERATIVO", amount, description: desc }), `A2. ${desc}`);
     await q("UPDATE cash_movements SET created_at = $2::timestamptz WHERE id = $1", [m.id, `${fecha} 12:00:00-05`]);
     return m;
   };
