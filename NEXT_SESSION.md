@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 📅 Ensayo del cierre de mes (2026-10-08)
+- Guía para el dueño: `docs/cierre-de-mes.md`. Simulacro `cierre_mes.mjs` (montos conocidos → ER, Balance, Flujo y Resultado mensual cuadran) TODO OK.
+- `services/finance.ts` arreglado: gastos y mano de obra desde egresos de Caja (antes tablas vacías `expenses`/`labor_payments` → $0); excluye anulados y CATEGORIAS_NO_OPERATIVAS (mismo criterio que Resultado mensual). Ventas + venta al detalle (INCOME VENTA sin ref 'sales'). Servicios = CxC de servicio devengadas (pilado/secado/sacos/empaque/service_charge). Costo de ventas solo salidas por venta (`SALIDA_POR_VENTA`; antes contaba la cáscara al molino y mermas) + servicios recibidos (CxP pilado/service_charge/packaging/selection + campo venta_flete/envejecido_flete; NO los fletes de liquidación).
+- Balance: caja e inventario A LA FECHA (`hasta`): cajas abiertas al terminar ese día; si ninguna, la última cerrada (antes con la caja cerrada salía $0). CxC/CxP/anticipos siguen con saldo de hoy → flag `cuentas_al_dia_de_hoy` + aviso en pantalla.
+- Pendiente del dueño para que el balance tenga sentido: precio de referencia por QQ (hoy 0 → cáscara vale $0), capital social y fecha de inicio contable de socios, saldos iniciales 30/09.
+
 ### 📥📤 Por Cobrar / Por Pagar auditados (2026-10-08)
 - BUG GRAVE arreglado: `POST /cash/payables/pay-group` (lo usa SIEMPRE Por Pagar al pagar a un acreedor) dejaba UN movimiento apuntando solo a la 1ª cuenta → al anularlo volvía a deber solo esa y las demás quedaban pagadas. Ahora guarda el desglose en `cash_movement_cuentas` (migración `20261080`) y `revertirAbonoDeCuentaPorAnulacion` revierte TODAS (y sus espejos). La base real no tenía casos.
 - Nuevo `POST /receivable/pay-group` (todo o nada, un ingreso, desglose, espejos). Antes el front cobraba cuenta por cuenta (si fallaba a la mitad quedaba a medias).
