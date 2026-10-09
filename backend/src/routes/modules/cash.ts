@@ -10,7 +10,8 @@ import { reversarEntradaRepuestosDeCaja, reversarEntradaRepuestosDeCredito, devo
 import { etiquetaMaquina, resolverMaquina, type Maquina } from "../../services/maquinas.js";
 import { resolverProveedor } from "../../services/proveedores.js";
 import { reabrirPagoNomina } from "../../services/nomina-reabrir.js";
-import { anularDeudaDeCobroPorSocio, espejarAbonoEnContraparte, revertirAbonoDeCuentaPorAnulacion } from "../../services/cuentas-vinculadas.js";
+import { anularDeudaDeCobroPorSocio, anularPagoPorSocio, buscarCuentaHermana, espejarAbonoEnContraparte, revertirAbonoDeCuentaPorAnulacion } from "../../services/cuentas-vinculadas.js";
+import { dinero, notificar } from "../../services/notificaciones.js";
 import { vidaUtilPorTipo } from "../../services/activos.js";
 import ExcelJS from "exceljs";
 import { avisarSobregiro, medioParaCaja, saldosDeCaja } from "../../services/caja.js";
@@ -596,6 +597,8 @@ cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(a
 
     // Cobro que recibió este accionista POR OTRO socio: se anula también la deuda entre los dos.
     if (m.category === "COBRO_POR_SOCIO") await anularDeudaDeCobroPorSocio(client, m.id, body.reason);
+    // Pago que hizo este accionista POR OTRO socio: vuelve lo descontado y se anula la deuda nueva.
+    if (m.category === "PAGO_POR_SOCIO") await anularPagoPorSocio(client, m.id, body.reason);
     // Si cobró/pagó una CUENTA, esa cuenta (y su hermana entre accionistas) vuelve a deber lo anulado.
     const cuentaRevertida = await revertirAbonoDeCuentaPorAnulacion(client, m, { userId: user?.id ?? null, motivo: body.reason });
 
@@ -1082,7 +1085,7 @@ export function categoriaDePagoCxP(ap: { reference_type: string | null; categori
   if (t === "pilado_service") return "PAGO_SERVICIO_PILADO";
   // Deudas entre socios / Matriz / Transporte (incluye el saldo inicial entre socios).
   if (t && ["lot_transfer", "campo_servicio", "fomento_cruce", "retencion_matriz", "packaging_charge", "service_charge",
-    "saldo_inicial_socio", "compra_producto_socio", "cobro_por_socio"].includes(t)) return "PAGO_ENTRE_SOCIOS";
+    "saldo_inicial_socio", "compra_producto_socio", "cobro_por_socio", "pago_por_socio"].includes(t)) return "PAGO_ENTRE_SOCIOS";
   // Selección/envejecido y sus fletes con carro externo (ida o regreso): ya son costo al nacer la deuda.
   if (t === "selection_batch" || t === "flete_envejecido_tercero") return "PAGO_SELECCION";
   if (t === "purchase") return "PAGO_PROVEEDOR";
@@ -1129,7 +1132,7 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
               'Cuenta por pagar'
             ) AS farmer_name,
             -- Deuda entre socios / Matriz / Transporte (se espeja con la otra cara).
-            (ap.reference_type IN ('campo_servicio', 'fomento_cruce', 'retencion_matriz', 'packaging_charge', 'pilado_service', 'lot_transfer', 'service_charge', 'saldo_inicial_socio', 'compra_producto_socio', 'cobro_por_socio')
+            (ap.reference_type IN ('campo_servicio', 'fomento_cruce', 'retencion_matriz', 'packaging_charge', 'pilado_service', 'lot_transfer', 'service_charge', 'saldo_inicial_socio', 'compra_producto_socio', 'cobro_por_socio', 'pago_por_socio')
               OR ps.id IS NOT NULL OR msc.id IS NOT NULL OR mpc.id IS NOT NULL OR lt.id IS NOT NULL) AS entre_socios,
             l.liquidation_number, l.batch_id
      FROM accounts_payable ap
@@ -1148,7 +1151,7 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
      LEFT JOIN accionistas lt_from ON lt_from.id = lt.from_accionista_id
      LEFT JOIN LATERAL (
        SELECT a.name FROM accounts_receivable h JOIN accionistas a ON a.id = h.accionista_id
-        WHERE ap.reference_type IN ('fomento_cruce', 'retencion_matriz', 'saldo_inicial_socio', 'compra_producto_socio', 'cobro_por_socio')
+        WHERE ap.reference_type IN ('fomento_cruce', 'retencion_matriz', 'saldo_inicial_socio', 'compra_producto_socio', 'cobro_por_socio', 'pago_por_socio')
           AND h.reference_type = ap.reference_type AND h.reference_id = ap.reference_id
           AND h.accionista_id IS DISTINCT FROM ap.accionista_id
         LIMIT 1
@@ -1360,17 +1363,47 @@ cashRouter.post("/payables/:id/pay", asyncRoute(async (req, res) => {
 // pantalla se muestran como UNA deuda con su total; aquí un solo pago se
 // reparte entre ellas (de la más vieja a la más nueva) y en caja queda UN solo
 // movimiento, porque físicamente fue un solo pago.
+//
+// PAGO HECHO POR OTRO SOCIO (`pagado_por`): p. ej. la Matriz paga a los cosechadores que debe STALYN. La deuda baja
+// aquí, el dinero sale de la caja ABIERTA del que pagó (categoría PAGO_POR_SOCIO: no es gasto suyo) y:
+//  1) primero se DESCUENTA de lo que el que pagó le debía a este socio por cobros que recibió por él
+//     ('cobro_por_socio'): «con esa misma plata» — sin mover más caja; queda en cruces_entre_socios;
+//  2) lo que pase de eso queda como deuda nueva de este socio con el que pagó ('pago_por_socio').
+// Solo para deudas con terceros (cosechadores, agricultores, proveedores), no entre socios.
 cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
   const body = z.object({
     payable_ids: z.array(z.string().uuid()).min(1),
-    cash_register_id: z.string().uuid(),
-    amount: z.number().positive()
+    cash_register_id: z.string().uuid().optional(),
+    amount: z.number().positive().transform(round2),
+    pagado_por: z.string().uuid().optional(),
+    medio_pago: z.enum(["EFECTIVO", "BANCO"]).optional()
   }).parse(req.body);
 
-  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const auth = req as AuthenticatedRequest;
+  const accionistaId = auth.accionistaId;
+  const otroSocio = body.pagado_por && body.pagado_por !== accionistaId ? body.pagado_por : null;
   const result = await inTransaction(async (client) => {
-    await assertCajaDelAccionista(client, body.cash_register_id, accionistaId);
-    await avisarSobregiro(client, body.cash_register_id, body.amount, req);
+    let cajaId: string;
+    let pagador: { id: string; name: string; caja_tipo: string } | null = null;
+    if (otroSocio) {
+      const acc = (await client.query("SELECT id, name FROM accionistas WHERE id = $1 AND is_active = true", [otroSocio])).rows[0];
+      if (!acc) throw new ApiError(404, "El socio que pagó no existe o está inactivo.");
+      if (auth.user?.role_name !== "ADMINISTRADOR") {
+        const acceso = await client.query("SELECT 1 FROM user_accionistas WHERE user_id = $1 AND accionista_id = $2", [auth.user?.id ?? null, otroSocio]);
+        if (!acceso.rowCount) throw new ApiError(403, `No tienes acceso a la caja de ${acc.name}: pide al administrador que registre este pago.`);
+      }
+      const caja = (await client.query(
+        "SELECT id, tipo FROM cash_registers WHERE accionista_id = $1 AND status = 'OPEN' ORDER BY opened_at DESC LIMIT 1", [otroSocio]
+      )).rows[0];
+      if (!caja) throw new ApiError(409, `${acc.name} no tiene la caja abierta: ábrela para registrar el dinero que pagó.`);
+      cajaId = caja.id;
+      pagador = { id: acc.id, name: acc.name, caja_tipo: caja.tipo };
+    } else {
+      if (!body.cash_register_id) throw new ApiError(400, "Abre una caja para registrar el pago.");
+      await assertCajaDelAccionista(client, body.cash_register_id, accionistaId);
+      cajaId = body.cash_register_id;
+    }
+    await avisarSobregiro(client, cajaId, body.amount, req);
     const cuentas = await client.query(
       `SELECT ap.*, f.full_name AS farmer_name
        FROM accounts_payable ap
@@ -1388,6 +1421,13 @@ cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
     if (body.amount > pendiente + 0.001) {
       throw new ApiError(409, `El monto supera el saldo pendiente ($${pendiente.toFixed(2)})`);
     }
+    if (pagador) {
+      for (const ap of cuentas.rows) {
+        if (ap.reference_type === "campo_servicio" || await buscarCuentaHermana(client, "payable", ap.id)) {
+          throw new ApiError(409, "Esa deuda es entre socios (o con Transporte): págala desde la caja de quien la debe.");
+        }
+      }
+    }
 
     let restante = body.amount;
     const desglose: Array<{ id: string; monto: number }> = [];
@@ -1402,7 +1442,10 @@ cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
       );
       // Deuda entre socios/Matriz/Transporte: el abono baja también la POR COBRAR
       // del que cobra, entra a su caja y le avisa (antes el pago en grupo no espejaba).
-      if (abono > 0) {
+      // (Un pago hecho por otro socio solo cubre deudas con terceros: no hay espejo.)
+      if (abono > 0 && pagador) {
+        desglose.push({ id: ap.id, monto: abono });
+      } else if (abono > 0) {
         desglose.push({ id: ap.id, monto: abono });
         espejos.push(await espejarAbonoEnContraparte(client, {
           desde: "payable",
@@ -1415,14 +1458,19 @@ cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
     }
 
     const primera = cuentas.rows[0];
-    const categoria = categoriaDePagoCxP(primera);
-    const mov = await client.query(
-      `INSERT INTO cash_movements
-       (cash_register_id, movement, category, reference_type, reference_id, amount, description)
-       VALUES ($1, 'EXPENSE', $2, 'accounts_payable', $3, $4, $5) RETURNING id`,
-      [body.cash_register_id, categoria, primera.id, body.amount,
-       `Pago a ${primera.farmer_name ?? primera.description ?? "proveedor"}`]
-    );
+    const aQuien = primera.farmer_name ?? primera.description ?? "proveedor";
+    const socio = pagador ? (await client.query("SELECT name FROM accionistas WHERE id = $1", [accionistaId])).rows[0]?.name ?? "el socio" : null;
+    const mov = pagador
+      ? await client.query(
+        `INSERT INTO cash_movements
+         (cash_register_id, movement, category, reference_type, reference_id, amount, description, medio)
+         VALUES ($1, 'EXPENSE', 'PAGO_POR_SOCIO', 'accounts_payable', $2, $3, $4, $5) RETURNING id`,
+        [cajaId, primera.id, body.amount, `Pago por ${socio}: ${aQuien}`, medioParaCaja(pagador.caja_tipo, body.medio_pago ?? "EFECTIVO")])
+      : await client.query(
+        `INSERT INTO cash_movements
+         (cash_register_id, movement, category, reference_type, reference_id, amount, description)
+         VALUES ($1, 'EXPENSE', $2, 'accounts_payable', $3, $4, $5) RETURNING id`,
+        [cajaId, categoriaDePagoCxP(primera), primera.id, body.amount, `Pago a ${aQuien}`]);
     // Desglose: cuánto se abonó a cada cuenta (al anular el pago, TODAS vuelven a deber lo suyo).
     for (const d of desglose) {
       await client.query(
@@ -1431,7 +1479,69 @@ cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
       );
     }
 
-    return { paid: body.amount, remaining: round2(pendiente - body.amount), espejos: espejos.filter(Boolean) };
+    // Pago hecho por otro socio: primero se descuenta de lo que el que pagó le debía (cobros que recibió por él);
+    // lo que pase queda como deuda de este socio con el que pagó.
+    let porSocio: { pagador: string; descontado: number; deuda_nueva: number } | null = null;
+    if (pagador) {
+      const movId = mov.rows[0].id;
+      const deudas = (await client.query(
+        `SELECT p.id AS pid, p.balance::float AS pb, r.id AS rid, r.balance::float AS rb
+           FROM accounts_payable p
+           JOIN accounts_receivable r ON r.reference_type = p.reference_type AND r.reference_id = p.reference_id
+          WHERE p.reference_type = 'cobro_por_socio' AND p.accionista_id = $1 AND r.accionista_id = $2
+            AND p.status IN ('CONFIRMED', 'PARTIAL') AND p.balance > 0.005
+          ORDER BY p.created_at, p.id
+          FOR UPDATE OF p, r`,
+        [pagador.id, accionistaId]
+      )).rows as Array<{ pid: string; pb: number; rid: string; rb: number }>;
+      let falta = body.amount;
+      let descontado = 0;
+      for (const d of deudas) {
+        if (falta <= 0.005) break;
+        const m = round2(Math.min(falta, d.pb, d.rb));
+        if (m <= 0.005) continue;
+        const np = round2(d.pb - m), nr = round2(d.rb - m);
+        await client.query("UPDATE accounts_payable SET balance = $2, status = $3 WHERE id = $1", [d.pid, np, np < 0.01 ? "PAID" : "PARTIAL"]);
+        await client.query("UPDATE accounts_receivable SET balance = $2, status = $3 WHERE id = $1", [d.rid, nr, nr < 0.01 ? "PAID" : "PARTIAL"]);
+        await client.query(
+          "INSERT INTO cruces_entre_socios (cash_movement_id, payable_id, receivable_id, monto) VALUES ($1, $2, $3, $4)",
+          [movId, d.pid, d.rid, m]
+        );
+        falta = round2(falta - m);
+        descontado = round2(descontado + m);
+      }
+      if (falta > 0.005) {
+        await client.query(
+          `INSERT INTO accounts_payable (accionista_id, reference_type, reference_id, description, amount, balance, status)
+           VALUES ($1, 'pago_por_socio', $2, $3, $4, $4, 'CONFIRMED')`,
+          [accionistaId, movId, `${pagador.name} pagó por ti a ${aQuien}`, falta]
+        );
+        await client.query(
+          `INSERT INTO accounts_receivable (accionista_id, reference_type, reference_id, description, amount, balance, status)
+           VALUES ($1, 'pago_por_socio', $2, $3, $4, $4, 'CONFIRMED')`,
+          [pagador.id, movId, `Pagaste por ${socio} a ${aQuien}`, falta]
+        );
+      }
+      const detalle = `${descontado > 0 ? ` Se descontaron ${dinero(descontado)} de lo que ${pagador.name} te debía por cobros que recibió por ti.` : ""}` +
+        `${falta > 0.005 ? ` Le debes ${dinero(falta)} a ${pagador.name} (Por Pagar).` : ""}`;
+      await notificar(client, {
+        accionistaId, tipo: "PAGO",
+        titulo: `${pagador.name} pagó por ti`,
+        mensaje: `${pagador.name} le pagó ${dinero(body.amount)} a ${aQuien}.${detalle}`,
+        monto: body.amount, referenciaTipo: "cash_movements", referenciaId: movId
+      });
+      await notificar(client, {
+        accionistaId: pagador.id,
+        titulo: `Pagaste por ${socio}`,
+        mensaje: `Salieron ${dinero(body.amount)} de tu caja para pagarle a ${aQuien} por ${socio}.` +
+          `${descontado > 0 ? ` ${dinero(descontado)} se descontaron de lo que le debías a ${socio}.` : ""}` +
+          `${falta > 0.005 ? ` ${socio} te debe ${dinero(falta)} (Por Cobrar).` : ""}`,
+        monto: body.amount, referenciaTipo: "cash_movements", referenciaId: movId
+      });
+      porSocio = { pagador: pagador.name, descontado, deuda_nueva: round2(Math.max(0, falta)) };
+    }
+
+    return { paid: body.amount, remaining: round2(pendiente - body.amount), espejos: espejos.filter(Boolean), pago_por_socio: porSocio };
   });
 
   res.json(result);

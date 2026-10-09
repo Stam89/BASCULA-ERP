@@ -13,7 +13,7 @@ import { dinero, notificar } from "./notificaciones.js";
  * Enlaces conocidos (buscarCuentaHermana):
  *  · pilado_services / lot_transfers / matriz_service_charges /
  *    matriz_packaging_charges → tabla puente con receivable_id + payable_id.
- *  · fomento_cruce / retencion_matriz / saldo_inicial_socio / compra_producto_socio / cobro_por_socio →
+ *  · fomento_cruce / retencion_matriz / saldo_inicial_socio / compra_producto_socio / cobro_por_socio / pago_por_socio →
  *    la CxC y la CxP comparten reference_type + reference_id (una en cada accionista).
  *  · campo_servicio → la Por Pagar del socio espeja un servicio de Transporte
  *    (su saldo lo mantiene un trigger; ver espejarPagoATransporte).
@@ -24,7 +24,8 @@ const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 /** Tipos cuya CxC y CxP hermanas comparten reference_type + reference_id. */
 // compra_producto_socio: el agricultor pagó con producto que se quedó OTRO socio (Por Cobrar › Comprar producto).
 // cobro_por_socio: el cliente de un socio le depositó a OTRO (p. ej. a la Matriz); ese otro le debe el dinero.
-const PARES_POR_REFERENCIA = ["fomento_cruce", "retencion_matriz", "saldo_inicial_socio", "compra_producto_socio", "cobro_por_socio"];
+// pago_por_socio: OTRO socio (p. ej. la Matriz) pagó una deuda de este (p. ej. a sus cosechadores); este se lo debe.
+const PARES_POR_REFERENCIA = ["fomento_cruce", "retencion_matriz", "saldo_inicial_socio", "compra_producto_socio", "cobro_por_socio", "pago_por_socio"];
 
 /** Id de la cuenta contraparte (la otra cara de la misma deuda), o null. */
 export async function buscarCuentaHermana(
@@ -177,38 +178,91 @@ export async function espejarAbonoEnContraparte(
 }
 
 /**
+ * Anula la deuda entre socios que nació de un movimiento de caja (reference_id = el movimiento):
+ *  · 'cobro_por_socio' → el depósito que recibió un socio para otro (categoría COBRO_POR_SOCIO);
+ *  · 'pago_por_socio'  → lo que un socio pagó por otro (categoría PAGO_POR_SOCIO).
+ * Si esa deuda ya tiene abonos (o se descontó en un pago por el socio), primero hay que anular eso.
+ * Devuelve el accionista dueño de la Por Cobrar (para avisarle), o null si no había deuda viva.
+ */
+async function anularDeudaDeMovimiento(client: PoolClient, movimientoId: string, tipo: "cobro_por_socio" | "pago_por_socio") {
+  const cxc = (await client.query(
+    "SELECT id, amount, balance, status, accionista_id FROM accounts_receivable WHERE reference_type = $2 AND reference_id = $1 FOR UPDATE",
+    [movimientoId, tipo]
+  )).rows;
+  const cxp = (await client.query(
+    "SELECT id, amount, balance, status, accionista_id FROM accounts_payable WHERE reference_type = $2 AND reference_id = $1 FOR UPDATE",
+    [movimientoId, tipo]
+  )).rows;
+  const vivas = [...cxc, ...cxp].filter((c) => c.status !== "CANCELLED");
+  if (!vivas.length) return null;
+  const abonada = vivas.find((c) => Number(c.balance) < Number(c.amount) - 0.005);
+  if (abonada) {
+    const usado = dinero(Number(abonada.amount) - Number(abonada.balance));
+    throw new ApiError(409, tipo === "cobro_por_socio"
+      ? `La deuda entre socios de este depósito ya tiene abonos o se usó para pagar deudas del socio (${usado}): anula primero ese pago y luego este cobro.`
+      : `Lo que se debe por este pago ya tiene abonos (${usado}): anula primero ese pago entre socios y luego este.`);
+  }
+  for (const c of cxc) await client.query("UPDATE accounts_receivable SET balance = 0, status = 'CANCELLED' WHERE id = $1 AND status <> 'CANCELLED'", [c.id]);
+  for (const c of cxp) await client.query("UPDATE accounts_payable SET balance = 0, status = 'CANCELLED' WHERE id = $1 AND status <> 'CANCELLED'", [c.id]);
+  return { cxc: cxc[0] ?? null, cxp: cxp[0] ?? null };
+}
+
+/**
  * Anular en Caja un COBRO RECIBIDO POR OTRO SOCIO (categoría COBRO_POR_SOCIO): además de que el cliente vuelva a
  * deber (lo hace revertirAbonoDeCuentaPorAnulacion con el desglose), se anula la deuda entre los dos socios que
  * nació de ese depósito. Si esa deuda ya tiene abonos, primero hay que anular ese pago entre socios.
  */
 export async function anularDeudaDeCobroPorSocio(client: PoolClient, movimientoId: string, motivo: string): Promise<boolean> {
-  const cxc = (await client.query(
-    "SELECT id, amount, balance, status, accionista_id FROM accounts_receivable WHERE reference_type = 'cobro_por_socio' AND reference_id = $1 FOR UPDATE",
-    [movimientoId]
-  )).rows;
-  const cxp = (await client.query(
-    "SELECT id, amount, balance, status, accionista_id FROM accounts_payable WHERE reference_type = 'cobro_por_socio' AND reference_id = $1 FOR UPDATE",
-    [movimientoId]
-  )).rows;
-  const vivas = [...cxc, ...cxp].filter((c) => c.status !== "CANCELLED");
-  if (!vivas.length) return false;
-  const abonada = vivas.find((c) => Number(c.balance) < Number(c.amount) - 0.005);
-  if (abonada) {
-    throw new ApiError(409, `La deuda entre socios de este depósito ya tiene abonos (${dinero(Number(abonada.amount) - Number(abonada.balance))}): anula primero ese pago entre socios y luego este cobro.`);
-  }
-  for (const c of cxc) await client.query("UPDATE accounts_receivable SET balance = 0, status = 'CANCELLED' WHERE id = $1 AND status <> 'CANCELLED'", [c.id]);
-  for (const c of cxp) await client.query("UPDATE accounts_payable SET balance = 0, status = 'CANCELLED' WHERE id = $1 AND status <> 'CANCELLED'", [c.id]);
-  const dueno = cxc[0];
-  if (dueno) {
-    const receptor = await nombreAccionista(client, cxp[0]?.accionista_id);
+  const d = await anularDeudaDeMovimiento(client, movimientoId, "cobro_por_socio");
+  if (!d) return false;
+  if (d.cxc) {
+    const receptor = await nombreAccionista(client, d.cxp?.accionista_id);
     await notificar(client, {
-      accionistaId: dueno.accionista_id,
+      accionistaId: d.cxc.accionista_id,
       titulo: `Se anuló un cobro que recibió ${receptor}`,
-      mensaje: `${receptor} anuló el depósito de ${dinero(Number(dueno.amount))} que había recibido por ti (${motivo}). Tu cliente vuelve a deber ese valor y ${receptor} ya no te lo debe.`,
-      monto: Number(dueno.amount), referenciaTipo: "accounts_receivable", referenciaId: dueno.id
+      mensaje: `${receptor} anuló el depósito de ${dinero(Number(d.cxc.amount))} que había recibido por ti (${motivo}). Tu cliente vuelve a deber ese valor y ${receptor} ya no te lo debe.`,
+      monto: Number(d.cxc.amount), referenciaTipo: "accounts_receivable", referenciaId: d.cxc.id
     });
   }
   return true;
+}
+
+/**
+ * Anular en Caja un PAGO HECHO POR OTRO SOCIO (categoría PAGO_POR_SOCIO): la deuda pagada vuelve a deberse (lo hace
+ * revertirAbonoDeCuentaPorAnulacion con el desglose), lo que se había descontado de los cobros recibidos vuelve a
+ * deberse, y se anula la deuda nueva entre los dos. Se llama DENTRO de la transacción de la anulación.
+ */
+export async function anularPagoPorSocio(client: PoolClient, movimientoId: string, motivo: string): Promise<void> {
+  const cruces = (await client.query(
+    "SELECT id, payable_id, receivable_id, monto::float AS monto FROM cruces_entre_socios WHERE cash_movement_id = $1 AND anulado_at IS NULL FOR UPDATE",
+    [movimientoId]
+  )).rows as Array<{ id: string; payable_id: string; receivable_id: string; monto: number }>;
+  const devolver = async (tabla: string, id: string, monto: number) => {
+    const c = (await client.query(`SELECT amount, balance, status FROM ${tabla} WHERE id = $1 FOR UPDATE`, [id])).rows[0];
+    if (!c || c.status === "CANCELLED") return;
+    const nuevo = round2(Math.min(Number(c.amount), Number(c.balance) + monto));
+    await client.query(`UPDATE ${tabla} SET balance = $2, status = $3 WHERE id = $1`,
+      [id, nuevo, nuevo + 0.005 >= Number(c.amount) ? "CONFIRMED" : nuevo < 0.01 ? "PAID" : "PARTIAL"]);
+  };
+  for (const x of cruces) {
+    await devolver("accounts_payable", x.payable_id, x.monto);
+    await devolver("accounts_receivable", x.receivable_id, x.monto);
+    await client.query("UPDATE cruces_entre_socios SET anulado_at = now() WHERE id = $1", [x.id]);
+  }
+  const d = await anularDeudaDeMovimiento(client, movimientoId, "pago_por_socio");
+  const socio = d?.cxp?.accionista_id
+    ?? (cruces[0] ? (await client.query("SELECT accionista_id FROM accounts_receivable WHERE id = $1", [cruces[0].receivable_id])).rows[0]?.accionista_id : null);
+  const pagador = d?.cxc?.accionista_id
+    ?? (cruces[0] ? (await client.query("SELECT accionista_id FROM accounts_payable WHERE id = $1", [cruces[0].payable_id])).rows[0]?.accionista_id : null);
+  if (socio) {
+    const quien = await nombreAccionista(client, pagador);
+    await notificar(client, {
+      accionistaId: socio,
+      titulo: `Se anuló un pago que ${quien} hizo por ti`,
+      mensaje: `${quien} anuló un pago que había hecho por ti (${motivo}). Esa deuda vuelve a tu Por Pagar${cruces.length ? " y lo que se había descontado de lo que te debía vuelve a deberse" : ""}.`,
+      referenciaTipo: "cash_movements", referenciaId: movimientoId
+    });
+  }
 }
 
 /**

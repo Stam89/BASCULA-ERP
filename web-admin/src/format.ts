@@ -48,6 +48,7 @@ export function categoryLabel(cat: string): string {
     PAGO_ENTRE_SOCIOS: "Pago entre socios",
     COBRO_ENTRE_SOCIOS: "Cobro entre socios",
     COBRO_POR_SOCIO: "Cobro recibido para otro socio",
+    PAGO_POR_SOCIO: "Pago hecho por otro socio",
     COBRO_PEDIDO: "Cobro de pedido",
     COBRO_CREDITO: "Cobro a crédito",
     VENTA: "Venta",

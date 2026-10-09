@@ -117,6 +117,8 @@ export const CATEGORIAS_NO_OPERATIVAS = [
   "PAGO_AGRICULTOR", "LIQUIDACION_AGRICULTOR", "ANTICIPO_AGRICULTOR",
   "FOMENTO_ENTREGA", "FOMENTOS", "PAGO_FOMENTO",
   "COMPRA_ACTIVO_FIJO", "PAGO_ENTRE_SOCIOS",
+  // Pago de una deuda de OTRO socio (p. ej. sus cosechadores): no es gasto de quien pagó; queda como deuda entre socios.
+  "PAGO_POR_SOCIO",
   "PAGO_SERVICIO_PILADO", "PAGO_SERVICIO_MAQUILA", "PAGO_SELECCION", "REVERSA_COMPRA",
   // Devolución del dinero de una venta anulada (no es gasto: deshace un ingreso; la venta ya no cuenta).
   "DEVOLUCION_VENTA",

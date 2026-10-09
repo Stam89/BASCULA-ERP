@@ -26,7 +26,7 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
       UNION ALL SELECT 'empaque', receivable_id, payable_id FROM matriz_packaging_charges WHERE receivable_id IS NOT NULL AND payable_id IS NOT NULL
       UNION ALL SELECT r.reference_type, r.id, p.id FROM accounts_receivable r
         JOIN accounts_payable p ON p.reference_type = r.reference_type AND p.reference_id = r.reference_id AND p.accionista_id IS DISTINCT FROM r.accionista_id
-       WHERE r.reference_type IN ('fomento_cruce', 'retencion_matriz', 'compra_producto_socio', 'cobro_por_socio') AND r.reference_id IS NOT NULL
+       WHERE r.reference_type IN ('fomento_cruce', 'retencion_matriz', 'compra_producto_socio', 'cobro_por_socio', 'pago_por_socio') AND r.reference_id IS NOT NULL
       ) x JOIN accounts_receivable r ON r.id = x.ar JOIN accounts_payable p ON p.id = x.ap
      WHERE abs(r.amount - p.amount) > 0.005 OR abs(r.balance - p.balance) > 0.005
         OR (r.status::text = 'CANCELLED') <> (p.status::text = 'CANCELLED')` },
@@ -38,6 +38,14 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
        AND (p.id IS NULL
             OR (cm.reversed_at IS NULL AND (p.status::text = 'CANCELLED' OR abs(p.amount - cm.amount) > 0.005))
             OR (cm.reversed_at IS NOT NULL AND p.status::text <> 'CANCELLED'))` },
+  { modulo: "Cuentas", nombre: "Pagos que un socio hizo por otro: lo descontado + la deuda nueva = lo que salió de caja (y uno anulado, nada vigente)", sql: `
+    SELECT cm.id, cm.amount::float AS pago, COALESCE(x.cruzado, 0)::float AS descontado, COALESCE(p.amount, 0)::float AS deuda, cm.reversed_at IS NOT NULL AS anulado
+      FROM cash_movements cm
+      LEFT JOIN LATERAL (SELECT sum(c.monto) AS cruzado FROM cruces_entre_socios c WHERE c.cash_movement_id = cm.id AND c.anulado_at IS NULL) x ON true
+      LEFT JOIN accounts_payable p ON p.reference_type = 'pago_por_socio' AND p.reference_id = cm.id AND p.status <> 'CANCELLED'
+     WHERE cm.category = 'PAGO_POR_SOCIO' AND cm.reversal_of IS NULL
+       AND ((cm.reversed_at IS NULL AND abs(COALESCE(x.cruzado, 0) + COALESCE(p.amount, 0) - cm.amount) > 0.005)
+            OR (cm.reversed_at IS NOT NULL AND (COALESCE(x.cruzado, 0) > 0.005 OR p.id IS NOT NULL)))` },
   { modulo: "Caja", nombre: "Pagos y cobros de varias cuentas: el desglose suma lo que movió la caja", sql: `
     SELECT cm.id, cm.amount::float AS movimiento, sum(d.monto)::float AS desglose
       FROM cash_movement_cuentas d JOIN cash_movements cm ON cm.id = d.cash_movement_id

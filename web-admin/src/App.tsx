@@ -2632,6 +2632,8 @@ export function App() {
   const [medioOperacion, setMedioOperacion] = useState<"EFECTIVO" | "BANCO">("EFECTIVO");
   // Por Cobrar: el cliente le depositó a OTRO socio (casi siempre a la Matriz). "" = entra a mi caja.
   const [cobroRecibidoPor, setCobroRecibidoPor] = useState("");
+  // Por Pagar: OTRO socio pagó esta deuda por mí (p. ej. la Matriz pagó a mis cosechadores). "" = sale de mi caja.
+  const [pagoHechoPor, setPagoHechoPor] = useState("");
   const [cashSummary, setCashSummary] = useState<CashSummary | null>(null);
   const [cashPayables, setCashPayables] = useState<AccountPayable[]>([]);
   const [anticipoFarmerId, setAnticipoFarmerId] = useState("");
@@ -9724,16 +9726,23 @@ export function App() {
   // sus cuentas (de la más vieja a la más nueva) y deja UN movimiento en caja.
   async function pagarGrupoCuentas(payableIds: string[], amount: number) {
     const registerId = dashboard.current_cash_register?.id;
-    if (!registerId) throw new Error("No hay caja abierta");
-    await apiPost("/cash/payables/pay-group", {
-      payable_ids: payableIds,
-      cash_register_id: registerId,
-      amount,
-      ...cuerpoMedio(medioOperacion)
-    });
-    addToast(medioOperacion === "BANCO" && cajaEsMixta ? "Pago registrado (🏦 por el banco)" : "Pago registrado", "success");
+    const pagadoPor = pagoHechoPor;
+    if (!registerId && !pagadoPor) throw new Error("No hay caja abierta");
+    const r = await apiPost<{ pago_por_socio?: { pagador: string; descontado: number; deuda_nueva: number } | null }>("/cash/payables/pay-group",
+      pagadoPor
+        // Lo pagó otro socio: el dinero sale de SU caja abierta (el servidor la busca).
+        ? { payable_ids: payableIds, amount, pagado_por: pagadoPor, medio_pago: medioOperacion }
+        : { payable_ids: payableIds, cash_register_id: registerId, amount, ...cuerpoMedio(medioOperacion) });
+    const ps = r.pago_por_socio;
+    addToast(ps
+      ? `Pago registrado: lo pagó ${ps.pagador}.` +
+        (ps.descontado > 0 ? ` Se descontaron ${money(ps.descontado)} de lo que ${ps.pagador} te debía.` : "") +
+        (ps.deuda_nueva > 0 ? ` Le debes ${money(ps.deuda_nueva)} a ${ps.pagador}.` : "")
+      : medioOperacion === "BANCO" && cajaEsMixta ? "Pago registrado (🏦 por el banco)" : "Pago registrado", "success");
     setMedioOperacion("EFECTIVO");
-    await refreshCaja(registerId);
+    setPagoHechoPor("");
+    if (registerId) await refreshCaja(registerId);
+    if (pagadoPor) await refreshReceivables();
   }
 
   async function setupMasterData() {
@@ -21008,13 +21017,19 @@ Motivo (obligatorio):`, "");
                 nombre={detalleGrupo.nombre}
                 rows={payableRows(detalleGrupo.items)}
                 color="pagar"
-                disabled={!dashboard.current_cash_register}
-                disabledMsg="Abre una caja para poder pagar."
-                onClose={() => setApDetalleKey(null)}
+                disabled={!dashboard.current_cash_register && !pagoHechoPor}
+                disabledMsg="Abre una caja para poder pagar (o elige abajo quién pagó)."
+                onClose={() => { setApDetalleKey(null); setPagoHechoPor(""); setMedioOperacion("EFECTIVO"); }}
                 onPagarTotal={() => pagarTotalPayableGrupo(detalleGrupo.items).catch((e) => addToast(e.message, "error"))}
                 onAbonar={(m) => abonarPayableGrupo(detalleGrupo.items, m).catch((e) => addToast(e.message, "error"))}
                 onImprimir={() => printCuentaStatement(detalleGrupo.nombre, payableRows(detalleGrupo.items), "Estado de cuenta por pagar")}
-                medio={cajaEsMixta ? { value: medioOperacion, onChange: setMedioOperacion } : undefined}
+                medio={cajaEsMixta || pagoHechoPor ? { value: medioOperacion, onChange: setMedioOperacion } : undefined}
+                recibidoPor={detalleGrupo.items.some((it) => it.entre_socios) ? undefined : {
+                  value: pagoHechoPor,
+                  onChange: (id) => { setPagoHechoPor(id); setMedioOperacion("EFECTIVO"); },
+                  opciones: accionistas.filter((a) => a.id !== activeAccionistaId && (a.tipo === "MATRIZ" || a.tipo === "SOCIO"))
+                    .map((a) => ({ id: a.id, name: a.tipo === "MATRIZ" ? `${a.name} (Matriz)` : a.name }))
+                }}
               />
             )}
           </section>
@@ -26882,7 +26897,8 @@ function CuentaDetalleModal(props: {
   onVerInforme?: (informeId: string) => void;
   /** Caja MIXTA: el cobro/pago pregunta si fue en efectivo o por el banco. */
   medio?: { value: "EFECTIVO" | "BANCO"; onChange: (m: "EFECTIVO" | "BANCO") => void };
-  /** Por Cobrar: ¿quién recibió el dinero? "" = mi caja; otro socio = le depositaron a él (y queda debiéndome). */
+  /** Por Cobrar: ¿quién recibió el dinero? · Por Pagar: ¿quién pagó? "" = mi caja; otro socio = el dinero entró/salió de
+   *  la caja de ese socio y queda la cuenta entre los dos. */
   recibidoPor?: { value: string; onChange: (id: string) => void; opciones: Array<{ id: string; name: string }> };
 }) {
   const saldoTotal = props.rows.reduce((s, r) => s + Number(r.saldo), 0);
@@ -26928,21 +26944,27 @@ function CuentaDetalleModal(props: {
         {props.recibidoPor && props.recibidoPor.opciones.length > 0 && (() => {
           const rp = props.recibidoPor;
           const otro = rp.opciones.find((o) => o.id === rp.value);
+          const cobrar = props.color === "cobrar";
           return (
             <div className="cobroRecibe">
               <label>
-                <span>¿Quién recibió el dinero?</span>
+                <span>{cobrar ? "¿Quién recibió el dinero?" : "¿Quién pagó?"}</span>
                 <select value={rp.value} onChange={(e) => rp.onChange(e.target.value)}>
-                  <option value="">Yo · entra a mi caja</option>
-                  {rp.opciones.map((o) => <option key={o.id} value={o.id}>Le depositaron a {o.name}</option>)}
+                  <option value="">{cobrar ? "Yo · entra a mi caja" : "Yo · sale de mi caja"}</option>
+                  {rp.opciones.map((o) => <option key={o.id} value={o.id}>{cobrar ? `Le depositaron a ${o.name}` : `Lo pagó ${o.name}`}</option>)}
                 </select>
               </label>
-              {otro && (
+              {otro && (cobrar ? (
                 <small>
                   El cliente deja de deberte; el dinero entra a la caja abierta de <b>{otro.name}</b> y ahora <b>{otro.name}</b> te lo
                   debe (lo ves aquí en Por Cobrar · entre socios, y a {otro.name} le aparece en Por Pagar).
                 </small>
-              )}
+              ) : (
+                <small>
+                  Esta deuda baja y el dinero sale de la caja abierta de <b>{otro.name}</b>. Si <b>{otro.name}</b> te debía por cobros que
+                  recibió por ti, se descuenta de eso; lo que falte se lo quedas debiendo (Por Pagar · entre socios).
+                </small>
+              ))}
             </div>
           );
         })()}
@@ -26952,7 +26974,7 @@ function CuentaDetalleModal(props: {
         {props.medio && !props.disabled && (
           <MedioPagoSelector value={props.medio.value} onChange={props.medio.onChange}
             pregunta={props.recibidoPor?.value
-              ? "¿Cómo le llegó: en efectivo o al banco?"
+              ? (props.color === "cobrar" ? "¿Cómo le llegó: en efectivo o al banco?" : "¿Cómo pagó: en efectivo o por el banco?")
               : props.color === "cobrar" ? "¿Te pagan en efectivo o por el banco?" : "¿Pagas en efectivo o por el banco?"} />
         )}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>

@@ -30,7 +30,7 @@ receivableRouter.get("/", asyncRoute(async (req, res) => {
             COALESCE(par.name, c.full_name, dest.name, ps_acc.name, ps.client_name,
                      msc_acc.name, mpc_acc.name, soc_ret.name, fr.full_name) AS customer_name,
             -- Deuda entre socios / Matriz (se espeja con la Por Pagar del otro).
-            (ar.reference_type IN ('fomento_cruce', 'retencion_matriz', 'packaging_charge', 'pilado_service', 'lot_transfer', 'service_charge', 'saldo_inicial_socio', 'compra_producto_socio', 'cobro_por_socio')
+            (ar.reference_type IN ('fomento_cruce', 'retencion_matriz', 'packaging_charge', 'pilado_service', 'lot_transfer', 'service_charge', 'saldo_inicial_socio', 'compra_producto_socio', 'cobro_por_socio', 'pago_por_socio')
               OR lt.id IS NOT NULL OR ps.client_accionista_id IS NOT NULL OR msc.id IS NOT NULL OR mpc.id IS NOT NULL) AS entre_socios,
             c.phone     AS customer_phone,
             s.sale_number,
@@ -56,7 +56,7 @@ receivableRouter.get("/", asyncRoute(async (req, res) => {
      LEFT JOIN accionistas soc_ret ON soc_ret.id = liq_ret.accionista_id
      LEFT JOIN LATERAL (
        SELECT a.name FROM accounts_payable h JOIN accionistas a ON a.id = h.accionista_id
-        WHERE ar.reference_type IN ('fomento_cruce', 'saldo_inicial_socio', 'compra_producto_socio', 'cobro_por_socio')
+        WHERE ar.reference_type IN ('fomento_cruce', 'saldo_inicial_socio', 'compra_producto_socio', 'cobro_por_socio', 'pago_por_socio')
           AND h.reference_type = ar.reference_type AND h.reference_id = ar.reference_id
           AND h.accionista_id IS DISTINCT FROM ar.accionista_id
         LIMIT 1
