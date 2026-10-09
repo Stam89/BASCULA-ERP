@@ -4322,6 +4322,10 @@ export function App() {
   }, [dashboard.current_cash_register, farmers.length, insumos.length, products.length, warehouses.length]);
 
   async function refresh() {
+    // Mismos módulos que el backend (READ_MODULES_BY_PREFIX.liquidations) para leer liquidaciones.
+    const permitidos = accionistas.find((a) => a.id === activeAccionistaId)?.allowed_modules ?? [];
+    const puedeLeerLiquidaciones = authUser?.role_name === "ADMINISTRADOR"
+      || ["Liquidaciones", "Caja", "Fomentos", "Agricultores", "Transporte / Cosechadora"].some((m) => permitidos.includes(m) || permitidos.includes(`EDIT:${m}`));
     setLoading(true);
     try {
       const online = await checkHealth();
@@ -4351,9 +4355,9 @@ export function App() {
         apiGet<Insumo[]>("/inventory/insumos"),
         apiGet<MateriaPrimaEntry[]>("/process-flow/drying/available-lots"),
         apiGet<DryingTunnelReport[]>("/process-flow/drying/reports"),
-        // Sin permiso de Liquidaciones (ni de las pestañas que las usan) el backend responde 403: lista vacía.
-        apiGet<LiqRecord[]>("/liquidations").catch(() => [] as LiqRecord[]),
-        apiGet<PendingEntry[]>("/liquidations/pending-entries").catch(() => [] as PendingEntry[]),
+        // Sin permiso de Liquidaciones (ni de las pestañas que las usan) el backend responde 403: ni se piden.
+        puedeLeerLiquidaciones ? apiGet<LiqRecord[]>("/liquidations").catch(() => [] as LiqRecord[]) : Promise.resolve([] as LiqRecord[]),
+        puedeLeerLiquidaciones ? apiGet<PendingEntry[]>("/liquidations/pending-entries").catch(() => [] as PendingEntry[]) : Promise.resolve([] as PendingEntry[]),
         apiGet<Lot[]>("/lots/dry-in-storage")
       ]);
 
