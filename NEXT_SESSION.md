@@ -49,6 +49,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 📍 Envejecido/selección: lo que QUEDÓ ALLÁ donde el proveedor (2026-10-08, pedido del dueño)
+- Migración `20261081` (warehouses.external_provider_id + bodega tipo EXTERNO «Allá: <proveedor>» creada al vuelo; selection_batch_outputs.qty_alla; tabla selection_traidas).
+- `POST /selection/batches/:id/finish` acepta `qty_alla` por línea: lo que llegó → bodega PT; lo que quedó → «Allá». `GET /selection/ubicacion` (por producto: piladora / allá por proveedor + viajes). `POST /selection/traer` (OUT de allá con FIFO → IN a PT; 409 si se trae más de lo que hay).
+- Lo de allá es del socio (inventario/balance lo cuentan) pero Ventas NO lo ofrece (orders: stock_dueno y saldo excluyen EXTERNO). `/inventory/stock` trae `warehouse_type`.
+- `buildDisplayStockRows` (App.tsx) ahora SUMA todas las filas OWNED del producto (antes tomaba la 1ª) y separa `alla`; InventarioExistencias muestra «🏭 en piladora · 📍 allá».
+- UI: en «Registrar lo que regresó» cada línea tiene «📍 De esto quedó allá» (+ «Todo quedó allá» / «Todo llegó»); En Proceso → tarjeta «📍 ¿Dónde está?» con «🚚 Traer a piladora desde X» (ventana con lo que hay allá precargado). Simulacro `envejecido_alla.mjs` TODO OK; verificado en celular.
+
 ### 📅 Ensayo del cierre de mes (2026-10-08)
 - Guía para el dueño: `docs/cierre-de-mes.md`. Simulacro `cierre_mes.mjs` (montos conocidos → ER, Balance, Flujo y Resultado mensual cuadran) TODO OK.
 - `services/finance.ts` arreglado: gastos y mano de obra desde egresos de Caja (antes tablas vacías `expenses`/`labor_payments` → $0); excluye anulados y CATEGORIAS_NO_OPERATIVAS (mismo criterio que Resultado mensual). Ventas + venta al detalle (INCOME VENTA sin ref 'sales'). Servicios = CxC de servicio devengadas (pilado/secado/sacos/empaque/service_charge). Costo de ventas solo salidas por venta (`SALIDA_POR_VENTA`; antes contaba la cáscara al molino y mermas) + servicios recibidos (CxP pilado/service_charge/packaging/selection + campo venta_flete/envejecido_flete; NO los fletes de liquidación).
