@@ -2627,6 +2627,9 @@ export function App() {
   const [cierreCaja, setCierreCaja] = useState<{ efectivo: string; banco: string; notas: string; busy?: boolean } | null>(null);
   const [traspaso, setTraspaso] = useState<{ direccion: "DEPOSITO" | "RETIRO"; monto: string; descripcion: string; busy?: boolean } | null>(null);
   const [movMedio, setMovMedio] = useState<"EFECTIVO" | "BANCO">("EFECTIVO");
+  // Efectivo o banco de los cobros/pagos fuera del formulario de movimientos (Por Cobrar, Por Pagar, anticipos,
+  // fomentos, venta al detalle). Solo se pregunta si la caja abierta es MIXTA; tras cada operación vuelve a efectivo.
+  const [medioOperacion, setMedioOperacion] = useState<"EFECTIVO" | "BANCO">("EFECTIVO");
   const [cashSummary, setCashSummary] = useState<CashSummary | null>(null);
   const [cashPayables, setCashPayables] = useState<AccountPayable[]>([]);
   const [anticipoFarmerId, setAnticipoFarmerId] = useState("");
@@ -7620,8 +7623,9 @@ export function App() {
     const total = round2(monto);
     if (!(total > 0)) { addToast("Monto inválido", "error"); return; }
     const r = await apiPost<{ paid: number; cuentas: number; espejos: Array<{ accionista: string; caja_registrada: boolean }> }>(
-      "/receivable/pay-group", { receivable_ids: items.map((it) => it.id), amount: total, cash_register_id: registerId }
+      "/receivable/pay-group", { receivable_ids: items.map((it) => it.id), amount: total, cash_register_id: registerId, ...cuerpoMedio(medioOperacion) }
     );
+    setMedioOperacion("EFECTIVO");
     await refreshReceivables();
     await refreshCaja(registerId);
     const espejo = r.espejos[0];
@@ -7848,6 +7852,7 @@ export function App() {
         cash_register_id: registerId,
         movement: "INCOME",
         category: "VENTA",
+        medio: cajaEsMixta ? medioOperacion : undefined,
         amount: v.total,
         description: `Venta detalle ${detalle}`
       });
@@ -8515,8 +8520,10 @@ export function App() {
       fecha: fomentoEntregaForm.fecha,
       valor: Number(fomentoEntregaForm.valor),
       concepto: fomentoEntregaForm.concepto || undefined,
-      cash_register_id: dashboard.current_cash_register?.id
+      cash_register_id: dashboard.current_cash_register?.id,
+      ...cuerpoMedio(medioOperacion)
     });
+    setMedioOperacion("EFECTIVO");
     setFomentoEntregaForm({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "", es_saldo_anterior: false, meses_interes_fijo: "1" });
     addToast("Entrega registrada" + (dashboard.current_cash_register ? " y descontada de caja" : ""), "success");
     await loadFomentoDetalle(fomentoDetalle.id);
@@ -8572,8 +8579,10 @@ export function App() {
       fecha: fomentoPagoForm.fecha,
       valor: Number(fomentoPagoForm.valor),
       concepto: fomentoPagoForm.concepto || undefined,
-      cash_register_id: dashboard.current_cash_register?.id
+      cash_register_id: dashboard.current_cash_register?.id,
+      ...cuerpoMedio(medioOperacion)
     });
+    setMedioOperacion("EFECTIVO");
     setFomentoPagoForm({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
     addToast("Pago registrado", "success");
     await loadFomentoDetalle(fomentoDetalle.id);
@@ -9353,8 +9362,10 @@ export function App() {
       amount: Number(form.get("amount")),
       concept: form.get("concept"),
       cash_register_id: registerId,
-      apply_to_payables: true
+      apply_to_payables: true,
+      ...cuerpoMedio(medioOperacion)
     });
+    setMedioOperacion("EFECTIVO");
     safeResetForm(formElement);
     addToast("Anticipo registrado", "success");
     await refresh();
@@ -9383,7 +9394,8 @@ export function App() {
     // flujo de pago de cuentas (descuenta caja + abona la liquidación, un solo
     // asiento; la relación queda cash_movement -> accounts_payable -> liquidation).
     if (category === "PAGO_AGRICULTOR" && movPayableId) {
-      await pagarCuenta(movPayableId, amount);
+      await pagarCuenta(movPayableId, amount, movMedio);
+      setMovMedio("EFECTIVO");
       safeResetForm(formElement);
       setMovCategory("");
       setMovPayableId("");
@@ -9397,8 +9409,10 @@ export function App() {
       await apiPost(`/receivable/${movReceivableId}/pay`, {
         amount,
         cash_register_id: registerId,
-        concepto: (form.get("description") as string) || undefined
+        concepto: (form.get("description") as string) || undefined,
+        ...cuerpoMedio(movMedio)
       });
+      setMovMedio("EFECTIVO");
       safeResetForm(formElement);
       setMovCategory(""); setMovReceivableId("");
       addToast("Abono registrado: ingreso a caja y saldo de la cuenta reducido.", "success");
@@ -9673,14 +9687,22 @@ export function App() {
     setLiqEdit(null);
   }
 
-  async function pagarCuenta(payableId: string, amount: number) {
+  /** `medio_pago` para el cuerpo de la operación (solo si la caja abierta es MIXTA). */
+  function cuerpoMedio(medio: "EFECTIVO" | "BANCO"): { medio_pago?: "EFECTIVO" | "BANCO" } {
+    return dashboard.current_cash_register?.tipo === "MIXTO" ? { medio_pago: medio } : {};
+  }
+  const cajaEsMixta = dashboard.current_cash_register?.tipo === "MIXTO";
+
+  async function pagarCuenta(payableId: string, amount: number, medio: "EFECTIVO" | "BANCO" = medioOperacion) {
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) throw new Error("No hay caja abierta");
     await apiPost(`/cash/payables/${payableId}/pay`, {
       cash_register_id: registerId,
-      amount
+      amount,
+      ...cuerpoMedio(medio)
     });
-    addToast("Pago registrado", "success");
+    addToast(medio === "BANCO" && cajaEsMixta ? "Pago registrado (🏦 por el banco)" : "Pago registrado", "success");
+    setMedioOperacion("EFECTIVO");
     await refreshCaja(registerId);
   }
 
@@ -9692,9 +9714,11 @@ export function App() {
     await apiPost("/cash/payables/pay-group", {
       payable_ids: payableIds,
       cash_register_id: registerId,
-      amount
+      amount,
+      ...cuerpoMedio(medioOperacion)
     });
-    addToast("Pago registrado", "success");
+    addToast(medioOperacion === "BANCO" && cajaEsMixta ? "Pago registrado (🏦 por el banco)" : "Pago registrado", "success");
+    setMedioOperacion("EFECTIVO");
     await refreshCaja(registerId);
   }
 
@@ -16896,9 +16920,9 @@ Motivo (obligatorio):`, "");
                             style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid var(--c-border)", fontSize: 13 }}
                           >
                             <option value="CASH">💵 Efectivo</option>
-                            <option value="TRANSFER">📱 Transferencia</option>
-                            <option value="CARD">💳 Tarjeta</option>
-                            <option value="CHECK">✓ Cheque</option>
+                            <option value="TRANSFER">🏦 Banco · transferencia</option>
+                            <option value="CARD">🏦 Banco · tarjeta</option>
+                            <option value="CHECK">🏦 Banco · cheque</option>
                             <option value="CREDIT">📋 Crédito</option>
                           </select>
                           <button type="button" className="primary" style={{ flex: 1, minWidth: 150, padding: "9px 12px", fontWeight: 800 }} onClick={() => despacharPedido(o).catch((e) => addToast(e.message, "error"))}>
@@ -17170,7 +17194,7 @@ Motivo (obligatorio):`, "");
                       <span><small>Cliente</small><strong>{o.customer_name}</strong></span>
                       <span><small>Cantidad</small><strong>{qq.enReal()} QQ</strong></span>
                       {m.modo === "despacho" && <span><small>Total</small><strong>{money(Number(o.total_amount))}</strong></span>}
-                      {m.modo === "despacho" && <span><small>Cobro</small><strong>{m.metodo === "CREDIT" ? "📋 Crédito" : "💵 Ahora, a la caja"}</strong></span>}
+                      {m.modo === "despacho" && <span><small>Cobro</small><strong>{m.metodo === "CREDIT" ? "📋 Crédito" : m.metodo === "CASH" ? "💵 Efectivo, a la caja" : "🏦 Por el banco"}</strong></span>}
                       {!m.esDelActivo && m.modo === "despacho" && <span><small>Vende</small><strong>{o.accionista_name}</strong></span>}
                     </div>
                     {m.modo === "despacho" && <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>La mercadería sale del inventario. {m.metodo === "CREDIT" ? "Queda como cuenta por cobrar al cliente." : "El cobro entra a la caja abierta."}</p>}
@@ -18175,6 +18199,7 @@ Motivo (obligatorio):`, "");
                         </label>
                         <Input name="amount" label="Monto $" type="number" />
                         <Input name="concept" label="Concepto" />
+                        {cajaEsMixta && <MedioPagoSelector value={medioOperacion} onChange={setMedioOperacion} pregunta="¿El anticipo sale en efectivo o por el banco?" />}
                         <button className="primary" style={{ width: "100%", padding: "10px 0" }} disabled={farmersWithPendingLiq.length === 0}>💰 Registrar anticipo</button>
                       </>
                     )}
@@ -18843,7 +18868,8 @@ Motivo (obligatorio):`, "");
                         ) : <Input name="amount" label="Monto $" type="number" />}
                       </>
                     )}
-                    {dashboard.current_cash_register?.tipo === "MIXTO" && movCategory !== "MANTENIMIENTO_EQUIPO" && !esCategoriaSacos(movCategory) && !CASH_REUSE[movCategory] && movModalidad !== "CREDITO" && (
+                    {dashboard.current_cash_register?.tipo === "MIXTO" && movCategory !== "MANTENIMIENTO_EQUIPO" && !esCategoriaSacos(movCategory)
+                      && (!CASH_REUSE[movCategory] || CASH_REUSE[movCategory] === "agricultor") && (movModalidad !== "CREDITO" || CASH_REUSE[movCategory] === "agricultor" || movType === "INCOME") && (
                       <div className="cjMedio" role="radiogroup" aria-label="Efectivo o banco">
                         <span>¿{movType === "INCOME" ? "Entró" : "Salió"} en efectivo o por el banco?</span>
                         <label className={movMedio === "EFECTIVO" ? "is-on" : ""}><input type="radio" checked={movMedio === "EFECTIVO"} onChange={() => setMovMedio("EFECTIVO")} /> 💵 Efectivo</label>
@@ -19114,6 +19140,11 @@ Motivo (obligatorio):`, "");
                 )}
 
                 {/* ── Venta Detalle (por Libra o por QQ) ── */}
+                {cajaSubTab === "venta_detalle" && cajaEsMixta && (
+                  <div className="cj-card" style={{ padding: "10px 14px", marginBottom: 10 }}>
+                    <MedioPagoSelector value={medioOperacion} onChange={setMedioOperacion} pregunta="¿El cliente paga en efectivo o por transferencia?" />
+                  </div>
+                )}
                 {cajaSubTab === "venta_detalle" && (
                   <VentaDetalleCard
                     productos={productosVentaDetalle()}
@@ -20366,6 +20397,7 @@ Motivo (obligatorio):`, "");
                             onChange={e => setFomentoEntregaForm(p => ({...p, concepto: e.target.value}))}
                             style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Opcional" />
                         </label>
+                        {cajaEsMixta && <MedioPagoSelector value={medioOperacion} onChange={setMedioOperacion} pregunta="¿La entrega sale en efectivo o por el banco?" />}
                         <button type="submit" style={{ background: "var(--c-brand)", color: "#fff", border: "none", borderRadius: 6, padding: "8px 16px", cursor: "pointer", fontWeight: 700 }}>
                           Registrar Entrega
                         </button>
@@ -20432,6 +20464,7 @@ Motivo (obligatorio):`, "");
                             onChange={e => setFomentoPagoForm(p => ({...p, concepto: e.target.value}))}
                             style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Abono / pago total" />
                         </label>
+                        {cajaEsMixta && <MedioPagoSelector value={medioOperacion} onChange={setMedioOperacion} pregunta="¿El agricultor pagó en efectivo o por el banco?" />}
                         <button type="submit" style={{ background: "#16a34a", color: "#fff", border: "none", borderRadius: 6, padding: "8px 16px", cursor: "pointer", fontWeight: 700 }}>
                           💵 Registrar Pago
                           {dashboard.current_cash_register && " (entra a caja)"}
@@ -20842,6 +20875,7 @@ Motivo (obligatorio):`, "");
                 onPagarTotal={() => pagarTotalReceivableGrupo(detalleGrupo.items).catch((e) => addToast(e.message, "error"))}
                 onAbonar={(m) => abonarReceivableGrupo(detalleGrupo.items, m).catch((e) => addToast(e.message, "error"))}
                 onImprimir={() => printCuentaStatement(detalleGrupo.nombre, receivableRows(detalleGrupo.items), "Estado de cuenta por cobrar")}
+                medio={cajaEsMixta ? { value: medioOperacion, onChange: setMedioOperacion } : undefined}
                 onVerInforme={(id) => loadPiladoReport(id).catch((err) => addToast(err.message, "error"))}
               />
             )}
@@ -20958,6 +20992,7 @@ Motivo (obligatorio):`, "");
                 onPagarTotal={() => pagarTotalPayableGrupo(detalleGrupo.items).catch((e) => addToast(e.message, "error"))}
                 onAbonar={(m) => abonarPayableGrupo(detalleGrupo.items, m).catch((e) => addToast(e.message, "error"))}
                 onImprimir={() => printCuentaStatement(detalleGrupo.nombre, payableRows(detalleGrupo.items), "Estado de cuenta por pagar")}
+                medio={cajaEsMixta ? { value: medioOperacion, onChange: setMedioOperacion } : undefined}
               />
             )}
           </section>
@@ -26800,6 +26835,17 @@ type DetalleRow = { id: string; fecha: string; concepto: string; monto: number; 
 // Modal "Estado de cuenta" GENÉRICO: mismo diseño y UX para Por Cobrar y Por
 // Pagar (solo cambia el color). Tabla de deudas + acciones (total / abono
 // parcial) + impresión. El detalle vive aquí; la tarjeta solo consolida.
+// ¿Efectivo o banco? Para los cobros y pagos de una caja MIXTA (la de efectivo o de banco tiene un solo medio).
+function MedioPagoSelector({ value, onChange, pregunta }: { value: "EFECTIVO" | "BANCO"; onChange: (m: "EFECTIVO" | "BANCO") => void; pregunta?: string }) {
+  return (
+    <div className="cjMedio" role="radiogroup" aria-label="Efectivo o banco">
+      <span>{pregunta ?? "¿En efectivo o por el banco?"}</span>
+      <label className={value === "EFECTIVO" ? "is-on" : ""}><input type="radio" checked={value === "EFECTIVO"} onChange={() => onChange("EFECTIVO")} /> 💵 Efectivo</label>
+      <label className={value === "BANCO" ? "is-on" : ""}><input type="radio" checked={value === "BANCO"} onChange={() => onChange("BANCO")} /> 🏦 Banco / transferencia</label>
+    </div>
+  );
+}
+
 function CuentaDetalleModal(props: {
   nombre: string;
   rows: DetalleRow[];
@@ -26812,6 +26858,8 @@ function CuentaDetalleModal(props: {
   onImprimir: () => void;
   /** Abre el informe del servicio (p. ej. pilado) de una fila que lo tenga. */
   onVerInforme?: (informeId: string) => void;
+  /** Caja MIXTA: el cobro/pago pregunta si fue en efectivo o por el banco. */
+  medio?: { value: "EFECTIVO" | "BANCO"; onChange: (m: "EFECTIVO" | "BANCO") => void };
 }) {
   const saldoTotal = props.rows.reduce((s, r) => s + Number(r.saldo), 0);
   const barColor = props.color === "cobrar" ? "#16a34a" : "#dc2626";
@@ -26855,6 +26903,10 @@ function CuentaDetalleModal(props: {
 
         {props.disabled && <div className="alertBox" style={{ marginTop: 10 }}>{props.disabledMsg ?? "Abre una caja para continuar."}</div>}
 
+        {props.medio && !props.disabled && (
+          <MedioPagoSelector value={props.medio.value} onChange={props.medio.onChange}
+            pregunta={props.color === "cobrar" ? "¿Te pagan en efectivo o por el banco?" : "¿Pagas en efectivo o por el banco?"} />
+        )}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
           <button type="button" className="primary" disabled={props.disabled} onClick={props.onPagarTotal} style={{ fontWeight: 700 }}>✅ Pagar total</button>
           <button type="button" disabled={props.disabled} onClick={() => { setMonto(String(saldoTotal.enReal())); setModoAbono((v) => !v); }}>💳 Abono parcial</button>
