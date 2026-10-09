@@ -5712,3 +5712,6 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
   .modalOverlay:has(.cjArqueo) { align-items: flex-end; padding: 0; }
   .cjArqueo { max-width: none; border-radius: 20px 20px 0 0; }
 }
+/* Desglose efectivo/banco dentro de la tarjeta verde del saldo: texto claro */
+.cj-kpi--hero .cj-kpi-split span { color: rgba(255, 255, 255, .85); }
+.cj-kpi--hero .cj-kpi-split b { color: #fff; }
