@@ -8,6 +8,12 @@ import { requireAuth } from "../../auth/require-auth.js";
 import { env } from "../../config/env.js";
 import { importBasculaTickets } from "./mobile-tickets.js";
 import { dentroDelCorteSql, leerCorteBascula } from "../../services/bascula-corte.js";
+import {
+  createDeviceToken,
+  hashDeviceToken,
+  requireBootstrapKey,
+  requireDeviceCredential
+} from "../../services/bascula-device-auth.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SINCRONIZACIÓN DIRECTA POR WiFi (tablet de báscula → ERP en la red local).
@@ -29,14 +35,6 @@ import { dentroDelCorteSql, leerCorteBascula } from "../../services/bascula-cort
 
 export const basculaSyncRouter = Router();
 
-function requireDeviceKey(req: { headers: Record<string, unknown> }): void {
-  const expected = env.deviceSyncKey;
-  const provided = req.headers["x-device-key"];
-  if (!expected || provided !== expected) {
-    throw new ApiError(401, "Dispositivo no autorizado para sincronizar tickets.");
-  }
-}
-
 // El cuerpo llega en el formato NATIVO de la app de báscula. No validamos aquí
 // cada campo: importBasculaTickets() ya valida ticket por ticket con su propio
 // esquema (basculaTicketSchema), así que solo exigimos un arreglo no vacío.
@@ -53,16 +51,42 @@ const deleteRenumberSchema = z.object({
   modo: z.enum(["principal", "particular"]).default("principal")
 });
 
+const registerDeviceSchema = z.object({
+  deviceId: z.string().trim().min(8).max(160),
+  modelo: z.string().trim().max(120).optional()
+});
+
 function formatTicketNumber(value: number): string {
   const padded = String(Math.max(1, value)).padStart(6, "0");
   return `${padded.slice(0, -3)} ${padded.slice(-3)}`;
 }
 
+// POST /api/bascula/register-device
+// Alta/rotacion de una credencial individual. La clave compartida se usa solo
+// para autorizar este paso de transicion; el token plano nunca se guarda en DB.
+basculaSyncRouter.post("/register-device", asyncRoute(async (req, res) => {
+  requireBootstrapKey(req);
+  const body = registerDeviceSchema.parse(req.body);
+  const token = createDeviceToken();
+  await pool.query(
+    `INSERT INTO bascula_devices (device_id, token_hash, modelo, last_seen_at)
+     VALUES ($1, $2, $3, now())
+     ON CONFLICT (device_id) DO UPDATE
+       SET token_hash = EXCLUDED.token_hash,
+           modelo = EXCLUDED.modelo,
+           activo = true,
+           updated_at = now(),
+           last_seen_at = now()`,
+    [body.deviceId, hashDeviceToken(token), body.modelo || null]
+  );
+  res.status(201).json({ ok: true, deviceId: body.deviceId, token });
+}));
+
 // POST /api/bascula/sync
 // Recibe los tickets de la tablet por red local e inserta/actualiza en
 // PostgreSQL con la MISMA lógica que Firebase. Idempotente.
 basculaSyncRouter.post("/sync", asyncRoute(async (req, res) => {
-  requireDeviceKey(req);
+  await requireDeviceCredential(req);
 
   const body = syncBodySchema.parse(req.body);
   const deviceId = body.deviceId?.trim() || "wifi-directo";
@@ -78,7 +102,7 @@ basculaSyncRouter.post("/sync", asyncRoute(async (req, res) => {
 // misma clave del dispositivo y entrega el payload nativo para poder reconstruir
 // Room después de una desinstalación, sin depender de la cuota de Firebase.
 basculaSyncRouter.get("/restore", asyncRoute(async (req, res) => {
-  requireDeviceKey(req);
+  await requireDeviceCredential(req);
   const result = await pool.query<{ raw_payload: unknown; en_espera: boolean }>(
     `SELECT raw_payload, en_espera
        FROM mobile_synced_tickets
@@ -100,7 +124,7 @@ basculaSyncRouter.get("/restore", asyncRoute(async (req, res) => {
 // se protege si ya participa en una operacion contable; los posteriores solo
 // cambian su numero visible y conservan su id/enlaces internos.
 basculaSyncRouter.post("/delete-and-renumber", asyncRoute(async (req, res) => {
-  requireDeviceKey(req);
+  await requireDeviceCredential(req);
   const body = deleteRenumberSchema.parse(req.body);
 
   const result = await inTransaction(async (client) => {
@@ -184,7 +208,7 @@ basculaSyncRouter.post("/delete-and-renumber", asyncRoute(async (req, res) => {
 // Consulta liviana para que una tablet con datos detecte un ERP recien restaurado
 // o vacio y pueda volver a publicar su historial sin descargar todos los payloads.
 basculaSyncRouter.get("/sync-state", asyncRoute(async (req, res) => {
-  requireDeviceKey(req);
+  await requireDeviceCredential(req);
   const result = await pool.query<{ principal_count: number; last_updated: string | null }>(
     `SELECT count(*) FILTER (
               WHERE lower(coalesce(raw_payload->>'modo', 'principal')) = 'principal'
@@ -204,8 +228,8 @@ basculaSyncRouter.get("/sync-state", asyncRoute(async (req, res) => {
 // Respuesta mínima para que la tablet pueda encontrar el ERP si cambia la IP.
 // La clave evita confundir otro servicio del puerto 4000 con este servidor.
 basculaSyncRouter.get("/discover", asyncRoute(async (req, res) => {
-  requireDeviceKey(req);
-  res.json({ ok: true, service: "BASCULA-ERP", version: 1 });
+  const auth = await requireDeviceCredential(req);
+  res.json({ ok: true, service: "BASCULA-ERP", version: 2, auth: auth.mode });
 }));
 
 // GET /api/bascula/status
