@@ -35,7 +35,9 @@ export const OTRAS: Tile[] = [
   { tab: "Gana", icono: "📈", titulo: "Gana", ayuda: "Rendimiento y ganancia de la pilada" },
   { tab: "Costos Operativos", icono: "🧾", titulo: "Costos operativos", ayuda: "Costos y gastos de la planta" },
   { tab: "Estados Financieros", icono: "📊", titulo: "Estados financieros", ayuda: "Resultados y balance" },
-  { tab: "Reportes", icono: "📑", titulo: "Reportes", ayuda: "Informes y reportes" }
+  { tab: "Reportes", icono: "📑", titulo: "Reportes", ayuda: "Informes y reportes" },
+  // Operación de la Matriz (se entra igual que desde el selector de arriba): para quien solo tiene Transporte.
+  { tab: "Caja de Campo", icono: "🚜", titulo: "Transporte y Cosechadora", ayuda: "Partes diarios, caja y cobros de la cosechadora y los carros" }
 ];
 
 /** Cuántos botones grandes se promueven cuando la persona no tiene ninguna pantalla «diaria». */
