@@ -55,7 +55,7 @@ try {
   check((await api("POST", `/selection/batches/${lote.id}/reabrir`, { motivo: "no" }, acc)).status === 400, "B3. sin motivo → 400");
   exigir(await api("POST", `/selection/batches/${lote.id}/reabrir`, { motivo: "se registraron mal las cantidades" }, acc), "B4. reabrir el lote");
   const bB = (await q("SELECT status, output_qq FROM selection_batches WHERE id=$1", [lote.id]))[0];
-  check(bB.status === "IN_PROCESS" && bB.output_qq === null && await stock(arroz, false) === r3(pB0 - 20) && await stock(arroz, true) === aB0 && await stock(a34, false) === s34,
+  check(bB.status === "IN_PROCESS" && Number(bB.output_qq) === 0 && await stock(arroz, false) === r3(pB0 - 20) && await stock(arroz, true) === aB0 && await stock(a34, false) === s34,
     "B5. vuelve a «En proceso» y lo recibido sale de la piladora y de «Allá»", { bB, piladora: await stock(arroz, false), alla: await stock(arroz, true) });
   check((await q("SELECT 1 FROM selection_batch_reaperturas WHERE batch_id=$1", [lote.id])).length === 1, "B6. queda el historial de la reapertura con el informe anterior");
   exigir(await api("POST", `/selection/batches/${lote.id}/finish`, { outputs: [{ product_id: arroz, quantity: 18, qty_alla: 6 }, { product_id: a34, quantity: 1.5 }] }, acc), "B7. se registra bien: 18 (6 allá) + 1.5 de 3/4");

@@ -738,7 +738,7 @@ selectionRouter.post("/batches/:id/reabrir", requirePermiso("ANULAR"), asyncRout
     );
     await tx.query("DELETE FROM selection_batch_outputs WHERE batch_id = $1", [b.id]);
     const upd = await tx.query(
-      "UPDATE selection_batches SET status = 'IN_PROCESS', output_qq = NULL, merma_qq = NULL, finished_at = NULL WHERE id = $1 RETURNING *", [b.id]
+      "UPDATE selection_batches SET status = 'IN_PROCESS', output_qq = 0, merma_qq = 0, finished_at = NULL WHERE id = $1 RETURNING *", [b.id]
     );
     return upd.rows[0];
   });
