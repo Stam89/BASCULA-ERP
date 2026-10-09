@@ -2838,7 +2838,7 @@ function OperadoresCatalogo({ operadores, onChanged, onError }: {
 // ── Contexto AISLADO de Campo: layout propio (sidebar + menú Captura/Reportes) ──
 // Se renderiza en lugar del layout estándar cuando la operación activa es Campo.
 // El resto de operaciones (Planta/Matriz, socios) no se ven aquí.
-export function CampoWorkspace({ operationSelector, userName, roleName, apiOnline, onLogout, nombre, matrizName, onNombreChange }: {
+export function CampoWorkspace({ operationSelector, userName, roleName, apiOnline, onLogout, nombre, matrizName, onNombreChange, puedeVerSeccion }: {
   operationSelector: ReactNode;
   userName: string;
   roleName: string;
@@ -2847,7 +2847,11 @@ export function CampoWorkspace({ operationSelector, userName, roleName, apiOnlin
   nombre: string;               // nombre editable de la operación (campo_config)
   matrizName: string;
   onNombreChange: (n: string) => void;
+  /** Permisos por sección (Configuración › permisos › Transporte / Cosechadora ↳). Sin la función, se ven todas. */
+  puedeVerSeccion?: (s: CampoSeccion) => boolean;
 }) {
+  const secciones = CAMPO_SECCIONES.filter((s) => !puedeVerSeccion || puedeVerSeccion(s.id));
+  const permitida = (s: CampoSeccion) => !puedeVerSeccion || puedeVerSeccion(s);
   // Entrada directa a una sección (p. ej. desde Configuración → «⚙️ Configuración»
   // de la operación): App deja la marca y aquí se consume una sola vez.
   const [seccion, setSeccion] = useState<CampoSeccion>(() => {
@@ -2855,15 +2859,17 @@ export function CampoWorkspace({ operationSelector, userName, roleName, apiOnlin
       const pedida = localStorage.getItem("bascula-erp:campo-seccion");
       if (pedida) {
         localStorage.removeItem("bascula-erp:campo-seccion");
-        if (CAMPO_SECCIONES.some((x) => x.id === pedida)) return pedida as CampoSeccion;
+        if (CAMPO_SECCIONES.some((x) => x.id === pedida) && permitida(pedida as CampoSeccion)) return pedida as CampoSeccion;
       }
     } catch { /* almacenamiento no disponible */ }
-    return "caja";
+    return secciones[0]?.id ?? "caja";
   });
+  // Ir a otra sección (menú, alertas, botones de la caja) solo si el usuario la puede ver.
+  const irA = (s: CampoSeccion) => { if (permitida(s)) setSeccion(s); };
   // Celular: el menú lateral es un cajón que se abre con ☰ (en PC no cambia nada).
   const [menuMovilAbierto, setMenuMovilAbierto] = useState(false);
   useEffect(() => { setMenuMovilAbierto(false); }, [seccion]);
-  const activa = CAMPO_SECCIONES.find((s) => s.id === seccion) ?? CAMPO_SECCIONES[0];
+  const activa = CAMPO_SECCIONES.find((s) => s.id === seccion) ?? secciones[0] ?? CAMPO_SECCIONES[0];
   const iniciales = userName.split(/\s+/).slice(0, 2).map((p) => p[0]?.toUpperCase() ?? "").join("");
   return (
     <main className="shell">
@@ -2881,8 +2887,8 @@ export function CampoWorkspace({ operationSelector, userName, roleName, apiOnlin
         <nav>
           <div className="navSection" data-group="Campo">
             <button type="button" className="navLabel" style={{ cursor: "default" }}><span>{nombre}</span></button>
-            {CAMPO_SECCIONES.map((s) => (
-              <button key={s.id} className={seccion === s.id ? "active" : ""} onClick={() => setSeccion(s.id)}>
+            {secciones.map((s) => (
+              <button key={s.id} className={seccion === s.id ? "active" : ""} onClick={() => irA(s.id)}>
                 <span style={{ width: 15, display: "inline-block", textAlign: "center" }}>{s.icon}</span>
                 {s.label}
               </button>
@@ -2916,7 +2922,9 @@ export function CampoWorkspace({ operationSelector, userName, roleName, apiOnlin
           </div>
         </header>
         <div className="content">
-          <CampoModule section={seccion} nombre={nombre} matrizName={matrizName} onNombreChange={onNombreChange} onIrSeccion={setSeccion} />
+          {secciones.length === 0 || !permitida(seccion)
+            ? <p className="muted">No tienes ninguna sección de {nombre} asignada. Pide acceso a un administrador.</p>
+            : <CampoModule section={seccion} nombre={nombre} matrizName={matrizName} onNombreChange={onNombreChange} onIrSeccion={irA} />}
         </div>
       </section>
     </main>

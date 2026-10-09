@@ -1676,7 +1676,7 @@ const PERM_MATRIX: Array<{ label: string; rows: Array<{ key: string; label: stri
     { key: "Bascula", label: "Báscula" }, { key: "Secadoras", label: "Secadoras" },
     { key: "Produccion", label: "Producción" }, { key: "Gana", label: "Gana" },
     { key: "Inventario", label: "Inventario" }, { key: "Seleccion", label: "Selección" },
-    { key: "Transporte / Cosechadora", label: "Transporte / Cosechadora" },
+    { key: "Transporte / Cosechadora", label: "🚜 Transporte / Cosechadora (en la Matriz)" },
     // «Gestión de Cuadrilla» y «Bancos» se quitaron (2026-10-08): no abrían ninguna pantalla ni
     // permitían nada. La cuadrilla se gobierna con Nómina › Cuadrilla / Bajada de carro.
   ] },
@@ -1736,6 +1736,21 @@ const SUB_TABS: Record<string, Array<{ key: string; label: string }>> = {
     { key: "porcobrar", label: "Por cobrar" },
     { key: "arianos", label: "Lotes guardados" },
     { key: "servicios", label: "Servicios (solo Matriz)" },
+  ],
+  // Secciones del menú de Transporte y Cosechadora (mismas claves que CAMPO_SECCIONES). El servidor las respeta
+  // (require-auth.ts → SUB_DE_LECTURA_RUTAS / SUB_DE_ESCRITURA).
+  "Transporte / Cosechadora": [
+    { key: "caja", label: "Caja" },
+    { key: "clientes", label: "Clientes" },
+    { key: "partes", label: "Partes Diarios" },
+    { key: "nomina", label: "Nómina Operadores" },
+    { key: "cxc", label: "Cuentas por Cobrar" },
+    { key: "cxp", label: "Cuentas por Pagar" },
+    { key: "vales", label: "Vales por Rendir" },
+    { key: "historial", label: "¿Cuándo se hizo?" },
+    { key: "resultados", label: "Estado de Resultados" },
+    { key: "reportes", label: "Reportes" },
+    { key: "config", label: "Configuración" },
   ],
 };
 function subTabKey(moduleKey: string, sub: string): string { return `SUB:${moduleKey}:${sub}`; }
@@ -13045,6 +13060,7 @@ Motivo (obligatorio):`, "");
           nombre={campoNombre}
           matrizName={matrizName}
           onNombreChange={setCampoNombre}
+          puedeVerSeccion={(s) => puedeVerSubTab("Transporte / Cosechadora", s === "servicios" || s === "mantenimiento" ? "caja" : s)}
         />
       </React.Suspense>
     );
@@ -24253,6 +24269,13 @@ Motivo (obligatorio):`, "");
                 {accionistaEditor && (() => {
                   const items = accionistaEditor.items;
                   const nombreAcc = (id: string) => adminAccionistas.find((a) => a.id === id)?.name ?? id;
+                  // Transporte y Cosechadora es una operación de la MATRIZ: en las columnas de los socios no aplica.
+                  const noAplicaEn = (moduleKey: string, accionistaId: string) => {
+                    if (moduleKey !== "Transporte / Cosechadora") return false;
+                    const tipo = accionistas.find((a) => a.id === accionistaId)?.tipo;
+                    return tipo !== undefined && tipo !== "MATRIZ";
+                  };
+                  const noAplica = <span className="muted" title="Transporte y Cosechadora se maneja desde la Matriz: dale el permiso en la columna de la Matriz." style={{ fontSize: 12 }}>—</span>;
                   const setItem = (idx: number, patch: Partial<{ access: boolean; modules: string[] }>) =>
                     setAccionistaEditor((ed) => ed && ({ ...ed, items: ed.items.map((x, i) => (i === idx ? { ...x, ...patch } : x)) }));
                   // Alterna un permiso simple (fila PERM:* de acción). Activa el acceso.
@@ -24363,7 +24386,7 @@ Motivo (obligatorio):`, "");
                                       <td style={{ position: "sticky", left: 0, background: "var(--c-surface)", padding: "5px 10px 5px 18px", borderBottom: "1px solid var(--c-border)", whiteSpace: "nowrap" }}>{row.label}</td>
                                       {items.map((it, idx) => (
                                         <td key={it.accionista_id} style={{ ...cellStyle, background: it.access ? undefined : "rgba(0,0,0,.02)" }}>
-                                          {esPerm ? (
+                                          {noAplicaEn(row.key, it.accionista_id) ? noAplica : esPerm ? (
                                             <input type="checkbox" checked={it.modules.includes(row.key)} onChange={() => toggleCell(idx, row.key)} />
                                           ) : (
                                             <span style={{ display: "inline-flex", gap: 10, justifyContent: "center" }}>
@@ -24402,6 +24425,7 @@ Motivo (obligatorio):`, "");
                                           const bloq = padre ? undefined : "Marca primero 👁️ Ver del módulo";
                                           return (
                                           <td key={it.accionista_id} style={{ ...cellStyle, background: it.access ? undefined : "rgba(0,0,0,.02)", opacity: padre ? 1 : 0.4 }}>
+                                            {noAplicaEn(row.key, it.accionista_id) ? noAplica : (
                                             <span style={{ display: "inline-flex", gap: 10, justifyContent: "center" }}>
                                               <label title={bloq ?? `Ver «${st.label}»`} style={{ display: "inline-flex", alignItems: "center", gap: 2, cursor: padre ? "pointer" : "not-allowed" }}>
                                                 <input type="checkbox" disabled={!padre} checked={p.can_view} onChange={() => toggleSubPerm(idx, row.key, st.key, "ver")} />
@@ -24412,6 +24436,7 @@ Motivo (obligatorio):`, "");
                                                 <span style={{ fontSize: 11 }}>✏️</span>
                                               </label>
                                             </span>
+                                            )}
                                           </td>
                                           );
                                         })}

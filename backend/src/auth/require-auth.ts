@@ -158,11 +158,27 @@ const SUB_DE_LECTURA: Record<string, { module: string; subs: Record<string, stri
   } }
 };
 
-/** Sub-pestaña que exige esta lectura, o null. */
-export function subDeLectura(prefix: string, rest: string): { module: string; sub: string } | null {
+// Transporte y Cosechadora (Caja de Campo): cada sección de su menú se puede permitir aparte (claves
+// SUB:Transporte / Cosechadora:<sección>). Solo se cierran las lecturas PROPIAS de una sección; las que
+// comparten todas (catálogos, sesión de caja, clientes, servicios, partes, alertas) quedan para todo el módulo.
+const CAMPO: AppModule = "Transporte / Cosechadora";
+const SUB_DE_LECTURA_RUTAS: Array<{ prefix: string; module: string; subs: string[]; test: (rest: string) => boolean }> = [
+  { prefix: "campo", module: CAMPO, subs: ["caja"], test: (r) => /^\/caja\/(libro|sesiones)\/?$/.test(r) },
+  { prefix: "campo", module: CAMPO, subs: ["caja", "reportes"], test: (r) => /^\/caja\/cierre-preview\/?$/.test(r) },
+  { prefix: "campo", module: CAMPO, subs: ["vales"], test: (r) => /^\/movimientos\/vales\/?$/.test(r) },
+  { prefix: "campo", module: CAMPO, subs: ["cxp"], test: (r) => /^\/cxp\/?$/.test(r) },
+  { prefix: "campo", module: CAMPO, subs: ["nomina"], test: (r) => /^\/nomina-operadores(\/|$)/.test(r) },
+  { prefix: "campo", module: CAMPO, subs: ["resultados"], test: (r) => /^\/reportes\/estado-resultados\/?$/.test(r) },
+  { prefix: "campo", module: CAMPO, subs: ["reportes"], test: (r) => /^\/reportes\//.test(r) }
+];
+
+/** Sub-pestaña(s) que exige esta lectura (basta tener una), o null. */
+export function subDeLectura(prefix: string, rest: string): { module: string; subs: string[] } | null {
+  const ruta = SUB_DE_LECTURA_RUTAS.find((r) => r.prefix === prefix && r.test(rest || "/"));
+  if (ruta) return { module: ruta.module, subs: ruta.subs };
   const regla = SUB_DE_LECTURA[prefix];
   const sub = regla?.subs[rest.split("/")[1] ?? ""];
-  return regla && sub ? { module: regla.module, sub } : null;
+  return regla && sub ? { module: regla.module, subs: [sub] } : null;
 }
 
 /** ¿Las sub-pestañas marcadas le permiten esta? (sin ninguna marcada de ese módulo → todas) */
@@ -177,7 +193,10 @@ export function subPermitida(allowed: string[], module: string, sub: string): bo
 // usuario tenga EDIT:<módulo>. Sin claves RO:SUB: todo queda como antes.
 // Se evalúa en orden: la primera regla que coincide decide la sub-pestaña; una
 // escritura que no coincide con ninguna (catálogos, configuración) es del módulo.
-const SUB_DE_ESCRITURA: Array<{ module: AppModule; prefix: string; sub: string; test: (method: string, rest: string) => boolean }> = [
+// `alt`: otras sub-pestañas desde las que también se hace esa escritura (basta una).
+// `exigeVer`: además hace falta VER esa sub-pestaña (si el administrador marcó alguna del módulo, las demás no se
+// tocan). Solo en las reglas nuevas, para no cambiar lo que ya funcionaba en Ventas, Selección y Nómina.
+const SUB_DE_ESCRITURA: Array<{ module: AppModule; prefix: string; sub: string; alt?: string[]; exigeVer?: boolean; test: (method: string, rest: string) => boolean }> = [
   { module: "Ventas", prefix: "orders", sub: "guias", test: (_m, r) => /^\/[^/]+\/guia\/?$/.test(r) },
   { module: "Ventas", prefix: "orders", sub: "despachos", test: (_m, r) => /^\/[^/]+\/(prepare|deliver)\/?$/.test(r) },
   { module: "Ventas", prefix: "orders", sub: "nuevo", test: () => true },
@@ -187,8 +206,24 @@ const SUB_DE_ESCRITURA: Array<{ module: AppModule; prefix: string; sub: string; 
   { module: "Nomina", prefix: "labor", sub: "secadora", test: (_m, r) => r.startsWith("/secador-days") },
   { module: "Nomina", prefix: "labor", sub: "pagos", test: () => true },
   { module: "Nomina", prefix: "nomina-semanal", sub: "pagos", test: () => true },
-  { module: "Nomina", prefix: "admin-payroll", sub: "sueldo-admin", test: () => true }
+  { module: "Nomina", prefix: "admin-payroll", sub: "sueldo-admin", test: () => true },
+  // Transporte y Cosechadora, por sección de su menú (lo que no coincide —clientes, catálogos sueltos— es del módulo).
+  { module: CAMPO, prefix: "campo", sub: "vales", exigeVer: true, test: (_m, r) => /^\/movimientos\/[^/]+\/(liquidar|anular-vale)\/?$/.test(r) },
+  { module: CAMPO, prefix: "campo", sub: "caja", exigeVer: true, test: (_m, r) => /^\/(caja\/(abrir|cerrar)|movimientos(\/[^/]+\/reversar)?|transferencias|mantenimientos)\/?$/.test(r) },
+  { module: CAMPO, prefix: "campo", sub: "caja", alt: ["clientes", "cxc"], exigeVer: true, test: (_m, r) => /^\/servicios\/?$/.test(r) },
+  { module: CAMPO, prefix: "campo", sub: "cxc", alt: ["clientes"], exigeVer: true, test: (_m, r) => /^\/(cxc|conciliacion)\//.test(r) },
+  { module: CAMPO, prefix: "campo", sub: "cxp", exigeVer: true, test: (_m, r) => /^\/cxp(\/|$)/.test(r) },
+  { module: CAMPO, prefix: "campo", sub: "partes", exigeVer: true, test: (_m, r) => /^\/partes(\/|$)/.test(r) },
+  { module: CAMPO, prefix: "campo", sub: "nomina", exigeVer: true, test: (_m, r) => /^\/nomina-operadores(\/|$)/.test(r) },
+  { module: CAMPO, prefix: "campo", sub: "config", alt: ["nomina"], exigeVer: true, test: (_m, r) => /^\/tarifas-operador(\/|$)/.test(r) },
+  { module: CAMPO, prefix: "campo", sub: "config", exigeVer: true, test: (_m, r) => /^\/(config|activos|cuentas|categorias-gasto|operadores)(\/|$)/.test(r) }
 ];
+
+/** ¿Alguna de las sub-pestañas de la regla deja escribir? (se ve —si la regla lo exige— y no es «Solo ver») */
+function reglaDeSubPermite(allowed: string[], module: string, regla: { sub: string; alt?: string[]; exigeVer?: boolean }): boolean {
+  return [regla.sub, ...(regla.alt ?? [])].some((s) =>
+    (!regla.exigeVer || subPermitida(allowed, module, s)) && !allowed.includes(`RO:SUB:${module}:${s}`));
+}
 
 /**
  * ¿El módulo `module` autoriza esta escritura? Necesita EDIT:<módulo> y que la
@@ -198,15 +233,19 @@ const SUB_DE_ESCRITURA: Array<{ module: AppModule; prefix: string; sub: string; 
 export function moduloPermiteEscritura(allowed: string[], module: AppModule, prefix: string, method: string, rest: string): boolean {
   if (!allowed.includes(`EDIT:${module}`)) return false;
   const regla = SUB_DE_ESCRITURA.find((r) => r.module === module && r.prefix === prefix && r.test(method, rest));
-  return !regla || !allowed.includes(`RO:SUB:${module}:${regla.sub}`);
+  return !regla || reglaDeSubPermite(allowed, module, regla);
 }
 
-/** Sub-pestaña «Solo ver» que bloquea esta escritura (para el mensaje), o null. */
+/** Mensaje cuando una sub-pestaña bloquea esta escritura («Solo ver» o sin acceso a esa sección), o null. */
 function subSoloVer(allowed: string[], modules: AppModule[], prefix: string, method: string, rest: string): string | null {
   for (const module of modules) {
     if (!allowed.includes(`EDIT:${module}`)) continue;
     const regla = SUB_DE_ESCRITURA.find((r) => r.module === module && r.prefix === prefix && r.test(method, rest));
-    if (regla && allowed.includes(`RO:SUB:${module}:${regla.sub}`)) return `${module} › ${regla.sub}`;
+    if (!regla || reglaDeSubPermite(allowed, module, regla)) continue;
+    const ve = [regla.sub, ...(regla.alt ?? [])].some((s) => subPermitida(allowed, module, s));
+    return ve || !regla.exigeVer
+      ? `Tu acceso a ${module} › ${regla.sub} en este accionista es de SOLO LECTURA. Pide permiso de edición a un administrador.`
+      : `No tienes acceso a ${module} › ${regla.sub} en este accionista. Pide acceso a un administrador.`;
   }
   return null;
 }
@@ -241,7 +280,7 @@ export function exigirLecturaEn(modules: string[]) {
   };
 }
 
-async function verificarLectura(req: Request, modules: string[], sub?: { module: string; sub: string } | null): Promise<void> {
+async function verificarLectura(req: Request, modules: string[], sub?: { module: string; subs: string[] } | null): Promise<void> {
   const user = (req as AuthenticatedRequest).user;
   if (!user) throw new ApiError(401, "Sesión requerida");
   // Rol y módulos se releen de la base (igual que en las escrituras): el token puede tener 12 h.
@@ -257,7 +296,7 @@ async function verificarLectura(req: Request, modules: string[], sub?: { module:
   if (fresh.rows[0].role_name === "ADMINISTRADOR") return;
   const allowed: string[] = fresh.rows[0].allowed_modules ?? [];
   if (!puedeLeer(allowed, modules)) throw new ApiError(403, `Tu usuario no tiene permiso para ver ${modules[0]} en este accionista. Pide acceso a un administrador.`);
-  if (sub && !subPermitida(allowed, sub.module, sub.sub)) throw new ApiError(403, `No tienes acceso a ${sub.module} › ${sub.sub} en este accionista. Pide acceso a un administrador.`);
+  if (sub && !sub.subs.some((s) => subPermitida(allowed, sub.module, s))) throw new ApiError(403, `No tienes acceso a ${sub.module} › ${sub.subs[0]} en este accionista. Pide acceso a un administrador.`);
 }
 
 async function aplicarPermisosDeEscritura(req: Request, _res: Response, next: NextFunction, forzado?: { prefix: string; modules: AppModule[] }) {
@@ -322,7 +361,7 @@ async function aplicarPermisosDeEscritura(req: Request, _res: Response, next: Ne
     }
     const sub = subSoloVer(allowed, requiredModules, prefix, req.method, rest);
     if (sub) {
-      next(new ApiError(403, `Tu acceso a ${sub} en este accionista es de SOLO LECTURA. Pide permiso de edición a un administrador.`));
+      next(new ApiError(403, sub));
       return;
     }
     // Mensaje según el motivo: tiene el módulo (solo Ver) vs no lo tiene.
