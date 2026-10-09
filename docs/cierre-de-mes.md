@@ -17,7 +17,12 @@ Los cortes del negocio son a **fin de mes** (día 1 al último día). Ensayado s
 2. Revisar **Configuración → Control de integridad**: debe decir 0 problemas.
 3. Revisar **Por Cobrar** y **Por Pagar** de cada accionista (las deudas entre socios deben ser iguales en los dos lados).
 4. Cerrar la caja (el balance la sigue contando con su saldo final).
-5. Sacar y guardar, de cada accionista, con desde = día 1 y hasta = último día:
+5. **Estados Financieros → 📸 Cerrar mes** (solo administrador): guarda la foto de TODOS los socios (balance,
+   estado de resultados, flujo, indicadores, activos fijos, Por Cobrar, Por Pagar, inventario y el Resultado mensual
+   de CEYRO). Lo cerrado no cambia aunque después se corrija algo; cada socio tiene «⬇ Excel» del cierre.
+   Si el control de integridad tiene avisos, los muestra y pide confirmar. Para corregir: «Anular este cierre» (con
+   motivo) y volver a cerrar. El primer cierre real es **octubre 2026**.
+6. Opcional, además del cierre: sacar con desde = día 1 y hasta = último día:
    - **Estados Financieros** → exportar Excel (balance, estado de resultados, flujo de caja).
    - **Costos Operativos → Resultado mensual** (CEYRO).
    - **Transporte y Cosechadora → Estado de resultados** del mes.

@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 📸 «Cerrar mes» (2026-10-08, pedido del dueño)
+- Migración `20261084` (tabla `cierres_mes`, única vigente por año/mes/accionista). En `routes/modules/finance.ts`: `POST /finance/cierres {anio, mes, notas?, confirmar_hallazgos?}` (admin; 409 si el mes no terminó, si ya está cerrado, o code HALLAZGOS si la integridad tiene avisos); guarda por accionista `getDashboardFinanciero` + activos + CxC/CxP abiertas + inventario a la fecha + resultado mensual (matriz) + meta (tomado_el, días después del corte). `GET /finance/cierres` (no admin: solo su accionista), `GET /:id`, `GET /:id/excel` (mismo libro que Exportar vía `construirExcelEstados` + hojas Por Cobrar/Por Pagar/Inventario), `POST /cierres/:anio/:mes/anular {motivo}` (admin).
+- `hoy()` de finance ahora es fecha de Ecuador (antes UTC: después de las 19:00 era mañana).
+- UI: `components/CierresMes.tsx` en Estados Financieros. Simulacro `cierres.mjs` TODO OK; verificado en celular (sesión de prueba firmada con clave propia de la copia → 401 en el real).
+- Pendiente opcional: bloquear ediciones con fecha dentro de un mes cerrado (hoy solo se congela la foto).
+
 ### 🧹 Selección y envejecido auditado (2026-10-08)
 - POST /selection/batches valida: bodega = FINISHED_GOODS (no «Allá»), productos = FINISHED_GOOD o arrocillos (no cáscara/empacados/polvillo); `rate_per_qq` distinto de la tarifa vigente exige admin o PERM:EDITAR_PRECIOS (403); en la UI el campo se bloquea sin ese permiso.
 - Nuevo `POST /selection/traidas/:id/anular {motivo}` (PERM:ANULAR): saca de la piladora (409 si ya se vendió) y devuelve a «Allá», deshace el flete (propia: borra campo_servicio si sin cobros; tercero: anula la CxP si sin abonos). Nada se borra (anulado_at/motivo/by).
