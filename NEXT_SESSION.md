@@ -49,6 +49,14 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🧹 Selección y envejecido auditado (2026-10-08)
+- POST /selection/batches valida: bodega = FINISHED_GOODS (no «Allá»), productos = FINISHED_GOOD o arrocillos (no cáscara/empacados/polvillo); `rate_per_qq` distinto de la tarifa vigente exige admin o PERM:EDITAR_PRECIOS (403); en la UI el campo se bloquea sin ese permiso.
+- Nuevo `POST /selection/traidas/:id/anular {motivo}` (PERM:ANULAR): saca de la piladora (409 si ya se vendió) y devuelve a «Allá», deshace el flete (propia: borra campo_servicio si sin cobros; tercero: anula la CxP si sin abonos). Nada se borra (anulado_at/motivo/by).
+- Nuevo `POST /selection/batches/:id/reabrir {motivo}` (PERM:ANULAR): COMPLETED → IN_PROCESS, saca lo recibido de PT y de «Allá» (409 si ya se vendió o se trajo: anular el viaje primero), devuelve sacos propios, guarda el informe anterior en `selection_batch_reaperturas`. CxP y flete de ida no cambian. Migración `20261083`.
+- Sub-pestaña «proceso» cubre finish/cancel/reabrir/traer/anular viaje. Integridad: 46 reglas (lotes: salió = enviado y entró = recibido; CxP = enviado × tarifa).
+- Simulacro `seleccion_auditoria.mjs` TODO OK; verificado en el celular (anular viaje, reabrir lote).
+- PENDIENTE del dueño: confirmar tarifas reales (provisionales selección 1.25 / envejecido 3.5 $/QQ).
+
 ### 📍 Envejecido/selección: lo que QUEDÓ ALLÁ donde el proveedor (2026-10-08, pedido del dueño)
 - Migración `20261081` (warehouses.external_provider_id + bodega tipo EXTERNO «Allá: <proveedor>» creada al vuelo; selection_batch_outputs.qty_alla; tabla selection_traidas).
 - `POST /selection/batches/:id/finish` acepta `qty_alla` por línea: lo que llegó → bodega PT; lo que quedó → «Allá». `GET /selection/ubicacion` (por producto: piladora / allá por proveedor + viajes). `POST /selection/traer` (OUT de allá con FIFO → IN a PT; 409 si se trae más de lo que hay).
