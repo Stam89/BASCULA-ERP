@@ -18,16 +18,16 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
      WHERE r.reference_type = 'saldo_inicial_socio' AND r.status <> 'CANCELLED' AND p.status <> 'CANCELLED'
        AND (abs(r.amount - p.amount) > 0.005 OR abs(r.balance - p.balance) > 0.005)` },
   { modulo: "Cuentas", nombre: "Deudas entre socios: la Por Cobrar de uno y la Por Pagar del otro tienen el mismo monto, saldo y estado", sql: `
-    WITH pares AS (
+    SELECT x.tipo, r.id AS cxc, p.id AS cxp, r.balance::float AS saldo_cxc, p.balance::float AS saldo_cxp, r.status::text AS est_cxc, p.status::text AS est_cxp
+      FROM (
       SELECT 'pilado' AS tipo, receivable_id AS ar, payable_id AS ap FROM pilado_services WHERE receivable_id IS NOT NULL AND payable_id IS NOT NULL
       UNION ALL SELECT 'traspaso', receivable_id, payable_id FROM lot_transfers WHERE receivable_id IS NOT NULL AND payable_id IS NOT NULL
       UNION ALL SELECT 'servicio_matriz', receivable_id, payable_id FROM matriz_service_charges WHERE receivable_id IS NOT NULL AND payable_id IS NOT NULL
       UNION ALL SELECT 'empaque', receivable_id, payable_id FROM matriz_packaging_charges WHERE receivable_id IS NOT NULL AND payable_id IS NOT NULL
       UNION ALL SELECT r.reference_type, r.id, p.id FROM accounts_receivable r
         JOIN accounts_payable p ON p.reference_type = r.reference_type AND p.reference_id = r.reference_id AND p.accionista_id IS DISTINCT FROM r.accionista_id
-       WHERE r.reference_type IN ('fomento_cruce', 'retencion_matriz', 'compra_producto_socio') AND r.reference_id IS NOT NULL)
-    SELECT x.tipo, r.id AS cxc, p.id AS cxp, r.balance::float AS saldo_cxc, p.balance::float AS saldo_cxp, r.status::text AS est_cxc, p.status::text AS est_cxp
-      FROM pares x JOIN accounts_receivable r ON r.id = x.ar JOIN accounts_payable p ON p.id = x.ap
+       WHERE r.reference_type IN ('fomento_cruce', 'retencion_matriz', 'compra_producto_socio') AND r.reference_id IS NOT NULL
+      ) x JOIN accounts_receivable r ON r.id = x.ar JOIN accounts_payable p ON p.id = x.ap
      WHERE abs(r.amount - p.amount) > 0.005 OR abs(r.balance - p.balance) > 0.005
         OR (r.status::text = 'CANCELLED') <> (p.status::text = 'CANCELLED')` },
   { modulo: "Caja", nombre: "Pagos y cobros de varias cuentas: el desglose suma lo que movió la caja", sql: `
