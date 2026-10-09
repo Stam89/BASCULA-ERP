@@ -16,6 +16,10 @@ try {
     await q(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../database/migrations/20261081_envejecido_alla.sql"), "utf8"));
     console.log("   (info) migración 20261081 aplicada en la COPIA");
   }
+  if (!(await q("SELECT 1 FROM information_schema.columns WHERE table_name='selection_traidas' AND column_name='flete_tipo'")).length) {
+    await q(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../database/migrations/20261082_flete_regreso_envejecido.sql"), "utf8"));
+    console.log("   (info) migración 20261082 aplicada en la COPIA");
+  }
   const acc = (await q("SELECT id FROM accionistas WHERE COALESCE(modulo_envejecido_habilitado, puede_envejecer) ORDER BY name LIMIT 1"))[0].id;
   const prov = (await q("SELECT id, name FROM external_providers WHERE is_active ORDER BY name LIMIT 1"))[0];
   const P = async (code) => (await q("SELECT id FROM products WHERE code=$1", [code]))[0].id;
@@ -71,6 +75,24 @@ try {
   check(Math.abs(inv1.total - inv0.total) < 0.01, "D1. el balance cuenta lo que está allá: traerlo a la piladora no cambia el inventario total", { antes: inv0.total, ahora: inv1.total });
   const stockApi = (await api("GET", "/inventory/stock", undefined, acc)).data;
   check(stockApi.some((r) => r.warehouse_type === "EXTERNO" && r.product_id === arroz), "D2. Inventario recibe la parte de allá marcada (para mostrarla aparte)");
+
+  // ── E. Flete de REGRESO ──
+  const hoy = new Date().toLocaleDateString("en-CA", { timeZone: "America/Guayaquil" });
+  const er = async () => (await api("GET", `/finance/income-statement?desde=${hoy}&hasta=${hoy}`, undefined, acc)).data.costo_ventas.servicios_recibidos;
+  const carro = (await q("SELECT id FROM campo_activos WHERE activo AND tipo <> 'cosechadora' ORDER BY nombre LIMIT 1"))[0].id;
+  const er0 = await er(), aE = await alla(arroz);
+  check((await api("POST", "/selection/traer", { provider_id: prov.id, items: [{ product_id: arroz, quantity: 1 }], flete: { tipo: "propia", monto: 10 } }, acc)).status === 400
+    && await alla(arroz) === aE, "E1. flete con carro propio pero sin elegir el carro → 400 y no se mueve nada");
+  const v1 = exigir(await api("POST", "/selection/traer", { provider_id: prov.id, items: [{ product_id: arroz, quantity: 1 }], flete: { tipo: "propia", monto: 12, activo_id: carro } }, acc), "E2. traer 1 QQ con el carro de Transporte (flete $12)");
+  const sv = (await q("SELECT s.id, s.valor::float v FROM campo_servicios s WHERE s.origen_tipo='envejecido_regreso' AND s.origen_id=$1", [v1.id]))[0];
+  const cxp = sv && (await q("SELECT amount::float a, accionista_id FROM accounts_payable WHERE reference_type='campo_servicio' AND reference_id=$1", [sv.id]))[0];
+  check(sv?.v === 12 && cxp?.a === 12 && cxp.accionista_id === acc, "E3. Transporte cobra $12 al socio (servicio de Campo + Por Pagar espejo del socio)", { sv, cxp });
+  const v2 = exigir(await api("POST", "/selection/traer", { provider_id: prov.id, items: [{ product_id: arroz, quantity: 1 }], flete: { tipo: "tercero", monto: 8, prestador: "Camión de Pedro" } }, acc), "E4. traer 1 QQ con un carro externo (flete $8)");
+  const cxpT = (await q("SELECT amount::float a, description FROM accounts_payable WHERE reference_type='flete_envejecido_tercero' AND reference_id=$1", [v2.id]))[0];
+  check(cxpT?.a === 8 && /regreso/i.test(cxpT.description), "E5. queda en Por Pagar al transportista externo", cxpT);
+  check(Math.round((await er() - er0) * 100) / 100 === 20, "E6. el Estado de Resultados del socio suma los $20 de fletes de regreso como servicio recibido", { antes: er0, ahora: await er() });
+  const ub3 = exigir(await api("GET", "/selection/ubicacion", undefined, acc), "E7. consulta de viajes");
+  check(ub3.traidas.some((t) => t.id === v1.id && t.flete_monto === 12 && t.flete_tipo === "propia"), "E8. el viaje muestra su flete");
 
   const h = await revisar((sql) => q(sql));
   check(h.length === 0, `Z. los ${TOTAL_REGLAS} controles de integridad se cumplen`, h.map((x) => x.error ? `${x.regla}: ${x.error}` : `${x.regla} → ${JSON.stringify(x.filas)}`));

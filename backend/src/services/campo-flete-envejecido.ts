@@ -26,11 +26,22 @@ export function validarFleteEnvejecido(f: FleteEnvejecido, serviceType: string):
   if (f.tipo === "tercero" && (f.prestador ?? "").trim().length < 2) throw new ApiError(400, "Escribe el nombre del transportista externo.");
 }
 
+/** Lo mismo para el flete de REGRESO (traer a la piladora lo que quedó allá): sirve para envejecido y selección. */
+export function validarFleteRegreso(f: FleteEnvejecido): void {
+  validarFleteEnvejecido(f, "ENVEJECIMIENTO");
+}
+
 export async function registrarFleteEnvejecido(
   client: PoolClient,
-  input: { batchId: string; batchNumber: string; accionistaId: string; fecha: string; qq: number; flete: FleteEnvejecido; createdBy?: string | null }
+  input: {
+    batchId: string; batchNumber: string; accionistaId: string; fecha: string; qq: number; flete: FleteEnvejecido; createdBy?: string | null;
+    // 'envejecido_regreso' = viaje que trae el producto de vuelta (batchId = id del viaje en selection_traidas).
+    origen?: "envejecido_flete" | "envejecido_regreso";
+  }
 ): Promise<ResultadoFleteEnvejecido> {
   const monto = round2(Number(input.flete.monto));
+  const origen = input.origen ?? "envejecido_flete";
+  const concepto = origen === "envejecido_regreso" ? "Flete de regreso del envejecido" : "Flete a envejecer";
   const socio = (await client.query("SELECT name FROM accionistas WHERE id = $1", [input.accionistaId])).rows[0];
   if (!socio) throw new ApiError(404, "Accionista no encontrado.");
 
@@ -40,7 +51,7 @@ export async function registrarFleteEnvejecido(
       `INSERT INTO accounts_payable (farmer_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
        VALUES (NULL, $1, $1, 'CONFIRMED', $2, 'flete_envejecido_tercero', $3, $4)
        RETURNING id`,
-      [monto, input.accionistaId, input.batchId, `Flete a envejecer (tercero) - ${prestador} - ${input.batchNumber}`]
+      [monto, input.accionistaId, input.batchId, `${concepto} (tercero) - ${prestador} - ${input.batchNumber}`]
     )).rows[0];
     return { tipo: "tercero", monto, activo_id: null, activo_nombre: null, prestador, servicio_id: null, payable_id: ap.id };
   }
@@ -61,16 +72,16 @@ export async function registrarFleteEnvejecido(
   )).rows[0];
 
   const qq = input.qq > 0 ? round2(input.qq) : null;
-  const notas = `Flete a envejecer · ${input.batchNumber} · Equipo: ${activo.nombre}`;
+  const notas = `${concepto} · ${input.batchNumber} · Equipo: ${activo.nombre}`;
   const servicio = (await client.query(
     `INSERT INTO campo_servicios (fecha, cliente_id, activo_id, tipo, qq, precio_unitario, valor, notas, created_by, origen_tipo, origen_id)
-     VALUES ($1, $2, $3, 'flete', $4, $5, $6, $7, $8, 'envejecido_flete', $9)
+     VALUES ($1, $2, $3, 'flete', $4, $5, $6, $7, $8, $10, $9)
      ON CONFLICT (origen_tipo, origen_id) WHERE origen_id IS NOT NULL DO NOTHING
      RETURNING id`,
-    [input.fecha, cliente.id, activo.id, qq, qq ? monto / qq : null, monto, notas, input.createdBy ?? null, input.batchId]
+    [input.fecha, cliente.id, activo.id, qq, qq ? monto / qq : null, monto, notas, input.createdBy ?? null, input.batchId, origen]
   )).rows[0];
   const servicioId: string = servicio?.id ?? (await client.query(
-    "SELECT id FROM campo_servicios WHERE origen_tipo = 'envejecido_flete' AND origen_id = $1", [input.batchId]
+    "SELECT id FROM campo_servicios WHERE origen_tipo = $2 AND origen_id = $1", [input.batchId, origen]
   )).rows[0]?.id;
 
   // Espejo: el socio debe este flete a Transporte y Cosechadora (su Por Pagar). Su saldo lo sigue el
@@ -79,7 +90,7 @@ export async function registrarFleteEnvejecido(
     `INSERT INTO accounts_payable (accionista_id, reference_type, reference_id, description, amount, balance, status)
      SELECT $1, 'campo_servicio', $2, $3, $4, $4, 'CONFIRMED'
      WHERE NOT EXISTS (SELECT 1 FROM accounts_payable WHERE reference_type = 'campo_servicio' AND reference_id = $2)`,
-    [input.accionistaId, servicioId, `Transporte y Cosechadora · Flete a envejecer · ${input.batchNumber}`, monto]
+    [input.accionistaId, servicioId, `Transporte y Cosechadora · ${concepto} · ${input.batchNumber}`, monto]
   );
   return { tipo: "propia", monto, activo_id: activo.id, activo_nombre: activo.nombre, prestador: null, servicio_id: servicioId, payable_id: null };
 }

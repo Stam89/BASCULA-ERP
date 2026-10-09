@@ -4,7 +4,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { anularFleteEnvejecido, registrarFleteEnvejecido, validarFleteEnvejecido, type FleteEnvejecido } from "../../services/campo-flete-envejecido.js";
+import { anularFleteEnvejecido, registrarFleteEnvejecido, validarFleteEnvejecido, validarFleteRegreso, type FleteEnvejecido } from "../../services/campo-flete-envejecido.js";
 import { tipoSacoEspecial } from "../../services/cargo-empaque.js";
 import { nextCode } from "../../utils/codes.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
@@ -529,8 +529,10 @@ selectionRouter.get("/ubicacion", asyncRoute(async (req, res) => {
     porProducto.set(f.product_id, x);
   }
   const traidas = (await pool.query(
-    `SELECT t.id, t.fecha::text AS fecha, t.items, t.total_qq::float AS total_qq, t.notes, pr.name AS proveedor
+    `SELECT t.id, t.fecha::text AS fecha, t.items, t.total_qq::float AS total_qq, t.notes, pr.name AS proveedor,
+            t.flete_tipo, t.flete_monto::float AS flete_monto, t.flete_prestador, fa.nombre AS flete_activo_nombre
        FROM selection_traidas t JOIN external_providers pr ON pr.id = t.provider_id
+       LEFT JOIN campo_activos fa ON fa.id = t.flete_activo_id
       WHERE t.accionista_id = $1 ORDER BY t.created_at DESC LIMIT 20`,
     [accionistaId]
   )).rows;
@@ -549,8 +551,16 @@ selectionRouter.post("/traer", asyncRoute(async (req, res) => {
     fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     notes: z.string().max(300).optional(),
     created_by: z.string().uuid().optional(),
-    items: z.array(z.object({ product_id: z.string().uuid(), quantity: z.number().positive() })).min(1)
+    items: z.array(z.object({ product_id: z.string().uuid(), quantity: z.number().positive() })).min(1),
+    // Flete de REGRESO: carro de Transporte y Cosechadora ('propia') o carro externo ('tercero').
+    flete: z.object({
+      tipo: z.enum(["propia", "tercero"]),
+      monto: z.number().positive(),
+      activo_id: z.string().uuid().optional(),
+      prestador: z.string().trim().max(120).optional()
+    }).optional()
   }).parse(req.body);
+  if (body.flete) validarFleteRegreso(body.flete as FleteEnvejecido);
   const ids = body.items.map((i) => i.product_id);
   if (new Set(ids).size !== ids.length) throw new ApiError(400, "Hay un producto repetido; súmalo en una sola línea.");
 
@@ -582,7 +592,20 @@ selectionRouter.post("/traer", asyncRoute(async (req, res) => {
         [it.product_id, planta.rows[0].id, qty, traidaId, `Llegó a la piladora desde ${alla.rows[0].name}`, body.created_by ?? null, accionistaId]
       );
     }
-    return { id: traidaId, total_qq: round3(body.items.reduce((s, i) => s + i.quantity, 0)) };
+    let flete: Awaited<ReturnType<typeof registrarFleteEnvejecido>> | null = null;
+    if (body.flete) {
+      const fecha = body.fecha ?? new Date().toLocaleDateString("en-CA", { timeZone: "America/Guayaquil" });
+      flete = await registrarFleteEnvejecido(tx, {
+        batchId: traidaId, batchNumber: `regreso desde ${alla.rows[0].name.replace(/^Allá: /, "")} ${fecha}`, accionistaId, fecha,
+        qq: round3(body.items.reduce((s, i) => s + i.quantity, 0)), flete: body.flete as FleteEnvejecido,
+        createdBy: body.created_by ?? null, origen: "envejecido_regreso"
+      });
+      await tx.query(
+        `UPDATE selection_traidas SET flete_tipo = $2, flete_monto = $3, flete_activo_id = $4, flete_prestador = $5, flete_payable_id = $6 WHERE id = $1`,
+        [traidaId, flete.tipo, flete.monto, flete.activo_id, flete.prestador, flete.payable_id]
+      );
+    }
+    return { id: traidaId, total_qq: round3(body.items.reduce((s, i) => s + i.quantity, 0)), flete };
   });
   res.status(201).json(result);
 }));

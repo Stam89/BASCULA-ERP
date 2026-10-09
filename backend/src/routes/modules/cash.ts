@@ -934,7 +934,8 @@ export function categoriaDePagoCxP(ap: { reference_type: string | null; categori
   // Deudas entre socios / Matriz / Transporte (incluye el saldo inicial entre socios).
   if (t && ["lot_transfer", "campo_servicio", "fomento_cruce", "retencion_matriz", "packaging_charge", "service_charge",
     "saldo_inicial_socio", "compra_producto_socio"].includes(t)) return "PAGO_ENTRE_SOCIOS";
-  if (t === "selection_batch") return "PAGO_SELECCION";
+  // Selección/envejecido y sus fletes con carro externo (ida o regreso): ya son costo al nacer la deuda.
+  if (t === "selection_batch" || t === "flete_envejecido_tercero") return "PAGO_SELECCION";
   if (t === "purchase") return "PAGO_PROVEEDOR";
   // Gasto a crédito: el egreso lleva la categoría del gasto original (el Resultado mensual lo cuenta en su rubro).
   if (t === "gasto_credito") return ap.categoria || "PAGO_PROVEEDOR";

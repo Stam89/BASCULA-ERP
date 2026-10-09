@@ -38,7 +38,7 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
     SELECT p.id, p.balance::float b, v.saldo_pendiente::float s FROM accounts_payable p JOIN campo_servicios_saldo v ON v.id = p.reference_id
      WHERE p.reference_type = 'campo_servicio' AND p.status <> 'CANCELLED' AND abs(p.balance - GREATEST(0, v.saldo_pendiente)) > 0.01` },
   { modulo: "Transporte", nombre: "Servicios de Campo huérfanos de su Por Pagar espejo (flete/cosecha de liquidación, envejecido o venta)", sql: `
-    SELECT s.id FROM campo_servicios s WHERE s.origen_tipo IN ('liquidacion_flete','liquidacion_cosechadora','envejecido_flete','venta_flete')
+    SELECT s.id FROM campo_servicios s WHERE s.origen_tipo IN ('liquidacion_flete','liquidacion_cosechadora','envejecido_flete','envejecido_regreso','venta_flete')
        AND NOT EXISTS (SELECT 1 FROM accounts_payable p WHERE p.reference_type = 'campo_servicio' AND p.reference_id = s.id)` },
   // ── Agricultores: anticipos y liquidaciones ──
   { modulo: "Liquidaciones", nombre: "Anticipos: saldo = monto − aplicado en liquidaciones vigentes", sql: `
@@ -110,6 +110,8 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
        AND NOT EXISTS (SELECT 1 FROM sales_orders o WHERE o.id = s.origen_id AND o.flete_servicio_id = s.id)` },
   { modulo: "Selección", nombre: "Fletes de envejecido: cada lote con flete propio tiene su servicio de Transporte", sql: `
     SELECT b.id FROM selection_batches b WHERE b.flete_tipo = 'propia' AND b.status <> 'CANCELLED' AND NOT EXISTS (SELECT 1 FROM campo_servicios s WHERE s.origen_tipo = 'envejecido_flete' AND s.origen_id = b.id)` },
+  { modulo: "Selección", nombre: "Fletes de regreso (traer de donde el proveedor): cada viaje con carro propio tiene su servicio de Transporte", sql: `
+    SELECT t.id FROM selection_traidas t WHERE t.flete_tipo = 'propia' AND NOT EXISTS (SELECT 1 FROM campo_servicios s WHERE s.origen_tipo = 'envejecido_regreso' AND s.origen_id = t.id)` },
   { modulo: "Nómina", nombre: "Pagos a trabajadores PAID con caja", sql: `SELECT id FROM worker_payments WHERE status = 'PAID' AND cash_register_id IS NULL AND paid_at IS NOT NULL LIMIT 20` },
   { modulo: "Nómina", nombre: "Tarifas de planta: las filas de socios no difieren de la general", sql: `
     SELECT s.socio_id FROM labor_rates s JOIN labor_rates g ON g.socio_id IS NULL WHERE s.socio_id IS NOT NULL

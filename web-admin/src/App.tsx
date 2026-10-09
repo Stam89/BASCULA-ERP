@@ -156,7 +156,8 @@ type SelectionLine = { product_id: string; product_name: string; quantity: numbe
 // 📍 Dónde está el producto procesado: en la piladora o ALLÁ donde el proveedor (por proveedor).
 type UbicacionSeleccion = {
   productos: Array<{ product_id: string; producto: string; code: string; piladora: number; alla_total: number; alla: Array<{ provider_id: string; proveedor: string; qq: number }> }>;
-  traidas: Array<{ id: string; fecha: string; items: Array<{ product_id: string; quantity: number }>; total_qq: number; notes: string | null; proveedor: string }>;
+  traidas: Array<{ id: string; fecha: string; items: Array<{ product_id: string; quantity: number }>; total_qq: number; notes: string | null; proveedor: string;
+    flete_tipo?: "propia" | "tercero" | null; flete_monto?: number | null; flete_prestador?: string | null; flete_activo_nombre?: string | null }>;
 };
 type SelectionBatch = {
   id: string;
@@ -3238,7 +3239,11 @@ export function App() {
   const [selectionRates, setSelectionRates] = useState<SelectionRates>({ seleccion_rate: 1.25, envejecimiento_rate: 3.5 });
   const [selectionView, setSelectionView] = useState<"nuevo" | "proceso" | "historial">("nuevo");
   const [ubicacionSel, setUbicacionSel] = useState<UbicacionSeleccion | null>(null);
-  const [traerModal, setTraerModal] = useState<{ provider_id: string; proveedor: string; cantidades: Record<string, string>; notes: string; busy?: boolean } | null>(null);
+  const [traerModal, setTraerModal] = useState<{
+    provider_id: string; proveedor: string; cantidades: Record<string, string>; notes: string; busy?: boolean;
+    // Flete de regreso (opcional): carro de Transporte y Cosechadora o carro externo.
+    flete_tipo: "" | "propia" | "tercero"; flete_activo_id: string; flete_prestador: string; flete_monto: string;
+  } | null>(null);
   // empaque (salidas de Selección): "TULA" (por defecto) · "SACO:<lb>" · "PROPIO:<sack_id>" (saco propio del socio).
   // alla = QQ de esta línea que QUEDARON ALLÁ donde el proveedor (no llegaron a la piladora).
   type LineDraft = { product_id: string; quantity: string; is_reject?: boolean; sack_weight_lb?: string; empaque?: string; alla?: string };
@@ -5660,11 +5665,24 @@ export function App() {
     if (!m) return;
     const items = Object.entries(m.cantidades).map(([product_id, q]) => ({ product_id, quantity: Number(q) || 0 })).filter((i) => i.quantity > 0);
     if (items.length === 0) { addToast("Escribe cuántos QQ trajeron", "error"); return; }
+    let flete: { tipo: "propia" | "tercero"; monto: number; activo_id?: string; prestador?: string } | undefined;
+    if (m.flete_tipo) {
+      const monto = Number(m.flete_monto);
+      if (!(monto > 0)) { addToast("Escribe el valor del flete de regreso", "error"); return; }
+      if (m.flete_tipo === "propia") {
+        if (!m.flete_activo_id) { addToast("Elige el carro de Transporte y Cosechadora que trajo el producto", "error"); return; }
+        flete = { tipo: "propia", monto, activo_id: m.flete_activo_id };
+      } else {
+        if (m.flete_prestador.trim().length < 2) { addToast("Escribe el nombre del transportista externo", "error"); return; }
+        flete = { tipo: "tercero", monto, prestador: m.flete_prestador.trim() };
+      }
+    }
     setTraerModal({ ...m, busy: true });
     try {
-      const r = await apiPost<{ total_qq: number }>("/selection/traer", { provider_id: m.provider_id, items, notes: m.notes.trim() || undefined });
+      const r = await apiPost<{ total_qq: number }>("/selection/traer", { provider_id: m.provider_id, items, notes: m.notes.trim() || undefined, flete });
       setTraerModal(null);
-      addToast(`🚚 ${Number(r.total_qq).enReal()} QQ llegaron a la piladora desde ${m.proveedor}`, "success");
+      addToast(`🚚 ${Number(r.total_qq).enReal()} QQ llegaron a la piladora desde ${m.proveedor}` +
+        (flete ? (flete.tipo === "propia" ? `. Flete de ${money(flete.monto)} cargado a Transporte y Cosechadora (Por Pagar del socio).` : `. Flete de ${money(flete.monto)} en Por Pagar al transportista.`) : ""), "success");
       await Promise.all([refreshSelection(), reloadStock()]);
     } catch (e) {
       setTraerModal((cur) => cur && { ...cur, busy: false });
@@ -21115,7 +21133,7 @@ Motivo (obligatorio):`, "");
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
                     {proveedores.map(([pid, nombre]) => (
                       <button key={pid} type="button" className="primary" onClick={() => setTraerModal({
-                        provider_id: pid, proveedor: nombre, notes: "",
+                        provider_id: pid, proveedor: nombre, notes: "", flete_tipo: "", flete_activo_id: "", flete_prestador: "", flete_monto: "",
                         cantidades: Object.fromEntries(conAlla.map((p) => [p.product_id, String(p.alla.find((a) => a.provider_id === pid)?.qq ?? "")]).filter(([, q]) => Number(q) > 0))
                       })}>🚚 Traer a piladora desde {nombre}</button>
                     ))}
@@ -21125,7 +21143,8 @@ Motivo (obligatorio):`, "");
                       <summary style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700 }}>Últimos viajes traídos ({ubicacionSel.traidas.length})</summary>
                       <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 12.5 }}>
                         {ubicacionSel.traidas.slice(0, 8).map((t) => (
-                          <li key={t.id}>{t.fecha} · {t.proveedor} · {Number(t.total_qq).enReal()} QQ{t.notes ? ` · ${t.notes}` : ""}</li>
+                          <li key={t.id}>{t.fecha} · {t.proveedor} · {Number(t.total_qq).enReal()} QQ{t.notes ? ` · ${t.notes}` : ""}
+                            {Number(t.flete_monto ?? 0) > 0 && ` · 🚚 flete ${money(Number(t.flete_monto))} (${t.flete_tipo === "propia" ? t.flete_activo_nombre ?? "Transporte" : t.flete_prestador ?? "externo"})`}</li>
                         ))}
                       </ul>
                     </details>
@@ -21150,6 +21169,41 @@ Motivo (obligatorio):`, "");
                           onChange={(e) => setTraerModal({ ...m, cantidades: { ...m.cantidades, [p.product_id]: e.target.value } })} />
                       </label>
                     ))}
+                    <div className="fleteEnv">
+                      <span className="fleteEnv-titulo">🚚 Flete de regreso (opcional)</span>
+                      <label><span>¿Quién lo trajo?</span>
+                        <select value={m.flete_tipo} disabled={m.busy} onChange={(e) => setTraerModal({ ...m, flete_tipo: e.target.value as "" | "propia" | "tercero", flete_activo_id: "", flete_prestador: "" })}>
+                          <option value="">Sin flete</option>
+                          <option value="propia">Carro de Transporte y Cosechadora</option>
+                          <option value="tercero">Carro externo</option>
+                        </select>
+                      </label>
+                      {m.flete_tipo === "propia" && (
+                        <label><span>Carro</span>
+                          <select value={m.flete_activo_id} disabled={m.busy} onChange={(e) => setTraerModal({ ...m, flete_activo_id: e.target.value })}>
+                            <option value="">Elige el carro…</option>
+                            {fletaActivos.filter((a) => String(a.tipo ?? "").toLowerCase() !== "cosechadora").map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}
+                          </select>
+                        </label>
+                      )}
+                      {m.flete_tipo === "tercero" && (
+                        <label><span>Transportista externo</span>
+                          <input type="text" value={m.flete_prestador} disabled={m.busy} onChange={(e) => setTraerModal({ ...m, flete_prestador: e.target.value })} placeholder="Nombre de quien lo trajo" />
+                        </label>
+                      )}
+                      {m.flete_tipo !== "" && (
+                        <label><span>Valor del flete ($)</span>
+                          <input type="number" step="0.01" min="0" value={m.flete_monto} disabled={m.busy} onChange={(e) => setTraerModal({ ...m, flete_monto: e.target.value })} placeholder="0.00" />
+                        </label>
+                      )}
+                      <small className="muted">
+                        {m.flete_tipo === "propia"
+                          ? "El dinero va a Transporte y Cosechadora: queda como cuenta por cobrar contra tu socio y como su cuenta por pagar."
+                          : m.flete_tipo === "tercero"
+                          ? "Queda como cuenta por pagar al transportista externo."
+                          : "Si nadie cobró por traerlo, déjalo en «Sin flete»."}
+                      </small>
+                    </div>
                     <label className="traerModal__fila"><span>Nota (opcional)</span>
                       <input type="text" placeholder="Ej: viaje en el carro de Transporte" value={m.notes} disabled={m.busy} onChange={(e) => setTraerModal({ ...m, notes: e.target.value })} />
                     </label>
