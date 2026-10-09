@@ -19,7 +19,8 @@ try {
   const libres = (await q("SELECT tunnel_number n FROM tunnel_status WHERE status = 'DISPONIBLE' ORDER BY 1")).map((x) => x.n);
   if (pend.length < 3 || libres.length < 2) throw new Error(`la copia no tiene suficientes tickets (${pend.length}) o túneles libres (${libres.length})`);
   let usados = 0;
-  const stockProd = async (code) => r2((await q("SELECT COALESCE(SUM(quantity),0)::float n FROM inventory_movements WHERE product_id=$1", [P(code)]))[0].n);
+  // Stock de la MATRIZ en la bodega de producto terminado (la base real ya tiene stock de otros socios y bodegas).
+  const stockProd = async (code) => r2((await q("SELECT COALESCE(SUM(quantity),0)::float n FROM inventory_movements WHERE product_id=$1 AND accionista_id=$2 AND warehouse_id=$3", [P(code), S.matriz, bodPT]))[0].n);
   const stockLote = async (loteId, code) => r2((await q("SELECT COALESCE(SUM(quantity),0)::float n FROM inventory_movements WHERE lot_id=$1 AND product_id=$2", [loteId, P(code)]))[0].n);
 
   const preparar = async (etiqueta) => {
