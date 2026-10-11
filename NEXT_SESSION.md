@@ -79,6 +79,14 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - Respaldo anterior: `BASCULA\Respaldos\sync-outbox-20261011-110846`. Verificación: build limpio + build final, 28 tests, lint y esquema Room v6 OK.
 - PENDIENTE REAL: instalar v11.46 encima de la app (sin desinstalar) y comprobar en la tablet que el primer SYNC llega a `Pendientes: 0`.
 
+### 🛡️ Protección local de datos BASCULA v11.47 (2026-10-11)
+- Amplía el respaldo JSON existente sin cambiar su compatibilidad: formato 2 agrega negocio, dispositivo, cantidad de tickets y firma SHA-256 sobre los datos operativos. Respaldos viejos siguen aceptados; los nuevos dañados/modificados se rechazan antes de borrar nada.
+- Automático al cargar cambios: copia rotativa `bascula_respaldo_automatico.json`, copia diaria fechada (retiene las 14 últimas) y copia especial en el primer arranque de cada versión. Todas quedan en `Descargas/Bascula`.
+- Menú «Respaldo y restauración» incorpora «Ver estado de protección» y la restauración muestra vista previa (versión, fecha, negocio, tickets, integridad) antes de pedir clave administrativa.
+- Corregido un riesgo previo: si se restaura otro negocio, Room se reinicia y abre la base correspondiente antes de importar los tickets; no escribe sobre la base que estaba activa.
+- Respaldo previo: `BASCULA\Respaldos\proteccion-datos-20261011-133355`. APK de entrega actualizado a v11.47. Verificación: build limpio, lint y 31 tests OK.
+- PENDIENTE REAL: instalar v11.47 encima de la app, abrirla con permiso de archivos y comprobar `Descargas/Bascula/bascula_respaldo_actualizacion_11_47_*.json`.
+
 ### 💰 Caja auditada (2026-10-09)
 - Migración `20261085`: `cash_movements.medio` (EFECTIVO/BANCO) con trigger por defecto (caja BANCO → BANCO; resto → EFECTIVO; un contra-asiento copia el medio del original) + backfill; columnas de arqueo en cash_registers; categorías FALTANTE_CAJA / SOBRANTE_CAJA inactivas (solo las usa el cierre).
 - `services/caja.ts`: `saldosDeCaja` (efectivo/banco/total) y `medioParaCaja`. Summary devuelve saldo_efectivo, saldo_banco, fondos_por_liquidar.
