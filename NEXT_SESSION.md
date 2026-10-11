@@ -105,6 +105,15 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - Respaldo previo: `BASCULA\Respaldos\cola-impresion-segura-20261011-153052`.
 - PENDIENTE REAL: instalar v11.49 encima de la app. En `⋮ > Cola de impresion`, revisar los 7 trabajos: cancelar los ya entregados y reintentar individualmente solo los que realmente falten cuando la Epson este encendida.
 
+### 🛟 Simulacro y restauracion protegida BASCULA v11.50 (2026-10-11)
+- `⋮ > Respaldo y restauracion > Simulacro de recuperacion` abre y valida la copia automatica sin restaurar nada. Comprueba firma SHA-256, negocio, version/fecha, identidades unicas y contadores.
+- Compara identidad por modo + numero canonico entre respaldo y Room (no solo cantidades) e informa cuantos faltarian localmente o existen solo en la tablet. Tambien compara los tickets principales de la copia contra `/api/bascula/sync-state` del ERP cuando esta accesible.
+- Una restauracion real ahora se bloquea hasta crear `bascula_antes_restaurar_YYYYMMDD_HHMMSS.json`, volver a leer esa copia preventiva desde Descargas/Bascula y confirmar su firma. Si no puede crearla o verificarla, no aplica el respaldo elegido ni reemplaza datos.
+- La copia preventiva queda registrada en bitacora administrativa y el mensaje final indica su nombre. No se cambio el formato de respaldo ni Room; copias anteriores siguen siendo compatibles.
+- APK de entrega actualizado a v11.50 (code 241). Verificacion: build limpio, lint y 40 tests OK; SHA-256 `9F9509458B49DD34FCD077BEF820C684946E53E5BD78C8836514380086EAE4AF`.
+- Respaldo previo: `BASCULA\Respaldos\simulacro-recuperacion-20261011-154523`.
+- PENDIENTE REAL: instalar v11.50 encima de la app y ejecutar el simulacro. No probar RESTAURAR con datos reales; compartir el reporte del simulacro si aparece ATENCION/ERROR.
+
 ### 💰 Caja auditada (2026-10-09)
 - Migración `20261085`: `cash_movements.medio` (EFECTIVO/BANCO) con trigger por defecto (caja BANCO → BANCO; resto → EFECTIVO; un contra-asiento copia el medio del original) + backfill; columnas de arqueo en cash_registers; categorías FALTANTE_CAJA / SOBRANTE_CAJA inactivas (solo las usa el cierre).
 - `services/caja.ts`: `saldosDeCaja` (efectivo/banco/total) y `medioParaCaja`. Summary devuelve saldo_efectivo, saldo_banco, fondos_por_liquidar.
