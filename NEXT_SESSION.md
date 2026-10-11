@@ -68,6 +68,8 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - Compatibilidad comprobada en API: token individual → `auth=device`, clave anterior → `auth=legacy`, token falso → HTTP 401. El dispositivo de prueba fue retirado.
 - Respaldo DB previo: `bascula-erp_2026-10-09T13-51-54.dump`. Respaldo Android v11.43: `BASCULA\Respaldos\credencial-tablet-20261009134551`.
 - Siguiente paso, solo después de instalar/probar v11.44 en la tablet real: mostrar/administrar dispositivos desde Configuración y luego retirar la clave compartida del uso rutinario. No retirarla antes.
+- HECHO (2026-10-11): Configuración → Estado del sistema → «Tablets autorizadas» lista modelo, ID abreviado, último contacto y estado; un administrador puede bloquear/reactivar sin borrar tickets. API `GET/PATCH /api/bascula/devices`, sin exponer hashes. Prueba funcional: listado 200, bloqueo 200 y token bloqueado 401; registro temporal retirado.
+- PENDIENTE REAL: instalar v11.44 y sincronizar desde la tablet física (no estaba conectada por ADB). Hasta confirmarlo, `DEVICE_SYNC_KEY` sigue aceptada como compatibilidad; no retirar aún.
 
 ### 💰 Caja auditada (2026-10-09)
 - Migración `20261085`: `cash_movements.medio` (EFECTIVO/BANCO) con trigger por defecto (caja BANCO → BANCO; resto → EFECTIVO; un contra-asiento copia el medio del original) + backfill; columnas de arqueo en cash_registers; categorías FALTANTE_CAJA / SOBRANTE_CAJA inactivas (solo las usa el cierre).
