@@ -9,7 +9,8 @@ import { avisarSobregiro } from "../../services/caja.js";
 
 // Nómina administrativa (personal de oficina) POR ACCIONISTA. Cada accionista
 // (matriz y socios) administra su propio personal y le paga de su propia caja.
-// Sueldo fijo QUINCENAL + incentivo opcional − descuentos. Todo lo scope el
+// Sueldo fijo QUINCENAL + incentivo opcional − descuentos. Lo de la quincena (día 15) es `base_salary`;
+// lo de FIN DE MES es `salario_fin_mes` (vacío = igual a la quincena). Todo lo scope el
 // accionista activo (req.accionistaId, que deja resolveAccionista).
 export const adminPayrollRouter = Router();
 
@@ -24,7 +25,8 @@ function accId(req: unknown): string {
 // ── Personal (staff) ────────────────────────────────────────────────────────
 adminPayrollRouter.get("/staff", asyncRoute(async (req, res) => {
   const result = await pool.query(
-    `SELECT id, cargo, worker_name, base_salary::float AS base_salary, is_active
+    `SELECT id, cargo, worker_name, base_salary::float AS base_salary, salario_fin_mes::float AS salario_fin_mes,
+            (base_salary + COALESCE(salario_fin_mes, base_salary))::float AS sueldo_mes, is_active
      FROM admin_staff
      WHERE accionista_id = $1 AND is_active = true
      ORDER BY worker_name`,
@@ -33,17 +35,22 @@ adminPayrollRouter.get("/staff", asyncRoute(async (req, res) => {
   res.json(result.rows);
 }));
 
+// Sueldo de fin de mes: número (si es distinto de la quincena) o null (= igual a la quincena).
+const salarioFinMes = z.union([z.coerce.number().min(0), z.null()]).optional();
+
 adminPayrollRouter.post("/staff", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({
     cargo: z.string().max(80).optional().default(""),
     worker_name: z.string().min(2),
-    base_salary: z.coerce.number().min(0)
+    base_salary: z.coerce.number().min(0),
+    salario_fin_mes: salarioFinMes
   }).parse(req.body);
   const result = await pool.query(
-    `INSERT INTO admin_staff (accionista_id, cargo, worker_name, base_salary)
-     VALUES ($1, $2, $3, $4)
-     RETURNING id, cargo, worker_name, base_salary::float AS base_salary, is_active`,
-    [accId(req), body.cargo.trim(), body.worker_name.trim(), body.base_salary]
+    `INSERT INTO admin_staff (accionista_id, cargo, worker_name, base_salary, salario_fin_mes)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, cargo, worker_name, base_salary::float AS base_salary, salario_fin_mes::float AS salario_fin_mes,
+            (base_salary + COALESCE(salario_fin_mes, base_salary))::float AS sueldo_mes, is_active`,
+    [accId(req), body.cargo.trim(), body.worker_name.trim(), body.base_salary, body.salario_fin_mes ?? null]
   );
   res.status(201).json(result.rows[0]);
 }));
@@ -51,7 +58,7 @@ adminPayrollRouter.post("/staff", requireAdmin, asyncRoute(async (req, res) => {
 // Dados de baja (ocultos) del accionista activo, con cuántos pagos conservan: para reactivarlos.
 adminPayrollRouter.get("/staff/bajas", asyncRoute(async (req, res) => {
   const result = await pool.query(
-    `SELECT s.id, s.cargo, s.worker_name, s.base_salary::float AS base_salary, s.is_active,
+    `SELECT s.id, s.cargo, s.worker_name, s.base_salary::float AS base_salary, s.salario_fin_mes::float AS salario_fin_mes, s.is_active,
             (SELECT count(*)::int FROM admin_salary_payments p WHERE p.staff_id = s.id AND p.anulado_at IS NULL) AS pagos
        FROM admin_staff s
       WHERE s.accionista_id = $1 AND s.is_active = false
@@ -87,16 +94,20 @@ adminPayrollRouter.put("/staff/:id", requireAdmin, asyncRoute(async (req, res) =
   const body = z.object({
     cargo: z.string().max(80).optional(),
     worker_name: z.string().min(2).optional(),
-    base_salary: z.coerce.number().min(0).optional()
+    base_salary: z.coerce.number().min(0).optional(),
+    salario_fin_mes: salarioFinMes
   }).parse(req.body);
   const result = await pool.query(
     `UPDATE admin_staff SET
         cargo = COALESCE($3, cargo),
         worker_name = COALESCE($4, worker_name),
-        base_salary = COALESCE($5, base_salary)
+        base_salary = COALESCE($5, base_salary),
+        salario_fin_mes = CASE WHEN $6 THEN $7::numeric ELSE salario_fin_mes END
      WHERE id = $1 AND accionista_id = $2
-     RETURNING id, cargo, worker_name, base_salary::float AS base_salary, is_active`,
-    [req.params.id, accId(req), body.cargo?.trim() ?? null, body.worker_name?.trim() ?? null, body.base_salary ?? null]
+     RETURNING id, cargo, worker_name, base_salary::float AS base_salary, salario_fin_mes::float AS salario_fin_mes,
+            (base_salary + COALESCE(salario_fin_mes, base_salary))::float AS sueldo_mes, is_active`,
+    [req.params.id, accId(req), body.cargo?.trim() ?? null, body.worker_name?.trim() ?? null, body.base_salary ?? null,
+     body.salario_fin_mes !== undefined, body.salario_fin_mes ?? null]
   );
   if (!result.rows[0]) throw new ApiError(404, "Empleado no encontrado");
   res.json(result.rows[0]);
@@ -175,7 +186,10 @@ adminPayrollRouter.get("/pending", asyncRoute(async (req, res) => {
                 CASE WHEN $2 THEN (mstart + INTERVAL '15 days')::date ELSE (mend + INTERVAL '1 day')::date END AS win_end
          FROM win
        )
-       SELECT s.id, s.cargo, s.worker_name, s.base_salary::float AS base_salary
+       -- base_salary = el sueldo de ESTE corte (quincena o fin de mes): lo que se paga y suma la pantalla.
+       SELECT s.id, s.cargo, s.worker_name,
+              (CASE WHEN $2 THEN s.base_salary ELSE COALESCE(s.salario_fin_mes, s.base_salary) END)::float AS base_salary,
+              s.base_salary::float AS sueldo_quincena, COALESCE(s.salario_fin_mes, s.base_salary)::float AS sueldo_fin_mes
        FROM admin_staff s, v
        WHERE s.accionista_id = $1 AND s.is_active = true
          AND NOT EXISTS (
@@ -219,16 +233,11 @@ adminPayrollRouter.post("/pay", asyncRoute(async (req, res) => {
     if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no está abierta");
 
     const staff = await client.query(
-      "SELECT id, cargo, worker_name, base_salary::float AS base_salary FROM admin_staff WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
+      `SELECT id, cargo, worker_name, base_salary::float AS base_salary, COALESCE(salario_fin_mes, base_salary)::float AS sueldo_fin_mes
+         FROM admin_staff WHERE id = $1 AND accionista_id = $2 FOR UPDATE`,
       [body.staff_id, accionista]
     );
     if (!staff.rows[0]) throw new ApiError(404, "Empleado no encontrado");
-
-    const base = round2(Number(staff.rows[0].base_salary));
-    const incentivo = round2(body.incentivo);
-    const descuentos = round2(body.descuentos);
-    const net = round2(Math.max(0, base + incentivo - descuentos));
-    if (net <= 0) throw new ApiError(400, "El neto a pagar debe ser mayor a 0");
 
     // Período de corte legible (Quincena / Fin de mes del mes en curso) si no se
     // indicó uno. paid_at (fecha_pago) lo pone la BD por defecto (now()).
@@ -241,6 +250,14 @@ adminPayrollRouter.post("/pay", asyncRoute(async (req, res) => {
       const dom = Number(m.rows[0].dom);
       periodo = `${m.rows[0].ym} ${dom < 16 ? "Quincena" : "Fin de mes"}`;
     }
+
+    // El sueldo depende del corte: lo de la quincena o lo de fin de mes.
+    const esFinDeMes = /fin de mes/i.test(periodo);
+    const base = round2(Number(esFinDeMes ? staff.rows[0].sueldo_fin_mes : staff.rows[0].base_salary));
+    const incentivo = round2(body.incentivo);
+    const descuentos = round2(body.descuentos);
+    const net = round2(Math.max(0, base + incentivo - descuentos));
+    if (net <= 0) throw new ApiError(400, "El neto a pagar debe ser mayor a 0");
 
     // El mismo sueldo del mismo período no se paga dos veces (doble clic o dos personas).
     // Si se pagó por error, se anula el movimiento en Caja y entonces se puede volver a pagar.

@@ -619,7 +619,11 @@ const esActividadCambioSaco = (nombre?: string | null) =>
   !!nombre && nombre.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().includes("CAMBIO DE SACO");
 type CuadrillaSummaryRow = { worker_name: string; entradas: number; total: number; pagado?: number; anticipos: number; neto: number; oldest_pending?: string | null; pending_count?: number };
 // Personal administrativo (sueldo fijo quincenal), por accionista.
-type AdminStaff = { id: string; cargo: string; worker_name: string; base_salary: number; is_active?: boolean; periodo?: string | null; corte?: string | null };
+// base_salary = sueldo de la QUINCENA (en los pendientes: el sueldo de ESE corte); salario_fin_mes = el de fin de mes
+// (null = igual a la quincena); sueldo_mes = los dos juntos.
+type AdminStaff = { id: string; cargo: string; worker_name: string; base_salary: number; salario_fin_mes?: number | null; sueldo_mes?: number; is_active?: boolean; periodo?: string | null; corte?: string | null };
+const sueldoFinDeMes = (st: AdminStaff) => st.salario_fin_mes ?? st.base_salary;
+const sueldoDelMes = (st: AdminStaff) => st.sueldo_mes ?? round2((st.base_salary ?? 0) + sueldoFinDeMes(st));
 type AdminSalaryPayment = { id: string; worker_name: string; cargo: string; base_salary: number; incentivo: number; descuentos: number; net_amount: number; periodo: string | null; paid_at: string };
 type CuadrillaAdvance = { id: string; worker_name: string; amount: number; balance: number; concept: string | null; status: string; issued_at: string };
 
@@ -3090,7 +3094,7 @@ export function App() {
   const [adminStaff, setAdminStaff] = useState<AdminStaff[]>([]);
   // Dados de baja (ocultos, con su historial): se pueden reactivar.
   const [adminBajas, setAdminBajas] = useState<Array<AdminStaff & { pagos: number }>>([]);
-  const [adminStaffForm, setAdminStaffForm] = useState({ cargo: "", worker_name: "", base_salary: "" });
+  const [adminStaffForm, setAdminStaffForm] = useState({ cargo: "", worker_name: "", base_salary: "", salario_fin_mes: "" });
   const [adminEditId, setAdminEditId] = useState<string | null>(null);
   const [adminHistory, setAdminHistory] = useState<AdminSalaryPayment[]>([]);
   const [adminPay, setAdminPay] = useState<null | { staff: AdminStaff; incentivo: string; descuentos: string }>(null);
@@ -6493,13 +6497,16 @@ export function App() {
   async function submitAdminStaff(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const base = Number(adminStaffForm.base_salary);
+    // Fin de mes vacío = igual a la quincena.
+    const finMes = adminStaffForm.salario_fin_mes.trim() === "" ? null : Number(adminStaffForm.salario_fin_mes);
     if (adminStaffForm.worker_name.trim().length < 2) { addToast("Escribe el nombre del empleado", "error"); return; }
-    if (!(base >= 0)) { addToast("Sueldo base inválido", "error"); return; }
+    if (adminStaffForm.base_salary.trim() === "" || !(base >= 0)) { addToast("Sueldo de la quincena inválido", "error"); return; }
+    if (finMes !== null && !(finMes >= 0)) { addToast("Sueldo de fin de mes inválido", "error"); return; }
     try {
-      const payload = { cargo: adminStaffForm.cargo.trim(), worker_name: adminStaffForm.worker_name.trim(), base_salary: base };
+      const payload = { cargo: adminStaffForm.cargo.trim(), worker_name: adminStaffForm.worker_name.trim(), base_salary: base, salario_fin_mes: finMes };
       if (adminEditId) await apiPut(`/admin-payroll/staff/${adminEditId}`, payload);
       else await apiPost("/admin-payroll/staff", payload);
-      setAdminStaffForm({ cargo: "", worker_name: "", base_salary: "" });
+      setAdminStaffForm({ cargo: "", worker_name: "", base_salary: "", salario_fin_mes: "" });
       setAdminEditId(null);
       addToast(adminEditId ? "Empleado actualizado" : "Empleado agregado", "success");
       await loadAdminStaff();
@@ -6507,7 +6514,8 @@ export function App() {
   }
   function editAdminStaff(st: AdminStaff) {
     setAdminEditId(st.id);
-    setAdminStaffForm({ cargo: st.cargo ?? "", worker_name: st.worker_name, base_salary: String(st.base_salary ?? "") });
+    setAdminStaffForm({ cargo: st.cargo ?? "", worker_name: st.worker_name, base_salary: String(st.base_salary ?? ""),
+      salario_fin_mes: st.salario_fin_mes == null ? "" : String(st.salario_fin_mes) });
   }
   async function removeAdminStaff(st: AdminStaff) {
     if (!window.confirm(`¿Dar de baja a ${st.worker_name}?\n\nDeja de aparecer en la nómina administrativa y en los pagos pendientes. Su historial de sueldos ya pagados se CONSERVA.`)) return;
@@ -22639,7 +22647,7 @@ Motivo (obligatorio):`, "");
                         <h3 style={{ marginTop: 0, marginBottom: 10 }}>Pagar sueldo</h3>
                         <p style={{ margin: "0 0 12px" }}>A <strong>{adminPay.staff.worker_name}</strong>{adminPay.staff.cargo ? ` · ${adminPay.staff.cargo}` : ""}.</p>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr auto", rowGap: 8, columnGap: 12, alignItems: "center", fontSize: 14 }}>
-                          <span>Sueldo base (quincena)</span><strong className="num">{money(base)}</strong>
+                          <span>{adminPay.staff.corte === "FIN_DE_MES" || /fin de mes/i.test(adminPay.staff.periodo ?? "") ? "Sueldo de fin de mes" : "Sueldo de la quincena"}</span><strong className="num">{money(base)}</strong>
                           <span>Incentivo</span><input type="number" step="0.01" min="0" value={adminPay.incentivo} onChange={(e) => setAdminPay({ ...adminPay, incentivo: e.target.value })} placeholder="0.00" style={{ width: 110, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }} />
                           <span>Descuentos</span><input type="number" step="0.01" min="0" value={adminPay.descuentos} onChange={(e) => setAdminPay({ ...adminPay, descuentos: e.target.value })} placeholder="0.00" style={{ width: 110, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }} />
                           <span style={{ borderTop: "1px solid #e5e7eb", paddingTop: 8, fontWeight: 800 }}>Neto a pagar</span>
@@ -22660,7 +22668,8 @@ Motivo (obligatorio):`, "");
 
             {nominaView === "sueldo-admin" && (() => {
               const accName = accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "—";
-              const totalStaff = adminStaff.reduce((sum, r) => sum + (r.base_salary ?? 0), 0);
+              const totalQuincena = adminStaff.reduce((sum, r) => sum + (r.base_salary ?? 0), 0);
+              const totalFinMes = adminStaff.reduce((sum, r) => sum + sueldoFinDeMes(r), 0);
               const ultimoPago = new Map();
               for (const h of adminHistory) { if (!ultimoPago.has(h.worker_name)) ultimoPago.set(h.worker_name, h.paid_at); }
               return (
@@ -22691,7 +22700,7 @@ Motivo (obligatorio):`, "");
                     ) : (
                       <div style={{ overflowX: "auto" }}>
                         <table className="cajaTable">
-                          <thead><tr><th>Cargo</th><th>Trabajador</th><th className="num">Sueldo base</th><th /></tr></thead>
+                          <thead><tr><th>Cargo</th><th>Trabajador</th><th className="num">Quincena</th><th className="num">Fin de mes</th><th className="num">Al mes</th></tr></thead>
                           <tbody>
                             {adminStaff.map((st) => {
                               const ult = ultimoPago.get(st.worker_name);
@@ -22700,12 +22709,13 @@ Motivo (obligatorio):`, "");
                                   <td>{st.cargo || "—"}</td>
                                   <td style={{ fontWeight: 600 }}>{st.worker_name}<div style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>{ult ? `último pago: ${new Date(ult).toLocaleDateString("es-EC")}` : "aún sin pagar"}</div></td>
                                   <td className="num" style={{ fontWeight: 700 }}>{money(st.base_salary)}</td>
-                                  <td />
+                                  <td className="num" style={{ fontWeight: 700 }}>{money(sueldoFinDeMes(st))}</td>
+                                  <td className="num">{money(sueldoDelMes(st))}</td>
                                 </tr>
                               );
                             })}
                           </tbody>
-                          <tfoot><tr><td colSpan={2} style={{ fontWeight: 700 }}>TOTAL sueldos base (quincena)</td><td className="num" style={{ fontWeight: 700 }}>{money(totalStaff)}</td><td /></tr></tfoot>
+                          <tfoot><tr><td colSpan={2} style={{ fontWeight: 700 }}>TOTAL</td><td className="num" style={{ fontWeight: 700 }}>{money(totalQuincena)}</td><td className="num" style={{ fontWeight: 700 }}>{money(totalFinMes)}</td><td className="num" style={{ fontWeight: 700 }}>{money(round2(totalQuincena + totalFinMes))}</td></tr></tfoot>
                         </table>
                       </div>
                     )}
@@ -24963,21 +24973,26 @@ Motivo (obligatorio):`, "");
                 funciones que antes estaban en Nómina (submitAdminStaff, etc.). */}
             {configSubTab === "negocio" && (() => {
               const accName = accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "—";
-              const totalStaff = adminStaff.reduce((sum, r) => sum + (r.base_salary ?? 0), 0);
+              const totalQuincena = adminStaff.reduce((sum, r) => sum + (r.base_salary ?? 0), 0);
+              const totalFinMes = adminStaff.reduce((sum, r) => sum + sueldoFinDeMes(r), 0);
               return (
               <section className="panelGrid" style={{ order: 2 }}>
                 <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}>
-                  <summary>{cfgSum("💼", "Personal administrativo", <>Empleados de oficina de {accName} · sueldo quincenal</>)}</summary>
-                  <p className="muted" style={{ margin: "6px 0 10px" }}>Agrega aquí al personal de oficina (cargo y sueldo base quincenal). El pago se hace en <strong>Nómina → 💵 Pagos</strong> en las fechas de corte.</p>
+                  <summary>{cfgSum("💼", "Personal administrativo", <>Empleados de oficina de {accName} · quincena y fin de mes</>)}</summary>
+                  <p className="muted" style={{ margin: "6px 0 10px" }}>Agrega aquí al personal de oficina: cargo, lo que cobra el <strong>15 (quincena)</strong> y lo que cobra a <strong>fin de mes</strong> (si es lo mismo, deja fin de mes vacío). El pago se hace en <strong>Nómina → 💵 Pagos</strong> en las fechas de corte.</p>
                   <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.4fr)", gap: 14, alignItems: "start" }} className="configPersonalGrid">
                     <form onSubmit={submitAdminStaff} style={{ display: "grid", gap: 8, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: 12 }}>
                       <strong style={{ fontSize: 13.5 }}>{adminEditId ? "✏️ Editar empleado" : "➕ Agregar empleado"}</strong>
                       <label><span>Cargo</span><input value={adminStaffForm.cargo} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, cargo: e.target.value })} placeholder="Ej. Contadora, Oficina" /></label>
                       <label><span>Trabajador</span><input value={adminStaffForm.worker_name} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, worker_name: e.target.value })} placeholder="Nombre y apellido" /></label>
-                      <label><span>Sueldo base (quincenal)</span><input type="number" step="0.01" min="0" value={adminStaffForm.base_salary} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, base_salary: e.target.value })} placeholder="0.00" /></label>
+                      <label><span>Sueldo de la quincena (día 15)</span><input type="number" step="0.01" min="0" value={adminStaffForm.base_salary} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, base_salary: e.target.value })} placeholder="0.00" /></label>
+                      <label><span>Sueldo de fin de mes</span><input type="number" step="0.01" min="0" value={adminStaffForm.salario_fin_mes} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, salario_fin_mes: e.target.value })} placeholder={adminStaffForm.base_salary ? `Igual a la quincena (${money(Number(adminStaffForm.base_salary) || 0)})` : "Igual a la quincena"} /></label>
+                      {Number(adminStaffForm.base_salary) > 0 && (
+                        <small className="muted">Al mes: {money(round2(Number(adminStaffForm.base_salary) + (adminStaffForm.salario_fin_mes.trim() === "" ? Number(adminStaffForm.base_salary) : Number(adminStaffForm.salario_fin_mes) || 0)))}</small>
+                      )}
                       <div className="buttonRow">
                         <button type="submit" className="primary">{adminEditId ? "Guardar" : "+ Agregar"}</button>
-                        {adminEditId && <button type="button" onClick={() => { setAdminEditId(null); setAdminStaffForm({ cargo: "", worker_name: "", base_salary: "" }); }}>Cancelar</button>}
+                        {adminEditId && <button type="button" onClick={() => { setAdminEditId(null); setAdminStaffForm({ cargo: "", worker_name: "", base_salary: "", salario_fin_mes: "" }); }}>Cancelar</button>}
                       </div>
                     </form>
                     {adminStaff.length === 0 ? (
@@ -24985,13 +25000,14 @@ Motivo (obligatorio):`, "");
                     ) : (
                       <div style={{ overflowX: "auto" }}>
                         <table className="cajaTable">
-                          <thead><tr><th>Cargo</th><th>Trabajador</th><th className="num">Sueldo base</th><th /></tr></thead>
+                          <thead><tr><th>Cargo</th><th>Trabajador</th><th className="num">Quincena</th><th className="num">Fin de mes</th><th /></tr></thead>
                           <tbody>
                             {adminStaff.map((st) => (
                               <tr key={st.id}>
                                 <td>{st.cargo || "—"}</td>
-                                <td style={{ fontWeight: 600 }}>{st.worker_name}</td>
+                                <td style={{ fontWeight: 600 }}>{st.worker_name}<div style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>al mes {money(sueldoDelMes(st))}</div></td>
                                 <td className="num" style={{ fontWeight: 700 }}>{money(st.base_salary)}</td>
+                                <td className="num" style={{ fontWeight: 700 }}>{money(sueldoFinDeMes(st))}</td>
                                 <td className="num" style={{ whiteSpace: "nowrap" }}>
                                   <button type="button" className="btnGhost" title="Editar" onClick={() => editAdminStaff(st)}>✏️</button>
                                   <button type="button" className="btnGhost" title="Dar de baja" style={{ marginLeft: 6 }} onClick={() => removeAdminStaff(st)}>🗑</button>
@@ -24999,7 +25015,7 @@ Motivo (obligatorio):`, "");
                               </tr>
                             ))}
                           </tbody>
-                          <tfoot><tr><td colSpan={2} style={{ fontWeight: 700 }}>TOTAL sueldos base (quincena)</td><td className="num" style={{ fontWeight: 700 }}>{money(totalStaff)}</td><td /></tr></tfoot>
+                          <tfoot><tr><td colSpan={2} style={{ fontWeight: 700 }}>TOTAL · al mes {money(round2(totalQuincena + totalFinMes))}</td><td className="num" style={{ fontWeight: 700 }}>{money(totalQuincena)}</td><td className="num" style={{ fontWeight: 700 }}>{money(totalFinMes)}</td><td /></tr></tfoot>
                         </table>
                       </div>
                     )}
@@ -25011,7 +25027,7 @@ Motivo (obligatorio):`, "");
                             <div key={b.id} className="staffBajas__item">
                               <span>
                                 <strong>{b.worker_name}</strong>
-                                <small>{b.cargo || "Sin cargo"} · {money(b.base_salary)} quincenal · {b.pagos} {b.pagos === 1 ? "pago" : "pagos"} en el historial</small>
+                                <small>{b.cargo || "Sin cargo"} · quincena {money(b.base_salary)} · fin de mes {money(sueldoFinDeMes(b))} · {b.pagos} {b.pagos === 1 ? "pago" : "pagos"} en el historial</small>
                               </span>
                               <button type="button" className="btnSecondary" onClick={() => reactivarAdminStaff(b)}>↩️ Reactivar</button>
                             </div>
