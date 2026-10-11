@@ -36,7 +36,8 @@ adminPayrollRouter.get("/staff", asyncRoute(async (req, res) => {
 }));
 
 // Sueldo de fin de mes: número (si es distinto de la quincena) o null (= igual a la quincena).
-const salarioFinMes = z.union([z.coerce.number().min(0), z.null()]).optional();
+// (z.null() primero: z.coerce.number() convertiría null en 0.)
+const salarioFinMes = z.union([z.null(), z.coerce.number().min(0)]).optional();
 
 adminPayrollRouter.post("/staff", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({
