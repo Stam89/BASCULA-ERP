@@ -1,6 +1,6 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-10-02
+Actualizado: 2026-10-11
 
 ## Inicio rapido
 
@@ -70,6 +70,14 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - Siguiente paso, solo después de instalar/probar v11.44 en la tablet real: mostrar/administrar dispositivos desde Configuración y luego retirar la clave compartida del uso rutinario. No retirarla antes.
 - HECHO (2026-10-11): Configuración → Estado del sistema → «Tablets autorizadas» lista modelo, ID abreviado, último contacto y estado; un administrador puede bloquear/reactivar sin borrar tickets. API `GET/PATCH /api/bascula/devices`, sin exponer hashes. Prueba funcional: listado 200, bloqueo 200 y token bloqueado 401; registro temporal retirado.
 - PENDIENTE REAL: instalar v11.44 y sincronizar desde la tablet física (no estaba conectada por ADB). Hasta confirmarlo, `DEVICE_SYNC_KEY` sigue aceptada como compatibilidad; no retirar aún.
+
+### 🔄 Cola ERP confirmada por ticket BASCULA v11.46 (2026-10-11)
+- Android histórico externo actualizado en `C:\Users\Usuario\AndroidStudioProjects\BASCULA`; APK de entrega en `C:\Users\Usuario\OneDrive\Documentos\BASCULA\Bascula-actualizada.apk`.
+- Room sube a v6 de forma aditiva: `tickets.erpSincronizadoEn`. Un ticket principal queda pendiente mientras esa confirmación sea anterior a `actualizadoEn`; cada lote se marca solo después del HTTP 2xx + `{ok:true, skipped:0}` del ERP.
+- La confirmación usa número canónico + modo + versión. Si el ticket cambia durante el envío, la actualización nueva permanece pendiente. Si falla un lote, los lotes anteriores ya confirmados no se reenvían; si un registro antiguo es rechazado, se aísla uno por uno y no bloquea a los válidos.
+- La primera ejecución de v11.46 republicará el historial principal existente una sola vez; el `upsert` único de ERP es idempotente y no crea duplicados. La pantalla muestra pendientes y contadores del último envío confirmado/aplicado.
+- Respaldo anterior: `BASCULA\Respaldos\sync-outbox-20261011-110846`. Verificación: build limpio + build final, 28 tests, lint y esquema Room v6 OK.
+- PENDIENTE REAL: instalar v11.46 encima de la app (sin desinstalar) y comprobar en la tablet que el primer SYNC llega a `Pendientes: 0`.
 
 ### 💰 Caja auditada (2026-10-09)
 - Migración `20261085`: `cash_movements.medio` (EFECTIVO/BANCO) con trigger por defecto (caja BANCO → BANCO; resto → EFECTIVO; un contra-asiento copia el medio del original) + backfill; columnas de arqueo en cash_registers; categorías FALTANTE_CAJA / SOBRANTE_CAJA inactivas (solo las usa el cierre).
