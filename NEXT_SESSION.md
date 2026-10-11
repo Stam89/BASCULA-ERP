@@ -96,6 +96,15 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - Respaldo previo: `BASCULA\Respaldos\diagnostico-integral-20261011-145410`.
 - PENDIENTE REAL: instalar v11.48 encima de la app, ejecutar el diagnostico integral con el ERP y la Epson encendidos y compartir el reporte si aparece `ERROR`.
 
+### 🖨️ Cola de impresion segura BASCULA v11.49 (2026-10-11)
+- La Cola de impresion muestra primero todos los trabajos PENDIENTE/ERROR, aunque sean mas antiguos que los 50 ultimos; los de mas de 24 horas se distinguen como `[ANTIGUO]` y advierten del riesgo antes de reintentar.
+- Todo reintento exige una segunda confirmacion y aclara que no vuelve a guardar el ticket ni cambia la numeracion.
+- `CANCELAR PENDIENTES` requiere clave de administrador y cancela solo trabajos de impresion; conserva tickets, ERP, Excel y conteos. Sirve para resolver de forma segura los 7 trabajos antiguos encontrados por el diagnostico real.
+- Cuando una impresion se confirma, cualquier trabajo PENDIENTE/ERROR anterior del mismo ticket y modo se cancela automaticamente. Asi un fallo viejo no puede reintentarse despues de que el ticket ya fue impreso por otra via.
+- APK de entrega actualizado a v11.49 (code 240). Verificacion: build limpio, lint y 36 tests OK; SHA-256 `A9E50BE887B70816DBD59B547C791340522F703B9C7F8A0C0FF93210CC96CA7D`.
+- Respaldo previo: `BASCULA\Respaldos\cola-impresion-segura-20261011-153052`.
+- PENDIENTE REAL: instalar v11.49 encima de la app. En `⋮ > Cola de impresion`, revisar los 7 trabajos: cancelar los ya entregados y reintentar individualmente solo los que realmente falten cuando la Epson este encendida.
+
 ### 💰 Caja auditada (2026-10-09)
 - Migración `20261085`: `cash_movements.medio` (EFECTIVO/BANCO) con trigger por defecto (caja BANCO → BANCO; resto → EFECTIVO; un contra-asiento copia el medio del original) + backfill; columnas de arqueo en cash_registers; categorías FALTANTE_CAJA / SOBRANTE_CAJA inactivas (solo las usa el cierre).
 - `services/caja.ts`: `saldosDeCaja` (efectivo/banco/total) y `medioParaCaja`. Summary devuelve saldo_efectivo, saldo_banco, fondos_por_liquidar.
