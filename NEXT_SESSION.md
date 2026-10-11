@@ -49,6 +49,10 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 💼 Sueldo administrativo: quincena y fin de mes distintos (2026-10-11, pedido del dueño: cobra $250 el 15 y $300 a fin de mes)
+
+- `admin_staff.salario_fin_mes` (migración `20261088`; NULL = igual a la quincena, así que los de antes no cambian). `base_salary` sigue siendo lo de la quincena. `/admin-payroll/pending` devuelve en `base_salary` el sueldo de ESE corte (+ `sueldo_quincena`/`sueldo_fin_mes`); `/pay` elige el monto por el `periodo` («… Fin de mes» → fin de mes). Configuración › 💼 Personal administrativo pide «Sueldo de la quincena (día 15)» y «Sueldo de fin de mes» (vacío = igual) y muestra «al mes»; Nómina › Sueldo Administrativo muestra Quincena / Fin de mes / Al mes. Ojo zod: `z.union([z.null(), z.coerce.number()])` (al revés, null se volvía 0). Simulacro `sueldo_quincena_fin_mes.mjs` TODO OK; verificado en celular sobre la copia.
+
 ### 🚜 Permisos de Transporte y Cosechadora por sección (2026-10-09)
 
 - Matriz de permisos: fila «🚜 Transporte / Cosechadora (en la Matriz)» con ↳ Caja, Clientes, Partes Diarios, Nómina Operadores, CxC, CxP, Vales, ¿Cuándo se hizo?, Estado de Resultados, Reportes, Configuración (👁️/✏️ cada una; claves `SUB:`/`RO:SUB:Transporte / Cosechadora:<sección>`). En columnas de socios sale «—» (es de la Matriz). `CampoWorkspace` muestra solo las secciones permitidas. Servidor: `SUB_DE_LECTURA_RUTAS` (lecturas propias de cada sección; catálogos/sesión/clientes/servicios/partes/alertas siguen abiertos a todo el módulo) y reglas `campo` en `SUB_DE_ESCRITURA` con `exigeVer` y `alt` (sin secciones marcadas = todas, como antes). Inicio simple: botón «Transporte y Cosechadora» (antes un operador con solo Transporte veía «no tienes pantallas»). Simulacro `permisos_transporte.mjs` TODO OK; `permisos.mjs` salta Resultado mensual en socios (es solo Matriz).
