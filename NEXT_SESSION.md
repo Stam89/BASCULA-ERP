@@ -1,6 +1,6 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-10-02
+Actualizado: 2026-10-11
 
 ## Inicio rapido
 
@@ -68,6 +68,51 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - Compatibilidad comprobada en API: token individual → `auth=device`, clave anterior → `auth=legacy`, token falso → HTTP 401. El dispositivo de prueba fue retirado.
 - Respaldo DB previo: `bascula-erp_2026-10-09T13-51-54.dump`. Respaldo Android v11.43: `BASCULA\Respaldos\credencial-tablet-20261009134551`.
 - Siguiente paso, solo después de instalar/probar v11.44 en la tablet real: mostrar/administrar dispositivos desde Configuración y luego retirar la clave compartida del uso rutinario. No retirarla antes.
+- HECHO (2026-10-11): Configuración → Estado del sistema → «Tablets autorizadas» lista modelo, ID abreviado, último contacto y estado; un administrador puede bloquear/reactivar sin borrar tickets. API `GET/PATCH /api/bascula/devices`, sin exponer hashes. Prueba funcional: listado 200, bloqueo 200 y token bloqueado 401; registro temporal retirado.
+- PENDIENTE REAL: instalar v11.44 y sincronizar desde la tablet física (no estaba conectada por ADB). Hasta confirmarlo, `DEVICE_SYNC_KEY` sigue aceptada como compatibilidad; no retirar aún.
+
+### 🔄 Cola ERP confirmada por ticket BASCULA v11.46 (2026-10-11)
+- Android histórico externo actualizado en `C:\Users\Usuario\AndroidStudioProjects\BASCULA`; APK de entrega en `C:\Users\Usuario\OneDrive\Documentos\BASCULA\Bascula-actualizada.apk`.
+- Room sube a v6 de forma aditiva: `tickets.erpSincronizadoEn`. Un ticket principal queda pendiente mientras esa confirmación sea anterior a `actualizadoEn`; cada lote se marca solo después del HTTP 2xx + `{ok:true, skipped:0}` del ERP.
+- La confirmación usa número canónico + modo + versión. Si el ticket cambia durante el envío, la actualización nueva permanece pendiente. Si falla un lote, los lotes anteriores ya confirmados no se reenvían; si un registro antiguo es rechazado, se aísla uno por uno y no bloquea a los válidos.
+- La primera ejecución de v11.46 republicará el historial principal existente una sola vez; el `upsert` único de ERP es idempotente y no crea duplicados. La pantalla muestra pendientes y contadores del último envío confirmado/aplicado.
+- Respaldo anterior: `BASCULA\Respaldos\sync-outbox-20261011-110846`. Verificación: build limpio + build final, 28 tests, lint y esquema Room v6 OK.
+- PENDIENTE REAL: instalar v11.46 encima de la app (sin desinstalar) y comprobar en la tablet que el primer SYNC llega a `Pendientes: 0`.
+
+### 🛡️ Protección local de datos BASCULA v11.47 (2026-10-11)
+- Amplía el respaldo JSON existente sin cambiar su compatibilidad: formato 2 agrega negocio, dispositivo, cantidad de tickets y firma SHA-256 sobre los datos operativos. Respaldos viejos siguen aceptados; los nuevos dañados/modificados se rechazan antes de borrar nada.
+- Automático al cargar cambios: copia rotativa `bascula_respaldo_automatico.json`, copia diaria fechada (retiene las 14 últimas) y copia especial en el primer arranque de cada versión. Todas quedan en `Descargas/Bascula`.
+- Menú «Respaldo y restauración» incorpora «Ver estado de protección» y la restauración muestra vista previa (versión, fecha, negocio, tickets, integridad) antes de pedir clave administrativa.
+- Corregido un riesgo previo: si se restaura otro negocio, Room se reinicia y abre la base correspondiente antes de importar los tickets; no escribe sobre la base que estaba activa.
+- Respaldo previo: `BASCULA\Respaldos\proteccion-datos-20261011-133355`. APK de entrega actualizado a v11.47. Verificación: build limpio, lint y 31 tests OK.
+- PENDIENTE REAL: instalar v11.47 encima de la app, abrirla con permiso de archivos y comprobar `Descargas/Bascula/bascula_respaldo_actualizacion_11_47_*.json`.
+
+### 🩺 Diagnostico integral BASCULA v11.48 (2026-10-11)
+- Nueva opcion `⋮ > Soporte y diagnostico > Diagnostico integral`: ejecuta verificaciones reales de solo lectura y deja claro al final que no sincronizo, no imprimio y no modifico tickets.
+- Comprueba Room (conteos, numeracion, pendientes ERP, cola de impresion y coincidencia con la pantalla), conexion HTTPS/HTTP al endpoint protegido `/api/bascula/sync-state` con la credencial privada de la tablet, tiempo de respuesta y conteo local contra ERP.
+- Valida en memoria la firma SHA-256 del respaldo y abre `Descargas/Bascula/bascula_respaldo_automatico.json` para confirmar que el archivo existe y no esta alterado.
+- En impresoras WiFi/Epson abre unicamente el puerto configurado y lo cierra sin enviar bytes ni papel. Android Print/Bluetooth se marca como prueba fisica manual. Firebase no se consulta para no gastar cuota.
+- APK de entrega actualizado a v11.48 (code 239). Verificacion: build limpio, lint y 34 tests OK; SHA-256 `41C155F12693553B64D2A4682F736EAC465B71F132F8C3428AD749399628D1AC`.
+- Respaldo previo: `BASCULA\Respaldos\diagnostico-integral-20261011-145410`.
+- PENDIENTE REAL: instalar v11.48 encima de la app, ejecutar el diagnostico integral con el ERP y la Epson encendidos y compartir el reporte si aparece `ERROR`.
+
+### 🖨️ Cola de impresion segura BASCULA v11.49 (2026-10-11)
+- La Cola de impresion muestra primero todos los trabajos PENDIENTE/ERROR, aunque sean mas antiguos que los 50 ultimos; los de mas de 24 horas se distinguen como `[ANTIGUO]` y advierten del riesgo antes de reintentar.
+- Todo reintento exige una segunda confirmacion y aclara que no vuelve a guardar el ticket ni cambia la numeracion.
+- `CANCELAR PENDIENTES` requiere clave de administrador y cancela solo trabajos de impresion; conserva tickets, ERP, Excel y conteos. Sirve para resolver de forma segura los 7 trabajos antiguos encontrados por el diagnostico real.
+- Cuando una impresion se confirma, cualquier trabajo PENDIENTE/ERROR anterior del mismo ticket y modo se cancela automaticamente. Asi un fallo viejo no puede reintentarse despues de que el ticket ya fue impreso por otra via.
+- APK de entrega actualizado a v11.49 (code 240). Verificacion: build limpio, lint y 36 tests OK; SHA-256 `A9E50BE887B70816DBD59B547C791340522F703B9C7F8A0C0FF93210CC96CA7D`.
+- Respaldo previo: `BASCULA\Respaldos\cola-impresion-segura-20261011-153052`.
+- PENDIENTE REAL: instalar v11.49 encima de la app. En `⋮ > Cola de impresion`, revisar los 7 trabajos: cancelar los ya entregados y reintentar individualmente solo los que realmente falten cuando la Epson este encendida.
+
+### 🛟 Simulacro y restauracion protegida BASCULA v11.50 (2026-10-11)
+- `⋮ > Respaldo y restauracion > Simulacro de recuperacion` abre y valida la copia automatica sin restaurar nada. Comprueba firma SHA-256, negocio, version/fecha, identidades unicas y contadores.
+- Compara identidad por modo + numero canonico entre respaldo y Room (no solo cantidades) e informa cuantos faltarian localmente o existen solo en la tablet. Tambien compara los tickets principales de la copia contra `/api/bascula/sync-state` del ERP cuando esta accesible.
+- Una restauracion real ahora se bloquea hasta crear `bascula_antes_restaurar_YYYYMMDD_HHMMSS.json`, volver a leer esa copia preventiva desde Descargas/Bascula y confirmar su firma. Si no puede crearla o verificarla, no aplica el respaldo elegido ni reemplaza datos.
+- La copia preventiva queda registrada en bitacora administrativa y el mensaje final indica su nombre. No se cambio el formato de respaldo ni Room; copias anteriores siguen siendo compatibles.
+- APK de entrega actualizado a v11.50 (code 241). Verificacion: build limpio, lint y 40 tests OK; SHA-256 `9F9509458B49DD34FCD077BEF820C684946E53E5BD78C8836514380086EAE4AF`.
+- Respaldo previo: `BASCULA\Respaldos\simulacro-recuperacion-20261011-154523`.
+- PENDIENTE REAL: instalar v11.50 encima de la app y ejecutar el simulacro. No probar RESTAURAR con datos reales; compartir el reporte del simulacro si aparece ATENCION/ERROR.
 
 ### 💰 Caja auditada (2026-10-09)
 - Migración `20261085`: `cash_movements.medio` (EFECTIVO/BANCO) con trigger por defecto (caja BANCO → BANCO; resto → EFECTIVO; un contra-asiento copia el medio del original) + backfill; columnas de arqueo en cash_registers; categorías FALTANTE_CAJA / SOBRANTE_CAJA inactivas (solo las usa el cierre).

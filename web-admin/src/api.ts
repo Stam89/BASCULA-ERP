@@ -186,6 +186,29 @@ export async function apiGetBasculaStatus(): Promise<BasculaSyncStatus> {
   return parseResponse<BasculaSyncStatus>(response);
 }
 
+export type BasculaDevice = {
+  device_id: string;
+  modelo: string | null;
+  activo: boolean;
+  created_at: string;
+  updated_at: string;
+  last_seen_at: string | null;
+};
+
+export async function apiGetBasculaDevices(): Promise<BasculaDevice[]> {
+  const response = await fetch(`${API_URL}/api/bascula/devices`, { headers: authHeaders() });
+  return parseResponse<BasculaDevice[]>(response);
+}
+
+export async function apiSetBasculaDeviceActive(deviceId: string, activo: boolean): Promise<BasculaDevice> {
+  const response = await fetch(`${API_URL}/api/bascula/devices/${encodeURIComponent(deviceId)}`, {
+    method: "PATCH",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ activo })
+  });
+  return parseResponse<BasculaDevice>(response);
+}
+
 export async function checkHealth(): Promise<boolean> {
   try {
     const response = await fetch(`${API_URL}/health`);

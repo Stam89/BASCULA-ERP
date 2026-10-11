@@ -4,7 +4,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { requireAuth } from "../../auth/require-auth.js";
+import { requireAdmin, requireAuth } from "../../auth/require-auth.js";
 import { env } from "../../config/env.js";
 import { importBasculaTickets } from "./mobile-tickets.js";
 import { dentroDelCorteSql, leerCorteBascula } from "../../services/bascula-corte.js";
@@ -55,6 +55,8 @@ const registerDeviceSchema = z.object({
   deviceId: z.string().trim().min(8).max(160),
   modelo: z.string().trim().max(120).optional()
 });
+
+const deviceStatusSchema = z.object({ activo: z.boolean() });
 
 function formatTicketNumber(value: number): string {
   const padded = String(Math.max(1, value)).padStart(6, "0");
@@ -230,6 +232,31 @@ basculaSyncRouter.get("/sync-state", asyncRoute(async (req, res) => {
 basculaSyncRouter.get("/discover", asyncRoute(async (req, res) => {
   const auth = await requireDeviceCredential(req);
   res.json({ ok: true, service: "BASCULA-ERP", version: 2, auth: auth.mode });
+}));
+
+// Administracion web. Nunca devuelve token_hash ni borra historial: bloquear
+// una tablet solo invalida su credencial individual y es reversible.
+basculaSyncRouter.get("/devices", requireAuth, requireAdmin, asyncRoute(async (_req, res) => {
+  const result = await pool.query(
+    `SELECT device_id, modelo, activo, created_at, updated_at, last_seen_at
+       FROM bascula_devices
+      ORDER BY activo DESC, last_seen_at DESC NULLS LAST, created_at DESC`
+  );
+  res.json(result.rows);
+}));
+
+basculaSyncRouter.patch("/devices/:deviceId", requireAuth, requireAdmin, asyncRoute(async (req, res) => {
+  const deviceId = z.string().trim().min(8).max(160).parse(req.params.deviceId);
+  const body = deviceStatusSchema.parse(req.body);
+  const result = await pool.query(
+    `UPDATE bascula_devices
+        SET activo = $2, updated_at = now()
+      WHERE device_id = $1
+      RETURNING device_id, modelo, activo, created_at, updated_at, last_seen_at`,
+    [deviceId, body.activo]
+  );
+  if (!result.rowCount) throw new ApiError(404, "La tablet indicada no esta registrada.");
+  res.json(result.rows[0]);
 }));
 
 // GET /api/bascula/status

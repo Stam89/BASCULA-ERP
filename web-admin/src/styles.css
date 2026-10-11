@@ -5724,3 +5724,24 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .cobroRecibe label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
 .cobroRecibe select { flex: 1 1 200px; min-width: 0; padding: 7px 9px; border-radius: 8px; border: 1px solid #cbd5e1; background: #fff; font-size: 14px; }
 .cobroRecibe small { color: #0c4a6e; line-height: 1.4; }
+.basculaDevicesCard { margin-top: 14px; }
+.basculaDevicesCard > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.basculaDevicesCard > summary small { color: #64748b; font-weight: 600; }
+.basculaDevicesIntro { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.basculaDevicesIntro p { margin: 4px 0 0; color: #64748b; font-size: 13px; }
+.basculaDevicesList { display: grid; gap: 8px; }
+.basculaDeviceRow { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 11px 12px; border: 1px solid #dbe3ea; border-left: 4px solid #16a34a; border-radius: 8px; background: #fff; }
+.basculaDeviceRow.is-blocked { border-left-color: #dc2626; background: #fffafa; }
+.basculaDeviceIcon { font-size: 22px; text-align: center; }
+.basculaDeviceInfo { display: grid; min-width: 0; gap: 2px; }
+.basculaDeviceInfo > span, .basculaDeviceInfo > small { color: #64748b; font-size: 12px; overflow-wrap: anywhere; }
+.basculaDeviceToggle { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 12px; font-weight: 700; cursor: pointer; }
+.basculaDeviceToggle input { width: 18px; height: 18px; accent-color: #15803d; }
+.basculaDevicesEmpty { display: grid; gap: 4px; padding: 16px; border: 1px dashed #94a3b8; border-radius: 8px; background: #f8fafc; text-align: center; }
+.basculaDevicesEmpty span, .basculaDevicesNote { color: #64748b; font-size: 12px; }
+.basculaDevicesNote { margin: 10px 0 0; }
+@media (max-width: 640px) {
+  .basculaDevicesIntro { align-items: stretch; flex-direction: column; }
+  .basculaDeviceRow { grid-template-columns: 34px minmax(0, 1fr); }
+  .basculaDeviceToggle { grid-column: 2; }
+}

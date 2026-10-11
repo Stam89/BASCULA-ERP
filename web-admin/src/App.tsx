@@ -2,6 +2,7 @@ import { leerCuadros, type CuadroMosaico, type HojaMosaico } from "./components/
 import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, apiOk, apiGet, apiGetSRI, apiGetBasculaStatus, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId } from "./api";
 import type { BasculaSyncStatus } from "./api";
+import BasculaDevicesPanel from "./components/BasculaDevicesPanel";
 import { money, categoryLabel, stockGroupLabel, formatPersonName, cantidad, kilos, numeroReal } from "./format";
 import type { Farmer, Product, Warehouse, Lot, MateriaPrimaEntry, MateriaPrimaCorreccion, PendingEntry } from "./types";
 import { Metric, ReportTable, Input, Select, MedidorRow, DataList } from "./components/ui";
@@ -2727,6 +2728,7 @@ export function App() {
   const cfgSeccionActual = cfgSecciones.find((x) => x.id === configSubTab) ?? cfgSecciones[0] ?? CFG_SECCIONES[0];
   const CONFIG_INDICE: AjusteIndex[] = [
     { sub: "estado", tarjeta: "Estado del sistema", claves: "salud api sincronizacion bascula respaldo backup usuarios accionistas diagnostico checklist empresa lista" },
+    { sub: "estado", tarjeta: "📱 Tablets autorizadas", claves: "bascula dispositivo tablet credencial bloquear autorizar seguridad sincronizacion wifi" },
     { sub: "planta", tarjeta: "⚙️ Parámetros de planta", claves: "tarifa de pilado humedad base merma quintal" },
     { sub: "negocio", tarjeta: "🏢 Datos del negocio", claves: "nombre comercial ruc telefono direccion pie de comprobante encabezado ticket recibo mi negocio nombre transporte cosechadora matriz principal" },
     { sub: "planta", tarjeta: "🧺 Catálogo de productos", claves: "crear producto nuevo marca empacado terminado subproducto materia prima presentaciones pesos arroz base calidad 0.11 corriente tarifa por libra venta al detalle mostrador codigo unidad" },
@@ -23471,6 +23473,8 @@ Motivo (obligatorio):`, "");
                       </div>
                     </div>
                   </div>
+
+                  {isAdmin && <BasculaDevicesPanel avisar={addToast} />}
 
                   {isAdmin && <ControlIntegridad avisar={addToast} />}
 
