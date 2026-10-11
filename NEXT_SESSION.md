@@ -87,6 +87,15 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - Respaldo previo: `BASCULA\Respaldos\proteccion-datos-20261011-133355`. APK de entrega actualizado a v11.47. Verificación: build limpio, lint y 31 tests OK.
 - PENDIENTE REAL: instalar v11.47 encima de la app, abrirla con permiso de archivos y comprobar `Descargas/Bascula/bascula_respaldo_actualizacion_11_47_*.json`.
 
+### 🩺 Diagnostico integral BASCULA v11.48 (2026-10-11)
+- Nueva opcion `⋮ > Soporte y diagnostico > Diagnostico integral`: ejecuta verificaciones reales de solo lectura y deja claro al final que no sincronizo, no imprimio y no modifico tickets.
+- Comprueba Room (conteos, numeracion, pendientes ERP, cola de impresion y coincidencia con la pantalla), conexion HTTPS/HTTP al endpoint protegido `/api/bascula/sync-state` con la credencial privada de la tablet, tiempo de respuesta y conteo local contra ERP.
+- Valida en memoria la firma SHA-256 del respaldo y abre `Descargas/Bascula/bascula_respaldo_automatico.json` para confirmar que el archivo existe y no esta alterado.
+- En impresoras WiFi/Epson abre unicamente el puerto configurado y lo cierra sin enviar bytes ni papel. Android Print/Bluetooth se marca como prueba fisica manual. Firebase no se consulta para no gastar cuota.
+- APK de entrega actualizado a v11.48 (code 239). Verificacion: build limpio, lint y 34 tests OK; SHA-256 `41C155F12693553B64D2A4682F736EAC465B71F132F8C3428AD749399628D1AC`.
+- Respaldo previo: `BASCULA\Respaldos\diagnostico-integral-20261011-145410`.
+- PENDIENTE REAL: instalar v11.48 encima de la app, ejecutar el diagnostico integral con el ERP y la Epson encendidos y compartir el reporte si aparece `ERROR`.
+
 ### 💰 Caja auditada (2026-10-09)
 - Migración `20261085`: `cash_movements.medio` (EFECTIVO/BANCO) con trigger por defecto (caja BANCO → BANCO; resto → EFECTIVO; un contra-asiento copia el medio del original) + backfill; columnas de arqueo en cash_registers; categorías FALTANTE_CAJA / SOBRANTE_CAJA inactivas (solo las usa el cierre).
 - `services/caja.ts`: `saldosDeCaja` (efectivo/banco/total) y `medioParaCaja`. Summary devuelve saldo_efectivo, saldo_banco, fondos_por_liquidar.
