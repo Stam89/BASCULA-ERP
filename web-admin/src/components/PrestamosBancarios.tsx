@@ -312,11 +312,11 @@ export function PrestamosBancarios({ cajaAbiertaId, cajaMixta, puedeEditar, pued
                         <td style={{ whiteSpace: "nowrap" }}>{fechaCorta(c.fecha_vencimiento.slice(0, 10))}</td>
                         <td className="num">
                           <b>{money(c.estado === "PAGADA" ? (c.pagado_total ?? c.total) : c.total)}</b>
-                          <small className="prest__desg">capital {money(c.capital)} · interés {money(interes)}{otros > 0 ? ` · otros ${money(otros)}` : ""}</small>
+                          <small className="prest__desg"><span>capital {money(c.capital)}</span><span>interés {money(interes)}</span>{otros > 0 && <span>otros {money(otros)}</span>}</small>
                         </td>
                         <td style={{ whiteSpace: "nowrap" }}>
                           {c.estado === "PAGADA"
-                            ? <span className="chip ok">✓ Pagada {c.pagada_at ? new Date(c.pagada_at).toLocaleDateString("es-EC") : ""}</span>
+                            ? <><span className="chip ok">✓ Pagada</span>{c.pagada_at && <small className="prest__desg">{new Date(c.pagada_at).toLocaleDateString("es-EC")}</small>}</>
                             : <>
                               {vencida && <span className="chip bad" style={{ marginRight: 4 }}>Vencida</span>}
                               {puedeEditar && detalle.estado === "VIGENTE" && <>

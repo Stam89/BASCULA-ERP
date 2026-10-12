@@ -5793,7 +5793,8 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .prest__pagoTotal { border-top: 1px solid var(--c-border); padding-top: 8px; font-weight: 800; }
 strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .prest__tipo input[type="radio"] { width: auto; min-width: 0; flex: 0 0 auto; margin: 3px 0 0; }
-.prest__desg { display: block; font-size: 11px; font-weight: 400; color: var(--c-text-muted); white-space: normal; }
+.prest__desg { display: block; font-size: 11px; font-weight: 400; color: var(--c-text-muted); }
+.prest__desg > span { display: block; white-space: nowrap; }
 .prest__modal .buttonRow, .prest__pago .buttonRow { flex-wrap: wrap; }
 .prest__modal .buttonRow > button, .prest__pago .buttonRow > button { flex: 1 1 auto; }
 .btnDanger { background: transparent; color: #b91c1c; border: 1px solid #fecaca; border-radius: 8px; padding: 7px 14px; font-weight: 700; cursor: pointer; }
