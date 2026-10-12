@@ -123,7 +123,17 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - La copia preventiva queda registrada en bitacora administrativa y el mensaje final indica su nombre. No se cambio el formato de respaldo ni Room; copias anteriores siguen siendo compatibles.
 - APK de entrega actualizado a v11.50 (code 241). Verificacion: build limpio, lint y 40 tests OK; SHA-256 `9F9509458B49DD34FCD077BEF820C684946E53E5BD78C8836514380086EAE4AF`.
 - Respaldo previo: `BASCULA\Respaldos\simulacro-recuperacion-20261011-154523`.
-- PENDIENTE REAL: instalar v11.50 encima de la app y ejecutar el simulacro. No probar RESTAURAR con datos reales; compartir el reporte del simulacro si aparece ATENCION/ERROR.
+- CONFIRMADO EN TABLET (2026-10-11): simulacro v11.50 sin cambios, 6 correctos / 0 atenciones / 0 errores. Copia y Room coincidieron en 380 tickets (379 principales + 1 particular), ERP coincidió en 379 principales y los contadores quedaron Principal 385 / Particular 2.
+
+### 🛡️ Actualizacion segura BASCULA v11.51 (2026-10-11)
+- Nuevo `⋮ > Preparar actualizacion`, protegido por clave administrativa: cuenta principal/particular, pendientes ERP y cola de impresion; consulta `/api/bascula/sync-state`; crea `bascula_antes_actualizar_11_51_YYYYMMDD_HHMMSS.json`; vuelve a leerlo y valida su firma antes de declarar la actualizacion preparada.
+- Guarda una huella previa con negocio, conteos, proximos numeros y SHA-256. La instruccion visible exige instalar el APK ENCIMA de la app y cancelar si Android solo ofrece desinstalar.
+- Tras abrir una version nueva, espera a que Room termine de cargar y compara automaticamente la tablet contra la huella preparada. En la primera instalacion de esta funcion usa como referencia el respaldo automatico de v11.50, antes de reemplazarlo por una copia de la version nueva.
+- Si todo coincide muestra `Actualizacion correcta`; si faltan tickets/retroceden contadores muestra una alerta y manda al simulacro. Si se instala un APK con `versionCode` inferior, advierte que no se creen tickets y conserva el respaldo anterior.
+- APK de entrega actualizado a v11.51 (code 242). Verificacion: build limpio, lint sin errores bloqueantes y 44 tests OK; SHA-256 `37ED42FF5496FFEBA640B9D1CAF13202885C5C240BE07DB4F547F454CBCDB088`.
+- Firma de instalacion comprobada contra v11.50: mismo certificado Android Debug SHA-256 `92da81b8ad2ad149fdbd399dcceffb0099f5eb76f6edb24843bb5266663e9210`, por lo que Android puede actualizar encima conservando los datos.
+- Respaldo previo de fuente y APK: `BASCULA\Respaldos\actualizacion-segura-20261011_160801`.
+- PENDIENTE REAL: instalar v11.51 ENCIMA de v11.50, sin desinstalar. Al abrir, confirmar el mensaje automatico; debe conservar 380 tickets y los contadores Principal 385 / Particular 2. Para futuras versiones, ejecutar primero `Preparar actualizacion`.
 
 ### 💰 Caja auditada (2026-10-09)
 - Migración `20261085`: `cash_movements.medio` (EFECTIVO/BANCO) con trigger por defecto (caja BANCO → BANCO; resto → EFECTIVO; un contra-asiento copia el medio del original) + backfill; columnas de arqueo en cash_registers; categorías FALTANTE_CAJA / SOBRANTE_CAJA inactivas (solo las usa el cierre).
