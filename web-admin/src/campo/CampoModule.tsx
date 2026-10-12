@@ -79,6 +79,17 @@ type CreditoConcil = { cliente_id: string; cliente_nombre: string; credito: numb
 type ParteConcil = { id: string; fecha: string; activo_nombre: string; cliente: string; qq: number; observaciones: string | null; origen: string; estado: string };
 type EstadoLinea = { fecha: string; clase: "servicio" | "abono"; detalle: string; maquina: string | null; qq: number | null; precio_unitario: number | null; debe: number; haber: number; cuenta: string | null; saldo: number };
 type EstadoCuenta = { cliente: { id: string; nombre: string; identificacion: string | null; tipo: string }; periodo: { from: string; to: string }; saldo_apertura: number; lineas: EstadoLinea[]; total_debe: number; total_haber: number; saldo_final: number };
+type CuentaConsolidada = {
+  cliente_id: string; nombre: string; identificacion: string | null;
+  por_cobrar: number; por_pagar: number; compensable: number; saldo_neto: number;
+  cargos_cxc: number; cargos_cxp: number;
+};
+type ComprobanteCompensacion = {
+  id: string; fecha: string; monto: number; cxc_antes: number; cxp_antes: number; saldo_neto: number;
+  nombre: string; identificacion: string | null;
+  cxc: Array<{ id: string; fecha: string; tipo: string; detalle: string | null; maquina: string; aplicado: number }>;
+  cxp: Array<{ id: string; fecha: string; acreedor: string; detalle: string | null; aplicado: number }>;
+};
 
 // Estandarización de mantenimientos: un egreso de REPARACION_MANT se registra con
 // el «Detalle de Intervención» (tipo, repuesto/trabajo y descripción) y queda como
@@ -340,7 +351,7 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
   }
 
   if (section === "cxp") {
-    return <section className="panelGrid">{flashEl}<CxPView onNotify={notify} onError={(m) => notify(m, "err")} /></section>;
+    return <section className="panelGrid">{flashEl}<CxPView nombreOperacion={nombre ?? "Campo"} onNotify={notify} onError={(m) => notify(m, "err")} /></section>;
   }
 
   if (section === "config") {
@@ -2114,6 +2125,87 @@ function CierreCajaModal({ onClose, onDone, onError }: {
   );
 }
 
+function ComprobanteCompensacionModal({ comprobante, nombreOperacion, onClose }: {
+  comprobante: ComprobanteCompensacion; nombreOperacion: string; onClose: () => void;
+}) {
+  const esc = (v: unknown) => String(v ?? "").replace(/[&<>\"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
+  const imprimir = () => {
+    const cxc = comprobante.cxc.map((x) => `<tr><td>${esc(String(x.fecha).slice(0, 10))}</td><td>${esc(x.detalle || (x.tipo === "cosecha" ? "Servicio de cosechadora" : "Servicio de flete"))}</td><td>${esc(x.maquina)}</td><td class="num">${x.aplicado.enReal()}</td></tr>`).join("");
+    const cxp = comprobante.cxp.map((x) => `<tr><td>${esc(String(x.fecha).slice(0, 10))}</td><td>${esc(x.detalle || "Cuenta por pagar")}</td><td>${esc(x.acreedor)}</td><td class="num">${x.aplicado.enReal()}</td></tr>`).join("");
+    const w = window.open("", "_blank", "width=820,height=900");
+    if (!w) return;
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Compensación · ${esc(comprobante.nombre)}</title><style>
+      @page{size:A4;margin:14mm}body{font:12px Arial;color:#111}h1{font-size:18px;margin:0}.muted{color:#555}
+      table{width:100%;border-collapse:collapse;margin:8px 0 16px}th,td{border:1px solid #ccc;padding:6px}th{background:#f3f4f6;text-align:left}.num{text-align:right}
+      .res{border:1px solid #aaa;padding:10px;margin:12px 0}.total{font-size:17px;font-weight:700}</style></head><body>
+      <h1>${esc(nombreOperacion)} · Comprobante de compensación</h1><div class="muted">N.º ${esc(comprobante.id.slice(0, 8).toUpperCase())} · ${esc(String(comprobante.fecha).slice(0, 10))}</div>
+      <p><strong>${esc(comprobante.nombre)}</strong>${comprobante.identificacion ? ` · ${esc(comprobante.identificacion)}` : ""}</p>
+      <div class="res"><div>Le debían a Transporte: <b>$ ${comprobante.cxc_antes.enReal()}</b></div><div>Transporte le debía: <b>$ ${comprobante.cxp_antes.enReal()}</b></div><div class="total">Compensado sin mover efectivo: $ ${comprobante.monto.enReal()}</div><div>Saldo neto restante: <b>$ ${Math.abs(comprobante.saldo_neto).enReal()}</b> ${comprobante.saldo_neto > 0 ? "a favor de Transporte" : comprobante.saldo_neto < 0 ? "a favor de la persona" : "· cuenta saldada"}</div></div>
+      <h3>Deudas por cobrar aplicadas</h3><table><thead><tr><th>Fecha</th><th>Detalle</th><th>Máquina</th><th class="num">Aplicado</th></tr></thead><tbody>${cxc}</tbody></table>
+      <h3>Deudas por pagar aplicadas</h3><table><thead><tr><th>Fecha</th><th>Detalle</th><th>Acreedor</th><th class="num">Aplicado</th></tr></thead><tbody>${cxp}</tbody></table>
+      <p class="muted">Este comprobante cruza obligaciones de la misma persona. Conserva por separado los documentos originales y no representa entrada ni salida de efectivo.</p></body></html>`);
+    w.document.close(); w.focus(); w.print();
+  };
+  return createPortal(
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.62)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100, padding: 16 }}>
+      <div className="tablePanel" onClick={(e) => e.stopPropagation()} style={{ width: "min(820px, 100%)", maxHeight: "calc(100vh - 32px)", overflow: "auto", margin: 0 }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <div><h2 style={{ margin: 0 }}>Cuenta compensada</h2><strong>{comprobante.nombre}</strong></div>
+          <button type="button" className="primary" style={{ marginLeft: "auto" }} onClick={imprimir}>🖨️ Imprimir comprobante</button>
+          <button type="button" onClick={onClose}>Cerrar</button>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 8, marginTop: 14 }}>
+          <div className="totalBox"><span>POR COBRAR</span><strong>{money(comprobante.cxc_antes)}</strong></div>
+          <div className="totalBox"><span>POR PAGAR</span><strong>{money(comprobante.cxp_antes)}</strong></div>
+          <div className="totalBox" style={{ background: "#ecfdf5", borderColor: "#bbf7d0" }}><span>COMPENSADO</span><strong style={{ color: "#15803d" }}>{money(comprobante.monto)}</strong></div>
+        </div>
+        <h3>Detalle de lo que debía pagar la persona</h3>
+        <ul>{comprobante.cxc.map((x) => <li key={x.id}>{String(x.fecha).slice(0, 10)} · {x.detalle || x.tipo} · {x.maquina}: <b>{money(x.aplicado)}</b></li>)}</ul>
+        <h3>Detalle de lo que Transporte debía pagarle</h3>
+        <ul>{comprobante.cxp.map((x) => <li key={x.id}>{String(x.fecha).slice(0, 10)} · {x.detalle || "Cuenta por pagar"}: <b>{money(x.aplicado)}</b></li>)}</ul>
+        <p style={{ fontWeight: 700 }}>Saldo neto restante: {money(Math.abs(comprobante.saldo_neto))} {comprobante.saldo_neto > 0 ? "a favor de Transporte" : comprobante.saldo_neto < 0 ? "a favor de la persona" : "· cuenta saldada"}</p>
+      </div>
+    </div>, document.body
+  );
+}
+
+function CuentasConsolidadasPanel({ nombreOperacion, onChanged, onNotify, onError }: {
+  nombreOperacion: string; onChanged: () => void | Promise<void>;
+  onNotify: (m: string, k?: "ok" | "err") => void; onError: (m: string) => void;
+}) {
+  const [rows, setRows] = useState<CuentaConsolidada[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [recibo, setRecibo] = useState<ComprobanteCompensacion | null>(null);
+  const cargar = useCallback(async () => {
+    try { setRows((await apiGet<{ cuentas: CuentaConsolidada[] }>("/campo/cuentas-consolidadas")).cuentas); }
+    catch (e) { onError((e as Error).message); }
+  }, [onError]);
+  useEffect(() => { cargar(); }, [cargar]);
+  const cruzables = rows.filter((r) => r.compensable > 0.005);
+  if (!cruzables.length) return null;
+  const compensar = async (r: CuentaConsolidada) => {
+    if (!window.confirm(`Se compensarán ${money(r.compensable)} entre lo que ${r.nombre} debe y lo que Transporte le debe. No se moverá efectivo. ¿Continuar?`)) return;
+    try {
+      setBusy(r.cliente_id);
+      const c = await apiPost<ComprobanteCompensacion>(`/campo/cuentas-consolidadas/${r.cliente_id}/compensar`, { fecha: hoy() });
+      setRecibo(c); await cargar(); await onChanged(); onNotify(`Cuenta de ${r.nombre} compensada por ${money(c.monto)}.`);
+    } catch (e) { onError((e as Error).message); } finally { setBusy(null); }
+  };
+  return <>
+    <div className="tablePanel" style={{ gridColumn: "1 / -1", borderColor: "#93c5fd", background: "#f8fbff" }}>
+      <h2 style={{ margin: 0 }}>⚖️ Cuentas de la misma persona</h2>
+      <p className="muted" style={{ margin: "4px 0 10px" }}>El sistema encontró personas que aparecen en CxC y CxP. Se muestra una sola cuenta neta; la compensación conserva el detalle y no mueve dinero de Caja.</p>
+      <div style={{ overflowX: "auto" }}><table className="cajaTable"><thead><tr><th>Persona</th><th className="num">Le deben a Transporte</th><th className="num">Transporte le debe</th><th className="num">Saldo único</th><th>Acción</th></tr></thead><tbody>
+        {cruzables.map((r) => <tr key={r.cliente_id}><td><strong>{r.nombre}</strong><small className="muted" style={{ display: "block" }}>{r.cargos_cxc} cargo(s) CxC · {r.cargos_cxp} deuda(s) CxP</small></td>
+          <td className="num">{money(r.por_cobrar)}</td><td className="num">{money(r.por_pagar)}</td>
+          <td className="num" style={{ fontWeight: 800, color: r.saldo_neto >= 0 ? "#b45309" : "#b91c1c" }}>{money(Math.abs(r.saldo_neto))}<small style={{ display: "block" }}>{r.saldo_neto > 0 ? "a cobrar" : r.saldo_neto < 0 ? "a pagar" : "saldada"}</small></td>
+          <td><button type="button" className="primary" disabled={busy === r.cliente_id} onClick={() => { void compensar(r); }}>{busy === r.cliente_id ? "Compensando…" : `Compensar ${money(r.compensable)}`}</button></td></tr>)}
+      </tbody></table></div>
+    </div>
+    {recibo && <ComprobanteCompensacionModal comprobante={recibo} nombreOperacion={nombreOperacion} onClose={() => setRecibo(null)} />}
+  </>;
+}
+
 // ── 📥 Cuentas por Cobrar (Transporte): lee los saldos de campo_servicios ─────
 // (misma fuente única que Clientes/Reportes → cero doble contabilidad) y permite
 // registrar un abono directo del agricultor que se reparte FIFO entre sus servicios.
@@ -2139,6 +2231,7 @@ function CxCView({ nombreOperacion, matrizName, onNotify, onError }: {
   const cajaCuenta = cuentas.find((cuenta) => cuenta.nombre.trim().toUpperCase() === "CAJA");
   return (
     <>
+      <CuentasConsolidadasPanel nombreOperacion={nombreOperacion} onChanged={cargar} onNotify={onNotify} onError={onError} />
       <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <h2 style={{ margin: 0 }}>📥 Cuentas por Cobrar <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· fletes y cosecha pendientes</span></h2>
@@ -2185,8 +2278,8 @@ function CxCView({ nombreOperacion, matrizName, onNotify, onError }: {
 }
 
 // ── 📤 Cuentas por Pagar (Transporte): deudas operativas propias (CRUD) ───────
-type CxP = { id: string; fecha: string; acreedor: string; concepto: string | null; monto: number; pagado: number; saldo: number; estado: "pendiente" | "pagado" };
-function CxPView({ onNotify, onError }: { onNotify: (m: string, k?: "ok" | "err") => void; onError: (m: string) => void; }) {
+type CxP = { id: string; fecha: string; acreedor: string; cliente_id: string | null; cliente_nombre: string | null; concepto: string | null; monto: number; pagado: number; saldo: number; estado: "pendiente" | "pagado" };
+function CxPView({ nombreOperacion, onNotify, onError }: { nombreOperacion: string; onNotify: (m: string, k?: "ok" | "err") => void; onError: (m: string) => void; }) {
   const [data, setData] = useState<{ cuentas: CxP[]; total_pendiente: number } | null>(null);
   const [cuentas, setCuentas] = useState<Cuenta[]>([]);
   const [nuevo, setNuevo] = useState(false);
@@ -2214,6 +2307,7 @@ function CxPView({ onNotify, onError }: { onNotify: (m: string, k?: "ok" | "err"
   const rows = data?.cuentas ?? [];
   return (
     <>
+      <CuentasConsolidadasPanel nombreOperacion={nombreOperacion} onChanged={cargar} onNotify={onNotify} onError={onError} />
       <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <h2 style={{ margin: 0 }}>📤 Cuentas por Pagar <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· deudas operativas de Transporte</span></h2>
@@ -2235,7 +2329,7 @@ function CxPView({ onNotify, onError }: { onNotify: (m: string, k?: "ok" | "err"
               ) : rows.map((c) => (
                 <tr key={c.id}>
                   <td>{c.fecha?.slice(0, 10)}</td>
-                  <td style={{ fontWeight: 600 }}>{c.acreedor}</td>
+                  <td style={{ fontWeight: 600 }}>{c.acreedor}{c.cliente_id ? <small className="muted" style={{ display: "block" }}>🔗 Misma persona del directorio</small> : null}</td>
                   <td className="muted">{c.concepto || "—"}</td>
                   <td className="num">{money(c.monto)}</td>
                   <td className="num" style={{ color: "#15803d" }}>{money(c.pagado)}</td>
@@ -2273,14 +2367,16 @@ function CxPView({ onNotify, onError }: { onNotify: (m: string, k?: "ok" | "err"
 function NuevaCxPModal({ onClose, onDone, onError }: {
   onClose: () => void; onDone: () => void | Promise<void>; onError: (m: string) => void;
 }) {
-  const [f, setF] = useState({ fecha: hoy(), acreedor: "", concepto: "", monto: "" });
+  const [f, setF] = useState({ fecha: hoy(), acreedor: "", cliente_id: "", concepto: "", monto: "" });
+  const [clientes, setClientes] = useState<Cliente[]>([]);
   const [busy, setBusy] = useState(false);
+  useEffect(() => { apiGet<Cliente[]>("/campo/clientes").then(setClientes).catch(() => setClientes([])); }, []);
   async function submit() {
     try {
       setBusy(true);
       if (f.acreedor.trim().length < 2) throw new Error("Indica el proveedor/acreedor");
       if (!(Number(f.monto) > 0)) throw new Error("Indica el monto total");
-      await apiPost("/campo/cxp", { fecha: f.fecha, acreedor: f.acreedor.trim(), concepto: f.concepto.trim() || undefined, monto: Number(f.monto) });
+      await apiPost("/campo/cxp", { fecha: f.fecha, acreedor: f.acreedor.trim(), cliente_id: f.cliente_id || undefined, concepto: f.concepto.trim() || undefined, monto: Number(f.monto) });
       await onDone();
     } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
   }
@@ -2289,8 +2385,18 @@ function NuevaCxPModal({ onClose, onDone, onError }: {
       <form className="formPanel" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submit(); }} style={{ maxWidth: 460, width: "100%", margin: 0 }}>
         <h2 style={{ marginTop: 0 }}>＋ Nueva Cuenta por Pagar</h2>
         <label><span>Fecha</span><input type="date" value={f.fecha} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
+        <label><span>¿Es una persona que también puede deberle a Transporte?</span>
+          <select value={f.cliente_id} onChange={(e) => {
+            const cliente = clientes.find((c) => c.id === e.target.value);
+            setF({ ...f, cliente_id: e.target.value, acreedor: cliente?.nombre ?? f.acreedor });
+          }}>
+            <option value="">No / proveedor independiente</option>
+            {clientes.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+          </select>
+          <small className="muted">Al elegirla, CxC y CxP se mostrarán como una sola cuenta neta.</small>
+        </label>
         <label><span>Proveedor / Acreedor <span style={{ color: "#ef4444" }}>*</span></span>
-          <input type="text" autoFocus value={f.acreedor} onChange={(e) => setF({ ...f, acreedor: e.target.value })} placeholder="Ej: Taller Mecánico / Gasolinera / Chofer Juan" />
+          <input type="text" autoFocus value={f.acreedor} readOnly={Boolean(f.cliente_id)} onChange={(e) => setF({ ...f, acreedor: e.target.value })} placeholder="Ej: Taller Mecánico / Gasolinera / Chofer Juan" />
         </label>
         <label><span>Concepto</span>
           <input type="text" value={f.concepto} onChange={(e) => setF({ ...f, concepto: e.target.value })} placeholder="Ej: Repuestos / Combustible / Mano de obra" />

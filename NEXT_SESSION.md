@@ -49,6 +49,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### ⚖️ Cuenta única CxC/CxP en Transporte y Cosechadora (2026-10-12)
+
+- `campo_cxp.cliente_id` enlaza de forma opcional la deuda por pagar con la misma persona de `campo_clientes`; la migración `20261090` vinculó históricos solo por coincidencia exacta normalizada. Nueva CxP permite elegir expresamente una persona del directorio; egresos a crédito y saldos iniciales también enlazan cuando el nombre coincide exactamente.
+- En Cuentas por Cobrar y Cuentas por Pagar aparece «Cuentas de la misma persona»: muestra bruto CxC, bruto CxP y un único saldo neto. `POST /campo/cuentas-consolidadas/:clienteId/compensar` aplica FIFO ambos lados dentro de una transacción usando `CRUCE PILADORA`; entradas y salidas son iguales, por lo que no mueve Caja ni cambia el saldo de la cuenta puente.
+- `campo_compensaciones` y `campo_movimientos.compensacion_id` conservan auditoría. El comprobante detalla cada flete/cosecha aplicado y cada deuda CxP aplicada, explica el saldo restante y se puede imprimir/PDF; endpoint de reimpresión `/campo/cuentas-consolidadas/comprobantes/:id`.
+- Seguridad concurrente: bloquea persona, servicios y CxP antes de releer saldos; no aproxima nombres ni mezcla personas parecidas. Pruebas: backend 218/218, builds backend/frontend, preflight sin errores críticos y simulacro `campo_cuentas_consolidadas.mjs` TODO OK (14 controles; $175 CxC - $90 CxP = $85; Caja y puente sin cambio).
+
 ### ⚖️📒 Báscula y Fomentos leen los mismos nombres (2026-10-12, pedido del dueño)
 
 - Causa: el ticket solo se enlazaba al llegar y con nombre EXACTO; si el agricultor se registraba después (fomento) o había tildes («JESÚS» vs «JESUS») quedaba «Sin vincular» para siempre. `services/agricultor-nombres.ts`: `nombreNormalSql`/`nombreNormal` (sin tildes/ñ, mayúsculas, un espacio), `vincularTicketsPendientes` (enlaza pendientes cuyo nombre coincide con UN solo agricultor activo o alias; nunca adivina), `nombresSoloEnBascula`, `agricultorPorNombre`.

@@ -7,6 +7,7 @@ import { ApiError } from "../../http/error-handler.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { crearParteDesdeBascula } from "../../services/campo-flete-bascula.js";
 import { calcularNominaCampo, tipoServicioPorActivo, totalFilaNomina, valeEsDeOperador, type CampoUnidadNomina } from "../../utils/campo.js";
+import { repartirCompensacion, saldoNeto } from "../../utils/campo-cuentas.js";
 import { armarResultado, informativo, lineasDelPeriodo, notasDelPeriodo, qqPorActivo, rangoMes } from "../../services/campo-resultados.js";
 import { alertasDeCampo } from "../../services/campo-alertas.js";
 
@@ -674,8 +675,9 @@ campoRouter.post("/movimientos", asyncRoute(async (req, res) => {
     }
     const concepto = [catNombre, parsed.concepto?.trim()].filter(Boolean).join(" · ") || null;
     const nuevo = (await pool.query(
-      `INSERT INTO campo_cxp (fecha, acreedor, concepto, monto, created_by, categoria_id, activo_id, vence, origen, lectura, unidad_lectura)
-       VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, 'EGRESO_CREDITO', $9, $10) RETURNING id`,
+      `INSERT INTO campo_cxp (fecha, acreedor, concepto, monto, created_by, categoria_id, activo_id, vence, origen, lectura, unidad_lectura, cliente_id)
+       VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, 'EGRESO_CREDITO', $9, $10,
+               (SELECT id FROM campo_clientes WHERE lower(trim(nombre)) = lower(trim($2)) LIMIT 1)) RETURNING id`,
       [parsed.fecha ?? null, proveedor.toUpperCase(), concepto, parsed.monto, userId(req),
        parsed.categoria_id ?? null, parsed.activo_id ?? null, parsed.vence ?? null, lectura, unidadLectura]
     )).rows[0];
@@ -2078,17 +2080,160 @@ campoRouter.post("/cxc/abono", asyncRoute(async (req, res) => {
   res.status(201).json(result);
 }));
 
+// ── Cuenta consolidada CxC/CxP por persona ──────────────────────────────────
+// No fusiona ni elimina documentos: presenta el neto y permite compensar ambos
+// saldos mediante la cuenta puente, dejando cada aplicación trazable.
+campoRouter.get("/cuentas-consolidadas", asyncRoute(async (_req, res) => {
+  const rows = (await pool.query(
+    `WITH cxc AS (
+       SELECT s.cliente_id, SUM(v.saldo_pendiente)::float AS por_cobrar,
+              COUNT(*) FILTER (WHERE v.saldo_pendiente > 0.005)::int AS cargos_cxc
+         FROM campo_servicios s JOIN campo_servicios_saldo v ON v.id = s.id
+        WHERE v.saldo_pendiente > 0.005 GROUP BY s.cliente_id
+     ), cxp AS (
+       SELECT p.cliente_id,
+              SUM(p.monto - COALESCE(m.pagado, 0))::float AS por_pagar,
+              COUNT(*) FILTER (WHERE p.monto - COALESCE(m.pagado, 0) > 0.005)::int AS cargos_cxp
+         FROM campo_cxp p
+         LEFT JOIN (SELECT cxp_id, SUM(monto) AS pagado FROM campo_movimientos
+                     WHERE signo = 'salida' AND cxp_id IS NOT NULL GROUP BY cxp_id) m ON m.cxp_id = p.id
+        WHERE p.cliente_id IS NOT NULL AND p.monto - COALESCE(m.pagado, 0) > 0.005
+        GROUP BY p.cliente_id
+     )
+     SELECT c.id AS cliente_id, c.nombre, c.identificacion,
+            COALESCE(x.por_cobrar, 0)::float AS por_cobrar,
+            COALESCE(p.por_pagar, 0)::float AS por_pagar,
+            COALESCE(x.cargos_cxc, 0)::int AS cargos_cxc,
+            COALESCE(p.cargos_cxp, 0)::int AS cargos_cxp
+       FROM campo_clientes c
+       LEFT JOIN cxc x ON x.cliente_id = c.id
+       LEFT JOIN cxp p ON p.cliente_id = c.id
+      WHERE COALESCE(x.por_cobrar, 0) > 0.005 OR COALESCE(p.por_pagar, 0) > 0.005
+      ORDER BY abs(COALESCE(x.por_cobrar, 0) - COALESCE(p.por_pagar, 0)) DESC, c.nombre`
+  )).rows.map((r) => ({ ...r, ...saldoNeto(r.por_cobrar, r.por_pagar) }));
+  const totales = rows.reduce((a, r) => ({
+    por_cobrar: Math.round((a.por_cobrar + r.por_cobrar) * 100) / 100,
+    por_pagar: Math.round((a.por_pagar + r.por_pagar) * 100) / 100,
+    saldo_neto: Math.round((a.saldo_neto + r.saldo_neto) * 100) / 100
+  }), { por_cobrar: 0, por_pagar: 0, saldo_neto: 0 });
+  res.json({ cuentas: rows, totales });
+}));
+
+async function leerComprobanteCompensacion(db: Q, id: string) {
+  const cabecera = (await db.query(
+    `SELECT x.id, x.fecha, x.monto::float AS monto, x.cxc_antes::float AS cxc_antes,
+            x.cxp_antes::float AS cxp_antes, x.created_at, c.id AS cliente_id,
+            c.nombre, c.identificacion
+       FROM campo_compensaciones x JOIN campo_clientes c ON c.id = x.cliente_id
+      WHERE x.id = $1`, [id]
+  )).rows[0];
+  if (!cabecera) throw new ApiError(404, "Comprobante de compensación no encontrado.");
+  const cxc = (await db.query(
+    `SELECT s.id, s.fecha, s.tipo, s.notas AS detalle, a.nombre AS maquina,
+            m.monto::float AS aplicado
+       FROM campo_movimientos m JOIN campo_servicios s ON s.id = m.servicio_id
+       JOIN campo_activos a ON a.id = s.activo_id
+      WHERE m.compensacion_id = $1 AND m.signo = 'entrada'
+      ORDER BY s.fecha, s.created_at`, [id]
+  )).rows;
+  const cxp = (await db.query(
+    `SELECT p.id, p.fecha, p.concepto AS detalle, p.acreedor, m.monto::float AS aplicado
+       FROM campo_movimientos m JOIN campo_cxp p ON p.id = m.cxp_id
+      WHERE m.compensacion_id = $1 AND m.signo = 'salida'
+      ORDER BY p.fecha, p.created_at`, [id]
+  )).rows;
+  return { ...cabecera, saldo_neto: Math.round((cabecera.cxc_antes - cabecera.cxp_antes) * 100) / 100, cxc, cxp };
+}
+
+campoRouter.get("/cuentas-consolidadas/comprobantes/:id", asyncRoute(async (req, res) => {
+  res.json(await leerComprobanteCompensacion(pool, String(req.params.id)));
+}));
+
+campoRouter.post("/cuentas-consolidadas/:clienteId/compensar", asyncRoute(async (req, res) => {
+  const body = z.object({ fecha: fechaSchema.optional() }).parse(req.body);
+  const comprobante = await inTransaction(async (client) => {
+    const persona = (await client.query(
+      "SELECT id, nombre FROM campo_clientes WHERE id = $1 FOR UPDATE", [req.params.clienteId]
+    )).rows[0];
+    if (!persona) throw new ApiError(404, "Persona no encontrada.");
+
+    // Vincula deudas históricas cuyo nombre coincide exactamente. No aproxima ni
+    // adivina nombres parecidos, para evitar compensar a dos personas distintas.
+    await client.query(
+      `UPDATE campo_cxp SET cliente_id = $1
+        WHERE cliente_id IS NULL AND lower(trim(acreedor)) = lower(trim($2))`,
+      [persona.id, persona.nombre]
+    );
+    await client.query(
+      "SELECT id FROM campo_servicios WHERE cliente_id = $1 ORDER BY fecha, created_at FOR UPDATE",
+      [persona.id]
+    );
+    await client.query(
+      "SELECT id FROM campo_cxp WHERE cliente_id = $1 ORDER BY fecha, created_at FOR UPDATE",
+      [persona.id]
+    );
+    const servicios = (await client.query(
+      `SELECT s.id, s.fecha, s.tipo, s.notas, a.nombre AS maquina, v.saldo_pendiente::float AS saldo
+         FROM campo_servicios s JOIN campo_servicios_saldo v ON v.id = s.id
+         JOIN campo_activos a ON a.id = s.activo_id
+        WHERE s.cliente_id = $1 AND v.saldo_pendiente > 0.005
+        ORDER BY s.fecha, s.created_at`, [persona.id]
+    )).rows;
+    const deudas = (await client.query(
+      `SELECT p.id, p.fecha, p.acreedor, p.concepto,
+              (p.monto - COALESCE(SUM(m.monto) FILTER (WHERE m.signo = 'salida'), 0))::float AS saldo
+         FROM campo_cxp p LEFT JOIN campo_movimientos m ON m.cxp_id = p.id
+        WHERE p.cliente_id = $1
+        GROUP BY p.id
+       HAVING p.monto - COALESCE(SUM(m.monto) FILTER (WHERE m.signo = 'salida'), 0) > 0.005
+        ORDER BY p.fecha, p.created_at`, [persona.id]
+    )).rows;
+    const cxc = Math.round(servicios.reduce((s, x) => s + Number(x.saldo), 0) * 100) / 100;
+    const cxp = Math.round(deudas.reduce((s, x) => s + Number(x.saldo), 0) * 100) / 100;
+    const monto = Math.round(Math.min(cxc, cxp) * 100) / 100;
+    if (!(monto > 0.005)) throw new ApiError(409, "Esta persona no tiene saldos pendientes en ambos lados para compensar.");
+    const puente = (await client.query("SELECT id FROM campo_cuentas WHERE nombre = $1", [CUENTA_INTERNA_CRUCE])).rows[0];
+    if (!puente) throw new ApiError(409, "Falta la cuenta interna CRUCE PILADORA.");
+    const comp = (await client.query(
+      `INSERT INTO campo_compensaciones (fecha, cliente_id, monto, cxc_antes, cxp_antes, created_by)
+       VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6) RETURNING id`,
+      [body.fecha ?? null, persona.id, monto, cxc, cxp, userId(req)]
+    )).rows[0];
+    for (const a of repartirCompensacion(servicios, monto)) {
+      await client.query(
+        `INSERT INTO campo_movimientos
+           (fecha, cuenta_id, signo, monto, concepto, servicio_id, cliente_id, compensacion_id, created_by)
+         VALUES (COALESCE($1::date, CURRENT_DATE), $2, 'entrada', $3,
+                 'Compensación CxC contra CxP', $4, $5, $6, $7)`,
+        [body.fecha ?? null, puente.id, a.monto, a.id, persona.id, comp.id, userId(req)]
+      );
+    }
+    for (const a of repartirCompensacion(deudas, monto)) {
+      await client.query(
+        `INSERT INTO campo_movimientos
+           (fecha, cuenta_id, signo, monto, concepto, cxp_id, cliente_id, compensacion_id, created_by)
+         VALUES (COALESCE($1::date, CURRENT_DATE), $2, 'salida', $3,
+                 'Compensación CxP contra CxC', $4, $5, $6, $7)`,
+        [body.fecha ?? null, puente.id, a.monto, a.id, persona.id, comp.id, userId(req)]
+      );
+    }
+    return leerComprobanteCompensacion(client, comp.id);
+  });
+  res.status(201).json(comprobante);
+}));
+
 // ── Cuentas por Pagar (CxP) de Transporte: deudas operativas propias ─────────
 // Mantenedor independiente (talleres, repuestos, gasolinera, choferes…). El saldo
 // y el estado se DERIVAN de los abonos (campo_movimientos 'salida' con cxp_id).
 const CXP_SELECT = `
   SELECT c.id, c.fecha, c.acreedor, c.concepto, c.monto::float AS monto, c.created_at,
-    c.categoria_id, c.activo_id, c.vence, c.origen,
+    c.categoria_id, c.activo_id, c.vence, c.origen, c.cliente_id, cl.nombre AS cliente_nombre,
     COALESCE((SELECT SUM(m.monto) FROM campo_movimientos m WHERE m.cxp_id = c.id AND m.signo = 'salida'), 0)::float AS pagado,
     (c.monto - COALESCE((SELECT SUM(m.monto) FROM campo_movimientos m WHERE m.cxp_id = c.id AND m.signo = 'salida'), 0))::float AS saldo,
     CASE WHEN c.monto - COALESCE((SELECT SUM(m.monto) FROM campo_movimientos m WHERE m.cxp_id = c.id AND m.signo = 'salida'), 0) <= 0.005
          THEN 'pagado' ELSE 'pendiente' END AS estado
-  FROM campo_cxp c`;
+  FROM campo_cxp c
+  LEFT JOIN campo_clientes cl ON cl.id = c.cliente_id`;
 
 campoRouter.get("/cxp", asyncRoute(async (req, res) => {
   const q = z.object({ estado: z.enum(["pendiente", "pagado"]).optional() }).parse(req.query);
@@ -2102,13 +2247,19 @@ campoRouter.post("/cxp", asyncRoute(async (req, res) => {
   const body = z.object({
     fecha: fechaSchema.optional(),
     acreedor: z.string().min(1).max(160),
+    cliente_id: z.string().uuid().nullable().optional(),
     concepto: z.string().max(400).optional(),
     monto: z.number().positive()
   }).parse(req.body);
+  const cliente = body.cliente_id
+    ? (await pool.query("SELECT id, nombre FROM campo_clientes WHERE id = $1", [body.cliente_id])).rows[0]
+    : (await pool.query("SELECT id, nombre FROM campo_clientes WHERE lower(trim(nombre)) = lower(trim($1)) LIMIT 1", [body.acreedor])).rows[0];
+  if (body.cliente_id && !cliente) throw new ApiError(404, "La persona seleccionada ya no existe en el directorio.");
   const row = (await pool.query(
-    `INSERT INTO campo_cxp (fecha, acreedor, concepto, monto, created_by)
-     VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5) RETURNING id`,
-    [body.fecha ?? null, body.acreedor.trim(), body.concepto?.trim() || null, body.monto, userId(req)]
+    `INSERT INTO campo_cxp (fecha, acreedor, cliente_id, concepto, monto, created_by)
+     VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6) RETURNING id`,
+    [body.fecha ?? null, cliente?.nombre ?? body.acreedor.trim(), cliente?.id ?? null,
+     body.concepto?.trim() || null, body.monto, userId(req)]
   )).rows[0];
   const full = (await pool.query(`${CXP_SELECT} WHERE c.id = $1`, [row.id])).rows[0];
   res.status(201).json(full);
@@ -2523,8 +2674,9 @@ campoRouter.post("/saldos-iniciales/pagar", asyncRoute(async (req, res) => {
     nota: z.string().trim().max(300).optional()
   }).parse(req.body);
   const row = (await pool.query(
-    `INSERT INTO campo_cxp (fecha, acreedor, concepto, monto, created_by, origen)
-     VALUES ($1, $2, $3, $4, $5, 'SALDO_INICIAL') RETURNING id`,
+    `INSERT INTO campo_cxp (fecha, acreedor, concepto, monto, created_by, origen, cliente_id)
+     VALUES ($1, $2, $3, $4, $5, 'SALDO_INICIAL',
+             (SELECT id FROM campo_clientes WHERE lower(trim(nombre)) = lower(trim($2)) LIMIT 1)) RETURNING id`,
     [body.fecha, body.acreedor.toUpperCase(), `Saldo inicial (deuda de antes del sistema)${body.nota ? ` · ${body.nota}` : ""}`,
      Math.round(body.monto * 100) / 100, userId(req)]
   )).rows[0];
