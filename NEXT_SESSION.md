@@ -133,7 +133,17 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - APK de entrega actualizado a v11.51 (code 242). Verificacion: build limpio, lint sin errores bloqueantes y 44 tests OK; SHA-256 `37ED42FF5496FFEBA640B9D1CAF13202885C5C240BE07DB4F547F454CBCDB088`.
 - Firma de instalacion comprobada contra v11.50: mismo certificado Android Debug SHA-256 `92da81b8ad2ad149fdbd399dcceffb0099f5eb76f6edb24843bb5266663e9210`, por lo que Android puede actualizar encima conservando los datos.
 - Respaldo previo de fuente y APK: `BASCULA\Respaldos\actualizacion-segura-20261011_160801`.
-- PENDIENTE REAL: instalar v11.51 ENCIMA de v11.50, sin desinstalar. Al abrir, confirmar el mensaje automatico; debe conservar 380 tickets y los contadores Principal 385 / Particular 2. Para futuras versiones, ejecutar primero `Preparar actualizacion`.
+- CONFIRMADO EN TABLET (2026-10-12): v11.51 se instalo encima sin desinstalar y mostro el aviso de verificacion correcta. Para futuras versiones ya esta disponible `Preparar actualizacion`.
+
+### 👁️ Vigilancia diaria BASCULA v11.52 (2026-10-12)
+- Se ejecuta como maximo una vez cada 20 horas, 15 segundos despues de cargar Room para dar tiempo al respaldo y al SYNC inicial. Si todo esta correcto permanece silenciosa; solo abre un aviso cuando existe una accion concreta.
+- Revisa en solo lectura: existencia/firma/conteo y antiguedad (maximo 48 h) de `bascula_respaldo_automatico.json`; siguiente numero contra el maximo real de Room; pendientes ERP; coincidencia principal local/ERP cuando el servidor responde; trabajos PENDIENTE/ERROR y cuantos tienen mas de 24 h.
+- No prueba la impresora, no reintenta trabajos, no sincroniza por su cuenta y no consulta Firebase. Una Epson apagada no genera alerta en esta vigilancia.
+- `⋮ > Soporte y diagnostico > Vigilancia diaria` muestra el ultimo resultado y permite `REVISAR AHORA`. Si encuentra problemas ofrece acceso a SYNC ERP o Diagnostico integral; el resultado queda registrado localmente.
+- APK de entrega actualizado a v11.52 (code 243). Verificacion: build limpio, lint sin errores bloqueantes y 49 tests OK; SHA-256 `C2DFF6E6888040CF1CA971B766480C785727CE485607070C579361E531F84E20`.
+- Firma compatible confirmada: certificado SHA-256 `92da81b8ad2ad149fdbd399dcceffb0099f5eb76f6edb24843bb5266663e9210`.
+- Respaldo previo de fuente y APK: `BASCULA\Respaldos\vigilancia-diaria-20261012_120204`.
+- PENDIENTE REAL: en v11.51 ejecutar primero `⋮ > Preparar actualizacion`; solo si declara la copia verificada, instalar v11.52 ENCIMA sin desinstalar. Confirmar `Actualizacion correcta` y luego abrir manualmente Vigilancia diaria una vez.
 
 ### 💰 Caja auditada (2026-10-09)
 - Migración `20261085`: `cash_movements.medio` (EFECTIVO/BANCO) con trigger por defecto (caja BANCO → BANCO; resto → EFECTIVO; un contra-asiento copia el medio del original) + backfill; columnas de arqueo en cash_registers; categorías FALTANTE_CAJA / SOBRANTE_CAJA inactivas (solo las usa el cierre).
