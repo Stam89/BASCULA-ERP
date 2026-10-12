@@ -15,6 +15,7 @@ import { dinero, notificar } from "../../services/notificaciones.js";
 import { vidaUtilPorTipo } from "../../services/activos.js";
 import ExcelJS from "exceljs";
 import { avisarSobregiro, medioParaCaja, saldosDeCaja } from "../../services/caja.js";
+import { revertirMovimientoDePrestamo } from "./prestamos.js";
 import type { PoolClient } from "pg";
 
 export const cashRouter = Router();
@@ -548,6 +549,8 @@ cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(a
     if (m.reversal_of) throw new ApiError(400, "No se puede anular un contra-asiento.");
     if (m.reversed_at) throw new ApiError(400, "Este movimiento ya fue anulado.");
     if (m.reference_type === "arqueo") throw new ApiError(409, "El faltante/sobrante del arqueo es parte del cierre de esa caja: no se anula.");
+    // Préstamos del banco: anular el pago de una cuota la deja pendiente; la entrada del dinero se anula desde el préstamo.
+    await revertirMovimientoDePrestamo(client, m);
 
     // El contra-asiento va a la caja donde está el dinero HOY: si la caja del movimiento ya se cerró, a la abierta
     // del mismo accionista (antes caía en la caja cerrada y cambiaba su saldo después del cierre).

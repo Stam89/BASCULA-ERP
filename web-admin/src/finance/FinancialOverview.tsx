@@ -19,7 +19,7 @@ export type FinancialOverviewData = {
       no_corriente: { activos_fijos: number; depreciacion_acumulada: number; total: number };
       total: number;
     };
-    pasivo: { corriente: { cuentas_por_pagar: number }; total: number };
+    pasivo: { corriente: { cuentas_por_pagar: number; prestamos_bancarios?: number }; no_corriente?: { prestamos_bancarios: number }; total: number };
     patrimonio: { capital_social: number; resultados_acumulados: number; resultado_ejercicio: number; ajuste_apertura: number; total: number };
     cuadre: number;
     cuentas_al_dia_de_hoy?: boolean;
@@ -29,6 +29,7 @@ export type FinancialOverviewData = {
     costo_ventas: { mercaderia_vendida: number; combustible_secado: number; servicios_recibidos?: number; total: number };
     utilidad_bruta: number; margen_bruto_pct: number;
     gastos_operativos: { gastos_generales: number; mano_obra: number; depreciacion: number; total: number };
+    gastos_financieros?: { intereses_prestamos: number; otros_cargos_prestamos: number; total: number };
     utilidad_neta: number; margen_neto_pct: number;
   };
   indicadores: Record<string, Indicator>;
@@ -124,7 +125,10 @@ export default function FinancialOverview({ data, onOpenCostDetail }: { data: Fi
           <tr style={{ fontWeight: 700 }}><td>Total activo corriente</td><td className="num">{money(data.balance.activo.corriente.total)}</td></tr>
           <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>ACTIVO NO CORRIENTE</td></tr><tr><td>Propiedad, planta y equipo</td><td className="num">{money(data.balance.activo.no_corriente.activos_fijos)}</td></tr><tr><td>(-) Depreciación acumulada</td><td className="num">{money(data.balance.activo.no_corriente.depreciacion_acumulada)}</td></tr>
           <tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border-strong)" }}><td>TOTAL ACTIVO</td><td className="num">{money(data.balance.activo.total)}</td></tr>
-          <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>PASIVO</td></tr><tr><td>Cuentas por pagar</td><td className="num">{money(data.balance.pasivo.corriente.cuentas_por_pagar)}</td></tr><tr style={{ fontWeight: 700 }}><td>Total pasivo</td><td className="num">{money(data.balance.pasivo.total)}</td></tr>
+          <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>PASIVO</td></tr><tr><td>Cuentas por pagar</td><td className="num">{money(data.balance.pasivo.corriente.cuentas_por_pagar)}</td></tr>
+          {(data.balance.pasivo.corriente.prestamos_bancarios ?? 0) > 0 && <tr><td>Préstamos bancarios <small className="muted">(próximos 12 meses)</small></td><td className="num">{money(data.balance.pasivo.corriente.prestamos_bancarios)}</td></tr>}
+          {(data.balance.pasivo.no_corriente?.prestamos_bancarios ?? 0) > 0 && <tr><td>Préstamos bancarios <small className="muted">(largo plazo)</small></td><td className="num">{money(data.balance.pasivo.no_corriente?.prestamos_bancarios)}</td></tr>}
+          <tr style={{ fontWeight: 700 }}><td>Total pasivo</td><td className="num">{money(data.balance.pasivo.total)}</td></tr>
           <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>PATRIMONIO</td></tr><tr><td>Capital social</td><td className="num">{money(data.balance.patrimonio.capital_social)}</td></tr><tr><td>Resultados acumulados</td><td className="num">{money(data.balance.patrimonio.resultados_acumulados)}</td></tr><tr><td>Resultado del ejercicio</td><td className="num">{money(data.balance.patrimonio.resultado_ejercicio)}</td></tr><tr><td>Ajuste de apertura <small className="muted">(antes del sistema)</small></td><td className="num">{money(data.balance.patrimonio.ajuste_apertura)}</td></tr>
           <tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border-strong)" }}><td>TOTAL PATRIMONIO</td><td className="num">{money(data.balance.patrimonio.total)}</td></tr>
         </tbody></table>
@@ -137,6 +141,11 @@ export default function FinancialOverview({ data, onOpenCostDetail }: { data: Fi
           <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>COSTO DE VENTAS</td></tr><tr><td><button type="button" className="linkBtn" onClick={() => onOpenCostDetail("mercaderia")}>Mercadería vendida 🔍</button></td><td className="num">{money(data.resultados.costo_ventas.mercaderia_vendida)}</td></tr><tr><td><button type="button" className="linkBtn" onClick={() => onOpenCostDetail("combustible")}>Combustible de secado 🔍</button></td><td className="num">{money(data.resultados.costo_ventas.combustible_secado)}</td></tr><tr><td>Servicios recibidos <small className="muted">(pilado, empaque, selección, fletes)</small></td><td className="num">{money(data.resultados.costo_ventas.servicios_recibidos ?? 0)}</td></tr>
           <tr style={{ fontWeight: 700, borderTop: "1px solid var(--c-border)" }}><td>UTILIDAD BRUTA <small className="muted">({data.resultados.margen_bruto_pct}%)</small></td><td className="num">{money(data.resultados.utilidad_bruta)}</td></tr>
           <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>GASTOS OPERATIVOS</td></tr><tr><td>Gastos generales</td><td className="num">{money(data.resultados.gastos_operativos.gastos_generales)}</td></tr><tr><td>Mano de obra</td><td className="num">{money(data.resultados.gastos_operativos.mano_obra)}</td></tr><tr><td>Depreciación</td><td className="num">{money(data.resultados.gastos_operativos.depreciacion)}</td></tr>
+          {(data.resultados.gastos_financieros?.total ?? 0) > 0 && <>
+            <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>GASTOS FINANCIEROS</td></tr>
+            <tr><td>Intereses de préstamos</td><td className="num">{money(data.resultados.gastos_financieros?.intereses_prestamos)}</td></tr>
+            {(data.resultados.gastos_financieros?.otros_cargos_prestamos ?? 0) > 0 && <tr><td>Seguros y otros cargos</td><td className="num">{money(data.resultados.gastos_financieros?.otros_cargos_prestamos)}</td></tr>}
+          </>}
           <tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border-strong)" }}><td>UTILIDAD NETA <small className="muted">({data.resultados.margen_neto_pct}%)</small></td><td className="num" style={{ color: data.resultados.utilidad_neta >= 0 ? "#15803d" : "#b91c1c" }}>{money(data.resultados.utilidad_neta)}</td></tr>
         </tbody></table>
       </div>

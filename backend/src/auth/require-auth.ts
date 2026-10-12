@@ -89,6 +89,8 @@ const WRITE_MODULES_BY_PREFIX: Record<string, AppModule[]> = {
   "campo": ["Transporte / Cosechadora"],
   // Cifras manuales y rubros del Resultado mensual (pestaña Costos Operativos).
   "resultado-mensual": ["Costos Operativos"],
+  // Préstamos bancarios (Por Pagar › Préstamos del banco): registrar y pagar cuotas.
+  "prestamos": ["Por Pagar", "Caja"],
   // Pestaña Reportes: «Apartar como arianos» y su ubicación.
   "reports": ["Reportes"]
 };
@@ -117,6 +119,7 @@ const READ_MODULES_BY_PREFIX: Record<string, ReglaLectura> = {
   "finance": { modules: ["Estados Financieros", "Caja", "Costos Operativos", "Por Pagar", "Por Cobrar"], abiertas: [/^\/bank\/accounts\/?$/] },
   "costos": { modules: ["Costos Operativos", "Caja", "Produccion", "Estados Financieros"] },
   "resultado-mensual": { modules: ["Costos Operativos", "Estados Financieros"] },
+  "prestamos": { modules: ["Por Pagar", "Caja", "Estados Financieros"] },
   "reports": { modules: ["Reportes"] },
   "labor": { modules: ["Nomina", "Caja", "Produccion", "Secadoras", "Gana", "Servicio Pilado", "Cuadrilla", "Gestión de Cuadrilla"], abiertas: [/^\/rates\/?$/] },
   "nomina-semanal": { modules: ["Nomina", "Caja"] },

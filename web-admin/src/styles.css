@@ -5745,3 +5745,56 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
   .basculaDeviceRow { grid-template-columns: 34px minmax(0, 1fr); }
   .basculaDeviceToggle { grid-column: 2; }
 }
+
+/* 🏦 Préstamos del banco (Por Pagar) */
+.prest__head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.prest__headDer { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-left: auto; }
+.prest__total { margin: 0; min-width: 170px; background: #eff6ff; border-color: #bfdbfe; }
+.prest__total strong { color: #1d4ed8; }
+.prest__vacio { margin: 10px 0 0; }
+.prest__lista { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 12px; }
+.prest__card { display: grid; gap: 6px; padding: 12px 14px; border: 1px solid var(--c-border); border-left: 4px solid #3b82f6; border-radius: 12px; background: var(--c-surface); }
+.prest__card.is-pronto { border-left-color: #f59e0b; }
+.prest__card.is-vencida { border-left-color: #dc2626; background: #fef2f2; }
+.prest__card.is-cerrado { border-left-color: #16a34a; opacity: .8; }
+.prest__cardTop { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.prest__cardTop strong { font-size: 15px; }
+.prest__datos { display: grid; gap: 2px; font-size: 12.5px; color: var(--c-text-muted); }
+.prest__datos b { color: var(--c-text); }
+.prest__prox { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--c-surface-2, #f8fafc); font-size: 13px; }
+.prest__prox em { font-style: normal; color: var(--c-text-muted); }
+.prest__card.is-vencida .prest__prox em { color: #b91c1c; font-weight: 700; }
+.prest__card.is-pronto .prest__prox em { color: #b45309; font-weight: 700; }
+.prest__prox strong { font-size: 16px; }
+.prest__alerta { color: #b91c1c; font-weight: 600; }
+.prest__acciones { display: flex; flex-wrap: wrap; gap: 8px; }
+.prest__acciones button { flex: 1 1 120px; }
+.prest__modal { max-width: 760px; width: 100%; max-height: 92vh; overflow-y: auto; }
+.prest__pago { max-width: 400px; width: 100%; }
+.prest__tipo { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+.prest__tipo label { display: flex; gap: 8px; align-items: flex-start; padding: 10px; border: 1px solid var(--c-border); border-radius: 10px; cursor: pointer; }
+.prest__tipo label.is-on { border-color: #0f766e; background: #f0fdfa; }
+.prest__tipo label span { display: grid; gap: 2px; font-size: 13px; }
+.prest__tipo small { color: var(--c-text-muted); }
+.prest__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px 12px; }
+.prest__grid label { display: grid; gap: 4px; font-size: 12.5px; font-weight: 600; }
+.prest__grid label small { font-weight: 400; }
+.prest__grid input, .prest__grid select { width: 100%; min-width: 0; }
+.prest__ancho { grid-column: 1 / -1; }
+.prest__ayuda { font-size: 12px; margin: 10px 0 6px; }
+.prest__tablaWrap { overflow-x: auto; max-height: 50vh; overflow-y: auto; border: 1px solid var(--c-border); border-radius: 8px; }
+.prest__tabla { width: 100%; font-size: 12.5px; }
+.prest__tabla input { width: 100%; min-width: 84px; padding: 4px 6px; font-size: 12.5px; }
+.prest__tabla input[type="date"] { min-width: 128px; }
+.prest__tabla tr.is-pagada td { color: var(--c-text-muted); }
+.prest__tabla tr.is-vencida td { background: #fef2f2; }
+.prest__pagoGrid { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; align-items: center; font-size: 14px; }
+.prest__pagoGrid input { width: 130px; text-align: right; }
+.prest__pagoTotal { border-top: 1px solid var(--c-border); padding-top: 8px; font-weight: 800; }
+strong.prest__pagoTotal { color: #047857; font-size: 17px; }
+.btnDanger { background: transparent; color: #b91c1c; border: 1px solid #fecaca; border-radius: 8px; padding: 7px 14px; font-weight: 700; cursor: pointer; }
+@media (max-width: 640px) {
+  .prest__tipo { grid-template-columns: 1fr; }
+  .prest__headDer { margin-left: 0; width: 100%; }
+  .prest__headDer > * { flex: 1 1 auto; }
+}

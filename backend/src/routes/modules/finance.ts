@@ -655,6 +655,8 @@ function construirExcelEstados(opts: { data: DatosEstados; activos: ActivosFijos
   ws1.addRow([]);
   seccion(ws1, "PASIVO");
   linea(ws1, "Cuentas por pagar (agricultores y proveedores)", b.pasivo.corriente.cuentas_por_pagar, { sangria: 3 });
+  linea(ws1, "Préstamos bancarios (vencen en los próximos 12 meses)", b.pasivo.corriente.prestamos_bancarios ?? 0, { sangria: 3 });
+  linea(ws1, "Préstamos bancarios (largo plazo)", b.pasivo.no_corriente?.prestamos_bancarios ?? 0, { sangria: 3 });
   linea(ws1, "TOTAL PASIVO", b.pasivo.total, { total: true });
   ws1.addRow([]);
   seccion(ws1, "PATRIMONIO");
@@ -692,6 +694,11 @@ function construirExcelEstados(opts: { data: DatosEstados; activos: ActivosFijos
   linea(ws2, "Mano de obra", e.gastos_operativos.mano_obra, { sangria: 3 });
   linea(ws2, "Depreciación", e.gastos_operativos.depreciacion, { sangria: 3 });
   linea(ws2, "Total gastos operativos", e.gastos_operativos.total, { negrita: true });
+  ws2.addRow([]);
+  seccion(ws2, "GASTOS FINANCIEROS");
+  linea(ws2, "Intereses de préstamos bancarios", e.gastos_financieros?.intereses_prestamos ?? 0, { sangria: 3 });
+  linea(ws2, "Seguros y otros cargos de préstamos", e.gastos_financieros?.otros_cargos_prestamos ?? 0, { sangria: 3 });
+  linea(ws2, "Total gastos financieros", e.gastos_financieros?.total ?? 0, { negrita: true });
   linea(ws2, "UTILIDAD NETA", e.utilidad_neta, { total: true });
   const mn = ws2.addRow(["", "Margen neto", "", e.margen_neto_pct / 100]);
   mn.getCell(4).numFmt = "0.0%";

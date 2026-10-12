@@ -31,7 +31,7 @@ type Reporte = {
   excluidos: Array<{ categoria: string; monto: number }>;
   total_costos: number; costo_real_qq: number; costo_estimado_qq: number;
   ingresos: Ingreso[]; total_ingresos: number;
-  financieros: Array<{ id: string; concepto: string; monto: number; nota: string | null }>; total_financieros: number;
+  financieros: Array<{ id: string; concepto: string; monto: number; nota: string | null; origen?: "auto" | "manual" }>; total_financieros: number;
 };
 export type GanaOperacion = { operacion: string; utilidad: number; lotes: number };
 
@@ -509,8 +509,8 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
                 <tbody>
                   {rep.financieros.length === 0 && <tr><td className="rm-muted">Hipoteca, préstamos o diferidos del mes.</td></tr>}
                   {rep.financieros.map((f) => (
-                    <tr key={f.id}><td>{f.concepto}</td><td className="num">{dinero(f.monto)}</td>
-                      <td style={{ width: 28 }}>{puedeEditar && <button type="button" className="btnGhost" title="Quitar" onClick={() => borrarManual(f.id)}>🗑</button>}</td></tr>
+                    <tr key={f.id}><td>{f.concepto}{f.origen === "auto" && <small className="rm-muted"> · automático ({f.nota})</small>}</td><td className="num">{dinero(f.monto)}</td>
+                      <td style={{ width: 28 }}>{puedeEditar && f.origen !== "auto" && <button type="button" className="btnGhost" title="Quitar" onClick={() => borrarManual(f.id)}>🗑</button>}</td></tr>
                   ))}
                 </tbody>
                 <tfoot><tr><td>Total</td><td className="num">{dinero(rep.total_financieros)}</td><td /></tr></tfoot>

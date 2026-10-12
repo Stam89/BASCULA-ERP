@@ -318,6 +318,20 @@ export async function getEstadoResultados(
   );
   const gastos = { rows: [{ v: egresos.rows[0].gastos }] };
   const manoObra = { rows: [{ v: egresos.rows[0].mano_obra }] };
+  // Gastos financieros: interés y otros cargos (seguro…) de las cuotas de préstamos del banco pagadas en el período.
+  // La cuota sale de Caja como PAGO_PRESTAMO (no operativo): el capital solo baja la deuda.
+  const financiero = (await client.query(
+    `SELECT COALESCE(sum(q.pagado_interes), 0)::float AS intereses, COALESCE(sum(q.pagado_otros), 0)::float AS otros
+       FROM prestamo_cuotas q
+       JOIN prestamos_bancarios p ON p.id = q.prestamo_id
+       JOIN cash_movements m ON m.id = q.cash_movement_id
+      WHERE p.accionista_id = $1 AND q.estado = 'PAGADA' AND m.reversed_at IS NULL
+        AND m.created_at::date BETWEEN $2 AND $3`,
+    [accionistaId, desde, hasta]
+  )).rows[0];
+  const interesesPrestamos = round2(Number(financiero.intereses));
+  const otrosCargosPrestamos = round2(Number(financiero.otros));
+  const gastosFinancieros = round2(interesesPrestamos + otrosCargosPrestamos);
 
   const activos = await getActivosFijos(client, accionistaId, hasta);
   const dias = Math.max(1, (new Date(hasta).getTime() - new Date(desde).getTime()) / (24 * 3600 * 1000));
@@ -329,7 +343,7 @@ export async function getEstadoResultados(
   const costoTotal = round2(costoVentas + Number(combustible.rows[0].v) + Number(serviciosRecibidos.rows[0].v));
   const utilidadBruta = round2(ingresos - costoTotal);
   const gastosOperativos = round2(Number(gastos.rows[0].v) + Number(manoObra.rows[0].v) + depreciacionPeriodo);
-  const utilidadNeta = round2(utilidadBruta - gastosOperativos);
+  const utilidadNeta = round2(utilidadBruta - gastosOperativos - gastosFinancieros);
 
   return {
     periodo: { desde, hasta },
@@ -352,6 +366,11 @@ export async function getEstadoResultados(
       mano_obra: round2(Number(manoObra.rows[0].v)),
       depreciacion: depreciacionPeriodo,
       total: gastosOperativos
+    },
+    gastos_financieros: {
+      intereses_prestamos: interesesPrestamos,
+      otros_cargos_prestamos: otrosCargosPrestamos,
+      total: gastosFinancieros
     },
     utilidad_neta: utilidadNeta,
     margen_neto_pct: ingresos > 0 ? round2((utilidadNeta / ingresos) * 100) : 0
@@ -458,14 +477,27 @@ export async function getBalanceGeneral(
     [accionistaId]
   );
 
+  // Préstamos del banco: el capital que falta pagar (cuotas pendientes). Corriente = lo que vence en los próximos
+  // 12 meses desde la fecha del balance; el resto, no corriente. Como las cuentas, con el estado de HOY.
+  const prestamos = (await client.query(
+    `SELECT COALESCE(sum(q.capital) FILTER (WHERE q.fecha_vencimiento <= ($2::date + INTERVAL '12 months')), 0)::float AS corriente,
+            COALESCE(sum(q.capital) FILTER (WHERE q.fecha_vencimiento > ($2::date + INTERVAL '12 months')), 0)::float AS largo
+       FROM prestamo_cuotas q JOIN prestamos_bancarios p ON p.id = q.prestamo_id
+      WHERE p.accionista_id = $1 AND p.estado = 'VIGENTE' AND q.estado = 'PENDIENTE'`,
+    [accionistaId, hasta]
+  )).rows[0];
+
   const cxc = round2(Number(porCobrar.rows[0].v));
   const antic = round2(Number(anticipos.rows[0].v));
   const cxp = round2(Number(porPagar.rows[0].v));
+  const prestamosCorto = round2(Number(prestamos.corriente));
+  const prestamosLargo = round2(Number(prestamos.largo));
 
   const activoCorriente = round2(caja.total + cxc + antic + inventario.total);
   const activoNoCorriente = activosFijos.valor_libros;
   const totalActivo = round2(activoCorriente + activoNoCorriente);
-  const totalPasivo = cxp;
+  const pasivoCorriente = round2(cxp + prestamosCorto);
+  const totalPasivo = round2(pasivoCorriente + prestamosLargo);
 
   // El resultado del ejercicio: desde la fecha de corte contable (o desde el
   // inicio del año) hasta la fecha del balance.
@@ -503,7 +535,8 @@ export async function getBalanceGeneral(
       total: totalActivo
     },
     pasivo: {
-      corriente: { cuentas_por_pagar: cxp, total: cxp },
+      corriente: { cuentas_por_pagar: cxp, prestamos_bancarios: prestamosCorto, total: pasivoCorriente },
+      no_corriente: { prestamos_bancarios: prestamosLargo, total: prestamosLargo },
       total: totalPasivo
     },
     patrimonio: {

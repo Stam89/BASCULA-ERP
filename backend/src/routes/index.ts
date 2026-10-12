@@ -47,6 +47,7 @@ import { campoRouter } from "./modules/campo.js";
 import { notificacionesRouter } from "./modules/notificaciones.js";
 import { historialRouter } from "./modules/historial.js";
 import { resultadoMensualRouter } from "./modules/resultado-mensual.js";
+import { prestamosRouter } from "./modules/prestamos.js";
 import { saldosInicialesRouter } from "./modules/saldos-iniciales.js";
 import { externalRouter } from "./modules/external.js";
 import { sriRouter } from "./modules/sri.js";
@@ -123,5 +124,6 @@ routes.use("/notificaciones", notificacionesRouter);
 routes.use("/historial", historialRouter);
 // 📊 Resultado mensual de CEYRO: costos por QQ vs estimado, ingresos adicionales y neto.
 routes.use("/resultado-mensual", resultadoMensualRouter);
+routes.use("/prestamos", prestamosRouter);
 // 📥 Saldos iniciales al corte de fin de mes (CxC, CxP, inventario, anticipos). Solo administradores.
 routes.use("/saldos-iniciales", saldosInicialesRouter);

@@ -117,6 +117,8 @@ export const CATEGORIAS_NO_OPERATIVAS = [
   "PAGO_AGRICULTOR", "LIQUIDACION_AGRICULTOR", "ANTICIPO_AGRICULTOR",
   "FOMENTO_ENTREGA", "FOMENTOS", "PAGO_FOMENTO",
   "COMPRA_ACTIVO_FIJO", "PAGO_ENTRE_SOCIOS",
+  // Cuota de préstamo bancario: el capital es deuda (no gasto); el interés va aparte como gasto financiero.
+  "PAGO_PRESTAMO",
   // Pago de una deuda de OTRO socio (p. ej. sus cosechadores): no es gasto de quien pagó; queda como deuda entre socios.
   "PAGO_POR_SOCIO",
   "PAGO_SERVICIO_PILADO", "PAGO_SERVICIO_MAQUILA", "PAGO_SELECCION", "REVERSA_COMPRA",
@@ -314,7 +316,24 @@ export async function calcularResultadoMensual(db: Db, opts: { year: number; mon
   for (const m of manuales.filter((x) => x.seccion === "INGRESO")) {
     ingresos.push({ concepto: m.concepto, monto: r2(m.monto), origen: "manual", id: m.id, nota: m.nota });
   }
-  const financieros = manuales.filter((x) => x.seccion === "FINANCIERO").map((m) => ({ id: m.id, concepto: m.concepto, monto: r2(m.monto), nota: m.nota }));
+  const financieros: Array<{ id: string; concepto: string; monto: number; nota: string | null; origen?: "auto" | "manual" }> =
+    manuales.filter((x) => x.seccion === "FINANCIERO").map((m) => ({ id: m.id, concepto: m.concepto, monto: r2(m.monto), nota: m.nota, origen: "manual" as const }));
+  // Préstamos del banco de la Matriz: interés + otros cargos de las cuotas PAGADAS en el mes (sale solo, no se borra).
+  const intereses = (await db.query(
+    `SELECT p.id, p.banco, p.numero, sum(COALESCE(q.pagado_interes, 0) + COALESCE(q.pagado_otros, 0))::float AS monto, count(*)::int AS cuotas
+       FROM prestamo_cuotas q
+       JOIN prestamos_bancarios p ON p.id = q.prestamo_id
+       JOIN cash_movements m ON m.id = q.cash_movement_id
+      WHERE p.accionista_id = $3 AND q.estado = 'PAGADA' AND m.reversed_at IS NULL AND ${enMes("m.created_at")}
+      GROUP BY p.id, p.banco, p.numero`,
+    [ini, fin, opts.matrizId]
+  )).rows as Array<{ id: string; banco: string; numero: string | null; monto: number; cuotas: number }>;
+  for (const x of intereses) {
+    if (Math.abs(x.monto) > 0.004) {
+      financieros.push({ id: `prestamo-${x.id}`, concepto: `Intereses préstamo ${x.banco}${x.numero ? ` N.º ${x.numero}` : ""}`, monto: r2(x.monto),
+        nota: `${x.cuotas} cuota(s) pagada(s) en el mes`, origen: "auto" });
+    }
+  }
 
   const totalIngresos = r2(ingresos.reduce((s, i) => s + i.monto, 0));
   const totalFinancieros = r2(financieros.reduce((s, f) => s + f.monto, 0));

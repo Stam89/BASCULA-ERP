@@ -46,6 +46,16 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
      WHERE cm.category = 'PAGO_POR_SOCIO' AND cm.reversal_of IS NULL
        AND ((cm.reversed_at IS NULL AND abs(COALESCE(x.cruzado, 0) + COALESCE(p.amount, 0) - cm.amount) > 0.005)
             OR (cm.reversed_at IS NOT NULL AND (COALESCE(x.cruzado, 0) > 0.005 OR p.id IS NOT NULL)))` },
+  { modulo: "Préstamos", nombre: "Cuotas de préstamos: cada pagada tiene su pago vigente en Caja por lo pagado, y las pendientes ninguno", sql: `
+    SELECT q.id, q.estado, m.amount::float AS caja, (q.capital + COALESCE(q.pagado_interes, 0) + COALESCE(q.pagado_otros, 0))::float AS pagado
+      FROM prestamo_cuotas q LEFT JOIN cash_movements m ON m.id = q.cash_movement_id
+     WHERE (q.estado = 'PAGADA' AND (m.id IS NULL OR m.reversed_at IS NOT NULL
+              OR abs(m.amount - (q.capital + COALESCE(q.pagado_interes, 0) + COALESCE(q.pagado_otros, 0))) > 0.005))
+        OR (q.estado = 'PENDIENTE' AND q.cash_movement_id IS NOT NULL)` },
+  { modulo: "Préstamos", nombre: "Préstamos: «pagado» solo sin cuotas pendientes y «vigente» con alguna", sql: `
+    SELECT p.id, p.estado FROM prestamos_bancarios p
+     WHERE (p.estado = 'PAGADO' AND EXISTS (SELECT 1 FROM prestamo_cuotas q WHERE q.prestamo_id = p.id AND q.estado = 'PENDIENTE'))
+        OR (p.estado = 'VIGENTE' AND NOT EXISTS (SELECT 1 FROM prestamo_cuotas q WHERE q.prestamo_id = p.id AND q.estado = 'PENDIENTE'))` },
   { modulo: "Caja", nombre: "Pagos y cobros de varias cuentas: el desglose suma lo que movió la caja", sql: `
     SELECT cm.id, cm.amount::float AS movimiento, sum(d.monto)::float AS desglose
       FROM cash_movement_cuentas d JOIN cash_movements cm ON cm.id = d.cash_movement_id

@@ -105,4 +105,18 @@ describe("construirTareas («Hoy»)", () => {
     });
     expect(t.map((x) => x.key)).toEqual(["combustible-motor-2", "bajadas-sin-nombre", "caja-cerrada", "cxc-vencidas", "tuneles-en-proceso", "nomina-pendiente"]);
   });
+
+  it("préstamos del banco: cuota vencida es urgente; la que se cobra mañana avisa; sin datos no dice nada", () => {
+    const t = construirTareas({ ...base(), prestamos: {
+      vencidas: [{ banco: "PICHINCHA", fecha: "2026-10-05", monto: 420.5 }],
+      proximas: [{ banco: "GUAYAQUIL", fecha: "2026-10-13", monto: 300, dias: 1 }]
+    } });
+    expect(t.map((x) => x.key)).toEqual(["prestamo-vencido", "prestamo-proximo"]);
+    expect(t[0]).toMatchObject({ nivel: "urgente", tab: "Por Pagar", sub: "prestamos" });
+    expect(t[0].titulo).toBe("Cuota del préstamo PICHINCHA vencida ($420.50)");
+    expect(t[0].detalle).toMatch(/venció el 5 oct/);
+    expect(t[1].titulo).toBe("Mañana cobra el banco la cuota del préstamo GUAYAQUIL ($300.00)");
+    expect(t[1].nivel).toBe("atencion");
+    expect(construirTareas({ ...base(), prestamos: { vencidas: [], proximas: [] } })).toEqual([]);
+  });
 });

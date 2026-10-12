@@ -13,6 +13,7 @@ import { ResultadoMensual, type GanaOperacion } from "./components/ResultadoMens
 import { planDeSacos, sobranteLb, SacosAlertaDashboard, SacosCatalogoConfig, SacosMovimientosRecientes, SacosPorComprarAlerta, SacosSinMinimosAviso, SacosTablero, type SacoPorComprar } from "./components/SacosModule";
 import { PedidoCompartirModal, type PedidoCompartirData } from "./components/PedidoCompartir";
 import { RepuestosAlertaDashboard, RepuestosModule, etiquetaCompat, type Repuesto } from "./components/RepuestosModule";
+import { PrestamosBancarios } from "./components/PrestamosBancarios";
 import { BuscadorCombo } from "./components/BuscadorCombo";
 import { SaldosIniciales } from "./components/SaldosIniciales";
 import { MaquinaBuscador, etiquetaMaquina } from "./components/MaquinaBuscador";
@@ -1188,7 +1189,7 @@ type FinanzasData = {
       no_corriente: { activos_fijos: number; depreciacion_acumulada: number; total: number };
       total: number;
     };
-    pasivo: { corriente: { cuentas_por_pagar: number; total: number }; total: number };
+    pasivo: { corriente: { cuentas_por_pagar: number; prestamos_bancarios?: number; total: number }; no_corriente?: { prestamos_bancarios: number; total: number }; total: number };
     patrimonio: { capital_social: number; resultados_acumulados: number; resultado_ejercicio: number; ajuste_apertura: number; total: number };
     cuadre: number;
   };
@@ -1197,6 +1198,7 @@ type FinanzasData = {
     costo_ventas: { mercaderia_vendida: number; combustible_secado: number; servicios_recibidos?: number; total: number };
     utilidad_bruta: number; margen_bruto_pct: number;
     gastos_operativos: { gastos_generales: number; mano_obra: number; depreciacion: number; total: number };
+    gastos_financieros?: { intereses_prestamos: number; otros_cargos_prestamos: number; total: number };
     utilidad_neta: number; margen_neto_pct: number;
   };
   flujo: {
@@ -3512,6 +3514,8 @@ export function App() {
   const [arDetalleKey, setArDetalleKey] = useState<string | null>(null);
   // Ídem para Por Pagar (acreedor).
   const [apDetalleKey, setApDetalleKey] = useState<string | null>(null);
+  // «Hoy» → cuota de préstamo: lleva la vista al panel de préstamos del banco (Por Pagar).
+  const [prestamosFoco, setPrestamosFoco] = useState(0);
   // Modal "Comprar producto / Cruzar CxC": compra producto a un cliente y lo
   // cruza contra su deuda de servicio. Guarda el grupo (cliente) y el formulario.
   const [comprarProd, setComprarProd] = useState<{ nombre: string; items: AccountsReceivable[] } | null>(null);
@@ -4702,6 +4706,7 @@ export function App() {
       irATab("Nomina");
       return;
     }
+    if (tab === "Por Pagar" && sub === "prestamos") { irATab("Por Pagar"); setTimeout(() => setPrestamosFoco(Date.now()), 150); return; }
     if (tab === "Configuracion" && sub === "puesta") { irAConfig("✅ Puesta en marcha"); return; }
     if (tab === "Configuracion" && sub === "integridad") { irAConfig("Estado del sistema"); return; }
     irATab(tab as typeof activeTab);
@@ -11197,6 +11202,7 @@ export function App() {
           ${fila("Activos Fijos (neto)", f.balance.activo.no_corriente.total)}
           ${fila("TOTAL ACTIVO", f.balance.activo.total, true)}
           ${fila("Cuentas por pagar", f.balance.pasivo.corriente.cuentas_por_pagar)}
+          ${fila("Préstamos bancarios", (f.balance.pasivo.corriente.prestamos_bancarios ?? 0) + (f.balance.pasivo.no_corriente?.prestamos_bancarios ?? 0))}
           ${fila("TOTAL PASIVO", f.balance.pasivo.total, true)}
           ${fila("TOTAL PATRIMONIO", f.balance.patrimonio.total, true)}
         </table></div>
@@ -11205,6 +11211,7 @@ export function App() {
           ${fila("Costo de ventas", f.resultados.costo_ventas.total)}
           ${fila("Utilidad Bruta", f.resultados.utilidad_bruta, true)}
           ${fila("Gastos operativos", f.resultados.gastos_operativos.total)}
+          ${fila("Gastos financieros (préstamos)", f.resultados.gastos_financieros?.total ?? 0)}
           ${fila("Utilidad Neta", f.resultados.utilidad_neta, true)}
         </table></div>
       </div>
@@ -21037,6 +21044,16 @@ Motivo (obligatorio):`, "");
                 al pagar aquí baja la Por Cobrar del otro, entra a su caja y le llega un aviso 🔔.
               </p>
             </div>
+
+            <PrestamosBancarios
+              cajaAbiertaId={dashboard.current_cash_register?.id ?? null}
+              cajaMixta={dashboard.current_cash_register?.tipo === "MIXTO"}
+              puedeEditar={canEdit("Por Pagar") || canEdit("Caja")}
+              puedeAnular={canAnular}
+              avisar={(m, t) => addToast(m, t)}
+              onCambio={() => { const id = dashboard.current_cash_register?.id; if (id) refreshCaja(id).catch(() => undefined); }}
+              foco={prestamosFoco}
+            />
 
             {detalleGrupo && (
               <CuentaDetalleModal

@@ -37,6 +37,11 @@ export type DatosHoy = {
   cxp: { n: number; monto: number };
   pedidos: { pendientes: number; paraHoy: number };
   puesta: { aplica: boolean; faltantes: string[] };
+  /** Cuotas de préstamos del banco: vencidas y las que se cobran pronto (opcional). */
+  prestamos?: {
+    vencidas: Array<{ banco: string; fecha: string; monto: number }>;
+    proximas: Array<{ banco: string; fecha: string; monto: number; dias: number }>;
+  };
   /** Solo administrador: controles de integridad entre módulos que fallan (opcional: sin dato no se muestra nada). */
   integridad?: { problemas: number; nombres: string[] };
 };
@@ -48,6 +53,8 @@ const dinero = (n: number) => `$${n.toFixed(2)}`;
 const plural = (n: number, uno: string, varios: string) => `${n} ${n === 1 ? uno : varios}`;
 const horasTxt = (h: number) => (h < 1 ? "menos de 1 h" : `${Math.round(h)} h`);
 const ORDEN: Record<NivelTarea, number> = { urgente: 0, atencion: 1, info: 2 };
+const MESES_CORTOS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+const fechaCorta = (iso: string) => `${Number(iso.slice(8, 10))} ${MESES_CORTOS[Number(iso.slice(5, 7)) - 1] ?? ""}`;
 
 export function construirTareas(d: DatosHoy): TareaHoy[] {
   const t: TareaHoy[] = [];
@@ -139,6 +146,29 @@ export function construirTareas(d: DatosHoy): TareaHoy[] {
       titulo: `${plural(d.cxp.n, "pago vencido", "pagos vencidos")} por ${dinero(d.cxp.monto)}`,
       detalle: "Cuentas por pagar que ya pasaron su fecha.",
       tab: "Por Pagar", accion: "Ver pagos"
+    });
+  }
+
+  // ── Préstamos del banco ──────────────────────────────────────────────────
+  if (d.prestamos && d.prestamos.vencidas.length > 0) {
+    const v = d.prestamos.vencidas;
+    const total = v.reduce((s, x) => s + x.monto, 0);
+    t.push({
+      key: "prestamo-vencido", nivel: "urgente", icono: "🏦",
+      titulo: v.length === 1 ? `Cuota del préstamo ${v[0].banco} vencida (${dinero(v[0].monto)})` : `${v.length} cuotas de préstamos vencidas por ${dinero(total)}`,
+      detalle: `${v.slice(0, 2).map((x) => `${x.banco}: venció el ${fechaCorta(x.fecha)}`).join(" · ")}${v.length > 2 ? ` · y ${v.length - 2} más` : ""}. Si el banco ya la cobró, regístrala para que la caja cuadre.`,
+      tab: "Por Pagar", sub: "prestamos", accion: "Pagar cuota"
+    });
+  }
+  if (d.prestamos && d.prestamos.proximas.length > 0) {
+    const p = d.prestamos.proximas;
+    t.push({
+      key: "prestamo-proximo", nivel: p.some((x) => x.dias <= 1) ? "atencion" : "info", icono: "🏦",
+      titulo: p.length === 1
+        ? `${p[0].dias === 0 ? "Hoy" : p[0].dias === 1 ? "Mañana" : `En ${p[0].dias} días`} cobra el banco la cuota del préstamo ${p[0].banco} (${dinero(p[0].monto)})`
+        : `${p.length} cuotas de préstamos se cobran esta semana`,
+      detalle: `${p.slice(0, 3).map((x) => `${x.banco}: ${fechaCorta(x.fecha)} · ${dinero(x.monto)}`).join(" · ")}. Ten el dinero en el banco.`,
+      tab: "Por Pagar", sub: "prestamos", accion: "Ver préstamos"
     });
   }
 
@@ -260,6 +290,22 @@ export async function reunirDatos(
     return { pendientes: Number(r.pendientes), paraHoy: Number(r.para_hoy) };
   });
 
+  const prestamos = await seguro("prestamos", { vencidas: [], proximas: [] } as NonNullable<DatosHoy["prestamos"]>, async () => {
+    const filas = (await db.query(
+      `SELECT p.banco, to_char(q.fecha_vencimiento, 'YYYY-MM-DD') AS fecha, (q.capital + q.interes + q.otros)::float AS monto,
+              (q.fecha_vencimiento - (now() AT TIME ZONE 'America/Guayaquil')::date)::int AS dias
+         FROM prestamo_cuotas q JOIN prestamos_bancarios p ON p.id = q.prestamo_id
+        WHERE p.accionista_id = $1 AND p.estado = 'VIGENTE' AND q.estado = 'PENDIENTE'
+          AND q.fecha_vencimiento <= (now() AT TIME ZONE 'America/Guayaquil')::date + 5
+        ORDER BY q.fecha_vencimiento`,
+      [acc]
+    )).rows as Array<{ banco: string; fecha: string; monto: number; dias: number }>;
+    return {
+      vencidas: filas.filter((f) => f.dias < 0).map(({ banco, fecha, monto }) => ({ banco, fecha, monto: Number(monto) })),
+      proximas: filas.filter((f) => f.dias >= 0).map((f) => ({ ...f, monto: Number(f.monto), dias: Number(f.dias) }))
+    };
+  });
+
   const puesta = ctx.esAdmin
     ? await seguro("puesta", { aplica: true, faltantes: [] as string[] }, async () => ({ aplica: true, faltantes: await ctx.faltantesPuesta() }))
     : { aplica: false, faltantes: [] as string[] };
@@ -271,7 +317,7 @@ export async function reunirDatos(
     })
     : undefined;
 
-  return { dow, caja, tuneles, nomina, cxc, cxp, pedidos, puesta, ...(integridad ? { integridad } : {}) };
+  return { dow, caja, tuneles, nomina, cxc, cxp, pedidos, prestamos, puesta, ...(integridad ? { integridad } : {}) };
 }
 
 export async function tareasDeHoy(ctx: Parameters<typeof reunirDatos>[1]): Promise<TareaHoy[]> {
