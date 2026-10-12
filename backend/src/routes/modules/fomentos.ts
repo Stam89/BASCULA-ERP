@@ -11,6 +11,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { ApiError } from "../../http/error-handler.js";
 import { avisarSobregiro, exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
 import { requirePermiso, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { nombreNormalSql } from "../../services/agricultor-nombres.js";
 
 export const fomentosRouter = Router();
 
@@ -43,7 +44,8 @@ async function resolveGlobalFarmer(client: PoolClient, farmerId: string | undefi
 
   const name = farmerName.trim();
   const existing = await client.query<{ id: string; full_name: string }>(
-    "SELECT id, full_name FROM farmers WHERE lower(trim(full_name)) = lower(trim($1)) ORDER BY created_at ASC LIMIT 1",
+    // Sin tildes / mayúsculas / espacios dobles: «Jesús Guerrero» es el mismo agricultor que «JESUS GUERRERO».
+    `SELECT id, full_name FROM farmers WHERE ${nombreNormalSql("full_name")} = ${nombreNormalSql("$1::text")} ORDER BY created_at ASC LIMIT 1`,
     [name]
   );
   if (existing.rowCount) return existing.rows[0];
@@ -404,7 +406,7 @@ fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res
         if (dup.rowCount) { omitidos++; continue; }
 
         // (a) Agricultor: buscar/crear.
-        const existe = await client.query("SELECT id FROM farmers WHERE lower(full_name) = lower($1) LIMIT 1", [nombre]);
+        const existe = await client.query(`SELECT id FROM farmers WHERE ${nombreNormalSql("full_name")} = ${nombreNormalSql("$1::text")} ORDER BY created_at LIMIT 1`, [nombre]);
         let farmerId: string;
         if (existe.rowCount) farmerId = existe.rows[0].id;
         else { farmerId = (await client.query("INSERT INTO farmers (full_name, accionista_id) VALUES ($1, NULL) RETURNING id", [nombre])).rows[0].id; farmersCreated++; }
@@ -483,7 +485,7 @@ fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res
 
         // (a) Verificación de agricultor en el Directorio (Báscula = farmers).
         //     Si no existe, se crea para mantener integridad referencial.
-        const existente = await client.query("SELECT id FROM farmers WHERE lower(full_name) = lower($1) LIMIT 1", [nombre]);
+        const existente = await client.query(`SELECT id FROM farmers WHERE ${nombreNormalSql("full_name")} = ${nombreNormalSql("$1::text")} ORDER BY created_at LIMIT 1`, [nombre]);
         let farmerId: string;
         if (existente.rowCount) {
           farmerId = existente.rows[0].id;
@@ -657,7 +659,7 @@ fomentosRouter.post("/bulk-import", asyncRoute(async (req, res) => {
       if (!nombre) { errores.push({ cliente: "(vacío)", error: "Nombre vacío" }); continue; }
 
       // (a) Agricultor: buscar por nombre o crear (integridad referencial).
-      const existente = await client.query("SELECT id FROM farmers WHERE lower(full_name) = lower($1) LIMIT 1", [nombre]);
+      const existente = await client.query(`SELECT id FROM farmers WHERE ${nombreNormalSql("full_name")} = ${nombreNormalSql("$1::text")} ORDER BY created_at LIMIT 1`, [nombre]);
       let farmerId: string;
       if (existente.rowCount) {
         farmerId = existente.rows[0].id;

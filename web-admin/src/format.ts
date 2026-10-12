@@ -18,6 +18,35 @@ const NAME_CONNECTORS = new Set(["de", "del", "la", "las", "los", "y", "e", "da"
  * - mantiene los conectores en minúscula si no son la primera palabra (de, del, la…).
  * No toca siglas ni fuerza mayúsculas intermedias: "juan carlos garcia" -> "Juan Carlos Garcia".
  */
+/** Nombre para comparar: sin tildes, mayúsculas, un solo espacio (igual que el servidor). */
+export function nombreNormal(s: string | null | undefined): string {
+  return String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Agricultores parecidos al nombre que mandó la báscula (el balancero suele escribirlo corto o con otra forma):
+ * uno contiene al otro, o empiezan con las mismas dos palabras, o con la misma palabra si solo escribió una.
+ * Primero los que tienen fomento.
+ */
+export function agricultoresParecidos<T extends { full_name: string; fomentos?: number }>(nombre: string, lista: T[], max = 6): T[] {
+  const n = nombreNormal(nombre);
+  if (n.length < 3) return [];
+  const pal = n.split(" ");
+  const puntos = (f: T) => {
+    const x = nombreNormal(f.full_name);
+    if (!x) return 0;
+    if (x === n) return 100;
+    const xp = x.split(" ");
+    let p = 0;
+    if (x.includes(n) || n.includes(x)) p = 60;
+    else if (pal.length >= 2 && xp.length >= 2 && pal[0] === xp[0] && pal[1] === xp[1]) p = 50;
+    else if (pal.length >= 2 && pal.every((w) => w.length >= 3 && xp.includes(w))) p = 45;
+    else if (pal.length === 1 && pal[0].length >= 4 && xp.some((w) => w.startsWith(pal[0]))) p = 30;
+    return p > 0 ? p + ((f.fomentos ?? 0) > 0 ? 5 : 0) : 0;
+  };
+  return lista.map((f) => ({ f, p: puntos(f) })).filter((x) => x.p > 0).sort((a, b) => b.p - a.p).slice(0, max).map((x) => x.f);
+}
+
 export function formatPersonName(val: string | null | undefined): string {
   if (!val) return "";
   const cap = (w: string) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w);

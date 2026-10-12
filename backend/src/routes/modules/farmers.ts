@@ -3,6 +3,7 @@ import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
+import { nombreNormalSql, nombresSoloEnBascula, vincularTicketsPendientesSeguro } from "../../services/agricultor-nombres.js";
 
 export const farmersRouter = Router();
 
@@ -19,7 +20,8 @@ const farmerSchema = z.object({
 farmersRouter.get("/", asyncRoute(async (_req, res) => {
   const result = await pool.query(`
     SELECT f.*,
-           COALESCE(SUM(fa.balance) FILTER (WHERE fa.status IN ('CONFIRMED', 'PARTIAL')), 0) AS pending_advance_balance
+           COALESCE(SUM(fa.balance) FILTER (WHERE fa.status IN ('CONFIRMED', 'PARTIAL')), 0) AS pending_advance_balance,
+           (SELECT count(*)::int FROM fomentos fo WHERE fo.farmer_id = f.id) AS fomentos
     FROM farmers f
     LEFT JOIN farmer_advances fa ON fa.farmer_id = f.id
     GROUP BY f.id
@@ -31,17 +33,30 @@ farmersRouter.get("/", asyncRoute(async (_req, res) => {
 // GET buscar agricultores por nombre o identificación (autocompletado universal).
 // Fuente única de verdad del directorio de báscula. Debe declararse ANTES de
 // "/:id" para que Express no interprete "search" como un id.
+// Sin tildes ni mayúsculas («sebastian» encuentra «SEBASTIÁN»). Con `bascula=1` agrega también los nombres que
+// SOLO están en la báscula (tickets pendientes sin agricultor): id vacío y origen «bascula»; al elegirlos se crea el
+// agricultor y sus tickets se enlazan solos.
 farmersRouter.get("/search", asyncRoute(async (req, res) => {
   const query = String(req.query.q ?? "").trim();
   if (query.length < 2) { res.json([]); return; }
   const result = await pool.query(
-    `SELECT id, full_name, identification, phone FROM farmers
-      WHERE full_name ILIKE $1 OR identification ILIKE $1
-      ORDER BY full_name ASC
+    `SELECT f.id, f.full_name, f.identification, f.phone,
+            (SELECT count(*)::int FROM fomentos fo WHERE fo.farmer_id = f.id) AS fomentos
+       FROM farmers f
+      WHERE ${nombreNormalSql("f.full_name")} LIKE '%' || ${nombreNormalSql("$1::text")} || '%' OR f.identification ILIKE '%' || $1 || '%'
+      ORDER BY f.full_name ASC
       LIMIT 10`,
-    [`%${query}%`]
+    [query]
   );
-  res.json(result.rows);
+  const rows: Array<Record<string, unknown>> = result.rows;
+  if (req.query.bascula === "1") {
+    try {
+      for (const b of await nombresSoloEnBascula(pool, query, 5)) {
+        rows.push({ id: "", full_name: b.nombre, identification: null, phone: null, origen: "bascula", tickets: b.tickets });
+      }
+    } catch { /* la búsqueda normal sigue funcionando */ }
+  }
+  res.json(rows);
 }));
 
 farmersRouter.post("/", asyncRoute(async (req, res) => {
@@ -52,6 +67,7 @@ farmersRouter.post("/", asyncRoute(async (req, res) => {
      RETURNING *`,
     [data.identification, data.full_name, data.phone, data.address, data.bank_account, data.notes, data.accionista_id ?? null]
   );
+  await vincularTicketsPendientesSeguro(); // sus tickets de la báscula con ese nombre se enlazan solos
   res.status(201).json(result.rows[0]);
 }));
 
@@ -75,6 +91,7 @@ farmersRouter.put("/:id", asyncRoute(async (req, res) => {
      RETURNING *`,
     [req.params.id, merged.identification, merged.full_name, merged.phone, merged.address, merged.bank_account, merged.notes, merged.accionista_id ?? null]
   );
+  await vincularTicketsPendientesSeguro();
   res.json(result.rows[0]);
 }));
 

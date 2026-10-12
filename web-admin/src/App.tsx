@@ -3,7 +3,7 @@ import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } f
 import { apiFetch, apiOk, apiGet, apiGetSRI, apiGetBasculaStatus, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId } from "./api";
 import type { BasculaSyncStatus } from "./api";
 import BasculaDevicesPanel from "./components/BasculaDevicesPanel";
-import { money, categoryLabel, stockGroupLabel, formatPersonName, cantidad, kilos, numeroReal } from "./format";
+import { money, categoryLabel, stockGroupLabel, formatPersonName, cantidad, kilos, numeroReal, nombreNormal, agricultoresParecidos } from "./format";
 import type { Farmer, Product, Warehouse, Lot, MateriaPrimaEntry, MateriaPrimaCorreccion, PendingEntry } from "./types";
 import { Metric, ReportTable, Input, Select, MedidorRow, DataList } from "./components/ui";
 import { ClienteSearchInput } from "./components/ClienteSearchInput";
@@ -25800,15 +25800,29 @@ Motivo (obligatorio):`, "");
 
     {/* Modal: vincular ticket de báscula a un agricultor */}
     {linkTicket && (() => {
-      const filtro = linkFarmerFilter.trim().toLowerCase();
+      // Sin tildes ni mayúsculas («JESÚS» = «JESUS»). Sugeridos: nombres parecidos al de la báscula (con fomento primero).
+      const filtro = nombreNormal(linkFarmerFilter);
       const opciones = filtro
-        ? farmers.filter((f) => (f.full_name || "").toLowerCase().includes(filtro))
+        ? farmers.filter((f) => nombreNormal(f.full_name).includes(filtro))
         : farmers;
+      const sugeridos = agricultoresParecidos(linkTicket.farmer_name || "", farmers);
       return (
       <div className="modalOverlay" onClick={() => { setLinkTicket(null); setLinkFarmerFilter(""); }}>
         <div className="modalCard" onClick={(e) => e.stopPropagation()}>
           <h3>Vincular ticket #{linkTicket.numero} a un agricultor</h3>
           <p className="muted">En la báscula figura como: <strong>{linkTicket.farmer_name || "(sin nombre)"}</strong></p>
+          {sugeridos.length > 0 && (
+            <div className="vincSug">
+              <span>¿Es alguno de estos?</span>
+              <div>
+                {sugeridos.map((f) => (
+                  <button key={f.id} type="button" className={linkFarmerId === f.id ? "is-on" : ""} onClick={() => setLinkFarmerId(f.id)}>
+                    {f.full_name}{(f.fomentos ?? 0) > 0 && <small> 📒 fomento</small>}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <label>
             <span>Buscar agricultor oficial</span>
             <input
@@ -25826,7 +25840,7 @@ Motivo (obligatorio):`, "");
               {(linkTicket.farmer_name || "").trim().length >= 2 && (
                 <option value="__new__">➕ Crear "{linkTicket.farmer_name}"</option>
               )}
-              {opciones.map((f) => <option key={f.id} value={f.id}>{f.full_name}</option>)}
+              {opciones.map((f) => <option key={f.id} value={f.id}>{f.full_name}{(f.fomentos ?? 0) > 0 ? " · 📒 con fomento" : ""}</option>)}
             </select>
           </label>
           {filtro && opciones.length === 0 && (

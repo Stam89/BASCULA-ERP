@@ -9,6 +9,8 @@ export type Farmer = {
   phone: string | null;
   accionista_id: string | null;
   pending_advance_balance: number;
+  /** Cuántos fomentos tiene (para marcarlo al vincular un ticket de la báscula). */
+  fomentos?: number;
 };
 
 export type Product = {

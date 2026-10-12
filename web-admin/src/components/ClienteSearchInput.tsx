@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { apiFetch, apiPost } from "../api";
-import { formatPersonName } from "../format";
+import { formatPersonName, nombreNormal } from "../format";
 
 // ── Buscador universal de Cliente / Agricultor ──────────────────────────────
 // Autocompleta EN TIEMPO REAL contra el directorio maestro (báscula = farmers /
@@ -10,7 +10,13 @@ import { formatPersonName } from "../format";
 // central (fallback), quedando disponible para cualquier otro formulario futuro.
 // Es un reemplazo directo (drop-in) de un <input> de texto: `value`/`onChange`
 // siguen funcionando como texto libre; onSelect/onCreated son opcionales.
-export type DirectorioHit = { id: string; full_name: string; identification: string | null; phone: string | null };
+export type DirectorioHit = {
+  id: string; full_name: string; identification: string | null; phone: string | null;
+  /** Agricultores: cuántos fomentos tiene. */
+  fomentos?: number;
+  /** «bascula»: el nombre solo está en tickets de la báscula (aún no es agricultor); id vacío. */
+  origen?: "bascula"; tickets?: number;
+};
 
 export function ClienteSearchInput({
   kind, value, onChange, onSelect, onCreated, onError,
@@ -46,22 +52,24 @@ export function ClienteSearchInput({
     setLoading(true);
     const t = setTimeout(async () => {
       try {
-        const res = await apiFetch(`${base}/search?q=${encodeURIComponent(term)}`);
+        // Agricultores: también los nombres que solo están en la báscula (al elegirlos se crea el agricultor).
+        const extra = kind === "farmer" && allowCreate ? "&bascula=1" : "";
+        const res = await apiFetch(`${base}/search?q=${encodeURIComponent(term)}${extra}`);
         const data = res.ok ? await res.json() : [];
         if (!cancel) setHits(Array.isArray(data) ? data : []);
       } catch { if (!cancel) setHits([]); }
       finally { if (!cancel) setLoading(false); }
     }, 220);
     return () => { cancel = true; clearTimeout(t); };
-  }, [q, open, base]);
+  }, [q, open, base, kind, allowCreate]);
 
   const term = q.trim();
-  const exact = hits.some((h) => h.full_name.trim().toLowerCase() === term.toLowerCase());
+  const exact = hits.some((h) => nombreNormal(h.full_name) === nombreNormal(term));
   const showCreate = allowCreate && term.length >= 2 && !exact && !loading;
 
-  async function crearNuevo() {
+  async function crearNuevo(desde?: string) {
     if (creating) return;
-    const nombre = formatPersonName(term);
+    const nombre = formatPersonName(desde ?? term);
     setCreating(true);
     try {
       const hit = await apiPost<DirectorioHit>(base, { full_name: nombre });
@@ -74,6 +82,8 @@ export function ClienteSearchInput({
   }
 
   function elegir(hit: DirectorioHit) {
+    // Nombre que solo está en la báscula: se crea el agricultor con ese nombre (y sus tickets se enlazan solos).
+    if (!hit.id) { void crearNuevo(hit.full_name); return; }
     onChange(hit.full_name);
     onSelect?.(hit);
     setOpen(false); setQ("");
@@ -99,11 +109,13 @@ export function ClienteSearchInput({
           background: "var(--c-surface)", border: "1px solid var(--c-border)", borderRadius: 8, boxShadow: "0 8px 20px rgba(0,0,0,.15)", marginTop: 2 }}>
           {loading && <div style={{ padding: "8px 12px", color: "var(--c-muted)", fontSize: 13 }}>Buscando…</div>}
           {!loading && hits.map((h) => (
-            <div key={h.id} onMouseDown={(e) => { e.preventDefault(); elegir(h); }}
+            <div key={h.id || `bascula-${h.full_name}`} onMouseDown={(e) => { e.preventDefault(); elegir(h); }}
               style={{ padding: "7px 12px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid var(--c-border)" }}>
-              <div style={{ fontWeight: 600 }}>{h.full_name}</div>
+              <div style={{ fontWeight: 600 }}>{h.full_name}{(h.fomentos ?? 0) > 0 && <span style={{ marginLeft: 6, fontSize: 11, color: "#7c3aed" }}>📒 con fomento</span>}</div>
               <div className="muted" style={{ fontSize: 11 }}>
-                {h.identification ? `CI/RUC: ${h.identification}` : "Sin identificación"}{h.phone ? ` · ${h.phone}` : ""}
+                {!h.id
+                  ? `⚖️ Viene de la báscula · ${h.tickets ?? 0} ticket(s) · al elegirlo se registra`
+                  : <>{h.identification ? `CI/RUC: ${h.identification}` : "Sin identificación"}{h.phone ? ` · ${h.phone}` : ""}</>}
               </div>
             </div>
           ))}
@@ -111,7 +123,7 @@ export function ClienteSearchInput({
             <div style={{ padding: "8px 12px", color: "var(--c-muted)", fontSize: 13 }}>Sin coincidencias</div>
           )}
           {showCreate && (
-            <div onMouseDown={(e) => { e.preventDefault(); crearNuevo(); }}
+            <div onMouseDown={(e) => { e.preventDefault(); void crearNuevo(); }}
               style={{ padding: "9px 12px", cursor: "pointer", fontSize: 13, fontWeight: 700, color: "#15803d", background: "#f0fdf4" }}>
               {creating ? "Creando…" : `➕ Nuevo ${label}: "${formatPersonName(term)}"`}
             </div>

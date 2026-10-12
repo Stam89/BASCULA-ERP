@@ -16,6 +16,7 @@ import { dispararFleteInternoBascula } from "../../services/campo-flete-bascula.
 import { getMatrizId } from "../../services/matriz.js";
 import { env } from "../../config/env.js";
 import { basculaTicketStableKey, canonicalBasculaTicketNumber } from "../../utils/bascula-ticket-identity.js";
+import { agricultorPorNombre, nombreNormalSql, vincularTicketsPendientesSeguro } from "../../services/agricultor-nombres.js";
 
 export const mobileTicketsRouter = Router();
 
@@ -38,6 +39,9 @@ async function resolveFarmerHomologado(
 ): Promise<{ id: string; accionista_id: string | null } | null> {
   const clean = (name ?? "").trim();
   if (clean.length < 2) return null;
+  // Primero sin tildes / mayúsculas / espacios dobles («JESÚS GUERRERO» = «JESUS GUERRERO»), si hay UN solo agricultor.
+  const normal = await agricultorPorNombre(pool, clean);
+  if (normal) return normal;
   const exact = await pool.query(
     "SELECT id, accionista_id FROM farmers WHERE lower(trim(full_name)) = lower(trim($1)) ORDER BY created_at ASC LIMIT 1",
     [clean]
@@ -305,6 +309,9 @@ export async function procesarLiquidacionTicket(
 // lote (ahí se elige qué accionista compra). Filtrarlos aquí escondía tickets.
 mobileTicketsRouter.get("/", requireAuth, resolveAccionista, exigirLecturaEn(["Bascula", "Liquidaciones"]), asyncRoute(async (req, res) => {
   const q = z.object({ status: z.enum(["pending", "liquidated"]).optional() }).parse(req.query);
+  // Antes de listar: los pendientes cuyo nombre ya existe (p. ej. el agricultor se registró después en Fomentos)
+  // se enlazan solos. Solo si hay UN agricultor con ese nombre; nunca rompe la lista.
+  await vincularTicketsPendientesSeguro();
   // "Pendiente" = todavía por procesar: ni ingresado como materia prima
   // (weighing_ticket_id) ni liquidado (liquidated_at). Así la lista de pendientes
   // solo muestra lo accionable; los ingresados/liquidados quedan en "Todos".
@@ -416,7 +423,7 @@ mobileTicketsRouter.post("/:id/link-farmer", requireAuth, resolveAccionista, exi
     if (name.length < 2) throw new ApiError(400, "Elige un agricultor o escribe un nombre para crearlo");
     // Evita duplicados: si ya existe un agricultor con ese nombre, se reutiliza.
     const existing = await pool.query(
-      "SELECT id FROM farmers WHERE lower(trim(full_name)) = lower($1) ORDER BY created_at ASC LIMIT 1",
+      `SELECT id FROM farmers WHERE ${nombreNormalSql("full_name")} = ${nombreNormalSql("$1::text")} ORDER BY created_at ASC LIMIT 1`,
       [name]
     );
     if (existing.rowCount) {
@@ -469,7 +476,7 @@ mobileTicketsRouter.post("/:id/link-farmer", requireAuth, resolveAccionista, exi
           AND liquidated_at IS NULL
           AND weighing_ticket_id IS NULL
           AND lower(coalesce(raw_payload->>'modo', 'principal')) = 'principal'
-          AND lower(trim(farmer_name)) = lower(trim($3))
+          AND ${nombreNormalSql("farmer_name")} = ${nombreNormalSql("$3::text")}
         RETURNING id`,
       [req.params.id, farmerId, externalName]
     );

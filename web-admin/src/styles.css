@@ -5822,3 +5822,11 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .campoSaldos__form label { margin: 0; }
 .campoSaldos__ancho { grid-column: 1 / -1; }
 .campoSaldos__banco > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid #bfdbfe; background: #eff6ff; border-radius: 10px; }
+
+/* Báscula › Vincular: nombres sugeridos (con fomento primero) */
+.vincSug { margin: 4px 0 10px; display: grid; gap: 6px; }
+.vincSug > span { font-size: 12.5px; font-weight: 700; }
+.vincSug > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.vincSug button { padding: 6px 12px; border-radius: 999px; border: 1px solid var(--c-border); background: var(--c-surface); font-weight: 600; font-size: 13px; cursor: pointer; }
+.vincSug button.is-on { border-color: #0f766e; background: #f0fdfa; color: #0f766e; }
+.vincSug button small { color: #7c3aed; font-weight: 600; }
