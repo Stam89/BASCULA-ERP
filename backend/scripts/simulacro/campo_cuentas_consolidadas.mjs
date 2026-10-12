@@ -46,6 +46,15 @@ try {
   const reimpreso = exigir(await api("GET", `/campo/cuentas-consolidadas/comprobantes/${recibo.id}`, undefined, matriz), "13. comprobante recuperable para reimpresión");
   check(reimpreso.cxc[0]?.detalle === "Flete Guía SIM-001" && reimpreso.cxp[0]?.detalle === "Reembolso combustible SIM",
     "14. el recibo reimpreso explica de qué eran las deudas", reimpreso);
+
+  // Varias CxP de la misma persona se pagan como una sola cuenta, conservando
+  // en el recibo el documento al que se aplicó cada parte del pago.
+  exigir(await api("POST", "/campo/cxp", { fecha: "2026-10-05", cliente_id: persona.id, acreedor: persona.nombre, concepto: "Repuesto A", monto: 10 }, matriz), "15. primera deuda adicional");
+  exigir(await api("POST", "/campo/cxp", { fecha: "2026-10-06", cliente_id: persona.id, acreedor: persona.nombre, concepto: "Repuesto B", monto: 20 }, matriz), "16. segunda deuda adicional");
+  const banco = (await api("GET", "/campo/cuentas", undefined, matriz)).data.find((x) => x.nombre === "BANCO");
+  const pagoGrupo = exigir(await api("POST", "/campo/cxp/pagar-grupo", { cliente_id: persona.id, monto: 30, cuenta_id: banco.id, fecha: "2026-10-07" }, matriz), "17. pago único de las dos deudas");
+  check(pagoGrupo.aplicaciones.length === 2 && pagoGrupo.aplicaciones[0].concepto === "Repuesto A" && pagoGrupo.aplicaciones[1].concepto === "Repuesto B" && pagoGrupo.saldo_despues === 0,
+    "18. el recibo del pago agrupa y detalla ambas deudas", pagoGrupo);
 } catch (e) {
   console.log("⛔", e.message);
 } finally {

@@ -2,7 +2,7 @@
 // V1 = solo captura. Autocontenido: su propio estado y llamadas a /campo/*.
 // No depende de la lógica de piladora/ventas/fomentos. Se engancha en App.tsx
 // con una entrada de sidebar y un único render.
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { apiFetch, apiGet, apiOk, apiPost, apiPut } from "../api";
@@ -2176,10 +2176,12 @@ function CuentasConsolidadasPanel({ nombreOperacion, onChanged, onNotify, onErro
   const [rows, setRows] = useState<CuentaConsolidada[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [recibo, setRecibo] = useState<ComprobanteCompensacion | null>(null);
+  const onErrorRef = useRef(onError);
+  useEffect(() => { onErrorRef.current = onError; }, [onError]);
   const cargar = useCallback(async () => {
     try { setRows((await apiGet<{ cuentas: CuentaConsolidada[] }>("/campo/cuentas-consolidadas")).cuentas); }
-    catch (e) { onError((e as Error).message); }
-  }, [onError]);
+    catch (e) { onErrorRef.current((e as Error).message); }
+  }, []);
   useEffect(() => { cargar(); }, [cargar]);
   const cruzables = rows.filter((r) => r.compensable > 0.005);
   if (!cruzables.length) return null;
@@ -2279,11 +2281,15 @@ function CxCView({ nombreOperacion, matrizName, onNotify, onError }: {
 
 // ── 📤 Cuentas por Pagar (Transporte): deudas operativas propias (CRUD) ───────
 type CxP = { id: string; fecha: string; acreedor: string; cliente_id: string | null; cliente_nombre: string | null; concepto: string | null; monto: number; pagado: number; saldo: number; estado: "pendiente" | "pagado" };
+type CxPGrupo = { clave: string; acreedor: string; cliente_id: string | null; cuentas: CxP[]; monto: number; pagado: number; saldo: number; };
+type PagoCxPGrupo = { fecha: string; acreedor: string; cuenta: string; monto: number; saldo_antes: number; saldo_despues: number; aplicaciones: Array<{ id: string; fecha: string; concepto: string | null; saldo_antes: number; aplicado: number }> };
 function CxPView({ nombreOperacion, onNotify, onError }: { nombreOperacion: string; onNotify: (m: string, k?: "ok" | "err") => void; onError: (m: string) => void; }) {
   const [data, setData] = useState<{ cuentas: CxP[]; total_pendiente: number } | null>(null);
   const [cuentas, setCuentas] = useState<Cuenta[]>([]);
   const [nuevo, setNuevo] = useState(false);
-  const [pagar, setPagar] = useState<CxP | null>(null);
+  const [pagar, setPagar] = useState<CxPGrupo | null>(null);
+  const [expandido, setExpandido] = useState<string | null>(null);
+  const [reciboPago, setReciboPago] = useState<PagoCxPGrupo | null>(null);
 
   const cargar = useCallback(async () => {
     try {
@@ -2305,6 +2311,19 @@ function CxPView({ nombreOperacion, onNotify, onError }: { nombreOperacion: stri
   }
 
   const rows = data?.cuentas ?? [];
+  const grupos = useMemo(() => {
+    const map = new Map<string, CxPGrupo>();
+    for (const c of rows) {
+      const nombre = (c.cliente_nombre || c.acreedor).trim();
+      const clave = `nombre:${nombre.toLocaleUpperCase("es-EC")}`;
+      const actual = map.get(clave) ?? { clave, acreedor: nombre, cliente_id: c.cliente_id, cuentas: [], monto: 0, pagado: 0, saldo: 0 };
+      if (!actual.cliente_id && c.cliente_id) actual.cliente_id = c.cliente_id;
+      actual.cuentas.push(c); actual.monto += Number(c.monto); actual.pagado += Number(c.pagado); actual.saldo += Number(c.saldo);
+      map.set(clave, actual);
+    }
+    return [...map.values()].map((g) => ({ ...g, monto: Math.round(g.monto * 100) / 100, pagado: Math.round(g.pagado * 100) / 100, saldo: Math.round(g.saldo * 100) / 100 }))
+      .sort((a, b) => b.saldo - a.saldo || a.acreedor.localeCompare(b.acreedor));
+  }, [rows]);
   return (
     <>
       <CuentasConsolidadasPanel nombreOperacion={nombreOperacion} onChanged={cargar} onNotify={onNotify} onError={onError} />
@@ -2326,22 +2345,27 @@ function CxPView({ nombreOperacion, onNotify, onError }: { nombreOperacion: stri
             <tbody>
               {rows.length === 0 ? (
                 <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin cuentas por pagar.</td></tr>
-              ) : rows.map((c) => (
-                <tr key={c.id}>
-                  <td>{c.fecha?.slice(0, 10)}</td>
-                  <td style={{ fontWeight: 600 }}>{c.acreedor}{c.cliente_id ? <small className="muted" style={{ display: "block" }}>🔗 Misma persona del directorio</small> : null}</td>
-                  <td className="muted">{c.concepto || "—"}</td>
-                  <td className="num">{money(c.monto)}</td>
-                  <td className="num" style={{ color: "#15803d" }}>{money(c.pagado)}</td>
-                  <td className="num" style={{ fontWeight: 700, color: c.saldo > 0.005 ? "#b91c1c" : "#15803d" }}>{money(c.saldo)}</td>
-                  <td><span className="chip" style={{ background: c.estado === "pagado" ? "#dcfce7" : "#fef3c7", color: c.estado === "pagado" ? "#15803d" : "#b45309" }}>{c.estado}</span></td>
-                  <td style={{ whiteSpace: "nowrap" }}>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      {c.saldo > 0.005 && <button type="button" className="primary" onClick={() => setPagar(c)}>💵 Pagar</button>}
-                      {c.pagado <= 0.005 && <button type="button" className="btnSecondary" style={{ color: "#b91c1c" }} onClick={() => eliminar(c)}>🗑️</button>}
-                    </div>
-                  </td>
-                </tr>
+              ) : grupos.map((g) => (
+                <Fragment key={g.clave}>
+                  <tr>
+                    <td>{g.cuentas.length === 1 ? g.cuentas[0].fecha?.slice(0, 10) : `${g.cuentas.length} documentos`}</td>
+                    <td style={{ fontWeight: 700 }}>{g.acreedor}{g.cliente_id ? <small className="muted" style={{ display: "block" }}>🔗 Persona identificada</small> : null}</td>
+                    <td className="muted">{g.cuentas.length === 1 ? (g.cuentas[0].concepto || "—") : `${g.cuentas.length} deudas agrupadas · Ver detalle`}</td>
+                    <td className="num">{money(g.monto)}</td>
+                    <td className="num" style={{ color: "#15803d" }}>{money(g.pagado)}</td>
+                    <td className="num" style={{ fontWeight: 700, color: g.saldo > 0.005 ? "#b91c1c" : "#15803d" }}>{money(g.saldo)}</td>
+                    <td><span className="chip" style={{ background: g.saldo <= 0.005 ? "#dcfce7" : "#fef3c7", color: g.saldo <= 0.005 ? "#15803d" : "#b45309" }}>{g.saldo <= 0.005 ? "pagado" : "pendiente"}</span></td>
+                    <td style={{ whiteSpace: "nowrap" }}><div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <button type="button" className="btnSecondary" onClick={() => setExpandido(expandido === g.clave ? null : g.clave)}>{expandido === g.clave ? "Ocultar" : "Ver detalle"}</button>
+                      {g.saldo > 0.005 && <button type="button" className="primary" onClick={() => setPagar(g)}>💵 Pagar cuenta</button>}
+                    </div></td>
+                  </tr>
+                  {expandido === g.clave && <tr><td colSpan={8} style={{ padding: 8, background: "var(--c-surface-2)" }}>
+                    <table className="cajaTable" style={{ margin: 0 }}><thead><tr><th>Fecha</th><th>Concepto</th><th className="num">Original</th><th className="num">Pagado</th><th className="num">Pendiente</th><th></th></tr></thead><tbody>
+                      {g.cuentas.map((c) => <tr key={c.id}><td>{c.fecha?.slice(0, 10)}</td><td>{c.concepto || "—"}</td><td className="num">{money(c.monto)}</td><td className="num">{money(c.pagado)}</td><td className="num"><b>{money(c.saldo)}</b></td><td>{c.pagado <= 0.005 && <button type="button" className="btnSecondary" style={{ color: "#b91c1c" }} onClick={() => eliminar(c)}>🗑️</button>}</td></tr>)}
+                    </tbody></table>
+                  </td></tr>}
+                </Fragment>
               ))}
             </tbody>
           </table>
@@ -2355,11 +2379,12 @@ function CxPView({ nombreOperacion, onNotify, onError }: { nombreOperacion: stri
           onError={onError} />
       )}
       {pagar && (
-        <PagarCxPModal cxp={pagar} cuentas={cuentas}
+        <PagarCxPModal grupo={pagar} cuentas={cuentas}
           onClose={() => setPagar(null)}
-          onDone={async (m) => { setPagar(null); await cargar(); onNotify(m); }}
+          onDone={async (m, recibo) => { setPagar(null); setReciboPago(recibo); await cargar(); onNotify(m); }}
           onError={onError} />
       )}
+      {reciboPago && <ComprobantePagoCxPModal recibo={reciboPago} nombreOperacion={nombreOperacion} onClose={() => setReciboPago(null)} />}
     </>
   );
 }
@@ -2413,11 +2438,11 @@ function NuevaCxPModal({ onClose, onDone, onError }: {
   );
 }
 
-function PagarCxPModal({ cxp, cuentas, onClose, onDone, onError }: {
-  cxp: CxP; cuentas: Cuenta[];
-  onClose: () => void; onDone: (m: string) => void | Promise<void>; onError: (m: string) => void;
+function PagarCxPModal({ grupo, cuentas, onClose, onDone, onError }: {
+  grupo: CxPGrupo; cuentas: Cuenta[];
+  onClose: () => void; onDone: (m: string, recibo: PagoCxPGrupo) => void | Promise<void>; onError: (m: string) => void;
 }) {
-  const [monto, setMonto] = useState(cxp.saldo > 0 ? cxp.saldo.enReal() : "");
+  const [monto, setMonto] = useState(grupo.saldo > 0 ? grupo.saldo.enReal() : "");
   const [cuentaId, setCuentaId] = useState(cuentas[0]?.id ?? "");
   const [fecha, setFecha] = useState(hoy());
   const [busy, setBusy] = useState(false);
@@ -2427,15 +2452,23 @@ function PagarCxPModal({ cxp, cuentas, onClose, onDone, onError }: {
       const m = Number(monto);
       if (!(m > 0)) throw new Error("Indica el monto del pago");
       if (!cuentaId) throw new Error("Elige la cuenta de donde sale el efectivo");
-      await apiPost(`/campo/cxp/${cxp.id}/abono`, { monto: m, cuenta_id: cuentaId, fecha });
-      await onDone(`Pago de ${money(m)} registrado a ${cxp.acreedor}`);
+      const recibo = await apiPost<PagoCxPGrupo>("/campo/cxp/pagar-grupo", {
+        cliente_id: grupo.cliente_id || undefined, acreedor: grupo.cliente_id ? undefined : grupo.acreedor,
+        monto: m, cuenta_id: cuentaId, fecha
+      });
+      await onDone(`Pago de ${money(m)} registrado a ${grupo.acreedor}`, recibo);
     } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
   }
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
       <form className="formPanel" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submit(); }} style={{ maxWidth: 440, width: "100%", margin: 0 }}>
-        <h2 style={{ marginTop: 0 }}>💵 Pagar · {cxp.acreedor}</h2>
-        <p className="muted" style={{ marginTop: 0 }}>Saldo pendiente: <strong>{money(cxp.saldo)}</strong>. El pago sale de la Caja de Transporte.</p>
+        <h2 style={{ marginTop: 0 }}>💵 Pagar · {grupo.acreedor}</h2>
+        <p className="muted" style={{ marginTop: 0 }}>Cuenta agrupada: <strong>{grupo.cuentas.length} documento(s)</strong> · Saldo total: <strong>{money(grupo.saldo)}</strong>.</p>
+        <div style={{ maxHeight: 180, overflow: "auto", border: "1px solid var(--c-border)", borderRadius: 8, marginBottom: 10 }}>
+          <table className="cajaTable" style={{ margin: 0 }}><thead><tr><th>Fecha</th><th>Detalle</th><th className="num">Saldo</th></tr></thead><tbody>
+            {grupo.cuentas.filter((c) => c.saldo > 0.005).map((c) => <tr key={c.id}><td>{c.fecha.slice(0, 10)}</td><td>{c.concepto || "Cuenta por pagar"}</td><td className="num">{money(c.saldo)}</td></tr>)}
+          </tbody></table>
+        </div>
         <label><span>Monto del pago</span>
           <input type="number" step="0.01" min="0" autoFocus value={monto} onChange={(e) => setMonto(e.target.value)} placeholder="0.00" />
         </label>
@@ -2452,6 +2485,27 @@ function PagarCxPModal({ cxp, cuentas, onClose, onDone, onError }: {
       </form>
     </div>
   );
+}
+
+function ComprobantePagoCxPModal({ recibo, nombreOperacion, onClose }: { recibo: PagoCxPGrupo; nombreOperacion: string; onClose: () => void }) {
+  const imprimir = () => {
+    const esc = (v: unknown) => String(v ?? "").replace(/[&<>\"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
+    const filas = recibo.aplicaciones.map((x) => `<tr><td>${esc(String(x.fecha).slice(0, 10))}</td><td>${esc(x.concepto || "Cuenta por pagar")}</td><td class="num">${x.saldo_antes.enReal()}</td><td class="num">${x.aplicado.enReal()}</td></tr>`).join("");
+    const w = window.open("", "_blank", "width=760,height=860"); if (!w) return;
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Pago CxP · ${esc(recibo.acreedor)}</title><style>@page{size:A4;margin:14mm}body{font:12px Arial;color:#111}h1{font-size:18px;margin:0}.muted{color:#555}table{width:100%;border-collapse:collapse;margin-top:14px}th,td{border:1px solid #ccc;padding:6px}th{background:#f3f4f6;text-align:left}.num{text-align:right}.total{font-size:18px;font-weight:700}</style></head><body>
+      <h1>${esc(nombreOperacion)} · Comprobante de pago</h1><div class="muted">${esc(recibo.fecha)} · Cuenta: ${esc(recibo.cuenta)}</div><p><strong>${esc(recibo.acreedor)}</strong></p>
+      <p class="total">Pagado: $ ${recibo.monto.enReal()}</p><p>Saldo anterior: $ ${recibo.saldo_antes.enReal()} · Saldo pendiente: $ ${recibo.saldo_despues.enReal()}</p>
+      <table><thead><tr><th>Fecha deuda</th><th>Detalle</th><th class="num">Saldo anterior</th><th class="num">Aplicado</th></tr></thead><tbody>${filas}</tbody></table>
+      <p class="muted">El pago fue distribuido por antigüedad entre los documentos detallados.</p></body></html>`);
+    w.document.close(); w.focus(); w.print();
+  };
+  return createPortal(<div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.62)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100, padding: 16 }}>
+    <div className="tablePanel" onClick={(e) => e.stopPropagation()} style={{ width: "min(720px,100%)", maxHeight: "calc(100vh - 32px)", overflow: "auto", margin: 0 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}><div><h2 style={{ margin: 0 }}>Pago registrado</h2><strong>{recibo.acreedor}</strong></div><button type="button" className="primary" style={{ marginLeft: "auto" }} onClick={imprimir}>🖨️ Imprimir recibo</button><button type="button" onClick={onClose}>Cerrar</button></div>
+      <p>Se pagaron <strong>{money(recibo.monto)}</strong> desde {recibo.cuenta}. Saldo pendiente: <strong>{money(recibo.saldo_despues)}</strong>.</p>
+      <table className="cajaTable"><thead><tr><th>Fecha</th><th>Detalle de la deuda</th><th className="num">Aplicado</th></tr></thead><tbody>{recibo.aplicaciones.map((x) => <tr key={x.id}><td>{String(x.fecha).slice(0, 10)}</td><td>{x.concepto || "Cuenta por pagar"}</td><td className="num"><b>{money(x.aplicado)}</b></td></tr>)}</tbody></table>
+    </div>
+  </div>, document.body);
 }
 
 // ── 📋 Historial de cierres de caja (auditoría) ──────────────────────────────

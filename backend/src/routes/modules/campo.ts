@@ -2265,6 +2265,70 @@ campoRouter.post("/cxp", asyncRoute(async (req, res) => {
   res.status(201).json(full);
 }));
 
+// Pago de una cuenta agrupada por persona/proveedor. Conserva cada documento
+// CxP y reparte el pago FIFO dentro de una sola transaccion.
+campoRouter.post("/cxp/pagar-grupo", asyncRoute(async (req, res) => {
+  const body = z.object({
+    cliente_id: z.string().uuid().optional(),
+    acreedor: z.string().trim().min(1).max(160).optional(),
+    monto: z.number().positive(),
+    cuenta_id: z.string().uuid(),
+    fecha: fechaSchema.optional()
+  }).superRefine((v, ctx) => {
+    if (!v.cliente_id && !v.acreedor) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Indica la persona o acreedor" });
+  }).parse(req.body);
+  const result = await inTransaction(async (client) => {
+    const cuenta = (await client.query("SELECT id, nombre FROM campo_cuentas WHERE id = $1", [body.cuenta_id])).rows[0];
+    if (!cuenta) throw new ApiError(404, "Cuenta no encontrada");
+    if (cuenta.nombre === CUENTA_INTERNA_CRUCE) throw new ApiError(400, MSG_CUENTA_INTERNA);
+    const persona = body.cliente_id
+      ? (await client.query("SELECT nombre FROM campo_clientes WHERE id = $1", [body.cliente_id])).rows[0]
+      : null;
+    if (body.cliente_id && !persona) throw new ApiError(404, "La persona ya no existe en el directorio.");
+    const nombre = persona?.nombre ?? body.acreedor!.trim();
+    if (body.cliente_id) {
+      await client.query(
+        "UPDATE campo_cxp SET cliente_id = $1 WHERE cliente_id IS NULL AND lower(trim(acreedor)) = lower(trim($2))",
+        [body.cliente_id, nombre]
+      );
+    }
+    const params = body.cliente_id ? [body.cliente_id] : [nombre];
+    const condicion = body.cliente_id ? "p.cliente_id = $1" : "lower(trim(p.acreedor)) = lower(trim($1))";
+    await client.query(`SELECT p.id FROM campo_cxp p WHERE ${condicion} ORDER BY p.fecha, p.created_at FOR UPDATE`, params);
+    const deudas = (await client.query(
+      `SELECT p.id, p.fecha, p.acreedor, p.concepto, p.categoria_id, p.activo_id,
+              (p.monto - COALESCE((SELECT SUM(m.monto) FROM campo_movimientos m
+                                    WHERE m.cxp_id = p.id AND m.signo = 'salida'), 0))::float AS saldo
+         FROM campo_cxp p WHERE ${condicion} ORDER BY p.fecha, p.created_at`, params
+    )).rows.filter((p) => Number(p.saldo) > 0.005);
+    const total = Math.round(deudas.reduce((s, p) => s + Number(p.saldo), 0) * 100) / 100;
+    if (!(total > 0.005)) throw new ApiError(409, "Esta cuenta ya no tiene saldo pendiente.");
+    if (body.monto > total + 0.005) throw new ApiError(422, `El pago (${body.monto.toFixed(2)}) supera el saldo agrupado (${total.toFixed(2)}).`);
+    await requireCajaAbierta([body.cuenta_id], client);
+    await requireSaldoCajaDisponible(client, body.cuenta_id, body.monto);
+    const aplicaciones = repartirCompensacion(deudas, body.monto);
+    const detalle: Array<{ id: string; fecha: string; concepto: string | null; saldo_antes: number; aplicado: number }> = [];
+    for (const aplicacion of aplicaciones) {
+      const deuda = deudas.find((p) => p.id === aplicacion.id)!;
+      await client.query(
+        `INSERT INTO campo_movimientos
+           (fecha, cuenta_id, signo, monto, concepto, cxp_id, created_by, categoria_id, activo_id, proveedor)
+         VALUES (COALESCE($1::date, CURRENT_DATE), $2, 'salida', $3, $4, $5, $6, $7, $8, $9)`,
+        [body.fecha ?? null, body.cuenta_id, aplicacion.monto, `Pago agrupado CxP · ${nombre}`,
+         deuda.id, userId(req), deuda.categoria_id ?? null, deuda.activo_id ?? null, nombre]
+      );
+      detalle.push({ id: deuda.id, fecha: deuda.fecha, concepto: deuda.concepto, saldo_antes: Number(deuda.saldo), aplicado: aplicacion.monto });
+    }
+    return {
+      fecha: body.fecha ?? new Date().toISOString().slice(0, 10), acreedor: nombre,
+      cuenta: cuenta.nombre, monto: Math.round(body.monto * 100) / 100,
+      saldo_antes: total, saldo_despues: Math.round((total - body.monto) * 100) / 100,
+      aplicaciones: detalle
+    };
+  });
+  res.status(201).json(result);
+}));
+
 campoRouter.post("/cxp/:id/abono", asyncRoute(async (req, res) => {
   const body = z.object({
     monto: z.number().positive(),
