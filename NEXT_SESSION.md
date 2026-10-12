@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🚜 Transporte › Configuración completa: estado, categorías y saldos de arranque (2026-10-12, pedido del dueño)
+
+- Arriba, «✅ Estado de la configuración» (`GET /campo/config/estado`): nombre, flota, operadores, tarifas, categorías, clientes, caja (si nunca se abrió → «Ir a Caja») y saldos de arranque (si aplica). Nueva tarjeta «🏷️ Categorías de gasto» (ver/agregar).
+- «📥 Saldos de arranque»: le deben (`POST /campo/saldos-iniciales/cobrar` → campo_servicios origen_tipo 'saldo_inicial'; cliente socio «piladora» con nombre de accionista → espejo campo_servicio en su Por Pagar), debe (`…/pagar` → campo_cxp origen 'SALDO_INICIAL', se paga en Cuentas por Pagar) y banco (`…/banco` → campo_movimientos naturaleza 'saldo_inicial' en BANCO; una sola vez). Quitar solo sin abonos. No cuentan como ingreso/gasto (exclusiones en `campo-resultados.ts` y reporte por máquina). Permiso: sección «config». Simulacro `campo_saldos_arranque.mjs` TODO OK; verificado en celular sobre la copia.
+
 ### 🏦 Préstamos del banco (2026-10-12, pedido del dueño: «tengo préstamos en el banco, unos cobran en distinta fecha»)
 
 - Tablas `prestamos_bancarios` + `prestamo_cuotas` (migración `20261089`; categorías inactivas PAGO_PRESTAMO / PRESTAMO_RECIBIDO). Por accionista. Ruta `/prestamos` (escribe Por Pagar o Caja; lee también Estados Financieros): `POST /tabla` (vista previa), `POST /` (con `filas` corregidas a mano y `desembolso` opcional = el dinero entra a la caja), `PUT /:id/cuotas/:cuotaId` (corregir pendiente), `POST /:id/cuotas/:cuotaId/pagar` (UN egreso PAGO_PRESTAMO, por defecto del banco; interés y otros ajustables), `POST /:id/anular` (PERM:ANULAR, sin cuotas pagadas; anula la entrada del dinero).
