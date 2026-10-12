@@ -49,6 +49,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🏦 Préstamos del banco (2026-10-12, pedido del dueño: «tengo préstamos en el banco, unos cobran en distinta fecha»)
+
+- Tablas `prestamos_bancarios` + `prestamo_cuotas` (migración `20261089`; categorías inactivas PAGO_PRESTAMO / PRESTAMO_RECIBIDO). Por accionista. Ruta `/prestamos` (escribe Por Pagar o Caja; lee también Estados Financieros): `POST /tabla` (vista previa), `POST /` (con `filas` corregidas a mano y `desembolso` opcional = el dinero entra a la caja), `PUT /:id/cuotas/:cuotaId` (corregir pendiente), `POST /:id/cuotas/:cuotaId/pagar` (UN egreso PAGO_PRESTAMO, por defecto del banco; interés y otros ajustables), `POST /:id/anular` (PERM:ANULAR, sin cuotas pagadas; anula la entrada del dinero).
+- `services/prestamos.ts` (puro, con pruebas): sistema francés, tasa despejada de la cuota del banco (bisección), seguro por cuota, frecuencia 1/2/3/6/12 meses, día de cobro = día de la 1.ª fecha (último día si el mes es corto).
+- Contabilidad: PAGO_PRESTAMO en `CATEGORIAS_NO_OPERATIVAS`; Estado de resultados `gastos_financieros` (interés + otros de cuotas pagadas, resta a la utilidad neta); Balance `pasivo.corriente.prestamos_bancarios` (vence ≤ 12 meses) y `pasivo.no_corriente`; Resultado mensual: «Intereses préstamo …» automático (origen auto, sin 🗑). Anular el pago en Caja deja la cuota pendiente; la entrada del dinero no se anula en Caja (409: se anula el préstamo).
+- «Hoy»: cuota vencida = urgente; cobro en ≤ 5 días = aviso (tab Por Pagar, sub «prestamos» → lleva al panel). 2 reglas de integridad nuevas (53). UI `components/PrestamosBancarios.tsx` en Por Pagar. Simulacro `prestamos.mjs` TODO OK; verificado en celular sobre la copia.
+
 ### 💼 Sueldo administrativo: quincena y fin de mes distintos (2026-10-11, pedido del dueño: cobra $250 el 15 y $300 a fin de mes)
 
 - `admin_staff.salario_fin_mes` (migración `20261088`; NULL = igual a la quincena, así que los de antes no cambian). `base_salary` sigue siendo lo de la quincena. `/admin-payroll/pending` devuelve en `base_salary` el sueldo de ESE corte (+ `sueldo_quincena`/`sueldo_fin_mes`); `/pay` elige el monto por el `periodo` («… Fin de mes» → fin de mes). Configuración › 💼 Personal administrativo pide «Sueldo de la quincena (día 15)» y «Sueldo de fin de mes» (vacío = igual) y muestra «al mes»; Nómina › Sueldo Administrativo muestra Quincena / Fin de mes / Al mes. Ojo zod: `z.union([z.null(), z.coerce.number()])` (al revés, null se volvía 0). Simulacro `sueldo_quincena_fin_mes.mjs` TODO OK; verificado en celular sobre la copia.
