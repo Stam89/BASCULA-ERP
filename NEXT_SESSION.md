@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### ⚖️📒 Báscula y Fomentos leen los mismos nombres (2026-10-12, pedido del dueño)
+
+- Causa: el ticket solo se enlazaba al llegar y con nombre EXACTO; si el agricultor se registraba después (fomento) o había tildes («JESÚS» vs «JESUS») quedaba «Sin vincular» para siempre. `services/agricultor-nombres.ts`: `nombreNormalSql`/`nombreNormal` (sin tildes/ñ, mayúsculas, un espacio), `vincularTicketsPendientes` (enlaza pendientes cuyo nombre coincide con UN solo agricultor activo o alias; nunca adivina), `nombresSoloEnBascula`, `agricultorPorNombre`.
+- Se llama al abrir la lista de tickets (`GET /tickets`) y al crear/editar un agricultor. La sincronización, «Vincular» en cascada, fomentos (crear e importar) y `/farmers/search` comparan normalizado. `/farmers/search?bascula=1` agrega los nombres que solo están en la báscula (id vacío, origen «bascula»); `ClienteSearchInput` (agricultores, con crear) los muestra y al elegirlos crea el agricultor. `/farmers` y la búsqueda traen `fomentos` (cuántos). Modal «Vincular» de la Báscula: sugeridos parecidos (`agricultoresParecidos` en format.ts, con fomento primero) y filtro sin tildes. Simulacro `nombres_bascula_fomento.mjs` TODO OK; verificado en celular sobre la copia.
+
 ### 🚜 Transporte › Configuración completa: estado, categorías y saldos de arranque (2026-10-12, pedido del dueño)
 
 - Arriba, «✅ Estado de la configuración» (`GET /campo/config/estado`): nombre, flota, operadores, tarifas, categorías, clientes, caja (si nunca se abrió → «Ir a Caja») y saldos de arranque (si aplica). Nueva tarjeta «🏷️ Categorías de gasto» (ver/agregar).
