@@ -2273,7 +2273,7 @@ campoRouter.get("/reportes/por-maquina", asyncRoute(async (req, res) => {
   const filas = (await pool.query(
     `WITH ing AS (
        SELECT activo_id, SUM(valor) AS v
-       FROM campo_servicios WHERE fecha BETWEEN $1 AND $2 GROUP BY activo_id
+       FROM campo_servicios WHERE fecha BETWEEN $1 AND $2 AND COALESCE(origen_tipo, '') <> 'saldo_inicial' GROUP BY activo_id
      ), gas AS (
        -- Gasto REAL por activo. Las TRANSFERENCIAS se excluyen. Los AJUSTES de
        -- vale (naturaleza 'ajuste_vale') netean: la devolución (entrada) baja el
@@ -2405,6 +2405,153 @@ campoRouter.put("/config", asyncRoute(async (req, res) => {
     [body.nombre_operacion]
   );
   res.json({ nombre_operacion: r.rows[0].nombre_operacion });
+}));
+
+// ════════════════════════════════════════════════════════════════════════════
+// ⚙️ CONFIGURACIÓN COMPLETA (pedido del dueño 2026-10-12: «la veo incompleta y no tengo cómo agregar si alguien le
+// debe o tenga que pagar»). Estado de la configuración y SALDOS DE ARRANQUE de Transporte:
+//  · Le deben (de antes del sistema) → campo_servicios con origen_tipo 'saldo_inicial'. Si el cliente es un socio
+//    (tipo piladora con el nombre de un accionista), también nace su Por Pagar espejo (campo_servicio).
+//  · Transporte le debe a alguien → campo_cxp con origen 'SALDO_INICIAL'.
+//  · Dinero en el banco al arrancar → campo_movimientos entrada en BANCO, naturaleza 'saldo_inicial'.
+// Ninguno es ingreso ni gasto del período (los reportes los excluyen); el efectivo de la CAJA se pone al abrirla.
+// ════════════════════════════════════════════════════════════════════════════
+const ORIGEN_SALDO_INICIAL = "saldo_inicial";
+
+campoRouter.get("/config/estado", asyncRoute(async (_req, res) => {
+  await ensureConfig();
+  const r = (await pool.query(
+    `SELECT (SELECT nombre_operacion FROM campo_config WHERE id = 1) AS nombre,
+            (SELECT count(*)::int FROM campo_activos WHERE activo) AS flota,
+            (SELECT count(*)::int FROM campo_operadores WHERE activo) AS operadores,
+            (SELECT count(*)::int FROM campo_tarifas_operador WHERE activo) AS tarifas_operador,
+            (SELECT count(*)::int FROM campo_categorias_gasto) AS categorias,
+            (SELECT count(*)::int FROM campo_clientes) AS clientes,
+            (SELECT count(*)::int FROM campo_caja_sesiones) AS sesiones_caja,
+            (SELECT count(*)::int FROM campo_caja_sesiones WHERE estado = 'ABIERTA') AS caja_abierta,
+            (SELECT count(*)::int FROM campo_servicios WHERE origen_tipo = $1) AS saldos_cobrar,
+            (SELECT count(*)::int FROM campo_cxp WHERE origen = 'SALDO_INICIAL') AS saldos_pagar,
+            (SELECT count(*)::int FROM campo_movimientos WHERE naturaleza = $1) AS saldo_banco`,
+    [ORIGEN_SALDO_INICIAL]
+  )).rows[0];
+  res.json(r);
+}));
+
+campoRouter.get("/saldos-iniciales", asyncRoute(async (_req, res) => {
+  const cobrar = (await pool.query(
+    `SELECT s.id, s.fecha, s.tipo, s.valor::float AS valor, s.notas, cl.nombre AS cliente, cl.tipo AS cliente_tipo,
+            (s.valor - v.saldo_pendiente)::float AS cobrado, v.saldo_pendiente::float AS saldo
+       FROM campo_servicios s JOIN campo_clientes cl ON cl.id = s.cliente_id JOIN campo_servicios_saldo v ON v.id = s.id
+      WHERE s.origen_tipo = $1 ORDER BY s.fecha, cl.nombre`,
+    [ORIGEN_SALDO_INICIAL]
+  )).rows;
+  const pagar = (await pool.query(`${CXP_SELECT} WHERE c.origen = 'SALDO_INICIAL' ORDER BY c.fecha, c.acreedor`)).rows;
+  const banco = (await pool.query(
+    `SELECT m.id, m.fecha, m.monto::float AS monto, ct.nombre AS cuenta FROM campo_movimientos m JOIN campo_cuentas ct ON ct.id = m.cuenta_id
+      WHERE m.naturaleza = $1 ORDER BY m.fecha`,
+    [ORIGEN_SALDO_INICIAL]
+  )).rows;
+  res.json({ cobrar, pagar, banco });
+}));
+
+// Le deben a Transporte desde antes del sistema.
+campoRouter.post("/saldos-iniciales/cobrar", asyncRoute(async (req, res) => {
+  const body = z.object({
+    cliente_id: z.string().uuid(),
+    tipo: z.enum(["cosecha", "flete"]),
+    monto: z.number().positive(),
+    fecha: fechaSchema,
+    nota: z.string().trim().max(300).optional()
+  }).parse(req.body);
+  const out = await inTransaction(async (client) => {
+    const cli = (await client.query("SELECT id, nombre, tipo FROM campo_clientes WHERE id = $1", [body.cliente_id])).rows[0];
+    if (!cli) throw new ApiError(404, "Cliente no encontrado.");
+    const tipos = body.tipo === "cosecha" ? ["cosechadora"] : ["camion", "transporte", "vehiculo"];
+    const activo = (await client.query(
+      `SELECT id FROM campo_activos WHERE activo = true AND tipo = ANY($1::varchar[]) ORDER BY nombre LIMIT 1`, [tipos]
+    )).rows[0] ?? (await client.query("SELECT id FROM campo_activos WHERE activo = true ORDER BY nombre LIMIT 1")).rows[0];
+    if (!activo) throw new ApiError(409, "Primero registra la flota (Configuración → Flota y maquinaria).");
+    const monto = Math.round(body.monto * 100) / 100;
+    const svc = (await client.query(
+      `INSERT INTO campo_servicios (fecha, cliente_id, activo_id, tipo, valor, notas, created_by, origen_tipo, origen_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, gen_random_uuid()) RETURNING id`,
+      [body.fecha, cli.id, activo.id, body.tipo, monto,
+       `Saldo inicial (deuda de antes del sistema)${body.nota ? ` · ${body.nota}` : ""}`, userId(req), ORIGEN_SALDO_INICIAL]
+    )).rows[0];
+    // Si el que debe es un SOCIO (cliente interno con el nombre de un accionista), lo ve en su Por Pagar.
+    let socio: string | null = null;
+    if (cli.tipo === "piladora") {
+      const acc = (await client.query(
+        "SELECT id, name FROM accionistas WHERE is_active AND upper(btrim(name)) = upper(btrim($1)) LIMIT 1", [cli.nombre]
+      )).rows[0];
+      if (acc) {
+        await client.query(
+          `INSERT INTO accounts_payable (accionista_id, reference_type, reference_id, description, amount, balance, status)
+           VALUES ($1, 'campo_servicio', $2, $3, $4, $4, 'CONFIRMED')`,
+          [acc.id, svc.id, `Transporte y Cosechadora · saldo inicial (${body.tipo === "cosecha" ? "cosecha" : "flete"})${body.nota ? ` · ${body.nota}` : ""}`, monto]
+        );
+        socio = acc.name;
+      }
+    }
+    return { id: svc.id, cliente: cli.nombre, monto, espejo_socio: socio };
+  });
+  res.status(201).json(out);
+}));
+
+campoRouter.delete("/saldos-iniciales/cobrar/:id", asyncRoute(async (req, res) => {
+  await inTransaction(async (client) => {
+    const s = (await client.query("SELECT id FROM campo_servicios WHERE id = $1 AND origen_tipo = $2 FOR UPDATE", [req.params.id, ORIGEN_SALDO_INICIAL])).rows[0];
+    if (!s) throw new ApiError(404, "Saldo inicial no encontrado.");
+    const abonos = Number((await client.query("SELECT count(*)::int AS n FROM campo_movimientos WHERE servicio_id = $1", [s.id])).rows[0].n);
+    if (abonos > 0) throw new ApiError(409, "Ya tiene abonos: anúlalos en la Caja de Transporte antes de quitar este saldo.");
+    const espejo = (await client.query("SELECT id, amount, balance FROM accounts_payable WHERE reference_type = 'campo_servicio' AND reference_id = $1 FOR UPDATE", [s.id])).rows;
+    if (espejo.some((p) => Number(p.balance) < Number(p.amount) - 0.005)) {
+      throw new ApiError(409, "El socio ya abonó a esta deuda desde su Por Pagar: anula ese pago primero.");
+    }
+    await client.query("DELETE FROM accounts_payable WHERE reference_type = 'campo_servicio' AND reference_id = $1", [s.id]);
+    await client.query("DELETE FROM campo_servicios WHERE id = $1", [s.id]);
+  });
+  res.json({ ok: true });
+}));
+
+// Transporte le debe a alguien desde antes del sistema.
+campoRouter.post("/saldos-iniciales/pagar", asyncRoute(async (req, res) => {
+  const body = z.object({
+    acreedor: z.string().trim().min(2).max(160),
+    monto: z.number().positive(),
+    fecha: fechaSchema,
+    nota: z.string().trim().max(300).optional()
+  }).parse(req.body);
+  const row = (await pool.query(
+    `INSERT INTO campo_cxp (fecha, acreedor, concepto, monto, created_by, origen)
+     VALUES ($1, $2, $3, $4, $5, 'SALDO_INICIAL') RETURNING id`,
+    [body.fecha, body.acreedor.toUpperCase(), `Saldo inicial (deuda de antes del sistema)${body.nota ? ` · ${body.nota}` : ""}`,
+     Math.round(body.monto * 100) / 100, userId(req)]
+  )).rows[0];
+  res.status(201).json((await pool.query(`${CXP_SELECT} WHERE c.id = $1`, [row.id])).rows[0]);
+}));
+
+// Dinero en el BANCO de Transporte al arrancar (el efectivo de la CAJA se pone al abrir la caja).
+campoRouter.post("/saldos-iniciales/banco", asyncRoute(async (req, res) => {
+  const body = z.object({ monto: z.number().positive(), fecha: fechaSchema }).parse(req.body);
+  const out = await inTransaction(async (client) => {
+    const banco = (await client.query("SELECT id FROM campo_cuentas WHERE nombre = 'BANCO' LIMIT 1")).rows[0];
+    if (!banco) throw new ApiError(409, "No existe la cuenta BANCO de Transporte.");
+    const ya = (await client.query("SELECT 1 FROM campo_movimientos WHERE naturaleza = $1 AND cuenta_id = $2", [ORIGEN_SALDO_INICIAL, banco.id])).rowCount;
+    if (ya) throw new ApiError(409, "El saldo inicial del banco ya está registrado: quítalo primero si quieres cambiarlo.");
+    return (await client.query(
+      `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, naturaleza, created_by)
+       VALUES ($1, $2, 'entrada', $3, 'Saldo inicial del banco (al arrancar el sistema)', $4, $5) RETURNING id, fecha, monto::float AS monto`,
+      [body.fecha, banco.id, Math.round(body.monto * 100) / 100, ORIGEN_SALDO_INICIAL, userId(req)]
+    )).rows[0];
+  });
+  res.status(201).json(out);
+}));
+
+campoRouter.delete("/saldos-iniciales/banco/:id", asyncRoute(async (req, res) => {
+  const r = await pool.query("DELETE FROM campo_movimientos WHERE id = $1 AND naturaleza = $2", [req.params.id, ORIGEN_SALDO_INICIAL]);
+  if (!r.rowCount) throw new ApiError(404, "Saldo inicial del banco no encontrado.");
+  res.json({ ok: true });
 }));
 
 // Transferencia entre dos cuentas: PAR de movimientos (salida en origen +

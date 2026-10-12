@@ -5803,3 +5803,22 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
   .prest__headDer { margin-left: 0; width: 100%; }
   .prest__headDer > * { flex: 1 1 auto; }
 }
+
+/* ⚙️ Transporte › Configuración: estado, categorías y saldos de arranque */
+.campoCfgEstado__head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.campoCfgEstado__lista { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; margin-top: 10px; }
+.campoCfgEstado__item { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--c-border); background: var(--c-surface); }
+.campoCfgEstado__item.is-ok { border-color: #bbf7d0; background: #f0fdf4; }
+.campoCfgEstado__item.is-falta { border-color: #fde68a; background: #fffbeb; }
+.campoCfgEstado__ico { flex: 0 0 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 13px; background: #e5e7eb; color: #374151; }
+.campoCfgEstado__item.is-ok .campoCfgEstado__ico { background: #16a34a; color: #fff; }
+.campoCfgEstado__item.is-falta .campoCfgEstado__ico { background: #f59e0b; color: #fff; }
+.campoCfgEstado__txt { display: grid; gap: 1px; flex: 1; min-width: 0; font-size: 13px; }
+.campoCfgEstado__txt small { color: var(--c-text-muted); }
+.campoCfgEstado__item button { flex: 0 0 auto; font-size: 12px; padding: 5px 10px; }
+.campoCats { display: flex; flex-wrap: wrap; gap: 6px; }
+.campoSaldos__tabs { margin: 6px 0 12px; flex-wrap: wrap; }
+.campoSaldos__form { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px 12px; align-items: end; }
+.campoSaldos__form label { margin: 0; }
+.campoSaldos__ancho { grid-column: 1 / -1; }
+.campoSaldos__banco > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid #bfdbfe; background: #eff6ff; border-radius: 10px; }

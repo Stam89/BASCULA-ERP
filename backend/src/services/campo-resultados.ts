@@ -150,7 +150,7 @@ export async function lineasDelPeriodo(db: Db, desde: string, hasta: string): Pr
             s.activo_id, s.valor::float AS monto, (cl.tipo = 'piladora') AS grupo
        FROM campo_servicios s
        LEFT JOIN campo_clientes cl ON cl.id = s.cliente_id
-      WHERE s.fecha BETWEEN $1 AND $2
+      WHERE s.fecha BETWEEN $1 AND $2 AND COALESCE(s.origen_tipo, '') <> 'saldo_inicial'  -- deuda de antes: no es ingreso
      UNION ALL
      -- Otros ingresos sueltos de caja (no son cobros de servicios ni de clientes).
      SELECT 'ingreso', 'Otros ingresos de caja', m.activo_id,
@@ -189,7 +189,7 @@ export async function lineasDelPeriodo(db: Db, desde: string, hasta: string): Pr
      SELECT 'gasto', COALESCE(cat.nombre, 'COMPRA_CREDITO'), c.activo_id, c.monto::float, NULL
        FROM campo_cxp c
        LEFT JOIN campo_categorias_gasto cat ON cat.id = c.categoria_id
-      WHERE c.fecha BETWEEN $1 AND $2`,
+      WHERE c.fecha BETWEEN $1 AND $2 AND COALESCE(c.origen, '') <> 'SALDO_INICIAL'`,
     [desde, hasta]
   );
   return r.rows as LineaCruda[];
@@ -206,7 +206,7 @@ export async function informativo(db: Db, desde: string, hasta: string) {
          WHERE m.fecha <= $2 AND m.signo = 'salida' AND m.estado = 'PENDIENTE_RENDICION') AS vales_por_rendir,
        (SELECT COUNT(*)::int FROM campo_movimientos m
          WHERE m.fecha <= $2 AND m.signo = 'salida' AND m.estado = 'PENDIENTE_RENDICION') AS vales_cantidad,
-       (SELECT COALESCE(SUM(c.monto), 0)::float FROM campo_cxp c WHERE c.fecha BETWEEN $1 AND $2) AS compras_credito,
+       (SELECT COALESCE(SUM(c.monto), 0)::float FROM campo_cxp c WHERE c.fecha BETWEEN $1 AND $2 AND COALESCE(c.origen, '') <> 'SALDO_INICIAL') AS compras_credito,
        (SELECT COALESCE(SUM(p.qq), 0)::float FROM campo_partes p WHERE p.fecha BETWEEN $1 AND $2) AS qq_trabajados`,
     [desde, hasta]
   )).rows[0];

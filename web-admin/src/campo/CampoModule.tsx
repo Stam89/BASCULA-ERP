@@ -273,6 +273,7 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
   }, []);
   const [servTab, setServTab] = useState<"servicio" | "abono" | "lista">("servicio");
   const [libroVersion, setLibroVersion] = useState(0); // fuerza recarga del libro tras cada movimiento
+  const [cfgVersion, setCfgVersion] = useState(0); // recarga el «Estado de la configuración» tras cada cambio
 
   const refreshCatalogos = useCallback(async () => {
     const [a, cat, ct, op] = await Promise.all([
@@ -343,21 +344,25 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
   }
 
   if (section === "config") {
+    const cambio = async (msg: string) => { await refreshCatalogos(); setCfgVersion((v) => v + 1); notify(msg); };
     return (
       <section className="panelGrid">
         {flashEl}
+        <EstadoConfigCampo version={cfgVersion} onIr={onIrSeccion} />
         <ConfigSection nombreActual={nombre ?? "Campo"}
-          onSaved={(n) => { onNombreChange?.(n); notify(`Nombre de la operación actualizado a “${n}”`); }}
+          onSaved={(n) => { onNombreChange?.(n); setCfgVersion((v) => v + 1); notify(`Nombre de la operación actualizado a “${n}”`); }}
           onError={(m) => notify(m, "err")} />
         <FlotaMaquinaria activos={activos}
-          onChanged={async (msg) => { await refreshCatalogos(); notify(msg); }}
+          onChanged={cambio}
           onError={(m) => notify(m, "err")} />
         <OperadoresCatalogo operadores={operadores}
-          onChanged={async (msg) => { await refreshCatalogos(); notify(msg); }}
+          onChanged={cambio}
           onError={(m) => notify(m, "err")} />
         <TarifasOperadorCatalogo activos={activos} operadores={operadores}
-          onChanged={(msg) => notify(msg)}
+          onChanged={(msg) => { setCfgVersion((v) => v + 1); notify(msg); }}
           onError={(m) => notify(m, "err")} />
+        <CategoriasGastoCampo categorias={categorias} onChanged={cambio} onError={(m) => notify(m, "err")} />
+        <SaldosArranqueCampo onChanged={async (msg) => { setCfgVersion((v) => v + 1); notify(msg); }} onError={(m) => notify(m, "err")} />
       </section>
     );
   }
@@ -2669,6 +2674,229 @@ function ClientePicker({ value, onChange, onError }: {
         </div>
       )}
     </label>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ⚙️ CONFIGURACIÓN COMPLETA DE TRANSPORTE (2026-10-12): estado de la configuración, categorías de gasto y SALDOS DE
+// ARRANQUE (quién le debía a Transporte, a quién le debía Transporte y el dinero que tenía en el banco).
+// ════════════════════════════════════════════════════════════════════════════
+type EstadoConfig = {
+  nombre: string | null; flota: number; operadores: number; tarifas_operador: number; categorias: number; clientes: number;
+  sesiones_caja: number; caja_abierta: number; saldos_cobrar: number; saldos_pagar: number; saldo_banco: number;
+};
+/** Último día del mes anterior (los cortes son a fin de mes). */
+function ultimoDiaMesAnterior(): string {
+  const d = new Date(); const u = new Date(d.getFullYear(), d.getMonth(), 0);
+  return `${u.getFullYear()}-${String(u.getMonth() + 1).padStart(2, "0")}-${String(u.getDate()).padStart(2, "0")}`;
+}
+
+function EstadoConfigCampo({ version, onIr }: { version: number; onIr?: (s: CampoSeccion) => void }) {
+  const [e, setE] = useState<EstadoConfig | null>(null);
+  useEffect(() => { apiGet<EstadoConfig>("/campo/config/estado").then(setE).catch(() => setE(null)); }, [version]);
+  if (!e) return null;
+  const saldos = e.saldos_cobrar + e.saldos_pagar + e.saldo_banco;
+  const items: Array<{ ok: boolean; opcional?: boolean; titulo: string; detalle: string; ir?: () => void; irTxt?: string }> = [
+    { ok: Boolean(e.nombre && e.nombre !== "Campo"), titulo: "Nombre de la operación", detalle: e.nombre ?? "Sin nombre" },
+    { ok: e.flota > 0, titulo: "Flota y maquinaria", detalle: e.flota > 0 ? `${e.flota} máquina(s) / vehículo(s)` : "Registra las cosechadoras y los carros (abajo)" },
+    { ok: e.operadores > 0, titulo: "Operadores", detalle: e.operadores > 0 ? `${e.operadores} operador(es)` : "Registra a los choferes y operadores (abajo)" },
+    { ok: e.tarifas_operador > 0, titulo: "Tarifas de los operadores", detalle: e.tarifas_operador > 0 ? `${e.tarifas_operador} tarifa(s)` : "Sin tarifas no se calcula la nómina de operadores" },
+    { ok: e.categorias > 0, titulo: "Categorías de gasto", detalle: `${e.categorias} categoría(s)` },
+    { ok: e.clientes > 0, titulo: "Clientes", detalle: e.clientes > 0 ? `${e.clientes} cliente(s)` : "Se crean solos al registrar un parte o un servicio", ir: onIr ? () => onIr("clientes") : undefined, irTxt: "Ver clientes" },
+    { ok: e.sesiones_caja > 0, titulo: "Caja", detalle: e.caja_abierta > 0 ? "Caja abierta" : e.sesiones_caja > 0 ? "Cerrada (se abre cada día)" : "Aún no se ha abierto nunca: ábrela con el efectivo que tiene Transporte", ir: onIr ? () => onIr("caja") : undefined, irTxt: "Ir a Caja" },
+    { ok: saldos > 0, opcional: true, titulo: "Saldos de arranque", detalle: saldos > 0 ? `${e.saldos_cobrar} por cobrar · ${e.saldos_pagar} por pagar · banco ${e.saldo_banco > 0 ? "✓" : "—"}` : "Si Transporte tenía deudas o dinero en el banco antes de usar el sistema, cárgalos abajo" }
+  ];
+  const listos = items.filter((x) => x.ok).length;
+  return (
+    <div className="tablePanel campoCfgEstado" style={{ gridColumn: "1 / -1" }}>
+      <div className="campoCfgEstado__head">
+        <h2 style={{ margin: 0 }}>✅ Estado de la configuración</h2>
+        <span className={`chip ${listos === items.length ? "ok" : "warn"}`}>{listos} de {items.length} listos</span>
+      </div>
+      <div className="campoCfgEstado__lista">
+        {items.map((x) => (
+          <div key={x.titulo} className={`campoCfgEstado__item ${x.ok ? "is-ok" : x.opcional ? "is-opc" : "is-falta"}`}>
+            <span className="campoCfgEstado__ico" aria-hidden="true">{x.ok ? "✓" : x.opcional ? "•" : "!"}</span>
+            <span className="campoCfgEstado__txt"><strong>{x.titulo}{x.opcional && !x.ok ? " (si aplica)" : ""}</strong><small>{x.detalle}</small></span>
+            {!x.ok && x.ir && <button type="button" className="btnSecondary" onClick={x.ir}>{x.irTxt}</button>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CategoriasGastoCampo({ categorias, onChanged, onError }: {
+  categorias: Categoria[]; onChanged: (msg: string) => Promise<void>; onError: (m: string) => void;
+}) {
+  const [nombre, setNombre] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function agregar() {
+    const n = nombre.trim().toUpperCase();
+    if (n.length < 2) { onError("Escribe el nombre de la categoría"); return; }
+    if (categorias.some((c) => c.nombre.toUpperCase() === n)) { onError(`La categoría ${n} ya existe`); return; }
+    try { setBusy(true); await apiPost("/campo/categorias-gasto", { nombre: n }); setNombre(""); await onChanged(`Categoría ${n} agregada`); }
+    catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+  return (
+    <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
+      <h2>🏷️ Categorías de gasto</h2>
+      <p className="muted" style={{ marginTop: -4 }}>Con estas se clasifican los egresos de la caja de Transporte (diésel, reparaciones…) en los reportes.</p>
+      <div className="campoCats">
+        {categorias.map((c) => <span key={c.id} className="chip">{c.nombre}</span>)}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+        <input type="text" value={nombre} maxLength={60} onChange={(e) => setNombre(e.target.value)} placeholder="Ej: LLANTAS" style={{ flex: "1 1 180px" }}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void agregar(); } }} />
+        <button type="button" className="primary" disabled={busy} onClick={agregar}>➕ Agregar categoría</button>
+      </div>
+    </div>
+  );
+}
+
+type SaldoCobrar = { id: string; fecha: string; tipo: "cosecha" | "flete"; valor: number; notas: string | null; cliente: string; cliente_tipo: string; cobrado: number; saldo: number };
+type SaldoPagar = { id: string; fecha: string; acreedor: string; concepto: string | null; monto: number; pagado: number; saldo: number };
+type SaldoBanco = { id: string; fecha: string; monto: number };
+
+function SaldosArranqueCampo({ onChanged, onError }: { onChanged: (msg: string) => Promise<void>; onError: (m: string) => void }) {
+  const [data, setData] = useState<{ cobrar: SaldoCobrar[]; pagar: SaldoPagar[]; banco: SaldoBanco[] } | null>(null);
+  const [vista, setVista] = useState<"cobrar" | "pagar" | "banco">("cobrar");
+  const [cliente, setCliente] = useState<Cliente | null>(null);
+  const [fc, setFc] = useState({ tipo: "cosecha" as "cosecha" | "flete", monto: "", fecha: ultimoDiaMesAnterior(), nota: "" });
+  const [fp, setFp] = useState({ acreedor: "", monto: "", fecha: ultimoDiaMesAnterior(), nota: "" });
+  const [fb, setFb] = useState({ monto: "", fecha: ultimoDiaMesAnterior() });
+  const [busy, setBusy] = useState(false);
+  const cargar = useCallback(async () => {
+    try { setData(await apiGet<{ cobrar: SaldoCobrar[]; pagar: SaldoPagar[]; banco: SaldoBanco[] }>("/campo/saldos-iniciales")); }
+    catch (e) { onError((e as Error).message); }
+  }, [onError]);
+  useEffect(() => { void cargar(); }, [cargar]);
+
+  async function correr(fn: () => Promise<string>) {
+    try { setBusy(true); const msg = await fn(); await cargar(); await onChanged(msg); }
+    catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+  const guardarCobrar = () => correr(async () => {
+    if (!cliente) throw new Error("Elige o crea el cliente que le debe a Transporte");
+    if (!(Number(fc.monto) > 0)) throw new Error("Escribe cuánto debe");
+    const r = await apiPost<{ cliente: string; espejo_socio: string | null }>("/campo/saldos-iniciales/cobrar", { cliente_id: cliente.id, tipo: fc.tipo, monto: Number(fc.monto), fecha: fc.fecha, nota: fc.nota.trim() || undefined });
+    setCliente(null); setFc({ ...fc, monto: "", nota: "" });
+    return `Saldo de ${r.cliente} registrado${r.espejo_socio ? ` · a ${r.espejo_socio} le aparece en su Por Pagar` : ""}`;
+  });
+  const guardarPagar = () => correr(async () => {
+    if (fp.acreedor.trim().length < 2) throw new Error("Escribe a quién le debe Transporte");
+    if (!(Number(fp.monto) > 0)) throw new Error("Escribe cuánto le debe");
+    await apiPost("/campo/saldos-iniciales/pagar", { acreedor: fp.acreedor.trim(), monto: Number(fp.monto), fecha: fp.fecha, nota: fp.nota.trim() || undefined });
+    setFp({ ...fp, acreedor: "", monto: "", nota: "" });
+    return "Deuda de Transporte registrada (la pagas en Cuentas por Pagar)";
+  });
+  const guardarBanco = () => correr(async () => {
+    if (!(Number(fb.monto) > 0)) throw new Error("Escribe cuánto había en el banco");
+    await apiPost("/campo/saldos-iniciales/banco", { monto: Number(fb.monto), fecha: fb.fecha });
+    setFb({ ...fb, monto: "" });
+    return "Saldo inicial del banco registrado";
+  });
+  const quitar = (url: string, msg: string) => {
+    if (!window.confirm(`¿Quitar este saldo de arranque? (${msg})`)) return;
+    void correr(async () => { await apiOk(url, { method: "DELETE" }); return "Saldo de arranque quitado"; });
+  };
+
+  const totCobrar = (data?.cobrar ?? []).reduce((s, x) => s + x.saldo, 0);
+  const totPagar = (data?.pagar ?? []).reduce((s, x) => s + x.saldo, 0);
+  return (
+    <div className="formPanel campoSaldos" style={{ gridColumn: "1 / -1" }}>
+      <h2>📥 Saldos de arranque <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· lo que venía de antes del sistema</span></h2>
+      <p className="muted" style={{ marginTop: -4 }}>Carga aquí lo que le debían a Transporte, lo que Transporte debía y el dinero que tenía en el banco al empezar. No cuenta como ingreso ni gasto del mes. El efectivo de la caja se pone al <b>abrir la caja</b>.</p>
+      <div className="segmented campoSaldos__tabs">
+        <button type="button" className={vista === "cobrar" ? "active" : ""} onClick={() => setVista("cobrar")}>📥 Le deben {totCobrar > 0 ? `· ${money(totCobrar)}` : ""}</button>
+        <button type="button" className={vista === "pagar" ? "active" : ""} onClick={() => setVista("pagar")}>📤 Debe {totPagar > 0 ? `· ${money(totPagar)}` : ""}</button>
+        <button type="button" className={vista === "banco" ? "active" : ""} onClick={() => setVista("banco")}>🏦 Banco</button>
+      </div>
+
+      {vista === "cobrar" && (
+        <>
+          <div className="campoSaldos__form">
+            <ClientePicker value={cliente} onChange={setCliente} onError={onError} />
+            <label><span>¿De qué es la deuda?</span>
+              <select value={fc.tipo} onChange={(e) => setFc({ ...fc, tipo: e.target.value as "cosecha" | "flete" })}>
+                <option value="cosecha">Cosecha</option><option value="flete">Flete / transporte</option>
+              </select></label>
+            <label><span>Cuánto debe</span><input type="number" inputMode="decimal" min="0" step="0.01" value={fc.monto} onChange={(e) => setFc({ ...fc, monto: e.target.value })} placeholder="0.00" /></label>
+            <label><span>Al día (corte)</span><input type="date" value={fc.fecha} onChange={(e) => setFc({ ...fc, fecha: e.target.value })} /></label>
+            <label className="campoSaldos__ancho"><span>Nota <small>(opcional)</small></span><input type="text" maxLength={300} value={fc.nota} onChange={(e) => setFc({ ...fc, nota: e.target.value })} placeholder="Ej: cosecha de agosto" /></label>
+            <button type="button" className="primary campoSaldos__ancho" disabled={busy} onClick={guardarCobrar}>➕ Agregar lo que le deben</button>
+          </div>
+          <p className="muted" style={{ fontSize: 12 }}>Si el que debe es un socio (cliente «piladora»), también le aparece en su Por Pagar. Los abonos se registran en <b>Cuentas por Cobrar</b>.</p>
+          <TablaSaldos vacio="Nadie cargado todavía." filas={(data?.cobrar ?? []).map((x) => ({
+            id: x.id, fecha: x.fecha, nombre: x.cliente, detalle: `${x.tipo === "cosecha" ? "Cosecha" : "Flete"}${x.notas ? ` · ${x.notas.replace(/^Saldo inicial \(deuda de antes del sistema\)( · )?/, "")}` : ""}`,
+            monto: x.valor, movido: x.cobrado, saldo: x.saldo,
+            quitar: x.cobrado <= 0.005 ? () => quitar(`/campo/saldos-iniciales/cobrar/${x.id}`, `${x.cliente} · ${money(x.valor)}`) : undefined
+          }))} movidoTxt="Cobrado" />
+        </>
+      )}
+
+      {vista === "pagar" && (
+        <>
+          <div className="campoSaldos__form">
+            <label><span>¿A quién le debe Transporte?</span><input type="text" value={fp.acreedor} onChange={(e) => setFp({ ...fp, acreedor: e.target.value })} placeholder="Ej: Taller / Gasolinera / Chofer" /></label>
+            <label><span>Cuánto le debe</span><input type="number" inputMode="decimal" min="0" step="0.01" value={fp.monto} onChange={(e) => setFp({ ...fp, monto: e.target.value })} placeholder="0.00" /></label>
+            <label><span>Al día (corte)</span><input type="date" value={fp.fecha} onChange={(e) => setFp({ ...fp, fecha: e.target.value })} /></label>
+            <label><span>Nota <small>(opcional)</small></span><input type="text" maxLength={300} value={fp.nota} onChange={(e) => setFp({ ...fp, nota: e.target.value })} placeholder="Ej: repuestos de la cosechadora" /></label>
+            <button type="button" className="primary campoSaldos__ancho" disabled={busy} onClick={guardarPagar}>➕ Agregar lo que debe</button>
+          </div>
+          <p className="muted" style={{ fontSize: 12 }}>Se paga desde <b>Cuentas por Pagar</b> (sale de la caja o del banco de Transporte).</p>
+          <TablaSaldos vacio="Nada cargado todavía." filas={(data?.pagar ?? []).map((x) => ({
+            id: x.id, fecha: x.fecha, nombre: x.acreedor, detalle: (x.concepto ?? "").replace(/^Saldo inicial \(deuda de antes del sistema\)( · )?/, ""),
+            monto: x.monto, movido: x.pagado, saldo: x.saldo,
+            quitar: x.pagado <= 0.005 ? () => quitar(`/campo/cxp/${x.id}`, `${x.acreedor} · ${money(x.monto)}`) : undefined
+          }))} movidoTxt="Pagado" />
+        </>
+      )}
+
+      {vista === "banco" && (
+        (data?.banco ?? []).length > 0 ? (
+          <div className="campoSaldos__banco">
+            {data!.banco.map((b) => (
+              <div key={b.id}>
+                <span>Al arrancar había en el banco <b>{money(b.monto)}</b> <small className="muted">(al {String(b.fecha).slice(0, 10)})</small></span>
+                <button type="button" className="btnSecondary" disabled={busy} onClick={() => quitar(`/campo/saldos-iniciales/banco/${b.id}`, money(b.monto))}>🗑 Quitar</button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="campoSaldos__form">
+            <label><span>Dinero en el banco al arrancar</span><input type="number" inputMode="decimal" min="0" step="0.01" value={fb.monto} onChange={(e) => setFb({ ...fb, monto: e.target.value })} placeholder="0.00" /></label>
+            <label><span>Al día (corte)</span><input type="date" value={fb.fecha} onChange={(e) => setFb({ ...fb, fecha: e.target.value })} /></label>
+            <button type="button" className="primary campoSaldos__ancho" disabled={busy} onClick={guardarBanco}>💾 Guardar saldo del banco</button>
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
+function TablaSaldos({ filas, vacio, movidoTxt }: {
+  filas: Array<{ id: string; fecha: string; nombre: string; detalle: string; monto: number; movido: number; saldo: number; quitar?: () => void }>;
+  vacio: string; movidoTxt: string;
+}) {
+  if (filas.length === 0) return <p className="muted" style={{ margin: "6px 0 0" }}>{vacio}</p>;
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table className="cajaTable" style={{ marginTop: 6 }}>
+        <thead><tr><th>Quién</th><th className="num">Monto</th><th className="num">{movidoTxt}</th><th className="num">Saldo</th><th /></tr></thead>
+        <tbody>
+          {filas.map((f) => (
+            <tr key={f.id}>
+              <td><strong>{f.nombre}</strong><small className="muted" style={{ display: "block" }}>{String(f.fecha).slice(0, 10)}{f.detalle ? ` · ${f.detalle}` : ""}</small></td>
+              <td className="num">{money(f.monto)}</td>
+              <td className="num" style={{ color: "#15803d" }}>{money(f.movido)}</td>
+              <td className="num" style={{ fontWeight: 700 }}>{money(f.saldo)}</td>
+              <td>{f.quitar && <button type="button" className="btnGhost" title="Quitar (se cargó por error)" onClick={f.quitar}>🗑</button>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
