@@ -123,7 +123,38 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - La copia preventiva queda registrada en bitacora administrativa y el mensaje final indica su nombre. No se cambio el formato de respaldo ni Room; copias anteriores siguen siendo compatibles.
 - APK de entrega actualizado a v11.50 (code 241). Verificacion: build limpio, lint y 40 tests OK; SHA-256 `9F9509458B49DD34FCD077BEF820C684946E53E5BD78C8836514380086EAE4AF`.
 - Respaldo previo: `BASCULA\Respaldos\simulacro-recuperacion-20261011-154523`.
-- PENDIENTE REAL: instalar v11.50 encima de la app y ejecutar el simulacro. No probar RESTAURAR con datos reales; compartir el reporte del simulacro si aparece ATENCION/ERROR.
+- CONFIRMADO EN TABLET (2026-10-11): simulacro v11.50 sin cambios, 6 correctos / 0 atenciones / 0 errores. Copia y Room coincidieron en 380 tickets (379 principales + 1 particular), ERP coincidió en 379 principales y los contadores quedaron Principal 385 / Particular 2.
+
+### 🛡️ Actualizacion segura BASCULA v11.51 (2026-10-11)
+- Nuevo `⋮ > Preparar actualizacion`, protegido por clave administrativa: cuenta principal/particular, pendientes ERP y cola de impresion; consulta `/api/bascula/sync-state`; crea `bascula_antes_actualizar_11_51_YYYYMMDD_HHMMSS.json`; vuelve a leerlo y valida su firma antes de declarar la actualizacion preparada.
+- Guarda una huella previa con negocio, conteos, proximos numeros y SHA-256. La instruccion visible exige instalar el APK ENCIMA de la app y cancelar si Android solo ofrece desinstalar.
+- Tras abrir una version nueva, espera a que Room termine de cargar y compara automaticamente la tablet contra la huella preparada. En la primera instalacion de esta funcion usa como referencia el respaldo automatico de v11.50, antes de reemplazarlo por una copia de la version nueva.
+- Si todo coincide muestra `Actualizacion correcta`; si faltan tickets/retroceden contadores muestra una alerta y manda al simulacro. Si se instala un APK con `versionCode` inferior, advierte que no se creen tickets y conserva el respaldo anterior.
+- APK de entrega actualizado a v11.51 (code 242). Verificacion: build limpio, lint sin errores bloqueantes y 44 tests OK; SHA-256 `37ED42FF5496FFEBA640B9D1CAF13202885C5C240BE07DB4F547F454CBCDB088`.
+- Firma de instalacion comprobada contra v11.50: mismo certificado Android Debug SHA-256 `92da81b8ad2ad149fdbd399dcceffb0099f5eb76f6edb24843bb5266663e9210`, por lo que Android puede actualizar encima conservando los datos.
+- Respaldo previo de fuente y APK: `BASCULA\Respaldos\actualizacion-segura-20261011_160801`.
+- CONFIRMADO EN TABLET (2026-10-12): v11.51 se instalo encima sin desinstalar y mostro el aviso de verificacion correcta. Para futuras versiones ya esta disponible `Preparar actualizacion`.
+
+### 👁️ Vigilancia diaria BASCULA v11.52 (2026-10-12)
+- Se ejecuta como maximo una vez cada 20 horas, 15 segundos despues de cargar Room para dar tiempo al respaldo y al SYNC inicial. Si todo esta correcto permanece silenciosa; solo abre un aviso cuando existe una accion concreta.
+- Revisa en solo lectura: existencia/firma/conteo y antiguedad (maximo 48 h) de `bascula_respaldo_automatico.json`; siguiente numero contra el maximo real de Room; pendientes ERP; coincidencia principal local/ERP cuando el servidor responde; trabajos PENDIENTE/ERROR y cuantos tienen mas de 24 h.
+- No prueba la impresora, no reintenta trabajos, no sincroniza por su cuenta y no consulta Firebase. Una Epson apagada no genera alerta en esta vigilancia.
+- `⋮ > Soporte y diagnostico > Vigilancia diaria` muestra el ultimo resultado y permite `REVISAR AHORA`. Si encuentra problemas ofrece acceso a SYNC ERP o Diagnostico integral; el resultado queda registrado localmente.
+- APK de entrega actualizado a v11.52 (code 243). Verificacion: build limpio, lint sin errores bloqueantes y 49 tests OK; SHA-256 `C2DFF6E6888040CF1CA971B766480C785727CE485607070C579361E531F84E20`.
+- Firma compatible confirmada: certificado SHA-256 `92da81b8ad2ad149fdbd399dcceffb0099f5eb76f6edb24843bb5266663e9210`.
+- Respaldo previo de fuente y APK: `BASCULA\Respaldos\vigilancia-diaria-20261012_120204`.
+- ENTREGA SUPERADA: v11.52 queda incluida completa en v11.53; no hace falta instalar ambas consecutivamente.
+
+### ✅ Cierre diario seguro BASCULA v11.53 (2026-10-12)
+- `⋮ > Cierre del dia` conserva el resumen y las acciones anteriores, pero agrega `EJECUTAR CIERRE SEGURO`, protegido por clave administrativa. Muestra tambien estado y hora del ultimo cierre certificado.
+- Cada ejecucion crea `Descargas/Bascula/bascula_cierre_YYYYMMDD_HHMMSS.json`, vuelve a leer el archivo y valida su firma SHA-256 antes de permitir el cierre. La copia queda aunque el cierre sea bloqueado, para proteger el estado encontrado.
+- Bloqueos reales (`NO CERRADO`): copia no verificable, proximo numero que no supera al maximo Room, tickets ERP pendientes o conteo principal local/ERP distinto cuando el servidor responde.
+- Avisos no destructivos (`CERRADO LOCAL CON AVISOS`): ERP temporalmente inaccesible/no configurado, tickets en espera, cola de impresion o Excel por revisar. No se fuerza red ni se reimprime nada.
+- El comprobante incluye produccion del dia, Q.Q., conteos Room/ERP, proximos numeros, pendientes, Excel, cola, nombre de copia y acciones. Se puede compartir; el cierre no borra, renumera, sincroniza ni imprime tickets.
+- Incluye completa la vigilancia diaria de v11.52. APK de entrega v11.53 (code 244), build limpio, lint sin errores bloqueantes y 54 tests OK; SHA-256 `E288876718AA835DD3107D6A3DD20FB0AF1FA5498051ED6C415DB985DAF0E3D3`.
+- Firma compatible confirmada: certificado SHA-256 `92da81b8ad2ad149fdbd399dcceffb0099f5eb76f6edb24843bb5266663e9210`.
+- Respaldo previo: `BASCULA\Respaldos\cierre-diario-seguro-20261012_121309`.
+- PENDIENTE REAL: desde la version que este instalada (v11.51 o v11.52), ejecutar `⋮ > Preparar actualizacion`; solo con copia verificada instalar v11.53 ENCIMA, sin desinstalar. Confirmar `Actualizacion correcta`, probar `Vigilancia diaria > REVISAR AHORA` y al final de la jornada ejecutar un cierre seguro real.
 
 ### 💰 Caja auditada (2026-10-09)
 - Migración `20261085`: `cash_movements.medio` (EFECTIVO/BANCO) con trigger por defecto (caja BANCO → BANCO; resto → EFECTIVO; un contra-asiento copia el medio del original) + backfill; columnas de arqueo en cash_registers; categorías FALTANTE_CAJA / SOBRANTE_CAJA inactivas (solo las usa el cierre).
