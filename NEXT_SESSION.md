@@ -143,7 +143,18 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - APK de entrega actualizado a v11.52 (code 243). Verificacion: build limpio, lint sin errores bloqueantes y 49 tests OK; SHA-256 `C2DFF6E6888040CF1CA971B766480C785727CE485607070C579361E531F84E20`.
 - Firma compatible confirmada: certificado SHA-256 `92da81b8ad2ad149fdbd399dcceffb0099f5eb76f6edb24843bb5266663e9210`.
 - Respaldo previo de fuente y APK: `BASCULA\Respaldos\vigilancia-diaria-20261012_120204`.
-- PENDIENTE REAL: en v11.51 ejecutar primero `⋮ > Preparar actualizacion`; solo si declara la copia verificada, instalar v11.52 ENCIMA sin desinstalar. Confirmar `Actualizacion correcta` y luego abrir manualmente Vigilancia diaria una vez.
+- ENTREGA SUPERADA: v11.52 queda incluida completa en v11.53; no hace falta instalar ambas consecutivamente.
+
+### ✅ Cierre diario seguro BASCULA v11.53 (2026-10-12)
+- `⋮ > Cierre del dia` conserva el resumen y las acciones anteriores, pero agrega `EJECUTAR CIERRE SEGURO`, protegido por clave administrativa. Muestra tambien estado y hora del ultimo cierre certificado.
+- Cada ejecucion crea `Descargas/Bascula/bascula_cierre_YYYYMMDD_HHMMSS.json`, vuelve a leer el archivo y valida su firma SHA-256 antes de permitir el cierre. La copia queda aunque el cierre sea bloqueado, para proteger el estado encontrado.
+- Bloqueos reales (`NO CERRADO`): copia no verificable, proximo numero que no supera al maximo Room, tickets ERP pendientes o conteo principal local/ERP distinto cuando el servidor responde.
+- Avisos no destructivos (`CERRADO LOCAL CON AVISOS`): ERP temporalmente inaccesible/no configurado, tickets en espera, cola de impresion o Excel por revisar. No se fuerza red ni se reimprime nada.
+- El comprobante incluye produccion del dia, Q.Q., conteos Room/ERP, proximos numeros, pendientes, Excel, cola, nombre de copia y acciones. Se puede compartir; el cierre no borra, renumera, sincroniza ni imprime tickets.
+- Incluye completa la vigilancia diaria de v11.52. APK de entrega v11.53 (code 244), build limpio, lint sin errores bloqueantes y 54 tests OK; SHA-256 `E288876718AA835DD3107D6A3DD20FB0AF1FA5498051ED6C415DB985DAF0E3D3`.
+- Firma compatible confirmada: certificado SHA-256 `92da81b8ad2ad149fdbd399dcceffb0099f5eb76f6edb24843bb5266663e9210`.
+- Respaldo previo: `BASCULA\Respaldos\cierre-diario-seguro-20261012_121309`.
+- PENDIENTE REAL: desde la version que este instalada (v11.51 o v11.52), ejecutar `⋮ > Preparar actualizacion`; solo con copia verificada instalar v11.53 ENCIMA, sin desinstalar. Confirmar `Actualizacion correcta`, probar `Vigilancia diaria > REVISAR AHORA` y al final de la jornada ejecutar un cierre seguro real.
 
 ### 💰 Caja auditada (2026-10-09)
 - Migración `20261085`: `cash_movements.medio` (EFECTIVO/BANCO) con trigger por defecto (caja BANCO → BANCO; resto → EFECTIVO; un contra-asiento copia el medio del original) + backfill; columnas de arqueo en cash_registers; categorías FALTANTE_CAJA / SOBRANTE_CAJA inactivas (solo las usa el cierre).
