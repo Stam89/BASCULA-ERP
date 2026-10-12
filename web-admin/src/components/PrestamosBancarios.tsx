@@ -300,18 +300,20 @@ export function PrestamosBancarios({ cajaAbiertaId, cajaMixta, puedeEditar, pued
             </p>
             <div className="prest__tablaWrap">
               <table className="cajaTable prest__tabla">
-                <thead><tr><th>#</th><th>Fecha</th><th className="num">Capital</th><th className="num">Interés</th><th className="num">Otros</th><th className="num">Cuota</th><th>Estado</th></tr></thead>
+                <thead><tr><th>#</th><th>Fecha</th><th className="num">Cuota</th><th>Estado</th></tr></thead>
                 <tbody>
                   {detalle.cuotas.map((c) => {
                     const vencida = c.estado === "PENDIENTE" && c.fecha_vencimiento.slice(0, 10) < hoyIso();
+                    const interes = c.estado === "PAGADA" ? (c.pagado_interes ?? c.interes) : c.interes;
+                    const otros = c.estado === "PAGADA" ? (c.pagado_otros ?? c.otros) : c.otros;
                     return (
                       <tr key={c.id} className={c.estado === "PAGADA" ? "is-pagada" : vencida ? "is-vencida" : ""}>
                         <td>{c.numero}</td>
-                        <td>{fechaCorta(c.fecha_vencimiento.slice(0, 10))}</td>
-                        <td className="num">{money(c.capital)}</td>
-                        <td className="num">{money(c.estado === "PAGADA" ? (c.pagado_interes ?? c.interes) : c.interes)}</td>
-                        <td className="num">{money(c.estado === "PAGADA" ? (c.pagado_otros ?? c.otros) : c.otros)}</td>
-                        <td className="num"><b>{money(c.estado === "PAGADA" ? (c.pagado_total ?? c.total) : c.total)}</b></td>
+                        <td style={{ whiteSpace: "nowrap" }}>{fechaCorta(c.fecha_vencimiento.slice(0, 10))}</td>
+                        <td className="num">
+                          <b>{money(c.estado === "PAGADA" ? (c.pagado_total ?? c.total) : c.total)}</b>
+                          <small className="prest__desg">capital {money(c.capital)} · interés {money(interes)}{otros > 0 ? ` · otros ${money(otros)}` : ""}</small>
+                        </td>
                         <td style={{ whiteSpace: "nowrap" }}>
                           {c.estado === "PAGADA"
                             ? <span className="chip ok">✓ Pagada {c.pagada_at ? new Date(c.pagada_at).toLocaleDateString("es-EC") : ""}</span>
