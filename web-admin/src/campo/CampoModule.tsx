@@ -2828,7 +2828,7 @@ function SaldosArranqueCampo({ onChanged, onError }: { onChanged: (msg: string) 
           </div>
           <p className="muted" style={{ fontSize: 12 }}>Si el que debe es un socio (cliente «piladora»), también le aparece en su Por Pagar. Los abonos se registran en <b>Cuentas por Cobrar</b>.</p>
           <TablaSaldos vacio="Nadie cargado todavía." filas={(data?.cobrar ?? []).map((x) => ({
-            id: x.id, fecha: x.fecha, nombre: x.cliente, detalle: `${x.tipo === "cosecha" ? "Cosecha" : "Flete"}${x.notas ? ` · ${x.notas.replace(/^Saldo inicial \(deuda de antes del sistema\)( · )?/, "")}` : ""}`,
+            id: x.id, fecha: x.fecha, nombre: x.cliente, detalle: [x.tipo === "cosecha" ? "Cosecha" : "Flete", (x.notas ?? "").replace(/^Saldo inicial \(deuda de antes del sistema\)( · )?/, "")].filter(Boolean).join(" · "),
             monto: x.valor, movido: x.cobrado, saldo: x.saldo,
             quitar: x.cobrado <= 0.005 ? () => quitar(`/campo/saldos-iniciales/cobrar/${x.id}`, `${x.cliente} · ${money(x.valor)}`) : undefined
           }))} movidoTxt="Cobrado" />
