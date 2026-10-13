@@ -4822,6 +4822,7 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .vdCard input.vdTotal { font-weight: 800; font-size: 16px; color: var(--c-text); cursor: default; }
 .vdCard__precio { margin: 0 0 12px; color: var(--c-success-text); font-size: 12px; }
 .vdCard__aviso { margin: 0 0 12px; color: var(--c-warning-text); font-size: 12px; }
+.vdPersona { display: inline-flex; max-width: 100%; margin: -4px 0 12px; padding: 4px 8px; border: 1px solid #99f6e4; border-radius: 5px; background: #f0fdfa; color: #115e59; font-size: 12px; font-weight: 650; }
 .vdResumen { background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; padding: 16px; margin-bottom: 16px; }
 .vdResumen__titulo { color: #166534; font-size: 12px; font-weight: 600; margin-bottom: 8px; }
 .vdResumen__grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 8px; }

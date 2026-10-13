@@ -12,6 +12,7 @@ import { createLotProcessReport } from "../../utils/process-reports.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { consumeInventoryFIFO } from "../../services/inventory-consume.js";
+import { resolverClienteVentaDetalle } from "../../services/venta-detalle-personas.js";
 
 export const salesRouter = Router();
 
@@ -21,6 +22,8 @@ export const saleInputSchema = z.object({
   customer_id: z.string().uuid().optional(),
   cash_register_id: z.string().uuid().optional(),
   payment_method: z.enum(["CASH", "TRANSFER", "CARD", "CHECK", "CREDIT"]).default("CASH"),
+  medio: z.enum(["EFECTIVO", "BANCO"]).optional(),
+  description: z.string().trim().min(2).max(300).optional(),
   packaging_supply_id: z.string().uuid().optional(),
   presentation: z.string().optional(),
   sack_weight_lb: z.number().positive().default(100),
@@ -77,6 +80,53 @@ salesRouter.post("/", asyncRoute(async (req, res) => {
 
   const result = await inTransaction((client) => crearVenta(client, accionistaId, body));
 
+  res.status(201).json(result);
+}));
+
+const retailSaleInputSchema = z.object({
+  cash_register_id: z.string().uuid(),
+  product_id: z.string().uuid(),
+  warehouse_id: z.string().uuid(),
+  quantity_qq: z.number().positive().max(100000),
+  total_amount: z.number().positive().max(100000000),
+  price_per_pound: z.number().positive().max(100000),
+  mode: z.enum(["DOLARES", "LIBRA", "QQ"]),
+  input_amount: z.number().positive(),
+  medio: z.enum(["EFECTIVO", "BANCO"]).optional(),
+  product_name: z.string().trim().min(1).max(180),
+  buyer: z.object({
+    full_name: z.string().trim().min(2).max(180),
+    customer_id: z.string().uuid().optional(),
+    farmer_id: z.string().uuid().optional(),
+    staff_id: z.string().uuid().optional(),
+    worker_key: z.string().trim().min(2).max(180).optional()
+  })
+});
+
+// Mostrador: cliente + venta + salida de inventario + ingreso a Caja quedan en
+// UNA transacción. Si algo falla, no queda medio cobro ni doble descuento.
+salesRouter.post("/retail", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const body = retailSaleInputSchema.parse(req.body);
+  const result = await inTransaction(async (client) => {
+    const cliente = await resolverClienteVentaDetalle(client, body.buyer, accionistaId);
+    const unitPriceQq = Math.round((body.total_amount / body.quantity_qq) * 10000) / 10000;
+    const venta = await crearVenta(client, accionistaId, {
+      customer_id: cliente.id,
+      cash_register_id: body.cash_register_id,
+      payment_method: body.medio === "BANCO" ? "TRANSFER" : "CASH",
+      sack_weight_lb: 100,
+      medio: body.medio,
+      description: `Venta detalle ${body.product_name} · ${cliente.full_name}`,
+      items: [{
+        product_id: body.product_id,
+        warehouse_id: body.warehouse_id,
+        quantity: body.quantity_qq,
+        unit_price: unitPriceQq
+      }]
+    });
+    return { ...venta, customer_id: cliente.id, customer_name: cliente.full_name };
+  });
   res.status(201).json(result);
 }));
 
@@ -176,9 +226,9 @@ async function crearVentaInterna(
     } else if (body.payment_method !== "CREDIT" && body.cash_register_id) {
       await client.query(
         `INSERT INTO cash_movements
-         (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)
-         VALUES ($1, 'INCOME', 'VENTA', 'sales', $2, $3, $4, $5)`,
-        [body.cash_register_id, sale.rows[0].id, total, `Venta ${sale.rows[0].sale_number}`, body.created_by]
+         (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by, medio)
+         VALUES ($1, 'INCOME', 'VENTA', 'sales', $2, $3, $4, $5, $6)`,
+        [body.cash_register_id, sale.rows[0].id, total, body.description || `Venta ${sale.rows[0].sale_number}`, body.created_by, body.medio]
       );
     }
 

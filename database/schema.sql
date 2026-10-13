@@ -69,6 +69,21 @@ CREATE TABLE customers (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Une el directorio comercial con personas que ya existen como agricultores o
+-- trabajadores. No duplica esos registros ni cambia sus módulos de origen.
+CREATE TABLE customer_directory_links (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  source_type VARCHAR(30) NOT NULL,
+  source_key TEXT NOT NULL,
+  source_name VARCHAR(180) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT customer_directory_links_source_type_chk
+    CHECK (source_type IN ('FARMER', 'ADMIN_STAFF', 'WORKER')),
+  UNIQUE (source_type, source_key)
+);
+CREATE INDEX idx_customer_directory_links_customer ON customer_directory_links (customer_id);
+
 CREATE TABLE vehicles (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   plate VARCHAR(30) NOT NULL UNIQUE,

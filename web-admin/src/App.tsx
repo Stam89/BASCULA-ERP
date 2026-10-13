@@ -18,7 +18,7 @@ import { BuscadorCombo } from "./components/BuscadorCombo";
 import { SaldosIniciales } from "./components/SaldosIniciales";
 import { MaquinaBuscador, etiquetaMaquina } from "./components/MaquinaBuscador";
 import { SalesSessionSwitcher } from "./components/SalesSessionSwitcher";
-import { VentaDetalleCard, type ProductoDetalle, type VentaDetalleRegistro } from "./components/VentaDetalleCard";
+import { VentaDetalleCard, type PersonaVentaDetalle, type ProductoDetalle, type VentaDetalleRegistro } from "./components/VentaDetalleCard";
 import { formatoCantidad, formatoPrecio, precioAplicadoDetalle, DESCUENTO_QQ_DEFECTO, LIBRAS_POR_QQ } from "./ventaDetalle";
 import { ParametrosContables } from "./components/ParametrosContables";
 import { CorreoRecuperacionModal } from "./components/CorreoRecuperacion";
@@ -3547,6 +3547,7 @@ export function App() {
 
   // ── Clientes y Ventas ──────────────────────────────────────────────────────
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [personasVentaDetalle, setPersonasVentaDetalle] = useState<PersonaVentaDetalle[]>([]);
   // Venta Detalle por QQ: descuento $/QQ por defecto (el de cada cliente va en customers.descuento_qq).
   const [descuentoQqDefecto, setDescuentoQqDefecto] = useState<number>(DESCUENTO_QQ_DEFECTO);
   const [nuevoDescCli, setNuevoDescCli] = useState({ id: "", monto: "" });
@@ -7935,7 +7936,7 @@ export function App() {
     setFomentoDetalle(data);
   }
 
-  // ── Venta Detalle (Libra / QQ) ──
+  // ── Venta Detalle (dólares / Libra / QQ) ──
   // Productos de mostrador con su tarifa por libra. Prioridad: (1) la configurada
   // en BD (Configuración → Tarifas por libra, price_per_pound); (2) el último
   // precio usado en este equipo (localStorage). 0 = sin tarifa (no se puede vender).
@@ -7948,70 +7949,44 @@ export function App() {
     });
   }
 
-  // Registra la venta que calculó la tarjeta. Mutación SIN CAMBIOS: (1) salida
-  // de inventario en QQ (POST /inventory/adjustments, el backend valida stock y
-  // responde 409 si no alcanza) y (2) ingreso a caja (POST /cash/movements).
-  // En modo QQ la cantidad ya viene en QQ y el precio con el centavo descontado.
+  // Venta, salida de inventario, cliente e ingreso de Caja se escriben juntos en
+  // el backend. Si una validación falla, la transacción completa se revierte.
   async function registrarVentaDetalle(v: VentaDetalleRegistro): Promise<boolean> {
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) { addToast("No hay caja abierta", "error"); return false; }
+    if (!finishedWarehouse?.id) { addToast("No está configurada la bodega de producto terminado", "error"); return false; }
     if (!v.product_id || !(v.libras > 0) || !(v.qq > 0) || !(v.precioAplicado > 0)) {
       addToast("Completa producto, cantidad y precio", "error");
       return false;
     }
     if (!(v.total > 0)) { addToast("La cantidad y el total deben ser mayores a 0", "error"); return false; }
 
-    // Datos para el ticket, capturados ANTES de que la tarjeta se limpie.
-    const cliTicket = v.customer_id ? customers.find((c) => c.id === v.customer_id) ?? null : null;
     const librasStr = v.libras.toFixed(3);
     const qqStr = formatoCantidad(v.qq);
-    // Texto de nota/descripción: por libra, el MISMO formato de siempre.
     const detalle = v.modo === "QQ"
       ? `${qqStr} QQ (${librasStr} lb) @ $${v.precioAplicado.enReal()}/QQ`
+      : v.modo === "DOLARES"
+        ? `${money(v.total)} = ${librasStr} lb @ $${v.precioLibra.enReal()}/lb`
       : `${librasStr} lb @ $${v.precioLibra.enReal()}/lb`;
 
-    // Descuento en kárdex (Producto Terminado / Arroz Pilado). Como apiFetch NO
-    // lanza en error, revisamos res.ok y abortamos ANTES de tocar la caja o
-    // imprimir. Así nunca se cobra una venta sin descontar inventario.
+    let venta: { customer_name: string };
     try {
-      const invRes = await apiFetch(`/inventory/adjustments`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          product_id: v.product_id,
-          warehouse_id: finishedWarehouse?.id,
-          quantity: -v.qq, // Negativo = salida
-          ownership: "OWNED",
-          notes: `Venta al detalle: ${detalle}`
-        })
+      venta = await apiPost<{ customer_name: string }>("/sales/retail", {
+        cash_register_id: registerId,
+        product_id: v.product_id,
+        warehouse_id: finishedWarehouse.id,
+        quantity_qq: v.qq,
+        total_amount: v.total,
+        price_per_pound: v.precioLibra,
+        mode: v.modo,
+        input_amount: v.cantidad,
+        medio: cajaEsMixta ? medioOperacion : dashboard.current_cash_register?.tipo === "BANCO" ? "BANCO" : "EFECTIVO",
+        product_name: v.producto,
+        buyer: v.comprador
       });
-      if (!invRes.ok) {
-        let msg = "No hay stock suficiente de este producto para la venta.";
-        try { const j = await invRes.json(); msg = j.error || j.message || msg; } catch { /* sin cuerpo JSON */ }
-        addToast(msg, "error");
-        return false; // No se registra caja ni se imprime ticket.
-      }
     } catch (e) {
       addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error");
       return false;
-    }
-
-    // Ingreso a caja. Si falla, el inventario YA salió: se avisa y se limpia la
-    // tarjeta para que un segundo Enter no descuente el producto dos veces.
-    try {
-      await apiPost("/cash/movements", {
-        cash_register_id: registerId,
-        movement: "INCOME",
-        category: "VENTA",
-        medio: cajaEsMixta ? medioOperacion : undefined,
-        amount: v.total,
-        description: `Venta detalle ${detalle}`
-      });
-    } catch (e) {
-      addToast(`El inventario ya se descontó, pero la caja no registró el ingreso de ${money(v.total)} `
-        + `(${e instanceof Error ? e.message : "error"}). Regístralo en Caja → Movimiento; NO repitas la venta.`, "error");
-      await refreshCaja(registerId).catch(() => { /* el refresco no cambia la venta */ });
-      return true;
     }
 
     // Recordar el precio/libra usado para este producto (precarga futura).
@@ -8019,11 +7994,11 @@ export function App() {
     setPreciosLibraPorProducto(nuevosPrecios);
     try { localStorage.setItem(preciosLibraKey, JSON.stringify(nuevosPrecios)); } catch { /* almacenamiento no disponible */ }
 
-    addToast(`✓ Venta ${v.modo === "QQ" ? `${qqStr} QQ` : `${librasStr} lb`} por ${money(v.total)} registrada`, "success");
+    addToast(`✓ ${venta.customer_name}: ${money(v.total)} · entregar ${librasStr} lb`, "success");
     // Ticket térmico 80mm (comprobante de mostrador).
     printTicketVentaDetalle({
       producto: v.producto,
-      cliente: cliTicket?.full_name || "Consumidor Final",
+      cliente: venta.customer_name,
       libras: librasStr,
       precioLibra: v.precioLibra,
       total: v.total,
@@ -8032,6 +8007,10 @@ export function App() {
       precioUnitario: v.precioAplicado
     });
     await refreshCaja(registerId).catch(() => { /* el refresco no cambia la venta */ });
+    Promise.all([
+      apiGet<Customer[]>("/customers").then(setCustomers),
+      apiGet<PersonaVentaDetalle[]>("/customers/directorio-venta-detalle").then(setPersonasVentaDetalle)
+    ]).catch(() => undefined);
     return true;
   }
 
@@ -8491,6 +8470,10 @@ export function App() {
       apiGet<Customer[]>("/customers").then(setCustomers).catch(() => undefined);
       apiGet<{ descuento_qq_defecto: number }>("/products/venta-detalle-config")
         .then((c) => setDescuentoQqDefecto(Number(c.descuento_qq_defecto))).catch(() => undefined);
+    }
+    if (activeTab === "Caja") {
+      apiGet<PersonaVentaDetalle[]>("/customers/directorio-venta-detalle")
+        .then(setPersonasVentaDetalle).catch(() => undefined);
     }
     // Gana: liquidación de rendimiento (lee el historial de producción del accionista)
     // + tarifas (fallback de la Tarifa de Pilada global si aún no hay lotes cargados).
@@ -18143,7 +18126,7 @@ Motivo (obligatorio):`, "");
                     .filter((t) => !(esSocio && soloMatriz.includes(t)));
                   const fomentosActivos = fomentos.filter((f) => f.status === "ACTIVOS").length;
                   const acciones: Array<{ key: typeof visibles[number]; icon: string; label: string; hint: string }> = [
-                    { key: "venta_detalle", icon: "🛒", label: "Venta Detalle", hint: "Venta por libra o QQ en mostrador" },
+                    { key: "venta_detalle", icon: "🛒", label: "Venta Detalle", hint: "Venta por dólares, libras o QQ" },
                     { key: "fomentos", icon: "🌾", label: `Fomentos${fomentosActivos > 0 ? ` (${fomentosActivos})` : ""}`, hint: "Créditos a agricultores" },
                     { key: "anticipo", icon: "💸", label: "Anticipos", hint: "Anticipo a agricultor" },
                     { key: "sacos", icon: "📦", label: "Sacos", hint: "Compra y stock de sacos" },
@@ -19503,7 +19486,14 @@ Motivo (obligatorio):`, "");
                 {cajaSubTab === "venta_detalle" && (
                   <VentaDetalleCard
                     productos={productosVentaDetalle()}
-                    clientes={customers.map((c) => [c.id, c.full_name, c.descuento_qq ?? null] as [string, string, number | null])}
+                    personas={personasVentaDetalle.length > 0 ? personasVentaDetalle : customers.map((c) => ({
+                      key: `CUSTOMER:${c.id}`,
+                      full_name: c.full_name,
+                      phone: c.phone,
+                      customer_id: c.id,
+                      descuento_qq: c.descuento_qq ?? null,
+                      roles: ["Cliente"]
+                    }))}
                     descuentoQqDefecto={descuentoQqDefecto}
                     onRegistrar={registrarVentaDetalle}
                     onAviso={(m) => addToast(m, "error")}

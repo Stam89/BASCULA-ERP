@@ -2,7 +2,8 @@ import { Router } from "express";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
-import { requireAdmin } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { listarPersonasVentaDetalle } from "../../services/venta-detalle-personas.js";
 
 export const customersRouter = Router();
 
@@ -23,6 +24,13 @@ customersRouter.get("/search", asyncRoute(async (req, res) => {
     [`%${query}%`]
   );
   res.json(result.rows);
+}));
+
+// Directorio unificado para Venta al detalle. Conserva los catálogos de origen
+// y muestra en una sola búsqueda a clientes, agricultores y trabajadores.
+customersRouter.get("/directorio-venta-detalle", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  res.json(await listarPersonasVentaDetalle(pool, accionistaId));
 }));
 
 // GET todos los clientes

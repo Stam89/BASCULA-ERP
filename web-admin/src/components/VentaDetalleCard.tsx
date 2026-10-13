@@ -5,48 +5,63 @@ import {
   type ModoVentaDetalle, type VentaDetalleCalculo
 } from "../ventaDetalle";
 
-// VENTA DETALLE (Caja → 🛒): venta de mostrador por Libra o por QQ. La tarjeta solo
-// captura y calcula; el registro (descuento de inventario + ingreso a caja) lo hace
-// App con `onRegistrar`, igual que antes. Flujo sin mouse: Producto → Tab →
-// Cantidad → Enter registra. En Cantidad, «L» / «Q» cambian la unidad.
+// VENTA DETALLE (Caja → 🛒): el mostrador trabaja primero por monto en dólares,
+// pero conserva Libra y QQ para casos especiales. El comprador se busca en el
+// directorio unificado o se escribe una vez si todavía no existe.
 
 export type ProductoDetalle = { id: string; label: string; precioLibra: number };
+
+export type PersonaVentaDetalle = {
+  key: string;
+  full_name: string;
+  phone?: string | null;
+  customer_id?: string | null;
+  farmer_id?: string | null;
+  staff_id?: string | null;
+  worker_key?: string | null;
+  descuento_qq?: number | null;
+  roles: string[];
+};
 
 export type VentaDetalleRegistro = VentaDetalleCalculo & {
   modo: ModoVentaDetalle;
   product_id: string;
-  customer_id: string;
+  comprador: {
+    full_name: string;
+    customer_id?: string;
+    farmer_id?: string;
+    staff_id?: string;
+    worker_key?: string;
+  };
   /** Nombre del producto como lo ve el cajero (para el ticket). */
   producto: string;
 };
 
 const MODOS: Array<{ modo: ModoVentaDetalle; label: string }> = [
-  { modo: "LIBRA", label: "Venta por Libra" },
-  { modo: "QQ", label: "Venta por QQ" }
+  { modo: "DOLARES", label: "Por dólares" },
+  { modo: "LIBRA", label: "Por libras" },
+  { modo: "QQ", label: "Por QQ" }
 ];
-const MODO_KEY = "bascula-erp:venta-detalle-modo";
 
-function modoGuardado(): ModoVentaDetalle {
-  try { return localStorage.getItem(MODO_KEY) === "QQ" ? "QQ" : "LIBRA"; } catch { return "LIBRA"; }
-}
+const normalizarNombre = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/\s+/g, " ").trim();
 
-export function VentaDetalleCard({ productos, clientes, onRegistrar, onAviso, enlaceTarifas, descuentoQqDefecto = DESCUENTO_QQ_DEFECTO }: {
+export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, enlaceTarifas, descuentoQqDefecto = DESCUENTO_QQ_DEFECTO }: {
   /** Descuento en $ por quintal para Consumidor Final y clientes sin el suyo. */
   descuentoQqDefecto?: number;
   /** Productos de mostrador con su tarifa por libra (0 = sin tarifa). */
   productos: ProductoDetalle[];
-  /** [id, nombre, descuento $/QQ propio del cliente o null = el por defecto]. */
-  clientes: Array<[string, string, (number | null)?]>;
+  /** Clientes, agricultores, fomentados y trabajadores, sin duplicar catálogos. */
+  personas: PersonaVentaDetalle[];
   /** Registra la venta; true si quedó registrada (entonces se limpia la tarjeta). */
   onRegistrar: (venta: VentaDetalleRegistro) => Promise<boolean>;
   onAviso: (mensaje: string) => void;
   /** Enlace a Configuración → Tarifas por libra (null si el usuario no tiene acceso). */
   enlaceTarifas: (texto: string) => ReactNode;
 }) {
-  const [modo, setModo] = useState<ModoVentaDetalle>(modoGuardado);
+  const [modo, setModo] = useState<ModoVentaDetalle>("DOLARES");
   const [productId, setProductId] = useState("");
   const [cantidad, setCantidad] = useState("");
-  const [clienteId, setClienteId] = useState("");
+  const [compradorTexto, setCompradorTexto] = useState("");
   // Descuento por QQ de ESTA venta: vacío = el del cliente (o el por defecto); se puede cambiar.
   const [descuentoTxt, setDescuentoTxt] = useState("");
   const [enviando, setEnviando] = useState(false);
@@ -60,8 +75,10 @@ export function VentaDetalleCard({ productos, clientes, onRegistrar, onAviso, en
   const producto = productos.find((p) => p.id === productId) ?? null;
   const precioLibra = producto?.precioLibra ?? 0;
   const enQQ = modo === "QQ";
-  const unidad = enQQ ? "QQ" : "lb";
-  const descCliente = clientes.find((c) => c[0] === clienteId)?.[2];
+  const enDolares = modo === "DOLARES";
+  const unidad = enQQ ? "QQ" : enDolares ? "$" : "lb";
+  const persona = personas.find((p) => normalizarNombre(p.full_name) === normalizarNombre(compradorTexto)) ?? null;
+  const descCliente = persona?.descuento_qq;
   const descSugerido = descCliente != null && Number.isFinite(Number(descCliente)) ? Number(descCliente) : descuentoQqDefecto;
   const descuentoQq = descuentoTxt.trim() !== "" && Number(descuentoTxt) >= 0 ? Number(descuentoTxt) : descSugerido;
   const origenDesc = descuentoTxt.trim() !== "" ? "cambiado en esta venta" : descCliente != null ? "de este cliente" : "por defecto";
@@ -76,25 +93,25 @@ export function VentaDetalleCard({ productos, clientes, onRegistrar, onAviso, en
 
   function cambiarModo(m: ModoVentaDetalle, enfocar: "pill" | "siguiente") {
     setModo(m);
-    try { localStorage.setItem(MODO_KEY, m); } catch { /* almacenamiento no disponible */ }
     if (enfocar === "pill") pillRefs.current[m]?.focus();
     else (productId ? cantidadRef.current : productoRef.current)?.focus();
   }
 
-  // Radiogroup: las flechas alternan entre los dos modos.
+  // Radiogroup: las flechas recorren los tres modos.
   function onKeyDownModo(e: KeyboardEvent<HTMLDivElement>) {
     if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
     e.preventDefault();
-    cambiarModo(enQQ ? "LIBRA" : "QQ", "pill");
+    const actual = MODOS.findIndex((m) => m.modo === modo);
+    const delta = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : -1;
+    cambiarModo(MODOS[(actual + delta + MODOS.length) % MODOS.length].modo, "pill");
   }
 
   function onKeyDownCantidad(e: KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter") { e.preventDefault(); void registrar(); return; }
     const k = e.key.toLowerCase();
-    if (!e.ctrlKey && !e.altKey && !e.metaKey && (k === "l" || k === "q")) {
+    if (!e.ctrlKey && !e.altKey && !e.metaKey && (k === "d" || k === "l" || k === "q")) {
       e.preventDefault();
-      setModo(k === "q" ? "QQ" : "LIBRA");
-      try { localStorage.setItem(MODO_KEY, k === "q" ? "QQ" : "LIBRA"); } catch { /* almacenamiento no disponible */ }
+      setModo(k === "q" ? "QQ" : k === "l" ? "LIBRA" : "DOLARES");
     }
   }
 
@@ -102,16 +119,30 @@ export function VentaDetalleCard({ productos, clientes, onRegistrar, onAviso, en
     if (enviandoRef.current) return;
     if (!producto) { onAviso("Elige el producto"); productoRef.current?.focus(); return; }
     if (!(precioLibra > 0)) { onAviso("Este producto no tiene tarifa por libra configurada"); return; }
-    if (!hayCantidad) { onAviso(`Digita la cantidad en ${enQQ ? "QQ" : "libras"}`); cantidadRef.current?.focus(); return; }
+    if (!hayCantidad) { onAviso(`Digita ${enDolares ? "el monto en dólares" : enQQ ? "la cantidad en QQ" : "la cantidad en libras"}`); cantidadRef.current?.focus(); return; }
+    if (compradorTexto.trim().length < 2) { onAviso("Escriba o seleccione el nombre del cliente"); return; }
     if (!calculo || !(calculo.total > 0)) { onAviso("El total debe ser mayor a 0"); cantidadRef.current?.focus(); return; }
     enviandoRef.current = true;
     setEnviando(true);
     try {
-      const ok = await onRegistrar({ ...calculo, modo, product_id: producto.id, customer_id: clienteId, producto: producto.label });
+      const ok = await onRegistrar({
+        ...calculo,
+        modo,
+        product_id: producto.id,
+        producto: producto.label,
+        comprador: {
+          full_name: persona?.full_name ?? compradorTexto.trim(),
+          ...(persona?.customer_id ? { customer_id: persona.customer_id } : {}),
+          ...(persona?.farmer_id ? { farmer_id: persona.farmer_id } : {}),
+          ...(persona?.staff_id ? { staff_id: persona.staff_id } : {}),
+          ...(persona?.worker_key ? { worker_key: persona.worker_key } : {})
+        }
+      });
       if (ok) {
+        setModo("DOLARES");
         setProductId("");
         setCantidad("");
-        setClienteId("");
+        setCompradorTexto("");
         setDescuentoTxt("");
         productoRef.current?.focus();
       }
@@ -137,7 +168,9 @@ export function VentaDetalleCard({ productos, clientes, onRegistrar, onAviso, en
         ))}
       </div>
       <p className="vdCard__ayuda">
-        Se resta del inventario y entra a la caja. {enQQ
+        La venta descuenta inventario y registra Caja en una sola operación. {enDolares
+          ? <>Escriba cuánto dinero pide el cliente y el sistema calcula las libras.</>
+          : enQQ
           ? <>Por QQ se cobra el quintal a <strong>{money(descuentoQq)} menos</strong> del precio base ({origenDesc}).</>
           : <>Por libra se cobra la tarifa base.</>}
       </p>
@@ -152,22 +185,22 @@ export function VentaDetalleCard({ productos, clientes, onRegistrar, onAviso, en
 
       <div className="vdCard__fila">
         <label>
-          <span>Cantidad ({enQQ ? "QQ" : "Libras"})</span>
+          <span>{enDolares ? "Monto solicitado ($)" : `Cantidad (${enQQ ? "QQ" : "Libras"})`}</span>
           <input ref={cantidadRef} name="cantidad" type="number" inputMode="decimal" min="0" step="any"
             value={cantidad} placeholder="0" autoComplete="off"
             onChange={(e) => setCantidad(e.target.value)}
             onKeyDown={onKeyDownCantidad} />
         </label>
         <label>
-          <span>Total $ (Monto a cobrar)</span>
+          <span>{enDolares ? "Peso a entregar (libras)" : "Total $ (Monto a cobrar)"}</span>
           <input name="total_dolares" className="vdTotal" readOnly tabIndex={-1} aria-live="polite"
-            value={calculo && hayCantidad ? calculo.total.enReal() : ""} placeholder="0.00" />
+            value={calculo && hayCantidad ? (enDolares ? calculo.libras.toFixed(3) : calculo.total.enReal()) : ""} placeholder="0.00" />
         </label>
       </div>
 
       {producto && calculo && (
         <p className="vdCard__precio">
-          Precio aplicado: <strong>{formatoPrecio(calculo.precioAplicado)}/{unidad}</strong>
+          Precio aplicado: <strong>{formatoPrecio(calculo.precioAplicado)}/{enQQ ? "QQ" : "lb"}</strong>
           {enQQ && <> (base {formatoPrecio(calculo.precioBase)} − {money(calculo.descuento)} {origenDesc})</>} ·{" "}
           {enlaceTarifas("Editar tarifa en Configuración") ?? "tarifa configurada en Administración."}
         </p>
@@ -180,12 +213,18 @@ export function VentaDetalleCard({ productos, clientes, onRegistrar, onAviso, en
       )}
 
       <label>
-        <span>Cliente (opcional)</span>
-        <select name="customer_id" value={clienteId} onChange={(e) => { setClienteId(e.target.value); setDescuentoTxt(""); }}>
-          <option value="">Consumidor Final</option>
-          {clientes.map(([id, nombre, desc]) => <option key={id} value={id}>{nombre}{desc != null ? ` · −${money(Number(desc))}/QQ` : ""}</option>)}
-        </select>
+        <span>Cliente <strong aria-hidden="true">*</strong></span>
+        <input name="cliente" list="venta-detalle-personas" value={compradorTexto} autoComplete="off"
+          placeholder="Buscar agricultor, fomentado o trabajador"
+          onChange={(e) => { setCompradorTexto(e.target.value); setDescuentoTxt(""); }} />
+        <datalist id="venta-detalle-personas">
+          {personas.map((p) => <option key={p.key} value={p.full_name} label={p.roles.join(" · ")} />)}
+        </datalist>
       </label>
+      {persona && <p className="vdPersona">{persona.roles.join(" · ")}{persona.phone ? ` · ${persona.phone}` : ""}</p>}
+      {!persona && compradorTexto.trim().length >= 2 && (
+        <p className="vdCard__precio">Nombre nuevo: se guardará en el directorio al registrar la venta.</p>
+      )}
       {enQQ && (
         <label>
           <span>Descuento por QQ $ <small className="muted" style={{ fontWeight: 400 }}>({origenDesc})</small></span>
@@ -201,17 +240,19 @@ export function VentaDetalleCard({ productos, clientes, onRegistrar, onAviso, en
           <div className="vdResumen__grid">
             <div>
               <div className="vdResumen__k">Cantidad</div>
-              <div className="vdResumen__v">{enQQ ? `${formatoCantidad(calculo.qq)} QQ` : `${calculo.libras.toFixed(3)} libras`}</div>
+              <div className="vdResumen__v">{enDolares ? `${money(calculo.total)} solicitados` : enQQ ? `${formatoCantidad(calculo.qq)} QQ` : `${calculo.libras.toFixed(3)} libras`}</div>
             </div>
             <div>
               <div className="vdResumen__k">Equivalencia</div>
               <div className="vdResumen__v vdResumen__v--sec">
-                {enQQ ? `${calculo.libras.toFixed(3)} libras` : `${(calculo.libras / 100).enReal()} QQ`}
+                {enQQ ? `${calculo.libras.toFixed(3)} libras` : `${calculo.libras.toFixed(3)} lb · ${formatoCantidad(calculo.qq)} QQ`}
               </div>
             </div>
           </div>
           <div className="vdResumen__total">
-            <div className="vdResumen__k">Total a cobrar · {formatoCantidad(calculo.cantidad)} {unidad} × {formatoPrecio(calculo.precioAplicado)}</div>
+            <div className="vdResumen__k">{enDolares
+              ? `${calculo.libras.toFixed(3)} lb × ${formatoPrecio(calculo.precioAplicado)}/lb`
+              : `Total a cobrar · ${formatoCantidad(calculo.cantidad)} ${unidad} × ${formatoPrecio(calculo.precioAplicado)}`}</div>
             <div className="vdResumen__monto">{money(calculo.total)}</div>
           </div>
         </div>
@@ -220,7 +261,7 @@ export function VentaDetalleCard({ productos, clientes, onRegistrar, onAviso, en
       <button className="primary vdCard__boton" type="submit" disabled={enviando}>
         {enviando ? "Registrando…" : "✓ Registrar venta detalle"}
       </button>
-      <p className="vdCard__atajos">Enter en Cantidad registra · L / Q cambia la unidad</p>
+      <p className="vdCard__atajos">Enter registra · D dólares · L libras · Q quintales</p>
     </form>
   );
 }

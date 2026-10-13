@@ -49,6 +49,14 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🛒 Venta al detalle por dólares y comprador enlazado (2026-10-13, pedido del dueño)
+
+- Caja → Venta Detalle abre por defecto en `Por dólares`: el cajero escribe el monto pedido y el sistema calcula automáticamente libras y QQ usando la tarifa por libra. Se conservan los modos por libras y por QQ.
+- El nombre del comprador es obligatorio y usa un directorio unificado de clientes, agricultores (incluidos los de Fomento) y trabajadores. También acepta un nombre nuevo. Las coincidencias se enlazan por identidad/nombre exacto, nunca por parecido parcial.
+- Migración aditiva `20261095_venta_detalle_directorio.sql`: `customer_directory_links` vincula la persona original con `customers` sin duplicarla en su catálogo de origen. Respaldo previo: `BASCULA\Respaldos\bascula-erp_venta-detalle_20261013-121645.dump`.
+- Nueva ruta transaccional `POST /sales/retail`: cliente, venta, salida FIFO de inventario e ingreso a Caja se guardan juntos; ante cualquier error se revierte todo. La venta queda en el historial comercial y conserva el medio efectivo/banco.
+- Verificación visual sin registrar datos reales: 82 personas cargadas; $5 a $0.49/lb = 10.204 lb / 0.10204 QQ. Builds backend/frontend, 221 pruebas y preflight correctos.
+
 ### 💵 Caja: egreso corto y opciones progresivas (2026-10-13, pedido del dueño)
 
 - «Registrar en caja» usa un selector compacto Egreso / Ingreso y guía el movimiento en pasos: categoría, detalle/valor y medio de pago. Las categorías frecuentes aparecen primero y mantenimiento, repuestos, activos, materiales y sacos quedan agrupados como procesos especiales.
