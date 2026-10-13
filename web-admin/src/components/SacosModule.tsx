@@ -373,6 +373,8 @@ export function SacosCatalogoConfig({
 }) {
   const [form, setForm] = useState({ categoria: "MARCA" as "MARCA" | "GENERICO", marca: "", calidad: "0.11" as "0.11" | "CORRIENTE", pesos: [100, 25, 10] as number[], otroPeso: "", minimo: "", compra: "", cliente: "" });
   const [verInactivos, setVerInactivos] = useState(false);
+  // Renombrar: el saco cuyo nombre se está corrigiendo y el texto escrito.
+  const [renombrando, setRenombrando] = useState<{ id: string; valor: string } | null>(null);
   const esPropio = modo === "PROPIO";
   const [guardando, setGuardando] = useState(false);
   const marcasExistentes = useMemo(() => [...new Set(sacos.filter((s) => s.marca).map((s) => String(s.marca)))].sort(), [sacos]);
@@ -426,11 +428,32 @@ export function SacosCatalogoConfig({
     }
   }
 
+  /** Nombre que se corrige: la marca (Flor, Extra…) o el saco propio, no el «tipo» con el peso. */
+  const nombreEditable = (s: Saco) => ((s.categoria === "MARCA" && s.product_id) || s.categoria === "PROPIO") && s.marca ? String(s.marca) : null;
+
+  async function renombrar(s: Saco) {
+    if (!renombrando) return;
+    const nuevo = renombrando.valor.replace(/\s+/g, " ").trim();
+    const antes = nombreEditable(s) ?? "";
+    if (nuevo.length < 2) { avisar("El nombre debe tener al menos 2 letras", "error"); return; }
+    if (nuevo === antes) { setRenombrando(null); return; }
+    try {
+      const r = await apiPatch<{ antes: string; despues: string; sacos: number }>(`/sacks/${s.id}/nombre`, { nombre: nuevo });
+      setRenombrando(null);
+      await onCambio();
+      avisar(s.categoria === "MARCA"
+        ? `Marca «${r.antes}» ahora se llama «${r.despues}» (${r.sacos} saco(s); Ventas e Inventario ya la muestran así)`
+        : `«${r.antes}» ahora se llama «${r.despues}»`, "success");
+    } catch (err) {
+      avisar(err instanceof Error ? err.message : "No se pudo cambiar el nombre", "error");
+    }
+  }
+
   async function cambiarActivo(s: Saco, activo: boolean) {
     try {
       await apiPatch(`/sacks/${s.id}`, { activo });
       await onCambio();
-      avisar(`${s.tipo} ${activo ? "reactivado" : "desactivado"}`, "success");
+      avisar(`${s.tipo} ${activo ? "reactivado" : "desactivado"}${activo && s.categoria === "MARCA" && s.marca ? ` (la marca ${s.marca} vuelve a estar a la venta)` : ""}`, "success");
     } catch (err) {
       avisar(err instanceof Error ? err.message : "No se pudo cambiar", "error");
     }
@@ -438,13 +461,17 @@ export function SacosCatalogoConfig({
 
   async function eliminar(s: Saco) {
     const tieneStock = num(s.stock) !== 0;
-    if (!window.confirm(`¿Eliminar "${s.tipo}"?${tieneStock ? `\n\nTiene ${num(s.stock)} sacos en stock.` : ""}\n\nSi tiene movimientos se DESACTIVA (se conserva su historial); si no, se borra.`)) return;
+    const ultimoDeMarca = s.categoria === "MARCA" && !!s.product_id &&
+      !sacos.some((x) => x.id !== s.id && x.product_id === s.product_id && x.activo !== false);
+    if (!window.confirm(`¿Eliminar "${s.tipo}"?${tieneStock ? `\n\nTiene ${num(s.stock)} sacos en stock.` : ""}\n\nSi tiene movimientos se DESACTIVA (se conserva su historial); si no, se borra.${ultimoDeMarca ? `\n\nEs el último saco de la marca ${s.marca}: la marca también deja de ofrecerse en Ventas, Inventario y los selectores (se reactiva si vuelves a agregar su saco).` : ""}`)) return;
     try {
       const r = await apiFetch(`/sacks/${s.id}`, { method: "DELETE" });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data?.error ?? "No se pudo eliminar");
       await onCambio();
       avisar(data.resultado === "ELIMINADO" ? `${s.tipo} eliminado` : `${s.tipo} desactivado (tenía historial)`, "success");
+      if (data.marca_desactivada) avisar(`La marca ${data.marca} quedó sin sacos y se desactivó: ya no aparece en Ventas ni en los selectores.`, "success");
+      else if (data.aviso_marca) avisar(`La marca ${data.marca} quedó sin sacos pero sigue activa: ${data.aviso_marca}`, "warn");
     } catch (err) {
       avisar(err instanceof Error ? err.message : "No se pudo eliminar", "error");
     }
@@ -551,7 +578,16 @@ export function SacosCatalogoConfig({
               return (
                 <tr key={s.id} style={{ borderTop: "1px solid #f1f5f9", opacity: inactivo ? 0.55 : 1 }}>
                   <td style={{ padding: "7px 10px", fontWeight: 700 }}>
-                    {s.tipo}
+                    {renombrando?.id === s.id ? (
+                      <span className="sacoRenombrar">
+                        <input autoFocus value={renombrando.valor} maxLength={60} aria-label="Nuevo nombre"
+                          onChange={(ev) => setRenombrando({ id: s.id, valor: ev.target.value })}
+                          onKeyDown={(ev) => { if (ev.key === "Enter") void renombrar(s); if (ev.key === "Escape") setRenombrando(null); }} />
+                        <button type="button" className="primary" onClick={() => void renombrar(s)}>Guardar</button>
+                        <button type="button" className="btnGhost" onClick={() => setRenombrando(null)}>Cancelar</button>
+                        {s.categoria === "MARCA" && <small className="muted">Cambia la marca en todos sus pesos.</small>}
+                      </span>
+                    ) : s.tipo}
                     {s.categoria !== "MARCA" && s.categoria !== "PROPIO" && <span style={{ marginLeft: 6, fontSize: 10.5, color: "#64748b", fontWeight: 600 }}>{s.categoria === "SUBPRODUCTO" ? "subproducto" : s.categoria === "USADO" ? "usado (segunda)" : "genérico"}</span>}
                     {inactivo && <span style={{ marginLeft: 6, fontSize: 10.5, color: "#b91c1c" }}>desactivado</span>}
                   </td>
@@ -568,6 +604,11 @@ export function SacosCatalogoConfig({
                     </td>
                   ))}
                   <td style={{ padding: "5px 10px", textAlign: "center", whiteSpace: "nowrap" }}>
+                    {puedeEditar && !inactivo && nombreEditable(s) && renombrando?.id !== s.id && (
+                      <button type="button" className="btnSecondary" style={{ fontSize: 11.5, marginRight: 6 }}
+                        title={s.categoria === "MARCA" ? "Corregir el nombre de la marca (todos sus pesos)" : "Corregir el nombre del saco"}
+                        onClick={() => setRenombrando({ id: s.id, valor: nombreEditable(s) ?? "" })}>✎ Nombre</button>
+                    )}
                     {puedeEditar && (inactivo
                       ? <button type="button" className="btnSecondary" style={{ fontSize: 11.5 }} onClick={() => cambiarActivo(s, true)}>Reactivar</button>
                       : <button type="button" className="btnSecondary" style={{ fontSize: 11.5, color: "#b91c1c" }} onClick={() => eliminar(s)}>🗑 Eliminar</button>)}

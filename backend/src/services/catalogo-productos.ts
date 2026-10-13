@@ -8,8 +8,9 @@
 //  · TERMINADO / SUBPRODUCTO: el producto + presentaciones opcionales + tarifa por
 //    libra y si se vende al detalle en el mostrador (Caja → Venta Detalle).
 //  · MATERIA PRIMA: solo el producto.
-// Nada se renombra ni se borra: el nombre y el código quedan fijos para no romper
-// pedidos, kárdex ni los enlaces por nombre de marca.
+// Nada se borra. El CÓDIGO queda fijo; el NOMBRE se puede corregir con
+// `renombrarProducto` (pedidos, kárdex y sacos se enlazan por id; los sacos de una
+// marca llevan el nombre en `marca`/`tipo` y se renombran en la misma transacción).
 import type { PoolClient } from "pg";
 import { ApiError } from "../http/error-handler.js";
 
@@ -275,9 +276,84 @@ export async function agregarPresentacion(client: PoolClient, productId: string,
   return { sacoCreado: null };
 }
 
+/** Reemplaza el nombre viejo al inicio de un «tipo» de saco («Flor 100 LB (Usado)» → «Flor Premium 100 LB (Usado)»). */
+export function tipoRenombrado(tipo: string, viejo: string, nuevo: string, pesoLb?: number | null): string {
+  const t = String(tipo ?? "");
+  if (t.toLowerCase().startsWith(viejo.toLowerCase())) return nuevo + t.slice(viejo.length);
+  return pesoLb != null && Number(pesoLb) > 0 ? `${nuevo} ${pesoTxt(Number(pesoLb))} LB` : t;
+}
+
+/**
+ * Corrige el NOMBRE de un producto (el código no cambia). Pedidos, inventario y
+ * presentaciones van por id, así que siguen enlazados. En una marca, sus sacos de la
+ * planta (y los «(Usado)» de esa marca) cambian `marca` y `tipo` en la misma transacción.
+ */
+export async function renombrarProducto(client: PoolClient, id: string, nombreNuevo: string): Promise<{ antes: string; despues: string; sacos: number }> {
+  const nombre = nombreNuevo.replace(/\s+/g, " ").trim();
+  if (nombre.length < 2 || nombre.length > 140) throw new ApiError(400, "El nombre debe tener entre 2 y 140 caracteres.");
+  const p = (await client.query("SELECT id, name, product_type FROM products WHERE id = $1 FOR UPDATE", [id])).rows[0];
+  if (!p) throw new ApiError(404, "Producto no encontrado");
+  const antes = String(p.name);
+  if (antes === nombre) return { antes, despues: nombre, sacos: 0 };
+  const dup = await client.query("SELECT name FROM products WHERE lower(name) = lower($1) AND id <> $2 LIMIT 1", [nombre, id]);
+  if (dup.rowCount) throw new ApiError(409, `Ya existe otro producto llamado «${dup.rows[0].name}».`);
+  await client.query("UPDATE products SET name = $2 WHERE id = $1", [id, nombre]);
+
+  let sacos = 0;
+  if (p.product_type === "PACKAGED_GOOD") {
+    const filas = (await client.query(
+      `SELECT id, tipo, peso_lb::float AS peso_lb FROM sack_inventory
+        WHERE product_id = $1
+           OR (categoria = 'USADO' AND accionista_id IS NULL AND lower(marca) = lower($2))
+        FOR UPDATE`,
+      [id, antes]
+    )).rows;
+    for (const s of filas) {
+      await client.query("UPDATE sack_inventory SET marca = $2, tipo = $3, updated_at = now() WHERE id = $1",
+        [s.id, nombre, tipoRenombrado(s.tipo, antes, nombre, s.peso_lb)]);
+      sacos++;
+    }
+  }
+  return { antes, despues: nombre, sacos };
+}
+
+/**
+ * Tras quitar un saco de MARCA: si la marca se quedó SIN sacos activos de la planta ya
+ * no se puede vender empacada, así que se desactiva (deja de salir en Ventas, Inventario
+ * y selectores; su historial se conserva y se reactiva al volver a agregar un saco).
+ * Si tiene stock o pedidos pendientes NO se toca y se devuelve el motivo.
+ */
+export async function desactivarMarcaSinSacos(client: PoolClient, productId: string | null): Promise<{ desactivada: boolean; marca?: string; motivo?: string }> {
+  if (!productId) return { desactivada: false };
+  const p = (await client.query("SELECT id, name, product_type, is_active FROM products WHERE id = $1", [productId])).rows[0];
+  if (!p || p.product_type !== "PACKAGED_GOOD" || p.is_active === false) return { desactivada: false };
+  const quedan = Number((await client.query(
+    "SELECT COUNT(*)::int AS n FROM sack_inventory WHERE product_id = $1 AND activo AND accionista_id IS NULL", [productId]
+  )).rows[0].n);
+  if (quedan > 0) return { desactivada: false };
+  try {
+    await actualizarProductoCatalogo(client, productId, { is_active: false });
+    return { desactivada: true, marca: p.name };
+  } catch (e) {
+    // Solo validaciones (stock / pedidos pendientes): no hubo error de SQL, la transacción sigue sana.
+    if (e instanceof ApiError) return { desactivada: false, marca: p.name, motivo: e.message };
+    throw e;
+  }
+}
+
+/** Al reactivar un saco de marca, su marca vuelve a estar activa (para poder venderla). */
+export async function reactivarMarcaDeSaco(client: { query: PoolClient["query"] }, sackId: string): Promise<void> {
+  await client.query(
+    `UPDATE products SET is_active = true
+      WHERE id = (SELECT product_id FROM sack_inventory WHERE id = $1 AND accionista_id IS NULL AND categoria = 'MARCA')
+        AND is_active = false`,
+    [sackId]
+  );
+}
+
 export type CambiosProducto = { is_active?: boolean; price_per_pound?: number; venta_detalle?: boolean };
 
-/** Cambios seguros de un producto (no se renombra: ver la nota de arriba). */
+/** Cambios seguros de un producto (el nombre va por `renombrarProducto`). */
 export async function actualizarProductoCatalogo(client: PoolClient, id: string, c: CambiosProducto): Promise<void> {
   const p = (await client.query(
     "SELECT id, name, product_type, is_active, price_per_pound::float AS price_per_pound, venta_detalle FROM products WHERE id = $1 FOR UPDATE", [id]

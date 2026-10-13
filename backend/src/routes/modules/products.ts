@@ -6,7 +6,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin } from "../../auth/require-auth.js";
 import {
-  actualizarProductoCatalogo, agregarPresentacion, crearProductoCatalogo, listarCatalogo
+  actualizarProductoCatalogo, agregarPresentacion, crearProductoCatalogo, listarCatalogo, renombrarProducto
 } from "../../services/catalogo-productos.js";
 
 export const productsRouter = Router();
@@ -128,16 +128,22 @@ productsRouter.patch("/:id/tarifa-libra", requireAdmin, asyncRoute(async (req, r
   res.json(result.rows[0]);
 }));
 
-// Cambios seguros de un producto del catálogo: activo, tarifa por libra y venta al
-// detalle. El nombre y el código NO se cambian (pedidos, kárdex y marcas los usan).
+// Cambios de un producto del catálogo: nombre, activo, tarifa por libra y venta al
+// detalle. El CÓDIGO no cambia. Pedidos, kárdex y presentaciones van por id; al
+// renombrar una marca se renombran también sus sacos.
 productsRouter.patch("/:id", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({
+    name: z.string().trim().min(2).max(140).optional(),
     is_active: z.boolean().optional(),
     price_per_pound: z.number().nonnegative().max(9999).optional(),
     venta_detalle: z.boolean().optional()
   }).parse(req.body);
   if (Object.values(body).every((v) => v === undefined)) throw new ApiError(400, "Nada que actualizar.");
-  await inTransaction((client) => actualizarProductoCatalogo(client, String(req.params.id), body));
+  const { name, ...resto } = body;
+  await inTransaction(async (client) => {
+    if (name !== undefined) await renombrarProducto(client, String(req.params.id), name);
+    if (Object.values(resto).some((v) => v !== undefined)) await actualizarProductoCatalogo(client, String(req.params.id), resto);
+  });
   const [producto] = await listarCatalogo(pool, String(req.params.id));
   res.json(producto);
 }));

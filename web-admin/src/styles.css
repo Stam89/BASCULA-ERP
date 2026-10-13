@@ -5830,3 +5830,18 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .vincSug button { padding: 6px 12px; border-radius: 999px; border: 1px solid var(--c-border); background: var(--c-surface); font-weight: 600; font-size: 13px; cursor: pointer; }
 .vincSug button.is-on { border-color: #0f766e; background: #f0fdfa; color: #0f766e; }
 .vincSug button small { color: #7c3aed; font-weight: 600; }
+
+/* Catálogo de sacos: corregir el nombre en la misma fila */
+.sacoRenombrar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.sacoRenombrar input { min-width: 140px; flex: 1 1 140px; padding: 5px 8px; border-radius: 6px; border: 1px solid #94a3b8; font-weight: 600; }
+.sacoRenombrar button { padding: 5px 10px; font-size: 12px; }
+.sacoRenombrar small { flex-basis: 100%; font-weight: 500; }
+
+/* Catálogo de productos: pestañas por tipo */
+.catProd__tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 4px; }
+.catProd__tab { padding: 7px 14px; border-radius: 999px; border: 1px solid var(--c-border); background: var(--c-surface); font-weight: 700; font-size: 13px; cursor: pointer; color: inherit; }
+.catProd__tab.is-activo { border-color: #0f766e; background: #f0fdfa; color: #0f766e; }
+.catProd__tab small { font-weight: 600; opacity: .75; margin-left: 4px; }
+.catProd__tabAyuda { margin: 2px 0 6px; font-size: 12.5px; }
+.catProd__nombre { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; margin-bottom: 10px; }
+.catProd__nombre label { flex: 1 1 200px; }

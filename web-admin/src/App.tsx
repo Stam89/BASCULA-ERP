@@ -8246,9 +8246,11 @@ export function App() {
     if (brandName === 'Conejo') {
       return products.find(p => p.code === 'ARROZ-PILADO-CORRIENTE')?.id || null;
     }
-    // Marca nueva creada en Configuración → Catálogo de sacos: su calidad dice
-    // qué arroz base la respalda (0.11 o Corriente).
-    const calidadMarca = sackInventory.find((sk) => sk.categoria === "MARCA" && sk.marca?.toUpperCase() === brandName.toUpperCase())?.calidad;
+    // Marca nueva (o renombrada) del Catálogo de sacos: la calidad de SU saco (enlazado por
+    // id) dice qué arroz base la respalda (0.11 o Corriente).
+    const prodMarca = products.find((p) => p.name === brandName);
+    const calidadMarca = (prodMarca ? sackInventory.find((sk) => sk.categoria === "MARCA" && sk.product_id === prodMarca.id && sk.calidad)?.calidad : undefined)
+      ?? sackInventory.find((sk) => sk.categoria === "MARCA" && sk.marca?.toUpperCase() === brandName.toUpperCase())?.calidad;
     if (calidadMarca === "0.11") return products.find(p => p.code === 'ARROZ-PILADO-011')?.id || null;
     if (calidadMarca === "CORRIENTE") return products.find(p => p.code === 'ARROZ-PILADO-CORRIENTE')?.id || null;
     // Arrocillos y Polvillo → productos propios
@@ -16676,31 +16678,25 @@ Motivo (obligatorio):`, "");
                           onChange={(e) => handleSaleLineProductChange(e.target.value)}
                           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); pedidoPresentacionRef.current?.focus(); } }}>
                           <option value="">Selecciona marca</option>
-                          <option value="" disabled>━━━ MARCAS ━━━</option>
-                          {['Flor', 'Oso', 'Lira Verde', 'Lira Azul', 'Conejo'].map(brandName => {
-                            const prod = products.find(p => p.name === brandName);
-                            return prod ? <option key={prod.id} value={prod.id}>{prod.name}</option> : null;
-                          })}
-                          <option value="" disabled>━━━ ARROCILLOS ━━━</option>
-                          {['Arrocillo 3/4', 'Arrocillo Fino', 'Polvillo / Afrecho'].map(brandName => {
-                            const prod = products.find(p => p.name === brandName);
-                            return prod ? <option key={prod.id} value={prod.id}>{prod.name}</option> : null;
-                          })}
-                          {/* Productos vendibles nuevos: aparecen solos, sin tocar código. */}
+                          {/* Por TIPO del catálogo y solo ACTIVOS: una marca renombrada sigue aquí y una
+                              desactivada (p. ej. sin sacos) desaparece. Orden de siempre primero. */}
                           {(() => {
-                            const yaListados = new Set(['Flor', 'Oso', 'Lira Verde', 'Lira Azul', 'Conejo', 'Arrocillo 3/4', 'Arrocillo Fino', 'Polvillo / Afrecho']);
-                            const otros = products.filter(p =>
-                              !yaListados.has(p.name) &&
-                              (p.product_type === "FINISHED_GOOD" || p.product_type === "PACKAGED_GOOD" || p.product_type === "BYPRODUCT") &&
-                              !String(p.code || "").startsWith("ARROZ-PILADO") &&
-                              !String(p.code || "").startsWith("CASCARA")
-                            );
-                            return otros.length ? (
-                              <>
-                                <option value="" disabled>━━━ OTROS ━━━</option>
-                                {otros.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                              </>
-                            ) : null;
+                            const ORDEN = ['Flor', 'Oso', 'Lira Verde', 'Lira Azul', 'Conejo', 'Arrocillo 3/4', 'Arrocillo Fino', 'Polvillo / Afrecho'];
+                            const pos = (p: Product) => { const i = ORDEN.indexOf(p.name); return i < 0 ? 99 : i; };
+                            const vendibles = products
+                              .filter(p => p.is_active !== false && !String(p.code || "").startsWith("ARROZ-PILADO") && !String(p.code || "").startsWith("CASCARA"))
+                              .sort((a, b) => pos(a) - pos(b) || a.name.localeCompare(b.name, "es"));
+                            const grupos: Array<[string, Product[]]> = [
+                              ["MARCAS", vendibles.filter(p => p.product_type === "PACKAGED_GOOD")],
+                              ["ARROCILLOS", vendibles.filter(p => p.product_type === "BYPRODUCT")],
+                              ["OTROS", vendibles.filter(p => p.product_type === "FINISHED_GOOD")]
+                            ];
+                            return grupos.filter(([, ps]) => ps.length).map(([titulo, ps]) => (
+                              <React.Fragment key={titulo}>
+                                <option value="" disabled>━━━ {titulo} ━━━</option>
+                                {ps.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                              </React.Fragment>
+                            ));
                           })()}
                         </select>
                       </td>
@@ -17813,7 +17809,7 @@ Motivo (obligatorio):`, "");
                     <>
                       <select value={it.product_id} onChange={(e: any) => updatePurchaseItem(idx, { product_id: e.target.value })}>
                         <option value="">— Producto —</option>
-                        {products.map((p) => (<option key={p.id} value={p.id}>{p.name} ({p.product_type})</option>))}
+                        {products.filter((p) => p.is_active !== false || p.id === it.product_id).map((p) => (<option key={p.id} value={p.id}>{p.name} ({p.product_type})</option>))}
                       </select>
                       <select value={it.warehouse_id} onChange={(e: any) => updatePurchaseItem(idx, { warehouse_id: e.target.value })}>
                         <option value="">— Bodega —</option>
@@ -25247,7 +25243,7 @@ Motivo (obligatorio):`, "");
                     sacos={sacosDelActivo}
                     modo={esMatrizActiva ? "MATRIZ" : "PROPIO"}
                     puedeEditar={isAdmin}
-                    onCambio={refreshSacks}
+                    onCambio={async () => { await refreshSacks(); refresh().catch(() => undefined); }}
                     avisar={(msg, tipo) => addToast(msg, tipo)}
                   />
                 </details>

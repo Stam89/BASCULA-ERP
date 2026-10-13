@@ -8,7 +8,9 @@ import { inTransaction } from "../../db/transaction.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { sacosPorComprar } from "../../services/sacos.js";
-import { altaMarcaOGenerico } from "../../services/catalogo-productos.js";
+import {
+  altaMarcaOGenerico, desactivarMarcaSinSacos, reactivarMarcaDeSaco, renombrarProducto, tipoRenombrado
+} from "../../services/catalogo-productos.js";
 
 export const sacksRouter = Router();
 
@@ -160,7 +162,8 @@ sacksRouter.patch("/:id", requireAdmin, asyncRoute(async (req, res) => {
     calidad: z.enum(["0.11", "CORRIENTE"]).nullable().optional(),
     activo: z.boolean().optional()
   }).parse(req.body);
-  const result = await pool.query(
+  const result = await inTransaction(async (client) => {
+  const r = await client.query(
     `UPDATE sack_inventory
         SET stock_minimo = COALESCE($2, stock_minimo),
             precio_compra_default = COALESCE($3, precio_compra_default),
@@ -173,8 +176,54 @@ sacksRouter.patch("/:id", requireAdmin, asyncRoute(async (req, res) => {
     [req.params.id, body.stock_minimo ?? null, body.precio_compra_default ?? null, body.precio_venta_cliente ?? null,
      body.calidad !== undefined, body.calidad ?? null, body.activo ?? null]
   );
-  if (!result.rowCount) throw new ApiError(404, "Saco no encontrado");
-  res.json(result.rows[0]);
+  if (!r.rowCount) throw new ApiError(404, "Saco no encontrado");
+  // Reactivar el saco de una marca la vuelve a activar; desactivar el último la desactiva.
+  if (body.activo === true) await reactivarMarcaDeSaco(client, String(req.params.id));
+  if (body.activo === false && r.rows[0].categoria === "MARCA" && !r.rows[0].accionista_id) {
+    const m = await desactivarMarcaSinSacos(client, r.rows[0].product_id ?? null);
+    return { ...r.rows[0], marca_desactivada: m.desactivada, aviso_marca: m.motivo ?? null };
+  }
+  return r.rows[0];
+  });
+  res.json(result);
+}));
+
+// Corrige el NOMBRE de un saco. Saco de MARCA (planta): renombra la marca entera
+// (producto + todos sus pesos), porque Ventas e Inventario la muestran con ese
+// nombre. Saco PROPIO del socio: renombra ese saco en todos sus pesos. Los
+// genéricos, de subproducto y usados tienen nombre fijo del sistema (se buscan por él).
+sacksRouter.patch("/:id/nombre", requireAdmin, asyncRoute(async (req, res) => {
+  const ambito = await ambitoSacos(req as AuthenticatedRequest);
+  await assertSacosDelAmbito(pool, ambito, [String(req.params.id)]);
+  const { nombre } = z.object({ nombre: z.string().trim().min(2).max(60) }).parse(req.body);
+  const limpio = nombre.replace(/\s+/g, " ").trim();
+  const out = await inTransaction(async (client) => {
+    const s = (await client.query("SELECT id, categoria, marca, product_id, accionista_id FROM sack_inventory WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
+    if (!s) throw new ApiError(404, "Saco no encontrado");
+    if (s.categoria === "MARCA" && s.product_id) {
+      return await renombrarProducto(client, s.product_id, limpio);
+    }
+    if (s.categoria === "PROPIO" && s.accionista_id && s.marca) {
+      const antes = String(s.marca);
+      if (antes === limpio) return { antes, despues: limpio, sacos: 0 };
+      const dup = await client.query(
+        "SELECT 1 FROM sack_inventory WHERE accionista_id = $1 AND lower(marca) = lower($2) AND lower(marca) <> lower($3) LIMIT 1",
+        [s.accionista_id, limpio, antes]
+      );
+      if (dup.rowCount) throw new ApiError(409, `Ya tienes un saco llamado «${limpio}».`);
+      const filas = (await client.query(
+        "SELECT id, tipo, peso_lb::float AS peso_lb FROM sack_inventory WHERE accionista_id = $1 AND lower(marca) = lower($2) FOR UPDATE",
+        [s.accionista_id, antes]
+      )).rows;
+      for (const f of filas) {
+        await client.query("UPDATE sack_inventory SET marca = $2, tipo = $3, updated_at = now() WHERE id = $1",
+          [f.id, limpio, tipoRenombrado(f.tipo, antes, limpio, f.peso_lb)]);
+      }
+      return { antes, despues: limpio, sacos: filas.length };
+    }
+    throw new ApiError(400, "Este saco tiene un nombre fijo del sistema (genérico, de subproducto o usado); no se puede renombrar.");
+  });
+  res.json(out);
 }));
 
 // Eliminar: si el saco nunca tuvo movimientos se borra; si tiene historial se
@@ -183,15 +232,22 @@ sacksRouter.delete("/:id", requireAdmin, asyncRoute(async (req, res) => {
   const ambito = await ambitoSacos(req as AuthenticatedRequest);
   await assertSacosDelAmbito(pool, ambito, [String(req.params.id)]);
   const result = await inTransaction(async (client) => {
-    const s = await client.query("SELECT id, tipo, stock FROM sack_inventory WHERE id = $1 FOR UPDATE", [req.params.id]);
+    const s = await client.query("SELECT id, tipo, stock, categoria, product_id, accionista_id FROM sack_inventory WHERE id = $1 FOR UPDATE", [req.params.id]);
     if (!s.rowCount) throw new ApiError(404, "Saco no encontrado");
     const movs = await client.query("SELECT 1 FROM sack_movements WHERE sack_id = $1 LIMIT 1", [req.params.id]);
+    let resultado: "ELIMINADO" | "DESACTIVADO";
     if (!movs.rowCount && Number(s.rows[0].stock) === 0) {
       await client.query("DELETE FROM sack_inventory WHERE id = $1", [req.params.id]);
-      return { tipo: s.rows[0].tipo, resultado: "ELIMINADO" };
+      resultado = "ELIMINADO";
+    } else {
+      await client.query("UPDATE sack_inventory SET activo = false, updated_at = now() WHERE id = $1", [req.params.id]);
+      resultado = "DESACTIVADO";
     }
-    await client.query("UPDATE sack_inventory SET activo = false, updated_at = now() WHERE id = $1", [req.params.id]);
-    return { tipo: s.rows[0].tipo, resultado: "DESACTIVADO" };
+    // Si era el último saco de una marca de la planta, la marca deja de ofrecerse (Ventas, Inventario…).
+    const m = s.rows[0].categoria === "MARCA" && !s.rows[0].accionista_id
+      ? await desactivarMarcaSinSacos(client, s.rows[0].product_id ?? null)
+      : { desactivada: false, marca: undefined, motivo: undefined };
+    return { tipo: s.rows[0].tipo, resultado, marca_desactivada: m.desactivada, marca: m.marca ?? null, aviso_marca: m.motivo ?? null };
   });
   res.json(result);
 }));

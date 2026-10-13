@@ -49,6 +49,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🧺📦 Catálogo de productos y sacos: renombrar, borrar sin huérfanos y pestañas (2026-10-13, pedido del dueño)
+
+- Renombrar: `PATCH /products/:id` acepta `name` (`renombrarProducto` en services/catalogo-productos.ts: nombre único sin importar mayúsculas; el CÓDIGO no cambia; en una marca renombra también `marca`/`tipo` de sus sacos y de sus «(Usado)»). `PATCH /sacks/:id/nombre`: saco de MARCA → renombra la marca entera; PROPIO del socio → todos sus pesos; genéricos / subproducto / usados → 400 (se buscan por nombre en cargo-empaque). Pedidos, presentaciones e inventario van por id.
+- Eliminar/desactivar el ÚLTIMO saco de una marca de la planta la DESACTIVA (`desactivarMarcaSinSacos`), salvo stock ≠ 0 o pedidos pendientes (se responde `aviso_marca`). Reactivar el saco o volver a agregarlo reactiva la marca. Presentaciones se conservan.
+- Ventas: el selector «Marca / Producto» ya no tiene nombres fijos: agrupa por tipo (MARCAS / ARROCILLOS / OTROS), solo ACTIVOS, con el orden de siempre primero. `getInventoryProductForBrand` busca la calidad por el saco enlazado (product_id) antes que por nombre. Compras: selector de producto sin inactivos.
+- UI: Catálogo de productos en pestañas (📦 Marcas / 🌾 Materia prima / ⚙️ Subproductos / 🍚 Granel; buscar busca en todas), columnas según la pestaña, chip «sin sacos»; ✎ Editar con campo Nombre. Catálogo de sacos: «✎ Nombre» en la fila. En la base real «Extra» y «Lira Verde» siguen ACTIVAS sin sacos (sus sacos se borraron antes de este cambio): el dueño puede desactivarlas en ✎ Editar. Simulacro `catalogo_renombrar.mjs` TODO OK.
+
 ### 📋 Selección: reporte recibido sin llegada física (2026-10-12)
 
 - Secadoras quedó dividida en dos vistas compactas: `🔥 Secado y túneles` y `🌙 Guardia semanal`; la programación de guardia ya no alarga la pantalla operativa.

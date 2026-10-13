@@ -8,7 +8,9 @@ import { apiGet, apiPatch, apiPost } from "../api";
 //  · Terminado / Subproducto: presentaciones, tarifa por libra y «venta al detalle»
 //    (Caja → Venta Detalle).
 //  · Materia prima: solo el producto.
-// El nombre y el código no se cambian después (pedidos, kárdex y marcas los usan).
+// El CÓDIGO no cambia; el NOMBRE se puede corregir (todo va enlazado por id y, en una
+// marca, sus sacos se renombran con ella). La lista va en pestañas por tipo para no
+// repetir: las marcas no muestran el arroz a granel que las respalda.
 
 type TipoProducto = "FINISHED_GOOD" | "PACKAGED_GOOD" | "BYPRODUCT" | "RAW_MATERIAL";
 type Presentacion = { id: string; name: string; weight_lb: number };
@@ -28,6 +30,14 @@ const TIPOS: Array<{ tipo: TipoProducto; icono: string; titulo: string; ayuda: s
   { tipo: "RAW_MATERIAL", icono: "🧺", titulo: "Materia prima", ayuda: "Cáscara u otro insumo que entra a la planta." }
 ];
 const ETIQUETA_TIPO: Record<string, string> = Object.fromEntries(TIPOS.map((t) => [t.tipo, t.titulo]));
+
+/** Pestañas del catálogo (cada producto en una sola). */
+const PESTANAS: Array<{ tipo: TipoProducto; etiqueta: string; ayuda: string }> = [
+  { tipo: "PACKAGED_GOOD", etiqueta: "📦 Marcas / Empacado", ayuda: "Marcas que se venden en saco. El arroz a granel que las respalda (0.11 / Corriente) está en «Granel»." },
+  { tipo: "RAW_MATERIAL", etiqueta: "🌾 Materia prima", ayuda: "Cáscara que entra a la planta." },
+  { tipo: "BYPRODUCT", etiqueta: "⚙️ Subproductos", ayuda: "Arrocillo, polvillo, rechazo y similares." },
+  { tipo: "FINISHED_GOOD", etiqueta: "🍚 Granel", ayuda: "Arroz a granel que sale de la pilada (Producto 0.11, Producto Corriente…): respalda el stock de las marcas." }
+];
 const PESOS_BASE = [100, 50, 25, 10];
 
 const slugCodigo = (t: string) => t.toUpperCase().normalize("NFD").replace(/\p{M}/gu, "").replace(/[^A-Z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -88,7 +98,7 @@ export function CatalogoProductos({ puedeEditar, avisar, onCambio, irASaldos, ir
 }) {
   const [filas, setFilas] = useState<FilaCatalogo[] | null>(null);
   const [verInactivos, setVerInactivos] = useState(false);
-  const [filtro, setFiltro] = useState<"" | TipoProducto>("");
+  const [pestana, setPestana] = useState<TipoProducto>("PACKAGED_GOOD");
   const [buscar, setBuscar] = useState("");
   const [nuevoAbierto, setNuevoAbierto] = useState(false);
   const [form, setForm] = useState<Formulario>(formularioInicial());
@@ -103,12 +113,25 @@ export function CatalogoProductos({ puedeEditar, avisar, onCambio, irASaldos, ir
   }, []);
   useEffect(() => { void cargar(); }, [cargar]);
 
+  // Al buscar se busca en todas las pestañas; si no, solo la pestaña elegida.
+  const buscando = buscar.trim().length > 0;
   const lista = useMemo(() => {
     const q = buscar.trim().toLowerCase();
     return (filas ?? []).filter((f) =>
-      (verInactivos || f.is_active) && (!filtro || f.product_type === filtro) &&
-      (!q || f.name.toLowerCase().includes(q) || f.code.toLowerCase().includes(q)));
-  }, [filas, verInactivos, filtro, buscar]);
+      (verInactivos || f.is_active) && (q ? (f.name.toLowerCase().includes(q) || f.code.toLowerCase().includes(q)) : f.product_type === pestana));
+  }, [filas, verInactivos, pestana, buscar]);
+  const cuantos = (tipo: TipoProducto) => (filas ?? []).filter((f) => f.product_type === tipo && (verInactivos || f.is_active)).length;
+  // Columnas que aplican a la vista (sin repetir datos que no corresponden).
+  const vista: TipoProducto | "TODOS" = buscando ? "TODOS" : pestana;
+  const col = {
+    tipo: vista === "TODOS",
+    presentaciones: vista !== "RAW_MATERIAL",
+    sacos: vista === "TODOS" || vista === "PACKAGED_GOOD",
+    calidad: vista === "TODOS" || vista === "PACKAGED_GOOD",
+    tarifa: vista === "TODOS" || vista === "FINISHED_GOOD" || vista === "BYPRODUCT",
+    mostrador: vista === "TODOS" || vista === "FINISHED_GOOD" || vista === "BYPRODUCT"
+  };
+  const nCols = 3 + Object.values(col).filter(Boolean).length;
 
   const esMarca = form.tipo === "PACKAGED_GOOD";
   const codigoMostrado = form.codigoEditado ? form.codigo : codigoSugerido(form.nombre, form.tipo);
@@ -165,20 +188,20 @@ export function CatalogoProductos({ puedeEditar, avisar, onCambio, irASaldos, ir
     <div className="catProd">
       <p className="muted" style={{ margin: "6px 0 10px" }}>
         Crea productos y déjalos <strong>enlazados</strong>: presentaciones, sacos y arroz base en una marca; tarifa y mostrador en un
-        producto de venta al detalle. El nombre y el código no se cambian después para no romper pedidos ni historial.
+        producto de venta al detalle. El <strong>nombre</strong> se puede corregir con ✎ Editar (pedidos e historial siguen enlazados);
+        el código queda fijo.
       </p>
 
       <div className="catProd__barra">
         {puedeEditar && (
-          <button type="button" className="primary" onClick={() => { setNuevoAbierto((a) => !a); setResultado(null); }}>
+          <button type="button" className="primary" onClick={() => {
+            if (!nuevoAbierto) setForm(formularioInicial(pestana));
+            setNuevoAbierto((a) => !a); setResultado(null);
+          }}>
             {nuevoAbierto ? "Cerrar formulario" : "➕ Nuevo producto"}
           </button>
         )}
         <input type="search" placeholder="🔍 Buscar producto…" value={buscar} onChange={(e) => setBuscar(e.target.value)} style={{ minWidth: 180, flex: "1 1 180px" }} />
-        <select value={filtro} onChange={(e) => setFiltro(e.target.value as "" | TipoProducto)} aria-label="Filtrar por tipo">
-          <option value="">Todos los tipos</option>
-          {TIPOS.map((t) => <option key={t.tipo} value={t.tipo}>{t.titulo}</option>)}
-        </select>
         <label className="catProd__check"><input type="checkbox" checked={verInactivos} onChange={(e) => setVerInactivos(e.target.checked)} /> Mostrar desactivados</label>
       </div>
 
@@ -295,26 +318,45 @@ export function CatalogoProductos({ puedeEditar, avisar, onCambio, irASaldos, ir
         </form>
       )}
 
-      <div style={{ overflowX: "auto", border: "1px solid var(--c-border)", borderRadius: 10, marginTop: 10 }}>
-        <table className="cajaTable" style={{ width: "100%", minWidth: 760, margin: 0 }}>
+      <div className="catProd__tabs" role="tablist" aria-label="Tipo de producto">
+        {PESTANAS.map((t) => (
+          <button key={t.tipo} type="button" role="tab" aria-selected={!buscando && pestana === t.tipo}
+            className={`catProd__tab ${!buscando && pestana === t.tipo ? "is-activo" : ""}`}
+            onClick={() => { setPestana(t.tipo); setBuscar(""); }}>
+            {t.etiqueta}<small>{filas ? cuantos(t.tipo) : ""}</small>
+          </button>
+        ))}
+      </div>
+      <p className="muted catProd__tabAyuda">
+        {buscando ? `Resultados de «${buscar.trim()}» en todas las pestañas.` : PESTANAS.find((t) => t.tipo === pestana)?.ayuda}
+      </p>
+
+      <div style={{ overflowX: "auto", border: "1px solid var(--c-border)", borderRadius: 10 }}>
+        <table className="cajaTable" style={{ width: "100%", minWidth: nCols > 6 ? 760 : 480, margin: 0 }}>
           <thead>
             <tr>
-              <th>Producto</th><th>Tipo</th><th>Presentaciones</th><th className="num">Sacos</th>
-              <th>Arroz base</th><th className="num">Tarifa/lb</th><th>Mostrador</th><th className="num">Stock</th><th />
+              <th>Producto</th>{col.tipo && <th>Tipo</th>}{col.presentaciones && <th>Presentaciones</th>}{col.sacos && <th className="num">Sacos</th>}
+              {col.calidad && <th>Arroz base</th>}{col.tarifa && <th className="num">Tarifa/lb</th>}{col.mostrador && <th>Mostrador</th>}<th className="num">Stock</th><th />
             </tr>
           </thead>
           <tbody>
-            {filas == null && <tr><td colSpan={9} className="muted" style={{ padding: 14, textAlign: "center" }}>Cargando…</td></tr>}
-            {filas != null && lista.length === 0 && <tr><td colSpan={9} className="muted" style={{ padding: 14, textAlign: "center" }}>Ningún producto coincide.</td></tr>}
+            {filas == null && <tr><td colSpan={nCols} className="muted" style={{ padding: 14, textAlign: "center" }}>Cargando…</td></tr>}
+            {filas != null && lista.length === 0 && <tr><td colSpan={nCols} className="muted" style={{ padding: 14, textAlign: "center" }}>{buscando ? "Ningún producto coincide." : "No hay productos en esta pestaña."}</td></tr>}
             {lista.map((f) => (
               <tr key={f.id} style={{ opacity: f.is_active ? 1 : 0.5 }}>
-                <td><strong>{f.name}</strong>{!f.is_active && <span className="chip bad" style={{ marginLeft: 6 }}>desactivado</span>}<br /><small className="muted">{f.code}</small></td>
-                <td>{ETIQUETA_TIPO[f.product_type] ?? f.product_type}</td>
-                <td>{f.presentaciones.length ? f.presentaciones.map((p) => p.name).join(", ") : <span className="muted">—</span>}</td>
-                <td className="num">{f.product_type === "PACKAGED_GOOD" ? f.sacos : "—"}</td>
-                <td>{f.calidad ? (f.calidad === "CORRIENTE" ? "Corriente" : f.calidad) : "—"}</td>
-                <td className="num">{f.price_per_pound > 0 ? `$${f.price_per_pound}` : "—"}</td>
-                <td>{f.venta_detalle ? <span className="chip ok">Sí</span> : "—"}</td>
+                <td>
+                  <strong>{f.name}</strong>{!f.is_active && <span className="chip bad" style={{ marginLeft: 6 }}>desactivado</span>}
+                  {f.is_active && f.product_type === "PACKAGED_GOOD" && f.sacos === 0 && (
+                    <span className="chip warn" style={{ marginLeft: 6 }} title="Sin sacos no se puede empacar ni vender. Agrega su saco o desactívala.">sin sacos</span>
+                  )}
+                  <br /><small className="muted">{f.code}</small>
+                </td>
+                {col.tipo && <td>{ETIQUETA_TIPO[f.product_type] ?? f.product_type}</td>}
+                {col.presentaciones && <td>{f.presentaciones.length ? f.presentaciones.map((p) => p.name).join(", ") : <span className="muted">—</span>}</td>}
+                {col.sacos && <td className="num">{f.product_type === "PACKAGED_GOOD" ? f.sacos : "—"}</td>}
+                {col.calidad && <td>{f.calidad ? (f.calidad === "CORRIENTE" ? "Corriente" : f.calidad) : "—"}</td>}
+                {col.tarifa && <td className="num">{f.price_per_pound > 0 ? `$${f.price_per_pound}` : "—"}</td>}
+                {col.mostrador && <td>{f.venta_detalle ? <span className="chip ok">Sí</span> : "—"}</td>}
                 <td className="num">{f.con_movimientos ? f.stock_total.enReal() : "—"}</td>
                 <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                   <button type="button" className="btnGhost" onClick={() => setEditando(f)}>✎ {puedeEditar ? "Editar" : "Ver"}</button>
@@ -327,6 +369,7 @@ export function CatalogoProductos({ puedeEditar, avisar, onCambio, irASaldos, ir
 
       {editando && (
         <EditarProducto
+          key={editando.id}
           fila={filas?.find((x) => x.id === editando.id) ?? editando}
           puedeEditar={puedeEditar}
           avisar={avisar}
@@ -345,12 +388,15 @@ function EditarProducto({ fila, puedeEditar, avisar, onCerrar, onCambio }: {
   onCerrar: () => void;
   onCambio: () => Promise<void>;
 }) {
+  const [nombre, setNombre] = useState(fila.name);
   const [tarifa, setTarifa] = useState(String(fila.price_per_pound || ""));
   const [detalle, setDetalle] = useState(fila.venta_detalle);
   const [peso, setPeso] = useState("");
   const [ocupado, setOcupado] = useState(false);
   const esMarca = fila.product_type === "PACKAGED_GOOD";
   const sucio = Number(tarifa || 0) !== fila.price_per_pound || detalle !== fila.venta_detalle;
+  const nombreLimpio = nombre.replace(/\s+/g, " ").trim();
+  const nombreSucio = nombreLimpio !== fila.name;
 
   async function ejecutar(accion: () => Promise<unknown>, ok: string) {
     setOcupado(true);
@@ -363,6 +409,20 @@ function EditarProducto({ fila, puedeEditar, avisar, onCerrar, onCambio }: {
     <div className="modalOverlay" onClick={onCerrar}>
       <div className="modalCard formPanel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
         <h3 style={{ marginTop: 0 }}>{fila.name} <small className="muted">· {fila.code}</small></h3>
+        {puedeEditar && (
+          <form className="catProd__nombre" onSubmit={(e) => {
+            e.preventDefault();
+            if (!nombreSucio || nombreLimpio.length < 2 || ocupado) return;
+            void ejecutar(() => apiPatch(`/products/${fila.id}`, { name: nombreLimpio }),
+              esMarca ? `Marca renombrada a «${nombreLimpio}» (también sus sacos)` : `Producto renombrado a «${nombreLimpio}»`);
+          }}>
+            <label><span>Nombre</span>
+              <input value={nombre} maxLength={140} onChange={(e) => setNombre(e.target.value)} />
+            </label>
+            <button className="primary" disabled={!nombreSucio || nombreLimpio.length < 2 || ocupado}>Guardar nombre</button>
+            {nombreSucio && <small className="muted" style={{ flexBasis: "100%" }}>Pedidos, inventario e historial siguen enlazados{esMarca ? "; sus sacos pasan a llamarse igual" : ""}. El código ({fila.code}) no cambia.</small>}
+          </form>
+        )}
         <p className="muted" style={{ marginTop: -4 }}>
           {ETIQUETA_TIPO[fila.product_type] ?? fila.product_type} · unidad {fila.unit}
           {fila.con_movimientos ? ` · stock ${fila.stock_total.enReal()}` : ""}
