@@ -51,7 +51,7 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ### ⚖️ Báscula en pestañas (2026-10-13, pedido del dueño)
 
-- Báscula: «📲 Tickets de báscula» (por defecto; ahí se ingresa la materia prima) · «🔁 Corregir accionista» (solo si hay ingresos y más de un accionista) · «🔗 Sincronización» (con punto de estado). `basculaVista` recordada en localStorage; desde Inicio abre Tickets. Solo cambia qué se muestra; la lógica es la misma.
+- Báscula: «📲 Tickets de báscula» (por defecto; ahí se ingresa la materia prima) · «🔁 Corregir accionista» (solo si hay ingresos y más de un accionista) · «🔗 Sincronización» (con punto de estado; ahí están «Contar desde el ticket #» y «Forzar sincronización completa»). `basculaVista` recordada en localStorage; desde Inicio abre Tickets. Solo cambia qué se muestra; la lógica es la misma.
 
 ### 🚚📂 Flete por viaje y cambio rápido de accionista (2026-10-13, pedido del dueño)
 

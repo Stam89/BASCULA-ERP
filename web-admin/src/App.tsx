@@ -13694,19 +13694,14 @@ Motivo (obligatorio):`, "");
           </div>
           )}
 
-          {(basculaVista === "tickets" || (basculaVista === "corregir" && !(accionistas.length > 1 && materiaPrimaEntries.length > 0))) && (
-          <div className="tablePanel">
+          {/* Ajustes de la báscula (antes encima de la lista de tickets): corte y descarga completa. */}
+          {basculaVista === "sync" && (
+          <div className="tablePanel" style={{ marginBottom: 12 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
               <div>
-                <h2 style={{ marginBottom: 2 }}>📲 Tickets de la app de báscula</h2>
-                <p className="muted" style={{ margin: 0 }}>Pesajes que llegan de tu app. Se importan solos; también puedes traerlos al instante.</p>
+                <h2 style={{ marginBottom: 2 }}>⚙️ Ajustes de los tickets</h2>
+                <p className="muted" style={{ margin: 0 }}>Desde qué ticket se cuentan los pendientes y la descarga completa del historial.</p>
               </div>
-              <button type="button" className="btnSecondary" onClick={() => { setMermaForm({ gross: "", tara: "", humedad: "", impureza: "" }); setIngresoModalOpen(true); }}>
-                + Ingreso Manual (Emergencia)
-              </button>
-              <button type="button" className="btnSecondary" disabled={basculaImporting || basculaFullSyncing} onClick={() => runFirebaseImport()}>
-                {basculaImporting ? "Importando…" : "⟳ Importar de báscula"}
-              </button>
               <button
                 type="button"
                 className="btnSecondary"
@@ -13717,20 +13712,6 @@ Motivo (obligatorio):`, "");
               >
                 {basculaFullSyncing ? "⏳ Descargando historial…" : "⚠️ Forzar Sincronización Completa"}
               </button>
-              <div className="cajaSubNav" style={{ borderBottom: "none" }}>
-                {(["pending", "liquidated", "all"] as const).map((f) => (
-                  <button key={f} type="button" className={ticketFilter === f ? "active" : ""} onClick={() => { setTicketFilter(f); }}>
-                    {f === "pending" ? "Pendientes" : f === "liquidated" ? "Liquidados" : "Todos"}
-                  </button>
-                ))}
-              </div>
-              <input
-                type="search"
-                value={ticketSearch}
-                onChange={(e) => setTicketSearch(e.target.value)}
-                placeholder="Buscar ticket, cliente, placa…"
-                style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", minWidth: 220, fontSize: 13 }}
-              />
             </div>
             {/* «Contar tickets desde»: el historial viejo de la báscula no cuenta como pendiente. */}
             {(isAdmin || basculaCorte?.desde || basculaCorte?.numero != null) && (
@@ -13757,6 +13738,44 @@ Motivo (obligatorio):`, "");
                   </div>
                 )}
               </div>
+            )}
+          </div>
+          )}
+
+          {(basculaVista === "tickets" || (basculaVista === "corregir" && !(accionistas.length > 1 && materiaPrimaEntries.length > 0))) && (
+          <div className="tablePanel">
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+              <div>
+                <h2 style={{ marginBottom: 2 }}>📲 Tickets de la app de báscula</h2>
+                <p className="muted" style={{ margin: 0 }}>Pesajes que llegan de tu app. Se importan solos; también puedes traerlos al instante.</p>
+              </div>
+              <button type="button" className="btnSecondary" onClick={() => { setMermaForm({ gross: "", tara: "", humedad: "", impureza: "" }); setIngresoModalOpen(true); }}>
+                + Ingreso Manual (Emergencia)
+              </button>
+              <button type="button" className="btnSecondary" disabled={basculaImporting || basculaFullSyncing} onClick={() => runFirebaseImport()}>
+                {basculaImporting ? "Importando…" : "⟳ Importar de báscula"}
+              </button>
+              <div className="cajaSubNav" style={{ borderBottom: "none" }}>
+                {(["pending", "liquidated", "all"] as const).map((f) => (
+                  <button key={f} type="button" className={ticketFilter === f ? "active" : ""} onClick={() => { setTicketFilter(f); }}>
+                    {f === "pending" ? "Pendientes" : f === "liquidated" ? "Liquidados" : "Todos"}
+                  </button>
+                ))}
+              </div>
+              <input
+                type="search"
+                value={ticketSearch}
+                onChange={(e) => setTicketSearch(e.target.value)}
+                placeholder="Buscar ticket, cliente, placa…"
+                style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", minWidth: 220, fontSize: 13 }}
+              />
+            </div>
+            {/* El corte «Contar desde el ticket #» se ajusta en la pestaña Sincronización; aquí solo el aviso. */}
+            {basculaCorte?.numero != null && (
+              <p className="muted" style={{ margin: "8px 0 0", fontSize: 12.5 }}>
+                Pendientes desde el ticket <strong>#{basculaCorte.numero}</strong>{basculaCorte.ocultos > 0 ? ` · ${basculaCorte.ocultos} anteriores en «Todos»` : ""}.
+                {isAdmin && <> <button type="button" className="btnGhost" style={{ padding: "0 4px" }} onClick={() => setBasculaVista("sync")}>Cambiar</button></>}
+              </p>
             )}
             {basculaTickets.length === 0 ? (
               <div className="emptyState"><div className="emptyIcon">📲</div><p>No hay tickets. Importa desde tu app con IMPORTAR-BASCULA.bat.</p></div>
@@ -25630,7 +25649,7 @@ Motivo (obligatorio):`, "");
                   ir: esMatrizActiva ? () => abrirCampo("config") : undefined },
                 { icono: "⚖️", donde: "Báscula → «Contar desde el ticket #»",
                   que: "Número de ticket de la báscula desde el que cuentan como pendientes (el historial anterior no).",
-                  ir: visibleTabs.includes("Bascula") ? () => irATab("Bascula") : undefined },
+                  ir: visibleTabs.includes("Bascula") ? () => { setBasculaVista("sync"); irATab("Bascula"); } : undefined },
                 { icono: "🚚", donde: "Nómina → Bajada de carro → «Contar desde el ticket #»",
                   que: "Número de ticket desde el que la bajada de carro se paga por aquí (lo anterior se asume pagado).",
                   ir: visibleTabs.includes("Nomina") ? () => { setNominaView("bajada"); loadBajadas().catch(() => undefined); irATab("Nomina"); } : undefined },
