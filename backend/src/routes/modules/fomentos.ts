@@ -9,7 +9,7 @@ import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { inTransaction } from "../../db/transaction.js";
 import { ApiError } from "../../http/error-handler.js";
-import { avisarSobregiro, exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
+import { avisarSobregiro, exigirCajaAbiertaDelAccionista, medioParaCaja } from "../../services/caja.js";
 import { requirePermiso, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { nombreNormalSql } from "../../services/agricultor-nombres.js";
 
@@ -83,6 +83,7 @@ const entregaSchema = z.object({
   valor:            z.number().positive(),
   concepto:         z.string().optional(),
   cash_register_id: z.string().uuid().optional(),
+  medio_pago:       z.enum(["EFECTIVO", "BANCO"]).optional(),
   // "Saldos en contra": fila de saldo de cosecha pasada con interés fijo por meses.
   es_saldo_anterior: z.boolean().optional().default(false),
   meses_interes_fijo: z.number().int().min(1).max(60).optional()
@@ -92,7 +93,8 @@ const pagoSchema = z.object({
   fecha:            z.string().regex(/^\d{4}-\d{2}-\d{2}/),
   valor:            z.number().positive(),
   concepto:         z.string().optional(),
-  cash_register_id: z.string().uuid().optional()
+  cash_register_id: z.string().uuid().optional(),
+  medio_pago:       z.enum(["EFECTIVO", "BANCO"]).optional()
 });
 
 const SELECT_FOMENTO = `
@@ -922,8 +924,10 @@ fomentosRouter.post("/:id/entregas", asyncRoute(async (req, res) => {
 
   const result = await inTransaction(async (client) => {
     await assertFomentoAccionista(client, fomentoId, accionistaId);
+    let tipoCaja: string | null = null;
     if (data.cash_register_id && !data.es_saldo_anterior) {
-      await exigirCajaAbiertaDelAccionista(client, data.cash_register_id, accionistaId);
+      const caja = await exigirCajaAbiertaDelAccionista(client, data.cash_register_id, accionistaId);
+      tipoCaja = caja.tipo;
       await avisarSobregiro(client, data.cash_register_id, data.valor, req);
     }
     // El saldo arrastrado no depende de la fecha; se deja en CURRENT_DATE (default).
@@ -944,10 +948,11 @@ fomentosRouter.post("/:id/entregas", asyncRoute(async (req, res) => {
       );
       await client.query(
         `INSERT INTO cash_movements
-         (cash_register_id, movement, category, reference_type, reference_id, amount, description)
-         VALUES ($1, 'EXPENSE', 'FOMENTO_ENTREGA', 'fomento_entregas', $2, $3, $4)`,
+         (cash_register_id, movement, category, reference_type, reference_id, amount, description, medio)
+         VALUES ($1, 'EXPENSE', 'FOMENTO_ENTREGA', 'fomento_entregas', $2, $3, $4, $5)`,
         [data.cash_register_id, entrega.rows[0].id, data.valor,
-         `Fomento entregado a ${fomento.rows[0]?.farmer_name ?? "agricultor"}`]
+         `Fomento entregado a ${fomento.rows[0]?.farmer_name ?? "agricultor"}`,
+         medioParaCaja(tipoCaja ?? "EFECTIVO", data.medio_pago)]
       );
     }
     return entrega.rows[0];
@@ -1006,8 +1011,26 @@ fomentosRouter.post("/:id/pagos", asyncRoute(async (req, res) => {
   const data = pagoSchema.parse(req.body);
 
   const result = await inTransaction(async (client) => {
-    await assertFomentoAccionista(client, fomentoId, accionistaId);
-    if (data.cash_register_id) await exigirCajaAbiertaDelAccionista(client, data.cash_register_id, accionistaId);
+    const bloqueado = await client.query(
+      "SELECT id FROM fomentos WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
+      [fomentoId, accionistaId]
+    );
+    if (!bloqueado.rowCount) throw new ApiError(404, "Fomento no encontrado o no pertenece al accionista activo");
+
+    // Un pago manual solo puede cubrir la deuda vigente. Impide saldos negativos
+    // y conserva el excedente de una liquidación fuera de este fomento.
+    const cuenta = await client.query(`${SELECT_FOMENTO} WHERE f.id = $1 AND f.accionista_id = $2`, [fomentoId, accionistaId]);
+    const deuda = Math.max(0, Math.round(Number(cuenta.rows[0]?.deuda_total ?? 0) * 100) / 100);
+    if (deuda < 0.01) throw new ApiError(409, "Este fomento ya está saldado.");
+    if (data.valor > deuda + 0.005) {
+      throw new ApiError(400, `El pago supera la deuda. El máximo que puede registrar es $${deuda.toFixed(2)}.`);
+    }
+
+    let tipoCaja: string | null = null;
+    if (data.cash_register_id) {
+      const caja = await exigirCajaAbiertaDelAccionista(client, data.cash_register_id, accionistaId);
+      tipoCaja = caja.tipo;
+    }
     const pago = await client.query(
       `INSERT INTO fomento_pagos (fomento_id, cash_register_id, fecha, valor, concepto)
        VALUES ($1,$2,$3,$4,$5) RETURNING *`,
@@ -1023,10 +1046,11 @@ fomentosRouter.post("/:id/pagos", asyncRoute(async (req, res) => {
       );
       await client.query(
         `INSERT INTO cash_movements
-         (cash_register_id, movement, category, reference_type, reference_id, amount, description)
-         VALUES ($1, 'INCOME', 'PAGO_FOMENTO', 'fomento_pagos', $2, $3, $4)`,
+         (cash_register_id, movement, category, reference_type, reference_id, amount, description, medio)
+         VALUES ($1, 'INCOME', 'PAGO_FOMENTO', 'fomento_pagos', $2, $3, $4, $5)`,
         [data.cash_register_id, pago.rows[0].id, data.valor,
-         `Pago de fomento de ${fomento.rows[0]?.farmer_name ?? "agricultor"}`]
+         `Pago de fomento de ${fomento.rows[0]?.farmer_name ?? "agricultor"}`,
+         medioParaCaja(tipoCaja ?? "EFECTIVO", data.medio_pago)]
       );
     }
     return pago.rows[0];

@@ -3705,6 +3705,9 @@ export function App() {
   const [cajaFomentoAccion, setCajaFomentoAccion] = useState<"entrega"|"pago">("entrega");
   const [cajaFomentoMonto, setCajaFomentoMonto] = useState("");
   const [cajaFomentoConcepto, setCajaFomentoConcepto] = useState("");
+  const [cajaFomentosCargando, setCajaFomentosCargando] = useState(false);
+  const [cajaFomentosError, setCajaFomentosError] = useState("");
+  const [cajaFomentoGuardando, setCajaFomentoGuardando] = useState(false);
 
   // ── Compra de Sacos en Caja ────────────────────────────────────────────
   const [sackBuyForm, setSackBuyForm] = useState({ sack_id: "", cantidad: "", precio: "" });
@@ -7177,6 +7180,30 @@ export function App() {
     setFomentos(data);
   }
 
+  async function refreshCajaFomentos() {
+    setCajaFomentosCargando(true);
+    setCajaFomentosError("");
+    try {
+      await refreshFomentos();
+    } catch (error) {
+      const mensaje = error instanceof Error ? error.message : "No se pudieron cargar los fomentos";
+      setCajaFomentosError(mensaje);
+      throw error;
+    } finally {
+      setCajaFomentosCargando(false);
+    }
+  }
+
+  // Caja tiene su propio acceso rápido a Fomentos. Antes dependía de haber
+  // visitado previamente el módulo principal y por eso el selector aparecía vacío.
+  useEffect(() => {
+    if (activeTab !== "Caja" || cajaSubTab !== "fomentos") return;
+    setCajaFomentoId("");
+    setFomentos([]);
+    refreshCajaFomentos().catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, cajaSubTab, activeAccionistaId]);
+
   async function exportFomentos() {
     try {
       const response = await apiFetch("/fomentos/export", { method: "GET" });
@@ -9229,23 +9256,44 @@ export function App() {
 
   async function submitCajaFomento(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (cajaFomentoGuardando) return;
     if (!cajaFomentoId) { addToast("Selecciona un agricultor fomentado", "error"); return; }
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) { addToast("No hay caja abierta", "error"); return; }
+    const valor = round2(Number(cajaFomentoMonto));
+    if (!(valor > 0)) { addToast("Ingresa un monto mayor a cero", "error"); return; }
+    const seleccionado = fomentos.find((f) => f.id === cajaFomentoId && f.status === "ACTIVOS");
+    if (!seleccionado) { addToast("El fomento seleccionado ya no está activo. Actualiza la lista.", "error"); return; }
+    const deuda = obtenerResumenCuentaFomento(seleccionado).deudaPendiente;
+    if (cajaFomentoAccion === "pago" && valor > deuda + 0.005) {
+      addToast(`El pago supera la deuda. El máximo es ${money(deuda)}.`, "error");
+      return;
+    }
     const endpoint = cajaFomentoAccion === "entrega"
       ? `/fomentos/${cajaFomentoId}/entregas`
       : `/fomentos/${cajaFomentoId}/pagos`;
-    await apiPost(endpoint, {
-      fecha: new Date().toISOString().slice(0,10),
-      valor: Number(cajaFomentoMonto),
-      concepto: cajaFomentoConcepto || (cajaFomentoAccion === "entrega" ? "Entrega de insumos" : "Pago de fomento"),
-      cash_register_id: registerId
-    });
-    setCajaFomentoMonto("");
-    setCajaFomentoConcepto("");
-    addToast(cajaFomentoAccion === "entrega" ? "Entrega registrada en caja" : "Pago registrado en caja", "success");
-    await refreshFomentos();
-    await refreshCaja(registerId);
+    setCajaFomentoGuardando(true);
+    try {
+      await apiPost(endpoint, {
+        fecha: fechaLocalIso(),
+        valor,
+        concepto: cajaFomentoConcepto.trim() || (cajaFomentoAccion === "entrega" ? "Entrega de insumos" : "Pago de fomento"),
+        cash_register_id: registerId,
+        ...cuerpoMedio(medioOperacion)
+      });
+      setCajaFomentoMonto("");
+      setCajaFomentoConcepto("");
+      setMedioOperacion("EFECTIVO");
+      addToast(cajaFomentoAccion === "entrega" ? "Entrega registrada en caja" : "Pago registrado en caja", "success");
+      await Promise.all([
+        refreshCajaFomentos().catch((error) => addToast(`La operación se registró, pero no se pudo actualizar Fomentos: ${error instanceof Error ? error.message : "error"}`, "error")),
+        refreshCaja(registerId).catch((error) => addToast(`La operación se registró, pero no se pudo actualizar Caja: ${error instanceof Error ? error.message : "error"}`, "error"))
+      ]);
+    } catch (error) {
+      addToast(error instanceof Error ? error.message : "No se pudo registrar la operación de fomento", "error");
+    } finally {
+      setCajaFomentoGuardando(false);
+    }
   }
 
   async function downloadCajaExcel() {
@@ -19530,12 +19578,22 @@ Motivo (obligatorio):`, "");
                         </button>
                       </div>
 
+                      {cajaFomentosCargando && (
+                        <div className="infoBox" style={{ marginBottom: 10 }}>Cargando agricultores fomentados…</div>
+                      )}
+                      {cajaFomentosError && !cajaFomentosCargando && (
+                        <div className="alert error" style={{ marginBottom: 10 }}>
+                          <span>No se pudieron cargar los fomentos: {cajaFomentosError}</span>{" "}
+                          <button type="button" className="btnGhost" onClick={() => refreshCajaFomentos().catch(() => undefined)}>Reintentar</button>
+                        </div>
+                      )}
+
                       {/* Seleccionar agricultor fomentado */}
                       <label style={{ fontSize: 12, fontWeight: 600, display: "block", marginBottom: 8 }}>
                         Agricultor Fomentado
-                        <select required value={cajaFomentoId} onChange={e => setCajaFomentoId(e.target.value)}
+                        <select required disabled={cajaFomentosCargando || !!cajaFomentosError} value={cajaFomentoId} onChange={e => setCajaFomentoId(e.target.value)}
                           style={{ display: "block", width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 13 }}>
-                          <option value="">— Seleccionar —</option>
+                          <option value="">{cajaFomentosCargando ? "— Cargando —" : "— Seleccionar —"}</option>
                           {fomentos.filter(f => f.status === "ACTIVOS").map(f => {
                             const cuenta = obtenerResumenCuentaFomento(f);
                             return (
@@ -19563,7 +19621,11 @@ Motivo (obligatorio):`, "");
 
                       <label style={{ fontSize: 12, fontWeight: 600, display: "block", marginBottom: 8 }}>
                         Monto ($)
-                        <input required type="number" step="0.01" min="0.01" value={cajaFomentoMonto}
+                        <input required type="number" step="0.01" min="0.01"
+                          max={cajaFomentoAccion === "pago" && cajaFomentoId
+                            ? obtenerResumenCuentaFomento(fomentos.find((f) => f.id === cajaFomentoId) ?? { total_pedido: 0, gasto_adm: 0, total_pagado: 0 }).deudaPendiente
+                            : undefined}
+                          value={cajaFomentoMonto}
                           onChange={e => setCajaFomentoMonto(e.target.value)}
                           style={{ display: "block", width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3 }}
                           placeholder="0.00" />
@@ -19576,17 +19638,24 @@ Motivo (obligatorio):`, "");
                           placeholder={cajaFomentoAccion === "entrega" ? "Entrega de insumos / semilla / etc." : "Abono / pago parcial / etc."} />
                       </label>
 
-                      <button type="submit"
+                      {cajaEsMixta && (
+                        <MedioPagoSelector
+                          value={medioOperacion}
+                          onChange={setMedioOperacion}
+                          pregunta={cajaFomentoAccion === "entrega" ? "¿La entrega sale en efectivo o por el banco?" : "¿El pago ingresó en efectivo o al banco?"} />
+                      )}
+
+                      <button type="submit" disabled={cajaFomentoGuardando || cajaFomentosCargando || !!cajaFomentosError}
                         style={{ width: "100%", padding: "9px 0", borderRadius: 6, border: "none", cursor: "pointer", fontWeight: 700, fontSize: 14,
                           background: cajaFomentoAccion === "entrega" ? "var(--c-brand)" : "#16a34a", color: "#fff" }}>
-                        {cajaFomentoAccion === "entrega" ? "⬇ Registrar Entrega (sale de caja)" : "⬆ Registrar Pago (entra a caja)"}
+                        {cajaFomentoGuardando ? "Guardando…" : cajaFomentoAccion === "entrega" ? "⬇ Registrar Entrega (sale de caja)" : "⬆ Registrar Pago (entra a caja)"}
                       </button>
                     </form>
 
                     {/* Lista de todos los agricultores fomentados */}
                     <h4 style={{ marginBottom: 8 }}>Agricultores Fomentados</h4>
-                    {fomentos.filter(f => f.status === "ACTIVOS").length === 0 && (
-                      <p style={{ color: "var(--c-muted)", textAlign: "center" }}>No hay fomentos activos</p>
+                    {!cajaFomentosCargando && !cajaFomentosError && fomentos.filter(f => f.status === "ACTIVOS").length === 0 && (
+                      <p style={{ color: "var(--c-muted)", textAlign: "center" }}>No hay fomentos activos para el socio seleccionado.</p>
                     )}
                     {fomentos.filter(f => f.status === "ACTIVOS").map(f => {
                       const cuenta = obtenerResumenCuentaFomento(f);

@@ -13,13 +13,14 @@ export async function exigirCajaAbiertaDelAccionista(
   db: Db,
   cashRegisterId: string,
   accionistaId: string | null | undefined
-): Promise<void> {
+): Promise<{ id: string; status: string; tipo: string }> {
   const reg = await db.query(
-    "SELECT id, status FROM cash_registers WHERE id = $1 AND accionista_id = $2",
+    "SELECT id, status, tipo FROM cash_registers WHERE id = $1 AND accionista_id = $2",
     [cashRegisterId, accionistaId ?? null]
   );
   if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
   if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+  return reg.rows[0];
 }
 
 const redondear2 = (n: number) => Math.round(n * 100) / 100;

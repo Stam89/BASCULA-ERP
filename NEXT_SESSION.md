@@ -7,7 +7,7 @@ Actualizado: 2026-10-13
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: acceso desde el celular con datos moviles ACTIVO en https://erp.ceyroerp.com (tunel Cloudflare). Pendiente: SMTP para «¿Olvidaste tu clave?» y pasar APP_MODE a production al arrancar real.
+- Ultimo cambio funcional: Caja carga los Fomentos del socio al abrir su acceso rapido y conserva correctamente el medio efectivo/banco en Fomentos, Anticipos y compras de Sacos.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### 💰🌾 Caja: Fomentos visibles y movimientos por medio correcto (2026-10-13)
+
+- Corregida la causa de «no aparece ningún agricultor» en Caja → Fomentos: esa vista dependía de haber abierto antes el módulo Fomentos. Ahora carga el catálogo del accionista al entrar o cambiar de socio, con estado de carga, error visible y botón Reintentar. Verificación real de solo lectura: CEYRO mostró 35 fomentos activos y 36 opciones en el selector contando «Seleccionar».
+- El formulario rápido valida monto, fomento todavía activo y tope de deuda; bloquea doble envío, muestra el error del servidor y no permite crear saldo negativo por un pago superior a la deuda.
+- Caja MIXTA muestra efectivo/banco en Fomentos. El backend ya conserva el medio elegido también en Anticipos y Compra de Sacos; antes el frontend lo enviaba pero esas rutas lo descartaban y el movimiento terminaba como efectivo.
+- Auditoría visual de Caja sin registrar movimientos: Venta Detalle, Anticipos, Sacos, Mantenimiento y Nuevo movimiento cargaron correctamente; Anticipos muestra el vacío correcto cuando no hay liquidaciones pendientes. Backend/frontend compilan, ESLint de App sin errores, 221 pruebas y preflight sin errores críticos.
 
 ### 🛒 Venta al detalle por dólares y comprador enlazado (2026-10-13, pedido del dueño)
 

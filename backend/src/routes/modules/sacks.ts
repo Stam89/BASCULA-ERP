@@ -3,7 +3,7 @@ import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { avisarSobregiro } from "../../services/caja.js";
+import { avisarSobregiro, medioParaCaja } from "../../services/caja.js";
 import { inTransaction } from "../../db/transaction.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
@@ -405,6 +405,7 @@ sacksRouter.post("/purchases", asyncRoute(async (req, res) => {
     })).min(1),
     cash_register_id: z.string().uuid(),
     concepto: z.string().optional(),
+    medio_pago: z.enum(["EFECTIVO", "BANCO"]).optional(),
     created_by: z.string().uuid().optional()
   }).parse({ ...raw, items: raw.items ?? single });
 
@@ -437,7 +438,7 @@ sacksRouter.post("/purchases", asyncRoute(async (req, res) => {
     // del usuario (mismo patron que /cash/payables/:id/pay). Sin esto, un usuario
     // podria cargar el egreso a la caja de otro socio.
     const reg = await client.query(
-      "SELECT id, status FROM cash_registers WHERE id = $1 AND accionista_id = $2",
+      "SELECT id, status, tipo FROM cash_registers WHERE id = $1 AND accionista_id = $2",
       [body.cash_register_id, authReq.accionistaId ?? null]
     );
     if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
@@ -465,10 +466,11 @@ sacksRouter.post("/purchases", asyncRoute(async (req, res) => {
       || (body.items.length > 1 ? "Compra de múltiples sacos" : `Compra de sacos ${detalle[0]}`);
     const cash = await client.query(
       `INSERT INTO cash_movements
-         (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)
-       VALUES ($1, 'EXPENSE', 'COMPRA_SACOS', 'sack_purchase', NULL, $2, $3, $4)
+         (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by, medio)
+       VALUES ($1, 'EXPENSE', 'COMPRA_SACOS', 'sack_purchase', NULL, $2, $3, $4, $5)
        RETURNING id`,
-      [body.cash_register_id, total, `${concepto} — ${detalle.join(", ")}`, body.created_by ?? null]
+      [body.cash_register_id, total, `${concepto} — ${detalle.join(", ")}`, body.created_by ?? null,
+       medioParaCaja(reg.rows[0].tipo, body.medio_pago)]
     );
     const cashId = cash.rows[0].id as string;
 

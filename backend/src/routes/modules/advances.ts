@@ -3,7 +3,7 @@ import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
-import { avisarSobregiro, exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
+import { avisarSobregiro, exigirCajaAbiertaDelAccionista, medioParaCaja } from "../../services/caja.js";
 import { nextCode } from "../../utils/codes.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
@@ -17,6 +17,7 @@ const advanceSchema = z.object({
   amount: z.number().positive(),
   concept: z.string().min(2),
   apply_to_payables: z.boolean().default(false),
+  medio_pago: z.enum(["EFECTIVO", "BANCO"]).optional(),
   created_by: z.string().uuid().optional()
 });
 
@@ -39,8 +40,10 @@ advancesRouter.post("/", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const data = advanceSchema.parse(req.body);
   const result = await inTransaction(async (client) => {
+    let tipoCaja: string | null = null;
     if (data.cash_register_id) {
-      await exigirCajaAbiertaDelAccionista(client, data.cash_register_id, accionistaId);
+      const caja = await exigirCajaAbiertaDelAccionista(client, data.cash_register_id, accionistaId);
+      tipoCaja = caja.tipo;
       await avisarSobregiro(client, data.cash_register_id, data.amount, req);
     }
     const advance = await client.query(
@@ -53,9 +56,10 @@ advancesRouter.post("/", asyncRoute(async (req, res) => {
     if (data.cash_register_id) {
       await client.query(
         `INSERT INTO cash_movements
-         (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)
-         VALUES ($1, 'EXPENSE', 'ANTICIPO_AGRICULTOR', 'farmer_advances', $2, $3, $4, $5)`,
-        [data.cash_register_id, advance.rows[0].id, data.amount, data.concept, data.created_by]
+         (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by, medio)
+         VALUES ($1, 'EXPENSE', 'ANTICIPO_AGRICULTOR', 'farmer_advances', $2, $3, $4, $5, $6)`,
+        [data.cash_register_id, advance.rows[0].id, data.amount, data.concept, data.created_by,
+         medioParaCaja(tipoCaja ?? "EFECTIVO", data.medio_pago)]
       );
     }
 
