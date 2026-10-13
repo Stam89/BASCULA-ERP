@@ -49,6 +49,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🧺 Catálogo de productos: renombrar, marcas sin sacos y pestañas (2026-10-13, pedido del dueño)
+
+- ✎ Editar ahora cambia el NOMBRE (el código sigue fijo). `actualizarProductoCatalogo` acepta `nombre`: valida duplicados (case-insensitive, incluye desactivados) y renombra en la misma transacción los sacos de la planta de esa marca (`marca` y prefijo de `tipo`, `renombrarTipoSaco`) y sus «(Usado)». Pedidos y kárdex enlazan por id. Ojo: `db:seed` hace `ON CONFLICT (code) DO UPDATE SET name` y devolvería el nombre original a los productos sembrados si se vuelve a correr.
+- Catálogo de sacos: eliminar o desactivar el ÚLTIMO saco activo de una marca desactiva el producto (`sincronizarMarcaConSacos`) para que deje de salir en ventas, inventario y selectores; si tiene stock o pedidos pendientes NO se desactiva y el aviso dice por qué. Reactivar un saco reactiva la marca. Configuración refresca productos además de sacos (`refreshProducts`).
+- La lista del catálogo va en pestañas: 🌾 Materia Prima, 📦 Marcas / Empacado, ⚙️ Subproductos y 🍚 Arroz a granel (Producto 0.11 / Corriente, por código, nunca en Marcas).
+
 ### ⚖️📒 Báscula y Fomentos leen los mismos nombres (2026-10-12, pedido del dueño)
 
 - Causa: el ticket solo se enlazaba al llegar y con nombre EXACTO; si el agricultor se registraba después (fomento) o había tildes («JESÚS» vs «JESUS») quedaba «Sin vincular» para siempre. `services/agricultor-nombres.ts`: `nombreNormalSql`/`nombreNormal` (sin tildes/ñ, mayúsculas, un espacio), `vincularTicketsPendientes` (enlaza pendientes cuyo nombre coincide con UN solo agricultor activo o alias; nunca adivina), `nombresSoloEnBascula`, `agricultorPorNombre`.

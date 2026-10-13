@@ -8,8 +8,13 @@
 //  · TERMINADO / SUBPRODUCTO: el producto + presentaciones opcionales + tarifa por
 //    libra y si se vende al detalle en el mostrador (Caja → Venta Detalle).
 //  · MATERIA PRIMA: solo el producto.
-// Nada se renombra ni se borra: el nombre y el código quedan fijos para no romper
-// pedidos, kárdex ni los enlaces por nombre de marca.
+// Nada se borra. El CÓDIGO queda fijo (las pantallas reconocen los productos del
+// sistema por código). El NOMBRE se puede corregir: pedidos y kárdex enlazan por
+// id, y los enlaces por nombre de marca (sack_inventory.marca/tipo) se renombran
+// en la misma transacción.
+// Una MARCA vive mientras tenga sacos: al eliminar o desactivar su último saco en
+// «Catálogo de sacos» se desactiva el producto (si no tiene stock ni pedidos
+// pendientes), para que deje de salir en ventas, inventario y selectores.
 import type { PoolClient } from "pg";
 import { ApiError } from "../http/error-handler.js";
 
@@ -275,9 +280,70 @@ export async function agregarPresentacion(client: PoolClient, productId: string,
   return { sacoCreado: null };
 }
 
-export type CambiosProducto = { is_active?: boolean; price_per_pound?: number; venta_detalle?: boolean };
+export type CambiosProducto = { nombre?: string; is_active?: boolean; price_per_pound?: number; venta_detalle?: boolean };
 
-/** Cambios seguros de un producto (no se renombra: ver la nota de arriba). */
+/** «Extra 100 LB» con la marca «Extra» → «Premium» = «Premium 100 LB». Si el tipo no empieza por la marca, no se toca. */
+export function renombrarTipoSaco(tipo: string, viejo: string, nuevo: string): string {
+  const t = String(tipo);
+  return viejo && t.toLowerCase().startsWith(viejo.toLowerCase()) ? `${nuevo}${t.slice(viejo.length)}` : t;
+}
+
+/** Normaliza un nombre de producto: espacios simples, sin bordes. */
+export function limpiarNombreProducto(nombre: string): string {
+  return nombre.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Por qué NO se puede desactivar el producto (stock distinto de 0 o pedidos pendientes),
+ * o null si se puede. Es la misma regla para «Desactivar producto» y para la marca que
+ * se queda sin sacos.
+ */
+export async function motivoNoDesactivar(client: { query: PoolClient["query"] }, id: string, nombre: string): Promise<string | null> {
+  const stock = Number((await client.query("SELECT COALESCE(SUM(quantity), 0)::float AS s FROM inventory_movements WHERE product_id = $1", [id])).rows[0].s);
+  if (Math.abs(stock) > 0.0005) {
+    return `«${nombre}» tiene ${stock.toFixed(2)} ${stock < 0 ? "(negativo) " : ""}en inventario: déjalo en 0 con un ajuste antes de desactivarlo.`;
+  }
+  const pedidos = Number((await client.query(
+    `SELECT COUNT(DISTINCT o.id)::int AS n FROM sales_orders o JOIN sales_order_items i ON i.order_id = o.id
+      WHERE o.status = 'PENDING' AND (i.product_id = $1 OR i.inventory_product_id = $1)`, [id]
+  )).rows[0].n);
+  if (pedidos > 0) return `«${nombre}» está en ${pedidos} pedido(s) pendiente(s): despáchalos o cancélalos antes de desactivarlo.`;
+  return null;
+}
+
+/**
+ * Renombra un producto y lo que lo nombra como texto: los sacos de la planta de esa
+ * marca (marca y tipo «<Marca> N LB») y sus sacos «(Usado)», que no tienen product_id.
+ * El código, los ids y el historial (conceptos del kárdex) no cambian.
+ */
+async function renombrarProducto(client: PoolClient, p: { id: string; name: string }, nombreNuevo: string): Promise<void> {
+  const nuevo = limpiarNombreProducto(nombreNuevo);
+  if (nuevo.length < 2 || nuevo.length > 140) throw new ApiError(400, "El nombre debe tener entre 2 y 140 caracteres.");
+  if (nuevo === p.name) return;
+  const choca = (await client.query(
+    "SELECT name, is_active FROM products WHERE lower(name) = lower($1) AND id <> $2 LIMIT 1", [nuevo, p.id]
+  )).rows[0];
+  if (choca) {
+    throw new ApiError(409, `Ya existe otro producto llamado «${choca.name}»${choca.is_active === false ? " (desactivado)" : ""}. Elige otro nombre.`);
+  }
+  await client.query("UPDATE products SET name = $2 WHERE id = $1", [p.id, nuevo]);
+  const sacos = (await client.query(
+    `SELECT id, tipo, marca FROM sack_inventory
+      WHERE accionista_id IS NULL
+        AND (product_id = $1 OR (categoria = 'USADO' AND product_id IS NULL AND upper(marca) = upper($2)))
+      FOR UPDATE`,
+    [p.id, p.name]
+  )).rows;
+  for (const s of sacos) {
+    const marca = s.marca != null && String(s.marca).toLowerCase() === p.name.toLowerCase() ? nuevo : s.marca;
+    await client.query(
+      "UPDATE sack_inventory SET marca = $2, tipo = $3, updated_at = now() WHERE id = $1",
+      [s.id, marca, renombrarTipoSaco(s.tipo, p.name, nuevo)]
+    );
+  }
+}
+
+/** Cambios de un producto: nombre (el código no), activo, tarifa por libra y venta al detalle. */
 export async function actualizarProductoCatalogo(client: PoolClient, id: string, c: CambiosProducto): Promise<void> {
   const p = (await client.query(
     "SELECT id, name, product_type, is_active, price_per_pound::float AS price_per_pound, venta_detalle FROM products WHERE id = $1 FOR UPDATE", [id]
@@ -290,19 +356,45 @@ export async function actualizarProductoCatalogo(client: PoolClient, id: string,
   if (detalle && !(tarifa > 0)) throw new ApiError(400, "Para vender al detalle pon primero la tarifa por libra.");
 
   if (c.is_active === false && p.is_active !== false) {
-    const stock = Number((await client.query("SELECT COALESCE(SUM(quantity), 0)::float AS s FROM inventory_movements WHERE product_id = $1", [id])).rows[0].s);
-    if (Math.abs(stock) > 0.0005) {
-      throw new ApiError(409, `«${p.name}» tiene ${stock.toFixed(2)} ${stock < 0 ? "(negativo) " : ""}en inventario: déjalo en 0 con un ajuste antes de desactivarlo.`);
-    }
-    const pedidos = Number((await client.query(
-      `SELECT COUNT(DISTINCT o.id)::int AS n FROM sales_orders o JOIN sales_order_items i ON i.order_id = o.id
-        WHERE o.status = 'PENDING' AND (i.product_id = $1 OR i.inventory_product_id = $1)`, [id]
-    )).rows[0].n);
-    if (pedidos > 0) throw new ApiError(409, `«${p.name}» está en ${pedidos} pedido(s) pendiente(s): despáchalos o cancélalos antes de desactivarlo.`);
+    const motivo = await motivoNoDesactivar(client, id, p.name);
+    if (motivo) throw new ApiError(409, motivo);
   }
+
+  if (c.nombre !== undefined) await renombrarProducto(client, p, c.nombre);
 
   await client.query(
     `UPDATE products SET is_active = COALESCE($2, is_active), price_per_pound = $3, venta_detalle = $4 WHERE id = $1`,
     [id, c.is_active ?? null, tarifa, c.is_active === false ? false : detalle]
   );
+}
+
+export type SincroMarca = { producto: string; accion: "DESACTIVADO" | "REACTIVADO" | "SIGUE_ACTIVO"; motivo?: string } | null;
+
+/**
+ * Deja la MARCA de un saco de la planta coherente con sus sacos, tras eliminar,
+ * desactivar o reactivar uno en «Catálogo de sacos»:
+ *  · sin ningún saco activo → se desactiva el producto (sale de ventas, inventario y
+ *    selectores). Si tiene stock o pedidos pendientes NO se desactiva y se dice por qué.
+ *  · con algún saco activo y el producto desactivado → se reactiva.
+ * Solo marcas (PACKAGED_GOOD); los genéricos, subproductos y sacos de socios no tienen producto.
+ */
+export async function sincronizarMarcaConSacos(client: PoolClient, productId: string | null): Promise<SincroMarca> {
+  if (!productId) return null;
+  const p = (await client.query(
+    "SELECT id, name, product_type, is_active FROM products WHERE id = $1 FOR UPDATE", [productId]
+  )).rows[0];
+  if (!p || p.product_type !== "PACKAGED_GOOD") return null;
+  const activos = Number((await client.query(
+    "SELECT COUNT(*)::int AS n FROM sack_inventory WHERE product_id = $1 AND accionista_id IS NULL AND activo", [productId]
+  )).rows[0].n);
+  if (activos > 0) {
+    if (p.is_active !== false) return null;
+    await client.query("UPDATE products SET is_active = true WHERE id = $1", [productId]);
+    return { producto: p.name, accion: "REACTIVADO" };
+  }
+  if (p.is_active === false) return null;
+  const motivo = await motivoNoDesactivar(client, productId, p.name);
+  if (motivo) return { producto: p.name, accion: "SIGUE_ACTIVO", motivo };
+  await client.query("UPDATE products SET is_active = false, venta_detalle = false WHERE id = $1", [productId]);
+  return { producto: p.name, accion: "DESACTIVADO" };
 }

@@ -128,10 +128,12 @@ productsRouter.patch("/:id/tarifa-libra", requireAdmin, asyncRoute(async (req, r
   res.json(result.rows[0]);
 }));
 
-// Cambios seguros de un producto del catálogo: activo, tarifa por libra y venta al
-// detalle. El nombre y el código NO se cambian (pedidos, kárdex y marcas los usan).
+// Cambios de un producto del catálogo: nombre, activo, tarifa por libra y venta al
+// detalle. El CÓDIGO no se cambia. Renombrar actualiza también los sacos de la marca
+// (pedidos y kárdex enlazan por id, no por nombre).
 productsRouter.patch("/:id", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({
+    nombre: z.string().trim().min(2).max(140).optional(),
     is_active: z.boolean().optional(),
     price_per_pound: z.number().nonnegative().max(9999).optional(),
     venta_detalle: z.boolean().optional()

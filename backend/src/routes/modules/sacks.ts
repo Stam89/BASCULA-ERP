@@ -8,7 +8,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { sacosPorComprar } from "../../services/sacos.js";
-import { altaMarcaOGenerico } from "../../services/catalogo-productos.js";
+import { altaMarcaOGenerico, sincronizarMarcaConSacos } from "../../services/catalogo-productos.js";
 
 export const sacksRouter = Router();
 
@@ -160,38 +160,46 @@ sacksRouter.patch("/:id", requireAdmin, asyncRoute(async (req, res) => {
     calidad: z.enum(["0.11", "CORRIENTE"]).nullable().optional(),
     activo: z.boolean().optional()
   }).parse(req.body);
-  const result = await pool.query(
-    `UPDATE sack_inventory
-        SET stock_minimo = COALESCE($2, stock_minimo),
-            precio_compra_default = COALESCE($3, precio_compra_default),
-            precio_venta_cliente = COALESCE($4, precio_venta_cliente),
-            calidad = CASE WHEN $5::boolean THEN $6 ELSE calidad END,
-            activo = COALESCE($7, activo),
-            updated_at = now()
-      WHERE id = $1
-      RETURNING *`,
-    [req.params.id, body.stock_minimo ?? null, body.precio_compra_default ?? null, body.precio_venta_cliente ?? null,
-     body.calidad !== undefined, body.calidad ?? null, body.activo ?? null]
-  );
-  if (!result.rowCount) throw new ApiError(404, "Saco no encontrado");
-  res.json(result.rows[0]);
+  const result = await inTransaction(async (client) => {
+    const r = await client.query(
+      `UPDATE sack_inventory
+          SET stock_minimo = COALESCE($2, stock_minimo),
+              precio_compra_default = COALESCE($3, precio_compra_default),
+              precio_venta_cliente = COALESCE($4, precio_venta_cliente),
+              calidad = CASE WHEN $5::boolean THEN $6 ELSE calidad END,
+              activo = COALESCE($7, activo),
+              updated_at = now()
+        WHERE id = $1
+        RETURNING *`,
+      [req.params.id, body.stock_minimo ?? null, body.precio_compra_default ?? null, body.precio_venta_cliente ?? null,
+       body.calidad !== undefined, body.calidad ?? null, body.activo ?? null]
+    );
+    if (!r.rowCount) throw new ApiError(404, "Saco no encontrado");
+    // Desactivar el último saco de una marca la saca de ventas e inventario; reactivarlo la devuelve.
+    const marca = body.activo !== undefined && ambito.esMatriz ? await sincronizarMarcaConSacos(client, r.rows[0].product_id) : null;
+    return { ...r.rows[0], marca };
+  });
+  res.json(result);
 }));
 
 // Eliminar: si el saco nunca tuvo movimientos se borra; si tiene historial se
-// DESACTIVA (conserva su kárdex y deja de aparecer en compras/ventas).
+// DESACTIVA (conserva su kárdex y deja de aparecer en compras/ventas). Si era el
+// último saco activo de una MARCA, la marca (producto) también se desactiva para
+// que no quede colgada en ventas, inventario y selectores (`marca` lo informa).
 sacksRouter.delete("/:id", requireAdmin, asyncRoute(async (req, res) => {
   const ambito = await ambitoSacos(req as AuthenticatedRequest);
   await assertSacosDelAmbito(pool, ambito, [String(req.params.id)]);
   const result = await inTransaction(async (client) => {
-    const s = await client.query("SELECT id, tipo, stock FROM sack_inventory WHERE id = $1 FOR UPDATE", [req.params.id]);
+    const s = await client.query("SELECT id, tipo, stock, product_id FROM sack_inventory WHERE id = $1 FOR UPDATE", [req.params.id]);
     if (!s.rowCount) throw new ApiError(404, "Saco no encontrado");
+    const productId: string | null = ambito.esMatriz ? s.rows[0].product_id : null;
     const movs = await client.query("SELECT 1 FROM sack_movements WHERE sack_id = $1 LIMIT 1", [req.params.id]);
     if (!movs.rowCount && Number(s.rows[0].stock) === 0) {
       await client.query("DELETE FROM sack_inventory WHERE id = $1", [req.params.id]);
-      return { tipo: s.rows[0].tipo, resultado: "ELIMINADO" };
+      return { tipo: s.rows[0].tipo, resultado: "ELIMINADO", marca: await sincronizarMarcaConSacos(client, productId) };
     }
     await client.query("UPDATE sack_inventory SET activo = false, updated_at = now() WHERE id = $1", [req.params.id]);
-    return { tipo: s.rows[0].tipo, resultado: "DESACTIVADO" };
+    return { tipo: s.rows[0].tipo, resultado: "DESACTIVADO", marca: await sincronizarMarcaConSacos(client, productId) };
   });
   res.json(result);
 }));

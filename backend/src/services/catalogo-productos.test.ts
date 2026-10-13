@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { codigoSugerido, normalizarPesos, slugCodigo } from "./catalogo-productos.js";
+import { codigoSugerido, limpiarNombreProducto, normalizarPesos, renombrarTipoSaco, slugCodigo } from "./catalogo-productos.js";
 
 describe("códigos de producto", () => {
   it("slugCodigo quita tildes, símbolos y espacios", () => {
@@ -33,5 +33,21 @@ describe("normalizarPesos", () => {
     expect(() => normalizarPesos([-5])).toThrow();
     expect(() => normalizarPesos([1001])).toThrow();
     expect(() => normalizarPesos([1, 2, 3, 4, 5, 6, 7, 8, 9])).toThrow();
+  });
+});
+
+describe("renombrar una marca", () => {
+  it("cambia el prefijo de la marca en el tipo del saco y conserva el resto", () => {
+    expect(renombrarTipoSaco("Extra 100 LB", "Extra", "Extra Premium")).toBe("Extra Premium 100 LB");
+    expect(renombrarTipoSaco("EXTRA 25 LB (Usado)", "Extra", "Premium")).toBe("Premium 25 LB (Usado)");
+  });
+
+  it("no toca un tipo que no empieza por la marca", () => {
+    expect(renombrarTipoSaco("Saco 100 LB", "Extra", "Premium")).toBe("Saco 100 LB");
+    expect(renombrarTipoSaco("Saco Extra", "Extra", "Premium")).toBe("Saco Extra");
+  });
+
+  it("limpia espacios del nombre nuevo", () => {
+    expect(limpiarNombreProducto("  Lira   Azul ")).toBe("Lira Azul");
   });
 });
