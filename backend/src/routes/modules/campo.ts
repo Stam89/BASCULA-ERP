@@ -6,7 +6,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { crearParteDesdeBascula } from "../../services/campo-flete-bascula.js";
-import { calcularNominaCampo, tipoServicioPorActivo, totalFilaNomina, valeEsDeOperador, type CampoUnidadNomina } from "../../utils/campo.js";
+import { calcularNominaCampo, esSemanaLunesDomingo, tipoServicioPorActivo, totalFilaNomina, valeEsDeOperador, type CampoUnidadNomina } from "../../utils/campo.js";
 import { repartirCompensacion, saldoNeto } from "../../utils/campo-cuentas.js";
 import { armarResultado, informativo, lineasDelPeriodo, notasDelPeriodo, qqPorActivo, rangoMes } from "../../services/campo-resultados.js";
 import { alertasDeCampo } from "../../services/campo-alertas.js";
@@ -252,7 +252,8 @@ campoRouter.get("/operadores", asyncRoute(async (req, res) => {
   const q = z.object({ solo_activos: z.enum(["1", "0"]).optional() }).parse(req.query);
   const where = q.solo_activos === "1" ? "WHERE activo = true" : "";
   const result = await pool.query(
-    `SELECT id, nombre, identificacion, telefono, activo, created_at
+    `SELECT id, nombre, identificacion, telefono, cargo,
+            sueldo_semanal::float AS sueldo_semanal, activo, created_at
      FROM campo_operadores ${where} ORDER BY activo DESC, nombre`
   );
   res.json(result.rows);
@@ -263,13 +264,17 @@ campoRouter.post("/operadores", asyncRoute(async (req, res) => {
     nombre: z.string().min(2).max(140),
     identificacion: z.string().max(40).optional(),
     telefono: z.string().max(40).optional(),
+    cargo: z.string().max(80).nullable().optional(),
+    sueldo_semanal: z.coerce.number().nonnegative().max(1_000_000).optional(),
     activo: z.boolean().optional()
   }).parse(req.body);
   await exigirNombreLibre("campo_operadores", body.nombre, "un operador");
   const result = await pool.query(
-    `INSERT INTO campo_operadores (nombre, identificacion, telefono, activo, created_by)
-     VALUES ($1, $2, $3, COALESCE($4, true), $5) RETURNING *`,
-    [body.nombre.trim(), body.identificacion?.trim() || null, body.telefono?.trim() || null, body.activo ?? null, userId(req)]
+    `INSERT INTO campo_operadores (nombre, identificacion, telefono, cargo, sueldo_semanal, activo, created_by)
+     VALUES ($1, $2, $3, $4, $5, COALESCE($6, true), $7)
+     RETURNING id, nombre, identificacion, telefono, cargo, sueldo_semanal::float AS sueldo_semanal, activo, created_at`,
+    [body.nombre.trim(), body.identificacion?.trim() || null, body.telefono?.trim() || null,
+     body.cargo?.trim() || null, body.sueldo_semanal ?? 0, body.activo ?? null, userId(req)]
   );
   res.status(201).json(result.rows[0]);
 }));
@@ -279,18 +284,24 @@ campoRouter.patch("/operadores/:id", asyncRoute(async (req, res) => {
     nombre: z.string().min(2).max(140).optional(),
     identificacion: z.string().max(40).nullable().optional(),
     telefono: z.string().max(40).nullable().optional(),
+    cargo: z.string().max(80).nullable().optional(),
+    sueldo_semanal: z.coerce.number().nonnegative().max(1_000_000).optional(),
     activo: z.boolean().optional()
   }).parse(req.body);
   const fields: string[] = [];
   const values: unknown[] = [];
   let i = 1;
-  for (const k of ["nombre", "identificacion", "telefono", "activo"] as const) {
+  for (const k of ["nombre", "identificacion", "telefono", "cargo", "sueldo_semanal", "activo"] as const) {
     if (body[k] !== undefined) { fields.push(`${k} = $${i++}`); values.push(body[k]); }
   }
   if (fields.length === 0) throw new ApiError(400, "Sin cambios");
   if (body.nombre !== undefined) await exigirNombreLibre("campo_operadores", body.nombre, "un operador", String(req.params.id));
   values.push(req.params.id);
-  const result = await pool.query(`UPDATE campo_operadores SET ${fields.join(", ")} WHERE id = $${i} RETURNING *`, values);
+  const result = await pool.query(
+    `UPDATE campo_operadores SET ${fields.join(", ")} WHERE id = $${i}
+     RETURNING id, nombre, identificacion, telefono, cargo, sueldo_semanal::float AS sueldo_semanal, activo, created_at`,
+    values
+  );
   if (!result.rows[0]) throw new ApiError(404, "Operador no encontrado");
   res.json(result.rows[0]);
 }));
@@ -1550,10 +1561,19 @@ const areaDeTipo = (tipo: string | null | undefined) =>
   tipo === "cosechadora" ? "cosechadora" : tipo ? "transporte" : "otro";
 
 campoRouter.get("/nomina-operadores/matriz", asyncRoute(async (req, res) => {
-  const q = z.object({ from: fechaSchema.optional(), to: fechaSchema.optional() }).parse(req.query);
-  const [grupos, operadores, habituales, vales] = await Promise.all([
+  const q = z.object({
+    from: fechaSchema.optional(),
+    to: fechaSchema.optional(),
+    periodo_desde: fechaSchema.optional(),
+    periodo_hasta: fechaSchema.optional()
+  }).parse(req.query);
+  const periodoSemanal = esSemanaLunesDomingo(q.periodo_desde, q.periodo_hasta);
+  const [grupos, operadores, habituales, vales, sueldosPagados] = await Promise.all([
     gruposNominaPendiente(pool, q),
-    pool.query("SELECT nombre FROM campo_operadores WHERE activo ORDER BY nombre"),
+    pool.query(
+      `SELECT id, nombre, cargo, sueldo_semanal::float AS sueldo_semanal
+         FROM campo_operadores WHERE activo ORDER BY nombre`
+    ),
     // Máquina habitual de cada operador: la que tiene asignada o la de su tarifa.
     pool.query(
       `SELECT DISTINCT ON (lower(operador)) operador, activo_id, nombre, tipo FROM (
@@ -1569,40 +1589,79 @@ campoRouter.get("/nomina-operadores/matriz", asyncRoute(async (req, res) => {
       `SELECT id, to_char(fecha, 'YYYY-MM-DD') AS fecha, concepto, monto::float AS monto FROM campo_movimientos
         WHERE signo = 'salida' AND estado = 'PENDIENTE_RENDICION' AND reversado_at IS NULL
         ORDER BY fecha, created_at`
-    )
+    ),
+    periodoSemanal
+      ? pool.query(
+          `SELECT operador_id FROM campo_nomina_pagos
+            WHERE es_sueldo_semanal = true AND anulado_at IS NULL
+              AND desde = $1::date AND hasta = $2::date`,
+          [q.periodo_desde, q.periodo_hasta]
+        )
+      : Promise.resolve({ rows: [] as Array<{ operador_id: string }> })
   ]);
   type Fila = {
-    clave: string; operador: string; activo_id: string | null; activo_nombre: string | null; activo_tipo: string | null; area: string;
+    clave: string; operador_id: string | null; operador: string; cargo: string | null;
+    activo_id: string | null; activo_nombre: string | null; activo_tipo: string | null; area: string;
     unidad: CampoUnidadNomina; tarifa: number | null; qq: number; viajes: number; dias: number; sugerido: number | null;
+    produccion_sugerida: number | null; sueldo_semanal: number; modalidad_fija: boolean;
+    sueldo_semanal_principal: boolean; sueldo_semanal_pagado: boolean; periodo_semanal: boolean;
     sin_tarifa: boolean; parte_ids: string[]; desde: string | null; hasta: string | null;
     vales: Array<{ id: string; fecha: string; concepto: string | null; monto: number }>;
   };
+  type OperadorNomina = { id: string; nombre: string; cargo: string | null; sueldo_semanal: number };
+  const operadoresNomina = operadores.rows as OperadorNomina[];
+  const operadorPorNombre = new Map(operadoresNomina.map((o) => [o.nombre.trim().toLowerCase(), o]));
   const filas: Fila[] = grupos.map((g) => ({
-    clave: `${g.operador.toLowerCase()}::${g.activo_id}`, operador: g.operador, activo_id: g.activo_id, activo_nombre: g.activo_nombre,
+    clave: `${g.operador.toLowerCase()}::${g.activo_id}`, operador_id: null, operador: g.operador, cargo: null,
+    activo_id: g.activo_id, activo_nombre: g.activo_nombre,
     activo_tipo: g.activo_tipo, area: areaDeTipo(g.activo_tipo), unidad: g.unidad as CampoUnidadNomina, tarifa: g.tarifa,
-    qq: g.qq, viajes: g.viajes, dias: g.dias, sugerido: g.total, sin_tarifa: g.sin_tarifa, parte_ids: g.parte_ids,
+    qq: g.qq, viajes: g.viajes, dias: g.dias, sugerido: g.total, produccion_sugerida: g.total,
+    sueldo_semanal: 0, modalidad_fija: false, sueldo_semanal_principal: false,
+    sueldo_semanal_pagado: false, periodo_semanal: periodoSemanal,
+    sin_tarifa: g.sin_tarifa, parte_ids: g.parte_ids,
     desde: g.desde, hasta: g.hasta, vales: []
   }));
   const conFilas = new Set(filas.map((f) => f.operador.trim().toLowerCase()));
   const habitual = new Map(habituales.rows.map((h) => [String(h.operador).trim().toLowerCase(), h]));
-  for (const o of operadores.rows) {
+  for (const o of operadoresNomina) {
     const k = String(o.nombre).trim().toLowerCase();
     if (conFilas.has(k)) continue;
     const h = habitual.get(k);
     filas.push({
-      clave: `${k}::${h?.activo_id ?? ""}`, operador: o.nombre, activo_id: h?.activo_id ?? null, activo_nombre: h?.nombre ?? null,
+      clave: `${k}::${h?.activo_id ?? ""}`, operador_id: o.id, operador: o.nombre, cargo: o.cargo ?? null,
+      activo_id: h?.activo_id ?? null, activo_nombre: h?.nombre ?? null,
       activo_tipo: h?.tipo ?? null, area: areaDeTipo(h?.tipo), unidad: h?.tipo === "cosechadora" ? "QQ" : h ? "VIAJE" : "DIA",
-      tarifa: null, qq: 0, viajes: 0, dias: 0, sugerido: null, sin_tarifa: false, parte_ids: [], desde: null, hasta: null, vales: []
+      tarifa: null, qq: 0, viajes: 0, dias: 0, sugerido: null, produccion_sugerida: null,
+      sueldo_semanal: Number(o.sueldo_semanal || 0), modalidad_fija: Number(o.sueldo_semanal || 0) > 0,
+      sueldo_semanal_principal: false, sueldo_semanal_pagado: false, periodo_semanal: periodoSemanal,
+      sin_tarifa: false, parte_ids: [], desde: null, hasta: null, vales: []
     });
     conFilas.add(k);
   }
-  // Vales por rendir del operador → su primera fila (para proponerlos como descuento).
+  filas.sort((a, b) => a.area.localeCompare(b.area) || a.operador.localeCompare(b.operador) || (a.activo_nombre ?? "").localeCompare(b.activo_nombre ?? ""));
+  const pagados = new Set(sueldosPagados.rows.map((p) => String(p.operador_id)));
+  const principalAsignado = new Set<string>();
+  for (const fila of filas) {
+    const op = operadorPorNombre.get(fila.operador.trim().toLowerCase());
+    if (!op) continue;
+    fila.operador_id = op.id;
+    fila.cargo = op.cargo ?? null;
+    fila.sueldo_semanal = Number(op.sueldo_semanal || 0);
+    fila.modalidad_fija = fila.sueldo_semanal > 0;
+    if (!fila.modalidad_fija) continue;
+    fila.sin_tarifa = false;
+    fila.sueldo_semanal_pagado = pagados.has(op.id);
+    const esPrincipal = periodoSemanal && !fila.sueldo_semanal_pagado && !principalAsignado.has(op.id);
+    fila.sueldo_semanal_principal = esPrincipal;
+    fila.sugerido = esPrincipal ? fila.sueldo_semanal : 0;
+    if (esPrincipal) principalAsignado.add(op.id);
+  }
+  // Vales por rendir del operador → su primera fila ya ordenada (para proponerlos como descuento).
   for (const v of vales.rows) {
     const fila = filas.find((f) => valeEsDeOperador(v.concepto, f.operador));
     if (fila) fila.vales.push({ id: v.id, fecha: v.fecha, concepto: v.concepto, monto: Number(v.monto) });
   }
-  filas.sort((a, b) => a.area.localeCompare(b.area) || a.operador.localeCompare(b.operador) || (a.activo_nombre ?? "").localeCompare(b.activo_nombre ?? ""));
-  res.json({ filas });
+  res.json({ filas, periodo_semanal: periodoSemanal });
 }));
 
 // Procesar la nómina EN LOTE: todas las filas en UNA transacción (si una falla,
@@ -1615,6 +1674,7 @@ campoRouter.post("/nomina-operadores/lote", asyncRoute(async (req, res) => {
     desde: fechaSchema.optional(),
     hasta: fechaSchema.optional(),
     filas: z.array(z.object({
+      operador_id: z.string().uuid().nullable().optional(),
       operador: z.string().trim().min(1).max(120),
       activo_id: z.string().uuid().nullable().optional(),
       parte_ids: z.array(z.string().uuid()).default([]),
@@ -1622,6 +1682,7 @@ campoRouter.post("/nomina-operadores/lote", asyncRoute(async (req, res) => {
       extras: z.number().nonnegative().max(1_000_000).default(0),
       descuentos: z.number().nonnegative().max(1_000_000).default(0),
       vale_ids: z.array(z.string().uuid()).default([]),
+      es_sueldo_semanal: z.boolean().default(false),
       nota: z.string().trim().max(300).optional()
     })).min(1).max(300)
   }).parse(req.body);
@@ -1629,6 +1690,14 @@ campoRouter.post("/nomina-operadores/lote", asyncRoute(async (req, res) => {
   const todosVales = body.filas.flatMap((f) => f.vale_ids);
   if (new Set(todosPartes).size !== todosPartes.length) throw new ApiError(400, "Un parte aparece en dos filas.");
   if (new Set(todosVales).size !== todosVales.length) throw new ApiError(400, "Un vale aparece en dos filas.");
+  const filasSueldo = body.filas.filter((f) => f.es_sueldo_semanal);
+  if (filasSueldo.length && !esSemanaLunesDomingo(body.desde, body.hasta)) {
+    throw new ApiError(400, "El sueldo fijo se procesa por semana completa, de lunes a domingo.");
+  }
+  const idsSueldo = filasSueldo.map((f) => f.operador_id).filter((id): id is string => !!id);
+  if (idsSueldo.length !== filasSueldo.length || new Set(idsSueldo).size !== idsSueldo.length) {
+    throw new ApiError(400, "Cada trabajador puede tener un solo sueldo fijo en la semana.");
+  }
   const usd = (n: number) => `$${n.toFixed(2)}`;
 
   const result = await inTransaction(async (client) => {
@@ -1648,6 +1717,41 @@ campoRouter.post("/nomina-operadores/lote", asyncRoute(async (req, res) => {
     for (const [i, f] of body.filas.entries()) {
       const monto = montos[i];
       const operador = f.operador.trim();
+      const operadorCfg = (await client.query(
+        `SELECT id, nombre, cargo, sueldo_semanal::float AS sueldo_semanal, activo
+           FROM campo_operadores
+          WHERE ($1::uuid IS NOT NULL AND id = $1::uuid)
+             OR ($1::uuid IS NULL AND lower(btrim(nombre)) = lower(btrim($2)))
+          ORDER BY activo DESC, created_at
+          LIMIT 1
+          FOR UPDATE`,
+        [f.operador_id ?? null, operador]
+      )).rows[0] ?? null;
+      if (f.operador_id && !operadorCfg) throw new ApiError(404, `${operador}: el trabajador ya no existe en la configuración.`);
+      if (operadorCfg && String(operadorCfg.nombre).trim().toLowerCase() !== operador.toLowerCase()) {
+        throw new ApiError(409, `${operador}: el nombre no coincide con el trabajador configurado. Actualiza la matriz.`);
+      }
+      const sueldoSemanal = Number(operadorCfg?.sueldo_semanal || 0);
+      const modalidadFija = sueldoSemanal > 0;
+      if (modalidadFija && !f.es_sueldo_semanal && f.base > 0.005) {
+        throw new ApiError(400, `${operador}: el sueldo base fijo solo se paga en una semana de lunes a domingo. Usa Adicional / Bonos para valores ocasionales.`);
+      }
+      if (f.es_sueldo_semanal) {
+        if (!operadorCfg?.activo) throw new ApiError(409, `${operador}: el trabajador está inactivo.`);
+        if (!modalidadFija) throw new ApiError(409, `${operador}: no tiene sueldo semanal configurado.`);
+        // Serializa dos intentos simultáneos antes de comprobar el periodo. El
+        // índice parcial de la BD es el segundo candado de seguridad.
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`campo-sueldo:${operadorCfg.id}:${body.desde}:${body.hasta}`]);
+        const yaPagado = await client.query(
+          `SELECT 1 FROM campo_nomina_pagos
+            WHERE operador_id = $1 AND es_sueldo_semanal = true AND anulado_at IS NULL
+              AND desde = $2::date AND hasta = $3::date LIMIT 1`,
+          [operadorCfg.id, body.desde, body.hasta]
+        );
+        if (yaPagado.rowCount) {
+          throw new ApiError(409, `${operador} ya cobró el sueldo de la semana ${body.desde} al ${body.hasta}. Actualiza la matriz.`);
+        }
+      }
       // Partes del operador en esta fila (mismo operador y máquina, aún no pagados).
       const partes = f.parte_ids.length ? (await client.query(
         `SELECT p.id, p.fecha, p.operador, p.activo_id, p.qq::float AS qq, a.nombre AS activo_nombre, a.tipo AS activo_tipo,
@@ -1676,10 +1780,11 @@ campoRouter.post("/nomina-operadores/lote", asyncRoute(async (req, res) => {
           dias: new Set(partes.map((p) => String(p.fecha).slice(0, 10))).size, tarifa })
         : null;
       const nota = f.nota?.trim() || "";
-      const baseAjustada = calculo ? Math.abs(f.base - calculo.total) > 0.005 : partes.length > 0;
+      const baseEsperada = f.es_sueldo_semanal ? sueldoSemanal : modalidadFija ? 0 : calculo?.total ?? null;
+      const baseAjustada = baseEsperada != null ? Math.abs(f.base - baseEsperada) > 0.005 : partes.length > 0;
       if (baseAjustada && !nota) {
-        throw new ApiError(400, calculo
-          ? `${operador}: la base cambió de ${usd(calculo.total)} a ${usd(f.base)}; escribe la nota del ajuste.`
+        throw new ApiError(400, baseEsperada != null
+          ? `${operador}: la base cambió de ${usd(baseEsperada)} a ${usd(f.base)}; escribe la nota del ajuste.`
           : `${operador} no tiene tarifa para esa máquina: escribe una nota con cómo se calculó la base.`);
       }
       // Vales descontados: deben estar pendientes y quedar cubiertos por el descuento.
@@ -1698,30 +1803,35 @@ campoRouter.post("/nomina-operadores/lote", asyncRoute(async (req, res) => {
 
       const motivo = [
         nota,
-        baseAjustada && calculo ? `Base ajustada de ${usd(calculo.total)} a ${usd(f.base)}` : "",
-        `Base ${usd(f.base)}`,
+        baseAjustada && baseEsperada != null ? `Base ajustada de ${usd(baseEsperada)} a ${usd(f.base)}` : "",
+        f.es_sueldo_semanal ? `Sueldo semanal ${usd(f.base)}` : `Base ${usd(f.base)}`,
         f.extras > 0 ? `Extras/bonos ${usd(f.extras)}` : "",
         f.descuentos > 0 ? `Descuentos ${usd(f.descuentos)}${vales.length ? ` (${vales.length} vale(s) ${usd(totalVales)})` : ""}` : ""
       ].filter(Boolean).join(" · ");
+      const pagoActivoId = f.es_sueldo_semanal ? null : activoId;
       const pago = (await client.query(
         `INSERT INTO campo_nomina_pagos
-           (operador, activo_id, unidad, base, tarifa, monto_sugerido, monto, ajustado, motivo,
-            desde, hasta, partes_count, cuenta_id, created_by, vale_ids)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11::date, $12, $13, $14, $15::uuid[])
+           (operador_id, operador, activo_id, unidad, base, tarifa, monto_sugerido, monto, ajustado, motivo,
+            desde, hasta, partes_count, cuenta_id, created_by, vale_ids, es_sueldo_semanal)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::date, $12::date, $13, $14, $15, $16::uuid[], $17)
          RETURNING id`,
-        [operador, activoId, unidad, calculo?.base ?? 0, tarifa, calculo?.total ?? null, monto,
-         calculo ? Math.abs(monto - calculo.total) > 0.005 : true, motivo,
-         partes[0]?.fecha ?? body.desde ?? null, partes[partes.length - 1]?.fecha ?? body.hasta ?? null,
-         partes.length, body.cuenta_id, userId(req), vales.map((v) => v.id)]
+        [operadorCfg?.id ?? null, operador, pagoActivoId, unidad, f.base, modalidadFija ? null : tarifa, baseEsperada, monto,
+         baseAjustada || f.extras > 0 || f.descuentos > 0, motivo,
+         f.es_sueldo_semanal ? body.desde : partes[0]?.fecha ?? body.desde ?? null,
+         f.es_sueldo_semanal ? body.hasta : partes[partes.length - 1]?.fecha ?? body.hasta ?? null,
+         partes.length, body.cuenta_id, userId(req), vales.map((v) => v.id), f.es_sueldo_semanal]
       )).rows[0];
       if (monto > 0) {
         const extra = [f.extras > 0 ? `+ extras ${usd(f.extras)}` : "", f.descuentos > 0 ? `- desc. ${usd(f.descuentos)}` : ""].filter(Boolean).join(" ");
+        const conceptoPago = f.es_sueldo_semanal
+          ? `Sueldo semanal: ${operador} (${body.desde} al ${body.hasta})`
+          : `Pago nomina: ${operador}${activo ? ` - ${activo.nombre}` : ""}`;
         const mov = (await client.query(
           `INSERT INTO campo_movimientos
              (fecha, cuenta_id, signo, monto, concepto, activo_id, naturaleza, created_by)
            VALUES (CURRENT_DATE, $1, 'salida', $2, $3, $4, 'pago_nomina_operador', $5)
            RETURNING id`,
-          [body.cuenta_id, monto, `Pago nomina: ${operador}${activo ? ` - ${activo.nombre}` : ""}${extra ? ` (${extra})` : ""}`.slice(0, 400), activoId, userId(req)]
+          [body.cuenta_id, monto, `${conceptoPago}${extra ? ` (${extra})` : ""}`.slice(0, 400), pagoActivoId, userId(req)]
         )).rows[0];
         await client.query("UPDATE campo_nomina_pagos SET movimiento_id = $2 WHERE id = $1", [pago.id, mov.id]);
       }
@@ -1838,10 +1948,11 @@ campoRouter.post("/nomina-operadores/liquidar", asyncRoute(async (req, res) => {
 campoRouter.get("/nomina-operadores/pagos", asyncRoute(async (req, res) => {
   const { limit } = z.object({ limit: z.coerce.number().int().min(1).max(500).default(100) }).parse(req.query);
   const rows = (await pool.query(
-    `SELECT p.id, p.created_at, p.operador, a.nombre AS activo_nombre, p.monto::float AS monto,
+    `SELECT p.id, p.created_at, p.operador, o.cargo, a.nombre AS activo_nombre, p.monto::float AS monto,
             p.partes_count, p.desde::text AS desde, p.hasta::text AS hasta, p.motivo,
-            c.nombre AS cuenta_nombre, p.anulado_at, p.anulado_motivo
+            p.es_sueldo_semanal, c.nombre AS cuenta_nombre, p.anulado_at, p.anulado_motivo
        FROM campo_nomina_pagos p
+       LEFT JOIN campo_operadores o ON o.id = p.operador_id
        LEFT JOIN campo_activos a ON a.id = p.activo_id
        LEFT JOIN campo_cuentas c ON c.id = p.cuenta_id
       ORDER BY p.created_at DESC

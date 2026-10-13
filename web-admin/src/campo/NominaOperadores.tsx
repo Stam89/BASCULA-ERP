@@ -26,8 +26,11 @@ type Tarifa = { id: string; operador: string; activo_id: string; tarifa: number;
 // sus partes pendientes del periodo (o sin partes, para bonos) y sus vales por rendir.
 type Area = "cosechadora" | "transporte" | "otro";
 type FilaMatriz = {
-  clave: string; operador: string; activo_id: string | null; activo_nombre: string | null; activo_tipo: string | null; area: Area;
+  clave: string; operador_id: string | null; operador: string; cargo: string | null;
+  activo_id: string | null; activo_nombre: string | null; activo_tipo: string | null; area: Area;
   unidad: Unidad; tarifa: number | null; qq: number; viajes: number; dias: number; sugerido: number | null;
+  produccion_sugerida: number | null; sueldo_semanal: number; modalidad_fija: boolean;
+  sueldo_semanal_principal: boolean; sueldo_semanal_pagado: boolean; periodo_semanal: boolean;
   sin_tarifa: boolean; parte_ids: string[]; desde: string | null; hasta: string | null;
   vales: Array<{ id: string; fecha: string; concepto: string | null; monto: number }>;
 };
@@ -169,10 +172,13 @@ function calcularFila(f: FilaMatriz, e: Edicion | undefined) {
   const base = numDe(baseTxt), extras = numDe(extrasTxt), descuentos = numDe(descTxt);
   const total = r2(base + extras - descuentos);
   const modificada = !!e && (e.base !== undefined || e.extras !== undefined || e.descuentos !== undefined || !!e.nota);
-  // Nota obligatoria: base distinta de la sugerida, o partes sin tarifa.
-  const pideNota = (f.sugerido != null && Math.abs(base - f.sugerido) > 0.005) || (f.sin_tarifa && f.parte_ids.length > 0);
+  // Nota obligatoria: base distinta de la sugerida, o partes sin tarifa. En
+  // sueldo fijo las filas secundarias esperan base cero: la semana se paga una
+  // sola vez aunque el trabajador aparezca en varias máquinas.
+  const baseEsperada = f.modalidad_fija ? (f.sueldo_semanal_principal ? f.sueldo_semanal : 0) : f.sugerido;
+  const pideNota = (baseEsperada != null && Math.abs(base - baseEsperada) > 0.005) || (!f.modalidad_fija && f.sin_tarifa && f.parte_ids.length > 0);
   const valesCubiertos = valesTotal > 0 && descuentos + 0.005 >= valesTotal;
-  const sugeridaIncluir = total > 0 || (f.parte_ids.length > 0 && modificada);
+  const sugeridaIncluir = total > 0 || (f.modalidad_fija && f.parte_ids.length > 0) || (f.parte_ids.length > 0 && modificada);
   const incluida = e?.excluir ? false : sugeridaIncluir;
   const error = total < 0 ? "Descuentos mayores que base + extras" : incluida && pideNota && !nota.trim() ? "Escribe la nota del ajuste" : "";
   return { baseTxt, extrasTxt, descTxt, nota, base, extras, descuentos, total, valesTotal, valesCubiertos, pideNota, incluida, sugeridaIncluir, error };
@@ -194,10 +200,11 @@ const FilaNomina = memo(function FilaNomina({ fila: f, idx, edit, onEdit }: {
   const c = calcularFila(f, edit);
   const prod = f.parte_ids.length === 0 ? null
     : f.unidad === "QQ" ? `${qqFmt(f.qq)} QQ` : f.unidad === "DIA" ? `${f.dias} día(s)` : `${f.viajes} viaje(s)`;
-  const celda = (col: Columna, valor: string, extra?: { placeholder?: string; title?: string; alerta?: boolean }) => (
+  const celda = (col: Columna, valor: string, extra?: { placeholder?: string; title?: string; alerta?: boolean; disabled?: boolean }) => (
     <input data-celda={`${idx}:${col}`} type={col === "nota" ? "text" : "number"} min={col === "nota" ? undefined : 0} step={col === "nota" ? undefined : "0.01"}
       className={`nomMatriz__celda ${col === "nota" ? "nomMatriz__celda--nota" : ""} ${extra?.alerta ? "is-alerta" : ""}`}
       value={valor} placeholder={extra?.placeholder ?? (col === "nota" ? "" : "0.00")} title={extra?.title}
+      disabled={extra?.disabled}
       onChange={(e) => onEdit(f.clave, { [col]: e.target.value })}
       onFocus={(e) => e.target.select()}
       onKeyDown={(e) => moverFoco(e, idx, col)} />
@@ -211,15 +218,33 @@ const FilaNomina = memo(function FilaNomina({ fila: f, idx, edit, onEdit }: {
       </td>
       <td>
         <strong>{f.operador}</strong>
+        {f.cargo && <small className="nomMatriz__sub">{f.cargo}</small>}
         <small className="nomMatriz__sub">{f.activo_nombre ?? "Sin máquina"}{f.activo_nombre ? ` · ${AREA_LABEL[f.area].split(" ").slice(1).join(" ")}` : ""}</small>
+        {f.modalidad_fija && (
+          <small className={f.sueldo_semanal_pagado ? "nomMatriz__sub" : "nomMatriz__fijo"}>
+            {f.sueldo_semanal_pagado
+              ? "✓ Sueldo de esta semana pagado"
+              : f.sueldo_semanal_principal
+                ? `Sueldo semanal ${money(f.sueldo_semanal)}`
+                : f.periodo_semanal ? "Sueldo incluido en otra fila" : "Elige un periodo semanal para pagar sueldo"}
+          </small>
+        )}
       </td>
       <td className="nomMatriz__prod">
-        {prod ? <>{prod}{f.sin_tarifa
-          ? <small className="nomMatriz__alerta">⚠️ sin tarifa</small>
-          : <small className="nomMatriz__sub">× {money(f.tarifa ?? 0)} / {unidadCorta(f.unidad)}</small>}</>
+        {prod ? <>{prod}{f.modalidad_fija
+          ? <small className="nomMatriz__sub">Pago fijo semanal</small>
+          : f.sin_tarifa
+            ? <small className="nomMatriz__alerta">⚠️ sin tarifa</small>
+            : <small className="nomMatriz__sub">× {money(f.tarifa ?? 0)} / {unidadCorta(f.unidad)}</small>}</>
           : <span className="muted">—</span>}
+        {f.modalidad_fija && f.produccion_sugerida != null && <small className="nomMatriz__sub">Referencia por producción: {money(f.produccion_sugerida)}</small>}
       </td>
-      <td className="num">{celda("base", c.baseTxt, { alerta: c.pideNota, title: f.sugerido != null ? `Sugerido: ${money(f.sugerido)}` : undefined, placeholder: f.parte_ids.length ? "0.00" : "—" })}</td>
+      <td className="num">{celda("base", c.baseTxt, {
+        alerta: c.pideNota,
+        title: f.modalidad_fija ? `Sueldo configurado: ${money(f.sueldo_semanal)}` : f.sugerido != null ? `Sugerido: ${money(f.sugerido)}` : undefined,
+        placeholder: f.parte_ids.length || f.modalidad_fija ? "0.00" : "—",
+        disabled: f.modalidad_fija && !f.sueldo_semanal_principal
+      })}</td>
       <td className="num">{celda("extras", c.extrasTxt)}</td>
       <td className="num">
         {celda("descuentos", c.descTxt, { title: f.vales.length ? f.vales.map((v) => `${v.fecha} · ${v.concepto ?? "Vale"} · ${money(v.monto)}`).join("\n") : undefined })}
@@ -239,12 +264,13 @@ const FilaNomina = memo(function FilaNomina({ fila: f, idx, edit, onEdit }: {
 
 type PagoHist = {
   id: string; created_at: string; operador: string; activo_nombre: string | null; monto: number; partes_count: number;
+  cargo: string | null; es_sueldo_semanal: boolean;
   cuenta_nombre: string | null; anulado_at: string | null; anulado_motivo: string | null;
 };
 
 export default function NominaOperadores() {
-  const [periodo, setPeriodo] = useState<Periodo>("quincena");
-  const [rango, setRango] = useState(() => rangoDe("quincena"));
+  const [periodo, setPeriodo] = useState<Periodo>("semana");
+  const [rango, setRango] = useState(() => rangoDe("semana"));
   const [area, setArea] = useState<"todas" | Area>("todas");
   // Partes NO pagados de antes del periodo: se deben igual, por eso entran por defecto.
   const [conAnteriores, setConAnteriores] = useState(true);
@@ -265,6 +291,8 @@ export default function NominaOperadores() {
       const qs = new URLSearchParams();
       if (rango.from && !conAnteriores) qs.set("from", rango.from);
       if (rango.to) qs.set("to", rango.to);
+      if (rango.from) qs.set("periodo_desde", rango.from);
+      if (rango.to) qs.set("periodo_hasta", rango.to);
       const [data, cuentasData] = await Promise.all([
         apiGet<{ filas: FilaMatriz[] }>(`/campo/nomina-operadores/matriz?${qs.toString()}`),
         apiGet<Cuenta[]>("/campo/cuentas")
@@ -282,7 +310,17 @@ export default function NominaOperadores() {
     setEdits((prev) => ({ ...prev, [clave]: { ...prev[clave], ...cambio } }));
   }, []);
 
-  const visibles = useMemo(() => filas.filter((f) => area === "todas" || f.area === area), [filas, area]);
+  const visibles = useMemo(() => {
+    const filtradas = filas.filter((f) => area === "todas" || f.area === area);
+    const sueldoAsignado = new Set<string>();
+    return filtradas.map((f) => {
+      if (!f.modalidad_fija) return f;
+      const claveOperador = f.operador_id ?? f.operador.trim().toLowerCase();
+      const principal = f.periodo_semanal && !f.sueldo_semanal_pagado && !sueldoAsignado.has(claveOperador);
+      if (principal) sueldoAsignado.add(claveOperador);
+      return { ...f, sueldo_semanal_principal: principal, sugerido: principal ? f.sueldo_semanal : 0 };
+    });
+  }, [filas, area]);
   const resumen = useMemo(() => {
     const t = { base: 0, extras: 0, descuentos: 0, total: 0, incluidas: 0, errores: 0 };
     for (const f of visibles) {
@@ -309,8 +347,9 @@ export default function NominaOperadores() {
       const r = await apiPost<{ total: number; pagos: unknown[] }>("/campo/nomina-operadores/lote", {
         cuenta_id: cuentaId, desde: rango.from || undefined, hasta: rango.to || undefined,
         filas: lote.map(({ f, c }) => ({
-          operador: f.operador, activo_id: f.activo_id, parte_ids: f.parte_ids,
+          operador_id: f.operador_id, operador: f.operador, activo_id: f.activo_id, parte_ids: f.parte_ids,
           base: c.base, extras: c.extras, descuentos: c.descuentos,
+          es_sueldo_semanal: f.sueldo_semanal_principal,
           // Los vales se rinden solo si el descuento los cubre; si no, quedan pendientes.
           vale_ids: c.valesCubiertos ? f.vales.map((v) => v.id) : [],
           nota: c.nota.trim() || undefined
@@ -378,8 +417,8 @@ Motivo (obligatorio):`, "");
           </div>
         </div>
         <p className="muted" style={{ margin: "8px 0 0", fontSize: 12.5 }}>
-          Escribe directo en las celdas (Enter o ↓ baja a la siguiente fila). <strong>Base</strong> = producción × tarifa (editable con nota);
-          <strong> Vales / Descuentos</strong> trae los vales por rendir del operador. <strong>Total</strong> = Base + Extras − Descuentos.
+          Escribe directo en las celdas (Enter o ↓ baja a la siguiente fila). <strong>Base</strong> usa el sueldo semanal configurado o producción × tarifa;
+          <strong> Adicional / Bonos</strong> sirve para pagos ocasionales. <strong>Total</strong> = Base + Adicionales − Descuentos.
           Se pagan las filas marcadas con total mayor a 0 o modificadas.{conAnteriores ? " Incluye los partes sin pagar de antes del periodo." : ""}
         </p>
       </div>
@@ -390,7 +429,7 @@ Motivo (obligatorio):`, "");
             <thead><tr>
               <th className="nomMatriz__check" title="Incluir en el lote">✓</th>
               <th>Operador</th><th>Producción</th>
-              <th className="num">Sueldo Base / Días</th><th className="num">Horas Extras / Bonos</th>
+              <th className="num">Sueldo semanal / Base</th><th className="num">Adicional / Bonos</th>
               <th className="num">Vales / Descuentos</th><th className="num">Total a Pagar</th><th>Nota</th>
             </tr></thead>
             <tbody>
@@ -425,7 +464,7 @@ Motivo (obligatorio):`, "");
                 <tr key={p.id} style={p.anulado_at ? { opacity: 0.55 } : undefined}>
                   <td>{String(p.created_at).slice(0, 10).split("-").reverse().join("/")}</td>
                   <td>{p.operador}</td>
-                  <td>{p.activo_nombre ?? "—"}</td>
+                  <td>{p.es_sueldo_semanal ? <span className="chip info">Sueldo semanal</span> : p.activo_nombre ?? "—"}</td>
                   <td className="num">{p.partes_count}</td>
                   <td className="num">{money(p.monto)}</td>
                   <td>{p.cuenta_nombre ?? "—"}</td>

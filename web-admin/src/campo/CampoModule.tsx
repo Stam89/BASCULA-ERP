@@ -210,7 +210,10 @@ const CONCEPTOS_INGRESO: Array<{ grupo: string; items: string[] }> = [
 const ACTIVO_GENERAL = "GENERAL";
 
 // Operador (catálogo para Partes Diarios).
-type Operador = { id: string; nombre: string; identificacion: string | null; telefono: string | null; activo: boolean };
+type Operador = {
+  id: string; nombre: string; identificacion: string | null; telefono: string | null;
+  cargo: string | null; sueldo_semanal: number; activo: boolean;
+};
 
 // Vale / anticipo por rendir (egreso con estado). entregado = monto del vale.
 type Vale = {
@@ -3153,7 +3156,7 @@ async function patchOperador(id: string, body: unknown): Promise<void> {
   const r = await apiFetch(`/campo/operadores/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error || "No se pudo actualizar el operador");
 }
-const operadorVacio = { nombre: "", identificacion: "", telefono: "" };
+const operadorVacio = { nombre: "", identificacion: "", telefono: "", cargo: "", sueldo_semanal: "" };
 function OperadoresCatalogo({ operadores, onChanged, onError }: {
   operadores: Operador[]; onChanged: (msg: string) => Promise<void>; onError: (m: string) => void;
 }) {
@@ -3163,7 +3166,10 @@ function OperadoresCatalogo({ operadores, onChanged, onError }: {
 
   function editar(o: Operador) {
     setEditId(o.id);
-    setF({ nombre: o.nombre, identificacion: o.identificacion ?? "", telefono: o.telefono ?? "" });
+    setF({
+      nombre: o.nombre, identificacion: o.identificacion ?? "", telefono: o.telefono ?? "",
+      cargo: o.cargo ?? "", sueldo_semanal: o.sueldo_semanal > 0 ? String(o.sueldo_semanal) : ""
+    });
   }
   function cancelar() { setEditId(null); setF(operadorVacio); }
 
@@ -3171,7 +3177,13 @@ function OperadoresCatalogo({ operadores, onChanged, onError }: {
     try {
       setBusy(true);
       if (f.nombre.trim().length < 2) throw new Error("Escribe el nombre del operador");
-      const payload = { nombre: f.nombre.trim(), identificacion: f.identificacion.trim() || null, telefono: f.telefono.trim() || null };
+      const sueldoSemanal = f.sueldo_semanal.trim() === "" ? 0 : Number(f.sueldo_semanal);
+      if (!Number.isFinite(sueldoSemanal) || sueldoSemanal < 0) throw new Error("El sueldo semanal no es válido");
+      const payload = {
+        nombre: f.nombre.trim(), identificacion: f.identificacion.trim() || null,
+        telefono: f.telefono.trim() || null, cargo: f.cargo.trim() || null,
+        sueldo_semanal: sueldoSemanal
+      };
       if (editId) await patchOperador(editId, payload);
       else await apiPost("/campo/operadores", { ...payload, identificacion: payload.identificacion ?? undefined, telefono: payload.telefono ?? undefined });
       cancelar();
@@ -3190,9 +3202,14 @@ function OperadoresCatalogo({ operadores, onChanged, onError }: {
   return (
     <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
       <h2>👷 Operadores</h2>
-      <p className="muted" style={{ marginTop: -4 }}>Personal que opera la maquinaria. Alimenta el selector de Operador en Partes Diarios.</p>
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10 }}>
+      <p className="muted" style={{ marginTop: -4 }}>
+        Personal de Transporte y Cosechadora. Si tiene sueldo semanal, la nómina lo propone una sola vez de lunes a domingo;
+        con sueldo en $0 conserva el cálculo por QQ, viaje o día.
+      </p>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
         <label><span>Nombre</span><input type="text" value={f.nombre} onChange={(e) => setF({ ...f, nombre: e.target.value })} placeholder="Ej: Juan Pérez" /></label>
+        <label><span>Cargo / Función</span><input type="text" value={f.cargo} onChange={(e) => setF({ ...f, cargo: e.target.value })} placeholder="Ej: Chofer" /></label>
+        <label><span>Sueldo semanal ($)</span><input type="number" min="0" step="0.01" value={f.sueldo_semanal} onChange={(e) => setF({ ...f, sueldo_semanal: e.target.value })} placeholder="0.00 = por producción" /></label>
         <label><span>Cédula / Identificación</span><input type="text" value={f.identificacion} onChange={(e) => setF({ ...f, identificacion: e.target.value })} placeholder="Ej: 0912345678" /></label>
         <label><span>Teléfono</span><input type="text" value={f.telefono} onChange={(e) => setF({ ...f, telefono: e.target.value })} placeholder="Ej: 0991234567" /></label>
       </div>
@@ -3203,11 +3220,13 @@ function OperadoresCatalogo({ operadores, onChanged, onError }: {
       {operadores.length > 0 && (
         <div style={{ overflowX: "auto", marginTop: 10 }}>
           <table className="cajaTable">
-            <thead><tr><th>Nombre</th><th>Cédula / ID</th><th>Teléfono</th><th>Estado</th><th /></tr></thead>
+            <thead><tr><th>Nombre</th><th>Cargo</th><th>Sueldo semanal</th><th>Cédula / ID</th><th>Teléfono</th><th>Estado</th><th /></tr></thead>
             <tbody>
               {operadores.map((o) => (
                 <tr key={o.id} style={{ opacity: o.activo ? 1 : 0.55 }}>
                   <td style={{ fontWeight: 600 }}>{o.nombre}</td>
+                  <td>{o.cargo || "—"}</td>
+                  <td style={{ fontWeight: 700 }}>{o.sueldo_semanal > 0 ? money(o.sueldo_semanal) : <span className="muted">Por producción</span>}</td>
                   <td>{o.identificacion || "—"}</td>
                   <td>{o.telefono || "—"}</td>
                   <td><span className={o.activo ? "chip ok" : "chip bad"}>{o.activo ? "Activo" : "Inactivo"}</span></td>

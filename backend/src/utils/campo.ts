@@ -28,6 +28,17 @@ export function totalFilaNomina(f: { base: number; extras: number; descuentos: n
   return Math.round(((Number(f.base) || 0) + (Number(f.extras) || 0) - (Number(f.descuentos) || 0)) * 100) / 100;
 }
 
+/** Periodo semanal de nomina: lunes a domingo, ambos inclusive. */
+export function esSemanaLunesDomingo(desde: string | undefined, hasta: string | undefined): boolean {
+  if (!desde || !hasta) return false;
+  const dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(desde);
+  const hm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(hasta);
+  if (!dm || !hm) return false;
+  const ini = Date.UTC(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3]));
+  const fin = Date.UTC(Number(hm[1]), Number(hm[2]) - 1, Number(hm[3]));
+  return new Date(ini).getUTCDay() === 1 && fin - ini === 6 * 24 * 60 * 60 * 1000;
+}
+
 const sinTildes = (t: string) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
 
 /**

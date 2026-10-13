@@ -7,7 +7,7 @@ Actualizado: 2026-10-13
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: Caja carga los Fomentos del socio al abrir su acceso rapido y conserva correctamente el medio efectivo/banco en Fomentos, Anticipos y compras de Sacos.
+- Ultimo cambio funcional: Transporte y Cosechadora permite configurar cargo y sueldo fijo semanal por operador, pagar adicionales por separado y conserva el esquema por produccion para quienes no tienen sueldo fijo.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,14 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### 🚜 Nomina de Campo: sueldo semanal y adicionales (2026-10-13)
+
+- Configuracion → Operadores agrega `Cargo / Funcion` y `Sueldo semanal ($)`. Un sueldo mayor a cero activa el pago fijo; vacio o cero mantiene intacto el calculo historico por QQ, viaje o dia.
+- Nomina Operadores abre por defecto la semana de lunes a domingo y separa `Sueldo semanal / Base` de `Adicional / Bonos`. La produccion del trabajador con sueldo fijo sigue visible como referencia, pero no vuelve a multiplicar su pago.
+- Seguridad: el backend exige un periodo completo lunes-domingo para el sueldo fijo, identifica al operador por ID y evita pagar dos veces al mismo trabajador en la misma semana, incluso ante doble clic o peticiones simultaneas. Los adicionales siguen disponibles aunque el sueldo semanal ya haya sido pagado.
+- Migracion aditiva `20261096_campo_sueldo_semanal.sql`: cargo/sueldo en `campo_operadores` y trazabilidad del operador/sueldo semanal en `campo_nomina_pagos`. Aplicada correctamente.
+- Verificacion: 226 pruebas, builds backend/frontend, preflight y revision visual en Configuracion/Nomina correctos; no se registraron pagos ni salarios reales durante las pruebas.
 
 ### 💰🌾 Caja: Fomentos visibles y movimientos por medio correcto (2026-10-13)
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calcularNominaCampo, tipoServicioPorActivo, totalFilaNomina, valeEsDeOperador } from "./campo.js";
+import { calcularNominaCampo, esSemanaLunesDomingo, tipoServicioPorActivo, totalFilaNomina, valeEsDeOperador } from "./campo.js";
 
 describe("reglas de Transporte y Cosechadora", () => {
   it("clasifica cosechadoras como cosecha", () => {
@@ -22,6 +22,13 @@ describe("reglas de Transporte y Cosechadora", () => {
     expect(totalFilaNomina({ base: 120.5, extras: 20, descuentos: 40.25 })).toBe(100.25);
     expect(totalFilaNomina({ base: 0, extras: 0, descuentos: 0 })).toBe(0);
     expect(totalFilaNomina({ base: 10, extras: 0, descuentos: 15 })).toBe(-5);
+  });
+
+  it("reconoce exclusivamente una semana completa de lunes a domingo", () => {
+    expect(esSemanaLunesDomingo("2026-10-12", "2026-10-18")).toBe(true);
+    expect(esSemanaLunesDomingo("2026-10-13", "2026-10-19")).toBe(false);
+    expect(esSemanaLunesDomingo("2026-10-12", "2026-10-17")).toBe(false);
+    expect(esSemanaLunesDomingo(undefined, "2026-10-18")).toBe(false);
   });
 
   it("reconoce el vale de un operador por su nombre (palabra completa, sin tildes)", () => {
