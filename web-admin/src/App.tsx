@@ -420,6 +420,24 @@ type WorkerSummary = {
   pending_count?: number;
 };
 
+type SecadorGuardiaDia = {
+  id: string;
+  work_date: string;
+  worker_name: string;
+  payment_id?: string | null;
+  payment_status?: string | null;
+  tunnels: number;
+  base_amount: number;
+  net_amount: number;
+};
+
+type SecadorGuardiaSemana = {
+  week_start: string;
+  week_end: string;
+  today: string;
+  rows: SecadorGuardiaDia[];
+};
+
 // ── Nómina: agrupación de roles en pestañas operativas ──────────────────────
 // La BD solo guarda 4 roles (PILADOR, ESTIBADOR, SECADOR, POLVILLO), así que el
 // reparto por pestaña se resuelve aquí, en el frontend, filtrando por
@@ -2321,6 +2339,9 @@ export function App() {
   // guardados conservan el nombre con el que fueron registrados.
   const [secadorSemana, setSecadorSemana] = useState(() => getSavedSecadorName() ?? "");
   const [secadorSemanaId, setSecadorSemanaId] = useState(() => semanaOperativaKey());
+  const [secadorGuardia, setSecadorGuardia] = useState<SecadorGuardiaSemana | null>(null);
+  const [secadorGuardiaDesde, setSecadorGuardiaDesde] = useState(() => semanaOperativaKey());
+  const [secadorGuardiaBusy, setSecadorGuardiaBusy] = useState(false);
   useEffect(() => {
     // Si la aplicación queda abierta del domingo al lunes, inicia la nueva
     // semana sin conservar en pantalla al responsable de la semana anterior.
@@ -2329,6 +2350,8 @@ export function App() {
       if (currentWeek === secadorSemanaId) return;
       setSecadorSemanaId(currentWeek);
       setSecadorSemana(getSavedSecadorName() ?? "");
+      setSecadorGuardiaDesde(currentWeek);
+      setSecadorGuardia(null);
     }, 60_000);
     return () => window.clearInterval(timer);
   }, [secadorSemanaId]);
@@ -4986,6 +5009,50 @@ export function App() {
     laborRatesPristine.current = rates; setLaborRatesForm(rates); setLaborRatesLoaded(true);
   }
 
+  async function loadSecadorGuardia(silent = true) {
+    try {
+      const data = await apiGet<SecadorGuardiaSemana>(`/labor/secador-guardia?week_start=${semanaOperativaKey()}`);
+      const rows = (data.rows ?? []).map((row) => ({ ...row, work_date: String(row.work_date).slice(0, 10) }));
+      const normalized = { ...data, week_start: String(data.week_start).slice(0, 10), week_end: String(data.week_end).slice(0, 10), today: String(data.today).slice(0, 10), rows };
+      setSecadorGuardia(normalized);
+      const current = rows.find((row) => row.work_date === normalized.today)
+        ?? [...rows].filter((row) => row.work_date <= normalized.today).pop()
+        ?? rows[0];
+      if (current?.worker_name) {
+        const name = current.worker_name.trim().toUpperCase();
+        setSecadorSemana(name);
+        saveSecadorName(name);
+      }
+      return normalized;
+    } catch (e) {
+      if (!silent) addToast(`No se pudo cargar la guardia semanal: ${e instanceof Error ? e.message : "desconocido"}`, "error");
+      return null;
+    }
+  }
+
+  async function guardarSecadorGuardia() {
+    const workerName = secadorSemana.trim().toUpperCase();
+    if (workerName.length < 2) { addToast("Escribe el nombre del secador de guardia", "error"); return; }
+    const desde = secadorGuardiaDesde || semanaOperativaKey();
+    const hasta = secadorGuardia?.week_end ?? (() => {
+      const d = new Date(`${semanaOperativaKey()}T12:00:00`); d.setDate(d.getDate() + 4); return fechaLocalIso(d);
+    })();
+    if (!window.confirm(`¿Asignar a ${workerName} como secador de guardia desde ${desde} hasta ${hasta}?\n\nSe generará la guardianía de lunes a viernes aunque no haya túneles. Los túneles realizados se sumarán automáticamente.`)) return;
+    setSecadorGuardiaBusy(true);
+    try {
+      const data = await apiPut<SecadorGuardiaSemana>("/labor/secador-guardia", {
+        week_start: semanaOperativaKey(), worker_name: workerName, effective_from: desde
+      });
+      const rows = (data.rows ?? []).map((row) => ({ ...row, work_date: String(row.work_date).slice(0, 10) }));
+      setSecadorGuardia({ ...data, week_start: String(data.week_start).slice(0, 10), week_end: String(data.week_end).slice(0, 10), today: String(data.today).slice(0, 10), rows });
+      saveSecadorName(workerName);
+      addToast(`${workerName} quedó asignado a la guardia semanal`, "success");
+      if (activeTab === "Nomina") await refreshNomina();
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : "No se pudo asignar la guardia", "error");
+    } finally { setSecadorGuardiaBusy(false); }
+  }
+
   type PackagingRates = { precio_saco_10lb: number; precio_saco_25lb: number; precio_saco_50lb: number };
   async function loadPackagingRates() {
     const pkg = await apiGet<PackagingRates>("/settings/packaging-rates").catch(() => null);
@@ -5228,6 +5295,9 @@ export function App() {
       // Tablas de REVISIÓN de las pestañas operativas: por período elegido.
       // La nómina de PRODUCCIÓN y la cuadrilla son de la matriz.
       if (esMatrizActiva) {
+        // Además de informar quién está de turno, materializa la guardianía de
+        // cada día transcurrido aunque no se haya encendido ningún túnel.
+        await loadSecadorGuardia();
         // Bajada de carro pendiente (sincroniza los tickets nuevos): un solo pago.
         try { setBajadaPend(await apiGet<BajadaResumen>("/cuadrilla/bajadas/pendiente")); } catch { setBajadaPend(null); }
         const data = await apiGet<{ rows: WorkerSummary[] }>(`/labor/summary?from=${nominaFrom}&to=${nominaTo}`);
@@ -8364,7 +8434,7 @@ export function App() {
     if (activeTab === "Por Pagar") refreshPayables().catch(() => undefined);
     // Secadoras y Nómina necesitan las tarifas (precios de gas/diesel).
     if (activeTab === "Secadoras" || activeTab === "Nomina") loadLaborRates().catch(() => undefined);
-    if (activeTab === "Secadoras") loadMotorActive(motorActivo).catch(() => undefined);
+    if (activeTab === "Secadoras") { loadMotorActive(motorActivo).catch(() => undefined); loadSecadorGuardia(false).catch(() => undefined); }
     if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
     if (activeTab === "Cuadrilla") refreshCuadrilla().catch(() => undefined);
     if (activeTab === "Servicio Pilado") { refreshPilado().catch(() => undefined); refreshCobros().catch(() => undefined); refreshServiceDriedLots().catch(() => undefined); loadLaborRates().catch(() => undefined); }
@@ -13738,6 +13808,51 @@ Motivo (obligatorio):`, "");
 
         {activeTab === "Secadoras" && (
           <section className="panelGrid">
+            <div className="card" style={{ gridColumn: "1 / -1", padding: 16, border: "1px solid #bae6fd", background: "#f0f9ff" }}>
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                <div>
+                  <h2 style={{ margin: 0, fontSize: 17 }}>🌙 Guardia del secador · semana del {semanaOperativaKey()}</h2>
+                  <p className="muted" style={{ margin: "4px 0 0", fontSize: 12 }}>
+                    La guardianía se paga de lunes a viernes aunque no haya túneles. Sábado y domingo los cubre el dueño y no generan nómina.
+                  </p>
+                </div>
+                <span className="chip info">{secadorGuardia?.rows.find((row) => row.work_date === secadorGuardia.today)?.worker_name || secadorSemana || "Sin asignar"}</span>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(150px, 190px) auto", gap: 10, alignItems: "end", marginTop: 12 }}>
+                <label><span>Secador de guardia</span>
+                  <input value={secadorSemana} disabled={!canEdit("Secadoras")} onChange={(e) => setSecadorSemana(e.target.value.toUpperCase())} placeholder="Nombre del responsable" />
+                </label>
+                <label><span>Aplicar desde</span>
+                  <input type="date" min={semanaOperativaKey()} max={secadorGuardia?.week_end}
+                    disabled={!canEdit("Secadoras")} value={secadorGuardiaDesde} onChange={(e) => setSecadorGuardiaDesde(e.target.value)} />
+                </label>
+                {canEdit("Secadoras") && (
+                  <button type="button" className="primary" disabled={secadorGuardiaBusy} onClick={() => guardarSecadorGuardia().catch(() => undefined)}>
+                    {secadorGuardiaBusy ? "Guardando…" : "Guardar guardia semanal"}
+                  </button>
+                )}
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(120px, 1fr))", gap: 8, marginTop: 12, overflowX: "auto" }}>
+                {Array.from({ length: 5 }, (_, i) => {
+                  const date = new Date(`${semanaOperativaKey()}T12:00:00`); date.setDate(date.getDate() + i);
+                  const iso = fechaLocalIso(date);
+                  const row = secadorGuardia?.rows.find((item) => item.work_date === iso);
+                  const pagada = row?.payment_status === "PAID";
+                  const generada = Boolean(row?.payment_id);
+                  return (
+                    <div key={iso} style={{ minWidth: 120, padding: "8px 10px", borderRadius: 8, background: "#fff", border: "1px solid #dbeafe" }}>
+                      <strong style={{ display: "block", fontSize: 12, textTransform: "capitalize" }}>{date.toLocaleDateString("es-EC", { weekday: "long" })}</strong>
+                      <span style={{ display: "block", fontSize: 12, marginTop: 2 }}>{row?.worker_name || "Sin asignar"}</span>
+                      <small style={{ color: pagada ? "#047857" : generada ? "#b45309" : "#64748b" }}>
+                        {pagada ? "Pagada" : generada ? `Pendiente · ${money(row?.net_amount ?? 0)}` : iso > (secadorGuardia?.today ?? fechaLocalIso()) ? "Programada" : "Sin guardianía"}
+                      </small>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
             {/* ── Acordeón operativo: 3 tarjetas expansibles. Colapsadas por
                   defecto (secadoraAbierta = null); el formulario correspondiente
                   solo aparece al hacer clic. Abrir un motor lo activa
@@ -14122,15 +14237,14 @@ Motivo (obligatorio):`, "");
                   </div>
                   <Input
                     name="secador_motor"
-                    label="👷 Secador de turno (se aplica a todos los túneles)"
-                    placeholder="Confirma el secador responsable de esta semana"
+                    label="👷 Secador responsable de esta corrida"
+                    placeholder="Se completa con el guardia de esta semana"
                     value={secadorSemana || motorActiveReports.find((report) => report.operator_name?.trim())?.operator_name || ""}
                     onChange={(event) => setSecadorSemana(event.target.value.toUpperCase())}
-                    onBlur={(event) => saveSecadorName(event.target.value)}
                     required
                   />
                   <p className="muted" style={{ fontSize: 12, margin: "6px 0 0" }}>
-                    Semana del lunes {semanaOperativaKey()}: este nombre se comparte entre los tres túneles. Si cambia el secador por enfermedad o reemplazo, escribe aquí el nuevo responsable antes de guardar la siguiente corrida. Los secados ya finalizados conservan su responsable.
+                    Se completa desde la guardia semanal y se aplica a todos los túneles de esta corrida. Si hubo un reemplazo, actualiza primero la tarjeta «Guardia del secador» indicando desde qué día comenzó.
                   </p>
                 </div>
                 <div className="panelGrid" style={{ gap: 16 }}>

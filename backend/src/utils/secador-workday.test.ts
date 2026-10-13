@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { esDiaPagableSecador } from "./secador-workday.js";
+import { esDiaPagableSecador, fechasLaborablesDesdeLunes } from "./secador-workday.js";
 
 describe("esDiaPagableSecador", () => {
   it.each([
@@ -16,5 +16,15 @@ describe("esDiaPagableSecador", () => {
 
   it("rechaza fechas inválidas", () => {
     expect(esDiaPagableSecador("sin-fecha")).toBe(false);
+  });
+
+  it("construye la guardia de lunes a viernes", () => {
+    expect(fechasLaborablesDesdeLunes("2026-10-12")).toEqual([
+      "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16"
+    ]);
+  });
+
+  it("no acepta otro día como inicio de semana", () => {
+    expect(fechasLaborablesDesdeLunes("2026-10-13")).toBeNull();
   });
 });

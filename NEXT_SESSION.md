@@ -49,6 +49,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🌙 Guardia semanal del secador sin túneles (2026-10-12)
+
+- Nueva tabla aditiva `secador_guardias` (migración `20261091`): registra por día quién cubre la guardia de lunes a viernes. El detalle diario permite cambiar al responsable «desde» cualquier día por enfermedad/reemplazo sin reescribir los días anteriores; sábado y domingo están bloqueados por BD y no generan nómina.
+- `GET/PUT /labor/secador-guardia`: consulta/asigna la semana. Al abrir Secadoras/Nómina materializa de forma idempotente la guardianía de cada día transcurrido aunque no haya túneles. Si después se seca, `autoGenerarPagoSecador` reutiliza esa misma fila y suma los túneles, sin duplicar guardianía. No permite reasignar un día ya pagado.
+- Secadoras muestra una tarjeta compacta «Guardia del secador» con responsable, fecha desde la que aplica y estado de lunes a viernes (sin asignar/programada/pendiente/pagada). El secador de cada corrida se autocompleta con esta asignación.
+- Antes de migrar se creó `BASCULA\Respaldos\bascula-erp_guardia-secador_20261012-202330.dump`. Migración aplicada sin asignar nombres reales: `guardias=0`, `pagos_guardia=0`. Backend/frontend compilan, 220 pruebas pasan y preflight no reporta errores críticos.
+
 ### ⚖️ Cuenta única CxC/CxP en Transporte y Cosechadora (2026-10-12)
 
 - `campo_cxp.cliente_id` enlaza de forma opcional la deuda por pagar con la misma persona de `campo_clientes`; la migración `20261090` vinculó históricos solo por coincidencia exacta normalizada. Nueva CxP permite elegir expresamente una persona del directorio; egresos a crédito y saldos iniciales también enlazan cuando el nombre coincide exactamente.

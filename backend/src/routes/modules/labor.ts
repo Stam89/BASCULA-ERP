@@ -8,11 +8,17 @@ import { ApiError } from "../../http/error-handler.js";
 import { avisarSobregiro, exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { estibadorBaseFromTulas } from "../../utils/money.js";
-import { esDiaPagableSecador } from "../../utils/secador-workday.js";
+import { esDiaPagableSecador, fechasLaborablesDesdeLunes } from "../../utils/secador-workday.js";
 
 export const laborRouter = Router();
 
 type Queryable = { query: typeof pool.query };
+
+function fechasLaborablesDeSemana(weekStart: string): string[] {
+  const days = fechasLaborablesDesdeLunes(weekStart);
+  if (!days) throw new ApiError(400, "La semana debe comenzar un lunes");
+  return days;
+}
 
 // ── Tablas (migración automática) ──────────────────────────────────────────
 let ready: Promise<void> | null = null;
@@ -88,6 +94,18 @@ export function ensureLaborTables(): Promise<void> {
       await pool.query(`ALTER TABLE worker_payments ADD COLUMN IF NOT EXISTS tulas NUMERIC(14,3) NOT NULL DEFAULT 0`);
       // Detalle legible del pago (ej. secador: "Secado - Inicio: DD/MM/YYYY HH:MM · Guardianía + N túnel(es)").
       await pool.query(`ALTER TABLE worker_payments ADD COLUMN IF NOT EXISTS notes TEXT`);
+      await pool.query(`CREATE TABLE IF NOT EXISTS secador_guardias (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        accionista_id UUID NOT NULL REFERENCES accionistas(id) ON DELETE CASCADE,
+        work_date DATE NOT NULL,
+        worker_name VARCHAR(140) NOT NULL,
+        created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CONSTRAINT chk_secador_guardia_laborable CHECK (EXTRACT(ISODOW FROM work_date) BETWEEN 1 AND 5),
+        CONSTRAINT uq_secador_guardia_dia UNIQUE (accionista_id, work_date)
+      )`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_secador_guardias_semana ON secador_guardias (accionista_id, work_date DESC)`);
       // Fila maestra de tarifas por defecto.
       await pool.query(`
         INSERT INTO labor_rates (id, socio_id)
@@ -684,6 +702,143 @@ laborRouter.put("/payments/:id", requireAdmin, asyncRoute(async (req, res) => {
   );
   if (!result.rowCount) throw new ApiError(400, "Pago no encontrado o ya pagado");
   res.json(result.rows[0]);
+}));
+
+type GuardiaRow = {
+  id: string;
+  work_date: string | Date;
+  worker_name: string;
+};
+
+async function materializarGuardiasSecador(client: PoolClient, accionistaId: string, throughDate: string): Promise<void> {
+  const guardias = await client.query<GuardiaRow>(
+    `SELECT id, work_date, worker_name
+       FROM secador_guardias
+      WHERE accionista_id = $1 AND work_date <= $2::date
+      ORDER BY work_date`,
+    [accionistaId, throughDate]
+  );
+  if (!guardias.rowCount) return;
+  const rates = await getRates(client, accionistaId);
+  const guardiania = round2(Number(rates.secador_guardiania ?? 0));
+
+  for (const guardia of guardias.rows) {
+    const workDate = guardia.work_date instanceof Date
+      ? guardia.work_date.toISOString().slice(0, 10)
+      : String(guardia.work_date).slice(0, 10);
+    const existing = await client.query(
+      `SELECT id FROM worker_payments
+        WHERE worker_role = 'SECADOR' AND btrim(worker_name) = $1 AND work_date = $2::date
+        LIMIT 1`,
+      [guardia.worker_name.trim(), workDate]
+    );
+    if (existing.rowCount) continue;
+
+    await client.query(
+      `INSERT INTO worker_payments
+         (worker_role, worker_name, work_date, tunnels, base_amount, net_amount, status, notes, reference_type, reference_id)
+       VALUES ('SECADOR', $1, $2::date, 0, $3, $3, 'PENDING', 'Guardianía de turno · sin túneles finalizados', 'secador_guardia', $4)`,
+      [guardia.worker_name.trim(), workDate, guardiania, guardia.id]
+    );
+  }
+}
+
+async function obtenerGuardiaSemanal(client: PoolClient, accionistaId: string, weekStart: string) {
+  const days = fechasLaborablesDeSemana(weekStart);
+  const todayResult = await client.query<{ today: string | Date }>("SELECT CURRENT_DATE AS today");
+  const rawToday = todayResult.rows[0]?.today;
+  const today = rawToday instanceof Date ? rawToday.toISOString().slice(0, 10) : String(rawToday).slice(0, 10);
+  await materializarGuardiasSecador(client, accionistaId, today);
+
+  const result = await client.query(
+    `SELECT g.id, g.work_date, g.worker_name,
+            wp.id AS payment_id, wp.status AS payment_status,
+            COALESCE(wp.tunnels, 0)::int AS tunnels,
+            COALESCE(wp.base_amount, 0)::float AS base_amount,
+            COALESCE(wp.net_amount, 0)::float AS net_amount
+       FROM secador_guardias g
+       LEFT JOIN LATERAL (
+         SELECT p.id, p.status, p.tunnels, p.base_amount, p.net_amount
+           FROM worker_payments p
+          WHERE p.worker_role = 'SECADOR'
+            AND btrim(p.worker_name) = btrim(g.worker_name)
+            AND p.work_date = g.work_date
+          ORDER BY p.created_at ASC LIMIT 1
+       ) wp ON true
+      WHERE g.accionista_id = $1 AND g.work_date = ANY($2::date[])
+      ORDER BY g.work_date`,
+    [accionistaId, days]
+  );
+  return { week_start: days[0], week_end: days[4], today, rows: result.rows };
+}
+
+// Guardia semanal del secador: se guarda por día para admitir reemplazos desde
+// cualquier jornada sin reescribir quién cubrió los días anteriores.
+laborRouter.get("/secador-guardia", asyncRoute(async (req, res) => {
+  await ensureLaborTables();
+  const q = z.object({
+    week_start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+  }).parse(req.query);
+  const dbWeek = await pool.query<{ week_start: string | Date }>("SELECT date_trunc('week', CURRENT_DATE)::date AS week_start");
+  const rawWeek = q.week_start ?? dbWeek.rows[0].week_start;
+  const weekStart = rawWeek instanceof Date ? rawWeek.toISOString().slice(0, 10) : String(rawWeek).slice(0, 10);
+  fechasLaborablesDeSemana(weekStart);
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  if (!accionistaId) throw new ApiError(400, "Selecciona la operación de la planta");
+  const data = await inTransaction((client) => obtenerGuardiaSemanal(client, accionistaId, weekStart));
+  res.json(data);
+}));
+
+laborRouter.put("/secador-guardia", asyncRoute(async (req, res) => {
+  await ensureLaborTables();
+  const body = z.object({
+    week_start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    worker_name: z.string().trim().min(2).max(140),
+    effective_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+  }).parse(req.body);
+  const days = fechasLaborablesDeSemana(body.week_start);
+  if (!days.includes(body.effective_from)) {
+    throw new ApiError(400, "La fecha de inicio debe estar entre lunes y viernes de esta semana");
+  }
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  if (!accionistaId) throw new ApiError(400, "Selecciona la operación de la planta");
+  const user = (req as AuthenticatedRequest).user;
+  const worker = body.worker_name.trim().toUpperCase();
+
+  const data = await inTransaction(async (client) => {
+    for (const workDate of days.filter((day) => day >= body.effective_from)) {
+      const previous = await client.query<{ worker_name: string }>(
+        `SELECT worker_name FROM secador_guardias
+          WHERE accionista_id = $1 AND work_date = $2::date FOR UPDATE`,
+        [accionistaId, workDate]
+      );
+      const oldWorker = previous.rows[0]?.worker_name?.trim();
+      if (oldWorker && oldWorker !== worker) {
+        const paid = await client.query(
+          `SELECT 1 FROM worker_payments
+            WHERE worker_role='SECADOR' AND btrim(worker_name)=$1 AND work_date=$2::date AND status='PAID'
+            LIMIT 1`,
+          [oldWorker, workDate]
+        );
+        if (paid.rowCount) throw new ApiError(409, `La guardianía del ${workDate} ya fue pagada a ${oldWorker}; no se puede reasignar.`);
+        await client.query(
+          `DELETE FROM worker_payments
+            WHERE worker_role='SECADOR' AND btrim(worker_name)=$1 AND work_date=$2::date
+              AND status='PENDING' AND reference_type='secador_guardia' AND tunnels=0`,
+          [oldWorker, workDate]
+        );
+      }
+      await client.query(
+        `INSERT INTO secador_guardias (accionista_id, work_date, worker_name, created_by)
+         VALUES ($1, $2::date, $3, $4)
+         ON CONFLICT (accionista_id, work_date) DO UPDATE
+           SET worker_name = EXCLUDED.worker_name, updated_at = now()`,
+        [accionistaId, workDate, worker, user?.id ?? null]
+      );
+    }
+    return obtenerGuardiaSemanal(client, accionistaId, body.week_start);
+  });
+  res.json(data);
 }));
 
 // ── Secador: días detectados desde Secadora (reportes de secado) ───────────
