@@ -3899,8 +3899,19 @@ export function App() {
       ),
     [finishedWarehouse?.name, stock, visibleInventoryProducts]
   );
+  const externalStockRows = useMemo(
+    () => stock
+      .filter((row) => row.ownership === "OWNED" && row.warehouse_type === "EXTERNO" && Number(row.quantity) > 0.0005)
+      .map((row) => ({
+        product_name: `${row.product_name} · ${row.warehouse_name.replace(/^Allá:\s*/i, "")}`,
+        warehouse_name: row.warehouse_name,
+        quantity: Number(row.quantity),
+        unit: row.unit
+      })),
+    [stock]
+  );
   const otherStockRows = useMemo(
-    () => stock.filter((row) => !["Cascara", "Producto", "Subproducto"].includes(stockGroupLabel(row))),
+    () => stock.filter((row) => row.warehouse_type !== "EXTERNO" && !["Cascara", "Producto", "Subproducto"].includes(stockGroupLabel(row))),
     [stock]
   );
   const criticalSupplies = useMemo(
@@ -15382,6 +15393,7 @@ Motivo (obligatorio):`, "");
                 { clave: "terminado", titulo: "Producto terminado", ayuda: "Arroz pilado listo para vender", icono: "🍚", color: "#22c55e", color2: "#15803d", filas: finishedStockRows },
                 { clave: "marcas", titulo: "Marcas / empacados", ayuda: "Arroz empacado por marca y presentación", icono: "🛍️", color: "#a78bfa", color2: "#6d28d9", filas: packagedStockRows },
                 { clave: "subproductos", titulo: "Subproductos", ayuda: "Arrocillo, polvillo y otros que salen del pilado", icono: "🌿", color: "#60a5fa", color2: "#1d4ed8", filas: byproductStockRows },
+                ...(externalStockRows.length > 0 ? [{ clave: "externo", titulo: "Fuera de piladora", ayuda: "Producto propio que continúa donde el proveedor y todavía no está disponible en planta", icono: "📍", color: "#fb923c", color2: "#c2410c", filas: externalStockRows }] : []),
                 ...(otherStockRows.length > 0 ? [{ clave: "otros", titulo: "Otros stocks", ayuda: "Productos fuera de las categorías anteriores", icono: "📦", color: "#94a3b8", color2: "#475569", filas: otherStockRows }] : [])
               ] as GrupoStock[]} empacados={{ marcas: marcasEmpacadas, calidadDe: calidadDeProductoTerminado }} />
             </div>
@@ -27437,17 +27449,17 @@ function isCurrentStockProduct(product: Product) {
   return product.is_active !== false && ["RAW_MATERIAL", "FINISHED_GOOD", "PACKAGED_GOOD", "BYPRODUCT"].includes(product.product_type);
 }
 
-// Existencia por producto: SUMA de todas sus filas (antes tomaba solo la primera bodega que encontraba).
-// `alla` = lo que quedó donde el proveedor de envejecido/selección (bodegas EXTERNO); `quantity` = total.
+// Existencia física por producto: las bodegas EXTERNO se informan aparte y no
+// forman parte de la cantidad disponible en la piladora.
 function buildDisplayStockRows(products: Product[], stock: StockRow[], fallbackWarehouse: string) {
   return products.map((product) => {
     const filas = stock.filter((item) => item.code === product.code && item.ownership === "OWNED");
-    const total = filas.reduce((s, r) => s + Number(r.quantity), 0);
+    const fisico = filas.filter((r) => r.warehouse_type !== "EXTERNO").reduce((s, r) => s + Number(r.quantity), 0);
     const alla = filas.filter((r) => r.warehouse_type === "EXTERNO").reduce((s, r) => s + Number(r.quantity), 0);
     return {
       product_name: product.name,
       warehouse_name: filas.find((r) => r.warehouse_type !== "EXTERNO")?.warehouse_name ?? fallbackWarehouse,
-      quantity: Math.round(total * 1000) / 1000,
+      quantity: Math.round(fisico * 1000) / 1000,
       alla: Math.round(alla * 1000) / 1000,
       unit: filas[0]?.unit ?? product.unit
     };

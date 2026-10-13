@@ -84,7 +84,8 @@ dashboardRouter.get("/panel", requireAuth, requirePanelAccess, asyncRoute(async 
               COALESCE(SUM(CASE WHEN p.code = 'POLVILLO' THEN m.quantity ELSE 0 END),0)::float polvillo
        FROM inventory_movements m
        JOIN products p ON p.id = m.product_id
-       WHERE m.ownership = 'OWNED'
+       JOIN warehouses w ON w.id = m.warehouse_id
+       WHERE m.ownership = 'OWNED' AND w.type <> 'EXTERNO'
        GROUP BY m.accionista_id`),
     pool.query(
       `SELECT cr.accionista_id,
@@ -250,7 +251,13 @@ dashboardRouter.get("/", asyncRoute(async (req, res) => {
   ] = await Promise.all([
     pool.query("SELECT COUNT(*)::int AS count FROM farmers WHERE is_active = true"),
     pool.query("SELECT COUNT(*)::int AS count FROM weighing_tickets WHERE created_at::date = CURRENT_DATE AND accionista_id = $1", [accionistaId]),
-    pool.query("SELECT COALESCE(SUM(quantity), 0)::numeric AS quantity FROM inventory_stock WHERE ownership = 'OWNED' AND accionista_id = $1", [accionistaId]),
+    pool.query(
+      `SELECT COALESCE(SUM(s.quantity), 0)::numeric AS quantity
+         FROM inventory_stock s
+         JOIN warehouses w ON w.id = s.warehouse_id
+        WHERE s.ownership = 'OWNED' AND s.accionista_id = $1 AND w.type <> 'EXTERNO'`,
+      [accionistaId]
+    ),
     pool.query("SELECT COALESCE(SUM(balance), 0)::numeric AS amount FROM farmer_advances WHERE status IN ('CONFIRMED', 'PARTIAL') AND accionista_id = $1", [accionistaId]),
     pool.query("SELECT COALESCE(SUM(balance), 0)::numeric AS amount FROM accounts_payable WHERE status IN ('CONFIRMED', 'PARTIAL') AND accionista_id = $1", [accionistaId]),
     pool.query("SELECT COALESCE(SUM(total_amount), 0)::numeric AS amount FROM sales WHERE created_at::date = CURRENT_DATE AND accionista_id = $1 AND sale_status <> 'CANCELLED'", [accionistaId]),

@@ -54,6 +54,7 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - Secadoras quedó dividida en dos vistas compactas: `🔥 Secado y túneles` y `🌙 Guardia semanal`; la programación de guardia ya no alarga la pantalla operativa.
 - En Selección/Envejecimiento, «Registrar reporte / recepción» ahora pregunta primero por la ubicación real. La opción predeterminada y segura es «Solo recibí el reporte · sigue allá»: registra productos, subproductos y merma, pero asigna todo a la bodega externa del proveedor y no lo deja disponible en la piladora.
 - Si el producto ya llegó se elige «El producto ya llegó a la piladora»; todavía se puede indicar una parte que permaneció donde el proveedor. Más adelante, el panel existente «Traer a piladora» mueve ese saldo externo al inventario físico sin duplicarlo.
+- Inventario ya no mezcla ese saldo externo con el físico: las categorías normales y el Dashboard cuentan solo bodegas de planta; cuando exista saldo externo aparece una categoría naranja independiente «Fuera de piladora», detallada por producto y proveedor. Selección conserva además la comparación `Piladora / Allá / Total`.
 - No se modificó la BD ni el endpoint de cierre: se aprovechó `qty_alla` y la bodega externa ya existentes. Backend/frontend compilan, 220 pruebas pasan y preflight no reporta errores críticos. La separación de la guardia se verificó visualmente; no se crearon lotes reales para probar la recepción.
 
 ### 🌙 Guardia semanal del secador sin túneles (2026-10-12)
