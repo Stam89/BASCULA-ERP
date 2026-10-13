@@ -361,6 +361,8 @@ export function SacosPorComprarAlerta({ sacos, onIr }: { sacos: SacoPorComprar[]
 // (regla automática de planDeSacos). "Otro peso" permite registrar cualquier otro.
 const PESOS_BASE = [100, 25, 10];
 
+type SincroMarca = { producto: string; accion: "DESACTIVADO" | "REACTIVADO" | "SIGUE_ACTIVO"; motivo?: string };
+
 export function SacosCatalogoConfig({
   sacos, puedeEditar, onCambio, avisar, modo = "MATRIZ"
 }: {
@@ -426,11 +428,20 @@ export function SacosCatalogoConfig({
     }
   }
 
+  // Si era el último saco de una marca, el servidor también desactiva (o reactiva) la marca.
+  function avisarMarca(m: SincroMarca | null | undefined) {
+    if (!m) return;
+    if (m.accion === "DESACTIVADO") avisar(`La marca «${m.producto}» quedó sin sacos y se desactivó: ya no aparece en ventas, inventario ni selectores.`, "success");
+    else if (m.accion === "REACTIVADO") avisar(`La marca «${m.producto}» se reactivó.`, "success");
+    else avisar(`La marca «${m.producto}» quedó sin sacos pero sigue activa. ${m.motivo ?? ""}`, "warn");
+  }
+
   async function cambiarActivo(s: Saco, activo: boolean) {
     try {
-      await apiPatch(`/sacks/${s.id}`, { activo });
+      const r = await apiPatch<{ marca?: SincroMarca | null }>(`/sacks/${s.id}`, { activo });
       await onCambio();
       avisar(`${s.tipo} ${activo ? "reactivado" : "desactivado"}`, "success");
+      avisarMarca(r?.marca);
     } catch (err) {
       avisar(err instanceof Error ? err.message : "No se pudo cambiar", "error");
     }
@@ -438,13 +449,16 @@ export function SacosCatalogoConfig({
 
   async function eliminar(s: Saco) {
     const tieneStock = num(s.stock) !== 0;
-    if (!window.confirm(`¿Eliminar "${s.tipo}"?${tieneStock ? `\n\nTiene ${num(s.stock)} sacos en stock.` : ""}\n\nSi tiene movimientos se DESACTIVA (se conserva su historial); si no, se borra.`)) return;
+    const ultimoDeMarca = !esPropio && !!s.product_id && !sacos.some((x) => x.id !== s.id && x.product_id === s.product_id && x.activo !== false);
+    const avisoMarca = ultimoDeMarca ? `\n\nEs el último saco de la marca «${s.marca ?? s.tipo}»: la marca también se desactiva y deja de salir en ventas e inventario (si no tiene stock ni pedidos pendientes).` : "";
+    if (!window.confirm(`¿Eliminar "${s.tipo}"?${tieneStock ? `\n\nTiene ${num(s.stock)} sacos en stock.` : ""}\n\nSi tiene movimientos se DESACTIVA (se conserva su historial); si no, se borra.${avisoMarca}`)) return;
     try {
       const r = await apiFetch(`/sacks/${s.id}`, { method: "DELETE" });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data?.error ?? "No se pudo eliminar");
       await onCambio();
       avisar(data.resultado === "ELIMINADO" ? `${s.tipo} eliminado` : `${s.tipo} desactivado (tenía historial)`, "success");
+      avisarMarca(data.marca);
     } catch (err) {
       avisar(err instanceof Error ? err.message : "No se pudo eliminar", "error");
     }

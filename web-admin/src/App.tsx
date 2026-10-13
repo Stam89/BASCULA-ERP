@@ -7263,6 +7263,12 @@ export function App() {
     addToast("Plantilla descargada — pega tus cuadros y súbela con 📤 SUBIR EXCEL", "success");
   }
 
+  // Solo la lista de productos (activo/nombre): lo que cambia al eliminar o renombrar
+  // una marca, sin recargar todo el tablero.
+  async function refreshProducts() {
+    setProducts(await apiGet<Product[]>("/inventory/products"));
+  }
+
   async function refreshSacks() {
     const esSocioActivo = accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "SOCIO";
     const [inv, movs, propios] = await Promise.all([
@@ -25076,7 +25082,7 @@ Motivo (obligatorio):`, "");
                     sacos={sacosDelActivo}
                     modo={esMatrizActiva ? "MATRIZ" : "PROPIO"}
                     puedeEditar={isAdmin}
-                    onCambio={refreshSacks}
+                    onCambio={async () => { await Promise.all([refreshSacks(), refreshProducts()]); }}
                     avisar={(msg, tipo) => addToast(msg, tipo)}
                   />
                 </details>
@@ -25287,6 +25293,7 @@ Motivo (obligatorio):`, "");
                 <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}>
                   <summary>{cfgSum("🧺", "Catálogo de productos", "Productos y marcas enlazados con sacos, presentaciones y mostrador")}</summary>
                   <CatalogoProductos
+                    recargarCon={sackInventory}
                     puedeEditar={isAdmin}
                     avisar={addToast}
                     onCambio={() => { refresh().catch(() => undefined); refreshSacks().catch(() => undefined); }}

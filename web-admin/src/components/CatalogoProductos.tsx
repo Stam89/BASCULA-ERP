@@ -8,7 +8,9 @@ import { apiGet, apiPatch, apiPost } from "../api";
 //  · Terminado / Subproducto: presentaciones, tarifa por libra y «venta al detalle»
 //    (Caja → Venta Detalle).
 //  · Materia prima: solo el producto.
-// El nombre y el código no se cambian después (pedidos, kárdex y marcas los usan).
+// El código no cambia después; el nombre sí se corrige con ✎ Editar (pedidos y kárdex
+// enlazan por id, y el servidor renombra también los sacos de la marca).
+// La lista va en pestañas por tipo para no mezclar marcas con el arroz a granel.
 
 type TipoProducto = "FINISHED_GOOD" | "PACKAGED_GOOD" | "BYPRODUCT" | "RAW_MATERIAL";
 type Presentacion = { id: string; name: string; weight_lb: number };
@@ -28,6 +30,26 @@ const TIPOS: Array<{ tipo: TipoProducto; icono: string; titulo: string; ayuda: s
   { tipo: "RAW_MATERIAL", icono: "🧺", titulo: "Materia prima", ayuda: "Cáscara u otro insumo que entra a la planta." }
 ];
 const ETIQUETA_TIPO: Record<string, string> = Object.fromEntries(TIPOS.map((t) => [t.tipo, t.titulo]));
+
+// Pestañas del catálogo. El arroz base a granel («Producto 0.11», «Producto Corriente»)
+// va aparte de las marcas aunque esté mal clasificado, para no verlo dos veces.
+type Pestana = "MATERIA_PRIMA" | "MARCAS" | "SUBPRODUCTOS" | "GRANEL";
+const CODIGOS_GRANEL = new Set(["ARROZ-PILADO-011", "ARROZ-PILADO-CORRIENTE"]);
+const PESTANAS: Array<{ id: Pestana; icono: string; titulo: string; tipoNuevo: TipoProducto; ayuda: string }> = [
+  { id: "MATERIA_PRIMA", icono: "🌾", titulo: "Materia Prima", tipoNuevo: "RAW_MATERIAL", ayuda: "Cáscara 0.11, Cáscara Corriente y otros insumos que entran a la planta." },
+  { id: "MARCAS", icono: "📦", titulo: "Marcas Comerciales / Empacado", tipoNuevo: "PACKAGED_GOOD", ayuda: "Marcas que se venden en saco (Conejo, Flor, Lira Azul, Oso, Extra…). El arroz a granel que las respalda está en su propia pestaña." },
+  { id: "SUBPRODUCTOS", icono: "⚙️", titulo: "Subproductos", tipoNuevo: "BYPRODUCT", ayuda: "Arrocillo, polvillo, rechazo y similares." },
+  { id: "GRANEL", icono: "🍚", titulo: "Arroz a granel", tipoNuevo: "FINISHED_GOOD", ayuda: "Arroz base que sale de la pilada (Producto 0.11, Producto Corriente): respalda el stock de las marcas." }
+];
+function pestanaDe(f: { code: string; product_type: string }): Pestana {
+  if (CODIGOS_GRANEL.has(String(f.code).toUpperCase())) return "GRANEL";
+  switch (f.product_type) {
+    case "RAW_MATERIAL": return "MATERIA_PRIMA";
+    case "PACKAGED_GOOD": return "MARCAS";
+    case "BYPRODUCT": return "SUBPRODUCTOS";
+    default: return "GRANEL";
+  }
+}
 const PESOS_BASE = [100, 50, 25, 10];
 
 const slugCodigo = (t: string) => t.toUpperCase().normalize("NFD").replace(/\p{M}/gu, "").replace(/[^A-Z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -77,8 +99,10 @@ function dondeAparece(tipo: TipoProducto, detalle: boolean): string[] {
   }
 }
 
-export function CatalogoProductos({ puedeEditar, avisar, onCambio, irASaldos, irATarifas, irAInventario }: {
+export function CatalogoProductos({ puedeEditar, avisar, onCambio, irASaldos, irATarifas, irAInventario, recargarCon }: {
   puedeEditar: boolean;
+  /** Cuando cambia (p. ej. los sacos tras eliminar una marca en «Catálogo de sacos»), se relee el catálogo. */
+  recargarCon?: unknown;
   avisar: (msg: string, tipo?: "success" | "error" | "warn") => void;
   /** Recarga productos y sacos en la app tras crear/editar. */
   onCambio: () => void;
@@ -88,7 +112,7 @@ export function CatalogoProductos({ puedeEditar, avisar, onCambio, irASaldos, ir
 }) {
   const [filas, setFilas] = useState<FilaCatalogo[] | null>(null);
   const [verInactivos, setVerInactivos] = useState(false);
-  const [filtro, setFiltro] = useState<"" | TipoProducto>("");
+  const [pestana, setPestana] = useState<Pestana>("MARCAS");
   const [buscar, setBuscar] = useState("");
   const [nuevoAbierto, setNuevoAbierto] = useState(false);
   const [form, setForm] = useState<Formulario>(formularioInicial());
@@ -101,14 +125,22 @@ export function CatalogoProductos({ puedeEditar, avisar, onCambio, irASaldos, ir
     catch (e) { avisar(`No se pudo leer el catálogo: ${e instanceof Error ? e.message : "error"}`, "error"); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  useEffect(() => { void cargar(); }, [cargar]);
+  useEffect(() => { void cargar(); }, [cargar, recargarCon]);
 
-  const lista = useMemo(() => {
+  // Visibles con el buscador y «Mostrar desactivados»; luego, los de la pestaña activa.
+  const visibles = useMemo(() => {
     const q = buscar.trim().toLowerCase();
     return (filas ?? []).filter((f) =>
-      (verInactivos || f.is_active) && (!filtro || f.product_type === filtro) &&
-      (!q || f.name.toLowerCase().includes(q) || f.code.toLowerCase().includes(q)));
-  }, [filas, verInactivos, filtro, buscar]);
+      (verInactivos || f.is_active) && (!q || f.name.toLowerCase().includes(q) || f.code.toLowerCase().includes(q)));
+  }, [filas, verInactivos, buscar]);
+  const lista = useMemo(() => visibles.filter((f) => pestanaDe(f) === pestana), [visibles, pestana]);
+  const cuenta = useMemo(() => {
+    const c: Record<Pestana, number> = { MATERIA_PRIMA: 0, MARCAS: 0, SUBPRODUCTOS: 0, GRANEL: 0 };
+    for (const f of visibles) c[pestanaDe(f)] += 1;
+    return c;
+  }, [visibles]);
+  const pestanaActual = PESTANAS.find((t) => t.id === pestana) ?? PESTANAS[1];
+  const esMarcas = pestana === "MARCAS";
 
   const esMarca = form.tipo === "PACKAGED_GOOD";
   const codigoMostrado = form.codigoEditado ? form.codigo : codigoSugerido(form.nombre, form.tipo);
@@ -149,6 +181,7 @@ export function CatalogoProductos({ puedeEditar, avisar, onCambio, irASaldos, ir
         venta_detalle: form.detalle
       });
       setResultado(r);
+      setPestana(pestanaDe(r.producto));
       setForm(formularioInicial(form.tipo));
       avisar(r.reactivado ? `«${r.producto.name}» reactivado` : `«${r.producto.name}» creado`, "success");
       await cargar();
@@ -165,20 +198,19 @@ export function CatalogoProductos({ puedeEditar, avisar, onCambio, irASaldos, ir
     <div className="catProd">
       <p className="muted" style={{ margin: "6px 0 10px" }}>
         Crea productos y déjalos <strong>enlazados</strong>: presentaciones, sacos y arroz base en una marca; tarifa y mostrador en un
-        producto de venta al detalle. El nombre y el código no se cambian después para no romper pedidos ni historial.
+        producto de venta al detalle. El código no cambia después; el nombre se corrige con ✎ Editar sin romper pedidos ni historial.
       </p>
 
       <div className="catProd__barra">
         {puedeEditar && (
-          <button type="button" className="primary" onClick={() => { setNuevoAbierto((a) => !a); setResultado(null); }}>
+          <button type="button" className="primary" onClick={() => {
+            if (!nuevoAbierto) setForm(formularioInicial(pestanaActual.tipoNuevo));
+            setNuevoAbierto((a) => !a); setResultado(null);
+          }}>
             {nuevoAbierto ? "Cerrar formulario" : "➕ Nuevo producto"}
           </button>
         )}
         <input type="search" placeholder="🔍 Buscar producto…" value={buscar} onChange={(e) => setBuscar(e.target.value)} style={{ minWidth: 180, flex: "1 1 180px" }} />
-        <select value={filtro} onChange={(e) => setFiltro(e.target.value as "" | TipoProducto)} aria-label="Filtrar por tipo">
-          <option value="">Todos los tipos</option>
-          {TIPOS.map((t) => <option key={t.tipo} value={t.tipo}>{t.titulo}</option>)}
-        </select>
         <label className="catProd__check"><input type="checkbox" checked={verInactivos} onChange={(e) => setVerInactivos(e.target.checked)} /> Mostrar desactivados</label>
       </div>
 
@@ -295,26 +327,47 @@ export function CatalogoProductos({ puedeEditar, avisar, onCambio, irASaldos, ir
         </form>
       )}
 
-      <div style={{ overflowX: "auto", border: "1px solid var(--c-border)", borderRadius: 10, marginTop: 10 }}>
-        <table className="cajaTable" style={{ width: "100%", minWidth: 760, margin: 0 }}>
+      <div className="catProd__tabs" role="tablist" aria-label="Tipo de producto">
+        {PESTANAS.map((t) => (
+          <button key={t.id} type="button" role="tab" aria-selected={pestana === t.id}
+            className={`catProd__tab ${pestana === t.id ? "is-activo" : ""}`} onClick={() => setPestana(t.id)}>
+            <span aria-hidden="true">{t.icono}</span> {t.titulo} <span className="catProd__tabN">{cuenta[t.id]}</span>
+          </button>
+        ))}
+      </div>
+      <p className="muted" style={{ margin: "6px 0 0", fontSize: 12.5 }}>{pestanaActual.ayuda}</p>
+
+      <div style={{ overflowX: "auto", border: "1px solid var(--c-border)", borderRadius: 10, marginTop: 8 }}>
+        <table className="cajaTable" style={{ width: "100%", minWidth: esMarcas ? 640 : 560, margin: 0 }}>
           <thead>
             <tr>
-              <th>Producto</th><th>Tipo</th><th>Presentaciones</th><th className="num">Sacos</th>
-              <th>Arroz base</th><th className="num">Tarifa/lb</th><th>Mostrador</th><th className="num">Stock</th><th />
+              <th>Producto</th><th>Presentaciones</th>
+              {esMarcas ? <><th className="num">Sacos</th><th>Arroz base</th></> : <><th className="num">Tarifa/lb</th><th>Mostrador</th></>}
+              <th className="num">Stock</th><th />
             </tr>
           </thead>
           <tbody>
-            {filas == null && <tr><td colSpan={9} className="muted" style={{ padding: 14, textAlign: "center" }}>Cargando…</td></tr>}
-            {filas != null && lista.length === 0 && <tr><td colSpan={9} className="muted" style={{ padding: 14, textAlign: "center" }}>Ningún producto coincide.</td></tr>}
+            {filas == null && <tr><td colSpan={6} className="muted" style={{ padding: 14, textAlign: "center" }}>Cargando…</td></tr>}
+            {filas != null && lista.length === 0 && (
+              <tr><td colSpan={6} className="muted" style={{ padding: 14, textAlign: "center" }}>
+                {buscar.trim() ? "Ningún producto de esta pestaña coincide con la búsqueda." : "No hay productos en esta pestaña."}
+              </td></tr>
+            )}
             {lista.map((f) => (
               <tr key={f.id} style={{ opacity: f.is_active ? 1 : 0.5 }}>
                 <td><strong>{f.name}</strong>{!f.is_active && <span className="chip bad" style={{ marginLeft: 6 }}>desactivado</span>}<br /><small className="muted">{f.code}</small></td>
-                <td>{ETIQUETA_TIPO[f.product_type] ?? f.product_type}</td>
                 <td>{f.presentaciones.length ? f.presentaciones.map((p) => p.name).join(", ") : <span className="muted">—</span>}</td>
-                <td className="num">{f.product_type === "PACKAGED_GOOD" ? f.sacos : "—"}</td>
-                <td>{f.calidad ? (f.calidad === "CORRIENTE" ? "Corriente" : f.calidad) : "—"}</td>
-                <td className="num">{f.price_per_pound > 0 ? `$${f.price_per_pound}` : "—"}</td>
-                <td>{f.venta_detalle ? <span className="chip ok">Sí</span> : "—"}</td>
+                {esMarcas ? (
+                  <>
+                    <td className="num">{f.sacos}</td>
+                    <td>{f.calidad ? (f.calidad === "CORRIENTE" ? "Corriente" : f.calidad) : "—"}</td>
+                  </>
+                ) : (
+                  <>
+                    <td className="num">{f.price_per_pound > 0 ? `$${f.price_per_pound}` : "—"}</td>
+                    <td>{f.venta_detalle ? <span className="chip ok">Sí</span> : "—"}</td>
+                  </>
+                )}
                 <td className="num">{f.con_movimientos ? f.stock_total.enReal() : "—"}</td>
                 <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                   <button type="button" className="btnGhost" onClick={() => setEditando(f)}>✎ {puedeEditar ? "Editar" : "Ver"}</button>
@@ -331,7 +384,11 @@ export function CatalogoProductos({ puedeEditar, avisar, onCambio, irASaldos, ir
           puedeEditar={puedeEditar}
           avisar={avisar}
           onCerrar={() => setEditando(null)}
-          onCambio={async () => { await cargar(); onCambio(); }}
+          onCambio={async (actualizado) => {
+            // Refresca la fila al instante con lo que devolvió el servidor y luego relee todo.
+            if (actualizado) setFilas((prev) => prev?.map((x) => (x.id === actualizado.id ? actualizado : x)) ?? prev);
+            await cargar(); onCambio();
+          }}
         />
       )}
     </div>
@@ -343,20 +400,37 @@ function EditarProducto({ fila, puedeEditar, avisar, onCerrar, onCambio }: {
   puedeEditar: boolean;
   avisar: (msg: string, tipo?: "success" | "error" | "warn") => void;
   onCerrar: () => void;
-  onCambio: () => Promise<void>;
+  onCambio: (actualizado?: FilaCatalogo) => Promise<void>;
 }) {
+  const [nombre, setNombre] = useState(fila.name);
   const [tarifa, setTarifa] = useState(String(fila.price_per_pound || ""));
   const [detalle, setDetalle] = useState(fila.venta_detalle);
   const [peso, setPeso] = useState("");
   const [ocupado, setOcupado] = useState(false);
   const esMarca = fila.product_type === "PACKAGED_GOOD";
-  const sucio = Number(tarifa || 0) !== fila.price_per_pound || detalle !== fila.venta_detalle;
+  const esMateriaPrima = fila.product_type === "RAW_MATERIAL";
+  const nombreLimpio = nombre.replace(/\s+/g, " ").trim();
+  const nombreCambio = nombreLimpio !== fila.name;
+  const sucio = nombreCambio || (!esMateriaPrima && (Number(tarifa || 0) !== fila.price_per_pound || detalle !== fila.venta_detalle));
 
   async function ejecutar(accion: () => Promise<unknown>, ok: string) {
     setOcupado(true);
-    try { await accion(); avisar(ok, "success"); await onCambio(); }
+    try {
+      const r = await accion();
+      avisar(ok, "success");
+      await onCambio(r && typeof r === "object" && "id" in r && "name" in r ? (r as FilaCatalogo) : undefined);
+    }
     catch (err) { avisar(err instanceof Error ? err.message : "No se pudo guardar", "error"); }
     finally { setOcupado(false); }
+  }
+
+  function guardar() {
+    if (nombreLimpio.length < 2) { avisar("El nombre debe tener al menos 2 letras", "error"); return; }
+    if (nombreCambio && esMarca && !window.confirm(`¿Renombrar «${fila.name}» a «${nombreLimpio}»?\n\nSe cambia también el nombre de sus sacos. El código ${fila.code}, los pedidos y el historial se conservan.`)) return;
+    const cambios: Record<string, unknown> = {};
+    if (nombreCambio) cambios.nombre = nombreLimpio;
+    if (!esMateriaPrima) { cambios.price_per_pound = Number(tarifa || 0); cambios.venta_detalle = detalle; }
+    void ejecutar(() => apiPatch<FilaCatalogo>(`/products/${fila.id}`, cambios), nombreCambio ? `Renombrado a «${nombreLimpio}»` : "Producto actualizado");
   }
 
   return (
@@ -369,8 +443,15 @@ function EditarProducto({ fila, puedeEditar, avisar, onCerrar, onCambio }: {
           {esMarca ? ` · ${fila.sacos} saco(s) · arroz base ${fila.calidad === "CORRIENTE" ? "Corriente" : fila.calidad ?? "—"}` : ""}
         </p>
 
-        {fila.product_type !== "RAW_MATERIAL" && (
-          <>
+        <div className="catProd__grid">
+          <label><span>Nombre</span>
+            <input value={nombre} disabled={!puedeEditar} minLength={2} maxLength={140} onChange={(e) => setNombre(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && sucio && !ocupado) { e.preventDefault(); guardar(); } }} />
+            <small className="muted">El código {fila.code} no cambia.</small>
+          </label>
+        </div>
+
+        {!esMateriaPrima && (
             <div className="catProd__grid">
               <label><span>Tarifa por libra ($)</span>
                 <input type="number" min="0" step="0.001" value={tarifa} disabled={!puedeEditar} onChange={(e) => setTarifa(e.target.value)} placeholder="0.00" />
@@ -380,15 +461,13 @@ function EditarProducto({ fila, puedeEditar, avisar, onCerrar, onCambio }: {
                 <span><strong>Se vende al detalle</strong> (Caja → Venta Detalle)</span>
               </label>
             </div>
-            {puedeEditar && (
-              <div className="buttonRow">
-                <button className="primary" disabled={!sucio || ocupado}
-                  onClick={() => void ejecutar(() => apiPatch(`/products/${fila.id}`, { price_per_pound: Number(tarifa || 0), venta_detalle: detalle }), "Producto actualizado")}>
-                  Guardar cambios
-                </button>
-              </div>
-            )}
-          </>
+        )}
+        {puedeEditar && (
+          <div className="buttonRow">
+            <button type="button" className="primary" disabled={!sucio || ocupado} onClick={guardar}>
+              {ocupado ? "Guardando…" : "Guardar cambios"}
+            </button>
+          </div>
         )}
 
         <div style={{ marginTop: 12 }}>
@@ -402,7 +481,7 @@ function EditarProducto({ fila, puedeEditar, avisar, onCerrar, onCambio }: {
               <input type="number" min="1" max="1000" step="0.5" value={peso} placeholder="Nuevo peso (lb)" style={{ width: 130, padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db" }}
                 onChange={(e) => setPeso(e.target.value)} />
               <button type="button" className="btnSecondary" disabled={!(Number(peso) > 0) || ocupado}
-                onClick={() => void ejecutar(async () => { await apiPost(`/products/${fila.id}/presentaciones`, { peso_lb: Number(peso) }); setPeso(""); },
+                onClick={() => void ejecutar(async () => { const r = await apiPost<{ producto: FilaCatalogo }>(`/products/${fila.id}/presentaciones`, { peso_lb: Number(peso) }); setPeso(""); return r.producto; },
                   esMarca ? "Presentación y saco agregados" : "Presentación agregada")}>
                 {esMarca ? "Agregar presentación + saco" : "Agregar presentación"}
               </button>
