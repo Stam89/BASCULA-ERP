@@ -2130,7 +2130,7 @@ function CierreCajaModal({ onClose, onDone, onError }: {
 function ComprobanteCompensacionModal({ comprobante, nombreOperacion, onClose }: {
   comprobante: ComprobanteCompensacion; nombreOperacion: string; onClose: () => void;
 }) {
-  const esc = (v: unknown) => String(v ?? "").replace(/[&<>\"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
+  const esc = (v: unknown) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
   const imprimir = () => {
     const cxc = comprobante.cxc.map((x) => `<tr><td>${esc(String(x.fecha).slice(0, 10))}</td><td>${esc(x.detalle || (x.tipo === "cosecha" ? "Servicio de cosechadora" : "Servicio de flete"))}</td><td>${esc(x.maquina)}</td><td class="num">${x.aplicado.enReal()}</td></tr>`).join("");
     const cxp = comprobante.cxp.map((x) => `<tr><td>${esc(String(x.fecha).slice(0, 10))}</td><td>${esc(x.detalle || "Cuenta por pagar")}</td><td>${esc(x.acreedor)}</td><td class="num">${x.aplicado.enReal()}</td></tr>`).join("");
@@ -2491,7 +2491,7 @@ function PagarCxPModal({ grupo, cuentas, onClose, onDone, onError }: {
 
 function ComprobantePagoCxPModal({ recibo, nombreOperacion, onClose }: { recibo: PagoCxPGrupo; nombreOperacion: string; onClose: () => void }) {
   const imprimir = () => {
-    const esc = (v: unknown) => String(v ?? "").replace(/[&<>\"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
+    const esc = (v: unknown) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
     const filas = recibo.aplicaciones.map((x) => `<tr><td>${esc(String(x.fecha).slice(0, 10))}</td><td>${esc(x.concepto || "Cuenta por pagar")}</td><td class="num">${x.saldo_antes.enReal()}</td><td class="num">${x.aplicado.enReal()}</td></tr>`).join("");
     const w = window.open("", "_blank", "width=760,height=860"); if (!w) return;
     w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Pago CxP · ${esc(recibo.acreedor)}</title><style>@page{size:A4;margin:14mm}body{font:12px Arial;color:#111}h1{font-size:18px;margin:0}.muted{color:#555}table{width:100%;border-collapse:collapse;margin-top:14px}th,td{border:1px solid #ccc;padding:6px}th{background:#f3f4f6;text-align:left}.num{text-align:right}.total{font-size:18px;font-weight:700}</style></head><body>

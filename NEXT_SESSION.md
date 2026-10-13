@@ -1561,6 +1561,14 @@ Implementado el 2026-10-13:
 - Auditoría real: 56 reglas y 0 hallazgos en `Caja / Resultado mensual`. El mes actual clasifica Mantenimiento y Alimentación sin egresos sin clasificar.
 - Verificaciones: backend build, frontend build, 225/225 tests, preflight sin errores críticos y revisión visual en Configuración > Contabilidad > Categorías de caja.
 
+### Limpieza de lint en comprobantes de Campo
+
+Implementado el 2026-10-13:
+
+- Se eliminaron dos escapes innecesarios en las expresiones regulares que sanitizan texto para los comprobantes impresos de compensación y pagos CxP de Transporte/Cosechadora.
+- No cambia la lógica ni el resultado: continúan escapándose `&`, `<`, `>` y comillas para imprimir HTML de forma segura.
+- Verificaciones: ESLint sin errores (177 advertencias históricas no bloqueantes), frontend build y `git diff --check` correctos.
+
 ## Servidor local
 
 El backend compilado se inicia desde `backend/` con:
